@@ -1,5 +1,20 @@
 #dockerfile june 2026, literally almost exactly a combination of isaaclab's dockerfiles, so shoutout them lol
 
+# Build the gripper process against the same ROS distribution as GOLEM.
+# Isaac's bundled CPython has a different ABI, so this runtime stays private.
+FROM ros:humble-ros-base-jammy AS magpie_humble
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-colcon-common-extensions ros-humble-rmw-cyclonedds-cpp \
+    ros-humble-rosidl-default-generators \
+    && rm -rf /var/lib/apt/lists/*
+COPY core_ws/src/magpie_msgs /tmp/magpie_msgs
+RUN . /opt/ros/humble/setup.sh && cd /tmp && \
+    colcon build --base-paths /tmp/magpie_msgs --packages-select magpie_msgs \
+    --merge-install --install-base /opt/golem-magpie-humble --cmake-args -DBUILD_TESTING=OFF
+COPY docker/scripts/package_humble_runtime.py /tmp/package_humble_runtime.py
+RUN . /opt/ros/humble/setup.sh && . /opt/golem-magpie-humble/setup.sh && \
+    python3 /tmp/package_humble_runtime.py
+
 FROM nvcr.io/nvidia/isaac-sim:5.1.0 AS builder
 
 USER root
@@ -118,3 +133,11 @@ WORKDIR ${GOLEM_WORKSPACE_PATH}
 ENTRYPOINT []
 CMD ["/bin/bash"]
 
+
+COPY --from=magpie_humble /native-python /opt/golem-humble-python
+COPY --from=magpie_humble /opt/ros/humble /opt/ros/humble
+COPY --from=magpie_humble /opt/golem-magpie-humble /opt/golem-magpie-humble
+RUN PYTHONHOME=/opt/golem-humble-python \
+    PYTHONPATH=/opt/golem-humble-python/lib/python3.10/site-packages:/opt/ros/humble/local/lib/python3.10/dist-packages:/opt/ros/humble/lib/python3.10/site-packages:/opt/golem-magpie-humble/local/lib/python3.10/dist-packages:/opt/golem-magpie-humble/lib/python3.10/site-packages \
+    LD_LIBRARY_PATH=/opt/golem-humble-python/lib:/opt/ros/humble/lib:/opt/golem-magpie-humble/lib \
+    /opt/golem-humble-python/bin/python3.10 -c "from rclpy.action import ActionServer; from magpie_msgs.msg import GripperState; GripperState.__class__.__import_type_support__()"

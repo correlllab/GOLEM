@@ -164,7 +164,8 @@ Single-stage, `FROM golem_base`. Provides the MuJoCo + RoboCasa kitchen simulato
 
 ## 6. `golem_sim_isaac` (`docker/IsaacDockerfile`)
 
-Single-stage, based on `nvcr.io/nvidia/isaac-sim:5.1.0`. IsaacLab is checked out
+The main stage is based on `nvcr.io/nvidia/isaac-sim:5.1.0`. A separate Humble
+stage packages the Magpie gripper runtime and message interfaces. IsaacLab is checked out
 at `b4c321024792976150ca55fddb26fa34480d974e`; its `_isaac_sim` link points to
 `/isaac-sim`. Run simulator Python through that installation's `python.sh`,
 which sets Kit's required environment. The image installs CycloneDDS 0.10.x,
@@ -176,7 +177,8 @@ to relocate them. Existing `CL_isaaclab_sim/.isaac_cache` contents may be copied
 there with containers stopped; otherwise caches regenerate on first launch.
 
 `launch_isaac.sh` accepts a task name or `--task NAME`, `--headless`, and
-`--reset-cache`. Use `--` before additional simulator arguments. Output uses
+`--reset-cache`, `--hand_type magpie|inspire`, and `--fix_base` for a bench
+fixture. Magpie is the default floating-base robot. Output uses
 normal container stdout/stderr. The image has no shell entrypoint, so command
 overrides such as `docker_run.sh isaac bash` work normally.
 
@@ -184,7 +186,12 @@ The simulator's Unitree DDS manager reads `ROS_DOMAIN_ID` (default 1), rejects
 0, and communicates directly with the ROS stack on that domain. There is no
 cross-domain relay. This requires the accompanying `CL_isaaclab_sim` source
 change; distribute it through the submodule repository before updating the
-superproject pin.
+superproject pin. The Magpie gripper process uses private Humble Python 3.10 and the
+same DDS domain, while the main simulator uses Isaac's bundled interpreter.
+Humble's discovery schema matches the ROS container and bundled sensor bridge.
+The original `magpie_msgs` source is built into the image; rebuild Isaac when
+those interfaces change. The helper runtime leaves Isaac's Python and the
+container's libc unchanged.
 
 ---
 

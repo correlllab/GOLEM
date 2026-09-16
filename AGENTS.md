@@ -206,8 +206,9 @@ elsewhere.)
 **Isaac (`CL_isaaclab_sim/sim_main.py`)** — publishes `rt/lowstate` and
 optional `rt/inspire/state` over CycloneDDS, `/clock`, three RealSense RGBD
 camera streams with camera info, and `/livox/{lidar,pointcloud,imu}`. Consumes
-`rt/lowcmd` and optional `rt/inspire/cmd`. The current asset is the Inspire
-model; Magpie hardware fidelity depends on the planned CL_Assets pin update.
+`rt/lowcmd` and optional `rt/inspire/cmd`. The default asset is the floating-base Magpie H1-2; `--hand_type inspire`
+selects the Inspire fixture. Magpie exposes the real gripper state, services,
+and DeliGrasp action through a native ROS process inside the Isaac container.
 See `tests/README.md` for saved CPU and cross-container integration tests.
 
 ### Ground truth must NEVER be on by default

@@ -5,6 +5,7 @@
 # Whitelisted COPY sources:
 #   RobocasaDockerfile -> core_ws/src/livox_ros_driver2 (baked-in livox build)
 #   BaseDockerfile   -> unitree_sdk2_python (local SDK install)
+#   IsaacDockerfile  -> magpie_msgs + private Humble runtime packager
 *
 !core_ws
 core_ws/*
@@ -15,3 +16,11 @@ core_ws/src/livox_ros_driver2/.git
 !unitree_sdk2_python
 !unitree_sdk2_python/**
 unitree_sdk2_python/.git
+
+!core_ws/src/magpie_msgs
+core_ws/src/magpie_msgs/.git
+!docker
+docker/*
+!docker/scripts
+docker/scripts/*
+!docker/scripts/package_humble_runtime.py

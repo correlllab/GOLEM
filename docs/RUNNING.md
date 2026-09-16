@@ -72,7 +72,11 @@ Scene flags are passed straight through, e.g.
 Uses the same wrappers, on NVIDIA Linux only. The launcher honors
 `ROS_DOMAIN_ID` and communicates directly on that simulation domain; zero is
 rejected. Select a task with `docker_run.sh isaac --task base --headless`.
-Use `--` before additional simulator options. Logs go to container stdout.
+Magpie H1-2 is the default asset, with a floating base. Start the ROS lower-body
+controller to support it. Select the Inspire fixture with `--hand_type inspire`.
+Use `--fix_base` only for a fixed-root bench test. Logs go to container stdout.
+The Magpie ROS gripper process starts inside the Isaac container using an
+isolated Humble runtime. Its message interfaces are built into the image.
 
 Isaac's sensor/topic surface still differs from RoboCasa (see `CLAUDE.md`);
 starting both containers does not imply full navigation/skills parity.

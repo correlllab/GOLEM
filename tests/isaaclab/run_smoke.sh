@@ -8,3 +8,7 @@ ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-187} "$ROOT/tests/isaaclab/run_in_container.sh" \
  > "$ROOT/tests/results/isaac-smoke.log" 2>&1
 # A successful bounded run must reach normal cleanup; timeouts are failures.
 grep -q '\[isaac\] completed 50 steps' "$ROOT/tests/results/isaac-smoke.log"
+if grep -Eq 'invalid data size|string data is not null-terminated|rcutils_set_error_state' "$ROOT/tests/results/isaac-smoke.log"; then
+    echo 'ROS discovery or deserialization failed; see tests/results/isaac-smoke.log' >&2
+    exit 1
+fi

@@ -54,6 +54,10 @@ jobs:
           lfs: true
       - name: Build simulation and ROS images
         run: docker/scripts/docker_build.sh isaac ros
+      - name: Magpie physical linkage schema
+        run: ROS_DOMAIN_ID=186 tests/isaaclab/run_magpie_couplings.sh
+      - name: Magpie native ROS services and actions
+        run: ROS_DOMAIN_ID=190 tests/isaaclab/run_magpie_transport.sh
       - name: Actual Isaac Lab scene and shutdown
         run: ROS_DOMAIN_ID=187 tests/isaaclab/run_smoke.sh
       - name: ROS sensor transport
@@ -61,7 +65,9 @@ jobs:
       - name: Native ROS Livox interoperability
         run: ROS_DOMAIN_ID=189 tests/isaaclab/run_livox_interop.sh
       - name: ROS commands drive actual Isaac physics
-        run: ROS_DOMAIN_ID=191 tests/isaaclab/run_robot_interop.sh
+        run: ROS_DOMAIN_ID=191 tests/isaaclab/run_robot_interop.sh magpie
+      - name: Inspire variant regression
+        run: ROS_DOMAIN_ID=192 tests/isaaclab/run_robot_interop.sh inspire
       - uses: actions/upload-artifact@v4
         if: always()
         with:

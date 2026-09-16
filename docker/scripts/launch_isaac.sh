@@ -63,6 +63,5 @@ exec "$ISAAC_PY" -u \
     --device cuda \
     --task "$TASK" \
     $HEADLESS_FLAG \
-    --enable_inspire_dds \
     --enable_cameras \
     --robot_type h1_2 "${EXTRA_ARGS[@]}"

@@ -1,67 +1,52 @@
 #!/usr/bin/env bash
-# Build Docker images.
-#
-# Usage: docker_build.sh [profile ...]
-#   Profiles: isaac, robocasa, ros
-#   With no args, all three are built.
-#   Examples:
-#     docker_build.sh                  # build all
-#     docker_build.sh isaac            # build isaac only
-#     docker_build.sh robocasa ros     # build robocasa + ros
-#
-# RoboCasa and Ros inherit from golem_base; the base image is built first
-# whenever either of those profiles is selected. Isaac is self-contained
-# (Sim 5.1 / Lab v2.3.2 / Python 3.11) and does not use golem_base.
-set -euo pipefail
-cd "$(dirname "$0")/../.."
-
-# Lock the ros image's MuJoCo-MPC build to the mujoco_mpc submodule's committed
-# SHA. RosDockerfile clones mujoco_mpc fresh over HTTPS at build time (no SSH
-# keys / no git context inside the build), so it can't read the gitlink itself
-# -- we read it here on the host and pass it in as the MJPC_REF build arg (see
-# docker-compose.yml ros.build.args). Without this a `git submodule` bump would
-# silently ship a stale MJPC. Empty (not a git checkout) -> Dockerfile default.
-MJPC_REF="$(git rev-parse HEAD:mujoco_mpc 2>/dev/null || true)"
-if [ -n "${MJPC_REF}" ]; then
-    export MJPC_REF
-    echo "MJPC_REF (from mujoco_mpc submodule pin): ${MJPC_REF}"
+# Usage: docker_build.sh [--pull] [--no-cache] [isaac|robocasa|ros ...]
+set -eo pipefail
+source "$(dirname "$0")/docker_common.sh"
+load_config
+SERVICES=()
+BUILD_FLAGS=()
+CHILD_FLAGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --pull) BUILD_FLAGS+=("$arg");;
+        --no-cache) BUILD_FLAGS+=("$arg"); CHILD_FLAGS+=("$arg");;
+        --help|-h) echo 'Usage: docker_build.sh [--pull] [--no-cache] [isaac|robocasa|ros ...]'; exit 0;;
+        *) validate_service "$arg"; SERVICES+=("$arg");;
+    esac
+done
+if [ ${#SERVICES[@]} -eq 0 ]; then
+    SERVICES=(robocasa ros)
+    [ "${GOLEM_PLATFORM:-linux}" = mac ] || SERVICES+=(isaac)
 fi
-
-VALID_PROFILES=(isaac robocasa ros)
-
-if [ "$#" -eq 0 ]; then
-    PROFILES=("${VALID_PROFILES[@]}")
-else
-    PROFILES=("$@")
-    for p in "${PROFILES[@]}"; do
-        ok=0
-        for v in "${VALID_PROFILES[@]}"; do
-            if [ "$p" = "$v" ]; then ok=1; break; fi
-        done
-        if [ "$ok" -ne 1 ]; then
-            echo "error: unknown profile '$p' (valid: ${VALID_PROFILES[*]})" >&2
-            exit 2
-        fi
-    done
-fi
-
-needs_base=0
-for p in "${PROFILES[@]}"; do
-    if [ "$p" = "robocasa" ] || [ "$p" = "ros" ]; then
-        needs_base=1
-        break
+NEEDS_BASE=0
+for service in "${SERVICES[@]}"; do
+    case "$service" in
+        ros|robocasa) NEEDS_BASE=1; require_file unitree_sdk2_python/setup.py;;
+    esac
+    if [ "$service" = robocasa ]; then require_file core_ws/src/livox_ros_driver2/package_ROS2.xml; fi
+    if [ "$service" = ros ] && [ "${GOLEM_PLATFORM:-linux}" != mac ]; then
+        export MJPC_REF
+        MJPC_REF=$(git rev-parse HEAD:mujoco_mpc) || fail 'Cannot resolve the committed mujoco_mpc pin.'
+        echo "MJPC_REF=$MJPC_REF"
     fi
 done
-
-if [ "$needs_base" -eq 1 ]; then
-    echo "Building base..."
-    docker build -t golem_base:latest -f docker/BaseDockerfile .
+if [ "$NEEDS_BASE" = 1 ]; then
+    if [ "${GOLEM_PLATFORM:-linux}" = mac ]; then
+        docker build --platform linux/arm64 "${BUILD_FLAGS[@]}" -t golem_base:arm64 -f docker/mac/BaseDockerfile.arm64 .
+    else
+        docker build --platform linux/amd64 "${BUILD_FLAGS[@]}" -t golem_base:latest -f docker/BaseDockerfile .
+    fi
 fi
-
-PROFILE_ARGS=()
-for p in "${PROFILES[@]}"; do
-    PROFILE_ARGS+=(--profile "$p")
+# Child images inherit the local base we just built; --pull there would try
+# downloading golem_base from Docker Hub. Isaac has a public upstream base.
+CHILDREN=()
+for service in "${SERVICES[@]}"; do
+    if [ "$service" = isaac ]; then
+        "${COMPOSE[@]}" build "${BUILD_FLAGS[@]}" isaac
+    else
+        CHILDREN+=("$service")
+    fi
 done
-
-echo "Building profiles: ${PROFILES[*]}"
-docker compose -f docker/docker-compose.yml "${PROFILE_ARGS[@]}" build
+if [ "${#CHILDREN[@]}" -gt 0 ]; then
+    "${COMPOSE[@]}" build "${CHILD_FLAGS[@]}" "${CHILDREN[@]}"
+fi

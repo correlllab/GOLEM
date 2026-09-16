@@ -43,7 +43,7 @@ submodules): `FAST_LIO`, `h12_deploy_mjpc`, `h12_lowerbody_rl`,
 
 Large binary assets (meshes, XML, USD) are tracked with **Git-LFS**; run
 `git lfs install` first. Some weights are *not* in git and are fetched manually
-(e.g. SAM3 `sam3.pt`, GraspGenX checkpoints) — see the root `README.md`.
+(e.g. SAM3 `sam3.pt`, GraspGenX checkpoints) — see `docs/SETUP.md`.
 
 ---
 
@@ -59,16 +59,16 @@ nvidia/cuda:12.2.0-devel-ubuntu22.04
     cu130, CycloneDDS   golem_ros     golem_sim_robocasa
     0.10, unitree SDK)  (workspace)   (MuJoCo + RoboCasa)
 
-nvidia/cuda:12.2.0-runtime-ubuntu22.04
-        │  (two-stage builder → runtime; NO golem_base)
+nvcr.io/nvidia/isaac-sim:5.1.0
+        │
         ▼
-   golem_sim_isaac  (Isaac Sim 5.1 / IsaacLab 2.3.2, conda Python 3.11)
+   golem_sim_isaac  (Isaac Sim's bundled Python + pinned IsaacLab)
 ```
 
 - `golem_ros` and `golem_sim_robocasa` inherit from `golem_base`.
-- `golem_sim_isaac` is **self-contained** — Isaac Sim 5.x needs Python 3.11, but
-  `golem_base` pins 3.10 for the ROS 2 Humble apt packages, so Isaac cannot share
-  the base. It gets its Python from a Miniconda env instead.
+- `golem_sim_isaac` is **self-contained**, based on NVIDIA's Isaac Sim image.
+  Its bundled interpreter and ROS bridge are separate from the Humble/Python 3.10
+  stack in `golem_base`. The Dockerfile also installs ROS Jazzy tooling.
 
 All containers interoperate over **CycloneDDS on one ROS domain** (default
 `ROS_DOMAIN_ID=1`; domain `0` is reserved for the real robot).
@@ -148,7 +148,7 @@ Single-stage, `FROM golem_base`. Provides the MuJoCo + RoboCasa kitchen simulato
   only to silence import-time "not installed" warnings.
   - *Side effect:* `lerobot` (a RoboCasa transitive) pins `torch==2.7.1`, which
     downgrades base's cu130 torch to a CPU/cu121 build **in this image only**
-    (accepted; Isaac keeps cu130 because it builds from base independently).
+    (accepted; Isaac uses its own NVIDIA image).
 - **Kitchen assets (~10 GB)** downloaded at build time so the container is
   ready-to-run (comment out that `RUN` to fetch them manually instead).
 - **`msgs_ws` toolchain** (colcon + ament + rosidl) + an empty `/home/code/msgs_ws/src`
@@ -164,33 +164,27 @@ Single-stage, `FROM golem_base`. Provides the MuJoCo + RoboCasa kitchen simulato
 
 ## 6. `golem_sim_isaac` (`docker/IsaacDockerfile`)
 
-**Two-stage** (builder → runtime), self-contained, from
-`nvidia/cuda:12.2.0-runtime-ubuntu22.04`.
+Single-stage, based on `nvcr.io/nvidia/isaac-sim:5.1.0`. IsaacLab is checked out
+at `b4c321024792976150ca55fddb26fa34480d974e`; its `_isaac_sim` link points to
+`/isaac-sim`. Run simulator Python through that installation's `python.sh`,
+which sets Kit's required environment. The image installs CycloneDDS 0.10.x,
+the Unitree Python SDK, simulator dependencies, and ROS Jazzy tooling.
 
-**Builder stage:**
-- Miniconda + a **Python 3.11** conda env `unitree_sim_env` (all subsequent `RUN`s
-  execute inside it via `SHELL [conda run …]`). conda-forge `libgcc`/`libstdcxx`
-  keeps the C++ ABI consistent with Isaac's wheels.
-- **PyTorch 2.7.0** (+ `torchvision` 0.22.0, `torchaudio` 2.7.0), **cu128** — cu128
-  has native `sm_120`; upstream's cu126 does not.
-- CycloneDDS 0.10.x from source (same rationale as base — the controller talks to
-  the sim over Unitree DDS on domain 1).
-- `unitree_sdk2_python` installed **editable** (`pip install -e .`) so its
-  sub-packages stay importable.
-- **`isaacsim[all,extscache]==5.1.0.0`** (multi-GB, early in layer order).
-- **IsaacLab `v2.3.2`** via `./isaaclab.sh --install`, with `PIP_CONSTRAINT`
-  pinning `setuptools<80` (a transitive dep, `flatdict==4.0.1`, has a `setup.py`
-  that imports `pkg_resources`, dropped in 80+) and `TERM=xterm-256color` (its
-  `tput` calls need a real terminfo entry).
-- Only `CL_isaaclab_sim/requirements.txt` is `COPY`'d in; the source tree is
-  bind-mounted at runtime.
+Source and assets are bind-mounted. Persistent caches default to
+`container_cache/isaac/{ov,nvidia,local_share_ov,isaacsim}`. Set `GOLEM_CACHE_DIR`
+to relocate them. Existing `CL_isaaclab_sim/.isaac_cache` contents may be copied
+there with containers stopped; otherwise caches regenerate on first launch.
 
-**Runtime stage:** copies the populated `/opt/conda`, `/cyclonedds`, `IsaacLab`,
-and `unitree_sdk2_python` from the builder, installs runtime-only X11/EGL libs, and
-auto-activates the conda env in `.bashrc`. **ROS publishing uses Isaac Sim's bundled
-`isaacsim.ros2.bridge` (OmniGraph)** — there is no `/opt/ros/humble` here and
-`rclpy` is not installed. (The bundled `librmw_cyclonedds` is deliberately *not*
-put on the global `LD_LIBRARY_PATH`; only Kit's own loader can load it correctly.)
+`launch_isaac.sh` accepts a task name or `--task NAME`, `--headless`, and
+`--reset-cache`. Use `--` before additional simulator arguments. Output uses
+normal container stdout/stderr. The image has no shell entrypoint, so command
+overrides such as `docker_run.sh isaac bash` work normally.
+
+The simulator's Unitree DDS manager reads `ROS_DOMAIN_ID` (default 1), rejects
+0, and communicates directly with the ROS stack on that domain. There is no
+cross-domain relay. This requires the accompanying `CL_isaaclab_sim` source
+change; distribute it through the submodule repository before updating the
+superproject pin.
 
 ---
 
@@ -228,47 +222,48 @@ into `dist-packages` (the path `from mujoco_mpc import agent` auto-spawns).
 
 ## 8. Build & run orchestration
 
-**Build** — `docker/scripts/docker_build.sh [isaac|robocasa|ros]…` (all three if no
-args). Builds `golem_base` first whenever `ros` or `robocasa` is selected, then
-`docker compose … build` for the requested profiles.
+**Build** — `docker/scripts/docker_build.sh [--pull] [--no-cache] [service ...]`.
+Defaults to all three services. Builds `golem_base` first for ROS/RoboCasa;
+propagates the committed MJPC pin into the ROS build. `--pull` refreshes public
+upstream images (base and Isaac); child builds use the freshly built local
+`golem_base`, rather than attempting to pull that private local tag.
 
-**Run** — `docker/scripts/docker_run.sh <profile> [cmd…]`:
-- Sources `docker/.env` (`GEMINI_API_KEY`, `ROS_DOMAIN_ID`, …).
-- Pre-creates host bind sources (`container_cache/msgs_ws`,
-  `container_cache/mjpc_build`, the nested `mujoco_mpc/build`) so dockerd doesn't
-  create them root-owned.
-- Normalizes `ROS_DOMAIN_ID` (empty→1; `0` rejected for sims, confirmed for `ros`).
-- `xhost +local:docker`, stable container names (`golem_ros`, `golem_sim_*`), `--rm`.
+**Run one service** — `docker/scripts/docker_run.sh SERVICE [--restart] [cmd...]`.
+A leading flag invokes that service's launcher. Existing containers are never
+removed implicitly; `--restart` explicitly replaces the selected container.
 
-The Apple-Silicon port mirrors these as `docker/mac/scripts/docker_build_mac.sh` and
-`docker/mac/scripts/docker_run_mac.sh` (against `docker/mac/docker-compose.yml`):
-services `robocasa`/`ros` only (no `isaac`), base built from
-`mac/BaseDockerfile.arm64`, no `MJPC_REF`, no `xhost`. See the README macOS section.
+**Run a pair** — `docker/scripts/docker_stack.sh up|restart|stop|logs SIM`.
+The startup command builds the ROS and RoboCasa message workspaces without
+starting physics, then starts the simulator and ROS bringup. ROS waits for a
+fresh `rt/lowstate` sample on the configured domain. `GOLEM_SIM_TIMEOUT` bounds
+that wait; a timeout fails ROS startup and directs users to simulator logs.
+`restart` stops both services before recreating them. `stop` preserves caches.
 
-**`docker-compose.yml`** defines three profiles (`isaac`, `robocasa`, `ros`), each
-with `runtime: nvidia`, `network_mode: host`, X11 passthrough, and the bind mounts.
-Each profile's `command:` is its `launch_*.sh`.
+Both wrapper families source `docker/scripts/docker_common.sh`. They explicitly
+load `docker/.env`, preserving exported shell overrides, validate the domain,
+check required source paths, and create only cache/mountpoint directories.
+`GOLEM_ASSETS_DIR` and `GOLEM_CACHE_DIR` accept absolute paths or paths relative
+to the checkout. Required bind sources use `create_host_path: false`.
 
-**`.dockerignore` is deny-all (`*`)** with a tiny whitelist — everything is
-bind-mounted at runtime, so only the few files a Dockerfile actually `COPY`s
-(`CL_isaaclab_sim/requirements.txt`, `core_ws/src/livox_ros_driver2`,
-`unitree_sdk2_python`) are sent to the daemon. This keeps the build context small
-(~GB otherwise) and is why `mujoco_mpc` needs no `.dockerignore` entry.
+Linux Compose is headless by itself. The wrapper selects
+`docker-compose.gui.yml` when `GOLEM_DISPLAY=gui`, or automatically when
+`DISPLAY` is set. GUI mode requires an Xauthority file; it does not change the
+host's X access policy. `--headless` avoids desktop mounts entirely. NVIDIA
+runtime and host networking remain in the Linux configuration.
 
-**Launchers:**
-- `launch_ros.sh` — sources ROS, hydrates the MJPC cache (§7), then `colcon build
-  --symlink-install`s `core_ws` **only if needed** (no `install/`, or any
-  `package.xml` newer than `install/setup.bash`), sources the overlay, drops to a
-  shell. `livox_ros_driver2` is built via its own `build.sh` (patched idempotently
-  to add `--symlink-install`).
-- `launch_robocasa.sh` — sources ROS + `/opt/livox_ws`, `colcon build`s the two IDL
-  packages in `msgs_ws`, picks `MUJOCO_GL`, runs `h12_mujoco.py`.
-- `launch_isaac.sh` — runs the **Unitree DDS relay** (`dds_bridge.py`, a
-  CycloneDDS↔CycloneDDS relay of `rt/lowstate`, `rt/lowcmd`, `rt/inspire/*`, …
-  between the sim domain and the command domain) in the background, then
-  `CL_isaaclab_sim/sim_main.py` from the conda interpreter. (The OmniGraph ROS 2
-  bridge is a *separate* mechanism, loaded inside Kit by `sim_main` — see §6.)
-  Isaac task selection is WIP.
+The Mac wrappers expose the same build/run/stack operations for `robocasa` and
+`ros` only. Images use the `:arm64` tag and `linux/arm64` platform. Mac uses
+FastDDS, host networking/IPC, and native VM named volumes for colcon build and
+install trees. Keep those named volumes: host filesystem shares make symlink
+builds slow. VNC is opt-in; there are no NVIDIA or host X11 requirements.
+
+The ROS image bakes the pinned Unitree C++ SDK at `/opt/unitree_install`.
+No SDK clone or SDK-cache mount is needed at startup. The separate MJPC warm
+build cache and source mounts remain for controller development.
+
+`.dockerignore` restricts build context to sources actually copied by the
+Dockerfiles: the Unitree Python SDK and Livox driver. Simulation source, model
+weights, and assets stay outside the context and arrive through bind mounts.
 
 ---
 
@@ -302,8 +297,9 @@ are near-instant; wipe the host dir for a clean rebuild.
   RoboCasa's pin).
 - **Layer-order discipline:** heavy/stable layers first; volatile pins appended
   last. New deps go at the *end* of a Dockerfile so they don't bust cached layers.
-- **CUDA wheel split:** `ros`/base use torch **cu130**; Isaac uses **cu128**;
-  robocasa ends up on a cu121/CPU torch (via `lerobot`). Deliberate, per image.
+- **CUDA wheel split:** `ros`/base use torch **cu130**; Isaac inherits NVIDIA's
+  bundled stack; RoboCasa resolves its own torch through `lerobot`. Inspect
+  the built images when diagnosing GPU/torch compatibility.
 
 ---
 

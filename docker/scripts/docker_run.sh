@@ -1,82 +1,24 @@
-#!/bin/bash
-# Usage:
-#   ./docker_run.sh [isaac|robocasa|ros]                -> auto-starts the simulation/workspace
-#   ./docker_run.sh [isaac|robocasa|ros] bash           -> drops to a shell instead
-#   ./docker_run.sh [isaac|robocasa|ros] <exec> <args>  -> runs any command inside the container
-#
-# To change the Isaac task or RoboCasa flags, either:
-#   - Drop to bash and invoke launch_isaac.sh / launch_robocasa.sh with your args, or
-#   - Invoke the launcher directly: ./docker_run.sh isaac /home/code/h12_sim_scripts/launch_isaac.sh TASKNAME
-
-SIM=${1:?Usage: ./docker_run.sh [isaac|robocasa|ros] [override command/args...]}
+#!/usr/bin/env bash
+# Usage: docker_run.sh SERVICE [--restart] [command | launcher flags...]
+# GOLEM_DISPLAY=auto|gui|headless selects Linux desktop mounts.
+set -eo pipefail
+source "$(dirname "$0")/docker_common.sh"
+SIM=${1:?Usage: docker_run.sh SERVICE [--restart] [command or flags...]}
 shift
-cd "$(dirname "$0")/../.."
-
-# HAMS -> GOLEM rename guard. Every feature toggle defaults to off/on without
-# erroring, so a stale HAMS_* export would be silently ignored rather than
-# failing loudly. Reject it instead of second-guessing what the caller meant.
-legacy=$(env | sed -n 's/^\(HAMS_[A-Z0-9_]*\)=.*/\1/p' | tr '\n' ' ')
-if [ -n "$legacy" ]; then
-    echo "ERROR: legacy HAMS_* env vars set: $legacy" >&2
-    echo "       The project is now GOLEM; these were renamed to GOLEM_*." >&2
-    echo "       Update your shell exports / scripts and re-run." >&2
-    exit 1
+load_config
+validate_service "$SIM"
+RESTART=0
+if [ "${1:-}" = --restart ]; then RESTART=1; shift; fi
+check_domain "$SIM"
+for arg in "$@"; do [ "$arg" != --headless ] || export GOLEM_DISPLAY=headless; done
+configure_display
+prepare_mounts "$SIM"
+NAME=$(container_name "$SIM")
+if docker inspect "$NAME" >/dev/null 2>&1; then
+    [ "$RESTART" = 1 ] || fail "$NAME already exists. Use --restart explicitly, or attach with docker exec -it $NAME bash."
+    docker rm -f "$NAME"
 fi
-
-# Load local secrets / overrides (GEMINI_API_KEY, ROS_DOMAIN_ID, ...). compose
-# also auto-loads docker/.env, but sourcing here makes the values available to
-# this script too (e.g. the ROS_DOMAIN_ID normalization below). set -a exports
-# them so the values reach `docker compose` as host-env vars. Note: this
-# overwrites any same-named vars already exported in your shell.
-if [ -f docker/.env ]; then
-    set -a
-    source docker/.env
-    set +a
-fi
-
-# Pre-create host-side bind sources so dockerd doesn't materialise them
-# root-owned on first run. The caches hold msgs_ws build/install/log and the MJPC
-# CMake build tree between container restarts (see docker-compose.yml). mjpc's
-# SOURCE is a git submodule (never mkdir it); we only pre-create the nested build/
-# mountpoint inside it (gitignored by the submodule's own /build/ rule).
-mkdir -p container_cache/msgs_ws container_cache/mjpc_build
-[ -d mujoco_mpc ] && mkdir -p mujoco_mpc/build
-
-# ROS_DOMAIN_ID handling. Domain 0 is the real robot's DDS command bus.
-#   - Sims (isaac/robocasa) must never run on it: reject an explicit 0 loudly.
-#   - The ros profile may use it (real robot), but only after confirming the
-#     interactive prompt below.
-#   - An unset/empty value defaults to 1, the simulation domain.
-if [ "${ROS_DOMAIN_ID:-}" = "0" ]; then
-    if [ "$SIM" != "ros" ]; then
-        echo "ERROR: ROS_DOMAIN_ID=0 is the real robot's DDS domain; the '$SIM' sim may not run on it." >&2
-        echo "       Set ROS_DOMAIN_ID to a positive value (e.g. 1) in docker/.env, or unset it to default to 1." >&2
-        exit 1
-    fi
-    echo "WARNING: ROS_DOMAIN_ID=0 -> DDS domain 0 is the REAL ROBOT command bus." >&2
-    echo "         Nodes will publish/subscribe on the live robot." >&2
-    read -r -p "Proceed on DDS domain 0 (real robot)? [y/N] " reply
-    case "$reply" in
-        y|Y|yes|YES|Yes) ;;
-        *) echo "Aborted: refused to run on DDS domain 0." >&2; exit 1 ;;
-    esac
-fi
-if [ -z "${ROS_DOMAIN_ID:-}" ]; then
-    export ROS_DOMAIN_ID=1
-fi
-
-xhost +local:docker 2>/dev/null || true
-
-# If the first arg is a flag (e.g. --viewer), forward it to the default launcher
-# instead of letting docker treat it as the command name.
 if [ $# -gt 0 ] && [ "${1#-}" != "$1" ]; then
-    set -- "/home/code/h12_sim_scripts/launch_${SIM}.sh" "$@"
+    set -- "/home/code/h12_sim_scripts/launch_${SIM}${LAUNCH_SUFFIX}.sh" "$@"
 fi
-
-# Stable container name per profile so `docker exec`/`docker logs` work without
-# copy-pasting a generated UUID. The ros profile is the real-robot workspace and
-# drops the "sim" infix; the sims (isaac, robocasa) keep it. --rm cleans it up on
-# exit; if a previous run was killed without cleanup, force-remove the stale name.
-if [ "$SIM" = "ros" ]; then NAME="golem_ros"; else NAME="golem_sim_${SIM}"; fi
-docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker compose -f docker/docker-compose.yml --profile "$SIM" run --rm --remove-orphans --name "$NAME" "$SIM" "$@"
+exec "${COMPOSE[@]}" run --rm --name "$NAME" "$SIM" "$@"

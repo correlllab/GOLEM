@@ -5,7 +5,10 @@ services:
     build:
       context: ..
       dockerfile: docker/IsaacDockerfile
+    entrypoint: []
     image: golem_sim_isaac:latest
+    platform: linux/amd64
+    init: true
     runtime: nvidia
     privileged: true
     shm_size: 16g
@@ -13,24 +16,49 @@ services:
     stdin_open: true
     tty: true
     environment:
-      - DISPLAY=${DISPLAY}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
       - QT_X11_NO_MITSHM=1
       - LIBGL_ALWAYS_INDIRECT=0
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-1}
     volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:ro
-      - /dev/input:/dev/input:ro
-      - /dev/dri:/dev/dri:rw
-      - ../CL_Assets:/home/code/CL_Assets:ro
-      - ./scripts:/home/code/h12_sim_scripts
-      - ../CL_isaaclab_sim:/home/code/CL_isaaclab_sim
-      - ../CL_isaaclab_sim/.isaac_cache/ov:/root/.cache/ov
-      - ../CL_isaaclab_sim/.isaac_cache/nvidia:/root/.nv
-      - ../CL_isaaclab_sim/.isaac_cache/local_share_ov:/root/.local/share/ov
-      - ../CL_isaaclab_sim/.isaac_cache/isaacsim:/root/.isaacsim
+      - type: bind
+        source: ${GOLEM_ASSETS_DIR:-../CL_Assets}
+        target: /home/code/CL_Assets
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./scripts
+        target: /home/code/h12_sim_scripts
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../CL_isaaclab_sim
+        target: /home/code/CL_isaaclab_sim
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GOLEM_CACHE_DIR:-../container_cache}/isaac/ov
+        target: /root/.cache/ov
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GOLEM_CACHE_DIR:-../container_cache}/isaac/nvidia
+        target: /root/.nv
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GOLEM_CACHE_DIR:-../container_cache}/isaac/local_share_ov
+        target: /root/.local/share/ov
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GOLEM_CACHE_DIR:-../container_cache}/isaac/isaacsim
+        target: /root/.isaacsim
+        bind:
+          create_host_path: false
     command: /home/code/h12_sim_scripts/launch_isaac.sh
 
   robocasa:
@@ -40,6 +68,8 @@ services:
       context: ..
       dockerfile: docker/RobocasaDockerfile
     image: golem_sim_robocasa:latest
+    platform: linux/amd64
+    init: true
     runtime: nvidia
     privileged: true
     shm_size: 16g
@@ -47,7 +77,6 @@ services:
     stdin_open: true
     tty: true
     environment:
-      - DISPLAY=${DISPLAY}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
       - QT_X11_NO_MITSHM=1
@@ -57,13 +86,23 @@ services:
       - MUJOCO_GL=${MUJOCO_GL:-glfw}
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-1}
     volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:ro
-      - /dev/input:/dev/input:ro
-      - /dev/dri:/dev/dri:rw
-      - ../h1_robocasa:/home/code/h1_robocasa
-      - ../CL_Assets:/home/code/CL_Assets:ro
-      - ./scripts:/home/code/h12_sim_scripts
+      - type: bind
+        source: ../h1_robocasa
+        target: /home/code/h1_robocasa
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GOLEM_ASSETS_DIR:-../CL_Assets}
+        target: /home/code/CL_Assets
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./scripts
+        target: /home/code/h12_sim_scripts
+        read_only: true
+        bind:
+          create_host_path: false
       # Only the message packages the magpi sim needs — keeps the rest of
       # core_ws (model_server weights, FAST_LIO, root-owned host build
       # dir, etc.) out of this container. The parent rw mount persists
@@ -71,9 +110,23 @@ services:
       # colcon's incremental rebuild on launch is a near-no-op when the
       # IDL is unchanged; the two inner :ro mounts override their src/
       # subdirs so the package sources stay read-only.
-      - ../container_cache/msgs_ws:/home/code/msgs_ws:rw
-      - ../core_ws/src/magpie_msgs:/home/code/msgs_ws/src/magpie_msgs:ro
-      - ../core_ws/src/custom_ros_messages:/home/code/msgs_ws/src/custom_ros_messages:ro
+      - type: bind
+        source: ${GOLEM_CACHE_DIR:-../container_cache}/msgs_ws
+        target: /home/code/msgs_ws
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../core_ws/src/magpie_msgs
+        target: /home/code/msgs_ws/src/magpie_msgs
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../core_ws/src/custom_ros_messages
+        target: /home/code/msgs_ws/src/custom_ros_messages
+        read_only: true
+        bind:
+          create_host_path: false
     command: /home/code/h12_sim_scripts/launch_robocasa.sh
 
   ros:
@@ -88,6 +141,8 @@ services:
       args:
         - MJPC_REF
     image: golem_ros:latest
+    platform: linux/amd64
+    init: true
     runtime: nvidia
     privileged: true
     shm_size: 16g
@@ -95,7 +150,6 @@ services:
     stdin_open: true
     tty: true
     environment:
-      - DISPLAY=${DISPLAY}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
       - QT_X11_NO_MITSHM=1
@@ -104,7 +158,7 @@ services:
       # sensor traffic (camera images, Livox point clouds) stops overflowing the
       # socket buffer and dropping DDS fragments. Config file bind-mounted below;
       # also raise net.core.rmem_max on the host or this has no effect
-      # (see README "Network / DDS tuning").
+      # (see docs/DDS_TUNING.md).
       - CYCLONEDDS_URI=file:///home/code/cyclonedds.xml
       # Gemini API key for the vision pipeline's gemini backbone + h12_skills.
       # Passed through from the host shell: export GEMINI_API_KEY before running.
@@ -118,41 +172,69 @@ services:
       # into via the bind mounts below. graspgen_server requires this explicitly.
       - GRASPGENX_ASSETS_DIR=/opt/graspgenx/assets
     volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:ro
-      - ../core_ws:/home/code/core_ws
+      - type: bind
+        source: ../core_ws
+        target: /home/code/core_ws
+        bind:
+          create_host_path: false
       # CycloneDDS tuning config (see CYCLONEDDS_URI above). core_ws is already
       # mounted, but bind the file explicitly and read-only so the setting is
       # obvious and can't be clobbered from inside the container.
-      - ../core_ws/cyclonedds.xml:/home/code/cyclonedds.xml:ro
-      - ../CL_Assets:/home/code/CL_Assets:ro
+      - type: bind
+        source: ../core_ws/cyclonedds.xml
+        target: /home/code/cyclonedds.xml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GOLEM_ASSETS_DIR:-../CL_Assets}
+        target: /home/code/CL_Assets
+        read_only: true
+        bind:
+          create_host_path: false
       # Stage the magpie GraspGenX gripper description into the (image-baked)
       # GraspGenX assets so gripper_name=magpie resolves. Mount the LEAF dirs only —
       # mounting all of assets/ would shadow the baked proc_grippers/ + sample_data/.
       # gripper.urdf references ../meshes/magpie/, so the meshes leaf is mounted at
       # x_grippers/meshes/magpie (one level up from the gripper dir).
-      - ../CL_Assets/graspgenx/assets/magpie:/opt/graspgenx/assets/x_grippers/magpie:ro
-      - ../CL_Assets/graspgenx/assets/meshes/magpie:/opt/graspgenx/assets/x_grippers/meshes/magpie:ro
-      - ./scripts:/home/code/h12_sim_scripts
+      - type: bind
+        source: ${GOLEM_ASSETS_DIR:-../CL_Assets}/graspgenx/assets/magpie
+        target: /opt/graspgenx/assets/x_grippers/magpie
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GOLEM_ASSETS_DIR:-../CL_Assets}/graspgenx/assets/meshes/magpie
+        target: /opt/graspgenx/assets/x_grippers/meshes/magpie
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./scripts
+        target: /home/code/h12_sim_scripts
+        read_only: true
+        bind:
+          create_host_path: false
       # --- MuJoCo MPC (MJPC) dev mounts -------------------------------------
       # rw SOURCE mount: the ../mujoco_mpc submodule fills the (build-time-removed)
       # clone path so the C++ agent_server / task XMLs are host-editable. The
       # importable package lives baked in dist-packages, so `import mujoco_mpc`
       # works with zero rebuild; keep this checkout pinned at MJPC_REF.
-      - ../mujoco_mpc:/home/code/mujoco_mpc:rw
+      - type: bind
+        source: ../mujoco_mpc
+        target: /home/code/mujoco_mpc
+        bind:
+          create_host_path: false
       # Persistent CMake build tree, nested INSIDE the source mount at the exact
       # in-tree path the image seed was built at (/home/code/mujoco_mpc/build), so
       # CMakeCache absolute paths match and setup.py's build_ext reuses it. Host
       # bytes live in gitignored container_cache/mjpc_build; launch_ros.sh hydrates
       # it from /opt/mjpc-build-seed on first launch (see msgs_ws pattern above).
-      - ../container_cache/mjpc_build:/home/code/mujoco_mpc/build:rw
-      # unitree_sdk2 C++ SDK install (headers + PREBUILT libunitree_sdk2.a +
-      # CycloneDDS .so) for the h12_deploy_mjpc controller shim, which compiles
-      # the fork's deploy core (deploy_common.cc, raw unitree_sdk2 DDS) inside
-      # colcon. Hydrated by launch_ros.sh on first launch (clone + cmake
-      # --install, seconds — nothing compiles, the repo ships prebuilt libs);
-      # persisted here so `run --rm` containers keep it.
-      - ../container_cache/unitree_install:/opt/unitree_install:rw
+      - type: bind
+        source: ${GOLEM_CACHE_DIR:-../container_cache}/mjpc_build
+        target: /home/code/mujoco_mpc/build
+        bind:
+          create_host_path: false
       # Submodule git metadata (ro): mujoco_mpc/.git is a FILE with
       # `gitdir: ../.git/modules/mujoco_mpc`, so mounting that dir at the
       # matching container path makes git work on the mounted source.
@@ -160,5 +242,10 @@ services:
       # un-backdate exactly the files that changed since the image's baked
       # build seed (otherwise a submodule ahead of MJPC_REF hydrates into a
       # silently STALE build tree).
-      - ../.git/modules/mujoco_mpc:/home/code/.git/modules/mujoco_mpc:ro
+      - type: bind
+        source: ${GOLEM_MJPC_GIT_DIR:-../.git/modules/mujoco_mpc}
+        target: /home/code/.git/modules/mujoco_mpc
+        read_only: true
+        bind:
+          create_host_path: false
     command: /home/code/h12_sim_scripts/launch_ros.sh

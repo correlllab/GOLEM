@@ -13,6 +13,8 @@
 # Silicon, so we ship pixels. View from the Mac: docker/mac/scripts/mac_vnc_tunnel.sh
 # then open http://localhost:6081/vnc.html.
 set -e
+source /home/code/golem_common/runtime_common.sh
+validate_sim_domain
 
 GOLEM_RVIZ="${GOLEM_RVIZ:-0}"
 # GOLEM_ROS_MCP=1 starts the ROS debugging MCP server (tools/ros_mcp_server.py)
@@ -117,11 +119,11 @@ cd "$WS"
 # unitree_hg + h12_lowerbody_rl provide the optional lower-body stack
 # (walk/FAME policies). They build cheaply and are only *launched* when
 # GOLEM_LOWERBODY is set (see the bringup), but building them always keeps
-# `ros2 run h12_lowerbody_rl fame_node` available in a shell. unitree_hg
-# needs ros-humble-rosidl-generator-dds-idl (added to the image); torch is
-# already present. NOTE: FAME balances the robot standing unsupported; the walk
-# policy currently does not stay up in the RoboCasa sim (see README).
-PKGS="custom_ros_messages magpie_msgs h12_ros2_model h12_ros2_controller h12_safety_layer h1_bringup unitree_hg h12_lowerbody_controller"
+# `ros2 run h12_lowerbody_rl fame_node` available in a shell. unitree_hg needs
+# ros-humble-rosidl-generator-dds-idl and torch, both in the image. The walk
+# policy is stable only when handed over from a settled FAME stance, which is
+# what GOLEM_LOWERBODY=switch does (see docs/MACOS.md).
+PKGS="custom_ros_messages magpie_msgs h12_ros2_model h12_ros2_controller h12_safety_layer h1_bringup unitree_hg h12_lowerbody_rl"
 H1_BRINGUP_STUB_DEPS="estop livox_ros_driver2 fast_lio model_server"
 
 for _dep in $H1_BRINGUP_STUB_DEPS; do
@@ -151,9 +153,11 @@ if [ "$GOLEM_ROS_MCP" = "1" ] || [ "$GOLEM_ROS_MCP" = "vnc" ]; then
     start_ros_mcp || echo "[launch_ros_mac] MCP server failed to start (continuing without it)"
 fi
 
-if [ "${1:-}" = "bash" ]; then
-    echo "[launch_ros_mac] workspace built; dropping to shell (ROS_DOMAIN_ID=$ROS_DOMAIN_ID)"
-    exec bash
+if [ "${GOLEM_WAIT_FOR_SIM:-0}" = 1 ]; then
+    python3 /home/code/golem_common/wait_for_sim.py
+fi
+if [ "$#" -gt 0 ]; then
+    exec "$@"
 fi
 
 echo "[launch_ros_mac] launching minimal bringup (ROS_DOMAIN_ID=$ROS_DOMAIN_ID)"

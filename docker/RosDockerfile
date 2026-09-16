@@ -292,11 +292,29 @@ RUN git clone --depth 1 https://github.com/NVlabs/GraspGenX.git /opt/graspgenx \
     && pip install --no-cache-dir --no-deps /tmp/gwheel/graspgenx-*.whl \
     && rm -rf /tmp/bsetup /tmp/gwheel
 
-# Remove a broken Pillow dist-info ghost (pillow-12.2.0.dist-info holds only a
-# REQUESTED file, no METADATA) left in an upstream layer; it crashes pip's
-# metadata scan the moment a Pillow-dependent dep is touched. The real, intact
-# Pillow 11.0.0 install is untouched.
-RUN rm -rf /usr/local/lib/python3.10/dist-packages/pillow-12.2.0.dist-info
+# Sweep orphaned .dist-info ghosts: directories holding a stray file but no
+# METADATA. pip reports such a ghost's version from the DIRECTORY NAME (so
+# `pip freeze` emits a version that is not installed), and hard-crashes with
+# "OSError: [Errno 2] ... /METADATA" the moment a dep of that package is touched.
+#
+# How one is manufactured here (Pillow is the recurring victim): the base image's
+# `uv pip install torch torchvision` writes pillow-<X>.dist-info INCLUDING a
+# REQUESTED entry in its RECORD. The controller-stack install in section 3
+# re-installs that same pillow <X> for meshcat/open3d -- its
+# `--ignore-installed` is a GLOBAL flag, not scoped to `blinker` -- overwriting
+# the dist-info with a pip-written RECORD that does NOT list REQUESTED (pillow
+# was not explicitly requested). The later `Pillow==11.0.0` pin then uninstalls
+# <X>, removing every RECORD-listed file and leaving uv's orphaned REQUESTED
+# behind.
+#
+# Version-agnostic on purpose: a hardcoded dist-info name becomes a silent no-op
+# as soon as upstream ships a different Pillow. The real, intact Pillow 11.0.0
+# install is untouched; the assert proves it.
+RUN for d in /usr/local/lib/python3.10/dist-packages/*.dist-info; do \
+        [ -d "$d" ] || continue; \
+        if [ ! -e "$d/METADATA" ]; then echo "removing orphaned dist-info: $d"; rm -rf "$d"; fi; \
+    done \
+    && python3 -c "import PIL, importlib.metadata as m; r=m.version('pillow'); assert r == PIL.__version__, f'pillow metadata {r} != runtime {PIL.__version__}'; print('pillow ok:', r)"
 
 # Freeze the ENTIRE current environment as the additive-install constraints (see
 # header). grep '==' drops editable / file-url / comment lines pip freeze emits.
@@ -447,21 +465,20 @@ RUN grep -viE '^(grpcio|grpcio-tools|grpcio-status|protobuf|mujoco)==' \
 
 # 4. Build the C++ agent_server, install the importable `mujoco_mpc` package,
 #    stage libmujoco, STASH the warm build tree as the incremental-cache seed,
-#    then REMOVE the source clone. The three source fixes that used to be sed'd
-#    in here now live as commits on extended_hw_patched, so the seed and the
-#    runtime-mounted submodule source are byte-identical (a hard requirement for
-#    the runtime incremental-build cache) and there is NO in-Dockerfile patching.
-#    The original gotchas still hold and are satisfied by those committed fixes
-#    plus build-first ordering:
+#    then REMOVE the source clone. Source fixes live as commits on the fork's
+#    extended_hw_patched branch, NOT as in-Dockerfile patching, so the seed and
+#    the runtime-mounted submodule source stay byte-identical (a hard requirement
+#    for the runtime incremental-build cache). Those commits plus build-first
+#    ordering are what satisfy these gotchas:
 #      (a) setup.py's build_py.copy_task_assets asserts build/mjpc/tasks exists,
 #          which only CMake (build_ext) produces — so run the CMake build FIRST;
 #          the install's build_ext re-config is then an incremental no-op. Building
 #          just agent_server pulls the copy_resources / copy_model_resources ALL
 #          targets that populate build/mjpc/tasks.
-#      (b) extended_hw deleted the standalone ui_agent_server executable, so the
-#          fork's setup.py no longer --targets/copies it (it aborted Ninja).
-#      (c) the stale h1_2_modified_magpie.xml.patch is replaced by a direct CMake
-#          copy of the base model in the fork's mjpc/tasks/CMakeLists.txt.
+#      (b) the fork has no standalone ui_agent_server executable, so its setup.py
+#          must not --target or copy one (that aborts Ninja).
+#      (c) the base model is copied directly by the fork's
+#          mjpc/tasks/CMakeLists.txt, not applied as an XML patch.
 #      (d) copy_task_assets globs are case-insensitive in the fork, so the H1-2
 #          UPPERCASE .STL meshes reach site-packages.
 #
@@ -557,3 +574,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-realsense2-camera \
         ros-humble-image-transport-plugins \
     && rm -rf /var/lib/apt/lists/*
+
+# The controller shim links this pinned SDK. Install at build time so launching
+# a workspace does not require network access or a per-host SDK cache.
+ARG UNITREE_SDK_REF=63c6f53103e2f28e23b807d7399e92338c9d07d3
+RUN git clone https://github.com/unitreerobotics/unitree_sdk2.git /tmp/unitree_sdk2 \
+    && git -C /tmp/unitree_sdk2 checkout --quiet "${UNITREE_SDK_REF}" \
+    && cmake -S /tmp/unitree_sdk2 -B /tmp/unitree_sdk2/build -DCMAKE_INSTALL_PREFIX=/opt/unitree_install \
+    && cmake --install /tmp/unitree_sdk2/build \
+    && test -f /opt/unitree_install/lib/libunitree_sdk2.a \
+    && rm -rf /tmp/unitree_sdk2

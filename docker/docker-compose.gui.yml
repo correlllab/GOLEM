@@ -1,0 +1,21 @@
+# Linux desktop additions; the host wrapper selects this only for GUI mode.
+x-gui: &gui
+  environment:
+    DISPLAY: ${DISPLAY:?GUI mode needs DISPLAY}
+    XAUTHORITY: /root/.Xauthority
+  volumes:
+    - type: bind
+      source: /tmp/.X11-unix
+      target: /tmp/.X11-unix
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${XAUTHORITY:-${HOME}/.Xauthority}
+      target: /root/.Xauthority
+      read_only: true
+      bind:
+        create_host_path: false
+services:
+  isaac: *gui
+  robocasa: *gui
+  ros: *gui

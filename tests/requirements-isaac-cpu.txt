@@ -1,0 +1,4 @@
+# Install the CPU torch wheel separately (see the workflow).
+numpy<2
+Pillow>=10,<12
+cyclonedds==0.10.2

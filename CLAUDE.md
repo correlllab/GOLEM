@@ -28,7 +28,7 @@ robot, so code moves between them unchanged.
 | `mujoco_mpc/` | MuJoCo-MPC fork submodule (built standalone, outside colcon — see §8) |
 | `unitree_sdk2_python/` | vendored Unitree DDS SDK (Python) |
 | `tools/` | standalone debug tools (ROS MCP server for Claude Code) |
-| `docs/` | `NAVIGATION_DEMO.md` (mac SLAM/nav2/frontier demo), `ROS_MCP_DEBUG.md` |
+| `docs/` | user-facing docs: `SETUP.md`, `RUNNING.md`, `MACOS.md`, `DDS_TUNING.md`, `NAVIGATION_DEMO.md`, `ROS_MCP_DEBUG.md` |
 | `docker/BUILD.md` | deep dive on the image/build system — read it before touching any Dockerfile |
 
 Most of the tree is **git submodules** (`git submodule update --init --recursive`
@@ -47,6 +47,13 @@ They can be invoked from any directory.
 | `docker/scripts/docker_build.sh [profile ...]` | `isaac`, `robocasa`, `ros` (no args = all three) | `golem_base` is built first automatically for `robocasa`/`ros`; `isaac` is self-contained. Pins the MJPC build to the `mujoco_mpc` submodule SHA (`MJPC_REF`). |
 | `docker/scripts/docker_run.sh <profile> [cmd...]` | `isaac`, `robocasa`, `ros`; then optionally `bash` (shell instead of default launcher) or any command; a leading `-flag` (e.g. `--headless`) is forwarded to the default launcher | Container names: `golem_ros`, `golem_sim_robocasa`, `golem_sim_isaac`. |
 
+Paired startup: `docker/scripts/docker_stack.sh up robocasa|isaac [--headless|--gui]`.
+Use `restart`, `stop`, or `logs` with the same simulator name. It prepares the
+workspaces before physics and gates bringup on a fresh DDS state sample.
+`GOLEM_ASSETS_DIR` and `GOLEM_CACHE_DIR` relocate host mounts. Shell exports
+win over `docker/.env`. Existing single-service containers require explicit
+`--restart`. See `docs/DOCKER_TESTING.md` for both platform smoke tests.
+
 Default launchers (compose `command`): `docker/scripts/launch_isaac.sh`,
 `launch_robocasa.sh`, `launch_ros.sh`. The `ros` launcher colcon-builds
 `core_ws` (if stale) and **drops to a shell — it does not launch bringup**.
@@ -56,7 +63,7 @@ Default launchers (compose `command`): `docker/scripts/launch_isaac.sh`,
 | Script | Verified arguments | Notes |
 |---|---|---|
 | `docker/mac/scripts/docker_build_mac.sh [service ...]` | `robocasa`, `ros` (no args = both) | **No `isaac`** — Isaac Sim needs an NVIDIA GPU. arm64 base built from `docker/mac/BaseDockerfile.arm64`. |
-| `docker/mac/scripts/docker_run_mac.sh <service> [cmd...]` | `robocasa`, `ros` | Starts ONE service. For the paired sim prefer `docker compose -f docker/mac/docker-compose.yml up` so both start together (RoboCasa running alone for a few seconds lets the robot collapse — motor command timeout). |
+| `docker/mac/scripts/docker_run_mac.sh <service> [cmd...]` | `robocasa`, `ros` | Starts ONE service. For paired startup use `docker/mac/scripts/docker_stack_mac.sh up robocasa` (RoboCasa running alone for a few seconds lets the robot collapse — motor command timeout). |
 
 Mac feature toggles are env vars read by the compose file: `GOLEM_DISPLAY=vnc`
 (MuJoCo viewer → noVNC :6080), `GOLEM_RVIZ=vnc` (RViz → :6081), `GOLEM_LOWERBODY=fame|walk|switch`,
@@ -193,13 +200,15 @@ it consumes. Verified current surface:
 `/livox/lidar` (CustomMsg), `/livox/pointcloud`, `/livox/imu`,
 `/{left,right}/gripper/state`, and `rt/lowstate` over Unitree DDS; consumes
 `rt/lowcmd` and the `/{left,right}/gripper/*` services/DeliGrasp action.
-(The topic list in `launch_robocasa.sh`'s header comment and the root README is
-stale — trust the bridge code in `mujoco_ros_bridge.py`.)
+(Trust the bridge code in `mujoco_ros_bridge.py` over any topic list repeated
+elsewhere.)
 
 **Isaac (`CL_isaaclab_sim/sim_main.py`)** — publishes `rt/lowstate` and
-`rt/inspire/state` over DDS plus compressed left-hand camera topics over ROS;
-consumes `rt/lowcmd`, `rt/inspire/cmd`, `rt/reset_pose/cmd`. Lidar/IMU ROS
-publishers are advertised but currently never fed (publish code commented out).
+optional `rt/inspire/state` over CycloneDDS, `/clock`, three RealSense RGBD
+camera streams with camera info, and `/livox/{lidar,pointcloud,imu}`. Consumes
+`rt/lowcmd` and optional `rt/inspire/cmd`. The current asset is the Inspire
+model; Magpie hardware fidelity depends on the planned CL_Assets pin update.
+See `tests/README.md` for saved CPU and cross-container integration tests.
 
 ### Ground truth must NEVER be on by default
 
@@ -212,10 +221,8 @@ sim-to-real transfer.
 - **RoboCasa complies:** ground-truth `/odom` + `odom→pelvis` TF is gated by
   `GOLEM_SIM_ODOM` (default `'0'` = off, `h12_mujoco.py:184`). Only the mac nav
   demo opts in. Keep it that way.
-- **Known deviations (do not make worse):** Isaac publishes full scene ground
-  truth (`rt/sim_state`, robot + object poses as JSON) unconditionally every
-  loop — there is no off switch, and `docker/scripts/dds_bridge.py` even relays
-  it across domains. RoboCasa always publishes privileged task signals
+- **Isaac:** no full-scene ground-truth publisher or per-step scene JSON conversion.
+- **Known deviations (do not make worse):** RoboCasa always publishes privileged task signals
   (`/robocasa/success`, `/robocasa/reward`, `/robocasa/task_goal`). Never make
   robot-stack code *depend* on any of these, and don't add new ungated
   ground-truth publishers.
@@ -256,6 +263,37 @@ identical (the images must agree on the `CustomMsg` wire format), and assert the
 build worked — `python3 -c 'from livox_ros_driver2.msg import CustomMsg'` — so a
 mismatch fails the image build instead of shipping broken.
 
+### Comments describe the code as it is, not how it got there
+
+A comment is scoped to what the code does **now**, written for someone who has
+never seen an earlier version. Change history belongs in the commit message and
+the PR, not in the source — git already has it, and a comment about a past edit
+goes stale the moment the next edit lands.
+
+Don't write:
+
+- change narration — `# now uses X instead of Y`, `# switched to CycloneDDS`,
+  `# was 0.5, bumped to 0.8`, `# fixed the TF extrapolation bug`
+- dated or attributed notes — `# 2026-07-12 (max): ...`, `# per review`
+- status chatter about the edit itself — `# new`, `# updated`, `# temporary`,
+  `# deprecated, keep for now`
+- commented-out code kept "just in case" — delete it; git remembers
+- a restatement of the identifier the comment sits above
+
+Do write what the code can't say for itself: units and frames (`# rad, pelvis
+frame`), why a non-obvious constant, ordering or sleep is required, invariants
+a caller must uphold, and a link to the upstream issue that forces a workaround.
+
+Rationale from a past change is welcome when the rationale is still
+load-bearing — but phrase it as a present-tense constraint, not as a diff:
+`# 3.2.3 matches the MJPC ABI` beats `# downgraded from 3.3.1, MJPC broke`.
+
+This applies to edits too: when you change behavior, rewrite the nearby comment
+and docstring to describe the new behavior instead of appending a note about the
+change. A comment that duplicates a list the code owns (topics, package names,
+paths, tuning values) is a stale comment waiting to happen — point at the
+authoritative source instead of copying it.
+
 ### Other invariants
 
 - MuJoCo versions are pinned per image (`3.2.3` in `ros` to match the MJPC ABI,
@@ -293,7 +331,7 @@ ros2 action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
 
 ```bash
 # Terminals 1+2 in one: start BOTH services together (bringup auto-launches in ros)
-docker compose -f docker/mac/docker-compose.yml up
+docker/mac/scripts/docker_stack_mac.sh up robocasa
 # or two terminals: docker/mac/scripts/docker_run_mac.sh robocasa  /  ... ros
 # (start ros within seconds of robocasa or the robot collapses)
 
@@ -323,13 +361,13 @@ pose — it gates leg commands).
 2. `cp docker/.env.example docker/.env`; set `GEMINI_API_KEY` and
    `ROS_DOMAIN_ID` (any non-zero; 0 is the real robot).
 3. Place SAM3 weights at `core_ws/src/model_server/weights/sam3.pt`
-   (gated HF download — see root `README.md`).
+   (gated HF download — see `docs/SETUP.md`).
 4. `docker/scripts/docker_build.sh robocasa ros` (add `isaac` if needed).
 5. Run the three-terminal flow in §9; confirm with `ros2 topic hz /lowstate`
    and `ros2 action list | grep skill` inside `golem_ros`.
 6. Trigger `/skill/grasp` or the frontier explorer (§7).
-7. Read first: root `README.md` (run flows, DDS tuning, mac port),
-   `docker/BUILD.md` (build system), your target package's source.
+7. Read first: `docs/RUNNING.md` (run flows), `docker/BUILD.md` (build system),
+   your target package's source. `README.md` indexes the rest of `docs/`.
 
 ### Common pitfalls
 
@@ -347,10 +385,6 @@ pose — it gates leg commands).
 - Talking to the sim from the host bypasses `docker/.env`; run
   `set -a; source docker/.env; set +a` first or topics will be invisible.
 - Laggy point clouds/images on x86 are usually kernel UDP buffer drops — see
-  "Network / DDS tuning" in the root README (sysctls + IRQ pinning).
-- Stale name alert: `docker/mac/scripts/launch_ros_mac.sh` `PKGS` still lists
-  `h12_lowerbody_controller`; the package is now `h12_lowerbody_rl`. If the mac
-  lower-body stack won't build/launch, fix that list.
-- Isaac's `launch_isaac.sh` hardcodes its task on the `exec` line — the
-  script's task/`--headless` parsing is dead code; pass flags by invoking
-  `sim_main.py` directly if you need a different task.
+  `docs/DDS_TUNING.md` (sysctls + IRQ pinning).
+- Isaac's launcher accepts `--task NAME` and `--headless`; Unitree DDS reads
+  `ROS_DOMAIN_ID` directly and rejects domain 0. There is no domain relay.

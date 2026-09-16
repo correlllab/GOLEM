@@ -22,9 +22,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # MuJoCo Python binding + Pillow for image encoding.
-# NOTE: pinned to 3.3.1 to match Robocasa's hard pin (see below). Earlier
-# this image used 3.6.0; downgraded so that `pip install robocasa` doesn't
-# silently swap the version mid-install.
+# Pinned to 3.3.1 to match Robocasa's hard pin (see below); any other version
+# is silently swapped out mid-install by `pip install robocasa`.
 RUN uv pip install --system --no-cache \
         "mujoco==3.3.1" \
         "numpy>=2.2.6" \

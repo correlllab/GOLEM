@@ -1,9 +1,13 @@
 #!/bin/bash
-# Build (if needed) and source the core_ws workspace, then drop to bash.
+# Build and source core_ws, then execute a command (default: bash).
 # core_ws is bind-mounted from the host; build/install/log persist there too.
 set -e
 
 source /opt/ros/humble/setup.bash
+if [ ! -f /opt/unitree_install/lib/libunitree_sdk2.a ]; then
+    echo '[launch_ros] missing baked Unitree SDK; rebuild with docker/scripts/docker_build.sh ros' >&2
+    exit 1
+fi
 
 # --- MuJoCo MPC (MJPC) build-cache hydrate (image seed -> persistent mount) ---
 # ../container_cache/mjpc_build persists the CMake build tree at the in-tree path
@@ -54,31 +58,6 @@ if [ -f "$MJPC_SRC/CMakeLists.txt" ] && [ ! -e "$MJPC_BUILD/CMakeCache.txt" ] \
     fi
 fi
 
-# --- unitree_sdk2 C++ install hydrate (for the h12_deploy_mjpc controller shim) ---
-# deploy_common.cc (compiled by colcon from the submodule) links unitree_sdk2's
-# C++ ChannelFactory/Publisher/Subscriber. The repo ships PREBUILT
-# libunitree_sdk2.a + CycloneDDS .so per arch, so this is a clone + header/lib
-# copy — seconds, no compilation. /opt/unitree_install is a persistent host
-# mount (container_cache/unitree_install), so this runs exactly once per host.
-# SHA pinned to the host's ~/unitree_sdk2 build (63c6f53) so fork and shim link
-# the SAME SDK.
-UNITREE_PREFIX=/opt/unitree_install
-UNITREE_SDK_REF=63c6f53103e2f28e23b807d7399e92338c9d07d3
-if [ ! -f "$UNITREE_PREFIX/lib/libunitree_sdk2.a" ]; then
-    echo "[launch_ros] hydrating unitree_sdk2 C++ install -> $UNITREE_PREFIX (@$UNITREE_SDK_REF)"
-    rm -rf /tmp/unitree_sdk2
-    if git clone https://github.com/unitreerobotics/unitree_sdk2.git /tmp/unitree_sdk2 \
-       && git -C /tmp/unitree_sdk2 checkout --quiet "$UNITREE_SDK_REF" \
-       && cmake -S /tmp/unitree_sdk2 -B /tmp/unitree_sdk2/build \
-                -DCMAKE_INSTALL_PREFIX="$UNITREE_PREFIX" >/dev/null \
-       && cmake --install /tmp/unitree_sdk2/build >/dev/null; then
-        echo "[launch_ros] unitree_sdk2 installed"
-    else
-        echo "[launch_ros] WARNING: unitree_sdk2 hydrate FAILED — h12_deploy_mjpc's controller will be skipped by its CMake guard"
-    fi
-    rm -rf /tmp/unitree_sdk2
-fi
-
 # --- MJPC incremental rebuild (ninja no-op scan when already warm) ---
 # Brings libmjpc/threadpool + the staged task assets + the dist-packages
 # agent_server current with the mounted submodule BEFORE colcon links
@@ -97,7 +76,7 @@ fi
 
 # Rebuild only if install/ is missing or any package.xml is newer than its install marker.
 NEEDS_BUILD=0
-if [ ! -d install ]; then
+if [ ! -f install/setup.bash ]; then
     NEEDS_BUILD=1
 elif [ -n "$(find src -name package.xml -newer install/setup.bash 2>/dev/null | head -1)" ]; then
     NEEDS_BUILD=1
@@ -128,6 +107,10 @@ else
     echo "[launch_ros] install/ is up to date — skipping build (run 'colcon build --symlink-install' to force)"
 fi
 
-source install/setup.bash 2>/dev/null || true
+source install/setup.bash
 
-exec bash
+if [ "${GOLEM_WAIT_FOR_SIM:-0}" = 1 ]; then
+    python3 /home/code/h12_sim_scripts/wait_for_sim.py
+fi
+[ "$#" -gt 0 ] || set -- bash
+exec "$@"

@@ -2,13 +2,12 @@
 # Usage: ./launch_robocasa.sh [--headless]
 # Windowed MuJoCo sim by default; pass --headless to disable the passive viewer
 # (auto-applied when no DISPLAY is reachable, e.g. SSH without X11 / CI).
-# Sim publishes:
-#   - rt/lowstate on CycloneDDS domain 1 (unitree_sdk2py)
-#   - /realsense/{head,left_hand,right_hand}/color/image_raw[/compressed],
-#     .../aligned_depth_to_color/image_raw[/compressedDepth], .../color/camera_info,
-#     /livox/lidar (CustomMsg), /livox/pointcloud, /livox/imu, /clock, and
-#     /{left,right}/gripper/state on ROS 2 (ROS_DOMAIN_ID=1 unless overridden)
+# The sim publishes rt/lowstate over CycloneDDS plus its camera / lidar / clock /
+# gripper topics on ROS 2 (ROS_DOMAIN_ID=1 unless overridden). mujoco_ros_bridge.py
+# is the authority on that list.
 set -e
+source "$(dirname "$0")/runtime_common.sh"
+validate_sim_domain
 
 source /opt/ros/humble/setup.bash
 # livox_ros_driver2 (CustomMsg/CustomPoint) is baked into the robocasa image at
@@ -25,6 +24,7 @@ echo "[launch_robocasa] building $MSGS_WS"
 (cd "$MSGS_WS" && colcon build --symlink-install \
     --packages-select magpie_msgs custom_ros_messages)
 source "$MSGS_WS/install/setup.bash"
+[ "${GOLEM_PREPARE_ONLY:-0}" != 1 ] || exit 0
 
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-1}"
 
@@ -49,4 +49,4 @@ cd /home/code/h1_robocasa
 # -u: docker-compose captures stdout via a pipe, which block-buffers python's
 # print()s — the "[h12_mujoco] ROS bridges up" readiness line otherwise sits in
 # the buffer indefinitely on a quiet headless run.
-python -u h12_mujoco.py "$@"
+exec python -u h12_mujoco.py "$@"

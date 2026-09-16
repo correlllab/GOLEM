@@ -7,7 +7,7 @@
 #
 # Build:  docker build -t golem_sim_robocasa:latest -f docker/mac/RobocasaDockerfile.arm64 .
 # ==============================
-FROM golem_base:latest
+FROM golem_base:arm64
 
 ARG http_proxy
 ARG https_proxy

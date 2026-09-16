@@ -26,6 +26,9 @@ import os
 import struct
 from array import array as _array
 from collections import namedtuple
+from contextlib import nullcontext
+
+from sim_timing import LoopTimings
 
 import mujoco
 import numpy as np
@@ -137,12 +140,14 @@ class RosSensorBridge(Node):
         lidar_self_prefixes: tuple = (),
         elastic_band=None,
         sim_lock=None,
+        timings=None,
     ):
         super().__init__("mujoco_sensors")
         self.model = model
         self.data = data
         self.elastic_band = elastic_band
         self.sim_lock = sim_lock
+        self.timings = timings if timings is not None else LoopTimings()
 
         self.lidar_frame = lidar_frame
 
@@ -337,9 +342,12 @@ class RosSensorBridge(Node):
         /clock is published every call. TF and IMU are published at their
         target rates keyed off sim time. Camera and lidar are rate-throttled
         the same way but run less frequently (they involve rendering / ray
-        casting on the main thread).
+        casting on the main thread). Call without holding sim_lock: each sensor
+        protects its own MuJoCo reads, then encodes/publishes outside the lock.
+        Physics must stay on this thread so the state cannot advance mid-tick.
         """
-        sim_t = float(self.data.time)
+        with self.sim_lock or nullcontext():
+            sim_t = float(self.data.time)
         stamp = _sim_time_to_msg(sim_t)
 
         # Always publish /clock so subscriber nodes can track sim time.
@@ -376,11 +384,12 @@ class RosSensorBridge(Node):
                 self.get_logger().warn(f"lidar publish failed: {e}")
 
     def _publish_imu(self, stamp: TimeMsg) -> None:
-        sd = self.data.sensordata
-        # framequat sensor returns (w, x, y, z) world-frame; gyro/accel are site-local.
-        q = sd[self.imu_quat_adr : self.imu_quat_adr + self.imu_quat_dim]
-        w = sd[self.imu_gyro_adr : self.imu_gyro_adr + self.imu_gyro_dim]
-        a = sd[self.imu_acc_adr : self.imu_acc_adr + self.imu_acc_dim]
+        with self.sim_lock or nullcontext():
+            sd = self.data.sensordata
+            # framequat sensor returns (w, x, y, z) world-frame; gyro/accel are site-local.
+            q = sd[self.imu_quat_adr : self.imu_quat_adr + self.imu_quat_dim].copy()
+            w = sd[self.imu_gyro_adr : self.imu_gyro_adr + self.imu_gyro_dim].copy()
+            a = sd[self.imu_acc_adr : self.imu_acc_adr + self.imu_acc_dim].copy()
 
         msg = Imu()
         msg.header.stamp = stamp
@@ -400,11 +409,12 @@ class RosSensorBridge(Node):
     def _publish_odom(self, stamp: TimeMsg) -> None:
         # Ground-truth pelvis pose in the sim world (used as the odom frame).
         # MuJoCo quaternions are (w, x, y, z); ROS wants (x, y, z, w).
-        pos = self.data.xpos[self.base_body_id]
-        quat = self.data.xquat[self.base_body_id]
-        px, py, pz = float(pos[0]), float(pos[1]), float(pos[2])
-        qw, qx, qy, qz = (float(quat[0]), float(quat[1]),
-                          float(quat[2]), float(quat[3]))
+        with self.sim_lock or nullcontext():
+            pos = self.data.xpos[self.base_body_id]
+            quat = self.data.xquat[self.base_body_id]
+            px, py, pz = float(pos[0]), float(pos[1]), float(pos[2])
+            qw, qx, qy, qz = (float(quat[0]), float(quat[1]),
+                              float(quat[2]), float(quat[3]))
 
         tf = TransformStamped()
         tf.header.stamp = stamp
@@ -433,35 +443,46 @@ class RosSensorBridge(Node):
         self.pub_odom.publish(odom)
 
     def _publish_camera_frame(self, stamp: TimeMsg) -> None:
-        if self._renderer is None:
-            if self.model.vis.global_.offwidth < self.cam_width:
-                self.model.vis.global_.offwidth = self.cam_width
-            if self.model.vis.global_.offheight < self.cam_height:
-                self.model.vis.global_.offheight = self.cam_height
-            self._renderer = mujoco.Renderer(self.model, height=self.cam_height, width=self.cam_width)
-            # Group 0: red collision primitives (joint spheres, mesh
-            # duplicates) — hide. Group 1: H1 body visual meshes — show.
-            # Group 2: magpie hand visuals + h12 wrist mount — show.
-            # Group 3: magpie collision meshes + finger pad boxes — hide.
-            self._scene_opt = mujoco.MjvOption()
-            self._scene_opt.geomgroup[:] = 0
-            self._scene_opt.geomgroup[1] = 1
-            self._scene_opt.geomgroup[2] = 1
-            # Hide all site markers from camera output. Sites are non-physical
-            # debug markers (camera/lidar mounts, robosuite's required grip_site
-            # at the grasp center, etc.); a hand camera looking down the gripper
-            # axis stares straight at grip_site, whose semi-transparent geom is
-            # faint in RGB but writes a solid blob into the depth image.
-            self._scene_opt.sitegroup[:] = 0
+        with self.sim_lock or nullcontext():
+            if self._renderer is None:
+                if self.model.vis.global_.offwidth < self.cam_width:
+                    self.model.vis.global_.offwidth = self.cam_width
+                if self.model.vis.global_.offheight < self.cam_height:
+                    self.model.vis.global_.offheight = self.cam_height
+                self._renderer = mujoco.Renderer(self.model, height=self.cam_height, width=self.cam_width)
+                self._rgb_buffer = np.empty((self.cam_height, self.cam_width, 3), dtype=np.uint8)
+                self._depth_buffer = np.empty((self.cam_height, self.cam_width), dtype=np.float32)
+                # Group 0: red collision primitives (joint spheres, mesh
+                # duplicates) — hide. Group 1: H1 body visual meshes — show.
+                # Group 2: magpie hand visuals + h12 wrist mount — show.
+                # Group 3: magpie collision meshes + finger pad boxes — hide.
+                self._scene_opt = mujoco.MjvOption()
+                self._scene_opt.geomgroup[:] = 0
+                self._scene_opt.geomgroup[1] = 1
+                self._scene_opt.geomgroup[2] = 1
+                # Hide all site markers from camera output. Sites are non-physical
+                # debug markers (camera/lidar mounts, robosuite's required grip_site
+                # at the grasp center, etc.); a hand camera looking down the gripper
+                # axis stares straight at grip_site, whose semi-transparent geom is
+                # faint in RGB but writes a solid blob into the depth image.
+                self._scene_opt.sitegroup[:] = 0
         r = self._renderer
 
         # Render every camera through the shared renderer (one render context,
         # selected per camera by name). All share resolution/rate; each publishes
         # to its own /realsense/<namespace>/* topics with its own frame_id.
         for cam in self.cameras:
+            render_start = self.timings.start()
             r.disable_depth_rendering()
-            r.update_scene(self.data, camera=cam.name, scene_option=self._scene_opt)
-            rgb_u8 = np.ascontiguousarray(r.render(), dtype=np.uint8)
+            with self.sim_lock or nullcontext():
+                r.update_scene(self.data, camera=cam.cam_id, scene_option=self._scene_opt)
+            # Both passes consume the same captured MjvScene. Rendering and
+            # encoding do not access mutable MjData; keep DDS readers unblocked.
+            rgb_u8 = r.render(out=self._rgb_buffer)
+            r.enable_depth_rendering()
+            depth = r.render(out=self._depth_buffer)
+            self.timings.stop("camera_render", render_start)
+            publish_start = self.timings.start()
 
             rgb_jpeg = io.BytesIO()
             PILImage.fromarray(rgb_u8, mode="RGB").save(rgb_jpeg, format="JPEG", quality=80)
@@ -487,10 +508,6 @@ class RosSensorBridge(Node):
             rgb_raw.step = self.cam_width * 3
             rgb_raw.data = _array("B", rgb_u8.tobytes())
             cam.pub_rgb_raw.publish(rgb_raw)
-
-            r.enable_depth_rendering()
-            r.update_scene(self.data, camera=cam.name, scene_option=self._scene_opt)
-            depth = r.render()
 
             # Mask "no hit" pixels (far-plane sentinel + non-finite/<=0) to 0
             # before quantizing to mm. RealSense uses 0 as the invalid value
@@ -529,33 +546,39 @@ class RosSensorBridge(Node):
             info = cam.info_msg
             info.header.stamp = stamp
             cam.pub_info.publish(info)
+            self.timings.stop("camera_publish", publish_start)
 
     def _publish_lidar_scan(self, stamp: TimeMsg) -> None:
-        origin = np.ascontiguousarray(self.data.xpos[self.lidar_body_id], dtype=np.float64).reshape(3, 1)
-        rot = np.array(self.data.xmat[self.lidar_body_id], dtype=np.float64).reshape(3, 3)
+        cast_start = self.timings.start()
+        with self.sim_lock or nullcontext():
+            timebase = int(self.data.time * 1e9)
+            origin = np.ascontiguousarray(self.data.xpos[self.lidar_body_id], dtype=np.float64).reshape(3, 1)
+            rot = np.array(self.data.xmat[self.lidar_body_id], dtype=np.float64).reshape(3, 3)
 
-        # Rotate local ray directions to world frame.
-        # rot maps local→world (column vecs); for row-vec array: world = local @ rot.T
-        world_dirs = np.ascontiguousarray(self.lidar_local_dirs @ rot.T, dtype=np.float64)
+            # Rotate local ray directions to world frame.
+            # rot maps local→world (column vecs); for row-vec array: world = local @ rot.T
+            world_dirs = np.ascontiguousarray(self.lidar_local_dirs @ rot.T, dtype=np.float64)
 
-        # Single batched cast. bodyexclude=torso skips the torso shell at the
-        # source: the lidar sits inside the torso visual mesh and otherwise
-        # every ray would self-hit at ~2 cm, forcing a per-ray retry loop
-        # (~280 ms/scan). Excluding here gives ~80 ms/scan.
-        dists = self._lidar_dists
-        geomids = self._lidar_geomids
-        dists.fill(-1.0)
-        geomids.fill(-1)
-        mujoco.mj_multiRay(
-            self.model, self.data,
-            origin, world_dirs.reshape(-1, 1),
-            self.lidar_geomgroup,
-            1,                              # include static geoms
-            self.lidar_exclude_body_id,     # skip torso geoms
-            geomids, dists,
-            self.lidar_rays,
-            self.lidar_max_range,
-        )
+            # Single batched cast. bodyexclude=torso skips the torso shell at the
+            # source: the lidar sits inside the torso visual mesh and otherwise
+            # every ray would self-hit at ~2 cm, forcing a per-ray retry loop
+            # (~280 ms/scan). Excluding here gives ~80 ms/scan.
+            dists = self._lidar_dists
+            geomids = self._lidar_geomids
+            dists.fill(-1.0)
+            geomids.fill(-1)
+            mujoco.mj_multiRay(
+                self.model, self.data,
+                origin, world_dirs.reshape(-1, 1),
+                self.lidar_geomgroup,
+                1,                              # include static geoms
+                self.lidar_exclude_body_id,     # skip torso geoms
+                geomids, dists,
+                self.lidar_rays,
+                self.lidar_max_range,
+            )
+        self.timings.stop("lidar_cast", cast_start)
+        publish_start = self.timings.start()
         hit_dists = dists.ravel()
 
         # Drop self-returns: rays that hit the robot's own body (legs/arms/grippers
@@ -575,7 +598,7 @@ class RosSensorBridge(Node):
         msg = CustomMsg()
         msg.header.stamp = stamp
         msg.header.frame_id = self.lidar_frame
-        msg.timebase = int(self.data.time * 1e9)
+        msg.timebase = timebase
         msg.point_num = int(pts.shape[0])
         msg.lidar_id = 0
         msg.rsvd = [0, 0, 0]
@@ -610,8 +633,11 @@ class RosSensorBridge(Node):
         pc2.point_step = PC2_POINT_STEP
         pc2.row_step = PC2_POINT_STEP * pc2.width
         pc2.is_dense = True
-        pc2.data = arr.tobytes()
+        # A typed byte array avoids rclpy's per-byte Python validation; the
+        # serialized PointCloud2 payload is identical to the packed NumPy bytes.
+        pc2.data = _array("B", arr.tobytes())
         self.pub_pc2.publish(pc2)
+        self.timings.stop("lidar_publish", publish_start)
 
 
 def init_ros() -> bool:

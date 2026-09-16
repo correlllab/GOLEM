@@ -3,13 +3,9 @@
 # on full builds otherwise). Un-deny only files that a Dockerfile COPYs in.
 #
 # Whitelisted COPY sources:
-#   IsaacDockerfile  -> CL_isaaclab_sim/requirements.txt
 #   RobocasaDockerfile -> core_ws/src/livox_ros_driver2 (baked-in livox build)
 #   BaseDockerfile   -> unitree_sdk2_python (local SDK install)
 *
-!CL_isaaclab_sim
-CL_isaaclab_sim/*
-!CL_isaaclab_sim/requirements.txt
 !core_ws
 core_ws/*
 !core_ws/src

@@ -3,7 +3,6 @@ import math
 import os
 import random
 import threading
-import time
 
 import mujoco
 import numpy as np
@@ -18,6 +17,7 @@ from measurement_bridge import MeasurementBridge
 from mujoco_env import ElasticBand
 from mujoco_ros_bridge import RosSensorBridge
 from sim_names import NameResolver
+from sim_timing import RealtimePacer, LoopTimings
 from unitree_interface import SimInterface
 
 # Viewer free-camera spawn pose, anchored to the robot so the passive viewer
@@ -87,7 +87,7 @@ def _draw_band(handle, anchor, body_pos):
         scn.ngeom += 1
 
 
-def sim_loop(task, viewer=True, layout=None, style=None, seed=None):
+def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False):
     """Launch a RoboCasa task env around the H1-2 and run the shared-MjData loop.
 
     Builds the env with robots='H1_2' and steps the env's *own* MjData with our
@@ -213,6 +213,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None):
         ("gripper0_right_hand_cam", "right_hand", "right_hand_camera_color_optical_frame"),
     ] if _cameras_on else []
     print(f"[h12_mujoco] RGBD cameras {'ON' if _cameras_on else 'OFF (GOLEM_CAMERAS=0)'}")
+    timings = LoopTimings(enabled=timing)
     ros_bridge = RosSensorBridge(
         model, data,
         cameras=_cameras,
@@ -245,6 +246,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None):
             else ()
         ),
         sim_lock=sim_lock,
+        timings=timings,
     )
 
     # Gripper bridges (gripper0_<side>_ prefixed actuators/sensors).
@@ -297,11 +299,13 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None):
     _band_release_t = None
     _band_prev_on = bool(band.enabled) if band is not None else False
 
+    timings.reset(float(data.time))
+    pacer = RealtimePacer(model.opt.timestep)
     try:
         while True:
-            start_time = time.time()
             if viewer and not handle.is_running():
                 break
+            physics_start = timings.start()
             with sim_lock:
                 if band is not None:
                     # Re-write every step; MuJoCo persists xfrc_applied, so we must
@@ -316,6 +320,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None):
                     # /lowcmd, which held a stale-damping torque and toppled FAME.
                     sim_interface.write_ctrl()
                 mujoco.mj_step(model, data)
+                timings.stop("physics", physics_start)
                 # --- fall logger ---
                 if band is not None and _band_prev_on and not band.enabled:
                     _band_release_t = float(data.time)
@@ -332,18 +337,28 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None):
                         print(f"[fall-logger] *** ROBOT FELL at sim t={data.time:.2f}s — stood "
                               f"{_since} (uprightness={_upz:.2f}, torso_h={_torso_h:.2f}) ***",
                               flush=True)
+                task_start = timings.start()
                 env.update_state()                  # REQUIRED before _check_success
-                ros_bridge.tick()                   # /clock + camera + lidar + imu
+                timings.stop("task_update", task_start)
+            # tick owns short sensor capture locks; encoding/publication cannot
+            # block the DDS state reader. No physics step occurs inside tick.
+            ros_bridge.tick()                       # /clock + camera + lidar + imu
+            task_start = timings.start()
+            with sim_lock:
                 done = measurement.tick()
+            timings.stop("task_check", task_start)
             if done:
                 print("[h12_mujoco] task success (debounced).")
             if viewer:
+                viewer_start = timings.start()
                 if band is not None and band.enabled:
                     _draw_band(handle, band.point, data.xpos[band_body_id])
                 else:
                     handle.user_scn.ngeom = 0   # clear overlay when band off
                 handle.sync()
-            time.sleep(max(0, model.opt.timestep - (time.time() - start_time)))
+                timings.stop("viewer", viewer_start)
+            pacer.wait()
+            timings.maybe_report(float(data.time))
     finally:
         if handle is not None:
             handle.close()
@@ -441,6 +456,8 @@ if __name__ == "__main__":
     parser.add_argument("--layout", type=int, default=None, help="RoboCasa kitchen layout id")
     parser.add_argument("--style", type=int, default=None, help="RoboCasa kitchen style id")
     parser.add_argument("--seed", type=int, default=None, help="episode seed")
+    parser.add_argument("--timing", action="store_true",
+                        help="Log real-time factor and stage mean/max timings every 5 seconds")
     args = parser.parse_args()
 
     task = args.task
@@ -451,4 +468,4 @@ if __name__ == "__main__":
         task = _resolve_task(task, seed=args.seed)
 
     sim_loop(task, viewer=not args.headless,
-             layout=args.layout, style=args.style, seed=args.seed)
+             layout=args.layout, style=args.style, seed=args.seed, timing=args.timing)

@@ -1,0 +1,69 @@
+name: Simulator regression tests
+on:
+  pull_request:
+    paths:
+      - 'CL_isaaclab_sim'
+      - 'CL_isaaclab_sim/**'
+      - 'h1_robocasa/**'
+      - 'docker/**'
+      - 'tests/**'
+      - '.github/workflows/simulator-tests.yml'
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize code submodules (no large asset downloads)
+        run: git submodule update --init CL_isaaclab_sim unitree_sdk2_python
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cyclonedds-dev
+          python -m pip install torch==2.7.0 --index-url https://download.pytorch.org/whl/cpu
+          CYCLONEDDS_HOME=/usr python -m pip install -r tests/requirements-isaac-cpu.txt
+      - name: Isaac Lab interface and control regressions
+        env:
+          PYTHONPATH: CL_isaaclab_sim:unitree_sdk2_python
+        run: python -m unittest discover -s tests/isaaclab -p 'test_*.py' -v
+      - name: RoboCasa loop pacing regressions
+        env:
+          PYTHONPATH: h1_robocasa
+        run: python -m unittest discover -s tests/robocasa -p test_loop_timing.py -v
+      - name: Linux and Mac Docker workflow regressions
+        run: python -m unittest discover -s tests/docker -v
+
+  gpu-integration:
+    # Explicit trusted runs on a prepared worker; CPU job is the portable PR gate.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, linux, x64, nvidia]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: true
+      - name: Build simulation and ROS images
+        run: docker/scripts/docker_build.sh isaac ros
+      - name: Actual Isaac Lab scene and shutdown
+        run: ROS_DOMAIN_ID=187 tests/isaaclab/run_smoke.sh
+      - name: ROS sensor transport
+        run: ROS_DOMAIN_ID=188 tests/isaaclab/run_sensor_transport.sh
+      - name: Native ROS Livox interoperability
+        run: ROS_DOMAIN_ID=189 tests/isaaclab/run_livox_interop.sh
+      - name: ROS commands drive actual Isaac physics
+        run: ROS_DOMAIN_ID=191 tests/isaaclab/run_robot_interop.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: simulator-test-results
+          path: tests/results/

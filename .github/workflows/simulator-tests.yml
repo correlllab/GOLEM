@@ -41,6 +41,8 @@ jobs:
         run: python -m unittest discover -s tests/robocasa -p test_loop_timing.py -v
       - name: Linux and Mac Docker workflow regressions
         run: python -m unittest discover -s tests/docker -v
+      - name: Controller integration acceptance scoring
+        run: python -m unittest discover -s tests/stack -p 'test_*.py' -v
 
   gpu-integration:
     # Explicit trusted runs on a prepared worker; CPU job is the portable PR gate.

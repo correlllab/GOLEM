@@ -62,6 +62,9 @@ wandb/
 
 # host-side caches for docker container build artefacts
 /container_cache/
+/core_ws/build_stack_tests/
+/core_ws/install_stack_tests/
+/core_ws/log_stack_tests/
 
 # process crash dumps (e.g. h1_robocasa/core from unitree_sdk2py segfaults)
 core

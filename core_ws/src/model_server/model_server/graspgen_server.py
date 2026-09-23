@@ -71,13 +71,12 @@ MIN_OBJECT_POINTS = 30
 # when the gripper sweep volume comes within this distance of an obstacle, so a big
 # value (e.g. 5 cm) rejects grasps that merely pass NEAR the scene and can filter
 # everything; keep it small (near-contact only). Tune up only if grasps clip obstacles.
-# Loosened 5mm -> 2mm to ADMIT ROLLED grasps: the scene cloud is sparse (downsampled
-# to MAX_SCENE_POINTS), so 5mm is really a clearance band, not penetration — a rolled
-# gripper (fingers closing vertically) merely passes ~2-5mm from the support surface
-# and was being rejected, collapsing the output to upright (near-yaw-only) grasps.
-# Empirically 5mm returned 0 collision-free grasps on 3 of 4 recent calls; 2mm
-# restores a full roll spread AND un-breaks those calls. Raise back toward 5mm only
-# if grasps start clipping obstacles.
+# 2mm is small enough to ADMIT ROLLED grasps: the scene cloud is sparse (downsampled
+# to MAX_SCENE_POINTS), so this is really a clearance band, not penetration — a rolled
+# gripper (fingers closing vertically) passes only ~2-5mm from the support surface, so
+# a 5mm band rejects it, collapses the output to upright (near-yaw-only) grasps, and
+# returns 0 collision-free grasps on most calls. Raise toward 5mm only if grasps start
+# clipping obstacles.
 COLLISION_THRESHOLD_M = 0.002
 # Scene points within this radius of the object cloud are treated as the object
 # (not obstacles) and dropped before the collision check. MUST be >=
@@ -104,15 +103,14 @@ DUMMY_MESH_MIN_EXTENT_M = 0.05
 #     approach's z-component (col 2, row 2). Kept when |az| <= sin(APPROACH_MAX_
 #     PITCH_DEG). At 90 deg this admits every pitch (sin(90)=1), i.e. the gate is
 #     effectively disabled — near-vertical top-down / bottom-up approaches pass.
-#     (Earlier reach notes put the arm's steepest reachable approach at ~45 deg
-#     below horizontal, so values above ~45 may admit unreachable grasps.)
+#     (The arm's steepest reachable approach is ~45 deg below horizontal, so
+#     values above ~45 may admit unreachable grasps.)
 #   * YAW — heading of +Z off robot-forward +X in the horizontal plane =
 #     atan2(ay, ax) (approach's y- and x-components). Kept when |yaw| <=
 #     APPROACH_MAX_YAW_DEG. A SYMMETRIC forward cone (both sides); at 180 deg
 #     |yaw| <= pi is always true, so every heading passes — including sideways
 #     and behind-the-object approaches.
-# The two gates are ANDed. Replaces the old single forward-cone (APPROACH_MAX_
-# ANGLE_DEG) plus per-arm lateral cut with an explicit pitch/yaw reach envelope.
+# The two gates are ANDed into an explicit pitch/yaw reach envelope.
 # NOTE: with pitch=90 and yaw=180 BOTH gates are no-ops, so the approach-direction
 # filter is effectively disabled — the widest, most varied grasp set is returned
 # and reachability pruning is left entirely to the grasp skill's IK fallback. Dial
@@ -143,14 +141,16 @@ _Gripper = namedtuple('_Gripper', 'sampler width info surf_pts')
 
 # Candidate planner kwargs (filtered to run_planner_on_object's real signature).
 # Tuned for MAXIMUM grasp count and variety (paired with the disabled approach
-# filter above). Levers, vs. the stock 1024 / 36-yaw / 2-offset / 1cm config:
-#   * num_grasps / topk_num_grasps 1024 -> 2048: keep twice as many ranked grasps.
-#   * moe_num_yaws 36 -> 72: sample a yaw every 5 deg (was 10), doubling the
-#     rotational spread of finger-closing directions at each grasp position.
-#   * moe_z_offsets_cm (-2,0) -> (-4,-2,0,2): four approach-DEPTH standoffs instead
-#     of two, so grasps vary along the approach axis as well.
-#   * moe_obb_position_spacing_cm 1.0 -> 0.5: sample OBB grasp positions on a 5mm
-#     grid (was 10mm), roughly 4x the spatial candidate density.
+# filter above). Each lever, against GraspGenX's stock 1024 / 36-yaw / 2-offset /
+# 1cm config:
+#   * num_grasps / topk_num_grasps 2048 (stock 1024): keep twice as many ranked
+#     grasps.
+#   * moe_num_yaws 72 (stock 36): sample a yaw every 5 deg instead of 10, doubling
+#     the rotational spread of finger-closing directions at each grasp position.
+#   * moe_z_offsets_cm (-4,-2,0,2) (stock (-2,0)): four approach-DEPTH standoffs
+#     instead of two, so grasps vary along the approach axis as well.
+#   * moe_obb_position_spacing_cm 0.5 (stock 1.0): sample OBB grasp positions on a
+#     5mm grid instead of 10mm, roughly 4x the spatial candidate density.
 # grasp_threshold stays -1.0 (no confidence cut). These multiply the pre-topk
 # candidate pool, so planning is heavier/slower on the GPU — trim any lever back
 # if latency matters more than breadth.
@@ -424,10 +424,6 @@ class GraspGenServer(Node):
         order = np.argsort(-confs)
         grasps, confs = grasps[order], confs[order]
 
-        # print("\n\n\n")
-        # print(f"{type(grasps)=}")
-        # print(f"{grasps.shape=}")
-        # print("\n\n\n")
         # Approach-direction filter, in `frame` (pelvis: +x forward, +y left, +z up).
         # Keep grasps whose +Z approach axis (col 2) lies inside the gripper's reach
         # envelope: pitch (tilt off horizontal) within APPROACH_MAX_PITCH_DEG AND yaw

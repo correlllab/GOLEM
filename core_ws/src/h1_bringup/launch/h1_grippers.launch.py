@@ -23,13 +23,12 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'auto_detect_port': False,
-            # OpenRB-150 serial ...FF101F14 (was ttyACM0)
+            # OpenRB-150 serial ...FF101F14
             'port': '/dev/serial/by-id/usb-ROBOTIS_OpenRB-150_B0935A515157375037202020FF101F14-if00',
             'use_eflesh': False,
-            # Finger angle limits (degrees), per-gripper calibration.
-            # Recalibrated 2026-07-21 after gripper repair. min/max are the
-            # measured servo angles at the open/closed stops; theta_90
-            # (parallel-jaw ref) scaled from the prior parallel fraction.
+            # Finger angle limits (degrees), per-gripper calibration
+            # (2026-07-21). min/max are the measured servo angles at the
+            # open/closed stops; theta_90 is the parallel-jaw reference.
             'finger1theta_min': 87.98,
             'finger1theta_max': 162.4,
             'finger1theta_90': 135.71,
@@ -47,7 +46,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'auto_detect_port': False,
-            # OpenRB-150 serial ...FF0F0E1C (replacement board, was ...FF122F35)
+            # OpenRB-150 serial ...FF0F0E1C
             'port': '/dev/serial/by-id/usb-ROBOTIS_OpenRB-150_3EC94E825157375037202020FF0F0E1C-if00',
             'use_eflesh': False,
             # Finger angle limits (degrees), per-gripper calibration.

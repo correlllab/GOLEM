@@ -79,31 +79,28 @@ def generate_launch_description():
         parameters=[
             {'target_frame': 'pelvis'},
             {'use_sim_time': use_sim_time},
-            # Height band per the real-verified reference implementation
-            # (correlllab/fast_lio_nav2_humanoid nav2.launch.py: -0.65..+0.65
-            # from pelvis). The previous in-tree -0.90 had drifted from that
-            # and put the FLOOR inside the band once the ALMI crouch lowered
-            # the pelvis to ~0.78 m — measured 2026-07-19 as a uniform lethal
-            # ring at every bearing in the local costmap ("Collision Ahead"
-            # aborts). The verified -0.65 keeps the floor out in every stance.
+            # Height band around the pelvis, matching the real-verified
+            # reference implementation (correlllab/fast_lio_nav2_humanoid
+            # nav2.launch.py). The lower bound must stay above the floor in
+            # every stance: the ALMI crouch drops the pelvis to ~0.78 m, so a
+            # deeper band slices in the floor and the local costmap fills with
+            # a uniform lethal ring ("Collision Ahead" aborts).
             {'min_height': -0.65},
-            {'max_height': 0.65},   # verified reference value
+            {'max_height': 0.65},
             {'angle_min': -3.14159},
             {'angle_max': 3.14159},
             {'angle_increment': 0.0087},
             # range_min is the 2D horizontal distance from the pelvis origin
-            # after transforming the cloud to target_frame. 0.6 m covered the
-            # hanging-arm envelope, but with the IK holding the arms at home
-            # (and during named-config motions) the hands reach 0.6-0.8 m from
-            # the pelvis: measured 2026-07-19, ~25% of scan returns landed
-            # inside 0.8 m concentrated in the forward +/-60 deg cone, marking
-            # LETHAL cells inside the robot's own footprint and locking nav2
-            # into "Collision Ahead" aborts (self-marks also defeat raytrace
-            # clearing — the arm re-marks the cell every scan). 0.9 m keeps the
-            # whole arm workspace inside the blind ring; the costmap inflation
-            # covers the wider near-field gap.
+            # after transforming the cloud to target_frame, i.e. the blind ring
+            # that keeps the robot from scanning itself. It must clear the whole
+            # arm workspace: the hands reach 0.6-0.8 m from the pelvis at the
+            # home pose and during named-config motions, and returns off the
+            # arms mark LETHAL cells inside the footprint that raytrace clearing
+            # cannot clear (the arm re-marks them every scan), locking nav2 into
+            # "Collision Ahead" aborts. Costmap inflation covers the near-field
+            # gap this leaves.
             {'range_min': 0.9},
-            {'range_max': 3.0},    # verified reference value
+            {'range_max': 3.0},
             {'use_inf': True},
             {'scan_time': 0.0333},
             {'transform_tolerance': 0.05},

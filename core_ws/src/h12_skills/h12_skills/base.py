@@ -134,7 +134,7 @@ GRIPPER_MAX_WIDTH_MM = 106.0
 # taken as "run to completion" — the skill then ends only by finishing, failing,
 # or being canceled, never on a clock. Deliberate: the long-running skills
 # (frontier exploration, a visual-servo grasp) have no meaningful upper bound,
-# and the old 300 s ceiling silently aborted them mid-work. Send a NON-ZERO
+# and a fixed ceiling silently aborts them mid-work. Send a NON-ZERO
 # goal.timeout whenever a bound is actually wanted.
 #
 # Consequences of the infinity, all checked: _Run.deadline becomes inf so
@@ -341,7 +341,7 @@ class SkillsBase(Node):
         # Live gripper aperture [mm] from the driver's published state (10 Hz),
         # cached per arm. Unlike _gripper_actual_mm (only refreshed by a position
         # command), this tracks the aperture after ANY close — including the
-        # force-based /close close_gripper now uses — so the held-object check
+        # force-based /close that close_gripper issues — so the held-object check
         # stays valid. Read via gripper_aperture().
         self._gripper_state_mm = {}
         self.gripper_state_subs = {

@@ -23,9 +23,8 @@ controller_server:
       movement_time_allowance: 10.0
     goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      # Real-verified reference values (fast_lio_nav2_humanoid); the earlier
-      # in-tree 0.10s had drifted tighter than anything a walking humanoid
-      # can settle inside.
+      # Real-verified reference values (fast_lio_nav2_humanoid). A walking
+      # humanoid cannot settle inside anything tighter.
       xy_goal_tolerance: 0.25
       yaw_goal_tolerance: 0.25
       stateful: True

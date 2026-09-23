@@ -171,13 +171,13 @@ class LowerBodyControllerNode(Node):
         # Seconds to ramp the pre-pose target from the measured leg pose to the
         # policy's nominal (cosine blend; see the PREPOSE block above). Starting
         # at the measured pose means zero initial PD error, so full gains apply
-        # no step torque. 0 disables the ramp (old step behavior).
+        # no step torque. 0 disables the ramp (step straight to the nominal).
         self.declare_parameter("prepose_ramp_s", 2.0)
         # Hold at the pre-pose crouch until an operator confirms engagement via
         # the /lowerbody/confirm_engage Trigger service. Default TRUE — on the
         # real robot the engage is the moment the policy takes authority, so it
         # must be an explicit operator action. The sim bringup passes false to
-        # keep unattended runs auto-engaging (the old behavior). While waiting,
+        # keep unattended runs auto-engaging. While waiting,
         # the pre-pose timeout never auto-commits.
         self.declare_parameter("engage_wait_for_confirm", True)
         self.declare_parameter("disable_elastic_band", True)
@@ -269,7 +269,7 @@ class LowerBodyControllerNode(Node):
         self.create_timer(1.0 / control_hz, self._tick)
         # Auto-switch sides: the startup policy is the stand side when it can
         # stand (fame or almi); walk is always the locomotion side. A startup
-        # policy of "walk" gets fame as its stand side (legacy behavior).
+        # policy of "walk" gets fame as its stand side.
         self._stand_policy = startup_policy if startup_policy in STAND_CAPABLE else FAME
 
         self.get_logger().info(
@@ -389,12 +389,11 @@ class LowerBodyControllerNode(Node):
     def _release_band(self, reason: str) -> None:
         # Called every tick while awaiting release. Only mark the band released
         # once the sim's toggle actually succeeds — NOT before the service check.
-        # The old code set _band_released=True up front, so if /elastic_band/toggle
-        # wasn't discovered yet (a startup race, likelier with the slower non-
-        # headless MuJoCo viewer) it gave up permanently and the robot hung from
-        # the band forever: it would even switch to walk on /cmd_vel but never
-        # move. Now it retries every tick until the service is ready and the call
-        # returns success.
+        # /elastic_band/toggle may not be discovered yet (a startup race, likelier
+        # with the slower non-headless MuJoCo viewer), and marking it released up
+        # front gives up permanently: the robot hangs from the band forever, still
+        # switching to walk on /cmd_vel but never moving. Retry every tick until
+        # the service is ready and the call returns success.
         if self._band_released or self._band_release_inflight:
             return
         if not self._band_cli.service_is_ready():

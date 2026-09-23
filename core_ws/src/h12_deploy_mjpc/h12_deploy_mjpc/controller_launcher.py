@@ -129,7 +129,7 @@ def main() -> None:
         # frc_parity is a TRI-STATE INT, not a bool -- pass 1, never true:
         #   -1 = task default -> the `deploy_frc_parity` model numeric, which is
         #        ABSENT from Stabilize_H12_Magpie.xml, so -1 resolves to OFF.
-        #    0 = force OFF (legacy planner model, byte-identical) -- the A/B arm.
+        #    0 = force OFF (untightened planner forceranges) -- the A/B arm.
         #    1 = force ON -> planner forceranges tightened to 0.9 x tau_estop (the
         #        budget the node can actually emit; ankle 75 -> 48.6 Nm).
         "--frc_parity", str(int(p("frc_parity", -1).value)),

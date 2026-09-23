@@ -215,21 +215,20 @@ APPROACH_IMAGE_WAIT_SEC = 3.0
 # Target camera->object depth [m] — a REAL drive target near where the fingers
 # should sit (~100 mm; the finger contact point is 70.6 mm ahead of the
 # camera, so the object ends ~29 mm beyond the fingertips). The servo drives
-# depth TO this, so it must be a sensible value, not a band-center trick: an
-# earlier (0,105) one-sided band centered the setpoint at 52.5 mm and made the
-# servo plunge toward it whenever the object started beyond 105 mm, overshooting
+# depth TO this, so it must be a sensible value, not a band-center trick: a
+# one-sided band such as (0,105) centers the setpoint at 52.5 mm and makes the
+# servo plunge toward it whenever the object starts beyond 105 mm, overshooting
 # into the part and disturbing X/Y. Paired with VISUAL_SERVO_RANGE_TOL_M for the
 # accepted band (99, 101) mm.
 VISUAL_SERVO_DEPTH_M = 0.10
-# Per-axis convergence tolerances [m], set from real runs (2026-07-21), not
-# theory — these are the values the robust screw picking runs converged with
-# (b714d40). The binding limit is the ARM: frame_task settles to ~1.2 mm
-# residual, so corrections under ~2 mm don't execute and <4 mm lateral is
-# unreachable.
+# Per-axis convergence tolerances [m], measured from real screw-picking runs
+# rather than derived — these are the values those runs converge with. The
+# binding limit is the ARM: frame_task settles to ~1.2 mm residual, so
+# corrections under ~2 mm don't execute and <4 mm lateral is unreachable.
 #   X (across the jaws) — what a grasp depends on. BELOW the arm's own ~1.2 mm
 #     resolution, so the loop cannot deliberately place within this band; it
-#     converges when it happens to land there. b714d40 ran 1 mm; if runs stall
-#     naming X, loosen it back to that (2 mm is the honest value).
+#     converges when it happens to land there. If runs stall naming X, loosen
+#     toward 1-2 mm (2 mm is the honest value against that residual).
 #   Y (along the jaw span) — pre-opened to 106 mm, so far more forgiving; 5 mm
 #     still holds the part near the middle of the grip rather than out at a jaw.
 #   range — decides whether the jaws close around the part or above it.
@@ -1114,7 +1113,7 @@ class GraspSkill:
                     label=f'visual servo back-off {retracts}/'
                           f'{VISUAL_SERVO_MAX_RETRACTS}')
                 # After a back-off `after` becomes a CLOCK instant (pre-move
-                # frames describe the old vantage point outright), and the
+                # frames describe the previous vantage point outright), and the
                 # detect wait, stall counters and depth prediction all reset —
                 # the hand is somewhere genuinely new.
                 after = _stamp_tuple(self.get_clock().now().to_msg())

@@ -88,11 +88,11 @@ _NAV_XY_GOAL_TOL = 0.25
 # sit at least the goal tolerance PLUS a margin away, guaranteeing nav2 actually
 # commands motion; a frontier whose deepest safe cell is nearer than this is
 # blacklisted instead. MUST exceed _NAV_XY_GOAL_TOL — a smaller value guards
-# nothing (this was 0.15 < 0.25, the cause of the instant-success loop).
+# nothing and reopens the instant-success loop.
 _MIN_SAFE_ADVANCE = _NAV_XY_GOAL_TOL + 0.10
 # Below this base displacement (m) over one nav attempt we treat the robot as
 # not having moved at all — used to catch a nav2 "SUCCEEDED" that advanced the
-# base nowhere (belt-and-braces if the tolerances above ever drift apart again).
+# base nowhere (belt-and-braces if the tolerances above ever drift apart).
 _STUCK_MOVE = 0.05
 # Newly-known map cells during one nav attempt above which the attempt counts as
 # "made progress" even if nav2 didn't formally reach the goal. With a slow gait

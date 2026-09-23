@@ -70,3 +70,11 @@ wandb/
 core
 core.*
 *.core
+
+# rosbag recordings (multi-GB; share out of band, not via git)
+/bags/
+*.mcap
+*.db3
+
+# local scratch space
+/work/

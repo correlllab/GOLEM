@@ -83,12 +83,11 @@ def generate_launch_description():
         # controller (h12_lowerbody_rl lowerbody_controller_node): ALMI stands,
         # hands off to the walk policy on /cmd_vel, and follows nav2. 'fame' /
         # 'walk' pin that same RL controller to those policies instead. The RL
-        # controller launches for any value != 'mjpc'. NOTE: the MJPC nodes
-        # below are currently COMMENTED OUT, so 'mjpc' launches NO leg
-        # controller (legs uncontrolled) — the RL controller is the only working
-        # sim option right now, which is why the default is 'almi'. Only the SIM
-        # bringup defaults to almi; the real-robot bringup still defaults to mjpc
-        # behind the start_position_verified interlock.
+        # controller launches for any value != 'mjpc'. 'mjpc' launches NO leg
+        # controller here — the MJPC nodes below are disabled, so the legs are
+        # left uncontrolled — which is why the sim default is 'almi'. The
+        # real-robot bringup does default to mjpc, behind the
+        # start_position_verified interlock.
         DeclareLaunchArgument('lowerbody', default_value='almi'),  # almi | almi27 | fame | walk
         DeclareLaunchArgument('model_logging', default_value='true'),
         DeclareLaunchArgument('model_visualization', default_value='true'),

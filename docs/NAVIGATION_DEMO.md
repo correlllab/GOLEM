@@ -4,9 +4,8 @@ This walks the H1-2 through a RoboCasa kitchen **autonomously**: it builds a map
 with SLAM, plans collision-free paths around the furniture with nav2, and drives
 itself to unexplored frontiers — all on the headless CPU sim, no GPU.
 
-It runs on top of the macOS (Apple-Silicon) port; see the **macOS (Apple
-Silicon)** section of the top-level [`README.md`](../README.md) for the one-time
-Colima/Docker setup, image builds, and the noVNC tunnel.
+It runs on top of the macOS (Apple-Silicon) port; see [`MACOS.md`](MACOS.md)
+for the one-time Colima/Docker setup, image builds, and the noVNC tunnel.
 
 ## What it demonstrates
 

@@ -1,13 +1,25 @@
+# FAST-LIO for the H1-2 MID360, shared by the real robot and both simulators.
+# Values are the real-verified reference stack's
+# (correlllab/fast_lio_nav2_humanoid fast_lio_nav2_integration/config/mid360.yaml)
+# except where noted inline.
+#
+# The identity extrinsic_R requires /livox/imu in the same upright frame as the
+# points. The sims publish both from co-located upright sites. On the real robot
+# the stock livox_ros_driver2 rotates only the points by MID360_config.json's
+# extrinsic (roll 180, the lidar is mounted inverted), so h1_real_drivers.launch.py
+# routes the IMU through livox_imu_upright. FAST-LIO seeds camera_init from the
+# IMU attitude at startup, so an inverted IMU puts the whole map upside down.
 /**:
     ros__parameters:
         feature_extract_enable: false
-        point_filter_num: 1          # was 3 — sim LiDAR is already sparse (5 Hz, 180x28 rays);
-                                     # decimating 3:1 before scan-to-map registration starves
-                                     # FAST-LIO of correspondences and causes odometry drift.
+        point_filter_num: 3
         max_iteration: 3
-        filter_size_surf: 0.2        # was 0.5 — finer surf voxels retain more plane features
-                                     # per scan; pairs with point_filter_num above.
-        filter_size_map: 0.2         # was 0.5 — finer map voxels give tighter plane fits.
+        # 0.4 instead of the reference's 0.5: the sim lidar (180x28 rays) leaves
+        # too few points at 0.5 and FAST-LIO loses registration, while finer
+        # voxels (<= 0.3) destabilise the real MID360 while walking. Both
+        # bounds were measured by replaying real and RoboCasa walking bags.
+        filter_size_surf: 0.4
+        filter_size_map: 0.4
         cube_side_length: 1000.0
         runtime_pos_log_enable: false
         map_file_path: "./test.pcd"
@@ -21,8 +33,9 @@
 
         preprocess:
             lidar_type: 1                # 1 for Livox serials LiDAR, 2 for Velodyne LiDAR, 3 for ouster LiDAR, 4 for any other pointcloud input
-            scan_line:  6
-            blind: 0.7
+            scan_line:  6                # a filter only (line < scan_line) with feature_extract off;
+                                         # the real MID360 emits lines 0-3, the sims 0-5
+            blind: 0.5
             timestamp_unit: 3
             scan_rate: 10
 
@@ -48,6 +61,6 @@
             scan_bodyframe_pub_en: true  # true: output the point cloud scans in IMU-body-frame
 
         pcd_save:
-            pcd_save_en: true
+            pcd_save_en: false  # interval -1 buffers every frame in RAM until shutdown
             interval: -1                 # how many LiDAR frames saved in each pcd file; 
                                         # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.

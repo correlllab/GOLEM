@@ -131,7 +131,7 @@ no `sim:=true` arg):
 | `h1_sim_bringup.launch.py` | **x86 sim** — full stack: nav (via include), robot/joint state publishers, `frame_task_server`, `safety_node`, gemini/sam servers, MJPC estimator + lowerbody controller, graspgen + skills (`use_skills`, default true), rviz (`use_rviz`) |
 | `h1_sim_bringup_mac.launch.py` | **mac sim** — trimmed: state publishers, `frame_task_server`, `safety_node`; lower body/SLAM/nav2 gated by `GOLEM_*` env vars, not launch args |
 | `h1_real_robot_bringup.launch.py` | **real robot, onboard PC** (native, `ROS_DOMAIN_ID=0`) — aggregates the three below-listed real files |
-| `h1_real_drivers.launch.py` | real: Livox MID360, RealSense cams, left+right `gripper_node` |
+| `h1_real_drivers.launch.py` | real: Livox MID360 (+ `livox_imu_upright`, which rotates `/livox/imu_raw` into the point frame — the stock driver rotates only points), RealSense cams, left+right `gripper_node` |
 | `h1_real_controller.launch.py` | real: estop, state publishers, staggered `safety_node` + `frame_task_server` |
 | `h1_real_desktop_bringup.launch.py` | real: companion x86 desktop — model servers, skills, MJPC controller. Leg control is interlocked behind `start_position_verified:=true` (default **false**) |
 | `h1_navigation.launch.py` | shared nav stack (FAST-LIO → pointcloud_to_laserscan → slam_toolbox → nav2); included by sim and real bringups |

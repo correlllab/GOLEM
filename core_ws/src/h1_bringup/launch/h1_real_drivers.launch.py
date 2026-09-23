@@ -35,6 +35,19 @@ def generate_launch_description():
         name='livox_lidar_publisher',
         output='screen',
         parameters=livox_mid360_params,
+        # The driver rotates points by the MID360_config.json extrinsic but
+        # not the IMU; livox_imu_upright applies the same rotation and owns
+        # /livox/imu (see mid360.yaml).
+        remappings=[('/livox/imu', '/livox/imu_raw')],
+    )
+
+    livox_imu_upright = Node(
+        package='h1_bringup',
+        executable='livox_imu_upright',
+        name='livox_imu_upright',
+        output='screen',
+        parameters=[{'livox_config_path': mid360_config}],
+        remappings=[('imu_in', '/livox/imu_raw'), ('imu_out', '/livox/imu')],
     )
 
     # Equivalent of `ros2 launch cl_realsense h12_headcamera.launch.py` — brings
@@ -59,6 +72,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         livox_mid360,
+        livox_imu_upright,
         realsense_cams,
         grippers,
     ])

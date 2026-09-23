@@ -31,6 +31,8 @@ setup(
         ],
     },
     entry_points={
-        'console_scripts': [],
+        'console_scripts': [
+            'livox_imu_upright = h1_bringup.livox_imu_upright:main',
+        ],
     },
 )

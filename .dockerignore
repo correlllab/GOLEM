@@ -24,3 +24,5 @@ docker/*
 !docker/scripts
 docker/scripts/*
 !docker/scripts/package_humble_runtime.py
+!docker/locks
+!docker/locks/**

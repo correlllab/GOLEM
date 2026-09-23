@@ -8,6 +8,7 @@
 # Build:  docker build -t golem_sim_robocasa:latest -f docker/mac/RobocasaDockerfile.arm64 .
 # ==============================
 FROM golem_base:arm64
+COPY docker/locks/robocasa-*.txt docker/locks/robocasa-assets.digest /opt/golem-locks/
 
 ARG http_proxy
 ARG https_proxy
@@ -27,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # MuJoCo Python binding + Pillow for image encoding. Pinned to 3.3.1 to match
 # Robocasa's hard pin (see below).
-RUN uv pip install --system --no-cache \
+RUN uv pip install -c /opt/golem-locks/robocasa-arm64-01.txt --system --no-cache \
         "mujoco==3.3.1" \
         "numpy>=2.2.6" \
         "Pillow>=10.0"
@@ -35,26 +36,34 @@ RUN uv pip install --system --no-cache \
 # Robocasa kitchen scenes. Both packages are git-only. robosuite is pinned to
 # master per robocasa.ai. Side effect: lerobot (a Robocasa transitive) pins
 # torch==2.7.1 (CPU) — fine here.
-RUN git clone --depth 1 https://github.com/ARISE-Initiative/robosuite /opt/robosuite && \
-    uv pip install --system --no-cache -e /opt/robosuite
+RUN git clone https://github.com/ARISE-Initiative/robosuite /opt/robosuite && \
+    git -C /opt/robosuite checkout --quiet 5ce6643f3092639d08f7b0f90ed1c6a84f50552c && \
+    uv pip install -c /opt/golem-locks/robocasa-arm64-02.txt --system --no-cache -e /opt/robosuite
 
-RUN git clone --depth 1 https://github.com/robocasa/robocasa /opt/robocasa && \
-    uv pip install --system --no-cache -e /opt/robocasa
+RUN git clone https://github.com/robocasa/robocasa /opt/robocasa && \
+    git -C /opt/robocasa checkout --quiet 4f8a2980def75a55dff96b990745b83540425f09 && \
+    uv pip install -c /opt/golem-locks/robocasa-arm64-03.txt --system --no-cache -e /opt/robocasa
 
 # Robocasa & robosuite setup scripts (create the macros file, silence warnings).
 RUN python /opt/robosuite/robosuite/scripts/setup_macros.py && \
     python /opt/robocasa/robocasa/scripts/setup_macros.py
 
 # Optional robosuite/robocasa deps that print "WARNING: not installed" otherwise.
-RUN git clone --depth 1 https://github.com/ARISE-Initiative/robosuite_models /opt/robosuite_models && \
-    uv pip install --system --no-cache -e /opt/robosuite_models && \
-    git clone --depth 1 https://github.com/NVlabs/mimicgen /opt/mimicgen && \
-    uv pip install --system --no-cache -e /opt/mimicgen && \
-    uv pip install --system --no-cache --no-deps "mink==0.0.5"
+RUN git clone https://github.com/ARISE-Initiative/robosuite_models /opt/robosuite_models && \
+    git -C /opt/robosuite_models checkout --quiet 2d63a6b4319bda772420daf10594ce0de5bd793d && \
+    uv pip install -c /opt/golem-locks/robocasa-arm64-04.txt --system --no-cache -e /opt/robosuite_models && \
+    git clone https://github.com/NVlabs/mimicgen /opt/mimicgen && \
+    git -C /opt/mimicgen checkout --quiet 72bd767c255545f462e7ccfb2731f2e5d4c1d9bb && \
+    uv pip install -c /opt/golem-locks/robocasa-arm64-04.txt --system --no-cache -e /opt/mimicgen && \
+    uv pip install -c /opt/golem-locks/robocasa-arm64-04.txt --system --no-cache --no-deps "mink==0.0.5"
 
 # Robocasa's textures, fixtures, and objects (~10 GB) — required for any
 # `--scene kitchen` run. `echo y` answers the interactive confirmation.
 RUN echo y | python -m robocasa.scripts.download_kitchen_assets --type all
+# Verify the complete downloaded tree, including additions/removals.
+RUN cd /opt/robocasa/robocasa/models && \
+    find assets -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | \
+    sha256sum --check /opt/golem-locks/robocasa-assets.digest
 
 WORKDIR /home/code/h1_robocasa
 
@@ -77,7 +86,8 @@ RUN mkdir -p /home/code/msgs_ws/src
 # -----------------------------------------------------------------------------
 # Livox-SDK2 — required by livox_ros_driver2's C++ library.
 # -----------------------------------------------------------------------------
-RUN git clone --depth 1 https://github.com/Livox-SDK/Livox-SDK2.git /tmp/Livox-SDK2 && \
+RUN git clone https://github.com/Livox-SDK/Livox-SDK2.git /tmp/Livox-SDK2 && \
+    git -C /tmp/Livox-SDK2 checkout --quiet 08f523c930b2f0ba1e98a6afaa8d7476bf479908 && \
     cd /tmp/Livox-SDK2 && mkdir build && cd build && \
     cmake .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5 && make -j"$(nproc)" && make install && \
     ldconfig && \

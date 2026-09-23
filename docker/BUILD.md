@@ -217,9 +217,9 @@ mounted source are byte-identical — a requirement for the warm cache below.
 **At runtime:** `docker-compose` mounts the submodule source over
 `/home/code/mujoco_mpc` and a persistent build cache
 (`container_cache/mjpc_build`) at the exact in-tree build path. On first launch
-`launch_ros.sh` hydrates the cache from the seed and back-dates the source mtimes,
-so the first `docker exec … rebuild_mjpc.sh` is *incremental* (seconds–minutes),
-not a cold ~15 min rebuild. `rebuild_mjpc.sh` rebuilds `agent_server` and copies it
+`launch_ros.sh` hydrates the cache from the seed and refreshes source timestamps to avoid
+reusing stale objects for local edits. The first `docker exec … rebuild_mjpc.sh` revalidates source objects while retaining built dependencies; subsequent launches
+use normal incremental builds. `rebuild_mjpc.sh` rebuilds `agent_server` and copies it
 into `dist-packages` (the path `from mujoco_mpc import agent` auto-spawns).
 
 > The submodule gitlink and `MJPC_REF` are pinned to the **same** patched-fork SHA.
@@ -281,7 +281,7 @@ bind-mounted source, with output persisted on the host:
 
 | Container | Workspace | Built | Cache |
 |---|---|---|---|
-| `ros` | `core_ws` (full) | every start, gated on staleness | host `core_ws/{build,install,log}` |
+| `ros` | `core_ws` (full) | every start, incremental every launch | host `core_ws/{build,install,log}` |
 | `robocasa` | `msgs_ws` (IDL only) | every start (fast no-op) | host `container_cache/msgs_ws` |
 
 `--symlink-install` is used throughout so Python nodes and model weights resolve

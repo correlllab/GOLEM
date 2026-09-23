@@ -158,6 +158,9 @@ def main():
                 validate_row(row)
                 assert not rows or row['sim_time'] > rows[-1]['sim_time'], 'Telemetry reset/nonmonotonic timestamp'
                 rows.append(row)
+                if not row['support_active']:
+                    assert row['position'][2] >= LIMITS['minimum_height'], 'Unsupported base collapsed before completing acceptance'
+                    assert tilt_deg(row['quaternion']) <= LIMITS['max_tilt_deg'], 'Unsupported base exceeded tilt limit before completing acceptance'
     report = dict(success=False, expected_walk_policy=args.expected_walk_policy, phases=phases)
     try:
         while True:
@@ -193,6 +196,11 @@ def main():
             publisher.publish(Twist())
             rclpy.spin_once(node, timeout_sec=.02)
         report['policies'] = policies
+        report['telemetry_samples'] = len(rows)
+        if rows:
+            report['minimum_height_observed'] = min(r['position'][2] for r in rows)
+            report['maximum_tilt_observed_deg'] = max(tilt_deg(r['quaternion']) for r in rows)
+            report['final_sim_time'] = rows[-1]['sim_time']
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2)+'\n')
         node.destroy_node()

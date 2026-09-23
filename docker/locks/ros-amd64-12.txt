@@ -1,0 +1,7 @@
+-c ros-amd64.txt
+huggingface-hub==0.25.2
+mujoco==3.2.3
+numpy==1.26.4
+psutil==5.9.8
+setuptools==59.6.0
+wheel==0.43.0

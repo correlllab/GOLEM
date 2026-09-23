@@ -6,6 +6,9 @@ on:
       - 'CL_isaaclab_sim/**'
       - 'h1_robocasa/**'
       - 'docker/**'
+      - 'core_ws/**'
+      - 'CL_Assets'
+      - '.gitmodules'
       - 'tests/**'
       - '.github/workflows/simulator-tests.yml'
   push:
@@ -48,14 +51,14 @@ jobs:
     # Explicit trusted runs on a prepared worker; CPU job is the portable PR gate.
     if: github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, linux, x64, nvidia]
-    timeout-minutes: 20
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
           lfs: true
       - name: Build simulation and ROS images
-        run: docker/scripts/docker_build.sh isaac ros
+        run: docker/scripts/docker_build.sh isaac robocasa ros
       - name: Magpie physical linkage schema
         run: ROS_DOMAIN_ID=186 tests/isaaclab/run_magpie_couplings.sh
       - name: Magpie native ROS services and actions
@@ -70,6 +73,8 @@ jobs:
         run: ROS_DOMAIN_ID=191 tests/isaaclab/run_robot_interop.sh magpie
       - name: Inspire variant regression
         run: ROS_DOMAIN_ID=192 tests/isaaclab/run_robot_interop.sh inspire
+      - name: Real frame-task and lower-body control in both simulators
+        run: tests/stack/run_all.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:

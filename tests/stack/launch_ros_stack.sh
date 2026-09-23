@@ -31,6 +31,7 @@ colcon --log-base "$WS/log_stack_tests" build \
     --packages-up-to h12_ros2_controller h12_safety_layer h12_lowerbody_rl unitree_hg unitree_go \
     --cmake-args -DBUILD_TESTING=OFF -DPython3_EXECUTABLE=/usr/bin/python3
 source "$TEST_INSTALL_BASE/setup.bash"
+python3 /home/code/tests/stack/test_heartbeat_clock.py
 echo "STACK_BUILD_READY case=$TEST_CASE simulator=$SIMULATOR domain=$ROS_DOMAIN_ID"
 if [ "${1:-}" = --build-only ]; then
     exit 0

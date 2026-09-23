@@ -17,6 +17,10 @@ JSON acceptance results under `tests/results/stack-*`. Nonzero exit means
 failure, including startup failures and timeouts. Controllers cannot access
 the private telemetry mount. The default wall timeout is 900 seconds; override
 with `GOLEM_TEST_WALL_TIMEOUT` for slower workers.
+Simulator cameras are off by default (`GOLEM_TEST_CAMERAS=0`) because these
+controllers use no images and CPU camera rendering slows RoboCasa physics well
+below the real-time pace the wall-clock controllers assume. `run.json` records
+the camera setting, the git state and the exact image IDs used.
 
 Arms move both wrist frames forward 2 cm and back through `/frame_task`.
 Acceptance requires successful actions, measured end-effector progress and
@@ -37,6 +41,7 @@ The scoring unit tests run in the GitHub CPU merge workflow:
 python3 -m unittest discover -s tests/stack -p 'test_*.py' -v
 ```
 
-Live acceptance is **not yet validated** for either simulator. These runners
-are available for trusted GPU workers; they are not enabled as mandatory live
-merge gates until their end-to-end validation is complete.
+Live acceptance runs on trusted NVIDIA workers through the manual GitHub
+workflow. `tests/stack/run_all.sh` runs all four cases and returns nonzero if
+any fails. Physical failures remain release blockers; CPU scoring tests alone
+do not establish simulator/controller stability.

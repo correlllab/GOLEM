@@ -7,7 +7,9 @@
 #           and shared kinematics libs (pin/pink/mink).
 # Build:   docker compose build base
 # ==============================
-FROM nvidia/cuda:12.2.0-devel-ubuntu22.04
+FROM nvidia/cuda:12.2.0-devel-ubuntu22.04@sha256:c4e81887e4aa9f13b1119337323cba89601319ecb282383b879c4ba50510fd17
+COPY docker/locks/base-*.txt docker/locks/apt-sources.sh docker/locks/ros-snapshot.asc /opt/golem-locks/
+RUN sh /opt/golem-locks/apt-sources.sh
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=America/Denver
@@ -35,14 +37,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libegl1-mesa-dev libosmesa6-dev \
     && locale-gen en_US en_US.UTF-8 && update-locale LC_ALL=C.UTF-8 LANG=C.UTF-8 \
     && add-apt-repository universe \
+    && sh /opt/golem-locks/apt-sources.sh \
     && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100 \
     && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100 \
     && rm -rf /var/lib/apt/lists/*
 
 # ROS 2 Humble apt repository.
-RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/e31287f892ecd01b170d1cbfa298db35abe4a74f/ros.key \
         -o /usr/share/keyrings/ros-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu jammy main" \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/opt/golem-locks/ros-snapshot.asc] http://snapshots.ros.org/humble/2026-08-07/ubuntu jammy main" \
         > /etc/apt/sources.list.d/ros2.list
 
 # ROS 2 Humble packages needed by the sim processes (rclpy + sensor/TF publishers).
@@ -60,13 +63,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install uv for fast, deterministic pip-compatible installs.
 # UV_INSTALL_DIR overrides the default ~/.local/bin location.
-RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
+RUN curl -LsSf https://astral.sh/uv/0.12.15/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
     && uv --version
 
 # Build CycloneDDS 0.10.x. Pinned because the PyPI `cyclonedds` wheel (transitive
 # dep of unitree_sdk2_python) references `dds/ddsi/q_radmin.h`, removed post-0.10.
 # CYCLONEDDS_HOME points the PyPI wheel at this install at pip-build time.
-RUN git clone --depth 1 --branch releases/0.10.x https://github.com/eclipse-cyclonedds/cyclonedds /cyclonedds && \
+RUN git clone https://github.com/eclipse-cyclonedds/cyclonedds /cyclonedds && \
+    git -C /cyclonedds checkout --quiet 5041f3560c088c99e5088b2b8520b69169621196 && \
     cd /cyclonedds && mkdir build install && cd build && \
     cmake .. -DCMAKE_INSTALL_PREFIX=../install && \
     cmake --build . --target install && \
@@ -78,7 +82,7 @@ ENV CYCLONEDDS_HOME=/cyclonedds/install
 # the image for development/debugging.
 COPY unitree_sdk2_python /home/code/unitree_sdk2_python
 RUN cd /home/code/unitree_sdk2_python && \
-    uv pip install --system . && \
+    uv pip install -c /opt/golem-locks/base-amd64-01.txt --system . && \
     SP=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
     cp -r /home/code/unitree_sdk2_python/unitree_sdk2py/* "$SP/unitree_sdk2py/"
 
@@ -86,7 +90,7 @@ RUN cd /home/code/unitree_sdk2_python && \
 # Bundled CUDA runtime is self-contained — no host toolkit version dependency.
 # UV_HTTP_TIMEOUT raised from default 30s because multi-hundred-MB NVIDIA wheels
 # from pypi.nvidia.com can stall past the default on slow links.
-RUN UV_HTTP_TIMEOUT=600 uv pip install --system --no-cache \
+RUN UV_HTTP_TIMEOUT=600 uv pip install -c /opt/golem-locks/base-amd64-02.txt --system --no-cache \
         torch torchvision \
         --index-url https://download.pytorch.org/whl/cu130
 
@@ -94,7 +98,7 @@ RUN UV_HTTP_TIMEOUT=600 uv pip install --system --no-cache \
 # PyPI `pin` provides the `pinocchio` module. `pink` / `mink` are Pythonic IK
 # wrappers built on pinocchio. Kept in base so per-sim Dockerfiles don't
 # duplicate them; ROS container is standalone and installs its own pinocchio.
-RUN uv pip install --system --no-cache pin pink mink
+RUN uv pip install -c /opt/golem-locks/base-amd64-03.txt --system --no-cache pin pink mink
 
 # Source ROS 2 on every interactive shell.
 RUN echo 'source /opt/ros/humble/setup.bash' >> /root/.bashrc

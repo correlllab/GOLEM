@@ -2,7 +2,9 @@
 
 # Build the gripper process against the same ROS distribution as GOLEM.
 # Isaac's bundled CPython has a different ABI, so this runtime stays private.
-FROM ros:humble-ros-base-jammy AS magpie_humble
+FROM ros:humble-ros-base-jammy@sha256:1813d3c85d7f96ff7d3012d865204583255740182db5d0065f8f8cd029a83138 AS magpie_humble
+COPY docker/locks/isaac-*.txt docker/locks/apt-sources.sh docker/locks/ros-snapshot.asc /opt/golem-locks/
+RUN sh /opt/golem-locks/apt-sources.sh
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-colcon-common-extensions ros-humble-rmw-cyclonedds-cpp \
     ros-humble-rosidl-default-generators \
@@ -15,9 +17,11 @@ COPY docker/scripts/package_humble_runtime.py /tmp/package_humble_runtime.py
 RUN . /opt/ros/humble/setup.sh && . /opt/golem-magpie-humble/setup.sh && \
     python3 /tmp/package_humble_runtime.py
 
-FROM nvcr.io/nvidia/isaac-sim:5.1.0 AS builder
+FROM nvcr.io/nvidia/isaac-sim:5.1.0@sha256:f3563cb2ba0c18af0b2fb321360dcb73a917b899f879e3213623d6bee484fa54 AS builder
+COPY docker/locks/isaac-*.txt docker/locks/apt-sources.sh docker/locks/ros-snapshot.asc /opt/golem-locks/
 
 USER root
+RUN sh /opt/golem-locks/apt-sources.sh
 
 ENV ACCEPT_EULA=Y
 ENV OMNI_KIT_ACCEPT_EULA=yes
@@ -36,23 +40,29 @@ RUN --mount=type=cache,target=/var/cache/apt \
   libglib2.0-0 \
   ncurses-term \
   wget && \
-  apt -y autoremove && apt clean autoclean && \ 
+  apt -y autoremove && apt clean autoclean && \
   rm -rf /var/lib/apt/lists/*
 
 
 WORKDIR ${GOLEM_WORKSPACE_PATH}
 
-RUN git clone https://github.com/isaac-sim/IsaacLab.git
+RUN git clone https://github.com/isaac-sim/IsaacLab.git && \
+  git -C IsaacLab checkout --quiet b4c321024792976150ca55fddb26fa34480d974e
 
 WORKDIR ${ISAACLAB_PATH}
-RUN git reset --hard b4c321024792976150ca55fddb26fa34480d974e
+# IsaacLab's extras otherwise resolve moving VCS refs even at a fixed Lab SHA.
+# Reuse commits recorded by pip in the validated existing Isaac image.
+RUN grep -Fq 'rl_games.git@python3.11' source/isaaclab_rl/setup.py \
+  && sed -i 's|rl_games.git@python3.11|rl_games.git@6b3534f29568158e9e29ec8bf83cc88fce5f0cae|' source/isaaclab_rl/setup.py \
+  && grep -Fq 'robomimic.git@v0.4.0' source/isaaclab_mimic/setup.py \
+  && sed -i 's|robomimic.git@v0.4.0|robomimic.git@7c66e7a41b5d9dcc905b1a68346bfee1b49b79c9|' source/isaaclab_mimic/setup.py
 #this verison corresponds to Jun 12
 
 RUN chmod +x ${ISAACLAB_PATH}/isaaclab.sh
 
 RUN ln -sf ${ISAACSIM_ROOT_PATH} ${ISAACLAB_PATH}/_isaac_sim
 
-RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install toml 
+RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -c /opt/golem-locks/isaac-amd64-01.txt toml
 
 RUN --mount=type=cache,target=/var/cache/apt \
   ${ISAACLAB_PATH}/isaaclab.sh -p ${ISAACLAB_PATH}/tools/install_deps.py apt ${ISAACLAB_PATH}/source && \
@@ -78,12 +88,13 @@ RUN touch /bin/nvidia-smi && \
   touch /var/run/nvidia-persistenced/socket
 
 RUN --mount=type=cache,target=${DOCKER_USER_HOME}/.cache/pip \
-  ${ISAACLAB_PATH}/isaaclab.sh --install
+  PIP_CONSTRAINT=/opt/golem-locks/isaac-amd64-02.txt ${ISAACLAB_PATH}/isaaclab.sh --install
 
 RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip uninstall -y quadprog msal
 
 WORKDIR ${GOLEM_WORKSPACE_PATH}
-RUN git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x && \
+RUN git clone https://github.com/eclipse-cyclonedds/cyclonedds && \
+  git -C cyclonedds checkout --quiet 5041f3560c088c99e5088b2b8520b69169621196 && \
   cd cyclonedds && mkdir build install && cd build && \
   cmake .. -DCMAKE_INSTALL_PREFIX=../install && \
   cmake --build . --target install
@@ -91,13 +102,14 @@ RUN git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.
 ENV CYCLONEDDS_HOME=${GOLEM_WORKSPACE_PATH}/cyclonedds/install
 
 RUN git clone https://github.com/unitreerobotics/unitree_sdk2_python.git && \
-  cd unitree_sdk2_python && ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -e .
+  git -C unitree_sdk2_python checkout --quiet 65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5 && \
+  cd unitree_sdk2_python && ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -c /opt/golem-locks/isaac-amd64-03.txt -e .
 
-RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install rerun-sdk==0.20.1 \
+RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -c /opt/golem-locks/isaac-amd64-04.txt rerun-sdk==0.20.1 \
   logging_mp==0.1.5 \
   onnxruntime==1.22.1 \
   onnx \
-  pynput==1.8.1 
+  pynput==1.8.1
 
 RUN echo "export ISAACLAB_PATH=${ISAACLAB_PATH}" >> ${HOME}/.bashrc && \
     echo "export CYCLONEDDS_HOME=${GOLEM_WORKSPACE_PATH}/cyclonedds/install" >> ${HOME}/.bashrc && \
@@ -112,12 +124,13 @@ RUN echo "export ISAACLAB_PATH=${ISAACLAB_PATH}" >> ${HOME}/.bashrc && \
     echo "PROMPT_COMMAND='history -a'" >> /root/.bashrc
 
 RUN --mount=type=cache,target=/var/cache/apt \
-  apt-get update && apt-get install -y --no-install-recommends curl \ 
+  apt-get update && apt-get install -y --no-install-recommends curl \
   software-properties-common && \
   add-apt-repository universe && \
-  curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg && \
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu noble main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null && \
-  apt-get update && apt-get install -y --no-install-recommends \ 
+  sh /opt/golem-locks/apt-sources.sh && \
+  curl -sSL https://raw.githubusercontent.com/ros/rosdistro/e31287f892ecd01b170d1cbfa298db35abe4a74f/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg && \
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/opt/golem-locks/ros-snapshot.asc] http://snapshots.ros.org/jazzy/2026-09-11/ubuntu noble main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null && \
+  apt-get update && apt-get install -y --no-install-recommends \
   ros-jazzy-ros-base \
   ros-jazzy-vision-msgs \
   ros-jazzy-rmw-cyclonedds-cpp \

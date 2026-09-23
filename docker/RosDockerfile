@@ -17,6 +17,7 @@
 # IK stack comes before the volatile vision ML stack for the same reason.
 # ==============================
 FROM golem_base:latest
+COPY docker/locks/ros-*.txt /opt/golem-locks/
 
 ARG http_proxy
 ARG https_proxy
@@ -78,7 +79,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #    the cmake build. CMAKE_POLICY_VERSION_MINIMUM works around upstream's
 #    outdated cmake_minimum_required.
 # -----------------------------------------------------------------------------
-RUN git clone --depth 1 https://github.com/Livox-SDK/Livox-SDK2.git /tmp/Livox-SDK2 && \
+RUN git clone https://github.com/Livox-SDK/Livox-SDK2.git /tmp/Livox-SDK2 && \
+    git -C /tmp/Livox-SDK2 checkout --quiet 08f523c930b2f0ba1e98a6afaa8d7476bf479908 && \
     cd /tmp/Livox-SDK2 && mkdir build && cd build && \
     cmake .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5 && make -j"$(nproc)" && make install && \
     ldconfig && \
@@ -91,7 +93,13 @@ RUN git clone --depth 1 https://github.com/Livox-SDK/Livox-SDK2.git /tmp/Livox-S
 #    `--ignore-installed blinker` works around apt's old python3-blinker that
 #    pip cannot cleanly uninstall.
 # -----------------------------------------------------------------------------
-RUN pip install --no-cache-dir --ignore-installed blinker \
+# Remove the NumPy-2 kinematics inherited from base, including its cmeel C++
+# libraries, before installing the ROS ABI. The next step runs with pip's global
+# --ignore-installed, which writes over packages without uninstalling them.
+RUN pip uninstall -y pin libpinocchio coal libcoal eigenpy \
+        cmeel cmeel-assimp cmeel-boost cmeel-console-bridge cmeel-octomap \
+        cmeel-qhull cmeel-tinyxml2 cmeel-urdfdom cmeel-zlib
+RUN pip install -c /opt/golem-locks/ros-amd64-01.txt --no-cache-dir --ignore-installed blinker \
         "numpy<2" \
         "scikit-learn>=1.4" \
         pin-pink \
@@ -111,7 +119,7 @@ RUN pip install --no-cache-dir --ignore-installed blinker \
 #    because it is not on PyPI. Model weights ship under
 #    model_server/weights and are bind-mounted via core_ws.
 # -----------------------------------------------------------------------------
-RUN pip install --no-cache-dir \
+RUN pip install -c /opt/golem-locks/ros-amd64-02.txt --no-cache-dir \
         "transformers==4.47.1" \
         "google-genai==1.30.0" \
         "matplotlib==3.9.3" \
@@ -124,22 +132,23 @@ RUN pip install --no-cache-dir \
         "pycocotools==2.0.8" \
         "ultralytics==8.3.52"
 
-RUN pip install --no-cache-dir \
+RUN pip install -c /opt/golem-locks/ros-amd64-03.txt --no-cache-dir \
         "opencv-python-headless==4.10.0.84" \
         "iopath==0.1.10"
 
 RUN git clone https://github.com/openai/CLIP.git /opt/clip \
     && cd /opt/clip && git checkout a1d071733d7111c9c014f024669f959182114e33
-RUN pip install --no-cache-dir --no-deps /opt/clip
+RUN pip install -c /opt/golem-locks/ros-amd64-04.txt --no-cache-dir --no-deps /opt/clip
 
 # -----------------------------------------------------------------------------
 # 5. SAM3 — vendored from git.
 #    SAM3's setup.py produces UNKNOWN-0.0.0; bypass with PYTHONPATH instead.
 #    (hydra-core kept: used for model config resolution.)
 # -----------------------------------------------------------------------------
-RUN pip install --no-cache-dir "hydra-core>=1.3.2"
+RUN pip install -c /opt/golem-locks/ros-amd64-05.txt --no-cache-dir "hydra-core>=1.3.2"
 
-RUN git clone --depth 1 https://github.com/facebookresearch/sam3.git /opt/sam3
+RUN git clone https://github.com/facebookresearch/sam3.git /opt/sam3 && \
+    git -C /opt/sam3 checkout --quiet 660a5e9e1b8b4c02c0ad97229b88a09a6e4ff5b7
 ENV PYTHONPATH=/opt/sam3:${PYTHONPATH}
 
 # -----------------------------------------------------------------------------
@@ -181,7 +190,7 @@ RUN rm -rf /usr/local/lib/python3.10/dist-packages/setuptools \
            /usr/local/lib/python3.10/dist-packages/_distutils_hack \
            /usr/local/lib/python3.10/dist-packages/wheel \
            /usr/local/lib/python3.10/dist-packages/wheel-*.dist-info \
-    && pip install --no-cache-dir --no-deps "numpy<2" "setuptools==59.6.0" "wheel<0.44"
+    && pip install -c /opt/golem-locks/ros-amd64-06.txt --no-cache-dir --no-deps "numpy<2" "setuptools==59.6.0" "wheel<0.44"
 
 # -----------------------------------------------------------------------------
 # 8. Workspace integration. Base already sources /opt/ros/humble in bashrc;
@@ -285,11 +294,12 @@ ENV GRASPGENX_CHECKPOINT_DIR=/opt/graspgenx/ext/graspgenx_checkpoints \
 # wheel against it (PYTHONPATH + --no-build-isolation), then install the prebuilt
 # wheel with the system pip: the build sees PEP 621, but the system's
 # colcon-critical setuptools 59.6.0 is never touched. Source stays at /opt/graspgenx.
-RUN git clone --depth 1 https://github.com/NVlabs/GraspGenX.git /opt/graspgenx \
-    && pip install --no-cache-dir --target=/tmp/bsetup "setuptools>=64,<78" wheel setuptools-scm \
+RUN git clone https://github.com/NVlabs/GraspGenX.git /opt/graspgenx && \
+    git -C /opt/graspgenx checkout --quiet b9429097728cb1c430dd78b92edf17ba318aad03 \
+    && pip install -c /opt/golem-locks/ros-amd64-07.txt --no-cache-dir --target=/tmp/bsetup "setuptools>=64,<78" wheel setuptools-scm \
     && SETUPTOOLS_SCM_PRETEND_VERSION=1.0.0 PYTHONPATH=/tmp/bsetup \
          pip wheel --no-deps --no-build-isolation -w /tmp/gwheel /opt/graspgenx \
-    && pip install --no-cache-dir --no-deps /tmp/gwheel/graspgenx-*.whl \
+    && pip install -c /opt/golem-locks/ros-amd64-07.txt --no-cache-dir --no-deps /tmp/gwheel/graspgenx-*.whl \
     && rm -rf /tmp/bsetup /tmp/gwheel
 
 # Sweep orphaned .dist-info ghosts: directories holding a stray file but no
@@ -322,7 +332,7 @@ RUN pip freeze 2>/dev/null | grep '==' > /opt/graspgenx-constraints.txt
 
 # Additive GraspGenX deps that install cleanly under the full freeze (validated
 # in a throwaway container: exit 0, every pinned package unchanged).
-RUN PIP_CONSTRAINT=/opt/graspgenx-constraints.txt pip install --no-cache-dir \
+RUN PIP_CONSTRAINT=/opt/graspgenx-constraints.txt pip install -c /opt/golem-locks/ros-amd64-08.txt --no-cache-dir \
         "trimesh==4.5.3" \
         "yourdfpy==0.0.56" \
         torch-geometric \
@@ -345,7 +355,7 @@ RUN PIP_CONSTRAINT=/opt/graspgenx-constraints.txt pip install --no-cache-dir \
 # numpy/Pillow/setuptools stay pinned.
 RUN grep -viE '^huggingface[-_]hub==' /opt/graspgenx-constraints.txt \
         > /opt/graspgenx-constraints-nohf.txt \
-    && PIP_CONSTRAINT=/opt/graspgenx-constraints-nohf.txt pip install --no-cache-dir \
+    && PIP_CONSTRAINT=/opt/graspgenx-constraints-nohf.txt pip install -c /opt/golem-locks/ros-amd64-09.txt --no-cache-dir \
         "huggingface-hub==0.25.2" \
         "diffusers==0.11.1"
 
@@ -364,7 +374,7 @@ RUN grep -viE '^huggingface[-_]hub==' /opt/graspgenx-constraints.txt \
 # tyro, plyfile, ...) are purely additive.
 RUN grep -viE '^psutil==' /opt/graspgenx-constraints.txt \
         > /opt/graspgenx-constraints-viser.txt \
-    && PIP_CONSTRAINT=/opt/graspgenx-constraints-viser.txt pip install --no-cache-dir \
+    && PIP_CONSTRAINT=/opt/graspgenx-constraints-viser.txt pip install -c /opt/golem-locks/ros-amd64-10.txt --no-cache-dir \
         "viser==0.2.23" "psutil==5.9.8"
 
 # Asset staging is deferred to integration (install-only scope). We just create
@@ -440,7 +450,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #    docker_build.sh overrides it with the live `mujoco_mpc` submodule pin
 #    (git rev-parse HEAD:mujoco_mpc), so the baked MJPC can't drift from the gitlink.
 ARG MJPC_REF=c7fc99f5028d2c09d14060d6d85202a377eefe49
-RUN git clone --branch extended_hw --single-branch \
+RUN git clone \
         https://github.com/badinkajink/mujoco_mpc.git /home/code/mujoco_mpc \
     && git -C /home/code/mujoco_mpc checkout --quiet "${MJPC_REF}"
 
@@ -460,7 +470,7 @@ RUN git clone --branch extended_hw --single-branch \
 #    to 82 — the latter is re-clamped back to 59.6.0 in step 6 below.
 RUN grep -viE '^(grpcio|grpcio-tools|grpcio-status|protobuf|mujoco)==' \
         /opt/graspgenx-constraints.txt > /opt/mjpc-constraints.txt \
-    && PIP_CONSTRAINT=/opt/mjpc-constraints.txt pip install --no-cache-dir \
+    && PIP_CONSTRAINT=/opt/mjpc-constraints.txt pip install -c /opt/golem-locks/ros-amd64-11.txt --no-cache-dir \
         grpcio grpcio-tools protobuf "mujoco==3.2.3"
 
 # 4. Build the C++ agent_server, install the importable `mujoco_mpc` package,
@@ -542,7 +552,7 @@ RUN rm -rf /usr/local/lib/python3.10/dist-packages/setuptools \
            /usr/local/lib/python3.10/dist-packages/_distutils_hack \
            /usr/local/lib/python3.10/dist-packages/wheel \
            /usr/local/lib/python3.10/dist-packages/wheel-*.dist-info \
-    && pip install --no-cache-dir --no-deps "numpy<2" "setuptools==59.6.0" "wheel<0.44" \
+    && pip install -c /opt/golem-locks/ros-amd64-12.txt --no-cache-dir --no-deps "numpy<2" "setuptools==59.6.0" "wheel<0.44" \
     && rm -f /usr/local/lib/python3.10/dist-packages/distutils-precedence.pth
 
 # 6. Fail the build loudly if the package isn't importable, the server binary

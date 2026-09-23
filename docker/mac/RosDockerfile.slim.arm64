@@ -11,6 +11,7 @@
 # Build:  docker build -t golem_ros:latest -f docker/mac/RosDockerfile.slim.arm64 .
 # ==============================
 FROM golem_base:arm64
+COPY docker/locks/ros-*.txt /opt/golem-locks/
 
 ARG http_proxy
 ARG https_proxy
@@ -54,7 +55,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # C-extension installs bind to the numpy 1.x ABI (matches apt scipy). OMPL ships
 # a manylinux2014_aarch64 wheel, so it installs on arm64 with no source build.
 # -----------------------------------------------------------------------------
-RUN pip install --no-cache-dir --ignore-installed blinker \
+# Remove the NumPy-2 kinematics inherited from base before installing the ROS ABI.
+RUN pip uninstall -y pin libpinocchio coal libcoal eigenpy
+RUN pip install -c /opt/golem-locks/ros-arm64-01.txt --no-cache-dir --ignore-installed blinker \
         "numpy<2" \
         "scikit-learn>=1.4" \
         pin-pink \
@@ -82,7 +85,7 @@ RUN rm -rf /usr/local/lib/python3.10/dist-packages/setuptools \
            /usr/local/lib/python3.10/dist-packages/_distutils_hack \
            /usr/local/lib/python3.10/dist-packages/wheel \
            /usr/local/lib/python3.10/dist-packages/wheel-*.dist-info \
-    && pip install --no-cache-dir --no-deps "numpy<2" "setuptools==59.6.0" "wheel<0.44" \
+    && pip install -c /opt/golem-locks/ros-arm64-02.txt --no-cache-dir --no-deps "numpy<2" "setuptools==59.6.0" "wheel<0.44" \
     && rm -f /usr/local/lib/python3.10/dist-packages/distutils-precedence.pth
 
 # FastDDS RMW for the ROS (rclpy) layer — arm64 coexistence fix (see the

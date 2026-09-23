@@ -7,9 +7,12 @@ loop without robosuite. Mirrors sim_names.self_test style.
 
 Run: python3 test_spawn_collision.py
 """
+import io
 import math
+import re
 import sys
 import types
+from contextlib import redirect_stdout
 
 import mujoco
 import numpy as np
@@ -191,6 +194,97 @@ def test_keeps_best_on_giveup():
     assert final_pen <= start_pen + 1e-9, (start_pen, final_pen)  # best is never worse than start
     assert d.qpos[_free_qadr(m)] < 0.0, "give-up should keep the most-backed-off (least-penetrating) try"
 
+
+def _gap(m, d, margin):
+    mujoco.mj_forward(m, d)
+    return hr._robot_env_gap(m, d, margin)
+
+
+def test_gap_ignores_floor_and_caps_at_margin():
+    m, d = _load()
+    d.qpos[_free_qadr(m)] = -2.0          # far from the counter, hand near nothing
+    d.qpos[_free_qadr(m) + 2] = 0.12      # hand box 2 cm above the floor plane
+    assert abs(_gap(m, d, 0.2) - 0.2) < 1e-9, "floor must not count toward spawn clearance"
+
+
+def test_gap_sees_near_pairs_inside_multi_geom_bodies():
+    # MuJoCo's midphase would cull the hand<->counter pair once the robot body has
+    # a second geom; the clearance check must still see it.
+    two_geoms = SCENE.replace('<geom name="robot0_hand"',
+                              '<geom name="robot0_back" type="box" pos="-0.1 0 0" size="0.1 0.1 0.1"/><geom name="robot0_hand"')
+    m = mujoco.MjModel.from_xml_string(two_geoms)
+    d = mujoco.MjData(m)
+    d.qpos[_free_qadr(m)] = -0.22          # hand front 2 cm from the counter face
+    assert abs(_gap(m, d, 0.2) - 0.02) < 1e-6
+    assert not m.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_MIDPHASE, "model flags must be restored"
+
+def test_gap_is_negative_when_overlapping():
+    m, d = _load()
+    assert _gap(m, d, 0.2) < 0.0
+
+
+def test_margin_backs_off_until_requested_gap():
+    m, d = _load()
+    env = _FakeEnv(m, d)
+    base_quat = np.array([1.0, 0.0, 0.0, 0.0])
+    hr.place_robot_collision_free(env, np.array([0.0, 0.0, 1.0]), base_quat, margin=0.0)
+    no_overlap_x = d.qpos[_free_qadr(m)]
+    hr.place_robot_collision_free(env, np.array([0.0, 0.0, 1.0]), base_quat, margin=0.2)
+    assert _gap(m, d, 0.2) >= 0.2 - 1e-9, "margin spawn must keep 20 cm to the counter"
+    # Hand front sits 0.3 m ahead of the base; the counter face is at x=0.1.
+    assert d.qpos[_free_qadr(m)] <= -0.4 + 1e-9 < no_overlap_x
+    assert d.qpos[_free_qadr(m)] > -0.4 - 0.02 - 1e-9, "must stop at the first spot that meets the margin"
+
+
+def test_margin_zero_keeps_no_overlap_behavior():
+    m, d = _load()
+    env = _FakeEnv(m, d)
+    hr.place_robot_collision_free(env, np.array([0.0, 0.0, 1.0]), np.array([1.0, 0.0, 0.0, 0.0]), margin=0.0)
+    assert hr._robot_env_contacts(m, d) == []
+    assert -0.22 - 1e-9 <= d.qpos[_free_qadr(m)] < -0.18, "margin 0 only clears the overlap"
+
+
+def test_margin_blocked_behind_keeps_widest_gap():
+    blocked = SCENE.replace(
+        '<body name="robot0_base"',
+        '<body name="wall" pos="-0.55 0 0.5"><geom name="wall" type="box" size="0.05 1 0.5"/></body>\n    <body name="robot0_base"'
+    ).replace(
+        '<geom name="robot0_hand"',
+        '<geom name="robot0_back" type="box" pos="-0.1 0 0" size="0.1 0.1 0.1"/><geom name="robot0_hand"')
+    m = mujoco.MjModel.from_xml_string(blocked)
+    d = mujoco.MjData(m)
+    env = _FakeEnv(m, d)
+    out = io.StringIO()
+    with redirect_stdout(out):
+        hr.place_robot_collision_free(env, np.array([0.0, 0.0, 1.0]), np.array([1.0, 0.0, 0.0, 0.0]), margin=0.2)
+    searched = float(re.search(r"searched ([0-9.]+) m back", out.getvalue()).group(1))
+    assert searched < 0.5, f"search must stop at the wall behind, went {searched} m"
+    gap = _gap(m, d, 0.2)
+    assert 0.0 < gap < 0.2, gap   # the wall behind prevents 20 cm, but it never overlaps
+    assert d.qpos[_free_qadr(m)] > -0.5, "must stay in front of the wall, not search through it"
+
+ARM_SCENE = SCENE.replace(
+    '<geom name="robot0_hand" type="box" pos="0.15 0 0" size="0.15 0.1 0.1"/>',
+    '<geom name="robot0_hand" type="box" pos="0.15 0 0" size="0.15 0.1 0.1"/>'
+    '<body name="robot0_arm" pos="0 0 0.3"><joint name="robot0_arm_joint" axis="0 1 0"/>'
+    '<geom name="robot0_forearm" type="capsule" fromto="0 0 0 0 0 0.4" size="0.03"/></body>')
+
+
+def test_margin_holds_for_extra_poses_and_keeps_spawn_joints():
+    m = mujoco.MjModel.from_xml_string(ARM_SCENE)
+    d = mujoco.MjData(m)
+    env = _FakeEnv(m, d)
+    arm = np.array([int(m.jnt_qposadr[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, "robot0_arm_joint")])])
+    quat = np.array([1.0, 0.0, 0.0, 0.0])
+    hr.place_robot_collision_free(env, np.array([0.0, 0.0, 1.0]), quat, margin=0.2)
+    upright_x = d.qpos[_free_qadr(m)]
+    # The forearm swung 90 deg forward reaches 0.4 m ahead of its shoulder.
+    hr.place_robot_collision_free(env, np.array([0.0, 0.0, 1.0]), quat, margin=0.2,
+                                  poses=[(arm, np.array([math.pi / 2]))])
+    assert d.qpos[arm[0]] == 0.0, "the robot must be left in its spawn joint state"
+    assert d.qpos[_free_qadr(m)] < upright_x - 0.05, "the swung pose must need more room"
+    d.qpos[arm[0]] = math.pi / 2
+    assert _gap(m, d, 0.2) >= 0.2 - 1e-9, "margin must hold in the extra pose"
 
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

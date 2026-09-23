@@ -62,6 +62,7 @@ changing one needs the stack `restart` command to recreate both containers.
 | `GOLEM_SIM_ODOM` | off | sim ground-truth `/odom` + `odom→pelvis` TF (SLAM needs it) |
 | `GOLEM_CAMERAS` | on | `0` drops the 3 RGBD renders — the heaviest per-step cost |
 | `GOLEM_SPAWN_BACKOFF` | 0 | metres to back the robot into open floor at spawn |
+| `GOLEM_SPAWN_MARGIN` | 0.20 | minimum metres between the robot and any non-floor geom at spawn (also on x86) |
 | `GOLEM_CMD_TIMEOUT` | 0.5 | sim-seconds before the low-level interface zeroes the motors |
 | `GOLEM_ROS_MCP` | off | `1` starts the [ROS debugging MCP server](ROS_MCP_DEBUG.md) |
 

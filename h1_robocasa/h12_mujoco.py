@@ -3,6 +3,7 @@ import math
 import os
 import random
 import threading
+import time
 
 import mujoco
 import numpy as np
@@ -54,6 +55,31 @@ def _initial_motor_qpos():
     return qpos
 
 
+# Motor indices (ROS order): 12 torso, 13-19 left arm, 20-26 right arm, each arm
+# shoulder pitch/roll/yaw, elbow, wrist roll/pitch/yaw.
+_TORSO, _ARMS = 12, (13, 20)
+
+
+def _limp_upper_body_poses(model, motor_qpos, spawn):
+    """Poses the unpowered upper body settles into before the arm controller
+    first commands it, as (qpos indices, values) pairs for the spawn clearance
+    check. Measured in RoboCasa: the torso twists up to ~0.7 rad (either way),
+    shoulders pitch back ~0.25 rad, elbows bend ~0.45 rad and the wrists drop
+    onto their pitch stops, swinging the grippers forward."""
+    poses = []
+    for twist in (0.75, -0.75):
+        q = np.array(spawn, dtype=float)
+        q[_TORSO] = twist
+        for base in _ARMS:
+            q[base + 0] = 0.25    # shoulder pitch (rad, + is backward)
+            q[base + 2] = -0.2    # shoulder yaw
+            q[base + 3] = 0.45    # elbow
+            wrist_pitch = int(np.flatnonzero(model.jnt_qposadr == motor_qpos[base + 5])[0])
+            q[base + 5] = model.jnt_range[wrist_pitch, 0]
+        poses.append((motor_qpos, q))
+    return poses
+
+
 def _frame_viewer_on_robot(handle, data, body_id):
     """Set the passive viewer free camera's spawn pose as a function of the robot
     base body's world pose. lookat tracks the body position; the orbit azimuth is
@@ -67,6 +93,21 @@ def _frame_viewer_on_robot(handle, data, body_id):
     cam.distance = VIEW_CAM_DISTANCE
     cam.azimuth = yaw_deg + VIEW_CAM_AZIMUTH
     cam.elevation = VIEW_CAM_ELEVATION
+
+
+# Viewer display rate. A viewer thread syncs its own MjData at this rate so the
+# ~11 ms handle.sync() (it waits for the render thread) never blocks physics.
+VIEWER_HZ = 60.0
+
+
+def _copy_display_state(dst, src):
+    """Copy the state the viewer draws from src (caller holds sim_lock)."""
+    dst.time = src.time
+    dst.qpos[:] = src.qpos
+    dst.qvel[:] = src.qvel
+    dst.act[:] = src.act
+    dst.mocap_pos[:] = src.mocap_pos
+    dst.mocap_quat[:] = src.mocap_quat
 
 
 def _draw_band(handle, anchor, body_pos):
@@ -123,8 +164,10 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # perturbs the pose during reset, so restore a baked-in bent-knee stance,
     # zero all velocities, and re-place the pelvis. Upper-body motors remain at
     # zero. place_robot_collision_free auto-fits floor clearance AND backs the
-    # base away (the robot's -x) until no robot geom penetrates a fixture, keeping
-    # the least-penetrating spot if it can't fully clear.
+    # base away (the robot's -x) until every robot geom is GOLEM_SPAWN_MARGIN
+    # (default 0.20 m) from any non-floor geom, in the spawn pose and in the
+    # sagged pose the unpowered upper body falls into, keeping the widest-gap
+    # spot if it can't reach that.
     try:
         init_qpos = _initial_motor_qpos()
         data.qpos[resolver.motor_qpos] = init_qpos
@@ -133,10 +176,15 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         # floor (default 0 = at the counter for manipulation). Set ~1.0 for nav2,
         # which needs the robot's start cell to be free to plan.
         _spawn_backoff = float(os.environ.get("GOLEM_SPAWN_BACKOFF", "0") or 0)
+        _spawn_margin = float(os.environ.get("GOLEM_SPAWN_MARGIN", "0.20") or 0)
         h1_2_robosuite.place_robot_collision_free(
             env, env.init_robot_base_pos,
             h1_2_robosuite._euler_to_wxyz(getattr(env, "init_robot_base_ori", None)),
             extra_backoff=_spawn_backoff,
+            margin=_spawn_margin,
+            # Motors stay unpowered until the first command, so the margin must
+            # also hold once the torso and arms sag.
+            poses=_limp_upper_body_poses(model, resolver.motor_qpos, init_qpos),
         )
         print("[h12_mujoco] initial stance from baked-in sim defaults")
     except Exception as e:
@@ -270,11 +318,18 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
           "RGBD /realsense/{head,left_hand,right_hand}, livox lidar+imu, "
           "/{left,right}/gripper/*, /elastic_band/toggle")
 
+    # The viewer draws its own MjData, refreshed from `data` by the viewer
+    # thread below; mouse perturbation forces flow back through viewer_perturb.
+    viewer_data = mujoco.MjData(model) if viewer else None
+    if viewer_data is not None:
+        with sim_lock:
+            _copy_display_state(viewer_data, data)
+        mujoco.mj_forward(model, viewer_data)
     # SPACE in the viewer toggles the band (ElasticBand.key_callback).
     handle = (
-        mujoco.viewer.launch_passive(model, data, key_callback=band.key_callback)
+        mujoco.viewer.launch_passive(model, viewer_data, key_callback=band.key_callback)
         if viewer and band is not None
-        else (mujoco.viewer.launch_passive(model, data) if viewer else None)
+        else (mujoco.viewer.launch_passive(model, viewer_data) if viewer else None)
     )
     if handle is not None:
         handle.opt.geomgroup[0] = 0   # hide collision geoms by default
@@ -290,7 +345,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         if cam_body_id >= 0:
             try:
                 with handle.lock():
-                    _frame_viewer_on_robot(handle, data, cam_body_id)
+                    _frame_viewer_on_robot(handle, viewer_data, cam_body_id)
             except Exception as e:
                 print(f"[h12_mujoco] viewer camera framing skipped: {e}")
     # Fall logger: watch the torso's uprightness + height and log once when the
@@ -298,6 +353,40 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     _fall_logged = False
     _band_release_t = None
     _band_prev_on = bool(band.enabled) if band is not None else False
+
+    # RoboCasa advances fixture state and checks success once per control step
+    # (env._post_action at control_freq, 20 Hz by default), not per physics step.
+    # Several fixtures count calls (toaster heat, scrub contact), and the success
+    # debounce is in control steps, so matching that cadence keeps task semantics.
+    task_every = max(1, round(env.control_timestep / model.opt.timestep))
+    step_count = 0
+    viewer_perturb = np.zeros_like(data.xfrc_applied)
+    viewer_stop = threading.Event()
+
+    def _viewer_loop():
+        period = 1.0 / VIEWER_HZ
+        while not viewer_stop.is_set() and handle.is_running():
+            frame_start = time.perf_counter()
+            viewer_start = timings.start()
+            with sim_lock:
+                _copy_display_state(viewer_data, data)
+            mujoco.mj_forward(model, viewer_data)
+            # sync() applies the current mouse perturbation to viewer_data.
+            viewer_data.xfrc_applied[:] = 0.0
+            if band is not None and band.enabled:
+                _draw_band(handle, band.point, viewer_data.xpos[band_body_id])
+            else:
+                handle.user_scn.ngeom = 0   # clear overlay when band off
+            handle.sync()
+            with sim_lock:
+                viewer_perturb[:] = viewer_data.xfrc_applied
+            timings.stop("viewer", viewer_start)
+            viewer_stop.wait(max(0.0, period - (time.perf_counter() - frame_start)))
+
+    viewer_thread = None
+    if handle is not None:
+        viewer_thread = threading.Thread(target=_viewer_loop, daemon=True, name="viewer_sync")
+        viewer_thread.start()
 
     timings.reset(float(data.time))
     pacer = RealtimePacer(model.opt.timestep)
@@ -307,6 +396,9 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                 break
             physics_start = timings.start()
             with sim_lock:
+                if viewer_data is not None:
+                    # Mouse perturbation from the viewer's latest sync (zero when idle).
+                    data.xfrc_applied[:] = viewer_perturb
                 if band is not None:
                     # Re-write every step; MuJoCo persists xfrc_applied, so we must
                     # zero it when the band is disabled or the last force lingers.
@@ -337,29 +429,28 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                         print(f"[fall-logger] *** ROBOT FELL at sim t={data.time:.2f}s — stood "
                               f"{_since} (uprightness={_upz:.2f}, torso_h={_torso_h:.2f}) ***",
                               flush=True)
-                task_start = timings.start()
-                env.update_state()                  # REQUIRED before _check_success
-                timings.stop("task_update", task_start)
+                step_count += 1
+                task_step = step_count % task_every == 0
+                if task_step:
+                    task_start = timings.start()
+                    env.update_state()              # REQUIRED before _check_success
+                    timings.stop("task_update", task_start)
             # tick owns short sensor capture locks; encoding/publication cannot
             # block the DDS state reader. No physics step occurs inside tick.
             ros_bridge.tick()                       # /clock + camera + lidar + imu
-            task_start = timings.start()
-            with sim_lock:
-                done = measurement.tick()
-            timings.stop("task_check", task_start)
-            if done:
-                print("[h12_mujoco] task success (debounced).")
-            if viewer:
-                viewer_start = timings.start()
-                if band is not None and band.enabled:
-                    _draw_band(handle, band.point, data.xpos[band_body_id])
-                else:
-                    handle.user_scn.ngeom = 0   # clear overlay when band off
-                handle.sync()
-                timings.stop("viewer", viewer_start)
+            if task_step:
+                task_start = timings.start()
+                with sim_lock:
+                    done = measurement.tick()
+                timings.stop("task_check", task_start)
+                if done:
+                    print("[h12_mujoco] task success (debounced).")
             pacer.wait()
             timings.maybe_report(float(data.time))
     finally:
+        viewer_stop.set()
+        if viewer_thread is not None:
+            viewer_thread.join()
         if handle is not None:
             handle.close()
         executor.shutdown()

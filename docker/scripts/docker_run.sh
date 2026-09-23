@@ -14,7 +14,7 @@ for arg in "$@"; do [ "$arg" != --headless ] || export GOLEM_DISPLAY=headless; d
 configure_display
 prepare_mounts "$SIM"
 NAME=$(container_name "$SIM")
-if docker inspect "$NAME" >/dev/null 2>&1; then
+if docker inspect --type container "$NAME" >/dev/null 2>&1; then
     [ "$RESTART" = 1 ] || fail "$NAME already exists. Use --restart explicitly, or attach with docker exec -it $NAME bash."
     docker rm -f "$NAME"
 fi

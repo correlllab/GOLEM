@@ -52,6 +52,8 @@ services:
       # room to plan and keeps FAME from leaning into a nearby counter. NOTE: baked
       # at container-create -- change it with `up --force-recreate`, not `restart`.
       - GOLEM_SPAWN_BACKOFF=${GOLEM_SPAWN_BACKOFF:-0}
+      # Minimum free space (m) between the robot and any non-floor geom at spawn.
+      - GOLEM_SPAWN_MARGIN=${GOLEM_SPAWN_MARGIN:-0.20}
       # rclpy runs on FastDDS so it does not load a 2nd CycloneDDS libddsc
       # alongside unitree_sdk2py's (arm64 in-process coexistence fix).
       - RMW_IMPLEMENTATION=rmw_fastrtps_cpp

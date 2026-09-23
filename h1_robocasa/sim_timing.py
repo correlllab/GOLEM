@@ -1,5 +1,6 @@
 """Wall-clock pacing and optional stage timings for the single-step simulator."""
 import math
+import threading
 import time
 
 
@@ -30,7 +31,10 @@ class RealtimePacer:
 
 
 class LoopTimings:
-    """Report mean/max stage milliseconds and RTF every few wall seconds."""
+    """Report mean/max stage milliseconds and RTF every few wall seconds.
+
+    Sensor worker threads record stages too, so updates and reports are locked.
+    """
 
     def __init__(self, enabled=False, interval=5.0, *, clock=time.perf_counter):
         self.enabled = enabled
@@ -39,11 +43,13 @@ class LoopTimings:
         self.wall_start = clock() if enabled else 0.0
         self.sim_start = 0.0
         self.stages = {}
+        self._lock = threading.Lock()
 
     def reset(self, sim_time):
         self.wall_start = self.clock() if self.enabled else 0.0
         self.sim_start = sim_time
-        self.stages.clear()
+        with self._lock:
+            self.stages.clear()
 
     def start(self):
         return self.clock() if self.enabled else 0.0
@@ -51,8 +57,9 @@ class LoopTimings:
     def stop(self, name, start):
         if self.enabled:
             elapsed = self.clock() - start
-            total, count, longest = self.stages.get(name, (0.0, 0, 0.0))
-            self.stages[name] = (total + elapsed, count + 1, max(longest, elapsed))
+            with self._lock:
+                total, count, longest = self.stages.get(name, (0.0, 0, 0.0))
+                self.stages[name] = (total + elapsed, count + 1, max(longest, elapsed))
 
     def maybe_report(self, sim_time):
         if not self.enabled:
@@ -61,12 +68,13 @@ class LoopTimings:
         wall = now - self.wall_start
         if wall < self.interval:
             return
+        with self._lock:
+            stages, self.stages = self.stages, {}
         fields = ' '.join(
             f'{name}={1000 * total / count:.2f}/{1000 * longest:.2f}ms(n={count})'
-            for name, (total, count, longest) in self.stages.items()
+            for name, (total, count, longest) in stages.items()
         )
         print(f'[sim-timing] RTF={(sim_time - self.sim_start) / wall:.3f} '
               f'(stage mean/max) {fields}', flush=True)
         self.wall_start = now
         self.sim_start = sim_time
-        self.stages.clear()

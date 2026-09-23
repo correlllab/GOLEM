@@ -32,6 +32,7 @@ def generate_launch_description():
             package='h12_lowerbody_rl', executable='lowerbody_controller_node', name='lowerbody_controller_node',
             parameters=[sim_time, {
                 'active_policy': 'almi',
+                'auto_switch': False,
                 'engage_wait_for_confirm': False,
                 'imu_offset_roll_deg': 0., 'imu_offset_pitch_deg': 0., 'imu_offset_yaw_deg': 0.,
             }], output='screen'))

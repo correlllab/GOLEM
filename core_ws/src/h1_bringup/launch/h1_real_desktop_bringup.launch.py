@@ -74,6 +74,10 @@ def generate_launch_description():
         # node additionally holds at the pre-pose crouch until the operator
         # confirms:  ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
         DeclareLaunchArgument('lowerbody', default_value='almi'),
+        # auto_switch on the RL controller: false (default) keeps the robot on
+        # the lowerbody:= policy for standing AND walking (ALMI all the way);
+        # true hands nonzero /cmd_vel to the walk policy and back.
+        DeclareLaunchArgument('lowerbody_auto_switch', default_value='false'),
         DeclareLaunchArgument('use_skills', default_value='true'),
         DeclareLaunchArgument('model_logging', default_value='true'),
         DeclareLaunchArgument('model_visualization', default_value='true'),
@@ -148,18 +152,19 @@ def generate_launch_description():
             condition=IfCondition(LaunchConfiguration('use_skills')),
         ),
 
-        # Switchable lower-body RL controller (almi / fame / walk) — launched
-        # only when lowerbody:= names an RL policy AND the operator has verified
+        # Lower-body RL controller (almi / fame / walk) — launched only
+        # when lowerbody:= names an RL policy AND the operator has verified
         # the start position; the MJPC controller below is gated off in that
-        # case. The chosen policy is pinned as active_policy (fame/walk still
-        # auto-switch between themselves on /cmd_vel; almi never auto-switches —
-        # it stands AND walks itself).
+        # case. The chosen policy stays active for standing and walking unless
+        # lowerbody_auto_switch:=true.
         Node(
             package='h12_lowerbody_rl',
             executable='lowerbody_controller_node',
             name='lowerbody_controller_node',
             parameters=[sim_time_param,
                         {'active_policy': LaunchConfiguration('lowerbody'),
+                         'auto_switch': ParameterValue(
+                             LaunchConfiguration('lowerbody_auto_switch'), value_type=bool),
                          # The elastic band is a SIM fixture; on real there is
                          # no /elastic_band/toggle service, so the release path
                          # only costs a 1 s blocking wait_for_service inside the

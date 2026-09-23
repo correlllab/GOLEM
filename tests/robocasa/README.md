@@ -33,7 +33,21 @@ point filtering, message construction, and publishing. Physics includes lock
 acquisition and PD control. Timings are silent unless requested.
 
 Compare the same task/layout/style/seed, display mode, subscribers, and hardware.
-Discard the first interval for renderer warm-up. These changes keep per-step PD
-and task checks, all sensor schedules, message formats, and topic definitions.
+Discard the first interval for renderer warm-up. PD torque is recomputed every
+physics step. RoboCasa fixture updates and success checks run once per control
+step (`env.control_timestep`, 20 Hz), matching RoboCasa's own `env.step`.
+
+Lidar scans and camera frames are produced from a ~1 ms `MjData` snapshot on
+one worker thread per sensor, overlapping physics, with one job in flight per
+sensor. A due job waits for the previous one rather than being dropped, so
+schedules, stamps, message formats and topics are unchanged. `*_capture` is the
+locked snapshot, `*_wait` is time the loop blocked on the previous job.
+The launcher selects EGL for offscreen camera rendering in both display modes;
+the camera context is created before the passive viewer opens, because a new
+EGL context cannot be made current once the GLFW window exists. The viewer
+draws its own `MjData`, refreshed and synced at 60 Hz on a separate thread
+(`viewer` stage), so `handle.sync()` never blocks physics. Mouse perturbation
+forces from each sync are applied to the simulation on every step.
+
 The pacer repays at most 100 ms of wall-clock lag without dropping simulation
 steps. It does not make an overloaded scene run in real time.

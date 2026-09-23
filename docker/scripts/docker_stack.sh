@@ -21,7 +21,7 @@ done
 if [ "$ACTION" = stop ]; then
     for service in ros "$SIM"; do
         name=$(container_name "$service")
-        if docker inspect "$name" >/dev/null 2>&1; then docker stop "$name"; fi
+        if docker inspect --type container "$name" >/dev/null 2>&1; then docker stop "$name"; fi
     done
     exit 0
 fi
@@ -34,12 +34,12 @@ if [ "$ACTION" = restart ]; then
     # Explicit restart also replaces one-off containers created by docker_run.sh.
     for service in ros "$SIM"; do
         name=$(container_name "$service")
-        if docker inspect "$name" >/dev/null 2>&1; then docker rm -f "$name"; fi
+        if docker inspect --type container "$name" >/dev/null 2>&1; then docker rm -f "$name"; fi
     done
 else
     for service in "$SIM" ros; do
         name=$(container_name "$service")
-        if [ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null || true)" = true ]; then
+        if [ "$(docker inspect --type container -f '{{.State.Running}}' "$name" 2>/dev/null || true)" = true ]; then
             fail "$name is already running. Use the stack restart command to restart both coherently."
         fi
     done

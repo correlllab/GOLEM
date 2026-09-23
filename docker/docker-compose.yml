@@ -81,10 +81,12 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=all
       - QT_X11_NO_MITSHM=1
       - LIBGL_ALWAYS_INDIRECT=0
-      # Default to GLFW (native passive viewer). Export MUJOCO_GL=egl on the
-      # host (or pass --headless to launch_robocasa.sh) for offscreen rendering.
+      # launch_robocasa.sh exports MUJOCO_GL=egl for offscreen cameras in both
+      # display modes; the passive viewer opens its own GLFW window.
       - MUJOCO_GL=${MUJOCO_GL:-glfw}
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-1}
+      # Minimum free space (m) between the robot and any non-floor geom at spawn.
+      - GOLEM_SPAWN_MARGIN=${GOLEM_SPAWN_MARGIN:-0.20}
     volumes:
       - type: bind
         source: ../h1_robocasa

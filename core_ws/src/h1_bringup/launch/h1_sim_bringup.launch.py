@@ -79,16 +79,20 @@ def generate_launch_description():
         # mp4 (written on shutdown). Reads rt/lowstate + the estimator + rt/mjpc/plan;
         # commands nothing. use_mjpc_viz:=false for a clean bringup.
         DeclareLaunchArgument('use_mjpc_viz', default_value='true'),
-        # Which controller drives the legs. 'almi' (default) = the switchable RL
-        # controller (h12_lowerbody_rl lowerbody_controller_node): ALMI stands,
-        # hands off to the walk policy on /cmd_vel, and follows nav2. 'fame' /
-        # 'walk' pin that same RL controller to those policies instead. The RL
+        # Which controller drives the legs. 'almi' (default) = the RL controller
+        # (h12_lowerbody_rl lowerbody_controller_node) running ALMI for standing
+        # and walking, following /cmd_vel from nav2. 'fame' / 'walk' pin that
+        # same RL controller to those policies instead. The RL
         # controller launches for any value != 'mjpc'. 'mjpc' launches NO leg
         # controller here — the MJPC nodes below are disabled, so the legs are
         # left uncontrolled — which is why the sim default is 'almi'. The
         # real-robot bringup does default to mjpc, behind the
         # start_position_verified interlock.
         DeclareLaunchArgument('lowerbody', default_value='almi'),  # almi | almi27 | fame | walk
+        # auto_switch on the RL controller: false (default) keeps the robot on
+        # the lowerbody:= policy for standing AND walking (ALMI all the way);
+        # true hands nonzero /cmd_vel to the walk policy and back.
+        DeclareLaunchArgument('lowerbody_auto_switch', default_value='false'),
         DeclareLaunchArgument('model_logging', default_value='true'),
         DeclareLaunchArgument('model_visualization', default_value='true'),
         DeclareLaunchArgument('model_clear_logs', default_value='true'),
@@ -164,16 +168,18 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # Switchable lower-body RL controller (almi / fame / walk) — launched
-        # only when lowerbody:= names an RL policy; the MJPC controller below
-        # is gated off in that case. The chosen policy is pinned as
-        # active_policy (fame/walk still auto-switch between themselves on
+        # Lower-body RL controller (almi / fame / walk) — launched only when
+        # lowerbody:= names an RL policy; the MJPC controller below is gated off
+        # in that case. The chosen policy stays active throughout unless
+        # lowerbody_auto_switch:=true.
         Node(
             package='h12_lowerbody_rl',
             executable='lowerbody_controller_node',
             name='lowerbody_controller_node',
             parameters=[sim_time_param,
                         {'active_policy': LaunchConfiguration('lowerbody'),  # almi/almi27/fame/walk
+                         'auto_switch': ParameterValue(
+                             LaunchConfiguration('lowerbody_auto_switch'), value_type=bool),
                          # Sim auto-engages after the pre-pose settles (unattended
                          # runs); the operator-confirm arming gate is a REAL-robot
                          # step (see h1_real_desktop_bringup.launch.py).

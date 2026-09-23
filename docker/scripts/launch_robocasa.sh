@@ -39,11 +39,10 @@ case " $* " in
         ;;
 esac
 
-# MUJOCO_GL: glfw needs an X display, egl is offscreen.
-case " $* " in
-    *" --headless "*) export MUJOCO_GL=egl ;;
-    *) export MUJOCO_GL=glfw ;;
-esac
+# MUJOCO_GL selects the offscreen renderer for the RGBD cameras. EGL needs no
+# display and can render on the camera worker thread; the passive viewer opens
+# its own GLFW window independently of it.
+export MUJOCO_GL=egl
 
 cd /home/code/h1_robocasa
 # -u: docker-compose captures stdout via a pipe, which block-buffers python's

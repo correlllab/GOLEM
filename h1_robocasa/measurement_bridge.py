@@ -1,17 +1,18 @@
 """Publish RoboCasa task measurements (goal / success / reward) onto ROS.
 
-The RoboCasa env shares our MjData (we step it ourselves), so after each
-``mj_step`` the loop must call ``env.update_state()`` (refreshes fixture caches:
-temperature, timer, door, rack) BEFORE reading ``_check_success``. This bridge
-wraps that read and publishes:
+The RoboCasa env shares our MjData (we step it ourselves), so once per control
+step (``env.control_timestep``, as RoboCasa's own ``env.step`` does) the loop
+calls ``env.update_state()`` (refreshes fixture caches: temperature, timer,
+door, rack) and then ``tick()``, which reads ``_check_success``. This bridge
+wraps that read and publishes, at the control rate:
 
   /robocasa/task_name   std_msgs/String   (the task env name, e.g. "TurnOnToasterOven", latched)
   /robocasa/task_goal   std_msgs/String   (the language instruction, latched)
   /robocasa/success     std_msgs/Bool     (sustained success, after debounce)
   /robocasa/reward      std_msgs/Float32  (sparse instantaneous = float(success))
 
-Success is debounced over N consecutive successful steps (RoboCasa teleop uses
-~15) so a single transient frame does not count as task completion.
+Success is debounced over N consecutive successful control steps (RoboCasa
+teleop uses ~15) so a single transient frame does not count as task completion.
 """
 from rclpy.node import Node
 from std_msgs.msg import Bool, Float32, String

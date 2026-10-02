@@ -1,0 +1,19 @@
+# lowerbody_controller_node parameters for the real robot. active_policy and
+# auto_switch come from h1_lowerbody.launch.py's launch arguments. The node
+# holds at the pre-pose crouch until the operator confirms:
+#   ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
+lowerbody_controller_node:
+  ros__parameters:
+    # The elastic band is a sim fixture; on real there is no
+    # /elastic_band/toggle service, so the release path only costs a 1 s
+    # blocking wait_for_service inside the engage tick (first policy command
+    # then computed from 1 s-stale state) plus a redundant second LSTM reset.
+    # The operator lowers the gantry instead.
+    disable_elastic_band: false
+    # Startup seed for the live IMU trim (adjust during a run with
+    # rqt_reconfigure or ros2 param set). Negative pitch is an anti-lean bias
+    # (the policy believes it pitches further forward and fights harder); the
+    # hanging-plumb static calibration would be +0.264.
+    imu_offset_roll_deg: 0.50
+    imu_offset_pitch_deg: -2.5
+    imu_offset_yaw_deg: 0.0

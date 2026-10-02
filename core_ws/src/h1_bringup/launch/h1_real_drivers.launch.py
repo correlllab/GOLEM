@@ -11,11 +11,12 @@ def generate_launch_description():
     # Equivalent of `ros2 launch livox_ros_driver2 msg_MID360_launch.py`,
     # inlined so the MID360 driver comes up as part of this bringup. Params
     # mirror msg_MID360_launch.py; user_config_path points at the
-    # humanoid-validated MID360_config.json stored under h1_bringup/config
+    # humanoid-validated MID360_config.json stored under h12_slam/config
     # (Unitree onboard net 192.168.123.164 host / 192.168.123.120 lidar,
     # lidar mounted inverted -> extrinsic roll 180).
     bringup_share = get_package_share_directory('h1_bringup')
-    mid360_config = os.path.join(bringup_share, 'config', 'MID360_config.json')
+    mid360_config = os.path.join(
+        get_package_share_directory('h12_slam'), 'config', 'MID360_config.json')
 
     livox_mid360_params = [
         {'xfer_format': 1},      # 0-Pointcloud2(PointXYZRTL), 1-customized pointcloud format

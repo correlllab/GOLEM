@@ -9,8 +9,7 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    bringup_share = get_package_share_directory('h1_bringup')
-    config_dir = os.path.join(bringup_share, 'config')
+    config_dir = os.path.join(get_package_share_directory('h12_slam'), 'config')
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     declare_use_sim_time = DeclareLaunchArgument(
@@ -21,7 +20,7 @@ def generate_launch_description():
     fast_lio_config_file = LaunchConfiguration('fast_lio_config_file')
     declare_fast_lio_config_file = DeclareLaunchArgument(
         'fast_lio_config_file', default_value='mid360.yaml',
-        description='Config file for fast_lio (resolved against h1_bringup/config)'
+        description='Config file for fast_lio (resolved against h12_slam/config)'
     )
 
     nav2_params_file = LaunchConfiguration('nav2_params_file')

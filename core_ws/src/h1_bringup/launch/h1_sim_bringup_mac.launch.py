@@ -155,7 +155,7 @@ def generate_launch_description():
             executable='async_slam_toolbox_node',
             name='slam_toolbox',
             parameters=[
-                os.path.join(get_package_share_directory('h1_bringup'),
+                os.path.join(get_package_share_directory('h12_slam'),
                              'config', 'slam_toolbox_h1.yaml'),
                 {'odom_frame': 'odom', 'scan_topic': '/converted_scan'},
                 sim_time_param,
@@ -177,7 +177,7 @@ def generate_launch_description():
         nav2_launch = os.path.join(
             get_package_share_directory('nav2_bringup'), 'launch', 'navigation_launch.py')
         nav2_cfg = os.path.join(
-            get_package_share_directory('h1_bringup'), 'config', 'nav2_config_mac.yaml')
+            get_package_share_directory('h12_slam'), 'config', 'nav2_config_mac.yaml')
         nodes.append(IncludeLaunchDescription(
             PythonLaunchDescriptionSource(nav2_launch),
             launch_arguments={'params_file': nav2_cfg, 'use_sim_time': 'true'}.items(),

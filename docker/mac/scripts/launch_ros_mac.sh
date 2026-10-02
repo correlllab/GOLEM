@@ -123,7 +123,7 @@ cd "$WS"
 # ros-humble-rosidl-generator-dds-idl and torch, both in the image. The walk
 # policy is stable only when handed over from a settled FAME stance, which is
 # what GOLEM_LOWERBODY=switch does (see docs/MACOS.md).
-PKGS="custom_ros_messages magpie_msgs h12_ros2_model h12_ros2_controller h12_safety_layer h1_bringup unitree_hg h12_lowerbody_rl"
+PKGS="custom_ros_messages magpie_msgs h12_ros2_model h12_ros2_controller h12_safety_layer h12_slam h1_bringup unitree_hg h12_lowerbody_rl"
 H1_BRINGUP_STUB_DEPS="estop livox_ros_driver2 fast_lio model_server"
 
 for _dep in $H1_BRINGUP_STUB_DEPS; do

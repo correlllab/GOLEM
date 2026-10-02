@@ -6,8 +6,9 @@ from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 
-# Real robot, onboard PC. ROS_DOMAIN_ID must be exported in the launching shell
-# (0 on the real robot; see h1_control.launch.py).
+# Real robot SLAM + navigation only: sensor drivers, state publishers and the
+# h12_slam nav stack; no estop, safety layer or IK. ROS_DOMAIN_ID must be
+# exported in the launching shell (0 on the real robot).
 
 
 def _include(package, launch_file, launch_arguments):
@@ -24,7 +25,6 @@ def generate_launch_description():
 
     return LaunchDescription([
         _include('h1_bringup', 'h1_real_drivers.launch.py', wall_time),
-        _include('h12_slam', 'h1_navigation.launch.py', wall_time),
         _include('h1_bringup', 'h1_state.launch.py', wall_time),
-        _include('h1_bringup', 'h1_control.launch.py', {**wall_time, 'use_estop': 'true'}),
+        _include('h12_slam', 'h1_navigation.launch.py', wall_time),
     ])

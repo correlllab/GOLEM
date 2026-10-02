@@ -90,15 +90,19 @@ is no `sim:=true` argument):
 |---|---|
 | `h1_sim_bringup.launch.py` | x86 sim — the full stack |
 | `h1_sim_bringup_mac.launch.py` | mac sim — trimmed, toggled by `GOLEM_*` env vars |
-| `h1_real_robot_bringup.launch.py` | real robot, onboard PC (aggregates the three below) |
-| `h1_real_drivers.launch.py` | real: Livox, RealSense, grippers |
-| `h1_real_controller.launch.py` | real: estop, state publishers, safety + IK servers |
-| `h1_real_desktop_bringup.launch.py` | real: companion desktop — model servers, skills, MJPC |
-| `h1_navigation.launch.py` | shared nav stack, included by the sim and real bringups |
+| `h1_real_robot_bringup.launch.py` | real robot, onboard PC: drivers, state publishers, estop + safety + IK, nav |
+| `h1_real_desktop_bringup.launch.py` | real: companion desktop — hand cameras, model servers, skills, lower body |
+| `h1_safety_grippers.launch.py` | real: estop + safety layer + grippers only |
+| `h1_real_slam.launch.py` | real: drivers, state publishers and SLAM/nav only (no estop, safety or IK) |
+
+The top-level files above are assembled from building blocks you can also
+launch on their own: `h1_state` (state publishers), `h1_control` (estop,
+safety, IK), `h1_lowerbody`, `h1_models` (model servers + skills),
+`h1_real_drivers`, `h1_grippers`, and `h1_navigation` (in `h12_slam`).
 
 The x86 sim bringup starts the state publishers, the `frame_task_server` IK
-solver, `safety_node`, the Gemini/SAM/GraspGen model servers, the MJPC estimator
-and lower-body controller, the skills node, nav, and RViz. Common arguments:
+solver, `safety_node`, the Gemini/SAM/GraspGen model servers, the RL lower-body
+controller, the skills node, nav, and RViz. Common arguments:
 
 ```bash
 ros2 launch h1_bringup h1_sim_bringup.launch.py \

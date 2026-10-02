@@ -15,6 +15,7 @@ from h1_bringup.livox_imu_upright import load_rotation, rotate
 
 PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = os.path.join(PKG, 'config')
+SLAM_CONFIG = os.path.join(os.path.dirname(PKG), 'h12_slam', 'config')
 
 
 def _vec(x, y, z):
@@ -22,7 +23,7 @@ def _vec(x, y, z):
 
 
 def test_raw_inverted_gravity_reads_up_after_rotation():
-    r = load_rotation(os.path.join(CONFIG, 'MID360_config.json'))
+    r = load_rotation(os.path.join(SLAM_CONFIG, 'MID360_config.json'))
     # At rest the inverted MID360 IMU reads about (-0.19, -0.01, -0.98) g.
     acc = _vec(-0.19, -0.01, -0.98)
     rotate(r, acc)
@@ -31,7 +32,7 @@ def test_raw_inverted_gravity_reads_up_after_rotation():
 
 
 def test_fast_lio_config_expects_upright_imu():
-    with open(os.path.join(CONFIG, 'mid360.yaml')) as f:
+    with open(os.path.join(SLAM_CONFIG, 'mid360.yaml')) as f:
         params = yaml.safe_load(f)['/**']['ros__parameters']
     assert params['common']['imu_topic'] == '/livox/imu'
     assert params['mapping']['extrinsic_R'] == [1., 0., 0., 0., 1., 0., 0., 0., 1.]
@@ -40,15 +41,19 @@ def test_fast_lio_config_expects_upright_imu():
 def test_fast_lio_keeps_every_lidar_line():
     # line < scan_line is a hard filter: the real MID360 emits lines 0-3 and
     # both sims 0-5, so anything below 6 silently drops sim points.
-    with open(os.path.join(CONFIG, 'mid360.yaml')) as f:
+    with open(os.path.join(SLAM_CONFIG, 'mid360.yaml')) as f:
         params = yaml.safe_load(f)['/**']['ros__parameters']
     assert params['preprocess']['scan_line'] >= 6
 
 
 def test_one_slam_config_set():
-    names = sorted(os.listdir(CONFIG))
+    names = sorted(os.listdir(SLAM_CONFIG))
     assert [n for n in names if n.startswith('mid360')] == ['mid360.yaml']
     assert [n for n in names if n.startswith('slam_toolbox')] == ['slam_toolbox_h1.yaml']
+    # Bringup loads lidar/SLAM/nav configs from h12_slam; a copy here would silently drift.
+    leftovers = [n for n in os.listdir(CONFIG)
+                 if n.lower().startswith(('mid360', 'slam_toolbox', 'nav2'))]
+    assert leftovers == []
 
 
 def test_real_drivers_route_imu_through_upright_node():

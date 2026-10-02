@@ -77,7 +77,7 @@ _STANDOFF = _STANDOFFS[0]
 _WALL_MARGIN = 0.20
 # nav2's controller goal-checker xy tolerance — MUST mirror
 # controller_server.goal_checker.xy_goal_tolerance in
-# h1_bringup/config/nav2_config.yaml. nav2 reports a goal SUCCEEDED the instant
+# h12_slam/config/nav2_config.yaml. nav2 reports a goal SUCCEEDED the instant
 # the base is within this radius of it, commanding no motion. Kept here so the
 # advance gate below can guarantee every goal we issue sits OUTSIDE it.
 _NAV_XY_GOAL_TOL = 0.25

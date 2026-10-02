@@ -1,0 +1,12 @@
+# lowerbody_controller_node parameters for the simulators. active_policy and
+# auto_switch come from h1_lowerbody.launch.py's launch arguments.
+lowerbody_controller_node:
+  ros__parameters:
+    # Sim auto-engages after the pre-pose settles (unattended runs); the
+    # operator-confirm arming gate is a real-robot step.
+    engage_wait_for_confirm: false
+    # The sim IMU has no mounting bias to correct (the live trim sliders still
+    # work for experiments).
+    imu_offset_roll_deg: 0.0
+    imu_offset_pitch_deg: 0.0
+    imu_offset_yaw_deg: 0.0

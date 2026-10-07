@@ -1,8 +1,9 @@
-# Deploy config for LocoManip-Marl-Flat-Golem2-Direct-v0 (Locomanipulation_game, marl-direct): the IK task with
+# Deploy config for LocoManip-Marl-Flat-Golem3-Direct-v0 (Locomanipulation_game, marl-direct): the IK task with
 # goals spread over the workspace and built in a real squat (IK2), arm commands held by leg kinematics and a
 # 3 Hz low-pass on the arms' residual (IK3), and targets clipped as h12_safety_layer clips them, trained with
 # its e-stops (90% velocity/torque, 0.02 rad position) ending the episode (Golem), and targets bounded so the
-# PD torque they ask for stays within 85% of the effort limit (Golem2).
+# PD torque they ask for stays within 85% of the effort limit (Golem2). Golem3 randomizes joint damping and
+# armature in training only; its policy runs with the same deploy settings as Golem2's.
 # Every value mirrors the training env; the source is named on each block.
 # Locomanipulation_game scripts/skrl/export_marl.py writes the networks and export.yaml next to
 # this file; export.yaml's keys (rest_pose, source) override the ones here.

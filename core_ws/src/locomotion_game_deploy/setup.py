@@ -16,6 +16,8 @@ setup(
         # Exported policies + their deploy config, installed under share/<pkg>/policies/<name>/.
         (os.path.join('share', package_name, 'policies', 'marl_ik'),
             glob('policies/marl_ik/*')),
+        (os.path.join('share', package_name, 'policies', 'marl_golem'),
+            glob('policies/marl_golem/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -31,6 +33,7 @@ setup(
     entry_points={
         'console_scripts': [
             'marl_deploy_node = locomotion_game_deploy.marl_deploy_node:main',
+            'game_commander_node = locomotion_game_deploy.game_commander_node:main',
         ],
     },
 )

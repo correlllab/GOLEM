@@ -26,8 +26,10 @@ from locomotion_game_deploy.rotations import compute_pose_error, quat_from_matri
 
 class ArmKinematics:
     def __init__(self, urdf_path: str, joint_names: list[str], ee_frames: list[str],
-                 arm_joint_names: list[list[str]], pelvis_frame: str = "pelvis"):
-        """joint_names: the policy's joint order (Unitree motor order); q vectors use it."""
+                 arm_joint_names: list[list[str]], pelvis_frame: str = "pelvis",
+                 extra_frames: list[str] | None = None):
+        """joint_names: the policy's joint order (Unitree motor order); q vectors use it.
+        extra_frames: more frames whose pelvis-frame pose update() computes (frame_pose), e.g. the feet."""
         self.model = pin.buildModelFromUrdf(urdf_path)
         self.data = self.model.createData()
         self._q_pin = pin.neutral(self.model)
@@ -35,7 +37,10 @@ class ArmKinematics:
         self._q_idx = np.array([self.model.joints[self.model.getJointId(n)].idx_q for n in joint_names])
         self._pelvis_id = self.model.getFrameId(pelvis_frame)
         self._ee_ids = [self.model.getFrameId(f) for f in ee_frames]
-        for name, fid in zip([pelvis_frame] + ee_frames, [self._pelvis_id] + self._ee_ids):
+        self._extra_ids = {f: self.model.getFrameId(f) for f in (extra_frames or [])}
+        self._extra_poses: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        for name, fid in zip([pelvis_frame] + ee_frames + list(self._extra_ids),
+                             [self._pelvis_id] + self._ee_ids + list(self._extra_ids.values())):
             if fid >= len(self.model.frames):
                 raise ValueError(f"frame {name!r} not in {urdf_path}")
         # per arm: columns in the policy's joint order, and in pinocchio's velocity vector
@@ -67,11 +72,18 @@ class ArmKinematics:
             r = o_m_ee.rotation @ self._jac_points[arm]
             lin = jac[:3] - _skew(r) @ jac[3:]
             self._jacobians.append(np.vstack([r_pelvis_t @ lin, r_pelvis_t @ jac[3:]]))
+        for name, fid in self._extra_ids.items():
+            pelvis_m_f = o_m_pelvis.actInv(self.data.oMf[fid])
+            self._extra_poses[name] = (pelvis_m_f.translation.copy(), quat_from_matrix(pelvis_m_f.rotation))
 
     def wrist_pose(self, arm: int) -> tuple[np.ndarray, np.ndarray]:
         """(position, quaternion wxyz with qw >= 0) of the arm's wrist frame in the pelvis frame."""
         pos, quat = self._poses[arm]
         return pos, quat_unique(quat)
+
+    def frame_pose(self, name: str) -> tuple[np.ndarray, np.ndarray]:
+        """(position, quaternion wxyz) of an extra frame in the pelvis frame, at the last update()."""
+        return self._extra_poses[name]
 
     def ik_step(self, arm: int, target_pos: np.ndarray, target_quat: np.ndarray, damping: float,
                 max_step: float) -> np.ndarray:

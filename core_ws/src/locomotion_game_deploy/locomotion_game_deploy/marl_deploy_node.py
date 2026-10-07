@@ -27,7 +27,7 @@ Safety
 * /safety/heartbeat watchdog, as in h12_lowerbody_rl: armed on the first beat;
   a False beat (the safety layer's estop latched) or ``heartbeat_timeout`` of
   silence latches this node silent.
-* /lowstate older than ``lowstate_timeout``: no policy step and no publish
+* /lowstate older than ``lowstate_timeout`` (wall clock): no policy step and no publish
   that tick (stepping on a frozen state would integrate garbage).
 * A non-finite observation or target latches the node silent instead of
   sending it: the safety layer would latch its estop (all motors limp) on it.
@@ -117,11 +117,17 @@ class MarlDeployNode(Node):
             raise ValueError(f"control_hz {control_hz} doesn't match the policy's control_dt {cfg['control_dt']}")
 
         torch.set_num_threads(1)
+        # leg odometry needs the feet, and the IMU's frame when the IMU isn't on the pelvis
+        legs_odom = cfg.get("legs_odometry", {}) if cfg.get("odometry") == "legs" else {}
+        extra_frames = list(legs_odom.get("foot_frames", []))
+        if legs_odom.get("imu_frame", "pelvis") != "pelvis":
+            extra_frames.append(legs_odom["imu_frame"])
         kin = ArmKinematics(
             self.get_parameter("urdf_path").value,
             joint_names=cfg["joint_names"],
             ee_frames=cfg["arms"]["ee_frames"],
             arm_joint_names=[cfg["joint_names"][ARM_START:ARM_START + 7], cfg["joint_names"][ARM_START + 7:]],
+            extra_frames=extra_frames,
         )
         mode = str(self.get_parameter("policy_mode").value)
         if mode == "torch":

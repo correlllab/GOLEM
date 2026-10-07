@@ -299,3 +299,110 @@ def test_estimator_input_layout():
     np.testing.assert_allclose(x[252:300].reshape(4, 12)[:, 0], [2, 3, 4, 5])  # leg torques
     first = est.inputs[0]                        # the 2nd step: window = frame 0 repeated, then frame 1
     np.testing.assert_allclose(first[0:12:3], [0, 0, 0, 1])
+
+
+# -- the Golem policy's deploy features ------------------------------------------------
+
+GOLEM_CFG_PATH = os.path.join(HERE, "..", "policies", "marl_golem", "marl_golem.yaml")
+
+
+def _golem_controller(legs=None, arms=None, **overrides):
+    with open(GOLEM_CFG_PATH) as f:
+        cfg = yaml.safe_load(f)
+    cfg.update(overrides)
+    names = cfg["joint_names"]
+    odom = cfg["legs_odometry"]
+    kin = ArmKinematics(URDF, names, cfg["arms"]["ee_frames"], [names[13:20], names[20:]],
+                        extra_frames=odom["foot_frames"] + [odom["imu_frame"]])
+    return MarlController(cfg, kin, legs or ZeroNetwork(12), arms or ZeroNetwork(14), ZeroNetwork(6)), cfg
+
+
+def test_residual_low_pass_and_observed_action():
+    action = np.full(14, 1.0)
+    arms = ConstNetwork(action)
+    ctrl, cfg = _golem_controller(arms=arms)
+    state = _state(cfg)
+    ctrl.reset(state)
+    alpha = 1.0 - np.exp(-2.0 * np.pi * 3.0 * 0.02)
+    ctrl.step(state)
+    np.testing.assert_allclose(ctrl.residual, alpha * action)
+    np.testing.assert_allclose(ctrl.arms_last, alpha * action)        # the arms observe the filtered residual
+    ctrl.step(state)
+    np.testing.assert_allclose(ctrl.residual, (alpha + alpha * (1 - alpha)) * action)
+    np.testing.assert_allclose(arms.inputs[-1][84:98], alpha * action)
+
+
+def test_golem_targets_inside_the_safety_clip():
+    ctrl, cfg = _golem_controller(legs=ConstNetwork(np.full(12, 10.0)), arms=ConstNetwork(np.full(14, 10.0)))
+    state = _state(cfg)
+    ctrl.reset(state)
+    for _ in range(20):
+        cmd = ctrl.step(state)
+    limits = ctrl.kin.joint_limits
+    legs_arms = np.r_[0:12, 13:27]
+    assert np.all(cmd.q[legs_arms] <= limits[legs_arms, 1] - 0.001 + 1e-12)
+    assert np.all(cmd.q[legs_arms] >= limits[legs_arms, 0] + 0.001 - 1e-12)
+
+
+def test_leg_odometry_moves_goal_against_pelvis_motion():
+    """Feet fixed in the world while the pelvis walks forward: they slide back in the pelvis frame."""
+    ctrl, cfg = _golem_controller(settle_to_arm_s=0.0)
+    state = _state(cfg)
+    ctrl.reset(state)
+    ctrl.kin.update(state.q)
+    feet0 = {f: ctrl.kin.frame_pose(f) for f in ctrl.foot_frames}
+    shift = {"x": 0.0}
+    real_update = ctrl.kin.update
+
+    def update(q):
+        real_update(q)
+        for f, (pos, quat) in feet0.items():
+            ctrl.kin._extra_poses[f] = (pos - np.array([shift["x"], 0.0, 0.0]), quat)
+
+    ctrl.kin.update = update
+    goal = ctrl.rest_pose.copy()
+    ctrl.request_arm_goal(goal)
+    v, n = 0.5, 10
+    ctrl.step(state)                             # the first step only records the feet
+    for _ in range(n):
+        shift["x"] += v * 0.02
+        ctrl.step(state)
+    np.testing.assert_allclose(ctrl.believed[:, 0], goal[:, 0] - v * 0.02 * n, atol=1e-9)
+    np.testing.assert_allclose(ctrl.believed[:, 1:3], goal[:, 1:3], atol=1e-9)
+
+
+def test_leg_odometry_ignores_a_lifted_foot():
+    ctrl, cfg = _golem_controller(settle_to_arm_s=0.0)
+    state = _state(cfg)
+    ctrl.reset(state)
+    ctrl.kin.update(state.q)
+    left, right = ctrl.foot_frames
+    feet0 = {f: ctrl.kin.frame_pose(f) for f in ctrl.foot_frames}
+    t = {"k": 0}
+    real_update = ctrl.kin.update
+
+    def update(q):
+        real_update(q)
+        pos, quat = feet0[left]
+        ctrl.kin._extra_poses[left] = (pos, quat)                                  # planted
+        pos, quat = feet0[right]
+        ctrl.kin._extra_poses[right] = (pos + np.array([0.02 * t["k"], 0.0, 0.1]), quat)  # swinging, lifted
+
+    ctrl.kin.update = update
+    goal = ctrl.rest_pose.copy()
+    ctrl.request_arm_goal(goal)
+    for k in range(6):
+        t["k"] = k
+        ctrl.step(state)
+    np.testing.assert_allclose(ctrl.believed[:, :3], goal[:, :3], atol=1e-9)    # the planted foot didn't move
+
+
+def test_torque_headroom_bounds_the_pd_demand():
+    ctrl, cfg = _golem_controller(legs=ConstNetwork(np.full(12, 10.0)), arms=ConstNetwork(np.full(14, -10.0)))
+    state = _state(cfg)
+    state.dq = RNG.normal(scale=2.0, size=27)
+    ctrl.reset(state)
+    cmd = ctrl.step(state)
+    joints = np.r_[0:12, 13:27]
+    demand = ctrl.kp[joints] * (cmd.q[joints] - state.q[joints]) - ctrl.kd[joints] * state.dq[joints]
+    assert np.all(np.abs(demand) <= 0.85 * ctrl.effort_limits[joints] + 1e-9)

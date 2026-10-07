@@ -1,0 +1,103 @@
+# Deploy config for LocoManip-Marl-Flat-Golem2-Direct-v0 (Locomanipulation_game, marl-direct): the IK task with
+# goals spread over the workspace and built in a real squat (IK2), arm commands held by leg kinematics and a
+# 3 Hz low-pass on the arms' residual (IK3), and targets clipped as h12_safety_layer clips them, trained with
+# its e-stops (90% velocity/torque, 0.02 rad position) ending the episode (Golem), and targets bounded so the
+# PD torque they ask for stays within 85% of the effort limit (Golem2).
+# Every value mirrors the training env; the source is named on each block.
+# Locomanipulation_game scripts/skrl/export_marl.py writes the networks and export.yaml next to
+# this file; export.yaml's keys (rest_pose, source) override the ones here.
+
+control_dt: 0.02            # decimation 4 x sim dt 0.005 (LocoManipMarlEnvCfg)
+
+# Policy joint order = Unitree motor order 0..26 (assets/h1_2.py ALL_JOINTS_NAMES)
+joint_names: [
+  left_hip_yaw_joint, left_hip_pitch_joint, left_hip_roll_joint,
+  left_knee_joint, left_ankle_pitch_joint, left_ankle_roll_joint,
+  right_hip_yaw_joint, right_hip_pitch_joint, right_hip_roll_joint,
+  right_knee_joint, right_ankle_pitch_joint, right_ankle_roll_joint,
+  torso_joint,
+  left_shoulder_pitch_joint, left_shoulder_roll_joint, left_shoulder_yaw_joint,
+  left_elbow_joint, left_wrist_roll_joint, left_wrist_pitch_joint, left_wrist_yaw_joint,
+  right_shoulder_pitch_joint, right_shoulder_roll_joint, right_shoulder_yaw_joint,
+  right_elbow_joint, right_wrist_roll_joint, right_wrist_pitch_joint, right_wrist_yaw_joint]
+
+# assets/h1_2.py _INIT_STATE (rad)
+default_joint_pos: [
+  0.0, -0.3, 0.0, 0.5, -0.2, 0.0,
+  0.0, -0.3, 0.0, 0.5, -0.2, 0.0,
+  0.0,
+  0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+  0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+# assets/h1_2.py _ACTUATORS: stiffness / damping (Nm/rad, Nm s/rad)
+kp: [
+  200, 200, 200, 300, 40, 40,
+  200, 200, 200, 300, 40, 40,
+  300,
+  120, 120, 120, 80, 40, 40, 40,
+  120, 120, 120, 80, 40, 40, 40]
+kd: [
+  2.5, 2.5, 2.5, 4.0, 2.0, 2.0,
+  2.5, 2.5, 2.5, 4.0, 2.0, 2.0,
+  3.0,
+  2.0, 2.0, 2.0, 1.0, 1.0, 1.0, 1.0,
+  2.0, 2.0, 2.0, 1.0, 1.0, 1.0, 1.0]
+
+# assets/h1_2.py _ACTUATORS effort_limit_sim (Nm) = the URDF limits h12_safety_layer e-stops at
+effort_limits: [
+  200, 200, 200, 300, 60, 40,
+  200, 200, 200, 300, 60, 40,
+  200,
+  40, 40, 18, 18, 19, 19, 19,
+  40, 40, 18, 18, 19, 19, 19]
+# Golem2: each target kept where kp (target - q) - kd qd is within this share of effort_limits
+torque_headroom: 0.85
+
+clip_actions: 10.0          # CLIP_ACTIONS: the env clamps every raw action to +-this
+target_margin: -0.001       # rad: joint targets bounded to the URDF hard limits +- this; h12_safety_layer's clip.position_offset
+
+legs:
+  policy: legs.pt
+  num_obs: 96
+  num_actions: 12
+  action_scale: 0.25        # target = scale * action + default
+
+arms:
+  policy: arms.pt
+  num_obs: 124
+  num_actions: 14
+  residual_scale: 0.2       # target = q + IK step + scale * action
+  ee_frames: [left_wrist_yaw_link, right_wrist_yaw_link]
+  ik_damping: 0.05
+  max_ik_step: 0.1          # rad per joint per policy step
+  residual_cutoff_hz: 3.0   # one-pole low-pass on the residual (IKResidualArmActionCfg.residual_cutoff_hz)
+
+# Arm commands move by the leg kinematics (LocoManipMarlFlatIK3EnvCfg estimator.odometry "legs")
+odometry: legs
+legs_odometry:
+  foot_frames: [left_ankle_roll_link, right_ankle_roll_link]   # FOOT_LINK_NAMES
+  imu_frame: torso_link     # training's imu_link: on torso_link, no rotation
+  stance_height: 0.02       # m: a foot this close to the lowest one (along gravity) counts as planted
+
+estimator:                  # trained alongside; unused with odometry legs
+  path: estimator.pt
+  history: 4                # ODOMETRY_HISTORY
+  num_inputs: 326           # 4 x (3 + 3 + 3 + 27 + 27 + 12) + 26 actions
+
+# Gait clock (manager_based mdp/rewards.py)
+gait_period: 0.8
+zero_cmd_eps: 0.1
+
+# Velocity command ranges (legs_r0_env_cfg.py CommandsCfg); /cmd_vel is clipped to them
+command_ranges:
+  lin_vel_x: [-0.7, 0.7]
+  lin_vel_y: [-0.3, 0.3]
+  ang_vel_z: [-0.5, 0.5]
+
+# Zero-velocity settle at a mode switch (LocoManipMarlFlatCurriculumEnvCfg)
+settle_to_arm_s: 0.75
+settle_to_nav_s: 1.5
+
+# The navigation rest pose: wrist poses (x, y, z, qw, qx, qy, qz), pelvis frame, left then right,
+# from the run's arm_target_tables.pt (default_poses). null: forward kinematics at the default pose.
+rest_pose: null

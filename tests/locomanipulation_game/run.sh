@@ -44,7 +44,7 @@ cleanup() {
     git -C "$ROOT" status --short >>"$result/commit.txt" 2>/dev/null || true
     printf '%s\n' "mode=$MODE seconds=$SECONDS_SIM domain=$ROS_DOMAIN_ID sim_args=${SIM_ARGS[*]} launch_args=${EXTRA_ARGS[*]}" >"$result/run.txt"
     if [[ "${LMG_RENDER:-1}" == 1 && -s "$result/record/qpos.f32" ]]; then
-        "${COMPOSE[@]}" run --rm --no-deps -e MUJOCO_GL=egl -v "$ROOT/tests/locomanipulation_game:/home/code/tests/locomanipulation_game:ro" \
+        "${COMPOSE[@]}" run -T --rm --no-deps -e MUJOCO_GL=egl -v "$ROOT/tests/locomanipulation_game:/home/code/tests/locomanipulation_game:ro" \
             -v "$result:/result" --entrypoint python3 robocasa /home/code/tests/locomanipulation_game/render_recording.py \
             /result/record --overlay /result/ros/commander.jsonl --out /result/video.mp4 >"$result/render.log" 2>&1 || echo "render failed (see render.log)"
     fi

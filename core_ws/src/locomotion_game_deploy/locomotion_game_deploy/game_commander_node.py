@@ -31,6 +31,7 @@ sub  /marl_deploy_node/wrist_error   (std_msgs/Float32MultiArray)  m, left and r
 sub  /safety/heartbeat               (std_msgs/Bool)
 sub  /livox/pointcloud               (sensor_msgs/PointCloud2)
 sub  /Odometry                       (nav_msgs/Odometry)
+sub  /lowstate                       (unitree_hg/LowState)  IMU tilt: a fall ends the run
 pub  /cmd_vel                        (geometry_msgs/Twist)
 pub  /marl_deploy_node/arm_goal      (geometry_msgs/PoseArray)
 cli  /marl_deploy_node/end_arm_goal  (std_srvs/Trigger)
@@ -53,10 +54,13 @@ from sensor_msgs_py import point_cloud2
 from std_msgs.msg import Bool, Float32MultiArray, String
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformListener
+from unitree_hg.msg import LowState
 
-from locomotion_game_deploy.rotations import quat_apply
+from locomotion_game_deploy.rotations import projected_gravity, quat_apply
 
 DRIVING_STATES = ("nav", "settle_to_arm", "arm_goal", "settle_to_nav")
+FALLEN_TILT = 1.0    # rad: the IMU tilted this far for FALLEN_S ends the run (training's fall termination: 1 rad)
+FALLEN_S = 0.5
 REACH_TOL = 0.05     # m: both wrists this close for REACH_HOLD_S counts a goal reached (training: 5 cm, 1 s)
 REACH_HOLD_S = 1.0
 
@@ -120,6 +124,9 @@ class GameCommanderNode(Node):
         self.create_subscription(Bool, "/safety/heartbeat", self._on_heartbeat, 10)
         self.create_subscription(PointCloud2, "/livox/pointcloud", self._on_cloud, sensor)
         self.create_subscription(Odometry, "/Odometry", self._on_odom, 10)
+        self.create_subscription(LowState, "/lowstate", self._on_lowstate, sensor)
+        self.tilt = 0.0
+        self.tilted_since: float | None = None
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
         self.goal_pub = self.create_publisher(PoseArray, "/marl_deploy_node/arm_goal", 10)
         self.end_cli = self.create_client(Trigger, "/marl_deploy_node/end_arm_goal")
@@ -167,6 +174,10 @@ class GameCommanderNode(Node):
         # between knee and head height in the pelvis frame (pelvis ~1 m up), beyond the robot's own body
         band = (pts[:, 2] > -0.6) & (pts[:, 2] < 0.8) & (np.hypot(pts[:, 0], pts[:, 1]) > 0.35)
         self.points = pts[band]
+
+    def _on_lowstate(self, msg: LowState) -> None:
+        gravity = projected_gravity(np.asarray(msg.imu_state.quaternion, dtype=np.float64))
+        self.tilt = float(np.arccos(np.clip(-gravity[2], -1.0, 1.0)))
 
     def _on_odom(self, msg: Odometry) -> None:
         p, q = msg.pose.pose.position, msg.pose.pose.orientation
@@ -297,6 +308,16 @@ class GameCommanderNode(Node):
     # -- loop --------------------------------------------------------------------------------
     def _tick(self) -> None:
         now = self._now()
+        if self.tilt > FALLEN_TILT:
+            self.tilted_since = now if self.tilted_since is None else self.tilted_since
+        else:
+            self.tilted_since = None
+        if not self.finished and self.tilted_since is not None and now - self.tilted_since > FALLEN_S:
+            self.finished = True
+            if self.event is not None and self.event["kind"] == "arm_goal":
+                self._finish_goal()
+            self.event, self.cmd = None, np.zeros(3)
+            self._write({"type": "done", "events": self.events_done, "reason": f"fallen (IMU tilt {self.tilt:.2f} rad)"})
         if not self.finished and (self.deploy_state.startswith("fault") or self.heartbeat is False):
             # an e-stop or a latched deploy node ends the run: the robot is limp from here
             self.finished = True

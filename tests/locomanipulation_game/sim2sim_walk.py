@@ -28,6 +28,8 @@ Variants (join with '+' to combine; each is a change from RoboCasa's settings):
   soft_contact    foot and floor solref 0.04
   friction06      foot and floor sliding friction 0.6
   pyramidal       pyramidal friction cone, impratio 1
+  condim4         foot and floor contacts with torsional friction (condim 4), at the model's coefficient 0.005 m
+  torsion02       condim 4 with torsional friction 0.02 m
   dt5ms           5 ms physics steps (Isaac's), PD still recomputed every step
   implicit_pd     the 27 motors as MuJoCo position servos (kp, kd) under the implicitfast integrator: the PD is
                   integrated implicitly, as PhysX drives integrate it
@@ -105,7 +107,7 @@ def _variant_settings(name):
     return settings
 
 
-def _set_contact(m, ctx, solref=None, solimp=None, friction=None):
+def _set_contact(m, ctx, solref=None, solimp=None, friction=None, condim=None, torsion=None):
     for g in list(ctx['robot_geoms']) + [ctx['floor']]:
         if solref is not None:
             m.geom_solref[g] = solref
@@ -113,6 +115,10 @@ def _set_contact(m, ctx, solref=None, solimp=None, friction=None):
             m.geom_solimp[g, :3] = solimp
         if friction is not None:
             m.geom_friction[g, 0] = friction
+        if condim is not None:
+            m.geom_condim[g] = condim
+        if torsion is not None:
+            m.geom_friction[g, 1] = torsion
 
 
 def _implicit_pd(m, ctx):
@@ -137,6 +143,8 @@ MODS = {
     'soft_contact': lambda m, ctx: _set_contact(m, ctx, solref=(0.04, 1.0)),
     'friction06': lambda m, ctx: _set_contact(m, ctx, friction=0.6),
     'pyramidal': lambda m, ctx: (setattr(m.opt, 'cone', 0), setattr(m.opt, 'impratio', 1.0)),
+    'condim4': lambda m, ctx: _set_contact(m, ctx, condim=4),
+    'torsion02': lambda m, ctx: _set_contact(m, ctx, condim=4, torsion=0.02),
     'dt5ms': lambda m, ctx: setattr(m.opt, 'timestep', 0.005),
     'implicit_pd': _implicit_pd,
     'gravcomp0': lambda m, ctx: m.body_gravcomp.__setitem__(ctx['robot_bodies'], 0.0),

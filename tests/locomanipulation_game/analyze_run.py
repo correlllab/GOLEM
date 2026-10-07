@@ -94,7 +94,7 @@ for i, ev in enumerate(events):
         goals.append({'t': start, 'low': ev['low'], 'needs_crouch': ev['needs_crouch'],
                       'reached': None if res is None else res['reached'], 'best_error': None if res is None else res['best_error'],
                       'pelvis_drop_max': float(standing_z - pos[m, 2].min()) if m.any() else None,
-                      'lowest_target_z': float(min(p[2] for p in ev['poses'])), 'completed': res is not None and stop >= start + ev['duration']})
+                      'lowest_target_z': float(min(p[2] for p in ev['poses'])), 'completed': bool(res is not None and stop >= start + ev['duration'])})
 
 
 def share(values):
@@ -138,9 +138,9 @@ metrics = {
     },
     'goals': goals, 'walks': walks, 'joints': joints,
 }
-json.dump(metrics, open(result / 'metrics.json', 'w'), indent=1)
+json.dump(metrics, open(result / 'metrics.json', 'w'), indent=1, default=lambda o: o.item() if hasattr(o, 'item') else str(o))
 summary = {k: v for k, v in metrics.items() if k not in ('goals', 'walks', 'joints')}
-print(json.dumps(summary, indent=1))
+print(json.dumps(summary, indent=1, default=lambda o: o.item() if hasattr(o, 'item') else str(o)))
 
 try:
     import matplotlib

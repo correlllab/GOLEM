@@ -18,7 +18,8 @@ the furniture, and both only shorten or redirect walking:
   geofence   with SLAM running, /Odometry (FAST-LIO, camera_init -> body): outside geofence_radius of the start,
              walking segments head back toward it.
 
-mode "sequence" runs one scripted pass instead: walk 6 s at 0.5 m/s, a standing reach, a crouch reach, walk 6 s.
+mode "sequence" runs one scripted pass instead: back off 3 s, turn 4 s, walk 4 s, a standing reach, a crouch reach,
+walk 4 s (the guards still apply).
 
 Every event and a status line at 10 Hz (state, commands, wrist errors, safety heartbeat, SLAM pose) go to
 log_file as JSON lines, for evaluation.
@@ -316,10 +317,13 @@ class GameCommanderNode(Node):
                 self._write({"type": "warning", "detail": "no obstacle input after 20 s; starting without it"})
             self.start_time = now
             if self.mode == "sequence":
-                self.script = [{"kind": "walk", "cmd": [0.5, 0.0, 0.0], "duration": 6.0},
+                # the robot starts facing a counter: back off and turn before walking forward
+                self.script = [{"kind": "walk", "cmd": [-0.3, 0.0, 0.0], "duration": 3.0},
+                               {"kind": "walk", "cmd": [0.0, 0.0, 0.5], "duration": 4.0},
+                               {"kind": "walk", "cmd": [0.4, 0.0, 0.0], "duration": 4.0},
                                {"kind": "goal", "goal": "standing", "duration": 6.0},
                                {"kind": "goal", "goal": "crouch", "duration": 6.0},
-                               {"kind": "walk", "cmd": [0.5, 0.0, 0.0], "duration": 6.0}]
+                               {"kind": "walk", "cmd": [0.4, 0.0, 0.0], "duration": 4.0}]
             self._write({"type": "start", "mode": self.mode})
             self.events_done = -1
             self._next_event()

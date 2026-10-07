@@ -4,8 +4,10 @@
         [--overlay <commander.jsonl>]
 
 The camera follows the pelvis from above and behind, turning with the robot's heading (azimuth is an offset from
-it; --fixed_azimuth holds it instead). The room's walls are not drawn, so the camera can sit outside them. With --overlay, the commander's event log
-labels each frame with the active event and its command.
+it; --fixed_azimuth holds it instead). The room's walls are not drawn, so the camera can sit outside them. When a
+cabinet or counter blocks the line of sight to the robot, the camera swings to the first clear view in VIEWS (other
+sides, then steeper), and moves in if none is clear; it returns to the default view once that has been clear for 2 s.
+With --overlay, the commander's event log labels each frame with the active event and its command.
 """
 import argparse
 import json
@@ -77,6 +79,23 @@ def label(t: float) -> str:
     return f"t {t:6.1f} s  {current['type']}"
 
 
+# views tried when the default is blocked: (azimuth offset, elevation) in degrees, in order of preference
+VIEWS = [(0.0, args.elevation), (60.0, args.elevation), (-60.0, args.elevation), (120.0, args.elevation),
+         (-120.0, args.elevation), (180.0, args.elevation), (0.0, -65.0), (90.0, -65.0), (-90.0, -65.0), (180.0, -65.0)]
+DRAWN = np.array([1, 1, 1, 0, 0, 0], dtype=np.uint8)   # geom groups the renderer draws by default
+robot_root = model.body_rootid[pelvis]
+robot_geoms = np.flatnonzero(model.body_rootid[model.geom_bodyid] == robot_root)
+draw_groups = model.geom_group.copy()
+
+
+def clearance(lookat: np.ndarray, azimuth: float, elevation: float) -> float:
+    """Distance from the look-at point toward the camera to the first drawn geom that isn't the robot."""
+    az, el = np.radians(azimuth), np.radians(elevation)
+    toward_camera = -np.array([np.cos(el) * np.cos(az), np.cos(el) * np.sin(az), np.sin(el)])
+    hit = mujoco.mj_ray(model, data, lookat, toward_camera, DRAWN, 1, -1, np.zeros(1, np.int32))
+    return np.inf if hit < 0 else hit
+
+
 renderer = mujoco.Renderer(model, args.height, args.width)
 camera = mujoco.MjvCamera()
 camera.type = mujoco.mjtCamera.mjCAMERA_FREE
@@ -84,6 +103,7 @@ camera.distance, camera.azimuth, camera.elevation = args.distance, args.azimuth,
 out = args.out or str(rec / 'video.mp4')
 writer = imageio.get_writer(out, fps=30, codec='libx264', quality=7, macro_block_size=1)
 lookat, heading = None, None
+view, shown, distance, default_clear = 0, np.array(VIEWS[0]), args.distance, 0
 for row in rows:
     data.qpos[:] = row[1:]
     mujoco.mj_forward(model, data)
@@ -93,9 +113,21 @@ for row in rows:
     xmat = data.xmat[pelvis].reshape(3, 3)
     yaw = np.arctan2(xmat[1, 0], xmat[0, 0])
     heading = yaw if heading is None else heading + 0.05 * np.angle(np.exp(1j * (yaw - heading)))
+    base = (0.0 if args.fixed_azimuth else np.degrees(heading)) + args.azimuth
+    model.geom_group[robot_geoms] = 5   # the rays skip the robot
+    need = args.distance + 0.2
+    default_clear = default_clear + 1 if clearance(lookat, base + VIEWS[0][0], VIEWS[0][1]) >= need else 0
+    if clearance(lookat, base + VIEWS[view][0], VIEWS[view][1]) < need or (view and default_clear >= 60):
+        room = [clearance(lookat, base + a, e) for a, e in VIEWS]
+        view = next((i for i, c in enumerate(room) if c >= need), int(np.argmax(room)))
+    step = np.array(VIEWS[view]) - shown
+    step[0] = (step[0] + 180.0) % 360.0 - 180.0
+    shown = shown + np.clip(step, -6.0, 6.0)   # swing at most 180 deg/s
+    room = clearance(lookat, base + shown[0], shown[1])
+    model.geom_group[:] = draw_groups
+    distance = min(distance + 0.05, args.distance, max(room - 0.25, 0.8))
     camera.lookat[:] = lookat
-    if not args.fixed_azimuth:
-        camera.azimuth = np.degrees(heading) + args.azimuth
+    camera.azimuth, camera.elevation, camera.distance = base + shown[0], shown[1], distance
     renderer.update_scene(data, camera)
     frame = renderer.render()
     if Image is not None and events is not None:

@@ -1,4 +1,0 @@
-# Written by Locomanipulation_game scripts/skrl/export_marl.py and export_arm_goals.py; see the package README.
-*.pt
-*.npz
-export.yaml

@@ -1,0 +1,4 @@
+# Exported policy networks and arm goals: binaries tracked via Git LFS.
+# Config YAMLs and READMEs stay as normal git text.
+*.pt  filter=lfs diff=lfs merge=lfs -text
+*.npz filter=lfs diff=lfs merge=lfs -text

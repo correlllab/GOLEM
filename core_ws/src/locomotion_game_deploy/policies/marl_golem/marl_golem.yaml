@@ -1,12 +1,12 @@
-# Deploy config for LocoManip-Marl-Flat-Golem3-Direct-v0 (Locomanipulation_game, marl-direct): the IK task with
-# goals spread over the workspace and built in a real squat (IK2), arm commands held by leg kinematics and a
-# 3 Hz low-pass on the arms' residual (IK3), and targets clipped as h12_safety_layer clips them, trained with
-# its e-stops (90% velocity/torque, 0.02 rad position) ending the episode (Golem), and targets bounded so the
-# PD torque they ask for stays within 85% of the effort limit (Golem2). Golem3 randomizes joint damping and
-# armature in training only; its policy runs with the same deploy settings as Golem2's.
+# Deploy config for run R: LocoManip-Marl-Direct-v0 (Locomanipulation_game, branch marl-direct, commit 54d935f),
+# agent_24000. Arm goals spread over the workspace and built in a real squat, arm commands held by leg kinematics,
+# a 3 Hz low-pass on the arms' residual, targets clipped as h12_safety_layer clips them and bounded so the PD
+# torque they ask for stays within 85% of the effort limit, trained with the safety layer's e-stops ending the
+# episode. RoboCasa's joint damping and armature and a 0-20 ms target delay are randomized in training only.
 # Every value mirrors the training env; the source is named on each block.
 # Locomanipulation_game scripts/skrl/export_marl.py writes the networks and export.yaml next to
-# this file; export.yaml's keys (rest_pose, source) override the ones here.
+# this file; export.yaml's keys (rest_pose, source) override the ones here. Run R's export is committed, the
+# networks and arm goals in Git LFS.
 
 control_dt: 0.02            # decimation 4 x sim dt 0.005 (LocoManipMarlEnvCfg)
 
@@ -51,7 +51,7 @@ effort_limits: [
   200,
   40, 40, 18, 18, 19, 19, 19,
   40, 40, 18, 18, 19, 19, 19]
-# Golem2: each target kept where kp (target - q) - kd qd is within this share of effort_limits
+# each target kept where kp (target - q) - kd qd is within this share of effort_limits (BoundedJointPositionActionCfg)
 torque_headroom: 0.85
 
 clip_actions: 10.0          # CLIP_ACTIONS: the env clamps every raw action to +-this
@@ -73,7 +73,7 @@ arms:
   max_ik_step: 0.1          # rad per joint per policy step
   residual_cutoff_hz: 3.0   # one-pole low-pass on the residual (IKResidualArmActionCfg.residual_cutoff_hz)
 
-# Arm commands move by the leg kinematics (LocoManipMarlFlatIK3EnvCfg estimator.odometry "legs")
+# Arm commands move by the leg kinematics (LocoManipMarlEnv._leg_odometry)
 odometry: legs
 legs_odometry:
   foot_frames: [left_ankle_roll_link, right_ankle_roll_link]   # FOOT_LINK_NAMES
@@ -89,13 +89,13 @@ estimator:                  # trained alongside; unused with odometry legs
 gait_period: 0.8
 zero_cmd_eps: 0.1
 
-# Velocity command ranges (legs_r0_env_cfg.py CommandsCfg); /cmd_vel is clipped to them
+# Velocity command ranges (MarlCommandsCfg base_velocity); /cmd_vel is clipped to them
 command_ranges:
   lin_vel_x: [-0.7, 0.7]
   lin_vel_y: [-0.3, 0.3]
   ang_vel_z: [-0.5, 0.5]
 
-# Zero-velocity settle at a mode switch (LocoManipMarlFlatCurriculumEnvCfg)
+# Zero-velocity settle at a mode switch (ArmTargetsCommandCfg)
 settle_to_arm_s: 0.75
 settle_to_nav_s: 1.5
 

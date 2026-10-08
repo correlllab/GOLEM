@@ -1,9 +1,9 @@
 # locomotion_game_deploy (LocoMotionGameDeploy)
 
 Runs the two-agent MARL policy from Locomanipulation_game (branch
-`marl-direct`) on the H1-2: `policies/marl_golem` for
-`LocoManip-Marl-Flat-Golem3-Direct-v0`, trained against h12_safety_layer's
-e-stops, and `policies/marl_ik` for the older `LocoManip-Marl-Flat-IK-Direct-v0`. A
+`marl-direct`) on the H1-2: `policies/marl_golem` for run R of
+`LocoManip-Marl-Direct-v0`, trained against h12_safety_layer's e-stops, and
+`policies/marl_ik` for the older `LocoManip-Marl-Flat-IK-Direct-v0`. A
 **legs** agent that walks on `/cmd_vel`, and an **arms** agent that reaches
 wrist-pose goals through a damped-least-squares IK step plus a learned
 residual. One node, `marl_deploy_node`, owns all 27 joints. It publishes
@@ -24,17 +24,20 @@ release) and uses the same heartbeat watchdog.
 | `locomotion_game_deploy/marl_deploy_node.py` | the ROS node: safety channels, heartbeat, pre-pose, band, operator interface |
 | `locomotion_game_deploy/game_commander_node.py` | sends walking and arm-goal commands on training's schedule; lidar obstacle guard, SLAM geofence, event log |
 | `policies/<name>/<name>.yaml` | deploy config: joint order, defaults, gains, scales, odometry, bounds, command ranges (each from the training env) |
-| `policies/<name>/{legs,arms,estimator}.pt`, `export.yaml`, `arm_goals_*.npz` | written by the export, below (untracked) |
+| `policies/<name>/{legs,arms,estimator}.pt`, `export.yaml`, `arm_goals_*.npz` | written by the export, below; `marl_golem` holds run R's, the `.pt` and `.npz` files in Git LFS (`policies/.gitattributes`) |
 | `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, odometry) |
 
 ## Exporting a checkpoint
+
+`policies/marl_golem` already holds run R's export (agent_24000). Its networks and arm goals are Git LFS files:
+after cloning, `git lfs install` once and `git lfs pull` fetch them.
 
 These commands are run in Locomanipulation_game. Exporting needs only torch, no simulator:
 
 ```bash
 P=<GOLEM>/core_ws/src/locomotion_game_deploy/policies/marl_golem
 python scripts/skrl/export_marl.py --checkpoint logs/skrl/locomanip_marl/<run>/checkpoints/agent_<step>.pt \
-  --task LocoManip-Marl-Flat-Golem3-Direct-v0 --out $P
+  --out $P
 python scripts/skrl/export_arm_goals.py --checkpoint <same> --levels 4:10,7:10,10:10 --out $P --headless
 ```
 
@@ -47,7 +50,7 @@ It writes:
 Then check the deploy controller against the training env, step by step. It compares observations term by term, the networks against skrl, the joint targets, and leg odometry against the true pelvis motion:
 
 ```bash
-python scripts/skrl/deploy_parity.py --headless --checkpoint <same> --task LocoManip-Marl-Flat-Golem2-Direct-v0 \
+python scripts/skrl/deploy_parity.py --headless --checkpoint <same> \
   --export $P --deploy_pkg <GOLEM>/core_ws/src/locomotion_game_deploy --arm_goal_prob 1.0
 ```
 

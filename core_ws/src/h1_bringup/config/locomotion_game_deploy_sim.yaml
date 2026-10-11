@@ -1,0 +1,12 @@
+# locomotion_game_deploy marl_deploy_node, sim (h1_sim_bringup.launch.py, lowerbody:=marl_ik).
+marl_deploy_node:
+  ros__parameters:
+    control_hz: 50.0
+    prepose_ramp_s: 2.0
+    # unattended sim runs engage once the pre-pose settles; real requires the operator
+    engage_wait_for_confirm: false
+    # RoboCasa holds the robot on an elastic band until /elastic_band/toggle
+    disable_elastic_band: true
+    band_release_delay_s: 1.0
+    heartbeat_timeout: 0.5
+    lowstate_timeout: 0.1

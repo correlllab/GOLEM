@@ -1,0 +1,13 @@
+# locomotion_game_deploy marl_deploy_node, real robot (h1_real_desktop_bringup.launch.py,
+# lowerbody:=marl_ik start_position_verified:=true). Engage with:
+#   ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger
+marl_deploy_node:
+  ros__parameters:
+    policy_mode: torch
+    control_hz: 50.0
+    prepose_ramp_s: 2.0
+    engage_wait_for_confirm: true
+    # no elastic band on the real robot: the operator lowers the gantry
+    disable_elastic_band: false
+    heartbeat_timeout: 0.5
+    lowstate_timeout: 0.1

@@ -58,6 +58,12 @@ def generate_launch_description():
             LaunchConfiguration('record_runs'), value_type=bool),
     }
 
+    # The skills drive the arms through frame_task_server, which marl_ik replaces.
+    skills_condition = IfCondition(AndSubstitution(
+        LaunchConfiguration('use_skills'),
+        PythonExpression(["'", LaunchConfiguration('lowerbody'), "' != 'marl_ik'"]),
+    ))
+
     return LaunchDescription([
         
         # Engage the FAME lower-body standing policy only once the operator has
@@ -73,6 +79,10 @@ def generate_launch_description():
         # path stays behind the start_position_verified interlock, and the RL
         # node additionally holds at the pre-pose crouch until the operator
         # confirms:  ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
+        # 'marl_ik' = locomotion_game_deploy's marl_deploy_node, which drives
+        # legs AND arms: launch the onboard controller with use_frame_task:=false
+        # so frame_task_server isn't also feeding /safety/lowcmd_upper_in.
+        # Engage: ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger
         DeclareLaunchArgument('lowerbody', default_value='almi'),
         # auto_switch on the RL controller: false (default) keeps the robot on
         # the lowerbody:= policy for standing AND walking (ALMI all the way);
@@ -141,7 +151,7 @@ def generate_launch_description():
             name='graspgen_server',
             parameters=[sim_time_param, model_log_params],
             output='screen',
-            condition=IfCondition(LaunchConfiguration('use_skills')),
+            condition=skills_condition,
         ),
         Node(
             package='h12_skills',
@@ -149,7 +159,7 @@ def generate_launch_description():
             name='h12_skills',
             parameters=[sim_time_param, model_log_params, skills_params],
             output='screen',
-            condition=IfCondition(LaunchConfiguration('use_skills')),
+            condition=skills_condition,
         ),
 
         # Lower-body RL controller (almi / fame / walk) — launched only
@@ -184,7 +194,26 @@ def generate_launch_description():
             condition=IfCondition(AndSubstitution(
                 LaunchConfiguration('start_position_verified'),
                 PythonExpression(
-                    ["'", LaunchConfiguration('lowerbody'), "' != 'mjpc'"]),
+                    ["'", LaunchConfiguration('lowerbody'), "' not in ('mjpc', 'marl_ik')"]),
+            )),
+        ),
+
+        # LocoMotionGameDeploy: the two-agent MARL policy on all 27 joints,
+        # behind the same start_position_verified interlock, and it holds at
+        # the pre-pose until /marl_deploy_node/confirm_engage.
+        Node(
+            package='locomotion_game_deploy',
+            executable='marl_deploy_node',
+            name='marl_deploy_node',   # MUST match the yaml key
+            parameters=[sim_time_param,
+                        os.path.join(get_package_share_directory('h1_bringup'),
+                                     'config', 'locomotion_game_deploy_real.yaml'),
+                        {'urdf_path': os.path.join(ASSETS_DIR, 'ros_assets', 'h1_2_magpie.urdf')}],
+            output='screen',
+            condition=IfCondition(AndSubstitution(
+                LaunchConfiguration('start_position_verified'),
+                PythonExpression(
+                    ["'", LaunchConfiguration('lowerbody'), "' == 'marl_ik'"]),
             )),
         ),
 

@@ -61,6 +61,12 @@ def generate_launch_description():
             LaunchConfiguration('record_runs'), value_type=bool),
     }
 
+    # The skills drive the arms through frame_task_server, which marl_ik replaces.
+    skills_condition = IfCondition(AndSubstitution(
+        LaunchConfiguration('use_skills'),
+        PythonExpression(["'", LaunchConfiguration('lowerbody'), "' != 'marl_ik'"]),
+    ))
+
     nav_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(bringup_share, 'launch', 'h1_navigation.launch.py')
@@ -88,7 +94,14 @@ def generate_launch_description():
         # left uncontrolled — which is why the sim default is 'almi'. The
         # real-robot bringup does default to mjpc, behind the
         # start_position_verified interlock.
-        DeclareLaunchArgument('lowerbody', default_value='almi'),  # almi | almi27 | fame | walk
+        # 'marl_ik' runs locomotion_game_deploy's marl_deploy_node instead: the
+        # Locomanipulation_game two-agent policy, which drives the legs AND the
+        # arms, so frame_task_server, the RL controller and the skills (which
+        # need frame_task) are gated off.
+        DeclareLaunchArgument('lowerbody', default_value='almi'),  # almi | almi27 | fame | walk | marl_ik
+        # marl_deploy_node's networks: 'torch' (the exported policies) or 'zero'
+        # (stand-ins: legs hold the default pose, arms pure IK) for plumbing tests.
+        DeclareLaunchArgument('marl_policy_mode', default_value='torch'),
         # auto_switch on the RL controller: false (default) keeps the robot on
         # the lowerbody:= policy for standing AND walking (ALMI all the way);
         # true hands nonzero /cmd_vel to the walk policy and back.
@@ -141,6 +154,7 @@ def generate_launch_description():
             arguments=['--config', 'sim_safety_split.yaml'],
             parameters=[sim_time_param],
             output='screen',
+            condition=LaunchConfigurationNotEquals('lowerbody', 'marl_ik'),
         ),
 
         # vision foundation-model services (gemini + sam, served by model_server)
@@ -190,6 +204,20 @@ def generate_launch_description():
                          'imu_offset_pitch_deg': 0.0,
                          'imu_offset_yaw_deg': 0.0}],
             output='screen',
+            condition=LaunchConfigurationNotEquals('lowerbody', 'marl_ik'),
+        ),
+
+        # LocoMotionGameDeploy: the two-agent MARL policy on all 27 joints,
+        # through the split safety layer (lower and upper channels).
+        Node(
+            package='locomotion_game_deploy',
+            executable='marl_deploy_node',
+            name='marl_deploy_node',   # MUST match the yaml key
+            parameters=[sim_time_param,
+                        os.path.join(bringup_share, 'config', 'locomotion_game_deploy_sim.yaml'),
+                        {'policy_mode': LaunchConfiguration('marl_policy_mode')}],
+            output='screen',
+            condition=LaunchConfigurationEquals('lowerbody', 'marl_ik'),
         ),
 
         # --- MJPC lower-body base estimator (RW-EKF) -> rt/sportmodestate_est ---
@@ -262,7 +290,7 @@ def generate_launch_description():
             name='graspgen_server',
             parameters=[sim_time_param, model_log_params],
             output='screen',
-            condition=IfCondition(LaunchConfiguration('use_skills')),
+            condition=skills_condition,
         ),
 
         # h12_skills: serves the /skill/* atomic-skill actions (open_door,
@@ -275,7 +303,7 @@ def generate_launch_description():
             name='h12_skills',
             parameters=[sim_time_param, model_log_params, skills_params],
             output='screen',
-            condition=IfCondition(LaunchConfiguration('use_skills')),
+            condition=skills_condition,
         ),
 
         Node(

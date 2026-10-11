@@ -1,7 +1,9 @@
 import os
 
 from launch import LaunchDescription
-from launch.actions import TimerAction
+from launch.actions import DeclareLaunchArgument, TimerAction
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
@@ -25,6 +27,9 @@ def generate_launch_description():
     sim_time_param = {'use_sim_time': False}
 
     return LaunchDescription([
+        # false when a whole-body controller owns the arms (the desktop's
+        # lowerbody:=marl_ik): only one publisher may feed /safety/lowcmd_upper_in.
+        DeclareLaunchArgument('use_frame_task', default_value='true'),
         Node(
             package='estop',
             executable='estop_node',
@@ -71,5 +76,6 @@ def generate_launch_description():
                     output='screen',
                 ),
             ],
+            condition=IfCondition(LaunchConfiguration('use_frame_task')),
         ),
     ])

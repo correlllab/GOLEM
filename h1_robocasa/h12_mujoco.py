@@ -196,20 +196,17 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # /elastic_band/toggle service disables it).
     band = None
     band_body_id = -1
-    base_dof = 0
+    band_vel = np.zeros(6)
     try:
         band_body_id = resolver.body_id("torso_link")            # robot0_torso_link
-        fj = mujoco.mj_name2id(
-            model, mujoco.mjtObj.mjOBJ_JOINT,
-            f"{env.robots[0].robot_model.naming_prefix}{h1_2_robosuite.FREE_JOINT_NAME}")
-        base_dof = int(model.jnt_dofadr[fj])
         anchor = data.xpos[band_body_id].copy()
         anchor[2] += 0.01
         # Stiff enough to hold the LIMP robot near-upright through the lowerbody
         # controller's band-held idle phase (~20s of frame_task arm-home startup
         # before FAME engages); at stiffness=1e3 it pitched forward to ~60deg and
         # FAME inherited a toppling robot. Static tilt ~ gravity_torque/stiffness.
-        band = ElasticBand(anchor, length=0, stiffness=1e4, damping=1e3)
+        # damping=2e3 N*s/m damps a lateral shove out in well under a second.
+        band = ElasticBand(anchor, length=0, stiffness=1e4, damping=2e3)
         print(f"[h12_mujoco] elastic band on torso anchored at {anchor.round(3)}")
     except Exception as e:
         print(f"[h12_mujoco] elastic band setup skipped: {e}")
@@ -402,10 +399,14 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                 if band is not None:
                     # Re-write every step; MuJoCo persists xfrc_applied, so we must
                     # zero it when the band is disabled or the last force lingers.
-                    data.xfrc_applied[band_body_id, :3] = (
-                        band.evaluate_force(data.xpos[band_body_id], data.qvel[base_dof:base_dof + 3])
-                        if band.enabled else 0.0
-                    )
+                    if band.enabled:
+                        # [ang(3), lin(3)] of the torso itself, world frame
+                        mujoco.mj_objectVelocity(model, data, mujoco.mjtObj.mjOBJ_BODY,
+                                                 band_body_id, band_vel, 0)
+                        data.xfrc_applied[band_body_id, :3] = band.evaluate_force(
+                            data.xpos[band_body_id], band_vel[3:])
+                    else:
+                        data.xfrc_applied[band_body_id, :3] = 0.0
                 if sim_interface is not None:
                     # Recompute the DDS command's PD torque every sim step (emulates
                     # the real motor's ~1kHz servo) instead of only on each 50Hz

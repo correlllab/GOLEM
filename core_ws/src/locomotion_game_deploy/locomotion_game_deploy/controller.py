@@ -6,12 +6,15 @@ order (locomanip_marl_env.py _get_observations, then _pre_physics_step):
   1. pelvis odometry: estimate how the pelvis moved over the last step and
      move the arm command by it (ArmTargetsCommand.apply_pelvis_motion);
   2. commands: advance the settle timer, switch mode;
-  3. observations: the legs' (96) and the arms' (124);
+  3. observations: the legs' (96) and the arms' (124), one fewer each without
+     height_drop_obs;
   4. actions: clamp to +-clip, legs = scale * a + default, arms = q + IK step
      + residual_scale * r, both bounded to the hard limits +- target_margin
-     (negative: inside them). r is the arms' action, low-passed when
-     arms.residual_cutoff_hz is set (mdp.IKResidualArmAction), and is what the
-     arms observe as their last action. With torque_headroom set, each target
+     (negative: inside them), narrowed to target_limits where it names a joint
+     (the run's GOLEM position e-stop range, from export.yaml). r is the
+     arms' action, low-passed when arms.residual_cutoff_hz is set
+     (mdp.IKResidualArmAction), and is what the arms observe as their last
+     action. With torque_headroom set, each target
      is then kept where the PD torque it asks for at the measured state,
      kp (target - q) - kd qd, is within torque_headroom x effort_limits
      (mdp.actions.torque_bounds).
@@ -94,9 +97,9 @@ class MarlController:
         self.kp = np.asarray(cfg["kp"], dtype=np.float64)
         self.kd = np.asarray(cfg["kd"], dtype=np.float64)
         self.clip = float(cfg["clip_actions"])
-        margin = float(cfg["target_margin"])
-        self.lower = kinematics.joint_limits[:, 0] - margin
-        self.upper = kinematics.joint_limits[:, 1] + margin
+        self.lower, self.upper = self._position_bounds(kinematics.joint_limits, float(cfg["target_margin"]),
+                                                       cfg.get("target_limits"))
+        self.height_drop_obs = bool(cfg.get("height_drop_obs", True))
         self.legs_scale = float(cfg["legs"]["action_scale"])
         self.arms_scale = float(cfg["arms"]["residual_scale"])
         self.ik_damping = float(cfg["arms"]["ik_damping"])
@@ -217,6 +220,19 @@ class MarlController:
         return JointCommand(q=target, kp=self.kp.copy(), kd=self.kd.copy())
 
     # -- internals ----------------------------------------------------------------------
+    def _position_bounds(self, hard: np.ndarray, margin: float, target_limits: dict | None):
+        """(lower, upper) per joint: the hard limits widened by margin, narrowed to target_limits[name]."""
+        lower, upper = hard[:, 0] - margin, hard[:, 1] + margin
+        names = list(self.cfg["joint_names"])
+        for name, (low, high) in (target_limits or {}).items():
+            if name not in names:
+                raise ValueError(f"target_limits names {name!r}, not a policy joint")
+            i = names.index(name)
+            lower[i], upper[i] = max(lower[i], float(low)), min(upper[i], float(high))
+        if np.any(lower > upper):
+            raise ValueError("target bounds are empty for some joint")
+        return lower, upper
+
     def _bound(self, target: np.ndarray, joints: slice) -> np.ndarray:
         return np.minimum(np.maximum(target, self.lower[joints]), self.upper[joints])
 
@@ -263,7 +279,7 @@ class MarlController:
             cmd,
             [1.0 if self.mode == Mode.ARM else 0.0],
             ee_targets,
-            [0.0],                       # height_drop: an input the actors are always shown as zero
+            [0.0] if self.height_drop_obs else [],   # height_drop: always shown as zero
             state.q - self.default,
             state.dq,
             self._gait_phase(cmd),

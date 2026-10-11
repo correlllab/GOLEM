@@ -3,7 +3,9 @@
 Runs the two-agent MARL policy from Locomanipulation_game (branch
 `marl-direct`) on the H1-2: `policies/marl_golem` for run R of
 `LocoManip-Marl-Direct-v0`, trained against h12_safety_layer's e-stops, and
-`policies/marl_ik` for the older `LocoManip-Marl-Flat-IK-Direct-v0`. A
+`policies/marl_ik` for `golemlim120k` (agent_120000, a partly trained run of the
+same task whose joint targets were clipped into GOLEM's position e-stop range;
+see its `export.yaml`). A
 **legs** agent that walks on `/cmd_vel`, and an **arms** agent that reaches
 wrist-pose goals through a damped-least-squares IK step plus a learned
 residual. One node, `marl_deploy_node`, owns all 27 joints. It publishes
@@ -17,14 +19,14 @@ release) and uses the same heartbeat watchdog.
 
 | File | What it is |
 |---|---|
-| `locomotion_game_deploy/controller.py` | ROS-free env step: odometry → mode → observations (legs 96, arms 124) → joint targets |
+| `locomotion_game_deploy/controller.py` | ROS-free env step: odometry → mode → observations (legs 96, arms 124; 95 and 123 with `height_drop_obs: false`) → joint targets |
 | `locomotion_game_deploy/kinematics.py` | Pinocchio wrist FK, Jacobian and IK step, in the pelvis frame |
 | `locomotion_game_deploy/rotations.py` | numpy versions of the isaaclab.utils.math functions training used |
 | `locomotion_game_deploy/networks.py` | TorchScript loader, and the `zero` stand-ins for plumbing tests |
 | `locomotion_game_deploy/marl_deploy_node.py` | the ROS node: safety channels, heartbeat, pre-pose, band, operator interface |
 | `locomotion_game_deploy/game_commander_node.py` | sends walking and arm-goal commands on training's schedule; lidar obstacle guard, SLAM geofence, event log |
 | `policies/<name>/<name>.yaml` | deploy config: joint order, defaults, gains, scales, odometry, bounds, command ranges (each from the training env) |
-| `policies/<name>/{legs,arms,estimator}.pt`, `export.yaml`, `arm_goals_*.npz` | written by the export, below; `marl_golem` holds run R's, the `.pt` and `.npz` files in Git LFS (`policies/.gitattributes`) |
+| `policies/<name>/{legs,arms,estimator}.pt`, `export.yaml`, `arm_goals_*.npz` | written by the export, below; `marl_golem` holds run R's and `marl_ik` golemlim120k's (no arm goals), the `.pt` and `.npz` files in Git LFS (`policies/.gitattributes`) |
 | `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, odometry) |
 
 ## Exporting a checkpoint
@@ -44,7 +46,9 @@ python scripts/skrl/export_arm_goals.py --checkpoint <same> --levels 4:10,7:10,1
 It writes:
 - `legs.pt` and `arms.pt`: the observation scaler, the MLP's mean and the ±10 clamp.
 - `estimator.pt`: the input norm and MLP.
-- `export.yaml`: the run's navigation rest pose and the source files. The node loads it over the policy's yaml.
+- `export.yaml`: the run's navigation rest pose, its `target_limits` (runs trained inside GOLEM's position e-stop
+  range: joint -> [low, high], narrowing the target bounds) and the source files. The node loads it over the policy's
+  yaml.
 - `arm_goals_<spread>_<drop>.npz`: goals drawn by the training command, for the commander.
 
 Then check the deploy controller against the training env, step by step. It compares observations term by term, the networks against skrl, the joint targets, and leg odometry against the true pelvis motion:
@@ -80,7 +84,7 @@ ros2 launch h1_bringup locomanipulationgame_bringup.launch.py
 - `use_commander:=false`: drive the robot yourself, as below.
 - `goals:=arm_goals_<spread>_<drop>.npz`: the arm-goal sample set.
 - `commander_log:=<file>`: a JSON-lines event log.
-- `use_slam`, `use_rviz`, `policy`.
+- `use_slam`, `use_rviz`, `policy`. `policy:=marl_ik` has no arm-goal samples, so run it with `use_commander:=false`.
 - `policy_mode:=zero`: run without exported networks. The legs hold the default pose and the arms follow pure IK, which checks the plumbing only; the robot falls once the band releases.
 
 `tests/locomanipulation_game/run.sh` runs the same launch in disposable containers. It records the sim without modifying it, renders a follow-camera video, and scores the run with `analyze_run.py`.

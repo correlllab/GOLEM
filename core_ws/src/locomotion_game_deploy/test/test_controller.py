@@ -191,8 +191,8 @@ def test_observation_sizes_and_layout():
     ctrl.set_velocity_command(np.array([0.5, 0.0, 0.0]))
     ctrl.step(state)
     lo, ao = legs.inputs[-1], arms.inputs[-1]
-    assert lo.shape == (96,) and ao.shape == (124,)
-    np.testing.assert_allclose(lo[:84], ao[:84])                # the shared ProprioCfg terms
+    assert lo.shape == (95,) and ao.shape == (123,)             # height_drop_obs: false
+    np.testing.assert_allclose(lo[:83], ao[:83])                # the shared ProprioCfg terms
     np.testing.assert_allclose(lo[0:3], [0, 0, 9.81])           # accelerometer
     np.testing.assert_allclose(lo[6:9], [0, 0, -1])             # projected gravity
     np.testing.assert_allclose(lo[9:12], [0.5, 0, 0])           # velocity command
@@ -200,11 +200,10 @@ def test_observation_sizes_and_layout():
     rest = ctrl.rest_pose
     np.testing.assert_allclose(lo[13:16], rest[0, :3])          # left target position
     np.testing.assert_allclose(lo[16:20], R.wxyz_to_xyzw(rest[0, 3:]))  # xyzw
-    assert lo[27] == 0.0                                        # height_drop
-    np.testing.assert_allclose(lo[28:55], 0.0)                  # q - default at default
-    np.testing.assert_allclose(lo[82:84], [0.0, 0.0], atol=1e-12)  # t = 0: sin(0), sin(pi)
-    np.testing.assert_allclose(ao[98:112].reshape(2, 7)[:, :3], rest[:, :3], atol=1e-9)  # wrist poses = rest
-    np.testing.assert_allclose(ao[112:124], 0.0, atol=1e-9)     # no error at rest
+    np.testing.assert_allclose(lo[27:54], 0.0)                  # q - default at default
+    np.testing.assert_allclose(lo[81:83], [0.0, 0.0], atol=1e-12)  # t = 0: sin(0), sin(pi)
+    np.testing.assert_allclose(ao[97:111].reshape(2, 7)[:, :3], rest[:, :3], atol=1e-9)  # wrist poses = rest
+    np.testing.assert_allclose(ao[111:123], 0.0, atol=1e-9)     # no error at rest
 
 
 def test_gait_phase_zero_when_standing():
@@ -212,7 +211,7 @@ def test_gait_phase_zero_when_standing():
     ctrl, cfg = _controller(legs=legs)
     ctrl.reset(_state(cfg))
     ctrl.step(_state(cfg))
-    np.testing.assert_allclose(legs.inputs[-1][82:84], 0.0)
+    np.testing.assert_allclose(legs.inputs[-1][81:83], 0.0)
 
 
 def test_legs_action_mapping_and_last_action():
@@ -224,10 +223,34 @@ def test_legs_action_mapping_and_last_action():
     np.testing.assert_allclose(ctrl.legs_last, 0.0)
     cmd = ctrl.step(state)
     default = np.array(cfg["default_joint_pos"])
-    expected = np.minimum(default[:12] + 10.0 * 0.25, ctrl.upper[:12])
+    # the position bound, then the torque bound: at rest kp (target - q) <= headroom x effort
+    torque_upper = default[:12] + cfg["torque_headroom"] * np.array(cfg["effort_limits"][:12]) / np.array(cfg["kp"][:12])
+    expected = np.minimum(np.minimum(default[:12] + 10.0 * 0.25, ctrl.upper[:12]), torque_upper)
     np.testing.assert_allclose(cmd.q[:12], expected)
     np.testing.assert_allclose(ctrl.legs_last, (expected - default[:12]) / 0.25)
     assert cmd.q[12] == 0.0
+
+
+def test_position_bounds_inside_hard_limits_and_target_limits():
+    """Targets stay target_margin inside the URDF limits (negative margin), narrowed to export.yaml's
+    target_limits (GOLEM's position e-stop range) where it names a joint."""
+    ctrl, cfg = _controller(target_limits={"left_hip_yaw_joint": [-0.1, 0.05], "left_elbow_joint": [-0.2, 0.3]})
+    hard = _kin(cfg).joint_limits
+    np.testing.assert_allclose(ctrl.upper[1], hard[1, 1] - 0.001)
+    np.testing.assert_allclose(ctrl.lower[1], hard[1, 0] + 0.001)
+    np.testing.assert_allclose([ctrl.lower[0], ctrl.upper[0]], [-0.1, 0.05])
+    elbow = cfg["joint_names"].index("left_elbow_joint")
+    np.testing.assert_allclose([ctrl.lower[elbow], ctrl.upper[elbow]], [-0.2, 0.3])
+    legs = ConstNetwork(np.full(12, 1.0))       # hip yaw 0.25 rad, past the 0.05 limit
+    ctrl, cfg = _controller(legs=legs, target_limits={"left_hip_yaw_joint": [-0.1, 0.05]})
+    state = _state(cfg)
+    ctrl.reset(state)
+    assert ctrl.step(state).q[0] == pytest.approx(0.05)
+
+
+def test_target_limits_must_name_policy_joints():
+    with pytest.raises(ValueError):
+        _controller(target_limits={"not_a_joint": [-1.0, 1.0]})
 
 
 def test_arm_goal_modes_and_settle():
@@ -330,6 +353,18 @@ def test_residual_low_pass_and_observed_action():
     ctrl.step(state)
     np.testing.assert_allclose(ctrl.residual, (alpha + alpha * (1 - alpha)) * action)
     np.testing.assert_allclose(arms.inputs[-1][84:98], alpha * action)
+
+
+def test_golem_observes_height_drop():
+    legs, arms = ConstNetwork(np.zeros(12)), ConstNetwork(np.zeros(14))
+    ctrl, cfg = _golem_controller(legs=legs, arms=arms)
+    state = _state(cfg)
+    ctrl.reset(state)
+    ctrl.step(state)
+    lo, ao = legs.inputs[-1], arms.inputs[-1]
+    assert lo.shape == (96,) and ao.shape == (124,)
+    assert lo[27] == 0.0                                        # height_drop
+    np.testing.assert_allclose(lo[28:55], 0.0)                  # q - default at default
 
 
 def test_golem_targets_inside_the_safety_clip():

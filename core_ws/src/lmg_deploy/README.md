@@ -1,4 +1,4 @@
-# locomotion_game_deploy (LocoMotionGameDeploy)
+# lmg_deploy (LocoMotionGameDeploy)
 
 Runs the two-agent MARL policy from Locomanipulation_game (branch
 `marl-direct`) on the H1-2: `policies/marl_golem` for run R of
@@ -19,12 +19,12 @@ release) and uses the same heartbeat watchdog.
 
 | File | What it is |
 |---|---|
-| `locomotion_game_deploy/controller.py` | ROS-free env step: odometry → mode → observations (legs 96, arms 124; 95 and 123 with `height_drop_obs: false`) → joint targets |
-| `locomotion_game_deploy/kinematics.py` | Pinocchio wrist FK, Jacobian and IK step, in the pelvis frame |
-| `locomotion_game_deploy/rotations.py` | numpy versions of the isaaclab.utils.math functions training used |
-| `locomotion_game_deploy/networks.py` | TorchScript loader, and the `zero` stand-ins for plumbing tests |
-| `locomotion_game_deploy/marl_deploy_node.py` | the ROS node: safety channels, heartbeat, pre-pose, band, operator interface |
-| `locomotion_game_deploy/game_commander_node.py` | sends walking and arm-goal commands on training's schedule; lidar obstacle guard, SLAM geofence, event log |
+| `lmg_deploy/controller.py` | ROS-free env step: odometry → mode → observations (legs 96, arms 124; 95 and 123 with `height_drop_obs: false`) → joint targets |
+| `lmg_deploy/kinematics.py` | Pinocchio wrist FK, Jacobian and IK step, in the pelvis frame |
+| `lmg_deploy/rotations.py` | numpy versions of the isaaclab.utils.math functions training used |
+| `lmg_deploy/networks.py` | TorchScript loader, and the `zero` stand-ins for plumbing tests |
+| `lmg_deploy/marl_deploy_node.py` | the ROS node: safety channels, heartbeat, pre-pose, band, operator interface |
+| `lmg_deploy/game_commander_node.py` | sends walking and arm-goal commands on training's schedule; lidar obstacle guard, SLAM geofence, event log |
 | `policies/<name>/<name>.yaml` | deploy config: joint order, defaults, gains, scales, odometry, bounds, command ranges (each from the training env) |
 | `policies/<name>/{legs,arms,estimator}.pt`, `export.yaml`, `arm_goals_*.npz` | written by the export, below; `marl_golem` holds run R's and `marl_ik` golemlim120k's (no arm goals), the `.pt` and `.npz` files in Git LFS (`policies/.gitattributes`) |
 | `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, odometry) |
@@ -37,7 +37,7 @@ after cloning, `git lfs install` once and `git lfs pull` fetch them.
 These commands are run in Locomanipulation_game. Exporting needs only torch, no simulator:
 
 ```bash
-P=<GOLEM>/core_ws/src/locomotion_game_deploy/policies/marl_golem
+P=<GOLEM>/core_ws/src/lmg_deploy/policies/marl_golem
 python scripts/skrl/export_marl.py --checkpoint logs/skrl/locomanip_marl/<run>/checkpoints/agent_<step>.pt \
   --out $P
 python scripts/skrl/export_arm_goals.py --checkpoint <same> --levels 4:10,7:10,10:10 --out $P --headless
@@ -55,7 +55,7 @@ Then check the deploy controller against the training env, step by step. It comp
 
 ```bash
 python scripts/skrl/deploy_parity.py --headless --checkpoint <same> \
-  --export $P --deploy_pkg <GOLEM>/core_ws/src/locomotion_game_deploy --arm_goal_prob 1.0
+  --export $P --deploy_pkg <GOLEM>/core_ws/src/lmg_deploy --arm_goal_prob 1.0
 ```
 
 ## Running in the sim

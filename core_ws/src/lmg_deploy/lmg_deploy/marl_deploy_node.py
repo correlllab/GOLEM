@@ -64,7 +64,7 @@ from std_msgs.msg import Bool, Float32MultiArray, String
 from std_srvs.srv import Trigger
 from unitree_hg.msg import LowCmd, LowState
 
-from locomotion_game_deploy.controller import (
+from lmg_deploy.controller import (
     ARM_START,
     NUM_JOINTS,
     NUM_LEGS,
@@ -72,9 +72,9 @@ from locomotion_game_deploy.controller import (
     MarlController,
     RobotState,
 )
-from locomotion_game_deploy.kinematics import ArmKinematics
-from locomotion_game_deploy.networks import TorchScriptNetwork, ZeroNetwork
-from locomotion_game_deploy.rotations import xyzw_to_wxyz
+from lmg_deploy.kinematics import ArmKinematics
+from lmg_deploy.networks import TorchScriptNetwork, ZeroNetwork
+from lmg_deploy.rotations import xyzw_to_wxyz
 
 MOTOR_MODE_PR = 1
 SAFETY_HEARTBEAT_TOPIC = "/safety/heartbeat"
@@ -84,7 +84,7 @@ PREPOSE_MAX_TICKS = 400     # after the ramp; posed or not, stop waiting (8 s at
 
 
 def _share(*parts: str) -> str:
-    return os.path.join(get_package_share_directory("locomotion_game_deploy"), *parts)
+    return os.path.join(get_package_share_directory("lmg_deploy"), *parts)
 
 
 class MarlDeployNode(Node):

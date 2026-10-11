@@ -36,7 +36,7 @@ git -C "$ROOT" status --short >>"$result/commit.txt" 2>/dev/null || true
 echo "$SOURCE" >"$result/source.txt"
 "${COMPOSE[@]}" run -T --rm --no-deps -e ROS_DOMAIN_ID=194 \
     -v "$ROOT/tests/locomanipulation_game:/home/code/tests/locomanipulation_game:ro" \
-    -v "$ROOT/core_ws/src/locomotion_game_deploy:/home/code/locomotion_game_deploy:ro" \
+    -v "$ROOT/core_ws/src/lmg_deploy:/home/code/lmg_deploy:ro" \
     -v "$ROOT/core_ws/src/h12_safety_layer:/home/code/h12_safety_layer:ro" \
     -v "$SOURCE:/source:ro" -v "$result:/result" "${policy[@]}" \
     --entrypoint python3 robocasa /home/code/tests/locomanipulation_game/sim2sim_walk.py \

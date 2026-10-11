@@ -56,7 +56,7 @@ from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformListener
 from unitree_hg.msg import LowState
 
-from locomotion_game_deploy.rotations import projected_gravity, quat_apply
+from lmg_deploy.rotations import projected_gravity, quat_apply
 
 DRIVING_STATES = ("nav", "settle_to_arm", "arm_goal", "settle_to_nav")
 FALLEN_TILT = 1.0    # rad: the IMU tilted this far for FALLEN_S ends the run (training's fall termination: 1 rad)

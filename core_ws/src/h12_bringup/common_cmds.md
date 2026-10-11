@@ -213,10 +213,10 @@ ros2 action send_goal /frame_task custom_ros_messages/action/FrameTask \
 
 ## Loco-manipulation game policy (`/marl_deploy_node`)
 
-The Locomanipulation_game MARL policy (`locomotion_game_deploy`) drives all 27
+The Locomanipulation_game MARL policy (`lmg_deploy`) drives all 27
 joints: legs walk on `/cmd_vel`, arms reach wrist-pose goals. Start it with no
 game commander so you drive it yourself (see
-`locomotion_game_deploy/README.md` for all launch arguments):
+`lmg_deploy/README.md` for all launch arguments):
 
 ```bash
 ros2 launch h12_bringup lmg_sim_bringup.launch.py use_commander:=false   # add policy:=marl_ik for golemlim120k

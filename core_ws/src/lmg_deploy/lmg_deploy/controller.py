@@ -42,8 +42,8 @@ from enum import Enum
 
 import numpy as np
 
-from locomotion_game_deploy.kinematics import ArmKinematics
-from locomotion_game_deploy.rotations import (
+from lmg_deploy.kinematics import ArmKinematics
+from lmg_deploy.rotations import (
     compute_pose_error,
     projected_gravity,
     quat_apply,

@@ -13,10 +13,10 @@ import numpy as np
 import pytest
 import yaml
 
-from locomotion_game_deploy import rotations as R
-from locomotion_game_deploy.controller import MarlController, Mode, RobotState
-from locomotion_game_deploy.kinematics import ArmKinematics
-from locomotion_game_deploy.networks import ZeroNetwork
+from lmg_deploy import rotations as R
+from lmg_deploy.controller import MarlController, Mode, RobotState
+from lmg_deploy.kinematics import ArmKinematics
+from lmg_deploy.networks import ZeroNetwork
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CFG_PATH = os.path.join(HERE, "..", "policies", "marl_ik", "marl_ik.yaml")

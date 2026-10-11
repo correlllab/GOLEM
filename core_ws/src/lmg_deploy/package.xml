@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>locomotion_game_deploy</name>
+  <name>lmg_deploy</name>
   <version>0.0.0</version>
   <description>LocoMotionGameDeploy: runs the two-agent (legs + IK arms) MARL policy from
     Locomanipulation_game on the H1-2 through the split safety layer.</description>

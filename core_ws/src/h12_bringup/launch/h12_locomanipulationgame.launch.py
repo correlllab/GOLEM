@@ -7,7 +7,7 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 # Loco-manipulation game: the Locomanipulation_game MARL policy
-# (locomotion_game_deploy's marl_deploy_node, all 27 joints through the split
+# (lmg_deploy's marl_deploy_node, all 27 joints through the split
 # safety layer) and the game commander. Included by lmg_sim_bringup.launch.py
 # and lmg_real_bringup.launch.py, which start the state publishers, the safety
 # layer and SLAM.
@@ -17,7 +17,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
-    deploy_share = get_package_share_directory('locomotion_game_deploy')
+    deploy_share = get_package_share_directory('lmg_deploy')
     policy_dir = PathJoinSubstitution([deploy_share, 'policies', LaunchConfiguration('policy')])
     use_sim_time = ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool)
     policy_on = LaunchConfiguration('start_position_verified')
@@ -30,7 +30,7 @@ def generate_launch_description():
         DeclareLaunchArgument('start_position_verified', default_value='false',
                               description='Start marl_deploy_node and the commander'),
         DeclareLaunchArgument('policy', default_value='marl_golem',
-                              description='policies/<name>/ of locomotion_game_deploy: <name>.yaml plus the export'),
+                              description='policies/<name>/ of lmg_deploy: <name>.yaml plus the export'),
         DeclareLaunchArgument('policy_mode', default_value='torch',
                               description='torch: the exported networks; zero: plumbing stand-ins'),
         DeclareLaunchArgument('engage_wait_for_confirm', default_value='true',
@@ -46,7 +46,7 @@ def generate_launch_description():
         DeclareLaunchArgument('commander_log', default_value='', description='JSON-lines log of events and status'),
 
         Node(
-            package='locomotion_game_deploy',
+            package='lmg_deploy',
             executable='marl_deploy_node',
             name='marl_deploy_node',
             output='screen',
@@ -62,7 +62,7 @@ def generate_launch_description():
         ),
 
         Node(
-            package='locomotion_game_deploy',
+            package='lmg_deploy',
             executable='game_commander_node',
             name='game_commander',
             output='screen',

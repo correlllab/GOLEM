@@ -3,7 +3,7 @@ from glob import glob
 
 from setuptools import find_packages, setup
 
-package_name = 'locomotion_game_deploy'
+package_name = 'lmg_deploy'
 
 setup(
     name=package_name,
@@ -32,8 +32,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'marl_deploy_node = locomotion_game_deploy.marl_deploy_node:main',
-            'game_commander_node = locomotion_game_deploy.game_commander_node:main',
+            'marl_deploy_node = lmg_deploy.marl_deploy_node:main',
+            'game_commander_node = lmg_deploy.game_commander_node:main',
         ],
     },
 )

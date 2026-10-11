@@ -1,7 +1,7 @@
 """Walking sim-to-sim test: the deploy controller on RoboCasa's own MuJoCo physics, without ROS. Runs in the robocasa image.
 
 The loco-manipulation game walks far slower in RoboCasa than in Isaac Lab. This test runs the same policy export
-through locomotion_game_deploy's MarlController (the code marl_deploy_node runs) on the compiled scene a RoboCasa
+through lmg_deploy's MarlController (the code marl_deploy_node runs) on the compiled scene a RoboCasa
 run recorded (record_simulator.py's model.mjb), with only the robot's and the floor's collisions kept and the floor
 widened, so the robot walks a fixed schedule on open floor. Each variant changes one physics or timing setting from
 RoboCasa's; whichever brings the walking speed back says what RoboCasa does differently from training.
@@ -57,7 +57,7 @@ from pathlib import Path
 
 import numpy as np
 
-DEPLOY_PKG = Path(os.environ.get('LMG_DEPLOY_PKG', '/home/code/locomotion_game_deploy'))
+DEPLOY_PKG = Path(os.environ.get('LMG_DEPLOY_PKG', '/home/code/lmg_deploy'))
 SAFETY_PKG = Path(os.environ.get('LMG_SAFETY_PKG', '/home/code/h12_safety_layer'))
 SIM_DIR = Path(os.environ.get('LMG_SIM_DIR', '/home/code/h1_robocasa'))
 
@@ -260,9 +260,9 @@ def run_variant(args, variant, out):
     sys.path.insert(0, str(DEPLOY_PKG))
     sys.path.insert(0, str(SAFETY_PKG))
     from sim_names import NameResolver
-    from locomotion_game_deploy.controller import ARM_START, MarlController, RobotState
-    from locomotion_game_deploy.kinematics import ArmKinematics
-    from locomotion_game_deploy.networks import TorchScriptNetwork
+    from lmg_deploy.controller import ARM_START, MarlController, RobotState
+    from lmg_deploy.kinematics import ArmKinematics
+    from lmg_deploy.networks import TorchScriptNetwork
     from h12_safety_layer.core.config import load_config
     from h12_safety_layer.core.joint_limits import JOINT_NAMES
 

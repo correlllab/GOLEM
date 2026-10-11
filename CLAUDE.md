@@ -138,7 +138,7 @@ below and sets `use_sim_time` plus its platform's arguments.
 | `h12_real_desktop_bringup.launch.py` | **real: companion x86 desktop** — hand cameras and rviz. Leg control is interlocked behind `start_position_verified:=true` (default **false**) | models (`use_yolo:=true`), lowerbody (`lowerbody_real.yaml` + MJPC estimator) |
 | `h12_safety_grippers.launch.py` | real: actuation-only debug bringup | control (estop + safety, no IK), grippers |
 | `h12_real_slam.launch.py` | real: sensors + SLAM/navigation only, on wall time (no estop, safety or IK) | real_drivers, state, navigation |
-| `lmg_sim_bringup.launch.py` | **x86 sim**, loco-manipulation game: the `locomotion_game_deploy` MARL policy owns all 27 joints, commander on, no operator confirm. Refuses an unset or 0 `ROS_DOMAIN_ID` | state, control (no IK, no stagger), locomanipulationgame, navigation (`use_slam`) |
+| `lmg_sim_bringup.launch.py` | **x86 sim**, loco-manipulation game: the `lmg_deploy` MARL policy owns all 27 joints, commander on, no operator confirm. Refuses an unset or 0 `ROS_DOMAIN_ID` | state, control (no IK, no stagger), locomanipulationgame, navigation (`use_slam`) |
 | `lmg_real_bringup.launch.py` | **real, onboard PC**, loco-manipulation game, run *instead of* `h12_real_robot_bringup`. Policy behind `start_position_verified:=true` + `/marl_deploy_node/confirm_engage`; commander off by default | real_drivers, state, control (`use_estop:=true`, no IK), locomanipulationgame, navigation (`use_slam`) |
 
 | Building block | Starts |

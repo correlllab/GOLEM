@@ -21,7 +21,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import pinocchio as pin
 
-from locomotion_game_deploy.rotations import compute_pose_error, quat_from_matrix, quat_unique
+from lmg_deploy.rotations import compute_pose_error, quat_from_matrix, quat_unique
 
 
 class ArmKinematics:

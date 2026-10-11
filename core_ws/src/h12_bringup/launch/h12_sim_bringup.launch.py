@@ -39,7 +39,7 @@ def generate_launch_description():
         # Which RL policy drives the legs (see h12_lowerbody.launch.py). The sim
         # bringup does not launch the MJPC controller, so lowerbody:=mjpc
         # leaves the legs uncontrolled.
-        DeclareLaunchArgument('lowerbody', default_value='almi'),  # almi | almi27 | fame | walk
+        DeclareLaunchArgument('lowerbody', default_value='almi'),  # almi | fame | walk
         DeclareLaunchArgument('lowerbody_auto_switch', default_value='false'),
         DeclareLaunchArgument('model_logging', default_value='true'),
         DeclareLaunchArgument('model_visualization', default_value='true'),

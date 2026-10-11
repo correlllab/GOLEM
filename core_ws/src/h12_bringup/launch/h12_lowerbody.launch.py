@@ -29,7 +29,7 @@ def generate_launch_description():
             description='Start the leg controller and estimator'),
         DeclareLaunchArgument(
             'lowerbody', default_value='almi',
-            description='RL policy: almi | almi27 | fame | walk; mjpc starts no RL node'),
+            description='RL policy: almi | fame | walk; mjpc starts no RL node'),
         # false keeps the robot on the lowerbody:= policy for standing AND
         # walking; true hands nonzero /cmd_vel to the walk policy and back.
         DeclareLaunchArgument('lowerbody_auto_switch', default_value='false'),

@@ -20,8 +20,6 @@ setup(
             glob('policies/fame/*')),
         (os.path.join('share', package_name, 'policies', 'almi'),
             glob('policies/almi/*')),
-        (os.path.join('share', package_name, 'policies', 'almi27'),
-            glob('policies/almi27/*')),
     ],
     package_data={'': ['py.typed']},
     install_requires=['setuptools'],

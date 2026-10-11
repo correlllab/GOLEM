@@ -3,9 +3,12 @@
 Flow
 ----
 1. Idle until the first /lowstate.
-2. Pre-pose: ramp all 27 joint targets (cosine blend over ``prepose_ramp_s``)
-   from the measured pose to the policy's default pose at the training gains,
-   then wait for the joints to settle there.
+2. Pre-pose: ramp all 27 joint targets (cosine blend) from the measured pose
+   to the policy's default pose at the training gains, then wait for the joints
+   to settle there. The ramp lasts at least ``prepose_ramp_s`` and is stretched
+   so that no target moves faster than ``prepose_max_vel``: a target that runs
+   ahead of the joint makes the PD torque spike and trips the safety layer's
+   torque e-stop.
 3. With ``engage_wait_for_confirm`` (default true; lmg_real_bringup keeps it
    on, lmg_sim_bringup turns it off and engages automatically) hold the
    pre-pose until an operator calls ~/confirm_engage.
@@ -94,7 +97,8 @@ class MarlDeployNode(Node):
         self.declare_parameter("config", _share("policies", "marl_ik", "marl_ik.yaml"))
         self.declare_parameter("urdf_path", "/home/code/CL_Assets/ros_assets/h1_2_magpie.urdf")
         self.declare_parameter("control_hz", 50.0)
-        self.declare_parameter("prepose_ramp_s", 2.0)
+        self.declare_parameter("prepose_ramp_s", 6.0)     # s, minimum ramp duration
+        self.declare_parameter("prepose_max_vel", 0.25)   # rad/s, peak target speed of any joint
         self.declare_parameter("engage_wait_for_confirm", True)
         self.declare_parameter("disable_elastic_band", True)
         self.declare_parameter("band_release_delay_s", 1.0)
@@ -141,7 +145,12 @@ class MarlDeployNode(Node):
         self._lowstate_time: float | None = None   # monotonic receipt time
         self._confirm_wait = bool(self.get_parameter("engage_wait_for_confirm").value)
         self._confirmed = False
-        self._ramp_ticks = max(1, int(round(float(self.get_parameter("prepose_ramp_s").value) * control_hz)))
+        self._control_hz = control_hz
+        self._ramp_min_s = float(self.get_parameter("prepose_ramp_s").value)
+        self._ramp_max_vel = float(self.get_parameter("prepose_max_vel").value)
+        if self._ramp_max_vel <= 0.0:
+            raise ValueError(f"prepose_max_vel must be positive, not {self._ramp_max_vel}")
+        self._ramp_ticks = 1   # set from the measured start pose on the first pre-pose tick
         self._prepose_ticks = 0
         self._prepose_pass = 0
         self._prepose_start: np.ndarray | None = None
@@ -325,6 +334,13 @@ class MarlDeployNode(Node):
         ctrl = self.controller
         if self._prepose_start is None:
             self._prepose_start = state.q.copy()
+            # the cosine blend's peak speed is (pi / 2) * distance / duration
+            dist = float(np.max(np.abs(ctrl.default - self._prepose_start)))
+            ramp_s = max(self._ramp_min_s, 0.5 * np.pi * dist / self._ramp_max_vel)
+            self._ramp_ticks = max(1, int(round(ramp_s * self._control_hz)))
+            self.get_logger().info(
+                f"pre-posing: max joint distance {dist:.2f} rad over {ramp_s:.1f} s "
+                f"(peak {0.5 * np.pi * dist / ramp_s:.2f} rad/s)")
             self._set_state("preposing")
         target = ctrl.default.copy()
         if self._prepose_ticks < self._ramp_ticks:

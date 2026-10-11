@@ -2,8 +2,10 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
@@ -36,6 +38,7 @@ def generate_launch_description():
         name='livox_lidar_publisher',
         output='screen',
         parameters=livox_mid360_params,
+        condition=IfCondition(LaunchConfiguration('use_lidar')),
         # The driver rotates points by the MID360_config.json extrinsic but
         # not the IMU; livox_imu_upright applies the same rotation and owns
         # /livox/imu (see mid360.yaml).
@@ -48,6 +51,7 @@ def generate_launch_description():
         name='livox_imu_upright',
         output='screen',
         parameters=[{'livox_config_path': mid360_config}],
+        condition=IfCondition(LaunchConfiguration('use_lidar')),
         remappings=[('imu_in', '/livox/imu_raw'), ('imu_out', '/livox/imu')],
     )
 
@@ -59,7 +63,8 @@ def generate_launch_description():
     realsense_cams = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(realsense_share, 'launch', 'h12_headcamera.launch.py')
-        )
+        ),
+        condition=IfCondition(LaunchConfiguration('use_head_camera')),
     )
 
     # Magpie grippers, one node per side. Both nodes (ports, per-gripper finger
@@ -68,10 +73,17 @@ def generate_launch_description():
     grippers = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(bringup_share, 'launch', 'h12_grippers.launch.py')
-        )
+        ),
+        condition=IfCondition(LaunchConfiguration('use_grippers')),
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument('use_lidar', default_value='true',
+                              description='Start the MID360 driver and livox_imu_upright'),
+        DeclareLaunchArgument('use_head_camera', default_value='true',
+                              description='Start the head RealSense and its static TF'),
+        DeclareLaunchArgument('use_grippers', default_value='true',
+                              description='Start the left and right gripper nodes'),
         livox_mid360,
         livox_imu_upright,
         realsense_cams,

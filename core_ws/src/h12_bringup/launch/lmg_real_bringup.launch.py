@@ -27,7 +27,7 @@ from launch.substitutions import LaunchConfiguration
 # see h12_control.launch.py). Assets resolve as in h12_state.launch.py.
 ASSETS_DIR = os.environ.get('GOLEM_ASSETS_DIR', '/home/unitree/GOLEM/CL_Assets')
 
-GAME_ARGS = ('start_position_verified', 'policy', 'use_commander',
+GAME_ARGS = ('start_position_verified', 'policy', 'prepose_ramp_s', 'prepose_max_vel', 'use_commander',
              'commander_mode', 'goals', 'commander_seed', 'commander_duration_s', 'commander_log')
 
 
@@ -47,8 +47,15 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('start_position_verified', default_value='false'),
         DeclareLaunchArgument('policy', default_value='marl_golem'),
+        DeclareLaunchArgument('prepose_ramp_s', default_value='6.0'),
+        DeclareLaunchArgument('prepose_max_vel', default_value='0.25'),
         DeclareLaunchArgument('safety_config', default_value='relax_safety_split.yaml'),
         DeclareLaunchArgument('use_slam', default_value='true'),
+        # The game reads only the lidar (SLAM and the commander's obstacle guard).
+        DeclareLaunchArgument('use_lidar', default_value='true',
+                              description='MID360 driver and livox_imu_upright'),
+        DeclareLaunchArgument('use_head_camera', default_value='false', description='head RealSense'),
+        DeclareLaunchArgument('use_grippers', default_value='false', description='left and right gripper nodes'),
         DeclareLaunchArgument('use_commander', default_value='false'),
         DeclareLaunchArgument('commander_mode', default_value='training'),
         DeclareLaunchArgument('goals', default_value='arm_goals_4_10.npz'),
@@ -56,7 +63,10 @@ def generate_launch_description():
         DeclareLaunchArgument('commander_duration_s', default_value='0.0'),
         DeclareLaunchArgument('commander_log', default_value=''),
 
-        _include('h12_bringup', 'h12_real_drivers.launch.py', wall_time),
+        _include('h12_bringup', 'h12_real_drivers.launch.py', {
+            **wall_time,
+            **{name: LaunchConfiguration(name) for name in ('use_lidar', 'use_head_camera', 'use_grippers')},
+        }),
         _include('h12_bringup', 'h12_state.launch.py', wall_time),
         _include('h12_bringup', 'h12_control.launch.py', {
             **wall_time,

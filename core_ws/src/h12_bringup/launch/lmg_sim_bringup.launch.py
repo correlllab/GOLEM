@@ -23,7 +23,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 # the real robot's command bus.
 ASSETS_DIR = '/home/code/CL_Assets'
 
-GAME_ARGS = ('policy', 'use_commander',
+GAME_ARGS = ('policy', 'prepose_ramp_s', 'prepose_max_vel', 'use_commander',
              'commander_mode', 'goals', 'commander_seed', 'commander_duration_s', 'commander_log')
 
 
@@ -49,6 +49,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument('policy', default_value='marl_golem'),
+        DeclareLaunchArgument('prepose_ramp_s', default_value='6.0'),
+        DeclareLaunchArgument('prepose_max_vel', default_value='0.25'),
         DeclareLaunchArgument('safety_config', default_value='relax_safety_split.yaml'),
         DeclareLaunchArgument('use_slam', default_value='true'),
         DeclareLaunchArgument('use_commander', default_value='true'),

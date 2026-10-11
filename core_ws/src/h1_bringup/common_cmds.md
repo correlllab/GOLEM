@@ -208,3 +208,36 @@ ros2 action send_goal /frame_task custom_ros_messages/action/FrameTask \
     duration: {sec: 4, nanosec: 0}}" \
   --feedback
 ```
+
+---
+
+## Loco-manipulation game policy (`/marl_deploy_node`)
+
+The Locomanipulation_game MARL policy (`locomotion_game_deploy`) drives all 27
+joints: legs walk on `/cmd_vel`, arms reach wrist-pose goals. Start it with no
+game commander so you drive it yourself (see
+`locomotion_game_deploy/README.md` for all launch arguments):
+
+```bash
+ros2 launch h1_bringup locomanipulationgame_bringup.launch.py use_commander:=false   # add policy:=marl_ik for golemlim120k
+```
+
+Walk:
+
+```bash
+ros2 topic echo /marl_deploy_node/state --once                 # expect "nav" once engaged
+ros2 run teleop_twist_keyboard teleop_twist_keyboard           # walk (expect little forward motion with this checkpoint)
+```
+
+To reach, then go back to walking:
+
+```bash
+ros2 topic pub --once /marl_deploy_node/arm_goal geometry_msgs/msg/PoseArray \
+  "{poses: [{position: {x: 0.30, y: 0.25, z: 0.05}, orientation: {w: 1.0}},
+            {position: {x: 0.30, y: -0.25, z: 0.05}, orientation: {w: 1.0}}]}"
+ros2 topic echo /marl_deploy_node/wrist_error                  # metres, left and right
+ros2 service call /marl_deploy_node/end_arm_goal std_srvs/srv/Trigger
+```
+
+Arm goals are `left_wrist_yaw_link` then `right_wrist_yaw_link` poses in the
+pelvis frame; `/cmd_vel` is ignored until the goal ends.

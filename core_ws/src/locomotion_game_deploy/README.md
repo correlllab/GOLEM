@@ -60,7 +60,8 @@ python scripts/skrl/deploy_parity.py --headless --checkpoint <same> \
 
 ## Running in the sim
 
-`h1_bringup/launch/locomanipulationgame_bringup.launch.py` starts everything:
+`h1_bringup/launch/locomanipulationgame_sim_bringup.launch.py` starts everything (the policy node, commander and
+SLAM come from the shared block `h1_locomanipulationgame.launch.py`):
 - the state publishers;
 - the split safety layer with the real robot's preset (`relax_safety_split`);
 - `marl_deploy_node` with `policies/<policy>/` (default `marl_golem`);
@@ -69,14 +70,14 @@ python scripts/skrl/deploy_parity.py --headless --checkpoint <same> \
 
 `frame_task_server` and the lower-body RL node stay off, so this node is the only publisher on each safety channel.
 
-Use a domain other than 0; domain 0 is the real robot.
+Use a domain other than 0; domain 0 is the real robot. The launch refuses to start when `ROS_DOMAIN_ID` is unset or 0.
 
 ```bash
 export ROS_DOMAIN_ID=42
 docker/scripts/docker_run.sh robocasa env GOLEM_SPAWN_BACKOFF=0.3 \
     /home/code/h12_sim_scripts/launch_robocasa.sh --headless --task AirDryFruit --layout 1 --seed 42   # terminal 1
 docker/scripts/docker_run.sh ros                                                                     # terminal 2, then:
-ros2 launch h1_bringup locomanipulationgame_bringup.launch.py
+ros2 launch h1_bringup locomanipulationgame_sim_bringup.launch.py
 ```
 
 **Launch arguments:**
@@ -109,12 +110,26 @@ ros2 topic echo /marl_deploy_node/wrist_error   # m, left and right
 
 ## Real robot
 
-No real-robot launch file starts this node yet: `lowerbody:=marl_ik` is not wired into `h1_real_desktop_bringup.launch.py`.
+On the onboard PC, run `h1_bringup/launch/locomanipulationgame_real_bringup.launch.py` **instead of**
+`h1_real_robot_bringup.launch.py`, never beside it. It starts the same drivers, state publishers, estop and safety
+layer, without `frame_task_server`, plus the shared game block on wall-clock time. Keep the lower-body RL and MJPC
+controllers off.
 
-1. Bring up the onboard PC with `use_frame_task:=false`, so nothing else publishes on the upper channel.
-2. Keep the lower-body RL and MJPC controllers off.
-3. Start the node with `engage_wait_for_confirm:=true`. It pre-poses all 27 joints, then holds.
-4. Engage it with `ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger`.
+```bash
+export ROS_DOMAIN_ID=0
+ros2 launch h1_bringup locomanipulationgame_real_bringup.launch.py                                # sensors, safety, SLAM
+ros2 launch h1_bringup locomanipulationgame_real_bringup.launch.py start_position_verified:=true  # + the policy node
+ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger                           # engage
+```
+
+- `start_position_verified:=true` (default `false`) starts `marl_deploy_node`. It pre-poses all 27 joints, then holds.
+- Engaging zeroes the velocity command: a `/cmd_vel` sent before the confirm is dropped, so only a new message
+  after `nav` appears moves the robot. A publisher still streaming (e.g. `ros2 topic pub -r`) sets it again on its
+  next message.
+- The node always waits for `~/confirm_engage` here, and never calls the sim's elastic band; neither is an argument.
+- The commander is off by default (`use_commander:=false`): drive with `/cmd_vel` and `~/arm_goal` as above.
+  `use_commander:=true` starts it alongside the node.
+- Same `policy`, `policy_mode`, `safety_config`, `use_slam` and `commander_*` arguments as the sim launch.
 
 **Before the first real run:**
 - **IMU frame.** Training read the IMU on `torso_link` (`imu_link`, offset (-0.0445, -0.0189, 0.2776), no rotation). The MuJoCo sim's IMU is in the same place. Confirm that the real `LowState.imu_state` comes from that same IMU.

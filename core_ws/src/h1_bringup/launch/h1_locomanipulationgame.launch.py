@@ -2,88 +2,68 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import AndSubstitution, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-# Loco-manipulation game bringup (x86 sim): the Locomanipulation_game MARL policy
-# (locomotion_game_deploy) driving all 27 joints through the split safety layer,
-# SLAM, and the game commander that sends it walking and arm-goal commands the
-# way training did. ROS_DOMAIN_ID must be exported in the launching shell (see
-# h1_control.launch.py); start the simulator first.
+# Loco-manipulation game: the Locomanipulation_game MARL policy
+# (locomotion_game_deploy's marl_deploy_node, all 27 joints through the split
+# safety layer), the game commander, and SLAM without nav2. Included by
+# locomanipulationgame_sim_bringup.launch.py and
+# locomanipulationgame_real_bringup.launch.py, which start the state publishers
+# and the safety layer.
 #
 # marl_deploy_node owns both safety channels, so frame_task_server and the
-# lower-body RL node are not started. The safety layer runs the real robot's
-# preset (relax_safety_split): the policy was trained against its e-stops, and
-# the sim is where to see that it doesn't trip them. Navigation (nav2) is not
-# started: the commander is the only /cmd_vel publisher.
-ASSETS_DIR = '/home/code/CL_Assets'
-
-
-def _include(package, launch_file, launch_arguments, condition=None):
-    return IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory(package), 'launch', launch_file)),
-        launch_arguments=launch_arguments.items(),
-        condition=condition,
-    )
+# lower-body RL node must not run beside it. nav2 is not started: the commander
+# (or the operator) is the only /cmd_vel publisher.
 
 
 def generate_launch_description():
-    bringup_share = get_package_share_directory('h1_bringup')
     deploy_share = get_package_share_directory('locomotion_game_deploy')
     slam_share = get_package_share_directory('h12_slam')
     policy_dir = PathJoinSubstitution([deploy_share, 'policies', LaunchConfiguration('policy')])
     use_sim_time = ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool)
-    sim_time = {'use_sim_time': LaunchConfiguration('use_sim_time')}
+    policy_on = LaunchConfiguration('start_position_verified')
 
     return LaunchDescription([
-        DeclareLaunchArgument('use_sim_time', default_value='true'),
+        DeclareLaunchArgument('use_sim_time', default_value='false'),
+        DeclareLaunchArgument('urdf_path', description='Pinocchio URDF for the wrist kinematics (h1_2_magpie.urdf)'),
+        # Interlock: neither the policy node nor the commander starts until the
+        # operator has verified the robot is in a safe start position.
+        DeclareLaunchArgument('start_position_verified', default_value='false',
+                              description='Start marl_deploy_node and the commander'),
         DeclareLaunchArgument('policy', default_value='marl_golem',
                               description='policies/<name>/ of locomotion_game_deploy: <name>.yaml plus the export'),
         DeclareLaunchArgument('policy_mode', default_value='torch',
                               description='torch: the exported networks; zero: plumbing stand-ins'),
-        DeclareLaunchArgument('safety_config', default_value='relax_safety_split.yaml'),
-        DeclareLaunchArgument('engage_wait_for_confirm', default_value='false',
-                              description='hold the pre-pose until ~/confirm_engage (true on the real robot)'),
+        DeclareLaunchArgument('engage_wait_for_confirm', default_value='true',
+                              description='hold the pre-pose until ~/confirm_engage'),
+        DeclareLaunchArgument('disable_elastic_band', default_value='false',
+                              description="release the sim's elastic band through /elastic_band/toggle once engaged"),
         DeclareLaunchArgument('use_slam', default_value='true'),
-        DeclareLaunchArgument('use_commander', default_value='true'),
+        DeclareLaunchArgument('use_commander', default_value='false'),
         DeclareLaunchArgument('commander_mode', default_value='training', description='training | sequence'),
         DeclareLaunchArgument('goals', default_value='arm_goals_4_10.npz',
                               description='arm goal samples in the policy directory (spread_drop levels)'),
         DeclareLaunchArgument('commander_seed', default_value='0'),
         DeclareLaunchArgument('commander_duration_s', default_value='0.0', description='0: run until stopped'),
         DeclareLaunchArgument('commander_log', default_value='', description='JSON-lines log of events and status'),
-        DeclareLaunchArgument('use_rviz', default_value='false'),
-        DeclareLaunchArgument('rviz_config', default_value=os.path.join(bringup_share, 'rviz', 'nav.rviz')),
-
-        _include('h1_bringup', 'h1_state.launch.py', {
-            **sim_time,
-            'urdf_file': os.path.join(ASSETS_DIR, 'ros_assets', 'h1_2_magpie_ros.urdf'),
-        }),
-        _include('h1_bringup', 'h1_control.launch.py', {
-            **sim_time,
-            'use_frame_task': 'false',
-            'safety_config': LaunchConfiguration('safety_config'),
-            # no hardware e-stop node in sim to wait for
-            'safety_delay': '0.0',
-        }),
 
         Node(
             package='locomotion_game_deploy',
             executable='marl_deploy_node',
             name='marl_deploy_node',
             output='screen',
+            condition=IfCondition(policy_on),
             parameters=[{
                 'use_sim_time': use_sim_time,
                 'config': PathJoinSubstitution([policy_dir, [LaunchConfiguration('policy'), '.yaml']]),
-                'urdf_path': os.path.join(ASSETS_DIR, 'ros_assets', 'h1_2_magpie.urdf'),
+                'urdf_path': LaunchConfiguration('urdf_path'),
                 'policy_mode': LaunchConfiguration('policy_mode'),
                 'engage_wait_for_confirm': ParameterValue(LaunchConfiguration('engage_wait_for_confirm'), value_type=bool),
-                'disable_elastic_band': True,
+                'disable_elastic_band': ParameterValue(LaunchConfiguration('disable_elastic_band'), value_type=bool),
             }],
         ),
 
@@ -92,7 +72,7 @@ def generate_launch_description():
             executable='game_commander_node',
             name='game_commander',
             output='screen',
-            condition=IfCondition(LaunchConfiguration('use_commander')),
+            condition=IfCondition(AndSubstitution(policy_on, LaunchConfiguration('use_commander'))),
             parameters=[{
                 'use_sim_time': use_sim_time,
                 'mode': LaunchConfiguration('commander_mode'),
@@ -148,15 +128,5 @@ def generate_launch_description():
                 'base_frame': 'pelvis', 'odom_frame': 'camera_init', 'scan_topic': '/converted_scan',
                 'odom_topic': '/Odometry', 'use_sim_time': use_sim_time,
             }],
-        ),
-
-        Node(
-            package='rviz2',
-            executable='rviz2',
-            name='rviz2_locomanipulationgame',
-            arguments=['-d', LaunchConfiguration('rviz_config')],
-            parameters=[{'use_sim_time': use_sim_time}],
-            output='screen',
-            condition=IfCondition(LaunchConfiguration('use_rviz')),
         ),
     ])

@@ -138,6 +138,8 @@ below and sets `use_sim_time` plus its platform's arguments.
 | `h1_real_desktop_bringup.launch.py` | **real: companion x86 desktop** — hand cameras and rviz. Leg control is interlocked behind `start_position_verified:=true` (default **false**) | models (`use_yolo:=true`), lowerbody (`lowerbody_real.yaml` + MJPC estimator) |
 | `h1_safety_grippers.launch.py` | real: actuation-only debug bringup | control (estop + safety, no IK), grippers |
 | `h1_real_slam.launch.py` | real: sensors + SLAM/navigation only, on wall time (no estop, safety or IK) | real_drivers, state, navigation |
+| `locomanipulationgame_sim_bringup.launch.py` | **x86 sim**, loco-manipulation game: the `locomotion_game_deploy` MARL policy owns all 27 joints, commander on, no operator confirm. Refuses an unset or 0 `ROS_DOMAIN_ID` | state, control (no IK, no stagger), locomanipulationgame |
+| `locomanipulationgame_real_bringup.launch.py` | **real, onboard PC**, loco-manipulation game, run *instead of* `h1_real_robot_bringup`. Policy behind `start_position_verified:=true` + `/marl_deploy_node/confirm_engage`; commander off by default | real_drivers, state, control (`use_estop:=true`, no IK), locomanipulationgame |
 
 | Building block | Starts |
 |---|---|
@@ -146,6 +148,7 @@ below and sets `use_sim_time` plus its platform's arguments.
 | `h1_lowerbody.launch.py` | RL `lowerbody_controller_node` (`lowerbody:=`, params from `lowerbody_params`) and optional MJPC `estimator_node`, both behind `start_position_verified` |
 | `h1_models.launch.py` | gemini + sam servers, [yolo], graspgen + `h12_skills` (`use_skills`) |
 | `h1_real_drivers.launch.py` | Livox MID360 (+ `livox_imu_upright`, which rotates `/livox/imu_raw` into the point frame — the stock driver rotates only points), RealSense head camera, `h1_grippers.launch.py` (left+right `gripper_node`) |
+| `h1_locomanipulationgame.launch.py` | `marl_deploy_node` + `game_commander_node` (behind `start_position_verified`) and SLAM without nav2 |
 | `h12_slam/launch/h1_navigation.launch.py` | shared nav stack (FAST-LIO → pointcloud_to_laserscan → slam_toolbox → nav2) |
 
 Humble includes are not scoped: an argument passed to one include stays set

@@ -8,8 +8,9 @@ Flow
    then wait for the joints to settle there.
 3. With ``engage_wait_for_confirm`` (default true; the sim launch turns it
    off) hold the pre-pose until an operator calls ~/confirm_engage.
-4. Engage: the controller starts an episode at the measured state and runs at
-   ``control_hz`` (50 Hz, the training policy rate). In the sim the elastic
+4. Engage: the controller starts an episode at the measured state with a zero
+   velocity command (any /cmd_vel received before engaging is dropped) and
+   runs at ``control_hz`` (50 Hz, the training policy rate). In the sim the elastic
    band is released ``band_release_delay_s`` later and the episode restarts
    then, so the policy's first free step is its episode's first.
 
@@ -356,6 +357,8 @@ class MarlDeployNode(Node):
             return
         self.get_logger().info(f"pre-posed ({'settled' if settled else 'timeout'}, max err {err:.3f} rad): engaging")
         ctrl.reset(state)
+        # a /cmd_vel that arrived before engaging is not a command to walk now
+        ctrl.set_velocity_command(np.zeros(3))
         self._engaged = True
         if not self._band_released:
             self._band_release_at = time.monotonic() + float(self.get_parameter("band_release_delay_s").value)

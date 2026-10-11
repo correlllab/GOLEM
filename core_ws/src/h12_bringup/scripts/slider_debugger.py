@@ -17,9 +17,9 @@ graspgenx frames, +Z is the approach axis (the home RPY 0,0,0 points it along
 pelvis +Z); set RPY = 1.5708 0 1.5708 to match the wrist's identity orientation.
 
 Usage:
-    ros2 run h1_bringup slider_debugger.py
+    ros2 run h12_bringup slider_debugger.py
     # or
-    python3 core_ws/src/h1_bringup/scripts/slider_debugger.py
+    python3 core_ws/src/h12_bringup/scripts/slider_debugger.py
 """
 
 import math

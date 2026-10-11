@@ -47,7 +47,7 @@ TorchScript via the ALMI-Open `PolicyExporterLSTM` (same stateful `forward(obs)`
 Sim bringup (leaves `almi` as the default):
 
 ```bash
-ros2 launch h1_bringup h1_sim_bringup.launch.py lowerbody:=almi27
+ros2 launch h12_bringup h12_sim_bringup.launch.py lowerbody:=almi27
 ```
 
 `almi27` is `STAND_CAPABLE`, so under `auto_switch` it stands and hands locomotion

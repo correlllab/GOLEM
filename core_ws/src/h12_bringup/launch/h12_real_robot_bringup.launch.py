@@ -7,7 +7,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 
 # Real robot, onboard PC. ROS_DOMAIN_ID must be exported in the launching shell
-# (0 on the real robot; see h1_control.launch.py).
+# (0 on the real robot; see h12_control.launch.py).
 
 
 def _include(package, launch_file, launch_arguments):
@@ -23,8 +23,8 @@ def generate_launch_description():
     wall_time = {'use_sim_time': 'false'}
 
     return LaunchDescription([
-        _include('h1_bringup', 'h1_real_drivers.launch.py', wall_time),
-        _include('h12_slam', 'h1_navigation.launch.py', wall_time),
-        _include('h1_bringup', 'h1_state.launch.py', wall_time),
-        _include('h1_bringup', 'h1_control.launch.py', {**wall_time, 'use_estop': 'true'}),
+        _include('h12_bringup', 'h12_real_drivers.launch.py', wall_time),
+        _include('h12_slam', 'h12_navigation.launch.py', wall_time),
+        _include('h12_bringup', 'h12_state.launch.py', wall_time),
+        _include('h12_bringup', 'h12_control.launch.py', {**wall_time, 'use_estop': 'true'}),
     ])

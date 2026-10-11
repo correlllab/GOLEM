@@ -29,7 +29,7 @@ docker/scripts/docker_run.sh robocasa            # or: isaac
 
 # Terminal 2 — ROS workspace. Colcon-builds core_ws if stale, then drops to a shell.
 docker/scripts/docker_run.sh ros
-ros2 launch h1_bringup h1_sim_bringup.launch.py  # bringup is a manual step
+ros2 launch h12_bringup h12_sim_bringup.launch.py  # bringup is a manual step
 
 # Terminal 3 — drive the robot from inside the running ROS container
 docker exec -it golem_ros bash
@@ -83,29 +83,29 @@ starting both containers does not imply full navigation/skills parity.
 
 ## Bringup
 
-`h1_bringup` is launch-only, and sim versus real are separate launch files (there
+`h12_bringup` is launch-only, and sim versus real are separate launch files (there
 is no `sim:=true` argument):
 
 | Launch file | Scenario |
 |---|---|
-| `h1_sim_bringup.launch.py` | x86 sim — the full stack |
-| `h1_sim_bringup_mac.launch.py` | mac sim — trimmed, toggled by `GOLEM_*` env vars |
-| `h1_real_robot_bringup.launch.py` | real robot, onboard PC: drivers, state publishers, estop + safety + IK, nav |
-| `h1_real_desktop_bringup.launch.py` | real: companion desktop — hand cameras, model servers, skills, lower body |
-| `h1_safety_grippers.launch.py` | real: estop + safety layer + grippers only |
-| `h1_real_slam.launch.py` | real: drivers, state publishers and SLAM/nav only (no estop, safety or IK) |
+| `h12_sim_bringup.launch.py` | x86 sim — the full stack |
+| `h12_sim_bringup_mac.launch.py` | mac sim — trimmed, toggled by `GOLEM_*` env vars |
+| `h12_real_robot_bringup.launch.py` | real robot, onboard PC: drivers, state publishers, estop + safety + IK, nav |
+| `h12_real_desktop_bringup.launch.py` | real: companion desktop — hand cameras, model servers, skills, lower body |
+| `h12_safety_grippers.launch.py` | real: estop + safety layer + grippers only |
+| `h12_real_slam.launch.py` | real: drivers, state publishers and SLAM/nav only (no estop, safety or IK) |
 
 The top-level files above are assembled from building blocks you can also
-launch on their own: `h1_state` (state publishers), `h1_control` (estop,
-safety, IK), `h1_lowerbody`, `h1_models` (model servers + skills),
-`h1_real_drivers`, `h1_grippers`, and `h1_navigation` (in `h12_slam`).
+launch on their own: `h12_state` (state publishers), `h12_control` (estop,
+safety, IK), `h12_lowerbody`, `h12_models` (model servers + skills),
+`h12_real_drivers`, `h12_grippers`, and `h12_navigation` (in `h12_slam`).
 
 The x86 sim bringup starts the state publishers, the `frame_task_server` IK
 solver, `safety_node`, the Gemini/SAM/GraspGen model servers, the RL lower-body
 controller, the skills node, nav, and RViz. Common arguments:
 
 ```bash
-ros2 launch h1_bringup h1_sim_bringup.launch.py \
+ros2 launch h12_bringup h12_sim_bringup.launch.py \
   use_rviz:=false use_nav:=false use_skills:=false lowerbody:=fame
 ```
 
@@ -117,7 +117,7 @@ ros2 launch h1_bringup h1_sim_bringup.launch.py \
 
 # Terminal 2
 docker/scripts/docker_run.sh ros
-ros2 launch h1_bringup h1_sim_bringup.launch.py
+ros2 launch h12_bringup h12_sim_bringup.launch.py
 
 # Terminal 3 (inside golem_ros, workspace sourced)
 ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
@@ -130,7 +130,7 @@ ros2 action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
 
 `/skill/grasp`, `/skill/pick_place`, and `/skill/frontier_explore` are
 implemented; the other nine `/skill/*` action servers accept a goal and then
-abort with "not implemented". `core_ws/src/h1_bringup/common_cmds.md` has a
+abort with "not implemented". `core_ws/src/h12_bringup/common_cmds.md` has a
 ready-made `send_goal` snippet and field reference for each one.
 
 ## Real robot
@@ -140,10 +140,10 @@ Coordinate before touching. The onboard PC runs natively, without Docker:
 ```bash
 export ROS_DOMAIN_ID=0
 source core_ws/install/setup.bash
-ros2 launch h1_bringup h1_real_robot_bringup.launch.py
+ros2 launch h12_bringup h12_real_robot_bringup.launch.py
 ```
 
-On the companion desktop, `h1_real_desktop_bringup.launch.py` gates leg commands
+On the companion desktop, `h12_real_desktop_bringup.launch.py` gates leg commands
 behind `start_position_verified:=true` (default false) — set it only after
 physically verifying the robot's pose.
 

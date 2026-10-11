@@ -1,5 +1,5 @@
 # lowerbody_controller_node parameters for the simulators. active_policy and
-# auto_switch come from h1_lowerbody.launch.py's launch arguments.
+# auto_switch come from h12_lowerbody.launch.py's launch arguments.
 lowerbody_controller_node:
   ros__parameters:
     # Sim auto-engages after the pre-pose settles (unattended runs); the

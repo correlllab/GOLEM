@@ -39,7 +39,7 @@ is required before anything builds.
 
 **`core_ws/src` in-tree packages** (versioned directly in this repo, *not*
 submodules): `FAST_LIO`, `h12_deploy_mjpc`, `h12_lowerbody_rl`,
-`h12_skills`, `h1_bringup`, `model_server`.
+`h12_skills`, `h12_bringup`, `model_server`.
 
 Large binary assets (meshes, XML, USD) are tracked with **Git-LFS**; run
 `git lfs install` first. Some weights are *not* in git and are fetched manually
@@ -328,7 +328,7 @@ docker/scripts/docker_run.sh ros                 # workspace shell (auto colcon 
 docker/scripts/docker_run.sh isaac
 
 # inside the ros container
-ros2 launch h1_bringup h1_sim_bringup.launch.py
+ros2 launch h12_bringup h12_sim_bringup.launch.py
 colcon build --symlink-install                   # force a rebuild
 
 # MJPC iteration (inside golem_ros)

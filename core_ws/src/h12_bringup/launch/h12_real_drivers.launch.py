@@ -14,7 +14,7 @@ def generate_launch_description():
     # humanoid-validated MID360_config.json stored under h12_slam/config
     # (Unitree onboard net 192.168.123.164 host / 192.168.123.120 lidar,
     # lidar mounted inverted -> extrinsic roll 180).
-    bringup_share = get_package_share_directory('h1_bringup')
+    bringup_share = get_package_share_directory('h12_bringup')
     mid360_config = os.path.join(
         get_package_share_directory('h12_slam'), 'config', 'MID360_config.json')
 
@@ -43,7 +43,7 @@ def generate_launch_description():
     )
 
     livox_imu_upright = Node(
-        package='h1_bringup',
+        package='h12_bringup',
         executable='livox_imu_upright',
         name='livox_imu_upright',
         output='screen',
@@ -53,7 +53,7 @@ def generate_launch_description():
 
     # Equivalent of `ros2 launch cl_realsense h12_headcamera.launch.py` — brings
     # up only the head RealSense camera and its camera->link static TF. The hand
-    # cameras start on the companion desktop (h1_real_desktop_bringup.launch.py),
+    # cameras start on the companion desktop (h12_real_desktop_bringup.launch.py),
     # so the onboard driver bringup only owns the head cam.
     realsense_share = get_package_share_directory('cl_realsense')
     realsense_cams = IncludeLaunchDescription(
@@ -63,11 +63,11 @@ def generate_launch_description():
     )
 
     # Magpie grippers, one node per side. Both nodes (ports, per-gripper finger
-    # calibration) live in h1_grippers.launch.py so the actuation-only bringup
-    # (h1_safety_grippers.launch.py) can reuse the exact same configuration.
+    # calibration) live in h12_grippers.launch.py so the actuation-only bringup
+    # (h12_safety_grippers.launch.py) can reuse the exact same configuration.
     grippers = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(bringup_share, 'launch', 'h1_grippers.launch.py')
+            os.path.join(bringup_share, 'launch', 'h12_grippers.launch.py')
         )
     )
 

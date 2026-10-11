@@ -1,6 +1,6 @@
 """Minimal, CPU-only (Apple Silicon) bringup for the H1 MuJoCo sim.
 
-A trimmed variant of h1_sim_bringup.launch.py that runs ONLY the core robot
+A trimmed variant of h12_sim_bringup.launch.py that runs ONLY the core robot
 nodes — no vision foundation models (gemini/sam/graspgen), no h12_skills, no
 Nav2/SLAM, no rviz/sliders. Those need the heavy x86-tuned ML stack that the
 slim arm64 ROS image intentionally omits.
@@ -14,7 +14,7 @@ Nodes started:
   * safety_node                (h12_safety_layer)
 
 Launch by path from the slim ROS container:
-  ros2 launch /home/code/core_ws/src/h1_bringup/launch/h1_sim_bringup_mac.launch.py
+  ros2 launch /home/code/core_ws/src/h12_bringup/launch/h12_sim_bringup_mac.launch.py
 """
 import os
 
@@ -123,7 +123,7 @@ def generate_launch_description():
     # /map from it against the sim's ground-truth /odom (odom -> pelvis). No
     # FAST-LIO needed. REQUIRES the robocasa/sim container started with
     # GOLEM_SIM_ODOM=1 (off by default) to publish that /odom; without it slam_toolbox
-    # has no odom and the map stays empty. p2l params match h1_navigation.launch.py
+    # has no odom and the map stays empty. p2l params match h12_navigation.launch.py
     # but are fed from the raw /livox/pointcloud instead of FAST-LIO's registered cloud.
     if os.environ.get('GOLEM_SLAM', '').strip().lower() in ('1', 'true', 'on'):
         nodes.append(Node(
@@ -132,7 +132,7 @@ def generate_launch_description():
             name='pointcloud_to_laserscan',
             parameters=[{
                 'target_frame': 'pelvis',
-                # Relaxed vs h1_navigation's FAST-LIO tuning for the raw sim lidar:
+                # Relaxed vs h12_navigation's FAST-LIO tuning for the raw sim lidar:
                 # a taller band (counter tops / cabinets). range_min 0.65 drops the
                 # robot's OWN legs/feet — the torso lidar looks down and returns them
                 # at ~0.4 m; mapping those puts a phantom obstacle under the robot and

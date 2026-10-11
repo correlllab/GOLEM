@@ -24,7 +24,7 @@ def generate_launch_description():
     wall_time = {'use_sim_time': 'false'}
 
     return LaunchDescription([
-        _include('h1_bringup', 'h1_real_drivers.launch.py', wall_time),
-        _include('h1_bringup', 'h1_state.launch.py', wall_time),
-        _include('h12_slam', 'h1_navigation.launch.py', wall_time),
+        _include('h12_bringup', 'h12_real_drivers.launch.py', wall_time),
+        _include('h12_bringup', 'h12_state.launch.py', wall_time),
+        _include('h12_slam', 'h12_navigation.launch.py', wall_time),
     ])

@@ -11,7 +11,7 @@ import types
 
 import yaml
 
-from h1_bringup.livox_imu_upright import load_rotation, rotate
+from h12_bringup.livox_imu_upright import load_rotation, rotate
 
 PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = os.path.join(PKG, 'config')
@@ -57,7 +57,7 @@ def test_one_slam_config_set():
 
 
 def test_real_drivers_route_imu_through_upright_node():
-    path = os.path.join(PKG, 'launch', 'h1_real_drivers.launch.py')
+    path = os.path.join(PKG, 'launch', 'h12_real_drivers.launch.py')
     with open(path) as f:
         src = f.read()
     assert "('/livox/imu', '/livox/imu_raw')" in src

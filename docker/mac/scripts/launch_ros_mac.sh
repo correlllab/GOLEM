@@ -37,7 +37,7 @@ RVIZ_DISPLAY=:100
 RVIZ_VNC_PORT=5901
 RVIZ_NOVNC_PORT=6081
 RVIZ_GEOMETRY="${RVIZ_GEOMETRY:-1600x900x24}"
-# h1_sim.rviz ships in the h1_bringup package (rviz/). Resolved from the installed
+# h1_sim.rviz ships in the h12_bringup package (rviz/). Resolved from the installed
 # share dir inside start_rviz_stack (after the workspace is built + sourced).
 RVIZ_CONFIG="${RVIZ_CONFIG:-}"
 
@@ -70,8 +70,8 @@ start_rviz_stack() {
 
     export LIBGL_ALWAYS_SOFTWARE=1   # force llvmpipe; no GPU under Colima
     if [ -z "$RVIZ_CONFIG" ]; then
-        _pfx="$(ros2 pkg prefix h1_bringup 2>/dev/null)"
-        [ -n "$_pfx" ] && RVIZ_CONFIG="$_pfx/share/h1_bringup/rviz/h1_sim.rviz"
+        _pfx="$(ros2 pkg prefix h12_bringup 2>/dev/null)"
+        [ -n "$_pfx" ] && RVIZ_CONFIG="$_pfx/share/h12_bringup/rviz/h1_sim.rviz"
     fi
     local cfg_arg=()
     [ -f "$RVIZ_CONFIG" ] && cfg_arg=(-d "$RVIZ_CONFIG")
@@ -107,14 +107,14 @@ BUILD_BASE=/opt/core_ws/build
 INSTALL_BASE=/opt/core_ws/install
 cd "$WS"
 
-# The packages the minimal Mac bringup needs. h1_bringup (ament_python, just
-# launch/config/rviz files) is included so `ros2 launch h1_bringup <file>`
+# The packages the minimal Mac bringup needs. h12_bringup (ament_python, just
+# launch/config/rviz files) is included so `ros2 launch h12_bringup <file>`
 # resolves with tab completion — but colcon-ros refuses to build it until its
 # in-workspace exec_depends have a package.sh in the install space, and we
 # deliberately don't build the heavy ones (estop, livox_ros_driver2, fast_lio,
 # model_server — the LIO/ML/driver stack). Empty package.sh stubs (below) satisfy
 # that check; they carry no ament index marker so they never show up in
-# `ros2 pkg list`. NOTE only h1_sim_bringup_mac.launch.py runs here — the other
+# `ros2 pkg list`. NOTE only h12_sim_bringup_mac.launch.py runs here — the other
 # launch files exec-launch the omitted packages (nav2, FAST_LIO, model_server...).
 # unitree_hg + h12_lowerbody_rl provide the optional lower-body stack
 # (walk/FAME policies). They build cheaply and are only *launched* when
@@ -123,7 +123,7 @@ cd "$WS"
 # ros-humble-rosidl-generator-dds-idl and torch, both in the image. The walk
 # policy is stable only when handed over from a settled FAME stance, which is
 # what GOLEM_LOWERBODY=switch does (see docs/MACOS.md).
-PKGS="custom_ros_messages magpie_msgs h12_ros2_model h12_ros2_controller h12_safety_layer h12_slam h1_bringup unitree_hg h12_lowerbody_rl"
+PKGS="custom_ros_messages magpie_msgs h12_ros2_model h12_ros2_controller h12_safety_layer h12_slam h12_bringup unitree_hg h12_lowerbody_rl"
 H1_BRINGUP_STUB_DEPS="estop livox_ros_driver2 fast_lio model_server"
 
 for _dep in $H1_BRINGUP_STUB_DEPS; do
@@ -161,4 +161,4 @@ if [ "$#" -gt 0 ]; then
 fi
 
 echo "[launch_ros_mac] launching minimal bringup (ROS_DOMAIN_ID=$ROS_DOMAIN_ID)"
-exec ros2 launch "$WS/src/h1_bringup/launch/h1_sim_bringup_mac.launch.py"
+exec ros2 launch "$WS/src/h12_bringup/launch/h12_sim_bringup_mac.launch.py"

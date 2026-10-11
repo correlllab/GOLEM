@@ -217,7 +217,7 @@ WORKDIR /home/code/core_ws
 CMD ["/home/code/h12_sim_scripts/launch_ros.sh"]
 
 # -----------------------------------------------------------------------------
-# Tkinter — needed by h1_bringup's slider_debugger (Tk GUI for live wrist /
+# Tkinter — needed by h12_bringup's slider_debugger (Tk GUI for live wrist /
 # gripper control). Appended at the end so iterating on this layer does not
 # bust the heavy apt / pip / SAM / robocasa layers above.
 # -----------------------------------------------------------------------------
@@ -226,7 +226,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
-# Nav2 + SLAM + rqt + dev/debug ROS packages used by h1_navigation.launch.py
+# Nav2 + SLAM + rqt + dev/debug ROS packages used by h12_navigation.launch.py
 # and day-to-day H1 debugging. Appended at the end (same reasoning as the
 # python3-tk block above) so iterating on this list does not bust the heavy
 # apt / pip / SAM layers earlier in the file.
@@ -422,7 +422,7 @@ RUN mkdir -p "$GRASPGENX_CHECKPOINT_DIR" "$GRASPGENX_GRIPPER_CFG_DIR"
 #    libc++, exactly as CI does — so libc++-*-dev are deliberately NOT installed:
 #    libc++abi-13-dev pulls libunwind-13-dev, which Conflicts with libunwind-dev
 #    and would make apt silently REMOVE libceres-dev -> ros-humble-navigation2 /
-#    nav2-bringup / slam-toolbox, breaking h1_navigation.launch.py).
+#    nav2-bringup / slam-toolbox, breaking h12_navigation.launch.py).
 #    llvm-13 + lld-13: MuJoCo builds its deps (ccd, qhull, …) with LTO/IPO, so
 #    CMake archives/links them with clang's `llvm-ar`/`llvm-ranlib`/`ld.lld`
 #    rather than GNU binutils. The bare `clang-13` package doesn't ship those —
@@ -571,7 +571,7 @@ assert b.exists(), f'agent_server binary missing at {b}'; \
 print('MJPC OK — mujoco', mujoco.__version__, '| agent_server:', b)"
 
 # -----------------------------------------------------------------------------
-# Intel RealSense ROS driver — h1_real_desktop_bringup.launch.py now includes
+# Intel RealSense ROS driver — h12_real_desktop_bringup.launch.py now includes
 # cl_realsense's h12_hand_cameras.launch.py (both wrist cams' USB runs on the
 # companion desktop), which launches realsense2_camera_node. The apt package
 # pulls librealsense2 with it. image-transport-plugins supplies the

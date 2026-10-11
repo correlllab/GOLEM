@@ -1,4 +1,4 @@
-# MJPC lower-body deploy — RoboCasa SIM params (h1_sim_bringup.launch.py).
+# MJPC lower-body deploy — RoboCasa SIM params (h12_sim_bringup.launch.py).
 # Controller + estimator are the fork's deploy core
 # and RW-EKF base estimator behind the h12_deploy_mjpc shims; these params
 # mirror the fork's surviving CLI flags 1:1. Everything settled (ctrl 200 Hz,

@@ -3,7 +3,7 @@ from glob import glob
 
 from setuptools import find_packages, setup
 
-package_name = 'h1_bringup'
+package_name = 'h12_bringup'
 
 setup(
     name=package_name,
@@ -32,7 +32,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'livox_imu_upright = h1_bringup.livox_imu_upright:main',
+            'livox_imu_upright = h12_bringup.livox_imu_upright:main',
         ],
     },
 )

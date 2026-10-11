@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One loco-manipulation game run in RoboCasa: locomanipulationgame_sim_bringup.launch.py in a disposable ROS
+# One loco-manipulation game run in RoboCasa: lmg_sim_bringup.launch.py in a disposable ROS
 # container, the canonical RoboCasa launcher with record_simulator.py as its entry point in a disposable sim
 # container, then a rendered video. Artifacts go to tests/results/locomanipulation_game-<name>-<time>/.
 #
@@ -53,7 +53,7 @@ cleanup() {
 }
 trap cleanup EXIT
 tests_mount=(-v "$ROOT/tests/locomanipulation_game:/home/code/tests/locomanipulation_game:ro")
-launch="ros2 launch h1_bringup locomanipulationgame_sim_bringup.launch.py commander_mode:=$MODE commander_duration_s:=$SECONDS_SIM commander_log:=/results/commander.jsonl ${EXTRA_ARGS[*]}"
+launch="ros2 launch h12_bringup lmg_sim_bringup.launch.py commander_mode:=$MODE commander_duration_s:=$SECONDS_SIM commander_log:=/results/commander.jsonl ${EXTRA_ARGS[*]}"
 "${COMPOSE[@]}" run -d --no-deps --name "$ros" "${tests_mount[@]}" -v "$result/ros:/results" --entrypoint bash ros \
     -c "/home/code/h12_sim_scripts/launch_ros.sh bash -c 'echo LMG_BUILD_READY; python3 /home/code/h12_sim_scripts/wait_for_sim.py && exec $launch'" >/dev/null
 for ((attempt=0; attempt<1800; attempt++)); do

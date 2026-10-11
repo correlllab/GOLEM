@@ -219,7 +219,7 @@ game commander so you drive it yourself (see
 `locomotion_game_deploy/README.md` for all launch arguments):
 
 ```bash
-ros2 launch h1_bringup locomanipulationgame_sim_bringup.launch.py use_commander:=false   # add policy:=marl_ik for golemlim120k
+ros2 launch h12_bringup lmg_sim_bringup.launch.py use_commander:=false   # add policy:=marl_ik for golemlim120k
 ```
 
 Walk:

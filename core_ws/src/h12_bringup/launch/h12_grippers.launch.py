@@ -4,9 +4,9 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     # Magpie grippers, one node per side. Factored out of
-    # h1_real_drivers.launch.py so the calibration constants live in exactly one
-    # place: h1_real_drivers (full onboard driver set) and
-    # h1_safety_grippers (actuation-only bringup) both include this file.
+    # h12_real_drivers.launch.py so the calibration constants live in exactly one
+    # place: h12_real_drivers (full onboard driver set) and
+    # h12_safety_grippers (actuation-only bringup) both include this file.
     #
     # The gripper_node has no built-in left/right concept (node name,
     # gripper/state topic and services are all relative), so each side is

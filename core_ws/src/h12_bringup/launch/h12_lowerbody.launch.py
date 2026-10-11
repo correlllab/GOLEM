@@ -16,7 +16,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
-    config_dir = os.path.join(get_package_share_directory('h1_bringup'), 'config')
+    config_dir = os.path.join(get_package_share_directory('h12_bringup'), 'config')
 
     args = [
         DeclareLaunchArgument(

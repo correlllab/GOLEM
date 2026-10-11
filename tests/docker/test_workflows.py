@@ -20,7 +20,7 @@ class Workflows(unittest.TestCase):
                      'CL_isaaclab_sim/sim_main.py', 'h1_robocasa/h12_mujoco.py',
                      'core_ws/src/magpie_msgs/package.xml', 'core_ws/src/custom_ros_messages/package.xml',
                      'core_ws/src/livox_ros_driver2/package_ROS2.xml', 'core_ws/cyclonedds.xml',
-                     'core_ws/src/h1_bringup/package.xml', 'mujoco_mpc/CMakeLists.txt'):
+                     'core_ws/src/h12_bringup/package.xml', 'mujoco_mpc/CMakeLists.txt'):
             p = self.root / name
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text('fixture')

@@ -9,8 +9,8 @@ from launch_ros.actions import Node
 
 # Companion-desktop bringup: hand cameras, model servers + skills, lower-body
 # control, and rviz. The state publishers, safety layer and frame_task_server
-# run on the onboard PC (h1_real_robot_bringup.launch.py). ROS_DOMAIN_ID must
-# be exported in the launching shell (see h1_control.launch.py).
+# run on the onboard PC (h12_real_robot_bringup.launch.py). ROS_DOMAIN_ID must
+# be exported in the launching shell (see h12_control.launch.py).
 
 
 def _include(package, launch_file, launch_arguments=None):
@@ -22,7 +22,7 @@ def _include(package, launch_file, launch_arguments=None):
 
 
 def generate_launch_description():
-    bringup_share = get_package_share_directory('h1_bringup')
+    bringup_share = get_package_share_directory('h12_bringup')
     default_rviz = os.path.join(bringup_share, 'rviz', 'sim.rviz')
 
     # Real robot runs on wall-clock time (no simulator /clock).
@@ -34,7 +34,7 @@ def generate_launch_description():
         # auto-commands the legs on the real robot.
         DeclareLaunchArgument('start_position_verified', default_value='false'),
         # Which RL policy drives the legs once start_position_verified:=true
-        # (see h1_lowerbody.launch.py); the RL node additionally holds at the
+        # (see h12_lowerbody.launch.py); the RL node additionally holds at the
         # pre-pose crouch until the operator confirms:
         #   ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
         DeclareLaunchArgument('lowerbody', default_value='almi'),
@@ -48,10 +48,10 @@ def generate_launch_description():
         # Both hand/wrist RealSense cameras and their camera->link static TFs.
         # These live on the companion desktop (the wrists' USB runs here), while
         # the head camera comes up with the onboard driver bringup
-        # (h1_real_drivers.launch.py).
+        # (h12_real_drivers.launch.py).
         _include('cl_realsense', 'h12_hand_cameras.launch.py'),
 
-        _include('h1_bringup', 'h1_models.launch.py', {
+        _include('h12_bringup', 'h12_models.launch.py', {
             **wall_time,
             'use_yolo': 'true',
             'use_skills': LaunchConfiguration('use_skills'),
@@ -60,7 +60,7 @@ def generate_launch_description():
             'model_clear_logs': LaunchConfiguration('model_clear_logs'),
             'record_runs': LaunchConfiguration('record_runs'),
         }),
-        _include('h1_bringup', 'h1_lowerbody.launch.py', {
+        _include('h12_bringup', 'h12_lowerbody.launch.py', {
             **wall_time,
             'start_position_verified': LaunchConfiguration('start_position_verified'),
             'lowerbody': LaunchConfiguration('lowerbody'),
@@ -93,7 +93,7 @@ def generate_launch_description():
         #     period=1.0,
         #     actions=[
         #         Node(
-        #             package='h1_bringup',
+        #             package='h12_bringup',
         #             executable='slider_debugger.py',
         #             name='slider_debugger',
         #             output='screen',

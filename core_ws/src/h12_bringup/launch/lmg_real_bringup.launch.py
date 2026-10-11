@@ -3,14 +3,16 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
 # Loco-manipulation game, real robot, onboard PC. Run it INSTEAD of
-# h1_real_robot_bringup.launch.py, never beside it: it starts the same drivers,
-# state publishers, estop and safety layer, but without frame_task_server,
+# h12_real_robot_bringup.launch.py, never beside it: it starts the same drivers,
+# state publishers, estop, safety layer and h12_slam navigation stack
+# (use_slam), but without frame_task_server,
 # because marl_deploy_node owns both safety channels. Keep the lower-body RL
-# and MJPC controllers (h1_real_desktop_bringup.launch.py's leg control) off.
+# and MJPC controllers (h12_real_desktop_bringup.launch.py's leg control) off.
 #
 # Nothing commands the robot until both operator gates pass:
 #   1. start_position_verified:=true starts marl_deploy_node (and the commander,
@@ -22,18 +24,19 @@ from launch.substitutions import LaunchConfiguration
 # reaches on /marl_deploy_node/arm_goal from the operator.
 #
 # ROS_DOMAIN_ID must be exported in the launching shell (0 on the real robot;
-# see h1_control.launch.py). Assets resolve as in h1_state.launch.py.
+# see h12_control.launch.py). Assets resolve as in h12_state.launch.py.
 ASSETS_DIR = os.environ.get('GOLEM_ASSETS_DIR', '/home/unitree/GOLEM/CL_Assets')
 
-GAME_ARGS = ('start_position_verified', 'policy', 'policy_mode', 'use_slam', 'use_commander',
+GAME_ARGS = ('start_position_verified', 'policy', 'policy_mode', 'use_commander',
              'commander_mode', 'goals', 'commander_seed', 'commander_duration_s', 'commander_log')
 
 
-def _include(package, launch_file, launch_arguments):
+def _include(package, launch_file, launch_arguments, condition=None):
     return IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory(package), 'launch', launch_file)),
         launch_arguments=launch_arguments.items(),
+        condition=condition,
     )
 
 
@@ -54,15 +57,15 @@ def generate_launch_description():
         DeclareLaunchArgument('commander_duration_s', default_value='0.0'),
         DeclareLaunchArgument('commander_log', default_value=''),
 
-        _include('h1_bringup', 'h1_real_drivers.launch.py', wall_time),
-        _include('h1_bringup', 'h1_state.launch.py', wall_time),
-        _include('h1_bringup', 'h1_control.launch.py', {
+        _include('h12_bringup', 'h12_real_drivers.launch.py', wall_time),
+        _include('h12_bringup', 'h12_state.launch.py', wall_time),
+        _include('h12_bringup', 'h12_control.launch.py', {
             **wall_time,
             'use_estop': 'true',
             'use_frame_task': 'false',
             'safety_config': LaunchConfiguration('safety_config'),
         }),
-        _include('h1_bringup', 'h1_locomanipulationgame.launch.py', {
+        _include('h12_bringup', 'h12_locomanipulationgame.launch.py', {
             **wall_time,
             **{name: LaunchConfiguration(name) for name in GAME_ARGS},
             'urdf_path': os.path.join(ASSETS_DIR, 'ros_assets', 'h1_2_magpie.urdf'),
@@ -70,4 +73,6 @@ def generate_launch_description():
             'engage_wait_for_confirm': 'true',
             'disable_elastic_band': 'false',
         }),
+        _include('h12_slam', 'h12_navigation.launch.py', wall_time,
+                 condition=IfCondition(LaunchConfiguration('use_slam'))),
     ])

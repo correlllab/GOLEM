@@ -11,13 +11,13 @@ from launch.substitutions import LaunchConfiguration
 # No lidar, no cameras, no state publishers, no arm IK -- just the pieces that
 # have to be alive for a command to reach a motor safely. Use it when working on
 # gripper/low-level actuation without paying for the full driver stack; the full
-# onboard bringup (h1_real_robot_bringup.launch.py) is still the normal path.
+# onboard bringup (h12_real_robot_bringup.launch.py) is still the normal path.
 # ROS_DOMAIN_ID must be exported in the launching shell (0 on the real robot;
-# see h1_control.launch.py).
+# see h12_control.launch.py).
 
 
 def generate_launch_description():
-    bringup_share = get_package_share_directory('h1_bringup')
+    bringup_share = get_package_share_directory('h12_bringup')
 
     # Same default config as the full real bringup; overridable so a session
     # can tighten/relax limits without editing launch.
@@ -29,7 +29,7 @@ def generate_launch_description():
 
     control = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(bringup_share, 'launch', 'h1_control.launch.py')
+            os.path.join(bringup_share, 'launch', 'h12_control.launch.py')
         ),
         launch_arguments={
             'use_sim_time': 'false',
@@ -41,7 +41,7 @@ def generate_launch_description():
 
     grippers = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(bringup_share, 'launch', 'h1_grippers.launch.py')
+            os.path.join(bringup_share, 'launch', 'h12_grippers.launch.py')
         ),
     )
 

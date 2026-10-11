@@ -6,7 +6,7 @@
 # The identity extrinsic_R requires /livox/imu in the same upright frame as the
 # points. The sims publish both from co-located upright sites. On the real robot
 # the stock livox_ros_driver2 rotates only the points by MID360_config.json's
-# extrinsic (roll 180, the lidar is mounted inverted), so h1_real_drivers.launch.py
+# extrinsic (roll 180, the lidar is mounted inverted), so h12_real_drivers.launch.py
 # routes the IMU through livox_imu_upright. FAST-LIO seeds camera_init from the
 # IMU attitude at startup, so an inverted IMU puts the whole map upside down.
 /**:

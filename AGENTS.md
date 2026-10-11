@@ -89,11 +89,11 @@ package `fast_lio`; dir `unitree_ros2` is not itself a package (it nests
 
 | Directory | Role | What it does | Key entry points |
 |---|---|---|---|
-| `h1_bringup` | **bringup** | Launch-only package that starts the whole robot (sim or real). See §6. | top-level + building-block launch files, `config/*.yaml` |
+| `h12_bringup` | **bringup** | Launch-only package that starts the whole robot (sim or real). See §6. | top-level + building-block launch files, `config/*.yaml` |
 | `h12_ros2_controller` | controller (upper body) | Pinocchio-based arm IK: `/frame_task` + `/dual_arm` action servers, joint state publisher, hand controller | `frame_task_server`, `dual_arm_server`, `joint_state_publisher`, `hand_controller_node` |
 | `h12_deploy_mjpc` | controller (lower body, MPC) | MJPC balance/locomotion controller (C++ cores from the `mujoco_mpc` fork, run as separate processes) + RW-EKF base estimator | `mjpc_lowerbody_core`, `controller_launcher.py`, `estimator_node.py` |
 | `h12_lowerbody_rl` | controller (lower body, RL) | TorchScript walking + FAME RMA stand/squat policies; switchable stand↔walk controller; consumes `/lowstate` + `/cmd_vel`, emits 12-joint PD setpoints | `walking_node`, `fame_node`, `lowerbody_controller_node` |
-| `h12_slam` | SLAM + navigation | The shared nav launch (FAST-LIO → pointcloud_to_laserscan → slam_toolbox → nav2) and its configs: Livox MID360 driver config (`MID360_config.json`, real robot, read by `h1_real_drivers.launch.py`), FAST-LIO (`mid360.yaml`), slam_toolbox (`slam_toolbox_h1.yaml`), Nav2 (`nav2_config.yaml`; mac bringup: `nav2_config_mac.yaml`) | `launch/h1_navigation.launch.py`, `config/` |
+| `h12_slam` | SLAM + navigation | The shared nav launch (FAST-LIO → pointcloud_to_laserscan → slam_toolbox → nav2) and its configs: Livox MID360 driver config (`MID360_config.json`, real robot, read by `h12_real_drivers.launch.py`), FAST-LIO (`mid360.yaml`), slam_toolbox (`slam_toolbox_h1.yaml`), Nav2 (`nav2_config.yaml`; mac bringup: `nav2_config_mac.yaml`) | `launch/h12_navigation.launch.py`, `config/` |
 | `h12_safety_layer` | safety | Merges upper/lower command channels into `/lowcmd` with limit checks (YAML-configured) | `safety_node` |
 | `h12_skills` | **skills** | Action servers for the 12 `/skill/*` atomic skills an LLM can call (frontier exploration lives here). See §7. | `skills` (SkillsNode) |
 | `model_server` | model server | ROS service servers wrapping ML models: Gemini VLM, SAM3 segmentation, GraspGenX grasp generation, YOLO detection | `gemini_server`, `sam_server`, `graspgen_server`, `yolo_server` |
@@ -118,7 +118,7 @@ separate git submodules with their own history. Rules of thumb:
 
 - Confine a change to the package it belongs to. If a task seems to require
   edits across packages, stop and coordinate first.
-- Shared infra — `h1_bringup`, `custom_ros_messages`/`magpie_msgs`,
+- Shared infra — `h12_bringup`, `custom_ros_messages`/`magpie_msgs`,
   `docker/`, the safety layer, the simulators — affects everyone. Treat
   changes there as interface changes: minimal, deliberate, announced.
 - Submodule packages must be committed and pushed in the submodule repo, then
@@ -126,39 +126,39 @@ separate git submodules with their own history. Rules of thumb:
 
 ## 6. Bringup: how the robot starts
 
-`h1_bringup` is launch-only. Sim vs real is **separate top-level launch files**
+`h12_bringup` is launch-only. Sim vs real is **separate top-level launch files**
 (there is no `sim:=true` arg); each one only includes the shared building blocks
 below and sets `use_sim_time` plus its platform's arguments.
 
 | Top-level launch file | Scenario | Includes |
 |---|---|---|
-| `h1_sim_bringup.launch.py` | **x86 sim** (`use_sim_time=true`), plus the camera optical-frame static TF and rviz (`use_rviz`) | state, control (sim safety configs, no stagger), lowerbody (`lowerbody_sim.yaml`), models (`use_skills`), navigation (`use_nav`) |
-| `h1_sim_bringup_mac.launch.py` | **mac sim** — standalone, includes none of the blocks: state publishers, `frame_task_server`, `safety_node`; lower body/SLAM/nav2 gated by `GOLEM_*` env vars, not launch args | — |
-| `h1_real_robot_bringup.launch.py` | **real robot, onboard PC** (native, `ROS_DOMAIN_ID=0`) | real_drivers, navigation, state, control (`use_estop:=true`) |
-| `h1_real_desktop_bringup.launch.py` | **real: companion x86 desktop** — hand cameras and rviz. Leg control is interlocked behind `start_position_verified:=true` (default **false**) | models (`use_yolo:=true`), lowerbody (`lowerbody_real.yaml` + MJPC estimator) |
-| `h1_safety_grippers.launch.py` | real: actuation-only debug bringup | control (estop + safety, no IK), grippers |
-| `h1_real_slam.launch.py` | real: sensors + SLAM/navigation only, on wall time (no estop, safety or IK) | real_drivers, state, navigation |
+| `h12_sim_bringup.launch.py` | **x86 sim** (`use_sim_time=true`), plus the camera optical-frame static TF and rviz (`use_rviz`) | state, control (sim safety configs, no stagger), lowerbody (`lowerbody_sim.yaml`), models (`use_skills`), navigation (`use_nav`) |
+| `h12_sim_bringup_mac.launch.py` | **mac sim** — standalone, includes none of the blocks: state publishers, `frame_task_server`, `safety_node`; lower body/SLAM/nav2 gated by `GOLEM_*` env vars, not launch args | — |
+| `h12_real_robot_bringup.launch.py` | **real robot, onboard PC** (native, `ROS_DOMAIN_ID=0`) | real_drivers, navigation, state, control (`use_estop:=true`) |
+| `h12_real_desktop_bringup.launch.py` | **real: companion x86 desktop** — hand cameras and rviz. Leg control is interlocked behind `start_position_verified:=true` (default **false**) | models (`use_yolo:=true`), lowerbody (`lowerbody_real.yaml` + MJPC estimator) |
+| `h12_safety_grippers.launch.py` | real: actuation-only debug bringup | control (estop + safety, no IK), grippers |
+| `h12_real_slam.launch.py` | real: sensors + SLAM/navigation only, on wall time (no estop, safety or IK) | real_drivers, state, navigation |
 
 | Building block | Starts |
 |---|---|
-| `h1_state.launch.py` | `joint_state_publisher` + `robot_state_publisher` (`urdf_file` arg) |
-| `h1_control.launch.py` | [`estop_node`] → `safety_node` → `frame_task_server`, staggered by `safety_delay` / `frame_task_delay` |
-| `h1_lowerbody.launch.py` | RL `lowerbody_controller_node` (`lowerbody:=`, params from `lowerbody_params`) and optional MJPC `estimator_node`, both behind `start_position_verified` |
-| `h1_models.launch.py` | gemini + sam servers, [yolo], graspgen + `h12_skills` (`use_skills`) |
-| `h1_real_drivers.launch.py` | Livox MID360 (+ `livox_imu_upright`, which rotates `/livox/imu_raw` into the point frame — the stock driver rotates only points), RealSense head camera, `h1_grippers.launch.py` (left+right `gripper_node`) |
-| `h12_slam/launch/h1_navigation.launch.py` | shared nav stack (FAST-LIO → pointcloud_to_laserscan → slam_toolbox → nav2) |
+| `h12_state.launch.py` | `joint_state_publisher` + `robot_state_publisher` (`urdf_file` arg) |
+| `h12_control.launch.py` | [`estop_node`] → `safety_node` → `frame_task_server`, staggered by `safety_delay` / `frame_task_delay` |
+| `h12_lowerbody.launch.py` | RL `lowerbody_controller_node` (`lowerbody:=`, params from `lowerbody_params`) and optional MJPC `estimator_node`, both behind `start_position_verified` |
+| `h12_models.launch.py` | gemini + sam servers, [yolo], graspgen + `h12_skills` (`use_skills`) |
+| `h12_real_drivers.launch.py` | Livox MID360 (+ `livox_imu_upright`, which rotates `/livox/imu_raw` into the point frame — the stock driver rotates only points), RealSense head camera, `h12_grippers.launch.py` (left+right `gripper_node`) |
+| `h12_slam/launch/h12_navigation.launch.py` | shared nav stack (FAST-LIO → pointcloud_to_laserscan → slam_toolbox → nav2) |
 
 Humble includes are not scoped: an argument passed to one include stays set
 for the includes after it, so pass consistent values (all four blocks share
 `use_sim_time`).
 
 **Wiring a new package into bringup:** add it as `exec_depend` in
-`h1_bringup/package.xml`, add a `launch_ros.actions.Node(...)` entry to the
-relevant launch file (put node params in `h1_bringup/config/<file>.yaml` — the
+`h12_bringup/package.xml`, add a `launch_ros.actions.Node(...)` entry to the
+relevant launch file (put node params in `h12_bringup/config/<file>.yaml` — the
 top-level YAML key must match the node `name`), and gate optional nodes with
 `IfCondition(LaunchConfiguration(...))`. Add the node to the building block it
 belongs to (or a new block included by the top-level files), not to a top-level
-file; see `h1_lowerbody.launch.py` as the model. **Mac only:** also add the package to
+file; see `h12_lowerbody.launch.py` as the model. **Mac only:** also add the package to
 the `PKGS` list in `docker/mac/scripts/launch_ros_mac.sh` or the slim image
 won't build it.
 
@@ -334,7 +334,7 @@ docker/scripts/docker_run.sh robocasa            # or: isaac; add --headless if 
 
 # Terminal 2 — ROS workspace (auto colcon-builds core_ws, drops to a shell)
 docker/scripts/docker_run.sh ros
-ros2 launch h1_bringup h1_sim_bringup.launch.py   # manual step — the container does NOT launch it
+ros2 launch h12_bringup h12_sim_bringup.launch.py   # manual step — the container does NOT launch it
 # variants: use_skills:=false use_rviz:=false use_nav:=false
 
 # Terminal 3 — drive skills: attach to the running ROS container
@@ -359,7 +359,7 @@ source /home/code/h12_sim_scripts/robot_cli.sh   # rob_pose, rob_grip, rob_stand
 ```
 
 The mac `ros` container auto-runs
-`ros2 launch /home/code/core_ws/src/h1_bringup/launch/h1_sim_bringup_mac.launch.py`
+`ros2 launch /home/code/core_ws/src/h12_bringup/launch/h12_sim_bringup_mac.launch.py`
 (launched by path; only skills built on mac are available — no `h12_skills`,
 `model_server`, or nav unless `GOLEM_SLAM/GOLEM_NAV2` are set).
 
@@ -367,8 +367,8 @@ The mac `ros` container auto-runs
 
 Onboard PC, native (no docker): `export ROS_DOMAIN_ID=0`, source
 `core_ws/install/setup.bash`, then
-`ros2 launch h1_bringup h1_real_robot_bringup.launch.py`. Companion desktop:
-`ros2 launch h1_bringup h1_real_desktop_bringup.launch.py`
+`ros2 launch h12_bringup h12_real_robot_bringup.launch.py`. Companion desktop:
+`ros2 launch h12_bringup h12_real_desktop_bringup.launch.py`
 (`start_position_verified:=true` only after physically verifying the robot's
 pose — it gates leg commands).
 

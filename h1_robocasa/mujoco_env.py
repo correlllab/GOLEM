@@ -13,27 +13,36 @@ class ElasticBand:
     def __init__(self, point=np.array([0, 0, 3]), length=0, stiffness=200, damping=100):
         self.point = point.astype(np.float64)
         self.length = length
-        self.stiffness = stiffness
-        self.damping = damping
+        self.stiffness = stiffness  # N/m
+        self.damping = damping      # N*s/m, on the full linear velocity
         self.enabled = True
 
     def evaluate_force(self, x, v):
-        # displacement / direction from the attached body to the anchor
-        displacement = np.linalg.norm(x - self.point)
-        direction = (x - self.point) / displacement
-        # tangential velocity along the band, for damping
-        v_tan = np.dot(v, direction)
-        # spring-damper
-        return (-self.stiffness * (displacement - self.length) - self.damping * v_tan) * direction
+        """World-frame force on the attached body at position x with linear velocity v.
+
+        Damping acts on the whole velocity, not just its component along the band:
+        with length=0 the spring pulls in every direction, so radial-only damping
+        leaves lateral/fore-aft swing undamped.
+        """
+        offset = x - self.point
+        displacement = np.linalg.norm(offset)
+        if displacement > 1e-9:
+            spring = -self.stiffness * (displacement - self.length) * offset / displacement
+        else:
+            spring = np.zeros(3)
+        return spring - self.damping * v
 
     def toggle(self) -> bool:
         self.enabled = not self.enabled
         print(f"Elastic band {'enabled' if self.enabled else 'disabled'}")
         return self.enabled
 
+    # GLFW_KEY_SPACE; mujoco.viewer passes raw GLFW key codes, and the
+    # mujoco.glfw submodule isn't importable as an attribute in mujoco 3.3.
+    _KEY_SPACE = 32
+
     def key_callback(self, key):
-        glfw = mujoco.glfw.glfw
-        if key == glfw.KEY_SPACE:
+        if key == self._KEY_SPACE:
             self.toggle()
 
     def print_instructions(self):

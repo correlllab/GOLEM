@@ -2,12 +2,19 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 
 
 # Real robot, onboard PC. ROS_DOMAIN_ID must be exported in the launching shell
 # (0 on the real robot; see h12_control.launch.py).
+#
+# Leg control (h12_lowerbody.launch.py) runs here, behind two operator gates:
+#   1. start_position_verified:=true starts the lowerbody:= RL policy, which
+#      ramps the legs to the policy's pre-pose crouch and holds there.
+#   2. ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
+#      engages the policy.
 
 
 def _include(package, launch_file, launch_arguments):
@@ -22,9 +29,24 @@ def generate_launch_description():
     # Real robot runs on wall-clock time (no simulator /clock).
     wall_time = {'use_sim_time': 'false'}
 
+    bringup_share = get_package_share_directory('h12_bringup')
+
     return LaunchDescription([
+        # Defaults to false so a bare launch never commands the legs.
+        DeclareLaunchArgument('start_position_verified', default_value='false'),
+        DeclareLaunchArgument('lowerbody', default_value='almi'),
+        DeclareLaunchArgument('lowerbody_auto_switch', default_value='false'),
+
         _include('h12_bringup', 'h12_real_drivers.launch.py', wall_time),
         _include('h12_slam', 'h12_navigation.launch.py', wall_time),
         _include('h12_bringup', 'h12_state.launch.py', wall_time),
         _include('h12_bringup', 'h12_control.launch.py', {**wall_time, 'use_estop': 'true'}),
+        _include('h12_bringup', 'h12_lowerbody.launch.py', {
+            **wall_time,
+            'start_position_verified': LaunchConfiguration('start_position_verified'),
+            'lowerbody': LaunchConfiguration('lowerbody'),
+            'lowerbody_auto_switch': LaunchConfiguration('lowerbody_auto_switch'),
+            'lowerbody_params': os.path.join(bringup_share, 'config', 'lowerbody_real.yaml'),
+            'use_estimator': 'false',
+        }),
     ])

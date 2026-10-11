@@ -134,8 +134,8 @@ below and sets `use_sim_time` plus its platform's arguments.
 |---|---|---|
 | `h12_sim_bringup.launch.py` | **x86 sim** (`use_sim_time=true`), plus the camera optical-frame static TF and rviz (`use_rviz`) | state, control (sim safety configs, no stagger), lowerbody (`lowerbody_sim.yaml`), models (`use_skills`), navigation (`use_nav`) |
 | `h12_sim_bringup_mac.launch.py` | **mac sim** — standalone, includes none of the blocks: state publishers, `frame_task_server`, `safety_node`; lower body/SLAM/nav2 gated by `GOLEM_*` env vars, not launch args | — |
-| `h12_real_robot_bringup.launch.py` | **real robot, onboard PC** (native, `ROS_DOMAIN_ID=0`) | real_drivers, navigation, state, control (`use_estop:=true`) |
-| `h12_real_desktop_bringup.launch.py` | **real: companion x86 desktop** — hand cameras and rviz. Leg control is interlocked behind `start_position_verified:=true` (default **false**) | models (`use_yolo:=true`), lowerbody (`lowerbody_real.yaml` + MJPC estimator) |
+| `h12_real_robot_bringup.launch.py` | **real robot, onboard PC** (native, `ROS_DOMAIN_ID=0`) | real_drivers, navigation, state, control (`use_estop:=true`), lowerbody (`lowerbody_real.yaml`, no estimator). Leg control is interlocked behind `start_position_verified:=true` (default **false**) |
+| `h12_real_desktop_bringup.launch.py` | **real: companion x86 desktop** — rviz, plus the hand cameras with `use_hand_cameras:=true` (default **false**) | models (`use_yolo:=true`) |
 | `h12_safety_grippers.launch.py` | real: actuation-only debug bringup | control (estop + safety, no IK), grippers |
 | `h12_real_slam.launch.py` | real: sensors + SLAM/navigation only, on wall time (no estop, safety or IK) | real_drivers, state, navigation |
 | `lmg_sim_bringup.launch.py` | **x86 sim**, loco-manipulation game: the `lmg_deploy` MARL policy owns all 27 joints, commander on, no operator confirm. Refuses an unset or 0 `ROS_DOMAIN_ID` | state, control (no IK, no stagger), locomanipulationgame, navigation (`use_slam`) |
@@ -370,10 +370,11 @@ The mac `ros` container auto-runs
 
 Onboard PC, native (no docker): `export ROS_DOMAIN_ID=0`, source
 `core_ws/install/setup.bash`, then
-`ros2 launch h12_bringup h12_real_robot_bringup.launch.py`. Companion desktop:
-`ros2 launch h12_bringup h12_real_desktop_bringup.launch.py`
+`ros2 launch h12_bringup h12_real_robot_bringup.launch.py`
 (`start_position_verified:=true` only after physically verifying the robot's
-pose — it gates leg commands).
+pose — it gates leg commands; the policy then holds its pre-pose until
+`/lowerbody/confirm_engage`). Companion desktop:
+`ros2 launch h12_bringup h12_real_desktop_bringup.launch.py`.
 
 ## 10. Getting-started checklist for a new agent
 

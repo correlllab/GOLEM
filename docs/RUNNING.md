@@ -90,8 +90,8 @@ is no `sim:=true` argument):
 |---|---|
 | `h12_sim_bringup.launch.py` | x86 sim — the full stack |
 | `h12_sim_bringup_mac.launch.py` | mac sim — trimmed, toggled by `GOLEM_*` env vars |
-| `h12_real_robot_bringup.launch.py` | real robot, onboard PC: drivers, state publishers, estop + safety + IK, nav |
-| `h12_real_desktop_bringup.launch.py` | real: companion desktop — hand cameras, model servers, skills, lower body |
+| `h12_real_robot_bringup.launch.py` | real robot, onboard PC: drivers, state publishers, estop + safety + IK, nav, lower body |
+| `h12_real_desktop_bringup.launch.py` | real: companion desktop — model servers, skills, rviz; hand cameras with `use_hand_cameras:=true` |
 | `h12_safety_grippers.launch.py` | real: estop + safety layer + grippers only |
 | `h12_real_slam.launch.py` | real: drivers, state publishers and SLAM/nav only (no estop, safety or IK) |
 
@@ -140,12 +140,20 @@ Coordinate before touching. The onboard PC runs natively, without Docker:
 ```bash
 export ROS_DOMAIN_ID=0
 source core_ws/install/setup.bash
-ros2 launch h12_bringup h12_real_robot_bringup.launch.py
+ros2 launch h12_bringup h12_real_robot_bringup.launch.py start_position_verified:=true
 ```
 
-On the companion desktop, `h12_real_desktop_bringup.launch.py` gates leg commands
-behind `start_position_verified:=true` (default false) — set it only after
-physically verifying the robot's pose.
+Leg commands are gated behind `start_position_verified:=true` (default false) —
+set it only after physically verifying the robot's pose. The `lowerbody:=` policy
+(default `almi`) then ramps the legs to its pre-pose crouch and holds until
+
+```bash
+ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
+```
+
+The companion desktop runs `h12_real_desktop_bringup.launch.py` for the model
+servers, skills and rviz; add `use_hand_cameras:=true` to also start the hand
+cameras.
 
 ## Troubleshooting
 

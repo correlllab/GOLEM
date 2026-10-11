@@ -27,7 +27,7 @@ from launch.substitutions import LaunchConfiguration
 # see h12_control.launch.py). Assets resolve as in h12_state.launch.py.
 ASSETS_DIR = os.environ.get('GOLEM_ASSETS_DIR', '/home/unitree/GOLEM/CL_Assets')
 
-GAME_ARGS = ('start_position_verified', 'policy', 'policy_mode', 'use_commander',
+GAME_ARGS = ('start_position_verified', 'policy', 'use_commander',
              'commander_mode', 'goals', 'commander_seed', 'commander_duration_s', 'commander_log')
 
 
@@ -47,7 +47,6 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('start_position_verified', default_value='false'),
         DeclareLaunchArgument('policy', default_value='marl_golem'),
-        DeclareLaunchArgument('policy_mode', default_value='torch'),
         DeclareLaunchArgument('safety_config', default_value='relax_safety_split.yaml'),
         DeclareLaunchArgument('use_slam', default_value='true'),
         DeclareLaunchArgument('use_commander', default_value='false'),

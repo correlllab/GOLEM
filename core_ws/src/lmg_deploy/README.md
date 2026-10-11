@@ -22,7 +22,7 @@ release) and uses the same heartbeat watchdog.
 | `lmg_deploy/controller.py` | ROS-free env step: odometry → mode → observations (legs 96, arms 124; 95 and 123 with `height_drop_obs: false`) → joint targets |
 | `lmg_deploy/kinematics.py` | Pinocchio wrist FK, Jacobian and IK step, in the pelvis frame |
 | `lmg_deploy/rotations.py` | numpy versions of the isaaclab.utils.math functions training used |
-| `lmg_deploy/networks.py` | TorchScript loader, and the `zero` stand-ins for plumbing tests |
+| `lmg_deploy/networks.py` | TorchScript loader, and the zero stand-ins the unit tests use |
 | `lmg_deploy/marl_deploy_node.py` | the ROS node: safety channels, heartbeat, pre-pose, band, operator interface |
 | `lmg_deploy/game_commander_node.py` | sends walking and arm-goal commands on training's schedule; lidar obstacle guard, SLAM geofence, event log |
 | `policies/<name>/<name>.yaml` | deploy config: joint order, defaults, gains, scales, odometry, bounds, command ranges (each from the training env) |
@@ -86,7 +86,6 @@ ros2 launch h12_bringup lmg_sim_bringup.launch.py
 - `goals:=arm_goals_<spread>_<drop>.npz`: the arm-goal sample set.
 - `commander_log:=<file>`: a JSON-lines event log.
 - `use_slam`, `use_rviz`, `policy`. `policy:=marl_ik` has no arm-goal samples, so run it with `use_commander:=false`.
-- `policy_mode:=zero`: run without exported networks. The legs hold the default pose and the arms follow pure IK, which checks the plumbing only; the robot falls once the band releases.
 
 `tests/locomanipulation_game/run.sh` runs the same launch in disposable containers. It records the sim without modifying it, renders a follow-camera video, and scores the run with `analyze_run.py`.
 
@@ -129,7 +128,7 @@ ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger         
 - The node always waits for `~/confirm_engage` here, and never calls the sim's elastic band; neither is an argument.
 - The commander is off by default (`use_commander:=false`): drive with `/cmd_vel` and `~/arm_goal` as above.
   `use_commander:=true` starts it alongside the node.
-- Same `policy`, `policy_mode`, `safety_config`, `use_slam` and `commander_*` arguments as the sim launch.
+- Same `policy`, `safety_config`, `use_slam` and `commander_*` arguments as the sim launch.
 
 **Before the first real run:**
 - **IMU frame.** Training read the IMU on `torso_link` (`imu_link`, offset (-0.0445, -0.0189, 0.2776), no rotation). The MuJoCo sim's IMU is in the same place. Confirm that the real `LowState.imu_state` comes from that same IMU.

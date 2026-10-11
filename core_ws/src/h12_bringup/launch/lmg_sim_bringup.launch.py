@@ -23,7 +23,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 # the real robot's command bus.
 ASSETS_DIR = '/home/code/CL_Assets'
 
-GAME_ARGS = ('policy', 'policy_mode', 'engage_wait_for_confirm', 'use_commander',
+GAME_ARGS = ('policy', 'use_commander',
              'commander_mode', 'goals', 'commander_seed', 'commander_duration_s', 'commander_log')
 
 
@@ -49,9 +49,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument('policy', default_value='marl_golem'),
-        DeclareLaunchArgument('policy_mode', default_value='torch'),
         DeclareLaunchArgument('safety_config', default_value='relax_safety_split.yaml'),
-        DeclareLaunchArgument('engage_wait_for_confirm', default_value='false'),
         DeclareLaunchArgument('use_slam', default_value='true'),
         DeclareLaunchArgument('use_commander', default_value='true'),
         DeclareLaunchArgument('commander_mode', default_value='training'),
@@ -78,6 +76,8 @@ def generate_launch_description():
             **{name: LaunchConfiguration(name) for name in GAME_ARGS},
             'urdf_path': os.path.join(ASSETS_DIR, 'ros_assets', 'h1_2_magpie.urdf'),
             'start_position_verified': 'true',
+            # engages as soon as the pre-pose settles, with no operator confirm
+            'engage_wait_for_confirm': 'false',
             'disable_elastic_band': 'true',
         }),
         _include('h12_slam', 'h12_navigation.launch.py', sim_time,

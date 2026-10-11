@@ -6,8 +6,9 @@ Flow
 2. Pre-pose: ramp all 27 joint targets (cosine blend over ``prepose_ramp_s``)
    from the measured pose to the policy's default pose at the training gains,
    then wait for the joints to settle there.
-3. With ``engage_wait_for_confirm`` (default true; the sim launch turns it
-   off) hold the pre-pose until an operator calls ~/confirm_engage.
+3. With ``engage_wait_for_confirm`` (default true; lmg_real_bringup keeps it
+   on, lmg_sim_bringup turns it off and engages automatically) hold the
+   pre-pose until an operator calls ~/confirm_engage.
 4. Engage: the controller starts an episode at the measured state with a zero
    velocity command (any /cmd_vel received before engaging is dropped) and
    runs at ``control_hz`` (50 Hz, the training policy rate). In the sim the elastic
@@ -73,7 +74,7 @@ from lmg_deploy.controller import (
     RobotState,
 )
 from lmg_deploy.kinematics import ArmKinematics
-from lmg_deploy.networks import TorchScriptNetwork, ZeroNetwork
+from lmg_deploy.networks import TorchScriptNetwork
 from lmg_deploy.rotations import xyzw_to_wxyz
 
 MOTOR_MODE_PR = 1
@@ -92,9 +93,6 @@ class MarlDeployNode(Node):
         super().__init__("marl_deploy_node")
         self.declare_parameter("config", _share("policies", "marl_ik", "marl_ik.yaml"))
         self.declare_parameter("urdf_path", "/home/code/CL_Assets/ros_assets/h1_2_magpie.urdf")
-        # "torch": the exported networks next to the config. "zero": stand-ins (legs hold the
-        # default pose, arms pure IK, no odometry), for plumbing tests without a checkpoint.
-        self.declare_parameter("policy_mode", "torch")
         self.declare_parameter("control_hz", 50.0)
         self.declare_parameter("prepose_ramp_s", 2.0)
         self.declare_parameter("engage_wait_for_confirm", True)
@@ -130,20 +128,13 @@ class MarlDeployNode(Node):
             arm_joint_names=[cfg["joint_names"][ARM_START:ARM_START + 7], cfg["joint_names"][ARM_START + 7:]],
             extra_frames=extra_frames,
         )
-        mode = str(self.get_parameter("policy_mode").value)
-        if mode == "torch":
-            legs = TorchScriptNetwork(os.path.join(cfg_dir, cfg["legs"]["policy"]),
-                                      cfg["legs"]["num_obs"], cfg["legs"]["num_actions"])
-            arms = TorchScriptNetwork(os.path.join(cfg_dir, cfg["arms"]["policy"]),
-                                      cfg["arms"]["num_obs"], cfg["arms"]["num_actions"])
-            estimator = TorchScriptNetwork(os.path.join(cfg_dir, cfg["estimator"]["path"]),
-                                           cfg["estimator"]["num_inputs"], 6)
-        elif mode == "zero":
-            self.get_logger().warn("policy_mode=zero: stand-in networks, for plumbing tests only")
-            legs, arms, estimator = (ZeroNetwork(cfg["legs"]["num_actions"]),
-                                     ZeroNetwork(cfg["arms"]["num_actions"]), ZeroNetwork(6))
-        else:
-            raise ValueError(f"policy_mode must be 'torch' or 'zero', not {mode!r}")
+        # the exported networks, next to the config
+        legs = TorchScriptNetwork(os.path.join(cfg_dir, cfg["legs"]["policy"]),
+                                  cfg["legs"]["num_obs"], cfg["legs"]["num_actions"])
+        arms = TorchScriptNetwork(os.path.join(cfg_dir, cfg["arms"]["policy"]),
+                                  cfg["arms"]["num_obs"], cfg["arms"]["num_actions"])
+        estimator = TorchScriptNetwork(os.path.join(cfg_dir, cfg["estimator"]["path"]),
+                                       cfg["estimator"]["num_inputs"], 6)
         self.controller = MarlController(cfg, kin, legs, arms, estimator)
 
         self._lowstate: LowState | None = None
@@ -182,7 +173,7 @@ class MarlDeployNode(Node):
         self.create_timer(1.0 / control_hz, self._tick)
         self._set_state("idle")
         self.get_logger().info(
-            f"marl_deploy_node ready: {cfg_path} ({mode}), {control_hz:.0f} Hz, "
+            f"marl_deploy_node ready: {cfg_path}, {control_hz:.0f} Hz, "
             f"confirm={'required' if self._confirm_wait else 'auto'}")
 
     # -- callbacks -------------------------------------------------------------------

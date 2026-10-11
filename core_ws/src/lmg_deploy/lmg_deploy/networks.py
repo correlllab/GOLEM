@@ -5,9 +5,9 @@ file already contains its observation scaler and the +-10 action clamp, so it
 maps a raw observation straight to the raw action the env would apply; the
 estimator file contains its input normalization.
 
-ZeroNetwork stands in for a missing export: legs hold the default pose, arms
-follow pure IK, and the estimator reports no pelvis motion. It is for
-plumbing tests only.
+ZeroNetwork is a stand-in for the unit tests: legs hold the default pose, arms
+follow pure IK, and the estimator reports no pelvis motion. The node always
+loads the TorchScript exports.
 """
 
 import numpy as np

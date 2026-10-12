@@ -70,7 +70,7 @@ gripper`).
 
 ```bash
 ros2 action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
-  "{target_object: 'screwdriver handle', arm: 'right', top_down: true, timeout: {sec: 180, nanosec: 0}}" \
+  "{target_object: 'screwdriver handle', arm: 'right', top_down: false, timeout: {sec: 180, nanosec: 0}}" \
   --feedback
 ```
 

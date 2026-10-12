@@ -317,6 +317,11 @@ authoritative source instead of copying it.
 
 ### Other invariants
 
+- `h12_safety_layer` is the only publisher of `rt/lowcmd`. Controllers publish
+  only to its `rt/safety/*` inputs (`h12_ros2_controller` refuses any other
+  `topics.low_cmd`; there is no `rt/arm_sdk` path). Once estop latches, the
+  safety layer writes a short burst of zero-gain commands and then stops
+  publishing `rt/lowcmd` until restart.
 - MuJoCo versions are pinned per image (`3.2.3` in `ros` to match the MJPC ABI,
   `3.3.1` in `robocasa`) — never bump one without the other side of its pin.
 - `numpy<2`, `setuptools==59.6.0`, `wheel<0.44` are deliberately re-clamped in

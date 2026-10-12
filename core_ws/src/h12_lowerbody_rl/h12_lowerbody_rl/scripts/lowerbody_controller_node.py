@@ -3,9 +3,10 @@
 Flow
 ----
 1. The robot starts held by the elastic band, **idle** (no policy drives the legs).
-2. At startup the ``active_policy`` (default ``fame``) is auto-activated: the node
-   pre-poses the legs (ramping the target from the measured pose to the policy's
-   nominal crouch over ``prepose_ramp_s`` — never a step at full gains), releases
+2. At startup the ``active_policy`` (default ``fame``) is auto-activated: once the
+   safety layer's /safety/heartbeat arrives, the node pre-poses the legs (ramping
+   the target from the measured pose to the policy's nominal crouch over
+   ``prepose_ramp_s`` — never a step at full gains), releases
    the elastic band (gated on frame_task being ready, /left_ee_pose), and engages
    FAME (standing). With ``engage_wait_for_confirm``
    (the default) the node HOLDS at the pre-pose crouch and only engages the policy
@@ -82,6 +83,9 @@ IMU_OFFSET_RANGE_DEG = 15.0
 from h12_lowerbody_rl.policy_manager import GateConfig, PolicyManager
 
 MOTOR_MODE_PR = 1
+# LowCmd header: ankle pitch/roll mode and the H1-2 machine id.
+MODE_PR = 0
+MODE_MACHINE = 6
 
 # Safety-layer liveness flag (published by safety_node at 10 Hz: True while
 # commands are relayed, False once its estop latches). The watchdog below arms
@@ -370,6 +374,13 @@ class LowerBodyControllerNode(Node):
 
     def _publish_leg(self, leg: LegCommand) -> None:
         cmd_msg = LowCmd()
+        # Header matches frame_task_server's LowCmdPublisher
+        # (h12_ros2_controller/core/channel_interface.py). The safety layer
+        # forwards the header of whichever channel spoke last, so both channels
+        # must send the same values, and the robot drops any LowCmd whose
+        # mode_machine differs from its own.
+        cmd_msg.mode_pr = MODE_PR
+        cmd_msg.mode_machine = MODE_MACHINE
         for i in range(NUM_LEG_JOINTS):
             m = cmd_msg.motor_cmd[i]
             m.mode = MOTOR_MODE_PR
@@ -464,6 +475,15 @@ class LowerBodyControllerNode(Node):
                 # on _awaiting_band_release, which we only set once committed.
                 pending = self._manager.desired_policy()
                 if pending is None:
+                    return
+                # Leg commands only reach the motors once the safety layer is
+                # relaying. Ramping before then runs the ramp out against legs
+                # that never move, and the first relayed command steps them to
+                # the full crouch at full gains.
+                if self._hb_last is None:
+                    self.get_logger().info(
+                        "waiting for /safety/heartbeat before pre-posing the legs",
+                        throttle_duration_sec=5.0)
                     return
                 cmd = pending.nominal_command()
                 if self._prepose_start_q is None:

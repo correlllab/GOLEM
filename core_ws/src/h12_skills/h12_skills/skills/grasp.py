@@ -315,6 +315,10 @@ SERVO_DURATION_SEC = 15   # primary (iter-0) contact IK move budget [s]
 # is never cut off; rejected plans return in well under a second.
 APPROACH_DURATION_SEC = 180.0
 SERVO_MAX_ITER = 12       # world-frame servo refinement passes per pose
+# Anchor the contact move in WORLD_FRAME for pelvis-drift compensation. False
+# drives the raw pelvis-frame poses (as when the world TF is down) — use it
+# when odometry is poor enough that the world-frame corrections add error.
+GRASP_WORLD_ANCHOR = False
 # Stop a frame_task move early once the server's streamed feedback repeats
 # UNCHANGED for this many messages — the arm has settled and the server is only
 # holding steady state (which otherwise runs to its ~5 s hold timeout). Passed
@@ -346,6 +350,13 @@ LINEAR_APPROACH_SEG_SEC = 10.0
 TARGET_FRAME = 'graspgenx_target_frame'
 # Cap on 'graspgen_markers' markers.
 KEPT_MARKER_MAX = 20
+# Candidate state -> marker (r, g, b, a). Untried candidates are 'pending'.
+GRASP_MARKER_COLORS = {
+    'pending': (0.5, 0.5, 0.0, 0.4),   # dim yellow
+    'trying': (0.0, 0.6, 1.0, 1.0),    # blue: pre-grasp approach in progress
+    'failed': (1.0, 0.0, 0.0, 0.8),    # red: pre-grasp unreachable
+    'chosen': (0.0, 1.0, 0.0, 1.0),    # green: committed grasp
+}
 
 
 # ================================ data types =================================
@@ -491,10 +502,6 @@ class GraspSkill:
             # No retreat lift here: the arm is at prep or partway toward a
             # rejected pre-grasp — it never reached into the parts.
             return run.abort(err)
-        # Markers only now that a grasp is committed, so RViz matches where
-        # the arm is actually going (full pool still in graspgen's viser).
-        self._publish_grasp_markers(targets.frame, targets.grasps_p,
-                                    cands.scores, highlight=idx)
         # --- snapshot mode: save an image at the pre-grasp, then withdraw ----
         # PREEMPTS the visual servo and the contact confirm: both exist to set
         # up a close that never happens in this mode, and a servo failure
@@ -878,12 +885,20 @@ class GraspSkill:
         from the CURRENT pelvis frame into the world frame, once, up front —
         world-anchored targets stay correct as the pelvis drifts
         (servo_frame_to_world re-resolves them each iteration). If the world
-        TF is unavailable, `have_world` is False and the raw pelvis poses are
-        driven with no drift compensation."""
+        TF is unavailable or GRASP_WORLD_ANCHOR is off, `have_world` is False
+        and the raw pelvis poses are driven with no drift compensation."""
         grasps_p = [get_approach_pose(g.pose, approach_dist=GRASP_OFFSET)
                     for g in cands.grasps]
         approaches_p = [get_approach_pose(g, approach_dist=-APPROACH_DIST)
                         for g in grasps_p]
+        if not GRASP_WORLD_ANCHOR:
+            self.get_logger().info(
+                'grasp: GRASP_WORLD_ANCHOR off; driving raw pelvis poses')
+            return _Targets(frame=cands.grasps[0].header.frame_id,
+                            grasps_p=grasps_p, approaches_p=approaches_p,
+                            grasps_w=[None] * len(grasps_p),
+                            approaches_w=[None] * len(approaches_p),
+                            have_world=False, centroid_w=None)
         grasps_w = [self._transform_pose(g, 'pelvis', WORLD_FRAME)
                     for g in grasps_p]
         approaches_w = [self._transform_pose(a, 'pelvis', WORLD_FRAME)
@@ -941,11 +956,21 @@ class GraspSkill:
         within a tier, reaching each pre-grasp via a series of straight-line,
         UNPLANNED, SLOW-mode segments (_linear_approach) until one is reachable.
         Returns (index, None) of the committed candidate, or
-        (None, abort-reason) on cancel/timeout or all-unreachable."""
+        (None, abort-reason) on cancel/timeout or all-unreachable. Each
+        candidate's state (trying / failed / chosen) is republished on
+        'graspgen_markers' as it changes."""
         order = sorted(range(len(cands.grasps)),
                        key=lambda i: (cands.tiers[i], -cands.scores[i]))
         width_mm = cands.gripper_width * 1000.0
+        status = {}
+
+        def mark(i, state):
+            status[i] = state
+            self._publish_grasp_markers(targets.frame, targets.grasps_p,
+                                        cands.scores, status)
+
         for i in order:
+            mark(i, 'trying')
             self._publish_target_tf(targets, targets.approaches_w[i],
                                     targets.approaches_p[i])
             self.get_logger().info(
@@ -955,9 +980,11 @@ class GraspSkill:
             # pre-grasp (no world anchoring). The visual servo runs AFTER this.
             if self._linear_approach(GRASP_FRAMES[arm], targets.approaches_p[i],
                                      run, gh, slow_mode=slow_mode):
+                mark(i, 'chosen')
                 return i, None
             if gh.is_cancel_requested or run.remaining() <= 0.0:
                 return None, 'canceled or timed out during approach'
+            mark(i, 'failed')
             self.get_logger().warn(
                 f'grasp {i} pre-grasp unreachable; trying next-ranked grasp')
         return None, (f'no reachable grasp for {obj!r} '
@@ -1567,19 +1594,23 @@ class GraspSkill:
         return arm
 
     # ------------------------------------------------------------ visualization
-    def _publish_grasp_markers(self, frame, poses, scores, highlight=None):
+    def _publish_grasp_markers(self, frame, poses, scores, status=None):
         """Publish grasp markers on 'graspgen_markers' (latched, pelvis frame),
-        best-score-first up to KEPT_MARKER_MAX. `highlight` = index of the
-        grasp actually driven (bright green; others dim). Per grasp: an ARROW
-        from the gripper-base origin along +Z to the finger CONTACT point, and
-        a small SPHERE there — making the base-vs-contact distinction visible.
+        up to KEPT_MARKER_MAX: every candidate in `status` (index -> a
+        GRASP_MARKER_COLORS state), then the rest best-score-first as
+        'pending'. Per grasp: an ARROW from the gripper-base origin along +Z to
+        the finger CONTACT point, a small SPHERE there, and a TEXT label with
+        the candidate index (matches the 'grasp {i}' log lines). Marker ids are
+        the candidate index, so a state change replaces that grasp's markers.
         Best-effort — viz must never break the grasp."""
+        status = status or {}
         try:
             if not hasattr(self, '_grasp_marker_pub'):
                 self._grasp_marker_pub = self.create_publisher(
                     MarkerArray, 'graspgen_markers',
                     QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
-            order = sorted(range(len(poses)), key=lambda i: scores[i], reverse=True)
+            order = sorted(range(len(poses)),
+                           key=lambda i: (i not in status, -scores[i]))
             # Zero stamp = latest available TF; a now() stamp races the
             # pelvis->map link and RViz drops the markers.
             stamp = Time()
@@ -1588,19 +1619,17 @@ class GraspSkill:
             clear.header.frame_id = frame
             clear.action = Marker.DELETEALL
             arr.markers.append(clear)
-            for n, i in enumerate(order[:KEPT_MARKER_MAX]):
+            for i in order[:KEPT_MARKER_MAX]:
                 T = pose_to_matrix(poses[i])
                 base = T[:3, 3]
                 contact = base + GRIPPER_BASE_TO_CONTACT_M * T[:3, 2]
-                best = (i == highlight) if highlight is not None else (n == 0)
-                r, g, b = (0.0, 1.0, 0.0) if best else (0.5, 0.5, 0.0)
-                a = 1.0 if best else 0.5
+                r, g, b, a = GRASP_MARKER_COLORS[status.get(i, 'pending')]
 
                 arrow = Marker()
                 arrow.header.frame_id = frame
                 arrow.header.stamp = stamp
                 arrow.ns = 'graspgen_approach'
-                arrow.id = n
+                arrow.id = i
                 arrow.type = Marker.ARROW
                 arrow.action = Marker.ADD
                 arrow.points = [
@@ -1617,7 +1646,7 @@ class GraspSkill:
                 dot.header.frame_id = frame
                 dot.header.stamp = stamp
                 dot.ns = 'graspgen_contact'
-                dot.id = n
+                dot.id = i
                 dot.type = Marker.SPHERE
                 dot.action = Marker.ADD
                 dot.pose.position = Point(
@@ -1626,6 +1655,21 @@ class GraspSkill:
                 dot.scale.x = dot.scale.y = dot.scale.z = 0.02
                 dot.color.r, dot.color.g, dot.color.b, dot.color.a = r, g, b, a
                 arr.markers.append(dot)
+
+                label = Marker()
+                label.header.frame_id = frame
+                label.header.stamp = stamp
+                label.ns = 'graspgen_index'
+                label.id = i
+                label.type = Marker.TEXT_VIEW_FACING
+                label.action = Marker.ADD
+                label.pose.position = Point(
+                    x=float(base[0]), y=float(base[1]), z=float(base[2]) + 0.02)
+                label.pose.orientation.w = 1.0
+                label.scale.z = 0.025                  # text height [m]
+                label.text = str(i)
+                label.color.r, label.color.g, label.color.b, label.color.a = r, g, b, 1.0
+                arr.markers.append(label)
             self._grasp_marker_pub.publish(arr)
         except Exception as e:
             self.get_logger().warn(f'grasp marker publish failed: {e}')

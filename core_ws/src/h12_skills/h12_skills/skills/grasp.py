@@ -153,9 +153,6 @@ HEURISTIC_GRASP_AZIMUTHS_DEG = (0.0, 45.0, 90.0)
 # value is a gentle downward rake -> tier 4-6.
 HEURISTIC_GRASP_PITCH_DOWN_DEG = 45.0
 HEURISTIC_GRASP_PITCH_FLAT_DEG = 10.0
-# Also include the steep top-down approach (TOP_DOWN_PITCH_DEG) in the set. It
-# lands in a flat tier by pitch, so it is tried after the down-pitched grasps.
-HEURISTIC_GRASP_INCLUDE_TOP_DOWN = True
 
 
 # ===================== failure retreat (_retreat_after_failure) ==============
@@ -337,8 +334,9 @@ APPROACH_LIN_TOL = 0.025
 APPROACH_ANG_TOL = 0.10
 # The pre-grasp approach (move_to_candidate_approach) is executed as a series of
 # straight-line, UNPLANNED, SLOW-mode Cartesian segments of at most this length
-# (from the staging pose to the pre-grasp), rather than one planned/world-servo
-# move — see _linear_approach. The visual servo still runs AFTER it.
+# (from the staging pose, or 'prep' without top_down, to the pre-grasp), rather
+# than one planned/world-servo move — see _linear_approach. The visual servo
+# still runs AFTER it.
 LINEAR_APPROACH_SEG_M = 0.10
 # Per-segment frame_task budget [s] (already the slow-mode-scaled value the
 # server needs to cover LINEAR_APPROACH_SEG_M at 1/4 speed).
@@ -462,19 +460,21 @@ class GraspSkill:
         self._note_run_arm(arm)    # point the sway recorder's gripper column at it
 
         # Pre-open the gripper here — after 'prep', before staging — so the arm
-        # travels to the staging pose (and everything after) already open.
+        # travels to the staging pose (when used) and everything after open.
         if not self.open_gripper(arm, OPEN_PERCENT):
             return fail('gripper pre-open failed')
 
-        # --- staging: named config for the arm we are actually going to use.
-        # Joint-space (recorded on the robot), so it needs no IK/reach solve and
-        # lands the grasping arm in a repeatable pre-approach posture with the
-        # other arm parked at 'prep'.
-        stage_cfg = 'staging_right' if arm == 'right' else 'staging_left'
-        if not self.goto_named_config(stage_cfg, plan=True, slow_mode=True,
-                                      duration_sec=30.0, result_timeout=90.0,
-                                      outer_gh=gh):
-            return fail(f"move to {stage_cfg!r} staging config failed")
+        # --- staging (top_down only): named config for the arm we are going to
+        # use. Joint-space (recorded on the robot), so it needs no IK/reach
+        # solve and lands the grasping arm in a repeatable posture above the
+        # workspace for the steep top-down approach, with the other arm parked
+        # at 'prep'. The side approaches start straight from 'prep'.
+        if goal.top_down:
+            stage_cfg = 'staging_right' if arm == 'right' else 'staging_left'
+            if not self.goto_named_config(stage_cfg, plan=True, slow_mode=True,
+                                          duration_sec=30.0, result_timeout=90.0,
+                                          outer_gh=gh):
+                return fail(f"move to {stage_cfg!r} staging config failed")
 
         # --- plan: ranked candidates ------------------------------------------
         if not run.phase('approach_grasp', 0.4):
@@ -735,8 +735,6 @@ class GraspSkill:
         for pitch in (HEURISTIC_GRASP_PITCH_DOWN_DEG, HEURISTIC_GRASP_PITCH_FLAT_DEG):
             for az in HEURISTIC_GRASP_AZIMUTHS_DEG:
                 specs.append((side * az, pitch))
-        if HEURISTIC_GRASP_INCLUDE_TOP_DOWN:
-            specs.append((0.0, TOP_DOWN_PITCH_DEG))
         poses = [_heuristic_grasp_pose(centroid_p, _approach_from_az_pitch(az, p))
                  for az, p in specs]
 

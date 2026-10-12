@@ -1,7 +1,7 @@
 ---
 /**:
   ros__parameters:
-    robot_base_frame: pelvis
+    robot_base_frame: base_footprint
     map_frame: map
     odom_frame: odom
     use_sim_time: ${use_sim_time}
@@ -62,7 +62,7 @@ behavior_server:
     use_sim_time: ${use_sim_time}
     local_frame: odom
     global_frame: map
-    robot_base_frame: pelvis
+    robot_base_frame: base_footprint
     transform_tolerance: 0.1
 planner_server:
   ros__parameters:
@@ -106,7 +106,7 @@ planner_server:
         do_refinement: true               # Whether to recursively run the smoother 3 times on the results from prior runs to refine the results further
       ros__parameters:
         global_frame: map
-        robot_base_frame: pelvis
+        robot_base_frame: base_footprint
         allow_unknown: false
         default_tolerance: 0.1
         transform_tolerance: 0.01
@@ -120,7 +120,7 @@ global_costmap:
   global_costmap:
     ros__parameters:
       use_sim_time: ${use_sim_time}
-      robot_base_frame: pelvis
+      robot_base_frame: base_footprint
       global_frame: map
       update_frequency: 5.0
       publish_frequency: 5.0
@@ -146,7 +146,7 @@ local_costmap:
       update_frequency: 5.0
       publish_frequency: 5.0
       global_frame: odom
-      robot_base_frame: pelvis
+      robot_base_frame: base_footprint
       use_sim_time: ${use_sim_time}
       rolling_window: true
       width: 6
@@ -171,7 +171,20 @@ local_costmap:
         z_voxels: 16
         max_obstacle_height: 1.9
         mark_threshold: 0
-        observation_sources: lidar
+        # lidar marks obstacles in the height band. lidar_clear only clears:
+        # VoxelLayer drops points outside an observation's height band before
+        # ray tracing, so without floor returns nothing clears stale marks in
+        # open floor space.
+        observation_sources: lidar lidar_clear
+        lidar_clear:
+          topic: /cloud_body_filtered
+          data_type: "PointCloud2"
+          min_obstacle_height: -0.3
+          max_obstacle_height: 1.9
+          marking: False
+          clearing: True
+          raytrace_max_range: 5.0
+          raytrace_min_range: 0.0
         lidar:
           topic: /cloud_body_filtered
           data_type: "PointCloud2"

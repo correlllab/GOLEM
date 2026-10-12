@@ -1,5 +1,5 @@
 """
-Publish a gravity-aligned, floor-referenced ``odom`` frame above FAST-LIO's ``camera_init``.
+Publish level, floor-referenced ``odom`` and ``base_footprint`` frames around FAST-LIO.
 
 FAST-LIO's world frame ``camera_init`` is the IMU frame at startup, so it
 carries the MID360's mounting pitch (~14 deg on the H1-2) and sits at lidar
@@ -20,18 +20,29 @@ Once at startup this node:
 
 The floor comes from the lidar, not the leg kinematics, so it is right even
 when the feet are off the ground (gantry) or the legs are bent.
+
+From then on, for every FAST-LIO ``odometry`` message it publishes
+odom -> base_footprint: the ``base_frame`` (pelvis) position projected onto the
+floor (z = 0) with its yaw only. slam_toolbox and Nav2 must use this frame as
+their base: slam_toolbox composes map -> odom through its base frame, so a
+base that rolls, pitches and sits above the floor makes the map frame bob and
+tilt with the robot's sway.
 """
 
 import numpy as np
 import rclpy
 from geometry_msgs.msg import TransformStamped
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import Imu, PointCloud2
-from tf2_ros import Buffer, StaticTransformBroadcaster, TransformException, TransformListener
+from tf2_ros import (
+    Buffer, StaticTransformBroadcaster, TransformBroadcaster, TransformException,
+    TransformListener)
 
-from h12_slam.robot_geometry import matrix_to_quat, rotation_aligning, transform_to_rt
+from h12_slam.robot_geometry import (
+    matrix_to_quat, quat_to_matrix, rotation_aligning, transform_to_rt)
 from h12_slam.self_filter import cloud_points
 
 
@@ -75,6 +86,9 @@ class LevelOdom(Node):
         self.odom_frame = self.declare_parameter('odom_frame', 'odom').value
         self.world_frame = self.declare_parameter('world_frame', 'camera_init').value
         self.body_frame = self.declare_parameter('body_frame', 'body').value
+        self.base_frame = self.declare_parameter('base_frame', 'pelvis').value
+        self.footprint_frame = self.declare_parameter(
+            'footprint_frame', 'base_footprint').value
         self.samples = self.declare_parameter('samples', 200).value  # ~1 s of MID360 IMU
         self.max_spread = self.declare_parameter('max_accel_spread', 0.1).value
         self.floor_scans = self.declare_parameter('floor_scans', 10).value  # ~1 s at 10 Hz
@@ -84,16 +98,20 @@ class LevelOdom(Node):
         self.min_points = self.declare_parameter('min_floor_points', 300).value
 
         self.up = None
+        self.odom_from_world = None  # (rot, trans), set once odom is published
+        self.body_from_base = None
         self.ups = []
         self.scans = []
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.broadcaster = StaticTransformBroadcaster(self)
+        self.footprint_broadcaster = TransformBroadcaster(self)
 
         self.imu_sub = self.create_subscription(Imu, 'imu', self._on_imu,
                                                 qos_profile_sensor_data)
         self.cloud_sub = self.create_subscription(PointCloud2, 'cloud', self._on_cloud,
                                                   qos_profile_sensor_data)
+        self.create_subscription(Odometry, 'odometry', self._on_odometry, 10)
 
     def _world_from_body(self, stamp):
         try:
@@ -171,11 +189,42 @@ class LevelOdom(Node):
         (t.transform.rotation.x, t.transform.rotation.y,
          t.transform.rotation.z, t.transform.rotation.w) = (float(v) for v in matrix_to_quat(rot))
         self.broadcaster.sendTransform(t)
+        self.odom_from_world = (rot, np.array([0.0, 0.0, -floor]))
         self.destroy_subscription(self.cloud_sub)
         tilt = np.degrees(np.arccos(np.clip(self.up[2], -1.0, 1.0)))
         self.get_logger().info(
             f'{self.odom_frame}->{self.world_frame}: tilt {tilt:.1f} deg, '
             f'lidar {sensor_height - floor:.3f} m above the floor')
+
+    def _on_odometry(self, msg):
+        if self.odom_from_world is None:
+            return
+        if self.body_from_base is None:
+            try:
+                self.body_from_base = transform_to_rt(self.tf_buffer.lookup_transform(
+                    self.body_frame, self.base_frame, Time()).transform)
+            except TransformException:
+                self.get_logger().info(
+                    f'waiting for {self.body_frame}->{self.base_frame}',
+                    throttle_duration_sec=5.0)
+                return
+        p, q = msg.pose.pose.position, msg.pose.pose.orientation
+        r_wb, t_wb = quat_to_matrix(q.x, q.y, q.z, q.w), np.array([p.x, p.y, p.z])
+        r_ow, t_ow = self.odom_from_world
+        r_bp, t_bp = self.body_from_base
+        r_ob, t_ob = r_ow @ r_wb, r_ow @ t_wb + t_ow
+        r_op, t_op = r_ob @ r_bp, r_ob @ t_bp + t_ob
+        yaw = np.arctan2(r_op[1, 0], r_op[0, 0])
+
+        t = TransformStamped()
+        t.header.stamp = msg.header.stamp
+        t.header.frame_id = self.odom_frame
+        t.child_frame_id = self.footprint_frame
+        t.transform.translation.x = float(t_op[0])
+        t.transform.translation.y = float(t_op[1])
+        t.transform.rotation.z = float(np.sin(yaw / 2.0))
+        t.transform.rotation.w = float(np.cos(yaw / 2.0))
+        self.footprint_broadcaster.sendTransform(t)
 
 
 def main(args=None):

@@ -14,7 +14,9 @@ octomap_server:
     sensor_model.hit: 0.7
     sensor_model.miss: 0.4
     sensor_model.min: 0.12
-    sensor_model.max: 0.97
+    # Confidence cap: from 0.9, about 6 scans whose rays pass through a voxel
+    # free it (0.97 takes about 9), so moved objects and noise clear faster.
+    sensor_model.max: 0.9
     # Points inserted (map frame): floor included so rays through free space
     # clear stale voxels.
     point_cloud_min_z: -0.5

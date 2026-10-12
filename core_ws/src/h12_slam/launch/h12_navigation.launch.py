@@ -72,15 +72,18 @@ def generate_launch_description():
 
     # Gravity-aligned, floor-referenced odom -> camera_init (static, computed
     # once at startup: up from the IMU while the robot stands still, floor
-    # height from the floor plane in the self-filtered scan). Costmap and
-    # octomap height bands are in odom/map; see h12_slam/level_odom.py.
+    # height from the floor plane in the self-filtered scan), then
+    # odom -> base_footprint (pelvis on the floor, yaw only) per FAST-LIO
+    # odometry. Costmap and octomap height bands are in odom/map; see
+    # h12_slam/level_odom.py.
     level_odom_node = Node(
         package='h12_slam',
         executable='level_odom',
         name='level_odom',
         output='screen',
         parameters=[{'use_sim_time': use_sim_time}],
-        remappings=[('imu', '/livox/imu'), ('cloud', '/cloud_body_filtered')],
+        remappings=[('imu', '/livox/imu'), ('cloud', '/cloud_body_filtered'),
+                    ('odometry', '/Odometry')],
     )
 
     # Drops the robot's own body (URDF collision boxes posed by TF) from the
@@ -117,14 +120,14 @@ def generate_launch_description():
         name='cloud_registered_to_laserscan',
         output='screen',
         parameters=[
-            {'target_frame': 'pelvis'},
+            # Level frame on the floor, so body sway doesn't tilt the slice
+            # into the floor.
+            {'target_frame': 'base_footprint'},
             {'use_sim_time': use_sim_time},
-            # Height band around the pelvis, matching the real-verified
-            # reference implementation (correlllab/fast_lio_nav2_humanoid
-            # nav2.launch.py). The lower bound must stay above the floor in
-            # every stance: the ALMI crouch drops the pelvis to ~0.78 m.
-            {'min_height': -0.65},
-            {'max_height': 0.65},
+            # m above the floor: clears floor returns and FAST-LIO z drift,
+            # and stays below the robot's height.
+            {'min_height': 0.25},
+            {'max_height': 1.7},
             {'angle_min': -3.14159},
             {'angle_max': 3.14159},
             {'angle_increment': 0.0087},
@@ -151,7 +154,9 @@ def generate_launch_description():
         parameters=[
             slam_params_file,
             {
-                'base_frame': 'pelvis',
+                # Must be level and on the floor: slam_toolbox folds its base
+                # frame's height and tilt into map -> odom.
+                'base_frame': 'base_footprint',
                 'odom_frame': 'odom',
                 'scan_topic': '/converted_scan',
                 'odom_topic': '/Odometry',

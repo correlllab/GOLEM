@@ -60,6 +60,6 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        left_gripper,
+        # left_gripper,
         right_gripper,
     ])

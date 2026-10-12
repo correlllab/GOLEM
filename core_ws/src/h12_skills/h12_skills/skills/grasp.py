@@ -340,12 +340,12 @@ APPROACH_ANG_TOL = 0.10
 # Every candidate is approached in three straight-line, UNPLANNED, SLOW-mode
 # stages (_straight_line_move):
 #   1. take off: straight up (pelvis +Z), holding the current orientation, to
-#      APPROACH_CLEARANCE_M above the higher of the hand and the pre-grasp —
-#      this also lifts a failed candidate's hand clear before the next one;
+#      APPROACH_CLEARANCE_M above the higher of the hand and the pre-grasp;
 #   2. transit to the pre-grasp, position and orientation interpolated;
 #   3. in along the grasp's own +Z approach axis to the contact pose
 #      (move_to_candidate), orientation held.
-# The visual servo, when requested, replaces stage 3.
+# The visual servo, when requested, replaces stage 3. A failed candidate is
+# followed by a planned reset to 'prep' (top_down: the staging config).
 APPROACH_CLEARANCE_M = 0.05
 # Stage 1-2 segment limits: at most this far / this much rotation per
 # frame_task goal, so no single goal asks for a large reorientation.
@@ -485,8 +485,8 @@ class GraspSkill:
         # solve and lands the grasping arm in a repeatable posture above the
         # workspace for the steep top-down approach, with the other arm parked
         # at 'prep'. The side approaches start straight from 'prep'.
+        stage_cfg = 'staging_right' if arm == 'right' else 'staging_left'
         if goal.top_down:
-            stage_cfg = 'staging_right' if arm == 'right' else 'staging_left'
             if not self.goto_named_config(stage_cfg, plan=True, slow_mode=True,
                                           duration_sec=30.0, result_timeout=90.0,
                                           outer_gh=gh):
@@ -512,11 +512,12 @@ class GraspSkill:
         targets = self._snapshot_targets(cands, centroid_p)
         if targets.centroid_w is not None:   # sway target = object centroid in world
             self._note_run_target(targets.centroid_w)
+        reset_cfg = stage_cfg if goal.top_down else 'prep'
         idx, err = self.move_to_candidate_approach(run, gh, obj, arm, cands,
-                                                   targets)
+                                                   targets, reset_cfg)
         if err:
-            # No retreat lift: every candidate already began by taking off in
-            # Z, and a halted arm must not be moved at all.
+            # No retreat lift: a failed walk ends with the arms reset to
+            # reset_cfg, and a halted arm must not be moved at all.
             return run.abort(err)
         # --- snapshot mode: save an image at the pre-grasp, then withdraw ----
         # PREEMPTS the visual servo and the contact confirm: both exist to set
@@ -993,12 +994,18 @@ class GraspSkill:
             LINEAR_APPROACH_SEG_RAD, LINEAR_APPROACH_SEG_SEC,
             APPROACH_LIN_TOL, APPROACH_ANG_TOL, 'transit to pre-grasp')
 
-    def move_to_candidate_approach(self, run, gh, obj, arm, cands, targets):
+    def move_to_candidate_approach(self, run, gh, obj, arm, cands, targets,
+                                   reset_cfg):
         """Walk the candidates strictly tier-major (1..7), best score first
         within a tier, reaching each pre-grasp by taking off in Z and then
-        transiting to it (_approach_pregrasp) until one is reachable.
+        transiting to it (_approach_pregrasp) until one is reachable. After a
+        failed candidate (the last one included) the arms return to the named
+        config `reset_cfg` by a PLANNED joint-space move: a failed Cartesian
+        approach can leave a joint pinned at its limit, from which no further
+        Cartesian move (including the next take-off) makes progress.
         Returns (index, None) of the committed candidate, or
-        (None, abort-reason) on cancel/timeout, arm halt or all-unreachable. Each
+        (None, abort-reason) on cancel/timeout, arm halt, a failed reset or
+        all-unreachable. Each
         candidate's state (trying / failed / chosen) is republished on
         'graspgen_markers' as it changes."""
         order = sorted(range(len(cands.grasps)),
@@ -1032,7 +1039,14 @@ class GraspSkill:
                 return None, f'arm halted during the approach: {halt}'
             mark(i, 'failed')
             self.get_logger().warn(
-                f'grasp {i} pre-grasp unreachable; trying next-ranked grasp')
+                f'grasp {i} pre-grasp unreachable; resetting to {reset_cfg!r}')
+            if not self.goto_named_config(reset_cfg, plan=True, slow_mode=True,
+                                          duration_sec=30.0, result_timeout=90.0,
+                                          outer_gh=gh):
+                halt = self.arm_halt_reason()
+                return None, (f'arm halted during the reset to {reset_cfg!r}: {halt}'
+                              if halt is not None else
+                              f'reset to {reset_cfg!r} after grasp {i} failed')
         return None, (f'no reachable grasp for {obj!r} '
                       f'(tried {len(order)} of {cands.total})')
 

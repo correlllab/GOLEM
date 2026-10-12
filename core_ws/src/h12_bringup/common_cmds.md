@@ -76,8 +76,23 @@ ros2 action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
 
 Drop `top_down: true` to try the heuristic side approaches instead.
 
-**5. Lift.** The grasp skill closes the gripper and stops; raising the arm to
-`prep` lifts the handle:
+**5. Lift.** The grasp skill closes the gripper and stops. Raise the hand
+straight up from where it closed with a relative `frame_task` goal. With
+`relative: true` each target is an offset from the frame's current pose: the
+position is added in pelvis axes (`z: 0.05` = 5 cm up), and an identity
+orientation (`w: 1.0`, not all zeros) keeps the wrist as it is. Use
+`left_graspgenx_frame` for the left arm.
+
+```bash
+ros2 action send_goal /frame_task custom_ros_messages/action/FrameTask \
+  "{relative: true, plan: false, frame_names: ['right_graspgenx_frame'],
+    frame_targets: [{position: {x: 0.0, y: 0.0, z: 0.05},
+                     orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}],
+    duration: {sec: 3, nanosec: 0}}" \
+  --feedback
+```
+
+Then carry the handle back by raising the arm to `prep`:
 
 ```bash
 ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \

@@ -23,6 +23,72 @@ actually want a bound. Ctrl-C on `send_goal` cancels the in-flight goal.
 
 ---
 
+## Real robot: pick up a screwdriver by its handle
+
+Two machines on `ROS_DOMAIN_ID=0`, run natively (no Docker). Every terminal on
+both machines first runs:
+
+```bash
+export ROS_DOMAIN_ID=0
+source ~/GOLEM/core_ws/install/setup.bash
+```
+
+**1. Onboard PC — launch** (robot on the gantry, legs hanging free):
+
+```bash
+ros2 launch h12_bringup h12_real_robot_bringup.launch.py start_position_verified:=true
+```
+
+The leg controller logs `waiting for /safety/heartbeat before pre-posing the
+legs`, ramps the legs into the ALMI crouch, then holds and logs
+`legs pre-posed (settled, err=...) — holding`. If it reports `NOT SETTLED` or
+the legs jump, Ctrl-C and do not engage.
+
+**2. Onboard PC, second terminal — engage** (feet loaded, gantry slack):
+
+```bash
+ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
+```
+
+**3. Desktop — perception and skills:**
+
+```bash
+ros2 launch h12_bringup h12_real_desktop_bringup.launch.py
+# add use_hand_cameras:=true when the grasp uses visual_servo
+```
+
+Wait for `h12_skills` to report ready; it looks for frame_task, the grippers
+and the model servers on startup.
+
+**4. Grasp.** Lay the screwdriver flat in reach of the arm, shaft pointing
+straight away from the robot. `top_down` closes the fingers along pelvis ±Y
+whatever the object's orientation, so this puts them across the handle. Name
+the **handle**, not the tool: the grasp lands on the centroid of what Gemini +
+SAM segment, and for the whole screwdriver that sits near the handle–shaft
+joint. Pick an arm whose gripper node is running (`ros2 node list | grep
+gripper`).
+
+```bash
+ros2 action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
+  "{target_object: 'screwdriver handle', arm: 'right', top_down: true, timeout: {sec: 180, nanosec: 0}}" \
+  --feedback
+```
+
+Drop `top_down: true` to try the heuristic side approaches instead.
+
+**5. Lift.** The grasp skill closes the gripper and stops; raising the arm to
+`prep` lifts the handle:
+
+```bash
+ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
+  "{config_name: 'prep', plan: true, slow_mode: true, duration: {sec: 30, nanosec: 0}}" \
+  --feedback
+```
+
+Ctrl-C on a `send_goal` cancels that arm motion; the e-stop stops everything.
+
+---
+
 ## Frontier exploration (`/skill/frontier_explore`)
 
 Autonomous frontier-based exploration over the slam_toolbox `/map`. Needs nav2 +
@@ -159,8 +225,9 @@ Drive the 14 arm joints to a predefined posture (defined in
 directly; `plan: true` runs the planner first. `duration` of `0` uses the
 controller default settle time.
 
-Available configs: `home`, `t_pose`, `arms_front_45`, `arms_overhead`,
-`arms_asym`, `arms_front_yaw`, `elbow_only`, `init_1`, `init_2`, `init_3`.
+The available configs are the keys of `NAMED_CONFIGS` in that file. The grasp
+skill itself uses `prep` (arms clear of the head camera) and
+`staging_left` / `staging_right` (pre-approach posture for the grasping arm).
 
 ```bash
 # arms down to the home baseline

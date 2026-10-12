@@ -7,7 +7,8 @@ drops datagrams. Lost DDS fragments stall or drop whole point-cloud/image
 samples, so topics go laggy even though the network is not full. The tell is
 `RcvbufErrors` climbing in `/proc/net/snmp`.
 
-Three settings fix this and **all three are required**.
+Steps 1–3 fix that and **all three are required**. Step 4 covers a second loss
+point, IP fragment reassembly, that the UDP counters never show.
 
 ## 1. Host kernel buffers
 
@@ -60,10 +61,46 @@ Confirm the softirq moved (counts should grow on core 13, not 11):
 grep NET_RX /proc/softirqs
 ```
 
-## Verify
+## 4. IP fragment reassembly
 
-Under load, `RcvbufErrors` should stop climbing:
+Cyclone sends DDS data in UDP datagrams of up to `MaxMessageSize` (64 KB on the
+robot PCs), so the sender's kernel splits each one into ~45 IP fragments and the
+receiver's kernel reassembles them before UDP sees anything. Two kernel
+defaults on the receiving host throw that data away under a multi-MB/s stream:
+
+- `ipfrag_max_dist` (64) discards a half-built datagram once 64 other
+  fragments from the same host arrive in between — constant when a sender
+  interleaves many large samples;
+- `ipfrag_high_thresh` (4 MB) caps the memory for in-flight reassembly.
+
+One lost fragment loses the whole 64 KB datagram, and reliable topics resend it,
+adding load. Large topics (point clouds, octomap markers) arrive at a fraction of
+their rate with multi-second gaps, while small ones (`/tf`) look fine. `Udp:
+RcvbufErrors` and the NIC counters stay clean; the losses only show in
+`Ip: ReasmFails`:
 
 ```bash
-docker exec golem_ros grep '^Udp:' /proc/net/snmp
+grep '^Ip:' /proc/net/snmp      # ReasmFails / ReasmTimeout climbing = losses
+```
+
+```bash
+sudo sysctl -w net.ipv4.ipfrag_high_thresh=134217728
+sudo sysctl -w net.ipv4.ipfrag_low_thresh=100663296
+sudo sysctl -w net.ipv4.ipfrag_max_dist=0
+sudo sysctl -w net.ipv4.ipfrag_time=5
+```
+
+Persist them in `/etc/sysctl.d/10-cyclonedds.conf` with the step-1 lines. The
+privileged, host-network `golem_ros` container can apply them too
+(`docker exec golem_ros sysctl -w ...`), but that does not survive a reboot.
+`ReasmTimeout` that keeps climbing afterwards means fragments never arrived
+(loss upstream of this host); a sender `MaxMessageSize` of ~1400 B avoids IP
+fragmentation altogether, so a lost packet costs one DDS fragment instead.
+
+## Verify
+
+Under load, `RcvbufErrors` and `ReasmFails` should stop climbing:
+
+```bash
+docker exec golem_ros grep -E '^(Udp|Ip):' /proc/net/snmp
 ```

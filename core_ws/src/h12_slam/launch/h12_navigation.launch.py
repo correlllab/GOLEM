@@ -70,6 +70,47 @@ def generate_launch_description():
         output='screen'
     )
 
+    # Gravity-aligned, floor-referenced odom -> camera_init (static, computed
+    # once at startup: up from the IMU while the robot stands still, floor
+    # height from the floor plane in the self-filtered scan). Costmap and
+    # octomap height bands are in odom/map; see h12_slam/level_odom.py.
+    level_odom_node = Node(
+        package='h12_slam',
+        executable='level_odom',
+        name='level_odom',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+        remappings=[('imu', '/livox/imu'), ('cloud', '/cloud_body_filtered')],
+    )
+
+    # Drops the robot's own body (URDF collision boxes posed by TF) from the
+    # deskewed FAST-LIO scan. Everything downstream (octomap, costmaps,
+    # slam_toolbox's scan) consumes /cloud_body_filtered.
+    self_filter_node = Node(
+        package='h12_slam',
+        executable='self_filter',
+        name='self_filter',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+        remappings=[
+            ('cloud_in', '/cloud_registered_body'),
+            ('cloud_out', '/cloud_body_filtered'),
+        ],
+    )
+
+    # 3D occupancy (RViz: /occupied_cells_vis_array) and its 2D projection
+    # /projected_map, the static layer of both Nav2 costmaps.
+    octomap_node = Node(
+        package='octomap_server',
+        executable='octomap_server_node',
+        name='octomap_server',
+        output='screen',
+        parameters=[os.path.join(config_dir, 'octomap.yaml'),
+                    {'use_sim_time': use_sim_time}],
+        remappings=[('cloud_in', '/cloud_body_filtered')],
+    )
+
+    # 2D scan for slam_toolbox only (the costmaps use the 3D cloud).
     pointcloud_to_laserscan_node = Node(
         package='pointcloud_to_laserscan',
         executable='pointcloud_to_laserscan_node',
@@ -81,24 +122,15 @@ def generate_launch_description():
             # Height band around the pelvis, matching the real-verified
             # reference implementation (correlllab/fast_lio_nav2_humanoid
             # nav2.launch.py). The lower bound must stay above the floor in
-            # every stance: the ALMI crouch drops the pelvis to ~0.78 m, so a
-            # deeper band slices in the floor and the local costmap fills with
-            # a uniform lethal ring ("Collision Ahead" aborts).
+            # every stance: the ALMI crouch drops the pelvis to ~0.78 m.
             {'min_height': -0.65},
             {'max_height': 0.65},
             {'angle_min': -3.14159},
             {'angle_max': 3.14159},
             {'angle_increment': 0.0087},
-            # range_min is the 2D horizontal distance from the pelvis origin
-            # after transforming the cloud to target_frame, i.e. the blind ring
-            # that keeps the robot from scanning itself. It must clear the whole
-            # arm workspace: the hands reach 0.6-0.8 m from the pelvis at the
-            # home pose and during named-config motions, and returns off the
-            # arms mark LETHAL cells inside the footprint that raytrace clearing
-            # cannot clear (the arm re-marks them every scan), locking nav2 into
-            # "Collision Ahead" aborts. Costmap inflation covers the near-field
-            # gap this leaves.
-            {'range_min': 0.9},
+            # The self filter already removes the body; range_min only drops
+            # the MID360's near-field noise.
+            {'range_min': 0.3},
             {'range_max': 3.0},
             {'use_inf': True},
             {'scan_time': 0.0333},
@@ -106,7 +138,7 @@ def generate_launch_description():
             {'queue_size': 20},
         ],
         remappings=[
-            ('cloud_in', '/cloud_registered_body'),
+            ('cloud_in', '/cloud_body_filtered'),
             ('scan', '/converted_scan'),
         ]
     )
@@ -120,7 +152,7 @@ def generate_launch_description():
             slam_params_file,
             {
                 'base_frame': 'pelvis',
-                'odom_frame': 'camera_init',
+                'odom_frame': 'odom',
                 'scan_topic': '/converted_scan',
                 'odom_topic': '/Odometry',
                 'use_sim_time': use_sim_time,
@@ -128,11 +160,12 @@ def generate_launch_description():
         ]
     )
 
-    # Nav2: bring up the navigation half only. slam_toolbox above already provides
-    # /map and the map -> camera_init transform, so we don't need map_server or
-    # AMCL. navigation_launch.py runs controller_server, planner_server,
-    # behavior_server, bt_navigator, smoother_server, waypoint_follower, and
-    # velocity_smoother under lifecycle_manager_navigation.
+    # Nav2: bring up the navigation half only. slam_toolbox above provides the
+    # map -> odom transform and octomap_server the map (/projected_map), so we
+    # don't need map_server or AMCL. navigation_launch.py runs
+    # controller_server, planner_server, behavior_server, bt_navigator,
+    # smoother_server, waypoint_follower, and velocity_smoother under
+    # lifecycle_manager_navigation.
     nav2_bringup_dir = get_package_share_directory('nav2_bringup')
     nav2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -157,6 +190,9 @@ def generate_launch_description():
         declare_slam_params_file,
         fast_lio_node,
         static_tf_broadcaster,
+        level_odom_node,
+        self_filter_node,
+        octomap_node,
         pointcloud_to_laserscan_node,
         slam_toolbox_node,
         nav2_launch,

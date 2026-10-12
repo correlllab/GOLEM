@@ -594,3 +594,13 @@ RUN git clone https://github.com/unitreerobotics/unitree_sdk2.git /tmp/unitree_s
     && cmake --install /tmp/unitree_sdk2/build \
     && test -f /opt/unitree_install/lib/libunitree_sdk2.a \
     && rm -rf /tmp/unitree_sdk2
+
+# -----------------------------------------------------------------------------
+# 3D occupancy mapping for h12_navigation.launch.py: octomap_server builds the
+# 3D map and the /projected_map the Nav2 costmaps load. The rviz plugins add
+# native OccupancyGrid/OcTree displays. Last, so it can't bust earlier layers.
+# -----------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-octomap-server \
+        ros-humble-octomap-rviz-plugins \
+    && rm -rf /var/lib/apt/lists/*

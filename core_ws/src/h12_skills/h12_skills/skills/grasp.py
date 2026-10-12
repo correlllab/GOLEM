@@ -1069,6 +1069,10 @@ class GraspSkill:
         self._publish_target_tf(targets, contact_w, contact_p)
         start = targets.approaches_p[idx]
         depth = float(np.linalg.norm(_pose_xyz(contact_p) - _pose_xyz(start)))
+        if depth < 0.01:
+            self.get_logger().warn(
+                f'grasp: axis approach is only {depth * 100:.1f}cm; the '
+                'gripper closes without approaching along the grasp axis')
         n = max(1, int(math.ceil(depth / AXIS_APPROACH_STEP_M)))
         for k in range(1, n + 1):
             if gh.is_cancel_requested:

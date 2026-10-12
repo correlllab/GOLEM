@@ -32,7 +32,7 @@ from action_msgs.msg import GoalStatus
 from builtin_interfaces.msg import Duration
 from geometry_msgs.msg import Point, Pose, Quaternion, Vector3Stamped
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image
-from std_msgs.msg import Header
+from std_msgs.msg import Bool, Header
 
 from sensor_msgs_py import point_cloud2
 from tf2_ros import Buffer, TransformBroadcaster, TransformListener, TransformException
@@ -242,6 +242,8 @@ class _Run:
         self.feedback = action_type.Feedback()
         self.result = action_type.Result()
         self.deadline = time.monotonic() + node._timeout_sec(goal_handle.request)
+        # an aborted arm move halts arm motion for this goal only
+        node._arm_halt_reason = None
 
     def remaining(self):
         return max(0.0, self.deadline - time.monotonic())
@@ -373,6 +375,17 @@ class SkillsBase(Node):
         # frame_task server.
         self.named_config_cli = ActionClient(
             self, NamedConfig, '/named_config', callback_group=self._cb_group)
+
+        # --- arm halt detection -------------------------------------------------
+        # /safety/heartbeat is True until the safety layer latches estop (None
+        # until the first message). A frame_task/named_config goal the server
+        # ABORTS (estop, stale robot state, execution error) halts arm motion
+        # for the rest of the skill goal; see arm_halt_reason().
+        self._safety_alive = None
+        self._arm_halt_reason = None
+        self.safety_heartbeat_sub = self.create_subscription(
+            Bool, '/safety/heartbeat', self._on_safety_heartbeat, 10,
+            callback_group=self._cb_group)
 
         # --- in-process skill composition ---------------------------------------
         # pick_place drives the grasp through this node's OWN /skill/grasp action
@@ -954,6 +967,25 @@ class SkillsBase(Node):
                                      stable_stop_msgs=stable_stop_msgs,
                                      lin_tol=lin_tol, ang_tol=ang_tol)
 
+    def _on_safety_heartbeat(self, msg):
+        self._safety_alive = bool(msg.data)
+
+    def arm_halt_reason(self):
+        '''Why arm motion must stop for the current skill goal, or None. Every
+        frame_task / named_config move refuses to send while this is set, so a
+        skill should abort rather than try another target.'''
+        if self._safety_alive is False:
+            return 'safety layer estop latched (/safety/heartbeat false)'
+        return self._arm_halt_reason
+
+    def _note_arm_move_status(self, response, what):
+        '''Latch an arm halt when the server aborted the move `what`.'''
+        if response is not None and response.status == GoalStatus.STATUS_ABORTED:
+            self._arm_halt_reason = (
+                f'{what} was aborted by the server (estop, stale robot state, '
+                'or an execution error)')
+            self.get_logger().error(f'arm halted: {self._arm_halt_reason}')
+
     def _send_frame_move(self, frame, pose, duration_sec, outer_gh, do_plan,
                          slow_mode=False, label='', stable_stop_msgs=None,
                          lin_tol=0.01, ang_tol=0.05):
@@ -967,14 +999,18 @@ class SkillsBase(Node):
         messages — the arm has settled and the server is only holding steady
         state (which otherwise runs to its hold timeout). The reached/not-reached
         verdict still comes from the same loose final-error gate below."""
+        # Every log line for this move carries the caller's label so the
+        # purpose of the motion is visible next to its convergence stream.
+        tag = f'{frame} | {label}' if label else frame
+        halt = self.arm_halt_reason()
+        if halt is not None:
+            self.get_logger().error(f'frame_task[{tag}] not sent: {halt}')
+            return False
         goal = FrameTask.Goal()
         goal.frame_names = [frame]
         goal.frame_targets = [pose]
         goal.plan = do_plan
         goal.slow_mode = bool(slow_mode)
-        # Every log line for this move carries the caller's label so the
-        # purpose of the motion is visible next to its convergence stream.
-        tag = f'{frame} | {label}' if label else frame
         x, y, z = pose.position.x, pose.position.y, pose.position.z
         # Preserve fractional seconds (int() truncation silently shortened the
         # motion budget, e.g. 1.8s -> 1s).
@@ -1032,6 +1068,7 @@ class SkillsBase(Node):
             self.frame_task_cli, goal, feedback_cb=_log_feedback,
             result_timeout=float(duration_sec) + 10.0, outer_gh=outer_gh,
             stop_event=stable_event)
+        self._note_arm_move_status(response, f'frame_task {tag!r}')
         stable_stopped = stable_event is not None and stable_event.is_set()
         ok = stable_stopped or (
             response is not None and response.status == GoalStatus.STATUS_SUCCEEDED)
@@ -1088,6 +1125,10 @@ class SkillsBase(Node):
         (and result_timeout) so the slow move has budget to arrive. Returns True
         when the server reports success. Pass the outer skill goal handle as
         `outer_gh` so canceling the skill also cancels the in-flight arm move."""
+        halt = self.arm_halt_reason()
+        if halt is not None:
+            self.get_logger().error(f'named_config {name!r} not sent: {halt}')
+            return False
         goal = NamedConfig.Goal()
         goal.plan = bool(plan)
         goal.config_name = name
@@ -1097,6 +1138,7 @@ class SkillsBase(Node):
         response = self._send_action(self.named_config_cli, goal,
                                      result_timeout=result_timeout,
                                      outer_gh=outer_gh)
+        self._note_arm_move_status(response, f'named_config {name!r}')
         ok = (response is not None
               and response.status == GoalStatus.STATUS_SUCCEEDED
               and response.result.success)

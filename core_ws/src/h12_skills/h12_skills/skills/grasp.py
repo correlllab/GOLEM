@@ -3,8 +3,9 @@
 Flow (_exec_grasp, the orchestrator):
 
     prep -> detect_object (box) -> segment_object (cloud)
-         -> get_grasp_candidates -> move_to_candidate_approach
-         -> move_to_candidate + force close
+         -> get_grasp_candidates
+         -> move_to_candidate_approach (take off in Z, transit to pre-grasp)
+         -> move_to_candidate (in along the grasp axis) + force close
 
 Goal toggles: with goal.visual_servo the contact move is replaced by servo() —
 a closed hand-camera loop that aligns on the object at VISUAL_SERVO_DEPTH_M and
@@ -12,10 +13,13 @@ closes there (failing the skill if it can't converge; no open-loop fallback).
 With goal.top_down, get_grasp_candidates skips GraspGenX and returns a single
 synthetic steep-from-above grasp.
 
-Testing switch: with APPROACH_IMAGE_ONLY on (currently ON), the skill ends at
-the pre-grasp — it saves one frame from the grasping arm's hand camera,
-returns the arms to 'prep', and succeeds without ever moving to contact or
-closing the gripper.
+Testing switch: with APPROACH_IMAGE_ONLY on, the skill ends at the pre-grasp
+— it saves one frame from the grasping arm's hand camera, returns the arms to
+'prep', and succeeds without ever moving to contact or closing the gripper.
+
+Every arm move refuses to send once the safety layer latches estop or the
+frame_task server aborts a move (base.arm_halt_reason); the skill then aborts
+instead of trying further candidates or retreating.
 
 The box comes from Gemini for a generic object, or from the head-camera YOLO
 detector for a battery-workcell part (BATTERY_OBJECTS; SAM is skipped there
@@ -36,8 +40,8 @@ import cv2
 import numpy as np
 
 from builtin_interfaces.msg import Time
-from geometry_msgs.msg import (Pose, PoseStamped, Point, TransformStamped,
-                               Vector3Stamped)
+from geometry_msgs.msg import (Pose, PoseStamped, Point, Quaternion,
+                               TransformStamped, Vector3Stamped)
 from sensor_msgs.msg import Image
 from visualization_msgs.msg import Marker, MarkerArray
 from rclpy.duration import Duration as RclpyDuration
@@ -157,10 +161,11 @@ HEURISTIC_GRASP_PITCH_FLAT_DEG = 10.0
 
 # ===================== failure retreat (_retreat_after_failure) ==============
 # Straight-up lift before a skill reports failure, so a failed grasp doesn't
-# leave the hand parked in the workspace. Skipped for the prep-config failure
-# (arm never moved) and the approach failure (arm never reached the parts).
+# leave the hand parked in the workspace. Run in slow mode: it starts wherever
+# the failure left the hand, often next to the object. Skipped for the
+# prep-config failure (arm never moved) and when arm motion is halted.
 FAILURE_RETRACT_M = 0.15
-FAILURE_RETRACT_SEC = 3.0
+FAILURE_RETRACT_SEC = 3.0   # full-speed budget; scaled by SLOW_MODE_TIME_SCALE
 
 
 # ========================= motion / execution knobs ==========================
@@ -332,15 +337,26 @@ SERVO_ANG_TOL = 0.05
 # rejecting reachable candidates as "unreachable" and burning through the pool.
 APPROACH_LIN_TOL = 0.025
 APPROACH_ANG_TOL = 0.10
-# The pre-grasp approach (move_to_candidate_approach) is executed as a series of
-# straight-line, UNPLANNED, SLOW-mode Cartesian segments of at most this length
-# (from the staging pose, or 'prep' without top_down, to the pre-grasp), rather
-# than one planned/world-servo move — see _linear_approach. The visual servo
-# still runs AFTER it.
+# Every candidate is approached in three straight-line, UNPLANNED, SLOW-mode
+# stages (_straight_line_move):
+#   1. take off: straight up (pelvis +Z), holding the current orientation, to
+#      APPROACH_CLEARANCE_M above the higher of the hand and the pre-grasp —
+#      this also lifts a failed candidate's hand clear before the next one;
+#   2. transit to the pre-grasp, position and orientation interpolated;
+#   3. in along the grasp's own +Z approach axis to the contact pose
+#      (move_to_candidate), orientation held.
+# The visual servo, when requested, replaces stage 3.
+APPROACH_CLEARANCE_M = 0.05
+# Stage 1-2 segment limits: at most this far / this much rotation per
+# frame_task goal, so no single goal asks for a large reorientation.
 LINEAR_APPROACH_SEG_M = 0.10
+LINEAR_APPROACH_SEG_RAD = 0.35
 # Per-segment frame_task budget [s] (already the slow-mode-scaled value the
 # server needs to cover LINEAR_APPROACH_SEG_M at 1/4 speed).
 LINEAR_APPROACH_SEG_SEC = 10.0
+# Stage 3 step along the grasp axis [m] and its per-step budget [s].
+AXIS_APPROACH_STEP_M = 0.025
+AXIS_APPROACH_STEP_SEC = 6.0
 
 
 # ============================== visualization ================================
@@ -499,8 +515,8 @@ class GraspSkill:
         idx, err = self.move_to_candidate_approach(run, gh, obj, arm, cands,
                                                    targets)
         if err:
-            # No retreat lift here: the arm is at prep or partway toward a
-            # rejected pre-grasp — it never reached into the parts.
+            # No retreat lift: every candidate already began by taking off in
+            # Z, and a halted arm must not be moved at all.
             return run.abort(err)
         # --- snapshot mode: save an image at the pre-grasp, then withdraw ----
         # PREEMPTS the visual servo and the contact confirm: both exist to set
@@ -560,6 +576,9 @@ class GraspSkill:
                          if targets.have_world else None)
         else:
             contact_p, contact_w = self.move_to_candidate(gh, arm, targets, idx)
+            halt = self.arm_halt_reason()
+            if halt is not None:
+                return run.abort(f'arm halted during the contact approach: {halt}')
         self.get_clock().sleep_for(RclpyDuration(seconds=PRE_CLOSE_SETTLE_SEC))
         if not self.close_gripper(arm):
             return fail('gripper close failed')
@@ -913,48 +932,73 @@ class GraspSkill:
                         grasps_w=grasps_w, approaches_w=approaches_w,
                         have_world=have_world, centroid_w=centroid_w)
 
-    def _linear_approach(self, frame, target, run, gh, slow_mode=True):
-        """Move `frame` to `target` (a pelvis-frame Pose) as a series of
-        straight-line Cartesian segments of at most LINEAR_APPROACH_SEG_M, each
-        a DIRECT (unplanned) move, in slow mode. The target orientation is
-        commanded from the first segment; only the position is interpolated.
-        Returns True once every segment reached, or False on the first
-        unreachable segment / cancel / timeout (so the caller tries the next
-        candidate)."""
+    def _straight_line_move(self, frame, target, run, gh, step_m, step_rad,
+                            seg_sec, lin_tol, ang_tol, label, slow_mode=True):
+        """Move `frame` from its current pose to `target` (pelvis frame) along a
+        straight line, as DIRECT (unplanned) frame_task goals of at most
+        `step_m` translation and `step_rad` rotation each; orientation is
+        slerped. Returns True once every segment reached (lin_tol, ang_tol),
+        False on the first miss, cancel, timeout or arm halt."""
         cur = self._frame_pose_in_pelvis(frame)
         if cur is None:
             return False
-        p0 = np.array([cur.position.x, cur.position.y, cur.position.z])
-        p1 = np.array([target.position.x, target.position.y, target.position.z])
-        n = max(1, int(math.ceil(float(np.linalg.norm(p1 - p0))
-                                 / LINEAR_APPROACH_SEG_M)))
+        p0 = _pose_xyz(cur)
+        p1 = _pose_xyz(target)
+        q0 = _pose_quat(cur)
+        q1 = _pose_quat(target)
+        dist = float(np.linalg.norm(p1 - p0))
+        angle = _quat_angle(q0, q1)
+        n = max(1, int(math.ceil(max(dist / step_m, angle / step_rad))))
         self.get_logger().info(
-            f'grasp: linear approach {np.linalg.norm(p1 - p0) * 100:.0f}cm in {n} '
-            f'unplanned{" slow" if slow_mode else ""} step(s) of '
-            f'<= {LINEAR_APPROACH_SEG_M * 100:.0f}cm')
+            f'grasp: {label}: {dist * 100:.1f}cm / {math.degrees(angle):.0f}deg '
+            f'in {n} unplanned{" slow" if slow_mode else ""} step(s)')
         for k in range(1, n + 1):
             if gh.is_cancel_requested or run.remaining() <= 0.0:
                 return False
-            pk = p0 + (float(k) / n) * (p1 - p0)
+            t = float(k) / n
+            pk = p0 + t * (p1 - p0)
+            qk = _quat_slerp(q0, q1, t)
             wp = Pose()
             wp.position = Point(x=float(pk[0]), y=float(pk[1]), z=float(pk[2]))
-            wp.orientation = target.orientation
+            wp.orientation = Quaternion(x=float(qk[0]), y=float(qk[1]),
+                                        z=float(qk[2]), w=float(qk[3]))
             if not self.move_frame_to(
-                    frame, wp, outer_gh=gh, duration_sec=LINEAR_APPROACH_SEG_SEC,
+                    frame, wp, outer_gh=gh, duration_sec=seg_sec,
                     do_plan=False, slow_mode=slow_mode,
-                    lin_tol=APPROACH_LIN_TOL, ang_tol=APPROACH_ANG_TOL,
+                    lin_tol=lin_tol, ang_tol=ang_tol,
                     stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
-                    label=f'linear approach step {k}/{n}'):
+                    label=f'{label} {k}/{n}'):
                 return False
         return True
 
-    def move_to_candidate_approach(self, run, gh, obj, arm, cands, targets,
-                                   slow_mode=True):
+    def _approach_pregrasp(self, frame, pregrasp, run, gh):
+        """Stages 1-2 of a candidate's approach: take off straight up (pelvis
+        +Z, current orientation held) to APPROACH_CLEARANCE_M above the higher
+        of the hand and the pre-grasp, then transit to the pre-grasp. Returns
+        whether the pre-grasp was reached."""
+        cur = self._frame_pose_in_pelvis(frame)
+        if cur is None:
+            return False
+        lift_z = max(cur.position.z, pregrasp.position.z) + APPROACH_CLEARANCE_M
+        if lift_z - cur.position.z > 1e-3:
+            up = copy.deepcopy(cur)
+            up.position.z = lift_z
+            if not self._straight_line_move(
+                    frame, up, run, gh, LINEAR_APPROACH_SEG_M,
+                    LINEAR_APPROACH_SEG_RAD, LINEAR_APPROACH_SEG_SEC,
+                    APPROACH_LIN_TOL, APPROACH_ANG_TOL, 'take-off (pelvis +Z)'):
+                return False
+        return self._straight_line_move(
+            frame, pregrasp, run, gh, LINEAR_APPROACH_SEG_M,
+            LINEAR_APPROACH_SEG_RAD, LINEAR_APPROACH_SEG_SEC,
+            APPROACH_LIN_TOL, APPROACH_ANG_TOL, 'transit to pre-grasp')
+
+    def move_to_candidate_approach(self, run, gh, obj, arm, cands, targets):
         """Walk the candidates strictly tier-major (1..7), best score first
-        within a tier, reaching each pre-grasp via a series of straight-line,
-        UNPLANNED, SLOW-mode segments (_linear_approach) until one is reachable.
+        within a tier, reaching each pre-grasp by taking off in Z and then
+        transiting to it (_approach_pregrasp) until one is reachable.
         Returns (index, None) of the committed candidate, or
-        (None, abort-reason) on cancel/timeout or all-unreachable. Each
+        (None, abort-reason) on cancel/timeout, arm halt or all-unreachable. Each
         candidate's state (trying / failed / chosen) is republished on
         'graspgen_markers' as it changes."""
         order = sorted(range(len(cands.grasps)),
@@ -974,43 +1018,67 @@ class GraspSkill:
             self.get_logger().info(
                 f'grasp {i} for {obj!r}: tier {cands.tiers[i]}, '
                 f'score {cands.scores[i]:.2f}, width {width_mm:.1f}mm')
-            # Straight-line, unplanned, slow segments to the pelvis-frame
-            # pre-grasp (no world anchoring). The visual servo runs AFTER this.
-            if self._linear_approach(GRASP_FRAMES[arm], targets.approaches_p[i],
-                                     run, gh, slow_mode=slow_mode):
+            # Pelvis-frame pre-grasp (no world anchoring); the visual servo
+            # or the in-along-the-axis contact move runs AFTER this.
+            if self._approach_pregrasp(GRASP_FRAMES[arm], targets.approaches_p[i],
+                                       run, gh):
                 mark(i, 'chosen')
                 return i, None
             if gh.is_cancel_requested or run.remaining() <= 0.0:
                 return None, 'canceled or timed out during approach'
+            halt = self.arm_halt_reason()
+            if halt is not None:
+                mark(i, 'failed')
+                return None, f'arm halted during the approach: {halt}'
             mark(i, 'failed')
             self.get_logger().warn(
                 f'grasp {i} pre-grasp unreachable; trying next-ranked grasp')
         return None, (f'no reachable grasp for {obj!r} '
                       f'(tried {len(order)} of {cands.total})')
 
-    def move_to_candidate(self, gh, arm, targets, idx, slow_mode=False):
-        """Servo from the committed pre-grasp to the contact target — the
-        committed grasp pose backed off CONTACT_OFFSET along its own approach
-        axis (rigid geometry applied to the world SNAPSHOT, keeping the
-        detect-time anchoring). Best-effort by design: a contact pose that
-        never reaches tolerance is still worth closing on. do_plan=False —
-        collision-aware planning would fight the intended approach into the
-        object. Returns (contact_p, contact_w) for the outcome record."""
+    def move_to_candidate(self, gh, arm, targets, idx):
+        """Stage 3 of the approach: from the pre-grasp, go IN along the
+        committed grasp's own +Z approach axis to the contact target (the grasp
+        backed off CONTACT_OFFSET), in AXIS_APPROACH_STEP_M straight steps with
+        the grasp orientation held, slow mode, unplanned (collision-aware
+        planning would fight the intended approach into the object).
+        Best-effort: advancing stops at the first step that misses tolerance,
+        and the gripper still closes there. With world anchoring available, a
+        final world-frame correction compensates pelvis drift. Returns
+        (contact_p, contact_w) for the outcome record."""
+        frame = GRASP_FRAMES[arm]
         contact_p = get_approach_pose(targets.grasps_p[idx],
                                       approach_dist=-CONTACT_OFFSET)
         contact_w = (get_approach_pose(targets.grasps_w[idx],
                                        approach_dist=-CONTACT_OFFSET)
                      if targets.have_world else None)
         self._publish_target_tf(targets, contact_w, contact_p)
-        self.servo_frame_to_world(
-            GRASP_FRAMES[arm], contact_w if targets.have_world else None,
-            contact_p, outer_gh=gh,
-            duration_sec=SERVO_DURATION_SEC * (SLOW_MODE_TIME_SCALE
-                                               if slow_mode else 1.0),
-            max_iter=SERVO_MAX_ITER,
-            lin_tol=SERVO_LIN_TOL, ang_tol=SERVO_ANG_TOL, do_plan=False,
-            slow_mode=slow_mode, stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
-            label='contact descent onto committed grasp')
+        start = targets.approaches_p[idx]
+        depth = float(np.linalg.norm(_pose_xyz(contact_p) - _pose_xyz(start)))
+        n = max(1, int(math.ceil(depth / AXIS_APPROACH_STEP_M)))
+        for k in range(1, n + 1):
+            if gh.is_cancel_requested:
+                break
+            step = get_approach_pose(start, approach_dist=depth * k / n)
+            if not self.move_frame_to(
+                    frame, step, outer_gh=gh, duration_sec=AXIS_APPROACH_STEP_SEC,
+                    do_plan=False, slow_mode=True,
+                    lin_tol=SERVO_LIN_TOL, ang_tol=SERVO_ANG_TOL,
+                    stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
+                    label=f'in along the grasp axis {k}/{n}'):
+                self.get_logger().warn(
+                    f'grasp: axis approach stopped at step {k}/{n} '
+                    f'({depth * (k - 1) / n * 100:.1f} of {depth * 100:.1f}cm); '
+                    'closing here')
+                return contact_p, contact_w
+        if targets.have_world and self.arm_halt_reason() is None:
+            self.servo_frame_to_world(
+                frame, contact_w, contact_p, outer_gh=gh,
+                duration_sec=SERVO_DURATION_SEC * SLOW_MODE_TIME_SCALE,
+                max_iter=SERVO_MAX_ITER,
+                lin_tol=SERVO_LIN_TOL, ang_tol=SERVO_ANG_TOL, do_plan=False,
+                slow_mode=True, stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
+                label='world-frame contact correction')
         return contact_p, contact_w
 
     # ------------------------------------------------------------ visual servo
@@ -1501,6 +1569,10 @@ class GraspSkill:
         failing, and the retreat must never replace the real reason."""
         if arm is None:
             return
+        halt = self.arm_halt_reason()
+        if halt is not None:
+            self.get_logger().warn(f'retreat: skipped, arm halted: {halt}')
+            return
         frame = GRASP_FRAMES[arm]
         cur = self._frame_pose_in_pelvis(frame)
         if cur is None:
@@ -1513,8 +1585,8 @@ class GraspSkill:
             f'retreat: lifting {frame} {FAILURE_RETRACT_M * 100:.0f}cm (pelvis +Z) '
             'before reporting the failure')
         if not self.move_frame_to(frame, up, outer_gh=gh,
-                                  duration_sec=FAILURE_RETRACT_SEC,
-                                  do_plan=False, slow_mode=False,
+                                  duration_sec=FAILURE_RETRACT_SEC * SLOW_MODE_TIME_SCALE,
+                                  do_plan=False, slow_mode=True,
                                   stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
                                   label='failure retreat lift'):
             self.get_logger().warn('retreat: lift incomplete')
@@ -1735,6 +1807,34 @@ class GraspSkill:
 
 
 # ============================ grasp-pose geometry ============================
+def _pose_xyz(pose):
+    return np.array([pose.position.x, pose.position.y, pose.position.z], dtype=float)
+
+
+def _pose_quat(pose):
+    """Unit quaternion (x, y, z, w) of `pose`."""
+    q = np.array([pose.orientation.x, pose.orientation.y,
+                  pose.orientation.z, pose.orientation.w], dtype=float)
+    return q / np.linalg.norm(q)
+
+
+def _quat_angle(q0, q1):
+    """Rotation angle [rad] between unit quaternions q0 and q1."""
+    return 2.0 * math.acos(min(1.0, abs(float(np.dot(q0, q1)))))
+
+
+def _quat_slerp(q0, q1, t):
+    """Spherical interpolation from q0 (t=0) to q1 (t=1), shortest arc."""
+    dot = float(np.dot(q0, q1))
+    if dot < 0.0:
+        q1, dot = -q1, -dot
+    if dot > 0.9995:
+        q = q0 + t * (q1 - q0)
+        return q / np.linalg.norm(q)
+    theta = math.acos(dot)
+    return (math.sin((1.0 - t) * theta) * q0 + math.sin(t * theta) * q1) / math.sin(theta)
+
+
 def get_approach_pose(pose, approach_dist):
     """Translate `pose` along its OWN local +Z (the GraspGenX approach axis)
     by `approach_dist` metres, returning a NEW Pose with the orientation

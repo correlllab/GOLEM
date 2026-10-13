@@ -6,6 +6,7 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from nav2_common.launch import RewrittenYaml
 
 
 def generate_launch_description():
@@ -172,19 +173,24 @@ def generate_launch_description():
     # smoother_server, waypoint_follower, and velocity_smoother under
     # lifecycle_manager_navigation.
     nav2_bringup_dir = get_package_share_directory('nav2_bringup')
+    # navigation_launch.py takes no BT argument; bt_navigator reads its tree
+    # from the params file, so point that key at the installed humanoid tree.
+    nav2_params = RewrittenYaml(
+        source_file=nav2_params_file,
+        param_rewrites={'default_nav_to_pose_bt_xml': os.path.join(
+            get_package_share_directory('h12_slam'), 'behavior_trees',
+            'navigate_to_pose_humanoid.xml')},
+        convert_types=True,
+    )
     nav2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(nav2_bringup_dir, 'launch', 'navigation_launch.py')
         ),
         launch_arguments={
             'use_sim_time': use_sim_time,
-            'params_file': nav2_params_file,
+            'params_file': nav2_params,
             'autostart': 'true',
             'namespace': '',
-            'default_bt_xml_filename': os.path.join(
-                get_package_share_directory('nav2_bt_navigator'),
-                'behavior_trees',
-                'navigate_to_pose_w_replanning_and_recovery.xml'),
         }.items(),
     )
 

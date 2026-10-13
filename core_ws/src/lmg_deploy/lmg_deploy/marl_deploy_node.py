@@ -220,6 +220,10 @@ class MarlDeployNode(Node):
         self._hb_last = time.monotonic()
 
     def _on_confirm(self, _req, resp):
+        if not self._engaged:
+            # a /cmd_vel that arrived before the go-ahead is not a command to walk
+            # on (arm goals are already ignored until engaged)
+            self.controller.set_velocity_command(np.zeros(3))
         self._confirmed = True
         resp.success = True
         resp.message = "already engaged" if self._engaged else "confirmed: engaging once the pre-pose settles"

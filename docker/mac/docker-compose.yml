@@ -130,10 +130,9 @@ services:
       - GOLEM_RVIZ=${GOLEM_RVIZ:-0}
       # Optional lower-body controller: GOLEM_LOWERBODY=fame runs the RMA policy
       # that balances the robot standing unsupported (releases the elastic band);
-      # =walk runs the raw walk policy (marches in place); =switch is the switchable
-      # controller (band-held idle -> /lowerbody/start_{fame,walk}) and is the one to
-      # use for stand<->walk and the nav demo -- the walk policy stays upright when
-      # handed over from FAME. Default (unset) keeps the band tether + upper-body IK.
+      # =walk runs the raw walk policy (marches in place); =almi runs the controller
+      # pinned to ALMI, which stands and walks on /cmd_vel -- the one to use for the
+      # nav demo. Default (unset) keeps the band tether + upper-body IK.
       - GOLEM_LOWERBODY=${GOLEM_LOWERBODY:-}
       # GOLEM_SLAM=1 adds pointcloud_to_laserscan + slam_toolbox to the bringup:
       # the Livox cloud -> 2D scan -> occupancy /map against the sim's /odom.

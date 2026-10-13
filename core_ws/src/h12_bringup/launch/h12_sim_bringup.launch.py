@@ -40,7 +40,6 @@ def generate_launch_description():
         # bringup does not launch the MJPC controller, so lowerbody:=mjpc
         # leaves the legs uncontrolled.
         DeclareLaunchArgument('lowerbody', default_value='almi'),  # almi | fame | walk
-        DeclareLaunchArgument('lowerbody_auto_switch', default_value='false'),
         DeclareLaunchArgument('model_logging', default_value='true'),
         DeclareLaunchArgument('model_visualization', default_value='true'),
         DeclareLaunchArgument('model_clear_logs', default_value='true'),
@@ -62,7 +61,6 @@ def generate_launch_description():
             **sim_time,
             'start_position_verified': 'true',
             'lowerbody': LaunchConfiguration('lowerbody'),
-            'lowerbody_auto_switch': LaunchConfiguration('lowerbody_auto_switch'),
             'lowerbody_params': os.path.join(bringup_share, 'config', 'lowerbody_sim.yaml'),
         }),
         _include('h12_bringup', 'h12_models.launch.py', {

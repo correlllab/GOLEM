@@ -120,9 +120,8 @@ cd "$WS"
 # (walk/FAME policies). They build cheaply and are only *launched* when
 # GOLEM_LOWERBODY is set (see the bringup), but building them always keeps
 # `ros2 run h12_lowerbody_rl fame_node` available in a shell. unitree_hg needs
-# ros-humble-rosidl-generator-dds-idl and torch, both in the image. The walk
-# policy is stable only when handed over from a settled FAME stance, which is
-# what GOLEM_LOWERBODY=switch does (see docs/MACOS.md).
+# ros-humble-rosidl-generator-dds-idl and torch, both in the image. Use
+# GOLEM_LOWERBODY=almi to stand and walk (see docs/MACOS.md).
 PKGS="custom_ros_messages magpie_msgs h12_ros2_model h12_ros2_controller h12_safety_layer h12_slam h12_bringup unitree_hg h12_lowerbody_rl"
 H1_BRINGUP_STUB_DEPS="estop livox_ros_driver2 fast_lio model_server"
 

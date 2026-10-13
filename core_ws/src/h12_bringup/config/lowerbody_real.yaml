@@ -1,5 +1,5 @@
-# lowerbody_controller_node parameters for the real robot. active_policy and
-# auto_switch come from h12_lowerbody.launch.py's launch arguments. The node
+# lowerbody_controller_node parameters for the real robot. active_policy comes
+# from h12_lowerbody.launch.py's lowerbody:= launch argument. The node
 # holds at the pre-pose crouch until the operator confirms:
 #   ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
 lowerbody_controller_node:

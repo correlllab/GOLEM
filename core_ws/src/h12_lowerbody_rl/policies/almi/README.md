@@ -81,8 +81,8 @@ forced to 0), above it walks. Publish `/cmd_vel` (teleop or nav2):
 - `cmd_gain` `[1.5, 1.0, 2.0]` amplifies commands before the policy sees
   them (the checkpoint undertracks, yaw worst) and `cmd_smooth_alpha` 0.15
   averages out sign-flipping follower corrections. Start with vx 0.2–0.3.
-- `almi` never auto-switches — auto_switch only toggles fame<->walk, so the
-  active policy stays pinned.
+- The controller never switches policies — `lowerbody:=almi` drives the legs
+  for the whole run.
 
 ### Sim
 

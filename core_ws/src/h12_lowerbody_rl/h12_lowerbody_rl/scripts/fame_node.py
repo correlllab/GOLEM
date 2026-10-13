@@ -9,7 +9,7 @@ h12_safety_layer to merge with upper-body commands.
 It controls only the 12 legs; the torso + arms are driven by the upper-body IK
 and are merely *observed* here (the encoder adapts the legs to them). Reuses
 ``FamePolicy`` so the RMA observation/encoder math has a single source of truth;
-the generic, switchable controller is ``lowerbody_controller_node``.
+the generic controller is ``lowerbody_controller_node``.
 
 Interfaces
 ----------

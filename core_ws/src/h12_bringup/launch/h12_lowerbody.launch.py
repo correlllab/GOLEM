@@ -30,9 +30,6 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'lowerbody', default_value='almi',
             description='RL policy: almi | fame | walk; mjpc starts no RL node'),
-        # false keeps the robot on the lowerbody:= policy for standing AND
-        # walking; true hands nonzero /cmd_vel to the walk policy and back.
-        DeclareLaunchArgument('lowerbody_auto_switch', default_value='false'),
         DeclareLaunchArgument(
             'lowerbody_params',
             default_value=os.path.join(config_dir, 'lowerbody_real.yaml'),
@@ -56,9 +53,7 @@ def generate_launch_description():
             name='lowerbody_controller_node',  # MUST match the yaml key
             parameters=[sim_time_param,
                         LaunchConfiguration('lowerbody_params'),
-                        {'active_policy': LaunchConfiguration('lowerbody'),
-                         'auto_switch': ParameterValue(
-                             LaunchConfiguration('lowerbody_auto_switch'), value_type=bool)}],
+                        {'active_policy': LaunchConfiguration('lowerbody')}],
             output='screen',
             condition=IfCondition(AndSubstitution(
                 LaunchConfiguration('start_position_verified'),

@@ -19,8 +19,8 @@ Ported from the standalone mac-sim frontier_explore node into the skills mixin s
 it runs as the /skill/frontier_explore action alongside the other skills, reusing
 SkillsBase's TF buffer + executor-safe action plumbing (_send_action). Requires
 nav2 + slam_toolbox up and the robot able to follow nav2's /cmd_vel — under the
-switchable lower-body controller (lowerbody:=almi, auto_switch on) ALMI stands at
-a waypoint and hands off to the walk policy the moment nav2 commands motion.
+lower-body controller with lowerbody:=almi, ALMI stands at a waypoint and walks
+the moment nav2 commands motion.
 """
 import math
 import time

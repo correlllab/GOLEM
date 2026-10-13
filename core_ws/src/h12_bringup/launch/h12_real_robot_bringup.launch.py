@@ -35,7 +35,6 @@ def generate_launch_description():
         # Defaults to false so a bare launch never commands the legs.
         DeclareLaunchArgument('start_position_verified', default_value='false'),
         DeclareLaunchArgument('lowerbody', default_value='almi'),
-        DeclareLaunchArgument('lowerbody_auto_switch', default_value='false'),
 
         _include('h12_bringup', 'h12_real_drivers.launch.py', wall_time),
         _include('h12_slam', 'h12_navigation.launch.py', wall_time),
@@ -45,7 +44,6 @@ def generate_launch_description():
             **wall_time,
             'start_position_verified': LaunchConfiguration('start_position_verified'),
             'lowerbody': LaunchConfiguration('lowerbody'),
-            'lowerbody_auto_switch': LaunchConfiguration('lowerbody_auto_switch'),
             'lowerbody_params': os.path.join(bringup_share, 'config', 'lowerbody_real.yaml'),
             'use_estimator': 'false',
         }),

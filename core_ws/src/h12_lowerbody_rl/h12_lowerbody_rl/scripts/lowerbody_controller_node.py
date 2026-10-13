@@ -1,4 +1,4 @@
-"""Lower-body controller node: band-held idle -> FAME stand -> auto stand/walk.
+"""Lower-body controller node: band-held idle -> pre-pose -> one pinned policy.
 
 Flow
 ----
@@ -8,34 +8,18 @@ Flow
    the target from the measured pose to the policy's nominal crouch over
    ``prepose_ramp_s`` — never a step at full gains), releases
    the elastic band (gated on frame_task being ready, /left_ee_pose), and engages
-   FAME (standing). With ``engage_wait_for_confirm``
+   the policy. With ``engage_wait_for_confirm``
    (the default) the node HOLDS at the pre-pose crouch and only engages the policy
    after the operator calls the /lowerbody/confirm_engage Trigger service — the
    real-robot arming step. The sim bringup disables it for unattended runs.
-3. From then on the policy is chosen **automatically from /cmd_vel** (auto_switch,
-   on by default): ||[vx, vy, wz]|| above ``auto_switch_rise_norm`` -> walk
-   (locomote); below ``auto_switch_fall_norm`` -> FAME (stand still). The two
-   thresholds give hysteresis so it doesn't chatter at the boundary. Each switch
-   commits through the gated handover (policy_manager.py): walk->FAME waits for a
-   real stop + settle; FAME->walk engages as soon as the base is upright and still,
-   so it can start under a held velocity command.
-
-There are no per-policy start services — drive /cmd_vel (e.g. from nav2) and the
-controller stands or walks to match. Set ``auto_switch:=false`` to pin the robot to
-``active_policy`` (pure stand or pure walk).
-
-The stand side of the auto-switch is the startup policy when it can stand:
-``active_policy:=almi`` gives almi(stand) <-> walk(locomote), exactly like the
-default fame <-> walk. (ALMI can in principle locomote itself, but its
-from-stand gait engagement proved unreliable — envelope-tested 2026-07-20 — so
-under auto_switch it serves as the stand/manipulation policy and the proven
-walk policy handles velocity tracking.) ``auto_switch:=false`` pins the
-startup policy outright.
+3. From then on ``active_policy`` drives the legs for the whole run; there is no
+   switching between policies. It receives /cmd_vel directly (ALMI and walk
+   locomote on it; FAME stands).
 
 Interfaces
 ----------
 sub  /lowstate                 (unitree_hg/LowState)   robot state
-sub  /cmd_vel                  (geometry_msgs/Twist)   velocity command -> policy + walk
+sub  /cmd_vel                  (geometry_msgs/Twist)   velocity command -> policy
 sub  /lowerbody/squat_cmd      (std_msgs/Float32)      base-height / squat (FAME)
 sub  /left_ee_pose             (geometry_msgs/PoseStamped)  frame_task-ready signal
 sub  /safety/heartbeat         (std_msgs/Bool)         safety-layer liveness; a False
@@ -45,7 +29,8 @@ sub  /safety/heartbeat         (std_msgs/Bool)         safety-layer liveness; a 
 pub  /safety/lowcmd_lower_in   (unitree_hg/LowCmd)     12-joint leg setpoints
 pub  /lowerbody/active_policy  (std_msgs/String, latched)  active policy ("idle" when none)
 srv  /lowerbody/confirm_engage (std_srvs/Trigger)      operator go-ahead: engage the
-                                                       pre-posed policy (see Flow #2)
+                                                       pre-posed policy (see Flow #2);
+                                                       clears /cmd_vel and squat_cmd
 """
 
 import os
@@ -97,15 +82,8 @@ SAFETY_HEARTBEAT_TOPIC = "/safety/heartbeat"
 # Policy registry keys (see LowerBodyControllerNode.__init__).
 FAME = "fame"   # RMA balance/stand policy (does not locomote)
 WALK = "walk"   # TorchScript walk policy (follows /cmd_vel)
-ALMI = "almi"   # ALMI LSTM policy: superb stand (incl. under arm motion), but
-                # its from-stand gait engagement is unreliable (LSTM was only
-                # ever trained with the command present from episode start) —
-                # so under auto_switch it serves as a STAND policy and hands
-                # locomotion to walk, exactly like fame does.
-
-# Policies that can serve as the auto-switch stand side. The locomotion side
-# is always the walk policy (the proven velocity tracker).
-STAND_CAPABLE = (FAME, ALMI)
+ALMI = "almi"   # ALMI LSTM policy: stands (incl. under arm motion) and walks on
+                # /cmd_vel; AlmiPolicy resets its LSTM at gait onset
 
 # Pre-pose: before engaging the policy, PD-drive the legs to the incoming policy's
 # nominal crouch (band-held) and wait until they settle there. The RMA policy warms
@@ -133,9 +111,8 @@ class LowerBodyControllerNode(Node):
 
         self.declare_parameter("control_hz", 50.0)
         # Policy to auto-activate at startup (releases the band when ready).
-        # Default "fame" (stand). "none" stays band-held idle -- but with the start
-        # services removed, "none" now leaves the robot idle forever (auto_switch
-        # only switches BETWEEN active policies), so set a real policy here.
+        # Default "fame" (stand). "none" leaves the robot band-held idle forever,
+        # so set a real policy here.
         self.declare_parameter("active_policy", "fame")
         self.declare_parameter("walk_config", _share("policies", "walk", "walk.yaml"))
         self.declare_parameter("fame_config", _share("policies", "fame", "fame.yaml"))
@@ -154,20 +131,9 @@ class LowerBodyControllerNode(Node):
                     from_value=-IMU_OFFSET_RANGE_DEG, to_value=IMU_OFFSET_RANGE_DEG,
                     step=0.0)]))
         self.declare_parameter("default_height_cmd", 1.0)
-        # Auto-switch stand<->walk from ||[vx, vy, wz]||: engage walk above rise,
-        # fall back to stand at or below fall. auto_switch:=false pins the robot
-        # to active_policy. rise 0.05 so a real velocity command starts walking
-        # (small enough to catch nav2's fine-approach commands). fall 0.0 so once
-        # walking the robot STAYS in walk for ANY nonzero command and only returns
-        # to stand at an exactly-zero command -- it never drops out of walk on
-        # small mid-path dips. (The fall check is <=, see _tick, so 0.0 fires at
-        # 0.) Both stay <= the handover gate's cmd_eps (0.10) so walk->stand's
-        # stop gate can still pass. NOTE: /cmd_vel is latched, so if a publisher
-        # stops mid-command the last (nonzero) value holds and the robot keeps
-        # walking -- publish an explicit zero to stand.
-        self.declare_parameter("auto_switch", True)
-        self.declare_parameter("auto_switch_rise_norm", 0.05)
-        self.declare_parameter("auto_switch_fall_norm", 0.0)
+        # NOTE: /cmd_vel is latched, so if a publisher stops mid-command the last
+        # (nonzero) value holds and the robot keeps walking -- publish an
+        # explicit zero to stand.
         # Seconds to ramp the pre-pose target from the measured leg pose to the
         # policy's nominal (cosine blend; see the PREPOSE block above). Starting
         # at the measured pose means zero initial PD error, so full gains apply
@@ -202,9 +168,6 @@ class LowerBodyControllerNode(Node):
         self._imu_corr = self._build_imu_corr()
         self.add_on_set_parameters_callback(self._on_set_parameters)
         self._height_cmd = float(self.get_parameter("default_height_cmd").value)
-        self._auto_switch = bool(self.get_parameter("auto_switch").value)
-        self._auto_rise = float(self.get_parameter("auto_switch_rise_norm").value)
-        self._auto_fall = float(self.get_parameter("auto_switch_fall_norm").value)
         self._confirm_wait = bool(self.get_parameter("engage_wait_for_confirm").value)
         self._engage_confirmed = False
         self._prepose_ramp_ticks = max(1, int(round(
@@ -265,15 +228,9 @@ class LowerBodyControllerNode(Node):
         self._publish_active()
 
         self.create_timer(1.0 / control_hz, self._tick)
-        # Auto-switch sides: the startup policy is the stand side when it can
-        # stand (fame or almi); walk is always the locomotion side. A startup
-        # policy of "walk" gets fame as its stand side.
-        self._stand_policy = startup_policy if startup_policy in STAND_CAPABLE else FAME
 
         self.get_logger().info(
             f"lowerbody_controller ready: policies={self._manager.names()}, "
-            f"auto_switch={self._auto_switch} "
-            f"(stand={self._stand_policy!r} <-> walk, rise={self._auto_rise}, fall={self._auto_fall}), "
             f"control_hz={control_hz}. Policy follows /cmd_vel; no start services."
         )
 
@@ -287,8 +244,8 @@ class LowerBodyControllerNode(Node):
             )
 
     # -- request entry points ------------------------------------------------
-    def _request_policy(self, name: str, require_stop: bool = True) -> tuple[bool, str]:
-        ok, msg = self._manager.request(name, require_stop=require_stop)
+    def _request_policy(self, name: str) -> tuple[bool, str]:
+        ok, msg = self._manager.request(name)
         if ok and self._manager.is_pending() and self._manager.is_idle():
             self._request_time = time.monotonic()  # start band-release timeout
         return ok, msg
@@ -338,11 +295,18 @@ class LowerBodyControllerNode(Node):
             resp.message = "already confirmed"
             return resp
         self._engage_confirmed = True
+        self._clear_commands()
         resp.success = True
         resp.message = (f"confirmed — engaging {pending!r} once the pre-pose settles"
                         if pending else "confirmed (no activation pending)")
         self.get_logger().info(f"operator confirm: {resp.message}")
         return resp
+
+    def _clear_commands(self) -> None:
+        # Commands that arrived before the operator's go-ahead are not commands
+        # to act on now: zero the velocity and restore the default squat height.
+        self._cmd[:] = 0.0
+        self._height_cmd = float(self.get_parameter("default_height_cmd").value)
 
     # -- IMU trim ------------------------------------------------------------
     def _build_imu_corr(self):
@@ -397,7 +361,7 @@ class LowerBodyControllerNode(Node):
         # /elastic_band/toggle may not be discovered yet (a startup race, likelier
         # with the slower non-headless MuJoCo viewer), and marking it released up
         # front gives up permanently: the robot hangs from the band forever, still
-        # switching to walk on /cmd_vel but never moving. Retry every tick until
+        # following /cmd_vel but never moving. Retry every tick until
         # the service is ready and the call returns success.
         if self._band_released or self._band_release_inflight:
             return
@@ -448,80 +412,61 @@ class LowerBodyControllerNode(Node):
             return
         state = self._state_from_lowstate(self._lowstate)
 
-        # Auto-switch stand<->walk from the velocity command. Decide only when
-        # settled on a policy (not idle, not mid-handover); the request then commits
-        # through the gated handover below. fame->walk uses a relaxed gate
-        # (require_stop=False) so it engages under a held cmd; walk->FAME uses the
-        # full stop-and-settle gate. request() is idempotent while pending, so
-        # re-deciding each tick doesn't reset the gate.
-        if self._auto_switch and not self._manager.is_idle() and not self._manager.is_pending():
-            cmd_norm = float(np.linalg.norm(self._cmd))
-            active = self._manager.active_name
-            if active == self._stand_policy and cmd_norm > self._auto_rise:
-                self._request_policy(WALK, require_stop=False)
-            elif active == WALK and cmd_norm <= self._auto_fall:
-                # <= (not <) so a fall threshold of 0.0 returns to stand at an
-                # exactly-zero command; a norm is never < 0, so strict < would
-                # never fire at 0 and the robot would stay in walk forever.
-                self._request_policy(self._stand_policy, require_stop=True)
-
-        if self._manager.is_pending():
-            if self._manager.is_idle():
-                # Pre-pose: PD-drive the legs to the incoming policy's nominal
-                # crouch (band-held) and wait until they settle BEFORE engaging it.
-                # The RMA policy warms up from its trained default pose; from the
-                # straight-leg spawn it can't recover the transition before the band
-                # drops. The band stays held throughout — the release below is gated
-                # on _awaiting_band_release, which we only set once committed.
-                pending = self._manager.desired_policy()
-                if pending is None:
-                    return
-                # Leg commands only reach the motors once the safety layer is
-                # relaying. Ramping before then runs the ramp out against legs
-                # that never move, and the first relayed command steps them to
-                # the full crouch at full gains.
-                if self._hb_last is None:
-                    self.get_logger().info(
-                        "waiting for /safety/heartbeat before pre-posing the legs",
-                        throttle_duration_sec=5.0)
-                    return
-                cmd = pending.nominal_command()
-                if self._prepose_start_q is None:
-                    self._prepose_start_q = state.q[:NUM_LEG_JOINTS].copy()
-                if self._prepose_ticks < self._prepose_ramp_ticks:
-                    frac = self._prepose_ticks / self._prepose_ramp_ticks
-                    alpha = 0.5 * (1.0 - np.cos(np.pi * frac))
-                    cmd.target_q = (1.0 - alpha) * self._prepose_start_q + alpha * cmd.target_q
-                self._publish_leg(cmd)
-                err = float(np.max(np.abs(state.q[:NUM_LEG_JOINTS] - pending.nominal_lower)))
-                self._prepose_ticks += 1
-                self._prepose_pass = self._prepose_pass + 1 if err < PREPOSE_TOL else 0
-                settled = self._prepose_pass >= PREPOSE_SETTLE_TICKS
-                timed_out = self._prepose_ticks >= self._prepose_ramp_ticks + PREPOSE_MAX_TICKS
-                if not settled and not timed_out:
-                    return  # keep posing; don't engage the policy or drop the band yet
-                if self._confirm_wait and not self._engage_confirmed:
-                    # ARMING GATE: hold the legs at the pre-pose crouch until the
-                    # operator explicitly confirms. Applies to the timeout path
-                    # too — an unsettled pre-pose must never auto-engage on real.
-                    self.get_logger().info(
-                        f"legs pre-posed ({'settled' if settled else 'NOT SETTLED (timeout)'}, "
-                        f"err={err:.3f} rad) — holding; to engage "
-                        f"{self._manager.desired_name!r} run: ros2 service call "
-                        "/lowerbody/confirm_engage std_srvs/srv/Trigger",
-                        throttle_duration_sec=5.0)
-                    return
+        if self._manager.is_pending() and self._manager.is_idle():
+            # Pre-pose: PD-drive the legs to the incoming policy's nominal
+            # crouch (band-held) and wait until they settle BEFORE engaging it.
+            # The RMA policy warms up from its trained default pose; from the
+            # straight-leg spawn it can't recover the transition before the band
+            # drops. The band stays held throughout — the release below is gated
+            # on _awaiting_band_release, which we only set once committed.
+            pending = self._manager.desired_policy()
+            if pending is None:
+                return
+            # Leg commands only reach the motors once the safety layer is
+            # relaying. Ramping before then runs the ramp out against legs
+            # that never move, and the first relayed command steps them to
+            # the full crouch at full gains.
+            if self._hb_last is None:
                 self.get_logger().info(
-                    f"legs pre-posed to nominal ({'settled' if settled else 'timeout'}, "
-                    f"err={err:.3f} rad) — engaging {self._manager.desired_name!r}")
-                # Now engage the policy; it drives the legs while the band still holds.
-                self._manager.commit(state)   # resets policy -> clean warm-up
-                self._publish_active()
-                self._awaiting_band_release = not self._band_released
-            else:
-                # Switch between active policies: gated handover.
-                if self._manager.update_switch(state) is not None:
-                    self._publish_active()
+                    "waiting for /safety/heartbeat before pre-posing the legs",
+                    throttle_duration_sec=5.0)
+                return
+            cmd = pending.nominal_command()
+            if self._prepose_start_q is None:
+                self._prepose_start_q = state.q[:NUM_LEG_JOINTS].copy()
+            if self._prepose_ticks < self._prepose_ramp_ticks:
+                frac = self._prepose_ticks / self._prepose_ramp_ticks
+                alpha = 0.5 * (1.0 - np.cos(np.pi * frac))
+                cmd.target_q = (1.0 - alpha) * self._prepose_start_q + alpha * cmd.target_q
+            self._publish_leg(cmd)
+            err = float(np.max(np.abs(state.q[:NUM_LEG_JOINTS] - pending.nominal_lower)))
+            self._prepose_ticks += 1
+            self._prepose_pass = self._prepose_pass + 1 if err < PREPOSE_TOL else 0
+            settled = self._prepose_pass >= PREPOSE_SETTLE_TICKS
+            timed_out = self._prepose_ticks >= self._prepose_ramp_ticks + PREPOSE_MAX_TICKS
+            if not settled and not timed_out:
+                return  # keep posing; don't engage the policy or drop the band yet
+            if self._confirm_wait and not self._engage_confirmed:
+                # ARMING GATE: hold the legs at the pre-pose crouch until the
+                # operator explicitly confirms. Applies to the timeout path
+                # too — an unsettled pre-pose must never auto-engage on real.
+                self.get_logger().info(
+                    f"legs pre-posed ({'settled' if settled else 'NOT SETTLED (timeout)'}, "
+                    f"err={err:.3f} rad) — holding; to engage "
+                    f"{self._manager.desired_name!r} run: ros2 service call "
+                    "/lowerbody/confirm_engage std_srvs/srv/Trigger",
+                    throttle_duration_sec=5.0)
+                return
+            self.get_logger().info(
+                f"legs pre-posed to nominal ({'settled' if settled else 'timeout'}, "
+                f"err={err:.3f} rad) — engaging {self._manager.desired_name!r}")
+            # Now engage the policy; it drives the legs while the band still holds.
+            # Engage from zero commands (the policy reset below seeds from them).
+            self._clear_commands()
+            state = self._state_from_lowstate(self._lowstate)
+            self._manager.commit(state)   # resets policy -> clean warm-up
+            self._publish_active()
+            self._awaiting_band_release = not self._band_released
 
         # Release the band only after a policy is committed and driving the legs
         # (gated on frame_task being ready, or the max-wait timeout).

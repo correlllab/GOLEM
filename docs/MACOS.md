@@ -56,7 +56,7 @@ changing one needs the stack `restart` command to recreate both containers.
 |---|---|---|
 | `GOLEM_DISPLAY` | off | `vnc` → MuJoCo viewer on noVNC port 6080 |
 | `GOLEM_RVIZ` | off | `vnc` → RViz on noVNC port 6081 |
-| `GOLEM_LOWERBODY` | off (tethered) | `fame` stand-only, `walk` raw policy, `switch` auto stand↔walk |
+| `GOLEM_LOWERBODY` | off (tethered) | `fame` stand-only, `walk` raw policy, `almi` stand + walk (one policy) |
 | `GOLEM_SLAM` | off | `pointcloud_to_laserscan` + `slam_toolbox` → `/map` |
 | `GOLEM_NAV2` | off | nav2 stack (implies SLAM) |
 | `GOLEM_SIM_ODOM` | off | sim ground-truth `/odom` + `odom→pelvis` TF (SLAM needs it) |
@@ -109,16 +109,14 @@ body is controlled. `GOLEM_LOWERBODY` releases the tether and balances the robot
 # stand free (and squat via /lowerbody/squat_cmd), but no locomotion
 GOLEM_DISPLAY=vnc GOLEM_LOWERBODY=fame docker/mac/scripts/docker_stack_mac.sh up robocasa
 
-# stand AND walk — the switchable controller
-GOLEM_DISPLAY=vnc GOLEM_LOWERBODY=switch docker/mac/scripts/docker_stack_mac.sh up robocasa
+# stand AND walk — the lower-body controller pinned to ALMI
+GOLEM_DISPLAY=vnc GOLEM_LOWERBODY=almi docker/mac/scripts/docker_stack_mac.sh up robocasa
 ```
 
-`switch` starts band-held idle and selects stand↔walk from the commanded
-velocity: `rob_stand` settles it into FAME, and `rob_go <vx> <vy> <wz>` engages
-the TorchScript walk policy — any non-zero `/cmd_vel` does, so there is no manual
-handover step. The walk policy is stable only when handed over from a settled
-FAME stance, which is what `switch` provides; `GOLEM_LOWERBODY=walk` launches the
-raw policy directly and only marches in place.
+`almi` starts band-held idle, pre-poses the legs, then runs ALMI for the whole
+run: `rob_stand` (zero `/cmd_vel`) makes it stand, and `rob_go <vx> <vy> <wz>`
+makes it walk — there is no policy switch. `GOLEM_LOWERBODY=walk` launches the
+raw walk policy directly and only marches in place.
 
 ## Demos
 

@@ -29,7 +29,7 @@ isolated arm test; RoboCasa retains its normal support tether.
 
 Locomotion requires 5 simulation seconds of unsupported ALMI balance,
 3 seconds of forward `/cmd_vel`, and 3 seconds stopping, with ALMI the active
-policy throughout (`auto_switch: False`, as in bringup). Tests check physical height, tilt, displacement, both knees, support
+policy throughout, as in bringup. Tests check physical height, tilt, displacement, both knees, support
 release, telemetry continuity, and active policies. No fixed base is allowed.
 Isaac currently lacks RoboCasa's startup support tether, which may cause a
 real startup/balance failure. Thresholds are in `check_lowerbody.py`.

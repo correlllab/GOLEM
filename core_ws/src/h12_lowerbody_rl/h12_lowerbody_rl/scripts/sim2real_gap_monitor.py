@@ -1,4 +1,4 @@
-"""Read-only sim-vs-real diagnostic for the switchable lower-body RL controller
+"""Read-only sim-vs-real diagnostic for the lower-body RL controller
 (walk/FAME/ALMI). Three subscribers span the whole pipeline:
 
   policy  /safety/lowcmd_lower_in   the active RL policy's raw 12-leg command,

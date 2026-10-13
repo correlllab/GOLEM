@@ -26,7 +26,7 @@ def _include(package, launch_file, launch_arguments=None, condition=None):
 
 def generate_launch_description():
     bringup_share = get_package_share_directory('h12_bringup')
-    default_rviz = os.path.join(bringup_share, 'rviz', 'sim.rviz')
+    default_rviz = os.path.join(bringup_share, 'rviz', 'main.rviz')
 
     # Real robot runs on wall-clock time (no simulator /clock).
     wall_time = {'use_sim_time': 'false'}

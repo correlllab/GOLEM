@@ -37,7 +37,7 @@ RVIZ_DISPLAY=:100
 RVIZ_VNC_PORT=5901
 RVIZ_NOVNC_PORT=6081
 RVIZ_GEOMETRY="${RVIZ_GEOMETRY:-1600x900x24}"
-# h1_sim.rviz ships in the h12_bringup package (rviz/). Resolved from the installed
+# main.rviz ships in the h12_bringup package (rviz/). Resolved from the installed
 # share dir inside start_rviz_stack (after the workspace is built + sourced).
 RVIZ_CONFIG="${RVIZ_CONFIG:-}"
 
@@ -71,7 +71,7 @@ start_rviz_stack() {
     export LIBGL_ALWAYS_SOFTWARE=1   # force llvmpipe; no GPU under Colima
     if [ -z "$RVIZ_CONFIG" ]; then
         _pfx="$(ros2 pkg prefix h12_bringup 2>/dev/null)"
-        [ -n "$_pfx" ] && RVIZ_CONFIG="$_pfx/share/h12_bringup/rviz/h1_sim.rviz"
+        [ -n "$_pfx" ] && RVIZ_CONFIG="$_pfx/share/h12_bringup/rviz/main.rviz"
     fi
     local cfg_arg=()
     [ -f "$RVIZ_CONFIG" ] && cfg_arg=(-d "$RVIZ_CONFIG")

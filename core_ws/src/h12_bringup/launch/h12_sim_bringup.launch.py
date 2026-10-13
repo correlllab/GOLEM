@@ -24,7 +24,7 @@ def _include(package, launch_file, launch_arguments, condition=None):
 
 def generate_launch_description():
     bringup_share = get_package_share_directory('h12_bringup')
-    default_rviz = os.path.join(bringup_share, 'rviz', 'sim.rviz')
+    default_rviz = os.path.join(bringup_share, 'rviz', 'main.rviz')
 
     # MuJoCo publishes /clock with sim time. All nodes use it so TF lookups and
     # sensor timestamps are coherent with the simulation.

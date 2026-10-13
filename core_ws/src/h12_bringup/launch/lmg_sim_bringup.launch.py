@@ -60,7 +60,7 @@ def generate_launch_description():
         DeclareLaunchArgument('commander_duration_s', default_value='0.0'),
         DeclareLaunchArgument('commander_log', default_value=''),
         DeclareLaunchArgument('use_rviz', default_value='false'),
-        DeclareLaunchArgument('rviz_config', default_value=os.path.join(bringup_share, 'rviz', 'nav.rviz')),
+        DeclareLaunchArgument('rviz_config', default_value=os.path.join(bringup_share, 'rviz', 'main.rviz')),
 
         _include('h12_bringup', 'h12_state.launch.py', {
             **sim_time,

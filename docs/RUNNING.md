@@ -66,6 +66,9 @@ the RealSense topics `/realsense/{head,left_hand,right_hand}/color/image_raw` an
 
 Scene flags are passed straight through, e.g.
 `docker_run.sh robocasa --task OpenFridge --layout 1 --style 1 --seed 42`.
+`--task Battery` loads the battery workcell instead of a kitchen
+(`h1_robocasa/battery_env.py`; scene and objects in
+`CL_Assets/mujoco_assets/battery/`); `--layout`/`--style` don't apply to it.
 
 ### Isaac
 

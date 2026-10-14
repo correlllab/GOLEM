@@ -13,6 +13,7 @@ from mujoco_ros_bridge import init_ros, shutdown_ros
 import mujoco.viewer
 
 import h1_2_robosuite  # registers H1_2 + Magpie grippers, patches RoboCasa
+import battery_env  # registers the Battery workcell env
 from magpie_hand_bridge import MagpieHandBridge
 from measurement_bridge import MeasurementBridge
 from mujoco_env import ElasticBand
@@ -165,9 +166,9 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # zero all velocities, and re-place the pelvis. Upper-body motors remain at
     # zero. place_robot_collision_free auto-fits floor clearance AND backs the
     # base away (the robot's -x) until every robot geom is GOLEM_SPAWN_MARGIN
-    # (default 0.20 m) from any non-floor geom, in the spawn pose and in the
-    # sagged pose the unpowered upper body falls into, keeping the widest-gap
-    # spot if it can't reach that.
+    # (unset: the env's spawn_margin, else 0.20 m) from any non-floor geom, in
+    # the spawn pose and in the sagged pose the unpowered upper body falls into,
+    # keeping the widest-gap spot if it can't reach that.
     try:
         init_qpos = _initial_motor_qpos()
         data.qpos[resolver.motor_qpos] = init_qpos
@@ -176,7 +177,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         # floor (default 0 = at the counter for manipulation). Set ~1.0 for nav2,
         # which needs the robot's start cell to be free to plan.
         _spawn_backoff = float(os.environ.get("GOLEM_SPAWN_BACKOFF", "0") or 0)
-        _spawn_margin = float(os.environ.get("GOLEM_SPAWN_MARGIN", "0.20") or 0)
+        _spawn_margin = float(os.environ.get("GOLEM_SPAWN_MARGIN", "").strip()
+                              or getattr(env, "spawn_margin", 0.20))
         h1_2_robosuite.place_robot_collision_free(
             env, env.init_robot_base_pos,
             h1_2_robosuite._euler_to_wxyz(getattr(env, "init_robot_base_ori", None)),
@@ -505,11 +507,15 @@ def _random_task(seed=None):
 def _resolve_task(name, seed=None):
     """Resolve a user-supplied --task name to a concrete runnable task.
 
-    If `name` is already a concrete benchmark task, return it unchanged. If it's
+    A battery_env task name (any case) returns its canonical spelling. If `name`
+    is already a concrete benchmark task, return it unchanged. If it's
     an abstract base (e.g. OpenDoor, ManipulateDoor) — registered but not directly
     instantiable — randomly pick one of its concrete runnable subclasses instead
     of crashing.
     """
+    battery_task = battery_env.canonical_task(name)
+    if battery_task is not None:
+        return battery_task
     env_classes, runnable = _runnable_tasks()
     if name in runnable:
         return name
@@ -542,7 +548,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--task",
         default=None,
-        help="RoboCasa env name (e.g. TurnOnToasterOven). "
+        help="RoboCasa env name (e.g. TurnOnToasterOven), or Battery for the "
+             "battery workcell (CL_Assets/mujoco_assets/battery). "
              "Omit to launch a random registered kitchen task.",
     )
     parser.add_argument("--layout", type=int, default=None, help="RoboCasa kitchen layout id")

@@ -86,7 +86,8 @@ services:
       - MUJOCO_GL=${MUJOCO_GL:-glfw}
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-1}
       # Minimum free space (m) between the robot and any non-floor geom at spawn.
-      - GOLEM_SPAWN_MARGIN=${GOLEM_SPAWN_MARGIN:-0.20}
+      # Empty = the task's default (h12_mujoco.py: 0.20, or the env's spawn_margin).
+      - GOLEM_SPAWN_MARGIN=${GOLEM_SPAWN_MARGIN:-}
     volumes:
       - type: bind
         source: ../h1_robocasa

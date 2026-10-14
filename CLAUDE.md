@@ -69,8 +69,9 @@ Mac feature toggles are env vars read by the compose file: `GOLEM_DISPLAY=vnc`
 (MuJoCo viewer → noVNC :6080), `GOLEM_RVIZ=vnc` (RViz → :6081), `GOLEM_LOWERBODY=fame|walk|switch`,
 `GOLEM_SLAM=1`, `GOLEM_NAV2=1`, `GOLEM_SIM_ODOM=1`, `GOLEM_CAMERAS=0`,
 `GOLEM_SPAWN_BACKOFF=<m>`, `GOLEM_CMD_TIMEOUT=<sim-s>`, `GOLEM_ROS_MCP=1`.
-`GOLEM_SPAWN_MARGIN=<m>` (default 0.20) sets the robot's minimum spawn clearance
-from non-floor geoms on both platforms.
+`GOLEM_SPAWN_MARGIN=<m>` (default 0.20; a task env can set its own via
+`spawn_margin`, as `battery_env.py` does) sets the robot's minimum spawn
+clearance from non-floor geoms on both platforms.
 GUIs stream over noVNC via `docker/mac/scripts/mac_vnc_tunnel.sh` (no XQuartz).
 
 ### DDS domain safety (both platforms)

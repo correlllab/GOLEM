@@ -23,18 +23,20 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'auto_detect_port': False,
-            # OpenRB-150 serial ...FF091010
-            'port': '/dev/serial/by-id/usb-ROBOTIS_OpenRB-150_7B483A645055344E312E3120FF091010-if00',
+            # OpenRB-150 serial ...FF101F14
+            'port': '/dev/serial/by-id/usb-ROBOTIS_OpenRB-150_B0935A515157375037202020FF101F14-if00',
             'use_eflesh': False,
-            # Finger angle limits (degrees), per-gripper calibration
-            # (2026-07-21). min/max are the measured servo angles at the
-            # open/closed stops; theta_90 is the parallel-jaw reference.
+            # Finger angle limits (degrees), per-gripper calibration.
+            # min/max are the measured servo angles at the open/closed
+            # stops. theta_90 (parallel-jaw reference) is estimated as
+            # 26.6 deg (finger1) / 26.9 deg (finger2) from the closed stop,
+            # the offset measured on the right gripper and the previous left.
             'finger1theta_min': 87.98,
-            'finger1theta_max': 162.4,
-            'finger1theta_90': 135.71,
-            'finger2theta_min': 130.6,
-            'finger2theta_max': 209.09,
-            'finger2theta_90': 157.89,
+            'finger1theta_max': 170.97,
+            'finger1theta_90': 144.37,
+            'finger2theta_min': 136.01,
+            'finger2theta_max': 211.73,
+            'finger2theta_90': 162.91,
         }],
     )
 
@@ -60,6 +62,6 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        # left_gripper,
+        left_gripper,
         right_gripper,
     ])

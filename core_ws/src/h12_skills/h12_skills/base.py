@@ -27,6 +27,7 @@ from rclpy.duration import Duration as RclpyDuration
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
+from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 
 from action_msgs.msg import GoalStatus
 from builtin_interfaces.msg import Duration
@@ -54,6 +55,7 @@ from .perception_utils import (
     transform_to_matrix, pose_to_matrix, matrix_to_pose, quat_geodesic,
     extract_json,
 )
+from .grasp_synthesis import DEFAULT_METHOD, METHODS, method_name
 from .model_logging import _log_root
 from .run_telemetry import RunRecorder, describe_goal, run_dir
 
@@ -489,6 +491,14 @@ class SkillsBase(Node):
         self._run_lock = threading.Lock()
         self._active_run = None
 
+        # --- grasp synthesis method (grasp_synthesis/) ------------------------
+        # Read per goal, so `ros2 param set /h12_skills grasp_method <name>`
+        # takes effect on the next grasp; unknown names are rejected here.
+        self.declare_parameter('grasp_method', DEFAULT_METHOD, ParameterDescriptor(
+            description=('grasp_synthesis method for /skill/grasp, one of '
+                         f'{sorted(METHODS)}; goal.top_down overrides it')))
+        self.add_on_set_parameters_callback(self._check_grasp_method)
+
     # ----------------------------------------------------------- camera caches
     def _on_color_image(self, msg: CompressedImage):
         """Cache the latest head-camera color frame (for gemini/sam requests)."""
@@ -564,6 +574,14 @@ class SkillsBase(Node):
         self.tf_broadcaster.sendTransform(tfs)
 
     # ------------------------------------------------------------------ utils
+    def _check_grasp_method(self, params):
+        for p in params:
+            if p.name == 'grasp_method' and p.value not in METHODS:
+                return SetParametersResult(
+                    successful=False,
+                    reason=f'grasp_method must be one of {sorted(METHODS)}')
+        return SetParametersResult(successful=True)
+
     def _on_skill_cancel(self, _cancel_request):
         return CancelResponse.ACCEPT
 
@@ -1423,11 +1441,15 @@ class SkillsBase(Node):
             arm = (getattr(goal, 'arm', '') or '').strip().lower()
             out_dir = run_dir(self._run_log_root, skill,
                               getattr(goal, 'target_object', ''))
+            request = describe_goal(goal)
+            if hasattr(goal, 'top_down'):      # grasp / pick_place goals
+                request['grasp_method'] = method_name(
+                    goal.top_down, self.get_parameter('grasp_method').value)
             try:
                 rec = RunRecorder(
                     self, skill, out_dir, WORLD_FRAME, GRASP_FRAMES,
                     arm=arm if arm in GRASP_FRAMES else None,
-                    request=describe_goal(goal)).start()
+                    request=request).start()
             except Exception as e:      # recording must never break a skill
                 self.get_logger().warn(f'run telemetry: start failed: {e}')
                 return None

@@ -8,6 +8,7 @@
   <license>TODO: License declaration</license>
 
   <depend>rclpy</depend>
+  <depend>rcl_interfaces</depend>
   <depend>custom_ros_messages</depend>
   <depend>magpie_msgs</depend>
   <depend>std_srvs</depend>

@@ -1,17 +1,19 @@
-"""SkillGrasp: one pipeline, two bounding-box sources, two grasp modes.
+"""SkillGrasp: perception, a pluggable synthesis method, one executor.
 
 Flow (_exec_grasp, the orchestrator):
 
     prep -> detect_object (box) -> segment_object (cloud)
-         -> get_grasp_candidates
+         -> get_grasp_candidates (the selected grasp_synthesis method)
          -> move_to_candidate_approach (take off in Z, transit to pre-grasp)
          -> move_to_candidate (in along the grasp axis) + force close
 
-Goal toggles: with goal.visual_servo the contact move is replaced by servo() —
-a closed hand-camera loop that aligns on the object at VISUAL_SERVO_DEPTH_M and
-closes there (failing the skill if it can't converge; no open-loop fallback).
-With goal.top_down, get_grasp_candidates skips GraspGenX and returns a single
-synthetic steep-from-above grasp.
+Perception and execution are the same for every synthesis method; only the
+candidate list differs (see grasp_synthesis/__init__.py for the methods and
+how one is selected). Execution mode is a separate goal toggle: with
+goal.visual_servo the contact move is replaced by servo() — a closed
+hand-camera loop that aligns on the object at VISUAL_SERVO_DEPTH_M and closes
+there. A servo that fails to converge still closes where it stopped; a cancel
+or timeout aborts.
 
 Testing switch: with APPROACH_IMAGE_ONLY on, the skill ends at the pre-grasp
 — it saves one frame from the grasping arm's hand camera, returns the arms to
@@ -40,8 +42,8 @@ import cv2
 import numpy as np
 
 from builtin_interfaces.msg import Time
-from geometry_msgs.msg import (Pose, PoseStamped, Point, Quaternion,
-                               TransformStamped, Vector3Stamped)
+from geometry_msgs.msg import (Pose, Point, Quaternion, TransformStamped,
+                               Vector3Stamped)
 from sensor_msgs.msg import Image
 from visualization_msgs.msg import Marker, MarkerArray
 from rclpy.duration import Duration as RclpyDuration
@@ -53,7 +55,9 @@ from custom_ros_messages.msg import Detection
 from ..base import (_Run, GRASP_FRAMES, SLOW_MODE_TIME_SCALE, WORLD_FRAME,
                     GEMINI_TIMEOUT_SEC)
 from ..model_logging import _log_root
-from ..perception_utils import pose_to_matrix, matrix_to_pose, extract_json
+from ..perception_utils import pose_to_matrix, extract_json
+from ..grasp_synthesis import METHODS, SynthesisInput, method_name
+from ..grasp_synthesis.common import GRIPPER_BASE_TO_CONTACT_M, pose_at
 
 
 # ========================== perception routing ===============================
@@ -82,8 +86,8 @@ GEMINI_MULTI_GRASP_PROMPT = (
 )
 
 # Gemini prompt for the hand-camera VISUAL SERVO: a single box to center the
-# object on. The servo only translates (orientation is the planned, leveled
-# grasp), so no grasp axis is requested. Same 0-1000, y-first normalized
+# object on. The servo only translates (orientation is the planned grasp's),
+# so no grasp axis is requested. Same 0-1000, y-first normalized
 # convention as the other Gemini prompts.
 GEMINI_SERVO_PROMPT = (
     'A robot gripper is about to pick up the {obj} in this hand-camera image. '
@@ -91,72 +95,6 @@ GEMINI_SERVO_PROMPT = (
     'box_2d FULLY ENCOMPASSES the {obj}. Coordinates are integers normalized to '
     '0-1000 with y first. If the {obj} is not visible, return {{}}.'
 )
-
-
-# ======================= GraspGenX frame convention ==========================
-# GraspGenX emits each grasp as its gripper-BASE pose (+Z = approach into the
-# object, +X = finger-closing axis). The URDF carries matching frames
-# (GRASP_FRAMES[arm]), so a grasp executes by driving that frame to the RAW
-# GraspGenX pose — no axis permutation or TCP-depth fix-up.
-# Gripper base -> finger contact point distance along +Z (magpie fingertip).
-GRIPPER_BASE_TO_CONTACT_M = 0.1146
-
-
-# ======================= candidate selection knobs ===========================
-# Ranked grasps to try (best-first) before giving up — the top grasp may be
-# IK-unreachable.
-MAX_GRASP_ATTEMPTS = 5
-# Diversity thresholds for those attempts: a candidate within BOTH of an
-# already-selected one (position AND orientation) is a duplicate and skipped,
-# so the IK fallback tries genuinely different grasps.
-GRASP_DIVERSITY_LIN_M = 0.02
-GRASP_DIVERSITY_ANG_DEG = 20.0
-
-# Priority tiers (_grasp_priority_tier): tried tier-by-tier, GraspGenX
-# confidence breaking ties within a tier. Tiers 1-3 want the approach pitched
-# 20-45 deg below horizontal (steeper than ~45 deg is beyond the H1 arm's
-# practical reach, flatter rakes the support surface); 4-6 drop the pitch
-# requirement; 7 = out-of-fan azimuth (cross-body / behind), kept last.
-TIER_PITCH_MIN_DEG = 20.0
-TIER_PITCH_MAX_DEG = 45.0
-# "Forward" tiers (1/4): approach azimuth tolerance off pelvis +X, and the
-# finger-closing +X axis tolerance off pelvis +Y.
-TIER1_AZ_TOL_DEG = 15.0
-TIER1_X_ALIGN_TOL_DEG = 15.0
-# "Diagonal" tiers (2/5): azimuth band toward the robot's midline.
-TIER2_AZ_CENTER_DEG = 45.0
-TIER2_AZ_HALFWIDTH_DEG = 15.0
-
-# Y-up canonicalization: grasps are RE-ROLLED about their own approach axis to
-# a level wrist (+Y as close to up as the pitch allows) instead of dropping
-# mis-rolled ones (see _roll_to_yup). The achievable +Y-from-up equals the
-# approach's tilt off horizontal, so approaches steeper than this can't be
-# leveled and are dropped.
-GRASP_YUP_TOL_DEG = 55.0
-
-# Pitch below horizontal of the synthetic top_down grasp. See _top_down_pose;
-# the approach points DOWN and FORWARD, away from the robot (pelvis +X).
-TOP_DOWN_PITCH_DEG = 80.0
-
-
-# ===================== heuristic grasp set (no GraspGenX) =====================
-# When True, get_grasp_candidates SKIPS GraspGenX entirely and instead
-# synthesizes a fixed set of canonical grasps at the object centroid — one per
-# (azimuth toward the working side, pitch below horizontal) — each with a level
-# X-horizontal / Y-up wrist, ordered by the SAME priority tiers used for the
-# GraspGenX output (_heuristic_candidates). Set False to restore GraspGenX
-# planning (_graspgen_candidates).
-USE_HEURISTIC_GRASPS = True
-# Azimuths of the approach axis in the pelvis XY plane [deg]: 0 = straight
-# forward (pelvis +X); positive = toward the robot's midline (mirrored per arm,
-# so a right-arm 45 deg leans toward +Y, a left-arm 45 deg toward -Y). These map
-# to the forward / diagonal / center tier classes.
-HEURISTIC_GRASP_AZIMUTHS_DEG = (0.0, 45.0, 90.0)
-# Approach pitch below horizontal [deg] for the two pitch families: the
-# 'down' value sits inside the tier 1-3 band (TIER_PITCH_MIN..MAX); the 'flat'
-# value is a gentle downward rake -> tier 4-6.
-HEURISTIC_GRASP_PITCH_DOWN_DEG = 45.0
-HEURISTIC_GRASP_PITCH_FLAT_DEG = 10.0
 
 
 # ===================== failure retreat (_retreat_after_failure) ==============
@@ -302,10 +240,9 @@ VISUAL_SERVO_TARGET_XY_M = (0.012, 0.0)
 # sits ABOVE the target depth and would reject the needed measurements.
 VISUAL_SERVO_MIN_DEPTH_M = 0.04
 
-# The servo holds the planned grasp orientation and only TRANSLATES. That
-# orientation is leveled to X-horizontal / Y-up for a regular grasp before the
-# approach (_level_grasp_orientation); the top_down grasp keeps its steep
-# orientation. There is no in-loop orientation alignment.
+# The servo holds the planned grasp orientation — whatever the synthesis
+# method produced — and only TRANSLATES. There is no in-loop orientation
+# alignment.
 
 
 # =============== reach budgets (move_to_candidate_approach etc.) =============
@@ -345,7 +282,7 @@ APPROACH_ANG_TOL = 0.10
 #   3. in along the grasp's own +Z approach axis to the contact pose
 #      (move_to_candidate), orientation held.
 # The visual servo, when requested, replaces stage 3. A failed candidate is
-# followed by a planned reset to 'prep' (top_down: the staging config).
+# followed by a planned reset to 'prep' (a staged method: its staging config).
 APPROACH_CLEARANCE_M = 0.05
 # Stage 1-2 segment limits: at most this far / this much rotation per
 # frame_task goal, so no single goal asks for a large reorientation.
@@ -384,18 +321,9 @@ class GraspOutcome:
     frame: str              # WORLD_FRAME when the world TF was available, else 'pelvis'
     centroid: np.ndarray    # object-cloud centroid [m], same frame
     rest_height: float      # centroid height above the object's own bottom [m]
-    gripper_width: float    # GraspGenX planned opening [m]
+    gripper_width: float    # method's planned opening [m]; 0.0 when it has none
     score: float            # confidence of the executed grasp
-
-
-@dataclass
-class _Candidates:
-    """Ranked, ready-to-execute grasp candidates (get_grasp_candidates)."""
-    grasps: list            # PoseStamped per candidate (planning frame = pelvis)
-    scores: list            # confidence per candidate, same order
-    tiers: list             # _grasp_priority_tier per candidate (1 best .. 7)
-    total: int              # size of the ranked pool these were picked from
-    gripper_width: float    # planned opening [m]; 0.0 when unknown (top_down)
+    method: str             # grasp_synthesis method that produced it
 
 
 @dataclass
@@ -417,13 +345,15 @@ class GraspSkill:
         get_grasp_candidates -> move_to_candidate_approach -> contact + close.
         No lift afterwards (by design).
 
+        The synthesis method is the node's `grasp_method` parameter, or
+        `top_down` when the goal sets it (_resolve_grasp_method).
+
         Optional goal fields (see SkillGrasp.action; zero/false = off):
-          top_down — skip graspgen; one synthetic steep-from-above grasp.
-          min_downward_pitch_deg — keep only grasps approaching at least this
-            far below horizontal.
+          top_down — use the top_down synthesis method for this goal.
+          min_downward_pitch_deg — every method keeps only grasps approaching
+            at least this far below horizontal.
           visual_servo — replace the contact move with servo(): align on the
-            hand camera at VISUAL_SERVO_DEPTH_M and close there. ABORTS the
-            skill if it can't converge — no open-loop fallback.
+            hand camera at VISUAL_SERVO_DEPTH_M and close there.
 
         With APPROACH_IMAGE_ONLY on (module testing switch), the flow ends at
         the pre-grasp: save one hand-camera image, return to 'prep', succeed —
@@ -440,7 +370,13 @@ class GraspSkill:
         arm = self._validated_arm(goal)
         if arm is None and goal.arm.strip().lower() not in ('', 'none'):
             return run.abort(f'invalid arm {goal.arm!r}')
+        method, err = self._resolve_grasp_method(goal)
+        if err:
+            return run.abort(err)
         obj = goal.target_object
+        self.get_logger().info(
+            f'grasp: {obj!r} with synthesis method {method.name!r}'
+            f'{" + visual servo" if goal.visual_servo else ""}')
 
         # --- detect: prep the arms, box the object, lift it to a cloud --------
         if not run.phase('detect_object', 0.0):
@@ -480,39 +416,32 @@ class GraspSkill:
         if not self.open_gripper(arm, OPEN_PERCENT):
             return fail('gripper pre-open failed')
 
-        # --- staging (top_down only): named config for the arm we are going to
-        # use. Joint-space (recorded on the robot), so it needs no IK/reach
-        # solve and lands the grasping arm in a repeatable posture above the
-        # workspace for the steep top-down approach, with the other arm parked
-        # at 'prep'. The side approaches start straight from 'prep'.
+        # --- staging (staged methods only): named config for the arm we are
+        # going to use. Joint-space (recorded on the robot), so it needs no
+        # IK/reach solve and lands the grasping arm in a repeatable posture
+        # above the workspace for a steep top-down approach, with the other
+        # arm parked at 'prep'. Other methods start straight from 'prep'.
         stage_cfg = 'staging_right' if arm == 'right' else 'staging_left'
-        if goal.top_down:
+        if method.staged:
             if not self.goto_named_config(stage_cfg, plan=True, slow_mode=True,
                                           duration_sec=30.0, result_timeout=90.0,
                                           outer_gh=gh):
                 return fail(f"move to {stage_cfg!r} staging config failed")
 
-        # --- plan: ranked candidates ------------------------------------------
+        # --- plan: ordered candidates from the synthesis method --------------
         if not run.phase('approach_grasp', 0.4):
             return run.result
-        cands, err = self.get_grasp_candidates(goal, obj, arm, obj_cloud,
-                                               scene, centroid_p)
+        cands, err = self.get_grasp_candidates(method, goal, obj, arm,
+                                               obj_cloud, scene)
         if err:
             return fail(err)
-        # Level every REGULAR candidate about its approach (+Z) axis so the
-        # finger-closing +X sits in the pelvis XY plane and +Y points up. The
-        # top_down grasp is left steep (never leveled). Done once here, at the
-        # approach; the servo then only translates and so keeps it.
-        if not goal.top_down:
-            for g in cands.grasps:
-                g.pose.orientation = self._level_grasp_orientation(g.pose).orientation
 
         # --- approach: servo to the first reachable pre-grasp -----------------
         # (the gripper was already pre-opened after 'prep', before staging)
         targets = self._snapshot_targets(cands, centroid_p)
         if targets.centroid_w is not None:   # sway target = object centroid in world
             self._note_run_target(targets.centroid_w)
-        reset_cfg = stage_cfg if goal.top_down else 'prep'
+        reset_cfg = stage_cfg if method.staged else 'prep'
         idx, err = self.move_to_candidate_approach(run, gh, obj, arm, cands,
                                                    targets, reset_cfg)
         if err:
@@ -591,16 +520,28 @@ class GraspSkill:
         if targets.have_world and targets.centroid_w is not None:
             out_pose, out_frame, out_c = contact_w, WORLD_FRAME, targets.centroid_w
         else:
-            out_pose, out_frame, out_c = contact_p, 'pelvis', _pose_at(centroid_p)
+            out_pose, out_frame, out_c = contact_p, 'pelvis', pose_at(centroid_p)
         self._last_grasp_outcome = GraspOutcome(
             arm=arm, pose=out_pose, frame=out_frame,
             centroid=np.array([out_c.position.x, out_c.position.y,
                                out_c.position.z]),
             rest_height=rest_height, gripper_width=cands.gripper_width,
-            score=cands.scores[idx])
+            score=cands.scores[idx], method=method.name)
 
         return run.succeed(
-            f'grasped {obj!r} (candidate score {cands.scores[idx]:.2f})')
+            f'grasped {obj!r} with {method.name} candidate '
+            f'{cands.labels[idx]} (score {cands.scores[idx]:.2f})')
+
+    def _resolve_grasp_method(self, goal):
+        """(GraspMethod, None) for this goal, or (None, abort-reason):
+        goal.top_down forces `top_down`, else the `grasp_method` parameter."""
+        name = method_name(goal.top_down,
+                           self.get_parameter('grasp_method').value)
+        method = METHODS.get(name)
+        if method is None:
+            return None, (f'unknown grasp_method {name!r}; expected one of '
+                          f'{sorted(METHODS)}')
+        return method, None
 
     # -------------------------------------------------------------- perception
     def detect_object(self, obj, run, gh, arm=None):
@@ -639,7 +580,7 @@ class GraspSkill:
         # arm, the pelvis origin (nearest-to-robot).
         ref = None
         if arm in GRASP_FRAMES:
-            o = self._transform_pose(_pose_at((0.0, 0.0, 0.0)),
+            o = self._transform_pose(pose_at((0.0, 0.0, 0.0)),
                                      GRASP_FRAMES[arm], 'pelvis')
             if o is not None:
                 ref = np.array([o.position.x, o.position.y, o.position.z])
@@ -730,172 +671,18 @@ class GraspSkill:
         return obj_cloud, self.scene_to_cloud(target_frame='pelvis'), None
 
     # ---------------------------------------------------- candidate generation
-    def get_grasp_candidates(self, goal, obj, arm, obj_cloud, scene, centroid_p):
-        """Build the ranked candidate list: (_Candidates, None) or
-        (None, abort-reason). goal.top_down returns the single synthetic steep
-        grasp. Otherwise, with USE_HEURISTIC_GRASPS (default True) a fixed set of
-        canonical grasps at the centroid is used (_heuristic_candidates); with it
-        False, GraspGenX plans on the object cloud and its result runs the whole
-        selection chain (_graspgen_candidates)."""
-        if goal.top_down:
-            return self._top_down_candidates(obj, centroid_p), None
-        if USE_HEURISTIC_GRASPS:
-            return self._heuristic_candidates(goal, obj, arm, centroid_p)
-        return self._graspgen_candidates(goal, obj, arm, obj_cloud, scene)
-
-    def _heuristic_candidates(self, goal, obj, arm, centroid_p):
-        """Fixed heuristic candidate set — NO GraspGenX. One grasp per canonical
-        (azimuth, pitch) at the object centroid (HEURISTIC_GRASP_* constants),
-        each built with a level X-horizontal / Y-up wrist (_heuristic_grasp_pose)
-        and ordered by the SAME priority tiers as the GraspGenX path
-        (_grasp_priority_tier). Honors goal.min_downward_pitch_deg. Returns
-        (_Candidates, None) or (None, abort-reason)."""
-        side = 1.0 if arm == 'right' else -1.0
-        specs = []                          # (azimuth_deg, pitch_deg)
-        for pitch in (HEURISTIC_GRASP_PITCH_DOWN_DEG, HEURISTIC_GRASP_PITCH_FLAT_DEG):
-            for az in HEURISTIC_GRASP_AZIMUTHS_DEG:
-                specs.append((side * az, pitch))
-        poses = [_heuristic_grasp_pose(centroid_p, _approach_from_az_pitch(az, p))
-                 for az, p in specs]
-
-        idxs = list(range(len(poses)))
-        # Optional downward-pitch gate (min pitch below horizontal).
-        min_pitch = float(goal.min_downward_pitch_deg or 0.0)
-        if min_pitch > 0.0:
-            thr = math.sin(math.radians(min_pitch))
-            idxs = [i for i in idxs if -pose_to_matrix(poses[i])[2, 2] >= thr]
-            if not idxs:
-                return None, (
-                    f'no heuristic grasp for {obj!r} pitched >= {min_pitch:.0f} '
-                    f'deg down')
-
-        # Tier-major order (stable), dropping any tier-7 (cross-body) entry.
-        tier_of = {i: _grasp_priority_tier(poses[i], arm) for i in idxs}
-        idxs = [i for i in idxs if tier_of[i] != 7]
-        idxs.sort(key=lambda i: tier_of[i])
-        if not idxs:
-            return None, f'no on-side heuristic grasp for {obj!r}'
-        hist = {}
-        for i in idxs:
-            hist[tier_of[i]] = hist.get(tier_of[i], 0) + 1
-        self.get_logger().info(
-            f'grasp: heuristic candidates for {obj!r} [{arm}] at centroid '
-            f'({centroid_p[0]:.3f}, {centroid_p[1]:.3f}, {centroid_p[2]:.3f}) '
-            f'pelvis — {len(idxs)} grasp(s), tiers ' +
-            ', '.join(f'{t}x{n}' for t, n in sorted(hist.items())))
-
-        grasps = []
-        for i in idxs:
-            g = PoseStamped()
-            g.header.frame_id = 'pelvis'
-            g.pose = poses[i]
-            grasps.append(g)
-        return _Candidates(
-            grasps=grasps, scores=[1.0] * len(idxs),
-            tiers=[tier_of[i] for i in idxs], total=len(specs),
-            gripper_width=0.0), None
-
-    def _top_down_candidates(self, obj, centroid_p):
-        """One synthetic candidate above the object: the tier-1 orientation
-        pitched TOP_DOWN_PITCH_DEG down, gripper base one base->contact length
-        back so the finger contact lands on the centroid (_top_down_pose).
-        Still steeper than the arm's ~45-deg practical approach — expect
-        best-effort convergence from the servo."""
-        g = PoseStamped()
-        g.header.frame_id = 'pelvis'
-        g.pose = _top_down_pose(centroid_p)
-        self.get_logger().info(
-            f'grasp: top-down override for {obj!r} '
-            f'({TOP_DOWN_PITCH_DEG:.0f}deg below horizontal), gripper base at '
-            f'({g.pose.position.x:.3f}, {g.pose.position.y:.3f}, '
-            f'{g.pose.position.z:.3f}) pelvis')
-        return _Candidates(grasps=[g], scores=[1.0], tiers=[1], total=1,
-                           gripper_width=0.0)
-
-    def _graspgen_candidates(self, goal, obj, arm, obj_cloud, scene):
-        """GraspGenX plan + the candidate-selection chain. Stages, in order:
-          1. plan_grasp on the object cloud (server ranks best-first);
-          2. optional downward-pitch gate (goal.min_downward_pitch_deg);
-          3. arm-side + levelable filter, then re-roll survivors to Y-up;
-          4. tier-major ordering (_grasp_priority_tier);
-          5. diversity pick of the MAX_GRASP_ATTEMPTS poses actually tried."""
-        resp = self.plan_grasp(obj_cloud, gripper_name="magpie", frame='pelvis',
-                               scene_cloud=scene, arm=arm)
-        if resp is None:
-            return None, f'no grasp planned for {obj!r}'
-
-        # -- optional downward-pitch gate: a MINIMUM pitch below horizontal,
-        # not proximity to vertical (straight down is unreachable). Approach
-        # pitch = asin(-a_z) of the grasp rotation's +Z column.
-        cand = list(range(len(resp.grasps)))
-        min_pitch = float(goal.min_downward_pitch_deg or 0.0)
-        if min_pitch > 0.0:
-            thr = math.sin(math.radians(min_pitch))
-            kept = [i for i in cand
-                    if -pose_to_matrix(resp.grasps[i].pose)[2, 2] >= thr]
-            self.get_logger().info(
-                f'grasp: downward-pitch gate >= {min_pitch:.0f} deg kept '
-                f'{len(kept)}/{len(cand)} candidates')
-            if not kept:
-                return None, (
-                    f'no grasp for {obj!r} pitched >= {min_pitch:.0f} deg down')
-            cand = kept
-
-        # -- arm-side + levelable filter, then Y-up re-roll. Roll about the
-        # approach axis is a free parameter (position + approach untouched),
-        # so mis-rolled grasps are re-leveled instead of dropped. Two gates
-        # remain, both on the approach axis (which the re-roll never moves):
-        # drop tier 7 (cross-body/behind) and drop approaches too steep to
-        # level (see GRASP_YUP_TOL_DEG).
-        tier0 = {i: _grasp_priority_tier(resp.grasps[i].pose, arm) for i in cand}
-        yup_sin = math.sin(math.radians(GRASP_YUP_TOL_DEG))
-
-        def _levelable(i):
-            return abs(float(pose_to_matrix(resp.grasps[i].pose)[2, 2])) <= yup_sin
-
-        kept = [i for i in cand if tier0[i] != 7 and _levelable(i)]
-        n_side = sum(1 for i in cand if tier0[i] != 7)
-        n_level = sum(1 for i in cand if _levelable(i))
-        self.get_logger().info(
-            f'grasp: {arm}-arm + levelable(<={GRASP_YUP_TOL_DEG:.0f}deg pitch) kept '
-            f'{len(kept)}/{len(cand)} (on-side {n_side}, levelable {n_level})')
-        if not kept:
-            return None, (
-                f'no levelable {arm}-arm grasp for {obj!r}: all {len(cand)} '
-                f'filtered (on-side {n_side}, levelable {n_level}) — approaches too '
-                f'steep to level, or all cross-body')
-        for i in kept:
-            resp.grasps[i].pose = _roll_to_yup(resp.grasps[i].pose)
-        cand = kept
-
-        # -- tier-major ordering, recomputed AFTER the re-roll so the forward
-        # tier's finger-axis check sees the leveled finger direction. The sort
-        # is stable, so GraspGenX confidence keeps breaking ties within a tier.
-        tier_of = {i: _grasp_priority_tier(resp.grasps[i].pose, arm) for i in cand}
-        cand.sort(key=lambda i: tier_of[i])
-        hist = {t: 0 for t in range(1, 8)}
-        for i in cand:
-            hist[tier_of[i]] += 1
-        self.get_logger().info(
-            f'grasp: priority tiers over {len(cand)} kept candidate(s) [{arm}]: '
-            f'fwd/diag/center down={hist[1]}/{hist[2]}/{hist[3]}, '
-            f'flat={hist[4]}/{hist[5]}/{hist[6]}, other={hist[7]}')
-
-        # -- diversity pick of the grasps actually tried.
-        all_poses = [g.pose for g in resp.grasps]
-        cand = _select_diverse(cand, all_poses, MAX_GRASP_ATTEMPTS,
-                               GRASP_DIVERSITY_LIN_M,
-                               math.radians(GRASP_DIVERSITY_ANG_DEG))
-        self.get_logger().info(
-            f'grasp: selected {len(cand)} diverse candidate(s) for {obj!r} '
-            f'(>= {GRASP_DIVERSITY_LIN_M * 100:.0f}cm or '
-            f'{GRASP_DIVERSITY_ANG_DEG:.0f}deg apart) from {len(resp.grasps)} ranked')
-        return _Candidates(
-            grasps=[resp.grasps[i] for i in cand],
-            scores=[float(resp.scores[i]) for i in cand],
-            tiers=[tier_of[i] for i in cand],
-            total=len(resp.grasps),
-            gripper_width=float(resp.gripper_width)), None
+    def get_grasp_candidates(self, method, goal, obj, arm, obj_cloud, scene):
+        """Run `method` (a grasp_synthesis.GraspMethod) on the segmented
+        object: (Candidates in execution order, None) or (None, abort-reason).
+        """
+        inp = SynthesisInput(
+            obj=obj, arm=arm, cloud=obj_cloud, scene=scene,
+            min_pitch_deg=float(goal.min_downward_pitch_deg or 0.0),
+            plan_grasp=self.plan_grasp, log=self.get_logger())
+        cands, err = method.synthesize(inp)
+        if err is None and not cands.grasps:
+            err = f'{method.name} produced no grasp for {obj!r}'
+        return (None, err) if err else (cands, None)
 
     # ---------------------------------------------------------------- execution
     def _snapshot_targets(self, cands, centroid_p):
@@ -926,7 +713,7 @@ class GraspSkill:
             self.get_logger().warn(
                 f'grasp: {WORLD_FRAME} TF unavailable; pelvis-drift servoing OFF, '
                 'driving raw pelvis poses (start navigation/FAST-LIO to enable)')
-        centroid_w = (self._transform_pose(_pose_at(centroid_p), 'pelvis',
+        centroid_w = (self._transform_pose(pose_at(centroid_p), 'pelvis',
                                            WORLD_FRAME) if have_world else None)
         return _Targets(frame=cands.grasps[0].header.frame_id,
                         grasps_p=grasps_p, approaches_p=approaches_p,
@@ -996,9 +783,9 @@ class GraspSkill:
 
     def move_to_candidate_approach(self, run, gh, obj, arm, cands, targets,
                                    reset_cfg):
-        """Walk the candidates strictly tier-major (1..7), best score first
-        within a tier, reaching each pre-grasp by taking off in Z and then
-        transiting to it (_approach_pregrasp) until one is reachable. After a
+        """Walk the candidates in the order the synthesis method gave them,
+        reaching each pre-grasp by taking off in Z and then transiting to it
+        (_approach_pregrasp) until one is reachable. After a
         failed candidate (the last one included) the arms return to the named
         config `reset_cfg` by a PLANNED joint-space move: a failed Cartesian
         approach can leave a joint pinned at its limit, from which no further
@@ -1008,8 +795,7 @@ class GraspSkill:
         all-unreachable. Each
         candidate's state (trying / failed / chosen) is republished on
         'graspgen_markers' as it changes."""
-        order = sorted(range(len(cands.grasps)),
-                       key=lambda i: (cands.tiers[i], -cands.scores[i]))
+        order = range(len(cands.grasps))
         width_mm = cands.gripper_width * 1000.0
         status = {}
 
@@ -1023,8 +809,9 @@ class GraspSkill:
             self._publish_target_tf(targets, targets.approaches_w[i],
                                     targets.approaches_p[i])
             self.get_logger().info(
-                f'grasp {i} for {obj!r}: tier {cands.tiers[i]}, '
-                f'score {cands.scores[i]:.2f}, width {width_mm:.1f}mm')
+                f'grasp {i} ({cands.labels[i]}) for {obj!r}: tier '
+                f'{cands.tiers[i]}, score {cands.scores[i]:.2f}, '
+                f'width {width_mm:.1f}mm')
             # Pelvis-frame pre-grasp (no world anchoring); the visual servo
             # or the in-along-the-axis contact move runs AFTER this.
             if self._approach_pregrasp(GRASP_FRAMES[arm], targets.approaches_p[i],
@@ -1107,8 +894,7 @@ class GraspSkill:
         Drives GRASP_FRAMES[arm] in PURE TRANSLATION until `obj` sits at
         (VISUAL_SERVO_TARGET_XY_M, VISUAL_SERVO_DEPTH_M) in the hand camera's
         optical frame. The orientation is held fixed at the planned grasp pose
-        (already leveled to X-horizontal / Y-up for a regular grasp, see
-        _level_grasp_orientation), so the servo never changes it.
+        (as the synthesis method produced it), so the servo never changes it.
 
         One iteration: take a hand-camera DetectionBundle newer than the last
         frame consumed (fresh frames only — re-using one would apply the same
@@ -1126,8 +912,8 @@ class GraspSkill:
         grasp would hide exactly the misalignment the caller asked to
         eliminate."""
         frame = GRASP_FRAMES[arm]
-        # Orientation is fixed for the whole servo — the planned, already-leveled
-        # grasp orientation. The servo only translates.
+        # Orientation is fixed for the whole servo — the planned grasp
+        # orientation. The servo only translates.
         planned_q = targets.grasps_p[idx].orientation
         target = np.array([VISUAL_SERVO_TARGET_XY_M[0],
                            VISUAL_SERVO_TARGET_XY_M[1],
@@ -1611,40 +1397,13 @@ class GraspSkill:
 
     def _frame_pose_in_pelvis(self, frame):
         """Current pose of URDF `frame` in the pelvis frame, or None."""
-        return self._transform_pose(_pose_at((0.0, 0.0, 0.0)), frame, 'pelvis')
-
-    def _level_grasp_orientation(self, pose):
-        """Yaw a REGULAR grasp `pose` (pelvis frame) about its own approach (+Z)
-        axis so the finger-closing +X axis lies in the pelvis XY plane
-        (horizontal) and +Y points UP (positive pelvis +Z) — 'Y as up as it can
-        be'. The approach direction (+Z) and the position are untouched; only
-        the roll about +Z changes. Returns the leveled Pose.
-
-        If the approach is ~vertical (a top-down-ish grasp, where +X cannot be
-        made horizontal), it CANNOT be leveled — the pose is returned unchanged
-        with a warning. Not used for the synthetic top_down grasp at all (see
-        the caller in _exec_grasp)."""
-        T = pose_to_matrix(pose)
-        approach = T[:3, 2]
-        x = np.cross(approach, np.array([0.0, 0.0, 1.0]))   # ⟂ up -> horizontal
-        if float(np.linalg.norm(x)) < 1e-3:
-            self.get_logger().warn(
-                'grasp: approach is ~vertical; cannot level the wrist '
-                '(X horizontal / Y up) by yaw about Z — holding the planned '
-                'orientation')
-            return pose
-        x /= np.linalg.norm(x)
-        y = np.cross(approach, x)                           # +Z x +X = +Y
-        if float(y[2]) < 0.0:                               # make +Y point up
-            x, y = -x, -y
-        T[:3, 0], T[:3, 1], T[:3, 2] = x, y, approach
-        return matrix_to_pose(T)
+        return self._transform_pose(pose_at((0.0, 0.0, 0.0)), frame, 'pelvis')
 
     def _rotate_into_pelvis(self, vec, src_frame):
         """Rotate the 3-vector `vec` from `src_frame` into the pelvis frame
         (pure direction change), or None if TF is unavailable."""
-        o = self._transform_pose(_pose_at((0.0, 0.0, 0.0)), src_frame, 'pelvis')
-        t = self._transform_pose(_pose_at(vec), src_frame, 'pelvis')
+        o = self._transform_pose(pose_at((0.0, 0.0, 0.0)), src_frame, 'pelvis')
+        t = self._transform_pose(pose_at(vec), src_frame, 'pelvis')
         if o is None or t is None:
             return None
         return np.array([t.position.x - o.position.x,
@@ -1665,7 +1424,7 @@ class GraspSkill:
         object sits on (+Y = left) when a hand TF is unavailable."""
         dists = {}
         for arm, frame in GRASP_FRAMES.items():
-            p = self._transform_pose(_pose_at(centroid_p), 'pelvis', frame)
+            p = self._transform_pose(pose_at(centroid_p), 'pelvis', frame)
             if p is not None:
                 dists[arm] = math.sqrt(p.position.x ** 2 + p.position.y ** 2
                                        + p.position.z ** 2)
@@ -1866,75 +1625,6 @@ def get_approach_pose(pose, approach_dist):
     return out
 
 
-def _top_down_pose(centroid):
-    """GraspGenX gripper-base Pose (pelvis frame) for the steep top-down grasp
-    of the object at `centroid`: the TIER-1 orientation (forward azimuth,
-    fingers closing along pelvis +Y, wrist as level as the pitch allows)
-    pitched TOP_DOWN_PITCH_DEG below horizontal, base one base->contact length
-    back along the approach so the finger CONTACT point lands on the centroid.
-    At 90 deg this collapses to the straight-down grasp."""
-    pitch = math.radians(TOP_DOWN_PITCH_DEG)
-    # Approach points DOWN and FORWARD, away from the robot (pelvis +X).
-    z_axis = np.array([math.cos(pitch), 0.0, -math.sin(pitch)])   # approach
-    x_axis = np.array([0.0, 1.0, 0.0])                            # fingers (pelvis +Y)
-    y_axis = np.cross(z_axis, x_axis)                             # level wrist
-    T = np.eye(4)
-    T[:3, :3] = np.column_stack((x_axis, y_axis, z_axis))
-    T[:3, 3] = np.asarray(centroid, dtype=float) - GRIPPER_BASE_TO_CONTACT_M * z_axis
-    return matrix_to_pose(T)
-
-
-def _approach_from_az_pitch(az_deg, pitch_deg):
-    """Unit approach axis (pelvis frame) at azimuth `az_deg` in the XY plane
-    (0 = +X forward, positive toward +Y) and `pitch_deg` below horizontal."""
-    az, pit = math.radians(az_deg), math.radians(pitch_deg)
-    return np.array([math.cos(pit) * math.cos(az),
-                     math.cos(pit) * math.sin(az),
-                     -math.sin(pit)])
-
-
-def _heuristic_grasp_pose(centroid, approach_dir):
-    """GraspGenX gripper-base Pose (pelvis frame) for a heuristic grasp of the
-    object at `centroid` approaching along `approach_dir` (+Z). The wrist is
-    leveled: +X = approach x pelvis-up (horizontal, in the pelvis XY plane),
-    +Y = approach x +X with the sign chosen so +Y points up. The base sits one
-    base->contact length back along the approach so the finger CONTACT point
-    lands on the centroid (same convention as _top_down_pose)."""
-    a = np.asarray(approach_dir, dtype=float)
-    a = a / np.linalg.norm(a)
-    x = np.cross(a, np.array([0.0, 0.0, 1.0]))
-    nx = float(np.linalg.norm(x))
-    x = np.array([0.0, 1.0, 0.0]) if nx < 1e-6 else x / nx   # vertical -> pick +Y
-    y = np.cross(a, x)
-    if float(y[2]) < 0.0:                                    # make +Y point up
-        x, y = -x, -y
-    T = np.eye(4)
-    T[:3, 0], T[:3, 1], T[:3, 2] = x, y, a
-    T[:3, 3] = np.asarray(centroid, dtype=float) - GRIPPER_BASE_TO_CONTACT_M * a
-    return matrix_to_pose(T)
-
-
-def _roll_to_yup(pose):
-    """Return `pose` rolled about its OWN approach axis (+Z) so gripper +Y
-    points as close to pelvis +Z (up) as the approach allows — a level wrist.
-    Only the finger-closing direction changes; graspgen's position + approach
-    are preserved. NOTE: a genuine regrasp — it swings the pinch to
-    horizontal, valid when the site affords a horizontal pinch (which a level
-    wrist implies)."""
-    T = pose_to_matrix(pose)
-    R = T[:3, :3]
-    up = np.array([0.0, 0.0, 1.0])
-    x_up, y_up = float(R[:, 0] @ up), float(R[:, 1] @ up)
-    # Y'.up = cos(th)*y_up - sin(th)*x_up, maximised at atan2(-x_up, y_up).
-    theta = math.atan2(-x_up, y_up)
-    c, s = math.cos(theta), math.sin(theta)
-    Rz = np.array([[c, -s, 0.0],
-                   [s,  c, 0.0],
-                   [0.0, 0.0, 1.0]])
-    T[:3, :3] = R @ Rz
-    return matrix_to_pose(T)
-
-
 def _stamp_tuple(stamp):
     """(sec, nanosec) of a builtin_interfaces/Time, for ordering stamps."""
     return (stamp.sec, stamp.nanosec)
@@ -1957,73 +1647,6 @@ def _vec3_stamped(stamp, frame_id, v):
     msg.vector.y = float(v[1])
     msg.vector.z = float(v[2])
     return msg
-
-
-def _pose_at(point):
-    """Identity-orientation Pose at `point` (x, y, z array-like)."""
-    pose = Pose()
-    pose.position.x, pose.position.y, pose.position.z = (
-        float(point[0]), float(point[1]), float(point[2]))
-    pose.orientation.w = 1.0
-    return pose
-
-
-# ========================== candidate ranking helpers ========================
-def _grasp_priority_tier(pose, arm):
-    """Selection tier of a GraspGenX grasp `pose` (z-up pelvis frame) for
-    `arm` — lower tries first. Azimuth classes of the approach axis, mirrored
-    per hand ("toward center" = toward +Y for the right hand, -Y for the
-    left): forward (azimuth near +X AND fingers near pelvis +Y), diagonal
-    (TIER2 band toward center), center (the full toward-center fan). Combined
-    with pitch: 1/2/3 = those classes pitched TIER_PITCH_MIN..MAX below
-    horizontal, 4/5/6 = any other pitch, 7 = out-of-fan azimuth (last
-    resort, not discarded)."""
-    eps = 1e-6      # absorb Pose->quaternion->matrix round-trip at boundaries
-    R = pose_to_matrix(pose)[:3, :3]
-    ax, ay, az = float(R[0, 2]), float(R[1, 2]), float(R[2, 2])
-    azim = math.degrees(math.atan2(ay, ax))     # 0 = +X, positive toward +Y
-    toward_center = azim if arm == 'right' else -azim
-    if (abs(azim) <= TIER1_AZ_TOL_DEG + eps
-            and float(R[1, 0])
-            >= math.cos(math.radians(TIER1_X_ALIGN_TOL_DEG)) - eps):
-        az_class = 0                                            # forward
-    elif (abs(toward_center - TIER2_AZ_CENTER_DEG)
-            <= TIER2_AZ_HALFWIDTH_DEG + eps):
-        az_class = 1                                            # diagonal
-    elif -TIER1_AZ_TOL_DEG - eps <= toward_center <= 90.0 + eps:
-        az_class = 2                                            # center fan
-    else:
-        return 7
-    pitch_down = math.degrees(math.asin(np.clip(-az, -1.0, 1.0)))
-    pitched = (TIER_PITCH_MIN_DEG - eps <= pitch_down
-               <= TIER_PITCH_MAX_DEG + eps)
-    return (1 if pitched else 4) + az_class
-
-
-def _grasp_poses_close(pa, pb, lin_thr, ang_thr):
-    """True when Poses `pa` and `pb` are near-duplicate grasps: within
-    `lin_thr` metres AND `ang_thr` radians. Either difference exceeding its
-    threshold makes them distinct."""
-    Ta, Tb = pose_to_matrix(pa), pose_to_matrix(pb)
-    if float(np.linalg.norm(Ta[:3, 3] - Tb[:3, 3])) >= lin_thr:
-        return False
-    cos = (float(np.trace(Ta[:3, :3].T @ Tb[:3, :3])) - 1.0) / 2.0
-    return float(np.arccos(np.clip(cos, -1.0, 1.0))) < ang_thr
-
-
-def _select_diverse(cand, poses, max_n, lin_thr, ang_thr):
-    """Greedily pick up to `max_n` indices from `cand` (already ranked
-    best-first) that are mutually distinct (_grasp_poses_close). The best
-    grasp is always taken first, so at least one index is returned."""
-    picked = []
-    for i in cand:
-        if any(_grasp_poses_close(poses[i], poses[j], lin_thr, ang_thr)
-               for j in picked):
-            continue
-        picked.append(i)
-        if len(picked) >= max_n:
-            break
-    return picked
 
 
 # ============================== debug TF helper ==============================

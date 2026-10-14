@@ -3,10 +3,10 @@
 top-down above the place target -> open the gripper.
 
 The place is deliberately simple: no orientation fan or rest-height
-descent. The place pose reuses the grasp skill's top-down
-orientation (_top_down_pose — forward azimuth, level wrist, pitched
-TOP_DOWN_PITCH_DEG down) with the finger CONTACT point PLACE_HEIGHT above the
-place target's top face, and the object is dropped from there.
+descent. The place pose reuses the top_down grasp orientation
+(grasp_synthesis.top_down.top_down_pose — forward azimuth, level wrist,
+pitched TOP_DOWN_PITCH_DEG down) with the finger CONTACT point PLACE_HEIGHT
+above the place target's top face, and the object is dropped from there.
 
 The place point is detected BEFORE the (long) grasp and anchored in
 WORLD_FRAME so pelvis drift during the grasp does not move the goal; at place
@@ -37,7 +37,9 @@ from custom_ros_messages.action import SkillGrasp, SkillPickPlace
 from ..base import _Run, GRASP_FRAMES, WORLD_FRAME
 from ..perception_utils import (matrix_to_pose, pose_to_matrix,
                                 transform_to_matrix)
-from .grasp import (_approach_target_tf, _pose_at, _top_down_pose,
+from ..grasp_synthesis.common import pose_at
+from ..grasp_synthesis.top_down import top_down_pose
+from .grasp import (_approach_target_tf,
                     SERVO_MAX_ITER, SERVO_LIN_TOL, SERVO_ANG_TOL,
                     APPROACH_DURATION_SEC, FRAME_TASK_STABLE_STOP_MSGS)
 
@@ -87,7 +89,8 @@ class PickPlaceSkill:
         Optional goal fields (see SkillPickPlace.action; zero/empty = off):
           arm — "" or "none" leaves the pick arm to the grasp skill (nearest
             arm); the resolved arm comes back on the outcome.
-          top_down, visual_servo — forwarded to /skill/grasp."""
+          top_down, visual_servo — forwarded to /skill/grasp, which also
+            reads this node's `grasp_method` parameter."""
         goal = gh.request
         run = _Run(self, gh, SkillPickPlace, 'pick_place')
         arm = self._validated_arm(goal)
@@ -118,10 +121,10 @@ class PickPlaceSkill:
         if err:
             return fail(f'place target: {err}')
         top_p = _top_face_point(place_cloud)          # (x, y, z_top) in pelvis
-        top_w = self._transform_pose(_pose_at(top_p), 'pelvis', WORLD_FRAME)
+        top_w = self._transform_pose(pose_at(top_p), 'pelvis', WORLD_FRAME)
         self.publish_tf(_approach_target_tf(
             WORLD_FRAME if top_w is not None else 'pelvis',
-            top_w if top_w is not None else _pose_at(top_p),
+            top_w if top_w is not None else pose_at(top_p),
             self.get_clock().now().to_msg(), child=PLACE_TARGET_FRAME))
         self.get_logger().info(
             f'pick_place: {place!r} top face at pelvis '
@@ -192,7 +195,7 @@ class PickPlaceSkill:
             self.get_logger().warn(
                 'pick_place: no world anchor; placing in the pelvis frame '
                 'with NO drift compensation')
-        place_p = _top_down_pose(top_now + [0.0, 0.0, PLACE_HEIGHT])
+        place_p = top_down_pose(top_now + [0.0, 0.0, PLACE_HEIGHT])
         place_w = (self._transform_pose(place_p, 'pelvis', WORLD_FRAME)
                    if top_w is not None else None)
         self.publish_tf(_approach_target_tf(

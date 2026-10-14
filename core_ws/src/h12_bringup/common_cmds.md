@@ -159,9 +159,24 @@ Optional goal fields (omit / `false` / `0` = off):
 
 | Field | Meaning |
 |---|---|
-| `top_down` | skip GraspGenX; build ONE synthetic grasp above the object — the tier-1 orientation (forward azimuth, fingers across pelvis ±Y, level wrist) pitched `TOP_DOWN_PITCH_DEG` = 80° below horizontal, base backed 0.1146 m off along that approach so the fingers close on the cloud centroid. Still steeper than the arm's ~45° practical reach, and there is no second candidate to fall back to, so an unreachable pose aborts the skill. |
-| `min_downward_pitch_deg` | keep only GraspGenX grasps approaching at least this far below horizontal (a *minimum* pitch, not proximity to vertical) |
+| `top_down` | use the `top_down` synthesis method for this goal, overriding `grasp_method` (below): ONE synthetic grasp above the object — the tier-1 orientation (forward azimuth, fingers across pelvis ±Y, level wrist) pitched `TOP_DOWN_PITCH_DEG` = 80° below horizontal, base backed 0.1146 m off along that approach so the fingers close on the cloud centroid. Still steeper than the arm's ~45° practical reach, and there is no second candidate to fall back to, so an unreachable pose aborts the skill. |
+| `min_downward_pitch_deg` | every synthesis method keeps only grasps approaching at least this far below horizontal (a *minimum* pitch, not proximity to vertical) |
 | `visual_servo` | at the pre-grasp, close the loop on the arm's hand camera: translate (orientation frozen) until the object sits at a fixed setpoint in the camera optical frame — `VISUAL_SERVO_TARGET_XY_M` = (+12, 0) mm laterally, `VISUAL_SERVO_DEPTH_M` = 0.10 m in range — then close **there** instead of running the contact descent. Tolerances are **per axis**, because the camera axes mean different things to a parallel gripper: 1 mm across the jaws (optical X — what a grasp depends on), 2 mm in range (optical Z — whether the jaws close around the part or above it), 5 mm along the jaws (optical Y — the jaws span 106 mm, so this is the forgiving one). 90 s budget (~50 corrections), and it gives up early if the error stops improving. If it loses sight of the object for 5 s, **or** reads it closer than 5.5 cm on two consecutive frames, it backs straight up 5 cm (pelvis +Z) and keeps servoing — up to twice between the two cases. If it still can't converge the skill **aborts** — there is no open-loop fallback, so the result tells you the grasp was never aligned. Only works for the 7 YOLO battery classes — the hand detector knows nothing else. |
+
+**Synthesis method.** Without `top_down`, the grasp candidates come from the
+skills node's `grasp_method` parameter (default `heuristic`). Every method
+gets the same segmented cloud and runs through the same approach / contact /
+servo executor, so switching methods changes only the grasps:
+
+```bash
+ros2 param set /h12_skills grasp_method antipodal      # takes effect on the next goal
+ros2 param describe /h12_skills grasp_method
+```
+
+The method names and what each does are in
+`h12_skills/h12_skills/grasp_synthesis/` (registry: `METHODS` in its
+`__init__.py`); an unknown name is rejected by `ros2 param set`.
+`visual_servo` composes with any of them.
 
 Small battery-workcell parts (`Bolt`, `BusBar`, `InteriorScrew`, `Nut`,
 `OrageCover`, `Screw`, `ScrewHole`) are routed to the head-camera YOLO detector

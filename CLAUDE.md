@@ -71,7 +71,9 @@ Mac feature toggles are env vars read by the compose file: `GOLEM_DISPLAY=vnc`
 `GOLEM_SPAWN_BACKOFF=<m>`, `GOLEM_CMD_TIMEOUT=<sim-s>`, `GOLEM_ROS_MCP=1`.
 `GOLEM_SPAWN_MARGIN=<m>` (default 0.20; a task env can set its own via
 `spawn_margin`, as `battery_env.py` does) sets the robot's minimum spawn
-clearance from non-floor geoms on both platforms.
+clearance from non-floor geoms on both platforms. `GOLEM_CAMERA_SCALE=<f>`
+(default 0.5 of the real 1280x720), `GOLEM_CAMERA_DEPTH=0` and
+`GOLEM_CAMERA_POINTCLOUD=0` tune the RoboCasa cameras on both platforms.
 GUIs stream over noVNC via `docker/mac/scripts/mac_vnc_tunnel.sh` (no XQuartz).
 
 ### DDS domain safety (both platforms)
@@ -215,10 +217,11 @@ sim-vs-real workflow depends on them behaving like the real robot.
 They should publish only what the real robot publishes and consume only what
 it consumes. Verified current surface:
 
-**RoboCasa (`h1_robocasa/h12_mujoco.py`)** — publishes `/clock`,
-`/realsense/{head,left_hand,right_hand}/color/image_raw[/compressed]`,
-`.../aligned_depth_to_color/image_raw[/compressedDepth]`, `.../color/camera_info`,
-`/livox/lidar` (CustomMsg), `/livox/pointcloud`, `/livox/imu`,
+**RoboCasa (`h1_robocasa/h12_mujoco.py`)** — publishes `/clock`, the real
+RealSense drivers' topics, frame names and camera TF (`/tf_static` + `/tf`) for
+`/realsense/{head,left_hand,right_hand}` — colour, depth and aligned depth with
+their camera_info, and `depth/color/points` — as captured from the robot in
+`h1_robocasa/realsense_profile.yaml`, `/livox/lidar` (CustomMsg), `/livox/pointcloud`, `/livox/imu`,
 `/{left,right}/gripper/state`, and `rt/lowstate` over Unitree DDS; consumes
 `rt/lowcmd` and the `/{left,right}/gripper/*` services/DeliGrasp action.
 (Trust the bridge code in `mujoco_ros_bridge.py` over any topic list repeated

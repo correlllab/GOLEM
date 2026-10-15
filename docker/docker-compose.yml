@@ -88,6 +88,15 @@ services:
       # Minimum free space (m) between the robot and any non-floor geom at spawn.
       # Empty = the task's default (h12_mujoco.py: 0.20, or the env's spawn_margin).
       - GOLEM_SPAWN_MARGIN=${GOLEM_SPAWN_MARGIN:-}
+      # GOLEM_CAMERAS=0 drops all RGBD cameras.
+      - GOLEM_CAMERAS=${GOLEM_CAMERAS:-}
+      # Camera toggles (h12_mujoco.py); empty = its default. GOLEM_CAMERA_SCALE:
+      # head-camera render scale of the real 1280x720 (default 0.5).
+      # GOLEM_CAMERA_DEPTH / GOLEM_CAMERA_POINTCLOUD = 0 drop depth/image_rect_raw
+      # / depth/color/points.
+      - GOLEM_CAMERA_SCALE=${GOLEM_CAMERA_SCALE:-}
+      - GOLEM_CAMERA_DEPTH=${GOLEM_CAMERA_DEPTH:-}
+      - GOLEM_CAMERA_POINTCLOUD=${GOLEM_CAMERA_POINTCLOUD:-}
     volumes:
       - type: bind
         source: ../h1_robocasa

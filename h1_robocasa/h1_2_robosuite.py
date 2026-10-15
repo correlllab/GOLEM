@@ -48,6 +48,9 @@ LEG_JOINT_RENAME = {
 # Free joint name on the pelvis (used by the placement patch).
 FREE_JOINT_NAME = "floating_base_joint"
 
+# Robot MJCF head camera; its optical frame is the URDF head_camera_link.
+HEAD_CAMERA = "head_cam"
+
 # Initial stance for the 27 actuated joints (excludes the 7-DoF free joint).
 # Model-level init stays zeros; the harness overrides the spawn with a baked-in
 # bent-knee leg stance and zero arms (h12_mujoco.INIT_LEG_POS via
@@ -154,6 +157,14 @@ class H1_2(LeggedManipulatorModel):
 
     def __init__(self, idn=0):
         super().__init__(ROBOT_XML, idn=idn)
+        # The head camera as the real robot's: calibrated colour optical pose and
+        # intrinsics, plus a depth camera at the depth optical pose
+        # (realsense_profile.yaml). Names carry the robot prefix by now.
+        import realsense_profile
+
+        realsense_profile.place_profiled_cameras(
+            self.worldbody, f"{self.naming_prefix}{HEAD_CAMERA}",
+            realsense_profile.load_profile()["cameras"]["head"])
 
     @property
     def default_base(self):

@@ -61,6 +61,9 @@ changing one needs the stack `restart` command to recreate both containers.
 | `GOLEM_NAV2` | off | nav2 stack (implies SLAM) |
 | `GOLEM_SIM_ODOM` | off | sim ground-truth `/odom` + `odom→pelvis` TF (SLAM needs it) |
 | `GOLEM_CAMERAS` | on | `0` drops the 3 RGBD renders — the heaviest per-step cost |
+| `GOLEM_CAMERA_SCALE` | 0.5 | head-camera render size as a fraction of the real 1280x720 (same projection) |
+| `GOLEM_CAMERA_DEPTH` | on | `0` drops `depth/image_rect_raw` + its camera_info |
+| `GOLEM_CAMERA_POINTCLOUD` | on | `0` drops `depth/color/points` |
 | `GOLEM_SPAWN_BACKOFF` | 0 | metres to back the robot into open floor at spawn |
 | `GOLEM_SPAWN_MARGIN` | 0.20 (Battery task: 0.015) | minimum metres between the robot and any non-floor geom at spawn (also on x86) |
 | `GOLEM_CMD_TIMEOUT` | 0.5 | sim-seconds before the low-level interface zeroes the motors |

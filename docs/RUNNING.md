@@ -58,9 +58,13 @@ service name; otherwise attach with `docker exec`.
 ### RoboCasa
 
 Publishes `rt/lowstate` over CycloneDDS, and on the chosen ROS domain: `/clock`;
-the RealSense topics `/realsense/{head,left_hand,right_hand}/color/image_raw` and
-`.../aligned_depth_to_color/image_raw` (raw and compressed) with
-`.../color/camera_info`; the Livox topics `/livox/lidar` (CustomMsg),
+the real RealSense drivers' topics, frame names and camera TF for
+`/realsense/{head,left_hand,right_hand}` (colour, depth and aligned depth, raw and
+compressed, with their camera_info, plus `depth/color/points`), as captured from
+the robot in `h1_robocasa/realsense_profile.yaml`. The head camera renders at
+`GOLEM_CAMERA_SCALE` (default 0.5) of the real 1280x720 with the real
+intrinsics; `GOLEM_CAMERA_DEPTH=0` and `GOLEM_CAMERA_POINTCLOUD=0` drop the depth
+stream and point cloud. Then the Livox topics `/livox/lidar` (CustomMsg),
 `/livox/pointcloud`, `/livox/imu`; and `/{left,right}/gripper/state`. It consumes
 `rt/lowcmd` and the `/{left,right}/gripper/*` services.
 

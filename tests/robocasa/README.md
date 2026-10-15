@@ -12,6 +12,14 @@ and ROS message types on a tiny fixed scene, without starting ROS nodes or DDS
 participants. They cover pixel/payload equivalence, sensor scheduling, lock
 boundaries, and pacing. The image must include the existing Livox messages.
 
+The RealSense profile tests (camera placement, projection against
+camera_info, TF tree, point cloud) need only MuJoCo, NumPy and PyYAML; the
+projection check renders, so give it an offscreen GL context:
+
+```bash
+MUJOCO_GL=egl PYTHONPATH=h1_robocasa python3 -m unittest discover -s tests/robocasa -p test_realsense_profile.py -v
+```
+
 Pure pacing/timing tests also run without ROS or MuJoCo:
 
 ```bash
@@ -27,7 +35,8 @@ docker/scripts/docker_run.sh robocasa --headless --task OpenFridge --layout 1 --
 Every five wall-clock seconds, `[sim-timing]` reports simulation/wall-clock time
 (RTF: 1 means real time) and mean/max milliseconds per stage call, with call
 counts. `camera_render` includes scene capture and both render passes per
-camera; `camera_publish` includes image conversion, compression, and publishing.
+camera; `camera_depth_render` the depth stream's render; `camera_publish`
+image conversion, compression, and publishing; `camera_cloud` the point cloud.
 `lidar_cast` includes scene capture and raycasting; `lidar_publish` includes
 point filtering, message construction, and publishing. Physics includes lock
 acquisition and PD control. Timings are silent unless requested.

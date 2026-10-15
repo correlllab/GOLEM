@@ -41,6 +41,13 @@ services:
       # GOLEM_CAMERAS=0 drops the 3 RGBD camera renders (the heaviest per-step CPU
       # cost) to speed the sim up for locomotion/SLAM. Lidar + odom are unaffected.
       - GOLEM_CAMERAS=${GOLEM_CAMERAS:-1}
+      # Camera toggles (h12_mujoco.py); empty = its default. GOLEM_CAMERA_SCALE:
+      # head-camera render scale of the real 1280x720 (default 0.5).
+      # GOLEM_CAMERA_DEPTH / GOLEM_CAMERA_POINTCLOUD = 0 drop depth/image_rect_raw
+      # / depth/color/points.
+      - GOLEM_CAMERA_SCALE=${GOLEM_CAMERA_SCALE:-}
+      - GOLEM_CAMERA_DEPTH=${GOLEM_CAMERA_DEPTH:-}
+      - GOLEM_CAMERA_POINTCLOUD=${GOLEM_CAMERA_POINTCLOUD:-}
       - GOLEM_CMD_TIMEOUT=${GOLEM_CMD_TIMEOUT:-0.5}
       # GOLEM_SIM_ODOM=1 publishes ground-truth base odometry (odom -> pelvis TF +
       # /odom) straight from the sim, feeding 2D SLAM without FAST-LIO. Default 0

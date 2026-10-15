@@ -12,9 +12,10 @@ from livox_ros_driver2.msg import CustomMsg, CustomPoint
 from rclpy.serialization import deserialize_message, serialize_message
 from sensor_msgs.msg import PointCloud2
 
+import realsense_profile as rp
 from mujoco_ros_bridge import (
-    RosSensorBridge, _CameraPub, _build_camera_info, _serialize_livox_scan,
-    _sim_time_to_msg, PC2_DTYPE,
+    RosSensorBridge, _CameraPub, _camera_info, _serialize_livox_scan,
+    _sim_time_to_msg, PC2_DTYPE, _COMPRESSED_DEPTH_HEADER, _JPEG_QUALITY,
 )
 
 SCENE = '''<mujoco>
@@ -32,9 +33,13 @@ SCENE = '''<mujoco>
 
 
 class Recorder:
-    def __init__(self, lock):
+    def __init__(self, lock, subscribers=1):
         self.lock = lock
         self.messages = []
+        self.subscribers = subscribers
+
+    def get_subscription_count(self):
+        return self.subscribers
 
     def publish(self, msg):
         if self.lock.locked():
@@ -51,7 +56,6 @@ class SensorTests(unittest.TestCase):
         mujoco.mj_forward(b.model, b.data)
         b.data.time = 1.25
         b.sim_lock = threading.Lock()
-        b.cam_width = b.cam_height = 32
         b.zfar = float(b.model.vis.map.zfar * b.model.stat.extent)
         b._renderer = None
         b.cam_period = 1 / 15
@@ -60,10 +64,19 @@ class SensorTests(unittest.TestCase):
         b.odom_period = .02
         b.base_body_id = -1
         b._last_cam_sim_t = b._last_lidar_sim_t = b._last_imu_sim_t = b._last_odom_sim_t = 0.
-        b._camera_specs = [('head', 'head', 'optical')]
-        pubs = [Recorder(b.sim_lock) for _ in range(5)]
-        b.cameras = [_CameraPub('head', 'optical', 0,
-                               _build_camera_info(32, 32, 45, 'optical'), *pubs)]
+        b.depth_stream = b.pointcloud = True
+        b._camera_tf = []
+        color = rp.fovy_intrinsics(32, 32, 45)
+        spec = rp.CameraSpec(
+            ns='head', color_camera='head', depth_camera='head', color=color, depth_info=color,
+            depth_image=color.scaled(16, 16), color_frame='optical', depth_frame='depth_optical',
+            T_color_depth=np.eye(4))
+        b._camera_specs = [spec]
+        keys = ('color', 'color_jpeg', 'color_info', 'aligned', 'aligned_png', 'aligned_info',
+                'depth', 'depth_png', 'depth_info', 'points')
+        b.cameras = [_CameraPub(spec, 0, 0, _camera_info(spec.color, 'optical'),
+                                _camera_info(spec.depth_info, 'depth_optical'),
+                                {k: Recorder(b.sim_lock) for k in keys})]
         b.pub_clock = Recorder(b.sim_lock)
         b.get_logger = lambda: SimpleNamespace(warn=lambda text: self.fail(text))
         # Timing is optional for existing callers of the bridge.
@@ -93,48 +106,87 @@ class SensorTests(unittest.TestCase):
 
         with patch.object(mujoco.Renderer, 'update_scene', update), patch.object(mujoco.Renderer, 'render', render):
             b._publish_camera_frame(_sim_time_to_msg(b.data.time))
-        self.assertEqual(updates, [0])
+        # Colour + aligned depth share one scene update; the decimated depth
+        # stream is the second (here the same camera, as on a D405).
+        self.assertEqual(updates, [0, 0])
 
     def test_images_match_two_scene_update_reference(self):
         b = self.bridge
         stamp = _sim_time_to_msg(b.data.time)
         b._publish_camera_frame(stamp)
         cam = b.cameras[0]
-        rgb = cam.pub_rgb_raw.messages[0]
-        depth = cam.pub_depth_raw.messages[0]
+        rgb = cam.pubs['color'].messages[0]
+        depth = cam.pubs['aligned'].messages[0]
         # Reference path rebuilds the same scene separately for RGB and depth.
-        r = b._renderer
+        r = b._renderer[(32, 32)]
         r.disable_depth_rendering()
-        r.update_scene(b.data, camera=cam.name, scene_option=b._scene_opt)
+        r.update_scene(b.data, camera=0, scene_option=b._scene_opt)
         reference_rgb = r.render()
         r.enable_depth_rendering()
-        r.update_scene(b.data, camera=cam.name, scene_option=b._scene_opt)
+        r.update_scene(b.data, camera=0, scene_option=b._scene_opt)
         reference_depth = r.render()
         invalid = ~np.isfinite(reference_depth) | (reference_depth <= 0) | (reference_depth >= .999 * b.zfar)
         reference_mm = np.clip(reference_depth * 1000, 0, 65535).astype(np.uint16)
         reference_mm[invalid] = 0
         self.assertEqual(bytes(rgb.data), reference_rgb.tobytes())
         self.assertEqual(bytes(depth.data), reference_mm.tobytes())
-        compressed = cam.pub_depth.messages[0]
+        compressed = cam.pubs['aligned_png'].messages[0]
+        self.assertEqual(bytes(compressed.data)[:12], _COMPRESSED_DEPTH_HEADER)
+        self.assertEqual(compressed.format, '16UC1; compressedDepth')
         decoded = np.asarray(PILImage.open(io.BytesIO(bytes(compressed.data)[12:])))
         np.testing.assert_array_equal(decoded, reference_mm)
         expected_jpeg = io.BytesIO()
-        PILImage.fromarray(reference_rgb, mode='RGB').save(expected_jpeg, format='JPEG', quality=80)
-        self.assertEqual(bytes(cam.pub_rgb.messages[0].data), expected_jpeg.getvalue())
-        for pub in (cam.pub_rgb, cam.pub_depth, cam.pub_rgb_raw, cam.pub_depth_raw, cam.pub_info):
-            self.assertEqual(pub.messages[0].header.stamp, stamp)
-            self.assertEqual(pub.messages[0].header.frame_id, 'optical')
+        PILImage.fromarray(reference_rgb, mode='RGB').save(expected_jpeg, format='JPEG', quality=_JPEG_QUALITY)
+        self.assertEqual(bytes(cam.pubs['color_jpeg'].messages[0].data), expected_jpeg.getvalue())
+        self.assertEqual(cam.pubs['color_jpeg'].messages[0].format, 'rgb8; jpeg compressed bgr8')
+        for key in ('color', 'color_jpeg', 'color_info', 'aligned', 'aligned_png', 'aligned_info'):
+            self.assertEqual(cam.pubs[key].messages[0].header.stamp, stamp, key)
+            self.assertEqual(cam.pubs[key].messages[0].header.frame_id, 'optical', key)
+        for key in ('depth', 'depth_png', 'depth_info', 'points'):
+            self.assertEqual(cam.pubs[key].messages[0].header.stamp, stamp, key)
+            self.assertEqual(cam.pubs[key].messages[0].header.frame_id, 'depth_optical', key)
         self.assertEqual(rgb.encoding, 'rgb8')
         self.assertEqual(depth.encoding, '16UC1')
+        # Decimated depth stream: a separate render at the depth image size.
+        rd = b._renderer[(16, 16)]
+        rd.enable_depth_rendering()
+        rd.update_scene(b.data, camera=0, scene_option=b._scene_opt)
+        np.testing.assert_array_equal(
+            np.frombuffer(bytes(cam.pubs['depth'].messages[0].data), dtype=np.uint16).reshape(16, 16),
+            b._depth_mm(rd.render()))
+        self.assertEqual((cam.pubs['depth_info'].messages[0].width, cam.pubs['depth'].messages[0].width), (32, 16))
+
+    def test_compressed_topics_encode_only_for_subscribers(self):
+        b = self.bridge
+        cam = b.cameras[0]
+        for key in ('color_jpeg', 'aligned_png', 'depth_png'):
+            cam.pubs[key].subscribers = 0
+        b._publish_camera_frame(_sim_time_to_msg(b.data.time))
+        for key in ('color_jpeg', 'aligned_png', 'depth_png'):
+            self.assertEqual(cam.pubs[key].messages, [], key)
+        for key in ('color', 'aligned', 'depth', 'points'):
+            self.assertEqual(len(cam.pubs[key].messages), 1, key)
+
+    def test_point_cloud_matches_the_real_driver_layout(self):
+        b = self.bridge
+        b._publish_camera_frame(_sim_time_to_msg(b.data.time))
+        msg = b.cameras[0].pubs['points'].messages[0]
+        self.assertEqual([(f.name, f.offset, f.datatype, f.count) for f in msg.fields],
+                         [('x', 0, 7, 1), ('y', 4, 7, 1), ('z', 8, 7, 1), ('rgb', 16, 7, 1)])
+        self.assertEqual((msg.height, msg.point_step, msg.is_dense), (1, 20, True))
+        depth = np.frombuffer(bytes(b.cameras[0].pubs['depth'].messages[0].data), dtype=np.uint16)
+        self.assertEqual(msg.width, int(np.count_nonzero(depth)))
+        points = np.frombuffer(bytes(msg.data), dtype=rp.CLOUD_DTYPE)
+        np.testing.assert_allclose(np.sort(points['z']), np.sort(depth[depth > 0] / 1000.0), rtol=1e-6)
 
     def test_camera_worker_matches_inline_frames_and_owns_renderer(self):
         from concurrent.futures import ThreadPoolExecutor
         b = self.bridge
         stamp = _sim_time_to_msg(b.data.time)
         b._publish_camera_frame(stamp)
-        inline = [bytes(pub.messages[0].data) for pub in (b.cameras[0].pub_rgb_raw, b.cameras[0].pub_depth_raw)]
+        inline = [bytes(b.cameras[0].pubs[k].messages[0].data) for k in ('color', 'aligned')]
         b._close_renderer()
-        for pub in b.cameras[0][4:]:
+        for pub in b.cameras[0].pubs.values():
             pub.messages.clear()
         b._camera_worker, b._camera_pending = ThreadPoolExecutor(max_workers=1), None
         threads = []
@@ -151,8 +203,8 @@ class SensorTests(unittest.TestCase):
         self.assertTrue(threads and all(t is not threading.main_thread() for t in threads))
         self.assertIsNone(b._renderer)
         cam = b.cameras[0]
-        self.assertEqual(len(cam.pub_rgb_raw.messages), 2)
-        self.assertEqual([bytes(cam.pub_rgb_raw.messages[0].data), bytes(cam.pub_depth_raw.messages[0].data)], inline)
+        self.assertEqual(len(cam.pubs['color'].messages), 2)
+        self.assertEqual([bytes(cam.pubs[k].messages[0].data) for k in ('color', 'aligned')], inline)
 
     def test_tick_preserves_sim_time_schedule_and_publication_order(self):
         b = self.bridge

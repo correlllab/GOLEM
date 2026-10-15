@@ -13,6 +13,7 @@ from mujoco_ros_bridge import init_ros, shutdown_ros
 import mujoco.viewer
 
 import h1_2_robosuite  # registers H1_2 + Magpie grippers, patches RoboCasa
+import realsense_profile
 import battery_env  # registers the Battery workcell env
 from magpie_hand_bridge import MagpieHandBridge
 from measurement_bridge import MeasurementBridge
@@ -246,25 +247,42 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     init_ros()
 
     # Sensor bridge: /clock, RGBD cameras (head + both hands), livox lidar + IMU.
-    # Pass robosuite-prefixed MuJoCo lookup names; ROS-facing frame_ids stay
-    # unprefixed (ctor defaults). cameras: (mujoco name, /realsense/<ns>, frame_id).
-    # Head rides the robot prefix; the eye-in-hand gripper cameras ride the gripper
-    # prefixes (same as the hand bridges below).
-    # RGBD camera rendering (3x 256x256 offscreen renders per frame) is the
-    # heaviest per-step cost on CPU. GOLEM_CAMERAS=0 drops them to speed the sim up
-    # for locomotion/SLAM (lidar + odom are unaffected).
-    _cameras_on = os.environ.get('GOLEM_CAMERAS', '1').strip().lower() not in ('0', 'off', 'false', 'no')
-    _cameras = [
-        (f"{pfx}head_cam",          "head",       "camera_color_optical_frame"),
-        ("gripper0_left_hand_cam",  "left_hand",  "left_hand_camera_color_optical_frame"),
-        ("gripper0_right_hand_cam", "right_hand", "right_hand_camera_color_optical_frame"),
+    # MuJoCo lookups use robosuite-prefixed names (the head camera rides the robot
+    # prefix, the eye-in-hand cameras the gripper prefixes, as the hand bridges
+    # below); ROS-facing names are the real robot's. Camera rendering and encoding
+    # is the heaviest per-step cost on CPU; GOLEM_CAMERAS=0 drops the cameras to
+    # speed the sim up for locomotion/SLAM (lidar + odom are unaffected).
+    # The cameras publish what the real robot's RealSense drivers do
+    # (realsense_profile.yaml): frame names, TF, intrinsics and topics.
+    # GOLEM_CAMERA_SCALE renders the head camera at that fraction of its real
+    # 1280x720 (same projection, camera_info scaled to match). The hand cameras
+    # keep their gripper-MJCF fovy at 256x256. GOLEM_CAMERA_DEPTH=0 drops
+    # depth/image_rect_raw and GOLEM_CAMERA_POINTCLOUD=0 drops depth/color/points
+    # (with both off, the extra depth render is skipped).
+    def _env_on(name):
+        return os.environ.get(name, '1').strip().lower() not in ('0', 'off', 'false', 'no')
+    _cameras_on = _env_on('GOLEM_CAMERAS')
+    _camera_scale = float(os.environ.get('GOLEM_CAMERA_SCALE', '').strip() or 0.5)
+    _profile = realsense_profile.load_profile()
+    _camera_names = [
+        ("head",       f"{pfx}{h1_2_robosuite.HEAD_CAMERA}"),
+        ("left_hand",  "gripper0_left_hand_cam"),
+        ("right_hand", "gripper0_right_hand_cam"),
     ] if _cameras_on else []
-    print(f"[h12_mujoco] RGBD cameras {'ON' if _cameras_on else 'OFF (GOLEM_CAMERAS=0)'}")
+    _cameras = realsense_profile.camera_specs(model, _camera_names, _profile, _camera_scale, (256, 256))
+    _depth_on, _cloud_on = _env_on('GOLEM_CAMERA_DEPTH'), _env_on('GOLEM_CAMERA_POINTCLOUD')
+    print(f"[h12_mujoco] RGBD cameras {'ON' if _cameras_on else 'OFF (GOLEM_CAMERAS=0)'}"
+          + (f": head {_cameras[0].color.width}x{_cameras[0].color.height} "
+             f"(GOLEM_CAMERA_SCALE={_camera_scale:g}), depth stream {'on' if _depth_on else 'off'}, "
+             f"point cloud {'on' if _cloud_on else 'off'}" if _cameras else ""))
     timings = LoopTimings(enabled=timing)
     ros_bridge = RosSensorBridge(
         model, data,
         cameras=_cameras,
-        cam_width=256, cam_height=256,   # all 3 cameras render at 256x256 (RoboCasa default)
+        camera_tf=realsense_profile.tf_edges(_profile, [ns for ns, _ in _camera_names]),
+        camera_tf_rate_hz=float(_profile["tf_rate_hz"]),
+        depth_stream=_depth_on,
+        pointcloud=_cloud_on,
         # MID-360 fidelity: 360x56 @ 10Hz ~= 201k pts/s (real ~200k), 0.1m near /
         # 40m far range, per-point offset_time for FAST-LIO deskew. el_rays/rate
         # are the knobs to dial back if the ray cast (main thread) hurts RTF.

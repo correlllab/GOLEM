@@ -2,11 +2,11 @@
 # with the task code of 10-15), agent_196800. LSTM actors (64 units, then [256, 128, 64] on the LSTM's output and the
 # raw observation), running observation normalization, explicit PD at 500 Hz in training (policy 50 Hz), a 0-20 ms
 # target delay, pushes and rough terrain (up to +-5 cm) in training only, joint targets clipped into GOLEM's position
-# e-stop range (export.yaml target_limits) and bounded to 85% of the effort limit. Arm goals move by the learned
-# estimator, its vertical motion from the feet and its tilt from gravity (export.yaml odometry). No height_drop input,
-# no settle at a mode switch. Every value mirrors the training env; the source is named on each block.
+# e-stop range (export.yaml target_limits) and bounded to 85% of the effort limit. On the robot the arm goals stay put
+# in the world by the SLAM pipeline's odometry (slam_frame below). No settle at a mode switch. Every other value mirrors
+# the training env; the source is named on each block.
 # Locomanipulation_game scripts/skrl/export_marl.py writes the networks and export.yaml next to this file; export.yaml's
-# keys (rest_pose, target_limits, odometry, height_drop_obs, source) override the ones here.
+# keys (rest_pose, target_limits, source) override the ones here.
 
 control_dt: 0.02            # decimation 10 x sim dt 0.002 (Explicit500: env.sim.dt=0.002 env.decimation=10)
 
@@ -59,10 +59,6 @@ target_limits: null         # joint -> [low, high], GOLEM's position e-stop rang
                             # export.yaml sets it per run (null: runs trained without it)
 torque_headroom: 0.85       # then: kp (target - q) - kd dq within this share of effort_limits
 
-# The actors' height_drop input (always shown as zero): runs before golemlim* had it (legs 96, arms 124 obs); Explicit500's
-# actors have none (legs 95, arms 123)
-height_drop_obs: false
-
 legs:
   policy: legs.pt
   num_obs: 95
@@ -79,18 +75,9 @@ arms:
   ik_damping: 0.05
   max_ik_step: 0.1          # rad per joint per policy step
 
-# Arm commands move by the learned pelvis-motion estimator on its history window and the action; export.yaml's odometry
-# block (history_frames 25, vertical_from_feet, tilt_from_gravity) replaces this mode: the step's vertical motion from the
-# pelvis's height above the lowest ankle, its roll and pitch from gravity, through the feet and IMU frames below.
-odometry: learned
-legs_odometry:
-  foot_frames: [left_ankle_roll_link, right_ankle_roll_link]   # FOOT_LINK_NAMES
-  imu_frame: torso_link     # training's imu_link: on torso_link, no rotation
-
-estimator:
-  path: estimator.pt
-  history: 25               # ODOMETRY_HISTORY
-  num_inputs: 1901          # 25 x (3 + 3 + 3 + 27 + 27 + 12) + 26 actions
+# FAST-LIO's body frame (/Odometry, camera_init -> body): the MID360's, livox_link in the URDF. Forward kinematics
+# takes its pose to the pelvis, through the torso joint.
+slam_frame: livox_link
 
 # Gait clock (manager_based mdp/rewards.py)
 gait_period: 0.8

@@ -296,19 +296,19 @@ ros2 action send_goal /frame_task custom_ros_messages/action/FrameTask \
 ## Loco-manipulation game policy (`/marl_deploy_node`)
 
 The Locomanipulation_game MARL policy (`lmg_deploy`) drives all 27
-joints: legs walk on `/cmd_vel`, arms reach wrist-pose goals. Start it with no
-game commander so you drive it yourself (see
+joints: legs walk on `/cmd_vel`, arms reach wrist-pose goals (held in the world
+by the SLAM odometry, so keep `use_slam` on). You drive it yourself (see
 `lmg_deploy/README.md` for all launch arguments):
 
 ```bash
-ros2 launch h12_bringup lmg_sim_bringup.launch.py use_commander:=false   # add policy:=marl_ik for golemlim120k
+ros2 launch h12_bringup lmg_sim_bringup.launch.py   # Explicit500
 ```
 
 Walk:
 
 ```bash
 ros2 topic echo /marl_deploy_node/state --once                 # expect "nav" once engaged
-ros2 run teleop_twist_keyboard teleop_twist_keyboard           # walk (expect little forward motion with this checkpoint)
+ros2 run teleop_twist_keyboard teleop_twist_keyboard           # walk
 ```
 
 To reach, then go back to walking:

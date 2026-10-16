@@ -95,12 +95,6 @@ target_limits:
   right_wrist_yaw_joint:
   - -1.249
   - 1.249
-odometry:
-  mode: learned
-  history_frames: 25
-  vertical_from_feet: true
-  tilt_from_gravity: true
-height_drop_obs: false
 source:
   checkpoint: /home/max/Locomanipulation_game/logs/skrl/locomanip_marl/2026-10-15_12-17-16_Explicit500/checkpoints/agent_196800.pt
   estimator: /home/max/Locomanipulation_game/logs/skrl/locomanip_marl/2026-10-15_12-17-16_Explicit500/estimator/estimator_196800.pt

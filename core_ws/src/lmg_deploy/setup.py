@@ -13,11 +13,7 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        # Exported policies + their deploy config, installed under share/<pkg>/policies/<name>/.
-        (os.path.join('share', package_name, 'policies', 'marl_ik'),
-            glob('policies/marl_ik/*')),
-        (os.path.join('share', package_name, 'policies', 'marl_golem'),
-            glob('policies/marl_golem/*')),
+        # The exported policy + its deploy config, installed under share/<pkg>/policies/<name>/.
         (os.path.join('share', package_name, 'policies', 'explicit500'),
             glob('policies/explicit500/*')),
     ],
@@ -35,7 +31,6 @@ setup(
     entry_points={
         'console_scripts': [
             'marl_deploy_node = lmg_deploy.marl_deploy_node:main',
-            'game_commander_node = lmg_deploy.game_commander_node:main',
         ],
     },
 )

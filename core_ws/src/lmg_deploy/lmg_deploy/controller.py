@@ -3,11 +3,10 @@
 One step() is one env step of LocoManip-Marl-Flat-IK-Direct-v0, in the env's
 order (locomanip_marl_env.py _get_observations, then _pre_physics_step):
 
-  1. pelvis odometry: estimate how the pelvis moved over the last step and
-     move the arm command by it (ArmTargetsCommand.apply_pelvis_motion);
+  1. pelvis odometry: move the arm command by how the pelvis moved since the
+     last SLAM pose (ArmTargetsCommand.apply_pelvis_motion);
   2. commands: advance the settle timer, switch mode;
-  3. observations: the legs' (96) and the arms' (124), one fewer each without
-     height_drop_obs;
+  3. observations: the legs' (95) and the arms' (123);
   4. actions: clamp to +-clip, legs = scale * a + default, arms = q + IK step
      + residual_scale * r, both bounded to the hard limits +- target_margin
      (negative: inside them), narrowed to target_limits where it names a joint
@@ -19,22 +18,12 @@ order (locomanip_marl_env.py _get_observations, then _pre_physics_step):
      kp (target - q) - kd qd, is within torque_headroom x effort_limits
      (mdp.actions.torque_bounds).
 
-Odometry is cfg["odometry"]: a mode name, or export_marl.py's block
-{mode, history_frames, vertical_from_feet, tilt_from_gravity}:
-  learned  the pelvis-motion estimator on its history window and the action;
-           with tilt_from_gravity its rotation's roll and pitch are turned to
-           agree with gravity's (odometry.align_tilt), and with
-           vertical_from_feet its vertical motion is replaced by the change in
-           the pelvis's height above the lowest ankle along gravity
-           (LocoManipMarlEnv._from_feet_and_gravity); both use the
-           legs_odometry frames;
-  legs     rotation from the IMU attitude (taken back to the pelvis through
-           the torso joint when the IMU sits on the torso), translation from
-           the planted feet: a foot that stays put moves in the pelvis frame
-           by the pelvis's motion, p(t-1) - dR p(t) (LocoManipMarlEnv.
-           _leg_odometry). Training called a foot planted from its contact
-           force; with no foot force sensor, a foot counts as planted here when
-           it is within stance_height (m, gravity axis) of the lowest foot.
+Odometry is the SLAM pipeline's: set_slam_pose() takes FAST-LIO's body pose
+(camera_init -> body, the lidar frame, slam_frame in the config) and forward
+kinematics carries it to the pelvis through the torso joint. Each new pose
+moves the arm command by the pelvis's motion since the previous one; between
+SLAM poses (10 Hz against the 50 Hz policy) the command holds still in the
+pelvis frame.
 
 Recurrent actors (networks.RecurrentTorchScriptNetwork) carry their LSTM
 state from step to step; reset() zeroes it, as training did at each episode
@@ -44,7 +33,7 @@ Modes follow the training command schedule: navigation (velocity command
 live, arms holding the rest pose) or an arm goal (velocity zero, one wrist
 pose per arm fixed in the world), with a zero-velocity settle at each switch.
 The operator's arm goal is a pelvis-frame pose taken at request time; the
-odometry estimate keeps it on its world point from then on, through the
+SLAM odometry keeps it on its world point from then on, through the
 settle too.
 """
 
@@ -55,13 +44,11 @@ import numpy as np
 
 from lmg_deploy.kinematics import ArmKinematics
 from lmg_deploy.rotations import (
-    align_tilt,
     compute_pose_error,
     projected_gravity,
     quat_apply,
     quat_conjugate,
     quat_mul,
-    quat_from_rotvec,
     quat_unique,
     subtract_frame_transforms,
     wxyz_to_xyzw,
@@ -99,11 +86,12 @@ class Mode(Enum):
 
 
 class MarlController:
-    def __init__(self, cfg: dict, kinematics: ArmKinematics, legs, arms, estimator):
-        """legs / arms / estimator: callables numpy -> numpy (networks.py)."""
+    def __init__(self, cfg: dict, kinematics: ArmKinematics, legs, arms):
+        """legs / arms: callables numpy -> numpy (networks.py). kinematics needs cfg["slam_frame"] among its
+        extra frames."""
         self.cfg = cfg
         self.kin = kinematics
-        self.legs, self.arms, self.estimator = legs, arms, estimator
+        self.legs, self.arms = legs, arms
         self.dt = float(cfg["control_dt"])
         self.default = np.asarray(cfg["default_joint_pos"], dtype=np.float64)
         self.kp = np.asarray(cfg["kp"], dtype=np.float64)
@@ -111,21 +99,10 @@ class MarlController:
         self.clip = float(cfg["clip_actions"])
         self.lower, self.upper = self._position_bounds(kinematics.joint_limits, float(cfg["target_margin"]),
                                                        cfg.get("target_limits"))
-        self.height_drop_obs = bool(cfg.get("height_drop_obs", True))
         self.legs_scale = float(cfg["legs"]["action_scale"])
         self.arms_scale = float(cfg["arms"]["residual_scale"])
         self.ik_damping = float(cfg["arms"]["ik_damping"])
         self.max_ik_step = float(cfg["arms"]["max_ik_step"])
-        odometry = cfg.get("odometry", "learned")
-        if isinstance(odometry, dict):
-            self.odometry = odometry.get("mode", "learned")
-            self.history = int(odometry.get("history_frames", cfg["estimator"]["history"]))
-            self.vertical_from_feet = bool(odometry.get("vertical_from_feet", False))
-            self.tilt_from_gravity = bool(odometry.get("tilt_from_gravity", False))
-        else:
-            self.odometry = odometry
-            self.history = int(cfg["estimator"]["history"])
-            self.vertical_from_feet = self.tilt_from_gravity = False
         self.gait_period = float(cfg["gait_period"])
         self.zero_cmd_eps = float(cfg["zero_cmd_eps"])
         ranges = cfg["command_ranges"]
@@ -139,14 +116,8 @@ class MarlController:
             self.effort_limits = np.asarray(cfg["effort_limits"], dtype=np.float64)
         cutoff = cfg["arms"].get("residual_cutoff_hz")
         self.filter_alpha = 1.0 if cutoff is None else 1.0 - np.exp(-2.0 * np.pi * float(cutoff) * self.dt)
-        if self.odometry not in ("learned", "legs"):
-            raise ValueError(f"odometry must be 'learned' or 'legs', not {self.odometry!r}")
-        legs_odom = cfg.get("legs_odometry", {})
-        self.foot_frames = legs_odom.get("foot_frames", [])
-        self.imu_frame = legs_odom.get("imu_frame", "pelvis")
-        self.stance_height = float(legs_odom.get("stance_height", 0.02))
-        if (self.odometry == "legs" or self.vertical_from_feet) and not self.foot_frames:
-            raise ValueError("odometry 'legs' and vertical_from_feet need legs_odometry.foot_frames")
+        self.slam_frame = cfg["slam_frame"]
+        self._slam_pose: tuple[np.ndarray, np.ndarray] | None = None   # latest body pose, SLAM world frame
         if len(self.default) != NUM_JOINTS or len(self.kp) != NUM_JOINTS or len(self.kd) != NUM_JOINTS:
             raise ValueError("default_joint_pos, kp and kd need one entry per policy joint (27)")
         if cfg.get("rest_pose") is not None:
@@ -167,21 +138,21 @@ class MarlController:
         self.pending_goal: np.ndarray | None = None
         self.believed = self.rest_pose.copy()   # (arms, 7) pelvis frame, wxyz: the arm command
         self.steps = 0                          # since reset: the gait clock
-        self._frames: list[np.ndarray] = []     # estimator history, oldest first
-        self._prev_action: np.ndarray | None = None
         # the action terms' state after a reset: legs see the applied target in action units, arms zero
         q_legs = state.q[:NUM_LEGS] if state is not None else self.default[:NUM_LEGS]
         self.legs_last = (q_legs - self.default[:NUM_LEGS]) / self.legs_scale
         self.arms_last = np.zeros(NUM_ARM_JOINTS)
         self.residual = np.zeros(NUM_ARM_JOINTS)    # the arms' action after the low-pass
-        self._prev_pelvis_quat: np.ndarray | None = None
-        self._prev_feet: np.ndarray | None = None
-        self._prev_up: np.ndarray | None = None       # the world's vertical in the pelvis frame, last step
-        self._prev_height: float | None = None        # the pelvis's height above the lowest ankle, last step
+        self._prev_pelvis: tuple[np.ndarray, np.ndarray] | None = None   # pelvis pose at the last SLAM pose used
         self.last_obs: dict[str, np.ndarray] = {}
         for network in (self.legs, self.arms):
             if hasattr(network, "reset"):
                 network.reset()                       # recurrent actors start each episode from a zero state
+
+    # -- inputs ------------------------------------------------------------------
+    def set_slam_pose(self, pos: np.ndarray, quat: np.ndarray) -> None:
+        """FAST-LIO's body pose (position, quaternion wxyz) in its world frame; the next step() applies it."""
+        self._slam_pose = (np.asarray(pos, dtype=np.float64), np.asarray(quat, dtype=np.float64))
 
     # -- operator commands -------------------------------------------------------
     def set_velocity_command(self, cmd: np.ndarray) -> None:
@@ -240,7 +211,7 @@ class MarlController:
     # -- the env step ----------------------------------------------------------------
     def step(self, state: RobotState) -> JointCommand:
         self.kin.update(state.q)
-        self._update_odometry(state)
+        self._update_odometry()
         self._update_mode()
 
         common = self._common_obs(state)
@@ -266,7 +237,6 @@ class MarlController:
         # what each agent observes of its action next step (mdp.applied_action)
         self.legs_last = (target[:NUM_LEGS] - self.default[:NUM_LEGS]) / self.legs_scale
         self.arms_last = self.residual.copy()
-        self._prev_action = np.concatenate([legs_action, arms_action])
         self.steps += 1
         return JointCommand(q=target, kp=self.kp.copy(), kd=self.kd.copy())
 
@@ -330,7 +300,6 @@ class MarlController:
             cmd,
             [1.0 if self.mode == Mode.ARM else 0.0],
             ee_targets,
-            [0.0] if self.height_drop_obs else [],   # height_drop: always shown as zero
             state.q - self.default,
             state.dq,
             self._gait_phase(cmd),
@@ -355,74 +324,20 @@ class MarlController:
         """(arms,) position error to the command (m), for logging."""
         return np.linalg.norm(self._wrist_errors().reshape(self.num_arms, 6)[:, :3], axis=1)
 
-    def _update_odometry(self, state: RobotState) -> None:
-        if self.odometry == "legs":
-            motion = self._leg_odometry(state)
-            if motion is not None:
-                self._move_goal(*motion)
+    def _update_odometry(self) -> None:
+        """Move the arm command by the pelvis's motion since the last SLAM pose used, in that pose's pelvis frame."""
+        if self._slam_pose is None:
             return
-        motion = self._learned_motion(state)
-        if motion is not None:
-            self._move_goal(*motion)
-
-    def _learned_motion(self, state: RobotState) -> tuple[np.ndarray, np.ndarray] | None:
-        """The estimator's pelvis motion since the last step, previous pelvis frame: (delta_pos, delta_quat), with
-        tilt_from_gravity and vertical_from_feet applied; None before the first action. Pushes the history frame."""
-        frame = np.concatenate([
-            state.acc, state.gyro, projected_gravity(state.quat),
-            state.q - self.default, state.dq, state.tau[:NUM_LEGS],
-        ])
-        if not self._frames:
-            self._frames = [frame] * self.history   # the first push fills the window, as CircularBuffer does
-        else:
-            self._frames = self._frames[1:] + [frame]
-        up, height = self._up_and_height(state)
-        prev_up, prev_height = self._prev_up, self._prev_height
-        self._prev_up, self._prev_height = up, height
-        if self._prev_action is None:
-            return None
-        self.last_estimator_input = np.concatenate([self._history_input(), self._prev_action])
-        motion = self.estimator(self.last_estimator_input)
-        delta_pos, delta_quat = motion[:3] * self.dt, quat_from_rotvec(motion[3:] * self.dt)
-        if prev_up is not None:
-            if self.tilt_from_gravity:
-                delta_quat = align_tilt(delta_quat, prev_up, up)
-            if self.vertical_from_feet:
-                rise = height - prev_height
-                delta_pos = delta_pos + (rise - float(delta_pos @ prev_up)) * prev_up
-        return delta_pos, delta_quat
-
-    def _up_and_height(self, state: RobotState) -> tuple[np.ndarray | None, float | None]:
-        """The world's vertical in the pelvis frame (from the IMU attitude) and, with foot frames, the pelvis's height
-        above the lowest ankle along it (forward kinematics), for tilt_from_gravity and vertical_from_feet."""
-        if not (self.tilt_from_gravity or self.vertical_from_feet):
-            return None, None
-        up = quat_apply(quat_conjugate(self._pelvis_quat(state)), np.array([0.0, 0.0, 1.0]))
-        if not self.foot_frames:
-            return up, None
-        feet = np.stack([self.kin.frame_pose(f)[0] for f in self.foot_frames])  # pelvis frame
-        return up, float(np.max(-(feet @ up)))
-
-    def _pelvis_quat(self, state: RobotState) -> np.ndarray:
-        """The pelvis's world orientation from the IMU's: through the torso joint when the IMU is on the torso."""
-        if self.imu_frame == "pelvis":
-            return state.quat
-        _, quat_imu_in_pelvis = self.kin.frame_pose(self.imu_frame)
-        return quat_mul(state.quat, quat_conjugate(quat_imu_in_pelvis))
-
-    def _leg_odometry(self, state: RobotState) -> tuple[np.ndarray, np.ndarray] | None:
-        """The pelvis's motion since the last step, in the previous pelvis frame: (delta_pos, delta_quat)."""
-        quat = self._pelvis_quat(state)
-        feet = np.stack([self.kin.frame_pose(f)[0] for f in self.foot_frames])  # pelvis frame
-        prev_quat, prev_feet = self._prev_pelvis_quat, self._prev_feet
-        self._prev_pelvis_quat, self._prev_feet = quat, feet
-        if prev_quat is None:
-            return None
-        delta_quat = quat_mul(quat_conjugate(prev_quat), quat)
-        moved = np.stack([prev_feet[i] - quat_apply(delta_quat, feet[i]) for i in range(len(feet))])
-        height = np.array([quat_apply(quat, foot)[2] for foot in feet])  # along gravity, from the pelvis
-        planted = height <= height.min() + self.stance_height
-        return moved[planted].mean(axis=0), delta_quat
+        body_pos, body_quat = self._slam_pose
+        self._slam_pose = None
+        # world <- pelvis = (world <- body) o (pelvis <- body)^-1, the body frame posed by forward kinematics
+        p_pb, q_pb = self.kin.frame_pose(self.slam_frame)
+        q_bp = quat_conjugate(q_pb)
+        quat = quat_mul(body_quat, q_bp)
+        pos = body_pos - quat_apply(quat, p_pb)
+        prev, self._prev_pelvis = self._prev_pelvis, (pos, quat)
+        if prev is not None:
+            self._move_goal(*subtract_frame_transforms(prev[0], prev[1], pos, quat))
 
     def _move_goal(self, delta_pos: np.ndarray, delta_quat: np.ndarray) -> None:
         if self.mode not in (Mode.ARM, Mode.SETTLE_TO_ARM):
@@ -432,13 +347,6 @@ class MarlController:
         for arm in range(self.num_arms):
             pos, quat = subtract_frame_transforms(delta_pos, delta_quat, poses[arm, :3], poses[arm, 3:])
             poses[arm, :3], poses[arm, 3:] = pos, quat_unique(quat)
-
-    def _history_input(self) -> np.ndarray:
-        """The odometry group's layout: term by term, each term's frames oldest first."""
-        frames = np.stack(self._frames)              # (history, frame)
-        sizes = [3, 3, 3, NUM_JOINTS, NUM_JOINTS, NUM_LEGS]
-        bounds = np.cumsum([0] + sizes)
-        return np.concatenate([frames[:, lo:hi].reshape(-1) for lo, hi in zip(bounds[:-1], bounds[1:])])
 
     def _rest_pose_from_fk(self) -> np.ndarray:
         self.kin.update(self.default)

@@ -20,9 +20,6 @@
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>pinocchio</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>sensor_msgs_py</exec_depend>
-  <exec_depend>tf2_ros</exec_depend>
   <!-- torch comes from pip in the golem_ros image (no rosdep key) -->
 
   <test_depend>python3-pytest</test_depend>

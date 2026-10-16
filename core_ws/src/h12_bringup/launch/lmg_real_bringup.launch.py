@@ -15,20 +15,18 @@ from launch.substitutions import LaunchConfiguration
 # and MJPC controllers (h12_real_desktop_bringup.launch.py's leg control) off.
 #
 # Nothing commands the robot until both operator gates pass:
-#   1. start_position_verified:=true starts marl_deploy_node (and the commander,
-#      if use_commander:=true); it ramps all 27 joints to the policy's default
-#      pose and holds there.
+#   1. start_position_verified:=true starts marl_deploy_node; it ramps all 27
+#      joints to the policy's default pose and holds there.
 #   2. ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger
 #      engages the policy.
-# With use_commander:=false (the default) the robot only walks on /cmd_vel and
-# reaches on /marl_deploy_node/arm_goal from the operator.
+# The robot then walks on /cmd_vel and reaches on the arm goals the operator sets
+# through /marl_deploy_node/set_mode and set_arm_goals.
 #
 # ROS_DOMAIN_ID must be exported in the launching shell (0 on the real robot;
 # see h12_control.launch.py). Assets resolve as in h12_state.launch.py.
 ASSETS_DIR = os.environ.get('GOLEM_ASSETS_DIR', '/home/unitree/GOLEM/CL_Assets')
 
-GAME_ARGS = ('start_position_verified', 'policy', 'prepose_ramp_s', 'prepose_max_vel', 'use_commander',
-             'commander_mode', 'goals', 'commander_seed', 'commander_duration_s', 'commander_log')
+GAME_ARGS = ('start_position_verified', 'policy', 'prepose_ramp_s', 'prepose_max_vel')
 
 
 def _include(package, launch_file, launch_arguments, condition=None):
@@ -46,22 +44,16 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('start_position_verified', default_value='false'),
-        DeclareLaunchArgument('policy', default_value='marl_golem'),
+        DeclareLaunchArgument('policy', default_value='explicit500'),
         DeclareLaunchArgument('prepose_ramp_s', default_value='6.0'),
         DeclareLaunchArgument('prepose_max_vel', default_value='0.25'),
         DeclareLaunchArgument('safety_config', default_value='relax_safety_split.yaml'),
         DeclareLaunchArgument('use_slam', default_value='true'),
-        # The game reads only the lidar (SLAM and the commander's obstacle guard).
+        # The game reads only the lidar (SLAM).
         DeclareLaunchArgument('use_lidar', default_value='true',
                               description='MID360 driver and livox_imu_upright'),
         DeclareLaunchArgument('use_head_camera', default_value='false', description='head RealSense'),
         DeclareLaunchArgument('use_grippers', default_value='false', description='left and right gripper nodes'),
-        DeclareLaunchArgument('use_commander', default_value='false'),
-        DeclareLaunchArgument('commander_mode', default_value='training'),
-        DeclareLaunchArgument('goals', default_value='arm_goals_4_10.npz'),
-        DeclareLaunchArgument('commander_seed', default_value='0'),
-        DeclareLaunchArgument('commander_duration_s', default_value='0.0'),
-        DeclareLaunchArgument('commander_log', default_value=''),
 
         _include('h12_bringup', 'h12_real_drivers.launch.py', {
             **wall_time,

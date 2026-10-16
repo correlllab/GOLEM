@@ -100,14 +100,3 @@ def wxyz_to_xyzw(q: np.ndarray) -> np.ndarray:
 
 def xyzw_to_wxyz(q: np.ndarray) -> np.ndarray:
     return np.array([q[3], q[0], q[1], q[2]])
-
-
-def align_tilt(delta_quat: np.ndarray, up_prev: np.ndarray, up: np.ndarray) -> np.ndarray:
-    """delta_quat (previous pelvis frame <- new, wxyz) turned by the smallest rotation that makes it carry the world's
-    vertical in the new frame, up, onto the one in the previous frame, up_prev: its roll and pitch then agree with
-    gravity's and its yaw is kept (Locomanipulation_game odometry.align_tilt)."""
-    carried = quat_apply(delta_quat, up)
-    axis = np.cross(carried, up_prev)
-    sin, cos = np.linalg.norm(axis), float(carried @ up_prev)
-    axis = axis / max(sin, 1e-9)
-    return quat_mul(quat_from_rotvec(axis * np.arctan2(sin, cos)), delta_quat)

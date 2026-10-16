@@ -1,4 +1,4 @@
-"""Unit tests for the ROS-free core: rotations, kinematics, observation layout, odometry.
+"""Unit tests for the ROS-free core: rotations, kinematics, observation layout, SLAM odometry.
 
 Run on a host with pinocchio + torch (e.g. the env_isaaclab conda env):
     python -m pytest test/test_controller.py
@@ -19,7 +19,7 @@ from lmg_deploy.kinematics import ArmKinematics
 from lmg_deploy.networks import ZeroNetwork
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CFG_PATH = os.path.join(HERE, "..", "policies", "marl_ik", "marl_ik.yaml")
+CFG_PATH = os.path.join(HERE, "..", "policies", "explicit500", "explicit500.yaml")
 URDF = os.environ.get(
     "H12_URDF", os.path.join(HERE, "..", "..", "..", "..", "CL_Assets", "ros_assets", "h1_2_magpie.urdf"))
 RNG = np.random.default_rng(0)
@@ -32,7 +32,8 @@ def _cfg():
 
 def _kin(cfg):
     names = cfg["joint_names"]
-    return ArmKinematics(URDF, names, cfg["arms"]["ee_frames"], [names[13:20], names[20:]])
+    return ArmKinematics(URDF, names, cfg["arms"]["ee_frames"], [names[13:20], names[20:]],
+                         extra_frames=[cfg["slam_frame"]])
 
 
 def _random_quat():
@@ -176,11 +177,10 @@ def test_ik_step_capped():
 # -- controller --------------------------------------------------------------------
 
 
-def _controller(legs=None, arms=None, estimator=None, **overrides):
+def _controller(legs=None, arms=None, **overrides):
     cfg = _cfg()
     cfg.update(overrides)
-    return MarlController(cfg, _kin(cfg), legs or ZeroNetwork(12), arms or ZeroNetwork(14),
-                          estimator or ZeroNetwork(6)), cfg
+    return MarlController(cfg, _kin(cfg), legs or ZeroNetwork(12), arms or ZeroNetwork(14)), cfg
 
 
 def test_observation_sizes_and_layout():
@@ -191,7 +191,7 @@ def test_observation_sizes_and_layout():
     ctrl.set_velocity_command(np.array([0.5, 0.0, 0.0]))
     ctrl.step(state)
     lo, ao = legs.inputs[-1], arms.inputs[-1]
-    assert lo.shape == (95,) and ao.shape == (123,)             # height_drop_obs: false
+    assert lo.shape == (95,) and ao.shape == (123,)
     np.testing.assert_allclose(lo[:83], ao[:83])                # the shared ProprioCfg terms
     np.testing.assert_allclose(lo[0:3], [0, 0, 9.81])           # accelerometer
     np.testing.assert_allclose(lo[6:9], [0, 0, -1])             # projected gravity
@@ -254,7 +254,7 @@ def test_target_limits_must_name_policy_joints():
 
 
 def test_arm_goal_modes_and_settle():
-    ctrl, cfg = _controller()
+    ctrl, cfg = _controller(settle_to_arm_s=0.75, settle_to_nav_s=1.5)
     state = _state(cfg)
     ctrl.reset(state)
     ctrl.set_velocity_command(np.array([0.5, 0.0, 0.0]))
@@ -290,60 +290,71 @@ def test_arms_track_goal_with_pure_ik():
     assert np.all(ctrl.wrist_errors() < 5e-3)
 
 
-def test_odometry_moves_goal_against_pelvis_motion():
-    vx = 0.5                                     # m/s forward, estimated
-    ctrl, cfg = _controller(estimator=ConstNetwork([vx, 0, 0, 0, 0, 0]), settle_to_arm_s=0.0)
+def _slam_body_pose(ctrl, state, pelvis_pos, pelvis_quat):
+    """The body (lidar) pose FAST-LIO would report for a pelvis at this world pose, at the state's joints."""
+    ctrl.kin.update(state.q)
+    p_pb, q_pb = ctrl.kin.frame_pose(ctrl.slam_frame)
+    return pelvis_pos + R.quat_apply(pelvis_quat, p_pb), R.quat_mul(pelvis_quat, q_pb)
+
+
+def test_slam_odometry_moves_goal_against_pelvis_motion():
+    """The pelvis walks forward and turns in the world: the goal moves back and turns the other way in its frame."""
+    ctrl, cfg = _controller()
     state = _state(cfg)
     ctrl.reset(state)
     goal = ctrl.rest_pose.copy()
     ctrl.request_arm_goal(goal)
-    n = 10
-    for _ in range(n + 1):                       # the first step has no previous action: no estimate
+    yaw = 0.2
+    for pelvis_pos, pelvis_quat in ((np.zeros(3), np.array([1.0, 0, 0, 0])),
+                                    (np.array([0.1, 0.0, 0.0]), R.quat_from_rotvec(np.array([0.0, 0.0, yaw])))):
+        ctrl.set_slam_pose(*_slam_body_pose(ctrl, state, pelvis_pos, pelvis_quat))
         ctrl.step(state)
-    np.testing.assert_allclose(ctrl.believed[:, 0], goal[:, 0] - vx * 0.02 * n, atol=1e-9)
+    world = [(np.zeros(3) + p[:3], p[3:]) for p in goal]         # the first pelvis pose is the world frame
+    for arm in range(2):
+        pos, quat = R.subtract_frame_transforms(np.array([0.1, 0.0, 0.0]),
+                                                R.quat_from_rotvec(np.array([0.0, 0.0, yaw])), *world[arm])
+        np.testing.assert_allclose(ctrl.believed[arm, :3], pos, atol=1e-9)
+        np.testing.assert_allclose(R.quat_unique(ctrl.believed[arm, 3:]), R.quat_unique(quat), atol=1e-9)
+
+
+def test_slam_odometry_follows_the_torso_joint():
+    """A torso turn moves the lidar but not the pelvis: the body pose it reports leaves the goal where it was."""
+    ctrl, cfg = _controller()
+    state = _state(cfg)
+    ctrl.reset(state)
+    goal = ctrl.rest_pose.copy()
+    ctrl.request_arm_goal(goal)
+    ctrl.set_slam_pose(*_slam_body_pose(ctrl, state, np.zeros(3), np.array([1.0, 0, 0, 0])))
+    ctrl.step(state)
+    turned = _state(cfg)
+    turned.q[12] = 0.4                                            # torso_joint, rad
+    ctrl.set_slam_pose(*_slam_body_pose(ctrl, turned, np.zeros(3), np.array([1.0, 0, 0, 0])))
+    ctrl.step(turned)
+    np.testing.assert_allclose(ctrl.believed, goal, atol=1e-9)
+
+
+def test_slam_odometry_moves_goal_only_on_a_new_pose():
+    ctrl, cfg = _controller()
+    state = _state(cfg)
+    ctrl.reset(state)
+    goal = ctrl.rest_pose.copy()
+    ctrl.request_arm_goal(goal)
+    ctrl.set_slam_pose(*_slam_body_pose(ctrl, state, np.zeros(3), np.array([1.0, 0, 0, 0])))
+    ctrl.step(state)
+    ctrl.set_slam_pose(*_slam_body_pose(ctrl, state, np.array([0.05, 0.0, 0.0]), np.array([1.0, 0, 0, 0])))
+    for _ in range(5):                                            # one SLAM pose, five policy steps
+        ctrl.step(state)
+    np.testing.assert_allclose(ctrl.believed[:, 0], goal[:, 0] - 0.05, atol=1e-9)
     np.testing.assert_allclose(ctrl.believed[:, 1:3], goal[:, 1:3], atol=1e-9)
 
 
-def test_estimator_input_layout():
-    est = ConstNetwork(np.zeros(6))
-    ctrl, cfg = _controller(estimator=est)
-    states = []
-    for k in range(6):
-        s = _state(cfg)
-        s.acc = np.array([k, 0.0, 0.0])
-        s.tau = np.full(27, float(k))
-        states.append(s)
-    ctrl.reset(states[0])
-    for s in states:
-        ctrl.step(s)
-    x = est.inputs[-1]                           # after the 6th frame: window frames 2..5
-    assert x.shape == (326,)
-    np.testing.assert_allclose(x[0:12:3], [2, 3, 4, 5])          # acc x, oldest first, term-major
-    np.testing.assert_allclose(x[252:300].reshape(4, 12)[:, 0], [2, 3, 4, 5])  # leg torques
-    first = est.inputs[0]                        # the 2nd step: window = frame 0 repeated, then frame 1
-    np.testing.assert_allclose(first[0:12:3], [0, 0, 0, 1])
-
-
-# -- the Golem policy's deploy features ------------------------------------------------
-
-GOLEM_CFG_PATH = os.path.join(HERE, "..", "policies", "marl_golem", "marl_golem.yaml")
-
-
-def _golem_controller(legs=None, arms=None, **overrides):
-    with open(GOLEM_CFG_PATH) as f:
-        cfg = yaml.safe_load(f)
-    cfg.update(overrides)
-    names = cfg["joint_names"]
-    odom = cfg["legs_odometry"]
-    kin = ArmKinematics(URDF, names, cfg["arms"]["ee_frames"], [names[13:20], names[20:]],
-                        extra_frames=odom["foot_frames"] + [odom["imu_frame"]])
-    return MarlController(cfg, kin, legs or ZeroNetwork(12), arms or ZeroNetwork(14), ZeroNetwork(6)), cfg
+# -- action terms ------------------------------------------------------------------------
 
 
 def test_residual_low_pass_and_observed_action():
     action = np.full(14, 1.0)
     arms = ConstNetwork(action)
-    ctrl, cfg = _golem_controller(arms=arms)
+    ctrl, cfg = _controller(arms=arms)
     state = _state(cfg)
     ctrl.reset(state)
     alpha = 1.0 - np.exp(-2.0 * np.pi * 3.0 * 0.02)
@@ -352,23 +363,11 @@ def test_residual_low_pass_and_observed_action():
     np.testing.assert_allclose(ctrl.arms_last, alpha * action)        # the arms observe the filtered residual
     ctrl.step(state)
     np.testing.assert_allclose(ctrl.residual, (alpha + alpha * (1 - alpha)) * action)
-    np.testing.assert_allclose(arms.inputs[-1][84:98], alpha * action)
+    np.testing.assert_allclose(arms.inputs[-1][83:97], alpha * action)
 
 
-def test_golem_observes_height_drop():
-    legs, arms = ConstNetwork(np.zeros(12)), ConstNetwork(np.zeros(14))
-    ctrl, cfg = _golem_controller(legs=legs, arms=arms)
-    state = _state(cfg)
-    ctrl.reset(state)
-    ctrl.step(state)
-    lo, ao = legs.inputs[-1], arms.inputs[-1]
-    assert lo.shape == (96,) and ao.shape == (124,)
-    assert lo[27] == 0.0                                        # height_drop
-    np.testing.assert_allclose(lo[28:55], 0.0)                  # q - default at default
-
-
-def test_golem_targets_inside_the_safety_clip():
-    ctrl, cfg = _golem_controller(legs=ConstNetwork(np.full(12, 10.0)), arms=ConstNetwork(np.full(14, 10.0)))
+def test_targets_inside_the_safety_clip():
+    ctrl, cfg = _controller(legs=ConstNetwork(np.full(12, 10.0)), arms=ConstNetwork(np.full(14, 10.0)))
     state = _state(cfg)
     ctrl.reset(state)
     for _ in range(20):
@@ -379,61 +378,8 @@ def test_golem_targets_inside_the_safety_clip():
     assert np.all(cmd.q[legs_arms] >= limits[legs_arms, 0] + 0.001 - 1e-12)
 
 
-def test_leg_odometry_moves_goal_against_pelvis_motion():
-    """Feet fixed in the world while the pelvis walks forward: they slide back in the pelvis frame."""
-    ctrl, cfg = _golem_controller(settle_to_arm_s=0.0)
-    state = _state(cfg)
-    ctrl.reset(state)
-    ctrl.kin.update(state.q)
-    feet0 = {f: ctrl.kin.frame_pose(f) for f in ctrl.foot_frames}
-    shift = {"x": 0.0}
-    real_update = ctrl.kin.update
-
-    def update(q):
-        real_update(q)
-        for f, (pos, quat) in feet0.items():
-            ctrl.kin._extra_poses[f] = (pos - np.array([shift["x"], 0.0, 0.0]), quat)
-
-    ctrl.kin.update = update
-    goal = ctrl.rest_pose.copy()
-    ctrl.request_arm_goal(goal)
-    v, n = 0.5, 10
-    ctrl.step(state)                             # the first step only records the feet
-    for _ in range(n):
-        shift["x"] += v * 0.02
-        ctrl.step(state)
-    np.testing.assert_allclose(ctrl.believed[:, 0], goal[:, 0] - v * 0.02 * n, atol=1e-9)
-    np.testing.assert_allclose(ctrl.believed[:, 1:3], goal[:, 1:3], atol=1e-9)
-
-
-def test_leg_odometry_ignores_a_lifted_foot():
-    ctrl, cfg = _golem_controller(settle_to_arm_s=0.0)
-    state = _state(cfg)
-    ctrl.reset(state)
-    ctrl.kin.update(state.q)
-    left, right = ctrl.foot_frames
-    feet0 = {f: ctrl.kin.frame_pose(f) for f in ctrl.foot_frames}
-    t = {"k": 0}
-    real_update = ctrl.kin.update
-
-    def update(q):
-        real_update(q)
-        pos, quat = feet0[left]
-        ctrl.kin._extra_poses[left] = (pos, quat)                                  # planted
-        pos, quat = feet0[right]
-        ctrl.kin._extra_poses[right] = (pos + np.array([0.02 * t["k"], 0.0, 0.1]), quat)  # swinging, lifted
-
-    ctrl.kin.update = update
-    goal = ctrl.rest_pose.copy()
-    ctrl.request_arm_goal(goal)
-    for k in range(6):
-        t["k"] = k
-        ctrl.step(state)
-    np.testing.assert_allclose(ctrl.believed[:, :3], goal[:, :3], atol=1e-9)    # the planted foot didn't move
-
-
 def test_torque_headroom_bounds_the_pd_demand():
-    ctrl, cfg = _golem_controller(legs=ConstNetwork(np.full(12, 10.0)), arms=ConstNetwork(np.full(14, -10.0)))
+    ctrl, cfg = _controller(legs=ConstNetwork(np.full(12, 10.0)), arms=ConstNetwork(np.full(14, -10.0)))
     state = _state(cfg)
     state.dq = RNG.normal(scale=2.0, size=27)
     ctrl.reset(state)
@@ -443,55 +389,7 @@ def test_torque_headroom_bounds_the_pd_demand():
     assert np.all(np.abs(demand) <= 0.85 * ctrl.effort_limits[joints] + 1e-9)
 
 
-# -- Explicit500: recurrent actors, feet and gravity odometry -----------------------------
-
-def test_align_tilt_matches_gravity_and_keeps_yaw():
-    for _ in range(20):
-        delta, up_prev = _random_quat(), RNG.normal(size=3)
-        up_prev /= np.linalg.norm(up_prev)
-        up = RNG.normal(size=3)
-        up /= np.linalg.norm(up)
-        aligned = R.align_tilt(delta, up_prev, up)
-        np.testing.assert_allclose(R.quat_apply(aligned, up), up_prev, atol=1e-9)    # carries up onto up_prev
-    yaw = R.quat_from_rotvec(np.array([0.0, 0.0, 0.3]))
-    z = np.array([0.0, 0.0, 1.0])
-    np.testing.assert_allclose(R.align_tilt(yaw, z, z), yaw, atol=1e-12)             # a level turn stays
-
-
-def _feet_controller(estimator, **odometry):
-    cfg = _cfg()
-    cfg.update(settle_to_arm_s=0.0, odometry={"mode": "learned", "history_frames": 4, **odometry},
-               legs_odometry={"foot_frames": ["left_ankle_roll_link", "right_ankle_roll_link"], "imu_frame": "torso_link"})
-    names = cfg["joint_names"]
-    kin = ArmKinematics(URDF, names, cfg["arms"]["ee_frames"], [names[13:20], names[20:]],
-                        extra_frames=["left_ankle_roll_link", "right_ankle_roll_link", "torso_link"])
-    return MarlController(cfg, kin, ZeroNetwork(12), ZeroNetwork(14), estimator), cfg
-
-
-def test_vertical_from_feet_replaces_the_estimated_rise():
-    vz = 0.5                                     # m/s up, estimated; the feet say the pelvis stays at its height
-    for vertical, expected_dz in ((False, -vz * 0.02 * 10), (True, 0.0)):
-        ctrl, cfg = _feet_controller(ConstNetwork([0, 0, vz, 0, 0, 0]), vertical_from_feet=vertical)
-        assert ctrl.history == 4 and ctrl.vertical_from_feet == vertical
-        state = _state(cfg)
-        ctrl.reset(state)
-        goal = ctrl.rest_pose.copy()
-        ctrl.request_arm_goal(goal)
-        for _ in range(11):
-            ctrl.step(state)
-        np.testing.assert_allclose(ctrl.believed[:, 2], goal[:, 2] + expected_dz, atol=1e-9)
-
-
-def test_tilt_from_gravity_removes_an_estimated_roll():
-    ctrl, cfg = _feet_controller(ConstNetwork([0, 0, 0, 0.5, 0, 0]), tilt_from_gravity=True)  # rad/s roll, estimated
-    state = _state(cfg)
-    ctrl.reset(state)
-    goal = ctrl.rest_pose.copy()
-    ctrl.request_arm_goal(goal)
-    for _ in range(11):
-        ctrl.step(state)
-    np.testing.assert_allclose(ctrl.believed, goal, atol=1e-9)   # gravity says the pelvis never tilted
-
+# -- recurrent actors ----------------------------------------------------------------------
 
 def test_recurrent_network_carries_and_resets_its_state(tmp_path):
     torch = pytest.importorskip("torch")

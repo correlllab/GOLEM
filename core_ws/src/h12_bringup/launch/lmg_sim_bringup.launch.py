@@ -12,8 +12,8 @@ from launch_ros.parameter_descriptions import ParameterValue
 # Loco-manipulation game bringup (x86 sim): the state publishers, the split
 # safety layer with the real robot's preset (relax_safety_split: the policy was
 # trained against its e-stops, and the sim is where to see that it doesn't trip
-# them), h12_locomanipulationgame.launch.py with the commander running and no
-# operator confirm, and the h12_slam navigation stack (use_slam). Start the
+# them), h12_locomanipulationgame.launch.py with no operator confirm, and the
+# h12_slam navigation stack (use_slam), with rviz (use_rviz) for nav2 goals. Start the
 # simulator first. The real-robot counterpart is
 # lmg_real_bringup.launch.py.
 #
@@ -23,8 +23,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 # the real robot's command bus.
 ASSETS_DIR = '/home/code/CL_Assets'
 
-GAME_ARGS = ('policy', 'prepose_ramp_s', 'prepose_max_vel', 'use_commander',
-             'commander_mode', 'goals', 'commander_seed', 'commander_duration_s', 'commander_log')
+GAME_ARGS = ('policy', 'prepose_ramp_s', 'prepose_max_vel')
 
 
 def _include(package, launch_file, launch_arguments, condition=None):
@@ -48,18 +47,12 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true'),
-        DeclareLaunchArgument('policy', default_value='marl_golem'),
+        DeclareLaunchArgument('policy', default_value='explicit500'),
         DeclareLaunchArgument('prepose_ramp_s', default_value='6.0'),
         DeclareLaunchArgument('prepose_max_vel', default_value='0.25'),
         DeclareLaunchArgument('safety_config', default_value='relax_safety_split.yaml'),
         DeclareLaunchArgument('use_slam', default_value='true'),
-        DeclareLaunchArgument('use_commander', default_value='true'),
-        DeclareLaunchArgument('commander_mode', default_value='training'),
-        DeclareLaunchArgument('goals', default_value='arm_goals_4_10.npz'),
-        DeclareLaunchArgument('commander_seed', default_value='0'),
-        DeclareLaunchArgument('commander_duration_s', default_value='0.0'),
-        DeclareLaunchArgument('commander_log', default_value=''),
-        DeclareLaunchArgument('use_rviz', default_value='false'),
+        DeclareLaunchArgument('use_rviz', default_value='true'),
         DeclareLaunchArgument('rviz_config', default_value=os.path.join(bringup_share, 'rviz', 'main.rviz')),
 
         _include('h12_bringup', 'h12_state.launch.py', {

@@ -141,8 +141,8 @@ below and sets `use_sim_time` plus its platform's arguments.
 | `h12_real_desktop_bringup.launch.py` | **real: companion x86 desktop** — rviz, plus the hand cameras with `use_hand_cameras:=true` (default **false**) | models (`use_yolo:=true`) |
 | `h12_safety_grippers.launch.py` | real: actuation-only debug bringup | control (estop + safety, no IK), grippers |
 | `h12_real_slam.launch.py` | real: sensors + SLAM/navigation only, on wall time (no estop, safety or IK) | real_drivers, state, navigation |
-| `lmg_sim_bringup.launch.py` | **x86 sim**, loco-manipulation game: the `lmg_deploy` MARL policy owns all 27 joints, commander on, no operator confirm. Refuses an unset or 0 `ROS_DOMAIN_ID` | state, control (no IK, no stagger), locomanipulationgame, navigation (`use_slam`) |
-| `lmg_real_bringup.launch.py` | **real, onboard PC**, loco-manipulation game, run *instead of* `h12_real_robot_bringup`. Policy behind `start_position_verified:=true` + `/marl_deploy_node/confirm_engage`; commander off by default | real_drivers, state, control (`use_estop:=true`, no IK), locomanipulationgame, navigation (`use_slam`) |
+| `lmg_sim_bringup.launch.py` | **x86 sim**, loco-manipulation game: the `lmg_deploy` MARL policy (Explicit500) owns all 27 joints, no operator confirm. Refuses an unset or 0 `ROS_DOMAIN_ID` | state, control (no IK, no stagger), locomanipulationgame, navigation (`use_slam`) |
+| `lmg_real_bringup.launch.py` | **real, onboard PC**, loco-manipulation game, run *instead of* `h12_real_robot_bringup`. Policy behind `start_position_verified:=true` + `/marl_deploy_node/confirm_engage` | real_drivers, state, control (`use_estop:=true`, no IK), locomanipulationgame, navigation (`use_slam`) |
 
 | Building block | Starts |
 |---|---|
@@ -151,7 +151,7 @@ below and sets `use_sim_time` plus its platform's arguments.
 | `h12_lowerbody.launch.py` | RL `lowerbody_controller_node` (`lowerbody:=`, params from `lowerbody_params`) and optional MJPC `estimator_node`, both behind `start_position_verified` |
 | `h12_models.launch.py` | gemini + sam servers, [yolo], graspgen + `h12_skills` (`use_skills`) |
 | `h12_real_drivers.launch.py` | Livox MID360 (+ `livox_imu_upright`, which rotates `/livox/imu_raw` into the point frame — the stock driver rotates only points), RealSense head camera, `h12_grippers.launch.py` (left+right `gripper_node`) |
-| `h12_locomanipulationgame.launch.py` | `marl_deploy_node` + `game_commander_node` (behind `start_position_verified`) |
+| `h12_locomanipulationgame.launch.py` | `marl_deploy_node` (behind `start_position_verified`; holds arm goals in the world by the SLAM `/Odometry`) |
 | `h12_slam/launch/h12_navigation.launch.py` | shared nav stack (FAST-LIO → pointcloud_to_laserscan → slam_toolbox → nav2) |
 
 Humble includes are not scoped: an argument passed to one include stays set

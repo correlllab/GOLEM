@@ -23,13 +23,17 @@ mode is switched by hand with ~/set_mode (custom_ros_messages/LmgSetMode: "walk"
 "arm"); ~/set_arm_goals (custom_ros_messages/LmgSetArmGoals) sets the left and right
 wrist_yaw_link goals, pelvis frame: in arm mode at once, while walking for the
 next switch to arm mode (until some are set, arm mode holds the rest pose).
-The game commander's interface stays: a PoseArray on ~/arm_goal (left then
-right) sets the goals and switches to arm mode, ~/end_arm_goal back to
-walking. /cmd_vel is ignored in arm mode: the policy only ever saw zero there.
+A PoseArray on ~/arm_goal (left then right) sets the goals and switches to arm
+mode in one message, ~/end_arm_goal back to walking. /cmd_vel is ignored in arm
+mode: the policy only ever saw zero there.
+
+The arm goals stay fixed in the world by the SLAM pipeline's odometry
+(/Odometry, FAST-LIO's camera_init -> body), so h12_slam's navigation launch
+must run beside this node; without it the goals stay fixed to the pelvis.
 
 This node owns all 27 joints: legs on /safety/lowcmd_lower_in, torso and arms
 on /safety/lowcmd_upper_in. frame_task_server and lowerbody_controller_node
-must not run beside it (the bringup gates them on lowerbody:=marl_ik).
+must not run beside it (the lmg bringups start neither).
 
 Safety
 ------
@@ -48,6 +52,7 @@ Interfaces
 sub  /lowstate                       (unitree_hg/LowState)
 sub  /cmd_vel                        (geometry_msgs/Twist)
 sub  /safety/heartbeat               (std_msgs/Bool)
+sub  /Odometry                       (nav_msgs/Odometry)  FAST-LIO body pose
 sub  ~/arm_goal                      (geometry_msgs/PoseArray)  2 poses, pelvis frame
 pub  /safety/lowcmd_lower_in         (unitree_hg/LowCmd)  rows 0-11
 pub  /safety/lowcmd_upper_in         (unitree_hg/LowCmd)  rows 12-26
@@ -68,6 +73,7 @@ import torch
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseArray, Twist
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, Float32MultiArray, String
@@ -84,7 +90,7 @@ from lmg_deploy.controller import (
     RobotState,
 )
 from lmg_deploy.kinematics import ArmKinematics
-from lmg_deploy.networks import TorchScriptNetwork, load_network
+from lmg_deploy.networks import load_network
 from lmg_deploy.rotations import xyzw_to_wxyz
 
 MOTOR_MODE_PR = 1
@@ -92,6 +98,7 @@ SAFETY_HEARTBEAT_TOPIC = "/safety/heartbeat"
 PREPOSE_TOL = 0.15          # rad; max |q - default| over all 27 joints to count as posed
 PREPOSE_SETTLE_TICKS = 10   # consecutive in-tolerance ticks (0.2 s at 50 Hz)
 PREPOSE_MAX_TICKS = 400     # after the ramp; posed or not, stop waiting (8 s at 50 Hz)
+SLAM_STALE_S = 0.5          # /Odometry older than this while reaching: warn that the goals ride with the pelvis
 
 
 def _share(*parts: str) -> str:
@@ -101,7 +108,7 @@ def _share(*parts: str) -> str:
 class MarlDeployNode(Node):
     def __init__(self):
         super().__init__("marl_deploy_node")
-        self.declare_parameter("config", _share("policies", "marl_ik", "marl_ik.yaml"))
+        self.declare_parameter("config", _share("policies", "explicit500", "explicit500.yaml"))
         self.declare_parameter("urdf_path", "/home/code/CL_Assets/ros_assets/h1_2_magpie.urdf")
         self.declare_parameter("control_hz", 50.0)
         self.declare_parameter("prepose_ramp_s", 6.0)     # s, minimum ramp duration
@@ -127,34 +134,23 @@ class MarlDeployNode(Node):
             raise ValueError(f"control_hz {control_hz} doesn't match the policy's control_dt {cfg['control_dt']}")
 
         torch.set_num_threads(1)
-        # leg odometry needs the feet, and the IMU's frame when the IMU isn't on the pelvis
-        # leg odometry, and the learned estimator's vertical_from_feet / tilt_from_gravity (export.yaml odometry), need
-        # the feet and the IMU's frame when the IMU isn't on the pelvis
-        odometry = cfg.get("odometry")
-        uses_frames = odometry == "legs" or (isinstance(odometry, dict) and (
-            odometry.get("vertical_from_feet") or odometry.get("tilt_from_gravity")))
-        legs_odom = cfg.get("legs_odometry", {}) if uses_frames else {}
-        extra_frames = list(legs_odom.get("foot_frames", []))
-        if legs_odom.get("imu_frame", "pelvis") != "pelvis":
-            extra_frames.append(legs_odom["imu_frame"])
         kin = ArmKinematics(
             self.get_parameter("urdf_path").value,
             joint_names=cfg["joint_names"],
             ee_frames=cfg["arms"]["ee_frames"],
             arm_joint_names=[cfg["joint_names"][ARM_START:ARM_START + 7], cfg["joint_names"][ARM_START + 7:]],
-            extra_frames=extra_frames,
+            extra_frames=[cfg["slam_frame"]],
         )
         # the exported networks, next to the config
         legs = load_network(os.path.join(cfg_dir, cfg["legs"]["policy"]),
                             cfg["legs"]["num_obs"], cfg["legs"]["num_actions"])   # MLP or LSTM
         arms = load_network(os.path.join(cfg_dir, cfg["arms"]["policy"]),
                             cfg["arms"]["num_obs"], cfg["arms"]["num_actions"])
-        estimator = TorchScriptNetwork(os.path.join(cfg_dir, cfg["estimator"]["path"]),
-                                       cfg["estimator"]["num_inputs"], 6)
-        self.controller = MarlController(cfg, kin, legs, arms, estimator)
+        self.controller = MarlController(cfg, kin, legs, arms)
 
         self._lowstate: LowState | None = None
         self._lowstate_time: float | None = None   # monotonic receipt time
+        self._slam_time: float | None = None       # monotonic receipt time of the last /Odometry
         self._confirm_wait = bool(self.get_parameter("engage_wait_for_confirm").value)
         self._confirmed = False
         self._control_hz = control_hz
@@ -183,6 +179,7 @@ class MarlDeployNode(Node):
         self.create_subscription(LowState, "/lowstate", self._on_lowstate, lowstate_qos)
         self.create_subscription(Twist, "/cmd_vel", self._on_cmd_vel, 10)
         self.create_subscription(Bool, SAFETY_HEARTBEAT_TOPIC, self._on_heartbeat, 10)
+        self.create_subscription(Odometry, "/Odometry", self._on_odometry, 10)
         self.create_subscription(PoseArray, "~/arm_goal", self._on_arm_goal, 10)
         self._lower_pub = self.create_publisher(LowCmd, "/safety/lowcmd_lower_in", 10)
         self._upper_pub = self.create_publisher(LowCmd, "/safety/lowcmd_upper_in", 10)
@@ -203,6 +200,11 @@ class MarlDeployNode(Node):
     def _on_lowstate(self, msg: LowState) -> None:
         self._lowstate = msg
         self._lowstate_time = time.monotonic()
+
+    def _on_odometry(self, msg: Odometry) -> None:
+        p, o = msg.pose.pose.position, msg.pose.pose.orientation
+        self.controller.set_slam_pose(np.array([p.x, p.y, p.z]), xyzw_to_wxyz(np.array([o.x, o.y, o.z, o.w])))
+        self._slam_time = time.monotonic()
 
     def _on_cmd_vel(self, msg: Twist) -> None:
         self.controller.set_velocity_command(np.array([msg.linear.x, msg.linear.y, msg.angular.z]))
@@ -370,6 +372,9 @@ class MarlDeployNode(Node):
         if self._band_release_at is not None and not self._band_released and now >= self._band_release_at:
             self._release_band()
 
+        if self.controller.mode.value in ("arm_goal", "settle_to_arm") and (self._slam_time is None or now - self._slam_time > SLAM_STALE_S):
+            self.get_logger().warn("no fresh /Odometry: the arm goals move with the pelvis (is h12_slam running?)",
+                                   throttle_duration_sec=5.0)
         cmd = self.controller.step(state)
         for name, obs in self.controller.last_obs.items():
             if not np.isfinite(obs).all():

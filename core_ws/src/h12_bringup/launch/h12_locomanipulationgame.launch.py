@@ -2,13 +2,13 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import AndSubstitution, LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 # Loco-manipulation game: the Locomanipulation_game MARL policy
 # (lmg_deploy's marl_deploy_node, all 27 joints through the split
-# safety layer) and the game commander. Included by lmg_sim_bringup.launch.py
+# safety layer). Included by lmg_sim_bringup.launch.py
 # and lmg_real_bringup.launch.py, which start the state publishers, the safety
 # layer and SLAM.
 #
@@ -25,11 +25,11 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('urdf_path', description='Pinocchio URDF for the wrist kinematics (h1_2_magpie.urdf)'),
-        # Interlock: neither the policy node nor the commander starts until the
-        # operator has verified the robot is in a safe start position.
+        # Interlock: the policy node doesn't start until the operator has
+        # verified the robot is in a safe start position.
         DeclareLaunchArgument('start_position_verified', default_value='false',
-                              description='Start marl_deploy_node and the commander'),
-        DeclareLaunchArgument('policy', default_value='marl_golem',
+                              description='Start marl_deploy_node'),
+        DeclareLaunchArgument('policy', default_value='explicit500',
                               description='policies/<name>/ of lmg_deploy: <name>.yaml plus the export'),
         DeclareLaunchArgument('engage_wait_for_confirm', default_value='true',
                               description='hold the pre-pose until ~/confirm_engage'),
@@ -39,14 +39,6 @@ def generate_launch_description():
                               description='peak joint target speed [rad/s] during that ramp; lengthens it'),
         DeclareLaunchArgument('disable_elastic_band', default_value='false',
                               description="release the sim's elastic band through /elastic_band/toggle once engaged"),
-        DeclareLaunchArgument('use_commander', default_value='false'),
-        DeclareLaunchArgument('commander_mode', default_value='training', description='training | sequence'),
-        DeclareLaunchArgument('goals', default_value='arm_goals_4_10.npz',
-                              description='arm goal samples in the policy directory (spread_drop levels)'),
-        DeclareLaunchArgument('commander_seed', default_value='0'),
-        DeclareLaunchArgument('commander_duration_s', default_value='0.0', description='0: run until stopped'),
-        DeclareLaunchArgument('commander_log', default_value='', description='JSON-lines log of events and status'),
-
         Node(
             package='lmg_deploy',
             executable='marl_deploy_node',
@@ -61,23 +53,6 @@ def generate_launch_description():
                 'disable_elastic_band': ParameterValue(LaunchConfiguration('disable_elastic_band'), value_type=bool),
                 'prepose_ramp_s': ParameterValue(LaunchConfiguration('prepose_ramp_s'), value_type=float),
                 'prepose_max_vel': ParameterValue(LaunchConfiguration('prepose_max_vel'), value_type=float),
-            }],
-        ),
-
-        Node(
-            package='lmg_deploy',
-            executable='game_commander_node',
-            name='game_commander',
-            output='screen',
-            condition=IfCondition(AndSubstitution(policy_on, LaunchConfiguration('use_commander'))),
-            parameters=[{
-                'use_sim_time': use_sim_time,
-                'mode': LaunchConfiguration('commander_mode'),
-                'goals_file': PathJoinSubstitution([policy_dir, LaunchConfiguration('goals')]),
-                'seed': ParameterValue(LaunchConfiguration('commander_seed'), value_type=int),
-                'duration_s': ParameterValue(LaunchConfiguration('commander_duration_s'), value_type=float),
-                'log_file': LaunchConfiguration('commander_log'),
-                'cloud_frame': 'livox_link',
             }],
         ),
     ])

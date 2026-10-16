@@ -1,13 +1,10 @@
 # lmg_deploy (LocoMotionGameDeploy)
 
 Runs the two-agent MARL policy from Locomanipulation_game (branch
-`marl-direct`) on the H1-2: `policies/marl_golem` for run R of
-`LocoManip-Marl-Direct-v0`, trained against h12_safety_layer's e-stops, and
-`policies/marl_ik` for `golemlim120k` (agent_120000, a partly trained run of the
-same task whose joint targets were clipped into GOLEM's position e-stop range;
-see its `export.yaml`), and `policies/explicit500` for `Explicit500` (agent_196800,
-200k steps: LSTM actors, explicit PD at 500 Hz, a 0-20 ms target delay, pushes
-and rough terrain in training; the legs crouch for low goals). A
+`marl-direct`) on the H1-2: `policies/explicit500`, `Explicit500` of
+`LocoManip-Marl-Direct-v0` (agent_196800, 200k steps: LSTM actors, explicit PD
+at 500 Hz, a 0-20 ms target delay, pushes and rough terrain in training; the
+legs crouch for low goals). A
 **legs** agent that walks on `/cmd_vel`, and an **arms** agent that reaches
 wrist-pose goals through a damped-least-squares IK step plus a learned
 residual. One node, `marl_deploy_node`, owns all 27 joints. It publishes
@@ -21,45 +18,44 @@ release) and uses the same heartbeat watchdog.
 
 | File | What it is |
 |---|---|
-| `lmg_deploy/controller.py` | ROS-free env step: odometry → mode → observations (legs 96, arms 124; 95 and 123 with `height_drop_obs: false`) → joint targets |
+| `lmg_deploy/controller.py` | ROS-free env step: SLAM odometry → mode → observations (legs 95, arms 123) → joint targets |
 | `lmg_deploy/kinematics.py` | Pinocchio wrist FK, Jacobian and IK step, in the pelvis frame |
 | `lmg_deploy/rotations.py` | numpy versions of the isaaclab.utils.math functions training used |
 | `lmg_deploy/networks.py` | TorchScript loader, and the zero stand-ins the unit tests use |
 | `lmg_deploy/marl_deploy_node.py` | the ROS node: safety channels, heartbeat, pre-pose, band, operator interface |
-| `lmg_deploy/game_commander_node.py` | sends walking and arm-goal commands on training's schedule; lidar obstacle guard, SLAM geofence, event log |
-| `policies/<name>/<name>.yaml` | deploy config: joint order, defaults, gains, scales, odometry, bounds, command ranges (each from the training env) |
-| `policies/<name>/{legs,arms,estimator}.pt`, `export.yaml`, `arm_goals_*.npz` | written by the export, below; `marl_golem` holds run R's, `marl_ik` golemlim120k's (no arm goals) and `explicit500` Explicit500's, the `.pt` and `.npz` files in Git LFS (`policies/.gitattributes`) |
-| `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, odometry, modes) |
+| `policies/explicit500/explicit500.yaml` | deploy config: joint order, defaults, gains, scales, bounds, command ranges (each from the training env), and the SLAM body frame |
+| `policies/explicit500/{legs,arms}.pt`, `export.yaml` | written by the export, below; the `.pt` files in Git LFS (`policies/.gitattributes`) |
+| `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, SLAM odometry, modes) |
 | `custom_ros_messages/srv/Lmg*.srv` | the node's services: `LmgSetMode` (walk / arm), `LmgSetArmGoals` (left, right pose) |
 
 ## Exporting a checkpoint
 
-`policies/marl_golem` already holds run R's export (agent_24000). Its networks and arm goals are Git LFS files:
-after cloning, `git lfs install` once and `git lfs pull` fetch them.
+`policies/explicit500` holds Explicit500's export. Its networks are Git LFS files: after cloning, `git lfs install`
+once and `git lfs pull` fetch them.
 
 These commands are run in Locomanipulation_game. Exporting needs only torch, no simulator:
 
 ```bash
-P=<GOLEM>/core_ws/src/lmg_deploy/policies/marl_golem
+P=<GOLEM>/core_ws/src/lmg_deploy/policies/explicit500
 python scripts/skrl/export_marl.py --checkpoint logs/skrl/locomanip_marl/<run>/checkpoints/agent_<step>.pt \
   --out $P
-python scripts/skrl/export_arm_goals.py --checkpoint <same> --levels 4,7 --out $P --headless
 ```
 
 It writes:
-- `legs.pt` and `arms.pt`: the observation scaler, the MLP's mean and the ±10 clamp. An LSTM actor exports as
+- `legs.pt` and `arms.pt`: the observation scaler, the network and the ±10 clamp. An LSTM actor exports as
   `forward(obs, h, c) -> (action, h, c)`; the node carries `h, c` from step to step and zeroes them at every reset
   (`networks.RecurrentTorchScriptNetwork`).
-- `estimator.pt`: the input norm and MLP.
 - `export.yaml`: the run's navigation rest pose, its `target_limits` (runs trained inside GOLEM's position e-stop
-  range: joint -> [low, high], narrowing the target bounds), `odometry` (the estimator's window in frames, and the
-  run's `vertical_from_feet` / `tilt_from_gravity`: the estimate's vertical motion replaced by the change in the
-  pelvis's height above the lowest ankle, its roll and pitch by gravity's), `height_drop_obs` and the source files.
-  The node loads it over the policy's yaml.
-- `arm_goals_depth<level>.npz`: goals drawn by the training command at that depth level, for the commander (runs
-  before the depth curriculum: `arm_goals_<spread>_<drop>.npz`).
+  range: joint -> [low, high], narrowing the target bounds) and the source files. The node loads it over the
+  policy's yaml.
 
-Then check the deploy controller against the training env, step by step, on the run's physics. It compares observations term by term, the networks against skrl (LSTM actors stepped alongside), the joint targets, the rest pose, and the odometry: with the learned estimator its input window term by term and its corrected motion against the env's, and either odometry against the true pelvis motion. Explicit500 matches to 1.6e-4 everywhere and to 1e-6 on the estimator:
+The export also writes `estimator.pt` and an `odometry` block in `export.yaml`; the deploy doesn't use them (its
+odometry is the SLAM pipeline's, below), so leave them out of `policies/`.
+
+Locomanipulation_game's `deploy_parity.py` checks the deploy controller against the training env, step by step, on
+the run's physics: observations term by term, the networks against skrl (LSTM actors stepped alongside), the joint
+targets and the rest pose. It was written for the estimator odometry and passes the controller an estimator, which
+`MarlController` no longer takes, so it needs that argument dropped before it runs against this package:
 
 ```bash
 python scripts/skrl/deploy_parity.py --headless --checkpoint <same> \
@@ -68,13 +64,13 @@ python scripts/skrl/deploy_parity.py --headless --checkpoint <same> \
 
 ## Running in the sim
 
-`h12_bringup/launch/lmg_sim_bringup.launch.py` starts everything (the policy node and commander
-come from the shared block `h12_locomanipulationgame.launch.py`):
+`h12_bringup/launch/lmg_sim_bringup.launch.py` starts everything (the policy node comes from the shared
+block `h12_locomanipulationgame.launch.py`):
 - the state publishers;
 - the split safety layer with the real robot's preset (`relax_safety_split`);
-- `marl_deploy_node` with `policies/<policy>/` (default `marl_golem`);
-- `game_commander_node`, which sends walking and arm-goal commands on training's schedule;
+- `marl_deploy_node` with `policies/explicit500/`;
 - SLAM: `h12_slam/launch/h12_navigation.launch.py` (FAST-LIO, the pelvis-height laser scan, slam_toolbox and nav2).
+  FAST-LIO's `/Odometry` is what keeps the arm goals fixed in the world.
 
 `frame_task_server` and the lower-body RL node stay off, so this node is the only publisher on each safety channel.
 
@@ -88,16 +84,11 @@ docker/scripts/docker_run.sh ros                                                
 ros2 launch h12_bringup lmg_sim_bringup.launch.py
 ```
 
-**Launch arguments:**
-- `commander_mode`: `training` (the default), or `sequence` for one scripted pass: back off, turn, walk, a standing reach, a crouch reach, walk.
-- `use_commander:=false`: drive the robot yourself, as below.
-- `goals:=arm_goals_<spread>_<drop>.npz`: the arm-goal sample set (the commander's only). `policy:=explicit500` has none: run it with `use_commander:=false` and drive it by hand, below.
-- `commander_log:=<file>`: a JSON-lines event log.
-- `use_slam`, `use_rviz`, `policy`. `policy:=marl_ik` has no arm-goal samples, so run it with `use_commander:=false`.
+**Launch arguments:** `use_slam` (default `true`; with `false` the arm goals ride with the pelvis and the node warns),
+`use_rviz`, `policy` (a directory under `policies/`, default `explicit500`), `prepose_ramp_s`, `prepose_max_vel`,
+`safety_config`.
 
-`tests/locomanipulation_game/run.sh` runs the same launch in disposable containers. It records the sim without modifying it, renders a follow-camera video, and scores the run with `analyze_run.py`.
-
-**Driving it yourself** (`use_commander:=false`, from `docker exec -it golem_ros bash`). The node starts in walking mode once engaged:
+**Driving it** (from `docker exec -it golem_ros bash`). The node starts in walking mode once engaged:
 
 ```bash
 ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.3}}"   # walk (clipped to vx ±0.7, vy ±0.3, wz ±0.5)
@@ -110,7 +101,7 @@ ros2 service call /marl_deploy_node/set_mode custom_ros_messages/srv/LmgSetMode 
 
 `set_arm_goals` in arm mode moves the goals at once; while walking it keeps them for the next `set_mode arm`, and
 they are taken in the pelvis frame of that switch. Arm mode without goals holds the rest pose (standing still).
-`set_mode` is refused until the node is engaged. The game commander's interface also works:
+`set_mode` is refused until the node is engaged. A PoseArray sets the goals and switches to arm mode in one message:
 
 ```bash
 ros2 topic pub --once /marl_deploy_node/arm_goal geometry_msgs/msg/PoseArray \
@@ -122,10 +113,13 @@ ros2 topic echo /marl_deploy_node/wrist_error   # m, left and right
 ```
 
 **Arm goals.**
-- An arm goal stops the robot, waits `settle_to_arm_s` (0.75 s for `marl_golem`, none for `explicit500`), then reaches.
-- The goal is a `left_wrist_yaw_link` and `right_wrist_yaw_link` pose in the pelvis frame, taken when it arrives. The odometry keeps it fixed in the world from then on: the learned estimator for `marl_ik`, the learned estimator with its vertical motion from the feet and its tilt from gravity for `explicit500`, and for `marl_golem` the IMU attitude plus the planted feet.
+- An arm goal stops the robot and reaches at once (`settle_to_arm_s` and `settle_to_nav_s` are 0 for Explicit500).
+- The goal is a `left_wrist_yaw_link` and `right_wrist_yaw_link` pose in the pelvis frame, taken when it arrives.
+  The SLAM odometry keeps it fixed in the world from then on: each FAST-LIO pose (`/Odometry`, camera_init -> body,
+  ~10 Hz) is carried from the lidar (`slam_frame: livox_link`) to the pelvis by forward kinematics, through the
+  torso joint, and the goal moves by the pelvis's motion since the previous one. Training used a learned estimator
+  instead; with no fresh `/Odometry` while reaching the node warns and the goal stays fixed to the pelvis.
 - `/cmd_vel` is ignored during an arm goal; the policy only ever saw a zero command there.
-- Ending a goal settles for `settle_to_nav_s` (1.5 s for `marl_golem`, none for `explicit500`), then walking resumes.
 
 ## Real robot
 
@@ -146,9 +140,8 @@ ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger         
   after `nav` appears moves the robot. A publisher still streaming (e.g. `ros2 topic pub -r`) sets it again on its
   next message.
 - The node always waits for `~/confirm_engage` here, and never calls the sim's elastic band; neither is an argument.
-- The commander is off by default (`use_commander:=false`): drive with `/cmd_vel` and `~/arm_goal` as above.
-  `use_commander:=true` starts it alongside the node.
-- Same `policy`, `safety_config`, `use_slam` and `commander_*` arguments as the sim launch.
+- Drive with `/cmd_vel`, `~/set_mode` and `~/set_arm_goals` as above.
+- Same `policy`, `safety_config` and `use_slam` arguments as the sim launch; keep `use_slam` on for arm goals.
 
 **Before the first real run:**
 - **IMU frame.** Training read the IMU on `torso_link` (`imu_link`, offset (-0.0445, -0.0189, 0.2776), no rotation). The MuJoCo sim's IMU is in the same place. Confirm that the real `LowState.imu_state` comes from that same IMU.

@@ -441,3 +441,150 @@ def test_torque_headroom_bounds_the_pd_demand():
     joints = np.r_[0:12, 13:27]
     demand = ctrl.kp[joints] * (cmd.q[joints] - state.q[joints]) - ctrl.kd[joints] * state.dq[joints]
     assert np.all(np.abs(demand) <= 0.85 * ctrl.effort_limits[joints] + 1e-9)
+
+
+# -- Explicit500: recurrent actors, feet and gravity odometry -----------------------------
+
+def test_align_tilt_matches_gravity_and_keeps_yaw():
+    for _ in range(20):
+        delta, up_prev = _random_quat(), RNG.normal(size=3)
+        up_prev /= np.linalg.norm(up_prev)
+        up = RNG.normal(size=3)
+        up /= np.linalg.norm(up)
+        aligned = R.align_tilt(delta, up_prev, up)
+        np.testing.assert_allclose(R.quat_apply(aligned, up), up_prev, atol=1e-9)    # carries up onto up_prev
+    yaw = R.quat_from_rotvec(np.array([0.0, 0.0, 0.3]))
+    z = np.array([0.0, 0.0, 1.0])
+    np.testing.assert_allclose(R.align_tilt(yaw, z, z), yaw, atol=1e-12)             # a level turn stays
+
+
+def _feet_controller(estimator, **odometry):
+    cfg = _cfg()
+    cfg.update(settle_to_arm_s=0.0, odometry={"mode": "learned", "history_frames": 4, **odometry},
+               legs_odometry={"foot_frames": ["left_ankle_roll_link", "right_ankle_roll_link"], "imu_frame": "torso_link"})
+    names = cfg["joint_names"]
+    kin = ArmKinematics(URDF, names, cfg["arms"]["ee_frames"], [names[13:20], names[20:]],
+                        extra_frames=["left_ankle_roll_link", "right_ankle_roll_link", "torso_link"])
+    return MarlController(cfg, kin, ZeroNetwork(12), ZeroNetwork(14), estimator), cfg
+
+
+def test_vertical_from_feet_replaces_the_estimated_rise():
+    vz = 0.5                                     # m/s up, estimated; the feet say the pelvis stays at its height
+    for vertical, expected_dz in ((False, -vz * 0.02 * 10), (True, 0.0)):
+        ctrl, cfg = _feet_controller(ConstNetwork([0, 0, vz, 0, 0, 0]), vertical_from_feet=vertical)
+        assert ctrl.history == 4 and ctrl.vertical_from_feet == vertical
+        state = _state(cfg)
+        ctrl.reset(state)
+        goal = ctrl.rest_pose.copy()
+        ctrl.request_arm_goal(goal)
+        for _ in range(11):
+            ctrl.step(state)
+        np.testing.assert_allclose(ctrl.believed[:, 2], goal[:, 2] + expected_dz, atol=1e-9)
+
+
+def test_tilt_from_gravity_removes_an_estimated_roll():
+    ctrl, cfg = _feet_controller(ConstNetwork([0, 0, 0, 0.5, 0, 0]), tilt_from_gravity=True)  # rad/s roll, estimated
+    state = _state(cfg)
+    ctrl.reset(state)
+    goal = ctrl.rest_pose.copy()
+    ctrl.request_arm_goal(goal)
+    for _ in range(11):
+        ctrl.step(state)
+    np.testing.assert_allclose(ctrl.believed, goal, atol=1e-9)   # gravity says the pelvis never tilted
+
+
+def test_recurrent_network_carries_and_resets_its_state(tmp_path):
+    torch = pytest.importorskip("torch")
+    from lmg_deploy.networks import RecurrentTorchScriptNetwork, load_network
+
+    class Counter(torch.nn.Module):
+        hidden_size: int
+        num_layers: int
+
+        def __init__(self):
+            super().__init__()
+            self.hidden_size, self.num_layers = 3, 1
+
+        def forward(self, obs: torch.Tensor, h: torch.Tensor, c: torch.Tensor):
+            h = h + 1.0                                  # counts the steps since the last reset
+            return obs[:, :2] * 0.0 + h[0, :, :1], h, c
+
+    path = str(tmp_path / "counter.pt")
+    torch.jit.script(Counter()).save(path)
+    net = load_network(path, 5, 2)
+    assert isinstance(net, RecurrentTorchScriptNetwork)
+    x = np.zeros(5)
+    assert [net(x)[0] for _ in range(3)] == [1.0, 2.0, 3.0]
+    net.reset()
+    assert net(x)[0] == 1.0
+
+
+def test_controller_reset_resets_recurrent_actors():
+    class Resettable(ZeroNetwork):
+        resets = 0
+
+        def reset(self):
+            self.resets += 1
+
+    legs, arms = Resettable(12), Resettable(14)
+    ctrl, cfg = _controller(legs=legs, arms=arms)
+    before = legs.resets, arms.resets
+    ctrl.reset(_state(cfg))
+    assert (legs.resets, arms.resets) == (before[0] + 1, before[1] + 1)
+
+
+# -- manual mode switch and arm goals (~/set_mode, ~/set_arm_goals) ------------------------
+
+def test_starts_walking_and_switches_by_hand():
+    ctrl, cfg = _controller(settle_to_arm_s=0.0, settle_to_nav_s=0.0)
+    state = _state(cfg)
+    ctrl.reset(state)
+    assert ctrl.mode == Mode.NAV
+    ctrl.set_velocity_command(np.array([0.4, 0.0, 0.2]))
+    np.testing.assert_allclose(ctrl.velocity_command(), [0.4, 0.0, 0.2])
+    ctrl.set_mode("arm")                               # no goals set: the arms hold the rest pose, standing still
+    assert ctrl.mode == Mode.ARM
+    np.testing.assert_allclose(ctrl.velocity_command(), 0.0)
+    np.testing.assert_allclose(ctrl.believed, ctrl.rest_pose)
+    ctrl.set_mode("walk")
+    assert ctrl.mode == Mode.NAV
+    np.testing.assert_allclose(ctrl.velocity_command(), [0.4, 0.0, 0.2])
+    with pytest.raises(ValueError):
+        ctrl.set_mode("run")
+
+
+def test_arm_goals_wait_for_arm_mode_and_apply_at_once_in_it():
+    ctrl, cfg = _controller(settle_to_arm_s=0.0, settle_to_nav_s=0.0)
+    ctrl.reset(_state(cfg))
+    goal = ctrl.rest_pose.copy()
+    goal[:, 2] -= 0.3                                  # both wrists 30 cm lower: a crouch
+    ctrl.set_arm_goals(goal)
+    assert ctrl.mode == Mode.NAV                       # setting goals doesn't switch the mode
+    np.testing.assert_allclose(ctrl.believed, ctrl.rest_pose)
+    ctrl.set_mode("arm")
+    np.testing.assert_allclose(ctrl.believed, goal)
+    other = goal.copy()
+    other[0, 1] += 0.1
+    ctrl.set_arm_goals(other)                          # in arm mode: at once
+    np.testing.assert_allclose(ctrl.believed, other)
+    ctrl.set_mode("walk")
+    np.testing.assert_allclose(ctrl.believed, ctrl.rest_pose)
+    ctrl.reset(_state(cfg))                            # the goals stay set across a reset (the band release)
+    ctrl.set_mode("arm")
+    np.testing.assert_allclose(ctrl.believed, other)
+
+
+def test_set_mode_arm_goes_through_the_settle():
+    ctrl, cfg = _controller(settle_to_arm_s=0.1, settle_to_nav_s=0.0)
+    state = _state(cfg)
+    ctrl.reset(state)
+    goal = ctrl.rest_pose.copy()
+    goal[:, 0] += 0.05
+    ctrl.set_arm_goals(goal)
+    ctrl.set_mode("arm")
+    assert ctrl.mode == Mode.SETTLE_TO_ARM
+    ctrl.set_mode("arm")                               # already on its way: no restart of the settle
+    for _ in range(5):
+        ctrl.step(state)
+    assert ctrl.mode == Mode.ARM
+    np.testing.assert_allclose(ctrl.believed, goal, atol=1e-9)

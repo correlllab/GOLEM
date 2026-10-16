@@ -18,10 +18,14 @@ Flow
    band is released ``band_release_delay_s`` later and the episode restarts
    then, so the policy's first free step is its episode's first.
 
-While engaged the robot navigates on /cmd_vel, or reaches for an arm goal:
-a PoseArray on ~/arm_goal (left then right wrist_yaw_link pose, pelvis frame)
-stops it, settles and reaches; ~/end_arm_goal settles and returns to walking.
-/cmd_vel is ignored during an arm goal: the policy only ever saw zero there.
+While engaged the robot starts in walking mode and navigates on /cmd_vel. The
+mode is switched by hand with ~/set_mode (custom_ros_messages/LmgSetMode: "walk" or
+"arm"); ~/set_arm_goals (custom_ros_messages/LmgSetArmGoals) sets the left and right
+wrist_yaw_link goals, pelvis frame: in arm mode at once, while walking for the
+next switch to arm mode (until some are set, arm mode holds the rest pose).
+The game commander's interface stays: a PoseArray on ~/arm_goal (left then
+right) sets the goals and switches to arm mode, ~/end_arm_goal back to
+walking. /cmd_vel is ignored in arm mode: the policy only ever saw zero there.
 
 This node owns all 27 joints: legs on /safety/lowcmd_lower_in, torso and arms
 on /safety/lowcmd_upper_in. frame_task_server and lowerbody_controller_node
@@ -50,7 +54,9 @@ pub  /safety/lowcmd_upper_in         (unitree_hg/LowCmd)  rows 12-26
 pub  ~/state                         (std_msgs/String, latched)
 pub  ~/wrist_error                   (std_msgs/Float32MultiArray)  m, per arm, while engaged
 srv  ~/confirm_engage                (std_srvs/Trigger)
-srv  ~/end_arm_goal                  (std_srvs/Trigger)
+srv  ~/set_mode                      (custom_ros_messages/LmgSetMode)      "walk" | "arm"
+srv  ~/set_arm_goals                 (custom_ros_messages/LmgSetArmGoals)  left, right Pose, pelvis frame
+srv  ~/end_arm_goal                  (std_srvs/Trigger)            = set_mode walk
 """
 
 import os
@@ -66,6 +72,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, Float32MultiArray, String
 from std_srvs.srv import Trigger
+from custom_ros_messages.srv import LmgSetArmGoals as SetArmGoals, LmgSetMode as SetMode
 from unitree_hg.msg import LowCmd, LowState
 
 from lmg_deploy.controller import (
@@ -77,7 +84,7 @@ from lmg_deploy.controller import (
     RobotState,
 )
 from lmg_deploy.kinematics import ArmKinematics
-from lmg_deploy.networks import TorchScriptNetwork
+from lmg_deploy.networks import TorchScriptNetwork, load_network
 from lmg_deploy.rotations import xyzw_to_wxyz
 
 MOTOR_MODE_PR = 1
@@ -121,7 +128,12 @@ class MarlDeployNode(Node):
 
         torch.set_num_threads(1)
         # leg odometry needs the feet, and the IMU's frame when the IMU isn't on the pelvis
-        legs_odom = cfg.get("legs_odometry", {}) if cfg.get("odometry") == "legs" else {}
+        # leg odometry, and the learned estimator's vertical_from_feet / tilt_from_gravity (export.yaml odometry), need
+        # the feet and the IMU's frame when the IMU isn't on the pelvis
+        odometry = cfg.get("odometry")
+        uses_frames = odometry == "legs" or (isinstance(odometry, dict) and (
+            odometry.get("vertical_from_feet") or odometry.get("tilt_from_gravity")))
+        legs_odom = cfg.get("legs_odometry", {}) if uses_frames else {}
         extra_frames = list(legs_odom.get("foot_frames", []))
         if legs_odom.get("imu_frame", "pelvis") != "pelvis":
             extra_frames.append(legs_odom["imu_frame"])
@@ -133,10 +145,10 @@ class MarlDeployNode(Node):
             extra_frames=extra_frames,
         )
         # the exported networks, next to the config
-        legs = TorchScriptNetwork(os.path.join(cfg_dir, cfg["legs"]["policy"]),
-                                  cfg["legs"]["num_obs"], cfg["legs"]["num_actions"])
-        arms = TorchScriptNetwork(os.path.join(cfg_dir, cfg["arms"]["policy"]),
-                                  cfg["arms"]["num_obs"], cfg["arms"]["num_actions"])
+        legs = load_network(os.path.join(cfg_dir, cfg["legs"]["policy"]),
+                            cfg["legs"]["num_obs"], cfg["legs"]["num_actions"])   # MLP or LSTM
+        arms = load_network(os.path.join(cfg_dir, cfg["arms"]["policy"]),
+                            cfg["arms"]["num_obs"], cfg["arms"]["num_actions"])
         estimator = TorchScriptNetwork(os.path.join(cfg_dir, cfg["estimator"]["path"]),
                                        cfg["estimator"]["num_inputs"], 6)
         self.controller = MarlController(cfg, kin, legs, arms, estimator)
@@ -178,6 +190,8 @@ class MarlDeployNode(Node):
         self._err_pub = self.create_publisher(Float32MultiArray, "~/wrist_error", 10)
         self.create_service(Trigger, "~/confirm_engage", self._on_confirm)
         self.create_service(Trigger, "~/end_arm_goal", self._on_end_arm_goal)
+        self.create_service(SetMode, "~/set_mode", self._on_set_mode)
+        self.create_service(SetArmGoals, "~/set_arm_goals", self._on_set_arm_goals)
         self._band_cli = self.create_client(Trigger, "/elastic_band/toggle")
         self.create_timer(1.0 / control_hz, self._tick)
         self._set_state("idle")
@@ -193,17 +207,23 @@ class MarlDeployNode(Node):
     def _on_cmd_vel(self, msg: Twist) -> None:
         self.controller.set_velocity_command(np.array([msg.linear.x, msg.linear.y, msg.angular.z]))
 
-    def _on_arm_goal(self, msg: PoseArray) -> None:
+    def _poses(self, poses_msg) -> np.ndarray | str:
+        """(arms, 7) wxyz poses from geometry_msgs Poses (left, right), or why they can't be a goal."""
         n = self.controller.num_arms
-        if len(msg.poses) != n:
-            self.get_logger().error(f"arm goal needs {n} poses (left, right), got {len(msg.poses)}; ignored")
-            return
+        if len(poses_msg) != n:
+            return f"arm goal needs {n} poses (left, right), got {len(poses_msg)}"
         poses = np.array([[p.position.x, p.position.y, p.position.z,
                            *xyzw_to_wxyz(np.array([p.orientation.x, p.orientation.y,
                                                    p.orientation.z, p.orientation.w]))]
-                          for p in msg.poses])
+                          for p in poses_msg])
         if not np.isfinite(poses).all() or np.any(np.linalg.norm(poses[:, 3:], axis=1) < 1e-6):
-            self.get_logger().error("arm goal has a non-finite position or a zero quaternion; ignored")
+            return "arm goal has a non-finite position or a zero quaternion"
+        return poses
+
+    def _on_arm_goal(self, msg: PoseArray) -> None:
+        poses = self._poses(msg.poses)
+        if isinstance(poses, str):
+            self.get_logger().error(f"{poses}; ignored")
             return
         if not self._engaged:
             self.get_logger().warn("arm goal before the policy is engaged; ignored")
@@ -234,6 +254,31 @@ class MarlDeployNode(Node):
         self.controller.end_arm_goal()
         resp.success = True
         resp.message = f"mode {self.controller.mode.value}"
+        return resp
+
+    def _on_set_mode(self, req, resp):
+        mode = req.mode.strip().lower()
+        if mode not in (SetMode.Request.WALK, SetMode.Request.ARM):
+            resp.success, resp.message = False, f"mode must be '{SetMode.Request.WALK}' or '{SetMode.Request.ARM}', not {req.mode!r}"
+        elif not self._engaged:
+            resp.success, resp.message = False, "not engaged yet: the policy starts in walking mode once it engages"
+        else:
+            self.controller.set_mode(mode)
+            resp.success, resp.message = True, f"mode {self.controller.mode.value}"
+            self.get_logger().info(f"set_mode {mode}: {resp.message}")
+        return resp
+
+    def _on_set_arm_goals(self, req, resp):
+        poses = self._poses([req.left, req.right])
+        if isinstance(poses, str):
+            resp.success, resp.message = False, poses
+            return resp
+        self.controller.set_arm_goals(poses)
+        applied = self.controller.mode.value == "arm_goal"
+        resp.success = True
+        resp.message = (f"left {poses[0, :3].round(3).tolist()}, right {poses[1, :3].round(3).tolist()} (pelvis): "
+                        + ("applied" if applied else "kept for the next set_mode arm"))
+        self.get_logger().info(f"set_arm_goals: {resp.message}")
         return resp
 
     # -- helpers -------------------------------------------------------------------------

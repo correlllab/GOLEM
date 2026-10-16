@@ -18,6 +18,8 @@ setup(
             glob('policies/marl_ik/*')),
         (os.path.join('share', package_name, 'policies', 'marl_golem'),
             glob('policies/marl_golem/*')),
+        (os.path.join('share', package_name, 'policies', 'explicit500'),
+            glob('policies/explicit500/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

@@ -5,7 +5,9 @@ Runs the two-agent MARL policy from Locomanipulation_game (branch
 `LocoManip-Marl-Direct-v0`, trained against h12_safety_layer's e-stops, and
 `policies/marl_ik` for `golemlim120k` (agent_120000, a partly trained run of the
 same task whose joint targets were clipped into GOLEM's position e-stop range;
-see its `export.yaml`). A
+see its `export.yaml`), and `policies/explicit500` for `Explicit500` (agent_196800,
+200k steps: LSTM actors, explicit PD at 500 Hz, a 0-20 ms target delay, pushes
+and rough terrain in training; the legs crouch for low goals). A
 **legs** agent that walks on `/cmd_vel`, and an **arms** agent that reaches
 wrist-pose goals through a damped-least-squares IK step plus a learned
 residual. One node, `marl_deploy_node`, owns all 27 joints. It publishes
@@ -26,8 +28,9 @@ release) and uses the same heartbeat watchdog.
 | `lmg_deploy/marl_deploy_node.py` | the ROS node: safety channels, heartbeat, pre-pose, band, operator interface |
 | `lmg_deploy/game_commander_node.py` | sends walking and arm-goal commands on training's schedule; lidar obstacle guard, SLAM geofence, event log |
 | `policies/<name>/<name>.yaml` | deploy config: joint order, defaults, gains, scales, odometry, bounds, command ranges (each from the training env) |
-| `policies/<name>/{legs,arms,estimator}.pt`, `export.yaml`, `arm_goals_*.npz` | written by the export, below; `marl_golem` holds run R's and `marl_ik` golemlim120k's (no arm goals), the `.pt` and `.npz` files in Git LFS (`policies/.gitattributes`) |
-| `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, odometry) |
+| `policies/<name>/{legs,arms,estimator}.pt`, `export.yaml`, `arm_goals_*.npz` | written by the export, below; `marl_golem` holds run R's, `marl_ik` golemlim120k's (no arm goals) and `explicit500` Explicit500's, the `.pt` and `.npz` files in Git LFS (`policies/.gitattributes`) |
+| `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, odometry, modes) |
+| `custom_ros_messages/srv/Lmg*.srv` | the node's services: `LmgSetMode` (walk / arm), `LmgSetArmGoals` (left, right pose) |
 
 ## Exporting a checkpoint
 
@@ -40,18 +43,23 @@ These commands are run in Locomanipulation_game. Exporting needs only torch, no 
 P=<GOLEM>/core_ws/src/lmg_deploy/policies/marl_golem
 python scripts/skrl/export_marl.py --checkpoint logs/skrl/locomanip_marl/<run>/checkpoints/agent_<step>.pt \
   --out $P
-python scripts/skrl/export_arm_goals.py --checkpoint <same> --levels 4:10,7:10,10:10 --out $P --headless
+python scripts/skrl/export_arm_goals.py --checkpoint <same> --levels 4,7 --out $P --headless
 ```
 
 It writes:
-- `legs.pt` and `arms.pt`: the observation scaler, the MLP's mean and the ±10 clamp.
+- `legs.pt` and `arms.pt`: the observation scaler, the MLP's mean and the ±10 clamp. An LSTM actor exports as
+  `forward(obs, h, c) -> (action, h, c)`; the node carries `h, c` from step to step and zeroes them at every reset
+  (`networks.RecurrentTorchScriptNetwork`).
 - `estimator.pt`: the input norm and MLP.
 - `export.yaml`: the run's navigation rest pose, its `target_limits` (runs trained inside GOLEM's position e-stop
-  range: joint -> [low, high], narrowing the target bounds) and the source files. The node loads it over the policy's
-  yaml.
-- `arm_goals_<spread>_<drop>.npz`: goals drawn by the training command, for the commander.
+  range: joint -> [low, high], narrowing the target bounds), `odometry` (the estimator's window in frames, and the
+  run's `vertical_from_feet` / `tilt_from_gravity`: the estimate's vertical motion replaced by the change in the
+  pelvis's height above the lowest ankle, its roll and pitch by gravity's), `height_drop_obs` and the source files.
+  The node loads it over the policy's yaml.
+- `arm_goals_depth<level>.npz`: goals drawn by the training command at that depth level, for the commander (runs
+  before the depth curriculum: `arm_goals_<spread>_<drop>.npz`).
 
-Then check the deploy controller against the training env, step by step. It compares observations term by term, the networks against skrl, the joint targets, and leg odometry against the true pelvis motion:
+Then check the deploy controller against the training env, step by step, on the run's physics. It compares observations term by term, the networks against skrl (LSTM actors stepped alongside), the joint targets, the rest pose, and the odometry: with the learned estimator its input window term by term and its corrected motion against the env's, and either odometry against the true pelvis motion. Explicit500 matches to 1.6e-4 everywhere and to 1e-6 on the estimator:
 
 ```bash
 python scripts/skrl/deploy_parity.py --headless --checkpoint <same> \
@@ -83,16 +91,28 @@ ros2 launch h12_bringup lmg_sim_bringup.launch.py
 **Launch arguments:**
 - `commander_mode`: `training` (the default), or `sequence` for one scripted pass: back off, turn, walk, a standing reach, a crouch reach, walk.
 - `use_commander:=false`: drive the robot yourself, as below.
-- `goals:=arm_goals_<spread>_<drop>.npz`: the arm-goal sample set.
+- `goals:=arm_goals_<spread>_<drop>.npz`: the arm-goal sample set (the commander's only). `policy:=explicit500` has none: run it with `use_commander:=false` and drive it by hand, below.
 - `commander_log:=<file>`: a JSON-lines event log.
 - `use_slam`, `use_rviz`, `policy`. `policy:=marl_ik` has no arm-goal samples, so run it with `use_commander:=false`.
 
 `tests/locomanipulation_game/run.sh` runs the same launch in disposable containers. It records the sim without modifying it, renders a follow-camera video, and scores the run with `analyze_run.py`.
 
-**Driving it yourself** (`use_commander:=false`, from `docker exec -it golem_ros bash`):
+**Driving it yourself** (`use_commander:=false`, from `docker exec -it golem_ros bash`). The node starts in walking mode once engaged:
 
 ```bash
 ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.3}}"   # walk (clipped to vx ±0.7, vy ±0.3, wz ±0.5)
+ros2 service call /marl_deploy_node/set_arm_goals custom_ros_messages/srv/LmgSetArmGoals \
+  "{left: {position: {x: 0.30, y: 0.22, z: -0.15}, orientation: {w: 1.0}},
+    right: {position: {x: 0.30, y: -0.22, z: -0.15}, orientation: {w: 1.0}}}"  # pelvis frame; kept until arm mode
+ros2 service call /marl_deploy_node/set_mode custom_ros_messages/srv/LmgSetMode "{mode: arm}"    # stop and reach (crouch)
+ros2 service call /marl_deploy_node/set_mode custom_ros_messages/srv/LmgSetMode "{mode: walk}"   # back to /cmd_vel
+```
+
+`set_arm_goals` in arm mode moves the goals at once; while walking it keeps them for the next `set_mode arm`, and
+they are taken in the pelvis frame of that switch. Arm mode without goals holds the rest pose (standing still).
+`set_mode` is refused until the node is engaged. The game commander's interface also works:
+
+```bash
 ros2 topic pub --once /marl_deploy_node/arm_goal geometry_msgs/msg/PoseArray \
   "{poses: [{position: {x: 0.30, y: 0.25, z: 0.05}, orientation: {w: 1.0}},
             {position: {x: 0.30, y: -0.25, z: 0.05}, orientation: {w: 1.0}}]}"  # left, right; pelvis frame
@@ -102,10 +122,10 @@ ros2 topic echo /marl_deploy_node/wrist_error   # m, left and right
 ```
 
 **Arm goals.**
-- An arm goal stops the robot, waits 0.75 s, then reaches.
-- The goal is a `left_wrist_yaw_link` and `right_wrist_yaw_link` pose in the pelvis frame, taken when it arrives. The odometry keeps it fixed in the world from then on: the learned estimator for `marl_ik`, and for `marl_golem` the IMU attitude plus the planted feet.
+- An arm goal stops the robot, waits `settle_to_arm_s` (0.75 s for `marl_golem`, none for `explicit500`), then reaches.
+- The goal is a `left_wrist_yaw_link` and `right_wrist_yaw_link` pose in the pelvis frame, taken when it arrives. The odometry keeps it fixed in the world from then on: the learned estimator for `marl_ik`, the learned estimator with its vertical motion from the feet and its tilt from gravity for `explicit500`, and for `marl_golem` the IMU attitude plus the planted feet.
 - `/cmd_vel` is ignored during an arm goal; the policy only ever saw a zero command there.
-- Ending a goal settles for 1.5 s, then walking resumes.
+- Ending a goal settles for `settle_to_nav_s` (1.5 s for `marl_golem`, none for `explicit500`), then walking resumes.
 
 ## Real robot
 

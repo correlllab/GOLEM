@@ -12,6 +12,7 @@
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
+  <exec_depend>custom_ros_messages</exec_depend>
   <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>unitree_hg</exec_depend>
   <exec_depend>ament_index_python</exec_depend>

@@ -25,6 +25,7 @@ release) and uses the same heartbeat watchdog.
 | `lmg_deploy/marl_deploy_node.py` | the ROS node: safety channels, heartbeat, pre-pose, band, operator interface |
 | `policies/explicit500/explicit500.yaml` | deploy config: joint order, defaults, gains, scales, bounds, command ranges (each from the training env), and the SLAM body frame |
 | `policies/explicit500/{legs,arms}.pt`, `export.yaml` | written by the export, below; the `.pt` files in Git LFS (`policies/.gitattributes`) |
+| `bags/<name>/` | rosbag2 recordings of Explicit500 on the real robot (`policy_bag_walk`: walking to nav2 goals; `reach`: an arm goal, ended by the hardware e-stop), the `.db3` files in Git LFS |
 | `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, SLAM odometry, modes) |
 | `custom_ros_messages/srv/Lmg*.srv` | the node's services: `LmgSetMode` (walk / arm), `LmgSetArmGoals` (left, right pose) |
 

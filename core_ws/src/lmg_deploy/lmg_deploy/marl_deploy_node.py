@@ -41,15 +41,29 @@ Safety
   a False beat (the safety layer's estop latched) or ``heartbeat_timeout`` of
   silence latches this node silent.
 * /lowstate older than ``lowstate_timeout`` (wall clock): no policy step and no publish
-  that tick (stepping on a frozen state would integrate garbage).
+  that tick (stepping on a frozen state would integrate garbage). With
+  ``imu_source`` livox the same holds for /livox/imu, and the policy doesn't engage
+  until its attitude estimate is up.
 * A non-finite observation or target latches the node silent instead of
   sending it: the safety layer would latch its estop (all motors limp) on it.
 Silent means the safety layer keeps holding the last targets until it is
 stopped; it has no staleness watchdog on these channels.
 
+IMU
+---
+``imu_source`` picks the policy's IMU observations (angular velocity, specific force,
+projected gravity): ``lowstate`` (default) LowState.imu_state, ``livox`` the MID360's
+/livox/imu carried into the torso IMU frame (livox_imu.LivoxImu).
+
+``imu_offset_{roll,pitch,yaw}_deg`` trim that IMU, live (``ros2 param set`` or
+rqt_reconfigure): the attitude it reads with the torso level, as in h12_lowerbody_rl.
+The trim rotates the attitude, the angular velocity and the specific force alike, so
+projected gravity and the accelerometer agree on the tilt.
+
 Interfaces
 ----------
 sub  /lowstate                       (unitree_hg/LowState)
+sub  /livox/imu                      (sensor_msgs/Imu)  with imu_source livox, livox_link frame
 sub  /cmd_vel                        (geometry_msgs/Twist)
 sub  /safety/heartbeat               (std_msgs/Bool)
 sub  /Odometry                       (nav_msgs/Odometry)  FAST-LIO body pose
@@ -75,7 +89,9 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseArray, Twist
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor, SetParametersResult
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool, Float32MultiArray, String
 from std_srvs.srv import Trigger
 from custom_ros_messages.srv import LmgSetArmGoals as SetArmGoals, LmgSetMode as SetMode
@@ -90,14 +106,18 @@ from lmg_deploy.controller import (
     RobotState,
 )
 from lmg_deploy.kinematics import ArmKinematics
+from lmg_deploy.livox_imu import LivoxImu
 from lmg_deploy.networks import load_network
-from lmg_deploy.rotations import xyzw_to_wxyz
+from lmg_deploy.rotations import imu_mount_quat, quat_apply, quat_conjugate, quat_mul, xyzw_to_wxyz
 
 MOTOR_MODE_PR = 1
 SAFETY_HEARTBEAT_TOPIC = "/safety/heartbeat"
 PREPOSE_TOL = 0.15          # rad; max |q - default| over all 27 joints to count as posed
 PREPOSE_SETTLE_TICKS = 10   # consecutive in-tolerance ticks (0.2 s at 50 Hz)
 PREPOSE_MAX_TICKS = 400     # after the ramp; posed or not, stop waiting (8 s at 50 Hz)
+IMU_FRAME = "torso_link"     # the IMU training read (README "IMU frame"; no rotation on the link)
+IMU_OFFSET_PARAMS = ("imu_offset_roll_deg", "imu_offset_pitch_deg", "imu_offset_yaw_deg")
+IMU_OFFSET_RANGE_DEG = 15.0
 SLAM_STALE_S = 0.5          # /Odometry older than this while reaching: warn that the goals ride with the pelvis
 
 
@@ -118,6 +138,14 @@ class MarlDeployNode(Node):
         self.declare_parameter("band_release_delay_s", 1.0)
         self.declare_parameter("heartbeat_timeout", 0.5)
         self.declare_parameter("lowstate_timeout", 0.1)
+        self.declare_parameter("imu_source", "lowstate")   # "lowstate" | "livox"
+        self.declare_parameter("livox_imu_timeout", 0.1)   # s, wall clock
+        self.declare_parameter("livox_gravity_tau_s", 0.5)  # s, attitude filter's pull toward the accelerometer
+        for name in IMU_OFFSET_PARAMS:
+            self.declare_parameter(name, 0.0, ParameterDescriptor(
+                description="live IMU trim, deg: the IMU's reading with the torso level",
+                floating_point_range=[FloatingPointRange(
+                    from_value=-IMU_OFFSET_RANGE_DEG, to_value=IMU_OFFSET_RANGE_DEG, step=0.0)]))
 
         cfg_path = self.get_parameter("config").value
         with open(cfg_path) as f:
@@ -139,8 +167,22 @@ class MarlDeployNode(Node):
             joint_names=cfg["joint_names"],
             ee_frames=cfg["arms"]["ee_frames"],
             arm_joint_names=[cfg["joint_names"][ARM_START:ARM_START + 7], cfg["joint_names"][ARM_START + 7:]],
-            extra_frames=[cfg["slam_frame"]],
+            extra_frames=[cfg["slam_frame"], IMU_FRAME],
         )
+        self._imu_source = self.get_parameter("imu_source").value
+        if self._imu_source not in ("livox", "lowstate"):
+            raise ValueError(f"imu_source must be 'livox' or 'lowstate', not {self._imu_source!r}")
+        self._livox: LivoxImu | None = None
+        self._livox_time: float | None = None   # monotonic receipt time of the last /livox/imu
+        if self._imu_source == "livox":
+            # IMU <- livox_link: a fixed mount on torso_link, read off the URDF at any joint state
+            kin.update(np.zeros(NUM_JOINTS))
+            q_imu = kin.frame_pose(IMU_FRAME)[1]
+            q_livox = kin.frame_pose(cfg["slam_frame"])[1]
+            q_imu_livox = quat_mul(quat_conjugate(q_imu), q_livox)
+            r_imu_livox = np.stack([quat_apply(q_imu_livox, e) for e in np.eye(3)], axis=1)
+            self._livox = LivoxImu(r_imu_livox,
+                                   tau_s=float(self.get_parameter("livox_gravity_tau_s").value))
         # the exported networks, next to the config
         legs = load_network(os.path.join(cfg_dir, cfg["legs"]["policy"]),
                             cfg["legs"]["num_obs"], cfg["legs"]["num_actions"])   # MLP or LSTM
@@ -171,6 +213,8 @@ class MarlDeployNode(Node):
         self._hb_last: float | None = None
         self._dead = False                  # latched: never publishes again
         self._state_name = ""
+        self._imu_mount = self._build_imu_mount({n: float(self.get_parameter(n).value) for n in IMU_OFFSET_PARAMS})
+        self.add_on_set_parameters_callback(self._on_set_parameters)
 
         lowstate_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                                   history=HistoryPolicy.KEEP_LAST, depth=1)
@@ -178,6 +222,8 @@ class MarlDeployNode(Node):
                              history=HistoryPolicy.KEEP_LAST, depth=1)
         self.create_subscription(LowState, "/lowstate", self._on_lowstate, lowstate_qos)
         self.create_subscription(Twist, "/cmd_vel", self._on_cmd_vel, 10)
+        if self._livox is not None:
+            self.create_subscription(Imu, "/livox/imu", self._on_livox_imu, qos_profile_sensor_data)
         self.create_subscription(Bool, SAFETY_HEARTBEAT_TOPIC, self._on_heartbeat, 10)
         self.create_subscription(Odometry, "/Odometry", self._on_odometry, 10)
         self.create_subscription(PoseArray, "~/arm_goal", self._on_arm_goal, 10)
@@ -194,12 +240,41 @@ class MarlDeployNode(Node):
         self._set_state("idle")
         self.get_logger().info(
             f"marl_deploy_node ready: {cfg_path}, {control_hz:.0f} Hz, "
-            f"confirm={'required' if self._confirm_wait else 'auto'}")
+            f"confirm={'required' if self._confirm_wait else 'auto'}, imu={self._imu_source}")
 
     # -- callbacks -------------------------------------------------------------------
+    def _build_imu_mount(self, deg: dict) -> np.ndarray | None:
+        self.get_logger().info("IMU trim: roll %+.3f pitch %+.3f yaw %+.3f deg" % tuple(deg[n] for n in IMU_OFFSET_PARAMS))
+        if not any(deg.values()):
+            return None
+        return imu_mount_quat(*(np.radians(deg[n]) for n in IMU_OFFSET_PARAMS))
+
+    def _on_set_parameters(self, params) -> SetParametersResult:
+        # same single-threaded executor as _tick: swapping the trim here can't race a step
+        touched = [p for p in params if p.name in IMU_OFFSET_PARAMS]
+        if touched:
+            if any(not np.isfinite(p.value) for p in touched):
+                return SetParametersResult(successful=False, reason="IMU trim must be finite")
+            # the new values aren't stored until this returns
+            deg = {n: float(self.get_parameter(n).value) for n in IMU_OFFSET_PARAMS}
+            deg.update({p.name: float(p.value) for p in touched})
+            self._imu_mount = self._build_imu_mount(deg)
+        return SetParametersResult(successful=True)
+
     def _on_lowstate(self, msg: LowState) -> None:
         self._lowstate = msg
         self._lowstate_time = time.monotonic()
+
+    def _on_livox_imu(self, msg: Imu) -> None:
+        w, a = msg.angular_velocity, msg.linear_acceleration
+        ready = self._livox.ready
+        self._livox.update(msg.header.stamp.sec + 1e-9 * msg.header.stamp.nanosec,
+                           np.array([w.x, w.y, w.z]), np.array([a.x, a.y, a.z]))
+        self._livox_time = time.monotonic()
+        if self._livox.ready and not ready:
+            self.get_logger().info(
+                f"/livox/imu attitude up ({'g' if self._livox.scale != 1.0 else 'm/s^2'} input), "
+                f"projected gravity {(-self._livox.up).round(3).tolist()}")
 
     def _on_odometry(self, msg: Odometry) -> None:
         p, o = msg.pose.pose.position, msg.pose.pose.orientation
@@ -298,14 +373,26 @@ class MarlDeployNode(Node):
 
     def _robot_state(self, msg: LowState) -> RobotState:
         motors = msg.motor_state
+        if self._livox is not None and self._livox.ready:
+            quat, gyro, acc = self._livox.quat(), self._livox.gyro.copy(), self._livox.acc.copy()
+        else:
+            # lowstate source; with livox, only pre-pose reads this (it uses q alone)
+            quat = np.asarray(msg.imu_state.quaternion, dtype=np.float64)
+            gyro = np.asarray(msg.imu_state.gyroscope, dtype=np.float64)
+            acc = np.asarray(msg.imu_state.accelerometer, dtype=np.float64)
+        if self._imu_mount is not None:
+            quat = quat_mul(quat, quat_conjugate(self._imu_mount))
+            gyro, acc = quat_apply(self._imu_mount, gyro), quat_apply(self._imu_mount, acc)
         return RobotState(
             q=np.array([motors[i].q for i in range(NUM_JOINTS)], dtype=np.float64),
             dq=np.array([motors[i].dq for i in range(NUM_JOINTS)], dtype=np.float64),
             tau=np.array([motors[i].tau_est for i in range(NUM_JOINTS)], dtype=np.float64),
-            quat=np.asarray(msg.imu_state.quaternion, dtype=np.float64),
-            gyro=np.asarray(msg.imu_state.gyroscope, dtype=np.float64),
-            acc=np.asarray(msg.imu_state.accelerometer, dtype=np.float64),
+            quat=quat, gyro=gyro, acc=acc,
         )
+
+    def _livox_fresh(self, now: float) -> bool:
+        return (self._livox.ready and self._livox_time is not None
+                and now - self._livox_time <= float(self.get_parameter("livox_imu_timeout").value))
 
     def _publish(self, cmd: JointCommand, mode_machine: int) -> None:
         if not (np.isfinite(cmd.q).all() and np.isfinite(cmd.kp).all() and np.isfinite(cmd.kd).all()):
@@ -360,6 +447,9 @@ class MarlDeployNode(Node):
                 f"/lowstate is {now - self._lowstate_time:.2f} s old; not stepping", throttle_duration_sec=1.0)
             return
         msg = self._lowstate
+        if self._engaged and self._livox is not None and not self._livox_fresh(now):
+            self.get_logger().warn("/livox/imu stale; not stepping", throttle_duration_sec=1.0)
+            return
         state = self._robot_state(msg)
         if not (np.isfinite(state.q).all() and np.isfinite(state.quat).all()):
             self._latch("non-finite /lowstate")
@@ -408,6 +498,11 @@ class MarlDeployNode(Node):
         settled = self._prepose_pass >= PREPOSE_SETTLE_TICKS
         timed_out = self._prepose_ticks >= self._ramp_ticks + PREPOSE_MAX_TICKS
         if not settled and not timed_out:
+            return
+        if self._livox is not None and not self._livox_fresh(time.monotonic()):
+            self._set_state("waiting_imu")
+            self.get_logger().info("pre-posed; waiting for /livox/imu (h12_real_drivers use_lidar?)",
+                                   throttle_duration_sec=5.0)
             return
         if self._confirm_wait and not self._confirmed:
             self._set_state("waiting_confirm")

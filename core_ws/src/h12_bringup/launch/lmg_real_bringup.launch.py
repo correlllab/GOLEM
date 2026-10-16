@@ -26,7 +26,8 @@ from launch.substitutions import LaunchConfiguration
 # see h12_control.launch.py). Assets resolve as in h12_state.launch.py.
 ASSETS_DIR = os.environ.get('GOLEM_ASSETS_DIR', '/home/unitree/GOLEM/CL_Assets')
 
-GAME_ARGS = ('start_position_verified', 'policy', 'prepose_ramp_s', 'prepose_max_vel')
+GAME_ARGS = ('start_position_verified', 'policy', 'prepose_ramp_s', 'prepose_max_vel',
+             'imu_offset_roll_deg', 'imu_offset_pitch_deg', 'imu_offset_yaw_deg')
 
 
 def _include(package, launch_file, launch_arguments, condition=None):
@@ -47,6 +48,13 @@ def generate_launch_description():
         DeclareLaunchArgument('policy', default_value='explicit500'),
         DeclareLaunchArgument('prepose_ramp_s', default_value='6.0'),
         DeclareLaunchArgument('prepose_max_vel', default_value='0.25'),
+        # Startup IMU trim, the lower-body RL's real seed (lowerbody_real.yaml): negative pitch
+        # is an anti-lean bias, the policy believes it pitches further forward than it does.
+        # The hanging-plumb static calibration is +0.264 deg pitch. Tune live with
+        # ros2 param set /marl_deploy_node imu_offset_pitch_deg <deg>.
+        DeclareLaunchArgument('imu_offset_roll_deg', default_value='0.5'),
+        DeclareLaunchArgument('imu_offset_pitch_deg', default_value='-2.5'),
+        DeclareLaunchArgument('imu_offset_yaw_deg', default_value='0.0'),
         DeclareLaunchArgument('safety_config', default_value='relax_safety_split.yaml'),
         DeclareLaunchArgument('use_slam', default_value='true'),
         # The game reads only the lidar (SLAM).

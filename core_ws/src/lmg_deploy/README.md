@@ -144,5 +144,5 @@ ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger         
 - Same `policy`, `safety_config` and `use_slam` arguments as the sim launch; keep `use_slam` on for arm goals.
 
 **Before the first real run:**
-- **IMU frame.** Training read the IMU on `torso_link` (`imu_link`, offset (-0.0445, -0.0189, 0.2776), no rotation). The MuJoCo sim's IMU is in the same place. Confirm that the real `LowState.imu_state` comes from that same IMU.
+- **IMU frame.** Training read the IMU on `torso_link` (`imu_link`, offset (-0.0445, -0.0189, 0.2776), no rotation). The MuJoCo sim's IMU is in the same place. By default the node reads `LowState.imu_state`; `imu_source:=livox` reads the MID360's `/livox/imu` instead, rotated from `livox_link` into that frame by the URDF mount, with attitude from a complementary filter (`lmg_deploy/livox_imu.py`). Confirm the real `LowState.imu_state` comes from the torso IMU.
 - **Safety-layer gaps.** The safety layer holds the last command on a silent channel: neither input channel has a staleness watchdog in the sim or real configs (`upper_stale_seconds: 0.0`). If this node latches silent, the safety layer keeps sending its last targets until it is stopped.

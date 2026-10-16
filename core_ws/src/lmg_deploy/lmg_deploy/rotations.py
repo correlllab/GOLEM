@@ -58,6 +58,18 @@ def quat_from_rotvec(rotvec: np.ndarray, eps: float = 1.0e-12) -> np.ndarray:
     return np.concatenate([[np.cos(half)], axis * np.sin(half)])
 
 
+def imu_mount_quat(roll: float, pitch: float, yaw: float) -> np.ndarray:
+    """IMU mounting bias Rz(yaw) Ry(pitch) Rx(roll), rad: the attitude the IMU reads with the torso level.
+
+    Positive pitch reads tilted forward, positive roll tilted right (h12_lowerbody_rl's
+    imu_offset_quat). The torso's attitude is raw * conj(this); a vector the IMU
+    measures is this applied to it in the torso frame.
+    """
+    return quat_mul(quat_mul(quat_from_rotvec(np.array([0.0, 0.0, yaw])),
+                             quat_from_rotvec(np.array([0.0, pitch, 0.0]))),
+                    quat_from_rotvec(np.array([roll, 0.0, 0.0])))
+
+
 def quat_from_matrix(m: np.ndarray) -> np.ndarray:
     """Rotation matrix -> unit quaternion, qw >= 0."""
     trace = m[0, 0] + m[1, 1] + m[2, 2]

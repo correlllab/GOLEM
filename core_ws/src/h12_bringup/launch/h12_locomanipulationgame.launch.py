@@ -39,6 +39,9 @@ def generate_launch_description():
                               description='peak joint target speed [rad/s] during that ramp; lengthens it'),
         DeclareLaunchArgument('disable_elastic_band', default_value='false',
                               description="release the sim's elastic band through /elastic_band/toggle once engaged"),
+        *[DeclareLaunchArgument(f'imu_offset_{axis}_deg', default_value='0.0',
+                                description=f'startup IMU {axis} trim [deg]: its reading with the torso level (live: ros2 param set)')
+          for axis in ('roll', 'pitch', 'yaw')],
         Node(
             package='lmg_deploy',
             executable='marl_deploy_node',
@@ -53,6 +56,8 @@ def generate_launch_description():
                 'disable_elastic_band': ParameterValue(LaunchConfiguration('disable_elastic_band'), value_type=bool),
                 'prepose_ramp_s': ParameterValue(LaunchConfiguration('prepose_ramp_s'), value_type=float),
                 'prepose_max_vel': ParameterValue(LaunchConfiguration('prepose_max_vel'), value_type=float),
+                **{f'imu_offset_{axis}_deg': ParameterValue(LaunchConfiguration(f'imu_offset_{axis}_deg'), value_type=float)
+                   for axis in ('roll', 'pitch', 'yaw')},
             }],
         ),
     ])

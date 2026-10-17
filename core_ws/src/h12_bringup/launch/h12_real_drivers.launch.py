@@ -24,7 +24,7 @@ def generate_launch_description():
         {'xfer_format': 1},      # 0-Pointcloud2(PointXYZRTL), 1-customized pointcloud format
         {'multi_topic': 0},      # 0-All LiDARs share the same topic, 1-One LiDAR one topic
         {'data_src': 0},         # 0-lidar, others-Invalid data src
-        {'publish_freq': 10.0},  # publish frequency (Hz)
+        {'publish_freq': 30.0},  # publish frequency (Hz)
         {'output_data_type': 0},
         {'frame_id': 'livox_frame'},
         {'lvx_file_path': '/home/livox/livox_test.lvx'},

@@ -100,12 +100,15 @@ is no `sim:=true` argument):
 | `h12_real_robot_bringup.launch.py` | real robot, onboard PC: drivers, state publishers, estop + safety + IK, nav, lower body |
 | `h12_real_desktop_bringup.launch.py` | real: companion desktop — model servers, skills, rviz; hand cameras with `use_hand_cameras:=true` |
 | `h12_safety_grippers.launch.py` | real: estop + safety layer + grippers only |
-| `h12_real_slam.launch.py` | real: drivers, state publishers and SLAM/nav only (no estop, safety or IK) |
 
 The top-level files above are assembled from building blocks you can also
 launch on their own: `h12_state` (state publishers), `h12_control` (estop,
 safety, IK), `h12_lowerbody`, `h12_models` (model servers + skills),
 `h12_real_drivers`, `h12_grippers`, and `h12_navigation` (in `h12_slam`).
+
+For sensors + SLAM/nav on the real robot with no joint commanded (no estop,
+safety or IK), use `ros2 launch h12_slam h12_real_slam.launch.py`, which lives in
+`h12_slam`; record those runs with `ros2 run h12_slam record_slam_bag --name <name>`.
 
 The x86 sim bringup starts the state publishers, the `frame_task_server` IK
 solver, `safety_node`, the Gemini/SAM/GraspGen model servers, the RL lower-body

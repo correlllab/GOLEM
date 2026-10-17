@@ -33,6 +33,7 @@ setup(
         'console_scripts': [
             'self_filter = h12_slam.self_filter:main',
             'level_odom = h12_slam.level_odom:main',
+            'record_slam_bag = h12_slam.record_slam_bag:main',
         ],
     },
 )

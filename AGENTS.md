@@ -140,7 +140,6 @@ below and sets `use_sim_time` plus its platform's arguments.
 | `h12_real_robot_bringup.launch.py` | **real robot, onboard PC** (native, `ROS_DOMAIN_ID=0`) | real_drivers, navigation, state, control (`use_estop:=true`) |
 | `h12_real_desktop_bringup.launch.py` | **real: companion x86 desktop** — hand cameras and rviz. Leg control is interlocked behind `start_position_verified:=true` (default **false**) | models (`use_yolo:=true`), lowerbody (`lowerbody_real.yaml` + MJPC estimator) |
 | `h12_safety_grippers.launch.py` | real: actuation-only debug bringup | control (estop + safety, no IK), grippers |
-| `h12_real_slam.launch.py` | real: sensors + SLAM/navigation only, on wall time (no estop, safety or IK) | real_drivers, state, navigation |
 
 | Building block | Starts |
 |---|---|
@@ -150,6 +149,11 @@ below and sets `use_sim_time` plus its platform's arguments.
 | `h12_models.launch.py` | gemini + sam servers, [yolo], graspgen + `h12_skills` (`use_skills`) |
 | `h12_real_drivers.launch.py` | Livox MID360 (+ `livox_imu_upright`, which rotates `/livox/imu_raw` into the point frame — the stock driver rotates only points), RealSense head camera, `h12_grippers.launch.py` (left+right `gripper_node`) |
 | `h12_slam/launch/h12_navigation.launch.py` | shared nav stack (FAST-LIO → pointcloud_to_laserscan → slam_toolbox → nav2) |
+
+`h12_slam` also ships one top-level file of its own, `h12_real_slam.launch.py`
+(`ros2 launch h12_slam h12_real_slam.launch.py`): real robot sensors + SLAM/navigation
+only, on wall time — real_drivers, state, navigation; no estop, safety or IK, so
+no joint is commanded. Record its runs with `ros2 run h12_slam record_slam_bag --name <name>`.
 
 Humble includes are not scoped: an argument passed to one include stays set
 for the includes after it, so pass consistent values (all four blocks share

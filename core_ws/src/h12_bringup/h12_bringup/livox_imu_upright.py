@@ -24,7 +24,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Imu
 
 GRAVITY_CHECK_SAMPLES = 200  # ~1 s at the MID360's 200 Hz IMU rate
-GRAVITY_MIN_Z = 0.5  # g; upright with the torso's ~14 deg lidar pitch reads ~0.98
+GRAVITY_MIN_Z = 0.5  # g; upright with the torso's ~9.4 deg lidar pitch reads ~0.99
 
 
 def driver_rotation(roll_deg, pitch_deg, yaw_deg):

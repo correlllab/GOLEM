@@ -2,7 +2,7 @@
 Publish level, floor-referenced ``odom`` and ``base_footprint`` frames around FAST-LIO.
 
 FAST-LIO's world frame ``camera_init`` is the IMU frame at startup, so it
-carries the MID360's mounting pitch (~14 deg on the H1-2) and sits at lidar
+carries the MID360's mounting pitch (~9.4 deg on the H1-2) and sits at lidar
 height. Anything that thresholds on height (octomap projection, costmap
 obstacle bands) needs a frame with +z against gravity and z = 0 on the floor.
 

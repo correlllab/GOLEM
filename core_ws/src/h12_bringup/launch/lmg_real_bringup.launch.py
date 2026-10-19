@@ -48,16 +48,16 @@ def generate_launch_description():
         DeclareLaunchArgument('policy', default_value='explicit500'),
         DeclareLaunchArgument('prepose_ramp_s', default_value='6.0'),
         DeclareLaunchArgument('prepose_max_vel', default_value='0.25'),
-        # Startup IMU trim, the lower-body RL's real seed (lowerbody_real.yaml): negative pitch
-        # is an anti-lean bias, the policy believes it pitches further forward than it does.
-        # The hanging-plumb static calibration is +0.264 deg pitch. Tune live with
-        # ros2 param set /marl_deploy_node imu_offset_pitch_deg <deg>.
-        DeclareLaunchArgument('imu_offset_roll_deg', default_value='0.5'),
-        DeclareLaunchArgument('imu_offset_pitch_deg', default_value='-2.5'),
+        # Startup trim of the policy's IMU, the MID360 (/livox/imu): its reading with the torso
+        # level. The URDF livox_joint carries the measured mount, so it starts at 0. Tune live
+        # with ros2 param set /marl_deploy_node imu_offset_pitch_deg <deg>.
+        DeclareLaunchArgument('imu_offset_roll_deg', default_value='0.0'),
+        DeclareLaunchArgument('imu_offset_pitch_deg', default_value='0.0'),
         DeclareLaunchArgument('imu_offset_yaw_deg', default_value='0.0'),
         DeclareLaunchArgument('safety_config', default_value='relax_safety_split.yaml'),
         DeclareLaunchArgument('use_slam', default_value='true'),
-        # The game reads only the lidar (SLAM).
+        # The game reads the MID360 for SLAM and as the policy's IMU; marl_deploy_node waits
+        # in the pre-pose until /livox/imu is up.
         DeclareLaunchArgument('use_lidar', default_value='true',
                               description='MID360 driver and livox_imu_upright'),
         DeclareLaunchArgument('use_head_camera', default_value='false', description='head RealSense'),

@@ -1,11 +1,11 @@
-"""The MID360's IMU as the policy's IMU: torso-frame gyro, accelerometer and attitude.
+"""The MID360's IMU as the policy's IMU: gyro, accelerometer and attitude in the policy's IMU frame.
 
-Training read the IMU on torso_link (no rotation; README "IMU frame"). The MID360
-sits on the same rigid link, so its angular velocity and gravity direction are the
-torso IMU's rotated by the fixed mount (r_imu_livox, from the URDF). Its specific
-force differs by the lever-arm terms (alpha x r + omega x (omega x r), r about 0.4 m
-up the torso), which this leaves out: they vanish standing still and stay small at
-walking rates.
+The policy's IMU frame is the one it trained with (export.yaml ``imu.frame``):
+livox_link itself, or the torso's imu_link for older runs. Both sit on torso_link,
+so angular velocity and gravity direction are the MID360's rotated by the fixed
+mount (r_imu_livox, from the URDF). For imu_link the specific force also differs by
+the lever-arm terms (alpha x r + omega x (omega x r), r about 0.4 m up the torso),
+which this leaves out: they vanish standing still and stay small at walking rates.
 
 /livox/imu (livox_imu_upright's output, livox_link frame) carries no orientation:
 the driver leaves it zero. The attitude is a complementary filter on the up
@@ -20,11 +20,20 @@ robot is standing or hanging still before it engages).
 
 import numpy as np
 
-from lmg_deploy.rotations import quat_from_matrix
+from lmg_deploy.rotations import quat_apply, quat_conjugate, quat_from_matrix, quat_mul
 
 GRAVITY = 9.81           # m/s^2
 G_UNIT_MAX_NORM = 4.0    # a mean |acc| below this is in g (1.0), above it in m/s^2 (9.81)
 MAX_DT = 0.05            # s; a longer gap between samples (a dropout) is not integrated
+
+
+def livox_to_imu_rotation(kin, imu_frame: str, livox_frame: str = "livox_link") -> np.ndarray:
+    """(3, 3) rotation taking livox_frame vectors into imu_frame, from the URDF.
+
+    kin: a kinematics.ArmKinematics updated at any joint state that has both frames
+    (they share torso_link, so the joints don't change it)."""
+    q_rel = quat_mul(quat_conjugate(kin.frame_pose(imu_frame)[1]), kin.frame_pose(livox_frame)[1])
+    return np.stack([quat_apply(q_rel, e) for e in np.eye(3)], axis=1)
 
 
 def _rotation_aligning(a: np.ndarray, b: np.ndarray) -> np.ndarray:

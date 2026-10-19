@@ -10,12 +10,12 @@ import numpy as np
 import pytest
 
 from lmg_deploy import rotations as R
-from lmg_deploy.livox_imu import GRAVITY, LivoxImu
+from lmg_deploy.livox_imu import GRAVITY, LivoxImu, livox_to_imu_rotation
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 URDF = os.environ.get(
     "H12_URDF", os.path.join(HERE, "..", "..", "..", "..", "CL_Assets", "ros_assets", "h1_2_magpie.urdf"))
-LIVOX_PITCH = 0.24015730507441985   # rad, livox_joint rpy in the URDF
+LIVOX_PITCH = 0.1642                # rad, livox_joint rpy in the URDF
 DT = 0.005                          # s, the MID360's 200 Hz
 
 
@@ -88,10 +88,12 @@ def test_urdf_mount_is_the_livox_pitch():
     names = cfg["joint_names"]
     kin = ArmKinematics(URDF, joint_names=names, ee_frames=cfg["arms"]["ee_frames"],
                         arm_joint_names=[names[13:20], names[20:27]],
-                        extra_frames=[cfg["slam_frame"], "torso_link"])
+                        extra_frames=[cfg["slam_frame"], "livox_link", "imu_link", "torso_link"])
     q = np.zeros(len(names))
     q[12] = 0.7   # torso yaw must not change the mount
     kin.update(q)
-    q_rel = R.quat_mul(R.quat_conjugate(kin.frame_pose("torso_link")[1]), kin.frame_pose(cfg["slam_frame"])[1])
-    r = np.stack([R.quat_apply(q_rel, e) for e in np.eye(3)], axis=1)
-    np.testing.assert_allclose(r, _ry(LIVOX_PITCH), atol=1e-9)
+    # imu_link carries no rotation on torso_link: older exports read the lidar through the mount
+    np.testing.assert_allclose(livox_to_imu_rotation(kin, "imu_link"), _ry(LIVOX_PITCH), atol=1e-9)
+    np.testing.assert_allclose(livox_to_imu_rotation(kin, "torso_link"), _ry(LIVOX_PITCH), atol=1e-9)
+    # Livox-IMU exports read it as is
+    np.testing.assert_allclose(livox_to_imu_rotation(kin, "livox_link"), np.eye(3), atol=1e-12)

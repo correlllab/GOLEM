@@ -53,10 +53,11 @@ IMU
 ---
 The policy's IMU observations (angular velocity, specific force, projected gravity)
 come from the MID360's /livox/imu, never LowState.imu_state (its attitude carries a
-~2.5 deg calibration error). They are carried from livox_link into the frame the
-policy trained with, export.yaml's ``imu.frame``: imu_link on torso_link for runs up
-to Explicit500 (the default when the export has no ``imu`` block), livox_link from
-then on. The rotation is the URDF mount; attitude is livox_imu.LivoxImu's filter.
+~2.5 deg calibration error). They are carried from the chip's frame (URDF
+livox_imu_link) into the frame the policy trained with, export.yaml's ``imu.frame``:
+imu_link on torso_link for runs up to Explicit500 (the default when the export has no
+``imu`` block), livox_link or livox_imu_link from then on. The rotation is the URDF
+mount; attitude is livox_imu.LivoxImu's filter.
 
 ``imu_offset_{roll,pitch,yaw}_deg`` (default 0) trim that IMU, live (``ros2 param set``
 or rqt_reconfigure): the attitude it reads with the torso level, as in h12_lowerbody_rl.
@@ -66,7 +67,7 @@ projected gravity and the accelerometer agree on the tilt.
 Interfaces
 ----------
 sub  /lowstate                       (unitree_hg/LowState)
-sub  /livox/imu                      (sensor_msgs/Imu)  livox_link frame (livox_imu_upright)
+sub  /livox/imu                      (sensor_msgs/Imu)  livox_imu_link frame (livox_imu_upright)
 sub  /cmd_vel                        (geometry_msgs/Twist)
 sub  /safety/heartbeat               (std_msgs/Bool)
 sub  /Odometry                       (nav_msgs/Odometry)  FAST-LIO body pose
@@ -109,7 +110,7 @@ from lmg_deploy.controller import (
     RobotState,
 )
 from lmg_deploy.kinematics import ArmKinematics
-from lmg_deploy.livox_imu import LivoxImu, livox_to_imu_rotation
+from lmg_deploy.livox_imu import LIVOX_IMU_FRAME, LivoxImu, livox_to_imu_rotation
 from lmg_deploy.networks import load_network
 from lmg_deploy.rotations import imu_mount_quat, quat_apply, quat_conjugate, quat_mul, xyzw_to_wxyz
 
@@ -170,7 +171,7 @@ class MarlDeployNode(Node):
             joint_names=cfg["joint_names"],
             ee_frames=cfg["arms"]["ee_frames"],
             arm_joint_names=[cfg["joint_names"][ARM_START:ARM_START + 7], cfg["joint_names"][ARM_START + 7:]],
-            extra_frames=list(dict.fromkeys([cfg["slam_frame"], "livox_link", imu_frame])),
+            extra_frames=list(dict.fromkeys([cfg["slam_frame"], LIVOX_IMU_FRAME, imu_frame])),
         )
         kin.update(np.zeros(NUM_JOINTS))
         r_imu_livox = livox_to_imu_rotation(kin, imu_frame)

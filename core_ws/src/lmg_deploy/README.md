@@ -145,9 +145,10 @@ ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger         
 - Same `policy`, `safety_config` and `use_slam` arguments as the sim launch; keep `use_slam` on for arm goals.
 
 **Before the first real run:**
-- **IMU.** The node reads only the MID360's `/livox/imu` (`livox_imu_upright`'s output), never `LowState.imu_state`, whose attitude carries a ~2.5 deg calibration error. It carries the readings from `livox_link` into the frame the policy trained with, `export.yaml`'s `imu.frame`:
-  - `livox_link` for Livox-IMU runs, as is;
-  - `imu_link` on `torso_link` for Explicit500 and older (the default when the export has no `imu` block), through the URDF mount.
+- **IMU.** The node reads only the MID360's `/livox/imu` (`livox_imu_upright`'s output), never `LowState.imu_state`, whose attitude carries a ~2.5 deg calibration error. `/livox/imu` is in the URDF's `livox_imu_link` (the IMU chip). The node carries the readings from there into the frame the policy trained with, `export.yaml`'s `imu.frame`, through the URDF:
+  - `livox_imu_link`: as is;
+  - `livox_link` (the point frame, 0.7 deg from the chip);
+  - `imu_link` on `torso_link` for Explicit500 and older (the default when the export has no `imu` block).
 
-  The attitude comes from a complementary filter (`lmg_deploy/livox_imu.py`). The URDF mount (`livox_joint`) is the real robot's measured 9.41 deg pitch; `imu_offset_{roll,pitch,yaw}_deg` (default 0) trims what is left, live.
+  The attitude comes from a complementary filter (`lmg_deploy/livox_imu.py`). `livox_joint` and `livox_imu_joint` carry the real robot's measured mount (point frame 8.77 deg, chip 9.45 deg pitch); `imu_offset_{roll,pitch,yaw}_deg` (default 0) trims what is left, live.
 - **Safety-layer gaps.** The safety layer holds the last command on a silent channel: neither input channel has a staleness watchdog in the sim or real configs (`upper_stale_seconds: 0.0`). If this node latches silent, the safety layer keeps sending its last targets until it is stopped.

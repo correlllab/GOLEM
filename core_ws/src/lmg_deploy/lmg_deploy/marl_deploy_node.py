@@ -57,7 +57,9 @@ come from the MID360's /livox/imu, never LowState.imu_state (its attitude carrie
 livox_imu_link) into the frame the policy trained with, export.yaml's ``imu.frame``:
 imu_link on torso_link for runs up to Explicit500 (the default when the export has no
 ``imu`` block), livox_link or livox_imu_link from then on. The rotation is the URDF
-mount; attitude is livox_imu.LivoxImu's filter.
+mount; attitude is livox_imu.LivoxImu's filter. The angular velocity passes the
+livox_imu.GyroLowpass the run trained with (``imu.gyro_lowpass_hz``; absent = none),
+which suppresses the head's ~20 Hz pitch resonance while walking.
 
 ``imu_offset_{roll,pitch,yaw}_deg`` (default 0) trim that IMU, live (``ros2 param set``
 or rqt_reconfigure): the attitude it reads with the torso level, as in h12_lowerbody_rl.
@@ -176,7 +178,11 @@ class MarlDeployNode(Node):
         kin.update(np.zeros(NUM_JOINTS))
         r_imu_livox = livox_to_imu_rotation(kin, imu_frame)
         self._imu_frame = imu_frame
-        self._livox = LivoxImu(r_imu_livox, tau_s=float(self.get_parameter("livox_gravity_tau_s").value))
+        # the gyro low-pass the run trained with; exports without one (Explicit500) saw the raw rate
+        gyro_lowpass_hz = float((cfg.get("imu") or {}).get("gyro_lowpass_hz", 0.0))
+        self._livox = LivoxImu(r_imu_livox, tau_s=float(self.get_parameter("livox_gravity_tau_s").value),
+                               gyro_lowpass_hz=gyro_lowpass_hz)
+        self._gyro_lowpass_hz = gyro_lowpass_hz
         self._livox_time: float | None = None   # monotonic receipt time of the last /livox/imu
         # the exported networks, next to the config
         legs = load_network(os.path.join(cfg_dir, cfg["legs"]["policy"]),
@@ -234,7 +240,8 @@ class MarlDeployNode(Node):
         self._set_state("idle")
         self.get_logger().info(
             f"marl_deploy_node ready: {cfg_path}, {control_hz:.0f} Hz, "
-            f"confirm={'required' if self._confirm_wait else 'auto'}, IMU /livox/imu in {self._imu_frame}")
+            f"confirm={'required' if self._confirm_wait else 'auto'}, IMU /livox/imu in {self._imu_frame}, "
+            f"gyro low-pass {f'{self._gyro_lowpass_hz:g} Hz' if self._gyro_lowpass_hz > 0 else 'off'}")
 
     # -- callbacks -------------------------------------------------------------------
     def _build_imu_mount(self, deg: dict) -> np.ndarray | None:

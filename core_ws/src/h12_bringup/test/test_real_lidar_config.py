@@ -35,7 +35,9 @@ def test_fast_lio_config_expects_upright_imu():
     with open(os.path.join(SLAM_CONFIG, 'mid360.yaml')) as f:
         params = yaml.safe_load(f)['/**']['ros__parameters']
     assert params['common']['imu_topic'] == '/livox/imu'
-    assert params['mapping']['extrinsic_R'] == [1., 0., 0., 0., 1., 0., 0., 0., 1.]
+    # h12_navigation.launch.py sets the extrinsic from the URDF; a copy here would drift
+    assert 'extrinsic_T' not in params['mapping']
+    assert 'extrinsic_R' not in params['mapping']
 
 
 def test_fast_lio_keeps_every_lidar_line():

@@ -2,11 +2,50 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from nav2_common.launch import RewrittenYaml
+
+from h12_slam.robot_geometry import fixed_transform, matrix_to_quat
+
+# As h12_state.launch.py: the onboard PC's checkout unless GOLEM_ASSETS_DIR is set;
+# the sim bringups pass urdf_file to h12_state, and that value reaches this file too.
+ASSETS_DIR = os.environ.get('GOLEM_ASSETS_DIR', '/home/unitree/GOLEM/CL_Assets')
+LIDAR_FRAME = 'livox_link'    # /livox/lidar's points
+IMU_FRAME = 'livox_imu_link'  # /livox/imu, FAST-LIO's 'body'
+
+
+def _fast_lio(context, config_dir, fast_lio_config_file, use_sim_time):
+    """FAST-LIO and its body -> pelvis TF, both from the URDF's MID360 frames."""
+    with open(LaunchConfiguration('urdf_file').perform(context)) as f:
+        urdf = f.read()
+    # FAST-LIO's extrinsic: the lidar in the IMU frame
+    r_il, t_il = fixed_transform(urdf, IMU_FRAME, LIDAR_FRAME)
+    fast_lio_node = Node(
+        package='fast_lio',
+        executable='fastlio_mapping',
+        parameters=[PathJoinSubstitution([config_dir, fast_lio_config_file]),
+                    {'use_sim_time': use_sim_time,
+                     'mapping.extrinsic_T': [float(v) for v in t_il],
+                     'mapping.extrinsic_R': [float(v) for v in r_il.flatten()]}],
+        output='screen'
+    )
+    # FAST-LIO publishes camera_init -> body, body being the IMU frame. Hang the robot
+    # off it by the pelvis's pose in that frame, torso_joint at zero.
+    r_bp, t_bp = fixed_transform(urdf, IMU_FRAME, 'pelvis')
+    qx, qy, qz, qw = matrix_to_quat(r_bp)
+    static_tf_broadcaster = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='body_to_pelvis_broadcaster',
+        arguments=['--x', str(t_bp[0]), '--y', str(t_bp[1]), '--z', str(t_bp[2]),
+                   '--qx', str(qx), '--qy', str(qy), '--qz', str(qz), '--qw', str(qw),
+                   '--frame-id', 'body', '--child-frame-id', 'pelvis'],
+        output='screen'
+    )
+    return [fast_lio_node, static_tf_broadcaster]
 
 
 def generate_launch_description():
@@ -38,39 +77,14 @@ def generate_launch_description():
         description='Full path to the slam_toolbox parameters file'
     )
 
-    # FAST-LIO. Subscribes to /livox/lidar and /livox/imu per mid360.yaml.
-    # Assumes the Livox driver (or its sim equivalent) is already publishing them.
-    fast_lio_node = Node(
-        package='fast_lio',
-        executable='fastlio_mapping',
-        parameters=[PathJoinSubstitution([config_dir, fast_lio_config_file]),
-                    {'use_sim_time': use_sim_time}],
-        output='screen'
+    declare_urdf_file = DeclareLaunchArgument(
+        'urdf_file',
+        default_value=os.path.join(ASSETS_DIR, 'ros_assets', 'h1_2_magpie_ros.urdf'),
+        description='Robot URDF: FAST-LIO extrinsic and body -> pelvis from its MID360 frames'
     )
-
-    # Attach FAST-LIO's 'body' frame to H1's 'pelvis' frame.
-    #
-    # FAST-LIO publishes camera_init -> body where 'body' is the IMU frame
-    # (livox_imu_site in MJCF, which sits at the origin of livox_link).
-    # So body == livox_link at startup. The URDF places livox_link on torso_link at
-    #   xyz=(0.04874, 0, 0.67980) rpy=(0, 0.1642, 0)
-    # (see CL_Assets/ros_assets/h1_2_magpie_ros.urdf, livox_joint), and torso_joint
-    # sits at the pelvis origin with identity rotation.
-    #
-    # Inverting that transform (body -> pelvis):
-    #   rotation: RotY(-0.1642)
-    #   translation: -RotY(-0.1642) * (0.04874, 0, 0.67980)
-    #              ≈ (0.06304, 0.0, -0.67862)
-    # Keep these numbers in step with livox_joint.
-    static_tf_broadcaster = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='body_to_pelvis_broadcaster',
-        arguments=['0.06304', '0.0', '-0.67862',
-                   '0.0', '-0.1642', '0.0',
-                   'body', 'pelvis'],
-        output='screen'
-    )
+    # FAST-LIO (/livox/lidar and /livox/imu per mid360.yaml) and body -> pelvis.
+    fast_lio = OpaqueFunction(function=_fast_lio,
+                              args=[config_dir, fast_lio_config_file, use_sim_time])
 
     # Gravity-aligned, floor-referenced odom -> camera_init (static, computed
     # once at startup: up from the IMU while the robot stands still, floor
@@ -200,8 +214,8 @@ def generate_launch_description():
         declare_fast_lio_config_file,
         declare_nav2_params_file,
         declare_slam_params_file,
-        fast_lio_node,
-        static_tf_broadcaster,
+        declare_urdf_file,
+        fast_lio,
         level_odom_node,
         self_filter_node,
         octomap_node,

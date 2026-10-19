@@ -146,6 +146,35 @@ def link_collision_points(urdf_xml):
     return links
 
 
+def fixed_transform(urdf_xml, parent, child):
+    """(rotation, translation) of link `child` in link `parent`, every joint at zero.
+
+    Both links must hang off one tree; the path between them may run through movable
+    joints, which count at their zero position.
+    """
+    root = ET.fromstring(urdf_xml)
+    up = {}   # child link -> (parent link, rotation, translation) of its joint origin
+    for joint in root.findall('joint'):
+        origin = joint.find('origin')
+        xyz = _parse_floats(origin.get('xyz') if origin is not None else None, [0.0, 0.0, 0.0])
+        rpy = _parse_floats(origin.get('rpy') if origin is not None else None, [0.0, 0.0, 0.0])
+        up[joint.find('child').get('link')] = (joint.find('parent').get('link'),
+                                               rpy_to_matrix(*rpy), xyz)
+
+    def pose_in_root(link):
+        rot, trans = np.eye(3), np.zeros(3)
+        while link in up:
+            link, r, t = up[link]
+            rot, trans = r @ rot, r @ trans + t
+        return link, rot, trans
+
+    root_p, rot_p, trans_p = pose_in_root(parent)
+    root_c, rot_c, trans_c = pose_in_root(child)
+    if root_p != root_c:
+        raise ValueError(f'{parent!r} and {child!r} are not in one URDF tree')
+    return rot_p.T @ rot_c, rot_p.T @ (trans_c - trans_p)
+
+
 def link_boxes(urdf_xml, padding):
     """{link name: (lo, hi)} padded axis-aligned boxes in each link's frame."""
     return {name: (pts.min(axis=0) - padding, pts.max(axis=0) + padding)

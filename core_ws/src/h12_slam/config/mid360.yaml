@@ -3,12 +3,13 @@
 # (correlllab/fast_lio_nav2_humanoid fast_lio_nav2_integration/config/mid360.yaml)
 # except where noted inline.
 #
-# The identity extrinsic_R requires /livox/imu in the same upright frame as the
-# points. The sims publish both from co-located upright sites. On the real robot
-# the stock livox_ros_driver2 rotates only the points by MID360_config.json's
-# extrinsic (roll 180, the lidar is mounted inverted), so h12_real_drivers.launch.py
-# routes the IMU through livox_imu_upright. FAST-LIO seeds camera_init from the
-# IMU attitude at startup, so an inverted IMU puts the whole map upside down.
+# The extrinsic (URDF livox_link in livox_imu_link, under a degree from identity)
+# requires /livox/imu upright like the points. The sims publish both from the
+# MJCF's livox_site and livox_imu_site. On the real robot the stock livox_ros_driver2
+# rotates only the points by MID360_config.json's extrinsic (roll 180, the lidar is
+# mounted inverted), so h12_real_drivers.launch.py routes the IMU through
+# livox_imu_upright. FAST-LIO seeds camera_init from the IMU attitude at startup, so
+# an inverted IMU puts the whole map upside down.
 /**:
     ros__parameters:
         feature_extract_enable: false
@@ -47,14 +48,8 @@
             fov_degree:    360.0
             det_range:     100.0
             extrinsic_est_en:  true      # true: enable the online estimation of IMU-LiDAR extrinsic
-            # lidar origin in the IMU frame, m: the real MID360's IMU-in-lidar (11.0, 23.29,
-            # -44.12) mm (Livox spec), inverted and with y, z flipped by the roll 180 both
-            # streams arrive in. The sims put the IMU at the lidar origin; extrinsic_est_en
-            # absorbs the 5 cm there.
-            extrinsic_T: [ -0.011, 0.02329, -0.04412 ]
-            extrinsic_R: [ 1., 0., 0.,
-                            0., 1., 0.,
-                            0., 0., 1.]
+            # extrinsic_T / extrinsic_R (the lidar in the IMU frame) come from the URDF's
+            # livox_link and livox_imu_link: h12_navigation.launch.py sets them.
 
         publish:
             path_en: true                # true: publish Path

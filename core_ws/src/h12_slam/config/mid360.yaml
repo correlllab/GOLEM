@@ -47,7 +47,11 @@
             fov_degree:    360.0
             det_range:     100.0
             extrinsic_est_en:  true      # true: enable the online estimation of IMU-LiDAR extrinsic
-            extrinsic_T: [ -0.011, -0.02329, 0.04412 ]
+            # lidar origin in the IMU frame, m: the real MID360's IMU-in-lidar (11.0, 23.29,
+            # -44.12) mm (Livox spec), inverted and with y, z flipped by the roll 180 both
+            # streams arrive in. The sims put the IMU at the lidar origin; extrinsic_est_en
+            # absorbs the 5 cm there.
+            extrinsic_T: [ -0.011, 0.02329, -0.04412 ]
             extrinsic_R: [ 1., 0., 0.,
                             0., 1., 0.,
                             0., 0., 1.]

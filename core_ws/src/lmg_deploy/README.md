@@ -25,7 +25,7 @@ release) and uses the same heartbeat watchdog.
 | `lmg_deploy/livox_attitude.py` | the policy's attitude from FAST-LIO's `/Odometry`, carried by the gyro, levelled at the pre-pose |
 | `lmg_deploy/marl_deploy_node.py` | the ROS node: safety channels, heartbeat, pre-pose, band, operator interface |
 | `config/policy_template.yaml` | the deploy config a new policy starts from: joint order, defaults, gains, scales, bounds, command ranges (each from the training env), and the SLAM body frame |
-| `policies/<name>/<name>.yaml`, `{legs,arms}.pt`, `export.yaml` | a policy: its deploy config and what the export writes, below; the `.pt` files in Git LFS (`policies/.gitattributes`). Empty since 10-19 (Explicit500, Tune3Track2 and Mid360 were removed for the next training run) |
+| `policies/<name>/<name>.yaml`, `{legs,arms}.pt`, `export.yaml` | a policy: its deploy config and what the export writes, below; the `.pt` files in Git LFS (`policies/.gitattributes`). Mid360v2 since 10-20 (Explicit500, Tune3Track2 and Mid360 were removed 10-19) |
 | `bags/<name>/` | rosbag2 recordings of Explicit500 on the real robot (`policy_bag_walk`: walking to nav2 goals; `reach`: an arm goal, ended by the hardware e-stop), the `.db3` files in Git LFS |
 | `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, SLAM odometry, modes) on `test/data/explicit500.yaml`, Explicit500's deploy config |
 | `test/sim_drive.py` | a scripted drive in the Robocasa sim (stand, walk, turn, side-step, arm goal), measured on FAST-LIO's `/Odometry` |
@@ -77,7 +77,7 @@ python scripts/skrl/deploy_parity.py --headless --checkpoint <same> \
 `h12_bringup/launch/lmg_sim_bringup.launch.py` starts everything (the policy node comes from the shared
 block `h12_locomanipulationgame.launch.py`):
 - the state publishers;
-- the split safety layer with the real robot's preset (`relax_safety_split`);
+- the split safety layer with the real robot's preset (`relax_safety_split`; ankle pitch torque e-stop 95 Nm since 10-20, sport mode peaks at 93);
 - `marl_deploy_node` with `policies/<policy>/`;
 - SLAM: `h12_slam/launch/h12_navigation.launch.py` (FAST-LIO, the pelvis-height laser scan, slam_toolbox and nav2).
   FAST-LIO's `/Odometry` is what keeps the arm goals fixed in the world.

@@ -3,7 +3,8 @@
 Run in the ROS container with lmg_sim_bringup policy:=<name> up (any non-zero ROS_DOMAIN_ID):
     python3 sim_drive.py [--out /tmp/sim_drive.json]
 
-Confirms the engage, then stands, walks, turns, side-steps, reaches a world-fixed arm goal and walks again. For each
+Confirms the engage, then stands, walks backward and forward, turns, side-steps, reaches a world-fixed arm goal and
+walks again. For each
 phase it reports the commanded velocity, the head IMU's mean heading-frame velocity and yaw rate (FAST-LIO's body,
 differenced over 0.5 s windows), the cosine between commanded and actual planar velocity, the largest height drop and
 tilt from standing, the node's states and the wrist errors. camera_init is levelled as h12_slam level_odom does it:
@@ -21,23 +22,28 @@ import rclpy
 from geometry_msgs.msg import Pose, PoseArray, Twist
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Float32MultiArray, String
 from std_srvs.srv import Trigger
 
 # (label, seconds, (vx, vy, wz)) or (label, seconds, "arm")
+# The Robocasa spawn faces a fixture about 0.5 m ahead with open floor behind (h1_2_robosuite place_robot_clear):
+# back up first, then walk forward over the same ground.
 PHASES = [
     ("stand", 4.0, (0.0, 0.0, 0.0)),
-    ("walk forward 0.3", 8.0, (0.3, 0.0, 0.0)),
+    ("walk backward 0.3", 6.0, (-0.3, 0.0, 0.0)),
+    ("walk forward 0.3", 5.0, (0.3, 0.0, 0.0)),
+    ("stop", 2.0, (0.0, 0.0, 0.0)),
     ("turn left 0.4", 6.0, (0.0, 0.0, 0.4)),
     ("turn right 0.4", 6.0, (0.0, 0.0, -0.4)),
-    ("walk sideways 0.2", 6.0, (0.0, 0.2, 0.0)),
-    ("walk forward + turn", 8.0, (0.3, 0.0, 0.3)),
-    ("stop", 3.0, (0.0, 0.0, 0.0)),
-    ("arm goal (world-fixed)", 8.0, "arm"),
-    ("walk forward 0.3 again", 6.0, (0.3, 0.0, 0.0)),
+    ("walk backward + turn", 6.0, (-0.3, 0.0, 0.3)),
+    ("walk sideways left 0.2", 4.0, (0.0, 0.2, 0.0)),
+    ("walk sideways right 0.2", 4.0, (0.0, -0.2, 0.0)),
     ("stop again", 3.0, (0.0, 0.0, 0.0)),
+    ("arm goal (world-fixed)", 8.0, "arm"),
+    ("walk backward 0.3 again", 5.0, (-0.3, 0.0, 0.0)),
+    ("stop at the end", 3.0, (0.0, 0.0, 0.0)),
 ]
 ARM_GOAL = [(0.30, 0.25, 0.05), (0.30, -0.25, 0.05)]  # left, right wrist, pelvis frame (README example)
 
@@ -61,7 +67,9 @@ class Driver(Node):
         self.wrist = []         # (t, left, right)
         self.create_subscription(Odometry, "/Odometry", self._on_odom, 50)
         self.create_subscription(Imu, "/livox/imu", self._on_imu, qos_profile_sensor_data)
-        self.create_subscription(String, "/marl_deploy_node/state", self._on_state, 10)
+        latched = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                             history=HistoryPolicy.KEEP_LAST, depth=1)   # as the node publishes ~/state
+        self.create_subscription(String, "/marl_deploy_node/state", self._on_state, latched)
         self.create_subscription(Float32MultiArray, "/marl_deploy_node/wrist_error", self._on_wrist, 10)
         self.pub_cmd = self.create_publisher(Twist, "/cmd_vel", 10)
         self.pub_goal = self.create_publisher(PoseArray, "/marl_deploy_node/arm_goal", 10)
@@ -186,12 +194,13 @@ def main():
     log = {"events": [], "phases": []}
     t_start = time.monotonic()
     # wait for the node to pre-pose and level its attitude, then confirm
-    while time.monotonic() - t_start < args.engage_timeout and d.state != "waiting_confirm":
+    while time.monotonic() - t_start < args.engage_timeout and d.state not in ("waiting_confirm", "nav"):
         d.spin_for(0.5)
         if d.state.startswith("fault"):
             break
     log["events"].append(f"t={time.monotonic() - t_start:.1f}s state {d.state!r} before confirm")
-    log["events"].append(d.call(d.cli_confirm, "confirm_engage"))
+    if d.state != "nav":
+        log["events"].append(d.call(d.cli_confirm, "confirm_engage"))
     t_wait = time.monotonic()
     while time.monotonic() - t_wait < 30.0 and d.state != "nav":
         d.spin_for(0.5)

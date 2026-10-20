@@ -301,7 +301,7 @@ by the SLAM odometry, so keep `use_slam` on). You drive it yourself (see
 `lmg_deploy/README.md` for all launch arguments):
 
 ```bash
-ros2 launch h12_bringup lmg_sim_bringup.launch.py   # Explicit500
+ros2 launch h12_bringup lmg_sim_bringup.launch.py policy:=<name>   # a policies/<name>/ of lmg_deploy
 ```
 
 Walk:

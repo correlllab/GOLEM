@@ -1,14 +1,13 @@
-# Deploy config for Explicit500: LocoManip-Marl-Direct-v0 (Locomanipulation_game, branch marl-direct, after 7389a0b,
-# with the task code of 10-15), agent_196800. LSTM actors (64 units, then [256, 128, 64] on the LSTM's output and the
-# raw observation), running observation normalization, explicit PD at 500 Hz in training (policy 50 Hz), a 0-20 ms
-# target delay, pushes and rough terrain (up to +-5 cm) in training only, joint targets clipped into GOLEM's position
-# e-stop range (export.yaml target_limits) and bounded to 85% of the effort limit. On the robot the arm goals stay put
-# in the world by the SLAM pipeline's odometry (slam_frame below). No settle at a mode switch. Every other value mirrors
-# the training env; the source is named on each block.
-# Locomanipulation_game scripts/skrl/export_marl.py writes the networks and export.yaml next to this file; export.yaml's
-# keys (rest_pose, target_limits, source) override the ones here.
+# Deploy config template for a policy exported from Locomanipulation_game (LocoManip-Marl-Direct-v0, branch
+# marl-direct): copy it to policies/<name>/<name>.yaml next to the export (legs.pt, arms.pt, export.yaml) and check
+# legs.num_obs / arms.num_obs against the sizes export_marl.py prints (97 / 125 with gait_phase_cos, 95 / 123 without).
+# export.yaml's keys (rest_pose, target_limits, gait_phase_cos, imu, source) override the ones here. The values are
+# Mid360's (marl-direct 7fca440, the first run on the measured MID-360 mount, CL_Assets ed592de): the Explicit500
+# setup (LSTM actors, explicit PD at 500 Hz, 0-20 ms target delay, GOLEM e-stop target clip, 85% torque headroom)
+# with its ankle-roll target clip; the source is named on each block. A run with different gains, scales, bounds or
+# command ranges needs them changed here.
 
-control_dt: 0.02            # decimation 10 x sim dt 0.002 (Explicit500: env.sim.dt=0.002 env.decimation=10)
+control_dt: 0.02            # decimation 10 x sim dt 0.002 (env.sim.dt=0.002 env.decimation=10)
 
 # Policy joint order = Unitree motor order 0..26 (assets/h1_2.py ALL_JOINTS_NAMES)
 joint_names: [
@@ -61,13 +60,13 @@ torque_headroom: 0.85       # then: kp (target - q) - kd dq within this share of
 
 legs:
   policy: legs.pt
-  num_obs: 95
+  num_obs: 97               # 95 + each leg's gait phase cos
   num_actions: 12
   action_scale: 0.25        # target = scale * action + default
 
 arms:
   policy: arms.pt
-  num_obs: 123
+  num_obs: 125
   num_actions: 14
   residual_scale: 0.2       # target = q + IK step + scale * residual
   residual_cutoff_hz: 3.0   # residual = the action low-passed (one pole, per policy step); the arms observe it
@@ -75,9 +74,11 @@ arms:
   ik_damping: 0.05
   max_ik_step: 0.1          # rad per joint per policy step
 
-# FAST-LIO's body frame (/Odometry, camera_init -> body): the MID360's, livox_link in the URDF. Forward kinematics
-# takes its pose to the pelvis, through the torso joint.
-slam_frame: livox_link
+# FAST-LIO's body frame (/Odometry, camera_init -> body): the MID360's IMU chip, livox_imu_link in the URDF, the
+# frame FAST-LIO integrates /livox/imu in (h12_slam mid360.yaml; the lidar extrinsic is livox_link in it). Forward
+# kinematics takes its pose to the pelvis, through the torso joint. Configs before 10-19 named livox_link, 5 cm and
+# 0.7 deg away.
+slam_frame: livox_imu_link
 
 # Gait clock (manager_based mdp/rewards.py)
 gait_period: 0.8

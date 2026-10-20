@@ -21,7 +21,7 @@ order (locomanip_marl_env.py _get_observations, then _pre_physics_step):
      (mdp.actions.torque_bounds).
 
 Odometry is the SLAM pipeline's: set_slam_pose() takes FAST-LIO's body pose
-(camera_init -> body, the lidar frame, slam_frame in the config) and forward
+(camera_init -> body, the IMU frame FAST-LIO integrates, livox_imu_link: slam_frame in the config) and forward
 kinematics carries it to the pelvis through the torso joint. Each new pose
 moves the arm command by the pelvis's motion since the previous one; between
 SLAM poses (10 Hz against the 50 Hz policy) the command holds still in the

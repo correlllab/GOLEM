@@ -29,8 +29,9 @@ def generate_launch_description():
         # verified the robot is in a safe start position.
         DeclareLaunchArgument('start_position_verified', default_value='false',
                               description='Start marl_deploy_node'),
-        DeclareLaunchArgument('policy', default_value='explicit500',
-                              description='policies/<name>/ of lmg_deploy: <name>.yaml plus the export'),
+        DeclareLaunchArgument('policy',
+                              description='policies/<name>/ of lmg_deploy: <name>.yaml plus the export (required: '
+                                          'lmg_deploy ships none)'),
         DeclareLaunchArgument('engage_wait_for_confirm', default_value='true',
                               description='hold the pre-pose until ~/confirm_engage'),
         DeclareLaunchArgument('prepose_ramp_s', default_value='6.0',

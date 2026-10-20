@@ -1,14 +1,16 @@
-# Deploy config for Mid360: LocoManip-Marl-Direct-v0 (Locomanipulation_game, branch marl-direct, commit 7fca440), agent_48000
-# of a 50k-step run, the first on the measured MID-360 mount (CL_Assets ed592de). The node must match three things, all from
-# export.yaml: the IMU is the MID-360's chip, imu.frame livox_imu_link (/livox/imu as it arrives; attitude from FAST-LIO,
-# see marl_deploy_node "IMU"); its gyro passes the 8 Hz GyroLowpass the run trained with (imu.gyro_lowpass_hz); and the
-# actors observe each leg's gait phase cos after its sin (gait_phase_cos: legs 97, arms 125 inputs). Training also
-# randomized the chip's mount (pitch +-1.5, roll and yaw +-0.75 deg) and its accelerometer's horizontal bias (+-0.01 g).
-# Every other value is Tune3Track2's (Explicit500's, with its ankle-roll target clip); the source is named on each block.
+# The unit tests' controller config: Explicit500's deploy config (legs 95 / arms 123), kept when its policy was
+# removed from policies/ (10-19). The tests run it with stand-in networks; nothing deploys it.
+# Deploy config for Explicit500: LocoManip-Marl-Direct-v0 (Locomanipulation_game, branch marl-direct, after 7389a0b,
+# with the task code of 10-15), agent_196800. LSTM actors (64 units, then [256, 128, 64] on the LSTM's output and the
+# raw observation), running observation normalization, explicit PD at 500 Hz in training (policy 50 Hz), a 0-20 ms
+# target delay, pushes and rough terrain (up to +-5 cm) in training only, joint targets clipped into GOLEM's position
+# e-stop range (export.yaml target_limits) and bounded to 85% of the effort limit. On the robot the arm goals stay put
+# in the world by the SLAM pipeline's odometry (slam_frame below). No settle at a mode switch. Every other value mirrors
+# the training env; the source is named on each block.
 # Locomanipulation_game scripts/skrl/export_marl.py writes the networks and export.yaml next to this file; export.yaml's
-# keys (rest_pose, target_limits, gait_phase_cos, imu, source) override the ones here.
+# keys (rest_pose, target_limits, source) override the ones here.
 
-control_dt: 0.02            # decimation 10 x sim dt 0.002 (env.sim.dt=0.002 env.decimation=10)
+control_dt: 0.02            # decimation 10 x sim dt 0.002 (Explicit500: env.sim.dt=0.002 env.decimation=10)
 
 # Policy joint order = Unitree motor order 0..26 (assets/h1_2.py ALL_JOINTS_NAMES)
 joint_names: [
@@ -61,13 +63,13 @@ torque_headroom: 0.85       # then: kp (target - q) - kd dq within this share of
 
 legs:
   policy: legs.pt
-  num_obs: 97               # 95 + each leg's gait phase cos
+  num_obs: 95
   num_actions: 12
   action_scale: 0.25        # target = scale * action + default
 
 arms:
   policy: arms.pt
-  num_obs: 125
+  num_obs: 123
   num_actions: 14
   residual_scale: 0.2       # target = q + IK step + scale * residual
   residual_cutoff_hz: 3.0   # residual = the action low-passed (one pole, per policy step); the arms observe it

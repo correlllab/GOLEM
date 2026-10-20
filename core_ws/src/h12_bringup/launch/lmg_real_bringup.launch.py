@@ -45,7 +45,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('start_position_verified', default_value='false'),
-        DeclareLaunchArgument('policy', default_value='explicit500'),
+        DeclareLaunchArgument('policy', description='policies/<name>/ of lmg_deploy (required)'),
         DeclareLaunchArgument('prepose_ramp_s', default_value='6.0'),
         DeclareLaunchArgument('prepose_max_vel', default_value='0.25'),
         # Startup trim of the policy's IMU, the MID360 (/livox/imu): its reading with the torso

@@ -1,10 +1,9 @@
 # lmg_deploy (LocoMotionGameDeploy)
 
-Runs the two-agent MARL policy from Locomanipulation_game (branch
-`marl-direct`) on the H1-2: `policies/explicit500`, `Explicit500` of
-`LocoManip-Marl-Direct-v0` (agent_196800, 200k steps: LSTM actors, explicit PD
-at 500 Hz, a 0-20 ms target delay, pushes and rough terrain in training; the
-legs crouch for low goals). A
+Runs a two-agent MARL policy from Locomanipulation_game (branch `marl-direct`,
+`LocoManip-Marl-Direct-v0`: LSTM actors, explicit PD at 500 Hz, a 0-20 ms target
+delay in training) on the H1-2. No policy ships with the package: export one into
+`policies/<name>/` (below) and launch with `policy:=<name>`. A
 **legs** agent that walks on `/cmd_vel`, and an **arms** agent that reaches
 wrist-pose goals through a damped-least-squares IK step plus a learned
 residual. One node, `marl_deploy_node`, owns all 27 joints. It publishes
@@ -25,26 +24,30 @@ release) and uses the same heartbeat watchdog.
 | `lmg_deploy/livox_imu.py` | `/livox/imu` into the policy's IMU frame: the gyro low-pass, the specific force, and a complementary-filter attitude (the fallback, or `livox_attitude:=filter`) |
 | `lmg_deploy/livox_attitude.py` | the policy's attitude from FAST-LIO's `/Odometry`, carried by the gyro, levelled at the pre-pose |
 | `lmg_deploy/marl_deploy_node.py` | the ROS node: safety channels, heartbeat, pre-pose, band, operator interface |
-| `policies/explicit500/explicit500.yaml` | deploy config: joint order, defaults, gains, scales, bounds, command ranges (each from the training env), and the SLAM body frame |
-| `policies/explicit500/{legs,arms}.pt`, `export.yaml` | written by the export, below; the `.pt` files in Git LFS (`policies/.gitattributes`) |
-| `policies/mid360/` | Mid360's agent_48000 (Locomanipulation_game marl-direct, 50k steps): the first run on the measured MID-360 mount, IMU `livox_imu_link`, gyro low-pass 8 Hz, `gait_phase_cos` |
+| `config/policy_template.yaml` | the deploy config a new policy starts from: joint order, defaults, gains, scales, bounds, command ranges (each from the training env), and the SLAM body frame |
+| `policies/<name>/<name>.yaml`, `{legs,arms}.pt`, `export.yaml` | a policy: its deploy config and what the export writes, below; the `.pt` files in Git LFS (`policies/.gitattributes`). Empty since 10-19 (Explicit500, Tune3Track2 and Mid360 were removed for the next training run) |
 | `bags/<name>/` | rosbag2 recordings of Explicit500 on the real robot (`policy_bag_walk`: walking to nav2 goals; `reach`: an arm goal, ended by the hardware e-stop), the `.db3` files in Git LFS |
-| `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, SLAM odometry, modes) |
+| `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, SLAM odometry, modes) on `test/data/explicit500.yaml`, Explicit500's deploy config |
+| `test/sim_drive.py` | a scripted drive in the Robocasa sim (stand, walk, turn, side-step, arm goal), measured on FAST-LIO's `/Odometry` |
 | `test/test_livox_imu.py`, `test/test_livox_attitude.py` | unit tests of the two `/livox/imu` attitude paths, the gyro low-pass and the URDF mount |
 | `custom_ros_messages/srv/Lmg*.srv` | the node's services: `LmgSetMode` (walk / arm), `LmgSetArmGoals` (left, right pose) |
 
 ## Exporting a checkpoint
 
-`policies/explicit500` holds Explicit500's export. Its networks are Git LFS files: after cloning, `git lfs install`
-once and `git lfs pull` fetch them.
+A policy's networks are Git LFS files: after cloning, `git lfs install` once and `git lfs pull` fetch them.
 
 These commands are run in Locomanipulation_game. Exporting needs only torch, no simulator:
 
 ```bash
-P=<GOLEM>/core_ws/src/lmg_deploy/policies/explicit500
+P=<GOLEM>/core_ws/src/lmg_deploy/policies/<name>
 python scripts/skrl/export_marl.py --checkpoint logs/skrl/locomanip_marl/<run>/checkpoints/agent_<step>.pt \
   --out $P
+cp <GOLEM>/core_ws/src/lmg_deploy/config/policy_template.yaml $P/<name>.yaml   # then check its num_obs, below
+rm $P/estimator.pt
 ```
+
+Then rebuild the package (`colcon build --symlink-install --packages-select lmg_deploy`) so `policy:=<name>`
+resolves.
 
 It writes:
 - `legs.pt` and `arms.pt`: the observation scaler, the network and the ±10 clamp. An LSTM actor exports as
@@ -75,7 +78,7 @@ python scripts/skrl/deploy_parity.py --headless --checkpoint <same> \
 block `h12_locomanipulationgame.launch.py`):
 - the state publishers;
 - the split safety layer with the real robot's preset (`relax_safety_split`);
-- `marl_deploy_node` with `policies/explicit500/`;
+- `marl_deploy_node` with `policies/<policy>/`;
 - SLAM: `h12_slam/launch/h12_navigation.launch.py` (FAST-LIO, the pelvis-height laser scan, slam_toolbox and nav2).
   FAST-LIO's `/Odometry` is what keeps the arm goals fixed in the world.
 
@@ -88,11 +91,11 @@ export ROS_DOMAIN_ID=42
 docker/scripts/docker_run.sh robocasa env GOLEM_SPAWN_BACKOFF=0.3 \
     /home/code/h12_sim_scripts/launch_robocasa.sh --headless --task AirDryFruit --layout 1 --seed 42   # terminal 1
 docker/scripts/docker_run.sh ros                                                                     # terminal 2, then:
-ros2 launch h12_bringup lmg_sim_bringup.launch.py
+ros2 launch h12_bringup lmg_sim_bringup.launch.py policy:=<name>
 ```
 
 **Launch arguments:** `use_slam` (default `true`; with `false` the arm goals ride with the pelvis and the node warns),
-`use_rviz`, `policy` (a directory under `policies/`, default `explicit500`), `prepose_ramp_s`, `prepose_max_vel`,
+`use_rviz`, `policy` (a directory under `policies/`, required), `prepose_ramp_s`, `prepose_max_vel`,
 `safety_config`.
 
 **Driving it** (from `docker exec -it golem_ros bash`). The node starts in walking mode once engaged:
@@ -120,10 +123,10 @@ ros2 topic echo /marl_deploy_node/wrist_error   # m, left and right
 ```
 
 **Arm goals.**
-- An arm goal stops the robot and reaches at once (`settle_to_arm_s` and `settle_to_nav_s` are 0 for Explicit500).
+- An arm goal stops the robot and reaches at once (`settle_to_arm_s` and `settle_to_nav_s` are 0 in the template).
 - The goal is a `left_wrist_yaw_link` and `right_wrist_yaw_link` pose in the pelvis frame, taken when it arrives.
   The SLAM odometry keeps it fixed in the world from then on: each FAST-LIO pose (`/Odometry`, camera_init -> body,
-  ~10 Hz) is carried from the lidar (`slam_frame: livox_link`) to the pelvis by forward kinematics, through the
+  ~10 Hz) is carried from FAST-LIO's body, the IMU it integrates (`slam_frame: livox_imu_link`), to the pelvis by forward kinematics, through the
   torso joint, and the goal moves by the pelvis's motion since the previous one. Training used a learned estimator
   instead; with no fresh `/Odometry` while reaching the node warns and the goal stays fixed to the pelvis.
 - `/cmd_vel` is ignored during an arm goal; the policy only ever saw a zero command there.
@@ -137,8 +140,8 @@ controllers off.
 
 ```bash
 export ROS_DOMAIN_ID=0
-ros2 launch h12_bringup lmg_real_bringup.launch.py                                # sensors, safety, SLAM
-ros2 launch h12_bringup lmg_real_bringup.launch.py start_position_verified:=true  # + the policy node
+ros2 launch h12_bringup lmg_real_bringup.launch.py policy:=<name>                                # sensors, safety, SLAM
+ros2 launch h12_bringup lmg_real_bringup.launch.py policy:=<name> start_position_verified:=true  # + the policy node
 ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger          # engage
 ```
 

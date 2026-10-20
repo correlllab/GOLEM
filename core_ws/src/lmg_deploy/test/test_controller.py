@@ -19,7 +19,7 @@ from lmg_deploy.kinematics import ArmKinematics
 from lmg_deploy.networks import ZeroNetwork
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CFG_PATH = os.path.join(HERE, "..", "policies", "explicit500", "explicit500.yaml")
+CFG_PATH = os.path.join(HERE, "data", "explicit500.yaml")   # Explicit500's deploy config, legs 95 / arms 123
 URDF = os.environ.get(
     "H12_URDF", os.path.join(HERE, "..", "..", "..", "..", "CL_Assets", "ros_assets", "h1_2_magpie.urdf"))
 RNG = np.random.default_rng(0)

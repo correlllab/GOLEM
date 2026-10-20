@@ -102,7 +102,6 @@ import numpy as np
 import rclpy
 import torch
 import yaml
-from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseArray, Twist
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
@@ -146,14 +145,10 @@ IMU_OFFSET_RANGE_DEG = 15.0
 SLAM_STALE_S = 0.5          # /Odometry older than this while reaching: warn that the goals ride with the pelvis
 
 
-def _share(*parts: str) -> str:
-    return os.path.join(get_package_share_directory("lmg_deploy"), *parts)
-
-
 class MarlDeployNode(Node):
     def __init__(self):
         super().__init__("marl_deploy_node")
-        self.declare_parameter("config", _share("policies", "explicit500", "explicit500.yaml"))
+        self.declare_parameter("config", "")   # the policy's yaml, policies/<name>/<name>.yaml (none ships)
         self.declare_parameter("urdf_path", "/home/code/CL_Assets/ros_assets/h1_2_magpie.urdf")
         self.declare_parameter("control_hz", 50.0)
         self.declare_parameter("prepose_ramp_s", 6.0)     # s, minimum ramp duration
@@ -174,6 +169,9 @@ class MarlDeployNode(Node):
                     from_value=-IMU_OFFSET_RANGE_DEG, to_value=IMU_OFFSET_RANGE_DEG, step=0.0)]))
 
         cfg_path = self.get_parameter("config").value
+        if not cfg_path:
+            raise ValueError("config:= the policy's deploy yaml, policies/<name>/<name>.yaml (lmg_deploy ships no "
+                             "policy: export one, README 'Exporting a checkpoint')")
         with open(cfg_path) as f:
             cfg = yaml.safe_load(f)
         cfg_dir = os.path.dirname(os.path.abspath(cfg_path))

@@ -47,7 +47,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true'),
-        DeclareLaunchArgument('policy', default_value='explicit500'),
+        DeclareLaunchArgument('policy', description='policies/<name>/ of lmg_deploy (required)'),
         DeclareLaunchArgument('prepose_ramp_s', default_value='6.0'),
         DeclareLaunchArgument('prepose_max_vel', default_value='0.25'),
         DeclareLaunchArgument('safety_config', default_value='relax_safety_split.yaml'),

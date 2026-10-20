@@ -84,7 +84,7 @@ def test_urdf_mount_is_the_livox_pitch():
         pytest.skip(f"no URDF at {URDF}")
     from lmg_deploy.kinematics import ArmKinematics
     import yaml
-    with open(os.path.join(HERE, "..", "policies", "explicit500", "explicit500.yaml")) as f:
+    with open(os.path.join(HERE, "data", "explicit500.yaml")) as f:
         cfg = yaml.safe_load(f)
     names = cfg["joint_names"]
     kin = ArmKinematics(URDF, joint_names=names, ee_frames=cfg["arms"]["ee_frames"],
@@ -143,3 +143,12 @@ def test_lowpass_filters_the_rate_not_the_attitude():
         _feed(imu, att, r, 1.0, 400, gyro_imu=np.array([0.0, 0.0, 0.3]))
     np.testing.assert_allclose(filt.quat(), raw.quat(), atol=1e-12)
     np.testing.assert_allclose(filt.gyro, raw.gyro, atol=1e-6)   # a steady rate passes unchanged
+
+
+def test_template_slam_frame_is_fastlio_body():
+    """New policies' slam_frame is FAST-LIO's body, the IMU frame it integrates /livox/imu in (livox_imu_link)."""
+    import yaml
+    from lmg_deploy.livox_imu import LIVOX_IMU_FRAME
+    with open(os.path.join(HERE, "..", "config", "policy_template.yaml")) as f:
+        cfg = yaml.safe_load(f)
+    assert cfg["slam_frame"] == LIVOX_IMU_FRAME

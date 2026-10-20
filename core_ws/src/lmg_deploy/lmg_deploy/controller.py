@@ -6,7 +6,9 @@ order (locomanip_marl_env.py _get_observations, then _pre_physics_step):
   1. pelvis odometry: move the arm command by how the pelvis moved since the
      last SLAM pose (ArmTargetsCommand.apply_pelvis_motion);
   2. commands: advance the settle timer, switch mode;
-  3. observations: the legs' (95) and the arms' (123);
+  3. observations: the legs' (95) and the arms' (123), 97 and 125 with
+     gait_phase_cos (each leg's phase cos after its sin; runs from
+     Tune3Track2 on);
   4. actions: clamp to +-clip, legs = scale * a + default, arms = q + IK step
      + residual_scale * r, both bounded to the hard limits +- target_margin
      (negative: inside them), narrowed to target_limits where it names a joint
@@ -105,6 +107,7 @@ class MarlController:
         self.max_ik_step = float(cfg["arms"]["max_ik_step"])
         self.gait_period = float(cfg["gait_period"])
         self.zero_cmd_eps = float(cfg["zero_cmd_eps"])
+        self.gait_phase_cos = bool(cfg.get("gait_phase_cos", False))   # export.yaml: the run observed the cos too
         ranges = cfg["command_ranges"]
         self.cmd_low = np.array([ranges["lin_vel_x"][0], ranges["lin_vel_y"][0], ranges["ang_vel_z"][0]])
         self.cmd_high = np.array([ranges["lin_vel_x"][1], ranges["lin_vel_y"][1], ranges["ang_vel_z"][1]])
@@ -285,10 +288,14 @@ class MarlController:
         return self.cmd_vel.copy() if self.mode == Mode.NAV else np.zeros(3)
 
     def _gait_phase(self, cmd: np.ndarray) -> np.ndarray:
+        """sin of each leg's phase, then (gait_phase_cos) the cos: both legs at phase 0 while standing."""
         if np.linalg.norm(cmd) < self.zero_cmd_eps:
-            return np.zeros(2)
-        phase = (self.steps * self.dt % self.gait_period) / self.gait_period
-        return np.sin(2.0 * np.pi * np.array([phase, (phase + 0.5) % 1.0]))
+            phase = np.zeros(2)
+        else:
+            p = (self.steps * self.dt % self.gait_period) / self.gait_period
+            phase = np.array([p, (p + 0.5) % 1.0])
+        angle = 2.0 * np.pi * phase
+        return np.concatenate([np.sin(angle), np.cos(angle)]) if self.gait_phase_cos else np.sin(angle)
 
     def _common_obs(self, state: RobotState) -> np.ndarray:
         cmd = self.velocity_command()

@@ -214,6 +214,25 @@ def test_gait_phase_zero_when_standing():
     np.testing.assert_allclose(legs.inputs[-1][81:83], 0.0)
 
 
+def test_gait_phase_cos():
+    """gait_phase_cos (runs from Tune3Track2 on): each leg's phase cos after its sin, legs 97 / arms 125 inputs; both
+    legs at phase 0 (sin 0, cos 1) while standing, as legs_rewards.leg_phase."""
+    legs, arms = ConstNetwork(np.zeros(12)), ConstNetwork(np.zeros(14))
+    ctrl, cfg = _controller(legs=legs, arms=arms, gait_phase_cos=True)
+    state = _state(cfg)
+    ctrl.reset(state)
+    ctrl.step(state)                                            # standing
+    lo, ao = legs.inputs[-1], arms.inputs[-1]
+    assert lo.shape == (97,) and ao.shape == (125,)
+    np.testing.assert_allclose(lo[81:85], [0.0, 0.0, 1.0, 1.0], atol=1e-12)
+    np.testing.assert_allclose(lo[:85], ao[:85])                # the shared ProprioCfg terms
+    ctrl.set_velocity_command(np.array([0.5, 0.0, 0.0]))
+    for _ in range(10):                                         # the 11th step sees t = 0.2 s: a quarter period
+        ctrl.step(state)
+    phase = 2.0 * np.pi * np.array([0.25, 0.75])
+    np.testing.assert_allclose(legs.inputs[-1][81:85], np.concatenate([np.sin(phase), np.cos(phase)]), atol=1e-9)
+
+
 def test_legs_action_mapping_and_last_action():
     action = np.full(12, 20.0)                  # beyond the clip
     legs = ConstNetwork(action)

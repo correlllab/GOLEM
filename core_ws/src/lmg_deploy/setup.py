@@ -13,9 +13,10 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        # The exported policy + its deploy config, installed under share/<pkg>/policies/<name>/.
-        (os.path.join('share', package_name, 'policies', 'explicit500'),
-            glob('policies/explicit500/*')),
+    ] + [
+        # Each exported policy + its deploy config, installed under share/<pkg>/policies/<name>/.
+        (os.path.join('share', package_name, 'policies', os.path.basename(d)), glob(os.path.join(d, '*')))
+        for d in sorted(glob('policies/*')) if os.path.isdir(d)
     ],
     install_requires=['setuptools'],
     zip_safe=True,

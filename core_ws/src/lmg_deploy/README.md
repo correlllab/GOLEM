@@ -18,15 +18,19 @@ release) and uses the same heartbeat watchdog.
 
 | File | What it is |
 |---|---|
-| `lmg_deploy/controller.py` | ROS-free env step: SLAM odometry → mode → observations (legs 95, arms 123) → joint targets |
+| `lmg_deploy/controller.py` | ROS-free env step: SLAM odometry → mode → observations (legs 95, arms 123; 97 and 125 with `gait_phase_cos`) → joint targets |
 | `lmg_deploy/kinematics.py` | Pinocchio wrist FK, Jacobian and IK step, in the pelvis frame |
 | `lmg_deploy/rotations.py` | numpy versions of the isaaclab.utils.math functions training used |
 | `lmg_deploy/networks.py` | TorchScript loader, and the zero stand-ins the unit tests use |
+| `lmg_deploy/livox_imu.py` | `/livox/imu` into the policy's IMU frame: the gyro low-pass, the specific force, and a complementary-filter attitude (the fallback, or `livox_attitude:=filter`) |
+| `lmg_deploy/livox_attitude.py` | the policy's attitude from FAST-LIO's `/Odometry`, carried by the gyro, levelled at the pre-pose |
 | `lmg_deploy/marl_deploy_node.py` | the ROS node: safety channels, heartbeat, pre-pose, band, operator interface |
 | `policies/explicit500/explicit500.yaml` | deploy config: joint order, defaults, gains, scales, bounds, command ranges (each from the training env), and the SLAM body frame |
 | `policies/explicit500/{legs,arms}.pt`, `export.yaml` | written by the export, below; the `.pt` files in Git LFS (`policies/.gitattributes`) |
+| `policies/mid360/` | Mid360's agent_48000 (Locomanipulation_game marl-direct, 50k steps): the first run on the measured MID-360 mount, IMU `livox_imu_link`, gyro low-pass 8 Hz, `gait_phase_cos` |
 | `bags/<name>/` | rosbag2 recordings of Explicit500 on the real robot (`policy_bag_walk`: walking to nav2 goals; `reach`: an arm goal, ended by the hardware e-stop), the `.db3` files in Git LFS |
 | `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, SLAM odometry, modes) |
+| `test/test_livox_imu.py`, `test/test_livox_attitude.py` | unit tests of the two `/livox/imu` attitude paths, the gyro low-pass and the URDF mount |
 | `custom_ros_messages/srv/Lmg*.srv` | the node's services: `LmgSetMode` (walk / arm), `LmgSetArmGoals` (left, right pose) |
 
 ## Exporting a checkpoint
@@ -47,16 +51,18 @@ It writes:
   `forward(obs, h, c) -> (action, h, c)`; the node carries `h, c` from step to step and zeroes them at every reset
   (`networks.RecurrentTorchScriptNetwork`).
 - `export.yaml`: the run's navigation rest pose, its `target_limits` (runs trained inside GOLEM's position e-stop
-  range: joint -> [low, high], narrowing the target bounds) and the source files. The node loads it over the
-  policy's yaml.
+  range: joint -> [low, high], narrowing the target bounds), `gait_phase_cos` (the actors observe each leg's gait
+  phase cos after its sin), `imu` (the frame the run's IMU sat in, its offset, and `gyro_lowpass_hz` when the gyro
+  was low-passed) and the source files. The node loads it over the policy's yaml. A new policy's yaml is the last
+  one's with `legs.num_obs` / `arms.num_obs` set to the export's printed sizes.
 
 The export also writes `estimator.pt` and an `odometry` block in `export.yaml`; the deploy doesn't use them (its
 odometry is the SLAM pipeline's, below), so leave them out of `policies/`.
 
 Locomanipulation_game's `deploy_parity.py` checks the deploy controller against the training env, step by step, on
 the run's physics: observations term by term, the networks against skrl (LSTM actors stepped alongside), the joint
-targets and the rest pose. It was written for the estimator odometry and passes the controller an estimator, which
-`MarlController` no longer takes, so it needs that argument dropped before it runs against this package:
+targets and the rest pose. Against this package (SLAM odometry, no estimator) it skips the odometry comparison; with
+`imu.gyro_lowpass_hz` it feeds the controller this package's own `GyroLowpass` and compares it with training's:
 
 ```bash
 python scripts/skrl/deploy_parity.py --headless --checkpoint <same> \
@@ -150,5 +156,5 @@ ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger         
   - `livox_link` (the point frame, 0.7 deg from the chip);
   - `imu_link` on `torso_link` for Explicit500 and older (the default when the export has no `imu` block).
 
-  The attitude comes from a complementary filter (`lmg_deploy/livox_imu.py`). The angular velocity passes the gyro low-pass the run trained with, `imu.gyro_lowpass_hz` in `export.yaml` (absent: none, as for Explicit500). `livox_imu.GyroLowpass` is a 2nd-order Butterworth, discretized exactly over each sample's dt, so training's physics rate and the MID360's 200 Hz realize the same filter. At 8 Hz it takes the head's ~20 Hz pitch resonance while walking from 0.5-0.9 to ~0.1 rad/s rms. `livox_joint` and `livox_imu_joint` carry the real robot's measured mount (point frame 8.77 deg, chip 9.45 deg pitch); `imu_offset_{roll,pitch,yaw}_deg` (default 0) trims what is left, live.
+  The attitude (so projected gravity) comes from FAST-LIO by default (`livox_attitude:=fastlio`): `/Odometry` is the IMU body's pose in `camera_init`, carried forward between poses by the gyro and levelled once from the accelerometer while the robot holds the pre-pose (`lmg_deploy/livox_attitude.py`; state `waiting_imu` until the head is still, so FAST-LIO must run, `use_slam:=true`). On the real walking bag it is 0.23 deg off FAST-LIO's poses (p95 0.62), where the complementary filter (`lmg_deploy/livox_imu.py`) is 1.9 deg off (p95 4.4): its pull toward the accelerometer follows the gait. With no `/Odometry` for `livox_odom_timeout` (1 s) the node falls back to the filter and warns; `livox_attitude:=filter` uses the filter throughout. Restart the node with FAST-LIO (it moves `camera_init`). The angular velocity passes the gyro low-pass the run trained with, `imu.gyro_lowpass_hz` in `export.yaml` (absent: none, as for Explicit500). `livox_imu.GyroLowpass` is a 2nd-order Butterworth, discretized exactly over each sample's dt, so training's physics rate and the MID360's 200 Hz realize the same filter. At 8 Hz it takes the head's ~20 Hz pitch resonance while walking from 0.5-0.9 to ~0.1 rad/s rms. `livox_joint` and `livox_imu_joint` carry the real robot's measured mount (point frame 8.77 deg, chip 9.45 deg pitch); `imu_offset_{roll,pitch,yaw}_deg` (default 0) trims what is left, live.
 - **Safety-layer gaps.** The safety layer holds the last command on a silent channel: neither input channel has a staleness watchdog in the sim or real configs (`upper_stale_seconds: 0.0`). If this node latches silent, the safety layer keeps sending its last targets until it is stopped.

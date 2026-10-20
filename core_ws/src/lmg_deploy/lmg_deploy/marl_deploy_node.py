@@ -57,9 +57,20 @@ come from the MID360's /livox/imu, never LowState.imu_state (its attitude carrie
 livox_imu_link) into the frame the policy trained with, export.yaml's ``imu.frame``:
 imu_link on torso_link for runs up to Explicit500 (the default when the export has no
 ``imu`` block), livox_link or livox_imu_link from then on. The rotation is the URDF
-mount; attitude is livox_imu.LivoxImu's filter. The angular velocity passes the
-livox_imu.GyroLowpass the run trained with (``imu.gyro_lowpass_hz``; absent = none),
-which suppresses the head's ~20 Hz pitch resonance while walking.
+mount. The angular velocity passes the livox_imu.GyroLowpass the run trained with
+(``imu.gyro_lowpass_hz``; absent = none), which suppresses the head's ~20 Hz pitch
+resonance while walking.
+
+The attitude (so projected gravity) comes from ``livox_attitude``:
+``fastlio`` (default) FAST-LIO's /Odometry orientation of the IMU body, carried forward
+between poses by the gyro and levelled once from the accelerometer while the robot
+holds the pre-pose (livox_attitude.LivoxAttitude; state ``waiting_imu`` until it is
+still enough to). On the real walking bag it stays within 0.23 deg of FAST-LIO (p95
+0.62), where LivoxImu's complementary filter is 1.9 deg off on average (p95 4.4): the
+filter's pull toward the accelerometer follows the gait. With no /Odometry for
+``livox_odom_timeout`` it falls back to the filter and warns. ``filter`` uses
+LivoxImu's filter throughout (no FAST-LIO needed). A FAST-LIO restart moves
+camera_init: restart this node with it.
 
 ``imu_offset_{roll,pitch,yaw}_deg`` (default 0) trim that IMU, live (``ros2 param set``
 or rqt_reconfigure): the attitude it reads with the torso level, as in h12_lowerbody_rl.
@@ -112,9 +123,17 @@ from lmg_deploy.controller import (
     RobotState,
 )
 from lmg_deploy.kinematics import ArmKinematics
+from lmg_deploy.livox_attitude import LivoxAttitude, in_imu_frame
 from lmg_deploy.livox_imu import LIVOX_IMU_FRAME, LivoxImu, livox_to_imu_rotation
 from lmg_deploy.networks import load_network
-from lmg_deploy.rotations import imu_mount_quat, quat_apply, quat_conjugate, quat_mul, xyzw_to_wxyz
+from lmg_deploy.rotations import (
+    imu_mount_quat,
+    projected_gravity,
+    quat_apply,
+    quat_conjugate,
+    quat_mul,
+    xyzw_to_wxyz,
+)
 
 MOTOR_MODE_PR = 1
 SAFETY_HEARTBEAT_TOPIC = "/safety/heartbeat"
@@ -146,6 +165,8 @@ class MarlDeployNode(Node):
         self.declare_parameter("lowstate_timeout", 0.1)
         self.declare_parameter("livox_imu_timeout", 0.1)   # s, wall clock
         self.declare_parameter("livox_gravity_tau_s", 0.5)  # s, attitude filter's pull toward the accelerometer
+        self.declare_parameter("livox_attitude", "fastlio")  # "fastlio" | "filter": where projected gravity comes from
+        self.declare_parameter("livox_odom_timeout", 1.0)   # s; fastlio: no /Odometry this long, the filter stands in
         for name in IMU_OFFSET_PARAMS:
             self.declare_parameter(name, 0.0, ParameterDescriptor(
                 description="live IMU trim, deg: the IMU's reading with the torso level",
@@ -184,6 +205,13 @@ class MarlDeployNode(Node):
                                gyro_lowpass_hz=gyro_lowpass_hz)
         self._gyro_lowpass_hz = gyro_lowpass_hz
         self._livox_time: float | None = None   # monotonic receipt time of the last /livox/imu
+        # the attitude: FAST-LIO's, of the IMU body (/livox/imu's frame), carried into the policy's IMU frame
+        source = self.get_parameter("livox_attitude").value
+        if source not in ("fastlio", "filter"):
+            raise ValueError(f"livox_attitude must be 'fastlio' or 'filter', not {source!r}")
+        self._attitude = LivoxAttitude() if source == "fastlio" else None
+        self._r_imu_livox = r_imu_livox
+        self._odom_timeout = float(self.get_parameter("livox_odom_timeout").value)
         # the exported networks, next to the config
         legs = load_network(os.path.join(cfg_dir, cfg["legs"]["policy"]),
                             cfg["legs"]["num_obs"], cfg["legs"]["num_actions"])   # MLP or LSTM
@@ -269,8 +297,10 @@ class MarlDeployNode(Node):
     def _on_livox_imu(self, msg: Imu) -> None:
         w, a = msg.angular_velocity, msg.linear_acceleration
         ready = self._livox.ready
-        self._livox.update(msg.header.stamp.sec + 1e-9 * msg.header.stamp.nanosec,
-                           np.array([w.x, w.y, w.z]), np.array([a.x, a.y, a.z]))
+        stamp = msg.header.stamp.sec + 1e-9 * msg.header.stamp.nanosec
+        self._livox.update(stamp, np.array([w.x, w.y, w.z]), np.array([a.x, a.y, a.z]))
+        if self._attitude is not None:
+            self._attitude.add_imu(stamp, [w.x, w.y, w.z], [a.x, a.y, a.z])   # raw: the attitude integrates the raw rate
         self._livox_time = time.monotonic()
         if self._livox.ready and not ready:
             self.get_logger().info(
@@ -279,8 +309,11 @@ class MarlDeployNode(Node):
 
     def _on_odometry(self, msg: Odometry) -> None:
         p, o = msg.pose.pose.position, msg.pose.pose.orientation
-        self.controller.set_slam_pose(np.array([p.x, p.y, p.z]), xyzw_to_wxyz(np.array([o.x, o.y, o.z, o.w])))
+        quat = xyzw_to_wxyz(np.array([o.x, o.y, o.z, o.w]))
+        self.controller.set_slam_pose(np.array([p.x, p.y, p.z]), quat)
         self._slam_time = time.monotonic()
+        if self._attitude is not None:
+            self._attitude.add_pose(msg.header.stamp.sec + 1e-9 * msg.header.stamp.nanosec, quat)
 
     def _on_cmd_vel(self, msg: Twist) -> None:
         self.controller.set_velocity_command(np.array([msg.linear.x, msg.linear.y, msg.angular.z]))
@@ -375,7 +408,16 @@ class MarlDeployNode(Node):
     def _robot_state(self, msg: LowState) -> RobotState:
         motors = msg.motor_state
         if self._livox.ready:
-            quat, gyro, acc = self._livox.quat(), self._livox.gyro.copy(), self._livox.acc.copy()
+            # gyro (low-passed) and specific force in the policy's IMU frame from LivoxImu; the attitude from
+            # FAST-LIO when levelled and current, else LivoxImu's filter
+            gyro, acc = self._livox.gyro.copy(), self._livox.acc.copy()
+            if self._attitude is not None and self._attitude.calibrated and self._odom_fresh(time.monotonic()):
+                quat = in_imu_frame(self._attitude.quat(), self._r_imu_livox)
+            else:
+                if self._attitude is not None and self._engaged:
+                    self.get_logger().warn(f"no FAST-LIO /Odometry for {self._odom_timeout:.1f} s: attitude from the "
+                                           "/livox/imu filter", throttle_duration_sec=2.0)
+                quat = self._livox.quat()
         else:
             # only pre-pose runs before the attitude is up, and it reads q alone
             quat, gyro, acc = np.array([1.0, 0.0, 0.0, 0.0]), np.zeros(3), np.zeros(3)
@@ -388,6 +430,9 @@ class MarlDeployNode(Node):
             tau=np.array([motors[i].tau_est for i in range(NUM_JOINTS)], dtype=np.float64),
             quat=quat, gyro=gyro, acc=acc,
         )
+
+    def _odom_fresh(self, now: float) -> bool:
+        return self._slam_time is not None and now - self._slam_time <= self._odom_timeout
 
     def _livox_fresh(self, now: float) -> bool:
         return (self._livox.ready and self._livox_time is not None
@@ -503,6 +548,17 @@ class MarlDeployNode(Node):
             self.get_logger().info("pre-posed; waiting for /livox/imu (h12_real_drivers use_lidar?)",
                                    throttle_duration_sec=5.0)
             return
+        if self._attitude is not None and not self._attitude.calibrated:
+            why = self._attitude.calibrate()
+            if why is not None:
+                self._set_state("waiting_imu")
+                self.get_logger().info(f"pre-posed; levelling FAST-LIO's attitude: {why} (is FAST-LIO running? "
+                                       "livox_attitude:=filter runs without it)", throttle_duration_sec=2.0)
+                return
+            self.get_logger().info(
+                f"FAST-LIO attitude levelled ({'g' if self._attitude.acc_scale != 1.0 else 'm/s^2'} input): policy IMU "
+                f"projected gravity {np.round(projected_gravity(in_imu_frame(self._attitude.quat(), self._r_imu_livox)), 3).tolist()}"
+                f", filter's {(-self._livox.up).round(3).tolist()}")
         if self._confirm_wait and not self._confirmed:
             self._set_state("waiting_confirm")
             self.get_logger().info(

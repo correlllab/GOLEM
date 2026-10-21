@@ -55,6 +55,7 @@ def generate_launch_description():
                         LaunchConfiguration('lowerbody_params'),
                         {'active_policy': LaunchConfiguration('lowerbody')}],
             output='screen',
+            emulate_tty=True,
             condition=IfCondition(AndSubstitution(
                 LaunchConfiguration('start_position_verified'),
                 PythonExpression(

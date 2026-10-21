@@ -44,6 +44,7 @@ def generate_launch_description():
                        'camera_link', 'camera_color_optical_frame'],
             parameters=[sim_time_param],
             output='screen',
+            emulate_tty=True,
         ),
         # The MuJoCo lidar bridge stamps /livox/{lidar,pointcloud} with frame_id
         # 'lidar_link', which is co-located with the URDF's 'livox_link' mount but
@@ -56,6 +57,7 @@ def generate_launch_description():
             arguments=['0', '0', '0', '0', '0', '0', 'livox_link', 'lidar_link'],
             parameters=[sim_time_param],
             output='screen',
+            emulate_tty=True,
         ),
         Node(
             package='h12_ros2_controller',
@@ -63,6 +65,7 @@ def generate_launch_description():
             name='joint_state_publisher',
             parameters=[sim_time_param],
             output='screen',
+            emulate_tty=True,
         ),
         Node(
             package='robot_state_publisher',
@@ -70,6 +73,7 @@ def generate_launch_description():
             name='robot_state_publisher',
             parameters=[{'robot_description': robot_description}, sim_time_param],
             output='screen',
+            emulate_tty=True,
         ),
         Node(
             package='h12_ros2_controller',
@@ -78,6 +82,7 @@ def generate_launch_description():
             arguments=['--config', 'sim_safety_split.yaml'],
             parameters=[sim_time_param],
             output='screen',
+            emulate_tty=True,
         ),
         Node(
             package='h12_safety_layer',
@@ -86,6 +91,7 @@ def generate_launch_description():
             arguments=['--config', 'sim_safety_split.yaml'],
             parameters=[sim_time_param],
             output='screen',
+            emulate_tty=True,
         ),
     ]
 
@@ -114,6 +120,7 @@ def generate_launch_description():
             name=_lowerbody_exec,
             parameters=_lb_params,
             output='screen',
+            emulate_tty=True,
         ))
 
     # Optional 2D SLAM (GOLEM_SLAM=1): pointcloud_to_laserscan flattens the Livox
@@ -147,6 +154,7 @@ def generate_launch_description():
             }, sim_time_param],
             remappings=[('cloud_in', '/livox/pointcloud'), ('scan', '/converted_scan')],
             output='screen',
+            emulate_tty=True,
         ))
         nodes.append(Node(
             package='slam_toolbox',
@@ -159,6 +167,7 @@ def generate_launch_description():
                 sim_time_param,
             ],
             output='screen',
+            emulate_tty=True,
         ))
 
     # Optional autonomous navigation (GOLEM_NAV2=1, implies SLAM for the map): the

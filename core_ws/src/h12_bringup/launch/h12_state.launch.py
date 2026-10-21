@@ -38,6 +38,7 @@ def generate_launch_description():
             name='joint_state_publisher',
             parameters=[sim_time_param],
             output='screen',
+            emulate_tty=True,
         ),
         Node(
             package='robot_state_publisher',
@@ -45,5 +46,6 @@ def generate_launch_description():
             name='robot_state_publisher',
             parameters=[{'robot_description': robot_description}, sim_time_param],
             output='screen',
+            emulate_tty=True,
         ),
     ])

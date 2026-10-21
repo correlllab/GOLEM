@@ -21,6 +21,7 @@ def generate_launch_description():
         name='gripper_node',
         namespace='left',
         output='screen',
+        emulate_tty=True,
         parameters=[{
             'auto_detect_port': False,
             # OpenRB-150 serial ...FF101F14
@@ -46,6 +47,7 @@ def generate_launch_description():
         name='gripper_node',
         namespace='right',
         output='screen',
+        emulate_tty=True,
         parameters=[{
             'auto_detect_port': False,
             # OpenRB-150 serial ...FF0F0E1C

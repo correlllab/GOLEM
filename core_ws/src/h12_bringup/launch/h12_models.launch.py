@@ -55,6 +55,7 @@ def generate_launch_description():
             name='gemini_server',
             parameters=[sim_time_param, model_log_params],
             output='screen',
+            emulate_tty=True,
         ),
         Node(
             package='model_server',
@@ -62,6 +63,7 @@ def generate_launch_description():
             name='sam_server',
             parameters=[sim_time_param, model_log_params],
             output='screen',
+            emulate_tty=True,
         ),
 
         # YOLO-World open-vocabulary detection. Subscribes to the head + both
@@ -76,6 +78,7 @@ def generate_launch_description():
             name='yolo_server',
             parameters=[sim_time_param, model_log_params],
             output='screen',
+            emulate_tty=True,
             condition=IfCondition(LaunchConfiguration('use_yolo')),
         ),
 
@@ -88,6 +91,7 @@ def generate_launch_description():
             name='graspgen_server',
             parameters=[sim_time_param, model_log_params],
             output='screen',
+            emulate_tty=True,
             condition=IfCondition(LaunchConfiguration('use_skills')),
         ),
 
@@ -100,6 +104,7 @@ def generate_launch_description():
             name='h12_skills',
             parameters=[sim_time_param, model_log_params, skills_params],
             output='screen',
+            emulate_tty=True,
             condition=IfCondition(LaunchConfiguration('use_skills')),
         ),
     ])

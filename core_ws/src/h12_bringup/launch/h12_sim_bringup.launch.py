@@ -90,6 +90,7 @@ def generate_launch_description():
                        'camera_link', 'camera_color_optical_frame'],
             parameters=[{'use_sim_time': True}],
             output='screen',
+            emulate_tty=True,
         ),
 
         Node(
@@ -99,6 +100,7 @@ def generate_launch_description():
             arguments=['-d', LaunchConfiguration('rviz_config')],
             parameters=[{'use_sim_time': True}],
             output='screen',
+            emulate_tty=True,
             condition=IfCondition(LaunchConfiguration('use_rviz')),
         ),
 

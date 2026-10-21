@@ -48,6 +48,7 @@ def generate_launch_description():
             executable='marl_deploy_node',
             name='marl_deploy_node',
             output='screen',
+            emulate_tty=True,
             condition=IfCondition(policy_on),
             parameters=[{
                 'use_sim_time': use_sim_time,

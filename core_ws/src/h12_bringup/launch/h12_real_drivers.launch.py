@@ -37,6 +37,7 @@ def generate_launch_description():
         executable='livox_ros_driver2_node',
         name='livox_lidar_publisher',
         output='screen',
+        emulate_tty=True,
         parameters=livox_mid360_params,
         condition=IfCondition(LaunchConfiguration('use_lidar')),
         # The driver rotates points by the MID360_config.json extrinsic but
@@ -50,6 +51,7 @@ def generate_launch_description():
         executable='livox_imu_upright',
         name='livox_imu_upright',
         output='screen',
+        emulate_tty=True,
         parameters=[{'livox_config_path': mid360_config}],
         condition=IfCondition(LaunchConfiguration('use_lidar')),
         remappings=[('imu_in', '/livox/imu_raw'), ('imu_out', '/livox/imu')],

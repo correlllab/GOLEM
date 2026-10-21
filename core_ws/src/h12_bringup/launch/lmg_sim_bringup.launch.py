@@ -85,6 +85,7 @@ def generate_launch_description():
             arguments=['-d', LaunchConfiguration('rviz_config')],
             parameters=[{'use_sim_time': ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool)}],
             output='screen',
+            emulate_tty=True,
             condition=IfCondition(LaunchConfiguration('use_rviz')),
         ),
     ])

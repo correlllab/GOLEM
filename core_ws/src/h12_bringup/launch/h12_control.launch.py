@@ -54,6 +54,7 @@ def generate_launch_description():
             name='estop_node',
             parameters=[sim_time_param],
             output='screen',
+            emulate_tty=True,
             condition=IfCondition(LaunchConfiguration('use_estop')),
         ),
         TimerAction(
@@ -66,6 +67,7 @@ def generate_launch_description():
                     parameters=[sim_time_param],
                     arguments=['--config', LaunchConfiguration('safety_config')],
                     output='screen',
+                    emulate_tty=True,
                 ),
             ],
         ),
@@ -79,6 +81,7 @@ def generate_launch_description():
                     arguments=['--config', LaunchConfiguration('frame_task_config')],
                     parameters=[sim_time_param],
                     output='screen',
+                    emulate_tty=True,
                     condition=IfCondition(LaunchConfiguration('use_frame_task')),
                 ),
             ],

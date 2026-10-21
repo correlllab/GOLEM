@@ -64,6 +64,7 @@ def generate_launch_description():
             arguments=['-d', default_rviz],
             parameters=[{'use_sim_time': False}],
             output='screen',
+            emulate_tty=True,
         ),
 
         # slider_debugger waits up to 5s on /left_ee_pose & /right_ee_pose,

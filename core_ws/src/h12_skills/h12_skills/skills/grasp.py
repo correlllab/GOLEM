@@ -11,9 +11,9 @@ Perception and execution are the same for every synthesis method; only the
 candidate list differs (see grasp_synthesis/__init__.py for the methods and
 how one is selected). Execution mode is a separate goal toggle: with
 goal.visual_servo the contact move is replaced by servo() — a closed
-hand-camera loop that aligns on the object at VISUAL_SERVO_DEPTH_M and closes
-there. A servo that fails to converge still closes where it stopped; a cancel
-or timeout aborts.
+hand-camera loop that aligns on the object at the node's `servo_depth`
+parameter (default VISUAL_SERVO_DEPTH_M) and closes there. A servo that fails
+to converge still closes where it stopped; a cancel or timeout aborts.
 
 Testing switch: with APPROACH_IMAGE_ONLY on, the skill ends at the pre-grasp
 — it saves one frame from the grasping arm's hand camera, returns the arms to
@@ -113,7 +113,7 @@ FAILURE_RETRACT_SEC = 3.0   # full-speed budget; scaled by SLOW_MODE_TIME_SCALE
 OPEN_PERCENT = 1.0
 # Metres to back off along the grasp's +Z approach axis for the pre-grasp.
 # With a visual-servo goal the servo takes over FROM here (it drives the last
-# stretch in to VISUAL_SERVO_DEPTH_M), so this doubles as the servo's start
+# stretch in to the `servo_depth` depth), so this doubles as the servo's start
 # standoff — kept tight at 10 cm so the servo begins close to the object.
 APPROACH_DIST = 0.10
 # Metres to shift every grasp along its own approach axis before executing
@@ -126,6 +126,7 @@ PRE_CLOSE_SETTLE_SEC = 1.0
 # so the grip establishes at full force before e.g. pick_place's lift.
 POST_CLOSE_SETTLE_SEC = 4.0
 # Metres to STOP SHORT of the grasp pose on the contact move (0 = full pose).
+# Default of the node's `contact_offset` parameter, which the move reads.
 CONTACT_OFFSET = 0.25 * APPROACH_DIST
 # Testing switch: hold at the pre-grasp until Enter is pressed on the skills
 # node's terminal (needs interactive stdin; ignores cancel while blocked).
@@ -160,7 +161,7 @@ APPROACH_IMAGE_WAIT_SEC = 3.0
 # servo plunge toward it whenever the object starts beyond 105 mm, overshooting
 # into the part and disturbing X/Y. Paired with VISUAL_SERVO_RANGE_TOL_M for the
 # accepted band (99, 101) mm.
-VISUAL_SERVO_DEPTH_M = 0.10
+VISUAL_SERVO_DEPTH_M = 0.10   # default of the node's `servo_depth` parameter
 # Per-axis convergence tolerances [m], measured from real screw-picking runs
 # rather than derived — these are the values those runs converge with. The
 # binding limit is the ARM: frame_task settles to ~1.2 mm residual, so
@@ -353,7 +354,7 @@ class GraspSkill:
           min_downward_pitch_deg — every method keeps only grasps approaching
             at least this far below horizontal.
           visual_servo — replace the contact move with servo(): align on the
-            hand camera at VISUAL_SERVO_DEPTH_M and close there.
+            hand camera at the `servo_depth` parameter and close there.
 
         With APPROACH_IMAGE_ONLY on (module testing switch), the flow ends at
         the pre-grasp: save one hand-camera image, return to 'prep', succeed —
@@ -840,18 +841,20 @@ class GraspSkill:
     def move_to_candidate(self, gh, arm, targets, idx):
         """Stage 3 of the approach: from the pre-grasp, go IN along the
         committed grasp's own +Z approach axis to the contact target (the grasp
-        backed off CONTACT_OFFSET), in AXIS_APPROACH_STEP_M straight steps with
-        the grasp orientation held, slow mode, unplanned (collision-aware
-        planning would fight the intended approach into the object).
+        backed off the node's `contact_offset` parameter), in
+        AXIS_APPROACH_STEP_M straight steps with the grasp orientation held,
+        slow mode, unplanned (collision-aware planning would fight the
+        intended approach into the object).
         Best-effort: advancing stops at the first step that misses tolerance,
         and the gripper still closes there. With world anchoring available, a
         final world-frame correction compensates pelvis drift. Returns
         (contact_p, contact_w) for the outcome record."""
         frame = GRASP_FRAMES[arm]
+        stop_short = float(self.get_parameter('contact_offset').value)
         contact_p = get_approach_pose(targets.grasps_p[idx],
-                                      approach_dist=-CONTACT_OFFSET)
+                                      approach_dist=-stop_short)
         contact_w = (get_approach_pose(targets.grasps_w[idx],
-                                       approach_dist=-CONTACT_OFFSET)
+                                       approach_dist=-stop_short)
                      if targets.have_world else None)
         self._publish_target_tf(targets, contact_w, contact_p)
         start = targets.approaches_p[idx]
@@ -892,7 +895,7 @@ class GraspSkill:
         (goal.visual_servo).
 
         Drives GRASP_FRAMES[arm] in PURE TRANSLATION until `obj` sits at
-        (VISUAL_SERVO_TARGET_XY_M, VISUAL_SERVO_DEPTH_M) in the hand camera's
+        (VISUAL_SERVO_TARGET_XY_M, `servo_depth`) in the hand camera's
         optical frame. The orientation is held fixed at the planned grasp pose
         (as the synthesis method produced it), so the servo never changes it.
 
@@ -917,7 +920,7 @@ class GraspSkill:
         planned_q = targets.grasps_p[idx].orientation
         target = np.array([VISUAL_SERVO_TARGET_XY_M[0],
                            VISUAL_SERVO_TARGET_XY_M[1],
-                           VISUAL_SERVO_DEPTH_M])
+                           float(self.get_parameter('servo_depth').value)])
         # A single Gemini query already outlasts the YOLO LOST window, so in
         # Gemini mode wait ~1.5 queries before declaring lost sight.
         detect_wait = (1.5 * SERVO_GEMINI_TIMEOUT_SEC if SERVO_USE_GEMINI

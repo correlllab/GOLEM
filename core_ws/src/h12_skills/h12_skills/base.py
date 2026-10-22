@@ -498,6 +498,15 @@ class SkillsBase(Node):
             description=('grasp_synthesis method for /skill/grasp, one of '
                          f'{sorted(METHODS)}; goal.top_down overrides it')))
         self.add_on_set_parameters_callback(self._check_grasp_method)
+        # Grasp-execution depths, read per goal like grasp_method. Defaults are
+        # the skill's constants (imported here: grasp.py imports this module).
+        from .skills.grasp import CONTACT_OFFSET, VISUAL_SERVO_DEPTH_M
+        self.declare_parameter('contact_offset', CONTACT_OFFSET, ParameterDescriptor(
+            description=('metres the open-loop contact move stops short of the '
+                         'grasp pose along its approach axis (0 = full pose)')))
+        self.declare_parameter('servo_depth', VISUAL_SERVO_DEPTH_M, ParameterDescriptor(
+            description=('visual-servo target camera->object depth [m]; the finger '
+                         'contact point is 0.0706 m ahead of the hand camera')))
 
     # ----------------------------------------------------------- camera caches
     def _on_color_image(self, msg: CompressedImage):

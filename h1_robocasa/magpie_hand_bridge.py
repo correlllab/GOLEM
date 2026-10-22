@@ -53,17 +53,16 @@ OPEN_MM = 110.0
 CLOSED_MM = 0.0
 CLOSED_RAD = 2.05  # matches the upper limit of finger_joint1 (MJCF range -0.035 2.05)
 
-# Force model: MuJoCo reports actuator torque (Nm) at the hinge; convert to an
-# approximate fingertip force (N) using a constant lever arm.
-FINGER_LEVER_M = 0.05
-
-# set_force → kp mapping. Position actuator force ≈ kp * (q_target - q), so a
-# very rough first-order model is kp ≈ N_max * lever / typical_error. The
-# constants below give kp ≈ 10 (current MJCF default) at ~5 N, and clip to a
-# safe range so a malicious request can't blow up the sim.
-KP_PER_N = 2.0
-KP_MIN = 1.0
-KP_MAX = 200.0
+# Force model. set_force bounds each finger's crank torque (actuator forcerange)
+# at max_force * FINGER_LEVER_M, so the fingers close and squeeze with that pad
+# normal force — the real MAGPIE's force-limited close. FINGER_LEVER_M is the
+# crank torque per newton of pad normal force through the 4-bar, measured on the
+# robosuite gripper model by closing on a fixed probe: 44 mm, within +/-4% over
+# 12-60 mm openings. The same lever turns the measured hinge torque back into
+# the reported force.
+FINGER_LEVER_M = 0.044
+# MAGPIE's maximum grasp force [N] (two AX-12A servos); requests are clipped to it.
+MAX_FORCE_N = 32.0
 
 
 def mm_to_rad(mm: float) -> float:
@@ -116,15 +115,11 @@ class MagpieHandBridge(Node):
         self.trq_left  = self._sensor_adr(names["trq_left"])
         self.trq_right = self._sensor_adr(names["trq_right"])
 
-        # Snapshot the default kp so reset_parameters can restore it. Position
-        # actuators store kp in actuator_gainprm[:, 0] and the matching PD
-        # bias term in actuator_biasprm[:, 1] = -kp.
-        self._kp_default_left  = float(model.actuator_gainprm[self.act_left,  0])
-        self._kp_default_right = float(model.actuator_gainprm[self.act_right, 0])
-
         # Initialize commanded ctrl to fully open so the hand sits open at
-        # boot (matches the real driver's default-open behaviour).
+        # boot (matches the real driver's default-open behaviour), with the
+        # grip force limit at MAGPIE's maximum until set_force lowers it.
         with self.sim_lock:
+            self._set_force_limit_locked(MAX_FORCE_N)
             self._write_aperture_rad_locked(0.0)
 
         # ReentrantCallbackGroup so the action server's loop (which sleeps
@@ -217,13 +212,17 @@ class MagpieHandBridge(Node):
         v_r = float(self.data.sensordata[self.vel_right])
         return max(abs(v_l), abs(v_r))
 
-    def _set_kp_locked(self, kp: float) -> None:
-        """Caller must hold sim_lock. Updates kp on both finger actuators."""
-        kp = float(np.clip(kp, KP_MIN, KP_MAX))
+    def _set_force_limit_locked(self, force_n: float) -> float:
+        """Caller must hold sim_lock. Bound both finger actuators so each pad
+        presses with at most `force_n` (clipped to [0, MAX_FORCE_N]); returns
+        the applied limit [N]."""
+        force_n = float(np.clip(force_n, 0.0, MAX_FORCE_N))
+        tau = force_n * FINGER_LEVER_M
         for act in (self.act_left, self.act_right):
-            self.model.actuator_gainprm[act, 0] = kp
-            # Position actuators bake the PD-bias as biasprm[1] = -kp.
-            self.model.actuator_biasprm[act, 1] = -kp
+            self.model.actuator_forcelimited[act] = 1
+            self.model.actuator_forcerange[act] = [-tau, tau]
+        self._force_limit_n = force_n
+        return force_n
 
     # -------------------------------------------------------------- publishers
 
@@ -282,14 +281,12 @@ class MagpieHandBridge(Node):
 
     def _on_set_force(self, request, response):
         try:
-            kp = max(request.max_force, 0.0) * KP_PER_N
             with self.sim_lock:
-                self._set_kp_locked(kp)
+                applied = self._set_force_limit_locked(request.max_force)
             response.success = True
             response.message = (
-                f"{self.side} force limit {request.max_force:.2f} N "
-                f"(kp={float(np.clip(kp, KP_MIN, KP_MAX)):.2f})"
-            )
+                f"{self.side} force limit {applied:.2f} N "
+                f"(requested {request.max_force:.2f} N, max {MAX_FORCE_N:.0f} N)")
         except Exception as e:
             response.success = False
             response.message = f"set_force failed: {e}"
@@ -304,15 +301,9 @@ class MagpieHandBridge(Node):
     def _on_reset_parameters(self, request, response):
         try:
             with self.sim_lock:
-                self.model.actuator_gainprm[self.act_left,  0] = self._kp_default_left
-                self.model.actuator_gainprm[self.act_right, 0] = self._kp_default_right
-                self.model.actuator_biasprm[self.act_left,  1] = -self._kp_default_left
-                self.model.actuator_biasprm[self.act_right, 1] = -self._kp_default_right
+                self._set_force_limit_locked(MAX_FORCE_N)
             response.success = True
-            response.message = (
-                f"{self.side} kp restored to "
-                f"({self._kp_default_left:.1f}, {self._kp_default_right:.1f})"
-            )
+            response.message = f"{self.side} force limit restored to {MAX_FORCE_N:.0f} N"
         except Exception as e:
             response.success = False
             response.message = f"reset_parameters failed: {e}"
@@ -346,7 +337,7 @@ class MagpieHandBridge(Node):
             goal_handle.publish_feedback(feedback)
 
             with self.sim_lock:
-                self._set_kp_locked(current_force_target * KP_PER_N)
+                self._set_force_limit_locked(current_force_target)
                 self._write_aperture_rad_locked(mm_to_rad(current_aperture))
 
             time.sleep(SETTLE_S)
@@ -388,7 +379,7 @@ class MagpieHandBridge(Node):
                 goal_handle.publish_feedback(feedback)
 
                 with self.sim_lock:
-                    self._set_kp_locked(current_force_target * KP_PER_N)
+                    self._set_force_limit_locked(current_force_target)
                     self._write_aperture_rad_locked(mm_to_rad(current_aperture))
                 time.sleep(SETTLE_S)
 

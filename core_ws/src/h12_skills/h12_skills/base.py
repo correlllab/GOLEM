@@ -887,24 +887,10 @@ class SkillsBase(Node):
         lower it — see grasp.py's visual servo."""
         if bundle is None or det is None:
             return None
-        depth_msg, info = bundle.depth_image, bundle.camera_info
-        if not depth_msg.data or not info.width or not info.height:
-            self.get_logger().warn(
-                'bundle_detection_point: bundle carries no depth/caminfo — is '
-                'yolo_server new enough to attach them?')
-            return None
-        try:
-            depth = decode_compressed_depth_image(depth_msg).astype(np.float32) / 1000.0
-        except (ValueError, TypeError) as e:
-            self.get_logger().warn(f'bundle_detection_point: depth decode failed: {e}')
+        depth, info = self._bundle_depth(bundle, 'bundle_detection_point')
+        if depth is None:
             return None
         h, w = depth.shape
-        if (int(info.height), int(info.width)) != (h, w):
-            self.get_logger().warn(
-                f'bundle_detection_point: depth {h}x{w} != caminfo '
-                f'{info.height}x{info.width} — depth is not aligned to the color '
-                'grid the boxes were measured in')
-            return None
         cx_box = (det.bbox_min.x + det.bbox_max.x) / 2.0
         cy_box = (det.bbox_min.y + det.bbox_max.y) / 2.0
         half_w = max(1.0, abs(det.bbox_max.x - det.bbox_min.x) * 0.25)
@@ -920,6 +906,56 @@ class SkillsBase(Node):
         if pts is None or len(pts) == 0:
             return None
         return np.median(pts, axis=0)
+
+    def _bundle_depth(self, bundle, caller):
+        """(depth [m] HxW on the bundle's color grid, camera_info) of
+        DetectionBundle `bundle`, or (None, None) with a warning naming
+        `caller`."""
+        depth_msg, info = bundle.depth_image, bundle.camera_info
+        if not depth_msg.data or not info.width or not info.height:
+            self.get_logger().warn(
+                f'{caller}: bundle carries no depth/caminfo — is yolo_server new '
+                'enough to attach them?')
+            return None, None
+        try:
+            depth = decode_compressed_depth_image(depth_msg).astype(np.float32) / 1000.0
+        except (ValueError, TypeError) as e:
+            self.get_logger().warn(f'{caller}: depth decode failed: {e}')
+            return None, None
+        if (int(info.height), int(info.width)) != depth.shape:
+            self.get_logger().warn(
+                f'{caller}: depth {depth.shape[0]}x{depth.shape[1]} != caminfo '
+                f'{info.height}x{info.width} — depth is not aligned to the color '
+                'grid the boxes were measured in')
+            return None, None
+        return depth, info
+
+    def bundle_mask_point(self, bundle, mask_msg, min_depth=DEPTH_MIN_M,
+                          support_m=0.01):
+        """Back-project a mono8 `mask_msg` (on the bundle's color grid) with the
+        bundle's aligned depth and return ONE on-object (x, y, z) point in the
+        bundle camera's optical frame, or None: the masked point nearest the
+        mask's 3-D centroid, averaged (median) with its neighbours within
+        `support_m`. Unlike the centroid itself, that point lies on the part even
+        when the part is bent or hollow (a centroid can fall in empty space)."""
+        if bundle is None or mask_msg is None:
+            return None
+        depth, info = self._bundle_depth(bundle, 'bundle_mask_point')
+        if depth is None:
+            return None
+        mask = (np.frombuffer(bytes(mask_msg.data), dtype=np.uint8)
+                .reshape(mask_msg.height, mask_msg.width) > 127)
+        if mask.shape != depth.shape:
+            self.get_logger().warn(
+                f'bundle_mask_point: mask {mask.shape} != depth {depth.shape}')
+            return None
+        fx, fy, cx, cy = info.k[0], info.k[4], info.k[2], info.k[5]
+        pts = deproject_mask(mask, depth, fx, fy, cx, cy, min_depth, DEPTH_MAX_M)
+        if pts is None or len(pts) == 0:
+            return None
+        nearest = pts[np.argmin(np.linalg.norm(pts - pts.mean(axis=0), axis=1))]
+        near = pts[np.linalg.norm(pts - nearest, axis=1) <= support_m]
+        return np.median(near, axis=0)
 
     def plan_grasp(self, cloud, frame, gripper_name, scene_cloud=None, arm=''):
         """Send an (N, 3) object cloud to the graspgen service. Pass an optional

@@ -23,11 +23,11 @@ Every arm move refuses to send once the safety layer latches estop or the
 frame_task server aborts a move (base.arm_halt_reason); the skill then aborts
 instead of trying further candidates or retreating.
 
-The box comes from Gemini for a generic object, or from the head-camera YOLO
-detector for a battery-workcell part (BATTERY_OBJECTS; SAM is skipped there
-too — small parts are below its reliable scale). That routing lives entirely
-in detect_object. The module constants below are the tuning knobs, grouped by
-pipeline stage.
+Every target is boxed by Gemini and segmented by SAM (BATTERY_USE_GEMINI).
+With that switch off, a battery-workcell part (BATTERY_OBJECTS) is boxed by the
+head-camera YOLO detector instead, and SAM is skipped (small parts are below
+its reliable scale). That routing lives entirely in detect_object. The module
+constants below are the tuning knobs, grouped by pipeline stage.
 """
 
 import copy
@@ -68,6 +68,16 @@ from ..grasp_synthesis.common import GRIPPER_BASE_TO_CONTACT_M, pose_at
 BATTERY_OBJECTS = ('Bolt', 'BusBar', 'InteriorScrew', 'Nut', 'OrageCover',
                    'Screw', 'ScrewHole')
 _BATTERY_OBJECTS_LC = frozenset(o.lower() for o in BATTERY_OBJECTS)
+# True: battery parts take the Gemini + SAM path on the head camera and in the
+# visual servo, like every other target — the pipeline the sim grasp tables
+# measure (the YOLO checkpoint does not detect the sim assets). A battery class
+# label given as the target is sent to Gemini as its GEMINI_NAMES phrase.
+# False: battery parts use the head and hand YOLO detectors as described above.
+# The hand YOLO bundle supplies the servo's depth + intrinsics either way.
+BATTERY_USE_GEMINI = True
+GEMINI_NAMES = {'bolt': 'bolt', 'busbar': 'bus bar', 'interiorscrew': 'interior screw',
+                'nut': 'nut', 'oragecover': 'orange cover', 'screw': 'screw',
+                'screwhole': 'screw hole'}
 
 # Multi-instance variant of base.GEMINI_GRASP_PROMPT: one box per VISIBLE
 # instance instead of exactly one. Used by the grasp skill to disambiguate
@@ -183,14 +193,19 @@ VISUAL_SERVO_TIMEOUT_SEC = 90.0
 # How long to wait for a usable hand-camera detection before LOST [s]
 # (yolo_server publishes at ~5 Hz).
 VISUAL_SERVO_DETECT_WAIT_SEC = 5.0
-# Source the visual-servo box from GEMINI on the hand-camera frame instead of
-# the hand YOLO detector — for EVERY object, INCLUDING battery parts that use
-# YOLO on the HEAD camera (detect_object). A generic (non-battery) object is not
-# even a hand-YOLO class, so the YOLO servo would go permanently LOST. The YOLO
-# bundle is still used for its aligned depth + intrinsics; only the BOX comes
-# from Gemini (see _servo_measure_gemini). Set False to go back to the YOLO
-# hand-detector servo.
+# Source of the visual-servo box on the hand-camera frame when
+# BATTERY_USE_GEMINI is off: a battery part (BATTERY_OBJECTS) uses the hand YOLO
+# detector; any other object is not a YOLO class, so it is always boxed by
+# GEMINI. True sends battery parts to Gemini as well. Either way the hand YOLO
+# bundle supplies the aligned depth + intrinsics; only the BOX source differs
+# (see _servo_measure_gemini).
 SERVO_USE_GEMINI = False
+# Gemini servo only: segment the Gemini box with SAM on the hand frame and steer
+# on the masked part (base.bundle_mask_point — the on-object point nearest the
+# mask centroid) instead of the median depth of the box's central quarter. For
+# a bent or elongated part the box centre is often empty space. A failed SAM
+# call falls back to the box point.
+SERVO_USE_SAM = True
 # Per-query timeout for the servo's Gemini box [s]. A Gemini call is
 # seconds-to-minutes — far slower than a frame_task iteration — so a Gemini
 # servo is deliberately slow-but-general. The LOST timer is stretched to match
@@ -374,7 +389,7 @@ class GraspSkill:
         method, err = self._resolve_grasp_method(goal)
         if err:
             return run.abort(err)
-        obj = goal.target_object
+        obj = _perception_name(goal.target_object)
         self.get_logger().info(
             f'grasp: {obj!r} with synthesis method {method.name!r}'
             f'{" + visual servo" if goal.visual_servo else ""}')
@@ -548,16 +563,16 @@ class GraspSkill:
     def detect_object(self, obj, run, gh, arm=None):
         """Locate `obj` in the head camera and return (box, use_sam): a pixel
         xyxy bounding box (or None) plus how segment_object should lift it to a
-        cloud. Battery-workcell parts (BATTERY_OBJECTS) get a YOLO box and skip
-        SAM (raw box cloud — small parts are below SAM's reliable scale);
-        everything else gets a Gemini box refined by SAM. (The hand-camera
-        visual servo uses Gemini for BOTH kinds — see SERVO_USE_GEMINI.)
+        cloud. A Gemini box refined by SAM, or — for a battery-workcell part with
+        BATTERY_USE_GEMINI off — a YOLO box and the raw box cloud (small parts
+        are below SAM's reliable scale). (The hand-camera visual servo's box
+        source is chosen by _servo_uses_gemini.)
 
         `arm` (the resolved grasping arm, or None for auto-select) picks, among
         multiple look-alike instances, the one closest to that arm's gripper —
         via the arm frame on the YOLO path (_yolo_box), and via
         _gemini_box_closest_arm on the Gemini path."""
-        is_small = obj.strip().lower() in _BATTERY_OBJECTS_LC
+        is_small = _yolo_routed(obj)
         box = (self._yolo_box(obj, arm) if is_small
                else self._gemini_box_closest_arm(obj, run, gh, arm))
         return box, not is_small
@@ -921,9 +936,10 @@ class GraspSkill:
         target = np.array([VISUAL_SERVO_TARGET_XY_M[0],
                            VISUAL_SERVO_TARGET_XY_M[1],
                            float(self.get_parameter('servo_depth').value)])
+        use_gemini = _servo_uses_gemini(obj)
         # A single Gemini query already outlasts the YOLO LOST window, so in
         # Gemini mode wait ~1.5 queries before declaring lost sight.
-        detect_wait = (1.5 * SERVO_GEMINI_TIMEOUT_SEC if SERVO_USE_GEMINI
+        detect_wait = (1.5 * SERVO_GEMINI_TIMEOUT_SEC if use_gemini
                        else VISUAL_SERVO_DETECT_WAIT_SEC)
         deadline = time.monotonic() + VISUAL_SERVO_TIMEOUT_SEC
         last_seen = time.monotonic()
@@ -951,7 +967,7 @@ class GraspSkill:
                     f'{VISUAL_SERVO_TIMEOUT_SEC:.0f}s ({it} iteration(s), tol '
                     f'{VISUAL_SERVO_X_TOL_M * 1000:.0f}/'
                     f'{VISUAL_SERVO_Y_TOL_M * 1000:.0f}mm X/Y)')
-            if SERVO_USE_GEMINI:
+            if use_gemini:
                 p_cam, cam_frame, stamp, bundle = \
                     self._servo_measure_gemini(arm, obj, after, gh)
             else:
@@ -1141,15 +1157,16 @@ class GraspSkill:
 
     def _servo_measure_gemini(self, arm, obj, after, gh):
         """Visual-servo measurement whose BOX comes from GEMINI instead of the
-        hand-camera YOLO detector (SERVO_USE_GEMINI), so the servo can lock onto
+        hand-camera YOLO detector (_servo_uses_gemini), so the servo can lock onto
         any object Gemini names rather than only a YOLO class.
 
         The arm's YOLO DetectionBundle is still consumed — but only for the
         aligned depth + camera_info + rgb frame yolo_server attaches every frame
-        regardless of what it detects. Gemini boxes that rgb frame, the box is
-        wrapped in a synthetic Detection, and the SAME bundle_detection_point
-        back-projection as the YOLO path lifts it to a 3-D point in the hand
-        camera's optical frame. Returns (point, frame_id, stamp, bundle) or a
+        regardless of what it detects. Gemini boxes that rgb frame; with
+        SERVO_USE_SAM, SAM segments the box and bundle_mask_point lifts the mask
+        to an on-object 3-D point in the hand camera's optical frame, otherwise
+        (or if SAM fails) the box goes through the same bundle_detection_point
+        back-projection as the YOLO path. Returns (point, frame_id, stamp, bundle) or a
         tuple of Nones. Only accepts a bundle stamped strictly after `after`, so
         one frame's correction is never applied twice.
 
@@ -1165,12 +1182,23 @@ class GraspSkill:
                                         bundle.camera_info, gh)
         if box is None:
             return None, None, None, None
-        det = Detection()
-        det.cls = obj
-        det.bbox_min = Point(x=float(box[0]), y=float(box[1]), z=0.0)
-        det.bbox_max = Point(x=float(box[2]), y=float(box[3]), z=0.0)
-        p = self.bundle_detection_point(bundle, det,
-                                        min_depth=VISUAL_SERVO_MIN_DEPTH_M)
+        p = None
+        if SERVO_USE_SAM:
+            mask = self.segment(text=obj, positive_boxes=box,
+                                image=bundle.rgb_image, outer_gh=gh)
+            p = self.bundle_mask_point(bundle, mask,
+                                       min_depth=VISUAL_SERVO_MIN_DEPTH_M)
+            if p is None:
+                self.get_logger().warn(
+                    f'grasp: visual servo SAM mask for {obj!r} gave no point; '
+                    'using the box centre')
+        if p is None:
+            det = Detection()
+            det.cls = obj
+            det.bbox_min = Point(x=float(box[0]), y=float(box[1]), z=0.0)
+            det.bbox_max = Point(x=float(box[2]), y=float(box[3]), z=0.0)
+            p = self.bundle_detection_point(bundle, det,
+                                            min_depth=VISUAL_SERVO_MIN_DEPTH_M)
         if p is None:
             return None, None, None, None
         return p, self.bundle_camera_frame(bundle), stamp, bundle
@@ -1626,6 +1654,26 @@ def get_approach_pose(pose, approach_dist):
     out.position.y += approach_dist * float(z_axis[1])
     out.position.z += approach_dist * float(z_axis[2])
     return out
+
+
+def _yolo_routed(obj):
+    """Whether `obj` is a battery part that takes the YOLO path
+    (BATTERY_USE_GEMINI off)."""
+    return not BATTERY_USE_GEMINI and obj.strip().lower() in _BATTERY_OBJECTS_LC
+
+
+def _perception_name(obj):
+    """The target name perception queries: a battery class label becomes its
+    GEMINI_NAMES phrase when it takes the Gemini path; anything else as given."""
+    if BATTERY_USE_GEMINI:
+        return GEMINI_NAMES.get(obj.strip().lower(), obj)
+    return obj
+
+
+def _servo_uses_gemini(obj):
+    """Whether the visual servo boxes `obj` with Gemini rather than the hand
+    YOLO detector (see BATTERY_USE_GEMINI, SERVO_USE_GEMINI)."""
+    return SERVO_USE_GEMINI or not _yolo_routed(obj)
 
 
 def _stamp_tuple(stamp):

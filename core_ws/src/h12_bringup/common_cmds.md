@@ -161,7 +161,7 @@ Optional goal fields (omit / `false` / `0` = off):
 |---|---|
 | `top_down` | use the `top_down` synthesis method for this goal, overriding `grasp_method` (below): ONE synthetic grasp above the object — the tier-1 orientation (forward azimuth, fingers across pelvis ±Y, level wrist) pitched `TOP_DOWN_PITCH_DEG` = 80° below horizontal, base backed 0.1146 m off along that approach so the fingers close on the cloud centroid. Still steeper than the arm's ~45° practical reach, and there is no second candidate to fall back to, so an unreachable pose aborts the skill. |
 | `min_downward_pitch_deg` | every synthesis method keeps only grasps approaching at least this far below horizontal (a *minimum* pitch, not proximity to vertical) |
-| `visual_servo` | at the pre-grasp, close the loop on the arm's hand camera: translate (orientation frozen) until the object sits at a fixed setpoint in the camera optical frame — `VISUAL_SERVO_TARGET_XY_M` = (+12, 0) mm laterally, `VISUAL_SERVO_DEPTH_M` = 0.10 m in range — then close **there** instead of running the contact descent. Tolerances are **per axis**, because the camera axes mean different things to a parallel gripper: 1 mm across the jaws (optical X — what a grasp depends on), 2 mm in range (optical Z — whether the jaws close around the part or above it), 5 mm along the jaws (optical Y — the jaws span 106 mm, so this is the forgiving one). 90 s budget (~50 corrections), and it gives up early if the error stops improving. If it loses sight of the object for 5 s, **or** reads it closer than 5.5 cm on two consecutive frames, it backs straight up 5 cm (pelvis +Z) and keeps servoing — up to twice between the two cases. If it still can't converge the skill **aborts** — there is no open-loop fallback, so the result tells you the grasp was never aligned. Only works for the 7 YOLO battery classes — the hand detector knows nothing else. |
+| `visual_servo` | at the pre-grasp, close the loop on the arm's hand camera: translate (orientation frozen) until the object sits at a fixed setpoint in the camera optical frame — `VISUAL_SERVO_TARGET_XY_M` = (+12, 0) mm laterally, `VISUAL_SERVO_DEPTH_M` = 0.10 m in range — then close **there** instead of running the contact descent. Tolerances are **per axis**, because the camera axes mean different things to a parallel gripper: 1 mm across the jaws (optical X — what a grasp depends on), 2 mm in range (optical Z — whether the jaws close around the part or above it), 5 mm along the jaws (optical Y — the jaws span 106 mm, so this is the forgiving one). 90 s budget (~50 corrections), and it gives up early if the error stops improving. If it loses sight of the object for 5 s, **or** reads it closer than 5.5 cm on two consecutive frames, it backs straight up 5 cm (pelvis +Z) and keeps servoing — up to twice between the two cases. If it still can't converge the skill **aborts** — there is no open-loop fallback, so the result tells you the grasp was never aligned. The 7 YOLO battery classes are boxed by the hand YOLO detector; any other object is boxed by Gemini on the hand frame (seconds per correction). Both need `yolo_server` running, which supplies the hand depth. |
 
 **Synthesis method.** Without `top_down`, the grasp candidates come from the
 skills node's `grasp_method` parameter (default `heuristic`). Every method
@@ -178,13 +178,17 @@ The method names and what each does are in
 `__init__.py`); an unknown name is rejected by `ros2 param set`.
 `visual_servo` composes with any of them.
 
-Small battery-workcell parts (`Bolt`, `BusBar`, `InteriorScrew`, `Nut`,
-`OrageCover`, `Screw`, `ScrewHole`) are routed to the head-camera YOLO detector
-and the raw bounding-box cloud instead of Gemini + SAM — no goal field needed,
-the match is on `target_object`.
+Every target goes through Gemini + SAM, on the head camera and in the visual
+servo — the pipeline the sim grasp tables measure. A battery-workcell YOLO class
+label as `target_object` (e.g. `OrageCover`) is sent to Gemini as a readable
+phrase (`GEMINI_NAMES` in `skills/grasp.py`); a descriptive name such as
+`'orange cover with a pink dot'` is used as given. `BATTERY_USE_GEMINI = False`
+in `skills/grasp.py` routes those labels to the head/hand YOLO detectors and the
+raw bounding-box cloud instead. The hand YOLO stream (`use_yolo:=true`) is still
+needed for the servo's aligned depth and intrinsics.
 
-The full sequence runs: pre-grasp standoff → contact move (`APPROACH_DIST −
-CONTACT_OFFSET` = 7.5 cm along the approach) → force close at
+The full sequence runs: pre-grasp standoff → contact move (`APPROACH_DIST −` the
+`contact_offset` parameter, default 2.5 cm, = 7.5 cm along the approach) → force close at
 `base.GRIP_FORCE_N`. It does **not** lift afterwards.
 
 ---

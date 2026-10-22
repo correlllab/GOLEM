@@ -8,6 +8,7 @@ Plus the rotation/quaternion helpers and a Gemini-JSON extractor the skill needs
 """
 
 import json
+import re
 import math
 
 import numpy as np
@@ -127,10 +128,18 @@ def matrix_to_pose(T):
 
 
 # ------------------------------------------------------------------- gemini io
+# A "box_2d": [y1, x1, y2, x2] entry, for replies that are not valid JSON.
+_BOX_2D_RE = re.compile(
+    r'"box_2d"\s*:\s*\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,'
+    r'\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]')
+
+
 def extract_json(text):
     """Best-effort extraction of a JSON value from a Gemini text response: strips
-    ```json fences, else falls back to the outermost [...] / {...} span. Returns
-    the parsed object, or None."""
+    ```json fences, else falls back to the outermost [...] / {...} span. When
+    nothing parses but the text carries "box_2d": [...] arrays (Gemini sometimes
+    drops a key, e.g. echoes the label as a bare string), returns them as
+    [{"box_2d": [...]}, ...]. Returns the parsed object, or None."""
     if not text:
         return None
     lines = text.splitlines()
@@ -149,4 +158,5 @@ def extract_json(text):
                 return json.loads(text[a:b + 1])
             except (json.JSONDecodeError, ValueError):
                 continue
-    return None
+    boxes = [{'box_2d': [float(v) for v in m]} for m in _BOX_2D_RE.findall(text)]
+    return boxes or None

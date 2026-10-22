@@ -270,10 +270,14 @@ SERVO_DURATION_SEC = 15   # primary (iter-0) contact IK move budget [s]
 # is never cut off; rejected plans return in well under a second.
 APPROACH_DURATION_SEC = 180.0
 SERVO_MAX_ITER = 12       # world-frame servo refinement passes per pose
-# Anchor the contact move in WORLD_FRAME for pelvis-drift compensation. False
-# drives the raw pelvis-frame poses (as when the world TF is down) — use it
-# when odometry is poor enough that the world-frame corrections add error.
-GRASP_WORLD_ANCHOR = False
+# Track the grasp targets as the pelvis moves: every pre-grasp and grasp is
+# snapshotted in WORLD_FRAME once, each take-off, transit and axis-approach
+# waypoint is re-resolved into the LIVE pelvis frame before it is commanded,
+# and a world-frame correction runs at contact. False drives the raw
+# pelvis-frame poses (as when the world TF is down) — use it when odometry is
+# poor enough that the world-frame corrections add error. Needs WORLD_FRAME in
+# the TF tree (navigation / FAST-LIO running).
+GRASP_WORLD_ANCHOR = True
 # Stop a frame_task move early once the server's streamed feedback repeats
 # UNCHANGED for this many messages — the arm has settled and the server is only
 # holding steady state (which otherwise runs to its ~5 s hold timeout). Passed
@@ -737,15 +741,27 @@ class GraspSkill:
                         have_world=have_world, centroid_w=centroid_w)
 
     def _straight_line_move(self, frame, target, run, gh, step_m, step_rad,
-                            seg_sec, lin_tol, ang_tol, label, slow_mode=True):
+                            seg_sec, lin_tol, ang_tol, label, slow_mode=True,
+                            target_w=None):
         """Move `frame` from its current pose to `target` (pelvis frame) along a
         straight line, as DIRECT (unplanned) frame_task goals of at most
         `step_m` translation and `step_rad` rotation each; orientation is
-        slerped. Returns True once every segment reached (lin_tol, ang_tol),
-        False on the first miss, cancel, timeout or arm halt."""
+        slerped. With `target_w` (the same target in WORLD_FRAME) the line is
+        laid out in the world frame and each waypoint is re-resolved into the
+        live pelvis frame just before it is commanded, so the path follows the
+        pelvis as it moves; if the world TF is unavailable at the start the
+        pelvis-frame line is driven. Returns True once every segment reached
+        (lin_tol, ang_tol), False on the first miss, cancel, timeout or arm
+        halt."""
         cur = self._frame_pose_in_pelvis(frame)
         if cur is None:
             return False
+        if target_w is not None:
+            cur_w = self._transform_pose(cur, 'pelvis', WORLD_FRAME)
+            if cur_w is not None:
+                cur, target = cur_w, target_w
+            else:
+                target_w = None
         p0 = _pose_xyz(cur)
         p1 = _pose_xyz(target)
         q0 = _pose_quat(cur)
@@ -755,7 +771,8 @@ class GraspSkill:
         n = max(1, int(math.ceil(max(dist / step_m, angle / step_rad))))
         self.get_logger().info(
             f'grasp: {label}: {dist * 100:.1f}cm / {math.degrees(angle):.0f}deg '
-            f'in {n} unplanned{" slow" if slow_mode else ""} step(s)')
+            f'in {n} unplanned{" slow" if slow_mode else ""} step(s)'
+            f'{f", tracking {WORLD_FRAME}" if target_w is not None else ""}')
         for k in range(1, n + 1):
             if gh.is_cancel_requested or run.remaining() <= 0.0:
                 return False
@@ -766,6 +783,10 @@ class GraspSkill:
             wp.position = Point(x=float(pk[0]), y=float(pk[1]), z=float(pk[2]))
             wp.orientation = Quaternion(x=float(qk[0]), y=float(qk[1]),
                                         z=float(qk[2]), w=float(qk[3]))
+            if target_w is not None:
+                wp = self._live_pelvis_pose(wp)
+                if wp is None:
+                    return False
             if not self.move_frame_to(
                     frame, wp, outer_gh=gh, duration_sec=seg_sec,
                     do_plan=False, slow_mode=slow_mode,
@@ -775,11 +796,12 @@ class GraspSkill:
                 return False
         return True
 
-    def _approach_pregrasp(self, frame, pregrasp, run, gh):
+    def _approach_pregrasp(self, frame, pregrasp, run, gh, pregrasp_w=None):
         """Stages 1-2 of a candidate's approach: take off straight up (pelvis
         +Z, current orientation held) to APPROACH_CLEARANCE_M above the higher
-        of the hand and the pre-grasp, then transit to the pre-grasp. Returns
-        whether the pre-grasp was reached."""
+        of the hand and the pre-grasp, then transit to the pre-grasp. With
+        `pregrasp_w` (world-anchored targets) both legs track the pelvis
+        (_straight_line_move). Returns whether the pre-grasp was reached."""
         cur = self._frame_pose_in_pelvis(frame)
         if cur is None:
             return False
@@ -787,15 +809,24 @@ class GraspSkill:
         if lift_z - cur.position.z > 1e-3:
             up = copy.deepcopy(cur)
             up.position.z = lift_z
+            up_w = (self._transform_pose(up, 'pelvis', WORLD_FRAME)
+                    if pregrasp_w is not None else None)
             if not self._straight_line_move(
                     frame, up, run, gh, LINEAR_APPROACH_SEG_M,
                     LINEAR_APPROACH_SEG_RAD, LINEAR_APPROACH_SEG_SEC,
-                    APPROACH_LIN_TOL, APPROACH_ANG_TOL, 'take-off (pelvis +Z)'):
+                    APPROACH_LIN_TOL, APPROACH_ANG_TOL, 'take-off (pelvis +Z)',
+                    target_w=up_w):
                 return False
         return self._straight_line_move(
             frame, pregrasp, run, gh, LINEAR_APPROACH_SEG_M,
             LINEAR_APPROACH_SEG_RAD, LINEAR_APPROACH_SEG_SEC,
-            APPROACH_LIN_TOL, APPROACH_ANG_TOL, 'transit to pre-grasp')
+            APPROACH_LIN_TOL, APPROACH_ANG_TOL, 'transit to pre-grasp',
+            target_w=pregrasp_w)
+
+    def _live_pelvis_pose(self, pose_w):
+        """A WORLD_FRAME pose re-resolved into the live pelvis frame (None if
+        the world TF is unavailable)."""
+        return self._transform_pose(pose_w, WORLD_FRAME, 'pelvis')
 
     def move_to_candidate_approach(self, run, gh, obj, arm, cands, targets,
                                    reset_cfg):
@@ -828,10 +859,10 @@ class GraspSkill:
                 f'grasp {i} ({cands.labels[i]}) for {obj!r}: tier '
                 f'{cands.tiers[i]}, score {cands.scores[i]:.2f}, '
                 f'width {width_mm:.1f}mm')
-            # Pelvis-frame pre-grasp (no world anchoring); the visual servo
-            # or the in-along-the-axis contact move runs AFTER this.
+            # World-anchored when targets.have_world, else pelvis-frame; the
+            # visual servo or the in-along-the-axis contact move runs AFTER this.
             if self._approach_pregrasp(GRASP_FRAMES[arm], targets.approaches_p[i],
-                                       run, gh):
+                                       run, gh, pregrasp_w=targets.approaches_w[i]):
                 mark(i, 'chosen')
                 return i, None
             if gh.is_cancel_requested or run.remaining() <= 0.0:
@@ -861,8 +892,10 @@ class GraspSkill:
         slow mode, unplanned (collision-aware planning would fight the
         intended approach into the object).
         Best-effort: advancing stops at the first step that misses tolerance,
-        and the gripper still closes there. With world anchoring available, a
-        final world-frame correction compensates pelvis drift. Returns
+        and the gripper still closes there. With world anchoring available,
+        each step is laid out along the world-frame grasp axis and re-resolved
+        into the live pelvis frame, and a final world-frame correction
+        compensates the remaining pelvis drift. Returns
         (contact_p, contact_w) for the outcome record."""
         frame = GRASP_FRAMES[arm]
         stop_short = float(self.get_parameter('contact_offset').value)
@@ -883,6 +916,9 @@ class GraspSkill:
             if gh.is_cancel_requested:
                 break
             step = get_approach_pose(start, approach_dist=depth * k / n)
+            if targets.have_world:
+                step = self._live_pelvis_pose(get_approach_pose(
+                    targets.approaches_w[idx], approach_dist=depth * k / n)) or step
             if not self.move_frame_to(
                     frame, step, outer_gh=gh, duration_sec=AXIS_APPROACH_STEP_SEC,
                     do_plan=False, slow_mode=True,

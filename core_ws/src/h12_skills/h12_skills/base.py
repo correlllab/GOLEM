@@ -186,6 +186,11 @@ WORLD_FRAME = 'camera_init'   # FAST-LIO odometry world frame; switch to 'map' f
 SERVO_ITER = 3                # max world-frame servo refinement iterations
 SERVO_LIN_TOL = 0.005         # 5 mm world-position convergence tolerance
 SERVO_ANG_TOL = 0.02          # ~1.15 deg world-orientation convergence tolerance
+# World-servo divergence stop [m]: once the measured world error exceeds the
+# best so far by this much, the drift fixes are pushing the base rather than
+# the hand (arm blocked by contact, the balance controller stepping away from
+# the reach), and further fixes only chase the target further.
+SERVO_DIVERGE_M = 0.01
 # Multiply a move's duration BUDGET by this when it is sent with slow_mode=True.
 # The frame_task server's SLOW_MODE_SCALE (0.25) scales joint VELOCITY, while a
 # FrameTask duration is a TIMEOUT — so at 1/4 speed the same budget covers 1/4
@@ -1254,6 +1259,7 @@ class SkillsBase(Node):
         tq = (world_pose.orientation.x, world_pose.orientation.y,
               world_pose.orientation.z, world_pose.orientation.w)
         ok, lin, ang = False, None, None
+        best_lin = None
         for i in range(int(max_iter)):
             if outer_gh is not None and outer_gh.is_cancel_requested:
                 return False
@@ -1289,6 +1295,13 @@ class SkillsBase(Node):
                 self.get_logger().warn(
                     f'servo[{tag}]: unreachable; caller tries next grasp')
                 return False
+            if best_lin is not None and lin > best_lin + SERVO_DIVERGE_M:
+                self.get_logger().warn(
+                    f'servo[{tag}]: diverging (lin {lin * 1000:.1f}mm vs best '
+                    f'{best_lin * 1000:.1f}mm); stopping drift fixes, proceeding '
+                    'best-effort')
+                return True
+            best_lin = lin if best_lin is None else min(best_lin, lin)
         # Ran the full iteration budget without hitting tolerance. This is NOT a
         # failure: return best-effort success so the caller proceeds with the
         # near-converged pose rather than aborting on non-convergence. Genuine

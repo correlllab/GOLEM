@@ -258,7 +258,7 @@ class Battery(ManipulationEnv):
         )
         # The merged scene takes robosuite's <option>, not the arena's. The
         # arena's multiccd flag must be carried over: with single-point
-        # contacts the 5 mm screw-head cylinders rock at ~4 rad/s on their
+        # contacts the screws' small neck cylinders rock at ~6 rad/s on their
         # walls (MuJoCo 3.3.1).
         option = self.model.root.find("option")
         if option is None:

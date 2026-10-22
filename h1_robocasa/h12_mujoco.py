@@ -284,7 +284,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # (realsense_profile.yaml): frame names, TF, intrinsics and topics.
     # GOLEM_CAMERA_SCALE renders the head camera at that fraction of its real
     # 1280x720 (same projection, camera_info scaled to match). The hand cameras
-    # keep their gripper-MJCF fovy at 256x256. GOLEM_CAMERA_DEPTH=0 drops
+    # keep their gripper-MJCF fovy at GOLEM_HAND_CAMERA_RES=<W>x<H> (default
+    # 256x256; 640x480 is the D405 colour stream). GOLEM_CAMERA_DEPTH=0 drops
     # depth/image_rect_raw and GOLEM_CAMERA_POINTCLOUD=0 drops depth/color/points
     # (with both off, the extra depth render is skipped).
     def _env_on(name):
@@ -297,11 +298,14 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         ("left_hand",  "gripper0_left_hand_cam"),
         ("right_hand", "gripper0_right_hand_cam"),
     ] if _cameras_on else []
-    _cameras = realsense_profile.camera_specs(model, _camera_names, _profile, _camera_scale, (256, 256))
+    _hand_res = tuple(int(v) for v in
+                      (os.environ.get('GOLEM_HAND_CAMERA_RES', '').strip() or '256x256').lower().split('x'))
+    _cameras = realsense_profile.camera_specs(model, _camera_names, _profile, _camera_scale, _hand_res)
     _depth_on, _cloud_on = _env_on('GOLEM_CAMERA_DEPTH'), _env_on('GOLEM_CAMERA_POINTCLOUD')
     print(f"[h12_mujoco] RGBD cameras {'ON' if _cameras_on else 'OFF (GOLEM_CAMERAS=0)'}"
           + (f": head {_cameras[0].color.width}x{_cameras[0].color.height} "
-             f"(GOLEM_CAMERA_SCALE={_camera_scale:g}), depth stream {'on' if _depth_on else 'off'}, "
+             f"(GOLEM_CAMERA_SCALE={_camera_scale:g}), hands {_hand_res[0]}x{_hand_res[1]}, "
+             f"depth stream {'on' if _depth_on else 'off'}, "
              f"point cloud {'on' if _cloud_on else 'off'}" if _cameras else ""))
     timings = LoopTimings(enabled=timing)
     ros_bridge = RosSensorBridge(

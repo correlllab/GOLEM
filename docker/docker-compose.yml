@@ -93,10 +93,24 @@ services:
       # Camera toggles (h12_mujoco.py); empty = its default. GOLEM_CAMERA_SCALE:
       # head-camera render scale of the real 1280x720 (default 0.5).
       # GOLEM_CAMERA_DEPTH / GOLEM_CAMERA_POINTCLOUD = 0 drop depth/image_rect_raw
-      # / depth/color/points.
+      # / depth/color/points. GOLEM_HAND_CAMERA_RES=<W>x<H> renders both hand
+      # cameras at that size (default 256x256).
       - GOLEM_CAMERA_SCALE=${GOLEM_CAMERA_SCALE:-}
       - GOLEM_CAMERA_DEPTH=${GOLEM_CAMERA_DEPTH:-}
       - GOLEM_CAMERA_POINTCLOUD=${GOLEM_CAMERA_POINTCLOUD:-}
+      - GOLEM_HAND_CAMERA_RES=${GOLEM_HAND_CAMERA_RES:-}
+      # 1 = publish ground-truth /odom + odom->pelvis TF (opt-in; never on by
+      # default — see h12_mujoco.py).
+      - GOLEM_SIM_ODOM=${GOLEM_SIM_ODOM:-0}
+      # 1 = experiment harness surface: /sim/ground_truth + /sim/reset_objects;
+      # off by default (measurement_bridge.py).
+      - GOLEM_SIM_EXPERIMENT=${GOLEM_SIM_EXPERIMENT:-0}
+      # N*m/rad; > 0 adds a rotational hold to the elastic band (rigid tether
+      # fixture for experiments). 0 = linear-only band (default).
+      - GOLEM_SIM_TETHER_ROT_STIFFNESS=${GOLEM_SIM_TETHER_ROT_STIFFNESS:-0}
+      - GOLEM_SIM_TETHER_ROT_BODY=${GOLEM_SIM_TETHER_ROT_BODY:-}
+      # "dx,dy" m (world) added to the task spawn; empty = task spawn.
+      - GOLEM_SPAWN_OFFSET=${GOLEM_SPAWN_OFFSET:-}
     volumes:
       - type: bind
         source: ../h1_robocasa

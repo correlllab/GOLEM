@@ -199,7 +199,9 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # /elastic_band/toggle service disables it).
     band = None
     band_body_id = -1
+    rot_body_id = -1
     band_vel = np.zeros(6)
+    rot_vel = np.zeros(6)
     try:
         band_body_id = resolver.body_id("torso_link")            # robot0_torso_link
         anchor = data.xpos[band_body_id].copy()
@@ -209,8 +211,24 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         # before FAME engages); at stiffness=1e3 it pitched forward to ~60deg and
         # FAME inherited a toppling robot. Static tilt ~ gravity_torque/stiffness.
         # damping=2e3 N*s/m damps a lateral shove out in well under a second.
-        band = ElasticBand(anchor, length=0, stiffness=1e4, damping=2e3)
-        print(f"[h12_mujoco] elastic band on torso anchored at {anchor.round(3)}")
+        # GOLEM_SIM_TETHER_ROT_STIFFNESS (N*m/rad, default 0 = off) adds a
+        # rotational hold at the spawn orientation while the band is on: a rigid
+        # hoist fixture for tethered manipulation experiments.
+        # GOLEM_SIM_TETHER_ROT_BODY picks the held body: torso (default) or
+        # pelvis — the pelvis hold also stops the legs spinning the pelvis about
+        # the waist while a policy steps with the feet off the ground. The torque
+        # is applied explicitly, so damping must keep d*dt/I well under 2 at the
+        # 2 ms step: torso yaw I ~0.13 kg*m^2 -> 0.04 s x stiffness; pelvis
+        # ~0.009 kg*m^2 -> 0.006 s x stiffness.
+        rot_k = float(os.environ.get("GOLEM_SIM_TETHER_ROT_STIFFNESS", "0") or 0)
+        rot_body = os.environ.get("GOLEM_SIM_TETHER_ROT_BODY", "torso").strip() or "torso"
+        rot_body_id = (resolver.body_id("pelvis") if rot_body == "pelvis" else band_body_id)
+        rot_d = (0.006 if rot_body == "pelvis" else 0.04) * rot_k
+        band = ElasticBand(anchor, length=0, stiffness=1e4, damping=2e3,
+                           orientation=data.xquat[rot_body_id].copy(),
+                           rot_stiffness=rot_k, rot_damping=rot_d)
+        print(f"[h12_mujoco] elastic band on torso anchored at {anchor.round(3)}"
+              + (f", rotational hold {rot_k:g} N*m/rad on the {rot_body}" if rot_k > 0 else ""))
     except Exception as e:
         print(f"[h12_mujoco] elastic band setup skipped: {e}")
 
@@ -425,8 +443,15 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                                                  band_body_id, band_vel, 0)
                         data.xfrc_applied[band_body_id, :3] = band.evaluate_force(
                             data.xpos[band_body_id], band_vel[3:])
+                        if band.rot_stiffness > 0.0:
+                            mujoco.mj_objectVelocity(model, data, mujoco.mjtObj.mjOBJ_BODY,
+                                                     rot_body_id, rot_vel, 0)
+                            data.xfrc_applied[rot_body_id, 3:] = band.evaluate_torque(
+                                data.xquat[rot_body_id], rot_vel[:3])
                     else:
-                        data.xfrc_applied[band_body_id, :3] = 0.0
+                        data.xfrc_applied[band_body_id, :] = 0.0
+                        if rot_body_id >= 0:
+                            data.xfrc_applied[rot_body_id, :] = 0.0
                 if sim_interface is not None:
                     # Recompute the DDS command's PD torque every sim step (emulates
                     # the real motor's ~1kHz servo) instead of only on each 50Hz

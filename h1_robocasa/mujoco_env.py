@@ -4,17 +4,27 @@ A vertical spring-damper that pulls a body (the torso) toward a fixed anchor
 point above its spawn, holding the free-floating biped upright until the ROS
 walking policy takes over. Toggle with SPACE in the viewer or the
 /elastic_band/toggle service.
+
+Optionally (rot_stiffness > 0) it also holds the body's orientation at
+`orientation` with a rotational spring-damper, which makes the tether a rigid
+hoist fixture: a linear-only band leaves yaw free, and the arm's reaction and
+contact torques then spin the hanging robot.
 """
 import mujoco
 import numpy as np
 
 
 class ElasticBand:
-    def __init__(self, point=np.array([0, 0, 3]), length=0, stiffness=200, damping=100):
+    def __init__(self, point=np.array([0, 0, 3]), length=0, stiffness=200, damping=100,
+                 orientation=None, rot_stiffness=0.0, rot_damping=0.0):
         self.point = point.astype(np.float64)
         self.length = length
         self.stiffness = stiffness  # N/m
         self.damping = damping      # N*s/m, on the full linear velocity
+        # Target orientation (wxyz quaternion, world) for the rotational hold.
+        self.orientation = None if orientation is None else np.asarray(orientation, dtype=np.float64)
+        self.rot_stiffness = float(rot_stiffness)   # N*m/rad
+        self.rot_damping = float(rot_damping)       # N*m*s/rad
         self.enabled = True
 
     def evaluate_force(self, x, v):
@@ -31,6 +41,23 @@ class ElasticBand:
         else:
             spring = np.zeros(3)
         return spring - self.damping * v
+
+    def evaluate_torque(self, quat, omega):
+        """World-frame torque on the body with orientation `quat` (wxyz) and
+        angular velocity `omega` (world), or zeros when the rotational hold is
+        off."""
+        if self.rot_stiffness <= 0.0 or self.orientation is None:
+            return np.zeros(3)
+        # q_err = q_target * conj(q): the world-frame rotation from q to target.
+        err = np.zeros(4)
+        neg = np.zeros(4)
+        mujoco.mju_negQuat(neg, np.asarray(quat, dtype=np.float64))
+        mujoco.mju_mulQuat(err, self.orientation, neg)
+        if err[0] < 0.0:
+            err = -err
+        rotvec = np.zeros(3)
+        mujoco.mju_quat2Vel(rotvec, err, 1.0)
+        return self.rot_stiffness * rotvec - self.rot_damping * np.asarray(omega)
 
     def toggle(self) -> bool:
         self.enabled = not self.enabled

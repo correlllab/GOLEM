@@ -180,8 +180,18 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         _spawn_backoff = float(os.environ.get("GOLEM_SPAWN_BACKOFF", "0") or 0)
         _spawn_margin = float(os.environ.get("GOLEM_SPAWN_MARGIN", "").strip()
                               or getattr(env, "spawn_margin", 0.20))
+        # GOLEM_SPAWN_OFFSET="dx,dy" (m, world) shifts the task's spawn before
+        # placement, e.g. to stand the robot in front of a different part.
+        # Unset = the task's own spawn.
+        _spawn_pos = list(env.init_robot_base_pos)
+        _offset = os.environ.get("GOLEM_SPAWN_OFFSET", "").strip()
+        if _offset:
+            _dx, _dy = (float(v) for v in _offset.split(","))
+            _spawn_pos[0] += _dx
+            _spawn_pos[1] += _dy
+            print(f"[h12_mujoco] spawn offset ({_dx:+.3f}, {_dy:+.3f}) m")
         h1_2_robosuite.place_robot_collision_free(
-            env, env.init_robot_base_pos,
+            env, _spawn_pos,
             h1_2_robosuite._euler_to_wxyz(getattr(env, "init_robot_base_ori", None)),
             extra_backoff=_spawn_backoff,
             margin=_spawn_margin,

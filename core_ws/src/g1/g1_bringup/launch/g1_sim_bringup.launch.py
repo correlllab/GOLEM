@@ -5,6 +5,8 @@
     ros2 launch g1_bringup g1_sim_bringup.launch.py use_locomotion:=true use_nav:=true
     ros2 launch g1_bringup g1_sim_bringup.launch.py use_locomotion:=true use_nav:=true \\
         odom_source:=sim_gt   # the sim started with GOLEM_SIM_ODOM=1
+    ros2 launch g1_bringup g1_sim_bringup.launch.py use_locomotion:=true use_nav:=true \\
+        frontier_explore:=true   # also serves /skill/frontier_explore
 
 The G1 RoboCasa sim (h1_robocasa/g1/) emulates rt/arm_sdk (weight slot 29
 blending with a leg/waist/arm hold), rt/dex3/* and, for use_locomotion:=true,
@@ -18,7 +20,9 @@ MID-360 (/livox/lidar, /livox/imu), with sim time and g1_fastlio_sim.yaml, and
 Nav2 drives the walking node on /cmd_vel; send goals to /navigate_to_pose.
 odom_source:=fastlio (the default) needs the sim started without
 GOLEM_SIM_ODOM, and odom_source:=sim_gt with GOLEM_SIM_ODOM=1. Otherwise
-odom -> pelvis has two publishers (TF breaks) or none.
+odom -> pelvis has two publishers (TF breaks) or none. frontier_explore:=true
+adds g1_navigation's frontier explorer, which walks the robot through Nav2 to
+the frontiers of /map.
 tests/g1/test_sim_nav.sh is the closed-loop test.
 '''
 
@@ -51,6 +55,10 @@ def generate_launch_description():
             'odom_source', default_value='fastlio',
             description="with use_nav: fastlio, or sim_gt (the sim's ground truth; start "
                         'the sim with GOLEM_SIM_ODOM=1)'),
+        DeclareLaunchArgument(
+            'frontier_explore', default_value='false',
+            description='with use_nav: the frontier explorer, serving '
+                        '/skill/frontier_explore'),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(core),
             launch_arguments={
@@ -64,6 +72,7 @@ def generate_launch_description():
                 'use_locomotion': LaunchConfiguration('use_locomotion'),
                 'use_nav': LaunchConfiguration('use_nav'),
                 'odom_source': LaunchConfiguration('odom_source'),
+                'frontier_explore': LaunchConfiguration('frontier_explore'),
             }.items(),
         ),
     ])

@@ -30,6 +30,9 @@ FAST_LIO config and clock in the sim. odom_source picks the odometry:
 fastlio (the default; the sim must not publish its ground truth, GOLEM_SIM_ODOM
 unset) or sim_gt (the sim's ground-truth odom -> pelvis, GOLEM_SIM_ODOM=1).
 FAST_LIO starts while the sim's stand-in holds the robot still, as it needs.
+frontier_explore:=true adds g1_navigation's frontier explorer (it serves
+/skill/frontier_explore), and is passed to g1_navigation as a launch argument
+of its include.
 
 The launch refuses to start on a bad pairing, checked by g1_control's
 utility/config_pairing.py (its robot_safety_launch.py uses the same rules):
@@ -238,12 +241,17 @@ def _setup(context):
         # sim's stand-in still holds the robot standing still
         nav = os.path.join(get_package_share_directory('g1_navigation'), 'launch',
                            'g1_navigation.launch.py')
+        # the arguments of this launch that g1_navigation also declares are passed
+        # explicitly: Humble includes are not scoped, so an included launch file sees
+        # every launch configuration set so far, and an argument left out would take a
+        # value set elsewhere
         actions.append(IncludeLaunchDescription(
             PythonLaunchDescriptionSource(nav),
             launch_arguments={
                 'odom_source': odom_source,
                 'sim': str(sim).lower(),
                 'use_sim_time': str(use_sim_time['use_sim_time']).lower(),
+                'frontier_explore': str(_as_bool(context, 'frontier_explore')).lower(),
             }.items(),
         ))
     return actions
@@ -282,6 +290,10 @@ def generate_launch_description():
             'odom_source', default_value='fastlio',
             description="with use_nav: fastlio, or sim_gt (the sim's ground truth, "
                         'GOLEM_SIM_ODOM=1)'),
+        DeclareLaunchArgument(
+            'frontier_explore', default_value='false',
+            description='with use_nav: the frontier explorer, serving '
+                        '/skill/frontier_explore'),
         # the leg-control interlock; the sim does not need it
         DeclareLaunchArgument(
             'start_position_verified', default_value='false',

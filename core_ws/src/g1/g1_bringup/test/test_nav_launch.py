@@ -2,8 +2,9 @@
 use_nav in the bringup: g1_core includes g1_navigation's launch with the sim's
 arguments, refuses navigation on the real robot (its lidar is not connected
 yet) and without the walking node, and the real and sim launches pass use_nav
-on. Needs the workspace built and sourced (g1_bringup, g1_description,
-g1_navigation and g1_control installed)
+on. frontier_explore reaches g1_navigation as an explicit launch argument of
+that include. Needs the workspace built and sourced (g1_bringup,
+g1_description, g1_navigation and g1_control installed)
 '''
 
 import os
@@ -19,7 +20,7 @@ from launch.utilities import normalize_to_list_of_substitutions, perform_substit
 from launch_ros.actions import Node
 from launch_ros.utilities import evaluate_parameters
 
-from test_locomotion_launch import _context, _core_nodes, _passed_to_core, core
+from test_locomotion_launch import _context, _core_nodes, _load, _passed_to_core, core
 
 NAV_LAUNCH = os.path.join(get_package_share_directory('g1_navigation'), 'launch',
                           'g1_navigation.launch.py')
@@ -88,7 +89,8 @@ def test_sim_bringup_includes_navigation(odom_source):
     assert 'locomotion_node' in _core_nodes(**passed)
     path, arguments = _nav_include(**passed)
     assert path == NAV_LAUNCH
-    assert arguments == {'odom_source': odom_source, 'sim': 'true', 'use_sim_time': 'true'}
+    assert arguments == {'odom_source': odom_source, 'sim': 'true', 'use_sim_time': 'true',
+                         'frontier_explore': 'false'}
 
     nodes = _nav_nodes(path, arguments)
     assert ('fast_lio' in nodes) == (odom_source == 'fastlio')
@@ -102,6 +104,31 @@ def test_sim_bringup_includes_navigation(odom_source):
             continue   # static_transform_publisher: arguments only
         # pointcloud_to_laserscan runs on the wall clock (g1_navigation.launch.py)
         assert values.get('use_sim_time') is (name != 'pointcloud_to_laserscan'), name
+
+
+def test_frontier_explore_is_declared_and_forwarded():
+    # an argument of the sim bringup and of g1_core, off by default
+    for launch_file in ('g1_sim_bringup.launch.py', 'g1_core.launch.py'):
+        description = _load(launch_file).generate_launch_description()
+        declared = {e.name: e for e in description.entities
+                    if isinstance(e, DeclareLaunchArgument)}
+        assert 'frontier_explore' in declared, f'{launch_file} does not declare it'
+        default = perform_substitutions(LaunchContext(),
+                                        declared['frontier_explore'].default_value)
+        assert default == 'false', launch_file
+    assert _passed_to_core('g1_sim_bringup.launch.py')['frontier_explore'] == 'false'
+
+    # the sim bringup hands it to g1_core, and g1_core to g1_navigation, as a launch
+    # argument of the include: not left to the launch context they share
+    for value in ('true', 'false'):
+        passed = _passed_to_core('g1_sim_bringup.launch.py', use_locomotion='true',
+                                 use_nav='true', frontier_explore=value)
+        assert passed['frontier_explore'] == value
+        path, arguments = _nav_include(**passed)
+        assert path == NAV_LAUNCH
+        assert arguments['frontier_explore'] == value
+        # and g1_navigation starts the explorer only when asked
+        assert ('frontier_explore' in _nav_nodes(path, arguments)) == (value == 'true')
 
 
 def test_core_passes_use_sim_time_on():

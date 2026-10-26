@@ -1,0 +1,554 @@
+"""ROS 2 side of the G1 sim: /clock, the MID-360 and the head D435 as their drivers
+publish them, and optional ground-truth odometry.
+
+  /clock                                     rosgraph_msgs/Clock, after every physics step
+  /livox/lidar                               livox_ros_driver2/CustomMsg, 10 Hz, livox_frame
+  /livox/imu                                 sensor_msgs/Imu, 200 Hz, livox_frame
+  /realsense/head/color/image_raw            sensor_msgs/Image rgb8, 6 Hz, head_color_optical_frame
+  /realsense/head/color/image_raw/compressed sensor_msgs/CompressedImage (JPEG)
+  /realsense/head/aligned_depth_to_color/image_raw
+                                             sensor_msgs/Image 16UC1 (mm)
+  /realsense/head/aligned_depth_to_color/image_raw/compressedDepth
+                                             sensor_msgs/CompressedImage (16UC1 PNG)
+  /realsense/head/color/camera_info          sensor_msgs/CameraInfo
+  /tf_static                                 d435_link -> head_color_optical_frame, with the camera
+  /odom and odom -> pelvis on /tf            ground truth, only with base_body_id (HAMS_SIM_ODOM=1)
+
+Both sensors are on by default, as on the robot; SensorConfig lists the env
+knobs that turn each off or lower its rate or resolution. g1_lidar.py and
+g1_head_camera.py model them and g1_sensor_msgs.py packs their messages (see
+those for the frames, units and formats). Like the Livox driver in CustomMsg
+mode, the sim does not publish /livox/pointcloud. robot_state_publisher gives
+torso_link -> mid360_link and -> d435_link, and g1_navigation mid360_link ->
+livox_frame; head_color_optical_frame stands in for the RealSense node's own
+frames.
+
+Stamps are sim time, of the state a sample measures. tick() runs after mj_step,
+which leaves the kinematics, velocities and accelerations of the state it
+started from, so the sensors are stamped one physics step (2 ms) before /clock.
+The IMU's 200 Hz falls between the 2 ms physics steps: its samples alternate
+4 and 6 ms apart, 200 per sim second.
+
+Threads. tick() runs on the physics thread between steps, with the sim lock
+held. The sensors' heavy work runs on two threads of their own, which never
+touch the sim's MjData:
+  - mid360_scan casts the lidar's rays (an exact ray costs 4 to 6 us, 50,000
+    per sim second by default). Every LIDAR_CAST_EVERY physics steps (10 ms)
+    the physics thread copies what a cast reads, every geom's pose and the
+    sensor's, into a slot of a ring; the thread copies the slot into its own
+    MjData, on its own copy of the model (cast() edits the model it is given,
+    and mj_step reads the same field), and casts the rays due by then, labelled
+    with that time. mj_multiRay releases the GIL, so the casts run beside the
+    physics; casting every step instead would wake the thread 500 times a sim
+    second, and its Python between casts would hold up the physics thread.
+    The slot also carries the geoms' and materials' alpha, which RoboCasa tasks
+    change at runtime (liquids, fruit, hidden walls) and the rays skip at 0.
+    Other runtime edits of the model do not reach the thread's copy; RoboCasa's
+    others (body poses, which reach the casts through the geom poses, sites and
+    contact flags) do not change what a ray hits.
+  - head_camera renders, converts, compresses and publishes each frame. At the
+    camera's rate the physics thread copies what the camera sees into the
+    renderer's scene (mjv_updateScene, which reads MjData: about 0.1 ms in the
+    G1-only model, CPU only); the thread owns the renderer's GL context (it is
+    thread-affine) and renders that scene, with the GIL released, so the render
+    (15-20 ms a frame at 1280x720) does not hold up the physics or rt/lowstate
+    (and g1_mujoco's 0.5 ms GIL switch interval keeps the thread's Python work
+    from doing so). The scene is handed over, not copied: a frame that comes due
+    while the thread still renders the last is dropped (and counted).
+The IMU is read and published on the physics thread (tens of us a sample).
+"""
+import copy
+import math
+import os
+import queue
+import threading
+import time
+from typing import NamedTuple
+
+import mujoco
+import numpy as np
+import rclpy
+from builtin_interfaces.msg import Time as TimeMsg
+from geometry_msgs.msg import TransformStamped
+from livox_ros_driver2.msg import CustomMsg
+from nav_msgs.msg import Odometry
+from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from rosgraph_msgs.msg import Clock
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Imu
+from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
+
+import g1_head_camera
+import g1_lidar
+import g1_sensor_msgs as sm
+
+HEAD_CAMERA_NS = "/realsense/head"
+HEAD_CAMERA_LINK = "d435_link"
+# the real driver's QoS on both MID-360 topics: default (reliable), queue 256
+LIVOX_QOS = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=256)
+# physics steps between lidar casts: the points are cast from 100 poses per sim
+# second (at the 2 ms step), each labelled with its pose's time
+LIDAR_CAST_EVERY = 5
+# casts the lidar's ring holds before the physics thread skips one
+LIDAR_SLOTS = 20
+MAX_CAMERA_HZ = 30.0   # the D435's top rate at 1280x720
+CAMERA_START_S = 60.0   # wall s for the head camera's thread to make and try its renderer
+WARN_PERIOD_S = 5.0   # wall s between repeats of one warning
+_EPS_T = 1e-9   # s, tolerance on accumulated sim time
+
+
+def _sim_time_to_msg(sim_time: float) -> TimeMsg:
+    """Convert MuJoCo sim time (float seconds) to a ROS Time message."""
+    sec = int(sim_time)
+    nanosec = int((sim_time - sec) * 1e9)
+    msg = TimeMsg()
+    msg.sec = sec
+    msg.nanosec = nanosec
+    return msg
+
+
+def _log(text):
+    print(f"[mujoco_ros_bridge] {text}", flush=True)
+
+
+def _env_flag(env, name, default):
+    raw = env.get(name, "").strip().lower()
+    return default if raw == "" else raw not in ("0", "off", "false", "no")
+
+
+def _env_number(env, name, default, kind):
+    raw = env.get(name, "").strip()
+    try:
+        value = kind(raw) if raw else default
+    except ValueError:
+        raise ValueError(f"{name} must be a {kind.__name__}, got {raw!r}") from None
+    if not (math.isfinite(value) and value > 0):
+        raise ValueError(f"{name} must be positive, got {raw!r}")
+    return value
+
+
+class SensorConfig(NamedTuple):
+    """The simulated sensors. from_env() reads them from these env knobs:
+      HAMS_LIDAR=0         no MID-360 (/livox/lidar, /livox/imu)
+      HAMS_LIDAR_POINTS    points per lidar frame (default 5000; the real sensor's
+                           ~20,000 cost 4x as much, see g1_lidar.py)
+      HAMS_LIDAR_HZ        lidar frames per sim second (default 10, the driver's; at
+                           most 100, the rate the rays are cast at)
+      HAMS_CAMERAS=0       no head camera (/realsense/head/*, its /tf_static)
+      HAMS_CAMERA_HZ       head camera frames per sim second (default 6; at most
+                           30, the D435's top rate at 1280x720)
+      HAMS_CAMERA_SIZE     WIDTHxHEIGHT (default 1280x720); 6 Hz at 1280x720 is
+                           the head camera's profile in cl_realsense's launch file
+    """
+    lidar: bool = True
+    lidar_points: int = g1_lidar.POINTS_PER_FRAME
+    lidar_hz: float = g1_lidar.FRAME_RATE_HZ
+    imu_hz: float = g1_lidar.IMU_RATE_HZ
+    camera: bool = True
+    camera_hz: float = 6.0
+    camera_width: int = g1_head_camera.WIDTH
+    camera_height: int = g1_head_camera.HEIGHT
+
+    @classmethod
+    def from_env(cls, env=os.environ):
+        size = env.get("HAMS_CAMERA_SIZE", "").strip().lower()
+        try:
+            width, height = ((int(v) for v in size.split("x")) if size
+                             else (cls._field_defaults["camera_width"], cls._field_defaults["camera_height"]))
+        except ValueError:
+            raise ValueError(f"HAMS_CAMERA_SIZE must be WIDTHxHEIGHT, e.g. 640x360, got {size!r}") from None
+        if width <= 0 or height <= 0:
+            raise ValueError(f"HAMS_CAMERA_SIZE must be positive, got {size!r}")
+        lidar_hz = _env_number(env, "HAMS_LIDAR_HZ", cls._field_defaults["lidar_hz"], float)
+        if lidar_hz > 100.0:
+            raise ValueError(f"HAMS_LIDAR_HZ must be at most 100, got {lidar_hz:g}")
+        camera_hz = _env_number(env, "HAMS_CAMERA_HZ", cls._field_defaults["camera_hz"], float)
+        if camera_hz > MAX_CAMERA_HZ:
+            raise ValueError(f"HAMS_CAMERA_HZ must be at most {MAX_CAMERA_HZ:g}, got {camera_hz:g}")
+        return cls(lidar=_env_flag(env, "HAMS_LIDAR", True),
+                   lidar_points=_env_number(env, "HAMS_LIDAR_POINTS", cls._field_defaults["lidar_points"], int),
+                   lidar_hz=lidar_hz,
+                   camera=_env_flag(env, "HAMS_CAMERAS", True),
+                   camera_hz=camera_hz,
+                   camera_width=width, camera_height=height)
+
+    def describe(self):
+        lidar = (f"MID-360 {self.lidar_points} points x {self.lidar_hz:g} Hz + IMU {self.imu_hz:g} Hz"
+                 if self.lidar else "no lidar (HAMS_LIDAR=0)")
+        camera = (f"head D435 {self.camera_width}x{self.camera_height} at {self.camera_hz:g} Hz"
+                  if self.camera else "no head camera (HAMS_CAMERAS=0)")
+        return f"{lidar}; {camera}"
+
+
+class _Schedule:
+    """Sample times at rate_hz of sim time from the first tick, starting again
+    when the sim time goes back (MuJoCo's reset)"""
+
+    def __init__(self, rate_hz):
+        self.period = 1.0 / rate_hz
+        self._next = self._last = None
+
+    def due(self, t):
+        if self._next is None or t < self._last:
+            self._next = t
+        self._last = t
+        if t < self._next - _EPS_T:
+            return False
+        self._next += self.period
+        return True
+
+
+class _LidarScans:
+    """The MID-360's scans on the mid360_scan thread (see the module docstring);
+    submit() on the physics thread, between steps"""
+
+    def __init__(self, model, data, prefix, config, publish):
+        self._live = model   # read on the physics thread only, for the alpha
+        self.model = copy.copy(model)
+        self.data = mujoco.MjData(self.model)
+        self.mid360 = g1_lidar.Mid360(self.model, prefix, points_per_frame=config.lidar_points,
+                                      rate_hz=config.lidar_hz)
+        self._site = self.mid360.site_id
+        self._publish = publish
+        self._geom_xpos = np.empty((LIDAR_SLOTS,) + data.geom_xpos.shape)
+        self._geom_xmat = np.empty((LIDAR_SLOTS,) + data.geom_xmat.shape)
+        self._site_xpos = np.empty((LIDAR_SLOTS, 3))
+        self._site_xmat = np.empty((LIDAR_SLOTS, 9))
+        self._geom_alpha = np.empty((LIDAR_SLOTS, model.ngeom), model.geom_rgba.dtype)
+        self._mat_alpha = np.empty((LIDAR_SLOTS, model.nmat), model.mat_rgba.dtype)
+        self._free = queue.SimpleQueue()
+        for slot in range(LIDAR_SLOTS):
+            self._free.put(slot)
+        self._work = queue.SimpleQueue()
+        self.frames = self.skipped = 0
+        self._errors = set()
+        self._warned = -WARN_PERIOD_S
+        self._thread = threading.Thread(target=self._run, name="mid360_scan", daemon=True)
+        self._thread.start()
+
+    def submit(self, data, t):
+        """Hand the poses of data's kinematics, at sim time t, and the model's
+        alpha to the thread; if it is LIDAR_SLOTS casts behind, skip this one:
+        the next casts the rays due by then"""
+        try:
+            slot = self._free.get_nowait()
+        except queue.Empty:
+            self.skipped += 1
+            if time.monotonic() - self._warned >= WARN_PERIOD_S:
+                self._warned = time.monotonic()
+                _log(f"WARNING: the lidar thread is {LIDAR_SLOTS} casts behind at sim t {t:.2f} s (short of "
+                     f"CPU); skipping casts, the next one casts their rays ({self.skipped} skipped so far)")
+            return
+        np.copyto(self._geom_xpos[slot], data.geom_xpos)
+        np.copyto(self._geom_xmat[slot], data.geom_xmat)
+        self._site_xpos[slot] = data.site_xpos[self._site]
+        self._site_xmat[slot] = data.site_xmat[self._site]
+        self._geom_alpha[slot] = self._live.geom_rgba[:, 3]
+        self._mat_alpha[slot] = self._live.mat_rgba[:, 3]
+        self._work.put((slot, t))
+
+    def _run(self):
+        d = self.data
+        while (item := self._work.get()) is not None:
+            slot, t = item
+            np.copyto(d.geom_xpos, self._geom_xpos[slot])
+            np.copyto(d.geom_xmat, self._geom_xmat[slot])
+            d.site_xpos[self._site] = self._site_xpos[slot]
+            d.site_xmat[self._site] = self._site_xmat[slot]
+            self.model.geom_rgba[:, 3] = self._geom_alpha[slot]
+            self.model.mat_rgba[:, 3] = self._mat_alpha[slot]
+            self._free.put(slot)
+            try:
+                frame = self.mid360.update(d, t)
+                if frame is not None:
+                    self._publish(sm.livox_custom_msg_cdr(frame))   # rclpy publishes CDR bytes as is
+                    self.frames += 1
+            except Exception as e:   # keep the sim running; say so once per kind
+                if type(e) not in self._errors:
+                    self._errors.add(type(e))
+                    _log(f"WARNING: /livox/lidar scan failed at sim t {t:.3f}: {e!r}")
+
+    def close(self):
+        self._work.put(None)
+        self._thread.join(timeout=5.0)
+
+
+class _Mid360:
+    """/livox/lidar (scans on their own thread) and /livox/imu (on the physics thread)"""
+
+    def __init__(self, node, model, data, prefix, config):
+        self.pub_lidar = node.create_publisher(CustomMsg, "/livox/lidar", LIVOX_QOS)
+        self.pub_imu = node.create_publisher(Imu, "/livox/imu", LIVOX_QOS)
+        self._imu = g1_lidar.Mid360(model, prefix)   # imu() only: it reads the live MjData
+        self._imu_schedule = _Schedule(config.imu_hz)
+        self.imu_samples = 0
+        self._steps = 0
+        self.scans = _LidarScans(model, data, prefix, config, self.pub_lidar.publish)
+
+    def tick(self, data, t):
+        if self._steps % LIDAR_CAST_EVERY == 0:
+            self.scans.submit(data, t)
+        self._steps += 1
+        if self._imu_schedule.due(t):
+            angular_velocity, specific_force = self._imu.imu(data)
+            self.pub_imu.publish(sm.livox_imu_msg(t, angular_velocity, specific_force))
+            self.imu_samples += 1
+
+    def close(self):
+        self.scans.close()
+
+    def stats(self):
+        return (f"{self.scans.frames} lidar frames ({self.scans.skipped} casts skipped), "
+                f"{self.imu_samples} IMU samples")
+
+
+class _HeadCamera:
+    """/realsense/head/*: the physics thread fills the camera's scene at its rate;
+    the head_camera thread renders, converts, compresses and publishes it"""
+
+    def __init__(self, node, model, data, prefix, config):
+        self.camera = g1_head_camera.HeadCamera(model, prefix, config.camera_width, config.camera_height)
+        pub = {}
+        for name, kind, topic in (("color", Image, "/color/image_raw"),
+                                  ("depth", Image, "/aligned_depth_to_color/image_raw"),
+                                  ("info", CameraInfo, "/color/camera_info"),
+                                  ("color_jpeg", CompressedImage, "/color/image_raw/compressed"),
+                                  ("depth_png", CompressedImage,
+                                   "/aligned_depth_to_color/image_raw/compressedDepth")):
+            pub[name] = node.create_publisher(kind, HEAD_CAMERA_NS + topic, qos_profile_sensor_data)
+        self._pub = pub
+        self._schedule = _Schedule(config.camera_hz)
+        # set while the thread is not rendering the scene: only then does the
+        # physics thread fill it; a frame due while it is clear is dropped
+        self._idle = threading.Event()
+        self._frames = queue.SimpleQueue()
+        self.rendered = self.dropped = self.published = 0
+        self._errors = set()
+        # the thread makes and tries its renderer now, so a missing GL fails at startup
+        started = queue.SimpleQueue()
+        self._thread = threading.Thread(target=self._run, args=(started,), name="head_camera", daemon=True)
+        self._thread.start()
+        try:
+            error = started.get(timeout=CAMERA_START_S)
+        except queue.Empty:
+            error = TimeoutError(f"the head camera's renderer was not ready after {CAMERA_START_S:g} s")
+        if error is not None:
+            raise error
+        # head_color_optical_frame on the URDF's camera link, as head_cam sits there
+        tf = TransformStamped()
+        tf.header.stamp = _sim_time_to_msg(float(data.time))
+        tf.header.frame_id = HEAD_CAMERA_LINK
+        tf.child_frame_id = sm.HEAD_OPTICAL_FRAME
+        r = tf.transform.rotation
+        r.x, r.y, r.z, r.w = g1_head_camera.OPTICAL_IN_D435_XYZW
+        self._static_tf = StaticTransformBroadcaster(node)
+        self._static_tf.sendTransform(tf)
+
+    def tick(self, data, t):
+        """On the physics thread: fill the scene from data at the camera's rate"""
+        if not self._schedule.due(t):
+            return
+        if not self._idle.is_set():
+            self.dropped += 1
+            return
+        self._idle.clear()
+        try:
+            self.camera.update_scene(data)
+        except Exception:
+            self._idle.set()
+            raise
+        self.rendered += 1
+        self._frames.put(t)
+
+    def _run(self, started):
+        cam = self.camera
+        try:
+            cam.make_renderer()
+            cam.render_scene()   # an empty scene: the GL context works
+        except Exception as e:
+            started.put(e)
+            cam.close()
+            return
+        started.put(None)
+        self._idle.set()
+        while (t := self._frames.get()) is not None:
+            try:
+                rgb, depth = cam.render_scene()
+            except Exception as e:   # keep the sim running; say so once per kind
+                self._warn_once(e, f"WARNING: /realsense/head render failed at sim t {t:.3f}: {e!r}")
+                continue
+            finally:
+                self._idle.set()
+            try:
+                depth = cam.depth_mm(depth)
+                pub = self._pub
+                pub["color"].publish(sm.color_image_msg(t, rgb))
+                pub["depth"].publish(sm.depth_image_msg(t, depth))
+                pub["info"].publish(sm.camera_info_msg(t, cam.width, cam.height, cam.fx, cam.fy, cam.cx, cam.cy))
+                pub["color_jpeg"].publish(sm.color_compressed_msg(t, rgb))
+                pub["depth_png"].publish(sm.depth_compressed_msg(t, depth))
+                self.published += 1
+            except Exception as e:
+                self._warn_once(e, f"WARNING: /realsense/head frame failed at sim t {t:.3f}: {e!r}")
+        cam.close()   # on this thread, which owns the GL context
+
+    def _warn_once(self, error, text):
+        if type(error) not in self._errors:
+            self._errors.add(type(error))
+            _log(text)
+
+    def close(self):
+        """After the last tick: the thread renders what is queued, then closes the renderer"""
+        self._frames.put(None)
+        self._thread.join(timeout=5.0)
+
+    def stats(self):
+        return (f"{self.published} head camera frames ({self.dropped} of {self.rendered + self.dropped} "
+                f"due dropped)")
+
+
+class RosSensorBridge(Node):
+    def __init__(
+        self,
+        model,
+        data,
+        prefix: str = "robot0_",
+        sensors: SensorConfig = None,
+        base_body_id: int = -1,
+        odom_frame: str = "odom",
+        base_frame: str = "pelvis",
+        odom_rate_hz: float = 50.0,
+        sim_lock=None,
+    ):
+        super().__init__("mujoco_sensors")
+        self.model = model
+        self.data = data
+        self.sim_lock = sim_lock
+
+        # /clock stays on default reliable QoS so subscribers don't drop ticks.
+        self.pub_clock = self.create_publisher(Clock, "/clock", 10)
+
+        # The sensors (SensorConfig.from_env() by default); the camera's thread
+        # makes and tries its renderer here, so a missing GL fails at startup
+        sensors = SensorConfig.from_env() if sensors is None else sensors
+        self.mid360 = _Mid360(self, model, data, prefix, sensors) if sensors.lidar else None
+        self.head_camera = _HeadCamera(self, model, data, prefix, sensors) if sensors.camera else None
+
+        # Ground-truth base odometry (odom -> base_frame TF + /odom). The sim knows
+        # the pelvis world pose exactly, so we publish it directly instead of
+        # running FAST-LIO. This is the odom source SLAM (slam_toolbox) consumes.
+        self.base_body_id = int(base_body_id)
+        self.odom_frame = odom_frame
+        self.base_frame = base_frame
+        self.odom_period = 1.0 / odom_rate_hz
+        self._last_odom_sim_t = 0.0
+        if self.base_body_id >= 0:
+            self._tf_broadcaster = TransformBroadcaster(self)
+            self.pub_odom = self.create_publisher(Odometry, "/odom", 10)
+
+    def shutdown(self) -> None:
+        """Stop the sensors' threads; on the physics thread, after the last tick()"""
+        for sensor in (self.mid360, self.head_camera):
+            if sensor is not None:
+                sensor.close()
+        if self.mid360 is not None or self.head_camera is not None:
+            _log("sensors published " + ", ".join(s.stats() for s in (self.mid360, self.head_camera) if s))
+
+    def stats(self):
+        """The sensors' counts so far, for the sim's log"""
+        return ", ".join(s.stats() for s in (self.mid360, self.head_camera) if s is not None)
+
+    def tick(self) -> None:
+        """Call once per sim step from the main loop, after mj_step.
+
+        /clock is published every call, odom at its rate, and the sensors at
+        theirs, keyed off sim time.
+        """
+        sim_t = float(self.data.time)
+        stamp = _sim_time_to_msg(sim_t)
+
+        # Always publish /clock so subscriber nodes can track sim time.
+        clock_msg = Clock()
+        clock_msg.clock = stamp
+        self.pub_clock.publish(clock_msg)
+
+        if self.base_body_id >= 0 and sim_t - self._last_odom_sim_t >= self.odom_period:
+            self._last_odom_sim_t = sim_t
+            try:
+                self._publish_odom(stamp)
+            except Exception as e:
+                self.get_logger().warn(f"odom publish failed: {e}")
+
+        # the state the sensors measure: the one mj_step started from
+        t = sim_t - self.model.opt.timestep
+        if self.mid360 is not None:
+            self.mid360.tick(self.data, t)
+        if self.head_camera is not None:
+            try:
+                self.head_camera.tick(self.data, t)
+            except Exception as e:
+                self.get_logger().warn(f"head camera scene update failed: {e}", throttle_duration_sec=5.0)
+
+    def _publish_odom(self, stamp: TimeMsg) -> None:
+        # Ground-truth pelvis pose in the sim world (used as the odom frame).
+        # MuJoCo quaternions are (w, x, y, z); ROS wants (x, y, z, w).
+        pos = self.data.xpos[self.base_body_id]
+        quat = self.data.xquat[self.base_body_id]
+        px, py, pz = float(pos[0]), float(pos[1]), float(pos[2])
+        qw, qx, qy, qz = (float(quat[0]), float(quat[1]),
+                          float(quat[2]), float(quat[3]))
+
+        tf = TransformStamped()
+        tf.header.stamp = stamp
+        tf.header.frame_id = self.odom_frame
+        tf.child_frame_id = self.base_frame
+        tf.transform.translation.x = px
+        tf.transform.translation.y = py
+        tf.transform.translation.z = pz
+        tf.transform.rotation.x = qx
+        tf.transform.rotation.y = qy
+        tf.transform.rotation.z = qz
+        tf.transform.rotation.w = qw
+        self._tf_broadcaster.sendTransform(tf)
+
+        odom = Odometry()
+        odom.header.stamp = stamp
+        odom.header.frame_id = self.odom_frame
+        odom.child_frame_id = self.base_frame
+        odom.pose.pose.position.x = px
+        odom.pose.pose.position.y = py
+        odom.pose.pose.position.z = pz
+        odom.pose.pose.orientation.x = qx
+        odom.pose.pose.orientation.y = qy
+        odom.pose.pose.orientation.z = qz
+        odom.pose.pose.orientation.w = qw
+        self.pub_odom.publish(odom)
+
+
+def init_ros() -> bool:
+    raw = os.getenv("ROS_DOMAIN_ID")
+    if raw is None or raw == "":
+        raise RuntimeError(
+            "ROS_DOMAIN_ID is not set. Export a positive integer "
+            "(domain 0 is reserved for the real robot), e.g. "
+            "`export ROS_DOMAIN_ID=1`."
+        )
+    try:
+        domain = int(raw)
+    except ValueError as e:
+        raise RuntimeError(
+            f"ROS_DOMAIN_ID must be an integer, got {raw!r}."
+        ) from e
+    if domain <= 0:
+        raise RuntimeError(
+            f"ROS_DOMAIN_ID must be a positive integer (>0), got {domain}. "
+            "Domain 0 is reserved for the real robot."
+        )
+    if not rclpy.ok():
+        rclpy.init()
+    return True
+
+
+def shutdown_ros() -> None:
+    if rclpy.ok():
+        rclpy.shutdown()

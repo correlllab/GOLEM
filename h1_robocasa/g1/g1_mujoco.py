@@ -11,15 +11,15 @@ import mujoco
 import numpy as np
 import rclpy.executors
 
-from mujoco_ros_bridge import init_ros, shutdown_ros
+from .mujoco_ros_bridge import init_ros, shutdown_ros
 import mujoco.viewer
 
-import g1_robosuite  # registers G1Dex3 + its grippers, patches RoboCasa
+from . import g1_robosuite  # registers G1Dex3 + its grippers, patches RoboCasa
 from measurement_bridge import MeasurementBridge
-from mujoco_ros_bridge import RosSensorBridge, SensorConfig
-from sim_names import BODY_JOINTS, NameResolver
-from stand_in import StandIn
-from unitree_interface import SimInterface
+from .mujoco_ros_bridge import RosSensorBridge, SensorConfig
+from .sim_names import BODY_JOINTS, NameResolver
+from .stand_in import StandIn
+from .unitree_interface import SimInterface
 
 # Viewer free-camera spawn pose, anchored to the robot so the passive viewer
 # opens framed on the robot wherever it spawns (RoboCasa places the base by

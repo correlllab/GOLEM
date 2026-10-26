@@ -78,9 +78,9 @@ from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Imu
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
-import g1_head_camera
-import g1_lidar
-import g1_sensor_msgs as sm
+from . import g1_head_camera
+from . import g1_lidar
+from . import g1_sensor_msgs as sm
 
 HEAD_CAMERA_NS = "/realsense/head"
 HEAD_CAMERA_LINK = "d435_link"

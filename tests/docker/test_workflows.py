@@ -470,6 +470,56 @@ esac
             self.assertNotEqual(r.returncode, 0)
             self.assertIn('reserved for the real robot', r.stderr)
 
+    def test_g1_domain0_check_follows_every_robot_selection(self):
+        # check_domain must see the robot the wrapper resolved from --g1 or from a
+        # value that only normalises after configure_robot (uppercase), not just a
+        # GOLEM_ROBOT=g1 that is already in the environment.
+        self.add_g1_files()
+        self.install_ip_stub()
+        up = {'IP_STATE': 'UP', 'IP_INET': '192.168.123.222/24'}
+        selections = (
+            ('flag, GOLEM_ROBOT unset', ('--g1',), None, {}),
+            ('flag after the service', ('--restart', '--g1'), None, {}),
+            ('uppercase GOLEM_ROBOT in the shell', (), None, {'GOLEM_ROBOT': 'G1'}),
+            ('uppercase GOLEM_ROBOT in docker/.env', (), 'GOLEM_ROBOT=G1\n', {}),
+        )
+        for label, args, dotenv, shell in selections:
+            env_file = self.root / 'docker/.env'
+            env_file.unlink(missing_ok=True)
+            if dotenv:
+                env_file.write_text(dotenv)
+
+            def domain0(stdin, **env):
+                (self.root / 'calls').unlink(missing_ok=True)
+                return self.run_with_input('docker/scripts/docker_run.sh', 'ros', *args, stdin=stdin,
+                                           ROS_DOMAIN_ID='0', **shell, **env)
+
+            with self.subTest(label, case='empty interface'):
+                # 'y' is on stdin: a prompt that was read would proceed to compose.
+                r = domain0('y\n', G1_DDS_INTERFACE='')
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn('G1_DDS_INTERFACE', r.stderr)
+                self.assertNotIn('Real-robot launch cancelled', r.stderr)
+                self.assertFalse(self.compose_calls())
+            with self.subTest(label, case='no such interface'):
+                r = domain0('y\n', G1_DDS_INTERFACE='nosuchif0', **up)
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn('is not a network interface', r.stderr)
+                self.assertFalse(self.compose_calls())
+            with self.subTest(label, case='usable interface reaches the prompt'):
+                r = domain0('n\n', G1_DDS_INTERFACE='eth7', **up)
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn('Real-robot launch cancelled', r.stderr)
+                self.assertFalse(self.compose_calls())
+        with self.subTest('the stack wrapper refuses domain 0 for its simulator'):
+            (self.root / 'docker/.env').unlink(missing_ok=True)
+            (self.root / 'calls').unlink(missing_ok=True)
+            r = self.run_with_input('docker/scripts/docker_stack.sh', 'up', 'robocasa', '--g1', stdin='y\n',
+                                    ROS_DOMAIN_ID='0', G1_DDS_INTERFACE='eth7', **up)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn('reserved for the real robot', r.stderr)
+            self.assertFalse(self.compose_calls())
+
     def test_h12_domain0_needs_no_interface(self):
         r = self.run_with_input('docker/scripts/docker_run.sh', 'ros', stdin='n\n', ROS_DOMAIN_ID='0')
         self.assertNotEqual(r.returncode, 0)
@@ -503,6 +553,16 @@ esac
         self.assertEqual(self.stack_up_env(), {'GOLEM_ROBOT': 'g1', 'GOLEM_BRINGUP_PACKAGE': 'g1_bringup',
                                                'GOLEM_BRINGUP_LAUNCH': 'g1_sim_bringup.launch.py'})
         self.assertEqual(r.stderr.count('robot: g1'), 1)
+
+    def test_stack_g1_overrides_leftover_bringup_selection(self):
+        self.add_g1_files()
+        self.install_env_recording_docker()
+        (self.root / 'docker/.env').write_text('GOLEM_BRINGUP_PACKAGE=h12_bringup\n')
+        r = self.run_script('docker/scripts/docker_stack.sh', 'up', 'robocasa', '--g1', '--headless',
+                            GOLEM_BRINGUP_LAUNCH='h12_sim_bringup.launch.py')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.stack_up_env(), {'GOLEM_ROBOT': 'g1', 'GOLEM_BRINGUP_PACKAGE': 'g1_bringup',
+                                               'GOLEM_BRINGUP_LAUNCH': 'g1_sim_bringup.launch.py'})
 
     def test_stack_default_robot_leaves_bringup_to_compose_defaults(self):
         self.install_env_recording_docker()

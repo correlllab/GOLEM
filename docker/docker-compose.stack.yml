@@ -1,5 +1,6 @@
 # Selected by docker_stack.sh; shell launches keep their existing default.
-# docker_stack.sh --g1 sets GOLEM_BRINGUP_PACKAGE / GOLEM_BRINGUP_LAUNCH to the G1 bringup.
+# For the G1 (GOLEM_ROBOT=g1 or --g1) docker_stack.sh sets GOLEM_BRINGUP_PACKAGE /
+# GOLEM_BRINGUP_LAUNCH to the G1 bringup; otherwise the H1-2 defaults below apply.
 services:
   ros:
     environment:

@@ -32,9 +32,10 @@ if [ "$ACTION" = logs ]; then exec "${COMPOSE[@]}" logs -f "$SIM" ros; fi
 configure_robot "$SIM"
 echo "robot: $GOLEM_ROBOT" >&2
 if [ "$GOLEM_ROBOT" = g1 ]; then
-    # Read by docker-compose.stack.yml; an explicit export still wins.
-    export GOLEM_BRINGUP_PACKAGE=${GOLEM_BRINGUP_PACKAGE:-g1_bringup}
-    export GOLEM_BRINGUP_LAUNCH=${GOLEM_BRINGUP_LAUNCH:-g1_sim_bringup.launch.py}
+    # Read by docker-compose.stack.yml. Set unconditionally: a value left in the
+    # shell or docker/.env would start the H1-2 bringup against the G1 sim.
+    export GOLEM_BRINGUP_PACKAGE=g1_bringup
+    export GOLEM_BRINGUP_LAUNCH=g1_sim_bringup.launch.py
 fi
 check_domain "$SIM"
 configure_display

@@ -419,8 +419,12 @@ def _resolve_task(name, seed=None):
     return choice
 
 
-if __name__ == "__main__":
+def main(argv):
+    """Run the G1 sim with the command-line arguments argv (without the program
+    name). h12_mujoco.py calls it for --g1 or GOLEM_ROBOT=g1, so --g1 is accepted."""
     parser = argparse.ArgumentParser(description="Run the G1 RoboCasa MuJoCo sim")
+    parser.add_argument("--g1", action="store_true",
+                        help="Run the G1 (h12_mujoco.py's selector; GOLEM_ROBOT=g1 selects it too)")
     parser.add_argument(
         "--headless",
         action="store_true",
@@ -438,7 +442,7 @@ if __name__ == "__main__":
     parser.add_argument("--duration", type=float, default=0.0,
                         help="sim seconds to run from the first step, then exit "
                              "(default 0: run until closed)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     task = args.task
     if task is None:

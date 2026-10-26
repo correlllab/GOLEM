@@ -1,3 +1,14 @@
+import sys
+
+import sim_common
+
+# The G1 runs from this entry point too. It is dispatched before the H1-2 imports below,
+# which need magpie_msgs and CL_Assets; the G1 needs neither, and its test containers
+# provide neither.
+if __name__ == "__main__" and sim_common.select_robot(sys.argv[1:]) == "g1":
+    from g1 import g1_mujoco
+    sys.exit(g1_mujoco.main(sys.argv[1:]))
+
 import argparse
 import math
 import os
@@ -614,6 +625,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=None, help="episode seed")
     parser.add_argument("--timing", action="store_true",
                         help="Log real-time factor and stage mean/max timings every 5 seconds")
+    sim_common.add_robot_args(parser)
     args = parser.parse_args()
 
     task = args.task

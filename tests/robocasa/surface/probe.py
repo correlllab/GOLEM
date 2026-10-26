@@ -13,7 +13,9 @@ bridges down), and writes the JSON. With --golden it compares the observation
 against the golden file.
 
 Exit status: 0 success or match, 1 mismatch against the golden, 2 the probe
-could not measure (sim failed to start, domain not empty, hung shutdown, ...).
+could not measure (sim failed to start, domain shared with another sim, a
+required measurement missing, ...). A sim that crashes or hangs on SIGINT after
+the surface was measured only prints a warning; the comparison decides.
 
 Rates are per second of simulated time, taken from message header stamps where
 a message has them and from the latest /clock sample otherwise, so they do not
@@ -262,6 +264,17 @@ def require_empty_domain(node):
                          f"(nodes {others}, topics {topics}); one robot stack per domain")
 
 
+def require_single_sim(node):
+    """Fails if a second sim has come up on the domain: a node name or /clock twice."""
+    names = [_fqn(namespace, name) for name, namespace in node.get_node_names_and_namespaces()
+             if name != PROBE_NODE]
+    duplicates = sorted({n for n in names if names.count(n) > 1})
+    clock_publishers = len(node.get_publishers_info_by_topic("/clock"))
+    if duplicates or clock_publishers != 1:
+        raise ProbeError(f"more than one sim is on DDS domain {os.environ.get('ROS_DOMAIN_ID')}: "
+                         f"duplicate nodes {duplicates}, {clock_publishers} publishers on /clock")
+
+
 # --------------------------------------------------------------------------- message statistics
 
 def message_facts(msg):
@@ -399,6 +412,7 @@ def observe(args, sim, node):
     print(f"[probe] sim up after {time.monotonic() - started:.0f} s", flush=True)
     wait_for(lambda: "/clock" in dict(node.get_topic_names_and_types()), 60, "/clock")
     time.sleep(args.settle)   # the rest of the graph is discovered by now
+    require_single_sim(node)
 
     nodes = snapshot_nodes(node)
     topics, bare_dds = snapshot_topics(node)
@@ -429,6 +443,7 @@ def observe(args, sim, node):
         raise ProbeError("the sim exited during the measurement window")
     last_tick = lowstate.tick()
     lowstate.close()
+    require_single_sim(node)
     ticks_advance = first_tick is not None and last_tick is not None and last_tick > first_tick
 
     stats = {}
@@ -487,6 +502,20 @@ def run_probe(args):
     return observed, shutdown
 
 
+def report_sim_exit(args, shutdown):
+    """Records how the sim stopped. The surface is already measured, so a sim that
+    crashes or hangs on SIGINT is a warning, not a failed measurement."""
+    clean = shutdown in CLEAN_SIM_EXIT
+    status = "did not exit and was killed" if shutdown is None else shutdown
+    if args.sim_exit:
+        with open(args.sim_exit, "w") as f:
+            f.write(f"{'clean' if clean else 'unclean'} {'hung' if shutdown is None else shutdown}\n")
+    if not clean:
+        print(f"[probe] WARNING: the sim did not stop cleanly on SIGINT (status {status}); "
+              f"the surface was measured before that. Kept sim log: {args.sim_log}\n"
+              f"{tail(args.sim_log, 20)}", file=sys.stderr, flush=True)
+
+
 def check_fit_to_record(observed):
     """What a golden must at least contain, so a broken run is never recorded."""
     problems = []
@@ -523,6 +552,7 @@ def main(argv):
                         help="wall seconds for graph discovery once the sim is up")
     parser.add_argument("--ready-timeout", type=float, default=900.0)
     parser.add_argument("--sim-log", default="sim.log")
+    parser.add_argument("--sim-exit", help="write how the sim stopped (clean|unclean <status>) here")
     parser.add_argument("launcher", nargs=argparse.REMAINDER,
                         help="-- followed by the launcher command and its arguments")
     args = parser.parse_args(argv)
@@ -543,10 +573,7 @@ def main(argv):
         json.dump(observed, f, indent=2, sort_keys=True)
         f.write("\n")
     print(f"[probe] observed surface written to {args.out}", flush=True)
-    if shutdown not in CLEAN_SIM_EXIT:
-        print(f"[probe] ERROR: the sim did not stop cleanly on SIGINT (status {shutdown}); "
-              f"see {args.sim_log}", file=sys.stderr)
-        return 2
+    report_sim_exit(args, shutdown)
     if args.record:
         problems = check_fit_to_record(observed)
         if problems:

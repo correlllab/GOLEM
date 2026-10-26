@@ -14,9 +14,13 @@ GOLDEN=/path/to/other.json tests/robocasa/surface/run.sh h12
 ```
 
 It needs the `golem_sim_robocasa` image (it never rebuilds) and runs in a disposable container
-that leaves a running simulator alone. Each run takes about 40 s with a warm image and build cache. It always uses DDS
-domain 194, and refuses to start if anything else is already on that domain. The `g1` run
-selects the G1 overlay the way `docker_run.sh --g1` does.
+that leaves a running simulator alone. Each run takes about 40 s with a warm image and build cache.
+The `g1` run selects the G1 overlay the way `docker_run.sh --g1` does.
+
+It always uses DDS domain 194, one probe at a time: `run.sh` holds a lock on
+`/tmp/golem-dds-domain-194.lock` and a second run fails at once. The probe also refuses a domain
+with anything on it before the sim starts, and fails if it then finds a node name or `/clock`
+publisher twice, which means a second sim is on the domain.
 
 ## What is measured
 
@@ -50,16 +54,23 @@ it. The window length and the other timings are `probe.py` arguments.
 Names, types, QoS, frames, encodings, sizes, point fields, TF edges and node surfaces must match
 exactly; list order does not matter. `rate_hz` and `livox_imu_mean_acc` must be within 5 %. A
 mismatch prints the path of each differing value with the golden and observed values, and exits 1.
-Exit 2 means the probe could not measure (the sim did not start, the domain was busy, or the sim
-did not stop on SIGINT).
+Exit 2 means the probe could not measure (the sim did not start, the domain was shared, a required
+measurement was missing).
+
+The sim is stopped with SIGINT once the surface is measured. If it then crashes or hangs, the run
+prints a warning with the exit status and the kept `sim.log`, and `run.json` records both
+(`sim_exit`, `sim_log`); the comparison still decides the exit code.
 
 ## Recording
 
 Re-record only for an intended change to what the sim publishes, in the same commit as that
 change, and read the diff of the golden. The golden describes the default sim: `run.sh` clears
-every `GOLEM_*` sim knob (cameras, lidar, odometry, spawn and so on) that the shell or `docker/.env`
-sets, so a stray setting does not end up in it. `--record` refuses a run that is not fit to be a
-golden (no `/clock`, no IMU samples, `rt/lowstate` not ticking).
+the sim knobs it lists as `pinned` (cameras, lidar, odometry, spawn, `G1_DDS_INTERFACE` and so on)
+that the shell or `docker/.env` sets, so a stray setting does not end up in it. It also fails,
+naming the variable, if the robocasa service in the compose files of the run interpolates a
+`GOLEM_*` or `G1_*` variable that is neither pinned nor `allowed`; a new sim knob goes into one of
+the two lists. `--record` refuses a run that is not fit to be a golden (no `/clock`, no IMU samples,
+`rt/lowstate` not ticking); a sim that crashed on SIGINT afterwards only warns.
 
-Each run leaves `observed.json`, `sim.log`, `probe.log` and `run.json` in
+Each run leaves `observed.json`, `sim.log`, `sim_exit`, `probe.log` and `run.json` in
 `tests/results/surface-<robot>-<time>-<pid>/`.

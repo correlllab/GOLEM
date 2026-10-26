@@ -18,13 +18,13 @@ Every torque is recomputed every physics step from the latched commands and the
 current state (write_ctrl), which emulates the motors' own servo loop, and is
 limited to the joint's actuatorfrcrange. Timeouts are in sim time, so a sim
 running slower than real time does not trip them:
-  - rt/arm_sdk silent for HAMS_ARM_SDK_TIMEOUT (0.5 s): its weight falls to 0 at
+  - rt/arm_sdk silent for GOLEM_ARM_SDK_TIMEOUT (0.5 s): its weight falls to 0 at
     1/ARM_SDK_RELEASE_S per second, handing the waist and arms back to the
     stand-in, and when frames return it rises back at the same rate until it
     meets theirs, so neither direction is a step change. This is also an
     assumption: what Unitree's controller does when rt/arm_sdk stops, and when
     it resumes, has not been measured on the real G1.
-  - rt/lowcmd silent for HAMS_CMD_TIMEOUT (0.5 s) once it has taken over: every
+  - rt/lowcmd silent for GOLEM_CMD_TIMEOUT (0.5 s) once it has taken over: every
     motor off (zero torque). This is the H1 sim's behaviour, kept as an
     assumption; what the real G1's motors do when rt/lowcmd stops has not been
     measured.
@@ -84,11 +84,11 @@ def env_seconds(name, default, env=os.environ):
 # Sim seconds without a frame before rt/arm_sdk's weight ramps to 0 (back to the
 # stand-in, like the safety layer's release); it ramps at 1/ARM_SDK_RELEASE_S per
 # second, down and, once frames return, back up
-ARM_SDK_TIMEOUT = env_seconds('HAMS_ARM_SDK_TIMEOUT', 0.5)
+ARM_SDK_TIMEOUT = env_seconds('GOLEM_ARM_SDK_TIMEOUT', 0.5)
 ARM_SDK_RELEASE_S = 1.0
 # Sim seconds without a frame before rt/lowcmd, once it has taken over, turns
 # every motor off (an assumption, see the module docstring)
-LOWCMD_TIMEOUT = env_seconds('HAMS_CMD_TIMEOUT', 0.5)
+LOWCMD_TIMEOUT = env_seconds('GOLEM_CMD_TIMEOUT', 0.5)
 # wall seconds between repeats of one warning
 WARN_PERIOD_S = 5.0
 

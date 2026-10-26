@@ -126,9 +126,9 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, duration=0.0
       - StandIn          : Unitree's controller stand-in, HOMIE standing the robot
                            until the first valid rt/lowcmd releases it
       - RosSensorBridge  : /clock, the MID-360 (/livox/lidar, /livox/imu) and the
-                           head D435 (/realsense/head/*), on unless HAMS_LIDAR=0 /
-                           HAMS_CAMERAS=0 (SensorConfig), + ground-truth /odom
-                           with HAMS_SIM_ODOM=1
+                           head D435 (/realsense/head/*), on unless GOLEM_LIDAR=0 /
+                           GOLEM_CAMERAS=0 (SensorConfig), + ground-truth /odom
+                           with GOLEM_SIM_ODOM=1
       - MeasurementBridge: /robocasa/{task_name,task_goal,success,reward}
     RoboCasa's _check_success/reward/lang are read off the shared env.
     duration: sim seconds to run from the first step, counted in physics steps
@@ -169,10 +169,10 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, duration=0.0
         for hand in resolver.hands.values():
             data.qpos[hand.qpos] = 0.0
         data.qvel[:] = 0.0
-        # HAMS_SPAWN_BACKOFF backs the robot further off the counter into open
+        # GOLEM_SPAWN_BACKOFF backs the robot further off the counter into open
         # floor (default 0 = at the counter for manipulation). Set ~1.0 for nav2,
         # which needs the robot's start cell to be free to plan.
-        _spawn_backoff = float(os.environ.get("HAMS_SPAWN_BACKOFF", "0") or 0)
+        _spawn_backoff = float(os.environ.get("GOLEM_SPAWN_BACKOFF", "0") or 0)
         g1_robosuite.place_robot_collision_free(
             env, env.init_robot_base_pos,
             g1_robosuite._euler_to_wxyz(getattr(env, "init_robot_base_ori", None)),
@@ -194,10 +194,10 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, duration=0.0
     # odometry, which the bridge publishes as odom -> pelvis TF + /odom (feeds
     # SLAM without needing FAST-LIO). OFF by default so the shared sim bridge does
     # not inject a second odom->pelvis anchor that competes with the real stack's
-    # FAST-LIO (camera_init) TF; g1_navigation's odom_source:=sim_gt opts in with HAMS_SIM_ODOM=1.
-    _sim_odom_on = os.environ.get('HAMS_SIM_ODOM', '0').strip().lower() not in ('0', 'off', 'false', 'no', '')
+    # FAST-LIO (camera_init) TF; g1_navigation's odom_source:=sim_gt opts in with GOLEM_SIM_ODOM=1.
+    _sim_odom_on = os.environ.get('GOLEM_SIM_ODOM', '0').strip().lower() not in ('0', 'off', 'false', 'no', '')
     odom_base_body_id = resolver.base_body if _sim_odom_on else -1
-    print(f"[g1_mujoco] ground-truth sim odom {'ON (HAMS_SIM_ODOM=1)' if _sim_odom_on else 'OFF'}")
+    print(f"[g1_mujoco] ground-truth sim odom {'ON (GOLEM_SIM_ODOM=1)' if _sim_odom_on else 'OFF'}")
 
     # The stand-in for Unitree's controller stands the robot from the first
     # physics step; the DDS bridge hands the waist and arms to rt/arm_sdk by its

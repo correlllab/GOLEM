@@ -12,7 +12,7 @@ publish them, and optional ground-truth odometry.
                                              sensor_msgs/CompressedImage (16UC1 PNG)
   /realsense/head/color/camera_info          sensor_msgs/CameraInfo
   /tf_static                                 d435_link -> head_color_optical_frame, with the camera
-  /odom and odom -> pelvis on /tf            ground truth, only with base_body_id (HAMS_SIM_ODOM=1)
+  /odom and odom -> pelvis on /tf            ground truth, only with base_body_id (GOLEM_SIM_ODOM=1)
 
 Both sensors are on by default, as on the robot; SensorConfig lists the env
 knobs that turn each off or lower its rate or resolution. g1_lidar.py and
@@ -129,16 +129,19 @@ def _env_number(env, name, default, kind):
 
 class SensorConfig(NamedTuple):
     """The simulated sensors. from_env() reads them from these env knobs:
-      HAMS_LIDAR=0         no MID-360 (/livox/lidar, /livox/imu)
-      HAMS_LIDAR_POINTS    points per lidar frame (default 5000; the real sensor's
-                           ~20,000 cost 4x as much, see g1_lidar.py)
-      HAMS_LIDAR_HZ        lidar frames per sim second (default 10, the driver's; at
-                           most 100, the rate the rays are cast at)
-      HAMS_CAMERAS=0       no head camera (/realsense/head/*, its /tf_static)
-      HAMS_CAMERA_HZ       head camera frames per sim second (default 6; at most
-                           30, the D435's top rate at 1280x720)
-      HAMS_CAMERA_SIZE     WIDTHxHEIGHT (default 1280x720); 6 Hz at 1280x720 is
-                           the head camera's profile in cl_realsense's launch file
+      GOLEM_LIDAR=0         no MID-360 (/livox/lidar, /livox/imu)
+      GOLEM_LIDAR_POINTS    points per lidar frame (default 5000; the real sensor's
+                            ~20,000 cost 4x as much, see g1_lidar.py)
+      GOLEM_LIDAR_HZ        lidar frames per sim second (default 10, the driver's;
+                            at most 100, the rate the rays are cast at)
+      GOLEM_CAMERAS=0       no head camera (/realsense/head/*, its /tf_static)
+      GOLEM_CAMERA_HZ       head camera frames per sim second (default 6; at most
+                            30, the D435's top rate at 1280x720)
+      GOLEM_CAMERA_SCALE    head camera size as a fraction of the real 1280x720
+                            (default 1.0): round(1280 s) x round(720 s) with the
+                            same fovy, and camera_info to match; 6 Hz at 1280x720
+                            is the head camera's profile in cl_realsense's launch
+                            file
     """
     lidar: bool = True
     lidar_points: int = g1_lidar.POINTS_PER_FRAME
@@ -151,32 +154,29 @@ class SensorConfig(NamedTuple):
 
     @classmethod
     def from_env(cls, env=os.environ):
-        size = env.get("HAMS_CAMERA_SIZE", "").strip().lower()
-        try:
-            width, height = ((int(v) for v in size.split("x")) if size
-                             else (cls._field_defaults["camera_width"], cls._field_defaults["camera_height"]))
-        except ValueError:
-            raise ValueError(f"HAMS_CAMERA_SIZE must be WIDTHxHEIGHT, e.g. 640x360, got {size!r}") from None
-        if width <= 0 or height <= 0:
-            raise ValueError(f"HAMS_CAMERA_SIZE must be positive, got {size!r}")
-        lidar_hz = _env_number(env, "HAMS_LIDAR_HZ", cls._field_defaults["lidar_hz"], float)
+        scale = _env_number(env, "GOLEM_CAMERA_SCALE", 1.0, float)
+        width, height = round(g1_head_camera.WIDTH * scale), round(g1_head_camera.HEIGHT * scale)
+        if width < 1 or height < 1:
+            raise ValueError(f"GOLEM_CAMERA_SCALE must leave the head camera at least 1x1 pixels, "
+                             f"got {scale:g} ({width}x{height})")
+        lidar_hz = _env_number(env, "GOLEM_LIDAR_HZ", cls._field_defaults["lidar_hz"], float)
         if lidar_hz > 100.0:
-            raise ValueError(f"HAMS_LIDAR_HZ must be at most 100, got {lidar_hz:g}")
-        camera_hz = _env_number(env, "HAMS_CAMERA_HZ", cls._field_defaults["camera_hz"], float)
+            raise ValueError(f"GOLEM_LIDAR_HZ must be at most 100, got {lidar_hz:g}")
+        camera_hz = _env_number(env, "GOLEM_CAMERA_HZ", cls._field_defaults["camera_hz"], float)
         if camera_hz > MAX_CAMERA_HZ:
-            raise ValueError(f"HAMS_CAMERA_HZ must be at most {MAX_CAMERA_HZ:g}, got {camera_hz:g}")
-        return cls(lidar=_env_flag(env, "HAMS_LIDAR", True),
-                   lidar_points=_env_number(env, "HAMS_LIDAR_POINTS", cls._field_defaults["lidar_points"], int),
+            raise ValueError(f"GOLEM_CAMERA_HZ must be at most {MAX_CAMERA_HZ:g}, got {camera_hz:g}")
+        return cls(lidar=_env_flag(env, "GOLEM_LIDAR", True),
+                   lidar_points=_env_number(env, "GOLEM_LIDAR_POINTS", cls._field_defaults["lidar_points"], int),
                    lidar_hz=lidar_hz,
-                   camera=_env_flag(env, "HAMS_CAMERAS", True),
+                   camera=_env_flag(env, "GOLEM_CAMERAS", True),
                    camera_hz=camera_hz,
                    camera_width=width, camera_height=height)
 
     def describe(self):
         lidar = (f"MID-360 {self.lidar_points} points x {self.lidar_hz:g} Hz + IMU {self.imu_hz:g} Hz"
-                 if self.lidar else "no lidar (HAMS_LIDAR=0)")
+                 if self.lidar else "no lidar (GOLEM_LIDAR=0)")
         camera = (f"head D435 {self.camera_width}x{self.camera_height} at {self.camera_hz:g} Hz"
-                  if self.camera else "no head camera (HAMS_CAMERAS=0)")
+                  if self.camera else "no head camera (GOLEM_CAMERAS=0)")
         return f"{lidar}; {camera}"
 
 

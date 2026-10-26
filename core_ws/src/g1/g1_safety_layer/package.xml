@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>g1_safety_layer</name>
+  <version>0.0.0</version>
+  <description>Safety layer relaying G1 low-level commands to rt/arm_sdk or rt/lowcmd</description>
+  <maintainer email="zhangyt2000@gmail.com">tonyzyt2000</maintainer>
+  <license>MIT</license>
+
+  <depend>g1_description</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

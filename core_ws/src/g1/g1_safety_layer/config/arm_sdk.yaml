@@ -1,0 +1,115 @@
+# Real G1, default: our controller drives waist + arms over rt/arm_sdk while
+# Unitree's controller keeps the legs balanced.
+#
+# Nothing is published until an upper-body command passes the engage gate
+# (below); the weight slot (motor 29) then ramps 0 -> 1 over engage_seconds.
+# On estop, and on SIGINT/SIGTERM/SIGHUP, the last good command is held while
+# the weight ramps back to 0 over release_seconds, handing waist + arms back
+# to Unitree. The estop stays latched until restart.
+#
+# First-session defaults: release_seconds, the waist + arm velocity and torque
+# limits and the engage gate are deliberately conservative. A false estop here
+# only hands the arms back to Unitree; relax them once logs from our G1 show
+# the margins.
+robot: real
+mode: arm_sdk_mode
+
+topics:
+  low_cmd_upper_in: rt/safety/lowcmd_upper_in
+  low_cmd_out: rt/arm_sdk
+  low_state: rt/lowstate
+
+network:
+  domain_id: 0
+  interface: ''
+
+control:
+  publish_hz: 500.0
+  # once engaged, an rt/lowstate gap longer than this latches the estop (50
+  # periods of the robot's 500 Hz rt/lowstate)
+  state_stale_estop_seconds: 0.1
+
+# take the waist + arms only when rt/lowstate is fresh and reports our unit's
+# mode_machine, and the command is within max_position_error of the measured q
+# on every waist and arm slot (12-28), so the hand-over cannot jump
+engage:
+  max_state_age_seconds: 0.1
+  mode_machine: 5
+  # rad; the controller's first command is the measured pose
+  max_position_error: 0.15
+
+arm_sdk:
+  engage_seconds: 1.0
+  # Unitree's g1_arm7_sdk_dds_example.py releases over 3 s
+  release_seconds: 3.0
+  # a command with a waist (slots 12-14) kp below this is rejected and latches
+  # the estop. From the URDF, gravity pulls the torso over with 22.9 N*m/rad
+  # (arms at home) to 33.8 N*m/rad (arms straight forward) about waist roll and
+  # pitch, so a softer waist cannot hold it up; the controller sends 60 (Unitree's
+  # example), and a stray publisher's default command 0
+  waist_kp_min: 40.0
+
+limits:
+  # all fields can be scalar or 29-entry lists (rt/lowcmd slot order) for
+  # per-joint tuning; ratios scale the URDF limits in g1_description
+  # (g1_description/joints.py). Waist + arm URDF limits, slots 12-28:
+  #   waist yaw 32 rad/s, 88 N*m; waist roll, pitch 30 rad/s, 35 N*m;
+  #   shoulder pitch, roll, yaw, elbow, wrist roll 37 rad/s, 25 N*m;
+  #   wrist pitch, yaw 22 rad/s, 5 N*m.
+  # The legs (0-11) are Unitree's: zeroed on rt/arm_sdk and never checked
+  clip:
+    position_offset: 0.01
+    # 1.0 rad/s on every waist and arm joint, the controller's dq_lim (g1.yaml):
+    # 1/32 = 0.03125, 1/30 = 0.0333, 1/37 = 0.027, 1/22 = 0.0455
+    velocity_ratio: [
+      0.10, 0.10, 0.10, 0.10, 0.10, 0.10,  # left leg
+      0.10, 0.10, 0.10, 0.10, 0.10, 0.10,  # right leg
+      0.03125, 0.0333, 0.0333,  # waist yaw, roll, pitch
+      0.027, 0.027, 0.027, 0.027, 0.027, 0.0455, 0.0455,  # left arm
+      0.027, 0.027, 0.027, 0.027, 0.027, 0.0455, 0.0455,  # right arm
+    ]
+    # feedforward (the controller's gravity compensation), kept below the
+    # estop: waist roll, pitch 0.6 = 21 N*m, waist yaw 0.4 = 35.2 N*m, arms 0.4 =
+    # 10 N*m (wrist pitch, yaw 2 N*m). The largest static gravity load in the
+    # controller's postures (pelvis upright, no payload) is 18.2 N*m on waist
+    # pitch and 8.6 N*m on a shoulder with the arms straight forward or out
+    torque_ratio: [
+      0.60, 0.60, 0.60, 0.60, 0.60, 0.60,  # left leg
+      0.60, 0.60, 0.60, 0.60, 0.60, 0.60,  # right leg
+      0.4, 0.6, 0.6,  # waist yaw, roll, pitch
+      0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4,  # left arm
+      0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4,  # right arm
+    ]
+    kp_max: 200.0
+    kd_max: 10.0
+  # checked on waist + arms (slots 12-28) only, and only once engaged
+  estop:
+    position_offset: 0.0
+    # 2.0 rad/s on every waist and arm joint, twice the controller's 1 rad/s
+    # cap (was 0.15: 5.55 rad/s on shoulders and elbows). In MuJoCo (HOMIE's
+    # joint dynamics), kp 60 / kd 1.5 tracking the controller's 30 Hz targets at
+    # 1 rad/s peaks at 1.37 rad/s. 2/32 = 0.0625, 2/30 = 0.0667, 2/37 = 0.0541,
+    # 2/22 = 0.0909
+    velocity_ratio: [
+      0.15, 0.15, 0.15, 0.15, 0.15, 0.15,  # left leg
+      0.15, 0.15, 0.15, 0.15, 0.15, 0.15,  # right leg
+      0.0625, 0.0667, 0.0667,  # waist yaw, roll, pitch
+      0.0541, 0.0541, 0.0541, 0.0541, 0.0541, 0.0909, 0.0909,  # left arm
+      0.0541, 0.0541, 0.0541, 0.0541, 0.0541, 0.0909, 0.0909,  # right arm
+    ]
+    # measured torque (was 0.9): waist roll, pitch 0.7 = 24.5 N*m (1.35x the
+    # 18.2 N*m static load), waist yaw 0.5 = 44 N*m, arms 0.5 = 12.5 N*m (1.45x
+    # the 8.6 N*m static load; wrist pitch, yaw 2.5 N*m against 1.2 N*m)
+    torque_ratio: [
+      0.90, 0.90, 0.90, 0.90, 0.90, 0.90,  # left leg
+      0.90, 0.90, 0.90, 0.90, 0.90, 0.90,  # right leg
+      0.5, 0.7, 0.7,  # waist yaw, roll, pitch
+      0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5,  # left arm
+      0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5,  # right arm
+    ]
+
+logging:
+  enabled: true
+  # G1_SAFETY_LOG_DIR, when set, overrides this (one subdirectory per run)
+  base_dir: /tmp/g1_safety_layer
+  chunk_prefix: chunk_

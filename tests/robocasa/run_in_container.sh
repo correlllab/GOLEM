@@ -3,6 +3,8 @@
 set -eo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 source "$ROOT/docker/scripts/docker_common.sh"
+# H1-2 only: a G1 selected in the shell or docker/.env does not apply here.
+export GOLEM_ROBOT=h12
 load_config
 check_domain robocasa
 export GOLEM_DISPLAY=headless

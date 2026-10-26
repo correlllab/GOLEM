@@ -1,4 +1,5 @@
 # Selected by docker_stack.sh; shell launches keep their existing default.
+# docker_stack.sh --g1 sets GOLEM_BRINGUP_PACKAGE / GOLEM_BRINGUP_LAUNCH to the G1 bringup.
 services:
   ros:
     environment:
@@ -8,6 +9,6 @@ services:
       - /home/code/h12_sim_scripts/launch_ros.sh
       - ros2
       - launch
-      - h12_bringup
-      - h12_sim_bringup.launch.py
+      - ${GOLEM_BRINGUP_PACKAGE:-h12_bringup}
+      - ${GOLEM_BRINGUP_LAUNCH:-h12_sim_bringup.launch.py}
       - use_rviz:=${GOLEM_USE_RVIZ:-false}

@@ -52,9 +52,74 @@ validate_service() {
     esac
 }
 
+# Splits the robot selectors --g1 / --h12 out of the arguments, wherever they
+# appear. ROBOT_FLAG is the selector (empty if none); WRAPPER_ARGS is the rest.
+parse_robot_flags() {
+    ROBOT_FLAG=
+    WRAPPER_ARGS=()
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            --g1|--h12)
+                [ -z "$ROBOT_FLAG" ] || [ "$ROBOT_FLAG" = "${arg#--}" ] || fail 'Choose one robot: --g1 or --h12.'
+                ROBOT_FLAG=${arg#--}
+                ;;
+            *) WRAPPER_ARGS+=("$arg");;
+        esac
+    done
+}
+
+# Selects the robot for service $1 and exports it as GOLEM_ROBOT (h12 or g1).
+# Precedence: ROBOT_FLAG, then the shell, then docker/.env (see load_config).
+# G1 adds its compose overlay and the CycloneDDS interface pin that the ros
+# container loads after core_ws/cyclonedds.xml; it runs on x86 Linux, never
+# with Isaac.
+configure_robot() {
+    local service=$1 robot
+    robot=$(printf '%s' "${ROBOT_FLAG:-${GOLEM_ROBOT:-h12}}" | tr '[:upper:]' '[:lower:]')
+    case "$robot" in
+        h12) ;;
+        g1)
+            [ "${GOLEM_PLATFORM:-linux}" != mac ] || fail 'G1 is not available on Mac; use an x86 Linux host.'
+            [ "$service" != isaac ] || fail 'G1 is not available with the Isaac simulator; use robocasa.'
+            mkdir -p "$GOLEM_CACHE_DIR"
+            if [ -n "${G1_DDS_INTERFACE:-}" ]; then
+                printf '<CycloneDDS><Domain Id="any"><General><Interfaces><NetworkInterface name="%s"/></Interfaces></General></Domain></CycloneDDS>\n' \
+                    "$G1_DDS_INTERFACE" > "$GOLEM_CACHE_DIR/cyclonedds_local.xml"
+            else
+                echo '<CycloneDDS/>' > "$GOLEM_CACHE_DIR/cyclonedds_local.xml"
+            fi
+            COMPOSE+=(-f "$GOLEM_ROOT/docker/docker-compose.g1.yml")
+            ;;
+        *) fail "GOLEM_ROBOT must be h12 or g1, not '$robot'.";;
+    esac
+    export GOLEM_ROBOT=$robot
+}
+
+# G1 on DDS domain 0 reaches the real robot, so the CycloneDDS interface pin
+# must name a host port that is up and addressed, not whatever DDS would pick.
+check_dds_interface() {
+    if [ -z "${G1_DDS_INTERFACE:-}" ]; then
+        fail "ROS_DOMAIN_ID=0 (the real robot) needs G1_DDS_INTERFACE, the laptop's wired port to"$'\n'"       the robot (ours: enp130s0), in docker/.env. Without it DDS may pick another interface."
+    fi
+    command -v ip >/dev/null 2>&1 || fail "'ip' (iproute2) is needed to check G1_DDS_INTERFACE on DDS domain 0."
+    ip link show dev "$G1_DDS_INTERFACE" >/dev/null 2>&1 || \
+        fail "G1_DDS_INTERFACE=$(printf '%q' "$G1_DDS_INTERFACE") is not a network interface on this host (see: ip -br link)."
+    local link_state ipv4
+    link_state=$(ip -br link show dev "$G1_DDS_INTERFACE" | awk '{print $2}') || true
+    if [ "$link_state" != UP ]; then
+        fail "G1_DDS_INTERFACE=$G1_DDS_INTERFACE is ${link_state:-in an unknown state}, not UP."$'\n'"       Check the cable to the robot: ip -br link show dev $G1_DDS_INTERFACE"
+    fi
+    ipv4=$(ip -o -4 addr show dev "$G1_DDS_INTERFACE" | awk '{print $4}' | paste -sd ' ' -) || true
+    if [ -z "$ipv4" ]; then
+        fail "G1_DDS_INTERFACE=$G1_DDS_INTERFACE has no IPv4 address (ours: 192.168.123.222/24)."$'\n'"       Check the cable and the port's address: ip -br addr show dev $G1_DDS_INTERFACE"
+    fi
+}
+
 check_domain() {
     if [ "$ROS_DOMAIN_ID" = 0 ]; then
         [ "$1" = ros ] && [ "${GOLEM_PLATFORM:-linux}" != mac ] || fail 'Domain 0 is reserved for the real robot.'
+        [ "${GOLEM_ROBOT:-h12}" != g1 ] || check_dds_interface
         local reply
         read -r -p 'Domain 0 is the REAL ROBOT bus. Proceed? [y/N] ' reply
         case "$reply" in y|Y|yes|YES) ;; *) fail 'Real-robot launch cancelled.';; esac
@@ -78,9 +143,27 @@ configure_display() {
     esac
 }
 
+# The files the G1 overlay bind-mounts: its robot description (a submodule) and
+# the walking policy.
+require_g1_files() {
+    local description="$GOLEM_ROOT/third_party/leprechaun_g1/assets/g1_description"
+    local policy="$GOLEM_ROOT/core_ws/src/g1/g1_locomotion/policy"
+    local name
+    for name in g1_29dof_with_hand_rev_1_0.urdf g1_29dof_with_hand_rev_1_0.xml; do
+        [ -f "$description/$name" ] || fail "Missing $description/$name. Initialize the G1 robot description: git submodule update --init third_party/leprechaun_g1"
+        require_file "$description/$name"
+    done
+    for name in deploy.onnx g1.yaml homie_policy.py; do
+        require_file "$policy/$name"
+    done
+}
+
 prepare_mounts() {
     local service=$1
     require_file "$GOLEM_ASSETS_DIR/ros_assets/h1_2_magpie_ros.urdf"
+    if [ "${GOLEM_ROBOT:-h12}" = g1 ]; then
+        case "$service" in robocasa|ros) require_g1_files;; esac
+    fi
     case "$service" in
         isaac)
             require_file "$GOLEM_ROOT/CL_isaaclab_sim/sim_main.py"

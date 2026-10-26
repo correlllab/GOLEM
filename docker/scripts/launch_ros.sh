@@ -99,8 +99,14 @@ for marker in "$WS"/install/*/share/colcon-core/packages/*; do
     fi
 done
 
+# The g1_* packages build only for the G1 (GOLEM_ROBOT=g1), so the H1-2 never
+# depends on the G1 sources or on third_party/leprechaun_g1. The discovery
+# above stays unfiltered: a g1_* install left by a G1 run is still a known package.
+BUILD_SELECT=()
+[ "${GOLEM_ROBOT:-h12}" = g1 ] || BUILD_SELECT=(--packages-ignore-regex '^g1_')
+
 echo "[launch_ros] colcon build (incremental)"
-colcon build --symlink-install --base-paths "${COLCON_PATHS[@]}" \
+colcon build --symlink-install "${BUILD_SELECT[@]}" --base-paths "${COLCON_PATHS[@]}" \
     --cmake-args -DROS_EDITION=ROS2 -DDISTRO_ROS=humble
 
 source install/setup.bash

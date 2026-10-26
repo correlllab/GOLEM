@@ -6,6 +6,8 @@ hand_type="${1:-${ISAAC_HAND_TYPE:-magpie}}"
 case "$hand_type" in magpie|inspire) ;; *) echo 'Expected magpie or inspire' >&2; exit 2 ;; esac
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-191}"
 source "$ROOT/docker/scripts/docker_common.sh"
+# H1-2 only: a G1 selected in the shell or docker/.env does not apply here.
+export GOLEM_ROBOT=h12
 load_config
 check_domain isaac
 export GOLEM_DISPLAY=headless

@@ -60,6 +60,18 @@ sys.exit(int(os.environ.get('BUILD_EXIT', '0')))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len((self.root / 'calls').read_text().splitlines()), 2)
 
+    def test_launch_ros_skips_g1_unless_g1(self):
+        self.env.pop('GOLEM_ROBOT', None)
+        for robot, skipped in ((None, True), ('h12', True), ('g1', False)):
+            with self.subTest(robot=robot):
+                (self.root / 'calls').unlink(missing_ok=True)
+                result = self.run_launch(**({'GOLEM_ROBOT': robot} if robot else {}))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                args = json.loads((self.root / 'calls').read_text())
+                self.assertEqual('--packages-ignore-regex' in args, skipped)
+                if skipped:
+                    self.assertEqual(args[args.index('--packages-ignore-regex') + 1], '^g1_')
+
     def test_colcon_failure_prevents_command_execution(self):
         result = self.run_launch(BUILD_EXIT='23')
         self.assertEqual(result.returncode, 23, result.stderr)

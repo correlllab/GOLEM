@@ -14,6 +14,8 @@ export GOLEM_TEST_WALL_TIMEOUT=${GOLEM_TEST_WALL_TIMEOUT:-900}
 export GOLEM_TEST_CAMERAS=${GOLEM_TEST_CAMERAS:-0}
 [[ "$GOLEM_TEST_WALL_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || exit 2
 source "$ROOT/docker/scripts/docker_common.sh"
+# H1-2 only: a G1 selected in the shell or docker/.env does not apply here.
+export GOLEM_ROBOT=h12
 load_config
 check_domain "$SIMULATOR"
 export GOLEM_DISPLAY=headless

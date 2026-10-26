@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Usage: docker_stack.sh up|restart|stop|logs robocasa|isaac [--headless|--gui]
 # Pre-build the ROS workspace before starting physics; wait for DDS before bringup.
+# --g1 / --h12 (anywhere in the arguments) or GOLEM_ROBOT=h12|g1 selects the robot.
 set -eo pipefail
 source "$(dirname "$0")/docker_common.sh"
+parse_robot_flags "$@"
+set -- "${WRAPPER_ARGS[@]}"
 ACTION=${1:?Usage: docker_stack.sh up|restart|stop|logs robocasa|isaac [--headless|--gui]}
 SIM=${2:?Select robocasa or isaac}
 shift 2
@@ -26,6 +29,13 @@ if [ "$ACTION" = stop ]; then
     exit 0
 fi
 if [ "$ACTION" = logs ]; then exec "${COMPOSE[@]}" logs -f "$SIM" ros; fi
+configure_robot "$SIM"
+echo "robot: $GOLEM_ROBOT" >&2
+if [ "$GOLEM_ROBOT" = g1 ]; then
+    # Read by docker-compose.stack.yml; an explicit export still wins.
+    export GOLEM_BRINGUP_PACKAGE=${GOLEM_BRINGUP_PACKAGE:-g1_bringup}
+    export GOLEM_BRINGUP_LAUNCH=${GOLEM_BRINGUP_LAUNCH:-g1_sim_bringup.launch.py}
+fi
 check_domain "$SIM"
 configure_display
 prepare_mounts "$SIM"

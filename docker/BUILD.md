@@ -129,6 +129,9 @@ iterating on volatile pins doesn't bust the heavy layers above. `FROM golem_base
    an *additive constraint*, then add deps + downgrade `huggingface-hub` for
    `diffusers`, and add `viser` — all pinned so nothing already-installed moves.
 9. **MuJoCo MPC** — see §7.
+10. **G1 additions** (last layers): apt `ros-humble-joint-state-publisher-gui`,
+    `python3-evdev`, `python3-xlib`, then pip `onnxruntime==1.23.2` (HOMIE's
+    walking policy) and `pynput==1.8.1` through lock step `ros-amd64-13.txt`.
 
 **Runtime build:** `launch_ros.sh` runs `colcon build --symlink-install` on
 `core_ws` **at container start** (see §8). The image bakes only the *toolchain* and
@@ -159,6 +162,8 @@ Single-stage, `FROM golem_base`. Provides the MuJoCo + RoboCasa kitchen simulato
   mount, since `build.sh` rewrites its own source tree) and built via upstream
   `build.sh humble`. `build/` is deliberately *not* wiped afterward because
   `--symlink-install` leaves the generated message modules symlinked into it.
+- **G1 addition** (last layer): `onnxruntime==1.23.2` through lock step
+  `robocasa-amd64-05.txt`, for the G1 sim's HOMIE walking-policy stand-in.
 
 ---
 

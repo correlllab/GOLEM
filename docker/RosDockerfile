@@ -604,3 +604,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-octomap-server \
         ros-humble-octomap-rviz-plugins \
     && rm -rf /var/lib/apt/lists/*
+
+# -----------------------------------------------------------------------------
+# G1 stack: onnxruntime runs HOMIE's walking policy (g1_locomotion); pynput,
+# evdev and xlib serve the G1 keyboard teleop examples; the jsp GUI drives
+# g1_description's display.launch.py. Last, so it can't bust earlier layers.
+# -----------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-joint-state-publisher-gui python3-evdev python3-xlib \
+    && rm -rf /var/lib/apt/lists/*
+# pynput's X backend refuses to import without a display; the dummy backend lets
+# the build-time import check run.
+RUN pip install -c /opt/golem-locks/ros-amd64-13.txt --no-cache-dir onnxruntime==1.23.2 pynput==1.8.1 \
+    && PYNPUT_BACKEND=dummy python3 -c "import onnxruntime, pynput"

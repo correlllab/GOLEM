@@ -94,6 +94,20 @@ that set and declare intentional per-install transitions (NumPy, Hugging Face,
 MuJoCo, and build tools). The arm64 sets reuse portable versions without CUDA
 packages; native Mac build/runtime validation remains required.
 
+The G1 stack's Python dependencies are the last step of each x86 image:
+
+| Step file | Image | Direct pins | Other pins added to the common set |
+| --- | --- | --- | --- |
+| `ros-amd64-13.txt` | golem_ros | `onnxruntime==1.23.2`, `pynput==1.8.1` | `coloredlogs==15.0.1`, `flatbuffers==25.12.19`, `humanfriendly==10.0`, and the apt-provided `evdev==1.4.0`, `python-xlib==0.29` |
+| `robocasa-amd64-05.txt` | golem_sim_robocasa | `onnxruntime==1.23.2` | `coloredlogs==15.0.1`, `flatbuffers==25.12.19`, `humanfriendly==10.0` |
+
+Both were resolved with uv 0.12.15 inside the previously built images; no
+already-locked package (NumPy, protobuf, sympy, ...) moved. The ROS image
+installs `python3-evdev` and `python3-xlib` from apt before the pip step, so pip
+keeps those two and the lock records the apt versions. A pip 22.0.2 build of the
+newer `evdev` sdist fails to produce metadata, so `evdev` must not be pinned to a
+PyPI release there.
+
 A fresh resolver exposed incompatible packages in the old installed ROS image:
 NumPy 1.26 coexisted with cmeel-boost 1.90 and OpenCV 5, which require NumPy 2.
 The ROS locks now use Pinocchio 2.7 / Boost 1.83 / eigenpy 3.5.1 / hpp-fcl 2.4.4

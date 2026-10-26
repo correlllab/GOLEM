@@ -1,0 +1,33 @@
+# ROS 2 build artifacts
+build/
+install/
+log/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Colcon/ament artifacts
+.colcon/
+*.pydevproject
+*.project
+*.settings/
+
+# VSCode/IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Misc
+*.DS_Store
+*.egg-info/
+*.launch.pyc
+.claude/
+.kilo/

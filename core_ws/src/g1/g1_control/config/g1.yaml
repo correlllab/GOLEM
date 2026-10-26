@@ -1,0 +1,92 @@
+# Real G1. Commands go to g1_safety_layer's upper-body input, which relays them
+# to rt/arm_sdk (its arm_sdk.yaml, the default; g1_split.yaml goes with its
+# split.yaml).
+# The controller never writes rt/arm_sdk or rt/lowcmd itself.
+# Gains, speed and estop limits are starting values, not yet tuned on our G1.
+
+topics:
+  low_cmd: rt/safety/lowcmd_upper_in
+  low_state: rt/lowstate
+  # g1_safety_layer's output, only read: the follow gate opens once a sample
+  # carries the commands (at weight 1: its arm_sdk.yaml has taken over)
+  safety_out: rt/arm_sdk
+
+network:
+  domain_id: 0
+  interface: ''
+
+controller:
+  # deliberately conservative for the first sessions on the real robot (the
+  # sim configs keep 0.5 m/s, 1.0 rad/s, 1.0 rad/s); raise them once logs from
+  # our G1 show the tracking
+  v_lim: 0.15  # palm linear speed limit, m/s
+  w_lim: 0.5   # palm angular speed limit, rad/s
+  dq_lim: 0.3  # arm joint speed limit, rad/s (the start-up waist move too)
+  d_min: 0.02
+  timeout: 10.0  # s per goal without a duration; 5 s is too short at these speeds
+  # waist hold angles (yaw, roll, pitch), rad, sent in every command; the IK
+  # only moves the arms (and models the waist at 0)
+  waist_target: [0.0, 0.0, 0.0]
+  # s to wait for a fresh rt/lowstate before enabling anything (then abort)
+  state_timeout: 5.0
+  # until g1_safety_layer is seen relaying the commands (topics.safety_out),
+  # every waist and arm command stays within this of its measured joint, rad;
+  # well below the safety layer's 0.15 rad engage gate. Never after that. 0 is off
+  follow_tolerance: 0.05
+  # s for g1_safety_layer to be seen relaying the commands, which opens the
+  # follow gate (then stop with an error)
+  startup_timeout: 30.0
+  # s for the start-up moves (arms to home, then the waist) from the gate
+  # opening on, however late it opens (then stop with an error)
+  startup_move_timeout: 30.0
+  # frame of the rt/lowstate IMU; to verify on the robot: if turning the waist
+  # changes rt/lowstate's IMU yaw while the pelvis stays still, use imu_in_torso
+  imu_frame: imu_in_pelvis
+  threshold_ik: 0.0001
+  threshold_joint: 0.001
+  threshold_linear: 0.001
+  threshold_angular: 0.002
+
+planner:
+  # OMPL planning needs a G1 self-collision model, which does not exist yet
+  enabled: false
+  planner: RRTConnect
+  timeout: 1.0
+  frame_names:
+    - left_hand_palm_link
+    - right_hand_palm_link
+
+frequency:
+  ctrl_hz: 30
+  pub_hz: 500
+  check_hz: 1000
+
+gains:
+  # waist + arms: a scalar, or 17 values (waist yaw, roll, pitch, then the left
+  # and right arm's shoulder pitch, roll, yaw, elbow, wrist roll, pitch, yaw);
+  # legs are 0. kp, and the arms' kd, from Unitree's rt/arm_sdk example. The
+  # waist kd gives a damping ratio kd / (2 sqrt(kp I)) of about 0.46 with the
+  # URDF's waist inertia I at home (yaw 0.39, roll 0.71, pitch 0.72 kg m^2);
+  # kd 1.5 gave 0.11-0.16. Under g1_safety_layer's kd_max (10)
+  kp: 60.0
+  kd: [4.5, 6.0, 6.0,
+       1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5,
+       1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5]
+  # steady-state integral term, off until the gains are tuned
+  ki: 0.0
+
+limits:
+  clip:
+    position_offset: 0.01
+    velocity_ratio: 0.10
+    torque_ratio: 0.60
+  # checked on waist + arms, matching g1_safety_layer's arm_sdk.yaml
+  estop:
+    position_offset: 0.0
+    velocity_ratio: 0.15
+    torque_ratio: 0.90
+
+logging:
+  enabled: false
+  base_dir: data/control_record
+  filename: record

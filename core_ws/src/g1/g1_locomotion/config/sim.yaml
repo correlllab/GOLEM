@@ -1,0 +1,56 @@
+# Simulated G1, DDS domain 1. HOMIE's walking policy drives the legs through
+# g1_safety_layer's split mode (its sim_split.yaml), which merges them with the
+# arm controller's waist + arms and alone writes rt/lowcmd.
+# The command limits are the trained ranges, and the rt/lowstate gap is relaxed
+# because the sim can run slower than real time.
+
+topics:
+  low_state: rt/lowstate
+  # the legs' commands: must be a g1_safety_layer input (rt/safety/...)
+  low_cmd: rt/safety/lowcmd_lower_in
+  # read only: the node starts once the arm controller is commanding here
+  upper_cmd: rt/safety/lowcmd_upper_in
+
+network:
+  domain_id: 1
+  interface: ''
+
+# frame of the rt/lowstate IMU. HOMIE was trained on the pelvis IMU and reads
+# rt/lowstate's IMU as it; only pelvis is accepted until our unit's is verified
+imu_frame: pelvis
+
+# rt/lowstate's tick, s per count: the policy steps every 20 ms of tick, so it
+# follows the robot's clock however many samples the node sees. The sim counts
+# ms of sim time
+tick_seconds: 0.001
+
+startup:
+  # s to move the legs from where they are to the policy's default pose; short,
+  # because the sim already holds the robot standing
+  ramp_seconds: 0.5
+  # s of rt/lowstate tick per s of wall clock the start accepts, measured
+  # while waiting: the sim's real-time factor, which drops below 1 when the
+  # laptop is loaded (0.59 seen) and catches up by at most 0.1 s
+  tick_rate: [0.25, 1.25]
+
+commands:
+  # the trained ranges: vx, vy in m/s, yaw in rad/s
+  vx: [-0.8, 1.2]
+  vy: [-0.5, 0.5]
+  yaw: [-0.8, 0.8]
+  # largest change per second: m/s^2, m/s^2, rad/s^2
+  accel: [0.5, 0.5, 1.0]
+  # /cmd_vel older than this (s) means zero velocity
+  timeout: 0.5
+  # largest change of the height target per second (m/s)
+  height_rate: 0.1
+
+faults:
+  # longest gap (s, wall clock) allowed between rt/lowstate samples once the
+  # node commands the legs; larger than g1.yaml's 0.05 s because the sim can
+  # run slower than real time, and below sim_split.yaml's 1 s leg watchdog
+  max_state_gap: 0.5
+  # longest a leg command may come after the rt/lowstate sample it answers
+  # (s, wall clock, from the robot's DDS write to the publish): well under the
+  # constant delay HOMIE stood with in the sim (30 ms; it fell at 60 ms)
+  max_latency: 0.025

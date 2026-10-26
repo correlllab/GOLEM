@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>g1_navigation</name>
+  <version>0.0.0</version>
+  <description>G1 navigation: FAST_LIO on the upside-down MID-360, slam_toolbox and Nav2 driving /cmd_vel</description>
+  <maintainer email="npudasai@nd.edu">Niraj Pudasaini</maintainer>
+  <license>MIT</license>
+
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>livox_ros_driver2</depend>
+  <!-- tf2_ros: static_transform_publisher; tf2_ros_py: the Python tf2_ros the nodes import -->
+  <depend>tf2_ros</depend>
+  <exec_depend>tf2_ros_py</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>g1_description</exec_depend>
+  <exec_depend>fast_lio</exec_depend>
+  <exec_depend>pointcloud_to_laserscan</exec_depend>
+  <exec_depend>slam_toolbox</exec_depend>
+  <exec_depend>nav2_bt_navigator</exec_depend>
+  <exec_depend>nav2_behaviors</exec_depend>
+  <exec_depend>nav2_controller</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_regulated_pure_pursuit_controller</exec_depend>
+  <exec_depend>nav2_smac_planner</exec_depend>
+  <exec_depend>nav2_velocity_smoother</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <!-- frontier_explore -->
+  <exec_depend>action_msgs</exec_depend>
+  <exec_depend>custom_ros_messages</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+  <test_depend>lifecycle_msgs</test_depend>
+  <test_depend>pinocchio</test_depend>
+  <test_depend>robot_state_publisher</test_depend>
+  <test_depend>sensor_msgs_py</test_depend>
+  <test_depend>tf2_msgs</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

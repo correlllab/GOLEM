@@ -1,0 +1,72 @@
+# FAST_LIO on the real G1's MID-360. NOT USED ON THE ROBOT YET: the Livox driver
+# is not connected to the lidar, and how it will be (where it runs, its
+# MID360_config.json) is still open. Every value marked TODO(lidar) depends on
+# that decision; check them all before the first run.
+#
+# FAST_LIO names its frames camera_init (the IMU's start pose) and body (the
+# IMU). g1_navigation.launch.py hangs them off odom with a static transform it
+# computes from the URDF and from mapping.extrinsic_T/R below
+# (g1_navigation/frames.py), and off the pelvis with body_to_pelvis, which reads
+# the same extrinsic. Edit the extrinsic here, not there.
+/**:
+    ros__parameters:
+        feature_extract_enable: false
+        point_filter_num: 3          # FAST_LIO's upstream MID-360 value (~20k points per 10 Hz scan)
+        max_iteration: 3
+        filter_size_surf: 0.5        # upstream values, not tuned on the G1
+        filter_size_map: 0.5
+        cube_side_length: 1000.0
+        runtime_pos_log_enable: false
+        map_file_path: ""
+
+        common:
+            # TODO(lidar): the driver's topics (msg_MID360_launch.py publishes these
+            # with multi_topic 0 and xfer_format 1, CustomMsg, which FAST_LIO needs).
+            lid_topic: "/livox/lidar"
+            imu_topic: "/livox/imu"
+            # TODO(lidar): the stamps must be on the laptop's clock. Unsynced, the
+            # driver stamps each packet with the host's clock on arrival; with
+            # PTP or GPS sync it passes the lidar's time through.
+            time_sync_en: false
+            time_offset_lidar_to_imu: 0.0
+
+        preprocess:
+            lidar_type: 1            # Livox CustomMsg (FAST_LIO's AVIA path)
+            scan_line: 4             # the MID-360's 4 lines
+            blind: 0.7               # m from the lidar; the arm and hand meshes in 'home' are 0.38-0.57 m away
+            timestamp_unit: 3        # unused for CustomMsg (offset_time is in ns)
+            scan_rate: 10            # TODO(lidar): the driver's publish_freq
+
+        mapping:
+            acc_cov: 0.1
+            gyr_cov: 0.1
+            b_acc_cov: 0.0001
+            b_gyr_cov: 0.0001
+            fov_degree: 360.0
+            det_range: 100.0
+            # The MID-360's lidar origin in its own IMU's frame (p_imu = R p_lidar + T):
+            # FAST_LIO's upstream MID-360 value. Not estimated online: the launch
+            # file's static transforms use these values.
+            extrinsic_est_en: false
+            extrinsic_T: [-0.011, -0.02329, 0.04412]
+            # TODO(lidar): identity only if the driver publishes the points in the raw
+            # sensor frame, i.e. MID360_config.json's extrinsic_parameter is all zero.
+            # Today it has roll 180. The driver applies that to the points but not to
+            # the IMU, so it would need extrinsic_R = diag(1, -1, -1) here, and the
+            # launch file's mid360_link -> livox_frame transform would have to become
+            # the same roll of pi (frames.fastlio_transforms' lidar_frame argument).
+            extrinsic_R: [1., 0., 0.,
+                          0., 1., 0.,
+                          0., 0., 1.]
+
+        publish:
+            path_en: true
+            effect_map_en: false
+            map_en: false            # /Laser_map, the whole map every second; on only to inspect
+            scan_publish_en: true
+            dense_publish_en: false
+            scan_bodyframe_pub_en: true
+
+        pcd_save:
+            pcd_save_en: false
+            interval: -1

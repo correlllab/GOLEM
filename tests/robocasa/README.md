@@ -10,7 +10,8 @@ The runner uses GOLEM's shared Docker preflight and a disposable container. It
 leaves existing simulator containers alone. Tests use real MuJoCo EGL rendering
 and ROS message types on a tiny fixed scene, without starting ROS nodes or DDS
 participants. They cover pixel/payload equivalence, sensor scheduling, lock
-boundaries, and pacing. The image must include the existing Livox messages.
+boundaries, and pacing, plus how `--task` names resolve and where the viewer
+frames the robot. The image must include the existing Livox messages.
 
 The RealSense profile tests (camera placement, projection against
 camera_info, TF tree, point cloud) need only MuJoCo, NumPy and PyYAML; the

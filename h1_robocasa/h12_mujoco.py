@@ -10,9 +10,7 @@ if __name__ == "__main__" and sim_common.select_robot(sys.argv[1:]) == "g1":
     sys.exit(g1_mujoco.main(sys.argv[1:]))
 
 import argparse
-import math
 import os
-import random
 import threading
 import time
 
@@ -33,19 +31,6 @@ from mujoco_ros_bridge import RosSensorBridge
 from sim_names import NameResolver
 from sim_timing import RealtimePacer, LoopTimings
 from unitree_interface import SimInterface
-
-# Viewer free-camera spawn pose, anchored to the robot so the passive viewer
-# opens framed on the robot wherever it spawns (RoboCasa places the base by
-# layout/seed and place_robot_collision_free may back it off), instead of
-# MuJoCo's default whole-scene framing. Top-down (straight down) view: lookat
-# follows the robot base body, elevation looks straight down, and azimuth (the
-# in-plane rotation of the top-down image) is offset from the base yaw so the
-# robot's facing points a consistent way in frame at any spawn orientation.
-# Spawn-time only — the user can orbit/zoom freely after.
-VIEW_CAM_DISTANCE  = 3.0     # m, camera height above lookat (straight down)
-VIEW_CAM_AZIMUTH   = 90.0    # deg, ADDED to robot yaw — rotates the top-down image
-VIEW_CAM_ELEVATION = -90.0   # deg, -90 = look straight down
-VIEW_CAM_LOOKAT_DZ = 0.0     # m, focal point offset along z (irrelevant for top-down)
 
 NUM_LEG_JOINTS = 12
 NUM_MOTORS = 27
@@ -93,21 +78,6 @@ def _limp_upper_body_poses(model, motor_qpos, spawn):
     return poses
 
 
-def _frame_viewer_on_robot(handle, data, body_id):
-    """Set the passive viewer free camera's spawn pose as a function of the robot
-    base body's world pose. lookat tracks the body position; the orbit azimuth is
-    offset from the body's yaw, so framing is invariant to spawn orientation."""
-    pos = data.xpos[body_id]
-    w, x, y, z = (float(v) for v in data.xquat[body_id])
-    yaw_deg = math.degrees(math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z)))
-    cam = handle.cam
-    cam.type = mujoco.mjtCamera.mjCAMERA_FREE
-    cam.lookat[:] = (float(pos[0]), float(pos[1]), float(pos[2]) + VIEW_CAM_LOOKAT_DZ)
-    cam.distance = VIEW_CAM_DISTANCE
-    cam.azimuth = yaw_deg + VIEW_CAM_AZIMUTH
-    cam.elevation = VIEW_CAM_ELEVATION
-
-
 # Viewer display rate. A viewer thread syncs its own MjData at this rate so the
 # ~11 ms handle.sync() (it waits for the render thread) never blocks physics.
 VIEWER_HZ = 60.0
@@ -141,7 +111,7 @@ def _draw_band(handle, anchor, body_pos):
         scn.ngeom += 1
 
 
-def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False):
+def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False, duration=0.0):
     """Launch a RoboCasa task env around the H1-2 and run the shared-MjData loop.
 
     Builds the env with robots='H1_2' and steps the env's *own* MjData with our
@@ -152,6 +122,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
       - MeasurementBridge: /robocasa/{task_goal,success,reward} + /elastic_band/toggle
     An elastic-band tether holds the robot upright until the ROS walking policy
     drives it; RoboCasa's _check_success/reward/lang are read off the shared env.
+    duration is part of the signature both runners share; this loop runs until the
+    viewer closes or Ctrl-C, and the command line rejects a non-zero --duration.
     """
 
     create_kwargs = {}
@@ -405,7 +377,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         if cam_body_id >= 0:
             try:
                 with handle.lock():
-                    _frame_viewer_on_robot(handle, viewer_data, cam_body_id)
+                    sim_common.frame_viewer_on_robot(handle, viewer_data, cam_body_id)
             except Exception as e:
                 print(f"[h12_mujoco] viewer camera framing skipped: {e}")
     # Fall logger: watch the torso's uprightness + height and log once when the
@@ -531,109 +503,24 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         shutdown_ros()
 
 
-def _runnable_tasks():
-    """Return (env_classes, runnable).
-
-    `env_classes` maps every robosuite-registered env name -> its class. This is
-    the same REGISTERED_ENVS that robosuite.make() resolves against, and it DOES
-    include RoboCasa's abstract bases (OpenDoor/CloseDoor/ManipulateDoor/
-    PickPlace) — RoboCasa's metaclass deliberately omits those five from its own
-    REGISTERED_KITCHEN_ENVS, but the robosuite parent metaclass still registers
-    them. We need them here so an abstract base name can be looked up and expanded
-    to its concrete subclasses.
-
-    `runnable` is the set of concrete benchmark task names from RoboCasa's curated
-    ATOMIC_/COMPOSITE_TASK_DATASETS (intersected with what's registered, to
-    tolerate version skew). Those bases can't be instantiated directly — they
-    require a `fixture_id` only a concrete subclass supplies — so they are never
-    in `runnable`. Falls back to REGISTERED_KITCHEN_ENVS (which already excludes
-    the five bases) if the curated lists are unavailable.
-    """
-    import robocasa  # noqa: F401  -> registers all kitchen envs on import
-    from robosuite.environments.base import REGISTERED_ENVS
-    env_classes = dict(REGISTERED_ENVS)
-    try:
-        from robocasa.utils.dataset_registry import (
-            ATOMIC_TASK_DATASETS,
-            COMPOSITE_TASK_DATASETS,
-        )
-        runnable = (set(ATOMIC_TASK_DATASETS) | set(COMPOSITE_TASK_DATASETS)) & set(env_classes)
-    except Exception:
-        from robocasa.environments.kitchen.kitchen import REGISTERED_KITCHEN_ENVS
-        runnable = set(REGISTERED_KITCHEN_ENVS) & set(env_classes)
-    return env_classes, runnable
-
-
-def _random_task(seed=None):
-    """Pick a random *runnable* (concrete) RoboCasa kitchen env name."""
-    _, runnable = _runnable_tasks()
-    if seed is not None:
-        random.seed(seed)
-    return random.choice(sorted(runnable))
-
-
-def _resolve_task(name, seed=None):
-    """Resolve a user-supplied --task name to a concrete runnable task.
-
-    A battery_env task name (any case) returns its canonical spelling. If `name`
-    is already a concrete benchmark task, return it unchanged. If it's
-    an abstract base (e.g. OpenDoor, ManipulateDoor) — registered but not directly
-    instantiable — randomly pick one of its concrete runnable subclasses instead
-    of crashing.
-    """
-    battery_task = battery_env.canonical_task(name)
-    if battery_task is not None:
-        return battery_task
-    env_classes, runnable = _runnable_tasks()
-    if name in runnable:
-        return name
-    if name not in env_classes:
-        raise SystemExit(f"[h12_mujoco] unknown RoboCasa task {name!r}")
-    base = env_classes[name]
-    concrete = sorted(
-        n for n in runnable
-        if isinstance(env_classes.get(n), type)
-        and issubclass(env_classes[n], base) and env_classes[n] is not base
-    )
-    if not concrete:
-        raise SystemExit(f"[h12_mujoco] {name!r} is abstract with no runnable concrete tasks")
-    if seed is not None:
-        random.seed(seed)
-    choice = random.choice(concrete)
-    print(f"[h12_mujoco] {name!r} is an abstract task base; "
-          f"randomly selected concrete subclass {choice!r} "
-          f"(from {len(concrete)} options)")
-    return choice
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the H1-2 RoboCasa MuJoCo sim")
-    parser.add_argument(
-        "--headless",
-        action="store_true",
-        help="Run without the MuJoCo passive viewer (default: viewer on)",
+    sim_common.add_common_args(
+        parser,
+        task_help="RoboCasa env name (e.g. TurnOnToasterOven), or Battery for the "
+                  "battery workcell (CL_Assets/mujoco_assets/battery). "
+                  "Omit to launch a random registered kitchen task.",
     )
-    parser.add_argument(
-        "--task",
-        default=None,
-        help="RoboCasa env name (e.g. TurnOnToasterOven), or Battery for the "
-             "battery workcell (CL_Assets/mujoco_assets/battery). "
-             "Omit to launch a random registered kitchen task.",
-    )
-    parser.add_argument("--layout", type=int, default=None, help="RoboCasa kitchen layout id")
-    parser.add_argument("--style", type=int, default=None, help="RoboCasa kitchen style id")
-    parser.add_argument("--seed", type=int, default=None, help="episode seed")
-    parser.add_argument("--timing", action="store_true",
-                        help="Log real-time factor and stage mean/max timings every 5 seconds")
-    sim_common.add_robot_args(parser)
-    args = parser.parse_args()
+    args = sim_common.parse_args(parser, sys.argv[1:], "h12")
 
     task = args.task
     if task is None:
-        task = _random_task(seed=args.seed)
+        task = sim_common.random_task(seed=args.seed)
         print(f"[h12_mujoco] no --task given; randomly selected {task!r}")
     else:
-        task = _resolve_task(task, seed=args.seed)
+        task = sim_common.resolve_task(task, seed=args.seed, tag="h12_mujoco",
+                                       robot_task=battery_env.canonical_task)
 
     sim_loop(task, viewer=not args.headless,
-             layout=args.layout, style=args.style, seed=args.seed, timing=args.timing)
+             layout=args.layout, style=args.style, seed=args.seed, timing=args.timing,
+             duration=args.duration)

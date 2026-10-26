@@ -16,6 +16,7 @@ from g1_control.utility.controller_config import (
     maybe_start_controller_logging,
 )
 from g1_control.utility.named_config import NAMED_CONFIGS
+from g1_control.utility.goal_checks import unsupported_named_config_fields
 from g1_control.utility.path_definition_ros import (
     URDF_PIN_PATH,
     CONFIG_DIR
@@ -295,6 +296,15 @@ class DualArmServer(Node):
         goal_handle.publish_feedback(feedback_msg)
 
     def named_config_callback(self, goal_handle):
+        unsupported = unsupported_named_config_fields(goal_handle.request)
+        if unsupported:
+            fields = ', '.join(unsupported)
+            self.get_logger().warn(f'{fields} not supported on the G1')
+            goal_handle.abort()
+            result = NamedConfig.Result()
+            result.success = False
+            return result
+
         with self._controller_lock:
             self.get_logger().info('Received named config goal')
             goal = goal_handle.request

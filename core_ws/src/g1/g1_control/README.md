@@ -131,6 +131,11 @@ kinematics on the G1 model.
       "{config_name: 't_pose', plan: false, duration: {sec: 0, nanosec: 0}}"
     ```
 
+- The `FrameTask` fields `relative` and `slow_mode` and the `NamedConfig`
+    field `slow_mode` are not implemented. A goal that sets one is aborted with
+    a warning that names it (`relative, slow_mode not supported on the G1`),
+    before the controller is touched. Send absolute targets at full speed.
+
 ## Launch Files
 
 - [robot_safety_launch.py](launch/robot_safety_launch.py) starts `robot_state_publisher`, `joint_state_publisher`, `g1_safety_layer/safety_node` and `frame_task_server`.

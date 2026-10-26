@@ -12,6 +12,10 @@ from custom_ros_messages.msg import StringArray
 from custom_ros_messages.action import FrameTask, NamedConfig
 from g1_control.core.controller.frame_controller import FrameController
 from g1_control.utility.named_config import NAMED_CONFIGS
+from g1_control.utility.goal_checks import (
+    unsupported_frame_task_fields,
+    unsupported_named_config_fields,
+)
 from g1_control.utility.controller_config import (
     init_channel_factory,
     load_controller_config,
@@ -147,6 +151,15 @@ class FrameTaskServer(Node):
             pass
 
     def frame_task_callback(self, goal_handle):
+        unsupported = unsupported_frame_task_fields(goal_handle.request)
+        if unsupported:
+            fields = ', '.join(unsupported)
+            self.get_logger().warn(f'{fields} not supported on the G1')
+            goal_handle.abort()
+            result = FrameTask.Result()
+            result.success = False
+            return result
+
         with self._controller_lock:
             self.get_logger().info('Received goal')
             goal = goal_handle.request
@@ -329,6 +342,15 @@ class FrameTaskServer(Node):
         goal_handle.publish_feedback(feedback_msg)
 
     def named_config_callback(self, goal_handle):
+        unsupported = unsupported_named_config_fields(goal_handle.request)
+        if unsupported:
+            fields = ', '.join(unsupported)
+            self.get_logger().warn(f'{fields} not supported on the G1')
+            goal_handle.abort()
+            result = NamedConfig.Result()
+            result.success = False
+            return result
+
         with self._controller_lock:
             self.get_logger().info('Received named config goal')
             goal = goal_handle.request

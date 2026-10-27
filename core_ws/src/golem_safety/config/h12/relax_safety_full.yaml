@@ -1,0 +1,78 @@
+mode: full_body_mode
+
+topics:
+  low_cmd_in: /safety/lowcmd_in
+  low_cmd_out: /lowcmd
+  low_state: /lowstate
+
+control:
+  publish_hz: 500.0
+  # Estop when /lowstate arrives this many ms later than the robot's own tick
+  # clock implies. Only enforced on ROS domain 0 (the real robot): the sims
+  # stamp tick in sim steps, not wall-clock ms. A value <= 0 disables it.
+  state_lag_ms: 100.0
+
+# Seconds. An input, or /lowstate, with no new sample for longer than this is
+# reported while its last command keeps being relayed; a value <= 0 disables
+# the report.
+stale:
+  lower_seconds: 0.2
+  state_seconds: 0.1
+
+# zero_stream: from boot, zero-gain commands on every slot; an input's slots carry
+# its commands from its first command.
+startup:
+  rule: zero_stream
+
+# On estop the layer streams burst_count zero-gain commands and then stops
+# publishing.
+estop_response:
+  mode: zero
+  after: burst_then_silence
+  burst_count: 50
+
+limits:
+  # position_offset, velocity_ratio and torque_ratio are scalars or 27-entry lists
+  # in slot order for per-joint tuning; kp_max and kd_max are single numbers
+  clip:
+    position_offset: 0.001
+    velocity_ratio: 1.00
+    torque_ratio: 1.00
+    kp_max: 500.0
+    kd_max: 30.0
+  estop:
+    position_offset: 0.0001
+    velocity_ratio:
+      - 1.00 # left_hip_yaw_joint
+      - 1.00 # left_hip_pitch_joint
+      - 1.00 # left_hip_roll_joint
+      - 1.00 # left_knee_joint
+      - 3.00 # left_ankle_pitch_joint
+      - 3.00 # left_ankle_roll_joint
+      - 1.00 # right_hip_yaw_joint
+      - 1.00 # right_hip_pitch_joint
+      - 1.00 # right_hip_roll_joint
+      - 1.00 # right_knee_joint
+      - 3.00 # right_ankle_pitch_joint
+      - 3.00 # right_ankle_roll_joint
+      - 1.00 # torso_joint
+      - 1.00 # left_shoulder_pitch_joint
+      - 1.00 # left_shoulder_roll_joint
+      - 1.00 # left_shoulder_yaw_joint
+      - 1.00 # left_elbow_joint
+      - 1.00 # left_wrist_roll_joint
+      - 1.00 # left_wrist_pitch_joint
+      - 1.00 # left_wrist_yaw_joint
+      - 1.00 # right_shoulder_pitch_joint
+      - 1.00 # right_shoulder_roll_joint
+      - 1.00 # right_shoulder_yaw_joint
+      - 1.00 # right_elbow_joint
+      - 1.00 # right_wrist_roll_joint
+      - 1.00 # right_wrist_pitch_joint
+      - 1.00 # right_wrist_yaw_joint
+    torque_ratio: 1.00
+
+logging:
+  enabled: false
+  base_dir: /tmp/h12_safety_layer
+  chunk_prefix: chunk_

@@ -33,6 +33,9 @@ enum class Mode { FullBody, Split, ArmSdk };
 // for anything else.
 Mode parse_mode(const std::string & name);
 
+// The name parse_mode accepts for `mode`.
+const char * mode_name(Mode mode);
+
 // Everything the safety layer knows about one robot. The data file is
 // share/golem_safety/robots/<robot>.yaml, written by tools/generate_robot_data.py
 // and read by golem_upper_ik too.

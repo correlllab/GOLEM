@@ -31,6 +31,19 @@ Mode parse_mode(const std::string & name)
           "' (expected full_body_mode, split_mode or arm_sdk_mode)");
 }
 
+const char * mode_name(Mode mode)
+{
+  switch (mode) {
+    case Mode::FullBody:
+      return "full_body_mode";
+    case Mode::Split:
+      return "split_mode";
+    case Mode::ArmSdk:
+      return "arm_sdk_mode";
+  }
+  return "unknown";
+}
+
 namespace
 {
 

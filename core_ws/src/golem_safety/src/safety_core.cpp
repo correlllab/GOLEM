@@ -24,6 +24,23 @@ using unitree_hg::msg::MotorCmd;
 // Constructed at load time, so a latch never has to allocate it.
 const std::string kReasonLost = "the estop latched, and its reason could not be recorded";
 
+// A command that does not engage is reported at most this often, s.
+constexpr double kRefusalReportSeconds = 1.0;
+
+// On exit in arm_sdk_mode, weight 0 is written this long, s, so that one lost packet cannot
+// leave the robot on a higher weight.
+constexpr double kExitHoldSeconds = 0.1;
+
+// The lag baseline may rise this fast, ms per s, to follow drift between the robot's tick
+// and the host clock (500 ppm, well above crystal drift); a delay that builds faster is lag.
+constexpr double kStateLagDriftMsPerS = 0.5;
+
+// LowState.tick is a uint32 millisecond counter.
+constexpr long long kTickWrap = 1LL << 32;
+
+// The ROS domain of the real robots' command bus; the lag check runs only there.
+constexpr int kRealRobotDomain = 0;
+
 size_t index_of(Input input) {return static_cast<size_t>(input);}
 
 const char * input_name(Input input)
@@ -145,8 +162,11 @@ std::string python_float(double value)
   return out;
 }
 
-// Python's round(value, 4), as the old layers rounded the logged weight and state age.
+// Python's round(value, 4): the events carry times and weights to 4 decimals.
 double round4(double value) {return std::round(value * 1e4) / 1e4;}
+
+// A time or weight in an event: rounded to 4 decimals, as Python's json writes it.
+std::string json_number(double value) {return python_float(round4(value));}
 
 // Milliseconds on the clock `now` is read from.
 long long ms(double seconds) {return std::llround(seconds * 1000.0);}
@@ -187,8 +207,10 @@ double wall_seconds()
 
 SafetyCore::SafetyCore(RobotProfile profile, SafetyConfig config, bool use_estop, int domain_id)
 : profile_(std::move(profile)), config_(for_robot(std::move(config), profile_)),
-  use_estop_(use_estop), domain_id_(domain_id), zero_cmd_(zero_command(profile_)),
-  estop_cmd_(estop_command(profile_, config_, zero_cmd_)), last_written_(zero_cmd_)
+  use_estop_(use_estop), zero_cmd_(zero_command(profile_)),
+  estop_cmd_(estop_command(profile_, config_, zero_cmd_)),
+  lag_checked_(domain_id == kRealRobotDomain && config_.control.state_lag_ms > 0.0),
+  last_written_(zero_cmd_)
 {
   if (config_.mode == Mode::ArmSdk && !profile_.arm_sdk_weight_slot) {
     throw std::invalid_argument(
@@ -204,6 +226,8 @@ SafetyCore::SafetyCore(RobotProfile profile, SafetyConfig config, bool use_estop
       in.slots = slots;
       in.topic = topic;
       in.source = source;
+      in.stale_seconds =
+        input == Input::Upper ? config_.stale.upper_seconds : config_.stale.lower_seconds;
       mode_inputs_.push_back(input);
     };
   switch (config_.mode) {
@@ -218,6 +242,16 @@ SafetyCore::SafetyCore(RobotProfile profile, SafetyConfig config, bool use_estop
       break;
     case Mode::ArmSdk:
       use(Input::Upper, profile_.upper_slots, config_.topics.low_cmd_upper_in, "arm_sdk_mode");
+      for (int slot = profile_.upper_slots.first; slot <= profile_.upper_slots.last; ++slot) {
+        if (profile_.joints[slot].name.rfind("waist_", 0) == 0) {
+          waist_slots_.push_back(slot);
+        }
+      }
+      if (waist_slots_.empty()) {
+        throw std::invalid_argument(
+                "arm_sdk_mode checks arm_sdk.waist_kp_min on the waist joints, and the " +
+                profile_.robot + " profile has no waist_* joint among its upper slots");
+      }
       break;
   }
   for (int slot = 0; slot <= last_body_slot; ++slot) {
@@ -266,6 +300,7 @@ std::string SafetyCore::joint(int slot) const
 
 void SafetyCore::on_state(const LowState & state, double now)
 {
+  const std::optional<double> previous = state_time_;
   state_time_ = now;
   if (estopped()) {
     return;
@@ -285,7 +320,26 @@ void SafetyCore::on_state(const LowState & state, double now)
     }
     return;
   }
-  if (config_.startup.rule == StartupRule::EngageGate && !engaged_) {
+  if (state_quiet_ && previous) {
+    state_quiet_ = false;
+    raise(
+      Event::Info, [&] {
+        return "{\"event\": \"state_resumed\", \"gap\": " + json_number(now - *previous) +
+        ", \"topic\": " + json_string(config_.topics.low_state) + "}";
+      });
+  }
+  if (lag_checked_) {
+    const double lag = state_lag_ms(state.tick, now);
+    if (took_control() && lag > config_.control.state_lag_ms) {
+      latch(
+        now, std::nullopt, [&] {
+          return config_.topics.low_state + " arriving " + fixed(lag, 0) + " ms late (> " +
+          fixed(config_.control.state_lag_ms, 0) + " ms) against the robot tick";
+        });
+      return;
+    }
+  }
+  if (!took_control()) {
     return;
   }
   const auto violation = limit_violation(state);
@@ -360,6 +414,27 @@ std::optional<SafetyCore::Violation> SafetyCore::limit_violation(const LowState 
   return std::nullopt;
 }
 
+// How late, ms, a /lowstate with this tick arrived at `now`: its offset from the robot's
+// ms clock, against the earliest offset seen, which may rise by kStateLagDriftMsPerS to
+// follow clock drift.
+double SafetyCore::state_lag_ms(uint32_t tick, double now)
+{
+  const long long t = tick;
+  if (lag_.last_tick && t < static_cast<long long>(*lag_.last_tick) - kTickWrap / 2) {
+    ++lag_.wraps;
+  }
+  lag_.last_tick = tick;
+  const double offset_ms = now * 1000.0 - static_cast<double>(t + lag_.wraps * kTickWrap);
+  if (!lag_.base_ms) {
+    lag_.base_ms = offset_ms;
+  } else {
+    const double drift_ms = kStateLagDriftMsPerS * (now - lag_.base_time);
+    lag_.base_ms = std::min(offset_ms, *lag_.base_ms + drift_ms);
+  }
+  lag_.base_time = now;
+  return offset_ms - *lag_.base_ms;
+}
+
 void SafetyCore::on_command(Input input, const LowCmd & cmd, const WriterId & writer, double now)
 {
   if (estopped() || exiting_) {
@@ -413,21 +488,218 @@ void SafetyCore::accept_command(InputState & in, const LowCmd & cmd, double now)
       });
     return;
   }
+  if (const auto soft = soft_waist(cmd)) {
+    latch(
+      now, std::nullopt, [&] {
+        return "Command validation failed on " + in.topic + ": " + joint(soft->slot) +
+        " kp " + python_float(soft->value) + " is below arm_sdk.waist_kp_min " +
+        python_float(config_.arm_sdk.waist_kp_min);
+      });
+    return;
+  }
 
   in.newest = clipped(in, cmd);
+  if (in.quiet) {
+    in.quiet = false;
+    const double gap = now - in.newest_time;
+    raise(
+      Event::Info, [&] {
+        return "{\"event\": \"input_resumed\", \"gap\": " + json_number(gap) +
+        ", \"source\": " + json_string(in.source) + ", \"topic\": " + json_string(in.topic) +
+        "}";
+      });
+  }
   in.newest_time = now;
-  if (engaged_) {
+  if (!in.engaged) {
+    try_engage(in, now);
+  }
+}
+
+// In arm_sdk_mode, the first waist slot whose kp, clipped to [0, kp_max], is below
+// arm_sdk.waist_kp_min, with that kp: a softer waist cannot hold the torso up, and a stray
+// publisher's default command has kp 0 there.
+std::optional<SafetyCore::BadValue> SafetyCore::soft_waist(const LowCmd & cmd) const
+{
+  for (const int slot : waist_slots_) {
+    const float kp = clip(cmd.motor_cmd[slot].kp, 0.0, config_.limits.kp_max);
+    if (kp < config_.arm_sdk.waist_kp_min) {
+      return BadValue{slot, "kp", kp};
+    }
+  }
+  return std::nullopt;
+}
+
+// Engages `in`, whose newest command has just arrived, and with engage_gate every input of
+// the mode, unless refusal() names a reason.
+void SafetyCore::try_engage(InputState & in, double now)
+{
+  if (const auto refused = refusal(now)) {
+    report_refusal(*refused, now);
     return;
   }
   if (config_.startup.rule == StartupRule::ZeroStream) {
-    engaged_ = true;
+    in.engaged = true;
+    raise(
+      Event::Info, [&] {
+        return "{\"event\": \"input_engaged\", \"source\": " + json_string(in.source) +
+        ", \"topic\": " + json_string(in.topic) + "}";
+      });
   } else {
-    engaged_ = std::all_of(
-      mode_inputs_.begin(), mode_inputs_.end(),
-      [this](Input input) {return input_state(input).newest.has_value();});
+    for (const Input input : mode_inputs_) {
+      input_state(input).engaged = true;
+    }
+    raise(
+      Event::Info, [&] {
+        if (config_.mode == Mode::ArmSdk) {
+          return std::string("{\"event\": \"arm_sdk_engage\"}");
+        }
+        return "{\"event\": \"lowcmd_engage\", \"mode\": " +
+        json_string(mode_name(config_.mode)) + "}";
+      });
   }
-  if (engaged_ && config_.mode == Mode::ArmSdk) {
+  if (!engaged_ && config_.mode == Mode::ArmSdk) {
     engage_start_ = now;
+  }
+  engaged_ = true;
+}
+
+// Why the newest commands cannot engage now, the first reason in this order: no
+// /lowstate; with engage_gate, a /lowstate older than max_state_age_seconds; a newest
+// /lowstate from another robot; with use_estop, no hardware estop sample; and with
+// engage_gate, an input with no command, a non-finite measured q, or the slot whose
+// command is furthest from the measured q when that is beyond max_position_error.
+std::optional<SafetyCore::Refusal> SafetyCore::refusal(double now) const
+{
+  const bool gate = config_.startup.rule == StartupRule::EngageGate;
+  if (!state_ || !state_time_) {
+    return Refusal{Refusal::NoState};
+  }
+  const double age = now - *state_time_;
+  if (gate && age > config_.engage.max_state_age_seconds) {
+    Refusal r{Refusal::StateAge};
+    r.value = age;
+    return r;
+  }
+  if (state_->mode_machine != profile_.mode_machine) {
+    Refusal r{Refusal::ModeMachine};
+    r.value = state_->mode_machine;
+    return r;
+  }
+  if (use_estop_ && !estop_sample_time_) {
+    return Refusal{Refusal::NoEstopSample};
+  }
+  if (!gate) {
+    return std::nullopt;
+  }
+  for (const Input input : mode_inputs_) {
+    const InputState & in = inputs_[index_of(input)];
+    if (!in.newest) {
+      Refusal r{Refusal::NoCommand};
+      r.input = &in;
+      return r;
+    }
+  }
+  std::optional<Refusal> worst;
+  double worst_error = -1.0;
+  for (const Input input : mode_inputs_) {
+    const InputState & in = inputs_[index_of(input)];
+    for (int slot = in.slots.first; slot <= in.slots.last; ++slot) {
+      const double q = in.newest->motor_cmd[slot].q;
+      const double measured = state_->motor_state[slot].q;
+      const double error = std::abs(q - measured);
+      if (!std::isfinite(error)) {
+        Refusal r{Refusal::StateNotFinite};
+        r.slot = slot;
+        return r;
+      }
+      if (error > worst_error) {
+        worst_error = error;
+        worst = Refusal{Refusal::FarCommand, q, measured, slot, nullptr};
+      }
+    }
+  }
+  if (worst && worst_error > config_.engage.max_position_error) {
+    return worst;
+  }
+  return std::nullopt;
+}
+
+std::string SafetyCore::refusal_text(const Refusal & r) const
+{
+  const std::string & state_topic = config_.topics.low_state;
+  switch (r.kind) {
+    case Refusal::NoState:
+      return "no " + state_topic + " received yet";
+    case Refusal::StateAge:
+      return state_topic + " is " + fixed(r.value, 3) + " s old (> " +
+             python_float(config_.engage.max_state_age_seconds) + " s)";
+    case Refusal::ModeMachine:
+      return state_topic + " mode_machine is " + fixed(r.value, 0) + ", expected " +
+             std::to_string(profile_.mode_machine);
+    case Refusal::NoEstopSample:
+      return "no hardware estop sample received yet on " + config_.estop.triggered_topic +
+             " or " + config_.estop.plugged_in_topic;
+    case Refusal::NoCommand:
+      return "no command received yet on " + r.input->topic;
+    case Refusal::StateNotFinite:
+      return joint(r.slot) + " has a non-finite q in " + state_topic;
+    case Refusal::FarCommand:
+      return joint(r.slot) + " command q " + fixed(r.value, 3) + " is " +
+             fixed(std::abs(r.value - r.measured), 3) + " rad from " + state_topic + " q " +
+             fixed(r.measured, 3) + " (> " + python_float(config_.engage.max_position_error) +
+             " rad)";
+  }
+  return "unknown";
+}
+
+// engage_refused (Warn), at most once every kRefusalReportSeconds.
+void SafetyCore::report_refusal(const Refusal & refused, double now)
+{
+  if (refusal_reported_ && now - *refusal_reported_ < kRefusalReportSeconds) {
+    return;
+  }
+  refusal_reported_ = now;
+  raise(
+    Event::Warn, [&] {
+      return "{\"event\": \"engage_refused\", \"mode\": " +
+      json_string(mode_name(config_.mode)) + ", \"reason\": " +
+      json_string(refusal_text(refused)) + "}";
+    });
+}
+
+// input_quiet and state_quiet (Warn), once per gap; the resumed events are raised by the
+// sample that ends it.
+void SafetyCore::report_quiet(double now)
+{
+  for (const Input input : mode_inputs_) {
+    InputState & in = input_state(input);
+    if (!in.engaged || in.quiet || in.stale_seconds <= 0.0) {
+      continue;
+    }
+    const double age = now - in.newest_time;
+    if (age > in.stale_seconds) {
+      in.quiet = true;
+      raise(
+        Event::Warn, [&] {
+          return "{\"age\": " + json_number(age) + ", \"event\": \"input_quiet\", " +
+          "\"seconds\": " + python_float(in.stale_seconds) + ", \"source\": " +
+          json_string(in.source) + ", \"topic\": " + json_string(in.topic) + "}";
+        });
+    }
+  }
+  const double state_seconds = config_.stale.state_seconds;
+  if (!engaged_ || state_quiet_ || state_seconds <= 0.0 || !state_time_) {
+    return;
+  }
+  const double age = now - *state_time_;
+  if (age > state_seconds) {
+    state_quiet_ = true;
+    raise(
+      Event::Warn, [&] {
+        return "{\"age\": " + json_number(age) + ", \"event\": \"state_quiet\", " +
+        "\"seconds\": " + python_float(state_seconds) + ", \"topic\": " +
+        json_string(config_.topics.low_state) + "}";
+      });
   }
 }
 
@@ -454,7 +726,7 @@ LowCmd SafetyCore::clipped(InputState & in, const LowCmd & cmd)
   LowCmd out = cmd;
   for (int slot = in.slots.first; slot <= in.slots.last; ++slot) {
     auto & motor = out.motor_cmd[slot];
-    // The old layers' gain_clipped event: the commanded gain and its maximum.
+    // gain_clipped: the commanded gain and its maximum.
     auto report_gain = [&](std::vector<bool> & reported, const char * gain, float value,
       double max) {
         if (!(value > max) || reported[slot]) {
@@ -485,10 +757,30 @@ void SafetyCore::on_estop(bool triggered, bool plugged_in, double now)
   if (!use_estop_ || estopped()) {
     return;
   }
+  estop_sample_time_ = now;
   if (triggered) {
     latch(now, now, [] {return std::string("External estop triggered");});
   } else if (!plugged_in) {
     latch(now, now, [] {return std::string("External estop unplugged");});
+  }
+}
+
+// From the first hardware estop sample on, latches when the newest is older than
+// estop.timeout_seconds: a dead estop node must not leave its last sample in force.
+void SafetyCore::check_estop_input(double now)
+{
+  if (!use_estop_ || !estop_sample_time_ || estopped()) {
+    return;
+  }
+  const double age = now - *estop_sample_time_;
+  const double timeout = config_.estop.timeout_seconds;
+  if (age > timeout) {
+    latch(
+      now, std::nullopt, [&] {
+        return "External estop silent: no sample on " + config_.estop.triggered_topic +
+        " or " + config_.estop.plugged_in_topic + " for " + fixed(age, 3) + " s (timeout " +
+        number(timeout) + " s)";
+      });
   }
 }
 
@@ -510,8 +802,8 @@ bool SafetyCore::set_latched(double now, std::optional<double> trigger) noexcept
   return true;
 }
 
-// The old layers' estop report, with sorted keys: estop_command_written, or
-// estop_latched_silent when the first step after the latch wrote nothing.
+// The estop report, with sorted keys: estop_command_written, or estop_latched_silent when
+// the first step after the latch wrote nothing.
 std::string SafetyCore::estop_report(const PendingReport & report) const
 {
   const long long decision_ms = ms(report.decision);
@@ -539,7 +831,7 @@ LowCmd SafetyCore::merged() const
   LowCmd out = zero_cmd_;
   for (const Input input : mode_inputs_) {
     const InputState & in = inputs_[index_of(input)];
-    if (!in.newest) {
+    if (!in.engaged) {
       continue;
     }
     for (int slot = in.slots.first; slot <= in.slots.last; ++slot) {
@@ -562,9 +854,8 @@ void SafetyCore::set_weight(LowCmd & cmd, double weight) const
 
 // The arm_sdk weight while handing the waist and arms back: from release_.from to 0 over
 // release_seconds, advancing only while /lowstate flows or while exiting, holding
-// otherwise. A change between running and holding raises the old layers'
-// arm_sdk_release_ramping or arm_sdk_release_held event, with the weight reached and the
-// /lowstate age.
+// otherwise. A change between running and holding raises arm_sdk_release_ramping or
+// arm_sdk_release_held, with the weight reached before this cycle and the /lowstate age.
 double SafetyCore::release_weight(double now, bool exiting)
 {
   const bool flowing = exiting || state_flowing(now);
@@ -580,10 +871,10 @@ double SafetyCore::release_weight(double now, bool exiting)
     raise(
       running ? Event::Info : Event::Warn, [&] {
         const std::string age =
-        state_time_ ? python_float(round4(now - *state_time_)) : std::string("null");
+        state_time_ ? json_number(now - *state_time_) : std::string("null");
         return std::string("{\"event\": ") +
         (running ? "\"arm_sdk_release_ramping\"" : "\"arm_sdk_release_held\"") +
-        ", \"state_age\": " + age + ", \"weight\": " + python_float(round4(weight_)) + "}";
+        ", \"state_age\": " + age + ", \"weight\": " + json_number(weight_) + "}";
       });
   }
   if (running) {
@@ -651,7 +942,12 @@ std::optional<LowCmd> SafetyCore::step(double now)
   if (exiting_) {
     return exit_step(now);
   }
-  return finish(estopped() ? estop_output(now, false) : relay_output(now));
+  check_estop_input(now);
+  if (estopped()) {
+    return finish(estop_output(now, false));
+  }
+  report_quiet(now);
+  return finish(relay_output(now));
 }
 
 std::optional<LowCmd> SafetyCore::exit_step(double now)
@@ -674,7 +970,12 @@ std::optional<LowCmd> SafetyCore::exit_step(double now)
         out = merged();
         set_weight(*out, release_weight(now, true));
       }
-      exit_done_ = weight_ == 0.0;
+      if (weight_ == 0.0) {
+        if (!exit_hold_start_) {
+          exit_hold_start_ = now;
+        }
+        exit_done_ = now - *exit_hold_start_ >= kExitHoldSeconds;
+      }
     }
   } else if (estopped()) {
     const bool burst = config_.estop_response.after == EstopAfter::BurstThenSilence;

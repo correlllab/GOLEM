@@ -936,7 +936,8 @@ TEST(ExitStep, ArmSdkRampsWeightToZero)
   const LowCmd last = engage_arm_sdk(core, command(g1()), 1.5);
   ASSERT_EQ(last.motor_cmd[29].q, 1.0F);
 
-  // No /lowstate during the exit: the ramp runs anyway.
+  // No /lowstate during the exit: the ramp runs anyway, and weight 0 is then held for
+  // 0.1 s.
   const double start = 1.51;
   std::optional<LowCmd> out;
   int written = 0;
@@ -953,8 +954,10 @@ TEST(ExitStep, ArmSdkRampsWeightToZero)
     EXPECT_EQ(out->motor_cmd[20], last.motor_cmd[20]);
   }
   EXPECT_FALSE(out);
-  EXPECT_GE(written, 101);
-  EXPECT_LE(written, 102);
+  // 101 or 102 ramp commands (the last ramp step can round to just above 0), then 10 or
+  // 11 more at weight 0.
+  EXPECT_GE(written, 111);
+  EXPECT_LE(written, 113);
   EXPECT_FALSE(core.estopped());
 
   // Never engaged: done at once.

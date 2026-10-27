@@ -70,6 +70,9 @@ if(BUILD_TESTING)
   ament_add_gtest(test_safety_core_relay test/test_safety_core_relay.cpp)
   target_link_libraries(test_safety_core_relay golem_safety_core)
 
+  ament_add_gtest(test_safety_core_startup test/test_safety_core_startup.cpp)
+  target_link_libraries(test_safety_core_startup golem_safety_core)
+
   # Writes the chunks test_chunk_files.py reads back with numpy; not installed.
   add_executable(test_chunk_writer test/test_chunk_writer.cpp)
   target_link_libraries(test_chunk_writer golem_safety_core)

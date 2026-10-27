@@ -336,8 +336,8 @@ sim-vs-real workflow depends on them behaving like the real robot.
 picks the robot (`--h12`/`--g1`, else `GOLEM_ROBOT`, else `h12`) before its
 H1-2 imports and hands the G1 over to `h1_robocasa/g1/g1_mujoco.py`. The H1-2
 stays the default, and nothing on the G1 path may change its behaviour. The robots share
-`sim_common.py`, `measurement_bridge.py`, `sim_timing.py` and the
-`mujoco_sensors` node in `mujoco_ros_bridge.py`; each has its own sensor suite
+`sim_common.py`, `measurement_bridge.py` and the `mujoco_sensors` node in
+`mujoco_ros_bridge.py` (`sim_timing.py` is the H1-2's only); each has its own sensor suite
 (`h12_sensors.py`, `g1/g1_sensors.py`) and Unitree DDS interface
 (`unitree_interface.py`, `g1/unitree_interface.py`).
 

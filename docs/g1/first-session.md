@@ -22,7 +22,7 @@ first ([Arms by hand](index.md#arms-by-hand), sending only `home` and
 | 3. Power | Laptop on AC, lid open, container run under `systemd-inhibit`. |
 | 4. Robot and people | Robot standing under Unitree's controller, on a gantry or in a harness. Nobody within reach of the arms. |
 | 5. Start the container | `docker/scripts/docker_run.sh ros --g1`; it prints `robot: g1` and asks you to confirm domain 0. |
-| 6. Read-only checks | The container is the G1's and pinned to the wired port; nothing else writes the command topics; `rt/lowstate` arrives. |
+| 6. Read-only checks | Gate: the container is the G1's and pinned to the robot's port, or exit and fix `docker/.env`. Then nothing else writes the command topics, and `rt/lowstate` arrives. |
 | 7. Launch | `ros2 launch g1_bringup g1_bringup.launch.py use_hands:=false use_rviz:=false` |
 | 8. Named configs | Send only `home` and `arms_down` on `/named_config`, one at a time. |
 | 9. Stop | Stop the controller first, wait for the hand-back, then Ctrl+C the launch. |
@@ -119,15 +119,19 @@ systemd-inhibit --what=sleep:idle:handle-lid-switch --who=G1 --why="real-robot s
 
 The wrapper prints `robot: g1`, then asks
 `Domain 0 is the REAL ROBOT bus. Proceed? [y/N]`. Answer `y` only if it
-printed `robot: g1`. The prompt does not name the interface: by then the
-wrapper has refused a missing, `DOWN` or unaddressed `G1_DDS_INTERFACE`, and
-step 6 checks that the container uses it.
+printed `robot: g1`. The prompt does not name the interface. By then the
+wrapper has refused a missing, `DOWN` or unaddressed `G1_DDS_INTERFACE`, but it
+does not know which port is the robot's: a wrong pin such as `wlan0` passes.
+Step 6 starts with the gate that catches it.
 
 If the wrapper stops with `golem_ros already exists`, a container from an
 earlier run is still there. Find out what it runs (`docker ps -a`,
-`docker logs golem_ros`) and stop it, then start this one with
-`docker/scripts/docker_run.sh ros --restart --g1` under the same
-`systemd-inhibit`.
+`docker logs golem_ros`). If it may be running a bringup, end that bringup
+with step 9 first (the controller first, then the hand-back, then Ctrl+C):
+`--restart` removes the old container with `docker rm -f`, which kills the
+safety node without its hand-back ([Safety layer](safety.md), Stopping). Then
+start this one with `docker/scripts/docker_run.sh ros --restart --g1` under the
+same `systemd-inhibit`.
 
 The container builds `core_ws` with the `g1_*` packages before it opens the
 shell (`launch_ros.sh`, an incremental colcon build that checks every
@@ -147,14 +151,27 @@ grep -E '^ *(engage|release)_seconds:' /home/code/core_ws/src/g1/g1_safety_layer
 
 ### 6. Read-only checks (terminal 1, before launching anything)
 
-The container is the G1's, on domain 0, pinned to the wired port:
+**Gate: the container is the G1's, on domain 0, pinned to the robot's port.**
 
 ```bash
-echo "$GOLEM_ROBOT $ROS_DOMAIN_ID $G1_DDS_INTERFACE"   # g1 0 enp130s0
-cat /home/code/cyclonedds_local.xml                    # names enp130s0
+echo "$GOLEM_ROBOT $ROS_DOMAIN_ID $G1_DDS_INTERFACE"
+cat /home/code/cyclonedds_local.xml
 ```
 
-Nothing else may be writing the robot's command topics:
+The two lines must read exactly:
+
+```
+g1 0 enp130s0
+<CycloneDDS><Domain Id="any"><General><Interfaces><NetworkInterface name="enp130s0"/></Interfaces></General></Domain></CycloneDDS>
+```
+
+If either line differs, `exit` the container and fix `docker/.env` (step 2),
+then start again at step 5. Do not continue.
+
+Nothing else may be writing the robot's command topics. An empty listing
+means "no other writer" only if the gate above passed and `read_lowstate.py`
+below then shows the robot: on the wrong interface, or with no link to the
+robot, discovery finds nothing and the listing is just as empty.
 
 ```bash
 cyclonedds ls -i 0 -r 5s -t 'rt/(arm_sdk|lowcmd|dex3/.*/cmd)' --suppress-progress-bar --color none \

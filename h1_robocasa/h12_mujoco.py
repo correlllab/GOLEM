@@ -24,6 +24,7 @@ import mujoco.viewer
 import h1_2_robosuite  # registers H1_2 + Magpie grippers, patches RoboCasa
 import realsense_profile
 import battery_env  # registers the Battery workcell env
+from h12_sensors import H12Sensors
 from magpie_hand_bridge import MagpieHandBridge
 from measurement_bridge import MeasurementBridge
 from mujoco_env import ElasticBand
@@ -117,7 +118,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     Builds the env with robots='H1_2' and steps the env's *own* MjData with our
     loop (never env.step()), driving the full sim<->ROS bridge layer:
       - SimInterface     : DDS rt/lowstate + rt/lowcmd (27 body motors, name-resolved)
-      - RosSensorBridge  : /clock, head RGBD, livox lidar + IMU
+      - RosSensorBridge  : /clock, and H12Sensors: RGBD cameras, livox lidar + IMU
       - MagpieHandBridge : /{left,right}/gripper/* (x2)
       - MeasurementBridge: /robocasa/{task_goal,success,reward} + /elastic_band/toggle
     An elastic-band tether holds the robot upright until the ROS walking policy
@@ -293,40 +294,44 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     timings = LoopTimings(enabled=timing)
     ros_bridge = RosSensorBridge(
         model, data,
-        cameras=_cameras,
-        camera_tf=realsense_profile.tf_edges(_profile, [ns for ns, _ in _camera_names]),
-        camera_tf_rate_hz=float(_profile["tf_rate_hz"]),
-        depth_stream=_depth_on,
-        pointcloud=_cloud_on,
-        # MID-360 fidelity: 360x56 @ 10Hz ~= 201k pts/s (real ~200k), 0.1m near /
-        # 40m far range, per-point offset_time for FAST-LIO deskew. el_rays/rate
-        # are the knobs to dial back if the ray cast (main thread) hurts RTF.
-        lidar_az_rays=360, lidar_el_rays=56,
-        lidar_rate_hz=10.0, lidar_max_range=40.0, lidar_min_range=0.1,
-        # 200 Hz IMU matches the real MID-360 (ICM-40609); the bridge default is
-        # 100 Hz. FAST-LIO integrates the IMU to propagate between the 10 Hz lidar
-        # scans, and the walking gait's high-frequency accelerations alias badly
-        # at 100 Hz -> pose drift/divergence. 200 Hz gives cleaner propagation
-        # through the gait wobble. (IMU sensor reads are cheap vs the ray cast.)
-        imu_rate_hz=200.0,
-        lidar_body=f"{pfx}livox_link",
-        lidar_exclude_body=f"{pfx}torso_link",
-        imu_quat_sensor=f"{pfx}livox_imu_quat",
-        imu_gyro_sensor=f"{pfx}livox_imu_gyro",
-        imu_acc_sensor=f"{pfx}livox_imu_acc",
-        base_body_id=odom_base_body_id,   # -> odom -> pelvis TF + /odom
-        # Drop the robot's own legs/arms from the lidar (self-returns otherwise map
-        # a phantom obstacle under the robot and nav2 rejects the start). Default on
-        # for this locomotion/SLAM/nav sim; GOLEM_LIDAR_SELF_FILTER=0 restores them
-        # as occluders.
-        lidar_self_prefixes=(
-            (pfx, "gripper0_")
-            if os.environ.get("GOLEM_LIDAR_SELF_FILTER", "1").strip().lower()
-            not in ("0", "off", "false", "no")
-            else ()
+        lambda node: H12Sensors(
+            node, model, data,
+            cameras=_cameras,
+            camera_tf=realsense_profile.tf_edges(_profile, [ns for ns, _ in _camera_names]),
+            camera_tf_rate_hz=float(_profile["tf_rate_hz"]),
+            depth_stream=_depth_on,
+            pointcloud=_cloud_on,
+            # MID-360 fidelity: 360x56 @ 10Hz ~= 201k pts/s (real ~200k), 0.1m near /
+            # 40m far range, per-point offset_time for FAST-LIO deskew. el_rays/rate
+            # are the knobs to dial back if the ray cast (main thread) hurts RTF.
+            lidar_az_rays=360, lidar_el_rays=56,
+            lidar_rate_hz=10.0, lidar_max_range=40.0, lidar_min_range=0.1,
+            # 200 Hz IMU matches the real MID-360 (ICM-40609); the bridge default is
+            # 100 Hz. FAST-LIO integrates the IMU to propagate between the 10 Hz lidar
+            # scans, and the walking gait's high-frequency accelerations alias badly
+            # at 100 Hz -> pose drift/divergence. 200 Hz gives cleaner propagation
+            # through the gait wobble. (IMU sensor reads are cheap vs the ray cast.)
+            imu_rate_hz=200.0,
+            lidar_body=f"{pfx}livox_link",
+            lidar_exclude_body=f"{pfx}torso_link",
+            imu_quat_sensor=f"{pfx}livox_imu_quat",
+            imu_gyro_sensor=f"{pfx}livox_imu_gyro",
+            imu_acc_sensor=f"{pfx}livox_imu_acc",
+            # Drop the robot's own legs/arms from the lidar (self-returns otherwise map
+            # a phantom obstacle under the robot and nav2 rejects the start). Default on
+            # for this locomotion/SLAM/nav sim; GOLEM_LIDAR_SELF_FILTER=0 restores them
+            # as occluders.
+            lidar_self_prefixes=(
+                (pfx, "gripper0_")
+                if os.environ.get("GOLEM_LIDAR_SELF_FILTER", "1").strip().lower()
+                not in ("0", "off", "false", "no")
+                else ()
+            ),
+            sim_lock=sim_lock,
+            timings=timings,
         ),
+        base_body_id=odom_base_body_id,   # -> odom -> pelvis TF + /odom
         sim_lock=sim_lock,
-        timings=timings,
     )
 
     # Gripper bridges (gripper0_<side>_ prefixed actuators/sensors).

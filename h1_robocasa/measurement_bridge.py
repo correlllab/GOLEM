@@ -46,9 +46,9 @@ class MeasurementBridge(Node):
         self.lang = ""
         self.task_name = task_name
 
-        # Optional elastic-band toggle service (same contract as
-        # RosSensorBridge's: std_srvs/Trigger -> ElasticBand.toggle()). Lets the
-        # band be released without the windowed viewer / SPACE key.
+        # Optional elastic-band toggle service (std_srvs/Trigger ->
+        # ElasticBand.toggle()). Lets the band be released without the windowed
+        # viewer / SPACE key.
         self.elastic_band = elastic_band
         if elastic_band is not None:
             self.create_service(Trigger, "/elastic_band/toggle", self._on_elastic_band_toggle)

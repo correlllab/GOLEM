@@ -13,10 +13,11 @@ from rclpy.serialization import deserialize_message, serialize_message
 from sensor_msgs.msg import PointCloud2
 
 import realsense_profile as rp
-from mujoco_ros_bridge import (
-    RosSensorBridge, _CameraPub, _camera_info, _serialize_livox_scan,
-    _sim_time_to_msg, PC2_DTYPE, _COMPRESSED_DEPTH_HEADER, _JPEG_QUALITY,
+from h12_sensors import (
+    H12Sensors, _CameraPub, _camera_info, _serialize_livox_scan,
+    PC2_DTYPE, _COMPRESSED_DEPTH_HEADER, _JPEG_QUALITY,
 )
+from mujoco_ros_bridge import RosSensorBridge, _sim_time_to_msg
 
 SCENE = '''<mujoco>
   <visual><global offwidth="32" offheight="32"/></visual>
@@ -49,7 +50,7 @@ class Recorder:
 
 class SensorTests(unittest.TestCase):
     def setUp(self):
-        self.bridge = object.__new__(RosSensorBridge)
+        self.bridge = object.__new__(H12Sensors)
         b = self.bridge
         b.model = mujoco.MjModel.from_xml_string(SCENE)
         b.data = mujoco.MjData(b.model)
@@ -61,9 +62,7 @@ class SensorTests(unittest.TestCase):
         b.cam_period = 1 / 15
         b.lidar_period = .1
         b.imu_period = .005
-        b.odom_period = .02
-        b.base_body_id = -1
-        b._last_cam_sim_t = b._last_lidar_sim_t = b._last_imu_sim_t = b._last_odom_sim_t = 0.
+        b._last_cam_sim_t = b._last_lidar_sim_t = b._last_imu_sim_t = 0.
         b.depth_stream = b.pointcloud = True
         b._camera_tf = []
         color = rp.fovy_intrinsics(32, 32, 45)
@@ -77,7 +76,6 @@ class SensorTests(unittest.TestCase):
         b.cameras = [_CameraPub(spec, 0, 0, _camera_info(spec.color, 'optical'),
                                 _camera_info(spec.depth_info, 'depth_optical'),
                                 {k: Recorder(b.sim_lock) for k in keys})]
-        b.pub_clock = Recorder(b.sim_lock)
         b.get_logger = lambda: SimpleNamespace(warn=lambda text: self.fail(text))
         # Timing is optional for existing callers of the bridge.
         try:
@@ -208,21 +206,25 @@ class SensorTests(unittest.TestCase):
 
     def test_tick_preserves_sim_time_schedule_and_publication_order(self):
         b = self.bridge
+        # The mujoco_sensors host publishes /clock, then ticks the suite.
+        host = object.__new__(RosSensorBridge)
+        host.suite, host.data, host.sim_lock, host.base_body_id = b, b.data, b.sim_lock, -1
+        host.pub_clock = Recorder(b.sim_lock)
         events = []
-        b.pub_clock.publish = lambda msg: events.append(('clock', msg.clock.sec, msg.clock.nanosec))
+        host.pub_clock.publish = lambda msg: events.append(('clock', msg.clock.sec, msg.clock.nanosec))
         b._publish_imu = lambda stamp: events.append(('imu', stamp.sec, stamp.nanosec))
         b._publish_camera_frame = lambda stamp: events.append(('camera', stamp.sec, stamp.nanosec))
         b._publish_lidar_scan = lambda stamp: events.append(('lidar', stamp.sec, stamp.nanosec))
-        b.tick()
+        host.tick()
         self.assertEqual([e[0] for e in events], ['clock', 'imu', 'camera', 'lidar'])
         self.assertTrue(all(e[1:] == (1, 250000000) for e in events))
         events.clear()
         b.data.time = 1.251
-        b.tick()
+        host.tick()
         self.assertEqual([e[0] for e in events], ['clock'])
         events.clear()
         b.data.time = 1.256
-        b.tick()
+        host.tick()
         self.assertEqual([e[0] for e in events], ['clock', 'imu'])
 
     def _configure_lidar(self):

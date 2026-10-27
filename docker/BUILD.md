@@ -277,7 +277,10 @@ else `h12`. For the G1 they add `docker/docker-compose.g1.yml` after
 - the robocasa service gets the G1 sim's knobs (`CLAUDE.md` §8);
 - the ros service loads a second CycloneDDS file after `core_ws/cyclonedds.xml`,
   `cyclonedds_local.xml`, which the wrapper writes into `GOLEM_CACHE_DIR` from
-  `G1_DDS_INTERFACE` to pin the network interface.
+  `G1_DDS_INTERFACE` to pin the network interface. It does so only when it
+  starts a ros container, and by rename, because the file is a single-file bind
+  mount that a running container rereads in every new process
+  (`write_g1_dds_pin` in `scripts/docker_common.sh`).
 
 The mounts stay out of the base file, so an H1-2 checkout without the
 `leprechaun_g1` submodule still starts. For the G1, `prepare_mounts` checks

@@ -360,6 +360,180 @@ esac
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse((self.root / 'container_cache/cyclonedds_local.xml').exists())
 
+    # --- the shared cyclonedds_local.xml and a live G1 ros container ---------------------------
+
+    PIN = ('<CycloneDDS><Domain Id="any"><General><Interfaces><NetworkInterface name="{}"/>'
+           '</Interfaces></General></Domain></CycloneDDS>')
+
+    def live_pin(self):
+        """The cyclonedds_local.xml a running domain-0 G1 ros container was started with."""
+        xml = self.root / 'container_cache/cyclonedds_local.xml'
+        xml.parent.mkdir(parents=True, exist_ok=True)
+        content = self.PIN.format('enp130s0') + '\n'
+        xml.write_text(content)
+        return xml, content, xml.stat()
+
+    def assert_pin_untouched(self, xml, content, before):
+        after = xml.stat()
+        self.assertEqual((after.st_ino, after.st_mtime_ns), (before.st_ino, before.st_mtime_ns))
+        self.assertEqual(xml.read_text(), content)
+
+    def install_copy(self, name):
+        dest = self.root / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(REPO / name, dest)
+
+    def install_flock_stub(self):
+        # tests/robocasa/surface/run.sh locks a host-wide file in /tmp; a real probe may hold it.
+        flock = self.bin / 'flock'
+        flock.write_text('#!/bin/sh\nexit 0\n')
+        flock.chmod(0o755)
+
+    def run_g1_test_setup(self, out):
+        """tests/g1/common.sh's g1_test_setup, then its EXIT cleanup, under the stub docker."""
+        return subprocess.run(['bash', '-c', 'set -eo pipefail; source "$1"; g1_test_setup t bringup arm 195',
+                               'bash', str(self.root / 'tests/g1/common.sh')], cwd='/tmp',
+                              env=dict(self.env, OUT=str(out)), text=True, capture_output=True)
+
+    def test_g1_sim_runs_leave_the_dds_pin_alone(self):
+        # A running G1 ros container reads the shared file through a single-file bind
+        # mount each time a process in it starts, so nothing that starts no ros
+        # container may change it.
+        self.add_g1_files()
+        self.install_flock_stub()
+        for name in ('tests/robocasa/g1/run_in_container.sh', 'tests/robocasa/surface/run.sh',
+                     'tests/g1/common.sh'):
+            self.install_copy(name)
+        (self.root / 'tests/robocasa/surface/g1.json').write_text('{}\n')
+        runs = (
+            ('docker_run.sh robocasa --g1, another interface',
+             lambda: self.run_script('docker/scripts/docker_run.sh', 'robocasa', '--g1', G1_DDS_INTERFACE='eth7')),
+            ('docker_run.sh robocasa --g1, empty interface',
+             lambda: self.run_script('docker/scripts/docker_run.sh', 'robocasa', '--g1', G1_DDS_INTERFACE='')),
+            ('tests/robocasa/g1/run_in_container.sh',
+             lambda: self.run_script('tests/robocasa/g1/run_in_container.sh', G1_DDS_INTERFACE='eth7')),
+            ('tests/robocasa/surface/run.sh g1',
+             lambda: self.run_script('tests/robocasa/surface/run.sh', 'g1', G1_DDS_INTERFACE='eth7')),
+        )
+        for label, run in runs:
+            with self.subTest(label):
+                xml, content, before = self.live_pin()
+                (self.root / 'calls').unlink(missing_ok=True)
+                r = run()
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertTrue(self.run_calls(), f'{label} never reached its compose run')
+                self.assert_pin_untouched(xml, content, before)
+        with self.subTest('tests/g1/common.sh binds a pin of its own'):
+            xml, content, before = self.live_pin()
+            (self.root / 'calls').unlink(missing_ok=True)
+            out = self.root / 'g1 out'
+            r = self.run_g1_test_setup(out)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assert_pin_untouched(xml, content, before)
+            self.assertEqual((out / 'cyclonedds_local.xml').read_text().strip(), '<CycloneDDS/>')
+            r = subprocess.run(['/usr/bin/docker', 'compose', '--env-file', '/dev/null',
+                                '-f', str(self.root / 'docker/docker-compose.yml'), '-f', self.overlay(),
+                                '-f', str(out / 'test_compose.yml'), '--profile', 'ros', 'config', '--format', 'json'],
+                               env=dict(self.env, GOLEM_CACHE_DIR=str(self.root / 'container_cache')),
+                               text=True, capture_output=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            volumes = json.loads(r.stdout)['services']['ros']['volumes']
+            pins = [v for v in volumes if v['target'] == '/home/code/cyclonedds_local.xml']
+            self.assertEqual([v['source'] for v in pins], [str(out / 'cyclonedds_local.xml')])
+            self.assertTrue(pins[0]['read_only'])
+            # every container g1_test_setup's runs create is removed on exit, the build's too
+            removed = next(c for c in self.calls() if c[:2] == ['rm', '-f'])
+            self.assertTrue(any(n.endswith('-ros-build') for n in removed), removed)
+
+    def test_g1_ros_start_replaces_dds_pin_atomically(self):
+        self.add_g1_files()
+        starts = (
+            ('docker_run.sh ros --g1', 'docker/scripts/docker_run.sh', ('ros', '--g1'), 'eth7'),
+            ('docker_stack.sh up', 'docker/scripts/docker_stack.sh', ('up', 'robocasa', '--g1', '--headless'), ''),
+            ('docker_stack.sh restart', 'docker/scripts/docker_stack.sh', ('restart', 'robocasa', '--g1'), 'eth7'),
+        )
+        for label, script, args, interface in starts:
+            with self.subTest(label):
+                xml, content, before = self.live_pin()
+                # The running container's bind mount holds the inode it started with.
+                with open(xml) as mounted:
+                    r = self.run_script(script, *args, G1_DDS_INTERFACE=interface)
+                    self.assertEqual(r.returncode, 0, r.stderr)
+                    self.assertEqual(xml.read_text().strip(),
+                                     self.PIN.format(interface) if interface else '<CycloneDDS/>')
+                    self.assertNotEqual(xml.stat().st_ino, before.st_ino)
+                    self.assertEqual(mounted.read(), content)
+                self.assertEqual(xml.stat().st_mode & 0o777, 0o644)
+                self.assertEqual(list(xml.parent.glob('cyclonedds_local.xml?*')), [])
+
+    def test_g1_dds_pin_is_written_only_when_a_ros_container_starts(self):
+        self.add_g1_files()
+        self.install_ip_stub()
+        up = {'IP_STATE': 'UP', 'IP_INET': '192.168.123.222/24'}
+        refused = (
+            ('golem_ros exists, no --restart', 'docker/scripts/docker_run.sh', ('ros', '--g1'), '',
+             {'EXISTING': '1'}),
+            ('domain 0 declined', 'docker/scripts/docker_run.sh', ('ros', '--g1'), 'n\n',
+             dict(up, ROS_DOMAIN_ID='0')),
+            ('stack already running', 'docker/scripts/docker_stack.sh', ('up', 'robocasa', '--g1'), '',
+             {'EXISTING': '1'}),
+        )
+        for label, script, args, stdin, env in refused:
+            with self.subTest(label):
+                xml, content, before = self.live_pin()
+                r = self.run_with_input(script, *args, stdin=stdin, G1_DDS_INTERFACE='eth7', **env)
+                self.assertNotEqual(r.returncode, 0)
+                self.assert_pin_untouched(xml, content, before)
+
+    def test_g1_dds_interface_must_be_an_interface_name(self):
+        self.add_g1_files()
+        xml = self.root / 'container_cache/cyclonedds_local.xml'
+        for name in ('eth0"/><Tracing', 'a' * 16, 'eth 0', 'eth0\n', 'éth0', 'eth/0'):
+            for service in ('ros', 'robocasa'):
+                with self.subTest(name=name, service=service):
+                    (self.root / 'calls').unlink(missing_ok=True)
+                    xml.unlink(missing_ok=True)
+                    r = self.run_script('docker/scripts/docker_run.sh', service, '--g1', G1_DDS_INTERFACE=name)
+                    self.assertNotEqual(r.returncode, 0)
+                    self.assertIn('is not a network interface name', r.stderr)
+                    self.assertFalse(self.compose_calls())
+                    self.assertFalse(xml.exists())
+        for name in ('enp130s0', 'eth0.100', 'br-0123456789ab', 'wlp0s20f3'):
+            with self.subTest(name=name):
+                r = self.run_script('docker/scripts/docker_run.sh', 'ros', '--g1', G1_DDS_INTERFACE=name)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(xml.read_text().strip(), self.PIN.format(name))
+
+    def test_g1_interface_on_a_sim_domain_warns(self):
+        self.add_g1_files()
+        self.install_ip_stub()
+        up = {'IP_STATE': 'UP', 'IP_INET': '192.168.123.222/24'}
+
+        def warnings(r):
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return [line for line in r.stderr.splitlines() if 'WARNING' in line]
+
+        warned = (
+            ('docker_run.sh robocasa', 'docker/scripts/docker_run.sh', ('robocasa', '--g1'), {}),
+            ('docker_run.sh ros', 'docker/scripts/docker_run.sh', ('ros', '--g1'), {}),
+            ('docker_stack.sh up', 'docker/scripts/docker_stack.sh', ('up', 'robocasa', '--g1'), {}),
+        )
+        for label, script, args, env in warned:
+            with self.subTest(label):
+                lines = warnings(self.run_script(script, *args, G1_DDS_INTERFACE='eth7', **env))
+                self.assertEqual(len(lines), 1, lines)
+                for text in ('G1_DDS_INTERFACE=eth7', 'ros container', 'domain 0', 'empty', 'docs/g1/dds.md'):
+                    self.assertIn(text, lines[0])
+        quiet = (
+            ('empty interface', ('robocasa', '--g1'), {'G1_DDS_INTERFACE': ''}, ''),
+            ('the H1-2', ('robocasa',), {'G1_DDS_INTERFACE': 'eth7'}, ''),
+            ('the real robot on domain 0', ('ros', '--g1'), dict(up, G1_DDS_INTERFACE='eth7', ROS_DOMAIN_ID='0'), 'y\n'),
+        )
+        for label, args, env, stdin in quiet:
+            with self.subTest(label):
+                r = self.run_with_input('docker/scripts/docker_run.sh', *args, stdin=stdin, **env)
+                self.assertEqual(warnings(r), [])
+
     def test_stack_wrappers_ignore_golem_robot(self):
         # A G1 selection left in docker/.env must not reach the H1 test wrappers.
         (self.root / 'docker/.env').write_text('GOLEM_ROBOT=g1\n')
@@ -460,6 +634,9 @@ esac
             self.assertNotEqual(r.returncode, 0)
             self.assertIn('Real-robot launch cancelled', r.stderr)
             self.assertFalse(self.compose_calls())
+            prompt = self.domain0_prompt(r)
+            for text in ('robot: g1', 'interface: eth7', '192.168.123.222/24'):
+                self.assertIn(text, prompt)
         with self.subTest('usable interface and a yes proceeds with the overlay'):
             r = domain0(stdin='y\n', G1_DDS_INTERFACE='eth7', **up)
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -520,10 +697,21 @@ esac
             self.assertIn('reserved for the real robot', r.stderr)
             self.assertFalse(self.compose_calls())
 
+    def domain0_prompt(self, r):
+        """The domain-0 confirmation the wrapper printed, from its first line to the question."""
+        start = 'Domain 0 is the REAL ROBOT bus.'
+        self.assertIn(start, r.stderr)
+        prompt = r.stderr[r.stderr.index(start):]
+        self.assertIn('Proceed? [y/N]', prompt)
+        return prompt[:prompt.index('Proceed? [y/N]')]
+
     def test_h12_domain0_needs_no_interface(self):
         r = self.run_with_input('docker/scripts/docker_run.sh', 'ros', stdin='n\n', ROS_DOMAIN_ID='0')
         self.assertNotEqual(r.returncode, 0)
         self.assertIn('Real-robot launch cancelled', r.stderr)
+        prompt = self.domain0_prompt(r)
+        self.assertIn('robot: h12', prompt)
+        self.assertNotIn('interface', prompt)
         r = self.run_with_input('docker/scripts/docker_run.sh', 'ros', stdin='y\n', ROS_DOMAIN_ID='0')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn(self.overlay(), self.compose_files(self.run_calls()[-1]))

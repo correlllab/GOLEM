@@ -26,4 +26,5 @@ fi
 if [ $# -gt 0 ] && [ "${1#-}" != "$1" ]; then
     set -- "/home/code/h12_sim_scripts/launch_${SIM}${LAUNCH_SUFFIX}.sh" "$@"
 fi
+[ "$SIM" != ros ] || write_g1_dds_pin
 exec "${COMPOSE[@]}" run --rm --name "$NAME" "$SIM" "$@"

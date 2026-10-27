@@ -48,7 +48,8 @@ services:
       # The Unitree SDK ignores CYCLONEDDS_URI, so the nodes that use it read
       # the interface from here.
       G1_DDS_INTERFACE: ${G1_DDS_INTERFACE:-}
-      # cyclonedds_local.xml, written by the host wrapper from G1_DDS_INTERFACE,
+      # cyclonedds_local.xml, written from G1_DDS_INTERFACE by the host wrapper
+      # when it starts this container (write_g1_dds_pin in docker_common.sh),
       # pins the network interface on top of the shared tuning file.
       CYCLONEDDS_URI: file:///home/code/cyclonedds.xml,file:///home/code/cyclonedds_local.xml
     volumes:

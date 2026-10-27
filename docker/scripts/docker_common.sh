@@ -71,23 +71,27 @@ parse_robot_flags() {
 
 # Selects the robot for service $1 and exports it as GOLEM_ROBOT (h12 or g1).
 # Precedence: ROBOT_FLAG, then the shell, then docker/.env (see load_config).
-# G1 adds its compose overlay and the CycloneDDS interface pin that the ros
-# container loads after core_ws/cyclonedds.xml; it runs on x86 Linux, never
-# with Isaac.
+# G1 adds its compose overlay; it runs on x86 Linux, never with Isaac. A set
+# G1_DDS_INTERFACE must be a Linux interface name (at most IFNAMSIZ-1 = 15
+# characters), because write_g1_dds_pin puts it into XML. It is meant for the
+# ros container on domain 0 only: the sim's ROS nodes are never pinned, so on a
+# sim domain it can split the ROS graph across interfaces.
 configure_robot() {
     local service=$1 robot
+    # Letters spelled out: a range like A-Z follows the locale's collation, which
+    # can take in letters such as é.
+    local ifname_re='^[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.@:-]{1,15}$'
     robot=$(printf '%s' "${ROBOT_FLAG:-${GOLEM_ROBOT:-h12}}" | tr '[:upper:]' '[:lower:]')
     case "$robot" in
         h12) ;;
         g1)
             [ "${GOLEM_PLATFORM:-linux}" != mac ] || fail 'G1 is not available on Mac; use an x86 Linux host.'
             [ "$service" != isaac ] || fail 'G1 is not available with the Isaac simulator; use robocasa.'
-            mkdir -p "$GOLEM_CACHE_DIR"
             if [ -n "${G1_DDS_INTERFACE:-}" ]; then
-                printf '<CycloneDDS><Domain Id="any"><General><Interfaces><NetworkInterface name="%s"/></Interfaces></General></Domain></CycloneDDS>\n' \
-                    "$G1_DDS_INTERFACE" > "$GOLEM_CACHE_DIR/cyclonedds_local.xml"
-            else
-                echo '<CycloneDDS/>' > "$GOLEM_CACHE_DIR/cyclonedds_local.xml"
+                [[ $G1_DDS_INTERFACE =~ $ifname_re ]] || \
+                    fail "G1_DDS_INTERFACE=$(printf '%q' "$G1_DDS_INTERFACE") is not a network interface name (letters, digits and _ . @ : -, at most 15 characters; see: ip -br link)."
+                [ "$ROS_DOMAIN_ID" = 0 ] || \
+                    echo "WARNING: G1_DDS_INTERFACE=$G1_DDS_INTERFACE pins only the ros container, for the real robot on domain 0; leave it empty for the sim (domain $ROS_DOMAIN_ID), whose ROS nodes may otherwise use another interface (docs/g1/dds.md)." >&2
             fi
             COMPOSE+=(-f "$GOLEM_ROOT/docker/docker-compose.g1.yml")
             ;;
@@ -96,8 +100,34 @@ configure_robot() {
     export GOLEM_ROBOT=$robot
 }
 
+# For the G1, writes $GOLEM_CACHE_DIR/cyclonedds_local.xml from
+# G1_DDS_INTERFACE (empty: CycloneDDS chooses); the ros container loads it after
+# core_ws/cyclonedds.xml. Call it only right before a ros container starts.
+# The overlay bind-mounts the file into the ros container as a single file, which
+# pins the inode the container started with, and CycloneDDS rereads it in every
+# process that starts there. So the file is replaced by a rename, never written
+# in place: a running container keeps the pin it started with.
+write_g1_dds_pin() {
+    [ "${GOLEM_ROBOT:-h12}" = g1 ] || return 0
+    local pin=$GOLEM_CACHE_DIR/cyclonedds_local.xml tmp
+    mkdir -p "$GOLEM_CACHE_DIR"
+    tmp=$(mktemp "$pin.XXXXXX") || fail "Cannot create a temporary file beside $pin."
+    if ! {
+        if [ -n "${G1_DDS_INTERFACE:-}" ]; then
+            printf '<CycloneDDS><Domain Id="any"><General><Interfaces><NetworkInterface name="%s"/></Interfaces></General></Domain></CycloneDDS>\n' \
+                "$G1_DDS_INTERFACE" > "$tmp"
+        else
+            echo '<CycloneDDS/>' > "$tmp"
+        fi && chmod 0644 "$tmp" && mv -f "$tmp" "$pin"
+    }; then
+        rm -f "$tmp"
+        fail "Cannot write $pin."
+    fi
+}
+
 # G1 on DDS domain 0 reaches the real robot, so the CycloneDDS interface pin
 # must name a host port that is up and addressed, not whatever DDS would pick.
+# Sets G1_DDS_IPV4 to the port's IPv4 addresses (CIDR, space-separated).
 check_dds_interface() {
     if [ -z "${G1_DDS_INTERFACE:-}" ]; then
         fail "ROS_DOMAIN_ID=0 (the real robot) needs G1_DDS_INTERFACE, the laptop's wired port to"$'\n'"       the robot (ours: enp130s0), in docker/.env. Without it DDS may pick another interface."
@@ -105,23 +135,31 @@ check_dds_interface() {
     command -v ip >/dev/null 2>&1 || fail "'ip' (iproute2) is needed to check G1_DDS_INTERFACE on DDS domain 0."
     ip link show dev "$G1_DDS_INTERFACE" >/dev/null 2>&1 || \
         fail "G1_DDS_INTERFACE=$(printf '%q' "$G1_DDS_INTERFACE") is not a network interface on this host (see: ip -br link)."
-    local link_state ipv4
+    local link_state
     link_state=$(ip -br link show dev "$G1_DDS_INTERFACE" | awk '{print $2}') || true
     if [ "$link_state" != UP ]; then
         fail "G1_DDS_INTERFACE=$G1_DDS_INTERFACE is ${link_state:-in an unknown state}, not UP."$'\n'"       Check the cable to the robot: ip -br link show dev $G1_DDS_INTERFACE"
     fi
-    ipv4=$(ip -o -4 addr show dev "$G1_DDS_INTERFACE" | awk '{print $4}' | paste -sd ' ' -) || true
-    if [ -z "$ipv4" ]; then
+    G1_DDS_IPV4=$(ip -o -4 addr show dev "$G1_DDS_INTERFACE" | awk '{print $4}' | paste -sd ' ' -) || true
+    if [ -z "$G1_DDS_IPV4" ]; then
         fail "G1_DDS_INTERFACE=$G1_DDS_INTERFACE has no IPv4 address (ours: 192.168.123.222/24)."$'\n'"       Check the cable and the port's address: ip -br addr show dev $G1_DDS_INTERFACE"
     fi
 }
 
+# The confirmation is printed whether or not stdin is a terminal, so a log shows
+# which robot and port were confirmed.
 check_domain() {
     if [ "$ROS_DOMAIN_ID" = 0 ]; then
         [ "$1" = ros ] && [ "${GOLEM_PLATFORM:-linux}" != mac ] || fail 'Domain 0 is reserved for the real robot.'
-        [ "${GOLEM_ROBOT:-h12}" != g1 ] || check_dds_interface
-        local reply
-        read -r -p 'Domain 0 is the REAL ROBOT bus. Proceed? [y/N] ' reply
+        local robot=${GOLEM_ROBOT:-h12} reply
+        [ "$robot" != g1 ] || check_dds_interface
+        {
+            echo 'Domain 0 is the REAL ROBOT bus.'
+            echo "  robot: $robot"
+            [ "$robot" != g1 ] || echo "  interface: $G1_DDS_INTERFACE (IPv4 $G1_DDS_IPV4)"
+            printf 'Proceed? [y/N] '
+        } >&2
+        read -r reply
         case "$reply" in y|Y|yes|YES) ;; *) fail 'Real-robot launch cancelled.';; esac
     fi
 }

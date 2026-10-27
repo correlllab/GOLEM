@@ -8,6 +8,9 @@
 #     network namespace, both on its loopback with multicast, so no DDS leaves
 #     the host and nothing talks to the robot;
 #   - the sim mounts h1_robocasa read-only;
+#   - the ros container loads the run's own cyclonedds_local.xml, which pins no
+#     interface, in place of the shared one in $GOLEM_CACHE_DIR, which a running
+#     G1 ros container rereads in every process it starts;
 #   - the ros container builds core_ws for the G1 (launch_ros.sh, GOLEM_ROBOT=g1)
 #     into $GOLEM_CACHE_DIR/g1_tests/{build,install,log}, so the checkout's own
 #     core_ws/build and core_ws/install are left alone; CORE_WS=<dir> builds
@@ -74,7 +77,7 @@ g1_test_setup() {
         out=$(cd -- "$OUT" && pwd)
     fi
     # The containers' only interface is their loopback, which they get as
-    # G1_DDS_INTERFACE below; the shared cyclonedds_local.xml pins none.
+    # G1_DDS_INTERFACE below; the ros container's cyclonedds_local.xml pins none.
     export GOLEM_ROBOT=g1 G1_DDS_INTERFACE= GOLEM_DISPLAY=headless
     ROBOT_FLAG=
     load_config
@@ -98,6 +101,7 @@ g1_test_setup() {
         echo "[$TAG] $OUT is not empty; use a new OUT" >&2
         exit 2
     fi
+    echo '<CycloneDDS/>' > "$OUT/cyclonedds_local.xml"
     local prefix=golem-g1-$TEST_NAME-$ROS_DOMAIN_ID-$$
     SIM=$prefix-sim
     ROS=$prefix-ros
@@ -131,6 +135,7 @@ $shared
     volumes:
 $shared
 $workspace
+      - {type: bind, source: "$OUT/cyclonedds_local.xml", target: /home/code/cyclonedds_local.xml, read_only: true}
 EOF
     printf 'services:\n  ros:\n    network_mode: "container:%s"\n' "$SIM" > "$OUT/test_compose_ros_in_sim.yml"
     COMPOSE+=(-f "$OUT/test_compose.yml")
@@ -143,7 +148,7 @@ g1_test_cleanup() {
     [ -z "$LOAD_PID" ] || kill "$LOAD_PID" 2>/dev/null || true
     local sim_state
     sim_state=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$SIM" 2>/dev/null || echo 'not started')
-    docker rm -f "$ROS" "$SIM" >/dev/null 2>&1 || true
+    docker rm -f "$ROS" "$ROS-build" "$SIM" >/dev/null 2>&1 || true
     # the containers write as root
     "${COMPOSE[@]}" run --rm -T --no-deps --entrypoint chown robocasa -R "$(id -u):$(id -g)" /out \
         >/dev/null 2>&1 || true

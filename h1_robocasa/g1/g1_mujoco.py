@@ -9,13 +9,13 @@ import mujoco
 import numpy as np
 import rclpy.executors
 
-from .mujoco_ros_bridge import init_ros, shutdown_ros
+from mujoco_ros_bridge import RosSensorBridge, init_ros, shutdown_ros
 import mujoco.viewer
 
 from . import g1_robosuite  # registers G1Dex3 + its grippers, patches RoboCasa
 import sim_common
 from measurement_bridge import MeasurementBridge
-from .mujoco_ros_bridge import RosSensorBridge, SensorConfig
+from .g1_sensors import G1Sensors, SensorConfig
 from .sim_names import BODY_JOINTS, NameResolver
 from .stand_in import StandIn
 from .unitree_interface import SimInterface
@@ -96,10 +96,10 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                            rt/lowstate, rt/lowcmd, rt/arm_sdk, rt/dex3/{left,right}/*
       - StandIn          : Unitree's controller stand-in, HOMIE standing the robot
                            until the first valid rt/lowcmd releases it
-      - RosSensorBridge  : /clock, the MID-360 (/livox/lidar, /livox/imu) and the
-                           head D435 (/realsense/head/*), on unless GOLEM_LIDAR=0 /
-                           GOLEM_CAMERAS=0 (SensorConfig), + ground-truth /odom
-                           with GOLEM_SIM_ODOM=1
+      - RosSensorBridge  : /clock, and G1Sensors: the MID-360 (/livox/lidar,
+                           /livox/imu) and the head D435 (/realsense/head/*), on
+                           unless GOLEM_LIDAR=0 / GOLEM_CAMERAS=0 (SensorConfig),
+                           + ground-truth /odom with GOLEM_SIM_ODOM=1
       - MeasurementBridge: /robocasa/{task_name,task_goal,success,reward}
     RoboCasa's _check_success/reward/lang are read off the shared env.
     duration: sim seconds to run from the first step, counted in physics steps
@@ -190,14 +190,14 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     sys.setswitchinterval(GIL_SWITCH_S)
     init_ros()
 
-    # Sensor bridge: /clock, the MID-360 and the head D435, and the optional
-    # ground-truth odom
+    # Sensor bridge: /clock, the MID-360 and the head D435 (G1Sensors), and the
+    # optional ground-truth odom. The loop calls tick() holding sim_lock, which
+    # is not reentrant, so the bridge takes none of its own.
     ros_bridge = RosSensorBridge(
         model, data,
-        prefix=pfx,
-        sensors=sensors,
+        lambda node: G1Sensors(node, model, data, prefix=pfx, config=sensors),
         base_body_id=odom_base_body_id,   # -> odom -> pelvis TF + /odom
-        sim_lock=sim_lock,
+        sim_lock=None,
     )
     print(f"[g1_mujoco] sensors: {sensors.describe()}")
 
@@ -206,8 +206,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
 
     # Background executor serves the nodes' ROS callbacks (parameter services).
     # ros_bridge.tick() is driven from the main loop instead (it reads MjData
-    # between steps; the camera renders on the bridge's own thread), so it is
-    # NOT added here.
+    # between steps; the camera renders on its own thread), so it is NOT added
+    # here.
     executor = rclpy.executors.MultiThreadedExecutor()
     executor.add_node(measurement)
     executor_thread = threading.Thread(target=executor.spin, daemon=True, name="ros_bridge_exec")

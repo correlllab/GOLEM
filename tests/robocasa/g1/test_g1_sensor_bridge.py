@@ -1,4 +1,4 @@
-"""Tests for g1.mujoco_ros_bridge without DDS: its env knobs (SensorConfig), the
+"""Tests for g1.g1_sensors without DDS: its env knobs (SensorConfig), the
 MID-360's scan thread (_LidarScans), whose frames go to a list instead of a
 publisher, and the head camera's render thread (_HeadCamera), whose messages go
 to a stand-in node's lists. No ROS node is created. The camera needs GL
@@ -23,7 +23,7 @@ from g1 import g1_head_camera
 from g1 import g1_lidar as lidar
 from g1 import g1_robosuite
 from g1 import g1_sensor_msgs as sm
-from g1 import mujoco_ros_bridge as bridge
+from g1 import g1_sensors as bridge
 
 PELVIS_Z = 0.793    # m, the MJCF's pelvis height with every joint at 0
 SCREEN_X = 1.0      # m: the screens' faces towards the robot, ahead (geom alpha) and behind (material alpha)
@@ -255,6 +255,36 @@ def test_head_camera_thread_renders_the_state_at_its_tick():
     k = info[0].k
     assert (k[0], k[4], k[2], k[5]) == (reference.fx, reference.fy, reference.cx, reference.cy)
     print(f"  6 frames as render() gives them; tick {max(tick_ms):.2f} ms at most on the physics thread")
+
+
+# ------------------------------------------------------------------ G1Sensors
+def test_g1_sensors_stamp_one_step_before_sim_t_and_build_what_the_config_enables():
+    """tick(sim_t, stamp) hands the sensors sim_t - dt, the state mj_step started
+    from, so the first sample of the first tick (sim_t = dt) is stamped 0 and
+    none of a second of ticks is stamped 1 s; the config picks the sensors, and
+    stats() covers them"""
+    model = _model()
+    data = _standing(model)
+    dt = model.opt.timestep
+    node = _Node()
+    sensors = bridge.G1Sensors(node, model, data, "", bridge.SensorConfig(camera=False))
+    try:
+        assert sensors.head_camera is None and "/realsense/head/color/image_raw" not in node.sent
+        for step in range(1, 501):
+            while sensors.mid360.scans._free.empty():   # the loop outruns real time, as in _submit
+                time.sleep(0.0005)
+            sim_t = step * dt
+            sensors.tick(sim_t, bridge._sim_time_to_msg(sim_t))
+    finally:
+        sensors.shutdown()
+    stamps = [m.header.stamp.sec * 10**9 + m.header.stamp.nanosec for m in node.sent["/livox/imu"]]
+    assert stamps[0] == 0 and 0 < stamps[-1] < 10**9, (stamps[0], stamps[-1])
+    assert len(stamps) == sensors.mid360.imu_samples == 200
+    assert "200 IMU samples" in sensors.stats() and "head camera" not in sensors.stats()
+    none = bridge.G1Sensors(_Node(), model, data, "", bridge.SensorConfig(lidar=False, camera=False))
+    none.tick(dt, bridge._sim_time_to_msg(dt))
+    none.shutdown()
+    assert none.mid360 is None and none.head_camera is None and none.stats() == ""
 
 
 if __name__ == "__main__":

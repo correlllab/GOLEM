@@ -1,7 +1,6 @@
-"""ROS 2 side of the G1 sim: /clock, the MID-360 and the head D435 as their drivers
-publish them, and optional ground-truth odometry.
+"""The G1's sensors as their drivers publish them: the Livox MID-360 lidar + IMU
+and the head RealSense D435.
 
-  /clock                                     rosgraph_msgs/Clock, after every physics step
   /livox/lidar                               livox_ros_driver2/CustomMsg, 10 Hz, livox_frame
   /livox/imu                                 sensor_msgs/Imu, 200 Hz, livox_frame
   /realsense/head/color/image_raw            sensor_msgs/Image rgb8, 6 Hz, head_color_optical_frame
@@ -12,7 +11,10 @@ publish them, and optional ground-truth odometry.
                                              sensor_msgs/CompressedImage (16UC1 PNG)
   /realsense/head/color/camera_info          sensor_msgs/CameraInfo
   /tf_static                                 d435_link -> head_color_optical_frame, with the camera
-  /odom and odom -> pelvis on /tf            ground truth, only with base_body_id (GOLEM_SIM_ODOM=1)
+
+G1Sensors is the sensor suite of the mujoco_sensors node
+(mujoco_ros_bridge.RosSensorBridge), which publishes /clock and the optional
+ground-truth odom and calls tick() once per sim step after them.
 
 Both sensors are on by default, as on the robot; SensorConfig lists the env
 knobs that turn each off or lower its rate or resolution. g1_lidar.py and
@@ -67,20 +69,16 @@ from typing import NamedTuple
 
 import mujoco
 import numpy as np
-import rclpy
-from builtin_interfaces.msg import Time as TimeMsg
 from geometry_msgs.msg import TransformStamped
 from livox_ros_driver2.msg import CustomMsg
-from nav_msgs.msg import Odometry
-from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
-from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Imu
-from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
+from tf2_ros import StaticTransformBroadcaster
 
 from . import g1_head_camera
 from . import g1_lidar
 from . import g1_sensor_msgs as sm
+from mujoco_ros_bridge import _sim_time_to_msg
 
 HEAD_CAMERA_NS = "/realsense/head"
 HEAD_CAMERA_LINK = "d435_link"
@@ -97,18 +95,8 @@ WARN_PERIOD_S = 5.0   # wall s between repeats of one warning
 _EPS_T = 1e-9   # s, tolerance on accumulated sim time
 
 
-def _sim_time_to_msg(sim_time: float) -> TimeMsg:
-    """Convert MuJoCo sim time (float seconds) to a ROS Time message."""
-    sec = int(sim_time)
-    nanosec = int((sim_time - sec) * 1e9)
-    msg = TimeMsg()
-    msg.sec = sec
-    msg.nanosec = nanosec
-    return msg
-
-
 def _log(text):
-    print(f"[mujoco_ros_bridge] {text}", flush=True)
+    print(f"[g1_sensors] {text}", flush=True)
 
 
 def _env_flag(env, name, default):
@@ -407,44 +395,32 @@ class _HeadCamera:
                 f"due dropped)")
 
 
-class RosSensorBridge(Node):
-    def __init__(
-        self,
-        model,
-        data,
-        prefix: str = "robot0_",
-        sensors: SensorConfig = None,
-        base_body_id: int = -1,
-        odom_frame: str = "odom",
-        base_frame: str = "pelvis",
-        odom_rate_hz: float = 50.0,
-        sim_lock=None,
-    ):
-        super().__init__("mujoco_sensors")
+class G1Sensors:
+    """The G1's sensor suite for the mujoco_sensors host: the MID-360 and the head
+    camera, as config says (SensorConfig.from_env() by default). The camera's
+    thread makes and tries its renderer here, so a missing GL fails at startup."""
+
+    def __init__(self, node, model, data, prefix="robot0_", config=None):
+        self.node = node
         self.model = model
         self.data = data
-        self.sim_lock = sim_lock
+        config = SensorConfig.from_env() if config is None else config
+        self.mid360 = _Mid360(node, model, data, prefix, config) if config.lidar else None
+        self.head_camera = _HeadCamera(node, model, data, prefix, config) if config.camera else None
 
-        # /clock stays on default reliable QoS so subscribers don't drop ticks.
-        self.pub_clock = self.create_publisher(Clock, "/clock", 10)
-
-        # The sensors (SensorConfig.from_env() by default); the camera's thread
-        # makes and tries its renderer here, so a missing GL fails at startup
-        sensors = SensorConfig.from_env() if sensors is None else sensors
-        self.mid360 = _Mid360(self, model, data, prefix, sensors) if sensors.lidar else None
-        self.head_camera = _HeadCamera(self, model, data, prefix, sensors) if sensors.camera else None
-
-        # Ground-truth base odometry (odom -> base_frame TF + /odom). The sim knows
-        # the pelvis world pose exactly, so we publish it directly instead of
-        # running FAST-LIO. This is the odom source SLAM (slam_toolbox) consumes.
-        self.base_body_id = int(base_body_id)
-        self.odom_frame = odom_frame
-        self.base_frame = base_frame
-        self.odom_period = 1.0 / odom_rate_hz
-        self._last_odom_sim_t = 0.0
-        if self.base_body_id >= 0:
-            self._tf_broadcaster = TransformBroadcaster(self)
-            self.pub_odom = self.create_publisher(Odometry, "/odom", 10)
+    def tick(self, sim_t, stamp):
+        """Call once per sim step, on the physics thread after mj_step: the IMU
+        and the lidar's and camera's scenes at their rates, keyed off sim time.
+        The samples are stamped one physics step before sim_t, not with stamp."""
+        # the state the sensors measure: the one mj_step started from
+        t = sim_t - self.model.opt.timestep
+        if self.mid360 is not None:
+            self.mid360.tick(self.data, t)
+        if self.head_camera is not None:
+            try:
+                self.head_camera.tick(self.data, t)
+            except Exception as e:
+                self.node.get_logger().warn(f"head camera scene update failed: {e}", throttle_duration_sec=5.0)
 
     def shutdown(self) -> None:
         """Stop the sensors' threads; on the physics thread, after the last tick()"""
@@ -457,98 +433,3 @@ class RosSensorBridge(Node):
     def stats(self):
         """The sensors' counts so far, for the sim's log"""
         return ", ".join(s.stats() for s in (self.mid360, self.head_camera) if s is not None)
-
-    def tick(self) -> None:
-        """Call once per sim step from the main loop, after mj_step.
-
-        /clock is published every call, odom at its rate, and the sensors at
-        theirs, keyed off sim time.
-        """
-        sim_t = float(self.data.time)
-        stamp = _sim_time_to_msg(sim_t)
-
-        # Always publish /clock so subscriber nodes can track sim time.
-        clock_msg = Clock()
-        clock_msg.clock = stamp
-        self.pub_clock.publish(clock_msg)
-
-        if self.base_body_id >= 0 and sim_t - self._last_odom_sim_t >= self.odom_period:
-            self._last_odom_sim_t = sim_t
-            try:
-                self._publish_odom(stamp)
-            except Exception as e:
-                self.get_logger().warn(f"odom publish failed: {e}")
-
-        # the state the sensors measure: the one mj_step started from
-        t = sim_t - self.model.opt.timestep
-        if self.mid360 is not None:
-            self.mid360.tick(self.data, t)
-        if self.head_camera is not None:
-            try:
-                self.head_camera.tick(self.data, t)
-            except Exception as e:
-                self.get_logger().warn(f"head camera scene update failed: {e}", throttle_duration_sec=5.0)
-
-    def _publish_odom(self, stamp: TimeMsg) -> None:
-        # Ground-truth pelvis pose in the sim world (used as the odom frame).
-        # MuJoCo quaternions are (w, x, y, z); ROS wants (x, y, z, w).
-        pos = self.data.xpos[self.base_body_id]
-        quat = self.data.xquat[self.base_body_id]
-        px, py, pz = float(pos[0]), float(pos[1]), float(pos[2])
-        qw, qx, qy, qz = (float(quat[0]), float(quat[1]),
-                          float(quat[2]), float(quat[3]))
-
-        tf = TransformStamped()
-        tf.header.stamp = stamp
-        tf.header.frame_id = self.odom_frame
-        tf.child_frame_id = self.base_frame
-        tf.transform.translation.x = px
-        tf.transform.translation.y = py
-        tf.transform.translation.z = pz
-        tf.transform.rotation.x = qx
-        tf.transform.rotation.y = qy
-        tf.transform.rotation.z = qz
-        tf.transform.rotation.w = qw
-        self._tf_broadcaster.sendTransform(tf)
-
-        odom = Odometry()
-        odom.header.stamp = stamp
-        odom.header.frame_id = self.odom_frame
-        odom.child_frame_id = self.base_frame
-        odom.pose.pose.position.x = px
-        odom.pose.pose.position.y = py
-        odom.pose.pose.position.z = pz
-        odom.pose.pose.orientation.x = qx
-        odom.pose.pose.orientation.y = qy
-        odom.pose.pose.orientation.z = qz
-        odom.pose.pose.orientation.w = qw
-        self.pub_odom.publish(odom)
-
-
-def init_ros() -> bool:
-    raw = os.getenv("ROS_DOMAIN_ID")
-    if raw is None or raw == "":
-        raise RuntimeError(
-            "ROS_DOMAIN_ID is not set. Export a positive integer "
-            "(domain 0 is reserved for the real robot), e.g. "
-            "`export ROS_DOMAIN_ID=1`."
-        )
-    try:
-        domain = int(raw)
-    except ValueError as e:
-        raise RuntimeError(
-            f"ROS_DOMAIN_ID must be an integer, got {raw!r}."
-        ) from e
-    if domain <= 0:
-        raise RuntimeError(
-            f"ROS_DOMAIN_ID must be a positive integer (>0), got {domain}. "
-            "Domain 0 is reserved for the real robot."
-        )
-    if not rclpy.ok():
-        rclpy.init()
-    return True
-
-
-def shutdown_ros() -> None:
-    if rclpy.ok():
-        rclpy.shutdown()

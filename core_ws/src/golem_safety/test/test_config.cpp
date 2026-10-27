@@ -81,9 +81,35 @@ private:
   std::string path_;
 };
 
-SafetyConfig parse(const std::string & text, const RobotProfile & profile)
+// startup.rule and estop_response.after have no default, so most tests that are not about
+// them leave them to this: `text` plus whichever of the two sections it does not give.
+std::string completed(const std::string & text, const RobotProfile & profile)
+{
+  const bool g1 = profile.robot == "g1";
+  std::string out = text;
+  if (!contains(text, "startup:")) {
+    out += g1 ? "startup: {rule: engage_gate}\n" : "startup: {rule: zero_stream}\n";
+  }
+  if (!contains(text, "estop_response:")) {
+    out += g1 ? "estop_response: {after: keep_writing}\n" :
+      "estop_response: {after: burst_then_silence}\n";
+  }
+  return out;
+}
+
+SafetyConfig parse_raw(const std::string & text, const RobotProfile & profile)
 {
   return golem_safety::parse_safety_config(text, "case.yaml", profile);
+}
+
+std::string parse_raw_error(const std::string & text, const RobotProfile & profile)
+{
+  return error_of([&] {parse_raw(text, profile);});
+}
+
+SafetyConfig parse(const std::string & text, const RobotProfile & profile)
+{
+  return parse_raw(completed(text, profile), profile);
 }
 
 std::string parse_error(const std::string & text, const RobotProfile & profile)
@@ -119,7 +145,7 @@ TEST(Config, ResolvesBareNameUnderRobotDir)
   EXPECT_TRUE(contains(arm_sdk.source, "/config/g1/arm_sdk.yaml")) << arm_sdk.source;
 
   // A path with a directory is used as given.
-  const TempConfig file("mode: split_mode\n");
+  const TempConfig file(completed("mode: split_mode\n", h12()));
   EXPECT_EQ(golem_safety::load_safety_config(file.path(), h12()).source, file.path());
 
   // A name the robot lacks reports the robot and the file it looked for.
@@ -131,13 +157,14 @@ TEST(Config, ResolvesBareNameUnderRobotDir)
 
 TEST(Config, UnknownKeyThrows)
 {
-  const TempConfig top("mode: split_mode\nbogus: 1\n");
+  const TempConfig top(completed("mode: split_mode\nbogus: 1\n", h12()));
   std::string message = error_of([&] {golem_safety::load_safety_config(top.path(), h12());});
   EXPECT_TRUE(contains(message, "h12")) << message;
   EXPECT_TRUE(contains(message, top.path())) << message;
   EXPECT_TRUE(contains(message, "'bogus'")) << message;
 
-  const TempConfig nested("mode: split_mode\nlimits:\n  clip:\n    kp_maxx: 1.0\n");
+  const TempConfig nested(
+    completed("mode: split_mode\nlimits:\n  clip:\n    kp_maxx: 1.0\n", h12()));
   message = error_of([&] {golem_safety::load_safety_config(nested.path(), h12());});
   EXPECT_TRUE(contains(message, "h12")) << message;
   EXPECT_TRUE(contains(message, nested.path())) << message;
@@ -187,14 +214,14 @@ TEST(Config, ModeNotInProfileThrows)
 
 TEST(Config, ModeDefaultsToTheProfilesFirstMode)
 {
-  EXPECT_EQ(parse("{}", h12()).mode, Mode::FullBody);
-  EXPECT_EQ(parse("{}", g1()).mode, Mode::ArmSdk);
+  EXPECT_EQ(parse("", h12()).mode, Mode::FullBody);
+  EXPECT_EQ(parse("", g1()).mode, Mode::ArmSdk);
 }
 
 TEST(Config, ListLengthMustMatchJoints)
 {
   const TempConfig short_list(
-    "mode: split_mode\nlimits:\n  clip:\n    velocity_ratio: [0.1, 0.1]\n");
+    completed("mode: split_mode\nlimits:\n  clip:\n    velocity_ratio: [0.1, 0.1]\n", h12()));
   std::string message =
     error_of([&] {golem_safety::load_safety_config(short_list.path(), h12());});
   EXPECT_TRUE(contains(message, "h12")) << message;
@@ -218,20 +245,12 @@ TEST(Config, ListLengthMustMatchJoints)
 
   // The damp gains are per joint too.
   message = parse_error(
-    "estop_response: {mode: damp, kd: " + list_of(1.0, 3) + "}\n", g1());
+    "estop_response: {mode: damp, after: keep_writing, kd: " + list_of(1.0, 3) + "}\n", g1());
   EXPECT_TRUE(contains(message, "'estop_response.kd'")) << message;
 }
 
-TEST(Config, H12DefaultsAreZeroStreamAndBurst)
+TEST(Config, CarriedH12ConfigsAreZeroStreamAndBurst)
 {
-  // Keys left out take the schema defaults.
-  const SafetyConfig minimal = parse("mode: split_mode\n", h12());
-  EXPECT_EQ(minimal.startup.rule, StartupRule::ZeroStream);
-  EXPECT_EQ(minimal.estop_response.mode, EstopMode::Zero);
-  EXPECT_EQ(minimal.estop_response.after, EstopAfter::BurstThenSilence);
-  EXPECT_EQ(minimal.estop_response.burst_count, 50);
-
-  // Every carried H1-2 config says so itself.
   for (const char * name : kH12Configs) {
     const SafetyConfig config = golem_safety::load_safety_config(name, h12());
     EXPECT_EQ(config.startup.rule, StartupRule::ZeroStream) << name;
@@ -248,6 +267,78 @@ TEST(Config, H12DefaultsAreZeroStreamAndBurst)
     EXPECT_EQ(config.topics.low_cmd_out, "/lowcmd") << name;
     EXPECT_EQ(config.topics.low_state, "/lowstate") << name;
   }
+}
+
+TEST(Config, StartupRuleIsRequired)
+{
+  // A G1 config that leaves the rule out would otherwise stream zeros before its engage gate.
+  std::string message = parse_raw_error("estop_response: {after: keep_writing}\n", g1());
+  EXPECT_TRUE(contains(message, "'startup.rule'")) << message;
+  EXPECT_TRUE(contains(message, "g1")) << message;
+  EXPECT_TRUE(contains(message, "case.yaml")) << message;
+  EXPECT_TRUE(contains(message, "engage_gate")) << message;
+
+  EXPECT_TRUE(
+    contains(
+      parse_raw_error("startup: {}\nestop_response: {after: keep_writing}\n", g1()),
+      "'startup.rule'"));
+  EXPECT_TRUE(
+    contains(
+      parse_raw_error("estop_response: {after: burst_then_silence}\n", h12()), "'startup.rule'"));
+  EXPECT_EQ(parse("startup: {rule: engage_gate}\n", g1()).startup.rule, StartupRule::EngageGate);
+  EXPECT_EQ(parse("startup: {rule: zero_stream}\n", h12()).startup.rule, StartupRule::ZeroStream);
+
+  // The same through a file: the message names the file too.
+  const TempConfig file("mode: split_mode\nestop_response: {after: burst_then_silence}\n");
+  message = error_of([&] {golem_safety::load_safety_config(file.path(), h12());});
+  EXPECT_TRUE(contains(message, file.path())) << message;
+  EXPECT_TRUE(contains(message, "'startup.rule'")) << message;
+}
+
+TEST(Config, EstopResponseAfterIsRequired)
+{
+  std::string message = parse_raw_error("startup: {rule: zero_stream}\n", h12());
+  EXPECT_TRUE(contains(message, "'estop_response.after'")) << message;
+  EXPECT_TRUE(contains(message, "h12")) << message;
+  EXPECT_TRUE(contains(message, "burst_then_silence")) << message;
+
+  EXPECT_TRUE(
+    contains(
+      parse_raw_error("startup: {rule: zero_stream}\nestop_response: {mode: zero}\n", h12()),
+      "'estop_response.after'"));
+  EXPECT_TRUE(
+    contains(parse_raw_error("startup: {rule: engage_gate}\n", g1()), "'estop_response.after'"));
+  EXPECT_EQ(
+    parse("estop_response: {after: keep_writing}\n", h12()).estop_response.after,
+    EstopAfter::KeepWriting);
+  EXPECT_EQ(
+    parse("estop_response: {after: burst_then_silence}\n", h12()).estop_response.after,
+    EstopAfter::BurstThenSilence);
+  // burst_count is the one key here that keeps a default.
+  EXPECT_EQ(parse("", h12()).estop_response.burst_count, 50);
+}
+
+TEST(Config, ArmSdkModeKeepsWriting)
+{
+  // The weight ramp keeps writing after an estop, so a burst-then-silence response cannot be
+  // what arm_sdk_mode does.
+  const std::string message = parse_error(
+    "mode: arm_sdk_mode\nestop_response: {after: burst_then_silence}\n", g1());
+  EXPECT_TRUE(contains(message, "'estop_response.after'")) << message;
+  EXPECT_TRUE(contains(message, "keep_writing")) << message;
+  EXPECT_TRUE(contains(message, "arm_sdk_mode")) << message;
+  EXPECT_TRUE(contains(message, "g1")) << message;
+
+  EXPECT_EQ(
+    parse("mode: arm_sdk_mode\nestop_response: {after: keep_writing}\n", g1())
+    .estop_response.after, EstopAfter::KeepWriting);
+  // The other modes take either.
+  EXPECT_EQ(
+    parse("mode: split_mode\nestop_response: {after: burst_then_silence}\n", g1())
+    .estop_response.after, EstopAfter::BurstThenSilence);
+  EXPECT_EQ(
+    parse("mode: full_body_mode\nestop_response: {after: keep_writing}\n", g1())
+    .estop_response.after, EstopAfter::KeepWriting);
 }
 
 TEST(Config, H12UpperStaleSecondsAreTheOldEffectiveValues)
@@ -272,6 +363,8 @@ TEST(Config, G1ConfigsUseTheEngageGateAndKeepWriting)
     EXPECT_EQ(config.estop_response.mode, EstopMode::Zero) << name;
     EXPECT_TRUE(config.logging.enabled) << name;
     EXPECT_EQ(config.logging.base_dir, "/tmp/g1_safety_layer") << name;
+    // The G1's lag check is off.
+    EXPECT_DOUBLE_EQ(config.control.state_lag_ms, 0.0) << name;
     EXPECT_DOUBLE_EQ(config.limits.kp_max, 200.0) << name;
     EXPECT_DOUBLE_EQ(config.limits.kd_max, 10.0) << name;
   }
@@ -337,7 +430,7 @@ TEST(Config, DerivedLimitsUseTheSchemaDefaults)
   }
   EXPECT_DOUBLE_EQ(c.limits.kp_max, 300.0);
   EXPECT_DOUBLE_EQ(c.limits.kd_max, 30.0);
-  EXPECT_EQ(parse("{}", g1()).limits.q_clip_low.size(), 29u);
+  EXPECT_EQ(parse("", g1()).limits.q_clip_low.size(), 29u);
 }
 
 TEST(Config, EnforceAndKpAbsKdAbsAreAliases)
@@ -437,12 +530,12 @@ TEST(Config, ScalarRangesAreChecked)
     "estop.timeout_seconds"));
   EXPECT_TRUE(contains(parse_error("single_writer: {handover_seconds: -0.1}\n", h12()),
     "single_writer.handover_seconds"));
-  EXPECT_TRUE(contains(parse_error("estop_response: {burst_count: 0}\n", h12()),
+  EXPECT_TRUE(contains(parse_error("estop_response: {after: burst_then_silence, burst_count: 0}\n", h12()),
     "estop_response.burst_count"));
   EXPECT_TRUE(contains(parse_error("startup: {rule: sometimes}\n", h12()), "startup.rule"));
   EXPECT_TRUE(contains(parse_error("estop_response: {after: later}\n", h12()),
     "estop_response.after"));
-  EXPECT_TRUE(contains(parse_error("estop_response: {mode: loud}\n", h12()),
+  EXPECT_TRUE(contains(parse_error("estop_response: {mode: loud, after: burst_then_silence}\n", h12()),
     "estop_response.mode"));
 
   // A value <= 0 disables a stale report, so a negative one is accepted.
@@ -454,9 +547,9 @@ TEST(Config, ScalarRangesAreChecked)
 TEST(Config, EstopResponseDamp)
 {
   EXPECT_TRUE(
-    contains(parse_error("estop_response: {mode: damp}\n", g1()), "estop_response.kd"));
+    contains(parse_error("estop_response: {mode: damp, after: keep_writing}\n", g1()), "estop_response.kd"));
 
-  const SafetyConfig damp = parse("estop_response: {mode: damp, kd: 5.0}\n", g1());
+  const SafetyConfig damp = parse("estop_response: {mode: damp, after: keep_writing, kd: 5.0}\n", g1());
   EXPECT_EQ(damp.estop_response.mode, EstopMode::Damp);
   ASSERT_EQ(damp.estop_response.kd.size(), 29u);
   EXPECT_DOUBLE_EQ(damp.estop_response.kd[28], 5.0);
@@ -464,11 +557,11 @@ TEST(Config, EstopResponseDamp)
   // kd stays within what the clip allows a controller.
   EXPECT_TRUE(
     contains(
-      parse_error("limits:\n  clip: {kd_max: 4.0}\nestop_response: {kd: 5.0}\n", g1()),
+      parse_error("limits:\n  clip: {kd_max: 4.0}\nestop_response: {after: keep_writing, kd: 5.0}\n", g1()),
       "estop_response.kd"));
-  EXPECT_TRUE(contains(parse_error("estop_response: {kd: -1.0}\n", g1()), "estop_response.kd"));
+  EXPECT_TRUE(contains(parse_error("estop_response: {after: keep_writing, kd: -1.0}\n", g1()), "estop_response.kd"));
 
-  const SafetyConfig none = parse("{}", h12());
+  const SafetyConfig none = parse("", h12());
   ASSERT_EQ(none.estop_response.kd.size(), 27u);
   EXPECT_DOUBLE_EQ(none.estop_response.kd[0], 0.0);
 }
@@ -493,8 +586,8 @@ TEST(Config, WaistKpMinMayNotExceedKpMax)
 
 TEST(Config, RootAndSectionsMustBeMaps)
 {
-  EXPECT_TRUE(contains(parse_error("- a\n- b\n", h12()), "mapping"));
-  EXPECT_TRUE(contains(parse_error("", h12()), "mapping"));
+  EXPECT_TRUE(contains(parse_raw_error("- a\n- b\n", h12()), "mapping"));
+  EXPECT_TRUE(contains(parse_raw_error("", h12()), "mapping"));
   EXPECT_TRUE(contains(parse_error("estop_response:\n", h12()), "'estop_response'"));
   EXPECT_TRUE(contains(parse_error("stale: 3\n", h12()), "'stale'"));
   EXPECT_TRUE(contains(parse_error("limits:\n  clip: 3\n", h12()), "'limits.clip'"));

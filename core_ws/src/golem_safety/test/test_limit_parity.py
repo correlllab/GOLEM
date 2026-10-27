@@ -96,9 +96,10 @@ def test_scalars_match_old_loaders(case):
     assert new['stale']['state_seconds'] == (
         old['state_stale_seconds'] if old['state_stale_seconds'] is not None else 0.1)
 
-    # estop.state_lag_ms moved to control.state_lag_ms; the G1 had none and takes 100.
+    # estop.state_lag_ms moved to control.state_lag_ms. The G1 had no lag check, so its configs
+    # carry 0.0, which disables it.
     assert new['control']['state_lag_ms'] == (
-        old['state_lag_ms'] if old['state_lag_ms'] is not None else 100.0)
+        old['state_lag_ms'] if old['state_lag_ms'] is not None else 0.0)
 
     # The H1-2 streams zeros and then goes silent; the G1 waits for the engage gate and keeps
     # writing its estop command.

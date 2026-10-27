@@ -229,13 +229,18 @@ public:
     const std::string value = text(name, fallback);
     const auto found = std::find(choices.begin(), choices.end(), value);
     if (found == choices.end()) {
-      std::string list;
-      for (const auto & choice : choices) {
-        list += (list.empty() ? "" : ", ") + choice;
-      }
-      fail_at(name, "'" + value + "' is not one of " + list);
+      fail_at(name, "'" + value + "' is not one of " + joined(choices));
     }
     return static_cast<size_t>(found - choices.begin());
+  }
+
+  // As choice, for a key with no default: leaving it out is an error.
+  size_t required_choice(const std::string & name, const std::vector<std::string> & choices) const
+  {
+    if (!has(name)) {
+      fail_at(name, "must be given, as one of " + joined(choices));
+    }
+    return choice(name, "", choices);
   }
 
   // A number for every body joint: one scalar for all, or one entry per joint.
@@ -267,6 +272,15 @@ public:
   }
 
 private:
+  static std::string joined(const std::vector<std::string> & choices)
+  {
+    std::string list;
+    for (const auto & choice : choices) {
+      list += (list.empty() ? "" : ", ") + choice;
+    }
+    return list;
+  }
+
   const Where & where_;
   YAML::Node node_;
   std::string path_;
@@ -347,15 +361,21 @@ DerivedLimits derive_all(const RobotProfile & profile, const Section & limits)
   return out;
 }
 
-EstopResponse parse_estop_response(const Section & section, const DerivedLimits & limits)
+EstopResponse parse_estop_response(
+  const Section & section, Mode config_mode, const DerivedLimits & limits)
 {
   section.allow_only({"mode", "kd", "after", "burst_count"});
   EstopResponse out;
   const size_t mode = section.choice("mode", "zero", {"zero", "damp"});
   out.mode = mode == 0 ? EstopMode::Zero : EstopMode::Damp;
   const size_t after =
-    section.choice("after", "burst_then_silence", {"burst_then_silence", "keep_writing"});
+    section.required_choice("after", {"burst_then_silence", "keep_writing"});
   out.after = after == 0 ? EstopAfter::BurstThenSilence : EstopAfter::KeepWriting;
+  if (config_mode == Mode::ArmSdk && out.after != EstopAfter::KeepWriting) {
+    section.fail_at(
+      "after", "must be keep_writing in arm_sdk_mode: the weight ramp keeps writing after "
+      "an estop");
+  }
   out.burst_count = section.positive_integer("burst_count", 50);
   out.kd = section.per_joint("kd", 0.0);
   for (const double kd : out.kd) {
@@ -429,7 +449,7 @@ SafetyConfig parse_checked(
 
   const Section startup = root.section("startup");
   startup.allow_only({"rule"});
-  const size_t rule = startup.choice("rule", "zero_stream", {"zero_stream", "engage_gate"});
+  const size_t rule = startup.required_choice("rule", {"zero_stream", "engage_gate"});
   config.startup.rule = rule == 0 ? StartupRule::ZeroStream : StartupRule::EngageGate;
 
   const Section engage = root.section("engage");
@@ -457,7 +477,8 @@ SafetyConfig parse_checked(
   limits.allow_only({"clip", "enforce", "estop"});
   config.limits = derive_all(profile, limits);
 
-  config.estop_response = parse_estop_response(root.section("estop_response"), config.limits);
+  config.estop_response =
+    parse_estop_response(root.section("estop_response"), config.mode, config.limits);
 
   // arm_sdk_mode rejects a command whose waist kp is below waist_kp_min, so the
   // clip must allow it. kp_max is one number for every joint, the waist included.

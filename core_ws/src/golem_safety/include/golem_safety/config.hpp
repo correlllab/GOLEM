@@ -27,13 +27,15 @@ struct DerivedLimits
   double kd_max = 30.0;
 };
 
-// What the layer does from boot until its first command is relayed.
+// What the layer does from boot until its first command is relayed. Every config
+// names its rule (startup.rule has no default).
 //   ZeroStream  streams a zero-gain command on every slot from boot (H1-2).
 //   EngageGate  writes nothing until a fresh /lowstate and a command near the
 //               measured joints pass the engage gate (G1).
 enum class StartupRule { ZeroStream, EngageGate };
 
-// What the layer does after the estop latches.
+// What the layer does after the estop latches. Every config names it
+// (estop_response.after has no default), and arm_sdk_mode requires KeepWriting.
 //   BurstThenSilence  estop_response.burst_count commands, then it stops publishing.
 //   KeepWriting       the estop command keeps being written.
 enum class EstopAfter { BurstThenSilence, KeepWriting };

@@ -14,15 +14,19 @@ find_package(std_msgs REQUIRED)
 find_package(unitree_hg REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(ZLIB REQUIRED)
 
 # Every source except the node's main(); the node and the tests link it.
 add_library(golem_safety_core
+  src/chunk_logger.cpp
   src/config.cpp
+  src/lowcmd.cpp
   src/robot_profile.cpp)
 target_include_directories(golem_safety_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
-ament_target_dependencies(golem_safety_core ament_index_cpp)
-target_link_libraries(golem_safety_core yaml-cpp)
+ament_target_dependencies(golem_safety_core ament_index_cpp unitree_hg)
+# zlib is only for crc32 in the npz writer; the archive is written stored.
+target_link_libraries(golem_safety_core yaml-cpp ZLIB::ZLIB)
 
 # Prints a config's derived limits and parsed values as JSON.
 add_executable(golem_safety_dump_config src/dump_config_main.cpp)
@@ -32,6 +36,9 @@ install(TARGETS golem_safety_dump_config DESTINATION lib/${PROJECT_NAME})
 # robots/<robot>.yaml is the robot data golem_upper_ik reads too; config/<robot>/ holds
 # the safety configs, which a bare config name resolves against.
 install(DIRECTORY robots config DESTINATION share/${PROJECT_NAME})
+
+# Concatenates a run's .npz chunks into one file.
+install(PROGRAMS scripts/combine_chunks.py DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
@@ -49,6 +56,22 @@ if(BUILD_TESTING)
 
   # Runs golem_safety_dump_config, so it needs the installed executable and configs.
   ament_add_pytest_test(test_limit_parity test/test_limit_parity.py TIMEOUT 120)
+
+  # test/fixtures/lowcmd_crc.json holds the SDK's CRCs, written by tools/crc_fixtures.py.
+  ament_add_gtest(test_lowcmd test/test_lowcmd.cpp)
+  target_link_libraries(test_lowcmd golem_safety_core)
+  target_compile_definitions(test_lowcmd PRIVATE
+    GOLEM_SAFETY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures")
+
+  ament_add_gtest(test_chunk_logger test/test_chunk_logger.cpp)
+  target_link_libraries(test_chunk_logger golem_safety_core)
+
+  # Writes the chunks test_chunk_files.py reads back with numpy; not installed.
+  add_executable(test_chunk_writer test/test_chunk_writer.cpp)
+  target_link_libraries(test_chunk_writer golem_safety_core)
+  # The installed combine_chunks.py is what the test runs, so it needs the install space.
+  ament_add_pytest_test(test_chunk_files test/test_chunk_files.py TIMEOUT 120
+    ENV GOLEM_SAFETY_TEST_CHUNK_WRITER=${CMAKE_CURRENT_BINARY_DIR}/test_chunk_writer)
 endif()
 
 ament_package()

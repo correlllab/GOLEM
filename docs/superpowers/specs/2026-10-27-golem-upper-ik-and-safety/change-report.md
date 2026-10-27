@@ -49,3 +49,24 @@ The 8 H1-2 and 5 G1 safety configs now live in `core_ws/src/golem_safety/config/
 | H1-2, G1 | With both `limits.clip` and `limits.enforce`, or both `kp_max` and `kp_abs`, the first silently won. | Both together are refused. | Two spellings of one setting can disagree. |
 | G1 | Every G1 config had to have `arm_sdk.waist_kp_min` at most the waist's `kp_max`, whatever its mode. | Checked in `arm_sdk_mode` only. | Only `arm_sdk_mode` uses the value. |
 | G1 | `lower_stale_estop_seconds` and `state_stale_estop_seconds` had to be positive. | Any finite number; a value <= 0 disables the report. | The stale times only report now. |
+
+## Task 4: LowCmd CRC, command builders and the chunk logger
+
+The CRC is the one the Unitree SDK computes: `test_lowcmd` compares `lowcmd_crc` with SDK values for five commands and for the two old estop commands (`test/fixtures/lowcmd_crc.json`, written by `tools/crc_fixtures.py`). The chunk files keep the old keys, key order, dtypes and shapes, and `combine_chunks.py` reads them. The rows below are the differences.
+
+### Commands
+
+| Robot | Old | New | Reason |
+|---|---|---|---|
+| H1-2 | The boot command and the estop command were `make_estop_cmd` of the newest input command, or of `LowCmdDefault()` before any input arrived: `mode_machine` 0 and `mode_pr` 0 until a controller command carried its own header. Every one of the 35 slots had mode 0 and zero q, dq, tau, kp, kd (`make_estop_cmd` zeroes slots 0-26, and `LowCmdDefault` has zeros in 27-34). | `zero_command` is the same 35 slots, with `mode_machine` 6 and `mode_pr` 0 from the profile, stamped with its CRC. | Outgoing commands carry the profile's header (spec, item 5). Every slot value is unchanged. |
+| G1 | The `damp` estop command copied the newest input command and set slots 0-28 to mode 1, kp 0, kd from the config. Its header and slots 29-34 came from that input command. | `estop_command` starts from `zero_command`: the header is the profile's (5, 0) and slots 29-34 are all-zero with mode 0. Slots 0-28 are as before. | Nothing of the input commands reaches the estop command. Slots 29-34 differ only if an input had set them, and the arm_sdk weight in slot 29 is written by the weight ramp, not by the estop command. |
+
+### Chunk logging
+
+| Robot | Old | New | Reason |
+|---|---|---|---|
+| G1 | A sample whose arrays had another length than the first sample's raised when the writer thread stacked a chunk. | The logger takes the motor count from the first sample and drops a sample with another count; `samples_dropped` counts it. | A bad sample must not stop the log. The node fills one entry per body slot, so the chunk shapes are the old ones (29 motors for the G1). |
+| G1 | A failed chunk write raised in the writer thread, which stopped logging with no message. | A failed chunk is counted (`write_failures`), reported on stderr and leaves a gap in the chunk numbers; later chunks still write. | A full disk must not end the log silently. |
+| G1 | A chunk was written to its final name directly, so `combine_chunks` could read half a file. | A chunk is written to `<name>.npz.tmp` and renamed; at start the logger also removes the prefix's leftover `.npz.tmp` files. | A reader never sees a partial chunk. |
+| G1 | `combine_chunks.py` defaulted to `/tmp/g1_safety_layer`. | `scripts/combine_chunks.py`, installed to `lib/golem_safety`, defaults to `/tmp/golem_safety`. Its code is otherwise the old script's. | The logging default is `/tmp/golem_safety`. The G1 configs still set their own `base_dir`. |
+| G1 | `G1_SAFETY_LOG_DIR` gave a per-run directory `<root>/<YYYYmmdd-HHMMSS>-<pid>`. | `run_log_directory(root)` returns that name and the logger clears its directory's chunks when it starts, as before. The node decides whether to use it (Task 7). | The logger takes a directory; the choice is the node's. |

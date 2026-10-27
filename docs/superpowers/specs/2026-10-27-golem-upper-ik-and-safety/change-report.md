@@ -70,3 +70,38 @@ The CRC is the one the Unitree SDK computes: `test_lowcmd` compares `lowcmd_crc`
 | G1 | A chunk was written to its final name directly, so `combine_chunks` could read half a file. | A chunk is written to `<name>.npz.tmp` and renamed; at start the logger also removes the prefix's leftover `.npz.tmp` files. | A reader never sees a partial chunk. |
 | G1 | `combine_chunks.py` defaulted to `/tmp/g1_safety_layer`. | `scripts/combine_chunks.py`, installed to `lib/golem_safety`, defaults to `/tmp/golem_safety`. Its code is otherwise the old script's. | The logging default is `/tmp/golem_safety`. The G1 configs still set their own `base_dir`. |
 | G1 | `G1_SAFETY_LOG_DIR` gave a per-run directory `<root>/<YYYYmmdd-HHMMSS>-<pid>`. | `run_log_directory(root)` returns that name and the logger clears its directory's chunks when it starts, as before. The node decides whether to use it (Task 7). | The logger takes a directory; the choice is the node's. |
+
+## Task 5: SafetyCore relay, clipping, limits, identity, writers and the estop latch
+
+`SafetyCore` (`include/golem_safety/safety_core.hpp`) holds the layer's decisions; the node that runs it is Task 7, so none of these rows reaches a robot before then. Ported unchanged, and not listed: the clip and estop-limit arithmetic (numpy's `clip` order included), the newest-valid-command-per-input relay, the arm_sdk engage and release ramps (the release advancing only while `/lowstate` is at most `stale.state_seconds` old), the 50-command H1-2 burst and the G1 keep-writing response, silence after a latch before engaging (G1), the estop diagnostic arrays, and logging every `/lowstate` up to and including the one that latches.
+
+### Inputs and writers
+
+| Robot | Old | New | Reason |
+|---|---|---|---|
+| H1-2 | No writer check: every publisher on an input was relayed, the newest sample of any of them each cycle. | A command from a writer other than the input's current one latches the estop (`second writer on <topic>: ...`) when the current writer's last command is at most `single_writer.handover_seconds` (0.5 s) old. After a longer quiet gap the new writer is accepted, logged (Info) and becomes current. | Review Focus 1: two live writers interleave their commands. A controller restarted after its old process is gone is still accepted, as today. |
+| G1 | The first writer of each input (its DDS publication handle) was the only one ever accepted. Any other writer latched the estop, even after the first had stopped, so a restarted controller latched it (`test_a_restarted_writer_also_latches_the_estop`). A sample without a publication handle skipped the check. The reason was `Second writer on <topic> (<source>): two publishers`. | As the H1-2 row: accepted after a quiet gap over 0.5 s, a latch within it. The writer is the publisher GID that the node passes with every command (Task 7). | Review Focus 1. |
+| H1-2, G1 | A command with a non-finite q, dq, tau, kp or kd on any body slot (all 27 or 29, not only the input's own) latched the estop: `clip_low_cmd` raised and `_clip_cmd_or_estop` latched with `Command validation failed on <source>: q contains non-finite values`. On the G1 before engaging the latch was silent, and the layer could then never engage. | The command is dropped and the input's last valid command keeps being relayed. The drop is logged (Warn) at most once a second per input, with the count and the first non-finite motor and field. Only the input's own slots are checked, and a dropped command does not engage its input. | Review Focus 3. (The plan's line for this row says the H1-2 relayed NaN and the G1 refused it only at engage; both old layers latched, `safety_checks.py` `clip_low_cmd` and `safety_layer.py` `_clip_cmd_or_estop` on each side.) |
+| H1-2 | A kp or kd clipped to `kp_max`/`kd_max` was not reported. | Each is reported once per joint and gain (Warn), as the G1 did. | The G1's report, with no H1-2 behavior against it. |
+
+### Robot identity
+
+| Robot | Old | New | Reason |
+|---|---|---|---|
+| H1-2 | `/lowstate`'s `mode_machine` was never read. | Once engaged (from the first valid command of any input), a `/lowstate` whose `mode_machine` is not 6 latches the estop: `/lowstate mode_machine 5 is not the h12's 6: another robot or sim is on this domain`. Before that the sample is only recorded. A foreign sample is never limit-checked. | Spec item 5: another robot or sim on the domain. The H1-2 sims report 0 today, so they need Task 12 (report 6) before the H1-2 bringups switch over (Task 13). |
+| G1 | The engage gate required `mode_machine` 5. After engaging nothing checked it, and the `rt/lowcmd` header echoed whatever the newest `/lowstate` carried. | After engaging, a `/lowstate` whose `mode_machine` is not 5 latches the estop. Before engaging it is recorded (Task 6 refuses engagement on it). | Spec item 5. |
+
+### What the relayed command carries
+
+| Robot | Old | New | Reason |
+|---|---|---|---|
+| H1-2 | The relayed command was the upper (`split`) or full input's message, with slots 0-11 replaced by the lower input's. Its header (`mode_pr`, `mode_machine`), its `reserve` words and slots 27-34 came from that input unclipped. The arm controller sends `mode_machine` 6 and leaves slots 27-34 and `reserve` at zero (`channel_interface.py`, 27 motors); other publishers were not checked. | The header is the profile's (`mode_machine` 6, `mode_pr` 0) and the CRC is computed. Slots 27-34 and the `reserve` words are `zero_command`'s: mode 0 and all zero. | Spec item 5. Only an input's own slots are relayed. |
+| G1 | `split` and `full`: `mode_pr` 0, `mode_machine` echoed from `/lowstate`, and slots 29-34 and `reserve` from the upper or full input. `arm_sdk`: the header was not stamped, so the upper input's header went out; slots 30-34 and `reserve` came from the input; the legs were zeroed and slot 29 carried the weight. | The profile's header (5, 0) in every mode, `/arm_sdk` included. Slots 29-34 (30-34 in `arm_sdk`, where slot 29 is the weight) and `reserve` are zero. The legs and the weight slot are as before. | Spec item 5. |
+
+### Estop reasons and the report
+
+| Robot | Old | New | Reason |
+|---|---|---|---|
+| H1-2 | The q reason was `motor i (name) q out of estop range: v`; the dq and tau reasons added `(limit L, Mx)`. A non-finite `/lowstate` gave `low_state contains non-finite values`. | The q reason also gives the limit crossed and the multiple, for example `(limit 1.670, 1.12x)`, with the multiple \|q\|/\|limit\| (`inf x` for a zero limit). A non-finite `/lowstate` names the motor and the field (`motor 0 (left_hip_yaw_joint) q is nan in /lowstate`). | Spec item 6: every limit reason names the joint, the value, the limit and the multiple. |
+| G1 | No reason carried the limit or the multiple. Non-finite as on the H1-2. | As the H1-2 row. | Spec item 6 (H1-2 `5182fbe`). |
+| H1-2, G1 | The estop report (`estop_command_written`, or the G1's `estop_latched_silent`) held wall-clock epoch milliseconds: `decision_ms` at the latch, and `action_ms` right after the DDS write. The H1-2's `trigger_stamp_ms` was the estop board's own stamp. | The same keys, in the same JSON, as an Error event on the boot-time clock. `decision_ms` is the core's `now` at the latch and `action_ms` the `now` of the first step after it, whose command the node then publishes. `trigger_stamp_ms` is the arrival of the hardware estop sample: the `std_msgs/Bool` topics carry no stamp. | The core takes its time from the node's boot clock (spec item 2) and does not publish. |

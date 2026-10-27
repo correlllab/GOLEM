@@ -21,7 +21,8 @@ add_library(golem_safety_core
   src/chunk_logger.cpp
   src/config.cpp
   src/lowcmd.cpp
-  src/robot_profile.cpp)
+  src/robot_profile.cpp
+  src/safety_core.cpp)
 target_include_directories(golem_safety_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 ament_target_dependencies(golem_safety_core ament_index_cpp unitree_hg)
@@ -65,6 +66,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_chunk_logger test/test_chunk_logger.cpp)
   target_link_libraries(test_chunk_logger golem_safety_core)
+
+  ament_add_gtest(test_safety_core_relay test/test_safety_core_relay.cpp)
+  target_link_libraries(test_safety_core_relay golem_safety_core)
 
   # Writes the chunks test_chunk_files.py reads back with numpy; not installed.
   add_executable(test_chunk_writer test/test_chunk_writer.cpp)

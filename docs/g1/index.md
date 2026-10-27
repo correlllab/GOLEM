@@ -101,6 +101,9 @@ controller (HOMIE's policy) keeps the legs. The named postures are in
   has one (`docker/scripts/wait_for_sim.py`).
 - These containers use host networking on domain 1, so their DDS traffic can
   reach other machines on your network. The test scripts keep it on the host.
+- Leave `G1_DDS_INTERFACE` empty here. It pins only the `ros` container, so on
+  the sim domain the two containers can end up on different interfaces; the
+  wrappers warn when it is set ([DDS and networking](dds.md)).
 - `plan: true` aborts: the arms have no self-collision model yet. So do
   `slow_mode: true` and a `FrameTask` with `relative: true`, which the G1
   controller does not implement.

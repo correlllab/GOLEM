@@ -41,7 +41,9 @@ robocasa ros`); they never build them.
   `docker_run.sh --g1` starts them, plus a `test_compose.yml` that `common.sh` writes into the
   output directory. The sim container has no network, and the ros container joins its network
   namespace. Both use its loopback with multicast, so no DDS leaves the host and nothing
-  talks to the robot.
+  talks to the robot. The ros container loads the run's own `cyclonedds_local.xml` (no
+  interface pin) from the output directory, never the shared one in `container_cache/`,
+  which a running G1 `ros` container rereads in every process it starts.
 - **DDS domains.** The arm test uses 195, the walk test 196, the nav test 197 and the explore
   test 198, unless `ROS_DOMAIN_ID` is set in the shell. Domain 0 is refused.
 - **`core_ws`.** Before the sim starts, the ros service builds `core_ws` for the G1

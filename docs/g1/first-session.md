@@ -22,7 +22,7 @@ first ([Arms by hand](index.md#arms-by-hand), sending only `home` and
 | 3. Power | Laptop on AC, lid open, container run under `systemd-inhibit`. |
 | 4. Robot and people | Robot standing under Unitree's controller, on a gantry or in a harness. Nobody within reach of the arms. |
 | 5. Start the container | `docker/scripts/docker_run.sh ros --g1`; it prints `robot: g1` and asks you to confirm domain 0. |
-| 6. Read-only checks | Gate: the container is the G1's and pinned to the robot's port, or exit and fix `docker/.env`. Then nothing else writes the command topics, and `rt/lowstate` arrives. |
+| 6. Read-only checks | Gate: the container is the G1's and pinned to the robot's port, or exit and fix `docker/.env` and the shell's exports. Then nothing else writes the command topics, and `rt/lowstate` arrives. |
 | 7. Launch | `ros2 launch g1_bringup g1_bringup.launch.py use_hands:=false use_rviz:=false` |
 | 8. Named configs | Send only `home` and `arms_down` on `/named_config`, one at a time. |
 | 9. Stop | Stop the controller first, wait for the hand-back, then Ctrl+C the launch. |
@@ -117,12 +117,20 @@ systemd-inhibit --what=sleep:idle:handle-lid-switch --who=G1 --why="real-robot s
     docker/scripts/docker_run.sh ros --g1
 ```
 
-The wrapper prints `robot: g1`, then asks
-`Domain 0 is the REAL ROBOT bus. Proceed? [y/N]`. Answer `y` only if it
-printed `robot: g1`. The prompt does not name the interface. By then the
-wrapper has refused a missing, `DOWN` or unaddressed `G1_DDS_INTERFACE`, but it
-does not know which port is the robot's: a wrong pin such as `wlan0` passes.
-Step 6 starts with the gate that catches it.
+The wrapper prints `robot: g1`, then asks:
+
+```
+Domain 0 is the REAL ROBOT bus.
+  robot: g1
+  interface: enp130s0 (IPv4 192.168.123.222/24)
+Proceed? [y/N]
+```
+
+Answer `y` only if it names `robot: g1` and the robot's wired port with its
+address. By then the wrapper has refused a missing, `DOWN` or unaddressed
+`G1_DDS_INTERFACE`, but it does not know which port is the robot's: a wrong pin
+such as `wlan0` with its WiFi address passes. Step 6 starts with the gate that
+catches it.
 
 If the wrapper stops with `golem_ros already exists`, a container from an
 earlier run is still there. Find out what it runs (`docker ps -a`,
@@ -165,8 +173,12 @@ g1 0 enp130s0
 <CycloneDDS><Domain Id="any"><General><Interfaces><NetworkInterface name="enp130s0"/></Interfaces></General></Domain></CycloneDDS>
 ```
 
-If either line differs, `exit` the container and fix `docker/.env` (step 2),
-then start again at step 5. Do not continue.
+If either line differs, `exit` the container and fix `docker/.env` (step 2).
+A variable exported in the laptop shell wins over `docker/.env`, so in the
+shell you start the container from, also check
+`env | grep -E '^(ROS_DOMAIN_ID|GOLEM_ROBOT|G1_DDS_INTERFACE)='` and `unset`
+any of them that disagrees with step 2. Then start again at step 5. Do not
+continue.
 
 Nothing else may be writing the robot's command topics. An empty listing
 means "no other writer" only if the gate above passed and `read_lowstate.py`

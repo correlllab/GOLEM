@@ -82,9 +82,15 @@ wrapper, else `GOLEM_ROBOT` from the shell, else from `docker/.env`, else
   passes the G1 sim knobs (§8) and `G1_DDS_INTERFACE`, and bind-mounts
   `third_party/leprechaun_g1` and `core_ws/src/g1/g1_locomotion/policy` (at
   `/home/code/g1_locomotion`) read-only;
-- write `$GOLEM_CACHE_DIR/cyclonedds_local.xml` from `G1_DDS_INTERFACE`, which
-  the `ros` container loads after `core_ws/cyclonedds.xml` to pin CycloneDDS to
-  that host interface (empty = CycloneDDS chooses);
+- write `$GOLEM_CACHE_DIR/cyclonedds_local.xml` from `G1_DDS_INTERFACE` just
+  before they start a `ros` container (`docker_run.sh ros`, `docker_stack.sh
+  up|restart`; never for a sim-only run), which the `ros` container loads after
+  `core_ws/cyclonedds.xml` to pin CycloneDDS to that host interface (empty =
+  CycloneDDS chooses). It is a single-file bind mount that CycloneDDS rereads in
+  every new process, so the wrappers replace it by rename (a running container
+  keeps the pin it started with) and refuse a value that is not an interface
+  name. The pin is for the real robot on domain 0: on a sim domain the wrappers
+  warn when it is set, since the sim's ROS nodes are never pinned;
 - check in `prepare_mounts` that the leprechaun URDF/MJCF and the policy files
   exist and are not LFS pointers, before any container starts;
 - refuse the Mac wrappers and the Isaac simulator.
@@ -125,8 +131,9 @@ The real G1 is commanded from the laptop wired to it, through
 `docker/scripts/docker_run.sh ros --g1` on domain 0 (the H1-2 runs natively on
 its onboard PC). For the G1 on domain 0 the wrapper first refuses a
 `G1_DDS_INTERFACE` that is empty, names no host interface, is not `UP` or has
-no IPv4 address, and only then asks for confirmation. The prompt does not name
-the interface; check it yourself (`docs/g1/first-session.md`).
+no IPv4 address, and only then asks for confirmation; the prompt names the
+robot, the interface and its IPv4 addresses. It cannot tell whether that port is
+the robot's; check it yourself (`docs/g1/first-session.md`, step 6).
 
 **One robot stack per DDS domain.** The two stacks share node, action and DDS
 topic names, with identical `unitree_hg` types. `wait_for_sim.py` refuses a

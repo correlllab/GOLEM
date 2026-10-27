@@ -32,14 +32,17 @@ is required before anything builds.
 | `CL_isaaclab_sim` | Isaac Sim task/runtime code |
 | `unitree_sdk2_python` | Unitree DDS SDK (Python) |
 | `mujoco_mpc` | MuJoCo MPC fork (`badinkajink @ extended_hw_patched`) — see §7 |
+| `third_party/leprechaun_g1` | G1 robot description (URDF, MJCF, meshes); the G1 overlay mounts it (§8) |
 
 **`core_ws/src` submodules:** `cl_realsense`, `custom_ros_messages`, `estop`,
 `h12_ros2_controller`, `h12_ros2_model`, `h12_safety_layer`, `livox_ros_driver2`,
 `magpie_control`, `magpie_msgs`, `unitree_ros2`.
 
 **`core_ws/src` in-tree packages** (versioned directly in this repo, *not*
-submodules): `FAST_LIO`, `h12_deploy_mjpc`, `h12_lowerbody_rl`,
-`h12_skills`, `h12_bringup`, `model_server`.
+submodules): `FAST_LIO`, `h12_deploy_mjpc`, `h12_lowerbody_rl`, `h12_slam`,
+`h12_skills`, `h12_bringup`, `lmg_deploy`, `model_server`, and the G1 packages in
+`core_ws/src/g1/` (`g1_bringup`, `g1_control`, `g1_description`, `g1_dex3`,
+`g1_locomotion`, `g1_navigation`, `g1_safety_layer`).
 
 Large binary assets (meshes, XML, USD) are tracked with **Git-LFS**; run
 `git lfs install` first. Some weights are *not* in git and are fetched manually
@@ -71,7 +74,8 @@ nvcr.io/nvidia/isaac-sim:5.1.0
   stack in `golem_base`. The Dockerfile also installs ROS Jazzy tooling.
 
 All containers interoperate over **CycloneDDS on one ROS domain** (default
-`ROS_DOMAIN_ID=1`; domain `0` is reserved for the real robot).
+`ROS_DOMAIN_ID=1`; domain `0` is reserved for the real robots), one robot
+stack per domain.
 
 ---
 
@@ -143,8 +147,9 @@ Python deps; the ROS packages themselves are compiled from the bind-mounted sour
 
 Single-stage, `FROM golem_base`. Provides the MuJoCo + RoboCasa kitchen simulator.
 
-- `MUJOCO_GL=egl` baked as default; `launch_robocasa.sh` forces `glfw` for a
-  windowed viewer unless `--headless` (then `egl` for offscreen GPU rendering).
+- `MUJOCO_GL=egl` baked as default; `launch_robocasa.sh` exports `egl` in both
+  display modes for the offscreen cameras, and the passive viewer opens its own
+  GLFW window.
 - **`mujoco==3.3.1`** (pinned to match RoboCasa's hard pin), `numpy>=2.2.6`, Pillow.
 - **RoboCasa + robosuite** installed from git (neither fully on PyPI; robosuite
   from `master`). Also `robosuite_models`, `mimicgen`, `mink==0.0.5` — installed
@@ -160,10 +165,13 @@ Single-stage, `FROM golem_base`. Provides the MuJoCo + RoboCasa kitchen simulato
 - **Livox baked at `/opt/livox_ws`:** `livox_ros_driver2` is `COPY`'d (not
   bind-mounted — a mount would collide with the `ros` container's `core_ws/src`
   mount, since `build.sh` rewrites its own source tree) and built via upstream
-  `build.sh humble`. `build/` is deliberately *not* wiped afterward because
-  `--symlink-install` leaves the generated message modules symlinked into it.
+  `build.sh humble`. At the pinned driver commit `build.sh` runs a plain
+  `colcon build` (no `--symlink-install`) and ends in `popd`, so it exits 0
+  even when that build fails (`CLAUDE.md` §8). `build/` is left in place.
 - **G1 addition** (last layer): `onnxruntime==1.23.2` through lock step
   `robocasa-amd64-05.txt`, for the G1 sim's HOMIE walking-policy stand-in.
+  The G1 sim's other inputs (its robot description and the policy) arrive
+  through the G1 overlay's bind mounts (§8), not the image.
 
 ---
 
@@ -257,6 +265,30 @@ check required source paths, and create only cache/mountpoint directories.
 `GOLEM_ASSETS_DIR` and `GOLEM_CACHE_DIR` accept absolute paths or paths relative
 to the checkout. Required bind sources use `create_host_path: false`.
 
+**The G1 overlay.** Both wrappers select the robot with `--g1`/`--h12`
+anywhere in their arguments, else `GOLEM_ROBOT` (shell, then `docker/.env`),
+else `h12`. For the G1 they add `docker/docker-compose.g1.yml` after
+`docker-compose.yml`:
+
+- both services get `GOLEM_ROBOT=g1`, `G1_DDS_INTERFACE`, and read-only bind
+  mounts of `third_party/leprechaun_g1` (at `/home/code/third_party/leprechaun_g1`)
+  and `core_ws/src/g1/g1_locomotion/policy` (at `/home/code/g1_locomotion`),
+  both `create_host_path: false`;
+- the robocasa service gets the G1 sim's knobs (`CLAUDE.md` §8);
+- the ros service loads a second CycloneDDS file after `core_ws/cyclonedds.xml`,
+  `cyclonedds_local.xml`, which the wrapper writes into `GOLEM_CACHE_DIR` from
+  `G1_DDS_INTERFACE` to pin the network interface.
+
+The mounts stay out of the base file, so an H1-2 checkout without the
+`leprechaun_g1` submodule still starts. For the G1, `prepare_mounts` checks
+the description and policy files (missing files and LFS pointers) before any
+container starts, and `launch_ros.sh` builds the `g1_*` packages, which it
+skips for the H1-2. `docker_stack.sh` sets `GOLEM_BRINGUP_PACKAGE=g1_bringup`
+and `GOLEM_BRINGUP_LAUNCH=g1_sim_bringup.launch.py` for the stack overlay, and
+`wait_for_sim.py` refuses a simulator of the other robot. The G1 uses the same
+images and container names as the H1-2, and the wrappers refuse it on Mac and
+with Isaac.
+
 Linux Compose is headless by itself. The wrapper selects
 `docker-compose.gui.yml` when `GOLEM_DISPLAY=gui`, or automatically when
 `DISPLAY` is set. GUI mode requires an Xauthority file; it does not change the
@@ -286,7 +318,7 @@ bind-mounted source, with output persisted on the host:
 
 | Container | Workspace | Built | Cache |
 |---|---|---|---|
-| `ros` | `core_ws` (full) | every start, incremental every launch | host `core_ws/{build,install,log}` |
+| `ros` | `core_ws` (full; the `g1_*` packages only for the G1) | every start, incremental every launch | host `core_ws/{build,install,log}` |
 | `robocasa` | `msgs_ws` (IDL only) | every start (fast no-op) | host `container_cache/msgs_ws` |
 
 `--symlink-install` is used throughout so Python nodes and model weights resolve

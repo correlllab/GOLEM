@@ -1,9 +1,25 @@
 # Simulator regression tests
 
-All simulator regression tests and repeatable validation commands live here,
-outside the simulator submodule. CPU tests run on every relevant pull request
-through `.github/workflows/simulator-tests.yml`; select its `cpu` job as a
-required branch-protection check to gate merges.
+All simulator regression and acceptance tests and repeatable validation
+commands live here, outside the simulator submodule. CPU tests run on every
+relevant pull request through `.github/workflows/simulator-tests.yml`; select
+its `cpu` job as a required branch-protection check to gate merges.
+
+## Directories
+
+| Path | What it tests | README |
+|---|---|---|
+| `tests/isaaclab/` | the Isaac simulator (H1-2) | this page |
+| `tests/robocasa/` | the RoboCasa sim: loop, sensors, robot selection and task handling (H1-2) | `tests/robocasa/README.md` |
+| `tests/robocasa/g1/` | the G1 sim's unit tests | [The G1](#the-g1) |
+| `tests/robocasa/surface/` | the topic surface of the RoboCasa sim, per robot, against a golden | `tests/robocasa/surface/README.md` |
+| `tests/stack/` | H1-2 sim + ROS stack integration (arms, locomotion) | `tests/stack/README.md` |
+| `tests/g1/` | the G1 acceptance tests: sim + whole G1 bringup | `tests/g1/README.md` |
+| `tests/docker/` | the wrappers, compose files, launchers and pins (CPU) | this page |
+
+No test runs on DDS domain 0. The H1-2 tests use the domains shown on this
+page and in `tests/stack/README.md`; the G1 tests and the surface probe use
+their own (below).
 
 ## CPU tests
 
@@ -23,6 +39,9 @@ Using existing Docker images:
 ROS_DOMAIN_ID=187 tests/isaaclab/run_in_container.sh
 ROS_DOMAIN_ID=187 tests/robocasa/run_in_container.sh
 ```
+
+`tests/robocasa/run_in_container.sh` runs the H1-2 sim's tests whatever
+robot the shell or `docker/.env` selects.
 
 ## NVIDIA / ROS integration
 
@@ -75,3 +94,45 @@ forces or hardware equivalence under contact.
 ROS_DOMAIN_ID=191 tests/isaaclab/run_robot_interop.sh magpie
 ROS_DOMAIN_ID=192 tests/isaaclab/run_robot_interop.sh inspire
 ```
+
+## RoboCasa topic surface
+
+The RoboCasa sim must publish what the real robot publishes. The probe
+measures what the sim publishes and consumes over ROS 2 and Unitree DDS and
+compares it with a checked-in golden per robot (`h12.json`, `g1.json`). It
+always uses DDS domain 194, one probe at a time.
+
+```bash
+tests/robocasa/surface/run.sh h12            # compare against h12.json
+tests/robocasa/surface/run.sh g1             # compare against g1.json
+tests/robocasa/surface/run.sh g1 --record    # rewrite g1.json, only for an intended change
+```
+
+## The G1
+
+The G1 sim's unit tests run in a disposable robocasa container with the G1
+overlay's mounts, no network and DDS domain 97 (`tests/robocasa/g1/run_in_container.sh`
+lists the options):
+
+```bash
+tests/robocasa/g1/run_in_container.sh                         # every test_g1_*.py
+tests/robocasa/g1/run_in_container.sh test_g1_sensors.py      # one file
+```
+
+The acceptance tests start the G1 sim headless with the whole G1 bringup and
+check the sim's own recording of the run. They need the `golem_sim_robocasa`
+and `golem_ros` images and Docker's NVIDIA runtime, run with no network of their
+own, and use domains 195 (arm), 196 (walk), 197 (nav) and 198 (explore) unless
+`ROS_DOMAIN_ID` is set:
+
+```bash
+tests/g1/test_sim_bringup.sh                 # arms
+tests/g1/test_sim_bringup.sh --walk          # walking
+tests/g1/test_sim_nav.sh                     # Nav2 to one goal, FAST_LIO odometry
+GOLEM_SIM_ODOM=1 tests/g1/test_sim_nav.sh    # the same, the sim's ground-truth odometry
+tests/g1/test_sim_explore.sh                 # frontier exploration
+```
+
+A passing test ends with `PASSED: <n>/<n> checks` and exits 0. The G1
+packages' own tests run in the G1 `ros` container; `docs/g1/packages.md` says
+how.

@@ -15,7 +15,8 @@ docker/scripts/docker_stack.sh restart robocasa --headless
 docker/scripts/docker_stack.sh stop robocasa
 ```
 
-Use `isaac` instead of `robocasa` for Isaac. `--gui` selects desktop mounts;
+Use `isaac` instead of `robocasa` for Isaac. Add `--g1` to run the G1 instead
+of the H1-2 ([The G1](#the-g1)). `--gui` selects desktop mounts;
 RViz follows GUI mode unless `GOLEM_USE_RVIZ` overrides it. The stack wrapper
 prepares workspaces, starts both containers, and gates bringup on a fresh DDS
 sample. Caches persist across stop/restart. Do not restart only the simulator
@@ -44,9 +45,11 @@ docker/scripts/docker_run.sh <isaac|robocasa|ros>          # default launcher
 docker/scripts/docker_run.sh robocasa --headless           # leading flags go to the launcher
 docker/scripts/docker_run.sh robocasa bash                 # shell instead
 docker/scripts/docker_run.sh ros <cmd> <args>              # any command
+docker/scripts/docker_run.sh ros --g1                      # the G1 (--g1/--h12 anywhere)
 ```
 
-Container names are `golem_sim_robocasa`, `golem_sim_isaac`, and `golem_ros`.
+Container names are `golem_sim_robocasa`, `golem_sim_isaac`, and `golem_ros`,
+for either robot.
 The default launchers are `docker/scripts/launch_{robocasa,isaac,ros}.sh`.
 
 **The single-service `ros` default is a shell.** Paired startup launches
@@ -145,7 +148,8 @@ ready-made `send_goal` snippet and field reference for each one.
 
 ## Real robot
 
-Coordinate before touching. The onboard PC runs natively, without Docker:
+Coordinate before touching. This is the H1-2; the G1 is under
+[The G1](#the-g1). The onboard PC runs natively, without Docker:
 
 ```bash
 export ROS_DOMAIN_ID=0
@@ -164,6 +168,32 @@ ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
 The companion desktop runs `h12_real_desktop_bringup.launch.py` for the model
 servers, skills and rviz; add `use_hand_cameras:=true` to also start the hand
 cameras.
+
+## The G1
+
+The wrappers run the Unitree G1 instead of the H1-2 with `--g1` anywhere in
+their arguments, or with `GOLEM_ROBOT=g1` in the shell or `docker/.env`
+(`--h12` overrides that). Each prints the robot it selected (`robot: g1`)
+before the DDS domain check. For the G1 they add the
+`docker/docker-compose.g1.yml` overlay, `launch_ros.sh` builds the
+`core_ws/src/g1/` packages, and `G1_DDS_INTERFACE` names the host port wired to
+the robot (empty for the sim). The G1 runs on x86 Linux with RoboCasa only.
+Both robots use the same container names and DDS topics: run one at a time.
+
+```bash
+docker/scripts/docker_stack.sh up robocasa --g1 --headless   # sim + g1_sim_bringup.launch.py
+
+docker/scripts/docker_run.sh robocasa --g1 --layout 9 --style 9 --seed 42
+docker/scripts/docker_run.sh ros --g1
+ros2 launch g1_bringup g1_sim_bringup.launch.py                # use_locomotion:=true use_nav:=true ...
+```
+
+The paired startup refuses a simulator of the other robot on the domain; the
+single-service flow does not check. On the real G1 the `ros` container runs on
+the laptop wired to the robot, on domain 0, which needs `G1_DDS_INTERFACE`
+(`UP`, with an IPv4 address) before the confirmation prompt. Start at
+[`g1/index.md`](g1/index.md); the first real session follows
+[`g1/first-session.md`](g1/first-session.md).
 
 ## Troubleshooting
 

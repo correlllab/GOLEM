@@ -56,10 +56,13 @@ robocasa ros`); they never build them.
 - **Knobs.** The sim's knobs come from the shell or the scripts, never from `docker/.env`.
 
 With a warm build each test takes one to two minutes; the first run also builds the whole
-workspace. The arm test's `t_pose` check has a thin margin. The arms hold `t_pose` 0.00095 to
-0.001 rad from it, and `frame_task_server` reports success only once its error is below 0.001 rad.
-A `t_pose` failure with the arms at the pose (`goal success False`, arm error under 0.001 rad)
-comes from that margin.
+workspace.
+
+Open issue: the arm test's `t_pose` check sometimes fails with the arms at the pose
+(`goal success False` with a small arm error). The arms hold `t_pose` with an error about as
+large as `frame_task_server`'s success threshold, `controller.threshold_joint` in
+`core_ws/src/g1/g1_control/config/sim.yaml`, so the server sometimes never reports the goal
+reached. Count such a run as failed, and check its arm error against that threshold.
 
 The tests depend on internals of the G1 sim. They patch `SimInterface.after_step` (and, for nav
 and explore, `__init__`) and read its `_lowcmd`, `_arm_sdk`, `arm_sdk_w`, `released` and

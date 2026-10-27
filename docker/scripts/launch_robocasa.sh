@@ -2,16 +2,17 @@
 # Usage: ./launch_robocasa.sh [--headless]
 # Windowed MuJoCo sim by default; pass --headless to disable the passive viewer
 # (auto-applied when no DISPLAY is reachable, e.g. SSH without X11 / CI).
-# The sim publishes rt/lowstate over CycloneDDS plus its camera / lidar / clock /
-# gripper topics on ROS 2 (ROS_DOMAIN_ID=1 unless overridden). mujoco_ros_bridge.py
-# is the authority on that list.
+# The sim publishes rt/lowstate over CycloneDDS plus its camera / lidar / clock
+# (and, for the H1-2, gripper) topics on ROS 2 (ROS_DOMAIN_ID=1 unless overridden).
+# The robot's modules are the authority on that list: h12_sensors.py and
+# magpie_hand_bridge.py, or g1/g1_sensors.py for the G1.
 set -e
 source "$(dirname "$0")/runtime_common.sh"
 validate_sim_domain
 
 source /opt/ros/humble/setup.bash
 # livox_ros_driver2 (CustomMsg/CustomPoint) is baked into the robocasa image at
-# /opt/livox_ws by RobocasaDockerfile. Source it so mujoco_ros_bridge.py can
+# /opt/livox_ws by RobocasaDockerfile. Source it so the sensor suites can
 # import livox_ros_driver2.msg.
 source /opt/livox_ws/install/setup.bash
 

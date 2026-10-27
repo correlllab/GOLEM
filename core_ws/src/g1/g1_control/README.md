@@ -3,8 +3,8 @@
 Upper-body IK controller for the Unitree G1 (29 DoF, Dex3-1 hands) with ROS 2
 action servers.
 
-Ported from [correlllab/h12_ros2_controller](https://github.com/correlllab/h12_ros2_controller)
-(H1-2), whose history is kept in this repo.
+Derived from [correlllab/h12_ros2_controller](https://github.com/correlllab/h12_ros2_controller)
+(H1-2).
 Joint names, slot order and URDF limits come from `g1_description`.
 
 ## What it does
@@ -224,5 +224,5 @@ PYTHONPATH=.:../g1_description python3 -m pytest test/test_g1_controller.py \
 The DDS tests run on domain 97 inside one process; they never touch the robot.
 They need the workspace built and sourced (`g1_safety_layer` for the arm_sdk
 test).
-`uv` users: `pyproject.toml` and `uv.lock` are inherited from the H1-2 package and
-have not been re-locked for G1.
+`uv` users: `pyproject.toml` and `uv.lock` describe this package (`g1-control`) with
+the repo's `unitree_sdk2_python` as an editable workspace member.

@@ -1,6 +1,6 @@
 # g1_locomotion/policy: HOMIE's walking policy
 
-The walking policy for G1_GOLEM's Unitree G1. It holds HOMIE's pretrained
+The walking policy for GOLEM's Unitree G1. It holds HOMIE's pretrained
 locomotion policy and a MuJoCo script that runs it in simulation (sim2sim).
 The `g1_locomotion` package around it runs it on the G1's legs
 (`locomotion_node`), and the sim's stand-in runs it too. The containers mount
@@ -175,4 +175,5 @@ All values now come from HOMIE's training config (HomieRL's
 The code is for non-commercial use only. OpenHomie's `LICENSE` file is CC BY-NC
 4.0, but its README says CC BY-NC-SA 4.0, which also requires changed versions
 to be shared under the same license. Treat it as the stricter CC BY-NC-SA 4.0.
-This license is different from G1_GOLEM's MIT packages.
+This license is different from the MIT license of GOLEM's `g1_*` packages,
+including the `g1_locomotion` code around this folder.

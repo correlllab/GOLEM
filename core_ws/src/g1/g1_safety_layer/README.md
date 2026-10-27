@@ -4,8 +4,8 @@ Safety layer for the Unitree G1 (29 DoF). It filters low-level commands, monitor
 joint states, and enforces clipping and estop logic before forwarding commands
 to the robot on `rt/arm_sdk` or `rt/lowcmd`.
 
-Ported from [correlllab/h12_safety_layer](https://github.com/correlllab/h12_safety_layer)
-(H1-2), whose history is kept in this repo.
+Derived from [correlllab/h12_safety_layer](https://github.com/correlllab/h12_safety_layer)
+(H1-2).
 The joint names, slot order and URDF limits come from `g1_description`.
 
 ## Modes
@@ -176,8 +176,8 @@ The joint names, slot order and URDF limits come from `g1_description`.
 
 - `--config` can be a bare config name (resolved from `config/`) or an absolute path.
 - The script asks for confirmation before using DDS domain 0, the real robot.
-- `uv` users: `pyproject.toml` and `uv.lock` are inherited from the H1-2 package and
-    have not been re-locked for G1.
+- `uv` users: `pyproject.toml` and `uv.lock` describe this package (`g1-safety-layer`)
+    with the repo's `unitree_sdk2_python` as an editable workspace member.
 
 ## Tests
 

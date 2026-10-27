@@ -154,7 +154,7 @@ measures what it cannot control:
 - The publish path is the policy step, the CRC and one write; the only
     logging on it is the timing line every 10 s.
 
-In the walk test at full CPU (`tests/test_sim_bringup.sh --walk`,
+In the walk test at full CPU (`tests/g1/test_sim_bringup.sh --walk`,
 five runs at a host load of 5-10) the node used 0.20-0.24 cores, and its
 commands left a median 0.7-0.9 ms (at most 1.9-7.0 ms) after their
 `rt/lowstate` sample. The old node used 2.39 cores in a run the same hour

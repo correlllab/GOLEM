@@ -77,7 +77,7 @@ cleanup_vnc_stack() {
 
 source /opt/ros/humble/setup.bash
 # livox_ros_driver2 (CustomMsg/CustomPoint) is baked into the robocasa image at
-# /opt/livox_ws so mujoco_ros_bridge.py can import it.
+# /opt/livox_ws so the sensor suite (h12_sensors.py) can import it.
 source /opt/livox_ws/install/setup.bash
 
 # Build the IDL-only msgs workspace (fast no-op when unchanged).

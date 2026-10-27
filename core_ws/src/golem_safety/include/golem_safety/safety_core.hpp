@@ -48,8 +48,8 @@ struct Event
 // A command is valid when q, dq, tau, kp and kd are finite on every body slot, the input's
 // own or not; any other command latches the estop. A valid command is clipped on the
 // input's slots: q to [q_clip_low, q_clip_high], dq and tau to +-dq_clip and +-tau_clip,
-// kp and kd to [0, kp_max] and [0, kd_max]. A kp or kd above its maximum is logged (Warn)
-// once per joint and gain.
+// kp and kd to [0, kp_max] and [0, kd_max]. A kp or kd above its maximum raises a
+// gain_clipped event (Warn) once per joint and gain.
 //
 // Single writer. Each input has a current writer, the writer of its first command. A
 // command from another writer is accepted, and its writer becomes current (Info), when the
@@ -67,22 +67,31 @@ struct Event
 //     engage_gate. The reason names the joint, the value, the limit and the multiple;
 //   - a second writer;
 //   - with use_estop, a hardware estop sample that is triggered or not plugged in.
+// The latch sets the flag before any other work, and nothing it does can throw.
 // After the latch step() returns
 //   - in arm_sdk_mode, the upper input's last valid command with the weight ramping from
 //     its last written value to 0 over arm_sdk.release_seconds, then 0 for ever. The ramp
 //     advances only while /lowstate is at most stale.state_seconds old (any age when that
 //     is <= 0), so a robot cut off from the layer does not see the weight jump when the
-//     link comes back;
+//     link comes back. Each change between running and holding raises
+//     arm_sdk_release_ramping (Info) or arm_sdk_release_held (Warn);
 //   - otherwise the estop command: estop_response.burst_count times and then nothing with
 //     burst_then_silence, on every step with keep_writing.
 // Nothing is written after the latch when the core had not taken control (engage_gate,
-// before engagement). The first step after the latch raises an Error event with the
-// reason and the timing report: decision_ms (when the core latched), action_ms (the `now`
-// of that step) and their difference, and for the hardware estop trigger_stamp_ms (the
-// sample's arrival) and trigger_to_action_ms; all ms on the boot-time clock.
+// before engagement). The estop report (Error) is estop_command_written, or
+// estop_latched_silent when that first step after the latch wrote nothing: the reason,
+// decision_ms (when the core latched), action_ms (the `now` of that step) and their
+// difference, and for the hardware estop trigger_stamp_ms (the sample's arrival) and
+// trigger_to_action_ms; all ms on the boot-time clock. It is built by the drain_events()
+// after that step, so nothing is formatted before the step's command is handed back.
+//
+// Events. gain_clipped, arm_sdk_release_ramping, arm_sdk_release_held and the estop report
+// are one JSON object each, with the keys the old safety layers logged, sorted, and
+// numbers written as Python's json module writes them. The other events are text. Raising
+// an event never throws: an event that cannot be built is dropped.
 //
 // Not thread-safe: one thread calls every method, except estopped(), which any thread may
-// call. estop_reason() is fixed once estopped() has returned true.
+// call.
 class SafetyCore
 {
 public:
@@ -113,9 +122,11 @@ public:
   std::optional<unitree_hg::msg::LowCmd> exit_step(double now);
 
   bool estopped() const {return estopped_.load(std::memory_order_acquire);}
-  const std::string & estop_reason() const {return estop_reason_;}
+  // Empty before the latch; a fixed text when the reason could not be built.
+  const std::string & estop_reason() const;
 
-  // The events raised since the last call, oldest first.
+  // The events raised since the last call, oldest first, with the estop report in its
+  // place once the step after the latch has run.
   std::vector<Event> drain_events();
 
   // With logging.enabled, one sample per /lowstate that arrived before the latch (the
@@ -130,6 +141,7 @@ private:
     bool used = false;  // the mode reads this input
     SlotRange slots;
     std::string topic;
+    std::string source;  // the old layers' name for the input, e.g. split_mode_upper
     std::optional<WriterId> writer;  // the current writer
     double writer_last = 0.0;        // arrival of the current writer's last command
     std::optional<unitree_hg::msg::LowCmd> newest;  // the newest valid command, clipped
@@ -148,11 +160,32 @@ private:
     std::optional<bool> running;  // last reported
   };
 
+  // The estop report's times, s; the reason is estop_reason().
   struct PendingReport
   {
-    std::string reason;
     double decision = 0.0;
     std::optional<double> trigger;
+    bool acted = false;      // the first step after the latch has run
+    bool written = false;    // and returned a command
+    double action = 0.0;
+    size_t event_index = 0;  // where the report goes among that step's events
+  };
+
+  // A measured value past its estop limit (`limit` set), or a non-finite one.
+  struct Violation
+  {
+    int slot = 0;
+    const char * field = "";
+    double value = 0.0;
+    std::optional<double> limit;
+  };
+
+  // A non-finite value in a command.
+  struct BadValue
+  {
+    int slot = 0;
+    const char * field = "";
+    double value = 0.0;
   };
 
   InputState & input_state(Input input);
@@ -160,12 +193,38 @@ private:
   bool state_flowing(double now) const;
 
   void accept_command(InputState & in, const unitree_hg::msg::LowCmd & cmd, double now);
-  std::optional<std::string> non_finite_value(const unitree_hg::msg::LowCmd & cmd) const;
+  std::optional<BadValue> non_finite_value(const unitree_hg::msg::LowCmd & cmd) const;
   unitree_hg::msg::LowCmd clipped(InputState & in, const unitree_hg::msg::LowCmd & cmd);
-  std::optional<std::string> limit_violation(const unitree_hg::msg::LowState & state) const;
+  std::optional<Violation> limit_violation(const unitree_hg::msg::LowState & state) const;
+  std::string joint(int slot) const;
 
-  void latch(const std::string & reason, double now, std::optional<double> trigger);
-  void report_estop(bool written, double now);
+  // Latches with the reason build_reason() returns: the flag first, then the report and
+  // the arm_sdk release (set_latched), then the reason, whose failure leaves the fixed
+  // text. Does nothing once latched.
+  template<class BuildReason>
+  void latch(double now, std::optional<double> trigger, BuildReason && build_reason) noexcept
+  {
+    if (!set_latched(now, trigger)) {
+      return;
+    }
+    try {
+      estop_reason_ = build_reason();
+    } catch (...) {
+      reason_lost_ = true;
+    }
+  }
+  bool set_latched(double now, std::optional<double> trigger) noexcept;
+  std::string estop_report(const PendingReport & report) const;
+
+  // Appends the event build_text() returns; drops it when it cannot be built.
+  template<class BuildText>
+  void raise(Event::Kind kind, BuildText && build_text) noexcept
+  {
+    try {
+      events_.push_back(Event{kind, build_text()});
+    } catch (...) {
+    }
+  }
 
   unitree_hg::msg::LowCmd merged() const;
   void set_weight(unitree_hg::msg::LowCmd & cmd, double weight) const;
@@ -195,8 +254,10 @@ private:
 
   std::atomic<bool> estopped_{false};
   std::string estop_reason_;
+  bool reason_lost_ = false;
   std::optional<PendingReport> pending_report_;
-  int estop_commands_written_ = 0;
+  int burst_written_ = 0;      // estop commands of the burst written, at most burst_count
+  bool estop_written_ = false;  // an estop command has been written since the latch
 
   double weight_ = 0.0;  // the arm_sdk weight last written
   Release release_;

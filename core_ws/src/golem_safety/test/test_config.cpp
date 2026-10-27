@@ -544,6 +544,20 @@ TEST(Config, ScalarRangesAreChecked)
   EXPECT_DOUBLE_EQ(c.stale.lower_seconds, 0.0);
 }
 
+TEST(Config, HandoverSecondsMustBePositive)
+{
+  for (const char * value : {"0.0", "0", "-0.1"}) {
+    SCOPED_TRACE(value);
+    const std::string message =
+      parse_error(std::string("single_writer: {handover_seconds: ") + value + "}\n", h12());
+    EXPECT_TRUE(contains(message, "single_writer.handover_seconds")) << message;
+    EXPECT_TRUE(contains(message, "must be positive")) << message;
+  }
+  EXPECT_DOUBLE_EQ(
+    parse("single_writer: {handover_seconds: 0.25}\n", g1()).single_writer.handover_seconds,
+    0.25);
+}
+
 TEST(Config, EstopResponseDamp)
 {
   EXPECT_TRUE(

@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <yaml-cpp/yaml.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -7,6 +9,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "golem_safety/config.hpp"
@@ -143,6 +146,39 @@ std::string texts(const std::vector<Event> & events)
     out += "[" + std::to_string(static_cast<int>(event.kind)) + "] " + event.text + "\n";
   }
   return out;
+}
+
+// Each JSON event, parsed, with its "event" equal to `name`: (the event, its object).
+std::vector<std::pair<Event, YAML::Node>> named(
+  const std::vector<Event> & events, const std::string & name)
+{
+  std::vector<std::pair<Event, YAML::Node>> out;
+  for (const auto & event : events) {
+    if (event.text.empty() || event.text[0] != '{') {
+      continue;
+    }
+    YAML::Node node;
+    try {
+      node = YAML::Load(event.text);
+    } catch (const YAML::Exception & e) {
+      ADD_FAILURE() << "not JSON: " << event.text << " (" << e.what() << ")";
+      continue;
+    }
+    if (node.IsMap() && node["event"] && node["event"].as<std::string>() == name) {
+      out.emplace_back(event, node);
+    }
+  }
+  return out;
+}
+
+// A JSON object's keys, in the order written.
+std::vector<std::string> keys_of(const YAML::Node & node)
+{
+  std::vector<std::string> keys;
+  for (const auto & entry : node) {
+    keys.push_back(entry.first.as<std::string>());
+  }
+  return keys;
 }
 
 // Every field equal, bit for bit.
@@ -821,7 +857,7 @@ TEST(Estop, ArmSdkReleaseWaitsForLowstate)
   ASSERT_TRUE(out);
   EXPECT_NEAR(out->motor_cmd[29].q, resumed - 0.1, 1e-6);
   events = core.drain_events();
-  EXPECT_TRUE(has_event(events, Event::Info, "running")) << texts(events);
+  EXPECT_TRUE(has_event(events, Event::Info, "arm_sdk_release_ramping")) << texts(events);
 }
 
 TEST(EstopInput, TriggeredOrUnpluggedLatchesWithUseEstop)
@@ -869,6 +905,28 @@ TEST(ExitStep, FullAndSplitAreDoneAtOnce)
     ASSERT_TRUE(burst.core.exit_step(0.022 + i * kDt)) << i;
   }
   EXPECT_FALSE(burst.core.exit_step(0.2));
+
+  // keep_writing: the estop command once if none was written since the latch, then done.
+  const SafetyConfig g1_cfg = config(g1(), "sim_split");
+  for (const bool stepped : {false, true}) {
+    SCOPED_TRACE(stepped ? "a step after the latch" : "no step after the latch");
+    SafetyCore keep(g1(), g1_cfg, false, kDomain);
+    keep.on_state(state_of(g1()), 0.0);
+    keep.on_command(Input::Lower, command(g1()), "lower", 0.001);
+    keep.on_command(Input::Upper, command(g1()), "upper", 0.001);
+    ASSERT_TRUE(keep.step(0.002));
+    keep.on_state(past_estop(g1(), g1_cfg, 20), 0.003);
+    ASSERT_TRUE(keep.estopped());
+    if (stepped) {
+      ASSERT_TRUE(keep.step(0.004));
+    } else {
+      const auto last = keep.exit_step(0.004);
+      ASSERT_TRUE(last);
+      expect_same(*last, golem_safety::estop_command(g1(), g1_cfg, *last));
+    }
+    EXPECT_FALSE(keep.exit_step(0.006));
+    EXPECT_FALSE(keep.step(0.008));
+  }
 }
 
 TEST(ExitStep, ArmSdkRampsWeightToZero)
@@ -951,6 +1009,167 @@ TEST(Log, OneSamplePerLowstateOnTheBodySlots)
   ASSERT_TRUE(g1_sample);
   EXPECT_EQ(g1_sample->q.size(), 29U);
   EXPECT_EQ(g1_sample->kd_cmd.size(), 29U);
+}
+
+TEST(Events, GainClippedIsTheOldJson)
+{
+  struct Case
+  {
+    const RobotProfile & profile;
+    const char * config_name;
+    Input input;
+    int slot;
+    const char * gain;
+    float commanded;
+    std::string text;
+  };
+  const std::vector<Case> cases = {
+    // the old G1 test's case (test_hardening_dds.py)
+    {g1(), "sim_arm_sdk", Input::Upper, 15, "kp", 300.0F,
+      "{\"commanded\": 300.0, \"event\": \"gain_clipped\", \"gain\": \"kp\", "
+      "\"joint\": \"left_shoulder_pitch_joint\", \"max\": 200.0, \"source\": \"arm_sdk_mode\"}"},
+    {g1(), "sim_split", Input::Upper, 20, "kp", 300.1F,
+      "{\"commanded\": 300.1000061035156, \"event\": \"gain_clipped\", \"gain\": \"kp\", "
+      "\"joint\": \"left_wrist_pitch_joint\", \"max\": 200.0, \"source\": \"split_mode_upper\"}"},
+    {h12(), "sim_safety_split", Input::Lower, 3, "kd", 31.5F,
+      "{\"commanded\": 31.5, \"event\": \"gain_clipped\", \"gain\": \"kd\", "
+      "\"joint\": \"left_knee_joint\", \"max\": 30.0, \"source\": \"split_mode_lower\"}"},
+    {h12(), "sim_safety_split", Input::Upper, 20, "kd", 1e20F,
+      "{\"commanded\": 1.0000000200408773e+20, \"event\": \"gain_clipped\", \"gain\": \"kd\", "
+      "\"joint\": \"right_shoulder_pitch_joint\", \"max\": 30.0, "
+      "\"source\": \"split_mode_upper\"}"},
+    {h12(), "default_safety_full", Input::Full, 26, "kp", 600.0F,
+      "{\"commanded\": 600.0, \"event\": \"gain_clipped\", \"gain\": \"kp\", "
+      "\"joint\": \"right_wrist_yaw_joint\", \"max\": 500.0, \"source\": \"full_body_mode\"}"},
+  };
+  for (const Case & c : cases) {
+    SCOPED_TRACE(c.text);
+    SafetyCore core(c.profile, config(c.profile, c.config_name), false, kDomain);
+    core.on_state(state_of(c.profile), 0.0);
+    LowCmd cmd = command(c.profile);
+    field_of(cmd.motor_cmd[c.slot], c.gain) = c.commanded;
+    for (int i = 0; i < 5; ++i) {
+      core.on_command(c.input, cmd, "writer", 0.001 * i);
+    }
+    const auto clipped = named(core.drain_events(), "gain_clipped");
+    ASSERT_EQ(clipped.size(), 1U) << "once per joint and gain";
+    EXPECT_EQ(clipped[0].first.kind, Event::Warn);
+    EXPECT_EQ(clipped[0].first.text, c.text);
+    const YAML::Node & e = clipped[0].second;
+    EXPECT_EQ(
+      keys_of(e),
+      (std::vector<std::string>{"commanded", "event", "gain", "joint", "max", "source"}));
+    EXPECT_EQ(e["commanded"].as<double>(), static_cast<double>(c.commanded));
+    EXPECT_EQ(e["gain"].as<std::string>(), c.gain);
+    EXPECT_EQ(e["joint"].as<std::string>(), c.profile.joints[c.slot].name);
+  }
+}
+
+TEST(Events, ArmSdkReleaseEventsAreTheOldJson)
+{
+  SafetyConfig cfg = config(g1(), "sim_arm_sdk");
+  cfg.stale.state_seconds = 0.1;
+  SafetyCore core(g1(), cfg, false, kDomain);
+  engage_arm_sdk(core, command(g1()), 1.5);
+  core.on_state(past_estop(g1(), cfg, 20), 1.505);
+  ASSERT_TRUE(core.estopped());
+  core.drain_events();
+
+  // The ramp runs from t = 1.51, holds once /lowstate is over 0.1 s old, and runs again
+  // when it flows; the estop report comes first, as the old layers logged it.
+  for (int i = 1; i <= 50; ++i) {
+    ASSERT_TRUE(core.step(1.5 + i * 0.01));
+  }
+  auto events = core.drain_events();
+  std::vector<std::string> sequence;
+  for (const auto & event : events) {
+    if (!event.text.empty() && event.text[0] == '{') {
+      sequence.push_back(YAML::Load(event.text)["event"].as<std::string>());
+    }
+  }
+  EXPECT_EQ(
+    sequence, (std::vector<std::string>{
+    "estop_command_written", "arm_sdk_release_ramping", "arm_sdk_release_held"})) <<
+    texts(events);
+  const auto ramping = named(events, "arm_sdk_release_ramping");
+  const auto held = named(events, "arm_sdk_release_held");
+  ASSERT_EQ(ramping.size(), 1U);
+  ASSERT_EQ(held.size(), 1U);
+  EXPECT_EQ(ramping[0].first.kind, Event::Info);
+  EXPECT_EQ(
+    ramping[0].first.text,
+    "{\"event\": \"arm_sdk_release_ramping\", \"state_age\": 0.005, \"weight\": 1.0}");
+  EXPECT_EQ(held[0].first.kind, Event::Warn);
+  EXPECT_EQ(
+    held[0].first.text,
+    "{\"event\": \"arm_sdk_release_held\", \"state_age\": 0.105, \"weight\": 0.91}");
+  for (const YAML::Node * node : {&ramping[0].second, &held[0].second}) {
+    EXPECT_EQ(keys_of(*node), (std::vector<std::string>{"event", "state_age", "weight"}));
+  }
+
+  core.on_state(state_of(g1()), 2.0);
+  ASSERT_TRUE(core.step(2.0));
+  const auto resumed = named(core.drain_events(), "arm_sdk_release_ramping");
+  ASSERT_EQ(resumed.size(), 1U);
+  EXPECT_EQ(
+    resumed[0].first.text,
+    "{\"event\": \"arm_sdk_release_ramping\", \"state_age\": 0.0, \"weight\": 0.91}");
+  EXPECT_EQ(resumed[0].second["weight"].as<double>(), 0.91);
+}
+
+TEST(Events, EstopReportIsTheOldJsonAfterTheCommand)
+{
+  // Built only once the step after the latch has handed its command back.
+  H12Split rig;
+  ASSERT_TRUE(rig.core.step(0.0));
+  rig.core.on_state(past_estop(h12(), rig.cfg, 20), 0.002);
+  ASSERT_TRUE(rig.core.estopped());
+  EXPECT_TRUE(named(rig.core.drain_events(), "estop_command_written").empty());
+  ASSERT_TRUE(rig.core.step(0.004));
+  auto reports = named(rig.core.drain_events(), "estop_command_written");
+  ASSERT_EQ(reports.size(), 1U);
+  EXPECT_EQ(reports[0].first.kind, Event::Error);
+  const YAML::Node & written = reports[0].second;
+  EXPECT_EQ(
+    keys_of(written), (std::vector<std::string>{
+    "action_ms", "decision_ms", "decision_to_action_ms", "event", "reason",
+    "trigger_stamp_ms"}));
+  EXPECT_EQ(written["action_ms"].as<long long>(), 4);
+  EXPECT_EQ(written["decision_ms"].as<long long>(), 2);
+  EXPECT_EQ(written["decision_to_action_ms"].as<long long>(), 2);
+  EXPECT_EQ(written["reason"].as<std::string>(), rig.core.estop_reason());
+  EXPECT_TRUE(written["trigger_stamp_ms"].IsNull());
+  ASSERT_TRUE(rig.core.step(0.006));
+  EXPECT_TRUE(named(rig.core.drain_events(), "estop_command_written").empty()) << "once";
+
+  // The hardware estop adds trigger_to_action_ms.
+  SafetyCore box(h12(), rig.cfg, true, kDomain);
+  box.on_estop(true, true, 0.010);
+  ASSERT_TRUE(box.step(0.013));
+  reports = named(box.drain_events(), "estop_command_written");
+  ASSERT_EQ(reports.size(), 1U);
+  EXPECT_EQ(
+    keys_of(reports[0].second), (std::vector<std::string>{
+    "action_ms", "decision_ms", "decision_to_action_ms", "event", "reason",
+    "trigger_stamp_ms", "trigger_to_action_ms"}));
+  EXPECT_EQ(reports[0].second["trigger_stamp_ms"].as<long long>(), 10);
+  EXPECT_EQ(reports[0].second["trigger_to_action_ms"].as<long long>(), 3);
+  EXPECT_EQ(reports[0].second["reason"].as<std::string>(), "External estop triggered");
+
+  // Nothing written: estop_latched_silent.
+  SafetyCore silent(g1(), config(g1(), "sim_split"), false, kDomain);
+  silent.on_state(state_of(g1()), 0.0);
+  silent.on_command(Input::Lower, command(g1()), "lower", 0.001);
+  silent.on_command(Input::Lower, command(g1()), "other", 0.002);
+  ASSERT_TRUE(silent.estopped());
+  EXPECT_FALSE(silent.step(0.004));
+  const auto silences = named(silent.drain_events(), "estop_latched_silent");
+  ASSERT_EQ(silences.size(), 1U);
+  EXPECT_EQ(
+    keys_of(silences[0].second),
+    (std::vector<std::string>{"decision_ms", "event", "reason", "trigger_stamp_ms"}));
+  EXPECT_EQ(silences[0].second["decision_ms"].as<long long>(), 2);
+  EXPECT_EQ(silences[0].second["reason"].as<std::string>(), silent.estop_reason());
 }
 
 TEST(Construction, RefusesAConfigForAnotherRobot)

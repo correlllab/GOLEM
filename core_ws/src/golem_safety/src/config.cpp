@@ -445,7 +445,7 @@ SafetyConfig parse_checked(
   const Section single_writer = root.section("single_writer");
   single_writer.allow_only({"handover_seconds"});
   config.single_writer.handover_seconds =
-    single_writer.nonnegative("handover_seconds", config.single_writer.handover_seconds);
+    single_writer.positive("handover_seconds", config.single_writer.handover_seconds);
 
   const Section startup = root.section("startup");
   startup.allow_only({"rule"});

@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 #include <utility>
 
@@ -18,6 +20,9 @@ namespace
 using unitree_hg::msg::LowCmd;
 using unitree_hg::msg::LowState;
 using unitree_hg::msg::MotorCmd;
+
+// Constructed at load time, so a latch never has to allocate it.
+const std::string kReasonLost = "the estop latched, and its reason could not be recorded";
 
 size_t index_of(Input input) {return static_cast<size_t>(input);}
 
@@ -85,6 +90,64 @@ std::string json_string(const std::string & text)
   return out + "\"";
 }
 
+// A double as Python's json module writes a float (its repr): the fewest digits that read
+// back as the same double, in fixed notation for decimal exponents -4..15 (with ".0" when
+// the value is integral) and in scientific notation, with an exponent of at least two
+// digits, otherwise; NaN, Infinity and -Infinity for the rest.
+std::string python_float(double value)
+{
+  if (std::isnan(value)) {
+    return "NaN";
+  }
+  if (std::isinf(value)) {
+    return value > 0.0 ? "Infinity" : "-Infinity";
+  }
+  char text[40];
+  for (int digits = 1; digits <= 17; ++digits) {
+    std::snprintf(text, sizeof(text), "%.*e", digits - 1, value);
+    if (std::strtod(text, nullptr) == value) {
+      break;
+    }
+  }
+  std::string scientific = text;  // [-]d[.ddd]e[+-]xx
+  const bool negative = scientific[0] == '-';
+  if (negative) {
+    scientific.erase(0, 1);
+  }
+  const size_t e = scientific.find('e');
+  const int exponent = std::atoi(scientific.c_str() + e + 1);
+  std::string digits = scientific.substr(0, e);
+  digits.erase(std::remove(digits.begin(), digits.end(), '.'), digits.end());
+  while (digits.size() > 1 && digits.back() == '0') {
+    digits.pop_back();
+  }
+  std::string out = negative ? "-" : "";
+  if (exponent >= -4 && exponent < 16) {
+    const size_t integral = static_cast<size_t>(exponent + 1);
+    if (exponent < 0) {
+      out += "0." + std::string(static_cast<size_t>(-exponent - 1), '0') + digits;
+    } else if (digits.size() <= integral) {
+      out += digits + std::string(integral - digits.size(), '0') + ".0";
+    } else {
+      out += digits.substr(0, integral) + "." + digits.substr(integral);
+    }
+  } else {
+    out += digits.substr(0, 1);
+    if (digits.size() > 1) {
+      out += "." + digits.substr(1);
+    }
+    char exponent_text[16];
+    std::snprintf(
+      exponent_text, sizeof(exponent_text), "e%c%02d", exponent < 0 ? '-' : '+',
+      std::abs(exponent));
+    out += exponent_text;
+  }
+  return out;
+}
+
+// Python's round(value, 4), as the old layers rounded the logged weight and state age.
+double round4(double value) {return std::round(value * 1e4) / 1e4;}
+
 // Milliseconds on the clock `now` is read from.
 long long ms(double seconds) {return std::llround(seconds * 1000.0);}
 
@@ -134,23 +197,27 @@ SafetyCore::SafetyCore(RobotProfile profile, SafetyConfig config, bool use_estop
   }
 
   const int last_body_slot = static_cast<int>(profile_.joints.size()) - 1;
-  auto use = [this](Input input, SlotRange slots, const std::string & topic) {
+  auto use = [this](
+    Input input, SlotRange slots, const std::string & topic, const std::string & source) {
       InputState & in = input_state(input);
       in.used = true;
       in.slots = slots;
       in.topic = topic;
+      in.source = source;
       mode_inputs_.push_back(input);
     };
   switch (config_.mode) {
     case Mode::FullBody:
-      use(Input::Full, SlotRange{0, last_body_slot}, config_.topics.low_cmd_in);
+      use(Input::Full, SlotRange{0, last_body_slot}, config_.topics.low_cmd_in, "full_body_mode");
       break;
     case Mode::Split:
-      use(Input::Lower, profile_.lower_slots, config_.topics.low_cmd_lower_in);
-      use(Input::Upper, profile_.upper_slots, config_.topics.low_cmd_upper_in);
+      use(
+        Input::Lower, profile_.lower_slots, config_.topics.low_cmd_lower_in, "split_mode_lower");
+      use(
+        Input::Upper, profile_.upper_slots, config_.topics.low_cmd_upper_in, "split_mode_upper");
       break;
     case Mode::ArmSdk:
-      use(Input::Upper, profile_.upper_slots, config_.topics.low_cmd_upper_in);
+      use(Input::Upper, profile_.upper_slots, config_.topics.low_cmd_upper_in, "arm_sdk_mode");
       break;
   }
   for (int slot = 0; slot <= last_body_slot; ++slot) {
@@ -163,6 +230,11 @@ SafetyCore::SafetyCore(RobotProfile profile, SafetyConfig config, bool use_estop
   }
   kp_clip_reported_.assign(profile_.joints.size(), false);
   kd_clip_reported_.assign(profile_.joints.size(), false);
+}
+
+const std::string & SafetyCore::estop_reason() const
+{
+  return reason_lost_ ? kReasonLost : estop_reason_;
 }
 
 SafetyCore::InputState & SafetyCore::input_state(Input input)
@@ -187,6 +259,11 @@ bool SafetyCore::state_flowing(double now) const
   return config_.stale.state_seconds <= 0.0 || now - *state_time_ <= config_.stale.state_seconds;
 }
 
+std::string SafetyCore::joint(int slot) const
+{
+  return "motor " + std::to_string(slot) + " (" + profile_.joints[slot].name + ")";
+}
+
 void SafetyCore::on_state(const LowState & state, double now)
 {
   state_time_ = now;
@@ -200,50 +277,63 @@ void SafetyCore::on_state(const LowState & state, double now)
   if (state.mode_machine != profile_.mode_machine) {
     if (engaged_) {
       latch(
-        config_.topics.low_state + " mode_machine " + std::to_string(state.mode_machine) +
-        " is not the " + profile_.robot + "'s " + std::to_string(profile_.mode_machine) +
-        ": another robot or sim is on this domain", now, std::nullopt);
+        now, std::nullopt, [&] {
+          return config_.topics.low_state + " mode_machine " +
+          std::to_string(state.mode_machine) + " is not the " + profile_.robot + "'s " +
+          std::to_string(profile_.mode_machine) + ": another robot or sim is on this domain";
+        });
     }
     return;
   }
   if (config_.startup.rule == StartupRule::EngageGate && !engaged_) {
     return;
   }
-  if (const auto reason = limit_violation(state)) {
-    latch(*reason, now, std::nullopt);
-    const size_t joints = profile_.joints.size();
-    std::string diagnostic = "estop diagnostic, body slots in order:";
-    auto add = [&](const char * name, auto value_of) {
-        diagnostic += std::string("\n") + name + ": [";
-        for (size_t slot = 0; slot < joints; ++slot) {
-          diagnostic += (slot ? ", " : "") + number(value_of(slot));
-        }
-        diagnostic += "]";
-      };
-    add("q_cmd", [&](size_t i) {return last_written_.motor_cmd[i].q;});
-    add("dq_cmd", [&](size_t i) {return last_written_.motor_cmd[i].dq;});
-    add("tau_cmd", [&](size_t i) {return last_written_.motor_cmd[i].tau;});
-    add("q", [&](size_t i) {return state.motor_state[i].q;});
-    add("dq", [&](size_t i) {return state.motor_state[i].dq;});
-    add("ddq", [&](size_t i) {return state.motor_state[i].ddq;});
-    events_.push_back({Event::Error, diagnostic});
+  const auto violation = limit_violation(state);
+  if (!violation) {
+    return;
   }
+  const Violation & v = *violation;
+  latch(
+    now, std::nullopt, [&] {
+      if (!v.limit) {
+        return joint(v.slot) + " " + v.field + " is " + number(v.value) + " in " +
+        config_.topics.low_state;
+      }
+      return joint(v.slot) + " " + v.field + " out of estop range: " + number(v.value) +
+      " (limit " + fixed(*v.limit, 3) + ", " + multiple(v.value, *v.limit) + ")";
+    });
+  raise(
+    Event::Error, [&] {
+      std::string diagnostic = "estop diagnostic, body slots in order:";
+      auto add = [&](const char * name, auto value_of) {
+          diagnostic += std::string("\n") + name + ": [";
+          for (size_t slot = 0; slot < profile_.joints.size(); ++slot) {
+            diagnostic += (slot ? ", " : "") + number(value_of(slot));
+          }
+          diagnostic += "]";
+        };
+      add("q_cmd", [&](size_t i) {return last_written_.motor_cmd[i].q;});
+      add("dq_cmd", [&](size_t i) {return last_written_.motor_cmd[i].dq;});
+      add("tau_cmd", [&](size_t i) {return last_written_.motor_cmd[i].tau;});
+      add("q", [&](size_t i) {return state.motor_state[i].q;});
+      add("dq", [&](size_t i) {return state.motor_state[i].dq;});
+      add("ddq", [&](size_t i) {return state.motor_state[i].ddq;});
+      return diagnostic;
+    });
 }
 
-std::optional<std::string> SafetyCore::limit_violation(const LowState & state) const
+// The first non-finite value on a checked slot, else the first q, then dq, then tau past
+// its estop limit.
+std::optional<SafetyCore::Violation> SafetyCore::limit_violation(const LowState & state) const
 {
   const DerivedLimits & limits = config_.limits;
-  auto joint = [this](int slot) {
-      return "motor " + std::to_string(slot) + " (" + profile_.joints[slot].name + ")";
-    };
   for (const int slot : checked_slots_) {
     const auto & motor = state.motor_state[slot];
     const std::pair<const char *, float> fields[] = {
       {"q", motor.q}, {"dq", motor.dq}, {"tau", motor.tau_est}};
     for (const auto & [name, value] : fields) {
       if (!std::isfinite(value)) {
-        return joint(slot) + " " + name + " is " + number(value) + " in " +
-               config_.topics.low_state;
+        return Violation{slot, name, value, std::nullopt};
       }
     }
   }
@@ -252,25 +342,19 @@ std::optional<std::string> SafetyCore::limit_violation(const LowState & state) c
     const double low = limits.q_estop_low[slot];
     const double high = limits.q_estop_high[slot];
     if (q < low || q > high) {
-      const double limit = q < low ? low : high;
-      return joint(slot) + " q out of estop range: " + number(q) + " (limit " +
-             fixed(limit, 3) + ", " + multiple(q, limit) + ")";
+      return Violation{slot, "q", q, q < low ? low : high};
     }
   }
   for (const int slot : checked_slots_) {
     const double dq = state.motor_state[slot].dq;
-    const double limit = limits.dq_estop[slot];
-    if (std::abs(dq) > limit) {
-      return joint(slot) + " dq out of estop range: " + number(dq) + " (limit " +
-             fixed(limit, 3) + ", " + multiple(dq, limit) + ")";
+    if (std::abs(dq) > limits.dq_estop[slot]) {
+      return Violation{slot, "dq", dq, limits.dq_estop[slot]};
     }
   }
   for (const int slot : checked_slots_) {
     const double tau = state.motor_state[slot].tau_est;
-    const double limit = limits.tau_estop[slot];
-    if (std::abs(tau) > limit) {
-      return joint(slot) + " tau out of estop range: " + number(tau) + " (limit " +
-             fixed(limit, 3) + ", " + multiple(tau, limit) + ")";
+    if (std::abs(tau) > limits.tau_estop[slot]) {
+      return Violation{slot, "tau", tau, limits.tau_estop[slot]};
     }
   }
   return std::nullopt;
@@ -285,9 +369,11 @@ void SafetyCore::on_command(Input input, const LowCmd & cmd, const WriterId & wr
   if (!in.used) {
     if (!in.misuse_reported) {
       in.misuse_reported = true;
-      events_.push_back(
-        {Event::Error, std::string("ignoring commands on the ") + input_name(input) +
-          " input, which " + mode_name(config_.mode) + " does not read"});
+      raise(
+        Event::Error, [&] {
+          return std::string("ignoring commands on the ") + input_name(input) +
+          " input, which " + mode_name(config_.mode) + " does not read";
+        });
     }
     return;
   }
@@ -299,16 +385,19 @@ void SafetyCore::on_command(Input input, const LowCmd & cmd, const WriterId & wr
     const double handover = config_.single_writer.handover_seconds;
     if (!(quiet > handover)) {
       latch(
-        "second writer on " + in.topic + ": a new writer sent a command " + fixed(quiet, 3) +
-        " s after the current writer's last, and a handover needs a gap over " +
-        number(handover) + " s", now, std::nullopt);
+        now, std::nullopt, [&] {
+          return "second writer on " + in.topic + ": a new writer sent a command " +
+          fixed(quiet, 3) + " s after the current writer's last, and a handover needs a gap " +
+          "over " + number(handover) + " s";
+        });
       return;
     }
     in.writer = writer;
-    events_.push_back(
-      {Event::Info, "new writer on " + in.topic + " accepted: the previous writer's last "
-        "command was " + fixed(quiet, 3) + " s old (handover after " + number(handover) +
-        " s)"});
+    raise(
+      Event::Info, [&] {
+        return "new writer on " + in.topic + " accepted: the previous writer's last command " +
+        "was " + fixed(quiet, 3) + " s old (handover after " + number(handover) + " s)";
+      });
   }
   in.writer_last = now;
   accept_command(in, cmd, now);
@@ -317,7 +406,11 @@ void SafetyCore::on_command(Input input, const LowCmd & cmd, const WriterId & wr
 void SafetyCore::accept_command(InputState & in, const LowCmd & cmd, double now)
 {
   if (const auto bad = non_finite_value(cmd)) {
-    latch("Command validation failed on " + in.topic + ": " + *bad, now, std::nullopt);
+    latch(
+      now, std::nullopt, [&] {
+        return "Command validation failed on " + in.topic + ": " + joint(bad->slot) + " " +
+        bad->field + " is " + number(bad->value);
+      });
     return;
   }
 
@@ -338,9 +431,8 @@ void SafetyCore::accept_command(InputState & in, const LowCmd & cmd, double now)
   }
 }
 
-// The first non-finite q, dq, tau, kp or kd on any body slot of `cmd`, in that field
-// order, as "motor 20 (right_shoulder_pitch_joint) q is nan".
-std::optional<std::string> SafetyCore::non_finite_value(const LowCmd & cmd) const
+// The first non-finite q, dq, tau, kp or kd on any body slot of `cmd`, in that field order.
+std::optional<SafetyCore::BadValue> SafetyCore::non_finite_value(const LowCmd & cmd) const
 {
   const std::pair<const char *, float MotorCmd::*> fields[] = {
     {"q", &MotorCmd::q}, {"dq", &MotorCmd::dq}, {"tau", &MotorCmd::tau}, {"kp", &MotorCmd::kp},
@@ -349,8 +441,7 @@ std::optional<std::string> SafetyCore::non_finite_value(const LowCmd & cmd) cons
     for (size_t slot = 0; slot < profile_.joints.size(); ++slot) {
       const float value = cmd.motor_cmd[slot].*member;
       if (!std::isfinite(value)) {
-        return "motor " + std::to_string(slot) + " (" + profile_.joints[slot].name + ") " +
-               name + " is " + number(value);
+        return BadValue{static_cast<int>(slot), name, value};
       }
     }
   }
@@ -363,15 +454,20 @@ LowCmd SafetyCore::clipped(InputState & in, const LowCmd & cmd)
   LowCmd out = cmd;
   for (int slot = in.slots.first; slot <= in.slots.last; ++slot) {
     auto & motor = out.motor_cmd[slot];
+    // The old layers' gain_clipped event: the commanded gain and its maximum.
     auto report_gain = [&](std::vector<bool> & reported, const char * gain, float value,
       double max) {
-        if (value > max && !reported[slot]) {
-          reported[slot] = true;
-          events_.push_back(
-            {Event::Warn, in.topic + " commands " + gain + " " + number(value) + " on motor " +
-              std::to_string(slot) + " (" + profile_.joints[slot].name + "), above " + gain +
-              "_max " + number(max) + ": clipped (reported once per joint and gain)"});
+        if (!(value > max) || reported[slot]) {
+          return;
         }
+        reported[slot] = true;
+        raise(
+          Event::Warn, [&] {
+            return "{\"commanded\": " + python_float(value) +
+            ", \"event\": \"gain_clipped\", \"gain\": " + json_string(gain) +
+            ", \"joint\": " + json_string(profile_.joints[slot].name) + ", \"max\": " +
+            python_float(max) + ", \"source\": " + json_string(in.source) + "}";
+          });
       };
     report_gain(kp_clip_reported_, "kp", motor.kp, limits.kp_max);
     report_gain(kd_clip_reported_, "kd", motor.kd, limits.kd_max);
@@ -390,56 +486,52 @@ void SafetyCore::on_estop(bool triggered, bool plugged_in, double now)
     return;
   }
   if (triggered) {
-    latch("External estop triggered", now, now);
+    latch(now, now, [] {return std::string("External estop triggered");});
   } else if (!plugged_in) {
-    latch("External estop unplugged", now, now);
+    latch(now, now, [] {return std::string("External estop unplugged");});
   }
 }
 
-void SafetyCore::latch(const std::string & reason, double now, std::optional<double> trigger)
+bool SafetyCore::set_latched(double now, std::optional<double> trigger) noexcept
 {
   if (estopped()) {
-    return;
+    return false;
   }
-  estop_reason_ = reason;
-  pending_report_ = PendingReport{reason, now, trigger};
+  estopped_.store(true, std::memory_order_release);
+  PendingReport report;
+  report.decision = now;
+  report.trigger = trigger;
+  pending_report_ = report;
   if (config_.mode == Mode::ArmSdk && !release_.begun) {
     release_ = Release{};
     release_.begun = true;
     release_.from = weight_;
   }
-  estopped_.store(true, std::memory_order_release);
+  return true;
 }
 
-// The one-time estop report, raised with the first output after the latch: written, or
-// nothing to write because the layer never took control.
-void SafetyCore::report_estop(bool written, double now)
+// The old layers' estop report, with sorted keys: estop_command_written, or
+// estop_latched_silent when the first step after the latch wrote nothing.
+std::string SafetyCore::estop_report(const PendingReport & report) const
 {
-  if (!pending_report_) {
-    return;
-  }
-  const PendingReport & report = *pending_report_;
   const long long decision_ms = ms(report.decision);
   const std::string trigger_ms =
     report.trigger ? std::to_string(ms(*report.trigger)) : std::string("null");
-  std::string text = "{";
-  if (written) {
-    const long long action_ms = ms(now);
-    text += "\"action_ms\": " + std::to_string(action_ms) + ", \"decision_ms\": " +
-      std::to_string(decision_ms) + ", \"decision_to_action_ms\": " +
-      std::to_string(action_ms - decision_ms) + ", \"event\": \"estop_command_written\", " +
-      "\"reason\": " + json_string(report.reason) + ", \"trigger_stamp_ms\": " + trigger_ms;
-    if (report.trigger) {
-      text += ", \"trigger_to_action_ms\": " + std::to_string(action_ms - ms(*report.trigger));
-    }
-  } else {
-    text += "\"decision_ms\": " + std::to_string(decision_ms) +
-      ", \"event\": \"estop_latched_silent\", \"reason\": " + json_string(report.reason) +
-      ", \"trigger_stamp_ms\": " + trigger_ms;
+  const std::string reason = json_string(estop_reason());
+  if (!report.written) {
+    return "{\"decision_ms\": " + std::to_string(decision_ms) +
+           ", \"event\": \"estop_latched_silent\", \"reason\": " + reason +
+           ", \"trigger_stamp_ms\": " + trigger_ms + "}";
   }
-  text += "}";
-  events_.push_back({Event::Error, text});
-  pending_report_.reset();
+  const long long action_ms = ms(report.action);
+  std::string text = "{\"action_ms\": " + std::to_string(action_ms) + ", \"decision_ms\": " +
+    std::to_string(decision_ms) + ", \"decision_to_action_ms\": " +
+    std::to_string(action_ms - decision_ms) + ", \"event\": \"estop_command_written\", " +
+    "\"reason\": " + reason + ", \"trigger_stamp_ms\": " + trigger_ms;
+  if (report.trigger) {
+    text += ", \"trigger_to_action_ms\": " + std::to_string(action_ms - ms(*report.trigger));
+  }
+  return text + "}";
 }
 
 LowCmd SafetyCore::merged() const
@@ -470,7 +562,9 @@ void SafetyCore::set_weight(LowCmd & cmd, double weight) const
 
 // The arm_sdk weight while handing the waist and arms back: from release_.from to 0 over
 // release_seconds, advancing only while /lowstate flows or while exiting, holding
-// otherwise. A change between running and holding raises an event.
+// otherwise. A change between running and holding raises the old layers'
+// arm_sdk_release_ramping or arm_sdk_release_held event, with the weight reached and the
+// /lowstate age.
 double SafetyCore::release_weight(double now, bool exiting)
 {
   const bool flowing = exiting || state_flowing(now);
@@ -483,17 +577,14 @@ double SafetyCore::release_weight(double now, bool exiting)
   const bool running = release_.start.has_value();
   if (!release_.running || *release_.running != running) {
     release_.running = running;
-    if (running) {
-      events_.push_back(
-        {Event::Info, "arm_sdk release ramp running at weight " + fixed(weight_, 4) +
-          ": the weight falls to 0 over " + number(config_.arm_sdk.release_seconds) + " s"});
-    } else {
-      const std::string age = state_time_ ?
-        fixed(now - *state_time_, 3) + " s old" : std::string("never received");
-      events_.push_back(
-        {Event::Warn, "arm_sdk release ramp held at weight " + fixed(weight_, 4) + ": " +
-          config_.topics.low_state + " is " + age});
-    }
+    raise(
+      running ? Event::Info : Event::Warn, [&] {
+        const std::string age =
+        state_time_ ? python_float(round4(now - *state_time_)) : std::string("null");
+        return std::string("{\"event\": ") +
+        (running ? "\"arm_sdk_release_ramping\"" : "\"arm_sdk_release_held\"") +
+        ", \"state_age\": " + age + ", \"weight\": " + python_float(round4(weight_)) + "}";
+      });
   }
   if (running) {
     weight_ = release_.from *
@@ -518,6 +609,7 @@ std::optional<LowCmd> SafetyCore::relay_output(double now)
 
 std::optional<LowCmd> SafetyCore::estop_output(double now, bool exiting)
 {
+  const size_t first_event = events_.size();
   std::optional<LowCmd> out;
   if (!took_control()) {
     out = std::nullopt;
@@ -525,16 +617,23 @@ std::optional<LowCmd> SafetyCore::estop_output(double now, bool exiting)
     out = merged();
     set_weight(*out, release_weight(now, exiting));
   } else if (config_.estop_response.after == EstopAfter::BurstThenSilence) {
-    if (estop_commands_written_ < config_.estop_response.burst_count) {
+    if (burst_written_ < config_.estop_response.burst_count) {
       out = estop_cmd_;
+      ++burst_written_;
     }
   } else {
     out = estop_cmd_;
   }
   if (out) {
-    ++estop_commands_written_;
+    estop_written_ = true;
   }
-  report_estop(out.has_value(), now);
+  // The report is built by drain_events(), once this step's command is out.
+  if (pending_report_ && !pending_report_->acted) {
+    pending_report_->acted = true;
+    pending_report_->written = out.has_value();
+    pending_report_->action = now;
+    pending_report_->event_index = first_event;
+  }
   return out;
 }
 
@@ -579,7 +678,7 @@ std::optional<LowCmd> SafetyCore::exit_step(double now)
     }
   } else if (estopped()) {
     const bool burst = config_.estop_response.after == EstopAfter::BurstThenSilence;
-    if (burst || estop_commands_written_ == 0) {
+    if (burst || !estop_written_) {
       out = estop_output(now, true);
     }
     exit_done_ = !burst;
@@ -594,6 +693,17 @@ std::vector<Event> SafetyCore::drain_events()
 {
   std::vector<Event> out;
   out.swap(events_);
+  if (pending_report_ && pending_report_->acted) {
+    const PendingReport report = *pending_report_;
+    pending_report_.reset();
+    try {
+      const size_t index = std::min(report.event_index, out.size());
+      out.insert(
+        out.begin() + static_cast<std::ptrdiff_t>(index),
+        Event{Event::Error, estop_report(report)});
+    } catch (...) {
+    }
+  }
   return out;
 }
 

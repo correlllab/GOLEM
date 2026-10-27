@@ -72,8 +72,9 @@ struct Stale
 
 struct SingleWriter
 {
-  // A new writer that appears after the old one was quiet this long is accepted;
-  // two writers live at once latch the estop.
+  // A new writer that appears after the old one was quiet longer than this is accepted;
+  // two writers live at once latch the estop. Positive: at 0 any interleaving writer
+  // would count as a handover.
   double handover_seconds = 0.5;
 };
 

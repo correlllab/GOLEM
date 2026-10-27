@@ -19,9 +19,6 @@ using unitree_hg::msg::LowCmd;
 using unitree_hg::msg::LowState;
 using unitree_hg::msg::MotorCmd;
 
-// A dropped command is reported at most this often per input, s.
-constexpr double kDropReportSeconds = 1.0;
-
 size_t index_of(Input input) {return static_cast<size_t>(input);}
 
 const char * input_name(Input input)
@@ -319,19 +316,9 @@ void SafetyCore::on_command(Input input, const LowCmd & cmd, const WriterId & wr
 
 void SafetyCore::accept_command(InputState & in, const LowCmd & cmd, double now)
 {
-  const std::pair<const char *, float MotorCmd::*> fields[] = {
-    {"q", &MotorCmd::q}, {"dq", &MotorCmd::dq}, {"tau", &MotorCmd::tau}, {"kp", &MotorCmd::kp},
-    {"kd", &MotorCmd::kd}};
-  for (const auto & [name, member] : fields) {
-    for (int slot = in.slots.first; slot <= in.slots.last; ++slot) {
-      const float value = cmd.motor_cmd[slot].*member;
-      if (!std::isfinite(value)) {
-        report_drop(
-          in, "motor " + std::to_string(slot) + " (" + profile_.joints[slot].name + ") " +
-          name + " is " + number(value), now);
-        return;
-      }
-    }
+  if (const auto bad = non_finite_value(cmd)) {
+    latch("Command validation failed on " + in.topic + ": " + *bad, now, std::nullopt);
+    return;
   }
 
   in.newest = clipped(in, cmd);
@@ -351,21 +338,23 @@ void SafetyCore::accept_command(InputState & in, const LowCmd & cmd, double now)
   }
 }
 
-void SafetyCore::report_drop(InputState & in, const std::string & detail, double now)
+// The first non-finite q, dq, tau, kp or kd on any body slot of `cmd`, in that field
+// order, as "motor 20 (right_shoulder_pitch_joint) q is nan".
+std::optional<std::string> SafetyCore::non_finite_value(const LowCmd & cmd) const
 {
-  ++in.drops_unreported;
-  if (in.last_drop_report && now - *in.last_drop_report < kDropReportSeconds) {
-    return;
+  const std::pair<const char *, float MotorCmd::*> fields[] = {
+    {"q", &MotorCmd::q}, {"dq", &MotorCmd::dq}, {"tau", &MotorCmd::tau}, {"kp", &MotorCmd::kp},
+    {"kd", &MotorCmd::kd}};
+  for (const auto & [name, member] : fields) {
+    for (size_t slot = 0; slot < profile_.joints.size(); ++slot) {
+      const float value = cmd.motor_cmd[slot].*member;
+      if (!std::isfinite(value)) {
+        return "motor " + std::to_string(slot) + " (" + profile_.joints[slot].name + ") " +
+               name + " is " + number(value);
+      }
+    }
   }
-  const size_t count = in.drops_unreported;
-  std::string text = "dropped " +
-    (count == 1 ? std::string("a command") : std::to_string(count) + " commands") + " on " +
-    in.topic + " with a non-finite value (latest: " + detail + "); ";
-  text += in.newest ? "its last valid command is still relayed" :
-    "the input has no valid command yet";
-  events_.push_back({Event::Warn, text});
-  in.last_drop_report = now;
-  in.drops_unreported = 0;
+  return std::nullopt;
 }
 
 LowCmd SafetyCore::clipped(InputState & in, const LowCmd & cmd)

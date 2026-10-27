@@ -379,77 +379,118 @@ TEST(Clip, PositionVelocityTorqueAndGains)
   EXPECT_FALSE(core.estopped());
 }
 
-TEST(Clip, NonFiniteSampleIsDroppedAndHeld)
+TEST(Clip, NonFiniteSampleLatches)
 {
+  // H1-2 split, engaged: a NaN q on an upper slot latches, and its burst follows.
   H12Split rig;
-  LowCmd good = command(h12());
-  good.motor_cmd[20].q = 0.5F;
-  rig.core.on_command(Input::Upper, good, "A", 0.001);
-  ASSERT_EQ(rig.core.step(0.002)->motor_cmd[20].q, 0.5F);
-  rig.core.drain_events();
-
-  LowCmd bad = good;
+  ASSERT_TRUE(rig.core.step(0.0));
+  LowCmd bad = command(h12());
   bad.motor_cmd[20].q = std::numeric_limits<float>::quiet_NaN();
-  bad.motor_cmd[21].q = 0.3F;
-  rig.core.on_command(Input::Upper, bad, "A", 0.004);
-  const auto out = rig.core.step(0.006);
+  rig.core.on_command(Input::Upper, bad, "A", 0.002);
+  ASSERT_TRUE(rig.core.estopped());
+  EXPECT_EQ(
+    rig.core.estop_reason(),
+    "Command validation failed on /safety/lowcmd_upper_in: "
+    "motor 20 (right_shoulder_pitch_joint) q is nan");
+  const auto out = rig.core.step(0.004);
   ASSERT_TRUE(out);
-  EXPECT_EQ(out->motor_cmd[20].q, 0.5F);
-  EXPECT_EQ(out->motor_cmd[21].q, 0.0F) << "the whole sample is dropped";
-  const auto events = rig.core.drain_events();
-  EXPECT_EQ(count(events, Event::Warn), 1U) << texts(events);
-  EXPECT_EQ(count(events, Event::Error), 0U) << texts(events);
-  EXPECT_TRUE(has_event(events, Event::Warn, "/safety/lowcmd_upper_in")) << texts(events);
-  EXPECT_FALSE(rig.core.estopped());
+  expect_same(*out, golem_safety::estop_command(h12(), rig.cfg, *out));
 
-  // Every field, NaN and either infinity.
+  // G1 split, engaged: the same, then the estop command on every step.
+  const SafetyConfig g1_cfg = config(g1(), "sim_split");
+  SafetyCore g1_core(g1(), g1_cfg, false, kDomain);
+  g1_core.on_state(state_of(g1()), 0.0);
+  g1_core.on_command(Input::Lower, command(g1()), "lower", 0.001);
+  g1_core.on_command(Input::Upper, command(g1()), "upper", 0.001);
+  ASSERT_TRUE(g1_core.step(0.002));
+  LowCmd g1_bad = command(g1());
+  g1_bad.motor_cmd[20].q = std::numeric_limits<float>::quiet_NaN();
+  g1_core.on_command(Input::Upper, g1_bad, "upper", 0.003);
+  ASSERT_TRUE(g1_core.estopped());
+  EXPECT_TRUE(contains(g1_core.estop_reason(), "/safety/lowcmd_upper_in")) <<
+    g1_core.estop_reason();
+  EXPECT_TRUE(contains(g1_core.estop_reason(), "left_wrist_pitch_joint")) <<
+    g1_core.estop_reason();
+  const auto g1_out = g1_core.step(0.004);
+  ASSERT_TRUE(g1_out);
+  expect_same(*g1_out, golem_safety::estop_command(g1(), g1_cfg, *g1_out));
+
+  // Every field, NaN and either infinity, on both robots and every input; a body slot the
+  // input does not own counts too.
   const float values[] = {
     std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
     -std::numeric_limits<float>::infinity()};
-  for (const char * field : {"q", "dq", "tau", "kp", "kd"}) {
-    for (const float value : values) {
-      SCOPED_TRACE(std::string(field) + " = " + std::to_string(value));
-      H12Split each;
-      each.core.on_command(Input::Upper, good, "A", 0.001);
-      LowCmd broken = good;
-      field_of(broken.motor_cmd[13], field) = value;
-      broken.motor_cmd[20].q = 0.7F;
-      each.core.on_command(Input::Upper, broken, "A", 0.003);
-      const auto held = each.core.step(0.004);
-      ASSERT_TRUE(held);
-      EXPECT_EQ(held->motor_cmd[20].q, 0.5F);
-      EXPECT_EQ(count(each.core.drain_events(), Event::Warn), 1U);
-      EXPECT_FALSE(each.core.estopped());
+  struct Case
+  {
+    const RobotProfile & profile;
+    const char * config_name;
+    Input input;
+    const char * topic;
+    int slot;
+  };
+  const std::vector<Case> cases = {
+    {h12(), "sim_safety_split", Input::Upper, "/safety/lowcmd_upper_in", 13},
+    {h12(), "sim_safety_split", Input::Lower, "/safety/lowcmd_lower_in", 4},
+    {h12(), "sim_safety_split", Input::Lower, "/safety/lowcmd_lower_in", 26},
+    {h12(), "default_safety_full", Input::Full, "/safety/lowcmd_in", 26},
+    {g1(), "sim_split", Input::Upper, "/safety/lowcmd_upper_in", 3},
+    {g1(), "sim_arm_sdk", Input::Upper, "/safety/lowcmd_upper_in", 28},
+    {g1(), "full", Input::Full, "/safety/lowcmd_in", 28},
+  };
+  for (const Case & c : cases) {
+    for (const char * field : {"q", "dq", "tau", "kp", "kd"}) {
+      for (const float value : values) {
+        SCOPED_TRACE(
+          std::string(c.config_name) + " " + c.topic + " slot " + std::to_string(c.slot) +
+          " " + field + " = " + std::to_string(value));
+        SafetyCore core(c.profile, config(c.profile, c.config_name), false, kDomain);
+        core.on_state(state_of(c.profile), 0.0);
+        LowCmd broken = command(c.profile);
+        field_of(broken.motor_cmd[c.slot], field) = value;
+        core.on_command(c.input, broken, "writer", 0.001);
+        ASSERT_TRUE(core.estopped());
+        const std::string & reason = core.estop_reason();
+        EXPECT_TRUE(contains(reason, c.topic)) << reason;
+        EXPECT_TRUE(contains(reason, c.profile.joints[c.slot].name)) << reason;
+        EXPECT_TRUE(contains(reason, std::string(") ") + field + " is ")) << reason;
+      }
     }
   }
 }
 
-TEST(Clip, NonFiniteFirstSampleDoesNotEngage)
+TEST(Clip, NonFiniteFirstSampleLatches)
 {
-  const LowCmd zero = golem_safety::zero_command(h12());
-  SafetyCore core(h12(), config(h12(), "sim_safety_split"), false, kDomain);
+  // zero_stream: a first command that is not valid latches before any input engages; the
+  // burst is the estop command.
+  const SafetyConfig cfg = config(h12(), "sim_safety_split");
+  SafetyCore core(h12(), cfg, false, kDomain);
   core.on_state(state_of(h12()), 0.0);
+  ASSERT_TRUE(core.step(0.0));
   LowCmd bad = command(h12(), 0.1F);
   bad.motor_cmd[15].kd = std::numeric_limits<float>::quiet_NaN();
   core.on_command(Input::Upper, bad, "upper", 0.001);
-  auto out = core.step(0.002);
+  ASSERT_TRUE(core.estopped());
+  EXPECT_TRUE(contains(core.estop_reason(), "left_shoulder_yaw_joint")) << core.estop_reason();
+  const auto out = core.step(0.002);
   ASSERT_TRUE(out);
-  for (int slot = 12; slot <= 26; ++slot) {
-    EXPECT_EQ(out->motor_cmd[slot], zero.motor_cmd[slot]) << "slot " << slot;
-  }
+  expect_same(*out, golem_safety::estop_command(h12(), cfg, *out));
+  // A valid command after the latch changes nothing.
   core.on_command(Input::Upper, command(h12(), 0.1F), "upper", 0.003);
-  out = core.step(0.004);
-  ASSERT_TRUE(out);
-  EXPECT_EQ(out->motor_cmd[15].q, 0.1F);
+  expect_same(*core.step(0.004), golem_safety::estop_command(h12(), cfg, *out));
 
-  // engage_gate: nothing is written until every input has sent a valid command.
+  // engage_gate: the latch comes before engaging, so nothing is ever written.
   SafetyCore arm_sdk(g1(), config(g1(), "sim_arm_sdk"), false, kDomain);
   arm_sdk.on_state(state_of(g1()), 0.0);
   LowCmd g1_bad = command(g1());
   g1_bad.motor_cmd[20].dq = std::numeric_limits<float>::infinity();
   arm_sdk.on_command(Input::Upper, g1_bad, "upper", 0.001);
-  EXPECT_FALSE(arm_sdk.step(0.002));
-  EXPECT_FALSE(arm_sdk.estopped());
+  ASSERT_TRUE(arm_sdk.estopped());
+  arm_sdk.on_command(Input::Upper, command(g1()), "upper", 0.002);
+  for (int i = 0; i < 100; ++i) {
+    EXPECT_FALSE(arm_sdk.step(0.003 + i * kDt));
+  }
+  const auto events = arm_sdk.drain_events();
+  EXPECT_TRUE(has_event(events, Event::Error, "estop_latched_silent")) << texts(events);
 }
 
 TEST(Limits, MeasuredPastEstopLatches)

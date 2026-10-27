@@ -45,12 +45,11 @@ struct Event
 // first call (zero_command until an input engages). With engage_gate it counts as engaged
 // once every input of the mode has, and step() returns nothing until then.
 //
-// A command is dropped, and the input keeps its last valid command, when it has a
-// non-finite q, dq, tau, kp or kd on the input's slots; the drop is logged (Warn) at most
-// once a second per input, with the count. A dropped command does not engage its input.
-// A valid command is clipped on the input's slots: q to [q_clip_low, q_clip_high], dq and
-// tau to +-dq_clip and +-tau_clip, kp and kd to [0, kp_max] and [0, kd_max]. A kp or kd
-// above its maximum is logged (Warn) once per joint and gain.
+// A command is valid when q, dq, tau, kp and kd are finite on every body slot, the input's
+// own or not; any other command latches the estop. A valid command is clipped on the
+// input's slots: q to [q_clip_low, q_clip_high], dq and tau to +-dq_clip and +-tau_clip,
+// kp and kd to [0, kp_max] and [0, kd_max]. A kp or kd above its maximum is logged (Warn)
+// once per joint and gain.
 //
 // Single writer. Each input has a current writer, the writer of its first command. A
 // command from another writer is accepted, and its writer becomes current (Info), when the
@@ -58,6 +57,8 @@ struct Event
 // otherwise it latches the estop with "second writer on <topic>".
 //
 // The estop latches, one way until restart, on
+//   - a command with a non-finite value, before or after engaging: "Command validation
+//     failed on <topic>: motor <slot> (<joint>) <field> is <value>";
 //   - a /lowstate whose mode_machine is not the profile's, once the core is engaged (before
 //     that it is recorded and not checked further);
 //   - a /lowstate q past [q_estop_low, q_estop_high], |dq| past dq_estop, |tau_est| past
@@ -133,8 +134,6 @@ private:
     double writer_last = 0.0;        // arrival of the current writer's last command
     std::optional<unitree_hg::msg::LowCmd> newest;  // the newest valid command, clipped
     double newest_time = 0.0;                       // its arrival
-    size_t drops_unreported = 0;
-    std::optional<double> last_drop_report;
     bool misuse_reported = false;
   };
 
@@ -161,7 +160,7 @@ private:
   bool state_flowing(double now) const;
 
   void accept_command(InputState & in, const unitree_hg::msg::LowCmd & cmd, double now);
-  void report_drop(InputState & in, const std::string & detail, double now);
+  std::optional<std::string> non_finite_value(const unitree_hg::msg::LowCmd & cmd) const;
   unitree_hg::msg::LowCmd clipped(InputState & in, const unitree_hg::msg::LowCmd & cmd);
   std::optional<std::string> limit_violation(const unitree_hg::msg::LowState & state) const;
 

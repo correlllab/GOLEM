@@ -48,10 +48,11 @@ struct Event
 //     zero_command until an input engages. Each input engages on its own first valid
 //     command that arrives once those conditions hold (input_engaged, Info).
 //   - engage_gate: step() returns nothing until every input of the mode engages, at once,
-//     on a valid command that finds every input with a command, the newest /lowstate at
-//     most engage.max_state_age_seconds old, and on every slot of the mode's inputs the
-//     newest command's q within engage.max_position_error of the measured q
-//     (lowcmd_engage or arm_sdk_engage, Info).
+//     on a valid command that finds every input with a command no older than its stale
+//     time (below; when that is > 0), the newest /lowstate at most
+//     engage.max_state_age_seconds old, and on every slot of the mode's inputs the newest
+//     command's q within engage.max_position_error of the measured q (lowcmd_engage or
+//     arm_sdk_engage, Info).
 // A command that does not engage raises engage_refused (Warn) with the first reason, at
 // most once a second.
 //
@@ -192,12 +193,14 @@ private:
   {
     enum Kind
     {
-      NoState, StateAge, ModeMachine, NoEstopSample, NoCommand, StateNotFinite, FarCommand
+      NoState, StateAge, ModeMachine, NoEstopSample, NoCommand, QuietInput, StateNotFinite,
+      FarCommand
     } kind;
-    double value = 0.0;     // StateAge: the age, s; ModeMachine: the sample's; FarCommand: q
+    // StateAge: the age, s; ModeMachine: the sample's; QuietInput: the gap, s; FarCommand: q
+    double value = 0.0;
     double measured = 0.0;  // FarCommand: the measured q
     int slot = 0;           // StateNotFinite, FarCommand
-    const InputState * input = nullptr;  // NoCommand
+    const InputState * input = nullptr;  // NoCommand, QuietInput
   };
 
   // The transport-lag check's state: the robot's ms tick, unwrapped, against `now`.

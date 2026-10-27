@@ -57,12 +57,14 @@ struct Control
 {
   double publish_hz = 500.0;
   // Estop when /lowstate arrives this many ms later than the robot's tick clock
-  // implies; <= 0 disables it.
-  double state_lag_ms = 100.0;
+  // implies, on ROS domain 0 only; <= 0 disables it. Required: every config sets it, so
+  // no robot takes another's value by leaving it out.
+  double state_lag_ms = 0.0;
 };
 
 // Quiet-input thresholds, seconds. A quiet input or /lowstate is reported and its
-// last command keeps being relayed; a value <= 0 disables the report.
+// last command keeps being relayed. With startup.rule engage_gate, an input quiet for
+// longer than its threshold also keeps the gate shut. A value <= 0 disables both.
 struct Stale
 {
   double upper_seconds = 0.0;

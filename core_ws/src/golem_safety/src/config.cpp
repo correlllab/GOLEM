@@ -234,6 +234,16 @@ public:
     return static_cast<size_t>(found - choices.begin());
   }
 
+  // A finite number for a key with no default: leaving it out is an error, `what` says
+  // what to give.
+  double required_number(const std::string & name, const std::string & what) const
+  {
+    if (!has(name)) {
+      fail_at(name, "must be given: " + what);
+    }
+    return number_of(where_, node_[name], key(name));
+  }
+
   // As choice, for a key with no default: leaving it out is an error.
   size_t required_choice(const std::string & name, const std::vector<std::string> & choices) const
   {
@@ -434,7 +444,8 @@ SafetyConfig parse_checked(
   const Section control = root.section("control");
   control.allow_only({"publish_hz", "state_lag_ms"});
   config.control.publish_hz = control.positive("publish_hz", config.control.publish_hz);
-  config.control.state_lag_ms = control.number("state_lag_ms", config.control.state_lag_ms);
+  config.control.state_lag_ms = control.required_number(
+    "state_lag_ms", "the transport-lag estop threshold in ms, or 0 to turn the check off");
 
   const Section stale = root.section("stale");
   stale.allow_only({"upper_seconds", "lower_seconds", "state_seconds"});

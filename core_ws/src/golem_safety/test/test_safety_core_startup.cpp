@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -421,6 +422,76 @@ TEST(Startup, EngageGateRefusesFarCommand)
     stale_refused[0].second["reason"].as<std::string>();
 }
 
+TEST(Startup, EngageGateRefusesQuietInput)
+{
+  // G1 split: the lower controller sends once at t = 0 and stops; the upper one starts at
+  // t = 1.5. The gate stays shut on the dead lower command, and nothing latches.
+  const SafetyConfig cfg = config(g1(), "split");
+  ASSERT_EQ(cfg.stale.lower_seconds, 0.2);
+  SafetyCore core(g1(), cfg, false, kDomain);
+  core.on_state(state_of(g1()), 0.0);
+  core.on_command(Input::Lower, command(g1()), "lower", 0.0);
+  EXPECT_FALSE(core.step(0.0));
+  core.drain_events();
+  for (int i = 150; i < 250; ++i) {
+    const double t = i * kStep;
+    core.on_state(state_of(g1()), t);
+    core.on_command(Input::Upper, command(g1()), "upper", t);
+    ASSERT_FALSE(core.step(t)) << "t = " << t;
+  }
+  EXPECT_FALSE(core.estopped()) << core.estop_reason();
+  const auto events = core.drain_events();
+  const auto refused = named(events, "engage_refused");
+  ASSERT_EQ(refused.size(), 1U) << texts(events);
+  EXPECT_EQ(refused[0].first.kind, Event::Warn);
+  EXPECT_EQ(
+    refused[0].first.text,
+    "{\"event\": \"engage_refused\", \"mode\": \"split_mode\", "
+    "\"reason\": \"no command on /safety/lowcmd_lower_in for 1.500 s (> 0.2 s)\"}");
+  EXPECT_TRUE(named(events, "lowcmd_engage").empty());
+
+  // The lower controller comes back: the next command engages both inputs.
+  LowCmd lower = command(g1());
+  lower.motor_cmd[3].q = 0.1F;
+  core.on_state(state_of(g1()), 2.5);
+  core.on_command(Input::Lower, lower, "lower", 2.5);
+  const auto out = core.step(2.5);
+  ASSERT_TRUE(out);
+  EXPECT_EQ(out->motor_cmd[3].q, 0.1F);
+  EXPECT_EQ(named(core.drain_events(), "lowcmd_engage").size(), 1U);
+}
+
+TEST(Startup, EngageGateRefusesNonFiniteMeasuredQ)
+{
+  // A NaN measured q on a slot the mode drives keeps the gate shut and latches nothing
+  // (the /lowstate limit checks start at engagement).
+  const SafetyConfig cfg = config(g1(), "sim_arm_sdk");
+  SafetyCore core(g1(), cfg, false, kDomain);
+  LowState broken = state_of(g1());
+  broken.motor_state[20].q = std::numeric_limits<float>::quiet_NaN();
+  for (int i = 0; i < 50; ++i) {
+    const double t = i * kStep;
+    core.on_state(broken, t);
+    core.on_command(Input::Upper, command(g1()), "upper", t);
+    ASSERT_FALSE(core.step(t)) << "t = " << t;
+  }
+  EXPECT_FALSE(core.estopped()) << core.estop_reason();
+  const auto refused = named(core.drain_events(), "engage_refused");
+  ASSERT_EQ(refused.size(), 1U);
+  EXPECT_EQ(
+    refused[0].first.text,
+    "{\"event\": \"engage_refused\", \"mode\": \"arm_sdk_mode\", "
+    "\"reason\": \"motor 20 (left_wrist_pitch_joint) has a non-finite q in /lowstate\"}");
+
+  // A NaN on a leg, which arm_sdk_mode leaves to Unitree, does not.
+  SafetyCore legs(g1(), cfg, false, kDomain);
+  LowState leg_nan = state_of(g1());
+  leg_nan.motor_state[3].q = std::numeric_limits<float>::quiet_NaN();
+  legs.on_state(leg_nan, 0.0);
+  legs.on_command(Input::Upper, command(g1()), "upper", 0.0);
+  EXPECT_TRUE(legs.step(0.0));
+}
+
 TEST(Startup, ArmSdkEngageRamp)
 {
   const SafetyConfig cfg = config(g1(), "sim_arm_sdk");
@@ -672,7 +743,7 @@ TEST(Quiet, InputHeldAndReported)
   const std::vector<Case> cases = {
     {h12(), "sim_safety_split", Input::Lower, "split_mode_lower", "/safety/lowcmd_lower_in",
       0.2, 0, 101},
-    // Longer than the 2 s after which the upper input latched before.
+    // A gap of 3 s, past stale.upper_seconds (2.0).
     {h12(), "default_safety_split", Input::Upper, "split_mode_upper", "/safety/lowcmd_upper_in",
       2.0, 0, 301},
     {g1(), "split", Input::Lower, "split_mode_lower", "/safety/lowcmd_lower_in", 0.2, 0, 101},
@@ -724,6 +795,87 @@ TEST(Quiet, InputHeldAndReported)
     EXPECT_EQ(keys_of(r), (std::vector<std::string>{"event", "gap", "source", "topic"}));
     EXPECT_NEAR(r["gap"].as<double>(), (c.first_after - c.last_before) * kStep, 1e-4);
     EXPECT_EQ(r["source"].as<std::string>(), c.source);
+  }
+}
+
+TEST(Quiet, ArmSdkUpperHeldAtFullWeight)
+{
+  // Engaged at weight 1, then the upper input is silent for 3.01 s (stale.upper_seconds 2.0):
+  // the last command stays at weight 1, one Warn, no latch.
+  const SafetyConfig cfg = config(g1(), "sim_arm_sdk");
+  ASSERT_EQ(cfg.stale.upper_seconds, 2.0);
+  SafetyCore core(g1(), cfg, false, kDomain);
+  LowCmd upper = command(g1());
+  upper.motor_cmd[20].q = 0.05F;
+  const auto last = run(core, g1(), cfg, upper, 0, 150);
+  ASSERT_TRUE(last);
+  ASSERT_EQ(last->motor_cmd[29].q, 1.0F);
+  core.drain_events();
+  for (int i = 151; i <= 460; ++i) {
+    const double t = i * kStep;
+    core.on_state(state_of(g1()), t);
+    if (i >= 451) {
+      core.on_command(Input::Upper, upper, "upper", t);
+    }
+    const auto out = core.step(t);
+    ASSERT_TRUE(out) << "t = " << t;
+    ASSERT_EQ(out->motor_cmd[29].q, 1.0F) << "t = " << t;
+    for (int slot = 12; slot <= 28; ++slot) {
+      ASSERT_EQ(out->motor_cmd[slot], last->motor_cmd[slot]) << "t = " << t;
+    }
+    ASSERT_FALSE(core.estopped()) << core.estop_reason();
+  }
+  const auto events = core.drain_events();
+  EXPECT_EQ(count(events, Event::Warn), 1U) << texts(events);
+  const auto quiet = named(events, "input_quiet");
+  ASSERT_EQ(quiet.size(), 1U) << texts(events);
+  EXPECT_EQ(quiet[0].second["source"].as<std::string>(), "arm_sdk_mode");
+  EXPECT_EQ(quiet[0].second["seconds"].as<double>(), 2.0);
+  const auto resumed = named(events, "input_resumed");
+  ASSERT_EQ(resumed.size(), 1U) << texts(events);
+  EXPECT_NEAR(resumed[0].second["gap"].as<double>(), 3.01, 1e-4);
+}
+
+TEST(Quiet, FullInputUsesLowerSeconds)
+{
+  struct Case
+  {
+    const RobotProfile & profile;
+    const char * config_name;
+  };
+  for (const Case & c : {Case{h12(), "default_safety_full"}, Case{g1(), "full"}}) {
+    SCOPED_TRACE(c.config_name);
+    const SafetyConfig cfg = config(c.profile, c.config_name);
+    ASSERT_EQ(cfg.stale.lower_seconds, 0.2);
+    ASSERT_LE(cfg.stale.upper_seconds, 0.0);
+    SafetyCore core(c.profile, cfg, false, kDomain);
+    const LowCmd held = command(c.profile, 0.05F);
+    // The full input sends at t = 0, then from t = 1.0.
+    for (int i = 0; i <= 110; ++i) {
+      const double t = i * kStep;
+      core.on_state(state_of(c.profile), t);
+      if (i == 0 || i >= 100) {
+        core.on_command(Input::Full, held, "full", t);
+      }
+      const auto out = core.step(t);
+      ASSERT_TRUE(out) << "t = " << t;
+      ASSERT_EQ(out->motor_cmd[3], held.motor_cmd[3]) << "t = " << t;
+      ASSERT_FALSE(core.estopped()) << core.estop_reason();
+      if (i == 0) {
+        core.drain_events();
+      }
+    }
+    const auto events = core.drain_events();
+    EXPECT_EQ(count(events, Event::Warn), 1U) << texts(events);
+    const auto quiet = named(events, "input_quiet");
+    ASSERT_EQ(quiet.size(), 1U) << texts(events);
+    const YAML::Node & q = quiet[0].second;
+    EXPECT_EQ(q["seconds"].as<double>(), 0.2);
+    EXPECT_GT(q["age"].as<double>(), 0.2);
+    EXPECT_LE(q["age"].as<double>(), 0.2 + kStep + 1e-9);
+    EXPECT_EQ(q["source"].as<std::string>(), "full_body_mode");
+    EXPECT_EQ(q["topic"].as<std::string>(), "/safety/lowcmd_in");
+    EXPECT_EQ(named(events, "input_resumed").size(), 1U) << texts(events);
   }
 }
 
@@ -814,7 +966,7 @@ TEST(Lag, Domain0LateTicksLatch)
     const SafetyConfig g1_cfg = config(g1(), "split");
     ASSERT_EQ(g1_cfg.control.state_lag_ms, 0.0);
     SafetyCore core(g1(), g1_cfg, false, kRealRobotDomain);
-    run(core, g1(), g1_cfg, command(g1()), 0, 0);
+    ASSERT_TRUE(run(core, g1(), g1_cfg, command(g1()), 0, 0)) << "engaged";
     feed(core, state_of(g1()), 1000);
     EXPECT_FALSE(core.estopped()) << core.estop_reason();
   }

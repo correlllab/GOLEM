@@ -566,8 +566,9 @@ void SafetyCore::try_engage(InputState & in, double now)
 // Why the newest commands cannot engage now, the first reason in this order: no
 // /lowstate; with engage_gate, a /lowstate older than max_state_age_seconds; a newest
 // /lowstate from another robot; with use_estop, no hardware estop sample; and with
-// engage_gate, an input with no command, a non-finite measured q, or the slot whose
-// command is furthest from the measured q when that is beyond max_position_error.
+// engage_gate, an input with no command, an input whose newest command is older than its
+// stale time (when that is > 0), a non-finite measured q, or the slot whose command is
+// furthest from the measured q when that is beyond max_position_error.
 std::optional<SafetyCore::Refusal> SafetyCore::refusal(double now) const
 {
   const bool gate = config_.startup.rule == StartupRule::EngageGate;
@@ -595,6 +596,17 @@ std::optional<SafetyCore::Refusal> SafetyCore::refusal(double now) const
     const InputState & in = inputs_[index_of(input)];
     if (!in.newest) {
       Refusal r{Refusal::NoCommand};
+      r.input = &in;
+      return r;
+    }
+  }
+  // A controller that sent once and stopped must not be engaged on its last command.
+  for (const Input input : mode_inputs_) {
+    const InputState & in = inputs_[index_of(input)];
+    const double quiet = now - in.newest_time;
+    if (in.stale_seconds > 0.0 && quiet > in.stale_seconds) {
+      Refusal r{Refusal::QuietInput};
+      r.value = quiet;
       r.input = &in;
       return r;
     }
@@ -641,6 +653,9 @@ std::string SafetyCore::refusal_text(const Refusal & r) const
              " or " + config_.estop.plugged_in_topic;
     case Refusal::NoCommand:
       return "no command received yet on " + r.input->topic;
+    case Refusal::QuietInput:
+      return "no command on " + r.input->topic + " for " + fixed(r.value, 3) + " s (> " +
+             python_float(r.input->stale_seconds) + " s)";
     case Refusal::StateNotFinite:
       return joint(r.slot) + " has a non-finite q in " + state_topic;
     case Refusal::FarCommand:

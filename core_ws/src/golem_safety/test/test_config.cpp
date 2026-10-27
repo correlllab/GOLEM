@@ -81,12 +81,16 @@ private:
   std::string path_;
 };
 
-// startup.rule and estop_response.after have no default, so most tests that are not about
-// them leave them to this: `text` plus whichever of the two sections it does not give.
+// startup.rule, estop_response.after and control.state_lag_ms have no default, so most
+// tests that are not about them leave them to this: `text` plus whichever of the three
+// sections it does not give, with the robot's carried values.
 std::string completed(const std::string & text, const RobotProfile & profile)
 {
   const bool g1 = profile.robot == "g1";
   std::string out = text;
+  if (!contains(text, "control:")) {
+    out += g1 ? "control: {state_lag_ms: 0.0}\n" : "control: {state_lag_ms: 100.0}\n";
+  }
   if (!contains(text, "startup:")) {
     out += g1 ? "startup: {rule: engage_gate}\n" : "startup: {rule: zero_stream}\n";
   }
@@ -272,7 +276,8 @@ TEST(Config, CarriedH12ConfigsAreZeroStreamAndBurst)
 TEST(Config, StartupRuleIsRequired)
 {
   // A G1 config that leaves the rule out would otherwise stream zeros before its engage gate.
-  std::string message = parse_raw_error("estop_response: {after: keep_writing}\n", g1());
+  const std::string lag = "control: {state_lag_ms: 0.0}\n";
+  std::string message = parse_raw_error(lag + "estop_response: {after: keep_writing}\n", g1());
   EXPECT_TRUE(contains(message, "'startup.rule'")) << message;
   EXPECT_TRUE(contains(message, "g1")) << message;
   EXPECT_TRUE(contains(message, "case.yaml")) << message;
@@ -280,34 +285,70 @@ TEST(Config, StartupRuleIsRequired)
 
   EXPECT_TRUE(
     contains(
-      parse_raw_error("startup: {}\nestop_response: {after: keep_writing}\n", g1()),
+      parse_raw_error(lag + "startup: {}\nestop_response: {after: keep_writing}\n", g1()),
       "'startup.rule'"));
   EXPECT_TRUE(
     contains(
-      parse_raw_error("estop_response: {after: burst_then_silence}\n", h12()), "'startup.rule'"));
+      parse_raw_error(lag + "estop_response: {after: burst_then_silence}\n", h12()),
+      "'startup.rule'"));
   EXPECT_EQ(parse("startup: {rule: engage_gate}\n", g1()).startup.rule, StartupRule::EngageGate);
   EXPECT_EQ(parse("startup: {rule: zero_stream}\n", h12()).startup.rule, StartupRule::ZeroStream);
 
   // The same through a file: the message names the file too.
-  const TempConfig file("mode: split_mode\nestop_response: {after: burst_then_silence}\n");
+  const TempConfig file(
+    "mode: split_mode\n" + lag + "estop_response: {after: burst_then_silence}\n");
   message = error_of([&] {golem_safety::load_safety_config(file.path(), h12());});
   EXPECT_TRUE(contains(message, file.path())) << message;
   EXPECT_TRUE(contains(message, "'startup.rule'")) << message;
 }
 
+TEST(Config, StateLagMsIsRequired)
+{
+  // Everything but control.state_lag_ms.
+  const std::string h12_rest =
+    "startup: {rule: zero_stream}\nestop_response: {after: burst_then_silence}\n";
+  const std::string g1_rest =
+    "startup: {rule: engage_gate}\nestop_response: {after: keep_writing}\n";
+  std::string message = parse_raw_error(h12_rest, h12());
+  EXPECT_TRUE(contains(message, "'control.state_lag_ms'")) << message;
+  EXPECT_TRUE(contains(message, "must be given")) << message;
+  EXPECT_TRUE(contains(message, "h12")) << message;
+  EXPECT_TRUE(contains(message, "case.yaml")) << message;
+  message = parse_raw_error("control: {publish_hz: 500.0}\n" + g1_rest, g1());
+  EXPECT_TRUE(contains(message, "'control.state_lag_ms'")) << message;
+  EXPECT_TRUE(contains(message, "g1")) << message;
+
+  EXPECT_DOUBLE_EQ(
+    parse_raw("control: {state_lag_ms: 100.0}\n" + h12_rest, h12()).control.state_lag_ms, 100.0);
+  EXPECT_DOUBLE_EQ(
+    parse_raw("control: {state_lag_ms: 0}\n" + g1_rest, g1()).control.state_lag_ms, 0.0);
+  EXPECT_TRUE(
+    contains(
+      parse_raw_error("control: {state_lag_ms: .nan}\n" + h12_rest, h12()), "state_lag_ms"));
+
+  // The same through a file: the message names the file.
+  const TempConfig file("mode: split_mode\n" + h12_rest);
+  message = error_of([&] {golem_safety::load_safety_config(file.path(), h12());});
+  EXPECT_TRUE(contains(message, file.path())) << message;
+  EXPECT_TRUE(contains(message, "'control.state_lag_ms'")) << message;
+}
+
 TEST(Config, EstopResponseAfterIsRequired)
 {
-  std::string message = parse_raw_error("startup: {rule: zero_stream}\n", h12());
+  const std::string lag = "control: {state_lag_ms: 100.0}\n";
+  std::string message = parse_raw_error(lag + "startup: {rule: zero_stream}\n", h12());
   EXPECT_TRUE(contains(message, "'estop_response.after'")) << message;
   EXPECT_TRUE(contains(message, "h12")) << message;
   EXPECT_TRUE(contains(message, "burst_then_silence")) << message;
 
   EXPECT_TRUE(
     contains(
-      parse_raw_error("startup: {rule: zero_stream}\nestop_response: {mode: zero}\n", h12()),
+      parse_raw_error(
+        lag + "startup: {rule: zero_stream}\nestop_response: {mode: zero}\n", h12()),
       "'estop_response.after'"));
   EXPECT_TRUE(
-    contains(parse_raw_error("startup: {rule: engage_gate}\n", g1()), "'estop_response.after'"));
+    contains(
+      parse_raw_error(lag + "startup: {rule: engage_gate}\n", g1()), "'estop_response.after'"));
   EXPECT_EQ(
     parse("estop_response: {after: keep_writing}\n", h12()).estop_response.after,
     EstopAfter::KeepWriting);

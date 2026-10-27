@@ -7,9 +7,9 @@ and `g1_locomotion` refuse any other command topic. It clips each command,
 decides when to take control, and latches an estop when something goes wrong.
 
 Every config key, limit and event is in the
-[package README](../../core_ws/src/g1/g1_safety_layer/README.md) and
-[`docs/config.md`](../../core_ws/src/g1/g1_safety_layer/docs/config.md) there; the values are in
-[`config/`](../../core_ws/src/g1/g1_safety_layer/config/). This page names the
+[package README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_safety_layer/README.md) and
+[`docs/config.md`](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_safety_layer/docs/config.md) there; the values are in
+[`config/`](https://github.com/correlllab/GOLEM/tree/main/core_ws/src/g1/g1_safety_layer/config). This page names the
 keys rather than copying their values.
 
 > **Not covered:** the Dex3 hand driver (`g1_dex3`) writes

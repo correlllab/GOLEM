@@ -1,0 +1,88 @@
+site_name: GOLEM
+site_description: >-
+  GOLEM (Generalized Open Layered Embodied Modules): the software stack for the
+  Correll Lab's Unitree H1-2 and G1 humanoids, in simulation and on the robot.
+site_url: https://correlllab.github.io/GOLEM/
+repo_url: https://github.com/correlllab/GOLEM
+repo_name: correlllab/GOLEM
+edit_uri: edit/main/docs/
+docs_dir: docs
+exclude_docs: |
+  requirements-docs.txt
+  superpowers/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Install and run:
+      - Setup: SETUP.md
+      - Running the stack: RUNNING.md
+      - macOS (Apple Silicon): MACOS.md
+      - Navigation demo: NAVIGATION_DEMO.md
+  - Debugging and testing:
+      - DDS tuning: DDS_TUNING.md
+      - ROS MCP debug: ROS_MCP_DEBUG.md
+      - Docker testing: DOCKER_TESTING.md
+  - The G1:
+      - g1/index.md
+      - First real session: g1/first-session.md
+      - Packages: g1/packages.md
+      - Safety layer: g1/safety.md
+      - Control in sim and on the robot: g1/control-path.md
+      - DDS and networking: g1/dds.md
+      - Walking: g1/walking.md
+      - Navigation: g1/navigation.md
+      - Frontier exploration: g1/exploration.md

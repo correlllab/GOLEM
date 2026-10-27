@@ -82,3 +82,6 @@ core.*
 
 # Claude Code local settings
 /.claude/
+
+# MkDocs site
+/site/

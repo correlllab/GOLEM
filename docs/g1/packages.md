@@ -10,12 +10,12 @@ full details.
 | Package | What it does | Key nodes and launch files | README |
 |---|---|---|---|
 | `g1_bringup` | Starts the whole stack, on the real G1 or in the sim. Launch only. | `g1_bringup.launch.py` (real), `g1_sim_bringup.launch.py` (sim), `g1_core.launch.py` (shared) | none; each launch file's docstring, and `CLAUDE.md` §6 |
-| `g1_safety_layer` | The only writer of the body command topics. Clips commands, gates engagement, latches estops. See [Safety layer](safety.md). | `safety_node` | [README](../../core_ws/src/g1/g1_safety_layer/README.md) |
-| `g1_control` | Arm IK controller (Pink) for the 14 arm joints. Holds the waist. | `frame_task_server` (`/frame_task`, `/named_config`), `dual_arm_server`, `joint_state_publisher` | [README](../../core_ws/src/g1/g1_control/README.md) |
-| `g1_locomotion` | HOMIE's walking policy on the legs, driven by `/cmd_vel`. | `locomotion_node` | [README](../../core_ws/src/g1/g1_locomotion/README.md) |
-| `g1_dex3` | Dex3-1 hand driver. Bypasses the safety layer. | `dex3_hands` (`/<side>/hand/set_pose`, `open`, `close`, `release`); `hands.launch.py` | [README](../../core_ws/src/g1/g1_dex3/README.md) |
-| `g1_navigation` | Odometry (FAST_LIO or sim ground truth), a 2D map (slam_toolbox) and Nav2; the frontier explorer. Sim only for now. | `g1_navigation.launch.py`, `livox_to_pointcloud`, `level_frame`, `body_to_pelvis`, `frontier_explore` | [README](../../core_ws/src/g1/g1_navigation/README.md) |
-| `g1_description` | G1 URDFs and meshes, the joint table (names, DDS slots, limits) and the DDS slot layout. | `display.launch.py` (RViz with joint sliders) | [README](../../core_ws/src/g1/g1_description/README.md) |
+| `g1_safety_layer` | The only writer of the body command topics. Clips commands, gates engagement, latches estops. See [Safety layer](safety.md). | `safety_node` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_safety_layer/README.md) |
+| `g1_control` | Arm IK controller (Pink) for the 14 arm joints. Holds the waist. | `frame_task_server` (`/frame_task`, `/named_config`), `dual_arm_server`, `joint_state_publisher` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_control/README.md) |
+| `g1_locomotion` | HOMIE's walking policy on the legs, driven by `/cmd_vel`. | `locomotion_node` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_locomotion/README.md) |
+| `g1_dex3` | Dex3-1 hand driver. Bypasses the safety layer. | `dex3_hands` (`/<side>/hand/set_pose`, `open`, `close`, `release`); `hands.launch.py` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_dex3/README.md) |
+| `g1_navigation` | Odometry (FAST_LIO or sim ground truth), a 2D map (slam_toolbox) and Nav2; the frontier explorer. Sim only for now. | `g1_navigation.launch.py`, `livox_to_pointcloud`, `level_frame`, `body_to_pelvis`, `frontier_explore` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_navigation/README.md) |
+| `g1_description` | G1 URDFs and meshes, the joint table (names, DDS slots, limits) and the DDS slot layout. | `display.launch.py` (RViz with joint sliders) | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_description/README.md) |
 
 ## Shared with the H1-2
 
@@ -34,7 +34,7 @@ Outside `core_ws`:
   `g1_description` installs and the sim builds its robot from. Without it the
   G1 wrappers stop with `git submodule update --init third_party/leprechaun_g1`.
 - HOMIE's policy is in `core_ws/src/g1/g1_locomotion/policy/`
-  ([README](../../core_ws/src/g1/g1_locomotion/policy/README.md)), for
+  ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_locomotion/policy/README.md)), for
   non-commercial use only. The containers mount it at `/home/code/g1_locomotion`.
 
 ## Tests

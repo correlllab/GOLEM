@@ -49,7 +49,7 @@ bringup enforces (`safety_config:=split`, `start_position_verified:=true`, a
 gantry because the split estop turns every motor off) are in
 `g1_bringup.launch.py`'s docstring and in [Safety layer](safety.md).
 
-More: the [g1_locomotion README](../../core_ws/src/g1/g1_locomotion/README.md)
+More: the [g1_locomotion README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_locomotion/README.md)
 (behaviour, faults, real-time limits, configs) and the
-[policy README](../../core_ws/src/g1/g1_locomotion/policy/README.md)
+[policy README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_locomotion/policy/README.md)
 (HOMIE, its credits and its non-commercial licence).

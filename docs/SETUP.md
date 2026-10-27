@@ -69,7 +69,7 @@ The build/run scripts resolve their own location, so they can be invoked from
 any directory.
 
 For how the images are layered, what is pinned and why, see
-[`../docker/BUILD.md`](../docker/BUILD.md).
+[`../docker/BUILD.md`](https://github.com/correlllab/GOLEM/blob/main/docker/BUILD.md).
 
 ## Upgrading a checkout from before the HAMS → GOLEM rename
 

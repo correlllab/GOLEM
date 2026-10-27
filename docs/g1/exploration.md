@@ -42,4 +42,4 @@ g1_navigation README list them). The test is
 the tested path; these commands have not been run by hand.
 
 More: the Frontier exploration section of the
-[g1_navigation README](../../core_ws/src/g1/g1_navigation/README.md#frontier-exploration).
+[g1_navigation README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_navigation/README.md#frontier-exploration).

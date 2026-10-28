@@ -18,7 +18,9 @@ stall for tens of ms while a participant that joins it, this probe's included, i
   carries the output's q (the zero-gain stream before the input engages, or a sample with a q
   that safety_node clipped to its limits; it relays q unchanged otherwise). `repeated`: the
   newest input with that q was matched already, since an input is matched at most once
-  (safety_node sending again a command that the controller has not renewed).
+  (safety_node sending again a command that the controller has not renewed). The outputs
+  before the recording are matched as well, but not counted, so a repeat at its start counts
+  as a repeat.
 
 The JSON on stdout gives the output's and the input's rate, how many distinct q the input
 carried (the controller's steps), the latency and the unmatched counts, in the units named by
@@ -48,10 +50,12 @@ class Matching:
         return self.no_equal_input + self.repeated
 
 
-def match_outputs(inputs, outputs) -> Matching:
+def match_outputs(inputs, outputs, since=-math.inf) -> Matching:
     """Match each output sample to the newest input before it with the same q.
 
     inputs and outputs are (arrival time in s, upper-slot q tuple), each in arrival order.
+    Outputs that arrived before since are matched too, so that an input one of them took is
+    not taken again, but only the outputs from since on are counted.
     """
     newest = {}  # q -> index of the newest input with that q received so far
     matched = set()
@@ -64,12 +68,16 @@ def match_outputs(inputs, outputs) -> Matching:
             newest[inputs[next_input][1]] = next_input
             next_input += 1
         index = newest.get(q)
+        fresh = index is not None and index not in matched
+        if fresh:
+            matched.add(index)
+        if arrival < since:
+            continue
         if index is None:
             no_equal_input += 1
-        elif index in matched:
+        elif not fresh:
             repeated += 1
         else:
-            matched.add(index)
             latencies.append(arrival - inputs[index][0])
     return Matching(latencies, no_equal_input, repeated)
 
@@ -154,7 +162,9 @@ def record(slots: range, input_topic: str, output_topic: str, settle: float, sec
         return on_message
 
     rclpy.init()
-    node = rclpy.create_node('relay_latency_probe')
+    # no /rosout writer or parameter services: fewer endpoints for the stack to discover
+    node = rclpy.create_node('relay_latency_probe', enable_rosout=False,
+                             start_parameter_services=False)
     node.create_subscription(LowCmd, input_topic, recorder(inputs), qos)
     node.create_subscription(LowCmd, output_topic, recorder(outputs), qos)
     executor = SingleThreadedExecutor()
@@ -207,7 +217,7 @@ def main() -> int:
         window_outputs = [sample for sample in outputs if start <= sample[0] < end]
         window_inputs = [sample for sample in inputs if start <= sample[0] < end]
         matching = match_outputs([sample for sample in inputs if sample[0] < end],
-                                 window_outputs)
+                                 [sample for sample in outputs if sample[0] < end], since=start)
         result = {
             'robot': args.robot,
             'domain': int(os.environ['ROS_DOMAIN_ID']),

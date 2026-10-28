@@ -104,6 +104,21 @@ def test_a_repeated_q_matches_its_newest_input():
     assert sorted(matching.latencies)[10:] == pytest.approx([0.0017] * 10)
 
 
+def test_a_held_repeat_at_the_window_start_is_a_repeat():
+    # One input at 0 ms, relayed at 0.5 ms, before the window that starts at 1 ms; the relay
+    # sends it again at 2.5 ms, inside the window, with no new input. A second input at 3 ms
+    # is relayed at 3.5 ms. A zero-gain sample at -1 ms is before the window too.
+    zero = tuple(0.0 for _ in range(15))
+    inputs = [(0.0, pose(1)), (0.003, pose(2))]
+    outputs = [(-0.001, zero), (0.0005, pose(1)), (0.0025, pose(1)), (0.0035, pose(2))]
+
+    matching = probe.match_outputs(inputs, outputs, since=0.001)
+
+    assert matching.repeated == 1
+    assert matching.no_equal_input == 0
+    assert matching.latencies == pytest.approx([0.0005])
+
+
 def test_output_rate_from_arrival_times():
     # 1001 arrivals: 999 intervals of 2 ms and one gap of 10 ms
     times = [0.0]

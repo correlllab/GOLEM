@@ -235,10 +235,10 @@ threads too, then waits for the next period:
 - `rt/lowstate` reached the node 41-54 ms late at 1.5 CPUs and 64-73 ms
     late at 1.0 CPUs, so the node did not start. In four runs (two at each
     cap) it was still waiting, logging why, when the test gave up 209-227 s
-    of sim time in, and the sim's stand-in kept the robot standing. In earlier runs of this code it never started at
-    1.0 CPUs (6 of 6), and at 1.5 CPUs it started in 2 of 5 (not counting
-    one with the sim at a real-time factor of 0.06), then faulted within 2 s
-    on a command 27.1 or 59.1 ms late.
+    of sim time in. In earlier runs of this code it never started at 1.0
+    CPUs (6 of 6), and at 1.5 CPUs it started in 2 of 5 (not counting one
+    with the sim at a real-time factor of 0.06), then faulted within 2 s on a
+    command 27.1 or 59.1 ms late.
 - Capped at 1.5 CPUs while walking (three runs), it faulted on a command
     25.5-35.9 ms late, 0.57-0.87 s after the cap, with the robot still up.
     The safety layer of those runs then held its last target until its 1 s
@@ -294,9 +294,11 @@ latency fault cannot see that part.
 
 ## Before using it on the robot
 
-- Only one program may command `rt/lowcmd`. Split mode needs Unitree's
-    controller released first; that is a manual operator step, and nothing in
-    this stack does it.
+- Only one program may command `rt/lowcmd`. The robot runs in Unitree's
+    debug mode, with Unitree's controller released, from before the bringup
+    starts: `golem_safety` writes every motor from its first moment. Entering
+    debug mode is a manual operator step that nothing in this stack does
+    (`docs/g1/first-session.md`).
 - Support the robot (a gantry): `split.yaml`'s estop zeroes every motor.
 - After the pre-pose the node holds the legs at the default pose until you
     call `ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger`

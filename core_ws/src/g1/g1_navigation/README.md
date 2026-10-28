@@ -18,9 +18,9 @@ the robot to the frontiers of the map until none is left
 
 ```bash
 # with the sim's bringup (golem_bringup): the core, the walking node and this
-ros2 launch golem_bringup g1_sim.launch.py use_locomotion:=true use_nav:=true
-ros2 launch golem_bringup g1_sim.launch.py use_locomotion:=true use_nav:=true odom_source:=sim_gt
-ros2 launch golem_bringup g1_sim.launch.py use_locomotion:=true use_nav:=true frontier_explore:=true
+ros2 launch golem_bringup g1_sim.launch.py use_nav:=true
+ros2 launch golem_bringup g1_sim.launch.py use_nav:=true odom_source:=sim_gt
+ros2 launch golem_bringup g1_sim.launch.py use_nav:=true frontier_explore:=true
 
 # alone, beside a running core
 ros2 launch g1_navigation g1_navigation.launch.py                          # real robot, FAST_LIO
@@ -381,14 +381,14 @@ falls back to its defaults without a warning.
 ## In the G1 sim
 
 `tests/g1/test_sim_nav.sh` (`GOLEM_SIM_ODOM=1` for `sim_gt`) runs the G1
-RoboCasa sim with its sensors and `g1_sim.launch.py use_locomotion:=true
-use_nav:=true`, and sends one goal: by default 2.48 m from the spawn in open
-floor, picked from the sim's own geometry (a 57 deg turn in place, then a walk),
-or `NAV_GOAL`'s (the corridor above: a turn, then 7.6-7.7 m around the
-counter peninsula). After the goal it stops the sim, then the bringup, so the
-robot stands to the end of the recording (the other way round, the safety
-layer's exit estop turns every motor off while the sim runs, and the robot
-falls).
+RoboCasa sim with its sensors and `g1_sim.launch.py use_nav:=true`, and,
+once the walking node has released the sim's elastic band, sends one goal: by
+default 2.48 m from the spawn in open floor, picked from the sim's own geometry
+(a 57 deg turn in place, then a walk), or `NAV_GOAL`'s (the corridor above: a
+turn, then 7.6-7.7 m around the counter peninsula). After the goal it stops the
+sim, then the bringup, so the robot stands to the end of the recording (the
+other way round, the safety layer stops writing `rt/lowcmd` while the sim runs,
+the sim turns every motor off, and the robot falls).
 Eight runs at the current settings (default goal: two fastlio, one `sim_gt`;
 corridor: four fastlio, one `sim_gt`; host load 1.0-16.7, real-time factor
 0.88-1.00 per run and 0.89-1.00 from the goal to its result; for a second it
@@ -444,7 +444,7 @@ It has not run on the robot. `tests/g1/test_sim_explore.sh` is the tested
 path ([below](#exploring-in-the-g1-sim)); the commands here were not run by hand.
 
 ```bash
-ros2 launch golem_bringup g1_sim.launch.py use_locomotion:=true use_nav:=true frontier_explore:=true
+ros2 launch golem_bringup g1_sim.launch.py use_nav:=true frontier_explore:=true
 ros2 action send_goal /skill/frontier_explore custom_ros_messages/action/SkillFrontierExplore \
     "{timeout: {sec: 120}}" --feedback
 ```
@@ -532,8 +532,9 @@ and 804 cells, 1.5-1.6 m); it was seen on the way after 2-3 s. On the robot, wit
 
 `tests/g1/test_sim_explore.sh` (`GOLEM_SIM_ODOM=1` for `sim_gt`) runs the
 G1 sim in the nav test's kitchen and spawn, with
-`g1_sim.launch.py use_locomotion:=true use_nav:=true
-frontier_explore:=true`, and sends one `SkillFrontierExplore` goal (timeout
+`g1_sim.launch.py use_nav:=true frontier_explore:=true`, and, once the
+walking node has released the sim's elastic band, sends one
+`SkillFrontierExplore` goal (timeout
 120 s, the defaults otherwise). It ends when the explorer reports, then stops
 the sim and the bringup as the nav test does. The floor the robot can reach
 comes from the sim's own geometry (`scene.npz`, the nav test's grid): 6166

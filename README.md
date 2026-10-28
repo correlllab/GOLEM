@@ -46,23 +46,24 @@ Isaac (H1-2 only) — see [`docs/MACOS.md`](docs/MACOS.md).
 ## The G1
 
 GOLEM also runs the Unitree G1 (29 DoF, two Dex3-1 hands): its own packages in
-`core_ws/src/g1/` (HOMIE walking policy, Dex3-1 hands, navigation, bringup,
-description), the safety layer and arm IK it shares with the H1-2
-(`core_ws/src/golem_safety`, `core_ws/src/golem_upper_ik`), its robot
-description in the `third_party/leprechaun_g1` submodule, and a RoboCasa sim in
-`golem_robocasa/g1/`. The H1-2 stays the default;
-`--g1` on a wrapper, or `GOLEM_ROBOT=g1`, selects the G1 (x86 Linux, RoboCasa
-only). The images are the same.
+`core_ws/src/g1/` (HOMIE walking policy, Dex3-1 hands, navigation,
+description), the safety layer, arm IK and bringup it shares with the H1-2
+(`core_ws/src/golem_safety`, `core_ws/src/golem_upper_ik`,
+`core_ws/src/golem_bringup`), its robot description in the
+`third_party/leprechaun_g1` submodule, and a RoboCasa sim in
+`golem_robocasa/g1/`. The H1-2 stays the default; `--g1` on a wrapper, or
+`GOLEM_ROBOT=g1`, selects the G1 (x86 Linux, RoboCasa only). The images are
+the same.
 
 ```bash
 tests/g1/test_sim_bringup.sh                          # the G1 acceptance test (arms); see tests/g1/README.md
-docker/scripts/docker_stack.sh up robocasa --g1       # the G1 sim and its arms bringup
+docker/scripts/docker_stack.sh up robocasa --g1       # the G1 sim and its bringup (the arms and HOMIE)
 ```
 
-On the real G1 the whole stack runs in Docker on a laptop wired to the robot.
-Nothing has run on it yet; the first session follows
-[`docs/g1/first-session.md`](docs/g1/first-session.md). Start at
-[`docs/g1/index.md`](docs/g1/index.md).
+On the real G1 the whole stack runs in Docker on a laptop wired to the robot,
+with the robot in Unitree's debug mode. Nothing has run on it yet; the first
+session follows [`docs/g1/first-session.md`](docs/g1/first-session.md). Start
+at [`docs/g1/index.md`](docs/g1/index.md).
 
 **Licence note.** HOMIE's walking policy in
 `core_ws/src/g1/g1_locomotion/policy/` (from
@@ -76,7 +77,7 @@ are MIT. See the policy's `README.md`.
 
 | Path | What it is |
 |---|---|
-| `core_ws/` | the ROS 2 workspace — 28 packages, the G1's in `core_ws/src/g1/`; where most development happens |
+| `core_ws/` | the ROS 2 workspace — 25 packages, the G1's in `core_ws/src/g1/`; where most development happens |
 | `golem_robocasa/` | RoboCasa/MuJoCo simulator entry point for both robots and its ROS/DDS bridges; the G1 sim in `golem_robocasa/g1/` |
 | `CL_isaaclab_sim/` | Isaac Lab simulator (H1-2) |
 | `CL_Assets/` | URDF meshes, MuJoCo XML, Isaac USD (Git-LFS) |

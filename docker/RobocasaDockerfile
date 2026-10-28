@@ -154,6 +154,6 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
              cd /opt/livox_ws/src/livox_ros_driver2 && \
              ./build.sh humble"
 
-# The G1 sim's stand-in runs HOMIE's walking policy with onnxruntime.
+# onnxruntime, through its own lock step (robocasa-amd64-05.txt).
 RUN uv pip install -c /opt/golem-locks/robocasa-amd64-05.txt --system --no-cache onnxruntime==1.23.2 \
     && python3 -c "import onnxruntime"

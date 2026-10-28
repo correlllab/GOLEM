@@ -1,12 +1,13 @@
 # CLAUDE.md — GOLEM developer guide for coding agents
 
 The safety layer and the arm controller of both robots (`golem_safety`,
-`golem_upper_ik`), the bringups that start them, the `mode_machine` identity
-check and the package tables were checked against the code on 2026-10-28; the
-robot selection, the rest of the G1 text, the DDS-domain rules and the H1-2
-claims beside them on 2026-10-26; the rest was verified on 2026-07-12. Where
-older docs or script comments disagree with the code, the code wins (known
-stale spots are flagged inline).
+`golem_upper_ik`), the bringup package (`golem_bringup`) and the start-ups it
+runs, the robot selection, the G1 text (its packages, sim, start-up and
+invariants), the `mode_machine` identity check, the package tables and the
+stale-install pitfall were checked against the code on 2026-10-28; the
+DDS-domain rules and the H1-2 claims beside them on 2026-10-26; the rest was
+verified on 2026-07-12. Where older docs or script comments disagree with the
+code, the code wins (known stale spots are flagged inline).
 
 ## 1. Project overview
 
@@ -21,9 +22,10 @@ Dex3-1 hands, navigation, description) and a RoboCasa sim (no Isaac).
 Both robots run one safety layer, `golem_safety`, and one arm IK controller,
 `golem_upper_ik`, each with a profile per robot, and start from one bringup
 package, `golem_bringup`. Each robot speaks its own Unitree DDS interface
-(`rt/lowcmd` / `rt/lowstate`, and on the G1 also `rt/arm_sdk` and `rt/dex3/*`)
-identically against its sim and the real robot, so code moves between them
-unchanged.
+(`rt/lowcmd` / `rt/lowstate`, and on the G1 also `rt/dex3/*`) identically
+against its sim and the real robot, so code moves between them unchanged. The
+G1 runs in Unitree's debug mode: Unitree's own controller is released, and the
+stack drives every motor on `rt/lowcmd`, as on the H1-2.
 
 The H1-2 is the default everywhere. `GOLEM_ROBOT=g1` or `--g1` on a wrapper
 selects the G1 (§3). The G1 pages are in `docs/g1/` (start at
@@ -86,8 +88,9 @@ wrapper, else `GOLEM_ROBOT` from the shell, else from `docker/.env`, else
 
 - add `docker/docker-compose.g1.yml` to both services: it sets `GOLEM_ROBOT=g1`,
   passes the G1 sim knobs (§8) and `G1_DDS_INTERFACE`, and bind-mounts
-  `third_party/leprechaun_g1` and `core_ws/src/g1/g1_locomotion/policy` (at
-  `/home/code/g1_locomotion`) read-only;
+  `third_party/leprechaun_g1` read-only into both and
+  `core_ws/src/g1/g1_locomotion/policy` (at `/home/code/g1_locomotion`)
+  read-only into the `ros` service only (the sim reads none of HOMIE's files);
 - write `$GOLEM_CACHE_DIR/cyclonedds_local.xml` from `G1_DDS_INTERFACE` just
   before they start a `ros` container (`docker_run.sh ros`, `docker_stack.sh
   up|restart`; never for a sim-only run), which the `ros` container loads after
@@ -97,8 +100,9 @@ wrapper, else `GOLEM_ROBOT` from the shell, else from `docker/.env`, else
   keeps the pin it started with) and refuse a value that is not an interface
   name. The pin is for the real robot on domain 0: on a sim domain the wrappers
   warn when it is set, since the sim's ROS nodes are never pinned;
-- check in `prepare_mounts` that the leprechaun URDF/MJCF and the policy files
-  exist and are not LFS pointers, before any container starts;
+- check in `prepare_mounts` that the leprechaun URDF/MJCF (both services) and
+  the policy files (the `ros` service) exist and are not LFS pointers, before
+  any container starts;
 - refuse the Mac wrappers and the Isaac simulator.
 
 `launch_ros.sh` builds the `g1_*` packages only when `GOLEM_ROBOT=g1`
@@ -167,7 +171,7 @@ nests `unitree_api`, `unitree_go`, `unitree_hg`, `unitree_ros2_example`).
 
 | Directory | Role | What it does | Key entry points |
 |---|---|---|---|
-| `golem_safety` | **safety (both robots)** | C++. The only writer of `/lowcmd` and `/arm_sdk` (§8): relays the controllers' `/safety/*` inputs, clips them, checks every `/lowstate` (robot identity, estop limits) and latches an estop until restart. A robot profile (`robots/<robot>.yaml`, the joint table both `golem_*` packages read) and configs per robot (`config/h12/`, `config/g1/`) | `safety_node` (`robot`, `config`, `sim`, `use_estop` parameters); `launch/safety.launch.py` |
+| `golem_safety` | **safety (both robots)** | C++. The only writer of `/lowcmd` (§8): streams zero gains from boot, engages each `/safety/*` input on its own first valid command and relays it, clips it, checks every `/lowstate` (robot identity, estop limits) and latches an estop until restart. A robot profile (`robots/<robot>.yaml`, the joint table both `golem_*` packages read) and configs per robot (`config/h12/`, `config/g1/`) | `safety_node` (`robot`, `config`, `sim`, `use_estop` parameters); `launch/safety.launch.py` |
 | `golem_upper_ik` | **controller (upper body, both robots)** | Pink IK on the 14 arm joints with the torso (H1-2) or waist (G1) held; OMPL planning and a self-collision barrier where the robot profile has a self-collision model (the H1-2); the follow gate; the safety/controller config pairing (`golem_upper_ik.pairing`) the bringups check | `frame_task_server` (`/frame_task`, `/named_config`), `joint_state_publisher`; `launch/upper_ik.launch.py` |
 | `golem_bringup` | **bringup (both robots)** | Launch-only package that starts the whole H1-2 (`launch/h12/`) or G1 (`launch/g1/`), sim or real. See §6. | top-level + building-block launch files, `config/h12/*.yaml` |
 | `h12_ros2_model` | description | H1-2 robot description (URDF, meshes, RViz launch) | `launch/`, `assets/` |
@@ -194,7 +198,7 @@ details, and `docs/g1/packages.md` indexes them.
 
 | Directory | Role | What it does | Key entry points |
 |---|---|---|---|
-| `g1_locomotion` | controller (lower body) | HOMIE's walking policy (onnxruntime) on the 12 leg joints, driven by `/cmd_vel` through `golem_safety`'s split mode | `locomotion_node` |
+| `g1_locomotion` | controller (lower body) | HOMIE's walking policy (onnxruntime) on the 12 leg joints, driven by `/cmd_vel` through `golem_safety`'s split mode. Follows the H1-2's leg node: waits for `/safety/heartbeat`, pre-poses the legs, on the real robot holds until `/lowerbody/confirm_engage`, and in the sim releases the elastic band | `locomotion_node` |
 | `g1_dex3` | driver (hands) | Dex3-1 hands on `rt/dex3/<side>/*`: `/<side>/hand/{set_pose,open,close,release}`; bypasses the safety layer | `dex3_hands`; `launch/hands.launch.py` |
 | `g1_navigation` | SLAM + navigation | FAST_LIO (or the sim's ground truth) → slam_toolbox map → Nav2 on `/cmd_vel`; the G1's own frontier explorer, serving `/skill/frontier_explore` | `launch/g1_navigation.launch.py`, `frontier_explore`, `livox_to_pointcloud`, `level_frame`, `body_to_pelvis` |
 | `g1_description` | description | G1 URDFs and meshes (from `third_party/leprechaun_g1`, through a symlink), joint table, DDS slot layout | `launch/display.launch.py`, `g1_description.paths` |
@@ -322,43 +326,60 @@ reference.
 
 | Launch file | Scenario | Starts |
 |---|---|---|
-| `g1_sim.launch.py` | **G1 sim** (sim time, the `sim_*` configs). `use_locomotion:=true` adds walking (switching the safety layer to `sim_split`), `use_nav:=true` navigation (needs `use_locomotion:=true`; `odom_source:=fastlio` or `sim_gt`), `frontier_explore:=true` the explorer | `g1_core` |
-| `g1_real_robot.launch.py` | **real G1**, every node in the laptop's `golem_ros` container on domain 0. Arms only by default: `safety_config:=arm_sdk`, Unitree's controller keeps the legs. No sensors or skills yet | `g1_core` |
-| `g1_core.launch.py` | shared core: `robot_state_publisher`, `golem_upper_ik`'s `joint_state_publisher` (`robot: g1`), `golem_safety`'s `safety_node` (`robot: g1`, `safety_config`, `sim`, `use_estop: false`: the G1 has no estop node), then `golem_upper_ik`'s `frame_task_server` (`robot: g1`, `controller_config`) after `controller_delay` (2 s); [`dex3_hands`] (`use_hands`), [rviz] (`use_rviz`), [`locomotion_node`] (`use_locomotion`), [`g1_navigation`] (`use_nav`) | — |
+| `g1_sim.launch.py` | **G1 sim** (sim time; `sim_split` for `golem_safety` and the controller, `g1_locomotion`'s `sim.yaml`). Always starts HOMIE's walking node. `use_nav:=true` adds navigation (`odom_source:=fastlio` or `sim_gt`), `frontier_explore:=true` the explorer | `g1_core` |
+| `g1_real_robot.launch.py` | **real G1** in Unitree's debug mode, every node in the laptop's `golem_ros` container on domain 0 (`split` and `g1_split`, `g1_locomotion`'s `g1.yaml`). The walking node only with `start_position_verified:=true` (default **false**): without it the leg motors stay off and the arms run. No sensors or skills yet | `g1_core` |
+| `g1_core.launch.py` | shared core: `robot_state_publisher`, `golem_upper_ik`'s `joint_state_publisher` (`robot: g1`), `golem_safety`'s `safety_node` (`robot: g1`, `safety_config`, `sim`, `use_estop: false`: the G1 has no estop node), then `golem_upper_ik`'s `frame_task_server` (`robot: g1`, `controller_config`) after `controller_delay` (2 s), then `g1_locomotion`'s `locomotion_node` (`locomotion_config`) after `locomotion_delay` (2 s more: always in the sim, with `start_position_verified` on the real robot); [`dex3_hands`] (`use_hands`), [rviz] (`use_rviz`), [`g1_navigation`] (`use_nav`) | — |
 
 The core refuses to start on a bad combination; `startup_refusal` in
 `g1_core.launch.py` and `pairing_refusal` in
 `core_ws/src/golem_upper_ik/golem_upper_ik/pairing.py` are the rules:
 
-- **Config pairing.** Each safety config runs with exactly one controller
-  config (`G1_SAFETY_CONTROLLER_CONFIGS` in `pairing.py`), and
-  `controller_config` defaults to it. The real robot refuses every `sim_*`
-  config and the sim refuses the real ones.
-- **Walking interlock.** On the real G1, `use_locomotion:=true` needs
-  `safety_config:=split` and `start_position_verified:=true` (default
-  **false**), set only after checking the robot is in a safe start pose. Split
-  mode writes `rt/lowcmd`, so Unitree's controller must already be released, a
-  manual operator step that nothing in this stack performs; support the robot
-  on a gantry (the split estop turns every motor off).
+- **Config pairing.** The safety config must relay the upper-body channel
+  (`split` or `sim_split`; `full` is refused), and each runs with exactly one
+  controller config (`G1_SAFETY_CONTROLLER_CONFIGS` in `pairing.py`:
+  `g1_split`, `sim_split`), which `controller_config` defaults to. The real
+  robot refuses every `sim_*` config and the walking node's `sim` config, and
+  the sim refuses the real ones (`split`, `g1_split`, the walking node's `g1`).
+- **The leg interlock.** On the real G1 the walking node starts only with
+  `start_position_verified:=true`, set only after checking the robot is in a
+  safe start pose; the argument refuses nothing. The bringup writes `rt/lowcmd` from the
+  moment `safety_node` starts, so the operator puts the G1 into Unitree's debug
+  mode, on a gantry, before launching, a manual step that nothing in this stack
+  performs or checks (its procedure is not written yet:
+  `docs/g1/first-session.md`). The gantry carries the robot while the legs are
+  off, and the split estop turns every motor off.
 - **No real navigation.** `use_nav:=true` is refused on the real G1 until the
   real MID-360 is connected to the bringup.
-- **Engage gate, no engage service.** `golem_safety` publishes nothing until a
-  command passes its engage gate (a fresh `rt/lowstate` reporting
-  `mode_machine` 5, every input of the mode commanding and none quiet, each
-  command within `engage.max_position_error` of the measured joints), and
-  `golem_upper_ik`'s follow gate keeps the controller's commands within
-  `controller.follow_tolerance` of the measured joints until `golem_safety`
-  relays them. `frame_task_server` stops with an error if that has not happened
-  within `controller.startup_timeout` (30 s). After any estop, restart the whole
-  bringup.
-- **The controller's exit.** When `frame_task_server` stops, it sends one last
-  command: mode 0 and zero kp, kd and tau on the arms, and in arm_sdk mode on
-  the waist too. `golem_safety` refuses that one (its waist kp is below
-  `arm_sdk.waist_kp_min`), latches its estop, logged as one, and hands the
-  waist and arms back to Unitree. In split (and full-body) mode the waist keeps
-  its hold angle and gains, since a walking policy needs it stiff; `golem_safety`
-  relays the command, so only the arms go limp while the legs keep their
-  commands. `docs/g1/safety.md` has the per-mode details.
+
+**The G1's start-up** (`g1_core.launch.py`'s docstring; `golem_safety`'s,
+`golem_upper_ik`'s and `g1_locomotion`'s READMEs have the details):
+
+- `safety_node` streams zero-gain `/lowcmd` (every motor off) from boot, checks
+  every `/lowstate` against the estop limits from the first sample, and engages
+  each input on that input's own first valid command once `/lowstate` reports
+  `mode_machine` 5, as on the H1-2; until then it logs `engage_refused`. Its
+  heartbeat is the H1-2's: none until `/lowstate` reports 5, then true at
+  10 Hz, false once latched.
+- `frame_task_server` holds the measured pose until its follow gate sees
+  `golem_safety` relay its commands, which happens on its first command, with
+  or without the walking node; then it moves the arms to `home` and the waist
+  to its hold. It stops with an error if `/lowstate` is not fresh within
+  `controller.state_timeout` (5 s), if nothing is relayed within
+  `controller.startup_timeout` (30 s), or if the moves take longer than
+  `controller.startup_move_timeout` (30 s). The leg motors stay off until the
+  walking node commands them.
+- `locomotion_node` sends nothing until the first true `/safety/heartbeat`,
+  1 s of steady, upright `rt/lowstate` and the arm controller's commands. Then
+  it moves the legs to HOMIE's default pose over 2.0 s. On the real robot
+  (`g1.yaml`) it holds that pose until
+  `ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger` (the H1-2
+  leg node's service); in the sim (`sim.yaml`) the policy starts at once, under
+  the sim's elastic band, and the node releases the band through
+  `/elastic_band/toggle` once `/left_ee_pose` has come (`frame_task_server`
+  publishes it after its start-up moves), or `band.max_wait` (30 s) after the
+  policy started. A false heartbeat, or none for 0.5 s after the first, stops
+  it for good in every phase.
+- After any estop, restart the whole bringup.
 
 ## 7. Skills (`h12_skills`) — the LLM-callable layer
 
@@ -438,18 +459,21 @@ opt-in odom in `mujoco_ros_bridge.py`, Unitree DDS in `unitree_interface.py`.)
 the Livox MID-360 as its driver does in CustomMsg mode (`/livox/lidar`,
 `/livox/imu`, no `/livox/pointcloud`), the head RealSense D435
 (`/realsense/head/*` and its `/tf_static`), and over Unitree DDS `rt/lowstate`
-and `rt/dex3/{left,right}/state`; consumes `rt/lowcmd`, `rt/arm_sdk` and
-`rt/dex3/{left,right}/cmd`. A HOMIE stand-in plays Unitree's controller and
-holds the robot up until the first valid `rt/lowcmd`; `rt/arm_sdk` blends the
-waist and arms with it by the weight in slot 29. (Trust `g1/g1_sensors.py` for
-the ROS side and `g1/unitree_interface.py` for the DDS side.) Its knobs are
-`GOLEM_LIDAR`, `GOLEM_LIDAR_POINTS`, `GOLEM_LIDAR_HZ`, `GOLEM_CAMERAS`,
-`GOLEM_CAMERA_HZ`, `GOLEM_CAMERA_SCALE` (G1 default 1.0), `GOLEM_CMD_TIMEOUT`,
-`GOLEM_ARM_SDK_TIMEOUT`, `GOLEM_SPAWN_BACKOFF`, `GOLEM_SIM_ODOM`,
+and `rt/dex3/{left,right}/state`, and serves `/elastic_band/toggle`
+(`std_srvs/srv/Trigger`, as the H1-2 sim does); consumes `rt/lowcmd` and
+`rt/dex3/{left,right}/cmd`. It plays the robot in Unitree's debug mode: every
+motor is off until the first `rt/lowcmd` with a valid CRC, `mode_machine` 5
+and `mode_pr` 0, and an elastic band on `torso_link` holds the robot until the
+toggle (or SPACE in the viewer) releases it; the G1 bringup's walking node
+calls it. It reads none of HOMIE's files. (Trust `g1/g1_sensors.py` for
+the ROS side, `g1/unitree_interface.py` for the DDS side and `g1/g1_mujoco.py`
+for the band.) Its knobs are `GOLEM_LIDAR`, `GOLEM_LIDAR_POINTS`,
+`GOLEM_LIDAR_HZ`, `GOLEM_CAMERAS`, `GOLEM_CAMERA_HZ`, `GOLEM_CAMERA_SCALE` (G1
+default 1.0), `GOLEM_CMD_TIMEOUT`, `GOLEM_SPAWN_BACKOFF`, `GOLEM_SIM_ODOM`,
 `GOLEM_SIM_EXPERIMENT` and `G1_DDS_INTERFACE`. Their defaults are in the code
 that reads them: `SensorConfig` in `g1/g1_sensors.py` (sensors),
-`g1/unitree_interface.py` (timeouts, interface), `g1/g1_mujoco.py` (spawn,
-odom) and `measurement_bridge.py` (experiment); the compose files pass them
+`g1/unitree_interface.py` (the command timeout, interface), `g1/g1_mujoco.py`
+(spawn, odom) and `measurement_bridge.py` (experiment); the compose files pass them
 (`docker/docker-compose.g1.yml` the G1-only ones). The G1 sim ignores the H1-2-only
 knobs (`GOLEM_SPAWN_MARGIN`, `GOLEM_SPAWN_OFFSET`, `GOLEM_HAND_CAMERA_RES`,
 `GOLEM_CAMERA_DEPTH`, `GOLEM_CAMERA_POINTCLOUD`, the tether ones). It refuses
@@ -562,10 +586,10 @@ authoritative source instead of copying it.
 
 ### Other invariants
 
-- **`golem_safety` is the only writer of the body command topics, on both
+- **`golem_safety` is the only writer of the body command topic, on both
   robots.** Its `safety_node` is the only publisher of `rt/lowcmd` (ROS
-  `/lowcmd`) and, on the G1 in arm_sdk mode, of `rt/arm_sdk` (the waist and
-  arms, with the weight in slot 29, while Unitree's controller keeps the legs).
+  `/lowcmd`), which drives every body motor (the G1 runs in Unitree's debug
+  mode).
   Controllers publish only to its `rt/safety/*` inputs: `golem_upper_ik` and
   `g1_locomotion` refuse a command topic outside them. The exception is
   `g1_dex3`, which writes `rt/dex3/<side>/cmd` directly, with no safety layer.
@@ -579,20 +603,16 @@ authoritative source instead of copying it.
 - **The estop latch** is one way until restart. It latches on a command with a
   non-finite value, a second live writer on an input (a new writer is accepted
   after `single_writer.handover_seconds`, 0.5 s, of quiet), a measured joint
-  past `limits.estop` or not finite, another robot's `mode_machine` once
-  engaged, the transport-lag check (`control.state_lag_ms`, on domain 0; off in
-  every G1 config), in arm_sdk mode a waist kp below `arm_sdk.waist_kp_min`, and
-  with `use_estop` a hardware estop that is triggered, unplugged or silent. What
-  it writes comes from the config's `estop_response`:
+  past `limits.estop` or not finite (checked from boot, on both robots), another
+  robot's `mode_machine` once an input has engaged, the transport-lag check
+  (`control.state_lag_ms`, on domain 0; off in every G1 config), and with
+  `use_estop` a hardware estop that is triggered, unplugged or silent. What it
+  writes comes from the config's `estop_response`:
   - H1-2 (all 8 configs): 50 zero-gain commands (mode 0, every value 0), then
-    no `rt/lowcmd` until restart. The limit checks run from boot.
-  - G1 arm_sdk mode: the last good command, with the weight ramping to 0 over
-    `arm_sdk.release_seconds` (the waist and arms go back to Unitree).
-  - G1 split (and full-body) mode: the estop command, written every cycle
-    (`mode: zero` in every config: every motor off, so the robot drops;
+    no `rt/lowcmd` until restart.
+  - G1 (all 3 configs): the estop command, written every cycle until restart
+    (`mode: zero`, `after: keep_writing`: every motor off, so the robot drops;
     support it).
-  - On the G1 nothing is written for a latch before the engage gate has passed
-    (`estop_latched_silent`), and the limit checks start at engagement.
 - **Robot identity.** `golem_safety` checks every `rt/lowstate` against its
   robot profile's `mode_machine`, 6 for the H1-2 and 5 for the G1: no input
   engages without it, another value latches the estop once engaged, and every
@@ -602,21 +622,18 @@ authoritative source instead of copying it.
   start-up that fails after its first command, `golem_upper_ik`'s
   `frame_task_server` sends its upper-body slots one command with mode 0 and
   zero kp, kd and tau on the IK joints, then stops publishing. The held joints
-  get the same, except on the G1 when `golem_safety` writes `rt/lowcmd` (the
-  profile's `shutdown_keeps_held_joints_on_lowcmd`). On the H1-2 `golem_safety`
-  relays it, so the torso and arms go limp and stay so (the quiet input keeps
-  its last command relayed). On the G1 in split (and full-body) mode it relays
-  it too: the waist keeps its hold angle, gains and torque and only the arms go
-  limp, while the walking node keeps the legs. On the G1 in arm_sdk mode it
-  refuses the command (its waist kp is below `arm_sdk.waist_kp_min`), latches
-  its estop, logged as an estop (`estop_command_written`), and hands the waist
-  and arms back to Unitree.
-- **`golem_safety`'s own exit** (SIGINT, SIGTERM, SIGHUP): in split and full-body
-  mode it stops publishing at once (an estop burst in progress is finished
-  first); in arm_sdk mode it ramps the weight to 0 over
-  `arm_sdk.release_seconds` first. Once `rt/lowcmd` falls silent, the sims turn
-  every body motor off after `GOLEM_CMD_TIMEOUT` (0.5 s of sim time); what the
-  real robots do then has not been measured.
+  get the same, except on the G1 (the profile's
+  `shutdown_keeps_held_joints_on_lowcmd`). On the H1-2 `golem_safety` relays
+  it, so the torso and arms go limp and stay so (the quiet input keeps its last
+  command relayed). On the G1, in split mode (the only one its bringups run),
+  it relays it too: the waist keeps its hold angle, gains and torque and only
+  the arms go limp, while the walking node keeps the legs. No estop latches.
+- **`golem_safety`'s own exit** (SIGINT, SIGTERM, SIGHUP): it stops publishing
+  at once (an estop burst in progress is finished first, and with
+  `keep_writing` the estop command is written once if none has been since the
+  latch). Once `rt/lowcmd` falls silent, the sims turn every body motor off
+  after `GOLEM_CMD_TIMEOUT` (0.5 s of sim time); what the real robots do then
+  has not been measured.
 - **One robot stack per DDS domain** (§3). Never run the H1-2's and the G1's
   stacks, or `h12_skills`' and `g1_navigation`'s frontier explorers, on one
   domain.
@@ -660,7 +677,7 @@ ros2 action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
 ### x86, the G1
 
 ```bash
-# Paired: the sim plus g1_sim.launch.py (arms), gated on the sim's robot
+# Paired: the sim plus g1_sim.launch.py (the arms and HOMIE), gated on the sim's robot
 docker/scripts/docker_stack.sh up robocasa --g1 --headless
 docker/scripts/docker_stack.sh logs robocasa
 
@@ -670,8 +687,8 @@ docker/scripts/docker_stack.sh logs robocasa
 docker/scripts/docker_run.sh robocasa --g1 --layout 9 --style 9 --seed 42
 # Terminal 2 — builds core_ws with the g1_* packages, drops to a shell
 docker/scripts/docker_run.sh ros --g1
-ros2 launch golem_bringup g1_sim.launch.py
-# variants: use_rviz:=false use_hands:=false use_locomotion:=true use_nav:=true frontier_explore:=true
+ros2 launch golem_bringup g1_sim.launch.py     # wait for the walking node's "elastic band released"
+# variants: use_rviz:=false use_hands:=false use_nav:=true frontier_explore:=true
 
 # Terminal 3
 docker exec -it golem_ros bash
@@ -718,13 +735,17 @@ box connected: a `safety_node` that starts while `estop_node` reports a failed
 connection latches until restart, and `frame_task_server` exits after
 `controller.startup_timeout` (30 s) when nothing is relayed (§6).
 
-G1: the laptop wired to the robot, in Docker: `ROS_DOMAIN_ID=0`,
-`GOLEM_ROBOT=g1` and `G1_DDS_INTERFACE=<the wired port>` in `docker/.env`,
-`docker/scripts/docker_run.sh ros --g1` (check that it prints `robot: g1`
-before you confirm domain 0), then
+G1: in Unitree's debug mode, on a gantry; the procedure for entering debug
+mode on our G1 is not written yet, and nobody runs a session until it is
+(`docs/g1/first-session.md`). The laptop wired to the robot, in Docker:
+`ROS_DOMAIN_ID=0`, `GOLEM_ROBOT=g1` and `G1_DDS_INTERFACE=<the wired port>` in
+`docker/.env`, `docker/scripts/docker_run.sh ros --g1` (check that it prints
+`robot: g1` before you confirm domain 0), then
 `ros2 launch golem_bringup g1_real_robot.launch.py use_hands:=false use_rviz:=false`
-— arms only, Unitree's controller keeps the legs. Nothing has run on the real
-G1 yet; follow `docs/g1/first-session.md` step by step.
+— the arms; the leg motors stay off. `start_position_verified:=true` adds
+HOMIE's walking node, which pre-poses the legs and holds them until
+`/lowerbody/confirm_engage`. Nothing has run on the real G1 yet; follow
+`docs/g1/first-session.md` step by step.
 
 ## 10. Getting-started checklist for a new agent
 
@@ -755,6 +776,21 @@ G1 yet; follow `docs/g1/first-session.md` step by step.
   expected 6`), so `frame_task_server` exits after 30 s. For Isaac, run
   `git submodule update` first: the H1-2 Isaac sim reports 6 from the current
   `CL_isaaclab_sim` pin.
+- **Delete the stale installs of removed packages once after pulling.** colcon
+  never removes a package that is gone from `core_ws/src`, so a workspace built
+  before `golem_bringup` replaced `h12_bringup` and `g1_bringup` (and the four
+  unused packages `h12_safety_layer`, `h12_ros2_controller`, `g1_safety_layer`
+  and `g1_control` were deleted) keeps their build and install directories.
+  From the repo root, on every host that built the workspace (`sudo` for files
+  a container left root-owned):
+  `rm -rf {core_ws/build,core_ws/install,core_ws/build_stack_tests,core_ws/install_stack_tests,container_cache/g1_tests/build,container_cache/g1_tests/install}/{h12_bringup,g1_bringup,h12_safety_layer,h12_ros2_controller,g1_safety_layer,g1_control}`.
+  Until then `launch_ros.sh` (`docker_run.sh ros`, `docker_stack.sh`,
+  `tests/g1`) exits before it builds, with `stale installed package '<pkg>' has
+  no discovered source`, and a native workspace (the H1-2's onboard PC) keeps
+  answering to the old names. A `--symlink-install` workspace also keeps links
+  to deleted G1 configs that fail the next `golem_upper_ik` build; the change
+  report (`docs/superpowers/specs/2026-10-28-golem-bringup-and-g1-debug-mode/change-report.md`)
+  has that cleanup and the Mac's.
 - **x86 `ros` container ≠ bringup.** It only builds and gives you a shell.
 - **Check the `robot:` line.** `docker_run.sh` and `docker_stack.sh up` print the
   robot they selected; a `GOLEM_ROBOT` left in the shell or `docker/.env`

@@ -17,15 +17,16 @@ The G1 packages, sim, tests and these pages come from
 
 | Feature | In the sim | On the real robot |
 |---|---|---|
-| Arms (`golem_upper_ik` and `golem_safety`, shared with the H1-2) | Works | Ready for a first session; nothing has run yet |
+| Arms (`golem_upper_ik` and `golem_safety`, shared with the H1-2) | Works | Written up for a first session, which waits for the debug-mode procedure; nothing has run yet |
 | Dex3-1 hands | Works | In the real bringup (`use_hands`), off for the first session |
-| Walking with HOMIE | Works | Not covered by these docs |
+| Walking with HOMIE | Works | The pre-pose and the confirm are in the first session; walking is not covered by these docs |
 | Navigation (Nav2) | Works | Refused: the real MID-360 lidar is not connected to the bringup |
 | Frontier exploration | Works | Needs navigation |
 
-Not done yet: navigation on the real robot, a self-collision model for the
-arms, manipulation skills, sensors and skills in the real bringup, and tuning
-of gains and limits on our G1.
+Not done yet: the procedure for entering Unitree's debug mode on our G1,
+navigation on the real robot, a self-collision model for the arms,
+manipulation skills, sensors and skills in the real bringup, and tuning of
+gains and limits on our G1.
 
 ## Selecting the G1
 
@@ -59,8 +60,8 @@ tests/g1/test_sim_explore.sh            # frontier exploration of the kitchen
 A passing test ends with `PASSED: <n>/<n> checks` and exits 0.
 `tests/g1/README.md` says what each one checks and where its output goes.
 
-The sim and the arms bringup together, gated on a fresh `rt/lowstate` from a
-G1 sim:
+The sim and the bringup together, gated on a fresh `rt/lowstate` from a G1
+sim:
 
 ```bash
 docker/scripts/docker_stack.sh up robocasa --g1 --headless
@@ -90,10 +91,14 @@ ros2 service call /left/hand/close std_srvs/srv/Trigger
 ros2 service call /left/hand/open std_srvs/srv/Trigger
 ```
 
-**What to expect:** the arms move to `home` once the stack is up, then to a
-T-pose, and the left hand closes and opens. The sim's stand-in for Unitree's
-controller (HOMIE's policy) keeps the legs. The named postures are
-`NAMED_CONFIGS` in `core_ws/src/golem_upper_ik/golem_upper_ik/robots/g1.py`.
+**What to expect:** the robot starts hanging from the sim's elastic band with
+every motor off, as the real G1 starts in Unitree's debug mode. The arms move
+to `home` once the stack is up. HOMIE's walking node, which the sim bringup
+always starts, moves the legs to its default pose, starts its policy and
+releases the band (`elastic band released` in the bringup's log); from then on
+it keeps the robot standing. The goals then move the arms to a T-pose, and the
+left hand closes and opens. The named postures are `NAMED_CONFIGS` in
+`core_ws/src/golem_upper_ik/golem_upper_ik/robots/g1.py`.
 
 - Start the sim first. If you restart the sim, restart the `ros` container
   too, because sim time starts again at 0.
@@ -114,9 +119,9 @@ controller (HOMIE's policy) keeps the legs. The named postures are
 
 | Page | Covers |
 |---|---|
-| [First real session](first-session.md) | the arms-only checklist for the first session on the real G1 |
-| [Safety layer](safety.md) | modes, the engage gate, estops, stopping, logs |
-| [Control in sim and on the robot](control-path.md) | the path of a command, and how the sim stands in for the robot |
+| [First real session](first-session.md) | the checklist for the first session on the real G1, in Unitree's debug mode; it waits for the debug-mode procedure |
+| [Safety layer](safety.md) | modes, the start-up, estops, stopping, logs |
+| [Control in sim and on the robot](control-path.md) | the path of a command, and how the sim plays the robot in debug mode |
 | [DDS and networking](dds.md) | domains, the guards against domain 0, the wired port |
 | [Walking](walking.md) | HOMIE's policy on the legs, in the sim |
 | [Navigation](navigation.md) | FAST_LIO, slam_toolbox and Nav2, in the sim |

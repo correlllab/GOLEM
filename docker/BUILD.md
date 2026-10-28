@@ -173,10 +173,10 @@ Single-stage, `FROM golem_base`. Provides the MuJoCo + RoboCasa kitchen simulato
   `build.sh humble`. At the pinned driver commit `build.sh` runs a plain
   `colcon build` (no `--symlink-install`) and ends in `popd`, so it exits 0
   even when that build fails (`CLAUDE.md` §8). `build/` is left in place.
-- **G1 addition** (last layer): `onnxruntime==1.23.2` through lock step
-  `robocasa-amd64-05.txt`, for the G1 sim's HOMIE walking-policy stand-in.
-  The G1 sim's other inputs (its robot description and the policy) arrive
-  through the G1 overlay's bind mounts (§8), not the image.
+- **onnxruntime** (last layer): `onnxruntime==1.23.2` through lock step
+  `robocasa-amd64-05.txt`. Nothing in `golem_robocasa` imports it: the G1 sim
+  reads none of HOMIE's files. The G1 sim's robot description arrives through
+  the G1 overlay's bind mount (§8), not the image.
 
 ---
 
@@ -275,10 +275,11 @@ anywhere in their arguments, else `GOLEM_ROBOT` (shell, then `docker/.env`),
 else `h12`. For the G1 they add `docker/docker-compose.g1.yml` after
 `docker-compose.yml`:
 
-- both services get `GOLEM_ROBOT=g1`, `G1_DDS_INTERFACE`, and read-only bind
-  mounts of `third_party/leprechaun_g1` (at `/home/code/third_party/leprechaun_g1`)
-  and `core_ws/src/g1/g1_locomotion/policy` (at `/home/code/g1_locomotion`),
-  both `create_host_path: false`;
+- both services get `GOLEM_ROBOT=g1`, `G1_DDS_INTERFACE`, and a read-only bind
+  mount of `third_party/leprechaun_g1` (at `/home/code/third_party/leprechaun_g1`);
+  the ros service also mounts HOMIE's policy, `core_ws/src/g1/g1_locomotion/policy`
+  (at `/home/code/g1_locomotion`), read-only, for the walking node; both with
+  `create_host_path: false`;
 - the robocasa service gets the G1 sim's knobs (`CLAUDE.md` §8);
 - the ros service loads a second CycloneDDS file after `core_ws/cyclonedds.xml`,
   `cyclonedds_local.xml`, which the wrapper writes into `GOLEM_CACHE_DIR` from
@@ -289,9 +290,10 @@ else `h12`. For the G1 they add `docker/docker-compose.g1.yml` after
 
 The mounts stay out of the base file, so an H1-2 checkout without the
 `leprechaun_g1` submodule still starts. For the G1, `prepare_mounts` checks
-the description and policy files (missing files and LFS pointers) before any
-container starts, and `launch_ros.sh` builds the `g1_*` packages, which it
-skips for the H1-2. `docker_stack.sh` sets `GOLEM_BRINGUP_PACKAGE=golem_bringup`
+the description files (both services) and the policy files (the ros service)
+for missing files and LFS pointers before any container starts, and
+`launch_ros.sh` builds the `g1_*` packages, which it skips for the H1-2.
+`docker_stack.sh` sets `GOLEM_BRINGUP_PACKAGE=golem_bringup`
 and `GOLEM_BRINGUP_LAUNCH=g1_sim.launch.py` for the stack overlay, and
 `wait_for_sim.py` refuses a simulator of the other robot. The G1 uses the same
 images and container names as the H1-2, and the wrappers refuse it on Mac and

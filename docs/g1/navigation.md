@@ -34,9 +34,9 @@ GOLEM_SPAWN_BACKOFF=2.0 docker/scripts/docker_run.sh robocasa --g1 --layout 9 --
 
 # terminal 2
 docker/scripts/docker_run.sh ros --g1
-ros2 launch golem_bringup g1_sim.launch.py use_locomotion:=true use_nav:=true
+ros2 launch golem_bringup g1_sim.launch.py use_nav:=true
 
-# terminal 3: once Nav2 is up
+# terminal 3: once Nav2 is up and the walking node has released the elastic band
 docker exec -it golem_ros bash
 source /opt/ros/humble/setup.bash && source /home/code/core_ws/install/setup.bash
 ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \

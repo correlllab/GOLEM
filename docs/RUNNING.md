@@ -186,15 +186,19 @@ docker/scripts/docker_stack.sh up robocasa --g1 --headless   # sim + g1_sim.laun
 
 docker/scripts/docker_run.sh robocasa --g1 --layout 9 --style 9 --seed 42
 docker/scripts/docker_run.sh ros --g1
-ros2 launch golem_bringup g1_sim.launch.py                   # use_locomotion:=true use_nav:=true ...
+ros2 launch golem_bringup g1_sim.launch.py                   # use_nav:=true frontier_explore:=true ...
 ```
+
+The G1 bringup always starts HOMIE's walking node in the sim: the robot hangs
+from the sim's elastic band, every motor off, until the walking node has moved
+the legs to its default pose, started its policy and released the band.
 
 The paired startup refuses a simulator of the other robot on the domain; the
 single-service flow does not check. On the real G1 the `ros` container runs on
 the laptop wired to the robot, on domain 0, which needs `G1_DDS_INTERFACE`
-(`UP`, with an IPv4 address) before the confirmation prompt. Start at
-[`g1/index.md`](g1/index.md); the first real session follows
-[`g1/first-session.md`](g1/first-session.md).
+(`UP`, with an IPv4 address) before the confirmation prompt, and the robot in
+Unitree's debug mode, on a gantry. Start at [`g1/index.md`](g1/index.md); the
+first real session follows [`g1/first-session.md`](g1/first-session.md).
 
 ## Troubleshooting
 
@@ -211,6 +215,25 @@ the laptop wired to the robot, on domain 0, which needs `G1_DDS_INTERFACE`
   after 30 s. Restart the sim (`docker_stack.sh restart`, or `docker_run.sh
   <sim> --restart`); for Isaac run `git submodule update` first, since the
   change is in the `CL_isaaclab_sim` pin.
+- **Stale installs of removed packages.** colcon never removes a package that
+  is gone from `core_ws/src`. A workspace built before `golem_bringup` replaced
+  `h12_bringup` and `g1_bringup` (and `h12_safety_layer`,
+  `h12_ros2_controller`, `g1_safety_layer` and `g1_control` were deleted) keeps
+  their build and install directories, and `launch_ros.sh` then stops with
+  `stale installed package '<pkg>' has no discovered source`. Delete them
+  once, from the repo root (`sudo` for files a container left root-owned):
+
+  ```bash
+  rm -rf {core_ws/build,core_ws/install,core_ws/build_stack_tests,core_ws/install_stack_tests,container_cache/g1_tests/build,container_cache/g1_tests/install}/{h12_bringup,g1_bringup,h12_safety_layer,h12_ros2_controller,g1_safety_layer,g1_control}
+  ```
+
+  A native workspace (the H1-2's onboard PC) has no such check and keeps
+  answering to the old names until they are deleted. A `--symlink-install`
+  workspace also keeps links to four deleted G1 config files, which fail the
+  next `golem_upper_ik` build (`can't copy ... doesn't exist or not a regular
+  file`); the change report,
+  `docs/superpowers/specs/2026-10-28-golem-bringup-and-g1-debug-mode/change-report.md`,
+  has their cleanup and the Mac's.
 - **X11 / GUI:** set `XAUTHORITY` to your session's existing authorization file.
   Use `GOLEM_DISPLAY=headless` or `--headless` when no X server is available.
 - **Talking to the sim from the host** bypasses the run scripts and so misses

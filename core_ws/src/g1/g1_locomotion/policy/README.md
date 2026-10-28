@@ -3,8 +3,8 @@
 The walking policy for GOLEM's Unitree G1. It holds HOMIE's pretrained
 locomotion policy and a MuJoCo script that runs it in simulation (sim2sim).
 The `g1_locomotion` package around it runs it on the G1's legs
-(`locomotion_node`), and the sim's stand-in runs it too. The containers mount
-this folder at `/home/code/g1_locomotion`.
+(`locomotion_node`); the G1 sim reads none of its files. The `ros` container
+mounts this folder at `/home/code/g1_locomotion`.
 
 The policy and the script come from [OpenHomie](https://github.com/InternRobotics/OpenHomie);
 see [Credits](#credits). We kept only its MuJoCo deployment. The training code
@@ -115,9 +115,9 @@ policy.reset()                                  # before starting again
   thread: one intra-op and one inter-op thread, no spinning, nothing pinned
   to a CPU. onnxruntime's default instead pins a pool of threads as wide as
   the machine, the same CPUs in every process, and two of them spin at 100%
-  between 50 Hz steps. With the sim's stand-in and the walking node both
-  running the policy, the node's threads on those two CPUs got no CPU time
-  and it never finished loading. The actions are identical.
+  between 50 Hz steps. With two processes running the policy that way on one
+  host, the second one's threads on those two CPUs got no CPU time and it
+  never finished loading. The actions are identical.
 - `clip_command()` clips to `cmd_range` and `height_range` in `g1.yaml`, and
   rejects values that are not finite. `mujoco_deploy_g1.py` does not clip, so
   the sim can still try commands outside the trained ranges.

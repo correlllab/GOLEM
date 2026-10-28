@@ -571,7 +571,7 @@ assert b.exists(), f'agent_server binary missing at {b}'; \
 print('MJPC OK — mujoco', mujoco.__version__, '| agent_server:', b)"
 
 # -----------------------------------------------------------------------------
-# Intel RealSense ROS driver — h12_real_desktop.launch.py now includes
+# Intel RealSense ROS driver — h12_real_desktop.launch.py includes
 # cl_realsense's h12_hand_cameras.launch.py (both wrist cams' USB runs on the
 # companion desktop), which launches realsense2_camera_node. The apt package
 # pulls librealsense2 with it. image-transport-plugins supplies the

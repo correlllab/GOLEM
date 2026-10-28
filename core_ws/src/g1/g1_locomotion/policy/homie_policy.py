@@ -82,9 +82,9 @@ def policy_session(policy_path):
     (23 threads on a 24-core laptop), pins each thread to one CPU, the same
     CPUs in every process, and lets them spin between runs. At 50 Hz two of
     them each kept a CPU 100% busy (CPUs 1 and 8 on the laptop) in every
-    process that ran the policy. With the sim's stand-in and the walking node
-    both running it, the node's pool threads on those two CPUs got no CPU
-    time for minutes, and the node never finished loading. The policy is a
+    process that ran the policy. With two processes running it on one host,
+    the second one's pool threads on those two CPUs got no CPU time for
+    minutes, and it never finished loading. The policy is a
     small MLP: on the calling thread a step takes about 0.2 ms, with the same
     actions. With one intra-op thread there is no pool, so nothing is pinned
     or spins; the spinning entries also cover a pool if a count changes.

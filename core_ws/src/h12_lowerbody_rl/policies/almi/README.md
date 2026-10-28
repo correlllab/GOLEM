@@ -33,15 +33,15 @@ frame_task IK plays that role through the safety layer.
 
 ## Usage
 
-### Real robot (companion desktop)
+### Real robot (onboard PC)
 
-The desktop bringup defaults to ALMI (`lowerbody:=almi`); every leg path
-stays behind the `start_position_verified` interlock. Hoist the robot first —
-snug, legs free to bend — and keep a hand on the e-stop. Launching IS the
-start of motion:
+The onboard bringup, `h12_real_robot.launch.py`, defaults to ALMI
+(`lowerbody:=almi`); every leg path stays behind the `start_position_verified`
+interlock. Hoist the robot first — snug, legs free to bend — and keep a hand
+on the e-stop. Launching IS the start of motion:
 
 ```bash
-ros2 launch golem_bringup h12_real_desktop.launch.py start_position_verified:=true
+ros2 launch golem_bringup h12_real_robot.launch.py start_position_verified:=true
 ```
 
 What happens, in order (`lowerbody_controller_node`):

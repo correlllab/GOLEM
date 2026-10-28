@@ -37,9 +37,10 @@ on the real robot), and drives the legs through golem_safety's split mode. It
 sends nothing until golem_safety beats on /safety/heartbeat, rt/lowstate is
 upright and the controller commands. Then it ramps the legs to the policy's
 default pose. In the sim it starts the policy and releases the sim's elastic
-band once the controller has finished its start-up moves; on the real robot it
-holds the pose until the operator calls /lowerbody/confirm_engage
-(g1_locomotion's README has the details). The controller holds the waist as
+band once the controller has finished its start-up moves (or band.max_wait
+after the policy started without them); on the real robot it holds the pose
+until the operator calls /lowerbody/confirm_engage (g1_locomotion's README has
+the details). The controller holds the waist as
 stiffly as golem_safety allows (g1_split.yaml, sim_split.yaml), as the policy
 expects.
 
@@ -54,7 +55,8 @@ FAST_LIO config and clock in the sim. odom_source picks the odometry:
 fastlio (the default; the sim must not publish its ground truth, GOLEM_SIM_ODOM
 unset) or sim_gt (the sim's ground-truth odom -> pelvis, GOLEM_SIM_ODOM=1).
 FAST_LIO starts while the sim's elastic band still holds the robot up: the
-walking node releases it only after the controller's start-up moves.
+walking node releases it once its policy runs and the controller's start-up
+moves are done (or band.max_wait after the policy started).
 frontier_explore:=true adds g1_navigation's frontier explorer (it serves
 /skill/frontier_explore), and is passed to g1_navigation as a launch argument
 of its include.
@@ -258,7 +260,7 @@ def _setup(context):
     if use_nav:
         # with the core: FAST_LIO initialises on its first scans, while the
         # sim's elastic band still holds the robot up (the walking node releases
-        # it only after the controller's start-up moves)
+        # it once its policy runs and the controller's start-up moves are done)
         nav = os.path.join(get_package_share_directory('g1_navigation'), 'launch',
                            'g1_navigation.launch.py')
         # the arguments of this launch that g1_navigation also declares are passed

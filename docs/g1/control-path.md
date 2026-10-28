@@ -9,20 +9,26 @@ YAML limits and timings differ.
 
 ```text
 frame_task_server (arm IK) -- rt/safety/lowcmd_upper_in --+
-                                                          +--> safety_node --> rt/arm_sdk  (arms only)
-locomotion_node (HOMIE)   -- rt/safety/lowcmd_lower_in --+                --> rt/lowcmd   (walking, all 29 motors)
+                                                          +--> safety_node --> rt/lowcmd  (all 29 motors)
+locomotion_node (HOMIE)   -- rt/safety/lowcmd_lower_in --+
 dex3_hands ------------------ rt/dex3/{left,right}/cmd ---------------------> hands (no safety layer)
 everything reads <---------- rt/lowstate, rt/dex3/{left,right}/state
 ```
 
-- **Arms only (the default).** The arm controller (`golem_upper_ik`) solves IK
-  at `frequency.ctrl_hz` and streams commands at `frequency.pub_hz`. The safety
-  layer (`golem_safety`) engages, ramps the `rt/arm_sdk` weight from 0 to 1, and
-  relays the newest command at its `control.publish_hz`. The legs stay with
-  Unitree's controller.
-- **Walking (`use_locomotion:=true`).** The walking node (`g1_locomotion`)
-  runs HOMIE's policy at 50 Hz on `/cmd_vel` and writes the legs. The safety
-  layer merges legs and arms into one `rt/lowcmd` (split mode).
+- **The safety layer** (`golem_safety`, split mode) writes every body motor on
+  `rt/lowcmd`: the waist and arms from the arm controller's input, the legs
+  from the walking node's. From boot it writes zero gains on every motor, and
+  each input's slots carry its commands from that input's first command on
+  ([Safety layer](safety.md), Start-up).
+- **Arms.** The arm controller (`golem_upper_ik`) solves IK at
+  `frequency.ctrl_hz` and streams commands at `frequency.pub_hz`. The safety
+  layer relays the newest one at its `control.publish_hz`.
+- **Legs.** The walking node (`g1_locomotion`) waits for the safety layer's
+  heartbeat, moves the legs to HOMIE's default pose over 2 s, then runs HOMIE's
+  policy at 50 Hz on `/cmd_vel`; on the real robot it holds the default pose
+  until the operator calls `/lowerbody/confirm_engage`. The sim bringup always
+  starts it, the real bringup only with `start_position_verified:=true`; without
+  it the leg motors stay off.
 - **Hands.** `dex3_hands` writes the hand topics directly, at its `rate_hz`
   parameter.
 
@@ -30,20 +36,27 @@ The motor commands are DDS topics in Unitree's IDL. `golem_safety` and
 `golem_upper_ik` read and write them as ROS 2 topics (ROS `/lowcmd` is DDS
 `rt/lowcmd`, the same wire type), while `locomotion_node` and `dex3_hands` use
 the Unitree SDK. The user-facing interface is ROS 2 too: `/cmd_vel`, the
-`/frame_task` and `/named_config` actions, the hand services, `/joint_states`,
-sensors.
+`/frame_task` and `/named_config` actions, the hand services,
+`/lowerbody/confirm_engage`, `/joint_states`, sensors.
 
 ## What sits behind the topics
 
 - **On the robot:** Unitree's own software, which is not in this repository.
-  It balances the robot and shares the waist and arms through the `rt/arm_sdk`
-  weight. Before `rt/lowcmd` can drive the legs, the operator must release
-  Unitree's controller by hand. Nothing in this stack does that step.
-- **In the sim:** `golem_robocasa/g1/` (`g1_mujoco.py`, `unitree_interface.py`,
-  `stand_in.py`). HOMIE's policy stands in for Unitree's controller and holds
-  the robot up. `rt/arm_sdk` blends the waist and arms with it by the weight.
-  The first valid `rt/lowcmd` releases the stand-in for good, which plays the
-  operator's release. `g1/unitree_interface.py`'s docstring is the reference.
+  The stack runs the G1 in Unitree's debug mode: Unitree's own controller is
+  released, and nothing but `rt/lowcmd` drives the body motors. The operator
+  puts the robot into debug mode before the bringup starts; nothing in this
+  stack does that step or checks it
+  ([First real session](first-session.md#entering-debug-mode-not-yet-written)).
+- **In the sim:** `golem_robocasa/g1/` (`g1_mujoco.py`, `unitree_interface.py`)
+  plays the robot in debug mode. Every motor is off (zero torque) until the
+  first `rt/lowcmd` with a valid CRC, `mode_machine` 5 and `mode_pr` 0; from
+  then on `rt/lowcmd` drives every body motor. Meanwhile an elastic band on the
+  torso holds the robot up, as the H1-2 sim's does: the walking node releases it
+  through `/elastic_band/toggle` once its policy runs and the arm controller has
+  finished its start-up moves, or `band.max_wait` after the policy started
+  (SPACE in the viewer toggles it by hand).
+  `g1/unitree_interface.py`'s and `g1_mujoco.py`'s docstrings are the
+  reference.
 
 ## Sim and real compared
 
@@ -53,24 +66,25 @@ instead of copying the numbers.
 | | Real G1 | Sim |
 |---|---|---|
 | DDS domain | 0, pinned to the wired port (`G1_DDS_INTERFACE`) | 1 or another test domain; the sim refuses 0 |
-| Who holds the robot before the stack | Unitree's controller | the HOMIE stand-in |
-| Arm hand-over (`rt/arm_sdk`) | Unitree mixes by the weight; the method is not known | torque blend by the weight |
-| Taking the legs (`rt/lowcmd`) | manual operator release first | the first valid frame releases the stand-in |
+| Before the bringup | Unitree's debug mode, entered by the operator (the procedure is not written yet) | every motor off |
+| Who holds the robot until the legs stand | a gantry | the elastic band, until the walking node releases it |
 | Motor torques | the robot's motor drivers | PD law every physics step, in sim time |
-| Silence on the command topics | not measured | `GOLEM_ARM_SDK_TIMEOUT` hands the arms back to the stand-in; `GOLEM_CMD_TIMEOUT` turns the motors off |
-| Time | wall clock | sim time, paced to at most real time; the safety layer's stale times and ramps still run on the host's clock |
-| Safety timings | `golem_safety/config/g1/arm_sdk.yaml`, `split.yaml` | `sim_arm_sdk.yaml`, `sim_split.yaml`: looser, since the sim can run slower than real time |
-| Arm speed limits (`controller.v_lim`, `w_lim`, `dq_lim`) | `golem_upper_ik/config/g1/g1.yaml`: deliberately low for the first sessions | `sim.yaml` |
-| Walking speed limits (`commands.vx`, `vy`, `yaw`) | `g1_locomotion/config/g1.yaml`: inside the trained ranges | `sim.yaml`: the trained ranges |
-| Navigation | refused (real lidar not connected yet) | allowed with `use_locomotion:=true` |
+| Silence on `rt/lowcmd` | not measured | `GOLEM_CMD_TIMEOUT` turns the motors off |
+| Time | wall clock | sim time, paced to at most real time; the safety layer's stale times still run on the host's clock |
+| Safety timings | `golem_safety/config/g1/split.yaml` | `sim_split.yaml`: looser, since the sim can run slower than real time |
+| Arm speed limits (`controller.v_lim`, `w_lim`, `dq_lim`) | `golem_upper_ik/config/g1/g1_split.yaml`: deliberately low for the first sessions | `sim_split.yaml` |
+| The walking node | `g1_locomotion/config/g1.yaml`: starts only with `start_position_verified:=true`, holds the default pose until `/lowerbody/confirm_engage` | `sim.yaml`: always starts, no confirm, releases the band |
+| Walking speed limits (`commands.vx`, `vy`, `yaw`) | `g1.yaml`: inside the trained ranges | `sim.yaml`: the trained ranges |
+| Navigation | refused (real lidar not connected yet) | allowed (`use_nav:=true`) |
 | Status | nothing has run on the robot yet | arm, walk, nav and exploration tests pass |
 
 ## Not known yet
 
 These depend on the robot's side, which is not in the repository:
 
-- how Unitree's controller applies the `rt/arm_sdk` weight;
-- what the robot does if `rt/arm_sdk` or `rt/lowcmd` simply stops;
+- how to enter debug mode on our G1, and how to confirm it
+  ([First real session](first-session.md#entering-debug-mode-not-yet-written));
+- what the robot does if `rt/lowcmd` simply stops;
 - which frame (pelvis or torso) the real `rt/lowstate` IMU reports in;
 - the real `rt/lowstate` rate and the real Dex3 hand behaviour.
 

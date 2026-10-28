@@ -1,5 +1,6 @@
 # Real G1, full body on /lowcmd from a single upstream publisher.
-# Unitree's controller must be released first (motion_switcher); on estop every
+# The robot must be in Unitree's debug mode (Unitree's controller released)
+# before the layer starts, since it writes every motor from boot; on estop every
 # motor is zeroed or damped (see estop_response).
 # From boot the layer streams zero gains on every motor (mode 0, every value 0:
 # every motor off) and checks every /lowstate against the estop limits. The

@@ -104,27 +104,4 @@ def generate_launch_description():
             emulate_tty=True,
             condition=IfCondition(LaunchConfiguration('use_rviz')),
         ),
-
-        # slider_debugger waits up to 5s on /left_ee_pose & /right_ee_pose,
-        # which frame_task_server publishes only after its IK solver finishes
-        # initialising (URDF load + 150-step torso init — empirically ~7s).
-        # 10s leaves headroom so the sliders seed from the live pose.
-        #
-        # Intentionally NOT using sim_time: the GUI's wait_for_initial_poses
-        # measures wall-clock; with use_sim_time=True a fast sim that's
-        # already past 5s makes get_clock().now() jump and trip the timeout
-        # immediately, falling back to all-zero targets that drive the IK
-        # toward unreachable poses inside the body.
-        # TimerAction(
-        #     period=1.0,
-        #     actions=[
-        #         Node(
-        #             package='golem_bringup',
-        #             executable='slider_debugger.py',
-        #             name='slider_debugger',
-        #             output='screen',
-        #             condition=IfCondition(LaunchConfiguration('use_sliders')),
-        #         ),
-        #     ],
-        # ),
     ])

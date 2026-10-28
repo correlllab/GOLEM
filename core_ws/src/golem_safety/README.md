@@ -102,7 +102,7 @@ What the robots' configs share:
   `relax_safety_split` and `sim_safety_split`; logging off.
 - **G1:** `startup.rule: engage_gate`; `estop_response` `zero`, `keep_writing`;
   `control.state_lag_ms: 0` (off: the real G1's tick has not been measured); logging on, to
-  `/tmp/g1_safety_layer`. The `sim_*` configs relax the stale times, the engage gate's state
+  `/tmp/golem_safety`. The `sim_*` configs relax the stale times, the engage gate's state
   age and the estop limits, since the sim can run slower than real time.
 
 Each safety config runs with one `golem_upper_ik` controller config; the bringups refuse
@@ -288,7 +288,7 @@ latch (the latching one included), with its motor fields and IMU, and the last c
 written. `combine_chunks.py` (installed in `lib/golem_safety`) merges one run's chunks:
 
 ```bash
-ros2 run golem_safety combine_chunks.py --load /tmp/g1_safety_layer/<run> --save /tmp/combined.npz
+ros2 run golem_safety combine_chunks.py --load /tmp/golem_safety/<run> --save /tmp/combined.npz
 ```
 
 ## Tests
@@ -327,6 +327,6 @@ discovered over loopback and fail the test.
 
 - `tools/relay_latency_probe.py --robot h12|g1 [--output /arm_sdk]`: on a running stack,
   the relay's output rate and input-to-output latency, as JSON (it refuses domain 0).
-- `tools/generate_robot_data.py`, `snapshot_old_limits.py` and `crc_fixtures.py` wrote
-  `robots/` and the test fixtures; they import the previous safety layers and the Unitree
-  SDK, so they run only where those import.
+- `tools/generate_robot_data.py` writes `robots/h12.yaml` from `tools/h12_joint_limits.py`
+  and `robots/g1.yaml` from `g1_description`, so it runs only where `g1_description`
+  imports. The test fixtures are recorded data (`test/fixtures/README.md`).

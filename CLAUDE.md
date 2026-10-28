@@ -157,30 +157,22 @@ does not check `rt/lowstate`'s `mode_machine`.
 
 ## 4. `core_ws/src` packages
 
-30 ROS packages: 23 (the H1-2's, the shared ones and the two `golem_*`
-packages both robots run) in 20 top-level directories, and the 7 G1 packages in
+26 ROS packages: 21 (the H1-2's, the shared ones and the two `golem_*`
+packages both robots run) in 18 top-level directories, and the 5 G1 packages in
 `core_ws/src/g1/` (below). Note two name mismatches: dir
 `FAST_LIO` → package `fast_lio`; dir `unitree_ros2` is not itself a package (it
 nests `unitree_api`, `unitree_go`, `unitree_hg`, `unitree_ros2_example`).
-
-Four packages are **unused and awaiting deletion**: `h12_safety_layer`,
-`h12_ros2_controller`, `g1_safety_layer` and `g1_control`. No bringup, test or
-package depends on them (only the `golem_*` `tools/` scripts that wrote the test
-fixtures import them); they still build. Do not extend them or launch them
-beside the `golem_*` nodes: their nodes write the same topics.
 
 | Directory | Role | What it does | Key entry points |
 |---|---|---|---|
 | `golem_safety` | **safety (both robots)** | C++. The only writer of `/lowcmd` and `/arm_sdk` (§8): relays the controllers' `/safety/*` inputs, clips them, checks every `/lowstate` (robot identity, estop limits) and latches an estop until restart. A robot profile (`robots/<robot>.yaml`, the joint table both `golem_*` packages read) and configs per robot (`config/h12/`, `config/g1/`) | `safety_node` (`robot`, `config`, `sim`, `use_estop` parameters); `launch/safety.launch.py` |
 | `golem_upper_ik` | **controller (upper body, both robots)** | Pink IK on the 14 arm joints with the torso (H1-2) or waist (G1) held; OMPL planning and a self-collision barrier where the robot profile has a self-collision model (the H1-2); the follow gate; the safety/controller config pairing (`golem_upper_ik.pairing`) the bringups check | `frame_task_server` (`/frame_task`, `/named_config`), `joint_state_publisher`; `launch/upper_ik.launch.py` |
 | `h12_bringup` | **bringup** | Launch-only package that starts the whole H1-2 (sim or real). See §6. | top-level + building-block launch files, `config/*.yaml` |
-| `h12_ros2_controller` | **unused, awaiting deletion** | The H1-2's former arm IK controller; `golem_upper_ik` replaces it | — |
 | `h12_ros2_model` | description | H1-2 robot description (URDF, meshes, RViz launch) | `launch/`, `assets/` |
 | `h12_deploy_mjpc` | controller (lower body, MPC) | MJPC balance/locomotion controller (C++ cores from the `mujoco_mpc` fork, run as separate processes) + RW-EKF base estimator | `mjpc_lowerbody_core`, `controller_launcher.py`, `estimator_node.py` |
 | `h12_lowerbody_rl` | controller (lower body, RL) | TorchScript walking, FAME RMA stand/squat and ALMI stand/walk policies; controller runs one pinned policy; consumes `/lowstate` + `/cmd_vel`, emits 12-joint PD setpoints | `walking_node`, `fame_node`, `lowerbody_controller_node` |
 | `lmg_deploy` | controller (whole body, MARL) | The loco-manipulation game's two-agent (legs + IK arms) MARL policy, run by the `lmg_*` bringups | `marl_deploy_node` |
 | `h12_slam` | SLAM + navigation | The shared nav launch (FAST-LIO → pointcloud_to_laserscan → slam_toolbox → nav2) and its configs: Livox MID360 driver config (`MID360_config.json`, real robot, read by `h12_real_drivers.launch.py`), FAST-LIO (`mid360.yaml`), slam_toolbox (`slam_toolbox_h1.yaml`), Nav2 (`nav2_config.yaml`; mac bringup: `nav2_config_mac.yaml`) | `launch/h12_navigation.launch.py`, `config/` |
-| `h12_safety_layer` | **unused, awaiting deletion** | The H1-2's former safety layer; `golem_safety` replaces it | — |
 | `h12_skills` | **skills** | Action servers for the 12 `/skill/*` atomic skills an LLM can call (frontier exploration lives here). See §7. | `skills` (SkillsNode) |
 | `model_server` | model server | ROS service servers wrapping ML models: Gemini VLM, SAM3 segmentation, GraspGenX grasp generation, YOLO detection | `gemini_server`, `sam_server`, `graspgen_server`, `yolo_server` |
 | `custom_ros_messages` | interfaces (both robots) | 19 actions (13 `Skill*`, `FrameTask`, `NamedConfig`, `DualArm`, …), msgs, srvs (`GeminiQuery`, `SamSegment`, `GraspGen`, `SetHandPose`, …) | rosidl only |
@@ -201,8 +193,6 @@ details, and `docs/g1/packages.md` indexes them.
 | Directory | Role | What it does | Key entry points |
 |---|---|---|---|
 | `g1_bringup` | **bringup** | Launch-only: the G1 real and sim bringups and the shared core. See §6. | `g1_bringup.launch.py`, `g1_sim_bringup.launch.py`, `g1_core.launch.py` |
-| `g1_safety_layer` | **unused, awaiting deletion** | The G1's former safety layer; `golem_safety` replaces it | — |
-| `g1_control` | **unused, awaiting deletion** | The G1's former arm IK controller; `golem_upper_ik` replaces it | — |
 | `g1_locomotion` | controller (lower body) | HOMIE's walking policy (onnxruntime) on the 12 leg joints, driven by `/cmd_vel` through `golem_safety`'s split mode | `locomotion_node` |
 | `g1_dex3` | driver (hands) | Dex3-1 hands on `rt/dex3/<side>/*`: `/<side>/hand/{set_pose,open,close,release}`; bypasses the safety layer | `dex3_hands`; `launch/hands.launch.py` |
 | `g1_navigation` | SLAM + navigation | FAST_LIO (or the sim's ground truth) → slam_toolbox map → Nav2 on `/cmd_vel`; the G1's own frontier explorer, serving `/skill/frontier_explore` | `launch/g1_navigation.launch.py`, `frontier_explore`, `livox_to_pointcloud`, `level_frame`, `body_to_pelvis` |

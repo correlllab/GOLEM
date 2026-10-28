@@ -1,8 +1,8 @@
 '''
 The robot profiles against golem_safety's robot data and the old controllers' tables.
 
-test/fixtures/old_controller/<robot>.json is written by tools/snapshot_old_controller.py
-from h12_ros2_controller and g1_control; these tests import neither.
+test/fixtures/old_controller/<robot>.json holds the previous arm controllers' tables
+(test/fixtures/README.md); these tests import no old package.
 '''
 import dataclasses
 import json

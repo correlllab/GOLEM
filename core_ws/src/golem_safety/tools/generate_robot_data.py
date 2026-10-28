@@ -1,26 +1,21 @@
 #!/usr/bin/env python3
-"""Writes the robot data files and the H1-2 table snapshot.
+"""Writes the robot data files golem_safety and golem_upper_ik read.
 
-Outputs, relative to the package:
-
-  robots/h12.yaml, robots/g1.yaml    the data golem_safety and golem_upper_ik read
-  test/fixtures/h12_joint_limits.json  today's H1-2 tables, for test_robot_data.py
+Outputs, relative to the package: robots/h12.yaml and robots/g1.yaml.
 
 Sources:
 
-  H1-2  h12_safety_layer.core.joint_limits (JOINT_NAMES, URDF_POSITION_LIMITS,
+  H1-2  tools/h12_joint_limits.py (JOINT_NAMES, URDF_POSITION_LIMITS,
         URDF_VELOCITY_LIMITS, URDF_TORQUE_LIMITS). The H1-2 limits are this table,
         which is what the robot runs, not the URDF: shoulder roll is +-0.38 here
-        and +-0.19 in h1_2_magpie.urdf. The table is checked against
-        h12_ros2_controller.utility.joint_limits, which must hold the same values.
+        and +-0.19 in h1_2_magpie.urdf.
   G1    g1_description.joints.BODY and g1_description.layout.
 
-Run it where both old packages and g1_description import (the G1-mode ros
-container, after the workspace is built and sourced):
+Run it where g1_description imports (the G1-mode ros container, after the workspace is
+built and sourced):
 
   python3 /home/code/core_ws/src/golem_safety/tools/generate_robot_data.py
 """
-import json
 from pathlib import Path
 import sys
 
@@ -39,31 +34,15 @@ def number(value):
 
 
 def h12_joints():
-    """(name, slot, low, high, velocity, effort) per body joint, from today's tables."""
-    from h12_safety_layer.core import joint_limits as table
+    """(name, slot, low, high, velocity, effort) per body joint, from tools/h12_joint_limits.py."""
+    import h12_joint_limits as table
 
-    check_controller_table(table)
     return [
         (name, slot, limits['low'], limits['high'], velocity, effort)
         for slot, (name, limits, velocity, effort) in enumerate(zip(
             table.JOINT_NAMES, table.URDF_POSITION_LIMITS,
             table.URDF_VELOCITY_LIMITS, table.URDF_TORQUE_LIMITS))
     ]
-
-
-def check_controller_table(table):
-    """Fails unless the controller's copy of the H1-2 table has the same values."""
-    from h12_ros2_controller.utility import joint_limits as copy
-    from h12_ros2_controller.utility.joint_definition import BODY_JOINTS
-
-    same = (
-        list(BODY_JOINTS) == table.JOINT_NAMES
-        and copy.JOINT_POSITION_LIMITS == table.URDF_POSITION_LIMITS
-        and copy.JOINT_VELOCITY_LIMITS == table.URDF_VELOCITY_LIMITS
-        and copy.JOINT_TORQUE_LIMITS == table.URDF_TORQUE_LIMITS
-    )
-    if not same:
-        sys.exit('h12_safety_layer and h12_ros2_controller hold different H1-2 joint tables')
 
 
 def g1_joints():
@@ -110,18 +89,6 @@ def check_round_trip(text, facts, joints):
         sys.exit(f'robot file for {facts["robot"]} does not read back as its source')
 
 
-def h12_snapshot():
-    from h12_safety_layer.core import joint_limits as table
-
-    return {
-        'source': 'h12_safety_layer/core/joint_limits.py',
-        'joint_names': table.JOINT_NAMES,
-        'position_limits': table.URDF_POSITION_LIMITS,
-        'velocity_limits': table.URDF_VELOCITY_LIMITS,
-        'torque_limits': table.URDF_TORQUE_LIMITS,
-    }
-
-
 def main():
     from g1_description import layout
 
@@ -139,7 +106,7 @@ def main():
         'arm_sdk_weight_slot': layout.ARM_SDK_WEIGHT_SLOT,
     }
     robots = [
-        ('h12', 'h12_safety_layer.core.joint_limits', h12_facts, h12_joints()),
+        ('h12', 'tools/h12_joint_limits.py', h12_facts, h12_joints()),
         ('g1', 'g1_description.joints.BODY', g1_facts, g1_joints()),
     ]
 
@@ -148,11 +115,6 @@ def main():
         text = robot_text(source, facts, joints)
         check_round_trip(text, facts, joints)
         (PACKAGE / 'robots' / f'{robot}.yaml').write_text(text)
-
-    fixtures = PACKAGE / 'test' / 'fixtures'
-    fixtures.mkdir(parents=True, exist_ok=True)
-    (fixtures / 'h12_joint_limits.json').write_text(
-        json.dumps(h12_snapshot(), indent=2) + '\n')
 
 
 if __name__ == '__main__':

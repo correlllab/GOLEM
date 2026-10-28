@@ -260,10 +260,7 @@ ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
 ```
 
 Send no other goals, and start no second controller: a second live writer on
-the safety layer's input latches its estop. `g1_control`, unused and awaiting
-deletion, still builds, and its nodes and the scripts in its `example/`
-directory publish to the same input as `frame_task_server`; run none of
-them.
+the safety layer's input latches its estop.
 
 ### 9. Stop
 
@@ -290,11 +287,11 @@ them.
    press Ctrl+C on the launch in terminal 1.
 4. The container is deleted when its shell exits, so copy the safety layer's
    logs out first: each run is a `<YYYYmmdd-HHMMSS>-<pid>` directory under
-   `/tmp/g1_safety_layer` (the configs' `logging.base_dir`). From the repo root
+   `/tmp/golem_safety` (the configs' `logging.base_dir`). From the repo root
    in a laptop shell:
 
    ```bash
-   docker cp golem_ros:/tmp/g1_safety_layer container_cache/g1_safety_logs_$(date +%Y%m%d_%H%M)
+   docker cp golem_ros:/tmp/golem_safety container_cache/g1_safety_logs_$(date +%Y%m%d_%H%M)
    ```
 
 5. Run `exit` in terminal 1. The container stops and `systemd-inhibit` lets go.

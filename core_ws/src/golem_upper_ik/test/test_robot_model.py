@@ -1,9 +1,9 @@
 '''
 RobotModel and RobotDynamics against the old controllers, on both robots.
 
-test/fixtures/fk_<robot>.json holds what h12_ros2_controller's (h12) or g1_control's (g1)
-RobotModel and RobotDynamics compute at 50 seeded random configurations (written by
-tools/snapshot_old_fk.py); these tests import no old package.
+test/fixtures/fk_<robot>.json holds what the robot's previous arm controller's RobotModel
+and RobotDynamics computed at 50 seeded random configurations (test/fixtures/README.md);
+these tests import no old package.
 '''
 import json
 from pathlib import Path

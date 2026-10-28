@@ -1,9 +1,8 @@
 """The new loader against what the old safety layers derive from the same configs.
 
-The fixtures under test/fixtures/limits/<robot>/<config>.json are written by
-tools/snapshot_old_limits.py from h12_safety_layer.core.config and
-g1_safety_layer.core.config. This test imports neither package: it runs
-golem_safety_dump_config and compares its output to the fixtures.
+The fixtures under test/fixtures/limits/<robot>/<config>.json hold what the previous safety
+layers derived from their configs (test/fixtures/README.md). This test imports neither
+package: it runs golem_safety_dump_config and compares its output to the fixtures.
 """
 import json
 from pathlib import Path

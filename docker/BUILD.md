@@ -47,10 +47,7 @@ submodules): `FAST_LIO`, `golem_safety`, `golem_upper_ik`, `h12_deploy_mjpc`,
 `golem_safety` (C++, `ament_cmake`) and `golem_upper_ik` (Python) are the
 safety layer and arm controller of both robots, so they build for both; the
 `ros` image has `golem_safety`'s build dependencies (`rclcpp`, `libyaml-cpp-dev`,
-`zlib1g-dev`). Four packages are unused and awaiting deletion: the submodules
-`h12_safety_layer` and `h12_ros2_controller`, and `g1_safety_layer` and
-`g1_control` in `core_ws/src/g1/`. Nothing launches or depends on them, and
-they still build.
+`zlib1g-dev`).
 
 Large binary assets (meshes, XML, USD) are tracked with **Git-LFS**; run
 `git lfs install` first. Some weights are *not* in git and are fetched manually

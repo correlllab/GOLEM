@@ -160,7 +160,7 @@ Events go to the node's ROS logger at their level, so they print as
 | `arm_sdk_release_ramping`, `arm_sdk_release_held` | The arm_sdk hand-back ramp runs, or waits for `rt/lowstate`. |
 
 State and commands are also logged to `.npz` chunks: each run writes its own
-`<logging.base_dir>/<YYYYmmdd-HHMMSS>-<pid>/` (`/tmp/g1_safety_layer` in the
+`<logging.base_dir>/<YYYYmmdd-HHMMSS>-<pid>/` (`/tmp/golem_safety` in the
 G1 configs, inside the container), named in `relay_started`. Copy them out
 before the container exits; `combine_chunks.py` (installed in
 `lib/golem_safety`) merges one run's chunks.

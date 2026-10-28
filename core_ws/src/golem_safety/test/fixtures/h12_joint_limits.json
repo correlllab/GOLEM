@@ -1,5 +1,5 @@
 {
-  "source": "h12_safety_layer/core/joint_limits.py",
+  "source": "see README.md",
   "joint_names": [
     "left_hip_yaw_joint",
     "left_hip_pitch_joint",

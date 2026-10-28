@@ -32,7 +32,7 @@ const RobotProfile & g1()
   return profile;
 }
 
-// test/fixtures/lowcmd_crc.json, written by tools/crc_fixtures.py with the Unitree SDK.
+// test/fixtures/lowcmd_crc.json, recorded with the Unitree SDK (test/fixtures/README.md).
 // A command entry holds the message fields as columns (one list per field, 35 slots)
 // and the CRC the SDK computed for it.
 YAML::Node fixture()
@@ -163,8 +163,8 @@ TEST(LowCmd, StampSetsProfileHeader)
 
 TEST(LowCmd, ZeroCommandMatchesTodaysH12EstopCommand)
 {
-  // make_estop_cmd(LowCmdDefault()) of h12_safety_layer, with the header the new
-  // layer stamps on every command; the fixture holds the SDK's CRC for it.
+  // The H1-2's previous safety layer's estop command, with the header golem_safety stamps on
+  // every command; the fixture holds the SDK's CRC for it.
   const YAML::Node entry = fixture()["old_commands"]["h12_estop"];
   const LowCmd expected = command_of(entry);
   const LowCmd zero = golem_safety::zero_command(h12());
@@ -252,7 +252,7 @@ TEST(LowCmd, DampKeepsKd)
 
 TEST(LowCmd, DampMatchesTodaysG1EstopCommand)
 {
-  // make_estop_cmd(template, kd) of g1_safety_layer; the fixture holds its kd and the
+  // The G1's previous safety layer's damping command; the fixture holds its kd and the
   // SDK's CRC for the result.
   const YAML::Node entry = fixture()["old_commands"]["g1_damp"];
   SafetyConfig config = golem_safety::load_safety_config("split", g1());

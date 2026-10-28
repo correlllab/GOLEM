@@ -101,5 +101,5 @@ limits:
 
 logging:
   enabled: false
-  base_dir: /tmp/h12_safety_layer
+  base_dir: /tmp/golem_safety
   chunk_prefix: chunk_

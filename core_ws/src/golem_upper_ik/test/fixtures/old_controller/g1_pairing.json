@@ -30,7 +30,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "g1",
@@ -46,7 +46,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "g1",
@@ -94,7 +94,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not split"
   },
   {
    "controller": "g1",
@@ -174,7 +174,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_arm_sdk"
   },
   {
    "controller": "g1",
@@ -190,7 +190,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
   },
   {
    "controller": "g1",
@@ -222,7 +222,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "g1",
@@ -270,7 +270,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "g1",
@@ -286,7 +286,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "g1",
@@ -318,7 +318,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "g1",
@@ -510,7 +510,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "g1_split",
@@ -526,7 +526,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "g1_split",
@@ -574,7 +574,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not split"
   },
   {
    "controller": "g1_split",
@@ -654,7 +654,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_arm_sdk"
   },
   {
    "controller": "g1_split",
@@ -670,7 +670,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
   },
   {
    "controller": "g1_split",
@@ -702,7 +702,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "g1_split",
@@ -750,7 +750,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "g1_split",
@@ -766,7 +766,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "g1_split",
@@ -798,7 +798,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "g1_split",
@@ -990,7 +990,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "sim",
@@ -1006,7 +1006,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "sim",
@@ -1054,7 +1054,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not split"
   },
   {
    "controller": "sim",
@@ -1134,7 +1134,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_arm_sdk"
   },
   {
    "controller": "sim",
@@ -1150,7 +1150,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
   },
   {
    "controller": "sim",
@@ -1182,7 +1182,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "sim",
@@ -1230,7 +1230,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "sim",
@@ -1246,7 +1246,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "sim",
@@ -1278,7 +1278,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "sim",
@@ -1470,7 +1470,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "sim_split",
@@ -1486,7 +1486,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "sim_split",
@@ -1534,7 +1534,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not split"
   },
   {
    "controller": "sim_split",
@@ -1614,7 +1614,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_arm_sdk"
   },
   {
    "controller": "sim_split",
@@ -1630,7 +1630,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
   },
   {
    "controller": "sim_split",
@@ -1662,7 +1662,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "sim_split",
@@ -1710,7 +1710,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "sim_split",
@@ -1726,7 +1726,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "sim_split",
@@ -1758,7 +1758,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "sim_split",
@@ -1950,7 +1950,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "g1.yaml",
@@ -1966,7 +1966,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "g1.yaml",
@@ -2014,7 +2014,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not split"
   },
   {
    "controller": "g1.yaml",
@@ -2094,7 +2094,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_arm_sdk"
   },
   {
    "controller": "g1.yaml",
@@ -2110,7 +2110,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
   },
   {
    "controller": "g1.yaml",
@@ -2142,7 +2142,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "g1.yaml",
@@ -2190,7 +2190,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "g1.yaml",
@@ -2206,7 +2206,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "g1.yaml",
@@ -2238,7 +2238,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "g1.yaml",
@@ -2430,7 +2430,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "config/sim_split.yaml",
@@ -2446,7 +2446,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "config/sim_split.yaml",
@@ -2494,7 +2494,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not split"
   },
   {
    "controller": "config/sim_split.yaml",
@@ -2574,7 +2574,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_arm_sdk"
   },
   {
    "controller": "config/sim_split.yaml",
@@ -2590,7 +2590,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
   },
   {
    "controller": "config/sim_split.yaml",
@@ -2622,7 +2622,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "config/sim_split.yaml",
@@ -2670,7 +2670,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "config/sim_split.yaml",
@@ -2686,7 +2686,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "config/sim_split.yaml",
@@ -2718,7 +2718,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "config/sim_split.yaml",
@@ -2910,7 +2910,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "/opt/configs/g1_split.yaml",
@@ -2926,7 +2926,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "/opt/configs/g1_split.yaml",
@@ -2974,7 +2974,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not split"
   },
   {
    "controller": "/opt/configs/g1_split.yaml",
@@ -3054,7 +3054,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_arm_sdk"
   },
   {
    "controller": "/opt/configs/g1_split.yaml",
@@ -3070,7 +3070,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
   },
   {
    "controller": "/opt/configs/g1_split.yaml",
@@ -3102,7 +3102,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "/opt/configs/g1_split.yaml",
@@ -3150,7 +3150,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "/opt/configs/g1_split.yaml",
@@ -3166,7 +3166,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "/opt/configs/g1_split.yaml",
@@ -3198,7 +3198,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "/opt/configs/g1_split.yaml",
@@ -3390,7 +3390,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "custom",
@@ -3406,7 +3406,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "custom",
@@ -3454,7 +3454,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not split"
   },
   {
    "controller": "custom",
@@ -3534,7 +3534,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_arm_sdk"
   },
   {
    "controller": "custom",
@@ -3550,7 +3550,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
   },
   {
    "controller": "custom",
@@ -3582,7 +3582,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "custom",
@@ -3630,7 +3630,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "custom",
@@ -3646,7 +3646,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "custom",
@@ -3678,7 +3678,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "custom",
@@ -3870,7 +3870,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "sim_custom",
@@ -3886,7 +3886,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "sim_custom",
@@ -3934,7 +3934,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not split"
   },
   {
    "controller": "sim_custom",
@@ -4014,7 +4014,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_arm_sdk"
   },
   {
    "controller": "sim_custom",
@@ -4030,7 +4030,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
   },
   {
    "controller": "sim_custom",
@@ -4062,7 +4062,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "sim_custom",
@@ -4110,7 +4110,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "sim_custom",
@@ -4126,7 +4126,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "sim_custom",
@@ -4158,7 +4158,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "sim_custom",
@@ -4350,7 +4350,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "safety_split",
@@ -4366,7 +4366,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "safety_split",
@@ -4414,7 +4414,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not split"
   },
   {
    "controller": "safety_split",
@@ -4494,7 +4494,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_arm_sdk"
   },
   {
    "controller": "safety_split",
@@ -4510,7 +4510,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not sim_arm_sdk"
   },
   {
    "controller": "safety_split",
@@ -4542,7 +4542,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "safety_split",
@@ -4590,7 +4590,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not arm_sdk"
   },
   {
    "controller": "safety_split",
@@ -4606,7 +4606,7 @@
    "sim": true,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=sim_split, not arm_sdk"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not arm_sdk"
   },
   {
    "controller": "safety_split",
@@ -4638,7 +4638,7 @@
    "sim": false,
    "locomotion": true,
    "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through g1_safety_layer split mode, so it needs safety_config:=split, not sim_split"
+   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
   },
   {
    "controller": "safety_split",

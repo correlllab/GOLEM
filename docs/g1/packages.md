@@ -17,10 +17,6 @@ the full details.
 | `g1_navigation` | Odometry (FAST_LIO or sim ground truth), a 2D map (slam_toolbox) and Nav2; the frontier explorer. Sim only for now. | `g1_navigation.launch.py`, `livox_to_pointcloud`, `level_frame`, `body_to_pelvis`, `frontier_explore` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_navigation/README.md) |
 | `g1_description` | G1 URDFs and meshes, the joint table (names, DDS slots, limits) and the DDS slot layout. | `display.launch.py` (RViz with joint sliders) | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_description/README.md) |
 
-`g1_safety_layer` and `g1_control`, the G1's former safety layer and arm
-controller, are still in `core_ws/src/g1/` and still build for the G1, but
-nothing launches or depends on them: they are unused and awaiting deletion.
-
 ## Shared with the H1-2
 
 | Package or path | What the G1 uses it for |

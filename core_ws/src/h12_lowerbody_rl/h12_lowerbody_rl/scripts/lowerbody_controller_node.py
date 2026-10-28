@@ -338,11 +338,8 @@ class LowerBodyControllerNode(Node):
 
     def _publish_leg(self, leg: LegCommand) -> None:
         cmd_msg = LowCmd()
-        # Header matches frame_task_server's LowCmdPublisher
-        # (h12_ros2_controller/core/channel_interface.py). The safety layer
-        # forwards the header of whichever channel spoke last, so both channels
-        # must send the same values, and the robot drops any LowCmd whose
-        # mode_machine differs from its own.
+        # The H1-2's header, the one golem_safety stamps on every command it writes. The
+        # robot drops any LowCmd whose mode_machine differs from its own.
         cmd_msg.mode_pr = MODE_PR
         cmd_msg.mode_machine = MODE_MACHINE
         for i in range(NUM_LEG_JOINTS):

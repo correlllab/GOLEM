@@ -1,10 +1,9 @@
 '''
 Which safety and controller configs may run together, and what the pairs agree on.
 
-The G1's verdicts are compared with g1_control's config_pairing, through
-test/fixtures/old_controller/g1_pairing.json (written by tools/snapshot_old_controller.py);
-this test does not import g1_control. The pairs' topics and gain limits are read from
-golem_safety's installed configs.
+The G1's verdicts are compared with the previous G1 arm controller's config_pairing, through
+test/fixtures/old_controller/g1_pairing.json (test/fixtures/README.md); this test imports no
+old package. The pairs' topics and gain limits are read from golem_safety's installed configs.
 '''
 import itertools
 import json
@@ -50,8 +49,7 @@ def test_g1_pairing_matches_old_rules():
         if case['verdict'] == 'accepted':
             assert refusal is None, case
         else:
-            # the same rule refuses it: the message is the old one, naming golem_safety
-            assert refusal == case['message'].replace('g1_safety_layer', 'golem_safety'), case
+            assert refusal == case['message'], case
 
 
 def test_g1_default_controller_config_matches_old():

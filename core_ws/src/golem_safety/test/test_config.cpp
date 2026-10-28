@@ -267,7 +267,7 @@ TEST(Config, CarriedH12ConfigsAreZeroStreamAndBurst)
     EXPECT_DOUBLE_EQ(config.control.state_lag_ms, 100.0) << name;
     EXPECT_DOUBLE_EQ(config.control.publish_hz, 500.0) << name;
     EXPECT_FALSE(config.logging.enabled) << name;
-    EXPECT_EQ(config.logging.base_dir, "/tmp/h12_safety_layer") << name;
+    EXPECT_EQ(config.logging.base_dir, "/tmp/golem_safety") << name;
     EXPECT_EQ(config.logging.chunk_prefix, "chunk_") << name;
     EXPECT_EQ(config.topics.low_cmd_out, "/lowcmd") << name;
     EXPECT_EQ(config.topics.low_state, "/lowstate") << name;
@@ -404,7 +404,7 @@ TEST(Config, G1ConfigsUseTheEngageGateAndKeepWriting)
     EXPECT_EQ(config.estop_response.after, EstopAfter::KeepWriting) << name;
     EXPECT_EQ(config.estop_response.mode, EstopMode::Zero) << name;
     EXPECT_TRUE(config.logging.enabled) << name;
-    EXPECT_EQ(config.logging.base_dir, "/tmp/g1_safety_layer") << name;
+    EXPECT_EQ(config.logging.base_dir, "/tmp/golem_safety") << name;
     // The G1's lag check is off.
     EXPECT_DOUBLE_EQ(config.control.state_lag_ms, 0.0) << name;
     EXPECT_DOUBLE_EQ(config.limits.kp_max, 200.0) << name;

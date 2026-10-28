@@ -3,8 +3,8 @@
 Standalone single-policy node — the ROS adaptation of
 ``reference/mujoco_deploy_h12_rma.py``, mirroring ``walking_node`` for the
 walking policy. Runs the RMA FAME policy against ``/lowstate`` and publishes
-12-joint lower-body PD setpoints on ``/safety/lowcmd_lower_in`` for the
-h12_safety_layer to merge with upper-body commands.
+12-joint lower-body PD setpoints on ``/safety/lowcmd_lower_in`` for golem_safety to merge
+with upper-body commands.
 
 It controls only the 12 legs; the torso + arms are driven by the upper-body IK
 and are merely *observed* here (the encoder adapts the legs to them). Reuses

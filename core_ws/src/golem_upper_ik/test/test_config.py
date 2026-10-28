@@ -1,9 +1,9 @@
 '''
 The controller-config loader, on the carried configs and on configs written by the tests.
 
-test/fixtures/old_controller/<robot>.json holds what h12_ros2_controller's and
-g1_control's own load_controller_config return for the same configs (written by
-tools/snapshot_old_controller.py); these tests import neither old package.
+test/fixtures/old_controller/<robot>.json holds what the robot's previous arm controller's
+load_controller_config returned for the same configs (test/fixtures/README.md); these tests
+import no old package.
 '''
 import json
 import math

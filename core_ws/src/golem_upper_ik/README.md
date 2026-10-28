@@ -255,13 +255,12 @@ H1-2 with its collision model, the G1 without), the ROS I/O, command handler and
 (`test_ros_io.py`, `test_low_cmd_handler.py`), the controller and the nodes
 (`test_controller_loop.py`, `test_frame_task_server.py`), the publish rate
 (`test_publish_rate.py`) and that nothing imports `unitree_sdk2py` (`test_no_sdk.py`). The
-fixtures under `test/fixtures/` hold what the previous controllers returned for the same
-configs and configurations; no test imports those controllers.
+fixtures under `test/fixtures/` are recorded data: what the previous arm controllers
+returned for the same configs and configurations (`test/fixtures/README.md` says which
+package and commit); no test imports those controllers.
 
 ## Tools
 
 - `tools/publish_rate_probe.py`, `tools/command_publisher_rate.py`,
   `tools/frame_task_server_rate.py`: measure the 500 Hz command rate of a bare `rclpy`
   publisher, of `CommandPublisher`, and of the installed `frame_task_server` with its IK.
-- `tools/snapshot_old_controller.py`, `tools/snapshot_old_fk.py`: wrote the fixtures; they
-  import the previous controllers, so they run only where those import.

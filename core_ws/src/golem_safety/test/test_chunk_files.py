@@ -2,7 +2,7 @@
 
 test_chunk_writer (built by this package's CMake, not installed) logs deterministic
 samples; the formulas below are the ones in test/test_chunk_writer.cpp. The keys, dtypes
-and shapes are the ones g1_safety_layer's chunk_logger.py wrote, and combine_chunks.py
+and shapes are the ones the G1's previous safety layer's chunk logger wrote, and combine_chunks.py
 (installed under lib/golem_safety) must still read them.
 """
 import os
@@ -146,4 +146,4 @@ def test_combine_chunks_defaults_to_the_golem_safety_directory():
     source = combine_script().read_text()
     assert "default='/tmp/golem_safety'" in source
     assert "default='/tmp/golem_safety/combined.npz'" in source
-    assert 'g1_safety_layer' not in source
+    assert 'safety_layer' not in source

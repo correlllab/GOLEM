@@ -267,7 +267,7 @@ The H1-2's 4 and the G1's 4 controller configs now live in `core_ws/src/golem_up
 - the end-effector twists;
 - the H1-2's reduced self-collision verdicts.
 
-The G1's gravity torques and centre of mass match too.
+The G1's gravity torques match too.
 
 Ported unchanged, and not listed:
 
@@ -282,7 +282,7 @@ Nothing runs these classes before Task 11's nodes. The rows below are the differ
 
 | Robot | Old | New | Reason |
 |---|---|---|---|
-| H1-2 | The joints frozen out of the models were a hand-written list (`ALL_JOINTS` minus `BODY_JOINTS`, or `ALL_HANDLESS_JOINTS` with `handless`), frozen at an all-zero configuration. The Magpie gripper's finger and rocker hinges are continuous joints, whose configuration is `[cos, sin]`. Zeros made them `[0, 0]`, which is no rotation at all, so the 8 finger and rocker links (50 g each) sat at a degenerate placement in the dynamics. | Every URDF joint that is not a profile body joint is frozen, at Pinocchio's neutral configuration (angle 0 for every hinge). For `h1_2_magpie.urdf` the frozen set is the same. At the fixture's 50 configurations, gravity-compensation torques differ by at most 6.4e-3 N*m (the torques themselves reach 42.8 N*m, median 1.9 N*m) and the centre of mass by at most 1.1e-5 m. Frames before the hinges (the end effectors, the grasp frames, the torso) are bit-identical. | The generic frozen-joint loader of the G1 (spec, golem_upper_ik "Frozen joints"); `[0, 0]` is not a configuration of a continuous joint. The `handless` flag goes with the hand-written list. |
+| H1-2 | The joints frozen out of the models were a hand-written list (`ALL_JOINTS` minus `BODY_JOINTS`, or `ALL_HANDLESS_JOINTS` with `handless`), frozen at an all-zero configuration. The Magpie gripper's finger and rocker hinges are continuous joints, whose configuration is `[cos, sin]`. Zeros made them `[0, 0]`, which is no rotation at all, so the 8 finger and rocker links (50 g each) sat at a degenerate placement in the dynamics. | Every URDF joint that is not a profile body joint is frozen, at Pinocchio's neutral configuration (angle 0 for every hinge). For `h1_2_magpie.urdf` the frozen set is the same. At the fixture's 50 configurations, gravity-compensation torques differ by at most 6.4e-3 N*m (the torques themselves reach 42.8 N*m, median 1.9 N*m). Frames before the hinges (the end effectors, the grasp frames, the torso) are bit-identical. | The generic frozen-joint loader of the G1 (spec, golem_upper_ik "Frozen joints"); `[0, 0]` is not a configuration of a continuous joint. The `handless` flag goes with the hand-written list. |
 | H1-2 | The model did not check the URDF's joints. A missing body joint, or body joints in another order than the `/lowcmd` slots, gave a model that read `/lowstate` into the wrong joints. | Either is refused with `ValueError` naming the robot and the URDF. `h1_2_magpie.urdf` and `h1_2_magpie_sphere.urdf` pass. | The G1's check (it asserted the order); the model feeds `/lowstate` straight in. |
 | G1 | A missing body joint, joints out of slot order and an unknown IMU frame raised `AssertionError`. | `ValueError`, naming the robot and the URDF or frame. | Bad robot data is an input error, and an `assert` is skipped under `python -O`. |
 | H1-2 | The IMU orientation was taken in `torso_link`, hard-coded. | The profile's `imu_frame` (`torso_link`), or the controller config's `controller.imu_frame` (Task 11 passes it). A frame not in the URDF is refused at start. | The G1's parameter, with the same default for the H1-2. |

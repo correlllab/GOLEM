@@ -189,6 +189,10 @@ RobotProfile parse_checked(const YAML::Node & root, const std::string & source)
   profile.mode_machine = require_byte(root, "mode_machine", source);
   profile.mode_pr = require_byte(root, "mode_pr", source);
   profile.motor_slots = require_scalar<int>(root, "motor_slots", source, "");
+  if (profile.motor_slots != kMotorSlots) {
+    fail(source, "key 'motor_slots' is " + std::to_string(profile.motor_slots) +
+           ", not the " + std::to_string(kMotorSlots) + " slots of the LowCmd motor array");
+  }
 
   const YAML::Node modes = require(root, "modes", source, "");
   if (!modes.IsSequence() || modes.size() == 0) {
@@ -196,11 +200,16 @@ RobotProfile parse_checked(const YAML::Node & root, const std::string & source)
   }
   for (const auto & entry : modes) {
     const std::string name = scalar_as<std::string>(entry, "modes", source, "");
+    Mode mode = Mode::FullBody;
     try {
-      profile.modes.push_back(parse_mode(name));
+      mode = parse_mode(name);
     } catch (const std::runtime_error & e) {
       fail(source, std::string("key 'modes': ") + e.what());
     }
+    if (std::find(profile.modes.begin(), profile.modes.end(), mode) != profile.modes.end()) {
+      fail(source, "key 'modes' lists " + name + " twice");
+    }
+    profile.modes.push_back(mode);
   }
 
   const YAML::Node joints = require(root, "joints", source, "");
@@ -216,9 +225,9 @@ RobotProfile parse_checked(const YAML::Node & root, const std::string & source)
   }
 
   const size_t joint_count = profile.joints.size();
-  if (profile.motor_slots < static_cast<int>(joint_count)) {
-    fail(source, "key 'motor_slots' is smaller than the " + std::to_string(joint_count) +
-           " body joints");
+  if (static_cast<int>(joint_count) > profile.motor_slots) {
+    fail(source, "the " + std::to_string(joint_count) + " body joints do not fit the " +
+           std::to_string(profile.motor_slots) + " motor slots");
   }
   profile.lower_slots = require_range(root, "lower_slots", source);
   profile.upper_slots = require_range(root, "upper_slots", source);
@@ -228,6 +237,13 @@ RobotProfile parse_checked(const YAML::Node & root, const std::string & source)
     profile.upper_slots.first <= profile.lower_slots.last)
   {
     fail(source, "keys 'lower_slots' and 'upper_slots' overlap");
+  }
+  for (const JointLimit & joint : profile.joints) {
+    if (!profile.lower_slots.contains(joint.slot) && !profile.upper_slots.contains(joint.slot)) {
+      fail(source, "keys 'lower_slots' and 'upper_slots' must cover every body joint, and "
+           "joint '" + joint.name + "' (slot " + std::to_string(joint.slot) + ") is in "
+           "neither");
+    }
   }
 
   const bool arm_sdk = std::find(profile.modes.begin(), profile.modes.end(), Mode::ArmSdk) !=

@@ -34,7 +34,8 @@ The node refuses to start, with one `FATAL` line and exit code 1, when a paramet
 missing, the profile or config does not load (`safety_node refuses to start: robot <robot>,
 config <config>: <reason>`), or `sim:=true` meets domain 0 (`safety_node refuses to start:
 sim:=true on ROS domain 0, ...`). It exits 1 as well when its relay loop
-fails, or when its exit sequence overruns its length by more than 1 s
+fails, when its executor thread (the heartbeat's) fails, after running the exit sequence,
+or when its exit sequence overruns its length by more than 1 s
 (`exit_hand_back_timeout`); 0 otherwise.
 
 ## ROS interface
@@ -47,11 +48,19 @@ fails, or when its exit sequence overruns its length by more than 1 s
 | sub | `/safety/lowcmd_upper_in` | `LowCmd` | keep-last 1, best effort | `arm_sdk_mode` (G1) |
 | sub | `/estop/triggered`, `/estop/plugged_in` | `std_msgs/Bool` | keep-last 1, best effort | `use_estop:=true` |
 | pub | `/lowcmd` (`full_body_mode`, `split_mode`) or `/arm_sdk` (`arm_sdk_mode`) | `LowCmd` | reliable, keep-last 1 | per mode |
-| pub | `/safety/heartbeat` | `std_msgs/Bool` | reliable, depth 10 | always: 10 Hz on the steady clock, true until the estop latches |
+| pub | `/safety/heartbeat` | `std_msgs/Bool` | reliable, depth 10 | 10 Hz on the steady clock once relaying can begin: true, then false once the estop latches |
 
 The topic names are the config's `topics` (and `estop`) values; the table gives the
 defaults, which every carried config uses. `h12_lowerbody_rl`, `lmg_deploy` and `h12_skills`
-read `/safety/heartbeat` on the H1-2.
+read `/safety/heartbeat` on the H1-2, and `h12_lowerbody_rl` starts pre-posing the legs on
+the first beat, so a beat means relaying can begin. The node publishes none until the
+engage conditions that do not depend on the inputs hold: the newest `/lowstate` reports the
+profile's `mode_machine` and, with `use_estop`, a first hardware estop sample has arrived
+(`SafetyCore::relay_ready`). From then on it beats true, and false once the estop latches.
+An estop that latches before then (a non-finite command with no `/lowstate` yet, a first
+estop sample that says triggered) makes the beats false from the latch on, never true.
+Before engaging, a `/lowstate` from another robot stops the beats again, which the readers
+time out on.
 
 ## Robot profiles
 
@@ -249,7 +258,7 @@ diagnostic`, Error). After the latch:
 The estop report (Error) is `estop_command_written`, or `estop_latched_silent` when nothing
 was written: the reason, `decision_ms` (the latch), `action_ms` (the first step after it)
 and, for the hardware estop, `trigger_stamp_ms`, all on the boot-time clock. The heartbeat
-turns false.
+turns false, or starts false when the relay was not ready yet.
 
 **Exit** (SIGINT, SIGTERM, SIGHUP; `main()` takes them, and a closed stderr cannot stop the
 exit). In `full_body_mode` and `split_mode` the layer stops publishing at once; an estop
@@ -297,7 +306,8 @@ docker/scripts/docker_run.sh ros --restart --g1 /home/code/h12_sim_scripts/launc
   `LowCmd` builders and CRC (`test_lowcmd`, against SDK-computed values), the chunk logger
   and the boot clock.
 - `test/test_node_ros.py` runs the installed `safety_node` against a fake robot over ROS on
-  `ROS_DOMAIN_ID` 91 (`test/conftest.py`), for both robots.
+  `ROS_DOMAIN_ID` 91 (`test/conftest.py`), for both robots. `test_spinner` (the executor
+  thread) runs on 91 too.
 - `test_limit_parity.py` compares every config's derived limits with fixtures from the
   previous safety layers' loaders, `test_robot_data.py` the profiles with their sources,
   `test_chunk_files.py` the chunks with numpy and `combine_chunks.py`, and `test_no_sdk.py`
@@ -305,6 +315,12 @@ docker/scripts/docker_run.sh ros --restart --g1 /home/code/h12_sim_scripts/launc
 
 A pytest reported as skipped means pytest was not usable when CMake configured the package
 (export `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` before building), not a pass.
+
+Do not run the suite on a host whose robot stack is up: `test_sim_refuses_domain_zero`
+starts the node with `sim:=true` on ROS domain 0, the real robots' command bus, on the
+loopback interface only. It refuses before it creates any command publisher, so nothing is
+commanded, but a stack on the same host (the G1 laptop's `golem_ros`, for one) can be
+discovered over loopback and fail the test.
 
 ## Tools
 

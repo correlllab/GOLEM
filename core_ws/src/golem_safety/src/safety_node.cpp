@@ -6,13 +6,15 @@
 //   - the relay thread polls /lowstate, the hardware estop and the mode's inputs with
 //     take() and calls step() at control.publish_hz, sleeping to absolute deadlines on the
 //     boot clock; on exit it calls exit_step() at the same rate until the core is done.
-//     It is the only thread that touches SafetyCore, except for estopped();
+//     It is the only thread that touches SafetyCore, except for estopped() and
+//     relay_ready();
 //   - an executor thread (a Spinner) runs the 10 Hz /safety/heartbeat wall timer, which
-//     reads only estopped(); the polled subscriptions are in a callback group no executor
-//     spins;
+//     reads only estopped() and relay_ready(); the polled subscriptions are in a callback
+//     group no executor spins;
 //   - an EventLog thread writes every log line, so that stderr can never block the relay;
-//   - main() waits for SIGINT, SIGTERM or SIGHUP, which every thread blocks, then has the
-//     relay run the exit sequence before rclcpp shuts down.
+//   - main() waits for SIGINT, SIGTERM or SIGHUP, which every thread blocks, or for the
+//     executor thread to fail, then has the relay run the exit sequence before rclcpp shuts
+//     down.
 
 #include <pthread.h>
 #include <signal.h>
@@ -39,6 +41,7 @@
 #include "golem_safety/json.hpp"
 #include "golem_safety/robot_profile.hpp"
 #include "golem_safety/safety_core.hpp"
+#include "golem_safety/spinner.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "unitree_hg/msg/low_cmd.hpp"
@@ -189,6 +192,22 @@ private:
   std::thread thread_;
 };
 
+// The longest the exit sequence's ramp or burst takes, s: the arm_sdk weight ramp, or the
+// rest of an estop burst.
+double exit_seconds(const SafetyConfig & config)
+{
+  if (config.mode == Mode::ArmSdk) {
+    return config.arm_sdk.release_seconds;
+  }
+  return config.estop_response.burst_count / config.control.publish_hz;
+}
+
+// How long the exit sequence may take before it counts as failed, s.
+double exit_budget_seconds(const SafetyConfig & config)
+{
+  return exit_seconds(config) + kExitMarginSeconds;
+}
+
 // The relay loop and the exit sequence, on one thread.
 class Relay
 {
@@ -205,18 +224,28 @@ public:
     rclcpp::Subscription<LowState>::SharedPtr state, std::vector<CommandInput> inputs,
     rclcpp::Subscription<Bool>::SharedPtr estop_triggered,
     rclcpp::Subscription<Bool>::SharedPtr estop_plugged_in)
-  : core_(core), period_(1.0 / config.control.publish_hz), log_(log), chunks_(chunks),
+  : core_(core), period_(1.0 / config.control.publish_hz),
+    exit_budget_(exit_budget_seconds(config)), log_(log), chunks_(chunks),
     out_(std::move(out)), state_(std::move(state)), inputs_(std::move(inputs)),
     estop_triggered_(std::move(estop_triggered)), estop_plugged_in_(std::move(estop_plugged_in))
   {}
 
-  // Only on a path that skipped join(): the exit sequence runs, bounded.
+  // Only on a path that skipped join(): the exit sequence runs, within the budget main()
+  // gives it. A thread still running after that uses the core, which is destroyed next, so
+  // the process leaves at once, as main() does.
   ~Relay()
   {
     if (thread_.joinable()) {
       request_exit();
-      if (!join(kDestructorJoinSeconds)) {
-        thread_.detach();
+      if (!join(exit_budget_)) {
+        try {
+          log_.post(
+            Event::Error, "{\"event\": \"exit_hand_back_timeout\", \"seconds\": " +
+            std::to_string(exit_budget_) + "}");
+          log_.drain(kLogDrainSeconds);
+        } catch (...) {
+        }
+        _exit(1);
       }
     }
   }
@@ -248,8 +277,6 @@ public:
   }
 
 private:
-  static constexpr double kDestructorJoinSeconds = 5.0;
-
   void run() noexcept
   {
     try {
@@ -364,6 +391,7 @@ private:
 
   SafetyCore & core_;
   const double period_;  // s
+  const double exit_budget_;  // s
   EventLog & log_;
   ChunkLogger * const chunks_;
   const rclcpp::Publisher<LowCmd>::SharedPtr out_;
@@ -385,48 +413,6 @@ private:
   std::mutex mutex_;
   std::condition_variable done_;
   std::thread thread_;
-};
-
-// Runs an executor's spin() on a thread of its own, and stops and joins it on every way out
-// of its scope, an exception included: a joinable std::thread that is destroyed ends the
-// process in std::terminate, with no exit sequence. Declare it after everything the
-// executor's callbacks use, so that it is destroyed first.
-class Spinner
-{
-public:
-  explicit Spinner(rclcpp::Executor & executor)
-  : executor_(executor), thread_([this] {
-      executor_.spin();
-      finished_.store(true, std::memory_order_release);
-    }) {}
-
-  ~Spinner() {stop();}
-
-  Spinner(const Spinner &) = delete;
-  Spinner & operator=(const Spinner &) = delete;
-
-  // Returns once spin() has returned; a second call does nothing. A cancel() that arrives
-  // before spin() has started is lost, so it is repeated until the thread returns.
-  void stop()
-  {
-    if (!thread_.joinable()) {
-      return;
-    }
-    while (!finished_.load(std::memory_order_acquire)) {
-      try {
-        executor_.cancel();
-      } catch (const std::exception &) {
-        // spin() ends by itself once the context is invalid
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    thread_.join();
-  }
-
-private:
-  rclcpp::Executor & executor_;
-  std::atomic<bool> finished_{false};
-  std::thread thread_;  // last: it starts in the constructor, and uses the members above
 };
 
 // The node's parameters, read once at start.
@@ -487,16 +473,6 @@ std::vector<Relay::CommandInput> command_inputs(
       return {subscribe(Input::Upper, config.topics.low_cmd_upper_in)};
   }
   return {};
-}
-
-// The longest the exit sequence's ramp or burst takes, s: the arm_sdk weight ramp, or the
-// rest of an estop burst.
-double exit_seconds(const SafetyConfig & config)
-{
-  if (config.mode == Mode::ArmSdk) {
-    return config.arm_sdk.release_seconds;
-  }
-  return config.estop_response.burst_count / config.control.publish_hz;
 }
 
 int run(int argc, char ** argv, const sigset_t & exit_signals)
@@ -567,13 +543,22 @@ int run(int argc, char ** argv, const sigset_t & exit_signals)
       config->estop.plugged_in_topic, newest, [](Bool::ConstSharedPtr) {}, polled);
   }
 
-  // true until the estop latches; on the steady clock, whatever use_sim_time says
+  // A beat means relaying can begin, since its readers start driving on the first one:
+  // nothing until SafetyCore::relay_ready(), then true, and false once the estop has
+  // latched, before the relay was ready too. On the steady clock, whatever use_sim_time
+  // says.
   auto heartbeat = node->create_publisher<Bool>(kHeartbeatTopic, rclcpp::QoS(10));
   SafetyCore & safety = *core;
   auto heartbeat_timer = node->create_wall_timer(
     kHeartbeatPeriod, [&safety, &heartbeat] {
       Bool msg;
-      msg.data = !safety.estopped();
+      if (safety.estopped()) {
+        msg.data = false;
+      } else if (safety.relay_ready()) {
+        msg.data = true;
+      } else {
+        return;
+      }
       heartbeat->publish(msg);
     });
 
@@ -597,9 +582,15 @@ int run(int argc, char ** argv, const sigset_t & exit_signals)
     log.post(Event::Info, started);
   }
 
-  // Until an exit signal, or the relay ending by itself, which is a failure.
+  // Until an exit signal, the executor thread failing (the heartbeat stops with it), or the
+  // relay ending by itself; the last two are failures.
   int signum = 0;
+  bool spinner_failed = false;
   while (!relay.finished()) {
+    if (spinner.failed()) {
+      spinner_failed = true;
+      break;
+    }
     const timespec poll{0, 100000000};  // 0.1 s
     siginfo_t info;
     const int taken = sigtimedwait(&exit_signals, &info, &poll);
@@ -610,12 +601,19 @@ int run(int argc, char ** argv, const sigset_t & exit_signals)
   }
   int code = 0;
   bool joined = true;
-  if (signum != 0) {
-    log.post(
-      Event::Info, "{\"event\": \"exit_requested\", \"reason\": " +
-      json_string(std::string("Exit requested (") + signal_name(signum) + ")") + "}");
+  if (signum != 0 || spinner_failed) {
+    if (spinner_failed) {
+      log.post(
+        Event::Error, "the executor thread failed, so the heartbeat has stopped; running "
+        "the exit sequence: " + spinner.error());
+      code = 1;
+    } else {
+      log.post(
+        Event::Info, "{\"event\": \"exit_requested\", \"reason\": " +
+        json_string(std::string("Exit requested (") + signal_name(signum) + ")") + "}");
+    }
     relay.request_exit();
-    const double budget = exit_seconds(*config) + kExitMarginSeconds;
+    const double budget = exit_budget_seconds(*config);
     joined = relay.join(budget);
     if (!joined) {
       log.post(

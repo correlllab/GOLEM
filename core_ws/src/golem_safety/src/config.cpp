@@ -107,7 +107,8 @@ public:
 
   bool has(const std::string & name) const {return node_[name].IsDefined();}
 
-  // A sub-map; an absent one is empty, so every key in it takes its default.
+  // A sub-map; an absent one is empty, so each of its keys takes its default, and a
+  // required one (required_number, required_choice) is reported missing.
   Section section(const std::string & name) const
   {
     return Section(where_, has(name) ? node_[name] : YAML::Node(YAML::NodeType::Map), key(name));

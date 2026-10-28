@@ -1001,6 +1001,54 @@ def test_heartbeat_true_then_false_on_estop(stack, robot):
     assert 8 <= len([t for t, _ in after if now - 1.0 <= t < now]) <= 12, '10 Hz'
 
 
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_no_heartbeat_while_lowstate_is_another_robots(stack, robot):
+    run = stack(robot, SPLIT[robot], stream_state=False)
+    own = run.robot.profile.mode_machine
+    run.robot.state.mode_machine = 5 if own == 6 else 6
+    run.robot.resume()
+    run.robot.stream(*input_pairs(run))
+    time.sleep(1.0)
+    assert run.robot.outputs(HEARTBEAT) == [], 'the relay cannot begin on a foreign /lowstate'
+    assert estop_events(run.node) == []
+
+    switched = time.time()
+    run.robot.state.mode_machine = own
+    time.sleep(1.0)
+    beats = run.robot.outputs(HEARTBEAT)
+    assert beats and all(beat for _, beat in beats)
+    assert beats[0][0] > switched
+    assert run.outputs() and carries(run.outputs()[-1][1], run)
+
+
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
+@pytest.mark.parametrize('latch', ['command', 'estop'])
+def test_heartbeat_false_after_a_latch_before_the_first_beat(stack, robot, latch):
+    '''
+    command: a non-finite command with no /lowstate yet; estop: a first hardware estop
+    sample that says triggered, with the robot's /lowstate. Either way the relay could never
+    begin: no beat is true, and the beats are false from the latch on
+    '''
+    if latch == 'command':
+        run = stack(robot, SPLIT[robot], stream_state=False)
+        pub = run.robot.publisher(UPPER)
+        pub.publish(run.robot.command(shoulder=float('nan')))
+        reason_prefix = 'Command validation failed on /safety/lowcmd_upper_in'
+    else:
+        run = stack(robot, SPLIT[robot], use_estop=True)
+        time.sleep(0.3)
+        run.robot.estop_values = (True, True)
+        reason_prefix = 'External estop triggered'
+    time.sleep(1.2)
+    (report,) = [e for e in estop_events(run.node) if e['event'] in (
+        'estop_command_written', 'estop_latched_silent')]
+    assert report['reason'].startswith(reason_prefix), report
+    beats = run.robot.outputs(HEARTBEAT)
+    assert beats and not any(beat for _, beat in beats)
+    now = time.time()
+    assert 8 <= len([t for t, _ in beats if now - 1.0 <= t < now]) <= 12, '10 Hz'
+
+
 # the hardware estop
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
@@ -1023,11 +1071,16 @@ def test_estop_topics_gate_engagement(stack, robot):
     run.robot.estop_values = (False, None)
     time.sleep(0.5)
     assert not_engaged()
+    # no heartbeat before the relay can begin
+    assert run.robot.outputs(HEARTBEAT) == []
+    sampled = time.time()
     run.robot.estop_values = (False, True)
     time.sleep(0.5)
     assert run.outputs() and carries(run.outputs()[-1][1], run)
     assert estop_events(run.node) == []
-    assert all(beat for _, beat in run.robot.outputs(HEARTBEAT))
+    beats = run.robot.outputs(HEARTBEAT)
+    assert beats and all(beat for _, beat in beats)
+    assert beats[0][0] > sampled
 
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])

@@ -663,6 +663,65 @@ TEST(Estop, NoEngageBeforeFirstSample)
   EXPECT_TRUE(run(g1_core, g1(), g1_cfg, command(g1()), 100, 100));
 }
 
+TEST(Startup, RelayReadyNeedsTheRobotsLowstateAndAnEstopSample)
+{
+  struct Case
+  {
+    const RobotProfile & profile;
+    const char * config_name;
+  };
+  for (const Case & c : {Case{h12(), "sim_safety_split"}, Case{g1(), "sim_split"},
+      Case{g1(), "sim_arm_sdk"}})
+  {
+    SCOPED_TRACE(c.config_name);
+    const SafetyConfig cfg = config(c.profile, c.config_name);
+    LowState foreign = state_of(c.profile);
+    foreign.mode_machine = c.profile.mode_machine == 5 ? 6 : 5;
+
+    // Without use_estop: the newest /lowstate decides, before any command.
+    SafetyCore core(c.profile, cfg, false, kDomain);
+    EXPECT_FALSE(core.relay_ready());
+    core.on_state(foreign, 0.0);
+    EXPECT_FALSE(core.relay_ready());
+    core.on_state(state_of(c.profile), 0.01);
+    EXPECT_TRUE(core.relay_ready());
+    core.on_state(foreign, 0.02);
+    EXPECT_FALSE(core.relay_ready()) << "a foreign /lowstate before engaging";
+    core.on_state(state_of(c.profile), 0.03);
+    EXPECT_TRUE(core.relay_ready());
+    EXPECT_FALSE(core.estopped());
+
+    // With use_estop, the first hardware estop sample too, in either order.
+    SafetyCore estop(c.profile, cfg, true, kDomain);
+    estop.on_state(state_of(c.profile), 0.0);
+    EXPECT_FALSE(estop.relay_ready());
+    estop.on_estop(false, true, 0.01);
+    EXPECT_TRUE(estop.relay_ready());
+    SafetyCore sample_first(c.profile, cfg, true, kDomain);
+    sample_first.on_estop(false, true, 0.0);
+    EXPECT_FALSE(sample_first.relay_ready());
+    sample_first.on_state(state_of(c.profile), 0.01);
+    EXPECT_TRUE(sample_first.relay_ready());
+
+    // A first sample that latches never makes the relay ready.
+    SafetyCore triggered(c.profile, cfg, true, kDomain);
+    triggered.on_state(state_of(c.profile), 0.0);
+    triggered.on_estop(true, true, 0.01);
+    EXPECT_TRUE(triggered.estopped());
+    EXPECT_FALSE(triggered.relay_ready());
+
+    // The estop can latch before the relay is ready: a non-finite command, no /lowstate.
+    SafetyCore early(c.profile, cfg, false, kDomain);
+    LowCmd bad = command(c.profile);
+    bad.motor_cmd[c.profile.upper_slots.first].q = std::numeric_limits<float>::quiet_NaN();
+    early.on_command(Input::Upper, bad, "upper", 0.0);
+    EXPECT_TRUE(early.estopped());
+    EXPECT_FALSE(early.relay_ready());
+    early.on_state(state_of(c.profile), 0.01);
+    EXPECT_FALSE(early.relay_ready());
+  }
+}
+
 TEST(Estop, StaleAfterEngageLatches)
 {
   struct Case

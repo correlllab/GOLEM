@@ -1,6 +1,7 @@
 #include "golem_safety/safety_core.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -21,6 +22,10 @@ namespace
 using unitree_hg::msg::LowCmd;
 using unitree_hg::msg::LowState;
 using unitree_hg::msg::MotorCmd;
+
+// The profile parser holds every slot below kMotorSlots, the length of these arrays.
+static_assert(std::tuple_size<decltype(LowCmd::motor_cmd)>::value == kMotorSlots);
+static_assert(std::tuple_size<decltype(LowState::motor_state)>::value == kMotorSlots);
 
 // Constructed at load time, so a latch never has to allocate it.
 const std::string kReasonLost = "the estop latched, and its reason could not be recorded";
@@ -273,6 +278,22 @@ std::string SafetyCore::joint(int slot) const
 }
 
 void SafetyCore::on_state(const LowState & state, double now)
+{
+  check_state(state, now);
+  if (!estopped()) {
+    update_relay_ready();
+  }
+}
+
+// The engage conditions that do not depend on the inputs, as refusal() checks them.
+void SafetyCore::update_relay_ready()
+{
+  const bool ready = state_ && state_->mode_machine == profile_.mode_machine &&
+    (!use_estop_ || estop_sample_time_.has_value());
+  relay_ready_.store(ready, std::memory_order_release);
+}
+
+void SafetyCore::check_state(const LowState & state, double now)
 {
   const std::optional<double> previous = state_time_;
   state_time_ = now;
@@ -751,6 +772,8 @@ void SafetyCore::on_estop(bool triggered, bool plugged_in, double now)
     latch(now, now, [] {return std::string("External estop triggered");});
   } else if (!plugged_in) {
     latch(now, now, [] {return std::string("External estop unplugged");});
+  } else {
+    update_relay_ready();
   }
 }
 

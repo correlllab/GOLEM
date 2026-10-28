@@ -56,6 +56,12 @@ struct Event
 // A command that does not engage raises engage_refused (Warn) with the first reason, at
 // most once a second.
 //
+// Relay ready. relay_ready() is true while the engage conditions that do not depend on the
+// inputs hold: the newest /lowstate carries the profile's mode_machine and, with use_estop,
+// a hardware estop sample has arrived. Before engaging, a /lowstate from another robot makes
+// it false again. A sample that latches the estop never makes it true; once the estop has
+// latched it keeps its value, and estopped() is what counts.
+//
 // Quiet inputs are held and reported, never latched. Once an input has engaged, a gap in
 // its commands longer than its stale time (stale.upper_seconds for Upper,
 // stale.lower_seconds for Lower and Full) raises input_quiet (Warn) while its last
@@ -120,8 +126,8 @@ struct Event
 // weights rounded to 4 decimals). The other events are text. Raising an event never
 // throws: an event that cannot be built is dropped.
 //
-// Not thread-safe: one thread calls every method, except estopped(), which any thread may
-// call.
+// Not thread-safe: one thread calls every method, except estopped() and relay_ready(),
+// which any thread may call.
 class SafetyCore
 {
 public:
@@ -158,6 +164,8 @@ public:
   std::optional<unitree_hg::msg::LowCmd> exit_step(double now);
 
   bool estopped() const {return estopped_.load(std::memory_order_acquire);}
+  // Relaying can begin: see "Relay ready" above.
+  bool relay_ready() const {return relay_ready_.load(std::memory_order_acquire);}
   // Empty before the latch; a fixed text when the reason could not be built.
   const std::string & estop_reason() const;
 
@@ -255,6 +263,9 @@ private:
   bool took_control() const;
   bool state_flowing(double now) const;
 
+  void check_state(const unitree_hg::msg::LowState & state, double now);
+  void update_relay_ready();
+
   void accept_command(InputState & in, const unitree_hg::msg::LowCmd & cmd, double now);
   std::optional<BadValue> soft_waist(const unitree_hg::msg::LowCmd & cmd) const;
   void try_engage(InputState & in, double now);
@@ -329,6 +340,7 @@ private:
 
   std::optional<double> estop_sample_time_;  // the newest hardware estop sample's arrival
 
+  std::atomic<bool> relay_ready_{false};
   std::atomic<bool> estopped_{false};
   std::string estop_reason_;
   bool reason_lost_ = false;

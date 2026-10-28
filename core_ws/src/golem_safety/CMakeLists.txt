@@ -91,6 +91,11 @@ if(BUILD_TESTING)
   ament_add_gtest(test_boot_clock test/test_boot_clock.cpp)
   target_include_directories(test_boot_clock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+  # Creates a node, on the package's test domain.
+  ament_add_gtest(test_spinner test/test_spinner.cpp ENV ROS_DOMAIN_ID=91)
+  target_include_directories(test_spinner PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  ament_target_dependencies(test_spinner rclcpp)
+
   ament_add_pytest_test(test_no_sdk test/test_no_sdk.py TIMEOUT 60)
 
   # The matching and statistics of tools/relay_latency_probe.py, on synthetic streams; no ROS.

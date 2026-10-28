@@ -27,7 +27,7 @@ std::string error_of(const std::function<void()> & fn)
   return "";
 }
 
-// Two body joints, three modes' worth of slots, one valid arm_sdk weight slot.
+// Two body joints, one lower and one upper slot, and the arm_sdk weight slot after them.
 const char * const kValid = R"(
 robot: toy
 mode_machine: 7
@@ -220,6 +220,66 @@ TEST(RobotProfile, WeightSlotWithoutArmSdkModeThrows)
   const std::string message =
     parse_error(replaced(kValid, "modes: [arm_sdk_mode, split_mode]", "modes: [split_mode]"));
   EXPECT_NE(message.find("arm_sdk_weight_slot"), std::string::npos) << message;
+}
+
+TEST(RobotProfile, MotorSlotsMustBeTheLowCmdArray)
+{
+  for (const char * slots : {"34", "36"}) {
+    const std::string message =
+      parse_error(replaced(kValid, "motor_slots: 35", std::string("motor_slots: ") + slots));
+    EXPECT_NE(message.find("motor_slots"), std::string::npos) << message;
+    EXPECT_NE(message.find("35"), std::string::npos) << message;
+  }
+}
+
+TEST(RobotProfile, JointsMustFitTheLowCmdArray)
+{
+  // 36 body joints, one more than the LowCmd array holds.
+  std::string joints = "joints:\n";
+  for (int slot = 0; slot < 36; ++slot) {
+    joints += "  - {name: j" + std::to_string(slot) + ", slot: " + std::to_string(slot) +
+      ", position: [-1.0, 1.0], velocity: 10.0, effort: 20.0}\n";
+  }
+  std::string text = kValid;
+  text = replaced(text, "upper_slots: [1, 1]", "upper_slots: [1, 35]");
+  text = replaced(text, "modes: [arm_sdk_mode, split_mode]", "modes: [split_mode]");
+  text = replaced(text, "arm_sdk_weight_slot: 2\n", "");
+  text = text.substr(0, text.find("joints:")) + joints;
+  const std::string message = parse_error(text);
+  EXPECT_NE(message.find("36 body joints"), std::string::npos) << message;
+}
+
+TEST(RobotProfile, LowerAndUpperSlotsMustCoverEveryBodyJoint)
+{
+  const std::string three_joints = replaced(
+    replaced(kValid, "arm_sdk_weight_slot: 2", "arm_sdk_weight_slot: 3"),
+    "effort: 21.0}\n",
+    "effort: 21.0}\n  - {name: c_joint, slot: 2, position: [-1.0, 1.0], velocity: 10.0, "
+    "effort: 20.0}\n");
+  const std::string message = parse_error(three_joints);
+  EXPECT_NE(message.find("lower_slots"), std::string::npos) << message;
+  EXPECT_NE(message.find("upper_slots"), std::string::npos) << message;
+  EXPECT_NE(message.find("c_joint"), std::string::npos) << message;
+  // the same profile with the upper range over both upper joints parses
+  EXPECT_NO_THROW(
+    golem_safety::parse_robot_profile(
+      replaced(three_joints, "upper_slots: [1, 1]", "upper_slots: [1, 2]"), "toy.yaml"));
+}
+
+TEST(RobotProfile, WeightSlotMustBeInsideTheLowCmdArray)
+{
+  const std::string message =
+    parse_error(replaced(kValid, "arm_sdk_weight_slot: 2", "arm_sdk_weight_slot: 35"));
+  EXPECT_NE(message.find("arm_sdk_weight_slot"), std::string::npos) << message;
+}
+
+TEST(RobotProfile, AModeListedTwiceThrows)
+{
+  const std::string message = parse_error(
+    replaced(kValid, "modes: [arm_sdk_mode, split_mode]", "modes: [arm_sdk_mode, split_mode, "
+    "arm_sdk_mode]"));
+  EXPECT_NE(message.find("arm_sdk_mode"), std::string::npos) << message;
+  EXPECT_NE(message.find("twice"), std::string::npos) << message;
 }
 
 TEST(Mode, ParsesTheThreeModeNames)

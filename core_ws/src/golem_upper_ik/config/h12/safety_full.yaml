@@ -1,0 +1,124 @@
+topics:
+  low_cmd: /safety/lowcmd_in
+  low_state: /lowstate
+
+controller:
+  v_lim: 1.0
+  w_lim: 2.0
+  dq_lim: 1.0
+  d_min: 0.02
+  timeout: 5.0
+  hold_targets:
+    torso_joint: 0.0  # rad
+  threshold_ik: 0.0001
+  threshold_joint: 0.01
+  threshold_linear: 0.001
+  threshold_angular: 0.002
+
+planner:
+  planner: RRTConnect
+  timeout: 1.0
+  # example RRT* tuning
+  # planner: RRTstar
+  # timeout: 3.0
+  # range: 0.15
+  # planner extension length in joint space
+  range: 0.0
+  try_direct: true
+  simplify: true
+  simplify_time: 1.0
+  shortcut: true
+  # target grasp-frame Cartesian speed in m/s
+  moving_speed: 0.30
+  min_interpolation_steps: 30
+  max_interpolation_steps: 300
+  # sampled validity spacing in joint space
+  validity_resolution: 0.0025
+  # extra samples between returned waypoints
+  constraint_check_steps: 10
+  frame_names:
+    - left_grasp_frame
+    - right_grasp_frame
+  # maximum forward reach for grasp frames
+  frame_x_max: 0.60
+  # prep grasp-frame y limits
+  frame_y_min: -0.45
+  frame_y_max: 0.45
+  # global z floor for frame_names
+  frame_z_min: -0.05
+  # zero-pose z references: head camera=0.68789 m, lidar=0.67980 m
+  # shoulder z=0.43358 m
+  frame_z_max: 0.60
+  # allowed drift beyond frame limits
+  frame_limit_margin: 0.01
+  # allowed drift below endpoint z min
+  frame_z_corridor_margin: 0.05
+  # clamp a measured start pose up to this (rad) past a joint limit back into
+  # bounds instead of aborting the plan; larger overshoots still fail
+  start_limit_tolerance: 0.05
+
+frequency:
+  ctrl_hz: 30
+  pub_hz: 500
+
+gains:
+  # upper-body gains only; lower-body gains default to 0
+  kp:
+    - 160.0 # torso_joint
+    - 240.0 # left_shoulder_pitch_joint
+    - 200.0 # left_shoulder_roll_joint
+    - 150.0 # left_shoulder_yaw_joint
+    - 150.0 # left_elbow_joint
+    - 120.0 # left_wrist_roll_joint
+    - 120.0 # left_wrist_pitch_joint
+    - 120.0 # left_wrist_yaw_joint
+    - 240.0 # right_shoulder_pitch_joint
+    - 200.0 # right_shoulder_roll_joint
+    - 150.0 # right_shoulder_yaw_joint
+    - 150.0 # right_elbow_joint
+    - 120.0 # right_wrist_roll_joint
+    - 120.0 # right_wrist_pitch_joint
+    - 120.0 # right_wrist_yaw_joint
+  kd:
+    - 10.0 # torso_joint
+    - 12.0 # left_shoulder_pitch_joint
+    - 12.0 # left_shoulder_roll_joint
+    - 12.0 # left_shoulder_yaw_joint
+    - 12.0 # left_elbow_joint
+    - 12.0 # left_wrist_roll_joint
+    - 12.0 # left_wrist_pitch_joint
+    - 12.0 # left_wrist_yaw_joint
+    - 12.0 # right_shoulder_pitch_joint
+    - 12.0 # right_shoulder_roll_joint
+    - 12.0 # right_shoulder_yaw_joint
+    - 12.0 # right_elbow_joint
+    - 12.0 # right_wrist_roll_joint
+    - 12.0 # right_wrist_pitch_joint
+    - 12.0 # right_wrist_yaw_joint
+  ki:
+    - 60.0 # torso_joint
+    - 600.0 # left_shoulder_pitch_joint
+    - 600.0 # left_shoulder_roll_joint
+    - 400.0 # left_shoulder_yaw_joint
+    - 400.0 # left_elbow_joint
+    - 100.0 # left_wrist_roll_joint
+    - 100.0 # left_wrist_pitch_joint
+    - 100.0 # left_wrist_yaw_joint
+    - 600.0 # right_shoulder_pitch_joint
+    - 600.0 # right_shoulder_roll_joint
+    - 400.0 # right_shoulder_yaw_joint
+    - 400.0 # right_elbow_joint
+    - 100.0 # right_wrist_roll_joint
+    - 100.0 # right_wrist_pitch_joint
+    - 100.0 # right_wrist_yaw_joint
+
+limits:
+  clip:
+    position_offset: 0.001
+    velocity_ratio: 0.10
+    torque_ratio: 0.60
+
+logging:
+  enabled: false
+  base_dir: data/control_record
+  filename: record

@@ -1,0 +1,81 @@
+'''The G1's controller data: the 29-DoF model with both Dex3-1 hands, its frames and postures'''
+import numpy as np
+
+# joints the IK solves for, in the order of every named configuration
+ENABLED_JOINTS = (
+    'left_shoulder_pitch_joint',
+    'left_shoulder_roll_joint',
+    'left_shoulder_yaw_joint',
+    'left_elbow_joint',
+    'left_wrist_roll_joint',
+    'left_wrist_pitch_joint',
+    'left_wrist_yaw_joint',
+    'right_shoulder_pitch_joint',
+    'right_shoulder_roll_joint',
+    'right_shoulder_yaw_joint',
+    'right_elbow_joint',
+    'right_wrist_roll_joint',
+    'right_wrist_pitch_joint',
+    'right_wrist_yaw_joint',
+)
+# upper-body joints the IK does not move (it models them at 0); every command holds them at
+# controller.hold_targets
+HELD_JOINTS = ('waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint')
+# the Dex3-1 palms: end effectors for velocity limiting and the ee pose topics, and the
+# planner's frames
+EE_FRAMES = ('left_hand_palm_link', 'right_hand_palm_link')
+PLANNER_FRAMES = ('left_hand_palm_link', 'right_hand_palm_link')
+# frame of the /lowstate IMU. To verify on the robot: if turning the waist changes the IMU
+# yaw while the pelvis stays still, the IMU is imu_in_torso (controller.imu_frame overrides)
+IMU_FRAME = 'imu_in_pelvis'
+
+HALF_PI = np.pi / 2
+# Named arm postures for the 14 IK joints, rad, inside the URDF limits:
+#   0 L_sh_pitch 1 L_sh_roll 2 L_sh_yaw 3 L_elbow 4 L_wr_roll 5 L_wr_pitch 6 L_wr_yaw
+#   7 R_sh_pitch 8 R_sh_roll 9 R_sh_yaw 10 R_elbow 11 R_wr_roll 12 R_wr_pitch 13 R_wr_yaw
+# G1 conventions, checked with forward kinematics on the with-hand URDF:
+# - all zeros is upper arms down, elbows at 90 deg, forearms forward (palms about 0.24 m in
+#   front of the pelvis at waist height)
+# - elbow +pi/2 straightens the arm downward
+# - shoulder pitch < 0 raises the arm forward
+# - shoulder roll > 0 (left) / < 0 (right) raises the arms out to the sides
+NAMED_CONFIGS = {
+    'home':  # zero posture, forearms forward; the first stage of Unitree's arm_sdk example
+        np.zeros(len(ENABLED_JOINTS)),
+    'arms_down':  # straight arms hanging below the shoulders
+        np.array([0.0, 0.0, 0.0, HALF_PI, 0.0, 0.0, 0.0,
+                  0.0, 0.0, 0.0, HALF_PI, 0.0, 0.0, 0.0]),
+    't_pose':  # straight arms out to the sides, horizontal; the example's lift target
+        np.array([0.0, HALF_PI, 0.0, HALF_PI, 0.0, 0.0, 0.0,
+                  0.0, -HALF_PI, 0.0, HALF_PI, 0.0, 0.0, 0.0]),
+    'arms_front_45':  # straight arms, 45 deg forward and down
+        np.array([-np.pi / 4, 0.0, 0.0, HALF_PI, 0.0, 0.0, 0.0,
+                  -np.pi / 4, 0.0, 0.0, HALF_PI, 0.0, 0.0, 0.0]),
+}
+# postures the controller moves through when it starts, then it moves the waist to its hold
+# targets
+STARTUP_SEQUENCE = ('home',)
+
+# Controller-config defaults the two robots do not share (golem_upper_ik.config). The
+# follow gate reads golem_safety's output, /arm_sdk in its default arm_sdk mode. The
+# /lowstate tick-lag check is off: the real G1's tick has not been measured.
+CONFIG_DEFAULTS = {
+    'topics.safety_out': '/arm_sdk',
+    'controller.max_state_lag_ms': 0.0,
+}
+
+
+def model_paths() -> dict:
+    '''
+    The model files, installed by g1_description. It symlinks into third_party/leprechaun_g1,
+    which is mounted for the G1 only, so it is imported here and not at module level.
+    Pinocchio resolves the relative mesh paths of the plain URDF; the ROS copy has
+    package:// URIs. There is no self-collision model yet
+    '''
+    from g1_description.paths import urdf_path
+
+    return {
+        'urdf_path': urdf_path('with_hand'),
+        'urdf_ros_path': urdf_path('with_hand', ros=True),
+        'collision': None,
+    }

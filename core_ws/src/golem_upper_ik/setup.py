@@ -1,3 +1,5 @@
+from glob import glob
+
 from setuptools import find_packages, setup
 
 package_name = 'golem_upper_ik'
@@ -5,6 +7,8 @@ package_name = 'golem_upper_ik'
 data_files = [
     ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
     ('share/' + package_name, ['package.xml']),
+    ('share/' + package_name + '/config/h12', glob('config/h12/*.yaml')),
+    ('share/' + package_name + '/config/g1', glob('config/g1/*.yaml')),
 ]
 
 setup(

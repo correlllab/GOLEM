@@ -9,7 +9,8 @@ unavailable and refuses every request without starting the subprocess.
 Every request carries a sequence number that its reply echoes, and the client takes only
 the reply to the request it waits for. A subprocess that may still owe a reply nobody waits
 for (its start timed out, or a request was abandoned) is stopped, and the next request
-starts a fresh one with fresh queues.
+starts a fresh one with fresh queues. Requests from several threads take turns: one waits
+until the one before it has its reply.
 '''
 import itertools
 import queue
@@ -112,6 +113,9 @@ class PlannerClient:
         self._worker_main = _planner_worker_main
         self._worker = None
         self._request_ids = itertools.count(1)
+        # one request at a time: two waiting on one worker's replies would each have to
+        # take the other's reply off the queue to find its own
+        self._request_lock = threading.Lock()
 
     @property
     def available(self) -> bool:
@@ -191,15 +195,16 @@ class PlannerClient:
             return
 
     def _request(self, request):
-        worker = self._start()
-        request_id = next(self._request_ids)
-        try:
-            worker.request_queue.put(dict(request, id=request_id))
-            response = self._await_response(worker, request_id)
-        except BaseException:
-            # the reply to this request, should it come, would wait for the next one
-            self._stop(worker)
-            raise
+        with self._request_lock:
+            worker = self._start()
+            request_id = next(self._request_ids)
+            try:
+                worker.request_queue.put(dict(request, id=request_id))
+                response = self._await_response(worker, request_id)
+            except BaseException:
+                # the reply to this request, should it come, would wait for the next one
+                self._stop(worker)
+                raise
         if response.get('type') == 'result':
             return response['result']
         if response.get('type') == 'error':

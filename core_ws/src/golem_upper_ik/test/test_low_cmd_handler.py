@@ -376,12 +376,35 @@ def test_start_needs_a_measured_state(ros, models):
     ros.on_close(lambda: setattr(model, 'state_subscriber', None))
     with pytest.raises(StaleStateError, match='no sample'):
         handler.start()
+    # an initial pose given does not help: the gate has no measured pose to hold it near
+    q_init = np.zeros(len(profile.body_joints))
+    with pytest.raises(StaleStateError, match='no sample'):
+        handler.start(q_init=q_init)
     # and none at all
     model.state_subscriber = None
     with pytest.raises(StaleStateError, match='no state source'):
         handler.start()
+    with pytest.raises(StaleStateError, match='no state source'):
+        handler.start(q_init=q_init)
     time.sleep(0.2)
     assert recorder.count == 0
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_start_holds_the_initial_pose_near_the_measured_one(ros, models, robot):
+    rig = Rig(ros, models, robot)
+    handler = rig.handler()
+    tolerance = rig.config['controller']['follow_tolerance']
+    q_init = rig.measured.copy()
+    q_init[rig.upper] += 0.3
+    handler.start(q_init=q_init)
+    assert not handler.following
+    # the first command already leads the measured pose by the tolerance at most, and the
+    # hold starts from it
+    assert wait_for(lambda: rig.recorder.count > 0, 2.0)
+    first = upper_q(rig.recorder.samples[0][1], rig.profile)
+    np.testing.assert_allclose(first, rig.measured[rig.upper] + tolerance, atol=FLOAT32)
+    np.testing.assert_allclose(handler.hold, rig.measured[rig.held] + tolerance, atol=FLOAT32)
 
 
 def test_detached_state_source_leaves_the_last_command(ros, models):

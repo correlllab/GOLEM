@@ -92,6 +92,9 @@ CONFIG_DEFAULTS = {
     'topics.safety_out': '/lowcmd',
     'controller.max_state_lag_ms': 50.0,
 }
+# the controller config frame_task_server and joint_state_publisher load when their config
+# parameter is not given
+DEFAULT_CONFIG = 'debug'
 
 
 def model_paths() -> dict:

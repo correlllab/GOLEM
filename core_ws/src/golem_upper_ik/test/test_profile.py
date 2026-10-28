@@ -188,8 +188,9 @@ def test_unknown_robot_raises():
 
 
 # Run in a fresh interpreter, where an import hook refuses g1_description: the H1-2's
-# profile, configs and pairing must work without it, and the G1 module must import without
-# it (only load_profile('g1') reaches for it). The last step checks that the hook works.
+# profile, configs, pairing and nodes must work without it, and the G1 module must import
+# without it (only load_profile('g1') reaches for it). The last step checks that the hook
+# works.
 NO_G1_SCRIPT = r'''
 import importlib.abc
 import sys
@@ -210,6 +211,8 @@ assert 'g1_description' not in sys.modules
 
 import golem_upper_ik.robots.h12
 import golem_upper_ik.robots.g1
+import golem_upper_ik.ros2.frame_task_server
+import golem_upper_ik.ros2.joint_state_publisher
 from golem_upper_ik.config import load_controller_config
 from golem_upper_ik.pairing import default_controller_config, pairing_refusal
 from golem_upper_ik.profile import load_profile

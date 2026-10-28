@@ -4,18 +4,30 @@ spinning its nodes in a thread (Ros), a fake robot publishing /lowstate (FakeRob
 recorder of a command topic (Recorder) and a stand-in for golem_safety that relays the
 controller's commands on its output topic (Echo).
 
+For the controller's closed loop: a robot that executes the controller's commands as an
+engaged golem_safety would relay them, and relays them itself (FollowingRobot); a robot
+behind golem_safety's output topic (RelayedRobot), with golem_safety's safety_node run as a
+subprocess (SafetyNode) and a walking node on its leg input (WalkingNode); a recorder that
+also notes the robot's measured pose (CommandRecorder); and an action client (send_goal).
+
 Every node lives in the test's context, so they share one DDS participant and discover each
 other at once.
 '''
 import itertools
+import os
+from pathlib import Path
+import signal
+import subprocess
 import threading
 import time
 
 import numpy as np
 import rclpy
+from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from unitree_hg.msg import LowCmd, LowState
+import yaml
 
 TEST_DOMAIN = 92
 # keeps every sample: the recorder must see each command the controller sends
@@ -41,7 +53,8 @@ class Ros:
     def __init__(self):
         self.context = rclpy.Context()
         rclpy.init(context=self.context, domain_id=TEST_DOMAIN)
-        self.executor = MultiThreadedExecutor(num_threads=4, context=self.context)
+        # a goal holds one thread for as long as it runs
+        self.executor = MultiThreadedExecutor(num_threads=8, context=self.context)
         self._nodes = []
         self._closers = []
         self.spin_error = None
@@ -56,6 +69,10 @@ class Ros:
 
     def node(self, name):
         node = rclpy.create_node(f'{name}_{next(_names)}', context=self.context)
+        return self.add(node)
+
+    def add(self, node):
+        '''Spin node, created in this context, and destroy it when the test ends'''
         self._nodes.append(node)
         self.executor.add_node(node)
         return node
@@ -211,3 +228,347 @@ class Echo:
 def upper_q(msg, profile):
     '''The upper-slot q of a LowCmd, as float64'''
     return np.array([msg.motor_cmd[slot].q for slot in profile.upper_slots], dtype=np.float64)
+
+
+def slots_of(profile, joints):
+    '''The body slots of joints'''
+    return [profile.body_joints.index(joint) for joint in joints]
+
+
+def body_pose(profile, arms=None, held=None):
+    '''
+    Every body joint at 0, the IK joints at arms (a named configuration's name, or one value
+    per IK joint) and the held joints at held (one value per held joint)
+    '''
+    q = np.zeros(len(profile.body_joints))
+    if arms is not None:
+        values = profile.named_configs[arms] if isinstance(arms, str) else arms
+        q[slots_of(profile, profile.enabled_joints)] = values
+    if held is not None:
+        q[slots_of(profile, profile.held_joints)] = held
+    return q
+
+
+def _lowstate(profile):
+    msg = LowState()
+    msg.mode_pr = profile.mode_pr
+    msg.mode_machine = profile.mode_machine
+    msg.imu_state.quaternion = [1.0, 0.0, 0.0, 0.0]
+    for slot in range(len(profile.body_joints)):
+        msg.motor_state[slot].mode = 1
+    return msg
+
+
+class _Loop:
+    '''Runs step() at rate_hz from a thread until stop()'''
+
+    def __init__(self, rate_hz, step):
+        self._period = 1.0 / rate_hz
+        self._step = step
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def _run(self):
+        next_at = time.monotonic()
+        while not self._stop.is_set():
+            self._step()
+            next_at += self._period
+            time.sleep(max(0.0, next_at - time.monotonic()))
+
+    def stop(self):
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+
+
+class FollowingRobot:
+    '''
+    A robot behind an engaged golem_safety, whose relay it plays too. Every command on
+    command_topic is executed at once: each body slot with kp > 0 jumps to its q, less its
+    sag (rad, per slot). The newest command is relayed on relay_topic, at weight 1 in the
+    profile's weight slot on /arm_sdk. /lowstate goes out at rate_hz, its tick in ms on the
+    monotonic clock, until stop_state().
+    '''
+
+    def __init__(self, ros, profile, q0, relay_topic, command_topic='/safety/lowcmd_upper_in',
+                 sag=None, rate_hz=500.0):
+        self.profile = profile
+        self.node = ros.node('following_robot')
+        count = len(profile.body_joints)
+        self._lock = threading.Lock()
+        self._q = np.array(q0, dtype=np.float64)
+        self._sag = np.zeros(count) if sag is None else np.array(sag, dtype=np.float64)
+        self._upper = list(profile.upper_slots)
+        self._weight_slot = profile.arm_sdk_weight_slot if relay_topic == '/arm_sdk' else None
+        self.commands = 0
+        self.zero_gain_commands = 0  # every upper slot at kp 0
+        self.last_command = None  # (receive time on time.monotonic(), LowCmd)
+        self._relay = None
+        self._state_on = True
+        self._state = _lowstate(profile)
+        self._start = time.monotonic()
+        self._state_publisher = self.node.create_publisher(LowState, '/lowstate', WRITER_QOS)
+        self._relay_publisher = self.node.create_publisher(LowCmd, relay_topic, WRITER_QOS)
+        self.node.create_subscription(LowCmd, command_topic, self._on_command, RECORD_QOS)
+        self._loop = _Loop(rate_hz, self._step)
+        self._loop.start()
+        ros.on_close(self._loop.stop)
+
+    def _on_command(self, msg):
+        now = time.monotonic()
+        motors = msg.motor_cmd
+        with self._lock:
+            self.commands += 1
+            if all(motors[slot].kp == 0.0 for slot in self._upper):
+                self.zero_gain_commands += 1
+            for slot in range(len(self._q)):
+                if motors[slot].kp > 0.0:
+                    self._q[slot] = motors[slot].q - self._sag[slot]
+            if self._weight_slot is not None:
+                motors[self._weight_slot].q = 1.0
+            self._relay = msg
+            self.last_command = (now, msg)
+
+    def _step(self):
+        with self._lock:
+            q = self._q.copy()
+            relay = self._relay
+            state_on = self._state_on
+        if state_on:
+            self._state.tick = int((time.monotonic() - self._start) * 1000.0)
+            for slot, value in enumerate(q):
+                self._state.motor_state[slot].q = float(value)
+            self._state_publisher.publish(self._state)
+        if relay is not None:
+            self._relay_publisher.publish(relay)
+
+    def measured(self):
+        with self._lock:
+            return self._q.copy()
+
+    def set_sag(self, sag):
+        '''How far below its command each slot settles from the next command on, rad'''
+        with self._lock:
+            self._sag = np.asarray(sag, dtype=np.float64).copy()
+
+    def stop_state(self):
+        '''Publish no more /lowstate; commands are still executed and relayed'''
+        with self._lock:
+            self._state_on = False
+
+
+class RelayedRobot:
+    '''
+    A robot behind golem_safety's output topic (/arm_sdk or /lowcmd). Each upper-body slot
+    the newest command gives kp > 0 tracks weight x its command + (1 - weight) x the hold;
+    any other upper slot tracks the hold. On /arm_sdk the weight is the newest command's
+    weight slot, 0 until one arrives (the hold is Unitree's); on /lowcmd it is 1 (the hold is
+    where the robot hangs, limp). push is added to every upper slot's target, and each tracks
+    its target with a TRACK_S lag. The hold sways sway rad on the first held joint and the
+    left shoulder roll, so the measured pose drifts before golem_safety engages. /lowstate
+    goes out at rate_hz from start()
+    '''
+
+    TRACK_S = 0.05
+    SWAY_PERIOD_S = 2.0
+
+    def __init__(self, ros, profile, q0, topic, sway=0.1, rate_hz=500.0):
+        self.profile = profile
+        self.node = ros.node('relayed_robot')
+        self.q0 = np.array(q0, dtype=np.float64)
+        self.upper = list(profile.upper_slots)
+        self.sway_slots = slots_of(profile, (profile.held_joints[0], 'left_shoulder_roll_joint'))
+        self._sway = sway
+        self._weight_slot = profile.arm_sdk_weight_slot if topic == '/arm_sdk' else None
+        self._lock = threading.Lock()
+        self._q = self.q0.copy()
+        self._cmd_q = self.q0.copy()
+        self._commanded = np.zeros(len(self.q0), dtype=bool)
+        self._weight = 0.0 if self._weight_slot is not None else 1.0
+        self._push = np.zeros(len(self.q0))
+        self._state = _lowstate(profile)
+        self.started = None
+        self._last = None
+        self._state_publisher = self.node.create_publisher(LowState, '/lowstate', WRITER_QOS)
+        self.node.create_subscription(LowCmd, topic, self._on_command, RECORD_QOS)
+        self._loop = _Loop(rate_hz, self._step)
+        ros.on_close(self._loop.stop)
+
+    def start(self):
+        self.started = time.monotonic()
+        self._last = self.started
+        self._loop.start()
+
+    def _on_command(self, msg):
+        motors = msg.motor_cmd
+        with self._lock:
+            if self._weight_slot is not None:
+                self._weight = float(motors[self._weight_slot].q)
+            for slot in self.upper:
+                self._commanded[slot] = motors[slot].kp > 0.0
+                if self._commanded[slot]:
+                    self._cmd_q[slot] = motors[slot].q
+
+    def _hold(self, t):
+        hold = self.q0.copy()
+        hold[self.sway_slots] += self._sway * np.sin(2.0 * np.pi * t / self.SWAY_PERIOD_S)
+        return hold
+
+    def _step(self):
+        now = time.monotonic()
+        # the lag in real time, however late this step runs
+        alpha = 1.0 - np.exp(-(now - self._last) / self.TRACK_S)
+        self._last = now
+        with self._lock:
+            hold = self._hold(now - self.started)
+            blended = self._weight * self._cmd_q + (1.0 - self._weight) * hold
+            target = np.where(self._commanded, blended, hold) + self._push
+            self._q[self.upper] += (target[self.upper] - self._q[self.upper]) * alpha
+            q = self._q.copy()
+        self._state.tick = int((now - self.started) * 1000.0)
+        for slot, value in enumerate(q):
+            self._state.motor_state[slot].q = float(value)
+        self._state_publisher.publish(self._state)
+
+    def set_push(self, push):
+        with self._lock:
+            self._push = np.asarray(push, dtype=np.float64).copy()
+
+    def measured(self):
+        with self._lock:
+            return self._q.copy()
+
+
+class WalkingNode:
+    '''A walking policy: the legs at q0 on golem_safety's leg input, at 200 Hz from start()'''
+
+    def __init__(self, ros, profile, q0):
+        self.node = ros.node('walking_node')
+        self._msg = LowCmd()
+        self._msg.mode_pr = profile.mode_pr
+        self._msg.mode_machine = profile.mode_machine
+        for slot in profile.lower_slots:
+            motor = self._msg.motor_cmd[slot]
+            motor.mode = 1
+            motor.q = float(q0[slot])
+            motor.kp = 100.0
+            motor.kd = 2.0
+        self._publisher = self.node.create_publisher(LowCmd, '/safety/lowcmd_lower_in',
+                                                     WRITER_QOS)
+        self._loop = _Loop(200.0, lambda: self._publisher.publish(self._msg))
+        ros.on_close(self._loop.stop)
+
+    def start(self):
+        self._loop.start()
+
+
+class CommandRecorder:
+    '''
+    Every LowCmd on topic, as samples: receive time (time.monotonic()), the upper-slot q and
+    their smallest kp, the weight slot's q (or None on a topic without one) and the robot's
+    measured upper-slot q at that time (or None without a robot)
+    '''
+
+    def __init__(self, ros, topic, profile, robot=None):
+        self.node = ros.node('command_recorder')
+        self._upper = list(profile.upper_slots)
+        self._weight_slot = profile.arm_sdk_weight_slot if topic == '/arm_sdk' else None
+        self._robot = robot
+        self._lock = threading.Lock()
+        self._samples = []
+        self.node.create_subscription(LowCmd, topic, self._on_command, RECORD_QOS)
+
+    def _on_command(self, msg):
+        now = time.monotonic()
+        motors = msg.motor_cmd
+        q = np.array([motors[slot].q for slot in self._upper], dtype=np.float64)
+        kp = min(motors[slot].kp for slot in self._upper)
+        weight = None if self._weight_slot is None else float(motors[self._weight_slot].q)
+        measured = None if self._robot is None else self._robot.measured()[self._upper]
+        with self._lock:
+            self._samples.append(Sample(now, q, kp, weight, measured))
+
+    @property
+    def samples(self):
+        with self._lock:
+            return list(self._samples)
+
+    @property
+    def count(self):
+        with self._lock:
+            return len(self._samples)
+
+
+class Sample:
+    __slots__ = ('t', 'q', 'kp', 'weight', 'measured')
+
+    def __init__(self, t, q, kp, weight, measured):
+        self.t, self.q, self.kp, self.weight, self.measured = t, q, kp, weight, measured
+
+
+def send_goal(ros, action_type, action_name, goal, timeout=60.0):
+    '''Send goal to the action server and wait for the outcome: (status, result)'''
+    node = ros.node('action_client')
+    client = ActionClient(node, action_type, action_name)
+    assert client.wait_for_server(timeout_sec=10.0), f'no {action_name} action server'
+    sent = client.send_goal_async(goal)
+    assert wait_for(sent.done, 10.0), f'{action_name} did not answer the goal'
+    handle = sent.result()
+    assert handle.accepted, f'{action_name} refused the goal'
+    done = handle.get_result_async()
+    assert wait_for(done.done, timeout), f'{action_name} gave no result within {timeout} s'
+    response = done.result()
+    return response.status, response.result
+
+
+class SafetyNode:
+    '''
+    golem_safety's safety_node as a subprocess on domain 92, on a copy of one of its robot's
+    configs with logging off, written to directory/<robot>/
+    '''
+
+    def __init__(self, robot, config, directory, sim=False):
+        from ament_index_python.packages import get_package_prefix, get_package_share_directory
+        share = Path(get_package_share_directory('golem_safety'))
+        raw = yaml.safe_load((share / 'config' / robot / f'{config}.yaml').read_text())
+        raw['logging']['enabled'] = False
+        path = Path(directory) / robot / f'{config}.yaml'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump(raw))
+        prefix = Path(get_package_prefix('golem_safety'))
+        executable = prefix / 'lib' / 'golem_safety' / 'safety_node'
+        self._args = [str(executable), '--ros-args', '-p', f'robot:={robot}',
+                      '-p', f'config:={path}', '-p', f'sim:={"true" if sim else "false"}']
+        self.lines = []
+        self.proc = None
+        self.started = None
+
+    def start(self):
+        env = dict(os.environ, ROS_DOMAIN_ID=str(TEST_DOMAIN), RCUTILS_COLORIZED_OUTPUT='0')
+        self.started = time.monotonic()
+        self.proc = subprocess.Popen(self._args, env=env, text=True, stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT)
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self):
+        for line in self.proc.stdout:
+            self.lines.append(line.rstrip('\n'))
+
+    def output(self):
+        return '\n'.join(self.lines)
+
+    def estopped(self):
+        return any('"event": "estop_' in line for line in list(self.lines))
+
+    def stop(self, timeout=10.0):
+        if self.proc is None or self.proc.poll() is not None:
+            return
+        self.proc.send_signal(signal.SIGINT)
+        try:
+            self.proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait(timeout=5.0)

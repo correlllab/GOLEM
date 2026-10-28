@@ -66,6 +66,9 @@ CONFIG_DEFAULTS = {
     'topics.safety_out': '/arm_sdk',
     'controller.max_state_lag_ms': 0.0,
 }
+# the controller config frame_task_server and joint_state_publisher load when their config
+# parameter is not given
+DEFAULT_CONFIG = 'g1'
 
 
 def model_paths() -> dict:

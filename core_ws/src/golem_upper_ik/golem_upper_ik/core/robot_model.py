@@ -47,7 +47,7 @@ class StateSource(Protocol):
         joint in /lowcmd slot order, and optionally 'imu_state', an object whose `quaternion`
         is the IMU orientation (w, x, y, z). update_kinematics and state_reduced each take
         everything they use from one read; nothing modifies what a read returns.
-    staleness_ms: the age of the newest sample, ms
+    staleness_ms: the age of the newest sample, ms; inf before the first sample
     shutdown(): stops the source; RobotModel.shutdown() calls it
     '''
 

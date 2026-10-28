@@ -446,3 +446,20 @@ def test_values_are_finite_after_loading():
                 for key, value in config[section].items():
                     if isinstance(value, float):
                         assert math.isfinite(value), (robot, name, section, key)
+
+
+@pytest.mark.parametrize('name', CONFIGS['g1'])
+def test_g1_waist_gains_are_damped_from_the_urdf_inertia(models, name):
+    import pinocchio as pin
+    gains = load('g1', name)['gains']
+    model = models('g1')
+    profile = model.profile
+    # joint-space inertia at home (arms and waist at 0)
+    data = model.model_body.createData()
+    inertia = np.diag(pin.crba(model.model_body, data, np.zeros(model.num_motor)))
+    for joint in profile.held_joints:
+        slot = profile.body_joints.index(joint)
+        zeta = gains['kd'][slot] / (2.0 * np.sqrt(gains['kp'][slot] * inertia[slot]))
+        assert 0.4 <= zeta <= 0.5, (name, joint, zeta)
+    arms = [profile.body_joints.index(joint) for joint in profile.enabled_joints]
+    assert np.all(gains['kd'][arms] == 1.5)

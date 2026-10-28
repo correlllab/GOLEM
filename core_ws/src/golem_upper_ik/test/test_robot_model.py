@@ -356,3 +356,73 @@ def test_unused_paths_are_gone(models):
                  'get_frame_twist', 'get_frame_wrench', 'get_motion_compensation',
                  'get_angular_centroidal_momentum'):
         assert not hasattr(model.dynamics, name), name
+
+
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_profile_frames_exist_in_every_model(models, robot):
+    model = models(robot)
+    profile = model.profile
+    frames = set(profile.ee_frames + profile.planner_frames + (profile.imu_frame, 'torso_link'))
+    if robot == 'g1':
+        # the G1's sensors and the other IMU, which controller.imu_frame may name
+        frames |= {'imu_in_torso', 'd435_link', 'mid360_link'}
+    for frame in sorted(frames):
+        for name in ('model', 'model_body', 'model_body_reduced'):
+            assert getattr(model, name).existFrame(frame), (name, frame)
+
+
+def pelvis_quaternion(model, q, imu_wxyz):
+    from pyquaternion import Quaternion
+    x, y, z, w = model.full_q(q, imu_quat=imu_wxyz)[3:7]
+    return Quaternion(w, x, y, z)
+
+
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_imu_orientation_gives_the_pelvis_orientation(models, robot):
+    from pyquaternion import Quaternion
+    model = models(robot)
+    profile = model.profile
+    first_held = profile.body_joints.index(profile.held_joints[0])
+    imu = Quaternion(axis=[0.3, 1.0, 0.2], angle=0.4)
+    # the held joints at 0: the IMU frame sits level on the pelvis, so the pelvis is the IMU
+    q = np.zeros(model.num_motor)
+    pelvis = pelvis_quaternion(model, q, imu.elements)
+    assert Quaternion.absolute_distance(pelvis, imu) < 1e-6
+    # the first held joint (the H1-2's torso, the G1's waist yaw) turned 0.5 rad
+    q[first_held] = 0.5
+    if robot == 'h12':
+        # the IMU on torso_link turns with it: an IMU reading the turn has a level pelvis
+        turned = Quaternion(axis=[0.0, 0.0, 1.0], angle=0.5)
+        pelvis = pelvis_quaternion(model, q, turned.elements)
+        assert Quaternion.absolute_distance(pelvis, Quaternion()) < 1e-6
+    else:
+        # the IMU on the pelvis does not: the pelvis is still the IMU
+        pelvis = pelvis_quaternion(model, q, imu.elements)
+        assert Quaternion.absolute_distance(pelvis, imu) < 1e-6
+
+
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_named_configs_are_within_limits(models, robot):
+    model = models(robot)
+    profile = model.profile
+    for name, q in profile.named_configs.items():
+        assert model.check_within_limits_reduced(q), (name, model.reduced_limit_violations(q))
+    assert set(profile.startup_sequence) <= set(profile.named_configs)
+
+
+def test_g1_named_configs_are_where_they_claim(models):
+    model = models('g1')
+    profile = model.profile
+    data = model.model_body_reduced.createData()
+
+    def palms(name):
+        pin.framesForwardKinematics(model.model_body_reduced, data, profile.named_configs[name])
+        return [data.oMf[model.model_body_reduced.getFrameId(frame)].translation.copy()
+                for frame in profile.ee_frames]
+
+    left, right = palms('home')  # forearms forward at waist height
+    assert left[0] > 0.15 and right[0] > 0.15
+    left, _ = palms('arms_down')  # straight down, under the shoulder
+    assert abs(left[0]) < 0.05 and left[2] < 0.0
+    left, right = palms('t_pose')  # straight out to the sides at shoulder height
+    assert left[1] > 0.45 and right[1] < -0.45 and left[2] > 0.25

@@ -201,13 +201,17 @@ class LowCmdHandler:
     def start(self, q_init=None, tau=None):
         '''
         Command q_init (default: the measured q) with dq 0 and tau (default 0), the hold at
-        q_init's held joints, and start publishing. ValueError, and nothing published, if
-        q_init is not finite
+        q_init's held joints, and start publishing. While the follow gate is shut, q_init is
+        held near the measured pose like any command, so the measured pose is needed:
+        StaleStateError without one. ValueError if q_init is not finite. Either way nothing
+        is published
         '''
         with self._data_lock:
             if self._shut_down or self._started:
                 raise RuntimeError('the command handler starts once')
-        q_init = self._values('initial q', self._measured_q() if q_init is None else q_init,
+        gated = not self._follow_gate.following
+        measured_q = self._measured_q() if gated or q_init is None else None
+        q_init = self._values('initial q', measured_q if q_init is None else q_init,
                               self._count)
         tau = self._values('initial tau', 0.0 if tau is None else tau, self._count)
         with self._data_lock:
@@ -215,7 +219,8 @@ class LowCmdHandler:
                 raise RuntimeError('the command handler starts once')
             q = self._clip_q(q_init)
             self._hold = q[self._held].astype(np.float32).astype(np.float64)
-            self._commit_locked(q, np.zeros(self._count), self._clip_tau(tau), None)
+            self._commit_locked(q, np.zeros(self._count), self._clip_tau(tau),
+                                measured_q if gated else None)
             self._started = True
         if not self._follow_gate.following:
             self._gate_thread = threading.Thread(

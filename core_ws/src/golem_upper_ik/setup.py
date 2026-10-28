@@ -9,6 +9,7 @@ data_files = [
     ('share/' + package_name, ['package.xml']),
     ('share/' + package_name + '/config/h12', glob('config/h12/*.yaml')),
     ('share/' + package_name + '/config/g1', glob('config/g1/*.yaml')),
+    ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
 ]
 
 setup(
@@ -24,6 +25,9 @@ setup(
     license='MIT',
     tests_require=['pytest'],
     entry_points={
-        'console_scripts': [],
+        'console_scripts': [
+            'frame_task_server = golem_upper_ik.ros2.frame_task_server:main',
+            'joint_state_publisher = golem_upper_ik.ros2.joint_state_publisher:main',
+        ],
     },
 )

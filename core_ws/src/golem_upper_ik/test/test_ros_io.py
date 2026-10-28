@@ -139,10 +139,9 @@ def test_state_subscriber_is_a_state_source(ros, models):
     assert wait_for(lambda: subscriber.latest()[0].tick == 7000, 2.0)
 
     state = subscriber.state
-    assert set(state) == {'q', 'dq', 'tau', 'imu_state'}
-    for key in ('q', 'dq', 'tau'):
+    assert set(state) == {'q', 'dq', 'imu_state'}
+    for key in ('q', 'dq'):
         assert state[key].shape == (count,) and state[key].dtype == np.float32, key
-    np.testing.assert_array_equal(state['tau'], np.float32(0.5 * np.arange(count)))
     np.testing.assert_array_equal(state['imu_state'].quaternion, [1.0, 0.0, 0.0, 0.0])
     # a read is the reader's own: changing it changes no later read
     state['q'][:] = 9.0

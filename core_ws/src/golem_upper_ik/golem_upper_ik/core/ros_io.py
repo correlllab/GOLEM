@@ -132,11 +132,11 @@ class StateSubscriber:
     The newest /lowstate of one robot.
 
     latest(): (message, receive time on time.monotonic()), or None before the first sample.
-    state: the newest sample as arrays, one value per body joint in slot order, each read the
-        reader's own copy: 'q' (rad), 'dq' (rad/s) and 'tau' (the motors' torque estimate,
-        N*m), float32, and 'imu_state', whose quaternion (w, x, y, z), gyroscope (rad/s),
-        accelerometer (m/s^2) and rpy (rad) are float32 arrays. Before the first sample every
-        array is 0 (the IMU quaternion too, which RobotModel reads as level).
+    state: the newest sample as arrays, each read the reader's own copy: 'q' (rad) and 'dq'
+        (rad/s), float32, one value per body joint in slot order, and 'imu_state', whose
+        quaternion (w, x, y, z), gyroscope (rad/s), accelerometer (m/s^2) and rpy (rad) are
+        float32 arrays. Before the first sample every array is 0 (the IMU quaternion too,
+        which RobotModel reads as level).
     lag_ms: how late the newest sample arrived against the robot's tick (TickLagTracker), or
         None before the first sample.
     staleness_ms: the larger of lag_ms and the newest sample's age, ms; inf before the first.
@@ -176,7 +176,7 @@ class StateSubscriber:
     def _at_rest(self) -> dict:
         zeros = np.zeros(self._count, dtype=np.float32)
         return {
-            'q': zeros, 'dq': zeros, 'tau': zeros,
+            'q': zeros, 'dq': zeros,
             'quaternion': np.zeros(4, dtype=np.float32),
             'gyroscope': np.zeros(3, dtype=np.float32),
             'accelerometer': np.zeros(3, dtype=np.float32),
@@ -191,7 +191,6 @@ class StateSubscriber:
         return {
             'q': np.fromiter((motors[i].q for i in range(count)), np.float32, count),
             'dq': np.fromiter((motors[i].dq for i in range(count)), np.float32, count),
-            'tau': np.fromiter((motors[i].tau_est for i in range(count)), np.float32, count),
             'quaternion': np.array(imu.quaternion, dtype=np.float32),
             'gyroscope': np.array(imu.gyroscope, dtype=np.float32),
             'accelerometer': np.array(imu.accelerometer, dtype=np.float32),
@@ -210,7 +209,6 @@ class StateSubscriber:
         return {
             'q': arrays['q'].copy(),
             'dq': arrays['dq'].copy(),
-            'tau': arrays['tau'].copy(),
             'imu_state': SimpleNamespace(
                 quaternion=arrays['quaternion'].copy(),
                 gyroscope=arrays['gyroscope'].copy(),

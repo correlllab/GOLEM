@@ -52,3 +52,13 @@ def never_answers(init_args, request_queue, response_queue):
     '''Ready at once; takes requests without answering them, until told to shut down'''
     response_queue.put({'type': 'ready'})
     _serve(request_queue, response_queue, lambda request, responses: None)
+
+
+def echo_after_a_while(init_args, request_queue, response_queue):
+    """Ready at once; answers each request 0.2 s after taking it"""
+    def respond(request, responses):
+        time.sleep(0.2)
+        responses.put(_answer(request))
+
+    response_queue.put({'type': 'ready'})
+    _serve(request_queue, response_queue, respond)

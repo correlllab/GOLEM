@@ -1,14 +1,16 @@
 '''
-Which safety and controller configs may run together.
+Which safety and controller configs may run together, and what the pairs agree on.
 
 The G1's verdicts are compared with g1_control's config_pairing, through
 test/fixtures/old_controller/g1_pairing.json (written by tools/snapshot_old_controller.py);
-this test does not import g1_control.
+this test does not import g1_control. The pairs' topics and gain limits are read from
+golem_safety's installed configs.
 '''
 import itertools
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from golem_upper_ik.pairing import default_controller_config, pairing_refusal
@@ -109,3 +111,43 @@ def test_unknown_robot_raises():
         pairing_refusal('h1', 'safety_split', 'relax_safety_split')
     with pytest.raises(ValueError, match='h1'):
         default_controller_config('h1', 'relax_safety_split')
+
+
+def safety_config(robot, name):
+    '''golem_safety's config name of robot, as its YAML'''
+    from ament_index_python.packages import get_package_share_directory
+    import yaml
+    share = Path(get_package_share_directory('golem_safety'))
+    return yaml.safe_load((share / 'config' / robot / f'{name}.yaml').read_text())
+
+
+def paired_configs(robot):
+    from golem_upper_ik.pairing import G1_SAFETY_CONTROLLER_CONFIGS
+    if robot == 'g1':
+        pytest.importorskip('g1_description')
+        return G1_SAFETY_CONTROLLER_CONFIGS
+    return H12_PAIRS
+
+
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_paired_configs_agree_on_the_topics(robot):
+    from golem_upper_ik.config import load_controller_config
+    for safety, controller in paired_configs(robot).items():
+        topics = safety_config(robot, safety)['topics']
+        config = load_controller_config(robot, controller)
+        # the follow gate reads the topic the safety config writes, by content, not by name
+        assert config['topics']['safety_out'] == topics['low_cmd_out'], (safety, controller)
+        # and the controller writes an input the safety config reads
+        inputs = [topic for key, topic in topics.items() if key.startswith('low_cmd_') and
+                  key != 'low_cmd_out']
+        assert config['topics']['low_cmd'] in inputs, (safety, controller)
+
+
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_paired_safety_configs_do_not_clip_the_gains(robot):
+    from golem_upper_ik.config import load_controller_config
+    for safety, controller in paired_configs(robot).items():
+        clip = safety_config(robot, safety)['limits']['clip']
+        gains = load_controller_config(robot, controller)['gains']
+        assert np.all(gains['kp'] <= clip['kp_max']), (safety, controller)
+        assert np.all(gains['kd'] <= clip['kd_max']), (safety, controller)

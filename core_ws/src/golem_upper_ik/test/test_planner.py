@@ -452,6 +452,31 @@ def test_a_worker_dying_at_start_fails_at_once():
     assert client._worker is None
 
 
+def test_requests_from_several_threads_take_turns():
+    client = stub_client(planner_stubs.echo_after_a_while)
+    results = {}
+
+    def request(goal):
+        try:
+            results[goal] = plan(client, goal)
+        except Exception as error:  # the outcome under test
+            results[goal] = error
+
+    goals = (0.1, 0.2, 0.3, 0.4)
+    threads = [threading.Thread(target=request, args=(goal,), daemon=True) for goal in goals]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10.0)
+        # each got the answer to its own request, from one worker
+        assert not any(thread.is_alive() for thread in threads), results
+        assert results == {goal: [goal] * 14 for goal in goals}
+        assert len(planner_processes()) == 1
+    finally:
+        client.shutdown()
+
+
 def test_shutdown_during_a_request_raises_cleanly():
     client = stub_client(planner_stubs.never_answers)
     client._start()

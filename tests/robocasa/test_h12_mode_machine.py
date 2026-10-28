@@ -1,7 +1,9 @@
 """The H1-2 RoboCasa sim's rt/lowstate carries the real H1-2's mode_machine.
 
-SimInterface opens Unitree DDS channels on ROS_DOMAIN_ID, so run this
-only where DDS cannot reach a robot, e.g. a throwaway robocasa container without a network:
+The test opens no DDS participant and starts no thread: unitree_interface's DDS channel
+and thread names are replaced by in-process fakes for the length of each test. It runs
+in the standard runner (tests/robocasa/run_in_container.sh) and in a throwaway container
+without a network:
 
     docker run --rm --network none -v "$PWD:/repo:ro" -w /repo -e PYTHONPATH=h1_robocasa \
         -e PYTHONDONTWRITEBYTECODE=1 --entrypoint python3 golem_sim_robocasa:latest \
@@ -12,21 +14,53 @@ only where DDS cannot reach a robot, e.g. a throwaway robocasa container without
 import os
 import types
 import unittest
-
-# A sim domain, never the real robots' 0 (unitree_interface refuses it); a domain set by the
-# caller wins.
-os.environ.setdefault('ROS_DOMAIN_ID', '199')
+from unittest import mock
 
 import mujoco
 import numpy as np
 
-import unitree_interface
+# unitree_interface reads ROS_DOMAIN_ID once, at import, and refuses a missing value and the
+# real robots' 0. The fakes below open nothing, so this value reaches no network; it is set
+# for the import only.
+with mock.patch.dict(os.environ, {'ROS_DOMAIN_ID': '199'}):
+    import unitree_interface
 
 MODE_MACHINE = 6  # what the real H1-2 reports in every LowState_ (bags of real runs)
 
 
-def body_model_and_resolver():
-    """A dummy model with MOTOR_NUM hinge joints and the sensors and motors SimInterface reads
+class FakePublisher:
+    """Stands in for ChannelPublisher: records the mode_machine of each sample written."""
+    written = []
+
+    def __init__(self, topic, kind):
+        self.topic = topic
+
+    def Init(self):
+        pass
+
+    def Write(self, sample):
+        self.written.append(sample.mode_machine)
+
+
+class FakeSubscriber:
+    def __init__(self, topic, kind):
+        self.topic = topic
+
+    def Init(self, handler, queue_size):
+        pass
+
+
+class FakeThread:
+    """Stands in for RecurrentThread: never runs its target."""
+    def __init__(self, interval, target, name):
+        self.target = target
+
+    def Start(self):
+        pass
+
+
+def dummy_model_and_resolver():
+    """A model with MOTOR_NUM hinge joints and the sensors and motors SimInterface reads
     through the resolver, without the kitchen scene."""
     n = unitree_interface.MOTOR_NUM
     bodies = ''.join(f'<body><joint name="j{i}" axis="0 0 1"/><geom size="0.01"/></body>'
@@ -44,21 +78,24 @@ def body_model_and_resolver():
 
 
 class H12SimLowStateTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        model, resolver = body_model_and_resolver()
-        cls.iface = unitree_interface.SimInterface(model, mujoco.MjData(model), resolver=resolver)
-        cls.addClassCleanup(cls.iface.low_state_thread.Wait)
-        cls.addClassCleanup(cls.iface.timeout_thread.Wait)
+    def setUp(self):
+        FakePublisher.written = []
+        for name, fake in (('ChannelFactoryInitialize', lambda id: None),
+                           ('ChannelPublisher', FakePublisher),
+                           ('ChannelSubscriber', FakeSubscriber),
+                           ('RecurrentThread', FakeThread)):
+            patcher = mock.patch.object(unitree_interface, name, fake)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        model, resolver = dummy_model_and_resolver()
+        self.iface = unitree_interface.SimInterface(model, mujoco.MjData(model), resolver=resolver)
 
     def test_h12_sim_lowstate_reports_6(self):
         self.assertEqual(self.iface.low_state.mode_machine, MODE_MACHINE)
 
     def test_published_sample_carries_it(self):
-        published = []
-        self.iface.low_state_publisher.Write = lambda sample: published.append(sample.mode_machine)
         self.iface.publish_low_state()
-        self.assertEqual(published[-1], MODE_MACHINE)
+        self.assertEqual(FakePublisher.written, [MODE_MACHINE])
 
 
 if __name__ == '__main__':

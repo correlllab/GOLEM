@@ -151,7 +151,9 @@ SafetyConfig parse_safety_config(
 
 // Loads a config for `profile`. A name without a directory, with or without ".yaml",
 // is read from share/golem_safety/config/<profile.robot>/; anything else is a path.
-// Throws std::runtime_error as parse_safety_config does, and when the file is missing.
+// Throws std::runtime_error as parse_safety_config does, when the file is missing, and
+// when the path's directory is named after another robot with a profile (config/g1/...
+// for the h12).
 SafetyConfig load_safety_config(const std::string & name_or_path, const RobotProfile & profile);
 
 }  // namespace golem_safety

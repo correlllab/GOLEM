@@ -15,6 +15,7 @@ find_package(unitree_hg REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(ZLIB REQUIRED)
+find_package(Threads REQUIRED)
 
 # Every source except the node's main(); the node and the tests link it.
 add_library(golem_safety_core
@@ -34,9 +35,15 @@ add_executable(golem_safety_dump_config src/dump_config_main.cpp)
 target_link_libraries(golem_safety_dump_config golem_safety_core)
 install(TARGETS golem_safety_dump_config DESTINATION lib/${PROJECT_NAME})
 
+# The node: ros2 run golem_safety safety_node --ros-args -p robot:=h12 -p config:=...
+add_executable(safety_node src/safety_node.cpp)
+ament_target_dependencies(safety_node rclcpp std_msgs unitree_hg)
+target_link_libraries(safety_node golem_safety_core Threads::Threads)
+install(TARGETS safety_node DESTINATION lib/${PROJECT_NAME})
+
 # robots/<robot>.yaml is the robot data golem_upper_ik reads too; config/<robot>/ holds
-# the safety configs, which a bare config name resolves against.
-install(DIRECTORY robots config DESTINATION share/${PROJECT_NAME})
+# the safety configs, which a bare config name resolves against; launch/ runs the node.
+install(DIRECTORY robots config launch DESTINATION share/${PROJECT_NAME})
 
 # Concatenates a run's .npz chunks into one file.
 install(PROGRAMS scripts/combine_chunks.py DESTINATION lib/${PROJECT_NAME})
@@ -79,6 +86,16 @@ if(BUILD_TESTING)
   # The installed combine_chunks.py is what the test runs, so it needs the install space.
   ament_add_pytest_test(test_chunk_files test/test_chunk_files.py TIMEOUT 120
     ENV GOLEM_SAFETY_TEST_CHUNK_WRITER=${CMAKE_CURRENT_BINARY_DIR}/test_chunk_writer)
+
+  ament_add_gtest(test_boot_clock test/test_boot_clock.cpp)
+  target_include_directories(test_boot_clock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+  ament_add_pytest_test(test_no_sdk test/test_no_sdk.py TIMEOUT 60)
+
+  # Runs the installed safety_node against a fake robot over ROS, on the package's own
+  # test domain.
+  ament_add_pytest_test(test_node_ros test/test_node_ros.py TIMEOUT 1500
+    ENV ROS_DOMAIN_ID=91)
 endif()
 
 ament_package()

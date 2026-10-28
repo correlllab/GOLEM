@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <initializer_list>
 #include <map>
@@ -505,6 +506,21 @@ SafetyConfig parse_checked(
   return config;
 }
 
+// Whether `name` is a robot with a profile in share/golem_safety/robots/.
+bool is_robot(const std::string & name)
+{
+  if (name.empty()) {
+    return false;
+  }
+  try {
+    return std::filesystem::exists(
+      ament_index_cpp::get_package_share_directory("golem_safety") + "/robots/" + name +
+      ".yaml");
+  } catch (const std::exception &) {
+    return false;
+  }
+}
+
 bool ends_with(const std::string & text, const std::string & suffix)
 {
   return text.size() >= suffix.size() &&
@@ -536,6 +552,14 @@ SafetyConfig load_safety_config(const std::string & name_or_path, const RobotPro
               "cannot load the config '" + name_or_path + "' of robot " + profile.robot + ": " +
               e.what());
     }
+  }
+  // Several configs of one robot parse for the other, so a path under another robot's
+  // config directory (config/g1/ for the h12) is refused by the directory's name.
+  const std::string directory = std::filesystem::path(path).parent_path().filename().string();
+  if (directory != profile.robot && is_robot(directory)) {
+    throw std::runtime_error(
+            "the config " + path + " is in the config directory of robot " + directory +
+            ", not of robot " + profile.robot);
   }
   std::ifstream file(path);
   if (!file) {

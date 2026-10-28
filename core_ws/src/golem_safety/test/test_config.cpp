@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "ament_index_cpp/get_package_share_directory.hpp"
 #include "golem_safety/config.hpp"
 #include "golem_safety/robot_profile.hpp"
 
@@ -452,6 +453,33 @@ TEST(Config, ConfigNamesBelongToTheirRobot)
   for (const char * name : kG1Configs) {
     EXPECT_THROW(golem_safety::load_safety_config(name, h12()), std::runtime_error) << name;
   }
+}
+
+TEST(Config, PathInAnotherRobotsDirectoryIsRefused)
+{
+  // Several configs of one robot parse for the other (the G1's full.yaml for the H1-2, the
+  // H1-2's sim_safety_split.yaml for the G1, with the H1-2's start-up rule), so a path
+  // under another robot's config directory is refused by that directory's name.
+  const std::string share = ament_index_cpp::get_package_share_directory("golem_safety");
+  for (const char * name : kG1Configs) {
+    const std::string path = share + "/config/g1/" + name + ".yaml";
+    const std::string message =
+      error_of([&] {golem_safety::load_safety_config(path, h12());});
+    EXPECT_TRUE(contains(message, "h12")) << message;
+    EXPECT_TRUE(contains(message, path)) << message;
+    EXPECT_TRUE(contains(message, "robot g1")) << message;
+  }
+  for (const char * name : kH12Configs) {
+    const std::string path = share + "/config/h12/" + name + ".yaml";
+    const std::string message =
+      error_of([&] {golem_safety::load_safety_config(path, g1());});
+    EXPECT_TRUE(contains(message, "robot h12")) << message;
+  }
+  // The robot's own directory, given as a path, and a directory of any other name load.
+  EXPECT_NO_THROW(
+    golem_safety::load_safety_config(share + "/config/h12/sim_safety_split.yaml", h12()));
+  const TempConfig file(completed("mode: split_mode\n", h12()));
+  EXPECT_NO_THROW(golem_safety::load_safety_config(file.path(), h12()));
 }
 
 TEST(Config, DerivedLimitsUseTheSchemaDefaults)

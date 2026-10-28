@@ -47,7 +47,9 @@ Not covered by these docs. Split mode needs Unitree's controller released by
 the operator first, which nothing in this stack does. The interlocks the
 bringup enforces (`safety_config:=split`, `start_position_verified:=true`, a
 gantry because the split estop turns every motor off) are in
-`g1_bringup.launch.py`'s docstring and in [Safety layer](safety.md).
+`g1_bringup.launch.py`'s docstring and in [Safety layer](safety.md). A
+walking-node fault does not trip that estop: the safety layer holds the legs on
+the node's last command ([Safety layer](safety.md), Quiet inputs).
 
 More: the [g1_locomotion README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_locomotion/README.md)
 (behaviour, faults, real-time limits, configs) and the

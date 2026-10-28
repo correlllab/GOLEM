@@ -64,6 +64,11 @@ Two start-up failures to watch for in this terminal:
   `safety_node` logs `engage_refused` with the reason, at most once a second.
   The rest of the bringup keeps running, without `/frame_task`.
 
+The leg controller's input is held like any other: if it crashes or stops,
+`golem_safety` keeps relaying its last leg command and only reports it
+(`input_quiet` after `relax_safety_split`'s `stale.lower_seconds`, 0.2 s), so the
+legs stay on their last target until the bringup stops.
+
 **2. Onboard PC, second terminal — engage** (feet loaded, gantry slack):
 
 ```bash

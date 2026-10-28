@@ -149,10 +149,11 @@ real robot's `rt/lowstate` `mode_machine`: 6 for the H1-2, 5 for the G1.
 `wait_for_sim.py` refuses a simulator of the other robot by that value, but it
 runs only in `docker_stack.sh` and the mac stack (`GOLEM_WAIT_FOR_SIM=1`) and in
 `tests/stack`. `docker_run.sh ros` followed by a manual `ros2 launch` is not
-guarded by the wrappers. `golem_safety` checks the value too (§8), but the
-H1-2's configs stream zero-gain `rt/lowcmd` from boot whatever `rt/lowstate`
-says, which releases the G1 sim's stand-in, so its check does not replace one
-stack per domain.
+guarded by the wrappers. `golem_safety` checks `rt/lowstate`'s value too (§8),
+but that does not replace one stack per domain: the stacks share the
+`rt/safety/*` input topics and the node and action names, `golem_safety` does
+not check which robot an input command was written for, and `golem_upper_ik`
+does not check `rt/lowstate`'s `mode_machine`.
 
 ## 4. `core_ws/src` packages
 
@@ -606,9 +607,11 @@ authoritative source instead of copying it.
   estop (`estop_command_written`), and hands the waist and arms back to
   Unitree.
 - **`golem_safety`'s own exit** (SIGINT, SIGTERM, SIGHUP): in split and full-body
-  mode it stops publishing at once and the robot holds the last command written
-  (an estop burst in progress is finished first); in arm_sdk mode it ramps the
-  weight to 0 over `arm_sdk.release_seconds` first.
+  mode it stops publishing at once (an estop burst in progress is finished
+  first); in arm_sdk mode it ramps the weight to 0 over
+  `arm_sdk.release_seconds` first. Once `rt/lowcmd` falls silent, the sims turn
+  every body motor off after `GOLEM_CMD_TIMEOUT` (0.5 s of sim time); what the
+  real robots do then has not been measured.
 - **One robot stack per DDS domain** (§3). Never run the H1-2's and the G1's
   stacks, or `h12_skills`' and `g1_navigation`'s frontier explorers, on one
   domain.
@@ -745,7 +748,8 @@ G1 yet; follow `docs/g1/first-session.md` step by step.
   `mode_machine` 6 is refused: `wait_for_sim.py` stops `docker_stack.sh`, and
   `golem_safety` never engages (`engage_refused`: `/lowstate mode_machine is 0,
   expected 6`), so `frame_task_server` exits after 30 s. For Isaac, run
-  `git submodule update` first: the fix is in the `CL_isaaclab_sim` pin.
+  `git submodule update` first: the H1-2 Isaac sim reports 6 from the current
+  `CL_isaaclab_sim` pin.
 - **x86 `ros` container ≠ bringup.** It only builds and gives you a shell.
 - **Check the `robot:` line.** `docker_run.sh` and `docker_stack.sh up` print the
   robot they selected; a `GOLEM_ROBOT` left in the shell or `docker/.env`

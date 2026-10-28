@@ -130,9 +130,11 @@ follows depends on the mode:
 Ctrl+C, SIGTERM and SIGHUP stop the layer the same way. In arm_sdk mode it
 first ramps the weight to 0 over `arm_sdk.release_seconds` (whatever the
 `rt/lowstate` age) and writes weight 0 for 0.1 s more. In split and full-body
-mode it stops publishing at once and the robot is left on the last command
-written. `docker stop` can kill the node before it finishes, so Ctrl+C the
-launch first.
+mode it stops publishing `rt/lowcmd` at once. The sim then turns every motor off
+after `GOLEM_CMD_TIMEOUT` (0.5 s of sim time); what the real G1's motors do when
+`rt/lowcmd` stops has not been measured ([Control in sim and on the
+robot](control-path.md)). `docker stop` can kill the node before it finishes,
+so Ctrl+C the launch first.
 
 ## Logs
 

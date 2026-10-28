@@ -252,8 +252,10 @@ and, for the hardware estop, `trigger_stamp_ms`, all on the boot-time clock. The
 turns false.
 
 **Exit** (SIGINT, SIGTERM, SIGHUP; `main()` takes them, and a closed stderr cannot stop the
-exit). In `full_body_mode` and `split_mode` the layer stops publishing at once, and the robot
-is left on the last command written; an estop burst in progress is finished first. In
+exit). In `full_body_mode` and `split_mode` the layer stops publishing at once; an estop
+burst in progress is finished first. The sims then turn every body motor off after
+`GOLEM_CMD_TIMEOUT` (0.5 s of sim time) of `rt/lowcmd` silence; what the real robots do when
+it stops has not been measured. In
 `arm_sdk_mode` it holds the last valid command while the weight ramps from its value to 0
 over `arm_sdk.release_seconds`, whatever the `/lowstate` age, then writes weight 0 for 0.1 s
 more, so one lost packet cannot leave the robot on a higher weight.

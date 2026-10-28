@@ -47,9 +47,11 @@ robot's value), but only in `docker_stack.sh` and the mac stack
 (`GOLEM_WAIT_FOR_SIM=1`) and in `tests/stack`. `docker_run.sh ros` followed by
 a manual `ros2 launch` is not checked by the wrappers. `golem_safety` checks
 the value as well: it engages no input on another robot's `rt/lowstate` and
-latches its estop on one once engaged. The H1-2's safety configs stream
-zero-gain `rt/lowcmd` from boot, though, which would release the G1 sim's
-stand-in, so keep to one robot per domain.
+latches its estop on one once engaged. That does not replace one robot per
+domain: the two stacks share the `rt/safety/*` input topics and the node and
+action names, `golem_safety` does not check which robot an input command was
+written for, and `golem_upper_ik` does not check `rt/lowstate`'s
+`mode_machine`.
 
 ## Guards against the wrong domain
 

@@ -703,22 +703,27 @@ class Report:
                    f"rad meanwhile")
         # 5. stopping frame_task_server hands the arms back: weight 1 -> 0. Its
         # last command (zero gains) trips golem_safety's arm_sdk.waist_kp_min at
-        # once, so the ramp can start before the stop's mark: it is looked for
-        # from 0.5 s (sim) before it, when the weight was still 1
+        # once, and the stop's mark is taken just after the signal, so the ramp
+        # may start at the sample before the mark. It is looked for from two
+        # samples before the mark: a ramp that started earlier has no sample at
+        # weight 1 in that window, and fails
         stop = self.at("controller_stopped")
-        ramp = self.weight_ramp(slice(max(0, stop - int(0.5 * self.hz)), n), rising=False)
+        ramp = self.weight_ramp(slice(max(0, stop - 2), n), rising=False)
         if ramp is None:
-            self.check("hand back", False, "the rt/arm_sdk weight did not ramp 1 -> 0 after the stop")
+            self.check("hand back", False, "the rt/arm_sdk weight did not ramp 1 -> 0 from the stop on "
+                                           "(it was below 1 two samples before the stop, or never reached 0)")
         else:
             t0, t1, step, _, wall = ramp
             arms_end = np.abs(self.joints(self.info["arm_joints"], slice(n - int(0.5 * self.hz), n))).max()
             w_end = float(s["w"][-1])
             self.numbers["hand_back"] = {"stop_t": float(s["t"][stop]), "ramp_start_t": t0,
+                                         "ramp_start_after_stop_s": t0 - float(s["t"][stop]),
                                          "ramp_end_t": t1, "ramp_wall_s": wall, "max_step": step,
                                          "w_end": w_end, "arms_end_max_abs": float(arms_end)}
             self.check("hand back", self.ramp_ok(wall, step) and w_end == 0.0,
                        f"frame_task_server stopped at sim t {s['t'][stop]:.2f} s; weight 1 -> 0 over "
-                       f"{wall:.2f} s wall (sim t {t0:.2f} to {t1:.2f} s, {t1 - t0:.2f} s), largest change "
+                       f"{wall:.2f} s wall (sim t {t0:.2f} to {t1:.2f} s, {t1 - t0:.2f} s, starting "
+                       f"{t0 - s['t'][stop]:+.2f} s from the stop), largest change "
                        f"per 20 ms of wall time {step:.3f}; "
                        f"weight in effect at the end {w_end:.3f}; arms back at the stand-in's hold "
                        f"(max |q| {arms_end:.3f} rad)")

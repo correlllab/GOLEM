@@ -48,7 +48,7 @@ commands:
 faults:
   # longest gap (s, wall clock) allowed between rt/lowstate samples once the
   # node commands the legs; larger than g1.yaml's 0.05 s because the sim can
-  # run slower than real time, and below sim_split.yaml's 1 s leg watchdog
+  # run slower than real time
   max_state_gap: 0.5
   # longest a leg command may come after the rt/lowstate sample it answers
   # (s, wall clock, from the robot's DDS write to the publish): well under the

@@ -307,23 +307,28 @@ def _rig(legs, ramp_seconds=0.2, state_seconds=MAX_STATE_GAP):
         config.parent.mkdir()
         config.write_text(yaml.safe_dump(safety))
         rig.safety_node = SafetyNode(config)
-        rig.lowcmd = Recorder('rt' + safety['topics']['low_cmd_out'])
-        rig.lower = Recorder(rig.config['topics']['low_cmd'])
-        rig.robot = FakeG1(rig.config['topics']['low_state'], legs)
-        rig.arms = FakeArms(rig.config['topics']['upper_cmd'])
-        rig.driver = LocomotionDriver(controller, rig.config['topics'], TEST_DOMAIN)
+        # what started, closed in reverse order after the safety node, whatever
+        # fails while starting the rest
+        started = []
         try:
+            rig.lowcmd = Recorder('rt' + safety['topics']['low_cmd_out'])
+            started.append(rig.lowcmd.close)
+            rig.lower = Recorder(rig.config['topics']['low_cmd'])
+            started.append(rig.lower.close)
+            rig.robot = FakeG1(rig.config['topics']['low_state'], legs)
+            started.append(rig.robot.close)
+            rig.arms = FakeArms(rig.config['topics']['upper_cmd'])
+            started.append(rig.arms.close)
+            rig.driver = LocomotionDriver(controller, rig.config['topics'], TEST_DOMAIN)
+            started.append(rig.driver.shutdown)
             rig.safety_node.wait_for('relay_started')
             # discovery between this process and the safety node's
             time.sleep(0.5)
             yield rig
         finally:
             rig.safety_node.stop()
-            rig.driver.shutdown()
-            rig.arms.close()
-            rig.robot.close()
-            rig.lowcmd.close()
-            rig.lower.close()
+            for close in reversed(started):
+                close()
 
 
 def _wait_for(condition, timeout=3.0):
@@ -524,7 +529,8 @@ def test_bad_state_silences_the_node_and_golem_safety_holds_its_last_command(inj
         assert states == [('state_quiet', rig.safety['topics']['low_state']),
                           ('state_resumed', rig.safety['topics']['low_state'])], states
         (reported,) = [e for e in events if e['event'] == 'state_quiet']
-        assert reported['seconds'] == state_quiet and state_quiet <= reported['age'], reported
+        assert reported['seconds'] == state_quiet, reported
+        assert state_quiet <= reported['age'] < state_quiet + LATE_S, reported
     else:
         assert states == [], states
 

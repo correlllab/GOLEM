@@ -66,12 +66,15 @@ Walking with HOMIE's policy on the legs instead of Unitree's controller:
 - The walking node waits for upright rt/lowstate and the arm controller's
   commands, moves the legs from where they are to the policy's default pose
   over 3 s, then starts the policy at zero velocity and 0.74 m height. It
-  walks on /cmd_vel. If it stops (stale, non-finite or fallen state, or a
-  late command), golem_safety keeps relaying its last leg command, which does
-  not balance the robot, and reports the quiet input (input_quiet) 0.2 s
-  later. It does not estop on it: the command stands until golem_safety
+  walks on /cmd_vel. If it stops on a stale or fallen state, a non-finite IMU
+  value or a late command, golem_safety keeps relaying its last leg command,
+  which does not balance the robot, and reports the quiet input (input_quiet)
+  0.2 s later. It does not estop on it: the command stands until golem_safety
   estops for another reason (a fall that drives a joint past split.yaml's
-  estop limits, say) or the bringup stops.
+  estop limits, say) or the bringup stops. A non-finite joint value (q, dq or
+  tau_est) in rt/lowstate is different: golem_safety latches its estop on
+  that sample, and split.yaml's estop (mode zero, keep_writing) turns every
+  motor off and keeps writing that command.
 """
 
 import os

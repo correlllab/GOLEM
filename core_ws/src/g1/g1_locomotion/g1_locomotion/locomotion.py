@@ -198,7 +198,8 @@ class LocomotionController:
       fails, or a command later than faults.max_latency (latency_ok) stops all
       output for good. golem_safety then keeps relaying the last leg command,
       which does not balance the robot, and reports the quiet input; it does
-      not estop on it. The node never sends a zero-gain or damping command
+      not estop on it, except on a non-finite joint value in rt/lowstate, which
+      it checks itself. The node never sends a zero-gain or damping command
       itself
 
     log(level, message) reports phase changes, why it is waiting, faults and,
@@ -479,6 +480,7 @@ class LocomotionController:
         self.phase = FAULTED
         self.fault = reason
         self._log('error', f'fault: {reason}. Stopped commanding the legs; golem_safety keeps '
-                           'relaying their last command, which does not balance the robot. '
-                           'Restart the node to clear')
+                           'relaying their last command, which does not balance the robot (it '
+                           'estops instead on a non-finite joint value). Restart the node to '
+                           'clear')
         return None

@@ -104,14 +104,20 @@ ros2 topic pub --once /locomotion/height std_msgs/msg/Float32 "{data: 0.7}"
       counts any slower delivery, the time the sample waited for the node,
       and the policy step.
 
-    The node never sends a zero-gain or damping command itself. `golem_safety`
-    holds a quiet input: it keeps relaying the node's last leg command, which
-    does not balance the robot, and after `stale.lower_seconds` (0.2 s in
-    `split.yaml`) reports the quiet input (`input_quiet`). It does not estop
-    on it: the command stands until `golem_safety` estops for another reason
-    (a fall that drives a joint of `rt/lowstate` past `split.yaml`'s
-    `limits.estop`, say) or the bringup stops. Only a restart clears a fault.
-    Shutdown (Ctrl-C) also just stops publishing.
+    The node never sends a zero-gain or damping command itself. On every
+    fault but a non-finite joint value, `golem_safety` holds a quiet input:
+    it keeps relaying the node's last leg command, which does not balance the
+    robot, and after `stale.lower_seconds` (0.2 s in `split.yaml`) reports
+    the quiet input (`input_quiet`). It does not estop on it: the command
+    stands until `golem_safety` estops for another reason (a fall that drives
+    a joint of `rt/lowstate` past `split.yaml`'s `limits.estop`, say) or the
+    bringup stops. A non-finite joint value is the exception: `golem_safety`
+    checks q, dq and tau_est of every body joint in each `rt/lowstate` it
+    takes, latches its estop on a non-finite one, and `split.yaml`'s
+    `estop_response` (`mode: zero`, `after: keep_writing`) turns every motor
+    off and keeps writing that command. It does not check the IMU, so a
+    non-finite gyro or quaternion is held like the other faults. Only a
+    restart clears a fault. Shutdown (Ctrl-C) also just stops publishing.
 5. **Timing.** The ramp's log line gives the tick's rate against the wall
     clock while waiting (1.00 on the robot). Every 10 s, after a publish, the
     node logs the latency of its commands (median and max) and how far apart
@@ -236,7 +242,9 @@ latency fault cannot see that part.
 - Support the robot (a gantry): `split.yaml`'s estop zeroes every motor.
 - A fault silences the node (Behavior, Faults), and `golem_safety` then
     holds the legs on the node's last command instead of turning every motor
-    off: the robot stands on a frozen target that does not balance it.
+    off: the robot stands on a frozen target that does not balance it. Only a
+    non-finite joint value in `rt/lowstate` makes `golem_safety` estop
+    (every motor off).
 - The frame of `rt/lowstate`'s IMU on our unit is not verified yet; the node
     takes it as the pelvis IMU, and accepts only `imu_frame: pelvis`.
 - The unit of `rt/lowstate`'s tick on our unit is not verified yet; the node
@@ -277,7 +285,7 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:../g1_description:$PYTHONPATH pyth
     need the host to keep up: at a load average of 11-19 on the 24-core laptop
     the fake G1 itself fell behind once (565 samples in 1 s) and one failed;
     the repeats passed.
-- The fault tests (stale, non-finite or fallen state, a late command) check
+- The fault tests (a stale or fallen state, a non-finite gyro, a late command) check
     that the node faults and sends nothing more, and that `golem_safety` keeps
     relaying its last leg command, reports the quiet leg input once and does
     not estop. The stale-`rt/lowstate` test keeps `split.yaml`'s own

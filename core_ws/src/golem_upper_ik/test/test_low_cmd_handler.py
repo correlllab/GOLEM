@@ -1,7 +1,7 @@
 '''
 LowCmdHandler on domain 92 against a fake robot publishing /lowstate, on both robots: the
 held joints, the follow gate, command clipping, no controller-side estop, no gating without
-a measured state, and the zero-gain shutdown. Then FollowGate and relays_commands on their
+a measured state, and the shutdown command. Then FollowGate and relays_commands on their
 own.
 
 The handler reads the measured state through a shared RobotModel whose state source is a

@@ -211,8 +211,9 @@ its stale time also keeps the gate shut. So:
   command in force until the bringup stops. On the G1 in split mode the legs stay on a
   frozen target that does not balance the robot; the layer has no tilt or fall check and
   does not read the IMU;
-- `frame_task_server`'s last command at exit (mode 0, zero gains) is the one held on the
-  H1-2 and in the G1's split mode: the torso or waist and the arms stay limp.
+- `frame_task_server`'s last command at exit is the one held: on the H1-2 every upper slot
+  is at mode 0 and zero gains, so the torso and the arms go limp; in the G1's split mode the
+  waist keeps its hold angle and gains and only the arms go limp.
 
 **Single writer.** Each input's current writer is the DDS publisher of its first command. A
 command from another publisher is accepted, and its publisher becomes current (logged, Info),

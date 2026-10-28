@@ -809,6 +809,7 @@ class Report:
         pitch stay there instead of slumping onto the walking policy"""
         s = self.s
         stop, end = self.at("controller_stopped"), self.at("end")
+        pids = self.events["controller_stopped"].get("pids", [])
         names = ["waist_roll_joint", "waist_pitch_joint"]
         slots = [self.names["body"].index(n) for n in names]
         t = s["t"]
@@ -822,8 +823,8 @@ class Report:
             "hold": hold.tolist(), "max_err": err.tolist(), "cmd_max_change": cmd_moved.tolist(),
             "sim_seconds": float(span)}
         self.check("waist held after the controller stops",
-                   span >= WAIST_HOLD_SECONDS - 0.5 and err.max() <= WAIST_HOLD_TOL,
-                   f"frame_task_server stopped at sim t {t[stop]:.2f} s; over the {span:.1f} s (sim) after, "
+                   bool(pids) and span >= WAIST_HOLD_SECONDS - 0.5 and err.max() <= WAIST_HOLD_TOL,
+                   f"frame_task_server (pids {pids}) stopped at sim t {t[stop]:.2f} s; over the {span:.1f} s (sim) after, "
                    f"waist roll / pitch within {err[0]:.4f} / {err[1]:.4f} rad of the hold "
                    f"{hold[0]:+.3f} / {hold[1]:+.3f} rad (limit {WAIST_HOLD_TOL}); the commanded waist "
                    f"moved {cmd_moved[0]:.4f} / {cmd_moved[1]:.4f} rad")

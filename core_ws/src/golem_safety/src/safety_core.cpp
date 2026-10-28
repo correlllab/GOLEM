@@ -285,7 +285,8 @@ void SafetyCore::on_state(const LowState & state, double now)
   }
 }
 
-// The engage conditions that do not depend on the inputs, as refusal() checks them.
+// The robot-identity and estop-sample conditions of refusal(); under engage_gate, refusal()
+// also checks the /lowstate age, which this flag does not.
 void SafetyCore::update_relay_ready()
 {
   const bool ready = state_ && state_->mode_machine == profile_.mode_machine &&

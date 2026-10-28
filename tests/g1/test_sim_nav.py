@@ -6,13 +6,13 @@ and has the usage.
           the robot's state as test_sim_bringup.py's sim role does (<out>/sim.npz),
           and also, after every physics step, any penetrating contact between a
           robot geom and anything but the floor (<out>/contacts.json). At startup,
-          with the robot standing at the spawn, it maps the kitchen from the sim's
+          with the robot at the spawn, it maps the kitchen from the sim's
           own geometry (<out>/scene.npz) and picks the goal, or takes NAV_GOAL's
           (<out>/goal.json). It stops on <out>/stop and saves sim.npz, then
           contacts.json
   drive   in the ros container, beside 'ros2 launch golem_bringup g1_sim.launch.py
-          use_locomotion:=true use_nav:=true': waits until the walking node walks
-          and Nav2's lifecycle nodes are active, sends one NavigateToPose goal,
+          use_nav:=true': waits until the walking node walks, the sim's elastic band
+          is released and Nav2's lifecycle nodes are active, sends one NavigateToPose goal,
           and records /cmd_vel, the TF the stack computes, the scan path's
           arrivals (/livox/lidar, /lidar_points, every /scan) and the final /map
           (<out>/drive.npz, map.npz; with --keep-lidar the /livox/lidar frames
@@ -47,8 +47,11 @@ publishes /odom exactly when the test runs sim_gt; while navigating, map -> pelv
 stays within MAX_LOCALISATION_ERR of the sim's truth in x, y (the odometry
 localises, and slam_toolbox only draws the map: with scan matching it drifted
 past that); and over the whole recording the pelvis stays above MIN_PELVIS_Z and
-tilts at most MAX_TILT_DEG (the sim's own state), no robot geom penetrates
-anything but the floor, and the sim's fall logger (sim.log) logs no fall.
+tilts at most MAX_TILT_DEG (the sim's own state: hanging from the band, then
+standing on the walking node), no robot geom penetrates anything but the floor,
+the sim's fall logger (sim.log) logs no fall, and golem_safety (launch.log)
+latches no estop before the drive's end. The stack has to come up: the walking
+node's policy started and the band released (the sim's record) before the goal.
 test_sim_nav.sh stops the sim before the bringup, so the recording ends with the
 robot standing under the walking node. The report also gives the odometry's
 drift against the sim's ground truth, and the localisation's (map -> pelvis)
@@ -325,7 +328,7 @@ def run_sim(out, sim_args):
         recorder.step(self)
 
     def mapped_init(self, model, data, resolver, *args, **kwargs):
-        # the robot stands at the spawn, settled, before the first step and the bridges
+        # the robot is at the spawn, in the sim's stance, before the first step and the bridges
         init(self, model, data, resolver, *args, **kwargs)
         map_scene(out, model, data, resolver.base_body)
 
@@ -606,6 +609,20 @@ class Driver:
         self.mark("walking_timeout")
         return False
 
+    def wait_band_released(self, timeout=120.0):
+        """The sim logs the band's release, which the walking node asks for once its policy
+        runs and frame_task_server is up"""
+        end = time.time() + timeout
+        sim_log = os.path.join(self.out, "sim.log")
+        while time.time() < end:
+            if bringup_test.file_has(sim_log, bringup_test.BAND_RELEASED_LINE):
+                self.mark("band_released")
+                return True
+            for _ in range(20):
+                self.spin()
+        self.mark("band_timeout")
+        return False
+
     def wait_nav(self, timeout=180.0):
         """Nav2's lifecycle nodes active, /navigate_to_pose served, map -> pelvis in TF"""
         from lifecycle_msgs.msg import State
@@ -739,7 +756,7 @@ def run_drive(out, odom_source, keep_lidar=False):
         if "error" in goal:
             d.mark("no_goal", error=goal["error"])
             return 1
-        if d.wait_walking() and d.wait_nav():
+        if d.wait_walking() and d.wait_band_released() and d.wait_nav():
             d.spin_for(STAND_S)
             x, y, yaw = d.goal_in_map(goal)
             ok = d.navigate_to(x, y, yaw)
@@ -817,23 +834,25 @@ class Report(bringup_test.Report):
         want_odom = ["mujoco_sensors"] if self.info["odom_source"] == "sim_gt" else []
         self.check("odom source", odom_pubs == want_odom,
                    f"odom_source {self.info['odom_source']}: /odom publishers {odom_pubs} (expected {want_odom})")
-        released = np.nonzero(s["released"])[0]
-        if not released.size:
-            self.check("hand-over", False, "the stand-in was never released (no valid rt/lowcmd)")
+        release = self.release()
+        if release is None:
+            self.check("stack up", False, "the sim's elastic band was never released: see sim.log and launch.log")
             return
-        r = int(released[0])
-        self.numbers["handover_t"] = float(s["t"][r])
-        for name in ("walking", "nav_active", "goal_sent"):
+        r = release[0]
+        self.numbers["band_release_t"] = release[1]
+        for name in ("walking", "band_released", "nav_active", "goal_sent"):
             if name not in ev:
                 self.check("stack up", False, f"no '{name}' mark: see drive.log and launch.log")
                 return
         first = ev["drive_start"]["wall"]
-        self.numbers["stack_up_wall_s"] = {n: ev[n]["wall"] - first for n in ("walking", "nav_active")}
+        self.numbers["stack_up_wall_s"] = {n: ev[n]["wall"] - first
+                                           for n in ("walking", "band_released", "nav_active")}
         self.check("stack up", True,
-                   f"stand-in released at sim t {s['t'][r]:.2f} s; the drive saw the walking node walk at sim t "
-                   f"{ev['walking']['sim']:.1f} s and Nav2 active at {ev['nav_active']['sim']:.1f} s "
-                   f"({ev['walking']['wall'] - first:.0f} and {ev['nav_active']['wall'] - first:.0f} s wall after "
-                   f"it started, beside the launch)")
+                   f"band released at sim t {release[1]:.2f} s; the drive saw the walking node walk at sim t "
+                   f"{ev['walking']['sim']:.1f} s, the band's release at {ev['band_released']['sim']:.1f} s and Nav2 "
+                   f"active at {ev['nav_active']['sim']:.1f} s ({ev['walking']['wall'] - first:.0f}, "
+                   f"{ev['band_released']['wall'] - first:.0f} and {ev['nav_active']['wall'] - first:.0f} s wall "
+                   f"after it started, beside the launch)")
         # the goal
         sent, result = ev["goal_sent"], ev.get("goal_result", {})
         took = result.get("sim_seconds", math.nan)
@@ -878,7 +897,7 @@ class Report(bringup_test.Report):
                    f"{self.numbers['goal_sent_world_vs_picked_m']:.3f} m from the picked one")
         # the pelvis per phase, for the record (run() checks the whole recording)
         a, b = self.at("goal_sent"), i_end
-        self.phases([("stand-in", 0, r), ("standing, walking node", r, a), ("navigating", a, b + 1),
+        self.phases([("under the band", 0, r), ("standing, walking node", r, a), ("navigating", a, b + 1),
                      ("after the result", b + 1, len(s["t"]))])
         self.cmd_vel()
         self.scan_path(sent["sim"], s["t"][i_end])
@@ -1131,6 +1150,7 @@ class Report(bringup_test.Report):
         self.upright()
         self.contacts()
         self.fall_log()
+        self.no_estop()
         ok = all(c["pass"] for c in self.checks)
         with open(os.path.join(out, "report.json"), "w") as f:
             json.dump({"pass": ok, "checks": self.checks, "numbers": self.numbers}, f, indent=1)

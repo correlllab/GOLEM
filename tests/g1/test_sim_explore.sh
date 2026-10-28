@@ -10,9 +10,9 @@
 # with its sensors on, in the layout 9 / style 9 / seed 42 kitchen, the spawn
 # backed EXPLORE_BACKOFF m into open floor, as test_sim_nav.sh does. In its
 # network namespace a ros container then runs 'ros2 launch golem_bringup
-# g1_sim.launch.py use_rviz:=false use_locomotion:=true use_nav:=true
-# frontier_explore:=true odom_source:=...' and the test's steps
-# (test_sim_explore.py drive): wait for the walking node, Nav2 and
+# g1_sim.launch.py use_rviz:=false use_nav:=true frontier_explore:=true
+# odom_source:=...' and the test's steps (test_sim_explore.py drive): wait for
+# the walking node, the elastic band's release, Nav2 and
 # /skill/frontier_explore, send one SkillFrontierExplore goal, record, wait for
 # its result. Then it stops the sim first (OUT/stop), with the robot standing
 # under the walking node, and the bringup once the sim has saved its recording:
@@ -68,9 +68,9 @@ g1_test_log_load
 echo "[test_sim_explore] odom_source $ODOM on DDS domain $ROS_DOMAIN_ID, output in $OUT"
 g1_test_build_ros
 g1_test_start_sim test_sim_explore.py "${SIM_ENV[@]}"
-echo "[test_sim_explore] sim up; starting the bringup with the walking node, navigation and the explorer"
+echo "[test_sim_explore] sim up; starting the bringup with navigation and the explorer"
 
-g1_test_run_ros 1500 "ros2 launch golem_bringup g1_sim.launch.py use_rviz:=false use_locomotion:=true use_nav:=true \
+g1_test_run_ros 1500 "ros2 launch golem_bringup g1_sim.launch.py use_rviz:=false use_nav:=true \
         frontier_explore:=true odom_source:=$ODOM > /out/launch.log 2>&1 &
     LAUNCH=\$!
     python3 -u /home/code/tests/g1/test_sim_explore.py drive --out /out --odom-source $ODOM

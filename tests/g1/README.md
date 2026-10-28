@@ -7,7 +7,7 @@ recording of the run.
 
 ```bash
 tests/g1/test_sim_bringup.sh                 # the arm test
-tests/g1/test_sim_bringup.sh --walk          # the walk test (use_locomotion:=true)
+tests/g1/test_sim_bringup.sh --walk          # the walk test
 tests/g1/test_sim_nav.sh                     # the nav test, FAST_LIO odometry
 GOLEM_SIM_ODOM=1 tests/g1/test_sim_nav.sh    # the nav test, the sim's ground-truth odometry
 tests/g1/test_sim_explore.sh                 # frontier exploration of the kitchen
@@ -17,26 +17,41 @@ A test that passes ends with `PASSED: <n>/<n> checks` and exits 0. A failing che
 with its reason, and the last line reads `FAILED: <passed>/<total> checks`. Each script's header
 lists its environment knobs, and each `test_sim_*.py` docstring says what it checks.
 
-- **Arm test**: `rt/arm_sdk` engages, the arms reach `home` and then a `t_pose` goal,
-  `/left/hand/close` closes the left hand, stopping the controller hands the arms back, and the
-  robot keeps standing. The bringup runs `golem_safety` (`sim_arm_sdk`) and `golem_upper_ik`
-  (`sim`). The controller's last command has zero gains, which `golem_safety` refuses in
-  arm_sdk mode (`arm_sdk.waist_kp_min`), so the stop latches its estop and the weight ramps
-  1 -> 0; the test finds the controller by its process, `lib/golem_upper_ik/frame_task_server`.
-- **Walk test**: the stand-in hands the legs to the walking node, the robot keeps standing, then
-  walks 5 s at 0.3 m/s. Then `frame_task_server` alone is stopped while the walking node
-  balances the robot: its shutdown command keeps the waist at its hold, so the waist roll and
-  pitch stay within 0.1 rad of it for 4 s (a limp waist slumps about 0.5 rad) and the robot
-  keeps standing.
-- **Arm and walk tests**: every sensor topic arrives at its rate with the right frames, and the
-  sim's sensor node publishes nothing else.
-- **Nav test**: Nav2 walks the robot to one goal 2-3 m from the spawn, picked from the sim's own
-  geometry (or `NAV_GOAL`). The goal must succeed, the robot must end near it by the sim's
-  truth, stay up and touch nothing, and `/cmd_vel`, `/scan`, the map and the localisation must
-  stay within their limits.
-- **Explore test**: the frontier explorer walks the robot until it reports the kitchen explored.
-  At least 95 % of the reachable floor must be free in the final map, with no phantom
-  obstacles, and the robot must stay up and touch nothing.
+Every test starts the G1 as it starts in debug mode. The limp robot hangs from the sim's elastic
+band while `golem_safety` streams zero-gain `rt/lowcmd`. HOMIE's walking node pre-poses the legs,
+starts its policy under the band and releases the band once `frame_task_server` is up.
+
+- **Arm and walk tests, the start-up**:
+  - `band holds`: while the band is on, the pelvis tilts at most 15 deg;
+  - `no estop during start-up`: `golem_safety` logs no estop from its start to the end of the
+    test's steps;
+  - `walking node starts`: the walking node logs `walking: policy started` once, and no fault;
+  - `band released after the controller is ready`: the band comes off once and stays off, after
+    the first `/left_ee_pose` the test sees and within the walking node's `band.max_wait` of the
+    policy's start;
+  - `standing after release`: the robot stands for 5 s after the release.
+
+  The report also prints the pelvis and the feet around the release, for the record.
+- **Arm test**: after the release, the arms are at `home` from the controller's start-up, a
+  `t_pose` goal succeeds and the arms reach it, and `/left/hand/close` closes the left hand. Then
+  `frame_task_server` alone is stopped while the walking node balances the robot. Its shutdown
+  command keeps the waist at its hold, so the waist roll and pitch stay within 0.1 rad of it
+  for 4 s (a limp waist slumps about 0.5 rad), and the robot keeps standing. The test finds the
+  controller by its process, `lib/golem_upper_ik/frame_task_server`.
+- **Walk test**: 5 s after the release the robot walks 5 s at 0.3 m/s, and keeps standing. Then
+  `frame_task_server` is stopped, with the arm test's waist check.
+- **Arm and walk tests, the sensors**: every sensor topic arrives at its rate with the right
+  frames, and the sim's sensor node publishes nothing else.
+- **Nav test**: once the band is released, Nav2 walks the robot to one goal 2-3 m from the
+  spawn. The goal is picked from the sim's own geometry (or `NAV_GOAL`).
+  - The goal must succeed, and the robot must end near it by the sim's truth.
+  - The robot must stay up and touch nothing, and `golem_safety` must latch no estop.
+  - `/cmd_vel`, `/scan`, the map and the localisation must stay within their limits.
+- **Explore test**: once the band is released, the frontier explorer walks the robot until it
+  reports the kitchen explored.
+  - At least 95 % of the reachable floor must be free in the final map, with no phantom
+    obstacles.
+  - The robot must stay up and touch nothing, and `golem_safety` must latch no estop.
 
 ## How they run
 
@@ -69,14 +84,22 @@ workspace.
 Open issue: the arm test's `t_pose` check sometimes fails with the arms at the pose
 (`goal success False` with a small arm error). The arms hold `t_pose` with an error about as
 large as `frame_task_server`'s success threshold, `controller.threshold_joint` in
-`core_ws/src/golem_upper_ik/config/g1/sim.yaml`, so the server sometimes never reports the goal
+`core_ws/src/golem_upper_ik/config/g1/sim_split.yaml`, so the server sometimes never reports the goal
 reached. Count such a run as failed, and check its arm error against that threshold.
 
-The tests depend on internals of the G1 sim. They patch `SimInterface.after_step` (and, for nav
-and explore, `__init__`) and read its `_lowcmd`, `_arm_sdk`, `arm_sdk_w`, `released` and
-`resolver`. They also rely on the sensor node's name `mujoco_sensors` and on the sim's
-`ROS bridges up` and `ROBOT FELL` log lines. A change to any of these must update the tests in
-the same commit.
+The tests depend on internals of the G1 sim and on the stack's log lines. A change to any of these
+must update the tests in the same commit.
+
+- They patch `SimInterface.after_step` (and, for nav and explore, `__init__`).
+- They read its `_lowcmd`, `commanded`, `band` (the band's `enabled`, every physics step) and
+  `resolver`.
+- They rely on the sensor node's name `mujoco_sensors`.
+- They rely on the sim's `ROS bridges up`, `elastic band released at t=` and `ROBOT FELL` log lines.
+- From `launch.log` they rely on:
+  - the walking node's `Loaded <config> and the policy` and `walking: policy started` lines,
+    its `fault:` lines, and its config's `band.max_wait`;
+  - `golem_safety`'s JSON events `relay_started` and `estop_command_written`, and its
+    `estop diagnostic` lines.
 
 ## Output
 

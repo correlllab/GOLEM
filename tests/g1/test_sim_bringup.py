@@ -11,34 +11,41 @@ the containers. test_sim_bringup.sh runs them; see it for the usage.
   report  anywhere with numpy: checks the recording against the steps,
           prints the numbers and writes <out>/report.json; exit 1 on a failure
 
-The arm test (default): the safety layer engages rt/arm_sdk (weight 0 -> 1),
-frame_task_server takes the arms to 'home' at startup, a NamedConfig 't_pose'
-goal succeeds and the arms reach it, /left/hand/close closes the left hand,
-stopping frame_task_server hands the arms back (weight -> 0), and the stand-in
-(HOMIE) keeps the robot standing throughout. The walk test (--walk, with
-use_locomotion:=true): the stand-in hands over to the walking node's
-rt/lowcmd, the robot keeps standing, then walks on /cmd_vel 0.3 m/s forward
-for 5 s; after the sensors, frame_task_server alone is stopped while the
-walking node balances the robot, and the waist roll and pitch stay at their
-hold, since its shutdown command keeps them stiff on rt/lowcmd. Both tests
-listen to the sensors from the ros container for 10 s
-(after the controller is up, or after the walk): every sensor topic at its
-rate in sim time throughout the window, with its frame_id and its message
-contents, the camera's frame on /tf_static, the sim's node publishing nothing
-else, and one /livox/lidar frame putting the floor where the upside-down mount
-predicts.
-The joint, base and sensor poses come from the sim's own state; no ground
-truth is published.
+Both tests start as the G1 starts in debug mode: the limp robot hangs from the
+sim's elastic band while golem_safety streams zero-gain rt/lowcmd, HOMIE's
+walking node pre-poses the legs and starts its policy under the band, and it
+releases the band once frame_task_server is up. Both check that start-up: the
+band holds the robot upright, golem_safety latches no estop, the walking node
+starts, the band comes off once (after the first /left_ee_pose the test sees,
+and within the walking node's band.max_wait of the policy's start), and the
+robot stands for 5 s after it. The report also gives the pelvis and the feet
+around the release, for the record.
+
+The arm test (default), after the release: frame_task_server took the arms
+to 'home' at startup, a NamedConfig 't_pose' goal succeeds and the arms reach
+it, /left/hand/close closes the left hand, and stopping frame_task_server
+leaves the waist roll and pitch at their hold (its shutdown command keeps them
+stiff on rt/lowcmd) while the walking node keeps the robot standing. The walk
+test (--walk) stands 5 s after the release, walks on /cmd_vel 0.3 m/s forward
+for 5 s, and after the sensors stops frame_task_server alone, with the same
+waist check. Both tests listen to the sensors from the ros container for 10 s
+(after the release, or after the walk): every sensor topic at its rate in sim
+time throughout the window, with its frame_id and its message contents, the
+camera's frame on /tf_static, the sim's node publishing nothing else, and one
+/livox/lidar frame putting the floor where the upside-down mount predicts.
+The joint, base, feet and sensor poses and the band's state come from the
+sim's own state; no ground truth is published.
 
 The steps wait in sim time (/clock) and the checks measure motion in sim time,
-so a sim slower than real time stretches the test instead of failing it; what
-the bringup runs on wall time (the safety layer's weight ramps) is checked in
-wall time.
+so a sim slower than real time stretches the test instead of failing it; the
+band's release against the policy's start is checked in wall time, as the
+walking node times its band.max_wait.
 """
 import argparse
 import json
 import math
 import os
+import re
 import struct
 import sys
 import time
@@ -57,19 +64,23 @@ SENSOR_SECONDS = 10.0      # sim s of listening to the sensors
 # pass limits
 ARM_TOL = 0.1              # rad: measured arm joints vs the named config
 HAND_TOL = 0.05            # rad: measured fingers vs the close pose
-MIN_PELVIS_Z = 0.70        # m: the stand-in stands at 0.744
-# pelvis z-axis from vertical: HOMIE stands at ~2 deg and leans ~6.5 deg with
-# the arms in t_pose; well short of the walking node's 25 deg upright gate
+MIN_PELVIS_Z = 0.70        # m: HOMIE stands at 0.744
+# pelvis z-axis from vertical: the limp robot hangs from the band within 4 deg,
+# HOMIE stands at ~2 deg and leans ~6.5 deg with the arms in t_pose; well short of
+# the walking node's 25 deg upright gate
 MAX_TILT_DEG = 15.0
-WEIGHT_STEP = 0.1          # largest rt/arm_sdk weight change per 20 ms of wall time
-RAMP_WALL_S = (0.5, 2.0)   # the safety layer's 1 s weight ramps, in wall s
 HOME_CMD_TOL = 0.01        # rad: the commanded arm targets vs home
+RELEASE_STANDING_S = 5.0   # sim s after the band's release that the robot must stand
+RELEASE_MEASURE_S = 3.0    # sim s after the band's release that the report measures, for the record
+# wall s past the walking node's band.max_wait that the release may come: the node
+# polls at 10 Hz, then calls the sim's /elastic_band/toggle
+BAND_POLL_SLACK_S = 0.5
 WALK_SPEED_TOL = 0.3       # mean forward speed within 30% of WALK_SPEED
-WAIST_HOLD_SECONDS = 4.0   # sim s after the controller stops, in the walk test
+WAIST_HOLD_SECONDS = 4.0   # sim s after the controller stops
 # rad: measured waist roll and pitch vs their hold once the controller has stopped. The arms
-# drop when they go limp, and the held waist settles about 0.03-0.05 rad off its hold under
-# the changed load (its last gravity torque was for the arms' pose); a limp waist slumps to
-# its ~0.5 rad limits
+# drop when they go limp, and the held waist settles up to about 0.06 rad off its hold under
+# the changed load (its last gravity torque was for the arms' pose), passing about 0.08 on
+# the way after the walk; a limp waist slumps to its ~0.5 rad limits
 WAIST_HOLD_TOL = 0.1
 # sensor topics: the rate from the stamps (sim time) within these fractions of
 # the configured one: the MID-360's are reliable, the camera's best effort
@@ -90,6 +101,48 @@ HEAD_OPTICAL_FRAME = "head_color_optical_frame"
 # which aligned depth follows, not the depth sensor's 58
 HEAD_VFOV_DEG = (41.0, 44.0)
 OPTICAL_IN_LINK_XYZW = (-0.5, 0.5, -0.5, 0.5)   # rpy (-pi/2, 0, -pi/2), REP 103's optical frame
+# the feet whose world positions the sim records (the G1's ankle roll links)
+FEET = ("left_ankle_roll_link", "right_ankle_roll_link")
+# the sim's log line once the band is off (golem_robocasa/g1/g1_mujoco.py's fall logger)
+BAND_RELEASED_LINE = "elastic band released at t="
+# the walking node's log lines (g1_locomotion): its config, and the policy's start
+LOCOMOTION_CONFIG = re.compile(r"Loaded (\S+\.yaml) and the policy")
+POLICY_STARTED = "walking: policy started"
+# a ROS log line in launch.log: level, wall time, logger, text
+LOG_LINE = re.compile(r"\[(DEBUG|INFO|WARN|ERROR|FATAL)\] \[(\d+(?:\.\d+)?)\] \[([^\]]+)\]: (.*)")
+
+
+def file_has(path, text):
+    try:
+        with open(path, errors="replace") as f:
+            return text in f.read()
+    except OSError:
+        return False
+
+
+def logged(path, logger):
+    """(wall time, level, text) of every line the ROS logger `logger` wrote to a launch
+    log, in order"""
+    lines = []
+    try:
+        with open(path, errors="replace") as f:
+            for line in f:
+                m = LOG_LINE.search(line)
+                if m and m.group(3) == logger:
+                    lines.append((float(m.group(2)), m.group(1), m.group(4).rstrip()))
+    except OSError:
+        pass
+    return lines
+
+
+def safety_event(text):
+    """The event of one of golem_safety's JSON log lines, else None"""
+    if not text.startswith("{"):
+        return None
+    try:
+        return json.loads(text).get("event")
+    except ValueError:
+        return None
 
 
 class StopRecording(Exception):
@@ -104,12 +157,18 @@ class Recorder:
         self.out = out
         self.stop_file = os.path.join(out, "stop")
         self.rows = {k: [] for k in ("t", "wall", "pelvis", "quat", "upz", "vel", "q", "dq", "gyro",
-                                     "hands", "sdk_weight", "sdk_q", "w", "released", "lowcmd_q",
-                                     "lowcmd_t", "leg_changes", "leg_hold_max", "lidar_pos", "lidar_mat")}
+                                     "hands", "feet", "band", "commanded", "lowcmd_q", "lowcmd_t",
+                                     "leg_changes", "leg_hold_max", "lidar_pos", "lidar_mat")}
         self.steps = 0
         self.names = None
         self.dt = None
         self._lidar_site = None
+        self._feet = None
+        # every step: the band's state (1 on, 0 off, NaN no band) at each change, with
+        # its sim and wall time, and the first step with SimInterface.commanded
+        self._band = None
+        self.band_changes = []
+        self.commanded_at = None
         # every step: how often rt/lowcmd's leg targets change, and the longest
         # they stayed the same (physics steps) since the last sample
         self._legs, self.leg_changes, self._hold, self._hold_max = None, 0, 0, 0
@@ -117,6 +176,13 @@ class Recorder:
     def step(self, iface):
         """After every physics step (the sim lock is held)"""
         self.steps += 1
+        on = None if iface.band is None else bool(iface.band.enabled)
+        band = math.nan if on is None else float(on)
+        if not self.band_changes or on != self._band:
+            self._band = on
+            self.band_changes.append([float(iface.data.time), time.time(), band])
+        if self.commanded_at is None and iface.commanded:
+            self.commanded_at = [float(iface.data.time), time.time()]
         if iface._lowcmd is not None:
             legs = iface._lowcmd.q[:12]
             if self._legs is None or np.any(legs != self._legs):
@@ -134,7 +200,8 @@ class Recorder:
                           "hands": [n for h in r.hands.values() for n in h.names]}
             self.dt = float(iface.model.opt.timestep)
             self._lidar_site = r.site_id("mid360_link")
-        sdk, lowcmd = iface._arm_sdk, iface._lowcmd
+            self._feet = [r.body_id(n) for n in FEET]
+        lowcmd = iface._lowcmd
         gyro = r.sensor_adr["gyro"][0]
         rows = self.rows
         rows["t"].append(float(d.time))
@@ -147,10 +214,9 @@ class Recorder:
         rows["dq"].append(d.qvel[r.body.qvel].copy())
         rows["gyro"].append(d.sensordata[gyro:gyro + 3].copy())
         rows["hands"].append(np.concatenate([d.qpos[h.qpos] for h in r.hands.values()]))
-        rows["sdk_weight"].append(math.nan if sdk is None else sdk.weight)
-        rows["sdk_q"].append(np.full(17, math.nan) if sdk is None else sdk.q.copy())
-        rows["w"].append(iface.arm_sdk_w)
-        rows["released"].append(iface.released)
+        rows["feet"].append(np.array([d.xpos[b] if b >= 0 else np.full(3, math.nan) for b in self._feet]))
+        rows["band"].append(band)
+        rows["commanded"].append(bool(iface.commanded))
         rows["lowcmd_q"].append(np.full(29, math.nan) if lowcmd is None else lowcmd.q.copy())
         rows["lowcmd_t"].append(math.nan if lowcmd is None else lowcmd.time)
         rows["leg_changes"].append(self.leg_changes)
@@ -164,7 +230,9 @@ class Recorder:
     def save(self):
         arrays = {k: np.array(v) for k, v in self.rows.items()}
         np.savez(os.path.join(self.out, "sim.npz"), names=json.dumps(self.names),
-                 hz=500.0 / RECORD_EVERY, dt=self.dt, **arrays)
+                 hz=500.0 / RECORD_EVERY, dt=self.dt,
+                 band_changes=np.array(self.band_changes, float).reshape(-1, 3),
+                 commanded_at=np.array(self.commanded_at or [math.nan, math.nan], float), **arrays)
         print(f"[test_sim_bringup] saved {len(self.rows['t'])} samples to {self.out}/sim.npz", flush=True)
 
 
@@ -258,10 +326,25 @@ class Driver:
         self.clocks = 0   # /clock messages heard
         self.node.create_subscription(Clock, "/clock", self._on_clock,
                                       QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT), raw=True)
+        # frame_task_server publishes /left_ee_pose (100 Hz) once its start-up moves are
+        # done; the first one's stamp (sim time) is when the test saw the controller ready.
+        # The drive spins in every wait, and the deep history keeps that first one
+        # through a slow spin
+        from geometry_msgs.msg import PoseStamped
+        self.ee_pose_first = None
+        self.node.create_subscription(PoseStamped, "/left_ee_pose", self._on_ee_pose, QoSProfile(
+            depth=1000, reliability=ReliabilityPolicy.RELIABLE))
+        self.launch_log = os.path.join(out, "launch.log")
+        self.sim_log = os.path.join(out, "sim.log")
 
     def _on_clock(self, raw):
         self.clock = _cdr_stamp(raw)
         self.clocks += 1
+
+    def _on_ee_pose(self, msg):
+        if self.ee_pose_first is None:
+            self.ee_pose_first = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            self.mark("left_ee_pose_first", stamp=self.ee_pose_first)
 
     def mark(self, name, **extra):
         self.events.append({"name": name, "wall": time.time(), "sim": self.clock, **extra})
@@ -295,15 +378,50 @@ class Driver:
             self.rclpy.spin_once(self.node, timeout_sec=0.05)
         return future.result() if future.done() else None
 
+    def spin_until(self, ready, timeout, every=0.25):
+        """Spin until ready(), asked every `every` s of wall time, is true; False after
+        `timeout` s of wall time"""
+        end = time.time() + timeout
+        while not ready():
+            if time.time() > end:
+                return False
+            until = time.time() + every
+            while time.time() < until:
+                self.rclpy.spin_once(self.node, timeout_sec=0.05)
+        return True
+
     def wait_for_controller(self, timeout=240.0):
         """frame_task_server creates /named_config after its startup move to 'home'"""
         from rclpy.action import ActionClient
         from custom_ros_messages.action import NamedConfig
         self.named_config = ActionClient(self.node, NamedConfig, "named_config")
-        if not self.named_config.wait_for_server(timeout_sec=timeout):
+        if not self.spin_until(self.named_config.server_is_ready, timeout, every=0.1):
             self.mark("controller_timeout")
             return False
         self.mark("controller_up")
+        return True
+
+    def wait_band_released(self, timeout=240.0):
+        """The sim logs the band's release, which the walking node asks for once its
+        policy runs and frame_task_server is up. Records the walking node's
+        band.max_wait, from the config it logged loading"""
+        import yaml
+        if not self.spin_until(lambda: file_has(self.sim_log, BAND_RELEASED_LINE)
+                               or file_has(self.launch_log, "g1_core: not starting"), timeout):
+            self.mark("band_timeout")
+            return False
+        if not file_has(self.sim_log, BAND_RELEASED_LINE):
+            self.mark("launch_refused")
+            return False
+        self.mark("band_released")
+        self.info["band_max_wait"] = None
+        for _, _, text in logged(self.launch_log, "locomotion_node"):
+            m = LOCOMOTION_CONFIG.match(text)
+            if m:
+                with open(m.group(1)) as f:
+                    self.info["locomotion_config"] = m.group(1)
+                    self.info["band_max_wait"] = float(yaml.safe_load(f)["band"]["max_wait"])
+                break
         return True
 
     def named_config_goal(self, name, timeout=60.0):
@@ -342,19 +460,6 @@ class Driver:
         for pid in pids:
             os.kill(int(pid), signal.SIGINT)   # as Ctrl-C
         self.mark("controller_stopped", pids=pids)
-
-    def wait_for_lowcmd(self, timeout=60.0):
-        """The split-mode safety layer's first rt/lowcmd (the sim releases its stand-in)"""
-        from rclpy.qos import qos_profile_sensor_data
-        from unitree_hg.msg import LowCmd
-        seen = []
-        sub = self.node.create_subscription(LowCmd, "lowcmd", seen.append, qos_profile_sensor_data)
-        end = time.time() + timeout
-        while not seen and time.time() < end:
-            self.rclpy.spin_once(self.node, timeout_sec=0.05)
-        self.node.destroy_subscription(sub)
-        self.mark("lowcmd_first" if seen else "lowcmd_timeout")
-        return bool(seen)
 
     def walk(self, speed, seconds, rate=20.0):
         """/cmd_vel forward at `rate` Hz of wall time for `seconds` of sim time"""
@@ -498,28 +603,26 @@ def run_drive(out, walk):
               "walk_speed": WALK_SPEED, "walk_seconds": WALK_SECONDS}
     try:
         if walk:
-            # split mode: the controller's first command and the node's start the
-            # safety layer's rt/lowcmd, which releases the sim's stand-in
-            if not d.wait_for_lowcmd(timeout=240.0):
+            # the walking node releases the band once its policy runs and the
+            # controller is up
+            if not d.wait_band_released():
                 return 1
             d.spin_for(5.0)
             d.mark("stand_end")
             d.walk(WALK_SPEED, WALK_SECONDS)
             d.spin_for(2.0)
             d.check_sensors()   # standing again, in open floor
-            # the controller alone stops while the walking node balances the robot
-            d.stop_frame_task_server()
-            d.spin_for(WAIST_HOLD_SECONDS)
         else:
-            if not d.wait_for_controller():
+            if not d.wait_for_controller() or not d.wait_band_released():
                 return 1
-            d.check_sensors()   # while the arms are at home
+            d.check_sensors()   # standing on HOMIE from the release, the arms at home
             d.named_config_goal("t_pose")
             d.spin_for(1.0)
             d.trigger("/left/hand/close")
             d.spin_for(2.5)     # the hand check averages the last 0.5 s of it
-            d.stop_frame_task_server()
-            d.spin_for(6.0)
+        # the controller alone stops while the walking node balances the robot
+        d.stop_frame_task_server()
+        d.spin_for(WAIST_HOLD_SECONDS)
         d.mark("end")
         return 0
     finally:
@@ -536,17 +639,6 @@ def _tilt_deg(upz):
 def _yaw(quat):
     w, x, y, z = np.asarray(quat).T
     return np.unwrap(np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
-
-
-def _largest_change(values, clock, span=0.02):
-    """The largest change of values per `span` s of clock, each over the shortest
-    run of samples that spans at least that long, whatever the sampling rate"""
-    j = np.searchsorted(clock, clock + span)
-    i = np.nonzero(j < len(clock))[0]
-    if not i.size:
-        return 0.0
-    j = j[i]
-    return float(np.max(np.abs(values[j] - values[i]) * span / (clock[j] - clock[i])))
 
 
 class Report:
@@ -584,7 +676,7 @@ class Report:
         idx = [self.names["body"].index(n) for n in names]
         return self.s["q"][rows][:, idx]
 
-    def standing(self, rows, label):
+    def standing(self, rows, label, name=None):
         z = self.s["pelvis"][rows, 2]
         tilt = _tilt_deg(self.s["upz"][rows])
         xy = self.s["pelvis"][rows, :2]
@@ -593,7 +685,7 @@ class Report:
         self.numbers[f"standing_{label}"] = {"z_min": float(z.min()), "z_max": float(z.max()),
                                              "tilt_max_deg": float(tilt.max()), "xy_drift_m": float(drift),
                                              "sim_t": [float(t[0]), float(t[-1])]}
-        self.check(f"standing ({label})", z.min() >= MIN_PELVIS_Z and tilt.max() <= MAX_TILT_DEG,
+        self.check(name or f"standing ({label})", z.min() >= MIN_PELVIS_Z and tilt.max() <= MAX_TILT_DEG,
                    f"sim t {t[0]:.1f}-{t[-1]:.1f} s: pelvis z {z.min():.3f}-{z.max():.3f} m, tilt max "
                    f"{tilt.max():.1f} deg, xy drift {drift * 100:.1f} cm (limits z >= {MIN_PELVIS_Z}, "
                    f"tilt <= {MAX_TILT_DEG})")
@@ -616,75 +708,193 @@ class Report:
         q = self.joints(self.info["arm_joints"], rows).mean(axis=0)
         err = np.abs(q - target)
         worst = self.info["arm_joints"][int(err.argmax())]
-        cmd = self.s["sdk_q"][rows].mean(axis=0)
-        arm_slots = [self.names["body"].index(n) - 12 for n in self.info["arm_joints"]]
+        # the targets golem_safety wrote on rt/lowcmd, whose slots are the body's order
+        cmd = self.s["lowcmd_q"][rows].mean(axis=0)
+        arm_slots = [self.names["body"].index(n) for n in self.info["arm_joints"]]
         cmd_err = np.abs(cmd[arm_slots] - target).max()
         waist = self.joints(["waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint"], rows).mean(axis=0)
         self.numbers[label] = {"max_err": float(err.max()), "mean_err": float(err.mean()), "worst": worst,
                                "cmd_max_err": float(cmd_err), "waist": waist.tolist()}
         return err, worst, cmd_err, waist
 
-    def weight_ramp(self, rows, rising):
-        """(start, end) sim times of a 0 -> 1 or 1 -> 0 ramp of the received weight, its
-        largest change per 20 ms of wall time (the safety layer ramps on wall time),
-        its first weight and its wall-clock duration"""
-        w = self.s["sdk_weight"][rows]
-        t = self.s["t"][rows]
-        wall = self.s["wall"][rows]
-        valid = ~np.isnan(w)
-        w, t, wall = w[valid], t[valid], wall[valid]
-        lo, hi = (w <= 0.001), (w >= 0.999)
-        if rising:
-            if not hi.any():
-                return None
-            end = int(np.argmax(hi))
-            start = int(np.nonzero(lo[:end])[0][-1]) if lo[:end].any() else 0
+    # ------------------------------------------------------------- start-up
+    def release(self):
+        """The band's first release, from the sim's record of every step: (index of the
+        first sample at or after it, sim t, wall), or None"""
+        changes = self.s["band_changes"]
+        off = np.nonzero(changes[:, 2] == 0.0)[0]
+        if not off.size:
+            return None
+        t, wall = float(changes[off[0], 0]), float(changes[off[0], 1])
+        return int(min(np.searchsorted(self.s["t"], t), len(self.s["t"]) - 1)), t, wall
+
+    def end_wall(self):
+        """The wall time of the test's last step: its end mark, or the last mark it made"""
+        if "end" in self.events:
+            return self.events["end"]["wall"]
+        return max(e["wall"] for e in self.events.values())
+
+    def startup(self):
+        """The G1's start-up: the band holds the limp robot, golem_safety latches no
+        estop, the walking node starts and releases the band once frame_task_server is
+        up, and the robot stands after. Returns the release's first sample, or None"""
+        release = self.release()
+        r = None if release is None else release[0]
+        self.band_holds(r)
+        self.no_estop()
+        policy_wall = self.walking_node_starts()
+        self.band_released(release, policy_wall)
+        if r is not None:
+            self.release_numbers(r, policy_wall)
+            t = self.s["t"]
+            rows = np.nonzero((t >= t[r]) & (t <= t[r] + RELEASE_STANDING_S))[0]
+            if t[-1] < t[r] + RELEASE_STANDING_S:
+                self.check("standing after release", False,
+                           f"the recording ends {t[-1] - t[r]:.1f} s (sim) after the release, before "
+                           f"{RELEASE_STANDING_S:g} s")
+            else:
+                self.standing(rows, f"the {RELEASE_STANDING_S:g} s after the release",
+                              name="standing after release")
+        return r
+
+    def band_holds(self, r):
+        """While the band is on, the robot hangs upright from it"""
+        s = self.s
+        rows = slice(0, len(s["t"]) if r is None else max(1, r))
+        tilt = _tilt_deg(s["upz"][rows])
+        z = s["pelvis"][rows, 2]
+        t = s["t"][rows]
+        on = s["band"][rows]
+        first = s["commanded_at"]
+        self.numbers["band_holds"] = {"sim_t": [float(t[0]), float(t[-1])], "tilt_max_deg": float(tilt.max()),
+                                      "z_min": float(z.min()), "z_max": float(z.max()),
+                                      "first_lowcmd_t": float(first[0])}
+        self.check("band holds", bool(np.all(on == 1.0)) and tilt.max() <= MAX_TILT_DEG,
+                   f"the band on from sim t {t[0]:.2f} to {t[-1]:.2f} s"
+                   + ("" if r is not None else " (never released)")
+                   + f": pelvis tilt max {tilt.max():.1f} deg (limit {MAX_TILT_DEG}), pelvis z "
+                   f"{z.min():.3f}-{z.max():.3f} m; the first valid rt/lowcmd came at sim t {first[0]:.2f} s"
+                   + ("" if np.all(on == 1.0) else "; the band was not on at every sample before the release"))
+
+    def no_estop(self):
+        """golem_safety (launch.log) latched no estop from its start to the end of the
+        test's steps, the controller's stop included"""
+        lines = logged(os.path.join(self.out, "launch.log"), "safety_node")
+        started = [wall for wall, _, text in lines if safety_event(text) == "relay_started"]
+        end = self.end_wall()
+        estops = [(wall, text) for wall, _, text in lines if wall <= end and (
+            safety_event(text) == "estop_command_written" or text.startswith("estop diagnostic"))]
+        self.numbers["estops"] = [[wall, text] for wall, text in estops]
+        if not started:
+            text = "launch.log has no relay_started from golem_safety's safety_node"
+        elif estops:
+            wall, first = estops[0]
+            text = (f"{len(estops)} estop line(s) from safety_node, the first {wall - started[0]:.1f} s (wall) "
+                    f"after its start: {first}")
         else:
-            if not hi.any() or not lo.any():
-                return None
-            last_hi = int(np.nonzero(hi)[0][-1])
-            after = np.nonzero(lo[last_hi:])[0]
-            if not after.size:
-                return None
-            start, end = last_hi, last_hi + int(after[0])
-        step = _largest_change(w[start:end + 1], wall[start:end + 1])
-        return float(t[start]), float(t[end]), step, float(w[0]), float(wall[end] - wall[start])
+            text = (f"no estop from safety_node's start to the end of the test's steps "
+                    f"({end - started[0]:.0f} s wall)")
+        self.check("no estop during start-up", bool(started) and not estops, text)
 
-    def ramp_ok(self, wall, step):
-        return RAMP_WALL_S[0] <= wall <= RAMP_WALL_S[1] and step <= WEIGHT_STEP
+    def walking_node_starts(self):
+        """HOMIE's node (launch.log) started its policy once, and did not fault before the
+        end of the test's steps. Returns the start's wall time, or None"""
+        lines = logged(os.path.join(self.out, "launch.log"), "locomotion_node")
+        end = self.end_wall()
+        starts = [wall for wall, _, text in lines if text.startswith(POLICY_STARTED)]
+        faults = [text for wall, _, text in lines if wall <= end and text.startswith("fault:")]
+        wall = starts[0] if starts else None
+        t = None
+        if wall is not None:
+            t = float(self.s["t"][int(min(np.searchsorted(self.s["wall"], wall), len(self.s["t"]) - 1))])
+        self.numbers["policy_started"] = {"wall": wall, "sim_t": t, "starts": len(starts), "faults": faults}
+        if not starts:
+            text = "launch.log has no 'walking: policy started' from locomotion_node"
+        else:
+            text = f"the policy started at sim t {t:.2f} s"
+            text += "" if len(starts) == 1 else f", {len(starts)} times"
+        if faults:
+            text += f"; it faulted: {faults[0]}"
+        self.check("walking node starts", len(starts) == 1 and not faults, text)
+        return wall
 
+    def band_released(self, release, policy_wall):
+        """The band comes off once and stays off: after the first /left_ee_pose the test saw
+        (its stamp, sim time) and within band.max_wait of the policy's start (wall)"""
+        changes = self.s["band_changes"]
+        states = changes[:, 2].tolist()
+        pose = self.events.get("left_ee_pose_first")
+        max_wait = self.info.get("band_max_wait")
+        reasons = [text for _, _, text in logged(os.path.join(self.out, "launch.log"), "locomotion_node")
+                   if text.startswith("releasing the elastic band") or text.startswith("elastic band released")]
+        self.numbers["band_release"] = {"changes_t_wall_on": changes.tolist(), "left_ee_pose_first": pose,
+                                        "max_wait": max_wait, "walking_node": reasons}
+        if release is None:
+            self.check("band released after the controller is ready", False,
+                       "the band was never released" + ("" if pose else ", and the test saw no /left_ee_pose"))
+            return
+        _, t_off, wall_off = release
+        once = states == [1.0, 0.0]
+        after_pose = pose is not None and t_off > pose["stamp"]
+        since = wall_off - policy_wall if policy_wall is not None else math.nan
+        in_time = max_wait is not None and 0.0 <= since <= max_wait + BAND_POLL_SLACK_S
+        self.numbers["band_release"].update(sim_t=t_off, wall=wall_off, after_policy_wall_s=since,
+                                            after_left_ee_pose_sim_s=None if pose is None else t_off - pose["stamp"])
+        text = (f"off at sim t {t_off:.3f} s; " + ("on from the first step, then off once" if once else
+                                                   f"its states over the run {states} (1 on, 0 off)")
+                + "; " + (f"{t_off - pose['stamp']:.3f} s (sim) after the first /left_ee_pose's stamp "
+                          f"{pose['stamp']:.3f} s" if pose else "the test saw no /left_ee_pose")
+                + f"; {since:.2f} s (wall) after the policy's start (band.max_wait {max_wait} s, "
+                f"+{BAND_POLL_SLACK_S} s for the node's poll)")
+        if reasons:
+            text += f"; locomotion_node: {' / '.join(reasons)}"
+        self.check("band released after the controller is ready", once and after_pose and in_time, text)
+
+    def release_numbers(self, r, policy_wall):
+        """The pelvis and the feet around the release, for the record: under the band in the
+        second before it, and over the RELEASE_MEASURE_S after it"""
+        s = self.s
+        t, z, tilt, feet = s["t"], s["pelvis"][:, 2], _tilt_deg(s["upz"]), s["feet"]
+        before = np.nonzero((t >= t[r] - 1.0) & (t < t[r]))[0]
+        after = np.nonzero((t >= t[r]) & (t <= t[r] + RELEASE_MEASURE_S))[0]
+        if not before.size or not after.size:
+            return
+        last = before[-1]
+        moved = np.linalg.norm(feet[after][:, :, :2] - feet[last][:, :2], axis=2)   # (samples, 2 feet)
+        under = s["wall"][last] - policy_wall if policy_wall is not None else math.nan
+        n = {"policy_under_band_wall_s": under,
+             "before": {"pelvis_z": float(z[last]), "pelvis_z_range": [float(z[before].min()), float(z[before].max())],
+                        "tilt_deg": float(tilt[last]), "tilt_max_deg": float(tilt[before].max())},
+             "after": {"seconds": RELEASE_MEASURE_S, "tilt_max_deg": float(tilt[after].max()),
+                       "pelvis_z_min": float(z[after].min()), "pelvis_drop_m": float(z[last] - z[after].min()),
+                       "pelvis_z_end": float(z[after[-1]]),
+                       "feet_moved_max_m": moved.max(axis=0).tolist(), "feet_moved_end_m": moved[-1].tolist()}}
+        self.numbers["release"] = n
+        b, a = n["before"], n["after"]
+        print(f"     band release at sim t {t[r]:.2f} s, {under:.2f} s (wall) after the policy's start. Under "
+              f"the band, the second before: pelvis z {b['pelvis_z_range'][0]:.3f}-{b['pelvis_z_range'][1]:.3f} "
+              f"m, tilt max {b['tilt_max_deg']:.1f} deg (last sample {b['pelvis_z']:.3f} m, "
+              f"{b['tilt_deg']:.1f} deg). The {RELEASE_MEASURE_S:g} s after: tilt max {a['tilt_max_deg']:.1f} "
+              f"deg, pelvis down {a['pelvis_drop_m'] * 100:.1f} cm to {a['pelvis_z_min']:.3f} m (at the end "
+              f"{a['pelvis_z_end']:.3f} m); feet moved left {a['feet_moved_max_m'][0] * 100:.1f} cm, right "
+              f"{a['feet_moved_max_m'][1] * 100:.1f} cm at most ({a['feet_moved_end_m'][0] * 100:.1f} / "
+              f"{a['feet_moved_end_m'][1] * 100:.1f} cm at the end)")
+
+    # ------------------------------------------------------------- the tests
     def arm_test(self):
         s = self.s
-        n = len(s["t"])
-        # 1. the safety layer engages rt/arm_sdk: weight 0 -> 1
-        ramp = self.weight_ramp(slice(0, self.at("t_pose_sent")), rising=True)
-        if ramp is None:
-            self.check("engage", False, "the rt/arm_sdk weight never reached 1")
-        else:
-            t0, t1, step, first, wall = ramp
-            first_t = s["t"][np.nonzero(~np.isnan(s["sdk_weight"]))[0][0]]
-            self.numbers["engage"] = {"first_frame_t": float(first_t), "first_weight": first,
-                                      "ramp_start_t": t0, "ramp_end_t": t1, "ramp_wall_s": wall,
-                                      "max_step": step}
-            self.check("engage", first <= 0.05 and self.ramp_ok(wall, step),
-                       f"first rt/arm_sdk frame at sim t {first_t:.2f} s with weight {first:.3f}; weight "
-                       f"0 -> 1 over {wall:.2f} s wall (sim t {t0:.2f} to {t1:.2f} s, {t1 - t0:.2f} s), largest "
-                       f"change per 20 ms of wall time {step:.3f} (limits {RAMP_WALL_S[0]}-{RAMP_WALL_S[1]} s "
-                       f"wall, {WEIGHT_STEP})")
-        # 2. frame_task_server took the arms to home at startup. In the sim the
-        # stand-in already holds them at 0, which is home, so the targets it
-        # commands and the weight it holds are checked too
+        samples = len(s["t"])
+        r = self.startup()
+        # frame_task_server took the arms to home at startup, and commands it
         rows = self.window("controller_up", "t_pose_sent", start_offset=1.0)
         err, worst, cmd_err, waist = self.arm_error("home", "home", rows)
         span = s["t"][rows[-1]] - s["t"][rows[0]]
-        w_min = float(s["w"][rows].min())
-        self.numbers["home"]["weight_min"] = w_min
-        self.check("home at startup", err.max() <= ARM_TOL and cmd_err <= HOME_CMD_TOL and w_min >= 0.999,
+        self.check("home at startup", err.max() <= ARM_TOL and cmd_err <= HOME_CMD_TOL,
                    f"arms (14) vs home over the {span:.1f} s (sim) before the t_pose goal: max "
                    f"{err.max():.3f} rad ({worst}), mean {err.mean():.3f}; commanded max {cmd_err:.4f} "
-                   f"(limit {HOME_CMD_TOL}), weight in effect min {w_min:.3f}; waist yaw/roll/pitch "
+                   f"(limit {HOME_CMD_TOL}); waist yaw/roll/pitch "
                    f"{waist[0]:+.3f} {waist[1]:+.3f} {waist[2]:+.3f}")
-        # 3. NamedConfig t_pose succeeds and the arms reach it
+        # NamedConfig t_pose succeeds and the arms reach it
         result = self.events.get("t_pose_result", {})
         rows = self.window("t_pose_result", "/left/hand/close_sent", start_offset=0.5)
         err, worst, cmd_err, waist = self.arm_error("t_pose", "t_pose", rows)
@@ -693,7 +903,7 @@ class Report:
                    f"goal success {result.get('success')} after {took:.1f} s wall; arms vs t_pose: max "
                    f"{err.max():.3f} rad ({worst}), mean {err.mean():.3f}; commanded max {cmd_err:.4f}; "
                    f"waist {waist[0]:+.3f} {waist[1]:+.3f} {waist[2]:+.3f}")
-        # 4. /left/hand/close closes the left hand: the last 0.5 s of sim time
+        # /left/hand/close closes the left hand: the last 0.5 s of sim time
         # before frame_task_server is stopped, at least 2 s after the response
         response = self.events.get("/left/hand/close_response", {})
         rows = self.window("controller_stopped", "controller_stopped", start_offset=-0.5)
@@ -713,58 +923,31 @@ class Report:
                    f"{err.max():.4f} rad, per joint {np.round(err, 4).tolist()} (from "
                    f"{np.round(before[left], 2).tolist()} before); the right hand moved {right_moved:.4f} "
                    f"rad meanwhile")
-        # 5. stopping frame_task_server hands the arms back: weight 1 -> 0. Its
-        # last command (zero gains) trips golem_safety's arm_sdk.waist_kp_min at
-        # once, and the stop's mark is taken just after the signal, so the ramp
-        # may start at the sample before the mark. It is looked for from two
-        # samples before the mark: a ramp that started earlier has no sample at
-        # weight 1 in that window, and fails
+        # stopping frame_task_server leaves the waist at its hold, the walking node standing the robot
+        self.waist_after_controller_stop()
         stop = self.at("controller_stopped")
-        ramp = self.weight_ramp(slice(max(0, stop - 2), n), rising=False)
-        if ramp is None:
-            self.check("hand back", False, "the rt/arm_sdk weight did not ramp 1 -> 0 from the stop on "
-                                           "(it was below 1 two samples before the stop, or never reached 0)")
-        else:
-            t0, t1, step, _, wall = ramp
-            arms_end = np.abs(self.joints(self.info["arm_joints"], slice(n - int(0.5 * self.hz), n))).max()
-            w_end = float(s["w"][-1])
-            self.numbers["hand_back"] = {"stop_t": float(s["t"][stop]), "ramp_start_t": t0,
-                                         "ramp_start_after_stop_s": t0 - float(s["t"][stop]),
-                                         "ramp_end_t": t1, "ramp_wall_s": wall, "max_step": step,
-                                         "w_end": w_end, "arms_end_max_abs": float(arms_end)}
-            self.check("hand back", self.ramp_ok(wall, step) and w_end == 0.0,
-                       f"frame_task_server stopped at sim t {s['t'][stop]:.2f} s; weight 1 -> 0 over "
-                       f"{wall:.2f} s wall (sim t {t0:.2f} to {t1:.2f} s, {t1 - t0:.2f} s, starting "
-                       f"{t0 - s['t'][stop]:+.2f} s from the stop), largest change "
-                       f"per 20 ms of wall time {step:.3f}; "
-                       f"weight in effect at the end {w_end:.3f}; arms back at the stand-in's hold "
-                       f"(max |q| {arms_end:.3f} rad)")
-        # 6. HOMIE stood the robot throughout, and was never released
-        self.phases([("stand-in alone", 0, self.at("controller_up")),
-                     ("home", self.at("controller_up"), self.at("t_pose_sent")),
+        released = samples if r is None else r
+        self.phases([("under the band", 0, released),
+                     ("on HOMIE, home", released, self.at("t_pose_sent")),
                      ("to t_pose", self.at("t_pose_sent"), self.at("t_pose_result")),
                      ("t_pose and hand", self.at("t_pose_result"), stop),
-                     ("hand back", stop, self.at("end") + 1)])
-        self.standing(slice(0, self.at("end") + 1), "whole run")
-        self.check("stand-in kept", not s["released"].any(), "no rt/lowcmd released the stand-in")
+                     ("controller stopped", stop, self.at("end") + 1)])
+        if r is not None:
+            self.standing(slice(r, self.at("end") + 1), "from the release to the end")
         self.sensors()
 
     def walk_test(self):
         s = self.s
         n = len(s["t"])
-        released = np.nonzero(s["released"])[0]
-        if not released.size:
-            self.check("hand-over", False, "the stand-in was never released (no valid rt/lowcmd)")
+        r = self.startup()
+        if r is None:
             return
-        r = int(released[0])
-        self.numbers["handover_t"] = float(s["t"][r])
-        self.check("hand-over", True, f"the node's rt/lowcmd released the stand-in at sim t {s['t'][r]:.2f} s")
         if "leg_changes" in s:
             # diagnostic: HOMIE needs a fresh leg target every 10 physics steps; a
             # starved ros side delivers fewer, late and in bursts
             self.numbers["leg_targets"] = {}
-            for label, e in (("in the first 2 s after the hand-over", min(n - 1, r + int(2 * self.hz))),
-                             ("from the hand-over to the end", self.at("end"))):
+            for label, e in (("in the first 2 s after the release", min(n - 1, r + int(2 * self.hz))),
+                             ("from the release to the end", self.at("end"))):
                 got = int(s["leg_changes"][e] - s["leg_changes"][r])
                 expected = int(round((s["t"][e] - s["t"][r]) / 0.02))
                 hold = float(s["leg_hold_max"][r + 1:e + 1].max() + 1) * 2.0
@@ -772,7 +955,6 @@ class Report:
                                                       "longest_hold_ms": hold}
                 print(f"     leg targets {label}: {got} received of {expected} expected (one per 20 ms "
                       f"of sim time); the longest one held {hold:.0f} ms of sim time")
-        self.standing(slice(0, r), "stand-in")
         self.standing(slice(r, self.at("walk_start")), "walking node, standing")
         # walk: base displacement in the heading at the start of the command
         a, b = self.at("walk_start"), self.at("walk_stop")
@@ -799,7 +981,7 @@ class Report:
         self.standing(slice(a, c + 1), "walking")
         # until the test ends: stopping the launch then stops rt/lowcmd and the
         # sim turns the motors off
-        self.standing(slice(r, self.at("end") + 1), "after the hand-over")
+        self.standing(slice(r, self.at("end") + 1), "from the release to the end")
         self.waist_after_controller_stop()
         self.sensors()
 
@@ -990,7 +1172,7 @@ class Report:
         self.numbers["real_time_factor_per_s"] = {"min": float(per_s.min()), "p5": float(np.percentile(per_s, 5)),
                                                   "median": float(np.median(per_s))}
         # and over the test's steps, once the bringup is up (its start loads the host)
-        first = next((e for e in ("controller_up", "lowcmd_first") if e in self.events), None)
+        first = next((e for e in ("controller_up", "band_released") if e in self.events), None)
         steps = ""
         if first and "end" in self.events:
             a, b = self.at(first), self.at("end")
@@ -1006,10 +1188,10 @@ class Report:
             # the steps stopped early: say so, and report what was recorded
             self.check("test steps", False, f"the run has no {e} mark, so the test's steps did not "
                                             "finish (see drive.log)")
-            released = np.nonzero(self.s["released"])[0]
-            if released.size:
-                print(f"     the stand-in was released at sim t {t[released[0]]:.2f} s")
-            self.standing(slice(0, len(t)), "whole recording")
+            release = self.release()
+            if release is not None:
+                print(f"     the band was released at sim t {release[1]:.2f} s")
+                self.standing(slice(release[0], len(t)), "from the release to the end of the recording")
         ok = all(c["pass"] for c in self.checks)
         with open(os.path.join(out, "report.json"), "w") as f:
             json.dump({"pass": ok, "checks": self.checks, "numbers": self.numbers}, f, indent=1)

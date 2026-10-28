@@ -11,25 +11,27 @@ test_sim_explore.sh runs them and has the usage. Built on test_sim_nav.py.
           least PATH_CLEARANCE (0.35 m) from anything the robot can touch. The nav
           test's goal (<out>/goal.json) is not used
   drive   in the ros container, beside 'ros2 launch golem_bringup g1_sim.launch.py
-          use_locomotion:=true use_nav:=true frontier_explore:=true': waits until the
-          walking node walks, Nav2 is active and /skill/frontier_explore is served,
-          stands STAND_S, sends one SkillFrontierExplore goal (timeout EXPLORE_TIMEOUT_S,
-          the explorer's defaults otherwise) and waits for its result; records as the nav
-          test's drive does (<out>/drive.npz, map.npz) and the explorer's feedback and
-          result (<out>/events.json)
+          use_nav:=true frontier_explore:=true': waits until the walking node walks, the
+          sim's elastic band is released, Nav2 is active and /skill/frontier_explore is
+          served, stands STAND_S, sends one SkillFrontierExplore goal (timeout
+          EXPLORE_TIMEOUT_S, the explorer's defaults otherwise) and waits for its result;
+          records as the nav test's drive does (<out>/drive.npz, map.npz) and the
+          explorer's feedback and result (<out>/events.json)
   report  anywhere with numpy and scipy: checks the run, prints the numbers and writes
           <out>/report.json; exit 1 on a failure
 
 Pass if: over the whole recording the pelvis stays above MIN_PELVIS_Z and tilts at
 most MAX_TILT_DEG, and the sim's fall logger logs no fall (never fell); no robot geom
-penetrates anything but the floor (touches nothing); every /cmd_vel is inside the speed
-caps and the velocity smoother is its only publisher; at least MIN_COVERAGE of the
-reachable floor (scene.npz) is free in the final /map (placed in the world through
-map -> pelvis against the sim's pelvis, as the nav test does); and every occupied cell
-of the final /map is within MAP_TOL of something the sim has in the scan's band (no
-phantom cells). The stack has to come up, and the sim has to publish /odom exactly
-when the test runs sim_gt. When the explorer reports the map explored, its result's
-goals_reached has to be above 0 and match its log: the goals Nav2 reached plus those
+penetrates anything but the floor (touches nothing); golem_safety latches no estop
+before the drive's end; every /cmd_vel is inside the speed caps and the velocity
+smoother is its only publisher; at least MIN_COVERAGE of the reachable floor
+(scene.npz) is free in the final /map (placed in the world through map -> pelvis
+against the sim's pelvis, as the nav test does); and every occupied cell of the final
+/map is within MAP_TOL of something the sim has in the scan's band (no phantom cells).
+The stack has to come up (the walking node's policy started and the band released
+before the goal), and the sim has to publish /odom exactly when the test runs sim_gt.
+When the explorer reports the map explored, its result's goals_reached has to be
+above 0 and match its log: the goals Nav2 reached plus those
 seen on the way (frontier_explore counts both). Otherwise its outcome (done or out of
 time), its goals and their failures are reported, not checked, and so are the nav
 test's other checks (the scan path, the scan's phantoms, the localisation), whose
@@ -165,7 +167,7 @@ def run_drive(out, odom_source):
     ok = False
     try:
         d.mark("drive_start")
-        if d.wait_walking() and d.wait_nav() and d.wait_explorer():
+        if d.wait_walking() and d.wait_band_released() and d.wait_nav() and d.wait_explorer():
             d.spin_for(STAND_S)
             ok = d.explore()
             d.spin_for(SETTLE_S)
@@ -227,18 +229,18 @@ class Report(nav.Report):
         want_odom = ["mujoco_sensors"] if self.info["odom_source"] == "sim_gt" else []
         self.check("odom source", odom_pubs == want_odom,
                    f"odom_source {self.info['odom_source']}: /odom publishers {odom_pubs} (expected {want_odom})")
-        released = np.nonzero(s["released"])[0]
-        if not released.size:
-            self.check("stack up", False, "the stand-in was never released (no valid rt/lowcmd)")
+        release = self.release()
+        if release is None:
+            self.check("stack up", False, "the sim's elastic band was never released: see sim.log and launch.log")
             return
-        r = int(released[0])
-        for name in ("walking", "nav_active", "explorer_up", "explore_sent"):
+        r = release[0]
+        for name in ("walking", "band_released", "nav_active", "explorer_up", "explore_sent"):
             if name not in ev:
                 self.check("stack up", False, f"no '{name}' mark: see drive.log and launch.log")
                 return
         first = ev["drive_start"]["wall"]
         self.check("stack up", True,
-                   f"stand-in released at sim t {s['t'][r]:.2f} s; the drive saw the walking node walk at sim t "
+                   f"band released at sim t {release[1]:.2f} s; the drive saw the walking node walk at sim t "
                    f"{ev['walking']['sim']:.1f} s, Nav2 active at {ev['nav_active']['sim']:.1f} s and the explorer "
                    f"at {ev['explorer_up']['sim']:.1f} s ({ev['explorer_up']['wall'] - first:.0f} s wall after it "
                    f"started)")
@@ -247,7 +249,7 @@ class Report(nav.Report):
         last = max(ev.values(), key=lambda e: e["wall"])["name"]
         i_end = self.at("explore_result") if "explore_result" in ev else self.at(last)
         a = self.at("explore_sent")
-        self.phases([("stand-in", 0, r), ("standing, walking node", r, a), ("exploring", a, i_end + 1),
+        self.phases([("under the band", 0, r), ("standing, walking node", r, a), ("exploring", a, i_end + 1),
                      ("after the result", i_end + 1, len(s["t"]))])
         self.cmd_vel()
         world_map = self.world_from(sent["map_pelvis"])

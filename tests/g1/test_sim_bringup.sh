@@ -2,7 +2,7 @@
 # Acceptance test of the G1 RoboCasa sim with the whole bringup, run from the host.
 #
 #   tests/g1/test_sim_bringup.sh           # the arm test
-#   tests/g1/test_sim_bringup.sh --walk    # the walk test (use_locomotion:=true)
+#   tests/g1/test_sim_bringup.sh --walk    # the walk test
 #
 # Builds core_ws for the G1, starts the sim (h12_mujoco.py --g1) headless in the
 # layout 9 / style 9 / seed 42 kitchen, then, in its network namespace, a ros
@@ -44,7 +44,6 @@ if [ "${1:-}" = "--walk" ]; then
     TEST=walk
     NAME=walk
     DOMAIN=196
-    LAUNCH_ARGS="$LAUNCH_ARGS use_locomotion:=true"
     # the spawn faces a counter: walk into open floor behind it instead
     SIM_ENV=(-e GOLEM_SIM_ODOM=0 -e "GOLEM_SPAWN_BACKOFF=${WALK_BACKOFF:-2.0}")
     DRIVE_ARGS="--walk"

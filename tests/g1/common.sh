@@ -194,7 +194,7 @@ g1_test_start_sim() {
     local py=$1
     shift
     "${COMPOSE[@]}" run -d --no-deps --name "$SIM" -e G1_DDS_INTERFACE=lo -e PYTHONDONTWRITEBYTECODE=1 \
-        -e PYTHONUNBUFFERED=1 -e MUJOCO_GL=egl -e GOLEM_CMD_TIMEOUT= -e GOLEM_ARM_SDK_TIMEOUT= \
+        -e PYTHONUNBUFFERED=1 -e MUJOCO_GL=egl -e GOLEM_CMD_TIMEOUT= \
         -e GOLEM_SIM_EXPERIMENT=0 "$@" robocasa bash -c "$MULTICAST && source /opt/ros/humble/setup.bash && \
         source /opt/livox_ws/install/setup.bash && cd /home/code/golem_robocasa && \
         exec python3 -u /home/code/tests/g1/$py sim --out /out -- --headless --layout 9 --style 9 --seed 42" >/dev/null

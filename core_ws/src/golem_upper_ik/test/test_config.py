@@ -8,6 +8,7 @@ tools/snapshot_old_controller.py); these tests import neither old package.
 import json
 import math
 from pathlib import Path
+import re
 
 from ament_index_python.packages import get_package_share_directory
 import numpy as np
@@ -87,6 +88,9 @@ def test_configs_load(case):
     old = old_config(robot, name)['controller']
 
     assert config['robot'] == robot
+    # the file names every held joint, so the values below are carried, not the defaults
+    raw = yaml.safe_load(installed(robot, name).read_text())
+    assert sorted(raw['controller']['hold_targets']) == sorted(HELD[robot])
     hold = config['controller']['hold_targets']
     if robot == 'h12':
         assert hold == {'torso_joint': old['torso_target']}
@@ -303,6 +307,90 @@ def test_bad_values_raise(tmp_path, section, key, value):
     raw[section] = {key: value}
     with pytest.raises(ValueError, match=f'{section}.{key}'):
         load('h12', write_config(tmp_path, 'h12', raw))
+
+
+# a speed limit, timeout, convergence threshold or interval must be positive; a distance,
+# ratio or offset must not be negative (a ratio of 0 is the lower slots' value in an
+# upper-body list)
+@pytest.mark.parametrize('key, value', [
+    ('controller.v_lim', 0.0),
+    ('controller.w_lim', -1.0),
+    ('controller.dq_lim', 0.0),
+    ('controller.timeout', 0.0),
+    ('controller.threshold_ik', 0.0),
+    ('controller.threshold_joint', 0.0),
+    ('controller.threshold_linear', -0.001),
+    ('controller.threshold_angular', 0.0),
+    ('controller.d_min', -0.01),
+    ('logging.record_interval', 0.0),
+    ('limits.clip.position_offset', -0.001),
+    ('limits.clip.velocity_ratio', -0.1),
+    ('limits.clip.torque_ratio', -0.25),
+    ('limits.clip.torque_ratio', [0.25] * 14 + [-0.25]),
+])
+def test_nonsensical_values_raise(tmp_path, key, value):
+    raw = minimal('h12')
+    *sections, name = key.split('.')
+    target = raw
+    for section in sections:
+        target = target.setdefault(section, {})
+    target[name] = value
+    with pytest.raises(ValueError, match=re.escape(f"'{key}'")):
+        load('h12', write_config(tmp_path, 'h12', raw))
+
+
+@pytest.mark.parametrize('key, value', [
+    ('try_direct', 'false'),
+    ('timeout', float('nan')),
+    ('frame_names', 'left_grasp_frame'),
+    ('frame_names', ['left_grasp_frame']),
+    ('frame_names', ['left_grasp_frame', '']),
+    ('max_interpolation_steps', 2.5),
+    ('min_interpolation_steps', 0),
+    ('constraint_check_steps', True),
+    ('planner', 5),
+    ('moving_speed', 0.0),
+    ('frame_x_max', 'far'),
+    ('frame_limit_margin', -0.01),
+    ('enabled', 'yes'),
+])
+def test_bad_planner_values_raise(tmp_path, key, value):
+    raw = minimal('h12')
+    raw['planner'] = {key: value}
+    with pytest.raises(ValueError, match=re.escape(f"'planner.{key}'")):
+        load('h12', write_config(tmp_path, 'h12', raw))
+
+
+def test_planner_values_load_with_their_types(tmp_path):
+    planner = load('h12', 'safety_split')['planner']
+    for key in ('enabled', 'try_direct', 'simplify', 'shortcut'):
+        assert type(planner[key]) is bool, key
+    for key in ('min_interpolation_steps', 'max_interpolation_steps', 'constraint_check_steps'):
+        assert type(planner[key]) is int, key
+    for key in ('timeout', 'range', 'simplify_time', 'moving_speed', 'validity_resolution',
+                'frame_x_max', 'frame_y_min', 'frame_y_max', 'frame_z_min', 'frame_z_max',
+                'frame_limit_margin', 'frame_z_corridor_margin', 'start_limit_tolerance'):
+        assert type(planner[key]) is float, key
+    assert planner['planner'] == 'RRTConnect'
+    assert planner['frame_names'] == ['left_grasp_frame', 'right_grasp_frame']
+
+    # a frame bound may be null (no bound); a whole-number count may be written as a float
+    raw = minimal('h12')
+    raw['planner'] = {'frame_y_min': None, 'max_interpolation_steps': 30.0}
+    planner = load('h12', write_config(tmp_path, 'h12', raw))['planner']
+    assert planner['frame_y_min'] is None
+    assert planner['max_interpolation_steps'] == 30
+    assert type(planner['max_interpolation_steps']) is int
+
+
+def test_mode_without_an_output_topic_raises(monkeypatch):
+    import dataclasses
+    from golem_upper_ik import config as config_module
+    from golem_upper_ik.profile import load_profile
+    profile = dataclasses.replace(load_profile('h12'), modes=('full_body_mode', 'wobble_mode'))
+    monkeypatch.setattr(config_module, 'load_profile', lambda robot: profile)
+    with pytest.raises(ValueError, match='h12.*wobble_mode'):
+        config_module.load_controller_config('h12', 'safety_split')
 
 
 def test_numbers_written_without_a_dot_load(tmp_path):

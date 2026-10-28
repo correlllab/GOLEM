@@ -53,7 +53,9 @@ def test_g1_pairing_matches_old_rules():
 
 
 def test_g1_default_controller_config_matches_old():
-    for safety, controller in old_cases()['default_controller_config'].items():
+    defaults = old_cases()['default_controller_config']
+    assert len(defaults) == 10
+    for safety, controller in defaults.items():
         assert default_controller_config('g1', safety) == controller, safety
 
 

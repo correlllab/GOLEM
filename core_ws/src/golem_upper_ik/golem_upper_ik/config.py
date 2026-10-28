@@ -4,9 +4,10 @@ returns the values the controller runs on, every default filled in and the joint
 derived for the robot's body slots.
 
 A bare name ('safety_split' or 'safety_split.yaml') is a file of
-share/golem_upper_ik/config/<robot>/. Anything with a '/' is a path. Every key is checked:
-an unknown key, a key from an older config, a non-finite number or a value of the wrong type
-raises ValueError naming the robot, the file and the key.
+share/golem_upper_ik/config/<robot>/. Anything with a '/' is a path. Every key and every
+value is checked: an unknown key, a key from an older config, a value of the wrong type, a
+non-finite number or a number out of its range raises ValueError naming the robot, the file
+and the key.
 '''
 import math
 import os
@@ -40,7 +41,7 @@ CONTROLLER_DEFAULTS = {
     'dq_lim': 1.0,  # IK joint speed limit, rad/s
     'd_min': 0.02,  # self-collision distance the IK keeps, m
     'timeout': 10.0,  # s per goal without a duration
-    'threshold_ik': 0.001,
+    'threshold_ik': 0.001,  # IK velocity error at which a goal has converged
     'threshold_joint': 0.01,  # rad
     'threshold_linear': 0.002,  # m
     'threshold_angular': 0.01,  # rad
@@ -49,8 +50,9 @@ CONTROLLER_DEFAULTS = {
     'startup_move_timeout': 30.0,  # s for the start-up moves, from the follow gate opening
     'follow_tolerance': 0.05,  # rad; 0 turns the follow gate off
 }
-# must be > 0
-POSITIVE_CONTROLLER_KEYS = ('state_timeout', 'startup_timeout', 'startup_move_timeout')
+# The values above must be > 0 (a speed limit of 0 never moves, a timeout of 0 fails at
+# once, a goal never converges to a threshold of 0), apart from these, which may be 0
+NON_NEGATIVE_CONTROLLER_KEYS = ('d_min', 'follow_tolerance')
 FREQUENCY_DEFAULTS = {
     'ctrl_hz': 50.0,  # IK
     'pub_hz': 500.0,  # command publishing
@@ -71,17 +73,32 @@ LOGGING_DEFAULTS = {
 }
 # logging keys and the older spelling each also takes; giving both is an error
 LOGGING_ALIASES = {'base_dir': 'save_path', 'filename': 'save_filename'}
-# The planner section's keys. Its values are passed through as written; the planner's own
-# config supplies the defaults, except enabled (true) and frame_names (the profile's planner
-# frames), which the loader fills in. The planner runs only when the profile has a
-# self-collision model and enabled is true.
-PLANNER_KEYS = frozenset((
-    'enabled', 'planner', 'timeout', 'range', 'try_direct', 'simplify', 'simplify_time',
-    'shortcut', 'moving_speed', 'dt', 'min_interpolation_steps', 'max_interpolation_steps',
-    'validity_resolution', 'constraint_check_steps', 'frame_names', 'frame_x_max',
-    'frame_y_min', 'frame_y_max', 'frame_z_min', 'frame_z_max', 'frame_limit_margin',
-    'frame_z_corridor_margin', 'start_limit_tolerance',
-))
+# The planner section's keys, by kind: the fields of the H1-2 planner's PlannerConfig, and
+# enabled. The loader checks the keys a file gives and fills in only enabled (true) and
+# frame_names (the profile's planner frames); PlannerConfig supplies every other default.
+# The planner runs only when the profile has a self-collision model and enabled is true.
+PLANNER_TEXT_KEYS = ('planner',)  # the OMPL planner's name
+PLANNER_BOOLEAN_KEYS = ('enabled', 'try_direct', 'simplify', 'shortcut')
+PLANNER_POSITIVE_KEYS = (
+    'timeout',  # s to plan
+    'moving_speed',  # planner-frame Cartesian speed, m/s
+    'dt',  # s between path samples
+    'validity_resolution',  # validity-check spacing in joint space, rad
+)
+PLANNER_NON_NEGATIVE_KEYS = (
+    'range',  # extension length in joint space, rad; 0 lets OMPL choose
+    'simplify_time',  # s
+    'frame_limit_margin',  # m
+    'frame_z_corridor_margin',  # m
+    'start_limit_tolerance',  # rad
+)
+PLANNER_COUNT_KEYS = ('min_interpolation_steps', 'max_interpolation_steps',
+                      'constraint_check_steps')
+PLANNER_BOUND_KEYS = ('frame_x_max', 'frame_y_min', 'frame_y_max', 'frame_z_min',
+                      'frame_z_max')  # m, or null for no bound
+PLANNER_KEYS = frozenset(
+    PLANNER_TEXT_KEYS + PLANNER_BOOLEAN_KEYS + PLANNER_POSITIVE_KEYS + PLANNER_NON_NEGATIVE_KEYS
+    + PLANNER_COUNT_KEYS + PLANNER_BOUND_KEYS + ('frame_names',))
 SECTION_KEYS = {
     'topics': frozenset(TOPIC_DEFAULTS) | {'safety_out'},
     'controller': frozenset(CONTROLLER_DEFAULTS) | {'hold_targets', 'imu_frame',
@@ -149,6 +166,28 @@ def _number(where: _Where, key: str, value) -> float:
     return value
 
 
+def _positive(where: _Where, key: str, value) -> float:
+    number = _number(where, key, value)
+    if number <= 0.0:
+        raise where.error(key, f'must be positive, not {number}')
+    return number
+
+
+def _non_negative(where: _Where, key: str, value) -> float:
+    number = _number(where, key, value)
+    if number < 0.0:
+        raise where.error(key, f'must be 0 or positive, not {number}')
+    return number
+
+
+def _count(where: _Where, key: str, value) -> int:
+    '''A positive whole number; 30.0 is 30'''
+    number = _number(where, key, value)
+    if not number.is_integer() or number < 1:
+        raise where.error(key, f'must be a whole number of at least 1, not {value!r}')
+    return int(number)
+
+
 def _boolean(where: _Where, key: str, value) -> bool:
     if not isinstance(value, bool):
         raise where.error(key, f'must be true or false, not {value!r}')
@@ -159,6 +198,13 @@ def _text(where: _Where, key: str, value) -> str:
     if not isinstance(value, str) or not value:
         raise where.error(key, f'must be a non-empty string, not {value!r}')
     return value
+
+
+def _frame_names(where: _Where, key: str, value) -> list:
+    '''The two planner frames, [left, right]'''
+    if not isinstance(value, list) or len(value) != 2:
+        raise where.error(key, f'must be a list of two frame names, [left, right], not {value!r}')
+    return [_text(where, key, name) for name in value]
 
 
 def _topic(where: _Where, key: str, value) -> str:
@@ -228,6 +274,12 @@ def _clip_limits(where: _Where, limits: dict, profile: RobotProfile) -> dict:
     values = {key: _joint_values(where, f'limits.{name}.{key}', policy.get(key, default),
                                  profile)
               for key, default in CLIP_DEFAULTS.items()}
+    for key, value in values.items():
+        if np.any(value < 0.0):
+            slot = int(np.argmax(value < 0.0))
+            raise where.error(f'limits.{name}.{key}',
+                              f'must be 0 or positive, not {value[slot]} '
+                              f'(joint {profile.body_joints[slot]})')
 
     offset = values['position_offset']
     q_limits = np.stack([profile.q_low + offset, profile.q_high - offset], axis=1)
@@ -242,6 +294,25 @@ def _clip_limits(where: _Where, limits: dict, profile: RobotProfile) -> dict:
         'dq_clip_limits': profile.dq_max * values['velocity_ratio'],
         'tau_clip_limits': profile.tau_max * values['torque_ratio'],
     }
+
+
+def _planner(where: _Where, planner: dict, profile: RobotProfile) -> dict:
+    '''The keys the file gives, checked, with enabled and frame_names filled in'''
+    checks = {key: _text for key in PLANNER_TEXT_KEYS}
+    checks.update({key: _boolean for key in PLANNER_BOOLEAN_KEYS})
+    checks.update({key: _positive for key in PLANNER_POSITIVE_KEYS})
+    checks.update({key: _non_negative for key in PLANNER_NON_NEGATIVE_KEYS})
+    checks.update({key: _count for key in PLANNER_COUNT_KEYS})
+    checks['frame_names'] = _frame_names
+    out = {}
+    for key, value in planner.items():
+        if key in PLANNER_BOUND_KEYS:
+            out[key] = None if value is None else _number(where, f'planner.{key}', value)
+        else:
+            out[key] = checks[key](where, f'planner.{key}', value)
+    out.setdefault('enabled', True)
+    out.setdefault('frame_names', list(profile.planner_frames))
+    return out
 
 
 def _hold_targets(where: _Where, value, profile: RobotProfile) -> dict:
@@ -305,6 +376,10 @@ def load_controller_config(robot: str, name_or_path: str) -> dict:
     if not topics['low_cmd'].startswith(SAFETY_INPUT_PREFIX):
         raise where.error('topics.low_cmd', f"'{topics['low_cmd']}' is not a golem_safety "
                                             f'input ({SAFETY_INPUT_PREFIX}...)')
+    unmapped = [mode for mode in profile.modes if mode not in SAFETY_OUTPUT_TOPICS]
+    if unmapped:
+        raise where.error('', f'robot {robot} has golem_safety modes with no known output '
+                              f'topic: {", ".join(unmapped)}')
     outputs = sorted({SAFETY_OUTPUT_TOPICS[mode] for mode in profile.modes})
     safety_out = _topic(where, 'topics.safety_out',
                         topics_raw.get('safety_out', robot_defaults['topics.safety_out']))
@@ -314,14 +389,11 @@ def load_controller_config(robot: str, name_or_path: str) -> dict:
     topics['safety_out'] = safety_out
 
     controller_raw = sections['controller']
-    controller = {key: _number(where, f'controller.{key}', controller_raw.get(key, default))
-                  for key, default in CONTROLLER_DEFAULTS.items()}
-    for key in POSITIVE_CONTROLLER_KEYS:
-        if controller[key] <= 0.0:
-            raise where.error(f'controller.{key}', f'must be positive, not {controller[key]}')
-    if controller['follow_tolerance'] < 0.0:
-        raise where.error('controller.follow_tolerance',
-                          f"must be 0 (off) or positive, not {controller['follow_tolerance']}")
+    controller = {
+        key: (_non_negative if key in NON_NEGATIVE_CONTROLLER_KEYS else _positive)(
+            where, f'controller.{key}', controller_raw.get(key, default))
+        for key, default in CONTROLLER_DEFAULTS.items()
+    }
     # /lowstate tick lag at which goals stop, ms; <= 0 turns the check off
     controller['max_state_lag_ms'] = _number(
         where, 'controller.max_state_lag_ms',
@@ -332,15 +404,8 @@ def load_controller_config(robot: str, name_or_path: str) -> dict:
         where, controller_raw.get('hold_targets', {}), profile)
 
     frequency_raw = sections['frequency']
-    frequency = {key: _number(where, f'frequency.{key}', frequency_raw.get(key, default))
+    frequency = {key: _positive(where, f'frequency.{key}', frequency_raw.get(key, default))
                  for key, default in FREQUENCY_DEFAULTS.items()}
-    for key, value in frequency.items():
-        if value <= 0.0:
-            raise where.error(f'frequency.{key}', f'must be positive, not {value}')
-
-    planner = dict(sections['planner'])
-    planner['enabled'] = _boolean(where, 'planner.enabled', planner.get('enabled', True))
-    planner.setdefault('frame_names', list(profile.planner_frames))
 
     logging_raw = sections['logging']
     for key, alias in LOGGING_ALIASES.items():
@@ -350,7 +415,7 @@ def load_controller_config(robot: str, name_or_path: str) -> dict:
     logging = {
         'enabled': _boolean(where, 'logging.enabled',
                             logging_raw.get('enabled', LOGGING_DEFAULTS['enabled'])),
-        'record_interval': _number(
+        'record_interval': _positive(
             where, 'logging.record_interval',
             logging_raw.get('record_interval', LOGGING_DEFAULTS['record_interval'])),
     }
@@ -364,7 +429,7 @@ def load_controller_config(robot: str, name_or_path: str) -> dict:
         'source': path,
         'topics': topics,
         'controller': controller,
-        'planner': planner,
+        'planner': _planner(where, sections['planner'], profile),
         'frequency': frequency,
         'gains': _gains(where, sections['gains'], profile),
         'limits': _clip_limits(where, sections['limits'], profile),

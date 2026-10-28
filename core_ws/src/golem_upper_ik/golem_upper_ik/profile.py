@@ -5,8 +5,10 @@ The joint table (names in slot order, limits, slot ranges, mode_machine) is gole
 share/golem_safety/robots/<robot>.yaml, the one copy both packages read. The rest (model
 files, frames, held and IK joints, named configurations) is golem_upper_ik.robots.<robot>.
 '''
+from collections.abc import Mapping
 from dataclasses import dataclass
 import os
+from types import MappingProxyType
 
 from ament_index_python.packages import get_package_share_directory
 import numpy as np
@@ -17,7 +19,8 @@ from golem_upper_ik.robots import ROBOTS, robot_module
 __all__ = ['ROBOTS', 'RobotProfile', 'load_profile']
 
 
-@dataclass(frozen=True)
+# eq=False: compared and hashed by identity, since an array field has no truth value
+@dataclass(frozen=True, eq=False)
 class RobotProfile:
     robot: str
     mode_machine: int  # the value /lowstate reports and every command carries
@@ -40,7 +43,8 @@ class RobotProfile:
     imu_frame: str
     held_joints: tuple[str, ...]  # upper-body joints the IK does not solve for
     enabled_joints: tuple[str, ...]  # joints the IK solves for, the named configs' order
-    named_configs: dict  # name -> read-only array over enabled_joints, rad
+    # read-only: name -> read-only array over enabled_joints, rad
+    named_configs: Mapping[str, np.ndarray]
     startup_sequence: tuple[str, ...]  # named configs the controller moves through at start
 
 
@@ -64,6 +68,10 @@ def load_profile(robot: str) -> RobotProfile:
     module = robot_module(robot)
     data = _robot_data(robot)
     joints = sorted(data['joints'], key=lambda joint: joint['slot'])
+    slots = [joint['slot'] for joint in joints]
+    if slots != list(range(len(joints))):
+        raise ValueError(f"robot {robot}: golem_safety's joint slots must be "
+                         f'0..{len(joints) - 1}, each once, not {slots}')
     body_joints = tuple(joint['name'] for joint in joints)
     lower_first, lower_last = data['lower_slots']
     upper_first, upper_last = data['upper_slots']
@@ -78,7 +86,8 @@ def load_profile(robot: str) -> RobotProfile:
         raise ValueError(
             f'robot {robot}: the held joints {held_joints} and IK joints {enabled_joints} '
             f'must be the upper-body joints {upper_joints}, each once')
-    named_configs = {name: _read_only(q) for name, q in module.NAMED_CONFIGS.items()}
+    named_configs = MappingProxyType(
+        {name: _read_only(q) for name, q in module.NAMED_CONFIGS.items()})
     for name, q in named_configs.items():
         if q.shape != (len(enabled_joints),):
             raise ValueError(f'robot {robot}: named config {name} has {q.size} values, '

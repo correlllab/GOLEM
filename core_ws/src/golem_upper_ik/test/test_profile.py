@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import types
 
 from ament_index_python.packages import get_package_share_directory
 import numpy as np
@@ -99,6 +100,24 @@ def test_profiles_load(robot):
 
     with pytest.raises(dataclasses.FrozenInstanceError):
         profile.robot = 'other'
+    assert isinstance(profile.named_configs, types.MappingProxyType)
+    with pytest.raises(TypeError):
+        profile.named_configs['home'] = np.zeros(len(profile.enabled_joints))
+    # compared and hashed by identity: an array field has no truth value to compare by
+    assert profile == profile
+    assert (profile == profile_of(robot)) is False
+    assert hash(profile) == hash(profile)
+
+
+@pytest.mark.parametrize('fault', ['gap', 'repeat'])
+def test_joint_slots_must_be_0_to_n(monkeypatch, fault):
+    from golem_upper_ik import profile as profile_module
+    data = profile_module._robot_data('h12')
+    joints = [dict(joint) for joint in data['joints']]
+    joints[-1]['slot'] = len(joints) if fault == 'gap' else 0
+    monkeypatch.setattr(profile_module, '_robot_data', lambda robot: dict(data, joints=joints))
+    with pytest.raises(ValueError, match='slots'):
+        profile_module.load_profile('h12')
 
 
 @pytest.mark.parametrize('robot', ROBOTS)

@@ -35,6 +35,7 @@ class RobotProfile:
     tau_max: np.ndarray
     lower_slots: range
     upper_slots: range
+    arm_sdk_weight_slot: int | None  # its q is the /arm_sdk blend weight; None: no arm_sdk_mode
     urdf_path: str  # for Pinocchio: relative mesh paths
     urdf_ros_path: str  # for robot_state_publisher and RViz: package:// mesh URIs
     collision: tuple[str, str] | None  # (sphere URDF, SRDF); None: no self-collision model
@@ -110,6 +111,8 @@ def load_profile(robot: str) -> RobotProfile:
         tau_max=_read_only([joint['effort'] for joint in joints]),
         lower_slots=range(lower_first, lower_last + 1),
         upper_slots=upper_slots,
+        arm_sdk_weight_slot=(None if data.get('arm_sdk_weight_slot') is None
+                             else int(data['arm_sdk_weight_slot'])),
         urdf_path=paths['urdf_path'],
         urdf_ros_path=paths['urdf_ros_path'],
         collision=None if paths['collision'] is None else tuple(paths['collision']),

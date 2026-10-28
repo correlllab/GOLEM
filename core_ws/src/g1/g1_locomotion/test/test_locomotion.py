@@ -1,6 +1,7 @@
 '''
 The walking node's logic with no DDS or ROS: config, slots, state, commands,
-startup, the tick cadence, the latency and faults
+startup (the heartbeat, the pre-pose, the confirm hold), the tick cadence, the
+latency and faults
 '''
 
 import importlib.util
@@ -18,6 +19,7 @@ import unitree_sdk2py.core.channel
 from g1_locomotion.config import check_config, init_channel_factory, load_config
 from g1_locomotion.locomotion import (
     FAULTED,
+    HOLDING,
     POLICY_DT,
     POLICY_SLOTS,
     RAMPING,
@@ -45,6 +47,7 @@ TICK_S = 0.001  # its tick counts ms
 # rt/lowstate samples per policy step, and to start, when every one arrives
 SAMPLES_PER_STEP = 10
 SAMPLES_TO_START = round(STEADY_SECONDS / SAMPLE_DT)
+BEAT_DT = 0.1  # golem_safety's /safety/heartbeat at 10 Hz
 
 
 def _raw_config(name='g1.yaml'):
@@ -103,12 +106,19 @@ class Rig:
     '''
     A LocomotionController on a fake clock, fed samples 2 ms (2 ticks) apart,
     and published as the driver does: only if latency_ok, the latency counted
-    from the sample's arrival (no delivery delay)
+    from the sample's arrival (no delivery delay). golem_safety's heartbeat
+    beats true every BEAT_DT while `beating`. The config is the shipped `config`
+    with ramp_seconds and wait_for_confirm replaced unless they are None: by
+    default a 0.1 s ramp straight into the policy
     '''
 
-    def __init__(self, policy, trained, ramp_seconds=0.1, tick=1000):
-        raw = _raw_config()
-        raw['startup']['ramp_seconds'] = ramp_seconds
+    def __init__(self, policy, trained, ramp_seconds=0.1, tick=1000, config='g1.yaml',
+                 wait_for_confirm=False):
+        raw = _raw_config(config)
+        if ramp_seconds is not None:
+            raw['startup']['ramp_seconds'] = ramp_seconds
+        if wait_for_confirm is not None:
+            raw['startup']['wait_for_confirm'] = wait_for_confirm
         self.config = check_config(raw, trained)
         self.policy = policy
         self.session = policy.session = FakeSession()
@@ -116,6 +126,8 @@ class Rig:
         self.tick = tick
         self.log = []
         self.steps = []  # the ticks of the published commands
+        self.beating = True
+        self.last_beat = None  # when the last beat was given
         self.controller = LocomotionController(
             policy, self.config, log=lambda level, message: self.log.append((level, message)))
 
@@ -130,6 +142,10 @@ class Rig:
             self.clock.t += dt
             step = round(dt / TICK_S) if ticks is None else ticks
             self.tick = (self.tick + step) % TICK_MODULO
+            if self.beating and (self.last_beat is None or
+                                 self.clock.t - self.last_beat >= BEAT_DT - 1e-9):
+                self.controller.on_heartbeat(True, self.clock.t)
+                self.last_beat = self.clock.t
             if upper:
                 self.controller.on_upper_cmd(self.clock.t)
             arrival = self.clock.t
@@ -150,32 +166,64 @@ class Rig:
                 return
         raise AssertionError(f'never walked: {self.controller.phase}, {self.log}')
 
+    def until(self, state, phase, limit=4 * SAMPLES_TO_START):
+        '''Feed samples one at a time until the controller is in `phase`; returns the outputs'''
+        out = []
+        while self.controller.phase != phase:
+            assert len(out) < limit, f'never {phase}: {self.controller.phase}, {self.log}'
+            out += self.feed(state, 1)
+        return out
+
 
 def _messages(log, level=None):
     return [m for lvl, m in log if level is None or lvl == level]
 
 
-def test_configs_load(trained):
+def test_configs(trained):
     real = load_config(CONFIG_DIR / 'g1.yaml', trained)
     assert real['topics'] == {'low_state': 'rt/lowstate', 'low_cmd': 'rt/safety/lowcmd_lower_in',
                               'upper_cmd': 'rt/safety/lowcmd_upper_in'}
     assert real['network'] == {'domain_id': 0, 'interface': None}
-    assert real['startup']['ramp_seconds'] == 3.0
+    # the real robot holds the default pose until the operator confirms, and has no band
+    assert real['startup'] == {'ramp_seconds': 2.0, 'wait_for_confirm': True,
+                               'tick_rate': (0.9, 1.1)}
+    assert real['heartbeat'] == {'timeout': 0.5}
+    assert real['band'] == {'release': False, 'max_wait': 30.0}
     limits = [real['commands'][k] for k in ('vx', 'vy', 'yaw')]
     assert limits == [(-0.3, 0.5), (-0.3, 0.3), (-0.6, 0.6)]
     assert real['commands']['timeout'] == 0.5
     assert real['faults'] == {'max_state_gap': 0.05, 'max_latency': 0.025}
     assert real['tick_seconds'] == 0.001
-    assert real['startup']['tick_rate'] == (0.9, 1.1)
 
     sim = load_config(CONFIG_DIR / 'sim.yaml', trained)
-    assert sim['network']['domain_id'] == 1 and sim['startup']['ramp_seconds'] < 1.0
+    assert sim['network']['domain_id'] == 1
+    # the same 2 s pre-pose, no confirm, and the band released once the policy runs; the
+    # sim's real-time factor may drop well below 1
+    assert sim['startup'] == {'ramp_seconds': 2.0, 'wait_for_confirm': False,
+                              'tick_rate': (0.25, 1.25)}
+    assert sim['heartbeat'] == {'timeout': 0.5}
+    assert sim['band'] == {'release': True, 'max_wait': 30.0}
     # the sim's tick is ms of sim time, and its latency limit the robot's
     assert sim['tick_seconds'] == 0.001 and sim['faults']['max_latency'] == 0.025
-    # its real-time factor may drop well below 1
-    assert sim['startup']['tick_rate'] == (0.25, 1.25)
     # the sim uses the trained ranges
     assert [list(sim['commands'][k]) for k in ('vx', 'vy', 'yaw')] == trained
+
+    # each of these keys is required in both files, and a config without one is refused,
+    # naming it
+    for name in ('g1.yaml', 'sim.yaml'):
+        for section, key in (('startup', 'ramp_seconds'), ('startup', 'wait_for_confirm'),
+                             ('heartbeat', 'timeout'), ('band', 'release'), ('band', 'max_wait')):
+            raw = _raw_config(name)
+            del raw[section][key]
+            message = f"{section}: missing keys ['{key}'], unknown keys []"
+            with pytest.raises(ValueError, match=re.escape(message)):
+                check_config(raw, trained)
+        for section in ('heartbeat', 'band'):
+            raw = _raw_config(name)
+            del raw[section]
+            message = f"config: missing keys ['{section}'], unknown keys []"
+            with pytest.raises(ValueError, match=re.escape(message)):
+                check_config(raw, trained)
 
 
 @pytest.mark.parametrize('section, key, value, message', [
@@ -192,6 +240,13 @@ def test_configs_load(trained):
     ('commands', 'accel', [0.5, 0.0, 1.0], 'commands.accel (vy) must be positive'),
     ('commands', 'timeout', True, 'commands.timeout must be a number'),
     ('startup', 'ramp_seconds', 0.0, 'startup.ramp_seconds must be positive'),
+    ('startup', 'wait_for_confirm', 'yes',
+     "startup.wait_for_confirm must be true or false, got 'yes'"),
+    ('heartbeat', 'timeout', 0, 'heartbeat.timeout must be positive'),
+    ('heartbeat', 'timeout', 0.1,
+     "heartbeat.timeout must be longer than golem_safety's beat period (0.1 s), got 0.1"),
+    ('band', 'release', 1, 'band.release must be true or false, got 1'),
+    ('band', 'max_wait', -1.0, 'band.max_wait must be positive'),
     ('startup', 'tick_rate', [0.9, 0.95],
      'startup.tick_rate [0.9, 0.95] must be [low, high] with 0 < low <= 1 <= high'),
     ('startup', 'tick_rate', [0.0, 1.1], 'must be [low, high] with 0 < low <= 1 <= high'),
@@ -402,6 +457,173 @@ def test_the_upper_commands_must_be_recent(policy, trained):
     assert rig.controller.phase == WAITING
 
 
+def test_waits_for_first_heartbeat(policy, trained):
+    rig = Rig(policy, trained)
+    rig.beating = False
+    good = _standing(policy)
+    # steady, upright and the arm controller commanding, but golem_safety is not relaying
+    assert rig.feed(good, 2 * SAMPLES_TO_START) == [None] * (2 * SAMPLES_TO_START)
+    # the watchdog arms on the first beat: silence before it is no fault
+    rig.controller.check_stale(rig.clock.t + 10.0)
+    assert rig.controller.phase == WAITING and rig.controller.fault is None
+    assert _messages(rig.log) == [
+        'waiting to start: no /safety/heartbeat yet (golem_safety beats once it can relay)']
+    # the other start conditions have held for STEADY_SECONDS: the first true beat starts
+    # the ramp on the next sample
+    rig.controller.on_heartbeat(True, rig.clock.t)
+    assert rig.feed(good, 1)[0] is not None
+    assert rig.controller.phase == RAMPING
+
+
+def test_false_first_beat_faults(policy, trained):
+    rig = Rig(policy, trained)
+    rig.beating = False
+    reason = "golem_safety's /safety/heartbeat is false: its estop has latched"
+    rig.controller.on_heartbeat(False, rig.clock.t)
+    assert rig.controller.phase == FAULTED and rig.controller.fault == reason
+    # silent for good: true beats and good samples change nothing
+    rig.beating = True
+    assert rig.feed(_standing(policy), 2 * SAMPLES_TO_START) == [None] * (2 * SAMPLES_TO_START)
+    assert rig.controller.phase == FAULTED and rig.controller.fault == reason
+    errors = _messages(rig.log, 'error')
+    assert len(errors) == 1 and errors[0].startswith(f'fault: {reason}. Stopped commanding')
+
+
+@pytest.mark.parametrize('how', ['false beat', 'no beat'])
+@pytest.mark.parametrize('phase', [WAITING, RAMPING, HOLDING, WALKING])
+def test_heartbeat_lost_in_every_phase_faults(policy, trained, phase, how):
+    # the shipped 2 s ramp, so the ramp lasts longer than the test feeds it; waiting
+    # here is waiting for the arm controller, after the first beat
+    rig = Rig(policy, trained, ramp_seconds=None, wait_for_confirm=True)
+    state = _standing(policy, np.asarray(policy.default_angles) + 0.2)
+    upper = phase != WAITING
+    if phase != WAITING:
+        rig.until(state, RAMPING)
+    if phase in (HOLDING, WALKING):
+        rig.until(state, HOLDING)
+    if phase == WALKING:
+        assert rig.controller.confirm()[0]
+    # beats every 0.1 s keep it running, the watchdog checked on every sample as the
+    # driver does
+    for _ in range(round(0.6 / SAMPLE_DT)):
+        rig.feed(state, 1, upper=upper)
+        rig.controller.check_stale(rig.clock.t)
+    assert rig.controller.phase == phase and rig.controller.fault is None
+
+    if how == 'false beat':
+        reason = "golem_safety's /safety/heartbeat is false: its estop has latched"
+        published, command = len(rig.steps), rig.controller.command
+        rig.controller.on_heartbeat(False, rig.clock.t)
+    else:
+        # rt/lowstate goes on and the beats stop: up to 0.5 s without one is allowed
+        rig.beating = False
+        last = rig.last_beat
+        while rig.clock.t + SAMPLE_DT - last < 0.5 - 1e-6:
+            rig.feed(state, 1, upper=upper)
+            rig.controller.check_stale(rig.clock.t)
+        assert rig.controller.phase == phase and rig.controller.fault is None
+        reason = 'no /safety/heartbeat for 510 ms (> 500 ms)'
+        published, command = len(rig.steps), rig.controller.command
+        rig.clock.t = last + 0.51
+        rig.controller.check_stale(rig.clock.t)
+    assert rig.controller.phase == FAULTED and rig.controller.fault.startswith(reason)
+    assert rig.controller.walking_since is None
+    # nothing more is published, and the command stays the last one
+    assert rig.feed(state, 20 * SAMPLES_PER_STEP, upper=upper) == [None] * (20 * SAMPLES_PER_STEP)
+    assert len(rig.steps) == published
+    np.testing.assert_array_equal(rig.controller.command[0], command[0])
+    assert rig.controller.command[1] == command[1]
+    errors = _messages(rig.log, 'error')
+    assert len(errors) == 1 and errors[0].startswith(f'fault: {reason}')
+    assert 'Stopped commanding the legs for good' in errors[0]
+
+
+@pytest.mark.parametrize('config', ['g1.yaml', 'sim.yaml'])
+def test_ramp_takes_two_seconds(policy, trained, config):
+    rig = Rig(policy, trained, config=config, ramp_seconds=None, wait_for_confirm=None)
+    legs = np.asarray(policy.default_angles) + np.linspace(-0.3, 0.3, 12)
+    default = np.asarray(policy.default_angles)
+    out = rig.feed(_standing(policy, legs), SAMPLES_TO_START + 110 * SAMPLES_PER_STEP)
+    targets = np.array([t for t in out if t is not None])
+    # 101 targets 20 ms of tick apart: from the measured legs, the default pose reached
+    # after 100 policy steps, 2.0 s, and not before
+    np.testing.assert_allclose(targets[0], legs, atol=1e-12)
+    np.testing.assert_allclose(targets[100], default, atol=1e-12)
+    assert np.all(np.abs(targets[:100] - default).max(axis=1) > 1e-3)
+    assert rig.steps[100] - rig.steps[0] == 2000
+    (moving,) = [m for m in _messages(rig.log) if m.startswith('moving the legs')]
+    assert moving.endswith("over 2.0 s (rt/lowstate's tick ran at 1.00 s per s of wall clock)")
+    assert rig.controller.phase == (HOLDING if config == 'g1.yaml' else WALKING)
+
+
+def test_holds_until_confirm(policy, trained):
+    rig = Rig(policy, trained, wait_for_confirm=True)
+    default = np.asarray(policy.default_angles)
+    state = _standing(policy, default + 0.2)
+    rig.until(state, HOLDING)
+    assert rig.controller.walking_since is None
+    assert _messages(rig.log)[-1] == (
+        'legs at the default pose: holding it until the operator confirms (ros2 service call '
+        '/lowerbody/confirm_engage std_srvs/srv/Trigger)')
+    # the default pose every policy step, and no policy
+    rig.steps.clear()
+    held = [t for t in rig.feed(state, 50 * SAMPLES_PER_STEP) if t is not None]
+    assert len(held) == 50 and np.diff(rig.steps).tolist() == [20] * 49
+    for targets in held:
+        np.testing.assert_array_equal(targets, default)
+    assert rig.controller.phase == HOLDING and not rig.session.inputs
+
+    # requests that came before the go-ahead are dropped: the policy starts at zero
+    # velocity and the standing height
+    rig.controller.set_cmd_vel(0.3, 0.1, 0.2, rig.clock.t)
+    rig.controller.set_height(0.6)
+    ok, message = rig.controller.confirm()
+    assert ok and message == 'confirmed: the policy starts on the next policy step'
+    assert rig.controller.phase == WALKING
+    assert rig.controller.walking_since == rig.clock.t
+    assert _messages(rig.log)[-1] == 'walking: policy started at zero velocity and 0.74 m height'
+    assert sum(t is not None for t in rig.feed(state, SAMPLES_PER_STEP)) == 1
+    assert len(rig.session.inputs) == 1
+    assert not rig.session.inputs[0].reshape(6, -1)[:5].any(), 'the history must start empty'
+    cmd, height = rig.controller.command
+    assert cmd.tolist() == [0.0, 0.0, 0.0] and height == pytest.approx(0.74)
+    # confirmed once
+    ok, message = rig.controller.confirm()
+    assert not ok and 'walking' in message
+
+
+def test_confirm_refused_outside_holding(policy, trained):
+    rig = Rig(policy, trained, wait_for_confirm=True)
+    state = _standing(policy, np.asarray(policy.default_angles) + 0.2)
+    for phase in (WAITING, RAMPING, FAULTED):
+        if phase == RAMPING:
+            rig.until(state, RAMPING)
+        elif phase == FAULTED:
+            rig.controller.latch('test')
+        ok, message = rig.controller.confirm()
+        assert not ok and f'the node is {phase}' in message, message
+        assert rig.controller.phase == phase and rig.controller.walking_since is None
+    assert not rig.session.inputs
+
+
+def test_sim_config_does_not_hold(policy, trained):
+    rig = Rig(policy, trained, config='sim.yaml', wait_for_confirm=None)  # a 0.1 s ramp
+    state = _standing(policy, np.asarray(policy.default_angles) + 0.2)
+    rig.until(state, RAMPING)
+    phases = []
+    while not rig.session.inputs:
+        rig.feed(state, 1)
+        phases.append(rig.controller.phase)
+        if phases[-1] == WALKING and len(phases) > 1 and phases[-2] == RAMPING:
+            # the ramp's last target went out on this sample, and the policy follows
+            started = rig.clock.t
+    assert HOLDING not in phases and rig.controller.phase == WALKING
+    assert rig.controller.walking_since == started
+    assert [m for m in _messages(rig.log) if not m.startswith('waiting')][-1] == (
+        'walking: policy started at zero velocity and 0.74 m height')
+    assert not any('holding' in m for m in _messages(rig.log))
+
+
 def test_ramp_then_policy_from_zero_command_and_standing_height(policy, trained):
     rig = Rig(policy, trained, ramp_seconds=0.1)  # 5 policy steps
     legs = np.asarray(policy.default_angles) + np.linspace(-0.3, 0.3, 12)
@@ -542,6 +764,27 @@ def test_faults_latch_silent(policy, trained, name, inject, reason):
             'which does not balance the robot (it estops instead when rt/lowstate has a '
             "non-finite joint value, a joint past limits.estop or another robot's "
             'mode_machine). Restart the node to clear') in errors[0]
+
+
+@pytest.mark.parametrize('inject, reason', [
+    (lambda rig, state: rig.feed(state, 1, dt=0.06),
+     'rt/lowstate stale: 60 ms between samples (> 50 ms)'),
+    (lambda rig, state: rig.controller.check_stale(rig.clock.t + 0.051),
+     'rt/lowstate stale: no sample for 51 ms (> 50 ms)'),
+    (_changed(quat_wxyz=_tilted(70.0)), 'fell: gravity z -0.34 in the pelvis frame (> -0.5)'),
+    (lambda rig, state: rig.controller.latency_ok(0.030),
+     'command late: 30.0 ms after its rt/lowstate sample (> 25 ms)'),
+], ids=['gap', 'silence', 'fall', 'late'])
+def test_faults_latch_while_holding(policy, trained, inject, reason):
+    rig = Rig(policy, trained, wait_for_confirm=True)
+    state = _standing(policy)
+    rig.until(state, HOLDING)
+    rig.feed(state, 5 * SAMPLES_PER_STEP)
+    inject(rig, state)
+    assert rig.controller.phase == FAULTED and rig.controller.fault.startswith(reason)
+    assert rig.feed(state, 100) == [None] * 100
+    assert not rig.controller.confirm()[0]
+    assert not rig.session.inputs
 
 
 def test_faults_during_the_ramp_latch_too(policy, trained):

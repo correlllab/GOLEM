@@ -1,9 +1,10 @@
 '''
 The walking node's DDS side on DDS domain 97 (no robot): in this process a fake G1 on
 rt/lowstate, a fake arm controller on the upper input and the node's controller and driver,
-on Unitree SDK channels; beside it golem_safety's installed safety_node as a subprocess, with
-robot g1 on a copy of its split.yaml (split mode). ROS topic /x is DDS rt/x with the same
-unitree_hg types, so the SDK channels here and the safety node's ROS topics meet
+on Unitree SDK channels, and the node's /safety/heartbeat subscription; beside it
+golem_safety's installed safety_node as a subprocess, with robot g1 on a copy of its
+split.yaml (split mode). ROS topic /x is DDS rt/x with the same unitree_hg types, so the SDK
+channels here and the safety node's ROS topics meet
 '''
 
 import itertools
@@ -21,9 +22,12 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import rclpy
 import yaml
 
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
+from rclpy.executors import SingleThreadedExecutor
+from std_msgs.msg import Bool
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_ as LowCmdDefault
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_ as LowStateDefault
@@ -37,6 +41,7 @@ from g1_locomotion.config import check_config
 from g1_locomotion.driver import LocomotionDriver
 from g1_locomotion.locomotion import (
     FAULTED,
+    HOLDING,
     WAITING,
     WALKING,
     LocomotionController,
@@ -108,12 +113,15 @@ class FakeG1:
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
-    def set(self, quat=None, gyro=None):
+    def set(self, quat=None, gyro=None, motor=None):
+        '''A new IMU quaternion or gyro, or motor = (slot, q)'''
         with self.lock:
             if quat is not None:
                 self.state.imu_state.quaternion = list(quat)
             if gyro is not None:
                 self.state.imu_state.gyroscope = list(gyro)
+            if motor is not None:
+                self.state.motor_state[motor[0]].q = float(motor[1])
 
     def pause(self, seconds):
         with self.lock:
@@ -177,14 +185,48 @@ class Recorder:
         self._sub.Close()
 
 
+class Heartbeat:
+    '''
+    The node's /safety/heartbeat subscription (LocomotionNode's), on `topic`: every
+    beat is kept in beats, (receive time, data), and handed to the driver while
+    `forwarding` is set
+    '''
+
+    def __init__(self, topic, driver, forwarding=True):
+        self.beats = []
+        self.forwarding = threading.Event()
+        if forwarding:
+            self.forwarding.set()
+        self._driver = driver
+        self._context = rclpy.Context()
+        rclpy.init(context=self._context, domain_id=TEST_DOMAIN)
+        self._node = rclpy.create_node('test_locomotion_heartbeat', context=self._context)
+        self._node.create_subscription(Bool, topic, self._on_beat, 10)
+        self._executor = SingleThreadedExecutor(context=self._context)
+        self._executor.add_node(self._node)
+        self._thread = threading.Thread(target=self._executor.spin, daemon=True)
+        self._thread.start()
+
+    def _on_beat(self, msg):
+        self.beats.append((time.monotonic(), msg.data))
+        if self.forwarding.is_set():
+            self._driver.on_heartbeat(msg.data)
+
+    def close(self):
+        self._executor.shutdown()
+        self._thread.join(timeout=5.0)
+        self._node.destroy_node()
+        rclpy.shutdown(context=self._context)
+
+
 class SafetyNode:
     '''
     golem_safety's installed safety_node on TEST_DOMAIN, robot g1 on the config
-    at `config`, sim:=true (so it refuses domain 0) and no hardware estop; a
-    thread collects its log lines
+    at `config`, sim:=true (so it refuses domain 0) and no hardware estop, its
+    /safety/heartbeat remapped to `heartbeat`; a thread collects its log lines
     '''
 
-    def __init__(self, config):
+    def __init__(self, config, heartbeat):
         prefix = Path(get_package_prefix('golem_safety'))
         executable = prefix / 'lib' / 'golem_safety' / 'safety_node'
         env = dict(os.environ, ROS_DOMAIN_ID=str(TEST_DOMAIN), RCUTILS_COLORIZED_OUTPUT='0')
@@ -194,7 +236,8 @@ class SafetyNode:
         self.exit_code = None
         self.proc = subprocess.Popen(
             [str(executable), '--ros-args', '-p', 'robot:=g1', '-p', f'config:={config}',
-             '-p', 'sim:=true', '-p', 'use_estop:=false'],
+             '-p', 'sim:=true', '-p', 'use_estop:=false',
+             '-r', f'/safety/heartbeat:={heartbeat}'],
             env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self._reader = threading.Thread(target=self._read, daemon=True)
         self._reader.start()
@@ -242,20 +285,25 @@ class Rig:
     What _rig() starts; log holds the node's (time, level, message), fed
     every sample the driver gave the controller: (tick, time, whether it
     returned targets), and latencies every command's (time, latency) as the
-    driver measured it
+    driver measured it. The heartbeat watchdog faults the node 0.5 s after
+    the safety node stops, so a test copies what it checks before the
+    teardown
     '''
 
 
 @contextmanager
-def _rig(legs, ramp_seconds=0.2, state_seconds=MAX_STATE_GAP):
+def _rig(legs, ramp_seconds=0.2, state_seconds=MAX_STATE_GAP, wait_for_confirm=False,
+         forwarding=True):
     '''
-    The node's controller and driver (g1.yaml, with a short ramp and the
-    relaxed timing above), golem_safety's safety_node on a copy of its
-    split.yaml (logging off; stale.state_seconds at state_seconds s, or
-    split.yaml's for None), a fake G1 and a fake arm controller (not started),
-    on topics of their own, so no channel of another test can match this run's.
-    The safety node is stopped first, so that the rest of the teardown adds
-    nothing to its log
+    The node's controller and driver (g1.yaml, with a short ramp, no confirm
+    unless wait_for_confirm, and the relaxed timing above), its heartbeat
+    subscription (handing the beats to the driver from the start if
+    forwarding), golem_safety's safety_node on a copy of its split.yaml
+    (logging off; stale.state_seconds at state_seconds s, or split.yaml's for
+    None), a fake G1 and a fake arm controller (not started), on topics of
+    their own, so no channel of another test can match this run's. The safety
+    node is stopped first, so that the rest of the teardown adds nothing to
+    its log
     '''
     _init_dds()
     # a ROS name token must not start with a digit
@@ -269,8 +317,10 @@ def _rig(legs, ramp_seconds=0.2, state_seconds=MAX_STATE_GAP):
     with open(CONFIG_DIR / 'g1.yaml') as f:
         raw = yaml.safe_load(f)
     raw['topics'] = {key: name + suffix for key, name in raw['topics'].items()}
-    raw['startup'] = {'ramp_seconds': ramp_seconds, 'tick_rate': TICK_RATE}
+    raw['startup'] = {'ramp_seconds': ramp_seconds, 'wait_for_confirm': wait_for_confirm,
+                      'tick_rate': TICK_RATE}
     raw['faults'] = {'max_state_gap': MAX_STATE_GAP, 'max_latency': MAX_LATENCY}
+    heartbeat = '/safety/heartbeat' + suffix
 
     rig = Rig()
     rig.safety = safety
@@ -306,7 +356,7 @@ def _rig(legs, ramp_seconds=0.2, state_seconds=MAX_STATE_GAP):
         config = Path(tmp) / 'g1' / 'split.yaml'
         config.parent.mkdir()
         config.write_text(yaml.safe_dump(safety))
-        rig.safety_node = SafetyNode(config)
+        rig.safety_node = SafetyNode(config, heartbeat)
         # what started, closed in reverse order after the safety node, whatever
         # fails while starting the rest
         started = []
@@ -321,6 +371,8 @@ def _rig(legs, ramp_seconds=0.2, state_seconds=MAX_STATE_GAP):
             started.append(rig.arms.close)
             rig.driver = LocomotionDriver(controller, rig.config['topics'], TEST_DOMAIN)
             started.append(rig.driver.shutdown)
+            rig.heartbeat = Heartbeat(heartbeat, rig.driver, forwarding)
+            started.append(rig.heartbeat.close)
             rig.safety_node.wait_for('relay_started')
             # discovery between this process and the safety node's
             time.sleep(0.5)
@@ -357,10 +409,10 @@ def _alarms(rig):
     return rig.safety_node.events(ALARMS)
 
 
-def test_silent_until_upright_state_and_arms_then_ramp_and_walk():
+def test_silent_until_upright_arms_and_heartbeat_then_ramp_hold_and_walk():
     default = np.asarray(load_policy(str(POLICY_DIR)).default_angles, dtype=np.float64)
     legs = default + np.linspace(-0.2, 0.2, 12)
-    with _rig(legs, ramp_seconds=0.2) as rig:
+    with _rig(legs, ramp_seconds=0.2, wait_for_confirm=True, forwarding=False) as rig:
         kp, kd = rig.policy.gains(rig.policy.leg_joints)
         # upright rt/lowstate but no arm controller: the node is silent, and
         # golem_safety streams zero gains on every motor
@@ -377,9 +429,25 @@ def test_silent_until_upright_state_and_arms_then_ramp_and_walk():
         assert all(_is_off(m.motor_cmd[:12]) for _, m in rig.lowcmd.msgs)
         assert rig.driver.phase == WAITING
 
-        # upright: the ramp (0.2 s, 11 targets), then the policy
+        # upright, and golem_safety beats, but its beats do not reach the node:
+        # still silent, past the 1 s the other start conditions need
         rig.robot.set(quat=[1.0, 0.0, 0.0, 0.0])
-        _wait_for(lambda: rig.driver.phase == WALKING)
+        time.sleep(1.5)
+        assert rig.lower.msgs == [] and rig.driver.phase == WAITING
+        beats = list(rig.heartbeat.beats)
+        assert len(beats) >= 10 and all(data for _, data in beats)
+        assert [m for _, _, m in rig.log if m.startswith('waiting to start: no /safety/heartbeat')]
+
+        # the beats reach it: the ramp (0.2 s, 11 targets), then the hold at the
+        # default pose until the operator's confirm, then the policy
+        rig.heartbeat.forwarding.set()
+        _wait_for(lambda: rig.driver.phase == HOLDING)
+        time.sleep(0.5)
+        assert rig.driver.phase == HOLDING
+        assert rig.driver.confirm() == (
+            True, 'confirmed: the policy starts on the next policy step')
+        confirmed = time.monotonic()
+        assert rig.driver.phase == WALKING
         time.sleep(0.3)
         start_samples, start = rig.robot.samples, time.monotonic()
         time.sleep(1.0)
@@ -387,6 +455,7 @@ def test_silent_until_upright_state_and_arms_then_ramp_and_walk():
         lower = list(rig.lower.msgs)
         lowcmd = list(rig.lowcmd.msgs)
         fed = list(rig.fed)
+        log = list(rig.log)
         assert rig.driver.fault is None, rig.driver.fault
 
     # the ramp starts at the measured legs and moves each one monotonically to
@@ -398,6 +467,11 @@ def test_silent_until_upright_state_and_arms_then_ramp_and_walk():
     assert np.all(np.diff(ramp, axis=0) * toward >= -1e-6), 'must move toward the defaults'
     steps = np.diff([t for t, _ in lower[:11]])
     assert 0.01 < np.median(steps) < 0.03, f'one target per policy step, not {np.median(steps)} s'
+    # then the default pose, at 50 Hz, until the confirm
+    held = [(t, m) for t, m in lower[11:] if t < confirmed]
+    assert abs(len(held) - 25) <= 5, len(held)
+    for _, msg in held:
+        np.testing.assert_allclose(_legs(msg), default, atol=1e-6)
 
     # every leg command: slots 0-11 only, mode 1, dq = tau = 0, the training gains
     for _, msg in lower:
@@ -435,7 +509,7 @@ def test_silent_until_upright_state_and_arms_then_ramp_and_walk():
                    msg.motor_cmd[i].kd == pytest.approx(kd[i]) for i in LEGS)
         assert msg.motor_cmd[SHOULDER].kp == 60.0
     assert _alarms(rig) == []
-    assert [m for _, level, m in rig.log if level == 'error'] == []
+    assert [m for _, level, m in log if level == 'error'] == []
 
 
 def _nan_gyro(rig):
@@ -490,11 +564,12 @@ def test_bad_state_silences_the_node_and_golem_safety_holds_its_last_command(inj
         end = time.monotonic()
         lower = list(rig.lower.msgs)
         lowcmd = list(rig.lowcmd.msgs)
+        log = list(rig.log)
         fault = rig.driver.fault
         assert rig.driver.phase == FAULTED and fault.startswith(reason), fault
 
     # the node latched once, soon after the fault, and sent nothing after that
-    errors = [(t, m) for t, level, m in rig.log if level == 'error']
+    errors = [(t, m) for t, level, m in log if level == 'error']
     assert len(errors) == 1 and errors[0][1].startswith(f'fault: {reason}'), errors
     fault_time = errors[0][0]
     assert inject_time < fault_time < inject_time + MAX_STATE_GAP + 0.15
@@ -564,6 +639,7 @@ def test_a_backlog_is_dropped_and_the_cadence_kept():
         fed = list(rig.fed)
         lower = list(rig.lower.msgs)
         latencies = list(rig.latencies)
+        log = list(rig.log)
         fault = rig.driver.fault
     assert fault is None, fault
     assert tick_delta(newest, before) >= 50, (before, newest)
@@ -587,7 +663,7 @@ def test_a_backlog_is_dropped_and_the_cadence_kept():
     gaps = [tick_delta(b, a) for a, b in zip(steps, steps[1:])]
     assert min(gaps) >= 10, gaps
     assert sorted(gaps)[len(gaps) // 2] == 20, gaps
-    assert [m for _, level, m in rig.log if level == 'error'] == []
+    assert [m for _, level, m in log if level == 'error'] == []
     assert _alarms(rig) == []
 
 
@@ -621,3 +697,52 @@ def test_the_latency_counts_the_time_a_sample_waited_for_the_node():
     others = [latency for t, latency in latencies if not release <= t < release + 0.05]
     assert sorted(others)[len(others) // 2] < 0.02, sorted(others)
     assert _alarms(rig) == []
+
+
+def _stop_safety(rig):
+    rig.safety_node.stop()
+
+
+def _latch_safety(rig):
+    # left hip pitch at 3.5 rad, past split.yaml's limits.estop (its URDF range, to
+    # 2.88 rad): golem_safety latches its estop, and its heartbeat turns false
+    rig.robot.set(motor=(0, 3.5))
+
+
+@pytest.mark.parametrize('inject, reason', [
+    (_stop_safety, 'no /safety/heartbeat for '),
+    (_latch_safety, "golem_safety's /safety/heartbeat is false: its estop has latched"),
+], ids=['safety stopped', 'estop latched'])
+def test_losing_the_heartbeat_stops_the_node(inject, reason):
+    default = load_policy(str(POLICY_DIR)).default_angles
+    with _rig(default, ramp_seconds=0.1) as rig:
+        rig.arms.start()
+        _wait_for(lambda: rig.driver.phase == WALKING)
+        time.sleep(0.3)
+        inject_time = time.monotonic()
+        inject(rig)
+        _wait_for(lambda: rig.driver.phase == FAULTED)
+        time.sleep(0.3)
+        lower = list(rig.lower.msgs)
+        beats = list(rig.heartbeat.beats)
+        log = list(rig.log)
+        fault = rig.driver.fault
+    assert fault.startswith(reason), fault
+
+    # the node latched once and sent nothing after that
+    errors = [(t, m) for t, level, m in log if level == 'error']
+    assert len(errors) == 1 and errors[0][1].startswith(f'fault: {reason}'), errors
+    fault_time = errors[0][0]
+    assert lower[-1][0] < fault_time + 0.05, 'nothing may be sent after the fault'
+    assert rig.safety_node.exit_code == 0, rig.safety_node.output()
+    if inject is _stop_safety:
+        # 0.5 s after the last beat, the watchdog's heartbeat.timeout
+        last_beat = beats[-1][0]
+        assert last_beat < fault_time
+        assert 0.5 <= fault_time - last_beat < 0.5 + LATE_S, (last_beat, fault_time)
+    else:
+        # golem_safety latched and wrote its estop command; its next beat, false,
+        # stopped the node
+        assert rig.safety_node.events(('estop_command_written',))
+        first_false = next(t for t, data in beats if not data)
+        assert inject_time < first_false <= fault_time < first_false + LATE_S

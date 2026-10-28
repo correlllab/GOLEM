@@ -1,7 +1,8 @@
 '''
 The walking node's logic with no ROS or DDS: loading the policy, the joint
 slots, the observed state, the velocity and height commands, and the startup
-and fault handling
+(golem_safety's heartbeat, the pre-pose, the operator's confirm) and fault
+handling
 '''
 
 import collections
@@ -43,11 +44,15 @@ WINDOW_BUCKETS = 4
 STATS_SECONDS = 10.0
 # a reason to wait is logged when it changes, each at most this often (s)
 WAIT_LOG_SECONDS = 5.0
+# golem_safety's /safety/heartbeat period (s); heartbeat.timeout must be longer
+HEARTBEAT_PERIOD = 0.1
 
 # phases: silent until the start conditions hold, then a ramp of the legs to
-# the default pose, then the policy; a fault is silent for good
+# the default pose, a hold there until the operator confirms (with
+# startup.wait_for_confirm), then the policy; a fault is silent for good
 WAITING = 'waiting'
 RAMPING = 'ramping'
+HOLDING = 'holding'
 WALKING = 'walking'
 FAULTED = 'faulted'
 
@@ -182,15 +187,16 @@ class LocomotionController:
     that sample. Samples the caller drops never change the rate: 50 Hz of
     robot time on average, steps never closer than 10 ms.
 
-    - waiting: silent until rt/lowstate has been steady, on time (no sample
-      older than half faults.max_latency when taken, no gap over that), finite and
-      upright for STEADY_SECONDS, its tick has kept to the wall clock within
+    - waiting: silent until golem_safety's first true heartbeat (on_heartbeat),
+      and until rt/lowstate has been steady, on time (no sample older than half
+      faults.max_latency when taken, no gap over that), finite and upright for
+      STEADY_SECONDS, its tick has kept to the wall clock within
       startup.tick_rate over that time (a wrong tick_seconds would change the
-      policy's rate), and the arm controller is commanding (golem_safety's
-      split mode starts on the first leg command only if the arms are already
-      commanded)
+      policy's rate), and the arm controller is commanding
     - ramping: the legs move from their measured positions to the policy's
       default pose over startup.ramp_seconds
+    - holding (startup.wait_for_confirm): the default pose every policy step,
+      every fault checked, until the operator confirms (confirm)
     - walking: the policy runs, starting at zero velocity and the standing
       height, with an empty history
     - faulted: once the legs are commanded, a stale, non-finite or fallen
@@ -201,7 +207,9 @@ class LocomotionController:
       not estop on it. It estops on what it checks in rt/lowstate itself: a
       non-finite joint value, a joint past limits.estop or another robot's
       mode_machine. The node never sends a zero-gain or damping command
-      itself
+      itself. In every phase, a false heartbeat (golem_safety's estop has
+      latched), or none for heartbeat.timeout once the first has come
+      (check_stale), stops all output for good too
 
     log(level, message) reports phase changes, why it is waiting, faults and,
     every STATS_SECONDS (log_timing), the timing; level is 'info', 'warn' or
@@ -215,6 +223,8 @@ class LocomotionController:
         self.kp, self.kd = policy.gains(policy.leg_joints)
         self._default = np.asarray(policy.default_angles, dtype=np.float64)
         self._ramp_steps = max(1, int(round(config['startup']['ramp_seconds'] * POLICY_HZ)))
+        self._wait_for_confirm = config['startup']['wait_for_confirm']
+        self._heartbeat_timeout = config['heartbeat']['timeout']
         self._tick_seconds = config['tick_seconds']
         # ticks per policy step (20 for a tick of 1 ms)
         self._period_ticks = int(round(POLICY_DT / self._tick_seconds))
@@ -247,11 +257,44 @@ class LocomotionController:
         self._height = self._filter.height
         self._ramp_start = None
         self._ramp_step = 0
+        self._beat_time = None  # when the last true heartbeat came
+        self._walking_since = None
 
     @property
     def command(self):
         '''The (vx, vy, yaw) and height the policy got last'''
         return self._filter.cmd.copy(), self._filter.height
+
+    @property
+    def walking_since(self):
+        '''When the policy started (s, the `now` clock), while it runs; None otherwise'''
+        return self._walking_since if self.phase == WALKING else None
+
+    def on_heartbeat(self, beat, now):
+        '''
+        golem_safety's /safety/heartbeat at now (s): true once it can relay the
+        commands, false once its estop has latched. The node starts only after
+        the first true beat; a false beat stops it for good whenever it comes
+        '''
+        if self.phase == FAULTED:
+            return
+        if not beat:
+            self._latch_heartbeat(
+                "golem_safety's /safety/heartbeat is false: its estop has latched")
+            return
+        self._beat_time = now
+
+    def confirm(self):
+        '''
+        The operator's go-ahead (/lowerbody/confirm_engage): the policy starts on
+        the next policy step. Accepted only while holding the default pose;
+        returns (accepted, message)
+        '''
+        if self.phase != HOLDING:
+            return False, (f'refused: the node is {self.phase}; the policy starts on a confirm '
+                           f'only while the legs hold the default pose ({HOLDING})')
+        self._start_policy(self._last_sample)
+        return True, 'confirmed: the policy starts on the next policy step'
 
     def on_upper_cmd(self, now):
         '''The arm controller commanded (a sample on topics.upper_cmd) at now (s)'''
@@ -273,8 +316,20 @@ class LocomotionController:
         self._height = float(height)
 
     def check_stale(self, now):
-        '''Latch a fault if rt/lowstate has gone quiet while the legs are commanded'''
-        if self.phase not in (RAMPING, WALKING):
+        '''
+        Latch a fault if golem_safety's heartbeat has stopped (none for
+        heartbeat.timeout since the last, once the first has come), or
+        rt/lowstate has gone quiet while the legs are commanded
+        '''
+        if self.phase == FAULTED:
+            return
+        if self._beat_time is not None and now - self._beat_time > self._heartbeat_timeout:
+            self._latch_heartbeat(
+                f'no /safety/heartbeat for {(now - self._beat_time) * 1000:.0f} ms '
+                f'(> {self._heartbeat_timeout * 1000:.0f} ms): golem_safety has stopped or '
+                'cannot keep up')
+            return
+        if self.phase == WAITING:
             return
         age = now - self._last_sample
         if age > self._max_gap:
@@ -322,7 +377,9 @@ class LocomotionController:
             return None
         self._step_at(tick)
         if self.phase == RAMPING:
-            return self._ramp()
+            return self._ramp(now)
+        if self.phase == HOLDING:
+            return self._default.copy()
         return self._walk(state, now)
 
     def _step_at(self, tick):
@@ -416,6 +473,10 @@ class LocomotionController:
             self._good_since = None
         elif self._good_since is None:
             self._good_since, self._good_wall = tick, now
+        # golem_safety and the arm controller do not restart the steady window:
+        # once the state has held, the first sample with both starts the ramp
+        if reason is None and self._beat_time is None:
+            reason = 'no /safety/heartbeat yet (golem_safety beats once it can relay)'
         upper_age = None if self._upper_time is None else now - self._upper_time
         if reason is None and (upper_age is None or upper_age > UPPER_FRESH_SECONDS):
             reason = f'no commands from the arm controller on {self._upper_topic}'
@@ -449,20 +510,38 @@ class LocomotionController:
         self._log('info', f'moving the legs from where they are to the default pose over '
                           f'{self._ramp_steps / POLICY_HZ:.1f} s (rt/lowstate\'s tick ran at '
                           f'{rate:.2f} s per s of wall clock)')
-        return self._ramp()
+        return self._ramp(now)
 
-    def _ramp(self):
+    def _ramp(self, now):
         '''The next target on the line from the measured legs to the default pose'''
         alpha = self._ramp_step / self._ramp_steps
         targets = self._ramp_start + alpha * (self._default - self._ramp_start)
         self._ramp_step += 1
         if self._ramp_step > self._ramp_steps:
-            # the default pose was just sent: the policy takes over on the next step
-            self.phase = WALKING
-            self.policy.reset()
-            self._log('info', f'walking: policy started at zero velocity and '
-                              f'{self._filter.height:.2f} m height')
+            # the default pose was just sent: the hold or the policy takes over on
+            # the next step
+            if self._wait_for_confirm:
+                self.phase = HOLDING
+                self._log('info', 'legs at the default pose: holding it until the operator '
+                                  'confirms (ros2 service call /lowerbody/confirm_engage '
+                                  'std_srvs/srv/Trigger)')
+            else:
+                self._start_policy(now)
         return targets
+
+    def _start_policy(self, now):
+        '''
+        The policy takes the legs on the next step, with an empty history, at
+        zero velocity and the standing height: a /cmd_vel or height request that
+        came before is dropped
+        '''
+        self.phase = WALKING
+        self._walking_since = now
+        self.policy.reset()
+        self._cmd_vel, self._cmd_vel_time = np.zeros(3), None
+        self._height = self._filter.height
+        self._log('info', f'walking: policy started at zero velocity and '
+                          f'{self._filter.height:.2f} m height')
 
     def _walk(self, state, now):
         '''One policy step on the filtered command'''
@@ -477,12 +556,18 @@ class LocomotionController:
             return self._latch(f'policy output is not 12 finite targets: {targets.tolist()}')
         return targets
 
-    def _latch(self, reason):
+    def _latch(self, reason, after=None):
+        '''Stop for good; after says what happens next (default: golem_safety holds the legs)'''
         self.phase = FAULTED
         self.fault = reason
-        self._log('error', f'fault: {reason}. Stopped commanding the legs; golem_safety keeps '
-                           'relaying their last command, which does not balance the robot (it '
-                           'estops instead when rt/lowstate has a non-finite joint value, a '
-                           "joint past limits.estop or another robot's mode_machine). Restart "
-                           'the node to clear')
+        if after is None:
+            after = ('Stopped commanding the legs; golem_safety keeps relaying their last '
+                     'command, which does not balance the robot (it estops instead when '
+                     'rt/lowstate has a non-finite joint value, a joint past limits.estop or '
+                     "another robot's mode_machine). Restart the node to clear")
+        self._log('error', f'fault: {reason}. {after}')
         return None
+
+    def _latch_heartbeat(self, reason):
+        '''Stop for good: golem_safety has latched its estop, or stopped'''
+        self._latch(reason, 'Stopped commanding the legs for good. Restart the bringup to clear')

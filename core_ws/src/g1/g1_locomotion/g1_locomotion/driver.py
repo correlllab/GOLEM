@@ -19,7 +19,8 @@ from g1_description.layout import MODE_PR
 
 from g1_locomotion.locomotion import WAITING, SourceClock, read_state
 
-# how long the worker waits for rt/lowstate before checking that it is not stale (s)
+# how long the worker waits for rt/lowstate before it checks the heartbeat and
+# rt/lowstate for silence again (s)
 WATCHDOG_PERIOD = 0.01
 # the readers keep only the newest sample: a backlog is dropped inside DDS, and
 # nothing is decoded until the worker takes it
@@ -32,11 +33,15 @@ class LocomotionDriver:
     Runs a LocomotionController on Unitree DDS. A worker thread takes the
     newest rt/lowstate sample whenever one arrives and gives it to the
     controller with its tick; samples that arrived while it was busy are gone.
-    Each leg target the controller returns is checked for latency
-    (LocomotionController.latency_ok, from the sample's DDS write, see
-    SourceClock) and written at once to topics['low_cmd']
-    (golem_safety's lower-body input, which holds it at 500 Hz): slots 0-11
-    with mode 1, dq = tau = 0 and the training gains, every other slot zero.
+    On every wake, a sample or not, it first checks golem_safety's heartbeat
+    and rt/lowstate for silence (LocomotionController.check_stale): from the
+    first wake past either's timeout, nothing more is sent. The heartbeat
+    itself, the operator's confirm and the commands come from the caller's
+    threads (the ROS node). Each leg target the controller returns is checked
+    for latency (LocomotionController.latency_ok, from the sample's DDS write,
+    see SourceClock) and written at once to topics['low_cmd'] (golem_safety's
+    lower-body input, which holds it at 500 Hz): slots 0-11 with mode 1,
+    dq = tau = 0 and the training gains, every other slot zero.
     topics['upper_cmd'] is only read while waiting to start, to know the arm
     controller is running. Nothing is written on a fault or on shutdown.
 
@@ -96,6 +101,22 @@ class LocomotionDriver:
         with self._lock:
             return self._controller.command
 
+    @property
+    def walking_since(self):
+        '''When the policy started (time.monotonic()), while it runs; None otherwise'''
+        with self._lock:
+            return self._controller.walking_since
+
+    def on_heartbeat(self, beat):
+        '''A /safety/heartbeat from golem_safety, received now'''
+        with self._lock:
+            self._controller.on_heartbeat(beat, time.monotonic())
+
+    def confirm(self):
+        '''The operator's go-ahead; (accepted, message), see LocomotionController.confirm'''
+        with self._lock:
+            return self._controller.confirm()
+
     def set_cmd_vel(self, vx, vy, yaw):
         with self._lock:
             self._controller.set_cmd_vel(vx, vy, yaw, time.monotonic())
@@ -105,7 +126,7 @@ class LocomotionDriver:
             self._controller.set_height(height)
 
     def _run(self):
-        '''Take the newest samples as they arrive; while none do, check for staleness'''
+        '''Take the newest samples as they arrive, and check for silence on every wake'''
         while True:
             # the GIL is released while waiting
             self._waitset.wait(duration(seconds=WATCHDOG_PERIOD))
@@ -119,6 +140,7 @@ class LocomotionDriver:
 
     def _step(self):
         now = time.monotonic()
+        self._controller.check_stale(now)
         if self._upper_reader is not None:
             if any(not isinstance(m, InvalidSample) for m in self._upper_reader.take(N=1)):
                 self._controller.on_upper_cmd(now)
@@ -128,7 +150,6 @@ class LocomotionDriver:
                 self._upper_ready = self._upper_reader = None
         samples = self._state_reader.take(N=1)
         if not samples or isinstance(samples[0], InvalidSample):
-            self._controller.check_stale(now)
             return
         msg = samples[0]
         source = msg.sample_info.source_timestamp

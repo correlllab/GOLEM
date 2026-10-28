@@ -25,13 +25,29 @@ imu_frame: pelvis
 tick_seconds: 0.001
 
 startup:
-  # s to move the legs from where they are to the policy's default pose; short,
-  # because the sim already holds the robot standing
-  ramp_seconds: 0.5
+  # s to move the legs from where they are to the policy's default pose (the
+  # pre-pose), as the H1-2's leg node does: the band holds the robot meanwhile
+  ramp_seconds: 2.0
+  # hold the default pose until /lowerbody/confirm_engage is called: not in the
+  # sim, where the policy starts after the pre-pose
+  wait_for_confirm: false
   # s of rt/lowstate tick per s of wall clock the start accepts, measured
   # while waiting: the sim's real-time factor, which drops below 1 when the
   # laptop is loaded (0.59 seen) and catches up by at most 0.1 s
   tick_rate: [0.25, 1.25]
+
+heartbeat:
+  # s without golem_safety's /safety/heartbeat (10 Hz) after the first beat
+  # that stops the node for good, as a false beat (its estop latched) does
+  timeout: 0.5
+
+band:
+  # call the sim's /elastic_band/toggle once the policy runs and frame_task_server
+  # is up (its first /left_ee_pose); the toggle flips the band, so it is called
+  # until one call succeeds, and never again
+  release: true
+  # s after the policy started at which the band is released without /left_ee_pose
+  max_wait: 30.0
 
 commands:
   # the trained ranges: vx, vy in m/s, yaw in rad/s

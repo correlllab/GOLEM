@@ -6,14 +6,16 @@ from pathlib import Path
 
 import yaml
 
-from g1_locomotion.locomotion import POLICY_DT
+from g1_locomotion.locomotion import HEARTBEAT_PERIOD, POLICY_DT
 
 # every key is required; an unknown one is an error, so a typo cannot fall
 # back to a default
 SECTIONS = {
     'topics': ('low_state', 'low_cmd', 'upper_cmd'),
     'network': ('domain_id', 'interface'),
-    'startup': ('ramp_seconds', 'tick_rate'),
+    'startup': ('ramp_seconds', 'wait_for_confirm', 'tick_rate'),
+    'heartbeat': ('timeout',),
+    'band': ('release', 'max_wait'),
     'commands': ('vx', 'vy', 'yaw', 'accel', 'timeout', 'height_rate'),
     'faults': ('max_state_gap', 'max_latency'),
 }
@@ -38,6 +40,12 @@ def _positive(value, name):
     if not (math.isfinite(value) and value > 0.0):
         raise ValueError(f'{name} must be positive and finite, got {value}')
     return float(value)
+
+
+def _flag(value, name):
+    if not isinstance(value, bool):
+        raise ValueError(f'{name} must be true or false, got {value!r}')
+    return value
 
 
 def _numbers(value, count, name):
@@ -99,6 +107,12 @@ def check_config(raw, cmd_range):
         raise ValueError(f'startup.tick_rate {tick_rate} must be [low, high] with '
                          '0 < low <= 1 <= high')
 
+    heartbeat_timeout = _positive(raw['heartbeat']['timeout'], 'heartbeat.timeout')
+    # a timeout within one beat period would stop the node between two beats
+    if heartbeat_timeout <= HEARTBEAT_PERIOD:
+        raise ValueError(f"heartbeat.timeout must be longer than golem_safety's beat period "
+                         f'({HEARTBEAT_PERIOD} s), got {heartbeat_timeout}')
+
     domain_id = raw['network']['domain_id']
     if isinstance(domain_id, bool) or not isinstance(domain_id, int) or domain_id < 0:
         raise ValueError(f'network.domain_id must be a nonnegative integer, got {domain_id!r}')
@@ -114,7 +128,14 @@ def check_config(raw, cmd_range):
         'tick_seconds': tick_seconds,
         'startup': {
             'ramp_seconds': _positive(raw['startup']['ramp_seconds'], 'startup.ramp_seconds'),
+            'wait_for_confirm': _flag(raw['startup']['wait_for_confirm'],
+                                      'startup.wait_for_confirm'),
             'tick_rate': tuple(tick_rate),
+        },
+        'heartbeat': {'timeout': heartbeat_timeout},
+        'band': {
+            'release': _flag(raw['band']['release'], 'band.release'),
+            'max_wait': _positive(raw['band']['max_wait'], 'band.max_wait'),
         },
         'commands': {
             **limits,

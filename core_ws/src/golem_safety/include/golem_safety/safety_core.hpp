@@ -37,22 +37,15 @@ struct Event
 //
 // Relay. Each input keeps its newest valid command. step() merges the engaged inputs'
 // newest commands, each on its own slots, into zero_command; the slots no engaged input
-// owns keep zero_command's values. Header and CRC are stamped last on whatever step() and
-// exit_step() return.
+// owns keep zero_command's values. step() returns the merge from its first call, so
+// zero_command on every slot until an input engages. Header and CRC are stamped last on
+// whatever step() and exit_step() return.
 //
 // Engaging. Nothing engages until the newest /lowstate carries the profile's mode_machine
 // and, with use_estop, a hardware estop sample has arrived; a /lowstate from another
-// robot only delays engaging. Engaging is tried on each valid command:
-//   - startup.rule zero_stream: step() returns the merge from its first call, so
-//     zero_command until an input engages. Each input engages on its own first valid
-//     command that arrives once those conditions hold (input_engaged, Info).
-//   - engage_gate: step() returns nothing until every input of the mode engages, at once,
-//     on a valid command that finds every input with a command no older than its stale
-//     time (below; when that is > 0), the newest /lowstate at most
-//     engage.max_state_age_seconds old, and on every slot of the mode's inputs the newest
-//     command's q within engage.max_position_error of the measured q (lowcmd_engage, Info).
-// A command that does not engage raises engage_refused (Warn) with the first reason, at
-// most once a second.
+// robot only delays engaging. Each input engages on its own first valid command that
+// arrives once those conditions hold (input_engaged, Info). A command that does not
+// engage raises engage_refused (Warn) with the first reason, at most once a second.
 //
 // Relay ready. relay_ready() is true while the engage conditions that do not depend on the
 // inputs hold: the newest /lowstate carries the profile's mode_machine and, with use_estop,
@@ -78,8 +71,8 @@ struct Event
 // current writer's last command (valid or not) is older than single_writer.handover_seconds;
 // otherwise it latches the estop with "second writer on <topic>".
 //
-// The /lowstate checks run on the samples that carry the profile's mode_machine, from the
-// first /lowstate with zero_stream and from engagement with engage_gate.
+// The /lowstate checks run on every sample that carries the profile's mode_machine, from
+// the first.
 //
 // The estop latches, one way until restart, on
 //   - a command with a non-finite value, before or after engaging: "Command validation
@@ -98,17 +91,16 @@ struct Event
 //     sample.
 // The latch sets the flag before any other work, and nothing it does can throw.
 // After the latch step() returns the estop command: estop_response.burst_count times and
-// then nothing with burst_then_silence, on every step with keep_writing.
-// Nothing is written after the latch when the core had not taken control (engage_gate,
-// before engagement). The estop report (Error) is estop_command_written, or
-// estop_latched_silent when that first step after the latch wrote nothing: the reason,
-// decision_ms (when the core latched), action_ms (the `now` of that step) and their
-// difference, and for the hardware estop trigger_stamp_ms (the sample's arrival) and
-// trigger_to_action_ms; all ms on the boot-time clock. It is built by the drain_events()
-// after that step, so nothing is formatted before the step's command is handed back.
+// then nothing with burst_then_silence, on every step with keep_writing. The estop report
+// (Error) is estop_command_written, for the first step (or exit_step()) after the latch,
+// which writes the estop command: the reason, decision_ms (when the core latched),
+// action_ms (the `now` of that step) and their difference, and for the hardware estop
+// trigger_stamp_ms (the sample's arrival) and trigger_to_action_ms; all ms on the
+// boot-time clock. It is built by the drain_events() after that step, so nothing is
+// formatted before the step's command is handed back.
 //
-// Events. engage_refused, input_engaged, lowcmd_engage, input_quiet, input_resumed,
-// state_quiet, state_resumed, gain_clipped and the estop report are one JSON object each:
+// Events. engage_refused, input_engaged, input_quiet, input_resumed, state_quiet,
+// state_resumed, gain_clipped and the estop report are one JSON object each:
 // keys sorted, ", " and ": " separators, and numbers as Python's json module writes them
 // (times rounded to 4 decimals). The other events are text. Raising an event never throws:
 // an event that cannot be built is dropped.
@@ -179,16 +171,8 @@ private:
   // Why a command does not engage.
   struct Refusal
   {
-    enum Kind
-    {
-      NoState, StateAge, ModeMachine, NoEstopSample, NoCommand, QuietInput, StateNotFinite,
-      FarCommand
-    } kind;
-    // StateAge: the age, s; ModeMachine: the sample's; QuietInput: the gap, s; FarCommand: q
-    double value = 0.0;
-    double measured = 0.0;  // FarCommand: the measured q
-    int slot = 0;           // StateNotFinite, FarCommand
-    const InputState * input = nullptr;  // NoCommand, QuietInput
+    enum Kind { NoState, ModeMachine, NoEstopSample } kind;
+    int mode_machine = 0;  // ModeMachine: the sample's
   };
 
   // The transport-lag check's state: the robot's ms tick, unwrapped, against `now`.
@@ -206,7 +190,6 @@ private:
     double decision = 0.0;
     std::optional<double> trigger;
     bool acted = false;      // the first step after the latch has run
-    bool written = false;    // and returned a command
     double action = 0.0;
     size_t event_index = 0;  // where the report goes among that step's events
   };
@@ -229,14 +212,13 @@ private:
   };
 
   InputState & input_state(Input input);
-  bool took_control() const;
 
   void check_state(const unitree_hg::msg::LowState & state, double now);
   void update_relay_ready();
 
   void accept_command(InputState & in, const unitree_hg::msg::LowCmd & cmd, double now);
   void try_engage(InputState & in, double now);
-  std::optional<Refusal> refusal(double now) const;
+  std::optional<Refusal> refusal() const;
   std::string refusal_text(const Refusal & refusal) const;
   void report_refusal(const Refusal & refusal, double now);
   void report_quiet(double now);
@@ -276,7 +258,6 @@ private:
   }
 
   unitree_hg::msg::LowCmd merged() const;
-  std::optional<unitree_hg::msg::LowCmd> relay_output();
   std::optional<unitree_hg::msg::LowCmd> estop_output(double now);
   std::optional<unitree_hg::msg::LowCmd> finish(std::optional<unitree_hg::msg::LowCmd> out);
 
@@ -290,7 +271,7 @@ private:
   std::vector<Input> mode_inputs_;
   std::vector<int> checked_slots_;  // every slot of the mode's inputs, ascending
 
-  bool engaged_ = false;  // any input with zero_stream, every input with engage_gate
+  bool engaged_ = false;  // an input has engaged
   std::optional<double> refusal_reported_;  // the last engage_refused
 
   std::optional<unitree_hg::msg::LowState> state_;

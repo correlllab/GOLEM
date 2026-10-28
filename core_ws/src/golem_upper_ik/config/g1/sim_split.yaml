@@ -25,8 +25,8 @@ controller:
   # s to wait for a fresh /lowstate before enabling anything (then abort)
   state_timeout: 5.0
   # until golem_safety is seen relaying the commands (topics.safety_out),
-  # every waist and arm command stays within this of its measured joint, rad;
-  # well below the safety layer's 0.15 rad engage gate. Never after that. 0 is off
+  # every waist and arm command stays within this of its measured joint, rad.
+  # Never after that. 0 is off
   follow_tolerance: 0.05
   # s for golem_safety to be seen relaying the commands, which opens the
   # follow gate (then stop with an error)

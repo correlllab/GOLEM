@@ -27,9 +27,8 @@ using golem_safety::SafetyCore;
 using unitree_hg::msg::LowCmd;
 using unitree_hg::msg::LowState;
 
-// Every test feeds a /lowstate carrying the profile's mode_machine before any command,
-// and on the G1 sends commands within engage.max_position_error of the measured q, so the
-// tests hold under the start-up rules too.
+// Every test feeds a /lowstate carrying the profile's mode_machine before any command, so
+// each input engages on its first valid command.
 
 namespace {
 
@@ -475,8 +474,8 @@ TEST(Clip, NonFiniteSampleLatches)
 
 TEST(Clip, NonFiniteFirstSampleLatches)
 {
-  // zero_stream: a first command that is not valid latches before any input engages; the
-  // burst is the estop command.
+  // A first command that is not valid latches before any input engages; the burst is the
+  // estop command.
   const SafetyConfig cfg = config(h12(), "sim_safety_split");
   SafetyCore core(h12(), cfg, false, kDomain);
   core.on_state(state_of(h12()), 0.0);
@@ -493,20 +492,26 @@ TEST(Clip, NonFiniteFirstSampleLatches)
   core.on_command(Input::Upper, command(h12(), 0.1F), "upper", 0.003);
   expect_same(*core.step(0.004), golem_safety::estop_command(h12(), cfg, *out));
 
-  // engage_gate: the latch comes before engaging, so nothing is ever written.
-  SafetyCore g1_core(g1(), config(g1(), "sim_split"), false, kDomain);
+  // The G1 likewise, and keep_writing writes the estop command on every step.
+  const SafetyConfig g1_cfg = config(g1(), "sim_split");
+  SafetyCore g1_core(g1(), g1_cfg, false, kDomain);
   g1_core.on_state(state_of(g1()), 0.0);
+  ASSERT_TRUE(g1_core.step(0.0));
   LowCmd g1_bad = command(g1());
   g1_bad.motor_cmd[20].dq = std::numeric_limits<float>::infinity();
   g1_core.on_command(Input::Upper, g1_bad, "upper", 0.001);
   ASSERT_TRUE(g1_core.estopped());
   g1_core.on_command(Input::Lower, command(g1()), "lower", 0.002);
   g1_core.on_command(Input::Upper, command(g1()), "upper", 0.002);
+  const LowCmd g1_estop =
+    golem_safety::estop_command(g1(), g1_cfg, golem_safety::zero_command(g1()));
   for (int i = 0; i < 100; ++i) {
-    EXPECT_FALSE(g1_core.step(0.003 + i * kDt));
+    const auto g1_out = g1_core.step(0.003 + i * kDt);
+    ASSERT_TRUE(g1_out) << "step " << i;
+    expect_same(*g1_out, g1_estop);
   }
   const auto events = g1_core.drain_events();
-  EXPECT_TRUE(has_event(events, Event::Error, "estop_latched_silent")) << texts(events);
+  EXPECT_TRUE(has_event(events, Event::Error, "estop_command_written")) << texts(events);
 }
 
 TEST(Limits, MeasuredPastEstopLatches)
@@ -565,23 +570,6 @@ TEST(Limits, MeasuredPastEstopLatches)
       EXPECT_TRUE(contains(core.estop_reason(), part)) << core.estop_reason();
     }
   }
-}
-
-TEST(Limits, EngageGateChecksFromEngagement)
-{
-  const SafetyConfig cfg = config(g1(), "sim_split");
-  SafetyCore core(g1(), cfg, false, kDomain);
-  // Before engaging a joint past its estop range is not ours to guard.
-  core.on_state(past_estop(g1(), cfg, 20), 0.0);
-  EXPECT_FALSE(core.estopped());
-  core.on_state(state_of(g1()), 0.01);
-  core.on_command(Input::Lower, command(g1()), "lower", 0.02);
-  core.on_command(Input::Upper, command(g1()), "upper", 0.02);
-  ASSERT_TRUE(core.step(0.02));
-  // Once engaged, split_mode guards every body slot, the legs included.
-  core.on_state(past_estop(g1(), cfg, 3), 0.03);
-  ASSERT_TRUE(core.estopped());
-  EXPECT_TRUE(contains(core.estop_reason(), "left_knee_joint")) << core.estop_reason();
 }
 
 TEST(Identity, ForeignSampleAfterEngageLatches)
@@ -742,21 +730,6 @@ TEST(Estop, KeepWriting)
     ASSERT_TRUE(out) << "step " << i;
     expect_same(*out, expected);
   }
-}
-
-TEST(Estop, SilentWhenNeverEngaged)
-{
-  // engage_gate: a latch before engaging writes nothing, then or later.
-  SafetyCore core(g1(), config(g1(), "sim_split"), false, kDomain);
-  core.on_state(state_of(g1()), 0.0);
-  core.on_command(Input::Lower, command(g1()), "lower", 0.001);
-  core.on_command(Input::Lower, command(g1()), "other", 0.002);
-  ASSERT_TRUE(core.estopped());
-  for (int i = 0; i < 100; ++i) {
-    EXPECT_FALSE(core.step(0.003 + i * kDt));
-  }
-  const auto events = core.drain_events();
-  EXPECT_TRUE(has_event(events, Event::Error, "estop_latched_silent")) << texts(events);
 }
 
 TEST(EstopInput, TriggeredOrUnpluggedLatchesWithUseEstop)
@@ -964,21 +937,6 @@ TEST(Events, EstopReportIsTheOldJsonAfterTheCommand)
   EXPECT_EQ(reports[0].second["trigger_stamp_ms"].as<long long>(), 10);
   EXPECT_EQ(reports[0].second["trigger_to_action_ms"].as<long long>(), 3);
   EXPECT_EQ(reports[0].second["reason"].as<std::string>(), "External estop triggered");
-
-  // Nothing written: estop_latched_silent.
-  SafetyCore silent(g1(), config(g1(), "sim_split"), false, kDomain);
-  silent.on_state(state_of(g1()), 0.0);
-  silent.on_command(Input::Lower, command(g1()), "lower", 0.001);
-  silent.on_command(Input::Lower, command(g1()), "other", 0.002);
-  ASSERT_TRUE(silent.estopped());
-  EXPECT_FALSE(silent.step(0.004));
-  const auto silences = named(silent.drain_events(), "estop_latched_silent");
-  ASSERT_EQ(silences.size(), 1U);
-  EXPECT_EQ(
-    keys_of(silences[0].second),
-    (std::vector<std::string>{"decision_ms", "event", "reason", "trigger_stamp_ms"}));
-  EXPECT_EQ(silences[0].second["decision_ms"].as<long long>(), 2);
-  EXPECT_EQ(silences[0].second["reason"].as<std::string>(), silent.estop_reason());
 }
 
 TEST(Construction, RefusesAConfigForAnotherRobot)

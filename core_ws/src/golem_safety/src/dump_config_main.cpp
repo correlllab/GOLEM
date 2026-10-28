@@ -20,7 +20,6 @@ namespace
 
 using golem_safety::EstopAfter;
 using golem_safety::EstopMode;
-using golem_safety::StartupRule;
 
 // A double that reads back as the same double.
 std::string number(double value)
@@ -73,12 +72,6 @@ void print(const golem_safety::SafetyConfig & c, const golem_safety::RobotProfil
             << ", \"state_seconds\": " << number(c.stale.state_seconds) << "},\n"
             << " \"single_writer\": {\"handover_seconds\": "
             << number(c.single_writer.handover_seconds) << "},\n"
-            << " \"startup\": {\"rule\": "
-            << quoted(c.startup.rule == StartupRule::ZeroStream ? "zero_stream" : "engage_gate")
-            << "},\n"
-            << " \"engage\": {\"max_state_age_seconds\": "
-            << number(c.engage.max_state_age_seconds) << ", \"max_position_error\": "
-            << number(c.engage.max_position_error) << "},\n"
             << " \"estop\": {\"triggered_topic\": " << quoted(c.estop.triggered_topic)
             << ", \"plugged_in_topic\": " << quoted(c.estop.plugged_in_topic)
             << ", \"timeout_seconds\": " << number(c.estop.timeout_seconds) << "},\n"

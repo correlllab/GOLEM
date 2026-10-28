@@ -8,6 +8,7 @@
 #include <functional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
@@ -19,7 +20,6 @@ using golem_safety::EstopMode;
 using golem_safety::Mode;
 using golem_safety::RobotProfile;
 using golem_safety::SafetyConfig;
-using golem_safety::StartupRule;
 
 namespace {
 
@@ -82,18 +82,15 @@ private:
   std::string path_;
 };
 
-// startup.rule, estop_response.after and control.state_lag_ms have no default, so most
-// tests that are not about them leave them to this: `text` plus whichever of the three
-// sections it does not give, with the robot's carried values.
+// estop_response.after and control.state_lag_ms have no default, so most tests that are
+// not about them leave them to this: `text` plus whichever of the two sections it does not
+// give, with the robot's carried values.
 std::string completed(const std::string & text, const RobotProfile & profile)
 {
   const bool g1 = profile.robot == "g1";
   std::string out = text;
   if (!contains(text, "control:")) {
     out += g1 ? "control: {state_lag_ms: 0.0}\n" : "control: {state_lag_ms: 100.0}\n";
-  }
-  if (!contains(text, "startup:")) {
-    out += g1 ? "startup: {rule: engage_gate}\n" : "startup: {rule: zero_stream}\n";
   }
   if (!contains(text, "estop_response:")) {
     out += g1 ? "estop_response: {after: keep_writing}\n" :
@@ -184,7 +181,6 @@ TEST(Config, RemovedAndRenamedKeysNameTheirReplacement)
 {
   EXPECT_TRUE(contains(parse_error("network: {domain_id: 1}\n", h12()), "removed"));
   EXPECT_TRUE(contains(parse_error("robot: real\n", g1()), "sim"));
-  EXPECT_TRUE(contains(parse_error("engage: {mode_machine: 5}\n", g1()), "profile"));
   EXPECT_TRUE(contains(parse_error("estop: {enabled: true}\n", h12()), "use_estop"));
   EXPECT_TRUE(contains(parse_error("estop: {poll_hz: 500.0}\n", h12()), "use_estop"));
   EXPECT_TRUE(
@@ -228,6 +224,42 @@ TEST(Config, ArmSdkKeysRefused)
   // The H1-2's configs are refused the same way.
   const std::string h12_message = parse_error("arm_sdk: {}\n", h12());
   EXPECT_TRUE(contains(h12_message, "key 'arm_sdk': " + reason)) << h12_message;
+}
+
+TEST(Config, StartupAndEngageKeysRefused)
+{
+  // Every robot streams zero gains from boot, so neither section has a choice left to make.
+  const std::string reason =
+    "unknown key (removed: every robot streams zero gains from boot and engages each input "
+    "on its own first valid command)";
+  struct Case
+  {
+    const RobotProfile & profile;
+    std::string rest;  // the required keys, with the robot's carried values
+  };
+  const Case cases[] = {
+    {h12(), "control: {state_lag_ms: 100.0}\nestop_response: {after: burst_then_silence}\n"},
+    {g1(), "control: {state_lag_ms: 0.0}\nestop_response: {after: keep_writing}\n"},
+  };
+  const std::pair<const char *, const char *> sections[] = {
+    {"startup", "startup: {rule: zero_stream}\n"},
+    {"startup", "startup: {rule: engage_gate}\n"},
+    {"startup", "startup: {}\n"},
+    {"engage", "engage: {max_state_age_seconds: 0.1, max_position_error: 0.15}\n"},
+    {"engage", "engage: {mode_machine: 5}\n"},
+    {"engage", "engage: {}\n"},
+  };
+  for (const Case & c : cases) {
+    for (const auto & [key, section] : sections) {
+      SCOPED_TRACE(c.profile.robot + ": " + section);
+      const std::string message =
+        parse_raw_error("mode: split_mode\n" + c.rest + section, c.profile);
+      EXPECT_TRUE(
+        contains(
+          message, "safety config case.yaml (robot " + c.profile.robot + "): key '" + key +
+          "': " + reason)) << message;
+    }
+  }
 }
 
 TEST(Config, ModeNotInProfileThrows)
@@ -300,7 +332,6 @@ TEST(Config, CarriedH12ConfigsAreZeroStreamAndBurst)
 {
   for (const char * name : kH12Configs) {
     const SafetyConfig config = golem_safety::load_safety_config(name, h12());
-    EXPECT_EQ(config.startup.rule, StartupRule::ZeroStream) << name;
     EXPECT_EQ(config.estop_response.mode, EstopMode::Zero) << name;
     EXPECT_EQ(config.estop_response.after, EstopAfter::BurstThenSilence) << name;
     EXPECT_EQ(config.estop_response.burst_count, 50) << name;
@@ -316,42 +347,11 @@ TEST(Config, CarriedH12ConfigsAreZeroStreamAndBurst)
   }
 }
 
-TEST(Config, StartupRuleIsRequired)
-{
-  // A G1 config that leaves the rule out would otherwise stream zeros before its engage gate.
-  const std::string lag = "control: {state_lag_ms: 0.0}\n";
-  std::string message = parse_raw_error(lag + "estop_response: {after: keep_writing}\n", g1());
-  EXPECT_TRUE(contains(message, "'startup.rule'")) << message;
-  EXPECT_TRUE(contains(message, "g1")) << message;
-  EXPECT_TRUE(contains(message, "case.yaml")) << message;
-  EXPECT_TRUE(contains(message, "engage_gate")) << message;
-
-  EXPECT_TRUE(
-    contains(
-      parse_raw_error(lag + "startup: {}\nestop_response: {after: keep_writing}\n", g1()),
-      "'startup.rule'"));
-  EXPECT_TRUE(
-    contains(
-      parse_raw_error(lag + "estop_response: {after: burst_then_silence}\n", h12()),
-      "'startup.rule'"));
-  EXPECT_EQ(parse("startup: {rule: engage_gate}\n", g1()).startup.rule, StartupRule::EngageGate);
-  EXPECT_EQ(parse("startup: {rule: zero_stream}\n", h12()).startup.rule, StartupRule::ZeroStream);
-
-  // The same through a file: the message names the file too.
-  const TempConfig file(
-    "mode: split_mode\n" + lag + "estop_response: {after: burst_then_silence}\n");
-  message = error_of([&] {golem_safety::load_safety_config(file.path(), h12());});
-  EXPECT_TRUE(contains(message, file.path())) << message;
-  EXPECT_TRUE(contains(message, "'startup.rule'")) << message;
-}
-
 TEST(Config, StateLagMsIsRequired)
 {
   // Everything but control.state_lag_ms.
-  const std::string h12_rest =
-    "startup: {rule: zero_stream}\nestop_response: {after: burst_then_silence}\n";
-  const std::string g1_rest =
-    "startup: {rule: engage_gate}\nestop_response: {after: keep_writing}\n";
+  const std::string h12_rest = "estop_response: {after: burst_then_silence}\n";
+  const std::string g1_rest = "estop_response: {after: keep_writing}\n";
   std::string message = parse_raw_error(h12_rest, h12());
   EXPECT_TRUE(contains(message, "'control.state_lag_ms'")) << message;
   EXPECT_TRUE(contains(message, "must be given")) << message;
@@ -379,19 +379,15 @@ TEST(Config, StateLagMsIsRequired)
 TEST(Config, EstopResponseAfterIsRequired)
 {
   const std::string lag = "control: {state_lag_ms: 100.0}\n";
-  std::string message = parse_raw_error(lag + "startup: {rule: zero_stream}\n", h12());
+  std::string message = parse_raw_error(lag, h12());
   EXPECT_TRUE(contains(message, "'estop_response.after'")) << message;
   EXPECT_TRUE(contains(message, "h12")) << message;
   EXPECT_TRUE(contains(message, "burst_then_silence")) << message;
 
   EXPECT_TRUE(
     contains(
-      parse_raw_error(
-        lag + "startup: {rule: zero_stream}\nestop_response: {mode: zero}\n", h12()),
-      "'estop_response.after'"));
-  EXPECT_TRUE(
-    contains(
-      parse_raw_error(lag + "startup: {rule: engage_gate}\n", g1()), "'estop_response.after'"));
+      parse_raw_error(lag + "estop_response: {mode: zero}\n", h12()), "'estop_response.after'"));
+  EXPECT_TRUE(contains(parse_raw_error(lag, g1()), "'estop_response.after'"));
   EXPECT_EQ(
     parse("estop_response: {after: keep_writing}\n", h12()).estop_response.after,
     EstopAfter::KeepWriting);
@@ -415,11 +411,10 @@ TEST(Config, H12UpperStaleSecondsAreTheOldEffectiveValues)
     .stale.upper_seconds, 0.0);
 }
 
-TEST(Config, G1ConfigsUseTheEngageGateAndKeepWriting)
+TEST(Config, G1ConfigsKeepWriting)
 {
   for (const char * name : kG1Configs) {
     const SafetyConfig config = golem_safety::load_safety_config(name, g1());
-    EXPECT_EQ(config.startup.rule, StartupRule::EngageGate) << name;
     EXPECT_EQ(config.estop_response.after, EstopAfter::KeepWriting) << name;
     EXPECT_EQ(config.estop_response.mode, EstopMode::Zero) << name;
     EXPECT_TRUE(config.logging.enabled) << name;
@@ -442,8 +437,6 @@ TEST(Config, G1ConfigsUseTheEngageGateAndKeepWriting)
   const SafetyConfig sim = golem_safety::load_safety_config("sim_split", g1());
   EXPECT_EQ(sim.mode, Mode::Split);
   EXPECT_EQ(sim.topics.low_cmd_out, "/lowcmd");
-  EXPECT_DOUBLE_EQ(sim.engage.max_state_age_seconds, 1.0);
-  EXPECT_DOUBLE_EQ(sim.engage.max_position_error, 0.15);
   EXPECT_DOUBLE_EQ(sim.stale.lower_seconds, 1.0);
 
   const SafetyConfig full = golem_safety::load_safety_config("full", g1());
@@ -475,8 +468,8 @@ TEST(Config, ConfigNamesBelongToTheirRobot)
 TEST(Config, PathInAnotherRobotsDirectoryIsRefused)
 {
   // Several configs of one robot parse for the other (the G1's full.yaml for the H1-2, the
-  // H1-2's sim_safety_split.yaml for the G1, with the H1-2's start-up rule), so a path
-  // under another robot's config directory is refused by that directory's name.
+  // H1-2's sim_safety_split.yaml for the G1), so a path under another robot's config
+  // directory is refused by that directory's name.
   const std::string share = ament_index_cpp::get_package_share_directory("golem_safety");
   for (const char * name : kG1Configs) {
     const std::string path = share + "/config/g1/" + name + ".yaml";
@@ -604,17 +597,12 @@ TEST(Config, TopicsAreRosNames)
 TEST(Config, ScalarRangesAreChecked)
 {
   EXPECT_TRUE(contains(parse_error("control: {publish_hz: 0.0}\n", h12()), "publish_hz"));
-  EXPECT_TRUE(contains(parse_error("engage: {max_state_age_seconds: 0.0}\n", g1()),
-    "engage.max_state_age_seconds"));
-  EXPECT_TRUE(contains(parse_error("engage: {max_position_error: -1.0}\n", g1()),
-    "engage.max_position_error"));
   EXPECT_TRUE(contains(parse_error("estop: {timeout_seconds: 0.0}\n", h12()),
     "estop.timeout_seconds"));
   EXPECT_TRUE(contains(parse_error("single_writer: {handover_seconds: -0.1}\n", h12()),
     "single_writer.handover_seconds"));
   EXPECT_TRUE(contains(parse_error("estop_response: {after: burst_then_silence, burst_count: 0}\n", h12()),
     "estop_response.burst_count"));
-  EXPECT_TRUE(contains(parse_error("startup: {rule: sometimes}\n", h12()), "startup.rule"));
   EXPECT_TRUE(contains(parse_error("estop_response: {after: later}\n", h12()),
     "estop_response.after"));
   EXPECT_TRUE(contains(parse_error("estop_response: {mode: loud, after: burst_then_silence}\n", h12()),

@@ -67,7 +67,7 @@ SHOULDER = 15  # left shoulder pitch, an arm slot
 LATE_S = 0.3
 # the events by which golem_safety latches its estop or reports a quiet input or a
 # quiet /lowstate: none of them may appear while the node walks
-ALARMS = ('estop_command_written', 'estop_latched_silent', 'input_quiet', 'state_quiet')
+ALARMS = ('estop_command_written', 'input_quiet', 'state_quiet')
 # rcutils' default console format: [LEVEL] [seconds] [logger]: message
 LOG_LINE = re.compile(r'^\[(DEBUG|INFO|WARN|ERROR|FATAL)\] \[([0-9.]+)\] \[[^\]]*\]: (.*)$')
 _factory = []
@@ -347,7 +347,7 @@ def _is_off(motors):
 
 
 def _is_zeroed(msg):
-    '''Every motor off, the rt/lowcmd estop command'''
+    '''Every motor off: golem_safety's zero-gain stream, and its estop command'''
     return _is_off(msg.motor_cmd[:29])
 
 
@@ -362,15 +362,19 @@ def test_silent_until_upright_state_and_arms_then_ramp_and_walk():
     legs = default + np.linspace(-0.2, 0.2, 12)
     with _rig(legs, ramp_seconds=0.2) as rig:
         kp, kd = rig.policy.gains(rig.policy.leg_joints)
-        # upright rt/lowstate but no arm controller: the node is silent, so
-        # golem_safety is too
+        # upright rt/lowstate but no arm controller: the node is silent, and
+        # golem_safety streams zero gains on every motor
         time.sleep(0.4)
-        assert rig.lower.msgs == [] and rig.lowcmd.msgs == []
-        # the arm controller commands, but the robot is tilted 40 deg
+        assert rig.lower.msgs == []
+        assert rig.lowcmd.msgs and all(_is_zeroed(m) for _, m in rig.lowcmd.msgs)
+        # the arm controller commands, but the robot is tilted 40 deg: the node
+        # stays silent, and golem_safety relays the arms with the legs still off
         rig.robot.set(quat=_tilted(40.0))
         rig.arms.start()
         time.sleep(0.4)
-        assert rig.lower.msgs == [] and rig.lowcmd.msgs == []
+        assert rig.lower.msgs == []
+        assert rig.lowcmd.msgs[-1][1].motor_cmd[SHOULDER].kp == 60.0
+        assert all(_is_off(m.motor_cmd[:12]) for _, m in rig.lowcmd.msgs)
         assert rig.driver.phase == WAITING
 
         # upright: the ramp (0.2 s, 11 targets), then the policy
@@ -412,16 +416,19 @@ def test_silent_until_upright_state_and_arms_then_ramp_and_walk():
     gaps = [tick_delta(b, a) for a, b in zip(steps, steps[1:])]
     assert min(gaps) >= 10 and abs(np.mean(gaps) - 20.0) < 1.0, gaps
 
-    # golem_safety engages split mode on the node's first command (the measured
-    # legs) and publishes from then on: the node's legs with the training gains
-    # and the arm controller's arms, stamped with the G1 profile's mode_pr 0
-    # and mode_machine 5
-    assert rig.safety_node.events(('lowcmd_engage',)) == [
-        {'event': 'lowcmd_engage', 'mode': 'split_mode'}]
-    assert lowcmd
-    np.testing.assert_allclose(_legs(lowcmd[0][1]), legs, atol=1e-6)
+    # golem_safety engaged the arm controller's input first and the node's on
+    # its first command (the measured legs), each on its own; the legs were
+    # off until then, and from then on carry the node's legs with the training
+    # gains beside the arm controller's arms. Every command is stamped with the
+    # G1 profile's mode_pr 0 and mode_machine 5
+    assert [e['source'] for e in rig.safety_node.events(('input_engaged',))] == [
+        'split_mode_upper', 'split_mode_lower']
+    first = next(i for i, (_, m) in enumerate(lowcmd) if m.motor_cmd[LEGS[0]].kp > 0.0)
+    assert all(_is_off(m.motor_cmd[:12]) for _, m in lowcmd[:first])
+    assert all((m.mode_pr, m.mode_machine) == (0, 5) for _, m in lowcmd[:first])
+    np.testing.assert_allclose(_legs(lowcmd[first][1]), legs, atol=1e-6)
     sent = {tuple(np.round(_legs(m), 6)) for _, m in lower}
-    for _, msg in lowcmd:
+    for _, msg in lowcmd[first:]:
         assert (msg.mode_pr, msg.mode_machine) == (0, 5)
         assert tuple(np.round(_legs(msg), 6)) in sent
         assert all(msg.motor_cmd[i].mode == 1 and msg.motor_cmd[i].kp == pytest.approx(kp[i]) and
@@ -496,9 +503,13 @@ def test_bad_state_silences_the_node_and_golem_safety_holds_its_last_command(inj
     # never a zero-gain or damping command from the node itself
     assert all(msg.motor_cmd[i].kp > 0.0 for _, msg in lower for i in LEGS)
 
-    # golem_safety holds a quiet input: it went on relaying the node's last leg
-    # command, with the training gains, to the end, and never the estop command
-    assert not any(_is_zeroed(msg) for _, msg in lowcmd)
+    # golem_safety holds a quiet input: from the arm controller's first command
+    # on (before it, the zero-gain stream), it went on relaying the node's last
+    # leg command, with the training gains, to the end, and never the estop
+    # command
+    arms = next(i for i, (_, msg) in enumerate(lowcmd) if msg.motor_cmd[SHOULDER].kp > 0.0)
+    assert all(_is_zeroed(msg) for _, msg in lowcmd[:arms])
+    assert not any(_is_zeroed(msg) for _, msg in lowcmd[arms:])
     held = [(t, msg) for t, msg in lowcmd if t > last_lower + 0.05]
     assert held, 'golem_safety must keep relaying'
     last_legs = _legs(lower[-1][1])

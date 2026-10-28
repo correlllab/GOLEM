@@ -147,16 +147,16 @@ out of its range or a value of the wrong kind; an alias given with its key.
 3. Hold that pose until `golem_safety` is seen relaying the commands (the follow gate opens)
    within `controller.startup_timeout`. The error otherwise names what `golem_safety` waits
    for: a `/lowstate` reporting the profile's `mode_machine` (6 or 5), a first estop sample
-   with `use_estop:=true`, the paired safety config, no estop latched from an earlier run,
-   and, under the G1's engage gate, every input of the mode (the walking node too).
+   with `use_estop:=true`, the paired safety config and no estop latched from an earlier run.
 4. Move through the start-up postures, each until the IK's command is within 1e-3 rad of it,
    then step the held joints to `controller.hold_targets` at min(0.3, `dq_lim`) rad/s, all
    within `controller.startup_move_timeout` of the gate opening.
 
 A start-up that fails after step 2 sends the shutdown command (Shutdown, below) and the
-node exits 1. On the H1-2 `golem_safety` relays once `/lowstate` reports `mode_machine` 6 (and,
-on the real robot, `estop_node` has sent a first sample), so the gate opens at the first
-relay; on the G1 it opens once `golem_safety`'s engage gate has passed.
+node exits 1. `golem_safety` streams zero gains from boot and engages the upper-body input on
+its first command once `/lowstate` reports the profile's `mode_machine` (and, on the real
+H1-2, `estop_node` has sent a first sample), so the gate opens at the first relay, on both
+robots whether or not the leg node commands.
 
 **The follow gate.** Until a `topics.safety_out` sample carries the controller's command on
 every upper slot (kp > 0, each q within `controller.follow_tolerance`), every upper-body

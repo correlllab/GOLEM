@@ -212,9 +212,8 @@ class UpperController:
             f'{self.profile.mode_machine} (the {self.profile.robot} profile\'s) and, when started '
             'with use_estop:=true, a first sample on its estop topics; it must run the safety '
             'config this controller config pairs with (writing '
-            f'{topic}), not latched in an estop from an earlier run (restart it), and under '
-            'an engage gate (the G1\'s configs) every input of its mode must command: in split '
-            'mode the walking node too. Stopping the controller')
+            f'{topic}), and not be latched in an estop from an earlier run (restart it). '
+            'Stopping the controller')
 
     def _startup_timeout_error(self, desc):
         '''The error for a start-up move not done in time'''

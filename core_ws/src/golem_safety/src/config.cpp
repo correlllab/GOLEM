@@ -33,11 +33,13 @@ constexpr double kDefaultKdMax = 30.0;
 const std::map<std::string, std::string> & replaced_keys()
 {
   static const std::string estop_box = "removed: the bringup's use_estop decides";
+  static const std::string zero_stream =
+    "removed: every robot streams zero gains from boot and engages each input on its own "
+    "first valid command";
   static const std::map<std::string, std::string> keys = {
     {"network", "removed: ROS supplies the domain, and the G1's interface is pinned in "
       "cyclonedds_local.xml"},
     {"robot", "removed: whether the robot is simulated comes from the bringup's sim argument"},
-    {"engage.mode_machine", "removed: mode_machine comes from the robot profile"},
     {"estop.enabled", estop_box},
     {"estop.estop_topic", estop_box},
     {"estop.poll_hz", estop_box},
@@ -46,6 +48,8 @@ const std::map<std::string, std::string> & replaced_keys()
     {"control.lower_stale_estop_seconds", "renamed stale.lower_seconds"},
     {"control.state_stale_estop_seconds", "renamed stale.state_seconds"},
     {"arm_sdk", "arm_sdk mode was removed: the G1 runs split_mode or full_body_mode"},
+    {"startup", zero_stream},
+    {"engage", zero_stream},
   };
   return keys;
 }
@@ -405,8 +409,8 @@ SafetyConfig parse_checked(
   const Where where{profile.robot, source, profile.joints.size()};
   const Section root(where, root_node, "");
   root.allow_only(
-    {"mode", "topics", "control", "stale", "single_writer", "startup", "engage", "estop",
-      "estop_response", "limits", "logging"});
+    {"mode", "topics", "control", "stale", "single_writer", "estop", "estop_response", "limits",
+      "logging"});
 
   SafetyConfig config;
   config.robot = profile.robot;
@@ -452,18 +456,6 @@ SafetyConfig parse_checked(
   single_writer.allow_only({"handover_seconds"});
   config.single_writer.handover_seconds =
     single_writer.positive("handover_seconds", config.single_writer.handover_seconds);
-
-  const Section startup = root.section("startup");
-  startup.allow_only({"rule"});
-  const size_t rule = startup.required_choice("rule", {"zero_stream", "engage_gate"});
-  config.startup.rule = rule == 0 ? StartupRule::ZeroStream : StartupRule::EngageGate;
-
-  const Section engage = root.section("engage");
-  engage.allow_only({"max_state_age_seconds", "max_position_error"});
-  config.engage.max_state_age_seconds =
-    engage.positive("max_state_age_seconds", config.engage.max_state_age_seconds);
-  config.engage.max_position_error =
-    engage.positive("max_position_error", config.engage.max_position_error);
 
   const Section estop = root.section("estop");
   estop.allow_only({"triggered_topic", "plugged_in_topic", "timeout_seconds"});

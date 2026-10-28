@@ -26,7 +26,7 @@ STATE_PERIOD = 0.005  # /lowstate at 200 Hz
 STREAM_EVERY = 2  # streamed commands and estop samples every 2 state periods: 100 Hz
 OUTPUTS = ('/lowcmd',)
 HEARTBEAT = '/safety/heartbeat'
-# the pose the fake robot reports, which the tests command unless they test the gate
+# the pose the fake robot reports, which the tests command
 KNEE = 3  # left knee on both robots
 KNEE_Q = 0.5
 SHOULDER_Q = 0.2

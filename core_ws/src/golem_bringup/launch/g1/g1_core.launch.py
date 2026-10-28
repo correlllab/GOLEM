@@ -12,16 +12,19 @@ use_estop false: the G1 stack has no hardware estop node.
 
 safety_node runs split mode (split, or sim_split in the sim): it writes every
 motor on /lowcmd, the legs from the walking node's input and the waist and
-arms from the controller's.
+arms from the controller's. From boot it streams zero gains on every motor
+(every motor off), and engages each input on that input's own first valid
+command once rt/lowstate reports the G1's mode_machine (5); until the walking
+node commands, the leg motors stay off.
 
 The safety node starts first; the controller follows after `controller_delay`
 seconds. It waits for a fresh /lowstate (or stops with an error) and starts
 every command at the measured pose. Its follow gate then keeps each waist and
 arm command within controller.follow_tolerance (0.05 rad) of the measured
 joint until it sees golem_safety relay the commands, reading (never writing)
-golem_safety's output, /lowcmd, which split mode writes once its engage gate
-passes: once the walking node commands too. Only then does the controller move
-the arms to `home` and the waist to its hold angles, and from then on no
+golem_safety's output, /lowcmd, which carries them from the controller's first
+command on, with or without the walking node. Only then does the controller
+move the arms to `home` and the waist to its hold angles, and from then on no
 command follows the measured pose. The follow gate must open within
 controller.startup_timeout (30 s), and the moves to home and the waist hold
 must finish within controller.startup_move_timeout (30 s) of the gate opening;
@@ -29,10 +32,9 @@ otherwise the controller stops with an error.
 
 use_locomotion:=true adds HOMIE's walking policy on the legs, through
 golem_safety's split mode, `locomotion_delay` seconds after the controller.
-Without it nothing commands the legs, so the engage gate never passes and the
-controller stops after controller.startup_timeout. The controller holds the
-waist as stiffly as golem_safety allows (g1_split.yaml, sim_split.yaml), as
-the policy expects.
+Without it nothing commands the legs, so their motors stay off while the arms
+run. The controller holds the waist as stiffly as golem_safety allows
+(g1_split.yaml, sim_split.yaml), as the policy expects.
 
 use_nav:=true adds g1_navigation (odometry, slam_toolbox and Nav2, which
 drives the walking node through /cmd_vel), with the core, on the sim's

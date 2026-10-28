@@ -8,12 +8,11 @@ class FollowGate:
     Keep every gated joint's command within tolerance (rad) of its measured position until
     open(), then let the commands through for good.
 
-    Before golem_safety relays the controller's commands, nothing executes them: on the G1
-    its engage gate waits for every input of its mode; on the H1-2 it streams zero gains
-    until it engages the input. An
-    open-loop move such as the start-up move to home would then run away from the measured
-    pose, and the robot would jump once the commands are relayed. With the gate a command
-    leads its measured joint by at most tolerance, before the relay starts and at it.
+    Before golem_safety relays the controller's commands, nothing executes them: it streams
+    zero gains until it engages the input. An open-loop move such as the start-up move to
+    home would then run away from the measured pose, and the robot would jump once the
+    commands are relayed. With the gate a command leads its measured joint by at most
+    tolerance, before the relay starts and at it.
 
     The gate opens when the safety layer is seen relaying the commands (relays_commands),
     never on how the measured joints move: it takes a relayed command for an executed one

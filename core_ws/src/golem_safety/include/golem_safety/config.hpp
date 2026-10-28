@@ -27,13 +27,6 @@ struct DerivedLimits
   double kd_max = 30.0;
 };
 
-// What the layer does from boot until its first command is relayed. Every config
-// names its rule (startup.rule has no default).
-//   ZeroStream  streams a zero-gain command on every slot from boot (H1-2).
-//   EngageGate  writes nothing until a fresh /lowstate and a command near the
-//               measured joints pass the engage gate (G1).
-enum class StartupRule { ZeroStream, EngageGate };
-
 // What the layer does after the estop latches. Every config names it
 // (estop_response.after has no default).
 //   BurstThenSilence  estop_response.burst_count commands, then it stops publishing.
@@ -63,8 +56,7 @@ struct Control
 };
 
 // Quiet-input thresholds, seconds. A quiet input or /lowstate is reported and its
-// last command keeps being relayed. With startup.rule engage_gate, an input quiet for
-// longer than its threshold also keeps the gate shut. A value <= 0 disables both.
+// last command keeps being relayed. A value <= 0 disables the report.
 struct Stale
 {
   double upper_seconds = 0.0;
@@ -78,18 +70,6 @@ struct SingleWriter
   // two writers live at once latch the estop. Positive: at 0 any interleaving writer
   // would count as a handover.
   double handover_seconds = 0.5;
-};
-
-struct Startup
-{
-  StartupRule rule = StartupRule::ZeroStream;
-};
-
-// EngageGate only.
-struct Engage
-{
-  double max_state_age_seconds = 0.1;
-  double max_position_error = 0.15;  // rad
 };
 
 // The hardware estop's ROS topics, read only when the bringup passes use_estop.
@@ -125,8 +105,6 @@ struct SafetyConfig
   Control control;
   Stale stale;
   SingleWriter single_writer;
-  Startup startup;
-  Engage engage;
   EstopInput estop;
   EstopResponse estop_response;
   DerivedLimits limits;

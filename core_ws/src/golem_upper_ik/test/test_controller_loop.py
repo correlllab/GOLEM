@@ -11,9 +11,8 @@ error at controller.startup_timeout, well before controller.startup_move_timeout
 
 The others sit behind golem_safety's safety_node, run as a subprocess (RelayedRobot). The
 controller waits for /lowstate and, unless follow_tolerance turns the gate off, never
-commands far from the measured pose before and at engagement: on the G1 until its engage
-gate passes, on the H1-2 until its zero stream gives way to the upper input. The G1's gate
-opens only once the walking node commands too, the H1-2's without it; when the relay starts
+commands far from the measured pose before and at engagement, until golem_safety's zero
+stream gives way to the upper input, on both robots with no leg input; when the relay starts
 late, the start-up moves still finish, though the start-up outlasts
 controller.startup_move_timeout. Once engaged, the controller holds against a push instead
 of following it.
@@ -26,8 +25,8 @@ import numpy as np
 import pytest
 
 from ros_harness import (
-    CommandRecorder, FollowingRobot, RelayedRobot, SafetyNode, WalkingNode, body_pose,
-    profile_of, shared_model, slots_of, wait_for,
+    CommandRecorder, FollowingRobot, RelayedRobot, SafetyNode, body_pose, profile_of,
+    shared_model, slots_of, wait_for,
 )
 
 ROBOTS = ('h12', 'g1')
@@ -298,9 +297,12 @@ def test_startup_stops_with_an_error_when_the_safety_layer_never_engages(
     model = shared_model(ros, models, robot)
     with pytest.raises(RuntimeError, match=re.escape(
             'golem_safety did not relay the commands within controller.startup_timeout '
-            f'(2 s): no {safety_out} sample carried them')):
+            f'(2 s): no {safety_out} sample carried them')) as raised:
         build(ros, model, config)
     stopped = time.monotonic()
+    # golem_safety engages each input on its own: no cause waits for another input
+    message = str(raised.value)
+    assert 'engage gate' not in message and 'walking node' not in message, message
     time.sleep(0.3)
     assert 2.0 <= startup['end'] - startup['start'] < 3.0
     tolerance = config['controller']['follow_tolerance']
@@ -387,8 +389,6 @@ def test_waits_for_state_and_tracks_the_robot_through_engagement(
     output = CommandRecorder(ros, safety_out, profile, robot_)
     layer = SafetyNode(robot, safety_config, tmp_path)
     ros.on_close(layer.stop)
-    # the G1's engage gate waits for the legs too
-    legs = WalkingNode(ros, profile, q0) if robot == 'g1' else None
     opened = watch_gate_opening(monkeypatch)
     model = shared_model(ros, models, robot)
     probe = ros.node('probe')
@@ -402,8 +402,6 @@ def test_waits_for_state_and_tracks_the_robot_through_engagement(
     # nothing relays the commands yet: the robot does not follow for 2 s
     time.sleep(2.0)
     layer.start()
-    if legs is not None:
-        legs.start()
     # before golem_safety runs, from the controller's commands alone
     before = [s for s in upper_in.samples if s.t < layer.started]
     assert before[0].t >= robot_.started
@@ -423,8 +421,8 @@ def test_waits_for_state_and_tracks_the_robot_through_engagement(
     sway = [list(profile.upper_slots).index(slot) for slot in robot_.sway_slots]
     assert np.all(np.ptp(np.array([s.measured[sway] for s in before]), axis=0) > 2 * bound)
     assert gap_before <= bound
-    # until golem_safety relays the upper input (the G1's engage gate passes, the H1-2's zero
-    # stream gives way to it), and with no jump at engagement
+    # until golem_safety relays the upper input (its zero stream gives way to it), and with no
+    # jump at engagement
     relaying = [s for s in output.samples if s.kp > 0.0]
     through = [s for s in upper_in.samples if s.t <= relaying[0].t]
     assert max(np.max(np.abs(s.q - s.measured)) for s in through) <= bound
@@ -458,22 +456,14 @@ def test_split_mode_engages_then_holds_against_a_push(ros, models, robot, monkey
     lowcmd = CommandRecorder(ros, '/lowcmd', profile, robot_)
     layer = SafetyNode(robot, safety_config, tmp_path)
     ros.on_close(layer.stop)
-    legs = WalkingNode(ros, profile, q0)
     opened = watch_gate_opening(monkeypatch)
     model = shared_model(ros, models, robot)
 
     layer.start()
     builder, built = build_in_thread(ros, model, config)
     assert wait_for(lambda: upper_in.count >= 100, 30.0)
-    if robot == 'g1':
-        # the upper input alone: the G1's engage gate waits for the legs, silent, the gate shut
-        time.sleep(1.0)
-        assert upper_in.count > 100 and lowcmd.count == 0 and opened == []
-        assert builder.is_alive(), 'the start-up must wait for golem_safety'
-        legs.start()
-    else:
-        # the H1-2's zero stream engages each input on its own: the arms without the legs
-        assert wait_for(lambda: opened, 5.0)
+    # golem_safety's zero stream engages each input on its own: the arms without the legs
+    assert wait_for(lambda: opened, 5.0)
     builder.join(30.0)
     assert not builder.is_alive() and 'error' not in built, built.get('error')
     controller = built['controller']
@@ -529,10 +519,10 @@ def test_relay_starting_late_still_gets_the_whole_start_up_move(ros, models, rob
     # Each start-up step moves a joint at most dq_lim x dt and then sleeps a whole control
     # period dt, so a move of d rad takes at least d / dq_lim s, plus the steps' work
     if robot == 'g1':
-        # the walking node commands 5 s into a 7 s wait for the engagement. The elbows hang
-        # 1.5 rad from home: at sim_split's 1 rad/s the move takes at least 1.5 s (about 2 s
-        # here), so the start-up ends over 6.5 s after it began, and a 6 s move budget
-        # suffices only if it counts from the gate opening
+        # golem_safety starts 5 s into a 7 s wait for the engagement. The elbows hang 1.5 rad
+        # from home: at sim_split's 1 rad/s the move takes at least 1.5 s (about 2 s here),
+        # so the start-up ends over 6.5 s after it began, and a 6 s move budget suffices
+        # only if it counts from the gate opening
         q0[slots_of(profile, ('left_elbow_joint', 'right_elbow_joint'))] = 1.5
         late, timeouts = 5.0, {'startup_timeout': 7.0, 'startup_move_timeout': 6.0}
     else:
@@ -545,20 +535,14 @@ def test_relay_starting_late_still_gets_the_whole_start_up_move(ros, models, rob
     robot_.start()
     layer = SafetyNode(robot, safety_config, tmp_path, sim=robot == 'g1')
     ros.on_close(layer.stop)
-    legs = WalkingNode(ros, profile, q0)
     startup = watch_startup(monkeypatch)
     opened = watch_gate_opening(monkeypatch)
     model = shared_model(ros, models, robot)
 
-    if robot == 'g1':
-        layer.start()
     builder, built = build_in_thread(ros, model, config)
     assert startup['started'].wait(30.0)
     time.sleep(late)
-    if robot == 'g1':
-        legs.start()
-    else:
-        layer.start()
+    layer.start()
     builder.join(45.0)
     assert not builder.is_alive() and 'error' not in built, built.get('error')
     # engaged late, then moved to the end pose past the end of the wait for it and past the

@@ -223,13 +223,6 @@ SafetyCore::InputState & SafetyCore::input_state(Input input)
   return inputs_[index_of(input)];
 }
 
-// Whether the layer has been writing commands: from the first step with zero_stream, from
-// engagement with engage_gate.
-bool SafetyCore::took_control() const
-{
-  return config_.startup.rule == StartupRule::ZeroStream || engaged_;
-}
-
 std::string SafetyCore::joint(int slot) const
 {
   return "motor " + std::to_string(slot) + " (" + profile_.joints[slot].name + ")";
@@ -243,8 +236,7 @@ void SafetyCore::on_state(const LowState & state, double now)
   }
 }
 
-// The robot-identity and estop-sample conditions of refusal(); under engage_gate, refusal()
-// also checks the /lowstate age, which this flag does not.
+// The conditions of refusal(), which depend on no input.
 void SafetyCore::update_relay_ready()
 {
   const bool ready = state_ && state_->mode_machine == profile_.mode_machine &&
@@ -284,7 +276,7 @@ void SafetyCore::check_state(const LowState & state, double now)
   }
   if (lag_checked_) {
     const double lag = state_lag_ms(state.tick, now);
-    if (took_control() && lag > config_.control.state_lag_ms) {
+    if (lag > config_.control.state_lag_ms) {
       latch(
         now, std::nullopt, [&] {
           return config_.topics.low_state + " arriving " + fixed(lag, 0) + " ms late (> " +
@@ -292,9 +284,6 @@ void SafetyCore::check_state(const LowState & state, double now)
         });
       return;
     }
-  }
-  if (!took_control()) {
-    return;
   }
   const auto violation = limit_violation(state);
   if (!violation) {
@@ -460,103 +449,34 @@ void SafetyCore::accept_command(InputState & in, const LowCmd & cmd, double now)
   }
 }
 
-// Engages `in`, whose newest command has just arrived, and with engage_gate every input of
-// the mode, unless refusal() names a reason.
+// Engages `in`, whose newest command has just arrived, unless refusal() names a reason.
 void SafetyCore::try_engage(InputState & in, double now)
 {
-  if (const auto refused = refusal(now)) {
+  if (const auto refused = refusal()) {
     report_refusal(*refused, now);
     return;
   }
-  if (config_.startup.rule == StartupRule::ZeroStream) {
-    in.engaged = true;
-    raise(
-      Event::Info, [&] {
-        return "{\"event\": \"input_engaged\", \"source\": " + json_string(in.source) +
-        ", \"topic\": " + json_string(in.topic) + "}";
-      });
-  } else {
-    for (const Input input : mode_inputs_) {
-      input_state(input).engaged = true;
-    }
-    raise(
-      Event::Info, [&] {
-        return "{\"event\": \"lowcmd_engage\", \"mode\": " +
-        json_string(mode_name(config_.mode)) + "}";
-      });
-  }
+  in.engaged = true;
+  raise(
+    Event::Info, [&] {
+      return "{\"event\": \"input_engaged\", \"source\": " + json_string(in.source) +
+      ", \"topic\": " + json_string(in.topic) + "}";
+    });
   engaged_ = true;
 }
 
-// Why the newest commands cannot engage now, the first reason in this order: no
-// /lowstate; with engage_gate, a /lowstate older than max_state_age_seconds; a newest
-// /lowstate from another robot; with use_estop, no hardware estop sample; and with
-// engage_gate, an input with no command, an input whose newest command is older than its
-// stale time (when that is > 0), a non-finite measured q, or the slot whose command is
-// furthest from the measured q when that is beyond max_position_error.
-std::optional<SafetyCore::Refusal> SafetyCore::refusal(double now) const
+// Why a command cannot engage now, the first reason in this order: no /lowstate, a newest
+// /lowstate from another robot, and with use_estop no hardware estop sample.
+std::optional<SafetyCore::Refusal> SafetyCore::refusal() const
 {
-  const bool gate = config_.startup.rule == StartupRule::EngageGate;
   if (!state_ || !state_time_) {
     return Refusal{Refusal::NoState};
   }
-  const double age = now - *state_time_;
-  if (gate && age > config_.engage.max_state_age_seconds) {
-    Refusal r{Refusal::StateAge};
-    r.value = age;
-    return r;
-  }
   if (state_->mode_machine != profile_.mode_machine) {
-    Refusal r{Refusal::ModeMachine};
-    r.value = state_->mode_machine;
-    return r;
+    return Refusal{Refusal::ModeMachine, state_->mode_machine};
   }
   if (use_estop_ && !estop_sample_time_) {
     return Refusal{Refusal::NoEstopSample};
-  }
-  if (!gate) {
-    return std::nullopt;
-  }
-  for (const Input input : mode_inputs_) {
-    const InputState & in = inputs_[index_of(input)];
-    if (!in.newest) {
-      Refusal r{Refusal::NoCommand};
-      r.input = &in;
-      return r;
-    }
-  }
-  // A controller that sent once and stopped must not be engaged on its last command.
-  for (const Input input : mode_inputs_) {
-    const InputState & in = inputs_[index_of(input)];
-    const double quiet = now - in.newest_time;
-    if (in.stale_seconds > 0.0 && quiet > in.stale_seconds) {
-      Refusal r{Refusal::QuietInput};
-      r.value = quiet;
-      r.input = &in;
-      return r;
-    }
-  }
-  std::optional<Refusal> worst;
-  double worst_error = -1.0;
-  for (const Input input : mode_inputs_) {
-    const InputState & in = inputs_[index_of(input)];
-    for (int slot = in.slots.first; slot <= in.slots.last; ++slot) {
-      const double q = in.newest->motor_cmd[slot].q;
-      const double measured = state_->motor_state[slot].q;
-      const double error = std::abs(q - measured);
-      if (!std::isfinite(error)) {
-        Refusal r{Refusal::StateNotFinite};
-        r.slot = slot;
-        return r;
-      }
-      if (error > worst_error) {
-        worst_error = error;
-        worst = Refusal{Refusal::FarCommand, q, measured, slot, nullptr};
-      }
-    }
-  }
-  if (worst && worst_error > config_.engage.max_position_error) {
-    return worst;
   }
   return std::nullopt;
 }
@@ -567,27 +487,12 @@ std::string SafetyCore::refusal_text(const Refusal & r) const
   switch (r.kind) {
     case Refusal::NoState:
       return "no " + state_topic + " received yet";
-    case Refusal::StateAge:
-      return state_topic + " is " + fixed(r.value, 3) + " s old (> " +
-             python_float(config_.engage.max_state_age_seconds) + " s)";
     case Refusal::ModeMachine:
-      return state_topic + " mode_machine is " + fixed(r.value, 0) + ", expected " +
-             std::to_string(profile_.mode_machine);
+      return state_topic + " mode_machine is " + std::to_string(r.mode_machine) +
+             ", expected " + std::to_string(profile_.mode_machine);
     case Refusal::NoEstopSample:
       return "no hardware estop sample received yet on " + config_.estop.triggered_topic +
              " or " + config_.estop.plugged_in_topic;
-    case Refusal::NoCommand:
-      return "no command received yet on " + r.input->topic;
-    case Refusal::QuietInput:
-      return "no command on " + r.input->topic + " for " + fixed(r.value, 3) + " s (> " +
-             python_float(r.input->stale_seconds) + " s)";
-    case Refusal::StateNotFinite:
-      return joint(r.slot) + " has a non-finite q in " + state_topic;
-    case Refusal::FarCommand:
-      return joint(r.slot) + " command q " + fixed(r.value, 3) + " is " +
-             fixed(std::abs(r.value - r.measured), 3) + " rad from " + state_topic + " q " +
-             fixed(r.measured, 3) + " (> " + python_float(config_.engage.max_position_error) +
-             " rad)";
   }
   return "unknown";
 }
@@ -739,19 +644,13 @@ bool SafetyCore::set_latched(double now, std::optional<double> trigger) noexcept
   return true;
 }
 
-// The estop report, with sorted keys: estop_command_written, or estop_latched_silent when
-// the first step after the latch wrote nothing.
+// The estop report, estop_command_written, with sorted keys.
 std::string SafetyCore::estop_report(const PendingReport & report) const
 {
   const long long decision_ms = ms(report.decision);
   const std::string trigger_ms =
     report.trigger ? std::to_string(ms(*report.trigger)) : std::string("null");
   const std::string reason = json_string(estop_reason());
-  if (!report.written) {
-    return "{\"decision_ms\": " + std::to_string(decision_ms) +
-           ", \"event\": \"estop_latched_silent\", \"reason\": " + reason +
-           ", \"trigger_stamp_ms\": " + trigger_ms + "}";
-  }
   const long long action_ms = ms(report.action);
   std::string text = "{\"action_ms\": " + std::to_string(action_ms) + ", \"decision_ms\": " +
     std::to_string(decision_ms) + ", \"decision_to_action_ms\": " +
@@ -778,21 +677,11 @@ LowCmd SafetyCore::merged() const
   return out;
 }
 
-std::optional<LowCmd> SafetyCore::relay_output()
-{
-  if (!took_control()) {
-    return std::nullopt;
-  }
-  return merged();
-}
-
 std::optional<LowCmd> SafetyCore::estop_output(double now)
 {
   const size_t first_event = events_.size();
   std::optional<LowCmd> out;
-  if (!took_control()) {
-    out = std::nullopt;
-  } else if (config_.estop_response.after == EstopAfter::BurstThenSilence) {
+  if (config_.estop_response.after == EstopAfter::BurstThenSilence) {
     if (burst_written_ < config_.estop_response.burst_count) {
       out = estop_cmd_;
       ++burst_written_;
@@ -806,7 +695,6 @@ std::optional<LowCmd> SafetyCore::estop_output(double now)
   // The report is built by drain_events(), once this step's command is out.
   if (pending_report_ && !pending_report_->acted) {
     pending_report_->acted = true;
-    pending_report_->written = out.has_value();
     pending_report_->action = now;
     pending_report_->event_index = first_event;
   }
@@ -832,7 +720,7 @@ std::optional<LowCmd> SafetyCore::step(double now)
     return finish(estop_output(now));
   }
   report_quiet(now);
-  return finish(relay_output());
+  return finish(merged());
 }
 
 std::optional<LowCmd> SafetyCore::exit_step(double now)

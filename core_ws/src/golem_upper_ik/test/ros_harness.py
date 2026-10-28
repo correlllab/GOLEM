@@ -10,8 +10,8 @@ and the session's robot model, put back at rest after the test (shared_model).
 For the controller's closed loop: a robot that executes the controller's commands as an
 engaged golem_safety would relay them, and relays them itself (FollowingRobot); a robot
 behind golem_safety's output topic (RelayedRobot), with golem_safety's safety_node run as a
-subprocess (SafetyNode) and a walking node on its leg input (WalkingNode); a recorder that
-also notes the robot's measured pose (CommandRecorder); and an action client (send_goal).
+subprocess (SafetyNode); a recorder that also notes the robot's measured pose
+(CommandRecorder); and an action client (send_goal).
 
 Every node lives in the test's context, so they share one DDS participant and discover each
 other at once.
@@ -447,29 +447,6 @@ class RelayedRobot:
     def measured(self):
         with self._lock:
             return self._q.copy()
-
-
-class WalkingNode:
-    '''A walking policy: the legs at q0 on golem_safety's leg input, at 200 Hz from start()'''
-
-    def __init__(self, ros, profile, q0):
-        self.node = ros.node('walking_node')
-        self._msg = LowCmd()
-        self._msg.mode_pr = profile.mode_pr
-        self._msg.mode_machine = profile.mode_machine
-        for slot in profile.lower_slots:
-            motor = self._msg.motor_cmd[slot]
-            motor.mode = 1
-            motor.q = float(q0[slot])
-            motor.kp = 100.0
-            motor.kd = 2.0
-        self._publisher = self.node.create_publisher(LowCmd, '/safety/lowcmd_lower_in',
-                                                     WRITER_QOS)
-        self._loop = _Loop(200.0, lambda: self._publisher.publish(self._msg))
-        ros.on_close(self._loop.stop)
-
-    def start(self):
-        self._loop.start()
 
 
 class CommandRecorder:

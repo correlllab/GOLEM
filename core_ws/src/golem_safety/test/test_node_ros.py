@@ -1,9 +1,8 @@
 '''
 safety_node over ROS on domain 91, against a fake robot: the start-up refusals, the relay,
-the start-up and engage rules, the estop latch, the heartbeat, the hardware estop and the
-exit, each run for the robots whose behavior it pins. Timing is read from the
-node's own publish times (the source timestamps), and assertions on time keep generous
-margins.
+the zero-gain start-up, the estop latch, the heartbeat, the hardware estop and the exit,
+each run for the robots whose behavior it pins. Timing is read from the node's own publish
+times (the source timestamps), and assertions on time keep generous margins.
 '''
 
 import os
@@ -315,9 +314,6 @@ def test_split_relay_end_to_end(stack, robot):
 def test_newest_only_under_load(stack, robot, record_testsuite_property):
     run = stack(robot, SPLIT[robot])
     slot = run.robot.profile.shoulder
-    if robot == 'g1':
-        # the G1's engage gate waits for the leg input too
-        run.robot.stream((run.robot.publisher(LOWER), run.robot.command(knee=KNEE_Q)))
     pub = run.robot.publisher(UPPER)
     cmd = run.robot.command(shoulder=SHOULDER_Q)
     # engage on the measured pose first
@@ -370,7 +366,7 @@ def test_every_output_carries_the_crc(stack, robot):
         assert msg.crc == msg_crc(msg)
 
 
-# start-up rules
+# start-up
 
 @pytest.mark.parametrize('first', ['lower', 'upper'])
 def test_zero_stream_engages_each_input_on_its_own(stack, first):
@@ -400,25 +396,22 @@ def test_zero_stream_engages_each_input_on_its_own(stack, first):
         'split_mode_lower', 'split_mode_upper']
 
 
-@pytest.mark.parametrize('first', ['lower', 'upper'])
-def test_split_mode_is_silent_until_both_inputs_have_sent(stack, first):
-    run = stack('g1', 'split')
-    (lower_pub, lower), (upper_pub, upper) = input_pairs(run)
-    time.sleep(0.2)
-    assert run.outputs() == [], 'must not publish the zero command'
-    alone = (lower_pub, lower) if first == 'lower' else (upper_pub, upper)
-    run.robot.publish_for(0.3, alone)
-    assert run.outputs() == [], f'must stay silent with only the {first} input'
-    missing = UPPER if first == 'lower' else LOWER
-    assert f'no command received yet on {missing}' in reasons(run.node, 'engage_refused')
-
-    run.robot.publish_for(0.3, (lower_pub, lower), (upper_pub, upper))
-    time.sleep(0.05)
-    published = [msg for _, msg in run.outputs()]
-    assert published, 'must publish once both inputs have sent'
-    for msg in published:
-        assert (msg.mode_pr, msg.mode_machine) == (0, 5) and carries(msg, run)
-    assert run.node.events('lowcmd_engage') == [{'event': 'lowcmd_engage', 'mode': 'split_mode'}]
+def test_g1_streams_lowcmd_from_boot(stack):
+    # no input and no /lowstate: the zero-gain stream on every slot at the relay rate,
+    # stamped for the G1, and no heartbeat, since the relay cannot begin
+    run = stack('g1', 'split', stream_state=False)
+    time.sleep(0.3)
+    start = time.time()
+    time.sleep(1.0)
+    end = time.time()
+    window = [msg for t, msg in run.outputs(since=start) if t < end]
+    hz = len(window) / (end - start)
+    assert 450.0 <= hz <= 520.0, f'{hz:.0f} Hz'
+    for msg in window:
+        assert is_zeroed(msg, len(msg.motor_cmd))
+        assert (msg.mode_pr, msg.mode_machine) == (0, 5) and msg.crc == msg_crc(msg)
+    assert run.robot.outputs(HEARTBEAT) == []
+    assert run.node.events('input_engaged') == [] and estop_events(run.node) == []
 
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
@@ -432,10 +425,7 @@ def test_full_body_mode_clips_gains_and_holds_a_quiet_input(stack, robot):
     cmd.motor_cmd[KNEE].kd = kd_max + 10.0
     time.sleep(0.2)
     before = [msg for _, msg in run.outputs()]
-    if robot == 'g1':
-        assert before == [], 'the engage gate writes nothing before the first command'
-    else:
-        assert before and all(is_zeroed(msg, joints) for msg in before)
+    assert before and all(is_zeroed(msg, joints) for msg in before)
 
     last = run.robot.publish_for(0.3, (pub, cmd))
     stale = run.config['stale']['lower_seconds']
@@ -459,11 +449,7 @@ def test_full_body_mode_clips_gains_and_holds_a_quiet_input(stack, robot):
         (joint, 'kp', kp_max + 100.0, kp_max, 'full_body_mode'),
         (joint, 'kd', kd_max + 10.0, kd_max, 'full_body_mode')]
     assert [level for level, _, _ in run.node.timed_events('gain_clipped')] == ['WARN', 'WARN']
-    if robot == 'g1':
-        assert run.node.events('lowcmd_engage') == [
-            {'event': 'lowcmd_engage', 'mode': 'full_body_mode'}]
-    else:
-        assert [e['source'] for e in run.node.events('input_engaged')] == ['full_body_mode']
+    assert [e['source'] for e in run.node.events('input_engaged')] == ['full_body_mode']
     (level, _, quiet_event), = run.node.timed_events('input_quiet')
     assert level == 'WARN' and quiet_event['seconds'] == stale
     assert quiet_event['source'] == 'full_body_mode' and quiet_event['topic'] == FULL_IN
@@ -536,52 +522,6 @@ def test_quiet_lowstate_is_held_and_reported(stack, robot, config):
     assert estop_events(run.node) == []
 
 
-# the engage gate
-
-def test_the_engage_gate_needs_fresh_state_its_mode_machine_and_close_commands(stack):
-    run = stack('g1', 'split', stream_state=False)
-    robot = run.robot
-    (lower_pub, lower), (upper_pub, upper) = input_pairs(run)
-    good = [(lower_pub, lower), (upper_pub, upper)]
-    far = [(lower_pub, robot.command(knee=KNEE_Q + 0.3)),
-           (upper_pub, robot.command(shoulder=SHOULDER_Q + 0.3))]
-    # each phase outlasts the once-a-second refusal report. The gate takes each input's
-    # newest command, so the far commands start while the robot's mode_machine is foreign:
-    # a far command never meets the other input's earlier good one
-    robot.publish_for(1.2, *good)
-    robot.state.mode_machine = 6
-    robot.resume()
-    time.sleep(0.1)
-    robot.publish_for(1.2, *far)
-    robot.state.mode_machine = 5
-    time.sleep(0.1)
-    robot.publish_for(1.2, *far)
-    robot.pause()
-    time.sleep(0.2)
-    robot.publish_for(1.2, *good)
-    assert run.outputs() == [], 'must stay silent until the gate passes'
-
-    robot.resume()
-    time.sleep(0.1)
-    robot.publish_for(SETTLE, *good)
-    time.sleep(0.05)
-    phases = []
-    for reason in reasons(run.node, 'engage_refused'):
-        if reason.startswith('/lowstate is ') and reason.endswith(' s old (> 0.1 s)'):
-            reason = 'stale'
-        if not phases or phases[-1] != reason:
-            phases.append(reason)
-    assert phases == [
-        'no /lowstate received yet',
-        '/lowstate mode_machine is 6, expected 5',
-        'motor 3 (left_knee_joint) command q 0.800 is 0.300 rad from /lowstate q 0.500 '
-        '(> 0.15 rad)',
-        'stale',
-    ]
-    assert run.outputs() and all(carries(msg, run) for _, msg in run.outputs())
-    assert run.node.events('lowcmd_engage') == [{'event': 'lowcmd_engage', 'mode': 'split_mode'}]
-
-
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_engage_refusals_are_logged_at_most_once_a_second(stack, robot):
     run = stack(robot, 'split' if robot == 'g1' else 'sim_safety_split')
@@ -599,29 +539,8 @@ def test_engage_refusals_are_logged_at_most_once_a_second(stack, robot):
     assert {e['reason'] for _, _, e in refused} == {
         f'/lowstate mode_machine is {foreign}, expected {expected}'}
     joints = len(run.robot.profile.joints)
-    if robot == 'g1':
-        assert run.outputs() == []
-    else:
-        assert all(is_zeroed(msg, joints) for _, msg in run.outputs())
-
-
-@pytest.mark.parametrize('config', ['split', 'full'])
-def test_lowcmd_modes_engage_only_with_every_slot_close_to_lowstate(stack, config):
-    run = stack('g1', config)
-    far = input_pairs(run, knee=KNEE_Q + 0.3)
-    # longer than the once-a-second refusal report
-    run.robot.publish_for(1.2, *far)
-    assert run.outputs() == [], 'a leg 0.3 rad from /lowstate must not engage'
-    refused = reasons(run.node, 'engage_refused')
-    # each input's own slots are the ones checked: one command fits both inputs
-    good = [(pub, run.robot.command(knee=KNEE_Q, shoulder=SHOULDER_Q)) for pub, _ in far]
-    run.robot.publish_for(0.3, *good)
-    time.sleep(0.05)
-    published = [msg for _, msg in run.outputs()]
-    assert ('motor 3 (left_knee_joint) command q 0.800 is 0.300 rad from /lowstate q 0.500 '
-            '(> 0.15 rad)') in refused, refused
-    assert published and all(carries(msg, run) for msg in published)
-    assert len(run.node.events('lowcmd_engage')) == 1
+    published = run.outputs()
+    assert published and all(is_zeroed(msg, joints) for _, msg in published)
 
 
 # the estop latch
@@ -631,10 +550,7 @@ def test_an_estop_before_engaging(stack, robot):
     run = stack(robot, 'split' if robot == 'g1' else 'sim_safety_split')
     joints = len(run.robot.profile.joints)
     (lower_pub, lower), (upper_pub, upper) = input_pairs(run)
-    if robot == 'g1':
-        # the lower input alone first: split_mode on the G1 cannot engage without the upper
-        run.robot.publish_for(0.1, (lower_pub, lower))
-    # the H1-2 engages an input on its first valid command: the NaN comes first
+    # an input engages on its first valid command: the NaN comes first
     bad = run.robot.command(knee=float('nan'))
     sent = time.time()
     lower_pub.publish(bad)
@@ -643,19 +559,17 @@ def test_an_estop_before_engaging(stack, robot):
     run.robot.publish_for(0.3, (lower_pub, lower), (upper_pub, upper))
     time.sleep(0.3)
     reason_prefix = 'Command validation failed on /safety/lowcmd_lower_in: motor 3'
+    # the zero stream, then the estop command: the H1-2's burst of 50 and then silence, the
+    # G1's every cycle
+    published = run.outputs()
+    assert published and all(is_zeroed(msg, joints) for _, msg in published)
     if robot == 'g1':
-        assert run.outputs() == [], 'never took control, so the estop writes nothing either'
-        assert run.node.events('lowcmd_engage') == []
-        assert reasons(run.node) == []
-        (reason,) = reasons(run.node, 'estop_latched_silent')
+        assert published[-1][0] > time.time() - 0.1, 'keep_writing'
     else:
-        # the zero stream, then the burst of 50 zero commands, then silence
-        published = run.outputs()
-        assert published and all(is_zeroed(msg, joints) for _, msg in published)
         assert 50 <= len(run.outputs(since=sent)) <= 53
         assert published[-1][0] < time.time() - 0.2
-        assert run.node.events('input_engaged') == []
-        (reason,) = reasons(run.node)
+    assert run.node.events('input_engaged') == []
+    (reason,) = reasons(run.node)
     assert reason.startswith(reason_prefix), reason
     assert run.robot.outputs(HEARTBEAT)[-1][1] is False
 
@@ -710,23 +624,16 @@ def test_state_limits(stack, robot, config):
         assert reason.startswith('motor 3 (left_knee_joint) q out of estop range: -0.32 (limit')
         return
 
-    time.sleep(0.2)
-    # engage_gate checks from engagement: bring the knee back first
-    run.robot.state.motor_state[KNEE].q = KNEE_Q
-    time.sleep(0.1)
-    pairs = input_pairs(run)
-    run.robot.stream(*pairs)
-    time.sleep(SETTLE)
-    assert estop_events(run.node) == [], 'a state past its limit before engaging must not latch'
-    run.robot.state.motor_state[KNEE].q = past_limit
-    time.sleep(0.2)
+    # the G1 checks every slot from the first /lowstate too, and keeps writing the estop
+    # command, every motor off
+    time.sleep(0.3)
     published = run.outputs()
-    idx = next(i for i, (_, msg) in enumerate(published) if is_zeroed(msg, joints))
-    assert idx > 0 and all(carries(msg, run) for _, msg in published[:idx])
-    assert all(is_zeroed(msg, joints) for _, msg in published[idx:])
+    assert published and all(is_zeroed(msg, joints) for _, msg in published)
+    assert published[-1][0] > time.time() - 0.1, 'keep_writing'
     assert [e['event'] for e in estop_events(run.node)] == ['estop_command_written']
     (reason,) = reasons(run.node)
-    assert reason.startswith('motor 3 (left_knee_joint) q out of estop range')
+    assert reason.startswith('motor 3 (left_knee_joint) q out of estop range: '), reason
+    assert run.node.events('input_engaged') == []
 
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
@@ -792,19 +699,19 @@ def test_a_second_writer_on_the_lower_input_before_engaging(stack, robot):
     joints = len(run.robot.profile.joints)
     (lower_pub, lower), (upper_pub, upper) = input_pairs(run)
     second = run.robot.publisher(LOWER)
-    # the lower input alone first: split_mode on the G1 cannot engage without the upper
+    # the lower input alone first, which engages on its first command
     run.robot.publish_for(0.2, (lower_pub, lower), (second, lower))
     run.robot.publish_for(0.3, (lower_pub, lower), (upper_pub, upper))
     time.sleep(0.2)
+    # the upper input never engaged; then the estop command: the H1-2's burst and then
+    # silence, the G1's every cycle
+    assert all(not carries(msg, run) for _, msg in run.outputs())
+    assert is_zeroed(run.outputs()[-1][1], joints)
     if robot == 'g1':
-        assert run.outputs() == [], 'latched before engaging: nothing may be written'
-        (reason,) = reasons(run.node, 'estop_latched_silent')
+        assert run.outputs()[-1][0] > time.time() - 0.1, 'keep_writing'
     else:
-        # the H1-2 engaged the lower input on its first command: the burst, then silence
-        assert all(not carries(msg, run) for _, msg in run.outputs())
-        assert is_zeroed(run.outputs()[-1][1], joints)
         assert run.outputs()[-1][0] < time.time() - 0.1
-        (reason,) = reasons(run.node)
+    (reason,) = reasons(run.node)
     assert reason.startswith(f'second writer on {LOWER}: '), reason
 
 
@@ -867,8 +774,7 @@ def test_heartbeat_false_after_a_latch_before_the_first_beat(stack, robot, latch
         run.robot.estop_values = (True, True)
         reason_prefix = 'External estop triggered'
     time.sleep(1.2)
-    (report,) = [e for e in estop_events(run.node) if e['event'] in (
-        'estop_command_written', 'estop_latched_silent')]
+    (report,) = run.node.events('estop_command_written')
     assert report['reason'].startswith(reason_prefix), report
     beats = run.robot.outputs(HEARTBEAT)
     assert beats and not any(beat for _, beat in beats)
@@ -887,8 +793,6 @@ def test_estop_topics_gate_engagement(stack, robot):
 
     def not_engaged() -> bool:
         published = run.outputs()
-        if robot == 'g1':
-            return published == []
         return bool(published) and all(is_zeroed(msg, joints) for _, msg in published)
 
     assert not_engaged()
@@ -920,16 +824,14 @@ def test_estop_first_sample_latches(stack, robot, values, reason):
     run.robot.estop_values = values
     time.sleep(0.5)
     published = run.outputs()
+    joints = len(run.robot.profile.joints)
+    assert published and all(is_zeroed(msg, joints) for _, msg in published)
     if robot == 'g1':
-        # the engage gate never opened: nothing was written, before or after the latch
-        assert published == []
-        (report,) = run.node.events('estop_latched_silent')
+        assert published[-1][0] > time.time() - 0.1, 'keep_writing'
     else:
-        joints = len(run.robot.profile.joints)
-        assert published and all(is_zeroed(msg, joints) for _, msg in published)
         assert published[-1][0] < time.time() - 0.2, 'the burst, then silence'
-        (report,) = run.node.events('estop_command_written')
-        assert 'trigger_to_action_ms' in report
+    (report,) = run.node.events('estop_command_written')
+    assert 'trigger_to_action_ms' in report
     assert report['reason'] == reason and report['trigger_stamp_ms'] is not None
     assert run.robot.outputs(HEARTBEAT)[-1][1] is False
 
@@ -988,8 +890,11 @@ def test_sigint_split_stops_publishing(stack, robot, config):
     assert estop_events(run.node) == []
 
 
-def test_an_exit_before_engaging_writes_nothing(stack):
-    run = stack('g1', 'split')
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_an_exit_before_engaging_stops_the_zero_stream_at_once(stack, robot):
+    run = stack(robot, SPLIT[robot])
+    joints = len(run.robot.profile.joints)
+    time.sleep(0.2)
     sent = time.time()
     run.node.proc.send_signal(signal.SIGTERM)
     code = run.node.wait_exit(5.0)
@@ -997,7 +902,9 @@ def test_an_exit_before_engaging_writes_nothing(stack):
     time.sleep(0.1)
     assert code == 0, run.node.output()
     assert elapsed < 1.5
-    assert run.outputs() == []
+    published = run.outputs()
+    assert published and all(is_zeroed(msg, joints) for _, msg in published)
+    assert run.outputs(since=sent + 0.05) == []
     assert run.node.events('exit_requested') == [
         {'event': 'exit_requested', 'reason': 'Exit requested (SIGTERM)'}]
     assert estop_events(run.node) == []

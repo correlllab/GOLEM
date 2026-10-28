@@ -10,11 +10,11 @@ Simulated G1: the same core stack on DDS domain 1 with sim time and the sim conf
         frontier_explore:=true   # also serves /skill/frontier_explore
 
 The G1 RoboCasa sim (golem_robocasa/g1/) takes rt/lowcmd and rt/dex3/*.
-golem_safety runs sim_split and the controller sim_split: split mode engages
-only once the walking node commands too, so without use_locomotion:=true
-golem_safety writes nothing and the controller stops after 30 s. g1_core
-refuses the real robot's configs here (split, g1_split); the sim configs keep
-the faster arm speeds (1 rad/s, 0.5 m/s).
+golem_safety runs sim_split and the controller sim_split: golem_safety streams
+zero gains on every motor from boot and engages each input on its own first
+command, so without use_locomotion:=true the arms run and the leg motors stay
+off. g1_core refuses the real robot's configs here (split, g1_split); the sim
+configs keep the faster arm speeds (1 rad/s, 0.5 m/s).
 
 use_nav:=true (with use_locomotion:=true) adds g1_navigation on the sim's
 MID-360 (/livox/lidar, /livox/imu), with sim time and g1_fastlio_sim.yaml, and

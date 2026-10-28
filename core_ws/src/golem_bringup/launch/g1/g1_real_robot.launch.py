@@ -6,9 +6,9 @@ Real G1, with the whole ROS stack running on the laptop wired to the robot.
 
 golem_safety runs split.yaml: it writes every motor on rt/lowcmd, the legs
 from the walking node's input and the waist and arms from the arm controller's
-(g1_split.yaml). Split mode engages only once both command, so without
-use_locomotion:=true (below) golem_safety writes nothing and the controller
-stops after 30 s.
+(g1_split.yaml). From boot it streams zero gains on every motor and engages
+each input on its own first command, so without use_locomotion:=true (below)
+the arms run and the leg motors stay off.
 
 Before launching:
 - ROS_DOMAIN_ID=0 (the robot's DDS domain) and G1_DDS_INTERFACE set to the
@@ -50,10 +50,9 @@ Walking with HOMIE's policy on the legs:
     ros2 launch golem_bringup g1_real_robot.launch.py \
         use_locomotion:=true start_position_verified:=true
 
-- Split mode engages only once the walking node commands too; until then the
-  controller's follow gate keeps the arm and waist commands within 0.05 rad of
-  wherever the robot hangs, and the move to home starts when the controller
-  sees golem_safety's first rt/lowcmd.
+- golem_safety engages the leg input on the walking node's first command, on
+  its own: the arms engage on the controller's first command, and the move to
+  home starts once the controller sees golem_safety relay it on rt/lowcmd.
 - Set start_position_verified:=true only after checking the robot is in a safe
   start pose; without it the launch refuses to start.
 - The walking node waits for upright rt/lowstate and the arm controller's

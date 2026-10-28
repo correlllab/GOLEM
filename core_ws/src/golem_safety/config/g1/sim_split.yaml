@@ -2,11 +2,13 @@
 # controller, waist + arms (12-28) from the upper-body controller, merged here.
 # Unitree's controller must be released first (motion_switcher); on estop every
 # motor is zeroed or damped (see estop_response).
-# Nothing is published until both inputs have sent a command and the merged
-# command passes the engage gate (below), and /lowstate is checked only from
-# then on. Each input's quiet time starts at its own first command: an input
-# quiet for its stale time, or, once engaged, /lowstate for stale.state_seconds,
-# is reported while its last command keeps being relayed.
+# From boot the layer streams zero gains on every motor (mode 0, every value 0:
+# every motor off) and checks every /lowstate against the estop limits. Each
+# input's slots carry its commands from its own first valid command once
+# /lowstate reports the G1's mode_machine (5): the arms run without the legs,
+# whose motors stay off until the lower-body controller commands. Once an input
+# has engaged, it is reported when quiet for its stale time, or /lowstate for
+# stale.state_seconds, while its last command keeps being relayed.
 # Estop limits are relaxed so sim contact spikes do not latch it.
 mode: split_mode
 
@@ -34,18 +36,6 @@ stale:
   lower_seconds: 1.0
   # longest gap on /lowstate, relaxed the same way
   state_seconds: 1.0
-
-# The engage gate: start only when /lowstate is fresh (relaxed like the stale
-# times: the sim can run slower than real time), reports the profile's
-# mode_machine (5, as the sim's G1 does), and the command is within
-# max_position_error of the measured q.
-startup:
-  rule: engage_gate
-
-engage:
-  max_state_age_seconds: 1.0
-  # rad
-  max_position_error: 0.15
 
 # The estop command on /lowcmd. zero: every motor off, so the robot drops and
 # must be supported (e.g. on a gantry). damp: every motor stays enabled with

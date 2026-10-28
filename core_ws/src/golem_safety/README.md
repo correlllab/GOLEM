@@ -92,14 +92,13 @@ Both robots' `LowCmd`/`LowState` motor arrays hold 35 slots.
 
 What the robots' configs share:
 
-- **H1-2:** `startup.rule: zero_stream`; `estop_response` `zero`, `burst_then_silence`, 50
-  commands; `control.state_lag_ms: 100`; `stale.lower_seconds` 0.2 and `state_seconds` 0.1;
+- **H1-2:** `estop_response` `zero`, `burst_then_silence`, 50 commands;
+  `control.state_lag_ms: 100`; `stale.lower_seconds` 0.2 and `state_seconds` 0.1;
   `stale.upper_seconds` 2.0 in `default_safety_split` and `tight_safety_split`, 0 (off) in
   `relax_safety_split` and `sim_safety_split`; logging off.
-- **G1:** `startup.rule: engage_gate`; `estop_response` `zero`, `keep_writing`;
-  `control.state_lag_ms: 0` (off: the real G1's tick has not been measured); logging on, to
-  `/tmp/golem_safety`. `sim_split` relaxes the stale times, the engage gate's state age and
-  the estop limits, since the sim can run slower than real time.
+- **G1:** `estop_response` `zero`, `keep_writing`; `control.state_lag_ms: 0` (off: the real
+  G1's tick has not been measured); logging on, to `/tmp/golem_safety`. `sim_split` relaxes
+  the stale times and the estop limits, since the sim can run slower than real time.
 
 Each safety config runs with one `golem_upper_ik` controller config; the bringups refuse
 another pair (`golem_upper_ik.pairing`).
@@ -116,8 +115,6 @@ another pair (`golem_upper_ik.pairing`).
 | `control.state_lag_ms` | required | the transport-lag estop, ms; on ROS domain 0 only; <= 0 turns it off |
 | `stale.upper_seconds`, `lower_seconds`, `state_seconds` | 0, 0.2, 0.1 | quiet times of the upper input, the lower or full input and `/lowstate`, s; <= 0 turns the report off |
 | `single_writer.handover_seconds` | 0.5 | how long the current writer must be quiet before another is accepted, s |
-| `startup.rule` | required | `zero_stream` or `engage_gate` |
-| `engage.max_state_age_seconds`, `max_position_error` | 0.1, 0.15 | the engage gate's `/lowstate` age (s) and command distance (rad) |
 | `estop.triggered_topic`, `plugged_in_topic` | `/estop/triggered`, `/estop/plugged_in` | the hardware estop's topics |
 | `estop.timeout_seconds` | 0.5 | the oldest a hardware estop sample may be, s |
 | `estop_response.mode` | `zero` | `zero`: every motor off (mode 0, every value 0); `damp`: every body motor on with kp 0 and `kd` |
@@ -136,7 +133,7 @@ the range), |dq| up to velocity limit x `velocity_ratio`, |tau| up to effort lim
 `lib/golem_safety`) prints every derived and parsed value as JSON.
 
 The loader refuses, naming the robot, the file and the key: an unknown key at any level; a
-key of an older schema (`network`, `robot`, `engage.mode_machine`, `estop.enabled`, ...),
+key of an older schema (`network`, `robot`, `startup`, `engage`, `estop.enabled`, ...),
 saying why it was removed or which key replaces it; a non-finite or out-of-range number; a
 list whose length is not the profile's joint count; an alias given with the key it aliases;
 a missing required key.
@@ -161,28 +158,17 @@ the input's own or not; any other command latches the estop. A valid command is 
 its input's slots: q, dq and tau to `limits.clip`, kp and kd to [0, `kp_max`] and [0,
 `kd_max`]. A gain above its maximum raises `gain_clipped` (Warn) once per joint and gain.
 
-**Start-up** (`startup.rule`):
-
-- `zero_stream` (the H1-2): from boot the layer streams `zero_command` on every slot. Each
-  input engages on its own first valid command that arrives once the newest `/lowstate`
-  reports the profile's `mode_machine` (and, with `use_estop`, a first hardware estop sample
-  has arrived); its slots carry its commands from then on (`input_engaged`). The slots of an
-  input that has not engaged stay at zero gain: the real H1-2 runs arms-only until the leg
-  node starts. The `/lowstate` limit checks run from boot.
-- `engage_gate` (the G1): nothing is written until every input of the mode engages at once,
-  on a valid command that finds a `/lowstate` no older than `engage.max_state_age_seconds`
-  reporting the profile's `mode_machine`, every input with a command no older than its stale
-  time, and each command's q within `engage.max_position_error` of the measured q on every
-  slot of the mode (`lowcmd_engage`). In `split_mode` that is both inputs: the G1 sim's
-  stand-in lets go on the first valid `/lowcmd`, so the arms alone must not engage. The
-  `/lowstate` limit checks start at engagement.
+**Start-up**, the same on both robots (no config key chooses it): from boot the layer
+streams `zero_command` on every slot, so every motor is off. Each input engages on its own
+first valid command that arrives once the newest `/lowstate` reports the profile's
+`mode_machine` (and, with `use_estop`, a first hardware estop sample has arrived); its slots
+carry its commands from then on (`input_engaged`). The slots of an input that has not
+engaged stay at zero gain: in split mode the robot runs arms-only, with its leg motors off,
+until the leg node commands. The `/lowstate` limit checks run from boot.
 
 A command that cannot engage raises `engage_refused` (Warn) with the first reason, at most
-once a second, for example `no /lowstate received yet`, `/lowstate mode_machine is 0,
-expected 6`, `no hardware estop sample received yet on /estop/triggered or
-/estop/plugged_in`, `no command received yet on /safety/lowcmd_lower_in` or `motor 15
-(left_shoulder_pitch_joint) command q 0.400 is 0.300 rad from /lowstate q 0.100 (> 0.15
-rad)`.
+once a second: `no /lowstate received yet`, `/lowstate mode_machine is 0, expected 6`, or
+`no hardware estop sample received yet on /estop/triggered or /estop/plugged_in`.
 
 **Robot identity.** Every `/lowstate` is checked against the profile's `mode_machine`. Before
 engaging, another value only refuses (another robot or sim delays engaging); once engaged, it
@@ -195,8 +181,7 @@ its commands longer than its stale time (`stale.upper_seconds` for the upper inp
 `stale.lower_seconds` for the lower and full inputs) raises `input_quiet` (Warn) while its
 last command keeps being relayed, and its next command raises `input_resumed` (Info). Once
 engaged, a `/lowstate` gap longer than `stale.state_seconds` raises `state_quiet` and the
-relay keeps running; the next sample raises `state_resumed`. Neither latches. With
-`engage_gate`, an input quiet for longer than its stale time also keeps the gate shut. So:
+relay keeps running; the next sample raises `state_resumed`. Neither latches. So:
 
 - a controller that dies, or a walking node that faults and goes silent, leaves its last
   command in force until the bringup stops. On the G1 in split mode the legs stay on a
@@ -238,13 +223,12 @@ latch:
 
 - `burst_then_silence` (the H1-2): `burst_count` estop commands, then no output until
   restart;
-- `keep_writing` (the G1): the estop command every cycle;
-- with `engage_gate`, a latch before engaging writes nothing.
+- `keep_writing` (the G1): the estop command every cycle.
 
-The estop report (Error) is `estop_command_written`, or `estop_latched_silent` when nothing
-was written: the reason, `decision_ms` (the latch), `action_ms` (the first step after it)
-and, for the hardware estop, `trigger_stamp_ms`, all on the boot-time clock. The heartbeat
-turns false, or starts false when the relay was not ready yet.
+The estop report (Error) is `estop_command_written`: the reason, `decision_ms` (the latch),
+`action_ms` (the first step after it) and, for the hardware estop, `trigger_stamp_ms`, all on
+the boot-time clock. The heartbeat turns false, or starts false when the relay was not ready
+yet.
 
 **Exit** (SIGINT, SIGTERM, SIGHUP; `main()` takes them, and a closed stderr cannot stop the
 exit). The layer stops publishing at once; an estop burst in progress is finished first, and
@@ -258,9 +242,9 @@ Every event goes to the node's ROS logger at its level, from a thread of its own
 stderr cannot stall the relay): `[INFO] [<time>] [safety_node]: <event>`, and `/rosout`.
 Most events are one JSON object with sorted keys after the `]: `: `relay_started` (the
 robot, the config file, the mode, `sim`, `use_estop` and the log directory),
-`engage_refused`, `input_engaged`, `lowcmd_engage`, `input_quiet`, `input_resumed`,
-`state_quiet`, `state_resumed`, `gain_clipped`, `estop_command_written`,
-`estop_latched_silent`, `exit_requested`, `exit_hand_back_timeout` and `relay_stopped`.
+`engage_refused`, `input_engaged`, `input_quiet`, `input_resumed`, `state_quiet`,
+`state_resumed`, `gain_clipped`, `estop_command_written`, `exit_requested`,
+`exit_hand_back_timeout` and `relay_stopped`.
 
 With `logging.enabled`, each run logs to its own directory,
 `<logging.base_dir>/<YYYYmmdd-HHMMSS>-<pid>/`, in chunks of 1000 samples
@@ -283,7 +267,7 @@ docker/scripts/docker_run.sh ros --restart --g1 /home/code/h12_sim_scripts/launc
 ```
 
 - gtests: `SafetyCore` (`test_safety_core_relay`, `test_safety_core_startup`: the relay,
-  clipping, identity, single writer, quiet inputs, the start-up rules, the hardware estop,
+  clipping, identity, single writer, quiet inputs, the start-up, the hardware estop,
   the latch responses, exit), the config loader (`test_config`), the profile loader, the
   `LowCmd` builders and CRC (`test_lowcmd`, against SDK-computed values), the chunk logger
   and the boot clock.

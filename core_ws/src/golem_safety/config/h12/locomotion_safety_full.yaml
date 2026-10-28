@@ -23,11 +23,6 @@ stale:
   lower_seconds: 0.2
   state_seconds: 0.1
 
-# zero_stream: from boot, zero-gain commands on every slot; an input's slots carry
-# its commands from its first command.
-startup:
-  rule: zero_stream
-
 # On estop the layer streams burst_count zero-gain commands and then stops
 # publishing.
 estop_response:

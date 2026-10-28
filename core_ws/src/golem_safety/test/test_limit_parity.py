@@ -100,25 +100,23 @@ def test_scalars_match_old_loaders(case):
     assert new['control']['state_lag_ms'] == (
         old['state_lag_ms'] if old['state_lag_ms'] is not None else 0.0)
 
-    # The H1-2 streams zeros and then goes silent; the G1 waits for the engage gate and keeps
-    # writing its estop command.
+    # Both robots stream zero gains from boot, a start-up the loader no longer configures.
+    # After an estop the H1-2 writes its burst and goes silent; the G1 keeps writing its
+    # estop command.
+    assert 'startup' not in new and 'engage' not in new
     if robot == 'h12':
-        assert new['startup']['rule'] == 'zero_stream'
         assert new['estop_response']['after'] == 'burst_then_silence'
         assert new['estop_response']['burst_count'] == 50
         assert new['estop_response']['mode'] == 'zero'
         assert new['estop_response']['kd'] == [0.0] * JOINTS[robot]
         assert old['engage'] is None
     else:
-        assert new['startup']['rule'] == 'engage_gate'
         assert new['estop_response']['after'] == 'keep_writing'
         assert new['estop_response']['mode'] == old['estop_response']['mode']
         kd = old['estop_response']['kd']
         assert new['estop_response']['kd'] == (kd if kd is not None else [0.0] * JOINTS[robot])
-        # engage.mode_machine moved to the profile, and must be what it was.
+        # the old engage.mode_machine is the profile's
         assert old['engage']['mode_machine'] == MODE_MACHINE[robot]
-        for key in ('max_state_age_seconds', 'max_position_error'):
-            assert new['engage'][key] == old['engage'][key], key
 
 
 def test_every_installed_config_has_a_fixture():

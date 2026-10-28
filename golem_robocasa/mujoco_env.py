@@ -1,9 +1,10 @@
-"""Elastic-band balance tether used by the sim runner (h12_mujoco.sim_loop).
+"""Elastic-band balance tether used by both robots' sim runners
+(h12_mujoco.sim_loop, g1.g1_mujoco.sim_loop).
 
 A vertical spring-damper that pulls a body (the torso) toward a fixed anchor
 point above its spawn, holding the free-floating biped upright until the ROS
 walking policy takes over. Toggle with SPACE in the viewer or the
-/elastic_band/toggle service.
+/elastic_band/toggle service; draw_band draws it in the viewer.
 
 Optionally (rot_stiffness > 0) it also holds the body's orientation at
 `orientation` with a rotational spring-damper, which makes the tether a rigid
@@ -75,3 +76,21 @@ class ElasticBand:
     def print_instructions(self):
         print('Elastic Band Controls:')
         print('  SPACE - Toggle elastic band on/off')
+
+
+def draw_band(handle, anchor, body_pos):
+    """Draw the elastic band (anchor sphere + capsule to the torso at body_pos) in
+    the passive viewer's user scene, replacing whatever the scene held."""
+    scn = handle.user_scn
+    scn.ngeom = 0
+    color = np.array([0.5, 0.6, 1.0, 0.8])
+    if scn.ngeom < scn.maxgeom:
+        mujoco.mjv_initGeom(scn.geoms[scn.ngeom], mujoco.mjtGeom.mjGEOM_SPHERE,
+                            np.array([0.02, 0.0, 0.0]), anchor, np.eye(3).flatten(), color)
+        scn.ngeom += 1
+    if scn.ngeom < scn.maxgeom:
+        mujoco.mjv_initGeom(scn.geoms[scn.ngeom], mujoco.mjtGeom.mjGEOM_CAPSULE,
+                            np.zeros(3), np.zeros(3), np.eye(3).flatten(), color)
+        mujoco.mjv_connector(scn.geoms[scn.ngeom], mujoco.mjtGeom.mjGEOM_CAPSULE,
+                             0.01, anchor, body_pos)
+        scn.ngeom += 1

@@ -1,33 +1,24 @@
-"""Unitree DDS for the simulated G1: the topics the robot's own computers serve.
+"""Unitree DDS for the simulated G1: the topics the robot's own computers serve
+in Unitree's debug mode, where nothing but rt/lowcmd drives the body.
 
   rt/lowstate           published after every physics step (500 Hz sim time)
-  rt/lowcmd             subscribed; the first valid frame releases the stand-in for good
-  rt/arm_sdk            subscribed while the stand-in runs; weight slot 29 blends slots 12-28
+  rt/lowcmd             subscribed; PD on the 29 body motors
   rt/dex3/<side>/cmd    subscribed; PD on the hand's 7 motors
   rt/dex3/<side>/state  published at 100 Hz sim time
 
-Until the first valid rt/lowcmd frame, the stand-in for Unitree's controller
-(stand_in.StandIn) drives the 29 body motors: HOMIE on the legs, the waist and
-arms held at 0. rt/arm_sdk shares the waist and arms with it, as on the real
-robot: with w = motor_cmd[29].q clipped to [0, 1], tau = w * PD(rt/arm_sdk) +
-(1 - w) * the hold. The first rt/lowcmd frame with a valid CRC, mode_machine 5
-and mode_pr 0 emulates releasing Unitree's controller: from then on rt/lowcmd
-drives every body motor and rt/arm_sdk is ignored.
+Every motor is off (zero torque) until the first rt/lowcmd frame with a valid
+CRC, mode_machine 5 and mode_pr 0; from then on rt/lowcmd drives every body
+motor, and motor mode 0 turns one off. A hand's motors are off until its first
+rt/dex3/<side>/cmd. Until a command drives it the robot hangs from the sim's
+elastic band (g1_mujoco), as the H1-2 does in its sim.
 
 Every torque is recomputed every physics step from the latched commands and the
 current state (write_ctrl), which emulates the motors' own servo loop, and is
-limited to the joint's actuatorfrcrange. Timeouts are in sim time, so a sim
-running slower than real time does not trip them:
-  - rt/arm_sdk silent for GOLEM_ARM_SDK_TIMEOUT (0.5 s): its weight falls to 0 at
-    1/ARM_SDK_RELEASE_S per second, handing the waist and arms back to the
-    stand-in, and when frames return it rises back at the same rate until it
-    meets theirs, so neither direction is a step change. This is also an
-    assumption: what Unitree's controller does when rt/arm_sdk stops, and when
-    it resumes, has not been measured on the real G1.
-  - rt/lowcmd silent for GOLEM_CMD_TIMEOUT (0.5 s) once it has taken over: every
-    motor off (zero torque). This is the H1 sim's behaviour, kept as an
-    assumption; what the real G1's motors do when rt/lowcmd stops has not been
-    measured.
+limited to the joint's actuatorfrcrange. rt/lowcmd silent for GOLEM_CMD_TIMEOUT
+(0.5 s of sim time, so a sim running slower than real time does not trip it)
+turns every body motor off (zero torque) until frames return. This is the H1-2
+sim's behaviour, kept as an assumption; what the real G1's motors do when
+rt/lowcmd stops has not been measured.
 The slot layout and header values match
 core_ws/src/g1/g1_description/g1_description/layout.py.
 """
@@ -50,7 +41,6 @@ from unitree_sdk2py.utils.crc import CRC
 
 TOPIC_LOWSTATE = 'rt/lowstate'
 TOPIC_LOWCMD = 'rt/lowcmd'
-TOPIC_ARM_SDK = 'rt/arm_sdk'
 TOPIC_HAND_CMD = 'rt/dex3/{side}/cmd'
 TOPIC_HAND_STATE = 'rt/dex3/{side}/state'
 
@@ -58,9 +48,6 @@ TOPIC_HAND_STATE = 'rt/dex3/{side}/state'
 # mode_machine 5, and mode_pr 0 (MODE_PR) drives the ankles' pitch/roll joints
 MODE_MACHINE = 5
 MODE_PR = 0
-# rt/arm_sdk drives the waist and arms; slot 29's q is the weight (1 = ours)
-ARM_SDK_SLOTS = range(12, 29)
-ARM_SDK_WEIGHT_SLOT = 29
 # Dex3 HandCmd_ mode byte (g1_dex3/dex3.py): bits 0-3 motor index, bits 4-6
 # status (1 = enabled), bit 7 timeout, which the driver sets to release a finger
 HAND_STATUS_ENABLED = 0x01
@@ -81,13 +68,8 @@ def env_seconds(name, default, env=os.environ):
     return value
 
 
-# Sim seconds without a frame before rt/arm_sdk's weight ramps to 0 (back to the
-# stand-in, like the safety layer's release); it ramps at 1/ARM_SDK_RELEASE_S per
-# second, down and, once frames return, back up
-ARM_SDK_TIMEOUT = env_seconds('GOLEM_ARM_SDK_TIMEOUT', 0.5)
-ARM_SDK_RELEASE_S = 1.0
-# Sim seconds without a frame before rt/lowcmd, once it has taken over, turns
-# every motor off (an assumption, see the module docstring)
+# Sim seconds without a frame before rt/lowcmd, once it has driven the motors,
+# turns every motor off (an assumption, see the module docstring)
 LOWCMD_TIMEOUT = env_seconds('GOLEM_CMD_TIMEOUT', 0.5)
 # wall seconds between repeats of one warning
 WARN_PERIOD_S = 5.0
@@ -102,7 +84,6 @@ class MotorCommand(NamedTuple):
     kp: np.ndarray
     kd: np.ndarray
     time: float
-    weight: float = 0.0  # rt/arm_sdk only
 
     def torques(self, q, dq):
         return np.where(self.on, self.kp * (self.q - q) + self.kd * (self.dq - dq) + self.tau, 0.0)
@@ -129,8 +110,7 @@ def fast_crc():
     replaced by a numpy view of them: the same field packing and the same C
     routine, so the same CRC, at about a quarter of the cost (33 instead of 145
     us a frame, measured over rt/lowstate and rt/lowcmd frames; rt/lowstate is
-    signed every physics step, and every rt/lowcmd and rt/arm_sdk frame is
-    checked). The SDK's CRC object is one per process. The result is checked
+    signed every physics step, and every rt/lowcmd frame is checked). The SDK's CRC object is one per process. The result is checked
     against the SDK's own on sample frames; if it differs, the SDK's loop is
     kept."""
     crc = CRC()
@@ -175,11 +155,6 @@ def lowcmd_motor_on(mode):
     return mode != 0
 
 
-def arm_sdk_motor_on(mode):
-    """rt/arm_sdk has no per-motor switch: Unitree's arm_sdk example leaves mode at 0"""
-    return True
-
-
 def hand_motor_on(mode):
     """A Dex3 motor applies its PD only when enabled and without the timeout bit"""
     status = (mode >> 4) & 0x07
@@ -209,23 +184,20 @@ def _domain_id():
 
 
 class SimInterface:
-    """The G1's Unitree DDS topics on a MuJoCo model, with the stand-in for
-    Unitree's controller.
+    """The G1's Unitree DDS topics on a MuJoCo model.
 
     The main loop calls write_ctrl() before and after_step() after every
     mj_step, holding the sim lock. The DDS handlers only validate and latch
     commands (one reference swap each) and never touch MjData.
     """
 
-    def __init__(self, model, data, resolver, stand_in):
+    def __init__(self, model, data, resolver):
         self.model = model
         self.data = data
         self.resolver = resolver
-        self.stand_in = stand_in
         missing = {'quat', 'gyro', 'acc'} - set(resolver.sensor_adr)
         if missing:
             raise KeyError(f'pelvis IMU sensors missing from the model: {sorted(missing)}')
-        self.arm_sdk_timeout = ARM_SDK_TIMEOUT
         self.lowcmd_timeout = LOWCMD_TIMEOUT
         self._crc = fast_crc()
         self._hand_state_every = max(1, round(1.0 / (HAND_STATE_HZ * model.opt.timestep)))
@@ -235,17 +207,13 @@ class SimInterface:
 
         # latched commands (None until the first valid frame)
         self._lowcmd = None
-        self._arm_sdk = None
         self._hand_cmd = {side: None for side in resolver.hands}
-        # the first valid rt/lowcmd frame releases the stand-in for good
-        self.released = False
+        # True from the first valid rt/lowcmd frame on; until then every body motor is off
+        self.commanded = False
         self._lowcmd_timed_out = False
-        # rt/arm_sdk's weight in effect (arm_sdk_weight) and the sim time it was
-        # last updated; ramping back up after a silence until it meets the frames'
-        self.arm_sdk_w = 0.0
-        self._arm_sdk_w_time = self.sim_time
-        self._arm_sdk_timed_out = False
-        self._arm_sdk_resuming = False
+        # The sim's elastic band (mujoco_env.ElasticBand), which sim_loop sets once
+        # it has built it, for the tests that record the sim; this class never uses it.
+        self.band = None
         self._warn_lock = threading.Lock()
         self._warned = {}
 
@@ -268,25 +236,24 @@ class SimInterface:
             self._hand_state_pub[side] = ChannelPublisher(TOPIC_HAND_STATE.format(side=side), HandState_)
             self._hand_state_pub[side].Init()
 
-        self._subscribers = [ChannelSubscriber(TOPIC_LOWCMD, LowCmd_),
-                             ChannelSubscriber(TOPIC_ARM_SDK, LowCmd_)]
-        self._subscribers[0].Init(self._on_lowcmd, 10)
-        self._subscribers[1].Init(self._on_arm_sdk, 10)
+        # the subscribed topics and their subscribers
+        self._subscribers = {TOPIC_LOWCMD: ChannelSubscriber(TOPIC_LOWCMD, LowCmd_)}
+        self._subscribers[TOPIC_LOWCMD].Init(self._on_lowcmd, 10)
         for side in resolver.hands:
-            sub = ChannelSubscriber(TOPIC_HAND_CMD.format(side=side), HandCmd_)
-            sub.Init(lambda msg, side=side: self._on_hand_cmd(side, msg), 10)
-            self._subscribers.append(sub)
+            topic = TOPIC_HAND_CMD.format(side=side)
+            self._subscribers[topic] = ChannelSubscriber(topic, HandCmd_)
+            self._subscribers[topic].Init(lambda msg, side=side: self._on_hand_cmd(side, msg), 10)
 
     # ------------------------------------------------------------------ #
     # DDS handlers: validate and latch
     # ------------------------------------------------------------------ #
-    def _warn(self, key, text, once=False):
-        """Print a warning at most once per WARN_PERIOD_S (or once), with how many it stands for"""
+    def _warn(self, key, text):
+        """Print a warning at most once per WARN_PERIOD_S, with how many it stands for"""
         now = time.monotonic()
         with self._warn_lock:
             last, count = self._warned.get(key, (None, 0))
             count += 1
-            if last is not None and (once or now - last < WARN_PERIOD_S):
+            if last is not None and now - last < WARN_PERIOD_S:
                 self._warned[key] = (last, count)
                 return
             self._warned[key] = (now, 0)
@@ -302,24 +269,9 @@ class SimInterface:
             self._warn(f'lowcmd {error}', f'dropped rt/lowcmd: {error}')
             return
         self._lowcmd = cmd
-        if not self.released:
-            self.released = True
-            _log(f"t={cmd.time:.3f}s: first valid rt/lowcmd; the stand-in for Unitree's "
-                 'controller is released, rt/lowcmd drives all 29 body motors')
-
-    def _on_arm_sdk(self, msg: LowCmd_):
-        if self.released:
-            self._warn('arm_sdk_ignored', 'rt/arm_sdk ignored: rt/lowcmd has taken every motor', once=True)
-            return
-        if self._crc.Crc(msg) != msg.crc:
-            self._warn('arm_sdk crc', 'dropped rt/arm_sdk: bad CRC')
-            return
-        weight = float(msg.motor_cmd[ARM_SDK_WEIGHT_SLOT].q)
-        cmd = parse_motor_cmds(msg.motor_cmd, ARM_SDK_SLOTS, self.sim_time, arm_sdk_motor_on)
-        if cmd is None or not math.isfinite(weight):
-            self._warn('arm_sdk nan', 'dropped rt/arm_sdk: a value is not finite')
-            return
-        self._arm_sdk = cmd._replace(weight=min(max(weight, 0.0), 1.0))
+        if not self.commanded:
+            self.commanded = True
+            _log(f't={cmd.time:.3f}s: first valid rt/lowcmd; it drives all 29 body motors')
 
     def _on_hand_cmd(self, side, msg: HandCmd_):
         count = len(self.resolver.hands[side].names)
@@ -335,48 +287,15 @@ class SimInterface:
     # ------------------------------------------------------------------ #
     # main loop (the caller holds the sim lock)
     # ------------------------------------------------------------------ #
-    def arm_sdk_weight(self, sdk, now):
-        """The weight of rt/arm_sdk command sdk in effect at sim time now, kept as
-        arm_sdk_w; call it once per physics step. It is the latest frame's weight,
-        except around a silence: once rt/arm_sdk has been silent for
-        arm_sdk_timeout it falls to 0 at 1/ARM_SDK_RELEASE_S per second, and when
-        frames return it rises back at that rate until it meets theirs."""
-        rate = max(0.0, now - self._arm_sdk_w_time) / ARM_SDK_RELEASE_S
-        self._arm_sdk_w_time = now
-        w = self.arm_sdk_w
-        if sdk is None:
-            w = 0.0
-        elif now - sdk.time > self.arm_sdk_timeout:
-            if not self._arm_sdk_timed_out:
-                self._arm_sdk_timed_out = True
-                _log(f't={now:.3f}s: rt/arm_sdk silent for {self.arm_sdk_timeout:.2f}s; handing the '
-                     f'waist and arms back to the stand-in over {ARM_SDK_RELEASE_S * w:.1f}s')
-            w = max(0.0, w - rate)
-        else:
-            if self._arm_sdk_timed_out:
-                self._arm_sdk_timed_out = False
-                self._arm_sdk_resuming = w < sdk.weight
-                _log(f't={now:.3f}s: rt/arm_sdk back; its weight ramps from {w:.2f} back to the '
-                     f'frames\' {sdk.weight:.2f} over {ARM_SDK_RELEASE_S * max(0.0, sdk.weight - w):.1f}s')
-            if self._arm_sdk_resuming and w + rate < sdk.weight:
-                w += rate
-            else:
-                self._arm_sdk_resuming = False
-                w = sdk.weight
-        self.arm_sdk_w = w
-        return w
-
     def physics_reset(self):
         """MuJoCo has reset the whole scene and its time: restamp the latched
-        rt/lowcmd and rt/arm_sdk at the new sim time, so their timeouts still
-        measure the silence since the last frame instead of waiting for the old
-        sim time to come round again"""
+        rt/lowcmd at the new sim time, so its timeout still measures the silence
+        since the last frame instead of waiting for the old sim time to come
+        round again"""
         now = float(self.data.time)
-        self.sim_time = self._arm_sdk_w_time = now
+        self.sim_time = now
         if self._lowcmd is not None:
             self._lowcmd = self._lowcmd._replace(time=now)
-        if self._arm_sdk is not None:
-            self._arm_sdk = self._arm_sdk._replace(time=now)
 
     def _lowcmd_torques(self, q, dq, now):
         cmd = self._lowcmd
@@ -395,19 +314,11 @@ class SimInterface:
         """The torque of every motor for the next physics step"""
         d = self.data
         body = self.resolver.body
-        q = d.qpos[body.qpos]
-        dq = d.qvel[body.qvel]
-        now = float(d.time)
-        if self.released:
-            tau = self._lowcmd_torques(q, dq, now)
-        else:
-            tau = self.stand_in.torques(q, dq)
-            sdk = self._arm_sdk
-            w = self.arm_sdk_weight(sdk, now)
-            if w > 0.0:
-                upper = slice(ARM_SDK_SLOTS.start, ARM_SDK_SLOTS.stop)
-                tau[upper] = w * sdk.torques(q[upper], dq[upper]) + (1.0 - w) * tau[upper]
-        d.ctrl[body.ctrl] = np.clip(tau, body.tau_min, body.tau_max)
+        if self.commanded:
+            tau = self._lowcmd_torques(d.qpos[body.qpos], d.qvel[body.qvel], float(d.time))
+            d.ctrl[body.ctrl] = np.clip(tau, body.tau_min, body.tau_max)
+        else:   # never commanded: every motor off
+            d.ctrl[body.ctrl] = 0.0
 
         for side, hand in self.resolver.hands.items():
             cmd = self._hand_cmd[side]
@@ -418,17 +329,12 @@ class SimInterface:
             d.ctrl[hand.ctrl] = np.clip(tau, hand.tau_min, hand.tau_max)
 
     def after_step(self):
-        """Run the stand-in's policy and publish the state after a physics step"""
+        """Publish the state after a physics step"""
         d = self.data
         r = self.resolver
         self.sim_time = float(d.time)
         self._steps += 1
-        q = d.qpos[r.body.qpos]
-        dq = d.qvel[r.body.qvel]
-        if not self.released:
-            self.stand_in.after_step(q, dq, d.qpos[r.base_qpos + 3:r.base_qpos + 7],
-                                     d.qvel[r.base_qvel + 3:r.base_qvel + 6])
-        self._publish_low_state(q, dq)
+        self._publish_low_state(d.qpos[r.body.qpos], d.qvel[r.body.qvel])
         if self._steps % self._hand_state_every == 0:
             for side in r.hands:
                 self._publish_hand_state(side)
@@ -469,7 +375,7 @@ class SimInterface:
         self._hand_state_pub[side].Write(msg)
 
     def shutdown(self):
-        for sub in self._subscribers:
+        for sub in self._subscribers.values():
             sub.Close()
         self._low_state_pub.Close()
         for pub in self._hand_state_pub.values():

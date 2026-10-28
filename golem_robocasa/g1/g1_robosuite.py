@@ -25,7 +25,6 @@ import xml.etree.ElementTree as ET
 
 import mujoco
 import numpy as np
-import yaml
 
 from robosuite.models.grippers import register_gripper
 from robosuite.models.grippers.null_gripper import NullGripper
@@ -41,40 +40,37 @@ _REPO = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__))
 G1_ASSETS = os.path.join(_REPO, "third_party", "leprechaun_g1", "assets", "g1_description")
 SOURCE_XML = os.path.join(G1_ASSETS, "g1_29dof_with_hand_rev_1_0.xml")
 SOURCE_URDF = os.path.join(G1_ASSETS, "g1_29dof_with_hand_rev_1_0.urdf")
-# HOMIE's walking policy config: the joint dynamics and standing stance below
-# come from it, so the RoboCasa G1 matches the policy's mujoco_deploy_g1.py.
-# The policy is core_ws/src/g1/g1_locomotion/policy in the repo; the containers
-# mount it at /home/code/g1_locomotion.
-_POLICY_DIRS = (os.path.join(_REPO, "g1_locomotion"),
-                os.path.join(_REPO, "core_ws", "src", "g1", "g1_locomotion", "policy"))
-POLICY_CONFIG = os.path.join(next((d for d in _POLICY_DIRS if os.path.isdir(d)), _POLICY_DIRS[0]),
-                             "g1.yaml")
 
 # Free joint name on the pelvis (used by the placement patch).
 FREE_JOINT_NAME = "floating_base_joint"
 
-with open(POLICY_CONFIG) as _f:
-    _POLICY = yaml.safe_load(_f)
+# The G1's joint dynamics and stance are Unitree's, from unitree_rl_gym
+# (github.com/unitreerobotics/unitree_rl_gym, BSD-3-Clause): the default joint of
+# resources/robots/g1_description/g1_12dof.xml (damping="0.001" armature="0.01"
+# frictionloss="0.1"), and the default_joint_angles of
+# legged_gym/envs/g1/g1_config.py. leprechaun_g1's MJCF gives its joints none.
+JOINT_DAMPING = 0.001      # N*m*s/rad
+JOINT_ARMATURE = 0.01      # kg*m^2
+JOINT_FRICTIONLOSS = 0.1   # N*m
+# Every body joint gets them. The Dex3-1 fingers get the armature and a tenth of
+# the frictionloss: with the hand driver's soft gains (kp 1.5), 0.1 Nm would stop
+# each finger ~0.07 rad short of its target, 0.01 Nm ~0.007 rad. Without any, a
+# hand nobody commands droops (the thumb swings to its 1.05 rad limit), and the
+# driver's close, which starts from the current pose, then jams the thumb on the
+# middle finger. robosuite fills a missing damping/frictionloss with 0.1, so the
+# hands carry explicit values.
+BODY_JOINT_DYNAMICS = {"damping": JOINT_DAMPING, "armature": JOINT_ARMATURE,
+                       "frictionloss": JOINT_FRICTIONLOSS}
+HAND_JOINT_DYNAMICS = {"damping": 0.0, "armature": JOINT_ARMATURE,
+                       "frictionloss": 0.1 * JOINT_FRICTIONLOSS}
 
-# mujoco_deploy_g1.py gives every DOF these (HOMIE's MJCF values). The Dex3-1
-# fingers get the armature and a tenth of the frictionloss: with the hand
-# driver's soft gains (kp 1.5), 0.1 Nm would stop each finger ~0.07 rad short of
-# its target, 0.01 Nm ~0.007 rad. Without any, a hand nobody commands droops
-# (the thumb swings to its 1.05 rad limit), and the driver's close, which starts
-# from the current pose, then jams the thumb on the middle finger. robosuite
-# fills a missing damping/frictionloss with 0.1, so the hands carry explicit values.
-BODY_JOINT_DYNAMICS = {
-    "damping": _POLICY["joint_damping"],
-    "armature": _POLICY["joint_armature"],
-    "frictionloss": _POLICY["joint_frictionloss"],
-}
-HAND_JOINT_DYNAMICS = {"damping": 0.0, "armature": _POLICY["joint_armature"],
-                       "frictionloss": 0.1 * _POLICY["joint_frictionloss"]}
-
-# Standing stance, keyed by joint name: the legs at the walking policy's
-# default_angles, everything else (waist, arms at the controller's 'home',
-# hands) at 0. G1Dex3.init_qpos orders it by the model's joints.
-STANCE = dict(zip(_POLICY["policy_joints"][:_POLICY["num_actions"]], _POLICY["default_angles"]))
+# The spawn stance, keyed by joint name (rad): the legs at Unitree's
+# default_joint_angles, every other joint (waist, arms, hands) at 0.
+# G1Dex3.init_qpos orders it by the model's joints.
+STANCE = {f"{side}_{joint}_joint": q
+          for side in ("left", "right")
+          for joint, q in (("hip_pitch", -0.1), ("hip_roll", 0.0), ("hip_yaw", 0.0),
+                           ("knee", 0.3), ("ankle_pitch", -0.2), ("ankle_roll", 0.0))}
 
 # URDF fixed joints whose child links become frames in the MJCF: the sensors
 # as sites on torso_link, the palms as the (empty) eef bodies robosuite merges

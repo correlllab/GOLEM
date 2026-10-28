@@ -21,14 +21,12 @@ from unitree_sdk2py.utils.crc import CRC
 
 import g1
 from g1.sim_names import BODY_JOINTS, HAND_JOINTS, NameResolver
-from g1.stand_in import StandIn
 from g1 import unitree_interface as ui
 
 # two levels up from golem_robocasa/g1/: the repo root on the host, /home/code in the container
 REPO = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(g1.__file__)), "..", ".."))
 XML = os.path.join(REPO, "third_party", "leprechaun_g1", "assets", "g1_description",
                    "g1_29dof_with_hand_rev_1_0.xml")
-UPPER = slice(ui.ARM_SDK_SLOTS.start, ui.ARM_SDK_SLOTS.stop)
 
 
 def _model():
@@ -43,9 +41,8 @@ def _model():
 
 MODEL = _model()
 RESOLVER = NameResolver(MODEL, robot_prefix="")
-STAND_IN = StandIn(RESOLVER.body.names, MODEL.opt.timestep)
 DATA = mujoco.MjData(MODEL)
-IFACE = ui.SimInterface(MODEL, DATA, RESOLVER, STAND_IN)
+IFACE = ui.SimInterface(MODEL, DATA, RESOLVER)
 CRC_ = CRC()
 
 
@@ -56,20 +53,17 @@ def _reset(q=None):
         DATA.qpos[RESOLVER.body.qpos] = q
     mujoco.mj_forward(MODEL, DATA)
     IFACE.sim_time = float(DATA.time)
-    IFACE._lowcmd = IFACE._arm_sdk = None
+    IFACE._lowcmd = None
     IFACE._hand_cmd = {side: None for side in RESOLVER.hands}
-    IFACE.released = IFACE._lowcmd_timed_out = IFACE._arm_sdk_timed_out = False
-    IFACE.arm_sdk_w, IFACE._arm_sdk_w_time, IFACE._arm_sdk_resuming = 0.0, float(DATA.time), False
+    IFACE.commanded = IFACE._lowcmd_timed_out = False
 
 
-def _lowcmd(q=0.3, kp=40.0, kd=2.0, tau=0.5, mode=1, weight=None, mode_machine=5, mode_pr=0):
+def _lowcmd(q=0.3, kp=40.0, kd=2.0, tau=0.5, mode=1, mode_machine=5, mode_pr=0):
     msg = LowCmd_default()
     msg.mode_machine, msg.mode_pr = mode_machine, mode_pr
     for i in range(len(BODY_JOINTS)):
         c = msg.motor_cmd[i]
         c.mode, c.q, c.dq, c.tau, c.kp, c.kd = mode, q, 0.0, tau, kp, kd
-    if weight is not None:
-        msg.motor_cmd[ui.ARM_SDK_WEIGHT_SLOT].q = weight
     msg.crc = CRC_.Crc(msg)
     return msg
 
@@ -94,27 +88,35 @@ def test_names_resolve_in_slot_order():
     assert b.tau_max[BODY_JOINTS.index("left_wrist_yaw_joint")] == 5.0
 
 
-def test_stand_in_drives_before_any_command():
-    _reset()
-    IFACE.write_ctrl()
-    q, dq = _state()
-    b = RESOLVER.body
-    expected = np.clip(STAND_IN.torques(q, dq), b.tau_min, b.tau_max)
-    assert np.array_equal(DATA.ctrl[b.ctrl], expected)
-    for hand in RESOLVER.hands.values():  # never commanded: limp
-        assert np.all(DATA.ctrl[hand.ctrl] == 0.0)
+def test_motors_off_until_first_valid_lowcmd():
+    """Nothing drives the robot before rt/lowcmd: every motor, body and hand,
+    is off (zero torque), however long the sim runs"""
+    _reset(np.linspace(-0.3, 0.3, len(BODY_JOINTS)))
+    DATA.qvel[RESOLVER.body.qvel] = 0.5
+    DATA.ctrl[:] = 1.0   # whatever a previous step left
+    for t in (0.0, 1.0, 100.0):
+        DATA.time = t
+        IFACE.write_ctrl()
+        assert not IFACE.commanded
+        assert np.all(DATA.ctrl[RESOLVER.body.ctrl] == 0.0)
+        for hand in RESOLVER.hands.values():
+            assert np.all(DATA.ctrl[hand.ctrl] == 0.0)
 
 
-def test_lowcmd_frames_are_validated():
+def test_invalid_lowcmd_ignored():
+    """A frame with a bad CRC, another robot's mode_machine, mode_pr 1 or a
+    value that is not finite drives nothing"""
     _reset()
     bad_crc = _lowcmd()
     bad_crc.crc ^= 1
-    for msg in (bad_crc, _lowcmd(mode_machine=0), _lowcmd(mode_pr=1), _lowcmd(q=math.nan)):
+    for msg in (bad_crc, _lowcmd(mode_machine=6), _lowcmd(mode_pr=1), _lowcmd(q=math.nan)):
         IFACE._on_lowcmd(msg)
-        assert not IFACE.released and IFACE._lowcmd is None
+        IFACE.write_ctrl()
+        assert not IFACE.commanded and IFACE._lowcmd is None
+        assert np.all(DATA.ctrl[RESOLVER.body.ctrl] == 0.0)
     assert ui.lowcmd_error(_lowcmd(), CRC_) is None
     IFACE._on_lowcmd(_lowcmd())
-    assert IFACE.released
+    assert IFACE.commanded
 
 
 def test_fast_crc_is_the_sdks():
@@ -145,38 +147,50 @@ def test_fast_crc_is_the_sdks():
         CRC_._CRC__Trans, CRC_._crc_ctypes = fast_words, fast_crc32
 
 
-def test_timeout_knobs_must_be_finite_and_positive():
-    for name in ("GOLEM_ARM_SDK_TIMEOUT", "GOLEM_CMD_TIMEOUT"):
-        assert ui.env_seconds(name, 0.5, {}) == 0.5
-        assert ui.env_seconds(name, 0.5, {name: " "}) == 0.5   # empty: the default, as compose passes it
-        assert ui.env_seconds(name, 0.5, {name: "0.25"}) == 0.25
-        for bad in ("nan", "inf", "-inf", "-0.5", "0", "fast"):
-            try:
-                ui.env_seconds(name, 0.5, {name: bad})
-            except ValueError as e:
-                assert name in str(e) and repr(bad) in str(e), e
-            else:
-                raise AssertionError(f"{name}={bad!r} accepted")
+def test_timeout_knob_must_be_finite_and_positive():
+    name = "GOLEM_CMD_TIMEOUT"
+    assert ui.env_seconds(name, 0.5, {}) == 0.5
+    assert ui.env_seconds(name, 0.5, {name: " "}) == 0.5   # empty: the default, as compose passes it
+    assert ui.env_seconds(name, 0.5, {name: "0.25"}) == 0.25
+    for bad in ("nan", "inf", "-inf", "-0.5", "0", "fast"):
+        try:
+            ui.env_seconds(name, 0.5, {name: bad})
+        except ValueError as e:
+            assert name in str(e) and repr(bad) in str(e), e
+        else:
+            raise AssertionError(f"{name}={bad!r} accepted")
 
 
-def test_lowcmd_drives_every_motor_after_release():
+def test_first_valid_lowcmd_drives_motors():
     _reset()
     IFACE._on_lowcmd(_lowcmd(q=0.3, kp=40.0, kd=2.0, tau=0.5))
+    assert IFACE.commanded
     IFACE.write_ctrl()
     q, dq = _state()
     b = RESOLVER.body
     expected = np.clip(40.0 * (0.3 - q) + 2.0 * (0.0 - dq) + 0.5, b.tau_min, b.tau_max)
     assert np.allclose(DATA.ctrl[b.ctrl], expected)
+    assert np.any(DATA.ctrl[b.ctrl] != 0.0)
     # motor mode 0 is off
     IFACE._on_lowcmd(_lowcmd(mode=0))
     IFACE.write_ctrl()
     assert np.all(DATA.ctrl[b.ctrl] == 0.0)
-    # rt/arm_sdk is ignored for good
-    IFACE._on_arm_sdk(_lowcmd(weight=1.0))
-    assert IFACE._arm_sdk is None
 
 
-def test_lowcmd_timeout_turns_the_motors_off():
+def test_band_is_none_until_the_sim_builds_it():
+    """sim_loop hands the interface its elastic band once built (the tests/g1
+    recorders read it); the interface itself never touches it"""
+    assert IFACE.band is None
+
+
+def test_no_arm_sdk_subscription():
+    """The sim consumes rt/lowcmd and the hands' commands, and no rt/arm_sdk"""
+    assert set(IFACE._subscribers) == {"rt/lowcmd", "rt/dex3/left/cmd", "rt/dex3/right/cmd"}
+    assert not [name for name in dir(ui) if "arm_sdk" in name.lower()]
+    assert not [name for name in dir(IFACE) if "arm_sdk" in name.lower()]
+
+
+def test_lowcmd_timeout_turns_motors_off():
     _reset()
     IFACE._on_lowcmd(_lowcmd())
     IFACE.write_ctrl()
@@ -190,94 +204,13 @@ def test_lowcmd_timeout_turns_the_motors_off():
     assert np.any(DATA.ctrl[RESOLVER.body.ctrl] != 0.0)
 
 
-def test_arm_sdk_blends_waist_and_arms_by_weight():
-    _reset()
-    IFACE.write_ctrl()
-    hold = DATA.ctrl[RESOLVER.body.ctrl].copy()
-    IFACE._on_arm_sdk(_lowcmd(q=0.3, kp=60.0, kd=1.5, tau=0.0, mode=0, weight=0.25, mode_machine=0))
-    assert not IFACE.released  # rt/arm_sdk needs no mode_machine and never releases the stand-in
-    IFACE.write_ctrl()
-    q, dq = _state()
-    b = RESOLVER.body
-    tau_hold = STAND_IN.torques(q, dq)
-    sdk = 60.0 * (0.3 - q) + 1.5 * (0.0 - dq)  # mode 0: rt/arm_sdk has no per-motor switch
-    expected = tau_hold.copy()
-    expected[UPPER] = 0.25 * sdk[UPPER] + 0.75 * tau_hold[UPPER]
-    assert np.allclose(DATA.ctrl[b.ctrl], np.clip(expected, b.tau_min, b.tau_max))
-    assert np.array_equal(DATA.ctrl[b.ctrl][:12], hold[:12])  # the legs stay HOMIE's
-    # the weight is clipped to [0, 1]
-    IFACE._on_arm_sdk(_lowcmd(weight=3.0))
-    assert IFACE._arm_sdk.weight == 1.0
-    # a bad CRC is dropped
-    bad = _lowcmd(weight=0.5)
-    bad.crc ^= 1
-    IFACE._on_arm_sdk(bad)
-    assert IFACE._arm_sdk.weight == 1.0
-
-
-def _weights(sdk, start, stop):
-    """arm_sdk_weight once per physics step from sim time start to stop"""
-    dt = MODEL.opt.timestep
-    return [IFACE.arm_sdk_weight(sdk, start + i * dt) for i in range(round((stop - start) / dt) + 1)]
-
-
-def test_arm_sdk_weight_ramps_to_zero_when_silent():
-    _reset()
-    IFACE._on_arm_sdk(_lowcmd(weight=0.8))
-    sdk = IFACE._arm_sdk
-    timeout, ramp = IFACE.arm_sdk_timeout, ui.ARM_SDK_RELEASE_S
-    assert set(_weights(sdk, 0.0, timeout - 0.01)) == {0.8}
-    # then down at 1/ARM_SDK_RELEASE_S per second, no step
-    w = _weights(sdk, timeout - 0.01, timeout + 0.4 * ramp)
-    assert math.isclose(w[-1], 0.4, abs_tol=0.01)
-    assert max(abs(np.diff(w))) <= MODEL.opt.timestep / ramp + 1e-9
-    assert _weights(sdk, timeout + 0.4 * ramp, timeout + ramp)[-1] == 0.0
-    DATA.time = timeout + ramp + 0.002
-    IFACE.write_ctrl()
-    q, dq = _state()
-    b = RESOLVER.body
-    assert np.array_equal(DATA.ctrl[b.ctrl], np.clip(STAND_IN.torques(q, dq), b.tau_min, b.tau_max))
-
-
-def _silent_then_back(weight_before, silence, weight_after):
-    """rt/arm_sdk at weight_before from t=0, silent from then for timeout +
-    silence, then one frame at weight_after; returns the sim time it came"""
-    _reset()
-    IFACE._on_arm_sdk(_lowcmd(weight=weight_before))
-    back = IFACE.arm_sdk_timeout + silence
-    _weights(IFACE._arm_sdk, 0.0, back)
-    IFACE.sim_time = back
-    IFACE._on_arm_sdk(_lowcmd(weight=weight_after))
-    return back
-
-
-def test_arm_sdk_weight_ramps_back_up_when_frames_return():
-    ramp = ui.ARM_SDK_RELEASE_S
-    back = _silent_then_back(1.0, 0.3 * ramp, 1.0)   # fell to 0.7 while silent
-    assert math.isclose(IFACE.arm_sdk_w, 0.7, abs_tol=0.01)
-    w = [IFACE.arm_sdk_w] + _weights(IFACE._arm_sdk, back, back + 0.5 * ramp)
-    steps = np.diff(w)   # back up at 1/ARM_SDK_RELEASE_S per second, no step
-    assert np.all(steps >= 0.0) and steps.max() <= MODEL.opt.timestep / ramp + 1e-9
-    assert w[-1] == 1.0 and math.isclose(w.index(1.0) * MODEL.opt.timestep, 0.3 * ramp, abs_tol=0.005)
-
-
-def test_arm_sdk_resume_follows_a_lower_weight_at_once():
-    back = _silent_then_back(1.0, 0.5 * ui.ARM_SDK_RELEASE_S, 1.0)
-    w = _weights(IFACE._arm_sdk, back, back + 0.1)   # on the way back up, at ~0.6
-    assert 0.55 < w[-1] < 0.65
-    IFACE.sim_time = back + 0.1
-    IFACE._on_arm_sdk(_lowcmd(weight=0.2))   # e.g. the safety layer releasing
-    assert IFACE.arm_sdk_weight(IFACE._arm_sdk, back + 0.102) == 0.2
-
-
 def test_physics_reset_restamps_the_latched_commands():
     _reset()
     IFACE.sim_time = 40.0
-    IFACE._on_arm_sdk(_lowcmd(weight=1.0))
     IFACE._on_lowcmd(_lowcmd())
     DATA.time = 0.002   # MuJoCo's auto-reset puts the time back to 0
     IFACE.physics_reset()
-    assert IFACE._arm_sdk.time == IFACE._lowcmd.time == IFACE.sim_time == 0.002
+    assert IFACE._lowcmd.time == IFACE.sim_time == 0.002
     DATA.time = 0.002 + IFACE.lowcmd_timeout + 0.01   # so the timeouts fire again
     IFACE.write_ctrl()
     assert np.all(DATA.ctrl[RESOLVER.body.ctrl] == 0.0)

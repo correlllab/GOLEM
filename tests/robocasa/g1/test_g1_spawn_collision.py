@@ -5,8 +5,12 @@ these tests build a tiny synthetic MjModel with a robot0_-prefixed free body and
 a fixed fixture, and exercise the pure geometry + contact-filtering + back-off
 loop without robosuite. Mirrors sim_names.self_test style.
 
+It also checks the robot's joint dynamics and stance, which g1_robosuite gives
+the generated MJCF. The spawn of the robot in the real kitchen, hanging from the
+band, is test_g1_band.py's.
+
 Run from the repo root: PYTHONPATH=golem_robocasa python3 tests/robocasa/g1/test_g1_spawn_collision.py
-(g1_robosuite reads the walking policy's g1.yaml and leprechaun_g1's MJCF at import).
+(g1_robosuite reads leprechaun_g1's MJCF and URDF at import).
 """
 import math
 import sys
@@ -191,6 +195,31 @@ def test_keeps_best_on_giveup():
     final_pen = _total_penetration(m, d)
     assert final_pen <= start_pen + 1e-9, (start_pen, final_pen)  # best is never worse than start
     assert d.qpos[_free_qadr(m)] < 0.0, "give-up should keep the most-backed-off (least-penetrating) try"
+
+
+# Unitree's unitree_rl_gym: g1_12dof.xml's default joint, g1_config.py's default_joint_angles
+UNITREE_JOINT = {"damping": 0.001, "armature": 0.01, "frictionloss": 0.1}
+UNITREE_LEGS = {"hip_pitch": -0.1, "hip_roll": 0.0, "hip_yaw": 0.0,
+                "knee": 0.3, "ankle_pitch": -0.2, "ankle_roll": 0.0}
+
+
+def test_joint_dynamics_are_unitrees():
+    assert (gr.JOINT_DAMPING, gr.JOINT_ARMATURE, gr.JOINT_FRICTIONLOSS) == (0.001, 0.01, 0.1)
+    joints = list(gr.build_robot_xml().iter("joint"))
+    body = [j for j in joints if "_hand_" not in j.get("name")]
+    assert len(body) == 29, len(body)
+    for joint in body:
+        assert {k: float(joint.get(k)) for k in UNITREE_JOINT} == UNITREE_JOINT, joint.attrib
+    for joint in joints:   # the fingers: the armature, a tenth of the friction, no damping
+        if "_hand_" in joint.get("name"):
+            assert (float(joint.get("damping")), float(joint.get("armature")),
+                    float(joint.get("frictionloss"))) == (0.0, 0.01, 0.1 * 0.1), joint.attrib
+
+
+def test_stance_is_unitrees_default():
+    expected = {f"{side}_{name}_joint": q for side in ("left", "right") for name, q in UNITREE_LEGS.items()}
+    assert {n: q for n, q in gr.STANCE.items() if q} == {n: q for n, q in expected.items() if q}
+    assert set(gr.STANCE) <= set(expected), set(gr.STANCE) - set(expected)
 
 
 def main():

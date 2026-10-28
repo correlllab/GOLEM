@@ -1,5 +1,4 @@
 import argparse
-import copy
 import os
 import sys
 import threading
@@ -15,9 +14,9 @@ import mujoco.viewer
 from . import g1_robosuite  # registers G1Dex3 + its grippers, patches RoboCasa
 import sim_common
 from measurement_bridge import MeasurementBridge
+from mujoco_env import ElasticBand, draw_band
 from .g1_sensors import G1Sensors, SensorConfig
 from .sim_names import BODY_JOINTS, NameResolver
-from .stand_in import StandIn
 from .unitree_interface import SimInterface
 
 # The fall logger's test, as mujoco_deploy_g1.py's: the pelvis tilted more than
@@ -25,14 +24,21 @@ from .unitree_interface import SimInterface
 FALL_UPRIGHTNESS = 0.5   # pelvis z-axis . world up
 FALL_PELVIS_HEIGHT = 0.2  # m
 
-# HOMIE stands more crouched than the stance the robot spawns in (at its 0.74 m
-# height target, knees ~0.76 rad instead of 0.3 and the pelvis at 0.744 m instead
-# of ~0.78 m), so from the stance it settles for ~1.5 s, moving the pelvis ~7 cm
-# back over its feet. The sim settles that on a copy of the state before it
-# starts, then puts the settled robot back where the spawn placed it.
-SETTLE_SECONDS = 3.0
-# The spawn puts the lowest collision geom this far above the floor: a 2 cm drop
-# onto the feet makes HOMIE slide them ~3 cm while it settles.
+# The elastic band, the H1-2 sim's (h12_mujoco.py): a spring-damper pulling the
+# torso toward a point BAND_ANCHOR_DZ above its spawn position, which holds the
+# robot while no motor drives it, until /elastic_band/toggle (or SPACE in the
+# viewer) releases it. It is twice as stiff as the H1-2's: at the H1-2's 1e4 N/m
+# the limp G1 (34.4 kg) rocks fore and aft on its limp legs, its pelvis tilting
+# 16-19 deg for 20 s and more, and the physics can go unstable; at 2e4 N/m it
+# settles within 4 s, upright to 0.3 deg with its torso ~1.4 cm below the anchor
+# (measured in three RoboCasa kitchens; tests/robocasa/g1/test_g1_band.py checks
+# one).
+BAND_BODY = "torso_link"
+BAND_ANCHOR_DZ = 0.01    # m
+BAND_STIFFNESS = 2e4     # N/m
+BAND_DAMPING = 2e3       # N*s/m
+# The spawn puts the lowest collision geom this far above the floor, so the
+# robot hangs from the band with its feet on the floor.
 SPAWN_CLEARANCE = 0.001  # m
 # Real-time pacing resyncs instead of catching up once the sim lags this far behind.
 MAX_LAG = 0.1  # s
@@ -49,42 +55,48 @@ UNSTABLE = (mujoco.mjtWarning.mjWARN_BADQPOS, mujoco.mjtWarning.mjWARN_BADQVEL,
             mujoco.mjtWarning.mjWARN_BADQACC)
 
 
-def _settle_stance(env, resolver, stand_in, seconds=SETTLE_SECONDS):
-    """Let the stand-in settle the robot on a copy of the state, so the sim
-    starts with the robot standing still in HOMIE's own posture; the kitchen's
-    objects and the sim time are untouched. The settled joints, velocities and
-    pelvis orientation are copied back, and the pelvis is put back where the
-    spawn placed it: place_robot_collision_free fits it to the floor again and
-    checks the settled posture for collisions (backing off if it must). The
-    policy sees neither the pelvis position nor its yaw, and the stand-in keeps
-    its policy state, so the sim's first step continues it.
-    Returns False, changing nothing, if the robot did not stay upright."""
-    model = env.sim.model._model
+def spawn(env, resolver, backoff=0.0):
+    """Put the robot at rest in the stance (g1_robosuite.STANCE), hands open, at
+    RoboCasa's spawn, after env.reset(): RoboCasa's zero-action settling loop
+    folds the limp robot during reset (and its initialization noise perturbs
+    every joint). place_robot_collision_free fits the lowest robot geom
+    SPAWN_CLEARANCE above the floor AND backs the base away (the robot's -x)
+    until no robot geom penetrates a fixture, keeping the least-penetrating spot
+    if it can't fully clear; backoff (m) then backs it up to that much further
+    into open floor. Zeroes every velocity in the scene."""
     data = env.sim.data._data
-    scratch = copy.copy(data)
-    body = resolver.body
-    base_q = np.arange(resolver.base_qpos, resolver.base_qpos + 7)
-    base_v = np.arange(resolver.base_qvel, resolver.base_qvel + 6)
-    placed = data.qpos[base_q[:3]].copy()
+    data.qpos[resolver.body.qpos] = [g1_robosuite.STANCE.get(n, 0.0) for n in BODY_JOINTS]
     for hand in resolver.hands.values():
-        scratch.ctrl[hand.ctrl] = 0.0   # limp, as before any rt/dex3 command
-    for _ in range(round(seconds / model.opt.timestep)):
-        tau = stand_in.torques(scratch.qpos[body.qpos], scratch.qvel[body.qvel])
-        scratch.ctrl[body.ctrl] = np.clip(tau, body.tau_min, body.tau_max)
-        mujoco.mj_step(model, scratch)
-        stand_in.after_step(scratch.qpos[body.qpos], scratch.qvel[body.qvel],
-                            scratch.qpos[base_q[3:]], scratch.qvel[base_v[3:]])
-    pelvis = resolver.base_body
-    if scratch.xmat[pelvis][8] < FALL_UPRIGHTNESS or scratch.xpos[pelvis][2] < FALL_PELVIS_HEIGHT:
-        return False
-    hands = list(resolver.hands.values())
-    qpos = np.concatenate([body.qpos] + [h.qpos for h in hands])
-    qvel = np.concatenate([base_v, body.qvel] + [h.qvel for h in hands])
-    data.qpos[qpos] = scratch.qpos[qpos]
-    data.qvel[qvel] = scratch.qvel[qvel]
-    g1_robosuite.place_robot_collision_free(env, placed, scratch.qpos[base_q[3:]],
-                                            clearance=SPAWN_CLEARANCE)
-    return True
+        data.qpos[hand.qpos] = 0.0
+    data.qvel[:] = 0.0
+    g1_robosuite.place_robot_collision_free(
+        env, env.init_robot_base_pos,
+        g1_robosuite._euler_to_wxyz(getattr(env, "init_robot_base_ori", None)),
+        clearance=SPAWN_CLEARANCE, extra_backoff=backoff,
+    )
+
+
+def make_band(data, resolver):
+    """The elastic band on the torso, anchored BAND_ANCHOR_DZ above where the
+    torso is now (call it at the spawn); returns (band, the torso's body id)"""
+    body = resolver.body_id(BAND_BODY)
+    if body < 0:
+        raise KeyError(f"no body {resolver.robot_prefix}{BAND_BODY} for the elastic band")
+    anchor = data.xpos[body].copy()
+    anchor[2] += BAND_ANCHOR_DZ
+    return ElasticBand(anchor, length=0, stiffness=BAND_STIFFNESS, damping=BAND_DAMPING), body
+
+
+def apply_band(model, data, band, body, vel):
+    """Write the band's force on body into xfrc_applied for the next physics
+    step: its pull while enabled, else zero. MuJoCo keeps xfrc_applied between
+    steps, so call it before every mj_step; vel is a 6-vector scratch buffer."""
+    if band.enabled:
+        # [ang(3), lin(3)] of the torso itself, world frame
+        mujoco.mj_objectVelocity(model, data, mujoco.mjtObj.mjOBJ_BODY, body, vel, 0)
+        data.xfrc_applied[body, :3] = band.evaluate_force(data.xpos[body], vel[3:])
+    else:
+        data.xfrc_applied[body, :3] = 0.0
 
 
 def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False, duration=0.0):
@@ -92,16 +104,18 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
 
     Builds the env with robots='G1Dex3' and steps the env's *own* MjData with our
     loop (never env.step()), driving the sim<->ROS bridge layer:
-      - SimInterface     : Unitree DDS, as the G1's own computers serve it:
-                           rt/lowstate, rt/lowcmd, rt/arm_sdk, rt/dex3/{left,right}/*
-      - StandIn          : Unitree's controller stand-in, HOMIE standing the robot
-                           until the first valid rt/lowcmd releases it
+      - SimInterface     : Unitree DDS, as the G1's own computers serve it in
+                           debug mode: rt/lowstate, rt/lowcmd, rt/dex3/{left,right}/*;
+                           every motor off until the first valid rt/lowcmd
       - RosSensorBridge  : /clock, and G1Sensors: the MID-360 (/livox/lidar,
                            /livox/imu) and the head D435 (/realsense/head/*), on
                            unless GOLEM_LIDAR=0 / GOLEM_CAMERAS=0 (SensorConfig),
                            + ground-truth /odom with GOLEM_SIM_ODOM=1
-      - MeasurementBridge: /robocasa/{task_name,task_goal,success,reward}
-    RoboCasa's _check_success/reward/lang are read off the shared env.
+      - MeasurementBridge: /robocasa/{task_name,task_goal,success,reward} +
+                           /elastic_band/toggle
+    An elastic band on the torso holds the robot until /elastic_band/toggle or
+    SPACE in the viewer releases it, as in the H1-2 sim. RoboCasa's
+    _check_success/reward/lang are read off the shared env.
     duration: sim seconds to run from the first step, counted in physics steps
     (0 = until the viewer closes or Ctrl-C).
     timing is part of the signature both runners share; the command line rejects
@@ -129,31 +143,22 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     pfx = env.robots[0].robot_model.naming_prefix   # "robot0_"
     resolver = NameResolver(model, robot_prefix=pfx)  # DDS<->sim name map
 
-    # Clean, contact-free initial state. RoboCasa's zero-action settling loop
-    # folds the limp robot during reset (and its initialization noise perturbs
-    # every joint), so restore the standing stance (the legs at HOMIE's default
-    # angles, every other joint at 0), zero all velocities, and re-place the
-    # pelvis. place_robot_collision_free auto-fits floor clearance AND backs the
-    # base away (the robot's -x) until no robot geom penetrates a fixture, keeping
-    # the least-penetrating spot if it can't fully clear. The stand-in then
-    # settles the stance (_settle_stance).
+    # Clean, contact-free initial state: the robot at rest in the stance (spawn).
     try:
-        data.qpos[resolver.body.qpos] = [g1_robosuite.STANCE.get(n, 0.0) for n in BODY_JOINTS]
-        for hand in resolver.hands.values():
-            data.qpos[hand.qpos] = 0.0
-        data.qvel[:] = 0.0
         # GOLEM_SPAWN_BACKOFF backs the robot further off the counter into open
         # floor (default 0 = at the counter for manipulation). Set ~1.0 for nav2,
         # which needs the robot's start cell to be free to plan.
-        _spawn_backoff = float(os.environ.get("GOLEM_SPAWN_BACKOFF", "0") or 0)
-        g1_robosuite.place_robot_collision_free(
-            env, env.init_robot_base_pos,
-            g1_robosuite._euler_to_wxyz(getattr(env, "init_robot_base_ori", None)),
-            clearance=SPAWN_CLEARANCE, extra_backoff=_spawn_backoff,
-        )
-        print("[g1_mujoco] initial stance: legs at HOMIE's default angles, everything else at 0")
+        spawn(env, resolver, backoff=float(os.environ.get("GOLEM_SPAWN_BACKOFF", "0") or 0))
+        print("[g1_mujoco] initial stance: legs at Unitree's default angles, everything else at 0")
     except Exception as e:
         print(f"[g1_mujoco] clean reset skipped: {e}")
+
+    # The elastic band holds the robot from the first physics step, while every
+    # motor is off until the first valid rt/lowcmd.
+    band, band_body = make_band(data, resolver)
+    band_vel = np.zeros(6)
+    print(f"[g1_mujoco] elastic band on {BAND_BODY} anchored at {band.point.round(3)}; "
+          "/elastic_band/toggle or SPACE in the viewer releases it")
 
     print(f"[g1_mujoco] RoboCasa task {task!r} built around the G1: "
           f"nq={model.nq} nu={model.nu}; resolver mapped {len(resolver.body.names)} body "
@@ -172,20 +177,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     odom_base_body_id = resolver.base_body if _sim_odom_on else -1
     print(f"[g1_mujoco] ground-truth sim odom {'ON (GOLEM_SIM_ODOM=1)' if _sim_odom_on else 'OFF'}")
 
-    # The stand-in for Unitree's controller stands the robot from the first
-    # physics step; the DDS bridge hands the waist and arms to rt/arm_sdk by its
-    # weight, and every motor to the first valid rt/lowcmd.
-    stand_in = StandIn(resolver.body.names, model.opt.timestep)
-    spawn = data.xpos[resolver.base_body].copy()
-    if _settle_stance(env, resolver, stand_in):
-        pos = data.xpos[resolver.base_body]
-        print(f"[g1_mujoco] stance settled under the stand-in ({SETTLE_SECONDS:.0f} s on a copy) and put "
-              f"back at the spawn: pelvis {np.linalg.norm(pos[:2] - spawn[:2]) * 100:.1f} cm from it, "
-              f"at z {pos[2]:.3f} m")
-    else:
-        print("[g1_mujoco] WARNING: the robot fell while settling the stance; starting from the stance")
-        stand_in = StandIn(resolver.body.names, model.opt.timestep)
-    sim_interface = SimInterface(model, data, resolver, stand_in)
+    sim_interface = SimInterface(model, data, resolver)
+    sim_interface.band = band
 
     sys.setswitchinterval(GIL_SWITCH_S)
     init_ros()
@@ -201,36 +194,35 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     )
     print(f"[g1_mujoco] sensors: {sensors.describe()}")
 
-    measurement = MeasurementBridge(env, task_name=task)
+    measurement = MeasurementBridge(env, elastic_band=band, task_name=task)
     print(f"[g1_mujoco] task goal: {measurement.publish_goal()!r}")
 
-    # Background executor serves the nodes' ROS callbacks (parameter services).
-    # ros_bridge.tick() is driven from the main loop instead (it reads MjData
-    # between steps; the camera renders on its own thread), so it is NOT added
-    # here.
+    # Background executor serves the nodes' ROS callbacks (the band toggle,
+    # parameter services). ros_bridge.tick() is driven from the main loop instead
+    # (it reads MjData between steps; the camera renders on its own thread), so it
+    # is NOT added here.
     executor = rclpy.executors.MultiThreadedExecutor()
     executor.add_node(measurement)
     executor_thread = threading.Thread(target=executor.spin, daemon=True, name="ros_bridge_exec")
     executor_thread.start()
-    print("[g1_mujoco] ROS bridges up: rt/lowstate, rt/lowcmd, rt/arm_sdk, "
+    print("[g1_mujoco] ROS bridges up: rt/lowstate, rt/lowcmd, "
           "rt/dex3/{left,right}/{cmd,state}, /clock, "
           + ("/livox/lidar, /livox/imu, " if sensors.lidar else "")
-          + ("/realsense/head/*, " if sensors.camera else "") + "/robocasa/*")
+          + ("/realsense/head/*, " if sensors.camera else "") + "/robocasa/*, /elastic_band/toggle")
 
-    handle = mujoco.viewer.launch_passive(model, data) if viewer else None
+    # SPACE in the viewer toggles the band (ElasticBand.key_callback).
+    handle = mujoco.viewer.launch_passive(model, data, key_callback=band.key_callback) if viewer else None
     if handle is not None:
         handle.opt.geomgroup[0] = 0   # hide collision geoms by default
         # Frame the free camera on the robot's spawn pose (function of robot
         # position + yaw).
-        cam_body_id = resolver.body_id("torso_link")
-        if cam_body_id >= 0:
-            try:
-                with handle.lock():
-                    sim_common.frame_viewer_on_robot(handle, data, cam_body_id)
-            except Exception as e:
-                print(f"[g1_mujoco] viewer camera framing skipped: {e}")
+        try:
+            with handle.lock():
+                sim_common.frame_viewer_on_robot(handle, data, band_body)
+        except Exception as e:
+            print(f"[g1_mujoco] viewer camera framing skipped: {e}")
     # Fall logger: watch the pelvis's uprightness + height and log once when the
-    # robot falls, including how long it stood after the stand-in was released.
+    # robot falls, including how long it stood after the elastic band was released.
     _fall_logged = False
     _release_t = None
     pelvis = resolver.base_body
@@ -251,6 +243,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             if viewer and not handle.is_running():
                 break
             with sim_lock:
+                apply_band(model, data, band, band_body, band_vel)
                 # Recompute every motor's PD torque every sim step (emulates the
                 # real motors' servo loop) from the latched DDS commands.
                 sim_interface.write_ctrl()
@@ -267,19 +260,20 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                     print(f"[g1_mujoco] *** WARNING: the physics went unstable and MuJoCo reset the "
                           f"whole scene, robot and kitchen, to its initial state and the sim time to 0 "
                           f"(reset {_resets} at step {steps}); restart the sim ***", flush=True)
-                # the stand-in's policy at 50 Hz, rt/lowstate, rt/dex3/*/state
+                # publishes rt/lowstate and rt/dex3/*/state
                 sim_interface.after_step()
                 # --- fall logger ---
-                if _release_t is None and sim_interface.released:
+                if _release_t is None and not band.enabled:
                     _release_t = float(data.time)
+                    print(f"[fall-logger] elastic band released at t={data.time:.2f}s", flush=True)
                 if not _fall_logged:
                     _upz = float(data.xmat[pelvis][8])   # pelvis z-axis . world up (1=upright)
                     _pelvis_h = float(data.xpos[pelvis][2])
                     if _upz < FALL_UPRIGHTNESS or _pelvis_h < FALL_PELVIS_HEIGHT:
                         _fall_logged = True
-                        _since = (f"{data.time - _release_t:.2f}s after rt/lowcmd released the stand-in"
+                        _since = (f"{data.time - _release_t:.2f}s after band release"
                                   if _release_t is not None
-                                  else f"{data.time:.2f}s (stand-in still in control)")
+                                  else f"{data.time:.2f}s (band still on)")
                         print(f"[fall-logger] *** ROBOT FELL at sim t={data.time:.2f}s — stood "
                               f"{_since} (uprightness={_upz:.2f}, pelvis_h={_pelvis_h:.2f}) ***",
                               flush=True)
@@ -292,6 +286,10 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                 print("[g1_mujoco] task success (debounced).")
             _success = done
             if viewer:
+                if band.enabled:
+                    draw_band(handle, band.point, data.xpos[band_body])
+                else:
+                    handle.user_scn.ngeom = 0   # clear the overlay once the band is off
                 handle.sync()
             # real-time pacing against sim time
             ahead = (data.time - sim_start) - (time.time() - wall_start)

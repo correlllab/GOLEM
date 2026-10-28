@@ -181,9 +181,10 @@ configure_display() {
     esac
 }
 
-# The files the G1 overlay bind-mounts: its robot description (a submodule) and
-# the walking policy.
+# The files the G1 overlay bind-mounts into a service: its robot description (a
+# submodule) into both, and the walking policy into the ros service only.
 require_g1_files() {
+    local service=$1
     local description="$GOLEM_ROOT/third_party/leprechaun_g1/assets/g1_description"
     local policy="$GOLEM_ROOT/core_ws/src/g1/g1_locomotion/policy"
     local name
@@ -191,6 +192,7 @@ require_g1_files() {
         [ -f "$description/$name" ] || fail "Missing $description/$name. Initialize the G1 robot description: git submodule update --init third_party/leprechaun_g1"
         require_file "$description/$name"
     done
+    [ "$service" = ros ] || return 0
     for name in deploy.onnx g1.yaml homie_policy.py; do
         require_file "$policy/$name"
     done
@@ -200,7 +202,7 @@ prepare_mounts() {
     local service=$1
     require_file "$GOLEM_ASSETS_DIR/ros_assets/h1_2_magpie_ros.urdf"
     if [ "${GOLEM_ROBOT:-h12}" = g1 ]; then
-        case "$service" in robocasa|ros) require_g1_files;; esac
+        case "$service" in robocasa|ros) require_g1_files "$service";; esac
     fi
     case "$service" in
         isaac)

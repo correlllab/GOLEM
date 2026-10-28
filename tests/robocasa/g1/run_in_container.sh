@@ -14,7 +14,7 @@ done
 # The tests use each knob's default: a value set in the shell or docker/.env
 # must not change them (an interface in G1_DDS_INTERFACE does not exist here).
 for knob in GOLEM_CAMERAS GOLEM_CAMERA_SCALE GOLEM_CAMERA_HZ GOLEM_LIDAR GOLEM_LIDAR_POINTS \
-            GOLEM_LIDAR_HZ GOLEM_CMD_TIMEOUT GOLEM_ARM_SDK_TIMEOUT GOLEM_SPAWN_BACKOFF \
+            GOLEM_LIDAR_HZ GOLEM_CMD_TIMEOUT GOLEM_SPAWN_BACKOFF \
             GOLEM_SIM_ODOM GOLEM_SIM_EXPERIMENT G1_DDS_INTERFACE; do
     export "$knob="
 done

@@ -6,13 +6,11 @@ services:
       GOLEM_ROBOT: g1
       # The Unitree SDK in the sim takes the interface explicitly; empty = automatic.
       G1_DDS_INTERFACE: ${G1_DDS_INTERFACE:-}
-      # Sim seconds of rt/lowcmd / rt/arm_sdk silence before the sim turns the
-      # motors off / hands the arms back to the stand-in. Empty = the sim's
-      # default (0.5); a value that is not finite and positive stops the sim at
-      # startup. The H1-2 sim fails on an empty GOLEM_CMD_TIMEOUT, so only this
-      # overlay sets it.
+      # Sim seconds of rt/lowcmd silence before the sim turns the motors off.
+      # Empty = the sim's default (0.5); a value that is not finite and
+      # positive stops the sim at startup. The H1-2 sim fails on an empty
+      # GOLEM_CMD_TIMEOUT, so only this overlay sets it.
       GOLEM_CMD_TIMEOUT: ${GOLEM_CMD_TIMEOUT:-}
-      GOLEM_ARM_SDK_TIMEOUT: ${GOLEM_ARM_SDK_TIMEOUT:-}
       # MID-360 and head-camera cost knobs; empty = the sim's default.
       # GOLEM_LIDAR=0 drops the lidar; GOLEM_LIDAR_POINTS is points per frame and
       # GOLEM_LIDAR_HZ / GOLEM_CAMERA_HZ are the publish rates.
@@ -26,18 +24,11 @@ services:
       # h12_mujoco.py); empty = 0.
       GOLEM_SPAWN_BACKOFF: ${GOLEM_SPAWN_BACKOFF:-}
     volumes:
-      # The G1 model the sim builds its robot from, and the walking policy whose
-      # g1.yaml gives that robot its joint dynamics and standing stance. The ros
-      # service mounts both at the same paths.
+      # The G1 model the sim builds its robot from; the ros service mounts it
+      # at the same path.
       - type: bind
         source: ../third_party/leprechaun_g1
         target: /home/code/third_party/leprechaun_g1
-        read_only: true
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ../core_ws/src/g1/g1_locomotion/policy
-        target: /home/code/g1_locomotion
         read_only: true
         bind:
           create_host_path: false

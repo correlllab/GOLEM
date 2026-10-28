@@ -27,7 +27,7 @@ import battery_env  # registers the Battery workcell env
 from h12_sensors import H12Sensors
 from magpie_hand_bridge import MagpieHandBridge
 from measurement_bridge import MeasurementBridge
-from mujoco_env import ElasticBand
+from mujoco_env import ElasticBand, draw_band
 from mujoco_ros_bridge import RosSensorBridge
 from sim_names import NameResolver
 from sim_timing import RealtimePacer, LoopTimings
@@ -92,24 +92,6 @@ def _copy_display_state(dst, src):
     dst.act[:] = src.act
     dst.mocap_pos[:] = src.mocap_pos
     dst.mocap_quat[:] = src.mocap_quat
-
-
-def _draw_band(handle, anchor, body_pos):
-    """Draw the elastic band (anchor sphere + capsule to the torso) in the passive
-    viewer's user scene. Mirrors the legacy MujocoEnv.draw_elastic_band."""
-    scn = handle.user_scn
-    scn.ngeom = 0
-    color = np.array([0.5, 0.6, 1.0, 0.8])
-    if scn.ngeom < scn.maxgeom:
-        mujoco.mjv_initGeom(scn.geoms[scn.ngeom], mujoco.mjtGeom.mjGEOM_SPHERE,
-                            np.array([0.02, 0.0, 0.0]), anchor, np.eye(3).flatten(), color)
-        scn.ngeom += 1
-    if scn.ngeom < scn.maxgeom:
-        mujoco.mjv_initGeom(scn.geoms[scn.ngeom], mujoco.mjtGeom.mjGEOM_CAPSULE,
-                            np.zeros(3), np.zeros(3), np.eye(3).flatten(), color)
-        mujoco.mjv_connector(scn.geoms[scn.ngeom], mujoco.mjtGeom.mjGEOM_CAPSULE,
-                             0.01, anchor, body_pos)
-        scn.ngeom += 1
 
 
 def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False, duration=0.0):
@@ -411,7 +393,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             # sync() applies the current mouse perturbation to viewer_data.
             viewer_data.xfrc_applied[:] = 0.0
             if band is not None and band.enabled:
-                _draw_band(handle, band.point, viewer_data.xpos[band_body_id])
+                draw_band(handle, band.point, viewer_data.xpos[band_body_id])
             else:
                 handle.user_scn.ngeom = 0   # clear overlay when band off
             handle.sync()

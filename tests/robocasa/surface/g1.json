@@ -6,7 +6,6 @@
       "/lowstate": "unitree_hg/msg/LowState"
     },
     "subscribes": {
-      "/arm_sdk": "unitree_hg/msg/LowCmd",
       "/dex3/left/cmd": "unitree_hg/msg/HandCmd",
       "/dex3/right/cmd": "unitree_hg/msg/HandCmd",
       "/lowcmd": "unitree_hg/msg/LowCmd"
@@ -53,7 +52,9 @@
         "/robocasa/task_goal": "std_msgs/msg/String",
         "/robocasa/task_name": "std_msgs/msg/String"
       },
-      "services": {},
+      "services": {
+        "/elastic_band/toggle": "std_srvs/srv/Trigger"
+      },
       "subscriptions": {}
     }
   },

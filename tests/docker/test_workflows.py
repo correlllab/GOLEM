@@ -558,16 +558,19 @@ esac
         self.assertIn(self.SUBMODULE_HINT, r.stderr)
         self.assertFalse(self.compose_calls())
 
-    def test_g1_missing_policy_file_fails_early(self):
+    def test_g1_missing_policy_file_fails_early_for_ros_only(self):
+        # The walking node in the ros container reads the policy; the sim reads none of it.
         self.add_g1_files()
         policy = self.root / 'core_ws/src/g1/g1_locomotion/policy/deploy.onnx'
         policy.unlink()
-        for service in ('robocasa', 'ros'):
-            with self.subTest(service=service):
-                r = self.run_script('docker/scripts/docker_run.sh', service, '--g1')
-                self.assertNotEqual(r.returncode, 0)
-                self.assertIn('deploy.onnx', r.stderr)
-                self.assertFalse(self.compose_calls())
+        r = self.run_script('docker/scripts/docker_run.sh', 'ros', '--g1')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('deploy.onnx', r.stderr)
+        self.assertFalse(self.compose_calls())
+        shutil.rmtree(self.root / 'core_ws/src/g1/g1_locomotion')
+        r = self.run_script('docker/scripts/docker_run.sh', 'robocasa', '--g1')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(self.run_calls())
 
     def test_h12_ignores_missing_leprechaun(self):
         self.assertFalse((self.root / self.G1_URDF).exists())
@@ -786,9 +789,10 @@ esac
         services = self.compose_config('docker-compose.yml', 'docker-compose.g1.yml', profile='robocasa')
         sim = services['robocasa']['environment']
         self.assertEqual(sim['GOLEM_ROBOT'], 'g1')
-        for key in ('G1_DDS_INTERFACE', 'GOLEM_CMD_TIMEOUT', 'GOLEM_ARM_SDK_TIMEOUT', 'GOLEM_LIDAR',
+        for key in ('G1_DDS_INTERFACE', 'GOLEM_CMD_TIMEOUT', 'GOLEM_LIDAR',
                     'GOLEM_LIDAR_POINTS', 'GOLEM_LIDAR_HZ', 'GOLEM_CAMERA_HZ', 'GOLEM_SPAWN_BACKOFF'):
             self.assertEqual(sim[key], '', key)
+        self.assertNotIn('GOLEM_ARM_SDK_TIMEOUT', sim)
         self.assertEqual(sim['GOLEM_CAMERA_SCALE'], '1.0')
         ros = self.compose_config('docker-compose.yml', 'docker-compose.g1.yml', profile='ros',
                                   GOLEM_CACHE_DIR='/cache')['ros']
@@ -796,14 +800,17 @@ esac
         self.assertIn('G1_DDS_INTERFACE', ros['environment'])
         self.assertEqual(ros['environment']['CYCLONEDDS_URI'],
                          'file:///home/code/cyclonedds.xml,file:///home/code/cyclonedds_local.xml')
-        for service, extra in ((services['robocasa'], {}), (ros, {'/home/code/cyclonedds_local.xml': '/cache/cyclonedds_local.xml'})):
+        # The walking node in the ros container reads HOMIE's policy; the sim reads none of it.
+        policy = {'/home/code/g1_locomotion': str(self.root / 'core_ws/src/g1/g1_locomotion/policy')}
+        for service, extra in ((services['robocasa'], {}),
+                               (ros, {'/home/code/cyclonedds_local.xml': '/cache/cyclonedds_local.xml', **policy})):
             mounts = {v['target']: v for v in service['volumes']}
-            expected = {'/home/code/third_party/leprechaun_g1': str(self.root / 'third_party/leprechaun_g1'),
-                        '/home/code/g1_locomotion': str(self.root / 'core_ws/src/g1/g1_locomotion/policy'), **extra}
+            expected = {'/home/code/third_party/leprechaun_g1': str(self.root / 'third_party/leprechaun_g1'), **extra}
             for target, source in expected.items():
                 self.assertEqual(mounts[target]['source'], source)
                 self.assertTrue(mounts[target]['read_only'], target)
                 self.assertFalse(mounts[target].get('bind', {}).get('create_host_path', False), target)
+        self.assertFalse([v for v in services['robocasa']['volumes'] if 'g1_locomotion' in v['source']])
 
     def test_stack_compose_bringup_defaults_and_overrides(self):
         files = ('docker-compose.yml', 'docker-compose.stack.yml')

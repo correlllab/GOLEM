@@ -66,9 +66,11 @@ RAMP_WALL_S = (0.5, 2.0)   # the safety layer's 1 s weight ramps, in wall s
 HOME_CMD_TOL = 0.01        # rad: the commanded arm targets vs home
 WALK_SPEED_TOL = 0.3       # mean forward speed within 30% of WALK_SPEED
 WAIST_HOLD_SECONDS = 4.0   # sim s after the controller stops, in the walk test
-# rad: measured waist roll and pitch vs their hold once the controller has stopped. HOMIE
-# standing keeps them within ~0.015 of it; a limp waist slumps to its ~0.5 rad limits
-WAIST_HOLD_TOL = 0.05
+# rad: measured waist roll and pitch vs their hold once the controller has stopped. The arms
+# drop when they go limp, and the held waist settles about 0.03-0.05 rad off its hold under
+# the changed load (its last gravity torque was for the arms' pose); a limp waist slumps to
+# its ~0.5 rad limits
+WAIST_HOLD_TOL = 0.1
 # sensor topics: the rate from the stamps (sim time) within these fractions of
 # the configured one: the MID-360's are reliable, the camera's best effort
 RATE_TOL = {"reliable": (0.99, 1.01), "best_effort": (0.95, 1.01)}

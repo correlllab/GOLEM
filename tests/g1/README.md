@@ -26,7 +26,8 @@ lists its environment knobs, and each `test_sim_*.py` docstring says what it che
 - **Walk test**: the stand-in hands the legs to the walking node, the robot keeps standing, then
   walks 5 s at 0.3 m/s. Then `frame_task_server` alone is stopped while the walking node
   balances the robot: its shutdown command keeps the waist at its hold, so the waist roll and
-  pitch stay within 0.05 rad of it for 4 s and the robot keeps standing.
+  pitch stay within 0.1 rad of it for 4 s (a limp waist slumps about 0.5 rad) and the robot
+  keeps standing.
 - **Arm and walk tests**: every sensor topic arrives at its rate with the right frames, and the
   sim's sensor node publishes nothing else.
 - **Nav test**: Nav2 walks the robot to one goal 2-3 m from the spawn, picked from the sim's own

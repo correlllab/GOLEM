@@ -7,7 +7,8 @@ frame_task_config that does not run with its safety_config. For the G1, g1_core.
 starts golem_safety's safety_node with robot g1, the safety config, sim as the top-level
 file says and no hardware estop, and golem_upper_ik's frame_task_server and
 joint_state_publisher with robot g1. The launch tests need the workspace built and
-sourced.
+sourced; the G1 one is skipped without g1_description, which an H1-2 workspace does
+not build.
 """
 
 import importlib.util
@@ -164,6 +165,7 @@ def _core_nodes(**args):
 ])
 def test_core_runs_golem_safety_and_golem_upper_ik(launch_file, sim, safety_config,
                                                    controller_config):
+    pytest.importorskip('g1_description')   # g1_core.launch.py imports it
     nodes = _core_nodes(**_passed_to_core(launch_file))
     sim_time = {'use_sim_time': sim}
     assert nodes['safety_node'] == ('golem_safety', 'safety_node', {

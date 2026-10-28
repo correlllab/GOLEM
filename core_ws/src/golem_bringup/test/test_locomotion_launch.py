@@ -4,7 +4,8 @@ use_locomotion and config pairing in the bringup.
 g1_core refuses unsafe settings and sim/real mixes, picks the split-mode
 configs, and the real and sim launches pass the interlock on. Needs the
 workspace built and sourced (golem_bringup, g1_description and golem_upper_ik
-installed).
+installed); skipped without g1_description, which an H1-2 workspace does not
+build.
 """
 
 import importlib.util
@@ -18,6 +19,9 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, Time
 from launch.utilities import normalize_to_list_of_substitutions, perform_substitutions
 from launch_ros.actions import Node
 from launch_ros.utilities import evaluate_parameters
+
+# g1_core.launch.py imports g1_description
+pytest.importorskip('g1_description')
 
 LAUNCH_DIR = Path(__file__).resolve().parents[1] / 'launch' / 'g1'
 

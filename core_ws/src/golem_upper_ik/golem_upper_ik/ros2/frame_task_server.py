@@ -113,7 +113,7 @@ class FrameTaskServer(Node):
             f'Frame Task Server initialized (robot {self.robot}, config {self.config_name})')
 
     def shutdown(self):
-        '''The controller's shutdown: one zero-gain command, then silence'''
+        '''The controller's shutdown: its shutdown command, then silence'''
         if self.controller is not None:
             self.controller.shutdown()
 

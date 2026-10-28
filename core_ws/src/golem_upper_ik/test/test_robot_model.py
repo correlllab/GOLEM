@@ -346,7 +346,7 @@ def test_reduced_limit_violations_name_the_joint(models):
 
 
 def test_unused_paths_are_gone(models):
-    '''Only what the old nodes and the planner call is carried over'''
+    '''RobotModel has only what the controllers and the planner call: none of these'''
     model = models('h12')
     for name in ('check_valid', 'check_within_limits', 'check_collision_free', 'total_mass',
                  'zero_q_body_reduced', 'init_reduced_model', 'init_collision_model',

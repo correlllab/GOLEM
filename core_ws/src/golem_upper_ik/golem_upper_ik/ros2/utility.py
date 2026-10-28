@@ -22,9 +22,9 @@ __all__ = ['matrix_to_pose', 'node_parameters', 'pose_to_matrix', 'run']
 
 # s to wait at exit for the callbacks still running (a goal sees the shut-down controller
 # refuse its next command and ends within a control step), then for the executor's thread.
-# The zero-gain command goes out first; after it the controller's planner may take up to 3 s
-# (PlannerClient's 2 s grace for a plan in progress, then 1 s to terminate), so the whole
-# shutdown fits within launch's default sigterm_timeout of 5 s
+# The controller's shutdown command goes out first; after it the planner may take
+# planner_process.SHUTDOWN_GRACE for a plan in progress and its terminate wait
+# (PlannerClient.shutdown). All of it must fit within launch's default sigterm_timeout of 5 s
 EXIT_CALLBACK_TIMEOUT = 1.0
 EXIT_JOIN_TIMEOUT = 0.5
 
@@ -110,8 +110,8 @@ def _ignored(signum, frame):
 def _ignore_signals():
     '''
     Ignore SIGINT and SIGTERM from now on, through a handler that does nothing: with SIG_IGN,
-    a signal already pending when the handler changes raises OSError ("ignored due to race
-    condition") in the main thread
+    a signal that arrives while the handler changes is reported through sys.unraisablehook
+    as OSError("Signal 2 ignored due to race condition"), a stray traceback on stderr
     '''
     signal.signal(signal.SIGINT, _ignored)
     signal.signal(signal.SIGTERM, _ignored)

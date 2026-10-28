@@ -256,9 +256,10 @@ class CommandPublisher:
 
     set(q, dq, tau, kp, kd) gives the command of the profile's upper slots, one value each, in
     slot order (rad, rad/s, N*m and the gains); enabled=False sends mode 0 (motor off) on
-    them. Nothing is published before the first set(). Every message carries the profile's
-    mode_pr and mode_machine; its lower slots and the slots past the body are mode 0 with
-    every value 0, and its CRC is 0 (golem_safety computes the CRC of what it writes).
+    them, and one bool per upper slot sets each slot's mode. Nothing is published before the
+    first set(). Every message carries the profile's mode_pr and mode_machine; its lower
+    slots and the slots past the body are mode 0 with every value 0, and its CRC is 0
+    (golem_safety computes the CRC of what it writes).
 
     The thread keeps to absolute deadlines on time.monotonic(). If it fails, set() raises.
     stop() makes sure the newest command has been published once, then stops.
@@ -296,9 +297,17 @@ class CommandPublisher:
     def topic(self) -> str:
         return self._topic
 
-    def set(self, q, dq, tau, kp, kd, enabled: bool = True) -> None:
-        '''The command of the upper slots from now on; ValueError on a bad value'''
+    def set(self, q, dq, tau, kp, kd, enabled=True) -> None:
+        '''
+        The command of the upper slots from now on; enabled is a bool for every upper slot or
+        one per upper slot (mode 1 or 0). ValueError on a bad value
+        '''
         count = len(self._slots)
+        modes = np.asarray(enabled)
+        if modes.dtype != np.bool_ or modes.shape not in ((), (count,)):
+            raise ValueError(f'enabled must be a bool or {count} bools (the upper slots), '
+                             f'not {enabled!r}')
+        modes = np.broadcast_to(modes, (count,)).astype(np.int64).tolist()
         fields = []
         for name, values in (('q', q), ('dq', dq), ('tau', tau), ('kp', kp), ('kd', kd)):
             values = np.asarray(values, dtype=np.float64)
@@ -314,7 +323,7 @@ class CommandPublisher:
                                    f'{self._error!r}')
             if self._stopped:
                 raise RuntimeError(f'the command publisher on {self._topic} is stopped')
-            self._staged = (1 if enabled else 0, *fields)
+            self._staged = (modes, *fields)
             self._version += 1
 
     def _write(self, staged) -> None:
@@ -322,7 +331,7 @@ class CommandPublisher:
         motors = self._msg.motor_cmd
         for k, slot in enumerate(self._slots):
             motor = motors[slot]
-            motor.mode = mode
+            motor.mode = mode[k]
             motor.q = q[k]
             motor.dq = dq[k]
             motor.tau = tau[k]

@@ -266,6 +266,11 @@ def test_header_is_profile(ros, robot, mode_machine):
     # disabled: mode 0 on the upper slots
     publisher.set(q, dq, np.zeros(n), np.zeros(n), np.zeros(n), enabled=False)
     assert wait_for(lambda: recorder.last.motor_cmd[upper[0]].mode == 0, 2.0)
+    # a mode per upper slot
+    enabled = np.arange(n) % 2 == 0
+    publisher.set(q, dq, tau, kp, kd, enabled=enabled)
+    assert wait_for(lambda: recorder.last.motor_cmd[upper[0]].mode == 1, 2.0)
+    assert [recorder.last.motor_cmd[slot].mode for slot in upper] == enabled.astype(int).tolist()
 
 
 def test_command_publisher_refuses_bad_commands(ros):
@@ -290,6 +295,9 @@ def test_command_publisher_refuses_bad_commands(ros):
                 publisher.set(*values)
     with pytest.raises(ValueError, match=str(n)):
         publisher.set(np.zeros(n + 1), *good[1:])
+    for enabled in ([True] * (n - 1), 1, [1] * n):
+        with pytest.raises(ValueError, match='enabled'):
+            publisher.set(*good, enabled=enabled)
     publisher.stop()
     with pytest.raises(RuntimeError, match='stopped'):
         publisher.set(*good)

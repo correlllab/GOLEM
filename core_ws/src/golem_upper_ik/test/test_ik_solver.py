@@ -152,7 +152,7 @@ def test_rebuild_reduced_rebinds_the_reduced_model(models):
 
 
 def test_unused_paths_are_gone(solver):
-    '''Only what the old nodes call is carried over'''
+    '''IKSolver has only what the controllers call: none of these'''
     for name in ('solve_ik', 'integrate_reduced', 'set_from_configuration',
                  'set_from_configuration_reduced', 'com_task', 'com_task_reduced'):
         assert not hasattr(solver, name), name

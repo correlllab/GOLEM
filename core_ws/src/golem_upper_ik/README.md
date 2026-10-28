@@ -73,6 +73,7 @@ a node runs with `robot:=g1`.
 |---|---|---|
 | IK joints | the 14 arm joints | the 14 arm joints |
 | Held joints | `torso_joint` | `waist_yaw_joint`, `waist_roll_joint`, `waist_pitch_joint` |
+| Held joints at shutdown on `/lowcmd` (Shutdown, below) | off, with the arms | kept at their hold |
 | End-effector frames | `left/right_wrist_yaw_link` | `left/right_hand_palm_link` |
 | Planner frames | `left/right_grasp_frame` | `left/right_hand_palm_link` |
 | IMU frame | `torso_link` | `imu_in_pelvis` (`controller.imu_frame` overrides) |
@@ -155,7 +156,7 @@ out of its range or a value of the wrong kind; an alias given with its key.
    then step the held joints to `controller.hold_targets` at min(0.3, `dq_lim`) rad/s, all
    within `controller.startup_move_timeout` of the gate opening.
 
-A start-up that fails after step 2 sends the zero-gain command (Shutdown, below) and the
+A start-up that fails after step 2 sends the shutdown command (Shutdown, below) and the
 node exits 1. On the H1-2 `golem_safety` relays once `/lowstate` reports `mode_machine` 6 (and,
 on the real robot, `estop_node` has sent a first sample), so the gate opens at the first
 relay; on the G1 it opens once `golem_safety`'s engage gate has passed and, in arm_sdk mode,
@@ -216,13 +217,19 @@ check. Both nodes set `OPENBLAS_NUM_THREADS` and `OMP_NUM_THREADS` to 1 before n
 loads: OpenBLAS's busy-waiting threads would stall the 500 Hz publisher.
 
 **Shutdown.** rclpy's signal handlers are off. The first SIGINT or SIGTERM ends the node; a
-later one is ignored. `frame_task_server` first sends its upper slots one command with mode 0
-and zero kp, kd and tau (q and dq as they were) and stops publishing, then stops the planner
-and its `/lowstate` subscription; the whole shutdown fits in launch's 5 s `sigterm_timeout`.
-What `golem_safety` does with that command:
+later one is ignored. `frame_task_server` first sends its upper slots one command and stops
+publishing, then stops the planner and its `/lowstate` subscription, the last two even if an
+earlier step fails; the whole shutdown fits in launch's 5 s `sigterm_timeout`. The command
+gives the IK joints mode 0 and zero kp, kd and tau (q and dq as they were). The held joints
+get the same, unless the profile's `shutdown_keeps_held_joints_on_lowcmd` is set (the G1)
+and `topics.safety_out` is `/lowcmd`: then they keep their hold angle, gains and torque,
+since a walking policy on the legs needs a stiff waist. What `golem_safety` does with that
+command:
 
-- H1-2 (both modes) and G1 split mode: it relays it, so the torso or waist and the arms go
-  limp, and as a quiet input it stays relayed;
+- H1-2 (both modes): it relays it, so the torso and the arms go limp, and as a quiet input
+  it stays relayed;
+- G1 split mode: it relays it, so the arms go limp while the waist holds, and as a quiet
+  input it stays relayed;
 - G1 arm_sdk mode: it refuses it (the waist kp is below `arm_sdk.waist_kp_min`), latches its
   estop (`estop_command_written`) and hands the waist and arms back to Unitree over
   `arm_sdk.release_seconds`.

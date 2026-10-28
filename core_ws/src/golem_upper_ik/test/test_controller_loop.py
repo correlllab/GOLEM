@@ -226,6 +226,31 @@ def test_startup_home_ee_target_and_zero_gain_shutdown(ros, models, robot):
         assert (motor.mode, motor.kp, motor.kd, motor.tau) == (0, 0.0, 0.0, 0.0)
 
 
+@pytest.mark.parametrize('raising', ['handler', 'planner'])
+def test_shutdown_stops_the_planner_and_detaches_the_state_whatever_raises(raising):
+    '''
+    A command handler or planner whose shutdown raises leaves nothing behind: the planner
+    subprocess is still stopped and the state source detached, and the error propagates
+    '''
+    from golem_upper_ik.core.controller.upper_controller import UpperController
+    calls = []
+
+    def part(name):
+        def shutdown():
+            calls.append(name)
+            if name == raising:
+                raise RuntimeError(f'the {name} failed')
+        return type(name, (), {'shutdown': staticmethod(shutdown)})()
+
+    controller = UpperController.__new__(UpperController)
+    controller.low_cmd_handler = part('handler')
+    controller.planner = part('planner')
+    controller.robot_model = part('state')
+    with pytest.raises(RuntimeError, match=f'the {raising} failed'):
+        controller.shutdown()
+    assert calls == ['handler', 'planner', 'state']
+
+
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_no_lowstate_means_no_command_and_a_clear_error(ros, models, robot):
     profile = profile_of(robot)

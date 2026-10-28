@@ -25,6 +25,9 @@ ENABLED_JOINTS = (
 )
 # upper-body joints the IK does not move; every command holds them at controller.hold_targets
 HELD_JOINTS = ('torso_joint',)
+# The controller's shutdown command turns the torso off with the arms, in both modes: gravity
+# barely loads the torso yaw
+SHUTDOWN_KEEPS_HELD_JOINTS_ON_LOWCMD = False
 # end effectors for velocity limiting and the ee pose topics
 EE_FRAMES = ('left_wrist_yaw_link', 'right_wrist_yaw_link')
 # frames the OMPL planner plans for and bounds by planner.frame_* limits

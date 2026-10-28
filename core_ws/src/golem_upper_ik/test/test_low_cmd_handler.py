@@ -266,20 +266,47 @@ def test_start_refuses_a_non_finite_pose(ros, models):
     assert rig.recorder.count == 0
 
 
-def test_shutdown_writes_zero_gains_then_stops(ros, models):
-    rig = Rig(ros, models, 'h12', follow_tolerance=0.0)
+# (robot, controller config, golem_safety's output, whether the shutdown keeps the held joints)
+SHUTDOWNS = [('h12', 'safety_split', '/lowcmd', False), ('h12', 'safety_full', '/lowcmd', False),
+             ('g1', 'g1', '/arm_sdk', False), ('g1', 'g1_split', '/lowcmd', True)]
+
+
+@pytest.mark.parametrize('robot, config, safety_out, keeps_held', SHUTDOWNS,
+                         ids=[f'{r}-{c}' for r, c, _, _ in SHUTDOWNS])
+def test_shutdown_command_then_silence(ros, models, robot, config, safety_out, keeps_held):
+    '''
+    The IK joints go limp: mode 0, kp, kd and tau 0, q as they were. The held joints too,
+    except on the G1 when golem_safety writes /lowcmd, where a walking policy may be on the
+    legs: there they keep their hold angle, gains and torque. On the G1's /arm_sdk the
+    zero-gain waist makes golem_safety latch and hand the waist and arms back
+    '''
+    rig = Rig(ros, models, robot, config=config, follow_tolerance=0.0)
+    assert rig.config['topics']['safety_out'] == safety_out
     handler = rig.handler()
     handler.start()
     command(rig, handler, rig.measured)
-    assert wait_for(lambda: rig.recorder.count > 10, 2.0)
-    handler.shutdown()
+    tau = 1.5  # N*m on every joint, gravity feed-forward as the controller sends it
+    handler.set_joint_commands(tau=np.full(len(rig.profile.body_joints), tau))
     assert wait_for(lambda: rig.recorder.last is not None
-                    and rig.recorder.last.motor_cmd[rig.upper[0]].mode == 0, 2.0)
+                    and rig.recorder.last.motor_cmd[rig.arms[0]].tau == np.float32(tau), 2.0)
+    held_q = handler.hold
+    handler.shutdown()
+    assert wait_for(lambda: rig.recorder.last.motor_cmd[rig.arms[0]].mode == 0, 2.0)
     last = rig.recorder.last
-    for slot in rig.upper:
+    kp, kd = rig.config['gains']['kp'], rig.config['gains']['kd']
+    for slot in rig.arms:
         motor = last.motor_cmd[slot]
-        assert (motor.mode, motor.kp, motor.kd, motor.tau) == (0, 0.0, 0.0, 0.0)
+        assert (motor.mode, motor.kp, motor.kd, motor.tau) == (0, 0.0, 0.0, 0.0), slot
         assert motor.q == pytest.approx(rig.measured[slot], abs=FLOAT32)
+    for k, slot in enumerate(rig.held):
+        motor = last.motor_cmd[slot]
+        assert motor.q == pytest.approx(held_q[k], abs=FLOAT32)
+        if keeps_held:
+            assert (motor.mode, motor.kp, motor.kd) == (1, np.float32(kp[slot]),
+                                                         np.float32(kd[slot])), slot
+            assert motor.tau == np.float32(tau)
+        else:
+            assert (motor.mode, motor.kp, motor.kd, motor.tau) == (0, 0.0, 0.0, 0.0), slot
     count = rig.recorder.count
     time.sleep(0.2)
     assert rig.recorder.count == count

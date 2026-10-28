@@ -18,7 +18,10 @@ profile's upper slots to golem_safety's input (topics.low_cmd) by a CommandPubli
   pose raises StaleStateError, and the gate thread stops, leaving the last command standing.
 - No estop: golem_safety's limits and estop are the check. A measured state past a limit
   changes nothing here.
-- shutdown() sends the upper slots mode 0 with zero gains and torque, then stops publishing.
+- shutdown() sends one last command and stops publishing: the IK joints mode 0 with zero
+  gains and torque, and the held joints the same, except where the profile keeps them
+  (shutdown_keeps_held_joints_on_lowcmd, the G1) and golem_safety writes /lowcmd: there they
+  keep their hold angle, gains and torque.
 '''
 import math
 import threading
@@ -74,6 +77,11 @@ class LowCmdHandler:
         self._hold = np.zeros(len(self._held))  # start() sets it to the measured angles
 
         self._safety_output_topic = config['topics']['safety_out']
+        # the held joints stay on at shutdown: a walking policy may be on the legs
+        self._shutdown_keeps_held = (
+            profile.shutdown_keeps_held_joints_on_lowcmd
+            and self._safety_output_topic in (SAFETY_OUTPUT_TOPICS['split_mode'],
+                                              SAFETY_OUTPUT_TOPICS['full_body_mode']))
         self._weight_slot = None
         if self._safety_output_topic == SAFETY_OUTPUT_TOPICS['arm_sdk_mode']:
             if profile.arm_sdk_weight_slot is None:
@@ -344,8 +352,9 @@ class LowCmdHandler:
 
     def shutdown(self):
         '''
-        Send the upper slots mode 0 with zero gains and torque (q and dq as they were), make
-        sure that command went out, and stop publishing.
+        Send the IK joints mode 0 with zero gains and torque (q and dq as they were), and the
+        held joints the same unless the profile keeps them on /lowcmd, where their command
+        stands; make sure that command went out, and stop publishing.
 
         Call it before the robot model's state source is detached (RobotModel.shutdown()):
         while the follow gate is shut, a detached source stops the gate's check with an error
@@ -362,11 +371,15 @@ class LowCmdHandler:
         try:
             with self._data_lock:
                 if self._started:
-                    self._tau[:] = 0.0
-                    self._kp[:] = 0.0
-                    self._kd[:] = 0.0
                     upper = self._upper
+                    off = upper
+                    if self._shutdown_keeps_held:
+                        off = np.setdiff1d(upper, self._held)
+                    self._tau[off] = 0.0
+                    self._kp[off] = 0.0
+                    self._kd[off] = 0.0
                     self._publisher.set(self._q[upper], self._dq[upper], self._tau[upper],
-                                        self._kp[upper], self._kd[upper], enabled=False)
+                                        self._kp[upper], self._kd[upper],
+                                        enabled=~np.isin(upper, off))
         finally:
             self._publisher.stop()

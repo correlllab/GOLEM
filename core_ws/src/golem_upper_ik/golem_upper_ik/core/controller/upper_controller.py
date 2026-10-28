@@ -10,7 +10,7 @@ measured pose with its gravity torque. With init, the controller then waits for 
 to relay its commands (the follow gate opening) within controller.startup_timeout, moves the
 arms through the profile's start-up postures and the held joints to controller.hold_targets,
 within controller.startup_move_timeout of the gate opening. A start-up that fails shuts the
-controller down (one zero-gain command, then silence) and raises.
+controller down (the shutdown command, then silence: LowCmdHandler.shutdown) and raises.
 
 Each goal re-locks the reduced model's frozen joints at the measured pose and starts the IK
 from the last command (update_ik_solver). On the real robots' ROS domain (0) every control
@@ -144,7 +144,7 @@ class UpperController:
             if init:
                 self._startup_routine()
         except BaseException:
-            # one zero-gain command, then silence
+            # the shutdown command, then silence
             self.shutdown()
             raise
 
@@ -588,14 +588,19 @@ class UpperController:
 
     def shutdown(self):
         '''
-        Send the upper slots one zero-gain command and stop publishing, then stop the planner
-        and detach the state source. The zero-gain command goes first: the planner's own
-        shutdown may wait out a plan in progress. Publishing stops before the source is
-        detached: a detached source would leave the follow gate nothing to hold the commands
-        near. Idempotent
+        Send the shutdown command (LowCmdHandler.shutdown) and stop publishing, then stop the
+        planner and detach the state source, the last two even when an earlier step raises,
+        so that no planner subprocess outlives the controller; the error propagates.
+        The shutdown command goes first: the planner's own shutdown may wait out a plan in
+        progress. Publishing stops before the source is detached: a detached source would
+        leave the follow gate nothing to hold the commands near. Idempotent
         '''
-        if self.low_cmd_handler is not None:
-            self.low_cmd_handler.shutdown()
-        if self.planner is not None:
-            self.planner.shutdown()
-        self.robot_model.shutdown()
+        try:
+            if self.low_cmd_handler is not None:
+                self.low_cmd_handler.shutdown()
+        finally:
+            try:
+                if self.planner is not None:
+                    self.planner.shutdown()
+            finally:
+                self.robot_model.shutdown()

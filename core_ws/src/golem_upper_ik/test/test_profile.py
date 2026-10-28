@@ -34,6 +34,7 @@ EXPECTED = {
         'urdf_ros': 'h1_2_magpie_ros.urdf',
         'collision': ('h1_2_magpie_sphere.urdf', 'h1_2_magpie_sphere_collision.srdf'),
         'arm_sdk_weight_slot': None,
+        'shutdown_keeps_held_joints_on_lowcmd': False,
     },
     'g1': {
         'joints': 29,
@@ -48,6 +49,7 @@ EXPECTED = {
         'urdf_ros': 'g1_29dof_with_hand_rev_1_0_ros.urdf',
         'collision': None,
         'arm_sdk_weight_slot': 29,
+        'shutdown_keeps_held_joints_on_lowcmd': True,
     },
 }
 
@@ -84,6 +86,8 @@ def test_profiles_load(robot):
     assert profile.imu_frame == expected['imu_frame']
     assert profile.held_joints == expected['held_joints']
     assert profile.arm_sdk_weight_slot == expected['arm_sdk_weight_slot']
+    assert (profile.shutdown_keeps_held_joints_on_lowcmd
+            is expected['shutdown_keeps_held_joints_on_lowcmd'])
     for name in ('q_low', 'q_high', 'dq_max', 'tau_max'):
         values = getattr(profile, name)
         assert values.shape == (expected['joints'],), name

@@ -539,8 +539,9 @@ def test_faults_latch_silent(policy, trained, name, inject, reason):
     errors = _messages(rig.log, 'error')
     assert len(errors) == 1 and errors[0].startswith(f'fault: {reason}')
     assert ('Stopped commanding the legs; golem_safety keeps relaying their last command, '
-            'which does not balance the robot (it estops instead on a non-finite joint value). '
-            'Restart the node to clear') in errors[0]
+            'which does not balance the robot (it estops instead when rt/lowstate has a '
+            "non-finite joint value, a joint past limits.estop or another robot's "
+            'mode_machine). Restart the node to clear') in errors[0]
 
 
 def test_faults_during_the_ramp_latch_too(policy, trained):

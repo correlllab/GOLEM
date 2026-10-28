@@ -1,11 +1,13 @@
-'''
-use_nav in the bringup: g1_core includes g1_navigation's launch with the sim's
-arguments, refuses navigation on the real robot (its lidar is not connected
-yet) and without the walking node, and the real and sim launches pass use_nav
-on. frontier_explore reaches g1_navigation as an explicit launch argument of
-that include. Needs the workspace built and sourced (g1_bringup,
-g1_description, g1_navigation and g1_control installed)
-'''
+"""
+use_nav in the bringup.
+
+g1_core includes g1_navigation's launch with the sim's arguments, refuses
+navigation on the real robot (its lidar is not connected yet) and without the
+walking node, and the real and sim launches pass use_nav on. frontier_explore
+reaches g1_navigation as an explicit launch argument of that include. Needs the
+workspace built and sourced (g1_bringup, g1_description, g1_navigation and
+golem_upper_ik installed).
+"""
 
 import os
 import pathlib
@@ -29,13 +31,13 @@ REAL_WALKING = dict(use_locomotion='true', safety_config='split', start_position
 
 
 def _includes(**args):
-    '''The IncludeLaunchDescription actions g1_core starts with args'''
+    """Return the IncludeLaunchDescription actions g1_core starts with args."""
     actions = core._setup(_context(core.generate_launch_description(), **args))
     return [a for a in actions if isinstance(a, IncludeLaunchDescription)]
 
 
 def _nav_include(**args):
-    '''(path, {argument: value}) of the one launch file g1_core includes with args'''
+    """Return (path, {argument: value}) of the one launch file g1_core includes with args."""
     (include,) = _includes(**args)
     context = LaunchContext()
     include.launch_description_source.get_launch_description(context)   # resolves its location
@@ -47,8 +49,12 @@ def _nav_include(**args):
 
 
 def _nav_nodes(path, arguments):
-    '''{node name: (Node, {parameter: value} of its dict parameters, its parameter files)}
-    that the included launch file starts with arguments, all of which it must declare'''
+    """
+    Return the nodes the included launch file starts with arguments.
+
+    The result is {node name: (Node, {parameter: value} of its dict parameters, its
+    parameter files)}. The launch file must declare every argument.
+    """
     description = PythonLaunchDescriptionSource(path).get_launch_description(LaunchContext())
     declared = {e.name for e in description.entities if isinstance(e, DeclareLaunchArgument)}
     assert set(arguments) <= declared, f'not declared by {path}: {set(arguments) - declared}'

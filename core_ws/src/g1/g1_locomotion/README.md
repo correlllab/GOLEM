@@ -1,7 +1,7 @@
 # g1_locomotion
 
 ROS 2 node that runs HOMIE's walking policy on the Unitree G1's legs. The legs'
-commands go to `g1_safety_layer`'s split mode, which merges them with the arm
+commands go to `golem_safety`'s split mode, which merges them with the arm
 controller's waist and arms and alone writes `rt/lowcmd`. It needs
 `unitree_sdk2py` and its cyclonedds, onnxruntime, numpy and PyYAML, which the
 ros image has.
@@ -104,10 +104,14 @@ ros2 topic pub --once /locomotion/height std_msgs/msg/Float32 "{data: 0.7}"
       counts any slower delivery, the time the sample waited for the node,
       and the policy step.
 
-    The node never sends a zero-gain or damping command itself: the safety
-    layer's leg watchdog (0.2 s in `split.yaml`) sees the lower input go quiet
-    and estops. Only a restart clears a fault. Shutdown (Ctrl-C) also just
-    stops publishing.
+    The node never sends a zero-gain or damping command itself. `golem_safety`
+    holds a quiet input: it keeps relaying the node's last leg command, which
+    does not balance the robot, and after `stale.lower_seconds` (0.2 s in
+    `split.yaml`) reports the quiet input (`input_quiet`). It does not estop
+    on it: the command stands until `golem_safety` estops for another reason
+    (a fall that drives a joint of `rt/lowstate` past `split.yaml`'s
+    `limits.estop`, say) or the bringup stops. Only a restart clears a fault.
+    Shutdown (Ctrl-C) also just stops publishing.
 5. **Timing.** The ramp's log line gives the tick's rate against the wall
     clock while waiting (1.00 on the robot). Every 10 s, after a publish, the
     node logs the latency of its commands (median and max) and how far apart
@@ -178,9 +182,10 @@ threads too, then waits for the next period:
     on a command 27.1 or 59.1 ms late.
 - Capped at 1.5 CPUs while walking (three runs), it faulted on a command
     25.5-35.9 ms late, 0.57-0.87 s after the cap, with the robot still up.
-    The safety layer then held its last target until its 1 s leg watchdog
-    (`sim_split.yaml`) estopped, and the robot dropped when the estop turned
-    every motor off.
+    The safety layer of those runs then held its last target until its 1 s
+    leg watchdog (`sim_split.yaml`) estopped, and the robot dropped when the
+    estop turned every motor off. `golem_safety` holds the last target and
+    reports the quiet input instead (Behavior, Faults).
 - The old node fell in every capped run (five here, three in stage 3a).
 
 How the container gets its CPU matters as much as how much (this is the
@@ -213,7 +218,7 @@ latency fault cannot see that part.
 
 - Every key is required and an unknown key is an error, so a typo cannot fall
     back to a default.
-- `topics.low_cmd` must be a `g1_safety_layer` input (`rt/safety/...`), and
+- `topics.low_cmd` must be a `golem_safety` input (`rt/safety/...`), and
     differ from `topics.upper_cmd`.
 - The command limits must include 0 and lie inside the trained ranges
     (`cmd_range` in `policy/g1.yaml`).
@@ -229,6 +234,9 @@ latency fault cannot see that part.
     controller released first; that is a manual operator step, and nothing in
     this stack does it.
 - Support the robot (a gantry): `split.yaml`'s estop zeroes every motor.
+- A fault silences the node (Behavior, Faults), and `golem_safety` then
+    holds the legs on the node's last command instead of turning every motor
+    off: the robot stands on a frozen target that does not balance it.
 - The frame of `rt/lowstate`'s IMU on our unit is not verified yet; the node
     takes it as the pelvis IMU, and accepts only `imu_frame: pelvis`.
 - The unit of `rt/lowstate`'s tick on our unit is not verified yet; the node
@@ -256,20 +264,22 @@ latency fault cannot see that part.
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:../g1_description:$PYTHONPATH python3 -m pytest test
 ```
 
-- They need the workspace built and sourced (`g1_safety_layer`). They load
+- They need the workspace built and sourced (`golem_safety`). They load
     the policy from this package's `policy/`.
-- The DDS tests run on domain 97 inside one process: a fake G1, a fake arm
-    controller and the real safety layer in split mode. They never touch the
-    robot. That process is busy enough that `rt/lowstate` is sometimes tens
-    of ms late, so they relax `faults.max_state_gap` and
+- The DDS tests run on domain 97: a fake G1, a fake arm controller and the
+    node in the test's process, and `golem_safety`'s installed `safety_node`
+    (robot `g1`, a copy of its `split.yaml`) as a subprocess. They never
+    touch the robot. The test's process is busy enough that `rt/lowstate` is
+    sometimes tens of ms late, so they relax `faults.max_state_gap` and
     `faults.max_latency` to 0.25 s and `startup.tick_rate` to [0.5, 2.0],
-    and the safety layer's `rt/lowstate` watchdog, where it has one
-    (`control.state_stale_estop_seconds`), to 0.25 s; the unit tests check
-    the real values. Their 50 Hz checks still need the host to keep up: at a
-    load average of 11-19 on the 24-core laptop the fake G1 itself fell behind
-    once (565 samples in 1 s) and one failed; the repeats passed.
-- The stale-`rt/lowstate` test keeps `split.yaml`'s own `rt/lowstate`
-    watchdog. It accepts either estop: the leg watchdog's, once the node has
-    gone silent, or, with a safety layer that has an `rt/lowstate` watchdog,
-    that one, which fires first. Either way the node faults, sends nothing
-    more, and the safety layer zeroes every motor and stays latched.
+    and `golem_safety`'s quiet-`rt/lowstate` report (`stale.state_seconds`)
+    to 0.25 s; the unit tests check the real values. Their 50 Hz checks still
+    need the host to keep up: at a load average of 11-19 on the 24-core laptop
+    the fake G1 itself fell behind once (565 samples in 1 s) and one failed;
+    the repeats passed.
+- The fault tests (stale, non-finite or fallen state, a late command) check
+    that the node faults and sends nothing more, and that `golem_safety` keeps
+    relaying its last leg command, reports the quiet leg input once and does
+    not estop. The stale-`rt/lowstate` test keeps `split.yaml`'s own
+    `stale.state_seconds`, and `golem_safety` reports the quiet `rt/lowstate`
+    and its return too.

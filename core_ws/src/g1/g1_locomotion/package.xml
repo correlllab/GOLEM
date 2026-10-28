@@ -3,7 +3,7 @@
 <package format="3">
   <name>g1_locomotion</name>
   <version>0.0.0</version>
-  <description>HOMIE's walking policy on the Unitree G1's legs, through g1_safety_layer's split mode</description>
+  <description>HOMIE's walking policy on the Unitree G1's legs, through golem_safety's split mode</description>
   <maintainer email="npudasai@nd.edu">Niraj Pudasaini</maintainer>
   <license>MIT</license>
 
@@ -11,7 +11,7 @@
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
   <depend>g1_description</depend>
-  <exec_depend>g1_safety_layer</exec_depend>
+  <exec_depend>golem_safety</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
 

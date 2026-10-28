@@ -1,11 +1,11 @@
-# Real G1. HOMIE's walking policy drives the legs through g1_safety_layer's
+# Real G1. HOMIE's walking policy drives the legs through golem_safety's
 # split mode (its split.yaml), which merges them with the arm controller's
 # waist + arms and alone writes rt/lowcmd. The node never writes rt/lowcmd.
 # Command limits and rates are starting values, not yet tuned on our G1.
 
 topics:
   low_state: rt/lowstate
-  # the legs' commands: must be a g1_safety_layer input (rt/safety/...)
+  # the legs' commands: must be a golem_safety input (rt/safety/...)
   low_cmd: rt/safety/lowcmd_lower_in
   # read only: the node starts once the arm controller is commanding here
   upper_cmd: rt/safety/lowcmd_upper_in

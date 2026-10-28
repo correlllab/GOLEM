@@ -22,7 +22,7 @@ class LocomotionNode(Node):
       (rad/s) in the base frame; older than commands.timeout means stop
     - /locomotion/height (std_msgs/Float32): the pelvis height target, m
       (standing, 0.74, until one arrives)
-    The legs go to g1_safety_layer's lower-body input over Unitree DDS; see
+    The legs go to golem_safety's lower-body input over Unitree DDS; see
     LocomotionController for the startup and the faults.
 
     use_sim_time is always false, whatever the launch passes: the node times
@@ -67,7 +67,8 @@ class LocomotionNode(Node):
         self._driver.set_height(msg.data)
 
     def destroy_node(self):
-        # stop publishing; the safety layer's leg watchdog then estops
+        # stop publishing; golem_safety keeps relaying the last leg command and
+        # reports the quiet input
         self._driver.shutdown()
         return super().destroy_node()
 

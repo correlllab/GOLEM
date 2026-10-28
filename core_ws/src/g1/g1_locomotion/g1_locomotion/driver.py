@@ -35,7 +35,7 @@ class LocomotionDriver:
     Each leg target the controller returns is checked for latency
     (LocomotionController.latency_ok, from the sample's DDS write, see
     SourceClock) and written at once to topics['low_cmd']
-    (g1_safety_layer's lower-body input, which holds it at 500 Hz): slots 0-11
+    (golem_safety's lower-body input, which holds it at 500 Hz): slots 0-11
     with mode 1, dq = tau = 0 and the training gains, every other slot zero.
     topics['upper_cmd'] is only read while waiting to start, to know the arm
     controller is running. Nothing is written on a fault or on shutdown.
@@ -55,8 +55,8 @@ class LocomotionDriver:
         self._source_clock = SourceClock()
 
         self._cmd = LowCmdDefault()
-        # g1_safety_layer stamps mode_pr and rt/lowstate's mode_machine again
-        # before anything reaches the robot
+        # golem_safety stamps the G1 profile's mode_pr and mode_machine (0 and 5)
+        # again before anything reaches the robot
         self._cmd.mode_pr = MODE_PR
         for i, slot in enumerate(controller.leg_slots):
             motor = self._cmd.motor_cmd[slot]
@@ -147,7 +147,7 @@ class LocomotionDriver:
             self._controller.log_timing(sent)
 
     def shutdown(self):
-        '''Stop without writing anything more: the safety layer owns the estop'''
+        '''Stop without writing anything more: golem_safety owns the estop'''
         with self._lock:
             self._closed = True
         self._worker.join(timeout=1.0)

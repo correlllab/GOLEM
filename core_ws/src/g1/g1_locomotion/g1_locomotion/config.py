@@ -61,8 +61,8 @@ def check_config(raw, cmd_range):
 
     topics = {key: str(value) for key, value in raw['topics'].items()}
     if not topics['low_cmd'].startswith('rt/safety/'):
-        # rt/lowcmd is only ever written by g1_safety_layer
-        raise ValueError('topics.low_cmd must be a g1_safety_layer input (rt/safety/...), '
+        # rt/lowcmd is only ever written by golem_safety
+        raise ValueError('topics.low_cmd must be a golem_safety input (rt/safety/...), '
                          f'got {topics["low_cmd"]}')
     if topics['low_cmd'] == topics['upper_cmd']:
         raise ValueError('topics.low_cmd and topics.upper_cmd must differ: upper_cmd is only read')

@@ -328,7 +328,7 @@ class Driver:
     def stop_frame_task_server(self):
         import signal
         import subprocess
-        pids = subprocess.run(["pgrep", "-f", "lib/g1_control/frame_task_server"],
+        pids = subprocess.run(["pgrep", "-f", "lib/golem_upper_ik/frame_task_server"],
                               capture_output=True, text=True).stdout.split()
         for pid in pids:
             os.kill(int(pid), signal.SIGINT)   # as Ctrl-C
@@ -477,12 +477,13 @@ class Driver:
 
 def run_drive(out, walk):
     from g1_dex3.dex3 import JOINT_NAMES, named_pose
-    from g1_control.utility.joint_definition import ENABLED_JOINTS
-    from g1_control.utility.named_config import NAMED_CONFIGS
+    from golem_upper_ik.profile import load_profile
 
+    profile = load_profile("g1")
     d = Driver(out)
-    d.info = {"mode": "walk" if walk else "arm", "arm_joints": list(ENABLED_JOINTS),
-              "home": NAMED_CONFIGS["home"].tolist(), "t_pose": NAMED_CONFIGS["t_pose"].tolist(),
+    d.info = {"mode": "walk" if walk else "arm", "arm_joints": list(profile.enabled_joints),
+              "home": profile.named_configs["home"].tolist(),
+              "t_pose": profile.named_configs["t_pose"].tolist(),
               "left_hand_joints": JOINT_NAMES["left"],
               "left_close": named_pose("left", "close").tolist(),
               "walk_speed": WALK_SPEED, "walk_seconds": WALK_SECONDS}
@@ -700,9 +701,12 @@ class Report:
                    f"{err.max():.4f} rad, per joint {np.round(err, 4).tolist()} (from "
                    f"{np.round(before[left], 2).tolist()} before); the right hand moved {right_moved:.4f} "
                    f"rad meanwhile")
-        # 5. stopping frame_task_server hands the arms back: weight 1 -> 0
+        # 5. stopping frame_task_server hands the arms back: weight 1 -> 0. Its
+        # last command (zero gains) trips golem_safety's arm_sdk.waist_kp_min at
+        # once, so the ramp can start before the stop's mark: it is looked for
+        # from 0.5 s (sim) before it, when the weight was still 1
         stop = self.at("controller_stopped")
-        ramp = self.weight_ramp(slice(stop, n), rising=False)
+        ramp = self.weight_ramp(slice(max(0, stop - int(0.5 * self.hz)), n), rising=False)
         if ramp is None:
             self.check("hand back", False, "the rt/arm_sdk weight did not ramp 1 -> 0 after the stop")
         else:

@@ -180,7 +180,7 @@ def test_configs_load(trained):
 
 @pytest.mark.parametrize('section, key, value, message', [
     ('topics', 'low_cmd', 'rt/lowcmd',
-     'topics.low_cmd must be a g1_safety_layer input (rt/safety/...), got rt/lowcmd'),
+     'topics.low_cmd must be a golem_safety input (rt/safety/...), got rt/lowcmd'),
     ('topics', 'low_cmd', 'rt/safety/lowcmd_upper_in',
      'topics.low_cmd and topics.upper_cmd must differ'),
     (None, 'imu_frame', 'torso', "imu_frame must be one of ['pelvis'], got 'torso'"),
@@ -538,7 +538,8 @@ def test_faults_latch_silent(policy, trained, name, inject, reason):
     assert rig.feed(state, 20 * SAMPLES_PER_STEP) == [None] * (20 * SAMPLES_PER_STEP)
     errors = _messages(rig.log, 'error')
     assert len(errors) == 1 and errors[0].startswith(f'fault: {reason}')
-    assert "g1_safety_layer's leg watchdog estops next. Restart the node to clear" in errors[0]
+    assert ('Stopped commanding the legs; golem_safety keeps relaying their last command, '
+            'which does not balance the robot. Restart the node to clear') in errors[0]
 
 
 def test_faults_during_the_ramp_latch_too(policy, trained):

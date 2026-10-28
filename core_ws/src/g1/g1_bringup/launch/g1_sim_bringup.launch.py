@@ -1,11 +1,12 @@
-'''Simulated G1: the same core stack on DDS domain 1 with sim time and the sim configs.
+r"""
+Simulated G1: the same core stack on DDS domain 1 with sim time and the sim configs.
 
     ros2 launch g1_bringup g1_sim_bringup.launch.py
     ros2 launch g1_bringup g1_sim_bringup.launch.py use_locomotion:=true   # walk with HOMIE
     ros2 launch g1_bringup g1_sim_bringup.launch.py use_locomotion:=true use_nav:=true
-    ros2 launch g1_bringup g1_sim_bringup.launch.py use_locomotion:=true use_nav:=true \\
+    ros2 launch g1_bringup g1_sim_bringup.launch.py use_locomotion:=true use_nav:=true \
         odom_source:=sim_gt   # the sim started with GOLEM_SIM_ODOM=1
-    ros2 launch g1_bringup g1_sim_bringup.launch.py use_locomotion:=true use_nav:=true \\
+    ros2 launch g1_bringup g1_sim_bringup.launch.py use_locomotion:=true use_nav:=true \
         frontier_explore:=true   # also serves /skill/frontier_explore
 
 The G1 RoboCasa sim (h1_robocasa/g1/) emulates rt/arm_sdk (weight slot 29
@@ -24,7 +25,7 @@ odom -> pelvis has two publishers (TF breaks) or none. frontier_explore:=true
 adds g1_navigation's frontier explorer, which walks the robot through Nav2 to
 the frontiers of /map.
 tests/g1/test_sim_nav.sh is the closed-loop test.
-'''
+"""
 
 import os
 

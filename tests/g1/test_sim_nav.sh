@@ -15,8 +15,9 @@
 # NavigateToPose goal (the sim's pick from its own geometry, or NAV_GOAL),
 # record. Then it stops the sim first (OUT/stop), with the robot standing under
 # the walking node, and the bringup once the sim has saved its recording:
-# stopping the bringup first would let the safety layer's exit estop
-# (sim_split.yaml: every motor off) drop the robot while the sim still runs.
+# stopping the bringup first would stop rt/lowcmd (golem_safety stops publishing
+# when it exits in split mode), and the sim, with every motor off after
+# GOLEM_CMD_TIMEOUT, would drop the robot while it still runs.
 # Finally it checks the run against the sim's recording (test_sim_nav.py report;
 # see test_sim_nav.py for what is checked), the robot standing to the end of it
 # and no fall in sim.log. Exits 0 only if every check passes. The camera

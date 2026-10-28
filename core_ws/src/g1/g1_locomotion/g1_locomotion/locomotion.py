@@ -186,7 +186,7 @@ class LocomotionController:
       older than half faults.max_latency when taken, no gap over that), finite and
       upright for STEADY_SECONDS, its tick has kept to the wall clock within
       startup.tick_rate over that time (a wrong tick_seconds would change the
-      policy's rate), and the arm controller is commanding (g1_safety_layer's
+      policy's rate), and the arm controller is commanding (golem_safety's
       split mode starts on the first leg command only if the arms are already
       commanded)
     - ramping: the legs move from their measured positions to the policy's
@@ -196,8 +196,10 @@ class LocomotionController:
     - faulted: once the legs are commanded, a stale, non-finite or fallen
       state, a tick that goes back, a bad IMU quaternion, a policy step that
       fails, or a command later than faults.max_latency (latency_ok) stops all
-      output for good; g1_safety_layer's leg watchdog then estops. The node
-      never sends a zero-gain or damping command itself
+      output for good. golem_safety then keeps relaying the last leg command,
+      which does not balance the robot, and reports the quiet input; it does
+      not estop on it. The node never sends a zero-gain or damping command
+      itself
 
     log(level, message) reports phase changes, why it is waiting, faults and,
     every STATS_SECONDS (log_timing), the timing; level is 'info', 'warn' or
@@ -476,6 +478,7 @@ class LocomotionController:
     def _latch(self, reason):
         self.phase = FAULTED
         self.fault = reason
-        self._log('error', f'fault: {reason}. Stopped commanding the legs; g1_safety_layer\'s '
-                           'leg watchdog estops next. Restart the node to clear')
+        self._log('error', f'fault: {reason}. Stopped commanding the legs; golem_safety keeps '
+                           'relaying their last command, which does not balance the robot. '
+                           'Restart the node to clear')
         return None

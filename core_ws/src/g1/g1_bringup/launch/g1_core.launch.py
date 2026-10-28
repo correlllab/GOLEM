@@ -1,27 +1,33 @@
-'''Core G1 stack, shared by g1_bringup.launch.py (real robot) and g1_sim_bringup.launch.py.
+"""
+Core G1 stack, shared by g1_bringup.launch.py (real robot) and g1_sim_bringup.launch.py.
 
-Starts robot_state_publisher, the body joint_state_publisher, g1_safety_layer,
-the arm controller (frame_task_server) and, optionally, the walking node
-(locomotion_node), navigation (g1_navigation), the Dex3-1 hands and RViz.
+Starts robot_state_publisher, golem_upper_ik's joint_state_publisher (the 29
+body joints), golem_safety's safety_node, the only writer of /arm_sdk and
+/lowcmd, the arm controller (golem_upper_ik's frame_task_server) and,
+optionally, the walking node (locomotion_node), navigation (g1_navigation), the
+Dex3-1 hands and RViz. The golem nodes get robot g1 as a ROS parameter, and
+safety_node and frame_task_server their configs (joint_state_publisher reads
+its default, g1). safety_node also gets sim (it refuses sim:=true on ROS
+domain 0) and use_estop false: the G1 stack has no hardware estop node.
 
-The safety layer starts first; the controller follows after `controller_delay`
-seconds. It waits for a fresh rt/lowstate (or stops with an error) and starts
+The safety node starts first; the controller follows after `controller_delay`
+seconds. It waits for a fresh /lowstate (or stops with an error) and starts
 every command at the measured pose. Its follow gate then keeps each waist and
 arm command within controller.follow_tolerance (0.05 rad) of the measured
-joint until it sees the safety layer relay the commands, reading (never
-writing) the safety layer's output: rt/arm_sdk at weight 1 in arm_sdk mode,
-where the safety layer takes the waist + arms from Unitree over 1 s from the
-controller's first command, or rt/lowcmd in split mode, which engages once the
-walking node commands too. Only then does the controller move the arms to
-`home` and the waist to its hold angles, and from then on no command follows
-the measured pose. The follow gate must open within controller.startup_timeout
-(30 s), and the moves to home and the waist hold must finish within
-controller.startup_move_timeout (30 s) of the gate opening; otherwise the
-controller stops with an error.
+joint until it sees golem_safety relay the commands, reading (never writing)
+golem_safety's output: /arm_sdk at weight 1 in arm_sdk mode, where
+golem_safety takes the waist + arms from Unitree over 1 s from the first
+command that passes its engage gate, or /lowcmd in split mode, which engages
+once the walking node commands too. Only then does the controller move the
+arms to `home` and the waist to its hold angles, and from then on no command
+follows the measured pose. The follow gate must open within
+controller.startup_timeout (30 s), and the moves to home and the waist hold
+must finish within controller.startup_move_timeout (30 s) of the gate opening;
+otherwise the controller stops with an error.
 
-use_locomotion:=true adds HOMIE's walking policy on the legs, through the
-safety layer's split mode, `locomotion_delay` seconds after the controller.
-The controller then holds the waist as stiffly as the safety layer allows
+use_locomotion:=true adds HOMIE's walking policy on the legs, through
+golem_safety's split mode, `locomotion_delay` seconds after the controller.
+The controller then holds the waist as stiffly as golem_safety allows
 (g1_split.yaml, sim_split.yaml), as the policy expects.
 
 use_nav:=true adds g1_navigation (odometry, slam_toolbox and Nav2, which
@@ -34,8 +40,8 @@ frontier_explore:=true adds g1_navigation's frontier explorer (it serves
 /skill/frontier_explore), and is passed to g1_navigation as a launch argument
 of its include.
 
-The launch refuses to start on a bad pairing, checked by g1_control's
-utility/config_pairing.py (its robot_safety_launch.py uses the same rules):
+The launch refuses to start on a bad pairing, checked by
+golem_upper_ik.pairing for robot g1:
 - The safety config must relay the upper-body channel (arm_sdk, split or
   their sim_ versions).
 - Each safety config runs with one controller config: arm_sdk with g1, split
@@ -52,10 +58,10 @@ utility/config_pairing.py (its robot_safety_launch.py uses the same rules):
 
 Not checked: configs are told apart by name only, so a renamed copy of a sim
 config passes, and a custom controller config is not matched to the safety
-config (if its topics.safety_out is not the safety layer's output, the
-controller never sees it engage and stops after startup_timeout);
+config (if its topics.safety_out is not golem_safety's output, the controller
+never sees it engage and stops after startup_timeout);
 start_position_verified is the operator's word, not a measurement.
-'''
+"""
 
 import os
 
@@ -67,15 +73,17 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 from g1_description.paths import urdf_path
-from g1_control.utility.config_pairing import (
-    LOCOMOTION_SAFETY_CONFIGS,
+from golem_upper_ik.pairing import (
+    G1_LOCOMOTION_SAFETY_CONFIGS,
     default_controller_config,
     pairing_refusal,
 )
 
-# real / sim defaults: safety layer config, controller config; the controller
+ROBOT = 'g1'
+# real / sim defaults: golem_safety config, controller config; the controller
 # config defaults to the one the safety config runs with (default_controller_config)
 DEFAULT_CONFIGS = {
     False: ('arm_sdk', 'g1'),
@@ -100,7 +108,7 @@ def _config(context, name):
 
 
 def locomotion_refusal(sim, locomotion_config, start_position_verified):
-    '''Why the walking node must not start with these settings, or None'''
+    """Why the walking node must not start with these settings, or None."""
     default_locomotion = LOCOMOTION_CONFIGS[sim]
     if locomotion_config in ('g1', 'sim') and locomotion_config != default_locomotion:
         meant_for = 'the sim' if locomotion_config == 'sim' else 'the real robot'
@@ -113,7 +121,7 @@ def locomotion_refusal(sim, locomotion_config, start_position_verified):
 
 
 def nav_refusal(sim, use_locomotion, odom_source):
-    '''Why g1_navigation must not start with these settings, or None'''
+    """Why g1_navigation must not start with these settings, or None."""
     if not sim:
         return ('use_nav:=true is sim only for now: the real MID-360 is not connected to the '
                 "bringup yet (g1_navigation's README, The real lidar)")
@@ -127,12 +135,12 @@ def nav_refusal(sim, use_locomotion, odom_source):
 def startup_refusal(sim, use_locomotion, safety_config, controller_config,
                     locomotion_config, start_position_verified,
                     use_nav=False, odom_source='fastlio'):
-    '''Why g1_core must not start with these settings, or None'''
+    """Why g1_core must not start with these settings, or None."""
     # first, so that the real robot refuses use_nav whatever else is set
     refusal = nav_refusal(sim, use_locomotion, odom_source) if use_nav else None
-    # the controller package's pairing rules, shared with its robot_safety_launch.py
+    # golem_upper_ik's pairing rules for the G1
     if refusal is None:
-        refusal = pairing_refusal(controller_config, safety_config,
+        refusal = pairing_refusal(ROBOT, controller_config, safety_config,
                                   sim=sim, locomotion=use_locomotion)
     if refusal is None and use_locomotion:
         refusal = locomotion_refusal(sim, locomotion_config, start_position_verified)
@@ -147,10 +155,10 @@ def _setup(context):
     use_sim_time = {'use_sim_time': _as_bool(context, 'use_sim_time')}
     default_safety, default_controller = DEFAULT_CONFIGS[sim]
     if use_locomotion and sim:
-        default_safety = LOCOMOTION_SAFETY_CONFIGS[sim]
+        default_safety = G1_LOCOMOTION_SAFETY_CONFIGS[sim]
     safety_config = _config(context, 'safety_config') or default_safety
     # the controller config the safety config runs with: g1_split with split
-    default_controller = default_controller_config(safety_config) or default_controller
+    default_controller = default_controller_config(ROBOT, safety_config) or default_controller
     controller_config = _config(context, 'controller_config') or default_controller
     locomotion_config = _config(context, 'locomotion_config') or LOCOMOTION_CONFIGS[sim]
     delay = float(LaunchConfiguration('controller_delay').perform(context))
@@ -173,31 +181,39 @@ def _setup(context):
             parameters=[{'robot_description': robot_description}, use_sim_time],
             output='screen',
         ),
-        # body joints (29) from rt/lowstate; the finger joints come from dex3_hands
+        # body joints (29) from /lowstate; the finger joints come from dex3_hands
         Node(
-            package='g1_control',
+            package='golem_upper_ik',
             executable='joint_state_publisher',
             name='joint_state_publisher',
-            parameters=[use_sim_time],
+            parameters=[{'robot': ROBOT}, use_sim_time],
             output='screen',
         ),
+        # the config names as typed strings: launch_ros reads a plain string
+        # parameter as YAML, which would make a config named 'on' a bool
         Node(
-            package='g1_safety_layer',
+            package='golem_safety',
             executable='safety_node',
             name='safety_node',
-            arguments=['--config', f'{safety_config}.yaml'],
-            parameters=[use_sim_time],
+            parameters=[{
+                'robot': ROBOT,
+                'config': ParameterValue(safety_config, value_type=str),
+                'sim': sim,
+                'use_estop': False,
+            }, use_sim_time],
             output='screen',
         ),
         TimerAction(
             period=delay,
             actions=[
                 Node(
-                    package='g1_control',
+                    package='golem_upper_ik',
                     executable='frame_task_server',
                     name='frame_task_server',
-                    arguments=['--config', f'{controller_config}.yaml'],
-                    parameters=[use_sim_time],
+                    parameters=[{
+                        'robot': ROBOT,
+                        'config': ParameterValue(controller_config, value_type=str),
+                    }, use_sim_time],
                     output='screen',
                 ),
             ],
@@ -265,14 +281,16 @@ def generate_launch_description():
         DeclareLaunchArgument('use_hands', default_value='true'),
         DeclareLaunchArgument(
             'safety_config', default_value='',
-            description='g1_safety_layer config (default: arm_sdk, or sim_arm_sdk in sim; '
-                        'sim_split in sim with use_locomotion)'),
+            description='golem_safety config, a name under its config/g1/ or a path '
+                        '(default: arm_sdk, or sim_arm_sdk in sim; sim_split in sim with '
+                        'use_locomotion)'),
         DeclareLaunchArgument(
             'controller_config', default_value='',
-            description='g1_control config (default: the one the safety config '
-                        'runs with: g1, g1_split, sim or sim_split)'),
+            description='golem_upper_ik controller config, a name under its config/g1/ or '
+                        'a path (default: the one the safety config runs with: g1, g1_split, '
+                        'sim or sim_split)'),
         DeclareLaunchArgument('controller_delay', default_value='2.0',
-                              description='s between the safety layer and the controller'),
+                              description='s between the safety node and the controller'),
         DeclareLaunchArgument(
             'use_locomotion', default_value='false',
             description="HOMIE's walking policy on the legs (needs split mode, and "

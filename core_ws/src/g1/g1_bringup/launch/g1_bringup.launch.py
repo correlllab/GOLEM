@@ -1,4 +1,5 @@
-'''Real G1, with the whole ROS stack running on the laptop wired to the robot.
+r"""
+Real G1, with the whole ROS stack running on the laptop wired to the robot.
 
     ros2 launch g1_bringup g1_bringup.launch.py
     ros2 launch g1_bringup g1_bringup.launch.py use_rviz:=false use_hands:=false
@@ -11,44 +12,46 @@ Before launching:
 - Nothing else may be commanding rt/lowcmd, rt/arm_sdk or rt/dex3/*: two
   publishers fight over the motors.
 - Clear the space around the arms: once the controller has a fresh
-  rt/lowstate, the safety layer ramps control over from Unitree for 1 s, then
+  rt/lowstate, golem_safety ramps control over from Unitree for 1 s, then
   the arms move to `home` (forearms forward at waist height) at up to 0.3
   rad/s per joint.
 
 This launch refuses sim configs (any sim_* safety_config), and the controller
 config follows safety_config (g1 with arm_sdk, g1_split with split); g1_core's
-docstring lists every pairing it refuses. If the controller stops or its
-commands go bad, the safety layer hands the waist + arms back to Unitree. The
-controller stops with an error if rt/lowstate does not arrive within 5 s, or if
-the safety layer has not taken over and the move to home is not done within
-30 s. Sensors and skills are not part of the G1 bringup yet, and it refuses
-use_nav:=true: navigation runs in the sim only until the real MID-360 is
-connected (g1_navigation's README, The real lidar).
+docstring lists every pairing it refuses. When the controller exits it sends
+one command with zero gains. In arm_sdk mode golem_safety refuses it (its
+waist kp is below arm_sdk.waist_kp_min), latches its estop and hands the
+waist and arms back to Unitree, as it does on a command that is not finite;
+in split mode it relays it, so the waist and arms go limp. The controller
+stops with an error if rt/lowstate does not arrive within 5 s, if
+golem_safety has not relayed its commands within 30 s, or if the move to home
+is not done within 30 s after that. Sensors and skills are not part of the G1
+bringup yet, and it refuses use_nav:=true: navigation runs in the sim only
+until the real MID-360 is connected (g1_navigation's README, The real lidar).
 
-Hazards not handled in code (g1_control's README has the full list):
+Hazards not handled in code:
+- A controller that dies without its last command leaves the waist + arms
+  held at weight 1 on its last command: golem_safety holds a quiet input and
+  only reports it (input_quiet). Stopping the bringup hands them back to
+  Unitree over arm_sdk.release_seconds (3 s).
 - After any estop, restart the whole bringup, not only the safety node: the
   estop stays latched until restart, and the controller's follow gate opens
-  for good once the safety layer relays its commands, so a restarted safety
-  layer would meet a command held wherever the robot used to be.
+  for good once golem_safety relays its commands, so a restarted safety node
+  would meet a command held wherever the robot used to be.
 - Until rt/arm_sdk reaches weight 1 (the end of the 1 s ramp), a waist or arm
   joint pushed more than 0.05 rad from its command drags the command along;
   Unitree's share of the blend holds the joint meanwhile. From weight 1 on the
   commands hold.
 - The arm IK has no self-collision model (the arms can hit the torso or each
-  other) and models the waist at 0. The gains are not tuned on our G1: the
-  waist's damping ratio is about 0.46 at home and 0.26 with the arms out to the
-  sides, and between goals the gravity torque is not updated, so the waist
-  roll and pitch hold is softer at rest.
-- The controller's example tools refuse DDS domain 0 without --real-robot;
-  with it, motor_viewer --damping sends kp 0 on every slot and the waist goes
-  limp under the upper body.
+  other). The gains are not tuned on our G1: the waist's damping ratio is
+  about 0.46 at home and 0.26 with the arms out to the sides.
 
 Walking with HOMIE's policy on the legs instead of Unitree's controller:
 
-    ros2 launch g1_bringup g1_bringup.launch.py safety_config:=split \\
+    ros2 launch g1_bringup g1_bringup.launch.py safety_config:=split \
         use_locomotion:=true start_position_verified:=true
 
-- The legs then go through the safety layer's split mode on rt/lowcmd, so
+- The legs then go through golem_safety's split mode on rt/lowcmd, so
   Unitree's controller must already be released; that is a manual operator
   step, and nothing in this stack does it.
 - safety_config:=split runs g1_split.yaml (a stiff waist), walking or not;
@@ -57,15 +60,19 @@ Walking with HOMIE's policy on the legs instead of Unitree's controller:
 - Split mode engages only once the walking node commands too; until then the
   controller's follow gate keeps the arm and waist commands within 0.05 rad of
   wherever the robot hangs, and the move to home starts when the controller
-  sees the safety layer's first rt/lowcmd.
+  sees golem_safety's first rt/lowcmd.
 - Set start_position_verified:=true only after checking the robot is in a safe
   start pose; without it the launch refuses to start.
 - The walking node waits for upright rt/lowstate and the arm controller's
   commands, moves the legs from where they are to the policy's default pose
   over 3 s, then starts the policy at zero velocity and 0.74 m height. It
-  walks on /cmd_vel. If it stops (stale, non-finite or fallen state), the
-  safety layer's leg watchdog estops 0.2 s later.
-'''
+  walks on /cmd_vel. If it stops (stale, non-finite or fallen state, or a
+  late command), golem_safety keeps relaying its last leg command, which does
+  not balance the robot, and reports the quiet input (input_quiet) 0.2 s
+  later. It does not estop on it: the command stands until golem_safety
+  estops for another reason (a fall that drives a joint past split.yaml's
+  estop limits, say) or the bringup stops.
+"""
 
 import os
 

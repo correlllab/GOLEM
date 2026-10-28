@@ -1,12 +1,19 @@
 '''
-The walking node's DDS side inside one process (no robot, no network): a fake
-G1 on rt/lowstate, a fake arm controller on the upper input, and the real
-g1_safety_layer in split mode (split.yaml), on DDS domain 97
+The walking node's DDS side on DDS domain 97 (no robot): in this process a fake G1 on
+rt/lowstate, a fake arm controller on the upper input and the node's controller and driver,
+on Unitree SDK channels; beside it golem_safety's installed safety_node as a subprocess, with
+robot g1 on a copy of its split.yaml (split mode). ROS topic /x is DDS rt/x with the same
+unitree_hg types, so the SDK channels here and the safety node's ROS topics meet
 '''
 
 import itertools
 import json
 import math
+import os
+import re
+import signal
+import subprocess
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -16,6 +23,7 @@ import numpy as np
 import pytest
 import yaml
 
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_ as LowCmdDefault
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_ as LowStateDefault
@@ -24,9 +32,6 @@ from unitree_sdk2py.core.channel import (
     ChannelPublisher,
     ChannelSubscriber,
 )
-
-from g1_safety_layer.core.config import load_config as load_safety_config
-from g1_safety_layer.core.safety_layer import SafetyLayer
 
 from g1_locomotion.config import check_config
 from g1_locomotion.driver import LocomotionDriver
@@ -42,16 +47,15 @@ from g1_locomotion.locomotion import (
 # the package's policy/ (the containers also mount it at /home/code/g1_locomotion)
 POLICY_DIR = Path(__file__).resolve().parents[1] / 'policy'
 CONFIG_DIR = Path(__file__).resolve().parents[1] / 'config'
-SPLIT_CONFIG = Path(__file__).resolve().parents[2] / 'g1_safety_layer' / 'config' / 'split.yaml'
 TEST_DOMAIN = 97  # never 0 (the real robot) or 1 (the sim)
-# This one process runs the safety layer at 500 Hz, the fakes and the
-# recorders, and the GIL delays rt/lowstate by tens of ms at times (up to
-# 90 ms seen), which the real node, in a process of its own, does not see.
-# So these tests relax g1.yaml's 50 ms gap and 25 ms latency, and the tick
-# rate the start accepts (a late sample at either end of its 1 s window moves
-# it by as much); test_locomotion.py checks the real values. A safety layer
-# with an rt/lowstate watchdog (control.state_stale_estop_seconds, 0.1 s in
-# split.yaml) gets MAX_STATE_GAP too, except where a test needs its own value
+# This one process runs the fakes, the recorders and the node, and the GIL
+# delays rt/lowstate by tens of ms at times (up to 90 ms seen), which the real
+# node, in a process of its own, does not see. So these tests relax g1.yaml's
+# 50 ms gap and 25 ms latency, and the tick rate the start accepts (a late
+# sample at either end of its 1 s window moves it by as much); test_locomotion.py
+# checks the real values. golem_safety's quiet-rt/lowstate report
+# (stale.state_seconds, 0.1 s in split.yaml) gets MAX_STATE_GAP too, except where
+# a test keeps split.yaml's value
 MAX_STATE_GAP = 0.25
 MAX_LATENCY = 0.25
 TICK_RATE = [0.5, 2.0]
@@ -59,8 +63,13 @@ TICK_RATE = [0.5, 2.0]
 SAMPLES_PER_STEP = 10
 LEGS = range(0, 12)
 SHOULDER = 15  # left shoulder pitch, an arm slot
-# slack for thread scheduling when timing a watchdog
+# slack for thread scheduling when timing a report of golem_safety's
 LATE_S = 0.3
+# the events by which golem_safety latches its estop or reports a quiet input or a
+# quiet /lowstate: none of them may appear while the node walks
+ALARMS = ('estop_command_written', 'estop_latched_silent', 'input_quiet', 'state_quiet')
+# rcutils' default console format: [LEVEL] [seconds] [logger]: message
+LOG_LINE = re.compile(r'^\[(DEBUG|INFO|WARN|ERROR|FATAL)\] \[([0-9.]+)\] \[[^\]]*\]: (.*)$')
 _factory = []
 _runs = itertools.count()
 
@@ -168,6 +177,66 @@ class Recorder:
         self._sub.Close()
 
 
+class SafetyNode:
+    '''
+    golem_safety's installed safety_node on TEST_DOMAIN, robot g1 on the config
+    at `config`, sim:=true (so it refuses domain 0) and no hardware estop; a
+    thread collects its log lines
+    '''
+
+    def __init__(self, config):
+        prefix = Path(get_package_prefix('golem_safety'))
+        executable = prefix / 'lib' / 'golem_safety' / 'safety_node'
+        env = dict(os.environ, ROS_DOMAIN_ID=str(TEST_DOMAIN), RCUTILS_COLORIZED_OUTPUT='0')
+        env.pop('RCUTILS_CONSOLE_OUTPUT_FORMAT', None)
+        env.pop('RCUTILS_LOGGING_USE_STDOUT', None)
+        self.lines = []
+        self.exit_code = None
+        self.proc = subprocess.Popen(
+            [str(executable), '--ros-args', '-p', 'robot:=g1', '-p', f'config:={config}',
+             '-p', 'sim:=true', '-p', 'use_estop:=false'],
+            env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self._reader = threading.Thread(target=self._read, daemon=True)
+        self._reader.start()
+
+    def _read(self):
+        for line in self.proc.stdout:
+            self.lines.append(line.rstrip('\n'))
+
+    def output(self):
+        return '\n'.join(self.lines)
+
+    def events(self, names=None):
+        '''The JSON events the node logged, in order; only those called one of names, if given'''
+        events = []
+        for line in list(self.lines):
+            match = LOG_LINE.match(line)
+            if match and match.group(3).startswith('{'):
+                event = json.loads(match.group(3))
+                if names is None or event['event'] in names:
+                    events.append(event)
+        return events
+
+    def wait_for(self, name, timeout=15.0):
+        deadline = time.monotonic() + timeout
+        while not self.events((name,)):
+            assert self.proc.poll() is None, f'safety_node exited:\n{self.output()}'
+            assert time.monotonic() < deadline, f'no {name} within {timeout} s:\n{self.output()}'
+            time.sleep(0.02)
+
+    def stop(self):
+        '''SIGINT, as Ctrl-C; SIGKILL if it hangs. Keeps the exit code'''
+        if self.proc.poll() is None:
+            self.proc.send_signal(signal.SIGINT)
+            try:
+                self.proc.wait(timeout=10.0)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait()
+        self._reader.join(timeout=5.0)
+        self.exit_code = self.proc.returncode
+
+
 class Rig:
     '''
     What _rig() starts; log holds the node's (time, level, message), fed
@@ -178,21 +247,25 @@ class Rig:
 
 
 @contextmanager
-def _rig(legs, ramp_seconds=0.2, state_watchdog=MAX_STATE_GAP):
+def _rig(legs, ramp_seconds=0.2, state_seconds=MAX_STATE_GAP):
     '''
     The node's controller and driver (g1.yaml, with a short ramp and the
-    relaxed timing above), the real SafetyLayer (split.yaml; its rt/lowstate
-    watchdog, if it has one, at state_watchdog s, or split.yaml's for None), a
-    fake G1 and a fake arm controller (not started), on topics of their own,
-    so no channel of another test can match this run's
+    relaxed timing above), golem_safety's safety_node on a copy of its
+    split.yaml (logging off; stale.state_seconds at state_seconds s, or
+    split.yaml's for None), a fake G1 and a fake arm controller (not started),
+    on topics of their own, so no channel of another test can match this run's.
+    The safety node is stopped first, so that the rest of the teardown adds
+    nothing to its log
     '''
     _init_dds()
-    suffix = f'/test_locomotion_dds/{next(_runs)}'
-    safety = load_safety_config(SPLIT_CONFIG)
+    # a ROS name token must not start with a digit
+    suffix = f'/test_locomotion_dds/run{next(_runs)}'
+    split = Path(get_package_share_directory('golem_safety')) / 'config' / 'g1' / 'split.yaml'
+    safety = yaml.safe_load(split.read_text())
     safety['logging']['enabled'] = False
     safety['topics'] = {key: name + suffix for key, name in safety['topics'].items()}
-    if state_watchdog is not None and 'state_stale_estop_seconds' in safety['control']:
-        safety['control']['state_stale_estop_seconds'] = state_watchdog
+    if state_seconds is not None:
+        safety['stale']['state_seconds'] = state_seconds
     with open(CONFIG_DIR / 'g1.yaml') as f:
         raw = yaml.safe_load(f)
     raw['topics'] = {key: name + suffix for key, name in raw['topics'].items()}
@@ -203,8 +276,11 @@ def _rig(legs, ramp_seconds=0.2, state_watchdog=MAX_STATE_GAP):
     rig.safety = safety
     rig.policy = load_policy(str(POLICY_DIR))
     rig.config = check_config(raw, rig.policy.config['cmd_range'])
-    assert rig.config['topics']['low_cmd'] == safety['topics']['low_cmd_lower_in']
-    assert rig.config['topics']['upper_cmd'] == safety['topics']['low_cmd_upper_in']
+    # the node's DDS topics are the safety node's ROS topics
+    for node_key, safety_key in (('low_cmd', 'low_cmd_lower_in'),
+                                 ('upper_cmd', 'low_cmd_upper_in'),
+                                 ('low_state', 'low_state')):
+        assert rig.config['topics'][node_key] == 'rt' + safety['topics'][safety_key]
     rig.log = []
     controller = LocomotionController(
         rig.policy, rig.config,
@@ -226,24 +302,28 @@ def _rig(legs, ramp_seconds=0.2, state_watchdog=MAX_STATE_GAP):
         return latency_ok(latency)
 
     controller.latency_ok = timed
-    rig.lowcmd = Recorder(safety['topics']['low_cmd_out'])
-    rig.lower = Recorder(rig.config['topics']['low_cmd'])
-    layer = SafetyLayer(safety)
-    threading.Thread(target=layer.start, daemon=True).start()
-    rig.robot = FakeG1(rig.config['topics']['low_state'], legs)
-    rig.arms = FakeArms(rig.config['topics']['upper_cmd'])
-    rig.driver = LocomotionDriver(controller, rig.config['topics'], TEST_DOMAIN)
-    try:
-        # the layer's publisher loop starts after its 0.2 s writer setup
-        time.sleep(0.5)
-        yield rig
-    finally:
-        rig.driver.shutdown()
-        rig.arms.close()
-        rig.robot.close()
-        layer.stop()
-        rig.lowcmd.close()
-        rig.lower.close()
+    with tempfile.TemporaryDirectory() as tmp:
+        config = Path(tmp) / 'g1' / 'split.yaml'
+        config.parent.mkdir()
+        config.write_text(yaml.safe_dump(safety))
+        rig.safety_node = SafetyNode(config)
+        rig.lowcmd = Recorder('rt' + safety['topics']['low_cmd_out'])
+        rig.lower = Recorder(rig.config['topics']['low_cmd'])
+        rig.robot = FakeG1(rig.config['topics']['low_state'], legs)
+        rig.arms = FakeArms(rig.config['topics']['upper_cmd'])
+        rig.driver = LocomotionDriver(controller, rig.config['topics'], TEST_DOMAIN)
+        try:
+            rig.safety_node.wait_for('relay_started')
+            # discovery between this process and the safety node's
+            time.sleep(0.5)
+            yield rig
+        finally:
+            rig.safety_node.stop()
+            rig.driver.shutdown()
+            rig.arms.close()
+            rig.robot.close()
+            rig.lowcmd.close()
+            rig.lower.close()
 
 
 def _wait_for(condition, timeout=3.0):
@@ -266,20 +346,19 @@ def _is_zeroed(msg):
     return _is_off(msg.motor_cmd[:29])
 
 
-def _estop_reasons(capsys):
-    '''Why the safety layer estopped, from the JSON events it printed'''
-    lines = capsys.readouterr().out.splitlines()
-    events = [json.loads(line) for line in lines if line.startswith('{')]
-    return [e['reason'] for e in events if e['event'] == 'estop_command_written']
+def _alarms(rig):
+    '''golem_safety's estops and quiet reports (ALARMS) of the run; the node must have exited 0'''
+    assert rig.safety_node.exit_code == 0, rig.safety_node.output()
+    return rig.safety_node.events(ALARMS)
 
 
-def test_silent_until_upright_state_and_arms_then_ramp_and_walk(capsys):
+def test_silent_until_upright_state_and_arms_then_ramp_and_walk():
     default = np.asarray(load_policy(str(POLICY_DIR)).default_angles, dtype=np.float64)
     legs = default + np.linspace(-0.2, 0.2, 12)
     with _rig(legs, ramp_seconds=0.2) as rig:
         kp, kd = rig.policy.gains(rig.policy.leg_joints)
-        # upright rt/lowstate but no arm controller: the node is silent, so the
-        # safety layer is too
+        # upright rt/lowstate but no arm controller: the node is silent, so
+        # golem_safety is too
         time.sleep(0.4)
         assert rig.lower.msgs == [] and rig.lowcmd.msgs == []
         # the arm controller commands, but the robot is tilted 40 deg
@@ -328,9 +407,12 @@ def test_silent_until_upright_state_and_arms_then_ramp_and_walk(capsys):
     gaps = [tick_delta(b, a) for a, b in zip(steps, steps[1:])]
     assert min(gaps) >= 10 and abs(np.mean(gaps) - 20.0) < 1.0, gaps
 
-    # the safety layer publishes from the node's first command (the measured
-    # legs) on: the node's legs with the training gains and the arm
-    # controller's arms, stamped with mode_pr 0 and rt/lowstate's mode_machine
+    # golem_safety engages split mode on the node's first command (the measured
+    # legs) and publishes from then on: the node's legs with the training gains
+    # and the arm controller's arms, stamped with the G1 profile's mode_pr 0
+    # and mode_machine 5
+    assert rig.safety_node.events(('lowcmd_engage',)) == [
+        {'event': 'lowcmd_engage', 'mode': 'split_mode'}]
     assert lowcmd
     np.testing.assert_allclose(_legs(lowcmd[0][1]), legs, atol=1e-6)
     sent = {tuple(np.round(_legs(m), 6)) for _, m in lower}
@@ -340,7 +422,7 @@ def test_silent_until_upright_state_and_arms_then_ramp_and_walk(capsys):
         assert all(msg.motor_cmd[i].mode == 1 and msg.motor_cmd[i].kp == pytest.approx(kp[i]) and
                    msg.motor_cmd[i].kd == pytest.approx(kd[i]) for i in LEGS)
         assert msg.motor_cmd[SHOULDER].kp == 60.0
-    assert _estop_reasons(capsys) == []
+    assert _alarms(rig) == []
     assert [m for _, level, m in rig.log if level == 'error'] == []
 
 
@@ -378,20 +460,22 @@ def _slow_policy(rig):
     (_fall, 'fell: gravity z'),
     (_slow_policy, 'command late: 3'),
 ], ids=['stale', 'not finite', 'fallen', 'late'])
-def test_bad_state_silences_the_node_then_the_safety_layer_estops(inject, reason, capsys):
+def test_bad_state_silences_the_node_and_golem_safety_holds_its_last_command(inject, reason):
     default = load_policy(str(POLICY_DIR)).default_angles
-    # a stale rt/lowstate meets split.yaml's own rt/lowstate watchdog, if the
-    # safety layer has one; the other faults leave rt/lowstate flowing
-    state_watchdog = None if inject is _stale else MAX_STATE_GAP
-    with _rig(default, ramp_seconds=0.1, state_watchdog=state_watchdog) as rig:
-        watchdog = rig.safety['control']['lower_stale_estop_seconds']
-        state_watchdog = rig.safety['control'].get('state_stale_estop_seconds')
+    # a stale rt/lowstate meets split.yaml's own quiet-rt/lowstate time; the
+    # other faults leave rt/lowstate flowing
+    state_seconds = None if inject is _stale else MAX_STATE_GAP
+    with _rig(default, ramp_seconds=0.1, state_seconds=state_seconds) as rig:
+        lower_quiet = rig.safety['stale']['lower_seconds']
+        state_quiet = rig.safety['stale']['state_seconds']
+        kp, kd = rig.policy.gains(rig.policy.leg_joints)
         rig.arms.start()
         _wait_for(lambda: rig.driver.phase == WALKING)
         time.sleep(0.3)
         inject_time = time.monotonic()
         inject(rig)
-        time.sleep(MAX_STATE_GAP + watchdog + LATE_S)
+        time.sleep(MAX_STATE_GAP + lower_quiet + LATE_S)
+        end = time.monotonic()
         lower = list(rig.lower.msgs)
         lowcmd = list(rig.lowcmd.msgs)
         fault = rig.driver.fault
@@ -406,31 +490,54 @@ def test_bad_state_silences_the_node_then_the_safety_layer_estops(inject, reason
     assert last_lower < fault_time + 0.05, 'nothing may be sent after the fault'
     # never a zero-gain or damping command from the node itself
     assert all(msg.motor_cmd[i].kp > 0.0 for _, msg in lower for i in LEGS)
-    # the safety layer then zeroed every motor, and latched
-    idx = next((i for i, (_, msg) in enumerate(lowcmd) if _is_zeroed(msg)), None)
-    assert idx is not None and idx > 0, 'the safety layer must estop'
-    assert all(_is_zeroed(msg) for _, msg in lowcmd[idx:])
-    reasons = _estop_reasons(capsys)
-    assert len(reasons) == 1, reasons
-    if reasons[0].startswith('Lower-body command stale'):
-        # its leg watchdog, once the node had gone silent
-        assert watchdog - 0.02 < lowcmd[idx][0] - last_lower < watchdog + LATE_S
+
+    # golem_safety holds a quiet input: it went on relaying the node's last leg
+    # command, with the training gains, to the end, and never the estop command
+    assert not any(_is_zeroed(msg) for _, msg in lowcmd)
+    held = [(t, msg) for t, msg in lowcmd if t > last_lower + 0.05]
+    assert held, 'golem_safety must keep relaying'
+    last_legs = _legs(lower[-1][1])
+    for _, msg in held:
+        np.testing.assert_allclose(_legs(msg), last_legs, atol=1e-6)
+        assert all(msg.motor_cmd[i].mode == 1 and msg.motor_cmd[i].kp == pytest.approx(kp[i]) and
+                   msg.motor_cmd[i].kd == pytest.approx(kd[i]) for i in LEGS)
+    assert held[0][0] < last_lower + 0.15 and held[-1][0] > end - 0.1, (
+        last_lower, held[0][0], held[-1][0], end)
+    rate = (len(held) - 1) / (held[-1][0] - held[0][0])
+    assert rate > 250.0, f'{rate:.0f} Hz of held commands; golem_safety relays at 500 Hz'
+
+    # and reported the quiet leg input once, lower_quiet s after the node's last
+    # command (its age is rounded to 4 decimals), without an estop and with no
+    # command to resume it
+    events = rig.safety_node.events()
+    quiet = [e for e in events if e['event'] == 'input_quiet']
+    assert [(e['source'], e['topic'], e['seconds']) for e in quiet] == [
+        ('split_mode_lower', rig.safety['topics']['low_cmd_lower_in'], lower_quiet)], quiet
+    assert lower_quiet <= quiet[0]['age'] < lower_quiet + LATE_S, quiet
+    assert [e for e in events if e['event'] == 'input_resumed'] == []
+    assert [e for e in events if e['event'].startswith('estop')] == []
+    assert rig.safety_node.exit_code == 0, rig.safety_node.output()
+    # a stale rt/lowstate is reported too, and its return; the relay never waited for it
+    states = [(e['event'], e['topic']) for e in events
+              if e['event'] in ('state_quiet', 'state_resumed')]
+    if inject is _stale:
+        assert states == [('state_quiet', rig.safety['topics']['low_state']),
+                          ('state_resumed', rig.safety['topics']['low_state'])], states
+        (reported,) = [e for e in events if e['event'] == 'state_quiet']
+        assert reported['seconds'] == state_quiet and state_quiet <= reported['age'], reported
     else:
-        # or, for a stale rt/lowstate only, its own rt/lowstate watchdog,
-        # which in split.yaml fires before the leg watchdog would
-        assert inject is _stale and state_watchdog is not None, reasons
-        assert reasons[0].startswith('rt/lowstate stale'), reasons
-        assert state_watchdog - 0.02 < lowcmd[idx][0] - inject_time < state_watchdog + LATE_S
+        assert states == [], states
 
 
-def test_a_backlog_is_dropped_and_the_cadence_kept(capsys):
+def test_a_backlog_is_dropped_and_the_cadence_kept():
     default = load_policy(str(POLICY_DIR)).default_angles
     with _rig(default, ramp_seconds=0.1) as rig:
         rig.arms.start()
         _wait_for(lambda: rig.driver.phase == WALKING)
         time.sleep(0.3)
-        # the worker is held up for 120 ms while about 60 samples arrive (the
-        # safety layer's leg watchdog is 200 ms)
+        # the worker is held up for 120 ms while about 60 samples arrive
+        # (golem_safety reports a leg input quiet for 200 ms, its
+        # stale.lower_seconds)
         with rig.driver._lock:
             before = rig.robot.state.tick
             time.sleep(0.12)
@@ -464,10 +571,10 @@ def test_a_backlog_is_dropped_and_the_cadence_kept(capsys):
     assert min(gaps) >= 10, gaps
     assert sorted(gaps)[len(gaps) // 2] == 20, gaps
     assert [m for _, level, m in rig.log if level == 'error'] == []
-    assert _estop_reasons(capsys) == []
+    assert _alarms(rig) == []
 
 
-def test_the_latency_counts_the_time_a_sample_waited_for_the_node(capsys):
+def test_the_latency_counts_the_time_a_sample_waited_for_the_node():
     default = load_policy(str(POLICY_DIR)).default_angles
     with _rig(default, ramp_seconds=0.1) as rig:
         rig.arms.start()
@@ -475,8 +582,8 @@ def test_the_latency_counts_the_time_a_sample_waited_for_the_node(capsys):
         time.sleep(0.3)
         # the worker is held up, and rt/lowstate stops 30 ms in for 150 ms:
         # when the worker goes on, the newest sample is the one written 90 ms
-        # before (within the relaxed gap and rt/lowstate watchdog, and the
-        # safety layer's 200 ms leg watchdog)
+        # before (within the relaxed gap and golem_safety's quiet-rt/lowstate
+        # time, and its 200 ms quiet-leg time)
         with rig.driver._lock:
             time.sleep(0.03)
             rig.robot.pause(0.15)
@@ -496,4 +603,4 @@ def test_the_latency_counts_the_time_a_sample_waited_for_the_node(capsys):
     # when the host was loaded (this process's threads share the GIL)
     others = [latency for t, latency in latencies if not release <= t < release + 0.05]
     assert sorted(others)[len(others) // 2] < 0.02, sorted(others)
-    assert _estop_reasons(capsys) == []
+    assert _alarms(rig) == []

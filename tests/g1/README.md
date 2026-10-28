@@ -63,7 +63,7 @@ workspace.
 Open issue: the arm test's `t_pose` check sometimes fails with the arms at the pose
 (`goal success False` with a small arm error). The arms hold `t_pose` with an error about as
 large as `frame_task_server`'s success threshold, `controller.threshold_joint` in
-`core_ws/src/g1/g1_control/config/sim.yaml`, so the server sometimes never reports the goal
+`core_ws/src/golem_upper_ik/config/g1/sim.yaml`, so the server sometimes never reports the goal
 reached. Count such a run as failed, and check its arm error against that threshold.
 
 The tests depend on internals of the G1 sim. They patch `SimInterface.after_step` (and, for nav

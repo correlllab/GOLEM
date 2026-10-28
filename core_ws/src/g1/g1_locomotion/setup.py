@@ -18,7 +18,7 @@ setup(
     maintainer='Niraj Pudasaini',
     maintainer_email='npudasai@nd.edu',
     description=("HOMIE's walking policy on the Unitree G1's legs, "
-                 "through g1_safety_layer's split mode"),
+                 "through golem_safety's split mode"),
     license='MIT',
     extras_require={
         'test': [

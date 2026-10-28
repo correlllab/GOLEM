@@ -37,7 +37,7 @@ COMPOSE+=(-f "$no_network")
     -v "$ROOT/core_ws/src/g1/g1_navigation/config:/home/code/core_ws/src/g1/g1_navigation/config:ro" \
     -e MUJOCO_GL=egl -e PYTHONDONTWRITEBYTECODE=1 robocasa bash -lc '
 source /opt/ros/humble/setup.bash && source /opt/livox_ws/install/setup.bash
-export PYTHONPATH=/home/code/h1_robocasa${PYTHONPATH:+:$PYTHONPATH}
+export PYTHONPATH=/home/code/golem_robocasa${PYTHONPATH:+:$PYTHONPATH}
 cd /home/code/tests/robocasa/g1
 [ "$#" -gt 0 ] || set -- test_g1_*.py
 failed=()

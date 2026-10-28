@@ -35,7 +35,7 @@ selects the G1 (§3). The G1 pages are in `docs/g1/` (start at
 | `docker/` | x86 setup — the fully-featured, preferred platform (Dockerfiles, `docker-compose.yml`, the G1 overlay `docker-compose.g1.yml`, `scripts/`) |
 | `docker/mac/` | self-contained Apple-Silicon (arm64, CPU-only) port — limited: H1-2 only, no Isaac, no ML/vision stack, FastDDS instead of CycloneDDS |
 | `core_ws/` | the ROS 2 workspace — where the bulk of development happens (see §4); the G1 packages are in `core_ws/src/g1/`, the safety layer and arm controller both robots run in `core_ws/src/golem_safety/` and `core_ws/src/golem_upper_ik/` |
-| `h1_robocasa/` | RoboCasa/MuJoCo simulator entry point for both robots (`h12_mujoco.py`; `--g1` hands over to the G1 sim package `h1_robocasa/g1/`) and the ROS/DDS bridges |
+| `golem_robocasa/` | RoboCasa/MuJoCo simulator entry point for both robots (`h12_mujoco.py`; `--g1` hands over to the G1 sim package `golem_robocasa/g1/`) and the ROS/DDS bridges |
 | `CL_isaaclab_sim/` | Isaac Lab simulator, H1-2 only (`sim_main.py`, DDS bridges, tasks) |
 | `CL_Assets/` | URDF meshes, MuJoCo XML, Isaac USD (Git-LFS) |
 | `third_party/leprechaun_g1` | G1 robot description submodule (URDF, MJCF, meshes); `g1_description` and the G1 sim build on it |
@@ -413,12 +413,12 @@ ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
 
 ### The simulators are shared infra — don't modify them casually
 
-`CL_isaaclab_sim` and `h1_robocasa` should generally not be modified unless
+`CL_isaaclab_sim` and `golem_robocasa` should generally not be modified unless
 necessary, and their **default behaviors must be preserved**. Everyone's
 sim-vs-real workflow depends on them behaving like the real robot.
-`h1_robocasa/h12_mujoco.py` is the one RoboCasa entry point for both robots: it
+`golem_robocasa/h12_mujoco.py` is the one RoboCasa entry point for both robots: it
 picks the robot (`--h12`/`--g1`, else `GOLEM_ROBOT`, else `h12`) before its
-H1-2 imports and hands the G1 over to `h1_robocasa/g1/g1_mujoco.py`. The H1-2
+H1-2 imports and hands the G1 over to `golem_robocasa/g1/g1_mujoco.py`. The H1-2
 stays the default, and nothing on the G1 path may change its behaviour. The robots share
 `sim_common.py`, `measurement_bridge.py` and the `mujoco_sensors` node in
 `mujoco_ros_bridge.py` (`sim_timing.py` is the H1-2's only); each has its own sensor suite
@@ -430,11 +430,11 @@ stays the default, and nothing on the G1 path may change its behaviour. The robo
 They should publish only what the real robot publishes and consume only what
 it consumes. Verified current surface:
 
-**RoboCasa, H1-2 (`h1_robocasa/h12_mujoco.py`)** — publishes `/clock`, the real
+**RoboCasa, H1-2 (`golem_robocasa/h12_mujoco.py`)** — publishes `/clock`, the real
 RealSense drivers' topics, frame names and camera TF (`/tf_static` + `/tf`) for
 `/realsense/{head,left_hand,right_hand}` — colour, depth and aligned depth with
 their camera_info, and `depth/color/points` — as captured from the robot in
-`h1_robocasa/realsense_profile.yaml`, `/livox/lidar` (CustomMsg), `/livox/pointcloud`, `/livox/imu`,
+`golem_robocasa/realsense_profile.yaml`, `/livox/lidar` (CustomMsg), `/livox/pointcloud`, `/livox/imu`,
 `/{left,right}/gripper/state`, and `rt/lowstate` over Unitree DDS (with the
 real robot's `mode_machine`, 6); consumes `rt/lowcmd` and the
 `/{left,right}/gripper/*` services/DeliGrasp action.
@@ -442,7 +442,7 @@ real robot's `mode_machine`, 6); consumes `rt/lowcmd` and the
 `h12_sensors.py`, the grippers in `magpie_hand_bridge.py`, `/clock` and the
 opt-in odom in `mujoco_ros_bridge.py`, Unitree DDS in `unitree_interface.py`.)
 
-**RoboCasa, G1 (`h12_mujoco.py --g1`, `h1_robocasa/g1/`)** — publishes `/clock`,
+**RoboCasa, G1 (`h12_mujoco.py --g1`, `golem_robocasa/g1/`)** — publishes `/clock`,
 the Livox MID-360 as its driver does in CustomMsg mode (`/livox/lidar`,
 `/livox/imu`, no `/livox/pointcloud`), the head RealSense D435
 (`/realsense/head/*` and its `/tf_static`), and over Unitree DDS `rt/lowstate`
@@ -756,7 +756,7 @@ G1 yet; follow `docs/g1/first-session.md` step by step.
   you restart the `robocasa` container, restart `golem_ros` too (sim time resets
   to 0 → TF extrapolation errors, frozen SLAM map).
 - **Restart the sim containers after pulling.** The sims run the checkout's
-  `h1_robocasa` and `CL_isaaclab_sim` from bind mounts, so a running sim keeps
+  `golem_robocasa` and `CL_isaaclab_sim` from bind mounts, so a running sim keeps
   the code it started with. An H1-2 sim started before the H1-2 sims reported
   `mode_machine` 6 is refused: `wait_for_sim.py` stops `docker_stack.sh`, and
   `golem_safety` never engages (`engage_refused`: `/lowstate mode_machine is 0,

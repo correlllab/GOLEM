@@ -64,7 +64,7 @@ Publishes `rt/lowstate` over CycloneDDS, and on the chosen ROS domain: `/clock`;
 the real RealSense drivers' topics, frame names and camera TF for
 `/realsense/{head,left_hand,right_hand}` (colour, depth and aligned depth, raw and
 compressed, with their camera_info, plus `depth/color/points`), as captured from
-the robot in `h1_robocasa/realsense_profile.yaml`. The head camera renders at
+the robot in `golem_robocasa/realsense_profile.yaml`. The head camera renders at
 `GOLEM_CAMERA_SCALE` (default 0.5) of the real 1280x720 with the real
 intrinsics; `GOLEM_CAMERA_DEPTH=0` and `GOLEM_CAMERA_POINTCLOUD=0` drop the depth
 stream and point cloud. Then the Livox topics `/livox/lidar` (CustomMsg),
@@ -74,7 +74,7 @@ stream and point cloud. Then the Livox topics `/livox/lidar` (CustomMsg),
 Scene flags are passed straight through, e.g.
 `docker_run.sh robocasa --task OpenFridge --layout 1 --style 1 --seed 42`.
 `--task Battery` loads the battery workcell instead of a kitchen
-(`h1_robocasa/battery_env.py`; scene and objects in
+(`golem_robocasa/battery_env.py`; scene and objects in
 `CL_Assets/mujoco_assets/battery/`); `--layout`/`--style` don't apply to it.
 
 ### Isaac
@@ -201,7 +201,7 @@ the laptop wired to the robot, on domain 0, which needs `G1_DDS_INTERFACE`
   `golem_ros` too: sim time resets to 0, giving TF extrapolation errors and a
   frozen SLAM map.
 - **Restart the sim containers after pulling.** The sims run the checkout's
-  `h1_robocasa` and `CL_isaaclab_sim` from bind mounts, so a sim container keeps
+  `golem_robocasa` and `CL_isaaclab_sim` from bind mounts, so a sim container keeps
   running the code it started with. An H1-2 sim started before the H1-2 sims
   reported `mode_machine` 6 (the real robot's value) is refused: the paired
   startup stops at `the simulator is not a h12 (mode_machine 0)`, and in the

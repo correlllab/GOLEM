@@ -15,7 +15,7 @@ import numpy as np
 
 # HOMIE's policy is g1_locomotion's policy/ (core_ws/src/g1/g1_locomotion/policy),
 # not a Python package; the robocasa container mounts it read-only beside
-# h1_robocasa, at /home/code/g1_locomotion. _ROOT is two levels up from this
+# golem_robocasa, at /home/code/g1_locomotion. _ROOT is two levels up from this
 # directory: the repo root on the host, /home/code in the container.
 _ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 _POLICY_DIRS = (os.path.join(_ROOT, "g1_locomotion"),

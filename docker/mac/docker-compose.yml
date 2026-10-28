@@ -67,8 +67,8 @@ services:
       - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
     volumes:
       - type: bind
-        source: ../../h1_robocasa
-        target: /home/code/h1_robocasa
+        source: ../../golem_robocasa
+        target: /home/code/golem_robocasa
         bind:
           create_host_path: false
       - type: bind

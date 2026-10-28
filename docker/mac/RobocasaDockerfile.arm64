@@ -3,7 +3,7 @@
 # MuJoCo 3.3.1 sim on golem_base (arm64). Identical to the stock Dockerfile
 # except the default render backend is OSMesa (pure-software, CPU) instead of
 # EGL, since there is no NVIDIA GPU under Colima. Source tree bind-mounted at
-# runtime (docker/mac/docker-compose.yml -> /home/code/h1_robocasa).
+# runtime (docker/mac/docker-compose.yml -> /home/code/golem_robocasa).
 #
 # Build:  docker build -t golem_sim_robocasa:latest -f docker/mac/RobocasaDockerfile.arm64 .
 # ==============================
@@ -65,7 +65,7 @@ RUN cd /opt/robocasa/robocasa/models && \
     find assets -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | \
     sha256sum --check /opt/golem-locks/robocasa-assets.digest
 
-WORKDIR /home/code/h1_robocasa
+WORKDIR /home/code/golem_robocasa
 
 CMD ["/bin/bash"]
 

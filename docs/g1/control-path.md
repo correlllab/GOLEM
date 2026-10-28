@@ -39,7 +39,7 @@ sensors.
   It balances the robot and shares the waist and arms through the `rt/arm_sdk`
   weight. Before `rt/lowcmd` can drive the legs, the operator must release
   Unitree's controller by hand. Nothing in this stack does that step.
-- **In the sim:** `h1_robocasa/g1/` (`g1_mujoco.py`, `unitree_interface.py`,
+- **In the sim:** `golem_robocasa/g1/` (`g1_mujoco.py`, `unitree_interface.py`,
   `stand_in.py`). HOMIE's policy stands in for Unitree's controller and holds
   the robot up. `rt/arm_sdk` blends the waist and arms with it by the weight.
   The first valid `rt/lowcmd` releases the stand-in for good, which plays the

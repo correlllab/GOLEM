@@ -9,7 +9,7 @@ Simulated G1: the same core stack on DDS domain 1 with sim time and the sim conf
     ros2 launch g1_bringup g1_sim_bringup.launch.py use_locomotion:=true use_nav:=true \
         frontier_explore:=true   # also serves /skill/frontier_explore
 
-The G1 RoboCasa sim (h1_robocasa/g1/) emulates rt/arm_sdk (weight slot 29
+The G1 RoboCasa sim (golem_robocasa/g1/) emulates rt/arm_sdk (weight slot 29
 blending with a leg/waist/arm hold), rt/dex3/* and, for use_locomotion:=true,
 which switches the safety layer to sim_split, rt/lowcmd. The controller config
 follows the safety config (sim with sim_arm_sdk, sim_split with sim_split).

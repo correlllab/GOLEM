@@ -3,7 +3,7 @@
 The G1 is g1_robosuite's robot MJCF (names unprefixed), in small scenes of
 known geometry. Expected values come from the URDF and the scenes' analytic
 geometry, not from MuJoCo's kinematics. Run in the robocasa image (robosuite
-for g1_robosuite, EGL for the camera) with h1_robocasa on PYTHONPATH, as
+for g1_robosuite, EGL for the camera) with golem_robocasa on PYTHONPATH, as
 tests/robocasa/g1/run_in_container.sh does.
 """
 import sys

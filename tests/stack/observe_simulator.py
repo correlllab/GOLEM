@@ -54,7 +54,7 @@ def main():
 
         gym.make = observed_make
     elif simulator == 'robocasa':
-        entry = Path('/home/code/h1_robocasa/h12_mujoco.py')
+        entry = Path('/home/code/golem_robocasa/h12_mujoco.py')
         sys.path.insert(0, str(entry.parent))
         import mujoco
         step = mujoco.mj_step

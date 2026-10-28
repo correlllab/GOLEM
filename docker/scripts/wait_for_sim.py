@@ -9,9 +9,9 @@ import sys
 
 # LowState_.mode_machine of each robot's simulators: both robots' sims report
 # their robot's own value, the one the real robot reports. The H1-2's RoboCasa
-# and Isaac sims set 6 (h1_robocasa/unitree_interface.py,
+# and Isaac sims set 6 (golem_robocasa/unitree_interface.py,
 # CL_isaaclab_sim/src/python/dds/specialized/h12_robot_dds.py); the G1 sim sets 5
-# (MODE_MACHINE in h1_robocasa/g1/unitree_interface.py).
+# (MODE_MACHINE in golem_robocasa/g1/unitree_interface.py).
 MODE_MACHINE = {'h12': 6, 'g1': 5}
 
 

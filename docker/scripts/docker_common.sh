@@ -209,7 +209,7 @@ prepare_mounts() {
                      "$GOLEM_CACHE_DIR/isaac/local_share_ov" "$GOLEM_CACHE_DIR/isaac/isaacsim"
             ;;
         robocasa)
-            require_file "$GOLEM_ROOT/h1_robocasa/h12_mujoco.py"
+            require_file "$GOLEM_ROOT/golem_robocasa/h12_mujoco.py"
             require_file "$GOLEM_ROOT/core_ws/src/magpie_msgs/package.xml"
             require_file "$GOLEM_ROOT/core_ws/src/custom_ros_messages/package.xml"
             mkdir -p "$GOLEM_CACHE_DIR/msgs_ws/src/magpie_msgs" "$GOLEM_CACHE_DIR/msgs_ws/src/custom_ros_messages"

@@ -17,7 +17,7 @@ class Workflows(unittest.TestCase):
         self.root = Path(self.tmp.name)
         shutil.copytree(REPO / 'docker', self.root / 'docker', ignore=shutil.ignore_patterns('.env', '__pycache__'))
         for name in ('unitree_sdk2_python/setup.py', 'CL_Assets/ros_assets/h1_2_magpie_ros.urdf',
-                     'CL_isaaclab_sim/sim_main.py', 'h1_robocasa/h12_mujoco.py',
+                     'CL_isaaclab_sim/sim_main.py', 'golem_robocasa/h12_mujoco.py',
                      'core_ws/src/magpie_msgs/package.xml', 'core_ws/src/custom_ros_messages/package.xml',
                      'core_ws/src/livox_ros_driver2/package_ROS2.xml', 'core_ws/cyclonedds.xml',
                      'core_ws/src/h12_bringup/package.xml', 'mujoco_mpc/CMakeLists.txt'):
@@ -76,7 +76,7 @@ if 'config' in sys.argv:
         self.assertFalse(any('run' in c for c in self.calls()))
 
     def test_missing_source_fails_before_container_creation(self):
-        (self.root / 'h1_robocasa/h12_mujoco.py').unlink()
+        (self.root / 'golem_robocasa/h12_mujoco.py').unlink()
         r = self.run_script('docker/scripts/docker_run.sh', 'robocasa')
         self.assertNotEqual(r.returncode, 0)
         self.assertIn('h12_mujoco.py', r.stderr)
@@ -777,7 +777,7 @@ esac
         return json.loads(r.stdout)['services']
 
     def test_base_robocasa_service_has_no_cmd_timeout(self):
-        # H1 raises on an empty GOLEM_CMD_TIMEOUT (h1_robocasa/unitree_interface.py).
+        # H1 raises on an empty GOLEM_CMD_TIMEOUT (golem_robocasa/unitree_interface.py).
         env = self.compose_config('docker-compose.yml', profile='robocasa')['robocasa']['environment']
         self.assertNotIn('GOLEM_CMD_TIMEOUT', env)
         self.assertNotIn('GOLEM_ROBOT', env)

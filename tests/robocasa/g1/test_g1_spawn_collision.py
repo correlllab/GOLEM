@@ -5,7 +5,7 @@ these tests build a tiny synthetic MjModel with a robot0_-prefixed free body and
 a fixed fixture, and exercise the pure geometry + contact-filtering + back-off
 loop without robosuite. Mirrors sim_names.self_test style.
 
-Run from the repo root: PYTHONPATH=h1_robocasa python3 tests/robocasa/g1/test_g1_spawn_collision.py
+Run from the repo root: PYTHONPATH=golem_robocasa python3 tests/robocasa/g1/test_g1_spawn_collision.py
 (g1_robosuite reads the walking policy's g1.yaml and leprechaun_g1's MJCF at import).
 """
 import math

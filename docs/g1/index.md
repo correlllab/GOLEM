@@ -3,7 +3,7 @@
 GOLEM runs a second robot beside the H1-2: the Correll Lab's Unitree G1
 (29 DoF, two Dex3-1 hands). Its ROS 2 packages are in `core_ws/src/g1/`, its
 robot description is the `third_party/leprechaun_g1` submodule, and its
-RoboCasa kitchen sim is `h1_robocasa/g1/`, started through the same entry point
+RoboCasa kitchen sim is `golem_robocasa/g1/`, started through the same entry point
 as the H1-2's (`h12_mujoco.py --g1`). The same bringup runs against the sim or
 the real robot, which speaks the same Unitree DDS interface.
 

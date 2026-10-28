@@ -1,7 +1,7 @@
 # ==============================
 # MuJoCo 3.3.1 sim on golem_base.
 # Single-stage: base image already has ROS + Python + torch + unitree_sdk2py.
-# Source tree bind-mounted at runtime (docker-compose.yml -> /home/code/h1_robocasa).
+# Source tree bind-mounted at runtime (docker-compose.yml -> /home/code/golem_robocasa).
 # Robocasa (kitchen scenes) is installed from git; pins MuJoCo to 3.3.1.
 # ==============================
 FROM golem_base:latest
@@ -87,7 +87,7 @@ RUN cd /opt/robocasa/robocasa/models && \
     find assets -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | \
     sha256sum --check /opt/golem-locks/robocasa-assets.digest
 
-WORKDIR /home/code/h1_robocasa
+WORKDIR /home/code/golem_robocasa
 
 CMD ["/bin/bash"]
 

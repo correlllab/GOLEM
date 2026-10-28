@@ -18,13 +18,13 @@ camera_info, TF tree, point cloud) need only MuJoCo, NumPy and PyYAML; the
 projection check renders, so give it an offscreen GL context:
 
 ```bash
-MUJOCO_GL=egl PYTHONPATH=h1_robocasa python3 -m unittest discover -s tests/robocasa -p test_realsense_profile.py -v
+MUJOCO_GL=egl PYTHONPATH=golem_robocasa python3 -m unittest discover -s tests/robocasa -p test_realsense_profile.py -v
 ```
 
 Pure pacing/timing tests also run without ROS or MuJoCo:
 
 ```bash
-PYTHONPATH=h1_robocasa python3 -m unittest discover -s tests/robocasa -p test_loop_timing.py -v
+PYTHONPATH=golem_robocasa python3 -m unittest discover -s tests/robocasa -p test_loop_timing.py -v
 ```
 
 To measure the actual kitchen loop, add `--timing` to a normal launch:

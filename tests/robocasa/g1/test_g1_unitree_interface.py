@@ -5,7 +5,7 @@ the pelvis framequat g1_robosuite adds, and the handlers are called directly
 with crafted messages. SimInterface still opens Unitree DDS channels, so run
 this only where DDS cannot reach the robot: tests/robocasa/g1/run_in_container.sh
 runs it in the robocasa image with --network none and ROS_DOMAIN_ID=97, with
-h1_robocasa on PYTHONPATH.
+golem_robocasa on PYTHONPATH.
 """
 import math
 import os
@@ -24,7 +24,7 @@ from g1.sim_names import BODY_JOINTS, HAND_JOINTS, NameResolver
 from g1.stand_in import StandIn
 from g1 import unitree_interface as ui
 
-# two levels up from h1_robocasa/g1/: the repo root on the host, /home/code in the container
+# two levels up from golem_robocasa/g1/: the repo root on the host, /home/code in the container
 REPO = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(g1.__file__)), "..", ".."))
 XML = os.path.join(REPO, "third_party", "leprechaun_g1", "assets", "g1_description",
                    "g1_29dof_with_hand_rev_1_0.xml")

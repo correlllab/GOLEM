@@ -29,7 +29,7 @@ See the workflow for the exact dependency setup.
 
 ```bash
 PYTHONPATH=CL_isaaclab_sim:unitree_sdk2_python python -m unittest discover -s tests/isaaclab -p 'test_*.py' -v
-PYTHONPATH=h1_robocasa python -m unittest discover -s tests/robocasa -p test_loop_timing.py -v
+PYTHONPATH=golem_robocasa python -m unittest discover -s tests/robocasa -p test_loop_timing.py -v
 python -m unittest discover -s tests/docker -v
 ```
 

@@ -310,7 +310,7 @@ def run_sim(out, sim_args):
     import signal
 
     sys.path.insert(0, bringup_test.SIM)
-    # the G1's own classes: h1_robocasa's top-level unitree_interface is the H1-2's
+    # the G1's own classes: golem_robocasa's top-level unitree_interface is the H1-2's
     from g1 import unitree_interface
     from g1.g1_sensors import SensorConfig
 
@@ -980,7 +980,7 @@ class Report(bringup_test.Report):
         self.check("no contact", not c["contact_steps"], f"{c['steps']} physics steps: {text}")
 
     def fall_log(self):
-        """The sim's fall logger (h1_robocasa/g1/g1_mujoco.py), which looks at every physics step"""
+        """The sim's fall logger (golem_robocasa/g1/g1_mujoco.py), which looks at every physics step"""
         path = os.path.join(self.out, "sim.log")
         if not os.path.exists(path):
             self.check("no fall logged", False, "no sim.log")

@@ -46,9 +46,9 @@ import time
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# the sim: the repo's h1_robocasa/, two levels up from tests/g1/ (the containers
+# the sim: the repo's golem_robocasa/, two levels up from tests/g1/ (the containers
 # mount both under /home/code)
-SIM = os.path.join(os.path.dirname(os.path.dirname(HERE)), "h1_robocasa")
+SIM = os.path.join(os.path.dirname(os.path.dirname(HERE)), "golem_robocasa")
 # physics steps per sample: 50 Hz of sim time (1 to record every step)
 RECORD_EVERY = int(os.environ.get("GOLEM_TEST_RECORD_EVERY", "10"))
 WALK_SPEED = 0.3           # m/s forward
@@ -173,7 +173,7 @@ def run_sim(out, sim_args):
     import signal
 
     sys.path.insert(0, SIM)
-    # the G1's own classes: h1_robocasa's top-level unitree_interface is the H1-2's
+    # the G1's own classes: golem_robocasa's top-level unitree_interface is the H1-2's
     from g1 import unitree_interface
     from g1.g1_sensors import SensorConfig
 

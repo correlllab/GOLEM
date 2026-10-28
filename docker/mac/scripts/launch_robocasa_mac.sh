@@ -114,6 +114,6 @@ else
     esac
 fi
 
-cd /home/code/h1_robocasa
+cd /home/code/golem_robocasa
 echo "[launch_robocasa_mac] GOLEM_DISPLAY=$GOLEM_DISPLAY MUJOCO_GL=$MUJOCO_GL ROS_DOMAIN_ID=$ROS_DOMAIN_ID args: $*"
 python -u h12_mujoco.py "$@"

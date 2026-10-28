@@ -8,7 +8,7 @@ The G1 is g1_robosuite's robot MJCF (names unprefixed) in a room with two
 screens: one coloured by its geom's rgba, one by its material's, so that both
 alphas MuJoCo's rays read can be changed at runtime, as RoboCasa tasks do. Run
 in the robocasa image with ROS 2 Humble and the Livox messages sourced and
-h1_robocasa on PYTHONPATH, as tests/robocasa/g1/run_in_container.sh does.
+golem_robocasa on PYTHONPATH, as tests/robocasa/g1/run_in_container.sh does.
 """
 import sys
 import time

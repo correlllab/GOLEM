@@ -1,7 +1,7 @@
 """Tests for g1_sensor_msgs: the MID-360's and D435's ROS 2 messages, field by field.
 
 No DDS: messages are only built and (de)serialized. Run in the robocasa image
-with ROS 2 Humble and the Livox messages sourced and h1_robocasa on PYTHONPATH,
+with ROS 2 Humble and the Livox messages sourced and golem_robocasa on PYTHONPATH,
 as tests/robocasa/g1/run_in_container.sh does.
 """
 import io

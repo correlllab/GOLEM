@@ -7,7 +7,7 @@
 #   - the robocasa container has no network and the ros container joins its
 #     network namespace, both on its loopback with multicast, so no DDS leaves
 #     the host and nothing talks to the robot;
-#   - the sim mounts h1_robocasa read-only;
+#   - the sim mounts golem_robocasa read-only;
 #   - the ros container loads the run's own cyclonedds_local.xml, which pins no
 #     interface, in place of the shared one in $GOLEM_CACHE_DIR, which a running
 #     G1 ros container rereads in every process it starts;
@@ -127,7 +127,7 @@ services:
     environment:
       NVIDIA_VISIBLE_DEVICES: "${SIM_GPUS:-void}"
     volumes:
-      - {type: bind, source: "$GOLEM_ROOT/h1_robocasa", target: /home/code/h1_robocasa, read_only: true}
+      - {type: bind, source: "$GOLEM_ROOT/golem_robocasa", target: /home/code/golem_robocasa, read_only: true}
 $shared
   ros:
     image: "$ROS_IMAGE"
@@ -196,7 +196,7 @@ g1_test_start_sim() {
     "${COMPOSE[@]}" run -d --no-deps --name "$SIM" -e G1_DDS_INTERFACE=lo -e PYTHONDONTWRITEBYTECODE=1 \
         -e PYTHONUNBUFFERED=1 -e MUJOCO_GL=egl -e GOLEM_CMD_TIMEOUT= -e GOLEM_ARM_SDK_TIMEOUT= \
         -e GOLEM_SIM_EXPERIMENT=0 "$@" robocasa bash -c "$MULTICAST && source /opt/ros/humble/setup.bash && \
-        source /opt/livox_ws/install/setup.bash && cd /home/code/h1_robocasa && \
+        source /opt/livox_ws/install/setup.bash && cd /home/code/golem_robocasa && \
         exec python3 -u /home/code/tests/g1/$py sim --out /out -- --headless --layout 9 --style 9 --seed 42" >/dev/null
     docker logs -f "$SIM" > "$OUT/sim.log" 2>&1 9>&- &
     for _ in $(seq 1 300); do

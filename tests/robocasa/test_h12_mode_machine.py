@@ -5,7 +5,7 @@ and thread names are replaced by in-process fakes for the length of each test. I
 in the standard runner (tests/robocasa/run_in_container.sh) and in a throwaway container
 without a network:
 
-    docker run --rm --network none -v "$PWD:/repo:ro" -w /repo -e PYTHONPATH=h1_robocasa \
+    docker run --rm --network none -v "$PWD:/repo:ro" -w /repo -e PYTHONPATH=golem_robocasa \
         -e PYTHONDONTWRITEBYTECODE=1 --entrypoint python3 golem_sim_robocasa:latest \
         -m unittest discover -s tests/robocasa -p test_h12_mode_machine.py -v
 

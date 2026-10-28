@@ -70,7 +70,7 @@ written for, and `golem_upper_ik` does not check `rt/lowstate`'s
 
 Behind the wrappers:
 
-- `launch_robocasa.sh` and the G1 sim (`h1_robocasa/g1/unitree_interface.py`)
+- `launch_robocasa.sh` and the G1 sim (`golem_robocasa/g1/unitree_interface.py`)
   refuse domain 0 even when started some other way.
 - `golem_safety`'s `safety_node` refuses domain 0 when started with
   `sim:=true`, as the sim bringups start it, an unset `ROS_DOMAIN_ID`

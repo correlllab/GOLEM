@@ -50,7 +50,7 @@ GOLEM also runs the Unitree G1 (29 DoF, two Dex3-1 hands): its own packages in
 description), the safety layer and arm IK it shares with the H1-2
 (`core_ws/src/golem_safety`, `core_ws/src/golem_upper_ik`), its robot
 description in the `third_party/leprechaun_g1` submodule, and a RoboCasa sim in
-`h1_robocasa/g1/`. The H1-2 stays the default;
+`golem_robocasa/g1/`. The H1-2 stays the default;
 `--g1` on a wrapper, or `GOLEM_ROBOT=g1`, selects the G1 (x86 Linux, RoboCasa
 only). The images are the same.
 
@@ -77,7 +77,7 @@ are MIT. See the policy's `README.md`.
 | Path | What it is |
 |---|---|
 | `core_ws/` | the ROS 2 workspace — 28 packages, the G1's in `core_ws/src/g1/`; where most development happens |
-| `h1_robocasa/` | RoboCasa/MuJoCo simulator entry point for both robots and its ROS/DDS bridges; the G1 sim in `h1_robocasa/g1/` |
+| `golem_robocasa/` | RoboCasa/MuJoCo simulator entry point for both robots and its ROS/DDS bridges; the G1 sim in `golem_robocasa/g1/` |
 | `CL_isaaclab_sim/` | Isaac Lab simulator (H1-2) |
 | `CL_Assets/` | URDF meshes, MuJoCo XML, Isaac USD (Git-LFS) |
 | `docker/` | x86 images, compose files (with the G1 overlay), and the build/run scripts |

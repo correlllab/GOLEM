@@ -4,7 +4,7 @@ on:
     paths:
       - 'CL_isaaclab_sim'
       - 'CL_isaaclab_sim/**'
-      - 'h1_robocasa/**'
+      - 'golem_robocasa/**'
       - 'docker/**'
       - 'core_ws/**'
       - 'CL_Assets'
@@ -40,11 +40,11 @@ jobs:
         run: python -m unittest discover -s tests/isaaclab -p 'test_*.py' -v
       - name: RoboCasa loop pacing regressions
         env:
-          PYTHONPATH: h1_robocasa
+          PYTHONPATH: golem_robocasa
         run: python -m unittest discover -s tests/robocasa -p test_loop_timing.py -v
       - name: RoboCasa robot selection
         env:
-          PYTHONPATH: h1_robocasa
+          PYTHONPATH: golem_robocasa
         run: python -m unittest discover -s tests/robocasa -p test_robot_select.py -v
       - name: Linux and Mac Docker workflow regressions
         run: python -m unittest discover -s tests/docker -v

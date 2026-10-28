@@ -57,7 +57,7 @@ robocasa ros`); they never build them.
   so the checkout's own `core_ws/build` and `core_ws/install` are left alone. The first run
   builds the whole workspace; later runs rebuild what changed. `CORE_WS=<dir>` builds and uses
   that workspace in place instead. The tests share that build, so one runs at a time.
-- **Sim.** The sim role of `test_sim_*.py` runs `h1_robocasa/h12_mujoco.py --g1` through
+- **Sim.** The sim role of `test_sim_*.py` runs `golem_robocasa/h12_mujoco.py --g1` through
   `runpy`, with a recorder patched onto `g1.unitree_interface.SimInterface`. The recorder reads
   the robot's state inside the sim process, so no ground truth is published. The only
   exception is `/odom` for the nav and explore tests with `GOLEM_SIM_ODOM=1`.

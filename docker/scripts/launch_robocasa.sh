@@ -45,7 +45,7 @@ esac
 # its own GLFW window independently of it.
 export MUJOCO_GL=egl
 
-cd /home/code/h1_robocasa
+cd /home/code/golem_robocasa
 # -u: docker-compose captures stdout via a pipe, which block-buffers python's
 # print()s — the "[h12_mujoco] ROS bridges up" readiness line otherwise sits in
 # the buffer indefinitely on a quiet headless run.

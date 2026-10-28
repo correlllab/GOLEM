@@ -54,7 +54,11 @@ Two start-up failures to watch for in this terminal:
   and no retry had connected by then, or the attempt outlasted the 3 s and then
   failed, latches its estop until restart (`estop_command_written` with the
   reason `External estop triggered`). Other serial devices, such as the gripper
-  boards, lengthen the attempt. Restart the whole bringup.
+  boards, lengthen the attempt. Restart the whole bringup. An attempt that
+  outlasts the 3 s and then connects only delays the start: `safety_node`
+  publishes no `/safety/heartbeat` before the first estop sample (and a
+  `/lowstate` reporting `mode_machine` 6), so the leg controller keeps logging
+  `waiting for /safety/heartbeat` and the legs stay at zero gain until then.
 - **The arms start only once `golem_safety` relays them.** `frame_task_server`
   (`golem_upper_ik`) holds the arms where they are until it sees its commands
   on `/lowcmd`. If that has not happened within 30 s
@@ -67,7 +71,10 @@ Two start-up failures to watch for in this terminal:
 The leg controller's input is held like any other: if it crashes or stops,
 `golem_safety` keeps relaying its last leg command and only reports it
 (`input_quiet` after `relax_safety_split`'s `stale.lower_seconds`, 0.2 s), so the
-legs stay on their last target until the bringup stops.
+legs stay on their last target until `golem_safety`'s estop latches or the
+bringup stops. Its estop latches on a `/lowstate` joint past `limits.estop` (a
+fall can drive one there) or on the hardware estop (triggered, unplugged, or no
+sample for 0.5 s), and then writes 50 zero-gain commands and goes silent.
 
 **2. Onboard PC, second terminal — engage** (feet loaded, gantry slack):
 

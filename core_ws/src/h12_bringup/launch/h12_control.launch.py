@@ -77,7 +77,10 @@ def generate_launch_description():
         # unplugged, and triggered (fail_safe_triggered_on_disconnect), until a
         # retry connects. A safety_node that starts while estop_node is retrying
         # latches, so on the real robot safety_delay must cover the time
-        # estop_node takes to connect.
+        # estop_node takes to connect. A first attempt that outlasts safety_delay
+        # and then connects only delays the start: safety_node engages nothing and
+        # publishes no /safety/heartbeat, which the leg controller waits for before
+        # it pre-poses the legs, until that first sample.
         #
         # frame_task_server's start-up waits up to its controller.startup_timeout
         # for safety_node to relay its commands.

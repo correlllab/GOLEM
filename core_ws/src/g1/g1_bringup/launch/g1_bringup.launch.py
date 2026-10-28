@@ -19,10 +19,11 @@ Before launching:
 This launch refuses sim configs (any sim_* safety_config), and the controller
 config follows safety_config (g1 with arm_sdk, g1_split with split); g1_core's
 docstring lists every pairing it refuses. When the controller exits it sends
-one command with zero gains. In arm_sdk mode golem_safety refuses it (its
-waist kp is below arm_sdk.waist_kp_min), latches its estop and hands the
-waist and arms back to Unitree, as it does on a command that is not finite;
-in split mode it relays it, so the waist and arms go limp. The controller
+one last command, with zero gains on the arms. In arm_sdk mode it zeroes the
+waist too, so golem_safety refuses it (its waist kp is below
+arm_sdk.waist_kp_min), latches its estop and hands the waist and arms back to
+Unitree, as it does on a command that is not finite; in split mode the waist
+keeps its hold and golem_safety relays it, so only the arms go limp. The controller
 stops with an error if rt/lowstate does not arrive within 5 s, if
 golem_safety has not relayed its commands within 30 s, or if the move to home
 is not done within 30 s after that. Sensors and skills are not part of the G1

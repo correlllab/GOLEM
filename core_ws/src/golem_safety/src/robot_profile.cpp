@@ -23,12 +23,7 @@ Mode parse_mode(const std::string & name)
   if (name == "split_mode") {
     return Mode::Split;
   }
-  if (name == "arm_sdk_mode") {
-    return Mode::ArmSdk;
-  }
-  throw std::runtime_error(
-          "unknown mode '" + name +
-          "' (expected full_body_mode, split_mode or arm_sdk_mode)");
+  throw std::runtime_error("unknown mode '" + name + "' (expected full_body_mode or split_mode)");
 }
 
 const char * mode_name(Mode mode)
@@ -38,8 +33,6 @@ const char * mode_name(Mode mode)
       return "full_body_mode";
     case Mode::Split:
       return "split_mode";
-    case Mode::ArmSdk:
-      return "arm_sdk_mode";
   }
   return "unknown";
 }
@@ -178,7 +171,7 @@ RobotProfile parse_checked(const YAML::Node & root, const std::string & source)
   reject_unknown_keys(
     root,
     {"robot", "mode_machine", "mode_pr", "motor_slots", "modes", "lower_slots",
-      "upper_slots", "arm_sdk_weight_slot", "joints"},
+      "upper_slots", "joints"},
     source, "");
 
   RobotProfile profile;
@@ -244,22 +237,6 @@ RobotProfile parse_checked(const YAML::Node & root, const std::string & source)
            "joint '" + joint.name + "' (slot " + std::to_string(joint.slot) + ") is in "
            "neither");
     }
-  }
-
-  const bool arm_sdk = std::find(profile.modes.begin(), profile.modes.end(), Mode::ArmSdk) !=
-    profile.modes.end();
-  if (root["arm_sdk_weight_slot"]) {
-    const int slot = require_scalar<int>(root, "arm_sdk_weight_slot", source, "");
-    if (slot < static_cast<int>(joint_count) || slot >= profile.motor_slots) {
-      fail(source, "key 'arm_sdk_weight_slot' must be a slot after the body joints and below "
-           "motor_slots");
-    }
-    profile.arm_sdk_weight_slot = slot;
-  }
-  if (arm_sdk != profile.arm_sdk_weight_slot.has_value()) {
-    fail(source, arm_sdk ?
-           "modes lists arm_sdk_mode, which needs key 'arm_sdk_weight_slot'" :
-           "key 'arm_sdk_weight_slot' is set but modes lacks arm_sdk_mode");
   }
   return profile;
 }

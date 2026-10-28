@@ -36,7 +36,7 @@ def old_cases():
 
 def test_g1_pairing_matches_old_rules():
     cases = old_cases()['cases']
-    assert len(cases) == 600
+    assert len(cases) == 294
     for case in cases:
         args = (case['controller'], case['safety'])
         kwargs = {'sim': case['sim'], 'locomotion': case['locomotion']}
@@ -54,9 +54,33 @@ def test_g1_pairing_matches_old_rules():
 
 def test_g1_default_controller_config_matches_old():
     defaults = old_cases()['default_controller_config']
-    assert len(defaults) == 10
+    assert len(defaults) == 7
     for safety, controller in defaults.items():
         assert default_controller_config('g1', safety) == controller, safety
+
+
+def test_g1_arm_sdk_configs_refused():
+    '''golem_safety has no arm_sdk configs: they relay no upper-body channel, pair with none'''
+    refusal = pairing_refusal('g1', 'g1', 'arm_sdk', sim=False)
+    assert refusal == ('safety config "arm_sdk" must relay the upper-body channel: '
+                       'one of split, sim_split')
+    refusal = pairing_refusal('g1', 'sim', 'sim_arm_sdk', sim=True)
+    assert refusal == ('safety config "sim_arm_sdk" must relay the upper-body channel: '
+                       'one of split, sim_split')
+    for safety in ('arm_sdk', 'sim_arm_sdk'):
+        assert default_controller_config('g1', safety) is None
+
+
+def test_g1_default_pairs():
+    from golem_upper_ik.pairing import (
+        G1_CONTROLLER_CONFIGS, G1_SAFETY_CONTROLLER_CONFIGS, G1_UPPER_CHANNEL_SAFETY_CONFIGS)
+    assert G1_UPPER_CHANNEL_SAFETY_CONFIGS == ('split', 'sim_split')
+    assert G1_CONTROLLER_CONFIGS == ('g1_split', 'sim_split')
+    assert G1_SAFETY_CONTROLLER_CONFIGS == {'split': 'g1_split', 'sim_split': 'sim_split'}
+    assert default_controller_config('g1', 'split') == 'g1_split'
+    assert default_controller_config('g1', 'sim_split') == 'sim_split'
+    assert pairing_refusal('g1', 'g1_split', 'split', sim=False) is None
+    assert pairing_refusal('g1', 'sim_split', 'sim_split', sim=True) is None
 
 
 def test_h12_pairs():
@@ -101,7 +125,7 @@ def test_h12_default_controller_config():
         assert default_controller_config('h12', safety) == controller
         assert default_controller_config('h12', f'/opt/{safety}.yaml') == controller
     assert default_controller_config('h12', 'custom') is None
-    assert default_controller_config('h12', 'arm_sdk') is None
+    assert default_controller_config('h12', 'split') is None
 
 
 def test_unknown_robot_raises():

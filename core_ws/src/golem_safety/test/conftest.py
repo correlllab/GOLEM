@@ -1,7 +1,7 @@
 '''
 Fixtures for the safety_node tests, on ROS domain 91: the node as a subprocess, and a
 fake robot that publishes /lowstate (and the controllers' commands and the hardware
-estop) and records /lowcmd, /arm_sdk and /safety/heartbeat with their source timestamps.
+estop) and records /lowcmd and /safety/heartbeat with their source timestamps.
 
 rclpy is imported only by these fixtures, so the other pytest files in this directory,
 which load this conftest too, do not need a ROS domain.
@@ -24,7 +24,7 @@ import yaml
 TEST_DOMAIN = 91
 STATE_PERIOD = 0.005  # /lowstate at 200 Hz
 STREAM_EVERY = 2  # streamed commands and estop samples every 2 state periods: 100 Hz
-OUTPUTS = ('/lowcmd', '/arm_sdk')
+OUTPUTS = ('/lowcmd',)
 HEARTBEAT = '/safety/heartbeat'
 # the pose the fake robot reports, which the tests command unless they test the gate
 KNEE = 3  # left knee on both robots
@@ -54,7 +54,6 @@ class Profile:
         self.joints = [joint['name'] for joint in data['joints']]
         self.lower = range(data['lower_slots'][0], data['lower_slots'][1] + 1)
         self.upper = range(data['upper_slots'][0], data['upper_slots'][1] + 1)
-        self.weight_slot = data.get('arm_sdk_weight_slot')
         self.shoulder = self.joints.index('left_shoulder_pitch_joint')
         # the joints a controller holds stiff: the G1's waist, the H1-2's torso
         self.held = [i for i, name in enumerate(self.joints)
@@ -404,8 +403,8 @@ def stack(tmp_path, ros_context):
     stack(robot, config, ...) -> Run: a fake robot, then the node on a copy of the
     installed config, started and discovered. stale.state_seconds is 1.0 unless the test
     passes state_stale=None (the shipped value) or its own: a stall of this process's
-    state thread must not hold an arm_sdk ramp or report a quiet /lowstate in a test of
-    something else. Each run is stopped with SIGTERM after the test
+    state thread must not report a quiet /lowstate in a test of something else. Each run is
+    stopped with SIGTERM after the test
     '''
     runs = []
 

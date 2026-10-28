@@ -33,10 +33,6 @@ const std::string kReasonLost = "the estop latched, and its reason could not be 
 // A command that does not engage is reported at most this often, s.
 constexpr double kRefusalReportSeconds = 1.0;
 
-// On exit in arm_sdk_mode, weight 0 is written this long, s, so that one lost packet cannot
-// leave the robot on a higher weight.
-constexpr double kExitHoldSeconds = 0.1;
-
 // The lag baseline may rise this fast, ms per s, to follow drift between the robot's tick
 // and the host clock (500 ppm, well above crystal drift); a delay that builds faster is lag.
 constexpr double kStateLagDriftMsPerS = 0.5;
@@ -141,10 +137,10 @@ std::string python_float(double value)
   return out;
 }
 
-// Python's round(value, 4): the events carry times and weights to 4 decimals.
+// Python's round(value, 4): the events carry times to 4 decimals.
 double round4(double value) {return std::round(value * 1e4) / 1e4;}
 
-// A time or weight in an event: rounded to 4 decimals, as Python's json writes it.
+// A time in an event: rounded to 4 decimals, as Python's json writes it.
 std::string json_number(double value) {return python_float(round4(value));}
 
 // Milliseconds on the clock `now` is read from.
@@ -154,15 +150,6 @@ long long ms(double seconds) {return std::llround(seconds * 1000.0);}
 float clip(float value, double low, double high)
 {
   return static_cast<float>(std::min(std::max(static_cast<double>(value), low), high));
-}
-
-// Fraction of a linear ramp of `seconds` done after `elapsed`, in [0, 1].
-double ramp_fraction(double elapsed, double seconds)
-{
-  if (seconds <= 0.0) {
-    return 1.0;
-  }
-  return std::min(std::max(elapsed / seconds, 0.0), 1.0);
 }
 
 // `config`, refused when it was read for another robot.
@@ -191,12 +178,6 @@ SafetyCore::SafetyCore(RobotProfile profile, SafetyConfig config, bool use_estop
   lag_checked_(domain_id == kRealRobotDomain && config_.control.state_lag_ms > 0.0),
   last_written_(zero_cmd_)
 {
-  if (config_.mode == Mode::ArmSdk && !profile_.arm_sdk_weight_slot) {
-    throw std::invalid_argument(
-            "arm_sdk_mode needs a weight slot, and the " + profile_.robot +
-            " profile has none");
-  }
-
   const int last_body_slot = static_cast<int>(profile_.joints.size()) - 1;
   auto use = [this](
     Input input, SlotRange slots, const std::string & topic, const std::string & source) {
@@ -218,19 +199,6 @@ SafetyCore::SafetyCore(RobotProfile profile, SafetyConfig config, bool use_estop
         Input::Lower, profile_.lower_slots, config_.topics.low_cmd_lower_in, "split_mode_lower");
       use(
         Input::Upper, profile_.upper_slots, config_.topics.low_cmd_upper_in, "split_mode_upper");
-      break;
-    case Mode::ArmSdk:
-      use(Input::Upper, profile_.upper_slots, config_.topics.low_cmd_upper_in, "arm_sdk_mode");
-      for (int slot = profile_.upper_slots.first; slot <= profile_.upper_slots.last; ++slot) {
-        if (profile_.joints[slot].name.rfind("waist_", 0) == 0) {
-          waist_slots_.push_back(slot);
-        }
-      }
-      if (waist_slots_.empty()) {
-        throw std::invalid_argument(
-                "arm_sdk_mode checks arm_sdk.waist_kp_min on the waist joints, and the " +
-                profile_.robot + " profile has no waist_* joint among its upper slots");
-      }
       break;
   }
   for (int slot = 0; slot <= last_body_slot; ++slot) {
@@ -260,16 +228,6 @@ SafetyCore::InputState & SafetyCore::input_state(Input input)
 bool SafetyCore::took_control() const
 {
   return config_.startup.rule == StartupRule::ZeroStream || engaged_;
-}
-
-// Whether the robot's /lowstate reaches the layer, so that what the layer writes reaches
-// the robot too.
-bool SafetyCore::state_flowing(double now) const
-{
-  if (!state_time_) {
-    return false;
-  }
-  return config_.stale.state_seconds <= 0.0 || now - *state_time_ <= config_.stale.state_seconds;
 }
 
 std::string SafetyCore::joint(int slot) const
@@ -484,15 +442,6 @@ void SafetyCore::accept_command(InputState & in, const LowCmd & cmd, double now)
       });
     return;
   }
-  if (const auto soft = soft_waist(cmd)) {
-    latch(
-      now, std::nullopt, [&] {
-        return "Command validation failed on " + in.topic + ": " + joint(soft->slot) +
-        " kp " + python_float(soft->value) + " is below arm_sdk.waist_kp_min " +
-        python_float(config_.arm_sdk.waist_kp_min);
-      });
-    return;
-  }
 
   in.newest = clipped(in, cmd);
   if (in.quiet) {
@@ -509,20 +458,6 @@ void SafetyCore::accept_command(InputState & in, const LowCmd & cmd, double now)
   if (!in.engaged) {
     try_engage(in, now);
   }
-}
-
-// In arm_sdk_mode, the first waist slot whose kp, clipped to [0, kp_max], is below
-// arm_sdk.waist_kp_min, with that kp: a softer waist cannot hold the torso up, and a stray
-// publisher's default command has kp 0 there.
-std::optional<SafetyCore::BadValue> SafetyCore::soft_waist(const LowCmd & cmd) const
-{
-  for (const int slot : waist_slots_) {
-    const float kp = clip(cmd.motor_cmd[slot].kp, 0.0, config_.limits.kp_max);
-    if (kp < config_.arm_sdk.waist_kp_min) {
-      return BadValue{slot, "kp", kp};
-    }
-  }
-  return std::nullopt;
 }
 
 // Engages `in`, whose newest command has just arrived, and with engage_gate every input of
@@ -546,15 +481,9 @@ void SafetyCore::try_engage(InputState & in, double now)
     }
     raise(
       Event::Info, [&] {
-        if (config_.mode == Mode::ArmSdk) {
-          return std::string("{\"event\": \"arm_sdk_engage\"}");
-        }
         return "{\"event\": \"lowcmd_engage\", \"mode\": " +
         json_string(mode_name(config_.mode)) + "}";
       });
-  }
-  if (!engaged_ && config_.mode == Mode::ArmSdk) {
-    engage_start_ = now;
   }
   engaged_ = true;
 }
@@ -807,11 +736,6 @@ bool SafetyCore::set_latched(double now, std::optional<double> trigger) noexcept
   report.decision = now;
   report.trigger = trigger;
   pending_report_ = report;
-  if (config_.mode == Mode::ArmSdk && !release_.begun) {
-    release_ = Release{};
-    release_.begun = true;
-    release_.from = weight_;
-  }
   return true;
 }
 
@@ -854,72 +778,20 @@ LowCmd SafetyCore::merged() const
   return out;
 }
 
-void SafetyCore::set_weight(LowCmd & cmd, double weight) const
-{
-  auto & motor = cmd.motor_cmd[*profile_.arm_sdk_weight_slot];
-  motor.mode = 0;
-  motor.q = static_cast<float>(weight);
-  motor.dq = 0.0F;
-  motor.tau = 0.0F;
-  motor.kp = 0.0F;
-  motor.kd = 0.0F;
-}
-
-// The arm_sdk weight while handing the waist and arms back: from release_.from to 0 over
-// release_seconds, advancing only while /lowstate flows or while exiting, holding
-// otherwise. A change between running and holding raises arm_sdk_release_ramping or
-// arm_sdk_release_held, with the weight reached before this cycle and the /lowstate age.
-double SafetyCore::release_weight(double now, bool exiting)
-{
-  const bool flowing = exiting || state_flowing(now);
-  if (flowing && !release_.start) {
-    release_.start = now - release_.elapsed;
-  } else if (!flowing && release_.start) {
-    release_.elapsed = now - *release_.start;
-    release_.start.reset();
-  }
-  const bool running = release_.start.has_value();
-  if (!release_.running || *release_.running != running) {
-    release_.running = running;
-    raise(
-      running ? Event::Info : Event::Warn, [&] {
-        const std::string age =
-        state_time_ ? json_number(now - *state_time_) : std::string("null");
-        return std::string("{\"event\": ") +
-        (running ? "\"arm_sdk_release_ramping\"" : "\"arm_sdk_release_held\"") +
-        ", \"state_age\": " + age + ", \"weight\": " + json_number(weight_) + "}";
-      });
-  }
-  if (running) {
-    weight_ = release_.from *
-      (1.0 - ramp_fraction(now - *release_.start, config_.arm_sdk.release_seconds));
-  }
-  return weight_;
-}
-
-std::optional<LowCmd> SafetyCore::relay_output(double now)
+std::optional<LowCmd> SafetyCore::relay_output()
 {
   if (!took_control()) {
     return std::nullopt;
   }
-  LowCmd out = merged();
-  if (config_.mode == Mode::ArmSdk) {
-    weight_ = engage_start_ ?
-      ramp_fraction(now - *engage_start_, config_.arm_sdk.engage_seconds) : 0.0;
-    set_weight(out, weight_);
-  }
-  return out;
+  return merged();
 }
 
-std::optional<LowCmd> SafetyCore::estop_output(double now, bool exiting)
+std::optional<LowCmd> SafetyCore::estop_output(double now)
 {
   const size_t first_event = events_.size();
   std::optional<LowCmd> out;
   if (!took_control()) {
     out = std::nullopt;
-  } else if (config_.mode == Mode::ArmSdk) {
-    out = merged();
-    set_weight(*out, release_weight(now, exiting));
   } else if (config_.estop_response.after == EstopAfter::BurstThenSilence) {
     if (burst_written_ < config_.estop_response.burst_count) {
       out = estop_cmd_;
@@ -957,10 +829,10 @@ std::optional<LowCmd> SafetyCore::step(double now)
   }
   check_estop_input(now);
   if (estopped()) {
-    return finish(estop_output(now, false));
+    return finish(estop_output(now));
   }
   report_quiet(now);
-  return finish(relay_output(now));
+  return finish(relay_output());
 }
 
 std::optional<LowCmd> SafetyCore::exit_step(double now)
@@ -970,30 +842,10 @@ std::optional<LowCmd> SafetyCore::exit_step(double now)
     return std::nullopt;
   }
   std::optional<LowCmd> out;
-  if (config_.mode == Mode::ArmSdk) {
-    if (took_control() && engage_start_) {
-      if (!release_.begun) {
-        release_ = Release{};
-        release_.begun = true;
-        release_.from = weight_;
-      }
-      if (estopped()) {
-        out = estop_output(now, true);
-      } else {
-        out = merged();
-        set_weight(*out, release_weight(now, true));
-      }
-      if (weight_ == 0.0) {
-        if (!exit_hold_start_) {
-          exit_hold_start_ = now;
-        }
-        exit_done_ = now - *exit_hold_start_ >= kExitHoldSeconds;
-      }
-    }
-  } else if (estopped()) {
+  if (estopped()) {
     const bool burst = config_.estop_response.after == EstopAfter::BurstThenSilence;
     if (burst || !estop_written_) {
-      out = estop_output(now, true);
+      out = estop_output(now);
     }
     exit_done_ = !burst;
   }

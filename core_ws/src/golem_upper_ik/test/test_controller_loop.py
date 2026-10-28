@@ -11,10 +11,10 @@ error at controller.startup_timeout, well before controller.startup_move_timeout
 
 The others sit behind golem_safety's safety_node, run as a subprocess (RelayedRobot). The
 controller waits for /lowstate and, unless follow_tolerance turns the gate off, never
-commands far from the measured pose before and at engagement: on the G1 through the arm_sdk
-weight ramp, on the H1-2 until its zero stream gives way to the upper input. In split mode
-the G1's gate opens only once the walking node commands too, the H1-2's without it; when the
-relay starts late, the start-up moves still finish, though the start-up outlasts
+commands far from the measured pose before and at engagement: on the G1 until its engage
+gate passes, on the H1-2 until its zero stream gives way to the upper input. The G1's gate
+opens only once the walking node commands too, the H1-2's without it; when the relay starts
+late, the start-up moves still finish, though the start-up outlasts
 controller.startup_move_timeout. Once engaged, the controller holds against a push instead
 of following it.
 '''
@@ -32,8 +32,7 @@ from ros_harness import (
 
 ROBOTS = ('h12', 'g1')
 # the controller config, and the golem_safety config it pairs with, of each test setting
-CONFIGS = {'h12': 'safety_split', 'g1': 'g1'}
-ENGAGE = {'h12': ('safety_split', 'relax_safety_split'), 'g1': ('g1', 'arm_sdk')}
+CONFIGS = {'h12': 'safety_split', 'g1': 'g1_split'}
 SPLIT = {'h12': ('safety_split', 'relax_safety_split'), 'g1': ('g1_split', 'split')}
 LATE = {'h12': ('safety_split', 'relax_safety_split'), 'g1': ('sim_split', 'sim_split')}
 # the ROS delivery, and the robot's motion since the controller's sample (rad)
@@ -95,15 +94,15 @@ def build_in_thread(ros, model, config):
 
 
 def watch_gate_opening(monkeypatch):
-    '''(time, weight) of each golem_safety output sample that opens a follow gate'''
+    '''The time of each golem_safety output sample that opens a follow gate'''
     from golem_upper_ik.core import low_cmd_handler
     opened = []
     relays_commands = low_cmd_handler.relays_commands
 
-    def relays_and_note(sample_q, sample_kp, weight, *args):
-        relays = relays_commands(sample_q, sample_kp, weight, *args)
+    def relays_and_note(*args):
+        relays = relays_commands(*args)
         if relays:
-            opened.append((time.monotonic(), weight))
+            opened.append(time.monotonic())
         return relays
     monkeypatch.setattr(low_cmd_handler, 'relays_commands', relays_and_note)
     return opened
@@ -196,7 +195,7 @@ def test_startup_home_ee_target_and_zero_gain_shutdown(ros, models, robot):
     # their targets, never a zero-gain command
     np.testing.assert_allclose(robot_.measured()[upper], final_pose(profile, config), atol=0.02)
     assert robot_.commands > 0 and robot_.zero_gain_commands == 0
-    # the commands were relayed (on /arm_sdk at weight 1): the gate is open
+    # the commands were relayed: the gate is open
     assert controller.low_cmd_handler.following
 
     # a target 5 cm forward of the left end effector is reached; the right one stays put
@@ -214,16 +213,23 @@ def test_startup_home_ee_target_and_zero_gain_shutdown(ros, models, robot):
     assert np.linalg.norm(ee_position(controller, 0) - target[:3, 3]) < 0.005
     assert np.linalg.norm(ee_position(controller, 1) - right_start) < 0.005
 
-    # shutdown: one zero-gain, mode-0 command on the upper slots, then silence
+    # shutdown: one command, then silence. Mode 0 and zero gains and torque on the upper
+    # slots, except the held joints of a profile that keeps them on /lowcmd (the G1's waist),
+    # which stay at their hold
     controller.shutdown()
     stopped = time.monotonic()
     time.sleep(0.3)
     received, last = robot_.last_command
     assert received < stopped + 0.05
-    assert robot_.zero_gain_commands >= 1
+    keeps_held = profile.shutdown_keeps_held_joints_on_lowcmd
+    if not keeps_held:
+        assert robot_.zero_gain_commands >= 1
     for slot in upper:
         motor = last.motor_cmd[slot]
-        assert (motor.mode, motor.kp, motor.kd, motor.tau) == (0, 0.0, 0.0, 0.0)
+        if keeps_held and slot in held:
+            assert motor.mode == 1 and motor.kp > 0.0, slot
+        else:
+            assert (motor.mode, motor.kp, motor.kd, motor.tau) == (0, 0.0, 0.0, 0.0), slot
 
 
 @pytest.mark.parametrize('raising', ['handler', 'planner'])
@@ -290,10 +296,9 @@ def test_startup_stops_with_an_error_when_the_safety_layer_never_engages(
     recorder = CommandRecorder(ros, config['topics']['low_cmd'], profile, robot_)
     startup = watch_startup(monkeypatch)
     model = shared_model(ros, models, robot)
-    at = ' at weight 1' if safety_out == '/arm_sdk' else ''
     with pytest.raises(RuntimeError, match=re.escape(
             'golem_safety did not relay the commands within controller.startup_timeout '
-            f'(2 s): no {safety_out} sample{at} carried them')):
+            f'(2 s): no {safety_out} sample carried them')):
         build(ros, model, config)
     stopped = time.monotonic()
     time.sleep(0.3)
@@ -372,15 +377,18 @@ def test_every_command_holds_the_hold_targets_while_the_held_joints_sag(ros, mod
 def test_waits_for_state_and_tracks_the_robot_through_engagement(
         ros, models, robot, follow_tolerance, monkeypatch, tmp_path):
     profile = profile_of(robot)
-    controller_config, safety_config = ENGAGE[robot]
+    controller_config, safety_config = SPLIT[robot]
     config = config_of(robot, controller_config, follow_tolerance=follow_tolerance)
     safety_out = config['topics']['safety_out']
     arms, held = STANDING[robot]
-    robot_ = RelayedRobot(ros, profile, body_pose(profile, arms, held), safety_out)
+    q0 = body_pose(profile, arms, held)
+    robot_ = RelayedRobot(ros, profile, q0, safety_out)
     upper_in = CommandRecorder(ros, config['topics']['low_cmd'], profile, robot_)
     output = CommandRecorder(ros, safety_out, profile, robot_)
     layer = SafetyNode(robot, safety_config, tmp_path)
     ros.on_close(layer.stop)
+    # the G1's engage gate waits for the legs too
+    legs = WalkingNode(ros, profile, q0) if robot == 'g1' else None
     opened = watch_gate_opening(monkeypatch)
     model = shared_model(ros, models, robot)
     probe = ros.node('probe')
@@ -394,6 +402,8 @@ def test_waits_for_state_and_tracks_the_robot_through_engagement(
     # nothing relays the commands yet: the robot does not follow for 2 s
     time.sleep(2.0)
     layer.start()
+    if legs is not None:
+        legs.start()
     # before golem_safety runs, from the controller's commands alone
     before = [s for s in upper_in.samples if s.t < layer.started]
     assert before[0].t >= robot_.started
@@ -413,22 +423,16 @@ def test_waits_for_state_and_tracks_the_robot_through_engagement(
     sway = [list(profile.upper_slots).index(slot) for slot in robot_.sway_slots]
     assert np.all(np.ptp(np.array([s.measured[sway] for s in before]), axis=0) > 2 * bound)
     assert gap_before <= bound
-    # until golem_safety relays at full weight (the G1's arm_sdk ramp) or relays the upper
-    # input at all (the H1-2's zero stream gives way to it), and with no jump at engagement
+    # until golem_safety relays the upper input (the G1's engage gate passes, the H1-2's zero
+    # stream gives way to it), and with no jump at engagement
     relaying = [s for s in output.samples if s.kp > 0.0]
-    full = next(s.t for s in relaying if s.weight is None or s.weight >= 1.0)
-    through = [s for s in upper_in.samples if s.t <= full]
+    through = [s for s in upper_in.samples if s.t <= relaying[0].t]
     assert max(np.max(np.abs(s.q - s.measured)) for s in through) <= bound
     assert np.max(np.abs(relaying[0].q - relaying[0].measured)) <= bound, 'jump at engagement'
 
-    # the gate opened on one golem_safety output sample: at weight 1 (the end of the arm_sdk
-    # ramp) on the G1, without a weight on the H1-2
+    # the gate opened on one golem_safety output sample
     assert controller.low_cmd_handler.following
     assert len(opened) == 1
-    if safety_out == '/arm_sdk':
-        assert opened[0][1] >= 0.999
-    else:
-        assert opened[0][1] is None
     # then the start-up moves: the arms to their last start-up posture, the held joints at
     # their targets
     assert settles(robot_, final_pose(profile, config), 0.02)
@@ -474,8 +478,8 @@ def test_split_mode_engages_then_holds_against_a_push(ros, models, robot, monkey
     assert not builder.is_alive() and 'error' not in built, built.get('error')
     controller = built['controller']
     first = next(s for s in lowcmd.samples if s.kp > 0.0)
-    # opened on /lowcmd (no weight)
-    assert len(opened) == 1 and opened[0][1] is None
+    # opened on one /lowcmd sample
+    assert len(opened) == 1
     assert controller.low_cmd_handler.following
     assert np.max(np.abs(first.q - first.measured)) <= config['controller']['follow_tolerance']
     assert settles(robot_, final_pose(profile, config), 0.02)
@@ -490,7 +494,7 @@ def test_start_up_steps_sleep_a_whole_period_after_their_work(ros, models, monke
     from golem_upper_ik.core.controller.upper_controller import UpperController
     from golem_upper_ik.core.low_cmd_handler import LowCmdHandler
     profile = profile_of('g1')
-    config = config_of('g1', 'sim')
+    config = config_of('g1', 'sim_split')
     # every step of both start-up moves takes 10 ms of work more
     steps = {'posture': [], 'hold': []}
     for cls, name, kind in ((UpperController, 'goto_reduced_configuration', 'posture'),
@@ -559,7 +563,7 @@ def test_relay_starting_late_still_gets_the_whole_start_up_move(ros, models, rob
     assert not builder.is_alive() and 'error' not in built, built.get('error')
     # engaged late, then moved to the end pose past the end of the wait for it and past the
     # move budget counted from the start of the start-up
-    assert len(opened) == 1 and opened[0][0] - startup['start'] >= late
+    assert len(opened) == 1 and opened[0] - startup['start'] >= late
     assert startup['end'] - startup['start'] > config['controller']['startup_move_timeout']
     assert settles(robot_, final_pose(profile, config), 0.02)
     # the controller kept commanding: golem_safety never latched its estop

@@ -17,8 +17,8 @@
 namespace golem_safety
 {
 
-// A command input. full_body_mode reads Full (every body slot), split_mode reads Lower (the
-// profile's lower slots) and Upper (its upper slots), and arm_sdk_mode reads Upper.
+// A command input. full_body_mode reads Full (every body slot), and split_mode reads Lower
+// (the profile's lower slots) and Upper (its upper slots).
 enum class Input { Full, Upper, Lower };
 
 // The writer of a command: its DDS publisher GID, as raw bytes.
@@ -37,9 +37,8 @@ struct Event
 //
 // Relay. Each input keeps its newest valid command. step() merges the engaged inputs'
 // newest commands, each on its own slots, into zero_command; the slots no engaged input
-// owns keep zero_command's values. In arm_sdk_mode the weight slot carries the weight,
-// which ramps 0 -> 1 over arm_sdk.engage_seconds from engagement. Header and CRC are
-// stamped last on whatever step() and exit_step() return.
+// owns keep zero_command's values. Header and CRC are stamped last on whatever step() and
+// exit_step() return.
 //
 // Engaging. Nothing engages until the newest /lowstate carries the profile's mode_machine
 // and, with use_estop, a hardware estop sample has arrived; a /lowstate from another
@@ -51,8 +50,7 @@ struct Event
 //     on a valid command that finds every input with a command no older than its stale
 //     time (below; when that is > 0), the newest /lowstate at most
 //     engage.max_state_age_seconds old, and on every slot of the mode's inputs the newest
-//     command's q within engage.max_position_error of the measured q (lowcmd_engage or
-//     arm_sdk_engage, Info).
+//     command's q within engage.max_position_error of the measured q (lowcmd_engage, Info).
 // A command that does not engage raises engage_refused (Warn) with the first reason, at
 // most once a second.
 //
@@ -86,9 +84,6 @@ struct Event
 // The estop latches, one way until restart, on
 //   - a command with a non-finite value, before or after engaging: "Command validation
 //     failed on <topic>: motor <slot> (<joint>) <field> is <value>";
-//   - in arm_sdk_mode, a command with a waist kp, clipped, below arm_sdk.waist_kp_min,
-//     before or after engaging: "Command validation failed on <topic>: motor 12
-//     (waist_yaw_joint) kp 10.0 is below arm_sdk.waist_kp_min 40.0";
 //   - a /lowstate whose mode_machine is not the profile's, once the core is engaged;
 //   - on ROS domain 0 with control.state_lag_ms > 0, a /lowstate (checked) that arrives
 //     more than state_lag_ms late against the robot's uint32 ms tick: its arrival minus
@@ -102,15 +97,8 @@ struct Event
 //     from the first sample on, a step() more than estop.timeout_seconds after the newest
 //     sample.
 // The latch sets the flag before any other work, and nothing it does can throw.
-// After the latch step() returns
-//   - in arm_sdk_mode, the upper input's last valid command with the weight ramping from
-//     its last written value to 0 over arm_sdk.release_seconds, then 0 for ever. The ramp
-//     advances only while /lowstate is at most stale.state_seconds old (any age when that
-//     is <= 0), so a robot cut off from the layer does not see the weight jump when the
-//     link comes back. Each change between running and holding raises
-//     arm_sdk_release_ramping (Info) or arm_sdk_release_held (Warn);
-//   - otherwise the estop command: estop_response.burst_count times and then nothing with
-//     burst_then_silence, on every step with keep_writing.
+// After the latch step() returns the estop command: estop_response.burst_count times and
+// then nothing with burst_then_silence, on every step with keep_writing.
 // Nothing is written after the latch when the core had not taken control (engage_gate,
 // before engagement). The estop report (Error) is estop_command_written, or
 // estop_latched_silent when that first step after the latch wrote nothing: the reason,
@@ -119,12 +107,11 @@ struct Event
 // trigger_to_action_ms; all ms on the boot-time clock. It is built by the drain_events()
 // after that step, so nothing is formatted before the step's command is handed back.
 //
-// Events. engage_refused, input_engaged, lowcmd_engage, arm_sdk_engage, input_quiet,
-// input_resumed, state_quiet, state_resumed, gain_clipped, arm_sdk_release_ramping,
-// arm_sdk_release_held and the estop report are one JSON object each: keys sorted,
-// ", " and ": " separators, and numbers as Python's json module writes them (times and
-// weights rounded to 4 decimals). The other events are text. Raising an event never
-// throws: an event that cannot be built is dropped.
+// Events. engage_refused, input_engaged, lowcmd_engage, input_quiet, input_resumed,
+// state_quiet, state_resumed, gain_clipped and the estop report are one JSON object each:
+// keys sorted, ", " and ": " separators, and numbers as Python's json module writes them
+// (times rounded to 4 decimals). The other events are text. Raising an event never throws:
+// an event that cannot be built is dropped.
 //
 // Not thread-safe: one thread calls every method, except estopped() and relay_ready(),
 // which any thread may call.
@@ -132,10 +119,8 @@ class SafetyCore
 {
 public:
   // `domain_id` is the ROS domain: on 0, the real robots' command bus, the transport-lag
-  // check runs. Throws std::invalid_argument when `config` is for another robot, when
-  // arm_sdk_mode finds no weight slot or no waist_* joint among the upper slots in the
-  // profile, or when estop_command does (a Damp kd list that is not one entry per body
-  // slot).
+  // check runs. Throws std::invalid_argument when `config` is for another robot, or when
+  // estop_command does (a Damp kd list that is not one entry per body slot).
   SafetyCore(RobotProfile profile, SafetyConfig config, bool use_estop, int domain_id);
 
   SafetyCore(const SafetyCore &) = delete;
@@ -152,15 +137,10 @@ public:
   std::optional<unitree_hg::msg::LowCmd> step(double now);
 
   // What to publish during shutdown, in place of step(); nullopt means done, and step()
-  // answers as exit_step() from the first call on.
-  //   - full_body_mode and split_mode are done at once, so the robot holds the last
-  //     command written. Once estopped, the estop sequence is finished first: the rest of
-  //     the burst with burst_then_silence, and with keep_writing the estop command once if
-  //     none has been written since the latch.
-  //   - arm_sdk_mode holds the last valid command while the weight ramps from its value
-  //     to 0 over arm_sdk.release_seconds, whatever the /lowstate age, then writes weight
-  //     0 for 0.1 s more, so that one lost packet cannot leave the robot on a higher
-  //     weight. It is done at once if it never engaged.
+  // answers as exit_step() from the first call on. It is done at once, so the robot holds
+  // the last command written. Once estopped, the estop sequence is finished first: the rest
+  // of the burst with burst_then_silence, and with keep_writing the estop command once if
+  // none has been written since the latch.
   std::optional<unitree_hg::msg::LowCmd> exit_step(double now);
 
   bool estopped() const {return estopped_.load(std::memory_order_acquire);}
@@ -220,17 +200,6 @@ private:
     double base_time = 0.0;
   };
 
-  // The arm_sdk hand-back: the weight ramps from `from` to 0 over release_seconds, while
-  // it runs.
-  struct Release
-  {
-    bool begun = false;
-    double from = 0.0;
-    std::optional<double> start;  // set while the ramp runs
-    double elapsed = 0.0;         // ramp time done before the last hold
-    std::optional<bool> running;  // last reported
-  };
-
   // The estop report's times, s; the reason is estop_reason().
   struct PendingReport
   {
@@ -261,13 +230,11 @@ private:
 
   InputState & input_state(Input input);
   bool took_control() const;
-  bool state_flowing(double now) const;
 
   void check_state(const unitree_hg::msg::LowState & state, double now);
   void update_relay_ready();
 
   void accept_command(InputState & in, const unitree_hg::msg::LowCmd & cmd, double now);
-  std::optional<BadValue> soft_waist(const unitree_hg::msg::LowCmd & cmd) const;
   void try_engage(InputState & in, double now);
   std::optional<Refusal> refusal(double now) const;
   std::string refusal_text(const Refusal & refusal) const;
@@ -280,9 +247,9 @@ private:
   std::optional<Violation> limit_violation(const unitree_hg::msg::LowState & state) const;
   std::string joint(int slot) const;
 
-  // Latches with the reason build_reason() returns: the flag first, then the report and
-  // the arm_sdk release (set_latched), then the reason, whose failure leaves the fixed
-  // text. Does nothing once latched.
+  // Latches with the reason build_reason() returns: the flag first, then the report
+  // (set_latched), then the reason, whose failure leaves the fixed text. Does nothing once
+  // latched.
   template<class BuildReason>
   void latch(double now, std::optional<double> trigger, BuildReason && build_reason) noexcept
   {
@@ -309,10 +276,8 @@ private:
   }
 
   unitree_hg::msg::LowCmd merged() const;
-  void set_weight(unitree_hg::msg::LowCmd & cmd, double weight) const;
-  double release_weight(double now, bool exiting);
-  std::optional<unitree_hg::msg::LowCmd> relay_output(double now);
-  std::optional<unitree_hg::msg::LowCmd> estop_output(double now, bool exiting);
+  std::optional<unitree_hg::msg::LowCmd> relay_output();
+  std::optional<unitree_hg::msg::LowCmd> estop_output(double now);
   std::optional<unitree_hg::msg::LowCmd> finish(std::optional<unitree_hg::msg::LowCmd> out);
 
   const RobotProfile profile_;
@@ -324,10 +289,8 @@ private:
   std::array<InputState, 3> inputs_;
   std::vector<Input> mode_inputs_;
   std::vector<int> checked_slots_;  // every slot of the mode's inputs, ascending
-  std::vector<int> waist_slots_;    // arm_sdk_mode: the waist_kp_min slots
 
   bool engaged_ = false;  // any input with zero_stream, every input with engage_gate
-  std::optional<double> engage_start_;  // arm_sdk weight ramp
   std::optional<double> refusal_reported_;  // the last engage_refused
 
   std::optional<unitree_hg::msg::LowState> state_;
@@ -348,11 +311,8 @@ private:
   int burst_written_ = 0;      // estop commands of the burst written, at most burst_count
   bool estop_written_ = false;  // an estop command has been written since the latch
 
-  double weight_ = 0.0;  // the arm_sdk weight last written
-  Release release_;
   bool exiting_ = false;
   bool exit_done_ = false;
-  std::optional<double> exit_hold_start_;  // arm_sdk: weight 0 first written on exit
 
   std::vector<bool> kp_clip_reported_, kd_clip_reported_;
   unitree_hg::msg::LowCmd last_written_;

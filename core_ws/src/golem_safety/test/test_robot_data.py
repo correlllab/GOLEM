@@ -16,9 +16,8 @@ SCHEMA = {
     },
     'g1': {
         'robot': 'g1', 'mode_machine': 5, 'mode_pr': 0, 'motor_slots': 35,
-        'modes': ['arm_sdk_mode', 'split_mode', 'full_body_mode'],
+        'modes': ['split_mode', 'full_body_mode'],
         'lower_slots': [0, 11], 'upper_slots': [12, 28], 'joints': 29,
-        'arm_sdk_weight_slot': 29,
     },
 }
 
@@ -45,6 +44,14 @@ def test_robot_file_has_the_schema_and_robot_facts(robot):
         assert joint['velocity'] > 0 and joint['effort'] > 0, joint['name']
 
 
+def test_g1_profile_has_no_arm_sdk():
+    '''The G1 runs split_mode or full_body_mode, and no slot past the body carries a value'''
+    data = load_robot('g1')
+    assert data['modes'] == ['split_mode', 'full_body_mode']
+    assert set(data) == {'robot', 'mode_machine', 'mode_pr', 'motor_slots', 'modes',
+                         'lower_slots', 'upper_slots', 'joints'}
+
+
 def test_g1_data_matches_g1_description():
     joints = pytest.importorskip('g1_description.joints')
     layout = pytest.importorskip('g1_description.layout')
@@ -60,9 +67,9 @@ def test_g1_data_matches_g1_description():
 
     assert data['motor_slots'] == layout.LOWCMD_MOTOR_SLOTS
     assert data['mode_pr'] == layout.MODE_PR
-    assert data['arm_sdk_weight_slot'] == layout.ARM_SDK_WEIGHT_SLOT
     assert data['lower_slots'] == [layout.LEG_SLOTS.start, layout.LEG_SLOTS.stop - 1]
-    assert data['upper_slots'] == [layout.ARM_SDK_SLOTS.start, layout.ARM_SDK_SLOTS.stop - 1]
+    # the waist and both arms
+    assert data['upper_slots'] == [layout.WAIST_SLOTS.start, layout.RIGHT_ARM_SLOTS[-1]]
 
 
 def test_h12_data_matches_todays_table():

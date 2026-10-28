@@ -160,8 +160,8 @@ def _core_nodes(**args):
 
 
 @pytest.mark.parametrize('launch_file, sim, safety_config, controller_config', [
-    ('g1_real_robot.launch.py', False, 'arm_sdk', 'g1'),
-    ('g1_sim.launch.py', True, 'sim_arm_sdk', 'sim'),
+    ('g1_real_robot.launch.py', False, 'split', 'g1_split'),
+    ('g1_sim.launch.py', True, 'sim_split', 'sim_split'),
 ])
 def test_core_runs_golem_safety_and_golem_upper_ik(launch_file, sim, safety_config,
                                                    controller_config):

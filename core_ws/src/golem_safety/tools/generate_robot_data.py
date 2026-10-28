@@ -62,9 +62,6 @@ def robot_text(source, facts, joints):
     lines.append(f'modes: [{", ".join(facts["modes"])}]\n')
     lines.append(f'lower_slots: {list(facts["lower_slots"])}  # inclusive\n')
     lines.append(f'upper_slots: {list(facts["upper_slots"])}  # inclusive\n')
-    if 'arm_sdk_weight_slot' in facts:
-        lines.append(f'arm_sdk_weight_slot: {facts["arm_sdk_weight_slot"]}  '
-                     '# q of this slot is the arm_sdk blend weight\n')
     lines.append('# Body joints in slot order. position is [low, high] in rad, velocity in\n'
                  '# rad/s, effort in N*m.\n')
     lines.append('joints:\n')
@@ -100,10 +97,10 @@ def main():
     g1_facts = {
         'robot': 'g1', 'mode_machine': 5, 'mode_pr': layout.MODE_PR,
         'motor_slots': layout.LOWCMD_MOTOR_SLOTS,
-        'modes': ['arm_sdk_mode', 'split_mode', 'full_body_mode'],
+        'modes': ['split_mode', 'full_body_mode'],
         'lower_slots': (layout.LEG_SLOTS.start, layout.LEG_SLOTS.stop - 1),
-        'upper_slots': (layout.ARM_SDK_SLOTS.start, layout.ARM_SDK_SLOTS.stop - 1),
-        'arm_sdk_weight_slot': layout.ARM_SDK_WEIGHT_SLOT,
+        # the waist and both arms
+        'upper_slots': (layout.WAIST_SLOTS.start, layout.RIGHT_ARM_SLOTS[-1]),
     }
     robots = [
         ('h12', 'tools/h12_joint_limits.py', h12_facts, h12_joints()),

@@ -4,11 +4,11 @@
 Starts the installed frame_task_server for --robot with --config as a subprocess. This process
 plays the robot and golem_safety's relay: it publishes /lowstate at 500 Hz, executes every
 command on /safety/lowcmd_upper_in at once (each slot with kp > 0 jumps to its q) and relays
-it on the config's topics.safety_out (at weight 1 on /arm_sdk), and records the receive time
-of every command. Two windows are measured: the start-up (from the first command to the
-server's first /left_ee_pose, the start-up moves stepping the IK) and the goals (FrameTask
-goals that move both end effectors 10 cm forward and back, one after another, for --seconds).
-Then the server is stopped with SIGINT.
+it on the config's topics.safety_out, and records the receive time of every command. Two
+windows are measured: the start-up (from the first command to the server's first
+/left_ee_pose, the start-up moves stepping the IK) and the goals (FrameTask goals that move
+both end effectors 10 cm forward and back, one after another, for --seconds). Then the
+server is stopped with SIGINT.
 
 The JSON on stdout gives, per window, the achieved rate, the 99th percentile of the receive
 period, the longest gap, how many gaps were over 20 ms and the control steps per second
@@ -63,8 +63,6 @@ class Robot:
         self._lock = threading.Lock()
         self._q = np.zeros(count)
         self._upper = list(profile.upper_slots)
-        safety_out = config['topics']['safety_out']
-        self._weight_slot = profile.arm_sdk_weight_slot if safety_out == '/arm_sdk' else None
         self.times = []
         self.upper_q = []
         self.last = None
@@ -74,7 +72,8 @@ class Robot:
         self._state.imu_state.quaternion = [1.0, 0.0, 0.0, 0.0]
         self._state_publisher = node.create_publisher(LowState, config['topics']['low_state'],
                                                       WRITER_QOS)
-        self._relay_publisher = node.create_publisher(LowCmd, safety_out, WRITER_QOS)
+        self._relay_publisher = node.create_publisher(LowCmd, config['topics']['safety_out'],
+                                                      WRITER_QOS)
         node.create_subscription(LowCmd, config['topics']['low_cmd'], self._on_command,
                                  RECORD_QOS)
         self._stop = threading.Event()
@@ -91,8 +90,6 @@ class Robot:
             for slot in range(len(self._q)):
                 if motors[slot].kp > 0.0:
                     self._q[slot] = motors[slot].q
-            if self._weight_slot is not None:
-                motors[self._weight_slot].q = 1.0
             self._relay = msg
             self.last = msg
 

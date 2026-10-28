@@ -45,6 +45,7 @@ const std::map<std::string, std::string> & replaced_keys()
     {"estop.state_lag_ms", "moved to control.state_lag_ms"},
     {"control.lower_stale_estop_seconds", "renamed stale.lower_seconds"},
     {"control.state_stale_estop_seconds", "renamed stale.state_seconds"},
+    {"arm_sdk", "arm_sdk mode was removed: the G1 runs split_mode or full_body_mode"},
   };
   return keys;
 }
@@ -373,8 +374,7 @@ DerivedLimits derive_all(const RobotProfile & profile, const Section & limits)
   return out;
 }
 
-EstopResponse parse_estop_response(
-  const Section & section, Mode config_mode, const DerivedLimits & limits)
+EstopResponse parse_estop_response(const Section & section, const DerivedLimits & limits)
 {
   section.allow_only({"mode", "kd", "after", "burst_count"});
   EstopResponse out;
@@ -383,11 +383,6 @@ EstopResponse parse_estop_response(
   const size_t after =
     section.required_choice("after", {"burst_then_silence", "keep_writing"});
   out.after = after == 0 ? EstopAfter::BurstThenSilence : EstopAfter::KeepWriting;
-  if (config_mode == Mode::ArmSdk && out.after != EstopAfter::KeepWriting) {
-    section.fail_at(
-      "after", "must be keep_writing in arm_sdk_mode: the weight ramp keeps writing after "
-      "an estop");
-  }
   out.burst_count = section.positive_integer("burst_count", 50);
   out.kd = section.per_joint("kd", 0.0);
   for (const double kd : out.kd) {
@@ -410,8 +405,8 @@ SafetyConfig parse_checked(
   const Where where{profile.robot, source, profile.joints.size()};
   const Section root(where, root_node, "");
   root.allow_only(
-    {"mode", "topics", "control", "stale", "single_writer", "startup", "engage", "arm_sdk",
-      "estop", "estop_response", "limits", "logging"});
+    {"mode", "topics", "control", "stale", "single_writer", "startup", "engage", "estop",
+      "estop_response", "limits", "logging"});
 
   SafetyConfig config;
   config.robot = profile.robot;
@@ -419,19 +414,18 @@ SafetyConfig parse_checked(
 
   // A config without a mode runs the profile's first mode.
   const std::string mode_text = root.text("mode", mode_name(profile.modes.front()));
-  try {
-    config.mode = parse_mode(mode_text);
-  } catch (const std::runtime_error & e) {
-    root.fail_at("mode", e.what());
-  }
-  if (std::find(profile.modes.begin(), profile.modes.end(), config.mode) == profile.modes.end()) {
+  const auto mode = std::find_if(
+    profile.modes.begin(), profile.modes.end(),
+    [&mode_text](Mode candidate) {return mode_text == mode_name(candidate);});
+  if (mode == profile.modes.end()) {
     std::string modes;
-    for (const Mode mode : profile.modes) {
-      modes += std::string(modes.empty() ? "" : ", ") + mode_name(mode);
+    for (const Mode candidate : profile.modes) {
+      modes += std::string(modes.empty() ? "" : ", ") + mode_name(candidate);
     }
     root.fail_at(
       "mode", "'" + mode_text + "' is not a mode of robot " + profile.robot + " (" + modes + ")");
   }
+  config.mode = *mode;
 
   const Section topics = root.section("topics");
   topics.allow_only({"low_cmd_in", "low_cmd_lower_in", "low_cmd_upper_in", "low_cmd_out",
@@ -439,8 +433,7 @@ SafetyConfig parse_checked(
   config.topics.low_cmd_in = topics.topic("low_cmd_in", "/safety/lowcmd_in");
   config.topics.low_cmd_lower_in = topics.topic("low_cmd_lower_in", "/safety/lowcmd_lower_in");
   config.topics.low_cmd_upper_in = topics.topic("low_cmd_upper_in", "/safety/lowcmd_upper_in");
-  config.topics.low_cmd_out =
-    topics.topic("low_cmd_out", config.mode == Mode::ArmSdk ? "/arm_sdk" : "/lowcmd");
+  config.topics.low_cmd_out = topics.topic("low_cmd_out", "/lowcmd");
   config.topics.low_state = topics.topic("low_state", "/lowstate");
 
   const Section control = root.section("control");
@@ -472,14 +465,6 @@ SafetyConfig parse_checked(
   config.engage.max_position_error =
     engage.positive("max_position_error", config.engage.max_position_error);
 
-  const Section arm_sdk = root.section("arm_sdk");
-  arm_sdk.allow_only({"engage_seconds", "release_seconds", "waist_kp_min"});
-  config.arm_sdk.engage_seconds =
-    arm_sdk.nonnegative("engage_seconds", config.arm_sdk.engage_seconds);
-  config.arm_sdk.release_seconds =
-    arm_sdk.nonnegative("release_seconds", config.arm_sdk.release_seconds);
-  config.arm_sdk.waist_kp_min = arm_sdk.nonnegative("waist_kp_min", config.arm_sdk.waist_kp_min);
-
   const Section estop = root.section("estop");
   estop.allow_only({"triggered_topic", "plugged_in_topic", "timeout_seconds"});
   config.estop.triggered_topic = estop.topic("triggered_topic", config.estop.triggered_topic);
@@ -490,14 +475,7 @@ SafetyConfig parse_checked(
   limits.allow_only({"clip", "enforce", "estop"});
   config.limits = derive_all(profile, limits);
 
-  config.estop_response =
-    parse_estop_response(root.section("estop_response"), config.mode, config.limits);
-
-  // arm_sdk_mode rejects a command whose waist kp is below waist_kp_min, so the
-  // clip must allow it. kp_max is one number for every joint, the waist included.
-  if (config.mode == Mode::ArmSdk && config.arm_sdk.waist_kp_min > config.limits.kp_max) {
-    arm_sdk.fail_at("waist_kp_min", "must not exceed limits.clip.kp_max");
-  }
+  config.estop_response = parse_estop_response(root.section("estop_response"), config.limits);
 
   const Section logging = root.section("logging");
   logging.allow_only({"enabled", "base_dir", "chunk_prefix"});

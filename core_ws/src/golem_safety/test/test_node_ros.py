@@ -1,7 +1,7 @@
 '''
 safety_node over ROS on domain 91, against a fake robot: the start-up refusals, the relay,
 the start-up and engage rules, the estop latch, the heartbeat, the hardware estop and the
-exit hand-back, each run for the robots whose behavior it pins. Timing is read from the
+exit, each run for the robots whose behavior it pins. Timing is read from the
 node's own publish times (the source timestamps), and assertions on time keep generous
 margins.
 '''
@@ -28,8 +28,8 @@ LOWER = '/safety/lowcmd_lower_in'
 FULL_IN = '/safety/lowcmd_in'
 SPLIT = {'h12': 'sim_safety_split', 'g1': 'sim_split'}
 FULL = {'h12': 'default_safety_full', 'g1': 'full'}
-RAMP_S = 0.3
-FAST_RAMPS = {'engage_seconds': RAMP_S, 'release_seconds': RAMP_S}
+# s: long enough for every input of the mode to engage and its commands to be relayed
+SETTLE = 0.9
 FIXTURES = Path(__file__).resolve().parent / 'fixtures'
 
 
@@ -38,11 +38,6 @@ FIXTURES = Path(__file__).resolve().parent / 'fixtures'
 @functools.lru_cache(maxsize=None)
 def profile(robot: str) -> Profile:
     return Profile(robot)
-
-
-def weight(msg) -> float:
-    '''The G1's arm_sdk weight'''
-    return msg.motor_cmd[profile('g1').weight_slot].q
 
 
 def is_zeroed(msg, joints: int) -> bool:
@@ -55,11 +50,6 @@ def is_damped(msg, kd: list) -> bool:
     '''Every body motor on with kp 0 and only kd: the damp estop command'''
     return all(m.mode == 1 and m.q == m.dq == m.tau == m.kp == 0.0 and abs(m.kd - kd[i]) < 1e-6
                for i, m in enumerate(msg.motor_cmd[:len(kd)]))
-
-
-def monotonic(values: list, rising: bool) -> bool:
-    pairs = list(zip(values, values[1:]))
-    return all(b >= a for a, b in pairs) if rising else all(b <= a for a, b in pairs)
 
 
 def close(a: float, b: float) -> bool:
@@ -80,15 +70,13 @@ def input_pairs(run, knee: float = KNEE_Q, shoulder: float = SHOULDER_Q) -> list
     if mode == 'split_mode':
         return [(robot.publisher(LOWER), robot.command(knee=knee)),
                 (robot.publisher(UPPER), robot.command(shoulder=shoulder))]
-    if mode == 'full_body_mode':
-        return [(robot.publisher(FULL_IN), robot.command(knee=knee, shoulder=shoulder))]
-    return [(robot.publisher(UPPER), robot.command(shoulder=shoulder))]
+    assert mode == 'full_body_mode', mode
+    return [(robot.publisher(FULL_IN), robot.command(knee=knee, shoulder=shoulder))]
 
 
 def carries(msg, run, knee: float = KNEE_Q, shoulder: float = SHOULDER_Q) -> bool:
-    '''The relayed command: the commanded knee (when the mode drives the legs) and shoulder'''
-    legs = run.config['mode'] != 'arm_sdk_mode'
-    return (not legs or close(msg.motor_cmd[KNEE].q, knee)) and close(
+    '''The relayed command: the commanded knee and shoulder'''
+    return close(msg.motor_cmd[KNEE].q, knee) and close(
         msg.motor_cmd[run.robot.profile.shoulder].q, shoulder)
 
 
@@ -160,22 +148,17 @@ def _refused(robot, config, timeout: float = 30.0, **kwargs) -> tuple[int, str]:
 
 
 @pytest.mark.parametrize('robot, config, words', [
-    ('h12', 'arm_sdk', ['h12', 'arm_sdk', "no config 'arm_sdk' for robot h12"]),
+    ('h12', 'split', ['h12', 'split', "no config 'split' for robot h12"]),
     ('g1', 'default_safety_split',
      ['g1', 'default_safety_split', "no config 'default_safety_split' for robot g1"]),
     ('h12', 'share:g1/full.yaml',
      ['h12', 'g1/full.yaml', 'in the config directory of robot g1, not of robot h12']),
     ('g1', 'share:h12/sim_safety_split.yaml',
      ['g1', 'h12/sim_safety_split.yaml', 'in the config directory of robot h12, not of robot g1']),
-    ('h12', 'tmp:mode: arm_sdk_mode', ['h12', 'arm_sdk_mode']),
-], ids=['h12-g1_name', 'g1-h12_name', 'h12-g1_path', 'g1-h12_path', 'h12-g1_mode'])
-def test_config_for_other_robot_is_refused(tmp_path, robot, config, words):
+], ids=['h12-g1_name', 'g1-h12_name', 'h12-g1_path', 'g1-h12_path'])
+def test_config_for_other_robot_is_refused(robot, config, words):
     if config.startswith('share:'):
         config = str(share_dir() / 'config' / config.split(':', 1)[1])
-    elif config.startswith('tmp:'):
-        path, _ = write_config(tmp_path, robot, 'sim_safety_split')
-        path.write_text(path.read_text().replace('mode: split_mode', config.split(':', 1)[1]))
-        config = str(path)
     code, output = _refused(robot, config)
     assert code != 0, output
     refusal = [line for line in output.splitlines() if 'refuses to start' in line]
@@ -186,10 +169,10 @@ def test_config_for_other_robot_is_refused(tmp_path, robot, config, words):
 
 
 def test_a_config_that_fails_to_load_is_refused(tmp_path):
-    path, _ = write_config(tmp_path, 'g1', 'arm_sdk', mode='no_such_mode')
+    path, _ = write_config(tmp_path, 'g1', 'split', mode='no_such_mode')
     code, output = _refused('g1', path)
     assert code != 0, output
-    assert "unknown mode 'no_such_mode'" in output
+    assert "'no_such_mode' is not a mode of robot g1 (split_mode, full_body_mode)" in output
 
 
 @pytest.mark.parametrize('params, word', [
@@ -209,7 +192,7 @@ def test_missing_or_unknown_parameters_are_refused(params, word):
     assert len(refusal) == 1 and word in refusal[0], output
 
 
-# a passive watcher on domain 0, loopback only: what it sees of /lowcmd and /arm_sdk
+# a passive watcher on domain 0, loopback only: what it sees of /lowcmd
 DOMAIN_0_WATCHER = '''
 import sys, time, rclpy
 from rclpy.qos import QoSProfile, ReliabilityPolicy
@@ -218,14 +201,13 @@ rclpy.init()
 node = rclpy.create_node('domain_0_watcher')
 got = []
 qos = QoSProfile(depth=100, reliability=ReliabilityPolicy.BEST_EFFORT)
-for topic in ('/lowcmd', '/arm_sdk'):
-    node.create_subscription(LowCmd, topic, got.append, qos)
+node.create_subscription(LowCmd, '/lowcmd', got.append, qos)
 print('ready', flush=True)
 seen = 0
 deadline = time.monotonic() + float(sys.argv[1])
 while time.monotonic() < deadline:
     rclpy.spin_once(node, timeout_sec=0.01)
-    seen = max(seen, node.count_publishers('/lowcmd') + node.count_publishers('/arm_sdk'))
+    seen = max(seen, node.count_publishers('/lowcmd'))
 print(f'publishers {seen} messages {len(got)}', flush=True)
 '''
 
@@ -327,27 +309,15 @@ def test_split_relay_end_to_end(stack, robot):
         assert carries(msg, run)
         assert all(msg.motor_cmd[i].kp == 60.0 for i in facts.held)
         assert msg.crc == msg_crc(msg)
-    assert run.robot.outputs('/arm_sdk') == []
-
-
-def test_arm_sdk_output_topic(stack):
-    run = stack('g1', 'sim_arm_sdk', arm_sdk=FAST_RAMPS)
-    ((pub, cmd),) = input_pairs(run)
-    run.robot.publish_for(3 * RAMP_S, (pub, cmd))
-    time.sleep(0.05)
-    published = [msg for _, msg in run.robot.outputs('/arm_sdk')]
-    assert published and weight(published[-1]) == 1.0
-    for msg in published:
-        assert carries(msg, run) and (msg.mode_pr, msg.mode_machine) == (0, 5)
-    assert run.robot.outputs('/lowcmd') == []
-    assert run.robot.node.count_publishers('/lowcmd') == 0
 
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_newest_only_under_load(stack, robot, record_testsuite_property):
-    config = SPLIT[robot] if robot == 'h12' else 'sim_arm_sdk'
-    run = stack(robot, config, arm_sdk=FAST_RAMPS) if robot == 'g1' else stack(robot, config)
+    run = stack(robot, SPLIT[robot])
     slot = run.robot.profile.shoulder
+    if robot == 'g1':
+        # the G1's engage gate waits for the leg input too
+        run.robot.stream((run.robot.publisher(LOWER), run.robot.command(knee=KNEE_Q)))
     pub = run.robot.publisher(UPPER)
     cmd = run.robot.command(shoulder=SHOULDER_Q)
     # engage on the measured pose first
@@ -505,7 +475,7 @@ def test_full_body_mode_clips_gains_and_holds_a_quiet_input(stack, robot):
 QUIET_INPUTS = [
     ('h12', 'sim_safety_split', 'lower'), ('h12', 'sim_safety_split', 'upper'),
     ('h12', 'default_safety_full', 'full'), ('g1', 'sim_split', 'lower'),
-    ('g1', 'sim_split', 'upper'), ('g1', 'full', 'full'), ('g1', 'sim_arm_sdk', 'upper'),
+    ('g1', 'sim_split', 'upper'), ('g1', 'full', 'full'),
 ]
 
 
@@ -515,8 +485,7 @@ def test_quiet_input_is_held_and_reported(stack, robot, config, quiet):
     # 0.5 s, not a shipped value, so that a report that ignores the config fails
     seconds = 0.5
     key = 'upper_seconds' if quiet == 'upper' else 'lower_seconds'
-    run = stack(robot, config, stale={key: seconds}, arm_sdk=FAST_RAMPS) if (
-        config == 'sim_arm_sdk') else stack(robot, config, stale={key: seconds})
+    run = stack(robot, config, stale={key: seconds})
     pairs = input_pairs(run)
     topic = {'lower': LOWER, 'upper': UPPER, 'full': FULL_IN}[quiet]
     names = {LOWER: 'lower', UPPER: 'upper', FULL_IN: 'full'}
@@ -532,8 +501,6 @@ def test_quiet_input_is_held_and_reported(stack, robot, config, quiet):
 
     held = [msg for t, msg in run.outputs(since=stopped + seconds + 0.1) if t < resumed]
     assert len(held) > 100 and all(carries(msg, run) for msg in held)
-    if config == 'sim_arm_sdk':
-        assert all(weight(msg) == 1.0 for msg in held)
     (level, _, event), = run.node.timed_events('input_quiet')
     assert level == 'WARN'
     assert event['seconds'] == seconds and event['topic'] == topic
@@ -544,17 +511,15 @@ def test_quiet_input_is_held_and_reported(stack, robot, config, quiet):
     assert run.robot.outputs(HEARTBEAT) and all(beat for _, beat in run.robot.outputs(HEARTBEAT))
 
 
-QUIET_STATE = [('h12', 'sim_safety_split'), ('g1', 'sim_split'), ('g1', 'full'),
-               ('g1', 'arm_sdk')]
+QUIET_STATE = [('h12', 'sim_safety_split'), ('g1', 'sim_split'), ('g1', 'full')]
 
 
 @pytest.mark.parametrize('robot, config', QUIET_STATE, ids=[f'{r}-{c}' for r, c in QUIET_STATE])
 def test_quiet_lowstate_is_held_and_reported(stack, robot, config):
     seconds = 0.3
-    run = stack(robot, config, state_stale=seconds, arm_sdk=FAST_RAMPS) if (
-        config == 'arm_sdk') else stack(robot, config, state_stale=seconds)
+    run = stack(robot, config, state_stale=seconds)
     run.robot.stream(*input_pairs(run))
-    time.sleep(3 * RAMP_S)
+    time.sleep(SETTLE)
     run.robot.pause()
     paused = run.robot.last_state_write
     time.sleep(seconds + 0.5)
@@ -564,8 +529,6 @@ def test_quiet_lowstate_is_held_and_reported(stack, robot, config):
 
     held = [msg for t, msg in run.outputs(since=paused + seconds + 0.1) if t < resumed]
     assert len(held) > 100 and all(carries(msg, run) for msg in held)
-    if config == 'arm_sdk':
-        assert all(weight(msg) == 1.0 for msg in held)
     (level, _, event), = run.node.timed_events('state_quiet')
     assert level == 'WARN' and event['seconds'] == seconds and event['topic'] == '/lowstate'
     (resumed_event,) = run.node.events('state_resumed')
@@ -575,29 +538,32 @@ def test_quiet_lowstate_is_held_and_reported(stack, robot, config):
 
 # the engage gate
 
-def test_arm_sdk_engages_only_with_fresh_state_its_mode_machine_and_a_close_command(stack):
-    run = stack('g1', 'arm_sdk', stream_state=False, arm_sdk=FAST_RAMPS)
+def test_the_engage_gate_needs_fresh_state_its_mode_machine_and_close_commands(stack):
+    run = stack('g1', 'split', stream_state=False)
     robot = run.robot
-    pub = robot.publisher(UPPER)
-    good = robot.command(shoulder=SHOULDER_Q)
-    far = robot.command(shoulder=SHOULDER_Q + 0.3)
-    # each phase outlasts the once-a-second refusal report
-    robot.publish_for(1.2, (pub, good))
+    (lower_pub, lower), (upper_pub, upper) = input_pairs(run)
+    good = [(lower_pub, lower), (upper_pub, upper)]
+    far = [(lower_pub, robot.command(knee=KNEE_Q + 0.3)),
+           (upper_pub, robot.command(shoulder=SHOULDER_Q + 0.3))]
+    # each phase outlasts the once-a-second refusal report. The gate takes each input's
+    # newest command, so the far commands start while the robot's mode_machine is foreign:
+    # a far command never meets the other input's earlier good one
+    robot.publish_for(1.2, *good)
     robot.state.mode_machine = 6
     robot.resume()
     time.sleep(0.1)
-    robot.publish_for(1.2, (pub, good))
+    robot.publish_for(1.2, *far)
     robot.state.mode_machine = 5
     time.sleep(0.1)
-    robot.publish_for(1.2, (pub, far))
+    robot.publish_for(1.2, *far)
     robot.pause()
     time.sleep(0.2)
-    robot.publish_for(1.2, (pub, good))
+    robot.publish_for(1.2, *good)
     assert run.outputs() == [], 'must stay silent until the gate passes'
 
     robot.resume()
     time.sleep(0.1)
-    robot.publish_for(3 * RAMP_S, (pub, good))
+    robot.publish_for(SETTLE, *good)
     time.sleep(0.05)
     phases = []
     for reason in reasons(run.node, 'engage_refused'):
@@ -608,19 +574,17 @@ def test_arm_sdk_engages_only_with_fresh_state_its_mode_machine_and_a_close_comm
     assert phases == [
         'no /lowstate received yet',
         '/lowstate mode_machine is 6, expected 5',
-        'motor 15 (left_shoulder_pitch_joint) command q 0.500 is 0.300 rad from /lowstate q '
-        '0.200 (> 0.15 rad)',
+        'motor 3 (left_knee_joint) command q 0.800 is 0.300 rad from /lowstate q 0.500 '
+        '(> 0.15 rad)',
         'stale',
     ]
-    weights = [weight(msg) for _, msg in run.outputs()]
-    assert weights[0] < 0.5 and weights[-1] == 1.0 and monotonic(weights, rising=True)
-    assert all(carries(msg, run) for _, msg in run.outputs())
-    assert len(run.node.events('arm_sdk_engage')) == 1
+    assert run.outputs() and all(carries(msg, run) for _, msg in run.outputs())
+    assert run.node.events('lowcmd_engage') == [{'event': 'lowcmd_engage', 'mode': 'split_mode'}]
 
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_engage_refusals_are_logged_at_most_once_a_second(stack, robot):
-    run = stack(robot, 'arm_sdk' if robot == 'g1' else 'sim_safety_split')
+    run = stack(robot, 'split' if robot == 'g1' else 'sim_safety_split')
     foreign = 6 if robot == 'g1' else 5
     run.robot.state.mode_machine = foreign
     time.sleep(0.1)
@@ -661,38 +625,6 @@ def test_lowcmd_modes_engage_only_with_every_slot_close_to_lowstate(stack, confi
 
 
 # the estop latch
-
-def test_engage_then_hand_back_on_a_bad_command(stack):
-    run = stack('g1', 'arm_sdk', arm_sdk=FAST_RAMPS)
-    time.sleep(0.5)
-    assert run.outputs() == [], 'must stay silent until the first command'
-    ((pub, good),) = input_pairs(run)
-    run.robot.publish_for(3 * RAMP_S, (pub, good))
-    time.sleep(0.05)
-    engage = [msg for _, msg in run.outputs()]
-    weights = [weight(msg) for msg in engage]
-    assert weights[0] < 0.5 and weights[-1] == 1.0 and monotonic(weights, rising=True)
-    assert all(carries(msg, run) for msg in engage)
-
-    # a NaN latches the estop: the last good target held while the weight ramps to 0
-    bad = run.robot.command(shoulder=SHOULDER_Q)
-    bad.motor_cmd[16].q = float('nan')
-    sent = time.time()
-    pub.publish(bad)
-    time.sleep(3 * RAMP_S)
-    release = run.outputs(since=sent)
-    weights = [weight(msg) for _, msg in release]
-    assert weights[-1] == 0.0 and monotonic(weights, rising=False)
-    assert all(carries(msg, run) for _, msg in release), 'must hold the last good target'
-
-    # later commands are ignored
-    since = run.robot.publish_for(0.2, (pub, run.robot.command(shoulder=0.5)))
-    assert all(weight(m) == 0.0 and carries(m, run) for _, m in run.outputs(since=since))
-    assert reasons(run.node) == [
-        'Command validation failed on /safety/lowcmd_upper_in: motor 16 '
-        '(left_shoulder_roll_joint) q is nan']
-    assert run.robot.outputs('/lowcmd') == []
-
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_an_estop_before_engaging(stack, robot):
@@ -757,7 +689,7 @@ def test_damp_estop_keeps_every_motor_on_with_only_kd(stack, robot, config):
     assert reason.startswith('Command validation failed')
 
 
-STATE_LIMITS = [('g1', 'split'), ('g1', 'full'), ('g1', 'arm_sdk'), ('h12', 'sim_safety_split')]
+STATE_LIMITS = [('g1', 'split'), ('g1', 'full'), ('h12', 'sim_safety_split')]
 
 
 @pytest.mark.parametrize('robot, config', STATE_LIMITS,
@@ -766,8 +698,7 @@ def test_state_limits(stack, robot, config):
     facts = profile(robot)
     # a limp knee resting far past its limit while the layer starts
     past_limit = facts.position[KNEE][0] - 0.2
-    run = stack(robot, config, state_q={KNEE: past_limit},
-                **({'arm_sdk': FAST_RAMPS} if config == 'arm_sdk' else {}))
+    run = stack(robot, config, state_q={KNEE: past_limit})
     joints = len(facts.joints)
     if robot == 'h12':
         # zero_stream checks every slot from the first /lowstate
@@ -780,25 +711,13 @@ def test_state_limits(stack, robot, config):
         return
 
     time.sleep(0.2)
-    if config != 'arm_sdk':
-        # engage_gate checks from engagement: bring the knee back first
-        run.robot.state.motor_state[KNEE].q = KNEE_Q
-        time.sleep(0.1)
+    # engage_gate checks from engagement: bring the knee back first
+    run.robot.state.motor_state[KNEE].q = KNEE_Q
+    time.sleep(0.1)
     pairs = input_pairs(run)
     run.robot.stream(*pairs)
-    time.sleep(3 * RAMP_S)
+    time.sleep(SETTLE)
     assert estop_events(run.node) == [], 'a state past its limit before engaging must not latch'
-    if config == 'arm_sdk':
-        # arm_sdk_mode never checks the legs, which are Unitree's: the shoulder latches
-        run.robot.state.motor_state[KNEE].q = past_limit
-        time.sleep(0.2)
-        assert estop_events(run.node) == []
-        run.robot.state.motor_state[facts.shoulder].q = 10.0
-        time.sleep(3 * RAMP_S)
-        (reason,) = reasons(run.node)
-        assert reason.startswith('motor 15 (left_shoulder_pitch_joint) q out of estop range')
-        assert weight(run.outputs()[-1][1]) == 0.0
-        return
     run.robot.state.motor_state[KNEE].q = past_limit
     time.sleep(0.2)
     published = run.outputs()
@@ -829,35 +748,29 @@ def test_a_lowstate_from_another_robot_after_engaging_latches(stack, robot):
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_a_second_writer_latches_the_estop_before_its_command_is_used(stack, robot):
-    run = stack(robot, 'sim_arm_sdk' if robot == 'g1' else 'sim_safety_split',
-                **({'arm_sdk': FAST_RAMPS} if robot == 'g1' else {}))
+    run = stack(robot, SPLIT[robot])
     pairs = input_pairs(run)
     run.robot.stream(*pairs)
-    time.sleep(3 * RAMP_S)
+    time.sleep(SETTLE)
     second = run.robot.publisher(UPPER)
     run.robot.publish_for(0.2, (second, run.robot.command(shoulder=SHOULDER_Q + 0.05)))
-    time.sleep(3 * RAMP_S)
+    time.sleep(SETTLE)
     (reason,) = reasons(run.node)
     assert reason.startswith(f'second writer on {UPPER}: a new writer sent a command '), reason
     shoulder = run.robot.profile.shoulder
     # the second writer's target never reached the output
     assert not any(close(msg.motor_cmd[shoulder].q, SHOULDER_Q + 0.05) for _, msg in run.outputs())
-    last = run.outputs()[-1][1]
-    if robot == 'g1':
-        assert weight(last) == 0.0
-    else:
-        assert is_zeroed(last, len(run.robot.profile.joints))
+    assert is_zeroed(run.outputs()[-1][1], len(run.robot.profile.joints))
 
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_a_restarted_writer_is_accepted_after_a_quiet_gap(stack, robot):
     # a controller restarted while the layer runs is a new writer on the same input
-    run = stack(robot, 'sim_arm_sdk' if robot == 'g1' else 'sim_safety_split',
-                **({'arm_sdk': FAST_RAMPS} if robot == 'g1' else {}))
+    run = stack(robot, SPLIT[robot])
     pairs = input_pairs(run)
     first = pairs[-1][0]  # the upper input's writer
     run.robot.stream(*pairs)
-    time.sleep(3 * RAMP_S)
+    time.sleep(SETTLE)
     run.robot.stream(*pairs[:-1])
     run.robot.close_publisher(first)
     time.sleep(0.6)  # longer than single_writer.handover_seconds (0.5)
@@ -893,92 +806,6 @@ def test_a_second_writer_on_the_lower_input_before_engaging(stack, robot):
         assert run.outputs()[-1][0] < time.time() - 0.1
         (reason,) = reasons(run.node)
     assert reason.startswith(f'second writer on {LOWER}: '), reason
-
-
-def test_a_command_with_a_soft_waist_latches_the_estop_before_engaging(stack):
-    run = stack('g1', 'arm_sdk')
-    pub = run.robot.publisher(UPPER)
-    # a stray publisher's default command: kp 0 on the waist
-    run.robot.publish_for(0.2, (pub, run.robot.command(shoulder=SHOULDER_Q, held_kp=0.0)))
-    run.robot.publish_for(0.3, (pub, run.robot.command(shoulder=SHOULDER_Q)))
-    assert run.outputs() == []
-    assert reasons(run.node, 'estop_latched_silent') == [
-        'Command validation failed on /safety/lowcmd_upper_in: motor 12 (waist_yaw_joint) kp 0.0 '
-        'is below arm_sdk.waist_kp_min 40.0']
-
-
-def test_a_command_with_a_soft_waist_hands_back_once_engaged(stack):
-    run = stack('g1', 'arm_sdk', arm_sdk=FAST_RAMPS)
-    pairs = input_pairs(run)
-    run.robot.stream(*pairs)
-    time.sleep(3 * RAMP_S)
-    soft = run.robot.command(shoulder=SHOULDER_Q + 0.05, held_kp=30.0)
-    send_once(run.robot, pairs[0][0], soft, pairs)
-    time.sleep(3 * RAMP_S)
-    (reason,) = reasons(run.node)
-    assert reason.endswith('motor 12 (waist_yaw_joint) kp 30.0 is below arm_sdk.waist_kp_min 40.0')
-    published = run.outputs()
-    assert all(carries(msg, run) and msg.motor_cmd[12].kp == 60.0 for _, msg in published)
-    assert weight(published[-1][1]) == 0.0
-
-
-def test_arm_sdk_writes_zeros_on_the_legs_and_reports_clipped_gains(stack):
-    run = stack('g1', 'arm_sdk', arm_sdk=FAST_RAMPS)
-    cmd = run.robot.command(shoulder=SHOULDER_Q)
-    for i in range(12):
-        leg = cmd.motor_cmd[i]
-        leg.mode, leg.q, leg.dq, leg.tau, leg.kp, leg.kd = 1, 0.3, 0.1, 2.0, 50.0, 1.0
-    cmd.motor_cmd[15].kp = 300.0  # above kp_max (200)
-    pub = run.robot.publisher(UPPER)
-    run.robot.publish_for(3 * RAMP_S, (pub, cmd))
-    time.sleep(0.05)
-    published = [msg for _, msg in run.outputs()]
-    assert published
-    for msg in published:
-        for leg in msg.motor_cmd[:12]:
-            assert (leg.mode, leg.q, leg.dq, leg.tau, leg.kp, leg.kd) == (0, 0, 0, 0, 0, 0)
-        assert msg.motor_cmd[15].kp == 200.0
-    assert [(level, e) for level, _, e in run.node.timed_events('gain_clipped')] == [('WARN', {
-        'commanded': 300.0, 'event': 'gain_clipped', 'gain': 'kp',
-        'joint': 'left_shoulder_pitch_joint', 'max': 200.0, 'source': 'arm_sdk_mode'})]
-
-
-def test_arm_sdk_release_holds_mid_ramp_while_state_is_stale_then_resumes(stack):
-    release = 1.0
-    stale = 0.3
-    run = stack('g1', 'arm_sdk', state_stale=stale,
-                arm_sdk={'engage_seconds': RAMP_S, 'release_seconds': release})
-    pairs = input_pairs(run)
-    run.robot.stream(*pairs)
-    time.sleep(3 * RAMP_S)
-    latched = time.time()
-    # a soft waist latches the estop with /lowstate flowing: the ramp starts
-    send_once(run.robot, pairs[0][0], run.robot.command(shoulder=SHOULDER_Q, held_kp=30.0), pairs)
-    time.sleep(0.3)
-    run.robot.pause()
-    paused = run.robot.last_state_write
-    time.sleep(stale + 0.5)
-    run.robot.resume()
-    resumed = time.time()
-    time.sleep(release)
-
-    tail = run.outputs(since=latched)
-    weights = [weight(msg) for _, msg in tail]
-    start = next(i for i, w in enumerate(weights) if w < 1.0)
-    assert weights[0] == 1.0 and weights[-1] == 0.0 and monotonic(weights, rising=False)
-    # no jump down: at 500 Hz the 1 s ramp drops 0.002 a message
-    assert max(a - b for a, b in zip(weights, weights[1:])) < 0.1
-    held = [weight(msg) for t, msg in tail if paused + stale + 0.1 < t < resumed]
-    assert held and len(set(held)) == 1 and 0.2 < held[0] < 0.8, held[:3]
-    assert all(carries(msg, run) for _, msg in tail)
-    assert [e['event'] for e in run.node.events() if e['event'].startswith('arm_sdk_release')] == [
-        'arm_sdk_release_ramping', 'arm_sdk_release_held', 'arm_sdk_release_ramping']
-    # the ramp itself still takes release_seconds, the hold aside
-    hold_times = [t for t, msg in tail if weight(msg) == held[0]]
-    ramp_start = tail[start][0]
-    ramp_end = next(t for t, msg in tail if weight(msg) == 0.0)
-    ramp = ramp_end - ramp_start - (hold_times[-1] - hold_times[0])
-    assert release - 0.15 < ramp < release + 0.15, ramp
 
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
@@ -1161,53 +988,8 @@ def test_sigint_split_stops_publishing(stack, robot, config):
     assert estop_events(run.node) == []
 
 
-@pytest.mark.parametrize('signum', [signal.SIGINT, signal.SIGTERM, signal.SIGHUP],
-                         ids=['SIGINT', 'SIGTERM', 'SIGHUP'])
-def test_sigint_arm_sdk_ramps(stack, signum):
-    run = stack('g1', 'arm_sdk')
-    release = run.config['arm_sdk']['release_seconds']  # the shipped 3 s
-    run.robot.stream(*input_pairs(run))
-    run.robot.wait_for_output('/arm_sdk', lambda msg: weight(msg) == 1.0)
-    sent = time.time()
-    run.node.proc.send_signal(signum)
-    code = run.node.wait_exit(release + 5.0)
-    exited = time.time()
-    time.sleep(0.2)
-    assert code == 0, run.node.output()
-    after = run.outputs(since=sent)
-    weights = [weight(msg) for _, msg in after]
-    assert weights[0] == 1.0 and weights[-1] == 0.0 and monotonic(weights, rising=False)
-    assert all(carries(msg, run) for _, msg in after), 'must hold the last good target'
-    ramp_start = next(t for t, msg in after if weight(msg) < 1.0)
-    ramp_end = next(t for t, msg in after if weight(msg) == 0.0)
-    assert release - 0.15 < ramp_end - ramp_start < release + 0.15
-    # weight 0 for 0.1 s, so one lost packet cannot leave the arms on a higher weight
-    assert after[-1][0] - ramp_end > 0.08
-    assert exited - sent < release + 2.0
-    assert run.node.events('exit_requested') == [{
-        'event': 'exit_requested', 'reason': f'Exit requested ({signal.Signals(signum).name})'}]
-    assert estop_events(run.node) == []
-
-
-def test_an_exit_ramps_the_weight_whatever_the_lowstate_age(stack):
-    run = stack('g1', 'arm_sdk', state_stale=0.3, arm_sdk={'engage_seconds': RAMP_S,
-                                                           'release_seconds': 1.0})
-    run.robot.stream(*input_pairs(run))
-    run.robot.wait_for_output('/arm_sdk', lambda msg: weight(msg) == 1.0)
-    run.robot.pause()
-    time.sleep(0.6)
-    sent = time.time()
-    run.node.proc.send_signal(signal.SIGTERM)
-    code = run.node.wait_exit(6.0)
-    assert code == 0, run.node.output()
-    weights = [weight(msg) for _, msg in run.outputs(since=sent)]
-    assert weights[0] == 1.0 and weights[-1] == 0.0 and monotonic(weights, rising=False)
-    assert len(run.node.events('state_quiet')) == 1
-    assert estop_events(run.node) == []
-
-
 def test_an_exit_before_engaging_writes_nothing(stack):
-    run = stack('g1', 'arm_sdk')
+    run = stack('g1', 'split')
     sent = time.time()
     run.node.proc.send_signal(signal.SIGTERM)
     code = run.node.wait_exit(5.0)
@@ -1244,54 +1026,52 @@ def _stdout_pipe(stalled: bool) -> tuple[int, int]:
     ('closed', 'estop'), ('closed', signal.SIGTERM), ('closed', signal.SIGHUP),
     ('stalled', 'estop'), ('stalled', signal.SIGTERM),
 ], ids=['closed-estop', 'closed-SIGTERM', 'closed-SIGHUP', 'stalled-estop', 'stalled-SIGTERM'])
-def test_a_closed_or_stalled_stdout_never_stops_the_hand_back(tmp_path, fake_robot, stdout,
-                                                              trigger):
-    release = 1.0
+def test_a_closed_or_stalled_stdout_never_stops_the_estop_or_the_exit(tmp_path, fake_robot,
+                                                                     stdout, trigger):
     # logging on, as in the shipped config: stopping the chunk logger runs in the exit too
-    path, raw = write_config(tmp_path, 'g1', 'arm_sdk', logging={
-        'enabled': True, 'base_dir': str(tmp_path / 'logs')},
-        arm_sdk={'release_seconds': release}, stale={'state_seconds': 1.0})
+    path, raw = write_config(tmp_path, 'g1', 'sim_split', logging={
+        'enabled': True, 'base_dir': str(tmp_path / 'logs')})
     robot = fake_robot('g1')
+    joints = len(robot.profile.joints)
+    shoulder = robot.profile.shoulder
     read_fd, write_fd = _stdout_pipe(stalled=stdout == 'stalled')
     # stdout and stderr together: ros2 launch killed, a closed terminal, or a reader that
     # stopped reading
     node = SafetyNode('g1', path, stdout=write_fd, stderr=write_fd)
     os.close(write_fd)  # only the node holds the write end now
     try:
-        pub = robot.publisher(UPPER)
-        good = robot.command(shoulder=SHOULDER_Q)
-        robot.stream((pub, good))
-        robot.wait_for_output('/arm_sdk', lambda msg: weight(msg) == 1.0, timeout=30.0)
+        lower, upper = robot.publisher(LOWER), robot.publisher(UPPER)
+        pairs = [(lower, robot.command(knee=KNEE_Q)), (upper, robot.command(shoulder=SHOULDER_Q))]
+        robot.stream(*pairs)
+        robot.wait_for_output('/lowcmd', lambda msg: close(msg.motor_cmd[shoulder].q, SHOULDER_Q),
+                              timeout=30.0)
         if stdout == 'closed':
             os.close(read_fd)  # the node has written its start-up lines; nobody reads now
             read_fd = None
-        sent = time.time()
         if trigger == 'estop':
-            # an invalid command: the estop's lines are written as the ramp starts
-            bad = robot.command(shoulder=float('nan'))
-            send_once(robot, pub, bad, [(pub, good)])
-            robot.wait_for_output('/arm_sdk', lambda msg: weight(msg) == 0.0,
-                                  timeout=release + 2.0)
-            time.sleep(0.2)
+            # an invalid command: the estop's lines are written as its first command goes out,
+            # and keep_writing writes that command every cycle
+            send_once(robot, upper, robot.command(shoulder=float('nan')), pairs)
+            robot.wait_for_output('/lowcmd', lambda msg: is_zeroed(msg, joints), timeout=2.0)
+            latched = time.time()
+            time.sleep(0.5)
+            written = robot.outputs('/lowcmd', since=latched)
+            assert len(written) > 100 and all(is_zeroed(msg, joints) for _, msg in written)
+            signalled = time.time()
             node.proc.send_signal(signal.SIGTERM)
         else:
+            signalled = time.time()
             node.proc.send_signal(trigger)
-        code = node.wait_exit(release + 6.0)
+        code = node.wait_exit(8.0)
         exited = time.time()
     finally:
         node.stop()
         if read_fd is not None:
             os.close(read_fd)
 
-    after = robot.outputs('/arm_sdk', since=sent)
-    weights = [weight(msg) for _, msg in after]
-    assert weights and weights[0] == 1.0 and weights[-1] == 0.0, weights[-5:]
-    assert monotonic(weights, rising=False), 'the release must be monotonic'
-    assert all(close(msg.motor_cmd[15].q, SHOULDER_Q) for _, msg in after)
-    ramp_start = next(t for t, msg in after if weight(msg) < 1.0)
-    ramp_end = next(t for t, msg in after if weight(msg) == 0.0)
-    assert release - 0.15 < ramp_end - ramp_start < release + 0.15
-    # a clean exit, delayed by a stalled stdout for at most one 1 s wait for the last lines
+    # split_mode stops publishing at once: a clean exit, delayed by a stalled stdout for at
+    # most one 1 s wait for the last lines
     assert code == 0
-    assert exited - ramp_end < 3.5
+    assert robot.outputs('/lowcmd', since=signalled + 0.05) == []
+    assert exited - signalled < 3.5
     assert list((tmp_path / 'logs').glob('*/chunk_*.npz')), 'the logger must have written'

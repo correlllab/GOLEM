@@ -3,10 +3,9 @@ robot: g1
 mode_machine: 5  # the value /lowstate reports and every command carries
 mode_pr: 0
 motor_slots: 35  # length of the LowCmd/LowState motor arrays
-modes: [arm_sdk_mode, split_mode, full_body_mode]
+modes: [split_mode, full_body_mode]
 lower_slots: [0, 11]  # inclusive
 upper_slots: [12, 28]  # inclusive
-arm_sdk_weight_slot: 29  # q of this slot is the arm_sdk blend weight
 # Body joints in slot order. position is [low, high] in rad, velocity in
 # rad/s, effort in N*m.
 joints:

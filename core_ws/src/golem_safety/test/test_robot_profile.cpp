@@ -1,10 +1,14 @@
 #include <gtest/gtest.h>
 
+#include <yaml-cpp/yaml.h>
+
 #include <functional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "ament_index_cpp/get_package_share_directory.hpp"
 #include "golem_safety/robot_profile.hpp"
 
 using golem_safety::JointLimit;
@@ -27,16 +31,15 @@ std::string error_of(const std::function<void()> & fn)
   return "";
 }
 
-// Two body joints, one lower and one upper slot, and the arm_sdk weight slot after them.
+// Two body joints, one lower and one upper slot.
 const char * const kValid = R"(
 robot: toy
 mode_machine: 7
 mode_pr: 0
 motor_slots: 35
-modes: [arm_sdk_mode, split_mode]
+modes: [split_mode]
 lower_slots: [0, 0]
 upper_slots: [1, 1]
-arm_sdk_weight_slot: 2
 joints:
   - {name: a_joint, slot: 0, position: [-1.0, 1.0], velocity: 10.0, effort: 20.0}
   - {name: b_joint, slot: 1, position: [-2.0, 2.0], velocity: 11.0, effort: 21.0}
@@ -71,7 +74,6 @@ TEST(RobotProfile, LoadsH12)
   EXPECT_EQ(p.lower_slots.last, 11);
   EXPECT_EQ(p.upper_slots.first, 12);
   EXPECT_EQ(p.upper_slots.last, 26);
-  EXPECT_FALSE(p.arm_sdk_weight_slot.has_value());
   EXPECT_EQ(p.modes, (std::vector<Mode>{Mode::FullBody, Mode::Split}));
 
   for (size_t i = 0; i < p.joints.size(); ++i) {
@@ -109,9 +111,7 @@ TEST(RobotProfile, LoadsG1)
   EXPECT_EQ(p.lower_slots.last, 11);
   EXPECT_EQ(p.upper_slots.first, 12);
   EXPECT_EQ(p.upper_slots.last, 28);
-  ASSERT_TRUE(p.arm_sdk_weight_slot.has_value());
-  EXPECT_EQ(*p.arm_sdk_weight_slot, 29);
-  EXPECT_EQ(p.modes, (std::vector<Mode>{Mode::ArmSdk, Mode::Split, Mode::FullBody}));
+  EXPECT_EQ(p.modes, (std::vector<Mode>{Mode::Split, Mode::FullBody}));
 
   for (size_t i = 0; i < p.joints.size(); ++i) {
     EXPECT_EQ(p.joints[i].slot, static_cast<int>(i));
@@ -128,6 +128,22 @@ TEST(RobotProfile, LoadsG1)
   EXPECT_DOUBLE_EQ(last.q_high, 1.614429558);
   EXPECT_DOUBLE_EQ(last.dq_max, 22.0);
   EXPECT_DOUBLE_EQ(last.tau_max, 5.0);
+}
+
+TEST(RobotProfile, G1HasNoArmSdk)
+{
+  const RobotProfile p = golem_safety::load_robot_profile("g1");
+  EXPECT_EQ(p.modes, (std::vector<Mode>{Mode::Split, Mode::FullBody}));
+  // No slot past the body joints carries a value: the file has these keys and no other.
+  const YAML::Node root = YAML::LoadFile(
+    ament_index_cpp::get_package_share_directory("golem_safety") + "/robots/g1.yaml");
+  std::set<std::string> keys;
+  for (const auto & entry : root) {
+    keys.insert(entry.first.as<std::string>());
+  }
+  EXPECT_EQ(
+    keys, (std::set<std::string>{"joints", "lower_slots", "mode_machine", "mode_pr", "modes",
+      "motor_slots", "robot", "upper_slots"}));
 }
 
 TEST(RobotProfile, UnknownRobotThrows)
@@ -148,8 +164,7 @@ TEST(RobotProfile, ParsesAMinimalProfile)
   EXPECT_DOUBLE_EQ(p.joints[1].q_high, 2.0);
   EXPECT_DOUBLE_EQ(p.joints[1].dq_max, 11.0);
   EXPECT_DOUBLE_EQ(p.joints[1].tau_max, 21.0);
-  ASSERT_TRUE(p.arm_sdk_weight_slot.has_value());
-  EXPECT_EQ(*p.arm_sdk_weight_slot, 2);
+  EXPECT_EQ(p.modes, (std::vector<Mode>{Mode::Split}));
 }
 
 TEST(RobotProfile, ErrorsNameTheSourceAndTheKey)
@@ -202,26 +217,6 @@ TEST(RobotProfile, LowerAndUpperSlotsMustNotOverlap)
   EXPECT_NE(message.find("overlap"), std::string::npos) << message;
 }
 
-TEST(RobotProfile, ArmSdkModeNeedsAWeightSlot)
-{
-  const std::string message = parse_error(replaced(kValid, "arm_sdk_weight_slot: 2\n", ""));
-  EXPECT_NE(message.find("arm_sdk_weight_slot"), std::string::npos) << message;
-}
-
-TEST(RobotProfile, WeightSlotMustNotBeABodyJoint)
-{
-  const std::string message =
-    parse_error(replaced(kValid, "arm_sdk_weight_slot: 2", "arm_sdk_weight_slot: 1"));
-  EXPECT_NE(message.find("arm_sdk_weight_slot"), std::string::npos) << message;
-}
-
-TEST(RobotProfile, WeightSlotWithoutArmSdkModeThrows)
-{
-  const std::string message =
-    parse_error(replaced(kValid, "modes: [arm_sdk_mode, split_mode]", "modes: [split_mode]"));
-  EXPECT_NE(message.find("arm_sdk_weight_slot"), std::string::npos) << message;
-}
-
 TEST(RobotProfile, MotorSlotsMustBeTheLowCmdArray)
 {
   for (const char * slots : {"34", "36"}) {
@@ -242,8 +237,6 @@ TEST(RobotProfile, JointsMustFitTheLowCmdArray)
   }
   std::string text = kValid;
   text = replaced(text, "upper_slots: [1, 1]", "upper_slots: [1, 35]");
-  text = replaced(text, "modes: [arm_sdk_mode, split_mode]", "modes: [split_mode]");
-  text = replaced(text, "arm_sdk_weight_slot: 2\n", "");
   text = text.substr(0, text.find("joints:")) + joints;
   const std::string message = parse_error(text);
   EXPECT_NE(message.find("36 body joints"), std::string::npos) << message;
@@ -252,8 +245,7 @@ TEST(RobotProfile, JointsMustFitTheLowCmdArray)
 TEST(RobotProfile, LowerAndUpperSlotsMustCoverEveryBodyJoint)
 {
   const std::string three_joints = replaced(
-    replaced(kValid, "arm_sdk_weight_slot: 2", "arm_sdk_weight_slot: 3"),
-    "effort: 21.0}\n",
+    kValid, "effort: 21.0}\n",
     "effort: 21.0}\n  - {name: c_joint, slot: 2, position: [-1.0, 1.0], velocity: 10.0, "
     "effort: 20.0}\n");
   const std::string message = parse_error(three_joints);
@@ -266,27 +258,18 @@ TEST(RobotProfile, LowerAndUpperSlotsMustCoverEveryBodyJoint)
       replaced(three_joints, "upper_slots: [1, 1]", "upper_slots: [1, 2]"), "toy.yaml"));
 }
 
-TEST(RobotProfile, WeightSlotMustBeInsideTheLowCmdArray)
-{
-  const std::string message =
-    parse_error(replaced(kValid, "arm_sdk_weight_slot: 2", "arm_sdk_weight_slot: 35"));
-  EXPECT_NE(message.find("arm_sdk_weight_slot"), std::string::npos) << message;
-}
-
 TEST(RobotProfile, AModeListedTwiceThrows)
 {
   const std::string message = parse_error(
-    replaced(kValid, "modes: [arm_sdk_mode, split_mode]", "modes: [arm_sdk_mode, split_mode, "
-    "arm_sdk_mode]"));
-  EXPECT_NE(message.find("arm_sdk_mode"), std::string::npos) << message;
+    replaced(kValid, "modes: [split_mode]", "modes: [split_mode, full_body_mode, split_mode]"));
+  EXPECT_NE(message.find("split_mode"), std::string::npos) << message;
   EXPECT_NE(message.find("twice"), std::string::npos) << message;
 }
 
-TEST(Mode, ParsesTheThreeModeNames)
+TEST(Mode, ParsesTheTwoModeNames)
 {
   EXPECT_EQ(golem_safety::parse_mode("full_body_mode"), Mode::FullBody);
   EXPECT_EQ(golem_safety::parse_mode("split_mode"), Mode::Split);
-  EXPECT_EQ(golem_safety::parse_mode("arm_sdk_mode"), Mode::ArmSdk);
 }
 
 TEST(Mode, UnknownNameThrows)

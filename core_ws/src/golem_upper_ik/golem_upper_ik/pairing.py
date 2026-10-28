@@ -40,16 +40,14 @@ H12_SAFETY_CONTROLLER_CONFIGS = {
 H12_CONTROLLER_CONFIGS = ('safety_split', 'sim_safety_split', 'safety_full')
 
 # G1 safety configs that relay the upper-body channel the controller writes
-G1_UPPER_CHANNEL_SAFETY_CONFIGS = ('arm_sdk', 'split', 'sim_arm_sdk', 'sim_split')
-# the G1 controller configs; the *_split ones hold the waist stiff for a walking policy
-G1_CONTROLLER_CONFIGS = ('g1', 'g1_split', 'sim', 'sim_split')
-# the controller config each G1 safety config runs with: its gains suit the mode (the
-# *_split ones hold the waist stiff, whoever drives the legs) and its topics.safety_out is
-# the safety config's output, which the follow gate reads
+G1_UPPER_CHANNEL_SAFETY_CONFIGS = ('split', 'sim_split')
+# the G1 controller configs; both hold the waist stiff for a walking policy
+G1_CONTROLLER_CONFIGS = ('g1_split', 'sim_split')
+# the controller config each G1 safety config runs with: its speed limits suit the real
+# robot or the sim, and its topics.safety_out is the safety config's output, which the follow
+# gate reads
 G1_SAFETY_CONTROLLER_CONFIGS = {
-    'arm_sdk': 'g1',
     'split': 'g1_split',
-    'sim_arm_sdk': 'sim',
     'sim_split': 'sim_split',
 }
 # with a walking policy on the legs: golem_safety's split mode and a split controller
@@ -70,7 +68,7 @@ def config_stem(config_name: str) -> str:
 
 
 def is_sim_config(config_name: str) -> bool:
-    '''True for a G1 sim config (sim, sim_split, sim_arm_sdk, ...), by its name'''
+    '''True for a G1 sim config (sim_split, sim_custom, ...), by its name'''
     return config_stem(config_name).startswith('sim')
 
 
@@ -131,12 +129,11 @@ def _g1_refusal(controller: str, safety: str, sim: bool | None,
                 return f'{kind} config "{name}" is a sim config; the real robot never runs one'
     elif controller_known and is_sim_config(controller) != is_sim_config(safety):
         return (f'controller config "{controller}" and safety config "{safety}" mix sim and '
-                'real: use sim.yaml or sim_split.yaml with sim_*, g1.yaml or g1_split.yaml '
-                'with the others')
+                'real: use sim_split.yaml with sim_*, g1_split.yaml with the others')
     # a custom controller config's gains and safety_out are not known by its name
     paired = G1_SAFETY_CONTROLLER_CONFIGS[safety]
     if controller in G1_CONTROLLER_CONFIGS and controller != paired:
         return (f'safety config "{safety}" runs with controller config "{paired}", not '
-                f'"{controller}": the waist gains suit the mode, and the follow gate reads '
-                'the topic the safety layer writes')
+                f'"{controller}": its speed limits suit that safety config, and the follow '
+                'gate reads the topic the safety layer writes')
     return None

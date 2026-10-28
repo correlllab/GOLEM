@@ -18,16 +18,9 @@ def test_body_slots_are_contiguous_and_unique():
 def test_slot_groups_partition_the_body():
     groups = [layout.LEG_SLOTS, layout.WAIST_SLOTS, layout.LEFT_ARM_SLOTS, layout.RIGHT_ARM_SLOTS]
     assert [s for g in groups for s in g] == list(range(layout.NUM_BODY_MOTORS))
-    assert list(layout.ARM_SDK_SLOTS) == [*layout.WAIST_SLOTS, *layout.LEFT_ARM_SLOTS,
-                                          *layout.RIGHT_ARM_SLOTS]
     assert all('waist' in BODY[s].name for s in layout.WAIST_SLOTS)
     assert all(BODY[s].name.startswith('left_shoulder') for s in layout.LEFT_ARM_SLOTS[:3])
     assert all(BODY[s].name.startswith('right_shoulder') for s in layout.RIGHT_ARM_SLOTS[:3])
-
-
-def test_arm_sdk_weight_slot_is_past_the_body_and_inside_lowcmd():
-    assert layout.ARM_SDK_WEIGHT_SLOT == layout.NUM_BODY_MOTORS
-    assert layout.ARM_SDK_WEIGHT_SLOT < layout.LOWCMD_MOTOR_SLOTS
 
 
 @pytest.mark.parametrize('side, hand', [('left', LEFT_HAND), ('right', RIGHT_HAND)])

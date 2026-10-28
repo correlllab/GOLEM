@@ -2,11 +2,11 @@
 """Measure safety_node's relay on a running stack: output rate, input-to-output latency.
 
 Subscribes, and never publishes, to the upper-body controller's input
-(/safety/lowcmd_upper_in) and to safety_node's output (/lowcmd, or /arm_sdk for the G1's
-arm_sdk mode), and records each sample's arrival time on the monotonic clock with the q of the
-robot's upper slots (from golem_safety's robots/<robot>.yaml). Recording starts --settle s
-after both topics have delivered a sample and lasts --seconds: the publishers on a domain can
-stall for tens of ms while a participant that joins it, this probe's included, is discovered.
+(/safety/lowcmd_upper_in) and to safety_node's output (/lowcmd), and records each sample's
+arrival time on the monotonic clock with the q of the robot's upper slots (from
+golem_safety's robots/<robot>.yaml). Recording starts --settle s after both topics have
+delivered a sample and lasts --seconds: the publishers on a domain can stall for tens of ms
+while a participant that joins it, this probe's included, is discovered.
 
 - Output rate: the mean, the 99th percentile of the arrival interval and the longest gap.
 - Latency: each output sample is matched to the newest input received before it whose
@@ -198,8 +198,8 @@ def rounded(stats: dict) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--robot', required=True, choices=('h12', 'g1'))
-    parser.add_argument('--output', default='/lowcmd', choices=('/lowcmd', '/arm_sdk'),
-                        help="safety_node's output; /arm_sdk in the G1's arm_sdk mode")
+    parser.add_argument('--output', default='/lowcmd',
+                        help="safety_node's output, its config's topics.low_cmd_out")
     parser.add_argument('--input', default='/safety/lowcmd_upper_in')
     parser.add_argument('--settle', type=float, default=2.0,
                         help='s from the first samples to the start of the recording')

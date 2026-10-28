@@ -21,7 +21,7 @@ CONFIGS = {
         'relax_safety_full', 'relax_safety_split', 'sim_safety_split',
         'tight_safety_full', 'tight_safety_split',
     ],
-    'g1': ['arm_sdk', 'full', 'sim_arm_sdk', 'sim_split', 'split'],
+    'g1': ['full', 'sim_split', 'split'],
 }
 CASES = [f'{robot}/{name}' for robot, names in CONFIGS.items() for name in names]
 
@@ -87,7 +87,7 @@ def test_scalars_match_old_loaders(case):
     assert new['logging'] == old['logging']
 
     # The stale times. A key the old loader had carries its effective value; the others take
-    # 0.2 and 0.1. The old upper watchdog ran in split_mode and arm_sdk_mode only.
+    # 0.2 and 0.1. The old upper watchdog ran in split_mode only.
     upper = old['upper_stale_seconds'] if old['upper_stale_active'] else 0.0
     assert new['stale']['upper_seconds'] == upper
     assert new['stale']['lower_seconds'] == (
@@ -108,7 +108,7 @@ def test_scalars_match_old_loaders(case):
         assert new['estop_response']['burst_count'] == 50
         assert new['estop_response']['mode'] == 'zero'
         assert new['estop_response']['kd'] == [0.0] * JOINTS[robot]
-        assert old['engage'] is None and old['arm_sdk'] is None
+        assert old['engage'] is None
     else:
         assert new['startup']['rule'] == 'engage_gate'
         assert new['estop_response']['after'] == 'keep_writing'
@@ -119,9 +119,6 @@ def test_scalars_match_old_loaders(case):
         assert old['engage']['mode_machine'] == MODE_MACHINE[robot]
         for key in ('max_state_age_seconds', 'max_position_error'):
             assert new['engage'][key] == old['engage'][key], key
-        if old['mode'] == 'arm_sdk_mode':
-            for key in ('engage_seconds', 'release_seconds', 'waist_kp_min'):
-                assert new['arm_sdk'][key] == old['arm_sdk'][key], key
 
 
 def test_every_installed_config_has_a_fixture():

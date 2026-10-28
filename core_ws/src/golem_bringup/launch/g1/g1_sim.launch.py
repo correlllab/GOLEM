@@ -9,12 +9,12 @@ Simulated G1: the same core stack on DDS domain 1 with sim time and the sim conf
     ros2 launch golem_bringup g1_sim.launch.py use_locomotion:=true use_nav:=true \
         frontier_explore:=true   # also serves /skill/frontier_explore
 
-The G1 RoboCasa sim (golem_robocasa/g1/) emulates rt/arm_sdk (weight slot 29
-blending with a leg/waist/arm hold), rt/dex3/* and, for use_locomotion:=true,
-which switches the safety layer to sim_split, rt/lowcmd. The controller config
-follows the safety config (sim with sim_arm_sdk, sim_split with sim_split).
-g1_core refuses the real robot's configs here (arm_sdk, split, g1, g1_split);
-the sim configs keep the faster arm speeds (1 rad/s, 0.5 m/s).
+The G1 RoboCasa sim (golem_robocasa/g1/) takes rt/lowcmd and rt/dex3/*.
+golem_safety runs sim_split and the controller sim_split: split mode engages
+only once the walking node commands too, so without use_locomotion:=true
+golem_safety writes nothing and the controller stops after 30 s. g1_core
+refuses the real robot's configs here (split, g1_split); the sim configs keep
+the faster arm speeds (1 rad/s, 0.5 m/s).
 
 use_nav:=true (with use_locomotion:=true) adds g1_navigation on the sim's
 MID-360 (/livox/lidar, /livox/imu), with sim time and g1_fastlio_sim.yaml, and
@@ -45,7 +45,7 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument(
             'safety_config', default_value='',
-            description='sim_arm_sdk, or sim_split (the default with use_locomotion)'),
+            description='golem_safety config (default: sim_split)'),
         DeclareLaunchArgument(
             'use_locomotion', default_value='false',
             description="HOMIE's walking policy on the legs, through sim_split"),
@@ -69,7 +69,7 @@ def generate_launch_description():
                 'use_rviz': LaunchConfiguration('use_rviz'),
                 'use_hands': LaunchConfiguration('use_hands'),
                 'safety_config': LaunchConfiguration('safety_config'),
-                # sim, or sim_split (a stiff waist) with use_locomotion
+                # the one safety_config runs with: sim_split
                 'controller_config': '',
                 'use_locomotion': LaunchConfiguration('use_locomotion'),
                 'use_nav': LaunchConfiguration('use_nav'),

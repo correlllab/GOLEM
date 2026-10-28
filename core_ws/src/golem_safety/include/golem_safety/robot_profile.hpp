@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -30,10 +29,9 @@ struct SlotRange
 // The length of the LowCmd/LowState motor arrays (unitree_hg), which every profile has.
 constexpr int kMotorSlots = 35;
 
-enum class Mode { FullBody, Split, ArmSdk };
+enum class Mode { FullBody, Split };
 
-// Accepts full_body_mode, split_mode and arm_sdk_mode; throws std::runtime_error
-// for anything else.
+// Accepts full_body_mode and split_mode; throws std::runtime_error for anything else.
 Mode parse_mode(const std::string & name);
 
 // The name parse_mode accepts for `mode`.
@@ -51,14 +49,13 @@ struct RobotProfile
   std::vector<JointLimit> joints;  // indexed by slot
   std::vector<Mode> modes;   // each once
   SlotRange lower_slots, upper_slots;  // together, every body joint once
-  std::optional<int> arm_sdk_weight_slot;  // q of this slot is the arm_sdk blend weight
 };
 
 // Parses and validates profile text. `source` names the text in error messages.
 // Throws std::runtime_error on a missing or unknown key, a malformed value or
 // an inconsistent profile: motor_slots other than kMotorSlots, more body joints than
-// that, a mode listed twice, lower and upper slot ranges that do not cover every body
-// joint once, or an arm_sdk weight slot outside the slots after the body joints.
+// that, a mode listed twice, or lower and upper slot ranges that do not cover every body
+// joint once.
 RobotProfile parse_robot_profile(const std::string & yaml_text, const std::string & source);
 
 // Loads share/golem_safety/robots/<robot>.yaml. Throws std::runtime_error naming

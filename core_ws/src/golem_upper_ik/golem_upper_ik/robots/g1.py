@@ -26,8 +26,7 @@ ENABLED_JOINTS = (
 HELD_JOINTS = ('waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint')
 # When golem_safety writes /lowcmd (split or full mode), a walking policy may balance the
 # legs, trained with a stiff waist: the controller's shutdown command keeps the waist at its
-# hold, and only the arms go limp. On /arm_sdk the zero-gain waist makes golem_safety hand
-# the waist and arms back to Unitree's controller.
+# hold, and only the arms go limp.
 SHUTDOWN_KEEPS_HELD_JOINTS_ON_LOWCMD = True
 # the Dex3-1 palms: end effectors for velocity limiting and the ee pose topics, and the
 # planner's frames
@@ -47,8 +46,9 @@ HALF_PI = np.pi / 2
 # - elbow +pi/2 straightens the arm downward
 # - shoulder pitch < 0 raises the arm forward
 # - shoulder roll > 0 (left) / < 0 (right) raises the arms out to the sides
+# "The example" is Unitree's G1 arm example, unitree_sdk2_python's g1_arm7_sdk_dds_example.py.
 NAMED_CONFIGS = {
-    'home':  # zero posture, forearms forward; the first stage of Unitree's arm_sdk example
+    'home':  # zero posture, forearms forward; the example's first stage
         np.zeros(len(ENABLED_JOINTS)),
     'arms_down':  # straight arms hanging below the shoulders
         np.array([0.0, 0.0, 0.0, HALF_PI, 0.0, 0.0, 0.0,
@@ -65,15 +65,15 @@ NAMED_CONFIGS = {
 STARTUP_SEQUENCE = ('home',)
 
 # Controller-config defaults the two robots do not share (golem_upper_ik.config). The
-# follow gate reads golem_safety's output, /arm_sdk in its default arm_sdk mode. The
-# /lowstate tick-lag check is off: the real G1's tick has not been measured.
+# follow gate reads golem_safety's output, /lowcmd in both G1 modes. The /lowstate tick-lag
+# check is off: the real G1's tick has not been measured.
 CONFIG_DEFAULTS = {
-    'topics.safety_out': '/arm_sdk',
+    'topics.safety_out': '/lowcmd',
     'controller.max_state_lag_ms': 0.0,
 }
 # the controller config frame_task_server and joint_state_publisher load when their config
 # parameter is not given
-DEFAULT_CONFIG = 'g1'
+DEFAULT_CONFIG = 'g1_split'
 
 
 def model_paths() -> dict:

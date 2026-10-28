@@ -79,9 +79,6 @@ void print(const golem_safety::SafetyConfig & c, const golem_safety::RobotProfil
             << " \"engage\": {\"max_state_age_seconds\": "
             << number(c.engage.max_state_age_seconds) << ", \"max_position_error\": "
             << number(c.engage.max_position_error) << "},\n"
-            << " \"arm_sdk\": {\"engage_seconds\": " << number(c.arm_sdk.engage_seconds)
-            << ", \"release_seconds\": " << number(c.arm_sdk.release_seconds)
-            << ", \"waist_kp_min\": " << number(c.arm_sdk.waist_kp_min) << "},\n"
             << " \"estop\": {\"triggered_topic\": " << quoted(c.estop.triggered_topic)
             << ", \"plugged_in_topic\": " << quoted(c.estop.plugged_in_topic)
             << ", \"timeout_seconds\": " << number(c.estop.timeout_seconds) << "},\n"

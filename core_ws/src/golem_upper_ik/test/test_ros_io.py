@@ -278,7 +278,7 @@ def test_command_publisher_refuses_bad_commands(ros):
     profile = profile_of('h12')
     node = ros.node('controller')
     # the controller writes only golem_safety's inputs
-    for topic in ('/lowcmd', '/arm_sdk', 'safety/lowcmd_upper_in'):
+    for topic in ('/lowcmd', 'safety/lowcmd_upper_in'):
         with pytest.raises(ValueError, match='/safety/'):
             CommandPublisher(node, topic, 500.0, profile)
     with pytest.raises(ValueError, match='pub_hz'):

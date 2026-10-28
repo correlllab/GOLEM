@@ -273,11 +273,6 @@
    "mode_machine": 5,
    "max_position_error": 0.15
   },
-  "arm_sdk": {
-   "engage_seconds": 1.0,
-   "release_seconds": 1.0,
-   "waist_kp_min": 40.0
-  },
   "estop_response": {
    "mode": "zero",
    "kd": [

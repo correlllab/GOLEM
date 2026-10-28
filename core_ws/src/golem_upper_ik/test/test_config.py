@@ -18,7 +18,7 @@ import yaml
 FIXTURES = Path(__file__).parent / 'fixtures' / 'old_controller'
 CONFIGS = {
     'h12': ['safety_split', 'sim_safety_split', 'safety_full', 'debug'],
-    'g1': ['g1', 'g1_split', 'sim', 'sim_split'],
+    'g1': ['g1_split', 'sim_split'],
 }
 CASES = [f'{robot}/{name}' for robot, names in CONFIGS.items() for name in names]
 HELD = {
@@ -165,7 +165,7 @@ def test_defaults(robot, tmp_path):
     assert config['topics'] == {
         'low_cmd': '/safety/lowcmd_upper_in',
         'low_state': '/lowstate',
-        'safety_out': '/lowcmd' if robot == 'h12' else '/arm_sdk',
+        'safety_out': '/lowcmd',
     }
     controller = config['controller']
     assert controller['hold_targets'] == {joint: 0.0 for joint in HELD[robot]}
@@ -222,7 +222,7 @@ def test_joint_lists_take_body_or_upper_lengths(robot, tmp_path):
 
 
 def test_low_cmd_topic_must_be_safety_input(tmp_path):
-    for low_cmd in ('/lowcmd', '/arm_sdk', 'rt/safety/lowcmd_upper_in', 'safety/lowcmd_in'):
+    for low_cmd in ('/lowcmd', 'rt/safety/lowcmd_upper_in', 'safety/lowcmd_in'):
         raw = edited('h12', 'safety_split', topics={'low_cmd': low_cmd})
         with pytest.raises(ValueError, match='topics.low_cmd'):
             load('h12', write_config(tmp_path, 'h12', raw))
@@ -238,15 +238,24 @@ def test_topics_are_ros_names(tmp_path):
 
 
 def test_safety_out_is_an_output_of_the_robot(tmp_path):
-    raw = edited('h12', 'safety_split', topics={'safety_out': '/arm_sdk'})
+    raw = edited('h12', 'safety_split', topics={'safety_out': '/safety/lowcmd_upper_in'})
     with pytest.raises(ValueError, match='topics.safety_out'):
         load('h12', write_config(tmp_path, 'h12', raw))
-    for topic in ('/arm_sdk', '/lowcmd'):
-        raw = edited('g1', 'g1', topics={'safety_out': topic})
-        assert load('g1', write_config(tmp_path, 'g1', raw))['topics']['safety_out'] == topic
-    raw = edited('g1', 'g1', topics={'safety_out': '/safety/lowcmd_upper_in'})
+    raw = edited('g1', 'g1_split', topics={'safety_out': '/lowcmd'})
+    assert load('g1', write_config(tmp_path, 'g1', raw))['topics']['safety_out'] == '/lowcmd'
+    raw = edited('g1', 'g1_split', topics={'safety_out': '/safety/lowcmd_upper_in'})
     with pytest.raises(ValueError, match='topics.safety_out'):
         load('g1', write_config(tmp_path, 'g1', raw))
+
+
+@pytest.mark.parametrize('robot, name', [('h12', 'safety_split'), ('g1', 'g1_split')])
+def test_arm_sdk_output_refused(robot, name, tmp_path):
+    '''golem_safety writes /lowcmd only: a follow gate on another topic is refused, naming it'''
+    raw = edited(robot, name, topics={'safety_out': '/arm_sdk'})
+    with pytest.raises(ValueError, match=re.escape(
+            f"key 'topics.safety_out': '/arm_sdk' is not a golem_safety output of robot "
+            f'{robot} (/lowcmd)')):
+        load(robot, write_config(tmp_path, robot, raw))
 
 
 @pytest.mark.parametrize('key, raw_edit, message', [
@@ -421,13 +430,13 @@ def test_names_resolve_under_the_robots_config_directory():
     with_suffix = load('h12', 'safety_split.yaml')
     bare = load('h12', 'safety_split')
     assert with_suffix['source'] == bare['source'] == str(installed('h12', 'safety_split'))
-    with pytest.raises(FileNotFoundError, match='g1'):
-        load('h12', 'g1')
+    with pytest.raises(FileNotFoundError, match='g1_split'):
+        load('h12', 'g1_split')
 
 
 def test_config_of_other_robot_is_refused(tmp_path):
     with pytest.raises(ValueError, match='robot g1'):
-        load('h12', str(installed('g1', 'g1')))
+        load('h12', str(installed('g1', 'g1_split')))
     with pytest.raises(ValueError, match='robot h12'):
         load('g1', write_config(tmp_path, 'g1', minimal('g1'), directory='h12'))
 

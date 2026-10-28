@@ -2,10 +2,6 @@
 
 import numpy as np
 
-# /arm_sdk weight at which Unitree's controller has handed the waist and arms over in full;
-# golem_safety ramps it 0 -> 1 over its arm_sdk engage time
-FULL_WEIGHT = 0.999
-
 
 class FollowGate:
     '''
@@ -13,8 +9,8 @@ class FollowGate:
     open(), then let the commands through for good.
 
     Before golem_safety relays the controller's commands, nothing executes them: on the G1
-    its engage gate waits for every input of its mode and, in arm_sdk mode, for the weight
-    to ramp in; on the H1-2 it streams zero gains until it engages the input. An
+    its engage gate waits for every input of its mode; on the H1-2 it streams zero gains
+    until it engages the input. An
     open-loop move such as the start-up move to home would then run away from the measured
     pose, and the robot would jump once the commands are relayed. With the gate a command
     leads its measured joint by at most tolerance, before the relay starts and at it.
@@ -58,14 +54,11 @@ class FollowGate:
         return q_cmd
 
 
-def relays_commands(sample_q, sample_kp, weight, q_cmd, joint_ids, tolerance):
+def relays_commands(sample_q, sample_kp, q_cmd, joint_ids, tolerance):
     '''
     True when a sample of golem_safety's output carries q_cmd on every given joint, within
-    tolerance, with kp > 0, at full weight. weight is the /arm_sdk weight slot's q, or None
-    for /lowcmd, which the robot executes as it is
+    tolerance, with kp > 0
     '''
-    if weight is not None and not weight >= FULL_WEIGHT:
-        return False
     ids = np.asarray(list(joint_ids), dtype=np.int64)
     # the safety layer's estop and zero-gain commands and a default LowCmd have kp 0: never ours
     if not np.all(np.asarray(sample_kp, dtype=np.float64)[ids] > 0.0):

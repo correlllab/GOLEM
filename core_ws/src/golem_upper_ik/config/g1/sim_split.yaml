@@ -1,5 +1,5 @@
 # Simulated G1 (RoboCasa) in split mode, with HOMIE's walking policy on the
-# legs (g1_locomotion): sim.yaml with a stiff waist.
+# legs (g1_locomotion) and a stiff waist.
 # Commands go to golem_safety's upper-body input (its sim_split.yaml).
 # The controller never writes /lowcmd itself.
 
@@ -64,7 +64,8 @@ gains:
   # golem_safety's kp_max (200). The waist kd gives a damping ratio
   # kd / (2 sqrt(kp I)) of about 0.42-0.45 with the URDF's waist inertia I at
   # home (yaw 0.39, roll 0.71, pitch 0.72 kg m^2); kd 5 gave 0.21-0.28. Roll and
-  # pitch are at kd_max (10). The arms keep Unitree's rt/arm_sdk example values
+  # pitch are at kd_max (10). The arms keep the kp 60 and kd 1.5 of Unitree's G1
+  # arm example (unitree_sdk2_python's g1_arm7_sdk_dds_example.py)
   kp: [200.0, 200.0, 200.0,
        60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0,
        60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0]

@@ -62,8 +62,8 @@ constexpr std::chrono::milliseconds kHeartbeatPeriod{100};  // 10 Hz
 constexpr size_t kMaxQueuedLines = 10000;
 // How long the exit waits for stderr to take the last lines, s.
 constexpr double kLogDrainSeconds = 1.0;
-// How long an exit sequence may overrun its ramp or burst before it counts as failed, s;
-// it covers the short weight-0 hold that follows the arm_sdk ramp (SafetyCore::exit_step).
+// How long an exit sequence may overrun the rest of its estop burst before it counts as
+// failed, s.
 constexpr double kExitMarginSeconds = 1.0;
 
 const char * signal_name(int signum)
@@ -81,7 +81,7 @@ const char * signal_name(int signum)
 
 // Log lines written by a thread of their own: post() never blocks on stderr or throws, so
 // a closed, hung-up or stalled stderr (a dead ros2 launch, a closed terminal, a reader
-// that stopped reading) cannot stop the relay or the hand-back. rclcpp writes console
+// that stopped reading) cannot stop the relay or the exit. rclcpp writes console
 // output under a global mutex, so once the relay runs nothing else in the node logs
 // through rclcpp.
 class EventLog
@@ -192,13 +192,9 @@ private:
   std::thread thread_;
 };
 
-// The longest the exit sequence's ramp or burst takes, s: the arm_sdk weight ramp, or the
-// rest of an estop burst.
+// The longest the exit sequence takes, s: the rest of an estop burst.
 double exit_seconds(const SafetyConfig & config)
 {
-  if (config.mode == Mode::ArmSdk) {
-    return config.arm_sdk.release_seconds;
-  }
   return config.estop_response.burst_count / config.control.publish_hz;
 }
 
@@ -469,8 +465,6 @@ std::vector<Relay::CommandInput> command_inputs(
     case Mode::Split:
       return {subscribe(Input::Lower, config.topics.low_cmd_lower_in),
         subscribe(Input::Upper, config.topics.low_cmd_upper_in)};
-    case Mode::ArmSdk:
-      return {subscribe(Input::Upper, config.topics.low_cmd_upper_in)};
   }
   return {};
 }
@@ -668,7 +662,7 @@ int main(int argc, char ** argv)
   sigaddset(&exit_signals, SIGTERM);
   sigaddset(&exit_signals, SIGHUP);
   pthread_sigmask(SIG_BLOCK, &exit_signals, nullptr);
-  // A write to a closed stderr fails instead of ending the process mid-hand-back.
+  // A write to a closed stderr fails instead of ending the process mid-relay or mid-exit.
   signal(SIGPIPE, SIG_IGN);
   try {
     return golem_safety::run(argc, argv, exit_signals);

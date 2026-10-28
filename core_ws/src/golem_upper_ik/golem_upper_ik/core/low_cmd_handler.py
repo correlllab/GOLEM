@@ -82,12 +82,6 @@ class LowCmdHandler:
             profile.shutdown_keeps_held_joints_on_lowcmd
             and self._safety_output_topic in (SAFETY_OUTPUT_TOPICS['split_mode'],
                                               SAFETY_OUTPUT_TOPICS['full_body_mode']))
-        self._weight_slot = None
-        if self._safety_output_topic == SAFETY_OUTPUT_TOPICS['arm_sdk_mode']:
-            if profile.arm_sdk_weight_slot is None:
-                raise ValueError(f'robot {profile.robot} has no arm_sdk weight slot, so its '
-                                 f'safety output cannot be {self._safety_output_topic}')
-            self._weight_slot = profile.arm_sdk_weight_slot
         self._follow_gate = FollowGate(profile.upper_slots,
                                        config['controller']['follow_tolerance'])
         self._check_dt = 1.0 / float(config['frequency']['check_hz'])
@@ -331,16 +325,14 @@ class LowCmdHandler:
         count = self._count
         sample_q = np.fromiter((motors[i].q for i in range(count)), np.float64, count)
         sample_kp = np.fromiter((motors[i].kp for i in range(count)), np.float64, count)
-        weight = None if self._weight_slot is None else float(motors[self._weight_slot].q)
         gate = self._follow_gate
         with self._data_lock:
             if self._shut_down or not relays_commands(
-                    sample_q, sample_kp, weight, self._q, gate.joint_ids, gate.tolerance):
+                    sample_q, sample_kp, self._q, gate.joint_ids, gate.tolerance):
                 return
             gate.open()
-        at = '' if weight is None else ' at weight 1'
         self._node.get_logger().info(
-            f'golem_safety relays the commands on {self._safety_output_topic}{at}; '
+            f'golem_safety relays the commands on {self._safety_output_topic}; '
             'the follow gate is open')
 
     def _close_safety_output(self):

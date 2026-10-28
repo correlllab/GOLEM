@@ -4,60 +4,52 @@ Real G1, with the whole ROS stack running on the laptop wired to the robot.
     ros2 launch golem_bringup g1_real_robot.launch.py
     ros2 launch golem_bringup g1_real_robot.launch.py use_rviz:=false use_hands:=false
 
+golem_safety runs split.yaml: it writes every motor on rt/lowcmd, the legs
+from the walking node's input and the waist and arms from the arm controller's
+(g1_split.yaml). Split mode engages only once both command, so without
+use_locomotion:=true (below) golem_safety writes nothing and the controller
+stops after 30 s.
+
 Before launching:
 - ROS_DOMAIN_ID=0 (the robot's DDS domain) and G1_DDS_INTERFACE set to the
   laptop's wired port (ours: enp130s0), both in docker/.env.
-- The robot is standing under Unitree's own controller: in arm_sdk mode the
-  legs stay Unitree's, and only the waist + arms are taken over.
-- Nothing else may be commanding rt/lowcmd, rt/arm_sdk or rt/dex3/*: two
-  publishers fight over the motors.
-- Clear the space around the arms: once the controller has a fresh
-  rt/lowstate, golem_safety ramps control over from Unitree for 1 s, then
-  the arms move to `home` (forearms forward at waist height) at up to 0.3
-  rad/s per joint.
+- Split mode writes rt/lowcmd, so Unitree's controller must already be
+  released; that is a manual operator step, and nothing in this stack does it.
+- Support the robot (a gantry): split.yaml's estop turns every motor off.
+- Nothing else may be commanding rt/lowcmd or rt/dex3/*: two publishers fight
+  over the motors.
+- Clear the space around the arms: once golem_safety relays the controller's
+  commands, the arms move to `home` (forearms forward at waist height) at up to
+  0.3 rad/s per joint.
 
 This launch refuses sim configs (any sim_* safety_config), and the controller
-config follows safety_config (g1 with arm_sdk, g1_split with split); g1_core's
-docstring lists every pairing it refuses. When the controller exits it sends
-one last command, with zero gains on the arms. In arm_sdk mode it zeroes the
-waist too, so golem_safety refuses it (its waist kp is below
-arm_sdk.waist_kp_min), latches its estop and hands the waist and arms back to
-Unitree, as it does on a command that is not finite; in split mode the waist
-keeps its hold and golem_safety relays it, so only the arms go limp. The controller
-stops with an error if rt/lowstate does not arrive within 5 s, if
-golem_safety has not relayed its commands within 30 s, or if the move to home
-is not done within 30 s after that. Sensors and skills are not part of the G1
-bringup yet, and it refuses use_nav:=true: navigation runs in the sim only
-until the real MID-360 is connected (g1_navigation's README, The real lidar).
+config follows safety_config (g1_split with split); g1_core's docstring lists
+every pairing it refuses. When the controller exits it sends one last command,
+with zero gains on the arms; the waist keeps its hold and golem_safety relays
+it, so only the arms go limp. The controller stops with an error if
+rt/lowstate does not arrive within 5 s, if golem_safety has not relayed its
+commands within 30 s, or if the move to home is not done within 30 s after
+that. Sensors and skills are not part of the G1 bringup yet, and it refuses
+use_nav:=true: navigation runs in the sim only until the real MID-360 is
+connected (g1_navigation's README, The real lidar).
 
 Hazards not handled in code:
 - A controller that dies without its last command leaves the waist + arms
-  held at weight 1 on its last command: golem_safety holds a quiet input and
-  only reports it (input_quiet). Stopping the bringup hands them back to
-  Unitree over arm_sdk.release_seconds (3 s).
+  held on its last command: golem_safety holds a quiet input and only reports
+  it (input_quiet), until the bringup stops.
 - After any estop, restart the whole bringup, not only the safety node: the
   estop stays latched until restart, and the controller's follow gate opens
   for good once golem_safety relays its commands, so a restarted safety node
   would meet a command held wherever the robot used to be.
-- Until rt/arm_sdk reaches weight 1 (the end of the 1 s ramp), a waist or arm
-  joint pushed more than 0.05 rad from its command drags the command along;
-  Unitree's share of the blend holds the joint meanwhile. From weight 1 on the
-  commands hold.
 - The arm IK has no self-collision model (the arms can hit the torso or each
   other). The gains are not tuned on our G1: the waist's damping ratio is
-  about 0.46 at home and 0.26 with the arms out to the sides.
+  about 0.42-0.45 at home (g1_split.yaml).
 
-Walking with HOMIE's policy on the legs instead of Unitree's controller:
+Walking with HOMIE's policy on the legs:
 
-    ros2 launch golem_bringup g1_real_robot.launch.py safety_config:=split \
+    ros2 launch golem_bringup g1_real_robot.launch.py \
         use_locomotion:=true start_position_verified:=true
 
-- The legs then go through golem_safety's split mode on rt/lowcmd, so
-  Unitree's controller must already be released; that is a manual operator
-  step, and nothing in this stack does it.
-- safety_config:=split runs g1_split.yaml (a stiff waist), walking or not;
-  g1_core refuses any other controller config with it.
-- Support the robot (a gantry): split.yaml's estop zeroes every motor.
 - Split mode engages only once the walking node commands too; until then the
   controller's follow gate keeps the arm and waist commands within 0.05 rad of
   wherever the robot hangs, and the move to home starts when the controller
@@ -93,8 +85,9 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_rviz', default_value='true'),
         DeclareLaunchArgument('use_hands', default_value='true'),
-        DeclareLaunchArgument('safety_config', default_value='arm_sdk',
-                              description='arm_sdk (Unitree balances) or split (own lower body)'),
+        DeclareLaunchArgument('safety_config', default_value='split',
+                              description='golem_safety config, a name under its config/g1/ '
+                                          'or a path'),
         DeclareLaunchArgument(
             'use_locomotion', default_value='false',
             description="HOMIE's walking policy on the legs (needs safety_config:=split)"),
@@ -114,8 +107,7 @@ def generate_launch_description():
                 'use_rviz': LaunchConfiguration('use_rviz'),
                 'use_hands': LaunchConfiguration('use_hands'),
                 'safety_config': LaunchConfiguration('safety_config'),
-                # the one safety_config runs with: g1 with arm_sdk, g1_split (a
-                # stiff waist) with split, walking or not
+                # the one safety_config runs with: g1_split with split
                 'controller_config': '',
                 'use_locomotion': LaunchConfiguration('use_locomotion'),
                 'start_position_verified': LaunchConfiguration('start_position_verified'),

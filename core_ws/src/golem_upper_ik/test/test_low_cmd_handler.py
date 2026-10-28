@@ -15,7 +15,7 @@ import pytest
 from ros_harness import Echo, FakeRobot, Recorder, upper_q, wait_for
 
 ROBOTS = ('h12', 'g1')
-CONFIGS = {'h12': 'safety_split', 'g1': 'g1'}
+CONFIGS = {'h12': 'safety_split', 'g1': 'g1_split'}
 SAG = -0.08  # rad: where the fake robot's held joints (torso, waist) sit
 ARM_Q = 0.1  # rad: the fake robot's arm joints
 FLOAT32 = 1e-6  # rad: what a command loses as float32
@@ -70,11 +70,9 @@ class Rig:
         return np.clip(q, limits[:, 0], limits[:, 1])
 
     def echo(self, **kwargs):
-        '''An Echo of the commands on the config's safety output, with the /arm_sdk weight'''
-        safety_out = self.config['topics']['safety_out']
-        weight_slot = self.profile.arm_sdk_weight_slot if safety_out == '/arm_sdk' else None
-        return Echo(self.ros, self.config['topics']['low_cmd'], safety_out,
-                    weight_slot=weight_slot, **kwargs)
+        '''An Echo of the commands on the config's safety output'''
+        topics = self.config['topics']
+        return Echo(self.ros, topics['low_cmd'], topics['safety_out'], **kwargs)
 
 
 def command(rig, handler, q):
@@ -157,15 +155,8 @@ def test_follow_gate_holds_until_relayed(ros, models, robot):
         assert np.max(gap) <= tolerance + FLOAT32
 
     safety_out = rig.config['topics']['safety_out']
-    weight_slot = rig.profile.arm_sdk_weight_slot if safety_out == '/arm_sdk' else None
-    assert safety_out == {'h12': '/lowcmd', 'g1': '/arm_sdk'}[robot]
-    echo = Echo(ros, rig.config['topics']['low_cmd'], safety_out, weight_slot=weight_slot,
-                weight=0.5)
-    if weight_slot is not None:
-        # /arm_sdk below full weight: Unitree still holds part of the arms
-        time.sleep(0.3)
-        assert not handler.following
-        echo.weight = 1.0
+    assert safety_out == '/lowcmd'
+    Echo(ros, rig.config['topics']['low_cmd'], safety_out)
     assert wait_for(lambda: handler.following, 3.0)
 
     # open: the commands go where the controller sends them
@@ -268,7 +259,7 @@ def test_start_refuses_a_non_finite_pose(ros, models):
 
 # (robot, controller config, golem_safety's output, whether the shutdown keeps the held joints)
 SHUTDOWNS = [('h12', 'safety_split', '/lowcmd', False), ('h12', 'safety_full', '/lowcmd', False),
-             ('g1', 'g1', '/arm_sdk', False), ('g1', 'g1_split', '/lowcmd', True)]
+             ('g1', 'g1_split', '/lowcmd', True)]
 
 
 @pytest.mark.parametrize('robot, config, safety_out, keeps_held', SHUTDOWNS,
@@ -276,9 +267,8 @@ SHUTDOWNS = [('h12', 'safety_split', '/lowcmd', False), ('h12', 'safety_full', '
 def test_shutdown_command_then_silence(ros, models, robot, config, safety_out, keeps_held):
     '''
     The IK joints go limp: mode 0, kp, kd and tau 0, q as they were. The held joints too,
-    except on the G1 when golem_safety writes /lowcmd, where a walking policy may be on the
-    legs: there they keep their hold angle, gains and torque. On the G1's /arm_sdk the
-    zero-gain waist makes golem_safety latch and hand the waist and arms back
+    except on the G1, where a walking policy may be on the legs: there they keep their hold
+    angle, gains and torque
     '''
     rig = Rig(ros, models, robot, config=config, follow_tolerance=0.0)
     assert rig.config['topics']['safety_out'] == safety_out
@@ -356,9 +346,7 @@ def test_g1_split_gate_opens_on_lowcmd(ros, models):
     handler.start()
     time.sleep(0.3)
     assert not handler.following
-    # golem_safety's split output carries no weight
-    echo = rig.echo()
-    assert echo.weight_slot is None
+    rig.echo()
     assert wait_for(lambda: handler.following, 3.0)
 
 
@@ -535,7 +523,7 @@ def test_follow_gate_opens_only_when_told():
         assert np.array_equal(gate.limit(target, measured), target)
 
 
-def test_relays_commands_needs_the_commands_at_full_weight():
+def test_relays_commands_needs_every_joint_close_with_kp():
     from golem_upper_ik.core.follow_gate import relays_commands
     ids = [12, 13, 14, 15]
     q_cmd = np.zeros(29)
@@ -545,24 +533,19 @@ def test_relays_commands_needs_the_commands_at_full_weight():
     sample[:12] = 0.7  # the legs (the walking node's in split mode) are not compared
     kp = np.zeros(29)
     kp[ids] = [200.0, 200.0, 200.0, 60.0]
-    # /lowcmd has no weight: the robot executes it as it is
-    assert relays_commands(sample, kp, None, q_cmd, ids, 0.05)
-    # /arm_sdk: only once the weight has ramped in
-    assert relays_commands(sample, kp, 1.0, q_cmd, ids, 0.05)
-    for weight in (0.0, 0.5, 0.99, float('nan')):
-        assert not relays_commands(sample, kp, weight, q_cmd, ids, 0.05)
+    assert relays_commands(sample, kp, q_cmd, ids, 0.05)
     # one joint off: someone else's command, or not ours yet
     off = sample.copy()
     off[15] = 0.7
-    assert not relays_commands(off, kp, 1.0, q_cmd, ids, 0.05)
+    assert not relays_commands(off, kp, q_cmd, ids, 0.05)
     off[15] = np.nan
-    assert not relays_commands(off, kp, None, q_cmd, ids, 0.05)
+    assert not relays_commands(off, kp, q_cmd, ids, 0.05)
     # kp 0 on a slot: the safety layer's estop command (q 0, kp 0) or a default LowCmd, even
     # where our commands are near 0
     q_zero = np.zeros(29)
     for zero_kp in (np.zeros(29), np.where(np.arange(29) == 15, 0.0, kp)):
-        assert not relays_commands(np.zeros(29), zero_kp, None, q_zero, ids, 0.05)
-    assert relays_commands(np.zeros(29), kp, None, q_zero, ids, 0.05)
+        assert not relays_commands(np.zeros(29), zero_kp, q_zero, ids, 0.05)
+    assert relays_commands(np.zeros(29), kp, q_zero, ids, 0.05)
 
 
 def test_follow_gate_tolerance_zero_is_off():

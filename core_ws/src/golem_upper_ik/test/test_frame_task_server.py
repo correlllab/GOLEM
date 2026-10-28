@@ -32,7 +32,7 @@ from ros_harness import (
 )
 
 ROBOTS = ('h12', 'g1')
-CONFIGS = {'h12': 'safety_split', 'g1': 'g1'}
+CONFIGS = {'h12': 'safety_split', 'g1': 'g1_split'}
 # where the arms start: a working pose with room to move the end effectors forward
 START = {'h12': 'prep', 'g1': 'home'}
 RATE_TOOL = Path(__file__).resolve().parents[1] / 'tools' / 'frame_task_server_rate.py'
@@ -641,7 +641,7 @@ def test_joint_state_publisher(ros, robot):
 @pytest.mark.parametrize('name, params, words', [
     ('frame_task_server', [], ['robot', 'h12', 'g1']),
     ('frame_task_server', ['robot:=h1'], ["unknown robot 'h1'"]),
-    ('frame_task_server', ['robot:=h12', 'config:=g1'], ['robot h12', "'g1'"]),
+    ('frame_task_server', ['robot:=h12', 'config:=g1_split'], ['robot h12', "'g1_split'"]),
     ('frame_task_server', ['robot:=h12', 'config:=/nonexistent/g1/g1.yaml'],
      ['robot h12', 'config directory of robot g1']),
     ('joint_state_publisher', [], ['robot', 'h12', 'g1']),
@@ -656,12 +656,19 @@ def test_nodes_refuse_bad_parameters(name, params, words):
 
 
 def assert_zero_gain_last(robot, profile, before):
-    '''The robot's last command arrived before `before` and turns the upper slots off'''
+    '''
+    The robot's last command arrived before `before` and turns the IK joints off; the G1's
+    held joints (its waist) stay at their hold on /lowcmd
+    '''
     received, last = robot.last_command
     assert received < before
+    held = slots_of(profile, profile.held_joints)
     for slot in profile.upper_slots:
         motor = last.motor_cmd[slot]
-        assert (motor.mode, motor.kp, motor.kd, motor.tau) == (0, 0.0, 0.0, 0.0)
+        if slot in held:
+            assert motor.mode == 1 and motor.kp > 0.0, slot
+        else:
+            assert (motor.mode, motor.kp, motor.kd, motor.tau) == (0, 0.0, 0.0, 0.0), slot
 
 
 @pytest.mark.parametrize('signals', [
@@ -673,7 +680,7 @@ def test_frame_task_server_shuts_down_with_zero_gains_on_a_signal(ros, signals):
     robot_ = FollowingRobot(ros, profile, body_pose(profile, 'home'),
                             config['topics']['safety_out'])
     left = PoseRecorder(ros, '/left_ee_pose')
-    process = NodeProcess('frame_task_server', 'robot:=g1', 'config:=g1')
+    process = NodeProcess('frame_task_server', 'robot:=g1', f'config:={CONFIGS["g1"]}')
     try:
         # its end-effector poses go out once the start-up is done
         assert wait_for(lambda: left.poses, 60.0), process.output()
@@ -694,7 +701,7 @@ def test_frame_task_server_start_up_failure_exits_1_after_a_zero_gain_command(ro
     # startup_timeout after it has begun publishing
     profile = profile_of('g1')
     config_path = edited_config(tmp_path, 'g1', CONFIGS['g1'], startup_timeout=2.0)
-    robot_ = RelayedRobot(ros, profile, body_pose(profile, 'home'), '/arm_sdk')
+    robot_ = RelayedRobot(ros, profile, body_pose(profile, 'home'), '/lowcmd')
     robot_.start()
     commands = FollowingCommands(ros, profile)
     process = NodeProcess('frame_task_server', 'robot:=g1', f'config:={config_path}')

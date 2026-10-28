@@ -39,10 +39,7 @@ It also installs `launch/display.launch.py` and `rviz/g1.rviz`.
       50 Nm.
 - `layout.py`: which DDS slot is which.
     - Legs 0-11, waist 12-14, left arm 15-21, right arm 22-28; `LowCmd_` has 35
-      slots.
-    - `rt/arm_sdk` drives slots 12-28 (`ARM_SDK_SLOTS`). The `q` of slot 29
-      (`ARM_SDK_WEIGHT_SLOT`) hands control over: 1.0 for our commands, 0.0 for
-      Unitree's controller.
+      slots, and 29-34 are no body joint's.
     - `mode_pr` must be `MODE_PR` (0), so the ankle slots drive the pitch and
       roll joints the table names. `mode_machine` must echo the value read from
       `rt/lowstate` (our unit reports 5).

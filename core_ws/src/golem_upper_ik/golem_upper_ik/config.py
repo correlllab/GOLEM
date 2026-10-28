@@ -22,11 +22,10 @@ from golem_upper_ik.robots import robot_module
 __all__ = ['load_controller_config', 'SAFETY_INPUT_PREFIX', 'SAFETY_OUTPUT_TOPICS']
 
 # The controller writes only golem_safety's inputs: golem_safety is the only writer of
-# /lowcmd and /arm_sdk
+# /lowcmd
 SAFETY_INPUT_PREFIX = '/safety/'
 # golem_safety's output topic in each of its modes; the follow gate reads one of them
 SAFETY_OUTPUT_TOPICS = {
-    'arm_sdk_mode': '/arm_sdk',
     'split_mode': '/lowcmd',
     'full_body_mode': '/lowcmd',
 }

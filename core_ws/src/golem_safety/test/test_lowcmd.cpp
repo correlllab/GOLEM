@@ -107,7 +107,7 @@ LowCmd busy_command()
 TEST(LowCmd, CrcMatchesSdkFixtures)
 {
   const YAML::Node commands = fixture()["commands"];
-  ASSERT_EQ(commands.size(), 5u);
+  ASSERT_EQ(commands.size(), 4u);
   for (const YAML::Node & entry : commands) {
     SCOPED_TRACE(entry["name"].as<std::string>());
     EXPECT_EQ(golem_safety::lowcmd_crc(command_of(entry)), entry["crc"].as<uint32_t>());
@@ -234,8 +234,8 @@ TEST(LowCmd, DampKeepsKd)
     EXPECT_EQ(cmd.motor_cmd[i].kp, 0.0F);
     EXPECT_EQ(cmd.motor_cmd[i].kd, static_cast<float>(config.estop_response.kd[i]));
   }
-  // Slots past the body, among them the arm_sdk weight in slot 29, stay as the zero
-  // command has them: nothing of `last` reaches the result.
+  // Slots past the body stay as the zero command has them: nothing of `last` reaches the
+  // result.
   for (size_t i = body; i < cmd.motor_cmd.size(); ++i) {
     SCOPED_TRACE("slot " + std::to_string(i));
     EXPECT_EQ(cmd.motor_cmd[i].mode, zero.motor_cmd[i].mode);

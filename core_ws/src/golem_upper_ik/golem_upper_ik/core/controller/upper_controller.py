@@ -22,7 +22,6 @@ import time
 
 import numpy as np
 
-from golem_upper_ik.config import SAFETY_OUTPUT_TOPICS
 from golem_upper_ik.core.ik_solver import IKSolver
 from golem_upper_ik.core.low_cmd_handler import LowCmdHandler
 from golem_upper_ik.core.planner import PlannerClient, PlannerConfig, PlannerUnavailableError
@@ -206,10 +205,9 @@ class UpperController:
             time.sleep(max(0.0, self.dt - (time.monotonic() - start)))
 
     def _not_relayed_error(self, topic):
-        at = ' at weight 1' if topic == SAFETY_OUTPUT_TOPICS['arm_sdk_mode'] else ''
         return (
             'golem_safety did not relay the commands within controller.startup_timeout '
-            f'({self.startup_timeout:.0f} s): no {topic} sample{at} carried them. golem_safety '
+            f'({self.startup_timeout:.0f} s): no {topic} sample carried them. golem_safety '
             f'relays only once it sees {self.state_topic} report mode_machine '
             f'{self.profile.mode_machine} (the {self.profile.robot} profile\'s) and, when started '
             'with use_estop:=true, a first sample on its estop topics; it must run the safety '

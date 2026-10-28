@@ -219,16 +219,13 @@ class Recorder:
 class Echo:
     '''
     Plays golem_safety relaying the controller: every command on in_topic is published on
-    out_topic, with weight in weight_slot when it is given (the /arm_sdk blend weight).
-    clip, a (low, high) pair of per-slot arrays, clips each slot's q as golem_safety does;
-    zero_kp sends kp 0 on every slot, as golem_safety's zero stream does before it engages
+    out_topic. clip, a (low, high) pair of per-slot arrays, clips each slot's q as
+    golem_safety does; zero_kp sends kp 0 on every slot, as golem_safety's zero stream does
+    before it engages
     '''
 
-    def __init__(self, ros, in_topic, out_topic, weight_slot=None, weight=1.0, clip=None,
-                 zero_kp=False):
+    def __init__(self, ros, in_topic, out_topic, clip=None, zero_kp=False):
         self.node = ros.node('echo')
-        self.weight_slot = weight_slot
-        self.weight = weight
         self.clip = clip
         self.zero_kp = zero_kp
         self._publisher = self.node.create_publisher(LowCmd, out_topic, WRITER_QOS)
@@ -243,8 +240,6 @@ class Echo:
         if self.zero_kp:
             for motor in msg.motor_cmd:
                 motor.kp = 0.0
-        if self.weight_slot is not None:
-            msg.motor_cmd[self.weight_slot].q = float(self.weight)
         self._publisher.publish(msg)
 
 
@@ -311,9 +306,8 @@ class FollowingRobot:
     '''
     A robot behind an engaged golem_safety, whose relay it plays too. Every command on
     command_topic is executed at once: each body slot with kp > 0 jumps to its q, less its
-    sag (rad, per slot). The newest command is relayed on relay_topic, at weight 1 in the
-    profile's weight slot on /arm_sdk. /lowstate goes out at rate_hz, its tick in ms on the
-    monotonic clock, until stop_state().
+    sag (rad, per slot). The newest command is relayed on relay_topic. /lowstate goes out at
+    rate_hz, its tick in ms on the monotonic clock, until stop_state().
     '''
 
     def __init__(self, ros, profile, q0, relay_topic, command_topic='/safety/lowcmd_upper_in',
@@ -325,7 +319,6 @@ class FollowingRobot:
         self._q = np.array(q0, dtype=np.float64)
         self._sag = np.zeros(count) if sag is None else np.array(sag, dtype=np.float64)
         self._upper = list(profile.upper_slots)
-        self._weight_slot = profile.arm_sdk_weight_slot if relay_topic == '/arm_sdk' else None
         self.commands = 0
         self.zero_gain_commands = 0  # every upper slot at kp 0
         self.last_command = None  # (receive time on time.monotonic(), LowCmd)
@@ -350,8 +343,6 @@ class FollowingRobot:
             for slot in range(len(self._q)):
                 if motors[slot].kp > 0.0:
                     self._q[slot] = motors[slot].q - self._sag[slot]
-            if self._weight_slot is not None:
-                motors[self._weight_slot].q = 1.0
             self._relay = msg
             self.last_command = (now, msg)
 
@@ -385,12 +376,10 @@ class FollowingRobot:
 
 class RelayedRobot:
     '''
-    A robot behind golem_safety's output topic (/arm_sdk or /lowcmd). Each upper-body slot
-    the newest command gives kp > 0 tracks weight x its command + (1 - weight) x the hold;
-    any other upper slot tracks the hold. On /arm_sdk the weight is the newest command's
-    weight slot, 0 until one arrives (the hold is Unitree's); on /lowcmd it is 1 (the hold is
-    where the robot hangs, limp). push is added to every upper slot's target, and each tracks
-    its target with a TRACK_S lag. The hold sways sway rad on the first held joint and the
+    A robot behind golem_safety's output topic (/lowcmd). Each upper-body slot the newest
+    command gives kp > 0 tracks its command; any other upper slot tracks the hold, where the
+    robot hangs, limp. push is added to every upper slot's target, and each tracks its target
+    with a TRACK_S lag. The hold sways sway rad on the first held joint and the
     left shoulder roll, so the measured pose drifts before golem_safety engages. /lowstate
     goes out at rate_hz from start()
     '''
@@ -405,12 +394,10 @@ class RelayedRobot:
         self.upper = list(profile.upper_slots)
         self.sway_slots = slots_of(profile, (profile.held_joints[0], 'left_shoulder_roll_joint'))
         self._sway = sway
-        self._weight_slot = profile.arm_sdk_weight_slot if topic == '/arm_sdk' else None
         self._lock = threading.Lock()
         self._q = self.q0.copy()
         self._cmd_q = self.q0.copy()
         self._commanded = np.zeros(len(self.q0), dtype=bool)
-        self._weight = 0.0 if self._weight_slot is not None else 1.0
         self._push = np.zeros(len(self.q0))
         self._state = _lowstate(profile)
         self.started = None
@@ -428,8 +415,6 @@ class RelayedRobot:
     def _on_command(self, msg):
         motors = msg.motor_cmd
         with self._lock:
-            if self._weight_slot is not None:
-                self._weight = float(motors[self._weight_slot].q)
             for slot in self.upper:
                 self._commanded[slot] = motors[slot].kp > 0.0
                 if self._commanded[slot]:
@@ -447,8 +432,7 @@ class RelayedRobot:
         self._last = now
         with self._lock:
             hold = self._hold(now - self.started)
-            blended = self._weight * self._cmd_q + (1.0 - self._weight) * hold
-            target = np.where(self._commanded, blended, hold) + self._push
+            target = np.where(self._commanded, self._cmd_q, hold) + self._push
             self._q[self.upper] += (target[self.upper] - self._q[self.upper]) * alpha
             q = self._q.copy()
         self._state.tick = int((now - self.started) * 1000.0)
@@ -491,14 +475,13 @@ class WalkingNode:
 class CommandRecorder:
     '''
     Every LowCmd on topic, as samples: receive time (time.monotonic()), the upper-slot q and
-    their smallest kp, the weight slot's q (or None on a topic without one) and the robot's
-    measured upper-slot q at that time (or None without a robot)
+    their smallest kp, and the robot's measured upper-slot q at that time (or None without a
+    robot)
     '''
 
     def __init__(self, ros, topic, profile, robot=None):
         self.node = ros.node('command_recorder')
         self._upper = list(profile.upper_slots)
-        self._weight_slot = profile.arm_sdk_weight_slot if topic == '/arm_sdk' else None
         self._robot = robot
         self._lock = threading.Lock()
         self._samples = []
@@ -509,10 +492,9 @@ class CommandRecorder:
         motors = msg.motor_cmd
         q = np.array([motors[slot].q for slot in self._upper], dtype=np.float64)
         kp = min(motors[slot].kp for slot in self._upper)
-        weight = None if self._weight_slot is None else float(motors[self._weight_slot].q)
         measured = None if self._robot is None else self._robot.measured()[self._upper]
         with self._lock:
-            self._samples.append(Sample(now, q, kp, weight, measured))
+            self._samples.append(Sample(now, q, kp, measured))
 
     @property
     def samples(self):
@@ -526,10 +508,10 @@ class CommandRecorder:
 
 
 class Sample:
-    __slots__ = ('t', 'q', 'kp', 'weight', 'measured')
+    __slots__ = ('t', 'q', 'kp', 'measured')
 
-    def __init__(self, t, q, kp, weight, measured):
-        self.t, self.q, self.kp, self.weight, self.measured = t, q, kp, weight, measured
+    def __init__(self, t, q, kp, measured):
+        self.t, self.q, self.kp, self.measured = t, q, kp, measured
 
 
 def send_goal(ros, action_type, action_name, goal, timeout=60.0):

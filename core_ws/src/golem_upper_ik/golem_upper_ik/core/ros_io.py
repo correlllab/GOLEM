@@ -5,8 +5,8 @@ The controller's ROS I/O, on rclpy:
   source (golem_upper_ik.core.robot_model.StateSource).
 - CommandPublisher: a thread that publishes the newest command to a golem_safety input
   (/safety/...) at pub_hz.
-- SafetyOutputSubscriber: the newest command golem_safety relays (/lowcmd or /arm_sdk), which
-  the follow gate reads and nothing here ever writes.
+- SafetyOutputSubscriber: the newest command golem_safety relays (/lowcmd), which the follow
+  gate reads and nothing here ever writes.
 
 The subscribers keep one sample (keep-last 1, best effort): a reader that falls behind gets the
 newest sample, never a queue of old ones. Each takes its samples in a mutually exclusive
@@ -383,9 +383,9 @@ class CommandPublisher:
 
 class SafetyOutputSubscriber:
     '''
-    The newest command golem_safety relays on its output topic (/lowcmd or /arm_sdk): latest()
-    is (the LowCmd, its receive time on time.monotonic()), or None before the first. Only
-    read: the controller never writes golem_safety's output.
+    The newest command golem_safety relays on its output topic (/lowcmd): latest() is (the
+    LowCmd, its receive time on time.monotonic()), or None before the first. Only read: the
+    controller never writes golem_safety's output.
     '''
 
     def __init__(self, node, topic: str, callback_group=None):

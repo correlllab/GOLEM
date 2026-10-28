@@ -253,7 +253,6 @@
   "state_stale_seconds": null,
   "state_lag_ms": 100.0,
   "engage": null,
-  "arm_sdk": null,
   "estop_response": null,
   "logging": {
    "enabled": false,

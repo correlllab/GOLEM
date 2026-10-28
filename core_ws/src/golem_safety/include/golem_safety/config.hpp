@@ -35,7 +35,7 @@ struct DerivedLimits
 enum class StartupRule { ZeroStream, EngageGate };
 
 // What the layer does after the estop latches. Every config names it
-// (estop_response.after has no default), and arm_sdk_mode requires KeepWriting.
+// (estop_response.after has no default).
 //   BurstThenSilence  estop_response.burst_count commands, then it stops publishing.
 //   KeepWriting       the estop command keeps being written.
 enum class EstopAfter { BurstThenSilence, KeepWriting };
@@ -48,8 +48,8 @@ struct Topics  // ROS topic names; the DDS topic rt/x is the ROS topic /x
 {
   std::string low_cmd_in;        // full_body_mode input
   std::string low_cmd_lower_in;  // split_mode legs input
-  std::string low_cmd_upper_in;  // split_mode and arm_sdk_mode waist + arms input
-  std::string low_cmd_out;       // /arm_sdk by default in arm_sdk_mode, else /lowcmd
+  std::string low_cmd_upper_in;  // split_mode torso or waist + arms input
+  std::string low_cmd_out;       // /lowcmd by default
   std::string low_state;
 };
 
@@ -92,14 +92,6 @@ struct Engage
   double max_position_error = 0.15;  // rad
 };
 
-// arm_sdk_mode only.
-struct ArmSdk
-{
-  double engage_seconds = 1.0;   // weight ramp 0 -> 1
-  double release_seconds = 3.0;  // weight ramp 1 -> 0
-  double waist_kp_min = 40.0;    // a command with a waist kp below this is rejected
-};
-
 // The hardware estop's ROS topics, read only when the bringup passes use_estop.
 struct EstopInput
 {
@@ -135,7 +127,6 @@ struct SafetyConfig
   SingleWriter single_writer;
   Startup startup;
   Engage engage;
-  ArmSdk arm_sdk;
   EstopInput estop;
   EstopResponse estop_response;
   DerivedLimits limits;

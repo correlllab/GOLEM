@@ -39,7 +39,7 @@ const char * const kH12Configs[] = {
   "default_safety_full", "default_safety_split", "locomotion_safety_full", "relax_safety_full",
   "relax_safety_split", "sim_safety_split", "tight_safety_full", "tight_safety_split"};
 
-const char * const kG1Configs[] = {"arm_sdk", "full", "sim_arm_sdk", "sim_split", "split"};
+const char * const kG1Configs[] = {"full", "sim_split", "split"};
 
 // The message of the std::runtime_error that `fn` throws; fails the test when
 // it throws nothing.
@@ -144,10 +144,10 @@ TEST(Config, ResolvesBareNameUnderRobotDir)
   EXPECT_TRUE(contains(plain.source, "/config/h12/default_safety_split.yaml")) << plain.source;
   EXPECT_EQ(plain.limits.q_clip_low, suffixed.limits.q_clip_low);
 
-  const SafetyConfig arm_sdk = golem_safety::load_safety_config("arm_sdk", g1());
-  EXPECT_EQ(arm_sdk.robot, "g1");
-  EXPECT_EQ(arm_sdk.mode, Mode::ArmSdk);
-  EXPECT_TRUE(contains(arm_sdk.source, "/config/g1/arm_sdk.yaml")) << arm_sdk.source;
+  const SafetyConfig split = golem_safety::load_safety_config("split", g1());
+  EXPECT_EQ(split.robot, "g1");
+  EXPECT_EQ(split.mode, Mode::Split);
+  EXPECT_TRUE(contains(split.source, "/config/g1/split.yaml")) << split.source;
 
   // A path with a directory is used as given.
   const TempConfig file(completed("mode: split_mode\n", h12()));
@@ -155,9 +155,9 @@ TEST(Config, ResolvesBareNameUnderRobotDir)
 
   // A name the robot lacks reports the robot and the file it looked for.
   const std::string message =
-    error_of([] {golem_safety::load_safety_config("arm_sdk", h12());});
+    error_of([] {golem_safety::load_safety_config("split", h12());});
   EXPECT_TRUE(contains(message, "h12")) << message;
-  EXPECT_TRUE(contains(message, "/config/h12/arm_sdk.yaml")) << message;
+  EXPECT_TRUE(contains(message, "/config/h12/split.yaml")) << message;
 }
 
 TEST(Config, UnknownKeyThrows)
@@ -199,28 +199,70 @@ TEST(Config, RemovedAndRenamedKeysNameTheirReplacement)
       parse_error("control: {state_stale_estop_seconds: 0.1}\n", g1()), "stale.state_seconds"));
 }
 
+TEST(Config, ArmSdkModeRefused)
+{
+  // The G1 runs split_mode or full_body_mode: the message names the mode it was given and the
+  // robot's own.
+  const std::string message = parse_error("mode: arm_sdk_mode\n", g1());
+  EXPECT_TRUE(contains(message, "(robot g1)")) << message;
+  EXPECT_TRUE(contains(message, "'mode'")) << message;
+  EXPECT_TRUE(
+    contains(message, "'arm_sdk_mode' is not a mode of robot g1 (split_mode, full_body_mode)")) <<
+    message;
+}
+
+TEST(Config, ArmSdkKeysRefused)
+{
+  const std::string reason =
+    "unknown key (arm_sdk mode was removed: the G1 runs split_mode or full_body_mode)";
+  for (const char * section : {
+      "arm_sdk: {engage_seconds: 1.0, release_seconds: 3.0}\n", "arm_sdk: {waist_kp_min: 40.0}\n",
+      "arm_sdk: {}\n"})
+  {
+    SCOPED_TRACE(section);
+    const std::string message = parse_error(std::string("mode: split_mode\n") + section, g1());
+    EXPECT_TRUE(
+      contains(message, "safety config case.yaml (robot g1): key 'arm_sdk': " + reason)) <<
+      message;
+  }
+  // The H1-2's configs are refused the same way.
+  const std::string h12_message = parse_error("arm_sdk: {}\n", h12());
+  EXPECT_TRUE(contains(h12_message, "key 'arm_sdk': " + reason)) << h12_message;
+}
+
 TEST(Config, ModeNotInProfileThrows)
 {
-  const TempConfig file("mode: arm_sdk_mode\n");
+  const TempConfig file("mode: legs_only_mode\n");
   const std::string message =
     error_of([&] {golem_safety::load_safety_config(file.path(), h12());});
   EXPECT_TRUE(contains(message, "h12")) << message;
   EXPECT_TRUE(contains(message, file.path())) << message;
   EXPECT_TRUE(contains(message, "'mode'")) << message;
-  EXPECT_TRUE(contains(message, "arm_sdk_mode")) << message;
+  EXPECT_TRUE(
+    contains(message, "'legs_only_mode' is not a mode of robot h12 (full_body_mode, split_mode)"))
+    << message;
 
   EXPECT_TRUE(contains(parse_error("mode: bogus_mode\n", h12()), "'mode'"));
 
-  // The G1 has all three.
-  EXPECT_EQ(parse("mode: arm_sdk_mode\n", g1()).mode, Mode::ArmSdk);
-  EXPECT_EQ(parse("mode: split_mode\n", g1()).mode, Mode::Split);
-  EXPECT_EQ(parse("mode: full_body_mode\n", g1()).mode, Mode::FullBody);
+  // A mode name the loader knows is refused the same way by a profile without it.
+  RobotProfile split_only = g1();
+  split_only.modes = {Mode::Split};
+  EXPECT_TRUE(
+    contains(
+      parse_error("mode: full_body_mode\n", split_only),
+      "'full_body_mode' is not a mode of robot g1 (split_mode)"));
+
+  // Both robots have both.
+  for (const RobotProfile * profile : {&h12(), &g1()}) {
+    EXPECT_EQ(parse("mode: split_mode\n", *profile).mode, Mode::Split);
+    EXPECT_EQ(parse("mode: full_body_mode\n", *profile).mode, Mode::FullBody);
+  }
 }
 
 TEST(Config, ModeDefaultsToTheProfilesFirstMode)
 {
   EXPECT_EQ(parse("", h12()).mode, Mode::FullBody);
-  EXPECT_EQ(parse("", g1()).mode, Mode::ArmSdk);
+  EXPECT_EQ(parse("", g1()).mode, Mode::Split);
 }
 
 TEST(Config, ListLengthMustMatchJoints)
@@ -360,29 +402,6 @@ TEST(Config, EstopResponseAfterIsRequired)
   EXPECT_EQ(parse("", h12()).estop_response.burst_count, 50);
 }
 
-TEST(Config, ArmSdkModeKeepsWriting)
-{
-  // The weight ramp keeps writing after an estop, so a burst-then-silence response cannot be
-  // what arm_sdk_mode does.
-  const std::string message = parse_error(
-    "mode: arm_sdk_mode\nestop_response: {after: burst_then_silence}\n", g1());
-  EXPECT_TRUE(contains(message, "'estop_response.after'")) << message;
-  EXPECT_TRUE(contains(message, "keep_writing")) << message;
-  EXPECT_TRUE(contains(message, "arm_sdk_mode")) << message;
-  EXPECT_TRUE(contains(message, "g1")) << message;
-
-  EXPECT_EQ(
-    parse("mode: arm_sdk_mode\nestop_response: {after: keep_writing}\n", g1())
-    .estop_response.after, EstopAfter::KeepWriting);
-  // The other modes take either.
-  EXPECT_EQ(
-    parse("mode: split_mode\nestop_response: {after: burst_then_silence}\n", g1())
-    .estop_response.after, EstopAfter::BurstThenSilence);
-  EXPECT_EQ(
-    parse("mode: full_body_mode\nestop_response: {after: keep_writing}\n", g1())
-    .estop_response.after, EstopAfter::KeepWriting);
-}
-
 TEST(Config, H12UpperStaleSecondsAreTheOldEffectiveValues)
 {
   // default_safety_split and tight_safety_split had no key, so the old loader's 2.0 applied.
@@ -420,18 +439,16 @@ TEST(Config, G1ConfigsUseTheEngageGateAndKeepWriting)
   EXPECT_DOUBLE_EQ(split.stale.upper_seconds, 2.0);
   EXPECT_DOUBLE_EQ(split.stale.lower_seconds, 0.2);
 
-  const SafetyConfig arm_sdk = golem_safety::load_safety_config("arm_sdk", g1());
-  EXPECT_EQ(arm_sdk.topics.low_cmd_out, "/arm_sdk");
-  EXPECT_EQ(arm_sdk.topics.low_cmd_upper_in, "/safety/lowcmd_upper_in");
-  EXPECT_DOUBLE_EQ(arm_sdk.arm_sdk.engage_seconds, 1.0);
-  EXPECT_DOUBLE_EQ(arm_sdk.arm_sdk.release_seconds, 3.0);
-  EXPECT_DOUBLE_EQ(arm_sdk.arm_sdk.waist_kp_min, 40.0);
-
-  const SafetyConfig sim = golem_safety::load_safety_config("sim_arm_sdk", g1());
-  EXPECT_DOUBLE_EQ(sim.arm_sdk.release_seconds, 1.0);
+  const SafetyConfig sim = golem_safety::load_safety_config("sim_split", g1());
+  EXPECT_EQ(sim.mode, Mode::Split);
+  EXPECT_EQ(sim.topics.low_cmd_out, "/lowcmd");
   EXPECT_DOUBLE_EQ(sim.engage.max_state_age_seconds, 1.0);
   EXPECT_DOUBLE_EQ(sim.engage.max_position_error, 0.15);
-  EXPECT_DOUBLE_EQ(golem_safety::load_safety_config("sim_split", g1()).stale.lower_seconds, 1.0);
+  EXPECT_DOUBLE_EQ(sim.stale.lower_seconds, 1.0);
+
+  const SafetyConfig full = golem_safety::load_safety_config("full", g1());
+  EXPECT_EQ(full.mode, Mode::FullBody);
+  EXPECT_EQ(full.topics.low_cmd_out, "/lowcmd");
 }
 
 TEST(Config, EveryCarriedConfigLoads)
@@ -591,10 +608,6 @@ TEST(Config, ScalarRangesAreChecked)
     "engage.max_state_age_seconds"));
   EXPECT_TRUE(contains(parse_error("engage: {max_position_error: -1.0}\n", g1()),
     "engage.max_position_error"));
-  EXPECT_TRUE(contains(parse_error("arm_sdk: {engage_seconds: -1.0}\n", g1()),
-    "arm_sdk.engage_seconds"));
-  EXPECT_TRUE(contains(parse_error("arm_sdk: {release_seconds: -1.0}\n", g1()),
-    "arm_sdk.release_seconds"));
   EXPECT_TRUE(contains(parse_error("estop: {timeout_seconds: 0.0}\n", h12()),
     "estop.timeout_seconds"));
   EXPECT_TRUE(contains(parse_error("single_writer: {handover_seconds: -0.1}\n", h12()),
@@ -647,24 +660,6 @@ TEST(Config, EstopResponseDamp)
   const SafetyConfig none = parse("", h12());
   ASSERT_EQ(none.estop_response.kd.size(), 27u);
   EXPECT_DOUBLE_EQ(none.estop_response.kd[0], 0.0);
-}
-
-TEST(Config, WaistKpMinMayNotExceedKpMax)
-{
-  const std::string message =
-    parse_error("arm_sdk: {waist_kp_min: 400.0}\n", g1());
-  EXPECT_TRUE(contains(message, "'arm_sdk.waist_kp_min'")) << message;
-  EXPECT_TRUE(contains(message, "g1")) << message;
-  EXPECT_NO_THROW(parse("arm_sdk: {waist_kp_min: 300.0}\n", g1()));
-
-  // Only arm_sdk_mode uses waist_kp_min, so the other modes do not check it.
-  EXPECT_NO_THROW(
-    parse("mode: split_mode\nlimits:\n  clip: {kp_max: 30.0}\n", g1()));
-  EXPECT_TRUE(
-    contains(
-      parse_error("limits:\n  clip: {kp_max: 30.0}\n", g1()), "'arm_sdk.waist_kp_min'"));
-  EXPECT_TRUE(contains(parse_error("arm_sdk: {waist_kp_min: -1.0}\n", g1()),
-    "arm_sdk.waist_kp_min"));
 }
 
 TEST(Config, RootAndSectionsMustBeMaps)

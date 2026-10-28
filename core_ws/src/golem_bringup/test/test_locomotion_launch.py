@@ -1,7 +1,7 @@
 """
 use_locomotion and config pairing in the bringup.
 
-g1_core refuses unsafe settings and sim/real mixes, picks the split-mode
+g1_core refuses unsafe settings and sim/real mixes, runs the split-mode
 configs, and the real and sim launches pass the interlock on. Needs the
 workspace built and sourced (golem_bringup, g1_description and golem_upper_ik
 installed); skipped without g1_description, which an H1-2 workspace does not
@@ -98,14 +98,10 @@ def _configs(nodes):
 
 
 @pytest.mark.parametrize('args, message', [
-    # the legs need split mode, and the real robot never switches to it by itself
-    (dict(use_locomotion='true', start_position_verified='true'),
-     'drives the legs through golem_safety split mode, '
-     'so it needs safety_config:=split, not arm_sdk'),
+    # the legs need the robot's own split config
     (dict(use_locomotion='true', safety_config='sim_split', start_position_verified='true'),
-     'needs safety_config:=split, not sim_split'),
-    (dict(sim='true', use_locomotion='true', safety_config='sim_arm_sdk'),
-     'needs safety_config:=sim_split, not sim_arm_sdk'),
+     'drives the legs through golem_safety split mode, '
+     'so it needs safety_config:=split, not sim_split'),
     (dict(sim='true', use_locomotion='true', safety_config='split'),
      'needs safety_config:=sim_split, not split'),
     # the real robot's interlock
@@ -120,13 +116,14 @@ def _configs(nodes):
      'locomotion_config:=g1 is for the real robot; use sim'),
     # walking needs the split controller config's stiff waist
     (dict(use_locomotion='true', safety_config='split', start_position_verified='true',
-          controller_config='g1'),
-     'needs controller_config:=g1_split, whose stiff waist the walking policy expects, not g1'),
+          controller_config='custom'),
+     'needs controller_config:=g1_split, whose stiff waist the walking policy expects, '
+     'not custom'),
     (dict(use_locomotion='true', safety_config='split', start_position_verified='true',
           controller_config='sim_split'),
      'needs controller_config:=g1_split, whose stiff waist the walking policy expects, '
      'not sim_split'),
-    (dict(sim='true', use_locomotion='true', controller_config='sim'),
+    (dict(sim='true', use_locomotion='true', controller_config='sim_custom'),
      'needs controller_config:=sim_split'),
 ])
 def test_core_refuses_to_start_walking_unsafely(args, message):
@@ -134,14 +131,14 @@ def test_core_refuses_to_start_walking_unsafely(args, message):
         core._setup(_context(core.generate_launch_description(), **args))
 
 
-def test_core_defaults_are_unchanged():
-    # arm_sdk mode and no walking node, on the real robot and in the sim; the
+def test_core_defaults():
+    # split mode and no walking node, on the real robot and in the sim; the
     # interlock alone starts nothing. The controller config follows the safety
-    # config: split mode holds the waist stiff, walking or not
+    # config
     for args, safety, controller in [
-        (dict(), 'arm_sdk', 'g1'),
-        (dict(start_position_verified='true'), 'arm_sdk', 'g1'),
-        (dict(sim='true'), 'sim_arm_sdk', 'sim'),
+        (dict(), 'split', 'g1_split'),
+        (dict(start_position_verified='true'), 'split', 'g1_split'),
+        (dict(sim='true'), 'sim_split', 'sim_split'),
         (dict(safety_config='split'), 'split', 'g1_split'),
         (dict(sim='true', safety_config='sim_split'), 'sim_split', 'sim_split'),
     ]:
@@ -158,7 +155,7 @@ def test_core_starts_walking_in_split_mode_after_the_controller():
     assert arguments == ['--config', 'g1.yaml']
     assert delay == nodes['frame_task_server'].delay + 2.0 == 4.0
 
-    # the sim switches to sim_split by itself and needs no interlock
+    # the sim needs no interlock
     nodes = _core_nodes(sim='true', use_locomotion='true', locomotion_delay='1.5')
     assert _configs(nodes) == {'safety_node': 'sim_split', 'frame_task_server': 'sim_split'}
     assert nodes['locomotion_node'][:2] == (['--config', 'sim.yaml'], 3.5)
@@ -167,60 +164,41 @@ def test_core_starts_walking_in_split_mode_after_the_controller():
 def test_real_bringup_passes_the_interlock_on():
     passed = _passed_to_core('g1_real_robot.launch.py')
     assert (passed['sim'], passed['safety_config'], passed['use_locomotion'],
-            passed['start_position_verified']) == ('false', 'arm_sdk', 'false', 'false')
-    assert _configs(_core_nodes(**passed))['frame_task_server'] == 'g1'
+            passed['start_position_verified']) == ('false', 'split', 'false', 'false')
+    assert _configs(_core_nodes(**passed))['frame_task_server'] == 'g1_split'
 
-    # use_locomotion alone is refused (arm_sdk mode), and split mode without
-    # start_position_verified too
-    for args, message in [
-        (dict(use_locomotion='true'), 'not arm_sdk'),
-        (dict(use_locomotion='true', safety_config='split'), 'start_position_verified'),
-    ]:
-        with pytest.raises(RuntimeError, match=message):
-            _core_nodes(**_passed_to_core('g1_real_robot.launch.py', **args))
+    # use_locomotion without start_position_verified is refused
+    with pytest.raises(RuntimeError, match='start_position_verified'):
+        _core_nodes(**_passed_to_core('g1_real_robot.launch.py', use_locomotion='true'))
     passed = _passed_to_core('g1_real_robot.launch.py', use_locomotion='true',
-                             safety_config='split', start_position_verified='true')
+                             start_position_verified='true')
     assert passed['start_position_verified'] == 'true'
     assert 'locomotion_node' in _core_nodes(**passed)
 
 
-def test_sim_bringup_switches_to_sim_split_for_walking():
+def test_sim_bringup_runs_sim_split():
     passed = _passed_to_core('g1_sim.launch.py')
     assert (passed['sim'], passed['use_locomotion']) == ('true', 'false')
     nodes = _core_nodes(**passed)
-    assert _configs(nodes) == {'safety_node': 'sim_arm_sdk', 'frame_task_server': 'sim'}
+    assert _configs(nodes) == {'safety_node': 'sim_split', 'frame_task_server': 'sim_split'}
     assert 'locomotion_node' not in nodes
 
     nodes = _core_nodes(**_passed_to_core('g1_sim.launch.py', use_locomotion='true'))
     assert _configs(nodes) == {'safety_node': 'sim_split', 'frame_task_server': 'sim_split'}
     assert nodes['locomotion_node'].arguments == ['--config', 'sim.yaml']
-    with pytest.raises(RuntimeError, match='not sim_arm_sdk'):
-        _core_nodes(**_passed_to_core('g1_sim.launch.py', use_locomotion='true',
-                                      safety_config='sim_arm_sdk'))
 
 
 @pytest.mark.parametrize('args, message', [
     # the real robot never runs a sim config, walking or not
-    (dict(safety_config='sim_arm_sdk'), 'safety config "sim_arm_sdk" is a sim config'),
     (dict(safety_config='sim_split'), 'safety config "sim_split" is a sim config'),
-    (dict(controller_config='sim'), 'controller config "sim" is a sim config'),
-    (dict(safety_config='split', controller_config='sim_split'),
-     'controller config "sim_split" is a sim config'),
+    (dict(controller_config='sim_split'), 'controller config "sim_split" is a sim config'),
     (dict(controller_config='sim_fast'), 'controller config "sim_fast" is a sim config'),
     # nor the sim a real one
-    (dict(sim='true', safety_config='arm_sdk'), 'safety config "arm_sdk" is for the real robot'),
-    (dict(sim='true', controller_config='g1'), 'controller config "g1" is for the real robot'),
+    (dict(sim='true', safety_config='split'), 'safety config "split" is for the real robot'),
+    (dict(sim='true', controller_config='g1_split'),
+     'controller config "g1_split" is for the real robot'),
     # golem_safety must relay the controller's upper-body channel
     (dict(safety_config='full'), 'safety config "full" must relay the upper-body channel'),
-    # each safety config runs with one controller config, walking or not
-    (dict(safety_config='split', controller_config='g1'),
-     'safety config "split" runs with controller config "g1_split", not "g1"'),
-    (dict(controller_config='g1_split'),
-     'safety config "arm_sdk" runs with controller config "g1", not "g1_split"'),
-    (dict(sim='true', safety_config='sim_split', controller_config='sim'),
-     'safety config "sim_split" runs with controller config "sim_split", not "sim"'),
-    (dict(sim='true', controller_config='sim_split'),
-     'safety config "sim_arm_sdk" runs with controller config "sim", not "sim_split"'),
 ])
 def test_core_refuses_config_mixes(args, message):
     with pytest.raises(RuntimeError, match='g1_core: not starting: ' + re.escape(message)):
@@ -228,12 +206,10 @@ def test_core_refuses_config_mixes(args, message):
 
 
 def test_real_bringup_refuses_sim_configs():
-    for safety in ('sim_arm_sdk', 'sim_split'):
-        passed = _passed_to_core('g1_real_robot.launch.py', safety_config=safety)
-        assert passed['sim'] == 'false'
-        with pytest.raises(RuntimeError, match=f'"{safety}" is a sim config'):
-            _core_nodes(**passed)
-    # the real configs still start; split mode runs the stiff split waist even
-    # without the walking node
+    passed = _passed_to_core('g1_real_robot.launch.py', safety_config='sim_split')
+    assert passed['sim'] == 'false'
+    with pytest.raises(RuntimeError, match='"sim_split" is a sim config'):
+        _core_nodes(**passed)
+    # the real config starts, with the stiff split waist even without the walking node
     nodes = _core_nodes(**_passed_to_core('g1_real_robot.launch.py', safety_config='split'))
     assert _configs(nodes) == {'safety_node': 'split', 'frame_task_server': 'g1_split'}

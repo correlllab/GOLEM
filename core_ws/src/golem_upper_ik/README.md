@@ -5,7 +5,7 @@ nodes, both robots, each robot described by a profile:
 
 - `frame_task_server` solves Pink IK on the 14 arm joints, plans with OMPL where the robot
   has a self-collision model, and serves `/frame_task` and `/named_config`. It writes its
-  commands only to a `golem_safety` input (`/safety/...`), never to `/lowcmd` or `/arm_sdk`.
+  commands only to a `golem_safety` input (`/safety/...`), never to `/lowcmd`.
 - `joint_state_publisher` publishes `/joint_states` for the robot's body joints from
   `/lowstate`.
 
@@ -24,14 +24,14 @@ The bringups start both nodes (`golem_bringup`'s `h12_control.launch.py` and
 
 ```bash
 ros2 launch golem_upper_ik upper_ik.launch.py robot:=h12 config:=sim_safety_split use_sim_time:=true
-ros2 run golem_upper_ik frame_task_server --ros-args -p robot:=g1 -p config:=sim
+ros2 run golem_upper_ik frame_task_server --ros-args -p robot:=g1 -p config:=sim_split
 ros2 run golem_upper_ik joint_state_publisher --ros-args -p robot:=h12
 ```
 
 | Parameter | Default | Meaning |
 |---|---|---|
 | `robot` | required | `h12` or `g1` |
-| `config` | the robot's `DEFAULT_CONFIG`: `debug` (H1-2), `g1` (G1) | a controller config name under `share/golem_upper_ik/config/<robot>/` (with or without `.yaml`), or a path; a path in another robot's config directory is refused. `joint_state_publisher` reads only its `topics.low_state` |
+| `config` | the robot's `DEFAULT_CONFIG`: `debug` (H1-2), `g1_split` (G1) | a controller config name under `share/golem_upper_ik/config/<robot>/` (with or without `.yaml`), or a path; a path in another robot's config directory is refused. `joint_state_publisher` reads only its `topics.low_state` |
 
 A node whose robot is missing or unknown, whose config does not load, or whose start-up
 fails logs why (`frame_task_server did not start: ...`, naming the robot and the config once
@@ -81,7 +81,7 @@ a node runs with `robot:=g1`.
 | Self-collision model | `h1_2_magpie_sphere.urdf` + `h1_2_magpie_sphere_collision.srdf` | none: no collision barrier, no planner |
 | Start-up postures | `init_1`, `init_2`, `init_3`, `home` | `home` |
 | Named configurations | `NAMED_CONFIGS` in `robots/h12.py` (`home`, `t_pose`, `prep`, `staging_left`, ...) | `NAMED_CONFIGS` in `robots/g1.py` (`home`, `arms_down`, `t_pose`, `arms_front_45`) |
-| `topics.safety_out` default | `/lowcmd` | `/arm_sdk` |
+| `topics.safety_out` default | `/lowcmd` | `/lowcmd` |
 | `controller.max_state_lag_ms` default | 50 | 0 (off: the real G1's tick has not been measured) |
 
 ## Configs
@@ -92,9 +92,7 @@ a node runs with `robot:=g1`.
 | H1-2 | `sim_safety_split` | `/safety/lowcmd_upper_in` | `sim_safety_split` |
 | H1-2 | `safety_full` | `/safety/lowcmd_in` | `relax_safety_full`, `default_safety_full`, `tight_safety_full`, `locomotion_safety_full` |
 | H1-2 | `debug` | `/safety/lowcmd_in` | none: the default of both nodes, read by `joint_state_publisher` |
-| G1 | `g1` | `/safety/lowcmd_upper_in` | `arm_sdk` |
 | G1 | `g1_split` | `/safety/lowcmd_upper_in` | `split` (a stiff waist, for walking) |
-| G1 | `sim` | `/safety/lowcmd_upper_in` | `sim_arm_sdk` |
 | G1 | `sim_split` | `/safety/lowcmd_upper_in` | `sim_split` |
 
 `golem_upper_ik.pairing` holds these pairs (`H12_SAFETY_CONTROLLER_CONFIGS`,
@@ -102,9 +100,9 @@ a node runs with `robot:=g1`.
 `pairing_refusal(robot, controller, safety, sim, locomotion)` gives the reason a pair must not
 run, and `default_controller_config(robot, safety)` the controller config a safety config
 runs with. On the G1 it also refuses a safety config that does not relay the upper-body
-input (any config outside the four that do, `full` included), sim and real configs mixed
-(told apart by the `sim` prefix of their names), and walking without the split configs. On
-the H1-2 a config outside the tables is not refused.
+input (any config but the two that do, `full` included), sim and real configs mixed (told
+apart by the `sim` prefix of their names), and walking without the split configs. On the
+H1-2 a config outside the tables is not refused.
 
 ### Keys
 
@@ -112,7 +110,7 @@ the H1-2 a config outside the tables is not refused.
 |---|---|---|
 | `topics.low_cmd` | `/safety/lowcmd_upper_in` | the `golem_safety` input written; a topic outside `/safety/` is refused |
 | `topics.low_state` | `/lowstate` | the robot's state |
-| `topics.safety_out` | per robot (above) | `golem_safety`'s output for the follow gate: `/lowcmd`, or `/arm_sdk` on the G1 |
+| `topics.safety_out` | per robot (above) | `golem_safety`'s output for the follow gate: `/lowcmd`, the output of every `golem_safety` mode; another topic is refused |
 | `controller.v_lim`, `w_lim` | 1.0, 2.0 | end-effector linear (m/s) and angular (rad/s) speed limits |
 | `controller.dq_lim` | 1.0 | IK joint speed limit, rad/s |
 | `controller.d_min` | 0.02 | self-collision distance the IK keeps, m |
@@ -150,8 +148,7 @@ out of its range or a value of the wrong kind; an alias given with its key.
    within `controller.startup_timeout`. The error otherwise names what `golem_safety` waits
    for: a `/lowstate` reporting the profile's `mode_machine` (6 or 5), a first estop sample
    with `use_estop:=true`, the paired safety config, no estop latched from an earlier run,
-   and, under the G1's engage gate, every input of the mode (the walking node in split
-   mode).
+   and, under the G1's engage gate, every input of the mode (the walking node too).
 4. Move through the start-up postures, each until the IK's command is within 1e-3 rad of it,
    then step the held joints to `controller.hold_targets` at min(0.3, `dq_lim`) rad/s, all
    within `controller.startup_move_timeout` of the gate opening.
@@ -159,17 +156,15 @@ out of its range or a value of the wrong kind; an alias given with its key.
 A start-up that fails after step 2 sends the shutdown command (Shutdown, below) and the
 node exits 1. On the H1-2 `golem_safety` relays once `/lowstate` reports `mode_machine` 6 (and,
 on the real robot, `estop_node` has sent a first sample), so the gate opens at the first
-relay; on the G1 it opens once `golem_safety`'s engage gate has passed and, in arm_sdk mode,
-the weight has ramped to 1.
+relay; on the G1 it opens once `golem_safety`'s engage gate has passed.
 
 **The follow gate.** Until a `topics.safety_out` sample carries the controller's command on
-every upper slot (kp > 0, each q within `controller.follow_tolerance`; on `/arm_sdk` at a
-weight of at least 0.999), every upper-body command is kept within `follow_tolerance` of the
-measured joints,
-and a thread re-checks at `frequency.check_hz` between control steps. Nothing executes the
-commands before `golem_safety` relays them, so an open-loop move would run away from the
-robot and the robot would jump at the relay. Once open, the gate never moves a command again
-and the subscription is dropped. A planned path is not executed while the gate is shut.
+every upper slot (kp > 0, each q within `controller.follow_tolerance`), every upper-body
+command is kept within `follow_tolerance` of the measured joints, and a thread re-checks at
+`frequency.check_hz` between control steps. Nothing executes the commands before
+`golem_safety` relays them, so an open-loop move would run away from the robot and the robot
+would jump at the relay. Once open, the gate never moves a command again and the
+subscription is dropped. A planned path is not executed while the gate is shut.
 
 **Held joints.** Every command carries the held joints' hold angle (the H1-2's torso, the G1's
 waist), never the q the IK passes for them, so a sagging torso is pulled back. The hold
@@ -228,14 +223,11 @@ command:
 
 - H1-2 (both modes): it relays it, so the torso and the arms go limp, and as a quiet input
   it stays relayed;
-- G1 split mode: it relays it, so the arms go limp while the waist holds, and as a quiet
-  input it stays relayed;
-- G1 arm_sdk mode: it refuses it (the waist kp is below `arm_sdk.waist_kp_min`), latches its
-  estop (`estop_command_written`) and hands the waist and arms back to Unitree over
-  `arm_sdk.release_seconds`.
+- G1: it relays it, so the arms go limp while the waist holds, and as a quiet input it stays
+  relayed.
 
 A controller killed without that command (SIGKILL, a crash) leaves its last command held by
-`golem_safety`, at weight 1 in the G1's arm_sdk mode, until the bringup stops.
+`golem_safety` until the bringup stops.
 
 ## Tests
 

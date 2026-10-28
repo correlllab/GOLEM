@@ -209,20 +209,6 @@ LowState past_estop(const RobotProfile & profile, const SafetyConfig & cfg, int 
   return state;
 }
 
-// G1 arm_sdk, engaged at t = 0 and fed /lowstate every 10 ms until `until`; returns the
-// last command written.
-LowCmd engage_arm_sdk(SafetyCore & core, const LowCmd & upper, double until)
-{
-  std::optional<LowCmd> out;
-  for (int i = 0; i * 0.01 <= until + 1e-9; ++i) {
-    const double t = i * 0.01;
-    core.on_state(state_of(g1()), t);
-    core.on_command(Input::Upper, upper, "upper", t);
-    out = core.step(t);
-  }
-  return *out;
-}
-
 // H1-2 split, both inputs engaged at t = 0: Lower from writer "lower", Upper from "A".
 struct H12Split
 {
@@ -323,30 +309,23 @@ TEST(Relay, UnownedSlotsAreZeroCommand)
   }
   EXPECT_EQ(full_out->reserve, zero.reserve);
 
-  // arm_sdk_mode: Upper owns 12-28; the legs and 30-34 are zero_command's, and slot 29
-  // carries only the weight (0.5 halfway through the 1 s engage ramp).
+  // The G1's split_mode: Lower owns 0-11 and Upper 12-28; 29-34 are no input's.
   const LowCmd g1_zero = golem_safety::zero_command(g1());
-  SafetyCore arm_sdk(g1(), config(g1(), "sim_arm_sdk"), false, kDomain);
-  arm_sdk.on_state(state_of(g1()), 0.0);
-  LowCmd arm = command(g1());
-  fill_junk(arm, 0, 11);
-  fill_junk(arm, 29, 34);
-  arm_sdk.on_command(Input::Upper, arm, "upper", 0.0);
-  arm_sdk.on_state(state_of(g1()), 0.5);
-  const auto arm_out = arm_sdk.step(0.5);
-  ASSERT_TRUE(arm_out);
-  for (int slot = 0; slot <= 11; ++slot) {
-    EXPECT_EQ(arm_out->motor_cmd[slot], g1_zero.motor_cmd[slot]) << "slot " << slot;
+  SafetyCore g1_split(g1(), config(g1(), "sim_split"), false, kDomain);
+  g1_split.on_state(state_of(g1()), 0.0);
+  LowCmd g1_lower = command(g1());
+  fill_junk(g1_lower, 29, 34);
+  LowCmd g1_upper = command(g1());
+  fill_junk(g1_upper, 29, 34);
+  g1_split.on_command(Input::Lower, g1_lower, "lower", 0.001);
+  g1_split.on_command(Input::Upper, g1_upper, "upper", 0.001);
+  const auto g1_out = g1_split.step(0.002);
+  ASSERT_TRUE(g1_out);
+  for (int slot = 29; slot <= 34; ++slot) {
+    EXPECT_EQ(g1_out->motor_cmd[slot], g1_zero.motor_cmd[slot]) << "slot " << slot;
   }
-  for (int slot = 30; slot <= 34; ++slot) {
-    EXPECT_EQ(arm_out->motor_cmd[slot], g1_zero.motor_cmd[slot]) << "slot " << slot;
-  }
-  auto weight_slot = arm_out->motor_cmd[29];
-  EXPECT_NEAR(weight_slot.q, 0.5, 1e-6);
-  weight_slot.q = 0.0F;
-  EXPECT_EQ(weight_slot, g1_zero.motor_cmd[29]);
-  EXPECT_EQ(arm_out->reserve, g1_zero.reserve);
-  expect_stamped(*arm_out, g1());
+  EXPECT_EQ(g1_out->reserve, g1_zero.reserve);
+  expect_stamped(*g1_out, g1());
 }
 
 TEST(Clip, PositionVelocityTorqueAndGains)
@@ -470,7 +449,7 @@ TEST(Clip, NonFiniteSampleLatches)
     {h12(), "sim_safety_split", Input::Lower, "/safety/lowcmd_lower_in", 26},
     {h12(), "default_safety_full", Input::Full, "/safety/lowcmd_in", 26},
     {g1(), "sim_split", Input::Upper, "/safety/lowcmd_upper_in", 3},
-    {g1(), "sim_arm_sdk", Input::Upper, "/safety/lowcmd_upper_in", 28},
+    {g1(), "sim_split", Input::Upper, "/safety/lowcmd_upper_in", 28},
     {g1(), "full", Input::Full, "/safety/lowcmd_in", 28},
   };
   for (const Case & c : cases) {
@@ -515,17 +494,18 @@ TEST(Clip, NonFiniteFirstSampleLatches)
   expect_same(*core.step(0.004), golem_safety::estop_command(h12(), cfg, *out));
 
   // engage_gate: the latch comes before engaging, so nothing is ever written.
-  SafetyCore arm_sdk(g1(), config(g1(), "sim_arm_sdk"), false, kDomain);
-  arm_sdk.on_state(state_of(g1()), 0.0);
+  SafetyCore g1_core(g1(), config(g1(), "sim_split"), false, kDomain);
+  g1_core.on_state(state_of(g1()), 0.0);
   LowCmd g1_bad = command(g1());
   g1_bad.motor_cmd[20].dq = std::numeric_limits<float>::infinity();
-  arm_sdk.on_command(Input::Upper, g1_bad, "upper", 0.001);
-  ASSERT_TRUE(arm_sdk.estopped());
-  arm_sdk.on_command(Input::Upper, command(g1()), "upper", 0.002);
+  g1_core.on_command(Input::Upper, g1_bad, "upper", 0.001);
+  ASSERT_TRUE(g1_core.estopped());
+  g1_core.on_command(Input::Lower, command(g1()), "lower", 0.002);
+  g1_core.on_command(Input::Upper, command(g1()), "upper", 0.002);
   for (int i = 0; i < 100; ++i) {
-    EXPECT_FALSE(arm_sdk.step(0.003 + i * kDt));
+    EXPECT_FALSE(g1_core.step(0.003 + i * kDt));
   }
-  const auto events = arm_sdk.drain_events();
+  const auto events = g1_core.drain_events();
   EXPECT_TRUE(has_event(events, Event::Error, "estop_latched_silent")) << texts(events);
 }
 
@@ -587,22 +567,21 @@ TEST(Limits, MeasuredPastEstopLatches)
   }
 }
 
-TEST(Limits, EngageGateChecksOnlyEngagedSlotsOnceEngaged)
+TEST(Limits, EngageGateChecksFromEngagement)
 {
-  const SafetyConfig cfg = config(g1(), "sim_arm_sdk");
+  const SafetyConfig cfg = config(g1(), "sim_split");
   SafetyCore core(g1(), cfg, false, kDomain);
   // Before engaging a joint past its estop range is not ours to guard.
   core.on_state(past_estop(g1(), cfg, 20), 0.0);
   EXPECT_FALSE(core.estopped());
   core.on_state(state_of(g1()), 0.01);
+  core.on_command(Input::Lower, command(g1()), "lower", 0.02);
   core.on_command(Input::Upper, command(g1()), "upper", 0.02);
   ASSERT_TRUE(core.step(0.02));
-  // arm_sdk_mode guards the waist and arms only: the legs are Unitree's.
+  // Once engaged, split_mode guards every body slot, the legs included.
   core.on_state(past_estop(g1(), cfg, 3), 0.03);
-  EXPECT_FALSE(core.estopped());
-  core.on_state(past_estop(g1(), cfg, 20), 0.04);
   ASSERT_TRUE(core.estopped());
-  EXPECT_TRUE(contains(core.estop_reason(), "left_wrist_pitch_joint")) << core.estop_reason();
+  EXPECT_TRUE(contains(core.estop_reason(), "left_knee_joint")) << core.estop_reason();
 }
 
 TEST(Identity, ForeignSampleAfterEngageLatches)
@@ -780,86 +759,6 @@ TEST(Estop, SilentWhenNeverEngaged)
   EXPECT_TRUE(has_event(events, Event::Error, "estop_latched_silent")) << texts(events);
 }
 
-TEST(Estop, ArmSdkReleaseRamp)
-{
-  const SafetyConfig cfg = config(g1(), "sim_arm_sdk");
-  ASSERT_EQ(cfg.arm_sdk.release_seconds, 1.0);
-  const LowCmd zero = golem_safety::zero_command(g1());
-  SafetyCore core(g1(), cfg, false, kDomain);
-  LowCmd upper = command(g1());
-  upper.motor_cmd[20].q = 0.05F;
-  const LowCmd last = engage_arm_sdk(core, upper, 1.5);
-  ASSERT_EQ(last.motor_cmd[29].q, 1.0F);
-
-  core.on_state(past_estop(g1(), cfg, 20), 1.505);
-  ASSERT_TRUE(core.estopped());
-  const double start = 1.51;
-  for (int i = 0; i <= 300; ++i) {
-    const double t = start + i * 0.01;
-    SCOPED_TRACE("t = " + std::to_string(t));
-    core.on_state(state_of(g1()), t);
-    const auto out = core.step(t);
-    ASSERT_TRUE(out);
-    const double expected = std::max(0.0, 1.0 - (t - start) / cfg.arm_sdk.release_seconds);
-    EXPECT_NEAR(out->motor_cmd[29].q, expected, 1e-6);
-    if (t > start + cfg.arm_sdk.release_seconds + 1e-9) {
-      EXPECT_EQ(out->motor_cmd[29].q, 0.0F);
-    }
-    for (int slot = 12; slot <= 28; ++slot) {
-      ASSERT_EQ(out->motor_cmd[slot], last.motor_cmd[slot]) << "slot " << slot;
-    }
-    for (int slot = 0; slot <= 11; ++slot) {
-      ASSERT_EQ(out->motor_cmd[slot], zero.motor_cmd[slot]) << "slot " << slot;
-    }
-    expect_stamped(*out, g1());
-  }
-  const auto events = core.drain_events();
-  EXPECT_TRUE(has_event(events, Event::Error, "estop_command_written")) << texts(events);
-}
-
-TEST(Estop, ArmSdkReleaseWaitsForLowstate)
-{
-  SafetyConfig cfg = config(g1(), "sim_arm_sdk");
-  cfg.stale.state_seconds = 0.1;
-  SafetyCore core(g1(), cfg, false, kDomain);
-  engage_arm_sdk(core, command(g1()), 1.5);
-  core.on_state(past_estop(g1(), cfg, 20), 1.505);
-  ASSERT_TRUE(core.estopped());
-  core.drain_events();
-
-  // /lowstate stops: the ramp runs while the last one (t = 1.505) is at most 0.1 s old,
-  // then holds.
-  float held = 0.0F;
-  for (int i = 1; i <= 50; ++i) {
-    const double t = 1.5 + i * 0.01;
-    const auto out = core.step(t);
-    ASSERT_TRUE(out);
-    if (i <= 10) {
-      EXPECT_NEAR(out->motor_cmd[29].q, 1.0 - (t - 1.51), 1e-6) << "t = " << t;
-      held = out->motor_cmd[29].q;
-    } else {
-      EXPECT_EQ(out->motor_cmd[29].q, held) << "t = " << t;
-    }
-  }
-  EXPECT_NEAR(held, 0.91, 1e-6);
-  auto events = core.drain_events();
-  EXPECT_TRUE(has_event(events, Event::Warn, "held")) << texts(events);
-
-  // /lowstate flows again: the ramp goes on from where it held, within one step.
-  core.on_state(state_of(g1()), 2.0);
-  auto out = core.step(2.0);
-  ASSERT_TRUE(out);
-  const float resumed = out->motor_cmd[29].q;
-  EXPECT_NEAR(resumed, held, 0.0101);
-  EXPECT_LE(resumed, held);
-  core.on_state(state_of(g1()), 2.1);
-  out = core.step(2.1);
-  ASSERT_TRUE(out);
-  EXPECT_NEAR(out->motor_cmd[29].q, resumed - 0.1, 1e-6);
-  events = core.drain_events();
-  EXPECT_TRUE(has_event(events, Event::Info, "arm_sdk_release_ramping")) << texts(events);
-}
-
 TEST(EstopInput, TriggeredOrUnpluggedLatchesWithUseEstop)
 {
   const SafetyConfig cfg = config(h12(), "sim_safety_split");
@@ -929,43 +828,6 @@ TEST(ExitStep, FullAndSplitAreDoneAtOnce)
   }
 }
 
-TEST(ExitStep, ArmSdkRampsWeightToZero)
-{
-  const SafetyConfig cfg = config(g1(), "sim_arm_sdk");
-  SafetyCore core(g1(), cfg, false, kDomain);
-  const LowCmd last = engage_arm_sdk(core, command(g1()), 1.5);
-  ASSERT_EQ(last.motor_cmd[29].q, 1.0F);
-
-  // No /lowstate during the exit: the ramp runs anyway, and weight 0 is then held for
-  // 0.1 s.
-  const double start = 1.51;
-  std::optional<LowCmd> out;
-  int written = 0;
-  for (int i = 0; i < 1000; ++i) {
-    out = core.exit_step(start + i * 0.01);
-    if (!out) {
-      break;
-    }
-    ++written;
-    const double t = start + i * 0.01;
-    EXPECT_NEAR(
-      out->motor_cmd[29].q, std::max(0.0, 1.0 - (t - start) / cfg.arm_sdk.release_seconds),
-      1e-6);
-    EXPECT_EQ(out->motor_cmd[20], last.motor_cmd[20]);
-  }
-  EXPECT_FALSE(out);
-  // 101 or 102 ramp commands (the last ramp step can round to just above 0), then 10 or
-  // 11 more at weight 0.
-  EXPECT_GE(written, 111);
-  EXPECT_LE(written, 113);
-  EXPECT_FALSE(core.estopped());
-
-  // Never engaged: done at once.
-  SafetyCore idle(g1(), cfg, false, kDomain);
-  idle.on_state(state_of(g1()), 0.0);
-  EXPECT_FALSE(idle.exit_step(0.01));
-}
-
 TEST(Log, OneSamplePerLowstateOnTheBodySlots)
 {
   SafetyConfig cfg = config(h12(), "sim_safety_split");
@@ -1027,10 +889,6 @@ TEST(Events, GainClippedIsTheOldJson)
     std::string text;
   };
   const std::vector<Case> cases = {
-    // the old G1 test's case (test_hardening_dds.py)
-    {g1(), "sim_arm_sdk", Input::Upper, 15, "kp", 300.0F,
-      "{\"commanded\": 300.0, \"event\": \"gain_clipped\", \"gain\": \"kp\", "
-      "\"joint\": \"left_shoulder_pitch_joint\", \"max\": 200.0, \"source\": \"arm_sdk_mode\"}"},
     {g1(), "sim_split", Input::Upper, 20, "kp", 300.1F,
       "{\"commanded\": 300.1000061035156, \"event\": \"gain_clipped\", \"gain\": \"kp\", "
       "\"joint\": \"left_wrist_pitch_joint\", \"max\": 200.0, \"source\": \"split_mode_upper\"}"},
@@ -1066,58 +924,6 @@ TEST(Events, GainClippedIsTheOldJson)
     EXPECT_EQ(e["gain"].as<std::string>(), c.gain);
     EXPECT_EQ(e["joint"].as<std::string>(), c.profile.joints[c.slot].name);
   }
-}
-
-TEST(Events, ArmSdkReleaseEventsAreTheOldJson)
-{
-  SafetyConfig cfg = config(g1(), "sim_arm_sdk");
-  cfg.stale.state_seconds = 0.1;
-  SafetyCore core(g1(), cfg, false, kDomain);
-  engage_arm_sdk(core, command(g1()), 1.5);
-  core.on_state(past_estop(g1(), cfg, 20), 1.505);
-  ASSERT_TRUE(core.estopped());
-  core.drain_events();
-
-  // The ramp runs from t = 1.51, holds once /lowstate is over 0.1 s old, and runs again
-  // when it flows; the estop report comes first, as the old layers logged it.
-  for (int i = 1; i <= 50; ++i) {
-    ASSERT_TRUE(core.step(1.5 + i * 0.01));
-  }
-  auto events = core.drain_events();
-  std::vector<std::string> sequence;
-  for (const auto & event : events) {
-    if (!event.text.empty() && event.text[0] == '{') {
-      sequence.push_back(YAML::Load(event.text)["event"].as<std::string>());
-    }
-  }
-  EXPECT_EQ(
-    sequence, (std::vector<std::string>{
-    "estop_command_written", "arm_sdk_release_ramping", "arm_sdk_release_held"})) <<
-    texts(events);
-  const auto ramping = named(events, "arm_sdk_release_ramping");
-  const auto held = named(events, "arm_sdk_release_held");
-  ASSERT_EQ(ramping.size(), 1U);
-  ASSERT_EQ(held.size(), 1U);
-  EXPECT_EQ(ramping[0].first.kind, Event::Info);
-  EXPECT_EQ(
-    ramping[0].first.text,
-    "{\"event\": \"arm_sdk_release_ramping\", \"state_age\": 0.005, \"weight\": 1.0}");
-  EXPECT_EQ(held[0].first.kind, Event::Warn);
-  EXPECT_EQ(
-    held[0].first.text,
-    "{\"event\": \"arm_sdk_release_held\", \"state_age\": 0.105, \"weight\": 0.91}");
-  for (const YAML::Node * node : {&ramping[0].second, &held[0].second}) {
-    EXPECT_EQ(keys_of(*node), (std::vector<std::string>{"event", "state_age", "weight"}));
-  }
-
-  core.on_state(state_of(g1()), 2.0);
-  ASSERT_TRUE(core.step(2.0));
-  const auto resumed = named(core.drain_events(), "arm_sdk_release_ramping");
-  ASSERT_EQ(resumed.size(), 1U);
-  EXPECT_EQ(
-    resumed[0].first.text,
-    "{\"event\": \"arm_sdk_release_ramping\", \"state_age\": 0.0, \"weight\": 0.91}");
-  EXPECT_EQ(resumed[0].second["weight"].as<double>(), 0.91);
 }
 
 TEST(Events, EstopReportIsTheOldJsonAfterTheCommand)

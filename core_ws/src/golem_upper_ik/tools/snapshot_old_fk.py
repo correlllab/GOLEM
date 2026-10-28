@@ -18,7 +18,6 @@ seed, it writes test/fixtures/fk_<robot>.json:
   gravity         RobotDynamics.get_gravity_compensation(q, imu_quat), N*m per body joint
   twist           per end effector, RobotDynamics.compute_frame_twist(frame, dq) with the
                   measured state at q: (vx, vy, vz, wx, wy, wz)
-  com             RobotDynamics.get_com(q), m
   collision_free_reduced
                   (h12 only: the G1 has no self-collision model) whether the reduced model
                   at q's IK joints is free of self-collision
@@ -123,7 +122,6 @@ def snapshot(old):
         'reduced_frames': {frame: [] for frame in frames},
         'full_q': [], 'gravity': [],
         'twist': {frame: [] for frame in old['ee_frames']},
-        'com': [],
     }
     if old['collision']:
         data['collision_free_reduced'] = []
@@ -145,7 +143,6 @@ def snapshot(old):
         model._q = q.copy()  # compute_frame_twist takes q from the measured state
         for frame in old['ee_frames']:
             data['twist'][frame].append(floats(model.dynamics.compute_frame_twist(frame, dq)))
-        data['com'].append(floats(model.dynamics.get_com(q)))
         if old['collision']:
             data['collision_free_reduced'].append(
                 bool(model.check_collision_free_reduced(q[model.reduced_mask])))

@@ -65,14 +65,6 @@ CLIP_DEFAULTS = {
     'velocity_ratio': 0.10,
     'torque_ratio': 0.25,
 }
-LOGGING_DEFAULTS = {
-    'enabled': False,
-    'base_dir': 'data/control_record',
-    'filename': 'record',
-    'record_interval': 1.0,  # s
-}
-# logging keys and the older spelling each also takes; giving both is an error
-LOGGING_ALIASES = {'base_dir': 'save_path', 'filename': 'save_filename'}
 # The planner section's keys, by kind: the fields of the H1-2 planner's PlannerConfig, and
 # enabled. The loader checks the keys a file gives and fills in only enabled (true) and
 # frame_names (the profile's planner frames); PlannerConfig supplies every other default.
@@ -107,7 +99,6 @@ SECTION_KEYS = {
     'frequency': frozenset(FREQUENCY_DEFAULTS),
     'gains': frozenset(('kp', 'kd', 'ki')),
     'limits': frozenset(('clip', 'enforce')),
-    'logging': frozenset(LOGGING_DEFAULTS) | frozenset(LOGGING_ALIASES.values()),
 }
 # What the error says about a key an older config may still carry
 REPLACED_KEYS = {
@@ -407,23 +398,6 @@ def load_controller_config(robot: str, name_or_path: str) -> dict:
     frequency = {key: _positive(where, f'frequency.{key}', frequency_raw.get(key, default))
                  for key, default in FREQUENCY_DEFAULTS.items()}
 
-    logging_raw = sections['logging']
-    for key, alias in LOGGING_ALIASES.items():
-        if key in logging_raw and alias in logging_raw:
-            raise where.error(f'logging.{alias}', f'give logging.{key} or logging.{alias}, '
-                                                  'not both')
-    logging = {
-        'enabled': _boolean(where, 'logging.enabled',
-                            logging_raw.get('enabled', LOGGING_DEFAULTS['enabled'])),
-        'record_interval': _positive(
-            where, 'logging.record_interval',
-            logging_raw.get('record_interval', LOGGING_DEFAULTS['record_interval'])),
-    }
-    for key, alias in LOGGING_ALIASES.items():
-        given = key if key in logging_raw else alias
-        logging[key] = _text(where, f'logging.{given}',
-                             logging_raw.get(given, LOGGING_DEFAULTS[key]))
-
     return {
         'robot': robot,
         'source': path,
@@ -433,5 +407,4 @@ def load_controller_config(robot: str, name_or_path: str) -> dict:
         'frequency': frequency,
         'gains': _gains(where, sections['gains'], profile),
         'limits': _clip_limits(where, sections['limits'], profile),
-        'logging': {key: logging[key] for key in LOGGING_DEFAULTS},
     }

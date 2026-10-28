@@ -72,12 +72,15 @@ def test_check_fresh_raises_when_stale(ros):
 
     robot = FakeRobot(ros, profile)
     assert wait_for(lambda: robot.publish() or subscriber.latest() is not None, 2.0)
+    # the discovery loop above may still have a sample on its way; one writer's samples
+    # arrive in order, so once this one is the newest none is left to come
+    robot.publish(tick=9000)
+    assert wait_for(lambda: subscriber.latest()[0].tick == 9000, 2.0)
     subscriber.check_fresh(0.1)
-    time.sleep(0.3)
-    with pytest.raises(StaleStateError, match=r'/lowstate is 0\.[3-9][0-9]* s old'):
+    time.sleep(0.35)
+    with pytest.raises(StaleStateError, match=r'/lowstate is 0\.(3[5-9]|[4-9])[0-9]* s old'):
         subscriber.check_fresh(0.1)
-    # time.sleep may return a few hundredths of a ms short on the monotonic clock
-    assert subscriber.staleness_ms >= 290.0
+    assert subscriber.staleness_ms >= 350.0
     assert issubclass(StaleStateError, RuntimeError)
 
 
@@ -197,16 +200,33 @@ def test_state_subscriber_shutdown_stops_taking_samples(ros):
     assert wait_for(lambda: not node.get_subscriptions_info_by_topic('/lowstate'), 2.0)
 
 
-def test_command_publisher_rate():
+def measure_rate(*flags):
+    '''The receive-side JSON of tools/command_publisher_rate.py at 500 Hz for 3 s'''
     env = dict(os.environ, ROS_DOMAIN_ID=str(TEST_DOMAIN))
     done = subprocess.run(
-        [sys.executable, str(RATE_TOOL), '--rate', '500', '--seconds', '3'],
+        [sys.executable, str(RATE_TOOL), '--rate', '500', '--seconds', '3', *flags],
         env=env, capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stderr
     stats = json.loads(done.stdout.strip().splitlines()[-1])
     print(json.dumps(stats))
     print(done.stderr.strip().splitlines()[-1])
+    return stats
+
+
+def test_command_publisher_rate():
+    stats = measure_rate()
     assert stats['mean_hz'] >= 495, stats
+    assert stats['p99_period_ms'] <= 4.0, stats
+    assert stats['max_gap_ms'] <= 20.0, stats
+
+
+def test_command_publisher_rate_with_the_gate_thread():
+    '''LowCmdHandler with its follow gate shut: the 1 kHz gate check runs beside the publisher'''
+    stats = measure_rate('--gate')
+    assert stats['gate_shut'] is True, stats
+    assert stats['mean_hz'] >= 495, stats
+    assert stats['p99_period_ms'] <= 4.0, stats
+    assert stats['max_gap_ms'] <= 20.0, stats
 
 
 @pytest.mark.parametrize('robot, mode_machine', [('h12', 6), ('g1', 5)])

@@ -1,7 +1,6 @@
 '''
 RobotDynamics: dynamics on a RobotModel's free-flyer model: the gravity-compensation
-torques the controller sends as feed-forward, the end-effector twists its speed limits use,
-and the centre of mass its recordings log.
+torques the controller sends as feed-forward and the end-effector twists its speed limits use.
 
 Every q, dq and tau here is per body joint, in /lowcmd slot order; the free-flyer's base
 coordinates are added and stripped by RobotModel.full_q and full_v.
@@ -19,13 +18,6 @@ FREEFLYER_QUAT = slice(3, 7)  # x, y, z, w
 class RobotDynamics:
     def __init__(self, robot_model):
         self.robot_model = robot_model
-
-    def get_com(self, q: np.ndarray=None):
-        robot = self.robot_model
-        q = robot.state['q'] if q is None else q
-        q_full = robot.full_q(q)
-        com = pin.centerOfMass(robot.model, robot.data, q_full)
-        return com
 
     def get_gravity_compensation(self, q: np.ndarray=None, imu_quat=None):
         robot = self.robot_model

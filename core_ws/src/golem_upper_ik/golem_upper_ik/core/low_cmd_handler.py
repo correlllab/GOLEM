@@ -2,7 +2,8 @@
 LowCmdHandler: the controller's command, kept for every body joint and published on the
 profile's upper slots to golem_safety's input (topics.low_cmd) by a CommandPublisher.
 
-- Clipping: every q, dq and tau is clipped to the controller config's limits.clip.
+- Clipping: every q, dq and tau is clipped to the controller config's limits.clip, the q
+  again after the follow gate, so every published q is within the clip limits.
 - Held joints (profile.held_joints: the H1-2's torso, the G1's waist): every command carries
   their hold angles, never the q the controller passes for them. start() sets the hold at the
   measured angles; it moves only through set_hold(), and controller.hold_targets is where the
@@ -12,14 +13,14 @@ profile's upper slots to golem_safety's input (topics.low_cmd) by a CommandPubli
   the measured joints, and the hold restarts from the command the gate let through. Between
   control steps a thread re-checks at frequency.check_hz: it opens the gate on a relayed
   sample and keeps the stored command near a drifting pose. Once open, the gate and its
-  thread are gone for good.
+  thread are gone for good. The measured joints are the robot model's state source; without
+  one (detached, or before its first sample) nothing is gated: a call that needs the measured
+  pose raises StaleStateError, and the gate thread stops, leaving the last command standing.
 - No estop: golem_safety's limits and estop are the check. A measured state past a limit
   changes nothing here.
 - shutdown() sends the upper slots mode 0 with zero gains and torque, then stops publishing.
-- Recording: start_recording() saves the measured and commanded state of the given joints to
-  an .npz, rewritten every record_interval s.
 '''
-import os
+import math
 import threading
 import time
 from typing import List, Optional
@@ -28,7 +29,7 @@ import numpy as np
 
 from golem_upper_ik.config import SAFETY_OUTPUT_TOPICS
 from golem_upper_ik.core.follow_gate import FollowGate, relays_commands
-from golem_upper_ik.core.ros_io import CommandPublisher, SafetyOutputSubscriber
+from golem_upper_ik.core.ros_io import CommandPublisher, SafetyOutputSubscriber, StaleStateError
 from golem_upper_ik.profile import RobotProfile
 
 __all__ = ['LowCmdHandler']
@@ -40,9 +41,8 @@ class LowCmdHandler:
         node: the ROS node the publisher and the safety-output subscriber live on
         profile: the robot's profile
         config: its controller config (golem_upper_ik.config.load_controller_config)
-        robot_model: the RobotModel whose state is the measured state (the follow gate,
-            start() and the recording read it) and whose dynamics give the recorded centre
-            of mass
+        robot_model: the RobotModel whose state source gives the measured state, which the
+            follow gate and start() read
         '''
         for what, robot in (('controller config', config['robot']),
                             ('robot model', robot_model.profile.robot)):
@@ -91,17 +91,6 @@ class LowCmdHandler:
         self._gate_stop = threading.Event()
         self._gate_thread = None
         self._safety_output_lock = threading.Lock()
-
-        self._recording = False
-        self._record_lock = threading.Lock()
-        self._com_arr = []
-        self._q_arr = []
-        self._dq_arr = []
-        self._tau_arr = []
-        self._q_cmd_arr = []
-        self._dq_cmd_arr = []
-        self._tau_cmd_arr = []
-        self._torque_cmd_arr = []
 
         self._publisher = CommandPublisher(
             node, config['topics']['low_cmd'], config['frequency']['pub_hz'], profile)
@@ -173,7 +162,17 @@ class LowCmdHandler:
             raise RuntimeError(f'the follow gate check failed: {self._gate_error!r}')
 
     def _measured_q(self):
-        return np.asarray(self._robot_model.state['q'], dtype=np.float64)
+        '''
+        The measured q, from the robot model's state source. StaleStateError without a
+        source, or before its first sample: RobotModel then reports the all-zero rest pose,
+        and gating toward it would pull every command toward q = 0
+        '''
+        source = self._robot_model.state_subscriber
+        if source is None:
+            raise StaleStateError('no measured state: the robot model has no state source')
+        if not math.isfinite(source.staleness_ms):
+            raise StaleStateError('no measured state: the state source has no sample yet')
+        return np.asarray(source.state['q'], dtype=np.float64)
 
     def _push_locked(self):
         upper = self._upper
@@ -183,12 +182,12 @@ class LowCmdHandler:
     def _commit_locked(self, q, dq, tau, measured_q):
         '''
         Store and publish q, dq and tau (float64, every body joint, the held joints at their
-        hold). While the follow gate is shut, q is first held near measured_q and the hold
-        restarts from what it let through; nothing is stored if the result is not finite
+        hold). While the follow gate is shut, q is first held near measured_q, clipped again,
+        and the hold restarts from the result; nothing is stored if it is not finite
         '''
         gated = measured_q is not None and not self._follow_gate.following
         if gated:
-            q = self._follow_gate.limit(q, measured_q)
+            q = self._clip_q(self._follow_gate.limit(q, measured_q))
             if not np.all(np.isfinite(q)):
                 raise ValueError('the measured q is not finite, so the follow gate cannot '
                                  'bound the command; the last command stands')
@@ -231,14 +230,15 @@ class LowCmdHandler:
         '''
         Set the command of every body joint, or of joint_ids, atomically: clipped, the held
         joints at their hold, and, while the follow gate is shut and q is given, held near
-        the measured pose. A held joint in joint_ids, or a non-finite value, raises ValueError
-        and changes nothing
+        the measured pose. A q for a held joint named in joint_ids, or a non-finite value,
+        raises ValueError and changes nothing; without a measured pose to gate a q against,
+        StaleStateError
         '''
         self._check_running()
         if joint_ids is not None:
             joint_ids = np.asarray(joint_ids, dtype=np.int64).reshape(-1)
             held = sorted(set(joint_ids.tolist()) & set(self._held.tolist()))
-            if held:
+            if held and q is not None:
                 names = ', '.join(self._profile.body_joints[slot] for slot in held)
                 raise ValueError(f'{names}: held joints move only through set_hold')
         count = self._count if joint_ids is None else len(joint_ids)
@@ -261,10 +261,6 @@ class LowCmdHandler:
             if 'tau' in given:
                 new_tau[ids] = self._clip_tau(given['tau'], joint_ids)
             self._commit_locked(new_q, new_dq, new_tau, measured_q)
-
-        # record state if recording is enabled
-        if self._recording:
-            self._record_state()
 
     def set_hold(self, q_held):
         '''
@@ -300,14 +296,16 @@ class LowCmdHandler:
                 measured_q = self._measured_q()
                 with self._data_lock:
                     if not (self._shut_down or self._follow_gate.following):
-                        gated = self._follow_gate.limit(self._q, measured_q)
+                        gated = self._clip_q(self._follow_gate.limit(self._q, measured_q))
                         # a non-finite measured pose leaves the last command standing
                         if np.all(np.isfinite(gated)) and not np.array_equal(
                                 gated.astype(np.float32), self._q):
                             self._q[:] = gated
                             self._push_locked()
                 time.sleep(max(0.0, self._check_dt - (time.monotonic() - start)))
-        except Exception as error:  # set_joint_commands raises it from now on
+        except Exception as error:
+            # nothing is written after an error: the last command stands, and
+            # set_joint_commands raises the error from now on
             self._gate_error = error
             self._node.get_logger().error(f'the follow gate check failed: {error!r}')
             return
@@ -342,7 +340,11 @@ class LowCmdHandler:
     def shutdown(self):
         '''
         Send the upper slots mode 0 with zero gains and torque (q and dq as they were), make
-        sure that command went out, and stop publishing
+        sure that command went out, and stop publishing.
+
+        Call it before the robot model's state source is detached (RobotModel.shutdown()):
+        while the follow gate is shut, a detached source stops the gate's check with an error
+        rather than gating toward the model's all-zero rest pose
         '''
         with self._data_lock:
             if self._shut_down:
@@ -363,98 +365,3 @@ class LowCmdHandler:
                                         self._kp[upper], self._kd[upper], enabled=False)
         finally:
             self._publisher.stop()
-
-    def start_recording(self, ids, save_path, filename, record_interval=1.0):
-        '''Start recording with background saving'''
-        self._recording = True
-        self._record_ids = ids
-        self._record_path = save_path
-        self._record_filename = filename
-        self._record_interval = record_interval
-        # start recording thread
-        threading.Thread(
-            target=self._save_recording,
-            name='save_recording_thread',
-            daemon=True
-        ).start()
-
-    def stop_recording(self):
-        '''Stop recording'''
-        if self._recording:
-            self._recording = False
-            self._node.get_logger().info(
-                f'Recording stopped; data saved to {self._record_path}/'
-                f'{self._record_filename}.npz')
-
-    def clear_recording(self):
-        with self._record_lock:
-            self._com_arr = []
-            self._q_arr = []
-            self._dq_arr = []
-            self._tau_arr = []
-            self._q_cmd_arr = []
-            self._dq_cmd_arr = []
-            self._tau_cmd_arr = []
-            self._torque_cmd_arr = []
-
-    def _record_state(self):
-        if self._recording:
-            # record center of mass
-            com = self._robot_model.dynamics.get_com()
-            # get values for the recorded joints only
-            state = self._robot_model.state
-            q = state['q'][self._record_ids]
-            dq = state['dq'][self._record_ids]
-            tau = state['tau'][self._record_ids]
-            with self._data_lock:
-                q_cmd = self._q[self._record_ids]
-                dq_cmd = self._dq[self._record_ids]
-                tau_cmd = self._tau[self._record_ids]
-                kp = self._kp[self._record_ids]
-                kd = self._kd[self._record_ids]
-            # record with thread-safe access
-            with self._record_lock:
-                self._com_arr.append(com)
-                self._q_arr.append(q)
-                self._dq_arr.append(dq)
-                self._tau_arr.append(tau)
-                self._q_cmd_arr.append(q_cmd)
-                self._dq_cmd_arr.append(dq_cmd)
-                self._tau_cmd_arr.append(tau_cmd)
-                self._torque_cmd_arr.append(
-                    tau_cmd + kp * (q_cmd - q) + kd * (dq_cmd - dq)
-                )
-
-    def _save_recording(self):
-        '''Background worker thread for constant saving'''
-        while self._recording:
-            start_time = time.time()
-            try:
-                filename = f'{self._record_path}/{self._record_filename}.npz'
-                os.makedirs(os.path.dirname(filename), exist_ok=True)
-                # acquire lock to save copy of the arrays
-                with self._record_lock:
-                    # create copies of the arrays for safe access outside the lock
-                    com = np.array(self._com_arr)
-                    q = np.array(self._q_arr)
-                    dq = np.array(self._dq_arr)
-                    tau = np.array(self._tau_arr)
-                    q_cmd = np.array(self._q_cmd_arr)
-                    dq_cmd = np.array(self._dq_cmd_arr)
-                    tau_cmd = np.array(self._tau_cmd_arr)
-                    torque_cmd = np.array(self._torque_cmd_arr)
-                # save to the file
-                np.savez(filename,
-                         ids=np.array(self._record_ids),
-                         com=com,
-                         q=q,
-                         dq=dq,
-                         tau=tau,
-                         q_cmd=q_cmd,
-                         dq_cmd=dq_cmd,
-                         tau_cmd=tau_cmd,
-                         torque_cmd=torque_cmd)
-            except Exception as e:
-                self._node.get_logger().error(f'Failed to auto-save recording: {str(e)}')
-
-            time.sleep(max(0, self._record_interval - (time.time() - start_time)))

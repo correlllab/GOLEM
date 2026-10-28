@@ -179,17 +179,30 @@ class Recorder:
 class Echo:
     '''
     Plays golem_safety relaying the controller: every command on in_topic is published on
-    out_topic, with weight in weight_slot when it is given (the /arm_sdk blend weight)
+    out_topic, with weight in weight_slot when it is given (the /arm_sdk blend weight).
+    clip, a (low, high) pair of per-slot arrays, clips each slot's q as golem_safety does;
+    zero_kp sends kp 0 on every slot, as golem_safety's zero stream does before it engages
     '''
 
-    def __init__(self, ros, in_topic, out_topic, weight_slot=None, weight=1.0):
+    def __init__(self, ros, in_topic, out_topic, weight_slot=None, weight=1.0, clip=None,
+                 zero_kp=False):
         self.node = ros.node('echo')
         self.weight_slot = weight_slot
         self.weight = weight
+        self.clip = clip
+        self.zero_kp = zero_kp
         self._publisher = self.node.create_publisher(LowCmd, out_topic, WRITER_QOS)
         self.node.create_subscription(LowCmd, in_topic, self._relay, RECORD_QOS)
 
     def _relay(self, msg):
+        if self.clip is not None:
+            low, high = self.clip
+            for slot in range(len(low)):
+                motor = msg.motor_cmd[slot]
+                motor.q = float(min(max(motor.q, low[slot]), high[slot]))
+        if self.zero_kp:
+            for motor in msg.motor_cmd:
+                motor.kp = 0.0
         if self.weight_slot is not None:
             msg.motor_cmd[self.weight_slot].q = float(self.weight)
         self._publisher.publish(msg)

@@ -120,7 +120,8 @@ def test_config_values_match_old_loaders(case):
     np.testing.assert_array_equal(clip['q_clip_limits'][:, 1], old['clip']['q_high'])
     np.testing.assert_array_equal(clip['dq_clip_limits'], old['clip']['dq'])
     np.testing.assert_array_equal(clip['tau_clip_limits'], old['clip']['tau'])
-    assert config['logging'] == old['logging']
+    # the old loaders' logging section configured a command recorder no node started
+    assert 'logging' not in config
 
     # the planner section is the file's, with enabled and frame_names filled in
     planner = dict(config['planner'])
@@ -180,10 +181,6 @@ def test_defaults(robot, tmp_path):
         assert controller[key] == value, key
     assert config['frequency'] == {'ctrl_hz': 50.0, 'pub_hz': 500.0, 'check_hz': 1000.0}
     assert config['planner'] == {'enabled': True, 'frame_names': list(profile.planner_frames)}
-    assert config['logging'] == {
-        'enabled': False, 'base_dir': 'data/control_record', 'filename': 'record',
-        'record_interval': 1.0,
-    }
 
     # clip limits from the profile's limits, with offset 0.001, ratios 0.10 and 0.25
     limits = config['limits']
@@ -258,6 +255,7 @@ def test_safety_out_is_an_output_of_the_robot(tmp_path):
     ('planner.bogus', {'planner': {'bogus': 1}}, 'unknown'),
     ('limits.clip.bogus', {'limits': {'clip': {'bogus': 1}}}, 'unknown'),
     ('zmp', {'zmp': {}}, 'unknown'),
+    ('logging', {'logging': {'enabled': False}}, 'unknown'),
     ('mode', {'mode': 'debug'}, 'removed'),
     ('network', {'network': {'domain_id': 1}}, 'ROS supplies the domain'),
     ('controller.torso_target', {'controller': {'torso_target': 0.0}}, 'hold_targets'),
@@ -300,7 +298,6 @@ def test_hold_targets_name_held_joints(tmp_path):
     ('frequency', 'check_hz', -1.0),
     ('controller', 'v_lim', True),
     ('controller', 'v_lim', 'fast'),
-    ('logging', 'enabled', 'false'),
 ])
 def test_bad_values_raise(tmp_path, section, key, value):
     raw = minimal('h12')
@@ -322,7 +319,6 @@ def test_bad_values_raise(tmp_path, section, key, value):
     ('controller.threshold_linear', -0.001),
     ('controller.threshold_angular', 0.0),
     ('controller.d_min', -0.01),
-    ('logging.record_interval', 0.0),
     ('limits.clip.position_offset', -0.001),
     ('limits.clip.velocity_ratio', -0.1),
     ('limits.clip.torque_ratio', -0.25),
@@ -412,10 +408,6 @@ def test_two_spellings_of_one_key_raise(tmp_path):
     from golem_upper_ik.profile import load_profile
     np.testing.assert_array_equal(config['limits']['dq_clip_limits'],
                                   load_profile('h12').dq_max * 0.2)
-    raw = minimal('h12')
-    raw['logging'] = {'base_dir': '/tmp/a', 'save_path': '/tmp/b'}
-    with pytest.raises(ValueError, match='logging.save_path'):
-        load('h12', write_config(tmp_path, 'h12', raw))
 
 
 def test_position_offset_too_large_raises(tmp_path):

@@ -18,13 +18,10 @@ FK_ATOL = 1e-9
 # The Magpie gripper's finger and rocker hinges are continuous joints, frozen at Pinocchio's
 # neutral configuration (angle 0). The old H1-2 model froze them at [cos, sin] = [0, 0],
 # which is no rotation at all, so its fingers and rockers (8 links of 50 g) sat elsewhere:
-# at the fixture's configurations the gravity torques differ by up to 6.4e-3 N*m and the
-# centre of mass by 1.1e-5 m. The frames before them (the end effectors, the grasp frames,
-# the torso) are bit-identical. The G1 has no continuous joint: its dynamics are identical.
-DYNAMICS_ATOL = {
-    'h12': {'gravity': 1e-2, 'com': 1e-4},  # N*m, m
-    'g1': {'gravity': FK_ATOL, 'com': FK_ATOL},
-}
+# at the fixture's configurations the gravity torques differ by up to 6.4e-3 N*m. The frames
+# before them (the end effectors, the grasp frames, the torso) are bit-identical. The G1 has
+# no continuous joint: its dynamics are identical.
+GRAVITY_ATOL = {'h12': 1e-2, 'g1': FK_ATOL}  # N*m
 # each arm's seven IK joints, by /lowcmd slot: (left, right)
 ARM_SLOTS = {
     'h12': (range(13, 20), range(20, 27)),
@@ -108,7 +105,6 @@ def test_g1_fk_matches_old_controller(models):
 def test_dynamics_matches_old_controller(models, robot):
     fixture = fixture_of(robot)
     model = models(robot)
-    atol = DYNAMICS_ATOL[robot]
     try:
         for index, q in enumerate(np.asarray(fixture['q'])):
             model.state_subscriber = fixed_state(q)  # the twist is taken at the measured q
@@ -119,10 +115,8 @@ def test_dynamics_matches_old_controller(models, robot):
                     err_msg=f'{frame} twist at q {index}')
             np.testing.assert_allclose(
                 model.dynamics.get_gravity_compensation(q, fixture['imu_quat'][index]),
-                fixture['gravity'][index], rtol=0, atol=atol['gravity'],
+                fixture['gravity'][index], rtol=0, atol=GRAVITY_ATOL[robot],
                 err_msg=f'gravity at q {index}')
-            np.testing.assert_allclose(model.dynamics.get_com(q), fixture['com'][index],
-                                       rtol=0, atol=atol['com'], err_msg=f'com at q {index}')
     finally:
         model.state_subscriber = None
 
@@ -358,7 +352,7 @@ def test_unused_paths_are_gone(models):
                  'zero_q_body_reduced', 'init_reduced_model', 'init_collision_model',
                  'init_reduced', 'init_collision', 'collision_model_body'):
         assert not hasattr(model, name), name
-    for name in ('get_zmp', 'get_com_velocity', 'get_com_reduced', 'get_joint_jacobian',
+    for name in ('get_com', 'get_zmp', 'get_com_velocity', 'get_com_reduced', 'get_joint_jacobian',
                  'get_frame_twist', 'get_frame_wrench', 'get_motion_compensation',
                  'get_angular_centroidal_momentum'):
         assert not hasattr(model.dynamics, name), name

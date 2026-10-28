@@ -135,8 +135,3 @@ limits:
       - 0.60 # right_wrist_roll_joint
       - 0.60 # right_wrist_pitch_joint
       - 0.60 # right_wrist_yaw_joint
-
-logging:
-  enabled: false
-  base_dir: data/control_record
-  filename: record

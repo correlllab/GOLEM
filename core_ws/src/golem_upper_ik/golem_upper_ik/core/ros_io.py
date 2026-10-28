@@ -13,11 +13,13 @@ newest sample, never a queue of old ones. Each takes its samples in a mutually e
 callback group, its own unless the caller passes one, so a long callback elsewhere in the node
 does not hold them up under a multi-threaded executor.
 
-A subscriber's shutdown() only marks it closed; its next callback destroys the subscription.
-rclpy destroys a subscription safely there: its mutually exclusive group is busy with that
-callback, so no wait set holds it. Destroyed from another thread while an executor spins, a
-subscription the executor has already found ready raises InvalidHandle in the executor and
-ends its spin.
+A subscriber's shutdown() only marks it closed: it takes no more samples, and its next
+callback destroys the subscription. rclpy destroys a subscription safely there: its mutually
+exclusive group is busy with that callback, so no wait set holds it. Destroyed from another
+thread while an executor spins, a subscription the executor has already found ready raises
+InvalidHandle in the executor and ends its spin. shutdown() therefore does not unsubscribe:
+if no further sample arrives (or no executor spins), the subscription stays until the node is
+destroyed, which is harmless.
 '''
 import math
 import threading
@@ -118,7 +120,10 @@ class _ClosableSubscription:
             self._node.destroy_subscription(subscription)
 
     def close(self):
-        '''Take no more samples; the next callback destroys the subscription'''
+        '''
+        Take no more samples. The next callback destroys the subscription; without one it
+        stays until the node is destroyed
+        '''
         self._closed = True
 
 

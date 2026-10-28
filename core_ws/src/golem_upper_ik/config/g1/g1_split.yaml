@@ -83,8 +83,3 @@ limits:
     position_offset: 0.01
     velocity_ratio: 0.10
     torque_ratio: 0.60
-
-logging:
-  enabled: false
-  base_dir: data/control_record
-  filename: record

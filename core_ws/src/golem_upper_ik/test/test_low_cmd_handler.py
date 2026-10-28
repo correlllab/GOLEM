@@ -1,7 +1,8 @@
 '''
 LowCmdHandler on domain 92 against a fake robot publishing /lowstate, on both robots: the
-held joints, the follow gate, command clipping, no controller-side estop, the zero-gain
-shutdown and the recording. Then FollowGate and relays_commands on their own.
+held joints, the follow gate, command clipping, no controller-side estop, no gating without
+a measured state, and the zero-gain shutdown. Then FollowGate and relays_commands on their
+own.
 
 The handler reads the measured state through a shared RobotModel whose state source is a
 StateSubscriber on the fake /lowstate; every test puts the model back at rest.
@@ -30,12 +31,12 @@ def profile_of(robot):
 class Rig:
     '''A fake robot, a StateSubscriber feeding the shared model, a recorder of the commands'''
 
-    def __init__(self, ros, models, robot, **controller):
+    def __init__(self, ros, models, robot, config=None, **controller):
         from golem_upper_ik.config import load_controller_config
         from golem_upper_ik.core.ros_io import StateSubscriber
         self.ros = ros
         self.profile = profile_of(robot)
-        self.config = load_controller_config(robot, CONFIGS[robot])
+        self.config = load_controller_config(robot, config or CONFIGS[robot])
         self.config['controller'].update(controller)
         self.upper = list(self.profile.upper_slots)
         self.held = [self.profile.body_joints.index(j) for j in self.profile.held_joints]
@@ -67,6 +68,13 @@ class Rig:
     def clip(self, q):
         limits = self.config['limits']['q_clip_limits']
         return np.clip(q, limits[:, 0], limits[:, 1])
+
+    def echo(self, **kwargs):
+        '''An Echo of the commands on the config's safety output, with the /arm_sdk weight'''
+        safety_out = self.config['topics']['safety_out']
+        weight_slot = self.profile.arm_sdk_weight_slot if safety_out == '/arm_sdk' else None
+        return Echo(self.ros, self.config['topics']['low_cmd'], safety_out,
+                    weight_slot=weight_slot, **kwargs)
 
 
 def command(rig, handler, q):
@@ -113,9 +121,14 @@ def test_held_joints_carry_hold_target(ros, models, robot):
     # while the robot still reports the sag
     np.testing.assert_allclose(rig.subscriber.state['q'][rig.held], SAG, atol=FLOAT32)
 
-    # a held joint moves only through set_hold
+    # a held joint's q moves only through set_hold; its dq and tau are set as any joint's
     with pytest.raises(ValueError, match='held'):
         handler.set_joint_commands(q=np.zeros(1), joint_ids=[rig.held[0]])
+    handler.set_joint_commands(dq=[0.01], tau=[1.5], joint_ids=[rig.held[0]])
+    np.testing.assert_allclose(handler.q_cmd[rig.held], targets, atol=FLOAT32)
+    assert wait_for(lambda: rig.recorder.last.motor_cmd[rig.held[0]].tau == np.float32(1.5),
+                    2.0)
+    assert rig.recorder.last.motor_cmd[rig.held[0]].dq == np.float32(0.01)
 
 
 @pytest.mark.parametrize('robot', ROBOTS)
@@ -273,27 +286,140 @@ def test_shutdown_writes_zero_gains_then_stops(ros, models):
     handler.shutdown()  # again: nothing more
 
 
-def test_recording(ros, models, tmp_path):
-    rig = Rig(ros, models, 'h12', follow_tolerance=0.0)
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_set_hold_while_the_gate_is_shut(ros, models, robot):
+    rig = Rig(ros, models, robot)
+    tolerance = rig.config['controller']['follow_tolerance']
     handler = rig.handler()
     handler.start()
-    handler.start_recording(rig.upper, str(tmp_path), 'record', record_interval=0.1)
-    for _ in range(5):
+    np.testing.assert_allclose(handler.hold, SAG, atol=FLOAT32)
+    # a hold 0.3 rad away goes no further than the tolerance from the measured angle, and
+    # the hold restarts from there
+    for _ in range(3):
+        handler.set_hold(np.full(len(rig.held), SAG + 0.3))
+        np.testing.assert_allclose(handler.hold, SAG + tolerance, atol=FLOAT32)
+        np.testing.assert_allclose(handler.q_cmd[rig.held], SAG + tolerance, atol=FLOAT32)
+    assert not handler.following
+    rig.echo()
+    assert wait_for(lambda: handler.following, 3.0)
+    handler.set_hold(np.full(len(rig.held), SAG + 0.3))
+    np.testing.assert_allclose(handler.hold, SAG + 0.3, atol=FLOAT32)
+    np.testing.assert_allclose(handler.q_cmd[rig.held], SAG + 0.3, atol=FLOAT32)
+
+
+def test_zero_gain_output_keeps_the_gate_shut(ros, models):
+    rig = Rig(ros, models, 'h12')
+    handler = rig.handler()
+    handler.start()
+    # golem_safety before it engages the input: our q, but kp 0 on every slot
+    echo = rig.echo(zero_kp=True)
+    start = time.monotonic()
+    while time.monotonic() - start < 0.5:
+        command(rig, handler, rig.measured + 0.3)
+        time.sleep(1.0 / 30.0)
+    assert not handler.following
+    echo.zero_kp = False
+    assert wait_for(lambda: handler.following, 3.0)
+
+
+def test_g1_split_gate_opens_on_lowcmd(ros, models):
+    rig = Rig(ros, models, 'g1', config='g1_split')
+    assert rig.config['topics']['safety_out'] == '/lowcmd'
+    handler = rig.handler()
+    handler.start()
+    time.sleep(0.3)
+    assert not handler.following
+    # golem_safety's split output carries no weight
+    echo = rig.echo()
+    assert echo.weight_slot is None
+    assert wait_for(lambda: handler.following, 3.0)
+
+
+def test_gated_command_stays_within_the_clip_limits(ros, models):
+    rig = Rig(ros, models, 'h12')
+    limits = rig.config['limits']['q_clip_limits']
+    elbow = rig.profile.body_joints.index('left_elbow_joint')
+    # measured 0.15 rad past its clip limit, three tolerances
+    rig.robot.q[elbow] = limits[elbow, 1] + 0.15
+    rig.measured = rig.robot.q.copy()
+    assert wait_for(lambda: rig.subscriber.state['q'][elbow] > limits[elbow, 1] + 0.1, 2.0)
+    handler = rig.handler()
+    handler.start()
+    start = time.monotonic()
+    for _ in range(10):
         command(rig, handler, rig.measured)
-    time.sleep(0.35)
-    handler.stop_recording()
-    data = np.load(tmp_path / 'record.npz')
-    np.testing.assert_array_equal(data['ids'], rig.upper)
-    assert data['com'].shape == (5, 3)
-    for key in ('q', 'dq', 'tau', 'q_cmd', 'dq_cmd', 'tau_cmd', 'torque_cmd'):
-        assert data[key].shape == (5, len(rig.upper)), key
-    np.testing.assert_allclose(data['q'], np.tile(rig.measured[rig.upper], (5, 1)), atol=FLOAT32)
-    kp = rig.config['gains']['kp'][rig.upper]
-    kd = rig.config['gains']['kd'][rig.upper]
-    np.testing.assert_allclose(
-        data['torque_cmd'],
-        data['tau_cmd'] + kp * (data['q_cmd'] - data['q']) + kd * (data['dq_cmd'] - data['dq']),
-        rtol=1e-5, atol=1e-4)
+        time.sleep(1.0 / 30.0)
+    assert handler.q_cmd[elbow] == pytest.approx(limits[elbow, 1], abs=FLOAT32)
+    for msg in rig.recorder.since(start):
+        q = upper_q(msg, rig.profile)
+        assert np.all(q >= limits[rig.upper, 0] - FLOAT32)
+        assert np.all(q <= limits[rig.upper, 1] + FLOAT32)
+    # golem_safety clips what it relays: the relayed command is the stored one, so the gate
+    # opens
+    rig.echo(clip=(limits[:, 0], limits[:, 1]))
+    assert wait_for(lambda: handler.following, 3.0)
+
+
+def test_start_needs_a_measured_state(ros, models):
+    from golem_upper_ik.config import load_controller_config
+    from golem_upper_ik.core.low_cmd_handler import LowCmdHandler
+    from golem_upper_ik.core.ros_io import StaleStateError, StateSubscriber
+    profile = profile_of('h12')
+    config = load_controller_config('h12', CONFIGS['h12'])
+    model = models('h12')
+    node = ros.node('controller')
+    recorder = Recorder(ros, config['topics']['low_cmd'])
+    handler = LowCmdHandler(node, profile, config, model)
+    ros.on_close(handler.shutdown)
+    # a state source that has no sample yet: start() refuses and nothing is published
+    model.state_subscriber = StateSubscriber(node, profile, topic='/lowstate_unpublished')
+    ros.on_close(lambda: setattr(model, 'state_subscriber', None))
+    with pytest.raises(StaleStateError, match='no sample'):
+        handler.start()
+    # and none at all
+    model.state_subscriber = None
+    with pytest.raises(StaleStateError, match='no state source'):
+        handler.start()
+    time.sleep(0.2)
+    assert recorder.count == 0
+
+
+def test_detached_state_source_leaves_the_last_command(ros, models):
+    from golem_upper_ik.core.ros_io import StaleStateError
+    rig = Rig(ros, models, 'h12')
+    handler = rig.handler()
+    handler.start()
+    target = rig.measured.copy()
+    target[rig.arms] += 0.3
+    for _ in range(5):
+        command(rig, handler, target)
+        time.sleep(1.0 / 30.0)
+    assert not handler.following
+    last = handler.q_cmd
+    # the arms are commanded the tolerance past the measured 0.1 rad, away from 0
+    assert np.all(last[rig.arms] > ARM_Q)
+    assert wait_for(lambda: np.array_equal(upper_q(rig.recorder.last, rig.profile),
+                                           last[rig.upper]), 2.0)
+
+    # the controller's shutdown in the wrong order: the state source goes first, and the
+    # model falls back to its all-zero rest pose
+    rig.model.shutdown()
+    assert rig.model.state_subscriber is None
+    start = time.monotonic()
+    time.sleep(0.3)
+    sent = rig.recorder.since(start)
+    assert len(sent) > 100
+    # no command moved toward q = 0: every one is the last command
+    for msg in sent:
+        np.testing.assert_array_equal(upper_q(msg, rig.profile), last[rig.upper])
+    np.testing.assert_array_equal(handler.q_cmd, last)
+    # nothing is gated against a pose the robot does not report
+    with pytest.raises(RuntimeError, match='no measured state'):
+        command(rig, handler, target)
+    with pytest.raises(RuntimeError, match='no measured state'):
+        handler.set_hold(np.zeros(len(rig.held)))
+    np.testing.assert_array_equal(handler.q_cmd, last)
+    assert issubclass(StaleStateError, RuntimeError)
 
 
 # FollowGate and relays_commands on their own

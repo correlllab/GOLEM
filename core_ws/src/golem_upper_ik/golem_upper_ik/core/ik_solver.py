@@ -3,7 +3,7 @@ IKSolver: Pink differential IK on a RobotModel's body and reduced models.
 
 Each frame task pulls one frame to a target pose. With a self-collision model the reduced
 model's IK keeps the collision pairs apart (a self-collision barrier); without one it runs
-without the barrier. solve_ik* tries seeds in turn, the measured pose first.
+without the barrier. solve_ik_reduced tries seeds in turn, the measured pose first.
 '''
 import time
 from dataclasses import dataclass, field
@@ -14,7 +14,7 @@ import qpsolvers
 
 from golem_upper_ik.core.robot_model import RobotModel
 
-# named configurations solve_ik* falls back to, in order, after the measured pose
+# named configurations solve_ik_reduced falls back to, in order, after the measured pose
 SEED_CONFIGS = ('home', 't_pose', 'arms_front_45')
 
 
@@ -73,18 +73,12 @@ class IKSolver:
         self.posture_task = pink.tasks.PostureTask(cost=1e-3)
         self.config_task = pink.tasks.PostureTask(cost=30.0)
 
-        # center of mass task
-        self.com_task = pink.tasks.ComTask(cost=30.0)
-        self.com_task_reduced = pink.tasks.ComTask(cost=30.0)
-
         # configuration using model_body (no free-flyer)
         self.configuration = pink.Configuration(
             robot_model.model_body,
             robot_model.data_body,
             robot_model.state['q']
         )
-        # set target for CoM task
-        self.com_task.set_target_from_configuration(self.configuration)
 
         # limits using model_body (no free-flyer)
         self.limits = [
@@ -114,7 +108,7 @@ class IKSolver:
         robot_model = self.robot_model
         collision_kwargs = {}
         self.collision_barrier_reduced = None
-        if robot_model.init_collision:
+        if robot_model.has_collision:
             collision_kwargs = {
                 'collision_model': robot_model.collision_model_body_reduced,
                 'collision_data': robot_model.collision_data_body_reduced,
@@ -131,7 +125,6 @@ class IKSolver:
             robot_model.state_reduced['q'],
             **collision_kwargs,
         )
-        self.com_task_reduced.set_target_from_configuration(self.configuration_reduced)
         self.limits_reduced = [
             pink.limits.ConfigurationLimit(robot_model.model_body_reduced),
             pink.limits.VelocityLimit(robot_model.model_body_reduced),
@@ -197,28 +190,9 @@ class IKSolver:
         self.configuration.update(q)
         self.configuration_reduced.update(q[self.robot_model.reduced_mask])
 
-    def set_from_configuration(self):
-        '''Set initial targets for all tasks from current configuration'''
-        self.update_configurations()
-        for task in self.frame_tasks.values():
-            task.set_target_from_configuration(self.configuration)
-
-    def set_from_configuration_reduced(self):
-        '''Set initial targets for all tasks from reduced configuration'''
-        self.update_configurations()
-        for task in self.frame_tasks.values():
-            task.set_target_from_configuration(self.configuration_reduced)
-
     def integrate(self, vel: np.ndarray):
         '''Integrate the current configuration with given joint velocity (motor-only)'''
         vel_reduced = vel[self.robot_model.reduced_mask]
-        self.configuration.integrate_inplace(vel, self.dt)
-        self.configuration_reduced.integrate_inplace(vel_reduced, self.dt)
-
-    def integrate_reduced(self, vel_reduced: np.ndarray):
-        '''Integrate the current reduced configuration with given reduced joint velocity'''
-        vel = self.robot_model.zero_q_body
-        vel[self.robot_model.reduced_mask] = vel_reduced
         self.configuration.integrate_inplace(vel, self.dt)
         self.configuration_reduced.integrate_inplace(vel_reduced, self.dt)
 
@@ -270,7 +244,7 @@ class IKSolver:
         return q
 
     def _default_seed_items(self):
-        # solve_ik* returns the first seed that converges, so the measured
+        # solve_ik_reduced returns the first seed that converges, so the measured
         # pose goes first: it yields the solution nearest the arm, and the
         # named configs are fallbacks for when it does not converge.
         return [('current', self.robot_model.state['q'])] + [
@@ -302,22 +276,6 @@ class IKSolver:
                 items.append((f'initial_{idx}', item))
         return items
 
-    def _normalize_full_seed(self, seed, seed_name):
-        q = np.asarray(seed, dtype=float).reshape(-1)
-        if q.shape == (self.robot_model.model_body.nq,):
-            normalized = q
-        elif q.shape == (self.robot_model.model_body_reduced.nq,):
-            normalized = self._reduced_q_to_full(q)
-        else:
-            raise ValueError(
-                f'{seed_name} seed must have shape '
-                f'({self.robot_model.model_body.nq},) or '
-                f'({self.robot_model.model_body_reduced.nq},)'
-            )
-        if not np.all(np.isfinite(normalized)):
-            raise ValueError(f'{seed_name} seed must contain only finite values')
-        return normalized
-
     def _normalize_reduced_seed(self, seed, seed_name):
         q = np.asarray(seed, dtype=float).reshape(-1)
         if q.shape == (self.robot_model.model_body_reduced.nq,):
@@ -334,17 +292,13 @@ class IKSolver:
             raise ValueError(f'{seed_name} seed must contain only finite values')
         return normalized
 
-    def _seed_list(self, reduced, initial_positions):
+    def _seed_list(self, initial_positions):
         seeds = []
         seed_items = self._default_seed_items() + self._extra_seed_items(
             initial_positions,
         )
         for seed_name, seed in seed_items:
-            if reduced:
-                q = self._normalize_reduced_seed(seed, seed_name)
-            else:
-                q = self._normalize_full_seed(seed, seed_name)
-            seeds.append((seed_name, q))
+            seeds.append((seed_name, self._normalize_reduced_seed(seed, seed_name)))
         return seeds
 
     def _result_from_attempts(self, attempts, linear_threshold, angular_threshold):
@@ -366,37 +320,6 @@ class IKSolver:
             angular_error=best.angular_error,
             seed_name=best.seed_name,
             attempts=attempts,
-        )
-
-    def _solve_ik_attempt(self, seed_name, q_seed, alpha, timeout,
-                          linear_threshold, angular_threshold):
-        self.configuration.update(q_seed)
-        linear_err, angular_err = self._frame_task_errors(self.configuration)
-        start_time = time.time()
-        iterations = 0
-
-        while (
-            linear_err >= linear_threshold or
-            angular_err >= angular_threshold
-        ) and time.time() - start_time < timeout:
-            self.posture_task.set_target_from_configuration(self.configuration)
-            tasks = list(self.frame_tasks.values()) + [self.posture_task]
-            vel = self._ik(tasks, alpha)
-            self.configuration.integrate_inplace(vel, alpha)
-            iterations += 1
-            linear_err, angular_err = self._frame_task_errors(self.configuration)
-
-        return IKAttemptResult(
-            q=np.copy(self.configuration.q),
-            success=(
-                linear_err < linear_threshold and
-                angular_err < angular_threshold
-            ),
-            linear_error=linear_err,
-            angular_error=angular_err,
-            seed_name=seed_name,
-            iterations=iterations,
-            elapsed_time=time.time() - start_time,
         )
 
     def _solve_ik_reduced_attempt(self, seed_name, q_seed, alpha, timeout,
@@ -436,64 +359,28 @@ class IKSolver:
             elapsed_time=time.time() - start_time,
         )
 
-    def ik_step(self, com=False):
+    def ik_step(self):
         '''Solve one step of IK for all tasks and return joint velocity (motor-only)'''
         self.posture_task.set_target_from_configuration(self.configuration)
         tasks = list(self.frame_tasks.values()) + [self.posture_task]
-        # add com task if requested
-        if com:
-            tasks.append(self.com_task)
         return self._ik(tasks, self.dt)
 
-    def ik_step_reduced(self, com=False):
+    def ik_step_reduced(self):
         '''Solve one step of IK on reduced model for all tasks and return motor-only velocity'''
         self.posture_task.set_target_from_configuration(self.configuration_reduced)
         tasks = list(self.frame_tasks.values()) + [self.posture_task]
-        # add com task if requested
-        if com:
-            tasks.append(self.com_task_reduced)
         # convert reduced vel to full motor vel
         vel = self._ik_reduced(tasks, self.dt)
         vel_full = self.robot_model.zero_q_body
         vel_full[self.robot_model.reduced_mask] = vel
         return vel_full
 
-    def solve_ik(self, alpha=0.1, timeout=1.0,
-                 linear_threshold=1e-3, angular_threshold=1e-2,
-                 initial_positions=None):
-        '''Solve IK to convergence and return motor-only q'''
-        attempts = []
-        for seed_name, q_seed in self._seed_list(False, initial_positions):
-            attempt = self._solve_ik_attempt(
-                seed_name,
-                q_seed,
-                alpha,
-                timeout,
-                linear_threshold,
-                angular_threshold,
-            )
-            attempts.append(attempt)
-            if attempt.success:
-                return self._result_from_attempts(
-                    attempts,
-                    linear_threshold,
-                    angular_threshold,
-                )
-
-        result = self._result_from_attempts(
-            attempts,
-            linear_threshold,
-            angular_threshold,
-        )
-        self.configuration.update(result.q)
-        return result
-
     def solve_ik_reduced(self, alpha=0.1, timeout=1.0,
                          linear_threshold=1e-3, angular_threshold=1e-2,
                          initial_positions=None):
         '''Solve IK on reduced model to convergence and return motor-only q'''
         attempts = []
-        for seed_name, q_seed in self._seed_list(True, initial_positions):
+        for seed_name, q_seed in self._seed_list(initial_positions):
             attempt = self._solve_ik_reduced_attempt(
                 seed_name,
                 q_seed,

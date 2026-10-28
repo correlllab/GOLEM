@@ -5,16 +5,21 @@ RobotModel: one robot's Pinocchio models, built from its profile (golem_upper_ik
 - model_body, data_body: the body joints only, without the free-flyer, for the IK
 - model_body_reduced, data_body_reduced: model_body with every joint but the IK joints
   frozen, for the IK and the planner
-- collision_model_body(_reduced), collision_data_body(_reduced): the self-collision model,
-  when the profile names a sphere URDF and SRDF; without one, every configuration counts as
-  collision-free
+- collision_model_body_reduced, collision_data_body_reduced: the reduced model's
+  self-collision model, when the profile names a sphere URDF and SRDF (has_collision);
+  without one, every configuration counts as collision-free
 
 Every URDF joint that is not a body joint (the grippers', the hands') is frozen out of every
 model, so the joints left are the profile's body joints in /lowcmd slot order and /lowstate
 values feed the models directly. Joint arrays (q, dq, tau) hold one value per body joint in
 slot order; the _reduced ones one per IK joint, in the profile's enabled_joints order.
+
+The measured state comes from a StateSource (state_subscriber).
 '''
+from collections.abc import Mapping
 import os
+from types import SimpleNamespace
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 import pinocchio as pin
@@ -27,6 +32,54 @@ from golem_upper_ik.core.robot_dynamics import (
     RobotDynamics,
 )
 from golem_upper_ik.profile import RobotProfile
+
+# the measured-state arrays the package reads, one value per body joint in slot order
+STATE_KEYS = ('q', 'dq')
+
+
+@runtime_checkable
+class StateSource(Protocol):
+    '''
+    Where RobotModel reads the measured state: the ROS I/O's /lowstate subscriber.
+
+    state: one consistent sample per read, every value from the same /lowstate message. A
+        mapping with 'q' (rad) and 'dq' (rad/s), each an np.ndarray with one value per body
+        joint in /lowcmd slot order, and optionally 'imu_state', an object whose `quaternion`
+        is the IMU orientation (w, x, y, z). update_kinematics and state_reduced each take
+        everything they use from one read; nothing modifies what a read returns.
+    staleness_ms: the age of the newest sample, ms
+    shutdown(): stops the source; RobotModel.shutdown() calls it
+    '''
+
+    @property
+    def state(self) -> Mapping[str, Any]: ...
+
+    @property
+    def staleness_ms(self) -> float: ...
+
+    def shutdown(self) -> None: ...
+
+
+class FixedState:
+    '''A StateSource that always reports the same state: q, dq (default 0), optionally an IMU'''
+
+    def __init__(self, q, dq=None, imu_quaternion=None):
+        self._q = np.array(q, dtype=float)
+        self._dq = np.zeros_like(self._q) if dq is None else np.array(dq, dtype=float)
+        self._imu_state = None
+        if imu_quaternion is not None:
+            self._imu_state = SimpleNamespace(quaternion=np.array(imu_quaternion, dtype=float))
+        self.staleness_ms = 0.0
+
+    @property
+    def state(self) -> Mapping[str, Any]:
+        state = {'q': self._q.copy(), 'dq': self._dq.copy()}
+        if self._imu_state is not None:
+            state['imu_state'] = self._imu_state
+        return state
+
+    def shutdown(self) -> None:
+        pass
 
 
 class RobotModel:
@@ -52,26 +105,18 @@ class RobotModel:
         # full model (free-flyer) for dynamics
         self.model, _, _ = self._load_urdf_freeflyer(filename)
         self.data = self.model.createData()
-
-        # model without free-flyer for IK solver (motor only)
-        self.model_body, self.collision_model_body, _ = self._load_urdf_body(filename)
-        self.data_body = self.model_body.createData()
         imu_frame = profile.imu_frame if imu_frame is None else imu_frame
-        if not self.model_body.existFrame(imu_frame):
+        if not self.model.existFrame(imu_frame):
             raise ValueError(f'robot {profile.robot}: IMU frame {imu_frame} is not in '
                              f'{filename}')
         self.imu_frame = imu_frame
 
-        # The measured state source, set by the ROS I/O: any object with a `state` dict
-        # (the keys of `state` below, plus 'imu_state' with a w, x, y, z `quaternion`), a
-        # `staleness_ms` and a shutdown(). Without one, `state` reads the local fields below.
-        self.state_subscriber = None
+        # model without free-flyer for IK solver (motor only)
+        self.model_body, _, _ = self._load_urdf_body(filename)
+        self.data_body = self.model_body.createData()
 
-        # field variables tracking joint states (motor only, length num_motor)
-        self._q = np.zeros(self.num_motor)
-        self._dq = np.zeros(self.num_motor)
-        self._ddq = np.zeros(self.num_motor)
-        self._tau = np.zeros(self.num_motor)
+        # the measured state; without a source the model is at rest at q = 0
+        self.state_subscriber: StateSource | None = None
 
         self.dynamics = RobotDynamics(self)
 
@@ -80,39 +125,25 @@ class RobotModel:
         pin.updateFramePlacements(self.model, self.data)
         pin.forwardKinematics(self.model_body, self.data_body, self.zero_q_body)
         pin.updateFramePlacements(self.model_body, self.data_body)
-        self.total_mass = pin.computeTotalMass(self.model)
 
-        # flags for additional initialization
-        self.init_reduced = False
-        self.init_collision = False
-        # placeholder mask for reduced model (motor only, length num_motor)
-        self.reduced_mask = np.ones(self.num_motor, dtype=bool)
+        self._init_reduced_model(profile.enabled_joints)
+        self.has_collision = profile.collision is not None
+        if self.has_collision:
+            self._init_collision_model(*profile.collision)
 
-        self.init_reduced_model(profile.enabled_joints)
-        if profile.collision is not None:
-            self.init_collision_model(*profile.collision)
-
-    @property
-    def has_collision(self) -> bool:
-        '''Whether the model has a self-collision model (the profile names one)'''
-        return self.init_collision
-
-    def init_reduced_model(self, enabled_joints):
+    def _init_reduced_model(self, enabled_joints):
         '''
-        create reduced model from model_body (no free-flyer) for IK
-        reduced_mask applies to motor-only arrays (length num_motor)
+        create reduced model from model_body (no free-flyer) for IK, the frozen joints locked
+        at 0; reduced_mask picks the IK joints out of a motor-only array (length num_motor)
         '''
-        self.init_reduced = True
         frozen_joints = [joint for joint in self.body_joints if joint not in enabled_joints]
         # get joint ids in model_body (no free-flyer, so no offset)
         frozen_ids_body = [self.model_body.getJointId(joint_name) for joint_name in frozen_joints]
         frozen_motor_ids = [self.model_body.joints[joint_id].idx_q for joint_id in frozen_ids_body]
         # store frozen ids for collision model and rebuilds
         self.frozen_ids_body = frozen_ids_body
-        # set the reduced mask (motor only)
         self.reduced_mask = np.ones(self.num_motor, dtype=bool)
         self.reduced_mask[frozen_motor_ids] = False
-        # create reduced model from model_body
         self._build_reduced_model(self.zero_q_body)
 
     def _build_reduced_model(self, reference_q):
@@ -131,32 +162,22 @@ class RobotModel:
         Callers must rebind any object holding references to the reduced
         model (see IKSolver.rebuild_reduced).
         '''
-        assert(self.init_reduced), 'Reduced model is not initialized.'
         if reference_q is None:
             reference_q = self.state['q']
         reference_q = np.asarray(reference_q, dtype=float).copy()
         self._build_reduced_model(reference_q)
-        if self.init_collision:
+        if self.has_collision:
             self._build_reduced_collision_model(reference_q)
 
-    def init_collision_model(self, urdf_path, srdf_path):
+    def _init_collision_model(self, urdf_path, srdf_path):
         '''
-        Initialize collision model from another urdf (sphere collision)
-        Uses model_body (no free-flyer) for collision checking
+        The reduced model's self-collision model, from another urdf (sphere collision) and
+        the srdf of the pairs it leaves out
         '''
-        self.init_collision = True
-        # load collision model without free-flyer
-        model_collision, collision_model, _ = self._load_urdf_body(urdf_path)
-        self.collision_model_body, self.collision_data_body = self._process_srdf(
-            model_collision, collision_model, srdf_path
-        )
-        # keep the unreduced collision model and srdf path for reduced rebuilds
-        self._collision_model_full = model_collision
-        self._collision_geom_full = collision_model
+        # the unreduced sphere model is kept to re-lock the reduced one
+        self._collision_model_full, self._collision_geom_full, _ = self._load_urdf_body(urdf_path)
         self._collision_srdf_path = srdf_path
-
-        if self.init_reduced:
-            self._build_reduced_collision_model(self.zero_q_body)
+        self._build_reduced_collision_model(self.zero_q_body)
 
     def _build_reduced_collision_model(self, reference_q):
         model_collision_reduced, collision_model_reduced = pin.buildReducedModel(
@@ -223,53 +244,46 @@ class RobotModel:
         return collision_model, collision_data
 
     @property
-    def state(self):
-        # if state_subscriber exists, use its state dict
+    def state(self) -> Mapping[str, Any]:
+        '''One sample of the measured state (see StateSource); without a source, at rest'''
         if self.state_subscriber is not None:
             return self.state_subscriber.state
-        # otherwise, fallback to local fields
-        return {
-            'time_stamp': 0.0,
-            'arrival_monotonic': 0.0,
-            'tick': 0,
-            'unwrapped_tick': 0,
-            'tick_valid': False,
-            'sequence': 0,
-            'received': False,
-            'q': np.copy(self._q),
-            'dq': np.copy(self._dq),
-            'ddq': np.copy(self._ddq),
-            'tau': np.copy(self._tau),
-        }
+        return {key: np.zeros(self.num_motor) for key in STATE_KEYS}
 
     @property
     def state_reduced(self):
-        '''
-        Apply reduced_mask to motor-only state arrays
-        Reduced_mask is length num_motor
-        '''
-        mask_keys = {'mode', 'q', 'dq', 'ddq', 'tau', 'vol', 'motor_state', 'temperature',
-                     'sensor'}
-        state_reduced = {}
-        for k, v in self.state.items():
-            if k in mask_keys:
-                assert v.shape[0] == self.reduced_mask.size, 'mask length mismatch'
-                state_reduced[k] = np.copy(v[self.reduced_mask])
-            else:
-                state_reduced[k] = v
-        return state_reduced
+        '''q and dq of the IK joints, from one sample of the measured state'''
+        return self._reduce(self.state)
+
+    def _reduce(self, state):
+        reduced = {}
+        for key in STATE_KEYS:
+            values = np.asarray(state[key])
+            if values.shape != (self.num_motor,):
+                raise ValueError(f'measured {key} has shape {values.shape}: it must hold one '
+                                 f'value per body joint ({self.num_motor})')
+            reduced[key] = np.copy(values[self.reduced_mask])
+        return reduced
+
+    @staticmethod
+    def _imu_quaternion(state):
+        '''The IMU orientation (w, x, y, z) of a state sample, or None without one'''
+        imu_state = state.get('imu_state')
+        return None if imu_state is None else imu_state.quaternion
 
     def full_q(self, q: np.ndarray, imu_quat=None) -> np.ndarray:
         '''
         convert motor q (num_motor) to full pinocchio q (7+num_motor) with pelvis orientation
-        if imu_quat provided (unitree wxyz), use it; otherwise try state subscriber
+        if imu_quat provided (unitree wxyz), use it; otherwise the measured state's IMU, when
+        a state source is set and its sample has one; otherwise identity
         for use with full model with free-flyer base
         '''
-        full_q = np.zeros(self.model.nq)
-        # get imu quaternion
-        if imu_quat is None and self.state_subscriber is not None and 'imu_state' in self.state:
-            imu_quat = self.state['imu_state'].quaternion  # unitree wxyz
+        if imu_quat is None and self.state_subscriber is not None:
+            imu_quat = self._imu_quaternion(self.state)
+        return self._full_q(q, imu_quat)
 
+    def _full_q(self, q, imu_quat):
+        full_q = np.zeros(self.model.nq)
         if imu_quat is not None:
             imu_quat = np.asarray(imu_quat, dtype=float).reshape(4)
             # Validate IMU quaternion before normalization to avoid propagating NaN/Inf
@@ -320,11 +334,6 @@ class RobotModel:
         '''Zero configuration for model_body (no free-flyer), length num_motor'''
         return np.zeros(self.model_body.nq)
 
-    @property
-    def zero_q_body_reduced(self):
-        '''Zero configuration for model_body_reduced'''
-        return np.zeros(self.model_body_reduced.nq)
-
     def shutdown(self):
         if self.state_subscriber is not None:
             self.state_subscriber.shutdown()
@@ -339,20 +348,23 @@ class RobotModel:
         return self.state_subscriber.staleness_ms
 
     def update_kinematics(self, imu_quat=None):
-        '''update forward kinematics for all models'''
+        '''update forward kinematics for all models, from one sample of the measured state'''
+        state = self.state
+        if imu_quat is None:
+            imu_quat = self._imu_quaternion(state)
         # update full model (free-flyer) with current joint positions
-        q_full = self.full_q(self.state['q'], imu_quat=imu_quat)
-        dq_full = self.full_v(self.state['dq'])
+        q_full = self._full_q(state['q'], imu_quat)
+        dq_full = self.full_v(state['dq'])
         pin.forwardKinematics(self.model, self.data, q_full, dq_full)
         pin.updateFramePlacements(self.model, self.data)
         # update model_body (no free-flyer)
-        pin.forwardKinematics(self.model_body, self.data_body, self.state['q'], self.state['dq'])
+        pin.forwardKinematics(self.model_body, self.data_body, state['q'], state['dq'])
         pin.updateFramePlacements(self.model_body, self.data_body)
-        # update reduced model if initialized
-        if self.init_reduced:
-            pin.forwardKinematics(self.model_body_reduced, self.data_body_reduced,
-                                  self.state_reduced['q'], self.state_reduced['dq'])
-            pin.updateFramePlacements(self.model_body_reduced, self.data_body_reduced)
+        # update reduced model
+        reduced = self._reduce(state)
+        pin.forwardKinematics(self.model_body_reduced, self.data_body_reduced,
+                              reduced['q'], reduced['dq'])
+        pin.updateFramePlacements(self.model_body_reduced, self.data_body_reduced)
 
     def _get_frame_transformation(self, frame_name, q: np.ndarray=None):
         frame_id = self.model.getFrameId(frame_name)
@@ -378,7 +390,6 @@ class RobotModel:
 
     def _get_frame_transformation_reduced(self, frame_name, q_reduced: np.ndarray=None):
         '''Get frame transformation for the reduced model (model_body_reduced)'''
-        assert(self.init_reduced), 'Reduced model is not initialized.'
         frame_id = self.model_body_reduced.getFrameId(frame_name)
         if q_reduced is not None:
             data_body_reduced_temp = self.model_body_reduced.createData()
@@ -391,38 +402,16 @@ class RobotModel:
         return transformation
 
     def get_frame_transformation_reduced(self, frame_name: str, q_reduced: np.ndarray=None):
-        assert(self.init_reduced), 'Reduced model is not initialized.'
         return self._get_frame_transformation_reduced(frame_name, q_reduced).np
 
     def get_frame_position_reduced(self, frame_name: str, q_reduced: np.ndarray=None):
-        assert(self.init_reduced), 'Reduced model is not initialized.'
         return self._get_frame_transformation_reduced(frame_name, q_reduced).translation
 
     def get_frame_rotation_reduced(self, frame_name: str, q_reduced: np.ndarray=None):
-        assert(self.init_reduced), 'Reduced model is not initialized.'
         return self._get_frame_transformation_reduced(frame_name, q_reduced).rotation
-
-    def check_valid(self, q):
-        '''
-        Check if the given joint position is valid
-        q is motor-only (num_motor)
-        '''
-        return self.check_within_limits(q) and self.check_collision_free(q)
-
-    def check_within_limits(self, q):
-        '''
-        Check if the given motor joint position violates joint limits
-        q is motor-only (num_motor)
-        '''
-        q_full = self.full_q(q)
-        return (
-            np.all(q_full <= self.model.upperPositionLimit) and
-            np.all(q_full >= self.model.lowerPositionLimit)
-        )
 
     def check_within_limits_reduced(self, q_reduced):
         '''Check if the given joint position violates joint limits for the reduced model'''
-        assert(self.init_reduced), 'Reduced model is not initialized.'
         return (
             np.all(q_reduced <= self.model_body_reduced.upperPositionLimit) and
             np.all(q_reduced >= self.model_body_reduced.lowerPositionLimit)
@@ -444,7 +433,6 @@ class RobotModel:
         than tol. Returns a list of dicts with the joint name, config index,
         value, the violated bound, and the overshoot magnitude (>= 0).
         '''
-        assert(self.init_reduced), 'Reduced model is not initialized.'
         lower = self.model_body_reduced.lowerPositionLimit
         upper = self.model_body_reduced.upperPositionLimit
         idx_to_name = self._reduced_idx_to_name()
@@ -467,27 +455,12 @@ class RobotModel:
             })
         return violations
 
-    def check_collision_free(self, q):
-        '''
-        check if the given joint position violates collision constraints
-        q is motor-only (num_motor), uses collision_model_body (no free-flyer)
-        Without a collision model this always returns True
-        '''
-        if not self.init_collision:
-            return True
-        return not pin.computeCollisions(
-            self.model_body, self.data_body,
-            self.collision_model_body, self.collision_data_body, q,
-            stop_at_first_collision=True
-        )
-
     def check_collision_free_reduced(self, q_reduced):
         '''
         Check collision for the reduced model (model_body_reduced)
         Without a collision model this always returns True
         '''
-        assert(self.init_reduced), 'Reduced model is not initialized.'
-        if not self.init_collision:
+        if not self.has_collision:
             return True
         return not pin.computeCollisions(
             self.model_body_reduced, self.data_body_reduced,

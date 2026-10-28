@@ -35,8 +35,8 @@ class PlannerConfig:
     max_interpolation_steps: int = 300
     validity_resolution: float = 0.0025
     constraint_check_steps: int = 10
-    # frames bounded by the frame_* limits and timed by moving_speed; None: the robot's
-    # planner frames (RobotProfile.planner_frames)
+    # frames bounded by the frame_* limits and timed by moving_speed; PlannerClient sets
+    # them, and the planner refuses a config without them
     frame_names: tuple = None
     frame_x_max: float = 0.50
     frame_y_min: float = None
@@ -72,10 +72,7 @@ class ReducedJointPlanner:
 
         self.nq = int(self.robot_model.model_body_reduced.nq)
         self.validity_checks = 0
-        frame_names = self.config.frame_names
-        if frame_names is None:
-            frame_names = self.robot_model.profile.planner_frames
-        self.frame_names = tuple(frame_names)
+        self.frame_names = tuple(self.config.frame_names)
         self.frame_min_z = self._make_frame_floor_map(self.config.frame_z_min)
         self.frame_max_z = self._make_frame_floor_map(self.config.frame_z_max)
         self.corridor_min_z = {}
@@ -94,12 +91,14 @@ class ReducedJointPlanner:
         self.ss.setPlanner(self._make_planner())
 
     def _check_robot_model_ready(self):
-        if not getattr(self.robot_model, 'init_reduced', False):
+        if getattr(self.robot_model, 'model_body_reduced', None) is None:
             raise ValueError('RobotModel reduced model is not initialized')
-        if not getattr(self.robot_model, 'init_collision', False):
+        if not self.robot_model.has_collision:
             raise ValueError('RobotModel collision model is not initialized')
 
     def _check_planner_config(self):
+        if self.config.frame_names is None:
+            raise ValueError('Planner frame_names must be given')
         if self.config.moving_speed <= 0.0:
             raise ValueError('Planner moving_speed must be positive')
         if self.config.dt <= 0.0:

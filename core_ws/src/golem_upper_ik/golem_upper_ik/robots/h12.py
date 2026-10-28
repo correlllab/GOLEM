@@ -3,6 +3,9 @@ import os
 
 import numpy as np
 
+# the robot's name in messages
+DISPLAY_NAME = 'H1-2'
+
 # joints the IK solves for, in the order of every named configuration
 ENABLED_JOINTS = (
     'left_shoulder_pitch_joint',

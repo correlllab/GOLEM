@@ -27,7 +27,7 @@ import pytest
 
 from ros_harness import (
     CommandRecorder, FollowingRobot, RelayedRobot, SafetyNode, WalkingNode, body_pose,
-    slots_of, wait_for,
+    profile_of, shared_model, slots_of, wait_for,
 )
 
 ROBOTS = ('h12', 'g1')
@@ -53,29 +53,11 @@ PUSH = {
 }
 
 
-def profile_of(robot):
-    if robot == 'g1':
-        pytest.importorskip('g1_description')
-    from golem_upper_ik.profile import load_profile
-    return load_profile(robot)
-
-
 def config_of(robot, name, **controller):
     from golem_upper_ik.config import load_controller_config
     config = load_controller_config(robot, name)
     config['controller'].update(controller)
     return config
-
-
-def shared_model(ros, models, robot):
-    '''The session's model of robot, put back at rest when the test ends'''
-    model = models(robot)
-
-    def rest():
-        model.state_subscriber = None
-        model.rebuild_reduced_model(np.zeros(model.num_motor))
-    ros.on_close(rest)
-    return model
 
 
 def build(ros, model, config, init=True):
@@ -479,23 +461,56 @@ def test_split_mode_engages_then_holds_against_a_push(ros, models, robot, monkey
     assert not layer.estopped(), layer.output()
 
 
+def test_start_up_steps_sleep_a_whole_period_after_their_work(ros, models, monkeypatch):
+    from golem_upper_ik.core.controller.upper_controller import UpperController
+    from golem_upper_ik.core.low_cmd_handler import LowCmdHandler
+    profile = profile_of('g1')
+    config = config_of('g1', 'sim')
+    # every step of both start-up moves takes 10 ms of work more
+    steps = {'posture': [], 'hold': []}
+    for cls, name, kind in ((UpperController, 'goto_reduced_configuration', 'posture'),
+                            (LowCmdHandler, 'set_hold', 'hold')):
+        def slow(self, *args, _call=getattr(cls, name), _kind=kind, **kwargs):
+            steps[_kind].append(time.monotonic())
+            time.sleep(0.01)
+            return _call(self, *args, **kwargs)
+        monkeypatch.setattr(cls, name, slow)
+    # the elbows 0.5 rad from home and the waist yaw 0.1 rad from its target
+    q0 = body_pose(profile, 'home', [0.1, 0.0, 0.0])
+    q0[slots_of(profile, ('left_elbow_joint', 'right_elbow_joint'))] = 0.5
+    FollowingRobot(ros, profile, q0, config['topics']['safety_out'])
+    model = shared_model(ros, models, 'g1')
+    controller = build(ros, model, config)
+    dt = controller.dt
+    for kind in ('posture', 'hold'):
+        times = steps[kind]
+        assert len(times) > 8, (kind, len(times))
+        # a step's period is its work and then a whole period, not the period less the work
+        periods = np.diff(times)
+        assert np.min(periods) >= dt + 0.01 - 1e-3, (kind, np.min(periods))
+        assert np.median(periods) < dt + 0.02, (kind, np.median(periods))
+
+
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_relay_starting_late_still_gets_the_whole_start_up_move(ros, models, robot,
                                                                monkeypatch, tmp_path):
     profile = profile_of(robot)
     controller_config, safety_config = LATE[robot]
     q0 = np.zeros(len(profile.body_joints))
+    # Each start-up step moves a joint at most dq_lim x dt and then sleeps a whole control
+    # period dt, so a move of d rad takes at least d / dq_lim s, plus the steps' work
     if robot == 'g1':
         # the walking node commands 5 s into a 7 s wait for the engagement. The elbows hang
-        # 1.5 rad from home: the move takes at least 1.5 s at sim_split's 1 rad/s, so the
-        # start-up ends over 6.5 s after it began, and a 6 s move budget suffices only if it
-        # counts from the gate opening
+        # 1.5 rad from home: at sim_split's 1 rad/s the move takes at least 1.5 s (about 2 s
+        # here), so the start-up ends over 6.5 s after it began, and a 6 s move budget
+        # suffices only if it counts from the gate opening
         q0[slots_of(profile, ('left_elbow_joint', 'right_elbow_joint'))] = 1.5
         late, timeouts = 5.0, {'startup_timeout': 7.0, 'startup_move_timeout': 6.0}
     else:
-        # golem_safety starts 4 s into a 6 s wait. The start-up postures take at least 4 s
-        # at 1 rad/s from home, so the start-up ends over 8 s after it began; a 7.5 s budget
-        late, timeouts = 4.0, {'startup_timeout': 6.0, 'startup_move_timeout': 7.5}
+        # golem_safety starts 5 s into a 7 s wait. From home the start-up postures move
+        # 1.3 + 0.7 + 1.3 + 0.7 rad at 1 rad/s: at least 4 s (about 6 s here, the IK's work
+        # added to each step), so the start-up ends over 9 s after it began; an 8.5 s budget
+        late, timeouts = 5.0, {'startup_timeout': 7.0, 'startup_move_timeout': 8.5}
     config = config_of(robot, controller_config, **timeouts)
     robot_ = RelayedRobot(ros, profile, q0, '/lowcmd', sway=0.0)
     robot_.start()

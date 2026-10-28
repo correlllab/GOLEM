@@ -230,17 +230,19 @@ class UpperController:
             f'{q_cmd[worst]:.3f} rad, measured {q[worst]:.3f} rad). Stopping the controller')
 
     def _move_to_reduced_configuration(self, q_reduced, deadline, desc):
-        '''Step the IK until the command reaches q_reduced; raise at the deadline'''
+        '''
+        Step the IK until the command reaches q_reduced; raise at the deadline. Each step
+        sleeps a whole control period after its work, as do the held joints' steps
+        '''
         q_reduced = np.asarray(q_reduced, dtype=np.float64)
         self._logger.info(f'{desc}...')
         while True:
-            start = time.monotonic()
             self.goto_reduced_configuration(q_reduced)
             if np.max(np.abs(self.ik_solver.q_reduced - q_reduced)) < STARTUP_THRESHOLD:
                 return
             if time.monotonic() > deadline:
                 raise self._startup_timeout_error(desc)
-            time.sleep(max(0.0, self.dt - (time.monotonic() - start)))
+            time.sleep(self.dt)
 
     def _move_held_joints_to_targets(self, deadline):
         '''Ease the held joints (the torso, the waist) to exactly their hold targets'''
@@ -253,14 +255,13 @@ class UpperController:
         while np.any(handler.hold != targets):
             if time.monotonic() > deadline:
                 raise self._startup_timeout_error(desc)
-            start = time.monotonic()
             remaining = targets - handler.hold
             # the last step lands on the targets themselves
             handler.set_hold(np.where(np.abs(remaining) <= step, targets,
                                       handler.hold + np.clip(remaining, -step, step)))
             self._apply_joint_position(self.ik_solver.q)
             self.update_robot_model()
-            time.sleep(max(0.0, self.dt - (time.monotonic() - start)))
+            time.sleep(self.dt)
 
     # end effectors
 
@@ -587,12 +588,14 @@ class UpperController:
 
     def shutdown(self):
         '''
-        Stop the planner, send the upper slots one zero-gain command and stop publishing,
-        then detach the state source. Publishing stops first: a detached source would leave
-        the follow gate nothing to hold the commands near. Idempotent
+        Send the upper slots one zero-gain command and stop publishing, then stop the planner
+        and detach the state source. The zero-gain command goes first: the planner's own
+        shutdown may wait out a plan in progress. Publishing stops before the source is
+        detached: a detached source would leave the follow gate nothing to hold the commands
+        near. Idempotent
         '''
-        if self.planner is not None:
-            self.planner.shutdown()
         if self.low_cmd_handler is not None:
             self.low_cmd_handler.shutdown()
+        if self.planner is not None:
+            self.planner.shutdown()
         self.robot_model.shutdown()

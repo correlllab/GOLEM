@@ -18,17 +18,11 @@ os.environ['ROS_DOMAIN_ID'] = '92'
 import pytest  # noqa: E402
 
 
-def profile_of(robot):
-    if robot == 'g1':
-        pytest.importorskip('g1_description')
-    from golem_upper_ik.profile import load_profile
-    return load_profile(robot)
-
-
 @pytest.fixture(scope='session')
 def models():
     '''robot -> RobotModel, built on first use'''
     from golem_upper_ik.core.robot_model import RobotModel
+    from ros_harness import profile_of
     built = {}
 
     def model(robot):

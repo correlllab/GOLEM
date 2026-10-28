@@ -21,8 +21,12 @@ from golem_upper_ik.robots import ROBOTS, robot_module
 __all__ = ['matrix_to_pose', 'node_parameters', 'pose_to_matrix', 'run']
 
 # s to wait at exit for the callbacks still running (a goal sees the shut-down controller
-# refuse its next command and ends)
-EXIT_CALLBACK_TIMEOUT = 5.0
+# refuse its next command and ends within a control step), then for the executor's thread.
+# The zero-gain command goes out first; after it the controller's planner may take up to 3 s
+# (PlannerClient's 2 s grace for a plan in progress, then 1 s to terminate), so the whole
+# shutdown fits within launch's default sigterm_timeout of 5 s
+EXIT_CALLBACK_TIMEOUT = 1.0
+EXIT_JOIN_TIMEOUT = 0.5
 
 
 def _project_to_so3(rotation):
@@ -99,7 +103,23 @@ def node_parameters(node):
     return robot, config
 
 
+def _ignored(signum, frame):
+    pass
+
+
+def _ignore_signals():
+    '''
+    Ignore SIGINT and SIGTERM from now on, through a handler that does nothing: with SIG_IGN,
+    a signal already pending when the handler changes raises OSError ("ignored due to race
+    condition") in the main thread
+    '''
+    signal.signal(signal.SIGINT, _ignored)
+    signal.signal(signal.SIGTERM, _ignored)
+
+
 def _interrupt(signum, frame):
+    '''The first SIGINT or SIGTERM: stop the node; any later one is ignored'''
+    _ignore_signals()
     raise KeyboardInterrupt
 
 
@@ -123,7 +143,8 @@ def run(name, make_node, args=None):
 
     rclpy's own signal handlers stay off: on SIGINT they shut the context down, after which
     the controller's last command, which turns the upper body's gains to zero, could not be
-    published. SIGTERM, which launch sends after SIGINT, interrupts the same way.
+    published. SIGTERM, which launch sends after SIGINT, interrupts the same way. Once the
+    shutdown has begun, both are ignored, so a second signal cannot cut it short.
 
     Nothing is destroyed at the end. The multi-threaded executor can start a callback it
     handed to its thread pool just before its shutdown() returned; destroying the node under
@@ -132,6 +153,7 @@ def run(name, make_node, args=None):
     flushes the ROS log files), the process ends with os._exit.
     '''
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+    signal.signal(signal.SIGINT, _interrupt)
     signal.signal(signal.SIGTERM, _interrupt)
     logger = get_logger(name)
     executor = MultiThreadedExecutor()
@@ -156,6 +178,7 @@ def run(name, make_node, args=None):
         logger.error(f'{name}{where} did not start: {error}')
         code = 1
     finally:
+        _ignore_signals()
         if node is not None:
             try:
                 node.shutdown()
@@ -164,7 +187,7 @@ def run(name, make_node, args=None):
                 code = 1
         executor.shutdown(timeout_sec=EXIT_CALLBACK_TIMEOUT)
         if spinner.is_alive():
-            spinner.join(EXIT_CALLBACK_TIMEOUT)
+            spinner.join(EXIT_JOIN_TIMEOUT)
         rclpy.try_shutdown()
         sys.stdout.flush()
         sys.stderr.flush()

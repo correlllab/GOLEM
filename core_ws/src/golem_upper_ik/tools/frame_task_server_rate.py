@@ -11,9 +11,12 @@ goals that move both end effectors 10 cm forward and back, one after another, fo
 Then the server is stopped with SIGINT.
 
 The JSON on stdout gives, per window, the achieved rate, the 99th percentile of the receive
-period, the longest gap and the control steps per second (distinct commands), in the units
-named by the keys; then the server's exit code and whether its last command was mode 0 with
-zero gains. The server's output goes to stderr if it fails.
+period, the longest gap, how many gaps were over 20 ms and the control steps per second
+(distinct commands), in the units named by the keys. Then the server's threads once it is up:
+how many there are, and how many carry the process's own name (Python's threads and native
+threads that do not name themselves, such as OpenBLAS's workers; DDS names its own); then the
+server's exit code and whether its last command was mode 0 with zero gains. The server's
+output goes to stderr if it fails.
 """
 import argparse
 import json
@@ -43,6 +46,7 @@ from golem_upper_ik.config import load_controller_config  # noqa: E402
 from golem_upper_ik.profile import load_profile  # noqa: E402
 
 READY_TIMEOUT_S = 120.0
+LONG_GAP_MS = 20.0
 GOAL_TIMEOUT_S = 30.0
 RECORD_QOS = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                         history=HistoryPolicy.KEEP_LAST, depth=10000)
@@ -132,8 +136,24 @@ def stats(times, upper_q):
         'mean_hz': round((len(times) - 1) / span, 3),
         'p99_period_ms': round(float(np.percentile(gaps, 99)), 3),
         'max_gap_ms': round(float(gaps.max()), 3),
+        'gaps_over_20ms': int(np.sum(gaps > LONG_GAP_MS)),
         'control_steps_hz': round(steps / span, 3),
     }
+
+
+def threads_of(pid):
+    '''(threads, threads named as the process) of the process pid, from /proc'''
+    task = f'/proc/{pid}/task'
+    with open(f'/proc/{pid}/comm', encoding='utf-8') as handle:
+        name = handle.read().strip()
+    names = []
+    for tid in os.listdir(task):
+        try:
+            with open(f'{task}/{tid}/comm', encoding='utf-8') as handle:
+                names.append(handle.read().strip())
+        except FileNotFoundError:  # the thread ended
+            pass
+    return len(names), sum(1 for thread in names if thread == name)
 
 
 def wait(condition, timeout):
@@ -172,11 +192,15 @@ def main():
     executor.add_node(node)
     threading.Thread(target=executor.spin, daemon=True).start()
 
+    # the server starts without the BLAS thread settings of this process's environment, so
+    # its thread count shows the node's own pin
+    server_env = {key: value for key, value in os.environ.items()
+                  if key not in ('OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS')}
     server = subprocess.Popen(
         [str(os.path.join(get_package_prefix('golem_upper_ik'), 'lib', 'golem_upper_ik',
                           'frame_task_server')),
          '--ros-args', '-p', f'robot:={args.robot}', '-p', f'config:={args.config}'],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        env=server_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     output = []
     threading.Thread(target=lambda: output.extend(server.stdout), daemon=True).start()
     result = {'robot': args.robot, 'config': args.config}
@@ -185,6 +209,8 @@ def main():
         if not wait(lambda: ready, READY_TIMEOUT_S):
             raise RuntimeError('frame_task_server did not publish /left_ee_pose')
         result['startup'] = stats(*robot.window(robot.times[0], ready[0]))
+        result['server_threads'], result['server_threads_named_as_process'] = \
+            threads_of(server.pid)
 
         assert client.wait_for_server(timeout_sec=10.0), 'no /frame_task action server'
         goals_start = time.monotonic()
@@ -222,7 +248,6 @@ def main():
             last.motor_cmd[slot].kd == 0.0 for slot in profile.upper_slots)
         robot.stop()
         executor.shutdown(timeout_sec=2.0)
-        node.destroy_node()
         rclpy.try_shutdown()
     if code or result['server_exit_code'] != 0:
         print(''.join(output), file=sys.stderr)
@@ -231,4 +256,10 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    # The executor's thread pool may still start a callback it was handed before its
+    # shutdown() returned, so nothing is destroyed: the process ends here, as the nodes' do
+    # (golem_upper_ik.ros2.utility.run)
+    exit_code = main()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(exit_code)

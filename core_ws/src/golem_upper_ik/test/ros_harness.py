@@ -4,6 +4,9 @@ spinning its nodes in a thread (Ros), a fake robot publishing /lowstate (FakeRob
 recorder of a command topic (Recorder) and a stand-in for golem_safety that relays the
 controller's commands on its output topic (Echo).
 
+It also holds the helpers the controller tests share: the profile of a robot (profile_of)
+and the session's robot model, put back at rest after the test (shared_model).
+
 For the controller's closed loop: a robot that executes the controller's commands as an
 engaged golem_safety would relay them, and relays them itself (FollowingRobot); a robot
 behind golem_safety's output topic (RelayedRobot), with golem_safety's safety_node run as a
@@ -22,6 +25,7 @@ import threading
 import time
 
 import numpy as np
+import pytest
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
@@ -37,6 +41,25 @@ RECORD_QOS = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
 WRITER_QOS = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                         history=HistoryPolicy.KEEP_LAST, depth=1)
 _names = itertools.count()
+
+
+def profile_of(robot):
+    '''The profile of robot; the test is skipped for the G1 without g1_description'''
+    if robot == 'g1':
+        pytest.importorskip('g1_description')
+    from golem_upper_ik.profile import load_profile
+    return load_profile(robot)
+
+
+def shared_model(ros, models, robot):
+    '''The session's model of robot (the models fixture), put back at rest when the test ends'''
+    model = models(robot)
+
+    def rest():
+        model.state_subscriber = None
+        model.rebuild_reduced_model(np.zeros(model.num_motor))
+    ros.on_close(rest)
+    return model
 
 
 def wait_for(condition, timeout, period=0.005):

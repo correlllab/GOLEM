@@ -30,7 +30,7 @@ from custom_ros_messages.action import FrameTask, NamedConfig  # noqa: E402
 from custom_ros_messages.msg import StringArray  # noqa: E402
 from geometry_msgs.msg import PoseArray, PoseStamped  # noqa: E402
 import numpy as np  # noqa: E402
-from rclpy.action import ActionServer, CancelResponse  # noqa: E402
+from rclpy.action import ActionServer, CancelResponse, GoalResponse  # noqa: E402
 from rclpy.node import Node  # noqa: E402
 
 from golem_upper_ik.config import load_controller_config  # noqa: E402
@@ -51,6 +51,8 @@ SLOW_MODE_SCALE = 0.25
 PUBLISH_HZ = 100.0
 # the frame every published pose is in
 POSE_FRAME = 'pelvis'
+# s between log lines while publishing the poses keeps failing
+PUBLISH_ERROR_LOG_PERIOD = 1.0
 
 
 class FrameTaskServer(Node):
@@ -101,6 +103,7 @@ class FrameTaskServer(Node):
         self.action_server = ActionServer(
             self, FrameTask, 'frame_task',
             execute_callback=self.frame_task_callback,
+            goal_callback=self.frame_task_goal_callback,
             cancel_callback=self.cancel_callback)
         self.named_config_server = ActionServer(
             self, NamedConfig, 'named_config',
@@ -129,6 +132,17 @@ class FrameTaskServer(Node):
         return array
 
     def publisher_callback(self):
+        '''
+        Publish the poses. A failure is logged, at most once per PUBLISH_ERROR_LOG_PERIOD,
+        and never reaches the executor, which would stop serving every callback
+        '''
+        try:
+            self._publish_poses()
+        except Exception as error:
+            self.get_logger().error(f'publishing the poses failed: {error!r}',
+                                    throttle_duration_sec=PUBLISH_ERROR_LOG_PERIOD)
+
+    def _publish_poses(self):
         frame_names, frame_targets = self.frame_names, self.frame_targets
         names = StringArray()
         names.data = list(frame_names)
@@ -156,6 +170,16 @@ class FrameTaskServer(Node):
         goal_handle.abort()
         result.success = False
         return result
+
+    def frame_task_goal_callback(self, goal_request):
+        '''Refuse a goal that names a frame the robot's models do not have'''
+        unknown = self.controller.unknown_frames(goal_request.frame_names)
+        if unknown:
+            self.get_logger().warn(
+                f'Refusing the FrameTask goal: {", ".join(repr(name) for name in unknown)} '
+                f'is not a frame of the {self.robot} model')
+            return GoalResponse.REJECT
+        return GoalResponse.ACCEPT
 
     def frame_task_callback(self, goal_handle):
         try:

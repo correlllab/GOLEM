@@ -163,14 +163,22 @@ class IKSolver:
     def add_frame_task(self, task_name: str, frame_name: str,
                        position_cost: float = 50.0,
                        orientation_cost: float = 30.0,
-                       lm_damping: float = 3.0):
-        '''Add a frame task to the IK solver'''
-        self.frame_tasks[task_name] = pink.tasks.FrameTask(
+                       lm_damping: float = 3.0,
+                       target=None):
+        '''
+        Add a frame task to the IK solver, with its target (a pin.SE3) when given. The task
+        joins frame_tasks only once its target is set, so a reader in another thread never
+        finds it without one
+        '''
+        task = pink.tasks.FrameTask(
             frame_name,
             position_cost=position_cost,
             orientation_cost=orientation_cost,
             lm_damping=lm_damping
         )
+        if target is not None:
+            task.transform_target_to_world = target
+        self.frame_tasks[task_name] = task
 
     def remove_frame_task(self, task_name: str):
         '''Remove a frame task from the IK solver; KeyError for an unknown task'''

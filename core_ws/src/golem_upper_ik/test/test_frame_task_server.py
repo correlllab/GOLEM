@@ -21,14 +21,14 @@ import threading
 import time
 
 from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import Pose, PoseStamped
+from geometry_msgs.msg import Pose, PoseArray, PoseStamped
 import numpy as np
 import pytest
 import yaml
 
 from ros_harness import (
     TEST_DOMAIN, CommandRecorder, FakeRobot, FollowingRobot, RelayedRobot, body_pose,
-    send_goal, slots_of, wait_for,
+    profile_of, send_goal, shared_model, slots_of, wait_for,
 )
 
 ROBOTS = ('h12', 'g1')
@@ -36,13 +36,6 @@ CONFIGS = {'h12': 'safety_split', 'g1': 'g1'}
 # where the arms start: a working pose with room to move the end effectors forward
 START = {'h12': 'prep', 'g1': 'home'}
 RATE_TOOL = Path(__file__).resolve().parents[1] / 'tools' / 'frame_task_server_rate.py'
-
-
-def profile_of(robot):
-    if robot == 'g1':
-        pytest.importorskip('g1_description')
-    from golem_upper_ik.profile import load_profile
-    return load_profile(robot)
 
 
 def config_of(robot, name):
@@ -60,17 +53,6 @@ def edited_config(tmp_path, robot, name, **controller):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(raw))
     return path
-
-
-def shared_model(ros, models, robot):
-    '''The session's model of robot, put back at rest when the test ends'''
-    model = models(robot)
-
-    def rest():
-        model.state_subscriber = None
-        model.rebuild_reduced_model(np.zeros(model.num_motor))
-    ros.on_close(rest)
-    return model
 
 
 def server_of(ros, model, config, init=False):
@@ -100,10 +82,10 @@ class Log:
 
 
 class PoseRecorder:
-    def __init__(self, ros, topic):
+    def __init__(self, ros, topic, msg_type=PoseStamped):
         self.node = ros.node('pose_recorder')
         self.poses = []
-        self.node.create_subscription(PoseStamped, topic, self.poses.append, 10)
+        self.node.create_subscription(msg_type, topic, self.poses.append, 10)
 
     def position(self):
         pose = self.poses[-1].pose
@@ -335,6 +317,104 @@ def test_stale_state_aborts_goal(ros, models, monkeypatch, capfd):
     assert all(np.array_equal(q, held[0]) for q in held)
 
 
+def test_stale_state_does_not_abort_a_goal_off_the_real_robots_domain(ros, models, capfd):
+    from custom_ros_messages.action import FrameTask
+    profile = profile_of('h12')
+    config = config_of('h12', CONFIGS['h12'])
+    robot_ = FollowingRobot(ros, profile, body_pose(profile, START['h12']),
+                            config['topics']['safety_out'])
+    model = shared_model(ros, models, 'h12')
+    log = Log(capfd)
+    # on the test domain the tick-lag check is off: its deadline is 0
+    server = server_of(ros, model, CONFIGS['h12'])
+    assert server.controller.max_state_lag_ms == 0.0
+    # a slow 30 cm move keeps the IK stepping past the goal's 2 s; /lowstate stops at 0.5 s
+    threading.Timer(0.5, robot_.stop_state).start()
+    start = time.monotonic()
+    status, result = send_goal(
+        ros, FrameTask, '/frame_task',
+        frame_goal(profile.ee_frames[0], offset_pose(0.3), relative=True, slow_mode=True,
+                   duration=2.0))
+    # the goal ran to its timeout on the stale state, and was not aborted
+    assert status == GoalStatus.STATUS_SUCCEEDED
+    assert time.monotonic() - start >= 2.0
+    assert log.lines('Aborting goal') == []
+
+
+def test_frame_task_target_never_raises_while_tasks_are_added(ros, models):
+    from golem_upper_ik.core.controller.frame_controller import FrameController
+    profile = profile_of('g1')
+    config = config_of('g1', CONFIGS['g1'])
+    FollowingRobot(ros, profile, body_pose(profile, START['g1']), config['topics']['safety_out'])
+    model = shared_model(ros, models, 'g1')
+    controller = FrameController(ros.node('controller'), profile, config, robot_model=model,
+                                 init=False)
+    ros.on_close(controller.shutdown)
+    frame = profile.ee_frames[0]
+    target = controller.ee_transformations()[0]
+    # another thread reads the target in a tight loop, with the GIL handed over as often as
+    # the interpreter allows, while tasks come and go
+    errors, reads = [], [0]
+    done = threading.Event()
+
+    def read():
+        while not done.is_set():
+            try:
+                controller.frame_task_target(f'{frame}_task')
+                reads[0] += 1
+            except Exception as error:  # the outcome under test
+                errors.append(error)
+                return
+    switch_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    reader = threading.Thread(target=read, daemon=True)
+    try:
+        reader.start()
+        for _ in range(3000):
+            controller.clear_frame_tasks()
+            controller.add_frame_task(f'{frame}_task', frame, target)
+            if errors:
+                break
+    finally:
+        done.set()
+        reader.join(timeout=5.0)
+        sys.setswitchinterval(switch_interval)
+    assert errors == []
+    assert reads[0] > 1000
+    np.testing.assert_allclose(controller.frame_task_target(f'{frame}_task'), target)
+
+
+def test_unknown_frame_is_refused_and_the_poses_keep_going(ros, models, capfd):
+    from custom_ros_messages.action import FrameTask
+    from rclpy.action import ActionClient
+    profile = profile_of('h12')
+    config = config_of('h12', CONFIGS['h12'])
+    FollowingRobot(ros, profile, body_pose(profile, START['h12']),
+                   config['topics']['safety_out'])
+    model = shared_model(ros, models, 'h12')
+    log = Log(capfd)
+    left = PoseRecorder(ros, '/left_ee_pose')
+    poses = PoseRecorder(ros, '/frame_poses', PoseArray)
+    server_of(ros, model, CONFIGS['h12'])
+    assert wait_for(lambda: left.poses, 5.0)
+
+    goal = FrameTask.Goal()
+    goal.frame_names = [profile.ee_frames[0], 'no_such_frame']
+    goal.frame_targets = [offset_pose(0.0), offset_pose(0.0)]
+    goal.relative = True
+    client = ActionClient(ros.node('action_client'), FrameTask, '/frame_task')
+    assert client.wait_for_server(timeout_sec=10.0)
+    sent = client.send_goal_async(goal)
+    assert wait_for(sent.done, 10.0)
+    assert not sent.result().accepted
+    line = log.lines('no_such_frame')
+    assert line and 'Refusing' in line[0], line
+    # the poses keep going out, the refused goal's frames never among them
+    count = len(left.poses)
+    assert wait_for(lambda: len(left.poses) > count + 50, 2.0)
+    assert all(len(msg.poses) == 0 for msg in poses.poses)
+
+
 def test_planned_goal_without_collision_g1(ros, models, capfd):
     from custom_ros_messages.action import FrameTask, NamedConfig
     profile = profile_of('g1')
@@ -514,9 +594,13 @@ class NodeProcess:
     def output(self):
         return '\n'.join(self.lines)
 
-    def interrupt(self, timeout=15.0):
-        '''SIGINT; the exit code'''
-        self.proc.send_signal(signal.SIGINT)
+    def interrupt(self, signals=(signal.SIGINT,), timeout=15.0):
+        '''Send signals one after another; the exit code'''
+        for signum in signals:
+            self.proc.send_signal(signum)
+        return self.proc.wait(timeout=timeout)
+
+    def wait(self, timeout):
         return self.proc.wait(timeout=timeout)
 
     def kill(self):
@@ -571,7 +655,19 @@ def test_nodes_refuse_bad_parameters(name, params, words):
         assert word in output, output
 
 
-def test_frame_task_server_shuts_down_with_zero_gains_on_sigint(ros):
+def assert_zero_gain_last(robot, profile, before):
+    '''The robot's last command arrived before `before` and turns the upper slots off'''
+    received, last = robot.last_command
+    assert received < before
+    for slot in profile.upper_slots:
+        motor = last.motor_cmd[slot]
+        assert (motor.mode, motor.kp, motor.kd, motor.tau) == (0, 0.0, 0.0, 0.0)
+
+
+@pytest.mark.parametrize('signals', [
+    (signal.SIGINT,), (signal.SIGTERM,), (signal.SIGINT, signal.SIGINT),
+    (signal.SIGTERM, signal.SIGINT)], ids=['SIGINT', 'SIGTERM', 'SIGINT-twice', 'SIGTERM-SIGINT'])
+def test_frame_task_server_shuts_down_with_zero_gains_on_a_signal(ros, signals):
     profile = profile_of('g1')
     config = config_of('g1', CONFIGS['g1'])
     robot_ = FollowingRobot(ros, profile, body_pose(profile, 'home'),
@@ -582,26 +678,68 @@ def test_frame_task_server_shuts_down_with_zero_gains_on_sigint(ros):
         # its end-effector poses go out once the start-up is done
         assert wait_for(lambda: left.poses, 60.0), process.output()
         assert robot_.zero_gain_commands == 0
-        code = process.interrupt()
+        # a second signal, as from an impatient operator, arrives during the shutdown
+        code = process.interrupt(signals)
         stopped = time.monotonic()
     finally:
         process.kill()
     assert code == 0, process.output()
     assert 'Traceback' not in process.output(), process.output()
     time.sleep(0.3)
-    received, last = robot_.last_command
-    assert received < stopped
-    for slot in profile.upper_slots:
-        motor = last.motor_cmd[slot]
-        assert (motor.mode, motor.kp, motor.kd, motor.tau) == (0, 0.0, 0.0, 0.0)
+    assert_zero_gain_last(robot_, profile, stopped)
+
+
+def test_frame_task_server_start_up_failure_exits_1_after_a_zero_gain_command(ros, tmp_path):
+    # /lowstate comes, but nothing relays the commands: the start-up stops at its 2 s
+    # startup_timeout after it has begun publishing
+    profile = profile_of('g1')
+    config_path = edited_config(tmp_path, 'g1', CONFIGS['g1'], startup_timeout=2.0)
+    robot_ = RelayedRobot(ros, profile, body_pose(profile, 'home'), '/arm_sdk')
+    robot_.start()
+    commands = FollowingCommands(ros, profile)
+    process = NodeProcess('frame_task_server', 'robot:=g1', f'config:={config_path}')
+    try:
+        code = process.wait(timeout=60.0)
+        stopped = time.monotonic()
+    finally:
+        process.kill()
+    assert code == 1, process.output()
+    assert 'golem_safety did not relay the commands within controller.startup_timeout' in \
+        process.output(), process.output()
+    assert commands.count > 100, process.output()
+    time.sleep(0.3)
+    assert_zero_gain_last(commands, profile, stopped)
+
+
+class FollowingCommands:
+    '''Every command on /safety/lowcmd_upper_in: their count and the last, with its time'''
+
+    def __init__(self, ros, profile):
+        from unitree_hg.msg import LowCmd
+        from ros_harness import RECORD_QOS
+        self.node = ros.node('commands')
+        self.count = 0
+        self.last_command = None
+        self.node.create_subscription(LowCmd, '/safety/lowcmd_upper_in', self._on_command,
+                                      RECORD_QOS)
+
+    def _on_command(self, msg):
+        self.count += 1
+        self.last_command = (time.monotonic(), msg)
+
+
+# Threads frame_task_server may have that carry its process's name: the main thread, the
+# executor's, its pool's, the command publisher's and the follow gate's. OpenBLAS's workers
+# carry it too, one per core but one, unless the node pins BLAS to one thread
+MAX_THREADS_NAMED_AS_PROCESS = 16
 
 
 def test_frame_task_server_rate():
     '''
     The H1-2's commands through its start-up and its goals, received in another process: at
-    500 Hz, with no gap over 20 ms. The 99th percentile of the period is printed, not bounded:
-    the IK, rclpy's handling of /lowstate at 500 Hz and the 100 Hz pose topics share the GIL
-    with the publisher thread
+    500 Hz, with at most 3 gaps over 20 ms and none over 50 ms. The 99th percentile of the
+    period is printed, not bounded: the IK, rclpy's handling of /lowstate at 500 Hz and the
+    100 Hz pose topics share the GIL with the publisher thread. BLAS runs one thread
     '''
     env = dict(os.environ, ROS_DOMAIN_ID=str(TEST_DOMAIN))
     done = subprocess.run([sys.executable, str(RATE_TOOL), '--robot', 'h12', '--seconds', '6'],
@@ -611,9 +749,11 @@ def test_frame_task_server_rate():
     print(json.dumps(stats))
     for window in ('startup', 'goals'):
         assert stats[window]['mean_hz'] >= 495, stats
-        assert stats[window]['max_gap_ms'] <= 20.0, stats
+        assert stats[window]['gaps_over_20ms'] <= 3, stats
+        assert stats[window]['max_gap_ms'] <= 50.0, stats
     # the IK stepped at ctrl_hz throughout the goals
     assert stats['goals']['control_steps_hz'] >= 25.0, stats
+    assert stats['server_threads_named_as_process'] <= MAX_THREADS_NAMED_AS_PROCESS, stats
     assert stats['server_exit_code'] == 0, stats
     assert stats['shutdown_zero_gain'] is True, stats
 

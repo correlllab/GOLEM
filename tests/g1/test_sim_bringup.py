@@ -5,8 +5,8 @@ the containers. test_sim_bringup.sh runs them; see it for the usage.
           CLI), recording the robot's state from the sim after every 10th physics
           step (50 Hz of sim time; GOLEM_TEST_RECORD_EVERY=1 for every step)
           to <out>/sim.npz, until <out>/stop appears
-  drive   in the ros container, beside 'ros2 launch g1_bringup
-          g1_sim_bringup.launch.py': the test's steps, with their wall times
+  drive   in the ros container, beside 'ros2 launch golem_bringup
+          g1_sim.launch.py': the test's steps, with their wall times
           and results in <out>/events.json
   report  anywhere with numpy: checks the recording against the steps,
           prints the numbers and writes <out>/report.json; exit 1 on a failure

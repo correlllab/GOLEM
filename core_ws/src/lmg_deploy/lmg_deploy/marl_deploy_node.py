@@ -9,8 +9,8 @@ Flow
    so that no target moves faster than ``prepose_max_vel``: a target that runs
    ahead of the joint makes the PD torque spike and trips the safety layer's
    torque e-stop.
-3. With ``engage_wait_for_confirm`` (default true; lmg_real_bringup keeps it
-   on, lmg_sim_bringup turns it off and engages automatically) hold the
+3. With ``engage_wait_for_confirm`` (default true; lmg_real keeps it
+   on, lmg_sim turns it off and engages automatically) hold the
    pre-pose until an operator calls ~/confirm_engage.
 4. Engage: the controller starts an episode at the measured state with a zero
    velocity command (any /cmd_vel received before engaging is dropped) and

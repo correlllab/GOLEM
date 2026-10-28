@@ -30,7 +30,7 @@ docker/scripts/docker_run.sh robocasa            # or: isaac
 
 # Terminal 2 — ROS workspace. Colcon-builds core_ws if stale, then drops to a shell.
 docker/scripts/docker_run.sh ros
-ros2 launch h12_bringup h12_sim_bringup.launch.py  # bringup is a manual step
+ros2 launch golem_bringup h12_sim.launch.py  # bringup is a manual step
 
 # Terminal 3 — drive the robot from inside the running ROS container
 docker exec -it golem_ros bash
@@ -93,15 +93,16 @@ starting both containers does not imply full navigation/skills parity.
 
 ## Bringup
 
-`h12_bringup` is launch-only, and sim versus real are separate launch files (no
-top-level file takes a `sim:=` argument; each passes its own to `h12_control`):
+`golem_bringup` is launch-only (the H1-2's files are in its `launch/h12/`), and
+sim versus real are separate launch files (no top-level file takes a `sim:=`
+argument; each passes its own to `h12_control`):
 
 | Launch file | Scenario |
 |---|---|
-| `h12_sim_bringup.launch.py` | x86 sim — the full stack |
-| `h12_sim_bringup_mac.launch.py` | mac sim — trimmed, toggled by `GOLEM_*` env vars |
-| `h12_real_robot_bringup.launch.py` | real robot, onboard PC: drivers, state publishers, estop + safety + IK, nav, lower body |
-| `h12_real_desktop_bringup.launch.py` | real: companion desktop — model servers, skills, rviz; hand cameras with `use_hand_cameras:=true` |
+| `h12_sim.launch.py` | x86 sim — the full stack |
+| `h12_sim_mac.launch.py` | mac sim — trimmed, toggled by `GOLEM_*` env vars |
+| `h12_real_robot.launch.py` | real robot, onboard PC: drivers, state publishers, estop + safety + IK, nav, lower body |
+| `h12_real_desktop.launch.py` | real: companion desktop — model servers, skills, rviz; hand cameras with `use_hand_cameras:=true` |
 | `h12_safety_grippers.launch.py` | real: estop + safety layer + grippers only |
 
 The top-level files above are assembled from building blocks you can also
@@ -118,7 +119,7 @@ solver, `safety_node`, the Gemini/SAM/GraspGen model servers, the RL lower-body
 controller, the skills node, nav, and RViz. Common arguments:
 
 ```bash
-ros2 launch h12_bringup h12_sim_bringup.launch.py \
+ros2 launch golem_bringup h12_sim.launch.py \
   use_rviz:=false use_nav:=false use_skills:=false lowerbody:=fame
 ```
 
@@ -130,7 +131,7 @@ ros2 launch h12_bringup h12_sim_bringup.launch.py \
 
 # Terminal 2
 docker/scripts/docker_run.sh ros
-ros2 launch h12_bringup h12_sim_bringup.launch.py
+ros2 launch golem_bringup h12_sim.launch.py
 
 # Terminal 3 (inside golem_ros, workspace sourced)
 ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
@@ -143,7 +144,7 @@ ros2 action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
 
 `/skill/grasp`, `/skill/pick_place`, and `/skill/frontier_explore` are
 implemented; the other nine `/skill/*` action servers accept a goal and then
-abort with "not implemented". `core_ws/src/h12_bringup/common_cmds.md` has a
+abort with "not implemented". `core_ws/src/golem_bringup/common_cmds.md` has a
 ready-made `send_goal` snippet and field reference for each one.
 
 ## Real robot
@@ -154,7 +155,7 @@ Coordinate before touching. This is the H1-2; the G1 is under
 ```bash
 export ROS_DOMAIN_ID=0
 source core_ws/install/setup.bash
-ros2 launch h12_bringup h12_real_robot_bringup.launch.py start_position_verified:=true
+ros2 launch golem_bringup h12_real_robot.launch.py start_position_verified:=true
 ```
 
 Leg commands are gated behind `start_position_verified:=true` (default false) —
@@ -165,7 +166,7 @@ set it only after physically verifying the robot's pose. The `lowerbody:=` polic
 ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
 ```
 
-The companion desktop runs `h12_real_desktop_bringup.launch.py` for the model
+The companion desktop runs `h12_real_desktop.launch.py` for the model
 servers, skills and rviz; add `use_hand_cameras:=true` to also start the hand
 cameras.
 
@@ -181,11 +182,11 @@ the robot (empty for the sim). The G1 runs on x86 Linux with RoboCasa only.
 Both robots use the same container names and DDS topics: run one at a time.
 
 ```bash
-docker/scripts/docker_stack.sh up robocasa --g1 --headless   # sim + g1_sim_bringup.launch.py
+docker/scripts/docker_stack.sh up robocasa --g1 --headless   # sim + g1_sim.launch.py
 
 docker/scripts/docker_run.sh robocasa --g1 --layout 9 --style 9 --seed 42
 docker/scripts/docker_run.sh ros --g1
-ros2 launch g1_bringup g1_sim_bringup.launch.py                # use_locomotion:=true use_nav:=true ...
+ros2 launch golem_bringup g1_sim.launch.py                   # use_locomotion:=true use_nav:=true ...
 ```
 
 The paired startup refuses a simulator of the other robot on the domain; the

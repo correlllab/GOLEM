@@ -31,7 +31,8 @@ In arm_sdk mode, slot 29 of `rt/arm_sdk` is a weight: 1 means our commands,
 0 means Unitree's. The safety layer ramps it in over `arm_sdk.engage_seconds`
 and back out over `arm_sdk.release_seconds` on an estop and when it exits.
 
-`g1_bringup` runs each safety config with exactly one arm-controller config
+`golem_bringup`'s `g1_core.launch.py` runs each safety config with exactly one
+arm-controller config
 (`G1_SAFETY_CONTROLLER_CONFIGS` in
 `core_ws/src/golem_upper_ik/golem_upper_ik/pairing.py`) and refuses the real
 configs in the sim and the `sim_*` ones on the robot. With `sim:=true`, which

@@ -10,6 +10,6 @@ services:
       - /home/code/h12_sim_scripts/launch_ros.sh
       - ros2
       - launch
-      - ${GOLEM_BRINGUP_PACKAGE:-h12_bringup}
-      - ${GOLEM_BRINGUP_LAUNCH:-h12_sim_bringup.launch.py}
+      - ${GOLEM_BRINGUP_PACKAGE:-golem_bringup}
+      - ${GOLEM_BRINGUP_LAUNCH:-h12_sim.launch.py}
       - use_rviz:=${GOLEM_USE_RVIZ:-false}

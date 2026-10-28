@@ -28,7 +28,7 @@ Then, in two terminals:
 docker/scripts/docker_run.sh robocasa                # 1. simulator (start first)
 
 docker/scripts/docker_run.sh ros                     # 2. workspace shell
-ros2 launch h12_bringup h12_sim_bringup.launch.py      #    bringup is a manual step
+ros2 launch golem_bringup h12_sim.launch.py          #    bringup is a manual step
 ```
 
 And in a third, ask the robot to do something:

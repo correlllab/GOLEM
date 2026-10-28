@@ -20,7 +20,7 @@ class Workflows(unittest.TestCase):
                      'CL_isaaclab_sim/sim_main.py', 'golem_robocasa/h12_mujoco.py',
                      'core_ws/src/magpie_msgs/package.xml', 'core_ws/src/custom_ros_messages/package.xml',
                      'core_ws/src/livox_ros_driver2/package_ROS2.xml', 'core_ws/cyclonedds.xml',
-                     'core_ws/src/h12_bringup/package.xml', 'mujoco_mpc/CMakeLists.txt'):
+                     'core_ws/src/golem_bringup/package.xml', 'mujoco_mpc/CMakeLists.txt'):
             p = self.root / name
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text('fixture')
@@ -731,26 +731,26 @@ esac
         envs = [json.loads(x) for x in (self.root / 'calls.env').read_text().splitlines()]
         return envs[next(i for i, c in enumerate(calls) if 'up' in c)]
 
-    def test_stack_g1_selects_g1_bringup(self):
+    def test_stack_g1_selects_the_g1_sim_launch(self):
         self.add_g1_files()
         self.install_env_recording_docker()
         r = self.run_script('docker/scripts/docker_stack.sh', 'up', 'robocasa', '--g1', '--headless')
         self.assertEqual(r.returncode, 0, r.stderr)
         for call in self.compose_calls():
             self.assertIn(self.overlay(), self.compose_files(call))
-        self.assertEqual(self.stack_up_env(), {'GOLEM_ROBOT': 'g1', 'GOLEM_BRINGUP_PACKAGE': 'g1_bringup',
-                                               'GOLEM_BRINGUP_LAUNCH': 'g1_sim_bringup.launch.py'})
+        self.assertEqual(self.stack_up_env(), {'GOLEM_ROBOT': 'g1', 'GOLEM_BRINGUP_PACKAGE': 'golem_bringup',
+                                               'GOLEM_BRINGUP_LAUNCH': 'g1_sim.launch.py'})
         self.assertEqual(r.stderr.count('robot: g1'), 1)
 
     def test_stack_g1_overrides_leftover_bringup_selection(self):
         self.add_g1_files()
         self.install_env_recording_docker()
-        (self.root / 'docker/.env').write_text('GOLEM_BRINGUP_PACKAGE=h12_bringup\n')
+        (self.root / 'docker/.env').write_text('GOLEM_BRINGUP_PACKAGE=leftover_bringup\n')
         r = self.run_script('docker/scripts/docker_stack.sh', 'up', 'robocasa', '--g1', '--headless',
-                            GOLEM_BRINGUP_LAUNCH='h12_sim_bringup.launch.py')
+                            GOLEM_BRINGUP_LAUNCH='h12_sim.launch.py')
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(self.stack_up_env(), {'GOLEM_ROBOT': 'g1', 'GOLEM_BRINGUP_PACKAGE': 'g1_bringup',
-                                               'GOLEM_BRINGUP_LAUNCH': 'g1_sim_bringup.launch.py'})
+        self.assertEqual(self.stack_up_env(), {'GOLEM_ROBOT': 'g1', 'GOLEM_BRINGUP_PACKAGE': 'golem_bringup',
+                                               'GOLEM_BRINGUP_LAUNCH': 'g1_sim.launch.py'})
 
     def test_stack_default_robot_leaves_bringup_to_compose_defaults(self):
         self.install_env_recording_docker()
@@ -808,10 +808,10 @@ esac
     def test_stack_compose_bringup_defaults_and_overrides(self):
         files = ('docker-compose.yml', 'docker-compose.stack.yml')
         command = self.compose_config(*files, profile='ros')['ros']['command']
-        self.assertEqual(command[1:5], ['ros2', 'launch', 'h12_bringup', 'h12_sim_bringup.launch.py'])
-        command = self.compose_config(*files, profile='ros', GOLEM_BRINGUP_PACKAGE='g1_bringup',
-                                      GOLEM_BRINGUP_LAUNCH='g1_sim_bringup.launch.py')['ros']['command']
-        self.assertEqual(command[1:5], ['ros2', 'launch', 'g1_bringup', 'g1_sim_bringup.launch.py'])
+        self.assertEqual(command[1:5], ['ros2', 'launch', 'golem_bringup', 'h12_sim.launch.py'])
+        command = self.compose_config(*files, profile='ros', GOLEM_BRINGUP_PACKAGE='other_bringup',
+                                      GOLEM_BRINGUP_LAUNCH='g1_sim.launch.py')['ros']['command']
+        self.assertEqual(command[1:5], ['ros2', 'launch', 'other_bringup', 'g1_sim.launch.py'])
 
 
 if __name__ == '__main__':

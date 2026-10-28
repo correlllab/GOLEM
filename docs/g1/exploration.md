@@ -26,7 +26,7 @@ Start the sim as in [Navigation](navigation.md), then the bringup with the
 explorer, and send a goal from a second shell in `golem_ros`:
 
 ```bash
-ros2 launch g1_bringup g1_sim_bringup.launch.py use_locomotion:=true use_nav:=true frontier_explore:=true
+ros2 launch golem_bringup g1_sim.launch.py use_locomotion:=true use_nav:=true frontier_explore:=true
 
 ros2 action send_goal /skill/frontier_explore custom_ros_messages/action/SkillFrontierExplore \
     "{timeout: {sec: 120}}" --feedback

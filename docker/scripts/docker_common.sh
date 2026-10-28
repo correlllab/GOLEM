@@ -215,7 +215,7 @@ prepare_mounts() {
             mkdir -p "$GOLEM_CACHE_DIR/msgs_ws/src/magpie_msgs" "$GOLEM_CACHE_DIR/msgs_ws/src/custom_ros_messages"
             ;;
         ros)
-            require_file "$GOLEM_ROOT/core_ws/src/h12_bringup/package.xml"
+            require_file "$GOLEM_ROOT/core_ws/src/golem_bringup/package.xml"
             if [ "${GOLEM_PLATFORM:-linux}" != mac ]; then
                 require_file "$GOLEM_ROOT/core_ws/cyclonedds.xml"
                 require_file "$GOLEM_ROOT/mujoco_mpc/CMakeLists.txt"

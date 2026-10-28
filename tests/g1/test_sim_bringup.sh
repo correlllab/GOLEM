@@ -6,7 +6,7 @@
 #
 # Builds core_ws for the G1, starts the sim (h12_mujoco.py --g1) headless in the
 # layout 9 / style 9 / seed 42 kitchen, then, in its network namespace, a ros
-# container that runs 'ros2 launch g1_bringup g1_sim_bringup.launch.py
+# container that runs 'ros2 launch golem_bringup g1_sim.launch.py
 # use_rviz:=false' and the test's steps (test_sim_bringup.py drive), and finally
 # checks the sim's recording against them (test_sim_bringup.py report). See
 # test_sim_bringup.py for what is checked. Exits 0 only if every check passes.
@@ -64,7 +64,7 @@ g1_test_build_ros
 g1_test_start_sim test_sim_bringup.py "${SIM_ENV[@]}"
 echo "[test_sim_bringup] sim up; starting the bringup"
 
-g1_test_run_ros 900 "ros2 launch g1_bringup g1_sim_bringup.launch.py $LAUNCH_ARGS > /out/launch.log 2>&1 &
+g1_test_run_ros 900 "ros2 launch golem_bringup g1_sim.launch.py $LAUNCH_ARGS > /out/launch.log 2>&1 &
     LAUNCH=\$!
     python3 -u /home/code/tests/g1/test_sim_bringup.py drive --out /out $DRIVE_ARGS
     rc=\$?

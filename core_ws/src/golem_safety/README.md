@@ -15,7 +15,7 @@ replaces is in the change report beside it,
 
 ## Running it
 
-The bringups start the node (`h12_bringup`'s `h12_control.launch.py`, `g1_bringup`'s
+The bringups start the node (`golem_bringup`'s `h12_control.launch.py` and
 `g1_core.launch.py`). On its own:
 
 ```bash
@@ -84,15 +84,15 @@ Both robots' `LowCmd`/`LowState` motor arrays hold 35 slots.
 
 | Robot | Config | Mode | Run by |
 |---|---|---|---|
-| H1-2 | `relax_safety_split` | split | `h12_real_robot_bringup` (the `h12_control.launch.py` default), `lmg_sim_bringup`, `lmg_real_bringup`, `h12_safety_grippers` (their defaults) |
+| H1-2 | `relax_safety_split` | split | `h12_real_robot` (the `h12_control.launch.py` default), `lmg_sim`, `lmg_real`, `h12_safety_grippers` (their defaults) |
 | H1-2 | `default_safety_split`, `tight_safety_split` | split | by name (`safety_config:=`) |
-| H1-2 | `sim_safety_split` | split | `h12_sim_bringup`, the Mac bringup, `tests/stack` |
+| H1-2 | `sim_safety_split` | split | `h12_sim`, the Mac bringup, `tests/stack` |
 | H1-2 | `default_safety_full`, `relax_safety_full`, `tight_safety_full`, `locomotion_safety_full` | full body | by name |
-| G1 | `arm_sdk` | arm_sdk | `g1_bringup.launch.py` (default) |
-| G1 | `sim_arm_sdk` | arm_sdk | `g1_sim_bringup.launch.py` (default) |
-| G1 | `split` | split | `g1_bringup.launch.py safety_config:=split` (walking) |
-| G1 | `sim_split` | split | `g1_sim_bringup.launch.py use_locomotion:=true` |
-| G1 | `full` | full body | refused by `g1_bringup` (it must relay the upper-body input) |
+| G1 | `arm_sdk` | arm_sdk | `g1_real_robot.launch.py` (default) |
+| G1 | `sim_arm_sdk` | arm_sdk | `g1_sim.launch.py` (default) |
+| G1 | `split` | split | `g1_real_robot.launch.py safety_config:=split` (walking) |
+| G1 | `sim_split` | split | `g1_sim.launch.py use_locomotion:=true` |
+| G1 | `full` | full body | refused by `g1_core.launch.py` (it must relay the upper-body input) |
 
 What the robots' configs share:
 

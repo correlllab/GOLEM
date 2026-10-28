@@ -22,7 +22,7 @@ GOLEM_SPAWN_BACKOFF=2.0 docker/scripts/docker_run.sh robocasa --g1 --layout 9 --
 
 # terminal 2
 docker/scripts/docker_run.sh ros --g1
-ros2 launch g1_bringup g1_sim_bringup.launch.py use_locomotion:=true
+ros2 launch golem_bringup g1_sim.launch.py use_locomotion:=true
 
 # terminal 3: once the walking node has taken the legs
 docker exec -it golem_ros bash
@@ -47,7 +47,7 @@ Not covered by these docs. Split mode needs Unitree's controller released by
 the operator first, which nothing in this stack does. The interlocks the
 bringup enforces (`safety_config:=split`, `start_position_verified:=true`, a
 gantry because the split estop turns every motor off) are in
-`g1_bringup.launch.py`'s docstring and in [Safety layer](safety.md). A
+`g1_real_robot.launch.py`'s docstring and in [Safety layer](safety.md). A
 walking-node fault does not trip that estop: the safety layer holds the legs on
 the node's last command ([Safety layer](safety.md), Quiet inputs).
 

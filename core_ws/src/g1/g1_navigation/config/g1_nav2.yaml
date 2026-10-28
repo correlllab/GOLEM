@@ -13,8 +13,8 @@
 # of /cmd_vel.
 #
 # Costmap layer parameters sit directly under the layer's name. A
-# ros__parameters level there (as in g1_bringup/config/nav2_config.yaml) hides
-# them, and Nav2 silently falls back to its defaults.
+# ros__parameters level there hides them, and Nav2 silently falls back to its
+# defaults.
 #
 # use_sim_time comes from the launch file.
 

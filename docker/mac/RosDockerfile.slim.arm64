@@ -150,8 +150,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Overlay the colcon install in interactive shells so `docker exec … bash` sees
-# the same packages as the running bringup (incl. h12_bringup, so
-# `ros2 launch h12_bringup <TAB>` works). launch_ros_mac.sh builds to
+# the same packages as the running bringup (incl. golem_bringup, so
+# `ros2 launch golem_bringup <TAB>` works). launch_ros_mac.sh builds to
 # /opt/core_ws/install (INSTALL_BASE, a named volume on the VM's native ext4 —
 # NOT the virtiofs-mounted /home/code/core_ws/install, which may hold a stale
 # host-side build). Source that same path here.

@@ -1,8 +1,8 @@
 # G1 acceptance tests
 
-End-to-end tests of the G1 in the RoboCasa sim with its whole bringup (`g1_bringup`). Each one
+End-to-end tests of the G1 in the RoboCasa sim with its whole bringup (`golem_bringup`). Each one
 builds `core_ws` for the G1, starts the sim headless in the layout 9 / style 9 / seed 42 kitchen,
-runs `g1_sim_bringup.launch.py` and the test's steps beside it, and then checks the sim's own
+runs `g1_sim.launch.py` and the test's steps beside it, and then checks the sim's own
 recording of the run.
 
 ```bash

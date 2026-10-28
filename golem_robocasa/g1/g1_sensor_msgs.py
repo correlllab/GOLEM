@@ -48,8 +48,9 @@ HEAD_OPTICAL_FRAME = "head_color_optical_frame"
 REFLECTIVITY = 100
 TAG = 0
 # the driver's lidar_id is its handle cast to uint8: inet_addr of the lidar's IP
-# (192.168.123.120 in g1_bringup's MID360_config.json), whose low byte on a
-# little-endian host is the first octet
+# (192.168.123.120, the address in h12_slam's MID360_config.json; the G1 has no
+# driver config of its own yet), whose low byte on a little-endian host is the
+# first octet
 LIDAR_ID = 192
 # image_transport's plugins as installed in Humble (compressed/compressedDepth 2.5.5),
 # checked by republishing through them: JPEG quality 95; compressedDepth zeroes

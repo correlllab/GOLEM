@@ -9,7 +9,7 @@
 # Builds core_ws for the G1 and starts the sim (h12_mujoco.py --g1) headless,
 # with its sensors on, in the layout 9 / style 9 / seed 42 kitchen, the spawn
 # backed NAV_BACKOFF m into open floor. In its network namespace a ros container
-# then runs 'ros2 launch g1_bringup g1_sim_bringup.launch.py use_rviz:=false
+# then runs 'ros2 launch golem_bringup g1_sim.launch.py use_rviz:=false
 # use_locomotion:=true use_nav:=true odom_source:=...' and the test's steps
 # (test_sim_nav.py drive): wait for the walking node and Nav2, send one
 # NavigateToPose goal (the sim's pick from its own geometry, or NAV_GOAL),
@@ -82,7 +82,7 @@ g1_test_start_sim test_sim_nav.py "${SIM_ENV[@]}"
 grep "\[test_sim_nav\]" "$OUT/sim.log" || true
 echo "[test_sim_nav] sim up; starting the bringup with the walking node and navigation"
 
-g1_test_run_ros 900 "ros2 launch g1_bringup g1_sim_bringup.launch.py use_rviz:=false use_locomotion:=true use_nav:=true \
+g1_test_run_ros 900 "ros2 launch golem_bringup g1_sim.launch.py use_rviz:=false use_locomotion:=true use_nav:=true \
         odom_source:=$ODOM > /out/launch.log 2>&1 &
     LAUNCH=\$!
     python3 -u /home/code/tests/g1/test_sim_nav.py drive --out /out $DRIVE_ARGS

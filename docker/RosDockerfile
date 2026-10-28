@@ -217,7 +217,7 @@ WORKDIR /home/code/core_ws
 CMD ["/home/code/h12_sim_scripts/launch_ros.sh"]
 
 # -----------------------------------------------------------------------------
-# Tkinter — needed by h12_bringup's slider_debugger (Tk GUI for live wrist /
+# Tkinter — needed by golem_bringup's slider_debugger (Tk GUI for live wrist /
 # gripper control). Appended at the end so iterating on this layer does not
 # bust the heavy apt / pip / SAM / robocasa layers above.
 # -----------------------------------------------------------------------------
@@ -571,7 +571,7 @@ assert b.exists(), f'agent_server binary missing at {b}'; \
 print('MJPC OK — mujoco', mujoco.__version__, '| agent_server:', b)"
 
 # -----------------------------------------------------------------------------
-# Intel RealSense ROS driver — h12_real_desktop_bringup.launch.py now includes
+# Intel RealSense ROS driver — h12_real_desktop.launch.py now includes
 # cl_realsense's h12_hand_cameras.launch.py (both wrist cams' USB runs on the
 # companion desktop), which launches realsense2_camera_node. The apt package
 # pulls librealsense2 with it. image-transport-plugins supplies the

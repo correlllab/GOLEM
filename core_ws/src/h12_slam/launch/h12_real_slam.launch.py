@@ -10,10 +10,11 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 # h12_slam nav stack; no estop, safety layer or IK, so no joint is commanded.
 # ROS_DOMAIN_ID must be exported in the launching shell (0 on the real robot).
 #
-# The drivers and state publishers are h12_bringup building blocks. h12_bringup
-# is deliberately not an exec_depend of h12_slam: h12_bringup already
-# exec_depends on h12_slam, and colcon rejects the cycle. It is resolved here at
-# launch time, so this file needs h12_bringup built in the same workspace.
+# The drivers and state publishers are golem_bringup building blocks (its
+# launch/h12/). golem_bringup is deliberately not an exec_depend of h12_slam:
+# golem_bringup already exec_depends on h12_slam, and colcon rejects the cycle.
+# It is resolved here at launch time, so this file needs golem_bringup built in
+# the same workspace.
 
 
 def _include(package, launch_file, launch_arguments):
@@ -29,7 +30,7 @@ def generate_launch_description():
     wall_time = {'use_sim_time': 'false'}
 
     return LaunchDescription([
-        _include('h12_bringup', 'h12_real_drivers.launch.py', wall_time),
-        _include('h12_bringup', 'h12_state.launch.py', wall_time),
+        _include('golem_bringup', 'h12/h12_real_drivers.launch.py', wall_time),
+        _include('golem_bringup', 'h12/h12_state.launch.py', wall_time),
         _include('h12_slam', 'h12_navigation.launch.py', wall_time),
     ])

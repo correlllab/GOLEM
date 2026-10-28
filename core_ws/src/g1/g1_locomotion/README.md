@@ -35,7 +35,8 @@ ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.3}}"
 ros2 topic pub --once /locomotion/height std_msgs/msg/Float32 "{data: 0.7}"
 ```
 
-`g1_bringup` starts it with `use_locomotion:=true`; see its launch files.
+The G1 bringups (`golem_bringup`'s `launch/g1/`) start it with `use_locomotion:=true`; see
+their launch files.
 
 ## DDS interface
 

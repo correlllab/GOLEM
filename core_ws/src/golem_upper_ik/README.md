@@ -18,8 +18,8 @@ replaces is in the change report beside it,
 
 ## Running it
 
-The bringups start both nodes (`h12_bringup`'s `h12_control.launch.py` and
-`h12_state.launch.py`, `g1_bringup`'s `g1_core.launch.py`), after `golem_safety`'s
+The bringups start both nodes (`golem_bringup`'s `h12_control.launch.py` and
+`h12_state.launch.py`, and its `g1_core.launch.py`), after `golem_safety`'s
 `safety_node`. On their own:
 
 ```bash

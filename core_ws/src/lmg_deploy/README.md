@@ -74,7 +74,7 @@ python scripts/skrl/deploy_parity.py --headless --checkpoint <same> \
 
 ## Running in the sim
 
-`h12_bringup/launch/lmg_sim_bringup.launch.py` starts everything (the policy node comes from the shared
+`golem_bringup/launch/h12/lmg_sim.launch.py` starts everything (the policy node comes from the shared
 block `h12_locomanipulationgame.launch.py`):
 - the state publishers;
 - the split safety layer with the real robot's preset (`relax_safety_split`; ankle pitch torque e-stop 95 Nm since 10-20, sport mode peaks at 93);
@@ -91,7 +91,7 @@ export ROS_DOMAIN_ID=42
 docker/scripts/docker_run.sh robocasa env GOLEM_SPAWN_BACKOFF=0.3 \
     /home/code/h12_sim_scripts/launch_robocasa.sh --headless --task AirDryFruit --layout 1 --seed 42   # terminal 1
 docker/scripts/docker_run.sh ros                                                                     # terminal 2, then:
-ros2 launch h12_bringup lmg_sim_bringup.launch.py policy:=<name>
+ros2 launch golem_bringup lmg_sim.launch.py policy:=<name>
 ```
 
 **Launch arguments:** `use_slam` (default `true`; with `false` the arm goals ride with the pelvis and the node warns),
@@ -133,15 +133,15 @@ ros2 topic echo /marl_deploy_node/wrist_error   # m, left and right
 
 ## Real robot
 
-On the onboard PC, run `h12_bringup/launch/lmg_real_bringup.launch.py` **instead of**
-`h12_real_robot_bringup.launch.py`, never beside it. It starts the same drivers, state publishers, estop, safety
+On the onboard PC, run `golem_bringup/launch/h12/lmg_real.launch.py` **instead of**
+`h12_real_robot.launch.py`, never beside it. It starts the same drivers, state publishers, estop, safety
 layer and `h12_slam` navigation stack, without `frame_task_server`, plus the shared game block on wall-clock time. Keep the lower-body RL and MJPC
 controllers off.
 
 ```bash
 export ROS_DOMAIN_ID=0
-ros2 launch h12_bringup lmg_real_bringup.launch.py policy:=<name>                                # sensors, safety, SLAM
-ros2 launch h12_bringup lmg_real_bringup.launch.py policy:=<name> start_position_verified:=true  # + the policy node
+ros2 launch golem_bringup lmg_real.launch.py policy:=<name>                                # sensors, safety, SLAM
+ros2 launch golem_bringup lmg_real.launch.py policy:=<name> start_position_verified:=true  # + the policy node
 ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger          # engage
 ```
 

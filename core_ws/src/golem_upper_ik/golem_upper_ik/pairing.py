@@ -6,7 +6,7 @@ for these checks, used by the bringups. Configs are told apart by name; a direct
 - H1-2: each safety config runs with one controller config (H12_SAFETY_CONTROLLER_CONFIGS),
   as the H1-2 bringups launch them; a known controller config with another known safety
   config is refused. Nothing is refused for being a sim or a real config, since one config
-  serves both (lmg_sim_bringup runs relax_safety_split), and the H1-2 has no locomotion rule.
+  serves both (lmg_sim runs relax_safety_split), and the H1-2 has no locomotion rule.
 - G1: the safety config must relay the upper-body channel, sim configs (named sim*) and real
   ones do not mix, a walking policy needs the split configs, and each known safety config runs
   with one controller config (G1_SAFETY_CONTROLLER_CONFIGS).

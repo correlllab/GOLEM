@@ -41,7 +41,7 @@ snug, legs free to bend — and keep a hand on the e-stop. Launching IS the
 start of motion:
 
 ```bash
-ros2 launch h12_bringup h12_real_desktop_bringup.launch.py start_position_verified:=true
+ros2 launch golem_bringup h12_real_desktop.launch.py start_position_verified:=true
 ```
 
 What happens, in order (`lowerbody_controller_node`):
@@ -87,5 +87,5 @@ forced to 0), above it walks. Publish `/cmd_vel` (teleop or nav2):
 ### Sim
 
 ```bash
-ros2 launch h12_bringup h12_sim_bringup.launch.py lowerbody:=almi
+ros2 launch golem_bringup h12_sim.launch.py lowerbody:=almi
 ```

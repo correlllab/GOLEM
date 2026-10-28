@@ -40,9 +40,9 @@ is required before anything builds.
 
 **`core_ws/src` in-tree packages** (versioned directly in this repo, *not*
 submodules): `FAST_LIO`, `golem_safety`, `golem_upper_ik`, `h12_deploy_mjpc`,
-`h12_lowerbody_rl`, `h12_slam`, `h12_skills`, `h12_bringup`, `lmg_deploy`,
-`model_server`, and the G1 packages in `core_ws/src/g1/` (`g1_bringup`,
-`g1_description`, `g1_dex3`, `g1_locomotion`, `g1_navigation`).
+`h12_lowerbody_rl`, `h12_slam`, `h12_skills`, `golem_bringup`, `lmg_deploy`,
+`model_server`, and the G1 packages in `core_ws/src/g1/` (`g1_description`,
+`g1_dex3`, `g1_locomotion`, `g1_navigation`).
 
 `golem_safety` (C++, `ament_cmake`) and `golem_upper_ik` (Python) are the
 safety layer and arm controller of both robots, so they build for both; the
@@ -291,8 +291,8 @@ The mounts stay out of the base file, so an H1-2 checkout without the
 `leprechaun_g1` submodule still starts. For the G1, `prepare_mounts` checks
 the description and policy files (missing files and LFS pointers) before any
 container starts, and `launch_ros.sh` builds the `g1_*` packages, which it
-skips for the H1-2. `docker_stack.sh` sets `GOLEM_BRINGUP_PACKAGE=g1_bringup`
-and `GOLEM_BRINGUP_LAUNCH=g1_sim_bringup.launch.py` for the stack overlay, and
+skips for the H1-2. `docker_stack.sh` sets `GOLEM_BRINGUP_PACKAGE=golem_bringup`
+and `GOLEM_BRINGUP_LAUNCH=g1_sim.launch.py` for the stack overlay, and
 `wait_for_sim.py` refuses a simulator of the other robot. The G1 uses the same
 images and container names as the H1-2, and the wrappers refuse it on Mac and
 with Isaac.
@@ -373,7 +373,7 @@ docker/scripts/docker_run.sh ros                 # workspace shell (auto colcon 
 docker/scripts/docker_run.sh isaac
 
 # inside the ros container
-ros2 launch h12_bringup h12_sim_bringup.launch.py
+ros2 launch golem_bringup h12_sim.launch.py
 colcon build --symlink-install                   # force a rebuild
 
 # MJPC iteration (inside golem_ros)

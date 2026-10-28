@@ -79,7 +79,7 @@ docker/scripts/docker_run.sh robocasa --g1 --layout 9 --style 9 --seed 42
 
 # terminal 2: builds core_ws for the G1 if needed, then opens a shell
 docker/scripts/docker_run.sh ros --g1
-ros2 launch g1_bringup g1_sim_bringup.launch.py    # options: use_rviz:=false use_hands:=false
+ros2 launch golem_bringup g1_sim.launch.py    # options: use_rviz:=false use_hands:=false
 
 # terminal 3
 docker exec -it golem_ros bash

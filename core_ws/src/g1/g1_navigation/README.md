@@ -17,10 +17,10 @@ the robot to the frontiers of the map until none is left
 ## Run
 
 ```bash
-# with the sim's bringup (g1_bringup): the core, the walking node and this
-ros2 launch g1_bringup g1_sim_bringup.launch.py use_locomotion:=true use_nav:=true
-ros2 launch g1_bringup g1_sim_bringup.launch.py use_locomotion:=true use_nav:=true odom_source:=sim_gt
-ros2 launch g1_bringup g1_sim_bringup.launch.py use_locomotion:=true use_nav:=true frontier_explore:=true
+# with the sim's bringup (golem_bringup): the core, the walking node and this
+ros2 launch golem_bringup g1_sim.launch.py use_locomotion:=true use_nav:=true
+ros2 launch golem_bringup g1_sim.launch.py use_locomotion:=true use_nav:=true odom_source:=sim_gt
+ros2 launch golem_bringup g1_sim.launch.py use_locomotion:=true use_nav:=true frontier_explore:=true
 
 # alone, beside a running core
 ros2 launch g1_navigation g1_navigation.launch.py                          # real robot, FAST_LIO
@@ -42,7 +42,7 @@ own frame. Send goals to `/navigate_to_pose` (RViz's "2D Goal Pose" does).
 | `fastlio_config` | (by `sim`) | a FAST_LIO config in `config/` |
 | `pelvis_height` | `0.744` | pelvis above the floor when FAST_LIO starts (HOMIE standing) |
 | `nav2_params`, `slam_params` | `config/g1_nav2.yaml`, `config/g1_slam_toolbox.yaml` | |
-| `frontier_explore` | `false` | `true` adds the frontier explorer ([below](#frontier-exploration)); `g1_sim_bringup.launch.py` passes it through |
+| `frontier_explore` | `false` | `true` adds the frontier explorer ([below](#frontier-exploration)); `g1_sim.launch.py` passes it through |
 
 - `fastlio`: start it with the robot standing still. FAST_LIO initialises on its
   first scans, and odom assumes the torso level and the pelvis at
@@ -313,9 +313,8 @@ within 2.5 cm ([In the G1 sim](#in-the-g1-sim)).
 ## Nav2
 
 `config/g1_nav2.yaml` (Humble 1.1). The costmap layers' parameters sit directly
-under each layer's name. A `ros__parameters` level there, as in
-`g1_bringup/config/nav2_config.yaml`, hides them and Nav2 falls back to its
-defaults without a warning.
+under each layer's name. A `ros__parameters` level there hides them and Nav2
+falls back to its defaults without a warning.
 
 - Nav2's `robot_base_frame` is `base_footprint` too (the navigator, the
   behaviors and both costmaps): level, on the floor, at the pelvis's x, y and
@@ -382,7 +381,7 @@ defaults without a warning.
 ## In the G1 sim
 
 `tests/g1/test_sim_nav.sh` (`GOLEM_SIM_ODOM=1` for `sim_gt`) runs the G1
-RoboCasa sim with its sensors and `g1_sim_bringup.launch.py use_locomotion:=true
+RoboCasa sim with its sensors and `g1_sim.launch.py use_locomotion:=true
 use_nav:=true`, and sends one goal: by default 2.48 m from the spawn in open
 floor, picked from the sim's own geometry (a 57 deg turn in place, then a walk),
 or `NAV_GOAL`'s (the corridor above: a turn, then 7.6-7.7 m around the
@@ -445,7 +444,7 @@ It has not run on the robot. `tests/g1/test_sim_explore.sh` is the tested
 path ([below](#exploring-in-the-g1-sim)); the commands here were not run by hand.
 
 ```bash
-ros2 launch g1_bringup g1_sim_bringup.launch.py use_locomotion:=true use_nav:=true frontier_explore:=true
+ros2 launch golem_bringup g1_sim.launch.py use_locomotion:=true use_nav:=true frontier_explore:=true
 ros2 action send_goal /skill/frontier_explore custom_ros_messages/action/SkillFrontierExplore \
     "{timeout: {sec: 120}}" --feedback
 ```
@@ -533,7 +532,7 @@ and 804 cells, 1.5-1.6 m); it was seen on the way after 2-3 s. On the robot, wit
 
 `tests/g1/test_sim_explore.sh` (`GOLEM_SIM_ODOM=1` for `sim_gt`) runs the
 G1 sim in the nav test's kitchen and spawn, with
-`g1_sim_bringup.launch.py use_locomotion:=true use_nav:=true
+`g1_sim.launch.py use_locomotion:=true use_nav:=true
 frontier_explore:=true`, and sends one `SkillFrontierExplore` goal (timeout
 120 s, the defaults otherwise). It ends when the explorer reports, then stops
 the sim and the bringup as the nav test does. The floor the robot can reach

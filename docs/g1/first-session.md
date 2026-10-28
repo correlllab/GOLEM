@@ -1,7 +1,7 @@
 # First real G1 session
 
 The first session on the real G1 is **arms only**. Unitree's controller keeps
-balancing the legs. The laptop runs the bringup (`g1_bringup.launch.py`) with
+balancing the legs. The laptop runs the bringup (`g1_real_robot.launch.py`) with
 the [safety layer](safety.md) (`golem_safety`) in arm_sdk mode and the arm
 controller (`golem_upper_ik`), and no hand driver.
 
@@ -23,7 +23,7 @@ first ([Arms by hand](index.md#arms-by-hand), sending only `home` and
 | 4. Robot and people | Robot standing under Unitree's controller, on a gantry or in a harness. Nobody within reach of the arms. |
 | 5. Start the container | `docker/scripts/docker_run.sh ros --g1`; it prints `robot: g1` and asks you to confirm domain 0. |
 | 6. Read-only checks | Gate: the container is the G1's and pinned to the robot's port, or exit and fix `docker/.env` and the shell's exports. Then nothing else writes the command topics, and `rt/lowstate` arrives. |
-| 7. Launch | `ros2 launch g1_bringup g1_bringup.launch.py use_hands:=false use_rviz:=false` |
+| 7. Launch | `ros2 launch golem_bringup g1_real_robot.launch.py use_hands:=false use_rviz:=false` |
 | 8. Named configs | Send only `home` and `arms_down` on `/named_config`, one at a time. |
 | 9. Stop | Stop the controller first (the safety layer latches and hands the arms back), wait for the hand-back, then Ctrl+C the launch. |
 
@@ -227,7 +227,7 @@ If it only prints `no data yet`, check the cable, then in a laptop shell
 ### 7. First launch (terminal 1)
 
 ```bash
-PYTHONUNBUFFERED=1 ros2 launch g1_bringup g1_bringup.launch.py use_hands:=false use_rviz:=false
+PYTHONUNBUFFERED=1 ros2 launch golem_bringup g1_real_robot.launch.py use_hands:=false use_rviz:=false
 ```
 
 `PYTHONUNBUFFERED=1` is harmless: it makes every Python node's prints appear as

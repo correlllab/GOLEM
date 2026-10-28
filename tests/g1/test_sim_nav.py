@@ -10,7 +10,7 @@ and has the usage.
           own geometry (<out>/scene.npz) and picks the goal, or takes NAV_GOAL's
           (<out>/goal.json). It stops on <out>/stop and saves sim.npz, then
           contacts.json
-  drive   in the ros container, beside 'ros2 launch g1_bringup g1_sim_bringup.launch.py
+  drive   in the ros container, beside 'ros2 launch golem_bringup g1_sim.launch.py
           use_locomotion:=true use_nav:=true': waits until the walking node walks
           and Nav2's lifecycle nodes are active, sends one NavigateToPose goal,
           and records /cmd_vel, the TF the stack computes, the scan path's

@@ -10,7 +10,7 @@ test_sim_explore.sh runs them and has the usage. Built on test_sim_nav.py.
           grid, 10 x 10 m around the spawn, connected to the spawn through cells at
           least PATH_CLEARANCE (0.35 m) from anything the robot can touch. The nav
           test's goal (<out>/goal.json) is not used
-  drive   in the ros container, beside 'ros2 launch g1_bringup g1_sim_bringup.launch.py
+  drive   in the ros container, beside 'ros2 launch golem_bringup g1_sim.launch.py
           use_locomotion:=true use_nav:=true frontier_explore:=true': waits until the
           walking node walks, Nav2 is active and /skill/frontier_explore is served,
           stands STAND_S, sends one SkillFrontierExplore goal (timeout EXPLORE_TIMEOUT_S,

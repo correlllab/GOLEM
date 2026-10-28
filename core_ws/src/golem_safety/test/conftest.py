@@ -188,6 +188,10 @@ class FakeRobot:
         # (triggered, plugged_in) streamed when set; None leaves that topic silent
         self.estop_values: tuple | None = None
         self._streamed: list = []  # (publisher, command)
+        # held by the stream thread while it publishes a streamed command, and by
+        # close_publisher while it removes and destroys a publisher: a destroyed publisher is
+        # never written to
+        self._publisher_lock = threading.Lock()
         # written once in place of the first streamed command
         self.once = None
         self._publishers: list = []
@@ -268,9 +272,10 @@ class FakeRobot:
         return pub
 
     def close_publisher(self, pub) -> None:
-        self._streamed = [(p, c) for p, c in self._streamed if p is not pub]
-        self._publishers.remove(pub)
-        self.node.destroy_publisher(pub)
+        with self._publisher_lock:
+            self._streamed = [(p, c) for p, c in self._streamed if p is not pub]
+            self._publishers.remove(pub)
+            self.node.destroy_publisher(pub)
 
     def stream(self, *pairs) -> None:
         '''Write each (publisher, command) at 100 Hz from the stream thread until changed'''
@@ -311,9 +316,10 @@ class FakeRobot:
                     for pub, value in zip(self._estop_pubs, values):
                         if value is not None:
                             pub.publish(self._bool_type(data=value))
-                for pub, cmd in list(self._streamed):
-                    once, self.once = self.once, None
-                    pub.publish(cmd if once is None else once)
+                with self._publisher_lock:
+                    for pub, cmd in self._streamed:
+                        once, self.once = self.once, None
+                        pub.publish(cmd if once is None else once)
             tick += 1
             next_write += STATE_PERIOD
             delay = next_write - time.monotonic()
@@ -352,8 +358,8 @@ def write_config(directory: Path, robot: str, name: str, logging: dict | None = 
                  **sections) -> tuple[Path, dict]:
     '''
     The installed config name of robot, logging off (or as given), with each keyword
-    section's keys replaced, written to directory/robot/name.yaml (a directory named after
-    the robot, as the node requires of a config path)
+    section's keys replaced, written to directory/robot/name.yaml: the node refuses a config
+    in a directory named after another robot, so this one is in a directory named after its own
     '''
     raw = yaml.safe_load((share_dir() / 'config' / robot / f'{name}.yaml').read_text())
     raw['logging'] = {**raw.get('logging', {}), 'enabled': False, **(logging or {})}

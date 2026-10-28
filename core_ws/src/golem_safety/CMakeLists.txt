@@ -21,6 +21,7 @@ find_package(Threads REQUIRED)
 add_library(golem_safety_core
   src/chunk_logger.cpp
   src/config.cpp
+  src/json.cpp
   src/lowcmd.cpp
   src/robot_profile.cpp
   src/safety_core.cpp)

@@ -1,8 +1,9 @@
 '''
-safety_node over ROS on domain 91: the G1 safety suite ported from raw DDS to ROS, run for
-each robot whose behavior it pins, and the node's own start-up, relay, heartbeat,
-hardware-estop and exit behavior. Timing is read from the node's own publish times (the
-source timestamps), and assertions on time keep generous margins.
+safety_node over ROS on domain 91, against a fake robot: the start-up refusals, the relay,
+the start-up and engage rules, the estop latch, the heartbeat, the hardware estop and the
+exit hand-back, each run for the robots whose behavior it pins. Timing is read from the
+node's own publish times (the source timestamps), and assertions on time keep generous
+margins.
 '''
 
 import os
@@ -159,10 +160,13 @@ def _refused(robot, config, timeout: float = 30.0, **kwargs) -> tuple[int, str]:
 
 
 @pytest.mark.parametrize('robot, config, words', [
-    ('h12', 'arm_sdk', ['h12', 'arm_sdk']),
-    ('g1', 'default_safety_split', ['g1', 'default_safety_split']),
-    ('h12', 'share:g1/full.yaml', ['h12', 'g1/full.yaml', 'g1']),
-    ('g1', 'share:h12/sim_safety_split.yaml', ['g1', 'h12/sim_safety_split.yaml']),
+    ('h12', 'arm_sdk', ['h12', 'arm_sdk', "no config 'arm_sdk' for robot h12"]),
+    ('g1', 'default_safety_split',
+     ['g1', 'default_safety_split', "no config 'default_safety_split' for robot g1"]),
+    ('h12', 'share:g1/full.yaml',
+     ['h12', 'g1/full.yaml', 'in the config directory of robot g1, not of robot h12']),
+    ('g1', 'share:h12/sim_safety_split.yaml',
+     ['g1', 'h12/sim_safety_split.yaml', 'in the config directory of robot h12, not of robot g1']),
     ('h12', 'tmp:mode: arm_sdk_mode', ['h12', 'arm_sdk_mode']),
 ], ids=['h12-g1_name', 'g1-h12_name', 'h12-g1_path', 'g1-h12_path', 'h12-g1_mode'])
 def test_config_for_other_robot_is_refused(tmp_path, robot, config, words):
@@ -243,6 +247,12 @@ def test_sim_refuses_domain_zero(domain):
         extra['ROS_DOMAIN_ID'] = domain
     drop = ('ROS_LOCALHOST_ONLY',) + (('ROS_DOMAIN_ID',) if domain is None else ())
     env = node_env(extra, drop=drop)
+    # CYCLONEDDS_URI, which keeps domain 0 on the loopback interface, is read by CycloneDDS
+    # only: under another RMW the processes below would join domain 0 on the real interfaces
+    assert env.get('RMW_IMPLEMENTATION') == 'rmw_cyclonedds_cpp', (
+        'this test needs RMW_IMPLEMENTATION=rmw_cyclonedds_cpp: under any other RMW the '
+        'loopback-only CYCLONEDDS_URI has no effect, and the test would join domain 0, the '
+        "real robots' command bus, on the real network interfaces")
     watcher = subprocess.Popen([sys.executable, '-c', DOMAIN_0_WATCHER, '4.0'], env=env,
                                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:

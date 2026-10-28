@@ -7,8 +7,9 @@
 //     take() and calls step() at control.publish_hz, sleeping to absolute deadlines on the
 //     boot clock; on exit it calls exit_step() at the same rate until the core is done.
 //     It is the only thread that touches SafetyCore, except for estopped();
-//   - an executor thread runs the 10 Hz /safety/heartbeat wall timer, which reads only
-//     estopped(); the polled subscriptions are in a callback group no executor spins;
+//   - an executor thread (a Spinner) runs the 10 Hz /safety/heartbeat wall timer, which
+//     reads only estopped(); the polled subscriptions are in a callback group no executor
+//     spins;
 //   - an EventLog thread writes every log line, so that stderr can never block the relay;
 //   - main() waits for SIGINT, SIGTERM or SIGHUP, which every thread blocks, then has the
 //     relay run the exit sequence before rclcpp shuts down.
@@ -35,6 +36,7 @@
 #include "golem_safety/boot_clock.hpp"
 #include "golem_safety/chunk_logger.hpp"
 #include "golem_safety/config.hpp"
+#include "golem_safety/json.hpp"
 #include "golem_safety/robot_profile.hpp"
 #include "golem_safety/safety_core.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -60,24 +62,6 @@ constexpr double kLogDrainSeconds = 1.0;
 // How long an exit sequence may overrun its ramp or burst before it counts as failed, s;
 // it covers the short weight-0 hold that follows the arm_sdk ramp (SafetyCore::exit_step).
 constexpr double kExitMarginSeconds = 1.0;
-
-std::string json_string(const std::string & text)
-{
-  std::string out = "\"";
-  for (const char c : text) {
-    if (c == '"' || c == '\\') {
-      out += '\\';
-      out += c;
-    } else if (static_cast<unsigned char>(c) < 0x20) {
-      char escaped[8];
-      std::snprintf(escaped, sizeof(escaped), "\\u%04x", static_cast<unsigned>(c));
-      out += escaped;
-    } else {
-      out += c;
-    }
-  }
-  return out + "\"";
-}
 
 const char * signal_name(int signum)
 {
@@ -403,6 +387,48 @@ private:
   std::thread thread_;
 };
 
+// Runs an executor's spin() on a thread of its own, and stops and joins it on every way out
+// of its scope, an exception included: a joinable std::thread that is destroyed ends the
+// process in std::terminate, with no exit sequence. Declare it after everything the
+// executor's callbacks use, so that it is destroyed first.
+class Spinner
+{
+public:
+  explicit Spinner(rclcpp::Executor & executor)
+  : executor_(executor), thread_([this] {
+      executor_.spin();
+      finished_.store(true, std::memory_order_release);
+    }) {}
+
+  ~Spinner() {stop();}
+
+  Spinner(const Spinner &) = delete;
+  Spinner & operator=(const Spinner &) = delete;
+
+  // Returns once spin() has returned; a second call does nothing. A cancel() that arrives
+  // before spin() has started is lost, so it is repeated until the thread returns.
+  void stop()
+  {
+    if (!thread_.joinable()) {
+      return;
+    }
+    while (!finished_.load(std::memory_order_acquire)) {
+      try {
+        executor_.cancel();
+      } catch (const std::exception &) {
+        // spin() ends by itself once the context is invalid
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    thread_.join();
+  }
+
+private:
+  rclcpp::Executor & executor_;
+  std::atomic<bool> finished_{false};
+  std::thread thread_;  // last: it starts in the constructor, and uses the members above
+};
+
 // The node's parameters, read once at start.
 struct Parameters
 {
@@ -557,7 +583,7 @@ int run(int argc, char ** argv, const sigset_t & exit_signals)
     estop_plugged_in);
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(node);
-  std::thread spinner([&executor] {executor.spin();});
+  Spinner spinner(executor);
   relay.start();
   {
     std::string started = "{\"config\": " + json_string(config->source) +
@@ -605,8 +631,7 @@ int run(int argc, char ** argv, const sigset_t & exit_signals)
     code = 1;
   }
 
-  executor.cancel();
-  spinner.join();
+  spinner.stop();
   // the chunk logger last, after the final commands
   if (chunks) {
     chunks->stop();

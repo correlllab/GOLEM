@@ -21,7 +21,7 @@ ros2 run golem_safety safety_node --ros-args -p robot:=h12 -p config:=sim_safety
 | Parameter | Default | Meaning |
 |---|---|---|
 | `robot` | required | `h12` or `g1`: the profile in `robots/<robot>.yaml` |
-| `config` | required | a config name in `config/<robot>/`, or a path (not one in another robot's `config/` directory) |
+| `config` | required | a config name in `config/<robot>/`, or a path; a path whose parent directory is named after the other robot (`h12` or `g1`) is refused, wherever that directory is |
 | `sim` | `false` | `true` for a simulator; refused on ROS domain 0, the real robots' command bus |
 | `use_estop` | `false` | `true` to read the hardware estop on the config's `estop` topics |
 

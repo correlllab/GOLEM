@@ -97,12 +97,13 @@ a node runs with `robot:=g1`.
 
 `golem_upper_ik.pairing` holds these pairs (`H12_SAFETY_CONTROLLER_CONFIGS`,
 `G1_SAFETY_CONTROLLER_CONFIGS`) and the rules the bringups check before they start a node:
-`pairing_refusal(robot, controller, safety, sim, locomotion)` gives the reason a pair must not
-run, and `default_controller_config(robot, safety)` the controller config a safety config
-runs with. On the G1 it also refuses a safety config that does not relay the upper-body
-input (any config but the two that do, `full` included), sim and real configs mixed (told
-apart by the `sim` prefix of their names), and walking without the split configs. On the
-H1-2 a config outside the tables is not refused.
+`pairing_refusal(robot, controller, safety, sim)` gives the reason a pair must not run, and
+`default_controller_config(robot, safety)` the controller config a safety config runs with.
+On the G1 it refuses a safety config that does not relay the upper-body input (any config
+but the two that do, `full` included) and sim and real configs mixed (told apart by the
+`sim` prefix of their names); as one of its pairs is the real robot's and the other the
+sim's, that also keeps each known controller config to its own safety config. On the H1-2 a
+config outside the tables is not refused.
 
 ### Keys
 
@@ -216,10 +217,9 @@ later one is ignored. `frame_task_server` first sends its upper slots one comman
 publishing, then stops the planner and its `/lowstate` subscription, the last two even if an
 earlier step fails; the whole shutdown fits in launch's 5 s `sigterm_timeout`. The command
 gives the IK joints mode 0 and zero kp, kd and tau (q and dq as they were). The held joints
-get the same, unless the profile's `shutdown_keeps_held_joints_on_lowcmd` is set (the G1)
-and `topics.safety_out` is `/lowcmd`: then they keep their hold angle, gains and torque,
-since a walking policy on the legs needs a stiff waist. What `golem_safety` does with that
-command:
+get the same, unless the profile's `shutdown_keeps_held_joints_on_lowcmd` is set (the G1):
+then they keep their hold angle, gains and torque, since a walking policy on the legs needs
+a stiff waist. What `golem_safety` does with that command:
 
 - H1-2 (both modes): it relays it, so the torso and the arms go limp, and as a quiet input
   it stays relayed;

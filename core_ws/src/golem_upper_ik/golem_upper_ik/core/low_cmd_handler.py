@@ -20,8 +20,8 @@ profile's upper slots to golem_safety's input (topics.low_cmd) by a CommandPubli
   changes nothing here.
 - shutdown() sends one last command and stops publishing: the IK joints mode 0 with zero
   gains and torque, and the held joints the same, except where the profile keeps them
-  (shutdown_keeps_held_joints_on_lowcmd, the G1) and golem_safety writes /lowcmd: there they
-  keep their hold angle, gains and torque.
+  (shutdown_keeps_held_joints_on_lowcmd, the G1): there they keep their hold angle, gains
+  and torque.
 '''
 import math
 import threading
@@ -30,7 +30,6 @@ from typing import List, Optional
 
 import numpy as np
 
-from golem_upper_ik.config import SAFETY_OUTPUT_TOPICS
 from golem_upper_ik.core.follow_gate import FollowGate, relays_commands
 from golem_upper_ik.core.ros_io import CommandPublisher, SafetyOutputSubscriber, StaleStateError
 from golem_upper_ik.profile import RobotProfile
@@ -77,11 +76,9 @@ class LowCmdHandler:
         self._hold = np.zeros(len(self._held))  # start() sets it to the measured angles
 
         self._safety_output_topic = config['topics']['safety_out']
-        # the held joints stay on at shutdown: a walking policy may be on the legs
-        self._shutdown_keeps_held = (
-            profile.shutdown_keeps_held_joints_on_lowcmd
-            and self._safety_output_topic in (SAFETY_OUTPUT_TOPICS['split_mode'],
-                                              SAFETY_OUTPUT_TOPICS['full_body_mode']))
+        # golem_safety writes /lowcmd in every mode, so the profile alone decides whether
+        # the held joints stay on at shutdown (a walking policy may be on the legs)
+        self._shutdown_keeps_held = profile.shutdown_keeps_held_joints_on_lowcmd
         self._follow_gate = FollowGate(profile.upper_slots,
                                        config['controller']['follow_tolerance'])
         self._check_dt = 1.0 / float(config['frequency']['check_hz'])

@@ -5,7 +5,7 @@ The G1's verdicts are compared with the previous G1 arm controller's config_pair
 test/fixtures/old_controller/g1_pairing.json (test/fixtures/README.md); this test imports no
 old package. The pairs' topics and gain limits are read from golem_safety's installed configs.
 '''
-import itertools
+import inspect
 import json
 from pathlib import Path
 
@@ -36,19 +36,13 @@ def old_cases():
 
 def test_g1_pairing_matches_old_rules():
     cases = old_cases()['cases']
-    assert len(cases) == 294
+    assert len(cases) == 147
     for case in cases:
-        args = (case['controller'], case['safety'])
-        kwargs = {'sim': case['sim'], 'locomotion': case['locomotion']}
-        if case['verdict'] == 'raises':
-            with pytest.raises(Exception) as raised:
-                pairing_refusal('g1', *args, **kwargs)
-            assert type(raised.value).__name__ == case['exception'], case
-            continue
-        refusal = pairing_refusal('g1', *args, **kwargs)
+        refusal = pairing_refusal('g1', case['controller'], case['safety'], sim=case['sim'])
         if case['verdict'] == 'accepted':
             assert refusal is None, case
         else:
+            assert case['verdict'] == 'refused', case
             assert refusal == case['message'], case
 
 
@@ -71,16 +65,40 @@ def test_g1_arm_sdk_configs_refused():
         assert default_controller_config('g1', safety) is None
 
 
-def test_g1_default_pairs():
-    from golem_upper_ik.pairing import (
-        G1_CONTROLLER_CONFIGS, G1_SAFETY_CONTROLLER_CONFIGS, G1_UPPER_CHANNEL_SAFETY_CONFIGS)
-    assert G1_UPPER_CHANNEL_SAFETY_CONFIGS == ('split', 'sim_split')
-    assert G1_CONTROLLER_CONFIGS == ('g1_split', 'sim_split')
-    assert G1_SAFETY_CONTROLLER_CONFIGS == {'split': 'g1_split', 'sim_split': 'sim_split'}
-    assert default_controller_config('g1', 'split') == 'g1_split'
-    assert default_controller_config('g1', 'sim_split') == 'sim_split'
-    assert pairing_refusal('g1', 'g1_split', 'split', sim=False) is None
-    assert pairing_refusal('g1', 'sim_split', 'sim_split', sim=True) is None
+def test_g1_pairs():
+    '''split runs with g1_split and sim_split with sim_split; sim and real configs never mix'''
+    from golem_upper_ik import pairing
+    # no rule depends on the walking node: the G1 bringups start it beside the split
+    # configs they always run
+    assert list(inspect.signature(pairing_refusal).parameters) == [
+        'robot', 'controller_config', 'safety_config', 'sim']
+    assert not hasattr(pairing, 'G1_LOCOMOTION_SAFETY_CONFIGS')
+    assert not hasattr(pairing, 'G1_LOCOMOTION_CONTROLLER_CONFIGS')
+    assert pairing.G1_UPPER_CHANNEL_SAFETY_CONFIGS == ('split', 'sim_split')
+    assert pairing.G1_CONTROLLER_CONFIGS == ('g1_split', 'sim_split')
+    assert pairing.G1_SAFETY_CONTROLLER_CONFIGS == {'split': 'g1_split',
+                                                    'sim_split': 'sim_split'}
+    for safety, controller, sim in (('split', 'g1_split', False),
+                                    ('sim_split', 'sim_split', True)):
+        assert default_controller_config('g1', safety) == controller
+        for known in (None, sim):
+            assert pairing_refusal('g1', controller, safety, sim=known) is None
+            assert pairing_refusal('g1', f'/opt/{controller}.yaml', f'{safety}.yaml',
+                                   sim=known) is None
+
+    # sim and real mixed: refused with sim unknown, and on either side when it is known
+    for controller, safety in (('sim_split', 'split'), ('g1_split', 'sim_split')):
+        assert pairing_refusal('g1', controller, safety) == (
+            f'controller config "{controller}" and safety config "{safety}" mix sim and '
+            'real: use sim_split.yaml with sim_*, g1_split.yaml with the others')
+    assert pairing_refusal('g1', 'sim_split', 'split', sim=False) == (
+        'controller config "sim_split" is a sim config; the real robot never runs one')
+    assert pairing_refusal('g1', 'g1_split', 'sim_split', sim=False) == (
+        'safety config "sim_split" is a sim config; the real robot never runs one')
+    assert pairing_refusal('g1', 'g1_split', 'sim_split', sim=True) == (
+        'controller config "g1_split" is for the real robot, not the sim')
+    assert pairing_refusal('g1', 'sim_split', 'split', sim=True) == (
+        'safety config "split" is for the real robot, not the sim')
 
 
 def test_h12_pairs():
@@ -92,13 +110,12 @@ def test_h12_pairs():
 
 def test_h12_known_pairs_run_together_in_sim_and_real():
     for safety, controller in H12_PAIRS.items():
-        for sim, locomotion in itertools.product(SIMS, (False, True)):
+        for sim in SIMS:
             for safety_name, controller_name in (
                     (safety, controller),
                     (f'{safety}.yaml', f'{controller}.yaml'),
                     (f'/opt/configs/{safety}.yaml', f'config/{controller}.yaml')):
-                assert pairing_refusal('h12', controller_name, safety_name, sim=sim,
-                                       locomotion=locomotion) is None
+                assert pairing_refusal('h12', controller_name, safety_name, sim=sim) is None
 
 
 def test_h12_mismatched_pairs_are_refused():

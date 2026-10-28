@@ -4,23 +4,6 @@
    "controller": "g1_split",
    "safety": "split",
    "sim": null,
-   "locomotion": false,
-   "verdict": "accepted",
-   "message": null
-  },
-  {
-   "controller": "g1_split",
-   "safety": "split",
-   "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
-  },
-  {
-   "controller": "g1_split",
-   "safety": "split",
-   "sim": false,
-   "locomotion": false,
    "verdict": "accepted",
    "message": null
   },
@@ -28,7 +11,6 @@
    "controller": "g1_split",
    "safety": "split",
    "sim": false,
-   "locomotion": true,
    "verdict": "accepted",
    "message": null
   },
@@ -36,31 +18,13 @@
    "controller": "g1_split",
    "safety": "split",
    "sim": true,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"split\" is for the real robot, not the sim"
   },
   {
    "controller": "g1_split",
-   "safety": "split",
-   "sim": true,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not split"
-  },
-  {
-   "controller": "g1_split",
    "safety": "full",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "g1_split",
-   "safety": "full",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -68,15 +32,6 @@
    "controller": "g1_split",
    "safety": "full",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "g1_split",
-   "safety": "full",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -84,15 +39,6 @@
    "controller": "g1_split",
    "safety": "full",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "g1_split",
-   "safety": "full",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -100,111 +46,48 @@
    "controller": "g1_split",
    "safety": "sim_split",
    "sim": null,
-   "locomotion": false,
    "verdict": "refused",
    "message": "controller config \"g1_split\" and safety config \"sim_split\" mix sim and real: use sim_split.yaml with sim_*, g1_split.yaml with the others"
   },
   {
    "controller": "g1_split",
    "safety": "sim_split",
-   "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
-  },
-  {
-   "controller": "g1_split",
-   "safety": "sim_split",
    "sim": false,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"sim_split\" is a sim config; the real robot never runs one"
   },
   {
    "controller": "g1_split",
    "safety": "sim_split",
-   "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
-  },
-  {
-   "controller": "g1_split",
-   "safety": "sim_split",
    "sim": true,
-   "locomotion": false,
    "verdict": "refused",
    "message": "controller config \"g1_split\" is for the real robot, not the sim"
   },
   {
    "controller": "g1_split",
-   "safety": "sim_split",
-   "sim": true,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true needs controller_config:=sim_split, whose stiff waist the walking policy expects, not g1_split"
-  },
-  {
-   "controller": "g1_split",
    "safety": "/opt/configs/sim_split.yaml",
    "sim": null,
-   "locomotion": false,
    "verdict": "refused",
    "message": "controller config \"g1_split\" and safety config \"sim_split\" mix sim and real: use sim_split.yaml with sim_*, g1_split.yaml with the others"
   },
   {
    "controller": "g1_split",
    "safety": "/opt/configs/sim_split.yaml",
-   "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
-  },
-  {
-   "controller": "g1_split",
-   "safety": "/opt/configs/sim_split.yaml",
    "sim": false,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"sim_split\" is a sim config; the real robot never runs one"
   },
   {
    "controller": "g1_split",
    "safety": "/opt/configs/sim_split.yaml",
-   "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
-  },
-  {
-   "controller": "g1_split",
-   "safety": "/opt/configs/sim_split.yaml",
    "sim": true,
-   "locomotion": false,
    "verdict": "refused",
    "message": "controller config \"g1_split\" is for the real robot, not the sim"
   },
   {
    "controller": "g1_split",
-   "safety": "/opt/configs/sim_split.yaml",
-   "sim": true,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true needs controller_config:=sim_split, whose stiff waist the walking policy expects, not g1_split"
-  },
-  {
-   "controller": "g1_split",
    "safety": "custom",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "g1_split",
-   "safety": "custom",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -212,15 +95,6 @@
    "controller": "g1_split",
    "safety": "custom",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "g1_split",
-   "safety": "custom",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -228,15 +102,6 @@
    "controller": "g1_split",
    "safety": "custom",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "g1_split",
-   "safety": "custom",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -244,15 +109,6 @@
    "controller": "g1_split",
    "safety": "sim_custom",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "g1_split",
-   "safety": "sim_custom",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -260,15 +116,6 @@
    "controller": "g1_split",
    "safety": "sim_custom",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "g1_split",
-   "safety": "sim_custom",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -276,15 +123,6 @@
    "controller": "g1_split",
    "safety": "sim_custom",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "g1_split",
-   "safety": "sim_custom",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -292,15 +130,6 @@
    "controller": "g1_split",
    "safety": "relax_safety_split",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "g1_split",
-   "safety": "relax_safety_split",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -308,15 +137,6 @@
    "controller": "g1_split",
    "safety": "relax_safety_split",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "g1_split",
-   "safety": "relax_safety_split",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -324,15 +144,6 @@
    "controller": "g1_split",
    "safety": "relax_safety_split",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "g1_split",
-   "safety": "relax_safety_split",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -340,63 +151,27 @@
    "controller": "sim_split",
    "safety": "split",
    "sim": null,
-   "locomotion": false,
    "verdict": "refused",
    "message": "controller config \"sim_split\" and safety config \"split\" mix sim and real: use sim_split.yaml with sim_*, g1_split.yaml with the others"
   },
   {
    "controller": "sim_split",
    "safety": "split",
-   "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
-  },
-  {
-   "controller": "sim_split",
-   "safety": "split",
    "sim": false,
-   "locomotion": false,
    "verdict": "refused",
    "message": "controller config \"sim_split\" is a sim config; the real robot never runs one"
   },
   {
    "controller": "sim_split",
    "safety": "split",
-   "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true needs controller_config:=g1_split, whose stiff waist the walking policy expects, not sim_split"
-  },
-  {
-   "controller": "sim_split",
-   "safety": "split",
    "sim": true,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"split\" is for the real robot, not the sim"
   },
   {
    "controller": "sim_split",
-   "safety": "split",
-   "sim": true,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not split"
-  },
-  {
-   "controller": "sim_split",
    "safety": "full",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_split",
-   "safety": "full",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -404,15 +179,6 @@
    "controller": "sim_split",
    "safety": "full",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_split",
-   "safety": "full",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -420,15 +186,6 @@
    "controller": "sim_split",
    "safety": "full",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_split",
-   "safety": "full",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -436,47 +193,20 @@
    "controller": "sim_split",
    "safety": "sim_split",
    "sim": null,
-   "locomotion": false,
    "verdict": "accepted",
    "message": null
   },
   {
    "controller": "sim_split",
    "safety": "sim_split",
-   "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
-  },
-  {
-   "controller": "sim_split",
-   "safety": "sim_split",
    "sim": false,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"sim_split\" is a sim config; the real robot never runs one"
   },
   {
    "controller": "sim_split",
    "safety": "sim_split",
-   "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
-  },
-  {
-   "controller": "sim_split",
-   "safety": "sim_split",
    "sim": true,
-   "locomotion": false,
-   "verdict": "accepted",
-   "message": null
-  },
-  {
-   "controller": "sim_split",
-   "safety": "sim_split",
-   "sim": true,
-   "locomotion": true,
    "verdict": "accepted",
    "message": null
   },
@@ -484,47 +214,20 @@
    "controller": "sim_split",
    "safety": "/opt/configs/sim_split.yaml",
    "sim": null,
-   "locomotion": false,
    "verdict": "accepted",
    "message": null
   },
   {
    "controller": "sim_split",
    "safety": "/opt/configs/sim_split.yaml",
-   "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
-  },
-  {
-   "controller": "sim_split",
-   "safety": "/opt/configs/sim_split.yaml",
    "sim": false,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"sim_split\" is a sim config; the real robot never runs one"
   },
   {
    "controller": "sim_split",
    "safety": "/opt/configs/sim_split.yaml",
-   "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
-  },
-  {
-   "controller": "sim_split",
-   "safety": "/opt/configs/sim_split.yaml",
    "sim": true,
-   "locomotion": false,
-   "verdict": "accepted",
-   "message": null
-  },
-  {
-   "controller": "sim_split",
-   "safety": "/opt/configs/sim_split.yaml",
-   "sim": true,
-   "locomotion": true,
    "verdict": "accepted",
    "message": null
   },
@@ -532,15 +235,6 @@
    "controller": "sim_split",
    "safety": "custom",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_split",
-   "safety": "custom",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -548,15 +242,6 @@
    "controller": "sim_split",
    "safety": "custom",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_split",
-   "safety": "custom",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -564,15 +249,6 @@
    "controller": "sim_split",
    "safety": "custom",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_split",
-   "safety": "custom",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -580,15 +256,6 @@
    "controller": "sim_split",
    "safety": "sim_custom",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_split",
-   "safety": "sim_custom",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -596,15 +263,6 @@
    "controller": "sim_split",
    "safety": "sim_custom",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_split",
-   "safety": "sim_custom",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -612,15 +270,6 @@
    "controller": "sim_split",
    "safety": "sim_custom",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_split",
-   "safety": "sim_custom",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -628,15 +277,6 @@
    "controller": "sim_split",
    "safety": "relax_safety_split",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_split",
-   "safety": "relax_safety_split",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -644,15 +284,6 @@
    "controller": "sim_split",
    "safety": "relax_safety_split",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_split",
-   "safety": "relax_safety_split",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -660,15 +291,6 @@
    "controller": "sim_split",
    "safety": "relax_safety_split",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_split",
-   "safety": "relax_safety_split",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -676,63 +298,27 @@
    "controller": "config/sim_split.yaml",
    "safety": "split",
    "sim": null,
-   "locomotion": false,
    "verdict": "refused",
    "message": "controller config \"sim_split\" and safety config \"split\" mix sim and real: use sim_split.yaml with sim_*, g1_split.yaml with the others"
   },
   {
    "controller": "config/sim_split.yaml",
    "safety": "split",
-   "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "split",
    "sim": false,
-   "locomotion": false,
    "verdict": "refused",
    "message": "controller config \"sim_split\" is a sim config; the real robot never runs one"
   },
   {
    "controller": "config/sim_split.yaml",
    "safety": "split",
-   "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true needs controller_config:=g1_split, whose stiff waist the walking policy expects, not sim_split"
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "split",
    "sim": true,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"split\" is for the real robot, not the sim"
   },
   {
    "controller": "config/sim_split.yaml",
-   "safety": "split",
-   "sim": true,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not split"
-  },
-  {
-   "controller": "config/sim_split.yaml",
    "safety": "full",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "full",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -740,15 +326,6 @@
    "controller": "config/sim_split.yaml",
    "safety": "full",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "full",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -756,15 +333,6 @@
    "controller": "config/sim_split.yaml",
    "safety": "full",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "full",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -772,47 +340,20 @@
    "controller": "config/sim_split.yaml",
    "safety": "sim_split",
    "sim": null,
-   "locomotion": false,
    "verdict": "accepted",
    "message": null
   },
   {
    "controller": "config/sim_split.yaml",
    "safety": "sim_split",
-   "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "sim_split",
    "sim": false,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"sim_split\" is a sim config; the real robot never runs one"
   },
   {
    "controller": "config/sim_split.yaml",
    "safety": "sim_split",
-   "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "sim_split",
    "sim": true,
-   "locomotion": false,
-   "verdict": "accepted",
-   "message": null
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "sim_split",
-   "sim": true,
-   "locomotion": true,
    "verdict": "accepted",
    "message": null
   },
@@ -820,47 +361,20 @@
    "controller": "config/sim_split.yaml",
    "safety": "/opt/configs/sim_split.yaml",
    "sim": null,
-   "locomotion": false,
    "verdict": "accepted",
    "message": null
   },
   {
    "controller": "config/sim_split.yaml",
    "safety": "/opt/configs/sim_split.yaml",
-   "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "/opt/configs/sim_split.yaml",
    "sim": false,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"sim_split\" is a sim config; the real robot never runs one"
   },
   {
    "controller": "config/sim_split.yaml",
    "safety": "/opt/configs/sim_split.yaml",
-   "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "/opt/configs/sim_split.yaml",
    "sim": true,
-   "locomotion": false,
-   "verdict": "accepted",
-   "message": null
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "/opt/configs/sim_split.yaml",
-   "sim": true,
-   "locomotion": true,
    "verdict": "accepted",
    "message": null
   },
@@ -868,15 +382,6 @@
    "controller": "config/sim_split.yaml",
    "safety": "custom",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "custom",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -884,15 +389,6 @@
    "controller": "config/sim_split.yaml",
    "safety": "custom",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "custom",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -900,15 +396,6 @@
    "controller": "config/sim_split.yaml",
    "safety": "custom",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "custom",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -916,15 +403,6 @@
    "controller": "config/sim_split.yaml",
    "safety": "sim_custom",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "sim_custom",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -932,15 +410,6 @@
    "controller": "config/sim_split.yaml",
    "safety": "sim_custom",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "sim_custom",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -948,15 +417,6 @@
    "controller": "config/sim_split.yaml",
    "safety": "sim_custom",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "sim_custom",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -964,15 +424,6 @@
    "controller": "config/sim_split.yaml",
    "safety": "relax_safety_split",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "relax_safety_split",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -980,15 +431,6 @@
    "controller": "config/sim_split.yaml",
    "safety": "relax_safety_split",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "relax_safety_split",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -996,15 +438,6 @@
    "controller": "config/sim_split.yaml",
    "safety": "relax_safety_split",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "config/sim_split.yaml",
-   "safety": "relax_safety_split",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1012,23 +445,6 @@
    "controller": "/opt/configs/g1_split.yaml",
    "safety": "split",
    "sim": null,
-   "locomotion": false,
-   "verdict": "accepted",
-   "message": null
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
-   "safety": "split",
-   "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
-   "safety": "split",
-   "sim": false,
-   "locomotion": false,
    "verdict": "accepted",
    "message": null
   },
@@ -1036,7 +452,6 @@
    "controller": "/opt/configs/g1_split.yaml",
    "safety": "split",
    "sim": false,
-   "locomotion": true,
    "verdict": "accepted",
    "message": null
   },
@@ -1044,31 +459,13 @@
    "controller": "/opt/configs/g1_split.yaml",
    "safety": "split",
    "sim": true,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"split\" is for the real robot, not the sim"
   },
   {
    "controller": "/opt/configs/g1_split.yaml",
-   "safety": "split",
-   "sim": true,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not split"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
    "safety": "full",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
-   "safety": "full",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1076,15 +473,6 @@
    "controller": "/opt/configs/g1_split.yaml",
    "safety": "full",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
-   "safety": "full",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1092,15 +480,6 @@
    "controller": "/opt/configs/g1_split.yaml",
    "safety": "full",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
-   "safety": "full",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1108,111 +487,48 @@
    "controller": "/opt/configs/g1_split.yaml",
    "safety": "sim_split",
    "sim": null,
-   "locomotion": false,
    "verdict": "refused",
    "message": "controller config \"g1_split\" and safety config \"sim_split\" mix sim and real: use sim_split.yaml with sim_*, g1_split.yaml with the others"
   },
   {
    "controller": "/opt/configs/g1_split.yaml",
    "safety": "sim_split",
-   "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
-   "safety": "sim_split",
    "sim": false,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"sim_split\" is a sim config; the real robot never runs one"
   },
   {
    "controller": "/opt/configs/g1_split.yaml",
    "safety": "sim_split",
-   "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
-   "safety": "sim_split",
    "sim": true,
-   "locomotion": false,
    "verdict": "refused",
    "message": "controller config \"g1_split\" is for the real robot, not the sim"
   },
   {
    "controller": "/opt/configs/g1_split.yaml",
-   "safety": "sim_split",
-   "sim": true,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true needs controller_config:=sim_split, whose stiff waist the walking policy expects, not g1_split"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
    "safety": "/opt/configs/sim_split.yaml",
    "sim": null,
-   "locomotion": false,
    "verdict": "refused",
    "message": "controller config \"g1_split\" and safety config \"sim_split\" mix sim and real: use sim_split.yaml with sim_*, g1_split.yaml with the others"
   },
   {
    "controller": "/opt/configs/g1_split.yaml",
    "safety": "/opt/configs/sim_split.yaml",
-   "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
-   "safety": "/opt/configs/sim_split.yaml",
    "sim": false,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"sim_split\" is a sim config; the real robot never runs one"
   },
   {
    "controller": "/opt/configs/g1_split.yaml",
    "safety": "/opt/configs/sim_split.yaml",
-   "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
-   "safety": "/opt/configs/sim_split.yaml",
    "sim": true,
-   "locomotion": false,
    "verdict": "refused",
    "message": "controller config \"g1_split\" is for the real robot, not the sim"
   },
   {
    "controller": "/opt/configs/g1_split.yaml",
-   "safety": "/opt/configs/sim_split.yaml",
-   "sim": true,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true needs controller_config:=sim_split, whose stiff waist the walking policy expects, not g1_split"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
    "safety": "custom",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
-   "safety": "custom",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1220,15 +536,6 @@
    "controller": "/opt/configs/g1_split.yaml",
    "safety": "custom",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
-   "safety": "custom",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1236,15 +543,6 @@
    "controller": "/opt/configs/g1_split.yaml",
    "safety": "custom",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
-   "safety": "custom",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1252,15 +550,6 @@
    "controller": "/opt/configs/g1_split.yaml",
    "safety": "sim_custom",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
-   "safety": "sim_custom",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1268,15 +557,6 @@
    "controller": "/opt/configs/g1_split.yaml",
    "safety": "sim_custom",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
-   "safety": "sim_custom",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1284,15 +564,6 @@
    "controller": "/opt/configs/g1_split.yaml",
    "safety": "sim_custom",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
-   "safety": "sim_custom",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1300,15 +571,6 @@
    "controller": "/opt/configs/g1_split.yaml",
    "safety": "relax_safety_split",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
-   "safety": "relax_safety_split",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1316,15 +578,6 @@
    "controller": "/opt/configs/g1_split.yaml",
    "safety": "relax_safety_split",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
-   "safety": "relax_safety_split",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1332,15 +585,6 @@
    "controller": "/opt/configs/g1_split.yaml",
    "safety": "relax_safety_split",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "/opt/configs/g1_split.yaml",
-   "safety": "relax_safety_split",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1348,23 +592,6 @@
    "controller": "custom",
    "safety": "split",
    "sim": null,
-   "locomotion": false,
-   "verdict": "accepted",
-   "message": null
-  },
-  {
-   "controller": "custom",
-   "safety": "split",
-   "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
-  },
-  {
-   "controller": "custom",
-   "safety": "split",
-   "sim": false,
-   "locomotion": false,
    "verdict": "accepted",
    "message": null
   },
@@ -1372,39 +599,20 @@
    "controller": "custom",
    "safety": "split",
    "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true needs controller_config:=g1_split, whose stiff waist the walking policy expects, not custom"
+   "verdict": "accepted",
+   "message": null
   },
   {
    "controller": "custom",
    "safety": "split",
    "sim": true,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"split\" is for the real robot, not the sim"
   },
   {
    "controller": "custom",
-   "safety": "split",
-   "sim": true,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not split"
-  },
-  {
-   "controller": "custom",
    "safety": "full",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "custom",
-   "safety": "full",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1412,15 +620,6 @@
    "controller": "custom",
    "safety": "full",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "custom",
-   "safety": "full",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1428,15 +627,6 @@
    "controller": "custom",
    "safety": "full",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "custom",
-   "safety": "full",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1444,55 +634,20 @@
    "controller": "custom",
    "safety": "sim_split",
    "sim": null,
-   "locomotion": false,
    "verdict": "accepted",
    "message": null
   },
   {
    "controller": "custom",
    "safety": "sim_split",
-   "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
-  },
-  {
-   "controller": "custom",
-   "safety": "sim_split",
    "sim": false,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"sim_split\" is a sim config; the real robot never runs one"
   },
   {
    "controller": "custom",
    "safety": "sim_split",
-   "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
-  },
-  {
-   "controller": "custom",
-   "safety": "sim_split",
    "sim": true,
-   "locomotion": false,
-   "verdict": "accepted",
-   "message": null
-  },
-  {
-   "controller": "custom",
-   "safety": "sim_split",
-   "sim": true,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true needs controller_config:=sim_split, whose stiff waist the walking policy expects, not custom"
-  },
-  {
-   "controller": "custom",
-   "safety": "/opt/configs/sim_split.yaml",
-   "sim": null,
-   "locomotion": false,
    "verdict": "accepted",
    "message": null
   },
@@ -1500,55 +655,27 @@
    "controller": "custom",
    "safety": "/opt/configs/sim_split.yaml",
    "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
+   "verdict": "accepted",
+   "message": null
   },
   {
    "controller": "custom",
    "safety": "/opt/configs/sim_split.yaml",
    "sim": false,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"sim_split\" is a sim config; the real robot never runs one"
   },
   {
    "controller": "custom",
    "safety": "/opt/configs/sim_split.yaml",
-   "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
-  },
-  {
-   "controller": "custom",
-   "safety": "/opt/configs/sim_split.yaml",
    "sim": true,
-   "locomotion": false,
    "verdict": "accepted",
    "message": null
   },
   {
    "controller": "custom",
-   "safety": "/opt/configs/sim_split.yaml",
-   "sim": true,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true needs controller_config:=sim_split, whose stiff waist the walking policy expects, not custom"
-  },
-  {
-   "controller": "custom",
    "safety": "custom",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "custom",
-   "safety": "custom",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1556,15 +683,6 @@
    "controller": "custom",
    "safety": "custom",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "custom",
-   "safety": "custom",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1572,15 +690,6 @@
    "controller": "custom",
    "safety": "custom",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "custom",
-   "safety": "custom",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1588,15 +697,6 @@
    "controller": "custom",
    "safety": "sim_custom",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "custom",
-   "safety": "sim_custom",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1604,15 +704,6 @@
    "controller": "custom",
    "safety": "sim_custom",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "custom",
-   "safety": "sim_custom",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1620,15 +711,6 @@
    "controller": "custom",
    "safety": "sim_custom",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "custom",
-   "safety": "sim_custom",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1636,15 +718,6 @@
    "controller": "custom",
    "safety": "relax_safety_split",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "custom",
-   "safety": "relax_safety_split",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1652,15 +725,6 @@
    "controller": "custom",
    "safety": "relax_safety_split",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "custom",
-   "safety": "relax_safety_split",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1668,15 +732,6 @@
    "controller": "custom",
    "safety": "relax_safety_split",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "custom",
-   "safety": "relax_safety_split",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1684,63 +739,27 @@
    "controller": "sim_custom",
    "safety": "split",
    "sim": null,
-   "locomotion": false,
    "verdict": "refused",
    "message": "controller config \"sim_custom\" and safety config \"split\" mix sim and real: use sim_split.yaml with sim_*, g1_split.yaml with the others"
   },
   {
    "controller": "sim_custom",
    "safety": "split",
-   "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "split",
    "sim": false,
-   "locomotion": false,
    "verdict": "refused",
    "message": "controller config \"sim_custom\" is a sim config; the real robot never runs one"
   },
   {
    "controller": "sim_custom",
    "safety": "split",
-   "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true needs controller_config:=g1_split, whose stiff waist the walking policy expects, not sim_custom"
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "split",
    "sim": true,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"split\" is for the real robot, not the sim"
   },
   {
    "controller": "sim_custom",
-   "safety": "split",
-   "sim": true,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not split"
-  },
-  {
-   "controller": "sim_custom",
    "safety": "full",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "full",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1748,15 +767,6 @@
    "controller": "sim_custom",
    "safety": "full",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "full",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1764,15 +774,6 @@
    "controller": "sim_custom",
    "safety": "full",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "full",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1780,55 +781,20 @@
    "controller": "sim_custom",
    "safety": "sim_split",
    "sim": null,
-   "locomotion": false,
    "verdict": "accepted",
    "message": null
   },
   {
    "controller": "sim_custom",
    "safety": "sim_split",
-   "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "sim_split",
    "sim": false,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"sim_split\" is a sim config; the real robot never runs one"
   },
   {
    "controller": "sim_custom",
    "safety": "sim_split",
-   "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "sim_split",
    "sim": true,
-   "locomotion": false,
-   "verdict": "accepted",
-   "message": null
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "sim_split",
-   "sim": true,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true needs controller_config:=sim_split, whose stiff waist the walking policy expects, not sim_custom"
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "/opt/configs/sim_split.yaml",
-   "sim": null,
-   "locomotion": false,
    "verdict": "accepted",
    "message": null
   },
@@ -1836,55 +802,27 @@
    "controller": "sim_custom",
    "safety": "/opt/configs/sim_split.yaml",
    "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
+   "verdict": "accepted",
+   "message": null
   },
   {
    "controller": "sim_custom",
    "safety": "/opt/configs/sim_split.yaml",
    "sim": false,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"sim_split\" is a sim config; the real robot never runs one"
   },
   {
    "controller": "sim_custom",
    "safety": "/opt/configs/sim_split.yaml",
-   "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "/opt/configs/sim_split.yaml",
    "sim": true,
-   "locomotion": false,
    "verdict": "accepted",
    "message": null
   },
   {
    "controller": "sim_custom",
-   "safety": "/opt/configs/sim_split.yaml",
-   "sim": true,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true needs controller_config:=sim_split, whose stiff waist the walking policy expects, not sim_custom"
-  },
-  {
-   "controller": "sim_custom",
    "safety": "custom",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "custom",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1892,15 +830,6 @@
    "controller": "sim_custom",
    "safety": "custom",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "custom",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1908,15 +837,6 @@
    "controller": "sim_custom",
    "safety": "custom",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "custom",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1924,15 +844,6 @@
    "controller": "sim_custom",
    "safety": "sim_custom",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "sim_custom",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1940,15 +851,6 @@
    "controller": "sim_custom",
    "safety": "sim_custom",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "sim_custom",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1956,15 +858,6 @@
    "controller": "sim_custom",
    "safety": "sim_custom",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "sim_custom",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1972,15 +865,6 @@
    "controller": "sim_custom",
    "safety": "relax_safety_split",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "relax_safety_split",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -1988,15 +872,6 @@
    "controller": "sim_custom",
    "safety": "relax_safety_split",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "relax_safety_split",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -2004,15 +879,6 @@
    "controller": "sim_custom",
    "safety": "relax_safety_split",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "sim_custom",
-   "safety": "relax_safety_split",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -2020,23 +886,6 @@
    "controller": "safety_split",
    "safety": "split",
    "sim": null,
-   "locomotion": false,
-   "verdict": "accepted",
-   "message": null
-  },
-  {
-   "controller": "safety_split",
-   "safety": "split",
-   "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
-  },
-  {
-   "controller": "safety_split",
-   "safety": "split",
-   "sim": false,
-   "locomotion": false,
    "verdict": "accepted",
    "message": null
   },
@@ -2044,39 +893,20 @@
    "controller": "safety_split",
    "safety": "split",
    "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true needs controller_config:=g1_split, whose stiff waist the walking policy expects, not safety_split"
+   "verdict": "accepted",
+   "message": null
   },
   {
    "controller": "safety_split",
    "safety": "split",
    "sim": true,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"split\" is for the real robot, not the sim"
   },
   {
    "controller": "safety_split",
-   "safety": "split",
-   "sim": true,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=sim_split, not split"
-  },
-  {
-   "controller": "safety_split",
    "safety": "full",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "safety_split",
-   "safety": "full",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -2084,15 +914,6 @@
    "controller": "safety_split",
    "safety": "full",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "safety_split",
-   "safety": "full",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -2100,15 +921,6 @@
    "controller": "safety_split",
    "safety": "full",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "safety_split",
-   "safety": "full",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"full\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -2116,55 +928,20 @@
    "controller": "safety_split",
    "safety": "sim_split",
    "sim": null,
-   "locomotion": false,
    "verdict": "accepted",
    "message": null
   },
   {
    "controller": "safety_split",
    "safety": "sim_split",
-   "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
-  },
-  {
-   "controller": "safety_split",
-   "safety": "sim_split",
    "sim": false,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"sim_split\" is a sim config; the real robot never runs one"
   },
   {
    "controller": "safety_split",
    "safety": "sim_split",
-   "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
-  },
-  {
-   "controller": "safety_split",
-   "safety": "sim_split",
    "sim": true,
-   "locomotion": false,
-   "verdict": "accepted",
-   "message": null
-  },
-  {
-   "controller": "safety_split",
-   "safety": "sim_split",
-   "sim": true,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true needs controller_config:=sim_split, whose stiff waist the walking policy expects, not safety_split"
-  },
-  {
-   "controller": "safety_split",
-   "safety": "/opt/configs/sim_split.yaml",
-   "sim": null,
-   "locomotion": false,
    "verdict": "accepted",
    "message": null
   },
@@ -2172,55 +949,27 @@
    "controller": "safety_split",
    "safety": "/opt/configs/sim_split.yaml",
    "sim": null,
-   "locomotion": true,
-   "verdict": "raises",
-   "exception": "KeyError"
+   "verdict": "accepted",
+   "message": null
   },
   {
    "controller": "safety_split",
    "safety": "/opt/configs/sim_split.yaml",
    "sim": false,
-   "locomotion": false,
    "verdict": "refused",
    "message": "safety config \"sim_split\" is a sim config; the real robot never runs one"
   },
   {
    "controller": "safety_split",
    "safety": "/opt/configs/sim_split.yaml",
-   "sim": false,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true drives the legs through golem_safety split mode, so it needs safety_config:=split, not sim_split"
-  },
-  {
-   "controller": "safety_split",
-   "safety": "/opt/configs/sim_split.yaml",
    "sim": true,
-   "locomotion": false,
    "verdict": "accepted",
    "message": null
   },
   {
    "controller": "safety_split",
-   "safety": "/opt/configs/sim_split.yaml",
-   "sim": true,
-   "locomotion": true,
-   "verdict": "refused",
-   "message": "use_locomotion:=true needs controller_config:=sim_split, whose stiff waist the walking policy expects, not safety_split"
-  },
-  {
-   "controller": "safety_split",
    "safety": "custom",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "safety_split",
-   "safety": "custom",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -2228,15 +977,6 @@
    "controller": "safety_split",
    "safety": "custom",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "safety_split",
-   "safety": "custom",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -2244,15 +984,6 @@
    "controller": "safety_split",
    "safety": "custom",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "safety_split",
-   "safety": "custom",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -2260,15 +991,6 @@
    "controller": "safety_split",
    "safety": "sim_custom",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "safety_split",
-   "safety": "sim_custom",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -2276,15 +998,6 @@
    "controller": "safety_split",
    "safety": "sim_custom",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "safety_split",
-   "safety": "sim_custom",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -2292,15 +1005,6 @@
    "controller": "safety_split",
    "safety": "sim_custom",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "safety_split",
-   "safety": "sim_custom",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"sim_custom\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -2308,15 +1012,6 @@
    "controller": "safety_split",
    "safety": "relax_safety_split",
    "sim": null,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "safety_split",
-   "safety": "relax_safety_split",
-   "sim": null,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -2324,15 +1019,6 @@
    "controller": "safety_split",
    "safety": "relax_safety_split",
    "sim": false,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "safety_split",
-   "safety": "relax_safety_split",
-   "sim": false,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   },
@@ -2340,15 +1026,6 @@
    "controller": "safety_split",
    "safety": "relax_safety_split",
    "sim": true,
-   "locomotion": false,
-   "verdict": "refused",
-   "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
-  },
-  {
-   "controller": "safety_split",
-   "safety": "relax_safety_split",
-   "sim": true,
-   "locomotion": true,
    "verdict": "refused",
    "message": "safety config \"relax_safety_split\" must relay the upper-body channel: one of split, sim_split"
   }

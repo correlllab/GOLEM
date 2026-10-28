@@ -24,9 +24,9 @@ ENABLED_JOINTS = (
 # upper-body joints the IK does not move (its reduced model locks them at their measured
 # angles at each goal's start); every command holds them at controller.hold_targets
 HELD_JOINTS = ('waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint')
-# When golem_safety writes /lowcmd (split or full mode), a walking policy may balance the
-# legs, trained with a stiff waist: the controller's shutdown command keeps the waist at its
-# hold, and only the arms go limp.
+# golem_safety writes /lowcmd in every mode, and a walking policy may balance the legs,
+# trained with a stiff waist: the controller's shutdown command keeps the waist at its hold,
+# and only the arms go limp.
 SHUTDOWN_KEEPS_HELD_JOINTS_ON_LOWCMD = True
 # the Dex3-1 palms: end effectors for velocity limiting and the ee pose topics, and the
 # planner's frames

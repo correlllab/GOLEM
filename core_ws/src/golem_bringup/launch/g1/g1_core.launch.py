@@ -3,12 +3,13 @@ Core G1 stack, shared by g1_real_robot.launch.py (real robot) and g1_sim.launch.
 
 Starts robot_state_publisher, golem_upper_ik's joint_state_publisher (the 29
 body joints), golem_safety's safety_node, the only writer of /lowcmd, the arm
-controller (golem_upper_ik's frame_task_server) and, optionally, the walking
-node (locomotion_node), navigation (g1_navigation), the Dex3-1 hands and RViz.
-The golem nodes get robot g1 as a ROS parameter, and safety_node and
-frame_task_server their configs (joint_state_publisher reads its default,
-g1_split). safety_node also gets sim (it refuses sim:=true on ROS domain 0) and
-use_estop false: the G1 stack has no hardware estop node.
+controller (golem_upper_ik's frame_task_server), HOMIE's walking node
+(g1_locomotion's locomotion_node; on the real robot only with
+start_position_verified:=true) and, optionally, navigation (g1_navigation),
+the Dex3-1 hands and RViz. The golem nodes get robot g1 as a ROS parameter,
+and safety_node and frame_task_server their configs (joint_state_publisher
+reads its default, g1_split). safety_node also gets sim (it refuses sim:=true
+on ROS domain 0) and use_estop false: the G1 stack has no hardware estop node.
 
 safety_node runs split mode (split, or sim_split in the sim): it writes every
 motor on /lowcmd, the legs from the walking node's input and the waist and
@@ -30,40 +31,55 @@ controller.startup_timeout (30 s), and the moves to home and the waist hold
 must finish within controller.startup_move_timeout (30 s) of the gate opening;
 otherwise the controller stops with an error.
 
-use_locomotion:=true adds HOMIE's walking policy on the legs, through
-golem_safety's split mode, `locomotion_delay` seconds after the controller.
-Without it nothing commands the legs, so their motors stay off while the arms
-run. The controller holds the waist as stiffly as golem_safety allows
-(g1_split.yaml, sim_split.yaml), as the policy expects.
+The walking node starts `locomotion_delay` seconds after the controller, with
+g1_locomotion's config for the platform (locomotion_config: sim in the sim, g1
+on the real robot), and drives the legs through golem_safety's split mode. It
+sends nothing until golem_safety beats on /safety/heartbeat, rt/lowstate is
+upright and the controller commands. Then it ramps the legs to the policy's
+default pose. In the sim it starts the policy and releases the sim's elastic
+band once the controller has finished its start-up moves; on the real robot it
+holds the pose until the operator calls /lowerbody/confirm_engage
+(g1_locomotion's README has the details). The controller holds the waist as
+stiffly as golem_safety allows (g1_split.yaml, sim_split.yaml), as the policy
+expects.
+
+The sim always starts the walking node. The real robot starts it only with
+start_position_verified:=true (default false), as the H1-2's leg node
+(h12_lowerbody.launch.py): without it nothing commands the legs, so their
+motors stay off on golem_safety's zero-gain stream while the arms run.
 
 use_nav:=true adds g1_navigation (odometry, slam_toolbox and Nav2, which
 drives the walking node through /cmd_vel), with the core, on the sim's
 FAST_LIO config and clock in the sim. odom_source picks the odometry:
 fastlio (the default; the sim must not publish its ground truth, GOLEM_SIM_ODOM
 unset) or sim_gt (the sim's ground-truth odom -> pelvis, GOLEM_SIM_ODOM=1).
-FAST_LIO starts while the sim's stand-in holds the robot still, as it needs.
+FAST_LIO starts while the sim's elastic band still holds the robot up: the
+walking node releases it only after the controller's start-up moves.
 frontier_explore:=true adds g1_navigation's frontier explorer (it serves
 /skill/frontier_explore), and is passed to g1_navigation as a launch argument
 of its include.
 
-The launch refuses to start on a bad pairing, checked by
-golem_upper_ik.pairing for robot g1:
+The launch refuses to start, before any node, on these settings
+(startup_refusal; the config rules are golem_upper_ik.pairing's for robot g1):
 - The safety config must relay the upper-body channel (split, or sim_split in
   the sim).
 - Each safety config runs with one controller config: split with g1_split and
   sim_split with sim_split. controller_config defaults to the one the safety
   config runs with.
-- The real robot (sim:=false) never takes a sim_* safety or controller config,
-  and the sim refuses the real ones.
-- use_locomotion:=true needs safety_config split and controller_config
-  g1_split (sim_split and sim_split in the sim), and on the real robot
-  start_position_verified:=true.
+- Sim and real configs do not mix: the real robot (sim:=false) refuses every
+  sim_* safety or controller config and the walking node's sim config, and the
+  sim refuses the real robot's (split, g1_split, and the walking node's g1).
+  Since g1_split is the real robot's and sim_split the sim's, this also keeps
+  each controller config to its own safety config.
 - use_nav:=true is sim only for now (the real MID-360 is not connected yet),
-  needs use_locomotion:=true, and odom_source must be fastlio or sim_gt.
+  and odom_source must be fastlio or sim_gt.
+start_position_verified refuses nothing: it decides whether the real robot's
+walking node starts.
 
 Not checked: configs are told apart by name only, so a renamed copy of a sim
 config passes, and a custom controller config is not matched to the safety
-config; start_position_verified is the operator's word, not a measurement.
+config, nor checked for the stiff waist the walking policy expects;
+start_position_verified is the operator's word, not a measurement.
 """
 
 import os
@@ -105,49 +121,40 @@ def _config(context, name):
     return LaunchConfiguration(name).perform(context)
 
 
-def locomotion_refusal(sim, locomotion_config, start_position_verified):
-    """Why the walking node must not start with these settings, or None."""
-    default_locomotion = LOCOMOTION_CONFIGS[sim]
-    if locomotion_config in ('g1', 'sim') and locomotion_config != default_locomotion:
-        meant_for = 'the sim' if locomotion_config == 'sim' else 'the real robot'
-        return (f'locomotion_config:={locomotion_config} is for {meant_for}; '
-                f'use {default_locomotion}')
-    if not sim and not start_position_verified:
-        return ('use_locomotion:=true on the real robot needs start_position_verified:=true, '
-                'set only after checking the robot is in a safe start pose')
+def locomotion_refusal(sim, locomotion_config):
+    """Why the walking node's config does not suit the platform, or None."""
+    for config_sim, name in LOCOMOTION_CONFIGS.items():
+        if locomotion_config == name and config_sim != sim:
+            meant_for = 'the sim' if config_sim else 'the real robot'
+            return f'locomotion_config:={name} is for {meant_for}; use {LOCOMOTION_CONFIGS[sim]}'
     return None
 
 
-def nav_refusal(sim, use_locomotion, odom_source):
+def nav_refusal(sim, odom_source):
     """Why g1_navigation must not start with these settings, or None."""
     if not sim:
         return ('use_nav:=true is sim only for now: the real MID-360 is not connected to the '
                 "bringup yet (g1_navigation's README, The real lidar)")
-    if not use_locomotion:
-        return "use_nav:=true needs use_locomotion:=true: Nav2 drives the walking node's /cmd_vel"
     if odom_source not in ODOM_SOURCES:
         return f'odom_source must be one of {", ".join(ODOM_SOURCES)}, not {odom_source!r}'
     return None
 
 
-def startup_refusal(sim, use_locomotion, safety_config, controller_config,
-                    locomotion_config, start_position_verified,
+def startup_refusal(sim, safety_config, controller_config, locomotion_config,
                     use_nav=False, odom_source='fastlio'):
     """Why g1_core must not start with these settings, or None."""
     # first, so that the real robot refuses use_nav whatever else is set
-    refusal = nav_refusal(sim, use_locomotion, odom_source) if use_nav else None
+    refusal = nav_refusal(sim, odom_source) if use_nav else None
     # golem_upper_ik's pairing rules for the G1
     if refusal is None:
-        refusal = pairing_refusal(ROBOT, controller_config, safety_config,
-                                  sim=sim, locomotion=use_locomotion)
-    if refusal is None and use_locomotion:
-        refusal = locomotion_refusal(sim, locomotion_config, start_position_verified)
+        refusal = pairing_refusal(ROBOT, controller_config, safety_config, sim=sim)
+    if refusal is None:
+        refusal = locomotion_refusal(sim, locomotion_config)
     return refusal
 
 
 def _setup(context):
     sim = _as_bool(context, 'sim')
-    use_locomotion = _as_bool(context, 'use_locomotion')
     use_nav = _as_bool(context, 'use_nav')
     odom_source = _config(context, 'odom_source')
     use_sim_time = {'use_sim_time': _as_bool(context, 'use_sim_time')}
@@ -159,8 +166,7 @@ def _setup(context):
     locomotion_config = _config(context, 'locomotion_config') or LOCOMOTION_CONFIGS[sim]
     delay = float(LaunchConfiguration('controller_delay').perform(context))
     locomotion_delay = float(LaunchConfiguration('locomotion_delay').perform(context))
-    refusal = startup_refusal(sim, use_locomotion, safety_config, controller_config,
-                              locomotion_config, _as_bool(context, 'start_position_verified'),
+    refusal = startup_refusal(sim, safety_config, controller_config, locomotion_config,
                               use_nav, odom_source)
     if refusal is not None:
         raise RuntimeError(f'g1_core: not starting: {refusal}')
@@ -233,9 +239,9 @@ def _setup(context):
             condition=IfCondition(LaunchConfiguration('use_rviz')),
         ),
     ]
-    if use_locomotion:
-        # silent until rt/lowstate is upright and the controller commands; then
-        # it ramps the legs to the policy's default pose and starts the policy
+    # the leg-control interlock, as the H1-2's: the sim always starts the walking
+    # node, the real robot only once the operator has verified its start pose
+    if sim or _as_bool(context, 'start_position_verified'):
         actions.append(TimerAction(
             period=delay + locomotion_delay,
             actions=[
@@ -251,7 +257,8 @@ def _setup(context):
         ))
     if use_nav:
         # with the core: FAST_LIO initialises on its first scans, while the
-        # sim's stand-in still holds the robot standing still
+        # sim's elastic band still holds the robot up (the walking node releases
+        # it only after the controller's start-up moves)
         nav = os.path.join(get_package_share_directory('g1_navigation'), 'launch',
                            'g1_navigation.launch.py')
         # the arguments of this launch that g1_navigation also declares are passed
@@ -288,18 +295,14 @@ def generate_launch_description():
         DeclareLaunchArgument('controller_delay', default_value='2.0',
                               description='s between the safety node and the controller'),
         DeclareLaunchArgument(
-            'use_locomotion', default_value='false',
-            description="HOMIE's walking policy on the legs (needs split mode, and "
-                        'start_position_verified:=true on the real robot)'),
-        DeclareLaunchArgument(
             'locomotion_config', default_value='',
             description='g1_locomotion config (default: g1, or sim in sim)'),
         DeclareLaunchArgument('locomotion_delay', default_value='2.0',
                               description='s between the controller and the walking node'),
         DeclareLaunchArgument(
             'use_nav', default_value='false',
-            description='g1_navigation: odometry, SLAM and Nav2 on /cmd_vel (needs '
-                        'use_locomotion; sim only until the real lidar is connected)'),
+            description='g1_navigation: odometry, SLAM and Nav2 on /cmd_vel (sim only '
+                        'until the real lidar is connected)'),
         DeclareLaunchArgument(
             'odom_source', default_value='fastlio',
             description="with use_nav: fastlio, or sim_gt (the sim's ground truth, "
@@ -308,9 +311,10 @@ def generate_launch_description():
             'frontier_explore', default_value='false',
             description='with use_nav: the frontier explorer, serving '
                         '/skill/frontier_explore'),
-        # the leg-control interlock; the sim does not need it
+        # the leg-control interlock; the sim always starts the walking node
         DeclareLaunchArgument(
             'start_position_verified', default_value='false',
-            description='true only after checking the real robot is in a safe start pose'),
+            description="the real robot's walking node: true only after checking the robot "
+                        'is in a safe start pose'),
         OpaqueFunction(function=_setup),
     ])

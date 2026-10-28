@@ -1,9 +1,9 @@
 # Control in sim and on the robot
 
 The G1 sim speaks the robot's Unitree DDS interface exactly: the same topics,
-the same `unitree_hg` message types from the same SDK (`unitree_sdk2py`), the
-same joint slots and the same CRC. So the laptop stack runs unchanged against
-either one. Only the DDS domain and the YAML limits and timings differ.
+the same `unitree_hg` message types, the same joint slots and the same CRC. So
+the laptop stack runs unchanged against either one. Only the DDS domain and the
+YAML limits and timings differ.
 
 ## The path of a command
 
@@ -15,19 +15,23 @@ dex3_hands ------------------ rt/dex3/{left,right}/cmd ---------------------> ha
 everything reads <---------- rt/lowstate, rt/dex3/{left,right}/state
 ```
 
-- **Arms only (the default).** The arm controller (`g1_control`) solves IK at
-  `frequency.ctrl_hz` and streams commands at `frequency.pub_hz`. The safety
-  layer engages, ramps the `rt/arm_sdk` weight from 0 to 1, and relays at its
-  `control.publish_hz`. The legs stay with Unitree's controller.
+- **Arms only (the default).** The arm controller (`golem_upper_ik`) solves IK
+  at `frequency.ctrl_hz` and streams commands at `frequency.pub_hz`. The safety
+  layer (`golem_safety`) engages, ramps the `rt/arm_sdk` weight from 0 to 1, and
+  relays the newest command at its `control.publish_hz`. The legs stay with
+  Unitree's controller.
 - **Walking (`use_locomotion:=true`).** The walking node (`g1_locomotion`)
   runs HOMIE's policy at 50 Hz on `/cmd_vel` and writes the legs. The safety
   layer merges legs and arms into one `rt/lowcmd` (split mode).
 - **Hands.** `dex3_hands` writes the hand topics directly, at its `rate_hz`
   parameter.
 
-ROS 2 carries only the user-facing interface (`/cmd_vel`, the `/frame_task`
-and `/named_config` actions, the hand services, `/joint_states`, sensors). It
-carries no motor commands. Those go over Unitree DDS.
+The motor commands are DDS topics in Unitree's IDL. `golem_safety` and
+`golem_upper_ik` read and write them as ROS 2 topics (ROS `/lowcmd` is DDS
+`rt/lowcmd`, the same wire type), while `locomotion_node` and `dex3_hands` use
+the Unitree SDK. The user-facing interface is ROS 2 too: `/cmd_vel`, the
+`/frame_task` and `/named_config` actions, the hand services, `/joint_states`,
+sensors.
 
 ## What sits behind the topics
 
@@ -54,9 +58,9 @@ instead of copying the numbers.
 | Taking the legs (`rt/lowcmd`) | manual operator release first | the first valid frame releases the stand-in |
 | Motor torques | the robot's motor drivers | PD law every physics step, in sim time |
 | Silence on the command topics | not measured | `GOLEM_ARM_SDK_TIMEOUT` hands the arms back to the stand-in; `GOLEM_CMD_TIMEOUT` turns the motors off |
-| Time | wall clock | sim time, paced to at most real time; the safety layer's watchdogs still use the wall clock |
-| Safety timings | `g1_safety_layer/config/arm_sdk.yaml`, `split.yaml` | `sim_arm_sdk.yaml`, `sim_split.yaml`: looser, since the sim can run slower than real time |
-| Arm speed limits (`controller.v_lim`, `w_lim`, `dq_lim`) | `g1_control/config/g1.yaml`: deliberately low for the first sessions | `sim.yaml` |
+| Time | wall clock | sim time, paced to at most real time; the safety layer's stale times and ramps still run on the host's clock |
+| Safety timings | `golem_safety/config/g1/arm_sdk.yaml`, `split.yaml` | `sim_arm_sdk.yaml`, `sim_split.yaml`: looser, since the sim can run slower than real time |
+| Arm speed limits (`controller.v_lim`, `w_lim`, `dq_lim`) | `golem_upper_ik/config/g1/g1.yaml`: deliberately low for the first sessions | `sim.yaml` |
 | Walking speed limits (`commands.vx`, `vy`, `yaw`) | `g1_locomotion/config/g1.yaml`: inside the trained ranges | `sim.yaml`: the trained ranges |
 | Navigation | refused (real lidar not connected yet) | allowed with `use_locomotion:=true` |
 | Status | nothing has run on the robot yet | arm, walk, nav and exploration tests pass |

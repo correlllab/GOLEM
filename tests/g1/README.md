@@ -19,7 +19,10 @@ lists its environment knobs, and each `test_sim_*.py` docstring says what it che
 
 - **Arm test**: `rt/arm_sdk` engages, the arms reach `home` and then a `t_pose` goal,
   `/left/hand/close` closes the left hand, stopping the controller hands the arms back, and the
-  robot keeps standing.
+  robot keeps standing. The bringup runs `golem_safety` (`sim_arm_sdk`) and `golem_upper_ik`
+  (`sim`). The controller's last command has zero gains, which `golem_safety` refuses in
+  arm_sdk mode (`arm_sdk.waist_kp_min`), so the stop latches its estop and the weight ramps
+  1 -> 0; the test finds the controller by its process, `lib/golem_upper_ik/frame_task_server`.
 - **Walk test**: the stand-in hands the legs to the walking node, the robot keeps standing, then
   walks 5 s at 0.3 m/s.
 - **Arm and walk tests**: every sensor topic arrives at its rate with the right frames, and the

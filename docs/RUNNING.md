@@ -93,8 +93,8 @@ starting both containers does not imply full navigation/skills parity.
 
 ## Bringup
 
-`h12_bringup` is launch-only, and sim versus real are separate launch files (there
-is no `sim:=true` argument):
+`h12_bringup` is launch-only, and sim versus real are separate launch files (no
+top-level file takes a `sim:=` argument; each passes its own to `h12_control`):
 
 | Launch file | Scenario |
 |---|---|
@@ -200,6 +200,16 @@ the laptop wired to the robot, on domain 0, which needs `G1_DDS_INTERFACE`
 - **Start RoboCasa before bringup.** If you restart the sim container, restart
   `golem_ros` too: sim time resets to 0, giving TF extrapolation errors and a
   frozen SLAM map.
+- **Restart the sim containers after pulling.** The sims run the checkout's
+  `h1_robocasa` and `CL_isaaclab_sim` from bind mounts, so a sim container keeps
+  running the code it started with. An H1-2 sim started before the H1-2 sims
+  reported `mode_machine` 6 (the real robot's value) is refused: the paired
+  startup stops at `the simulator is not a h12 (mode_machine 0)`, and in the
+  three-terminal flow `golem_safety` never engages (`engage_refused`:
+  `/lowstate mode_machine is 0, expected 6`), so `frame_task_server` exits
+  after 30 s. Restart the sim (`docker_stack.sh restart`, or `docker_run.sh
+  <sim> --restart`); for Isaac run `git submodule update` first, since the
+  change is in the `CL_isaaclab_sim` pin.
 - **X11 / GUI:** set `XAUTHORITY` to your session's existing authorization file.
   Use `GOLEM_DISPLAY=headless` or `--headless` when no X server is available.
 - **Talking to the sim from the host** bypasses the run scripts and so misses

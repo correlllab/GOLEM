@@ -2,8 +2,8 @@
 
 The first session on the real G1 is **arms only**. Unitree's controller keeps
 balancing the legs. The laptop runs the bringup (`g1_bringup.launch.py`) with
-the [safety layer](safety.md) in arm_sdk mode and the arm controller, and no
-hand driver.
+the [safety layer](safety.md) (`golem_safety`) in arm_sdk mode and the arm
+controller (`golem_upper_ik`), and no hand driver.
 
 > **Status.** Nothing has run on the real robot yet. Gains, speed limits and
 > estop limits are conservative starting values, not tuned on our G1.
@@ -25,16 +25,20 @@ first ([Arms by hand](index.md#arms-by-hand), sending only `home` and
 | 6. Read-only checks | Gate: the container is the G1's and pinned to the robot's port, or exit and fix `docker/.env` and the shell's exports. Then nothing else writes the command topics, and `rt/lowstate` arrives. |
 | 7. Launch | `ros2 launch g1_bringup g1_bringup.launch.py use_hands:=false use_rviz:=false` |
 | 8. Named configs | Send only `home` and `arms_down` on `/named_config`, one at a time. |
-| 9. Stop | Stop the controller first, wait for the hand-back, then Ctrl+C the launch. |
+| 9. Stop | Stop the controller first (the safety layer latches and hands the arms back), wait for the hand-back, then Ctrl+C the launch. |
 
 ## What you should see
 
 - `{"event": "arm_sdk_engage"}`: the safety layer takes the waist and arms
   from Unitree over `engage_seconds`. The controller then moves the arms to
   `home`.
-- After stopping the controller (`pkill -INT -f frame_task_server`), about 2 s
-  later `estop_command_written` with `Upper-body command stale`. The arms go
-  back to Unitree over `release_seconds`. Then Ctrl+C the launch.
+- After stopping the controller (`pkill -INT -f frame_task_server`), at once
+  `estop_command_written` with the reason `Command validation failed on
+  /safety/lowcmd_upper_in: motor 12 (waist_yaw_joint) kp 0.0 is below
+  arm_sdk.waist_kp_min 40.0`. That is the expected stop: the controller's last
+  command has zero gains, which the safety layer refuses in arm_sdk mode, so it
+  latches and hands the waist and arms back to Unitree over `release_seconds`.
+  Then Ctrl+C the launch.
 - Any other estop: go straight to step 9.3. After any estop, restart the whole
   bringup.
 
@@ -43,7 +47,13 @@ first ([Arms by hand](index.md#arms-by-hand), sending only `home` and
 - **Hands.** The Dex3 driver bypasses the safety layer, so it stays off.
 - **Walking.** It needs Unitree's controller released first. That is a manual
   operator step that nothing in this stack performs, and these docs do not
-  describe it.
+  describe it. Know this before any walking session: in split mode a fault of
+  the walking node (a stale `rt/lowstate`, a non-finite IMU value, a fall, a late
+  command) silences it, and the safety layer then **holds its last leg command
+  instead of turning every motor off**. That frozen target does not balance the
+  robot, and it stands until the safety layer estops for another reason or the
+  bringup stops ([Safety layer](safety.md), Quiet inputs). Keep the robot on a
+  gantry.
 - **Navigation.** Sim only. The real bringup refuses `use_nav:=true` until the
   real MID-360 lidar is connected.
 
@@ -68,11 +78,11 @@ The workspace is built with `--symlink-install`, so a Python edit under
   `git submodule status` shows no line starting with `+` or `-`.
 - Write `git rev-parse HEAD` into the session notes. Leave the tree alone until
   the session ends.
-- Steps 7 and 9 were rehearsed offline, with a fake robot, in G1_GOLEM against
-  two earlier versions of this safety layer; they have not been rehearsed
-  against this repository's code. If `core_ws/src/g1/g1_safety_layer/README.md`
-  at the frozen commit disagrees with them, fix this checklist before the
-  session.
+- Steps 7 and 9 have not been rehearsed against the real robot. The sim's arm
+  test (`tests/g1/test_sim_bringup.sh`) runs the same core (`g1_core.launch.py`,
+  with the sim configs) and stops the controller the same way (SIGINT). If `core_ws/src/golem_safety/README.md` or
+  `core_ws/src/golem_upper_ik/README.md` at the frozen commit disagrees with
+  them, fix this checklist before the session.
 
 ### 2. Network and docker/.env (laptop shell)
 
@@ -154,7 +164,7 @@ hand anyway, run the container's own build again:
 Note the safety layer's two ramp times, used in steps 7 and 9:
 
 ```bash
-grep -E '^ *(engage|release)_seconds:' /home/code/core_ws/src/g1/g1_safety_layer/config/arm_sdk.yaml
+grep -E '^ *(engage|release)_seconds:' /home/code/core_ws/src/golem_safety/config/g1/arm_sdk.yaml
 ```
 
 ### 6. Read-only checks (terminal 1, before launching anything)
@@ -221,14 +231,18 @@ PYTHONUNBUFFERED=1 ros2 launch g1_bringup g1_bringup.launch.py use_hands:=false 
 ```
 
 `PYTHONUNBUFFERED=1` is harmless: it makes every Python node's prints appear as
-they happen (the safety layer flushes its `{"event": ...}` lines itself). With
+they happen. The safety layer logs its events through its ROS logger, as
+`[INFO] [...] [safety_node]: {"event": ...}` (or `[WARN]`, `[ERROR]`). With
 `use_hands:=false` no hand driver runs, so nothing commands the hands.
 `use_rviz:=false` leaves out RViz, which this session does not need.
 
-The safety layer starts first and stays silent. Two seconds later the
-controller starts. When the safety layer takes the waist and arms from Unitree,
-it prints `{"event": "arm_sdk_engage"}` and ramps them over in
-`engage_seconds` (step 5), and the controller moves the arms to `home`.
+The safety layer starts first, prints `relay_started`, and writes nothing yet.
+Two seconds later the controller starts. When the safety layer takes the waist
+and arms from Unitree, it prints `{"event": "arm_sdk_engage"}` and ramps them
+over in `engage_seconds` (step 5), and the controller moves the arms to `home`.
+Until then it may print `engage_refused` with a reason, at most once a second;
+the controller stops with an error if the safety layer has not taken over
+within 30 s.
 
 If the safety layer prints `estop_command_written` or `estop_latched_silent`
 at any point, or the controller exits with an error, continue at step 9.3.
@@ -245,10 +259,11 @@ ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
   "{config_name: 'home', plan: false, duration: {sec: 0, nanosec: 0}}"
 ```
 
-Send no other goals (`frame_task_client`, `dual_arm_client`), and start no
-second controller. `dual_arm_server` and the scripts in
-`core_ws/src/g1/g1_control/g1_control/example/` can publish to the
-same safety-layer input as `frame_task_server`.
+Send no other goals, and start no second controller: a second live writer on
+the safety layer's input latches its estop. `g1_control`, unused and awaiting
+deletion, still builds, and its nodes and the scripts in its `example/`
+directory publish to the same input as `frame_task_server`; run none of
+them.
 
 ### 9. Stop
 
@@ -261,19 +276,25 @@ same safety-layer input as `frame_task_server`.
    pkill -INT -f frame_task_server
    ```
 
-   About 2 s later the safety layer prints `"event": "estop_command_written"`
-   with the reason `Upper-body command stale ...`, and it ramps the waist and
-   arms back to Unitree over `release_seconds` (step 5). It prints
-   `arm_sdk_release_ramping` when that ramp runs, and `arm_sdk_release_held`
-   if `rt/lowstate` goes stale, which pauses the ramp.
+   The controller sends one last command with zero gains and stops. The
+   safety layer refuses it at once: it prints `"event": "estop_command_written"`
+   with the reason `Command validation failed on /safety/lowcmd_upper_in:
+   motor 12 (waist_yaw_joint) kp 0.0 is below arm_sdk.waist_kp_min 40.0`, and
+   it ramps the waist and arms back to Unitree over `release_seconds` (step 5),
+   holding the last good command meanwhile. That estop is the expected stop. It
+   prints `arm_sdk_release_ramping` when that ramp runs, and
+   `arm_sdk_release_held` if `rt/lowstate` goes stale, which pauses the
+   ramp.
 3. The safety layer prints nothing when that ramp ends. Wait
    `release_seconds` of ramping after the `estop_command_written` line, then
    press Ctrl+C on the launch in terminal 1.
 4. The container is deleted when its shell exits, so copy the safety layer's
-   logs out first. From the repo root in a laptop shell:
+   logs out first: each run is a `<YYYYmmdd-HHMMSS>-<pid>` directory under
+   `/tmp/g1_safety_layer` (the configs' `logging.base_dir`). From the repo root
+   in a laptop shell:
 
    ```bash
-   docker cp golem_ros:/tmp/g1_safety_layer container_cache/g1_safety_layer_$(date +%Y%m%d_%H%M)
+   docker cp golem_ros:/tmp/g1_safety_layer container_cache/g1_safety_logs_$(date +%Y%m%d_%H%M)
    ```
 
 5. Run `exit` in terminal 1. The container stops and `systemd-inhibit` lets go.
@@ -285,10 +306,12 @@ Stopping the controller first makes the safety layer ramp the `rt/arm_sdk`
 weight down to 0 while it still runs. That is how Unitree's own arm_sdk example
 (`unitree_sdk2_python/example/g1/high_level/g1_arm7_sdk_dds_example.py`) hands
 the arms back: it ramps the weight from 1 to 0 over 3 s. Ctrl+C on the launch
-also hands back in this safety layer (its README: SIGINT, SIGTERM and SIGHUP
-ramp the weight to 0 before the node exits), but this checklist does not rely
-on it. What the G1 does if `rt/arm_sdk` just stops while the weight is still 1
-is unknown.
+also hands back (`golem_safety`'s README: SIGINT, SIGTERM and SIGHUP ramp the
+weight to 0 before the node exits), but this checklist does not rely on it. A
+controller that dies without its last command is different: the safety layer
+holds its last command at weight 1 and only reports the quiet input, until the
+bringup stops. What the G1 does if `rt/arm_sdk` just stops while the weight is
+still 1 is unknown.
 
 If anything looks wrong at any point, the operator's remote comes first. On the
 laptop, stop with the `pkill` in step 9.2.

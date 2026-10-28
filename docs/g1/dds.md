@@ -1,8 +1,10 @@
 # DDS and networking
 
-The stack talks to the robot (or the sim) over **Unitree DDS** (CycloneDDS),
-through the Unitree SDK in `unitree_sdk2_python/`. ROS 2 also runs on
-CycloneDDS, as a separate layer for the user-facing topics.
+The stack talks to the robot (or the sim) over **Unitree DDS** (CycloneDDS).
+`golem_safety` and `golem_upper_ik` read and write those topics as ROS 2
+topics, which run on CycloneDDS too (ROS `/lowcmd` is DDS `rt/lowcmd`, the
+same wire type); `g1_locomotion` and `g1_dex3` use the Unitree SDK in
+`unitree_sdk2_python/`. ROS 2 also carries the user-facing topics.
 
 ## Domains
 
@@ -40,10 +42,14 @@ is set and `ROS_DOMAIN_ID` is not 0.
 topic names, with identical `unitree_hg` types, so two of them on one domain
 command each other's robots. `docker/scripts/wait_for_sim.py` refuses to start
 a bringup against a simulator of the other robot (it reads `mode_machine` from
-`rt/lowstate`: 5 for the G1, 0 for the H1-2 sims), but only in
-`docker_stack.sh` and the mac stack (`GOLEM_WAIT_FOR_SIM=1`) and in
-`tests/stack`. `docker_run.sh ros` followed by a manual `ros2 launch` is not
-checked.
+`rt/lowstate`: 5 for the G1, 6 for the H1-2, each sim reporting its real
+robot's value), but only in `docker_stack.sh` and the mac stack
+(`GOLEM_WAIT_FOR_SIM=1`) and in `tests/stack`. `docker_run.sh ros` followed by
+a manual `ros2 launch` is not checked by the wrappers. `golem_safety` checks
+the value as well: it engages no input on another robot's `rt/lowstate` and
+latches its estop on one once engaged. The H1-2's safety configs stream
+zero-gain `rt/lowcmd` from boot, though, which would release the G1 sim's
+stand-in, so keep to one robot per domain.
 
 ## Guards against the wrong domain
 
@@ -64,8 +70,9 @@ Behind the wrappers:
 
 - `launch_robocasa.sh` and the G1 sim (`h1_robocasa/g1/unitree_interface.py`)
   refuse domain 0 even when started some other way.
-- The safety layer's sim configs (`sim_arm_sdk.yaml`, `sim_split.yaml`) refuse
-  domain 0.
+- `golem_safety`'s `safety_node` refuses domain 0 when started with
+  `sim:=true`, as the sim bringups start it, an unset `ROS_DOMAIN_ID`
+  included.
 - The G1 tests run their containers with no network of their own, so no DDS
   leaves the laptop. `tests/g1/test_sim_*.sh` refuse domain 0, and
   `tests/robocasa/g1/run_in_container.sh` always uses 97.

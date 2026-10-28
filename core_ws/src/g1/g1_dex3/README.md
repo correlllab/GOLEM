@@ -22,7 +22,7 @@ Per hand, `<side>` is `left` or `right`:
     zero gains; the fingers go limp) and stops commanding that hand.
 - `/<side>/hand/pressure` (`std_msgs/Float32MultiArray`, sensors x 12).
 - `/joint_states`: the finger joints, so `robot_state_publisher` can draw the
-    hands; the body joints come from `g1_control`.
+    hands; the body joints come from `golem_upper_ik`'s `joint_state_publisher`.
 
 ```bash
 ros2 launch g1_dex3 hands.launch.py   # options: on_shutdown:=silent max_speed:=1.0

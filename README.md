@@ -46,9 +46,11 @@ Isaac (H1-2 only) — see [`docs/MACOS.md`](docs/MACOS.md).
 ## The G1
 
 GOLEM also runs the Unitree G1 (29 DoF, two Dex3-1 hands): its own packages in
-`core_ws/src/g1/` (safety layer, arm IK, HOMIE walking policy, Dex3-1 hands,
-navigation, bringup), its robot description in the `third_party/leprechaun_g1`
-submodule, and a RoboCasa sim in `h1_robocasa/g1/`. The H1-2 stays the default;
+`core_ws/src/g1/` (HOMIE walking policy, Dex3-1 hands, navigation, bringup,
+description), the safety layer and arm IK it shares with the H1-2
+(`core_ws/src/golem_safety`, `core_ws/src/golem_upper_ik`), its robot
+description in the `third_party/leprechaun_g1` submodule, and a RoboCasa sim in
+`h1_robocasa/g1/`. The H1-2 stays the default;
 `--g1` on a wrapper, or `GOLEM_ROBOT=g1`, selects the G1 (x86 Linux, RoboCasa
 only). The images are the same.
 

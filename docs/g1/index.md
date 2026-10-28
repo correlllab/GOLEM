@@ -17,7 +17,7 @@ The G1 packages, sim, tests and these pages come from
 
 | Feature | In the sim | On the real robot |
 |---|---|---|
-| Arms (IK controller and safety layer) | Works | Ready for a first session; nothing has run yet |
+| Arms (`golem_upper_ik` and `golem_safety`, shared with the H1-2) | Works | Ready for a first session; nothing has run yet |
 | Dex3-1 hands | Works | In the real bringup (`use_hands`), off for the first session |
 | Walking with HOMIE | Works | Not covered by these docs |
 | Navigation (Nav2) | Works | Refused: the real MID-360 lidar is not connected to the bringup |
@@ -92,21 +92,23 @@ ros2 service call /left/hand/open std_srvs/srv/Trigger
 
 **What to expect:** the arms move to `home` once the stack is up, then to a
 T-pose, and the left hand closes and opens. The sim's stand-in for Unitree's
-controller (HOMIE's policy) keeps the legs. The named postures are in
-`core_ws/src/g1/g1_control/g1_control/utility/named_config.py`.
+controller (HOMIE's policy) keeps the legs. The named postures are
+`NAMED_CONFIGS` in `core_ws/src/golem_upper_ik/golem_upper_ik/robots/g1.py`.
 
 - Start the sim first. If you restart the sim, restart the `ros` container
   too, because sim time starts again at 0.
-- This flow has no check that the sim on the domain is a G1; `docker_stack.sh`
-  has one (`docker/scripts/wait_for_sim.py`).
+- This flow does not check that the sim on the domain is a G1 before the
+  bringup starts; `docker_stack.sh` does (`docker/scripts/wait_for_sim.py`).
+  `golem_safety` then engages on no `rt/lowstate` but a G1's (`mode_machine`
+  5).
 - These containers use host networking on domain 1, so their DDS traffic can
   reach other machines on your network. The test scripts keep it on the host.
 - Leave `G1_DDS_INTERFACE` empty here. It pins only the `ros` container, so on
   the sim domain the two containers can end up on different interfaces; the
   wrappers warn when it is set ([DDS and networking](dds.md)).
-- `plan: true` aborts: the arms have no self-collision model yet. So do
-  `slow_mode: true` and a `FrameTask` with `relative: true`, which the G1
-  controller does not implement.
+- `plan: true` aborts: the G1 profile has no self-collision model yet, so the
+  planner is off. `slow_mode: true` (a quarter of the speed) and a `FrameTask`
+  with `relative: true` work as on the H1-2.
 
 ## Pages
 

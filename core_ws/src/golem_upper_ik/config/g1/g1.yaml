@@ -20,8 +20,8 @@ controller:
   dq_lim: 0.3  # arm joint speed limit, rad/s (the start-up waist move too)
   d_min: 0.02
   timeout: 10.0  # s per goal without a duration; 5 s is too short at these speeds
-  # waist hold angles, rad, sent in every command; the IK only moves the arms
-  # (and models the waist at 0)
+  # waist hold angles, rad, sent in every command; the IK only moves the arms,
+  # with the waist at its measured angle (re-locked at each goal's start)
   hold_targets:
     waist_yaw_joint: 0.0
     waist_roll_joint: 0.0

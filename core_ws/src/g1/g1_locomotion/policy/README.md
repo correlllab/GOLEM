@@ -28,7 +28,7 @@ own.
     | squat to 0.40 m | pelvis at 0.34 m |
 
 - **Not on the real robot yet.** It will run on the laptop and send the legs'
-  commands through `g1_safety_layer`'s `split` mode.
+  commands through `golem_safety`'s `split` mode.
 
 ## Contents
 

@@ -44,6 +44,26 @@ legs`, ramps the legs into the ALMI crouch, then holds and logs
 `legs pre-posed (settled, err=...) — holding`. If it reports `NOT SETTLED` or
 the legs jump, Ctrl-C and do not engage.
 
+Two start-up failures to watch for in this terminal:
+
+- **The estop box must be connected before `safety_node` starts.**
+  `estop_node` starts at once and `safety_node` (`golem_safety`) 3 s later
+  (`safety_delay`). `estop_node` publishes nothing until its first attempt to
+  connect ends, and while it is not connected it publishes unplugged and
+  triggered. A `safety_node` that sees that, because the first attempt failed
+  and no retry had connected by then, or the attempt outlasted the 3 s and then
+  failed, latches its estop until restart (`estop_command_written` with the
+  reason `External estop triggered`). Other serial devices, such as the gripper
+  boards, lengthen the attempt. Restart the whole bringup.
+- **The arms start only once `golem_safety` relays them.** `frame_task_server`
+  (`golem_upper_ik`) holds the arms where they are until it sees its commands
+  on `/lowcmd`. If that has not happened within 30 s
+  (`controller.startup_timeout`), it exits with an error that lists what
+  `golem_safety` waits for: `/lowstate` reporting `mode_machine` 6, a first
+  estop sample, the paired safety config, no estop latched. Meanwhile
+  `safety_node` logs `engage_refused` with the reason, at most once a second.
+  The rest of the bringup keeps running, without `/frame_task`.
+
 **2. Onboard PC, second terminal — engage** (feet loaded, gantry slack):
 
 ```bash
@@ -254,10 +274,11 @@ aborts, which reads as a servo failure when it is really budget starvation.
 
 ## Named arm configs (`/named_config`)
 
-Drive the 14 arm joints to a predefined posture (defined in
-`h12_ros2_controller/utility/named_config.py`). `plan: false` (or omitted) servos
-directly; `plan: true` runs the planner first. `duration` of `0` uses the
-controller default settle time.
+Drive the 14 arm joints to a predefined posture (`NAMED_CONFIGS` in
+`golem_upper_ik/golem_upper_ik/robots/h12.py`). `plan: false` (or omitted) servos
+directly; `plan: true` runs the planner first. `duration` is the goal's time
+limit; `0` uses the controller config's `controller.timeout` (5 s in the H1-2
+configs). `slow_mode: true` moves at a quarter of the speed.
 
 The available configs are the keys of `NAMED_CONFIGS` in that file. The grasp
 skill itself uses `prep` (arms clear of the head camera) and

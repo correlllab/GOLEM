@@ -242,9 +242,10 @@ latency fault cannot see that part.
 - Support the robot (a gantry): `split.yaml`'s estop zeroes every motor.
 - A fault silences the node (Behavior, Faults), and `golem_safety` then
     holds the legs on the node's last command instead of turning every motor
-    off: the robot stands on a frozen target that does not balance it. Only a
-    non-finite joint value in `rt/lowstate` makes `golem_safety` estop
-    (every motor off).
+    off: the robot stands on a frozen target that does not balance it. A
+    non-finite joint value in `rt/lowstate`, a fall that drives a joint past
+    `split.yaml`'s `limits.estop`, or a `rt/lowstate` from another robot
+    (`mode_machine` not 5) makes `golem_safety` estop (every motor off).
 - The frame of `rt/lowstate`'s IMU on our unit is not verified yet; the node
     takes it as the pelvis IMU, and accepts only `imu_frame: pelvis`.
 - The unit of `rt/lowstate`'s tick on our unit is not verified yet; the node

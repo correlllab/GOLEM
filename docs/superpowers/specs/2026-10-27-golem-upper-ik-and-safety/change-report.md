@@ -410,3 +410,16 @@ Nothing runs these classes before Task 11's nodes. The rows below are the differ
 |---|---|---|---|
 | H1-2, G1 | `ArmController`, used only by `dual_arm_server`, the examples and the benchmarks. | Not carried over. | Ruling 37; `dual_arm_server` is a spec non-goal. |
 | H1-2, G1 | `UpperController` methods no node called: `goto_configuration`, `control_step` (full model), the `sim_*` steps, `lock_configuration`, `damp_mode`, `configuration_error`, the end effectors' position, rotation, rpy and pose properties, `left/right_arm_q`, `visualize_path` and `play_path`, and the recording calls. `FrameController`'s 6-D pose targets, `get_frame_task_errors`, `remove_frame_task` and `get_frame_pose`. `ros2/utility.py`'s `list_to_pose` and `input_pose`, used by `frame_task_client`. | Not carried over. | Only what the robots run today (Ruling 33). |
+
+## Task 12: the H1-2 sims report `mode_machine` 6
+
+`golem_safety` checks every `/lowstate` against the robot's `mode_machine` (Tasks 5 and 6), so both H1-2 simulators must report the value the real robot does. The G1 sim already reports 5 and is unchanged.
+
+| Robot | Old | New | Reason |
+|---|---|---|---|
+| H1-2 (RoboCasa sim) | `rt/lowstate` carried the IDL default `mode_machine` 0 in every sample (`h1_robocasa/unitree_interface.py` never set it). | `SimInterface` sets `low_state.mode_machine = 6` where it creates the `LowState_`, so every published sample carries 6. | The real H1-2 reports 6 (spec, Robot profiles). Without it `golem_safety` refuses the sim: it never engages, and a sample with another value latches the estop. |
+| H1-2 (Isaac sim) | `rt/lowstate` carried `mode_machine` 0 (`H12RobotDDS` in `CL_isaaclab_sim`). | `H12RobotDDS` sets `low_state.mode_machine = 6` when it builds the `LowState_`, before it stamps the CRC. Committed and pushed in `CL_isaaclab_sim` (`camera_ready`, `7395998`), and GOLEM's pin moves to it. | As above. |
+| H1-2 | `docker/scripts/wait_for_sim.py` accepted a simulator reporting `mode_machine` 0 for `GOLEM_ROBOT=h12` and refused every other value. | It accepts 6 and refuses 0 and 5, so `docker_stack.sh`, the Mac stack and `tests/stack` refuse an H1-2 sim built before this change (a checkout or a `CL_isaaclab_sim` pin that still reports 0). The G1's 5 is unchanged. | The gate tells the robot's sims apart by the value they report. |
+| H1-2 | Nodes that copy `mode_machine` from `/lowstate` into their commands (`lmg_deploy`'s `marl_deploy_node`) sent 0 in the sim. | They send 6 in the sim, as on the real robot. The nodes that hard-code 6 (`lowerbody_controller_node`, `h12_ros2_controller`) are unchanged. | A consequence of the sim reporting the robot's value. |
+
+`tests/robocasa/surface/h12.json` does not record `mode_machine`, so the golden is unchanged and `tests/robocasa/surface/run.sh h12` matches it.

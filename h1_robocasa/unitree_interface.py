@@ -59,6 +59,7 @@ class SimInterface:
         ChannelFactoryInitialize(id=DOMAIN_ID)
         # publish low state
         self.low_state = LowState_default()
+        self.low_state.mode_machine = 6  # what the real H1-2 reports; the IDL default is 0
         self.low_state_publisher = ChannelPublisher(TOPIC_LOWSTATE, LowState_)
         self.low_state_publisher.Init()
         self.low_state_thread = RecurrentThread(interval=self.dt, target=self.publish_low_state, name='sim_lowstate')

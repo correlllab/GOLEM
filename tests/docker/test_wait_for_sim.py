@@ -65,7 +65,7 @@ def load_wait_for_sim():
 class ExpectedModeMachineTests(unittest.TestCase):
     def test_each_robot_has_its_simulators_mode_machine(self):
         wait_for_sim = load_wait_for_sim()
-        self.assertEqual(wait_for_sim.expected_mode_machine('h12'), 0)
+        self.assertEqual(wait_for_sim.expected_mode_machine('h12'), 6)
         self.assertEqual(wait_for_sim.expected_mode_machine('g1'), 5)
 
 
@@ -100,13 +100,16 @@ class RobotIdentityTests(unittest.TestCase):
         self.assertIn('simulator is publishing', result.stdout)
 
     def test_g1_stack_refuses_the_h12_simulator(self):
-        self.assertRefused(self.wait(0, 'g1'), 'the simulator is not a g1 (mode_machine 0)')
+        self.assertRefused(self.wait(6, 'g1'), 'the simulator is not a g1 (mode_machine 6)')
 
     def test_h12_stack_accepts_the_h12_simulator(self):
-        self.assertAccepted(self.wait(0, 'h12'))
+        self.assertAccepted(self.wait(6, 'h12'))
 
     def test_h12_stack_refuses_the_g1_simulator(self):
         self.assertRefused(self.wait(5, 'h12'), 'the simulator is not a h12 (mode_machine 5)')
+
+    def test_h12_stack_refuses_a_simulator_that_reports_the_idl_default(self):
+        self.assertRefused(self.wait(0, 'h12'), 'the simulator is not a h12 (mode_machine 0)')
 
     def test_g1_stack_accepts_the_g1_simulator(self):
         self.assertAccepted(self.wait(5, 'g1'))
@@ -114,14 +117,14 @@ class RobotIdentityTests(unittest.TestCase):
     def test_unset_or_empty_robot_is_h12(self):
         for robot in (None, ''):
             with self.subTest(GOLEM_ROBOT=robot):
-                self.assertAccepted(self.wait(0, robot))
+                self.assertAccepted(self.wait(6, robot))
                 self.assertRefused(self.wait(5, robot), 'the simulator is not a h12 (mode_machine 5)')
 
     def test_robot_name_is_case_insensitive(self):
         self.assertAccepted(self.wait(5, 'G1'))
 
     def test_unknown_robot_is_refused_before_waiting(self):
-        self.assertRefused(self.wait(0, 'h1'), "GOLEM_ROBOT must be h12 or g1, not 'h1'")
+        self.assertRefused(self.wait(6, 'h1'), "GOLEM_ROBOT must be h12 or g1, not 'h1'")
 
     def test_no_sample_still_fails(self):
         self.assertRefused(self.wait('none', 'g1'), 'no simulator sample received')

@@ -7,10 +7,12 @@ the reverse."""
 import os
 import sys
 
-# LowState_.mode_machine of each robot's simulators: the G1 sim reports the
-# G1's (MODE_MACHINE in h1_robocasa/g1/unitree_interface.py); the H1-2 sims,
-# RoboCasa and Isaac, leave the IDL default.
-MODE_MACHINE = {'h12': 0, 'g1': 5}
+# LowState_.mode_machine of each robot's simulators: both robots' sims report
+# their robot's own value, the one the real robot reports. The H1-2's RoboCasa
+# and Isaac sims set 6 (h1_robocasa/unitree_interface.py,
+# CL_isaaclab_sim/src/python/dds/specialized/h12_robot_dds.py); the G1 sim sets 5
+# (MODE_MACHINE in h1_robocasa/g1/unitree_interface.py).
+MODE_MACHINE = {'h12': 6, 'g1': 5}
 
 
 def expected_mode_machine(robot: str) -> int:

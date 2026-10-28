@@ -33,10 +33,10 @@ def generate_launch_description():
         declare_use_sim_time,
         declare_urdf_file,
         Node(
-            package='h12_ros2_controller',
+            package='golem_upper_ik',
             executable='joint_state_publisher',
             name='joint_state_publisher',
-            parameters=[sim_time_param],
+            parameters=[{'robot': 'h12'}, sim_time_param],
             output='screen',
             emulate_tty=True,
         ),

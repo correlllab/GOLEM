@@ -60,16 +60,20 @@ def generate_launch_description():
         # in the pre-pose until /livox/imu is up.
         DeclareLaunchArgument('use_lidar', default_value='true',
                               description='MID360 driver and livox_imu_upright'),
-        DeclareLaunchArgument('use_head_camera', default_value='false', description='head RealSense'),
-        DeclareLaunchArgument('use_grippers', default_value='false', description='left and right gripper nodes'),
+        DeclareLaunchArgument('use_head_camera', default_value='false',
+                              description='head RealSense'),
+        DeclareLaunchArgument('use_grippers', default_value='false',
+                              description='left and right gripper nodes'),
 
         _include('h12_bringup', 'h12_real_drivers.launch.py', {
             **wall_time,
-            **{name: LaunchConfiguration(name) for name in ('use_lidar', 'use_head_camera', 'use_grippers')},
+            **{name: LaunchConfiguration(name)
+               for name in ('use_lidar', 'use_head_camera', 'use_grippers')},
         }),
         _include('h12_bringup', 'h12_state.launch.py', wall_time),
         _include('h12_bringup', 'h12_control.launch.py', {
             **wall_time,
+            'sim': 'false',
             'use_estop': 'true',
             'use_frame_task': 'false',
             'safety_config': LaunchConfiguration('safety_config'),
@@ -78,7 +82,8 @@ def generate_launch_description():
             **wall_time,
             **{name: LaunchConfiguration(name) for name in GAME_ARGS},
             'urdf_path': os.path.join(ASSETS_DIR, 'ros_assets', 'h1_2_magpie.urdf'),
-            # The operator gate and the absent elastic band are fixed on the real robot, not arguments.
+            # The operator gate and the absent elastic band are fixed on the real robot, not
+            # arguments.
             'engage_wait_for_confirm': 'true',
             'disable_elastic_band': 'false',
         }),

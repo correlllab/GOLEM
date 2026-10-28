@@ -51,6 +51,7 @@ def generate_launch_description():
         }),
         _include('h12_bringup', 'h12_control.launch.py', {
             **sim_time,
+            'sim': 'true',
             'safety_config': 'sim_safety_split.yaml',
             'frame_task_config': 'sim_safety_split.yaml',
             # No estop in sim, so nothing to wait for.

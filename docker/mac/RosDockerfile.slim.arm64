@@ -51,7 +51,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # -----------------------------------------------------------------------------
 # Python: the Pink differential-IK stack + QP backends + OMPL path planning used
-# by h12_ros2_controller's frame_task_server. numpy<2 first so transitive
+# by golem_upper_ik's frame_task_server. numpy<2 first so transitive
 # C-extension installs bind to the numpy 1.x ABI (matches apt scipy). OMPL ships
 # a manylinux2014_aarch64 wheel, so it installs on arm64 with no source build.
 # -----------------------------------------------------------------------------
@@ -89,10 +89,10 @@ RUN rm -rf /usr/local/lib/python3.10/dist-packages/setuptools \
     && rm -f /usr/local/lib/python3.10/dist-packages/distutils-precedence.pth
 
 # FastDDS RMW for the ROS (rclpy) layer — arm64 coexistence fix (see the
-# matching block in RobocasaDockerfile.arm64). Nodes that also touch unitree
-# DDS (e.g. the safety_node's ChannelSubscriber) would otherwise load a second
-# CycloneDDS libddsc alongside rmw_cyclonedds_cpp and crash on arm64. rclpy runs
-# on FastDDS via RMW_IMPLEMENTATION=rmw_fastrtps_cpp (docker/mac/docker-compose.yml).
+# matching block in RobocasaDockerfile.arm64). A node that also opens a Unitree
+# SDK (CycloneDDS) channel would otherwise load a second CycloneDDS libddsc
+# alongside rmw_cyclonedds_cpp and crash on arm64. ROS runs on FastDDS via
+# RMW_IMPLEMENTATION=rmw_fastrtps_cpp (docker/mac/docker-compose.yml).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-rmw-fastrtps-cpp \
     && rm -rf /var/lib/apt/lists/*

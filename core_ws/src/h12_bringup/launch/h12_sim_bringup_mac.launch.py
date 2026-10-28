@@ -1,4 +1,5 @@
-"""Minimal, CPU-only (Apple Silicon) bringup for the H1 MuJoCo sim.
+"""
+Minimal, CPU-only (Apple Silicon) bringup for the H1 MuJoCo sim.
 
 A trimmed variant of h12_sim_bringup.launch.py that runs ONLY the core robot
 nodes — no vision foundation models (gemini/sam/graspgen), no h12_skills, no
@@ -8,10 +9,10 @@ slim arm64 ROS image intentionally omits.
 Nodes started:
   * static camera_link -> camera_color_optical_frame TF
   * static livox_link -> lidar_link TF (so RViz can place /livox/pointcloud)
-  * joint_state_publisher      (h12_ros2_controller)
+  * joint_state_publisher      (golem_upper_ik)
   * robot_state_publisher
-  * frame_task_server          (h12_ros2_controller, Pink IK)
-  * safety_node                (h12_safety_layer)
+  * frame_task_server          (golem_upper_ik, Pink IK)
+  * safety_node                (golem_safety, sim:=true)
 
 Launch by path from the slim ROS container:
   ros2 launch /home/code/core_ws/src/h12_bringup/launch/h12_sim_bringup_mac.launch.py
@@ -60,10 +61,10 @@ def generate_launch_description():
             emulate_tty=True,
         ),
         Node(
-            package='h12_ros2_controller',
+            package='golem_upper_ik',
             executable='joint_state_publisher',
             name='joint_state_publisher',
-            parameters=[sim_time_param],
+            parameters=[{'robot': 'h12'}, sim_time_param],
             output='screen',
             emulate_tty=True,
         ),
@@ -76,20 +77,19 @@ def generate_launch_description():
             emulate_tty=True,
         ),
         Node(
-            package='h12_ros2_controller',
+            package='golem_upper_ik',
             executable='frame_task_server',
             name='frame_task_server',
-            arguments=['--config', 'sim_safety_split.yaml'],
-            parameters=[sim_time_param],
+            parameters=[{'robot': 'h12', 'config': 'sim_safety_split.yaml'}, sim_time_param],
             output='screen',
             emulate_tty=True,
         ),
         Node(
-            package='h12_safety_layer',
+            package='golem_safety',
             executable='safety_node',
             name='safety_node',
-            arguments=['--config', 'sim_safety_split.yaml'],
-            parameters=[sim_time_param],
+            parameters=[{'robot': 'h12', 'config': 'sim_safety_split.yaml', 'sim': True},
+                        sim_time_param],
             output='screen',
             emulate_tty=True,
         ),

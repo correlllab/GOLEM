@@ -17,9 +17,10 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export PYTHONUNBUFFERED=1
 WS=/home/code/core_ws
 # An isolated install avoids inheriting stale interfaces or building MJPC/vision.
-# Source locations stay canonical so h12_ros2_model resolves CL_Assets correctly.
-# Keep build/<package> at the standard depth: h12_ros2_model resolves
-# assets relative to setup.py even when colcon executes its build copy.
+# golem_upper_ik loads the H1-2 URDFs and the sphere URDF/SRDF from
+# h12_ros2_model's installed share, which h12_ros2_model's setup.py stages from
+# CL_Assets at ../../../CL_Assets relative to itself, even when colcon runs its
+# build copy: keep the build base at the depth of src.
 TEST_BUILD_BASE=$WS/build_stack_tests
 TEST_INSTALL_BASE=$WS/install_stack_tests
 cd "$WS"
@@ -28,7 +29,7 @@ colcon --log-base "$WS/log_stack_tests" build \
     --build-base "$TEST_BUILD_BASE" \
     --install-base "$TEST_INSTALL_BASE" \
     --symlink-install \
-    --packages-up-to h12_ros2_controller h12_safety_layer h12_lowerbody_rl unitree_hg unitree_go \
+    --packages-up-to golem_safety golem_upper_ik h12_lowerbody_rl unitree_hg unitree_go \
     --cmake-args -DBUILD_TESTING=OFF -DPython3_EXECUTABLE=/usr/bin/python3
 source "$TEST_INSTALL_BASE/setup.bash"
 python3 /home/code/tests/stack/test_heartbeat_clock.py

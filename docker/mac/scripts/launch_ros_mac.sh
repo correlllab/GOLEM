@@ -122,7 +122,7 @@ cd "$WS"
 # `ros2 run h12_lowerbody_rl fame_node` available in a shell. unitree_hg needs
 # ros-humble-rosidl-generator-dds-idl and torch, both in the image. Use
 # GOLEM_LOWERBODY=almi to stand and walk (see docs/MACOS.md).
-PKGS="custom_ros_messages magpie_msgs h12_ros2_model h12_ros2_controller h12_safety_layer h12_slam h12_bringup unitree_hg h12_lowerbody_rl"
+PKGS="custom_ros_messages magpie_msgs h12_ros2_model golem_safety golem_upper_ik h12_slam h12_bringup unitree_hg h12_lowerbody_rl"
 H1_BRINGUP_STUB_DEPS="estop livox_ros_driver2 fast_lio model_server"
 
 for _dep in $H1_BRINGUP_STUB_DEPS; do
@@ -133,7 +133,8 @@ done
 echo "[launch_ros_mac] colcon build --packages-select $PKGS"
 colcon build --symlink-install \
     --build-base "$BUILD_BASE" --install-base "$INSTALL_BASE" \
-    --packages-select $PKGS
+    --packages-select $PKGS \
+    --cmake-args -DBUILD_TESTING=OFF
 
 source "$INSTALL_BASE/setup.bash"
 

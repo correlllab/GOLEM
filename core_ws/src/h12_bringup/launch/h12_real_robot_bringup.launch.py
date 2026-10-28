@@ -39,7 +39,11 @@ def generate_launch_description():
         _include('h12_bringup', 'h12_real_drivers.launch.py', wall_time),
         _include('h12_slam', 'h12_navigation.launch.py', wall_time),
         _include('h12_bringup', 'h12_state.launch.py', wall_time),
-        _include('h12_bringup', 'h12_control.launch.py', {**wall_time, 'use_estop': 'true'}),
+        _include('h12_bringup', 'h12_control.launch.py', {
+            **wall_time,
+            'sim': 'false',
+            'use_estop': 'true',
+        }),
         _include('h12_bringup', 'h12_lowerbody.launch.py', {
             **wall_time,
             'start_position_verified': LaunchConfiguration('start_position_verified'),

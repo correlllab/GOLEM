@@ -24,7 +24,7 @@ def generate_launch_description():
     safety_config_arg = DeclareLaunchArgument(
         'safety_config',
         default_value='relax_safety_split.yaml',
-        description='h12_safety_layer config name or path (resolved against its config/ dir)',
+        description='golem_safety config: a name under its config/h12/, or a path',
     )
 
     control = IncludeLaunchDescription(
@@ -33,6 +33,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             'use_sim_time': 'false',
+            'sim': 'false',
             'use_estop': 'true',
             'use_frame_task': 'false',
             'safety_config': LaunchConfiguration('safety_config'),

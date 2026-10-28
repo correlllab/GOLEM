@@ -17,12 +17,13 @@ def generate_launch_description():
         raise RuntimeError('Controller integration tests require an isolated domain and supported test case/simulator')
     sim_time = {'use_sim_time': True}
     nodes = [
-        Node(package='h12_safety_layer', executable='safety_node', name='safety_node',
-             arguments=['--config', 'sim_safety_split.yaml'], parameters=[sim_time], output='screen'),
-        Node(package='h12_ros2_controller', executable='frame_task_server', name='frame_task_server',
-             arguments=['--config', 'sim_safety_split.yaml'], parameters=[sim_time], output='screen'),
-        Node(package='h12_ros2_controller', executable='joint_state_publisher', name='joint_state_publisher',
-             parameters=[sim_time], output='screen'),
+        Node(package='golem_safety', executable='safety_node', name='safety_node',
+             parameters=[sim_time, {'robot': 'h12', 'config': 'sim_safety_split.yaml', 'sim': True}],
+             output='screen'),
+        Node(package='golem_upper_ik', executable='frame_task_server', name='frame_task_server',
+             parameters=[sim_time, {'robot': 'h12', 'config': 'sim_safety_split.yaml'}], output='screen'),
+        Node(package='golem_upper_ik', executable='joint_state_publisher', name='joint_state_publisher',
+             parameters=[sim_time, {'robot': 'h12'}], output='screen'),
         Node(package='robot_state_publisher', executable='robot_state_publisher', name='robot_state_publisher',
              parameters=[sim_time, {'robot_description': Path('/home/code/CL_Assets/ros_assets/h1_2_magpie_ros.urdf').read_text()}],
              output='screen'),

@@ -53,7 +53,8 @@ def generate_launch_description():
         DeclareLaunchArgument('safety_config', default_value='relax_safety_split.yaml'),
         DeclareLaunchArgument('use_slam', default_value='true'),
         DeclareLaunchArgument('use_rviz', default_value='true'),
-        DeclareLaunchArgument('rviz_config', default_value=os.path.join(bringup_share, 'rviz', 'main.rviz')),
+        DeclareLaunchArgument('rviz_config',
+                              default_value=os.path.join(bringup_share, 'rviz', 'main.rviz')),
 
         _include('h12_bringup', 'h12_state.launch.py', {
             **sim_time,
@@ -61,6 +62,7 @@ def generate_launch_description():
         }),
         _include('h12_bringup', 'h12_control.launch.py', {
             **sim_time,
+            'sim': 'true',
             'use_frame_task': 'false',
             'safety_config': LaunchConfiguration('safety_config'),
             # no hardware e-stop node in sim to wait for
@@ -83,7 +85,8 @@ def generate_launch_description():
             executable='rviz2',
             name='rviz2_locomanipulationgame',
             arguments=['-d', LaunchConfiguration('rviz_config')],
-            parameters=[{'use_sim_time': ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool)}],
+            parameters=[{'use_sim_time': ParameterValue(LaunchConfiguration('use_sim_time'),
+                                                        value_type=bool)}],
             output='screen',
             emulate_tty=True,
             condition=IfCondition(LaunchConfiguration('use_rviz')),

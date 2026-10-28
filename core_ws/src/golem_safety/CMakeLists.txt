@@ -93,6 +93,9 @@ if(BUILD_TESTING)
 
   ament_add_pytest_test(test_no_sdk test/test_no_sdk.py TIMEOUT 60)
 
+  # The matching and statistics of tools/relay_latency_probe.py, on synthetic streams; no ROS.
+  ament_add_pytest_test(test_relay_latency_probe test/test_relay_latency_probe.py TIMEOUT 60)
+
   # Runs the installed safety_node against a fake robot over ROS, on the package's own
   # test domain.
   ament_add_pytest_test(test_node_ros test/test_node_ros.py TIMEOUT 1500

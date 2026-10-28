@@ -18,7 +18,10 @@ stopping frame_task_server hands the arms back (weight -> 0), and the stand-in
 (HOMIE) keeps the robot standing throughout. The walk test (--walk, with
 use_locomotion:=true): the stand-in hands over to the walking node's
 rt/lowcmd, the robot keeps standing, then walks on /cmd_vel 0.3 m/s forward
-for 5 s. Both tests listen to the sensors from the ros container for 10 s
+for 5 s; after the sensors, frame_task_server alone is stopped while the
+walking node balances the robot, and the waist roll and pitch stay at their
+hold, since its shutdown command keeps them stiff on rt/lowcmd. Both tests
+listen to the sensors from the ros container for 10 s
 (after the controller is up, or after the walk): every sensor topic at its
 rate in sim time throughout the window, with its frame_id and its message
 contents, the camera's frame on /tf_static, the sim's node publishing nothing
@@ -62,6 +65,10 @@ WEIGHT_STEP = 0.1          # largest rt/arm_sdk weight change per 20 ms of wall 
 RAMP_WALL_S = (0.5, 2.0)   # the safety layer's 1 s weight ramps, in wall s
 HOME_CMD_TOL = 0.01        # rad: the commanded arm targets vs home
 WALK_SPEED_TOL = 0.3       # mean forward speed within 30% of WALK_SPEED
+WAIST_HOLD_SECONDS = 4.0   # sim s after the controller stops, in the walk test
+# rad: measured waist roll and pitch vs their hold once the controller has stopped. HOMIE
+# standing keeps them within ~0.015 of it; a limp waist slumps to its ~0.5 rad limits
+WAIST_HOLD_TOL = 0.05
 # sensor topics: the rate from the stamps (sim time) within these fractions of
 # the configured one: the MID-360's are reliable, the camera's best effort
 RATE_TOL = {"reliable": (0.99, 1.01), "best_effort": (0.95, 1.01)}
@@ -498,6 +505,9 @@ def run_drive(out, walk):
             d.walk(WALK_SPEED, WALK_SECONDS)
             d.spin_for(2.0)
             d.check_sensors()   # standing again, in open floor
+            # the controller alone stops while the walking node balances the robot
+            d.stop_frame_task_server()
+            d.spin_for(WAIST_HOLD_SECONDS)
         else:
             if not d.wait_for_controller():
                 return 1
@@ -788,7 +798,33 @@ class Report:
         # until the test ends: stopping the launch then stops rt/lowcmd and the
         # sim turns the motors off
         self.standing(slice(r, self.at("end") + 1), "after the hand-over")
+        self.waist_after_controller_stop()
         self.sensors()
+
+    def waist_after_controller_stop(self):
+        """frame_task_server stopped while the walking node runs: its last command keeps
+        the waist at its hold (golem_safety relays it on rt/lowcmd), so the waist roll and
+        pitch stay there instead of slumping onto the walking policy"""
+        s = self.s
+        stop, end = self.at("controller_stopped"), self.at("end")
+        names = ["waist_roll_joint", "waist_pitch_joint"]
+        slots = [self.names["body"].index(n) for n in names]
+        t = s["t"]
+        before = np.nonzero((t >= t[stop] - 0.5) & (t < t[stop]))[0]
+        hold = np.median(s["lowcmd_q"][before][:, slots], axis=0)
+        rows = np.arange(stop, end + 1)
+        err = np.abs(s["q"][rows][:, slots] - hold).max(axis=0)
+        cmd_moved = np.abs(s["lowcmd_q"][rows][:, slots] - hold).max(axis=0)
+        span = t[end] - t[stop]
+        self.numbers["waist_after_controller_stop"] = {
+            "hold": hold.tolist(), "max_err": err.tolist(), "cmd_max_change": cmd_moved.tolist(),
+            "sim_seconds": float(span)}
+        self.check("waist held after the controller stops",
+                   span >= WAIST_HOLD_SECONDS - 0.5 and err.max() <= WAIST_HOLD_TOL,
+                   f"frame_task_server stopped at sim t {t[stop]:.2f} s; over the {span:.1f} s (sim) after, "
+                   f"waist roll / pitch within {err[0]:.4f} / {err[1]:.4f} rad of the hold "
+                   f"{hold[0]:+.3f} / {hold[1]:+.3f} rad (limit {WAIST_HOLD_TOL}); the commanded waist "
+                   f"moved {cmd_moved[0]:.4f} / {cmd_moved[1]:.4f} rad")
 
     # ------------------------------------------------------------- sensors
     def sensors(self):

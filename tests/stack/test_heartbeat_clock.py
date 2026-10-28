@@ -2,7 +2,9 @@
 
 Runs the installed golem_safety safety_node as the sim bringups do (use_sim_time
 true, sim true) with no /clock publisher, and counts its /safety/heartbeat beats.
-Its /lowcmd is remapped to a topic nothing reads, so the test commands nothing.
+The node beats only once relaying can begin, so the test feeds it an H1-2
+/lowstate (mode_machine 6) at 100 Hz. Its /lowstate and /lowcmd are remapped to
+topics of the test's own, so nothing else reads or writes them.
 """
 import importlib.util
 import os
@@ -17,6 +19,8 @@ FIRST_BEAT_TIMEOUT = 15.0
 WINDOW = 1.5
 # 10 Hz for WINDOW s gives 15; a paused clock gives none
 MIN_BEATS = 5
+STATE_PERIOD = 0.01  # s, wall clock: the fed /lowstate at 100 Hz
+H12_MODE_MACHINE = 6
 
 
 @unittest.skipUnless(importlib.util.find_spec('rclpy'), 'requires ROS container')
@@ -26,6 +30,7 @@ class HeartbeatClockTests(unittest.TestCase):
         from ament_index_python.packages import get_package_prefix
         from rclpy.executors import SingleThreadedExecutor
         from std_msgs.msg import Bool
+        from unitree_hg.msg import LowState
         self.assertIn(int(os.environ.get('ROS_DOMAIN_ID', '0')), range(1, 233))
         safety_node = os.path.join(get_package_prefix('golem_safety'), 'lib', 'golem_safety', 'safety_node')
         rclpy.init()
@@ -33,13 +38,18 @@ class HeartbeatClockTests(unittest.TestCase):
         beats = []
         observer.create_subscription(
             Bool, '/safety/heartbeat', lambda m: beats.append((time.monotonic(), m.data)), 10)
+        state = LowState(mode_machine=H12_MODE_MACHINE)
+        state_pub = observer.create_publisher(LowState, '/heartbeat_clock_test/lowstate', 10)
+        # a wall timer: the observer does not use sim time either
+        observer.create_timer(STATE_PERIOD, lambda: state_pub.publish(state))
         executor = SingleThreadedExecutor()
         executor.add_node(observer)
         with tempfile.TemporaryFile(mode='w+') as log:
             process = subprocess.Popen(
                 [safety_node, '--ros-args', '-p', 'robot:=h12', '-p', 'config:=sim_safety_split',
                  '-p', 'sim:=true', '-p', 'use_sim_time:=true',
-                 '-r', '/lowcmd:=/heartbeat_clock_test/lowcmd'],
+                 '-r', '/lowcmd:=/heartbeat_clock_test/lowcmd',
+                 '-r', '/lowstate:=/heartbeat_clock_test/lowstate'],
                 stdout=log, stderr=subprocess.STDOUT)
             exit_code = None
             try:

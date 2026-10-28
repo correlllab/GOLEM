@@ -275,6 +275,11 @@ for the includes after it, so pass consistent values (all four blocks share
   that input's first valid command once `/lowstate` reports `mode_machine` 6,
   and, with `use_estop:=true`, once a first hardware estop sample has arrived;
   until then it logs `engage_refused` with the reason, at most once a second.
+- **`/safety/heartbeat` means relaying can begin.** `safety_node` publishes no
+  beat until those two conditions hold; then it beats true at 10 Hz, and false
+  once its estop latches (false from the start if it latched first).
+  `h12_lowerbody_rl` pre-poses the legs only from the first beat, and
+  `lmg_deploy` and `h12_skills` read it too.
 - **`frame_task_server` needs `golem_safety` relaying.** It waits up to
   `controller.state_timeout` (5 s) for a fresh `/lowstate`, then holds the
   measured pose until it sees its commands on `/lowcmd` (the follow gate), for
@@ -300,8 +305,11 @@ for the includes after it, so pass consistent values (all four blocks share
   is running while `estop_node` reports a failed connection latches until
   restart**: when the first attempt fails and no retry has connected by
   `safety_delay` (3 s), or the first attempt outlasts `safety_delay` and then
-  fails. `safety_delay` must cover the time `estop_node` takes to connect (the
-  comment in `h12_control.launch.py`).
+  fails. A first attempt that outlasts `safety_delay` and then connects only
+  delays the start: no input engages and no heartbeat goes out until its first
+  sample, so the legs pre-pose and the arms start late. `safety_delay` must
+  cover the time `estop_node` takes to connect (the comment in
+  `h12_control.launch.py`).
 
 **Wiring a new package into bringup:** add it as `exec_depend` in
 `h12_bringup/package.xml`, add a `launch_ros.actions.Node(...)` entry to the
@@ -351,12 +359,14 @@ The core refuses to start on a bad combination; `startup_refusal` in
   relays them. `frame_task_server` stops with an error if that has not happened
   within `controller.startup_timeout` (30 s). After any estop, restart the whole
   bringup.
-- **The controller's exit.** When `frame_task_server` stops, it sends one
-  zero-gain, mode-0 command on the waist and arms. In arm_sdk mode
-  `golem_safety` refuses it (its waist kp is below `arm_sdk.waist_kp_min`),
-  latches its estop, logged as one, and hands the waist and arms back to
-  Unitree; in split mode it relays it, so the waist and arms go limp while the
-  legs keep their commands. `docs/g1/safety.md` has the per-mode details.
+- **The controller's exit.** When `frame_task_server` stops, it sends one last
+  command: mode 0 and zero kp, kd and tau on the arms, and in arm_sdk mode on
+  the waist too. `golem_safety` refuses that one (its waist kp is below
+  `arm_sdk.waist_kp_min`), latches its estop, logged as one, and hands the
+  waist and arms back to Unitree. In split (and full-body) mode the waist keeps
+  its hold angle and gains, since a walking policy needs it stiff; `golem_safety`
+  relays the command, so only the arms go limp while the legs keep their
+  commands. `docs/g1/safety.md` has the per-mode details.
 
 ## 7. Skills (`h12_skills`) — the LLM-callable layer
 
@@ -596,16 +606,19 @@ authoritative source instead of copying it.
   engages without it, another value latches the estop once engaged, and every
   command it writes carries the profile's `mode_machine`. Each robot's sims
   report the real value, and `wait_for_sim.py` checks the same values (§3).
-- **The controller's exit is a zero-gain, mode-0 command.** On SIGINT or
-  SIGTERM, or a start-up that fails after its first command, `golem_upper_ik`'s
+- **The controller's exit is one last command.** On SIGINT or SIGTERM, or a
+  start-up that fails after its first command, `golem_upper_ik`'s
   `frame_task_server` sends its upper-body slots one command with mode 0 and
-  zero kp, kd and tau, then stops publishing. On the H1-2 `golem_safety` relays it, so the torso and arms
-  go limp and stay so (the quiet input keeps its last command relayed). On the
-  G1 in split mode it relays it too: the waist and arms go limp while the walking
-  node keeps the legs. On the G1 in arm_sdk mode it refuses the command (its
-  waist kp is below `arm_sdk.waist_kp_min`), latches its estop, logged as an
-  estop (`estop_command_written`), and hands the waist and arms back to
-  Unitree.
+  zero kp, kd and tau on the IK joints, then stops publishing. The held joints
+  get the same, except on the G1 when `golem_safety` writes `rt/lowcmd` (the
+  profile's `shutdown_keeps_held_joints_on_lowcmd`). On the H1-2 `golem_safety`
+  relays it, so the torso and arms go limp and stay so (the quiet input keeps
+  its last command relayed). On the G1 in split (and full-body) mode it relays
+  it too: the waist keeps its hold angle, gains and torque and only the arms go
+  limp, while the walking node keeps the legs. On the G1 in arm_sdk mode it
+  refuses the command (its waist kp is below `arm_sdk.waist_kp_min`), latches
+  its estop, logged as an estop (`estop_command_written`), and hands the waist
+  and arms back to Unitree.
 - **`golem_safety`'s own exit** (SIGINT, SIGTERM, SIGHUP): in split and full-body
   mode it stops publishing at once (an estop burst in progress is finished
   first); in arm_sdk mode it ramps the weight to 0 over

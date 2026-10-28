@@ -24,7 +24,9 @@ lists its environment knobs, and each `test_sim_*.py` docstring says what it che
   arm_sdk mode (`arm_sdk.waist_kp_min`), so the stop latches its estop and the weight ramps
   1 -> 0; the test finds the controller by its process, `lib/golem_upper_ik/frame_task_server`.
 - **Walk test**: the stand-in hands the legs to the walking node, the robot keeps standing, then
-  walks 5 s at 0.3 m/s.
+  walks 5 s at 0.3 m/s. Then `frame_task_server` alone is stopped while the walking node
+  balances the robot: its shutdown command keeps the waist at its hold, so the waist roll and
+  pitch stay within 0.05 rad of it for 4 s and the robot keeps standing.
 - **Arm and walk tests**: every sensor topic arrives at its rate with the right frames, and the
   sim's sensor node publishes nothing else.
 - **Nav test**: Nav2 walks the robot to one goal 2-3 m from the spawn, picked from the sim's own

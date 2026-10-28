@@ -109,9 +109,10 @@ the robot used to be.
 
 ## When the arm controller stops
 
-`frame_task_server` (`golem_upper_ik`) ends by sending the waist and arms one
-command with mode 0 and zero kp, kd and tau, then stops publishing. It does so
-on Ctrl+C or SIGTERM, and when its start-up fails after its first command. What
+`frame_task_server` (`golem_upper_ik`) ends by sending one last command, then
+stops publishing. It does so on Ctrl+C or SIGTERM, and when its start-up fails
+after its first command. The arms always get mode 0 and zero kp, kd and tau;
+the waist gets them too in arm_sdk mode, and keeps its hold in split mode. What
 follows depends on the mode:
 
 - **arm_sdk mode:** `golem_safety` refuses that command, because its waist kp
@@ -121,9 +122,14 @@ follows depends on the mode:
   arm_sdk.waist_kp_min 40.0`. It then holds the last good command and ramps
   the weight to 0, handing the waist and arms back to Unitree. Restart the
   bringup before commanding the arms again.
-- **split mode:** `golem_safety` relays it, so **the waist and arms go limp**
-  (mode 0, zero gains) while the walking node keeps the legs. They stay limp:
-  the quiet upper input keeps that command relayed.
+- **split mode:** the waist keeps its hold angle, gains and torque, because
+  the walking policy was trained with a stiff waist and a limp one slumps onto
+  it. `golem_safety` relays the command, so **the arms go limp** (mode 0, zero
+  gains) while the waist holds and the walking node keeps the legs. That stays
+  so: the quiet upper input keeps that command relayed.
+  `tests/g1/test_sim_bringup.sh --walk` stops `frame_task_server` while the
+  walking node runs and checks that the waist roll and pitch stay at their
+  hold.
 
 ## Stopping
 

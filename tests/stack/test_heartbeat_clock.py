@@ -41,6 +41,7 @@ class HeartbeatClockTests(unittest.TestCase):
                  '-p', 'sim:=true', '-p', 'use_sim_time:=true',
                  '-r', '/lowcmd:=/heartbeat_clock_test/lowcmd'],
                 stdout=log, stderr=subprocess.STDOUT)
+            exit_code = None
             try:
                 deadline = time.monotonic() + FIRST_BEAT_TIMEOUT
                 while not beats and time.monotonic() < deadline and process.poll() is None:
@@ -50,6 +51,7 @@ class HeartbeatClockTests(unittest.TestCase):
                     executor.spin_once(timeout_sec=.05)
                 window = [data for stamp, data in beats if stamp <= until]
                 clock_publishers = observer.count_publishers('/clock')
+                heartbeat_publishers = observer.count_publishers('/safety/heartbeat')
                 exit_code = process.poll()
             finally:
                 if process.poll() is None:
@@ -65,8 +67,12 @@ class HeartbeatClockTests(unittest.TestCase):
             log.seek(0)
             output = f' (safety_node exit code {exit_code}):\n{log.read()}'
         self.assertTrue(beats, f'No /safety/heartbeat within {FIRST_BEAT_TIMEOUT} s{output}')
+        self.assertIsNone(exit_code, f'safety_node exited before the end of the test{output}')
         self.assertEqual(clock_publishers, 0,
                          'A /clock publisher is on this domain: the test needs a paused clock')
+        self.assertEqual(heartbeat_publishers, 1,
+                         'The beats must come from this safety_node alone: another /safety/heartbeat '
+                         'publisher is on this domain')
         self.assertGreaterEqual(len(window), MIN_BEATS, f'Paused /clock suppressed safety heartbeat{output}')
         self.assertTrue(all(window), f'Heartbeat false{output}')
 

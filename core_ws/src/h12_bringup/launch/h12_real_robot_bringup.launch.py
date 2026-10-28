@@ -7,8 +7,9 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
 
-# Real robot, onboard PC. ROS_DOMAIN_ID must be exported in the launching shell
-# (0 on the real robot; see h12_control.launch.py).
+# Real robot, onboard PC. Every node joins the launching shell's ROS_DOMAIN_ID,
+# which must be 0, the real robot's command bus; ROS uses 0 when it is unset
+# (see h12_control.launch.py).
 #
 # Leg control (h12_lowerbody.launch.py) runs here, behind two operator gates:
 #   1. start_position_verified:=true starts the lowerbody:= RL policy, which

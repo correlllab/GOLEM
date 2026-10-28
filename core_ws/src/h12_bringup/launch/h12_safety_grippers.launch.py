@@ -12,8 +12,8 @@ from launch.substitutions import LaunchConfiguration
 # have to be alive for a command to reach a motor safely. Use it when working on
 # gripper/low-level actuation without paying for the full driver stack; the full
 # onboard bringup (h12_real_robot_bringup.launch.py) is still the normal path.
-# ROS_DOMAIN_ID must be exported in the launching shell (0 on the real robot;
-# see h12_control.launch.py).
+# Every node joins the launching shell's ROS_DOMAIN_ID, which must be 0, the real
+# robot's command bus; ROS uses 0 when it is unset (see h12_control.launch.py).
 
 
 def generate_launch_description():

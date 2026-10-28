@@ -32,8 +32,9 @@ def generate_launch_description():
     wall_time = {'use_sim_time': 'false'}
 
     return LaunchDescription([
-        DeclareLaunchArgument('use_hand_cameras', default_value='false',
-                              description='Start both hand RealSense cameras and their static TFs'),
+        DeclareLaunchArgument(
+            'use_hand_cameras', default_value='false',
+            description='Start both hand RealSense cameras and their static TFs'),
         DeclareLaunchArgument('use_skills', default_value='true'),
         DeclareLaunchArgument('model_logging', default_value='true'),
         DeclareLaunchArgument('model_visualization', default_value='true'),

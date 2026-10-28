@@ -22,8 +22,9 @@ from launch.substitutions import LaunchConfiguration
 # The robot then walks on /cmd_vel and reaches on the arm goals the operator sets
 # through /marl_deploy_node/set_mode and set_arm_goals.
 #
-# ROS_DOMAIN_ID must be exported in the launching shell (0 on the real robot;
-# see h12_control.launch.py). Assets resolve as in h12_state.launch.py.
+# Every node joins the launching shell's ROS_DOMAIN_ID, which must be 0, the real
+# robot's command bus; ROS uses 0 when it is unset (see h12_control.launch.py).
+# Assets resolve as in h12_state.launch.py.
 ASSETS_DIR = os.environ.get('GOLEM_ASSETS_DIR', '/home/unitree/GOLEM/CL_Assets')
 
 GAME_ARGS = ('start_position_verified', 'policy', 'prepose_ramp_s', 'prepose_max_vel',

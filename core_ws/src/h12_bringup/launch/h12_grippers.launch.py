@@ -25,7 +25,8 @@ def generate_launch_description():
         parameters=[{
             'auto_detect_port': False,
             # OpenRB-150 serial ...FF101F14
-            'port': '/dev/serial/by-id/usb-ROBOTIS_OpenRB-150_B0935A515157375037202020FF101F14-if00',
+            'port': ('/dev/serial/by-id/'
+                     'usb-ROBOTIS_OpenRB-150_B0935A515157375037202020FF101F14-if00'),
             'use_eflesh': False,
             # Finger angle limits (degrees), per-gripper calibration.
             # min/max are the measured servo angles at the open/closed
@@ -51,7 +52,8 @@ def generate_launch_description():
         parameters=[{
             'auto_detect_port': False,
             # OpenRB-150 serial ...FF0F0E1C
-            'port': '/dev/serial/by-id/usb-ROBOTIS_OpenRB-150_3EC94E825157375037202020FF0F0E1C-if00',
+            'port': ('/dev/serial/by-id/'
+                     'usb-ROBOTIS_OpenRB-150_3EC94E825157375037202020FF0F0E1C-if00'),
             'use_eflesh': False,
             # Finger angle limits (degrees), per-gripper calibration.
             'finger1theta_min': 86.51,

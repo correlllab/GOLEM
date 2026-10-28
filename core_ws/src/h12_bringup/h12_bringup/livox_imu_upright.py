@@ -1,4 +1,5 @@
-"""Rotate the MID360 IMU into the frame livox_ros_driver2 publishes points in.
+"""
+Rotate the MID360 IMU into the frame livox_ros_driver2 publishes points in.
 
 livox_ros_driver2 applies the MID360_config.json ``extrinsic_parameter``
 rotation to the point cloud but publishes the IMU in the raw sensor frame. On

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Live slider GUI for the H1 sim's frame_task_server and magpie grippers.
+"""
+Live slider GUI for the H1 sim's frame_task_server and magpie grippers.
 
 Twelve sliders (XYZ + RPY for each arm) drive the `/frame_task` action targeting
 the GraspGenX gripper-base frames `left_graspgenx_frame` / `right_graspgenx_frame`
@@ -25,7 +26,6 @@ Usage:
 import math
 import tkinter as tk
 
-import numpy as np
 from scipy.spatial.transform import Rotation
 
 import rclpy
@@ -61,7 +61,8 @@ class SliderDebugger(Node):
 
         self.frame_task_cli = ActionClient(self, FrameTask, '/frame_task')
         self.left_gripper_cli = self.create_client(SetGripperPosition, self.left_gripper_srv_name)
-        self.right_gripper_cli = self.create_client(SetGripperPosition, self.right_gripper_srv_name)
+        self.right_gripper_cli = self.create_client(SetGripperPosition,
+                                                    self.right_gripper_srv_name)
 
         # XYZ in pelvis + RPY (xyz-euler) of the driven frame.
         self._initial_left = (0.3, 0.2, 0.1, 0.0, 0.0, 0.0)

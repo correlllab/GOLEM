@@ -67,12 +67,20 @@ def generate_launch_description():
             description='golem_upper_ik config for frame_task_server: a name under its '
                         'config/h12/, or a path'),
         # The H1-2's start-up order, on the wall clock: estop_node at once, then
-        # safety_node, then frame_task_server. Neither delay is needed for
-        # safety: with use_estop, safety_node engages no input before estop_node's
-        # first sample, and frame_task_server's start-up waits up to its
-        # controller.startup_timeout for safety_node to relay. They give
-        # estop_node time to open its serial port, and safety_node time to start,
-        # before the next node waits on it.
+        # safety_node after safety_delay, then frame_task_server after
+        # frame_task_delay.
+        #
+        # With use_estop, safety_node engages no input before estop_node's first
+        # sample, and latches until restart on a sample that says triggered or
+        # unplugged. estop_node publishes nothing until its first attempt to open
+        # and probe the serial port ends; when that attempt fails it publishes
+        # unplugged, and triggered (fail_safe_triggered_on_disconnect), until a
+        # retry connects. A safety_node that starts while estop_node is retrying
+        # latches, so on the real robot safety_delay must cover the time
+        # estop_node takes to connect.
+        #
+        # frame_task_server's start-up waits up to its controller.startup_timeout
+        # for safety_node to relay its commands.
         DeclareLaunchArgument(
             'safety_delay', default_value='3.0',
             description='Seconds (wall clock) before starting safety_node'),

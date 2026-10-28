@@ -1,11 +1,12 @@
 """
-The H1-2 bringups and the stack test start golem_safety and golem_upper_ik.
+The H1-2 bringups start golem_safety and golem_upper_ik.
 
-No launch file of either, and no dependency of h12_bringup, names
-h12_safety_layer, h12_ros2_controller, g1_safety_layer or g1_control.
-h12_control.launch.py needs its sim argument from every top-level file, and
-refuses a frame_task_config that does not run with its safety_config. The
-launch tests need the workspace built and sourced.
+No launch file of h12_bringup names h12_safety_layer, h12_ros2_controller,
+g1_safety_layer or g1_control, and h12_bringup depends on none of them
+(tests/stack/test_launch_packages.py checks the stack test's launch files).
+h12_control.launch.py needs sim from every top-level file, the real-robot ones
+pass use_estop, and it refuses a frame_task_config that does not run with its
+safety_config. The launch tests need the workspace built and sourced.
 """
 
 import ast
@@ -22,9 +23,6 @@ from launch.utilities import normalize_to_list_of_substitutions, perform_substit
 import pytest
 
 PACKAGE = Path(__file__).resolve().parents[1]
-# The repository's tests/stack, beside core_ws. The golem_ros container mounts
-# core_ws only; the ROS container of tests/stack/run.sh mounts tests/stack here too.
-STACK = Path(__file__).resolve().parents[4] / 'tests' / 'stack'
 OLD_PACKAGES = ('h12_safety_layer', 'h12_ros2_controller', 'g1_safety_layer', 'g1_control')
 OLD_NAME = re.compile(r'\b(?:' + '|'.join(OLD_PACKAGES) + r')\b')
 
@@ -36,15 +34,9 @@ def _old_names(path):
     return sorted(set(OLD_NAME.findall(source)))
 
 
-@pytest.mark.parametrize('directory, pattern', [
-    (PACKAGE / 'launch', '*.py'),
-    (STACK, '*.launch.py'),
-], ids=['h12_bringup/launch', 'tests/stack'])
-def test_no_launch_names_old_packages(directory, pattern):
-    if directory == STACK and not STACK.is_dir():
-        pytest.skip(f'{STACK} is not mounted in this container')
-    files = sorted(directory.glob(pattern))
-    assert files, f'no {pattern} in {directory}'
+def test_no_launch_names_old_packages():
+    files = sorted((PACKAGE / 'launch').glob('*.py'))
+    assert files, 'no launch file in h12_bringup/launch'
     named = {path.name: _old_names(path) for path in files}
     assert not {name: old for name, old in named.items() if old}
 
@@ -86,14 +78,14 @@ def test_control_sim_has_no_default():
     assert sim.default_value is None
 
 
-@pytest.mark.parametrize('launch_file, sim', [
-    ('h12_sim_bringup.launch.py', 'true'),
-    ('lmg_sim_bringup.launch.py', 'true'),
-    ('h12_real_robot_bringup.launch.py', 'false'),
-    ('lmg_real_bringup.launch.py', 'false'),
-    ('h12_safety_grippers.launch.py', 'false'),
+@pytest.mark.parametrize('launch_file, sim, use_estop', [
+    ('h12_sim_bringup.launch.py', 'true', 'false'),
+    ('lmg_sim_bringup.launch.py', 'true', 'false'),
+    ('h12_real_robot_bringup.launch.py', 'false', 'true'),
+    ('lmg_real_bringup.launch.py', 'false', 'true'),
+    ('h12_safety_grippers.launch.py', 'false', 'true'),
 ])
-def test_top_level_files_pass_sim(launch_file, sim, monkeypatch):
+def test_top_level_files_pass_sim_and_use_estop(launch_file, sim, use_estop, monkeypatch):
     class Source(PythonLaunchDescriptionSource):
         """A PythonLaunchDescriptionSource that keeps the path it was given."""
 
@@ -113,13 +105,20 @@ def test_top_level_files_pass_sim(launch_file, sim, monkeypatch):
     arguments = {_text(context, name): _text(context, value)
                  for name, value in control.launch_arguments}
     assert arguments['sim'] == sim
+    # absent: h12_control.launch.py's default, false
+    assert arguments.get('use_estop', 'false') == use_estop
 
 
-def test_control_checks_the_pair_before_any_node():
-    entities = [entity for entity in
-                _load('h12_control.launch.py').generate_launch_description().entities
+def test_control_checks_the_pair_before_any_node(monkeypatch):
+    control = _load('h12_control.launch.py')
+    calls = []
+    monkeypatch.setattr(control, 'check_pairing', lambda context: calls.append(context) or [])
+    entities = [entity for entity in control.generate_launch_description().entities
                 if not isinstance(entity, DeclareLaunchArgument)]
     assert isinstance(entities[0], OpaqueFunction)
+    context = LaunchContext()
+    assert entities[0].execute(context) == []
+    assert calls == [context]
 
 
 @pytest.mark.parametrize('safety_config, frame_task_config, use_frame_task, refused', [

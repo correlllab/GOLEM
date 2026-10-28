@@ -1,4 +1,5 @@
-"""Guards the real-robot MID360 IMU/point frame agreement.
+"""
+Guards the real-robot MID360 IMU/point frame agreement.
 
 livox_ros_driver2 rotates only the points by MID360_config.json's extrinsic;
 livox_imu_upright must rotate the IMU identically, and mid360.yaml (shared

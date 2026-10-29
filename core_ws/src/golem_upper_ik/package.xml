@@ -13,7 +13,7 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>h12_ros2_model</exec_depend>
+  <exec_depend>golem_ros2_models</exec_depend>
   <exec_depend>golem_safety</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>python3-yaml</exec_depend>

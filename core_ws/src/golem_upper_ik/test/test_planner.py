@@ -24,8 +24,6 @@ from golem_upper_ik.core.planner import (
 
 
 def profile_of(robot):
-    if robot == 'g1':
-        pytest.importorskip('g1_description')
     from golem_upper_ik.profile import load_profile
     return load_profile(robot)
 

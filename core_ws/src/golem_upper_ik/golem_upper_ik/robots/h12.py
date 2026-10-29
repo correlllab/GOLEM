@@ -1,6 +1,5 @@
 '''The H1-2's controller data: the Magpie-gripper model, its frames and named postures'''
-import os
-
+from golem_ros2_models import paths
 import numpy as np
 
 # the robot's name in messages
@@ -102,15 +101,8 @@ DEFAULT_CONFIG = 'debug'
 
 def model_paths() -> dict:
     '''
-    The model files, installed by h12_ros2_model. Pinocchio resolves the relative mesh paths
-    of h1_2_magpie.urdf; the _ros copy has package:// URIs for robot_state_publisher and RViz
+    The model files, installed by golem_ros2_models. Pinocchio resolves the relative mesh
+    paths of h1_2_magpie.urdf; the _ros copy has package:// URIs for robot_state_publisher
+    and RViz
     '''
-    from ament_index_python.packages import get_package_share_directory
-
-    model = os.path.join(get_package_share_directory('h12_ros2_model'), 'assets', 'h1_2')
-    return {
-        'urdf_path': os.path.join(model, 'h1_2_magpie.urdf'),
-        'urdf_ros_path': os.path.join(model, 'h1_2_magpie_ros.urdf'),
-        'collision': (os.path.join(model, 'h1_2_magpie_sphere.urdf'),
-                      os.path.join(model, 'h1_2_magpie_sphere_collision.srdf')),
-    }
+    return paths.model_paths('h12')

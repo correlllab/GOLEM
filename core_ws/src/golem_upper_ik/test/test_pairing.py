@@ -163,7 +163,6 @@ def safety_config(robot, name):
 def paired_configs(robot):
     from golem_upper_ik.pairing import G1_SAFETY_CONTROLLER_CONFIGS
     if robot == 'g1':
-        pytest.importorskip('g1_description')
         return G1_SAFETY_CONTROLLER_CONFIGS
     return H12_PAIRS
 

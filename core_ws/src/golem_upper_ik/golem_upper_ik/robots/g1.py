@@ -1,4 +1,5 @@
 '''The G1's controller data: the 29-DoF model with both Dex3-1 hands, its frames and postures'''
+from golem_ros2_models import paths
 import numpy as np
 
 # the robot's name in messages
@@ -78,15 +79,8 @@ DEFAULT_CONFIG = 'g1_split'
 
 def model_paths() -> dict:
     '''
-    The model files, installed by g1_description. It symlinks into third_party/leprechaun_g1,
-    which is mounted for the G1 only, so it is imported here and not at module level.
-    Pinocchio resolves the relative mesh paths of the plain URDF; the ROS copy has
-    package:// URIs. There is no self-collision model yet
+    The model files, installed by golem_ros2_models. Pinocchio resolves the relative mesh
+    paths of the plain URDF; the ROS copy has package:// URIs for robot_state_publisher and
+    RViz. The G1's profile runs without a self-collision model
     '''
-    from g1_description.paths import urdf_path
-
-    return {
-        'urdf_path': urdf_path('with_hand'),
-        'urdf_ros_path': urdf_path('with_hand', ros=True),
-        'collision': None,
-    }
+    return {**paths.model_paths('g1'), 'collision': None}

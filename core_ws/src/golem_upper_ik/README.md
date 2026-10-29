@@ -65,9 +65,8 @@ first sample. The hands' and grippers' joints come from their own nodes.
 `robots/<robot>.yaml` (joint names in slot order, limits, slot ranges, `mode_machine`), the
 one joint table both packages read, and `golem_upper_ik/robots/<robot>.py` (model files,
 frames, IK and held joints, named configurations, start-up sequence, per-robot config
-defaults). A robot module imports nothing of another robot's packages at module level: the
-H1-2 builds and runs without the `g1_*` packages, and `g1_description` is imported only when
-a node runs with `robot:=g1`.
+defaults). Both robots' model files come from `golem_ros2_models`. A robot module imports
+nothing of another robot's packages: the H1-2 builds and runs without the `g1_*` packages.
 
 | | H1-2 (`robots/h12.py`) | G1 (`robots/g1.py`) |
 |---|---|---|
@@ -77,7 +76,7 @@ a node runs with `robot:=g1`.
 | End-effector frames | `left/right_wrist_yaw_link` | `left/right_hand_palm_link` |
 | Planner frames | `left/right_grasp_frame` | `left/right_hand_palm_link` |
 | IMU frame | `torso_link` | `imu_in_pelvis` (`controller.imu_frame` overrides) |
-| Model | `h1_2_magpie.urdf` (`h12_ros2_model`) | the with-hand URDF (`g1_description`) |
+| Model (`golem_ros2_models`) | `h1_2_magpie.urdf` | `g1_29dof_with_hand_rev_1_0.urdf` |
 | Self-collision model | `h1_2_magpie_sphere.urdf` + `h1_2_magpie_sphere_collision.srdf` | none: no collision barrier, no planner |
 | Start-up postures | `init_1`, `init_2`, `init_3`, `home` | `home` |
 | Named configurations | `NAMED_CONFIGS` in `robots/h12.py` (`home`, `t_pose`, `prep`, `staging_left`, ...) | `NAMED_CONFIGS` in `robots/g1.py` (`home`, `arms_down`, `t_pose`, `arms_front_45`) |
@@ -233,8 +232,7 @@ A controller killed without that command (SIGKILL, a crash) leaves its last comm
 
 ## Tests
 
-In the G1-mode container (the G1 profile needs `g1_description`; `--restart` replaces a
-running `golem_ros` container):
+In either container mode (`--restart` replaces a running `golem_ros` container):
 
 ```bash
 docker/scripts/docker_run.sh ros --restart --g1 /home/code/h12_sim_scripts/launch_ros.sh bash -lc \

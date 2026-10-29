@@ -30,8 +30,6 @@ ARM_SLOTS = {
 
 
 def profile_of(robot):
-    if robot == 'g1':
-        pytest.importorskip('g1_description')
     from golem_upper_ik.profile import load_profile
     return load_profile(robot)
 
@@ -42,7 +40,6 @@ def model_of(robot, **kwargs):
 
 
 def fixture_of(robot):
-    profile_of(robot)  # skips the g1 without g1_description
     return json.loads((FIXTURES / f'fk_{robot}.json').read_text())
 
 

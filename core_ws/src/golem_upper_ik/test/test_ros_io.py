@@ -21,8 +21,6 @@ COMMAND_TOPIC = '/safety/lowcmd_upper_in'
 
 
 def profile_of(robot):
-    if robot == 'g1':
-        pytest.importorskip('g1_description')
     from golem_upper_ik.profile import load_profile
     return load_profile(robot)
 

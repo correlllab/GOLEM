@@ -35,13 +35,7 @@ G1_CONTROLLER_KEYS = (
 )
 
 
-def needs_robot(robot):
-    if robot == 'g1':
-        pytest.importorskip('g1_description')
-
-
 def load(robot, name_or_path):
-    needs_robot(robot)
     from golem_upper_ik.config import load_controller_config
     return load_controller_config(robot, name_or_path)
 
@@ -157,7 +151,6 @@ def test_every_installed_config_has_a_fixture():
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_defaults(robot, tmp_path):
     '''A config with only gains: the loaders' shared defaults and each robot's own'''
-    needs_robot(robot)
     from golem_upper_ik.profile import load_profile
     profile = load_profile(robot)
     config = load(robot, write_config(tmp_path, robot, minimal(robot)))
@@ -197,7 +190,6 @@ def test_defaults(robot, tmp_path):
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_joint_lists_take_body_or_upper_lengths(robot, tmp_path):
-    needs_robot(robot)
     from golem_upper_ik.profile import load_profile
     profile = load_profile(robot)
     body, upper = len(profile.body_joints), len(profile.upper_slots)

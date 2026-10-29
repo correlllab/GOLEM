@@ -8,8 +8,6 @@ import dataclasses
 import json
 import os
 from pathlib import Path
-import subprocess
-import sys
 import types
 
 from ament_index_python.packages import get_package_share_directory
@@ -53,8 +51,6 @@ EXPECTED = {
 
 
 def profile_of(robot):
-    if robot == 'g1':
-        pytest.importorskip('g1_description')
     from golem_upper_ik.profile import load_profile
     return load_profile(robot)
 
@@ -186,60 +182,3 @@ def test_unknown_robot_raises():
     from golem_upper_ik.profile import load_profile
     with pytest.raises(ValueError, match='h1'):
         load_profile('h1')
-
-
-# Run in a fresh interpreter, where an import hook refuses g1_description: the H1-2's
-# profile, configs, pairing and nodes must work without it, and the G1 module must import
-# without it (only load_profile('g1') reaches for it). The last step checks that the hook
-# works.
-NO_G1_SCRIPT = r'''
-import importlib.abc
-import sys
-
-attempts = []
-
-
-class RefuseG1Description(importlib.abc.MetaPathFinder):
-    def find_spec(self, name, path=None, target=None):
-        if name == 'g1_description' or name.startswith('g1_description.'):
-            attempts.append(name)
-            raise ImportError(f'{name} is not installed')
-        return None
-
-
-sys.meta_path.insert(0, RefuseG1Description())
-assert 'g1_description' not in sys.modules
-
-import golem_upper_ik.robots.h12
-import golem_upper_ik.robots.g1
-import golem_upper_ik.ros2.frame_task_server
-import golem_upper_ik.ros2.joint_state_publisher
-from golem_upper_ik.config import load_controller_config
-from golem_upper_ik.pairing import default_controller_config, pairing_refusal
-from golem_upper_ik.profile import load_profile
-
-profile = load_profile('h12')
-for name in ('safety_split', 'sim_safety_split', 'safety_full', 'debug'):
-    load_controller_config('h12', name)
-assert pairing_refusal('h12', 'safety_split', 'relax_safety_split') is None
-assert pairing_refusal('g1', 'g1_split', 'split') is None
-assert default_controller_config('h12', 'relax_safety_split') == 'safety_split'
-assert attempts == [], attempts
-assert not any(m.split('.')[0] == 'g1_description' for m in sys.modules)
-
-try:
-    load_profile('g1')
-except ImportError:
-    pass
-else:
-    raise AssertionError('load_profile("g1") loaded although g1_description was refused')
-assert attempts, 'load_profile("g1") never imported g1_description'
-print('ok')
-'''
-
-
-def test_h12_profile_needs_no_g1_package(tmp_path):
-    done = subprocess.run([sys.executable, '-c', NO_G1_SCRIPT], cwd=tmp_path,
-                          capture_output=True, text=True, timeout=60)
-    assert done.returncode == 0, done.stdout + done.stderr
-    assert done.stdout.strip().splitlines()[-1] == 'ok'

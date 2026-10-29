@@ -25,7 +25,6 @@ import threading
 import time
 
 import numpy as np
-import pytest
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
@@ -44,9 +43,6 @@ _names = itertools.count()
 
 
 def profile_of(robot):
-    '''The profile of robot; the test is skipped for the G1 without g1_description'''
-    if robot == 'g1':
-        pytest.importorskip('g1_description')
     from golem_upper_ik.profile import load_profile
     return load_profile(robot)
 

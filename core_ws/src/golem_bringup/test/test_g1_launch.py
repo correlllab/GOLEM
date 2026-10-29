@@ -5,8 +5,7 @@ g1_core always starts the walking node (locomotion_node) in the sim, and on the
 real robot only with start_position_verified:=true, as the H1-2's leg node is
 started. It runs the split-mode configs and refuses sim/real mixes, and the
 real and sim launches pass their settings on. Needs the workspace built and
-sourced (golem_bringup, g1_description and golem_upper_ik installed); skipped
-without g1_description, which an H1-2 workspace does not build.
+sourced (golem_bringup, golem_ros2_models and golem_upper_ik installed).
 """
 
 import importlib.util
@@ -20,9 +19,6 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, Time
 from launch.utilities import normalize_to_list_of_substitutions, perform_substitutions
 from launch_ros.actions import Node
 from launch_ros.utilities import evaluate_parameters
-
-# g1_core.launch.py imports g1_description
-pytest.importorskip('g1_description')
 
 LAUNCH_DIR = Path(__file__).resolve().parents[1] / 'launch' / 'g1'
 

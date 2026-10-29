@@ -5,10 +5,9 @@ g1_core includes g1_navigation's launch with the sim's arguments, beside the
 walking node the sim always starts, and refuses navigation on the real robot
 (its lidar is not connected yet); the real and sim launches pass use_nav on.
 frontier_explore reaches g1_navigation as an explicit launch argument of that
-include. Needs the workspace built and sourced (golem_bringup, g1_description,
-g1_navigation and golem_upper_ik installed); skipped without g1_description or
-g1_navigation, which an H1-2 workspace does not build, or without the G1's URDF
-from third_party/leprechaun_g1, which an H1-2 container does not mount.
+include. Needs the workspace built and sourced (golem_bringup, golem_ros2_models,
+g1_navigation and golem_upper_ik installed); skipped without g1_navigation, which an
+H1-2 workspace does not build.
 """
 
 import os
@@ -24,14 +23,8 @@ from launch.utilities import normalize_to_list_of_substitutions, perform_substit
 from launch_ros.actions import Node
 from launch_ros.utilities import evaluate_parameters
 
-# g1_core.launch.py imports g1_description, and the navigation launch is g1_navigation's.
-# That launch also reads the G1's upstream URDF from third_party/leprechaun_g1, which an
-# H1-2 container does not mount even where a G1 build left g1_description installed.
+# the navigation launch is g1_navigation's
 pytest.importorskip('g1_navigation')
-G1_URDF = pytest.importorskip('g1_description.paths').urdf_path('with_hand')
-if not os.path.isfile(G1_URDF):
-    pytest.skip(f'{G1_URDF} is missing (third_party/leprechaun_g1 is not mounted)',
-                allow_module_level=True)
 
 from test_g1_launch import (  # noqa: E402
     _context, _core_nodes, _load, _passed_to_core, core)

@@ -1,6 +1,7 @@
 import os
 
 from ament_index_python.packages import get_package_share_directory
+from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
@@ -21,7 +22,6 @@ from launch_ros.parameter_descriptions import ParameterValue
 # h12_control.launch.py), and not as 0: this launch engages and walks without an
 # operator, and domain 0 (also the DDS default when the variable is unset) is
 # the real robot's command bus.
-ASSETS_DIR = '/home/code/CL_Assets'
 
 GAME_ARGS = ('policy', 'prepose_ramp_s', 'prepose_max_vel')
 
@@ -58,7 +58,7 @@ def generate_launch_description():
 
         _include('golem_bringup', 'h12/h12_state.launch.py', {
             **sim_time,
-            'urdf_file': os.path.join(ASSETS_DIR, 'ros_assets', 'h1_2_magpie_ros.urdf'),
+            'urdf_file': urdf_path('h12', ros=True),
         }),
         _include('golem_bringup', 'h12/h12_control.launch.py', {
             **sim_time,
@@ -71,7 +71,7 @@ def generate_launch_description():
         _include('golem_bringup', 'h12/h12_locomanipulationgame.launch.py', {
             **sim_time,
             **{name: LaunchConfiguration(name) for name in GAME_ARGS},
-            'urdf_path': os.path.join(ASSETS_DIR, 'ros_assets', 'h1_2_magpie.urdf'),
+            'urdf_path': urdf_path('h12'),
             'start_position_verified': 'true',
             # engages as soon as the pre-pose settles, with no operator confirm
             'engage_wait_for_confirm': 'false',

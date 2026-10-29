@@ -16,7 +16,7 @@
   <exec_depend>golem_upper_ik</exec_depend>
   <exec_depend>h12_lowerbody_rl</exec_depend>
   <exec_depend>lmg_deploy</exec_depend>
-  <exec_depend>g1_description</exec_depend>
+  <exec_depend>golem_ros2_models</exec_depend>
   <exec_depend>g1_dex3</exec_depend>
   <exec_depend>g1_locomotion</exec_depend>
   <exec_depend>g1_navigation</exec_depend>

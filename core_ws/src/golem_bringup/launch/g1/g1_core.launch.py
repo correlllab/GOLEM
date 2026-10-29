@@ -96,7 +96,7 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-from g1_description.paths import urdf_path
+from golem_ros2_models.paths import urdf_path
 from golem_upper_ik.pairing import default_controller_config, pairing_refusal
 
 ROBOT = 'g1'
@@ -173,7 +173,7 @@ def _setup(context):
     if refusal is not None:
         raise RuntimeError(f'g1_core: not starting: {refusal}')
 
-    with open(urdf_path('with_hand', ros=True)) as urdf_file:
+    with open(urdf_path('g1', ros=True)) as urdf_file:
         robot_description = urdf_file.read()
     rviz_config = os.path.join(get_package_share_directory('golem_bringup'), 'rviz', 'g1',
                                'g1.rviz')

@@ -20,16 +20,15 @@ Launch by path from the slim ROS container:
 import os
 
 from ament_index_python.packages import get_package_share_directory
+from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
-ASSETS_DIR = '/home/code/CL_Assets'
-
 
 def generate_launch_description():
-    with open(os.path.join(ASSETS_DIR, 'ros_assets', 'h1_2_magpie_ros.urdf'), 'r') as urdf_file:
+    with open(urdf_path('h12', ros=True), 'r') as urdf_file:
         robot_description = urdf_file.read()
 
     # MuJoCo publishes /clock with sim time; keep all nodes on it.

@@ -1,16 +1,9 @@
-import os
-
+from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
-
-
-# Default URDF: the real robot's onboard PC checkout, or GOLEM_ASSETS_DIR when
-# set. Inside the containers the assets are at /home/code/CL_Assets, so the sim
-# bringup passes urdf_file explicitly.
-ASSETS_DIR = os.environ.get('GOLEM_ASSETS_DIR', '/home/unitree/GOLEM/CL_Assets')
 
 
 def generate_launch_description():
@@ -20,7 +13,7 @@ def generate_launch_description():
     )
     declare_urdf_file = DeclareLaunchArgument(
         'urdf_file',
-        default_value=os.path.join(ASSETS_DIR, 'ros_assets', 'h1_2_magpie_ros.urdf'),
+        default_value=urdf_path('h12', ros=True),
         description='Absolute path to the robot URDF'
     )
 

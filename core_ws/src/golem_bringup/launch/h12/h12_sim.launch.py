@@ -1,6 +1,7 @@
 import os
 
 from ament_index_python.packages import get_package_share_directory
+from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
@@ -10,7 +11,6 @@ from launch_ros.actions import Node
 
 # x86 sim bringup. ROS_DOMAIN_ID must be exported in the launching shell (see
 # h12_control.launch.py).
-ASSETS_DIR = '/home/code/CL_Assets'
 
 
 def _include(package, launch_file, launch_arguments, condition=None):
@@ -47,7 +47,7 @@ def generate_launch_description():
 
         _include('golem_bringup', 'h12/h12_state.launch.py', {
             **sim_time,
-            'urdf_file': os.path.join(ASSETS_DIR, 'ros_assets', 'h1_2_magpie_ros.urdf'),
+            'urdf_file': urdf_path('h12', ros=True),
         }),
         _include('golem_bringup', 'h12/h12_control.launch.py', {
             **sim_time,

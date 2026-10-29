@@ -1,6 +1,7 @@
 import os
 
 from ament_index_python.packages import get_package_share_directory
+from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
@@ -24,8 +25,6 @@ from launch.substitutions import LaunchConfiguration
 #
 # Every node joins the launching shell's ROS_DOMAIN_ID, which must be 0, the real
 # robot's command bus; ROS uses 0 when it is unset (see h12_control.launch.py).
-# Assets resolve as in h12_state.launch.py.
-ASSETS_DIR = os.environ.get('GOLEM_ASSETS_DIR', '/home/unitree/GOLEM/CL_Assets')
 
 GAME_ARGS = ('start_position_verified', 'policy', 'prepose_ramp_s', 'prepose_max_vel',
              'imu_offset_roll_deg', 'imu_offset_pitch_deg', 'imu_offset_yaw_deg')
@@ -82,7 +81,7 @@ def generate_launch_description():
         _include('golem_bringup', 'h12/h12_locomanipulationgame.launch.py', {
             **wall_time,
             **{name: LaunchConfiguration(name) for name in GAME_ARGS},
-            'urdf_path': os.path.join(ASSETS_DIR, 'ros_assets', 'h1_2_magpie.urdf'),
+            'urdf_path': urdf_path('h12'),
             # The operator gate and the absent elastic band are fixed on the real robot, not
             # arguments.
             'engage_wait_for_confirm': 'true',

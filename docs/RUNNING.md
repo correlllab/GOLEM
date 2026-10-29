@@ -76,6 +76,10 @@ Scene flags are passed straight through, e.g.
 `--task Battery` loads the battery workcell instead of a kitchen
 (`golem_robocasa/battery_env.py`; scene and objects in
 `CL_Assets/mujoco_assets/battery/`); `--layout`/`--style` don't apply to it.
+`--task Blank` (any case; both robots, with or without `--g1`) puts the robot
+alone on a floor under a light, standing at the origin facing +x and held by
+the elastic band as in a kitchen (`golem_robocasa/blank_env.py`); it refuses
+`--layout` and `--style`.
 
 ### Isaac
 

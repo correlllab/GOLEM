@@ -29,7 +29,9 @@ G1 runs in Unitree's debug mode: Unitree's own controller is released, and the
 stack drives every motor on `rt/lowcmd`, as on the H1-2.
 
 The H1-2 is the default everywhere. `GOLEM_ROBOT=g1` or `--g1` on a wrapper
-selects the G1 (§3). The G1 pages are in `docs/g1/` (start at
+selects the G1 where the attached robot matters: the sim, `docker_stack.sh`'s
+bringup and the real G1's DDS pin (§3). Every `ros` container builds and runs
+both robots' packages. The G1 pages are in `docs/g1/` (start at
 `docs/g1/index.md`).
 
 ## 2. Repo layout
@@ -84,15 +86,18 @@ launch bringup**.
 
 `docker/scripts/docker_common.sh` owns this. The robot is `--g1`/`--h12` on the
 wrapper, else `GOLEM_ROBOT` from the shell, else from `docker/.env`, else
-`h12`. For `g1` the wrappers:
+`h12`. The selection means "which robot is attached" and matters only where
+that is inherent: which robot the RoboCasa sim runs, which bringup
+`docker_stack.sh` starts and which sim `wait_for_sim.py` expects, and the real
+G1's DDS interface pin. Every `ros` container, either robot, mounts and builds
+both robots' packages: the base compose file bind-mounts
+`core_ws/src/g1/g1_locomotion/policy` (at `/home/code/g1_locomotion`, HOMIE's
+policy) and `tools/` (at `/home/code/tools`, for `read_lowstate.py`)
+read-only into the `ros` service (the sim reads none of HOMIE's files), and
+`CL_Assets/g1` into both services. For `g1` the wrappers:
 
-- add `docker/docker-compose.g1.yml` to both services: it sets `GOLEM_ROBOT=g1`,
-  passes the G1 sim knobs (§8) and `G1_DDS_INTERFACE`, and bind-mounts
-  `core_ws/src/g1/g1_locomotion/policy` (at `/home/code/g1_locomotion`) and
-  `tools/` (at `/home/code/tools`, for `read_lowstate.py`) read-only into the
-  `ros` service only (the sim reads none of HOMIE's files). The G1's model
-  comes from `CL_Assets/g1`, which the base compose file mounts for both
-  robots;
+- add `docker/docker-compose.g1.yml` to both services: it sets `GOLEM_ROBOT=g1`
+  and passes the G1 sim knobs (§8) and `G1_DDS_INTERFACE`;
 - write `$GOLEM_CACHE_DIR/cyclonedds_local.xml` from `G1_DDS_INTERFACE` just
   before they start a `ros` container (`docker_run.sh ros`, `docker_stack.sh
   up|restart`; never for a sim-only run), which the `ros` container loads after
@@ -103,20 +108,18 @@ wrapper, else `GOLEM_ROBOT` from the shell, else from `docker/.env`, else
   name. The pin is for the real robot on domain 0: on a sim domain the wrappers
   warn when it is set, since the sim's ROS nodes are never pinned;
 - check in `prepare_mounts` that the G1 sim's `CL_Assets/g1` files (its MJCF,
-  URDF and meshes) and the policy files (the `ros` service) exist and are not
-  LFS pointers, before any container starts (every `ros` container, either
-  robot, gets the same check of the `CL_Assets/g1` files `golem_ros2_models`
-  installs);
+  URDF and meshes) exist and are not LFS pointers, before any container starts
+  (every `ros` container, either robot, gets the same check of the
+  `CL_Assets/g1` files `golem_ros2_models` installs and of the policy files);
 - refuse the Mac wrappers and the Isaac simulator.
 
-`launch_ros.sh` builds the `g1_*` packages only when `GOLEM_ROBOT=g1`
-(`--packages-ignore-regex '^g1_'` for the H1-2), so the H1-2 never depends on
-the G1's sources. `golem_safety`, `golem_upper_ik`, `golem_ros2_models` and
-`golem_bringup` build for both robots; `golem_ros2_models` installs both
-robots' models from `CL_Assets`, and `golem_upper_ik` loads the G1's only when
-a node runs with `robot:=g1`. Both robots use the
-same images and container names, so the wrappers run one robot at a time on a
-host.
+`launch_ros.sh` builds every package in `core_ws`, the `g1_*` ones included,
+whatever `GOLEM_ROBOT` says, so one `ros` container runs either robot's
+bringup (`docker_run.sh ros` needs `--g1` only for the real G1's DDS pin).
+`golem_ros2_models` installs both robots' models from `CL_Assets`, and
+`golem_upper_ik` loads the G1's only when a node runs with `robot:=g1`. Both
+robots use the same images and container names, so the wrappers run one robot
+at a time on a host.
 
 ### mac (`docker/mac`, limited)
 
@@ -197,7 +200,7 @@ nests `unitree_api`, `unitree_go`, `unitree_hg`, `unitree_ros2_example`).
 
 ### The G1 packages (`core_ws/src/g1/`)
 
-Built only for `GOLEM_ROBOT=g1` (§3). Their interfaces are in
+Built in every `ros` container, for either robot (§3). Their interfaces are in
 `custom_ros_messages`; each package has a README with the
 details, and `docs/g1/packages.md` indexes them.
 
@@ -692,8 +695,9 @@ docker/scripts/docker_stack.sh logs robocasa
 # check the sim's robot here; golem_safety's own check is in §8)
 # Terminal 1 — the sim; wait for "[g1_mujoco] ROS bridges up"
 docker/scripts/docker_run.sh robocasa --g1 --layout 9 --style 9 --seed 42
-# Terminal 2 — builds core_ws with the g1_* packages, drops to a shell
-docker/scripts/docker_run.sh ros --g1
+# Terminal 2 — builds core_ws (both robots' packages), drops to a shell; no
+# --g1 needed: the ros container runs either robot's bringup
+docker/scripts/docker_run.sh ros
 ros2 launch golem_bringup g1_sim.launch.py     # wait for the walking node's "elastic band released"
 # variants: use_rviz:=false use_hands:=false use_nav:=true frontier_explore:=true
 
@@ -730,10 +734,9 @@ The mac `ros` container auto-runs
 
 ### Real robot (for awareness — coordinate before touching)
 
-H1-2: onboard PC, native (no docker): build with
-`--packages-ignore-regex '^g1_'`, as `launch_ros.sh` does for the H1-2
-(`golem_bringup` exec_depends on the `g1_*` packages, so a
-`--packages-up-to golem_bringup` without it builds them too). The build
+H1-2: onboard PC, native (no docker): build the whole workspace, as
+`launch_ros.sh` does (the `g1_*` packages included: `golem_bringup`
+exec_depends on them). The build
 includes `golem_ros2_models`, which installs both robots' models from the
 checkout's `CL_Assets` (its LFS meshes pulled): the H1-2's launches read the
 robot description from `golem_ros2_models`, not from `CL_Assets` directly.

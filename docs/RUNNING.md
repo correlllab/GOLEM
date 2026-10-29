@@ -45,7 +45,7 @@ docker/scripts/docker_run.sh <isaac|robocasa|ros>          # default launcher
 docker/scripts/docker_run.sh robocasa --headless           # leading flags go to the launcher
 docker/scripts/docker_run.sh robocasa bash                 # shell instead
 docker/scripts/docker_run.sh ros <cmd> <args>              # any command
-docker/scripts/docker_run.sh ros --g1                      # the G1 (--g1/--h12 anywhere)
+docker/scripts/docker_run.sh robocasa --g1                 # the G1 sim (--g1/--h12 anywhere)
 ```
 
 Container names are `golem_sim_robocasa`, `golem_sim_isaac`, and `golem_ros`,
@@ -187,17 +187,21 @@ cameras.
 The wrappers run the Unitree G1 instead of the H1-2 with `--g1` anywhere in
 their arguments, or with `GOLEM_ROBOT=g1` in the shell or `docker/.env`
 (`--h12` overrides that). Each prints the robot it selected (`robot: g1`)
-before the DDS domain check. For the G1 they add the
-`docker/docker-compose.g1.yml` overlay, `launch_ros.sh` builds the
-`core_ws/src/g1/` packages, and `G1_DDS_INTERFACE` names the host port wired to
-the robot (empty for the sim). The G1 runs on x86 Linux with RoboCasa only.
-Both robots use the same container names and DDS topics: run one at a time.
+before the DDS domain check. The robot matters where it is inherent: which
+robot the sim runs, which bringup `docker_stack.sh` starts and which sim it
+waits for, and the real G1's DDS interface. Every `ros` container mounts and
+builds both robots' packages (`core_ws/src/g1/` included), so `docker_run.sh
+ros` without `--g1` runs `g1_sim.launch.py` as well as the H1-2's launches; it
+needs `--g1` only on the real G1, where the `docker/docker-compose.g1.yml`
+overlay pins CycloneDDS to `G1_DDS_INTERFACE`, the host port wired to the robot
+(empty for the sim). The G1 runs on x86 Linux with RoboCasa only. Both robots
+use the same container names and DDS topics: run one at a time.
 
 ```bash
 docker/scripts/docker_stack.sh up robocasa --g1 --headless   # sim + g1_sim.launch.py
 
 docker/scripts/docker_run.sh robocasa --g1 --layout 9 --style 9 --seed 42
-docker/scripts/docker_run.sh ros --g1
+docker/scripts/docker_run.sh ros                             # builds both robots' packages
 ros2 launch golem_bringup g1_sim.launch.py                   # use_nav:=true frontier_explore:=true ...
 ```
 

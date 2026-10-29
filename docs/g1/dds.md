@@ -78,7 +78,7 @@ Behind the wrappers:
 - The G1 tests run their containers with no network of their own, so no DDS
   leaves the laptop. `tests/g1/test_sim_*.sh` refuse domain 0, and
   `tests/robocasa/g1/run_in_container.sh` always uses 97.
-- The by-hand sim flow (`docker_run.sh robocasa --g1` and `docker_run.sh ros --g1`)
+- The by-hand sim flow (`docker_run.sh robocasa --g1` and `docker_run.sh ros`)
   uses host networking on domain 1, so its traffic can reach other machines on
   your network.
 

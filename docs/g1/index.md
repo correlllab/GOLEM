@@ -35,9 +35,11 @@ The H1-2 is the default. The Linux wrappers in `docker/scripts/` select the G1
 with `--g1` anywhere in their arguments, or with `GOLEM_ROBOT=g1` in the shell
 or `docker/.env`; `--h12` selects the H1-2 again. `docker_run.sh` and
 `docker_stack.sh up` print the robot they selected (`robot: g1`) before the
-DDS domain check and before any container starts. For the G1 the wrappers add
-`docker/docker-compose.g1.yml` to the compose files, and `launch_ros.sh` builds
-the `g1_*` packages. `CLAUDE.md` §3 has the details.
+DDS domain check and before any container starts. The selection picks the
+sim's robot, the bringup `docker_stack.sh` starts and the sim it waits for, and
+on the real G1 the DDS interface pin (`docker/docker-compose.g1.yml`). Every
+`ros` container mounts and builds both robots' packages, so `docker_run.sh ros`
+needs `--g1` only on the real G1. `CLAUDE.md` §3 has the details.
 
 - x86 Linux with an NVIDIA GPU only: the Mac wrappers and the Isaac simulator
   refuse the G1.
@@ -48,7 +50,7 @@ the `g1_*` packages. `CLAUDE.md` §3 has the details.
 
 ## Try it in the sim
 
-The acceptance tests need only the images; each builds `core_ws` for the G1 on
+The acceptance tests need only the images; each builds `core_ws` on
 its own and runs with no network, so nothing reaches a robot:
 
 ```bash
@@ -79,8 +81,8 @@ To send your own arm and hand goals, start the stack in three terminals:
 docker/scripts/docker_run.sh robocasa --g1 --layout 9 --style 9 --seed 42
 # wait for "[g1_mujoco] ROS bridges up"
 
-# terminal 2: builds core_ws for the G1 if needed, then opens a shell
-docker/scripts/docker_run.sh ros --g1
+# terminal 2: builds core_ws (both robots' packages) if needed, then opens a shell
+docker/scripts/docker_run.sh ros
 ros2 launch golem_bringup g1_sim.launch.py    # options: use_rviz:=false use_hands:=false
 
 # terminal 3

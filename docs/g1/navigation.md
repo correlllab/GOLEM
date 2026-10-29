@@ -33,7 +33,7 @@ GOLEM_SPAWN_BACKOFF=2.0 docker/scripts/docker_run.sh robocasa --g1 --layout 9 --
 # wait for "[g1_mujoco] ROS bridges up"
 
 # terminal 2
-docker/scripts/docker_run.sh ros --g1
+docker/scripts/docker_run.sh ros
 ros2 launch golem_bringup g1_sim.launch.py use_nav:=true
 
 # terminal 3: once Nav2 is up and the walking node has released the elastic band

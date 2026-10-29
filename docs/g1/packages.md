@@ -1,8 +1,8 @@
 # Packages
 
 The G1's own ROS 2 packages live in `core_ws/src/g1/`. `launch_ros.sh` builds
-them only for the G1 (`GOLEM_ROBOT=g1` or `--g1`), so the H1-2 never needs
-them. The G1 shares four packages with the H1-2, built for both robots: the
+them in every `ros` container, whichever robot the wrappers selected, so one
+container runs either robot's bringup. The G1 shares four packages with the H1-2, built for both robots: the
 safety layer `golem_safety` and the arm controller `golem_upper_ik`, each with
 a profile and configs per robot, the models `golem_ros2_models`, and the
 bringup `golem_bringup`. Each package
@@ -48,8 +48,8 @@ Outside `core_ws`:
 
 ## Tests
 
-The package tests run in the G1's `ros` container
-(`docker/scripts/docker_run.sh ros --g1`), from the package directory,
+The package tests run in the `ros` container
+(`docker/scripts/docker_run.sh ros`), from the package directory,
 `/home/code/core_ws/src/g1/<package>`. Each README's Tests section has the
 command; start it with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`, or pytest fails to
 load the `anyio` plugin. The DDS tests use domain 97 and fake robot peers; some

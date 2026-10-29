@@ -174,7 +174,7 @@ Single-stage, `FROM golem_base`. Provides the MuJoCo + RoboCasa kitchen simulato
 - **onnxruntime** (last layer): `onnxruntime==1.23.2` through lock step
   `robocasa-amd64-05.txt`. Nothing in `golem_robocasa` imports it: the G1 sim
   reads none of HOMIE's files. The G1 sim's robot description arrives through
-  the G1 overlay's bind mount (§8), not the image.
+  the base file's `CL_Assets` bind mount (§8), not the image.
 
 ---
 
@@ -273,11 +273,12 @@ anywhere in their arguments, else `GOLEM_ROBOT` (shell, then `docker/.env`),
 else `h12`. For the G1 they add `docker/docker-compose.g1.yml` after
 `docker-compose.yml`:
 
-- both services get `GOLEM_ROBOT=g1` and `G1_DDS_INTERFACE`; the ros service
-  also mounts HOMIE's policy, `core_ws/src/g1/g1_locomotion/policy` (at
-  `/home/code/g1_locomotion`), read-only with `create_host_path: false`, for
-  the walking node. The G1's model is in `CL_Assets/g1`, which the base file
-  mounts for both robots;
+- both services get `GOLEM_ROBOT=g1` and `G1_DDS_INTERFACE`. Nothing the
+  ros container builds or runs depends on them: the base file mounts HOMIE's
+  policy, `core_ws/src/g1/g1_locomotion/policy` (at `/home/code/g1_locomotion`,
+  for the walking node), and `tools/` (at `/home/code/tools`) into every ros
+  container, read-only with `create_host_path: false`, and the G1's model is in
+  `CL_Assets/g1`, which the base file mounts for both robots;
 - the robocasa service gets the G1 sim's knobs (`CLAUDE.md` §8);
 - the ros service loads a second CycloneDDS file after `core_ws/cyclonedds.xml`,
   `cyclonedds_local.xml`, which the wrapper writes into `GOLEM_CACHE_DIR` from
@@ -289,9 +290,9 @@ else `h12`. For the G1 they add `docker/docker-compose.g1.yml` after
 `prepare_mounts` checks the `CL_Assets/g1` files each service reads for missing
 files and LFS pointers before any container starts: in every ros container,
 whose `golem_ros2_models` installs both robots' models, and in the robocasa
-service for the G1. For the G1 it also checks the policy files (the ros
-service), and
-`launch_ros.sh` builds the `g1_*` packages, which it skips for the H1-2.
+service for the G1. It checks the policy files for every ros container, and
+`launch_ros.sh` builds every package, the `g1_*` ones included, whatever
+the robot: one `ros` container runs either robot's bringup. For the G1,
 `docker_stack.sh` sets `GOLEM_BRINGUP_PACKAGE=golem_bringup`
 and `GOLEM_BRINGUP_LAUNCH=g1_sim.launch.py` for the stack overlay, and
 `wait_for_sim.py` refuses a simulator of the other robot. The G1 uses the same
@@ -327,7 +328,7 @@ bind-mounted source, with output persisted on the host:
 
 | Container | Workspace | Built | Cache |
 |---|---|---|---|
-| `ros` | `core_ws` (full; the `g1_*` packages only for the G1) | every start, incremental every launch | host `core_ws/{build,install,log}` |
+| `ros` | `core_ws` (full, both robots' packages) | every start, incremental every launch | host `core_ws/{build,install,log}` |
 | `robocasa` | `msgs_ws` (IDL only) | every start (fast no-op) | host `container_cache/msgs_ws` |
 
 `--symlink-install` is used throughout so Python nodes and model weights resolve

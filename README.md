@@ -53,7 +53,7 @@ safety layer, arm IK, models package and bringup it shares with the H1-2
 `CL_Assets/g1`, and a RoboCasa sim in
 `golem_robocasa/g1/`. The H1-2 stays the default; `--g1` on a wrapper, or
 `GOLEM_ROBOT=g1`, selects the G1 (x86 Linux, RoboCasa only). The images are
-the same.
+the same, and every `ros` container builds and runs both robots' packages.
 
 ```bash
 tests/g1/test_sim_bringup.sh                          # the G1 acceptance test (arms); see tests/g1/README.md

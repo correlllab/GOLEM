@@ -69,8 +69,8 @@ robocasa ros`); they never build them.
   which a running G1 `ros` container rereads in every process it starts.
 - **DDS domains.** The arm test uses 195, the walk test 196, the nav test 197 and the explore
   test 198, unless `ROS_DOMAIN_ID` is set in the shell. Domain 0 is refused.
-- **`core_ws`.** Before the sim starts, the ros service builds `core_ws` for the G1
-  (`launch_ros.sh` with `GOLEM_ROBOT=g1`) into `container_cache/g1_tests/{build,install,log}`,
+- **`core_ws`.** Before the sim starts, the ros service builds `core_ws`, both robots'
+  packages (`launch_ros.sh`), into `container_cache/g1_tests/{build,install,log}`,
   so the checkout's own `core_ws/build` and `core_ws/install` are left alone. The first run
   builds the whole workspace; later runs rebuild what changed. `CORE_WS=<dir>` builds and uses
   that workspace in place instead. The tests share that build, so one runs at a time.

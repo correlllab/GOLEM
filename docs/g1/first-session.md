@@ -51,7 +51,7 @@ below depend on it.
 | 7. First launch: the arms | `ros2 launch golem_bringup g1_real_robot.launch.py use_hands:=false use_rviz:=false`: the zero-gain stream, the heartbeat, the arms' start-up. The legs stay limp. |
 | 8. Named configs | Send only `home` and `arms_down` on `/named_config`, one at a time, `arms_down` last. |
 | 9. Stop the bringup | Stop the controller alone (the arms go limp, the waist holds), then Ctrl+C the launch, with the gantry carrying the robot. |
-| 10. Second launch: the legs | The same launch with `start_position_verified:=true`: the walking node's pre-pose and hold, then the confirm. Stop with step 9. |
+| 10. Second launch: the legs | Step 6's last checks again (no other writer, the joints inside the estop limits), then the same launch with `start_position_verified:=true`: the walking node's pre-pose and hold, then the confirm. Stop with step 9. |
 | 11. End the session | Copy the safety layer's logs out, exit the container, set `docker/.env` back to the sim. |
 
 ## What you should see
@@ -71,7 +71,9 @@ below depend on it.
   commands, then moves the legs from where they hang to HOMIE's default pose
   over 2 s (`input_engaged`, `split_mode_lower`) and holds them there.
 - **The confirm** (second launch only). `/lowerbody/confirm_engage` starts
-  HOMIE's policy, which balances the robot on its legs at zero velocity.
+  HOMIE's policy at zero velocity. When the robot bears its own weight on its
+  legs is part of the procedure that is not written yet ([Entering debug mode
+  (not yet written)](#entering-debug-mode-not-yet-written)).
 
 Any `estop_command_written` from the safety layer, a `fault:` line from the
 walking node, or a controller that exits with an error: go to step 9. After any
@@ -352,15 +354,23 @@ the safety layer's input latches its estop.
    every motor off 0.5 s later), which is why the gantry carries the robot.
 
 After an estop, stop the same way; the safety layer keeps writing its estop
-command (every motor off) until step 4.
+command (every motor off) until the Ctrl+C in item 4 above.
 
 ### 10. Second launch: the legs (terminal 1)
 
-Only after the first launch went as step 7 describes. Check the start pose
-first: the robot hangs upright and still in the gantry (the walking node waits
-for a tilt under about 25 deg), the legs are free to move to HOMIE's default
-pose, and nobody is near them. `start_position_verified:=true` is your word
-that you did; nothing measures it.
+Only after the first launch went as step 7 describes, and step 9 stopped it.
+Before launching again, repeat step 6's last two checks in terminal 1, as they
+are now: nothing else writes the command topics (the `cyclonedds ls` listing
+shows no `Publications` under `rt/lowcmd` or `rt/dex3/.../cmd`; the first
+launch's nodes are gone), and every joint's `q` from `read_lowstate.py` lies
+inside its estop range with room to spare. The robot now hangs as step 9 left
+it, not as it hung before the first launch, and a joint outside its range
+latches the safety layer's estop the moment it starts.
+
+Then check the start pose: the robot hangs upright and still in the gantry
+(the walking node waits for a tilt under about 25 deg), the legs are free to
+move to HOMIE's default pose, and nobody is near them.
+`start_position_verified:=true` is your word that you did; nothing measures it.
 
 ```bash
 PYTHONUNBUFFERED=1 ros2 launch golem_bringup g1_real_robot.launch.py use_hands:=false use_rviz:=false \
@@ -391,9 +401,10 @@ What you should see, beyond step 7:
 
    It answers `success=True` with `confirmed: the policy starts on the next
    policy step`, and the walking node prints `walking: policy started at zero
-   velocity and 0.74 m height`. HOMIE's policy then balances the robot on its
-   legs, at zero velocity. When the robot may bear its own weight, and so when
-   to confirm, is part of the missing procedure ([Entering debug mode (not yet
+   velocity and 0.74 m height`: HOMIE's policy commands the legs from then on,
+   at zero velocity. When the robot may bear its own weight, and so when to
+   confirm and what the policy does with the gantry still carrying the robot,
+   is part of the missing procedure ([Entering debug mode (not yet
    written)](#entering-debug-mode-not-yet-written)). A call at any other time
    is refused, naming the phase.
 

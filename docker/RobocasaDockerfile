@@ -154,6 +154,7 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
              cd /opt/livox_ws/src/livox_ros_driver2 && \
              ./build.sh humble"
 
-# onnxruntime, through its own lock step (robocasa-amd64-05.txt).
+# Nothing in this image imports onnxruntime: the G1 sim reads none of HOMIE's
+# files (docker/BUILD.md).
 RUN uv pip install -c /opt/golem-locks/robocasa-amd64-05.txt --system --no-cache onnxruntime==1.23.2 \
     && python3 -c "import onnxruntime"

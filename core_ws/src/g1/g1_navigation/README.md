@@ -268,9 +268,10 @@ within 2.5 cm ([In the G1 sim](#in-the-g1-sim)).
   puts its base frame at z = 0 and level in map at each scan it adds, and
   `base_footprint` already is that in odom, so `map -> odom` is the identity:
   in the 11 runs measured below it stayed within 0.1 mm in z, 0.002 deg in
-  tilt and 0.0 mm in x and y, and in all 12 runs at the current settings (the
-  8 of [In the G1 sim](#in-the-g1-sim) and the 4 of
-  [Exploring in the G1 sim](#exploring-in-the-g1-sim)) `map -> pelvis`
+  tilt and 0.0 mm in x and y, and in all 12 runs with these settings (the 8
+  of [In the G1 sim](#in-the-g1-sim) and the 4 of
+  [Exploring in the G1 sim](#exploring-in-the-g1-sim), from before the sim
+  started from the elastic band) `map -> pelvis`
   equalled `odom -> pelvis` at the same stamps. A pose in odom (spatial
   memory's among them) is the same pose in map.
 - Before, `base_frame` was `pelvis`. Then `map -> odom` carried the pelvis's
@@ -287,7 +288,8 @@ within 2.5 cm ([In the G1 sim](#in-the-g1-sim)).
   stamp, looked up in the layer's first update at least 0.5 s later
   (`base_frame: pelvis` in 5 nav runs: default goal fastlio and `sim_gt`,
   corridor 2 fastlio and `sim_gt`; `base_footprint` in 8 nav and 3
-  exploration runs at the current settings):
+  exploration runs with these settings, from before the sim started from the
+  elastic band):
 
   | | `pelvis` (before) | `base_footprint` (now) |
   |---|---|---|
@@ -389,10 +391,12 @@ turn, then 7.6-7.7 m around the counter peninsula). After the goal it stops the
 sim, then the bringup, so the robot stands to the end of the recording (the
 other way round, the safety layer stops writing `rt/lowcmd` while the sim runs,
 the sim turns every motor off, and the robot falls).
-Eight runs at the current settings (default goal: two fastlio, one `sim_gt`;
-corridor: four fastlio, one `sim_gt`; host load 1.0-16.7, real-time factor
-0.88-1.00 per run and 0.89-1.00 from the goal to its result; for a second it
-dipped as low as 0.52-0.91), all passing:
+Eight runs with these navigation settings (default goal: two fastlio, one
+`sim_gt`; corridor: four fastlio, one `sim_gt`; host load 1.0-16.7, real-time
+factor 0.88-1.00 per run and 0.89-1.00 from the goal to its result; for a
+second it dipped as low as 0.52-0.91), all passing. They predate the G1 sim's
+start from the elastic band: the sim's stand-in, its own copy of HOMIE, then
+held the robot standing until the walking node took over.
 
 - the goal succeeded after 7.6-7.7 s (default) and 20.9-21.1 s (corridor) of
   sim time, with no recovery, no missed control cycle and no aborted path;
@@ -556,9 +560,10 @@ goal).
   88.7% in the run that stopped before the corridor (694 reachable cells
   unseen), so 95% catches a skipped corridor with room for a few unseen cells.
 
-4 runs at the current settings (3 fastlio, 1 `sim_gt`; host load 4.5-7.7,
+4 runs with these settings (3 fastlio, 1 `sim_gt`; host load 4.5-7.7,
 real-time factor 0.88-0.99 per run and 0.93-0.99 while exploring), all
-passing:
+passing, from before the G1 sim started from the elastic band (as the nav
+runs in [In the G1 sim](#in-the-g1-sim)):
 
 - the explorer reported the map explored after 23.6-29.8 s of sim time
   (fastlio 23.6-26.4 s, `sim_gt` 29.8 s), with 4-6 goals sent and 3-6

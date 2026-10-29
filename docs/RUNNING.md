@@ -158,6 +158,12 @@ source core_ws/install/setup.bash
 ros2 launch golem_bringup h12_real_robot.launch.py start_position_verified:=true
 ```
 
+A native build there leaves out the G1's packages, as `launch_ros.sh` does
+for the H1-2: add `--packages-ignore-regex '^g1_'` to its `colcon build`.
+`golem_bringup` exec_depends on the `g1_*` packages, so a
+`--packages-up-to golem_bringup` without it builds them too, and they need
+`third_party/leprechaun_g1`.
+
 Leg commands are gated behind `start_position_verified:=true` (default false) —
 set it only after physically verifying the robot's pose. The `lowerbody:=` policy
 (default `almi`) then ramps the legs to its pre-pose crouch and holds until
@@ -189,9 +195,12 @@ docker/scripts/docker_run.sh ros --g1
 ros2 launch golem_bringup g1_sim.launch.py                   # use_nav:=true frontier_explore:=true ...
 ```
 
-The G1 bringup always starts HOMIE's walking node in the sim: the robot hangs
-from the sim's elastic band, every motor off, until the walking node has moved
-the legs to its default pose, started its policy and released the band.
+The G1 bringup always starts HOMIE's walking node in the sim. The robot hangs
+from the sim's elastic band with every motor off until the arm controller's
+first command; from then on the controller drives the waist and arms, and the
+leg motors stay off until the walking node moves the legs to its default pose.
+The walking node then starts its policy, and releases the band once
+`frame_task_server` has finished its start-up moves.
 
 The paired startup refuses a simulator of the other robot on the domain; the
 single-service flow does not check. On the real G1 the `ros` container runs on

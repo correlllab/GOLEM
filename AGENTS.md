@@ -283,8 +283,10 @@ for the includes after it, so pass consistent values (all four blocks share
   lists the causes: no `/lowstate` reporting `mode_machine` 6 (an H1-2 sim
   started before the sims reported 6), no first estop sample with
   `use_estop:=true`, a safety config that does not pair with its controller
-  config, or an estop latched in an earlier run. The other nodes keep running,
-  without `/frame_task` and `/named_config`.
+  config, or an estop latched at this start-up (the limit checks run from
+  boot, so a joint already past `limits.estop` latches it) or in an earlier
+  run. The other nodes keep running, without `/frame_task` and
+  `/named_config`.
 - **`use_estop`.** `use_estop:=true` (the real bringups and
   `h12_safety_grippers`) starts `estop_node` and has `safety_node` read
   `/estop/triggered` and `/estop/plugged_in`: no input engages before the first
@@ -723,7 +725,11 @@ The mac `ros` container auto-runs
 
 ### Real robot (for awareness — coordinate before touching)
 
-H1-2: onboard PC, native (no docker): `export ROS_DOMAIN_ID=0`, source
+H1-2: onboard PC, native (no docker): build with
+`--packages-ignore-regex '^g1_'`, as `launch_ros.sh` does for the H1-2
+(`golem_bringup` exec_depends on the `g1_*` packages, so a
+`--packages-up-to golem_bringup` without it builds them too, which needs
+`third_party/leprechaun_g1`); `export ROS_DOMAIN_ID=0`, source
 `core_ws/install/setup.bash`, then
 `ros2 launch golem_bringup h12_real_robot.launch.py`
 (`start_position_verified:=true` only after physically verifying the robot's

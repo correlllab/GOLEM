@@ -51,17 +51,19 @@ def generate_launch_description():
         emulate_tty=True,
         parameters=[{
             'auto_detect_port': False,
-            # OpenRB-150 serial ...FF0F0E1C
+            # OpenRB-150 serial ...FF052729
             'port': ('/dev/serial/by-id/'
-                     'usb-ROBOTIS_OpenRB-150_3EC94E825157375037202020FF0F0E1C-if00'),
+                     'usb-ROBOTIS_OpenRB-150_77E78BAE50323952582E3120FF052729-if00'),
             'use_eflesh': False,
             # Finger angle limits (degrees), per-gripper calibration.
+            # min/max are the measured servo angles at the open/closed
+            # stops; theta_90 uses the same closed-stop offsets as the left.
             'finger1theta_min': 86.51,
-            'finger1theta_max': 168.33,
-            'finger1theta_90': 141.83,
-            'finger2theta_min': 132.55,
-            'finger2theta_max': 211.44,
-            'finger2theta_90': 159.05,
+            'finger1theta_max': 168.91,
+            'finger1theta_90': 142.31,
+            'finger2theta_min': 131.67,
+            'finger2theta_max': 210.26,
+            'finger2theta_90': 158.57,
         }],
     )
 

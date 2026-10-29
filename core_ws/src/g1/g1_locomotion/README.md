@@ -134,8 +134,11 @@ band's release.
     keeps at most one call in flight, with no timeout (a late response can
     never meet a second call), sends a failed call again, and sends nothing
     after one has succeeded. A call that never answers leaves the band on.
-    Nothing is called once the node has faulted. The real robot has no band
-    (`g1.yaml`: `band.release: false`), and the node has no client then.
+    Nothing is called once the node has faulted. If the service answers
+    `enabled`, the band was already off (SPACE in the viewer) and now holds
+    the robot again: the node warns and calls nothing more.
+    The real robot has no band (`g1.yaml`: `band.release: false`), and the
+    node has no client then.
 7. **Faults.** Once the legs are commanded (pre-pose, hold or walking), any
     of these stops all output for good and logs why:
     - a gap over `faults.max_state_gap` between the `rt/lowstate` samples

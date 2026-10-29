@@ -19,6 +19,9 @@ from g1_locomotion.locomotion import LocomotionController, load_policy
 DEFAULT_POLICY_DIR = '/home/code/g1_locomotion'
 # how often the band release is checked (s)
 BAND_PERIOD = 0.1
+# /elastic_band/toggle's message when the call left the band on (golem_robocasa's
+# MeasurementBridge answers "enabled" or "disabled")
+BAND_ON = 'enabled'
 
 
 class LocomotionNode(Node):
@@ -135,14 +138,22 @@ class LocomotionNode(Node):
             response, failure = None, repr(e)
         success = response is not None and response.success
         self._band.result(success)
-        if success:
-            self._log('info', f'elastic band released (/elastic_band/toggle: {response.message})')
-            self._band_timer.cancel()
-            if self._pose_sub is not None:
-                self.destroy_subscription(self._pose_sub)
-                self._pose_sub = None
-        else:
+        if not success:
             self._log('warn', f'/elastic_band/toggle failed ({failure}): calling it again')
+            return
+        self._band_timer.cancel()
+        if self._pose_sub is not None:
+            self.destroy_subscription(self._pose_sub)
+            self._pose_sub = None
+        if response.message == BAND_ON:
+            # the band was already off (SPACE in the viewer), and the toggle hung the
+            # robot from it again. Another call would take it off again, under a
+            # robot someone may have hung up on purpose, so none is sent
+            self._log('warn', '/elastic_band/toggle answered "enabled": the elastic band was '
+                              'already off and is now ON, and the robot hangs from it again. '
+                              'The node does not call the toggle again')
+            return
+        self._log('info', f'elastic band released (/elastic_band/toggle: {response.message})')
 
     def destroy_node(self):
         # stop publishing; golem_safety keeps relaying the last leg command and

@@ -165,6 +165,7 @@ def test_confirm_service_and_band_client(tmp_path, monkeypatch):
     toggles = []
 
     def toggle(request, response):
+        # the band was on: the call takes it off
         toggles.append(time.monotonic())
         response.success = True
         response.message = 'disabled'
@@ -191,6 +192,47 @@ def test_confirm_service_and_band_client(tmp_path, monkeypatch):
         assert _spin(executor, 5.0, lambda: toggles)
         _spin(executor, 1.0)
         assert len(toggles) == 1, toggles
+    finally:
+        executor.shutdown()
+        helper.destroy_node()
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+def test_band_toggle_that_hangs_the_robot_again_warns_once(tmp_path, monkeypatch):
+    # the band was already off (SPACE in the viewer): the toggle hangs the robot again and
+    # answers 'enabled'. The node warns and never calls again
+    config = _node_config(tmp_path, monkeypatch, band_release=True)
+    rclpy.init(args=['--ros-args', '-p', f'policy_dir:={POLICY_DIR}'], domain_id=TEST_DOMAIN)
+    node = LocomotionNode(config_name=str(config))
+    helper = rclpy.create_node('test_locomotion_helper')
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    executor.add_node(helper)
+    toggles = []
+    log = []
+    node._log = lambda level, message: log.append((level, message))
+
+    def toggle(request, response):
+        toggles.append(time.monotonic())
+        response.success = True
+        response.message = 'enabled'
+        return response
+
+    try:
+        helper.create_service(Trigger, '/elastic_band/toggle', toggle)
+        pose = helper.create_publisher(PoseStamped, '/left_ee_pose', 10)
+        node._driver.shutdown()
+        node._driver = FakeDriver(walking_since=time.monotonic())
+        assert _spin(executor, 5.0, node._band_client.service_is_ready)
+        assert _spin(executor, 5.0, lambda: pose.get_subscription_count() > 0)
+        pose.publish(PoseStamped())
+        assert _spin(executor, 5.0, lambda: toggles)
+        _spin(executor, 1.0)
+        assert len(toggles) == 1, toggles
+        warnings = [message for level, message in log if level == 'warn' and '"enabled"' in message]
+        assert len(warnings) == 1 and 'is now ON' in warnings[0], log
+        assert not any(message.startswith('elastic band released') for _, message in log), log
     finally:
         executor.shutdown()
         helper.destroy_node()

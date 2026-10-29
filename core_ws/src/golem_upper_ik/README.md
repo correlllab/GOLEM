@@ -187,8 +187,12 @@ then moves only in the start-up step 4.
   the frames (or joints) are within the thresholds before the goal's `duration` (or
   `controller.timeout`) runs out; a hold pinned at a joint position limit stops with
   `success: false` (`Hold blocked at a joint position limit: ...`).
-- `relative: true` (`FrameTask`): each target's translation is added to the frame's measured
-  position, and its rotation is applied in pelvis axes about the frame's origin.
+- `relative: true` (`FrameTask`): each target is an offset from the frame's measured pose in
+  the `pelvis` frame, the frame of absolute targets and of `/left_ee_pose`: its translation is
+  added to the frame's position in pelvis axes, and its rotation pre-multiplies the frame's
+  orientation (pelvis axes, about the frame's origin). The IMU orientation plays no part, so
+  `{position: {z: 0.05}}` moves the frame 5 cm up the pelvis's z axis however the robot is
+  turned or tilted.
 - `slow_mode: true` (both actions): a quarter of the speed (`SLOW_MODE_SCALE` 0.25), applied
   after the speed limits; a planned goal is planned at a quarter of `planner.moving_speed`.
 - `plan: true`: the OMPL planner (in a subprocess of its own) plans in the IK joints, with

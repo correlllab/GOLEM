@@ -309,11 +309,12 @@ class FollowingRobot:
     A robot behind an engaged golem_safety, whose relay it plays too. Every command on
     command_topic is executed at once: each body slot with kp > 0 jumps to its q, less its
     sag (rad, per slot). The newest command is relayed on relay_topic. /lowstate goes out at
-    rate_hz, its tick in ms on the monotonic clock, until stop_state().
+    rate_hz, its tick in ms on the monotonic clock, until stop_state(), with the IMU
+    orientation imu_quaternion (w, x, y, z; default identity).
     '''
 
     def __init__(self, ros, profile, q0, relay_topic, command_topic='/safety/lowcmd_upper_in',
-                 sag=None, rate_hz=500.0):
+                 sag=None, rate_hz=500.0, imu_quaternion=None):
         self.profile = profile
         self.node = ros.node('following_robot')
         count = len(profile.body_joints)
@@ -327,6 +328,8 @@ class FollowingRobot:
         self._relay = None
         self._state_on = True
         self._state = _lowstate(profile)
+        if imu_quaternion is not None:
+            self._state.imu_state.quaternion = [float(value) for value in imu_quaternion]
         self._start = time.monotonic()
         self._state_publisher = self.node.create_publisher(LowState, '/lowstate', WRITER_QOS)
         self._relay_publisher = self.node.create_publisher(LowCmd, relay_topic, WRITER_QOS)

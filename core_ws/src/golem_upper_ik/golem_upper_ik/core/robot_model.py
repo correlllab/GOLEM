@@ -388,6 +388,16 @@ class RobotModel:
     def get_frame_rotation(self, frame_name: str, q: np.ndarray = None):
         return self._get_frame_transformation(frame_name, q).rotation
 
+    def get_frame_transformation_body(self, frame_name: str, q: np.ndarray):
+        '''
+        The frame's 4x4 placement in the pelvis frame (model_body, no IMU orientation) at q,
+        one value per body joint. Computed on data of its own
+        '''
+        data = self.model_body.createData()
+        pin.forwardKinematics(self.model_body, data, np.asarray(q, dtype=float))
+        pin.updateFramePlacements(self.model_body, data)
+        return data.oMf[self.model_body.getFrameId(frame_name)].np
+
     def _get_frame_transformation_reduced(self, frame_name, q_reduced: np.ndarray=None):
         '''Get frame transformation for the reduced model (model_body_reduced)'''
         frame_id = self.model_body_reduced.getFrameId(frame_name)

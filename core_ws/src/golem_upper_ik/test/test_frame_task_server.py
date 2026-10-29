@@ -182,6 +182,94 @@ def test_relative_frame_goal(ros, models, robot):
     assert abs(abs(np.dot(left.quaternion(), start_quaternion)) - 1.0) < 1e-4
 
 
+def _rotation(axis, angle):
+    '''The 3x3 rotation by angle (rad) about the axis x, y or z'''
+    c, s = np.cos(angle), np.sin(angle)
+    i, j = {'x': (1, 2), 'y': (2, 0), 'z': (0, 1)}[axis]
+    rotation = np.eye(3)
+    rotation[i, i], rotation[i, j], rotation[j, i], rotation[j, j] = c, -s, s, c
+    return rotation
+
+
+def _quaternion_wxyz(rotation):
+    import pinocchio as pin
+    q = pin.Quaternion(rotation)
+    return np.array([q.w, q.x, q.y, q.z])
+
+
+# IMU orientations (w, x, y, z): level and facing the world's x, and the G1 sim's yaw of
+# -90 deg with a tilt, where the pelvis frame and the IMU-oriented world differ
+IMU_ORIENTATIONS = {
+    'identity': np.array([1.0, 0.0, 0.0, 0.0]),
+    'yawed_tilted': _quaternion_wxyz(
+        _rotation('z', -np.pi / 2) @ _rotation('y', 0.1) @ _rotation('x', 0.15)),
+}
+
+
+def _matrix(stamped):
+    from golem_upper_ik.ros2.utility import pose_to_matrix
+    return pose_to_matrix(stamped.pose)
+
+
+def _offset(position=(0.0, 0.0, 0.0), rotation=np.eye(3)):
+    from golem_upper_ik.ros2.utility import matrix_to_pose
+    offset = np.eye(4)
+    offset[:3, :3] = rotation
+    offset[:3, 3] = position
+    return matrix_to_pose(offset)
+
+
+@pytest.mark.parametrize('imu', IMU_ORIENTATIONS)
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_relative_frame_goal_is_a_pelvis_frame_move(ros, models, robot, imu):
+    '''
+    A relative target is resolved in the pelvis frame whatever the IMU says: its position
+    is the frame's measured pelvis-frame position (/left_ee_pose) plus the offset, its
+    orientation the offset's rotation (pelvis axes) times the frame's measured one; and
+    /frame_poses reports the measured pose in the pelvis frame too
+    '''
+    from custom_ros_messages.action import FrameTask
+    profile = profile_of(robot)
+    config = config_of(robot, CONFIGS[robot])
+    FollowingRobot(ros, profile, body_pose(profile, START[robot]),
+                   config['topics']['safety_out'], imu_quaternion=IMU_ORIENTATIONS[imu])
+    model = shared_model(ros, models, robot)
+    left = PoseRecorder(ros, '/left_ee_pose')
+    target = PoseRecorder(ros, '/left_ee_target')
+    frame_poses = PoseRecorder(ros, '/frame_poses', PoseArray)
+    server_of(ros, model, CONFIGS[robot])
+    assert wait_for(lambda: left.poses, 5.0)
+    threshold_linear = config['controller']['threshold_linear']
+    threshold_angular = config['controller']['threshold_angular']
+    frame = profile.ee_frames[0]
+
+    for position, rotation in (((0.0, 0.0, 0.05), np.eye(3)),
+                               ((0.05, 0.0, 0.0), np.eye(3)),
+                               ((0.0, 0.0, 0.0), _rotation('z', 0.2))):
+        time.sleep(0.1)
+        start = _matrix(left.poses[-1])
+        status, result = send_goal(ros, FrameTask, '/frame_task',
+                                   frame_goal(frame, _offset(position, rotation),
+                                              relative=True))
+        assert status == GoalStatus.STATUS_SUCCEEDED and result.success
+        time.sleep(0.1)
+        expected = np.eye(4)
+        expected[:3, :3] = rotation @ start[:3, :3]
+        expected[:3, 3] = start[:3, 3] + position
+        resolved = _matrix(target.poses[-1])
+        np.testing.assert_allclose(resolved[:3, 3], expected[:3, 3], atol=1e-5)
+        np.testing.assert_allclose(resolved[:3, :3], expected[:3, :3], atol=1e-5)
+        reached = _matrix(left.poses[-1])
+        assert np.linalg.norm(reached[:3, 3] - expected[:3, 3]) <= threshold_linear + 1e-4
+        angle = np.arccos(np.clip((np.trace(expected[:3, :3].T @ reached[:3, :3]) - 1.0) / 2.0,
+                                  -1.0, 1.0))
+        assert angle <= threshold_angular + 1e-4
+        measured = frame_poses.poses[-1].poses[0]
+        np.testing.assert_allclose(
+            [measured.position.x, measured.position.y, measured.position.z],
+            reached[:3, 3], atol=1e-4)
+
+
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_slow_mode_scales_speed(ros, models, robot, tmp_path):
     '''

@@ -41,9 +41,9 @@ class FrameController(UpperController):
 
     def get_frame_transformation(self, frame_name: str):
         '''
-        The frame's 4x4 placement at the measured state, in the world of the free-flyer model
-        (the pelvis at the origin, oriented by the IMU). Computed on data of its own, so a
-        call from another thread leaves the IK's data alone
+        The frame's 4x4 placement in the pelvis frame at the measured state (every body joint
+        measured; the IMU orientation plays no part), the frame of the IK's targets. Computed
+        on data of its own, so a call from another thread leaves the IK's data alone
         '''
-        return self.robot_model.get_frame_transformation(frame_name,
-                                                         self.robot_model.state['q'])
+        return self.robot_model.get_frame_transformation_body(frame_name,
+                                                              self.robot_model.state['q'])

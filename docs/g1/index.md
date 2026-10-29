@@ -117,7 +117,10 @@ left hand closes and opens. The named postures are `NAMED_CONFIGS` in
   not the fingers, and it keeps them 20 mm apart, as on the H1-2. `arms_down`
   rests the hands on the hips, inside the hip spheres, so a goal to it stops
   short and a planned one fails. `slow_mode: true` (a quarter of the speed) and
-  a `FrameTask` with `relative: true` work as on the H1-2.
+  a `FrameTask` with `relative: true` work as on the H1-2: a relative target is
+  an offset in the `pelvis` frame (the frame of absolute targets and
+  `/left_ee_pose`), whatever the IMU says: `{position: {x: 0.05}}` moves the
+  hand 5 cm forward of the pelvis however the robot is turned or tilted.
 
 ## Pages
 

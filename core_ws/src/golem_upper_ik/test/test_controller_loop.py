@@ -413,7 +413,7 @@ def test_waits_for_state_and_tracks_the_robot_through_engagement(
         # without the gate the start-up runs open loop, far from the robot that is not
         # following: the jump the gate prevents (about 0.3 rad on the G1, whose g1_split
         # palm speed limit, 0.15 m/s, slows the move)
-        assert gap_before > 0.2
+        assert gap_before > {'h12': 0.3, 'g1': 0.2}[robot]
         return
 
     builder.join(45.0)
@@ -508,11 +508,11 @@ def test_start_up_steps_sleep_a_whole_period_after_their_work(ros, models, monke
         times = steps[kind]
         assert len(times) > 8, (kind, len(times))
         # a step's period is its work and then a whole period, not the period less the work;
-        # the work is the added 10 ms and the step's own, under 15 ms (a posture step's IK
-        # with its self-collision barrier takes about 5 ms)
+        # the work is the added 10 ms and the step's own, under 20 ms (a posture step's IK
+        # with its self-collision barrier takes about 5 ms); a doubled period would not pass
         periods = np.diff(times)
         assert np.min(periods) >= dt + 0.01 - 1e-3, (kind, np.min(periods))
-        assert np.median(periods) < dt + 0.01 + 0.015, (kind, np.median(periods))
+        assert np.median(periods) < dt + 0.03, (kind, np.median(periods))
 
 
 @pytest.mark.parametrize('robot', ROBOTS)

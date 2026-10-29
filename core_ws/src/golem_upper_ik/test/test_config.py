@@ -30,10 +30,10 @@ SHARED_CONTROLLER_KEYS = (
     'v_lim', 'w_lim', 'dq_lim', 'd_min', 'timeout',
     'threshold_ik', 'threshold_joint', 'threshold_linear', 'threshold_angular',
 )
-# values the configs changed after the old loaders' fixtures were recorded: the G1 got its
-# self-collision model, which turned its planner on, and a d_min its start-up posture keeps
-# (home has a torso-shoulder-yaw sphere pair 0.0022 m apart)
-CHANGED_SINCE_RECORDING = {
+# where the configs differ from the old loaders' fixtures: the G1 has a self-collision model,
+# so its planner is on, and its d_min is one its start-up posture keeps (home has a
+# torso-shoulder-yaw sphere pair 0.0022 m apart)
+FIXTURE_DIFFERENCES = {
     'g1': {('controller', 'd_min'): 0.002, ('planner', 'enabled'): True},
 }
 G1_CONTROLLER_KEYS = (
@@ -107,7 +107,7 @@ def test_config_values_match_old_loaders(case):
 
     for key in ('low_cmd', 'low_state'):
         assert config['topics'][key] == ros_name(old['topics'][key]), key
-    changed = CHANGED_SINCE_RECORDING.get(robot, {})
+    changed = FIXTURE_DIFFERENCES.get(robot, {})
     for key in SHARED_CONTROLLER_KEYS:
         expected = changed.get(('controller', key), old['controller'][key])
         assert config['controller'][key] == expected, key

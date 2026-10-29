@@ -181,18 +181,35 @@ configure_display() {
     esac
 }
 
-# The files the G1 overlay bind-mounts into a service: its robot description (a
-# submodule) into both, and the walking policy into the ros service only.
-require_g1_files() {
+# The CL_Assets/g1 files a service reads: the G1 sim builds its robot from the
+# MJCF and URDF, and every ros container builds golem_ros2_models, which installs
+# the G1's URDF, sphere model and SRDF for both robots. The meshes are Git LFS.
+require_g1_model() {
     local service=$1
-    local description="$GOLEM_ROOT/third_party/leprechaun_g1/assets/g1_description"
+    local g1="$GOLEM_ASSETS_DIR/g1"
+    local hint="Fetch the G1 model: git -C $GOLEM_ASSETS_DIR lfs pull (CL_Assets is a submodule: git submodule update --init CL_Assets first)"
+    local files first_line path
+    case "$service" in
+        robocasa) files=(g1_description/g1_29dof_with_hand_rev_1_0.urdf g1_description/g1_29dof_with_hand_rev_1_0.xml) ;;
+        ros) files=(g1_description/g1_29dof_with_hand_rev_1_0.urdf g1_sphere.urdf g1_sphere_collision.srdf LICENSE.unitree_ros) ;;
+        *) return 0 ;;
+    esac
+    files=("${files[@]/#/$g1/}")
+    for path in "${files[@]}"; do
+        [ -f "$path" ] || fail "Missing $path. $hint"
+    done
+    local meshes=("$g1"/g1_description/meshes/*.STL)
+    [ -f "${meshes[0]}" ] || fail "No meshes in $g1/g1_description/meshes. $hint"
+    for path in "${files[@]}" "${meshes[@]}"; do
+        IFS= read -r first_line < "$path" || true
+        [ "$first_line" != 'version https://git-lfs.github.com/spec/v1' ] || fail "$path is a Git LFS pointer. $hint"
+    done
+}
+
+# The walking policy, which the G1 overlay bind-mounts into the ros service.
+require_g1_policy() {
     local policy="$GOLEM_ROOT/core_ws/src/g1/g1_locomotion/policy"
     local name
-    for name in g1_29dof_with_hand_rev_1_0.urdf g1_29dof_with_hand_rev_1_0.xml; do
-        [ -f "$description/$name" ] || fail "Missing $description/$name. Initialize the G1 robot description: git submodule update --init third_party/leprechaun_g1"
-        require_file "$description/$name"
-    done
-    [ "$service" = ros ] || return 0
     for name in deploy.onnx g1.yaml homie_policy.py; do
         require_file "$policy/$name"
     done
@@ -201,9 +218,10 @@ require_g1_files() {
 prepare_mounts() {
     local service=$1
     require_file "$GOLEM_ASSETS_DIR/ros_assets/h1_2_magpie_ros.urdf"
-    if [ "${GOLEM_ROBOT:-h12}" = g1 ]; then
-        case "$service" in robocasa|ros) require_g1_files "$service";; esac
-    fi
+    case "$service" in
+        ros) require_g1_model ros; [ "${GOLEM_ROBOT:-h12}" != g1 ] || require_g1_policy ;;
+        robocasa) [ "${GOLEM_ROBOT:-h12}" != g1 ] || require_g1_model robocasa ;;
+    esac
     case "$service" in
         isaac)
             require_file "$GOLEM_ROOT/CL_isaaclab_sim/sim_main.py"

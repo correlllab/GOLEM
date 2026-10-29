@@ -100,7 +100,8 @@ for marker in "$WS"/install/*/share/colcon-core/packages/*; do
 done
 
 # The g1_* packages build only for the G1 (GOLEM_ROBOT=g1), so the H1-2 never
-# depends on the G1 sources or on third_party/leprechaun_g1. The discovery
+# depends on the G1 sources (golem_ros2_models installs both robots' models from
+# CL_Assets for either robot). The discovery
 # above stays unfiltered: a g1_* install left by a G1 run is still a known package.
 BUILD_SELECT=()
 [ "${GOLEM_ROBOT:-h12}" = g1 ] || BUILD_SELECT=(--packages-ignore-regex '^g1_')

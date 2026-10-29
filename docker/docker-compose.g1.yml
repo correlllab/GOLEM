@@ -23,15 +23,8 @@ services:
       # Metres the robot is backed off the spawn counter into open floor (see
       # h12_mujoco.py); empty = 0.
       GOLEM_SPAWN_BACKOFF: ${GOLEM_SPAWN_BACKOFF:-}
-    volumes:
-      # The G1 model the sim builds its robot from; the ros service mounts it
-      # at the same path.
-      - type: bind
-        source: ../third_party/leprechaun_g1
-        target: /home/code/third_party/leprechaun_g1
-        read_only: true
-        bind:
-          create_host_path: false
+    # The sim builds its robot from CL_Assets/g1, which docker-compose.yml
+    # mounts for both robots.
 
   ros:
     environment:
@@ -44,15 +37,9 @@ services:
       # pins the network interface on top of the shared tuning file.
       CYCLONEDDS_URI: file:///home/code/cyclonedds.xml,file:///home/code/cyclonedds_local.xml
     volumes:
-      # The walking policy's g1.yaml reads the G1's MJCF at
-      # /home/code/third_party/leprechaun_g1; the walking node reads its policy
-      # from /home/code/g1_locomotion.
-      - type: bind
-        source: ../third_party/leprechaun_g1
-        target: /home/code/third_party/leprechaun_g1
-        read_only: true
-        bind:
-          create_host_path: false
+      # The walking node reads its policy from /home/code/g1_locomotion; the
+      # policy's g1.yaml names the G1's MJCF in /home/code/CL_Assets, which
+      # docker-compose.yml mounts for both robots.
       - type: bind
         source: ../core_ws/src/g1/g1_locomotion/policy
         target: /home/code/g1_locomotion

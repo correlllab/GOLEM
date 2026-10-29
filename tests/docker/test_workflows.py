@@ -17,6 +17,7 @@ class Workflows(unittest.TestCase):
         self.root = Path(self.tmp.name)
         shutil.copytree(REPO / 'docker', self.root / 'docker', ignore=shutil.ignore_patterns('.env', '__pycache__'))
         for name in ('unitree_sdk2_python/setup.py', 'CL_Assets/ros_assets/h1_2_magpie_ros.urdf',
+                     *self.G1_MODEL,
                      'CL_isaaclab_sim/sim_main.py', 'golem_robocasa/h12_mujoco.py',
                      'core_ws/src/magpie_msgs/package.xml', 'core_ws/src/custom_ros_messages/package.xml',
                      'core_ws/src/livox_ros_driver2/package_ROS2.xml', 'core_ws/cyclonedds.xml',
@@ -203,15 +204,23 @@ if 'config' in sys.argv:
 
     # --- robot selection: GOLEM_ROBOT, --g1 / --h12 -------------------------------------------
 
-    G1_URDF = 'third_party/leprechaun_g1/assets/g1_description/g1_29dof_with_hand_rev_1_0.urdf'
+    # The CL_Assets/g1 files the wrappers check: every ros container builds both robots'
+    # models (golem_ros2_models), so setUp gives every fixture them; the G1 sim reads the MJCF.
+    G1_XML = 'CL_Assets/g1/g1_description/g1_29dof_with_hand_rev_1_0.xml'
+    G1_MESH = 'CL_Assets/g1/g1_description/meshes/pelvis.STL'
+    G1_MODEL = (
+        'CL_Assets/g1/g1_description/g1_29dof_with_hand_rev_1_0.urdf', G1_XML, G1_MESH,
+        'CL_Assets/g1/g1_sphere.urdf', 'CL_Assets/g1/g1_sphere_collision.srdf',
+        'CL_Assets/g1/LICENSE.unitree_ros',
+    )
+    # The walking policy, which only the G1's ros service mounts.
     G1_FILES = (
-        G1_URDF,
-        'third_party/leprechaun_g1/assets/g1_description/g1_29dof_with_hand_rev_1_0.xml',
         'core_ws/src/g1/g1_locomotion/policy/deploy.onnx',
         'core_ws/src/g1/g1_locomotion/policy/g1.yaml',
         'core_ws/src/g1/g1_locomotion/policy/homie_policy.py',
     )
-    SUBMODULE_HINT = 'git submodule update --init third_party/leprechaun_g1'
+    LFS_HINT = 'lfs pull'
+    LFS_POINTER = 'version https://git-lfs.github.com/spec/v1\noid sha256:0\nsize 1\n'
 
     def add_g1_files(self):
         for name in self.G1_FILES:
@@ -546,17 +555,34 @@ esac
             with self.subTest(wrapper=name):
                 (self.root / 'calls').unlink(missing_ok=True)
                 self.run_script(name, *args)
-                # The fixture has no G1 files: reaching compose proves no G1 mount check ran.
+                # The fixture has no G1 policy files: reaching compose without the overlay
+                # proves the H1-2 was selected.
                 self.assertTrue(self.run_calls(), f'{name} never reached its compose run')
                 self.assertFalse(any(self.overlay() in c for c in self.calls()))
 
-    def test_g1_missing_leprechaun_fails_early(self):
+    def test_g1_sim_checks_its_model_files(self):
         self.add_g1_files()
-        (self.root / self.G1_URDF).unlink()
-        r = self.run_script('docker/scripts/docker_run.sh', 'robocasa', '--g1')
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn(self.SUBMODULE_HINT, r.stderr)
-        self.assertFalse(self.compose_calls())
+        meshes = str(Path(self.G1_MESH).parent)
+        cases = (('missing', self.G1_XML, None, self.G1_XML),
+                 ('no meshes', self.G1_MESH, None, meshes),
+                 ('LFS pointer', self.G1_XML, self.LFS_POINTER, self.G1_XML),
+                 ('LFS pointer', self.G1_MESH, self.LFS_POINTER, self.G1_MESH))
+        for label, name, content, reported in cases:
+            with self.subTest(label, name=name):
+                (self.root / 'calls').unlink(missing_ok=True)
+                path = self.root / name
+                if content is None:
+                    path.unlink()
+                else:
+                    path.write_text(content)
+                try:
+                    r = self.run_script('docker/scripts/docker_run.sh', 'robocasa', '--g1')
+                finally:
+                    path.write_text('fixture')
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn(reported, r.stderr)
+                self.assertIn(self.LFS_HINT, r.stderr)
+                self.assertFalse(self.compose_calls())
 
     def test_g1_missing_policy_file_fails_early_for_ros_only(self):
         # The walking node in the ros container reads the policy; the sim reads none of it.
@@ -572,13 +598,35 @@ esac
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(self.run_calls())
 
-    def test_h12_ignores_missing_leprechaun(self):
-        self.assertFalse((self.root / self.G1_URDF).exists())
+    def test_h12_sim_ignores_missing_g1_model(self):
+        shutil.rmtree(self.root / 'CL_Assets/g1')
         for args in ((), ('--h12',)):
             with self.subTest(args=args):
                 r = self.run_script('docker/scripts/docker_run.sh', 'robocasa', *args)
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertTrue(self.run_calls())
+
+    def test_ros_checks_g1_model_for_both_robots(self):
+        # golem_ros2_models installs both robots' models in every ros container.
+        self.add_g1_files()
+        sphere = 'CL_Assets/g1/g1_sphere.urdf'
+        for label, content in (('missing', None), ('LFS pointer', self.LFS_POINTER)):
+            for robot in ('h12', 'g1'):
+                with self.subTest(label, robot=robot):
+                    (self.root / 'calls').unlink(missing_ok=True)
+                    path = self.root / sphere
+                    if content is None:
+                        path.unlink()
+                    else:
+                        path.write_text(content)
+                    try:
+                        r = self.run_script('docker/scripts/docker_run.sh', 'ros', GOLEM_ROBOT=robot)
+                    finally:
+                        path.write_text('fixture')
+                    self.assertNotEqual(r.returncode, 0)
+                    self.assertIn(sphere, r.stderr)
+                    self.assertIn(self.LFS_HINT, r.stderr)
+                    self.assertFalse(self.compose_calls())
         r = self.run_script('docker/scripts/docker_run.sh', 'ros', GOLEM_ROBOT='h12')
         self.assertEqual(r.returncode, 0, r.stderr)
 
@@ -805,12 +853,16 @@ esac
         for service, extra in ((services['robocasa'], {}),
                                (ros, {'/home/code/cyclonedds_local.xml': '/cache/cyclonedds_local.xml', **policy})):
             mounts = {v['target']: v for v in service['volumes']}
-            expected = {'/home/code/third_party/leprechaun_g1': str(self.root / 'third_party/leprechaun_g1'), **extra}
-            for target, source in expected.items():
+            for target, source in extra.items():
                 self.assertEqual(mounts[target]['source'], source)
                 self.assertTrue(mounts[target]['read_only'], target)
                 self.assertFalse(mounts[target].get('bind', {}).get('create_host_path', False), target)
         self.assertFalse([v for v in services['robocasa']['volumes'] if 'g1_locomotion' in v['source']])
+        # The G1's model comes from the base file's CL_Assets mount, for both services.
+        for service in (services['robocasa'], ros):
+            mounts = {v['target']: v['source'] for v in service['volumes']}
+            self.assertEqual(mounts['/home/code/CL_Assets'], str(self.root / 'CL_Assets'))
+            self.assertFalse([s for s in mounts.values() if 'third_party' in s])
 
     def test_stack_compose_bringup_defaults_and_overrides(self):
         files = ('docker-compose.yml', 'docker-compose.stack.yml')

@@ -28,11 +28,10 @@ is required before anything builds.
 
 | Path | Purpose |
 |---|---|
-| `CL_Assets` | URDF meshes, MuJoCo XML, Isaac USD (Git-LFS) |
+| `CL_Assets` | both robots' URDFs, MJCFs and meshes (the G1's in `g1/`), Isaac USD (Git-LFS) |
 | `CL_isaaclab_sim` | Isaac Sim task/runtime code |
 | `unitree_sdk2_python` | Unitree DDS SDK (Python) |
 | `mujoco_mpc` | MuJoCo MPC fork (`badinkajink @ extended_hw_patched`) — see §7 |
-| `third_party/leprechaun_g1` | G1 robot description (URDF, MJCF, meshes); the G1 overlay mounts it (§8) |
 
 **`core_ws/src` submodules:** `cl_realsense`, `custom_ros_messages`, `estop`,
 `livox_ros_driver2`, `magpie_control`, `magpie_msgs`,
@@ -274,11 +273,11 @@ anywhere in their arguments, else `GOLEM_ROBOT` (shell, then `docker/.env`),
 else `h12`. For the G1 they add `docker/docker-compose.g1.yml` after
 `docker-compose.yml`:
 
-- both services get `GOLEM_ROBOT=g1`, `G1_DDS_INTERFACE`, and a read-only bind
-  mount of `third_party/leprechaun_g1` (at `/home/code/third_party/leprechaun_g1`);
-  the ros service also mounts HOMIE's policy, `core_ws/src/g1/g1_locomotion/policy`
-  (at `/home/code/g1_locomotion`), read-only, for the walking node; both with
-  `create_host_path: false`;
+- both services get `GOLEM_ROBOT=g1` and `G1_DDS_INTERFACE`; the ros service
+  also mounts HOMIE's policy, `core_ws/src/g1/g1_locomotion/policy` (at
+  `/home/code/g1_locomotion`), read-only with `create_host_path: false`, for
+  the walking node. The G1's model is in `CL_Assets/g1`, which the base file
+  mounts for both robots;
 - the robocasa service gets the G1 sim's knobs (`CLAUDE.md` §8);
 - the ros service loads a second CycloneDDS file after `core_ws/cyclonedds.xml`,
   `cyclonedds_local.xml`, which the wrapper writes into `GOLEM_CACHE_DIR` from
@@ -287,10 +286,11 @@ else `h12`. For the G1 they add `docker/docker-compose.g1.yml` after
   mount that a running container rereads in every new process
   (`write_g1_dds_pin` in `scripts/docker_common.sh`).
 
-The mounts stay out of the base file, so an H1-2 checkout without the
-`leprechaun_g1` submodule still starts. For the G1, `prepare_mounts` checks
-the description files (both services) and the policy files (the ros service)
-for missing files and LFS pointers before any container starts, and
+`prepare_mounts` checks the `CL_Assets/g1` files each service reads for missing
+files and LFS pointers before any container starts: in every ros container,
+whose `golem_ros2_models` installs both robots' models, and in the robocasa
+service for the G1. For the G1 it also checks the policy files (the ros
+service), and
 `launch_ros.sh` builds the `g1_*` packages, which it skips for the H1-2.
 `docker_stack.sh` sets `GOLEM_BRINGUP_PACKAGE=golem_bringup`
 and `GOLEM_BRINGUP_LAUNCH=g1_sim.launch.py` for the stack overlay, and

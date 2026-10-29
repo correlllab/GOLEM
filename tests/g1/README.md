@@ -116,4 +116,9 @@ Each run writes to `tests/results/g1-<test>-<time>-<pid>/`, where `<test>` is `b
 - the recordings: `sim.npz`, `events.json` and, for nav and explore, `drive.npz`, `map.npz`,
   `scene.npz`, `goal.json` and `contacts.json`.
 
+Each test stops the sim (`stop` file) and waits for its recording before it stops the bringup,
+so the recordings end with the robot standing, not with it falling once `rt/lowcmd` is silent.
+The report cuts a recording at the first sim-time reversal (MuJoCo resetting the scene): a reset
+before the test's `end` mark fails the run, one after it is noted.
+
 When a test fails, keep the whole directory.

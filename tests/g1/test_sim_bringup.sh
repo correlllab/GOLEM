@@ -7,9 +7,10 @@
 # Builds core_ws for the G1, starts the sim (h12_mujoco.py --g1) headless in the
 # layout 9 / style 9 / seed 42 kitchen, then, in its network namespace, a ros
 # container that runs 'ros2 launch golem_bringup g1_sim.launch.py
-# use_rviz:=false' and the test's steps (test_sim_bringup.py drive), and finally
-# checks the sim's recording against them (test_sim_bringup.py report). See
-# test_sim_bringup.py for what is checked. Exits 0 only if every check passes.
+# use_rviz:=false' and the test's steps (test_sim_bringup.py drive). It then stops
+# the sim (OUT/stop) and, once the sim has saved its recording, the bringup, so the
+# recording ends with the robot standing. Finally it checks the sim's recording
+# against the steps (test_sim_bringup.py report). See test_sim_bringup.py for what is checked. Exits 0 only if every check passes.
 # The sim's lidar and head camera are on, as by default; the camera renders on
 # the GPU (EGL).
 #
@@ -67,6 +68,11 @@ g1_test_run_ros 900 "ros2 launch golem_bringup g1_sim.launch.py $LAUNCH_ARGS > /
     LAUNCH=\$!
     python3 -u /home/code/tests/g1/test_sim_bringup.py drive --out /out $DRIVE_ARGS
     rc=\$?
+    # the sim first, with the robot standing: it looks for /out/stop every 500
+    # physics steps, then saves sim.npz; the bringup goes down after, so the
+    # recording never holds the unpowered robot falling
+    touch /out/stop
+    for _ in \$(seq 1 60); do [ -e /out/sim.npz ] && break; sleep 1; done
     kill -INT \$LAUNCH
     wait \$LAUNCH
     exit \$rc"

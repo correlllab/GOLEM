@@ -236,10 +236,13 @@ class Recorder:
 
     def save(self):
         arrays = {k: np.array(v) for k, v in self.rows.items()}
-        np.savez(os.path.join(self.out, "sim.npz"), names=json.dumps(self.names),
+        # written under another name and renamed, so a file named sim.npz is complete
+        tmp = os.path.join(self.out, "sim.tmp.npz")
+        np.savez(tmp, names=json.dumps(self.names),
                  hz=500.0 / RECORD_EVERY, dt=self.dt,
                  band_changes=np.array(self.band_changes, float).reshape(-1, 3),
                  commanded_at=np.array(self.commanded_at or [math.nan, math.nan], float), **arrays)
+        os.replace(tmp, os.path.join(self.out, "sim.npz"))
         print(f"[test_sim_bringup] saved {len(self.rows['t'])} samples to {self.out}/sim.npz", flush=True)
 
 
@@ -662,6 +665,23 @@ class Report:
         self.events = {e["name"]: e for e in ev["events"]}
         self.checks = []
         self.numbers = {}
+        self.cut_at_sim_reset()
+
+    def cut_at_sim_reset(self):
+        """Cuts the recording at the first sim-time reversal (MuJoCo resetting the scene).
+        A reset before the test's end mark fails the run; one after it is only noted"""
+        t = self.s["t"]
+        back = np.nonzero(np.diff(t) < 0)[0]
+        if not back.size:
+            return
+        i = int(back[0]) + 1
+        t_reset, wall_reset = float(t[i - 1]), float(self.s["wall"][i])
+        n = len(t)
+        self.s = {k: (v[:i] if v.ndim and len(v) == n else v) for k, v in self.s.items()}
+        if wall_reset < self.end_wall():
+            self.check("no sim reset", False, f"sim reset at sim t {t_reset:.2f} s before the test's end")
+        else:
+            print(f"     note: the sim reset at sim t {t_reset:.2f} s after the test's end; the recording is cut there")
 
     def check(self, name, ok, text):
         self.checks.append({"check": name, "pass": bool(ok), "detail": text})

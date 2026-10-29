@@ -1,7 +1,8 @@
 # The Unitree G1 in GOLEM
 
 GOLEM runs a second robot beside the H1-2: the Correll Lab's Unitree G1
-(29 DoF, two Dex3-1 hands). Its ROS 2 packages are in `core_ws/src/g1/`, its
+(29 DoF, two Dex3-1 hands). Its ROS 2 packages are `core_ws/src/g1_homie`, `dex_3` and
+`g1_navigation`, its
 models (Unitree's URDFs, MJCFs and meshes, and a sphere-packed self-collision
 model) are in `CL_Assets/g1`, installed for ROS by `golem_ros2_models` with the
 H1-2's, and its RoboCasa kitchen sim is `golem_robocasa/g1/`, started through the same entry point
@@ -140,6 +141,6 @@ left hand closes and opens. The named postures are `NAMED_CONFIGS` in
 
 ## Licence
 
-The `g1_*` packages are MIT. HOMIE's walking policy in
-`core_ws/src/g1/g1_locomotion/policy/` is for non-commercial use only (CC BY-NC
+The G1 packages (`dex_3`, `g1_homie`, `g1_navigation`) are MIT. HOMIE's walking policy in
+`core_ws/src/g1_homie/policy/` is for non-commercial use only (CC BY-NC
 4.0 by its `LICENSE`; treat it as CC BY-NC-SA 4.0); see its `README.md`.

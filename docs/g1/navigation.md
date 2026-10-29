@@ -49,6 +49,6 @@ spawn, x along its heading. For `odom_source:=sim_gt`, start the sim with
 and `fastlio` it has two, and TF breaks); `map` is then the sim's world frame.
 The test is the tested path; this by-hand flow puts together the same parts.
 
-More: the [g1_navigation README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_navigation/README.md)
+More: the [g1_navigation README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1_navigation/README.md)
 (frames, the scan, slam_toolbox, Nav2, the sim runs, and what the real lidar
 still needs).

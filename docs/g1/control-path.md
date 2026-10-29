@@ -23,7 +23,7 @@ everything reads <---------- rt/lowstate, rt/dex3/{left,right}/state
 - **Arms.** The arm controller (`golem_upper_ik`) solves IK at
   `frequency.ctrl_hz` and streams commands at `frequency.pub_hz`. The safety
   layer relays the newest one at its `control.publish_hz`.
-- **Legs.** The walking node (`g1_locomotion`) waits for the safety layer's
+- **Legs.** The walking node (`g1_homie`) waits for the safety layer's
   heartbeat, moves the legs to HOMIE's default pose over 2 s, then runs HOMIE's
   policy at 50 Hz on `/cmd_vel`; on the real robot it holds the default pose
   until the operator calls `/lowerbody/confirm_engage`. The sim bringup always
@@ -73,7 +73,7 @@ instead of copying the numbers.
 | Time | wall clock | sim time, paced to at most real time; the safety layer's stale times still run on the host's clock |
 | Safety timings | `golem_safety/config/g1/split.yaml` | `sim_split.yaml`: looser, since the sim can run slower than real time |
 | Arm speed limits (`controller.v_lim`, `w_lim`, `dq_lim`) | `golem_upper_ik/config/g1/g1_split.yaml`: deliberately low for the first sessions | `sim_split.yaml` |
-| The walking node | `g1_locomotion/config/g1.yaml`: starts only with `start_position_verified:=true`, holds the default pose until `/lowerbody/confirm_engage` | `sim.yaml`: always starts, no confirm, releases the band |
+| The walking node | `g1_homie/config/g1.yaml`: starts only with `start_position_verified:=true`, holds the default pose until `/lowerbody/confirm_engage` | `sim.yaml`: always starts, no confirm, releases the band |
 | Walking speed limits (`commands.vx`, `vy`, `yaw`) | `g1.yaml`: inside the trained ranges | `sim.yaml`: the trained ranges |
 | Navigation | refused (real lidar not connected yet) | allowed (`use_nav:=true`) |
 | Status | nothing has run on the robot yet | arm, walk, nav and exploration tests pass |

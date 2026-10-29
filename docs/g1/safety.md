@@ -3,7 +3,7 @@
 `golem_safety` (node `safety_node`) is the only node that writes the robot's
 body command topic, `rt/lowcmd`. The H1-2 runs the same node, with its own
 robot profile and configs. Every controller publishes to one of its
-`rt/safety/*` input topics instead, and `golem_upper_ik` and `g1_locomotion`
+`rt/safety/*` input topics instead, and `golem_upper_ik` and `g1_homie`
 refuse any other command topic. It relays the newest command of each input,
 clips it, checks every `rt/lowstate`, and latches an estop when something goes
 wrong.
@@ -13,7 +13,7 @@ Every parameter, config key and event is in the
 [`config/g1/`](https://github.com/correlllab/GOLEM/tree/main/core_ws/src/golem_safety/config/g1). This page names the
 keys rather than copying their values.
 
-> **Not covered:** the Dex3 hand driver (`g1_dex3`) writes
+> **Not covered:** the Dex3 hand driver (`dex_3`) writes
 > `rt/dex3/<side>/cmd` directly and bypasses the safety layer.
 
 ## Modes

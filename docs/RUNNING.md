@@ -163,8 +163,8 @@ ros2 launch golem_bringup h12_real_robot.launch.py start_position_verified:=true
 ```
 
 A native build there leaves out the G1's packages, as `launch_ros.sh` does
-for the H1-2: add `--packages-ignore-regex '^g1_'` to its `colcon build`.
-`golem_bringup` exec_depends on the `g1_*` packages, so a
+for the H1-2: add `--packages-ignore dex_3 g1_homie g1_navigation` to its `colcon build`.
+`golem_bringup` exec_depends on the G1's packages, so a
 `--packages-up-to golem_bringup` without it builds them too. The build includes
 `golem_ros2_models`, which installs both robots' models from the checkout's
 `CL_Assets` (run `git lfs pull` in it first): the H1-2's launches read the
@@ -190,7 +190,7 @@ their arguments, or with `GOLEM_ROBOT=g1` in the shell or `docker/.env`
 before the DDS domain check. The robot matters where it is inherent: which
 robot the sim runs, which bringup `docker_stack.sh` starts and which sim it
 waits for, and the real G1's DDS interface. Every `ros` container mounts and
-builds both robots' packages (`core_ws/src/g1/` included), so `docker_run.sh
+builds both robots' packages (`dex_3`, `g1_homie` and `g1_navigation` included), so `docker_run.sh
 ros` without `--g1` runs `g1_sim.launch.py` as well as the H1-2's launches; it
 needs `--g1` only on the real G1, where the `docker/docker-compose.g1.yml`
 overlay pins CycloneDDS to `G1_DDS_INTERFACE`, the host port wired to the robot
@@ -237,13 +237,14 @@ first real session follows [`g1/first-session.md`](g1/first-session.md).
 - **Stale installs of removed packages.** colcon never removes a package that
   is gone from `core_ws/src`. A workspace built before `golem_bringup` replaced
   `h12_bringup` and `g1_bringup` (and `h12_safety_layer`,
-  `h12_ros2_controller`, `g1_safety_layer` and `g1_control` were deleted) keeps
+  `h12_ros2_controller`, `g1_safety_layer` and `g1_control` were deleted), or
+  before `dex_3` and `g1_homie` replaced `g1_dex3` and `g1_locomotion`, keeps
   their build and install directories, and `launch_ros.sh` then stops with
   `stale installed package '<pkg>' has no discovered source`. Delete them
   once, from the repo root (`sudo` for files a container left root-owned):
 
   ```bash
-  rm -rf {core_ws/build,core_ws/install,core_ws/build_stack_tests,core_ws/install_stack_tests,container_cache/g1_tests/build,container_cache/g1_tests/install}/{h12_bringup,g1_bringup,h12_safety_layer,h12_ros2_controller,g1_safety_layer,g1_control}
+  rm -rf {core_ws/build,core_ws/install,core_ws/build_stack_tests,core_ws/install_stack_tests,container_cache/g1_tests/build,container_cache/g1_tests/install}/{h12_bringup,g1_bringup,h12_safety_layer,h12_ros2_controller,g1_safety_layer,g1_control,g1_dex3,g1_locomotion}
   ```
 
   A native workspace (the H1-2's onboard PC) has no such check and keeps

@@ -1,10 +1,10 @@
 # Walking
 
-Walking uses HOMIE's pretrained policy (`g1_locomotion`, with the policy in its
+Walking uses HOMIE's pretrained policy (`g1_homie`, with the policy in its
 `policy/`). These docs cover it in the sim only.
 
 Every G1 sim bringup walks: `g1_sim.launch.py` always starts HOMIE's walking
-node (`locomotion_node`, with `g1_locomotion`'s `sim.yaml`), with the safety
+node (`locomotion_node`, with `g1_homie`'s `sim.yaml`), with the safety
 layer on `sim_split` and the arm controller on its `sim_split` config. No
 launch argument turns it on or off. The robot starts hanging from the sim's
 elastic band, its leg motors off. Once `golem_safety` beats on
@@ -48,7 +48,7 @@ started at zero velocity and 0.74 m height`, then `elastic band released
 released at t=...`. The walking node ignores a `/cmd_vel` that arrives before
 its policy starts. Once the band is off, the robot walks forward while the
 command is published. It stops once the last command is older than
-`commands.timeout` (`core_ws/src/g1/g1_locomotion/config/sim.yaml`), so keep
+`commands.timeout` (`core_ws/src/g1_homie/config/sim.yaml`), so keep
 publishing at a steady rate. `/locomotion/height` sets the pelvis height (the
 package README's ROS interface section).
 
@@ -71,7 +71,7 @@ interlocks. A walking-node fault does not trip that estop: the safety layer
 holds the legs on the node's last command ([Safety layer](safety.md), Quiet
 inputs).
 
-More: the [g1_locomotion README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_locomotion/README.md)
+More: the [g1_homie README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1_homie/README.md)
 (behaviour, faults, real-time limits, configs) and the
-[policy README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_locomotion/policy/README.md)
+[policy README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1_homie/policy/README.md)
 (HOMIE, its credits and its non-commercial licence).

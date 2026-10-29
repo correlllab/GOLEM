@@ -1,6 +1,7 @@
 # Packages
 
-The G1's own ROS 2 packages live in `core_ws/src/g1/`. `launch_ros.sh` builds
+The G1's own ROS 2 packages are `dex_3`, `g1_homie` and `g1_navigation`, in
+`core_ws/src/`. `launch_ros.sh` builds
 them in every `ros` container, whichever robot the wrappers selected, so one
 container runs either robot's bringup. The G1 shares four packages with the H1-2, built for both robots: the
 safety layer `golem_safety` and the arm controller `golem_upper_ik`, each with
@@ -13,9 +14,9 @@ below has its own README with the full details, except the launch-only
 
 | Package | What it does | Key nodes and launch files | README |
 |---|---|---|---|
-| `g1_locomotion` | HOMIE's walking policy on the legs, driven by `/cmd_vel`: waits for `golem_safety`'s heartbeat, pre-poses the legs, on the real robot holds until `/lowerbody/confirm_engage`, and in the sim releases the elastic band. | `locomotion_node` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_locomotion/README.md) |
-| `g1_dex3` | Dex3-1 hand driver. Bypasses the safety layer. | `dex3_hands` (`/<side>/hand/set_pose`, `open`, `close`, `release`); `hands.launch.py` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_dex3/README.md) |
-| `g1_navigation` | Odometry (FAST_LIO or sim ground truth), a 2D map (slam_toolbox) and Nav2; the frontier explorer. Sim only for now. | `g1_navigation.launch.py`, `livox_to_pointcloud`, `level_frame`, `body_to_pelvis`, `frontier_explore` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_navigation/README.md) |
+| `g1_homie` | HOMIE's walking policy on the legs, driven by `/cmd_vel`: waits for `golem_safety`'s heartbeat, pre-poses the legs, on the real robot holds until `/lowerbody/confirm_engage`, and in the sim releases the elastic band. | `locomotion_node` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1_homie/README.md) |
+| `dex_3` | Dex3-1 hand driver. Bypasses the safety layer. | `dex3_hands` (`/<side>/hand/set_pose`, `open`, `close`, `release`); `hands.launch.py` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/dex_3/README.md) |
+| `g1_navigation` | Odometry (FAST_LIO or sim ground truth), a 2D map (slam_toolbox) and Nav2; the frontier explorer. Sim only for now. | `g1_navigation.launch.py`, `livox_to_pointcloud`, `level_frame`, `body_to_pelvis`, `frontier_explore` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1_navigation/README.md) |
 
 ## Shared with the H1-2
 
@@ -32,8 +33,8 @@ below has its own README with the full details, except the launch-only
 
 Outside `core_ws`:
 
-- `unitree_sdk2_python/` is the Unitree DDS SDK that `g1_locomotion`,
-  `g1_dex3` and the sim use. `golem_safety` and `golem_upper_ik` reach the
+- `unitree_sdk2_python/` is the Unitree DDS SDK that `g1_homie`,
+  `dex_3` and the sim use. `golem_safety` and `golem_upper_ik` reach the
   same DDS topics as ROS 2 topics (ROS `/lowcmd` is DDS `rt/lowcmd`).
 - `CL_Assets/g1` (in the `CL_Assets` submodule) holds the G1's models, which
   `golem_ros2_models` installs and the sim builds its robot from. The wrappers
@@ -41,16 +42,16 @@ Outside `core_ws`:
   (`git -C CL_Assets lfs pull`). `CL_Assets/g1/README.md` has their
   provenance, the Dex3-1 joint order and the loader quirks; our unit is
   [Our G1](hardware.md).
-- HOMIE's policy is in `core_ws/src/g1/g1_locomotion/policy/`
-  ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1/g1_locomotion/policy/README.md)), for
+- HOMIE's policy is in `core_ws/src/g1_homie/policy/`
+  ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1_homie/policy/README.md)), for
   non-commercial use only. The `ros` container mounts it at
-  `/home/code/g1_locomotion`; the sim reads none of its files.
+  `/home/code/g1_homie`; the sim reads none of its files.
 
 ## Tests
 
 The package tests run in the `ros` container
 (`docker/scripts/docker_run.sh ros`), from the package directory,
-`/home/code/core_ws/src/g1/<package>`. Each README's Tests section has the
+`/home/code/core_ws/src/<package>`. Each README's Tests section has the
 command; start it with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`, or pytest fails to
 load the `anyio` plugin. The DDS tests use domain 97 and fake robot peers; some
 tests are skipped when ROS is missing, and a skip is not a failure. `golem_safety` and `golem_upper_ik` run through `colcon test` in the
@@ -67,7 +68,7 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest test/test_g1_launch.py test/t
 HOMIE's policy test needs no simulator:
 
 ```bash
-cd /home/code/g1_locomotion && python3 test_homie_policy.py
+cd /home/code/g1_homie && python3 test_homie_policy.py
 ```
 
 The G1 sim's unit tests, the topic-surface probe and the acceptance tests run

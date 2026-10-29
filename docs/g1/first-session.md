@@ -118,7 +118,7 @@ The workspace is built with `--symlink-install`, so a Python edit under
   (`g1_core.launch.py`, with the sim configs: the walking node always runs, and
   without the confirm) and stops the controller the same way (SIGINT). If
   `core_ws/src/golem_safety/README.md`, `core_ws/src/golem_upper_ik/README.md`
-  or `core_ws/src/g1/g1_locomotion/README.md` at the frozen commit disagrees
+  or `core_ws/src/g1_homie/README.md` at the frozen commit disagrees
   with them, fix this checklist before the session.
 
 ### 2. Network and docker/.env (laptop shell)
@@ -205,7 +205,7 @@ which kills every node at once, without the controller's last command
 `docker/scripts/docker_run.sh ros --restart --g1` under the same
 `systemd-inhibit`.
 
-The container builds `core_ws` with the `g1_*` packages before it opens the
+The container builds `core_ws` with the G1's packages before it opens the
 shell (`launch_ros.sh`, an incremental colcon build that checks every
 package's inputs). A failed build stops the container instead of opening the
 shell, so the shell means the build matches the frozen tree. To rebuild by
@@ -403,12 +403,12 @@ PYTHONUNBUFFERED=1 ros2 launch golem_bringup g1_real_robot.launch.py use_hands:=
 What you should see, beyond step 7:
 
 1. `locomotion_node` prints `Loaded .../g1.yaml and the policy in
-   /home/code/g1_locomotion. Silent until golem_safety beats on
+   /home/code/g1_homie. Silent until golem_safety beats on
    /safety/heartbeat, ...`. It starts 2 s after the controller and sends nothing
    while it waits; it may print `waiting to start: <reason>`. It waits for the
    heartbeat, for 1 s of steady, on-time and upright `rt/lowstate`, for the
    tick to run at 0.9-1.1 s per s of wall clock, and for the arm controller's
-   commands (`g1_locomotion`'s README, Behavior).
+   commands (`g1_homie`'s README, Behavior).
 2. `moving the legs from where they are to the default pose over 2.0 s
    (rt/lowstate's tick ran at 1.00 s per s of wall clock)`, and the safety
    layer's `input_engaged` with `"source": "split_mode_lower"`. The legs move in

@@ -40,7 +40,7 @@ is required before anything builds.
 **`core_ws/src` in-tree packages** (versioned directly in this repo, *not*
 submodules): `FAST_LIO`, `golem_ros2_models`, `golem_safety`, `golem_upper_ik`, `h12_deploy_mjpc`,
 `h12_lowerbody_rl`, `h12_slam`, `h12_skills`, `golem_bringup`, `lmg_deploy`,
-`model_server`, and the G1 packages in `core_ws/src/g1/` (`g1_dex3`, `g1_locomotion`, `g1_navigation`).
+`model_server`, and the G1 packages `dex_3`, `g1_homie` and `g1_navigation`.
 
 `golem_safety` (C++, `ament_cmake`) and `golem_upper_ik` (Python) are the
 safety layer and arm controller of both robots, so they build for both; the
@@ -275,7 +275,7 @@ else `h12`. For the G1 they add `docker/docker-compose.g1.yml` after
 
 - both services get `GOLEM_ROBOT=g1` and `G1_DDS_INTERFACE`. Nothing the
   ros container builds or runs depends on them: the base file mounts HOMIE's
-  policy, `core_ws/src/g1/g1_locomotion/policy` (at `/home/code/g1_locomotion`,
+  policy, `core_ws/src/g1_homie/policy` (at `/home/code/g1_homie`,
   for the walking node), and `tools/` (at `/home/code/tools`) into every ros
   container, read-only with `create_host_path: false`, and the G1's model is in
   `CL_Assets/g1`, which the base file mounts for both robots;
@@ -291,7 +291,7 @@ else `h12`. For the G1 they add `docker/docker-compose.g1.yml` after
 files and LFS pointers before any container starts: in every ros container,
 whose `golem_ros2_models` installs both robots' models, and in the robocasa
 service for the G1. It checks the policy files for every ros container, and
-`launch_ros.sh` builds every package, the `g1_*` ones included, whatever
+`launch_ros.sh` builds every package, the G1's included, whatever
 the robot: one `ros` container runs either robot's bringup. For the G1,
 `docker_stack.sh` sets `GOLEM_BRINGUP_PACKAGE=golem_bringup`
 and `GOLEM_BRINGUP_LAUNCH=g1_sim.launch.py` for the stack overlay, and

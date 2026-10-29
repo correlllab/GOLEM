@@ -18,7 +18,7 @@ export PYTHONUNBUFFERED=1
 WS=/home/code/core_ws
 # An isolated install avoids inheriting stale interfaces or building MJPC/vision.
 # golem_upper_ik loads the H1-2 URDFs and the sphere URDF/SRDF from
-# h12_ros2_model's installed share, which h12_ros2_model's setup.py stages from
+# golem_ros2_models' installed share, which golem_ros2_models' setup.py stages from
 # CL_Assets at ../../../CL_Assets relative to itself, even when colcon runs its
 # build copy: keep the build base at the depth of src.
 TEST_BUILD_BASE=$WS/build_stack_tests

@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 
+from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
 from launch.actions import EmitEvent, RegisterEventHandler
 from launch.event_handlers import OnProcessExit
@@ -25,7 +26,7 @@ def generate_launch_description():
         Node(package='golem_upper_ik', executable='joint_state_publisher', name='joint_state_publisher',
              parameters=[sim_time, {'robot': 'h12'}], output='screen'),
         Node(package='robot_state_publisher', executable='robot_state_publisher', name='robot_state_publisher',
-             parameters=[sim_time, {'robot_description': Path('/home/code/CL_Assets/ros_assets/h1_2_magpie_ros.urdf').read_text()}],
+             parameters=[sim_time, {'robot_description': Path(urdf_path('h12', ros=True)).read_text()}],
              output='screen'),
     ]
     if case == 'locomotion':

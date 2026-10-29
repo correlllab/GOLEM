@@ -613,12 +613,12 @@ H1-2's). Before the first run:
 
 ## Tests
 
-In the ROS image, with the workspace built (they need `g1_description`,
+In the ROS image, with the workspace built (they need `golem_ros2_models`,
 `livox_ros_driver2` and `fast_lio`):
 
 ```bash
 cd core_ws/src/g1/g1_navigation
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:../g1_description:$PYTHONPATH python3 -m pytest test
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:$PYTHONPATH python3 -m pytest test
 ```
 
 They run on DDS domain 97 on loopback only (`test/stack.py` points every

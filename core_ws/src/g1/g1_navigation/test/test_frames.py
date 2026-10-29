@@ -14,11 +14,11 @@ import pinocchio as pin
 import pytest
 from scipy.spatial.transform import Rotation
 
-from g1_description.paths import urdf_path
 from g1_navigation import frames
 from g1_navigation.level_frame import level_rotation
+from golem_ros2_models.paths import urdf_path
 
-URDF = urdf_path('with_hand')
+URDF = urdf_path('g1')
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'config')
 SIM_CONFIG = os.path.join(CONFIG_DIR, 'g1_fastlio_sim.yaml')
 PELVIS_HEIGHT = 0.744  # HOMIE standing

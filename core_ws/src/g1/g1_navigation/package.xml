@@ -15,7 +15,7 @@
   <depend>tf2_ros</depend>
   <exec_depend>tf2_ros_py</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
-  <exec_depend>g1_description</exec_depend>
+  <exec_depend>golem_ros2_models</exec_depend>
   <exec_depend>fast_lio</exec_depend>
   <exec_depend>pointcloud_to_laserscan</exec_depend>
   <exec_depend>slam_toolbox</exec_depend>

@@ -50,8 +50,8 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-from g1_description.paths import urdf_path
 from g1_navigation import frames
+from golem_ros2_models.paths import urdf_path
 
 ODOM_SOURCES = ('fastlio', 'sim_gt')
 
@@ -179,7 +179,7 @@ def _setup(context):
 
     if odom_source == 'fastlio':
         odom_camera_init, _ = frames.fastlio_transforms(
-            urdf_path('with_hand'), fastlio_config,
+            urdf_path('g1'), fastlio_config,
             float(LaunchConfiguration('pelvis_height').perform(context)), LIDAR_FRAME)
         actions += [
             Node(

@@ -13,7 +13,7 @@ import time
 import yaml
 from ament_index_python.packages import get_package_prefix
 
-from g1_description.paths import urdf_path
+from golem_ros2_models.paths import urdf_path
 
 TEST_DOMAIN = 97  # never 0 (the real robot) or 1 (the sim)
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -57,7 +57,7 @@ class Processes:
         return proc
 
     def robot_state_publisher(self):
-        with open(urdf_path('with_hand', ros=True)) as f:
+        with open(urdf_path('g1', ros=True)) as f:
             description = f.read()
         params = {'robot_state_publisher': {'ros__parameters': {'robot_description': description}}}
         path = os.path.join(self.tmp_dir, 'robot_state_publisher.yaml')

@@ -15,8 +15,8 @@ from launch_ros.actions import Node
 from launch_ros.utilities import evaluate_parameters
 from scipy.spatial.transform import Rotation
 
-from g1_description.paths import urdf_path
 from g1_navigation import frames
+from golem_ros2_models.paths import urdf_path
 
 SHARE = get_package_share_directory('g1_navigation')
 LAUNCH = os.path.join(SHARE, 'launch', 'g1_navigation.launch.py')
@@ -95,7 +95,7 @@ def test_fastlio_mode(sim):
     params_file = fast_lio._Node__parameters[0]  # a launch_ros ParameterFile
     assert perform_substitutions(context, params_file.param_file) == config
 
-    odom_camera_init, _ = frames.fastlio_transforms(urdf_path('with_hand'), config, 0.73)
+    odom_camera_init, _ = frames.fastlio_transforms(urdf_path('g1'), config, 0.73)
     for name, parent, child, expected in (
             ('odom_camera_init_tf', 'odom', 'camera_init', odom_camera_init),
             ('livox_frame_tf', 'mid360_link', 'livox_frame', np.eye(4))):

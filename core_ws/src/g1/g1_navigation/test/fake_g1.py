@@ -38,8 +38,8 @@ from scipy.spatial.transform import Rotation
 from sensor_msgs.msg import Imu, JointState
 from tf2_ros import TransformBroadcaster
 
-from g1_description.paths import urdf_path
 from g1_navigation import frames
+from golem_ros2_models.paths import urdf_path
 
 GRAVITY = 9.81
 
@@ -163,7 +163,7 @@ class FakeG1(Node):
         self.cmd_time = None
         self.gait = 0.0  # 0 standing, 1 walking
         self.t0 = self.last = self.get_clock().now()
-        self.pelvis_lidar = frames.link_pose(urdf_path('with_hand'), frames.BASE_LINK,
+        self.pelvis_lidar = frames.link_pose(urdf_path('g1'), frames.BASE_LINK,
                                              frames.LIDAR_LINK, {WAIST_PITCH: waist})
         sim_config = os.path.join(get_package_share_directory('g1_navigation'), 'config',
                                   'g1_fastlio_sim.yaml')

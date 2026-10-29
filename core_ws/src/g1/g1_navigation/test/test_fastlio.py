@@ -37,8 +37,8 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 import fake_g1
 import stack
-from g1_description.paths import urdf_path
 from g1_navigation import frames
+from golem_ros2_models.paths import urdf_path
 
 SIM_CONFIG = os.path.join(get_package_share_directory('g1_navigation'), 'config',
                           'g1_fastlio_sim.yaml')
@@ -169,7 +169,7 @@ def test_fastlio_follows_the_fake_g1(stack_up):
 
     # odom -> camera_init as frames.py computes it from the URDF and the config,
     # and body -> pelvis through the fake's waist
-    urdf = urdf_path('with_hand')
+    urdf = urdf_path('g1')
     odom_camera_init, _ = frames.fastlio_transforms(urdf, SIM_CONFIG, PELVIS_HEIGHT)
     body_pelvis = frames.invert(frames.pelvis_to_body(
         urdf, frames.fastlio_extrinsic(SIM_CONFIG), positions={fake_g1.WAIST_PITCH: WAIST}))

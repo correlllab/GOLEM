@@ -20,11 +20,11 @@ from tf2_msgs.msg import TFMessage
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 import stack
-from g1_description.paths import urdf_path
 from g1_navigation import frames
 from g1_navigation.body_to_pelvis import BodyToPelvis, to_matrix
 from g1_navigation.level_frame import LevelFrame, level_rotation
 from g1_navigation.livox_to_pointcloud import IMU_GAP, LivoxToPointCloud, deskew, to_pointcloud2
+from golem_ros2_models.paths import urdf_path
 
 POINTS = [(1.0, -2.0, 0.5, 7), (0.1, 0.2, -3.0, 255), (-4.5, 0.0, 1.25, 0)]
 SIM_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'config',
@@ -310,7 +310,7 @@ def test_body_to_pelvis_node_over_dds(ros):
     broadcaster = TransformBroadcaster(peer)
     # pelvis -> livox_frame as robot_state_publisher gives it with the waist off 0
     waist = {'waist_yaw_joint': 0.3, 'waist_roll_joint': -0.1, 'waist_pitch_joint': 0.2}
-    pelvis_lidar = frames.link_pose(urdf_path('with_hand'), 'pelvis', 'mid360_link', waist)
+    pelvis_lidar = frames.link_pose(urdf_path('g1'), 'pelvis', 'mid360_link', waist)
     lidar = TransformStamped()
     lidar.header.frame_id, lidar.child_frame_id = 'pelvis', 'livox_frame'
     tr, q = lidar.transform.translation, lidar.transform.rotation

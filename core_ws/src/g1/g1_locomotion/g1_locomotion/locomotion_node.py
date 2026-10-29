@@ -40,7 +40,9 @@ class LocomotionNode(Node):
       which frame_task_server publishes once its start-up moves are done, and
       a client of the sim's /elastic_band/toggle (std_srvs/Trigger), called
       from a 10 Hz timer as BandRelease says: once the policy runs and a
-      /left_ee_pose has come, or band.max_wait after the policy started
+      /left_ee_pose has come, or band.max_wait after the policy started. When
+      the call takes the band off, the policy's history restarts
+      (LocomotionController.on_band_released)
     The legs go to golem_safety's lower-body input over Unitree DDS; see
     LocomotionController for the startup and the faults.
 
@@ -154,6 +156,7 @@ class LocomotionNode(Node):
                               'The node does not call the toggle again')
             return
         self._log('info', f'elastic band released (/elastic_band/toggle: {response.message})')
+        self._driver.on_band_released()
 
     def destroy_node(self):
         # stop publishing; golem_safety keeps relaying the last leg command and

@@ -651,6 +651,44 @@ def test_ramp_then_policy_from_zero_command_and_standing_height(policy, trained)
     assert rig.controller.command[1] == pytest.approx(0.74)
 
 
+def test_band_release_restarts_the_policy_history(policy, trained):
+    rig = Rig(policy, trained, config='sim.yaml')
+    rig.session.hook = lambda: np.full(12, 0.1, dtype=np.float32)  # a last action to clear
+    state = _standing(policy)
+    # before the policy runs, a release changes nothing
+    rig.controller.on_band_released()
+    assert rig.controller.phase == WAITING and not rig.log
+    rig.walk(state)
+    rig.controller.set_cmd_vel(0.4, 0.0, 0.0, rig.clock.t)
+    rig.controller.set_height(0.7)
+    rig.feed(state, 10 * SAMPLES_PER_STEP)
+    (vx, _, _), height = rig.controller.command
+    assert vx == pytest.approx(0.1) and height == pytest.approx(0.72)
+    full = rig.session.inputs[-1].reshape(6, -1)
+    assert full[:5].any() and full[5, -12:].any()
+    since, grid = rig.controller.walking_since, rig.steps[-1]
+
+    rig.controller.on_band_released()
+    assert rig.controller.phase == WALKING and rig.controller.walking_since == since
+    assert _messages(rig.log)[-1] == 'elastic band off: the policy carries on from an empty history'
+    rig.feed(state, SAMPLES_PER_STEP)
+    # the next step: an empty history and no last action, as at the policy's start ...
+    obs = rig.session.inputs[-1].reshape(6, -1)
+    assert not obs[:5].any(), 'the history must restart empty'
+    assert not obs[5, -12:].any(), 'the last action must restart at zero'
+    # ... but the command, the height and the step grid carry on
+    (vx_next, _, _), height_next = rig.controller.command
+    assert vx_next == pytest.approx(vx + 0.01) and height_next == pytest.approx(height - 0.002)
+    assert obs[5, 0] == pytest.approx(2 * vx_next, abs=1e-6)
+    assert rig.steps[-1] - grid == 20
+
+    # a fault ends it: a later release is ignored
+    rig.controller.latch('test')
+    rig.controller.on_band_released()
+    assert rig.controller.phase == FAULTED
+    assert _messages(rig.log).count('elastic band off: the policy carries on from an empty history') == 1
+
+
 def test_ramp_is_linear_to_the_default_pose(policy, trained):
     rig = Rig(policy, trained, ramp_seconds=0.1)
     legs = np.asarray(policy.default_angles) + np.linspace(-0.3, 0.3, 12)

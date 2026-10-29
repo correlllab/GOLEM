@@ -26,7 +26,11 @@ tick_seconds: 0.001
 
 startup:
   # s to move the legs from where they are to the policy's default pose (the
-  # pre-pose), as the H1-2's leg node does: the band holds the robot meanwhile
+  # pre-pose), as the H1-2's leg node does: the band holds the robot meanwhile.
+  # The policy then runs under the band until frame_task_server's start-up moves
+  # (about 1.9 s from the same rt/lowstate sample) are done, and there it
+  # crouches with the feet off the floor: with 0.5 s here it ran 1.5 s under the
+  # band and stumbled at the release. Keep this about as long as those moves
   ramp_seconds: 2.0
   # hold the default pose until /lowerbody/confirm_engage is called: not in the
   # sim, where the policy starts after the pre-pose

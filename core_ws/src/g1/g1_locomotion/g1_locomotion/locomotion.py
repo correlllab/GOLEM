@@ -198,7 +198,8 @@ class LocomotionController:
     - holding (startup.wait_for_confirm): the default pose every policy step,
       every fault checked, until the operator confirms (confirm)
     - walking: the policy runs, starting at zero velocity and the standing
-      height, with an empty history
+      height, with an empty history; in the sim its history empties again
+      when the elastic band comes off (on_band_released)
     - faulted: once the legs are commanded, a stale, non-finite or fallen
       state, a tick that goes back, a bad IMU quaternion, a policy step that
       fails, or a command later than faults.max_latency (latency_ok) stops all
@@ -295,6 +296,19 @@ class LocomotionController:
                            f'only while the legs hold the default pose ({HOLDING})')
         self._start_policy(self._last_sample)
         return True, 'confirmed: the policy starts on the next policy step'
+
+    def on_band_released(self):
+        '''
+        The sim's elastic band has come off. While the policy runs, its history
+        and last action restart empty, as at its start, so its first steps on
+        the free robot are not computed from the steps the band held, as the
+        H1-2's leg node does; the command, the height and the step grid carry
+        on. Ignored in every other phase
+        '''
+        if self.phase != WALKING:
+            return
+        self.policy.reset()
+        self._log('info', 'elastic band off: the policy carries on from an empty history')
 
     def on_upper_cmd(self, now):
         '''The arm controller commanded (a sample on topics.upper_cmd) at now (s)'''

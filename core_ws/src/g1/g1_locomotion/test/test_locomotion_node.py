@@ -30,7 +30,11 @@ class FakeDriver:
         self.cmd_vel = []
         self.heights = []
         self.beats = []
+        self.band_released = 0
         self.walking_since = walking_since
+
+    def on_band_released(self):
+        self.band_released += 1
 
     def set_cmd_vel(self, vx, vy, yaw):
         self.cmd_vel.append((vx, vy, yaw))
@@ -186,12 +190,14 @@ def test_confirm_service_and_band_client(tmp_path, monkeypatch):
         node._driver.shutdown()
         node._driver = FakeDriver(walking_since=time.monotonic())
         assert not _spin(executor, 0.5, lambda: toggles)
-        # one /left_ee_pose: frame_task_server is up, and the band is released, once
+        # one /left_ee_pose: frame_task_server is up, and the band is released, once; the
+        # policy's history restarts once the band is off
         assert _spin(executor, 5.0, lambda: pose.get_subscription_count() > 0)
         pose.publish(PoseStamped())
         assert _spin(executor, 5.0, lambda: toggles)
         _spin(executor, 1.0)
         assert len(toggles) == 1, toggles
+        assert node._driver.band_released == 1
     finally:
         executor.shutdown()
         helper.destroy_node()
@@ -201,7 +207,7 @@ def test_confirm_service_and_band_client(tmp_path, monkeypatch):
 
 def test_band_toggle_that_hangs_the_robot_again_warns_once(tmp_path, monkeypatch):
     # the band was already off (SPACE in the viewer): the toggle hangs the robot again and
-    # answers 'enabled'. The node warns and never calls again
+    # answers 'enabled'. The node warns, keeps the policy's history and never calls again
     config = _node_config(tmp_path, monkeypatch, band_release=True)
     rclpy.init(args=['--ros-args', '-p', f'policy_dir:={POLICY_DIR}'], domain_id=TEST_DOMAIN)
     node = LocomotionNode(config_name=str(config))
@@ -230,6 +236,7 @@ def test_band_toggle_that_hangs_the_robot_again_warns_once(tmp_path, monkeypatch
         assert _spin(executor, 5.0, lambda: toggles)
         _spin(executor, 1.0)
         assert len(toggles) == 1, toggles
+        assert node._driver.band_released == 0
         warnings = [message for level, message in log if level == 'warn' and '"enabled"' in message]
         assert len(warnings) == 1 and 'is now ON' in warnings[0], log
         assert not any(message.startswith('elastic band released') for _, message in log), log

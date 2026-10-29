@@ -134,9 +134,21 @@ band's release.
     keeps at most one call in flight, with no timeout (a late response can
     never meet a second call), sends a failed call again, and sends nothing
     after one has succeeded. A call that never answers leaves the band on.
-    Nothing is called once the node has faulted. If the service answers
-    `enabled`, the band was already off (SPACE in the viewer) and now holds
-    the robot again: the node warns and calls nothing more.
+    Nothing is called once the node has faulted. When the call has taken the
+    band off (the service answers `disabled`), the policy's history and last
+    action restart empty, as the H1-2's leg node resets its policy at the
+    release: its first steps on the free robot are not computed from the
+    steps the band held. The command, the height and the step grid carry on.
+    If it answers `enabled`, the band was already off (SPACE in the viewer)
+    and now holds the robot again: the node warns and calls nothing more.
+    The release waits for `frame_task_server`, whose start-up moves (about
+    1.9 s in the sim) start on the same `rt/lowstate` sample as the 2 s
+    pre-pose, so the policy runs under the band for only a few steps. When
+    it runs there longer, it crouches toward its 0.74 m height while the
+    band holds the pelvis at 0.78 m, with the feet off the floor, and
+    stumbles at the release: forced to 1.5 s (`ramp_seconds: 0.5`), the
+    robot tilted 23-28 deg and stepped 26-45 cm, with or without the
+    history reset (the history is 6 steps, 0.12 s).
     The real robot has no band (`g1.yaml`: `band.release: false`), and the
     node has no client then.
 7. **Faults.** Once the legs are commanded (pre-pose, hold or walking), any

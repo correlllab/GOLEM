@@ -168,7 +168,7 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      # h12_ros2_model/setup.py locates CL_Assets as ../../../CL_Assets relative
+      # golem_ros2_models/setup.py locates CL_Assets as ../../../CL_Assets relative
       # to __file__, and colcon runs setup.py from the build-base — so with
       # build-base at /opt/core_ws/build that resolves to /opt/CL_Assets. Mount
       # the submodule there too so the build finds meshes/URDFs. (Installed

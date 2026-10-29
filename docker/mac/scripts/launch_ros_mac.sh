@@ -102,7 +102,7 @@ WS=/home/code/core_ws
 # build/install go to /opt paths backed by named docker volumes on the VM's
 # native ext4: writing colcon's --symlink-install tree onto the virtiofs
 # bind-mount stalls for minutes. Named volumes are fast AND persistent, so the
-# 9-min C++ package (h12_ros2_model) incrementally caches across runs.
+# build caches incrementally across runs.
 BUILD_BASE=/opt/core_ws/build
 INSTALL_BASE=/opt/core_ws/install
 cd "$WS"
@@ -124,8 +124,8 @@ cd "$WS"
 # `ros2 run h12_lowerbody_rl fame_node` available in a shell. unitree_hg needs
 # ros-humble-rosidl-generator-dds-idl and torch, both in the image. Use
 # GOLEM_LOWERBODY=almi to stand and walk (see docs/MACOS.md).
-PKGS="custom_ros_messages magpie_msgs h12_ros2_model golem_safety golem_upper_ik h12_slam golem_bringup unitree_hg h12_lowerbody_rl"
-BRINGUP_STUB_DEPS="estop livox_ros_driver2 fast_lio model_server cl_realsense lmg_deploy g1_description g1_dex3 g1_locomotion g1_navigation"
+PKGS="custom_ros_messages magpie_msgs golem_ros2_models golem_safety golem_upper_ik h12_slam golem_bringup unitree_hg h12_lowerbody_rl"
+BRINGUP_STUB_DEPS="estop livox_ros_driver2 fast_lio model_server cl_realsense lmg_deploy g1_dex3 g1_locomotion g1_navigation"
 
 for _dep in $BRINGUP_STUB_DEPS; do
     mkdir -p "$INSTALL_BASE/$_dep/share/$_dep"

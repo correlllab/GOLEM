@@ -14,9 +14,10 @@ controller:
   v_lim: 0.5   # palm linear speed limit, m/s
   w_lim: 1.0   # palm angular speed limit, rad/s
   dq_lim: 1.0  # arm joint speed limit, rad/s
-  # self-collision distance the IK keeps, m. The start-up posture, home, has a
-  # torso-shoulder-yaw sphere pair 0.0022 m apart
-  d_min: 0.002
+  # self-collision distance the IK keeps between sphere pairs, m, as on the
+  # H1-2. The closest pairs at the start-up posture, home, are the upper arms'
+  # against the torso, 0.025 m apart (CL_Assets/README.md)
+  d_min: 0.02
   timeout: 5.0
   # waist hold angles, rad, sent in every command; the IK only moves the arms,
   # with the waist at its measured angle (re-locked at each goal's start)

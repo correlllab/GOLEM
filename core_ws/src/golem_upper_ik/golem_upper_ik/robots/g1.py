@@ -52,8 +52,9 @@ NAMED_CONFIGS = {
     'home':  # zero posture, forearms forward; the example's first stage
         np.zeros(len(ENABLED_JOINTS)),
     # straight arms hanging below the shoulders. The one named configuration in
-    # self-collision: each hand and wrist sits 2 to 5 cm inside its hip-pitch sphere, so a
-    # goal to it stops short with the barrier on, and a planned goal to it fails
+    # self-collision: the real wrists and hands rest on the hips (g1_description's meshes
+    # touch), and each hand and wrist sphere sits 2 to 5 cm inside its hip-pitch sphere, so
+    # a goal to it stops short with the barrier on, and a planned goal to it fails
     'arms_down':
         np.array([0.0, 0.0, 0.0, HALF_PI, 0.0, 0.0, 0.0,
                   0.0, 0.0, 0.0, HALF_PI, 0.0, 0.0, 0.0]),
@@ -87,10 +88,13 @@ def model_paths() -> dict:
     RViz. The self-collision model is the sphere-packed G1 and its SRDF (golem_ros2_models'
     paths); its spheres were packed on the rubber-hand G1, two per hand at the Dex3-1 palm
     and none on the fingers, so the barrier and the planner do not see the Dex3-1 fingers.
-    The G1's configs keep pairs 2 mm apart (controller.d_min; the H1-2's keep 20 mm). The IK
-    cannot start from a pose with overlapping spheres: the start-up's first step has no
-    solution and frame_task_server stops. On the real G1 in debug mode the arms hang limp
-    until its first command, so they must hang clear of the hips (hanging freely, the wrists
-    rest on the hips, clear; arms_down is not)
+    The G1's configs keep pairs 20 mm apart (controller.d_min), as the H1-2's do; at home the
+    closest pairs, the upper arms against the torso, are 25 mm apart. The IK can start a few
+    millimetres inside that keep-out, and the barrier pushes the pair back out, but not much
+    further: from a pose with a pair about 10 mm apart or closer, the start-up's first step
+    has no solution and frame_task_server stops. On the real G1 in debug mode the arms hang
+    limp until its first command, so they must hang clear (in the sim they hang with the
+    wrists resting on the hips, their spheres 20 mm from the hip spheres; arms_down is inside
+    them)
     '''
     return paths.model_paths('g1')

@@ -31,10 +31,9 @@ SHARED_CONTROLLER_KEYS = (
     'threshold_ik', 'threshold_joint', 'threshold_linear', 'threshold_angular',
 )
 # where the configs differ from the old loaders' fixtures: the G1 has a self-collision model,
-# so its planner is on, and its d_min is one its start-up posture keeps (home has a
-# torso-shoulder-yaw sphere pair 0.0022 m apart)
+# so its planner is on
 FIXTURE_DIFFERENCES = {
-    'g1': {('controller', 'd_min'): 0.002, ('planner', 'enabled'): True},
+    'g1': {('planner', 'enabled'): True},
 }
 G1_CONTROLLER_KEYS = (
     'state_timeout', 'startup_timeout', 'startup_move_timeout', 'follow_tolerance', 'imu_frame',

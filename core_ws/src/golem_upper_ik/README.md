@@ -77,7 +77,7 @@ nothing of another robot's packages: the H1-2 builds and runs without the `g1_*`
 | Planner frames | `left/right_grasp_frame` | `left/right_hand_palm_link` |
 | IMU frame | `torso_link` | `imu_in_pelvis` (`controller.imu_frame` overrides) |
 | Model (`golem_ros2_models`) | `h1_2_magpie.urdf` | `g1_29dof_with_hand_rev_1_0.urdf` |
-| Self-collision model | `h1_2_magpie_sphere.urdf` + `h1_2_magpie_sphere_collision.srdf` | `g1_sphere.urdf` + `g1_sphere_collision.srdf`, packed on the rubber-hand G1: two spheres per hand at the Dex3-1 palm, none on the fingers, so the barrier and the planner do not see the Dex3-1 fingers |
+| Self-collision model | `h1_2_magpie_sphere.urdf` + `h1_2_magpie_sphere_collision.srdf` | `g1_sphere.urdf` + `g1_sphere_collision.srdf`, packed on the rubber-hand G1: two spheres per hand at the Dex3-1 palm, none on the fingers, so the barrier and the planner do not see the Dex3-1 fingers. Its torso spheres stay inside the torso's flanks, where the hanging upper arms are 9 mm from the torso (`CL_Assets/README.md`) |
 | Start-up postures | `init_1`, `init_2`, `init_3`, `home` | `home` |
 | Named configurations | `NAMED_CONFIGS` in `robots/h12.py` (`home`, `t_pose`, `prep`, `staging_left`, ...) | `NAMED_CONFIGS` in `robots/g1.py` (`home`, `arms_down`, `t_pose`, `arms_front_45`) |
 | `topics.safety_out` default | `/lowcmd` | `/lowcmd` |
@@ -113,7 +113,7 @@ config outside the tables is not refused.
 | `topics.safety_out` | per robot (above) | `golem_safety`'s output for the follow gate: `/lowcmd`, the output of every `golem_safety` mode; another topic is refused |
 | `controller.v_lim`, `w_lim` | 1.0, 2.0 | end-effector linear (m/s) and angular (rad/s) speed limits |
 | `controller.dq_lim` | 1.0 | IK joint speed limit, rad/s |
-| `controller.d_min` | 0.02 | self-collision distance the IK keeps, m; the G1's configs set 0.002, since its start-up posture, `home`, has a torso–shoulder-yaw sphere pair 0.0022 m apart |
+| `controller.d_min` | 0.02 | self-collision distance the IK keeps between sphere pairs, m; every config of both robots keeps it (the G1's closest pairs at `home`, the upper arms against the torso, are 0.025 m apart) |
 | `controller.timeout` | 10.0 | s per goal sent with a zero `duration` |
 | `controller.threshold_ik`, `threshold_joint`, `threshold_linear`, `threshold_angular` | 0.001, 0.01, 0.002, 0.01 | convergence: IK velocity, rad, m, rad |
 | `controller.hold_targets` | 0 for each held joint | the held joints' angles, rad, a mapping by joint name |
@@ -197,14 +197,17 @@ then moves only in the start-up step 4.
   IK solve: `Planning is turned off: ...; send the goal with plan=false`. A profile without a
   self-collision model could not plan either (`Planning is unavailable`); both robots' have
   one.
-- The G1's `arms_down` is in self-collision: each hand and wrist sits 2 to 5 cm inside its
-  hip-pitch sphere. A goal to it stops short, held off by the barrier, and a planned goal to
-  it fails (`goal is in self-collision`). Every other named configuration of both robots is
-  collision-free.
-- The barrier cannot pull apart sphere pairs that already overlap: from such a measured pose
+- The G1's `arms_down` is in self-collision: the real wrists and hands rest on the hips, and
+  each hand and wrist sphere sits 2 to 5 cm inside its hip-pitch sphere. A goal to it stops
+  short, held off by the barrier, and a planned goal to it fails (`goal is in
+  self-collision`). Every other named configuration of both robots is collision-free.
+- The barrier pushes a sphere pair that starts a few millimetres inside `d_min` back out, but
+  not one much further in: from a measured pose with a pair overlapping, or on the G1 about
+  10 mm apart or closer (the start-up from the limp arms rolled in toward the torso, offline),
   the IK's quadratic program has no solution, and the move fails at its first step. On the
-  G1 the limp arms settle with the wrists resting on the hips (elbows about 1.25 rad), clear
-  of the spheres, and the start-up reaches `home` from there; from `arms_down` it could not.
+  G1 the limp arms settle with the wrists resting on the hips (elbows about 1.25 rad), their
+  spheres 20 mm from the hip spheres, and the start-up reaches `home` from there; from
+  `arms_down` it could not.
 - On ROS domain 0 every control step first checks that `/lowstate` is no staler than
   `controller.max_state_lag_ms` (the larger of its tick lag and its age); a stale state aborts
   the goal and the last command keeps going out. The sims stamp the tick in sim steps, so the

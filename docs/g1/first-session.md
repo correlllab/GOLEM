@@ -159,10 +159,12 @@ The workspace is built with `--symlink-install`, so a Python edit under
 - It hangs still: the safety layer checks every joint's position, speed and
   torque from its first `rt/lowstate` (step 6).
 - Its arms hang freely, the wrists resting on the hips. The arm controller's
-  self-collision model keeps every hand and wrist out of a sphere around its
-  hip, and its start-up begins wherever the arms hang: from a hand or wrist
-  inside that sphere it stops at once ("did not start", with a QP or
-  `NoSolutionFound` error that does not say self-collision).
+  self-collision model keeps every hand and wrist 20 mm out of a sphere around
+  its hip, and each upper arm 20 mm off the torso's spheres. Its start-up
+  begins wherever the arms hang, and from a hand or wrist about 10 mm or less
+  from its hip sphere, or an upper arm pressed in against the torso, it stops
+  at once ("did not start", with a QP or `NoSolutionFound` error that does not
+  say self-collision).
 - Nobody is within reach of the arms or the legs. The arms start moving to
   `home` a few seconds after the launch in step 7, and the legs a few seconds
   after the controller in step 10.
@@ -329,8 +331,9 @@ controller exits with an error, go to step 9.
 This session uses only `t_pose` and `home`. Send one goal at a time, and
 wait for each to finish before sending the next. Send `home` last, so the
 arms are low, the forearms forward at waist height, when step 9 turns them
-off. `arms_down` is not used: its hands and wrists sit inside the hip spheres
-of the controller's self-collision model, so a goal to it stops short.
+off. `arms_down` is not used: its hands and wrists rest on the hips, inside
+the hip spheres of the controller's self-collision model, so a goal to it
+stops short.
 
 ```bash
 ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \

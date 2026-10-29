@@ -72,16 +72,20 @@ Hazards not handled in code:
   would meet a command held wherever the robot used to be.
 - The arm IK's self-collision model was packed on the rubber-hand G1: it has
   no spheres on the Dex3-1 fingers, which can hit the torso, the legs or the
-  other arm. Its keep-out distance (controller.d_min) is 2 mm, against the
-  H1-2's 20 mm.
-- The arms must start clear of the hips. In debug mode golem_safety's
-  zero-gain stream leaves the arms limp in the gantry until the controller's
-  first command, so the start-up begins wherever they hang. If a hand or wrist
-  hangs inside its hip-pitch sphere (any overlapping sphere pair), the
-  start-up's first IK step has no solution and frame_task_server stops at
+  other arm. It keeps its spheres 20 mm apart (controller.d_min), as on the
+  H1-2, but its torso spheres stand up to 19 mm inside the torso's flanks
+  (CL_Assets/README.md): an upper arm rolled in toward the torso stops a few
+  millimetres from it.
+- The arms must start clear of the hips and the torso. In debug mode
+  golem_safety's zero-gain stream leaves the arms limp in the gantry until the
+  controller's first command, so the start-up begins wherever they hang. If a
+  sphere pair starts about 10 mm apart or closer (half the keep-out; a hand or
+  wrist in its hip-pitch sphere, or an upper arm rolled in against the torso),
+  the start-up's first IK step has no solution and frame_task_server stops at
   once ("did not start" with a QP / NoSolutionFound error, which does not say
-  self-collision). Hanging freely, the wrists rest on the hips, clear of the
-  spheres; arms_down (elbows at pi/2) is inside them.
+  self-collision). Hanging freely in the sim, the wrists rest on the hips with
+  their spheres 20 mm from the hip spheres; arms_down (elbows at pi/2) is
+  inside them.
 - The gains are not tuned on our G1: the waist's damping ratio is
   about 0.42-0.45 at home (g1_split.yaml).
 """

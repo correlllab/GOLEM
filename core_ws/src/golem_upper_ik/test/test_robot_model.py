@@ -166,8 +166,9 @@ def pair_distances(model, q_reduced):
 
 def test_g1_model_has_collision(models):
     '''
-    Every named configuration is collision-free and keeps every G1 config's d_min, except
-    arms_down: its hands and wrists sit inside the hip-pitch spheres (robots/g1.py)
+    Every named configuration is collision-free and keeps every G1 config's d_min, the
+    H1-2's 0.02 m, except arms_down: its hands and wrists sit inside the hip-pitch spheres
+    (robots/g1.py)
     '''
     from golem_upper_ik.config import load_controller_config
     model = models('g1')
@@ -178,6 +179,7 @@ def test_g1_model_has_collision(models):
     assert len(model.collision_model_body_reduced.collisionPairs) == 210
     d_min = max(load_controller_config('g1', name)['controller']['d_min']
                 for name in ('g1_split', 'sim_split'))
+    assert d_min == 0.02
     for name, q in model.profile.named_configs.items():
         distances = pair_distances(model, q)
         if name == 'arms_down':

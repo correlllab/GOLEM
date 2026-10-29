@@ -114,7 +114,8 @@ left hand closes and opens. The named postures are `NAMED_CONFIGS` in
   wrappers warn when it is set ([DDS and networking](dds.md)).
 - The arm controller keeps the arms out of self-collision and plans with
   OMPL (`plan: true`), as on the H1-2. Its spheres cover the Dex3-1 palms but
-  not the fingers. `arms_down` is inside the hip spheres, so a goal to it stops
+  not the fingers, and it keeps them 20 mm apart, as on the H1-2. `arms_down`
+  rests the hands on the hips, inside the hip spheres, so a goal to it stops
   short and a planned one fails. `slow_mode: true` (a quarter of the speed) and
   a `FrameTask` with `relative: true` work as on the H1-2.
 

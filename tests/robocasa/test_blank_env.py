@@ -29,7 +29,7 @@ MAX_PELVIS_DROP = 0.10
 # (the runners' clearances: 0.02 for the H1-2, 0.001 for the G1).
 SPAWN_CLEARANCE_MAX = 0.03
 # The H1-2's band, as h12_mujoco.sim_loop builds it.
-H12_BAND = dict(dz=0.01, stiffness=1e4, damping=2e3)
+H12_BAND = dict(dz=-0.04, stiffness=1e4, damping=2e3)
 # Bodies robosuite's Arena adds to every scene: mocap end-effector targets for
 # its GUI, with non-colliding geoms.
 ARENA_MOCAP_BODIES = {"left_eef_target", "right_eef_target"}

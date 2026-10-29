@@ -183,7 +183,9 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     try:
         band_body_id = resolver.body_id("torso_link")            # robot0_torso_link
         anchor = data.xpos[band_body_id].copy()
-        anchor[2] += 0.01
+        # m above the torso's spawn height: the band hangs the robot 4 cm lower
+        # than its spawn, so the feet carry part of its weight
+        anchor[2] -= 0.04
         # Stiff enough to hold the LIMP robot near-upright through the lowerbody
         # controller's band-held idle phase (~20s of frame_task arm-home startup
         # before FAME engages); at stiffness=1e3 it pitched forward to ~60deg and

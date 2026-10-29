@@ -35,14 +35,13 @@ is required before anything builds.
 | `third_party/leprechaun_g1` | G1 robot description (URDF, MJCF, meshes); the G1 overlay mounts it (§8) |
 
 **`core_ws/src` submodules:** `cl_realsense`, `custom_ros_messages`, `estop`,
-`h12_ros2_model`, `livox_ros_driver2`, `magpie_control`, `magpie_msgs`,
+`livox_ros_driver2`, `magpie_control`, `magpie_msgs`,
 `unitree_ros2`.
 
 **`core_ws/src` in-tree packages** (versioned directly in this repo, *not*
-submodules): `FAST_LIO`, `golem_safety`, `golem_upper_ik`, `h12_deploy_mjpc`,
+submodules): `FAST_LIO`, `golem_ros2_models`, `golem_safety`, `golem_upper_ik`, `h12_deploy_mjpc`,
 `h12_lowerbody_rl`, `h12_slam`, `h12_skills`, `golem_bringup`, `lmg_deploy`,
-`model_server`, and the G1 packages in `core_ws/src/g1/` (`g1_description`,
-`g1_dex3`, `g1_locomotion`, `g1_navigation`).
+`model_server`, and the G1 packages in `core_ws/src/g1/` (`g1_dex3`, `g1_locomotion`, `g1_navigation`).
 
 `golem_safety` (C++, `ament_cmake`) and `golem_upper_ik` (Python) are the
 safety layer and arm controller of both robots, so they build for both; the

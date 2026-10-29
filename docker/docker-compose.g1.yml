@@ -44,7 +44,7 @@ services:
       # pins the network interface on top of the shared tuning file.
       CYCLONEDDS_URI: file:///home/code/cyclonedds.xml,file:///home/code/cyclonedds_local.xml
     volumes:
-      # g1_description finds the robot model relative to itself, which resolves to
+      # The walking policy's g1.yaml reads the G1's MJCF at
       # /home/code/third_party/leprechaun_g1; the walking node reads its policy
       # from /home/code/g1_locomotion.
       - type: bind

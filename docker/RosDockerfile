@@ -608,7 +608,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # -----------------------------------------------------------------------------
 # G1 stack: onnxruntime runs HOMIE's walking policy (g1_locomotion); pynput,
 # evdev and xlib serve the G1 keyboard teleop examples; the jsp GUI drives
-# g1_description's display.launch.py. Last, so it can't bust earlier layers.
+# golem_ros2_models' display.launch.py. Last, so it can't bust earlier layers.
 # -----------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-joint-state-publisher-gui python3-evdev python3-xlib \

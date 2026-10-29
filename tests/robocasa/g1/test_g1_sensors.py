@@ -364,10 +364,13 @@ def test_imu_point_is_fastlios_extrinsic():
     """FAST_LIO's mid360 extrinsic_T is the lidar in the IMU frame: the IMU is at -T"""
     import os
     import yaml
-    config = os.path.join(g1_robosuite._REPO, "core_ws", "src", "g1", "g1_navigation", "config",
+    # two levels up from golem_robocasa/g1/: the repo root on the host, /home/code in the container
+    repo = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(g1_robosuite.__file__)),
+                                         "..", ".."))
+    config = os.path.join(repo, "core_ws", "src", "g1", "g1_navigation", "config",
                           "g1_fastlio_sim.yaml")
-    if not os.path.isdir(os.path.join(g1_robosuite._REPO, "core_ws", "src")):   # core_ws is not mounted
-        print(f"  (skipped: no core_ws/src under {g1_robosuite._REPO})")
+    if not os.path.isdir(os.path.join(repo, "core_ws", "src")):   # core_ws is not mounted
+        print(f"  (skipped: no core_ws/src under {repo})")
         return
     with open(config) as f:   # core_ws is there: a missing config is a failure, not a skip
         mapping = yaml.safe_load(f)["/**"]["ros__parameters"]["mapping"]

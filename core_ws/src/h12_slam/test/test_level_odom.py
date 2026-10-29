@@ -1,6 +1,6 @@
 import numpy as np
 
-from h12_slam.level_odom import find_floor_height
+from h12_slam.level_odom import find_floor_height, motion_spread
 from h12_slam.robot_geometry import rpy_to_matrix
 
 RNG = np.random.default_rng(0)
@@ -38,3 +38,33 @@ def test_ramp_rejected_and_no_floor():
     assert find_floor_height(ramp, np.array([0.0, 0.0, 1.0]), 0.0, 0.5, 300) is None
     assert find_floor_height(plane(100, -1.7), np.array([0.0, 0.0, 1.0]),
                              0.0, 1.0, 300) is None
+
+
+# level_odom's defaults: a 2 s window at the MID360's 200 Hz in 4 slices, 0.02 of the mean
+WINDOW, CHUNKS, MAX_SPREAD = 400, 4, 0.02
+
+
+def _specific_force(tilt_rad, rate=200.0):
+    t = np.arange(WINDOW) / rate
+    tilt = np.asarray(tilt_rad(t))
+    return np.column_stack([9.81 * np.sin(tilt), np.zeros(WINDOW), 9.81 * np.cos(tilt)]), t
+
+
+def test_motion_spread_ignores_standing_buzz():
+    # a standing policy's leg buzz: ~2 m/s^2 lateral at 12-30 Hz (the H1-2 sim's: 22 Hz)
+    for freq in (12.0, 22.0, 30.0):
+        ups, t = _specific_force(lambda t: 0.0 * t)
+        ups[:, 1] += 2.7 * np.sin(2 * np.pi * freq * t + 0.7) + RNG.normal(0.0, 0.3, WINDOW)
+        assert motion_spread(ups, CHUNKS) < MAX_SPREAD / 2
+
+
+def test_motion_spread_sees_swaying():
+    # a +-2 deg sway moves the up direction itself
+    for freq in (0.3, 0.5, 1.0):
+        ups, _ = _specific_force(lambda t: np.radians(2.0) * np.sin(2 * np.pi * freq * t))
+        assert motion_spread(ups, CHUNKS) > MAX_SPREAD
+
+
+def test_motion_spread_still():
+    ups, _ = _specific_force(lambda t: 0.0 * t)
+    assert motion_spread(ups, CHUNKS) < 1e-9

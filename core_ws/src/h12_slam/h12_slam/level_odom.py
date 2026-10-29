@@ -10,8 +10,12 @@ Once at startup this node:
   1. averages the IMU specific force (``imu``; FAST-LIO's body frame, the same
      frame the identity extrinsic_R in mid360.yaml assumes) rotated into
      camera_init through TF, giving the up direction in camera_init. The robot
-     must hold still for this window (spread above ``max_accel_spread`` of
-     the mean restarts it);
+     must hold still for this window (``samples``, ~2 s): the mean of each of
+     ``motion_chunks`` equal slices (~0.5 s) must lie within
+     ``max_accel_spread`` of the window's mean (~1 deg of up direction), or
+     the window restarts (motion_spread). Averaging each slice first lets the
+     leg buzz of a standing policy (tens of Hz) pass, while a sway or a step
+     still moves the slice means;
   2. accumulates ``floor_scans`` self-filtered scans (``cloud``) in
      camera_init and finds the floor plane in them (find_floor_height);
   3. publishes the static transform odom -> camera_init: the smallest rotation
@@ -44,6 +48,16 @@ from tf2_ros import (
 from h12_slam.robot_geometry import (
     matrix_to_quat, quat_to_matrix, rotation_aligning, transform_to_rt)
 from h12_slam.self_filter import cloud_points
+
+
+def motion_spread(ups, chunks):
+    """How far the up direction moves over a window of specific-force samples
+    (N x 3): the largest distance from the window's mean to the mean of any of
+    `chunks` equal slices, relative to the mean's norm."""
+    ups = np.asarray(ups, dtype=float)
+    mean = ups.mean(axis=0)
+    slices = np.array([s.mean(axis=0) for s in np.array_split(ups, chunks)])
+    return float(np.linalg.norm(slices - mean, axis=1).max() / np.linalg.norm(mean))
 
 
 def find_floor_height(points, up, sensor_height, min_depth, min_points,
@@ -89,8 +103,9 @@ class LevelOdom(Node):
         self.base_frame = self.declare_parameter('base_frame', 'pelvis').value
         self.footprint_frame = self.declare_parameter(
             'footprint_frame', 'base_footprint').value
-        self.samples = self.declare_parameter('samples', 200).value  # ~1 s of MID360 IMU
-        self.max_spread = self.declare_parameter('max_accel_spread', 0.1).value
+        self.samples = self.declare_parameter('samples', 400).value  # ~2 s of MID360 IMU
+        self.max_spread = self.declare_parameter('max_accel_spread', 0.02).value
+        self.motion_chunks = self.declare_parameter('motion_chunks', 4).value
         self.floor_scans = self.declare_parameter('floor_scans', 10).value  # ~1 s at 10 Hz
         # m below the lidar; the lidar is >= ~1.4 m above the floor in every
         # stance, and table tops (~0.75 m) sit closer to it than this.
@@ -143,7 +158,7 @@ class LevelOdom(Node):
         ups = np.array(self.ups)
         self.ups = []
         mean = ups.mean(axis=0)
-        spread = np.linalg.norm(ups - mean, axis=1).max() / np.linalg.norm(mean)
+        spread = motion_spread(ups, self.motion_chunks)
         if spread > self.max_spread:
             self.get_logger().warn(
                 f'robot moving (accel spread {spread:.2f}); waiting for it to stand still',

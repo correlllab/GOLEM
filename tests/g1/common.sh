@@ -2,7 +2,7 @@
 # The containers of the G1 acceptance tests, sourced by test_sim_*.sh here.
 #
 # Both are the compose services as docker_run.sh --g1 starts them (the G1
-# overlay with its mounts and GOLEM_ROBOT=g1), with test_compose.yml on top,
+# overlay, GOLEM_ROBOT=g1), with test_compose.yml on top,
 # which g1_test_setup writes into the run's output directory:
 #   - the robocasa container has no network and the ros container joins its
 #     network namespace, both on its loopback with multicast, so no DDS leaves
@@ -11,7 +11,7 @@
 #   - the ros container loads the run's own cyclonedds_local.xml, which pins no
 #     interface, in place of the shared one in $GOLEM_CACHE_DIR, which a running
 #     G1 ros container rereads in every process it starts;
-#   - the ros container builds core_ws for the G1 (launch_ros.sh, GOLEM_ROBOT=g1)
+#   - the ros container builds core_ws, both robots' packages (launch_ros.sh),
 #     into $GOLEM_CACHE_DIR/g1_tests/{build,install,log}, so the checkout's own
 #     core_ws/build and core_ws/install are left alone; CORE_WS=<dir> builds
 #     that workspace in place instead.

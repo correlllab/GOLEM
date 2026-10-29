@@ -241,6 +241,22 @@ services:
         read_only: true
         bind:
           create_host_path: false
+      # HOMIE's policy for the G1's walking node (g1_locomotion), which reads it
+      # from /home/code/g1_locomotion; the policy's g1.yaml names the G1's MJCF
+      # in /home/code/CL_Assets, mounted above.
+      - type: bind
+        source: ../core_ws/src/g1/g1_locomotion/policy
+        target: /home/code/g1_locomotion
+        read_only: true
+        bind:
+          create_host_path: false
+      # The repo's tools/, for tools/read_lowstate.py (docs/g1/first-session.md, step 6).
+      - type: bind
+        source: ../tools
+        target: /home/code/tools
+        read_only: true
+        bind:
+          create_host_path: false
       # --- MuJoCo MPC (MJPC) dev mounts -------------------------------------
       # rw SOURCE mount: the ../mujoco_mpc submodule fills the (build-time-removed)
       # clone path so the C++ agent_server / task XMLs are host-editable. The

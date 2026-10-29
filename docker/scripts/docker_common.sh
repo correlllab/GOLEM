@@ -229,7 +229,8 @@ require_h12_model() {
     done
 }
 
-# The walking policy, which the G1 overlay bind-mounts into the ros service.
+# HOMIE's walking policy, which docker-compose.yml bind-mounts into every ros
+# container (launch_ros.sh builds both robots' packages there).
 require_g1_policy() {
     local policy="$GOLEM_ROOT/core_ws/src/g1/g1_locomotion/policy"
     local name
@@ -241,7 +242,7 @@ require_g1_policy() {
 prepare_mounts() {
     local service=$1
     case "$service" in
-        ros) require_h12_model; require_g1_model ros; [ "${GOLEM_ROBOT:-h12}" != g1 ] || require_g1_policy ;;
+        ros) require_h12_model; require_g1_model ros; require_g1_policy ;;
         robocasa) [ "${GOLEM_ROBOT:-h12}" != g1 ] || require_g1_model robocasa ;;
     esac
     case "$service" in

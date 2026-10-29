@@ -16,7 +16,7 @@ class Workflows(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         shutil.copytree(REPO / 'docker', self.root / 'docker', ignore=shutil.ignore_patterns('.env', '__pycache__'))
-        for name in ('unitree_sdk2_python/setup.py', *self.H12_MODEL, *self.G1_MODEL,
+        for name in ('unitree_sdk2_python/setup.py', *self.H12_MODEL, *self.G1_MODEL, *self.G1_POLICY,
                      'CL_isaaclab_sim/sim_main.py', 'golem_robocasa/h12_mujoco.py',
                      'core_ws/src/magpie_msgs/package.xml', 'core_ws/src/custom_ros_messages/package.xml',
                      'core_ws/src/livox_ros_driver2/package_ROS2.xml', 'core_ws/cyclonedds.xml',
@@ -113,7 +113,6 @@ if 'config' in sys.argv:
     def test_ros_checks_h12_model_for_both_robots(self):
         # golem_ros2_models installs both robots' models in every ros container; the sims
         # read none of CL_Assets/ros_assets.
-        self.add_g1_files()
         for name in self.H12_MODEL:
             for label, content in (('missing', None), ('LFS pointer', self.LFS_POINTER)):
                 for robot in ('h12', 'g1'):
@@ -247,20 +246,14 @@ if 'config' in sys.argv:
         'CL_Assets/ros_assets/h1_2_magpie_sphere_collision.srdf',
         'CL_Assets/meshes/h1_2/pelvis.STL', 'CL_Assets/meshes/magpie/mount.stl',
     )
-    # The walking policy, which only the G1's ros service mounts.
-    G1_FILES = (
+    # HOMIE's walking policy, which every ros container mounts.
+    G1_POLICY = (
         'core_ws/src/g1/g1_locomotion/policy/deploy.onnx',
         'core_ws/src/g1/g1_locomotion/policy/g1.yaml',
         'core_ws/src/g1/g1_locomotion/policy/homie_policy.py',
     )
     LFS_HINT = 'lfs pull'
     LFS_POINTER = 'version https://git-lfs.github.com/spec/v1\noid sha256:0\nsize 1\n'
-
-    def add_g1_files(self):
-        for name in self.G1_FILES:
-            p = self.root / name
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text('fixture')
 
     def overlay(self):
         return str(self.root / 'docker/docker-compose.g1.yml')
@@ -302,7 +295,6 @@ esac
                 self.assertIn('robot: h12', r.stderr)
 
     def test_g1_flag_adds_overlay(self):
-        self.add_g1_files()
         r = self.run_script('docker/scripts/docker_run.sh', 'robocasa', '--g1')
         self.assertEqual(r.returncode, 0, r.stderr)
         run = self.run_calls()[-1]
@@ -311,7 +303,6 @@ esac
         self.assertEqual(r.stderr.count('robot: g1'), 1)
 
     def test_robot_flags_are_stripped_wherever_they_appear(self):
-        self.add_g1_files()
         cases = (
             (('robocasa', '--g1', '--headless'), 'g1', ['launch_robocasa.sh', '--headless']),
             (('robocasa', '--headless', '--g1'), 'g1', ['launch_robocasa.sh', '--headless']),
@@ -332,7 +323,6 @@ esac
                 self.assertFalse({'--g1', '--h12'} & set(run), run)
 
     def test_robot_flag_composes_with_restart_in_either_order(self):
-        self.add_g1_files()
         for args in (('ros', '--g1', '--restart'), ('ros', '--restart', '--g1')):
             with self.subTest(args=args):
                 (self.root / 'calls').unlink(missing_ok=True)
@@ -342,7 +332,6 @@ esac
                 self.assertIn(self.overlay(), self.compose_files(self.run_calls()[-1]))
 
     def test_quoted_command_containing_robot_flag_is_left_alone(self):
-        self.add_g1_files()
         r = self.run_script('docker/scripts/docker_run.sh', 'ros', 'bash', '-lc', 'echo --g1')
         self.assertEqual(r.returncode, 0, r.stderr)
         run = self.run_calls()[-1]
@@ -350,7 +339,6 @@ esac
         self.assertNotIn(self.overlay(), self.compose_files(run))
 
     def test_robot_precedence_flag_over_shell_over_env_file(self):
-        self.add_g1_files()
         (self.root / 'docker/.env').write_text('GOLEM_ROBOT=g1\n')
         cases = (
             ((), {}, True),                                   # .env alone
@@ -369,7 +357,6 @@ esac
                 self.assertIn('robot: g1' if g1 else 'robot: h12', r.stderr)
 
     def test_env_robot_g1_adds_overlay(self):
-        self.add_g1_files()
         (self.root / 'docker/.env').write_text('GOLEM_ROBOT=g1\n')
         for service in ('robocasa', 'ros'):
             with self.subTest(service=service):
@@ -378,7 +365,6 @@ esac
                 self.assertIn(self.overlay(), self.compose_files(self.run_calls()[-1]))
 
     def test_invalid_or_conflicting_robot_is_rejected(self):
-        self.add_g1_files()
         for args, env in ((('robocasa',), {'GOLEM_ROBOT': 'h1'}),
                           (('robocasa', '--g1', '--h12'), {})):
             with self.subTest(args=args, env=env):
@@ -387,7 +373,6 @@ esac
                 self.assertFalse(self.compose_calls())
 
     def test_g1_writes_cyclonedds_local_xml(self):
-        self.add_g1_files()
         xml = self.root / 'container_cache/cyclonedds_local.xml'
         r = self.run_script('docker/scripts/docker_run.sh', 'ros', '--g1')
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -442,7 +427,6 @@ esac
         # A running G1 ros container reads the shared file through a single-file bind
         # mount each time a process in it starts, so nothing that starts no ros
         # container may change it.
-        self.add_g1_files()
         self.install_flock_stub()
         for name in ('tests/robocasa/g1/run_in_container.sh', 'tests/robocasa/surface/run.sh',
                      'tests/g1/common.sh'):
@@ -489,7 +473,6 @@ esac
             self.assertTrue(any(n.endswith('-ros-build') for n in removed), removed)
 
     def test_g1_ros_start_replaces_dds_pin_atomically(self):
-        self.add_g1_files()
         starts = (
             ('docker_run.sh ros --g1', 'docker/scripts/docker_run.sh', ('ros', '--g1'), 'eth7'),
             ('docker_stack.sh up', 'docker/scripts/docker_stack.sh', ('up', 'robocasa', '--g1', '--headless'), ''),
@@ -510,7 +493,6 @@ esac
                 self.assertEqual(list(xml.parent.glob('cyclonedds_local.xml?*')), [])
 
     def test_g1_dds_pin_is_written_only_when_a_ros_container_starts(self):
-        self.add_g1_files()
         self.install_ip_stub()
         up = {'IP_STATE': 'UP', 'IP_INET': '192.168.123.222/24'}
         refused = (
@@ -529,7 +511,6 @@ esac
                 self.assert_pin_untouched(xml, content, before)
 
     def test_g1_dds_interface_must_be_an_interface_name(self):
-        self.add_g1_files()
         xml = self.root / 'container_cache/cyclonedds_local.xml'
         for name in ('eth0"/><Tracing', 'a' * 16, 'eth 0', 'eth0\n', 'éth0', 'eth/0'):
             for service in ('ros', 'robocasa'):
@@ -548,7 +529,6 @@ esac
                 self.assertEqual(xml.read_text().strip(), self.PIN.format(name))
 
     def test_g1_interface_on_a_sim_domain_warns(self):
-        self.add_g1_files()
         self.install_ip_stub()
         up = {'IP_STATE': 'UP', 'IP_INET': '192.168.123.222/24'}
 
@@ -589,13 +569,11 @@ esac
             with self.subTest(wrapper=name):
                 (self.root / 'calls').unlink(missing_ok=True)
                 self.run_script(name, *args)
-                # The fixture has no G1 policy files: reaching compose without the overlay
-                # proves the H1-2 was selected.
+                # Reaching compose without the overlay proves the H1-2 was selected.
                 self.assertTrue(self.run_calls(), f'{name} never reached its compose run')
                 self.assertFalse(any(self.overlay() in c for c in self.calls()))
 
     def test_g1_sim_checks_its_model_files(self):
-        self.add_g1_files()
         meshes = str(Path(self.G1_MESH).parent)
         cases = (('missing', self.G1_XML, None, self.G1_XML),
                  ('no meshes', self.G1_MESH, None, meshes),
@@ -618,19 +596,24 @@ esac
                 self.assertIn(self.LFS_HINT, r.stderr)
                 self.assertFalse(self.compose_calls())
 
-    def test_g1_missing_policy_file_fails_early_for_ros_only(self):
-        # The walking node in the ros container reads the policy; the sim reads none of it.
-        self.add_g1_files()
+    def test_missing_policy_file_fails_early_for_every_ros_container(self):
+        # Every ros container mounts HOMIE's policy for the walking node; the sim reads none of it.
         policy = self.root / 'core_ws/src/g1/g1_locomotion/policy/deploy.onnx'
         policy.unlink()
-        r = self.run_script('docker/scripts/docker_run.sh', 'ros', '--g1')
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn('deploy.onnx', r.stderr)
-        self.assertFalse(self.compose_calls())
+        for args in (('--g1',), ('--h12',), ()):
+            with self.subTest(args=args):
+                (self.root / 'calls').unlink(missing_ok=True)
+                r = self.run_script('docker/scripts/docker_run.sh', 'ros', *args)
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn('deploy.onnx', r.stderr)
+                self.assertFalse(self.compose_calls())
         shutil.rmtree(self.root / 'core_ws/src/g1/g1_locomotion')
-        r = self.run_script('docker/scripts/docker_run.sh', 'robocasa', '--g1')
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue(self.run_calls())
+        for args in (('--g1',), ('--h12',)):
+            with self.subTest('sim', args=args):
+                (self.root / 'calls').unlink(missing_ok=True)
+                r = self.run_script('docker/scripts/docker_run.sh', 'robocasa', *args)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertTrue(self.run_calls())
 
     def test_h12_sim_ignores_missing_g1_model(self):
         shutil.rmtree(self.root / 'CL_Assets/g1')
@@ -642,7 +625,6 @@ esac
 
     def test_ros_checks_g1_model_for_both_robots(self):
         # golem_ros2_models installs both robots' models in every ros container.
-        self.add_g1_files()
         sphere = 'CL_Assets/g1/g1_sphere.urdf'
         for label, content in (('missing', None), ('LFS pointer', self.LFS_POINTER)):
             for robot in ('h12', 'g1'):
@@ -665,7 +647,6 @@ esac
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_g1_rejected_on_mac_and_isaac(self):
-        self.add_g1_files()
         cases = (
             ('docker/scripts/docker_run.sh', ('robocasa', '--g1'), {'GOLEM_PLATFORM': 'mac', 'TEST_MAC': '1'}),
             ('docker/mac/scripts/docker_run_mac.sh', ('ros', '--g1'), {'TEST_MAC': '1'}),
@@ -682,7 +663,6 @@ esac
                 self.assertFalse(self.compose_calls())
 
     def test_g1_domain0_requires_interface(self):
-        self.add_g1_files()
         self.install_ip_stub()
         up = {'IP_STATE': 'UP', 'IP_INET': '192.168.123.222/24'}
 
@@ -736,7 +716,6 @@ esac
         # check_domain must see the robot the wrapper resolved from --g1 or from a
         # value that only normalises after configure_robot (uppercase), not just a
         # GOLEM_ROBOT=g1 that is already in the environment.
-        self.add_g1_files()
         self.install_ip_stub()
         up = {'IP_STATE': 'UP', 'IP_INET': '192.168.123.222/24'}
         selections = (
@@ -817,7 +796,6 @@ esac
         return envs[next(i for i, c in enumerate(calls) if 'up' in c)]
 
     def test_stack_g1_selects_the_g1_sim_launch(self):
-        self.add_g1_files()
         self.install_env_recording_docker()
         r = self.run_script('docker/scripts/docker_stack.sh', 'up', 'robocasa', '--g1', '--headless')
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -828,7 +806,6 @@ esac
         self.assertEqual(r.stderr.count('robot: g1'), 1)
 
     def test_stack_g1_overrides_leftover_bringup_selection(self):
-        self.add_g1_files()
         self.install_env_recording_docker()
         (self.root / 'docker/.env').write_text('GOLEM_BRINGUP_PACKAGE=leftover_bringup\n')
         r = self.run_script('docker/scripts/docker_stack.sh', 'up', 'robocasa', '--g1', '--headless',
@@ -882,22 +859,36 @@ esac
         self.assertIn('G1_DDS_INTERFACE', ros['environment'])
         self.assertEqual(ros['environment']['CYCLONEDDS_URI'],
                          'file:///home/code/cyclonedds.xml,file:///home/code/cyclonedds_local.xml')
-        # The walking node in the ros container reads HOMIE's policy; the sim reads none of it.
-        policy = {'/home/code/g1_locomotion': str(self.root / 'core_ws/src/g1/g1_locomotion/policy'),
-                  '/home/code/tools': str(self.root / 'tools')}
-        for service, extra in ((services['robocasa'], {}),
-                               (ros, {'/home/code/cyclonedds_local.xml': '/cache/cyclonedds_local.xml', **policy})):
-            mounts = {v['target']: v for v in service['volumes']}
-            for target, source in extra.items():
-                self.assertEqual(mounts[target]['source'], source)
-                self.assertTrue(mounts[target]['read_only'], target)
-                self.assertFalse(mounts[target].get('bind', {}).get('create_host_path', False), target)
+        # The overlay adds only the DDS pin file; HOMIE's policy and tools/ are in the base file.
+        mounts = {v['target']: v for v in ros['volumes']}
+        pin = mounts['/home/code/cyclonedds_local.xml']
+        self.assertEqual(pin['source'], '/cache/cyclonedds_local.xml')
+        self.assertTrue(pin['read_only'])
+        self.assertFalse(pin.get('bind', {}).get('create_host_path', False))
+        overlay = (self.root / 'docker/docker-compose.g1.yml').read_text()
+        self.assertNotIn('g1_locomotion', overlay)
+        self.assertNotIn('/home/code/tools', overlay)
         self.assertFalse([v for v in services['robocasa']['volumes'] if 'g1_locomotion' in v['source']])
         # The G1's model comes from the base file's CL_Assets mount, for both services.
         for service in (services['robocasa'], ros):
             mounts = {v['target']: v['source'] for v in service['volumes']}
             self.assertEqual(mounts['/home/code/CL_Assets'], str(self.root / 'CL_Assets'))
             self.assertFalse([s for s in mounts.values() if 'third_party' in s])
+
+    def test_base_ros_service_mounts_both_robots(self):
+        # Every ros container, the H1-2's included, runs either robot's bringup: HOMIE's
+        # policy for the G1's walking node and tools/ come from the base file.
+        ros = self.compose_config('docker-compose.yml', profile='ros')['ros']
+        mounts = {v['target']: v for v in ros['volumes']}
+        expected = {'/home/code/g1_locomotion': str(self.root / 'core_ws/src/g1/g1_locomotion/policy'),
+                    '/home/code/tools': str(self.root / 'tools')}
+        for target, source in expected.items():
+            self.assertEqual(mounts[target]['source'], source)
+            self.assertTrue(mounts[target]['read_only'], target)
+            self.assertFalse(mounts[target].get('bind', {}).get('create_host_path', False), target)
+        self.assertNotIn('GOLEM_ROBOT', ros['environment'])
+        sim = self.compose_config('docker-compose.yml', profile='robocasa')['robocasa']
+        self.assertFalse([v for v in sim['volumes'] if 'g1_locomotion' in v['source']])
 
     def test_stack_compose_bringup_defaults_and_overrides(self):
         files = ('docker-compose.yml', 'docker-compose.stack.yml')

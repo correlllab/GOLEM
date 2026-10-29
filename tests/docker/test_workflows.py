@@ -849,7 +849,8 @@ esac
         self.assertEqual(ros['environment']['CYCLONEDDS_URI'],
                          'file:///home/code/cyclonedds.xml,file:///home/code/cyclonedds_local.xml')
         # The walking node in the ros container reads HOMIE's policy; the sim reads none of it.
-        policy = {'/home/code/g1_locomotion': str(self.root / 'core_ws/src/g1/g1_locomotion/policy')}
+        policy = {'/home/code/g1_locomotion': str(self.root / 'core_ws/src/g1/g1_locomotion/policy'),
+                  '/home/code/tools': str(self.root / 'tools')}
         for service, extra in ((services['robocasa'], {}),
                                (ros, {'/home/code/cyclonedds_local.xml': '/cache/cyclonedds_local.xml', **policy})):
             mounts = {v['target']: v for v in service['volumes']}

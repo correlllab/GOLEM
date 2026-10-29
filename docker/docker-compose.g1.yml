@@ -46,6 +46,13 @@ services:
         read_only: true
         bind:
           create_host_path: false
+      # The repo's tools/, for tools/read_lowstate.py (docs/g1/first-session.md, step 6).
+      - type: bind
+        source: ../tools
+        target: /home/code/tools
+        read_only: true
+        bind:
+          create_host_path: false
       - type: bind
         source: ${GOLEM_CACHE_DIR:-../container_cache}/cyclonedds_local.xml
         target: /home/code/cyclonedds_local.xml

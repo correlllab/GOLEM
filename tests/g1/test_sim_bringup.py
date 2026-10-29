@@ -16,9 +16,11 @@ sim's elastic band while golem_safety streams zero-gain rt/lowcmd, HOMIE's
 walking node pre-poses the legs and starts its policy under the band, and it
 releases the band once frame_task_server is up. Both check that start-up: the
 band holds the robot upright, golem_safety latches no estop, the walking node
-starts, the band comes off once (after the first /left_ee_pose the test sees,
-and within the walking node's band.max_wait of the policy's start), and the
-robot stands for 5 s after it. The report also gives the pelvis and the feet
+starts, the band comes off once because frame_task_server is up (the walking
+node's log gives /left_ee_pose as the reason for every toggle call, not
+band.max_wait; the band is off after the first /left_ee_pose the test sees and
+within band.max_wait of the policy's start), and the robot stands for 5 s
+after it. The report also gives the pelvis and the feet
 around the release, for the record.
 
 The arm test (default), after the release: frame_task_server took the arms
@@ -105,9 +107,14 @@ OPTICAL_IN_LINK_XYZW = (-0.5, 0.5, -0.5, 0.5)   # rpy (-pi/2, 0, -pi/2), REP 103
 FEET = ("left_ankle_roll_link", "right_ankle_roll_link")
 # the sim's log line once the band is off (golem_robocasa/g1/g1_mujoco.py's fall logger)
 BAND_RELEASED_LINE = "elastic band released at t="
-# the walking node's log lines (g1_locomotion): its config, and the policy's start
+# the walking node's log lines (g1_locomotion): its config, the policy's start, each call
+# of the band's toggle with its reason, and the toggle's success
 LOCOMOTION_CONFIG = re.compile(r"Loaded (\S+\.yaml) and the policy")
 POLICY_STARTED = "walking: policy started"
+BAND_CALL = "releasing the elastic band: "
+# BandRelease's reason once /left_ee_pose has come; band.max_wait's names the maximum wait
+BAND_CALL_BY_POSE = BAND_CALL + "the policy runs and frame_task_server is up (/left_ee_pose)"
+BAND_TOGGLED = "elastic band released"
 # a ROS log line in launch.log: level, wall time, logger, text
 LOG_LINE = re.compile(r"\[(DEBUG|INFO|WARN|ERROR|FATAL)\] \[(\d+(?:\.\d+)?)\] \[([^\]]+)\]: (.*)")
 
@@ -819,16 +826,20 @@ class Report:
         return wall
 
     def band_released(self, release, policy_wall):
-        """The band comes off once and stays off: after the first /left_ee_pose the test saw
-        (its stamp, sim time) and within band.max_wait of the policy's start (wall)"""
+        """The band comes off once and stays off, because frame_task_server is up: every
+        toggle call the walking node logged gives /left_ee_pose as its reason (not
+        band.max_wait), the band is off after the first /left_ee_pose the test saw (its
+        stamp, sim time), and within band.max_wait of the policy's start (wall)"""
         changes = self.s["band_changes"]
         states = changes[:, 2].tolist()
         pose = self.events.get("left_ee_pose_first")
         max_wait = self.info.get("band_max_wait")
         reasons = [text for _, _, text in logged(os.path.join(self.out, "launch.log"), "locomotion_node")
-                   if text.startswith("releasing the elastic band") or text.startswith("elastic band released")]
+                   if text.startswith(BAND_CALL) or text.startswith(BAND_TOGGLED)]
+        calls = [text for text in reasons if text.startswith(BAND_CALL)]
+        by_pose = bool(calls) and all(text == BAND_CALL_BY_POSE for text in calls)
         self.numbers["band_release"] = {"changes_t_wall_on": changes.tolist(), "left_ee_pose_first": pose,
-                                        "max_wait": max_wait, "walking_node": reasons}
+                                        "max_wait": max_wait, "walking_node": reasons, "by_left_ee_pose": by_pose}
         if release is None:
             self.check("band released after the controller is ready", False,
                        "the band was never released" + ("" if pose else ", and the test saw no /left_ee_pose"))
@@ -846,9 +857,14 @@ class Report:
                           f"{pose['stamp']:.3f} s" if pose else "the test saw no /left_ee_pose")
                 + f"; {since:.2f} s (wall) after the policy's start (band.max_wait {max_wait} s, "
                 f"+{BAND_POLL_SLACK_S} s for the node's poll)")
+        if not calls:
+            text += "; locomotion_node logged no call of /elastic_band/toggle"
+        elif not by_pose:
+            text += "; locomotion_node released it for another reason than /left_ee_pose"
         if reasons:
             text += f"; locomotion_node: {' / '.join(reasons)}"
-        self.check("band released after the controller is ready", once and after_pose and in_time, text)
+        self.check("band released after the controller is ready", once and after_pose and in_time and by_pose,
+                   text)
 
     def release_numbers(self, r, policy_wall):
         """The pelvis and the feet around the release, for the record: under the band in the

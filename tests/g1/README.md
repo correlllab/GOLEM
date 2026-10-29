@@ -26,9 +26,11 @@ starts its policy under the band and releases the band once `frame_task_server` 
   - `no estop during start-up`: `golem_safety` logs no estop from its start to the end of the
     test's steps;
   - `walking node starts`: the walking node logs `walking: policy started` once, and no fault;
-  - `band released after the controller is ready`: the band comes off once and stays off, after
-    the first `/left_ee_pose` the test sees and within the walking node's `band.max_wait` of the
-    policy's start;
+  - `band released after the controller is ready`: the band comes off once and stays off,
+    because `frame_task_server` is up: every toggle call the walking node logs gives
+    `/left_ee_pose` as its reason, so a release by `band.max_wait` fails the check. The band is
+    off after the first `/left_ee_pose` the test sees and within the walking node's
+    `band.max_wait` of the policy's start;
   - `standing after release`: the robot stands for 5 s after the release.
 
   The report also prints the pelvis and the feet around the release, for the record.
@@ -97,7 +99,8 @@ must update the tests in the same commit.
 - They rely on the sim's `ROS bridges up`, `elastic band released at t=` and `ROBOT FELL` log lines.
 - From `launch.log` they rely on:
   - the walking node's `Loaded <config> and the policy` and `walking: policy started` lines,
-    its `fault:` lines, and its config's `band.max_wait`;
+    its `releasing the elastic band: <reason>` and `elastic band released` lines, its `fault:`
+    lines, and its config's `band.max_wait`;
   - `golem_safety`'s JSON events `relay_started` and `estop_command_written`, and its
     `estop diagnostic` lines.
 

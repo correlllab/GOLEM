@@ -5,7 +5,7 @@
     python mujoco_deploy_g1.py --headless --duration 10 --cmd 0.5 0 0
 
 Adapted from OpenHomie's MujocoDeploy/mujoco_deploy_g1.py. It runs the ONNX
-policy on the leprechaun_g1 G1 model; joints are looked up by name.
+policy on Unitree's G1 model in CL_Assets/g1; joints are looked up by name.
 """
 import argparse
 import os

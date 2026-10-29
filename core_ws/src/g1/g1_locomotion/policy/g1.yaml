@@ -3,7 +3,7 @@
 # Paths are relative to this file.
 
 policy_path: deploy.onnx
-xml_path: ../third_party/leprechaun_g1/assets/g1_description/g1_29dof_with_hand_rev_1_0.xml
+xml_path: ../CL_Assets/g1/g1_description/g1_29dof_with_hand_rev_1_0.xml
 
 # Simulation parameters
 simulation_duration: 60.0
@@ -38,7 +38,7 @@ stiffness: {hip_yaw: 100, hip_roll: 100, hip_pitch: 100, knee: 150, ankle: 40,
 damping: {hip_yaw: 2, hip_roll: 2, hip_pitch: 2, knee: 4, ankle: 2,
           waist: 5, shoulder: 4, elbow: 1, wrist: 0.5, hand: 2}
 
-# HOMIE's MJCF gives every joint these; the leprechaun_g1 model has none
+# HOMIE's MJCF gives every joint these; Unitree's model in CL_Assets/g1 has none
 joint_damping: 0.001
 joint_armature: 0.01
 joint_frictionloss: 0.1

@@ -10,8 +10,7 @@ The policy and the script come from [OpenHomie](https://github.com/InternRobotic
 see [Credits](#credits). We kept only its MuJoCo deployment. The training code
 (HomieRL), the real-robot deployment (HomieDeploy) and the teleoperation
 hardware (HomieHardware) were removed. The robot model is the one in the
-repo's `third_party/leprechaun_g1`, so this folder has no model files of its
-own.
+repo's `CL_Assets/g1`, so this folder has no model files of its own.
 
 ## Status
 
@@ -134,7 +133,7 @@ All values now come from HOMIE's training config (HomieRL's
 
   With HOMIE's values the robot fell when walking backward and did not turn.
 - **Height command:** 0.74 m (standing) instead of 0.34 m, which is a deep squat.
-- **Model:** the unmodified `leprechaun_g1` G1 (`g1_29dof_with_hand_rev_1_0`,
+- **Model:** Unitree's unmodified G1 in `CL_Assets/g1` (`g1_29dof_with_hand_rev_1_0`,
   the variant our robot reports). HOMIE used its own copy, which differed in two
   ways:
     - It locked waist roll, waist pitch and the hands. Here those joints are
@@ -167,8 +166,9 @@ All values now come from HOMIE's training config (HomieRL's
 
 - The MuJoCo script builds on Unitree's
   [unitree_rl_gym](https://github.com/unitreerobotics/unitree_rl_gym).
-- The G1 model is Unitree's, via
-  [leprechaun_g1](https://github.com/correlllab/leprechaun_g1).
+- The G1 model is Unitree's, from
+  [unitree_ros](https://github.com/unitreerobotics/unitree_ros) (see
+  `CL_Assets/g1/README.md`).
 
 ## License
 

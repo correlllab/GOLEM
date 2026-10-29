@@ -26,7 +26,7 @@ def load_config(config_path):
     """Load the YAML config; paths in it are relative to the file.
 
     In the containers this directory is /home/code/g1_locomotion, beside
-    /home/code/third_party; in the repo it is core_ws/src/g1/g1_locomotion/policy,
+    /home/code/CL_Assets; in the repo it is core_ws/src/g1/g1_locomotion/policy,
     so a path that is not there is looked up from the repo's root as well.
     """
     with open(config_path, 'r') as f:

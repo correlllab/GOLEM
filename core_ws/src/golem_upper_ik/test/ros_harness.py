@@ -4,8 +4,9 @@ spinning its nodes in a thread (Ros), a fake robot publishing /lowstate (FakeRob
 recorder of a command topic (Recorder) and a stand-in for golem_safety that relays the
 controller's commands on its output topic (Echo).
 
-It also holds the helpers the controller tests share: the profile of a robot (profile_of)
-and the session's robot model, put back at rest after the test (shared_model).
+It also holds the helpers the controller tests share: the profile of a robot (profile_of),
+the session's robot model, put back at rest after the test (shared_model), and where the
+G1's limp arms hang (G1_LIMP_ARMS).
 
 For the controller's closed loop: a robot that executes the controller's commands as an
 engaged golem_safety would relay them, and relays them itself (FollowingRobot); a robot
@@ -40,6 +41,11 @@ RECORD_QOS = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
 WRITER_QOS = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                         history=HistoryPolicy.KEEP_LAST, depth=1)
 _names = itertools.count()
+# The G1's limp arms, where they settle with every motor off (MuJoCo, the with-hand MJCF, the
+# pelvis held up, the legs at the sim's stance): straight down, the wrists resting on the
+# hips, clear of the self-collision spheres (unlike arms_down). The IK joints' order, rad
+G1_LIMP_ARMS = (-0.053, -0.0083, 0.052, 1.2508, -0.0411, -0.0995, 0.071,
+                -0.0523, 0.0075, -0.0589, 1.2543, 0.037, -0.1056, -0.0747)
 
 
 def profile_of(robot):

@@ -3,8 +3,8 @@
 The upper-body (torso or waist, and arms) IK controller of the Unitree H1-2 and G1. Two
 nodes, both robots, each robot described by a profile:
 
-- `frame_task_server` solves Pink IK on the 14 arm joints, plans with OMPL where the robot
-  has a self-collision model, and serves `/frame_task` and `/named_config`. It writes its
+- `frame_task_server` solves Pink IK on the 14 arm joints with a self-collision barrier,
+  plans with OMPL, and serves `/frame_task` and `/named_config`. It writes its
   commands only to a `golem_safety` input (`/safety/...`), never to `/lowcmd`.
 - `joint_state_publisher` publishes `/joint_states` for the robot's body joints from
   `/lowstate`.
@@ -77,7 +77,7 @@ nothing of another robot's packages: the H1-2 builds and runs without the `g1_*`
 | Planner frames | `left/right_grasp_frame` | `left/right_hand_palm_link` |
 | IMU frame | `torso_link` | `imu_in_pelvis` (`controller.imu_frame` overrides) |
 | Model (`golem_ros2_models`) | `h1_2_magpie.urdf` | `g1_29dof_with_hand_rev_1_0.urdf` |
-| Self-collision model | `h1_2_magpie_sphere.urdf` + `h1_2_magpie_sphere_collision.srdf` | none: no collision barrier, no planner |
+| Self-collision model | `h1_2_magpie_sphere.urdf` + `h1_2_magpie_sphere_collision.srdf` | `g1_sphere.urdf` + `g1_sphere_collision.srdf`, packed on the rubber-hand G1: two spheres per hand at the Dex3-1 palm, none on the fingers, so the barrier and the planner do not see the Dex3-1 fingers |
 | Start-up postures | `init_1`, `init_2`, `init_3`, `home` | `home` |
 | Named configurations | `NAMED_CONFIGS` in `robots/h12.py` (`home`, `t_pose`, `prep`, `staging_left`, ...) | `NAMED_CONFIGS` in `robots/g1.py` (`home`, `arms_down`, `t_pose`, `arms_front_45`) |
 | `topics.safety_out` default | `/lowcmd` | `/lowcmd` |
@@ -113,7 +113,7 @@ config outside the tables is not refused.
 | `topics.safety_out` | per robot (above) | `golem_safety`'s output for the follow gate: `/lowcmd`, the output of every `golem_safety` mode; another topic is refused |
 | `controller.v_lim`, `w_lim` | 1.0, 2.0 | end-effector linear (m/s) and angular (rad/s) speed limits |
 | `controller.dq_lim` | 1.0 | IK joint speed limit, rad/s |
-| `controller.d_min` | 0.02 | self-collision distance the IK keeps, m |
+| `controller.d_min` | 0.02 | self-collision distance the IK keeps, m; the G1's configs set 0.002, since its start-up posture, `home`, has a torso–shoulder-yaw sphere pair 0.0022 m apart |
 | `controller.timeout` | 10.0 | s per goal sent with a zero `duration` |
 | `controller.threshold_ik`, `threshold_joint`, `threshold_linear`, `threshold_angular` | 0.001, 0.01, 0.002, 0.01 | convergence: IK velocity, rad, m, rad |
 | `controller.hold_targets` | 0 for each held joint | the held joints' angles, rad, a mapping by joint name |
@@ -193,10 +193,18 @@ then moves only in the start-up step 4.
   after the speed limits; a planned goal is planned at a quarter of `planner.moving_speed`.
 - `plan: true`: the OMPL planner (in a subprocess of its own) plans in the IK joints, with
   the self-collision checks and the planner frames' x/y/z bounds, and the path is executed one
-  waypoint per control period. On a robot whose profile has no self-collision model (the G1)
-  every planned goal is aborted before any IK solve: `Planning is unavailable: the G1 has no
-  self-collision model ...; send the goal with plan=false`. `planner.enabled: false` refuses
-  them as well.
+  waypoint per control period. `planner.enabled: false` aborts every planned goal before any
+  IK solve: `Planning is turned off: ...; send the goal with plan=false`. A profile without a
+  self-collision model could not plan either (`Planning is unavailable`); both robots' have
+  one.
+- The G1's `arms_down` is in self-collision: each hand and wrist sits 2 to 5 cm inside its
+  hip-pitch sphere. A goal to it stops short, held off by the barrier, and a planned goal to
+  it fails (`goal is in self-collision`). Every other named configuration of both robots is
+  collision-free.
+- The barrier cannot pull apart sphere pairs that already overlap: from such a measured pose
+  the IK's quadratic program has no solution, and the move fails at its first step. On the
+  G1 the limp arms settle with the wrists resting on the hips (elbows about 1.25 rad), clear
+  of the spheres, and the start-up reaches `home` from there; from `arms_down` it could not.
 - On ROS domain 0 every control step first checks that `/lowstate` is no staler than
   `controller.max_state_lag_ms` (the larger of its tick lag and its age); a stale state aborts
   the goal and the last command keeps going out. The sims stamp the tick in sim steps, so the
@@ -242,8 +250,8 @@ docker/scripts/docker_run.sh ros --restart --g1 /home/code/h12_sim_scripts/launc
 The ROS tests run on `ROS_DOMAIN_ID` 92 (`test/conftest.py`, `test/ros_harness.py`), some
 against `golem_safety`'s installed `safety_node`. They cover the profiles
 (`test_profile.py`), the configs and pairing (`test_config.py`, `test_pairing.py`), the robot
-model, IK and planner (`test_robot_model.py`, `test_ik_solver.py`, `test_planner.py`; the
-H1-2 with its collision model, the G1 without), the ROS I/O, command handler and follow gate
+model, IK and planner (`test_robot_model.py`, `test_ik_solver.py`, `test_planner.py`; both
+robots with their collision models), the ROS I/O, command handler and follow gate
 (`test_ros_io.py`, `test_low_cmd_handler.py`), the controller and the nodes
 (`test_controller_loop.py`, `test_frame_task_server.py`), the publish rate
 (`test_publish_rate.py`) and that nothing imports `unitree_sdk2py` (`test_no_sdk.py`). The

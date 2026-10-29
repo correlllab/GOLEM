@@ -44,7 +44,7 @@ EXPECTED = {
         'held_joints': ('waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint'),
         'urdf': 'g1_29dof_with_hand_rev_1_0.urdf',
         'urdf_ros': 'g1_29dof_with_hand_rev_1_0_ros.urdf',
-        'collision': None,
+        'collision': ('g1_sphere.urdf', 'g1_sphere_collision.srdf'),
         'shutdown_keeps_held_joints_on_lowcmd': True,
     },
 }
@@ -91,12 +91,9 @@ def test_profiles_load(robot):
     assert Path(profile.urdf_ros_path).name == expected['urdf_ros']
     assert os.path.isfile(profile.urdf_path), profile.urdf_path
     assert os.path.isfile(profile.urdf_ros_path), profile.urdf_ros_path
-    if expected['collision'] is None:
-        assert profile.collision is None
-    else:
-        assert tuple(Path(path).name for path in profile.collision) == expected['collision']
-        for path in profile.collision:
-            assert os.path.isfile(path), path
+    assert tuple(Path(path).name for path in profile.collision) == expected['collision']
+    for path in profile.collision:
+        assert os.path.isfile(path), path
 
     with pytest.raises(dataclasses.FrozenInstanceError):
         profile.robot = 'other'

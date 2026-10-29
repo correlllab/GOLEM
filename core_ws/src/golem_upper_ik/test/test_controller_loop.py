@@ -25,8 +25,8 @@ import numpy as np
 import pytest
 
 from ros_harness import (
-    CommandRecorder, FollowingRobot, RelayedRobot, SafetyNode, body_pose, profile_of,
-    shared_model, slots_of, wait_for,
+    G1_LIMP_ARMS, CommandRecorder, FollowingRobot, RelayedRobot, SafetyNode, body_pose,
+    profile_of, shared_model, slots_of, wait_for,
 )
 
 ROBOTS = ('h12', 'g1')
@@ -184,7 +184,7 @@ def test_startup_home_ee_target_and_zero_gain_shutdown(ros, models, robot):
     upper = list(profile.upper_slots)
     held = slots_of(profile, profile.held_joints)
     # a standing robot: arms hanging, the first held joint turned a little
-    arms = 'arms_down' if robot == 'g1' else 'home'
+    arms = G1_LIMP_ARMS if robot == 'g1' else 'home'
     q0 = body_pose(profile, arms, [0.05] + [0.0] * (len(held) - 1))
     model = shared_model(ros, models, robot)
     robot_ = FollowingRobot(ros, profile, q0, config['topics']['safety_out'])
@@ -319,10 +319,10 @@ def test_startup_stops_with_an_error_when_the_safety_layer_never_engages(
 def test_startup_move_stops_with_an_error_after_its_own_timeout(ros, models, robot):
     profile = profile_of(robot)
     upper = list(profile.upper_slots)
-    # relayed at once, so the gate opens at the first command. The G1 moves its elbows pi/2
-    # from hanging to home (at least 5.2 s at 0.3 rad/s); the H1-2 starts at home and moves
-    # through its start-up postures back to it (at least 4 s at 1 rad/s)
-    q0 = body_pose(profile, 'arms_down' if robot == 'g1' else 'home')
+    # relayed at once, so the gate opens at the first command. The G1 moves its elbows 1.25
+    # rad from hanging to home (at least 4.2 s at 0.3 rad/s); the H1-2 starts at home and
+    # moves through its start-up postures back to it (at least 4 s at 1 rad/s)
+    q0 = body_pose(profile, G1_LIMP_ARMS if robot == 'g1' else 'home')
     config = config_of(robot, CONFIGS[robot], startup_move_timeout=2.0)
     robot_ = FollowingRobot(ros, profile, q0, config['topics']['safety_out'])
     recorder = CommandRecorder(ros, config['topics']['low_cmd'], profile)
@@ -337,7 +337,7 @@ def test_startup_move_stops_with_an_error_after_its_own_timeout(ros, models, rob
     assert np.max(np.abs(robot_.measured()[upper] - final_pose(profile, config))) > 0.1
     if robot == 'g1':
         elbow = robot_.measured()[profile.body_joints.index('left_elbow_joint')]
-        assert 0.1 < elbow < profile.named_configs['arms_down'][3] - 0.1, elbow
+        assert 0.1 < elbow < G1_LIMP_ARMS[3] - 0.1, elbow
     assert recorder.count > 50
     assert all(s.t < stopped + 0.05 for s in recorder.samples), 'still publishing'
 
@@ -411,8 +411,9 @@ def test_waits_for_state_and_tracks_the_robot_through_engagement(
     gap_before = max(np.max(np.abs(s.q - s.measured)) for s in before)
     if follow_tolerance == 0.0:
         # without the gate the start-up runs open loop, far from the robot that is not
-        # following: the jump the gate prevents
-        assert gap_before > 0.3
+        # following: the jump the gate prevents (about 0.3 rad on the G1, whose g1_split
+        # palm speed limit, 0.15 m/s, slows the move)
+        assert gap_before > 0.2
         return
 
     builder.join(45.0)
@@ -506,10 +507,12 @@ def test_start_up_steps_sleep_a_whole_period_after_their_work(ros, models, monke
     for kind in ('posture', 'hold'):
         times = steps[kind]
         assert len(times) > 8, (kind, len(times))
-        # a step's period is its work and then a whole period, not the period less the work
+        # a step's period is its work and then a whole period, not the period less the work;
+        # the work is the added 10 ms and the step's own, under 15 ms (a posture step's IK
+        # with its self-collision barrier takes about 5 ms)
         periods = np.diff(times)
         assert np.min(periods) >= dt + 0.01 - 1e-3, (kind, np.min(periods))
-        assert np.median(periods) < dt + 0.02, (kind, np.median(periods))
+        assert np.median(periods) < dt + 0.01 + 0.015, (kind, np.median(periods))
 
 
 @pytest.mark.parametrize('robot', ROBOTS)
@@ -521,11 +524,11 @@ def test_relay_starting_late_still_gets_the_whole_start_up_move(ros, models, rob
     # Each start-up step moves a joint at most dq_lim x dt and then sleeps a whole control
     # period dt, so a move of d rad takes at least d / dq_lim s, plus the steps' work
     if robot == 'g1':
-        # golem_safety starts 5 s into a 7 s wait for the engagement. The elbows hang 1.5 rad
-        # from home: at sim_split's 1 rad/s the move takes at least 1.5 s (about 2 s here),
-        # so the start-up ends over 6.5 s after it began, and a 6 s move budget suffices
-        # only if it counts from the gate opening
-        q0[slots_of(profile, ('left_elbow_joint', 'right_elbow_joint'))] = 1.5
+        # golem_safety starts 5 s into a 7 s wait for the engagement. The limp elbows hang
+        # 1.25 rad from home: at sim_split's 1 rad/s the move takes at least 1.25 s, so the
+        # start-up ends over 6.25 s after it began, and a 6 s move budget suffices only if
+        # it counts from the gate opening
+        q0[slots_of(profile, profile.enabled_joints)] = G1_LIMP_ARMS
         late, timeouts = 5.0, {'startup_timeout': 7.0, 'startup_move_timeout': 6.0}
     else:
         # golem_safety starts 5 s into a 7 s wait. From home the start-up postures move

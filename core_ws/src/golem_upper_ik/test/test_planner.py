@@ -299,18 +299,20 @@ def test_planner_client_resolves_the_frame_names():
         PlannerClient(profile, PlannerConfig(frame_names=('a', 'b')))
 
 
-def test_planner_unavailable_without_collision():
-    from golem_upper_ik.robots import g1
-    profile = profile_of('g1')
-    assert profile.collision is None
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_planner_unavailable_without_collision(robot):
+    '''A profile that names no self-collision model cannot plan'''
+    from dataclasses import replace
+    from golem_upper_ik.robots import robot_module
+    profile = replace(profile_of(robot), collision=None)
     client = PlannerClient(profile)
 
     assert client.available is False
-    assert g1.DISPLAY_NAME == 'G1'
-    assert client.unavailable_reason == PLANNER_UNAVAILABLE.format(robot='G1', module='g1')
+    display = robot_module(robot).DISPLAY_NAME
+    assert client.unavailable_reason == PLANNER_UNAVAILABLE.format(robot=display, module=robot)
     assert client.unavailable_reason == (
-        'Planning is unavailable: the G1 has no self-collision model (its profile, '
-        'golem_upper_ik/robots/g1.py, names no sphere URDF and SRDF); send the goal with '
+        f'Planning is unavailable: the {display} has no self-collision model (its profile, '
+        f'golem_upper_ik/robots/{robot}.py, names no sphere URDF and SRDF); send the goal with '
         'plan=false')
     with pytest.raises(PlannerUnavailableError) as error:
         client.plan_configuration(np.zeros(len(profile.body_joints)), np.zeros(14),
@@ -321,30 +323,31 @@ def test_planner_unavailable_without_collision():
     client.shutdown()
 
 
-def test_planner_client_plans_on_h12():
-    '''The subprocess builds the H1-2 model from its profile and plans a direct path'''
-    profile = profile_of('h12')
+# a direct path between two collision-free named configurations of each robot
+PLANNED_MOVE = {'h12': ('init_3', 'prep'), 'g1': ('home', 'arms_front_45')}
+
+
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_planner_client_plans(robot):
+    '''The subprocess builds the robot's model from its profile and plans a direct path'''
+    profile = profile_of(robot)
     named = profile.named_configs
+    begin, end = (named[name] for name in PLANNED_MOVE[robot])
+    current_q = np.zeros(len(profile.body_joints))
     client = PlannerClient(profile, PlannerConfig(timeout=5.0))
     assert client.available is True
     assert client.unavailable_reason is None
     try:
-        result = client.plan_configuration(
-            current_q=np.zeros(len(profile.body_joints)),
-            start=named['init_3'],
-            goal=named['prep'],
-        )
+        result = client.plan_configuration(current_q=current_q, start=begin, goal=end)
         assert result.success, result.reason
         assert result.reason == 'direct path'
-        np.testing.assert_allclose(result.path[0], named['init_3'], atol=1e-9)
-        np.testing.assert_allclose(result.path[-1], named['prep'], atol=1e-9)
+        np.testing.assert_allclose(result.path[0], begin, atol=1e-9)
+        np.testing.assert_allclose(result.path[-1], end, atol=1e-9)
         assert set(result.metadata['frame_path_lengths']) == set(profile.planner_frames)
 
         # a per-request speed reaches the worker: half the speed, about twice the waypoints
         slow = client.plan_configuration(
-            current_q=np.zeros(len(profile.body_joints)),
-            start=named['init_3'],
-            goal=named['prep'],
+            current_q=current_q, start=begin, goal=end,
             moving_speed=client.planner_config.moving_speed / 2,
             max_interpolation_steps=2 * client.planner_config.max_interpolation_steps,
         )
@@ -354,9 +357,14 @@ def test_planner_client_plans_on_h12():
         # an override is checked in the worker and reported back; the worker stays
         worker = client._worker
         with pytest.raises(RuntimeError, match='moving_speed must be positive'):
-            client.plan_configuration(np.zeros(len(profile.body_joints)), named['init_3'],
-                                      named['prep'], moving_speed=0.0)
+            client.plan_configuration(current_q, begin, end, moving_speed=0.0)
         assert client._worker is worker and worker.process.is_alive()
+
+        if robot == 'g1':
+            # arms_down is in self-collision (robots/g1.py): no plan reaches it
+            result = client.plan_configuration(current_q, begin, named['arms_down'])
+            assert not result.success
+            assert result.reason == 'goal is in self-collision'
     finally:
         client.shutdown()
     assert client._worker is None

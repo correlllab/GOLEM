@@ -70,8 +70,9 @@ Hazards not handled in code:
   estop stays latched until restart, and the controller's follow gate opens
   for good once golem_safety relays its commands, so a restarted safety node
   would meet a command held wherever the robot used to be.
-- The arm IK has no self-collision model (the arms can hit the torso or each
-  other). The gains are not tuned on our G1: the waist's damping ratio is
+- The arm IK's self-collision model was packed on the rubber-hand G1: it has
+  no spheres on the Dex3-1 fingers, which can hit the torso, the legs or the
+  other arm. The gains are not tuned on our G1: the waist's damping ratio is
   about 0.42-0.45 at home (g1_split.yaml).
 """
 

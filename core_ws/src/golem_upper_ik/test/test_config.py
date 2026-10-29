@@ -30,6 +30,12 @@ SHARED_CONTROLLER_KEYS = (
     'v_lim', 'w_lim', 'dq_lim', 'd_min', 'timeout',
     'threshold_ik', 'threshold_joint', 'threshold_linear', 'threshold_angular',
 )
+# values the configs changed after the old loaders' fixtures were recorded: the G1 got its
+# self-collision model, which turned its planner on, and a d_min its start-up posture keeps
+# (home has a torso-shoulder-yaw sphere pair 0.0022 m apart)
+CHANGED_SINCE_RECORDING = {
+    'g1': {('controller', 'd_min'): 0.002, ('planner', 'enabled'): True},
+}
 G1_CONTROLLER_KEYS = (
     'state_timeout', 'startup_timeout', 'startup_move_timeout', 'follow_tolerance', 'imu_frame',
 )
@@ -101,8 +107,10 @@ def test_config_values_match_old_loaders(case):
 
     for key in ('low_cmd', 'low_state'):
         assert config['topics'][key] == ros_name(old['topics'][key]), key
+    changed = CHANGED_SINCE_RECORDING.get(robot, {})
     for key in SHARED_CONTROLLER_KEYS:
-        assert config['controller'][key] == old['controller'][key], key
+        expected = changed.get(('controller', key), old['controller'][key])
+        assert config['controller'][key] == expected, key
     for key in ('ctrl_hz', 'pub_hz'):
         assert config['frequency'][key] == old['frequency'][key], key
     for key in ('kp', 'kd', 'ki'):
@@ -119,7 +127,8 @@ def test_config_values_match_old_loaders(case):
 
     # the planner section is the file's, with enabled and frame_names filled in
     planner = dict(config['planner'])
-    assert planner.pop('enabled') == old['planner'].get('enabled', True)
+    assert planner.pop('enabled') == changed.get(('planner', 'enabled'),
+                                                 old['planner'].get('enabled', True))
     frame_names = planner.pop('frame_names')
     assert frame_names == old['planner'].get('frame_names', frame_names)
     assert planner == {key: value for key, value in old['planner'].items()

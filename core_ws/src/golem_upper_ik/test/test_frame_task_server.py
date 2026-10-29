@@ -4,7 +4,7 @@ frame_task_server and joint_state_publisher on domain 92.
 In this process, frame_task_server against a robot that executes and relays its commands
 (FollowingRobot), sharing the session's robot model: relative and slow-mode frame goals,
 slow-mode named configurations, the fresh-state wait, the stale-state abort, planned goals
-without a self-collision model, the goal start from the last command, the hold pinned at a
+and planning turned off, the goal start from the last command, the hold pinned at a
 limit, and execute_path's pacing.
 
 Then the installed console scripts as processes: joint_state_publisher's /joint_states,
@@ -43,12 +43,16 @@ def config_of(robot, name):
     return load_controller_config(robot, name)
 
 
-def edited_config(tmp_path, robot, name, **controller):
-    '''A copy of the installed config with controller keys replaced, under tmp_path/<robot>/'''
+def edited_config(tmp_path, robot, name, planner=None, **controller):
+    '''
+    A copy of the installed config with controller keys (and the planner keys of planner)
+    replaced, under tmp_path/<robot>/
+    '''
     from ament_index_python.packages import get_package_share_directory
     share = Path(get_package_share_directory('golem_upper_ik'))
     raw = yaml.safe_load((share / 'config' / robot / f'{name}.yaml').read_text())
     raw['controller'] = dict(raw.get('controller') or {}, **controller)
+    raw['planner'] = dict(raw.get('planner') or {}, **(planner or {}))
     path = tmp_path / robot / f'{name}.yaml'
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(raw))
@@ -415,15 +419,49 @@ def test_unknown_frame_is_refused_and_the_poses_keep_going(ros, models, capfd):
     assert all(len(msg.poses) == 0 for msg in poses.poses)
 
 
-def test_planned_goal_without_collision_g1(ros, models, capfd):
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_planned_goals(ros, models, robot):
+    '''
+    Planned named configurations out to another posture and back, then a planned frame goal.
+    The G1 goes out to t_pose; the H1-2, whose t_pose is past its planner frames' y limit, to
+    arms_front_45
+    '''
+    from custom_ros_messages.action import FrameTask, NamedConfig
+    profile = profile_of(robot)
+    config = config_of(robot, CONFIGS[robot])
+    robot_ = FollowingRobot(ros, profile, body_pose(profile, START[robot]),
+                            config['topics']['safety_out'])
+    model = shared_model(ros, models, robot)
+    server_of(ros, model, CONFIGS[robot])
+    threshold = config['controller']['threshold_joint']
+
+    for name in ({'h12': 'arms_front_45', 'g1': 't_pose'}[robot], START[robot]):
+        status, result = send_goal(ros, NamedConfig, '/named_config',
+                                   named_goal(name, plan=True))
+        assert status == GoalStatus.STATUS_SUCCEEDED and result.success, (name, result)
+        reached = robot_.measured()[ik_slots(profile)]
+        assert np.max(np.abs(reached - profile.named_configs[name])) < threshold, name
+
+    left = profile.ee_frames[0]
+    before = model.get_frame_position(left, robot_.measured()).copy()
+    status, result = send_goal(ros, FrameTask, '/frame_task',
+                               frame_goal(left, offset_pose(0.05), relative=True, plan=True))
+    assert status == GoalStatus.STATUS_SUCCEEDED and result.success, result
+    moved = model.get_frame_position(left, robot_.measured()) - before
+    assert np.linalg.norm(moved) == pytest.approx(0.05, abs=5e-3), moved
+
+
+def test_planning_turned_off(ros, models, capfd, tmp_path):
+    '''planner.enabled: false refuses every planned goal before any IK solve'''
     from custom_ros_messages.action import FrameTask, NamedConfig
     profile = profile_of('g1')
-    config = config_of('g1', CONFIGS['g1'])
+    config_path = edited_config(tmp_path, 'g1', CONFIGS['g1'], planner={'enabled': False})
+    config = config_of('g1', str(config_path))
     FollowingRobot(ros, profile, body_pose(profile, START['g1']), config['topics']['safety_out'])
     model = shared_model(ros, models, 'g1')
     log = Log(capfd)
     recorder = CommandRecorder(ros, config['topics']['low_cmd'], profile)
-    server_of(ros, model, CONFIGS['g1'])
+    server_of(ros, model, config_path)
     assert wait_for(lambda: recorder.count > 0, 2.0)
 
     start = time.monotonic()
@@ -433,10 +471,10 @@ def test_planned_goal_without_collision_g1(ros, models, capfd):
     assert status == GoalStatus.STATUS_ABORTED and not result.success
     status, result = send_goal(ros, NamedConfig, '/named_config', named_goal('home', plan=True))
     assert status == GoalStatus.STATUS_ABORTED and not result.success
-    assert wait_for(lambda: len(log.lines('no self-collision model')) == 2, 2.0)
-    line = log.lines('no self-collision model')[0]
+    assert wait_for(lambda: len(log.lines('Planning is turned off')) == 2, 2.0)
+    line = log.lines('Planning is turned off')[0]
     assert '[frame_task_server]: Planning or execution failed: ' in line, line
-    assert 'Planning is unavailable: the G1 has no self-collision model' in line, line
+    assert f'the controller config {config_path} sets planner.enabled: false' in line, line
     assert 'send the goal with plan=false' in line, line
     # nothing moved
     sent = [s.q for s in recorder.samples if s.t >= start]

@@ -155,11 +155,37 @@ def test_h12_model_has_collision(models):
     assert model.check_collision_free_reduced(model.profile.named_configs['home'])
 
 
-def test_g1_model_builds_without_collision(models):
+def pair_distances(model, q_reduced):
+    '''Each enabled collision pair's distance at q_reduced, m (negative: they overlap)'''
+    geometry = model.collision_model_body_reduced
+    data = model.collision_data_body_reduced
+    pin.computeDistances(model.model_body_reduced, model.data_body_reduced, geometry, data,
+                         q_reduced)
+    return np.array([result.min_distance for result in data.distanceResults])
+
+
+def test_g1_model_has_collision(models):
+    '''
+    Every named configuration is collision-free and keeps every G1 config's d_min, except
+    arms_down: its hands and wrists sit inside the hip-pitch spheres (robots/g1.py)
+    '''
+    from golem_upper_ik.config import load_controller_config
     model = models('g1')
-    assert model.has_collision is False
-    # without a self-collision model every configuration counts as collision-free
-    assert model.check_collision_free_reduced(np.zeros(model.model_body_reduced.nq))
+    assert model.has_collision is True
+    # 24 spheres; the SRDF leaves 210 of their 240 pairs on the reduced model (the legs and
+    # the waist locked)
+    assert len(model.collision_model_body_reduced.geometryObjects) == 24
+    assert len(model.collision_model_body_reduced.collisionPairs) == 210
+    d_min = max(load_controller_config('g1', name)['controller']['d_min']
+                for name in ('g1_split', 'sim_split'))
+    for name, q in model.profile.named_configs.items():
+        distances = pair_distances(model, q)
+        if name == 'arms_down':
+            assert not model.check_collision_free_reduced(q)
+            assert distances.min() < -0.04, distances.min()
+        else:
+            assert model.check_collision_free_reduced(q), name
+            assert distances.min() >= d_min, (name, distances.min())
 
 
 def test_rebuild_reduced_relocks_at_measured(models):

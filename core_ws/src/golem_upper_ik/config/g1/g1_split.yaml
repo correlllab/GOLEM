@@ -18,7 +18,9 @@ controller:
   v_lim: 0.15  # palm linear speed limit, m/s
   w_lim: 0.5   # palm angular speed limit, rad/s
   dq_lim: 0.3  # arm joint speed limit, rad/s (the start-up waist move too)
-  d_min: 0.02
+  # self-collision distance the IK keeps, m. The start-up posture, home, has a
+  # torso-shoulder-yaw sphere pair 0.0022 m apart
+  d_min: 0.002
   timeout: 10.0  # s per goal without a duration; 5 s is too short at these speeds
   # waist hold angles, rad, sent in every command; the IK only moves the arms,
   # with the waist at its measured angle (re-locked at each goal's start)
@@ -47,8 +49,6 @@ controller:
   threshold_angular: 0.002
 
 planner:
-  # OMPL planning needs a G1 self-collision model, which does not exist yet
-  enabled: false
   planner: RRTConnect
   timeout: 1.0
   frame_names:

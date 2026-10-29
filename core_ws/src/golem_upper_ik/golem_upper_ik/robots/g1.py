@@ -51,7 +51,10 @@ HALF_PI = np.pi / 2
 NAMED_CONFIGS = {
     'home':  # zero posture, forearms forward; the example's first stage
         np.zeros(len(ENABLED_JOINTS)),
-    'arms_down':  # straight arms hanging below the shoulders
+    # straight arms hanging below the shoulders. The one named configuration in
+    # self-collision: each hand and wrist sits 2 to 5 cm inside its hip-pitch sphere, so a
+    # goal to it stops short with the barrier on, and a planned goal to it fails
+    'arms_down':
         np.array([0.0, 0.0, 0.0, HALF_PI, 0.0, 0.0, 0.0,
                   0.0, 0.0, 0.0, HALF_PI, 0.0, 0.0, 0.0]),
     't_pose':  # straight arms out to the sides, horizontal; the example's lift target
@@ -81,6 +84,8 @@ def model_paths() -> dict:
     '''
     The model files, installed by golem_ros2_models. Pinocchio resolves the relative mesh
     paths of the plain URDF; the ROS copy has package:// URIs for robot_state_publisher and
-    RViz. The G1's profile runs without a self-collision model
+    RViz. The self-collision model is the sphere-packed G1 and its SRDF (golem_ros2_models'
+    paths); its spheres were packed on the rubber-hand G1, two per hand at the Dex3-1 palm
+    and none on the fingers, so the barrier and the planner do not see the Dex3-1 fingers
     '''
-    return {**paths.model_paths('g1'), 'collision': None}
+    return paths.model_paths('g1')

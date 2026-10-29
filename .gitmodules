@@ -34,7 +34,3 @@
 	path = mujoco_mpc
 	url = git@github.com:badinkajink/mujoco_mpc.git
 	branch = extended_hw
-[submodule "third_party/leprechaun_g1"]
-	path = third_party/leprechaun_g1
-	url = git@github.com:correlllab/leprechaun_g1.git
-	branch = main

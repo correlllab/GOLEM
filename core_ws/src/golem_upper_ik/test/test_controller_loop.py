@@ -303,6 +303,8 @@ def test_startup_stops_with_an_error_when_the_safety_layer_never_engages(
     # golem_safety engages each input on its own: no cause waits for another input
     message = str(raised.value)
     assert 'engage gate' not in message and 'walking node' not in message, message
+    # its limit checks run from boot, so the latch may be this start-up's, not only an earlier run's
+    assert 'at this start-up' in message and 'or in an earlier run' in message, message
     time.sleep(0.3)
     assert 2.0 <= startup['end'] - startup['start'] < 3.0
     tolerance = config['controller']['follow_tolerance']

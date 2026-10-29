@@ -148,7 +148,9 @@ out of its range or a value of the wrong kind; an alias given with its key.
 3. Hold that pose until `golem_safety` is seen relaying the commands (the follow gate opens)
    within `controller.startup_timeout`. The error otherwise names what `golem_safety` waits
    for: a `/lowstate` reporting the profile's `mode_machine` (6 or 5), a first estop sample
-   with `use_estop:=true`, the paired safety config and no estop latched from an earlier run.
+   with `use_estop:=true`, the paired safety config, and no estop latched at this start-up (its
+   limit checks run from its first `/lowstate`, so a joint already past `limits.estop` latches
+   it) or in an earlier run.
 4. Move through the start-up postures, each until the IK's command is within 1e-3 rad of it,
    then step the held joints to `controller.hold_targets` at min(0.3, `dq_lim`) rad/s, all
    within `controller.startup_move_timeout` of the gate opening.

@@ -29,7 +29,8 @@ constexpr double kDefaultTorqueRatio = 0.5;
 constexpr double kDefaultKpMax = 300.0;
 constexpr double kDefaultKdMax = 30.0;
 
-// What the error says about a key an older config may still carry.
+// What the error says about a key an older config may still carry. A key inside a removed
+// section (engage.mode_machine) is reported by its own reason when it has one.
 const std::map<std::string, std::string> & replaced_keys()
 {
   static const std::string estop_box = "removed: the bringup's use_estop decides";
@@ -40,6 +41,7 @@ const std::map<std::string, std::string> & replaced_keys()
     {"network", "removed: ROS supplies the domain, and the G1's interface is pinned in "
       "cyclonedds_local.xml"},
     {"robot", "removed: whether the robot is simulated comes from the bringup's sim argument"},
+    {"engage.mode_machine", "removed: mode_machine comes from the robot profile"},
     {"estop.enabled", estop_box},
     {"estop.estop_topic", estop_box},
     {"estop.poll_hz", estop_box},
@@ -131,6 +133,7 @@ public:
       if (std::find(names.begin(), names.end(), name) != names.end()) {
         continue;
       }
+      fail_on_replaced_child(name, entry.second);
       std::string what = "unknown key";
       const auto replaced = replaced_keys().find(key(name));
       if (replaced != replaced_keys().end()) {
@@ -296,6 +299,25 @@ private:
       list += (list.empty() ? "" : ", ") + choice;
     }
     return list;
+  }
+
+  // Fails on the first key of the unknown section `name` that has a reason of its own in
+  // replaced_keys(); returns when it has none.
+  void fail_on_replaced_child(const std::string & name, const YAML::Node & section) const
+  {
+    if (!section.IsMap()) {
+      return;
+    }
+    for (const auto & child : section) {
+      if (!child.first.IsScalar()) {
+        continue;
+      }
+      const std::string child_key = key(name) + "." + child.first.Scalar();
+      const auto replaced = replaced_keys().find(child_key);
+      if (replaced != replaced_keys().end()) {
+        fail(where_, child_key, "unknown key (" + replaced->second + ")");
+      }
+    }
   }
 
   const Where & where_;

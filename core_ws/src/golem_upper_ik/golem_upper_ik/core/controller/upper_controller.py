@@ -212,8 +212,10 @@ class UpperController:
             f'{self.profile.mode_machine} (the {self.profile.robot} profile\'s) and, when started '
             'with use_estop:=true, a first sample on its estop topics; it must run the safety '
             'config this controller config pairs with (writing '
-            f'{topic}), and not be latched in an estop from an earlier run (restart it). '
-            'Stopping the controller')
+            f'{topic}), and must not have latched its estop, at this start-up (it checks its '
+            f'estop limits from its first {self.state_topic} sample, so a joint already past '
+            'limits.estop latches it) or in an earlier run; a latch holds until golem_safety '
+            'restarts. Stopping the controller')
 
     def _startup_timeout_error(self, desc):
         '''The error for a start-up move not done in time'''

@@ -229,9 +229,11 @@ TEST(Config, ArmSdkKeysRefused)
 TEST(Config, StartupAndEngageKeysRefused)
 {
   // Every robot streams zero gains from boot, so neither section has a choice left to make.
-  const std::string reason =
+  const std::string zero_stream =
     "unknown key (removed: every robot streams zero gains from boot and engages each input "
     "on its own first valid command)";
+  // engage.mode_machine has a reason of its own, wherever it sits in the section.
+  const std::string profile = "unknown key (removed: mode_machine comes from the robot profile)";
   struct Case
   {
     const RobotProfile & profile;
@@ -241,23 +243,30 @@ TEST(Config, StartupAndEngageKeysRefused)
     {h12(), "control: {state_lag_ms: 100.0}\nestop_response: {after: burst_then_silence}\n"},
     {g1(), "control: {state_lag_ms: 0.0}\nestop_response: {after: keep_writing}\n"},
   };
-  const std::pair<const char *, const char *> sections[] = {
-    {"startup", "startup: {rule: zero_stream}\n"},
-    {"startup", "startup: {rule: engage_gate}\n"},
-    {"startup", "startup: {}\n"},
-    {"engage", "engage: {max_state_age_seconds: 0.1, max_position_error: 0.15}\n"},
-    {"engage", "engage: {mode_machine: 5}\n"},
-    {"engage", "engage: {}\n"},
+  struct Section
+  {
+    const char * key;
+    const char * yaml;
+    const std::string & reason;
+  };
+  const Section sections[] = {
+    {"startup", "startup: {rule: zero_stream}\n", zero_stream},
+    {"startup", "startup: {rule: engage_gate}\n", zero_stream},
+    {"startup", "startup: {}\n", zero_stream},
+    {"engage", "engage: {max_state_age_seconds: 0.1, max_position_error: 0.15}\n", zero_stream},
+    {"engage", "engage: {}\n", zero_stream},
+    {"engage.mode_machine", "engage: {mode_machine: 5}\n", profile},
+    {"engage.mode_machine", "engage: {max_position_error: 0.15, mode_machine: 6}\n", profile},
   };
   for (const Case & c : cases) {
-    for (const auto & [key, section] : sections) {
-      SCOPED_TRACE(c.profile.robot + ": " + section);
+    for (const Section & section : sections) {
+      SCOPED_TRACE(c.profile.robot + ": " + section.yaml);
       const std::string message =
-        parse_raw_error("mode: split_mode\n" + c.rest + section, c.profile);
+        parse_raw_error("mode: split_mode\n" + c.rest + section.yaml, c.profile);
       EXPECT_TRUE(
         contains(
-          message, "safety config case.yaml (robot " + c.profile.robot + "): key '" + key +
-          "': " + reason)) << message;
+          message, "safety config case.yaml (robot " + c.profile.robot + "): key '" +
+          section.key + "': " + section.reason)) << message;
     }
   }
 }

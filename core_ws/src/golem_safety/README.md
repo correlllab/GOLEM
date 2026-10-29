@@ -74,7 +74,7 @@ defined once.
 | Body joints | 27, slots 0-26 | 29, slots 0-28 |
 | Lower / upper slots | 0-11 / 12-26 (torso 12, arms 13-26) | 0-11 / 12-28 (waist 12-14, arms 15-28) |
 | Modes | `full_body_mode`, `split_mode` | `split_mode`, `full_body_mode` |
-| Joint limits | the H1-2's joint-limit table (shoulder roll ±0.38 rad, not the URDF's ±0.19) | `g1_description.joints.BODY`, from the URDF |
+| Joint limits | `tools/h12_joint_limits.py`, the H1-2's joint-limit table (shoulder roll ±0.38 rad, not the URDF's ±0.19) | `tools/g1_joint_limits.py`, Unitree's URDF values (ankles and waist roll/pitch 35 N·m there, 50 N·m in the MJCF) |
 
 Both robots' `LowCmd`/`LowState` motor arrays hold 35 slots.
 
@@ -293,5 +293,6 @@ discovered over loopback and fail the test.
 - `tools/relay_latency_probe.py --robot h12|g1`: on a running stack, the relay's output
   rate and input-to-output latency, as JSON (it refuses domain 0).
 - `tools/generate_robot_data.py` writes `robots/h12.yaml` from `tools/h12_joint_limits.py`
-  and `robots/g1.yaml` from `g1_description`, so it runs only where `g1_description`
-  imports. The test fixtures are recorded data (`test/fixtures/README.md`).
+  and `robots/g1.yaml` from `tools/g1_joint_limits.py`. Both tables are hand-kept; the
+  hands are not in them (`g1_dex3` keeps the Dex3-1's joints, the Magpie gripper nodes
+  theirs). The test fixtures are recorded data (`test/fixtures/README.md`).

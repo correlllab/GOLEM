@@ -36,6 +36,7 @@ def test_robot_file_has_the_schema_and_robot_facts(robot):
     for key, value in expected.items():
         assert data[key] == value, key
     assert len(data['joints']) == joint_count
+    assert len({joint['name'] for joint in data['joints']}) == joint_count
     for index, joint in enumerate(data['joints']):
         assert set(joint) == {'name', 'slot', 'position', 'velocity', 'effort'}
         assert joint['slot'] == index, joint['name']
@@ -52,32 +53,12 @@ def test_g1_profile_has_no_arm_sdk():
                          'lower_slots', 'upper_slots', 'joints'}
 
 
-def test_g1_data_matches_g1_description():
-    joints = pytest.importorskip('g1_description.joints')
-    layout = pytest.importorskip('g1_description.layout')
-    data = load_robot('g1')
-
-    assert len(data['joints']) == len(joints.BODY)
-    for entry, joint in zip(data['joints'], joints.BODY):
-        assert entry['name'] == joint.name
-        assert entry['slot'] == joint.slot
-        assert entry['position'] == [joint.lower, joint.upper], joint.name
-        assert entry['velocity'] == joint.velocity, joint.name
-        assert entry['effort'] == joint.effort, joint.name
-
-    assert data['motor_slots'] == layout.LOWCMD_MOTOR_SLOTS
-    assert data['mode_pr'] == layout.MODE_PR
-    assert data['lower_slots'] == [layout.LEG_SLOTS.start, layout.LEG_SLOTS.stop - 1]
-    # the waist and both arms
-    assert data['upper_slots'] == [layout.WAIST_SLOTS.start, layout.RIGHT_ARM_SLOTS[-1]]
-
-
-def test_h12_data_matches_todays_table():
-    table = json.loads((FIXTURES / 'h12_joint_limits.json').read_text())
-    data = load_robot('h12')
+def check_against_table(robot, fixture, joint_count):
+    table = json.loads((FIXTURES / fixture).read_text())
+    data = load_robot(robot)
 
     names = table['joint_names']
-    assert len(data['joints']) == len(names) == 27
+    assert len(data['joints']) == len(names) == joint_count
     for index, entry in enumerate(data['joints']):
         name = names[index]
         assert entry['name'] == name
@@ -88,6 +69,29 @@ def test_h12_data_matches_todays_table():
         ], name
         assert entry['velocity'] == table['velocity_limits'][index], name
         assert entry['effort'] == table['torque_limits'][index], name
+
+
+def test_h12_data_matches_todays_table():
+    check_against_table('h12', 'h12_joint_limits.json', 27)
+
+
+def test_g1_data_matches_todays_table():
+    check_against_table('g1', 'g1_joint_limits.json', 29)
+
+
+def test_g1_slot_groups_partition_the_body():
+    '''Legs 0-11, waist 12-14, left arm 15-21, right arm 22-28'''
+    names = [joint['name'] for joint in load_robot('g1')['joints']]
+    legs, waist, left_arm, right_arm = names[0:12], names[12:15], names[15:22], names[22:29]
+    assert all(name.split('_')[1] in ('hip', 'knee', 'ankle') for name in legs)
+    assert [name.split('_')[0] for name in legs] == ['left'] * 6 + ['right'] * 6
+    assert waist == ['waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint']
+    assert all(name.startswith('left_') for name in left_arm)
+    assert all(name.startswith('right_') for name in right_arm)
+    assert [name.removeprefix('left_') for name in left_arm] == \
+        [name.removeprefix('right_') for name in right_arm]
+    assert all(name.startswith(('left_shoulder', 'right_shoulder')) for name in
+               left_arm[:3] + right_arm[:3])
 
 
 def test_h12_shoulder_roll_keeps_the_table_limits_not_the_urdfs():

@@ -19,8 +19,8 @@ limited to the joint's actuatorfrcrange. rt/lowcmd silent for GOLEM_CMD_TIMEOUT
 turns every body motor off (zero torque) until frames return. This is the H1-2
 sim's behaviour, kept as an assumption; what the real G1's motors do when
 rt/lowcmd stops has not been measured.
-The slot layout and header values match
-core_ws/src/g1/g1_description/g1_description/layout.py.
+The slot layout and header values match golem_safety's G1 profile
+(core_ws/src/golem_safety/robots/g1.yaml).
 """
 import ctypes
 import math

@@ -14,7 +14,8 @@ Per hand, `<side>` is `left` or `right`:
     longer: no joint moves faster than `max_speed`. So `duration: 0` (the
     srv's "go directly") is ramped too, e.g. 0.75 s for 1.5 rad at the default
     2 rad/s. A negative or non-finite `duration` is refused. Targets are
-    clipped to the URDF limits in `g1_description`.
+    clipped to the URDF limits this package keeps
+    (`HAND_JOINTS` in `g1_dex3/dex3.py`).
 - `/<side>/hand/open`, `/<side>/hand/close` (`std_srvs/Trigger`): named poses,
     reached over `pose_duration` (default 1 s; the default `max_speed` never
     stretches them, from any pose inside the limits).
@@ -102,7 +103,7 @@ left fingers toward their lower limits, the right hand the other way.
 ## Tests
 
 ```bash
-PYTHONPATH=.:../g1_description:$PYTHONPATH python3 -m pytest test
+PYTHONPATH=.:$PYTHONPATH python3 -m pytest test
 ```
 
 The DDS tests run on domain 97 inside one process against a fake hand; they never

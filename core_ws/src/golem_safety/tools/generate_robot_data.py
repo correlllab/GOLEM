@@ -9,10 +9,9 @@ Sources:
         URDF_VELOCITY_LIMITS, URDF_TORQUE_LIMITS). The H1-2 limits are this table,
         which is what the robot runs, not the URDF: shoulder roll is +-0.38 here
         and +-0.19 in h1_2_magpie.urdf.
-  G1    g1_description.joints.BODY and g1_description.layout.
+  G1    tools/g1_joint_limits.py (the same lists, and the slot layout and mode_pr).
 
-Run it where g1_description imports (the G1-mode ros container, after the workspace is
-built and sourced):
+Run it where PyYAML imports (the ros container):
 
   python3 /home/code/core_ws/src/golem_safety/tools/generate_robot_data.py
 """
@@ -33,22 +32,14 @@ def number(value):
     return repr(float(value))
 
 
-def h12_joints():
-    """(name, slot, low, high, velocity, effort) per body joint, from tools/h12_joint_limits.py."""
-    import h12_joint_limits as table
-
+def table_joints(table):
+    """(name, slot, low, high, velocity, effort) per body joint of a joint-limit table."""
     return [
         (name, slot, limits['low'], limits['high'], velocity, effort)
         for slot, (name, limits, velocity, effort) in enumerate(zip(
             table.JOINT_NAMES, table.URDF_POSITION_LIMITS,
             table.URDF_VELOCITY_LIMITS, table.URDF_TORQUE_LIMITS))
     ]
-
-
-def g1_joints():
-    from g1_description.joints import BODY
-
-    return [(j.name, j.slot, j.lower, j.upper, j.velocity, j.effort) for j in BODY]
 
 
 def robot_text(source, facts, joints):
@@ -87,7 +78,8 @@ def check_round_trip(text, facts, joints):
 
 
 def main():
-    from g1_description import layout
+    import g1_joint_limits as g1
+    import h12_joint_limits as h12
 
     h12_facts = {
         'robot': 'h12', 'mode_machine': 6, 'mode_pr': 0, 'motor_slots': 35,
@@ -95,16 +87,16 @@ def main():
         'lower_slots': (0, 11), 'upper_slots': (12, 26),
     }
     g1_facts = {
-        'robot': 'g1', 'mode_machine': 5, 'mode_pr': layout.MODE_PR,
-        'motor_slots': layout.LOWCMD_MOTOR_SLOTS,
+        'robot': 'g1', 'mode_machine': 5, 'mode_pr': g1.MODE_PR,
+        'motor_slots': g1.LOWCMD_MOTOR_SLOTS,
         'modes': ['split_mode', 'full_body_mode'],
-        'lower_slots': (layout.LEG_SLOTS.start, layout.LEG_SLOTS.stop - 1),
+        'lower_slots': (g1.LEG_SLOTS.start, g1.LEG_SLOTS.stop - 1),
         # the waist and both arms
-        'upper_slots': (layout.WAIST_SLOTS.start, layout.RIGHT_ARM_SLOTS[-1]),
+        'upper_slots': (g1.WAIST_SLOTS.start, g1.RIGHT_ARM_SLOTS[-1]),
     }
     robots = [
-        ('h12', 'tools/h12_joint_limits.py', h12_facts, h12_joints()),
-        ('g1', 'g1_description.joints.BODY', g1_facts, g1_joints()),
+        ('h12', 'tools/h12_joint_limits.py', h12_facts, table_joints(h12)),
+        ('g1', 'tools/g1_joint_limits.py', g1_facts, table_joints(g1)),
     ]
 
     (PACKAGE / 'robots').mkdir(exist_ok=True)

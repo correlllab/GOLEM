@@ -7,14 +7,36 @@ import math
 
 import numpy as np
 
-from g1_description.joints import LEFT_HAND, RIGHT_HAND
-from g1_description.layout import NUM_HAND_MOTORS
-
 SIDES = ('left', 'right')
-JOINTS = {'left': LEFT_HAND, 'right': RIGHT_HAND}
-JOINT_NAMES = {side: [joint.name for joint in JOINTS[side]] for side in SIDES}
-LOWER = {side: np.array([joint.lower for joint in JOINTS[side]]) for side in SIDES}
-UPPER = {side: np.array([joint.upper for joint in JOINTS[side]]) for side in SIDES}
+# motors per hand: the HandCmd_/HandState_ motor entries the driver writes and reads
+NUM_HAND_MOTORS = 7
+# each hand's joints in HandCmd_/HandState_ motor order: (name, lower, upper), rad.
+# The limits are the Dex3-1's in Unitree's G1 URDF
+# (CL_Assets/g1/g1_description/g1_29dof_with_hand_rev_1_0.urdf). Six of the seven are
+# mirrored between the hands; thumb_0's range is symmetric, so it is the same on both
+HAND_JOINTS = {
+    'left': (
+        ('left_hand_thumb_0_joint', -1.04719755, 1.04719755),
+        ('left_hand_thumb_1_joint', -0.61086523, 1.04719755),
+        ('left_hand_thumb_2_joint', 0.0, 1.74532925),
+        ('left_hand_middle_0_joint', -1.57079632, 0.0),
+        ('left_hand_middle_1_joint', -1.74532925, 0.0),
+        ('left_hand_index_0_joint', -1.57079632, 0.0),
+        ('left_hand_index_1_joint', -1.74532925, 0.0),
+    ),
+    'right': (
+        ('right_hand_thumb_0_joint', -1.04719755, 1.04719755),
+        ('right_hand_thumb_1_joint', -1.04719755, 0.61086523),
+        ('right_hand_thumb_2_joint', -1.74532925, 0.0),
+        ('right_hand_middle_0_joint', 0.0, 1.57079632),
+        ('right_hand_middle_1_joint', 0.0, 1.74532925),
+        ('right_hand_index_0_joint', 0.0, 1.57079632),
+        ('right_hand_index_1_joint', 0.0, 1.74532925),
+    ),
+}
+JOINT_NAMES = {side: [name for name, _, _ in HAND_JOINTS[side]] for side in SIDES}
+LOWER = {side: np.array([lower for _, lower, _ in HAND_JOINTS[side]]) for side in SIDES}
+UPPER = {side: np.array([upper for _, _, upper in HAND_JOINTS[side]]) for side in SIDES}
 
 # gains from Unitree's Dex3 grip example
 # (unitree_ros2/example/src/src/g1/dex3/g1_dex3_example.cpp); the hand's real

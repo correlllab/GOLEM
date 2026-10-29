@@ -3,7 +3,11 @@ import pytest
 
 from g1_dex3.dex3 import (
     DEFAULT_MAX_SPEED,
+    HAND_JOINTS,
+    JOINT_NAMES,
     LOWER,
+    NUM_HAND_MOTORS,
+    SIDES,
     UPPER,
     PoseInterpolator,
     dds_domain,
@@ -12,6 +16,22 @@ from g1_dex3.dex3 import (
     named_pose,
     validate_positions,
 )
+
+
+@pytest.mark.parametrize('side', SIDES)
+def test_hand_table_is_in_handcmd_order(side):
+    order = ['thumb_0', 'thumb_1', 'thumb_2', 'middle_0', 'middle_1', 'index_0', 'index_1']
+    assert len(HAND_JOINTS[side]) == NUM_HAND_MOTORS == 7
+    assert JOINT_NAMES[side] == [f'{side}_hand_{joint}_joint' for joint in order]
+    assert np.all(LOWER[side] < UPPER[side])
+
+
+def test_hands_mirror_except_thumb_0():
+    for left, right in zip(HAND_JOINTS['left'], HAND_JOINTS['right']):
+        if left[0].endswith('thumb_0_joint'):
+            assert left[1:] == right[1:]
+        else:
+            assert right[1:] == (-left[2], -left[1]), left[0]
 
 
 def test_motor_mode_matches_unitrees_example_encoding():

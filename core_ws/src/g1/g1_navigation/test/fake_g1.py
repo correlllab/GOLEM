@@ -38,11 +38,25 @@ from scipy.spatial.transform import Rotation
 from sensor_msgs.msg import Imu, JointState
 from tf2_ros import TransformBroadcaster
 
-from g1_description.joints import BODY
 from g1_description.paths import urdf_path
 from g1_navigation import frames
 
 GRAVITY = 9.81
+
+# the G1's body joints, all published on /joint_states (rt/lowstate slot order)
+BODY_JOINTS = (
+    'left_hip_pitch_joint', 'left_hip_roll_joint', 'left_hip_yaw_joint',
+    'left_knee_joint', 'left_ankle_pitch_joint', 'left_ankle_roll_joint',
+    'right_hip_pitch_joint', 'right_hip_roll_joint', 'right_hip_yaw_joint',
+    'right_knee_joint', 'right_ankle_pitch_joint', 'right_ankle_roll_joint',
+    'waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint',
+    'left_shoulder_pitch_joint', 'left_shoulder_roll_joint', 'left_shoulder_yaw_joint',
+    'left_elbow_joint', 'left_wrist_roll_joint', 'left_wrist_pitch_joint',
+    'left_wrist_yaw_joint',
+    'right_shoulder_pitch_joint', 'right_shoulder_roll_joint', 'right_shoulder_yaw_joint',
+    'right_elbow_joint', 'right_wrist_roll_joint', 'right_wrist_pitch_joint',
+    'right_wrist_yaw_joint',
+)
 
 # (min corner, max corner) of each box, m, in odom: the robot starts at the
 # origin facing +x. A 7 x 4 m room, one obstacle on the straight line to the
@@ -230,8 +244,8 @@ class FakeG1(Node):
         self.pub_truth.publish(truth)
         joints = JointState()
         joints.header.stamp = stamp
-        joints.name = [j.name for j in BODY]
-        joints.position = [self.waist if j.name == WAIST_PITCH else 0.0 for j in BODY]
+        joints.name = list(BODY_JOINTS)
+        joints.position = [self.waist if name == WAIST_PITCH else 0.0 for name in BODY_JOINTS]
         self.pub_joints.publish(joints)
         if self.pub_odom is None:
             return

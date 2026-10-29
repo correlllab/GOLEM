@@ -10,11 +10,11 @@ from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_, HandState_
 from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__HandCmd_ as HandCmdDefault
 
-from g1_description.layout import NUM_HAND_MOTORS
 from g1_dex3.dex3 import (
     DEFAULT_KD,
     DEFAULT_KP,
     DEFAULT_MAX_SPEED,
+    NUM_HAND_MOTORS,
     PoseInterpolator,
     motor_mode,
     move_duration,

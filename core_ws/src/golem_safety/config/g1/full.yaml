@@ -44,8 +44,8 @@ estop_response:
 
 limits:
   # position_offset and the ratios are scalars or 29-entry lists (slot order) for
-  # per-joint tuning; kp_max and kd_max are single numbers. Ratios scale the URDF
-  # limits in g1_description
+  # per-joint tuning; kp_max and kd_max are single numbers. Ratios scale the joint
+  # limits in robots/g1.yaml (from tools/g1_joint_limits.py)
   # untuned placeholders: set these with the lower-body controller
   clip:
     position_offset: 0.01

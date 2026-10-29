@@ -12,7 +12,6 @@
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>custom_ros_messages</depend>
-  <depend>g1_description</depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 

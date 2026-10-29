@@ -12,7 +12,21 @@ from typing import NamedTuple
 
 import numpy as np
 
-from g1_description.layout import BODY_JOINT_NAMES, SLOT_BY_NAME
+# the G1's body joints in rt/lowstate / rt/lowcmd slot order (Unitree's G1JointIndex)
+BODY_JOINT_NAMES = (
+    'left_hip_pitch_joint', 'left_hip_roll_joint', 'left_hip_yaw_joint',
+    'left_knee_joint', 'left_ankle_pitch_joint', 'left_ankle_roll_joint',
+    'right_hip_pitch_joint', 'right_hip_roll_joint', 'right_hip_yaw_joint',
+    'right_knee_joint', 'right_ankle_pitch_joint', 'right_ankle_roll_joint',
+    'waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint',
+    'left_shoulder_pitch_joint', 'left_shoulder_roll_joint', 'left_shoulder_yaw_joint',
+    'left_elbow_joint', 'left_wrist_roll_joint', 'left_wrist_pitch_joint',
+    'left_wrist_yaw_joint',
+    'right_shoulder_pitch_joint', 'right_shoulder_roll_joint', 'right_shoulder_yaw_joint',
+    'right_elbow_joint', 'right_wrist_roll_joint', 'right_wrist_pitch_joint',
+    'right_wrist_yaw_joint',
+)
+SLOT_BY_NAME = {name: slot for slot, name in enumerate(BODY_JOINT_NAMES)}
 
 # HOMIE was trained at 50 Hz. The node steps on a 20 ms grid of rt/lowstate's
 # tick, so it follows the robot's clock (the sim's, in the sim) rather than the
@@ -84,10 +98,10 @@ def load_policy(policy_dir):
 
 
 def policy_slots(joint_names):
-    '''The rt/lowstate motor slot of each policy joint, looked up by name in g1_description'''
+    '''The rt/lowstate motor slot of each policy joint, looked up by name in BODY_JOINT_NAMES'''
     unknown = [name for name in joint_names if name not in SLOT_BY_NAME]
     if unknown:
-        raise ValueError(f'policy joints not in g1_description: {unknown}')
+        raise ValueError(f'policy joints that are not G1 body joints: {unknown}')
     slots = tuple(SLOT_BY_NAME[name] for name in joint_names)
     if slots != POLICY_SLOTS:
         raise ValueError(f'policy joints map to slots {list(slots)}, expected 0-12 and 15-28')

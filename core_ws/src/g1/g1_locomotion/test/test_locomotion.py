@@ -308,7 +308,7 @@ def test_dds_domain_and_interface(trained, monkeypatch):
 def test_policy_joints_map_to_their_slots(policy):
     assert policy_slots(policy.policy_joints) == tuple(range(0, 13)) + tuple(range(15, 29))
     joints = list(policy.policy_joints)
-    with pytest.raises(ValueError, match='not in g1_description'):
+    with pytest.raises(ValueError, match='not G1 body joints'):
         policy_slots(joints[:-1] + ['head_joint'])
     swapped = joints[:]
     swapped[0], swapped[1] = swapped[1], swapped[0]

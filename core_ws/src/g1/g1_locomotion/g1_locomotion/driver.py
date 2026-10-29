@@ -15,9 +15,11 @@ from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_ as LowCmdDefa
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
 from unitree_sdk2py.utils.crc import CRC
 
-from g1_description.layout import MODE_PR
-
 from g1_locomotion.locomotion import WAITING, SourceClock, read_state
+
+# LowCmd_.mode_pr: MODE_PR drives the ankles' pitch/roll joints, which the policy
+# commands; 1 (MODE_AB) would drive the two ankle motors directly
+MODE_PR = 0
 
 # how long the worker waits for rt/lowstate before it checks the heartbeat and
 # rt/lowstate for silence again (s)

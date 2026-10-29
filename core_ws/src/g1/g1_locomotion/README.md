@@ -59,7 +59,8 @@ The G1 bringups (`golem_bringup`'s `launch/g1/`) start it after the arm controll
     starts the latency. The IMU (`imu_state.quaternion`, w first, and
     `imu_state.gyroscope`) is taken as the pelvis IMU, as in HOMIE's own
     deployment. The positions and velocities of the policy's 27 joints (legs,
-    waist yaw, arms) are looked up by name in `g1_description`: slots 0-12 and
+    waist yaw, arms) are looked up by name in the package's own table of the
+    G1's body slots (`BODY_JOINT_NAMES` in `locomotion.py`): slots 0-12 and
     15-28.
 - Reads `rt/safety/lowcmd_upper_in` the same way, and only while waiting to
     start, to know the arm controller is running. It never writes there.
@@ -350,7 +351,7 @@ latency fault cannot see that part.
 ## Tests
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:../g1_description:$PYTHONPATH python3 -m pytest test
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:$PYTHONPATH python3 -m pytest test
 ```
 
 - They need the workspace built and sourced (`golem_safety`). They load

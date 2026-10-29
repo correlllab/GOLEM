@@ -13,7 +13,7 @@ The tables are the sim's own, as the H1-2 sim's are: the same slot orders as
 golem_safety's robots/g1.yaml (body) and g1_dex3's HAND_JOINTS (hands), neither
 of which the robocasa container mounts.
 
-Works on the standalone leprechaun_g1 MJCF with ``robot_prefix=""``.
+Works on the standalone G1 MJCF in CL_Assets/g1 with ``robot_prefix=""``.
 """
 from typing import NamedTuple
 
@@ -70,7 +70,7 @@ class Motors(NamedTuple):
 class NameResolver:
     """Resolves the G1's DDS motors, pelvis IMU and base to indices in a
     (possibly robosuite-merged) MjModel. ``robot_prefix`` is e.g. 'robot0_'; use
-    '' for the standalone leprechaun_g1 MJCF."""
+    '' for the standalone G1 MJCF in CL_Assets/g1."""
 
     def __init__(self, model, robot_prefix="robot0_"):
         self.model = model

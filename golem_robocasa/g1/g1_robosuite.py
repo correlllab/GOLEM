@@ -5,12 +5,11 @@ Importing this module once (before ``robocasa.utils.env_utils.create_env`` /
 placement patch so the legged humanoid is positioned by its pelvis free joint
 (RoboCasa's stock path writes mobile-base joints that this robot lacks).
 
-The robot MJCF is generated at import time from leprechaun_g1's
+The robot MJCF is generated at import time from ``CL_Assets/g1``'s
 ``g1_29dof_with_hand_rev_1_0.xml`` (plus the sensor frames of its URDF) into a
-temp dir, since robosuite loads robots from a file. The G1 assets live only in
-the leprechaun_g1 submodule. The robot keeps its floating base and all 43
-motors (29 body + 14 Dex3-1 hand joints); the hands are part of the robot model,
-so each arm gets a massless NullGripper. Locomotion is driven externally over
+temp dir, since robosuite loads robots from a file. The robot keeps its
+floating base and all 43 motors (29 body + 14 Dex3-1 hand joints); the hands
+are part of the robot model, so each arm gets a massless NullGripper. Locomotion is driven externally over
 DDS: robosuite controllers are never stepped (we own ``mujoco.mj_step``).
 
 NOTE: robosuite/robocasa import only inside the MuJoCo container (mujoco==3.3.1).
@@ -36,8 +35,9 @@ from robosuite.robots import register_robot_class
 # --------------------------------------------------------------------------- #
 # Source files (resolve in both the container, /home/code/..., and on the host)
 # --------------------------------------------------------------------------- #
-_REPO = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-G1_ASSETS = os.path.join(_REPO, "third_party", "leprechaun_g1", "assets", "g1_description")
+G1_ASSETS = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..", "..", "CL_Assets", "g1", "g1_description"))
 SOURCE_XML = os.path.join(G1_ASSETS, "g1_29dof_with_hand_rev_1_0.xml")
 SOURCE_URDF = os.path.join(G1_ASSETS, "g1_29dof_with_hand_rev_1_0.urdf")
 
@@ -48,7 +48,7 @@ FREE_JOINT_NAME = "floating_base_joint"
 # (github.com/unitreerobotics/unitree_rl_gym, BSD-3-Clause): the default joint of
 # resources/robots/g1_description/g1_12dof.xml (damping="0.001" armature="0.01"
 # frictionloss="0.1"), and the default_joint_angles of
-# legged_gym/envs/g1/g1_config.py. leprechaun_g1's MJCF gives its joints none.
+# legged_gym/envs/g1/g1_config.py. Unitree's G1 MJCF in CL_Assets gives its joints none.
 JOINT_DAMPING = 0.001      # N*m*s/rad
 JOINT_ARMATURE = 0.01      # kg*m^2
 JOINT_FRICTIONLOSS = 0.1   # N*m
@@ -127,7 +127,7 @@ def _fmt(values):
 
 
 def build_robot_xml(source_xml=SOURCE_XML, source_urdf=SOURCE_URDF):
-    """The robosuite robot MJCF (an ElementTree root) for leprechaun_g1's G1.
+    """The robosuite robot MJCF (an ElementTree root) for the CL_Assets G1.
 
     Transforms applied to the source MJCF:
       * <compiler meshdir> dropped; mesh file= made absolute (robosuite joins

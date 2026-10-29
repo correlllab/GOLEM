@@ -1,4 +1,4 @@
-"""Tests for g1.unitree_interface.SimInterface on the standalone leprechaun_g1 MJCF.
+"""Tests for g1.unitree_interface.SimInterface on the standalone G1 MJCF in CL_Assets/g1.
 
 robosuite is not needed: the model is the source MJCF (names unprefixed) with
 the pelvis framequat g1_robosuite adds, and the handlers are called directly
@@ -25,8 +25,7 @@ from g1 import unitree_interface as ui
 
 # two levels up from golem_robocasa/g1/: the repo root on the host, /home/code in the container
 REPO = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(g1.__file__)), "..", ".."))
-XML = os.path.join(REPO, "third_party", "leprechaun_g1", "assets", "g1_description",
-                   "g1_29dof_with_hand_rev_1_0.xml")
+XML = os.path.join(REPO, "CL_Assets", "g1", "g1_description", "g1_29dof_with_hand_rev_1_0.xml")
 
 
 def _model():

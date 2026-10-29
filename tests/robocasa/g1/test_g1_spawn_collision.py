@@ -10,7 +10,7 @@ the generated MJCF. The spawn of the robot in the real kitchen, hanging from the
 band, is test_g1_band.py's.
 
 Run from the repo root: PYTHONPATH=golem_robocasa python3 tests/robocasa/g1/test_g1_spawn_collision.py
-(g1_robosuite reads leprechaun_g1's MJCF and URDF at import).
+(g1_robosuite reads CL_Assets/g1's MJCF and URDF at import).
 """
 import math
 import sys

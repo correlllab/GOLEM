@@ -3,8 +3,8 @@ import sys
 import sim_common
 
 # The G1 runs from this entry point too. It is dispatched before the H1-2 imports below,
-# which need magpie_msgs and CL_Assets; the G1 needs neither, and its test containers
-# provide neither.
+# which need magpie_msgs and the H1-2's CL_Assets files; the G1 needs neither (it reads
+# only CL_Assets/g1), and its test containers do not provide magpie_msgs.
 if __name__ == "__main__" and sim_common.select_robot(sys.argv[1:]) == "g1":
     from g1 import g1_mujoco
     sys.exit(g1_mujoco.main(sys.argv[1:]))

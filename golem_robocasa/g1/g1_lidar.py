@@ -120,7 +120,7 @@ class Mid360:
     """The MID-360 on a G1 MjModel: frames from update(), IMU samples from imu().
 
     prefix is the robot's name prefix in the model ('robot0_' in a RoboCasa env,
-    '' in the standalone leprechaun_g1 MJCF).
+    '' in the standalone G1 MJCF in CL_Assets/g1).
     """
 
     def __init__(self, model, prefix="robot0_", points_per_frame=POINTS_PER_FRAME,

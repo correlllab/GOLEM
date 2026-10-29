@@ -2,8 +2,9 @@
 
 GOLEM runs a second robot beside the H1-2: the Correll Lab's Unitree G1
 (29 DoF, two Dex3-1 hands). Its ROS 2 packages are in `core_ws/src/g1/`, its
-robot description is the `third_party/leprechaun_g1` submodule, and its
-RoboCasa kitchen sim is `golem_robocasa/g1/`, started through the same entry point
+models (Unitree's URDFs, MJCFs and meshes, and a sphere-packed self-collision
+model) are in `CL_Assets/g1`, installed for ROS by `golem_ros2_models` with the
+H1-2's, and its RoboCasa kitchen sim is `golem_robocasa/g1/`, started through the same entry point
 as the H1-2's (`h12_mujoco.py --g1`). The same bringup runs against the sim or
 the real robot, which speaks the same Unitree DDS interface.
 
@@ -24,7 +25,7 @@ The G1 packages, sim, tests and these pages come from
 | Frontier exploration | Works | Needs navigation |
 
 Not done yet: the procedure for entering Unitree's debug mode on our G1,
-navigation on the real robot, a self-collision model for the arms,
+navigation on the real robot, self-collision spheres on the Dex3-1 fingers,
 manipulation skills, sensors and skills in the real bringup, and tuning of
 gains and limits on our G1.
 
@@ -111,9 +112,11 @@ left hand closes and opens. The named postures are `NAMED_CONFIGS` in
 - Leave `G1_DDS_INTERFACE` empty here. It pins only the `ros` container, so on
   the sim domain the two containers can end up on different interfaces; the
   wrappers warn when it is set ([DDS and networking](dds.md)).
-- `plan: true` aborts: the G1 profile has no self-collision model yet, so the
-  planner is off. `slow_mode: true` (a quarter of the speed) and a `FrameTask`
-  with `relative: true` work as on the H1-2.
+- The arm controller keeps the arms out of self-collision and plans with
+  OMPL (`plan: true`), as on the H1-2. Its spheres cover the Dex3-1 palms but
+  not the fingers. `arms_down` is inside the hip spheres, so a goal to it stops
+  short and a planned one fails. `slow_mode: true` (a quarter of the speed) and
+  a `FrameTask` with `relative: true` work as on the H1-2.
 
 ## Pages
 
@@ -122,7 +125,8 @@ left hand closes and opens. The named postures are `NAMED_CONFIGS` in
 | [First real session](first-session.md) | the checklist for the first session on the real G1, in Unitree's debug mode; it waits for the debug-mode procedure |
 | [Safety layer](safety.md) | modes, the start-up, estops, stopping, logs |
 | [Control in sim and on the robot](control-path.md) | the path of a command, and how the sim plays the robot in debug mode |
-| [DDS and networking](dds.md) | domains, the guards against domain 0, the wired port |
+| [DDS and networking](dds.md) | domains, the guards against domain 0, the wired port, the robot's network and topics |
+| [Our G1](hardware.md) | our unit's details, `rt/lowstate`'s layout, open hardware questions |
 | [Walking](walking.md) | HOMIE's policy on the legs, in the sim |
 | [Navigation](navigation.md) | FAST_LIO, slam_toolbox and Nav2, in the sim |
 | [Frontier exploration](exploration.md) | `/skill/frontier_explore`, in the sim |

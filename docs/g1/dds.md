@@ -112,6 +112,76 @@ ip -br addr show dev enp130s0     # UP, 192.168.123.222/24 on our laptop
 
 and, inside the container, `cat /home/code/cyclonedds_local.xml`.
 
+## The robot's network
+
+What worked on 2026-09-28 from an Ubuntu 24.04 laptop (our unit's details are
+in [Our G1](hardware.md)):
+
+```
+laptop ─┬─ enp130s0   192.168.123.222 ── cable ── robot switch ─┬─ 192.168.123.161  motion computer (Unitree's)
+        │                                                        └─ 192.168.123.164  dev computer (ours)
+        └─ WiFi ── internet
+```
+
+- The robot's network is a private wired subnet, `192.168.123.0/24`, with fixed
+  addresses and no DHCP. Give the laptop's wired port a manual address,
+  `192.168.123.222/24`, with no gateway, so internet traffic stays on WiFi.
+- Use the cable. The SDK finds the robot by DDS multicast on the wired subnet,
+  which does not reach across from WiFi.
+- If pings come and go, check `ip -br link show enp130s0`; it should say UP.
+  Ours flapped at 100 Mb/s until the cable connection was fixed, then linked at
+  1 Gb/s.
+
+The robot talks DDS (CycloneDDS 0.10.2) on domain 0. `unitree_sdk2_python`
+speaks DDS directly. ROS 2, through Unitree's `unitree_ros2` (in GOLEM,
+`core_ws/src/unitree_ros2`), sees the same topics with `/` in place of `rt/`.
+
+## The robot's topics
+
+The ones that matter first:
+
+| Kind | Topics |
+| --- | --- |
+| State | `rt/lowstate` (joints, IMU, remote; `rt/lf/lowstate` is a lower-rate copy), `rt/dex3/{left,right}/state`, `rt/secondary_imu`, `rt/lf/bmsstate` (battery), `rt/sportmodestate`, `rt/odommodestate`, `rt/state_estimator/*` |
+| Commands | `rt/lowcmd` (every motor), `rt/arm_sdk` (arms, while Unitree's controller balances), `rt/dex3/{left,right}/cmd` |
+| Services | `rt/api/<name>/request` and `/response`, e.g. `sport`, `motion_switcher`, `arm`, `voice` |
+
+`rt/lowstate`'s layout and motor slots are in [Our G1](hardware.md#rtlowstate).
+
+## Reading the robot without the stack
+
+The first session reads the robot from the G1's `ros` container
+([First real session](first-session.md), step 6), which has the SDK and the
+`cyclonedds` tool. Outside the containers, on the laptop itself:
+
+cyclonedds 0.10.2 ships wheels only up to Python 3.10, so make an environment
+for it:
+
+```bash
+conda create -n g1 python=3.10
+conda activate g1
+git clone https://github.com/unitreerobotics/unitree_sdk2_python.git
+cd unitree_sdk2_python && pip install -e .
+```
+
+List every topic on the robot (the export points `cyclonedds`, which comes
+with the cyclonedds package, at the robot's port):
+
+```bash
+export CYCLONEDDS_URI='<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="enp130s0"/></Interfaces></General></Domain></CycloneDDS>'
+cyclonedds ls -r 5s --suppress-progress-bar --color none | grep -o 'rt/[A-Za-z0-9_/]*' | sort -u
+```
+
+Print `rt/lowstate`, from the repo root:
+
+```bash
+python tools/read_lowstate.py
+```
+
+Read-only: it subscribes and never publishes. Once a second it prints
+`mode_machine`, `mode_pr` and `tick`, the IMU roll, pitch and yaw, and each of
+the 29 joints by name with its angle. Stop it with Ctrl+C.
+
 ## Dropped samples (UDP buffers)
 
 Camera images and point clouds arrive in bursts that overflow the kernel's

@@ -18,7 +18,7 @@ holds them there until the operator's confirm. No hand driver runs.
 
 Every command runs on the laptop wired to the robot. Nothing runs on, or
 changes, the robot's own computers. Practise the same bringup in the sim first
-([Arms by hand](index.md#arms-by-hand), sending only `home` and `arms_down`):
+([Arms by hand](index.md#arms-by-hand), sending only `t_pose` and `home`):
 the sim starts the robot as debug mode does, every motor off, with an elastic
 band in place of the gantry.
 
@@ -49,7 +49,7 @@ below depend on it.
 | 5. Start the container | `docker/scripts/docker_run.sh ros --g1`; it prints `robot: g1` and asks you to confirm domain 0. |
 | 6. Read-only checks | Gate: the container is the G1's and pinned to the robot's port, or exit and fix `docker/.env` and the shell's exports. Then nothing else writes the command topics, `rt/lowstate` arrives, and every joint is inside the safety layer's estop limits. |
 | 7. First launch: the arms | `ros2 launch golem_bringup g1_real_robot.launch.py use_hands:=false use_rviz:=false`: the zero-gain stream, the heartbeat, the arms' start-up. The legs stay limp. |
-| 8. Named configs | Send only `home` and `arms_down` on `/named_config`, one at a time, `arms_down` last. |
+| 8. Named configs | Send only `t_pose` and `home` on `/named_config`, one at a time, `home` last. |
 | 9. Stop the bringup | Stop the controller alone (the arms go limp, the waist holds), then Ctrl+C the launch, with the gantry carrying the robot. |
 | 10. Second launch: the legs | Step 6's last checks again (no other writer, the joints inside the estop limits), then the same launch with `start_position_verified:=true`: the walking node's pre-pose and hold, then the confirm. Stop with step 9. |
 | 11. End the session | Copy the safety layer's logs out, exit the container, set `docker/.env` back to the sim. |
@@ -131,7 +131,8 @@ The workspace is built with `--symlink-install`, so a Python edit under
   G1_DDS_INTERFACE=enp130s0
   ```
 
-- `ip -br addr show dev enp130s0` shows `UP` and `192.168.123.222/24`.
+- `ip -br addr show dev enp130s0` shows `UP` and `192.168.123.222/24` (the
+  robot's subnet and addresses: [DDS and networking](dds.md#the-robots-network)).
 - With the G1 selected, `docker_run.sh` refuses domain 0 if
   `G1_DDS_INTERFACE` is empty, names no interface on the laptop, is not `UP`,
   or has no IPv4 address. It also refuses a `ROS_DOMAIN_ID` that is not an
@@ -157,6 +158,11 @@ The workspace is built with `--symlink-install`, so a Python edit under
   off.
 - It hangs still: the safety layer checks every joint's position, speed and
   torque from its first `rt/lowstate` (step 6).
+- Its arms hang freely, the wrists resting on the hips. The arm controller's
+  self-collision model keeps every hand and wrist out of a sphere around its
+  hip, and its start-up begins wherever the arms hang: from a hand or wrist
+  inside that sphere it stops at once ("did not start", with a QP or
+  `NoSolutionFound` error that does not say self-collision).
 - Nobody is within reach of the arms or the legs. The arms start moving to
   `home` a few seconds after the launch in step 7, and the legs a few seconds
   after the controller in step 10.
@@ -249,7 +255,7 @@ not launch: resolving that is not a laptop-side step.
 Then the robot's state:
 
 ```bash
-python3 /home/code/third_party/leprechaun_g1/tools/read_lowstate.py
+python3 /home/code/tools/read_lowstate.py
 ```
 
 It only subscribes (domain 0 on `enp130s0`, both fixed in the script), prints
@@ -258,6 +264,8 @@ once a second, and stops with Ctrl+C. Check that:
 - it shows `mode_machine: 5`;
 - `tick` grows from one print to the next;
 - the joints (slots 0-28) match how the robot hangs.
+
+`rt/lowstate`'s fields and slot layout are in [Our G1](hardware.md#rtlowstate).
 
 If it only prints `no data yet`, check the cable, then in a laptop shell
 `ip -br addr show dev enp130s0` and `sudo ufw status` (it should be inactive).
@@ -318,15 +326,17 @@ controller exits with an error, go to step 9.
 
 ### 8. Named configs only (terminal 2)
 
-This session uses only `home` and `arms_down`. Send one goal at a time, and
-wait for each to finish before sending the next. Send `arms_down` last, so the
-arms already hang when step 9 turns them off:
+This session uses only `t_pose` and `home`. Send one goal at a time, and
+wait for each to finish before sending the next. Send `home` last, so the
+arms are low, the forearms forward at waist height, when step 9 turns them
+off. `arms_down` is not used: its hands and wrists sit inside the hip spheres
+of the controller's self-collision model, so a goal to it stops short.
 
 ```bash
 ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 'home', plan: false, duration: {sec: 0, nanosec: 0}}"
+  "{config_name: 't_pose', plan: false, duration: {sec: 0, nanosec: 0}}"
 ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 'arms_down', plan: false, duration: {sec: 0, nanosec: 0}}"
+  "{config_name: 'home', plan: false, duration: {sec: 0, nanosec: 0}}"
 ```
 
 Send no other goals, and start no second controller: a second live writer on
@@ -368,8 +378,9 @@ it, not as it hung before the first launch, and a joint outside its range
 latches the safety layer's estop the moment it starts.
 
 Then check the start pose: the robot hangs upright and still in the gantry
-(the walking node waits for a tilt under about 25 deg), the legs are free to
-move to HOMIE's default pose, and nobody is near them.
+(the walking node waits for a tilt under about 25 deg), the arms hang freely
+with the wrists on the hips (step 4), the legs are free to move to HOMIE's
+default pose, and nobody is near them.
 `start_position_verified:=true` is your word that you did; nothing measures it.
 
 ```bash

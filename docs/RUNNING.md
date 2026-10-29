@@ -161,8 +161,10 @@ ros2 launch golem_bringup h12_real_robot.launch.py start_position_verified:=true
 A native build there leaves out the G1's packages, as `launch_ros.sh` does
 for the H1-2: add `--packages-ignore-regex '^g1_'` to its `colcon build`.
 `golem_bringup` exec_depends on the `g1_*` packages, so a
-`--packages-up-to golem_bringup` without it builds them too, and they need
-`third_party/leprechaun_g1`.
+`--packages-up-to golem_bringup` without it builds them too. The build includes
+`golem_ros2_models`, which installs both robots' models from the checkout's
+`CL_Assets` (run `git lfs pull` in it first): the H1-2's launches read the
+robot description from that package, not from `CL_Assets` directly.
 
 Leg commands are gated behind `start_position_verified:=true` (default false) —
 set it only after physically verifying the robot's pose. The `lowerbody:=` policy

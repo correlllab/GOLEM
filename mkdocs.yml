@@ -83,6 +83,7 @@ nav:
       - Safety layer: g1/safety.md
       - Control in sim and on the robot: g1/control-path.md
       - DDS and networking: g1/dds.md
+      - Our G1: g1/hardware.md
       - Walking: g1/walking.md
       - Navigation: g1/navigation.md
       - Frontier exploration: g1/exploration.md

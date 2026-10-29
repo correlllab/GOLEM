@@ -12,6 +12,7 @@ from mujoco_ros_bridge import RosSensorBridge, init_ros, shutdown_ros
 import mujoco.viewer
 
 from . import g1_robosuite  # registers G1Dex3 + its grippers, patches RoboCasa
+import blank_env  # registers the Blank env
 import sim_common
 from measurement_bridge import MeasurementBridge
 from mujoco_env import ElasticBand, draw_band
@@ -100,7 +101,8 @@ def apply_band(model, data, band, body, vel):
 
 
 def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False, duration=0.0):
-    """Launch a RoboCasa task env around the G1 and run the shared-MjData loop.
+    """Launch a task env around the G1 (a RoboCasa kitchen, or blank_env's Blank)
+    and run the shared-MjData loop.
 
     Builds the env with robots='G1Dex3' and steps the env's *own* MjData with our
     loop (never env.step()), driving the sim<->ROS bridge layer:
@@ -323,7 +325,12 @@ def main(argv):
     """Run the G1 sim with the command-line arguments argv (without the program
     name). h12_mujoco.py calls it for --g1 or GOLEM_ROBOT=g1."""
     parser = argparse.ArgumentParser(description="Run the G1 RoboCasa MuJoCo sim")
-    sim_common.add_common_args(parser)
+    sim_common.add_common_args(
+        parser,
+        task_help="RoboCasa env name (e.g. TurnOnToasterOven), or Blank for the robot "
+                  "alone on a floor (no --layout or --style). "
+                  "Omit to launch a random registered kitchen task.",
+    )
     args = sim_common.parse_args(parser, argv, "g1")
 
     task = args.task
@@ -331,7 +338,9 @@ def main(argv):
         task = sim_common.random_task(seed=args.seed)
         print(f"[g1_mujoco] no --task given; randomly selected {task!r}")
     else:
-        task = sim_common.resolve_task(task, seed=args.seed, tag="g1_mujoco")
+        task = sim_common.resolve_task(task, seed=args.seed, tag="g1_mujoco",
+                                       robot_task=blank_env.canonical_task)
+    sim_common.refuse_kitchen_args(parser, args, task, blank_env.TASKS)
 
     sim_loop(task, viewer=not args.headless,
              layout=args.layout, style=args.style, seed=args.seed, timing=args.timing,

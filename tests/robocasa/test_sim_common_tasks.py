@@ -3,6 +3,7 @@
 These need RoboCasa and MuJoCo, so they run in the robocasa container:
 ROS_DOMAIN_ID=187 tests/robocasa/run_in_container.sh
 """
+import argparse
 import contextlib
 import io
 import types
@@ -11,7 +12,13 @@ import unittest
 import numpy as np
 
 import battery_env
+import blank_env
 import sim_common
+
+# The --task hooks the runners pass to resolve_task: h12_mujoco's, and g1_mujoco's.
+H12_TASKS = {'tag': 'h12_mujoco',
+             'robot_task': lambda name: battery_env.canonical_task(name) or blank_env.canonical_task(name)}
+G1_TASKS = {'tag': 'g1_mujoco', 'robot_task': blank_env.canonical_task}
 
 
 def _resolve(*args, **kwargs):
@@ -58,8 +65,52 @@ class ResolveTaskTests(unittest.TestCase):
             self.assertEqual(caught.exception.code,
                              f"[g1_mujoco] task {name!r} is H1-2 only")
 
+    def test_blank_resolves_in_any_case_for_both_robots(self):
+        for hooks in (H12_TASKS, G1_TASKS):
+            for name in ('blank', 'Blank', 'BLANK'):
+                self.assertEqual(_resolve(name, **hooks), ('Blank', ''), (hooks['tag'], name))
+
+    def test_battery_still_resolves_for_the_h12(self):
+        self.assertEqual(_resolve('BATTERY', **H12_TASKS), ('Battery', ''))
+
+    def test_battery_still_refuses_the_g1(self):
+        for name in ('Battery', 'battery'):
+            with self.assertRaises(SystemExit) as caught:
+                sim_common.resolve_task(name, **G1_TASKS)
+            self.assertEqual(caught.exception.code, f"[g1_mujoco] task {name!r} is H1-2 only")
+
     def test_h12_only_tasks_are_the_battery_envs(self):
         self.assertEqual(sim_common.H12_ONLY_TASKS, battery_env.TASKS)
+
+
+class RefuseKitchenArgsTests(unittest.TestCase):
+    def _parser(self):
+        parser = argparse.ArgumentParser(prog='h12_mujoco.py')
+        sim_common.add_common_args(parser)
+        return parser
+
+    def _refuse(self, argv, task):
+        parser = self._parser()
+        args = parser.parse_args(argv)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as caught:
+            sim_common.refuse_kitchen_args(parser, args, task, blank_env.TASKS)
+        self.assertEqual(caught.exception.code, 2)
+        return err.getvalue()
+
+    def test_layout_and_style_are_refused_for_blank(self):
+        self.assertIn("--layout chooses a RoboCasa kitchen; task 'Blank' has none",
+                      self._refuse(['--layout', '9'], 'Blank'))
+        self.assertIn("--style chooses", self._refuse(['--style', '0'], 'Blank'))
+        self.assertIn("--layout and --style choose",
+                      self._refuse(['--layout', '1', '--style', '2', '--g1'], 'Blank'))
+
+    def test_blank_without_them_and_kitchens_with_them_pass(self):
+        parser = self._parser()
+        sim_common.refuse_kitchen_args(parser, parser.parse_args(['--seed', '3']), 'Blank',
+                                       blank_env.TASKS)
+        sim_common.refuse_kitchen_args(parser, parser.parse_args(['--layout', '9', '--style', '9']),
+                                       'OpenFridge', blank_env.TASKS)
 
 
 class RandomTaskTests(unittest.TestCase):

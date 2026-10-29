@@ -102,6 +102,19 @@ def parse_args(parser: argparse.ArgumentParser, argv: Sequence[str], robot: str)
     return args
 
 
+def refuse_kitchen_args(parser: argparse.ArgumentParser, args: argparse.Namespace,
+                        task: str, no_kitchen: Sequence[str]) -> None:
+    """Usage error (exit 2) when --layout or --style is given for a task in
+    `no_kitchen` (resolved names): those options choose a RoboCasa kitchen, and
+    such a task builds none."""
+    if task in no_kitchen:
+        given = [flag for flag in ("--layout", "--style") if getattr(args, flag[2:]) is not None]
+        if given:
+            verb = "choose" if len(given) > 1 else "chooses"
+            parser.error(f"{' and '.join(given)} {verb} a RoboCasa kitchen; "
+                         f"task {task!r} has none")
+
+
 def runnable_tasks() -> tuple[dict[str, type], set[str]]:
     """Return (env_classes, runnable).
 
@@ -147,10 +160,11 @@ def resolve_task(name: str, seed: int | None = None, *, tag: str,
                  robot_task: Callable[[str], str | None] = lambda name: None) -> str:
     """Resolve a user-supplied --task name to a concrete runnable task.
 
-    `robot_task(name)` returns the canonical name of a task only the calling robot
-    runs (the H1-2's battery workcell, matched in any case), else None; a name it
-    returns is used as is. A name in H12_ONLY_TASKS that it does not claim exits with
-    an error. If `name` is already a concrete benchmark task, return it unchanged.
+    `robot_task(name)` returns the canonical name of a task the calling robot runs
+    outside RoboCasa (blank_env's Blank, and the H1-2's battery workcell, matched
+    in any case), else None; a name it returns is used as is. A name in
+    H12_ONLY_TASKS that it does not claim exits with an error. If `name` is
+    already a concrete benchmark task, return it unchanged.
     If it's an abstract base (e.g. OpenDoor, ManipulateDoor) — registered but not
     directly instantiable — randomly pick one of its concrete runnable subclasses
     instead of crashing. Messages are prefixed `[tag]`.

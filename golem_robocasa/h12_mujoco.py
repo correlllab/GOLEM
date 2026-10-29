@@ -24,6 +24,7 @@ import mujoco.viewer
 import h1_2_robosuite  # registers H1_2 + Magpie grippers, patches RoboCasa
 import realsense_profile
 import battery_env  # registers the Battery workcell env
+import blank_env  # registers the Blank env
 from h12_sensors import H12Sensors
 from magpie_hand_bridge import MagpieHandBridge
 from measurement_bridge import MeasurementBridge
@@ -95,7 +96,8 @@ def _copy_display_state(dst, src):
 
 
 def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False, duration=0.0):
-    """Launch a RoboCasa task env around the H1-2 and run the shared-MjData loop.
+    """Launch a task env around the H1-2 (a RoboCasa kitchen, battery_env's
+    Battery or blank_env's Blank) and run the shared-MjData loop.
 
     Builds the env with robots='H1_2' and steps the env's *own* MjData with our
     loop (never env.step()), driving the full sim<->ROS bridge layer:
@@ -494,8 +496,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the H1-2 RoboCasa MuJoCo sim")
     sim_common.add_common_args(
         parser,
-        task_help="RoboCasa env name (e.g. TurnOnToasterOven), or Battery for the "
-                  "battery workcell (CL_Assets/mujoco_assets/battery). "
+        task_help="RoboCasa env name (e.g. TurnOnToasterOven), Battery for the "
+                  "battery workcell (CL_Assets/mujoco_assets/battery), or Blank for "
+                  "the robot alone on a floor (no --layout or --style). "
                   "Omit to launch a random registered kitchen task.",
     )
     args = sim_common.parse_args(parser, sys.argv[1:], "h12")
@@ -505,8 +508,10 @@ if __name__ == "__main__":
         task = sim_common.random_task(seed=args.seed)
         print(f"[h12_mujoco] no --task given; randomly selected {task!r}")
     else:
-        task = sim_common.resolve_task(task, seed=args.seed, tag="h12_mujoco",
-                                       robot_task=battery_env.canonical_task)
+        task = sim_common.resolve_task(
+            task, seed=args.seed, tag="h12_mujoco",
+            robot_task=lambda name: battery_env.canonical_task(name) or blank_env.canonical_task(name))
+    sim_common.refuse_kitchen_args(parser, args, task, blank_env.TASKS)
 
     sim_loop(task, viewer=not args.headless,
              layout=args.layout, style=args.style, seed=args.seed, timing=args.timing,

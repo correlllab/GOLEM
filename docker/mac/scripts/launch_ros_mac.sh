@@ -113,7 +113,7 @@ cd "$WS"
 # in-workspace exec_depends have a package.sh in the install space, and we
 # deliberately don't build the heavy ones (estop, livox_ros_driver2, fast_lio,
 # model_server, cl_realsense, lmg_deploy — the LIO/ML/driver stack and the
-# loco-manipulation game) or the G1's (g1_*; the Mac runs the H1-2 only). Empty
+# loco-manipulation game) or the G1's (the Mac runs the H1-2 only). Empty
 # package.sh stubs (below) satisfy that check; they carry no ament index marker
 # so they never show up in `ros2 pkg list`. NOTE only h12_sim_mac.launch.py runs
 # here — the other launch files exec-launch the omitted packages (nav2,
@@ -125,7 +125,7 @@ cd "$WS"
 # ros-humble-rosidl-generator-dds-idl and torch, both in the image. Use
 # GOLEM_LOWERBODY=almi to stand and walk (see docs/MACOS.md).
 PKGS="custom_ros_messages magpie_msgs golem_ros2_models golem_safety golem_upper_ik h12_slam golem_bringup unitree_hg h12_lowerbody_rl"
-BRINGUP_STUB_DEPS="estop livox_ros_driver2 fast_lio model_server cl_realsense lmg_deploy g1_dex3 g1_locomotion g1_navigation"
+BRINGUP_STUB_DEPS="estop livox_ros_driver2 fast_lio model_server cl_realsense lmg_deploy dex_3 g1_homie g1_navigation"
 
 for _dep in $BRINGUP_STUB_DEPS; do
     mkdir -p "$INSTALL_BASE/$_dep/share/$_dep"

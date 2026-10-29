@@ -10,7 +10,7 @@ This module maps one to the other by name, so nothing depends on the model's
 index order.
 
 The tables are the sim's own, as the H1-2 sim's are: the same slot orders as
-golem_safety's robots/g1.yaml (body) and g1_dex3's HAND_JOINTS (hands), neither
+golem_safety's robots/g1.yaml (body) and dex_3's HAND_JOINTS (hands), neither
 of which the robocasa container mounts.
 
 Works on the standalone G1 MJCF in CL_Assets/g1 with ``robot_prefix=""``.

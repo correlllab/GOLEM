@@ -241,12 +241,12 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      # HOMIE's policy for the G1's walking node (g1_locomotion), which reads it
-      # from /home/code/g1_locomotion; the policy's g1.yaml names the G1's MJCF
+      # HOMIE's policy for the G1's walking node (g1_homie), which reads it
+      # from /home/code/g1_homie; the policy's g1.yaml names the G1's MJCF
       # in /home/code/CL_Assets, mounted above.
       - type: bind
-        source: ../core_ws/src/g1/g1_locomotion/policy
-        target: /home/code/g1_locomotion
+        source: ../core_ws/src/g1_homie/policy
+        target: /home/code/g1_homie
         read_only: true
         bind:
           create_host_path: false

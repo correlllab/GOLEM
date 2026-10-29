@@ -232,7 +232,7 @@ require_h12_model() {
 # HOMIE's walking policy, which docker-compose.yml bind-mounts into every ros
 # container (launch_ros.sh builds both robots' packages there).
 require_g1_policy() {
-    local policy="$GOLEM_ROOT/core_ws/src/g1/g1_locomotion/policy"
+    local policy="$GOLEM_ROOT/core_ws/src/g1_homie/policy"
     local name
     for name in deploy.onnx g1.yaml homie_policy.py; do
         require_file "$policy/$name"

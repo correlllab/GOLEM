@@ -107,7 +107,7 @@ OPTICAL_IN_LINK_XYZW = (-0.5, 0.5, -0.5, 0.5)   # rpy (-pi/2, 0, -pi/2), REP 103
 FEET = ("left_ankle_roll_link", "right_ankle_roll_link")
 # the sim's log line once the band is off (golem_robocasa/g1/g1_mujoco.py's fall logger)
 BAND_RELEASED_LINE = "elastic band released at t="
-# the walking node's log lines (g1_locomotion): its config, the policy's start, each call
+# the walking node's log lines (g1_homie): its config, the policy's start, each call
 # of the band's toggle with its reason, and the toggle's success
 LOCOMOTION_CONFIG = re.compile(r"Loaded (\S+\.yaml) and the policy")
 POLICY_STARTED = "walking: policy started"
@@ -600,7 +600,7 @@ class Driver:
 
 
 def run_drive(out, walk):
-    from g1_dex3.dex3 import JOINT_NAMES, named_pose
+    from dex_3.dex3 import JOINT_NAMES, named_pose
     from golem_upper_ik.profile import load_profile
 
     profile = load_profile("g1")

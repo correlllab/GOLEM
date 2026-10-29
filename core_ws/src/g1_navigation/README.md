@@ -338,7 +338,7 @@ falls back to its defaults without a warning.
   the path at 0.4 m/s, turns in place towards the path, and never walks
   backwards on a path.
 - Speed caps, accepted by the user: vx -0.3 to 0.5 m/s, vy 0, |wz| <= 0.6
-  rad/s, as in `g1_locomotion`'s real-robot config. The velocity
+  rad/s, as in `g1_homie`'s real-robot config. The velocity
   smoother enforces them (accel 0.4 m/s^2 and 0.8 rad/s^2, decel 0.5 and 1.0,
   inside the walking node's own rate limits). The launch file routes the
   controller's and the recovery behaviors' commands through it (Humble's
@@ -617,7 +617,7 @@ In the ROS image, with the workspace built (they need `golem_ros2_models`,
 `livox_ros_driver2` and `fast_lio`):
 
 ```bash
-cd core_ws/src/g1/g1_navigation
+cd core_ws/src/g1_navigation
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:$PYTHONPATH python3 -m pytest test
 ```
 

@@ -1,5 +1,5 @@
 # Real G1 in split mode, with HOMIE's walking policy on the legs
-# (g1_locomotion) and a stiff waist. Commands go to golem_safety's
+# (g1_homie) and a stiff waist. Commands go to golem_safety's
 # upper-body input, which merges them with the legs' on /lowcmd (its
 # split.yaml). The controller never writes /lowcmd itself.
 # Gains and speed limits are starting values, not yet tuned on our G1.

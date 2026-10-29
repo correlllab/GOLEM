@@ -138,7 +138,7 @@ velocity_smoother:
     feedback: OPEN_LOOP
     max_velocity: [0.5, 0.0, 0.6]    # vx, vy, wz: the caps
     min_velocity: [-0.3, 0.0, -0.6]
-    # inside g1_locomotion's own rate limits (0.5 m/s^2, 1.0 rad/s^2)
+    # inside g1_homie's own rate limits (0.5 m/s^2, 1.0 rad/s^2)
     max_accel: [0.4, 0.0, 0.8]
     max_decel: [-0.5, 0.0, -1.0]
     deadband_velocity: [0.0, 0.0, 0.0]

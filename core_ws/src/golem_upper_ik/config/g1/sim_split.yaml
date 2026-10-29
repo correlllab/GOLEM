@@ -1,5 +1,5 @@
 # Simulated G1 (RoboCasa) in split mode, with HOMIE's walking policy on the
-# legs (g1_locomotion) and a stiff waist.
+# legs (g1_homie) and a stiff waist.
 # Commands go to golem_safety's upper-body input (its sim_split.yaml).
 # The controller never writes /lowcmd itself.
 

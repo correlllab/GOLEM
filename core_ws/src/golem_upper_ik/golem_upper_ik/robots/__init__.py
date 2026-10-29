@@ -4,7 +4,7 @@ joints, frames, model files, named configurations and the controller-config defa
 the robots differ. The joint table itself is golem_safety's robots/<robot>.yaml.
 
 A module imports nothing of another robot's packages at module level: the H1-2 builds and
-runs without the g1_* packages.
+runs without the G1's packages.
 '''
 import importlib
 

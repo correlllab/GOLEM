@@ -26,7 +26,7 @@ import stack
 
 SHARE = get_package_share_directory('g1_navigation')
 CAPS = {'vx': (-0.3, 0.5), 'vy': (0.0, 0.0), 'wz': (-0.6, 0.6)}
-WALKING_NODE_TIMEOUT = 0.5  # s, g1_locomotion stops on a command this old
+WALKING_NODE_TIMEOUT = 0.5  # s, g1_homie stops on a command this old
 
 
 def _smoother_remappings():

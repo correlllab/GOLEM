@@ -294,5 +294,5 @@ discovered over loopback and fail the test.
   rate and input-to-output latency, as JSON (it refuses domain 0).
 - `tools/generate_robot_data.py` writes `robots/h12.yaml` from `tools/h12_joint_limits.py`
   and `robots/g1.yaml` from `tools/g1_joint_limits.py`. Both tables are hand-kept; the
-  hands are not in them (`g1_dex3` keeps the Dex3-1's joints, the Magpie gripper nodes
+  hands are not in them (`dex_3` keeps the Dex3-1's joints, the Magpie gripper nodes
   theirs). The test fixtures are recorded data (`test/fixtures/README.md`).

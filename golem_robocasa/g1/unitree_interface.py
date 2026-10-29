@@ -48,7 +48,7 @@ TOPIC_HAND_STATE = 'rt/dex3/{side}/state'
 # mode_machine 5, and mode_pr 0 (MODE_PR) drives the ankles' pitch/roll joints
 MODE_MACHINE = 5
 MODE_PR = 0
-# Dex3 HandCmd_ mode byte (g1_dex3/dex3.py): bits 0-3 motor index, bits 4-6
+# Dex3 HandCmd_ mode byte (dex_3/dex3.py): bits 0-3 motor index, bits 4-6
 # status (1 = enabled), bit 7 timeout, which the driver sets to release a finger
 HAND_STATUS_ENABLED = 0x01
 HAND_STATE_HZ = 100.0

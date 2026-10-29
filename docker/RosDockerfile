@@ -606,7 +606,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
-# G1 stack: onnxruntime runs HOMIE's walking policy (g1_locomotion); pynput,
+# G1 stack: onnxruntime runs HOMIE's walking policy (g1_homie); pynput,
 # evdev and xlib serve the G1 keyboard teleop examples; the jsp GUI drives
 # golem_ros2_models' display.launch.py. Last, so it can't bust earlier layers.
 # -----------------------------------------------------------------------------

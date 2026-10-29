@@ -32,7 +32,7 @@ The legs:
   walking node does not start: the leg motors stay off on golem_safety's
   zero-gain stream while the arms run. Set start_position_verified:=true only
   after checking the robot is in a safe start pose.
-- With it, the walking node (g1_locomotion's g1.yaml) waits for golem_safety's
+- With it, the walking node (g1_homie's g1.yaml) waits for golem_safety's
   heartbeat, upright rt/lowstate and the arm controller's commands, moves the
   legs from where they are to the policy's default pose over 2 s, and holds
   that pose. golem_safety engages the leg input on its first command.

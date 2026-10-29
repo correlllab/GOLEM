@@ -4,7 +4,7 @@
 torque in N*m. They are the limits of Unitree's model (g1_29dof_with_hand_rev_1_0.urdf in
 CL_Assets/g1/g1_description), not measurements of our unit. That URDF gives the ankles and
 waist roll/pitch 35 N*m where the MJCF gives 50 N*m; confirm on hardware before relying on
-either. The Dex3-1 hands are not here: g1_dex3 keeps their joints.
+either. The Dex3-1 hands are not here: dex_3 keeps their joints.
 '''
 
 MOTOR_COUNT = 29

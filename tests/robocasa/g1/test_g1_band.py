@@ -127,8 +127,8 @@ def test_release_drops_limp_robot():
 
 def test_sim_reads_no_policy():
     """Importing g1_robosuite, which builds the sim's robot, touches no file or
-    directory of HOMIE's policy (g1_locomotion's policy/, mounted at
-    /home/code/g1_locomotion in the ros container) and puts none on sys.path"""
+    directory of HOMIE's policy (g1_homie's policy/, mounted at
+    /home/code/g1_homie in the ros container) and puts none on sys.path"""
     code = textwrap.dedent("""
         import os, sys
         touched = []
@@ -148,7 +148,7 @@ def test_sim_reads_no_policy():
         os.stat = stat
         from g1 import g1_robosuite
         assert g1_robosuite.STANCE, "no stance"
-        policy = sorted({p for p in touched + sys.path if "g1_locomotion" in p or "homie" in p.lower()})
+        policy = sorted({p for p in touched + sys.path if "homie" in p.lower()})
         modules = sorted(m for m in sys.modules if "homie" in m.lower())
         if policy or modules:
             print("policy paths:", policy, "modules:", modules)

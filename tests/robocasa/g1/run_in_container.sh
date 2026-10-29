@@ -34,7 +34,7 @@ COMPOSE+=(-f "$no_network")
 # test_g1_sensors.py checks the lidar's IMU point against g1_navigation's FAST_LIO config.
 "${COMPOSE[@]}" run --rm -T --no-deps \
     -v "$ROOT/tests:/home/code/tests:ro" \
-    -v "$ROOT/core_ws/src/g1/g1_navigation/config:/home/code/core_ws/src/g1/g1_navigation/config:ro" \
+    -v "$ROOT/core_ws/src/g1_navigation/config:/home/code/core_ws/src/g1_navigation/config:ro" \
     -e MUJOCO_GL=egl -e PYTHONDONTWRITEBYTECODE=1 robocasa bash -lc '
 source /opt/ros/humble/setup.bash && source /opt/livox_ws/install/setup.bash
 export PYTHONPATH=/home/code/golem_robocasa${PYTHONPATH:+:$PYTHONPATH}

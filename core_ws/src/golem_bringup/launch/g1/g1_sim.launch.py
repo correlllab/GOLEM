@@ -12,7 +12,7 @@ The G1 RoboCasa sim (golem_robocasa/g1/) takes rt/lowcmd and rt/dex3/*, and
 holds the robot up on an elastic band until /elastic_band/toggle releases it.
 golem_safety runs sim_split and the controller sim_split: golem_safety streams
 zero gains on every motor from boot and engages each input on its own first
-command. HOMIE's walking node always runs, with g1_locomotion's sim.yaml: once
+command. HOMIE's walking node always runs, with g1_homie's sim.yaml: once
 golem_safety beats and the controller commands, it moves the legs to the
 policy's default pose, starts the policy at zero velocity (no operator
 confirm in the sim) and releases the band once the controller has finished its

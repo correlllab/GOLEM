@@ -66,7 +66,7 @@ first sample. The hands' and grippers' joints come from their own nodes.
 one joint table both packages read, and `golem_upper_ik/robots/<robot>.py` (model files,
 frames, IK and held joints, named configurations, start-up sequence, per-robot config
 defaults). Both robots' model files come from `golem_ros2_models`. A robot module imports
-nothing of another robot's packages: the H1-2 builds and runs without the `g1_*` packages.
+nothing of another robot's packages: the H1-2 builds and runs without the G1's packages.
 
 | | H1-2 (`robots/h12.py`) | G1 (`robots/g1.py`) |
 |---|---|---|

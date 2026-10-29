@@ -61,7 +61,7 @@ sys.exit(int(os.environ.get('BUILD_EXIT', '0')))
         self.assertEqual(len((self.root / 'calls').read_text().splitlines()), 2)
 
     def test_launch_ros_builds_both_robots_whatever_golem_robot(self):
-        # Every ros container builds the g1_* packages too, the H1-2's included.
+        # Every ros container builds the G1's packages too, the H1-2's included.
         self.env.pop('GOLEM_ROBOT', None)
         for robot in (None, 'h12', 'g1'):
             with self.subTest(robot=robot):

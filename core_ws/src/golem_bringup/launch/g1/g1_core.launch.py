@@ -4,7 +4,7 @@ Core G1 stack, shared by g1_real_robot.launch.py (real robot) and g1_sim.launch.
 Starts robot_state_publisher, golem_upper_ik's joint_state_publisher (the 29
 body joints), golem_safety's safety_node, the only writer of /lowcmd, the arm
 controller (golem_upper_ik's frame_task_server), HOMIE's walking node
-(g1_locomotion's locomotion_node; on the real robot only with
+(g1_homie's locomotion_node; on the real robot only with
 start_position_verified:=true) and, optionally, navigation (g1_navigation),
 the Dex3-1 hands and RViz. The golem nodes get robot g1 as a ROS parameter,
 and safety_node and frame_task_server their configs (joint_state_publisher
@@ -32,14 +32,14 @@ must finish within controller.startup_move_timeout (30 s) of the gate opening;
 otherwise the controller stops with an error.
 
 The walking node starts `locomotion_delay` seconds after the controller, with
-g1_locomotion's config for the platform (locomotion_config: sim in the sim, g1
+g1_homie's config for the platform (locomotion_config: sim in the sim, g1
 on the real robot), and drives the legs through golem_safety's split mode. It
 sends nothing until golem_safety beats on /safety/heartbeat, rt/lowstate is
 upright and the controller commands. Then it ramps the legs to the policy's
 default pose. In the sim it starts the policy and releases the sim's elastic
 band once the controller has finished its start-up moves (or band.max_wait
 after the policy started without them); on the real robot it holds the pose
-until the operator calls /lowerbody/confirm_engage (g1_locomotion's README has
+until the operator calls /lowerbody/confirm_engage (g1_homie's README has
 the details). The controller holds the waist as
 stiffly as golem_safety allows (g1_split.yaml, sim_split.yaml), as the policy
 expects.
@@ -106,7 +106,7 @@ DEFAULT_CONFIGS = {
     False: ('split', 'g1_split'),
     True: ('sim_split', 'sim_split'),
 }
-# real / sim: the walking node's config (g1_locomotion's config/<name>.yaml)
+# real / sim: the walking node's config (g1_homie's config/<name>.yaml)
 LOCOMOTION_CONFIGS = {
     False: 'g1',
     True: 'sim',
@@ -224,7 +224,7 @@ def _setup(context):
             ],
         ),
         Node(
-            package='g1_dex3',
+            package='dex_3',
             executable='dex3_hands',
             name='dex3_hands',
             parameters=[use_sim_time],
@@ -248,7 +248,7 @@ def _setup(context):
             period=delay + locomotion_delay,
             actions=[
                 Node(
-                    package='g1_locomotion',
+                    package='g1_homie',
                     executable='locomotion_node',
                     name='locomotion_node',
                     arguments=['--config', f'{locomotion_config}.yaml'],
@@ -298,7 +298,7 @@ def generate_launch_description():
                               description='s between the safety node and the controller'),
         DeclareLaunchArgument(
             'locomotion_config', default_value='',
-            description='g1_locomotion config (default: g1, or sim in sim)'),
+            description='g1_homie config (default: g1, or sim in sim)'),
         DeclareLaunchArgument('locomotion_delay', default_value='2.0',
                               description='s between the controller and the walking node'),
         DeclareLaunchArgument(

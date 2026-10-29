@@ -21,6 +21,7 @@
   <exec_depend>nav2_mppi_controller</exec_depend>
   <exec_depend>nav2_smac_planner</exec_depend>
   <exec_depend>fast_lio</exec_depend>
+  <exec_depend>golem_ros2_models</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>pointcloud_to_laserscan</exec_depend>
   <exec_depend>slam_toolbox</exec_depend>

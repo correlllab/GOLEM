@@ -1,6 +1,7 @@
 import os
 
 from ament_index_python.packages import get_package_share_directory
+from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -10,9 +11,6 @@ from nav2_common.launch import RewrittenYaml
 
 from h12_slam.robot_geometry import fixed_transform, matrix_to_quat
 
-# As h12_state.launch.py: the onboard PC's checkout unless GOLEM_ASSETS_DIR is set;
-# the sim bringups pass urdf_file to h12_state, and that value reaches this file too.
-ASSETS_DIR = os.environ.get('GOLEM_ASSETS_DIR', '/home/unitree/GOLEM/CL_Assets')
 LIDAR_FRAME = 'livox_link'    # /livox/lidar's points
 IMU_FRAME = 'livox_imu_link'  # /livox/imu, FAST-LIO's 'body'
 
@@ -79,7 +77,7 @@ def generate_launch_description():
 
     declare_urdf_file = DeclareLaunchArgument(
         'urdf_file',
-        default_value=os.path.join(ASSETS_DIR, 'ros_assets', 'h1_2_magpie_ros.urdf'),
+        default_value=urdf_path('h12', ros=True),
         description='Robot URDF: FAST-LIO extrinsic and body -> pelvis from its MID360 frames'
     )
     # FAST-LIO (/livox/lidar and /livox/imu per mid360.yaml) and body -> pelvis.

@@ -21,6 +21,7 @@ torque plus the steady-state hold's integral bias, which fades over a move.
 import time
 
 import numpy as np
+from pink.exceptions import NoSolutionFound
 
 from golem_upper_ik.core.ik_solver import IKSolver
 from golem_upper_ik.core.low_cmd_handler import LowCmdHandler
@@ -236,12 +237,42 @@ class UpperController:
         q_reduced = np.asarray(q_reduced, dtype=np.float64)
         self._logger.info(f'{desc}...')
         while True:
-            self.goto_reduced_configuration(q_reduced)
+            try:
+                self.goto_reduced_configuration(q_reduced)
+            except NoSolutionFound as error:
+                raise self._no_ik_solution_error(desc, error) from error
             if np.max(np.abs(self.ik_solver.q_reduced - q_reduced)) < STARTUP_THRESHOLD:
                 return
             if time.monotonic() > deadline:
                 raise self._startup_timeout_error(desc)
             time.sleep(self.dt)
+
+    def _no_ik_solution_error(self, desc, error):
+        '''
+        The error for a start-up IK step with no solution. The usual cause is a self-collision
+        pair the IK starts well inside controller.d_min, which the barrier cannot push out in
+        one step, so the closest pairs at the IK's pose are logged with it
+        '''
+        pairs = self.robot_model.closest_collision_pairs(self.ik_solver.q_reduced)
+        if pairs:
+            closest = '; '.join(f'{first} - {second} {distance * 1000:.1f} mm'
+                                for first, second, distance in pairs)
+            inside = sum(distance < self.d_min for _, _, distance in pairs)
+            self._logger.error(
+                f'{desc}: the IK has no solution; closest self-collision pairs (controller.d_min '
+                f'{self.d_min * 1000:.0f} mm): {closest}')
+            if inside:
+                cause = (f'{inside} of the closest self-collision pairs are inside '
+                         f'controller.d_min ({self.d_min * 1000:.0f} mm), closest '
+                         f'{pairs[0][0]} - {pairs[0][1]} at {pairs[0][2] * 1000:.1f} mm: the '
+                         'arms start too close to the body or each other; move them clear')
+            else:
+                cause = (f'every self-collision pair keeps controller.d_min '
+                         f'({self.d_min * 1000:.0f} mm), closest {pairs[0][2] * 1000:.1f} mm')
+        else:
+            cause = 'the robot has no self-collision model'
+        return RuntimeError(f'{desc}: the IK has no solution ({error}); {cause}. Stopping the '
+                            'controller')
 
     def _move_held_joints_to_targets(self, deadline):
         '''Ease the held joints (the torso, the waist) to exactly their hold targets'''

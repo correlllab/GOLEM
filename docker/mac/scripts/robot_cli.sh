@@ -12,8 +12,7 @@
 #   rob_gripset left 0.5            # set gripper position (0=open .. 1=closed)
 #   rob_eepose right                # print current right-hand pose (pelvis frame)
 #   rob_home                        # arms-down baseline
-# (rob_reach / Cartesian reaching is disabled — the FrameTask action crashes the
-#  controller node; drive the robot in joint space with rob_pose for now.)
+# For Cartesian reaching, send a /frame_task goal (core_ws/src/golem_upper_ik/README.md).
 #
 # Watch it live in your browser (from the Mac): http://localhost:6080/vnc.html
 
@@ -59,19 +58,6 @@ rob_eepose() {
     local side="${1:-right}"
     timeout 8 ros2 topic echo "/${side}_ee_pose" --once \
         || echo "[rob_eepose] no sample in 8s (QoS-match CLI artifact; the topic is live)"
-}
-
-# rob_reach — DISABLED. The /frame_task (FrameTask) action currently CRASHES the
-# frame_task_server: after a goal sets self.frame_names, the node's periodic
-# /frame_poses publisher calls get_frame_transformation() on that frame in the
-# FULL model, where a wrist-frame id is out of range -> IndexError kills the node
-# (frame_task_server.py:124 -> robot_model.py:426). The arm does move first, but
-# the controller then dies and all further commands hang on "waiting for action
-# server". Until that's fixed, drive the robot in joint space (rob_pose) instead.
-rob_reach() {
-    echo "rob_reach is disabled: the FrameTask action crashes frame_task_server"
-    echo "(get_frame_transformation IndexError on the wrist frame). Use rob_pose <name>."
-    return 1
 }
 
 # --- Lower-body locomotion (needs GOLEM_LOWERBODY=almi) --------------------------

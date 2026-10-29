@@ -208,10 +208,13 @@ then moves only in the start-up step 4.
 - The barrier pushes a sphere pair that starts a few millimetres inside `d_min` back out, but
   not one much further in: from a measured pose with a pair overlapping, or on the G1 about
   10 mm apart or closer (the start-up from the limp arms rolled in toward the torso, offline),
-  the IK's quadratic program has no solution, and the move fails at its first step. On the
-  G1 the limp arms settle with the wrists resting on the hips (elbows about 1.25 rad), their
-  spheres 20 mm from the hip spheres, and the start-up reaches `home` from there; from
-  `arms_down` it could not.
+  the IK's quadratic program has no solution, and the move fails at its first step. A
+  start-up move that fails so stops the controller with an error that names the closest
+  enabled sphere pairs and their distances against `d_min` (logged first as `<move>: the IK
+  has no solution; closest self-collision pairs (controller.d_min 20 mm): ...`), so a start
+  inside the keep-out reads as self-collision. On the G1 the limp arms settle with the wrists
+  resting on the hips (elbows about 1.25 rad), their spheres 20 mm from the hip spheres, and
+  the start-up reaches `home` from there; from `arms_down` it could not.
 - On ROS domain 0 every control step first checks that `/lowstate` is no staler than
   `controller.max_state_lag_ms` (the larger of its tick lag and its age); a stale state aborts
   the goal and the last command keeps going out. The sims stamp the tick in sim steps, so the
@@ -260,7 +263,8 @@ against `golem_safety`'s installed `safety_node`. They cover the profiles
 model, IK and planner (`test_robot_model.py`, `test_ik_solver.py`, `test_planner.py`; both
 robots with their collision models), the ROS I/O, command handler and follow gate
 (`test_ros_io.py`, `test_low_cmd_handler.py`), the controller and the nodes
-(`test_controller_loop.py`, `test_frame_task_server.py`), the publish rate
+(`test_controller_loop.py`, `test_frame_task_server.py`), a start-up IK step with no
+solution (`test_startup_no_solution.py`), the publish rate
 (`test_publish_rate.py`) and that nothing imports `unitree_sdk2py` (`test_no_sdk.py`). The
 fixtures under `test/fixtures/` are recorded data: what the previous arm controllers
 returned for the same configs and configurations (`test/fixtures/README.md` says which

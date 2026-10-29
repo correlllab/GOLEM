@@ -52,9 +52,10 @@ NAMED_CONFIGS = {
     'home':  # zero posture, forearms forward; the example's first stage
         np.zeros(len(ENABLED_JOINTS)),
     # straight arms hanging below the shoulders. The one named configuration in
-    # self-collision: the real wrists and hands rest on the hips (g1_description's meshes
-    # touch), and each hand and wrist sphere sits 2 to 5 cm inside its hip-pitch sphere, so
-    # a goal to it stops short with the barrier on, and a planned goal to it fails
+    # self-collision: the real wrists and hands rest on the hips (the meshes of
+    # CL_Assets/g1/g1_description touch), and each hand and wrist sphere sits 2 to 5 cm inside
+    # its hip-pitch sphere, so a goal to it stops short with the barrier on, and a planned
+    # goal to it fails
     'arms_down':
         np.array([0.0, 0.0, 0.0, HALF_PI, 0.0, 0.0, 0.0,
                   0.0, 0.0, 0.0, HALF_PI, 0.0, 0.0, 0.0]),
@@ -92,7 +93,7 @@ def model_paths() -> dict:
     closest pairs, the upper arms against the torso, are 25 mm apart. The IK can start a few
     millimetres inside that keep-out, and the barrier pushes the pair back out, but not much
     further: from a pose with a pair about 10 mm apart or closer, the start-up's first step
-    has no solution and frame_task_server stops. On the real G1 in debug mode the arms hang
+    has no solution and frame_task_server stops, logging the closest sphere pairs. On the real G1 in debug mode the arms hang
     limp until its first command, so they must hang clear (in the sim they hang with the
     wrists resting on the hips, their spheres 20 mm from the hip spheres; arms_down is inside
     them)

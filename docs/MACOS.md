@@ -134,9 +134,6 @@ raw walk policy directly and only marches in place.
   fail with "Cannot connect to the Docker daemon" while the VM and containers are
   healthy. Use `colima ssh -- docker …`, or `colima stop && colima start` to
   relink the socket (this restarts the containers).
-- **Cartesian reaching is disabled.** The `/frame_task` action crashes the
-  controller node here, so `rob_reach` is a no-op stub — drive in joint space
-  with `rob_pose`.
 - **Restart the two containers coherently.** The RoboCasa container owns
   `/clock`; restarting it alone resets sim time to 0 while the ROS side keeps its
   old clock, giving TF extrapolation errors and a frozen `0×0` SLAM map. Restart

@@ -18,7 +18,7 @@ holds them there until the operator's confirm. No hand driver runs.
 
 Every command runs on the laptop wired to the robot. Nothing runs on, or
 changes, the robot's own computers. Practise the same bringup in the sim first
-([Arms by hand](index.md#arms-by-hand), sending only `t_pose` and `home`):
+([Arms by hand](index.md#arms-by-hand), sending only `arms_front_45` and `home`):
 the sim starts the robot as debug mode does, every motor off, with an elastic
 band in place of the gantry.
 
@@ -49,7 +49,7 @@ below depend on it.
 | 5. Start the container | `docker/scripts/docker_run.sh ros --g1`; it prints `robot: g1` and asks you to confirm domain 0. |
 | 6. Read-only checks | Gate: the container is the G1's and pinned to the robot's port, or exit and fix `docker/.env` and the shell's exports. Then nothing else writes the command topics, `rt/lowstate` arrives, and every joint is inside the safety layer's estop limits. |
 | 7. First launch: the arms | `ros2 launch golem_bringup g1_real_robot.launch.py use_hands:=false use_rviz:=false`: the zero-gain stream, the heartbeat, the arms' start-up. The legs stay limp. |
-| 8. Named configs | Send only `t_pose` and `home` on `/named_config`, one at a time, `home` last. |
+| 8. Named configs | Send only `arms_front_45` and `home` on `/named_config`, one at a time, `home` last. |
 | 9. Stop the bringup | Stop the controller alone (the arms go limp, the waist holds), then Ctrl+C the launch, with the gantry carrying the robot. |
 | 10. Second launch: the legs | Step 6's last checks again (no other writer, the joints inside the estop limits), then the same launch with `start_position_verified:=true`: the walking node's pre-pose and hold, then the confirm. Stop with step 9. |
 | 11. End the session | Copy the safety layer's logs out, exit the container, set `docker/.env` back to the sim. |
@@ -163,8 +163,10 @@ The workspace is built with `--symlink-install`, so a Python edit under
   its hip, and each upper arm 20 mm off the torso's spheres. Its start-up
   begins wherever the arms hang, and from a hand or wrist about 10 mm or less
   from its hip sphere, or an upper arm pressed in against the torso, it stops
-  at once ("did not start", with a QP or `NoSolutionFound` error that does not
-  say self-collision).
+  at once. It then logs `Moving home: the IK has no solution; closest
+  self-collision pairs (controller.d_min 20 mm): ...` with each sphere pair's
+  distance, and its `did not start` error says how many of those pairs are
+  inside the 20 mm keep-out.
 - Nobody is within reach of the arms or the legs. The arms start moving to
   `home` a few seconds after the launch in step 7, and the legs a few seconds
   after the controller in step 10.
@@ -328,19 +330,26 @@ controller exits with an error, go to step 9.
 
 ### 8. Named configs only (terminal 2)
 
-This session uses only `t_pose` and `home`. Send one goal at a time, and
-wait for each to finish before sending the next. Send `home` last, so the
-arms are low, the forearms forward at waist height, when step 9 turns them
-off. `arms_down` is not used: its hands and wrists rest on the hips, inside
-the hip spheres of the controller's self-collision model, so a goal to it
-stops short.
+This session uses only `arms_front_45` and `home`. `arms_front_45` (straight
+arms, 45 degrees forward and down) loads the shoulders less than `t_pose`, and
+its closest sphere pair is 27.9 mm apart, clear of the 20 mm keep-out. Send one
+goal at a time, and wait for each to finish before sending the next. Send
+`home` last, so the arms are low, the forearms forward at waist height, when
+step 9 turns them off. `arms_down` is not used: its hands and wrists rest on
+the hips, inside the hip spheres of the controller's self-collision model, so
+a goal to it stops short.
 
 ```bash
 ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 't_pose', plan: false, duration: {sec: 0, nanosec: 0}}"
+  "{config_name: 'arms_front_45', plan: false, duration: {sec: 0, nanosec: 0}}"
 ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
   "{config_name: 'home', plan: false, duration: {sec: 0, nanosec: 0}}"
 ```
+
+A goal that ends with `success: false` while the arms are at the pose is
+expected: the hold reports success only once every arm joint is within
+0.001 rad of the pose (`controller.threshold_joint`), and it may not get that
+close before the goal ends.
 
 Send no other goals, and start no second controller: a second live writer on
 the safety layer's input latches its estop.

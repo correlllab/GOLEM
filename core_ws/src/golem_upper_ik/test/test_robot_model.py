@@ -188,6 +188,12 @@ def test_g1_model_has_collision(models):
         else:
             assert model.check_collision_free_reduced(q), name
             assert distances.min() >= d_min, (name, distances.min())
+    # home's closest pairs are the upper arms against the torso. The distance pins CL_Assets'
+    # g1_sphere.urdf: a changed sphere model moves it
+    first, second, distance = model.closest_collision_pairs(model.profile.named_configs['home'],
+                                                            count=1)[0]
+    assert distance == pytest.approx(0.0249, abs=1e-3)
+    assert 'torso_link' in first + second, (first, second)
 
 
 def test_rebuild_reduced_relocks_at_measured(models):

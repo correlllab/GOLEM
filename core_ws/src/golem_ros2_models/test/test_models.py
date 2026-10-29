@@ -2,6 +2,7 @@
 The installed models of both robots, read through golem_ros2_models.paths (needs the package
 built and sourced).
 '''
+import hashlib
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -23,6 +24,10 @@ NON_BODY_JOINT = {
 # the Magpie finger hinges the H1-2's ROS copy fixes
 H12_HINGES = {f'{g}_{s}_hinge_{i}' for g in ('lg', 'rg') for s in ('left', 'right')
               for i in (1, 2, 3)}
+# sha256 of CL_Assets' g1/g1_sphere.urdf, installed verbatim: the lab's sphere model with
+# the optimiser-fitted torso column (CL_Assets/README.md). golem_upper_ik's G1 d_min and its
+# tests' distances hold for this file; a changed sphere model must change this too
+G1_SPHERE_SHA256 = '68c5e5cf93a6fcb5958f98dc88909be0632dd1165500adf6d1b4e8d64225dcf0'
 
 
 def share_dir():
@@ -185,6 +190,11 @@ def test_pinocchio_loads_the_sphere_model_with_its_srdf(robot):
     every_pair = len(collision.collisionPairs)
     pin.removeCollisionPairs(model, collision, srdf)
     assert 0 < len(collision.collisionPairs) < every_pair
+
+
+def test_g1_sphere_model_is_the_pinned_file():
+    with open(paths.collision_paths('g1')[0], 'rb') as f:
+        assert hashlib.sha256(f.read()).hexdigest() == G1_SPHERE_SHA256
 
 
 @pytest.mark.parametrize('robot', paths.ROBOTS)

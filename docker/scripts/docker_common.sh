@@ -206,6 +206,29 @@ require_g1_model() {
     done
 }
 
+# The CL_Assets files of the H1-2 that golem_ros2_models installs in every ros
+# container: its URDF, sphere model and SRDF, and the body and Magpie gripper
+# meshes, which are Git LFS.
+require_h12_model() {
+    local hint="Fetch the H1-2 model: git -C $GOLEM_ASSETS_DIR lfs pull (CL_Assets is a submodule: git submodule update --init CL_Assets first)"
+    local files=(h1_2_magpie.urdf h1_2_magpie_sphere.urdf h1_2_magpie_sphere_collision.srdf)
+    local first_line path dir
+    files=("${files[@]/#/$GOLEM_ASSETS_DIR/ros_assets/}")
+    for path in "${files[@]}"; do
+        [ -f "$path" ] || fail "Missing $path. $hint"
+    done
+    local meshes=()
+    for dir in h1_2 magpie; do
+        local found=("$GOLEM_ASSETS_DIR/meshes/$dir"/*.[sS][tT][lL])
+        [ -f "${found[0]}" ] || fail "No meshes in $GOLEM_ASSETS_DIR/meshes/$dir. $hint"
+        meshes+=("${found[@]}")
+    done
+    for path in "${files[@]}" "${meshes[@]}"; do
+        IFS= read -r first_line < "$path" || true
+        [ "$first_line" != 'version https://git-lfs.github.com/spec/v1' ] || fail "$path is a Git LFS pointer. $hint"
+    done
+}
+
 # The walking policy, which the G1 overlay bind-mounts into the ros service.
 require_g1_policy() {
     local policy="$GOLEM_ROOT/core_ws/src/g1/g1_locomotion/policy"
@@ -217,9 +240,8 @@ require_g1_policy() {
 
 prepare_mounts() {
     local service=$1
-    require_file "$GOLEM_ASSETS_DIR/ros_assets/h1_2_magpie_ros.urdf"
     case "$service" in
-        ros) require_g1_model ros; [ "${GOLEM_ROBOT:-h12}" != g1 ] || require_g1_policy ;;
+        ros) require_h12_model; require_g1_model ros; [ "${GOLEM_ROBOT:-h12}" != g1 ] || require_g1_policy ;;
         robocasa) [ "${GOLEM_ROBOT:-h12}" != g1 ] || require_g1_model robocasa ;;
     esac
     case "$service" in

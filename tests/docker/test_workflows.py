@@ -16,8 +16,7 @@ class Workflows(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         shutil.copytree(REPO / 'docker', self.root / 'docker', ignore=shutil.ignore_patterns('.env', '__pycache__'))
-        for name in ('unitree_sdk2_python/setup.py', 'CL_Assets/ros_assets/h1_2_magpie_ros.urdf',
-                     *self.G1_MODEL,
+        for name in ('unitree_sdk2_python/setup.py', *self.H12_MODEL, *self.G1_MODEL,
                      'CL_isaaclab_sim/sim_main.py', 'golem_robocasa/h12_mujoco.py',
                      'core_ws/src/magpie_msgs/package.xml', 'core_ws/src/custom_ros_messages/package.xml',
                      'core_ws/src/livox_ros_driver2/package_ROS2.xml', 'core_ws/cyclonedds.xml',
@@ -104,12 +103,41 @@ if 'config' in sys.argv:
         self.assertEqual(result['args'][result['args'].index('--task') + 1], 'custom')
 
     def test_lfs_pointer_is_not_accepted_as_an_asset(self):
-        asset = self.root / 'CL_Assets/ros_assets/h1_2_magpie_ros.urdf'
+        asset = self.root / 'golem_robocasa/h12_mujoco.py'
         asset.write_text('version https://git-lfs.github.com/spec/v1\noid sha256:123\nsize 10\n')
         r = self.run_script('docker/scripts/docker_run.sh', 'robocasa')
         self.assertNotEqual(r.returncode, 0)
         self.assertIn('LFS', r.stderr)
         self.assertFalse(any('run' in c for c in self.calls()))
+
+    def test_ros_checks_h12_model_for_both_robots(self):
+        # golem_ros2_models installs both robots' models in every ros container; the sims
+        # read none of CL_Assets/ros_assets.
+        self.add_g1_files()
+        for name in self.H12_MODEL:
+            for label, content in (('missing', None), ('LFS pointer', self.LFS_POINTER)):
+                for robot in ('h12', 'g1'):
+                    with self.subTest(label, name=name, robot=robot):
+                        (self.root / 'calls').unlink(missing_ok=True)
+                        path = self.root / name
+                        if content is None:
+                            path.unlink()
+                        else:
+                            path.write_text(content)
+                        try:
+                            r = self.run_script('docker/scripts/docker_run.sh', 'ros',
+                                                GOLEM_ROBOT=robot)
+                        finally:
+                            path.write_text('fixture')
+                        self.assertNotEqual(r.returncode, 0)
+                        reported = name if content or name.endswith(('.urdf', '.srdf')) \
+                            else str(Path(name).parent)
+                        self.assertIn(reported, r.stderr)
+                        self.assertIn(self.LFS_HINT, r.stderr)
+                        self.assertFalse(self.compose_calls())
+        shutil.rmtree(self.root / 'CL_Assets/ros_assets')
+        r = self.run_script('docker/scripts/docker_run.sh', 'robocasa')
+        self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_mac_rejects_isaac(self):
         r = self.run_script('docker/mac/scripts/docker_run_mac.sh', 'isaac', TEST_MAC='1')
@@ -212,6 +240,12 @@ if 'config' in sys.argv:
         'CL_Assets/g1/g1_description/g1_29dof_with_hand_rev_1_0.urdf', G1_XML, G1_MESH,
         'CL_Assets/g1/g1_sphere.urdf', 'CL_Assets/g1/g1_sphere_collision.srdf',
         'CL_Assets/g1/LICENSE.unitree_ros',
+    )
+    # The CL_Assets files of the H1-2 that golem_ros2_models installs in every ros container.
+    H12_MODEL = (
+        'CL_Assets/ros_assets/h1_2_magpie.urdf', 'CL_Assets/ros_assets/h1_2_magpie_sphere.urdf',
+        'CL_Assets/ros_assets/h1_2_magpie_sphere_collision.srdf',
+        'CL_Assets/meshes/h1_2/pelvis.STL', 'CL_Assets/meshes/magpie/mount.stl',
     )
     # The walking policy, which only the G1's ros service mounts.
     G1_FILES = (

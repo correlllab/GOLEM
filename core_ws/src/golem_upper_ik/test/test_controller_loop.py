@@ -411,8 +411,8 @@ def test_waits_for_state_and_tracks_the_robot_through_engagement(
     gap_before = max(np.max(np.abs(s.q - s.measured)) for s in before)
     if follow_tolerance == 0.0:
         # without the gate the start-up runs open loop, far from the robot that is not
-        # following: the jump the gate prevents (about 0.3 rad on the G1, whose g1_split
-        # palm speed limit, 0.15 m/s, slows the move)
+        # following: the jump the gate prevents (more than 0.3 rad on the H1-2; on the G1,
+        # whose g1_split palm speed limit, 0.15 m/s, slows the move, more than 0.2 rad)
         assert gap_before > {'h12': 0.3, 'g1': 0.2}[robot]
         return
 

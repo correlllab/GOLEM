@@ -465,6 +465,25 @@ class RobotModel:
             })
         return violations
 
+    def closest_collision_pairs(self, q_reduced, count=3):
+        '''
+        The count enabled self-collision pairs closest at q_reduced, closest first, as
+        (sphere, sphere, distance in m; negative: they overlap); empty without a collision
+        model
+        '''
+        if not self.has_collision:
+            return []
+        geometry = self.collision_model_body_reduced
+        data = self.collision_data_body_reduced
+        pin.computeDistances(self.model_body_reduced, self.data_body_reduced, geometry, data,
+                             np.asarray(q_reduced, dtype=np.float64))
+        objects = geometry.geometryObjects
+        pairs = sorted(
+            ((objects[pair.first].name, objects[pair.second].name, float(result.min_distance))
+             for pair, result in zip(geometry.collisionPairs, data.distanceResults)),
+            key=lambda pair: pair[2])
+        return pairs[:count]
+
     def check_collision_free_reduced(self, q_reduced):
         '''
         Check collision for the reduced model (model_body_reduced)

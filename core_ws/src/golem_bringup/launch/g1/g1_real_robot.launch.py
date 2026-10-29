@@ -82,10 +82,11 @@ Hazards not handled in code:
   sphere pair starts about 10 mm apart or closer (half the keep-out; a hand or
   wrist in its hip-pitch sphere, or an upper arm rolled in against the torso),
   the start-up's first IK step has no solution and frame_task_server stops at
-  once ("did not start" with a QP / NoSolutionFound error, which does not say
-  self-collision). Hanging freely in the sim, the wrists rest on the hips with
-  their spheres 20 mm from the hip spheres; arms_down (elbows at pi/2) is
-  inside them.
+  once: it logs "the IK has no solution; closest self-collision pairs
+  (controller.d_min 20 mm): ..." with each pair's distance, and its "did not
+  start" error says how many of them are inside controller.d_min. Hanging
+  freely in the sim, the wrists rest on the hips with their spheres 20 mm
+  from the hip spheres; arms_down (elbows at pi/2) is inside them.
 - The gains are not tuned on our G1: the waist's damping ratio is
   about 0.42-0.45 at home (g1_split.yaml).
 """

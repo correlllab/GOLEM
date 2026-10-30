@@ -35,7 +35,6 @@ from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                        ReliabilityPolicy)
 from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import LaserScan
-from std_srvs.srv import Trigger
 
 from mcp.server.fastmcp import FastMCP
 
@@ -69,8 +68,6 @@ class RosDebugNode(Node):
                                  self._cb("_costmap"), _LATCHED)
         self.create_subscription(Path, "/plan", self._cb("_plan"), _SENSOR)
         self._cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
-        self._fame_cli = self.create_client(Trigger, "/lowerbody/start_fame")
-        self._walk_cli = self.create_client(Trigger, "/lowerbody/start_walk")
 
     def _cb(self, attr):
         def f(msg):
@@ -121,19 +118,6 @@ class RosDebugNode(Node):
         return {"has_plan": True, "poses": len(pts), "length_m": round(length, 2)}
 
     # -- actuation -----------------------------------------------------------
-    def call_trigger(self, which, timeout=8.0):
-        cli = self._fame_cli if which == "fame" else self._walk_cli
-        if not cli.wait_for_service(timeout_sec=2.0):
-            return {"ok": False, "error": f"/lowerbody/start_{which} unavailable"}
-        fut = cli.call_async(Trigger.Request())
-        t0 = time.time()
-        while not fut.done() and time.time() - t0 < timeout:
-            time.sleep(0.05)
-        if not fut.done():
-            return {"ok": False, "error": "service call timed out"}
-        r = fut.result()
-        return {"ok": bool(r.success), "message": r.message}
-
     def publish_cmd(self, vx, vy, wz):
         t = Twist()
         t.linear.x, t.linear.y, t.angular.z = float(vx), float(vy), float(wz)
@@ -195,21 +179,11 @@ def scan_status() -> dict:
 
 # ---- actuation ------------------------------------------------------------
 @mcp.tool()
-def set_lowerbody(mode: str) -> dict:
-    """Switch the lower-body controller. mode='fame' -> stand free (FAME);
-    mode='walk' -> hand over to the walk policy (call after fame). Needs the sim
-    launched with GOLEM_LOWERBODY=switch."""
-    if mode not in ("fame", "walk"):
-        return {"ok": False, "error": "mode must be 'fame' or 'walk'"}
-    return NODE.call_trigger(mode)
-
-
-@mcp.tool()
 async def drive(vx: float = 0.0, vy: float = 0.0, wz: float = 0.0,
                 duration: float = 4.0) -> dict:
     """Publish /cmd_vel (body frame, m/s and rad/s) at 20 Hz for `duration`
-    seconds, then stop. vx>0 forward, wz>0 turn left. The robot must be in walk
-    mode (set_lowerbody('walk')). Reports start/end pose so you can see if it moved."""
+    seconds, then stop. vx>0 forward, wz>0 turn left. Needs the sim launched
+    with GOLEM_LOWERBODY=almi. Reports start/end pose so you can see if it moved."""
     duration = max(0.0, min(float(duration), 30.0))
     p0 = NODE.robot_state()
     hz, end = 0.05, time.time() + duration

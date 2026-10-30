@@ -1,0 +1,17 @@
+# lowerbody_controller_node parameters for the simulators. active_policy comes
+# from h12_lowerbody.launch.py's lowerbody:= launch argument.
+lowerbody_controller_node:
+  ros__parameters:
+    # Sim auto-engages after the pre-pose settles (unattended runs); the
+    # operator-confirm arming gate is a real-robot step.
+    engage_wait_for_confirm: false
+    # The sim IMU has no mounting bias to correct (the live trim sliders still
+    # work for experiments).
+    imu_offset_roll_deg: 0.0
+    imu_offset_pitch_deg: 0.0
+    imu_offset_yaw_deg: 0.0
+    # s from the policy request to releasing the elastic band without waiting
+    # for frame_task_server's /left_ee_pose. Its start-up moves end about 24 s
+    # after this node starts in tests/stack and about 29 s under the full sim
+    # bringup; a band released before then drops the robot.
+    band_max_wait: 34.0

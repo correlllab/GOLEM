@@ -1,0 +1,3 @@
+-c ros-amd64.txt
+onnxruntime==1.23.2
+pynput==1.8.1

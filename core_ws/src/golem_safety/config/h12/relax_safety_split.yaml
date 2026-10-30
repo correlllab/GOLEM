@@ -1,0 +1,165 @@
+mode: split_mode
+
+topics:
+  low_cmd_lower_in: /safety/lowcmd_lower_in
+  low_cmd_upper_in: /safety/lowcmd_upper_in
+  low_cmd_out: /lowcmd
+  low_state: /lowstate
+
+control:
+  publish_hz: 500.0
+  # Estop when /lowstate arrives this many ms later than the robot's own tick
+  # clock implies. Only enforced on ROS domain 0 (the real robot): the sims
+  # stamp tick in sim steps, not wall-clock ms. A value <= 0 disables it.
+  state_lag_ms: 100.0
+
+# Seconds. An input, or /lowstate, with no new sample for longer than this is
+# reported while its last command keeps being relayed; a value <= 0 disables
+# the report.
+# upper_seconds applies in split_mode only.
+stale:
+  upper_seconds: 0.0
+  lower_seconds: 0.2
+  state_seconds: 0.1
+
+# On estop the layer streams burst_count zero-gain commands and then stops
+# publishing.
+estop_response:
+  mode: zero
+  after: burst_then_silence
+  burst_count: 50
+
+limits:
+  # position_offset, velocity_ratio and torque_ratio are scalars or 27-entry lists
+  # in slot order for per-joint tuning; kp_max and kd_max are single numbers
+  clip:
+    position_offset: 0.001
+    velocity_ratio: 1.00
+    # elbows raised to 1.1111 x 18 Nm = 20.0 Nm for high-force grasping;
+    # every other joint stays at the URDF limit
+    torque_ratio:
+      - 1.00 # left_hip_yaw_joint
+      - 1.00 # left_hip_pitch_joint
+      - 1.00 # left_hip_roll_joint
+      - 1.00 # left_knee_joint
+      - 1.00 # left_ankle_pitch_joint
+      - 1.00 # left_ankle_roll_joint
+      - 1.00 # right_hip_yaw_joint
+      - 1.00 # right_hip_pitch_joint
+      - 1.00 # right_hip_roll_joint
+      - 1.00 # right_knee_joint
+      - 1.00 # right_ankle_pitch_joint
+      - 1.00 # right_ankle_roll_joint
+      - 1.00 # torso_joint
+      - 1.00 # left_shoulder_pitch_joint
+      - 1.00 # left_shoulder_roll_joint
+      - 1.00 # left_shoulder_yaw_joint
+      - 1.1111 # left_elbow_joint
+      - 1.00 # left_wrist_roll_joint
+      - 1.00 # left_wrist_pitch_joint
+      - 1.00 # left_wrist_yaw_joint
+      - 1.00 # right_shoulder_pitch_joint
+      - 1.00 # right_shoulder_roll_joint
+      - 1.00 # right_shoulder_yaw_joint
+      - 1.1111 # right_elbow_joint
+      - 1.00 # right_wrist_roll_joint
+      - 1.00 # right_wrist_pitch_joint
+      - 1.00 # right_wrist_yaw_joint
+    kp_max: 500.0
+    kd_max: 30.0
+  estop:
+    # negative offset widens the estop position range past the URDF limits;
+    # wrist pitch/yaw given -0.1 rad extra travel on each bound
+    position_offset:
+      - 0.0001 # left_hip_yaw_joint
+      - 0.0001 # left_hip_pitch_joint
+      - 0.0001 # left_hip_roll_joint
+      - 0.0001 # left_knee_joint
+      - 0.0001 # left_ankle_pitch_joint
+      - 0.0001 # left_ankle_roll_joint
+      - 0.0001 # right_hip_yaw_joint
+      - 0.0001 # right_hip_pitch_joint
+      - 0.0001 # right_hip_roll_joint
+      - 0.0001 # right_knee_joint
+      - 0.0001 # right_ankle_pitch_joint
+      - 0.0001 # right_ankle_roll_joint
+      - 0.0001 # torso_joint
+      - 0.0001 # left_shoulder_pitch_joint
+      - 0.0001 # left_shoulder_roll_joint
+      - 0.0001 # left_shoulder_yaw_joint
+      - 0.0001 # left_elbow_joint
+      - 0.0001 # left_wrist_roll_joint
+      - -0.10  # left_wrist_pitch_joint
+      - -0.10  # left_wrist_yaw_joint
+      - 0.0001 # right_shoulder_pitch_joint
+      - 0.0001 # right_shoulder_roll_joint
+      - 0.0001 # right_shoulder_yaw_joint
+      - 0.0001 # right_elbow_joint
+      - 0.0001 # right_wrist_roll_joint
+      - -0.10  # right_wrist_pitch_joint
+      - -0.10  # right_wrist_yaw_joint
+    velocity_ratio:
+      - 1.00 # left_hip_yaw_joint
+      - 1.00 # left_hip_pitch_joint
+      - 1.00 # left_hip_roll_joint
+      - 1.00 # left_knee_joint
+      - 3.00 # left_ankle_pitch_joint
+      - 3.00 # left_ankle_roll_joint
+      - 1.00 # right_hip_yaw_joint
+      - 1.00 # right_hip_pitch_joint
+      - 1.00 # right_hip_roll_joint
+      - 1.00 # right_knee_joint
+      - 3.00 # right_ankle_pitch_joint
+      - 3.00 # right_ankle_roll_joint
+      - 1.00 # torso_joint
+      - 1.00 # left_shoulder_pitch_joint
+      - 1.00 # left_shoulder_roll_joint
+      - 1.00 # left_shoulder_yaw_joint
+      - 1.00 # left_elbow_joint
+      - 1.00 # left_wrist_roll_joint
+      - 1.00 # left_wrist_pitch_joint
+      - 1.00 # left_wrist_yaw_joint
+      - 1.00 # right_shoulder_pitch_joint
+      - 1.00 # right_shoulder_roll_joint
+      - 1.00 # right_shoulder_yaw_joint
+      - 1.00 # right_elbow_joint
+      - 1.00 # right_wrist_roll_joint
+      - 1.00 # right_wrist_pitch_joint
+      - 1.00 # right_wrist_yaw_joint
+    # wrist pitch/yaw doubled (2.0 x 19 Nm = 38 Nm estop threshold)
+    # elbows 1.2 x 18 Nm = 21.6 Nm, above the 20.0 Nm elbow clip limit
+    # ankle pitch 1.58334 x 60 Nm = 95 Nm: Unitree's sport mode peaks at 93 Nm
+    # tau_est (right ankle pitch, its walking bags) and would trip 60 Nm in every bag
+    torque_ratio:
+      - 1.00 # left_hip_yaw_joint
+      - 1.00 # left_hip_pitch_joint
+      - 1.00 # left_hip_roll_joint
+      - 1.00 # left_knee_joint
+      - 1.58334 # left_ankle_pitch_joint
+      - 1.00 # left_ankle_roll_joint
+      - 1.00 # right_hip_yaw_joint
+      - 1.00 # right_hip_pitch_joint
+      - 1.00 # right_hip_roll_joint
+      - 1.00 # right_knee_joint
+      - 1.58334 # right_ankle_pitch_joint
+      - 1.00 # right_ankle_roll_joint
+      - 1.00 # torso_joint
+      - 1.00 # left_shoulder_pitch_joint
+      - 1.00 # left_shoulder_roll_joint
+      - 1.00 # left_shoulder_yaw_joint
+      - 1.20 # left_elbow_joint
+      - 1.00 # left_wrist_roll_joint
+      - 2.00 # left_wrist_pitch_joint
+      - 2.00 # left_wrist_yaw_joint
+      - 1.00 # right_shoulder_pitch_joint
+      - 1.00 # right_shoulder_roll_joint
+      - 1.00 # right_shoulder_yaw_joint
+      - 1.20 # right_elbow_joint
+      - 1.00 # right_wrist_roll_joint
+      - 2.00 # right_wrist_pitch_joint
+      - 2.00 # right_wrist_yaw_joint
+
+logging:
+  enabled: false
+  base_dir: /tmp/golem_safety
+  chunk_prefix: chunk_

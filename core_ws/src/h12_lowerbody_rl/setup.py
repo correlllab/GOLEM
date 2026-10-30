@@ -20,8 +20,6 @@ setup(
             glob('policies/fame/*')),
         (os.path.join('share', package_name, 'policies', 'almi'),
             glob('policies/almi/*')),
-        (os.path.join('share', package_name, 'policies', 'almi27'),
-            glob('policies/almi27/*')),
     ],
     package_data={'': ['py.typed']},
     install_requires=['setuptools'],
@@ -41,8 +39,6 @@ setup(
             'fame_node = h12_lowerbody_rl.scripts.fame_node:main',
             'lowerbody_controller_node = '
             'h12_lowerbody_rl.scripts.lowerbody_controller_node:main',
-            'sim2real_gap_monitor = '
-            'h12_lowerbody_rl.scripts.sim2real_gap_monitor:main',
         ],
     },
 )

@@ -13,6 +13,8 @@
 # Silicon, so we ship pixels. View from the Mac: docker/mac/scripts/mac_vnc_tunnel.sh
 # then open http://localhost:6081/vnc.html.
 set -e
+source /home/code/golem_common/runtime_common.sh
+validate_sim_domain
 
 GOLEM_RVIZ="${GOLEM_RVIZ:-0}"
 # GOLEM_ROS_MCP=1 starts the ROS debugging MCP server (tools/ros_mcp_server.py)
@@ -35,7 +37,7 @@ RVIZ_DISPLAY=:100
 RVIZ_VNC_PORT=5901
 RVIZ_NOVNC_PORT=6081
 RVIZ_GEOMETRY="${RVIZ_GEOMETRY:-1600x900x24}"
-# h1_sim.rviz ships in the h1_bringup package (rviz/). Resolved from the installed
+# main.rviz ships in the golem_bringup package (rviz/h12/). Resolved from the installed
 # share dir inside start_rviz_stack (after the workspace is built + sourced).
 RVIZ_CONFIG="${RVIZ_CONFIG:-}"
 
@@ -68,8 +70,8 @@ start_rviz_stack() {
 
     export LIBGL_ALWAYS_SOFTWARE=1   # force llvmpipe; no GPU under Colima
     if [ -z "$RVIZ_CONFIG" ]; then
-        _pfx="$(ros2 pkg prefix h1_bringup 2>/dev/null)"
-        [ -n "$_pfx" ] && RVIZ_CONFIG="$_pfx/share/h1_bringup/rviz/h1_sim.rviz"
+        _pfx="$(ros2 pkg prefix golem_bringup 2>/dev/null)"
+        [ -n "$_pfx" ] && RVIZ_CONFIG="$_pfx/share/golem_bringup/rviz/h12/main.rviz"
     fi
     local cfg_arg=()
     [ -f "$RVIZ_CONFIG" ] && cfg_arg=(-d "$RVIZ_CONFIG")
@@ -100,31 +102,32 @@ WS=/home/code/core_ws
 # build/install go to /opt paths backed by named docker volumes on the VM's
 # native ext4: writing colcon's --symlink-install tree onto the virtiofs
 # bind-mount stalls for minutes. Named volumes are fast AND persistent, so the
-# 9-min C++ package (h12_ros2_model) incrementally caches across runs.
+# build caches incrementally across runs.
 BUILD_BASE=/opt/core_ws/build
 INSTALL_BASE=/opt/core_ws/install
 cd "$WS"
 
-# The packages the minimal Mac bringup needs. h1_bringup (ament_python, just
-# launch/config/rviz files) is included so `ros2 launch h1_bringup <file>`
+# The packages the minimal Mac bringup needs. golem_bringup (ament_python, just
+# launch/config/rviz files) is included so `ros2 launch golem_bringup <file>`
 # resolves with tab completion — but colcon-ros refuses to build it until its
 # in-workspace exec_depends have a package.sh in the install space, and we
 # deliberately don't build the heavy ones (estop, livox_ros_driver2, fast_lio,
-# model_server — the LIO/ML/driver stack). Empty package.sh stubs (below) satisfy
-# that check; they carry no ament index marker so they never show up in
-# `ros2 pkg list`. NOTE only h1_sim_bringup_mac.launch.py runs here — the other
-# launch files exec-launch the omitted packages (nav2, FAST_LIO, model_server...).
+# model_server, cl_realsense, lmg_deploy — the LIO/ML/driver stack and the
+# loco-manipulation game) or the G1's (the Mac runs the H1-2 only). Empty
+# package.sh stubs (below) satisfy that check; they carry no ament index marker
+# so they never show up in `ros2 pkg list`. NOTE only h12_sim_mac.launch.py runs
+# here — the other launch files exec-launch the omitted packages (nav2,
+# FAST_LIO, model_server...).
 # unitree_hg + h12_lowerbody_rl provide the optional lower-body stack
 # (walk/FAME policies). They build cheaply and are only *launched* when
 # GOLEM_LOWERBODY is set (see the bringup), but building them always keeps
-# `ros2 run h12_lowerbody_rl fame_node` available in a shell. unitree_hg
-# needs ros-humble-rosidl-generator-dds-idl (added to the image); torch is
-# already present. NOTE: FAME balances the robot standing unsupported; the walk
-# policy currently does not stay up in the RoboCasa sim (see README).
-PKGS="custom_ros_messages magpie_msgs h12_ros2_model h12_ros2_controller h12_safety_layer h1_bringup unitree_hg h12_lowerbody_controller"
-H1_BRINGUP_STUB_DEPS="estop livox_ros_driver2 fast_lio model_server"
+# `ros2 run h12_lowerbody_rl fame_node` available in a shell. unitree_hg needs
+# ros-humble-rosidl-generator-dds-idl and torch, both in the image. Use
+# GOLEM_LOWERBODY=almi to stand and walk (see docs/MACOS.md).
+PKGS="custom_ros_messages magpie_msgs golem_ros2_models golem_safety golem_upper_ik golem_slam golem_bringup unitree_hg h12_lowerbody_rl"
+BRINGUP_STUB_DEPS="estop livox_ros_driver2 fast_lio model_server cl_realsense lmg_deploy dex_3 g1_homie deploy_mjpc golem_skills"
 
-for _dep in $H1_BRINGUP_STUB_DEPS; do
+for _dep in $BRINGUP_STUB_DEPS; do
     mkdir -p "$INSTALL_BASE/$_dep/share/$_dep"
     [ -e "$INSTALL_BASE/$_dep/share/$_dep/package.sh" ] || : > "$INSTALL_BASE/$_dep/share/$_dep/package.sh"
 done
@@ -132,7 +135,8 @@ done
 echo "[launch_ros_mac] colcon build --packages-select $PKGS"
 colcon build --symlink-install \
     --build-base "$BUILD_BASE" --install-base "$INSTALL_BASE" \
-    --packages-select $PKGS
+    --packages-select $PKGS \
+    --cmake-args -DBUILD_TESTING=OFF
 
 source "$INSTALL_BASE/setup.bash"
 
@@ -151,10 +155,12 @@ if [ "$GOLEM_ROS_MCP" = "1" ] || [ "$GOLEM_ROS_MCP" = "vnc" ]; then
     start_ros_mcp || echo "[launch_ros_mac] MCP server failed to start (continuing without it)"
 fi
 
-if [ "${1:-}" = "bash" ]; then
-    echo "[launch_ros_mac] workspace built; dropping to shell (ROS_DOMAIN_ID=$ROS_DOMAIN_ID)"
-    exec bash
+if [ "${GOLEM_WAIT_FOR_SIM:-0}" = 1 ]; then
+    python3 /home/code/golem_common/wait_for_sim.py
+fi
+if [ "$#" -gt 0 ]; then
+    exec "$@"
 fi
 
 echo "[launch_ros_mac] launching minimal bringup (ROS_DOMAIN_ID=$ROS_DOMAIN_ID)"
-exec ros2 launch "$WS/src/h1_bringup/launch/h1_sim_bringup_mac.launch.py"
+exec ros2 launch "$WS/src/golem_bringup/launch/h12/h12_sim_mac.launch.py"

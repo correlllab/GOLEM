@@ -4,8 +4,8 @@
 # /dev/dri | /dev/input | X11 device mounts from docker-compose.yml are simply
 # absent. Runs headless under Colima. Isaac is intentionally omitted.
 #
-#   docker compose -f docker/mac/docker-compose.yml build robocasa
-#   docker compose -f docker/mac/docker-compose.yml run --rm robocasa
+#   docker/mac/scripts/docker_build_mac.sh
+#   docker/mac/scripts/docker_stack_mac.sh up robocasa
 # ==============================
 services:
   robocasa:
@@ -13,7 +13,9 @@ services:
     build:
       context: ../..
       dockerfile: docker/mac/RobocasaDockerfile.arm64
-    image: golem_sim_robocasa:latest
+    image: golem_sim_robocasa:arm64
+    platform: linux/arm64
+    init: true
     shm_size: 8g
     # Share one network namespace so robocasa and ros see each other's DDS
     # discovery on the same ROS_DOMAIN_ID.
@@ -39,6 +41,14 @@ services:
       # GOLEM_CAMERAS=0 drops the 3 RGBD camera renders (the heaviest per-step CPU
       # cost) to speed the sim up for locomotion/SLAM. Lidar + odom are unaffected.
       - GOLEM_CAMERAS=${GOLEM_CAMERAS:-1}
+      # Camera toggles (h12_mujoco.py); empty = its default. GOLEM_CAMERA_SCALE:
+      # head-camera render scale of the real 1280x720 (default 0.5).
+      # GOLEM_CAMERA_DEPTH / GOLEM_CAMERA_POINTCLOUD = 0 drop depth/image_rect_raw
+      # / depth/color/points.
+      - GOLEM_CAMERA_SCALE=${GOLEM_CAMERA_SCALE:-}
+      - GOLEM_CAMERA_DEPTH=${GOLEM_CAMERA_DEPTH:-}
+      - GOLEM_CAMERA_POINTCLOUD=${GOLEM_CAMERA_POINTCLOUD:-}
+      - GOLEM_CMD_TIMEOUT=${GOLEM_CMD_TIMEOUT:-0.5}
       # GOLEM_SIM_ODOM=1 publishes ground-truth base odometry (odom -> pelvis TF +
       # /odom) straight from the sim, feeding 2D SLAM without FAST-LIO. Default 0
       # (off) so the shared sim bridge stays silent; the nav/SLAM demo sets it to 1
@@ -49,16 +59,53 @@ services:
       # room to plan and keeps FAME from leaning into a nearby counter. NOTE: baked
       # at container-create -- change it with `up --force-recreate`, not `restart`.
       - GOLEM_SPAWN_BACKOFF=${GOLEM_SPAWN_BACKOFF:-0}
+      # Minimum free space (m) between the robot and any non-floor geom at spawn.
+      # Empty = the task's default (h12_mujoco.py: 0.20, or the env's spawn_margin).
+      - GOLEM_SPAWN_MARGIN=${GOLEM_SPAWN_MARGIN:-}
       # rclpy runs on FastDDS so it does not load a 2nd CycloneDDS libddsc
       # alongside unitree_sdk2py's (arm64 in-process coexistence fix).
       - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
     volumes:
-      - ../../h1_robocasa:/home/code/h1_robocasa
-      - ../../CL_Assets:/home/code/CL_Assets:ro
-      - ./scripts:/home/code/h12_sim_scripts
-      - ../../container_cache/msgs_ws:/home/code/msgs_ws:rw
-      - ../../core_ws/src/magpie_msgs:/home/code/msgs_ws/src/magpie_msgs:ro
-      - ../../core_ws/src/custom_ros_messages:/home/code/msgs_ws/src/custom_ros_messages:ro
+      - type: bind
+        source: ../../golem_robocasa
+        target: /home/code/golem_robocasa
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GOLEM_ASSETS_DIR:-../../CL_Assets}
+        target: /home/code/CL_Assets
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./scripts
+        target: /home/code/h12_sim_scripts
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../scripts
+        target: /home/code/golem_common
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GOLEM_CACHE_DIR:-../../container_cache}/msgs_ws
+        target: /home/code/msgs_ws
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../../core_ws/src/magpie_msgs
+        target: /home/code/msgs_ws/src/magpie_msgs
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../../core_ws/src/custom_ros_messages
+        target: /home/code/msgs_ws/src/custom_ros_messages
+        read_only: true
+        bind:
+          create_host_path: false
       # colcon build/install on the VM's native ext4, NOT the virtiofs mount
       # (symlink-install onto virtiofs stalls for minutes). Persistent = cached.
       - msgs_build:/opt/msgs_ws/build
@@ -70,7 +117,9 @@ services:
     build:
       context: ../..
       dockerfile: docker/mac/RosDockerfile.slim.arm64
-    image: golem_ros:latest
+    image: golem_ros:arm64
+    platform: linux/arm64
+    init: true
     shm_size: 4g
     network_mode: host
     # Shared IPC namespace: required for FastDDS shared-memory transport to the
@@ -89,10 +138,9 @@ services:
       - GOLEM_RVIZ=${GOLEM_RVIZ:-0}
       # Optional lower-body controller: GOLEM_LOWERBODY=fame runs the RMA policy
       # that balances the robot standing unsupported (releases the elastic band);
-      # =walk runs the raw walk policy (marches in place); =switch is the switchable
-      # controller (band-held idle -> /lowerbody/start_{fame,walk}) and is the one to
-      # use for stand<->walk and the nav demo -- the walk policy stays upright when
-      # handed over from FAME. Default (unset) keeps the band tether + upper-body IK.
+      # =walk runs the raw walk policy (marches in place); =almi runs the controller
+      # pinned to ALMI, which stands and walks on /cmd_vel -- the one to use for the
+      # nav demo. Default (unset) keeps the band tether + upper-body IK.
       - GOLEM_LOWERBODY=${GOLEM_LOWERBODY:-}
       # GOLEM_SLAM=1 adds pointcloud_to_laserscan + slam_toolbox to the bringup:
       # the Livox cloud -> 2D scan -> occupancy /map against the sim's /odom.
@@ -109,18 +157,48 @@ services:
       - GOLEM_ROS_MCP=${GOLEM_ROS_MCP:-0}
       - GOLEM_ROS_MCP_PORT=${GOLEM_ROS_MCP_PORT:-6082}
     volumes:
-      - ../../core_ws:/home/code/core_ws
-      - ../../CL_Assets:/home/code/CL_Assets:ro
-      # h12_ros2_model/setup.py locates CL_Assets as ../../../CL_Assets relative
+      - type: bind
+        source: ../../core_ws
+        target: /home/code/core_ws
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GOLEM_ASSETS_DIR:-../../CL_Assets}
+        target: /home/code/CL_Assets
+        read_only: true
+        bind:
+          create_host_path: false
+      # golem_ros2_models/setup.py locates CL_Assets as ../../../CL_Assets relative
       # to __file__, and colcon runs setup.py from the build-base — so with
       # build-base at /opt/core_ws/build that resolves to /opt/CL_Assets. Mount
       # the submodule there too so the build finds meshes/URDFs. (Installed
       # artifacts are copied into core_ws_install, so runtime is unaffected.)
-      - ../../CL_Assets:/opt/CL_Assets:ro
-      - ./scripts:/home/code/h12_sim_scripts
+      - type: bind
+        source: ${GOLEM_ASSETS_DIR:-../../CL_Assets}
+        target: /opt/CL_Assets
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./scripts
+        target: /home/code/h12_sim_scripts
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../scripts
+        target: /home/code/golem_common
+        read_only: true
+        bind:
+          create_host_path: false
       # The ROS debug MCP server (GOLEM_ROS_MCP=1) lives in the top-level tools/
       # dir; mount it read-only so launch_ros_mac.sh can start it.
-      - ../../tools:/home/code/tools:ro
+      - type: bind
+        source: ../../tools
+        target: /home/code/tools
+        read_only: true
+        bind:
+          create_host_path: false
       # colcon build/install on the VM's native ext4, NOT the virtiofs mount
       # (symlink-install onto virtiofs stalls for minutes). Persistent = cached.
       - core_ws_build:/opt/core_ws/build

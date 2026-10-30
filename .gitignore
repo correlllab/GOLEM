@@ -62,8 +62,26 @@ wandb/
 
 # host-side caches for docker container build artefacts
 /container_cache/
+/core_ws/build_stack_tests/
+/core_ws/install_stack_tests/
+/core_ws/log_stack_tests/
 
-# process crash dumps (e.g. h1_robocasa/core from unitree_sdk2py segfaults)
+# process crash dumps (e.g. golem_robocasa/core from unitree_sdk2py segfaults)
 core
+!core/
 core.*
 *.core
+
+# rosbag recordings (multi-GB; share out of band, not via git)
+/bags/
+*.mcap
+*.db3
+
+# local scratch space
+/work/
+
+# Claude Code local settings
+/.claude/
+
+# MkDocs site
+/site/

@@ -1,0 +1,897 @@
+{
+  "bare_dds": {
+    "publishes": {
+      "/lowstate": "unitree_hg/msg/LowState"
+    },
+    "subscribes": {
+      "/lowcmd": "unitree_hg/msg/LowCmd"
+    }
+  },
+  "livox_imu_mean_acc": 9.8141,
+  "lowstate_ticks_advance": true,
+  "meta": {
+    "launcher": [
+      "/home/code/h12_sim_scripts/launch_robocasa.sh",
+      "--headless",
+      "--task",
+      "AirDryFruit",
+      "--seed",
+      "42"
+    ],
+    "robot": "h12",
+    "window_sim_s": 10.0
+  },
+  "nodes": {
+    "/magpie_hand_left": {
+      "actions": {
+        "/left/gripper/deligrasp": "magpie_msgs/action/DeliGrasp"
+      },
+      "publishers": {
+        "/left/gripper/state": "magpie_msgs/msg/GripperState"
+      },
+      "services": {
+        "/left/gripper/calibrate": "std_srvs/srv/Trigger",
+        "/left/gripper/close": "std_srvs/srv/Trigger",
+        "/left/gripper/open": "std_srvs/srv/Trigger",
+        "/left/gripper/reset_parameters": "std_srvs/srv/Trigger",
+        "/left/gripper/set_force": "magpie_msgs/srv/SetGripperForce",
+        "/left/gripper/set_position": "magpie_msgs/srv/SetGripperPosition"
+      },
+      "subscriptions": {}
+    },
+    "/magpie_hand_right": {
+      "actions": {
+        "/right/gripper/deligrasp": "magpie_msgs/action/DeliGrasp"
+      },
+      "publishers": {
+        "/right/gripper/state": "magpie_msgs/msg/GripperState"
+      },
+      "services": {
+        "/right/gripper/calibrate": "std_srvs/srv/Trigger",
+        "/right/gripper/close": "std_srvs/srv/Trigger",
+        "/right/gripper/open": "std_srvs/srv/Trigger",
+        "/right/gripper/reset_parameters": "std_srvs/srv/Trigger",
+        "/right/gripper/set_force": "magpie_msgs/srv/SetGripperForce",
+        "/right/gripper/set_position": "magpie_msgs/srv/SetGripperPosition"
+      },
+      "subscriptions": {}
+    },
+    "/mujoco_sensors": {
+      "actions": {},
+      "publishers": {
+        "/clock": "rosgraph_msgs/msg/Clock",
+        "/livox/imu": "sensor_msgs/msg/Imu",
+        "/livox/lidar": "livox_ros_driver2/msg/CustomMsg",
+        "/livox/pointcloud": "sensor_msgs/msg/PointCloud2",
+        "/realsense/head/aligned_depth_to_color/camera_info": "sensor_msgs/msg/CameraInfo",
+        "/realsense/head/aligned_depth_to_color/image_raw": "sensor_msgs/msg/Image",
+        "/realsense/head/aligned_depth_to_color/image_raw/compressedDepth": "sensor_msgs/msg/CompressedImage",
+        "/realsense/head/color/camera_info": "sensor_msgs/msg/CameraInfo",
+        "/realsense/head/color/image_raw": "sensor_msgs/msg/Image",
+        "/realsense/head/color/image_raw/compressed": "sensor_msgs/msg/CompressedImage",
+        "/realsense/head/depth/camera_info": "sensor_msgs/msg/CameraInfo",
+        "/realsense/head/depth/color/points": "sensor_msgs/msg/PointCloud2",
+        "/realsense/head/depth/image_rect_raw": "sensor_msgs/msg/Image",
+        "/realsense/head/depth/image_rect_raw/compressedDepth": "sensor_msgs/msg/CompressedImage",
+        "/realsense/left_hand/aligned_depth_to_color/camera_info": "sensor_msgs/msg/CameraInfo",
+        "/realsense/left_hand/aligned_depth_to_color/image_raw": "sensor_msgs/msg/Image",
+        "/realsense/left_hand/aligned_depth_to_color/image_raw/compressedDepth": "sensor_msgs/msg/CompressedImage",
+        "/realsense/left_hand/color/camera_info": "sensor_msgs/msg/CameraInfo",
+        "/realsense/left_hand/color/image_raw": "sensor_msgs/msg/Image",
+        "/realsense/left_hand/color/image_raw/compressed": "sensor_msgs/msg/CompressedImage",
+        "/realsense/left_hand/depth/camera_info": "sensor_msgs/msg/CameraInfo",
+        "/realsense/left_hand/depth/color/points": "sensor_msgs/msg/PointCloud2",
+        "/realsense/left_hand/depth/image_rect_raw": "sensor_msgs/msg/Image",
+        "/realsense/left_hand/depth/image_rect_raw/compressedDepth": "sensor_msgs/msg/CompressedImage",
+        "/realsense/right_hand/aligned_depth_to_color/camera_info": "sensor_msgs/msg/CameraInfo",
+        "/realsense/right_hand/aligned_depth_to_color/image_raw": "sensor_msgs/msg/Image",
+        "/realsense/right_hand/aligned_depth_to_color/image_raw/compressedDepth": "sensor_msgs/msg/CompressedImage",
+        "/realsense/right_hand/color/camera_info": "sensor_msgs/msg/CameraInfo",
+        "/realsense/right_hand/color/image_raw": "sensor_msgs/msg/Image",
+        "/realsense/right_hand/color/image_raw/compressed": "sensor_msgs/msg/CompressedImage",
+        "/realsense/right_hand/depth/camera_info": "sensor_msgs/msg/CameraInfo",
+        "/realsense/right_hand/depth/color/points": "sensor_msgs/msg/PointCloud2",
+        "/realsense/right_hand/depth/image_rect_raw": "sensor_msgs/msg/Image",
+        "/realsense/right_hand/depth/image_rect_raw/compressedDepth": "sensor_msgs/msg/CompressedImage",
+        "/tf": "tf2_msgs/msg/TFMessage",
+        "/tf_static": "tf2_msgs/msg/TFMessage"
+      },
+      "services": {},
+      "subscriptions": {}
+    },
+    "/robocasa_measurement": {
+      "actions": {},
+      "publishers": {
+        "/robocasa/reward": "std_msgs/msg/Float32",
+        "/robocasa/success": "std_msgs/msg/Bool",
+        "/robocasa/task_goal": "std_msgs/msg/String",
+        "/robocasa/task_name": "std_msgs/msg/String"
+      },
+      "services": {
+        "/elastic_band/toggle": "std_srvs/srv/Trigger"
+      },
+      "subscriptions": {}
+    }
+  },
+  "tf": [
+    "head_color_frame -> head_color_optical_frame",
+    "head_depth_frame -> head_depth_optical_frame",
+    "head_link -> head_color_frame",
+    "head_link -> head_depth_frame",
+    "left_hand_color_frame -> left_hand_color_optical_frame",
+    "left_hand_depth_frame -> left_hand_depth_optical_frame",
+    "left_hand_link -> left_hand_color_frame",
+    "left_hand_link -> left_hand_depth_frame",
+    "right_hand_color_frame -> right_hand_color_optical_frame",
+    "right_hand_depth_frame -> right_hand_depth_optical_frame",
+    "right_hand_link -> right_hand_color_frame",
+    "right_hand_link -> right_hand_depth_frame"
+  ],
+  "tf_static": [
+    "head_camera_link -> head_link",
+    "head_color_frame -> head_color_optical_frame",
+    "head_depth_frame -> head_depth_optical_frame",
+    "head_link -> head_color_frame",
+    "head_link -> head_depth_frame",
+    "left_hand_color_frame -> left_hand_color_optical_frame",
+    "left_hand_depth_frame -> left_hand_depth_optical_frame",
+    "left_hand_link -> left_hand_color_frame",
+    "left_hand_link -> left_hand_depth_frame",
+    "lg_mount -> left_hand_link",
+    "rg_mount -> right_hand_link",
+    "right_hand_color_frame -> right_hand_color_optical_frame",
+    "right_hand_depth_frame -> right_hand_depth_optical_frame",
+    "right_hand_link -> right_hand_color_frame",
+    "right_hand_link -> right_hand_depth_frame"
+  ],
+  "topics": {
+    "/clock": {
+      "encoding": null,
+      "frame_id": null,
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "RELIABLE"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 500.0,
+      "received": true,
+      "type": "rosgraph_msgs/msg/Clock",
+      "width": null
+    },
+    "/left/gripper/state": {
+      "encoding": null,
+      "frame_id": null,
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "RELIABLE"
+      },
+      "rate_clock": "wall",
+      "rate_hz": 9.962,
+      "received": true,
+      "type": "magpie_msgs/msg/GripperState",
+      "width": null
+    },
+    "/livox/imu": {
+      "encoding": null,
+      "frame_id": "lidar_link",
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "RELIABLE"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 166.667,
+      "received": true,
+      "type": "sensor_msgs/msg/Imu",
+      "width": null
+    },
+    "/livox/lidar": {
+      "encoding": null,
+      "frame_id": "lidar_link",
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "RELIABLE"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 9.936,
+      "received": true,
+      "type": "livox_ros_driver2/msg/CustomMsg",
+      "width": null
+    },
+    "/livox/pointcloud": {
+      "encoding": null,
+      "frame_id": "lidar_link",
+      "height": 1,
+      "point_fields": [
+        [
+          "x",
+          0,
+          7,
+          1
+        ],
+        [
+          "y",
+          4,
+          7,
+          1
+        ],
+        [
+          "z",
+          8,
+          7,
+          1
+        ],
+        [
+          "intensity",
+          12,
+          7,
+          1
+        ],
+        [
+          "tag",
+          16,
+          2,
+          1
+        ],
+        [
+          "line",
+          17,
+          2,
+          1
+        ],
+        [
+          "timestamp",
+          18,
+          8,
+          1
+        ]
+      ],
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "RELIABLE"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 9.936,
+      "received": true,
+      "type": "sensor_msgs/msg/PointCloud2",
+      "width": null
+    },
+    "/realsense/head/aligned_depth_to_color/camera_info": {
+      "encoding": null,
+      "frame_id": "head_color_optical_frame",
+      "height": 360,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/CameraInfo",
+      "width": 640
+    },
+    "/realsense/head/aligned_depth_to_color/image_raw": {
+      "encoding": "16UC1",
+      "frame_id": "head_color_optical_frame",
+      "height": 360,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/Image",
+      "width": 640
+    },
+    "/realsense/head/aligned_depth_to_color/image_raw/compressedDepth": {
+      "encoding": "16UC1; compressedDepth",
+      "frame_id": "head_color_optical_frame",
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/CompressedImage",
+      "width": null
+    },
+    "/realsense/head/color/camera_info": {
+      "encoding": null,
+      "frame_id": "head_color_optical_frame",
+      "height": 360,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/CameraInfo",
+      "width": 640
+    },
+    "/realsense/head/color/image_raw": {
+      "encoding": "rgb8",
+      "frame_id": "head_color_optical_frame",
+      "height": 360,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/Image",
+      "width": 640
+    },
+    "/realsense/head/color/image_raw/compressed": {
+      "encoding": "rgb8; jpeg compressed bgr8",
+      "frame_id": "head_color_optical_frame",
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/CompressedImage",
+      "width": null
+    },
+    "/realsense/head/depth/camera_info": {
+      "encoding": null,
+      "frame_id": "head_depth_optical_frame",
+      "height": 360,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/CameraInfo",
+      "width": 640
+    },
+    "/realsense/head/depth/color/points": {
+      "encoding": null,
+      "frame_id": "head_depth_optical_frame",
+      "height": 1,
+      "point_fields": [
+        [
+          "x",
+          0,
+          7,
+          1
+        ],
+        [
+          "y",
+          4,
+          7,
+          1
+        ],
+        [
+          "z",
+          8,
+          7,
+          1
+        ],
+        [
+          "rgb",
+          16,
+          7,
+          1
+        ]
+      ],
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/PointCloud2",
+      "width": null
+    },
+    "/realsense/head/depth/image_rect_raw": {
+      "encoding": "16UC1",
+      "frame_id": "head_depth_optical_frame",
+      "height": 180,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/Image",
+      "width": 320
+    },
+    "/realsense/head/depth/image_rect_raw/compressedDepth": {
+      "encoding": "16UC1; compressedDepth",
+      "frame_id": "head_depth_optical_frame",
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/CompressedImage",
+      "width": null
+    },
+    "/realsense/left_hand/aligned_depth_to_color/camera_info": {
+      "encoding": null,
+      "frame_id": "left_hand_color_optical_frame",
+      "height": 256,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/CameraInfo",
+      "width": 256
+    },
+    "/realsense/left_hand/aligned_depth_to_color/image_raw": {
+      "encoding": "16UC1",
+      "frame_id": "left_hand_color_optical_frame",
+      "height": 256,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/Image",
+      "width": 256
+    },
+    "/realsense/left_hand/aligned_depth_to_color/image_raw/compressedDepth": {
+      "encoding": "16UC1; compressedDepth",
+      "frame_id": "left_hand_color_optical_frame",
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/CompressedImage",
+      "width": null
+    },
+    "/realsense/left_hand/color/camera_info": {
+      "encoding": null,
+      "frame_id": "left_hand_color_optical_frame",
+      "height": 256,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/CameraInfo",
+      "width": 256
+    },
+    "/realsense/left_hand/color/image_raw": {
+      "encoding": "rgb8",
+      "frame_id": "left_hand_color_optical_frame",
+      "height": 256,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/Image",
+      "width": 256
+    },
+    "/realsense/left_hand/color/image_raw/compressed": {
+      "encoding": "rgb8; jpeg compressed bgr8",
+      "frame_id": "left_hand_color_optical_frame",
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/CompressedImage",
+      "width": null
+    },
+    "/realsense/left_hand/depth/camera_info": {
+      "encoding": null,
+      "frame_id": "left_hand_depth_optical_frame",
+      "height": 256,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/CameraInfo",
+      "width": 256
+    },
+    "/realsense/left_hand/depth/color/points": {
+      "encoding": null,
+      "frame_id": "left_hand_depth_optical_frame",
+      "height": 1,
+      "point_fields": [
+        [
+          "x",
+          0,
+          7,
+          1
+        ],
+        [
+          "y",
+          4,
+          7,
+          1
+        ],
+        [
+          "z",
+          8,
+          7,
+          1
+        ],
+        [
+          "rgb",
+          16,
+          7,
+          1
+        ]
+      ],
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/PointCloud2",
+      "width": null
+    },
+    "/realsense/left_hand/depth/image_rect_raw": {
+      "encoding": "16UC1",
+      "frame_id": "left_hand_depth_optical_frame",
+      "height": 128,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/Image",
+      "width": 128
+    },
+    "/realsense/left_hand/depth/image_rect_raw/compressedDepth": {
+      "encoding": "16UC1; compressedDepth",
+      "frame_id": "left_hand_depth_optical_frame",
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/CompressedImage",
+      "width": null
+    },
+    "/realsense/right_hand/aligned_depth_to_color/camera_info": {
+      "encoding": null,
+      "frame_id": "right_hand_color_optical_frame",
+      "height": 256,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/CameraInfo",
+      "width": 256
+    },
+    "/realsense/right_hand/aligned_depth_to_color/image_raw": {
+      "encoding": "16UC1",
+      "frame_id": "right_hand_color_optical_frame",
+      "height": 256,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/Image",
+      "width": 256
+    },
+    "/realsense/right_hand/aligned_depth_to_color/image_raw/compressedDepth": {
+      "encoding": "16UC1; compressedDepth",
+      "frame_id": "right_hand_color_optical_frame",
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/CompressedImage",
+      "width": null
+    },
+    "/realsense/right_hand/color/camera_info": {
+      "encoding": null,
+      "frame_id": "right_hand_color_optical_frame",
+      "height": 256,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/CameraInfo",
+      "width": 256
+    },
+    "/realsense/right_hand/color/image_raw": {
+      "encoding": "rgb8",
+      "frame_id": "right_hand_color_optical_frame",
+      "height": 256,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/Image",
+      "width": 256
+    },
+    "/realsense/right_hand/color/image_raw/compressed": {
+      "encoding": "rgb8; jpeg compressed bgr8",
+      "frame_id": "right_hand_color_optical_frame",
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/CompressedImage",
+      "width": null
+    },
+    "/realsense/right_hand/depth/camera_info": {
+      "encoding": null,
+      "frame_id": "right_hand_depth_optical_frame",
+      "height": 256,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/CameraInfo",
+      "width": 256
+    },
+    "/realsense/right_hand/depth/color/points": {
+      "encoding": null,
+      "frame_id": "right_hand_depth_optical_frame",
+      "height": 1,
+      "point_fields": [
+        [
+          "x",
+          0,
+          7,
+          1
+        ],
+        [
+          "y",
+          4,
+          7,
+          1
+        ],
+        [
+          "z",
+          8,
+          7,
+          1
+        ],
+        [
+          "rgb",
+          16,
+          7,
+          1
+        ]
+      ],
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/PointCloud2",
+      "width": null
+    },
+    "/realsense/right_hand/depth/image_rect_raw": {
+      "encoding": "16UC1",
+      "frame_id": "right_hand_depth_optical_frame",
+      "height": 128,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/Image",
+      "width": 128
+    },
+    "/realsense/right_hand/depth/image_rect_raw/compressedDepth": {
+      "encoding": "16UC1; compressedDepth",
+      "frame_id": "right_hand_depth_optical_frame",
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "BEST_EFFORT"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 14.706,
+      "received": true,
+      "type": "sensor_msgs/msg/CompressedImage",
+      "width": null
+    },
+    "/right/gripper/state": {
+      "encoding": null,
+      "frame_id": null,
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "RELIABLE"
+      },
+      "rate_clock": "wall",
+      "rate_hz": 10.032,
+      "received": true,
+      "type": "magpie_msgs/msg/GripperState",
+      "width": null
+    },
+    "/robocasa/reward": {
+      "encoding": null,
+      "frame_id": null,
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "RELIABLE"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 20.0,
+      "received": true,
+      "type": "std_msgs/msg/Float32",
+      "width": null
+    },
+    "/robocasa/success": {
+      "encoding": null,
+      "frame_id": null,
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "RELIABLE"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 20.0,
+      "received": true,
+      "type": "std_msgs/msg/Bool",
+      "width": null
+    },
+    "/robocasa/task_goal": {
+      "encoding": null,
+      "frame_id": null,
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "TRANSIENT_LOCAL",
+        "reliability": "RELIABLE"
+      },
+      "rate_clock": "sim",
+      "rate_hz": null,
+      "received": true,
+      "type": "std_msgs/msg/String",
+      "width": null
+    },
+    "/robocasa/task_name": {
+      "encoding": null,
+      "frame_id": null,
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "TRANSIENT_LOCAL",
+        "reliability": "RELIABLE"
+      },
+      "rate_clock": "sim",
+      "rate_hz": null,
+      "received": true,
+      "type": "std_msgs/msg/String",
+      "width": null
+    },
+    "/tf": {
+      "encoding": null,
+      "frame_id": null,
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "VOLATILE",
+        "reliability": "RELIABLE"
+      },
+      "rate_clock": "sim",
+      "rate_hz": 9.936,
+      "received": true,
+      "type": "tf2_msgs/msg/TFMessage",
+      "width": null
+    },
+    "/tf_static": {
+      "encoding": null,
+      "frame_id": null,
+      "height": null,
+      "point_fields": null,
+      "qos": {
+        "durability": "TRANSIENT_LOCAL",
+        "reliability": "RELIABLE"
+      },
+      "rate_clock": "sim",
+      "rate_hz": null,
+      "received": true,
+      "type": "tf2_msgs/msg/TFMessage",
+      "width": null
+    }
+  }
+}

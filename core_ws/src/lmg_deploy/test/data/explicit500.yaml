@@ -1,0 +1,100 @@
+# The unit tests' controller config: Explicit500's deploy config (legs 95 / arms 123), kept when its policy was
+# removed from policies/ (10-19). The tests run it with stand-in networks; nothing deploys it.
+# Deploy config for Explicit500: LocoManip-Marl-Direct-v0 (Locomanipulation_game, branch marl-direct, after 7389a0b,
+# with the task code of 10-15), agent_196800. LSTM actors (64 units, then [256, 128, 64] on the LSTM's output and the
+# raw observation), running observation normalization, explicit PD at 500 Hz in training (policy 50 Hz), a 0-20 ms
+# target delay, pushes and rough terrain (up to +-5 cm) in training only, joint targets clipped into GOLEM's position
+# e-stop range (export.yaml target_limits) and bounded to 85% of the effort limit. On the robot the arm goals stay put
+# in the world by the SLAM pipeline's odometry (slam_frame below). No settle at a mode switch. Every other value mirrors
+# the training env; the source is named on each block.
+# Locomanipulation_game scripts/skrl/export_marl.py writes the networks and export.yaml next to this file; export.yaml's
+# keys (rest_pose, target_limits, source) override the ones here.
+
+control_dt: 0.02            # decimation 10 x sim dt 0.002 (Explicit500: env.sim.dt=0.002 env.decimation=10)
+
+# Policy joint order = Unitree motor order 0..26 (assets/h1_2.py ALL_JOINTS_NAMES)
+joint_names: [
+  left_hip_yaw_joint, left_hip_pitch_joint, left_hip_roll_joint,
+  left_knee_joint, left_ankle_pitch_joint, left_ankle_roll_joint,
+  right_hip_yaw_joint, right_hip_pitch_joint, right_hip_roll_joint,
+  right_knee_joint, right_ankle_pitch_joint, right_ankle_roll_joint,
+  torso_joint,
+  left_shoulder_pitch_joint, left_shoulder_roll_joint, left_shoulder_yaw_joint,
+  left_elbow_joint, left_wrist_roll_joint, left_wrist_pitch_joint, left_wrist_yaw_joint,
+  right_shoulder_pitch_joint, right_shoulder_roll_joint, right_shoulder_yaw_joint,
+  right_elbow_joint, right_wrist_roll_joint, right_wrist_pitch_joint, right_wrist_yaw_joint]
+
+# assets/h1_2.py _INIT_STATE (rad)
+default_joint_pos: [
+  0.0, -0.3, 0.0, 0.5, -0.2, 0.0,
+  0.0, -0.3, 0.0, 0.5, -0.2, 0.0,
+  0.0,
+  0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+  0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+# assets/h1_2.py _ACTUATORS: stiffness / damping (Nm/rad, Nm s/rad)
+kp: [
+  200, 200, 200, 300, 40, 40,
+  200, 200, 200, 300, 40, 40,
+  300,
+  120, 120, 120, 80, 40, 40, 40,
+  120, 120, 120, 80, 40, 40, 40]
+kd: [
+  2.5, 2.5, 2.5, 4.0, 2.0, 2.0,
+  2.5, 2.5, 2.5, 4.0, 2.0, 2.0,
+  3.0,
+  2.0, 2.0, 2.0, 1.0, 1.0, 1.0, 1.0,
+  2.0, 2.0, 2.0, 1.0, 1.0, 1.0, 1.0]
+
+# assets/h1_2.py _ACTUATORS: effort_limit_sim (Nm)
+effort_limits: [
+  200, 200, 200, 300, 60, 40,
+  200, 200, 200, 300, 60, 40,
+  200,
+  40, 40, 18, 18, 19, 19, 19,
+  40, 40, 18, 18, 19, 19, 19]
+
+clip_actions: 10.0          # CLIP_ACTIONS: the env clamps every raw action to +-this
+# Joint target bounds (mdp/actions.py), in order:
+target_margin: -0.001       # rad: the URDF hard limits widened by this (negative: 1 mm inside them)
+target_limits: null         # joint -> [low, high], GOLEM's position e-stop range the run clipped into;
+                            # export.yaml sets it per run (null: runs trained without it)
+torque_headroom: 0.85       # then: kp (target - q) - kd dq within this share of effort_limits
+
+legs:
+  policy: legs.pt
+  num_obs: 95
+  num_actions: 12
+  action_scale: 0.25        # target = scale * action + default
+
+arms:
+  policy: arms.pt
+  num_obs: 123
+  num_actions: 14
+  residual_scale: 0.2       # target = q + IK step + scale * residual
+  residual_cutoff_hz: 3.0   # residual = the action low-passed (one pole, per policy step); the arms observe it
+  ee_frames: [left_wrist_yaw_link, right_wrist_yaw_link]
+  ik_damping: 0.05
+  max_ik_step: 0.1          # rad per joint per policy step
+
+# FAST-LIO's body frame (/Odometry, camera_init -> body): the MID360's, livox_link in the URDF. Forward kinematics
+# takes its pose to the pelvis, through the torso joint.
+slam_frame: livox_link
+
+# Gait clock (manager_based mdp/rewards.py)
+gait_period: 0.8
+zero_cmd_eps: 0.1
+
+# Velocity command ranges (MarlCommandsCfg base_velocity); /cmd_vel is clipped to them
+command_ranges:
+  lin_vel_x: [-0.7, 0.7]
+  lin_vel_y: [-0.3, 0.3]
+  ang_vel_z: [-0.5, 0.5]
+
+# No settle at a mode switch: the task switches between navigation and an arm goal at once (ArmTargetsCommand)
+settle_to_arm_s: 0.0
+settle_to_nav_s: 0.0
+
+# The navigation rest pose: wrist poses (x, y, z, qw, qx, qy, qz), pelvis frame, left then right,
+# from the run's arm_target_tables.pt (default_poses). null: forward kinematics at the default pose.
+rest_pose: null

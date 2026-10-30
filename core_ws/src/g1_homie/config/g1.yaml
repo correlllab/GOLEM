@@ -1,0 +1,71 @@
+# Real G1. HOMIE's walking policy drives the legs through golem_safety's
+# split mode (its split.yaml), which merges them with the arm controller's
+# waist + arms and alone writes rt/lowcmd. The node never writes rt/lowcmd.
+# Command limits and rates are starting values, not yet tuned on our G1.
+
+topics:
+  low_state: rt/lowstate
+  # the legs' commands: must be a golem_safety input (rt/safety/...)
+  low_cmd: rt/safety/lowcmd_lower_in
+  # read only: the policy starts once the arm controller is commanding here
+  upper_cmd: rt/safety/lowcmd_upper_in
+
+network:
+  domain_id: 0
+  interface: ''
+
+# frame of the rt/lowstate IMU. HOMIE was trained on the pelvis IMU and reads
+# rt/lowstate's IMU as it; only pelvis is accepted until our unit's is verified
+imu_frame: pelvis
+
+# rt/lowstate's tick, s per count: the policy steps every 20 ms of tick, so it
+# follows the robot's clock however many samples the node sees. Assumed ms, as
+# in the sim (2 per 500 Hz sample); not yet verified on our G1, so
+# startup.tick_rate checks it before the legs move
+tick_seconds: 0.001
+
+startup:
+  # s to move the legs from where they are to the policy's default pose (the
+  # pre-pose), as the H1-2's leg node does
+  ramp_seconds: 2.0
+  # hold the default pose until the operator calls /lowerbody/confirm_engage
+  # (std_srvs/srv/Trigger), then start the policy
+  wait_for_confirm: true
+  # s of rt/lowstate tick per s of wall clock the policy start accepts, measured
+  # while the legs hold the pre-pose: the robot's tick keeps to real time, and a
+  # tick_seconds that does not match its unit would change the policy's rate
+  tick_rate: [0.9, 1.1]
+
+heartbeat:
+  # s without golem_safety's /safety/heartbeat (10 Hz) after the first beat
+  # that stops the node for good, as a false beat (its estop latched) does
+  timeout: 0.5
+
+band:
+  # the real robot has no elastic band: /elastic_band/toggle is never called
+  release: false
+  # s after the policy started at which the band would be released without
+  # /left_ee_pose (unused while release is false)
+  max_wait: 30.0
+
+commands:
+  # deployment limits, inside the trained ranges (vx -0.8..1.2, vy -0.5..0.5,
+  # yaw -0.8..0.8): vx, vy in m/s, yaw in rad/s
+  vx: [-0.3, 0.5]
+  vy: [-0.3, 0.3]
+  yaw: [-0.6, 0.6]
+  # largest change per second: m/s^2, m/s^2, rad/s^2
+  accel: [0.5, 0.5, 1.0]
+  # /cmd_vel older than this (s) means zero velocity
+  timeout: 0.5
+  # largest change of the height target per second (m/s)
+  height_rate: 0.1
+
+faults:
+  # longest gap (s, wall clock) allowed between rt/lowstate samples once the
+  # node commands the legs
+  max_state_gap: 0.05
+  # longest a leg command may come after the rt/lowstate sample it answers
+  # (s, wall clock, from the robot's DDS write to the publish): well under the
+  # constant delay HOMIE stood with in the sim (30 ms; it fell at 60 ms)
+  max_latency: 0.025

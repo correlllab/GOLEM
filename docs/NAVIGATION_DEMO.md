@@ -4,9 +4,8 @@ This walks the H1-2 through a RoboCasa kitchen **autonomously**: it builds a map
 with SLAM, plans collision-free paths around the furniture with nav2, and drives
 itself to unexplored frontiers — all on the headless CPU sim, no GPU.
 
-It runs on top of the macOS (Apple-Silicon) port; see the **macOS (Apple
-Silicon)** section of the top-level [`README.md`](../README.md) for the one-time
-Colima/Docker setup, image builds, and the noVNC tunnel.
+It runs on top of the macOS (Apple-Silicon) port; see [`MACOS.md`](MACOS.md)
+for the one-time Colima/Docker setup, image builds, and the noVNC tunnel.
 
 ## What it demonstrates
 
@@ -17,11 +16,13 @@ Colima/Docker setup, image builds, and the noVNC tunnel.
 - **nav2** — a Smac/RegulatedPurePursuit stack plans a collision-free path on
   the map **and** a live costmap (2D scan + the full 3D Livox cloud, so it sees
   counters and appliances the flat slice misses), then drives `/cmd_vel`.
-- **Locomotion** — the switchable lower-body controller follows `/cmd_vel` with
-  the TorchScript walk policy, handed over from a stable FAME stand.
+- **Locomotion** — the lower-body controller, pinned to ALMI, follows `/cmd_vel`
+  directly (stands at zero, walks otherwise).
 - **Frontier exploration** — the `/skill/frontier_explore` action (the
-  `FrontierExploreSkill` in `h12_skills`) repeatedly sends the nearest unexplored
-  frontier as a nav2 goal until the reachable space is mapped.
+  `FrontierExploreSkill` in `golem_skills`) repeatedly sends the nearest unexplored
+  frontier as a nav2 goal until the reachable space is mapped. The Mac image does not
+  build `golem_skills` (`BRINGUP_STUB_DEPS` in `docker/mac/scripts/launch_ros_mac.sh`),
+  so on the Mac stack `rob_explore` finds no server.
 
 ## Run it
 
@@ -31,7 +32,7 @@ is publishing before the ROS nodes latch onto sim time):
 ```bash
 # from the repo root
 GOLEM_DISPLAY=vnc GOLEM_RVIZ=vnc GOLEM_CAMERAS=0 GOLEM_SIM_ODOM=1 \
-GOLEM_LOWERBODY=switch GOLEM_SLAM=1 GOLEM_NAV2=1 GOLEM_SPAWN_BACKOFF=1.5 \
+GOLEM_LOWERBODY=almi GOLEM_SLAM=1 GOLEM_NAV2=1 GOLEM_SPAWN_BACKOFF=1.5 \
   docker compose -f docker/mac/docker-compose.yml up -d
 
 # open the noVNC tunnel (Colima doesn't forward container ports)
@@ -44,7 +45,7 @@ Then drive it:
 docker exec -it golem_ros bash        # host docker CLI flaky? use: colima ssh -- docker exec -it golem_ros bash
 source /home/code/h12_sim_scripts/robot_cli.sh
 
-# The robot comes up already standing in FAME (auto-activated) — wait ~15 s of sim
+# The robot comes up standing in ALMI (auto-activated) — wait ~15 s of sim
 # time for the tether to release and the stance to settle, then:
 rob_explore    # send /skill/frontier_explore; walk auto-engages on nav2's /cmd_vel (Ctrl-C cancels)
 ```
@@ -63,7 +64,7 @@ blacklisted after a timeout and the explorer moves on; the action succeeds with
 
 | Variable | For the nav demo | Notes |
 |---|---|---|
-| `GOLEM_LOWERBODY` | `switch` | Switchable controller: starts in FAME and auto-switches stand↔walk from `‖/cmd_vel‖`. `fame` stands only; `walk` launches the raw policy (use `switch`). |
+| `GOLEM_LOWERBODY` | `almi` | Lower-body controller pinned to ALMI: stands at zero `/cmd_vel`, walks otherwise. `fame` stands only; `walk` launches the raw policy (use `almi`). |
 | `GOLEM_SIM_ODOM` | `1` | Publishes the sim's ground-truth base odom (`/odom` + `odom→pelvis` TF) that SLAM needs. Off by default; **required** for this demo. |
 | `GOLEM_SLAM` | `1` | Adds `pointcloud_to_laserscan` + `slam_toolbox` → `/map`. |
 | `GOLEM_NAV2` | `1` | Adds the nav2 stack (implies SLAM). Send goals via RViz "2D Nav Goal", `/navigate_to_pose`, or `rob_explore`. |
@@ -74,9 +75,9 @@ blacklisted after a timeout and the explorer moves on; the action succeeds with
 ## Manual driving (without exploration)
 
 ```bash
-# The controller auto-switches: any /cmd_vel makes it walk, zero makes it stand (FAME).
+# ALMI walks on any /cmd_vel and stands at zero.
 rob_go 0.3 0 0.2 6        # vx vy wz secs — forward + gentle left turn for 6 s (auto-walks)
-rob_stop                  # zero velocity → auto-switches back to FAME
+rob_stop                  # zero velocity → ALMI stands
 ```
 
 Or set a single goal in RViz with the **2D Nav Goal** tool and let nav2 drive.
@@ -103,13 +104,13 @@ MuJoCo (robocasa)                        ROS (golem_ros)
   ```
   The layout is randomized each launch, so a recreate also re-rolls the kitchen —
   handy if the robot spawns cramped against a counter (it'll then lean into it
-  once FAME releases). `1.5`–`2.0` reliably clears the fixtures.
+  once the tether releases). `1.5`–`2.0` reliably clears the fixtures.
 - **Restart the two containers coherently.** The sim owns `/clock`; if you restart
   it, its sim time resets to 0 and the still-running ROS side sees the clock jump
   backward (TF extrapolation errors, a frozen `0x0` SLAM map). After recreating or
   restarting `robocasa`, restart `golem_ros` too so it resyncs.
-- **Let FAME settle before commanding motion.** The controller boots into FAME and
-  the walk policy is stable only when handed over from a settled stance — give it
+- **Let the stance settle before commanding motion.** The controller boots into ALMI
+  standing; give it
   ~15 s of sim time after launch (tether release + settle) before `rob_go`/`rob_explore`.
 - **Some exploration goals time out on the slow sim.** At ~0.2× real-time, nav2
   planning + walking to a 2 m frontier can exceed the 120 s goal timeout; the

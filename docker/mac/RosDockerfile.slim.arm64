@@ -10,7 +10,8 @@
 #
 # Build:  docker build -t golem_ros:latest -f docker/mac/RosDockerfile.slim.arm64 .
 # ==============================
-FROM golem_base:latest
+FROM golem_base:arm64
+COPY docker/locks/ros-*.txt /opt/golem-locks/
 
 ARG http_proxy
 ARG https_proxy
@@ -50,11 +51,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # -----------------------------------------------------------------------------
 # Python: the Pink differential-IK stack + QP backends + OMPL path planning used
-# by h12_ros2_controller's frame_task_server. numpy<2 first so transitive
+# by golem_upper_ik's frame_task_server. numpy<2 first so transitive
 # C-extension installs bind to the numpy 1.x ABI (matches apt scipy). OMPL ships
 # a manylinux2014_aarch64 wheel, so it installs on arm64 with no source build.
 # -----------------------------------------------------------------------------
-RUN pip install --no-cache-dir --ignore-installed blinker \
+# Remove the NumPy-2 kinematics inherited from base before installing the ROS ABI.
+RUN pip uninstall -y pin libpinocchio coal libcoal eigenpy
+RUN pip install -c /opt/golem-locks/ros-arm64-01.txt --no-cache-dir --ignore-installed blinker \
         "numpy<2" \
         "scikit-learn>=1.4" \
         pin-pink \
@@ -82,14 +85,14 @@ RUN rm -rf /usr/local/lib/python3.10/dist-packages/setuptools \
            /usr/local/lib/python3.10/dist-packages/_distutils_hack \
            /usr/local/lib/python3.10/dist-packages/wheel \
            /usr/local/lib/python3.10/dist-packages/wheel-*.dist-info \
-    && pip install --no-cache-dir --no-deps "numpy<2" "setuptools==59.6.0" "wheel<0.44" \
+    && pip install -c /opt/golem-locks/ros-arm64-02.txt --no-cache-dir --no-deps "numpy<2" "setuptools==59.6.0" "wheel<0.44" \
     && rm -f /usr/local/lib/python3.10/dist-packages/distutils-precedence.pth
 
 # FastDDS RMW for the ROS (rclpy) layer — arm64 coexistence fix (see the
-# matching block in RobocasaDockerfile.arm64). Nodes that also touch unitree
-# DDS (e.g. the safety_node's ChannelSubscriber) would otherwise load a second
-# CycloneDDS libddsc alongside rmw_cyclonedds_cpp and crash on arm64. rclpy runs
-# on FastDDS via RMW_IMPLEMENTATION=rmw_fastrtps_cpp (docker/mac/docker-compose.yml).
+# matching block in RobocasaDockerfile.arm64). A node that also opens a Unitree
+# SDK (CycloneDDS) channel would otherwise load a second CycloneDDS libddsc
+# alongside rmw_cyclonedds_cpp and crash on arm64. ROS runs on FastDDS via
+# RMW_IMPLEMENTATION=rmw_fastrtps_cpp (docker/mac/docker-compose.yml).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-rmw-fastrtps-cpp \
     && rm -rf /var/lib/apt/lists/*
@@ -147,8 +150,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Overlay the colcon install in interactive shells so `docker exec … bash` sees
-# the same packages as the running bringup (incl. h1_bringup, so
-# `ros2 launch h1_bringup <TAB>` works). launch_ros_mac.sh builds to
+# the same packages as the running bringup (incl. golem_bringup, so
+# `ros2 launch golem_bringup <TAB>` works). launch_ros_mac.sh builds to
 # /opt/core_ws/install (INSTALL_BASE, a named volume on the VM's native ext4 —
 # NOT the virtiofs-mounted /home/code/core_ws/install, which may hold a stale
 # host-side build). Source that same path here.

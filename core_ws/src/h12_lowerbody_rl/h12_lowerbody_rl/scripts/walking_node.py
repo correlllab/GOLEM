@@ -2,10 +2,9 @@
 
 Runs the TorchScript walking policy from policies/walk/walkingPolicy.pt against
 live robot state on /lowstate and publishes lower-body PD setpoints on
-safety/lowcmd_lower_in for the h12_safety_layer to merge with upper-body
-commands.
+safety/lowcmd_lower_in for golem_safety to merge with upper-body commands.
 
-Kept as a standalone single-policy node; the generic, switchable controller is
+Kept as a standalone single-policy node; the generic controller is
 lowerbody_controller_node (see policy.py / policy_manager.py). Direct adaptation
 of reference/deploy_mujoco.py to a real-robot ROS 2 stack.
 '''

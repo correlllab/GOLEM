@@ -1,0 +1,2 @@
+# The root .gitignore drops *.db3; these lmg_deploy runs are kept, in Git LFS (.gitattributes).
+!*.db3

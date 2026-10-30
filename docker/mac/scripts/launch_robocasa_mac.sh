@@ -3,7 +3,7 @@
 # Same as launch_robocasa.sh but CPU/software rendering, no NVIDIA EGL.
 #
 # Two display modes, selected by the GOLEM_DISPLAY env var (default: headless):
-#   GOLEM_DISPLAY=headless  OSMesa offscreen, no viewer window (original behaviour)
+#   GOLEM_DISPLAY=headless  OSMesa offscreen, no viewer window (the default)
 #   GOLEM_DISPLAY=vnc       render the interactive MuJoCo viewer with software GL
 #                          (llvmpipe) into an in-container Xvfb and stream it out
 #                          over VNC/noVNC. MuJoCo's GL window cannot be forwarded
@@ -14,6 +14,8 @@
 #
 # Extra args pass through to h12_mujoco.py.
 set -e
+source "/home/code/golem_common/runtime_common.sh"
+validate_sim_domain
 
 GOLEM_DISPLAY="${GOLEM_DISPLAY:-headless}"
 
@@ -75,7 +77,7 @@ cleanup_vnc_stack() {
 
 source /opt/ros/humble/setup.bash
 # livox_ros_driver2 (CustomMsg/CustomPoint) is baked into the robocasa image at
-# /opt/livox_ws so mujoco_ros_bridge.py can import it.
+# /opt/livox_ws so the sensor suite (h12_sensors.py) can import it.
 source /opt/livox_ws/install/setup.bash
 
 # Build the IDL-only msgs workspace (fast no-op when unchanged).
@@ -91,6 +93,7 @@ echo "[launch_robocasa_mac] building $MSGS_WS -> $MSGS_INSTALL"
     --build-base "$MSGS_BUILD" --install-base "$MSGS_INSTALL" \
     --packages-select magpie_msgs custom_ros_messages)
 source "$MSGS_INSTALL/setup.bash"
+[ "${GOLEM_PREPARE_ONLY:-0}" != 1 ] || exit 0
 
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-1}"
 
@@ -111,6 +114,6 @@ else
     esac
 fi
 
-cd /home/code/h1_robocasa
+cd /home/code/golem_robocasa
 echo "[launch_robocasa_mac] GOLEM_DISPLAY=$GOLEM_DISPLAY MUJOCO_GL=$MUJOCO_GL ROS_DOMAIN_ID=$ROS_DOMAIN_ID args: $*"
-python h12_mujoco.py "$@"
+python -u h12_mujoco.py "$@"

@@ -1,0 +1,68 @@
+# RealSense cameras as the real robot publishes them; realsense_profile.py
+# turns this into the sim's MuJoCo cameras, camera_info and TF tree.
+#
+# head: captured from the real robot (bags/test_bag, 2026-09-22): /tf_static
+#   and the first camera_info of each stream. The mount edge is the hand-to-eye
+#   calibration cl_realsense/launch/h12_headcamera.launch.py publishes; the
+#   other edges are the D435i driver's own frames. Re-capture after a
+#   recalibration.
+# left_hand / right_hand: not captured. The sim keeps its gripper-MJCF cameras
+#   (pose and fovy) and gets the real frame names and TF tree: the mount edges
+#   from cl_realsense/launch/h12_hand_cameras.launch.py and a D405 driver tree
+#   (colour comes from the depth imager, so colour and depth share one frame).
+#   The gripper-MJCF optical frame sits 5 mm behind this tree's optical frame.
+#
+# Units: metres, quaternions x y z w, intrinsics in pixels at width x height.
+# tf_static entries: [parent, child, xyz, quat_xyzw(, driver)]. A trailing
+# `driver` marks the driver's own edges, which it also re-publishes on /tf at
+# tf_rate_hz; the rest are robot-side static mounts.
+
+tf_rate_hz: 10.0
+
+cameras:
+  head:
+    # URDF link whose frame is the robot MJCF head_cam's optical frame
+    # (+z forward, +y down); the sim places the head cameras relative to it.
+    anchor_link: head_camera_link
+    color_frame: head_color_optical_frame
+    depth_frame: head_depth_optical_frame
+    tf_static:
+      - [head_camera_link, head_link, [0.000985, 0.014977, -0.018805], [-0.510111, 0.523885, -0.486398, -0.478277]]
+      - [head_link, head_depth_frame, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], driver]
+      - [head_depth_frame, head_depth_optical_frame, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, 0.5], driver]
+      - [head_link, head_color_frame, [-0.00022629060549661517, 0.014902372844517231, 3.6659606848843396e-05], [0.007132303901016712, -0.0024601402692496777, -0.0033503943122923374, 0.9999659061431885], driver]
+      - [head_color_frame, head_color_optical_frame, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, 0.5], driver]
+    color:
+      width: 1280
+      height: 720
+      k: [909.6611328125, 909.5230102539062, 647.69384765625, 369.2969970703125]   # fx fy cx cy
+    depth:
+      width: 1280
+      height: 720
+      k: [642.6455078125, 642.6455078125, 651.2221069335938, 358.1368103027344]
+    # decimation_filter magnitude 2: depth/image_rect_raw and the point cloud
+    # are half the depth camera_info size, which the driver still reports at
+    # the undecimated resolution.
+    decimation: 2
+
+  left_hand:
+    color_frame: left_hand_color_optical_frame
+    depth_frame: left_hand_depth_optical_frame
+    tf_static:
+      - [lg_mount, left_hand_link, [0.0, 0.0, 0.05], [-0.5, -0.5, -0.5, 0.5]]
+      - [left_hand_link, left_hand_depth_frame, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], driver]
+      - [left_hand_depth_frame, left_hand_depth_optical_frame, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, 0.5], driver]
+      - [left_hand_link, left_hand_color_frame, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], driver]
+      - [left_hand_color_frame, left_hand_color_optical_frame, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, 0.5], driver]
+    decimation: 2
+
+  right_hand:
+    color_frame: right_hand_color_optical_frame
+    depth_frame: right_hand_depth_optical_frame
+    tf_static:
+      - [rg_mount, right_hand_link, [0.0, 0.0, 0.05], [-0.5, -0.5, -0.5, 0.5]]
+      - [right_hand_link, right_hand_depth_frame, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], driver]
+      - [right_hand_depth_frame, right_hand_depth_optical_frame, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, 0.5], driver]
+      - [right_hand_link, right_hand_color_frame, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], driver]
+      - [right_hand_color_frame, right_hand_color_optical_frame, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, 0.5], driver]
+    decimation: 2

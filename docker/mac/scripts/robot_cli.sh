@@ -12,8 +12,7 @@
 #   rob_gripset left 0.5            # set gripper position (0=open .. 1=closed)
 #   rob_eepose right                # print current right-hand pose (pelvis frame)
 #   rob_home                        # arms-down baseline
-# (rob_reach / Cartesian reaching is disabled — the FrameTask action crashes the
-#  controller node; drive the robot in joint space with rob_pose for now.)
+# For Cartesian reaching, send a /frame_task goal (core_ws/src/golem_upper_ik/README.md).
 #
 # Watch it live in your browser (from the Mac): http://localhost:6080/vnc.html
 
@@ -23,10 +22,10 @@ source /opt/core_ws/install/setup.bash 2>/dev/null
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-1}"
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
-# Named postures available to rob_pose (from utility/named_config.py):
-#   home t_pose arms_front_45 arms_overhead arms_asym arms_front_yaw elbow_only
+# Named postures available to rob_pose: NAMED_CONFIGS in
+# core_ws/src/golem_upper_ik/golem_upper_ik/robots/h12.py
 rob_poses() {
-    echo "home t_pose arms_front arms_front_elbow t_pose_elbow arms_overhead arms_asym arms_front_yaw elbow_only"
+    echo "home t_pose arms_front_45 arms_overhead arms_asym arms_front_yaw init_1 init_2 init_3 prep staging_right staging_left"
 }
 
 # rob_pose <config_name> [seconds]
@@ -61,30 +60,17 @@ rob_eepose() {
         || echo "[rob_eepose] no sample in 8s (QoS-match CLI artifact; the topic is live)"
 }
 
-# rob_reach — DISABLED. The /frame_task (FrameTask) action currently CRASHES the
-# frame_task_server: after a goal sets self.frame_names, the node's periodic
-# /frame_poses publisher calls get_frame_transformation() on that frame in the
-# FULL model, where a wrist-frame id is out of range -> IndexError kills the node
-# (frame_task_server.py:124 -> robot_model.py:426). The arm does move first, but
-# the controller then dies and all further commands hang on "waiting for action
-# server". Until that's fixed, drive the robot in joint space (rob_pose) instead.
-rob_reach() {
-    echo "rob_reach is disabled: the FrameTask action crashes frame_task_server"
-    echo "(get_frame_transformation IndexError on the wrist frame). Use rob_pose <name>."
-    return 1
-}
+# --- Lower-body locomotion (needs GOLEM_LOWERBODY=almi) --------------------------
+# The controller runs ALMI for both standing and walking: any velocity command makes
+# it walk; zero makes it stand. There are no start services — rob_go drives
+# /cmd_vel, rob_stop zeroes it.
 
-# --- Lower-body locomotion (needs GOLEM_LOWERBODY=switch) ------------------------
-# The switchable controller starts in FAME (stand) and auto-switches stand<->walk
-# from ||/cmd_vel||: any velocity command makes it walk; zero makes it stand. There
-# are no start services — rob_go drives /cmd_vel, rob_stop zeroes it (back to FAME).
-
-# rob_stand — command zero velocity; the controller auto-switches back to FAME.
+# rob_stand — command zero velocity; ALMI stands.
 rob_stand() { ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "{}" >/dev/null 2>&1; }
-# rob_walk — no-op: walk mode is entered automatically by commanding a velocity.
+# rob_walk — no-op: ALMI walks as soon as it is commanded a velocity.
 rob_walk()  { echo "[rob_walk] send a velocity (rob_go ...) — walk engages automatically"; }
 
-# rob_go <vx> [vy] [wz] [secs]  — drive the walk policy (m/s, m/s, rad/s).
+# rob_go <vx> [vy] [wz] [secs]  — drive the policy (m/s, m/s, rad/s).
 # Publishes /cmd_vel at 20 Hz for `secs` (default 6). vx>0 forward, wz>0 turn left.
 rob_go() {
     local vx="${1:-0.4}" vy="${2:-0.0}" wz="${3:-0.0}" secs="${4:-6}"
@@ -93,7 +79,7 @@ rob_go() {
         "{linear: {x: $vx, y: $vy}, angular: {z: $wz}}"
 }
 
-# rob_stop — zero velocity; the controller auto-switches back to FAME (stand still).
+# rob_stop — zero velocity; ALMI stands still.
 rob_stop() {
     ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "{}" >/dev/null 2>&1
 }
@@ -101,11 +87,12 @@ rob_stop() {
 # rob_odom — current base position in the odom (world) frame.
 rob_odom() { timeout 5 ros2 topic echo /odom --field pose.pose.position --once; }
 
-# rob_explore — autonomous frontier-based exploration (needs GOLEM_SLAM=1 GOLEM_NAV2=1).
+# rob_explore — autonomous frontier-based exploration (needs GOLEM_SLAM=1 GOLEM_NAV2=1
+# and a /skill/frontier_explore server: golem_skills serves it, and the Mac image does
+# not build golem_skills, so on the Mac stack this goal finds no server).
 # Sends the /skill/frontier_explore action, which repeatedly navigates to the nearest
-# unexplored frontier on the SLAM map until it's fully mapped. The controller
-# auto-switches to walk as soon as nav2 publishes /cmd_vel (no manual walk step) and
-# stands (FAME) between goals. Ctrl-C to stop (cancels the goal). Watch RViz (6081).
+# unexplored frontier on the SLAM map until it's fully mapped. ALMI walks as soon
+# as nav2 publishes /cmd_vel (no manual walk step) and stands between goals. Ctrl-C to stop (cancels the goal). Watch RViz (6081).
 rob_explore() {
     ros2 action send_goal /skill/frontier_explore \
         custom_ros_messages/action/SkillFrontierExplore \
@@ -115,5 +102,5 @@ rob_explore() {
 
 echo "robot_cli loaded."
 echo "  postures : rob_pose t_pose | rob_grip right close"
-echo "  locomote : rob_go 0.4 0 0.3 (fwd+turn) -> rob_stop   (auto stand<->walk; needs GOLEM_LOWERBODY=switch)"
-echo "  explore  : rob_explore   (autonomous frontier mapping; needs GOLEM_SLAM=1 GOLEM_NAV2=1)"
+echo "  locomote : rob_go 0.4 0 0.3 (fwd+turn) -> rob_stop   (ALMI stand/walk; needs GOLEM_LOWERBODY=almi)"
+echo "  explore  : rob_explore   (frontier mapping; needs GOLEM_SLAM=1 GOLEM_NAV2=1 and golem_skills, not built on the Mac)"

@@ -12,6 +12,7 @@ from mujoco_ros_bridge import RosSensorBridge, init_ros, shutdown_ros
 import mujoco.viewer
 
 from . import g1_robosuite  # registers G1Dex3 + its grippers, patches RoboCasa
+import battery_env  # registers the Battery workcell env
 import blank_env  # registers the Blank env
 import sim_common
 from measurement_bridge import MeasurementBridge
@@ -101,7 +102,8 @@ def apply_band(model, data, band, body, vel):
 
 
 def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False, duration=0.0):
-    """Launch a task env around the G1 (a RoboCasa kitchen, or blank_env's Blank)
+    """Launch a task env around the G1 (a RoboCasa kitchen, battery_env's Battery
+    or blank_env's Blank)
     and run the shared-MjData loop.
 
     Builds the env with robots='G1Dex3' and steps the env's *own* MjData with our
@@ -174,7 +176,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # odometry, which the bridge publishes as odom -> pelvis TF + /odom (feeds
     # SLAM without needing FAST-LIO). OFF by default so the shared sim bridge does
     # not inject a second odom->pelvis anchor that competes with the real stack's
-    # FAST-LIO (camera_init) TF; g1_navigation's odom_source:=sim_gt opts in with GOLEM_SIM_ODOM=1.
+    # FAST-LIO (camera_init) TF; opt in with GOLEM_SIM_ODOM=1.
     _sim_odom_on = os.environ.get('GOLEM_SIM_ODOM', '0').strip().lower() not in ('0', 'off', 'false', 'no', '')
     odom_base_body_id = resolver.base_body if _sim_odom_on else -1
     print(f"[g1_mujoco] ground-truth sim odom {'ON (GOLEM_SIM_ODOM=1)' if _sim_odom_on else 'OFF'}")
@@ -327,7 +329,8 @@ def main(argv):
     parser = argparse.ArgumentParser(description="Run the G1 RoboCasa MuJoCo sim")
     sim_common.add_common_args(
         parser,
-        task_help="RoboCasa env name (e.g. TurnOnToasterOven), or Blank for the robot "
+        task_help="RoboCasa env name (e.g. TurnOnToasterOven), Battery for the ARPA "
+                  "battery workcell (CL_Assets/mujoco_assets/battery), or Blank for the robot "
                   "alone on a floor (no --layout or --style). "
                   "Omit to launch a random registered kitchen task.",
     )
@@ -339,7 +342,8 @@ def main(argv):
         print(f"[g1_mujoco] no --task given; randomly selected {task!r}")
     else:
         task = sim_common.resolve_task(task, seed=args.seed, tag="g1_mujoco",
-                                       robot_task=blank_env.canonical_task)
+                                       robot_task=lambda name: battery_env.canonical_task(name)
+                                       or blank_env.canonical_task(name))
     sim_common.refuse_kitchen_args(parser, args, task, blank_env.TASKS)
 
     sim_loop(task, viewer=not args.headless,

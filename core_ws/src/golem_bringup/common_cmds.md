@@ -89,7 +89,7 @@ ros2 launch golem_bringup h12_real_desktop.launch.py
 # add use_hand_cameras:=true when the grasp uses visual_servo
 ```
 
-Wait for `h12_skills` to report ready; it looks for frame_task, the grippers
+Wait for `golem_skills` to report ready; it looks for frame_task, the grippers
 and the model servers on startup.
 
 **4. Grasp.** Lay the screwdriver flat in reach of the arm, shaft pointing
@@ -201,12 +201,12 @@ gets the same segmented cloud and runs through the same approach / contact /
 servo executor, so switching methods changes only the grasps:
 
 ```bash
-ros2 param set /h12_skills grasp_method antipodal      # takes effect on the next goal
-ros2 param describe /h12_skills grasp_method
+ros2 param set /golem_skills grasp_method antipodal      # takes effect on the next goal
+ros2 param describe /golem_skills grasp_method
 ```
 
 The method names and what each does are in
-`h12_skills/h12_skills/grasp_synthesis/` (registry: `METHODS` in its
+`golem_skills/golem_skills/grasp_synthesis/` (registry: `METHODS` in its
 `__init__.py`); an unknown name is rejected by `ros2 param set`.
 `visual_servo` composes with any of them.
 

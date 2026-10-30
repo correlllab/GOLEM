@@ -1,8 +1,8 @@
 # The Unitree G1 in GOLEM
 
 GOLEM runs a second robot beside the H1-2: the Correll Lab's Unitree G1
-(29 DoF, two Dex3-1 hands). Its ROS 2 packages are `core_ws/src/g1_homie`, `dex_3` and
-`g1_navigation`, its
+(29 DoF, two Dex3-1 hands). Its ROS 2 packages are `core_ws/src/g1_homie` and `dex_3`. Navigation
+and frontier exploration use the shared `golem_slam` and `golem_skills`; its
 models (Unitree's URDFs, MJCFs and meshes, and a sphere-packed self-collision
 model) are in `CL_Assets/g1`, installed for ROS by `golem_ros2_models` with the
 H1-2's, and its RoboCasa kitchen sim is `golem_robocasa/g1/`, started through the same entry point
@@ -32,15 +32,15 @@ gains and limits on our G1.
 
 ## Selecting the G1
 
-The H1-2 is the default. The Linux wrappers in `docker/scripts/` select the G1
-with `--g1` anywhere in their arguments, or with `GOLEM_ROBOT=g1` in the shell
-or `docker/.env`; `--h12` selects the H1-2 again. `docker_run.sh` and
-`docker_stack.sh up` print the robot they selected (`robot: g1`) before the
-DDS domain check and before any container starts. The selection picks the
-sim's robot, the bringup `docker_stack.sh` starts and the sim it waits for, and
-on the real G1 the DDS interface pin (`docker/docker-compose.g1.yml`). Every
-`ros` container mounts and builds both robots' packages, so `docker_run.sh ros`
-needs `--g1` only on the real G1. `CLAUDE.md` §3 has the details.
+The H1-2 is the default. The simulator and stack wrappers in `docker/scripts/`
+select the G1 with `--g1` anywhere in their arguments, or with `GOLEM_ROBOT=g1`
+in the shell or `docker/.env`; `--h12` selects the H1-2 again.
+`docker_run.sh robocasa` and `docker_stack.sh up` print the robot they selected
+(`robot: g1`) before the DDS domain check and before any container starts. The
+selection picks the sim's robot, the bringup `docker_stack.sh` starts and the
+sim it waits for. Every `ros` container mounts and builds both robots' packages
+and uses `core_ws/cyclonedds.xml` directly, so `docker_run.sh ros` takes no
+`--g1` or `--h12` flag. `CLAUDE.md` §3 has the details.
 
 - x86 Linux with an NVIDIA GPU only: the Mac wrappers and the Isaac simulator
   refuse the G1.
@@ -112,9 +112,6 @@ left hand closes and opens. The named postures are `NAMED_CONFIGS` in
   5).
 - These containers use host networking on domain 1, so their DDS traffic can
   reach other machines on your network. The test scripts keep it on the host.
-- Leave `G1_DDS_INTERFACE` empty here. It pins only the `ros` container, so on
-  the sim domain the two containers can end up on different interfaces; the
-  wrappers warn when it is set ([DDS and networking](dds.md)).
 - The arm controller keeps the arms out of self-collision and plans with
   OMPL (`plan: true`), as on the H1-2. Its spheres cover the Dex3-1 palms but
   not the fingers, and it keeps them 20 mm apart, as on the H1-2. `arms_down`
@@ -132,7 +129,7 @@ left hand closes and opens. The named postures are `NAMED_CONFIGS` in
 | [First real session](first-session.md) | the checklist for the first session on the real G1, in Unitree's debug mode; it waits for the debug-mode procedure |
 | [Safety layer](safety.md) | modes, the start-up, estops, stopping, logs |
 | [Control in sim and on the robot](control-path.md) | the path of a command, and how the sim plays the robot in debug mode |
-| [DDS and networking](dds.md) | domains, the guards against domain 0, the wired port, the robot's network and topics |
+| [DDS and networking](dds.md) | domains, the guards against domain 0, the robot's network and topics |
 | [Our G1](hardware.md) | our unit's details, `rt/lowstate`'s layout, open hardware questions |
 | [Walking](walking.md) | HOMIE's policy on the legs, in the sim |
 | [Navigation](navigation.md) | FAST_LIO, slam_toolbox and Nav2, in the sim |
@@ -141,6 +138,6 @@ left hand closes and opens. The named postures are `NAMED_CONFIGS` in
 
 ## Licence
 
-The G1 packages (`dex_3`, `g1_homie`, `g1_navigation`) are MIT. HOMIE's walking policy in
+The G1 packages (`dex_3`, `g1_homie`) are MIT. HOMIE's walking policy in
 `core_ws/src/g1_homie/policy/` is for non-commercial use only (CC BY-NC
 4.0 by its `LICENSE`; treat it as CC BY-NC-SA 4.0); see its `README.md`.

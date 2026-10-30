@@ -79,7 +79,7 @@ block `h12_locomanipulationgame.launch.py`):
 - the state publishers;
 - the split safety layer with the real robot's preset (`relax_safety_split`; ankle pitch torque e-stop 95 Nm since 10-20, sport mode peaks at 93);
 - `marl_deploy_node` with `policies/<policy>/`;
-- SLAM: `h12_slam/launch/h12_navigation.launch.py` (FAST-LIO, the pelvis-height laser scan, slam_toolbox and nav2).
+- SLAM: `golem_slam/launch/h12_navigation.launch.py` (FAST-LIO, the pelvis-height laser scan, slam_toolbox and nav2).
   FAST-LIO's `/Odometry` is what keeps the arm goals fixed in the world.
 
 `frame_task_server` and the lower-body RL node stay off, so this node is the only publisher on each safety channel.
@@ -135,7 +135,7 @@ ros2 topic echo /marl_deploy_node/wrist_error   # m, left and right
 
 On the onboard PC, run `golem_bringup/launch/h12/lmg_real.launch.py` **instead of**
 `h12_real_robot.launch.py`, never beside it. It starts the same drivers, state publishers, estop, safety
-layer and `h12_slam` navigation stack, without `frame_task_server`, plus the shared game block on wall-clock time. Keep the lower-body RL and MJPC
+layer and `golem_slam` navigation stack, without `frame_task_server`, plus the shared game block on wall-clock time. Keep the lower-body RL and MJPC
 controllers off.
 
 ```bash

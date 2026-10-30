@@ -37,7 +37,7 @@ fi
 # --- MJPC incremental rebuild (ninja no-op scan when already warm) ---
 # Brings libmjpc/threadpool + the staged task assets + the dist-packages
 # agent_server current with the mounted submodule BEFORE colcon links
-# h12_deploy_mjpc against the build tree (after a hydrate the tree is at the
+# deploy_mjpc against the build tree (after a hydrate the tree is at the
 # image's MJPC_REF; source inputs above require revalidation).
 if [ -f "$MJPC_SRC/CMakeLists.txt" ] && [ -e "$MJPC_BUILD/CMakeCache.txt" ]; then
     /home/code/h12_sim_scripts/rebuild_mjpc.sh

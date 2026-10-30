@@ -55,7 +55,6 @@ else
         fi
     done
 fi
-write_g1_dds_pin
 # Preparation suppresses optional GUI/MCP processes and does not start controllers.
 "${COMPOSE[@]}" run --rm -T -e GOLEM_WAIT_FOR_SIM=0 -e GOLEM_RVIZ=0 -e GOLEM_ROS_MCP=0 \
     ros "/home/code/h12_sim_scripts/launch_ros${LAUNCH_SUFFIX}.sh" /bin/true

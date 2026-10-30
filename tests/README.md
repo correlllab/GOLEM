@@ -129,10 +129,12 @@ own, and use domains 195 (arm), 196 (walk), 197 (nav) and 198 (explore) unless
 tests/g1/test_sim_bringup.sh                 # arms
 tests/g1/test_sim_bringup.sh --walk          # walking
 tests/g1/test_sim_nav.sh                     # Nav2 to one goal, FAST_LIO odometry
-GOLEM_SIM_ODOM=1 tests/g1/test_sim_nav.sh    # the same, the sim's ground-truth odometry
 tests/g1/test_sim_explore.sh                 # frontier exploration
 ```
 
 A passing test ends with `PASSED: <n>/<n> checks` and exits 0. The G1
 packages' own tests run in the G1 `ros` container; `docs/g1/packages.md` says
 how.
+
+The G1 nav/explore tests use `golem_slam` and require FAST-LIO; `GOLEM_SIM_ODOM=1`
+is refused.

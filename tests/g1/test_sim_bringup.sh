@@ -38,7 +38,7 @@ HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TEST=arm
 NAME=bringup
 DOMAIN=195
-LAUNCH_ARGS="use_rviz:=false"
+LAUNCH_ARGS="use_rviz:=false use_nav:=false"
 SIM_ENV=(-e GOLEM_SIM_ODOM=0 -e GOLEM_SPAWN_BACKOFF=)
 DRIVE_ARGS=""
 if [ "${1:-}" = "--walk" ]; then

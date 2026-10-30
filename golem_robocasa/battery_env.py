@@ -1,8 +1,9 @@
-"""Battery-workcell task for the H1-2 sim runner (``h12_mujoco.py --task Battery``).
+"""Battery-workcell task for both sim runners (``h12_mujoco.py --task Battery``,
+``--g1`` for the G1).
 
-A robosuite env (not a RoboCasa kitchen) around the same registered ``H1_2``
-robot the kitchen tasks use, so every robot0_/gripper0_ name the bridges
-resolve is identical. The arena is ``CL_Assets/mujoco_assets/battery/
+A robosuite env (not a RoboCasa kitchen) around the same registered robot the
+kitchen tasks use (``H1_2`` or ``G1Dex3``), so every robot0_/gripper0_ name the
+bridges resolve is identical. The arena is ``CL_Assets/mujoco_assets/battery/
 battery_cell.xml`` (ARPA cell, battery pack, screw row), plus every MJCF in
 ``battery/objects/``.
 
@@ -24,7 +25,7 @@ and inertia as authored even though robosuite compiles the merged scene with
 unique across the whole scene.
 
 Importing this module registers the env with robosuite (EnvMeta), so
-``robosuite.make("Battery", robots="H1_2", ...)`` resolves it. The task has no
+``robosuite.make("Battery", robots=...)`` resolves it. The task has no
 scripted success: the RoboCasa task-signal surface the runner reads
 (update_state / _check_success / reward / get_ep_meta) is stubbed.
 """
@@ -49,13 +50,13 @@ TASKS = ("Battery",)
 
 # Pelvis spawn (m, world) and orientation (euler rad): facing +x, 0.24 m short
 # of the battery's near wall (x = 0.444), within arm reach of the near modules
-# and the screw row. place_robot_collision_free fits floor clearance and backs
-# off along -x only if the margin below isn't met.
+# and the screw row. Each runner's place_robot_collision_free fits the floor
+# clearance and backs the robot off along -x until it clears the cell.
 ROBOT_BASE_POS = (0.20, 0.0, 1.03)
 ROBOT_BASE_ORI = (0.0, 0.0, 0.0)
 
-# Default spawn clearance (m) for this task, used when GOLEM_SPAWN_MARGIN is
-# unset. The kitchen default of 0.20 would hold the robot ~0.45 m further
+# The H1-2's default spawn clearance (m) for this task, used when
+# GOLEM_SPAWN_MARGIN is unset (the G1 sim keeps its own). The kitchen default of 0.20 would hold the robot ~0.45 m further
 # back: the binding pose is the sagged, unpowered arms, whose grippers hang
 # ~2 cm above the module tops from this spawn.
 SPAWN_MARGIN = 0.015
@@ -238,7 +239,7 @@ class BatteryArena(Arena):
 
 
 class Battery(ManipulationEnv):
-    """H1-2 at the ARPA battery workcell with the objects/ parts on the battery."""
+    """The robot at the ARPA battery workcell with the objects/ parts on the battery."""
 
     def __init__(self, robots, use_object_obs=True, **kwargs):
         # use_object_obs is part of make_kitchen_env's kwarg set; this env

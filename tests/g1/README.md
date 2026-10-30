@@ -9,7 +9,6 @@ recording of the run.
 tests/g1/test_sim_bringup.sh                 # the arm test
 tests/g1/test_sim_bringup.sh --walk          # the walk test
 tests/g1/test_sim_nav.sh                     # the nav test, FAST_LIO odometry
-GOLEM_SIM_ODOM=1 tests/g1/test_sim_nav.sh    # the nav test, the sim's ground-truth odometry
 tests/g1/test_sim_explore.sh                 # frontier exploration of the kitchen
 ```
 
@@ -60,13 +59,11 @@ starts its policy under the band and releases the band once `frame_task_server` 
 They need the `golem_sim_robocasa` and `golem_ros` images (`docker/scripts/docker_build.sh
 robocasa ros`); they never build them.
 
-- **Containers.** Both containers are the compose services with the G1 overlay, as
-  `docker_run.sh --g1` starts them, plus a `test_compose.yml` that `common.sh` writes into the
-  output directory. The sim container has no network, and the ros container joins its network
-  namespace. Both use its loopback with multicast, so no DDS leaves the host and nothing
-  talks to the robot. The ros container loads the run's own `cyclonedds_local.xml` (no
-  interface pin) from the output directory, never the shared one in `container_cache/`,
-  which a running G1 `ros` container rereads in every process it starts.
+- **Containers.** Both containers are the compose services as `docker_run.sh` starts them
+  (`robocasa` with the G1 overlay, `ros` from `docker-compose.yml`), plus a `test_compose.yml`
+  that `common.sh` writes into the output directory. The sim container has no network, and the
+  ros container joins its network namespace. Both use its loopback with multicast, so no DDS
+  leaves the host and nothing talks to the robot.
 - **DDS domains.** The arm test uses 195, the walk test 196, the nav test 197 and the explore
   test 198, unless `ROS_DOMAIN_ID` is set in the shell. Domain 0 is refused.
 - **`core_ws`.** Before the sim starts, the ros service builds `core_ws`, both robots'
@@ -76,8 +73,7 @@ robocasa ros`); they never build them.
   that workspace in place instead. The tests share that build, so one runs at a time.
 - **Sim.** The sim role of `test_sim_*.py` runs `golem_robocasa/h12_mujoco.py --g1` through
   `runpy`, with a recorder patched onto `g1.unitree_interface.SimInterface`. The recorder reads
-  the robot's state inside the sim process, so no ground truth is published. The only
-  exception is `/odom` for the nav and explore tests with `GOLEM_SIM_ODOM=1`.
+  the robot's state inside the sim process, so no ground truth is published.
 - **Knobs.** The sim's knobs come from the shell or the scripts, never from `docker/.env`.
 
 With a warm build each test takes one to two minutes; the first run also builds the whole
@@ -107,7 +103,7 @@ must update the tests in the same commit.
 ## Output
 
 Each run writes to `tests/results/g1-<test>-<time>-<pid>/`, where `<test>` is `bringup`, `walk`,
-`nav-fastlio`, `nav-sim_gt`, `explore-fastlio` or `explore-sim_gt`. The directory holds:
+`nav-fastlio` or `explore-fastlio`. The directory holds:
 
 - `run.json`: the exit codes, the domain, the commit, the submodules, the working tree and the
   image IDs.

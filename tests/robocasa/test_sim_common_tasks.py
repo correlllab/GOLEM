@@ -18,7 +18,8 @@ import sim_common
 # The --task hooks the runners pass to resolve_task: h12_mujoco's, and g1_mujoco's.
 H12_TASKS = {'tag': 'h12_mujoco',
              'robot_task': lambda name: battery_env.canonical_task(name) or blank_env.canonical_task(name)}
-G1_TASKS = {'tag': 'g1_mujoco', 'robot_task': blank_env.canonical_task}
+G1_TASKS = {'tag': 'g1_mujoco',
+            'robot_task': lambda name: battery_env.canonical_task(name) or blank_env.canonical_task(name)}
 
 
 def _resolve(*args, **kwargs):
@@ -58,29 +59,15 @@ class ResolveTaskTests(unittest.TestCase):
         task, out = _resolve('battery', tag='h12_mujoco', robot_task=battery_env.canonical_task)
         self.assertEqual((task, out), ('Battery', ''))
 
-    def test_battery_without_the_h12_hook_is_h12_only(self):
-        for name in ('Battery', 'battery'):
-            with self.assertRaises(SystemExit) as caught:
-                sim_common.resolve_task(name, tag='g1_mujoco')
-            self.assertEqual(caught.exception.code,
-                             f"[g1_mujoco] task {name!r} is H1-2 only")
-
     def test_blank_resolves_in_any_case_for_both_robots(self):
         for hooks in (H12_TASKS, G1_TASKS):
             for name in ('blank', 'Blank', 'BLANK'):
                 self.assertEqual(_resolve(name, **hooks), ('Blank', ''), (hooks['tag'], name))
 
-    def test_battery_still_resolves_for_the_h12(self):
-        self.assertEqual(_resolve('BATTERY', **H12_TASKS), ('Battery', ''))
-
-    def test_battery_still_refuses_the_g1(self):
-        for name in ('Battery', 'battery'):
-            with self.assertRaises(SystemExit) as caught:
-                sim_common.resolve_task(name, **G1_TASKS)
-            self.assertEqual(caught.exception.code, f"[g1_mujoco] task {name!r} is H1-2 only")
-
-    def test_h12_only_tasks_are_the_battery_envs(self):
-        self.assertEqual(sim_common.H12_ONLY_TASKS, battery_env.TASKS)
+    def test_battery_resolves_in_any_case_for_both_robots(self):
+        for hooks in (H12_TASKS, G1_TASKS):
+            for name in ('battery', 'Battery', 'BATTERY'):
+                self.assertEqual(_resolve(name, **hooks), ('Battery', ''), (hooks['tag'], name))
 
 
 class RefuseKitchenArgsTests(unittest.TestCase):

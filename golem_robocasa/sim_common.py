@@ -18,10 +18,6 @@ ROBOT_LABELS = {"h12": "the H1-2", "g1": "the G1"}
 # Options a robot's loop does not implement; parse_args refuses them for that robot.
 _UNSUPPORTED = {"h12": "--duration", "g1": "--timing"}
 
-# Tasks only the H1-2 runs. Its battery_env registers them, and the G1 process never
-# imports that module, so resolve_task names them by this list.
-H12_ONLY_TASKS = ("Battery",)
-
 # Viewer free-camera spawn pose, anchored to the robot so the passive viewer
 # opens framed on the robot wherever it spawns (RoboCasa places the base by
 # layout/seed and place_robot_collision_free may back it off), instead of
@@ -161,9 +157,8 @@ def resolve_task(name: str, seed: int | None = None, *, tag: str,
     """Resolve a user-supplied --task name to a concrete runnable task.
 
     `robot_task(name)` returns the canonical name of a task the calling robot runs
-    outside RoboCasa (blank_env's Blank, and the H1-2's battery workcell, matched
-    in any case), else None; a name it returns is used as is. A name in
-    H12_ONLY_TASKS that it does not claim exits with an error. If `name` is
+    outside RoboCasa (blank_env's Blank and battery_env's Battery workcell,
+    matched in any case), else None; a name it returns is used as is. If `name` is
     already a concrete benchmark task, return it unchanged.
     If it's an abstract base (e.g. OpenDoor, ManipulateDoor) — registered but not
     directly instantiable — randomly pick one of its concrete runnable subclasses
@@ -172,8 +167,6 @@ def resolve_task(name: str, seed: int | None = None, *, tag: str,
     claimed = robot_task(name)
     if claimed is not None:
         return claimed
-    if name.lower() in (task.lower() for task in H12_ONLY_TASKS):
-        raise SystemExit(f"[{tag}] task {name!r} is H1-2 only")
     env_classes, runnable = runnable_tasks()
     if name in runnable:
         return name

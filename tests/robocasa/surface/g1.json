@@ -111,7 +111,7 @@
     "/realsense/head/aligned_depth_to_color/image_raw": {
       "encoding": "16UC1",
       "frame_id": "head_color_optical_frame",
-      "height": 720,
+      "height": 360,
       "point_fields": null,
       "qos": {
         "durability": "VOLATILE",
@@ -121,7 +121,7 @@
       "rate_hz": 6.0,
       "received": true,
       "type": "sensor_msgs/msg/Image",
-      "width": 1280
+      "width": 640
     },
     "/realsense/head/aligned_depth_to_color/image_raw/compressedDepth": {
       "encoding": "16UC1; compressedDepth",
@@ -141,7 +141,7 @@
     "/realsense/head/color/camera_info": {
       "encoding": null,
       "frame_id": "head_color_optical_frame",
-      "height": 720,
+      "height": 360,
       "point_fields": null,
       "qos": {
         "durability": "VOLATILE",
@@ -151,12 +151,12 @@
       "rate_hz": 6.0,
       "received": true,
       "type": "sensor_msgs/msg/CameraInfo",
-      "width": 1280
+      "width": 640
     },
     "/realsense/head/color/image_raw": {
       "encoding": "rgb8",
       "frame_id": "head_color_optical_frame",
-      "height": 720,
+      "height": 360,
       "point_fields": null,
       "qos": {
         "durability": "VOLATILE",
@@ -166,7 +166,7 @@
       "rate_hz": 6.0,
       "received": true,
       "type": "sensor_msgs/msg/Image",
-      "width": 1280
+      "width": 640
     },
     "/realsense/head/color/image_raw/compressed": {
       "encoding": "rgb8; jpeg compressed bgr8",

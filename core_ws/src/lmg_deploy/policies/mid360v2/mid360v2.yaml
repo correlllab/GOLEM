@@ -78,7 +78,7 @@ arms:
   max_ik_step: 0.1          # rad per joint per policy step
 
 # FAST-LIO's body frame (/Odometry, camera_init -> body): the MID360's IMU chip, livox_imu_link in the URDF, the
-# frame FAST-LIO integrates /livox/imu in (h12_slam mid360.yaml; the lidar extrinsic is livox_link in it). Forward
+# frame FAST-LIO integrates /livox/imu in (golem_slam mid360.yaml; the lidar extrinsic is livox_link in it). Forward
 # kinematics takes its pose to the pelvis, through the torso joint. Configs before 10-19 named livox_link, 5 cm and
 # 0.7 deg away.
 slam_frame: livox_imu_link

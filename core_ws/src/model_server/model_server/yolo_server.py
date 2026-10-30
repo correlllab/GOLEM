@@ -15,7 +15,7 @@ Each bundle also carries that camera's latest ALIGNED DEPTH frame and color
 (see DEPTH_STREAM / CAMERA_INFO_STREAM). Because the depth is aligned to the
 color grid, a subscriber can back-project a detection box to a 3-D point with
 nothing but the bundle — that is what drives the hand-camera visual servo in
-h12_skills. Cameras that don't publish those streams get bundles without them.
+golem_skills. Cameras that don't publish those streams get bundles without them.
 
 Alongside each detection topic it also publishes an annotated `sensor_msgs/Image`
 (the frame with the detection boxes drawn on it) on a sibling topic ending in
@@ -106,7 +106,7 @@ DEFAULT_PUBLISH_RATE_HZ = 5.0
 DETECTION_TOPIC_SUFFIX = "/detections"
 # Each bundle also carries the ALIGNED DEPTH frame and the color intrinsics for
 # its camera, so a subscriber can back-project a detection box to a 3-D point
-# without subscribing to the camera itself (h12_skills' hand-camera visual servo
+# without subscribing to the camera itself (golem_skills' hand-camera visual servo
 # is the consumer). Both topics are derived from the image topic by convention:
 #   /realsense/<cam>/color/image_raw/compressed
 #     -> /realsense/<cam>/aligned_depth_to_color/image_raw/compressedDepth

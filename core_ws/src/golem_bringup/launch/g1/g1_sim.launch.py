@@ -2,11 +2,9 @@ r"""
 Simulated G1: the same core stack on DDS domain 1 with sim time and the sim configs.
 
     ros2 launch golem_bringup g1_sim.launch.py
-    ros2 launch golem_bringup g1_sim.launch.py use_nav:=true
-    ros2 launch golem_bringup g1_sim.launch.py use_nav:=true \
-        odom_source:=sim_gt   # the sim started with GOLEM_SIM_ODOM=1
-    ros2 launch golem_bringup g1_sim.launch.py use_nav:=true \
-        frontier_explore:=true   # also serves /skill/frontier_explore
+    ros2 launch golem_bringup g1_sim.launch.py use_nav:=false   # no SLAM or Nav2
+    ros2 launch golem_bringup g1_sim.launch.py \
+        use_skills:=true   # also serves /skill/* including /skill/frontier_explore
 
 The G1 RoboCasa sim (golem_robocasa/g1/) takes rt/lowcmd and rt/dex3/*, and
 holds the robot up on an elastic band until /elastic_band/toggle releases it.
@@ -21,14 +19,14 @@ then walks on /cmd_vel. g1_core refuses the real robot's configs here (split,
 g1_split, the walking node's g1); the sim configs keep the faster arm speeds
 (1 rad/s, 0.5 m/s).
 
-use_nav:=true adds g1_navigation on the sim's MID-360 (/livox/lidar,
+use_nav (default true) adds golem_slam on the sim's MID-360 (/livox/lidar,
 /livox/imu), with sim time and g1_fastlio_sim.yaml, and Nav2 drives the
 walking node on /cmd_vel; send goals to /navigate_to_pose.
-odom_source:=fastlio (the default) needs the sim started without
-GOLEM_SIM_ODOM, and odom_source:=sim_gt with GOLEM_SIM_ODOM=1. Otherwise
-odom -> pelvis has two publishers (TF breaks) or none. frontier_explore:=true
-adds g1_navigation's frontier explorer, which walks the robot through Nav2 to
-the frontiers of /map.
+odom_source:=fastlio is required. Start the sim with GOLEM_SIM_ODOM unset;
+otherwise odom -> pelvis has two publishers. The shared pipeline needs
+FAST-LIO's deskewed cloud and refuses sim_gt. use_skills:=true
+adds golem_skills, which serves /skill/frontier_explore to walk the robot
+through Nav2 to the frontiers of /map.
 tests/g1/test_sim_nav.sh is the closed-loop test.
 """
 
@@ -52,16 +50,14 @@ def generate_launch_description():
             'safety_config', default_value='',
             description='golem_safety config (default: sim_split)'),
         DeclareLaunchArgument(
-            'use_nav', default_value='false',
-            description='g1_navigation: odometry, SLAM and Nav2 on /cmd_vel'),
+            'use_nav', default_value='true',
+            description='golem_slam: odometry, SLAM and Nav2 on /cmd_vel'),
         DeclareLaunchArgument(
             'odom_source', default_value='fastlio',
-            description="with use_nav: fastlio, or sim_gt (the sim's ground truth; start "
-                        'the sim with GOLEM_SIM_ODOM=1)'),
+            description='with use_nav: fastlio (deskewed cloud required)'),
         DeclareLaunchArgument(
-            'frontier_explore', default_value='false',
-            description='with use_nav: the frontier explorer, serving '
-                        '/skill/frontier_explore'),
+            'use_skills', default_value='false',
+            description='Start the golem_skills action servers (/skill/*)'),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(core),
             launch_arguments={
@@ -74,7 +70,7 @@ def generate_launch_description():
                 'controller_config': '',
                 'use_nav': LaunchConfiguration('use_nav'),
                 'odom_source': LaunchConfiguration('odom_source'),
-                'frontier_explore': LaunchConfiguration('frontier_explore'),
+                'use_skills': LaunchConfiguration('use_skills'),
             }.items(),
         ),
     ])

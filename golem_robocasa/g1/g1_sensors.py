@@ -21,7 +21,7 @@ knobs that turn each off or lower its rate or resolution. g1_lidar.py and
 g1_head_camera.py model them and g1_sensor_msgs.py packs their messages (see
 those for the frames, units and formats). Like the Livox driver in CustomMsg
 mode, the sim does not publish /livox/pointcloud. robot_state_publisher gives
-torso_link -> mid360_link and -> d435_link, and g1_navigation mid360_link ->
+torso_link -> mid360_link and -> d435_link, and golem_slam mid360_link ->
 livox_frame; head_color_optical_frame stands in for the RealSense node's own
 frames.
 
@@ -115,6 +115,11 @@ def _env_number(env, name, default, kind):
     return value
 
 
+# default head-camera scale of the real 1280x720, the H1-2 sim's: a quarter of the
+# pixels keeps the render inside the sim's frame time
+CAMERA_SCALE = 0.5
+
+
 class SensorConfig(NamedTuple):
     """The simulated sensors. from_env() reads them from these env knobs:
       GOLEM_LIDAR=0         no MID-360 (/livox/lidar, /livox/imu)
@@ -126,10 +131,10 @@ class SensorConfig(NamedTuple):
       GOLEM_CAMERA_HZ       head camera frames per sim second (default 6; at most
                             30, the D435's top rate at 1280x720)
       GOLEM_CAMERA_SCALE    head camera size as a fraction of the real 1280x720
-                            (default 1.0): round(1280 s) x round(720 s) with the
-                            same fovy, and camera_info to match; 6 Hz at 1280x720
-                            is the head camera's profile in cl_realsense's launch
-                            file
+                            (default 0.5, as the H1-2 sim's): round(1280 s) x
+                            round(720 s) with the same fovy, and camera_info to
+                            match; 6 Hz at 1280x720 is the head camera's profile in
+                            cl_realsense's launch file
     """
     lidar: bool = True
     lidar_points: int = g1_lidar.POINTS_PER_FRAME
@@ -137,12 +142,12 @@ class SensorConfig(NamedTuple):
     imu_hz: float = g1_lidar.IMU_RATE_HZ
     camera: bool = True
     camera_hz: float = 6.0
-    camera_width: int = g1_head_camera.WIDTH
-    camera_height: int = g1_head_camera.HEIGHT
+    camera_width: int = round(g1_head_camera.WIDTH * CAMERA_SCALE)
+    camera_height: int = round(g1_head_camera.HEIGHT * CAMERA_SCALE)
 
     @classmethod
     def from_env(cls, env=os.environ):
-        scale = _env_number(env, "GOLEM_CAMERA_SCALE", 1.0, float)
+        scale = _env_number(env, "GOLEM_CAMERA_SCALE", CAMERA_SCALE, float)
         width, height = round(g1_head_camera.WIDTH * scale), round(g1_head_camera.HEIGHT * scale)
         if width < 1 or height < 1:
             raise ValueError(f"GOLEM_CAMERA_SCALE must leave the head camera at least 1x1 pixels, "

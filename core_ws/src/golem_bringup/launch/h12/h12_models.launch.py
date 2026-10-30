@@ -16,7 +16,7 @@ def generate_launch_description():
             description='Use the simulator /clock if true'),
         DeclareLaunchArgument(
             'use_skills', default_value='true',
-            description='Start graspgen_server and the h12_skills action servers'),
+            description='Start graspgen_server and the golem_skills action servers'),
         DeclareLaunchArgument(
             'use_yolo', default_value='false',
             description='Start the YOLO-World detection publisher'),
@@ -27,7 +27,7 @@ def generate_launch_description():
         DeclareLaunchArgument('model_logging', default_value='true'),
         DeclareLaunchArgument('model_visualization', default_value='true'),
         DeclareLaunchArgument('model_clear_logs', default_value='true'),
-        # h12_skills per-run base-sway telemetry (run_telemetry.py): each grasp /
+        # golem_skills per-run base-sway telemetry (run_telemetry.py): each grasp /
         # pick_place run writes logs/runs/<skill>/<stamp>/ with a 10 Hz
         # telemetry.csv + result.json.
         DeclareLaunchArgument('record_runs', default_value='true'),
@@ -99,9 +99,9 @@ def generate_launch_description():
         # and graspgen services, the grippers, and frame_task, then idles ready
         # for goals.
         Node(
-            package='h12_skills',
+            package='golem_skills',
             executable='skills',
-            name='h12_skills',
+            name='golem_skills',
             parameters=[sim_time_param, model_log_params, skills_params],
             output='screen',
             emulate_tty=True,

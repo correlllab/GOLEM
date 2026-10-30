@@ -62,7 +62,7 @@ limits:
     kp_max: 200.0
     kd_max: 10.0
   estop:
-    position_offset: -0.01
+    position_offset: -0.1
     velocity_ratio: 2.0
     torque_ratio: 2.0
 

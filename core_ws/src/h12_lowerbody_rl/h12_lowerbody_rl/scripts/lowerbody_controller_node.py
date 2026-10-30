@@ -65,7 +65,7 @@ from h12_lowerbody_rl.policy import (
 # there is nothing an x/y/z offset could feed into.
 IMU_OFFSET_PARAMS = ("imu_offset_roll_deg", "imu_offset_pitch_deg", "imu_offset_yaw_deg")
 IMU_OFFSET_RANGE_DEG = 15.0
-from h12_lowerbody_rl.policy_manager import GateConfig, PolicyManager
+from h12_lowerbody_rl.policy_manager import PolicyManager
 
 MOTOR_MODE_PR = 1
 # LowCmd header: ankle pitch/roll mode and the H1-2 machine id.
@@ -185,7 +185,7 @@ class LowerBodyControllerNode(Node):
                 "Check policies/fame/encoder_3800.pt."
             )
         self._manager = PolicyManager(
-            policies, gate=GateConfig(), log=lambda m: self.get_logger().info(m)
+            policies, log=lambda m: self.get_logger().info(m)
         )
 
         self._lowstate: LowState | None = None

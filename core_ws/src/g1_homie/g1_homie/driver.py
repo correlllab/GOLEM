@@ -15,7 +15,7 @@ from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_ as LowCmdDefa
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
 from unitree_sdk2py.utils.crc import CRC
 
-from g1_homie.locomotion import WAITING, SourceClock, read_state
+from g1_homie.locomotion import FAULTED, WALKING, SourceClock, read_state
 
 # LowCmd_.mode_pr: MODE_PR drives the ankles' pitch/roll joints, which the policy
 # commands; 1 (MODE_AB) would drive the two ankle motors directly
@@ -45,7 +45,7 @@ class LocomotionDriver:
     topics['low_cmd'] (golem_safety's lower-body input, which holds it at
     500 Hz): slots 0-11 with mode 1, dq = tau = 0 and the training gains,
     every other slot zero.
-    topics['upper_cmd'] is only read while waiting to start, to know the arm
+    topics['upper_cmd'] is only read until the policy starts, to know the arm
     controller is running. Nothing is written on a fault or on shutdown.
 
     The SDK's subscribers decode every sample in the DDS receive thread, under
@@ -152,8 +152,8 @@ class LocomotionDriver:
         if self._upper_reader is not None:
             if any(not isinstance(m, InvalidSample) for m in self._upper_reader.take(N=1)):
                 self._controller.on_upper_cmd(now)
-            if self._controller.phase != WAITING:
-                # only the start needs the arm controller: stop waking on it
+            if self._controller.phase in (WALKING, FAULTED):
+                # only the policy's start needs the arm controller: stop waking on it
                 self._waitset.detach(self._upper_ready)
                 self._upper_ready = self._upper_reader = None
         samples = self._state_reader.take(N=1)

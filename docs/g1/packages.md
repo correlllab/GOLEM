@@ -1,12 +1,12 @@
 # Packages
 
-The G1's own ROS 2 packages are `dex_3`, `g1_homie` and `g1_navigation`, in
+The G1's own ROS 2 packages are `dex_3` and `g1_homie`, in
 `core_ws/src/`. `launch_ros.sh` builds
 them in every `ros` container, whichever robot the wrappers selected, so one
-container runs either robot's bringup. The G1 shares four packages with the H1-2, built for both robots: the
+container runs either robot's bringup. The G1 shares six packages with the H1-2, built for both robots: the
 safety layer `golem_safety` and the arm controller `golem_upper_ik`, each with
-a profile and configs per robot, the models `golem_ros2_models`, and the
-bringup `golem_bringup`. Each package
+a profile and configs per robot, the models `golem_ros2_models`, the
+bringup `golem_bringup`, navigation `golem_slam`, and skills `golem_skills`. Each package
 below has its own README with the full details, except the launch-only
 `golem_bringup`.
 
@@ -16,18 +16,19 @@ below has its own README with the full details, except the launch-only
 |---|---|---|---|
 | `g1_homie` | HOMIE's walking policy on the legs, driven by `/cmd_vel`: waits for `golem_safety`'s heartbeat, pre-poses the legs, on the real robot holds until `/lowerbody/confirm_engage`, and in the sim releases the elastic band. | `locomotion_node` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1_homie/README.md) |
 | `dex_3` | Dex3-1 hand driver. Bypasses the safety layer. | `dex3_hands` (`/<side>/hand/set_pose`, `open`, `close`, `release`); `hands.launch.py` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/dex_3/README.md) |
-| `g1_navigation` | Odometry (FAST_LIO or sim ground truth), a 2D map (slam_toolbox) and Nav2; the frontier explorer. Sim only for now. | `g1_navigation.launch.py`, `livox_to_pointcloud`, `level_frame`, `body_to_pelvis`, `frontier_explore` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1_navigation/README.md) |
 
 ## Shared with the H1-2
 
 | Package or path | What the G1 uses it for |
 |---|---|
 | `golem_bringup` | starts the whole stack, on the real G1 or in the sim; launch only. The G1's files are in `launch/g1/`: `g1_real_robot.launch.py` (real), `g1_sim.launch.py` (sim), `g1_core.launch.py` (shared). No README; each launch file's docstring, and `CLAUDE.md` §6. |
-| `golem_ros2_models` | both robots' models from `CL_Assets`: the G1's URDF (and its ROS copy with `package://` URIs) and meshes, and its sphere-packed self-collision model and SRDF. `golem_upper_ik`, `g1_navigation` and the bringups' `robot_state_publisher` read them; `display.launch.py` shows a model in RViz with joint sliders ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_ros2_models/README.md)). |
+| `golem_ros2_models` | both robots' models from `CL_Assets`: the G1's URDF (and its ROS copy with `package://` URIs) and meshes, and its sphere-packed self-collision model and SRDF. `golem_upper_ik`, `golem_slam` and the bringups' `robot_state_publisher` read them; `display.launch.py` shows a model in RViz with joint sliders ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_ros2_models/README.md)). |
 | `golem_safety` | the safety layer, node `safety_node`: the only writer of the body command topic, `rt/lowcmd`. It streams zero gains from boot, engages each input on its own first command, clips commands, holds quiet inputs and latches estops ([Safety layer](safety.md)). The G1's profile is `robots/g1.yaml`, its configs `config/g1/` ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_safety/README.md)). |
 | `golem_upper_ik` | the arm IK controller (Pink) for the 14 arm joints, with the waist held at its hold targets: `frame_task_server` (`/frame_task`, `/named_config`) and `joint_state_publisher` (the 29 body joints). A self-collision barrier in the IK and OMPL planning, from the G1's sphere model, as on the H1-2; its spheres cover the Dex3-1 palms but not the fingers. The G1's data is `golem_upper_ik/robots/g1.py`, its configs `config/g1/` ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_upper_ik/README.md)). |
+| `golem_slam` | shared SLAM and Nav2 pipeline (`g1_navigation.launch.py`) plus the G1's dynamic waist transform node (`g1_body_to_pelvis`) ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_slam/README.md)). |
+| `golem_skills` | action servers for `/skill/*`, including `/skill/frontier_explore`, started by `use_skills:=true` in the G1 bringup. |
 | `custom_ros_messages` | the actions and services (`FrameTask`, `NamedConfig`, `SetHandPose`, `SkillFrontierExplore`, ...). |
-| `FAST_LIO` (package `fast_lio`) | lidar-inertial odometry for `g1_navigation` |
+| `FAST_LIO` (package `fast_lio`) | lidar-inertial odometry for `golem_slam` |
 | `livox_ros_driver2` | the `CustomMsg` type of `/livox/lidar`; the driver itself is not in the G1 bringup yet |
 | `unitree_ros2` | Unitree message definitions (`unitree_hg` and others) |
 
@@ -73,3 +74,6 @@ cd /home/code/g1_homie && python3 test_homie_policy.py
 
 The G1 sim's unit tests, the topic-surface probe and the acceptance tests run
 from the host; `tests/README.md` lists them.
+
+`golem_slam` now owns bringup navigation: FAST-LIO deskewed cloud, self filtering,
+OctoMap, slam_toolbox and MPPI. See [Navigation](navigation.md).

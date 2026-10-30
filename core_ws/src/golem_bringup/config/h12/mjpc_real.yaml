@@ -5,7 +5,7 @@
 # band. See the submodule's mjpc/deploy/deploy_common.h for the compiled-in
 # settled values and Command_Sheet_h12.html for the native-h12 equivalents.
 
-h12_deploy_mjpc_estimator:
+deploy_mjpc_estimator:
   ros__parameters:
     # Debug mode has no sport service, so the estimator OWNS rt/sportmodestate
     # (the native-B1 arrangement). Never run a second estimator instance.

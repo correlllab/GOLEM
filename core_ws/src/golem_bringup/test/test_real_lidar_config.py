@@ -16,7 +16,7 @@ from golem_bringup.livox_imu_upright import load_rotation, rotate
 
 PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = os.path.join(PKG, 'config', 'h12')
-SLAM_CONFIG = os.path.join(os.path.dirname(PKG), 'h12_slam', 'config')
+SLAM_CONFIG = os.path.join(os.path.dirname(PKG), 'golem_slam', 'config')
 
 
 def _vec(x, y, z):
@@ -53,7 +53,7 @@ def test_one_slam_config_set():
     names = sorted(os.listdir(SLAM_CONFIG))
     assert [n for n in names if n.startswith('mid360')] == ['mid360.yaml']
     assert [n for n in names if n.startswith('slam_toolbox')] == ['slam_toolbox_h1.yaml']
-    # Bringup loads lidar/SLAM/nav configs from h12_slam; a copy here would silently drift.
+    # Bringup loads lidar/SLAM/nav configs from golem_slam; a copy here would silently drift.
     leftovers = [n for n in os.listdir(CONFIG)
                  if n.lower().startswith(('mid360', 'slam_toolbox', 'nav2'))]
     assert leftovers == []

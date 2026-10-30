@@ -63,11 +63,11 @@ class LocomotionNode(Node):
         startup = config['startup']
         self.get_logger().info(
             f'Loaded {config_path} and the policy in {policy_dir}. Silent until golem_safety '
-            f'beats on /safety/heartbeat, {config["topics"]["low_state"]} is steady and upright '
-            f'and the arm controller commands on {config["topics"]["upper_cmd"]}; then the legs '
-            f'move to the default pose over {startup["ramp_seconds"]:.1f} s'
-            + (', hold it until /lowerbody/confirm_engage is called,'
-               if startup['wait_for_confirm'] else '')
+            f'beats on /safety/heartbeat and {config["topics"]["low_state"]} is upright; then the '
+            f'legs move to the default pose over {startup["ramp_seconds"]:.1f} s and hold it '
+            f'until the timing is steady and the arm controller commands on '
+            f'{config["topics"]["upper_cmd"]}'
+            + (' and /lowerbody/confirm_engage is called,' if startup['wait_for_confirm'] else ',')
             + ' and the policy starts'
             + ('; the elastic band is released once the policy runs and /left_ee_pose has come'
                if config['band']['release'] else ''))

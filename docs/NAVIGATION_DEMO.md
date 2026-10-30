@@ -19,8 +19,10 @@ for the one-time Colima/Docker setup, image builds, and the noVNC tunnel.
 - **Locomotion** — the lower-body controller, pinned to ALMI, follows `/cmd_vel`
   directly (stands at zero, walks otherwise).
 - **Frontier exploration** — the `/skill/frontier_explore` action (the
-  `FrontierExploreSkill` in `h12_skills`) repeatedly sends the nearest unexplored
-  frontier as a nav2 goal until the reachable space is mapped.
+  `FrontierExploreSkill` in `golem_skills`) repeatedly sends the nearest unexplored
+  frontier as a nav2 goal until the reachable space is mapped. The Mac image does not
+  build `golem_skills` (`BRINGUP_STUB_DEPS` in `docker/mac/scripts/launch_ros_mac.sh`),
+  so on the Mac stack `rob_explore` finds no server.
 
 ## Run it
 
@@ -43,7 +45,7 @@ Then drive it:
 docker exec -it golem_ros bash        # host docker CLI flaky? use: colima ssh -- docker exec -it golem_ros bash
 source /home/code/h12_sim_scripts/robot_cli.sh
 
-# The robot comes up already standing in FAME (auto-activated) — wait ~15 s of sim
+# The robot comes up standing in ALMI (auto-activated) — wait ~15 s of sim
 # time for the tether to release and the stance to settle, then:
 rob_explore    # send /skill/frontier_explore; walk auto-engages on nav2's /cmd_vel (Ctrl-C cancels)
 ```
@@ -102,13 +104,13 @@ MuJoCo (robocasa)                        ROS (golem_ros)
   ```
   The layout is randomized each launch, so a recreate also re-rolls the kitchen —
   handy if the robot spawns cramped against a counter (it'll then lean into it
-  once FAME releases). `1.5`–`2.0` reliably clears the fixtures.
+  once the tether releases). `1.5`–`2.0` reliably clears the fixtures.
 - **Restart the two containers coherently.** The sim owns `/clock`; if you restart
   it, its sim time resets to 0 and the still-running ROS side sees the clock jump
   backward (TF extrapolation errors, a frozen `0x0` SLAM map). After recreating or
   restarting `robocasa`, restart `golem_ros` too so it resyncs.
-- **Let FAME settle before commanding motion.** The controller boots into FAME and
-  the walk policy is stable only when handed over from a settled stance — give it
+- **Let the stance settle before commanding motion.** The controller boots into ALMI
+  standing; give it
   ~15 s of sim time after launch (tether release + settle) before `rob_go`/`rob_explore`.
 - **Some exploration goals time out on the slow sim.** At ~0.2× real-time, nav2
   planning + walking to a 2 m frontier can exceed the 120 s goal timeout; the

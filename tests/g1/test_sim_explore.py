@@ -1,4 +1,4 @@
-"""Closed-loop frontier-exploration test of the G1 sim: g1_navigation's frontier
+"""Closed-loop frontier-exploration test of the G1 sim: golem_skills' frontier
 explorer walks the G1 through Nav2 from the spawn until it reports the RoboCasa
 kitchen explored, or its time runs out. The parts that run in the containers;
 test_sim_explore.sh runs them and has the usage. Built on test_sim_nav.py.
@@ -11,7 +11,7 @@ test_sim_explore.sh runs them and has the usage. Built on test_sim_nav.py.
           least PATH_CLEARANCE (0.35 m) from anything the robot can touch. The nav
           test's goal (<out>/goal.json) is not used
   drive   in the ros container, beside 'ros2 launch golem_bringup g1_sim.launch.py
-          use_nav:=true frontier_explore:=true': waits until the walking node walks, the
+          use_nav:=true use_skills:=true': waits until the walking node walks, the
           sim's elastic band is released, Nav2 is active and /skill/frontier_explore is
           served, stands STAND_S, sends one SkillFrontierExplore goal (timeout
           EXPLORE_TIMEOUT_S, the explorer's defaults otherwise) and waits for its result;
@@ -68,10 +68,10 @@ SETTLE_S = nav.SETTLE_S    # sim s after the result
 # the floor) unseen. This catches a skipped corridor and leaves room for a few unseen cells
 MIN_COVERAGE = 0.95
 MAP_OCCUPIED = nav.MAP_OCCUPIED
-# the explorer's log lines (g1_navigation/frontier_explore.py)
-GOAL_SENT = re.compile(r"\[frontier_explore\]: goal (\d+): \(([-\d.]+), ([-\d.]+)\) yaw ([-\d.]+) deg, "
+# the explorer's log lines (golem_skills/skills/frontier_explore.py)
+GOAL_SENT = re.compile(r"\[(?:frontier_explore|golem_skills)\]: goal (\d+): \(([-\d.]+), ([-\d.]+)\) yaw ([-\d.]+) deg, "
                        r"(\d+) frontier cells, ([\d.]+) m from the robot")
-GOAL_END = re.compile(r"\[frontier_explore\]: goal (\d+): (reached|failed|seen on the way)(?: \(([^)]*)\))? "
+GOAL_END = re.compile(r"\[(?:frontier_explore|golem_skills)\]: goal (\d+): (reached|failed|seen on the way)(?: \(([^)]*)\))? "
                       r"after ([\d.]+) s")
 
 

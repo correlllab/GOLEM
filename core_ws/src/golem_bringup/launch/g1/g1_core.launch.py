@@ -5,7 +5,7 @@ Starts robot_state_publisher, golem_upper_ik's joint_state_publisher (the 29
 body joints), golem_safety's safety_node, the only writer of /lowcmd, the arm
 controller (golem_upper_ik's frame_task_server), HOMIE's walking node
 (g1_homie's locomotion_node; on the real robot only with
-start_position_verified:=true) and, optionally, navigation (g1_navigation),
+start_position_verified:=true) and, optionally, navigation (golem_slam),
 the Dex3-1 hands and RViz. The golem nodes get robot g1 as a ROS parameter,
 and safety_node and frame_task_server their configs (joint_state_publisher
 reads its default, g1_split). safety_node also gets sim (it refuses sim:=true
@@ -49,17 +49,18 @@ start_position_verified:=true (default false), as the H1-2's leg node
 (h12_lowerbody.launch.py): without it nothing commands the legs, so their
 motors stay off on golem_safety's zero-gain stream while the arms run.
 
-use_nav:=true adds g1_navigation (odometry, slam_toolbox and Nav2, which
-drives the walking node through /cmd_vel), with the core, on the sim's
-FAST_LIO config and clock in the sim. odom_source picks the odometry:
-fastlio (the default; the sim must not publish its ground truth, GOLEM_SIM_ODOM
-unset) or sim_gt (the sim's ground-truth odom -> pelvis, GOLEM_SIM_ODOM=1).
+use_nav (default true, as the H1-2's bringups start navigation) adds
+golem_slam (odometry, slam_toolbox and Nav2, which drives the walking node
+through /cmd_vel), with the core: on the sim's FAST_LIO config and clock in
+the sim, and on the real robot g1_fastlio.yaml, wall time and the MID-360
+driver (g1_real_drivers.launch.py). odom_source must be fastlio: the shared
+pipeline needs its deskewed cloud. Leave GOLEM_SIM_ODOM unset to avoid a second
+odom -> pelvis publisher.
 FAST_LIO starts while the sim's elastic band still holds the robot up: the
 walking node releases it once its policy runs and the controller's start-up
 moves are done (or band.max_wait after the policy started).
-frontier_explore:=true adds g1_navigation's frontier explorer (it serves
-/skill/frontier_explore), and is passed to g1_navigation as a launch argument
-of its include.
+use_skills:=true starts golem_skills (serving /skill/*, including
+/skill/frontier_explore).
 
 The launch refuses to start, before any node, on these settings
 (startup_refusal; the config rules are golem_upper_ik.pairing's for robot g1):
@@ -73,8 +74,7 @@ The launch refuses to start, before any node, on these settings
   sim refuses the real robot's (split, g1_split, and the walking node's g1).
   Since g1_split is the real robot's and sim_split the sim's, this also keeps
   each controller config to its own safety config.
-- use_nav:=true is sim only for now (the real MID-360 is not connected yet),
-  and odom_source must be fastlio or sim_gt.
+- With use_nav, odom_source must be fastlio.
 start_position_verified refuses nothing: it decides whether the real robot's
 walking node starts.
 
@@ -111,8 +111,8 @@ LOCOMOTION_CONFIGS = {
     False: 'g1',
     True: 'sim',
 }
-# g1_navigation's odom sources (its launch file checks them too)
-ODOM_SOURCES = ('fastlio', 'sim_gt')
+# Shared pipeline's odom sources (its launch file checks them too)
+ODOM_SOURCES = ('fastlio',)
 
 
 def _as_bool(context, name):
@@ -133,19 +133,15 @@ def locomotion_refusal(sim, locomotion_config):
 
 
 def nav_refusal(sim, odom_source):
-    """Why g1_navigation must not start with these settings, or None."""
-    if not sim:
-        return ('use_nav:=true is sim only for now: the real MID-360 is not connected to the '
-                "bringup yet (g1_navigation's README, The real lidar)")
+    """Why shared navigation must not start with these settings, or None."""
     if odom_source not in ODOM_SOURCES:
-        return f'odom_source must be one of {", ".join(ODOM_SOURCES)}, not {odom_source!r}'
+        return 'golem_slam requires FAST-LIO for its deskewed cloud'
     return None
 
 
 def startup_refusal(sim, safety_config, controller_config, locomotion_config,
                     use_nav=False, odom_source='fastlio'):
     """Why g1_core must not start with these settings, or None."""
-    # first, so that the real robot refuses use_nav whatever else is set
     refusal = nav_refusal(sim, odom_source) if use_nav else None
     # golem_upper_ik's pairing rules for the G1
     if refusal is None:
@@ -257,13 +253,30 @@ def _setup(context):
                 ),
             ],
         ))
+    if _as_bool(context, 'use_skills'):
+        actions.append(Node(
+            package='golem_skills',
+            executable='skills',
+            name='golem_skills',
+            parameters=[use_sim_time, {'wait_for_services': False}],
+            output='screen',
+        ))
+    if use_nav and not sim:
+        # the real MID-360's driver; the sim publishes the lidar itself
+        actions.append(IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(os.path.join(
+                get_package_share_directory('golem_bringup'), 'launch', 'g1',
+                'g1_real_drivers.launch.py')),
+            launch_arguments={'use_lidar': 'true'}.items(),
+        ))
     if use_nav:
-        # with the core: FAST_LIO initialises on its first scans, while the
-        # sim's elastic band still holds the robot up (the walking node releases
-        # it once its policy runs and the controller's start-up moves are done)
-        nav = os.path.join(get_package_share_directory('g1_navigation'), 'launch',
+        # with the core: FAST_LIO initialises on its first scans, in the sim
+        # while its elastic band still holds the robot up (the walking node
+        # releases it once its policy runs and the controller's start-up moves
+        # are done)
+        nav = os.path.join(get_package_share_directory('golem_slam'), 'launch',
                            'g1_navigation.launch.py')
-        # the arguments of this launch that g1_navigation also declares are passed
+        # the arguments of this launch that golem_slam also declares are passed
         # explicitly: Humble includes are not scoped, so an included launch file sees
         # every launch configuration set so far, and an argument left out would take a
         # value set elsewhere
@@ -272,8 +285,8 @@ def _setup(context):
             launch_arguments={
                 'odom_source': odom_source,
                 'sim': str(sim).lower(),
+                'fast_lio_config_file': 'g1_fastlio_sim.yaml' if sim else 'g1_fastlio.yaml',
                 'use_sim_time': str(use_sim_time['use_sim_time']).lower(),
-                'frontier_explore': str(_as_bool(context, 'frontier_explore')).lower(),
             }.items(),
         ))
     return actions
@@ -302,17 +315,15 @@ def generate_launch_description():
         DeclareLaunchArgument('locomotion_delay', default_value='2.0',
                               description='s between the controller and the walking node'),
         DeclareLaunchArgument(
-            'use_nav', default_value='false',
-            description='g1_navigation: odometry, SLAM and Nav2 on /cmd_vel (sim only '
-                        'until the real lidar is connected)'),
+            'use_nav', default_value='true',
+            description='golem_slam: odometry, SLAM and Nav2 on /cmd_vel, and on the real '
+                        'robot the MID-360 driver (g1_real_drivers.launch.py)'),
         DeclareLaunchArgument(
             'odom_source', default_value='fastlio',
-            description="with use_nav: fastlio, or sim_gt (the sim's ground truth, "
-                        'GOLEM_SIM_ODOM=1)'),
+            description='with use_nav: fastlio (shared pipeline requires its deskewed cloud)'),
         DeclareLaunchArgument(
-            'frontier_explore', default_value='false',
-            description='with use_nav: the frontier explorer, serving '
-                        '/skill/frontier_explore'),
+            'use_skills', default_value='false',
+            description='Start the golem_skills action servers (/skill/*)'),
         # the leg-control interlock; the sim always starts the walking node
         DeclareLaunchArgument(
             'start_position_verified', default_value='false',

@@ -79,23 +79,13 @@ band's release.
 
 1. **Waiting.** Silent until `golem_safety` has sent a first true
     `/safety/heartbeat` (it beats once it can relay: `/lowstate` reports
-    `mode_machine` 5) and, for 1 s of `rt/lowstate`'s tick, every sample
-    is steady (no gap over `faults.max_state_gap`), on time (taken within
-    half of `faults.max_latency` of its write, and no two that far apart, so
-    that a start does not run straight into the latency fault), finite,
-    with a unit IMU quaternion, and upright (gravity z in the pelvis frame
-    below -0.9, a tilt under about 25 deg); the tick kept to the wall clock
-    over that second within `startup.tick_rate`; and the arm controller has
-    commanded in the last 0.5 s. The beat and the arm controller do not
-    restart that second: once the state has held, the first sample with both
-    starts the pre-pose. Until the node's first command `golem_safety`
-    streams zero gains to the legs (they hang limp, in the sim from the
-    band). The reason for waiting is logged when it changes, each kind at
-    most every 5 s. The 1 s on time covers ten of the kernel's 100 ms
-    CPU-quota periods, so a laptop that cannot keep up usually keeps the
-    node waiting instead of faulting on its first late command. The tick
-    check catches a `tick_seconds` that does not match the robot's tick,
-    which would run the policy at the wrong rate.
+    `mode_machine` 5) and a sample is finite, with a unit IMU quaternion,
+    and upright (gravity z in the pelvis frame below -0.9, a tilt under
+    about 25 deg): as the H1-2's leg node, which pre-poses on the first beat
+    and state, the legs are not left limp while the arm controller moves the
+    waist and arms. Until the node's first command `golem_safety` streams
+    zero gains to the legs (they hang limp, in the sim from the band). The
+    reason for waiting is logged when it changes, each kind at most every 5 s.
 2. **Heartbeat watchdog.** From the first beat on, in every phase, a false
     beat (`golem_safety`'s estop has latched; it beats false from then on)
     or no beat for `heartbeat.timeout` (0.5 s; it beats at 10 Hz) stops all
@@ -105,13 +95,25 @@ band's release.
     positions to the policy's default pose over `startup.ramp_seconds`
     (2.0 s in both configs, the H1-2's `prepose_ramp_s`), one target per
     policy step, at the training gains.
-4. **Confirm (real robot).** With `startup.wait_for_confirm` (`g1.yaml`)
-    the node then holds the default pose, one target per policy step with
-    every fault active, and logs the command that ends the hold:
-    `ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger`. The
-    policy starts on the next policy step. A call at any other time is
-    refused, naming the phase. `sim.yaml` does not wait: the policy follows
-    the pre-pose.
+4. **Hold.** The node then holds the default pose, one target per policy
+    step with every fault active except the latency fault (the pose is a PD
+    hold), until the policy may start: for 1 s of `rt/lowstate`'s tick
+    every sample is steady (no gap over `faults.max_state_gap`) and on time
+    (taken within half of `faults.max_latency` of its write, so that the
+    policy does not run straight into the latency fault; the wall-clock gap
+    between samples is not held to that, since a sim below real time spaces
+    them out while each is still answered at once), the tick kept to the wall clock over that second within
+    `startup.tick_rate`, and the arm controller has commanded in the last
+    0.5 s. The 1 s covers ten of the kernel's 100 ms CPU-quota periods, so a
+    laptop that cannot keep up keeps the legs in the pre-pose instead of
+    faulting the policy. The tick check catches a `tick_seconds` that does
+    not match the robot's tick, which would run the policy at the wrong
+    rate. In the sim (`sim.yaml`) the policy starts as soon as that holds.
+    With `startup.wait_for_confirm` (`g1.yaml`) the node also waits for
+    `ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger`,
+    which it logs; a call before the timing holds is refused with the
+    reason, as is a call in any other phase, naming the phase. The policy
+    starts on the next policy step.
 5. **Walking.** The policy starts with an empty history, at zero velocity
     and 0.74 m: a `/cmd_vel` or `/locomotion/height` that came before it
     started is dropped. In the sim the band still holds the robot. The

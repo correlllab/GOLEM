@@ -12,8 +12,7 @@ Before launching:
   enters debug mode or checks that the robot is in it.
 - The gantry carries the robot whenever the legs are off: they hang limp until
   the walking node commands them, and split.yaml's estop turns every motor off.
-- ROS_DOMAIN_ID=0 (the robot's DDS domain) and G1_DDS_INTERFACE set to the
-  laptop's wired port (ours: enp130s0), both in docker/.env.
+- ROS_DOMAIN_ID=0 (the robot's DDS domain) in docker/.env.
 - Nothing else may be commanding rt/lowcmd or rt/dex3/*: two publishers fight
   over the motors.
 - Clear the space around the arms: once golem_safety relays the controller's
@@ -58,9 +57,11 @@ with zero gains on the arms; the waist keeps its hold and golem_safety relays
 it, so only the arms go limp. The controller stops with an error if
 rt/lowstate does not arrive within 5 s, if golem_safety has not relayed its
 commands within 30 s, or if the move to home is not done within 30 s after
-that. Sensors and skills are not part of the G1 bringup yet, and it refuses
-use_nav:=true: navigation runs in the sim only until the real MID-360 is
-connected (g1_navigation's README, The real lidar).
+that. use_nav (default true) starts the MID-360 driver
+(g1_real_drivers.launch.py) and golem_slam on g1_fastlio.yaml: FAST_LIO,
+slam_toolbox and Nav2, which drives the walking node through /cmd_vel once it
+runs. Neither has been run on our G1. Skills are not part of the real G1
+bringup yet.
 
 Hazards not handled in code:
 - A controller that dies without its last command leaves the waist + arms
@@ -114,10 +115,9 @@ def generate_launch_description():
             'start_position_verified', default_value='false',
             description="HOMIE's walking node on the legs: true only after checking the "
                         'robot is in a safe start pose'),
-        # refused for now: the real lidar is not connected yet
-        DeclareLaunchArgument('use_nav', default_value='false',
-                              description='g1_navigation; refused until the real MID-360 '
-                                          'is connected'),
+        DeclareLaunchArgument('use_nav', default_value='true',
+                              description='the MID-360 driver and golem_slam (FAST_LIO, '
+                                          'slam_toolbox, Nav2)'),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(core),
             launch_arguments={

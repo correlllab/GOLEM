@@ -32,7 +32,7 @@ cp docker/.env.example docker/.env
 Both `docker compose` and `docker/scripts/docker_run.sh` load the file, so every
 container and terminal sees the same values. `ROS_DOMAIN_ID` reaches all
 containers; `GEMINI_API_KEY` reaches only the `ros` container, where the vision
-servers and `h12_skills` need it. The wrappers load the file and preserve exported shell overrides, matching
+servers and `golem_skills` need it. The wrappers load the file and preserve exported shell overrides, matching
 Compose precedence. Optional `GOLEM_ASSETS_DIR` and `GOLEM_CACHE_DIR` relocate
 host mounts without editing YAML.
 

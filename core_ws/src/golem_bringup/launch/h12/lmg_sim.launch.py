@@ -14,7 +14,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 # safety layer with the real robot's preset (relax_safety_split: the policy was
 # trained against its e-stops, and the sim is where to see that it doesn't trip
 # them), h12_locomanipulationgame.launch.py with no operator confirm, and the
-# h12_slam navigation stack (use_slam), with rviz (use_rviz) for nav2 goals. Start the
+# golem_slam navigation stack (use_slam), with rviz (use_rviz) for nav2 goals. Start the
 # simulator first. The real-robot counterpart is
 # lmg_real.launch.py.
 #
@@ -77,7 +77,7 @@ def generate_launch_description():
             'engage_wait_for_confirm': 'false',
             'disable_elastic_band': 'true',
         }),
-        _include('h12_slam', 'h12_navigation.launch.py', sim_time,
+        _include('golem_slam', 'h12_navigation.launch.py', sim_time,
                  condition=IfCondition(LaunchConfiguration('use_slam'))),
 
         Node(

@@ -29,7 +29,7 @@
            that multicast to every port, including the locomotion computer
            (192.168.123.161) — whose DDS chokes on the camera stream and stops
            publishing rt/lowstate for ~20 s at a time. Trigger in practice:
-           h12_skills joining yolo_server on head color made /lowstate drop
+           golem_skills joining yolo_server on head color made /lowstate drop
            from 500 Hz to ~276 Hz with 18-22 s stalls. Verified 2026-07-10:
            two head-color readers with this setting = steady 500 Hz; without
            it = 21.9 s lowstate gap. Costs one extra unicast copy per

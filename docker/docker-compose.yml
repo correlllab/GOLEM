@@ -186,7 +186,7 @@ services:
       # also raise net.core.rmem_max on the host or this has no effect
       # (see docs/DDS_TUNING.md).
       - CYCLONEDDS_URI=file:///home/code/cyclonedds.xml
-      # Gemini API key for the vision pipeline's gemini backbone + h12_skills.
+      # Gemini API key for the vision pipeline's gemini backbone + golem_skills.
       # Passed through from the host shell: export GEMINI_API_KEY before running.
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       # GraspGenX released checkpoints ship in the repo (git-LFS) and reach the

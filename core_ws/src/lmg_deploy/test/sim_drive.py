@@ -7,7 +7,7 @@ Confirms the engage, then stands, walks backward and forward, turns, side-steps,
 walks again. For each
 phase it reports the commanded velocity, the head IMU's mean heading-frame velocity and yaw rate (FAST-LIO's body,
 differenced over 0.5 s windows), the cosine between commanded and actual planar velocity, the largest height drop and
-tilt from standing, the node's states and the wrist errors. camera_init is levelled as h12_slam level_odom does it:
+tilt from standing, the node's states and the wrist errors. camera_init is levelled as golem_slam level_odom does it:
 up = the mean /livox/imu specific force, rotated into camera_init, over the first stand. A drop of 0.4 m or a tilt
 past 0.8 rad from standing counts as a fall.
 """

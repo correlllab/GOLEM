@@ -176,5 +176,5 @@ The code is for non-commercial use only. OpenHomie's `LICENSE` file is CC BY-NC
 4.0, but its README says CC BY-NC-SA 4.0, which also requires changed versions
 to be shared under the same license. Treat it as the stricter CC BY-NC-SA 4.0.
 This license is different from the MIT license of GOLEM's G1 packages
-(`dex_3`, `g1_homie`, `g1_navigation`), including the `g1_homie` code around
+(`dex_3`, `g1_homie`), including the `g1_homie` code around
 this folder.

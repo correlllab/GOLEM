@@ -8,7 +8,7 @@ topics:
   low_state: rt/lowstate
   # the legs' commands: must be a golem_safety input (rt/safety/...)
   low_cmd: rt/safety/lowcmd_lower_in
-  # read only: the node starts once the arm controller is commanding here
+  # read only: the policy starts once the arm controller is commanding here
   upper_cmd: rt/safety/lowcmd_upper_in
 
 network:
@@ -26,19 +26,17 @@ tick_seconds: 0.001
 
 startup:
   # s to move the legs from where they are to the policy's default pose (the
-  # pre-pose), as the H1-2's leg node does: the band holds the robot meanwhile.
-  # The policy then runs under the band until frame_task_server's start-up moves
-  # (about 1.9 s from the same rt/lowstate sample) are done, and there it
-  # crouches with the feet off the floor: with 0.5 s here it ran 1.5 s under the
-  # band and stumbled at the release. Keep this about as long as those moves
+  # pre-pose), as the H1-2's leg node does: the band holds the robot meanwhile
   ramp_seconds: 2.0
   # hold the default pose until /lowerbody/confirm_engage is called: not in the
-  # sim, where the policy starts after the pre-pose
+  # sim, where the policy starts once the timing below holds
   wait_for_confirm: false
-  # s of rt/lowstate tick per s of wall clock the start accepts, measured
-  # while waiting: the sim's real-time factor, which drops below 1 when the
-  # laptop is loaded (0.59 seen) and catches up by at most 0.1 s
-  tick_rate: [0.25, 1.25]
+  # s of rt/lowstate tick per s of wall clock the policy start accepts, measured
+  # while the legs hold the pre-pose: the sim's real-time factor, which drops
+  # well below 1 on a loaded laptop (0.2 with golem_slam running) and catches up
+  # by at most 0.1 s. The policy steps on the tick, so a slow sim does not
+  # change its rate; the floor only catches a stalled one
+  tick_rate: [0.1, 1.25]
 
 heartbeat:
   # s without golem_safety's /safety/heartbeat (10 Hz) after the first beat

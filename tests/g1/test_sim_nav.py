@@ -14,9 +14,9 @@ and has the usage.
           use_nav:=true': waits until the walking node walks, the sim's elastic band
           is released and Nav2's lifecycle nodes are active, sends one NavigateToPose goal,
           and records /cmd_vel, the TF the stack computes, the scan path's
-          arrivals (/livox/lidar, /lidar_points, every /scan) and the final /map
+          arrivals (/livox/lidar, /cloud_body_filtered, every /converted_scan) and the final /map
           (<out>/drive.npz, map.npz; with --keep-lidar the /livox/lidar frames
-          from the goal on, lidar_frames.npz). If /scan stops while /livox/lidar
+          from the goal on, lidar_frames.npz). If /converted_scan stops while /livox/lidar
           still arrives, or slam_toolbox's map -> odom stops advancing, it writes
           the scan path's threads and sockets to <out>/stall.txt and gives up the goal
   report  anywhere with numpy and scipy: checks the run, prints the numbers and
@@ -38,10 +38,10 @@ start pose, the spawn, in fastlio), then slam_toolbox's map -> odom.
 
 Pass if: the goal succeeds within GOAL_TIMEOUT_S of sim time; the true pelvis
 ends within FINAL_TOL of the goal; every /cmd_vel is inside the speed caps and
-the velocity smoother is its only publisher; /scan never stops for more than
+the velocity smoother is its only publisher; /converted_scan never stops for more than
 MAX_SCAN_GAP_S while navigating; every occupied cell of the final /map is within
 MAP_TOL of something the sim has in the scan's height band (MAP_BAND_Z), and at
-most MAX_SCAN_PHANTOM_SHARE of the /scan returns within SCAN_PHANTOM_RANGE, placed
+most MAX_SCAN_PHANTOM_SHARE of the /converted_scan returns within SCAN_PHANTOM_RANGE, placed
 with the sim's true pelvis, are farther than SCAN_PHANTOM_TOL from it; the sim
 publishes /odom exactly when the test runs sim_gt; while navigating, map -> pelvis
 stays within MAX_LOCALISATION_ERR of the sim's truth in x, y (the odometry
@@ -83,7 +83,7 @@ GOAL_CLEARANCE = 1.0       # m to the nearest occupied cell (footprint 0.5 m + i
 PATH_CLEARANCE = 0.35      # m: the robot fits through (half width 0.24 m)
 # the scan's height band in the world: pelvis_level -0.59 to +0.45 m, with the
 # pelvis at 0.72-0.75 m standing and walking, so 0.13-1.20 m; a little wider
-MAP_BAND_Z = (0.10, 1.25)
+MAP_BAND_Z = (0.10, 1.35)
 FLOOR_TOP_Z = 0.005        # m: an env geom whose top is this low is the floor
 # drive
 NAV2_NODES = ("controller_server", "planner_server", "behavior_server", "bt_navigator",
@@ -92,20 +92,20 @@ STAND_S = 3.0              # sim s standing before the goal, Nav2 up
 SETTLE_S = 2.0             # sim s after the result
 GOAL_TIMEOUT_S = 90.0      # sim s from the goal to its result
 TF_PERIOD_S = 0.1          # wall s between TF samples
-SCAN_STALL_S = 3.0         # wall s without /scan, /livox/lidar still arriving: dump the scan path's threads
+SCAN_STALL_S = 3.0         # wall s without /converted_scan, /livox/lidar still arriving: dump the scan path's threads
 # the scan path and its consumers
-SCAN_PATH = ("livox_to_pointcloud", "pointcloud_to_laserscan", "level_frame", "body_to_pelvis", "slam_toolbox",
+SCAN_PATH = ("self_filter", "pointcloud_to_laserscan", "level_odom", "octomap_server", "body_to_pelvis", "slam_toolbox",
              "controller_server", "planner_server")
 # pass limits
 FINAL_TOL = 0.4            # m: the true pelvis at the result to the goal (Nav2's xy tolerance 0.25)
 MIN_PELVIS_Z = bringup_test.MIN_PELVIS_Z   # 0.70 m
 MAX_TILT_DEG = bringup_test.MAX_TILT_DEG   # 15 deg
-CAPS = {"vx": (-0.3, 0.5), "vy": (0.0, 0.0), "wz": (-0.6, 0.6)}   # the user's speed caps
+CAPS = {"vx": (-0.2, 0.3), "vy": (0.0, 0.0), "wz": (-0.5, 0.5)}   # the user's speed caps
 CAP_TOL = 1e-6
 MAP_TOL = 0.15             # m: an occupied /map cell to the nearest band cell of the sim
 MAP_OCCUPIED = 65          # OccupancyGrid value counted occupied (map_server's default threshold)
-MAX_SCAN_GAP_S = 0.5       # sim s between /scan stamps: the costmaps' expected_update_rate
-SCAN_PHANTOM_RANGE = 4.0   # m: /scan returns this near are checked against the sim's geometry
+MAX_SCAN_GAP_S = 0.5       # sim s between /converted_scan stamps: the costmaps' expected_update_rate
+SCAN_PHANTOM_RANGE = 4.0   # m: /converted_scan returns this near are checked against the sim's geometry
 SCAN_PHANTOM_TOL = 0.25    # m from the nearest band cell; more than SLAM's error and the 5 cm cells
 # the largest share of those returns that may lie farther: without livox_to_pointcloud's
 # deskew, the floor in the scan made it 1.2-1.7%; with it, 0 in 32 runs
@@ -299,6 +299,16 @@ class NavRecorder(bringup_test.Recorder):
                     if len(self.contacts) < self.MAX_LISTED:
                         r, e = (g[0], g[1]) if robot[g[0]] else (g[1], g[0])
                         self.contacts.append([float(d.time)] + _geom_names(m, (r, e)) + [float(gap)])
+        if self.steps % 100 == 0:
+            base = iface.resolver.base_body
+            pos = d.xpos[base]
+            rot = d.xmat[base].reshape(3, 3)
+            snapshot = {"stamp": float(d.time),
+                        "pose": [float(pos[0]), float(pos[1]), float(math.atan2(rot[1, 0], rot[0, 0]))]}
+            temporary = os.path.join(self.out, "live_pose.tmp")
+            with open(temporary, "w") as target:
+                json.dump(snapshot, target)
+            os.replace(temporary, os.path.join(self.out, "live_pose.json"))
         super().step(iface)
 
     def save(self):
@@ -408,18 +418,21 @@ class Driver:
         self.node.create_subscription(OccupancyGrid, "/map", self._on_map, QoSProfile(
             depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         # the scan path, as its consumers hear it: the stamps of /livox/lidar and
-        # /lidar_points (raw, not decoded), and every /scan
+        # /cloud_body_filtered (raw, not decoded), and every /converted_scan
         from rclpy.qos import qos_profile_sensor_data
         from sensor_msgs.msg import LaserScan, PointCloud2
         from livox_ros_driver2.msg import CustomMsg
-        self.arrivals = {"/livox/lidar": [], "/lidar_points": []}   # wall, sim, stamp
+        self.projected_map = None
+        self.node.create_subscription(OccupancyGrid, "/projected_map",
+                                      lambda msg: setattr(self, "projected_map", msg), 1)
+        self.arrivals = {"/livox/lidar": [], "/cloud_body_filtered": []}   # wall, sim, stamp
         # with keep_lidar, the /livox/lidar frames themselves from the goal on (lidar_frames.npz)
         self.keep_lidar, self.lidar_frames = keep_lidar, None
-        for topic, kind in (("/livox/lidar", CustomMsg), ("/lidar_points", PointCloud2)):
+        for topic, kind in (("/livox/lidar", CustomMsg), ("/cloud_body_filtered", PointCloud2)):
             self.node.create_subscription(kind, topic, lambda raw, topic=topic: self._on_arrival(topic, raw),
                                           qos_profile_sensor_data, raw=True)
         self.scans = []   # wall, sim, stamp, angle_min, angle_increment, then the ranges
-        self.node.create_subscription(LaserScan, "/scan", self._on_scan, qos_profile_sensor_data)
+        self.node.create_subscription(LaserScan, "/converted_scan", self._on_scan, qos_profile_sensor_data)
         self._stall_dumped = False
         # TF on a node of its own, spun on the listener's thread: /tf runs at hundreds of Hz
         self.tf_node = Node("test_sim_nav_tf")
@@ -451,12 +464,12 @@ class Driver:
                            msg.angle_min, msg.angle_increment] + list(msg.ranges))
 
     def _check_scan_path(self, now):
-        """Once: if /scan stopped while /livox/lidar still arrives, or slam_toolbox's
-        map -> odom stopped advancing while /scan arrives, record the scan path to
+        """Once: if /converted_scan stopped while /livox/lidar still arrives, or slam_toolbox's
+        map -> odom stopped advancing while /converted_scan arrives, record the scan path to
         <out>/stall.txt: the ROS graph of its topics, and for each of its processes
         (and their consumers), per thread, the state, kernel wait channel and what
         changed in 1 s (CPU time, context switches), and its UDP sockets' queues and drops"""
-        points, lidar = self.arrivals["/lidar_points"], self.arrivals["/livox/lidar"]
+        points, lidar = self.arrivals["/cloud_body_filtered"], self.arrivals["/livox/lidar"]
         if self._stall_dumped or not self.scans or not points or not lidar or self.clock is None:
             return
         scan_stalled = now - self.scans[-1][0] >= SCAN_STALL_S and now - lidar[-1][0] <= 1.0
@@ -466,12 +479,12 @@ class Driver:
         if not (scan_stalled or slam_stalled):
             return
         self._stall_dumped = True
-        lines = [f"{'/scan' if scan_stalled else 'map -> odom'} stalled. /scan last heard "
-                 f"{now - self.scans[-1][0]:.1f} s ago (stamp {self.scans[-1][2]:.2f}), /lidar_points "
+        lines = [f"{'/converted_scan' if scan_stalled else 'map -> odom'} stalled. /converted_scan last heard "
+                 f"{now - self.scans[-1][0]:.1f} s ago (stamp {self.scans[-1][2]:.2f}), /cloud_body_filtered "
                  f"{now - points[-1][0]:.1f} s ago (stamp "
                  f"{points[-1][2]:.2f}), /livox/lidar {now - self.arrivals['/livox/lidar'][-1][0]:.1f} s ago; map -> "
                  f"odom stamp {map_odom[0] if map_odom else None}; sim t {self.clock}"]
-        for topic in ("/livox/lidar", "/lidar_points", "/scan"):
+        for topic in ("/livox/lidar", "/cloud_body_filtered", "/converted_scan"):
             subs = [f"{i.node_name}({i.qos_profile.reliability.name})"
                     for i in self.node.get_subscriptions_info_by_topic(topic)]
             pubs = [i.node_name for i in self.node.get_publishers_info_by_topic(topic)]
@@ -642,7 +655,9 @@ class Driver:
                     states[name] = ("active" if response.current_state.id == State.PRIMARY_STATE_ACTIVE
                                     else response.current_state.label)
             if (all(states.get(n) == "active" for n in NAV2_NODES) and self.navigate.server_is_ready()
-                    and self.lookup("map", "pelvis") is not None):
+                    and self.lookup("map", "pelvis") is not None
+                    and self.projected_map is not None
+                    and self.arrivals["/cloud_body_filtered"]):
                 self.mark("nav_active", states=states)
                 return True
             for _ in range(20):
@@ -652,13 +667,25 @@ class Driver:
         return False
 
     def goal_in_map(self, goal):
-        """The goal (world x, y, yaw) in map: through odom as the odom source defines
-        it (the world in sim_gt, the spawn's pelvis on the floor in fastlio), then
-        slam_toolbox's map -> odom"""
-        if self.odom_source == "sim_gt":
-            world_odom = np.eye(3)
-        else:
-            world_odom = se2(goal["spawn"][0], goal["spawn"][1], goal["spawn_yaw"])
+        """Place a world goal in map using synchronized true/estimated pelvis poses."""
+        from rclpy.time import Time
+        from tf2_ros import TransformException
+        # The simulator records a pose privately to disk; no ground-truth TF is
+        # published onto the navigation bus. Match its stamp to estimated TF.
+        with open(os.path.join(self.out, "live_pose.json")) as source:
+            truth = json.load(source)
+        end = time.time() + 5.0
+        while True:
+            try:
+                estimate = self.tf.lookup_transform(
+                    "odom", "pelvis", Time(seconds=truth["stamp"]))
+                break
+            except TransformException:
+                if time.time() >= end:
+                    raise RuntimeError("no odometry at the recorded ground-truth pose stamp")
+                self.spin()
+        _, ex, ey, _, qx, qy, qz, qw = _tf_parts(estimate)
+        world_odom = se2(*truth["pose"]) @ np.linalg.inv(se2(ex, ey, _yaw_xyzw(qx, qy, qz, qw)))
         map_odom = self.lookup("map", "odom")
         if map_odom is None:
             raise RuntimeError("no map -> odom in TF")
@@ -734,7 +761,7 @@ class Driver:
             scans[i, :len(row)] = row
         np.savez(os.path.join(self.out, "drive.npz"), cmds=np.array(self.cmds, float).reshape(-1, 8),
                  scans=scans, lidar=np.array(self.arrivals["/livox/lidar"], float).reshape(-1, 3),
-                 points=np.array(self.arrivals["/lidar_points"], float).reshape(-1, 3),
+                 points=np.array(self.arrivals["/cloud_body_filtered"], float).reshape(-1, 3),
                  **{k: np.array(v, float).reshape(-1, 10) for k, v in self.samples.items()})
         self.mark("end")
 
@@ -906,12 +933,12 @@ class Report(bringup_test.Report):
         self.drift(sent["sim"], s["t"][i_end])
 
     def scan_path(self, t0, t1):
-        """/scan kept coming while navigating; and where the scan path stopped if it did"""
+        """/converted_scan kept coming while navigating; and where the scan path stopped if it did"""
         if self.drive is None or "scans" not in self.drive or not len(self.drive["scans"]):
-            self.check("scan path", False, "no /scan heard")
+            self.check("scan path", False, "no /converted_scan heard")
             return
         numbers, text = {}, []
-        for key, label in (("lidar", "/livox/lidar"), ("points", "/lidar_points"), ("scans", "/scan")):
+        for key, label in (("lidar", "/livox/lidar"), ("points", "/cloud_body_filtered"), ("scans", "/converted_scan")):
             rows = self.drive[key]
             stamps = rows[:, 2]
             inside = stamps[(stamps >= t0) & (stamps <= t1)]
@@ -922,18 +949,18 @@ class Report(bringup_test.Report):
                               "last_stamp": float(stamps.max()) if len(stamps) else None}
             text.append(f"{label} {len(inside)} (longest gap {gap:.2f} s)")
         self.numbers["scan_path"] = numbers
-        gap = numbers["/scan"]["longest_gap_s"]
+        gap = numbers["/converted_scan"]["longest_gap_s"]
         stall = os.path.exists(os.path.join(self.out, "stall.txt"))
         self.check("scan path", gap <= MAX_SCAN_GAP_S,
                    f"while navigating (sim t {t0:.1f}-{t1:.1f} s): " + ", ".join(text)
-                   + f"; limit {MAX_SCAN_GAP_S} s for /scan" + ("; see stall.txt" if stall else ""))
+                   + f"; limit {MAX_SCAN_GAP_S} s for /converted_scan" + ("; see stall.txt" if stall else ""))
 
     def scan_phantoms(self):
-        """Every /scan return within SCAN_PHANTOM_RANGE, placed in the world with the
-        sim's true pelvis at the scan's stamp (the scan is in pelvis_level), against
+        """Every /converted_scan return within SCAN_PHANTOM_RANGE, placed in the world with the
+        sim's true pelvis at the scan's stamp (the scan is in base_footprint), against
         what the sim has in the band"""
         if self.drive is None or "scans" not in self.drive or not len(self.drive["scans"]):
-            self.check("scan has no phantoms", False, "no /scan heard")
+            self.check("scan has no phantoms", False, "no /converted_scan heard")
             return
         from scipy import ndimage
         scene = np.load(os.path.join(self.out, "scene.npz"))

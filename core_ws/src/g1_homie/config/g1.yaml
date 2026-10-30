@@ -7,7 +7,7 @@ topics:
   low_state: rt/lowstate
   # the legs' commands: must be a golem_safety input (rt/safety/...)
   low_cmd: rt/safety/lowcmd_lower_in
-  # read only: the node starts once the arm controller is commanding here
+  # read only: the policy starts once the arm controller is commanding here
   upper_cmd: rt/safety/lowcmd_upper_in
 
 network:
@@ -31,9 +31,9 @@ startup:
   # hold the default pose until the operator calls /lowerbody/confirm_engage
   # (std_srvs/srv/Trigger), then start the policy
   wait_for_confirm: true
-  # s of rt/lowstate tick per s of wall clock the start accepts, measured
-  # while waiting: the robot's tick keeps to real time, and a tick_seconds that
-  # does not match its unit would change the policy's rate
+  # s of rt/lowstate tick per s of wall clock the policy start accepts, measured
+  # while the legs hold the pre-pose: the robot's tick keeps to real time, and a
+  # tick_seconds that does not match its unit would change the policy's rate
   tick_rate: [0.9, 1.1]
 
 heartbeat:

@@ -250,10 +250,10 @@ A controller killed without that command (SIGKILL, a crash) leaves its last comm
 
 ## Tests
 
-In either container mode (`--restart` replaces a running `golem_ros` container):
+In the `ros` container (`--restart` replaces a running `golem_ros` container):
 
 ```bash
-docker/scripts/docker_run.sh ros --restart --g1 /home/code/h12_sim_scripts/launch_ros.sh bash -lc \
+docker/scripts/docker_run.sh ros --restart /home/code/h12_sim_scripts/launch_ros.sh bash -lc \
   'export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 && cd /home/code/core_ws && colcon build --symlink-install --packages-select golem_upper_ik && source install/setup.bash && colcon test --packages-select golem_upper_ik --event-handlers console_direct+; colcon test-result --verbose'
 ```
 

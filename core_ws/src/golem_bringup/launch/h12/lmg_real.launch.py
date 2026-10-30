@@ -10,7 +10,7 @@ from launch.substitutions import LaunchConfiguration
 
 # Loco-manipulation game, real robot, onboard PC. Run it INSTEAD of
 # h12_real_robot.launch.py, never beside it: it starts the same drivers,
-# state publishers, estop, safety layer and h12_slam navigation stack
+# state publishers, estop, safety layer and golem_slam navigation stack
 # (use_slam), but without frame_task_server,
 # because marl_deploy_node owns both safety channels. Keep the lower-body RL
 # and MJPC controllers (h12_real_robot.launch.py's leg control) off.
@@ -87,6 +87,6 @@ def generate_launch_description():
             'engage_wait_for_confirm': 'true',
             'disable_elastic_band': 'false',
         }),
-        _include('h12_slam', 'h12_navigation.launch.py', wall_time,
+        _include('golem_slam', 'h12_navigation.launch.py', wall_time,
                  condition=IfCondition(LaunchConfiguration('use_slam'))),
     ])

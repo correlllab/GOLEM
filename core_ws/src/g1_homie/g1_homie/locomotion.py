@@ -201,22 +201,25 @@ class LocomotionController:
     that sample. Samples the caller drops never change the rate: 50 Hz of
     robot time on average, steps never closer than 10 ms.
 
-    - waiting: silent until golem_safety's first true heartbeat (on_heartbeat),
-      and until rt/lowstate has been steady, on time (no sample older than half
-      faults.max_latency when taken, no gap over that), finite and upright for
-      STEADY_SECONDS, its tick has kept to the wall clock within
-      startup.tick_rate over that time (a wrong tick_seconds would change the
-      policy's rate), and the arm controller is commanding
+    - waiting: silent until golem_safety's first true heartbeat (on_heartbeat)
+      and a finite, upright rt/lowstate, as the H1-2's leg node waits only for
+      the heartbeat and the state
     - ramping: the legs move from their measured positions to the policy's
       default pose over startup.ramp_seconds
-    - holding (startup.wait_for_confirm): the default pose every policy step,
-      every fault checked, until the operator confirms (confirm)
+    - holding: the default pose every policy step, every fault checked, until
+      the policy may start: rt/lowstate has been steady and on time (no sample
+      older than half faults.max_latency when taken, no gap over
+      faults.max_state_gap) for
+      STEADY_SECONDS, its tick has kept to the wall clock within
+      startup.tick_rate over that time (a wrong tick_seconds would change the
+      policy's rate), the arm controller is commanding, and, with
+      startup.wait_for_confirm, the operator has confirmed (confirm)
     - walking: the policy runs, starting at zero velocity and the standing
       height, with an empty history; in the sim its history empties again
       when the elastic band comes off (on_band_released)
     - faulted: once the legs are commanded, a stale, non-finite or fallen
       state, a tick that goes back, a bad IMU quaternion, a policy step that
-      fails, or a command later than faults.max_latency (latency_ok) stops all
+      fails, or a policy command later than faults.max_latency (latency_ok) stops all
       output for good. golem_safety then keeps relaying the last leg command,
       which does not balance the robot, and reports the quiet input; it does
       not estop on it. It estops on what it checks in rt/lowstate itself: a
@@ -274,6 +277,7 @@ class LocomotionController:
         self._ramp_step = 0
         self._beat_time = None  # when the last true heartbeat came
         self._walking_since = None
+        self._ready_reason = 'rt/lowstate has not been steady yet'  # None once the policy may start
 
     @property
     def command(self):
@@ -308,6 +312,8 @@ class LocomotionController:
         if self.phase != HOLDING:
             return False, (f'refused: the node is {self.phase}; the policy starts on a confirm '
                            f'only while the legs hold the default pose ({HOLDING})')
+        if self._ready_reason is not None:
+            return False, f'refused: the policy cannot start yet: {self._ready_reason}'
         self._start_policy(self._last_sample)
         return True, 'confirmed: the policy starts on the next policy step'
 
@@ -401,12 +407,17 @@ class LocomotionController:
         if gz > FALLEN_GRAVITY_Z:
             return self._latch(
                 f'fell: gravity z {gz:.2f} in the pelvis frame (> {FALLEN_GRAVITY_Z})')
+        if self.phase != WALKING:
+            self._track_ready(tick, now, gap, age)
         if tick_delta(tick, self._due_tick) < 0:
             return None
         self._step_at(tick)
         if self.phase == RAMPING:
             return self._ramp(now)
         if self.phase == HOLDING:
+            if not self._wait_for_confirm and self._ready_reason is None:
+                self._start_policy(now)
+                return self._walk(state, now)
             return self._default.copy()
         return self._walk(state, now)
 
@@ -430,11 +441,12 @@ class LocomotionController:
         Check a command just before it is published: latency (s) is the time
         from the rt/lowstate sample it answers (when it was written,
         SourceClock) to now. False, and a latched fault, if it is over
-        faults.max_latency
+        faults.max_latency while the policy runs; the pre-pose is a PD hold,
+        which a late command does not upset
         '''
         if self.phase == FAULTED:
             return False
-        if latency > self._max_latency:
+        if latency > self._max_latency and self.phase == WALKING:
             self._latch(f'command late: {latency * 1000:.1f} ms after its rt/lowstate sample '
                         f'(> {self._max_latency * 1000:.0f} ms)')
             return False
@@ -478,38 +490,57 @@ class LocomotionController:
         return None
 
     def _wait(self, state, tick, now, gap, age, went_back_from):
-        '''Start the ramp once the start conditions have held for STEADY_SECONDS of ticks'''
+        '''Start the ramp on the first finite, upright sample after the first true heartbeat'''
         reason = self._state_problem(state)
         if reason is None:
             gz = gravity_z(state.quat_wxyz)
             if gz >= UPRIGHT_GRAVITY_Z:
                 reason = (f'the robot is not upright (gravity z {gz:.2f} in the pelvis frame, '
                           f'needs < {UPRIGHT_GRAVITY_Z})')
-        if reason is None and went_back_from is not None:
-            reason = f'rt/lowstate tick went back (from {went_back_from} to {tick})'
-        if reason is None and gap is not None and gap > self._max_gap:
+        if reason is None and self._beat_time is None:
+            reason = 'no /safety/heartbeat yet (golem_safety beats once it can relay)'
+        if reason is not None:
+            self._log_wait(reason, now)
+            return None
+        self.phase = RAMPING
+        self._step_at(tick)
+        self._ramp_start = state.q[:len(self.leg_slots)].copy()
+        self._ramp_step = 0
+        self._track_ready(tick, now, gap, age)
+        self._log('info', f'moving the legs from where they are to the default pose over '
+                          f'{self._ramp_steps / POLICY_HZ:.1f} s')
+        return self._ramp(now)
+
+    def _track_ready(self, tick, now, gap, age):
+        '''
+        While the legs pre-pose and hold: set _ready_reason to why the policy
+        may not start yet, or None once the timing has held for STEADY_SECONDS
+        of ticks and the arm controller is commanding
+        '''
+        reason = None
+        if gap is not None and gap > self._max_gap:
             reason = (f'rt/lowstate is not steady ({gap * 1000:.0f} ms between samples, '
                       f'max {self._max_gap * 1000:.0f} ms)')
-        # a command answering a sample this late, or due in such a gap, would
-        # be late too: the laptop is not keeping up. Half faults.max_latency,
-        # so that a start does not run straight into the latency fault
-        late = max(age, 0.0 if gap is None else gap)
-        if reason is None and late > self._max_latency / 2:
-            reason = (f'rt/lowstate reaches the node late ({late * 1000:.0f} ms, '
+        # a command answering a sample this late would be late too: the laptop
+        # is not keeping up. Half faults.max_latency, so that the policy does
+        # not run straight into the latency fault. The wall-clock gap between
+        # samples is not checked here: a sim below real time spaces them out
+        # (9 ms at 0.2x for 2 ms of tick) while each is still answered at once
+        if reason is None and age > self._max_latency / 2:
+            reason = (f'rt/lowstate reaches the node late ({age * 1000:.0f} ms, '
                       f'max {self._max_latency * 500:.1f} ms to start)')
         if reason is not None:
             self._good_since = None
         elif self._good_since is None:
             self._good_since, self._good_wall = tick, now
-        # golem_safety and the arm controller do not restart the steady window:
-        # once the state has held, the first sample with both starts the ramp
-        if reason is None and self._beat_time is None:
-            reason = 'no /safety/heartbeat yet (golem_safety beats once it can relay)'
         upper_age = None if self._upper_time is None else now - self._upper_time
         if reason is None and (upper_age is None or upper_age > UPPER_FRESH_SECONDS):
             reason = f'no commands from the arm controller on {self._upper_topic}'
-        steady = reason is None and tick_delta(tick, self._good_since) >= self._steady_ticks
-        if steady:
+        if reason is None and tick_delta(tick, self._good_since) < self._steady_ticks:
+            # the steady window is still filling: nothing to report
+            self._ready_reason = 'rt/lowstate has not been steady for long enough yet'
+            return
+        if reason is None:
             # s of tick per s of wall clock over the steady samples
             rate = (tick_delta(tick, self._good_since) * self._tick_seconds /
                     max(now - self._good_wall, 1e-9))
@@ -519,26 +550,24 @@ class LocomotionController:
                           f'needs {low:.2f}-{high:.2f}; is tick_seconds right?)')
                 self._good_since = None
         if reason is not None:
-            # logged when the kind of reason (the text before any ' (') changes,
-            # so a steady one is logged once, and each kind at most every
-            # WAIT_LOG_SECONDS, so two that alternate do not flood the log
-            kind = reason.split(' (')[0]
-            last = self._wait_logged.get(kind)
-            if kind != self._wait_reason and (last is None or now - last >= WAIT_LOG_SECONDS):
-                self._wait_logged[kind] = now
-                self._log('info', f'waiting to start: {reason}')
-            self._wait_reason = kind
-            return None
-        if not steady:
-            return None
-        self.phase = RAMPING
-        self._step_at(tick)
-        self._ramp_start = state.q[:len(self.leg_slots)].copy()
-        self._ramp_step = 0
-        self._log('info', f'moving the legs from where they are to the default pose over '
-                          f'{self._ramp_steps / POLICY_HZ:.1f} s (rt/lowstate\'s tick ran at '
-                          f'{rate:.2f} s per s of wall clock)')
-        return self._ramp(now)
+            self._log_wait(reason, now, 'the policy waits')
+        elif self._ready_reason is not None:
+            self._log('info', f'the policy may start (rt/lowstate\'s tick ran at {rate:.2f} s '
+                              f'per s of wall clock)')
+        self._ready_reason = reason
+
+    def _log_wait(self, reason, now, prefix='waiting to start'):
+        '''
+        Log a reason to wait when its kind (the text before any ' (') changes,
+        so a steady one is logged once, and each kind at most every
+        WAIT_LOG_SECONDS, so two that alternate do not flood the log
+        '''
+        kind = reason.split(' (')[0]
+        last = self._wait_logged.get(kind)
+        if kind != self._wait_reason and (last is None or now - last >= WAIT_LOG_SECONDS):
+            self._wait_logged[kind] = now
+            self._log('info', f'{prefix}: {reason}')
+        self._wait_reason = kind
 
     def _ramp(self, now):
         '''The next target on the line from the measured legs to the default pose'''
@@ -548,13 +577,13 @@ class LocomotionController:
         if self._ramp_step > self._ramp_steps:
             # the default pose was just sent: the hold or the policy takes over on
             # the next step
+            self.phase = HOLDING
             if self._wait_for_confirm:
-                self.phase = HOLDING
                 self._log('info', 'legs at the default pose: holding it until the operator '
                                   'confirms (ros2 service call /lowerbody/confirm_engage '
                                   'std_srvs/srv/Trigger)')
             else:
-                self._start_policy(now)
+                self._log('info', 'legs at the default pose: holding it until the policy may start')
         return targets
 
     def _start_policy(self, now):

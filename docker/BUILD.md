@@ -38,9 +38,9 @@ is required before anything builds.
 `unitree_ros2`.
 
 **`core_ws/src` in-tree packages** (versioned directly in this repo, *not*
-submodules): `FAST_LIO`, `golem_ros2_models`, `golem_safety`, `golem_upper_ik`, `h12_deploy_mjpc`,
-`h12_lowerbody_rl`, `h12_slam`, `h12_skills`, `golem_bringup`, `lmg_deploy`,
-`model_server`, and the G1 packages `dex_3`, `g1_homie` and `g1_navigation`.
+submodules): `FAST_LIO`, `golem_ros2_models`, `golem_safety`, `golem_upper_ik`, `deploy_mjpc`,
+`h12_lowerbody_rl`, `golem_slam`, `golem_skills`, `golem_bringup`, `lmg_deploy`,
+`model_server`, and the G1 packages `dex_3` and `g1_homie`.
 
 `golem_safety` (C++, `ament_cmake`) and `golem_upper_ik` (Python) are the
 safety layer and arm controller of both robots, so they build for both; the
@@ -215,7 +215,7 @@ container's libc unchanged.
 
 MJPC is a CMake/FetchContent project (it fetches and builds its own MuJoCo 3.2.3 +
 gRPC + abseil + glfw). It is **built standalone, outside colcon** — the thin ROS
-bridge `h12_deploy_mjpc` is the only mjpc-related colcon package.
+bridge `deploy_mjpc` is the only mjpc-related colcon package.
 
 **At image build** (`RosDockerfile` MJPC block): the `mujoco_mpc` submodule's
 pinned commit is cloned (step 2); then `agent_server` is compiled with
@@ -268,24 +268,20 @@ check required source paths, and create only cache/mountpoint directories.
 `GOLEM_ASSETS_DIR` and `GOLEM_CACHE_DIR` accept absolute paths or paths relative
 to the checkout. Required bind sources use `create_host_path: false`.
 
-**The G1 overlay.** Both wrappers select the robot with `--g1`/`--h12`
-anywhere in their arguments, else `GOLEM_ROBOT` (shell, then `docker/.env`),
-else `h12`. For the G1 they add `docker/docker-compose.g1.yml` after
+**The G1 overlay.** Simulator and stack wrappers select the robot with
+`--g1`/`--h12` anywhere in their arguments, else `GOLEM_ROBOT` (shell, then
+`docker/.env`), else `h12` (`docker_run.sh ros` takes no `--g1` or `--h12`
+flag). For the G1 they add `docker/docker-compose.g1.yml` after
 `docker-compose.yml`:
 
-- both services get `GOLEM_ROBOT=g1` and `G1_DDS_INTERFACE`. Nothing the
-  ros container builds or runs depends on them: the base file mounts HOMIE's
-  policy, `core_ws/src/g1_homie/policy` (at `/home/code/g1_homie`,
-  for the walking node), and `tools/` (at `/home/code/tools`) into every ros
-  container, read-only with `create_host_path: false`, and the G1's model is in
-  `CL_Assets/g1`, which the base file mounts for both robots;
-- the robocasa service gets the G1 sim's knobs (`CLAUDE.md` §8);
-- the ros service loads a second CycloneDDS file after `core_ws/cyclonedds.xml`,
-  `cyclonedds_local.xml`, which the wrapper writes into `GOLEM_CACHE_DIR` from
-  `G1_DDS_INTERFACE` to pin the network interface. It does so only when it
-  starts a ros container, and by rename, because the file is a single-file bind
-  mount that a running container rereads in every new process
-  (`write_g1_dds_pin` in `scripts/docker_common.sh`).
+- the robocasa service gets `GOLEM_ROBOT=g1` and the G1 sim's knobs
+  (`CLAUDE.md` §8);
+- the ros service needs no overlay: the base file mounts HOMIE's policy,
+  `core_ws/src/g1_homie/policy` (at `/home/code/g1_homie`, for the walking
+  node), and `tools/` (at `/home/code/tools`) into every ros container,
+  read-only with `create_host_path: false`, uses `core_ws/cyclonedds.xml`
+  directly, and the G1's model is in `CL_Assets/g1`, which the base file mounts
+  for both robots.
 
 `prepare_mounts` checks the `CL_Assets/g1` files each service reads for missing
 files and LFS pointers before any container starts: in every ros container,

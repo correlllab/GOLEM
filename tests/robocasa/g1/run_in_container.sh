@@ -31,10 +31,10 @@ no_network=$(mktemp "${TMPDIR:-/tmp}/golem-g1-unit-XXXXXX.yml")
 trap 'rm -f "$no_network"' EXIT
 printf 'services:\n  robocasa:\n    network_mode: none\n' > "$no_network"
 COMPOSE+=(-f "$no_network")
-# test_g1_sensors.py checks the lidar's IMU point against g1_navigation's FAST_LIO config.
+# test_g1_sensors.py checks the lidar's IMU point against golem_slam's FAST_LIO config.
 "${COMPOSE[@]}" run --rm -T --no-deps \
     -v "$ROOT/tests:/home/code/tests:ro" \
-    -v "$ROOT/core_ws/src/g1_navigation/config:/home/code/core_ws/src/g1_navigation/config:ro" \
+    -v "$ROOT/core_ws/src/golem_slam/config:/home/code/core_ws/src/golem_slam/config:ro" \
     -e MUJOCO_GL=egl -e PYTHONDONTWRITEBYTECODE=1 robocasa bash -lc '
 source /opt/ros/humble/setup.bash && source /opt/livox_ws/install/setup.bash
 export PYTHONPATH=/home/code/golem_robocasa${PYTHONPATH:+:$PYTHONPATH}

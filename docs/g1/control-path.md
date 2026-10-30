@@ -65,7 +65,7 @@ instead of copying the numbers.
 
 | | Real G1 | Sim |
 |---|---|---|
-| DDS domain | 0, pinned to the wired port (`G1_DDS_INTERFACE`) | 1 or another test domain; the sim refuses 0 |
+| DDS domain | 0 | 1 or another test domain; the sim refuses 0 |
 | Before the bringup | Unitree's debug mode, entered by the operator (the procedure is not written yet) | every motor off |
 | Who holds the robot until the legs stand | a gantry | the elastic band, until the walking node releases it |
 | Motor torques | the robot's motor drivers | PD law every physics step, in sim time |
@@ -75,7 +75,7 @@ instead of copying the numbers.
 | Arm speed limits (`controller.v_lim`, `w_lim`, `dq_lim`) | `golem_upper_ik/config/g1/g1_split.yaml`: deliberately low for the first sessions | `sim_split.yaml` |
 | The walking node | `g1_homie/config/g1.yaml`: starts only with `start_position_verified:=true`, holds the default pose until `/lowerbody/confirm_engage` | `sim.yaml`: always starts, no confirm, releases the band |
 | Walking speed limits (`commands.vx`, `vy`, `yaw`) | `g1.yaml`: inside the trained ranges | `sim.yaml`: the trained ranges |
-| Navigation | refused (real lidar not connected yet) | allowed (`use_nav:=true`) |
+| Navigation | on by default (`use_nav`): the MID-360 driver, `g1_fastlio.yaml`; not yet run | on by default (`use_nav`) |
 | Status | nothing has run on the robot yet | arm, walk, nav and exploration tests pass |
 
 ## Not known yet

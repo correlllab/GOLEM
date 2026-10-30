@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
 # The containers of the G1 acceptance tests, sourced by test_sim_*.sh here.
 #
-# Both are the compose services as docker_run.sh --g1 starts them (the G1
-# overlay, GOLEM_ROBOT=g1), with test_compose.yml on top,
+# Both are the compose services as docker_run.sh starts them (robocasa with the
+# G1 overlay, GOLEM_ROBOT=g1; ros from docker-compose.yml), with test_compose.yml on top,
 # which g1_test_setup writes into the run's output directory:
 #   - the robocasa container has no network and the ros container joins its
 #     network namespace, both on its loopback with multicast, so no DDS leaves
 #     the host and nothing talks to the robot;
 #   - the sim mounts golem_robocasa read-only;
-#   - the ros container loads the run's own cyclonedds_local.xml, which pins no
-#     interface, in place of the shared one in $GOLEM_CACHE_DIR, which a running
-#     G1 ros container rereads in every process it starts;
 #   - the ros container builds core_ws, both robots' packages (launch_ros.sh),
 #     into $GOLEM_CACHE_DIR/g1_tests/{build,install,log}, so the checkout's own
 #     core_ws/build and core_ws/install are left alone; CORE_WS=<dir> builds
@@ -76,9 +73,7 @@ g1_test_setup() {
         mkdir -p "$OUT"
         out=$(cd -- "$OUT" && pwd)
     fi
-    # The containers' only interface is their loopback, which they get as
-    # G1_DDS_INTERFACE below; the ros container's cyclonedds_local.xml pins none.
-    export GOLEM_ROBOT=g1 G1_DDS_INTERFACE= GOLEM_DISPLAY=headless
+    export GOLEM_ROBOT=g1 GOLEM_DISPLAY=headless
     ROBOT_FLAG=
     load_config
     configure_robot robocasa
@@ -101,7 +96,6 @@ g1_test_setup() {
         echo "[$TAG] $OUT is not empty; use a new OUT" >&2
         exit 2
     fi
-    echo '<CycloneDDS/>' > "$OUT/cyclonedds_local.xml"
     local prefix=golem-g1-$TEST_NAME-$ROS_DOMAIN_ID-$$
     SIM=$prefix-sim
     ROS=$prefix-ros
@@ -135,7 +129,6 @@ $shared
     volumes:
 $shared
 $workspace
-      - {type: bind, source: "$OUT/cyclonedds_local.xml", target: /home/code/cyclonedds_local.xml, read_only: true}
 EOF
     printf 'services:\n  ros:\n    network_mode: "container:%s"\n' "$SIM" > "$OUT/test_compose_ros_in_sim.yml"
     COMPOSE+=(-f "$OUT/test_compose.yml")

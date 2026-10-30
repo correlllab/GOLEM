@@ -1,16 +1,15 @@
 #!/bin/bash
 # Closed-loop frontier-exploration test of the G1 RoboCasa sim, run from the host:
-# g1_navigation's frontier explorer walks the G1 through Nav2 from the spawn until
+# golem_skills' frontier explorer walks the G1 through Nav2 from the spawn until
 # it reports the kitchen explored, or its time runs out.
 #
 #   tests/g1/test_sim_explore.sh                    # odom_source fastlio (FAST_LIO on the sim's MID-360)
-#   GOLEM_SIM_ODOM=1 tests/g1/test_sim_explore.sh   # odom_source sim_gt (the sim's ground truth)
 #
 # Builds core_ws for the G1 and starts the sim (h12_mujoco.py --g1) headless,
 # with its sensors on, in the layout 9 / style 9 / seed 42 kitchen, the spawn
 # backed EXPLORE_BACKOFF m into open floor, as test_sim_nav.sh does. In its
 # network namespace a ros container then runs 'ros2 launch golem_bringup
-# g1_sim.launch.py use_rviz:=false use_nav:=true frontier_explore:=true
+# g1_sim.launch.py use_rviz:=false use_nav:=true use_skills:=true
 # odom_source:=...' and the test's steps (test_sim_explore.py drive): wait for
 # the walking node, the elastic band's release, Nav2 and
 # /skill/frontier_explore, send one SkillFrontierExplore goal, record, wait for
@@ -27,9 +26,7 @@
 # host, and nothing talks to the robot. ROS_DOMAIN_ID must not be 0.
 #
 # Env:
-#   GOLEM_SIM_ODOM  1: the sim publishes its ground truth and the bringup runs
-#               odom_source:=sim_gt; unset or 0: fastlio (the shell's value;
-#               docker/.env's does not apply)
+#   GOLEM_SIM_ODOM must be unset or 0: the shared pipeline needs FAST-LIO.
 #   CORE_WS     a core_ws to build in place and use (default the repo's, built
 #               into container_cache/g1_tests; see common.sh)
 #   OUT         output directory, new or empty (default
@@ -48,12 +45,12 @@ set -eo pipefail
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [ -n "${1:-}" ]; then
-    echo "usage: [GOLEM_SIM_ODOM=1] $0" >&2
+    echo "usage: $0" >&2
     exit 2
 fi
 case "$(echo "${GOLEM_SIM_ODOM:-0}" | tr '[:upper:]' '[:lower:]')" in
     0|off|false|no|'') ODOM=fastlio; SIM_ODOM=0 ;;
-    *) ODOM=sim_gt; SIM_ODOM=1 ;;
+    *) echo 'golem_slam requires FAST-LIO: leave GOLEM_SIM_ODOM unset.' >&2; exit 2 ;;
 esac
 # the lidar stays on: the test needs it
 SIM_ENV=(-e "GOLEM_SIM_ODOM=$SIM_ODOM" -e "GOLEM_SPAWN_BACKOFF=${EXPLORE_BACKOFF:-2.0}" -e GOLEM_LIDAR=)
@@ -71,7 +68,7 @@ g1_test_start_sim test_sim_explore.py "${SIM_ENV[@]}"
 echo "[test_sim_explore] sim up; starting the bringup with navigation and the explorer"
 
 g1_test_run_ros 1500 "ros2 launch golem_bringup g1_sim.launch.py use_rviz:=false use_nav:=true \
-        frontier_explore:=true odom_source:=$ODOM > /out/launch.log 2>&1 &
+        use_skills:=true odom_source:=$ODOM > /out/launch.log 2>&1 &
     LAUNCH=\$!
     python3 -u /home/code/tests/g1/test_sim_explore.py drive --out /out --odom-source $ODOM
     rc=\$?

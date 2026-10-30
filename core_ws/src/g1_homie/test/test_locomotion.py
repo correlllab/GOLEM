@@ -200,7 +200,7 @@ def test_configs(trained):
     # the same 2 s pre-pose, no confirm, and the band released once the policy runs; the
     # sim's real-time factor may drop well below 1
     assert sim['startup'] == {'ramp_seconds': 2.0, 'wait_for_confirm': False,
-                              'tick_rate': (0.25, 1.25)}
+                              'tick_rate': (0.1, 1.25)}
     assert sim['heartbeat'] == {'timeout': 0.5}
     assert sim['band'] == {'release': True, 'max_wait': 30.0}
     # the sim's tick is ms of sim time, and its latency limit the robot's
@@ -376,100 +376,130 @@ def test_command_filter_clips_then_rate_limits(policy, trained):
         f.update([math.nan, 0.0, 0.0], 0.74)
 
 
-def test_waits_for_steady_upright_state_and_the_arm_controller(policy, trained):
+def test_waits_for_an_upright_finite_state(policy, trained):
     rig = Rig(policy, trained)
     legs = np.asarray(policy.default_angles) + 0.2
-    good = _standing(policy, legs)
-    # upright and steady, but the arm controller is not commanding
-    assert rig.feed(good, 50, upper=False) == [None] * 50
-    # commanding, but tilted 40 deg, then not finite: waiting, not a fault
+    # tilted 40 deg, then not finite: waiting, not a fault
     assert rig.feed(_standing(policy, legs, quat=_tilted(40.0)), 50) == [None] * 50
     bad = _standing(policy, legs, gyro=(math.nan, 0.0, 0.0))
     assert rig.feed(bad, 50) == [None] * 50
-    # gaps above faults.max_state_gap (50 ms) keep it waiting too, and so do
-    # samples that reach the node over half faults.max_latency (12.5 ms) after
-    # their write, or that far apart: the laptop is not keeping up
-    assert rig.feed(good, 5, dt=0.06) == [None] * 5
-    assert rig.feed(good, 5, dt=0.03) == [None] * 5
-    assert rig.feed(good, 5, age=0.03) == [None] * 5
-    assert rig.feed(good, 5, age=0.013) == [None] * 5
     assert rig.controller.phase == WAITING and rig.controller.fault is None
     assert _messages(rig.log) == [
-        'waiting to start: no commands from the arm controller on rt/safety/lowcmd_upper_in',
         'waiting to start: the robot is not upright '
         '(gravity z -0.77 in the pelvis frame, needs < -0.9)',
         'waiting to start: rt/lowstate gyro is not finite (at [0])',
-        'waiting to start: rt/lowstate is not steady (60 ms between samples, max 50 ms)',
-        'waiting to start: rt/lowstate reaches the node late (30 ms, max 12.5 ms to start)',
     ]
-
-    # then STEADY_SECONDS (1 s of ticks) of good samples starts the ramp, from
-    # the measured legs; the arm controller must still be commanding
-    out = rig.feed(good, SAMPLES_TO_START + 30)
-    first = next(i for i, targets in enumerate(out) if targets is not None)
-    assert first == SAMPLES_TO_START
-    np.testing.assert_allclose(out[first], legs)
+    # the first good sample starts the ramp from the measured legs, as the H1-2's leg
+    # node does: with no arm controller and whatever the timing
+    out = rig.feed(_standing(policy, legs), 1, upper=False, age=0.03)
+    np.testing.assert_allclose(out[0], legs)
     assert rig.controller.phase == RAMPING
     assert not rig.session.inputs, 'the policy must not run during the ramp'
 
 
+def _holding(policy, trained, **kwargs):
+    '''A rig whose legs hold the default pose after a 0.1 s ramp, the policy not ready'''
+    rig = Rig(policy, trained, **kwargs)
+    rig.until(_standing(policy), HOLDING)
+    return rig
+
+
+def test_the_policy_waits_for_steady_timing_and_the_arm_controller(policy, trained):
+    rig = _holding(policy, trained, config='sim.yaml', wait_for_confirm=None)
+    good = _standing(policy)
+    rig.log.clear()
+    # upright and steady, but the arm controller has not commanded for 0.5 s
+    rig.feed(good, 300, upper=False)
+    # samples that reach the node over half faults.max_latency (12.5 ms) after
+    # their write keep it holding: the laptop is not keeping up. Samples that far
+    # apart do not, as from a sim below real time
+    rig.feed(good, 5, dt=0.03)
+    rig.feed(good, 5, age=0.03)
+    rig.feed(good, 5, age=0.013)
+    assert rig.controller.phase == HOLDING and rig.controller.fault is None
+    assert not rig.session.inputs
+    assert _messages(rig.log) == [
+        'the policy waits: no commands from the arm controller on rt/safety/lowcmd_upper_in',
+        'the policy waits: rt/lowstate reaches the node late (30 ms, max 12.5 ms to start)',
+    ]
+    # then STEADY_SECONDS (1 s of ticks) of good samples starts the policy
+    rig.feed(good, SAMPLES_TO_START + 20)
+    assert rig.controller.phase == WALKING
+    assert any(m.startswith('the policy may start') for m in _messages(rig.log))
+
+
+def test_a_sim_at_a_fifth_of_real_time_starts_the_policy(policy, trained):
+    # 2 ms of tick every 9-18 ms of wall clock, as the G1 sim with golem_slam
+    # delivers rt/lowstate: past half faults.max_latency apart, each answered at once
+    rig = _holding(policy, trained, config='sim.yaml', wait_for_confirm=None)
+    good = _standing(policy)
+    for _ in range(2 * SAMPLES_TO_START):
+        rig.feed(good, 1, dt=0.009, ticks=2)
+        rig.feed(good, 1, dt=0.018, ticks=2)
+        if rig.controller.phase == WALKING:
+            break
+    assert rig.controller.phase == WALKING, _messages(rig.log)
+
+
 def test_alternating_reasons_to_wait_are_logged_at_most_every_5_s(policy, trained):
-    rig = Rig(policy, trained)
-    good, tilted = _standing(policy), _standing(policy, quat=_tilted(40.0))
-    # two reasons that alternate for 8 s: a tilted robot between upright
-    # samples, while the arm controller has not started
-    for _ in range(400):
-        rig.feed(good, 5, upper=False)
-        rig.feed(tilted, 5, upper=False)
-    assert rig.controller.phase == WAITING
+    rig = _holding(policy, trained, config='sim.yaml', wait_for_confirm=None)
+    good = _standing(policy)
+    rig.log.clear()
+    # two reasons that alternate for 8 s: late samples between ones with no arm controller
+    for _ in range(12):
+        rig.feed(good, 300, upper=False)
+        rig.feed(good, 5, age=0.03)
+    assert rig.controller.phase == HOLDING
     kinds = [m.split(' (')[0] for m in _messages(rig.log)]
-    assert kinds == ['waiting to start: no commands from the arm controller on '
-                     'rt/safety/lowcmd_upper_in', 'waiting to start: the robot is not upright'] * 2
+    assert kinds == ['the policy waits: no commands from the arm controller on '
+                     'rt/safety/lowcmd_upper_in', 'the policy waits: rt/lowstate reaches the '
+                     'node late'] * 2
 
 
 @pytest.mark.parametrize('ticks', [1, 4], ids=['half', 'double'])
-def test_a_tick_off_the_wall_clock_keeps_it_waiting(policy, trained, ticks):
+def test_a_tick_off_the_wall_clock_keeps_the_policy_waiting(policy, trained, ticks):
     # rt/lowstate's tick counting 1 or 4 per 2 ms sample, not the 2 that
     # tick_seconds (1 ms) means: the policy would run at half or twice its rate
-    rig = Rig(policy, trained)
+    rig = _holding(policy, trained, wait_for_confirm=True)
     good = _standing(policy)
-    assert rig.feed(good, 4 * SAMPLES_TO_START, ticks=ticks) == [None] * (4 * SAMPLES_TO_START)
-    assert rig.controller.phase == WAITING and rig.controller.fault is None
+    rig.feed(good, 1, age=0.03)  # a late sample restarts the steady window
+    rig.log.clear()
+    rig.feed(good, 4 * SAMPLES_TO_START, ticks=ticks)
+    assert rig.controller.phase == HOLDING and rig.controller.fault is None
     rate = ticks / 2
     assert _messages(rig.log) == [
-        f"waiting to start: rt/lowstate's tick is off the wall clock ({rate:.2f} s of tick "
+        f"the policy waits: rt/lowstate's tick is off the wall clock ({rate:.2f} s of tick "
         'per s, needs 0.90-1.10; is tick_seconds right?)']
-    # once the tick is in ms, the next 1 s of ticks starts it (a tilted sample
+    ok, message = rig.controller.confirm()
+    assert not ok and message.startswith('refused: the policy cannot start yet: ')
+    # once the tick is in ms, the next 1 s of ticks makes it ready (a late sample
     # first ends the window that began with the old tick)
-    rig.feed(_standing(policy, quat=_tilted(40.0)), 1)
-    out = rig.feed(good, SAMPLES_TO_START + 1)
-    assert out[:-1] == [None] * SAMPLES_TO_START and out[-1] is not None
-    assert rig.controller.phase == RAMPING
-    assert _messages(rig.log)[-1].endswith(
-        "(rt/lowstate's tick ran at 1.00 s per s of wall clock)")
+    rig.feed(good, 1, age=0.03)
+    rig.feed(good, SAMPLES_TO_START + 1)
+    assert _messages(rig.log)[-1] == (
+        "the policy may start (rt/lowstate's tick ran at 1.00 s per s of wall clock)")
+    assert rig.controller.confirm()[0]
 
 
 def test_the_upper_commands_must_be_recent(policy, trained):
-    rig = Rig(policy, trained)
-    rig.controller.on_upper_cmd(rig.clock.t)
-    rig.clock.t += 0.51  # the arm controller's last command was 0.51 s ago
-    assert rig.feed(_standing(policy), 100, upper=False) == [None] * 100
-    assert rig.controller.phase == WAITING
+    rig = _holding(policy, trained, config='sim.yaml', wait_for_confirm=None)
+    # the arm controller's last command was over 0.5 s ago
+    rig.feed(_standing(policy), 2 * SAMPLES_TO_START, upper=False)
+    assert rig.controller.phase == HOLDING
 
 
 def test_waits_for_first_heartbeat(policy, trained):
     rig = Rig(policy, trained)
     rig.beating = False
     good = _standing(policy)
-    # steady, upright and the arm controller commanding, but golem_safety is not relaying
+    # upright and the arm controller commanding, but golem_safety is not relaying
     assert rig.feed(good, 2 * SAMPLES_TO_START) == [None] * (2 * SAMPLES_TO_START)
     # the watchdog arms on the first beat: silence before it is no fault
     rig.controller.check_stale(rig.clock.t + 10.0)
     assert rig.controller.phase == WAITING and rig.controller.fault is None
     assert _messages(rig.log) == [
         'waiting to start: no /safety/heartbeat yet (golem_safety beats once it can relay)']
-    # the other start conditions have held for STEADY_SECONDS: the first true beat starts
-    # the ramp on the next sample
+    # the first true beat starts the ramp on the next sample
     rig.controller.on_heartbeat(True, rig.clock.t)
     assert rig.feed(good, 1)[0] is not None
     assert rig.controller.phase == RAMPING
@@ -493,10 +523,11 @@ def test_false_first_beat_faults(policy, trained):
 @pytest.mark.parametrize('phase', [WAITING, RAMPING, HOLDING, WALKING])
 def test_heartbeat_lost_in_every_phase_faults(policy, trained, phase, how):
     # the shipped 2 s ramp, so the ramp lasts longer than the test feeds it; waiting
-    # here is waiting for the arm controller, after the first beat
+    # here is waiting for an upright robot, after the first beat
     rig = Rig(policy, trained, ramp_seconds=None, wait_for_confirm=True)
-    state = _standing(policy, np.asarray(policy.default_angles) + 0.2)
-    upper = phase != WAITING
+    upright = _standing(policy, np.asarray(policy.default_angles) + 0.2)
+    state = upright if phase != WAITING else upright._replace(quat_wxyz=np.array(_tilted(40.0)))
+    upper = True
     if phase != WAITING:
         rig.until(state, RAMPING)
     if phase in (HOLDING, WALKING):
@@ -543,7 +574,7 @@ def test_ramp_takes_two_seconds(policy, trained, config):
     rig = Rig(policy, trained, config=config, ramp_seconds=None, wait_for_confirm=None)
     legs = np.asarray(policy.default_angles) + np.linspace(-0.3, 0.3, 12)
     default = np.asarray(policy.default_angles)
-    out = rig.feed(_standing(policy, legs), SAMPLES_TO_START + 110 * SAMPLES_PER_STEP)
+    out = rig.feed(_standing(policy, legs), 102 * SAMPLES_PER_STEP)
     targets = np.array([t for t in out if t is not None])
     # 101 targets 20 ms of tick apart: from the measured legs, the default pose reached
     # after 100 policy steps, 2.0 s, and not before
@@ -552,7 +583,7 @@ def test_ramp_takes_two_seconds(policy, trained, config):
     assert np.all(np.abs(targets[:100] - default).max(axis=1) > 1e-3)
     assert rig.steps[100] - rig.steps[0] == 2000
     (moving,) = [m for m in _messages(rig.log) if m.startswith('moving the legs')]
-    assert moving.endswith("over 2.0 s (rt/lowstate's tick ran at 1.00 s per s of wall clock)")
+    assert moving.endswith('over 2.0 s')
     assert rig.controller.phase == (HOLDING if config == 'g1.yaml' else WALKING)
 
 
@@ -606,22 +637,17 @@ def test_confirm_refused_outside_holding(policy, trained):
     assert not rig.session.inputs
 
 
-def test_sim_config_does_not_hold(policy, trained):
+def test_sim_config_starts_the_policy_once_ready(policy, trained):
     rig = Rig(policy, trained, config='sim.yaml', wait_for_confirm=None)  # a 0.1 s ramp
     state = _standing(policy, np.asarray(policy.default_angles) + 0.2)
-    rig.until(state, RAMPING)
-    phases = []
-    while not rig.session.inputs:
-        rig.feed(state, 1)
-        phases.append(rig.controller.phase)
-        if phases[-1] == WALKING and len(phases) > 1 and phases[-2] == RAMPING:
-            # the ramp's last target went out on this sample, and the policy follows
-            started = rig.clock.t
-    assert HOLDING not in phases and rig.controller.phase == WALKING
-    assert rig.controller.walking_since == started
-    assert [m for m in _messages(rig.log) if not m.startswith('waiting')][-1] == (
-        'walking: policy started at zero velocity and 0.74 m height')
-    assert not any('holding' in m for m in _messages(rig.log))
+    rig.until(state, HOLDING)
+    assert _messages(rig.log)[-1] == (
+        'legs at the default pose: holding it until the policy may start')
+    # no confirm: the policy follows 1 s of steady samples from the ramp's start
+    rig.until(state, WALKING)
+    assert rig.controller.walking_since == rig.clock.t
+    assert _messages(rig.log)[-1] == 'walking: policy started at zero velocity and 0.74 m height'
+    assert len(rig.session.inputs) == 1
 
 
 def test_ramp_then_policy_from_zero_command_and_standing_height(policy, trained):
@@ -630,13 +656,14 @@ def test_ramp_then_policy_from_zero_command_and_standing_height(policy, trained)
     state = _standing(policy, legs, gyro=(0.1, -0.2, 0.05))
     rig.walk(state)
 
-    # 6 ramp targets on the line from the measured legs to the default pose,
-    # one per policy step (20 ticks), then the first policy step
-    assert np.diff(rig.steps).tolist() == [20] * 6
+    # 6 ramp targets on the line from the measured legs to the default pose, the
+    # default pose held, then the first policy step, one per policy step (20 ticks)
+    assert set(np.diff(rig.steps).tolist()) == {20}
     assert rig.controller.phase == WALKING and len(rig.session.inputs) == 1
-    assert [m for m in _messages(rig.log) if not m.startswith('waiting')] == [
-        "moving the legs from where they are to the default pose over 0.1 s (rt/lowstate's "
-        'tick ran at 1.00 s per s of wall clock)',
+    assert [m for m in _messages(rig.log) if not m.startswith('the policy waits')] == [
+        'moving the legs from where they are to the default pose over 0.1 s',
+        'legs at the default pose: holding it until the policy may start',
+        "the policy may start (rt/lowstate's tick ran at 1.00 s per s of wall clock)",
         'walking: policy started at zero velocity and 0.74 m height',
     ]
 
@@ -777,7 +804,7 @@ FAULTS = [
     ('fall', _changed(quat_wxyz=_tilted(70.0)),
      'fell: gravity z -0.34 in the pelvis frame (> -0.5)'),
     ('tick back', lambda rig, state: rig.feed(state, 1, ticks=-10),
-     'rt/lowstate tick went back from 2142 to 2132'),
+     'rt/lowstate tick went back from 2022 to 2012'),
     ('late', _session_runs(_slow),
      'command late: 30.0 ms after its rt/lowstate sample (> 25 ms)'),
     ('policy error', _session_runs(_failing), 'policy step failed: onnxruntime failed'),
@@ -810,9 +837,7 @@ def test_faults_latch_silent(policy, trained, name, inject, reason):
     (lambda rig, state: rig.controller.check_stale(rig.clock.t + 0.051),
      'rt/lowstate stale: no sample for 51 ms (> 50 ms)'),
     (_changed(quat_wxyz=_tilted(70.0)), 'fell: gravity z -0.34 in the pelvis frame (> -0.5)'),
-    (lambda rig, state: rig.controller.latency_ok(0.030),
-     'command late: 30.0 ms after its rt/lowstate sample (> 25 ms)'),
-], ids=['gap', 'silence', 'fall', 'late'])
+], ids=['gap', 'silence', 'fall'])
 def test_faults_latch_while_holding(policy, trained, inject, reason):
     rig = Rig(policy, trained, wait_for_confirm=True)
     state = _standing(policy)
@@ -825,10 +850,21 @@ def test_faults_latch_while_holding(policy, trained, inject, reason):
     assert not rig.session.inputs
 
 
+def test_a_late_command_is_no_fault_before_the_policy_runs(policy, trained):
+    # the pre-pose and the hold are PD targets, which a late command does not upset
+    rig = Rig(policy, trained, wait_for_confirm=True)
+    state = _standing(policy)
+    rig.until(state, RAMPING)
+    assert rig.controller.latency_ok(0.030)
+    rig.until(state, HOLDING)
+    assert rig.controller.latency_ok(0.030)
+    assert rig.controller.phase == HOLDING and rig.controller.fault is None
+
+
 def test_faults_during_the_ramp_latch_too(policy, trained):
     rig = Rig(policy, trained, ramp_seconds=1.0)
     state = _standing(policy, np.asarray(policy.default_angles) + 0.2)
-    rig.feed(state, SAMPLES_TO_START + 100)
+    rig.feed(state, 100)
     assert rig.controller.phase == RAMPING
     assert rig.feed(state._replace(quat_wxyz=np.array(_tilted(70.0))), 1) == [None]
     assert rig.controller.phase == FAULTED and rig.controller.fault.startswith('fell')

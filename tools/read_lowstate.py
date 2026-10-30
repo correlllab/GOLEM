@@ -1,6 +1,6 @@
 """Print rt/lowstate from the G1 once a second. Read-only: it only subscribes.
 
-In the G1's ros container (docker/scripts/docker_run.sh ros --g1), which mounts
+In the ros container (docker/scripts/docker_run.sh ros), which mounts
 this directory at /home/code/tools:
 
     python3 /home/code/tools/read_lowstate.py

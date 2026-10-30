@@ -28,7 +28,7 @@ mode in one message, ~/end_arm_goal back to walking. /cmd_vel is ignored in arm
 mode: the policy only ever saw zero there.
 
 The arm goals stay fixed in the world by the SLAM pipeline's odometry
-(/Odometry, FAST-LIO's camera_init -> body), so h12_slam's navigation launch
+(/Odometry, FAST-LIO's camera_init -> body), so golem_slam's navigation launch
 must run beside this node; without it the goals stay fixed to the pelvis.
 
 This node owns all 27 joints: legs on /safety/lowcmd_lower_in, torso and arms
@@ -505,7 +505,7 @@ class MarlDeployNode(Node):
             self._release_band()
 
         if self.controller.mode.value in ("arm_goal", "settle_to_arm") and (self._slam_time is None or now - self._slam_time > SLAM_STALE_S):
-            self.get_logger().warn("no fresh /Odometry: the arm goals move with the pelvis (is h12_slam running?)",
+            self.get_logger().warn("no fresh /Odometry: the arm goals move with the pelvis (is golem_slam running?)",
                                    throttle_duration_sec=5.0)
         cmd = self.controller.step(state)
         for name, obs in self.controller.last_obs.items():

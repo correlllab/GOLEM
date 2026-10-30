@@ -112,11 +112,11 @@ argument; each passes its own to `h12_control`):
 The top-level files above are assembled from building blocks you can also
 launch on their own: `h12_state` (state publishers), `h12_control` (estop,
 safety, IK), `h12_lowerbody`, `h12_models` (model servers + skills),
-`h12_real_drivers`, `h12_grippers`, and `h12_navigation` (in `h12_slam`).
+`h12_real_drivers`, `h12_grippers`, and `h12_navigation` (in `golem_slam`).
 
 For sensors + SLAM/nav on the real robot with no joint commanded (no estop,
-safety or IK), use `ros2 launch h12_slam h12_real_slam.launch.py`, which lives in
-`h12_slam`; record those runs with `ros2 run h12_slam record_slam_bag --name <name>`.
+safety or IK), use `ros2 launch golem_slam h12_real_slam.launch.py`, which lives in
+`golem_slam`; record those runs with `ros2 run golem_slam record_slam_bag --name <name>`.
 
 The x86 sim bringup starts the state publishers, the `frame_task_server` IK
 solver, `safety_node`, the Gemini/SAM/GraspGen model servers, the RL lower-body
@@ -163,7 +163,7 @@ ros2 launch golem_bringup h12_real_robot.launch.py start_position_verified:=true
 ```
 
 A native build there leaves out the G1's packages, as `launch_ros.sh` does
-for the H1-2: add `--packages-ignore dex_3 g1_homie g1_navigation` to its `colcon build`.
+for the H1-2: add `--packages-ignore dex_3 g1_homie` to its `colcon build`.
 `golem_bringup` exec_depends on the G1's packages, so a
 `--packages-up-to golem_bringup` without it builds them too. The build includes
 `golem_ros2_models`, which installs both robots' models from the checkout's
@@ -184,25 +184,24 @@ cameras.
 
 ## The G1
 
-The wrappers run the Unitree G1 instead of the H1-2 with `--g1` anywhere in
-their arguments, or with `GOLEM_ROBOT=g1` in the shell or `docker/.env`
-(`--h12` overrides that). Each prints the robot it selected (`robot: g1`)
-before the DDS domain check. The robot matters where it is inherent: which
-robot the sim runs, which bringup `docker_stack.sh` starts and which sim it
-waits for, and the real G1's DDS interface. Every `ros` container mounts and
-builds both robots' packages (`dex_3`, `g1_homie` and `g1_navigation` included), so `docker_run.sh
-ros` without `--g1` runs `g1_sim.launch.py` as well as the H1-2's launches; it
-needs `--g1` only on the real G1, where the `docker/docker-compose.g1.yml`
-overlay pins CycloneDDS to `G1_DDS_INTERFACE`, the host port wired to the robot
-(empty for the sim). The G1 runs on x86 Linux with RoboCasa only. Both robots
-use the same container names and DDS topics: run one at a time.
+Simulator and stack wrappers run the Unitree G1 instead of the H1-2 with `--g1`
+anywhere in their arguments, or with `GOLEM_ROBOT=g1` in the shell or
+`docker/.env` (`--h12` overrides that). Each prints the robot it selected
+(`robot: g1`) before the DDS domain check. The robot matters where it is
+inherent: which robot the sim runs, and which bringup `docker_stack.sh` starts
+and which sim it waits for. Every `ros` container mounts and builds both
+robots' packages (`dex_3` and `g1_homie` included) and uses the default
+CycloneDDS configuration (`core_ws/cyclonedds.xml`), so `docker_run.sh ros`
+takes no `--g1` flag and runs both `g1_sim.launch.py` / `g1_real_robot.launch.py`
+and the H1-2's launches. The G1 runs on x86 Linux with RoboCasa only. Both
+robots use the same container names and DDS topics: run one at a time.
 
 ```bash
 docker/scripts/docker_stack.sh up robocasa --g1 --headless   # sim + g1_sim.launch.py
 
 docker/scripts/docker_run.sh robocasa --g1 --layout 9 --style 9 --seed 42
 docker/scripts/docker_run.sh ros                             # builds both robots' packages
-ros2 launch golem_bringup g1_sim.launch.py                   # use_nav:=true frontier_explore:=true ...
+ros2 launch golem_bringup g1_sim.launch.py                   # use_nav:=true use_skills:=true ...
 ```
 
 The G1 bringup always starts HOMIE's walking node in the sim. The robot hangs
@@ -214,10 +213,9 @@ The walking node then starts its policy, and releases the band once
 
 The paired startup refuses a simulator of the other robot on the domain; the
 single-service flow does not check. On the real G1 the `ros` container runs on
-the laptop wired to the robot, on domain 0, which needs `G1_DDS_INTERFACE`
-(`UP`, with an IPv4 address) before the confirmation prompt, and the robot in
-Unitree's debug mode, on a gantry. Start at [`g1/index.md`](g1/index.md); the
-first real session follows [`g1/first-session.md`](g1/first-session.md).
+the laptop wired to the robot, on domain 0, with the robot in Unitree's debug
+mode, on a gantry. Start at [`g1/index.md`](g1/index.md); the first real
+session follows [`g1/first-session.md`](g1/first-session.md).
 
 ## Troubleshooting
 
@@ -244,7 +242,7 @@ first real session follows [`g1/first-session.md`](g1/first-session.md).
   once, from the repo root (`sudo` for files a container left root-owned):
 
   ```bash
-  rm -rf {core_ws/build,core_ws/install,core_ws/build_stack_tests,core_ws/install_stack_tests,container_cache/g1_tests/build,container_cache/g1_tests/install}/{h12_bringup,g1_bringup,h12_safety_layer,h12_ros2_controller,g1_safety_layer,g1_control,g1_dex3,g1_locomotion}
+  rm -rf {core_ws/build,core_ws/install,core_ws/build_stack_tests,core_ws/install_stack_tests,container_cache/g1_tests/build,container_cache/g1_tests/install}/{h12_bringup,g1_bringup,h12_safety_layer,h12_ros2_controller,g1_safety_layer,g1_control,h12_ros2_model,g1_description,g1_dex3,g1_locomotion,h12_slam,h12_deploy_mjpc,h12_skills,g1_navigation}
   ```
 
   A native workspace (the H1-2's onboard PC) has no such check and keeps
@@ -268,3 +266,25 @@ first real session follows [`g1/first-session.md`](g1/first-session.md).
   and proto), not colcon.
 - **Laggy point clouds or images** are usually kernel UDP buffer drops — see
   [`DDS_TUNING.md`](DDS_TUNING.md).
+
+## Package name migration
+
+The package directories, Python modules and ROS names changed together:
+`h12_slam` → `golem_slam`, `h12_deploy_mjpc` → `deploy_mjpc`, and
+`h12_skills` → `golem_skills`, and `g1_navigation` was merged into `golem_slam`
+(`g1_body_to_pelvis`) and `golem_skills` (`/skill/frontier_explore`). Existing executable and action names are unchanged.
+G1 navigation now uses `golem_slam`; see [G1 navigation](g1/navigation.md).
+
+Stop affected processes before rebuilding. Colcon does not remove obsolete
+install prefixes. Remove only these generated package caches from the repo root
+(on every host that built the workspace; use sudo for container-owned files):
+
+```bash
+rm -rf {core_ws/build,core_ws/install,core_ws/build_stack_tests,core_ws/install_stack_tests,container_cache/g1_tests/build,container_cache/g1_tests/install}/{h12_slam,h12_deploy_mjpc,h12_skills,g1_navigation}
+```
+
+Then rebuild through `docker/scripts/docker_run.sh ros` (or the native onboard
+colcon workflow), and source the new install in a fresh shell. Mac users must
+remove the same package prefixes from their build/install named volumes before
+running `docker/mac/scripts/docker_run_mac.sh ros`. Do not delete source or
+unrelated cache directories.

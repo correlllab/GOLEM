@@ -4,6 +4,7 @@
 services:
   ros:
     environment:
+      GOLEM_ROBOT: ${GOLEM_ROBOT:-h12}
       GOLEM_WAIT_FOR_SIM: "1"
       GOLEM_SIM_TIMEOUT: ${GOLEM_SIM_TIMEOUT:-180}
     command:

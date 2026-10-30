@@ -1,54 +1,74 @@
 # Navigation
 
-Navigation is **sim only**. The real MID-360 lidar is not connected to the
-bringup yet, and the real bringup refuses `use_nav:=true`.
+G1 bringup uses `golem_slam`, the H1-2 navigation pipeline with G1 profiles.
+Both G1 bringups start it by default (`use_nav`). On the real G1 the bringup
+also starts the MID-360 driver (`golem_bringup`'s `launch/g1/g1_real_drivers.launch.py`,
+on `golem_slam/config/g1_MID360_config.json`: the laptop at 192.168.123.222,
+the lidar at 192.168.123.120, points and IMU in the raw sensor frame) and
+FAST-LIO on `g1_fastlio.yaml`. That path has not run on our G1 yet.
 
-The stack (`g1_navigation`): FAST_LIO gives odometry from the lidar, and
-slam_toolbox draws a 2D map; Nav2 plans and sends `/cmd_vel` to the walking
-node. FAST_LIO localises the robot; slam_toolbox only draws the map at its
-poses (no scan matching). Both slam_toolbox and Nav2 work on `base_footprint`,
-a level frame on the floor under the pelvis, so `map -> odom` is the identity.
-With `odom_source:=sim_gt` the sim's ground-truth `odom -> pelvis` replaces
-FAST_LIO; the sim publishes it only with `GOLEM_SIM_ODOM=1`, and the real robot
-has no such thing.
+## Pipeline
 
-## Check it
+FAST-LIO consumes `/livox/lidar` and `/livox/imu`. Its deskewed body cloud is
+filtered against the G1 URDF collision geometry, then used for gravity/floor
+alignment and OctoMap. A stamped `level_cloud` adapter supplies the scan
+converter in `base_footprint`, avoiding its TF-filter stall on the moving G1.
+slam_toolbox uses `/converted_scan`, with scan matching
+and loop closure enabled. Nav2 uses the OctoMap `/projected_map` as its static
+obstacle map, plus the scan for local obstacle updates. MPPI drives HOMIE
+through the velocity smoother: forward/backward and yaw, with lateral velocity
+held at zero. The G1 profile uses its own footprint and height bands.
+
+The dynamic body-to-pelvis transform follows the measured waist. `level_odom`
+measures gravity and the floor rather than assuming a standing pelvis height.
+Goals are in `map`; do not assume map equals odom or the simulator's world.
+
+## Run
+
+Start the simulator through the provided wrappers on a nonzero DDS domain,
+with `GOLEM_SIM_ODOM` unset or 0, then in the ROS container:
 
 ```bash
-tests/g1/test_sim_nav.sh                         # FAST_LIO odometry
-GOLEM_SIM_ODOM=1 tests/g1/test_sim_nav.sh        # the sim's ground-truth odometry
+ros2 launch golem_bringup g1_sim.launch.py
+# Optional skills (including frontier exploration):
+ros2 launch golem_bringup g1_sim.launch.py use_skills:=true
+# The real G1 (the laptop's golem_ros container, domain 0):
+ros2 launch golem_bringup g1_real_robot.launch.py
 ```
 
-Nav2 walks the G1 to a goal 2-3 m away. The test checks that it arrives, stays
-up, touches nothing, and that the map and the localisation match the sim. A
-passing run ends with `PASSED: <n>/<n> checks`. `NAV_GOAL="x,y[,yaw_deg]"` (in
-the sim's world frame) picks your own goal; the script's header lists the
-other knobs.
-
-## Send your own goals
+Run only one of those bringups. The navigation-only entry point, requiring an
+already-running G1 state publisher, sensor stream and locomotion stack, is:
 
 ```bash
-# terminal 1: the sim, the spawn backed 2 m into open floor
-GOLEM_SPAWN_BACKOFF=2.0 docker/scripts/docker_run.sh robocasa --g1 --layout 9 --style 9 --seed 42
-# wait for "[g1_mujoco] ROS bridges up"
-
-# terminal 2
-docker/scripts/docker_run.sh ros
-ros2 launch golem_bringup g1_sim.launch.py use_nav:=true
-
-# terminal 3: once Nav2 is up and the walking node has released the elastic band
-docker exec -it golem_ros bash
-source /opt/ros/humble/setup.bash && source /home/code/core_ws/install/setup.bash
-ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
-    "{pose: {header: {frame_id: map}, pose: {position: {x: 1.33, y: 2.08}, orientation: {w: 1.0}}}}"
+ros2 launch golem_slam g1_navigation.launch.py sim:=true use_sim_time:=true
 ```
 
-Goals are in the `map` frame. With FAST_LIO it starts under the robot at the
-spawn, x along its heading. For `odom_source:=sim_gt`, start the sim with
-`GOLEM_SIM_ODOM=1` too (without it `odom -> pelvis` has no publisher; with it
-and `fastlio` it has two, and TF breaks); `map` is then the sim's world frame.
-The test is the tested path; this by-hand flow puts together the same parts.
+Send `/navigate_to_pose` goals in `map` once Nav2 is active. Available shared
+launch overrides include `fast_lio_config_file`, `nav2_params_file`,
+`slam_params_file`, `octomap_params_file`, and `pipeline_params_file`.
 
-More: the [g1_navigation README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1_navigation/README.md)
-(frames, the scan, slam_toolbox, Nav2, the sim runs, and what the real lidar
-still needs).
+## Check
+
+```bash
+tests/g1/test_sim_nav.sh
+tests/g1/test_sim_explore.sh
+```
+
+These run the shared pipeline in isolated containers. `GOLEM_SIM_ODOM=1` is
+refused: the shared pipeline requires FAST-LIO's cloud. The test reports goal
+completion, stability, contacts, scan quality and localization; inspect its
+report rather than treating launch success as a navigation pass.
+
+### Validation status (2026-10-29)
+
+The shared pipeline passed the point-to-point navigation acceptance test
+(13/13 checks) and the H1-2 arm smoke test passed after the rename. Extended
+G1 frontier exploration is **not yet passing**: a 120-second run reached 55.3%
+coverage versus the 95% requirement and exceeded the stability limits
+(22.3° maximum tilt, 0.693 m minimum pelvis height). Scans remained continuous,
+localization error stayed below 1.4 cm, and there were no obstacle contacts.
+The explorer remains opt-in (`use_skills:=true`); its integration is present, but these results do
+not establish reliable autonomous exploration or real-G1 navigation.
+
+For old install directories after upgrading, see the
+[package migration instructions](../RUNNING.md#package-name-migration).

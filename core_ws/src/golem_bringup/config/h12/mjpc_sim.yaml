@@ -1,12 +1,12 @@
 # MJPC lower-body deploy — RoboCasa SIM params (h12_sim.launch.py).
 # Controller + estimator are the fork's deploy core
-# and RW-EKF base estimator behind the h12_deploy_mjpc shims; these params
+# and RW-EKF base estimator behind the deploy_mjpc shims; these params
 # mirror the fork's surviving CLI flags 1:1. Everything settled (ctrl 200 Hz,
 # twin-time clocking, latency comp, ramp/hold/blend timings, torque-budget
 # clamp, watchdog) is compiled into the core — see the submodule's
 # mjpc/deploy/deploy_common.h.
 
-h12_deploy_mjpc_estimator:
+deploy_mjpc_estimator:
   ros__parameters:
     # Side topic (nothing else publishes sportmodestate in sim, but the side
     # topic keeps the one-writer rule trivially safe). Controller reads it below.
@@ -35,8 +35,8 @@ mjpc_debug_visualizer:
     # finalised, so a /tmp default writes a perfect video and then deletes it.
     # core_ws is bind-mounted, and core_ws/.gitignore's `log/` has no leading slash
     # so it matches at ANY depth -- this lands on the host at
-    # core_ws/src/h12_deploy_mjpc/log/mjpc_plan.mp4 and stays out of git.
-    out_path: /home/code/core_ws/src/h12_deploy_mjpc/log/mjpc_plan.mp4
+    # core_ws/src/deploy_mjpc/log/mjpc_plan.mp4 and stays out of git.
+    out_path: /home/code/core_ws/src/deploy_mjpc/log/mjpc_plan.mp4
     # RENDER rate, decoupled from the 200 Hz lowstate and the ~20 Hz plan (the viewer
     # draws from whatever it last cached, on its own clock). 10 because osmesa is a
     # software rasteriser: ~96 ms/frame for this scene with shadows off (measured),

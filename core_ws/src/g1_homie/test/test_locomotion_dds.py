@@ -430,7 +430,7 @@ def test_silent_until_upright_arms_and_heartbeat_then_ramp_hold_and_walk():
         assert rig.driver.phase == WAITING
 
         # upright, and golem_safety beats, but its beats do not reach the node:
-        # still silent, past the 1 s the other start conditions need
+        # still silent
         rig.robot.set(quat=[1.0, 0.0, 0.0, 0.0])
         time.sleep(1.5)
         assert rig.lower.msgs == [] and rig.driver.phase == WAITING
@@ -439,10 +439,11 @@ def test_silent_until_upright_arms_and_heartbeat_then_ramp_hold_and_walk():
         assert [m for _, _, m in rig.log if m.startswith('waiting to start: no /safety/heartbeat')]
 
         # the beats reach it: the ramp (0.2 s, 11 targets), then the hold at the
-        # default pose until the operator's confirm, then the policy
+        # default pose until 1 s of steady samples and the operator's confirm,
+        # then the policy
         rig.heartbeat.forwarding.set()
         _wait_for(lambda: rig.driver.phase == HOLDING)
-        time.sleep(0.5)
+        time.sleep(1.0)
         assert rig.driver.phase == HOLDING
         assert rig.driver.confirm() == (
             True, 'confirmed: the policy starts on the next policy step')
@@ -469,7 +470,7 @@ def test_silent_until_upright_arms_and_heartbeat_then_ramp_hold_and_walk():
     assert 0.01 < np.median(steps) < 0.03, f'one target per policy step, not {np.median(steps)} s'
     # then the default pose, at 50 Hz, until the confirm
     held = [(t, m) for t, m in lower[11:] if t < confirmed]
-    assert abs(len(held) - 25) <= 5, len(held)
+    assert abs(len(held) - 50) <= 5, len(held)
     for _, msg in held:
         np.testing.assert_allclose(_legs(msg), default, atol=1e-6)
 
@@ -578,13 +579,12 @@ def test_bad_state_silences_the_node_and_golem_safety_holds_its_last_command(inj
     # never a zero-gain or damping command from the node itself
     assert all(msg.motor_cmd[i].kp > 0.0 for _, msg in lower for i in LEGS)
 
-    # golem_safety holds a quiet input: from the arm controller's first command
-    # on (before it, the zero-gain stream), it went on relaying the node's last
-    # leg command, with the training gains, to the end, and never the estop
-    # command
-    arms = next(i for i, (_, msg) in enumerate(lowcmd) if msg.motor_cmd[SHOULDER].kp > 0.0)
-    assert all(_is_zeroed(msg) for _, msg in lowcmd[:arms])
-    assert not any(_is_zeroed(msg) for _, msg in lowcmd[arms:])
+    # golem_safety holds a quiet input: from the first input it engaged on (before
+    # it, the zero-gain stream; the legs may engage before the arms), it went on
+    # relaying the node's last leg command, with the training gains, to the end,
+    # and never the estop command
+    first = next(i for i, (_, msg) in enumerate(lowcmd) if not _is_zeroed(msg))
+    assert not any(_is_zeroed(msg) for _, msg in lowcmd[first:])
     held = [(t, msg) for t, msg in lowcmd if t > last_lower + 0.05]
     assert held, 'golem_safety must keep relaying'
     last_legs = _legs(lower[-1][1])

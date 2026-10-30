@@ -85,15 +85,15 @@ def test_sensor_config_defaults():
     assert bridge.SensorConfig.from_env(empty) == default
     assert (default.lidar, default.lidar_points, default.lidar_hz, default.imu_hz) == (True, 5000, 10.0, 200.0)
     assert (default.camera, default.camera_hz, default.camera_width, default.camera_height) == \
-        (True, 6.0, 1280, 720)
+        (True, 6.0, 640, 360)
 
 
 def test_sensor_config_knobs():
     config = bridge.SensorConfig.from_env({"GOLEM_LIDAR": "0", "GOLEM_CAMERAS": "off", "GOLEM_LIDAR_POINTS": "2000",
                                            "GOLEM_LIDAR_HZ": "100", "GOLEM_CAMERA_HZ": "30",
-                                           "GOLEM_CAMERA_SCALE": "0.5"})
+                                           "GOLEM_CAMERA_SCALE": "0.25"})
     assert (config.lidar, config.camera, config.lidar_points, config.lidar_hz) == (False, False, 2000, 100.0)
-    assert (config.camera_hz, config.camera_width, config.camera_height) == (30.0, 640, 360)
+    assert (config.camera_hz, config.camera_width, config.camera_height) == (30.0, 320, 180)
 
 
 def test_sensor_config_rejects_bad_knobs():
@@ -215,12 +215,13 @@ def test_head_camera_thread_renders_the_state_at_its_tick():
     thread renders; tick() only fills the scene, and a frame due while the
     thread renders is dropped. Depth is bit for bit; colour can differ by one
     level on a few pixels, as two renders of one scene on one thread do too
-    (MuJoCo's 4x multisampling: 15-94 of 921600 pixels, by 1; none with it off)"""
+    (MuJoCo's 4x multisampling: a few pixels in 1e3, by 1; none with it off)"""
     model = _model()
     data = _standing(model)
     node = _Node()
-    camera = bridge._HeadCamera(node, model, data, "", bridge.SensorConfig(lidar=False))
-    reference = g1_head_camera.HeadCamera(model, "")
+    config = bridge.SensorConfig(lidar=False)
+    camera = bridge._HeadCamera(node, model, data, "", config)
+    reference = g1_head_camera.HeadCamera(model, "", config.camera_width, config.camera_height)
     period = camera._schedule.period
     rng = np.random.default_rng(0)
     expected, tick_ms = [], []

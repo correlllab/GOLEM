@@ -10,7 +10,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 # Lower-body leg control: the h12_lowerbody_rl controller and, optionally, the
-# h12_deploy_mjpc RW-EKF base estimator. Only one lower-body controller may feed
+# deploy_mjpc RW-EKF base estimator. Only one lower-body controller may feed
 # /safety/lowcmd_lower_in; this bringup does not launch the MJPC controller, so
 # lowerbody:=mjpc leaves the legs uncontrolled.
 
@@ -63,9 +63,9 @@ def generate_launch_description():
             )),
         ),
         Node(
-            package='h12_deploy_mjpc',
+            package='deploy_mjpc',
             executable='estimator_node',
-            name='h12_deploy_mjpc_estimator',  # MUST match the yaml key
+            name='deploy_mjpc_estimator',  # MUST match the yaml key
             parameters=[sim_time_param, LaunchConfiguration('estimator_params')],
             # 'log' keeps the node's periodic [est] stdout off the console; it
             # still goes to the ROS log files.

@@ -7,7 +7,7 @@ returns into the messages the Livox driver publishes (/livox/lidar CustomMsg,
 Frames. Everything is in the sensor's own frame, livox_frame, which is the
 URDF's mid360_link (g1_robosuite puts a site of that name on torso_link at the
 URDF pose: rpy pi 0.0511 0, so the sensor hangs upside down). The driver runs
-with MID360_config.json's extrinsic at zero (as g1_navigation's FAST_LIO sim
+with MID360_config.json's extrinsic at zero (as golem_slam's G1 FAST_LIO sim
 config assumes), so the real points arrive in the same raw frame.
 
 Scan. The MID-360 covers 360 deg around and -7 to +52 deg in elevation in its

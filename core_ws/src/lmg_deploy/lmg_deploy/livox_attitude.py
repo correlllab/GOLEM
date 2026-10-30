@@ -57,7 +57,7 @@ class LivoxAttitude:
                  still_gyro: float = 0.1, still_acc_spread: float = 0.1, unit_samples: int = 200):
         """acc_scale: m/s^2 per accelerometer unit (9.81 for g), or None to decide it from the first unit_samples
         samples. still_gyro (rad/s) and still_acc_spread (the largest deviation from the window's mean accelerometer,
-        as a share of its norm: h12_slam level_odom's max_accel_spread) bound how still the robot must be for
+        as a share of its norm: golem_slam level_odom's max_accel_spread) bound how still the robot must be for
         calibrate()."""
         self.acc_scale = None if acc_scale is None else float(acc_scale)
         self._unit_samples = int(unit_samples)

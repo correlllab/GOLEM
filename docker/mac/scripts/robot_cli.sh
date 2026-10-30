@@ -22,10 +22,10 @@ source /opt/core_ws/install/setup.bash 2>/dev/null
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-1}"
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
-# Named postures available to rob_pose (from utility/named_config.py):
-#   home t_pose arms_front_45 arms_overhead arms_asym arms_front_yaw elbow_only
+# Named postures available to rob_pose: NAMED_CONFIGS in
+# core_ws/src/golem_upper_ik/golem_upper_ik/robots/h12.py
 rob_poses() {
-    echo "home t_pose arms_front arms_front_elbow t_pose_elbow arms_overhead arms_asym arms_front_yaw elbow_only"
+    echo "home t_pose arms_front_45 arms_overhead arms_asym arms_front_yaw init_1 init_2 init_3 prep staging_right staging_left"
 }
 
 # rob_pose <config_name> [seconds]
@@ -87,7 +87,9 @@ rob_stop() {
 # rob_odom — current base position in the odom (world) frame.
 rob_odom() { timeout 5 ros2 topic echo /odom --field pose.pose.position --once; }
 
-# rob_explore — autonomous frontier-based exploration (needs GOLEM_SLAM=1 GOLEM_NAV2=1).
+# rob_explore — autonomous frontier-based exploration (needs GOLEM_SLAM=1 GOLEM_NAV2=1
+# and a /skill/frontier_explore server: golem_skills serves it, and the Mac image does
+# not build golem_skills, so on the Mac stack this goal finds no server).
 # Sends the /skill/frontier_explore action, which repeatedly navigates to the nearest
 # unexplored frontier on the SLAM map until it's fully mapped. ALMI walks as soon
 # as nav2 publishes /cmd_vel (no manual walk step) and stands between goals. Ctrl-C to stop (cancels the goal). Watch RViz (6081).
@@ -101,4 +103,4 @@ rob_explore() {
 echo "robot_cli loaded."
 echo "  postures : rob_pose t_pose | rob_grip right close"
 echo "  locomote : rob_go 0.4 0 0.3 (fwd+turn) -> rob_stop   (ALMI stand/walk; needs GOLEM_LOWERBODY=almi)"
-echo "  explore  : rob_explore   (autonomous frontier mapping; needs GOLEM_SLAM=1 GOLEM_NAV2=1)"
+echo "  explore  : rob_explore   (frontier mapping; needs GOLEM_SLAM=1 GOLEM_NAV2=1 and golem_skills, not built on the Mac)"

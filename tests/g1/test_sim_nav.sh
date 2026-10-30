@@ -3,7 +3,6 @@
 # walks the G1 to a goal 2-3 m away in the kitchen, or to NAV_GOAL.
 #
 #   tests/g1/test_sim_nav.sh                     # odom_source fastlio (FAST_LIO on the sim's MID-360)
-#   GOLEM_SIM_ODOM=1 tests/g1/test_sim_nav.sh    # odom_source sim_gt (the sim's ground truth)
 #   NAV_GOAL=0.62,-5.08,180 tests/g1/test_sim_nav.sh   # the corridor behind the counter peninsula
 #
 # Builds core_ws for the G1 and starts the sim (h12_mujoco.py --g1) headless,
@@ -27,9 +26,7 @@
 # host, and nothing talks to the robot. ROS_DOMAIN_ID must not be 0.
 #
 # Env:
-#   GOLEM_SIM_ODOM  1: the sim publishes its ground truth and the bringup runs
-#               odom_source:=sim_gt; unset or 0: fastlio (the shell's value;
-#               docker/.env's does not apply)
+#   GOLEM_SIM_ODOM must be unset or 0: the shared pipeline needs FAST-LIO.
 #   CORE_WS     a core_ws to build in place and use (default the repo's, built
 #               into container_cache/g1_tests; see common.sh)
 #   OUT         output directory, new or empty (default
@@ -54,12 +51,12 @@ set -eo pipefail
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [ -n "${1:-}" ]; then
-    echo "usage: [GOLEM_SIM_ODOM=1] $0" >&2
+    echo "usage: $0" >&2
     exit 2
 fi
 case "$(echo "${GOLEM_SIM_ODOM:-0}" | tr '[:upper:]' '[:lower:]')" in
     0|off|false|no|'') ODOM=fastlio; SIM_ODOM=0 ;;
-    *) ODOM=sim_gt; SIM_ODOM=1 ;;
+    *) echo 'golem_slam requires FAST-LIO: leave GOLEM_SIM_ODOM unset.' >&2; exit 2 ;;
 esac
 # the lidar stays on: the test needs it
 SIM_ENV=(-e "GOLEM_SIM_ODOM=$SIM_ODOM" -e "GOLEM_SPAWN_BACKOFF=${NAV_BACKOFF:-2.0}" -e "NAV_GOAL=${NAV_GOAL:-}"

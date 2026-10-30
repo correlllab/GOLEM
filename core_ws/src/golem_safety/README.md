@@ -50,7 +50,7 @@ or when its exit sequence overruns its length by more than 1 s
 | pub | `/safety/heartbeat` | `std_msgs/Bool` | reliable, depth 10 | 10 Hz on the steady clock once relaying can begin: true, then false once the estop latches |
 
 The topic names are the config's `topics` (and `estop`) values; the table gives the
-defaults, which every carried config uses. `h12_lowerbody_rl`, `lmg_deploy` and `h12_skills`
+defaults, which every carried config uses. `h12_lowerbody_rl`, `lmg_deploy` and `golem_skills`
 read `/safety/heartbeat` on the H1-2, and `h12_lowerbody_rl` starts pre-posing the legs on
 the first beat, so a beat means relaying can begin. The node publishes none until the
 engage conditions that do not depend on the inputs hold: the newest `/lowstate` reports the
@@ -258,11 +258,11 @@ ros2 run golem_safety combine_chunks.py --load /tmp/golem_safety/<run> --save /t
 
 ## Tests
 
-In the G1-mode container (the H1-2 and the G1 tests both run there; `--restart` replaces a
+In the `ros` container (the H1-2 and the G1 tests both run there; `--restart` replaces a
 running `golem_ros` container):
 
 ```bash
-docker/scripts/docker_run.sh ros --restart --g1 /home/code/h12_sim_scripts/launch_ros.sh bash -lc \
+docker/scripts/docker_run.sh ros --restart /home/code/h12_sim_scripts/launch_ros.sh bash -lc \
   'export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 && cd /home/code/core_ws && colcon build --packages-select golem_safety && source install/setup.bash && colcon test --packages-select golem_safety --event-handlers console_direct+; colcon test-result --verbose'
 ```
 

@@ -43,11 +43,11 @@ below depend on it.
 | Step | What happens |
 |---|---|
 | 1. Freeze the code | Clean `git status`, note `git rev-parse HEAD`. |
-| 2. Network | `docker/.env`: `ROS_DOMAIN_ID=0`, `GOLEM_ROBOT=g1`, `G1_DDS_INTERFACE=` the wired port (ours: `enp130s0`). See [DDS and networking](dds.md). |
+| 2. Network | `docker/.env`: `ROS_DOMAIN_ID=0`. See [DDS and networking](dds.md). |
 | 3. Power | Laptop on AC, lid open, container run under `systemd-inhibit`. |
 | 4. Robot and people | Robot in debug mode, hanging in the gantry, which carries its whole weight. Nobody within reach of the arms or the legs. |
-| 5. Start the container | `docker/scripts/docker_run.sh ros --g1`; it prints `robot: g1` and asks you to confirm domain 0. |
-| 6. Read-only checks | Gate: the container is the G1's and pinned to the robot's port, or exit and fix `docker/.env` and the shell's exports. Then nothing else writes the command topics, `rt/lowstate` arrives, and every joint is inside the safety layer's estop limits. |
+| 5. Start the container | `docker/scripts/docker_run.sh ros`; it asks you to confirm domain 0. |
+| 6. Read-only checks | Gate: the container is on domain 0, or exit and fix `docker/.env` and the shell's exports. Then nothing else writes the command topics, `rt/lowstate` arrives, and every joint is inside the safety layer's estop limits. |
 | 7. First launch: the arms | `ros2 launch golem_bringup g1_real_robot.launch.py use_hands:=false use_rviz:=false`: the zero-gain stream, the heartbeat, the arms' start-up. The legs stay limp. |
 | 8. Named configs | Send only `arms_front_45` and `home` on `/named_config`, one at a time, `home` last. |
 | 9. Stop the bringup | Stop the controller alone (the arms go limp, the waist holds), then Ctrl+C the launch, with the gantry carrying the robot. |
@@ -89,8 +89,10 @@ estop, restart the whole bringup.
   every motor off**. That frozen target does not balance the robot, and it
   stands until the safety layer estops for another reason or the bringup stops
   ([Safety layer](safety.md), Quiet inputs). Keep the robot on a gantry.
-- **Navigation.** Sim only. The real bringup refuses `use_nav:=true` until the
-  real MID-360 lidar is connected.
+- **Navigation.** The real bringup starts the MID-360 driver and `golem_slam`
+  by default (`use_nav`); neither has run on our G1. Nav2 only commands
+  `/cmd_vel` for a `/navigate_to_pose` goal, and only the walking node reads
+  it. Pass `use_nav:=false` to keep them out of a session.
 
 ## The checklist
 
@@ -127,19 +129,12 @@ The workspace is built with `--symlink-install`, so a Python edit under
 
   ```
   ROS_DOMAIN_ID=0
-  GOLEM_ROBOT=g1
-  G1_DDS_INTERFACE=enp130s0
   ```
 
 - `ip -br addr show dev enp130s0` shows `UP` and `192.168.123.222/24` (the
   robot's subnet and addresses: [DDS and networking](dds.md#the-robots-network)).
-- With the G1 selected, `docker_run.sh` refuses domain 0 if
-  `G1_DDS_INTERFACE` is empty, names no interface on the laptop, is not `UP`,
-  or has no IPv4 address. It also refuses a `ROS_DOMAIN_ID` that is not an
-  integer from 0 to 232, as in a `docker/.env` with Windows line endings.
-  With the H1-2 selected there is no interface check at all, which is why
-  step 5 selects the G1 twice (`GOLEM_ROBOT=g1` and `--g1`) and checks the
-  `robot:` line.
+- `docker_run.sh` refuses a `ROS_DOMAIN_ID` that is not an integer from 0 to
+  232, as in a `docker/.env` with Windows line endings.
 
 ### 3. Power and sleep (laptop shell)
 
@@ -178,23 +173,17 @@ From the repo root in a laptop shell:
 
 ```bash
 systemd-inhibit --what=sleep:idle:handle-lid-switch --who=G1 --why="real-robot session" \
-    docker/scripts/docker_run.sh ros --g1
+    docker/scripts/docker_run.sh ros
 ```
 
-The wrapper prints `robot: g1`, then asks:
+The wrapper asks:
 
 ```
 Domain 0 is the REAL ROBOT bus.
-  robot: g1
-  interface: enp130s0 (IPv4 192.168.123.222/24)
 Proceed? [y/N]
 ```
 
-Answer `y` only if it names `robot: g1` and the robot's wired port with its
-address. By then the wrapper has refused a missing, `DOWN` or unaddressed
-`G1_DDS_INTERFACE`, but it does not know which port is the robot's: a wrong pin
-such as `wlan0` with its WiFi address passes. Step 6 starts with the gate that
-catches it.
+Answer `y` to proceed.
 
 If the wrapper stops with `golem_ros already exists`, a container from an
 earlier run is still there. Find out what it runs (`docker ps -a`,
@@ -202,7 +191,7 @@ earlier run is still there. Find out what it runs (`docker ps -a`,
 with step 9 first: `--restart` removes the old container with `docker rm -f`,
 which kills every node at once, without the controller's last command
 ([Safety layer](safety.md), Stopping). Then start this one with
-`docker/scripts/docker_run.sh ros --restart --g1` under the same
+`docker/scripts/docker_run.sh ros --restart` under the same
 `systemd-inhibit`.
 
 The container builds `core_ws` with the G1's packages before it opens the
@@ -217,25 +206,19 @@ hand anyway, run the container's own build again:
 
 ### 6. Read-only checks (terminal 1, before launching anything)
 
-**Gate: the container is the G1's, on domain 0, pinned to the robot's port.**
+**Gate: the container is on domain 0.**
 
 ```bash
-echo "$GOLEM_ROBOT $ROS_DOMAIN_ID $G1_DDS_INTERFACE"
-cat /home/code/cyclonedds_local.xml
+echo "$ROS_DOMAIN_ID"
 ```
 
-The two lines must read exactly:
+The output must read `0`.
 
-```
-g1 0 enp130s0
-<CycloneDDS><Domain Id="any"><General><Interfaces><NetworkInterface name="enp130s0"/></Interfaces></General></Domain></CycloneDDS>
-```
-
-If either line differs, `exit` the container and fix `docker/.env` (step 2).
+If it differs, `exit` the container and fix `docker/.env` (step 2).
 A variable exported in the laptop shell wins over `docker/.env`, so in the
 shell you start the container from, also check
-`env | grep -E '^(ROS_DOMAIN_ID|GOLEM_ROBOT|G1_DDS_INTERFACE)='` and `unset`
-any of them that disagrees with step 2. Then start again at step 5. Do not
+`env | grep '^ROS_DOMAIN_ID='` and `unset`
+it if it disagrees with step 2. Then start again at step 5. Do not
 continue.
 
 Nothing else may be writing the robot's command topics. An empty listing
@@ -406,16 +389,17 @@ What you should see, beyond step 7:
    /home/code/g1_homie. Silent until golem_safety beats on
    /safety/heartbeat, ...`. It starts 2 s after the controller and sends nothing
    while it waits; it may print `waiting to start: <reason>`. It waits for the
-   heartbeat, for 1 s of steady, on-time and upright `rt/lowstate`, for the
-   tick to run at 0.9-1.1 s per s of wall clock, and for the arm controller's
-   commands (`g1_homie`'s README, Behavior).
-2. `moving the legs from where they are to the default pose over 2.0 s
-   (rt/lowstate's tick ran at 1.00 s per s of wall clock)`, and the safety
+   heartbeat and an upright `rt/lowstate` (`g1_homie`'s README, Behavior).
+2. `moving the legs from where they are to the default pose over 2.0 s`, and the safety
    layer's `input_engaged` with `"source": "split_mode_lower"`. The legs move in
    a straight line from where they hang to HOMIE's default pose over 2 s.
 3. `legs at the default pose: holding it until the operator confirms (ros2
    service call /lowerbody/confirm_engage std_srvs/srv/Trigger)`. The legs hold
-   the pose, with every fault check active.
+   the pose, with every fault check active. `the policy may start
+   (rt/lowstate's tick ran at 1.00 s per s of wall clock)` follows once 1 s of
+   steady, on-time `rt/lowstate`, the tick at 0.9-1.1 s per s of wall clock and
+   the arm controller's commands have held; until then a confirm is refused with
+   the reason, and the node may print `the policy waits: <reason>`.
 4. The confirm, in terminal 2:
 
    ```bash
@@ -448,9 +432,8 @@ walking node keeps commanding the legs until the Ctrl+C.
    ```
 
 2. Run `exit` in terminal 1. The container stops and `systemd-inhibit` lets go.
-3. In a laptop shell, set `docker/.env` back to `ROS_DOMAIN_ID=1`,
-   `GOLEM_ROBOT=h12` and an empty `G1_DDS_INTERFACE=`, so the next container
-   starts on the sim domain.
+3. In a laptop shell, set `docker/.env` back to `ROS_DOMAIN_ID=1` and
+   `GOLEM_ROBOT=h12`, so the next container starts on the sim domain.
 
 A controller that dies without its last command (a crash, `docker rm -f`)
 leaves the waist and arms on its last command: the safety layer holds it and

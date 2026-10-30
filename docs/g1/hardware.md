@@ -8,7 +8,7 @@ order and the loader quirks). How the laptop reaches the robot is in
 
 | | |
 | --- | --- |
-| Variant | `mode_machine` 5: 29 DoF rev 1.0, 4010 wrist. Model: `CL_Assets/g1/g1_description/g1_29dof_with_hand_rev_1_0` |
+| Variant | `mode_machine` 5: 29 DoF rev 1.0, 4010 wrist. Model: `CL_Assets/g1/g1_description/g1_29dof_with_hand_rev_1_0.{urdf,xml}` |
 | Waist | 3 joints: yaw, roll, pitch |
 | Hands | Dex3-1, left and right |
 | Motion computer | `192.168.123.161`, hostname `Unitree`. Runs Unitree's control; not for our code |

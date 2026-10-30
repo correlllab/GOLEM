@@ -24,7 +24,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Initialize code submodules (no large asset downloads)
-        run: git submodule update --init CL_isaaclab_sim unitree_sdk2_python
+        # .gitmodules uses SSH URLs; the runner has no SSH key, and both are public
+        run: |
+          git config --global url."https://github.com/".insteadOf git@github.com:
+          git submodule update --init CL_isaaclab_sim unitree_sdk2_python
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'

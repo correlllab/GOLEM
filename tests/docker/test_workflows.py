@@ -591,12 +591,12 @@ if 'config' in sys.argv:
         services = self.compose_config('docker-compose.yml', 'docker-compose.g1.yml', profile='robocasa')
         sim = services['robocasa']['environment']
         self.assertEqual(sim['GOLEM_ROBOT'], 'g1')
-        for key in ('GOLEM_CMD_TIMEOUT', 'GOLEM_LIDAR',
-                    'GOLEM_LIDAR_POINTS', 'GOLEM_LIDAR_HZ', 'GOLEM_CAMERA_HZ', 'GOLEM_SPAWN_BACKOFF'):
+        # empty: the sim's own defaults (g1_sensors.py), e.g. camera scale 0.5
+        for key in ('GOLEM_CMD_TIMEOUT', 'GOLEM_LIDAR', 'GOLEM_LIDAR_POINTS', 'GOLEM_LIDAR_HZ',
+                    'GOLEM_CAMERA_HZ', 'GOLEM_CAMERA_SCALE', 'GOLEM_SPAWN_BACKOFF'):
             self.assertEqual(sim[key], '', key)
         self.assertNotIn('G1_DDS_INTERFACE', sim)
         self.assertNotIn('GOLEM_ARM_SDK_TIMEOUT', sim)
-        self.assertEqual(sim['GOLEM_CAMERA_SCALE'], '1.0')
         overlay = (self.root / 'docker/docker-compose.g1.yml').read_text()
         self.assertNotIn('ros:', overlay)
         self.assertNotIn('cyclonedds_local.xml', overlay)

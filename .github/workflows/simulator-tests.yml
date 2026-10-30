@@ -30,13 +30,15 @@ jobs:
           git submodule update --init CL_isaaclab_sim unitree_sdk2_python
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          # cyclonedds 0.10.2 ships wheels (with its C library) up to 3.10, the
+          # images' Python; on 3.11 pip builds it against jammy's 0.8.2 and fails
+          python-version: '3.10'
       - name: Install test dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cyclonedds-dev
-          python -m pip install torch==2.7.0 --index-url https://download.pytorch.org/whl/cpu
-          CYCLONEDDS_HOME=/usr python -m pip install -r tests/requirements-isaac-cpu.txt
+          # torch's own index lacks some of its dependencies' build tools
+          python -m pip install torch==2.7.0 --index-url https://download.pytorch.org/whl/cpu \
+            --extra-index-url https://pypi.org/simple
+          python -m pip install -r tests/requirements-isaac-cpu.txt
       - name: Isaac Lab interface and control regressions
         env:
           PYTHONPATH: CL_isaaclab_sim:unitree_sdk2_python

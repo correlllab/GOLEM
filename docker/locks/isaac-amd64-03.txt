@@ -1,0 +1,4 @@
+-c isaac-amd64.txt
+huggingface-hub==0.36.2
+numpy==1.26.4
+psutil==5.9.8

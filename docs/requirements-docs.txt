@@ -1,0 +1,6 @@
+# Pinned requirements for building the GOLEM documentation site.
+# Install into a virtual environment, then run `mkdocs serve` or
+# `mkdocs build --strict` from the repository root.
+mkdocs==1.6.1
+mkdocs-material==9.7.7
+pymdown-extensions==12.1

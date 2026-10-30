@@ -18,7 +18,7 @@ core_ws bind mount and survives container restarts:
 <id> is "<YYYYmmdd_HHMMSS_mmm>_<seq>" so artifacts sort chronologically and
 group by call. Set MODEL_LOG_DIR to override the output root (mainly for tests).
 
-This module is intentionally duplicated verbatim in h12_skills and
+This module is intentionally duplicated verbatim in golem_skills and
 model_server — they are independent ROS packages with no shared dependency.
 Keep the copies in sync.
 """

@@ -1,0 +1,200 @@
+{
+  "source": "see README.md",
+  "joint_names": [
+    "left_hip_yaw_joint",
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_yaw_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "torso_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint"
+  ],
+  "position_limits": [
+    {
+      "low": -0.43,
+      "high": 0.43
+    },
+    {
+      "low": -3.14,
+      "high": 2.5
+    },
+    {
+      "low": -0.43,
+      "high": 3.14
+    },
+    {
+      "low": -0.12,
+      "high": 2.19
+    },
+    {
+      "low": -0.897334,
+      "high": 0.523598
+    },
+    {
+      "low": -0.261799,
+      "high": 0.261799
+    },
+    {
+      "low": -0.43,
+      "high": 0.43
+    },
+    {
+      "low": -3.14,
+      "high": 2.5
+    },
+    {
+      "low": -3.14,
+      "high": 0.43
+    },
+    {
+      "low": -0.12,
+      "high": 2.19
+    },
+    {
+      "low": -0.897334,
+      "high": 0.523598
+    },
+    {
+      "low": -0.261799,
+      "high": 0.261799
+    },
+    {
+      "low": -2.35,
+      "high": 2.35
+    },
+    {
+      "low": -3.14,
+      "high": 1.57
+    },
+    {
+      "low": -0.38,
+      "high": 3.4
+    },
+    {
+      "low": -2.66,
+      "high": 3.01
+    },
+    {
+      "low": -0.95,
+      "high": 3.18
+    },
+    {
+      "low": -3.01,
+      "high": 2.75
+    },
+    {
+      "low": -0.4625,
+      "high": 0.4625
+    },
+    {
+      "low": -1.27,
+      "high": 1.27
+    },
+    {
+      "low": -3.14,
+      "high": 1.57
+    },
+    {
+      "low": -3.4,
+      "high": 0.38
+    },
+    {
+      "low": -3.01,
+      "high": 2.66
+    },
+    {
+      "low": -0.95,
+      "high": 3.18
+    },
+    {
+      "low": -2.75,
+      "high": 3.01
+    },
+    {
+      "low": -0.4625,
+      "high": 0.4625
+    },
+    {
+      "low": -1.27,
+      "high": 1.27
+    }
+  ],
+  "velocity_limits": [
+    23.0,
+    23.0,
+    23.0,
+    14.0,
+    9.0,
+    9.0,
+    23.0,
+    23.0,
+    23.0,
+    14.0,
+    9.0,
+    9.0,
+    23.0,
+    9.0,
+    9.0,
+    20.0,
+    20.0,
+    31.4,
+    31.4,
+    31.4,
+    9.0,
+    9.0,
+    20.0,
+    20.0,
+    31.4,
+    31.4,
+    31.4
+  ],
+  "torque_limits": [
+    200.0,
+    200.0,
+    200.0,
+    300.0,
+    60.0,
+    40.0,
+    200.0,
+    200.0,
+    200.0,
+    300.0,
+    60.0,
+    40.0,
+    200.0,
+    40.0,
+    40.0,
+    18.0,
+    18.0,
+    19.0,
+    19.0,
+    19.0,
+    40.0,
+    40.0,
+    18.0,
+    18.0,
+    19.0,
+    19.0,
+    19.0
+  ]
+}

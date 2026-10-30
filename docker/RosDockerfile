@@ -17,6 +17,7 @@
 # IK stack comes before the volatile vision ML stack for the same reason.
 # ==============================
 FROM golem_base:latest
+COPY docker/locks/ros-*.txt /opt/golem-locks/
 
 ARG http_proxy
 ARG https_proxy
@@ -78,7 +79,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #    the cmake build. CMAKE_POLICY_VERSION_MINIMUM works around upstream's
 #    outdated cmake_minimum_required.
 # -----------------------------------------------------------------------------
-RUN git clone --depth 1 https://github.com/Livox-SDK/Livox-SDK2.git /tmp/Livox-SDK2 && \
+RUN git clone https://github.com/Livox-SDK/Livox-SDK2.git /tmp/Livox-SDK2 && \
+    git -C /tmp/Livox-SDK2 checkout --quiet 08f523c930b2f0ba1e98a6afaa8d7476bf479908 && \
     cd /tmp/Livox-SDK2 && mkdir build && cd build && \
     cmake .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5 && make -j"$(nproc)" && make install && \
     ldconfig && \
@@ -91,7 +93,13 @@ RUN git clone --depth 1 https://github.com/Livox-SDK/Livox-SDK2.git /tmp/Livox-S
 #    `--ignore-installed blinker` works around apt's old python3-blinker that
 #    pip cannot cleanly uninstall.
 # -----------------------------------------------------------------------------
-RUN pip install --no-cache-dir --ignore-installed blinker \
+# Remove the NumPy-2 kinematics inherited from base, including its cmeel C++
+# libraries, before installing the ROS ABI. The next step runs with pip's global
+# --ignore-installed, which writes over packages without uninstalling them.
+RUN pip uninstall -y pin libpinocchio coal libcoal eigenpy \
+        cmeel cmeel-assimp cmeel-boost cmeel-console-bridge cmeel-octomap \
+        cmeel-qhull cmeel-tinyxml2 cmeel-urdfdom cmeel-zlib
+RUN pip install -c /opt/golem-locks/ros-amd64-01.txt --no-cache-dir --ignore-installed blinker \
         "numpy<2" \
         "scikit-learn>=1.4" \
         pin-pink \
@@ -111,7 +119,7 @@ RUN pip install --no-cache-dir --ignore-installed blinker \
 #    because it is not on PyPI. Model weights ship under
 #    model_server/weights and are bind-mounted via core_ws.
 # -----------------------------------------------------------------------------
-RUN pip install --no-cache-dir \
+RUN pip install -c /opt/golem-locks/ros-amd64-02.txt --no-cache-dir \
         "transformers==4.47.1" \
         "google-genai==1.30.0" \
         "matplotlib==3.9.3" \
@@ -124,22 +132,23 @@ RUN pip install --no-cache-dir \
         "pycocotools==2.0.8" \
         "ultralytics==8.3.52"
 
-RUN pip install --no-cache-dir \
+RUN pip install -c /opt/golem-locks/ros-amd64-03.txt --no-cache-dir \
         "opencv-python-headless==4.10.0.84" \
         "iopath==0.1.10"
 
 RUN git clone https://github.com/openai/CLIP.git /opt/clip \
     && cd /opt/clip && git checkout a1d071733d7111c9c014f024669f959182114e33
-RUN pip install --no-cache-dir --no-deps /opt/clip
+RUN pip install -c /opt/golem-locks/ros-amd64-04.txt --no-cache-dir --no-deps /opt/clip
 
 # -----------------------------------------------------------------------------
 # 5. SAM3 — vendored from git.
 #    SAM3's setup.py produces UNKNOWN-0.0.0; bypass with PYTHONPATH instead.
 #    (hydra-core kept: used for model config resolution.)
 # -----------------------------------------------------------------------------
-RUN pip install --no-cache-dir "hydra-core>=1.3.2"
+RUN pip install -c /opt/golem-locks/ros-amd64-05.txt --no-cache-dir "hydra-core>=1.3.2"
 
-RUN git clone --depth 1 https://github.com/facebookresearch/sam3.git /opt/sam3
+RUN git clone https://github.com/facebookresearch/sam3.git /opt/sam3 && \
+    git -C /opt/sam3 checkout --quiet 660a5e9e1b8b4c02c0ad97229b88a09a6e4ff5b7
 ENV PYTHONPATH=/opt/sam3:${PYTHONPATH}
 
 # -----------------------------------------------------------------------------
@@ -181,7 +190,7 @@ RUN rm -rf /usr/local/lib/python3.10/dist-packages/setuptools \
            /usr/local/lib/python3.10/dist-packages/_distutils_hack \
            /usr/local/lib/python3.10/dist-packages/wheel \
            /usr/local/lib/python3.10/dist-packages/wheel-*.dist-info \
-    && pip install --no-cache-dir --no-deps "numpy<2" "setuptools==59.6.0" "wheel<0.44"
+    && pip install -c /opt/golem-locks/ros-amd64-06.txt --no-cache-dir --no-deps "numpy<2" "setuptools==59.6.0" "wheel<0.44"
 
 # -----------------------------------------------------------------------------
 # 8. Workspace integration. Base already sources /opt/ros/humble in bashrc;
@@ -208,7 +217,7 @@ WORKDIR /home/code/core_ws
 CMD ["/home/code/h12_sim_scripts/launch_ros.sh"]
 
 # -----------------------------------------------------------------------------
-# Tkinter — needed by h1_bringup's slider_debugger (Tk GUI for live wrist /
+# Tkinter — needed by golem_bringup's slider_debugger (Tk GUI for live wrist /
 # gripper control). Appended at the end so iterating on this layer does not
 # bust the heavy apt / pip / SAM / robocasa layers above.
 # -----------------------------------------------------------------------------
@@ -217,7 +226,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
-# Nav2 + SLAM + rqt + dev/debug ROS packages used by h1_navigation.launch.py
+# Nav2 + SLAM + rqt + dev/debug ROS packages used by h12_navigation.launch.py
 # and day-to-day H1 debugging. Appended at the end (same reasoning as the
 # python3-tk block above) so iterating on this list does not bust the heavy
 # apt / pip / SAM layers earlier in the file.
@@ -285,18 +294,37 @@ ENV GRASPGENX_CHECKPOINT_DIR=/opt/graspgenx/ext/graspgenx_checkpoints \
 # wheel against it (PYTHONPATH + --no-build-isolation), then install the prebuilt
 # wheel with the system pip: the build sees PEP 621, but the system's
 # colcon-critical setuptools 59.6.0 is never touched. Source stays at /opt/graspgenx.
-RUN git clone --depth 1 https://github.com/NVlabs/GraspGenX.git /opt/graspgenx \
-    && pip install --no-cache-dir --target=/tmp/bsetup "setuptools>=64,<78" wheel setuptools-scm \
+RUN git clone https://github.com/NVlabs/GraspGenX.git /opt/graspgenx && \
+    git -C /opt/graspgenx checkout --quiet b9429097728cb1c430dd78b92edf17ba318aad03 \
+    && pip install -c /opt/golem-locks/ros-amd64-07.txt --no-cache-dir --target=/tmp/bsetup "setuptools>=64,<78" wheel setuptools-scm \
     && SETUPTOOLS_SCM_PRETEND_VERSION=1.0.0 PYTHONPATH=/tmp/bsetup \
          pip wheel --no-deps --no-build-isolation -w /tmp/gwheel /opt/graspgenx \
-    && pip install --no-cache-dir --no-deps /tmp/gwheel/graspgenx-*.whl \
+    && pip install -c /opt/golem-locks/ros-amd64-07.txt --no-cache-dir --no-deps /tmp/gwheel/graspgenx-*.whl \
     && rm -rf /tmp/bsetup /tmp/gwheel
 
-# Remove a broken Pillow dist-info ghost (pillow-12.2.0.dist-info holds only a
-# REQUESTED file, no METADATA) left in an upstream layer; it crashes pip's
-# metadata scan the moment a Pillow-dependent dep is touched. The real, intact
-# Pillow 11.0.0 install is untouched.
-RUN rm -rf /usr/local/lib/python3.10/dist-packages/pillow-12.2.0.dist-info
+# Sweep orphaned .dist-info ghosts: directories holding a stray file but no
+# METADATA. pip reports such a ghost's version from the DIRECTORY NAME (so
+# `pip freeze` emits a version that is not installed), and hard-crashes with
+# "OSError: [Errno 2] ... /METADATA" the moment a dep of that package is touched.
+#
+# How one is manufactured here (Pillow is the recurring victim): the base image's
+# `uv pip install torch torchvision` writes pillow-<X>.dist-info INCLUDING a
+# REQUESTED entry in its RECORD. The controller-stack install in section 3
+# re-installs that same pillow <X> for meshcat/open3d -- its
+# `--ignore-installed` is a GLOBAL flag, not scoped to `blinker` -- overwriting
+# the dist-info with a pip-written RECORD that does NOT list REQUESTED (pillow
+# was not explicitly requested). The later `Pillow==11.0.0` pin then uninstalls
+# <X>, removing every RECORD-listed file and leaving uv's orphaned REQUESTED
+# behind.
+#
+# Version-agnostic on purpose: a hardcoded dist-info name becomes a silent no-op
+# as soon as upstream ships a different Pillow. The real, intact Pillow 11.0.0
+# install is untouched; the assert proves it.
+RUN for d in /usr/local/lib/python3.10/dist-packages/*.dist-info; do \
+        [ -d "$d" ] || continue; \
+        if [ ! -e "$d/METADATA" ]; then echo "removing orphaned dist-info: $d"; rm -rf "$d"; fi; \
+    done \
+    && python3 -c "import PIL, importlib.metadata as m; r=m.version('pillow'); assert r == PIL.__version__, f'pillow metadata {r} != runtime {PIL.__version__}'; print('pillow ok:', r)"
 
 # Freeze the ENTIRE current environment as the additive-install constraints (see
 # header). grep '==' drops editable / file-url / comment lines pip freeze emits.
@@ -304,7 +332,7 @@ RUN pip freeze 2>/dev/null | grep '==' > /opt/graspgenx-constraints.txt
 
 # Additive GraspGenX deps that install cleanly under the full freeze (validated
 # in a throwaway container: exit 0, every pinned package unchanged).
-RUN PIP_CONSTRAINT=/opt/graspgenx-constraints.txt pip install --no-cache-dir \
+RUN PIP_CONSTRAINT=/opt/graspgenx-constraints.txt pip install -c /opt/golem-locks/ros-amd64-08.txt --no-cache-dir \
         "trimesh==4.5.3" \
         "yourdfpy==0.0.56" \
         torch-geometric \
@@ -327,7 +355,7 @@ RUN PIP_CONSTRAINT=/opt/graspgenx-constraints.txt pip install --no-cache-dir \
 # numpy/Pillow/setuptools stay pinned.
 RUN grep -viE '^huggingface[-_]hub==' /opt/graspgenx-constraints.txt \
         > /opt/graspgenx-constraints-nohf.txt \
-    && PIP_CONSTRAINT=/opt/graspgenx-constraints-nohf.txt pip install --no-cache-dir \
+    && PIP_CONSTRAINT=/opt/graspgenx-constraints-nohf.txt pip install -c /opt/golem-locks/ros-amd64-09.txt --no-cache-dir \
         "huggingface-hub==0.25.2" \
         "diffusers==0.11.1"
 
@@ -346,7 +374,7 @@ RUN grep -viE '^huggingface[-_]hub==' /opt/graspgenx-constraints.txt \
 # tyro, plyfile, ...) are purely additive.
 RUN grep -viE '^psutil==' /opt/graspgenx-constraints.txt \
         > /opt/graspgenx-constraints-viser.txt \
-    && PIP_CONSTRAINT=/opt/graspgenx-constraints-viser.txt pip install --no-cache-dir \
+    && PIP_CONSTRAINT=/opt/graspgenx-constraints-viser.txt pip install -c /opt/golem-locks/ros-amd64-10.txt --no-cache-dir \
         "viser==0.2.23" "psutil==5.9.8"
 
 # Asset staging is deferred to integration (install-only scope). We just create
@@ -362,7 +390,7 @@ RUN mkdir -p "$GRASPGENX_CHECKPOINT_DIR" "$GRASPGENX_GRIPPER_CFG_DIR"
 # MuJoCo MPC (MJPC) — badinkajink/mujoco_mpc @ extended_hw_patched, cloned to
 # /home/code/mujoco_mpc, built, and installed so later code can `import
 # mujoco_mpc` (the gRPC Agent API for real-time predictive control, e.g. the
-# h12_deploy_mjpc).
+# deploy_mjpc).
 #
 # Appended last (same reasoning as the GraspGenX / nav2 / tk blocks above) so
 # iterating here can't bust the heavy apt / pip / SAM / robocasa layers earlier
@@ -394,7 +422,7 @@ RUN mkdir -p "$GRASPGENX_CHECKPOINT_DIR" "$GRASPGENX_GRIPPER_CFG_DIR"
 #    libc++, exactly as CI does — so libc++-*-dev are deliberately NOT installed:
 #    libc++abi-13-dev pulls libunwind-13-dev, which Conflicts with libunwind-dev
 #    and would make apt silently REMOVE libceres-dev -> ros-humble-navigation2 /
-#    nav2-bringup / slam-toolbox, breaking h1_navigation.launch.py).
+#    nav2-bringup / slam-toolbox, breaking h12_navigation.launch.py).
 #    llvm-13 + lld-13: MuJoCo builds its deps (ccd, qhull, …) with LTO/IPO, so
 #    CMake archives/links them with clang's `llvm-ar`/`llvm-ranlib`/`ld.lld`
 #    rather than GNU binutils. The bare `clang-13` package doesn't ship those —
@@ -422,7 +450,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #    docker_build.sh overrides it with the live `mujoco_mpc` submodule pin
 #    (git rev-parse HEAD:mujoco_mpc), so the baked MJPC can't drift from the gitlink.
 ARG MJPC_REF=c7fc99f5028d2c09d14060d6d85202a377eefe49
-RUN git clone --branch extended_hw --single-branch \
+RUN git clone \
         https://github.com/badinkajink/mujoco_mpc.git /home/code/mujoco_mpc \
     && git -C /home/code/mujoco_mpc checkout --quiet "${MJPC_REF}"
 
@@ -442,26 +470,25 @@ RUN git clone --branch extended_hw --single-branch \
 #    to 82 — the latter is re-clamped back to 59.6.0 in step 6 below.
 RUN grep -viE '^(grpcio|grpcio-tools|grpcio-status|protobuf|mujoco)==' \
         /opt/graspgenx-constraints.txt > /opt/mjpc-constraints.txt \
-    && PIP_CONSTRAINT=/opt/mjpc-constraints.txt pip install --no-cache-dir \
+    && PIP_CONSTRAINT=/opt/mjpc-constraints.txt pip install -c /opt/golem-locks/ros-amd64-11.txt --no-cache-dir \
         grpcio grpcio-tools protobuf "mujoco==3.2.3"
 
 # 4. Build the C++ agent_server, install the importable `mujoco_mpc` package,
 #    stage libmujoco, STASH the warm build tree as the incremental-cache seed,
-#    then REMOVE the source clone. The three source fixes that used to be sed'd
-#    in here now live as commits on extended_hw_patched, so the seed and the
-#    runtime-mounted submodule source are byte-identical (a hard requirement for
-#    the runtime incremental-build cache) and there is NO in-Dockerfile patching.
-#    The original gotchas still hold and are satisfied by those committed fixes
-#    plus build-first ordering:
+#    then REMOVE the source clone. Source fixes live as commits on the fork's
+#    extended_hw_patched branch, NOT as in-Dockerfile patching, so the seed and
+#    the runtime-mounted submodule source stay byte-identical (a hard requirement
+#    for the runtime incremental-build cache). Those commits plus build-first
+#    ordering are what satisfy these gotchas:
 #      (a) setup.py's build_py.copy_task_assets asserts build/mjpc/tasks exists,
 #          which only CMake (build_ext) produces — so run the CMake build FIRST;
 #          the install's build_ext re-config is then an incremental no-op. Building
 #          just agent_server pulls the copy_resources / copy_model_resources ALL
 #          targets that populate build/mjpc/tasks.
-#      (b) extended_hw deleted the standalone ui_agent_server executable, so the
-#          fork's setup.py no longer --targets/copies it (it aborted Ninja).
-#      (c) the stale h1_2_modified_magpie.xml.patch is replaced by a direct CMake
-#          copy of the base model in the fork's mjpc/tasks/CMakeLists.txt.
+#      (b) the fork has no standalone ui_agent_server executable, so its setup.py
+#          must not --target or copy one (that aborts Ninja).
+#      (c) the base model is copied directly by the fork's
+#          mjpc/tasks/CMakeLists.txt, not applied as an XML patch.
 #      (d) copy_task_assets globs are case-insensitive in the fork, so the H1-2
 #          UPPERCASE .STL meshes reach site-packages.
 #
@@ -525,7 +552,7 @@ RUN rm -rf /usr/local/lib/python3.10/dist-packages/setuptools \
            /usr/local/lib/python3.10/dist-packages/_distutils_hack \
            /usr/local/lib/python3.10/dist-packages/wheel \
            /usr/local/lib/python3.10/dist-packages/wheel-*.dist-info \
-    && pip install --no-cache-dir --no-deps "numpy<2" "setuptools==59.6.0" "wheel<0.44" \
+    && pip install -c /opt/golem-locks/ros-amd64-12.txt --no-cache-dir --no-deps "numpy<2" "setuptools==59.6.0" "wheel<0.44" \
     && rm -f /usr/local/lib/python3.10/dist-packages/distutils-precedence.pth
 
 # 6. Fail the build loudly if the package isn't importable, the server binary
@@ -544,7 +571,7 @@ assert b.exists(), f'agent_server binary missing at {b}'; \
 print('MJPC OK — mujoco', mujoco.__version__, '| agent_server:', b)"
 
 # -----------------------------------------------------------------------------
-# Intel RealSense ROS driver — h1_real_desktop_bringup.launch.py now includes
+# Intel RealSense ROS driver — h12_real_desktop.launch.py includes
 # cl_realsense's h12_hand_cameras.launch.py (both wrist cams' USB runs on the
 # companion desktop), which launches realsense2_camera_node. The apt package
 # pulls librealsense2 with it. image-transport-plugins supplies the
@@ -557,3 +584,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-realsense2-camera \
         ros-humble-image-transport-plugins \
     && rm -rf /var/lib/apt/lists/*
+
+# The controller shim links this pinned SDK. Install at build time so launching
+# a workspace does not require network access or a per-host SDK cache.
+ARG UNITREE_SDK_REF=63c6f53103e2f28e23b807d7399e92338c9d07d3
+RUN git clone https://github.com/unitreerobotics/unitree_sdk2.git /tmp/unitree_sdk2 \
+    && git -C /tmp/unitree_sdk2 checkout --quiet "${UNITREE_SDK_REF}" \
+    && cmake -S /tmp/unitree_sdk2 -B /tmp/unitree_sdk2/build -DCMAKE_INSTALL_PREFIX=/opt/unitree_install \
+    && cmake --install /tmp/unitree_sdk2/build \
+    && test -f /opt/unitree_install/lib/libunitree_sdk2.a \
+    && rm -rf /tmp/unitree_sdk2
+
+# -----------------------------------------------------------------------------
+# 3D occupancy mapping for h12_navigation.launch.py: octomap_server builds the
+# 3D map and the /projected_map the Nav2 costmaps load. The rviz plugins add
+# native OccupancyGrid/OcTree displays. Last, so it can't bust earlier layers.
+# -----------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-octomap-server \
+        ros-humble-octomap-rviz-plugins \
+    && rm -rf /var/lib/apt/lists/*
+
+# -----------------------------------------------------------------------------
+# G1 stack: onnxruntime runs HOMIE's walking policy (g1_homie); pynput,
+# evdev and xlib serve the G1 keyboard teleop examples; the jsp GUI drives
+# golem_ros2_models' display.launch.py. Last, so it can't bust earlier layers.
+# -----------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-joint-state-publisher-gui python3-evdev python3-xlib \
+    && rm -rf /var/lib/apt/lists/*
+# pynput's X backend refuses to import without a display; the dummy backend lets
+# the build-time import check run.
+RUN pip install -c /opt/golem-locks/ros-amd64-13.txt --no-cache-dir onnxruntime==1.23.2 pynput==1.8.1 \
+    && PYNPUT_BACKEND=dummy python3 -c "import onnxruntime, pynput"

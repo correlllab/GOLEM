@@ -1,0 +1,35 @@
+# octomap_server: 3D occupancy from the self-filtered FAST-LIO scan, and its
+# 2D projection (/projected_map) that both Nav2 costmaps load as their static
+# layer. Heights are in `map`, which level_odom makes gravity-aligned with the
+# floor at z = 0.
+octomap_server:
+  ros__parameters:
+    frame_id: map
+    base_frame_id: pelvis
+    # 0.10 m voxels and a 6 m ray range keep octomap_server at the 10 Hz scan
+    # rate on the onboard PC (~30% of one core). 0.05 m, or ranges of 8 m,
+    # saturate a core and the map falls behind the scan by most of a second.
+    resolution: 0.10
+    sensor_model.max_range: 6.0
+    sensor_model.hit: 0.7
+    sensor_model.miss: 0.4
+    sensor_model.min: 0.12
+    # Confidence cap: from 0.9, about 6 scans whose rays pass through a voxel
+    # free it (0.97 takes about 9), so moved objects and noise clear faster.
+    sensor_model.max: 0.9
+    # Points inserted (map frame): floor included so rays through free space
+    # clear stale voxels.
+    point_cloud_min_z: -0.5
+    point_cloud_max_z: 2.5
+    # Occupied voxels in this band become lethal in /projected_map and are the
+    # only ones drawn in /occupied_cells_vis_array. The lower bound sits above
+    # floor returns plus FAST-LIO's z drift; the upper bound clears the H1-2's
+    # height (~1.8 m) so overhangs it can walk under stay free.
+    occupancy_min_z: 0.15
+    occupancy_max_z: 1.9
+    filter_speckles: true
+    filter_ground_plane: false
+    use_height_map: true
+    color_factor: 0.8
+    publish_free_space: false
+    latch: true

@@ -1,0 +1,28 @@
+# G1 additions to docker-compose.yml; the host wrappers add this file for the G1
+# simulator (GOLEM_ROBOT=g1 or --g1) and never for the H1-2. It holds only what
+# depends on the simulated robot: the sim's robot and knobs. Every ros container
+# mounts and builds both robots' code and uses the shared CycloneDDS config from
+# docker-compose.yml.
+services:
+  robocasa:
+    environment:
+      GOLEM_ROBOT: g1
+      # Sim seconds of rt/lowcmd silence before the sim turns the motors off.
+      # Empty = the sim's default (0.5); a value that is not finite and
+      # positive stops the sim at startup. The H1-2 sim fails on an empty
+      # GOLEM_CMD_TIMEOUT, so only this overlay sets it.
+      GOLEM_CMD_TIMEOUT: ${GOLEM_CMD_TIMEOUT:-}
+      # MID-360 and head-camera cost knobs; empty = the sim's default.
+      # GOLEM_LIDAR=0 drops the lidar; GOLEM_LIDAR_POINTS is points per frame and
+      # GOLEM_LIDAR_HZ / GOLEM_CAMERA_HZ are the publish rates.
+      GOLEM_LIDAR: ${GOLEM_LIDAR:-}
+      GOLEM_LIDAR_POINTS: ${GOLEM_LIDAR_POINTS:-}
+      GOLEM_LIDAR_HZ: ${GOLEM_LIDAR_HZ:-}
+      GOLEM_CAMERA_HZ: ${GOLEM_CAMERA_HZ:-}
+      # Head-camera render scale of the real 1280x720; empty = g1_sensors.py's default.
+      GOLEM_CAMERA_SCALE: ${GOLEM_CAMERA_SCALE:-}
+      # Metres the robot is backed off the spawn counter into open floor (see
+      # h12_mujoco.py); empty = 0.
+      GOLEM_SPAWN_BACKOFF: ${GOLEM_SPAWN_BACKOFF:-}
+    # The sim builds its robot from CL_Assets/g1, which docker-compose.yml
+    # mounts for both robots.

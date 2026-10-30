@@ -33,15 +33,15 @@ frame_task IK plays that role through the safety layer.
 
 ## Usage
 
-### Real robot (companion desktop)
+### Real robot (onboard PC)
 
-The desktop bringup defaults to ALMI (`lowerbody:=almi`); every leg path
-stays behind the `start_position_verified` interlock. Hoist the robot first —
-snug, legs free to bend — and keep a hand on the e-stop. Launching IS the
-start of motion:
+The onboard bringup, `h12_real_robot.launch.py`, defaults to ALMI
+(`lowerbody:=almi`); every leg path stays behind the `start_position_verified`
+interlock. Hoist the robot first — snug, legs free to bend — and keep a hand
+on the e-stop. Launching IS the start of motion:
 
 ```bash
-ros2 launch h1_bringup h1_real_desktop_bringup.launch.py start_position_verified:=true
+ros2 launch golem_bringup h12_real_robot.launch.py start_position_verified:=true
 ```
 
 What happens, in order (`lowerbody_controller_node`):
@@ -81,11 +81,11 @@ forced to 0), above it walks. Publish `/cmd_vel` (teleop or nav2):
 - `cmd_gain` `[1.5, 1.0, 2.0]` amplifies commands before the policy sees
   them (the checkpoint undertracks, yaw worst) and `cmd_smooth_alpha` 0.15
   averages out sign-flipping follower corrections. Start with vx 0.2–0.3.
-- `almi` never auto-switches — auto_switch only toggles fame<->walk, so the
-  active policy stays pinned.
+- The controller never switches policies — `lowerbody:=almi` drives the legs
+  for the whole run.
 
 ### Sim
 
 ```bash
-ros2 launch h1_bringup h1_sim_bringup.launch.py lowerbody:=almi
+ros2 launch golem_bringup h12_sim.launch.py lowerbody:=almi
 ```

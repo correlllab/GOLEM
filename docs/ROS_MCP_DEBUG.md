@@ -23,7 +23,7 @@ Add `GOLEM_ROS_MCP=1` when you launch (it starts on `localhost:6082` inside the 
 
 ```bash
 GOLEM_DISPLAY=vnc GOLEM_RVIZ=vnc GOLEM_CAMERAS=0 \
-GOLEM_LOWERBODY=switch GOLEM_SLAM=1 GOLEM_NAV2=1 GOLEM_SPAWN_BACKOFF=1.5 \
+GOLEM_LOWERBODY=almi GOLEM_SLAM=1 GOLEM_NAV2=1 GOLEM_SPAWN_BACKOFF=1.5 \
 GOLEM_ROS_MCP=1 \
   docker compose -f docker/mac/docker-compose.yml up -d
 
@@ -58,7 +58,6 @@ To remove: `claude mcp remove ros_debug`.
 | `costmap_summary()` | global-costmap cell counts: lethal / inflated / free / unknown |
 | `nav_status()` | current nav2 plan: exists?, pose count, path length (m) |
 | `scan_status()` | is `/converted_scan` live? stamp + range count |
-| `set_lowerbody(mode)` | `'fame'` stand free, or `'walk'` hand over to the walk policy |
 | `drive(vx,vy,wz,duration)` | publish `/cmd_vel` for N seconds, then stop; reports start/end pose |
 | `wait_for(condition,timeout)` | block until `standing`/`fallen`/`stopped`/`moving`/`scan_live`/`nav_has_plan`/`sim_time>=N` |
 | `list_topics(filter)` / `echo_topic(topic)` / `topic_hz(topic)` | generic topic inspection |

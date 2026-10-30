@@ -1,0 +1,69 @@
+# Real G1, full body on /lowcmd: legs (slots 0-11) from a lower-body
+# controller, waist + arms (12-28) from the upper-body controller, merged here.
+# The robot must be in Unitree's debug mode (Unitree's controller released)
+# before the layer starts, since it writes every motor from boot; on estop every
+# motor is zeroed or damped (see estop_response).
+# From boot the layer streams zero gains on every motor (mode 0, every value 0:
+# every motor off) and checks every /lowstate against the estop limits. Each
+# input's slots carry its commands from its own first valid command once
+# /lowstate reports the G1's mode_machine (5): the arms run without the legs,
+# whose motors stay off until the lower-body controller commands. Once an input
+# has engaged, it is reported when quiet for its stale time, or /lowstate for
+# stale.state_seconds, while its last command keeps being relayed.
+mode: split_mode
+
+topics:
+  low_cmd_lower_in: /safety/lowcmd_lower_in
+  low_cmd_upper_in: /safety/lowcmd_upper_in
+  low_cmd_out: /lowcmd
+  low_state: /lowstate
+
+control:
+  publish_hz: 500.0
+  # Estop when /lowstate arrives this many ms later than the robot's own tick
+  # clock implies; a value <= 0 disables the check. It is off because the G1's
+  # /lowstate tick has not been measured on the real robot.
+  state_lag_ms: 0.0
+
+# Seconds. An input, or /lowstate, with no new sample for longer than this is
+# reported while its last command keeps being relayed; a value <= 0 disables
+# the report.
+stale:
+  # waist + arm input
+  upper_seconds: 2.0
+  # 10 periods of a 50 Hz walking policy
+  lower_seconds: 0.2
+  # 500 Hz on the robot
+  state_seconds: 0.1
+
+# The estop command on /lowcmd. zero: every motor off, so the robot drops and
+# must be supported (e.g. on a gantry). damp: every motor stays enabled with
+# kp = 0, q = dq = tau = 0 and the kd below, so it sinks instead of dropping.
+# keep_writing: the estop command keeps being written.
+estop_response:
+  mode: zero
+  # used by damp only: scalar or 29-entry list, at most limits.clip.kd_max;
+  # a starting value, not yet tuned on our G1
+  kd: 8.0
+  after: keep_writing
+
+limits:
+  # position_offset and the ratios are scalars or 29-entry lists (slot order) for
+  # per-joint tuning; kp_max and kd_max are single numbers. Ratios scale the joint
+  # limits in robots/g1.yaml (from tools/g1_joint_limits.py)
+  # untuned placeholders: set these with the lower-body controller
+  clip:
+    position_offset: 0.01
+    velocity_ratio: 0.10
+    torque_ratio: 0.60
+    kp_max: 200.0
+    kd_max: 10.0
+  estop:
+    position_offset: 0.0
+    velocity_ratio: 0.50
+    torque_ratio: 0.90
+
+logging:
+  enabled: true
+  base_dir: /tmp/golem_safety
+  chunk_prefix: chunk_

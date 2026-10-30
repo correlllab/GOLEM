@@ -61,7 +61,7 @@ BIN="$MJPC_BUILD/bin/agent_server"
 # 3. ALWAYS refresh the binary the bridge spawns: `from mujoco_mpc import agent`
 #    auto-runs <pkg>/mjpc/agent_server, so a C++ edit only takes effect once this
 #    exe is copied over. (Without this, a default rebuild is a no-op for the ROS
-#    bridge / h12_deploy_mjpc.)
+#    bridge / deploy_mjpc.)
 cp -a "$BIN" "$PKG/mjpc/agent_server"
 echo "[rebuild_mjpc] refreshed $PKG/mjpc/agent_server  (from $BIN)"
 

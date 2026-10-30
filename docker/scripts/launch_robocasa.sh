@@ -2,17 +2,17 @@
 # Usage: ./launch_robocasa.sh [--headless]
 # Windowed MuJoCo sim by default; pass --headless to disable the passive viewer
 # (auto-applied when no DISPLAY is reachable, e.g. SSH without X11 / CI).
-# Sim publishes:
-#   - rt/lowstate on CycloneDDS domain 1 (unitree_sdk2py)
-#   - /realsense/{head,left_hand,right_hand}/color/image_raw[/compressed],
-#     .../aligned_depth_to_color/image_raw[/compressedDepth], .../color/camera_info,
-#     /livox/lidar (CustomMsg), /livox/pointcloud, /livox/imu, /clock, and
-#     /{left,right}/gripper/state on ROS 2 (ROS_DOMAIN_ID=1 unless overridden)
+# The sim publishes rt/lowstate over CycloneDDS plus its camera / lidar / clock
+# (and, for the H1-2, gripper) topics on ROS 2 (ROS_DOMAIN_ID=1 unless overridden).
+# The robot's modules are the authority on that list: h12_sensors.py and
+# magpie_hand_bridge.py, or g1/g1_sensors.py for the G1.
 set -e
+source "$(dirname "$0")/runtime_common.sh"
+validate_sim_domain
 
 source /opt/ros/humble/setup.bash
 # livox_ros_driver2 (CustomMsg/CustomPoint) is baked into the robocasa image at
-# /opt/livox_ws by RobocasaDockerfile. Source it so mujoco_ros_bridge.py can
+# /opt/livox_ws by RobocasaDockerfile. Source it so the sensor suites can
 # import livox_ros_driver2.msg.
 source /opt/livox_ws/install/setup.bash
 
@@ -25,6 +25,7 @@ echo "[launch_robocasa] building $MSGS_WS"
 (cd "$MSGS_WS" && colcon build --symlink-install \
     --packages-select magpie_msgs custom_ros_messages)
 source "$MSGS_WS/install/setup.bash"
+[ "${GOLEM_PREPARE_ONLY:-0}" != 1 ] || exit 0
 
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-1}"
 
@@ -39,14 +40,13 @@ case " $* " in
         ;;
 esac
 
-# MUJOCO_GL: glfw needs an X display, egl is offscreen.
-case " $* " in
-    *" --headless "*) export MUJOCO_GL=egl ;;
-    *) export MUJOCO_GL=glfw ;;
-esac
+# MUJOCO_GL selects the offscreen renderer for the RGBD cameras. EGL needs no
+# display and can render on the camera worker thread; the passive viewer opens
+# its own GLFW window independently of it.
+export MUJOCO_GL=egl
 
-cd /home/code/h1_robocasa
+cd /home/code/golem_robocasa
 # -u: docker-compose captures stdout via a pipe, which block-buffers python's
 # print()s — the "[h12_mujoco] ROS bridges up" readiness line otherwise sits in
 # the buffer indefinitely on a quiet headless run.
-python -u h12_mujoco.py "$@"
+exec python -u h12_mujoco.py "$@"

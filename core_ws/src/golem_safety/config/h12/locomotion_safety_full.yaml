@@ -1,0 +1,102 @@
+mode: full_body_mode
+
+# LOCOMOTION profile (WSS trot / walk). The velocity estop bands sit above the static
+# default's, midway to the gait-needed values: knee 0.72 trips at ~10 rad/s (the static
+# default's 0.60 trips at ~8.4 rad/s); raise it to 0.85 if the knee still trips.
+
+topics:
+  low_cmd_in: /safety/lowcmd_in
+  low_cmd_out: /lowcmd
+  low_state: /lowstate
+
+control:
+  publish_hz: 500.0
+  # Estop when /lowstate arrives this many ms later than the robot's own tick
+  # clock implies. Only enforced on ROS domain 0 (the real robot): the sims
+  # stamp tick in sim steps, not wall-clock ms. A value <= 0 disables it.
+  state_lag_ms: 100.0
+
+# Seconds. An input, or /lowstate, with no new sample for longer than this is
+# reported while its last command keeps being relayed; a value <= 0 disables
+# the report.
+stale:
+  lower_seconds: 0.2
+  state_seconds: 0.1
+
+# On estop the layer streams burst_count zero-gain commands and then stops
+# publishing.
+estop_response:
+  mode: zero
+  after: burst_then_silence
+  burst_count: 50
+
+limits:
+  clip:
+    position_offset: 0.001
+    velocity_ratio: 0.10
+    torque_ratio: 0.60
+    kp_max: 500.0
+    kd_max: 30.0
+  estop:
+    position_offset: 0.0001
+    velocity_ratio:
+      - 0.28 # left_hip_yaw_joint
+      - 0.35 # left_hip_pitch_joint
+      - 0.32 # left_hip_roll_joint
+      - 0.72 # left_knee_joint
+      - 3.00 # left_ankle_pitch_joint
+      - 3.00 # left_ankle_roll_joint
+      - 0.28 # right_hip_yaw_joint
+      - 0.35 # right_hip_pitch_joint
+      - 0.32 # right_hip_roll_joint
+      - 0.72 # right_knee_joint
+      - 3.00 # right_ankle_pitch_joint
+      - 3.00 # right_ankle_roll_joint
+      - 0.22 # torso_joint
+      - 0.60 # left_shoulder_pitch_joint
+      - 0.60 # left_shoulder_roll_joint
+      - 0.60 # left_shoulder_yaw_joint
+      - 0.40 # left_elbow_joint
+      - 0.40 # left_wrist_roll_joint
+      - 0.40 # left_wrist_pitch_joint
+      - 0.40 # left_wrist_yaw_joint
+      - 0.60 # right_shoulder_pitch_joint
+      - 0.60 # right_shoulder_roll_joint
+      - 0.60 # right_shoulder_yaw_joint
+      - 0.40 # right_elbow_joint
+      - 0.40 # right_wrist_roll_joint
+      - 0.40 # right_wrist_pitch_joint
+      - 0.40 # right_wrist_yaw_joint
+    torque_ratio:
+      - 0.30 # left_hip_yaw_joint
+      - 0.65 # left_hip_pitch_joint
+      - 1.00 # left_hip_roll_joint
+      - 1.00 # left_knee_joint
+      - 0.90 # left_ankle_pitch_joint
+      - 0.90 # left_ankle_roll_joint
+      - 0.30 # right_hip_yaw_joint
+      - 0.65 # right_hip_pitch_joint
+      - 1.00 # right_hip_roll_joint
+      - 1.00 # right_knee_joint
+      - 0.90 # right_ankle_pitch_joint
+      - 0.90 # right_ankle_roll_joint
+      - 0.20 # torso_joint
+      - 0.80 # left_shoulder_pitch_joint
+      - 0.80 # left_shoulder_roll_joint
+      - 0.80 # left_shoulder_yaw_joint
+      - 0.80 # left_elbow_joint
+      - 0.50 # left_wrist_roll_joint
+      - 0.50 # left_wrist_pitch_joint
+      - 0.50 # left_wrist_yaw_joint
+      - 0.80 # right_shoulder_pitch_joint
+      - 0.80 # right_shoulder_roll_joint
+      - 0.80 # right_shoulder_yaw_joint
+      - 0.80 # right_elbow_joint
+      - 0.50 # right_wrist_roll_joint
+      - 0.50 # right_wrist_pitch_joint
+      - 0.50 # right_wrist_yaw_joint
+
+logging:
+  enabled: false
+  base_dir: /tmp/golem_safety
+  chunk_prefix: chunk_

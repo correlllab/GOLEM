@@ -1,0 +1,38 @@
+# MJPC lower-body deploy — REAL H1-2 params (mirror of the fork's validated B1
+# rung: RW-EKF estimator in the loop, robot NIC auto-pinned by the core).
+# Differences vs mjpc_sim.yaml: twin_dt matches the real 1 kHz lowstate tick,
+# the measured IMU pitch mount calibration is applied, and there is no elastic
+# band. See the submodule's mjpc/deploy/deploy_common.h for the compiled-in
+# settled values and Command_Sheet_h12.html for the native-h12 equivalents.
+
+deploy_mjpc_estimator:
+  ros__parameters:
+    # Debug mode has no sport service, so the estimator OWNS rt/sportmodestate
+    # (the native-B1 arrangement). Never run a second estimator instance.
+    out_topic: rt/sportmodestate
+    rate: 200.0
+    filter: rw-ekf
+    # iface: left empty on purpose -- the estimator auto-pins whichever NIC
+    # holds a 192.168.123.x address, the same way the C++ core does. A NIC name
+    # is host-specific (eno1 on the robot PC, a USB adapter on a laptop), so
+    # never bake one into this shared config. Only set it to disambiguate two
+    # robot-subnet NICs; an unknown name warns and falls back to auto-detect.
+    iface: ""
+
+mjpc_deploy_lowerbody_controller:
+  ros__parameters:
+    task: "Stabilize H12 Magpie"
+    strategy: 6                 # 6 = stand
+    gravity_ff: 0.85            # real robot: validated value
+    twin_dt: 0.001              # real lowstate ticks at 1 kHz
+    sportstate_topic: rt/sportmodestate
+    # MEASURED mount calibration for THIS H1-2 (body truly vertical reads -1.6
+    # deg on the IMU; +1.6 zeroes it). Validated on real hardware.
+    imu_pitch_offset_deg: 1.6
+    arm_aware: true
+    drop_band: false            # no elastic band outside sim
+    # Planner rollout threadpool size. Matches the 12 P-cores (0-11) the desktop
+    # bringup pins this controller to via taskset; default 0 would spawn one
+    # thread per hardware CPU (28) and oversubscribe the reserved 12. Drop to
+    # ~10 if the RW-EKF estimator (pinned to core 12) starves under load.
+    plan_threads: 12

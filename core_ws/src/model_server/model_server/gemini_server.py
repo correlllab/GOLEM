@@ -27,7 +27,7 @@ from custom_ros_messages.srv import GeminiQuery
 from model_server.model_logging import ModelLogger, declare_logging_params
 
 # ----- config -----
-GEMINI_MODEL = "gemini-robotics-er-1.6-preview"
+GEMINI_MODEL = "gemini-robotics-er-2-preview"
 GEMINI_MAX_RETRIES = 4
 # Per-attempt HTTP timeout in MILLISECONDS (google-genai expects ms). The SDK
 # sets NO timeout by default and passes timeout=None straight to httpx, so a

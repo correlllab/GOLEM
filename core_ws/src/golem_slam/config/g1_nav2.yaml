@@ -1,0 +1,252 @@
+---
+/**:
+  ros__parameters:
+    robot_base_frame: base_footprint
+    map_frame: map
+    odom_frame: odom
+    use_sim_time: ${use_sim_time}
+
+controller_server:
+  ros__parameters:
+    use_sim_time: True
+    controller_frequency: 20.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.001
+    min_theta_velocity_threshold: 0.001
+    progress_checker_plugin: "progress_checker" # progress_checker_plugin: "progress_checker" For Humble and older
+    goal_checker_plugins: ["goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.5
+      movement_time_allowance: 10.0
+    goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      # Real-verified reference values (fast_lio_nav2_humanoid). A walking
+      # humanoid cannot settle inside anything tighter.
+      xy_goal_tolerance: 0.25
+      yaw_goal_tolerance: 0.25
+      stateful: True
+    # Same MPPI pipeline as H1-2, with conservative HOMIE limits and no strafe.
+    # DiffDrive constrains sampled lateral motion; the smoother agrees below.
+    FollowPath:
+      plugin: "nav2_mppi_controller::MPPIController"
+      motion_model: "DiffDrive"
+      time_steps: 56
+      model_dt: 0.05            # = 1 / controller_frequency
+      batch_size: 2000
+      iteration_count: 1
+      temperature: 0.3
+      gamma: 0.015
+      vx_max: 0.30
+      vx_min: -0.20
+      vy_max: 0.0
+      wz_max: 0.50
+      vx_std: 0.2
+      vy_std: 0.0
+      wz_std: 0.4
+      prune_distance: 1.7
+      transform_tolerance: 0.1
+      reset_period: 1.0
+      regenerate_noises: false
+      retry_attempt_limit: 1
+      # Publishes /trajectories (MarkerArray: sampled candidates + the optimal
+      # one) and transformed_global_plan (Path) for RViz. Costs controller CPU;
+      # set false once tuning is done.
+      visualize: true
+      TrajectoryVisualizer:
+        trajectory_step: 5
+        time_step: 3
+      critics: ["ConstraintCritic", "VelocityDeadbandCritic", "ObstaclesCritic",
+                "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic",
+                "PathAngleCritic", "TwirlingCritic"]
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      # No ALMI deadband assumed for HOMIE.
+      VelocityDeadbandCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 35.0
+        deadband_velocities: [0.0, 0.0, 0.0]
+      ObstaclesCritic:
+        enabled: true
+        cost_power: 1
+        repulsion_weight: 1.5
+        critical_weight: 20.0
+        consider_footprint: true
+        collision_cost: 10000.0
+        collision_margin_distance: 0.10
+        near_goal_distance: 0.5
+        inflation_radius: 0.4   # = the costmaps' inflation_radius
+        cost_scaling_factor: 3.0
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.4
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.5
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 4
+        threshold_to_consider: 0.5
+        offset_from_furthest: 20
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 5
+        threshold_to_consider: 1.4
+      # Face along the path when it heads off at a large angle -- the robot
+      # walks forward best -- but no PreferForwardCritic: reversing and
+      # turning stay available for short moves and tight spots.
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 1.0
+        forward_preference: true  # face along the path; reverse motion remains available
+      TwirlingCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 10.0
+# Shared humanoid recovery tree, without Spin; see behavior_trees/navigate_to_pose_humanoid.xml.
+# h12_navigation.launch.py rewrites this key to the installed path.
+bt_navigator:
+  ros__parameters:
+    default_nav_to_pose_bt_xml: ""
+# Passes conservative forward/backward and yaw commands to HOMIE; no strafe.
+velocity_smoother:
+  ros__parameters:
+    smoothing_frequency: 20.0
+    scale_velocities: false
+    feedback: "OPEN_LOOP"
+    max_velocity: [0.30, 0.0, 0.50]
+    min_velocity: [-0.20, 0.0, -0.50]
+    max_accel: [1.0, 1.0, 1.5]
+    max_decel: [-1.0, -1.0, -1.5]
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
+behavior_server:
+  ros__parameters:
+    use_sim_time: ${use_sim_time}
+    local_frame: odom
+    global_frame: map
+    robot_base_frame: base_footprint
+    transform_tolerance: 0.1
+planner_server:
+  ros__parameters:
+    use_sim_time: ${use_sim_time}
+    planner_plugins:
+      - GridBased
+    # 2D grid A*: a geometric path with no vehicle kinematics, so goals
+    # behind or beside the robot plan directly; MPPI turns or
+    # reverses to follow it.
+    GridBased:
+      plugin: "nav2_smac_planner/SmacPlanner2D"
+      tolerance: 0.25                     # m; plan to the nearest free cell this close if the goal is blocked
+      downsample_costmap: false
+      downsampling_factor: 1
+      allow_unknown: true
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 2.0
+      cost_travel_multiplier: 2.0         # steer toward the middle of free space
+      use_final_approach_orientation: false
+      smoother:
+        max_iterations: 1000
+        w_smooth: 0.3
+        w_data: 0.2
+        tolerance: 1.0e-10
+
+# Both costmaps take obstacles from octomap_server: /projected_map (the 2D
+# projection of the 3D occupancy, see octomap.yaml) as the static layer, plus
+# the level scan in the local obstacle layer for immediate reaction.
+# Obstacle heights are in odom/map, gravity-aligned with the floor at z = 0
+# (level_odom), so the 0.15-1.4 m band matches octomap's occupancy band.
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: ${use_sim_time}
+      robot_base_frame: base_footprint
+      global_frame: map
+      update_frequency: 5.0
+      publish_frequency: 5.0
+      resolution: 0.10  # matches octomap.yaml
+      track_unknown_space: true
+      always_send_full_costmap: true
+      plugins: ["static_layer", "inflation_layer"]
+      footprint: "[[0.44, 0.24], [0.44, -0.24], [-0.20, -0.24], [-0.20, 0.24]]"
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_topic: /projected_map
+        map_subscribe_transient_local: True
+        trinary_costmap: false
+        lethal_cost_threshold: 100
+        footprint_clearing_enabled: True
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.4
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 5.0
+      global_frame: odom
+      robot_base_frame: base_footprint
+      use_sim_time: ${use_sim_time}
+      rolling_window: true
+      width: 6
+      height: 6
+      resolution: 0.05
+      track_unknown_space: false
+      footprint: "[[0.44, 0.24], [0.44, -0.24], [-0.20, -0.24], [-0.20, 0.24]]"
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_topic: /projected_map
+        map_subscribe_transient_local: True
+        footprint_clearing_enabled: True
+      # Live obstacles from the flat /converted_scan (pointcloud_to_laserscan:
+      # 0.15-1.3 m above the floor, 0.3-3.0 m range, no-return beams as inf).
+      # A 2D layer frees a cell whenever any beam passes over it, so a moved
+      # object clears within a scan or two. The previous 3D VoxelLayer only
+      # freed a column once rays had crossed every marked voxel in it, and the
+      # tilted MID360 rarely crosses the low ones, so moved objects stuck
+      # around. Obstacles outside the scan band still come from the octomap
+      # static layer above.
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        footprint_clearing_enabled: True
+        observation_sources: scan
+        scan:
+          topic: /converted_scan
+          data_type: "LaserScan"
+          marking: True
+          clearing: True
+          inf_is_valid: True       # a beam with no return clears out to raytrace_max_range
+          min_obstacle_height: -0.1  # scan points sit at z = 0 in base_footprint
+          max_obstacle_height: 2.0
+          obstacle_max_range: 2.9
+          obstacle_min_range: 0.0
+          raytrace_max_range: 3.0  # = the scan's range_max
+          raytrace_min_range: 0.0
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 1.0
+        inflation_radius: 0.4
+      always_send_full_costmap: True

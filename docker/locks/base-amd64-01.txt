@@ -1,0 +1,4 @@
+-c base-amd64.txt
+mujoco==3.13.0
+numpy==2.2.6
+psutil==5.9.0

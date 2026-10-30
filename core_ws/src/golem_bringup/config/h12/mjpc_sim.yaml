@@ -1,0 +1,147 @@
+# MJPC lower-body deploy — RoboCasa SIM params (h12_sim.launch.py).
+# Controller + estimator are the fork's deploy core
+# and RW-EKF base estimator behind the deploy_mjpc shims; these params
+# mirror the fork's surviving CLI flags 1:1. Everything settled (ctrl 200 Hz,
+# twin-time clocking, latency comp, ramp/hold/blend timings, torque-budget
+# clamp, watchdog) is compiled into the core — see the submodule's
+# mjpc/deploy/deploy_common.h.
+
+deploy_mjpc_estimator:
+  ros__parameters:
+    # Side topic (nothing else publishes sportmodestate in sim, but the side
+    # topic keeps the one-writer rule trivially safe). Controller reads it below.
+    out_topic: rt/sportmodestate_est
+    rate: 200.0
+    filter: rw-ekf
+    # PLANT-CLOCK the filter (plant seconds per lowstate tick = RoboCasa's
+    # model.opt.timestep). The wall-clocked default over-integrates by 1/RTF on
+    # this far-below-realtime sim: odometric xy drifts ~4x the robot's true
+    # motion, feeding the planner an inconsistent (pos, vel) pair that diverges
+    # laterally within seconds of policy authority. REAL runs at 1x, where wall
+    # == plant time, so mjpc_real.yaml leaves this at 0.
+    tick_dt: 0.005   # must match the plant's --sim-dt
+
+mjpc_debug_visualizer:
+  ros__parameters:
+    # DEBUG ONLY (use_mjpc_viz:=false to drop it). Renders the MEASURED robot in its
+    # normal colours + a semi-transparent BLUE GHOST at the planner's current best
+    # trajectory, and writes the mp4 when the node is signalled. Commands nothing;
+    # subscribes only to rt/lowstate, the estimator's rt/sportmodestate_est, and
+    # rt/mjpc/plan (the controller core publishes that from its planner thread --
+    # controller_launcher.py hardcodes --plan_topic, so this needs no arming here).
+    # MUST be a HOST-MOUNTED path. docker_run.sh runs the ros container with
+    # `compose run --rm`, so the container -- and everything in its /tmp -- is
+    # DESTROYED the moment `ros2 launch` exits. That is exactly when the mp4 is
+    # finalised, so a /tmp default writes a perfect video and then deletes it.
+    # core_ws is bind-mounted, and core_ws/.gitignore's `log/` has no leading slash
+    # so it matches at ANY depth -- this lands on the host at
+    # core_ws/src/deploy_mjpc/log/mjpc_plan.mp4 and stays out of git.
+    out_path: /home/code/core_ws/src/deploy_mjpc/log/mjpc_plan.mp4
+    # RENDER rate, decoupled from the 200 Hz lowstate and the ~20 Hz plan (the viewer
+    # draws from whatever it last cached, on its own clock). 10 because osmesa is a
+    # software rasteriser: ~96 ms/frame for this scene with shadows off (measured),
+    # i.e. ~10 fps, and the mp4's fps tag is fixed when the file opens -- so a target
+    # the loop cannot hit yields a video that PLAYS FAST and misrepresents the
+    # dynamics. The node reports the achieved rate on exit if it falls short.
+    fps: 10.0
+    width: 960
+    height: 720
+    # Guard an unattended sim from filling the disk. 0 = run until shutdown.
+    max_seconds: 0.0
+    # EXPECT the ghost's BASE to sit off the measured robot's: the plan carries the
+    # PLANNER's base belief, the measured robot the ESTIMATOR's. That gap is real
+    # signal (it is how you see the planner solving for a robot that isn't where it
+    # thinks it is), so align_ghost_base stays false. Set true ONLY to compare
+    # POSTURE in isolation.
+    align_ghost_base: false
+    # GHOST MOTION. sweep = the ghost's plan step cycles 0 -> end of horizon in real
+    # time (each ~1 s loop walks from "now" out to the full lookahead), alpha fading
+    # from ghost_rgba's alpha down to ghost_alpha_far so a single frame still shows how
+    # far ahead it is. Do NOT use ghost_mode: single with ghost_step: 0 -- plan row 0
+    # is the measured state BIT-FOR-BIT (trajectory.cc:130 seeds it from what the
+    # deploy core SetState'd), so that draws a ghost welded to the robot and shows
+    # nothing, even as it falls. That was this tool's original default and it made the
+    # viewer look broken.
+    ghost_mode: sweep
+    sweep_rate: 1.0
+    ghost_alpha_far: 0.15
+    # HOW TO READ IT: a near-1:1 ghost on a STABLE stand is CORRECT -- over the 1.0 s
+    # horizon the plan moves the base only ~1.8 cm and the 27 joints ~0.029 rad on
+    # average (measured off the live CEM planner), because a balancing robot's plan
+    # says "stay put". Judge the ghost DURING a fall, in the first few hundred ms:
+    # that is when the plan's intended recovery diverges from what the robot actually
+    # does, and that gap is the deploy gap (deploy_common.h:92-110).
+    plan_stale_sec: 1.0
+
+mjpc_deploy_lowerbody_controller:
+  ros__parameters:
+    task: "Stabilize H12 Magpie"
+    strategy: 6                 # 6 = stand (the stabilize task's only real slot)
+    # 12 = parity with real/twin/own-sim, which all run 12. Thread count and RTF
+    # have to be chosen together, because the CEM planner free-runs on wall time
+    # (~55 iters/s at 12 threads): at RoboCasa's slow RTF that is ~4x more
+    # iterations per PLANT-second than twin/real, the elite-variance sampler
+    # collapses to its 0.01 rad floor on the near-static state, and the stand
+    # settles into a 5-7 plant-s wobble limit cycle. Cutting threads fixes only
+    # the planner half and requires staying slow, which leaves the latency
+    # compensator (deploy_common.cc, wall-clock dt predicted as sim-seconds)
+    # over-leading by 1/RTF -> controller<->plant overshoot. So run like real
+    # instead: 12 threads with RTF as near 1.0 as the box allows (HEADLESS,
+    # --no-sensors, no slowmo -> ~0.85, giving ~65 iters/sim-s against real's
+    # ~55 and only 1.18x latency over-lead). Do NOT slow the sim down; that
+    # breaks both halves. If 12 threads oversubscribe the machine and tank RTF
+    # (check /clock hz), drop to ~10.
+    plan_threads: 12
+    # Full gravity feed-forward, with the 0.67 kg back_equipment ballast and
+    # rigid feet (--rigid-feet, default ON in h12_mujoco.py). Rigid feet
+    # eliminate the topple — foot-slip is its dominant driver — leaving a
+    # vertical sink as the residual, and 1.0 holds height (z ~0.92 over 40 s)
+    # where 0.85 sinks to z 0.64: unlike the twin, this plant has no leg
+    # gravcomp, only the two hands. The remaining 5-12 deg tilt wobble is not a
+    # free stand; the next parity lever is the contact/integrator mismatch
+    # (RoboCasa runs impratio=20 / Euler / elliptic against the twin+planner's
+    # 100 / implicitfast / pyramidal, and the task XML warns Euler diverges on
+    # biped balance). REAL keeps 0.85 (mjpc_real.yaml).
+    gravity_ff: 1.0
+    # MUST equal RoboCasa's model.opt.timestep: the sim publishes rt/lowstate
+    # from a RecurrentThread at exactly that interval, and the core's planner
+    # clock is lowstate tick * twin_dt. The plant is run at the twin's dt
+    # (--sim-dt 0.005) because the deploy-chain stand is dt-sensitive: it hangs
+    # at 0.002 and stands at 0.005 even down at RTF 0.5.
+    twin_dt: 0.005
+    # REAL-PARITY STATE SOURCE: the RW-EKF estimate on rt/sportmodestate_est is
+    # the SAME signal path the real robot uses (the bringup already launches the
+    # estimator). Its filtered velocity gives a quieter stand (tilt 3-5° steady)
+    # than raw ground truth, whose full-bandwidth base velocity the planner
+    # over-reacts to; the 30 ms LPF matches real. Ground truth is not the missing
+    # piece — feeding rt/sportmodestate (plant --truth-sportstate, verified at
+    # 191 Hz) does not stop the fall, it only turns the lateral fold into a
+    # sagittal one. The EKF's leg-odometry xy wanders ~0.3 m under sim foot
+    # micro-slip, which is irrelevant for STANDING (balance = orientation + base
+    # velocity + CoM). Point this at rt/sportmodestate (+ sim
+    # --truth-sportstate) only to A/B raw truth.
+    sportstate_topic: rt/sportmodestate_est
+    imu_pitch_offset_deg: 0.0   # 1.6 is a REAL-robot IMU mount calibration; sim has none
+    arm_aware: true             # legs pre-compensate for measured arm/torso motion
+    # With the FULL sensor set on, each 10 Hz(sim) lidar+camera cycle holds
+    # the sim lock for up to ~1 s of wall on a laptop -- and mj_step + the
+    # lowstate publisher pause WITH it, so sim time itself freezes: nothing
+    # physical happens during the gap (thresholds of 0.05/0.15/0.25/0.5 all trip
+    # just past their own value once per sensor cycle, so each is a lower bound
+    # on the freeze). The threshold
+    # must sit ABOVE the freeze ceiling or every sensor cycle injects a
+    # mid-freeze damping blip into the command stream. 1.5 rides the freezes
+    # out and still catches a genuinely dead publisher; the bring-up script is
+    # plant-clocked, so it pauses during each freeze rather than racing ahead.
+    # REAL stays at the compiled 0.05 (mjpc_real.yaml doesn't set this).
+    stale_sec: 1.5
+    # Band release is owned by the SIM's slack-triggered auto-release
+    # (h12_mujoco --band-auto-release: |band force| <= 30 N sustained 2 sim-s,
+    # the twin harness "handoff-timing" doctrine -- a self-supporting robot
+    # leaves the band slack). Keep the launcher's TIMER release OFF: the
+    # /elastic_band/toggle service is a stateful TOGGLE, so firing it after
+    # the sim already auto-released turns the band back ON. A timer release is
+    # also dishonest: it fires mid-sway and dumps the robot from whatever
+    # posture the tether wound it into.
+    drop_band: false
+    band_drop_after_secs: 25.0

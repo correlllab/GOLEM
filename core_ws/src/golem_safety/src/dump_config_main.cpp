@@ -1,8 +1,7 @@
 // golem_safety_dump_config <robot> <config>
 //
 // Loads a safety config with the node's own loader and prints what it derived as
-// JSON: the derived limits and every parsed value, under the schema's keys. The
-// limit parity test compares this output to what the old safety layers derive.
+// JSON: the derived limits and every parsed value, under the schema's keys.
 #include <cstdio>
 #include <iomanip>
 #include <iostream>

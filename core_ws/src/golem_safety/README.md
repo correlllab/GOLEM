@@ -122,21 +122,19 @@ another pair (`golem_upper_ik.pairing`).
 | `estop_response.after` | required | `burst_then_silence` or `keep_writing` |
 | `estop_response.burst_count` | 50 | the commands of `burst_then_silence` |
 | `limits.clip.position_offset`, `velocity_ratio`, `torque_ratio` | 0.01, 0.5, 0.5 | one number, or one per body joint in slot order |
-| `limits.clip.kp_max`, `kd_max` | 300, 30 | one number for every joint (`kp_abs`, `kd_abs` are aliases) |
+| `limits.clip.kp_max`, `kd_max` | 300, 30 | one number for every joint |
 | `limits.estop.position_offset`, `velocity_ratio`, `torque_ratio` | 0.01, 0.5, 0.5 | as `limits.clip`, for the measured state |
 | `logging.enabled`, `base_dir`, `chunk_prefix` | `false`, `/tmp/golem_safety`, `chunk_` | the `.npz` sample log |
 
-`limits.enforce` is an alias of `limits.clip`. The limits derive from the profile's joint
+The limits derive from the profile's joint
 table: q within [low + `position_offset`, high - `position_offset`] (a negative offset widens
 the range), |dq| up to velocity limit x `velocity_ratio`, |tau| up to effort limit x
 `torque_ratio`. `golem_safety_dump_config <robot> <config>` (installed in
 `lib/golem_safety`) prints every derived and parsed value as JSON.
 
 The loader refuses, naming the robot, the file and the key: an unknown key at any level; a
-key of an older schema (`network`, `robot`, `startup`, `engage`, `estop.enabled`, ...),
-saying why it was removed or which key replaces it; a non-finite or out-of-range number; a
-list whose length is not the profile's joint count; an alias given with the key it aliases;
-a missing required key.
+non-finite or out-of-range number; a list whose length is not the profile's joint count; a
+missing required key.
 
 ## Behavior
 
@@ -274,8 +272,7 @@ docker/scripts/docker_run.sh ros --restart /home/code/h12_sim_scripts/launch_ros
 - `test/test_node_ros.py` runs the installed `safety_node` against a fake robot over ROS on
   `ROS_DOMAIN_ID` 91 (`test/conftest.py`), for both robots. `test_spinner` (the executor
   thread) runs on 91 too.
-- `test_limit_parity.py` compares every config's derived limits with fixtures from the
-  previous safety layers' loaders, `test_robot_data.py` the profiles with their sources,
+- `test_robot_data.py` compares the profiles with their sources,
   `test_chunk_files.py` the chunks with numpy and `combine_chunks.py`, and `test_no_sdk.py`
   that nothing imports `unitree_sdk2py`.
 

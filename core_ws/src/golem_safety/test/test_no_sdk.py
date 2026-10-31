@@ -1,6 +1,6 @@
 '''
 golem_safety's code talks ROS only: nothing in it imports the Unitree SDK. tools/ and
-test/fixtures are not scanned: the offline fixture tools read the SDK on purpose.
+test/ are not scanned: they are not installed, and test/fixtures records the SDK's CRCs.
 '''
 
 from pathlib import Path

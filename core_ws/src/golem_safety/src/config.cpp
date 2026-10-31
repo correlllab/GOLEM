@@ -7,7 +7,6 @@
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
-#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -28,33 +27,6 @@ constexpr double kDefaultVelocityRatio = 0.5;
 constexpr double kDefaultTorqueRatio = 0.5;
 constexpr double kDefaultKpMax = 300.0;
 constexpr double kDefaultKdMax = 30.0;
-
-// What the error says about a key an older config may still carry. A key inside a removed
-// section (engage.mode_machine) is reported by its own reason when it has one.
-const std::map<std::string, std::string> & replaced_keys()
-{
-  static const std::string estop_box = "removed: the bringup's use_estop decides";
-  static const std::string zero_stream =
-    "removed: every robot streams zero gains from boot and engages each input on its own "
-    "first valid command";
-  static const std::map<std::string, std::string> keys = {
-    {"network", "removed: ROS supplies the domain, and the G1's interface is pinned in "
-      "cyclonedds_local.xml"},
-    {"robot", "removed: whether the robot is simulated comes from the bringup's sim argument"},
-    {"engage.mode_machine", "removed: mode_machine comes from the robot profile"},
-    {"estop.enabled", estop_box},
-    {"estop.estop_topic", estop_box},
-    {"estop.poll_hz", estop_box},
-    {"estop.upper_stale_seconds", "renamed stale.upper_seconds"},
-    {"estop.state_lag_ms", "moved to control.state_lag_ms"},
-    {"control.lower_stale_estop_seconds", "renamed stale.lower_seconds"},
-    {"control.state_stale_estop_seconds", "renamed stale.state_seconds"},
-    {"arm_sdk", "arm_sdk mode was removed: the G1 runs split_mode or full_body_mode"},
-    {"startup", zero_stream},
-    {"engage", zero_stream},
-  };
-  return keys;
-}
 
 struct Where
 {
@@ -133,13 +105,7 @@ public:
       if (std::find(names.begin(), names.end(), name) != names.end()) {
         continue;
       }
-      fail_on_replaced_child(name, entry.second);
-      std::string what = "unknown key";
-      const auto replaced = replaced_keys().find(key(name));
-      if (replaced != replaced_keys().end()) {
-        what += " (" + replaced->second + ")";
-      }
-      fail(where_, key(name), what);
+      fail(where_, key(name), "unknown key");
     }
   }
 
@@ -301,25 +267,6 @@ private:
     return list;
   }
 
-  // Fails on the first key of the unknown section `name` that has a reason of its own in
-  // replaced_keys(); returns when it has none.
-  void fail_on_replaced_child(const std::string & name, const YAML::Node & section) const
-  {
-    if (!section.IsMap()) {
-      return;
-    }
-    for (const auto & child : section) {
-      if (!child.first.IsScalar()) {
-        continue;
-      }
-      const std::string child_key = key(name) + "." + child.first.Scalar();
-      const auto replaced = replaced_keys().find(child_key);
-      if (replaced != replaced_keys().end()) {
-        fail(where_, child_key, "unknown key (" + replaced->second + ")");
-      }
-    }
-  }
-
   const Where & where_;
   YAML::Node node_;
   std::string path_;
@@ -356,30 +303,10 @@ LimitSet derive_limits(const RobotProfile & profile, const Section & policy)
   return out;
 }
 
-// The section holding the clip policy: limits.clip, or its alias limits.enforce.
-Section clip_section(const Section & limits)
-{
-  if (limits.has("clip") && limits.has("enforce")) {
-    limits.fail_at("enforce", "is an alias of limits.clip; give only one of them");
-  }
-  return limits.section(limits.has("enforce") ? "enforce" : "clip");
-}
-
-// kp_max and kd_max, each under its own name or its alias (kp_abs, kd_abs).
-double gain_limit(
-  const Section & clip, const std::string & name, const std::string & alias, double fallback)
-{
-  if (clip.has(name) && clip.has(alias)) {
-    clip.fail_at(alias, "is an alias of " + name + "; give only one of them");
-  }
-  return clip.single_number(clip.has(name) ? name : alias, fallback);
-}
-
 DerivedLimits derive_all(const RobotProfile & profile, const Section & limits)
 {
-  const Section clip = clip_section(limits);
-  clip.allow_only(
-    {"position_offset", "velocity_ratio", "torque_ratio", "kp_max", "kd_max", "kp_abs", "kd_abs"});
+  const Section clip = limits.section("clip");
+  clip.allow_only({"position_offset", "velocity_ratio", "torque_ratio", "kp_max", "kd_max"});
   const Section estop = limits.section("estop");
   estop.allow_only({"position_offset", "velocity_ratio", "torque_ratio"});
 
@@ -389,8 +316,8 @@ DerivedLimits derive_all(const RobotProfile & profile, const Section & limits)
   out.q_clip_high = clipped.q_high;
   out.dq_clip = clipped.dq;
   out.tau_clip = clipped.tau;
-  out.kp_max = gain_limit(clip, "kp_max", "kp_abs", kDefaultKpMax);
-  out.kd_max = gain_limit(clip, "kd_max", "kd_abs", kDefaultKdMax);
+  out.kp_max = clip.single_number("kp_max", kDefaultKpMax);
+  out.kd_max = clip.single_number("kd_max", kDefaultKdMax);
 
   const LimitSet estopped = derive_limits(profile, estop);
   out.q_estop_low = estopped.q_low;
@@ -486,7 +413,7 @@ SafetyConfig parse_checked(
   config.estop.timeout_seconds = estop.positive("timeout_seconds", config.estop.timeout_seconds);
 
   const Section limits = root.section("limits");
-  limits.allow_only({"clip", "enforce", "estop"});
+  limits.allow_only({"clip", "estop"});
   config.limits = derive_all(profile, limits);
 
   config.estop_response = parse_estop_response(root.section("estop_response"), config.limits);

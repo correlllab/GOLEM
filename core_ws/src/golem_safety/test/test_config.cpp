@@ -177,100 +177,6 @@ TEST(Config, UnknownKeyThrows)
     contains(parse_error("limits:\n  estop:\n    kp_max: 1.0\n", h12()), "'limits.estop.kp_max'"));
 }
 
-TEST(Config, RemovedAndRenamedKeysNameTheirReplacement)
-{
-  EXPECT_TRUE(contains(parse_error("network: {domain_id: 1}\n", h12()), "removed"));
-  EXPECT_TRUE(contains(parse_error("robot: real\n", g1()), "sim"));
-  EXPECT_TRUE(contains(parse_error("estop: {enabled: true}\n", h12()), "use_estop"));
-  EXPECT_TRUE(contains(parse_error("estop: {poll_hz: 500.0}\n", h12()), "use_estop"));
-  EXPECT_TRUE(
-    contains(parse_error("estop: {upper_stale_seconds: 2.0}\n", h12()), "stale.upper_seconds"));
-  EXPECT_TRUE(
-    contains(parse_error("estop: {state_lag_ms: 100.0}\n", h12()), "control.state_lag_ms"));
-  EXPECT_TRUE(
-    contains(
-      parse_error("control: {lower_stale_estop_seconds: 0.2}\n", g1()), "stale.lower_seconds"));
-  EXPECT_TRUE(
-    contains(
-      parse_error("control: {state_stale_estop_seconds: 0.1}\n", g1()), "stale.state_seconds"));
-}
-
-TEST(Config, ArmSdkModeRefused)
-{
-  // The G1 runs split_mode or full_body_mode: the message names the mode it was given and the
-  // robot's own.
-  const std::string message = parse_error("mode: arm_sdk_mode\n", g1());
-  EXPECT_TRUE(contains(message, "(robot g1)")) << message;
-  EXPECT_TRUE(contains(message, "'mode'")) << message;
-  EXPECT_TRUE(
-    contains(message, "'arm_sdk_mode' is not a mode of robot g1 (split_mode, full_body_mode)")) <<
-    message;
-}
-
-TEST(Config, ArmSdkKeysRefused)
-{
-  const std::string reason =
-    "unknown key (arm_sdk mode was removed: the G1 runs split_mode or full_body_mode)";
-  for (const char * section : {
-      "arm_sdk: {engage_seconds: 1.0, release_seconds: 3.0}\n", "arm_sdk: {waist_kp_min: 40.0}\n",
-      "arm_sdk: {}\n"})
-  {
-    SCOPED_TRACE(section);
-    const std::string message = parse_error(std::string("mode: split_mode\n") + section, g1());
-    EXPECT_TRUE(
-      contains(message, "safety config case.yaml (robot g1): key 'arm_sdk': " + reason)) <<
-      message;
-  }
-  // The H1-2's configs are refused the same way.
-  const std::string h12_message = parse_error("arm_sdk: {}\n", h12());
-  EXPECT_TRUE(contains(h12_message, "key 'arm_sdk': " + reason)) << h12_message;
-}
-
-TEST(Config, StartupAndEngageKeysRefused)
-{
-  // Every robot streams zero gains from boot, so neither section has a choice left to make.
-  const std::string zero_stream =
-    "unknown key (removed: every robot streams zero gains from boot and engages each input "
-    "on its own first valid command)";
-  // engage.mode_machine has a reason of its own, wherever it sits in the section.
-  const std::string profile = "unknown key (removed: mode_machine comes from the robot profile)";
-  struct Case
-  {
-    const RobotProfile & profile;
-    std::string rest;  // the required keys, with the robot's carried values
-  };
-  const Case cases[] = {
-    {h12(), "control: {state_lag_ms: 100.0}\nestop_response: {after: burst_then_silence}\n"},
-    {g1(), "control: {state_lag_ms: 0.0}\nestop_response: {after: keep_writing}\n"},
-  };
-  struct Section
-  {
-    const char * key;
-    const char * yaml;
-    const std::string & reason;
-  };
-  const Section sections[] = {
-    {"startup", "startup: {rule: zero_stream}\n", zero_stream},
-    {"startup", "startup: {rule: engage_gate}\n", zero_stream},
-    {"startup", "startup: {}\n", zero_stream},
-    {"engage", "engage: {max_state_age_seconds: 0.1, max_position_error: 0.15}\n", zero_stream},
-    {"engage", "engage: {}\n", zero_stream},
-    {"engage.mode_machine", "engage: {mode_machine: 5}\n", profile},
-    {"engage.mode_machine", "engage: {max_position_error: 0.15, mode_machine: 6}\n", profile},
-  };
-  for (const Case & c : cases) {
-    for (const Section & section : sections) {
-      SCOPED_TRACE(c.profile.robot + ": " + section.yaml);
-      const std::string message =
-        parse_raw_error("mode: split_mode\n" + c.rest + section.yaml, c.profile);
-      EXPECT_TRUE(
-        contains(
-          message, "safety config case.yaml (robot " + c.profile.robot + "): key '" +
-          section.key + "': " + section.reason)) << message;
-    }
-  }
-}
-
 TEST(Config, ModeNotInProfileThrows)
 {
   const TempConfig file("mode: legs_only_mode\n");
@@ -519,30 +425,6 @@ TEST(Config, DerivedLimitsUseTheSchemaDefaults)
   EXPECT_DOUBLE_EQ(c.limits.kp_max, 300.0);
   EXPECT_DOUBLE_EQ(c.limits.kd_max, 30.0);
   EXPECT_EQ(parse("", g1()).limits.q_clip_low.size(), 29u);
-}
-
-TEST(Config, EnforceAndKpAbsKdAbsAreAliases)
-{
-  const SafetyConfig c = parse(
-    "mode: full_body_mode\n"
-    "limits:\n"
-    "  enforce: {position_offset: 0.02, velocity_ratio: 0.2, torque_ratio: 0.3,"
-    " kp_abs: 111.0, kd_abs: 7.0}\n", h12());
-  EXPECT_DOUBLE_EQ(c.limits.q_clip_low[0], h12().joints[0].q_low + 0.02);
-  EXPECT_DOUBLE_EQ(c.limits.dq_clip[0], h12().joints[0].dq_max * 0.2);
-  EXPECT_DOUBLE_EQ(c.limits.tau_clip[0], h12().joints[0].tau_max * 0.3);
-  EXPECT_DOUBLE_EQ(c.limits.kp_max, 111.0);
-  EXPECT_DOUBLE_EQ(c.limits.kd_max, 7.0);
-  // The estop limits keep their own defaults.
-  EXPECT_DOUBLE_EQ(c.limits.q_estop_low[0], h12().joints[0].q_low + 0.01);
-
-  // An alias next to its own key is ambiguous.
-  EXPECT_TRUE(
-    contains(
-      parse_error("limits:\n  clip: {kp_max: 1.0, kp_abs: 2.0}\n", h12()), "limits.clip.kp_abs"));
-  EXPECT_TRUE(
-    contains(
-      parse_error("limits:\n  clip: {}\n  enforce: {}\n", h12()), "limits.enforce"));
 }
 
 TEST(Config, NegativePositionOffsetWidensAndTooLargeThrows)

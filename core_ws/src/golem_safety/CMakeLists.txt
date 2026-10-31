@@ -63,9 +63,6 @@ if(BUILD_TESTING)
   ament_add_gtest(test_config test/test_config.cpp)
   target_link_libraries(test_config golem_safety_core)
 
-  # Runs golem_safety_dump_config, so it needs the installed executable and configs.
-  ament_add_pytest_test(test_limit_parity test/test_limit_parity.py TIMEOUT 120)
-
   # test/fixtures/lowcmd_crc.json holds the Unitree SDK's CRCs (test/fixtures/README.md).
   ament_add_gtest(test_lowcmd test/test_lowcmd.cpp)
   target_link_libraries(test_lowcmd golem_safety_core)

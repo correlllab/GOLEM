@@ -16,7 +16,6 @@ MODE_PR = 0
 
 LEG_SLOTS = range(0, 12)
 WAIST_SLOTS = range(12, 15)
-LEFT_ARM_SLOTS = range(15, 22)
 RIGHT_ARM_SLOTS = range(22, 29)
 
 JOINT_NAMES = [

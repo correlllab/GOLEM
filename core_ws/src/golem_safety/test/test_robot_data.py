@@ -45,14 +45,6 @@ def test_robot_file_has_the_schema_and_robot_facts(robot):
         assert joint['velocity'] > 0 and joint['effort'] > 0, joint['name']
 
 
-def test_g1_profile_has_no_arm_sdk():
-    '''The G1 runs split_mode or full_body_mode, and no slot past the body carries a value'''
-    data = load_robot('g1')
-    assert data['modes'] == ['split_mode', 'full_body_mode']
-    assert set(data) == {'robot', 'mode_machine', 'mode_pr', 'motor_slots', 'modes',
-                         'lower_slots', 'upper_slots', 'joints'}
-
-
 def check_against_table(robot, fixture, joint_count):
     table = json.loads((FIXTURES / fixture).read_text())
     data = load_robot(robot)

@@ -1,5 +1,4 @@
 """Synthetic truth cases for lower-body physical acceptance thresholds."""
-import copy
 import math
 import unittest
 from check_lowerbody import score_run

@@ -11,11 +11,13 @@ Outside the containers, in the Python 3.10 environment of docs/g1/dds.md
     conda activate g1
     python tools/read_lowstate.py
 
-Domain 0 on the laptop's port to the robot, enp130s0, both fixed below.
+Domain 0 (fixed), on the laptop's port to the robot: G1_DDS_INTERFACE, default
+enp130s0.
 
 MIT License, Copyright (c) 2026 Correll Robotics Lab.
 """
 
+import os
 import time
 
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
@@ -45,7 +47,8 @@ def on_lowstate(msg: LowState_):
     latest = msg
 
 
-ChannelFactoryInitialize(0, "enp130s0")  # DDS domain 0, on the robot's port
+# domain 0, the robot's port
+ChannelFactoryInitialize(0, os.environ.get("G1_DDS_INTERFACE") or "enp130s0")
 sub = ChannelSubscriber("rt/lowstate", LowState_)
 sub.Init(on_lowstate, 10)
 

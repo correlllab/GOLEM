@@ -19,11 +19,7 @@ from unittest import mock
 import mujoco
 import numpy as np
 
-# unitree_interface reads ROS_DOMAIN_ID once, at import, and refuses a missing value and the
-# real robots' 0. The fakes below open nothing, so this value reaches no network; it is set
-# for the import only.
-with mock.patch.dict(os.environ, {'ROS_DOMAIN_ID': '199'}):
-    import unitree_interface
+import unitree_interface
 
 MODE_MACHINE = 6  # what the real H1-2 reports in every LowState_ (bags of real runs)
 
@@ -80,6 +76,12 @@ def dummy_model_and_resolver():
 class H12SimLowStateTests(unittest.TestCase):
     def setUp(self):
         FakePublisher.written = []
+        # SimInterface reads ROS_DOMAIN_ID when it opens its DDS channel, and refuses a
+        # missing value and the real robots' 0. The fakes below open nothing, so this value
+        # reaches no network.
+        env = mock.patch.dict(os.environ, {'ROS_DOMAIN_ID': '199'})
+        env.start()
+        self.addCleanup(env.stop)
         for name, fake in (('ChannelFactoryInitialize', lambda id: None),
                            ('ChannelPublisher', FakePublisher),
                            ('ChannelSubscriber', FakeSubscriber),
@@ -96,6 +98,18 @@ class H12SimLowStateTests(unittest.TestCase):
     def test_published_sample_carries_it(self):
         self.iface.publish_low_state()
         self.assertEqual(FakePublisher.written, [MODE_MACHINE])
+
+
+class DomainIdTests(unittest.TestCase):
+    def test_refuses_unset_and_real_robot_domain(self):
+        for env in ({}, {'ROS_DOMAIN_ID': ''}, {'ROS_DOMAIN_ID': '0'}, {'ROS_DOMAIN_ID': 'x'}):
+            with self.subTest(env=env), mock.patch.dict(os.environ, env, clear=True):
+                with self.assertRaises(RuntimeError):
+                    unitree_interface._domain_id()
+
+    def test_reads_sim_domain(self):
+        with mock.patch.dict(os.environ, {'ROS_DOMAIN_ID': '7'}):
+            self.assertEqual(unitree_interface._domain_id(), 7)
 
 
 if __name__ == '__main__':

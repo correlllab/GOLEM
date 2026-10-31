@@ -22,7 +22,6 @@ load_config() {
         set +a
         eval "$saved_env"
     fi
-    [ -z "$(env | sed -n '/^HAMS_[A-Z0-9_]*=/p')" ] || fail 'Rename HAMS_* variables to GOLEM_*.'
     export GOLEM_ASSETS_DIR="${GOLEM_ASSETS_DIR:-$GOLEM_ROOT/CL_Assets}"
     export GOLEM_CACHE_DIR="${GOLEM_CACHE_DIR:-$GOLEM_ROOT/container_cache}"
     # Relative user paths are always relative to the checkout, on both platforms.
@@ -167,8 +166,9 @@ require_h12_model() {
     done
 }
 
-# HOMIE's walking policy, which docker-compose.yml bind-mounts into every ros
-# container (launch_ros.sh builds both robots' packages there).
+# HOMIE's walking policy, which docker-compose.yml bind-mounts into every x86 ros
+# container (launch_ros.sh builds both robots' packages there). The Mac neither
+# mounts nor builds g1_homie.
 require_g1_policy() {
     local policy="$GOLEM_ROOT/core_ws/src/g1_homie/policy"
     local name
@@ -180,7 +180,11 @@ require_g1_policy() {
 prepare_mounts() {
     local service=$1
     case "$service" in
-        ros) require_h12_model; require_g1_model ros; require_g1_policy ;;
+        ros)
+            require_h12_model
+            require_g1_model ros
+            [ "${GOLEM_PLATFORM:-linux}" = mac ] || require_g1_policy
+            ;;
         robocasa) [ "${GOLEM_ROBOT:-h12}" != g1 ] || require_g1_model robocasa ;;
     esac
     case "$service" in

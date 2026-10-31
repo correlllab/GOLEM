@@ -1,5 +1,4 @@
 """Native ROS client assertions against a synthetic-physics Magpie sidecar."""
-import math
 import time
 import rclpy
 from rclpy.action import ActionClient

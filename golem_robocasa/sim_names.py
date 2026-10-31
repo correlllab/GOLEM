@@ -5,11 +5,11 @@ When RoboCasa builds a task around the ``H1_2`` robot, every joint/actuator/
 sensor/body/site is renamed (legs gain a ``leg`` substring) and prefixed
 (``robot0_``), and indices are reordered. The ROS stack, however, speaks the
 original Unitree names and assumes a fixed 27-motor order. This module centralises
-the translation so the DDS interface, the magpie gripper bridge, and the sensor/
-TF bridge all resolve indices by name instead of by hard-coded offsets.
+the translation so the DDS interface and the sensor/TF bridge resolve indices by
+name instead of by hard-coded offsets.
 
 Designed to be testable on the host against the *standalone* robot.xml by passing
-``prefix=""`` (names there are already leg-renamed but not robosuite-prefixed).
+``robot_prefix=""`` (names there are already leg-renamed but not robosuite-prefixed).
 """
 import mujoco
 import numpy as np

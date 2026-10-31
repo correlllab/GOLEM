@@ -183,8 +183,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     try:
         band_body_id = resolver.body_id("torso_link")            # robot0_torso_link
         anchor = data.xpos[band_body_id].copy()
-        # m above the torso's spawn height: the band hangs the robot 4 cm lower
-        # than its spawn, so the feet carry part of its weight
+        # 4 cm below the torso's spawn position (m): the band hangs the robot
+        # lower than its spawn, so the feet carry part of its weight
         anchor[2] -= 0.04
         # Stiff enough to hold the LIMP robot near-upright through the lowerbody
         # controller's band-held idle phase (~20s of frame_task arm-home startup
@@ -240,7 +240,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # DDS control bridge: publishes rt/lowstate, subscribes rt/lowcmd, drives the
     # 27 body motors by name via the resolver (grippers handled by the hand
     # bridges below; gripper ctrl indices are disjoint from the body motors).
-    sim_interface = SimInterface(model, data, lock=sim_lock, resolver=resolver)  # noqa: F841
+    sim_interface = SimInterface(model, data, lock=sim_lock, resolver=resolver)
 
     init_ros()
 
@@ -440,11 +440,10 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                         data.xfrc_applied[band_body_id, :] = 0.0
                         if rot_body_id >= 0:
                             data.xfrc_applied[rot_body_id, :] = 0.0
-                if sim_interface is not None:
-                    # Recompute the DDS command's PD torque every sim step (emulates
-                    # the real motor's ~1kHz servo) instead of only on each 50Hz
-                    # /lowcmd, which held a stale-damping torque and toppled FAME.
-                    sim_interface.write_ctrl()
+                # Recompute the DDS command's PD torque every sim step (emulates
+                # the real motor's ~1kHz servo) instead of only on each 50Hz
+                # /lowcmd, which held a stale-damping torque and toppled FAME.
+                sim_interface.write_ctrl()
                 mujoco.mj_step(model, data)
                 timings.stop("physics", physics_start)
                 # --- fall logger ---

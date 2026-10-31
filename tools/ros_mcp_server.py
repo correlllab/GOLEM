@@ -11,11 +11,13 @@ the noVNC viewers (see mac_vnc_tunnel.sh). Register it on the Mac with:
 Design: a single warm rclpy node subscribes once to the hot topics (odom,
 costmap, plan, scan, clock) and caches the latest message, so status tools answer
 instantly instead of paying node-startup + DDS-discovery on every call (the thing
-that made `ros2 topic echo --once` slow to poll). Actuation (lower-body mode,
-/cmd_vel) uses warm publishers/clients. Generic passthroughs (echo/hz/service
-call for arbitrary topics) shell out to the ros2 CLI, which is robust for the
-rarely-used cold path. rclpy spins in a background thread; tool handlers read the
-thread-safe cache.
+that made `ros2 topic echo --once` slow to poll). Actuation is /cmd_vel only, on
+a warm publisher. Generic passthroughs (echo/hz/service call for arbitrary
+topics) shell out to the ros2 CLI, which is robust for the rarely-used cold path.
+rclpy spins in a background thread; tool handlers read the thread-safe cache.
+
+The robot pose (robot_status, wait_for) comes from /odom, which the sim publishes
+only with GOLEM_SIM_ODOM=1 (ground truth, opt-in).
 
 Env: GOLEM_ROS_MCP_PORT (default 6082), ROS_DOMAIN_ID, RMW_IMPLEMENTATION.
 """

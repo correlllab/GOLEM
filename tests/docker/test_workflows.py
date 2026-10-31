@@ -45,7 +45,7 @@ if 'config' in sys.argv:
     os.execv('/usr/bin/docker', ['docker'] + sys.argv[1:])
 ''')
         docker.chmod(0o755)
-        self.env = {k: v for k, v in os.environ.items() if not k.startswith(('GOLEM_', 'ROS_', 'HAMS_', 'G1_'))}
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith(('GOLEM_', 'ROS_', 'G1_'))}
         self.env.update(PATH=str(self.bin) + ':' + os.environ['PATH'], CALLS=str(self.root / 'calls'), DISPLAY='')
 
     def run_script(self, path, *args, **env):
@@ -586,6 +586,15 @@ if 'config' in sys.argv:
         env = self.compose_config('docker-compose.yml', profile='robocasa')['robocasa']['environment']
         self.assertNotIn('GOLEM_CMD_TIMEOUT', env)
         self.assertNotIn('GOLEM_ROBOT', env)
+
+    def test_base_robocasa_service_passes_spawn_and_lidar_knobs_empty(self):
+        # empty: the sim's own defaults (no backoff, self-filter on)
+        env = self.compose_config('docker-compose.yml', profile='robocasa')['robocasa']['environment']
+        for key in ('GOLEM_SPAWN_BACKOFF', 'GOLEM_LIDAR_SELF_FILTER'):
+            self.assertEqual(env[key], '', key)
+        env = self.compose_config('docker-compose.yml', profile='robocasa',
+                                  GOLEM_SPAWN_BACKOFF='2.0')['robocasa']['environment']
+        self.assertEqual(env['GOLEM_SPAWN_BACKOFF'], '2.0')
 
     def test_g1_overlay_compose_contents(self):
         services = self.compose_config('docker-compose.yml', 'docker-compose.g1.yml', profile='robocasa')

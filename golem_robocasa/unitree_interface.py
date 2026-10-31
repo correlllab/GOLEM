@@ -18,8 +18,20 @@ TOPIC_LOWSTATE = 'rt/lowstate'
 MOTOR_NUM = 27
 MOTOR_SENSOR_NUM = 3
 
-DOMAIN_ID = int(os.getenv("ROS_DOMAIN_ID"))
-assert DOMAIN_ID > 0 and isinstance(DOMAIN_ID, int), "Please set ROS_DOMAIN_ID environment variable to a positive value, e.g. export ROS_DOMAIN_ID=1, domain 0 is reserved for the real robot."
+
+def _domain_id():
+    raw = os.environ.get('ROS_DOMAIN_ID', '')
+    try:
+        domain = int(raw)
+    except ValueError:
+        domain = 0
+    if domain <= 0:
+        raise RuntimeError(
+            f'ROS_DOMAIN_ID must be a positive integer, got {raw!r}; domain 0 is '
+            'reserved for the real robot, e.g. export ROS_DOMAIN_ID=1')
+    return domain
+
+
 class SimInterface:
     def __init__(self, model, data, lock=None, resolver=None):
         # record mujoco model & data
@@ -56,7 +68,7 @@ class SimInterface:
         self._cmd_tau = np.zeros(MOTOR_NUM, dtype=np.float64)
 
         # initialize channel
-        ChannelFactoryInitialize(id=DOMAIN_ID)
+        ChannelFactoryInitialize(id=_domain_id())
         # publish low state
         self.low_state = LowState_default()
         self.low_state.mode_machine = 6  # what the real H1-2 reports; the IDL default is 0

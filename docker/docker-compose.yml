@@ -88,6 +88,12 @@ services:
       # Minimum free space (m) between the robot and any non-floor geom at spawn.
       # Empty = the task's default (h12_mujoco.py: 0.20, or the env's spawn_margin).
       - GOLEM_SPAWN_MARGIN=${GOLEM_SPAWN_MARGIN:-}
+      # Metres the robot is backed off the spawn counter into open floor, for
+      # both robots (h12_mujoco.py, g1/g1_mujoco.py); empty = 0.
+      - GOLEM_SPAWN_BACKOFF=${GOLEM_SPAWN_BACKOFF:-}
+      # H1-2: 0 keeps the robot's own links in its lidar scan (h12_mujoco.py);
+      # empty = they are filtered out.
+      - GOLEM_LIDAR_SELF_FILTER=${GOLEM_LIDAR_SELF_FILTER:-}
       # GOLEM_CAMERAS=0 drops all RGBD cameras.
       - GOLEM_CAMERAS=${GOLEM_CAMERAS:-}
       # Camera toggles (h12_mujoco.py); empty = its default. GOLEM_CAMERA_SCALE:
@@ -279,11 +285,9 @@ services:
           create_host_path: false
       # Submodule git metadata (ro): mujoco_mpc/.git is a FILE with
       # `gitdir: ../.git/modules/mujoco_mpc`, so mounting that dir at the
-      # matching container path makes git work on the mounted source.
-      # launch_ros.sh's hydrate needs `git diff --name-only <seed-ref>` to
-      # un-backdate exactly the files that changed since the image's baked
-      # build seed (otherwise a submodule ahead of MJPC_REF hydrates into a
-      # silently STALE build tree).
+      # matching container path makes git work on the mounted source (without
+      # it every git command under /home/code/mujoco_mpc fails, including any
+      # a CMake reconfigure runs; launch_ros.sh's hydrate itself uses no git).
       - type: bind
         source: ${GOLEM_MJPC_GIT_DIR:-../.git/modules/mujoco_mpc}
         target: /home/code/.git/modules/mujoco_mpc

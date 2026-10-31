@@ -9,7 +9,7 @@
 #   rob_pose t_pose                 # move to a named posture (default 3s)
 #   rob_pose arms_overhead 4        # ... over 4 seconds
 #   rob_grip right close            # close/open a gripper
-#   rob_gripset left 0.5            # set gripper position (0=open .. 1=closed)
+#   rob_gripset left 50             # set gripper opening, mm (0=closed .. ~110=open)
 #   rob_eepose right                # print current right-hand pose (pelvis frame)
 #   rob_home                        # arms-down baseline
 # For Cartesian reaching, send a /frame_task goal (core_ws/src/golem_upper_ik/README.md).
@@ -44,9 +44,10 @@ rob_grip() {
     ros2 service call "/${side}/gripper/${act}" std_srvs/srv/Trigger
 }
 
-# rob_gripset <left|right> <0.0..1.0>   (0 = open, 1 = closed)
+# rob_gripset <left|right> <mm>   opening width between the fingers, mm
+# (0 = closed; the sim's magpie_hand_bridge.py spans 0..110, OPEN_MM)
 rob_gripset() {
-    local side="${1:?usage: rob_gripset <left|right> <0..1>}" pos="${2:?0..1}"
+    local side="${1:?usage: rob_gripset <left|right> <mm>}" pos="${2:?opening width, mm}"
     ros2 service call "/${side}/gripper/set_position" magpie_msgs/srv/SetGripperPosition \
         "{position: $pos}"
 }

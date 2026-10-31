@@ -12,8 +12,6 @@ over DDS — robosuite controllers are never stepped (we own ``mujoco.mj_step``)
 
 NOTE: robosuite/robocasa import only inside the MuJoCo container (mujoco==3.3.1).
 This module is syntax-valid on the host but must be exercised in the container.
-The API here follows robosuite master / robocasa main as surveyed in the design
-doc (docs/superpowers/specs/2026-06-08-robocasa-mujoco-eval-integration-design.md).
 """
 import os
 
@@ -36,15 +34,6 @@ ROBOT_XML = os.path.join(_ASSETS, "robots", "h1_2", "robot.xml")
 GRIPPER_RIGHT_XML = os.path.join(_ASSETS, "grippers", "magpie_right_gripper.xml")
 GRIPPER_LEFT_XML = os.path.join(_ASSETS, "grippers", "magpie_left_gripper.xml")
 
-# Kept in sync with CL_Assets/robosuite_assets/build_assets.py. The DDS bridge
-# uses this to translate ROS joint names -> sim (robosuite, robot0_-prefixed)
-# joint names. Only the 12 legs are renamed; arms/torso are unchanged.
-LEG_JOINT_RENAME = {
-    f"{side}_{j}_joint": f"{side}_leg_{j}_joint"
-    for side in ("left", "right")
-    for j in ("hip_yaw", "hip_pitch", "hip_roll", "knee", "ankle_pitch", "ankle_roll")
-}
-
 # Free joint name on the pelvis (used by the placement patch).
 FREE_JOINT_NAME = "floating_base_joint"
 
@@ -52,35 +41,9 @@ FREE_JOINT_NAME = "floating_base_joint"
 HEAD_CAMERA = "head_cam"
 
 # Initial stance for the 27 actuated joints (excludes the 7-DoF free joint).
-# Model-level init stays zeros; the harness overrides the spawn with a baked-in
-# bent-knee leg stance and zero arms (h12_mujoco.INIT_LEG_POS via
-# _initial_motor_qpos). NOMINAL_STANCE / nominal_stance_vector below stay
-# available for an upright standing spawn but are not the default.
+# Model-level init stays zeros; the harness overrides the spawn with a bent-knee
+# leg stance and zero arms (h12_mujoco.INIT_LEG_POS via _initial_motor_qpos).
 _INIT_QPOS = np.zeros(27)
-
-# Nominal standing stance, keyed by ROS joint name. Legs are the walking policy's
-# default_angles (core_ws/.../h12_lowerbody_rl/example/h1_2.yaml) so the
-# stance matches what the policy will hold (clean handoff). Arms are tucked
-# down/back (shoulder_pitch +1.0, elbow +0.3) so the hands clear the kitchen
-# fixtures — at zeros the hands jut ~0.31 m forward into the counter. Everything
-# unlisted is 0 (torso, wrists, shoulder roll/yaw).
-NOMINAL_STANCE = {
-    **{f"{s}_hip_pitch_joint": -0.16 for s in ("left", "right")},
-    **{f"{s}_knee_joint": 0.36 for s in ("left", "right")},
-    **{f"{s}_ankle_pitch_joint": -0.2 for s in ("left", "right")},
-    **{f"{s}_shoulder_pitch_joint": 1.0 for s in ("left", "right")},
-    **{f"{s}_elbow_joint": 0.3 for s in ("left", "right")},
-}
-
-
-def nominal_stance_vector():
-    """The 27-vector of NOMINAL_STANCE angles ordered by sim_names.ROS_MOTOR_ORDER
-    (== NameResolver.motor_qpos order). Not used by the default spawn (bent-knee
-    legs, zero arms); write data.qpos[resolver.motor_qpos] = nominal_stance_vector()
-    for a standing pose."""
-    from sim_names import ROS_MOTOR_ORDER
-
-    return np.array([NOMINAL_STANCE.get(n, 0.0) for n in ROS_MOTOR_ORDER], dtype=float)
 
 
 # --------------------------------------------------------------------------- #

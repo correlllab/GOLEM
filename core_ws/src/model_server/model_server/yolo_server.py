@@ -85,9 +85,8 @@ YOLO_NMS_IOU = 0.01
 YOLO_HALF = False
 
 # Defaults for the pub/sub wiring (all overridable via ROS params, see below).
-# All three cameras publish color on .../color/image_raw/compressed: the hand
-# cameras moved from image_rect_raw to image_raw when cl_realsense split out
-# h12_hand_cameras.launch.py (it enables the compressed plugin on
+# All three cameras publish color on .../color/image_raw/compressed
+# (cl_realsense's h12_hand_cameras.launch.py enables the compressed plugin on
 # <name>.color.image_raw, realsense2_camera 4.58).
 DEFAULT_IMAGE_TOPICS = [
     "/realsense/head/color/image_raw/compressed",

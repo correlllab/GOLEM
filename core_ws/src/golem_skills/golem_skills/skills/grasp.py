@@ -262,8 +262,8 @@ VISUAL_SERVO_MIN_DEPTH_M = 0.04
 
 
 # =============== reach budgets (move_to_candidate_approach etc.) =============
-# Push past servo_frame_to_world's defaults: more time on the main IK move and
-# more world-frame refinement passes. The iter-0 unreachable fast-fail still
+# servo_frame_to_world budgets, shared with pick_place: a long main IK move and
+# many world-frame refinement passes. The iter-0 unreachable fast-fail still
 # bails dead candidates quickly.
 SERVO_DURATION_SEC = 15   # primary (iter-0) contact IK move budget [s]
 # Timeout (not trajectory time) per approach move: generous so a long transit
@@ -283,9 +283,9 @@ GRASP_WORLD_ANCHOR = True
 # holding steady state (which otherwise runs to its ~5 s hold timeout). Passed
 # to every frame_task move the grasp skill commands. None disables it.
 FRAME_TASK_STABLE_STOP_MSGS = 20
-# Convergence tolerances, relaxed from base.py's 5 mm / ~1.15 deg: real-robot
-# IK + pelvis drift rarely settle a 6-DOF grasp pose that tight. These gate the
-# CONTACT move.
+# Convergence tolerances [m, rad] of servo_frame_to_world, shared with
+# pick_place: real-robot IK + pelvis drift rarely settle a 6-DOF grasp pose
+# tighter than this. These gate the CONTACT move.
 SERVO_LIN_TOL = 0.0125
 SERVO_ANG_TOL = 0.05
 # Looser tolerances for the PRE-GRASP approach only (move_to_candidate_approach).
@@ -383,7 +383,17 @@ class GraspSkill:
         In-process RESULT side channel (for pick_place, same node):
         `self._last_grasp_outcome` is cleared here and only repopulated by a
         SUCCESSFUL grasp, so a failed grasp can never leak a stale outcome.
-        Assumes one grasp goal in flight at a time (true in practice)."""
+        Assumes one grasp goal in flight at a time (true in practice).
+
+        TARGET_FRAME is broadcast for RViz while the goal runs and dropped
+        when it ends, however it ends."""
+        try:
+            return self._grasp(gh)
+        finally:
+            self.drop_tf(TARGET_FRAME)
+
+    def _grasp(self, gh):
+        """The grasp goal's body (see _exec_grasp)."""
         goal = gh.request
         run = _Run(self, gh, SkillGrasp, 'grasp')
         self._last_grasp_outcome = None

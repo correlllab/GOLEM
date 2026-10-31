@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""h12 skills node: action servers for the RoboCasa-style atomic skills.
+"""Skills node (both robots): action servers for the RoboCasa-style atomic skills.
 
 Serves the 12 Skill* actions from custom_ros_messages on /skill/<name>. The
 shared machinery — the frame_task arm IK action, the per-arm gripper services,

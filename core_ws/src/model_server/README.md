@@ -1,9 +1,9 @@
 # model_server
 
 Self-contained ROS 2 (ament_python) package hosting the project's heavy
-model-inference service servers. Each server is a single, dependency-isolated file
-— it imports nothing from other workspace perception packages, so they can be
-retired independently.
+model-inference servers. Each server is a single file that imports nothing from
+other workspace perception packages; the servers share only this package's
+`model_logging` module (which `golem_skills` imports too).
 
 ## Executables
 
@@ -18,7 +18,9 @@ Run with `ros2 run model_server <executable>`.
 
 ## Weights
 
-All checkpoints live under `weights/`, tracked with Git LFS:
+All checkpoints live under `weights/`. The YOLO-World and GraspGenX ones are
+tracked with Git LFS; `sam3.pt` is not in git (`weights/.gitignore` ignores it):
+download it yourself (gated, see `weights/README.md`):
 
 ```
 weights/
@@ -28,11 +30,13 @@ weights/
   graspgen/release/dis/{config.yaml,epoch_1056.pth}  # GraspGenX discriminator
 ```
 
-Servers resolve weights relative to this package via `__file__` (works with
-`colcon build --symlink-install`). Override the root with
-`MODEL_SERVER_WEIGHTS_DIR`. GraspGenX additionally honors
-`GRASPGENX_CHECKPOINT_DIR` and needs the gripper description staged at
-`GRASPGENX_ASSETS_DIR` (default `/opt/graspgenx/assets`, inside the ros container).
+`sam_server` and `yolo_server` resolve weights relative to this package via
+`__file__` (works with `colcon build --symlink-install`); `MODEL_SERVER_WEIGHTS_DIR`
+overrides that root for those two. `graspgen_server` reads its checkpoints only
+from `GRASPGENX_CHECKPOINT_DIR` (required; the ros compose sets it to this
+package's `weights/graspgen`) and its gripper description from
+`GRASPGENX_ASSETS_DIR` (required; the ros compose sets it to
+`/opt/graspgenx/assets`, where the ros image stages it).
 
 ## Dependencies
 

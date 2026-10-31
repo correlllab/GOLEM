@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared infrastructure for the h12 skills node.
+"""Shared infrastructure for the skills node.
 
 `SkillsBase` is the ROS node every skill mixin plugs into. It owns the external
 clients the skills depend on — the arm IK action (frame_task), the per-arm
@@ -71,8 +71,8 @@ CAMERA_INFO_TOPIC = f'{CAMERA_NS}/color/camera_info'
 # the battery-object top-down grasp (skills/grasp.py) which skips gemini/sam/graspgen.
 DETECTION_TOPIC = f'{COLOR_IMAGE_TOPIC}/detections'
 # Per-arm HAND-camera DetectionBundle topics (same yolo_server, one channel per
-# camera; like the head, the hand cameras publish color on '.../image_raw' since
-# cl_realsense's h12_hand_cameras.launch.py split). The battery grasp reads the
+# camera; like the head, the hand cameras publish color on '.../image_raw', as
+# cl_realsense's h12_hand_cameras.launch.py sets up). The battery grasp reads the
 # relevant arm's hand detections once the GraspGenX frame is parked above the
 # object.
 ARM_DETECTION_TOPICS = {
@@ -97,10 +97,10 @@ GRASP_FRAMES = {'left': 'left_graspgenx_frame', 'right': 'right_graspgenx_frame'
 GRIPPER_NS = {'left': '/left/gripper', 'right': '/right/gripper'}
 
 # Grip-force limit (N) applied via set_force before closing on an object.
-# Halved from 30 N: 30 N on a small part is more than the grasp needs and is what
-# drives the Dynamixels into the overload the grip-hold loop then has to keep
-# clearing. This is the default for both set_gripper_force and close_gripper, so
-# every close in the package moves together.
+# Higher forces are more than a small part needs and drive the Dynamixels into
+# the overload the grip-hold loop then has to keep clearing. This is the default
+# for both set_gripper_force and close_gripper, so every close in the package
+# moves together.
 GRIP_FORCE_N = 15.0
 # --- grip-hold loop (see close_gripper / _grip_hold_loop) --------------------
 # The magpie fingers are Dynamixels that trip into OVERLOAD while holding
@@ -132,11 +132,13 @@ GRIPPER_SETTLE_SEC = 1.0
 # 0-106 mm (gripper.set_goal_aperture), so 106 mm is "fully open" and 0 mm is
 # "fully closed" — the endpoints the open/close percentage helpers map to.
 GRIPPER_MAX_WIDTH_MM = 106.0
-# Used when goal.timeout is zero [s]. INFINITE: a goal that names no timeout is
-# taken as "run to completion" — the skill then ends only by finishing, failing,
-# or being canceled, never on a clock. Deliberate: the long-running skills
-# (frontier exploration, a visual-servo grasp) have no meaningful upper bound,
-# and a fixed ceiling silently aborts them mid-work. Send a NON-ZERO
+# Used when goal.timeout is zero [s], by the skills that run on this module's
+# _Run (grasp, pick_place; frontier_explore has its own `default_timeout`
+# parameter). INFINITE: a goal that names no timeout is taken as "run to
+# completion" — the skill then ends only by finishing, failing, or being
+# canceled, never on a clock. Deliberate: a long-running skill (a visual-servo
+# grasp, a pick_place carrying one) has no meaningful upper bound,
+# and a fixed ceiling silently aborts it mid-work. Send a NON-ZERO
 # goal.timeout whenever a bound is actually wanted.
 #
 # Consequences of the infinity, all checked: _Run.deadline becomes inf so
@@ -183,9 +185,6 @@ TF_REPUBLISH_PERIOD_SEC = 0.1
 # odometry origin (camera_init -> body -> pelvis); switch to 'map' for the
 # slam_toolbox frame (globally consistent but jumps on loop closure).
 WORLD_FRAME = 'camera_init'   # FAST-LIO odometry world frame; switch to 'map' for slam_toolbox
-SERVO_ITER = 3                # max world-frame servo refinement iterations
-SERVO_LIN_TOL = 0.005         # 5 mm world-position convergence tolerance
-SERVO_ANG_TOL = 0.02          # ~1.15 deg world-orientation convergence tolerance
 # World-servo divergence stop [m]: once the measured world error exceeds the
 # best so far by this much, the drift fixes are pushing the base rather than
 # the hand (arm blocked by contact, the balance controller stepping away from
@@ -409,9 +408,10 @@ class SkillsBase(Node):
         # --- TF listener + broadcaster ----------------------------------------
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
-        # Broadcast planned grasp targets (graspgenx_target_frame) for RViz. These
-        # are re-sent on a timer (publish_tf / _republish_tfs) so the frames stay
-        # alive in RViz instead of expiring after a single one-shot send.
+        # Broadcast planned grasp/place targets for RViz. These are re-sent on a
+        # timer (publish_tf / _republish_tfs) so the frames stay alive in RViz
+        # instead of expiring after a single one-shot send; the skill that
+        # registered a frame drops it (drop_tf) when its goal ends.
         self.tf_broadcaster = TransformBroadcaster(self)
         self._persistent_tfs = {}            # child_frame_id -> TransformStamped
         self._tf_lock = threading.Lock()
@@ -573,8 +573,9 @@ class SkillsBase(Node):
         """Register a TransformStamped to be CONTINUOUSLY re-broadcast (re-stamped
         on a timer) so the frame stays alive in RViz instead of expiring after a
         single send. Keyed by child_frame_id: call again with the same child to
-        move it, or drop_tf(child) to stop publishing it. Sends once immediately
-        so the frame appears without waiting for the next tick."""
+        move it, or drop_tf(child) to stop publishing it; a skill that registers
+        a frame drops it when its goal ends. Sends once immediately so the frame
+        appears without waiting for the next tick."""
         with self._tf_lock:
             self._persistent_tfs[transform.child_frame_id] = transform
         self.tf_broadcaster.sendTransform(transform)
@@ -742,45 +743,27 @@ class SkillsBase(Node):
         py1, py2 = sorted((y1 / 1000.0 * h, y2 / 1000.0 * h))
         return [px1, py1, px2, py2]
 
-    def detect_object_cloud(self, obj, run, gh, box_provider=None, use_sam=True):
-        """Locate `obj` in the head camera: bounding box -> object cloud, plus the
-        whole-frame scene cloud as obstacle context. Returns (obj_cloud,
-        scene_cloud, None) on success or (None, None, reason). Shared by the grasp
-        skill (pick object) and pick_place (place target).
+    def detect_object_cloud(self, obj, run, gh):
+        """Locate `obj` in the head camera: Gemini bounding box -> SAM mask ->
+        object cloud, plus the whole-frame scene cloud as obstacle context.
+        Returns (obj_cloud, scene_cloud, None) on success or (None, None,
+        reason). pick_place uses it for the place target; the grasp skill runs
+        its own detect_object/segment_object pipeline.
 
-        `box_provider(obj, run, gh) -> pixel-xyxy box or None` supplies the box
-        (default self._gemini_box). The grasp skill runs its own split
-        detect_object/segment_object pipeline instead; pick_place uses this for
-        the place target.
-
-        `use_sam` selects how the box becomes an object cloud:
-          * True  (default) — SAM segments the box region and only the masked pixels
-            are back-projected. Best for larger/irregular objects.
-          * False — the box RECTANGLE is back-projected directly (box_to_cloud), no
-            SAM. Used for small components (screws/nuts/bolts) where SAM
-            segmentation is unreliable at that scale; the box then MUST be present.
-
-        With SAM: always prompts it with the object name; a whole-object box is
-        passed too as a positive exemplar so text + box together pin down the right
-        instance. The box is optional there (text alone is the fallback). Gemini
-        latency is highly variable and None is a legitimate "no box", so
-        cancel/timeout is disambiguated here before spending the SAM call."""
-        box = (box_provider or self._gemini_box)(obj, run, gh)  # box (pixel xyxy) or None
+        SAM is always prompted with the object name; the box, when Gemini gives
+        one, is passed too as a positive exemplar so text + box together pin
+        down the right instance (text alone is the fallback). Gemini latency is
+        highly variable and None is a legitimate "no box", so cancel/timeout is
+        disambiguated here before spending the SAM call."""
+        box = self._gemini_box(obj, run, gh)  # box (pixel xyxy) or None
         if gh.is_cancel_requested or run.remaining() <= 0.0:
             return None, None, 'detection canceled or timed out'
-        if use_sam:
-            mask = self.segment(text=obj, positive_boxes=box, outer_gh=gh)
-            if mask is None:
-                return None, None, f'no mask for {obj!r}'
-            obj_cloud = self.mask_to_cloud(mask, target_frame='pelvis')
-            reason = f'{obj!r} mask produced no usable cloud'
-        else:
-            if box is None:
-                return None, None, f'no bounding box for {obj!r} (SAM disabled)'
-            obj_cloud = self.box_to_cloud(box, target_frame='pelvis')
-            reason = f'{obj!r} bounding box produced no usable cloud'
+        mask = self.segment(text=obj, positive_boxes=box, outer_gh=gh)
+        if mask is None:
+            return None, None, f'no mask for {obj!r}'
+        obj_cloud = self.mask_to_cloud(mask, target_frame='pelvis')
         if obj_cloud is None:
-            return None, None, reason
+            return None, None, f'{obj!r} mask produced no usable cloud'
         # Whole-frame cloud as obstacle context so graspgen can collision-filter
         # grasps against the surroundings (optional — None just skips filtering).
         scene = self.scene_to_cloud(target_frame='pelvis')
@@ -1224,8 +1207,7 @@ class SkillsBase(Node):
         return ok
 
     def servo_frame_to_world(self, frame, world_pose, fallback_pose, outer_gh=None,
-                             duration_sec=10.0, max_iter=SERVO_ITER,
-                             lin_tol=SERVO_LIN_TOL, ang_tol=SERVO_ANG_TOL,
+                             duration_sec=10.0, *, max_iter, lin_tol, ang_tol,
                              do_plan=True, slow_mode=False, label='',
                              stable_stop_msgs=None):
         """Drive `frame` to `world_pose` (a Pose in WORLD_FRAME), compensating for

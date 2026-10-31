@@ -1,9 +1,8 @@
 """GraspGenX 6-DOF grasps, raw and reachability-filtered.
 
 Both methods send the same object + scene clouds to the same graspgen service
-(model_server/graspgen_server.py owns sampling, collision filtering and its
-own approach envelope), so the difference between them isolates the
-client-side selection layer:
+(model_server/graspgen_server.py owns sampling and collision filtering), so the
+difference between them isolates the client-side selection layer:
 
   graspgenx           the server's grasps executed strictly best-first by
                       model score — no re-roll, re-rank or diversity pick.

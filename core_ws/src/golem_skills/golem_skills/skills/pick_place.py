@@ -90,7 +90,17 @@ class PickPlaceSkill:
           arm — "" or "none" leaves the pick arm to the grasp skill (nearest
             arm); the resolved arm comes back on the outcome.
           top_down, visual_servo — forwarded to /skill/grasp, which also
-            reads this node's `grasp_method` parameter."""
+            reads this node's `grasp_method` parameter.
+
+        PLACE_TARGET_FRAME is broadcast for RViz while the goal runs and
+        dropped when it ends, however it ends."""
+        try:
+            return self._pick_place(gh)
+        finally:
+            self.drop_tf(PLACE_TARGET_FRAME)
+
+    def _pick_place(self, gh):
+        """The pick_place goal's body (see _exec_pick_place)."""
         goal = gh.request
         run = _Run(self, gh, SkillPickPlace, 'pick_place')
         arm = self._validated_arm(goal)

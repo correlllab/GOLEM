@@ -33,8 +33,8 @@ def generate_launch_description():
                               description='Start marl_deploy_node'),
         DeclareLaunchArgument(
             'policy',
-            description='policies/<name>/ of lmg_deploy: <name>.yaml plus the export (required: '
-                        'lmg_deploy ships none)'),
+            description='policies/<name>/ of lmg_deploy: <name>.yaml plus the export (required; '
+                        'lmg_deploy ships mid360v2)'),
         DeclareLaunchArgument('engage_wait_for_confirm', default_value='true',
                               description='hold the pre-pose until ~/confirm_engage'),
         DeclareLaunchArgument('prepose_ramp_s', default_value='6.0',

@@ -29,7 +29,7 @@ smoother is its only publisher; at least MIN_COVERAGE of the reachable floor
 against the sim's pelvis, as the nav test does); and every occupied cell of the final
 /map is within MAP_TOL of something the sim has in the scan's band (no phantom cells).
 The stack has to come up (the walking node's policy started and the band released
-before the goal), and the sim has to publish /odom exactly when the test runs sim_gt.
+before the goal), and the sim has to publish no /odom.
 When the explorer reports the map explored, its result's goals_reached has to be
 above 0 and match its log: the goals Nav2 reached plus those
 seen on the way (frontier_explore counts both). Otherwise its outcome (done or out of
@@ -89,8 +89,8 @@ def save_grid(path, msg):
 
 
 class Driver(nav.Driver):
-    def __init__(self, out, odom_source):
-        super().__init__(out, odom_source)
+    def __init__(self, out):
+        super().__init__(out)
         from nav_msgs.msg import OccupancyGrid
         from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
         self.explore_feedback = []   # sim t, phase, frontiers_remaining, at each change
@@ -162,8 +162,8 @@ class Driver(nav.Driver):
                                                              GoalStatus.STATUS_ABORTED)
 
 
-def run_drive(out, odom_source):
-    d = Driver(out, odom_source)
+def run_drive(out):
+    d = Driver(out)
     ok = False
     try:
         d.mark("drive_start")
@@ -226,9 +226,8 @@ class Report(nav.Report):
         print(f"     spawn ({g['spawn'][0]:.3f}, {g['spawn'][1]:.3f}), yaw {math.degrees(g['spawn_yaw']):.1f} deg, "
               f"{g['spawn_clearance']:.2f} m of room")
         odom_pubs = self.info.get("odom_publishers")
-        want_odom = ["mujoco_sensors"] if self.info["odom_source"] == "sim_gt" else []
-        self.check("odom source", odom_pubs == want_odom,
-                   f"odom_source {self.info['odom_source']}: /odom publishers {odom_pubs} (expected {want_odom})")
+        self.check("no sim /odom", odom_pubs == [],
+                   f"/odom publishers {odom_pubs} (expected none: FAST_LIO is the odometry)")
         release = self.release()
         if release is None:
             self.check("stack up", False, "the sim's elastic band was never released: see sim.log and launch.log")
@@ -348,8 +347,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("role", choices=("sim", "drive", "report"))
     parser.add_argument("--out", required=True, help="the shared output directory")
-    parser.add_argument("--odom-source", choices=("fastlio", "sim_gt"), default="fastlio",
-                        help="drive: the bringup's odom_source")
     parser.epilog = "sim: the G1 sim's arguments (h12_mujoco.py --g1) follow a --"
     argv = sys.argv[1:]
     sim_args = argv[argv.index("--") + 1:] if "--" in argv else []
@@ -358,7 +355,7 @@ def main():
         nav.run_sim(args.out, sim_args)
         return 0
     if args.role == "drive":
-        return run_drive(args.out, args.odom_source)
+        return run_drive(args.out)
     return Report(args.out).run(args.out)
 
 

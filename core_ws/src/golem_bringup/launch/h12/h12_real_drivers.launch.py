@@ -27,7 +27,6 @@ def generate_launch_description():
         {'publish_freq': 30.0},  # publish frequency (Hz)
         {'output_data_type': 0},
         {'frame_id': 'livox_frame'},
-        {'lvx_file_path': '/home/livox/livox_test.lvx'},
         {'user_config_path': mid360_config},
         {'cmdline_input_bd_code': 'livox0000000001'},
     ]

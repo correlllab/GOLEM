@@ -1,5 +1,5 @@
 """
-Publish body -> pelvis for the G1 FAST-LIO pipeline and compute G1 URDF sensor transforms.
+Publish the G1's dynamic body -> pelvis for FAST-LIO, with the transform helpers around it.
 
     ros2 run golem_slam g1_body_to_pelvis --ros-args -p fastlio_config:=<FAST_LIO yaml>
 
@@ -135,13 +135,6 @@ def pelvis_to_body(urdf_file, body_from_lidar, lidar_frame=np.eye(4), positions=
 def body_to_pelvis(pelvis_lidar, body_from_lidar):
     """Return T_body_pelvis from T_pelvis_livox_frame and FAST-LIO's T_body_lidar."""
     return body_from_lidar @ invert(pelvis_lidar)
-
-
-def fastlio_transforms(urdf_file, fastlio_config, pelvis_height, lidar_frame=np.eye(4)):
-    """Return (T_odom_camera_init, T_body_pelvis at the start pose, the waist at 0)."""
-    pelvis_body = pelvis_to_body(urdf_file, fastlio_extrinsic(fastlio_config), lidar_frame)
-    odom_pelvis = transform((0.0, 0.0, pelvis_height))
-    return odom_pelvis @ pelvis_body, invert(pelvis_body)
 
 
 def static_transform_arguments(t, parent, child):

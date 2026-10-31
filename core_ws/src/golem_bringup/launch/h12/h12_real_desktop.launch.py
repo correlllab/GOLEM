@@ -61,7 +61,7 @@ def generate_launch_description():
         Node(
             package='rviz2',
             executable='rviz2',
-            name='rviz2_sim',
+            name='rviz2',
             arguments=['-d', default_rviz],
             parameters=[{'use_sim_time': False}],
             output='screen',

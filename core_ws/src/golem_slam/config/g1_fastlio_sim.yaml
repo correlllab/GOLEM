@@ -9,8 +9,7 @@
         feature_extract_enable: false
         point_filter_num: 1          # keep every point: a synthetic scan is sparser than the real one
         max_iteration: 3
-        # 0.2 m voxels left FAST_LIO 5 cm off on test_fastlio.py's synthetic scan,
-        # 0.1 m about 1 cm; check again on the G1 sim's scans
+        # m; 0.1 m kept FAST_LIO within about 1 cm on a synthetic scan, 0.2 m 5 cm off
         filter_size_surf: 0.1
         filter_size_map: 0.1
         cube_side_length: 1000.0
@@ -39,8 +38,8 @@
             det_range: 100.0
             # The MID-360's lidar origin in its own IMU's frame (p_imu = R p_lidar + T):
             # FAST_LIO's upstream MID-360 value, which the sim has to match. R is
-            # identity for the raw sensor frame. Not estimated online: the launch
-            # file's static transforms use these values.
+            # identity for the raw sensor frame. Not estimated online:
+            # g1_body_to_pelvis reads these values for its dynamic body -> pelvis.
             extrinsic_est_en: false
             extrinsic_T: [-0.011, -0.02329, 0.04412]
             extrinsic_R: [1., 0., 0.,

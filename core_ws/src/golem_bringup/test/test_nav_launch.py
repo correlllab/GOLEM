@@ -10,7 +10,6 @@ sourced (golem_bringup, golem_ros2_models, golem_slam and golem_upper_ik install
 
 import os
 import pathlib
-import re
 
 import pytest
 from ament_index_python.packages import get_package_share_directory
@@ -90,7 +89,6 @@ def test_nav_is_on_by_default():
         passed = _passed_to_core(launch_file)
         assert passed['use_nav'] == 'true', launch_file
         assert _includes(**dict(passed, use_nav='false')) == []
-    assert _passed_to_core('g1_sim.launch.py')['odom_source'] == 'fastlio'
 
 
 def test_real_bringup_starts_the_lidar_driver_and_the_real_fastlio_config():
@@ -100,8 +98,7 @@ def test_real_bringup_starts_the_lidar_driver_and_the_real_fastlio_config():
                            'g1_real_drivers.launch.py')
     assert sorted(_location(i) for i in includes) == sorted([drivers, NAV_LAUNCH])
     path, arguments = _nav_include(**passed)
-    assert arguments == {'odom_source': 'fastlio', 'sim': 'false', 'use_sim_time': 'false',
-                         'fast_lio_config_file': 'g1_fastlio.yaml'}
+    assert arguments == {'use_sim_time': 'false', 'fast_lio_config_file': 'g1_fastlio.yaml'}
     nodes = _nav_nodes(path, arguments)
     _, values, files = nodes['fast_lio']
     assert files == [os.path.join(os.path.dirname(os.path.dirname(NAV_LAUNCH)), 'config',
@@ -120,27 +117,20 @@ def test_real_bringup_starts_the_lidar_driver_and_the_real_fastlio_config():
     assert [_location(i) for i in _includes(**sim)] == [NAV_LAUNCH]
 
 
-@pytest.mark.parametrize('odom_source', ['fastlio'])
-def test_sim_bringup_includes_navigation(odom_source):
-    args = dict(use_nav='true')
-    if odom_source != 'fastlio':
-        args['odom_source'] = odom_source
-    passed = _passed_to_core('g1_sim.launch.py', **args)
-    assert (passed['use_nav'], passed['odom_source']) == ('true', odom_source)
+def test_sim_bringup_includes_navigation():
+    passed = _passed_to_core('g1_sim.launch.py', use_nav='true')
+    assert passed['use_nav'] == 'true'
     # the walking node starts; navigation comes with the core, on sim time
     assert 'locomotion_node' in _core_nodes(**passed)
     path, arguments = _nav_include(**passed)
     assert path == NAV_LAUNCH
-    assert arguments == {'odom_source': odom_source, 'sim': 'true', 'use_sim_time': 'true',
-                         'fast_lio_config_file': 'g1_fastlio_sim.yaml'}
+    assert arguments == {'use_sim_time': 'true', 'fast_lio_config_file': 'g1_fastlio_sim.yaml'}
 
     nodes = _nav_nodes(path, arguments)
-    assert ('fast_lio' in nodes) == (odom_source == 'fastlio')
-    if odom_source == 'fastlio':
-        # the sim's FAST_LIO config: the raw sensor frame, every point kept
-        _, _, files = nodes['fast_lio']
-        assert files == [os.path.join(os.path.dirname(os.path.dirname(NAV_LAUNCH)), 'config',
-                                      'g1_fastlio_sim.yaml')]
+    # the sim's FAST_LIO config: the raw sensor frame, every point kept
+    _, _, files = nodes['fast_lio']
+    assert files == [os.path.join(os.path.dirname(os.path.dirname(NAV_LAUNCH)), 'config',
+                                  'g1_fastlio_sim.yaml')]
     for name, (_, values, _) in nodes.items():
         if name.endswith('_tf'):
             continue   # static_transform_publisher: arguments only
@@ -181,18 +171,7 @@ def test_sim_nav_without_use_locomotion():
     assert nodes['locomotion_node'].arguments == ['--config', 'sim.yaml']
     path, arguments = _nav_include(**passed)
     assert path == NAV_LAUNCH
-    assert arguments['sim'] == 'true'
-
-
-@pytest.mark.parametrize('args, message', [
-    (dict(SIM, use_nav='true', odom_source='sim_gt'), 'golem_slam requires FAST-LIO'),
-    (dict(SIM, use_nav='yes', odom_source='wheel'),
-     "golem_slam requires FAST-LIO"),
-    (dict(REAL_VERIFIED, use_nav='true', odom_source='sim_gt'), 'golem_slam requires FAST-LIO'),
-])
-def test_core_refuses_nav(args, message):
-    with pytest.raises(RuntimeError, match='g1_core: not starting: ' + re.escape(message)):
-        core._setup(_context(core.generate_launch_description(), **args))
+    assert arguments['fast_lio_config_file'] == 'g1_fastlio_sim.yaml'
 
 
 def test_real_nav_with_the_legs():

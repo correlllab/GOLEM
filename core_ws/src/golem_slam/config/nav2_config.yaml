@@ -129,7 +129,7 @@ controller_server:
         cost_weight: 10.0
 # The default behavior tree, minus the Spin recovery and with a BackUp fast
 # enough for ALMI to act on; see behavior_trees/navigate_to_pose_humanoid.xml.
-# h12_navigation.launch.py rewrites this key to the installed path.
+# golem_slam/navigation_launch.py rewrites this key to the installed path.
 bt_navigator:
   ros__parameters:
     default_nav_to_pose_bt_xml: ""

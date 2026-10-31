@@ -33,8 +33,8 @@ most room). Its heading is the direction from the spawn to it. NAV_GOAL="x,y[,ya
 given; the sim refuses it (goal.json's "error", and the test fails) unless its
 cell is reachable from the spawn through cells PATH_CLEARANCE m clear, and
 goal.json records it ("goal_override"). The drive sends the goal in the map
-frame: through odom as the odometry defines it (the world in sim_gt; FAST_LIO's
-start pose, the spawn, in fastlio), then slam_toolbox's map -> odom.
+frame: through odom as FAST_LIO's odometry defines it (its start pose, the
+spawn), then slam_toolbox's map -> odom.
 
 Pass if: the goal succeeds within GOAL_TIMEOUT_S of sim time; the true pelvis
 ends within FINAL_TOL of the goal; every /cmd_vel is inside the speed caps and
@@ -43,7 +43,7 @@ MAX_SCAN_GAP_S while navigating; every occupied cell of the final /map is within
 MAP_TOL of something the sim has in the scan's height band (MAP_BAND_Z), and at
 most MAX_SCAN_PHANTOM_SHARE of the /converted_scan returns within SCAN_PHANTOM_RANGE, placed
 with the sim's true pelvis, are farther than SCAN_PHANTOM_TOL from it; the sim
-publishes /odom exactly when the test runs sim_gt; while navigating, map -> pelvis
+publishes no /odom; while navigating, map -> pelvis
 stays within MAX_LOCALISATION_ERR of the sim's truth in x, y (the odometry
 localises, and slam_toolbox only draws the map: with scan matching it drifted
 past that); and over the whole recording the pelvis stays above MIN_PELVIS_Z and
@@ -112,10 +112,10 @@ SCAN_PHANTOM_TOL = 0.25    # m from the nearest band cell; more than SLAM's erro
 MAX_SCAN_PHANTOM_SHARE = 0.001
 # map -> pelvis against the sim's truth in x, y while navigating (the map frame placed in the world at
 # the drive's first sample). The odometry localising (slam_toolbox without scan matching, its base frame on
-# the floor, so map -> odom is the identity): at most 0.71 cm with fastlio and 0.06 cm with sim_gt in 8 runs.
-# With slam_toolbox's base frame on the tilted pelvis it was up to 0.69 cm with fastlio and 1.60 cm with
-# sim_gt in 12 runs, the largest 6 m from sim_gt's odom origin (TF interpolating the tilted map -> odom between
-# scans). Scan matching: 3.33-5.49 cm on the default goal in the 36 runs since the scan was deskewed
+# the floor, so map -> odom is the identity): at most 0.71 cm with FAST_LIO and 0.06 cm with the sim's
+# ground-truth odometry in 8 runs. With slam_toolbox's base frame on the tilted pelvis it was up to 0.69 cm
+# with FAST_LIO and 1.60 cm with ground-truth odometry in 12 runs, the largest 6 m from that odometry's origin
+# (TF interpolating the tilted map -> odom between scans). Scan matching: 3.33-5.49 cm on the default goal in the 36 runs since the scan was deskewed
 # (2.50-7.26 cm in 11 earlier runs with the floor still in the scan), 13.1-18.1 cm on the corridor goal (6
 # runs). Halfway between 1.6 and 3.3 cm
 MAX_LOCALISATION_ERR = 0.025   # m
@@ -395,7 +395,7 @@ def _process_cpu(names):
 
 
 class Driver:
-    def __init__(self, out, odom_source, keep_lidar=False):
+    def __init__(self, out, keep_lidar=False):
         import rclpy
         from geometry_msgs.msg import Twist
         from nav_msgs.msg import OccupancyGrid
@@ -407,8 +407,7 @@ class Driver:
         self.rclpy = rclpy
         self.node = Node("test_sim_nav")
         self.out = out
-        self.odom_source = odom_source
-        self.events, self.info = [], {"odom_source": odom_source}
+        self.events, self.info = [], {}
         self.clock, self.clocks = None, 0
         self.node.create_subscription(Clock, "/clock", self._on_clock,
                                       QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT), raw=True)
@@ -771,11 +770,11 @@ class Driver:
         self.rclpy.shutdown()
 
 
-def run_drive(out, odom_source, keep_lidar=False):
+def run_drive(out, keep_lidar=False):
     path = os.path.join(out, "goal.json")
     with open(path) as f:
         goal = json.load(f)
-    d = Driver(out, odom_source, keep_lidar)
+    d = Driver(out, keep_lidar)
     d.info["goal"] = goal
     ok = False
     try:
@@ -858,9 +857,8 @@ class Report(bringup_test.Report):
               + (f"; NAV_GOAL {g['goal_override']}" if "goal_override" in g else "; the sim's pick"))
         # the stack: the odometry the test asked for, the walking node, Nav2
         odom_pubs = self.info.get("odom_publishers")
-        want_odom = ["mujoco_sensors"] if self.info["odom_source"] == "sim_gt" else []
-        self.check("odom source", odom_pubs == want_odom,
-                   f"odom_source {self.info['odom_source']}: /odom publishers {odom_pubs} (expected {want_odom})")
+        self.check("no sim /odom", odom_pubs == [],
+                   f"/odom publishers {odom_pubs} (expected none: FAST_LIO is the odometry)")
         release = self.release()
         if release is None:
             self.check("stack up", False, "the sim's elastic band was never released: see sim.log and launch.log")
@@ -1189,8 +1187,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("role", choices=("sim", "drive", "report"))
     parser.add_argument("--out", required=True, help="the shared output directory")
-    parser.add_argument("--odom-source", choices=("fastlio", "sim_gt"), default="fastlio",
-                        help="drive: the bringup's odom_source")
     parser.add_argument("--keep-lidar", action="store_true",
                         help="drive: keep the /livox/lidar frames from the goal on (lidar_frames.npz)")
     parser.epilog = "sim: the G1 sim's arguments (h12_mujoco.py --g1) follow a --"
@@ -1201,7 +1197,7 @@ def main():
         run_sim(args.out, sim_args)
         return 0
     if args.role == "drive":
-        return run_drive(args.out, args.odom_source, args.keep_lidar)
+        return run_drive(args.out, args.keep_lidar)
     return Report(args.out).run(args.out)
 
 

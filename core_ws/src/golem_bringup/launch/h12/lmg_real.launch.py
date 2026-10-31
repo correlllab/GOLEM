@@ -13,7 +13,7 @@ from launch.substitutions import LaunchConfiguration
 # state publishers, estop, safety layer and golem_slam navigation stack
 # (use_slam), but without frame_task_server,
 # because marl_deploy_node owns both safety channels. Keep the lower-body RL
-# and MJPC controllers (h12_real_robot.launch.py's leg control) off.
+# controller (h12_real_robot.launch.py's leg control) off.
 #
 # Nothing commands the robot until both operator gates pass:
 #   1. start_position_verified:=true starts marl_deploy_node; it ramps all 27

@@ -32,7 +32,6 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('use_rviz', default_value='true'),
-        DeclareLaunchArgument('use_sliders', default_value='true'),
         DeclareLaunchArgument('use_nav', default_value='true'),
         DeclareLaunchArgument('use_skills', default_value='true'),
         DeclareLaunchArgument('record_runs', default_value='true'),
@@ -75,13 +74,14 @@ def generate_launch_description():
         _include('golem_slam', 'h12_navigation.launch.py', sim_time,
                  condition=IfCondition(LaunchConfiguration('use_nav'))),
 
-        # The MuJoCo bridge back-projects depth into 3D using REP-103 optical
-        # convention (+z = forward, +x = right, +y = down) but stamps the
-        # resulting camera_info / image / depth messages with the optical
-        # frame name below. The URDF defines only camera_link (a ROS link
-        # frame, +x = forward, +z = up); without this static TF the vision
-        # pipeline would treat optical-convention points as if they were in
-        # camera_link, rotating every detection ~90 deg out of place.
+        # For Isaac: its head camera's images are stamped
+        # camera_color_optical_frame (CL_isaaclab_sim's ros_sensor_bridge.py,
+        # REP-103 optical axes: +z forward, +x right, +y down) and it publishes
+        # no TF, so this rotates that frame under camera_link (+x forward,
+        # +z up). The URDF loaded here has no camera_link (its head camera is
+        # head_camera_link), so the frame joins the robot's tree only where
+        # something publishes camera_link. RoboCasa stamps
+        # head_color_optical_frame and publishes its own camera TF.
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',

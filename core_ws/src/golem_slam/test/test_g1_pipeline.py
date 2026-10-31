@@ -4,7 +4,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from golem_ros2_models.paths import urdf_path
 from golem_slam.g1_body_to_pelvis import (
-    body_to_pelvis, fastlio_extrinsic, fastlio_transforms, invert, link_pose,
+    body_to_pelvis, fastlio_extrinsic, invert, link_pose,
     pelvis_to_body, static_transform_arguments, transform,
 )
 from golem_slam.robot_geometry import link_boxes, quat_to_matrix, rpy_to_matrix
@@ -70,10 +70,10 @@ def test_static_transform_arguments_round_trip():
     urdf = urdf_path('g1')
     config = os.path.join(
         get_package_share_directory('golem_slam'), 'config', 'g1_fastlio_sim.yaml')
-    t = fastlio_transforms(urdf, config, 0.744)[0]
-    args = static_transform_arguments(t, 'odom', 'camera_init')
+    t = pelvis_to_body(urdf, fastlio_extrinsic(config))
+    args = static_transform_arguments(t, 'pelvis', 'body')
     values = dict(zip(args[0::2], args[1::2]))
-    assert values['--frame-id'] == 'odom' and values['--child-frame-id'] == 'camera_init'
+    assert values['--frame-id'] == 'pelvis' and values['--child-frame-id'] == 'body'
     xyz = [float(values[f'--{k}']) for k in 'xyz']
     quat = [float(values[f'--{k}']) for k in ('qx', 'qy', 'qz', 'qw')]
     np.testing.assert_allclose(transform(xyz, quat_to_matrix(*quat)), t, atol=1e-10)

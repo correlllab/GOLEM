@@ -14,9 +14,6 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
@@ -24,8 +21,6 @@ def generate_launch_description():
     mid360_config = os.path.join(
         get_package_share_directory('golem_slam'), 'config', 'g1_MID360_config.json')
     return LaunchDescription([
-        DeclareLaunchArgument('use_lidar', default_value='true',
-                              description='Start the MID-360 driver'),
         Node(
             package='livox_ros_driver2',
             executable='livox_ros_driver2_node',
@@ -42,6 +37,5 @@ def generate_launch_description():
                 'user_config_path': mid360_config,
                 'cmdline_input_bd_code': 'livox0000000001',
             }],
-            condition=IfCondition(LaunchConfiguration('use_lidar')),
         ),
     ])

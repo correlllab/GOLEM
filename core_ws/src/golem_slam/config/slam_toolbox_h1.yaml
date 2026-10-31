@@ -1,4 +1,4 @@
-# slam_toolbox for the H1-2, shared by the real robot and the simulators: the
+# slam_toolbox for both robots (the H1-2 and the G1), real and simulated: the
 # stock mapper_params_online_async.yaml (slam_toolbox 2.6.10, Humble) that the
 # real-verified reference stack (correlllab/fast_lio_nav2_humanoid) loads,
 # copied so a different installed slam_toolbox release cannot change it.

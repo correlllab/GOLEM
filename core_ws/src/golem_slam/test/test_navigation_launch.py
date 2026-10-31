@@ -2,7 +2,6 @@
 import importlib
 import os
 
-import pytest
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchContext
@@ -51,12 +50,10 @@ def test_h12_preserves_floor_and_scan_defaults():
 
 
 def test_g1_uses_shared_cloud_pipeline_and_dynamic_waist():
-    context, actions = pipeline('g1', sim='true', use_sim_time='true')
+    context, actions = pipeline('g1', use_sim_time='true')
     ns = nodes(context, actions)
     assert {'self_filter', 'level_odom', 'octomap_server', 'slam_toolbox',
             'cloud_registered_to_laserscan', 'body_to_pelvis', 'fast_lio'} <= set(ns)
-    assert not {'level_frame', 'livox_to_pointcloud', 'odom_camera_init_tf',
-                'body_to_pelvis_broadcaster'} & set(ns)
     assert 'level_cloud' in ns
     assert ns['cloud_registered_to_laserscan'][1]['target_frame'] == ''
     assert ns['level_odom'][1]['dynamic_base_transform'] is True
@@ -72,15 +69,6 @@ def test_g1_real_mode_builds_the_pipeline():
     ns = nodes(context, actions)
     assert {'fast_lio', 'body_to_pelvis', 'slam_toolbox', 'level_odom'} <= set(ns)
     assert ns['level_odom'][1]['use_sim_time'] is False
-
-
-@pytest.mark.parametrize('overrides,match', [
-    ({'sim': 'true', 'odom_source': 'sim_gt'}, 'FAST-LIO'),
-    ({'sim': 'true', 'odom_source': 'wheel'}, 'FAST-LIO'),
-])
-def test_g1_invalid_modes_refused_before_actions(overrides, match):
-    with pytest.raises(RuntimeError, match=match):
-        pipeline('g1', **overrides)
 
 
 def test_g1_motion_limits_and_static_map_source_agree():
@@ -102,7 +90,7 @@ def test_g1_motion_limits_and_static_map_source_agree():
 def test_g1_recovery_commands_use_velocity_smoother():
     from launch.actions import GroupAction
     from launch_ros.actions import SetRemap
-    context, actions = pipeline('g1', sim='true')
+    context, actions = pipeline('g1')
     groups = [a for a in actions if isinstance(a, GroupAction)]
     assert len(groups) == 1, 'G1 Nav2 needs a scoped recovery remap'
     remaps = [a for a in groups[0].get_sub_entities() if isinstance(a, SetRemap)]

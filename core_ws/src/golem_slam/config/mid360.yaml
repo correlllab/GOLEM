@@ -49,7 +49,7 @@
             det_range:     100.0
             extrinsic_est_en:  true      # true: enable the online estimation of IMU-LiDAR extrinsic
             # extrinsic_T / extrinsic_R (the lidar in the IMU frame) come from the URDF's
-            # livox_link and livox_imu_link: h12_navigation.launch.py sets them.
+            # livox_link and livox_imu_link: golem_slam/navigation_launch.py sets them.
 
         publish:
             path_en: true                # true: publish Path

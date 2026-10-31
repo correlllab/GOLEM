@@ -50,10 +50,6 @@ def _fast_lio(context, config_dir, fast_lio_config_file, use_sim_time):
     return [fast_lio_node, static_tf_broadcaster]
 
 
-def _as_bool(context, name):
-    return LaunchConfiguration(name).perform(context).strip().lower() in ('true', '1', 'yes')
-
-
 def _g1_fast_lio(context, config_dir, use_sim_time):
     config = os.path.join(config_dir, LaunchConfiguration('fast_lio_config_file').perform(context))
     return [
@@ -69,10 +65,6 @@ def _g1_fast_lio(context, config_dir, use_sim_time):
 
 
 def _pipeline(context, robot):
-    # Refuse unsupported G1 modes before constructing any executable action.
-    if robot == 'g1':
-        if LaunchConfiguration('odom_source').perform(context) != 'fastlio':
-            raise RuntimeError('golem_slam requires FAST-LIO for its deskewed cloud')
     config_dir = os.path.join(get_package_share_directory('golem_slam'), 'config')
     use_sim_time = LaunchConfiguration('use_sim_time')
     fast_lio_config_file = LaunchConfiguration('fast_lio_config_file')
@@ -136,8 +128,9 @@ def _pipeline(context, robot):
         name='cloud_registered_to_laserscan',
         output='screen',
         parameters=[
-            # Level frame on the floor, so body sway doesn't tilt the slice
-            # into the floor.
+            # H1-2: base_footprint, level and on the floor, so body sway
+            # doesn't tilt the slice into the floor. G1: none, level_cloud
+            # has already put /cloud_base_filtered in that frame.
             {'target_frame': '' if robot == 'g1' else 'base_footprint'},
             {'use_sim_time': use_sim_time},
             # m above the floor: clears floor returns and FAST-LIO z drift,
@@ -241,13 +234,14 @@ def generate_navigation_launch_description(robot):
             config, 'slam_toolbox_h1.yaml')),
         DeclareLaunchArgument('octomap_params_file', default_value=os.path.join(
             config, 'g1_octomap.yaml' if g1 else 'octomap.yaml')),
-        DeclareLaunchArgument('urdf_file', default_value=urdf_path(robot, ros=True)),
     ]
     if g1:
         arguments += [
-            DeclareLaunchArgument('sim', default_value='false'),
-            DeclareLaunchArgument('odom_source', default_value='fastlio'),
             DeclareLaunchArgument('pipeline_params_file',
                                   default_value=os.path.join(config, 'g1_pipeline.yaml')),
+        ]
+    else:
+        arguments += [
+            DeclareLaunchArgument('urdf_file', default_value=urdf_path(robot, ros=True)),
         ]
     return LaunchDescription(arguments + [OpaqueFunction(function=_pipeline, args=[robot])])

@@ -49,9 +49,8 @@ g1_json_string() {
 
 # g1_test_setup TAG NAME CASE DOMAIN
 #   TAG     the test's log prefix
-#   NAME    the output directory's name: bringup, walk, nav-<odom source> or
-#           explore-<odom source>
-#   CASE    the variant (arm, walk, fastlio, sim_gt), recorded in run.json
+#   NAME    the output directory's name: bringup, walk, nav or explore
+#   CASE    the variant (arm, walk, nav, explore), recorded in run.json
 #   DOMAIN  the DDS domain unless ROS_DOMAIN_ID is set; a positive integer
 # Reads CORE_WS, OUT, SIM_IMAGE, ROS_IMAGE and SIM_GPUS (the test scripts'
 # headers) and sets OUT, SIM, ROS and COMPOSE. On exit the containers are

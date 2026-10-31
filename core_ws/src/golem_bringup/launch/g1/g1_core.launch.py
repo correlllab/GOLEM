@@ -53,7 +53,7 @@ use_nav (default true, as the H1-2's bringups start navigation) adds
 golem_slam (odometry, slam_toolbox and Nav2, which drives the walking node
 through /cmd_vel), with the core: on the sim's FAST_LIO config and clock in
 the sim, and on the real robot g1_fastlio.yaml, wall time and the MID-360
-driver (g1_real_drivers.launch.py). odom_source must be fastlio: the shared
+driver (g1_real_drivers.launch.py). FAST_LIO is the only odometry: the shared
 pipeline needs its deskewed cloud. Leave GOLEM_SIM_ODOM unset to avoid a second
 odom -> pelvis publisher.
 FAST_LIO starts while the sim's elastic band still holds the robot up: the
@@ -74,7 +74,6 @@ The launch refuses to start, before any node, on these settings
   sim refuses the real robot's (split, g1_split, and the walking node's g1).
   Since g1_split is the real robot's and sim_split the sim's, this also keeps
   each controller config to its own safety config.
-- With use_nav, odom_source must be fastlio.
 start_position_verified refuses nothing: it decides whether the real robot's
 walking node starts.
 
@@ -111,8 +110,6 @@ LOCOMOTION_CONFIGS = {
     False: 'g1',
     True: 'sim',
 }
-# Shared pipeline's odom sources (its launch file checks them too)
-ODOM_SOURCES = ('fastlio',)
 
 
 def _as_bool(context, name):
@@ -132,20 +129,10 @@ def locomotion_refusal(sim, locomotion_config):
     return None
 
 
-def nav_refusal(sim, odom_source):
-    """Why shared navigation must not start with these settings, or None."""
-    if odom_source not in ODOM_SOURCES:
-        return 'golem_slam requires FAST-LIO for its deskewed cloud'
-    return None
-
-
-def startup_refusal(sim, safety_config, controller_config, locomotion_config,
-                    use_nav=False, odom_source='fastlio'):
+def startup_refusal(sim, safety_config, controller_config, locomotion_config):
     """Why g1_core must not start with these settings, or None."""
-    refusal = nav_refusal(sim, odom_source) if use_nav else None
     # golem_upper_ik's pairing rules for the G1
-    if refusal is None:
-        refusal = pairing_refusal(ROBOT, controller_config, safety_config, sim=sim)
+    refusal = pairing_refusal(ROBOT, controller_config, safety_config, sim=sim)
     if refusal is None:
         refusal = locomotion_refusal(sim, locomotion_config)
     return refusal
@@ -154,7 +141,6 @@ def startup_refusal(sim, safety_config, controller_config, locomotion_config,
 def _setup(context):
     sim = _as_bool(context, 'sim')
     use_nav = _as_bool(context, 'use_nav')
-    odom_source = _config(context, 'odom_source')
     use_sim_time = {'use_sim_time': _as_bool(context, 'use_sim_time')}
     default_safety, default_controller = DEFAULT_CONFIGS[sim]
     safety_config = _config(context, 'safety_config') or default_safety
@@ -164,8 +150,7 @@ def _setup(context):
     locomotion_config = _config(context, 'locomotion_config') or LOCOMOTION_CONFIGS[sim]
     delay = float(LaunchConfiguration('controller_delay').perform(context))
     locomotion_delay = float(LaunchConfiguration('locomotion_delay').perform(context))
-    refusal = startup_refusal(sim, safety_config, controller_config, locomotion_config,
-                              use_nav, odom_source)
+    refusal = startup_refusal(sim, safety_config, controller_config, locomotion_config)
     if refusal is not None:
         raise RuntimeError(f'g1_core: not starting: {refusal}')
 
@@ -267,7 +252,6 @@ def _setup(context):
             PythonLaunchDescriptionSource(os.path.join(
                 get_package_share_directory('golem_bringup'), 'launch', 'g1',
                 'g1_real_drivers.launch.py')),
-            launch_arguments={'use_lidar': 'true'}.items(),
         ))
     if use_nav:
         # with the core: FAST_LIO initialises on its first scans, in the sim
@@ -283,8 +267,6 @@ def _setup(context):
         actions.append(IncludeLaunchDescription(
             PythonLaunchDescriptionSource(nav),
             launch_arguments={
-                'odom_source': odom_source,
-                'sim': str(sim).lower(),
                 'fast_lio_config_file': 'g1_fastlio_sim.yaml' if sim else 'g1_fastlio.yaml',
                 'use_sim_time': str(use_sim_time['use_sim_time']).lower(),
             }.items(),
@@ -318,9 +300,6 @@ def generate_launch_description():
             'use_nav', default_value='true',
             description='golem_slam: odometry, SLAM and Nav2 on /cmd_vel, and on the real '
                         'robot the MID-360 driver (g1_real_drivers.launch.py)'),
-        DeclareLaunchArgument(
-            'odom_source', default_value='fastlio',
-            description='with use_nav: fastlio (shared pipeline requires its deskewed cloud)'),
         DeclareLaunchArgument(
             'use_skills', default_value='false',
             description='Start the golem_skills action servers (/skill/*)'),

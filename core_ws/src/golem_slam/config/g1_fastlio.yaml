@@ -42,8 +42,8 @@
             fov_degree: 360.0
             det_range: 100.0
             # The MID-360's lidar origin in its own IMU's frame (p_imu = R p_lidar + T):
-            # FAST_LIO's upstream MID-360 value. Not estimated online: the launch
-            # file's transforms use these values.
+            # FAST_LIO's upstream MID-360 value. Not estimated online:
+            # g1_body_to_pelvis reads these values for its dynamic body -> pelvis.
             extrinsic_est_en: false
             extrinsic_T: [-0.011, -0.02329, 0.04412]
             # R is identity for the raw sensor frame: g1_MID360_config.json's

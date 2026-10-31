@@ -103,7 +103,7 @@ must update the tests in the same commit.
 ## Output
 
 Each run writes to `tests/results/g1-<test>-<time>-<pid>/`, where `<test>` is `bringup`, `walk`,
-`nav-fastlio` or `explore-fastlio`. The directory holds:
+`nav` or `explore`. The directory holds:
 
 - `run.json`: the exit codes, the domain, the commit, the submodules, the working tree and the
   image IDs.

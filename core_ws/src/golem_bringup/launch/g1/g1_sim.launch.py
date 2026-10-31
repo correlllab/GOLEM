@@ -22,11 +22,10 @@ g1_split, the walking node's g1); the sim configs keep the faster arm speeds
 use_nav (default true) adds golem_slam on the sim's MID-360 (/livox/lidar,
 /livox/imu), with sim time and g1_fastlio_sim.yaml, and Nav2 drives the
 walking node on /cmd_vel; send goals to /navigate_to_pose.
-odom_source:=fastlio is required. Start the sim with GOLEM_SIM_ODOM unset;
-otherwise odom -> pelvis has two publishers. The shared pipeline needs
-FAST-LIO's deskewed cloud and refuses sim_gt. use_skills:=true
-adds golem_skills, which serves /skill/frontier_explore to walk the robot
-through Nav2 to the frontiers of /map.
+FAST-LIO is the odometry. Start the sim with GOLEM_SIM_ODOM unset;
+otherwise odom -> pelvis has two publishers. use_skills:=true adds
+golem_skills, which serves /skill/frontier_explore to walk the robot through
+Nav2 to the frontiers of /map.
 tests/g1/test_sim_nav.sh is the closed-loop test.
 """
 
@@ -53,9 +52,6 @@ def generate_launch_description():
             'use_nav', default_value='true',
             description='golem_slam: odometry, SLAM and Nav2 on /cmd_vel'),
         DeclareLaunchArgument(
-            'odom_source', default_value='fastlio',
-            description='with use_nav: fastlio (deskewed cloud required)'),
-        DeclareLaunchArgument(
             'use_skills', default_value='false',
             description='Start the golem_skills action servers (/skill/*)'),
         IncludeLaunchDescription(
@@ -69,7 +65,6 @@ def generate_launch_description():
                 # the one safety_config runs with: sim_split
                 'controller_config': '',
                 'use_nav': LaunchConfiguration('use_nav'),
-                'odom_source': LaunchConfiguration('odom_source'),
                 'use_skills': LaunchConfiguration('use_skills'),
             }.items(),
         ),

@@ -10,7 +10,7 @@
 # Everything else is identical: Python 3.10 + ROS 2 Humble via apt,
 # CycloneDDS 0.10.x from source, uv, unitree_sdk2_python, pin/pink/mink.
 #
-# Build:  docker build -t golem_base:latest -f docker/mac/BaseDockerfile.arm64 .
+# Build:  docker build -t golem_base:arm64 -f docker/mac/BaseDockerfile.arm64 .
 # ==============================
 # ubuntu:22.04 has no CA bundle, and apt-sources.sh selects HTTPS snapshots.
 # Take the bundle from a digest-pinned Jammy image so TLS stays verified.

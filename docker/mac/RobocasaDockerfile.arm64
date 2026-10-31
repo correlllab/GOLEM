@@ -5,7 +5,7 @@
 # EGL, since there is no NVIDIA GPU under Colima. Source tree bind-mounted at
 # runtime (docker/mac/docker-compose.yml -> /home/code/golem_robocasa).
 #
-# Build:  docker build -t golem_sim_robocasa:latest -f docker/mac/RobocasaDockerfile.arm64 .
+# Build:  docker build -t golem_sim_robocasa:arm64 -f docker/mac/RobocasaDockerfile.arm64 .
 # ==============================
 FROM golem_base:arm64
 COPY docker/locks/robocasa-*.txt docker/locks/robocasa-assets.digest /opt/golem-locks/
@@ -58,7 +58,7 @@ RUN git clone https://github.com/ARISE-Initiative/robosuite_models /opt/robosuit
     uv pip install -c /opt/golem-locks/robocasa-arm64-04.txt --system --no-cache --no-deps "mink==0.0.5"
 
 # Robocasa's textures, fixtures, and objects (~10 GB) — required for any
-# `--scene kitchen` run. `echo y` answers the interactive confirmation.
+# h12_mujoco.py run (every task is a RoboCasa kitchen). `echo y` answers the interactive confirmation.
 RUN echo y | python -m robocasa.scripts.download_kitchen_assets --type all
 # Verify the complete downloaded tree, including additions/removals.
 RUN cd /opt/robocasa/robocasa/models && \
@@ -142,8 +142,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # give MuJoCo a full OpenGL 4.5 context.
 #
 # Enabled at runtime via GOLEM_DISPLAY=vnc (see launch_robocasa_mac.sh); with the
-# default GOLEM_DISPLAY=headless none of these run and the image behaves exactly
-# as before (OSMesa offscreen). Appended last so it never busts the heavy
+# default GOLEM_DISPLAY=headless none of these run and the sim renders
+# offscreen with OSMesa. Appended last so it never busts the heavy
 # mujoco/robocasa/asset layers above.
 #   xvfb            virtual framebuffer X server
 #   x11vnc          exports the Xvfb display as a VNC server

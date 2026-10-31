@@ -152,15 +152,7 @@ RUN git clone https://github.com/facebookresearch/sam3.git /opt/sam3 && \
 ENV PYTHONPATH=/opt/sam3:${PYTHONPATH}
 
 # -----------------------------------------------------------------------------
-# 6. API_KEYS stub for vision_pipeline/BBBackBones.py — module-level import is
-#    unconditional even when the Gemini backbone is unused. Override at
-#    runtime via `-e GEMINI_KEY=...` or a bind mount.
-# -----------------------------------------------------------------------------
-RUN echo 'import os; GEMINI_KEY = os.environ.get("GEMINI_KEY", "")' \
-        > /usr/local/lib/python3.10/dist-packages/API_KEYS.py
-
-# -----------------------------------------------------------------------------
-# 7. Final version clamp — restore numpy<2, setuptools 59.6, wheel<0.44 after
+# 6. Final version clamp — restore numpy<2, setuptools 59.6, wheel<0.44 after
 #    earlier pip steps inevitably bumped them.
 #
 #    numpy>=2:       breaks pinocchio + apt scipy 1.8 ABI.
@@ -193,14 +185,14 @@ RUN rm -rf /usr/local/lib/python3.10/dist-packages/setuptools \
     && pip install -c /opt/golem-locks/ros-amd64-06.txt --no-cache-dir --no-deps "numpy<2" "setuptools==59.6.0" "wheel<0.44"
 
 # -----------------------------------------------------------------------------
-# 8. Workspace integration. Base already sources /opt/ros/humble in bashrc;
+# 7. Workspace integration. Base already sources /opt/ros/humble in bashrc;
 #    overlay core_ws/install if it exists (it does not until launch_ros.sh
 #    runs colcon build at first launch).
 # -----------------------------------------------------------------------------
 RUN echo '[ -f /home/code/core_ws/install/setup.bash ] && source /home/code/core_ws/install/setup.bash' >> /root/.bashrc
 
 # -----------------------------------------------------------------------------
-# 9. Drop setuptools-70+ leftover .pth file. The step-7 clamp removed
+# 8. Drop setuptools-70+ leftover .pth file. The step-6 clamp removed
 #    _distutils_hack/, but distutils-precedence.pth remained because pip saw
 #    apt's setuptools 59.6.0 already satisfied the pin and didn't reinstall —
 #    so the .pth from the earlier setuptools 82 install was never overwritten.
@@ -249,7 +241,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-rqt-graph \
         ros-humble-rqt-tf-tree \
         ros-humble-rqt-reconfigure \
-        # Teleop — drive /cmd_vel by hand to exercise walking_node and Nav2
+        # Teleop — drive /cmd_vel by hand to exercise the lower-body controller and Nav2
         ros-humble-teleop-twist-keyboard \
         ros-humble-teleop-twist-joy \
         # Bag recording / replay (lidar + IMU traces for offline FAST-LIO tuning)
@@ -280,7 +272,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # scene-synthesizer (rendering/viz), urdfpy (yourdfpy is used instead). viser IS
 # installed below for graspgen_server's live grasp visualizer. Running an
 # actual grasp additionally needs the checkpoints + gripper_descriptions assets
-# (staged dirs below; see .claude/plans). Appended last so iterating here can't
+# (the staged dirs below). Appended last so iterating here can't
 # bust the heavy layers above.
 # -----------------------------------------------------------------------------
 ENV GRASPGENX_CHECKPOINT_DIR=/opt/graspgenx/ext/graspgenx_checkpoints \
@@ -288,7 +280,7 @@ ENV GRASPGENX_CHECKPOINT_DIR=/opt/graspgenx/ext/graspgenx_checkpoints \
 
 # Clone source + install the package (importable) without pulling its deps.
 # GraspGenX uses PEP 621 [project] metadata, but the system setuptools is clamped
-# to 59.6.0 (RosDockerfile:180-187, required for colcon) which predates PEP 621 —
+# to 59.6.0 (step 6's clamp, required for colcon) which predates PEP 621 —
 # and pip 22.0.2 build isolation lets that old setuptools win, producing a bogus
 # "UNKNOWN-0.0.0" wheel. So we stage a modern setuptools to /tmp/bsetup, build the
 # wheel against it (PYTHONPATH + --no-build-isolation), then install the prebuilt
@@ -467,7 +459,7 @@ RUN git clone \
 #    add/resolve, so torch/numpy<2 stay pinned while grpc + mujoco resolve
 #    mutually compatibly. grpcio-tools pulls protobuf 7.35.1 -> 6.33.6 (verified
 #    safe: google-genai/transformers don't pin protobuf) and yanks setuptools up
-#    to 82 — the latter is re-clamped back to 59.6.0 in step 6 below.
+#    to 82 — the latter is re-clamped back to 59.6.0 in step 5 below.
 RUN grep -viE '^(grpcio|grpcio-tools|grpcio-status|protobuf|mujoco)==' \
         /opt/graspgenx-constraints.txt > /opt/mjpc-constraints.txt \
     && PIP_CONSTRAINT=/opt/mjpc-constraints.txt pip install -c /opt/golem-locks/ros-amd64-11.txt --no-cache-dir \

@@ -8,7 +8,7 @@
 # publisher, joint_state_publisher, the Pink IK frame_task_server, and the
 # safety_node — plus the message packages and IK/QP backends they depend on.
 #
-# Build:  docker build -t golem_ros:latest -f docker/mac/RosDockerfile.slim.arm64 .
+# Build:  docker build -t golem_ros:arm64 -f docker/mac/RosDockerfile.slim.arm64 .
 # ==============================
 FROM golem_base:arm64
 COPY docker/locks/ros-*.txt /opt/golem-locks/
@@ -108,7 +108,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # robocasa MuJoCo viewer (5900 / 6080), so both can run at once.
 #
 # Enabled at runtime via GOLEM_RVIZ=vnc (see launch_ros_mac.sh); with the default
-# GOLEM_RVIZ=0 none of this runs and the image behaves exactly as before.
+# GOLEM_RVIZ=0 none of this runs.
 # Appended late so it does not bust the colcon/message layers above.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-rviz2 \

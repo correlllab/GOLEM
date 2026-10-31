@@ -12,9 +12,9 @@ ARG https_proxy
 ENV http_proxy=${http_proxy}
 ENV https_proxy=${https_proxy}
 
-# Default backend baked into the image. Operational default is GLFW: docker-compose
-# exports MUJOCO_GL=${MUJOCO_GL:-glfw} and launch_robocasa.sh forces glfw unless
-# --headless (in which case it switches to egl for offscreen GPU rendering).
+# Offscreen GPU rendering for the RGBD cameras. launch_robocasa.sh exports
+# MUJOCO_GL=egl in both display modes (overriding docker-compose.yml's value);
+# the GUI's passive viewer opens its own GLFW window.
 ENV MUJOCO_GL=egl
 
 # MuJoCo runtime graphics libs (EGL + OSMesa for headless rendering).
@@ -30,7 +30,7 @@ RUN uv pip install -c /opt/golem-locks/robocasa-amd64-01.txt --system --no-cache
         "numpy>=2.2.6" \
         "Pillow>=10.0"
 
-# Robocasa kitchen scenes (used by `h12_mujoco.py --scene kitchen`).
+# Robocasa kitchen scenes (every h12_mujoco.py task is a RoboCasa kitchen).
 # Both packages are git-only — robocasa is not on PyPI, and Robocasa pins
 # the *master* branch of robosuite (per robocasa.ai install docs). robosuite
 # is required because Robocasa's KitchenArena inherits from
@@ -70,7 +70,7 @@ RUN git clone https://github.com/ARISE-Initiative/robosuite_models /opt/robosuit
     uv pip install -c /opt/golem-locks/robocasa-amd64-04.txt --system --no-cache --no-deps "mink==0.0.5"
 
 # Robocasa's textures, fixtures, and objects (~10 GB) — required for any
-# `--scene kitchen` run; KitchenArena fails immediately without them.
+# h12_mujoco.py run; KitchenArena fails immediately without them.
 # Baked into the image so `docker compose build` produces a ready-to-run
 # container. Tradeoff: image is ~10 GB larger; pushes/pulls take longer.
 # To skip and download manually instead, comment out this RUN step and

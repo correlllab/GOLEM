@@ -109,7 +109,7 @@ The ones that matter first:
 
 ## Reading the robot without the stack
 
-The first session reads the robot from the G1's `ros` container
+The first session reads the robot from the `ros` container
 ([First real session](first-session.md), step 6), which has the SDK and the
 `cyclonedds` tool. Outside the containers, on the laptop itself:
 

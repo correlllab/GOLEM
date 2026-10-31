@@ -29,7 +29,7 @@ below has its own README with the full details, except the launch-only
 | `golem_skills` | action servers for `/skill/*`, including `/skill/frontier_explore`, started by `use_skills:=true` in the G1 bringup. |
 | `custom_ros_messages` | the actions and services (`FrameTask`, `NamedConfig`, `SetHandPose`, `SkillFrontierExplore`, ...). |
 | `FAST_LIO` (package `fast_lio`) | lidar-inertial odometry for `golem_slam` |
-| `livox_ros_driver2` | the `CustomMsg` type of `/livox/lidar`; the driver itself is not in the G1 bringup yet |
+| `livox_ros_driver2` | the `CustomMsg` type of `/livox/lidar`, and the MID-360 driver the real G1's bringup starts with `use_nav` (`launch/g1/g1_real_drivers.launch.py`) |
 | `unitree_ros2` | Unitree message definitions (`unitree_hg` and others) |
 
 Outside `core_ws`:
@@ -75,5 +75,6 @@ cd /home/code/g1_homie && python3 test_homie_policy.py
 The G1 sim's unit tests, the topic-surface probe and the acceptance tests run
 from the host; `tests/README.md` lists them.
 
-`golem_slam` now owns bringup navigation: FAST-LIO deskewed cloud, self filtering,
-OctoMap, slam_toolbox and MPPI. See [Navigation](navigation.md).
+`golem_slam`'s navigation tests are in its README; the pipeline (FAST-LIO
+deskewed cloud, self filtering, OctoMap, slam_toolbox and MPPI) is in
+[Navigation](navigation.md).

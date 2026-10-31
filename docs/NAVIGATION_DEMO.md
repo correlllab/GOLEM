@@ -58,13 +58,14 @@ Watch it live:
 You'll see the map fill in, the costmap mark the counters/appliances, a green
 plan appear to each frontier, and the robot walk to it. Unreachable frontiers are
 blacklisted after a timeout and the explorer moves on; the action succeeds with
-`map fully explored (N frontier(s) reached)` when no frontiers remain.
+`map explored: X of N frontier goal(s) reached (A by Nav2, B seen on the way), F failed`
+when no frontiers remain.
 
 ## The env knobs
 
 | Variable | For the nav demo | Notes |
 |---|---|---|
-| `GOLEM_LOWERBODY` | `almi` | Lower-body controller pinned to ALMI: stands at zero `/cmd_vel`, walks otherwise. `fame` stands only; `walk` launches the raw policy (use `almi`). |
+| `GOLEM_LOWERBODY` | `almi` | Lower-body controller pinned to ALMI: stands at zero `/cmd_vel`, walks otherwise. `fame` stands only; `walk` pins the walk-only policy (use `almi`). |
 | `GOLEM_SIM_ODOM` | `1` | Publishes the sim's ground-truth base odom (`/odom` + `odom→pelvis` TF) that SLAM needs. Off by default; **required** for this demo. |
 | `GOLEM_SLAM` | `1` | Adds `pointcloud_to_laserscan` + `slam_toolbox` → `/map`. |
 | `GOLEM_NAV2` | `1` | Adds the nav2 stack (implies SLAM). Send goals via RViz "2D Nav Goal", `/navigate_to_pose`, or `rob_explore`. |
@@ -90,7 +91,7 @@ MuJoCo (robocasa)                        ROS (golem_ros)
   free-joint pose ─/odom, TF──────►  ...............................................................│
                                      nav2 (global+local costmap: /map + scan + 3D cloud) ◄─────────┘
                                        └─ plan ─► controller ─/cmd_vel─► lowerbody_controller_node
-  rt/lowcmd ◄──────────────────────────────────────────────────────────────────────┘  (walk policy)
+  rt/lowcmd ◄──────────────────────────────────────────────────────────────────────┘  (ALMI policy)
 ```
 
 ## Gotchas specific to the nav demo

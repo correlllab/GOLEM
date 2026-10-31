@@ -162,10 +162,8 @@ source core_ws/install/setup.bash
 ros2 launch golem_bringup h12_real_robot.launch.py start_position_verified:=true
 ```
 
-A native build there leaves out the G1's packages, as `launch_ros.sh` does
-for the H1-2: add `--packages-ignore dex_3 g1_homie` to its `colcon build`.
-`golem_bringup` exec_depends on the G1's packages, so a
-`--packages-up-to golem_bringup` without it builds them too. The build includes
+Build the whole workspace there, as `launch_ros.sh` does in the container: the
+G1's packages included, since `golem_bringup` exec_depends on them. The build includes
 `golem_ros2_models`, which installs both robots' models from the checkout's
 `CL_Assets` (run `git lfs pull` in it first): the H1-2's launches read the
 robot description from that package, not from `CL_Assets` directly.
@@ -235,18 +233,24 @@ session follows [`g1/first-session.md`](g1/first-session.md).
 - **Stale installs of removed packages.** colcon never removes a package that
   is gone from `core_ws/src`. A workspace built before `golem_bringup` replaced
   `h12_bringup` and `g1_bringup` (and `h12_safety_layer`,
-  `h12_ros2_controller`, `g1_safety_layer` and `g1_control` were deleted), or
-  before `dex_3` and `g1_homie` replaced `g1_dex3` and `g1_locomotion`, keeps
-  their build and install directories, and `launch_ros.sh` then stops with
-  `stale installed package '<pkg>' has no discovered source`. Delete them
-  once, from the repo root (`sudo` for files a container left root-owned):
+  `h12_ros2_controller`, `g1_safety_layer` and `g1_control` were deleted),
+  before `golem_ros2_models` replaced `h12_ros2_model` and `g1_description`,
+  before `dex_3` and `g1_homie` replaced `g1_dex3` and `g1_locomotion`, or
+  before `golem_slam`, `deploy_mjpc` and `golem_skills` replaced `h12_slam`,
+  `h12_deploy_mjpc` and `h12_skills` (`g1_navigation` went into `golem_slam`
+  and `golem_skills`; the skills node is `/golem_skills`), keeps their build
+  and install directories, and `launch_ros.sh` then stops with
+  `stale installed package '<pkg>' has no discovered source`. Stop the
+  processes that use them, then delete them once, from the repo root, on every
+  host that built the workspace (`sudo` for files a container left root-owned):
 
   ```bash
   rm -rf {core_ws/build,core_ws/install,core_ws/build_stack_tests,core_ws/install_stack_tests,container_cache/g1_tests/build,container_cache/g1_tests/install}/{h12_bringup,g1_bringup,h12_safety_layer,h12_ros2_controller,g1_safety_layer,g1_control,h12_ros2_model,g1_description,g1_dex3,g1_locomotion,h12_slam,h12_deploy_mjpc,h12_skills,g1_navigation}
   ```
 
   A native workspace (the H1-2's onboard PC) has no such check and keeps
-  answering to the old names until they are deleted. A `--symlink-install`
+  answering to the old names until they are deleted. On the Mac, delete the
+  same package prefixes from the build/install named volumes. A `--symlink-install`
   workspace also keeps links to four deleted G1 config files, which fail the
   next `golem_upper_ik` build (`can't copy ... doesn't exist or not a regular
   file`); the change report,
@@ -266,25 +270,3 @@ session follows [`g1/first-session.md`](g1/first-session.md).
   and proto), not colcon.
 - **Laggy point clouds or images** are usually kernel UDP buffer drops — see
   [`DDS_TUNING.md`](DDS_TUNING.md).
-
-## Package name migration
-
-The package directories, Python modules and ROS names changed together:
-`h12_slam` → `golem_slam`, `h12_deploy_mjpc` → `deploy_mjpc`, and
-`h12_skills` → `golem_skills`, and `g1_navigation` was merged into `golem_slam`
-(`g1_body_to_pelvis`) and `golem_skills` (`/skill/frontier_explore`). Existing executable and action names are unchanged.
-G1 navigation now uses `golem_slam`; see [G1 navigation](g1/navigation.md).
-
-Stop affected processes before rebuilding. Colcon does not remove obsolete
-install prefixes. Remove only these generated package caches from the repo root
-(on every host that built the workspace; use sudo for container-owned files):
-
-```bash
-rm -rf {core_ws/build,core_ws/install,core_ws/build_stack_tests,core_ws/install_stack_tests,container_cache/g1_tests/build,container_cache/g1_tests/install}/{h12_slam,h12_deploy_mjpc,h12_skills,g1_navigation}
-```
-
-Then rebuild through `docker/scripts/docker_run.sh ros` (or the native onboard
-colcon workflow), and source the new install in a fresh shell. Mac users must
-remove the same package prefixes from their build/install named volumes before
-running `docker/mac/scripts/docker_run_mac.sh ros`. Do not delete source or
-unrelated cache directories.

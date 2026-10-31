@@ -23,7 +23,7 @@ their own (below).
 
 ## CPU tests
 
-The Isaac suite needs Python 3.11, CPU PyTorch, NumPy, Pillow and CycloneDDS 0.10.2
+The Isaac suite needs Python 3.10, CPU PyTorch, NumPy, Pillow and CycloneDDS 0.10.2
 plus the checked-out Unitree SDK. It does not start Kit or DDS participants.
 See the workflow for the exact dependency setup.
 
@@ -133,7 +133,7 @@ tests/g1/test_sim_explore.sh                 # frontier exploration
 ```
 
 A passing test ends with `PASSED: <n>/<n> checks` and exits 0. The G1
-packages' own tests run in the G1 `ros` container; `docs/g1/packages.md` says
+packages' own tests run in the `ros` container (it serves both robots); `docs/g1/packages.md` says
 how.
 
 The G1 nav/explore tests use `golem_slam` and require FAST-LIO; `GOLEM_SIM_ODOM=1`

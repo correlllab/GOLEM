@@ -12,7 +12,7 @@ on:
       - 'tests/**'
       - '.github/workflows/simulator-tests.yml'
   push:
-    branches: [main, master]
+    branches: [main]
   workflow_dispatch:
 
 permissions:

@@ -33,17 +33,17 @@ it in automatically: `docker-compose.yml` bind-mounts it to
 file and restart the container to change the tuning (for example to pin the DDS
 network interface).
 
-## 3. Pin the NIC IRQ off the real-time cores
+## 3. Pin the NIC IRQ off the busy cores
 
 `eno1` has a single RX queue, so *all* inbound DDS traffic is processed in one
-`NET_RX` softirq on whichever core holds its IRQ. `irqbalance` parks that IRQ on
-core 11 — inside the MJPC planner's `0-11` set — and the contention drops the
+`NET_RX` softirq on whichever core holds its IRQ. When `irqbalance` parks that
+IRQ on a core a busy process also runs on, the contention drops the
 robot's 500 Hz `/lowstate` stream to ~400 Hz with multi-second stalls (TF fades
 in RViz, the lower-body controller trips its state-stale safe-hold). The wire and
 the robot are fine; the loss is single-core contention.
 
-Move the IRQ to a core outside the RT set (0–12) and stop `irqbalance` putting it
-back:
+Move the IRQ to a core nothing busy runs on (13 below; pick one that stays idle
+under load in `htop`) and stop `irqbalance` putting it back:
 
 ```bash
 sudo systemctl stop irqbalance
@@ -51,11 +51,10 @@ echo 13 | sudo tee /proc/irq/$(awk -F: '/eno1/{gsub(/ /,"",$1);print $1}' /proc/
 ```
 
 Persist with `sudo systemctl disable --now irqbalance` plus a boot-time unit that
-re-applies the affinity. The bringup CPU map reserves core 13 for this — the
-estimator takes core 12 and `OTHER_CPUS` starts at 14, so no ROS node lands on
-the network core.
+re-applies the affinity. The bringups pin no process to a core, so the scheduler
+can still place a ROS node on the network core.
 
-Confirm the softirq moved (counts should grow on core 13, not 11):
+Confirm the softirq moved (counts should grow on core 13 only):
 
 ```bash
 grep NET_RX /proc/softirqs

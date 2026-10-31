@@ -338,7 +338,6 @@ class RobotModel:
         if self.state_subscriber is not None:
             self.state_subscriber.shutdown()
             self.state_subscriber = None
-        print('RobotModel shutdown', flush=True)
 
     @property
     def state_staleness_ms(self):
@@ -413,12 +412,6 @@ class RobotModel:
 
     def get_frame_transformation_reduced(self, frame_name: str, q_reduced: np.ndarray=None):
         return self._get_frame_transformation_reduced(frame_name, q_reduced).np
-
-    def get_frame_position_reduced(self, frame_name: str, q_reduced: np.ndarray=None):
-        return self._get_frame_transformation_reduced(frame_name, q_reduced).translation
-
-    def get_frame_rotation_reduced(self, frame_name: str, q_reduced: np.ndarray=None):
-        return self._get_frame_transformation_reduced(frame_name, q_reduced).rotation
 
     def check_within_limits_reduced(self, q_reduced):
         '''Check if the given joint position violates joint limits for the reduced model'''

@@ -24,9 +24,9 @@ ENABLED_JOINTS = (
 )
 # upper-body joints the IK does not move; every command holds them at controller.hold_targets
 HELD_JOINTS = ('torso_joint',)
-# The controller's shutdown command turns the torso off with the arms, in both modes: gravity
-# barely loads the torso yaw
-SHUTDOWN_KEEPS_HELD_JOINTS_ON_LOWCMD = False
+# The controller's shutdown command turns the torso off with the arms: gravity barely loads
+# the torso yaw
+SHUTDOWN_KEEPS_HELD_JOINTS = False
 # end effectors for velocity limiting and the ee pose topics
 EE_FRAMES = ('left_wrist_yaw_link', 'right_wrist_yaw_link')
 # frames the OMPL planner plans for and bounds by planner.frame_* limits
@@ -87,11 +87,10 @@ NAMED_CONFIGS = {
 # hold target; the staged moves keep the hands from scraping the hips
 STARTUP_SEQUENCE = ('init_1', 'init_2', 'init_3', 'home')
 
-# Controller-config defaults the two robots do not share (golem_upper_ik.config). The
-# follow gate reads golem_safety's output, /lowcmd in both H1-2 modes. A goal stops when
-# /lowstate's tick lags by more than max_state_lag_ms (ms; <= 0 turns the check off).
+# Controller-config defaults the two robots do not share (golem_upper_ik.config). A goal
+# stops when /lowstate's tick lags by more than max_state_lag_ms (ms; <= 0 turns the check
+# off).
 CONFIG_DEFAULTS = {
-    'topics.safety_out': '/lowcmd',
     'controller.max_state_lag_ms': 50.0,
 }
 # the controller config frame_task_server and joint_state_publisher load when their config

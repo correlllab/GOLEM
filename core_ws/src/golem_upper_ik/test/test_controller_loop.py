@@ -187,7 +187,7 @@ def test_startup_home_ee_target_and_zero_gain_shutdown(ros, models, robot):
     arms = G1_LIMP_ARMS if robot == 'g1' else 'home'
     q0 = body_pose(profile, arms, [0.05] + [0.0] * (len(held) - 1))
     model = shared_model(ros, models, robot)
-    robot_ = FollowingRobot(ros, profile, q0, config['topics']['safety_out'])
+    robot_ = FollowingRobot(ros, profile, q0, '/lowcmd')
     controller = build(ros, model, config)
 
     # start-up: the arms through the start-up postures to the last, the held joints eased to
@@ -213,14 +213,14 @@ def test_startup_home_ee_target_and_zero_gain_shutdown(ros, models, robot):
     assert np.linalg.norm(ee_position(controller, 1) - right_start) < 0.005
 
     # shutdown: one command, then silence. Mode 0 and zero gains and torque on the upper
-    # slots, except the held joints of a profile that keeps them on /lowcmd (the G1's waist),
+    # slots, except the held joints of a profile that keeps them (the G1's waist),
     # which stay at their hold
     controller.shutdown()
     stopped = time.monotonic()
     time.sleep(0.3)
     received, last = robot_.last_command
     assert received < stopped + 0.05
-    keeps_held = profile.shutdown_keeps_held_joints_on_lowcmd
+    keeps_held = profile.shutdown_keeps_held_joints
     if not keeps_held:
         assert robot_.zero_gain_commands >= 1
     for slot in upper:
@@ -287,17 +287,17 @@ def test_startup_stops_with_an_error_when_the_safety_layer_never_engages(
     # nothing relays the commands: the gate stays shut, the commands stay near the swaying
     # robot, and the start-up gives up after its own 2 s wait, not after the moves' 10 s
     config = config_of(robot, CONFIGS[robot], startup_timeout=2.0, startup_move_timeout=10.0)
-    safety_out = config['topics']['safety_out']
+    lowcmd = '/lowcmd'
     q0 = np.zeros(len(profile.body_joints))
     q0[slots_of(profile, ('left_elbow_joint', 'right_elbow_joint'))] = 0.8
-    robot_ = RelayedRobot(ros, profile, q0, safety_out)
+    robot_ = RelayedRobot(ros, profile, q0, lowcmd)
     robot_.start()
     recorder = CommandRecorder(ros, config['topics']['low_cmd'], profile, robot_)
     startup = watch_startup(monkeypatch)
     model = shared_model(ros, models, robot)
     with pytest.raises(RuntimeError, match=re.escape(
             'golem_safety did not relay the commands within controller.startup_timeout '
-            f'(2 s): no {safety_out} sample carried them')) as raised:
+            f'(2 s): no {lowcmd} sample carried them')) as raised:
         build(ros, model, config)
     stopped = time.monotonic()
     # golem_safety engages each input on its own: no cause waits for another input
@@ -324,7 +324,7 @@ def test_startup_move_stops_with_an_error_after_its_own_timeout(ros, models, rob
     # moves through its start-up postures back to it (at least 4 s at 1 rad/s)
     q0 = body_pose(profile, G1_LIMP_ARMS if robot == 'g1' else 'home')
     config = config_of(robot, CONFIGS[robot], startup_move_timeout=2.0)
-    robot_ = FollowingRobot(ros, profile, q0, config['topics']['safety_out'])
+    robot_ = FollowingRobot(ros, profile, q0, '/lowcmd')
     recorder = CommandRecorder(ros, config['topics']['low_cmd'], profile)
     model = shared_model(ros, models, robot)
     with pytest.raises(RuntimeError, match=r'Moving \w+: not done within '
@@ -355,7 +355,7 @@ def test_every_command_holds_the_hold_targets_while_the_held_joints_sag(ros, mod
     sag = np.zeros(len(profile.body_joints))
     sag[held[-1]] = 0.02
     q0 = body_pose(profile, 'home', targets)
-    robot_ = FollowingRobot(ros, profile, q0, config['topics']['safety_out'], sag=sag)
+    robot_ = FollowingRobot(ros, profile, q0, '/lowcmd', sag=sag)
     model = shared_model(ros, models, robot)
     controller = build(ros, model, config, init=False)
     recorder = CommandRecorder(ros, config['topics']['low_cmd'], profile)
@@ -383,12 +383,12 @@ def test_waits_for_state_and_tracks_the_robot_through_engagement(
     profile = profile_of(robot)
     controller_config, safety_config = SPLIT[robot]
     config = config_of(robot, controller_config, follow_tolerance=follow_tolerance)
-    safety_out = config['topics']['safety_out']
+    lowcmd = '/lowcmd'
     arms, held = STANDING[robot]
     q0 = body_pose(profile, arms, held)
-    robot_ = RelayedRobot(ros, profile, q0, safety_out)
+    robot_ = RelayedRobot(ros, profile, q0, lowcmd)
     upper_in = CommandRecorder(ros, config['topics']['low_cmd'], profile, robot_)
-    output = CommandRecorder(ros, safety_out, profile, robot_)
+    output = CommandRecorder(ros, lowcmd, profile, robot_)
     layer = SafetyNode(robot, safety_config, tmp_path)
     ros.on_close(layer.stop)
     opened = watch_gate_opening(monkeypatch)
@@ -500,7 +500,7 @@ def test_start_up_steps_sleep_a_whole_period_after_their_work(ros, models, monke
     # the elbows 0.5 rad from home and the waist yaw 0.1 rad from its target
     q0 = body_pose(profile, 'home', [0.1, 0.0, 0.0])
     q0[slots_of(profile, ('left_elbow_joint', 'right_elbow_joint'))] = 0.5
-    FollowingRobot(ros, profile, q0, config['topics']['safety_out'])
+    FollowingRobot(ros, profile, q0, '/lowcmd')
     model = shared_model(ros, models, 'g1')
     controller = build(ros, model, config)
     dt = controller.dt

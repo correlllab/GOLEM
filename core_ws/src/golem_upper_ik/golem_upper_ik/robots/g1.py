@@ -25,10 +25,9 @@ ENABLED_JOINTS = (
 # upper-body joints the IK does not move (its reduced model locks them at their measured
 # angles at each goal's start); every command holds them at controller.hold_targets
 HELD_JOINTS = ('waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint')
-# golem_safety writes /lowcmd in every mode, and a walking policy may balance the legs,
-# trained with a stiff waist: the controller's shutdown command keeps the waist at its hold,
-# and only the arms go limp.
-SHUTDOWN_KEEPS_HELD_JOINTS_ON_LOWCMD = True
+# A walking policy may balance the legs, trained with a stiff waist: the controller's
+# shutdown command keeps the waist at its hold, and only the arms go limp.
+SHUTDOWN_KEEPS_HELD_JOINTS = True
 # the Dex3-1 palms: end effectors for velocity limiting and the ee pose topics, and the
 # planner's frames
 EE_FRAMES = ('left_hand_palm_link', 'right_hand_palm_link')
@@ -71,10 +70,8 @@ NAMED_CONFIGS = {
 STARTUP_SEQUENCE = ('home',)
 
 # Controller-config defaults the two robots do not share (golem_upper_ik.config). The
-# follow gate reads golem_safety's output, /lowcmd in both G1 modes. The /lowstate tick-lag
-# check is off: the real G1's tick has not been measured.
+# /lowstate tick-lag check is off: the real G1's tick has not been measured.
 CONFIG_DEFAULTS = {
-    'topics.safety_out': '/lowcmd',
     'controller.max_state_lag_ms': 0.0,
 }
 # the controller config frame_task_server and joint_state_publisher load when their config

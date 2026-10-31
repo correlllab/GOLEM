@@ -23,6 +23,7 @@ import time
 import numpy as np
 from pink.exceptions import NoSolutionFound
 
+from golem_upper_ik.config import SAFETY_OUTPUT_TOPIC
 from golem_upper_ik.core.ik_solver import IKSolver
 from golem_upper_ik.core.low_cmd_handler import LowCmdHandler
 from golem_upper_ik.core.planner import PlannerClient, PlannerConfig, PlannerUnavailableError
@@ -169,8 +170,8 @@ class UpperController:
             f'No fresh {self.state_topic} with finite joint positions within '
             f'{self.state_timeout:.1f} s on ROS domain {ros_domain_id(self.node)}; not '
             f'enabling any motor. Is the robot (or the sim) up and publishing '
-            f'{self.state_topic} on this domain, and is DDS on the interface wired to it '
-            '(on the G1, G1_DDS_INTERFACE)?')
+            f'{self.state_topic} on this domain (ROS_DOMAIN_ID), and does the CycloneDDS '
+            'configuration (CYCLONEDDS_URI) use the interface wired to it?')
 
     # the start-up
 
@@ -194,7 +195,7 @@ class UpperController:
         handler = self.low_cmd_handler
         if handler.following:
             return
-        topic = handler.safety_output_topic
+        topic = SAFETY_OUTPUT_TOPIC
         self._logger.info(f'Waiting for golem_safety to relay the commands on {topic}...')
         while not handler.following:
             if time.monotonic() > deadline:
@@ -212,8 +213,8 @@ class UpperController:
             f'relays only once it sees {self.state_topic} report mode_machine '
             f'{self.profile.mode_machine} (the {self.profile.robot} profile\'s) and, when started '
             'with use_estop:=true, a first sample on its estop topics; it must run the safety '
-            'config this controller config pairs with (writing '
-            f'{topic}), and must not have latched its estop, at this start-up (it checks its '
+            'config this controller config pairs with, and must not have latched its estop, '
+            'at this start-up (it checks its '
             f'estop limits from its first {self.state_topic} sample, so a joint already past '
             'limits.estop latches it) or in an earlier run; a latch holds until golem_safety '
             'restarts. Stopping the controller')

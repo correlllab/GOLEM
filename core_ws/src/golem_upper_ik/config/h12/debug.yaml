@@ -18,10 +18,6 @@ controller:
 planner:
   planner: RRTConnect
   timeout: 1.0
-  # example RRT* tuning
-  # planner: RRTstar
-  # timeout: 3.0
-  # range: 0.15
   # planner extension length in joint space
   range: 0.0
   try_direct: true

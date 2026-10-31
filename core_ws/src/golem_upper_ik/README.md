@@ -51,7 +51,7 @@ they are read) and exits 1. On SIGINT or SIGTERM it shuts down (below) and exits
 | pub | `left_ee_target`, `right_ee_target` | `geometry_msgs/PoseStamped` | the current goal's targets for the end-effector frames, when it names them |
 | pub | `topics.low_cmd` | `unitree_hg/msg/LowCmd` | reliable, keep-last 1, at `frequency.pub_hz`; must be under `/safety/` |
 | sub | `topics.low_state` (`/lowstate`) | `unitree_hg/msg/LowState` | keep-last 1, best effort |
-| sub | `topics.safety_out` | `LowCmd` | `golem_safety`'s output, read (never written) only until the follow gate opens |
+| sub | `/lowcmd` | `LowCmd` | `golem_safety`'s output, read (never written) only until the follow gate opens |
 
 The actions, publishers and the `/frame_task` goal check exist once the start-up is done.
 
@@ -72,7 +72,7 @@ nothing of another robot's packages: the H1-2 builds and runs without the G1's p
 |---|---|---|
 | IK joints | the 14 arm joints | the 14 arm joints |
 | Held joints | `torso_joint` | `waist_yaw_joint`, `waist_roll_joint`, `waist_pitch_joint` |
-| Held joints at shutdown on `/lowcmd` (Shutdown, below) | off, with the arms | kept at their hold |
+| Held joints at shutdown (Shutdown, below) | off, with the arms | kept at their hold |
 | End-effector frames | `left/right_wrist_yaw_link` | `left/right_hand_palm_link` |
 | Planner frames | `left/right_grasp_frame` | `left/right_hand_palm_link` |
 | IMU frame | `torso_link` | `imu_in_pelvis` (`controller.imu_frame` overrides) |
@@ -80,7 +80,6 @@ nothing of another robot's packages: the H1-2 builds and runs without the G1's p
 | Self-collision model | `h1_2_magpie_sphere.urdf` + `h1_2_magpie_sphere_collision.srdf` | `g1_sphere.urdf` + `g1_sphere_collision.srdf`, packed on the rubber-hand G1: two spheres per hand at the Dex3-1 palm, none on the fingers, so the barrier and the planner do not see the Dex3-1 fingers. Its torso spheres stay inside the torso's flanks, where the hanging upper arms are 9 mm from the torso (`CL_Assets/README.md`) |
 | Start-up postures | `init_1`, `init_2`, `init_3`, `home` | `home` |
 | Named configurations | `NAMED_CONFIGS` in `robots/h12.py` (`home`, `t_pose`, `prep`, `staging_left`, ...) | `NAMED_CONFIGS` in `robots/g1.py` (`home`, `arms_down`, `t_pose`, `arms_front_45`) |
-| `topics.safety_out` default | `/lowcmd` | `/lowcmd` |
 | `controller.max_state_lag_ms` default | 50 | 0 (off: the real G1's tick has not been measured) |
 
 ## Configs
@@ -110,7 +109,6 @@ config outside the tables is not refused.
 |---|---|---|
 | `topics.low_cmd` | `/safety/lowcmd_upper_in` | the `golem_safety` input written; a topic outside `/safety/` is refused |
 | `topics.low_state` | `/lowstate` | the robot's state |
-| `topics.safety_out` | per robot (above) | `golem_safety`'s output for the follow gate: `/lowcmd`, the output of every `golem_safety` mode; another topic is refused |
 | `controller.v_lim`, `w_lim` | 1.0, 2.0 | end-effector linear (m/s) and angular (rad/s) speed limits |
 | `controller.dq_lim` | 1.0 | IK joint speed limit, rad/s |
 | `controller.d_min` | 0.02 | self-collision distance the IK keeps between sphere pairs, m; every config of both robots keeps it (the G1's closest pairs at `home`, the upper arms against the torso, are 0.025 m apart) |
@@ -125,16 +123,13 @@ config outside the tables is not refused.
 | `controller.max_state_lag_ms` | per robot (above) | the stale-state limit on domain 0, ms; <= 0 turns it off |
 | `frequency.ctrl_hz`, `pub_hz`, `check_hz` | 50, 500, 1000 | IK steps, command publishing, the follow gate's checks between steps, Hz |
 | `gains.kp`, `kd`, `ki` | | per upper-body joint |
-| `limits.clip.position_offset`, `velocity_ratio`, `torque_ratio` | 0.001, 0.10, 0.25 | the command clip, as in `golem_safety` (`limits.enforce` is an alias) |
+| `limits.clip.position_offset`, `velocity_ratio`, `torque_ratio` | 0.001, 0.10, 0.25 | the command clip, as in `golem_safety` |
 | `planner.*` | `enabled: true`, `frame_names` the profile's | the OMPL planner (`planner`, `timeout`, `moving_speed`, the frame bounds, ...); the rest take `PlannerConfig`'s defaults |
 
 Every config sets `ctrl_hz` 30 and `pub_hz` 500, except the H1-2's `sim_safety_split`, which
 leaves `frequency` out and so solves IK at 50 Hz. The loader refuses, naming the robot, the
-file and the key: an unknown key at any level; a key of an older schema (`mode`, `network`,
-`controller.torso_target`, `controller.waist_target`, `limits.estop`,
-`planner.frame_z_min_margin`), saying why it was removed or which key replaces it; a
-non-finite number, a number
-out of its range or a value of the wrong kind; an alias given with its key.
+file and the key: an unknown key at any level; a non-finite number, a number out of its
+range or a value of the wrong kind.
 
 ## Behavior
 
@@ -160,7 +155,7 @@ its first command once `/lowstate` reports the profile's `mode_machine` (and, on
 H1-2, `estop_node` has sent a first sample), so the gate opens at the first relay, on both
 robots whether or not the leg node commands.
 
-**The follow gate.** Until a `topics.safety_out` sample carries the controller's command on
+**The follow gate.** Until a `/lowcmd` sample (`golem_safety`'s output) carries the controller's command on
 every upper slot (kp > 0, each q within `controller.follow_tolerance`), every upper-body
 command is kept within `follow_tolerance` of the measured joints, and a thread re-checks at
 `frequency.check_hz` between control steps. Nothing executes the commands before
@@ -236,7 +231,7 @@ later one is ignored. `frame_task_server` first sends its upper slots one comman
 publishing, then stops the planner and its `/lowstate` subscription, the last two even if an
 earlier step fails; the whole shutdown fits in launch's 5 s `sigterm_timeout`. The command
 gives the IK joints mode 0 and zero kp, kd and tau (q and dq as they were). The held joints
-get the same, unless the profile's `shutdown_keeps_held_joints_on_lowcmd` is set (the G1):
+get the same, unless the profile's `shutdown_keeps_held_joints` is set (the G1):
 then they keep their hold angle, gains and torque, since a walking policy on the legs needs
 a stiff waist. What `golem_safety` does with that command:
 
@@ -265,10 +260,7 @@ robots with their collision models), the ROS I/O, command handler and follow gat
 (`test_ros_io.py`, `test_low_cmd_handler.py`), the controller and the nodes
 (`test_controller_loop.py`, `test_frame_task_server.py`), a start-up IK step with no
 solution (`test_startup_no_solution.py`), the publish rate
-(`test_publish_rate.py`) and that nothing imports `unitree_sdk2py` (`test_no_sdk.py`). The
-fixtures under `test/fixtures/` are recorded data: what the previous arm controllers
-returned for the same configs and configurations (`test/fixtures/README.md` says which
-package and commit); no test imports those controllers.
+(`test_publish_rate.py`) and that nothing imports `unitree_sdk2py` (`test_no_sdk.py`).
 
 ## Tools
 

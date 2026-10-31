@@ -5,9 +5,8 @@ derived for the robot's body slots.
 
 A bare name ('safety_split' or 'safety_split.yaml') is a file of
 share/golem_upper_ik/config/<robot>/. Anything with a '/' is a path. Every key and every
-value is checked: an unknown key, a key from an older config, a value of the wrong type, a
-non-finite number or a number out of its range raises ValueError naming the robot, the file
-and the key.
+value is checked: an unknown key, a value of the wrong type, a non-finite number or a
+number out of its range raises ValueError naming the robot, the file and the key.
 '''
 import math
 import os
@@ -19,16 +18,13 @@ import yaml
 from golem_upper_ik.profile import ROBOTS, RobotProfile, load_profile
 from golem_upper_ik.robots import robot_module
 
-__all__ = ['load_controller_config', 'SAFETY_INPUT_PREFIX', 'SAFETY_OUTPUT_TOPICS']
+__all__ = ['load_controller_config', 'SAFETY_INPUT_PREFIX', 'SAFETY_OUTPUT_TOPIC']
 
 # The controller writes only golem_safety's inputs: golem_safety is the only writer of
 # /lowcmd
 SAFETY_INPUT_PREFIX = '/safety/'
-# golem_safety's output topic in each of its modes; the follow gate reads one of them
-SAFETY_OUTPUT_TOPICS = {
-    'split_mode': '/lowcmd',
-    'full_body_mode': '/lowcmd',
-}
+# golem_safety's output, which the follow gate reads
+SAFETY_OUTPUT_TOPIC = '/lowcmd'
 
 TOPIC_DEFAULTS = {
     'low_cmd': '/safety/lowcmd_upper_in',
@@ -64,7 +60,7 @@ CLIP_DEFAULTS = {
     'velocity_ratio': 0.10,
     'torque_ratio': 0.25,
 }
-# The planner section's keys, by kind: the fields of the H1-2 planner's PlannerConfig, and
+# The planner section's keys, by kind: the fields of PlannerConfig (core.planner), and
 # enabled. The loader checks the keys a file gives and fills in only enabled (true) and
 # frame_names (the profile's planner frames); PlannerConfig supplies every other default.
 # The planner runs only when the profile has a self-collision model and enabled is true.
@@ -91,25 +87,13 @@ PLANNER_KEYS = frozenset(
     PLANNER_TEXT_KEYS + PLANNER_BOOLEAN_KEYS + PLANNER_POSITIVE_KEYS + PLANNER_NON_NEGATIVE_KEYS
     + PLANNER_COUNT_KEYS + PLANNER_BOUND_KEYS + ('frame_names',))
 SECTION_KEYS = {
-    'topics': frozenset(TOPIC_DEFAULTS) | {'safety_out'},
+    'topics': frozenset(TOPIC_DEFAULTS),
     'controller': frozenset(CONTROLLER_DEFAULTS) | {'hold_targets', 'imu_frame',
                                                     'max_state_lag_ms'},
     'planner': PLANNER_KEYS,
     'frequency': frozenset(FREQUENCY_DEFAULTS),
     'gains': frozenset(('kp', 'kd', 'ki')),
-    'limits': frozenset(('clip', 'enforce')),
-}
-# What the error says about a key an older config may still carry
-REPLACED_KEYS = {
-    'mode': 'removed: the controller always writes a golem_safety input (topics.low_cmd)',
-    'network': "removed: ROS supplies the domain, and the G1's interface is pinned in "
-               'cyclonedds_local.xml',
-    'controller.torso_target': 'renamed controller.hold_targets: {torso_joint: rad}',
-    'controller.waist_target': 'renamed controller.hold_targets: {waist_yaw_joint: rad, '
-                               'waist_roll_joint: rad, waist_pitch_joint: rad}',
-    'limits.estop': "removed: the controller has no estop of its own; golem_safety's estop "
-                    'limits are the check',
-    'planner.frame_z_min_margin': 'renamed planner.frame_limit_margin (x, y and z)',
+    'limits': frozenset(('clip',)),
 }
 
 
@@ -131,11 +115,8 @@ def _section(where: _Where, raw: dict, name: str) -> dict:
     if not isinstance(value, dict):
         raise where.error(name, 'must be a mapping')
     for key in value:
-        dotted = f'{name}.{key}'
-        if dotted in REPLACED_KEYS:
-            raise where.error(dotted, REPLACED_KEYS[dotted])
         if key not in SECTION_KEYS[name]:
-            raise where.error(dotted, 'unknown key')
+            raise where.error(f'{name}.{key}', 'unknown key')
     return value
 
 
@@ -252,22 +233,19 @@ def _gains(where: _Where, gains: dict, profile: RobotProfile) -> dict:
 
 
 def _clip_limits(where: _Where, limits: dict, profile: RobotProfile) -> dict:
-    if 'clip' in limits and 'enforce' in limits:
-        raise where.error('limits.enforce', 'give limits.clip or limits.enforce, not both')
-    name = 'enforce' if 'enforce' in limits else 'clip'
-    policy = limits.get(name, {})
+    policy = limits.get('clip', {})
     if not isinstance(policy, dict):
-        raise where.error(f'limits.{name}', 'must be a mapping')
+        raise where.error('limits.clip', 'must be a mapping')
     for key in policy:
         if key not in CLIP_DEFAULTS:
-            raise where.error(f'limits.{name}.{key}', 'unknown key')
-    values = {key: _joint_values(where, f'limits.{name}.{key}', policy.get(key, default),
+            raise where.error(f'limits.clip.{key}', 'unknown key')
+    values = {key: _joint_values(where, f'limits.clip.{key}', policy.get(key, default),
                                  profile)
               for key, default in CLIP_DEFAULTS.items()}
     for key, value in values.items():
         if np.any(value < 0.0):
             slot = int(np.argmax(value < 0.0))
-            raise where.error(f'limits.{name}.{key}',
+            raise where.error(f'limits.clip.{key}',
                               f'must be 0 or positive, not {value[slot]} '
                               f'(joint {profile.body_joints[slot]})')
 
@@ -276,7 +254,7 @@ def _clip_limits(where: _Where, limits: dict, profile: RobotProfile) -> dict:
     for slot, (low, high) in enumerate(q_limits):
         if low >= high:
             raise where.error(
-                f'limits.{name}.position_offset',
+                'limits.clip.position_offset',
                 f'too large for joint {slot} ({profile.body_joints[slot]}): it leaves '
                 f'[{low}, {high}]')
     return {
@@ -354,8 +332,6 @@ def load_controller_config(robot: str, name_or_path: str) -> dict:
     if not isinstance(raw, dict):
         raise where.error('', 'the file must hold a mapping')
     for key in raw:
-        if key in REPLACED_KEYS:
-            raise where.error(key, REPLACED_KEYS[key])
         if key not in SECTION_KEYS:
             raise where.error(key, 'unknown key')
     sections = {name: _section(where, raw, name) for name in SECTION_KEYS}
@@ -366,17 +342,6 @@ def load_controller_config(robot: str, name_or_path: str) -> dict:
     if not topics['low_cmd'].startswith(SAFETY_INPUT_PREFIX):
         raise where.error('topics.low_cmd', f"'{topics['low_cmd']}' is not a golem_safety "
                                             f'input ({SAFETY_INPUT_PREFIX}...)')
-    unmapped = [mode for mode in profile.modes if mode not in SAFETY_OUTPUT_TOPICS]
-    if unmapped:
-        raise where.error('', f'robot {robot} has golem_safety modes with no known output '
-                              f'topic: {", ".join(unmapped)}')
-    outputs = sorted({SAFETY_OUTPUT_TOPICS[mode] for mode in profile.modes})
-    safety_out = _topic(where, 'topics.safety_out',
-                        topics_raw.get('safety_out', robot_defaults['topics.safety_out']))
-    if safety_out not in outputs:
-        raise where.error('topics.safety_out', f"'{safety_out}' is not a golem_safety output "
-                                               f'of robot {robot} ({", ".join(outputs)})')
-    topics['safety_out'] = safety_out
 
     controller_raw = sections['controller']
     controller = {

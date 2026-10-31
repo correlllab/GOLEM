@@ -164,8 +164,7 @@ def test_relative_frame_goal(ros, models, robot):
     from custom_ros_messages.action import FrameTask
     profile = profile_of(robot)
     config = config_of(robot, CONFIGS[robot])
-    FollowingRobot(ros, profile, body_pose(profile, START[robot]),
-                   config['topics']['safety_out'])
+    FollowingRobot(ros, profile, body_pose(profile, START[robot]), '/lowcmd')
     model = shared_model(ros, models, robot)
     left = PoseRecorder(ros, '/left_ee_pose')
     server_of(ros, model, CONFIGS[robot])
@@ -232,7 +231,7 @@ def test_relative_frame_goal_is_a_pelvis_frame_move(ros, models, robot, imu):
     profile = profile_of(robot)
     config = config_of(robot, CONFIGS[robot])
     FollowingRobot(ros, profile, body_pose(profile, START[robot]),
-                   config['topics']['safety_out'], imu_quaternion=IMU_ORIENTATIONS[imu])
+                   '/lowcmd', imu_quaternion=IMU_ORIENTATIONS[imu])
     model = shared_model(ros, models, robot)
     left = PoseRecorder(ros, '/left_ee_pose')
     target = PoseRecorder(ros, '/left_ee_target')
@@ -285,8 +284,7 @@ def test_slow_mode_scales_speed(ros, models, robot, tmp_path):
     v_lim = 0.04  # m/s
     config_path = edited_config(tmp_path, robot, CONFIGS[robot], v_lim=v_lim)
     config = config_of(robot, str(config_path))
-    FollowingRobot(ros, profile, body_pose(profile, START[robot]),
-                   config['topics']['safety_out'])
+    FollowingRobot(ros, profile, body_pose(profile, START[robot]), '/lowcmd')
     model = shared_model(ros, models, robot)
     recorder = CommandRecorder(ros, config['topics']['low_cmd'], profile)
     controller = server_of(ros, model, config_path).controller
@@ -330,7 +328,7 @@ def test_named_config_slow_mode(ros, models, robot):
     # the left shoulder pitch starts 0.15 rad from the named configuration
     q0 = body_pose(profile, name)
     q0[profile.body_joints.index('left_shoulder_pitch_joint')] += 0.15
-    robot_ = FollowingRobot(ros, profile, q0, config['topics']['safety_out'])
+    robot_ = FollowingRobot(ros, profile, q0, '/lowcmd')
     model = shared_model(ros, models, robot)
     recorder = CommandRecorder(ros, config['topics']['low_cmd'], profile)
     server_of(ros, model, CONFIGS[robot])
@@ -373,8 +371,7 @@ def test_stale_state_aborts_goal(ros, models, monkeypatch, capfd):
     from golem_upper_ik.core.controller import upper_controller
     profile = profile_of('h12')
     config = config_of('h12', CONFIGS['h12'])
-    robot_ = FollowingRobot(ros, profile, body_pose(profile, START['h12']),
-                            config['topics']['safety_out'])
+    robot_ = FollowingRobot(ros, profile, body_pose(profile, START['h12']), '/lowcmd')
     model = shared_model(ros, models, 'h12')
     recorder = CommandRecorder(ros, config['topics']['low_cmd'], profile)
     log = Log(capfd)
@@ -412,9 +409,7 @@ def test_stale_state_aborts_goal(ros, models, monkeypatch, capfd):
 def test_stale_state_does_not_abort_a_goal_off_the_real_robots_domain(ros, models, capfd):
     from custom_ros_messages.action import FrameTask
     profile = profile_of('h12')
-    config = config_of('h12', CONFIGS['h12'])
-    robot_ = FollowingRobot(ros, profile, body_pose(profile, START['h12']),
-                            config['topics']['safety_out'])
+    robot_ = FollowingRobot(ros, profile, body_pose(profile, START['h12']), '/lowcmd')
     model = shared_model(ros, models, 'h12')
     log = Log(capfd)
     # on the test domain the tick-lag check is off: its deadline is 0
@@ -437,7 +432,7 @@ def test_frame_task_target_never_raises_while_tasks_are_added(ros, models):
     from golem_upper_ik.core.controller.frame_controller import FrameController
     profile = profile_of('g1')
     config = config_of('g1', CONFIGS['g1'])
-    FollowingRobot(ros, profile, body_pose(profile, START['g1']), config['topics']['safety_out'])
+    FollowingRobot(ros, profile, body_pose(profile, START['g1']), '/lowcmd')
     model = shared_model(ros, models, 'g1')
     controller = FrameController(ros.node('controller'), profile, config, robot_model=model,
                                  init=False)
@@ -480,9 +475,7 @@ def test_unknown_frame_is_refused_and_the_poses_keep_going(ros, models, capfd):
     from custom_ros_messages.action import FrameTask
     from rclpy.action import ActionClient
     profile = profile_of('h12')
-    config = config_of('h12', CONFIGS['h12'])
-    FollowingRobot(ros, profile, body_pose(profile, START['h12']),
-                   config['topics']['safety_out'])
+    FollowingRobot(ros, profile, body_pose(profile, START['h12']), '/lowcmd')
     model = shared_model(ros, models, 'h12')
     log = Log(capfd)
     left = PoseRecorder(ros, '/left_ee_pose')
@@ -517,8 +510,7 @@ def test_planned_goals(ros, models, robot):
     from custom_ros_messages.action import FrameTask, NamedConfig
     profile = profile_of(robot)
     config = config_of(robot, CONFIGS[robot])
-    robot_ = FollowingRobot(ros, profile, body_pose(profile, START[robot]),
-                            config['topics']['safety_out'])
+    robot_ = FollowingRobot(ros, profile, body_pose(profile, START[robot]), '/lowcmd')
     model = shared_model(ros, models, robot)
     server_of(ros, model, CONFIGS[robot])
     threshold = config['controller']['threshold_joint']
@@ -545,7 +537,7 @@ def test_planning_turned_off(ros, models, capfd, tmp_path):
     profile = profile_of('g1')
     config_path = edited_config(tmp_path, 'g1', CONFIGS['g1'], planner={'enabled': False})
     config = config_of('g1', str(config_path))
-    FollowingRobot(ros, profile, body_pose(profile, START['g1']), config['topics']['safety_out'])
+    FollowingRobot(ros, profile, body_pose(profile, START['g1']), '/lowcmd')
     model = shared_model(ros, models, 'g1')
     log = Log(capfd)
     recorder = CommandRecorder(ros, config['topics']['low_cmd'], profile)
@@ -572,15 +564,13 @@ def test_planning_turned_off(ros, models, capfd, tmp_path):
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_goals_start_from_the_last_command(ros, models, robot):
     profile = profile_of(robot)
-    config = config_of(robot, CONFIGS[robot])
     arms = ik_slots(profile)
     # the left elbow sits 0.05 rad below every command (a gravity sag inside the 0.1 rad
     # the seed accepts), the right elbow 0.2 rad below (an arm held off its command)
     sag = np.zeros(len(profile.body_joints))
     left_elbow = profile.body_joints.index('left_elbow_joint')
     sag[left_elbow] = 0.05
-    robot_ = FollowingRobot(ros, profile, body_pose(profile, START[robot]),
-                            config['topics']['safety_out'], sag=sag)
+    robot_ = FollowingRobot(ros, profile, body_pose(profile, START[robot]), '/lowcmd', sag=sag)
     model = shared_model(ros, models, robot)
     controller = server_of(ros, model, CONFIGS[robot]).controller
     assert wait_for(lambda: controller.low_cmd_handler.following, 2.0)
@@ -618,7 +608,7 @@ def test_hold_pinned_at_a_limit_is_not_converged(ros, models, robot):
     sag = np.zeros(len(profile.body_joints))
     sag[elbow] = 0.0005
     q0 = body_pose(profile, START[robot])
-    robot_ = FollowingRobot(ros, profile, q0, config['topics']['safety_out'], sag=sag)
+    robot_ = FollowingRobot(ros, profile, q0, '/lowcmd', sag=sag)
     model = shared_model(ros, models, robot)
     from golem_upper_ik.core.controller.frame_controller import FrameController
     controller = FrameController(ros.node('controller'), profile, config, robot_model=model,
@@ -659,7 +649,7 @@ def test_execute_path_paces_at_dt_minus_work(ros, models, monkeypatch):
     config = config_of('h12', CONFIGS['h12'])
     model = shared_model(ros, models, 'h12')
     q0 = body_pose(profile, START['h12'])
-    FollowingRobot(ros, profile, q0, config['topics']['safety_out'])
+    FollowingRobot(ros, profile, q0, '/lowcmd')
     from golem_upper_ik.core.controller.frame_controller import FrameController
     controller = FrameController(ros.node('controller'), profile, config, robot_model=model,
                                  init=False)
@@ -802,9 +792,7 @@ def assert_zero_gain_last(robot, profile, before):
     (signal.SIGTERM, signal.SIGINT)], ids=['SIGINT', 'SIGTERM', 'SIGINT-twice', 'SIGTERM-SIGINT'])
 def test_frame_task_server_shuts_down_with_zero_gains_on_a_signal(ros, signals):
     profile = profile_of('g1')
-    config = config_of('g1', CONFIGS['g1'])
-    robot_ = FollowingRobot(ros, profile, body_pose(profile, 'home'),
-                            config['topics']['safety_out'])
+    robot_ = FollowingRobot(ros, profile, body_pose(profile, 'home'), '/lowcmd')
     left = PoseRecorder(ros, '/left_ee_pose')
     process = NodeProcess('frame_task_server', 'robot:=g1', f'config:={CONFIGS["g1"]}')
     try:

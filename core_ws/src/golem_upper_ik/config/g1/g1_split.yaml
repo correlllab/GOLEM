@@ -7,9 +7,6 @@
 topics:
   low_cmd: /safety/lowcmd_upper_in
   low_state: /lowstate
-  # golem_safety's output, only read: the follow gate opens once a sample
-  # carries the commands (its split.yaml has engaged)
-  safety_out: /lowcmd
 
 controller:
   # deliberately conservative for the first sessions on the real robot (the
@@ -31,7 +28,7 @@ controller:
     waist_pitch_joint: 0.0
   # s to wait for a fresh /lowstate before enabling anything (then abort)
   state_timeout: 5.0
-  # until golem_safety is seen relaying the commands (topics.safety_out),
+  # until golem_safety is seen relaying the commands (on /lowcmd),
   # every waist and arm command stays within this of its measured joint, rad.
   # Never after that. 0 is off
   follow_tolerance: 0.05

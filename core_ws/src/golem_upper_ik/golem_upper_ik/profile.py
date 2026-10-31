@@ -42,9 +42,9 @@ class RobotProfile:
     planner_frames: tuple[str, str]  # (left, right)
     imu_frame: str
     held_joints: tuple[str, ...]  # upper-body joints the IK does not solve for
-    # the controller's shutdown command keeps the held joints at their hold, gains and torque
-    # when golem_safety's output is /lowcmd; otherwise it turns them off with the IK joints
-    shutdown_keeps_held_joints_on_lowcmd: bool
+    # true: the controller's shutdown command keeps the held joints at their hold, gains and
+    # torque; false: it turns them off with the IK joints
+    shutdown_keeps_held_joints: bool
     enabled_joints: tuple[str, ...]  # joints the IK solves for, the named configs' order
     # read-only: name -> read-only array over enabled_joints, rad
     named_configs: Mapping[str, np.ndarray]
@@ -120,7 +120,7 @@ def load_profile(robot: str) -> RobotProfile:
         planner_frames=tuple(module.PLANNER_FRAMES),
         imu_frame=module.IMU_FRAME,
         held_joints=held_joints,
-        shutdown_keeps_held_joints_on_lowcmd=bool(module.SHUTDOWN_KEEPS_HELD_JOINTS_ON_LOWCMD),
+        shutdown_keeps_held_joints=bool(module.SHUTDOWN_KEEPS_HELD_JOINTS),
         enabled_joints=enabled_joints,
         named_configs=named_configs,
         startup_sequence=startup_sequence,

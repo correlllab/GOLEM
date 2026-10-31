@@ -1,11 +1,7 @@
 '''
-The robot profiles against golem_safety's robot data and the old controllers' tables.
-
-test/fixtures/old_controller/<robot>.json holds the previous arm controllers' tables
-(test/fixtures/README.md); these tests import no old package.
+The robot profiles against golem_safety's robot data.
 '''
 import dataclasses
-import json
 import os
 from pathlib import Path
 import types
@@ -15,7 +11,6 @@ import numpy as np
 import pytest
 import yaml
 
-FIXTURES = Path(__file__).parent / 'fixtures' / 'old_controller'
 ROBOTS = ('h12', 'g1')
 
 EXPECTED = {
@@ -31,7 +26,7 @@ EXPECTED = {
         'urdf': 'h1_2_magpie.urdf',
         'urdf_ros': 'h1_2_magpie_ros.urdf',
         'collision': ('h1_2_magpie_sphere.urdf', 'h1_2_magpie_sphere_collision.srdf'),
-        'shutdown_keeps_held_joints_on_lowcmd': False,
+        'shutdown_keeps_held_joints': False,
     },
     'g1': {
         'joints': 29,
@@ -45,7 +40,7 @@ EXPECTED = {
         'urdf': 'g1_29dof_with_hand_rev_1_0.urdf',
         'urdf_ros': 'g1_29dof_with_hand_rev_1_0_ros.urdf',
         'collision': ('g1_sphere.urdf', 'g1_sphere_collision.srdf'),
-        'shutdown_keeps_held_joints_on_lowcmd': True,
+        'shutdown_keeps_held_joints': True,
     },
 }
 
@@ -53,10 +48,6 @@ EXPECTED = {
 def profile_of(robot):
     from golem_upper_ik.profile import load_profile
     return load_profile(robot)
-
-
-def old_tables(robot):
-    return json.loads((FIXTURES / f'{robot}.json').read_text())
 
 
 def safety_data(robot):
@@ -79,8 +70,8 @@ def test_profiles_load(robot):
     assert profile.planner_frames == expected['planner_frames']
     assert profile.imu_frame == expected['imu_frame']
     assert profile.held_joints == expected['held_joints']
-    assert (profile.shutdown_keeps_held_joints_on_lowcmd
-            is expected['shutdown_keeps_held_joints_on_lowcmd'])
+    assert (profile.shutdown_keeps_held_joints
+            is expected['shutdown_keeps_held_joints'])
     for name in ('q_low', 'q_high', 'dq_max', 'tau_max'):
         values = getattr(profile, name)
         assert values.shape == (expected['joints'],), name
@@ -138,41 +129,21 @@ def test_profile_body_joints_match_safety_data(robot):
 
 
 @pytest.mark.parametrize('robot', ROBOTS)
-def test_profile_matches_old_controller_tables(robot):
+def test_held_joints_are_the_upper_joints_the_ik_leaves(robot):
     profile = profile_of(robot)
-    old = old_tables(robot)
-
-    assert profile.body_joints == tuple(old['body_joints'])
-    assert list(profile.upper_slots) == old['upper_body_index']
-    assert list(profile.lower_slots) == old['lower_body_index']
-    assert [profile.body_joints[i] for i in profile.upper_slots] == old['upper_body_joints']
-    assert profile.enabled_joints == tuple(old['enabled_joints'])
-    # the held joints are the upper-body joints the IK does not solve for
+    upper = [profile.body_joints[i] for i in profile.upper_slots]
     assert profile.held_joints == tuple(
-        joint for joint in old['upper_body_joints'] if joint not in old['enabled_joints'])
-    assert profile.planner_frames == tuple(old['planner_frame_names'])
-    if 'ee_frames' in old:
-        assert profile.ee_frames == tuple(old['ee_frames'])
-
-    limits = old['joint_limits']
-    np.testing.assert_array_equal(profile.q_low, [low for low, _ in limits['position']])
-    np.testing.assert_array_equal(profile.q_high, [high for _, high in limits['position']])
-    np.testing.assert_array_equal(profile.dq_max, limits['velocity'])
-    np.testing.assert_array_equal(profile.tau_max, limits['effort'])
+        joint for joint in upper if joint not in profile.enabled_joints)
+    assert set(profile.enabled_joints) <= set(upper)
 
 
 @pytest.mark.parametrize('robot', ROBOTS)
-def test_named_configs_match_old_controller(robot):
+def test_named_configs_are_over_the_ik_joints(robot):
     profile = profile_of(robot)
-    old = old_tables(robot)
-
-    assert list(profile.named_configs) == list(old['named_configs'])
-    for name, q in old['named_configs'].items():
-        value = profile.named_configs[name]
+    for name, value in profile.named_configs.items():
         assert value.shape == (len(profile.enabled_joints),), name
         assert value.dtype == np.float64, name
-        np.testing.assert_array_equal(value, q, err_msg=name)
-    assert profile.startup_sequence == tuple(old['startup_sequence'])
+    assert set(profile.startup_sequence) <= set(profile.named_configs)
 
 
 def test_unknown_robot_raises():

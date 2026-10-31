@@ -9,7 +9,7 @@ profile's upper slots to golem_safety's input (topics.low_cmd) by a CommandPubli
   measured angles; it moves only through set_hold(), and controller.hold_targets is where the
   controller's start-up moves it.
 - Follow gate (FollowGate, controller.follow_tolerance): until golem_safety is seen relaying
-  the commands on topics.safety_out, every upper-body command stays within the tolerance of
+  the commands on /lowcmd, every upper-body command stays within the tolerance of
   the measured joints, and the hold restarts from the command the gate let through. Between
   control steps a thread re-checks at frequency.check_hz: it opens the gate on a relayed
   sample and keeps the stored command near a drifting pose. Once open, the gate and its
@@ -20,7 +20,7 @@ profile's upper slots to golem_safety's input (topics.low_cmd) by a CommandPubli
   changes nothing here.
 - shutdown() sends one last command and stops publishing: the IK joints mode 0 with zero
   gains and torque, and the held joints the same, except where the profile keeps them
-  (shutdown_keeps_held_joints_on_lowcmd, the G1): there they keep their hold angle, gains
+  (shutdown_keeps_held_joints, the G1): there they keep their hold angle, gains
   and torque.
 '''
 import math
@@ -30,6 +30,7 @@ from typing import List, Optional
 
 import numpy as np
 
+from golem_upper_ik.config import SAFETY_OUTPUT_TOPIC
 from golem_upper_ik.core.follow_gate import FollowGate, relays_commands
 from golem_upper_ik.core.ros_io import CommandPublisher, SafetyOutputSubscriber, StaleStateError
 from golem_upper_ik.profile import RobotProfile
@@ -75,10 +76,7 @@ class LowCmdHandler:
                                       dtype=np.float64)
         self._hold = np.zeros(len(self._held))  # start() sets it to the measured angles
 
-        self._safety_output_topic = config['topics']['safety_out']
-        # golem_safety writes /lowcmd in every mode, so the profile alone decides whether
-        # the held joints stay on at shutdown (a walking policy may be on the legs)
-        self._shutdown_keeps_held = profile.shutdown_keeps_held_joints_on_lowcmd
+        self._shutdown_keeps_held = profile.shutdown_keeps_held_joints
         self._follow_gate = FollowGate(profile.upper_slots,
                                        config['controller']['follow_tolerance'])
         self._check_dt = 1.0 / float(config['frequency']['check_hz'])
@@ -95,7 +93,7 @@ class LowCmdHandler:
             node, config['topics']['low_cmd'], config['frequency']['pub_hz'], profile)
         self._safety_output = None
         if not self._follow_gate.following:
-            self._safety_output = SafetyOutputSubscriber(node, self._safety_output_topic)
+            self._safety_output = SafetyOutputSubscriber(node)
 
     @property
     def q_cmd(self) -> np.ndarray:
@@ -118,10 +116,6 @@ class LowCmdHandler:
     def following(self) -> bool:
         '''False while the follow gate holds the commands near the measured pose'''
         return self._follow_gate.following
-
-    @property
-    def safety_output_topic(self) -> str:
-        return self._safety_output_topic
 
     def _clip_q(self, q, joint_ids=None):
         limits = self._q_clip_limits
@@ -329,7 +323,7 @@ class LowCmdHandler:
                 return
             gate.open()
         self._node.get_logger().info(
-            f'golem_safety relays the commands on {self._safety_output_topic}; '
+            f'golem_safety relays the commands on {SAFETY_OUTPUT_TOPIC}; '
             'the follow gate is open')
 
     def _close_safety_output(self):
@@ -342,8 +336,8 @@ class LowCmdHandler:
     def shutdown(self):
         '''
         Send the IK joints mode 0 with zero gains and torque (q and dq as they were), and the
-        held joints the same unless the profile keeps them on /lowcmd, where their command
-        stands; make sure that command went out, and stop publishing.
+        held joints the same unless the profile keeps them (shutdown_keeps_held_joints), where
+        their command stands; make sure that command went out, and stop publishing.
 
         Call it before the robot model's state source is detached (RobotModel.shutdown()):
         while the follow gate is shut, a detached source stops the gate's check with an error

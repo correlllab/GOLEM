@@ -44,8 +44,7 @@ G1_UPPER_CHANNEL_SAFETY_CONFIGS = ('split', 'sim_split')
 # the G1 controller configs; both hold the waist stiff for a walking policy
 G1_CONTROLLER_CONFIGS = ('g1_split', 'sim_split')
 # the controller config each G1 safety config runs with: its speed limits suit the real
-# robot or the sim, and its topics.safety_out is the safety config's output, which the follow
-# gate reads
+# robot or the sim
 G1_SAFETY_CONTROLLER_CONFIGS = {
     'split': 'g1_split',
     'sim_split': 'sim_split',
@@ -102,7 +101,7 @@ def _g1_refusal(controller: str, safety: str, sim: bool | None) -> str | None:
         return (f'safety config "{safety}" must relay the upper-body channel: '
                 f'one of {", ".join(G1_UPPER_CHANNEL_SAFETY_CONFIGS)}')
     # a custom controller config is known to be a sim one only by its name, and is not
-    # matched to the safety config: its gains and safety_out are not known by its name
+    # matched to the safety config: its gains are not known by its name
     controller_known = controller in G1_CONTROLLER_CONFIGS or is_sim_config(controller)
     if sim is not None:
         for kind, name, known in (('safety', safety, True),

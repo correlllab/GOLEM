@@ -1,5 +1,6 @@
 '''
-IKSolver: Pink differential IK on a RobotModel's body and reduced models.
+IKSolver: Pink differential IK on a RobotModel's reduced model (the IK joints); a
+configuration on its body model (no free-flyer) carries every body joint's q.
 
 Each frame task pulls one frame to a target pose. With a self-collision model the reduced
 model's IK keeps the collision pairs apart (a self-collision barrier); without one it runs
@@ -16,6 +17,9 @@ from golem_upper_ik.core.robot_model import RobotModel
 
 # named configurations solve_ik_reduced falls back to, in order, after the measured pose
 SEED_CONFIGS = ('home', 't_pose', 'arms_front_45')
+# solve_ik_reduced converges when the summed frame-task errors are below these
+LINEAR_THRESHOLD = 1e-3  # m
+ANGULAR_THRESHOLD = 1e-2  # rad
 
 
 @dataclass
@@ -50,8 +54,8 @@ class IKSolver:
                  dt: float = 0.02,
                  d_min: float = 0.05):
         '''
-        Initialize the IK solver with robot model and collision parameters
-        Uses model_body (no free-flyer) for IK solving
+        Initialize the IK solver with robot model and collision parameters. The IK solves
+        on model_body_reduced; configuration (model_body) tracks every body joint
 
         @param robot_model: the robot model instance
         @param named_configs: name -> reduced q (one value per IK joint); the seeds
@@ -79,14 +83,6 @@ class IKSolver:
             robot_model.data_body,
             robot_model.state['q']
         )
-
-        # limits using model_body (no free-flyer)
-        self.limits = [
-            pink.limits.ConfigurationLimit(robot_model.model_body),
-            pink.limits.VelocityLimit(robot_model.model_body),
-            pink.limits.AccelerationLimit(robot_model.model_body,
-                                          25.0 * np.ones(robot_model.model_body.nv))
-        ]
 
         # reduced-model bindings (configuration, limits, collision barrier)
         self.rebuild_reduced()
@@ -142,15 +138,6 @@ class IKSolver:
         '''Get current reduced joint configuration'''
         return np.copy(self.configuration_reduced.q)
 
-    def compute_error(self, task: pink.Task, q: np.ndarray) -> np.ndarray:
-        '''Compute the error for a specific task (motor-only q)'''
-        configuration = pink.Configuration(
-            self.robot_model.model_body,
-            self.robot_model.data_body,
-            q
-        )
-        return task.compute_error(configuration)
-
     def compute_error_reduced(self, task: pink.Task, q_reduced: np.ndarray) -> np.ndarray:
         '''Compute the error for a specific task on reduced model'''
         configuration_reduced = pink.Configuration(
@@ -204,18 +191,6 @@ class IKSolver:
         self.configuration.integrate_inplace(vel, self.dt)
         self.configuration_reduced.integrate_inplace(vel_reduced, self.dt)
 
-    def _ik(self, tasks, dt):
-        '''Helper function solving IK on body model for all tasks'''
-        return pink.solve_ik(
-            self.configuration,
-            tasks,
-            dt=dt,
-            solver=self.solver,
-            limits=self.limits,
-            barriers=[],
-            safety_break=False
-        )
-
     def _ik_reduced(self, tasks, dt):
         '''Helper function solving IK on reduced model for all tasks'''
         barriers = []
@@ -241,10 +216,10 @@ class IKSolver:
             angular_err += np.linalg.norm(err[3:])
         return linear_err, angular_err
 
-    def _task_error_score(self, attempt, linear_threshold, angular_threshold):
-        linear_scale = max(float(linear_threshold), 1e-12)
-        angular_scale = max(float(angular_threshold), 1e-12)
-        return attempt.linear_error / linear_scale + attempt.angular_error / angular_scale
+    @staticmethod
+    def _task_error_score(attempt):
+        return (attempt.linear_error / LINEAR_THRESHOLD
+                + attempt.angular_error / ANGULAR_THRESHOLD)
 
     def _reduced_q_to_full(self, q_reduced):
         q = np.copy(self.robot_model.zero_q_body)
@@ -258,31 +233,6 @@ class IKSolver:
         return [('current', self.robot_model.state['q'])] + [
             (name, self.named_configs[name]) for name in SEED_CONFIGS
         ]
-
-    def _extra_seed_items(self, initial_positions):
-        if initial_positions is None:
-            return []
-
-        try:
-            seeds = np.asarray(initial_positions, dtype=float)
-            if seeds.ndim == 1:
-                return [('initial_0', seeds)]
-            if seeds.ndim == 2:
-                return [(f'initial_{idx}', seed) for idx, seed in enumerate(seeds)]
-        except (TypeError, ValueError):
-            pass
-
-        items = []
-        for idx, item in enumerate(initial_positions):
-            if (
-                isinstance(item, tuple) and
-                len(item) == 2 and
-                isinstance(item[0], str)
-            ):
-                items.append((item[0], item[1]))
-            else:
-                items.append((f'initial_{idx}', item))
-        return items
 
     def _normalize_reduced_seed(self, seed, seed_name):
         q = np.asarray(seed, dtype=float).reshape(-1)
@@ -300,27 +250,15 @@ class IKSolver:
             raise ValueError(f'{seed_name} seed must contain only finite values')
         return normalized
 
-    def _seed_list(self, initial_positions):
-        seeds = []
-        seed_items = self._default_seed_items() + self._extra_seed_items(
-            initial_positions,
-        )
-        for seed_name, seed in seed_items:
-            seeds.append((seed_name, self._normalize_reduced_seed(seed, seed_name)))
-        return seeds
+    def _seed_list(self):
+        return [(seed_name, self._normalize_reduced_seed(seed, seed_name))
+                for seed_name, seed in self._default_seed_items()]
 
-    def _result_from_attempts(self, attempts, linear_threshold, angular_threshold):
+    def _result_from_attempts(self, attempts):
         candidates = [attempt for attempt in attempts if attempt.success]
         if not candidates:
             candidates = attempts
-        best = min(
-            candidates,
-            key=lambda attempt: self._task_error_score(
-                attempt,
-                linear_threshold,
-                angular_threshold,
-            ),
-        )
+        best = min(candidates, key=self._task_error_score)
         return IKResult(
             q=np.copy(best.q),
             success=best.success,
@@ -330,8 +268,7 @@ class IKSolver:
             attempts=attempts,
         )
 
-    def _solve_ik_reduced_attempt(self, seed_name, q_seed, alpha, timeout,
-                                  linear_threshold, angular_threshold):
+    def _solve_ik_reduced_attempt(self, seed_name, q_seed, alpha, timeout):
         self.configuration_reduced.update(q_seed)
         linear_err, angular_err = self._frame_task_errors(
             self.configuration_reduced,
@@ -340,8 +277,8 @@ class IKSolver:
         iterations = 0
 
         while (
-            linear_err >= linear_threshold or
-            angular_err >= angular_threshold
+            linear_err >= LINEAR_THRESHOLD or
+            angular_err >= ANGULAR_THRESHOLD
         ) and time.time() - start_time < timeout:
             self.posture_task.set_target_from_configuration(
                 self.configuration_reduced,
@@ -357,8 +294,8 @@ class IKSolver:
         return IKAttemptResult(
             q=self._reduced_q_to_full(self.configuration_reduced.q),
             success=(
-                linear_err < linear_threshold and
-                angular_err < angular_threshold
+                linear_err < LINEAR_THRESHOLD and
+                angular_err < ANGULAR_THRESHOLD
             ),
             linear_error=linear_err,
             angular_error=angular_err,
@@ -366,12 +303,6 @@ class IKSolver:
             iterations=iterations,
             elapsed_time=time.time() - start_time,
         )
-
-    def ik_step(self):
-        '''Solve one step of IK for all tasks and return joint velocity (motor-only)'''
-        self.posture_task.set_target_from_configuration(self.configuration)
-        tasks = list(self.frame_tasks.values()) + [self.posture_task]
-        return self._ik(tasks, self.dt)
 
     def ik_step_reduced(self):
         '''Solve one step of IK on reduced model for all tasks and return motor-only velocity'''
@@ -383,40 +314,18 @@ class IKSolver:
         vel_full[self.robot_model.reduced_mask] = vel
         return vel_full
 
-    def solve_ik_reduced(self, alpha=0.1, timeout=1.0,
-                         linear_threshold=1e-3, angular_threshold=1e-2,
-                         initial_positions=None):
+    def solve_ik_reduced(self, alpha=0.1, timeout=1.0):
         '''Solve IK on reduced model to convergence and return motor-only q'''
         attempts = []
-        for seed_name, q_seed in self._seed_list(initial_positions):
-            attempt = self._solve_ik_reduced_attempt(
-                seed_name,
-                q_seed,
-                alpha,
-                timeout,
-                linear_threshold,
-                angular_threshold,
-            )
+        for seed_name, q_seed in self._seed_list():
+            attempt = self._solve_ik_reduced_attempt(seed_name, q_seed, alpha, timeout)
             attempts.append(attempt)
             if attempt.success:
-                return self._result_from_attempts(
-                    attempts,
-                    linear_threshold,
-                    angular_threshold,
-                )
+                return self._result_from_attempts(attempts)
 
-        result = self._result_from_attempts(
-            attempts,
-            linear_threshold,
-            angular_threshold,
-        )
+        result = self._result_from_attempts(attempts)
         self.configuration_reduced.update(result.q[self.robot_model.reduced_mask])
         return result
-
-    def goto_configuration(self, q: np.ndarray):
-        '''Solve one step of IK to reach a target joint configuration (motor-only)'''
-        self.config_task.set_target(q)
-        return self._ik([self.config_task], self.dt)
 
     def goto_reduced_configuration(self, q_reduced: np.ndarray):
         '''Solve one step of IK to reach a target reduced joint configuration'''

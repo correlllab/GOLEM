@@ -122,7 +122,7 @@ the robot used to be.
 stops publishing. It does so on Ctrl+C or SIGTERM, and when its start-up fails
 after its first command. The arms get mode 0 and zero kp, kd and tau; the
 waist keeps its hold angle, gains and torque (the G1 profile's
-`shutdown_keeps_held_joints_on_lowcmd`), because the walking policy was
+`shutdown_keeps_held_joints`), because the walking policy was
 trained with a stiff waist and a limp one slumps onto it. `golem_safety`
 relays the command, so **the arms go limp** while the waist holds and the
 walking node keeps the legs. That stays so: the quiet upper input keeps that

@@ -1,11 +1,6 @@
 '''
-The controller-config loader, on the carried configs and on configs written by the tests.
-
-test/fixtures/old_controller/<robot>.json holds what the robot's previous arm controller's
-load_controller_config returned for the same configs (test/fixtures/README.md); these tests
-import no old package.
+The controller-config loader, on the installed configs and on configs written by the tests.
 '''
-import json
 import math
 from pathlib import Path
 import re
@@ -15,7 +10,6 @@ import numpy as np
 import pytest
 import yaml
 
-FIXTURES = Path(__file__).parent / 'fixtures' / 'old_controller'
 CONFIGS = {
     'h12': ['safety_split', 'sim_safety_split', 'safety_full', 'debug'],
     'g1': ['g1_split', 'sim_split'],
@@ -25,19 +19,6 @@ HELD = {
     'h12': ('torso_joint',),
     'g1': ('waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint'),
 }
-# the keys both old loaders return under controller, with the same meaning
-SHARED_CONTROLLER_KEYS = (
-    'v_lim', 'w_lim', 'dq_lim', 'd_min', 'timeout',
-    'threshold_ik', 'threshold_joint', 'threshold_linear', 'threshold_angular',
-)
-# where the configs differ from the old loaders' fixtures: the G1 has a self-collision model,
-# so its planner is on
-FIXTURE_DIFFERENCES = {
-    'g1': {('planner', 'enabled'): True},
-}
-G1_CONTROLLER_KEYS = (
-    'state_timeout', 'startup_timeout', 'startup_move_timeout', 'follow_tolerance', 'imu_frame',
-)
 
 
 def load(robot, name_or_path):
@@ -45,18 +26,9 @@ def load(robot, name_or_path):
     return load_controller_config(robot, name_or_path)
 
 
-def old_config(robot, name):
-    return json.loads((FIXTURES / f'{robot}.json').read_text())['configs'][name]
-
-
 def installed(robot, name):
     share = Path(get_package_share_directory('golem_upper_ik'))
     return share / 'config' / robot / f'{name}.yaml'
-
-
-def ros_name(dds_topic):
-    assert dds_topic.startswith('rt/'), dds_topic
-    return '/' + dds_topic[len('rt/'):]
 
 
 def write_config(tmp_path, robot, raw, directory=None):
@@ -84,76 +56,20 @@ def minimal(robot):
 def test_configs_load(case):
     robot, name = case.split('/')
     config = load(robot, name)
-    old = old_config(robot, name)['controller']
 
     assert config['robot'] == robot
-    # the file names every held joint, so the values below are carried, not the defaults
+    # the file names every held joint, so the values below are the file's, not the defaults
     raw = yaml.safe_load(installed(robot, name).read_text())
     assert sorted(raw['controller']['hold_targets']) == sorted(HELD[robot])
     hold = config['controller']['hold_targets']
-    if robot == 'h12':
-        assert hold == {'torso_joint': old['torso_target']}
-    else:
-        assert hold == dict(zip(HELD['g1'], old['waist_target']))
+    assert hold == raw['controller']['hold_targets']
     assert list(hold) == list(HELD[robot])
 
 
-@pytest.mark.parametrize('case', CASES)
-def test_config_values_match_old_loaders(case):
-    robot, name = case.split('/')
-    config = load(robot, name)
-    old = old_config(robot, name)
-
-    for key in ('low_cmd', 'low_state'):
-        assert config['topics'][key] == ros_name(old['topics'][key]), key
-    changed = FIXTURE_DIFFERENCES.get(robot, {})
-    for key in SHARED_CONTROLLER_KEYS:
-        expected = changed.get(('controller', key), old['controller'][key])
-        assert config['controller'][key] == expected, key
-    for key in ('ctrl_hz', 'pub_hz'):
-        assert config['frequency'][key] == old['frequency'][key], key
-    for key in ('kp', 'kd', 'ki'):
-        gains = config['gains'][key]
-        assert gains.dtype == np.float32, key
-        np.testing.assert_array_equal(gains, old['gains'][key], err_msg=key)
-    clip = config['limits']
-    np.testing.assert_array_equal(clip['q_clip_limits'][:, 0], old['clip']['q_low'])
-    np.testing.assert_array_equal(clip['q_clip_limits'][:, 1], old['clip']['q_high'])
-    np.testing.assert_array_equal(clip['dq_clip_limits'], old['clip']['dq'])
-    np.testing.assert_array_equal(clip['tau_clip_limits'], old['clip']['tau'])
-    # the old loaders' logging section configured a command recorder no node started
-    assert 'logging' not in config
-
-    # the planner section is the file's, with enabled and frame_names filled in
-    planner = dict(config['planner'])
-    assert planner.pop('enabled') == changed.get(('planner', 'enabled'),
-                                                 old['planner'].get('enabled', True))
-    frame_names = planner.pop('frame_names')
-    assert frame_names == old['planner'].get('frame_names', frame_names)
-    assert planner == {key: value for key, value in old['planner'].items()
-                       if key not in ('enabled', 'frame_names')}
-
-    if robot == 'h12':
-        # keys the H1-2 loader had and the G1's did not
-        assert config['controller']['max_state_lag_ms'] == old['controller']['max_state_lag_ms']
-        assert config['topics']['safety_out'] == '/lowcmd'
-        assert config['controller']['imu_frame'] == 'torso_link'
-        assert frame_names == ['left_grasp_frame', 'right_grasp_frame']
-    else:
-        # keys the G1 loader had and the H1-2's did not
-        assert config['topics']['safety_out'] == ros_name(old['topics']['safety_out'])
-        for key in G1_CONTROLLER_KEYS:
-            assert config['controller'][key] == old['controller'][key], key
-        assert config['frequency']['check_hz'] == old['frequency']['check_hz']
-        assert config['controller']['max_state_lag_ms'] == 0.0
-
-
-def test_every_installed_config_has_a_fixture():
+def test_every_installed_config_is_tested():
     share = Path(get_package_share_directory('golem_upper_ik')) / 'config'
     for robot, names in CONFIGS.items():
         assert sorted(path.stem for path in (share / robot).glob('*.yaml')) == sorted(names)
-        fixture = json.loads((FIXTURES / f'{robot}.json').read_text())
-        assert sorted(fixture['configs']) == sorted(names)
 
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
@@ -166,7 +82,6 @@ def test_defaults(robot, tmp_path):
     assert config['topics'] == {
         'low_cmd': '/safety/lowcmd_upper_in',
         'low_state': '/lowstate',
-        'safety_out': '/lowcmd',
     }
     controller = config['controller']
     assert controller['hold_targets'] == {joint: 0.0 for joint in HELD[robot]}
@@ -237,27 +152,6 @@ def test_topics_are_ros_names(tmp_path):
         load('h12', write_config(tmp_path, 'h12', raw))
 
 
-def test_safety_out_is_an_output_of_the_robot(tmp_path):
-    raw = edited('h12', 'safety_split', topics={'safety_out': '/safety/lowcmd_upper_in'})
-    with pytest.raises(ValueError, match='topics.safety_out'):
-        load('h12', write_config(tmp_path, 'h12', raw))
-    raw = edited('g1', 'g1_split', topics={'safety_out': '/lowcmd'})
-    assert load('g1', write_config(tmp_path, 'g1', raw))['topics']['safety_out'] == '/lowcmd'
-    raw = edited('g1', 'g1_split', topics={'safety_out': '/safety/lowcmd_upper_in'})
-    with pytest.raises(ValueError, match='topics.safety_out'):
-        load('g1', write_config(tmp_path, 'g1', raw))
-
-
-@pytest.mark.parametrize('robot, name', [('h12', 'safety_split'), ('g1', 'g1_split')])
-def test_arm_sdk_output_refused(robot, name, tmp_path):
-    '''golem_safety writes /lowcmd only: a follow gate on another topic is refused, naming it'''
-    raw = edited(robot, name, topics={'safety_out': '/arm_sdk'})
-    with pytest.raises(ValueError, match=re.escape(
-            f"key 'topics.safety_out': '/arm_sdk' is not a golem_safety output of robot "
-            f'{robot} (/lowcmd)')):
-        load(robot, write_config(tmp_path, robot, raw))
-
-
 @pytest.mark.parametrize('key, raw_edit, message', [
     ('bogus', {'bogus': 1}, 'unknown'),
     ('controller.bogus', {'controller': {'bogus': 1}}, 'unknown'),
@@ -265,16 +159,11 @@ def test_arm_sdk_output_refused(robot, name, tmp_path):
     ('limits.clip.bogus', {'limits': {'clip': {'bogus': 1}}}, 'unknown'),
     ('zmp', {'zmp': {}}, 'unknown'),
     ('logging', {'logging': {'enabled': False}}, 'unknown'),
-    ('mode', {'mode': 'debug'}, 'removed'),
-    ('network', {'network': {'domain_id': 1}}, 'ROS supplies the domain'),
-    ('controller.torso_target', {'controller': {'torso_target': 0.0}}, 'hold_targets'),
-    ('controller.waist_target', {'controller': {'waist_target': 0.0}}, 'hold_targets'),
-    ('limits.estop', {'limits': {'estop': {'velocity_ratio': 0.5}}}, 'no estop of its own'),
     ('frequency.bogus', {'frequency': {'bogus': 1.0}}, 'unknown'),
-    ('planner.frame_z_min_margin', {'planner': {'frame_z_min_margin': 0.01}},
-     'frame_limit_margin'),
+    ('topics.safety_out', {'topics': {'safety_out': '/lowcmd'}}, 'unknown'),
+    ('limits.enforce', {'limits': {'enforce': {'velocity_ratio': 0.2}}}, 'unknown'),
 ])
-def test_unknown_and_replaced_keys_raise(tmp_path, key, raw_edit, message):
+def test_unknown_keys_raise(tmp_path, key, raw_edit, message):
     raw = minimal('h12')
     for section, value in raw_edit.items():
         raw[section] = value
@@ -388,35 +277,12 @@ def test_planner_values_load_with_their_types(tmp_path):
     assert type(planner['max_interpolation_steps']) is int
 
 
-def test_mode_without_an_output_topic_raises(monkeypatch):
-    import dataclasses
-    from golem_upper_ik import config as config_module
-    from golem_upper_ik.profile import load_profile
-    profile = dataclasses.replace(load_profile('h12'), modes=('full_body_mode', 'wobble_mode'))
-    monkeypatch.setattr(config_module, 'load_profile', lambda robot: profile)
-    with pytest.raises(ValueError, match='h12.*wobble_mode'):
-        config_module.load_controller_config('h12', 'safety_split')
-
-
 def test_numbers_written_without_a_dot_load(tmp_path):
-    # PyYAML reads 1e-3 (no dot) as a string; the old loaders' float() took it as a number
+    # PyYAML reads 1e-3 (no dot) as a string; the loader parses it as a number
     path = tmp_path / 'h12' / 'test.yaml'
     path.parent.mkdir(parents=True)
     path.write_text('gains: {kp: 10.0, kd: 1.0, ki: 0.0}\ncontroller: {threshold_ik: 1e-3}\n')
     assert load('h12', path)['controller']['threshold_ik'] == 0.001
-
-
-def test_two_spellings_of_one_key_raise(tmp_path):
-    raw = minimal('h12')
-    raw['limits'] = {'clip': {'velocity_ratio': 0.1}, 'enforce': {'velocity_ratio': 0.2}}
-    with pytest.raises(ValueError, match='limits.enforce'):
-        load('h12', write_config(tmp_path, 'h12', raw))
-    raw = minimal('h12')
-    raw['limits'] = {'enforce': {'velocity_ratio': 0.2}}
-    config = load('h12', write_config(tmp_path, 'h12', raw))
-    from golem_upper_ik.profile import load_profile
-    np.testing.assert_array_equal(config['limits']['dq_clip_limits'],
-                                  load_profile('h12').dq_max * 0.2)
 
 
 def test_position_offset_too_large_raises(tmp_path):

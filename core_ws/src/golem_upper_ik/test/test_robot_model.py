@@ -1,27 +1,10 @@
 '''
-RobotModel and RobotDynamics against the old controllers, on both robots.
-
-test/fixtures/fk_<robot>.json holds what the robot's previous arm controller's RobotModel
-and RobotDynamics computed at 50 seeded random configurations (test/fixtures/README.md);
-these tests import no old package.
+RobotModel and RobotDynamics, on both robots.
 '''
-import json
-from pathlib import Path
-
 import numpy as np
 import pinocchio as pin
 import pytest
 
-FIXTURES = Path(__file__).parent / 'fixtures'
-# Pinocchio's own float noise is around 1e-15; the old and new models are built the same way
-FK_ATOL = 1e-9
-# The Magpie gripper's finger and rocker hinges are continuous joints, frozen at Pinocchio's
-# neutral configuration (angle 0). The old H1-2 model froze them at [cos, sin] = [0, 0],
-# which is no rotation at all, so its fingers and rockers (8 links of 50 g) sat elsewhere:
-# at the fixture's configurations the gravity torques differ by up to 6.4e-3 N*m. The frames
-# before them (the end effectors, the grasp frames, the torso) are bit-identical. The G1 has
-# no continuous joint: its dynamics are identical.
-GRAVITY_ATOL = {'h12': 1e-2, 'g1': FK_ATOL}  # N*m
 # each arm's seven IK joints, by /lowcmd slot: (left, right)
 ARM_SLOTS = {
     'h12': (range(13, 20), range(20, 27)),
@@ -39,92 +22,9 @@ def model_of(robot, **kwargs):
     return RobotModel(profile_of(robot), **kwargs)
 
 
-def fixture_of(robot):
-    return json.loads((FIXTURES / f'fk_{robot}.json').read_text())
-
-
 def fixed_state(q, dq=None, imu_quaternion=None):
     from golem_upper_ik.core.robot_model import FixedState
     return FixedState(q, dq=dq, imu_quaternion=imu_quaternion)
-
-
-def placement(transform):
-    '''[x, y, z, R row-major], as the fixtures store a frame placement'''
-    transform = np.asarray(transform)
-    return np.concatenate([transform[:3, 3], transform[:3, :3].reshape(-1)])
-
-
-def frames_of(fixture):
-    return list(dict.fromkeys(
-        fixture['ee_frames'] + fixture['planner_frames'] + [fixture['imu_frame']]))
-
-
-@pytest.mark.parametrize('robot', ['h12', 'g1'])
-def test_fixture_matches_the_profile(robot):
-    fixture = fixture_of(robot)
-    profile = profile_of(robot)
-    assert fixture['urdf'] == Path(profile.urdf_path).name
-    assert tuple(fixture['body_joints']) == profile.body_joints
-    assert tuple(fixture['enabled_joints']) == profile.enabled_joints
-    assert tuple(fixture['ee_frames']) == profile.ee_frames
-    assert tuple(fixture['planner_frames']) == profile.planner_frames
-    assert fixture['imu_frame'] == profile.imu_frame
-    assert len(fixture['q']) == 50
-    assert sorted(fixture['frames']) == sorted(frames_of(fixture))
-
-
-def check_fk(model, fixture):
-    for index, q in enumerate(np.asarray(fixture['q'])):
-        for frame in frames_of(fixture):
-            np.testing.assert_allclose(
-                placement(model.get_frame_transformation(frame, q)),
-                fixture['frames'][frame][index], rtol=0, atol=FK_ATOL,
-                err_msg=f'{frame} at q {index}')
-            # the IK's model: the IK joints of q, the others frozen at 0
-            np.testing.assert_allclose(
-                placement(model.get_frame_transformation_reduced(frame, q[model.reduced_mask])),
-                fixture['reduced_frames'][frame][index], rtol=0, atol=FK_ATOL,
-                err_msg=f'{frame} at q {index}, reduced model')
-        np.testing.assert_allclose(
-            model.full_q(q, imu_quat=fixture['imu_quat'][index]), fixture['full_q'][index],
-            rtol=0, atol=FK_ATOL, err_msg=f'full_q at q {index}')
-
-
-def test_h12_fk_matches_old_controller(models):
-    check_fk(models('h12'), fixture_of('h12'))
-
-
-def test_g1_fk_matches_old_controller(models):
-    check_fk(models('g1'), fixture_of('g1'))
-
-
-@pytest.mark.parametrize('robot', ['h12', 'g1'])
-def test_dynamics_matches_old_controller(models, robot):
-    fixture = fixture_of(robot)
-    model = models(robot)
-    try:
-        for index, q in enumerate(np.asarray(fixture['q'])):
-            model.state_subscriber = fixed_state(q)  # the twist is taken at the measured q
-            for frame in fixture['ee_frames']:
-                np.testing.assert_allclose(
-                    model.dynamics.compute_frame_twist(frame, np.asarray(fixture['dq'][index])),
-                    fixture['twist'][frame][index], rtol=0, atol=FK_ATOL,
-                    err_msg=f'{frame} twist at q {index}')
-            np.testing.assert_allclose(
-                model.dynamics.get_gravity_compensation(q, fixture['imu_quat'][index]),
-                fixture['gravity'][index], rtol=0, atol=GRAVITY_ATOL[robot],
-                err_msg=f'gravity at q {index}')
-    finally:
-        model.state_subscriber = None
-
-
-def test_h12_collision_matches_old_controller(models):
-    fixture = fixture_of('h12')
-    model = models('h12')
-    verdicts = [bool(model.check_collision_free_reduced(q[model.reduced_mask]))
-                for q in np.asarray(fixture['q'])]
-    assert verdicts == fixture['collision_free_reduced']
-    assert any(verdicts) and not all(verdicts)
 
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])

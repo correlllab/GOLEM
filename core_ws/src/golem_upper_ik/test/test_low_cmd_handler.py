@@ -68,9 +68,9 @@ class Rig:
         return np.clip(q, limits[:, 0], limits[:, 1])
 
     def echo(self, **kwargs):
-        '''An Echo of the commands on the config's safety output'''
+        '''An Echo of the commands on golem_safety's output (/lowcmd)'''
         topics = self.config['topics']
-        return Echo(self.ros, topics['low_cmd'], topics['safety_out'], **kwargs)
+        return Echo(self.ros, topics['low_cmd'], '/lowcmd', **kwargs)
 
 
 def command(rig, handler, q):
@@ -152,9 +152,7 @@ def test_follow_gate_holds_until_relayed(ros, models, robot):
         gap = np.abs(upper_q(msg, rig.profile) - rig.measured[rig.upper])
         assert np.max(gap) <= tolerance + FLOAT32
 
-    safety_out = rig.config['topics']['safety_out']
-    assert safety_out == '/lowcmd'
-    Echo(ros, rig.config['topics']['low_cmd'], safety_out)
+    Echo(ros, rig.config['topics']['low_cmd'], '/lowcmd')
     assert wait_for(lambda: handler.following, 3.0)
 
     # open: the commands go where the controller sends them
@@ -255,21 +253,20 @@ def test_start_refuses_a_non_finite_pose(ros, models):
     assert rig.recorder.count == 0
 
 
-# (robot, controller config, golem_safety's output, whether the shutdown keeps the held joints)
-SHUTDOWNS = [('h12', 'safety_split', '/lowcmd', False), ('h12', 'safety_full', '/lowcmd', False),
-             ('g1', 'g1_split', '/lowcmd', True)]
+# (robot, controller config, whether the shutdown keeps the held joints)
+SHUTDOWNS = [('h12', 'safety_split', False), ('h12', 'safety_full', False),
+             ('g1', 'g1_split', True)]
 
 
-@pytest.mark.parametrize('robot, config, safety_out, keeps_held', SHUTDOWNS,
-                         ids=[f'{r}-{c}' for r, c, _, _ in SHUTDOWNS])
-def test_shutdown_command_then_silence(ros, models, robot, config, safety_out, keeps_held):
+@pytest.mark.parametrize('robot, config, keeps_held', SHUTDOWNS,
+                         ids=[f'{r}-{c}' for r, c, _ in SHUTDOWNS])
+def test_shutdown_command_then_silence(ros, models, robot, config, keeps_held):
     '''
     The IK joints go limp: mode 0, kp, kd and tau 0, q as they were. The held joints too,
     except on the G1, where a walking policy may be on the legs: there they keep their hold
     angle, gains and torque
     '''
     rig = Rig(ros, models, robot, config=config, follow_tolerance=0.0)
-    assert rig.config['topics']['safety_out'] == safety_out
     handler = rig.handler()
     handler.start()
     command(rig, handler, rig.measured)
@@ -339,7 +336,6 @@ def test_zero_gain_output_keeps_the_gate_shut(ros, models):
 
 def test_g1_split_gate_opens_on_lowcmd(ros, models):
     rig = Rig(ros, models, 'g1', config='g1_split')
-    assert rig.config['topics']['safety_out'] == '/lowcmd'
     handler = rig.handler()
     handler.start()
     time.sleep(0.3)

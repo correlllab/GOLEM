@@ -4,7 +4,7 @@
 Starts the installed frame_task_server for --robot with --config as a subprocess. This process
 plays the robot and golem_safety's relay: it publishes /lowstate at 500 Hz, executes every
 command on /safety/lowcmd_upper_in at once (each slot with kp > 0 jumps to its q) and relays
-it on the config's topics.safety_out, and records the receive time of every command. Two
+it on golem_safety's output, /lowcmd, and records the receive time of every command. Two
 windows are measured: the start-up (from the first command to the server's first
 /left_ee_pose, the start-up moves stepping the IK) and the goals (FrameTask goals that move
 both end effectors 10 cm forward and back, one after another, for --seconds). Then the
@@ -42,7 +42,7 @@ from rclpy.executors import MultiThreadedExecutor  # noqa: E402
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy  # noqa: E402
 from unitree_hg.msg import LowCmd, LowState  # noqa: E402
 
-from golem_upper_ik.config import load_controller_config  # noqa: E402
+from golem_upper_ik.config import SAFETY_OUTPUT_TOPIC, load_controller_config  # noqa: E402
 from golem_upper_ik.profile import load_profile  # noqa: E402
 
 READY_TIMEOUT_S = 120.0
@@ -72,8 +72,7 @@ class Robot:
         self._state.imu_state.quaternion = [1.0, 0.0, 0.0, 0.0]
         self._state_publisher = node.create_publisher(LowState, config['topics']['low_state'],
                                                       WRITER_QOS)
-        self._relay_publisher = node.create_publisher(LowCmd, config['topics']['safety_out'],
-                                                      WRITER_QOS)
+        self._relay_publisher = node.create_publisher(LowCmd, SAFETY_OUTPUT_TOPIC, WRITER_QOS)
         node.create_subscription(LowCmd, config['topics']['low_cmd'], self._on_command,
                                  RECORD_QOS)
         self._stop = threading.Event()

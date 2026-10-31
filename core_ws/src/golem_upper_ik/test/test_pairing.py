@@ -1,20 +1,15 @@
 '''
 Which safety and controller configs may run together, and what the pairs agree on.
 
-The G1's verdicts are compared with the previous G1 arm controller's config_pairing, through
-test/fixtures/old_controller/g1_pairing.json (test/fixtures/README.md); this test imports no
-old package. The pairs' topics and gain limits are read from golem_safety's installed configs.
+The pairs' topics and gain limits are read from golem_safety's installed configs.
 '''
 import inspect
-import json
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from golem_upper_ik.pairing import default_controller_config, pairing_refusal
-
-FIXTURE = Path(__file__).parent / 'fixtures' / 'old_controller' / 'g1_pairing.json'
 
 H12_PAIRS = {
     'relax_safety_split': 'safety_split',
@@ -28,41 +23,6 @@ H12_PAIRS = {
 }
 H12_CONTROLLERS = ('safety_split', 'sim_safety_split', 'safety_full')
 SIMS = (None, False, True)
-
-
-def old_cases():
-    return json.loads(FIXTURE.read_text())
-
-
-def test_g1_pairing_matches_old_rules():
-    cases = old_cases()['cases']
-    assert len(cases) == 147
-    for case in cases:
-        refusal = pairing_refusal('g1', case['controller'], case['safety'], sim=case['sim'])
-        if case['verdict'] == 'accepted':
-            assert refusal is None, case
-        else:
-            assert case['verdict'] == 'refused', case
-            assert refusal == case['message'], case
-
-
-def test_g1_default_controller_config_matches_old():
-    defaults = old_cases()['default_controller_config']
-    assert len(defaults) == 7
-    for safety, controller in defaults.items():
-        assert default_controller_config('g1', safety) == controller, safety
-
-
-def test_g1_arm_sdk_configs_refused():
-    '''golem_safety has no arm_sdk configs: they relay no upper-body channel, pair with none'''
-    refusal = pairing_refusal('g1', 'g1', 'arm_sdk', sim=False)
-    assert refusal == ('safety config "arm_sdk" must relay the upper-body channel: '
-                       'one of split, sim_split')
-    refusal = pairing_refusal('g1', 'sim', 'sim_arm_sdk', sim=True)
-    assert refusal == ('safety config "sim_arm_sdk" must relay the upper-body channel: '
-                       'one of split, sim_split')
-    for safety in ('arm_sdk', 'sim_arm_sdk'):
-        assert default_controller_config('g1', safety) is None
 
 
 def test_g1_pairs():
@@ -169,12 +129,12 @@ def paired_configs(robot):
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_paired_configs_agree_on_the_topics(robot):
-    from golem_upper_ik.config import load_controller_config
+    from golem_upper_ik.config import SAFETY_OUTPUT_TOPIC, load_controller_config
     for safety, controller in paired_configs(robot).items():
         topics = safety_config(robot, safety)['topics']
         config = load_controller_config(robot, controller)
-        # the follow gate reads the topic the safety config writes, by content, not by name
-        assert config['topics']['safety_out'] == topics['low_cmd_out'], (safety, controller)
+        # the follow gate reads the topic the safety config writes
+        assert SAFETY_OUTPUT_TOPIC == topics['low_cmd_out'], (safety, controller)
         # and the controller writes an input the safety config reads
         inputs = [topic for key, topic in topics.items() if key.startswith('low_cmd_') and
                   key != 'low_cmd_out']

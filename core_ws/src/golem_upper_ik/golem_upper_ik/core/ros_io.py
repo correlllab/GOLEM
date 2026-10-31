@@ -31,7 +31,7 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from unitree_hg.msg import LowCmd, LowState
 
-from golem_upper_ik.config import SAFETY_INPUT_PREFIX, SAFETY_OUTPUT_TOPICS
+from golem_upper_ik.config import SAFETY_INPUT_PREFIX, SAFETY_OUTPUT_TOPIC
 from golem_upper_ik.profile import RobotProfile
 
 __all__ = [
@@ -388,15 +388,12 @@ class SafetyOutputSubscriber:
     controller never writes golem_safety's output.
     '''
 
-    def __init__(self, node, topic: str, callback_group=None):
-        outputs = sorted(set(SAFETY_OUTPUT_TOPICS.values()))
-        if topic not in outputs:
-            raise ValueError(f"'{topic}' is not a golem_safety output ({', '.join(outputs)})")
-        self._topic = topic
+    def __init__(self, node, callback_group=None):
+        self._topic = SAFETY_OUTPUT_TOPIC
         self._lock = threading.Lock()
         self._latest = None
         self._subscription = _ClosableSubscription(
-            node, LowCmd, topic, self._receive, callback_group)
+            node, LowCmd, self._topic, self._receive, callback_group)
 
     @property
     def topic(self) -> str:

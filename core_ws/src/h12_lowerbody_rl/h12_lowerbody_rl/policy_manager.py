@@ -3,8 +3,8 @@
 The manager holds the lower-body policies and at most one *active* policy.
 ``active_name`` is ``None`` when **idle**: the robot is held by the elastic band
 and no policy drives the legs. A requested policy becomes active once the node
-releases the band and calls ``commit``, which ``reset()``s it for a clean
-free-standing warm-up. The band itself is owned by the node, not here.
+has pre-posed the legs and calls ``commit``, which ``reset()``s it for a clean
+warm-up. The band itself is owned by the node, not here.
 """
 
 from __future__ import annotations
@@ -37,17 +37,14 @@ class PolicyManager:
     def names(self) -> list[str]:
         return list(self._policies)
 
-    def has(self, name: str) -> bool:
-        return name in self._policies
-
     def desired_policy(self) -> Policy | None:
         """The pending (requested but not yet committed) policy, or None if idle."""
         return self._policies.get(self._desired) if self._desired is not None else None
 
     # -- control -------------------------------------------------------------
     def request(self, name: str) -> tuple[bool, str]:
-        """Request a policy. Returns (accepted, message). It is committed later,
-        after band release."""
+        """Request a policy. Returns (accepted, message). The node commits it
+        once the legs are pre-posed."""
         if name not in self._policies:
             return False, f"unknown policy {name!r}; have {self.names()}"
         if name == self._active and not self.is_pending():
@@ -59,8 +56,7 @@ class PolicyManager:
         return True, f"requested {name!r}"
 
     def commit(self, state: RobotState) -> str:
-        """Activate the desired policy now (reset for a clean warm-up). Used for
-        the first activation right after band release."""
+        """Activate the desired policy now (reset for a clean warm-up)."""
         incoming = self._policies[self._desired]
         incoming.reset(state)
         old = self._active

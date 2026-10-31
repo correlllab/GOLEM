@@ -3,11 +3,11 @@
 A ``Policy`` turns the current robot state into a 12-joint lower-body PD setpoint
 (``LegCommand``). Each policy is fully self-describing — it owns its observation
 layout, scales, PD gains, and nominal pose, all loaded from its own YAML — so the
-controller node can run any of them through the same loop and switch between them.
+controller node runs whichever one is pinned through the same loop.
 
 Three concrete policies are provided:
 
-* ``WalkPolicy``  — the original TorchScript walking policy (47-d obs, gait clock).
+* ``WalkPolicy``  — a TorchScript walking policy (47-d obs, gait clock).
 * ``FamePolicy``  — the RMA standing/squatting policy: an env-factor encoder
   (e_t -> z_t) plus a base policy over a history of proprio + z_t (252-d actor obs).
   It reads all 27 joints (legs + torso + arms) but only commands the 12 legs; the
@@ -27,7 +27,7 @@ from __future__ import annotations
 import collections
 import os
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 import torch
@@ -35,7 +35,6 @@ import yaml
 
 NUM_POLICY_JOINTS = 27          # legs(12) + torso(1) + left arm(7) + right arm(7)
 NUM_LEG_JOINTS = 12
-NUM_UPPER_JOINTS = 15           # torso + arms, indices 12:27
 
 
 # --------------------------------------------------------------------------- #
@@ -181,14 +180,13 @@ def _clip_leg_positions(
 # Policy interface
 # --------------------------------------------------------------------------- #
 class Policy(ABC):
-    """A swappable lower-body controller. Stateful (keeps history); reset on switch."""
+    """A lower-body controller. Stateful (keeps history); reset when it engages."""
 
     name: str
 
-    #: 12 leg default angles, in /lowstate order — the nominal pose used by the
-    #: handover gate to decide a switch is safe, and to pre-pose the legs before
-    #: the policy is engaged. ``_kps``/``_kds`` are the leg PD gains each concrete
-    #: policy loads from its YAML.
+    #: 12 leg default angles, in /lowstate order — the nominal pose the controller
+    #: pre-poses the legs to before the policy is engaged. ``_kps``/``_kds`` are
+    #: the leg PD gains each concrete policy loads from its YAML.
     nominal_lower: np.ndarray
     _kps: np.ndarray
     _kds: np.ndarray
@@ -215,7 +213,7 @@ class Policy(ABC):
 
 
 # --------------------------------------------------------------------------- #
-# Walking policy (original)
+# Walking policy
 # --------------------------------------------------------------------------- #
 class WalkPolicy(Policy):
     name = "walk"
@@ -226,10 +224,7 @@ class WalkPolicy(Policy):
         cfg_dir = os.path.dirname(os.path.abspath(config_path))
         policy_path = cfg.get("policy_path", "walkingPolicy.pt")
         if not os.path.isabs(policy_path):
-            # walk.yaml's policy_path points at a training tree; fall back to the
-            # weight shipped alongside the config.
-            local = os.path.join(cfg_dir, "walkingPolicy.pt")
-            policy_path = local if os.path.isfile(local) else os.path.join(cfg_dir, policy_path)
+            policy_path = os.path.join(cfg_dir, policy_path)
 
         self._kps = np.asarray(cfg["kps"], dtype=np.float32)
         self._kds = np.asarray(cfg["kds"], dtype=np.float32)
@@ -301,7 +296,7 @@ class AlmiPolicy(Policy):
     observations are forced to 0 and the policy balances in place — it does not
     march at zero command the way WalkPolicy does.
 
-    Stand->walk onset resets the LSTM (verified in RoboCasa 2026-07-19): the
+    Stand->walk onset resets the LSTM (checked in RoboCasa): the
     policy only enters locomotion if the command is already present when its
     recurrent state starts — in the upstream rollouts every episode begins with
     the command applied from tick 0, so "quiet stand, then a command appears"
@@ -485,7 +480,7 @@ class FamePolicy(Policy):
         self._policy.eval()
 
         self._encoder = None
-        enc_path = _resolve("encoder_path", "encoder_3800.pt")
+        enc_path = _resolve("encoder_path", "encoder_3600.pt")
         if os.path.isfile(enc_path):
             from h12_lowerbody_rl.rma import EnvFactorEncoder, EnvFactorEncoderCfg
 

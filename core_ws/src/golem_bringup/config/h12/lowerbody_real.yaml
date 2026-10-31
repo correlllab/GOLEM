@@ -4,11 +4,9 @@
 #   ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
 lowerbody_controller_node:
   ros__parameters:
-    # The elastic band is a sim fixture; on real there is no
-    # /elastic_band/toggle service, so the release path only costs a 1 s
-    # blocking wait_for_service inside the engage tick (first policy command
-    # then computed from 1 s-stale state) plus a redundant second LSTM reset.
-    # The operator lowers the gantry instead.
+    # The elastic band is a sim fixture; the real robot has no
+    # /elastic_band/toggle service. false means there is no band to release:
+    # the node never calls the service, and the operator lowers the gantry.
     disable_elastic_band: false
     # Startup seed for the live IMU trim (adjust during a run with
     # rqt_reconfigure or ros2 param set). Negative pitch is an anti-lean bias

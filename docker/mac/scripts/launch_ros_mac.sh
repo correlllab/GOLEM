@@ -1,9 +1,8 @@
 #!/bin/bash
 # Apple-Silicon / CPU launcher for the SLIM ROS workspace.
-# Builds only the core bringup package subset (skips the vision / grasp / nav2
-# / FAST-LIO packages that need the heavy ML stack), then launches the minimal
-# Mac bringup (robot_state_publisher, joint_state_publisher, Pink IK
-# frame_task_server, safety_node) against the running MuJoCo sim.
+# Builds only the core bringup package subset (skips the vision / grasp /
+# FAST-LIO packages that need the heavy ML stack), then launches the minimal
+# Mac bringup (h12_sim_mac.launch.py) against the running MuJoCo sim.
 #
 # Pass `bash` as the first arg to drop to a shell instead of launching.
 #
@@ -118,12 +117,11 @@ cd "$WS"
 # so they never show up in `ros2 pkg list`. NOTE only h12_sim_mac.launch.py runs
 # here — the other launch files exec-launch the omitted packages (nav2,
 # FAST_LIO, model_server...).
-# unitree_hg + h12_lowerbody_rl provide the optional lower-body stack
-# (walk/FAME policies). They build cheaply and are only *launched* when
-# GOLEM_LOWERBODY is set (see the bringup), but building them always keeps
-# `ros2 run h12_lowerbody_rl fame_node` available in a shell. unitree_hg needs
-# ros-humble-rosidl-generator-dds-idl and torch, both in the image. Use
-# GOLEM_LOWERBODY=almi to stand and walk (see docs/MACOS.md).
+# unitree_hg + h12_lowerbody_rl provide the optional lower-body controller
+# (lowerbody_controller_node with the FAME, walk or ALMI policy). They build
+# cheaply and are only *launched* when GOLEM_LOWERBODY is set (see the bringup).
+# unitree_hg needs ros-humble-rosidl-generator-dds-idl and torch, both in the
+# image. Use GOLEM_LOWERBODY=almi to stand and walk (see docs/MACOS.md).
 PKGS="custom_ros_messages magpie_msgs golem_ros2_models golem_safety golem_upper_ik golem_slam golem_bringup unitree_hg h12_lowerbody_rl"
 BRINGUP_STUB_DEPS="estop livox_ros_driver2 fast_lio model_server cl_realsense lmg_deploy dex_3 g1_homie deploy_mjpc golem_skills"
 

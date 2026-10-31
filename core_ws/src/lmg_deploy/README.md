@@ -2,8 +2,9 @@
 
 Runs a two-agent MARL policy from Locomanipulation_game (branch `marl-direct`,
 `LocoManip-Marl-Direct-v0`: LSTM actors, explicit PD at 500 Hz, a 0-20 ms target
-delay in training) on the H1-2. No policy ships with the package: export one into
-`policies/<name>/` (below) and launch with `policy:=<name>`. A
+delay in training) on the H1-2. One policy ships with the package,
+`policies/mid360v2/`; export others into `policies/<name>/` (below) and launch with
+`policy:=<name>`. A
 **legs** agent that walks on `/cmd_vel`, and an **arms** agent that reaches
 wrist-pose goals through a damped-least-squares IK step plus a learned
 residual. One node, `marl_deploy_node`, owns all 27 joints. It publishes
@@ -25,7 +26,7 @@ release) and uses the same heartbeat watchdog.
 | `lmg_deploy/livox_attitude.py` | the policy's attitude from FAST-LIO's `/Odometry`, carried by the gyro, levelled at the pre-pose |
 | `lmg_deploy/marl_deploy_node.py` | the ROS node: safety channels, heartbeat, pre-pose, band, operator interface |
 | `config/policy_template.yaml` | the deploy config a new policy starts from: joint order, defaults, gains, scales, bounds, command ranges (each from the training env), and the SLAM body frame |
-| `policies/<name>/<name>.yaml`, `{legs,arms}.pt`, `export.yaml` | a policy: its deploy config and what the export writes, below; the `.pt` files in Git LFS (`policies/.gitattributes`). Mid360v2 since 10-20 (Explicit500, Tune3Track2 and Mid360 were removed 10-19) |
+| `policies/<name>/<name>.yaml`, `{legs,arms}.pt`, `export.yaml` | a policy: its deploy config and what the export writes, below; the `.pt` files in Git LFS (`policies/.gitattributes`). `mid360v2` ships |
 | `bags/<name>/` | rosbag2 recordings of Explicit500 on the real robot (`policy_bag_walk`: walking to nav2 goals; `reach`: an arm goal, ended by the hardware e-stop), the `.db3` files in Git LFS |
 | `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, SLAM odometry, modes) on `test/data/explicit500.yaml`, Explicit500's deploy config |
 | `test/sim_drive.py` | a scripted drive in the Robocasa sim (stand, walk, turn, side-step, arm goal), measured on FAST-LIO's `/Odometry` |
@@ -160,4 +161,4 @@ ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger         
   - `imu_link` on `torso_link` for Explicit500 and older (the default when the export has no `imu` block).
 
   The attitude (so projected gravity) comes from FAST-LIO by default (`livox_attitude:=fastlio`): `/Odometry` is the IMU body's pose in `camera_init`, carried forward between poses by the gyro and levelled once from the accelerometer while the robot holds the pre-pose (`lmg_deploy/livox_attitude.py`; state `waiting_imu` until the head is still, so FAST-LIO must run, `use_slam:=true`). On the real walking bag it is 0.23 deg off FAST-LIO's poses (p95 0.62), where the complementary filter (`lmg_deploy/livox_imu.py`) is 1.9 deg off (p95 4.4): its pull toward the accelerometer follows the gait. With no `/Odometry` for `livox_odom_timeout` (1 s) the node falls back to the filter and warns; `livox_attitude:=filter` uses the filter throughout. Restart the node with FAST-LIO (it moves `camera_init`). The angular velocity passes the gyro low-pass the run trained with, `imu.gyro_lowpass_hz` in `export.yaml` (absent: none, as for Explicit500). `livox_imu.GyroLowpass` is a 2nd-order Butterworth, discretized exactly over each sample's dt, so training's physics rate and the MID360's 200 Hz realize the same filter. At 8 Hz it takes the head's ~20 Hz pitch resonance while walking from 0.5-0.9 to ~0.1 rad/s rms. `livox_joint` and `livox_imu_joint` carry the real robot's measured mount (point frame 8.77 deg, chip 9.45 deg pitch); `imu_offset_{roll,pitch,yaw}_deg` (default 0) trims what is left, live.
-- **Safety-layer gaps.** The safety layer holds the last command on a silent channel: neither input channel has a staleness watchdog in the sim or real configs (`upper_stale_seconds: 0.0`). If this node latches silent, the safety layer keeps sending its last targets until it is stopped.
+- **Safety-layer gaps.** The safety layer holds the last command on a silent channel. Its stale times only report a quiet input (`input_quiet`): in `relax_safety_split`, the lmg bringups' preset, `stale.lower_seconds` is 0.2 and `stale.upper_seconds` 0 (off), and neither stops the relay. If this node latches silent, the safety layer keeps sending its last targets until it is stopped.

@@ -18,8 +18,8 @@ in the same process.
 
 DEBUG ONLY: nothing in the control path reads this node, and it consumes no ground
 truth -- only rt/lowstate, the estimator's estimate, and the planner's own plan. It
-is a no-op unless the controller core was started with --plan_topic (the sim
-launcher passes it; the real robot does not publish plans by default).
+is a no-op unless the controller core was started with --plan_topic
+(controller_launcher.py always passes it; the bare core does not).
 """
 
 import os

@@ -62,10 +62,10 @@ What happens, in order (`lowerbody_controller_node`):
    If the log says `NOT SETTLED (timeout)`, do **not** confirm — the legs
    never reached the crouch; investigate first. (The sim bringup passes
    `engage_wait_for_confirm: false` and auto-engages for unattended runs.)
-4. On confirm the LSTM engages at zero command (stand). The
-   `elastic band toggle service unavailable` WARN right after is expected on
-   real — the band service is sim-only; the policy re-seeds its memory at
-   that moment (clean trained stand-start).
+4. On confirm the LSTM engages at zero command (stand), a clean trained
+   stand-start. The elastic band is a sim fixture: `lowerbody_real.yaml`
+   sets `disable_elastic_band: false`, so on the real robot the node never
+   calls `/elastic_band/toggle`.
 5. Slacken the hoist gradually. There is no post-engage ramp — the hoist is
    the ramp.
 

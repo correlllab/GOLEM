@@ -35,8 +35,6 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'walking_node = h12_lowerbody_rl.scripts.walking_node:main',
-            'fame_node = h12_lowerbody_rl.scripts.fame_node:main',
             'lowerbody_controller_node = '
             'h12_lowerbody_rl.scripts.lowerbody_controller_node:main',
         ],

@@ -30,11 +30,11 @@ from std_srvs.srv import Trigger
 def _band_worker(node: Node, delay_sec: float, stop: threading.Event) -> None:
     """After delay_sec ON THE NODE CLOCK, call /elastic_band/toggle once.
 
-    With use_sim_time (the sim bringup) the node clock follows /clock, so the
-    delay is measured in SIM seconds -- the clock the robot lives on. The
-    kitchen sim runs far below 1x real-time, so a wall-clock delay would fire
-    at the wrong point of the (plant-clocked) bring-up. Without use_sim_time
-    the node clock is system time and this degrades to the old wall behavior.
+    With use_sim_time the node clock follows /clock, so the delay is measured
+    in SIM seconds -- the clock the robot lives on. The kitchen sim runs far
+    below 1x real-time, so a wall-clock delay would fire at the wrong point of
+    the (plant-clocked) bring-up. Without use_sim_time the node clock is
+    system time and the delay is wall seconds.
     spin_once() here also services the /clock subscription (nothing else spins
     this node)."""
     t0 = None
@@ -78,8 +78,9 @@ def main() -> None:
     exe = p("controller_exe", "mjpc_lowerbody_core").value
     binary = p("controller_binary", os.path.join(_libdir, exe)).value
     # Same knob set + semantics as the fork's CLI (see mjpc/deploy/
-    # h12_lower_body_controller.cc); defaults here are the SIM bringup's --
-    # config/mjpc_sim.yaml / mjpc_real.yaml override.
+    # h12_lower_body_controller.cc). No golem_bringup launch file starts this
+    # node; golem_bringup's config/h12/mjpc_sim.yaml and mjpc_real.yaml hold
+    # the sim and real parameter sets to pass it.
     args = [
         binary,
         "--task", str(p("task", "Stabilize H12 Magpie").value),
@@ -94,22 +95,22 @@ def main() -> None:
         "--ankle_roll_offset_r_deg", str(p("ankle_roll_offset_r_deg", 0.0).value),
         "--domain_id", str(p("domain_id",
                              int(os.environ.get("ROS_DOMAIN_ID", "0"))).value),
-        # gRPC monitor is compiled out of the container build; the flag is inert
-        # there but meaningful on a host build (native monitor attach).
+        # deploy_mjpc builds the cores without H12_NODE_GRPC, so the monitor
+        # server is compiled out and this flag is inert here; it hosts the
+        # monitor only in a fork build that defines H12_NODE_GRPC.
         "--grpc_port", str(p("grpc_port", 0).value),
         "--plan_trajectories", str(p("plan_trajectories", 0).value),
         "--plan_threads", str(p("plan_threads", 0).value),
         "--stale_sec", str(p("stale_sec", 0.05).value),
-        # latency-comp sim-time scale = measured RTF. 1.0 (default) is byte-identical
-        # to before (real/twin run RTF~1); a below-realtime sim (RoboCasa) passes its
+        # latency-comp sim-time scale = measured RTF. 1.0 (default) applies no
+        # scaling (real/twin run RTF~1); a below-realtime sim (RoboCasa) passes its
         # measured RTF so the predict-forward horizon stops over-leading by 1/RTF.
         "--latency_rtf", str(p("latency_rtf", 1.0).value),
         # DEBUG plan publish for mjpc_debug_visualizer's blue ghost. Hardcoded, not a
         # ROS param: there is exactly one right topic and the visualizer defaults to
         # the same string, so a param could only ever be set WRONG (silently costing
-        # you the ghost). The core still defaults this OFF -- an empty --plan_topic --
-        # so the fork's binary, the full-body core and the upper-body core are all
-        # byte-unchanged; this launcher is the only thing that arms it.
+        # you the ghost). The core defaults this OFF -- an empty --plan_topic --
+        # so only runs through this launcher publish the plan.
         # The publish happens on the PLANNER thread after PlanIteration returns, so it
         # costs the 200 Hz control loop nothing. ROS sees it as /mjpc/plan.
         "--plan_topic", "rt/mjpc/plan",
@@ -118,8 +119,7 @@ def main() -> None:
         # Passed unconditionally with their defaults visible here (edit in place
         # or override with -p). Unlike --arm_aware below, BOTH cores define all
         # three, so no has_* guard is needed and mjpc_fullbody_core won't abort.
-        # Defaults reproduce the binary's own defaults exactly -> byte-identical
-        # to not passing them at all.
+        # The defaults are the binary's own, so passing them changes nothing.
         #
         # straighten_start: hold the measured (slumped) pose, wait for ENTER on
         # the core's STDIN, then hand authority to the planner (SETTLE->BLEND).

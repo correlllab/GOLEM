@@ -1,4 +1,6 @@
-# MJPC lower-body deploy — RoboCasa SIM params (h12_sim.launch.py).
+# MJPC lower-body deploy — RoboCasa SIM params. No golem_bringup launch file
+# loads this file: pass it to the deploy_mjpc nodes by hand (h12_lowerbody's
+# estimator_params defaults to mjpc_real.yaml).
 # Controller + estimator are the fork's deploy core
 # and RW-EKF base estimator behind the deploy_mjpc shims; these params
 # mirror the fork's surviving CLI flags 1:1. Everything settled (ctrl 200 Hz,
@@ -19,11 +21,11 @@ deploy_mjpc_estimator:
     # motion, feeding the planner an inconsistent (pos, vel) pair that diverges
     # laterally within seconds of policy authority. REAL runs at 1x, where wall
     # == plant time, so mjpc_real.yaml leaves this at 0.
-    tick_dt: 0.005   # must match the plant's --sim-dt
+    tick_dt: 0.005   # must match the plant's model.opt.timestep (see twin_dt)
 
 mjpc_debug_visualizer:
   ros__parameters:
-    # DEBUG ONLY (use_mjpc_viz:=false to drop it). Renders the MEASURED robot in its
+    # DEBUG ONLY. Renders the MEASURED robot in its
     # normal colours + a semi-transparent BLUE GHOST at the planner's current best
     # trajectory, and writes the mp4 when the node is signalled. Commands nothing;
     # subscribes only to rt/lowstate, the estimator's rt/sportmodestate_est, and
@@ -86,40 +88,41 @@ mjpc_deploy_lowerbody_controller:
     # the planner half and requires staying slow, which leaves the latency
     # compensator (deploy_common.cc, wall-clock dt predicted as sim-seconds)
     # over-leading by 1/RTF -> controller<->plant overshoot. So run like real
-    # instead: 12 threads with RTF as near 1.0 as the box allows (HEADLESS,
-    # --no-sensors, no slowmo -> ~0.85, giving ~65 iters/sim-s against real's
-    # ~55 and only 1.18x latency over-lead). Do NOT slow the sim down; that
+    # instead: 12 threads with RTF as near 1.0 as the box allows (headless,
+    # cameras off via GOLEM_CAMERAS=0 -> ~0.85, giving ~65 iters/sim-s
+    # against real's ~55 and only 1.18x latency over-lead). Do NOT slow the sim down; that
     # breaks both halves. If 12 threads oversubscribe the machine and tank RTF
     # (check /clock hz), drop to ~10.
     plan_threads: 12
-    # Full gravity feed-forward, with the 0.67 kg back_equipment ballast and
-    # rigid feet (--rigid-feet, default ON in h12_mujoco.py). Rigid feet
-    # eliminate the topple — foot-slip is its dominant driver — leaving a
-    # vertical sink as the residual, and 1.0 holds height (z ~0.92 over 40 s)
-    # where 0.85 sinks to z 0.64: unlike the twin, this plant has no leg
-    # gravcomp, only the two hands. The remaining 5-12 deg tilt wobble is not a
-    # free stand; the next parity lever is the contact/integrator mismatch
+    # Full gravity feed-forward, tuned on a plant with the 0.67 kg
+    # back_equipment ballast and rigid feet (foot-slip is the topple's dominant
+    # driver; the H1-2 RoboCasa sim has no rigid-feet option). 1.0 holds height
+    # (z ~0.92 over 40 s) where 0.85 sinks to z 0.64: unlike the twin, this
+    # plant has no leg gravcomp, only the two hands. The remaining 5-12 deg
+    # tilt wobble is not a free stand; the next parity lever is the
+    # contact/integrator mismatch
     # (RoboCasa runs impratio=20 / Euler / elliptic against the twin+planner's
     # 100 / implicitfast / pyramidal, and the task XML warns Euler diverges on
     # biped balance). REAL keeps 0.85 (mjpc_real.yaml).
     gravity_ff: 1.0
     # MUST equal RoboCasa's model.opt.timestep: the sim publishes rt/lowstate
     # from a RecurrentThread at exactly that interval, and the core's planner
-    # clock is lowstate tick * twin_dt. The plant is run at the twin's dt
-    # (--sim-dt 0.005) because the deploy-chain stand is dt-sensitive: it hangs
-    # at 0.002 and stands at 0.005 even down at RTF 0.5.
+    # clock is lowstate tick * twin_dt. 0.005 is the twin's dt; the
+    # deploy-chain stand is dt-sensitive (it hangs at 0.002 and stands at 0.005
+    # even down at RTF 0.5). The H1-2 RoboCasa sim takes no flag to set its
+    # timestep: check model.opt.timestep before running with this value.
     twin_dt: 0.005
     # REAL-PARITY STATE SOURCE: the RW-EKF estimate on rt/sportmodestate_est is
-    # the SAME signal path the real robot uses (the bringup already launches the
-    # estimator). Its filtered velocity gives a quieter stand (tilt 3-5° steady)
-    # than raw ground truth, whose full-bandwidth base velocity the planner
-    # over-reacts to; the 30 ms LPF matches real. Ground truth is not the missing
-    # piece — feeding rt/sportmodestate (plant --truth-sportstate, verified at
-    # 191 Hz) does not stop the fall, it only turns the lateral fold into a
-    # sagittal one. The EKF's leg-odometry xy wanders ~0.3 m under sim foot
-    # micro-slip, which is irrelevant for STANDING (balance = orientation + base
-    # velocity + CoM). Point this at rt/sportmodestate (+ sim
-    # --truth-sportstate) only to A/B raw truth.
+    # the SAME signal path the real robot uses (deploy_mjpc_estimator above
+    # publishes it; h12_lowerbody's use_estimator starts it). Its filtered
+    # velocity gives a quieter stand (tilt 3-5° steady) than raw ground truth,
+    # whose full-bandwidth base velocity the planner over-reacts to; the 30 ms
+    # LPF matches real. Ground truth is not the missing piece — a ground-truth
+    # rt/sportmodestate does not stop the fall, it only turns the lateral fold
+    # into a sagittal one. The EKF's leg-odometry xy wanders ~0.3 m under sim
+    # foot micro-slip, which is irrelevant for STANDING (balance = orientation +
+    # base velocity + CoM). The H1-2 RoboCasa sim publishes no
+    # rt/sportmodestate.
     sportstate_topic: rt/sportmodestate_est
     imu_pitch_offset_deg: 0.0   # 1.6 is a REAL-robot IMU mount calibration; sim has none
     arm_aware: true             # legs pre-compensate for measured arm/torso motion
@@ -135,13 +138,12 @@ mjpc_deploy_lowerbody_controller:
     # plant-clocked, so it pauses during each freeze rather than racing ahead.
     # REAL stays at the compiled 0.05 (mjpc_real.yaml doesn't set this).
     stale_sec: 1.5
-    # Band release is owned by the SIM's slack-triggered auto-release
-    # (h12_mujoco --band-auto-release: |band force| <= 30 N sustained 2 sim-s,
-    # the twin harness "handoff-timing" doctrine -- a self-supporting robot
-    # leaves the band slack). Keep the launcher's TIMER release OFF: the
-    # /elastic_band/toggle service is a stateful TOGGLE, so firing it after
-    # the sim already auto-released turns the band back ON. A timer release is
-    # also dishonest: it fires mid-sway and dumps the robot from whatever
-    # posture the tether wound it into.
+    # The H1-2 RoboCasa band stays on until /elastic_band/toggle is called (or
+    # SPACE in the viewer); the sim has no slack-triggered auto-release. With
+    # drop_band false the launcher leaves the band alone, so release it by
+    # hand once the robot supports itself. drop_band true has the launcher
+    # toggle it band_drop_after_secs (sim s) after start, whatever the robot's
+    # posture: a timer release can fire mid-sway, and the service is a
+    # stateful TOGGLE, so a second call turns the band back on.
     drop_band: false
     band_drop_after_secs: 25.0

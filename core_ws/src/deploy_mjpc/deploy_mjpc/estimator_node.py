@@ -10,11 +10,9 @@ ROS parameters -> the estimator's argv and then runs it unmodified — the fork
 stays the single source of truth, and the estimator's unitree_sdk2py DDS I/O
 (one-writer + iface auto-pinning) is deliberately NOT converted to rclpy pub/sub.
 
-Replaces the earlier stripped port (velocity-only leg odometry, hardcoded
-covariances, never read the accelerometer) — see git history. That version's
-"H3 hard contact gate" (drop swing feet entirely) is NOT carried over: the fork
-filter handles outliers via load-scaled measurement noise + chi2 rejection;
-bench H3 on the twin before considering re-adding it.
+There is no hard contact gate (dropping swing feet entirely): the fork filter
+handles outliers via load-scaled measurement noise + chi2 rejection. Bench a
+gate on the twin before adding one.
 
 Contract: the estimator's IMU_OFFSET must equal the controller core's kImuOffset
 (both are {-0.04452, -0.01891, 0.27756}; both ends of the IMU-site -> pelvis

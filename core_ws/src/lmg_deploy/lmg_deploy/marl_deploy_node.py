@@ -47,7 +47,7 @@ Safety
 * A non-finite observation or target latches the node silent instead of
   sending it: the safety layer would latch its estop (all motors limp) on it.
 Silent means the safety layer keeps holding the last targets until it is
-stopped; it has no staleness watchdog on these channels.
+stopped: its stale times (stale.*_seconds) only report a quiet input.
 
 IMU
 ---
@@ -148,7 +148,7 @@ SLAM_STALE_S = 0.5          # /Odometry older than this while reaching: warn tha
 class MarlDeployNode(Node):
     def __init__(self):
         super().__init__("marl_deploy_node")
-        self.declare_parameter("config", "")   # the policy's yaml, policies/<name>/<name>.yaml (none ships)
+        self.declare_parameter("config", "")   # the policy's yaml, policies/<name>/<name>.yaml
         self.declare_parameter("urdf_path", "/home/code/CL_Assets/ros_assets/h1_2_magpie.urdf")
         self.declare_parameter("control_hz", 50.0)
         self.declare_parameter("prepose_ramp_s", 6.0)     # s, minimum ramp duration
@@ -170,8 +170,8 @@ class MarlDeployNode(Node):
 
         cfg_path = self.get_parameter("config").value
         if not cfg_path:
-            raise ValueError("config:= the policy's deploy yaml, policies/<name>/<name>.yaml (lmg_deploy ships no "
-                             "policy: export one, README 'Exporting a checkpoint')")
+            raise ValueError("config:= the policy's deploy yaml, policies/<name>/<name>.yaml (lmg_deploy ships "
+                             "mid360v2; README 'Exporting a checkpoint' adds others)")
         with open(cfg_path) as f:
             cfg = yaml.safe_load(f)
         cfg_dir = os.path.dirname(os.path.abspath(cfg_path))

@@ -3,7 +3,8 @@
 Flow
 ----
 1. The robot starts held by the elastic band, **idle** (no policy drives the legs).
-2. At startup the ``active_policy`` (default ``fame``) is auto-activated: once the
+2. At startup the ``active_policy`` (``fame``, ``walk`` or ``almi``; the bringups
+   set it from ``lowerbody:=``) is auto-activated: once the
    safety layer's /safety/heartbeat arrives, the node pre-poses the legs (ramping
    the target from the measured pose to the policy's nominal crouch over
    ``prepose_ramp_s`` — never a step at full gains), releases
@@ -79,12 +80,6 @@ MODE_MACHINE = 6
 # latches this node silent on a False beat or on heartbeat_timeout of silence.
 SAFETY_HEARTBEAT_TOPIC = "/safety/heartbeat"
 
-# Policy registry keys (see LowerBodyControllerNode.__init__).
-FAME = "fame"   # RMA balance/stand policy (does not locomote)
-WALK = "walk"   # TorchScript walk policy (follows /cmd_vel)
-ALMI = "almi"   # ALMI LSTM policy: stands (incl. under arm motion) and walks on
-                # /cmd_vel; AlmiPolicy resets its LSTM at gait onset
-
 # Pre-pose: before engaging the policy, PD-drive the legs to the incoming policy's
 # nominal crouch (band-held) and wait until they settle there. The RMA policy warms
 # up from its trained default pose; released from the straight-leg spawn it can't
@@ -110,9 +105,9 @@ class LowerBodyControllerNode(Node):
         super().__init__("lowerbody_controller_node")
 
         self.declare_parameter("control_hz", 50.0)
-        # Policy to auto-activate at startup (releases the band when ready).
-        # Default "fame" (stand). "none" leaves the robot band-held idle forever,
-        # so set a real policy here.
+        # Policy to auto-activate at startup (releases the band when ready):
+        # fame (stands), walk or almi (both follow /cmd_vel). "none" leaves the
+        # robot band-held idle forever.
         self.declare_parameter("active_policy", "fame")
         self.declare_parameter("walk_config", _share("policies", "walk", "walk.yaml"))
         self.declare_parameter("fame_config", _share("policies", "fame", "fame.yaml"))
@@ -182,7 +177,7 @@ class LowerBodyControllerNode(Node):
         if not policies["fame"].has_encoder:
             self.get_logger().warn(
                 "FAME encoder not loaded — z_t will be zeros (out-of-distribution). "
-                "Check policies/fame/encoder_3800.pt."
+                "Check fame.yaml's encoder_path."
             )
         self._manager = PolicyManager(
             policies, log=lambda m: self.get_logger().info(m)
@@ -231,16 +226,18 @@ class LowerBodyControllerNode(Node):
 
         self.get_logger().info(
             f"lowerbody_controller ready: policies={self._manager.names()}, "
-            f"control_hz={control_hz}. Policy follows /cmd_vel; no start services."
+            f"control_hz={control_hz}."
         )
 
         if startup_policy and startup_policy != "none":
             self.get_logger().info(f"active_policy={startup_policy!r}: auto-activating at startup")
-            self._request_policy(startup_policy)
+            ok, msg = self._request_policy(startup_policy)
+            if not ok:
+                self.get_logger().error(f"active_policy: {msg} -> robot stays band-held idle")
         else:
             self.get_logger().warn(
-                "active_policy='none' with start services removed -> robot stays "
-                "band-held idle forever. Set active_policy to 'fame' or 'walk'."
+                "active_policy='none' -> robot stays band-held idle forever. "
+                f"Set active_policy to one of {self._manager.names()}."
             )
 
     # -- request entry points ------------------------------------------------
@@ -481,7 +478,6 @@ class LowerBodyControllerNode(Node):
                 # history (which filled with band-held states) is cleared and it
                 # warms up fresh on free-standing — otherwise FAME's first free
                 # actions are computed from stale band-held obs and it topples.
-                # (This is exactly what fame_node does, and why it stays up.)
                 self._manager.reset_active(state)
                 self._awaiting_band_release = False
 

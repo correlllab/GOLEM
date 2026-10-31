@@ -71,7 +71,7 @@ if(H12_BUILD_CONTROLLER AND EXISTS "${MJPC_BUILD}" AND unitree_sdk2_FOUND)
   find_package(Threads REQUIRED)
 
   # Includes: mjpc source headers, plus the fetched mujoco + absl headers.
-  # ABI CRITICAL (found 2026-07-07): the controller MUST compile against the
+  # ABI CRITICAL: the controller MUST compile against the
   # SAME mujoco headers the build tree's libmujoco.so + libmjpc.a were built
   # with -- the _deps/mujoco-src pinned commit. The pip package reports the
   # same release (3.2.3) but its mjModel/mjData struct layout differs from the

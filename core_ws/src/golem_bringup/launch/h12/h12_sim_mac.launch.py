@@ -1,18 +1,20 @@
 """
 Minimal, CPU-only (Apple Silicon) bringup for the H1 MuJoCo sim.
 
-A trimmed variant of h12_sim.launch.py that runs ONLY the core robot
-nodes — no vision foundation models (gemini/sam/graspgen), no golem_skills, no
-Nav2/SLAM, no rviz/sliders. Those need the heavy x86-tuned ML stack that the
-slim arm64 ROS image intentionally omits.
+A trimmed variant of h12_sim.launch.py that runs the core robot nodes — no
+vision foundation models (gemini/sam/graspgen), no golem_skills, no FAST-LIO.
+Those need the heavy x86-tuned ML stack that the slim arm64 ROS image
+intentionally omits. RViz runs outside this launch file (launch_ros_mac.sh,
+GOLEM_RVIZ=vnc).
 
 Nodes started:
-  * static camera_link -> camera_color_optical_frame TF
   * static livox_link -> lidar_link TF (so RViz can place /livox/pointcloud)
   * joint_state_publisher      (golem_upper_ik)
   * robot_state_publisher
   * frame_task_server          (golem_upper_ik, Pink IK)
   * safety_node                (golem_safety, sim:=true)
+  * lowerbody_controller_node  (h12_lowerbody_rl; GOLEM_LOWERBODY)
+  * pointcloud_to_laserscan + slam_toolbox (GOLEM_SLAM), nav2 (GOLEM_NAV2)
 
 Launch by path from the slim ROS container:
   ros2 launch /home/code/core_ws/src/golem_bringup/launch/h12/h12_sim_mac.launch.py
@@ -35,17 +37,6 @@ def generate_launch_description():
     sim_time_param = {'use_sim_time': True}
 
     nodes = [
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='camera_optical_frame_broadcaster',
-            arguments=['0', '0', '0',
-                       '-1.5707963267948966', '0', '-1.5707963267948966',
-                       'camera_link', 'camera_color_optical_frame'],
-            parameters=[sim_time_param],
-            output='screen',
-            emulate_tty=True,
-        ),
         # The MuJoCo lidar bridge stamps /livox/{lidar,pointcloud} with frame_id
         # 'lidar_link', which is co-located with the URDF's 'livox_link' mount but
         # is not itself a URDF link. Publish the identity bridge so RViz (and any
@@ -94,30 +85,28 @@ def generate_launch_description():
         ),
     ]
 
-    # Optional lower-body locomotion controller (GOLEM_LOWERBODY). Off by default:
-    # the elastic-band tether then holds the robot upright. The node self-sequences
-    # its band release (waits for the IK to finish) and publishes leg setpoints on
+    # Optional lower-body controller (GOLEM_LOWERBODY). Off by default: the
+    # elastic-band tether then holds the robot upright. Set, it starts
+    # lowerbody_controller_node pinned to that policy with the x86 sim's
+    # parameters (h12_lowerbody.launch.py, lowerbody_sim.yaml): it waits for
+    # /safety/heartbeat, pre-poses the legs, engages the policy, releases the
+    # band once frame_task_server is ready, and publishes leg setpoints on
     # /safety/lowcmd_lower_in for the safety_node to merge.
-    #   GOLEM_LOWERBODY=fame   RMA standing/squatting policy — balances the robot
-    #                         standing UNSUPPORTED (verified). Does not locomote.
-    #   GOLEM_LOWERBODY=walk   TorchScript walk policy on its own (marches in place;
-    #                         topples in the cluttered kitchen).
-    #   GOLEM_LOWERBODY=almi   lower-body controller pinned to ALMI: stands, and
-    #                         walks on /cmd_vel. This is the one to use for the nav
-    #                         demo — nav2's /cmd_vel makes it walk; it stands again
-    #                         when the command drops to ~0.
+    #   GOLEM_LOWERBODY=fame   RMA standing/squatting policy. Does not locomote.
+    #   GOLEM_LOWERBODY=walk   TorchScript walk policy (follows /cmd_vel).
+    #   GOLEM_LOWERBODY=almi   ALMI: stands, and walks on /cmd_vel. This is the one
+    #                         to use for the nav demo — nav2's /cmd_vel makes it
+    #                         walk; it stands again when the command drops to ~0.
     lowerbody = os.environ.get('GOLEM_LOWERBODY', '').strip().lower()
-    _lowerbody_exec = {'fame': 'fame_node', 'walk': 'walking_node',
-                       'almi': 'lowerbody_controller_node'}.get(lowerbody)
-    if _lowerbody_exec:
-        _lb_params = [sim_time_param]
-        if _lowerbody_exec == 'lowerbody_controller_node':
-            _lb_params.append({'active_policy': 'almi'})
+    if lowerbody in ('fame', 'walk', 'almi'):
         nodes.append(Node(
             package='h12_lowerbody_rl',
-            executable=_lowerbody_exec,
-            name=_lowerbody_exec,
-            parameters=_lb_params,
+            executable='lowerbody_controller_node',
+            name='lowerbody_controller_node',  # MUST match the yaml key
+            parameters=[sim_time_param,
+                        os.path.join(get_package_share_directory('golem_bringup'),
+                                     'config', 'h12', 'lowerbody_sim.yaml'),
+                        {'active_policy': lowerbody}],
             output='screen',
             emulate_tty=True,
         ))
@@ -171,14 +160,16 @@ def generate_launch_description():
 
     # Optional autonomous navigation (GOLEM_NAV2=1, implies SLAM for the map): the
     # nav2 stack plans a collision-free path on the SLAM map + lidar costmap and
-    # drives it via /cmd_vel, which the walk policy consumes (nav2's
+    # drives it via /cmd_vel, which the lower-body policy follows (nav2's
     # velocity_smoother publishes /cmd_vel). Send goals with the RViz "2D Nav Goal"
     # tool or the /navigate_to_pose action. With GOLEM_LOWERBODY=almi the robot
     # walks as soon as nav2 publishes /cmd_vel (no manual step). The
     # robot must be standing in open floor — nav2 rejects a goal if the robot's start
     # cell is occupied (e.g. pressed against a counter).
-    # nav2_config_mac.yaml is nav2_config.yaml with the odom frame swapped from
-    # FAST-LIO's camera_init to the sim's odom.
+    # nav2_config_mac.yaml is its own nav2 config for this SLAM-only setup:
+    # robot_base_frame pelvis (no base_footprint here), Regulated Pure Pursuit
+    # and the Smac Hybrid planner, costmaps built from slam_toolbox's /map plus
+    # the live scan and Livox cloud, and tighter goal tolerances; see the file.
     if os.environ.get('GOLEM_NAV2', '').strip().lower() in ('1', 'true', 'on'):
         nav2_launch = os.path.join(
             get_package_share_directory('nav2_bringup'), 'launch', 'navigation_launch.py')

@@ -560,6 +560,20 @@ def make_kitchen_env(env_name, layout_ids=None, style_ids=None, seed=None, **kwa
     Returns the env; the caller drives env.sim's raw MjModel/MjData with the
     custom mj_step loop and reads env._check_success()/reward()/get_ep_meta().
     """
+    # Native scene tasks must not import RoboCasa or its kitchen asset stack.
+    import peg_in_hole_env
+
+    local_task = peg_in_hole_env.canonical_task(env_name)
+    if local_task is not None:
+        import robosuite
+
+        return robosuite.make(
+            env_name=local_task, robots="H1_2", has_renderer=False,
+            has_offscreen_renderer=False, use_camera_obs=False,
+            use_object_obs=True, render_camera=None, ignore_done=True,
+            **({"seed": seed} if seed is not None else {}), **kwargs,
+        )
+
     install_robocasa_patches()  # also triggers `import robocasa` -> env registration
     import robocasa  # noqa: F401  (ensure Kitchen envs are registered)
     import robosuite

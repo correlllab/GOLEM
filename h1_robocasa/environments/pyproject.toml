@@ -1,0 +1,23 @@
+[project]
+name = "golem-native-simulator"
+version = "0.0.0"
+description = "Isolated native MuJoCo/robosuite runtime, without RoboCasa kitchens or ML servers"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "numpy==2.2.5",
+    "mujoco==3.3.1",
+    # Matches the simulator image closure; newer numba imports apt coverage APIs.
+    "numba==0.61.2",
+    "robosuite",
+    "Pillow==11.3.0",
+    "PyYAML==6.0.2",
+    "cyclonedds==0.10.2",
+    "setuptools==59.6.0",
+    "wheel==0.43.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+robosuite = { git = "https://github.com/ARISE-Initiative/robosuite", rev = "5ce6643f3092639d08f7b0f90ed1c6a84f50552c" }

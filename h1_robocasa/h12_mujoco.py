@@ -15,6 +15,7 @@ import mujoco.viewer
 import h1_2_robosuite  # registers H1_2 + Magpie grippers, patches RoboCasa
 import realsense_profile
 import battery_env  # registers the Battery workcell env
+import peg_in_hole_env  # registers the native PegInHole workcell env
 from magpie_hand_bridge import MagpieHandBridge
 from measurement_bridge import MeasurementBridge
 from mujoco_env import ElasticBand
@@ -564,7 +565,7 @@ def _random_task(seed=None):
 def _resolve_task(name, seed=None):
     """Resolve a user-supplied --task name to a concrete runnable task.
 
-    A battery_env task name (any case) returns its canonical spelling. If `name`
+    A local scene task name (any case) returns its canonical spelling. If `name`
     is already a concrete benchmark task, return it unchanged. If it's
     an abstract base (e.g. OpenDoor, ManipulateDoor) — registered but not directly
     instantiable — randomly pick one of its concrete runnable subclasses instead
@@ -573,6 +574,9 @@ def _resolve_task(name, seed=None):
     battery_task = battery_env.canonical_task(name)
     if battery_task is not None:
         return battery_task
+    peg_task = peg_in_hole_env.canonical_task(name)
+    if peg_task is not None:
+        return peg_task
     env_classes, runnable = _runnable_tasks()
     if name in runnable:
         return name
@@ -606,7 +610,7 @@ if __name__ == "__main__":
         "--task",
         default=None,
         help="RoboCasa env name (e.g. TurnOnToasterOven), or Battery for the "
-             "battery workcell (CL_Assets/mujoco_assets/battery). "
+             "battery workcell, or PegInHole for the native pegboard workcell. "
              "Omit to launch a random registered kitchen task.",
     )
     parser.add_argument("--layout", type=int, default=None, help="RoboCasa kitchen layout id")

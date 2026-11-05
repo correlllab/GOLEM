@@ -292,7 +292,7 @@ directly; `plan: true` runs the planner first. `duration` is the goal's time
 limit; `0` uses the controller config's `controller.timeout` (5 s in the H1-2
 configs). `slow_mode: true` moves at a quarter of the speed.
 
-The available configs are the keys of `NAMED_CONFIGS` in that file. The grasp
+The available configs are the keys of `named_configs` in that file. The grasp
 skill itself uses `prep` (arms clear of the head camera) and
 `staging_left` / `staging_right` (pre-approach posture for the grasping arm).
 

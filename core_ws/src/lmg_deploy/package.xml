@@ -15,7 +15,6 @@
   <exec_depend>custom_ros_messages</exec_depend>
   <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>unitree_hg</exec_depend>
-  <exec_depend>ament_index_python</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>pinocchio</exec_depend>

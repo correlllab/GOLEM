@@ -66,7 +66,6 @@ class LivoxAttitude:
         self.buffer_s, self.still_window_s = float(buffer_s), float(still_window_s)
         self.still_gyro, self.still_acc_spread = float(still_gyro), float(still_acc_spread)
         self._imu: deque = deque()                 # (t, gyro rad/s, acc m/s^2), oldest first
-        self._pose: tuple[float, np.ndarray] | None = None   # (stamp, camera_init <- body, wxyz)
         self._q: np.ndarray | None = None          # camera_init <- body now
         self._t: float | None = None               # the time _q is at
         self._align: np.ndarray | None = None      # level <- camera_init
@@ -97,7 +96,6 @@ class LivoxAttitude:
         """One FAST-LIO pose: stamp (s, the scan's end) and the body's orientation in camera_init (wxyz)."""
         q = np.asarray(quat_wxyz, dtype=np.float64)
         q = quat_unique(q / np.linalg.norm(q))
-        self._pose = (float(t), q)
         latest = self._imu[-1][0] if self._imu else t
         self._q, self._t = (self._integrate(q, t, latest), latest) if latest > t else (q, t)
 
@@ -134,9 +132,6 @@ class LivoxAttitude:
     # -- outputs --------------------------------------------------------------------------
     def latest_imu_time(self) -> float | None:
         return self._imu[-1][0] if self._imu else None
-
-    def pose_time(self) -> float | None:
-        return self._pose[0] if self._pose else None
 
     def quat(self) -> np.ndarray:
         """The body's gravity-aligned orientation (wxyz): projected gravity and tilt from it are the training env's."""

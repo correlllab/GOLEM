@@ -58,7 +58,6 @@ from lmg_deploy.rotations import (
 
 NUM_JOINTS = 27
 NUM_LEGS = 12
-TORSO = 12
 ARM_START = 13
 NUM_ARM_JOINTS = 14
 

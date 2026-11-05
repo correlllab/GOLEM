@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-"""ROS debugging MCP server for the H1 Mac sim.
+"""Serve ROS debugging tools over MCP (HTTP) for the H1-2 Mac sim.
 
-Runs INSIDE the golem_ros container (where the FastDDS graph is reachable) and
-exposes an HTTP MCP endpoint. Colima doesn't forward container ports to the Mac,
-so it binds localhost inside the VM and you reach it over the same SSH tunnel as
-the noVNC viewers (see mac_vnc_tunnel.sh). Register it on the Mac with:
+It runs inside the golem_ros container, where the FastDDS graph is reachable;
+docker/mac/scripts/launch_ros_mac.sh starts it with GOLEM_ROS_MCP=1. Colima
+doesn't forward container ports to the Mac, so it binds localhost inside the VM
+and is reached over the same SSH tunnel as the noVNC viewers
+(docker/mac/scripts/mac_vnc_tunnel.sh). Register it on the Mac with:
 
     claude mcp add --transport http ros_debug http://localhost:6082/mcp
 
-Design: a single warm rclpy node subscribes once to the hot topics (costmap, plan,
-scan, clock), listens to TF, and caches the latest message, so status tools answer
-instantly instead of paying node-startup + DDS-discovery on every call (the thing
-that made `ros2 topic echo --once` slow to poll). Actuation is /cmd_vel only, on
-a warm publisher. Generic passthroughs (echo/hz/service call for arbitrary
-topics) shell out to the ros2 CLI, which is robust for the rarely-used cold path.
-rclpy spins in a background thread; tool handlers read the thread-safe cache.
+One rclpy node subscribes once to the frequent topics (costmap, plan, scan,
+clock), listens to TF and caches the latest message, so the status tools answer
+without a node start-up and DDS discovery per call. It commands only /cmd_vel.
+The generic tools (echo, hz, service call for any topic) shell out to the ros2
+CLI. rclpy spins in a background thread; the tool handlers read the locked cache.
 
 The robot pose (robot_status, wait_for) comes from TF: base_footprint in map, or in
 odom while there is no map yet (golem_slam's level_odom publishes odom -> base_footprint
 and slam_toolbox map -> odom), and the pelvis in the same frame for posture. The
 sim's ground-truth /odom is off by default, so nothing here reads it.
 
-Env: GOLEM_ROS_MCP_PORT (default 6082), ROS_DOMAIN_ID, RMW_IMPLEMENTATION.
+Environment: GOLEM_ROS_MCP_PORT (default 6082), ROS_DOMAIN_ID, RMW_IMPLEMENTATION.
+The MCP tool functions' docstrings are the tool descriptions clients see.
 """
 import asyncio
 import math
@@ -48,9 +48,9 @@ PORT = int(os.environ.get("GOLEM_ROS_MCP_PORT", "6082"))
 _LATCHED = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                       durability=DurabilityPolicy.TRANSIENT_LOCAL,
                       history=HistoryPolicy.KEEP_LAST, depth=1)
-# BEST_EFFORT reader is compatible with BOTH best-effort and reliable writers, so
-# it receives sensor topics whatever QoS the publisher chose (the sim's
-# /converted_scan is best-effort; a reliable reader silently gets nothing).
+# A best-effort reader matches both best-effort and reliable writers, so it gets
+# the sensor topics whatever QoS the publisher chose; a reliable reader gets
+# nothing from a best-effort writer such as /converted_scan's.
 _SENSOR = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                      durability=DurabilityPolicy.VOLATILE,
                      history=HistoryPolicy.KEEP_LAST, depth=10)
@@ -61,9 +61,10 @@ PELVIS_FRAME = "pelvis"
 
 
 class RosDebugNode(Node):
-    """Warm subscriber + actuator. Caches latest messages under a lock."""
+    """Cache the latest costmap, plan, scan and clock under a lock, and publish /cmd_vel."""
 
     def __init__(self):
+        """Create the subscriptions, the /cmd_vel publisher and the TF listener."""
         super().__init__("ros_debug_mcp")
         self._lock = threading.Lock()
         self._costmap = None
@@ -80,32 +81,35 @@ class RosDebugNode(Node):
         self._tf_listener = TransformListener(self._tf_buffer, self)
 
     def _cb(self, attr):
+        """Return a callback that stores its message in attribute attr."""
         def f(msg):
             with self._lock:
                 setattr(self, attr, msg)
         return f
 
     def get(self, attr):
+        """Return the cached message in attribute attr, or None."""
         with self._lock:
             return getattr(self, attr)
 
-    # -- derived state -------------------------------------------------------
     def sim_time(self):
+        """Return the latest /clock in s, or None before the first."""
         c = self.get("_clock")
         return None if c is None else c.clock.sec + c.clock.nanosec * 1e-9
 
     def _lookup(self, frame, child):
-        """Latest transform of child in frame (a geometry_msgs Transform), or None."""
+        """Return the latest transform of child in frame (a geometry_msgs Transform), or None."""
         try:
             return self._tf_buffer.lookup_transform(frame, child, Time()).transform
         except TransformException:
             return None
 
     def robot_state(self):
-        """Base position from base_footprint in map (else odom); None without either.
+        """Return the base position (base_footprint in map, else odom) and posture; None without either.
 
         Posture comes from the pelvis in the same frame: its height above the footprint
-        and its tilt. "unknown" when the pelvis has no transform."""
+        and its tilt. It is "unknown" when the pelvis has no transform.
+        """
         for frame in POSE_FRAMES:
             base = self._lookup(frame, BASE_FRAME)
             if base is not None:
@@ -127,6 +131,7 @@ class RosDebugNode(Node):
                             else "leaning/other")}
 
     def costmap_summary(self):
+        """Return the global costmap's size and cell counts by class, or None before the first."""
         m = self.get("_costmap")
         if m is None:
             return None
@@ -139,6 +144,7 @@ class RosDebugNode(Node):
                 "unknown": int((a == -1).sum())}
 
     def plan_summary(self):
+        """Return whether a global plan exists, its pose count and its length (m)."""
         pl = self.get("_plan")
         if pl is None or not pl.poses:
             return {"has_plan": False, "poses": 0, "length_m": 0.0}
@@ -147,8 +153,8 @@ class RosDebugNode(Node):
                      for i in range(1, len(pts)))
         return {"has_plan": True, "poses": len(pts), "length_m": round(length, 2)}
 
-    # -- actuation -----------------------------------------------------------
     def publish_cmd(self, vx, vy, wz):
+        """Publish one /cmd_vel (vx, vy m/s, wz rad/s, body frame)."""
         t = Twist()
         t.linear.x, t.linear.y, t.angular.z = float(vx), float(vy), float(wz)
         self._cmd_pub.publish(t)
@@ -158,7 +164,7 @@ NODE: RosDebugNode = None  # set in main()
 
 
 def _sh(*args, timeout=10):
-    """Run a ros2 CLI command (env already sourced by the launcher) -> stdout."""
+    """Run a ros2 CLI command (the launcher sourced the environment) and return its output."""
     import subprocess
     try:
         out = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
@@ -170,7 +176,6 @@ def _sh(*args, timeout=10):
 mcp = FastMCP("ros_debug", host="127.0.0.1", port=PORT)
 
 
-# ---- hot tools (warm cache, instant) --------------------------------------
 @mcp.tool()
 def robot_status() -> dict:
     """Robot base state at a glance: base_footprint position (x,y,z) in the map frame, or
@@ -209,7 +214,6 @@ def scan_status() -> dict:
             "range_max": round(s.range_max, 2)}
 
 
-# ---- actuation ------------------------------------------------------------
 @mcp.tool()
 async def drive(vx: float = 0.0, vy: float = 0.0, wz: float = 0.0,
                 duration: float = 4.0) -> dict:
@@ -280,7 +284,6 @@ async def wait_for(condition: str, timeout: float = 60.0) -> dict:
             "note": f"condition '{condition}' not met within {timeout}s"}
 
 
-# ---- generic passthroughs (cold path, ros2 CLI) ---------------------------
 @mcp.tool()
 def list_topics(filter: str = "") -> list:
     """List active topics (optionally substring-filtered), as 'name  type'."""
@@ -330,10 +333,12 @@ def node_list() -> list:
 
 
 def _spin(executor):
+    """Spin the executor until shutdown."""
     executor.spin()
 
 
 def main():
+    """Start the node's executor in a background thread and serve MCP over HTTP."""
     rclpy.init()
     global NODE
     NODE = RosDebugNode()

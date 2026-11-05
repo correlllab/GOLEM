@@ -1,4 +1,4 @@
-"""Print rt/lowstate from the G1 once a second. Read-only: it only subscribes.
+"""Print the real G1's rt/lowstate once a second; it only subscribes, so it commands nothing.
 
 In the ros container (docker/scripts/docker_run.sh ros), which mounts
 this directory at /home/code/tools:
@@ -11,8 +11,8 @@ Outside the containers, in the Python 3.10 environment of docs/g1/dds.md
     conda activate g1
     python tools/read_lowstate.py
 
-Domain 0 (fixed), on the laptop's port to the robot: G1_DDS_INTERFACE, default
-enp130s0.
+It reads domain 0, always, on the laptop's port to the robot: the interface
+is G1_DDS_INTERFACE, default enp130s0. It runs until interrupted.
 
 MIT License, Copyright (c) 2026 Correll Robotics Lab.
 """
@@ -43,11 +43,12 @@ latest = None
 
 
 def on_lowstate(msg: LowState_):
+    """Keep the latest rt/lowstate sample; runs on a DDS thread."""
     global latest
     latest = msg
 
 
-# domain 0, the robot's port
+# Domain 0 is the real robot's bus; this script only subscribes on it.
 ChannelFactoryInitialize(0, os.environ.get("G1_DDS_INTERFACE") or "enp130s0")
 sub = ChannelSubscriber("rt/lowstate", LowState_)
 sub.Init(on_lowstate, 10)

@@ -57,7 +57,10 @@ not). The service flips the band, so the reply is final. A success takes the
 band off, and the policy's history is reset on the next tick, so its first
 free steps are not computed from the band-held ones. No response, an
 exception or `success: false` is logged as `elastic band release failed:
-<why>`, and the band stays on.
+<why>`, and the band stays on. A success whose message
+is `enabled` means the band was already off (SPACE in the viewer) and the call
+hung the robot from it again: the node warns, counts no release and sends no
+further call.
 
 Before relying on the real robot's `max_state_gap`, measure the worst
 `/lowstate` callback gap on the onboard PC in a hoisted ALMI run: it must stay
@@ -71,7 +74,7 @@ well under 0.25 s, or the legs latch silent.
 | `engage_wait_for_confirm` | true | false | (true) |
 | `prepose_ramp_s` | 2.0 s | | |
 | `heartbeat_timeout` | 0.5 s | | |
-| `max_state_gap` | 0.05 s | 0.5 s | 0.25 s |
+| `max_state_gap` | 0.25 s | 0.5 s | 0.25 s |
 | `cmd_vel_timeout` | 0.5 s | 0.5 s | 0.5 s |
 | `disable_elastic_band` | true | (true) | false |
 | `band_max_wait` | 30.0 s | 34.0 s | |

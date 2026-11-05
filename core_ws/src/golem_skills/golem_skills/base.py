@@ -1050,9 +1050,9 @@ class SkillsBase(Node):
                                      lin_tol=lin_tol, ang_tol=ang_tol)
 
     def _on_safety_heartbeat(self, msg):
-        self._last_beat = self._monotonic()
         if not msg.data:
             self._safety_latched = True
+        self._last_beat = self._monotonic()
 
     def arm_halt_reason(self):
         '''

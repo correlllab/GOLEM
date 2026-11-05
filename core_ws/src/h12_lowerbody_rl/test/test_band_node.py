@@ -85,3 +85,14 @@ def test_a_failed_release_is_not_retried(rig):
     errors = [m for lvl, m in log if lvl == 'error']
     assert len(errors) == 1 and errors[0].startswith('elastic band release failed: ')
     assert '"nope"' in errors[0]
+
+
+def test_a_toggle_that_turned_the_band_on_is_not_a_release(rig):
+    node, helper, executor, log = rig
+    calls = []
+    helper.create_service(Trigger, '/elastic_band/toggle', _toggle(calls, True, 'enabled'))
+    assert _spin(node, executor, 5.0, lambda: any(lvl == 'warn' and 'ON' in m for lvl, m in log))
+    _spin(node, executor, 1.0)
+    assert len(calls) == 1, calls
+    assert not node._band_released and not node._reset_due
+    assert not [m for lvl, m in log if lvl == 'error']

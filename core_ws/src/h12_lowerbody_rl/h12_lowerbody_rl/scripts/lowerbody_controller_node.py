@@ -88,6 +88,9 @@ MODE_MACHINE = 6
 SAFETY_HEARTBEAT_TOPIC = "/safety/heartbeat"
 # /cmd_vel components are clipped to this (m/s, m/s, rad/s)
 CMD_VEL_LIMIT = 1.0
+# /elastic_band/toggle's message when the call left the band on (golem_robocasa's
+# MeasurementBridge answers "enabled" or "disabled")
+BAND_ON = "enabled"
 
 # Pre-pose: before engaging the policy, PD-drive the legs to its nominal crouch
 # (band-held in the sim) and wait until they settle there. The RMA policy warms
@@ -147,8 +150,8 @@ class LowerBodyControllerNode(Node):
         # the /lowerbody/confirm_engage Trigger service. Default TRUE — on the
         # real robot the engage is the moment the policy takes authority, so it
         # must be an explicit operator action. The sim bringup passes false to
-        # keep unattended runs auto-engaging. A pre-pose that never settles
-        # holds for the confirm too.
+        # keep unattended runs auto-engaging. With this true, a pre-pose that
+        # never settles holds for the confirm too.
         self.declare_parameter("engage_wait_for_confirm", True)
         # true: the sim's elastic band holds the robot and the node releases it
         self.declare_parameter("disable_elastic_band", True)
@@ -168,7 +171,7 @@ class LowerBodyControllerNode(Node):
         # Longest wall-clock gap (s) between /lowstate samples once the legs
         # are commanded; the sim configs relax it, since the sim can run
         # slower than real time.
-        self.declare_parameter("max_state_gap", 0.05)
+        self.declare_parameter("max_state_gap", 0.25)
         # A /cmd_vel older than this (s) is zero velocity: publishers send it
         # continuously (Nav2, teleop at 20 Hz).
         self.declare_parameter("cmd_vel_timeout", 0.5)
@@ -391,6 +394,14 @@ class LowerBodyControllerNode(Node):
             self._log("error", f"elastic band release failed: {failure}. The band stays on; "
                                "the node does not call /elastic_band/toggle again")
             return
+        if response.message == BAND_ON:
+            # the band was already off (SPACE in the viewer), and the toggle hung the
+            # robot from it again. Another call would take it off again, under a
+            # robot someone may have hung up on purpose, so none is sent
+            self._log("warn", '/elastic_band/toggle answered "enabled": the elastic band was '
+                              "already off and is now ON, and the robot hangs from it again. "
+                              "The node does not call the toggle again")
+            return
         self._band_released = True
         # the policy's history filled with band-held states: it restarts on the
         # free robot, or FAME's first free actions come from stale obs and it topples
@@ -459,8 +470,8 @@ class LowerBodyControllerNode(Node):
         timed_out = self._prepose_ticks >= self._prepose_ramp_ticks + PREPOSE_MAX_TICKS
         if not settled and not timed_out:
             return
-        # an unsettled pre-pose (timeout) holds for the confirm too: never an
-        # auto-engage on the real robot
+        # an unsettled pre-pose (timeout) is posed all the same; with
+        # engage_wait_for_confirm it then holds for the confirm
         self._posed_note = (f"{'settled' if settled else 'NOT SETTLED (timeout)'}, "
                             f"err={err:.3f} rad")
         self._log("info", f"legs pre-posed to nominal ({self._posed_note})")

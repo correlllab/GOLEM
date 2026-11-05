@@ -93,6 +93,24 @@ LIVOX_POINT_DTYPE = np.dtype([
     ("reflectivity", "u1"), ("tag", "u1"), ("line", "u1"), ("pad", "u1"),
 ])
 
+# The MID-360's elevation span (deg) in its raw frame, the MJCF's livox_link. The
+# sensor hangs upside down, so in the world the fan covers about -52 to +7 deg.
+LIDAR_ELEVATION_DEG = (-7.0, 52.0)
+
+
+def lidar_fan(az_rays: int, el_rays: int) -> np.ndarray:
+    """Unit ray directions (az_rays * el_rays, 3) in the lidar's raw frame: a uniform
+    azimuth x elevation grid, elevation-major and azimuth-fast."""
+    az = np.linspace(0.0, 2.0 * np.pi, az_rays, endpoint=False, dtype=np.float64)
+    low, high = np.deg2rad(LIDAR_ELEVATION_DEG)
+    el = np.linspace(low, high, el_rays, endpoint=False, dtype=np.float64)
+    az_grid, el_grid = np.meshgrid(az, el, indexing="xy")
+    cos_el = np.cos(el_grid)
+    return np.stack(
+        [cos_el * np.cos(az_grid), cos_el * np.sin(az_grid), np.sin(el_grid)],
+        axis=-1,
+    ).reshape(-1, 3)
+
 
 def _serialize_livox_scan(stamp, frame_id, timebase, offset_time, points, lines) -> bytes:
     """Serialize a CustomMsg without building one Python object per point.
@@ -238,21 +256,9 @@ class H12Sensors:
         self.lidar_period = 1.0 / lidar_rate_hz
         self.lidar_max_range = lidar_max_range
         self.lidar_min_range = lidar_min_range
-        # Livox MID-360 FOV in WORLD coordinates is el ∈ [-7°, +52°] (mostly
-        # above horizon). The sensor is mounted upside-down in the MJCF, so
-        # local +Z = world -Z; flipping signs gives a LOCAL elevation range
-        # of [-52°, +7°] that produces the correct world coverage.
-        # The sim runs 360 az × 56 el rays at 10 Hz ≈ 200,000 pts/s, matching
-        # the real sensor's per-second density. The uniform grid is a
-        # simplification of the MID-360's non-repetitive scan pattern.
-        az = np.linspace(0.0, 2.0 * np.pi, lidar_az_rays, endpoint=False, dtype=np.float64)
-        el = np.linspace(-np.deg2rad(52.0), np.deg2rad(7.0), lidar_el_rays, endpoint=False, dtype=np.float64)
-        az_grid, el_grid = np.meshgrid(az, el, indexing="xy")
-        cos_el = np.cos(el_grid)
-        self.lidar_local_dirs = np.stack(
-            [cos_el * np.cos(az_grid), cos_el * np.sin(az_grid), np.sin(el_grid)],
-            axis=-1,
-        ).reshape(-1, 3)
+        # Rays and points are in the sensor's raw frame (lidar_fan). The uniform
+        # grid is a simplification of the MID-360's non-repetitive scan pattern.
+        self.lidar_local_dirs = lidar_fan(lidar_az_rays, lidar_el_rays)
         self.lidar_rays = self.lidar_local_dirs.shape[0]
         self.lidar_az_rays = lidar_az_rays
         # Mid-360 has 6 laser lines. Map each synthetic ray's elevation index

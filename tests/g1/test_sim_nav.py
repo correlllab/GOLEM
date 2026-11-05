@@ -39,13 +39,14 @@ spawn), then slam_toolbox's map -> odom.
 
 Pass if: the goal succeeds within GOAL_TIMEOUT_S of sim time; the true pelvis
 ends within FINAL_TOL of the goal; every /cmd_vel is inside the speed caps and
-the velocity smoother is its only publisher; /converted_scan never stops for more than
-MAX_SCAN_GAP_S while navigating; every occupied cell of the final /map is within
-MAP_TOL of something the sim has in the scan's height band (MAP_BAND_Z), and at
-most MAX_SCAN_PHANTOM_SHARE of the /converted_scan returns within SCAN_PHANTOM_RANGE, placed
-with the sim's true pelvis, are farther than SCAN_PHANTOM_TOL from it; the sim
-publishes no /odom; while navigating, map -> pelvis
-stays within MAX_LOCALISATION_ERR of the sim's truth in x, y; and over the whole recording the pelvis stays above MIN_PELVIS_Z and
+the velocity smoother is its only publisher; /converted_scan never stops for
+more than MAX_SCAN_GAP_S while navigating; every occupied cell of the final /map
+is within MAP_TOL of something the sim has in the scan's height band
+(MAP_BAND_Z), and at most MAX_SCAN_PHANTOM_SHARE of the /converted_scan returns
+within SCAN_PHANTOM_RANGE, placed with the sim's true pelvis, are farther than
+SCAN_PHANTOM_TOL from it; the sim publishes no /odom; while navigating,
+map -> pelvis stays within MAX_LOCALISATION_ERR of the sim's truth in x, y; and
+over the whole recording the pelvis stays above MIN_PELVIS_Z and
 tilts at most MAX_TILT_DEG (the sim's own state: hanging from the band, then
 standing on the walking node), no robot geom penetrates anything but the floor,
 the sim's fall logger (sim.log) logs no fall, and golem_safety (launch.log)

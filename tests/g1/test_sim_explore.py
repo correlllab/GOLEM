@@ -55,8 +55,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import test_sim_nav as nav  # noqa: E402  (the sim role, the drive's recorder, the report's checks)
 
-# s of sim time: the explorer's budget, its goal's timeout. Finished explorations have taken
-# 20.7-29.8 s (15 runs); this is four times the longest.
+# s of sim time: the explorer's budget, its goal's timeout. It is four times the longest of 15
+# explorations that finished (20.7-29.8 s), the timing the budget is set from; the failing runs
+# of README.md's open issue never finish and end at this budget.
 EXPLORE_TIMEOUT_S = 120
 RESULT_GRACE_S = 30.0  # s of sim time past it to wait for the result (a Nav2 goal is canceled at the end)
 STAND_S = nav.STAND_S  # s of sim time standing before the goal, Nav2 up

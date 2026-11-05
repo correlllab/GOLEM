@@ -203,10 +203,11 @@ sim_test_build_ros() {
 # robot, headless in the layout 9 / style 9 / seed 42 kitchen, with the docker
 # run ARGs (SIM_ENV), and waits until its bridges are up; its output goes to
 # <out>/sim.log. The robot's own knobs that the test does not set get the sim's
-# defaults: the G1 sim reads an empty GOLEM_CMD_TIMEOUT as its default (the
-# H1-2 sim refuses one, so it gets none and keeps its default). The H1-2 sim
-# imports magpie_msgs and custom_ros_messages, which launch_robocasa.sh builds
-# into the robocasa service's msgs_ws first.
+# defaults. GOLEM_CMD_TIMEOUT is passed empty, which either sim reads as its
+# default, for the G1 only: the G1 overlay passes it through from the shell,
+# the H1-2's base service does not pass it. The H1-2 sim imports magpie_msgs
+# and custom_ros_messages, which launch_robocasa.sh builds into the robocasa
+# service's msgs_ws first.
 sim_test_start_sim() {
     local py=$1
     shift

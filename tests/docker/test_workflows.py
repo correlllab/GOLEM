@@ -479,7 +479,8 @@ if 'config' in sys.argv:
 
     def test_sim_test_start_sim_gives_each_robot_its_knobs(self):
         """sim_test_start_sim passes each robot's own knobs, and prepares the H1-2 sim's messages."""
-        # The H1-2 sim refuses an empty GOLEM_CMD_TIMEOUT; the G1 sim reads it as its default.
+        # Only the G1 overlay passes GOLEM_CMD_TIMEOUT through from the shell, so only the
+        # G1's run blanks it; either sim reads an empty one as its default.
         self.install_copy('tests/sim/common.sh')
         for robot in ('h12', 'g1'):
             with self.subTest(robot=robot):

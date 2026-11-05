@@ -60,15 +60,32 @@ def test_ik_seed_order_current_first(solver):
         np.testing.assert_array_equal(seed, model.profile.named_configs[name])
 
 
-def test_named_seeds_are_fallbacks(solver):
-    """With no time to iterate, only a seed already at the target converges, and is chosen."""
+@pytest.mark.parametrize('target, tried', [
+    ('t_pose', ['current', 'home', 't_pose']),
+    ('arms_front_45', ['current', 'home', 't_pose', 'arms_front_45']),
+])
+def test_named_seeds_are_fallbacks(solver, monkeypatch, target, tried):
+    """solve_ik_reduced tries the seeds in order and stops at the first that converges.
+
+    With no time to iterate, only a seed already at the target converges.
+    """
     model = solver.robot_model
-    track_named_config(solver, 'arms_front_45')
+    track_named_config(solver, target)
     measured(model, np.zeros(model.num_motor))  # 'home' on both robots
+    seeds = []
+    attempt = solver._solve_ik_reduced_attempt
+
+    def record(seed_name, *args):
+        """Note the seed, then run the attempt."""
+        seeds.append(seed_name)
+        return attempt(seed_name, *args)
+
+    monkeypatch.setattr(solver, '_solve_ik_reduced_attempt', record)
     result = solver.solve_ik_reduced(timeout=0.0)
-    assert result.success and result.seed_name == 'arms_front_45'
+    assert seeds == tried
+    assert result.success and result.seed_name == target
     np.testing.assert_allclose(result.q[model.reduced_mask],
-                               model.profile.named_configs['arms_front_45'], atol=1e-12)
+                               model.profile.named_configs[target], atol=1e-12)
 
 
 def test_seed_configs_must_be_named_configs():

@@ -44,7 +44,9 @@ starts its policy under the band and releases the band once `frame_task_server` 
 - **Arm and walk tests, the sensors**: every sensor topic arrives at its rate with the right
   frames, and the sim's sensor node publishes nothing else.
 - **Nav test**: once the band is released, Nav2 walks the robot to one goal 2-3 m from the
-  spawn. The goal is picked from the sim's own geometry (or `NAV_GOAL`).
+  spawn. The goal is picked from the sim's own geometry (or `NAV_GOAL`). `NAV_USE_HANDS=false`
+  runs the bringup without the hand driver (`use_hands:=false`), so the Dex3 finger links have
+  no TF and `golem_slam`'s `self_filter` skips them.
   - The goal must succeed, and the robot must end near it by the sim's truth.
   - The robot must stay up and touch nothing, and `golem_safety` must latch no estop.
   - `/cmd_vel`, `/scan`, the map and the localisation must stay within their limits.

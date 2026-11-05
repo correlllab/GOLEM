@@ -9,8 +9,8 @@
 # with its sensors on, in the layout 9 / style 9 / seed 42 kitchen, the spawn
 # backed NAV_BACKOFF m into open floor. In its network namespace a ros container
 # then runs 'ros2 launch golem_bringup g1_sim.launch.py use_rviz:=false
-# use_nav:=true' and the test's steps (test_sim_nav.py drive): wait for the
-# walking node, the elastic band's release and Nav2, send one NavigateToPose
+# use_nav:=true use_hands:=$NAV_USE_HANDS' and the test's steps
+# (test_sim_nav.py drive): wait for the walking node, the elastic band's release and Nav2, send one NavigateToPose
 # goal (the sim's pick from its own geometry, or NAV_GOAL), record. Then it stops the sim first (OUT/stop), with the robot standing under
 # the walking node, and the bringup once the sim has saved its recording:
 # stopping the bringup first would stop rt/lowcmd (golem_safety stops publishing
@@ -34,6 +34,8 @@
 #   ROS_IMAGE   default golem_ros:latest
 #   ROS_DOMAIN_ID   default 197
 #   NAV_BACKOFF m the spawn is backed into open floor (default 2.0)
+#   NAV_USE_HANDS  the bringup's use_hands (default true); false runs the test with no
+#               hand driver, so the Dex3 finger links have no TF
 #   NAV_GOAL    "x,y[,yaw_deg]" in the world frame instead of the sim's pick (the heading
 #               defaults to the direction from the spawn); the sim refuses one that is not
 #               reachable from the spawn through cells 0.35 m clear (test_sim_nav.py's
@@ -57,6 +59,10 @@ case "$(echo "${GOLEM_SIM_ODOM:-0}" | tr '[:upper:]' '[:lower:]')" in
     0|off|false|no|'') ;;
     *) echo 'golem_slam requires FAST-LIO: leave GOLEM_SIM_ODOM unset.' >&2; exit 2 ;;
 esac
+case "${NAV_USE_HANDS:-true}" in
+    true|false) ;;
+    *) echo 'NAV_USE_HANDS must be true or false.' >&2; exit 2 ;;
+esac
 # the lidar stays on: the test needs it
 SIM_ENV=(-e GOLEM_SIM_ODOM=0 -e "GOLEM_SPAWN_BACKOFF=${NAV_BACKOFF:-2.0}" -e "NAV_GOAL=${NAV_GOAL:-}"
          -e GOLEM_LIDAR=)
@@ -79,7 +85,7 @@ grep "\[test_sim_nav\]" "$OUT/sim.log" || true
 echo "[test_sim_nav] sim up; starting the bringup with navigation"
 
 g1_test_run_ros 900 "ros2 launch golem_bringup g1_sim.launch.py use_rviz:=false use_nav:=true \
-        > /out/launch.log 2>&1 &
+        use_hands:=${NAV_USE_HANDS:-true} > /out/launch.log 2>&1 &
     LAUNCH=\$!
     python3 -u /home/code/tests/g1/test_sim_nav.py drive --out /out $DRIVE_ARGS
     rc=\$?

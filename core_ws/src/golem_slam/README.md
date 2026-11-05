@@ -30,7 +30,9 @@ The same nodes, executables and remaps on every robot:
   lidar-to-IMU extrinsic and the live TF from `pelvis` to `livox_frame`, so the
   pelvis follows the torso joint (H1-2) or the waist (G1);
 - `self_filter`: drops the robot's own body from FAST-LIO's deskewed cloud
-  (`/cloud_body_filtered`);
+  (`/cloud_body_filtered`). A link that has never had a TF (the G1's Dex3
+  finger links without a hand driver) is skipped and logged once; a link that
+  had a TF and loses it drops the cloud;
 - `level_odom`: gravity- and floor-aligned `odom`, and `odom → base_footprint`
   per FAST-LIO odometry, with `body → pelvis` at each odometry stamp;
 - OctoMap (`/projected_map`, the static layer of both costmaps);

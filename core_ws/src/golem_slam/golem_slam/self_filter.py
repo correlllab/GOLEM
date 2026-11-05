@@ -6,6 +6,11 @@ axis-aligned bounding box in the link frame (robot_geometry.link_boxes). Each
 cloud is tested against the boxes posed by TF at the cloud's stamp, and points
 inside any box are dropped. All point fields are passed through unchanged.
 
+A link that has never had a TF (for example the Dex3 finger links when no hand
+driver publishes their joints) is skipped, and the skipped links are logged
+once. A link that had a TF and has none now drops the cloud: publishing it
+would put the moving body back into the maps.
+
 Subscribes ``cloud_in`` (sensor_msgs/PointCloud2) and ``/robot_description``
 (std_msgs/String, transient local, from robot_state_publisher); publishes
 ``cloud_out`` in the input cloud's frame.
@@ -63,6 +68,8 @@ class SelfFilter(Node):
             seconds=self.declare_parameter('max_tf_age', 0.2).value)
 
         self.boxes = None
+        self.seen_links = set()
+        self.reported_unseen = frozenset()
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
@@ -97,13 +104,18 @@ class SelfFilter(Node):
             return
         arr, xyz = cloud_points(msg)
         keep = np.isfinite(xyz).all(axis=1)
-        missing = []
+        lost = []
+        unseen = set()
         for link, (lo, hi) in self.boxes.items():
             try:
                 tf = self._lookup(msg.header.frame_id, link, msg.header.stamp)
             except TransformException:
-                missing.append(link)
+                if link in self.seen_links:
+                    lost.append(link)
+                else:
+                    unseen.add(link)
                 continue
+            self.seen_links.add(link)
             rot, trans = transform_to_rt(tf.transform)
             # Cheap reject: only test points within the box's bounding sphere.
             centre = rot @ (0.5 * (lo + hi)) + trans
@@ -112,11 +124,16 @@ class SelfFilter(Node):
             if near.any():
                 idx = np.flatnonzero(near)
                 keep[idx[points_in_box(xyz[idx], rot, trans, lo, hi)]] = False
-        if missing:
-            # Publishing with unfiltered links would put the body back into the
-            # maps, so drop the cloud instead.
+        unseen = frozenset(unseen)
+        if unseen != self.reported_unseen:
+            self.reported_unseen = unseen
+            if unseen:
+                self.get_logger().warn(
+                    f'no TF has ever come for {len(unseen)} links, not filtering them: '
+                    + ', '.join(sorted(unseen)))
+        if lost:
             self.get_logger().warn(
-                f'no TF for {len(missing)} links (e.g. {missing[0]}); dropping cloud',
+                f'lost the TF of {len(lost)} links (e.g. {lost[0]}); dropping cloud',
                 throttle_duration_sec=5.0)
             return
 

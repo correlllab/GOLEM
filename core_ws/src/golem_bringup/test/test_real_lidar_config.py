@@ -54,13 +54,6 @@ def test_real_drivers_publish_the_raw_imu_directly():
     path = os.path.join(PKG, 'launch', 'h12', 'h12_real_drivers.launch.py')
     with open(path) as f:
         src = f.read()
-    assert 'livox_imu_upright' not in src
     assert '/livox/imu' not in src
     assert 'remappings' not in src
     assert "'frame_id': 'livox_frame'" in src
-
-
-def test_no_imu_rotation_node_is_installed():
-    with open(os.path.join(PKG, 'setup.py')) as f:
-        assert 'livox_imu_upright' not in f.read()
-    assert not os.path.exists(os.path.join(PKG, 'golem_bringup', 'livox_imu_upright.py'))

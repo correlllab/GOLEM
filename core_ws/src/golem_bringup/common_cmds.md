@@ -254,21 +254,19 @@ Optional goal fields (omit / `false` = off):
 | Field | Meaning |
 |---|---|
 | `arm` | `""` / `"none"` / omitted = auto: the grasp skill takes the arm whose gripper is currently closest to the object. Anything other than `left`/`right`/empty aborts the goal. |
-| `top_down` | forwarded verbatim to the inner `/skill/grasp` — same 80°-below-horizontal synthetic grasp, same reachability caveat as the grasp table above. **Also changes the place:** instead of lowering the object onto the target, the graspgenx frame goes to `TOP_DOWN_PLACE_HEIGHT` = 25 cm straight above the place point and releases, so the object is dropped the remaining ~14 cm (the fingers sit ~11 cm below that frame). Off by default: the normal place descent is vertical and grasp-agnostic. |
+| `top_down` | forwarded verbatim to the inner `/skill/grasp` — same 80°-below-horizontal synthetic grasp, same reachability caveat as the grasp table above. Off by default. |
 | `visual_servo` | forwarded verbatim to the inner `/skill/grasp` — same hand-camera alignment and the same abort-on-failure behavior. Off by default. ⚠️ Budget: the servo alone can take 90 s, and pick_place spends its Gemini place-target detect *before* the grasp, so prefer omitting `timeout` (run to completion) when using this. |
 
 The `place_target` is located with Gemini + SAM (not YOLO, whatever
 `target_object` routes to) and its **top face** becomes the drop point, anchored
 in the `camera_init` world frame so pelvis drift during the long grasp doesn't
-move it. The object lands in its pick-time orientation.
+move it.
 
-Sequence: detect place target → grasp → lift 10 cm in 5 cm hops → transit to a
-10 cm standoff above the release pose → vertical descent → release 3 cm above
-rest height → back the fingers out 15 cm along the reverse approach.
-
-With `top_down: true` the release pose changes only in *where* it is — the
-graspgenx frame goes 25 cm above the place point rather than to a computed
-set-down pose. Everything else (lift, standoff, descent, retreat) is unchanged.
+Sequence: detect place target → grasp → lift 10 cm in 5 cm hops → planned carry
+to a top-down release pose (the `top_down` grasp orientation, with the finger
+contact point `PLACE_HEIGHT` = 10 cm above the place target's top face) → open
+the gripper, dropping the object from there. The release pose is the same
+whether or not the grasp used `top_down`.
 
 **Budget:** the last 60 s of `timeout` (`PLACE_RESERVE_SEC`) are reserved for
 carry/place/release, so a slow Gemini detect can't starve the placement half —

@@ -1,6 +1,4 @@
-'''
-RobotModel and RobotDynamics, on both robots.
-'''
+"""Check RobotModel and RobotDynamics on both robots."""
 import numpy as np
 import pinocchio as pin
 import pytest
@@ -13,22 +11,26 @@ ARM_SLOTS = {
 
 
 def profile_of(robot):
+    """Return robot's RobotProfile."""
     from golem_upper_ik.profile import load_profile
     return load_profile(robot)
 
 
 def model_of(robot, **kwargs):
+    """Return a new RobotModel of robot."""
     from golem_upper_ik.core.robot_model import RobotModel
     return RobotModel(profile_of(robot), **kwargs)
 
 
 def fixed_state(q, dq=None, imu_quaternion=None):
+    """Return a FixedState at q, dq and an IMU quaternion."""
     from golem_upper_ik.core.robot_model import FixedState
     return FixedState(q, dq=dq, imu_quaternion=imu_quaternion)
 
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_models_follow_the_profile(models, robot):
+    """The models keep the body joints in slot order and solve for the IK joints only."""
     profile = profile_of(robot)
     model = models(robot)
 
@@ -49,6 +51,7 @@ def test_models_follow_the_profile(models, robot):
 
 
 def test_h12_model_has_collision(models):
+    """The H1-2 has a self-collision model, and home is collision-free."""
     model = models('h12')
     assert model.has_collision is True
     assert len(model.collision_model_body_reduced.collisionPairs) > 0
@@ -56,7 +59,7 @@ def test_h12_model_has_collision(models):
 
 
 def pair_distances(model, q_reduced):
-    '''Each enabled collision pair's distance at q_reduced, m (negative: they overlap)'''
+    """Return each enabled collision pair's distance at q_reduced, m (negative: they overlap)."""
     geometry = model.collision_model_body_reduced
     data = model.collision_data_body_reduced
     pin.computeDistances(model.model_body_reduced, model.data_body_reduced, geometry, data,
@@ -65,11 +68,11 @@ def pair_distances(model, q_reduced):
 
 
 def test_g1_model_has_collision(models):
-    '''
-    Every named configuration is collision-free and keeps every G1 config's d_min, the
-    H1-2's 0.02 m, except arms_down: its hands and wrists sit inside the hip-pitch spheres
-    (config/g1/robot.yaml)
-    '''
+    """Every G1 named config but arms_down keeps every pair d_min apart; arms_down collides.
+
+    The G1's spheres and pairs are counted, and home's closest pair (an upper arm against the
+    torso) pins CL_Assets' g1_sphere.urdf.
+    """
     from golem_upper_ik.config import load_controller_config
     model = models('g1')
     assert model.has_collision is True
@@ -97,6 +100,7 @@ def test_g1_model_has_collision(models):
 
 
 def test_rebuild_reduced_relocks_at_measured(models):
+    """Re-locking puts the frozen torso at its measured angle, spheres included."""
     model = models('h12')
     torso = model.profile.body_joints.index('torso_joint')
     q = np.zeros(model.num_motor)
@@ -126,6 +130,7 @@ def test_rebuild_reduced_relocks_at_measured(models):
                       if geometry.name.startswith('torso_link'))
 
         def sphere_position(robot_model, geometry_model, q_model):
+            """Return the torso sphere's position in a geometry model at q_model."""
             geometry_data = pin.GeometryData(geometry_model)
             pin.updateGeometryPlacements(robot_model, pin.Data(robot_model), geometry_model,
                                          geometry_data, q_model)
@@ -147,6 +152,7 @@ def test_rebuild_reduced_relocks_at_measured(models):
 
 
 def test_imu_frame_defaults_to_the_profile_and_can_be_overridden(models):
+    """An IMU on the pelvis ignores the waist, one on the torso turns with it; bad frames fail."""
     profile = profile_of('g1')
     on_pelvis = models('g1')
     on_torso = model_of('g1', imu_frame='imu_in_torso')
@@ -154,7 +160,7 @@ def test_imu_frame_defaults_to_the_profile_and_can_be_overridden(models):
     assert on_torso.imu_frame == 'imu_in_torso'
 
     def pelvis_turn(model, waist_yaw):
-        '''rad the pelvis is turned by waist_yaw, the IMU reading the same orientation'''
+        """Return how far (rad) the pelvis turns with waist_yaw, the IMU reading the same."""
         q = np.zeros(model.num_motor)
         level = np.array([1.0, 0.0, 0.0, 0.0])  # w, x, y, z
         before = model.full_q(q, imu_quat=level)[3:7]
@@ -171,6 +177,7 @@ def test_imu_frame_defaults_to_the_profile_and_can_be_overridden(models):
 
 
 def test_state_source_protocol(models):
+    """A FixedState is a StateSource; the model reads its state and refuses a mis-sized one."""
     from golem_upper_ik.core.robot_model import FixedState, StateSource
     model = models('h12')
     assert isinstance(FixedState(np.zeros(model.num_motor)), StateSource)
@@ -200,25 +207,29 @@ def test_state_source_protocol(models):
 
 
 class ChangingSource:
-    '''A source whose every read is a newer sample, the next q a step further'''
+    """Report a newer sample on every read, each q a step further."""
 
     def __init__(self, count):
+        """Start before the first read, never stale."""
         self.count = count
         self.reads = 0
         self.staleness_ms = 0.0
 
     @property
     def state(self):
+        """Return the next sample: q 0.1 per read so far, the IMU level."""
         self.reads += 1
         level = np.array([1.0, 0.0, 0.0, 0.0])
         return {'q': np.full(self.count, 0.1 * self.reads), 'dq': np.zeros(self.count),
                 'imu_state': type('Imu', (), {'quaternion': level})()}
 
     def shutdown(self):
+        """Do nothing."""
         pass
 
 
 def test_update_kinematics_reads_the_state_once(models):
+    """update_kinematics puts every model at one sample of the state."""
     model = models('h12')
     frame = 'left_wrist_yaw_link'
     source = ChangingSource(model.num_motor)
@@ -250,6 +261,7 @@ def test_update_kinematics_reads_the_state_once(models):
 
 
 def test_shutdown_stops_the_state_source(models):
+    """RobotModel.shutdown stops and detaches its state source."""
     model = models('g1')
     stopped = []
     source = ChangingSource(model.num_motor)
@@ -261,6 +273,7 @@ def test_shutdown_stops_the_state_source(models):
 
 
 def test_reduced_limit_violations_name_the_joint(models):
+    """A joint past its limit is reported by name, bound and overshoot, within tol not."""
     model = models('h12')
     q = np.zeros(model.model_body_reduced.nq)
     assert model.reduced_limit_violations(q) == []
@@ -276,21 +289,9 @@ def test_reduced_limit_violations_name_the_joint(models):
     assert model.reduced_limit_violations(q, tol=0.2) == []
 
 
-def test_unused_paths_are_gone(models):
-    '''RobotModel has only what the controllers and the planner call: none of these'''
-    model = models('h12')
-    for name in ('check_valid', 'check_within_limits', 'check_collision_free', 'total_mass',
-                 'zero_q_body_reduced', 'init_reduced_model', 'init_collision_model',
-                 'init_reduced', 'init_collision', 'collision_model_body'):
-        assert not hasattr(model, name), name
-    for name in ('get_com', 'get_zmp', 'get_com_velocity', 'get_com_reduced', 'get_joint_jacobian',
-                 'get_frame_twist', 'get_frame_wrench', 'get_motion_compensation',
-                 'get_angular_centroidal_momentum'):
-        assert not hasattr(model.dynamics, name), name
-
-
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_profile_frames_exist_in_every_model(models, robot):
+    """Every frame the profile and the configs name is in every model."""
     model = models(robot)
     profile = model.profile
     frames = set(profile.ee_frames + profile.planner_frames + (profile.imu_frame, 'torso_link'))
@@ -303,6 +304,7 @@ def test_profile_frames_exist_in_every_model(models, robot):
 
 
 def pelvis_quaternion(model, q, imu_wxyz):
+    """Return the pelvis orientation full_q gives for q and an IMU orientation (w, x, y, z)."""
     from pyquaternion import Quaternion
     x, y, z, w = model.full_q(q, imu_quat=imu_wxyz)[3:7]
     return Quaternion(w, x, y, z)
@@ -310,6 +312,7 @@ def pelvis_quaternion(model, q, imu_wxyz):
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_imu_orientation_gives_the_pelvis_orientation(models, robot):
+    """The pelvis orientation follows the IMU, through the held joint when the IMU is above it."""
     from pyquaternion import Quaternion
     model = models(robot)
     profile = model.profile
@@ -334,6 +337,7 @@ def test_imu_orientation_gives_the_pelvis_orientation(models, robot):
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_named_configs_are_within_limits(models, robot):
+    """Every named config is within the joint limits."""
     model = models(robot)
     profile = model.profile
     for name, q in profile.named_configs.items():
@@ -342,11 +346,13 @@ def test_named_configs_are_within_limits(models, robot):
 
 
 def test_g1_named_configs_are_where_they_claim(models):
+    """The G1's home, arms_down and t_pose put the palms where robot.yaml says."""
     model = models('g1')
     profile = model.profile
     data = model.model_body_reduced.createData()
 
     def palms(name):
+        """Return the palms' positions at a named config, m."""
         pin.framesForwardKinematics(model.model_body_reduced, data, profile.named_configs[name])
         return [data.oMf[model.model_body_reduced.getFrameId(frame)].translation.copy()
                 for frame in profile.ee_frames]

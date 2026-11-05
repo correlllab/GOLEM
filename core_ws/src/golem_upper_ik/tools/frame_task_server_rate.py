@@ -17,6 +17,12 @@ how many there are, and how many carry the process's own name (Python's threads 
 threads that do not name themselves, such as OpenBLAS's workers; DDS names its own); then the
 server's exit code and whether its last command was mode 0 with zero gains. The server's
 output goes to stderr if it fails.
+
+    python3 tools/frame_task_server_rate.py [--robot ROBOT] [--config NAME] [--seconds S]
+
+Needs golem_upper_ik installed and sourced; runs on ROS_DOMAIN_ID (test/
+test_frame_task_server.py sets a test domain). Exits 0 with the JSON, 1 when the server
+did not come up or a goal failed (the JSON then has 'error').
 """
 import argparse
 import json
@@ -45,19 +51,22 @@ from unitree_hg.msg import LowCmd, LowState  # noqa: E402
 from golem_upper_ik.config import SAFETY_OUTPUT_TOPIC, load_controller_config  # noqa: E402
 from golem_upper_ik.profile import load_profile  # noqa: E402
 
-READY_TIMEOUT_S = 120.0
-LONG_GAP_MS = 20.0
+READY_TIMEOUT_S = 120.0  # for the server's first /left_ee_pose
+LONG_GAP_MS = 20.0  # a gap counted in gaps_over_20ms
 GOAL_TIMEOUT_S = 30.0
+# keeps every sample: each command's receive time is recorded
 RECORD_QOS = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                         history=HistoryPolicy.KEEP_LAST, depth=10000)
+# reliable, keep-last 1, as the Unitree SDK's and golem_safety's writers
 WRITER_QOS = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                         history=HistoryPolicy.KEEP_LAST, depth=1)
 
 
 class Robot:
-    """/lowstate at 500 Hz; executes, relays and records every command"""
+    """Play the robot and golem_safety: /lowstate at 500 Hz; execute, relay and record commands."""
 
     def __init__(self, node, profile, config):
+        """Start /lowstate on node for profile, on config's topics, all joints at 0."""
         self.profile = profile
         count = len(profile.body_joints)
         self._lock = threading.Lock()
@@ -80,6 +89,7 @@ class Robot:
         self._thread.start()
 
     def _on_command(self, msg):
+        """Record a command and execute it: each slot with kp > 0 jumps to its q."""
         now = time.monotonic()
         motors = msg.motor_cmd
         q = tuple(motors[slot].q for slot in self._upper)
@@ -93,6 +103,7 @@ class Robot:
             self.last = msg
 
     def _run(self):
+        """Publish /lowstate every 2 ms and relay the newest command, until stop()."""
         start = time.monotonic()
         next_at = start
         while not self._stop.is_set():
@@ -109,17 +120,19 @@ class Robot:
             time.sleep(max(0.0, next_at - time.monotonic()))
 
     def window(self, start, end):
-        """(receive times, upper q) of the commands received from start to end"""
+        """Return (receive times, upper q) of the commands received from start to end."""
         with self._lock:
             pairs = [(t, q) for t, q in zip(self.times, self.upper_q) if start <= t <= end]
         return [t for t, _ in pairs], [q for _, q in pairs]
 
     def stop(self):
+        """Stop publishing."""
         self._stop.set()
         self._thread.join(timeout=2.0)
 
 
 def stats(times, upper_q):
+    """Return a window's rate statistics from receive times (s) and the commands' upper q."""
     times = np.asarray(times)
     if len(times) < 2:
         return {'received': len(times)}
@@ -138,7 +151,7 @@ def stats(times, upper_q):
 
 
 def threads_of(pid):
-    '''(threads, threads named as the process) of the process pid, from /proc'''
+    """Return (threads, threads named as the process) of the process pid, from /proc."""
     task = f'/proc/{pid}/task'
     with open(f'/proc/{pid}/comm', encoding='utf-8') as handle:
         name = handle.read().strip()
@@ -153,6 +166,7 @@ def threads_of(pid):
 
 
 def wait(condition, timeout):
+    """Return True as soon as condition() is, False once timeout s have passed."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if condition():
@@ -162,6 +176,7 @@ def wait(condition, timeout):
 
 
 def forward(x):
+    """Return a relative target x m forward (pelvis x), the orientation kept."""
     pose = Pose()
     pose.position.x = x
     pose.orientation.w = 1.0
@@ -169,6 +184,7 @@ def forward(x):
 
 
 def main():
+    """Run the server, measure both windows and stop it; return the exit code."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--robot', default='h12')
     parser.add_argument('--config', default='safety_split')

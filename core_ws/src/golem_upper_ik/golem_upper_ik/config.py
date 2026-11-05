@@ -1,13 +1,13 @@
-'''
-Controller configs: load_controller_config(robot, name_or_path) reads one YAML file and
-returns the values the controller runs on, every default filled in and the joint arrays
-derived for the robot's body slots.
+"""Load controller configs: the values frame_task_server and joint_state_publisher run on.
 
-A bare name ('safety_split' or 'safety_split.yaml') is a file of
-share/golem_upper_ik/config/<robot>/. Anything with a '/' is a path. Every key and every
-value is checked: an unknown key, a value of the wrong type, a non-finite number or a
-number out of its range raises ValueError naming the robot, the file and the key.
-'''
+load_controller_config(robot, name_or_path) reads one YAML file and returns it with every
+default filled in and the joint arrays derived for the robot's body slots. A bare name
+('safety_split' or 'safety_split.yaml') is a file of share/golem_upper_ik/config/<robot>/;
+anything with a '/' is a path. Every key and value is checked: an unknown key, a value of the
+wrong type, a non-finite number or a number out of its range raises ValueError naming the
+robot, the file and the key. config/<robot>/example.controller.yaml in the source tree holds
+every key with its meaning, units and allowed values.
+"""
 import math
 import os
 
@@ -19,10 +19,10 @@ from golem_upper_ik.profile import RobotProfile, known_robots, load_profile, rob
 
 __all__ = ['load_controller_config', 'SAFETY_INPUT_PREFIX', 'SAFETY_OUTPUT_TOPIC']
 
-# The controller writes only golem_safety's inputs: golem_safety is the only writer of
-# /lowcmd
+# SAFETY: the controller writes only golem_safety's inputs (topics under this prefix):
+# golem_safety is the only writer of /lowcmd
 SAFETY_INPUT_PREFIX = '/safety/'
-# golem_safety's output, which the follow gate reads
+# golem_safety's output, which the follow gate reads and the controller never writes
 SAFETY_OUTPUT_TOPIC = '/lowcmd'
 
 TOPIC_DEFAULTS = {
@@ -35,10 +35,10 @@ CONTROLLER_DEFAULTS = {
     'dq_lim': 1.0,  # IK joint speed limit, rad/s
     'd_min': 0.02,  # self-collision distance the IK keeps, m
     'timeout': 10.0,  # s per goal without a duration
-    'threshold_ik': 0.001,  # IK velocity error at which a goal has converged
-    'threshold_joint': 0.01,  # rad
-    'threshold_linear': 0.002,  # m
-    'threshold_angular': 0.01,  # rad
+    'threshold_ik': 0.001,  # largest IK joint velocity at which a goal's IK has converged
+    'threshold_joint': 0.01,  # rad: a named-config goal's largest joint error when reached
+    'threshold_linear': 0.002,  # m: a frame goal's largest position error when reached
+    'threshold_angular': 0.01,  # rad: a frame goal's largest orientation error when reached
     'state_timeout': 5.0,  # s to wait for a fresh /lowstate before enabling anything
     'startup_timeout': 30.0,  # s for golem_safety to be seen relaying the commands
     'startup_move_timeout': 30.0,  # s for the start-up moves, from the follow gate opening
@@ -62,14 +62,14 @@ CLIP_DEFAULTS = {
 # The planner section's keys, by kind: the fields of PlannerConfig (core.planner), and
 # enabled. The loader checks the keys a file gives and fills in only enabled (true) and
 # frame_names (the profile's planner frames); PlannerConfig supplies every other default.
-# The planner runs only when the profile has a self-collision model and enabled is true.
+# A goal can plan only when the profile has a self-collision model and enabled is true.
 PLANNER_TEXT_KEYS = ('planner',)  # the OMPL planner's name
 PLANNER_BOOLEAN_KEYS = ('enabled', 'try_direct', 'simplify', 'shortcut')
 PLANNER_POSITIVE_KEYS = (
     'timeout',  # s to plan
     'moving_speed',  # planner-frame Cartesian speed, m/s
     'dt',  # s between path samples
-    'validity_resolution',  # validity-check spacing in joint space, rad
+    'validity_resolution',  # OMPL's validity-checking resolution, a fraction of the extent
 )
 PLANNER_NON_NEGATIVE_KEYS = (
     'range',  # extension length in joint space, rad; 0 lets OMPL choose
@@ -97,19 +97,21 @@ SECTION_KEYS = {
 
 
 class _Where:
-    '''Builds the errors of one file: the robot, the file and the key'''
+    """Build the errors of one config file, naming the robot, the file and the key."""
 
     def __init__(self, robot: str, source: str):
+        """Name errors after robot and the config file source."""
         self.robot = robot
         self.source = source
 
     def error(self, key: str, what: str) -> ValueError:
+        """Return a ValueError saying what is wrong with key ('' for the whole file)."""
         where = f"key '{key}': " if key else ''
         return ValueError(f'controller config {self.source} (robot {self.robot}): {where}{what}')
 
 
 def _section(where: _Where, raw: dict, name: str) -> dict:
-    '''The mapping under name, its keys checked; {} when absent'''
+    """Return the section under name, its keys checked; {} when the file has none."""
     value = raw.get(name, {})
     if not isinstance(value, dict):
         raise where.error(name, 'must be a mapping')
@@ -120,7 +122,7 @@ def _section(where: _Where, raw: dict, name: str) -> dict:
 
 
 def _number(where: _Where, key: str, value) -> float:
-    '''A finite number. A string is parsed: PyYAML reads 1e-3 (no dot) as a string'''
+    """Return value as a finite float; a string is parsed (PyYAML reads 1e-3 as one)."""
     if isinstance(value, bool):
         raise where.error(key, f'must be a number, not {value!r}')
     if isinstance(value, str):
@@ -137,6 +139,7 @@ def _number(where: _Where, key: str, value) -> float:
 
 
 def _positive(where: _Where, key: str, value) -> float:
+    """Return value as a float greater than 0."""
     number = _number(where, key, value)
     if number <= 0.0:
         raise where.error(key, f'must be positive, not {number}')
@@ -144,6 +147,7 @@ def _positive(where: _Where, key: str, value) -> float:
 
 
 def _non_negative(where: _Where, key: str, value) -> float:
+    """Return value as a float of 0 or more."""
     number = _number(where, key, value)
     if number < 0.0:
         raise where.error(key, f'must be 0 or positive, not {number}')
@@ -151,7 +155,7 @@ def _non_negative(where: _Where, key: str, value) -> float:
 
 
 def _count(where: _Where, key: str, value) -> int:
-    '''A positive whole number; 30.0 is 30'''
+    """Return value as a whole number of at least 1; 30.0 is 30."""
     number = _number(where, key, value)
     if not number.is_integer() or number < 1:
         raise where.error(key, f'must be a whole number of at least 1, not {value!r}')
@@ -159,26 +163,28 @@ def _count(where: _Where, key: str, value) -> int:
 
 
 def _boolean(where: _Where, key: str, value) -> bool:
+    """Return value if it is true or false."""
     if not isinstance(value, bool):
         raise where.error(key, f'must be true or false, not {value!r}')
     return value
 
 
 def _text(where: _Where, key: str, value) -> str:
+    """Return value if it is a non-empty string."""
     if not isinstance(value, str) or not value:
         raise where.error(key, f'must be a non-empty string, not {value!r}')
     return value
 
 
 def _frame_names(where: _Where, key: str, value) -> list:
-    '''The two planner frames, [left, right]'''
+    """Return the two planner frame names, [left, right]."""
     if not isinstance(value, list) or len(value) != 2:
         raise where.error(key, f'must be a list of two frame names, [left, right], not {value!r}')
     return [_text(where, key, name) for name in value]
 
 
 def _topic(where: _Where, key: str, value) -> str:
-    '''A ROS topic name; the DDS spelling rt/x is refused with its ROS name /x'''
+    """Return value as a ROS topic name; the DDS spelling rt/x is refused, naming /x."""
     topic = _text(where, key, value)
     if topic.startswith('rt/'):
         raise where.error(key, f"'{topic}' is a DDS name: give the ROS topic "
@@ -189,10 +195,10 @@ def _topic(where: _Where, key: str, value) -> str:
 
 
 def _joint_values(where: _Where, key: str, value, profile: RobotProfile) -> np.ndarray:
-    '''
-    One value per body slot from a number (every slot), a list over the body slots, or a
-    list over the upper slots (the lower slots 0)
-    '''
+    """Return one value per body slot from a number, a body-slot list or an upper-slot list.
+
+    A number applies to every slot; a list over the upper slots leaves the lower slots 0.
+    """
     count = len(profile.body_joints)
     upper = list(profile.upper_slots)
     if isinstance(value, list):
@@ -210,7 +216,7 @@ def _joint_values(where: _Where, key: str, value, profile: RobotProfile) -> np.n
 
 
 def _gains(where: _Where, gains: dict, profile: RobotProfile) -> dict:
-    '''kp, kd and ki on the upper slots (a number, or a list over them); the legs get 0'''
+    """Return kp, kd and ki per body slot (float32): the given upper values, legs 0."""
     missing = [name for name in ('kp', 'kd', 'ki') if name not in gains]
     if missing:
         raise where.error('gains', f'kp, kd and ki must be given; missing {", ".join(missing)}')
@@ -232,6 +238,11 @@ def _gains(where: _Where, gains: dict, profile: RobotProfile) -> dict:
 
 
 def _clip_limits(where: _Where, limits: dict, profile: RobotProfile) -> dict:
+    """Return the per-slot clip limits limits.clip gives over the profile's joint limits.
+
+    q_clip_limits is (slots, 2) [low, high] in rad; dq_clip_limits (rad/s) and
+    tau_clip_limits (N*m) are per-slot magnitudes.
+    """
     policy = limits.get('clip', {})
     if not isinstance(policy, dict):
         raise where.error('limits.clip', 'must be a mapping')
@@ -264,7 +275,7 @@ def _clip_limits(where: _Where, limits: dict, profile: RobotProfile) -> dict:
 
 
 def _planner(where: _Where, planner: dict, profile: RobotProfile) -> dict:
-    '''The keys the file gives, checked, with enabled and frame_names filled in'''
+    """Return the planner keys the file gives, checked, with enabled and frame_names set."""
     checks = {key: _text for key in PLANNER_TEXT_KEYS}
     checks.update({key: _boolean for key in PLANNER_BOOLEAN_KEYS})
     checks.update({key: _positive for key in PLANNER_POSITIVE_KEYS})
@@ -283,7 +294,7 @@ def _planner(where: _Where, planner: dict, profile: RobotProfile) -> dict:
 
 
 def _hold_targets(where: _Where, value, profile: RobotProfile) -> dict:
-    '''{held joint: rad} over every held joint, in the profile's order; a joint left out is 0'''
+    """Return {held joint: rad} in the profile's order; a joint the file leaves out is 0."""
     key = 'controller.hold_targets'
     if not isinstance(value, dict):
         raise where.error(key, f'must be a mapping {{joint: rad}} over the held joints '
@@ -297,12 +308,13 @@ def _hold_targets(where: _Where, value, profile: RobotProfile) -> dict:
 
 
 def _resolve(robot: str, name_or_path: str) -> str:
+    """Return the file of a config name or path; refuse one in another robot's directory."""
     path = str(name_or_path)
     if '/' not in path:
         name = path if path.endswith('.yaml') else f'{path}.yaml'
         path = os.path.join(get_package_share_directory('golem_upper_ik'), 'config', robot, name)
-    # A config of one robot can parse for the other (a scalar gain fits either), so a file
-    # in another robot's config directory (config/g1/ for the h12) is refused by that name
+    # A config of one robot can parse for another (a scalar gain fits either), so a file in
+    # another known robot's config directory is refused by that directory's name
     directory = os.path.basename(os.path.dirname(os.path.abspath(path)))
     if directory != robot and directory in known_robots():
         raise ValueError(f'the controller config {path} is in the config directory of robot '
@@ -314,7 +326,7 @@ def _resolve(robot: str, name_or_path: str) -> str:
 
 
 def load_controller_config(robot: str, name_or_path: str) -> dict:
-    '''The controller config name_or_path of robot, checked and with its defaults filled in'''
+    """Return robot's controller config name_or_path, checked, with its defaults filled in."""
     robot_defaults = robot_config(robot)['config_defaults']  # ValueError for an unknown robot
     path = _resolve(robot, name_or_path)
     profile = load_profile(robot)
@@ -347,7 +359,7 @@ def load_controller_config(robot: str, name_or_path: str) -> dict:
             where, f'controller.{key}', controller_raw.get(key, default))
         for key, default in CONTROLLER_DEFAULTS.items()
     }
-    # /lowstate tick lag at which goals stop, ms; <= 0 turns the check off
+    # ms of /lowstate staleness at which goals stop on the real robots' domain; <= 0 is off
     controller['max_state_lag_ms'] = _number(
         where, 'controller.max_state_lag_ms',
         controller_raw.get('max_state_lag_ms', robot_defaults['controller.max_state_lag_ms']))

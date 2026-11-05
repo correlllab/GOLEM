@@ -15,6 +15,12 @@ Publisher-side numbers and sample counts go to stderr.
 --burn gil loads it with pure Python arithmetic, which keeps the GIL until the
 interpreter's switch interval (--switch-interval-ms) forces a hand-over, the
 worst case for the publisher thread.
+
+    python3 tools/publish_rate_probe.py [--rate HZ] [--seconds S] [--ik-hz HZ]
+        [--burn-ms MS] [--burn numpy|gil] [--switch-interval-ms MS]
+
+Runs on ROS_DOMAIN_ID (test/test_publish_rate.py sets a test domain). Exits 0 with
+the JSON, 1 when no subscriber matches within 10 s or fewer than 2 samples arrive.
 """
 import argparse
 import json
@@ -37,15 +43,16 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy  # noqa: E402
 from unitree_hg.msg import LowCmd  # noqa: E402
 
 TOPIC = '/golem_probe/lowcmd'
-UPPER_SLOTS = range(12, 29)
+UPPER_SLOTS = range(12, 29)  # the slots each message changes, as the G1's upper body
 DISCOVERY_TIMEOUT_S = 10.0
-SPARE_SAMPLES = 1000
+SPARE_SAMPLES = 1000  # recorder capacity beyond rate * (seconds + 5)
 
 
 class Recorder(Node):
-    """Subscribes with reliable, deep keep-last QoS and stamps every receive."""
+    """Record the receive time of every probe message (reliable, deep keep-last QoS)."""
 
     def __init__(self, capacity):
+        """Subscribe, with room for capacity receive times."""
         super().__init__('golem_probe_sub')
         self.times = np.zeros(capacity)
         self.count = 0
@@ -54,15 +61,17 @@ class Recorder(Node):
         self.create_subscription(LowCmd, TOPIC, self._on_msg, qos)
 
     def _on_msg(self, _msg):
+        """Stamp one receive; count it even past capacity."""
         if self.count < len(self.times):
             self.times[self.count] = time.monotonic()
         self.count += 1
 
 
 class Publisher(Node):
-    """Owns the publisher and one preallocated message."""
+    """Own the probe publisher and one preallocated message."""
 
     def __init__(self):
+        """Create the publisher (reliable, keep-last 1, as the controller's)."""
         super().__init__('golem_probe_pub')
         qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                          history=HistoryPolicy.KEEP_LAST, depth=1)
@@ -74,7 +83,10 @@ class Publisher(Node):
         self.max_late_s = 0.0
 
     def run(self, rate_hz, stop, capacity):
-        """Publish at rate_hz until stop is set, against absolute deadlines."""
+        """Publish at rate_hz until stop is set, against absolute deadlines.
+
+        Each message changes the upper slots' q and the CRC field, so none is a repeat.
+        """
         self.times = np.zeros(capacity)
         period = 1.0 / rate_hz
         motor_cmd = self.msg.motor_cmd
@@ -107,11 +119,12 @@ def make_load(burn_kind):
     rhs = rng.standard_normal(48)
 
     def numpy_load(end):
+        """Solve small dense systems until end (time.monotonic())."""
         while time.monotonic() < end:
             np.linalg.solve(a @ b + ridge, rhs)
 
     def gil_load(end):
-        # Pure Python arithmetic never releases the GIL voluntarily.
+        """Add floats in pure Python, which never releases the GIL itself, until end."""
         while time.monotonic() < end:
             total = 0.0
             for i in range(2000):
@@ -134,10 +147,12 @@ def ik_loop(seconds, ik_hz, burn_ms, load):
 
 
 def periods_ms(times):
+    """Return the gaps between consecutive times (s), in ms."""
     return np.diff(times) * 1000.0
 
 
 def main():
+    """Run the probe; return the exit code."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--rate', type=float, default=500.0)
     parser.add_argument('--seconds', type=float, default=10.0)

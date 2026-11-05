@@ -1,8 +1,5 @@
-'''
-The robot profiles against golem_safety's robot data.
-'''
+"""Check the robot profiles against golem_safety's robot data and robot.yaml's schema."""
 import dataclasses
-import json
 import os
 from pathlib import Path
 import types
@@ -44,17 +41,20 @@ EXPECTED = {
 
 
 def profile_of(robot):
+    """Return robot's RobotProfile."""
     from golem_upper_ik.profile import load_profile
     return load_profile(robot)
 
 
 def safety_data(robot):
+    """Return golem_safety's robots/<robot>.yaml."""
     share = Path(get_package_share_directory('golem_safety'))
     return yaml.safe_load((share / 'robots' / f'{robot}.yaml').read_text())
 
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_profiles_load(robot):
+    """Each profile has the robot's joints, frames, files and identity, frozen and read-only."""
     profile = profile_of(robot)
     expected = EXPECTED[robot]
 
@@ -94,6 +94,7 @@ def test_profiles_load(robot):
 
 @pytest.mark.parametrize('fault', ['gap', 'repeat'])
 def test_joint_slots_must_be_0_to_n(monkeypatch, fault):
+    """golem_safety joint slots with a gap or a repeat are refused."""
     from golem_upper_ik import profile as profile_module
     data = profile_module._robot_data('h12')
     joints = [dict(joint) for joint in data['joints']]
@@ -105,6 +106,7 @@ def test_joint_slots_must_be_0_to_n(monkeypatch, fault):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_profile_body_joints_match_safety_data(robot):
+    """A profile's joint table is golem_safety's, in slot order."""
     profile = profile_of(robot)
     data = safety_data(robot)
     joints = data['joints']
@@ -122,6 +124,7 @@ def test_profile_body_joints_match_safety_data(robot):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_held_joints_are_the_upper_joints_the_ik_leaves(robot):
+    """The held joints are the upper joints the IK does not solve for."""
     profile = profile_of(robot)
     upper = [profile.body_joints[i] for i in profile.upper_slots]
     assert profile.held_joints == tuple(
@@ -131,6 +134,7 @@ def test_held_joints_are_the_upper_joints_the_ik_leaves(robot):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_named_configs_are_over_the_ik_joints(robot):
+    """Every named config has one float per IK joint; the start-up postures are named."""
     profile = profile_of(robot)
     for name, value in profile.named_configs.items():
         assert value.shape == (len(profile.enabled_joints),), name
@@ -139,6 +143,7 @@ def test_named_configs_are_over_the_ik_joints(robot):
 
 
 def test_unknown_robot_raises():
+    """An unknown robot is refused, naming the known ones."""
     from golem_upper_ik.profile import load_profile, robot_config
     for function in (load_profile, robot_config):
         with pytest.raises(ValueError, match="unknown robot 'h1'.*g1, h12"):
@@ -146,10 +151,12 @@ def test_unknown_robot_raises():
 
 
 def test_known_robots():
+    """The known robots are g1 and h12."""
     assert known_robots() == ('g1', 'h12')
 
 
 def test_a_robot_needs_both_packages_data_to_be_known(monkeypatch, tmp_path):
+    """A robot is known only with data in both golem_safety and golem_upper_ik."""
     from golem_upper_ik import profile as profile_module
     (tmp_path / 'golem_safety' / 'robots').mkdir(parents=True)
     (tmp_path / 'golem_upper_ik' / 'config' / 'a').mkdir(parents=True)
@@ -163,28 +170,8 @@ def test_a_robot_needs_both_packages_data_to_be_known(monkeypatch, tmp_path):
     assert profile_module.known_robots() == ('a',)
 
 
-# robot_config is compared with the expected values of the JSON file this variable names
-# ({'robots': {robot: robot_config(robot)}}); the file is not in the repository, so the test
-# is skipped without it
-REFERENCE_VARIABLE = 'GOLEM_ROBOT_CONFIG_REFERENCE'
-
-
-@pytest.mark.parametrize('robot', ROBOTS)
-def test_robot_config_matches_reference(robot):
-    from golem_upper_ik.profile import robot_config
-    path = os.environ.get(REFERENCE_VARIABLE)
-    if not path:
-        pytest.skip(f'{REFERENCE_VARIABLE} names no reference file')
-    with open(path, encoding='utf-8') as handle:
-        reference = json.load(handle)['robots'][robot]
-    config = robot_config(robot)
-    assert sorted(config) == sorted(reference)
-    for key, value in reference.items():
-        assert config[key] == value, key
-
-
 def robot_config_with(monkeypatch, tmp_path, robot, change):
-    '''The profile module reading a copy of robot's robot.yaml that change edits'''
+    """Return robot_config(robot) read from a copy of robot's robot.yaml that change edits."""
     from golem_upper_ik import profile as profile_module
     real = get_package_share_directory('golem_upper_ik')
     raw = yaml.safe_load((Path(real) / 'config' / robot / 'robot.yaml').read_text())
@@ -194,6 +181,7 @@ def robot_config_with(monkeypatch, tmp_path, robot, change):
     path.write_text(yaml.safe_dump(raw))
 
     def share(package):
+        """Return tmp_path's share for golem_upper_ik, the installed one for others."""
         return str(tmp_path / package) if package == 'golem_upper_ik' else (
             get_package_share_directory(package))
     monkeypatch.setattr(profile_module, 'get_package_share_directory', share)
@@ -202,6 +190,7 @@ def robot_config_with(monkeypatch, tmp_path, robot, change):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_robot_config_rejects_unknown_and_missing_keys(monkeypatch, tmp_path, robot):
+    """robot.yaml with an unknown or a missing key is refused, naming it."""
     with pytest.raises(ValueError, match=f"{robot}.*'extra_key'"):
         robot_config_with(monkeypatch, tmp_path / 'extra', robot,
                           lambda raw: raw.update(extra_key=1))
@@ -211,6 +200,21 @@ def test_robot_config_rejects_unknown_and_missing_keys(monkeypatch, tmp_path, ro
 
 
 def test_robot_config_rejects_a_bad_value(monkeypatch, tmp_path):
+    """A named config that is not a list of numbers is refused."""
     with pytest.raises(ValueError, match="'named_configs'.*home"):
         robot_config_with(monkeypatch, tmp_path, 'h12',
                           lambda raw: raw['named_configs'].update(home='zero'))
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_example_robot_yaml_loads_as_a_robot_yaml(monkeypatch, tmp_path, robot):
+    """Each robot's example.robot.yaml holds exactly the schema's keys and loads as robot.yaml."""
+    from golem_upper_ik import profile as profile_module
+    example = Path(__file__).resolve().parents[1] / 'config' / robot / 'example.robot.yaml'
+    raw = yaml.safe_load(example.read_text())
+    assert sorted(raw) == sorted(profile_module.ROBOT_CONFIG_KEYS)
+    config = robot_config_with(monkeypatch, tmp_path, robot,
+                               lambda data: (data.clear(), data.update(raw)))
+    assert config['display_name'] == raw['display_name']
+    profile = profile_module.load_profile(robot)
+    assert profile.held_joints == profile_of(robot).held_joints

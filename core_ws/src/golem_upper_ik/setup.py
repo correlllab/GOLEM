@@ -1,3 +1,4 @@
+"""Install golem_upper_ik: its Python package, launch files and each robot's configs."""
 from glob import glob
 import os
 
@@ -10,10 +11,13 @@ data_files = [
     ('share/' + package_name, ['package.xml']),
     ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
 ]
-# every robot's config/<robot>/ directory
+# Every robot's config/<robot>/ directory. The annotated example.*.yaml files document the
+# schemas and stay in the source tree, so no loader or listing of the installed configs
+# can take one for a real config.
 for robot_dir in sorted(glob('config/*/')):
     data_files.append(('share/' + package_name + '/' + os.path.dirname(robot_dir),
-                       glob(robot_dir + '*.yaml')))
+                       [path for path in glob(robot_dir + '*.yaml')
+                        if not os.path.basename(path).startswith('example.')]))
 
 setup(
     name=package_name,

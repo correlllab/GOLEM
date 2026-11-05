@@ -1,22 +1,20 @@
-'''
-The ROS side of the tests, on domain 92: one rclpy context per test with an executor
-spinning its nodes in a thread (Ros), a fake robot publishing /lowstate (FakeRobot), a
-recorder of a command topic (Recorder) and a stand-in for golem_safety that relays the
-controller's commands on its output topic (Echo).
+"""Give the tests their ROS side, on domain 92, and the helpers the controller tests share.
 
-It also holds the helpers the controller tests share: the profile of a robot (profile_of),
-the session's robot model, put back at rest after the test (shared_model), and where the
-G1's limp arms hang (G1_LIMP_ARMS).
+Ros is one rclpy context per test with an executor spinning its nodes in a thread;
+FakeRobot publishes /lowstate; Recorder records a command topic; Echo plays golem_safety
+relaying the controller's commands on its output topic. profile_of, shared_model (the
+session's robot model, put back at rest after the test) and G1_LIMP_ARMS (where the G1's
+limp arms hang) serve the controller tests.
 
-For the controller's closed loop: a robot that executes the controller's commands as an
-engaged golem_safety would relay them, and relays them itself (FollowingRobot); a robot
-behind golem_safety's output topic (RelayedRobot), with golem_safety's safety_node run as a
-subprocess (SafetyNode); a recorder that also notes the robot's measured pose
-(CommandRecorder); and an action client (send_goal).
+For the controller's closed loop: FollowingRobot executes the controller's commands as an
+engaged golem_safety would relay them, and relays them itself; RelayedRobot sits behind
+golem_safety's output topic, with golem_safety's safety_node run as a subprocess
+(SafetyNode); CommandRecorder also notes the robot's measured pose; send_goal is an action
+client.
 
 Every node lives in the test's context, so they share one DDS participant and discover each
 other at once.
-'''
+"""
 import itertools
 import os
 from pathlib import Path
@@ -49,15 +47,17 @@ G1_LIMP_ARMS = (-0.053, -0.0083, 0.052, 1.2508, -0.0411, -0.0995, 0.071,
 
 
 def profile_of(robot):
+    """Return robot's RobotProfile."""
     from golem_upper_ik.profile import load_profile
     return load_profile(robot)
 
 
 def shared_model(ros, models, robot):
-    '''The session's model of robot (the models fixture), put back at rest when the test ends'''
+    """Return the session's model of robot (models fixture), put back at rest at the end."""
     model = models(robot)
 
     def rest():
+        """Detach the state source and re-lock the reduced model at q = 0."""
         model.state_subscriber = None
         model.rebuild_reduced_model(np.zeros(model.num_motor))
     ros.on_close(rest)
@@ -65,7 +65,7 @@ def shared_model(ros, models, robot):
 
 
 def wait_for(condition, timeout, period=0.005):
-    '''True as soon as condition() is, False once timeout s have passed without it'''
+    """Return True as soon as condition() is, False once timeout s have passed without it."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if condition():
@@ -75,7 +75,10 @@ def wait_for(condition, timeout, period=0.005):
 
 
 class Ros:
+    """Hold one test's rclpy context on TEST_DOMAIN, its nodes and a spinning executor."""
+
     def __init__(self):
+        """Init the context and start spinning the executor in a thread."""
         self.context = rclpy.Context()
         rclpy.init(context=self.context, domain_id=TEST_DOMAIN)
         # a goal holds one thread for as long as it runs
@@ -87,26 +90,32 @@ class Ros:
         self._spinner.start()
 
     def _spin(self):
+        """Spin the executor; an error it raises fails the test at close()."""
         try:
             self.executor.spin()
         except Exception as error:  # close() fails the test with it
             self.spin_error = error
 
     def node(self, name):
+        """Return a new spinning node named name (made unique), destroyed at the end."""
         node = rclpy.create_node(f'{name}_{next(_names)}', context=self.context)
         return self.add(node)
 
     def add(self, node):
-        '''Spin node, created in this context, and destroy it when the test ends'''
+        """Spin node, created in this context, and destroy it when the test ends."""
         self._nodes.append(node)
         self.executor.add_node(node)
         return node
 
     def on_close(self, close):
-        '''Run close() when the test ends, before the nodes go; the last registered runs first'''
+        """Run close() when the test ends, before the nodes go; the last registered first."""
         self._closers.append(close)
 
     def close(self):
+        """Run the closers, stop the executor, destroy the nodes and shut the context down.
+
+        Raises the first closer's error, or AssertionError if the executor stopped spinning.
+        """
         errors = []
         for close in reversed(self._closers):
             try:
@@ -125,12 +134,13 @@ class Ros:
 
 
 class FakeRobot:
-    '''
-    Publishes /lowstate for a profile: q, dq and tick on demand (publish) or at a fixed rate
-    from a thread (start), with the profile's mode_machine and a level IMU
-    '''
+    """Publish /lowstate for a profile, on demand (publish) or at a fixed rate (start).
+
+    Each message carries q, dq and tick, the profile's mode_machine and a level IMU.
+    """
 
     def __init__(self, ros, profile):
+        """Create the publisher (reliable, depth 100) with q and dq at 0."""
         self.profile = profile
         self.node = ros.node('fake_robot')
         self._publisher = self.node.create_publisher(
@@ -146,10 +156,11 @@ class FakeRobot:
         ros.on_close(self.stop)
 
     def tick_now(self):
-        '''The robot's millisecond tick: ms since this fake started, from 1000'''
+        """Return the robot's millisecond tick: ms since this fake started, from 1000."""
         return 1000 + int((time.monotonic() - self._start) * 1000.0)
 
     def publish(self, q=None, dq=None, tick=None):
+        """Publish one /lowstate: q and dq (default the current ones) and tick (default now)."""
         q = self.q if q is None else np.asarray(q, dtype=float)
         dq = self.dq if dq is None else np.asarray(dq, dtype=float)
         msg = LowState()
@@ -166,10 +177,11 @@ class FakeRobot:
         self._publisher.publish(msg)
 
     def start(self, rate_hz=200.0):
-        '''Publish the current q and dq at rate_hz until stop()'''
+        """Publish the current q and dq at rate_hz until stop()."""
         period = 1.0 / rate_hz
 
         def run():
+            """Publish on absolute deadlines until stopped."""
             next_at = time.monotonic()
             while not self._stop.is_set():
                 self.publish()
@@ -179,6 +191,7 @@ class FakeRobot:
         self._thread.start()
 
     def stop(self):
+        """Stop publishing at a rate."""
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
@@ -186,47 +199,52 @@ class FakeRobot:
 
 
 class Recorder:
-    '''Every LowCmd on a topic, with its receive time on time.monotonic()'''
+    """Record every LowCmd on a topic, with its receive time on time.monotonic()."""
 
     def __init__(self, ros, topic):
+        """Subscribe to topic, keeping every sample."""
         self.node = ros.node('recorder')
         self._lock = threading.Lock()
         self._samples = []
         self.node.create_subscription(LowCmd, topic, self._on_cmd, RECORD_QOS)
 
     def _on_cmd(self, msg):
+        """Record msg with its receive time."""
         with self._lock:
             self._samples.append((time.monotonic(), msg))
 
     @property
     def samples(self):
+        """Return the (receive time, LowCmd) samples so far."""
         with self._lock:
             return list(self._samples)
 
     @property
     def count(self):
+        """Return how many commands arrived."""
         with self._lock:
             return len(self._samples)
 
     @property
     def last(self):
+        """Return the newest LowCmd, or None."""
         with self._lock:
             return self._samples[-1][1] if self._samples else None
 
     def since(self, start):
-        '''The messages received at or after monotonic time start'''
+        """Return the messages received at or after monotonic time start."""
         return [msg for t, msg in self.samples if t >= start]
 
 
 class Echo:
-    '''
-    Plays golem_safety relaying the controller: every command on in_topic is published on
-    out_topic. clip, a (low, high) pair of per-slot arrays, clips each slot's q as
-    golem_safety does; zero_kp sends kp 0 on every slot, as golem_safety's zero stream does
-    before it engages
-    '''
+    """Play golem_safety relaying the controller: republish every in_topic command on out_topic.
+
+    clip, a (low, high) pair of per-slot arrays, clips each slot's q as golem_safety does;
+    zero_kp sends kp 0 on every slot, as golem_safety's zero stream does before it engages.
+    """
 
     def __init__(self, ros, in_topic, out_topic, clip=None, zero_kp=False):
+        """Subscribe to in_topic and publish on out_topic."""
         self.node = ros.node('echo')
         self.clip = clip
         self.zero_kp = zero_kp
@@ -234,6 +252,7 @@ class Echo:
         self.node.create_subscription(LowCmd, in_topic, self._relay, RECORD_QOS)
 
     def _relay(self, msg):
+        """Republish msg, clipped and with kp zeroed as configured."""
         if self.clip is not None:
             low, high = self.clip
             for slot in range(len(low)):
@@ -246,20 +265,21 @@ class Echo:
 
 
 def upper_q(msg, profile):
-    '''The upper-slot q of a LowCmd, as float64'''
+    """Return the upper-slot q of a LowCmd, as float64."""
     return np.array([msg.motor_cmd[slot].q for slot in profile.upper_slots], dtype=np.float64)
 
 
 def slots_of(profile, joints):
-    '''The body slots of joints'''
+    """Return the body slots of joints."""
     return [profile.body_joints.index(joint) for joint in joints]
 
 
 def body_pose(profile, arms=None, held=None):
-    '''
-    Every body joint at 0, the IK joints at arms (a named configuration's name, or one value
-    per IK joint) and the held joints at held (one value per held joint)
-    '''
+    """Return a body q: 0, the IK joints at arms and the held joints at held.
+
+    arms is a named configuration's name or one value per IK joint; held one value per held
+    joint.
+    """
     q = np.zeros(len(profile.body_joints))
     if arms is not None:
         values = profile.named_configs[arms] if isinstance(arms, str) else arms
@@ -270,6 +290,7 @@ def body_pose(profile, arms=None, held=None):
 
 
 def _lowstate(profile):
+    """Return a LowState of profile's robot with every motor on and a level IMU."""
     msg = LowState()
     msg.mode_pr = profile.mode_pr
     msg.mode_machine = profile.mode_machine
@@ -280,18 +301,21 @@ def _lowstate(profile):
 
 
 class _Loop:
-    '''Runs step() at rate_hz from a thread until stop()'''
+    """Run step() at rate_hz from a thread until stop()."""
 
     def __init__(self, rate_hz, step):
+        """Set up the thread; start() starts it."""
         self._period = 1.0 / rate_hz
         self._step = step
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def start(self):
+        """Start the thread."""
         self._thread.start()
 
     def _run(self):
+        """Run step() on absolute deadlines until stopped."""
         next_at = time.monotonic()
         while not self._stop.is_set():
             self._step()
@@ -299,22 +323,24 @@ class _Loop:
             time.sleep(max(0.0, next_at - time.monotonic()))
 
     def stop(self):
+        """Stop the thread."""
         self._stop.set()
         if self._thread.is_alive():
             self._thread.join(timeout=2.0)
 
 
 class FollowingRobot:
-    '''
-    A robot behind an engaged golem_safety, whose relay it plays too. Every command on
-    command_topic is executed at once: each body slot with kp > 0 jumps to its q, less its
-    sag (rad, per slot). The newest command is relayed on relay_topic. /lowstate goes out at
-    rate_hz, its tick in ms on the monotonic clock, until stop_state(), with the IMU
-    orientation imu_quaternion (w, x, y, z; default identity).
-    '''
+    """Play a robot behind an engaged golem_safety, and golem_safety's relay too.
+
+    Every command on command_topic is executed at once: each body slot with kp > 0 jumps to
+    its q, less its sag (rad, per slot). The newest command is relayed on relay_topic.
+    /lowstate goes out at rate_hz, its tick in ms on the monotonic clock, until stop_state(),
+    with the IMU orientation imu_quaternion (w, x, y, z; default identity).
+    """
 
     def __init__(self, ros, profile, q0, relay_topic, command_topic='/safety/lowcmd_upper_in',
                  sag=None, rate_hz=500.0, imu_quaternion=None):
+        """Start at body q0, publishing /lowstate at once."""
         self.profile = profile
         self.node = ros.node('following_robot')
         count = len(profile.body_joints)
@@ -339,6 +365,7 @@ class FollowingRobot:
         ros.on_close(self._loop.stop)
 
     def _on_command(self, msg):
+        """Execute and count a command, and keep it to relay."""
         now = time.monotonic()
         motors = msg.motor_cmd
         with self._lock:
@@ -352,6 +379,7 @@ class FollowingRobot:
             self.last_command = (now, msg)
 
     def _step(self):
+        """Publish /lowstate (unless stopped) and relay the newest command."""
         with self._lock:
             q = self._q.copy()
             relay = self._relay
@@ -365,34 +393,36 @@ class FollowingRobot:
             self._relay_publisher.publish(relay)
 
     def measured(self):
+        """Return the robot's body q."""
         with self._lock:
             return self._q.copy()
 
     def set_sag(self, sag):
-        '''How far below its command each slot settles from the next command on, rad'''
+        """Set how far below its command each slot settles from the next command on, rad."""
         with self._lock:
             self._sag = np.asarray(sag, dtype=np.float64).copy()
 
     def stop_state(self):
-        '''Publish no more /lowstate; commands are still executed and relayed'''
+        """Publish no more /lowstate; commands are still executed and relayed."""
         with self._lock:
             self._state_on = False
 
 
 class RelayedRobot:
-    '''
-    A robot behind golem_safety's output topic (/lowcmd). Each upper-body slot the newest
-    command gives kp > 0 tracks its command; any other upper slot tracks the hold, where the
-    robot hangs, limp. push is added to every upper slot's target, and each tracks its target
-    with a TRACK_S lag. The hold sways sway rad on the first held joint and the
-    left shoulder roll, so the measured pose drifts before golem_safety engages. /lowstate
-    goes out at rate_hz from start()
-    '''
+    """Play a robot behind golem_safety's output topic (/lowcmd).
+
+    Each upper-body slot the newest command gives kp > 0 tracks its command; any other upper
+    slot tracks the hold, where the robot hangs, limp. push is added to every upper slot's
+    target, and each tracks its target with a TRACK_S lag. The hold sways sway rad on the
+    first held joint and the left shoulder roll, so the measured pose drifts before
+    golem_safety engages. /lowstate goes out at rate_hz from start().
+    """
 
     TRACK_S = 0.05
     SWAY_PERIOD_S = 2.0
 
     def __init__(self, ros, profile, q0, topic, sway=0.1, rate_hz=500.0):
+        """Hang at body q0, reading commands on topic; nothing is published before start()."""
         self.profile = profile
         self.node = ros.node('relayed_robot')
         self.q0 = np.array(q0, dtype=np.float64)
@@ -413,11 +443,13 @@ class RelayedRobot:
         ros.on_close(self._loop.stop)
 
     def start(self):
+        """Start publishing /lowstate."""
         self.started = time.monotonic()
         self._last = self.started
         self._loop.start()
 
     def _on_command(self, msg):
+        """Take the upper slots with kp > 0 as commanded, at their q."""
         motors = msg.motor_cmd
         with self._lock:
             for slot in self.upper:
@@ -426,11 +458,13 @@ class RelayedRobot:
                     self._cmd_q[slot] = motors[slot].q
 
     def _hold(self, t):
+        """Return the swaying limp pose at t s after start()."""
         hold = self.q0.copy()
         hold[self.sway_slots] += self._sway * np.sin(2.0 * np.pi * t / self.SWAY_PERIOD_S)
         return hold
 
     def _step(self):
+        """Move each upper slot toward its target by the lag, then publish /lowstate."""
         now = time.monotonic()
         # the lag in real time, however late this step runs
         alpha = 1.0 - np.exp(-(now - self._last) / self.TRACK_S)
@@ -446,22 +480,25 @@ class RelayedRobot:
         self._state_publisher.publish(self._state)
 
     def set_push(self, push):
+        """Add push (rad per body slot) to every upper slot's target from now on."""
         with self._lock:
             self._push = np.asarray(push, dtype=np.float64).copy()
 
     def measured(self):
+        """Return the robot's body q."""
         with self._lock:
             return self._q.copy()
 
 
 class CommandRecorder:
-    '''
-    Every LowCmd on topic, as samples: receive time (time.monotonic()), the upper-slot q and
-    their smallest kp, and the robot's measured upper-slot q at that time (or None without a
-    robot)
-    '''
+    """Record every LowCmd on topic as a Sample.
+
+    A Sample is the receive time (time.monotonic()), the upper-slot q and their smallest kp,
+    and the robot's measured upper-slot q at that time (None without a robot).
+    """
 
     def __init__(self, ros, topic, profile, robot=None):
+        """Subscribe to topic, keeping every sample; robot gives the measured pose."""
         self.node = ros.node('command_recorder')
         self._upper = list(profile.upper_slots)
         self._robot = robot
@@ -470,6 +507,7 @@ class CommandRecorder:
         self.node.create_subscription(LowCmd, topic, self._on_command, RECORD_QOS)
 
     def _on_command(self, msg):
+        """Record msg as a Sample."""
         now = time.monotonic()
         motors = msg.motor_cmd
         q = np.array([motors[slot].q for slot in self._upper], dtype=np.float64)
@@ -480,24 +518,29 @@ class CommandRecorder:
 
     @property
     def samples(self):
+        """Return the Samples so far."""
         with self._lock:
             return list(self._samples)
 
     @property
     def count(self):
+        """Return how many commands arrived."""
         with self._lock:
             return len(self._samples)
 
 
 class Sample:
+    """Hold one recorded command: t (s), q and measured (rad, upper slots) and min kp."""
+
     __slots__ = ('t', 'q', 'kp', 'measured')
 
     def __init__(self, t, q, kp, measured):
+        """Hold the fields."""
         self.t, self.q, self.kp, self.measured = t, q, kp, measured
 
 
 def send_goal(ros, action_type, action_name, goal, timeout=60.0):
-    '''Send goal to the action server and wait for the outcome: (status, result)'''
+    """Send goal to the action server and wait for the outcome; return (status, result)."""
     node = ros.node('action_client')
     client = ActionClient(node, action_type, action_name)
     assert client.wait_for_server(timeout_sec=10.0), f'no {action_name} action server'
@@ -512,12 +555,14 @@ def send_goal(ros, action_type, action_name, goal, timeout=60.0):
 
 
 class SafetyNode:
-    '''
-    golem_safety's safety_node as a subprocess on domain 92, on a copy of one of its robot's
-    configs with logging off, written to directory/<robot>/
-    '''
+    """Run golem_safety's safety_node as a subprocess on domain 92.
+
+    It runs on a copy of one of its robot's configs with logging off, written to
+    directory/<robot>/.
+    """
 
     def __init__(self, robot, config, directory, sim=False):
+        """Write the config copy; start() starts the node."""
         from ament_index_python.packages import get_package_prefix, get_package_share_directory
         share = Path(get_package_share_directory('golem_safety'))
         raw = yaml.safe_load((share / 'config' / robot / f'{config}.yaml').read_text())
@@ -534,6 +579,7 @@ class SafetyNode:
         self.started = None
 
     def start(self):
+        """Start the node, collecting its output."""
         env = dict(os.environ, ROS_DOMAIN_ID=str(TEST_DOMAIN), RCUTILS_COLORIZED_OUTPUT='0')
         self.started = time.monotonic()
         self.proc = subprocess.Popen(self._args, env=env, text=True, stdout=subprocess.PIPE,
@@ -541,16 +587,20 @@ class SafetyNode:
         threading.Thread(target=self._read, daemon=True).start()
 
     def _read(self):
+        """Collect the node's output lines."""
         for line in self.proc.stdout:
             self.lines.append(line.rstrip('\n'))
 
     def output(self):
+        """Return the node's output so far."""
         return '\n'.join(self.lines)
 
     def estopped(self):
+        """Return whether the node logged an estop event."""
         return any('"event": "estop_' in line for line in list(self.lines))
 
     def stop(self, timeout=10.0):
+        """Stop the node with SIGINT (killed after timeout s)."""
         if self.proc is None or self.proc.poll() is not None:
             return
         self.proc.send_signal(signal.SIGINT)

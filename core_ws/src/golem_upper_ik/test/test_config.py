@@ -1,6 +1,4 @@
-'''
-The controller-config loader, on the installed configs and on configs written by the tests.
-'''
+"""Check the controller-config loader on the installed configs and on written ones."""
 import math
 from pathlib import Path
 import re
@@ -22,17 +20,19 @@ HELD = {
 
 
 def load(robot, name_or_path):
+    """Return load_controller_config(robot, name_or_path)."""
     from golem_upper_ik.config import load_controller_config
     return load_controller_config(robot, name_or_path)
 
 
 def installed(robot, name):
+    """Return the installed path of robot's config name."""
     share = Path(get_package_share_directory('golem_upper_ik'))
     return share / 'config' / robot / f'{name}.yaml'
 
 
 def write_config(tmp_path, robot, raw, directory=None):
-    '''raw written as YAML to tmp_path/<directory or robot>/test.yaml'''
+    """Write raw as YAML to tmp_path/<directory or robot>/test.yaml; return the path."""
     path = tmp_path / (directory or robot) / 'test.yaml'
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(raw))
@@ -40,7 +40,7 @@ def write_config(tmp_path, robot, raw, directory=None):
 
 
 def edited(robot, name, **sections):
-    '''The installed config name of robot with each keyword section's keys replaced'''
+    """Return the installed config name of robot with each keyword section's keys replaced."""
     raw = yaml.safe_load(installed(robot, name).read_text())
     for section, values in sections.items():
         raw[section] = dict(raw.get(section) or {}, **values)
@@ -48,12 +48,13 @@ def edited(robot, name, **sections):
 
 
 def minimal(robot):
-    '''The gains alone: every other key takes its default'''
+    """Return a config with only the gains: every other key takes its default."""
     return {'gains': {'kp': 10.0, 'kd': 1.0, 'ki': 0.0}}
 
 
 @pytest.mark.parametrize('case', CASES)
 def test_configs_load(case):
+    """Every installed controller config loads, its hold targets in the profile's order."""
     robot, name = case.split('/')
     config = load(robot, name)
 
@@ -67,6 +68,7 @@ def test_configs_load(case):
 
 
 def test_every_known_robot_is_tested_and_has_a_default_config():
+    """Every known robot has configs here, and its default_config is one of them and loads."""
     from golem_upper_ik.profile import known_robots, robot_config
     assert sorted(CONFIGS) == sorted(known_robots())
     for robot in known_robots():
@@ -76,6 +78,7 @@ def test_every_known_robot_is_tested_and_has_a_default_config():
 
 
 def test_every_installed_config_is_tested():
+    """Every installed controller config of every robot is in CONFIGS."""
     share = Path(get_package_share_directory('golem_upper_ik')) / 'config'
     for robot, names in CONFIGS.items():
         # robot.yaml and pairing.yaml are the robot's data, not controller configs
@@ -85,7 +88,7 @@ def test_every_installed_config_is_tested():
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_defaults(robot, tmp_path):
-    '''A config with only gains: the loaders' shared defaults and each robot's own'''
+    """A config with only gains takes the shared defaults and the robot's own."""
     from golem_upper_ik.profile import load_profile
     profile = load_profile(robot)
     config = load(robot, write_config(tmp_path, robot, minimal(robot)))
@@ -124,6 +127,7 @@ def test_defaults(robot, tmp_path):
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_joint_lists_take_body_or_upper_lengths(robot, tmp_path):
+    """Gain and clip lists take one value per body or per upper slot; another length is refused."""
     from golem_upper_ik.profile import load_profile
     profile = load_profile(robot)
     body, upper = len(profile.body_joints), len(profile.upper_slots)
@@ -149,6 +153,7 @@ def test_joint_lists_take_body_or_upper_lengths(robot, tmp_path):
 
 
 def test_low_cmd_topic_must_be_safety_input(tmp_path):
+    """topics.low_cmd must be a golem_safety input (/safety/...)."""
     for low_cmd in ('/lowcmd', 'rt/safety/lowcmd_upper_in', 'safety/lowcmd_in'):
         raw = edited('h12', 'safety_split', topics={'low_cmd': low_cmd})
         with pytest.raises(ValueError, match='topics.low_cmd'):
@@ -159,6 +164,7 @@ def test_low_cmd_topic_must_be_safety_input(tmp_path):
 
 
 def test_topics_are_ros_names(tmp_path):
+    """A DDS topic name (rt/x) is refused, naming its ROS name."""
     raw = edited('h12', 'safety_split', topics={'low_state': 'rt/lowstate'})
     with pytest.raises(ValueError, match="topics.low_state.*'/lowstate'"):
         load('h12', write_config(tmp_path, 'h12', raw))
@@ -176,6 +182,7 @@ def test_topics_are_ros_names(tmp_path):
     ('limits.enforce', {'limits': {'enforce': {'velocity_ratio': 0.2}}}, 'unknown'),
 ])
 def test_unknown_keys_raise(tmp_path, key, raw_edit, message):
+    """An unknown key, at any level, is refused by name."""
     raw = minimal('h12')
     for section, value in raw_edit.items():
         raw[section] = value
@@ -184,6 +191,7 @@ def test_unknown_keys_raise(tmp_path, key, raw_edit, message):
 
 
 def test_hold_targets_name_held_joints(tmp_path):
+    """hold_targets maps held joints only; one left out is 0; a number is refused."""
     raw = minimal('h12')
     raw['controller'] = {'hold_targets': {'waist_yaw_joint': 0.0}}
     with pytest.raises(ValueError, match='waist_yaw_joint.*torso_joint'):
@@ -210,15 +218,14 @@ def test_hold_targets_name_held_joints(tmp_path):
     ('controller', 'v_lim', 'fast'),
 ])
 def test_bad_values_raise(tmp_path, section, key, value):
+    """A non-finite, non-positive, bool or text value is refused, naming its key."""
     raw = minimal('h12')
     raw[section] = {key: value}
     with pytest.raises(ValueError, match=f'{section}.{key}'):
         load('h12', write_config(tmp_path, 'h12', raw))
 
 
-# a speed limit, timeout, convergence threshold or interval must be positive; a distance,
-# ratio or offset must not be negative (a ratio of 0 is the lower slots' value in an
-# upper-body list)
+# a ratio of 0 is allowed: it is the lower slots' value in an upper-body list
 @pytest.mark.parametrize('key, value', [
     ('controller.v_lim', 0.0),
     ('controller.w_lim', -1.0),
@@ -235,6 +242,7 @@ def test_bad_values_raise(tmp_path, section, key, value):
     ('limits.clip.torque_ratio', [0.25] * 14 + [-0.25]),
 ])
 def test_nonsensical_values_raise(tmp_path, key, value):
+    """A speed limit, timeout or threshold must be positive; a distance, offset or ratio >= 0."""
     raw = minimal('h12')
     *sections, name = key.split('.')
     target = raw
@@ -261,6 +269,7 @@ def test_nonsensical_values_raise(tmp_path, key, value):
     ('enabled', 'yes'),
 ])
 def test_bad_planner_values_raise(tmp_path, key, value):
+    """A planner value of the wrong type or range is refused, naming its key."""
     raw = minimal('h12')
     raw['planner'] = {key: value}
     with pytest.raises(ValueError, match=re.escape(f"'planner.{key}'")):
@@ -268,6 +277,7 @@ def test_bad_planner_values_raise(tmp_path, key, value):
 
 
 def test_planner_values_load_with_their_types(tmp_path):
+    """Planner values load as bool, int, float or text; a bound may be null; 30.0 counts as 30."""
     planner = load('h12', 'safety_split')['planner']
     for key in ('enabled', 'try_direct', 'simplify', 'shortcut'):
         assert type(planner[key]) is bool, key
@@ -291,6 +301,7 @@ def test_planner_values_load_with_their_types(tmp_path):
 
 def test_numbers_written_without_a_dot_load(tmp_path):
     # PyYAML reads 1e-3 (no dot) as a string; the loader parses it as a number
+    """A number PyYAML reads as text (1e-3) loads as a number."""
     path = tmp_path / 'h12' / 'test.yaml'
     path.parent.mkdir(parents=True)
     path.write_text('gains: {kp: 10.0, kd: 1.0, ki: 0.0}\ncontroller: {threshold_ik: 1e-3}\n')
@@ -298,6 +309,7 @@ def test_numbers_written_without_a_dot_load(tmp_path):
 
 
 def test_position_offset_too_large_raises(tmp_path):
+    """A position_offset that leaves a joint no range is refused."""
     raw = minimal('h12')
     raw['limits'] = {'clip': {'position_offset': 0.5}}
     with pytest.raises(ValueError, match='position_offset'):
@@ -305,6 +317,7 @@ def test_position_offset_too_large_raises(tmp_path):
 
 
 def test_names_resolve_under_the_robots_config_directory():
+    """A bare name, with or without .yaml, is a file of the robot's config directory."""
     with_suffix = load('h12', 'safety_split.yaml')
     bare = load('h12', 'safety_split')
     assert with_suffix['source'] == bare['source'] == str(installed('h12', 'safety_split'))
@@ -313,6 +326,7 @@ def test_names_resolve_under_the_robots_config_directory():
 
 
 def test_config_of_other_robot_is_refused(tmp_path):
+    """A config in another robot's config directory is refused."""
     with pytest.raises(ValueError, match='robot g1'):
         load('h12', str(installed('g1', 'g1_split')))
     with pytest.raises(ValueError, match='robot h12'):
@@ -320,12 +334,14 @@ def test_config_of_other_robot_is_refused(tmp_path):
 
 
 def test_unknown_robot_raises():
+    """An unknown robot is refused."""
     from golem_upper_ik.config import load_controller_config
     with pytest.raises(ValueError, match='h1'):
         load_controller_config('h1', 'safety_split')
 
 
 def test_values_are_finite_after_loading():
+    """Every installed config's controller and frequency values are finite."""
     for robot, names in CONFIGS.items():
         for name in names:
             config = load(robot, name)
@@ -337,6 +353,7 @@ def test_values_are_finite_after_loading():
 
 @pytest.mark.parametrize('name', CONFIGS['g1'])
 def test_g1_waist_gains_are_damped_from_the_urdf_inertia(models, name):
+    """The G1 configs' waist damping ratio is 0.4 to 0.5 at home, and the arms' kd 1.5."""
     import pinocchio as pin
     gains = load('g1', name)['gains']
     model = models('g1')
@@ -350,3 +367,30 @@ def test_g1_waist_gains_are_damped_from_the_urdf_inertia(models, name):
         assert 0.4 <= zeta <= 0.5, (name, joint, zeta)
     arms = [profile.body_joints.index(joint) for joint in profile.enabled_joints]
     assert np.all(gains['kd'][arms] == 1.5)
+
+
+SOURCE_CONFIG = Path(__file__).resolve().parents[1] / 'config'
+
+
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_example_holds_every_key_and_loads(robot):
+    """Each robot's example.controller.yaml holds exactly the schema's keys and loads."""
+    from golem_upper_ik.config import CLIP_DEFAULTS, SECTION_KEYS
+    from golem_upper_ik.profile import load_profile
+    path = SOURCE_CONFIG / robot / 'example.controller.yaml'
+    raw = yaml.safe_load(path.read_text())
+    assert set(raw) == set(SECTION_KEYS)
+    for section, keys in SECTION_KEYS.items():
+        assert set(raw[section]) == set(keys), section
+    assert set(raw['limits']['clip']) == set(CLIP_DEFAULTS)
+    assert set(raw['controller']['hold_targets']) == set(load_profile(robot).held_joints)
+    assert load(robot, path)['robot'] == robot
+
+
+def test_examples_are_not_installed():
+    """Every robot directory has the three example files, and none is installed."""
+    share = Path(get_package_share_directory('golem_upper_ik')) / 'config'
+    assert sorted(path.name for path in SOURCE_CONFIG.glob('*/example.*.yaml')) == sorted(
+        f'example.{kind}.yaml' for kind in ('controller', 'pairing', 'robot')
+        for _ in CONFIGS)
+    assert list(share.glob('*/example.*')) == []

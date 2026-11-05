@@ -15,6 +15,12 @@ and each step commands a pose 0.3 rad away, which the gate holds near the measur
 The JSON on stdout is the receive side: the achieved rate, the 99th percentile of the
 receive period and the longest gap, in the units named by the keys, and with --gate whether
 the gate stayed shut. Counts go to stderr.
+
+    python3 tools/command_publisher_rate.py [--rate HZ] [--seconds S] [--ik-hz HZ]
+        [--burn-ms MS] [--gate]
+
+Runs on ROS_DOMAIN_ID (test/test_ros_io.py sets a test domain). Exits 0 with the JSON, 1
+when no subscriber matches within 10 s or fewer than 2 samples arrive.
 """
 import argparse
 import json
@@ -39,13 +45,14 @@ from golem_upper_ik.profile import load_profile  # noqa: E402
 
 TOPIC = '/safety/rate_probe_upper_in'
 DISCOVERY_TIMEOUT_S = 10.0
-SPARE_SAMPLES = 1000
+SPARE_SAMPLES = 1000  # recorder capacity beyond rate * (seconds + 5)
 
 
 class Recorder:
-    """Subscribes with reliable, deep keep-last QoS and stamps every receive."""
+    """Record the receive time of every command (reliable, deep keep-last QoS)."""
 
     def __init__(self, node, capacity):
+        """Subscribe on node, with room for capacity receive times."""
         self.times = np.zeros(capacity)
         self.count = 0
         qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
@@ -53,15 +60,17 @@ class Recorder:
         self.subscription = node.create_subscription(LowCmd, TOPIC, self._on_msg, qos)
 
     def _on_msg(self, _msg):
+        """Stamp one receive; count it even past capacity."""
         if self.count < len(self.times):
             self.times[self.count] = time.monotonic()
         self.count += 1
 
 
 class StateStream:
-    """/lowstate at rate_hz from a thread: one prebuilt message, its tick advancing."""
+    """Publish /lowstate at rate_hz from a thread: one prebuilt message, its tick advancing."""
 
     def __init__(self, node, profile, q, rate_hz):
+        """Start publishing the profile's robot at body q (rad), level."""
         self._publisher = node.create_publisher(LowState, '/lowstate', 10)
         self._msg = LowState()
         self._msg.mode_machine = profile.mode_machine
@@ -74,6 +83,7 @@ class StateStream:
         self._thread.start()
 
     def _run(self):
+        """Publish on absolute deadlines until stop(), the tick in ms since the start."""
         start = time.monotonic()
         next_at = start
         while not self._stop.is_set():
@@ -83,24 +93,26 @@ class StateStream:
             time.sleep(max(0.0, next_at - time.monotonic()))
 
     def stop(self):
+        """Stop publishing."""
         self._stop.set()
         self._thread.join(timeout=2.0)
 
 
 def publisher_sender(controller, profile, rate):
-    """send(step) through a bare CommandPublisher, and its stop()"""
+    """Return (send(step), stop(), None) for commands through a bare CommandPublisher."""
     publisher = CommandPublisher(controller, TOPIC, rate, profile)
     count = len(profile.upper_slots)
     zeros = np.zeros(count)
     gains = np.full(count, 100.0)
 
     def send(step):
+        """Send a command whose q changes with step."""
         publisher.set(np.full(count, 0.001 * (step % 100)), zeros, zeros, gains, gains)
     return send, publisher.stop, None
 
 
 def gate_sender(controller, profile, rate):
-    """send(step) through a LowCmdHandler whose follow gate stays shut, its stop(), the handler"""
+    """Return (send(step), stop(), handler) for a LowCmdHandler whose follow gate stays shut."""
     from golem_upper_ik.config import load_controller_config
     from golem_upper_ik.core.low_cmd_handler import LowCmdHandler
     from golem_upper_ik.core.robot_model import RobotModel
@@ -124,9 +136,11 @@ def gate_sender(controller, profile, rate):
     zeros = np.zeros(count)
 
     def send(step):
+        """Command a pose 0.3 rad from the measured one, which the gate holds near it."""
         handler.set_joint_commands(q=pose + 0.3, dq=zeros, tau=zeros)
 
     def stop():
+        """Shut the handler down, then the /lowstate stream and the model's source."""
         handler.shutdown()
         stream.stop()
         model.shutdown()
@@ -134,7 +148,7 @@ def gate_sender(controller, profile, rate):
 
 
 def ik_loop(send, seconds, ik_hz, burn_ms):
-    """Burn burn_ms of numpy work, then send a new command, at ik_hz for seconds."""
+    """Burn burn_ms of numpy work, then send a new command, at ik_hz for seconds; the steps."""
     rng = np.random.default_rng(0)
     a = rng.standard_normal((48, 48))
     b = rng.standard_normal((48, 48))
@@ -156,6 +170,7 @@ def ik_loop(send, seconds, ik_hz, burn_ms):
 
 
 def main():
+    """Run the measurement; return the exit code."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--rate', type=float, default=500.0)
     parser.add_argument('--seconds', type=float, default=3.0)

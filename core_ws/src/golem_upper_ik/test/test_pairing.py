@@ -1,8 +1,7 @@
-'''
-Which safety and controller configs may run together, and what the pairs agree on.
+"""Check which safety and controller configs may run together, and what the pairs agree on.
 
 The pairs' topics and gain limits are read from golem_safety's installed configs.
-'''
+"""
 import inspect
 from pathlib import Path
 
@@ -16,7 +15,7 @@ SIMS = (None, False, True)
 
 
 def pairs_of(robot):
-    '''The safety config -> controller config pairs of robot, as its installed pairing.yaml'''
+    """Return robot's safety config -> controller config pairs, from its installed pairing.yaml."""
     from ament_index_python.packages import get_package_share_directory
     import yaml
     share = Path(get_package_share_directory('golem_upper_ik'))
@@ -24,6 +23,7 @@ def pairs_of(robot):
 
 
 def test_pairing_yaml_is_the_pair_table():
+    """Each robot's pairing.yaml holds exactly its expected pairs."""
     assert pairs_of('g1') == {'split': 'g1_split', 'sim_split': 'sim_split'}
     assert pairs_of('h12') == {
         'relax_safety_split': 'safety_split',
@@ -38,6 +38,7 @@ def test_pairing_yaml_is_the_pair_table():
 
 
 def test_the_pairing_functions_are_robot_independent():
+    """The pairing functions take the robot as an argument; no per-robot names are defined."""
     from golem_upper_ik import pairing
     assert list(inspect.signature(pairing_refusal).parameters) == [
         'robot', 'controller_config', 'safety_config', 'sim']
@@ -71,6 +72,7 @@ def test_the_pairing_functions_are_robot_independent():
      'safety config "sim_safety_split" is a sim config; the real robot never runs one'),
 ])
 def test_pairing_one_rule(robot, safety, controller, sim, expected):
+    """One rule decides every robot: in the pairs, the paired controller, the right platform."""
     refusal = pairing_refusal(robot, controller, safety, sim=sim)
     if expected is None:
         assert refusal is None
@@ -80,6 +82,7 @@ def test_pairing_one_rule(robot, safety, controller, sim, expected):
 
 @pytest.mark.parametrize('robot', known_robots())
 def test_pairs_run_together_by_name_or_path(robot):
+    """Every pair runs together by name, with .yaml or as a path, with sim known or not."""
     for safety, controller in pairs_of(robot).items():
         sim = safety.startswith('sim')
         for known in (None, sim):
@@ -95,6 +98,7 @@ def test_pairs_run_together_by_name_or_path(robot):
 
 @pytest.mark.parametrize('robot', known_robots())
 def test_mismatched_controllers_are_refused(robot):
+    """A controller config other than the paired one is refused, naming both."""
     pairs = pairs_of(robot)
     for safety, paired in pairs.items():
         for controller in set(pairs.values()) | {'custom', 'debug'}:
@@ -108,11 +112,13 @@ def test_mismatched_controllers_are_refused(robot):
 
 @pytest.mark.parametrize('robot', known_robots())
 def test_default_controller_config_of_an_unpaired_safety_config_raises(robot):
+    """An unpaired safety config has no default controller config."""
     with pytest.raises(ValueError, match='"custom" is not one of'):
         default_controller_config(robot, 'custom')
 
 
 def test_unknown_robot_raises():
+    """An unknown robot is refused."""
     with pytest.raises(ValueError, match="unknown robot 'h1'"):
         pairing_refusal('h1', 'safety_split', 'relax_safety_split')
     with pytest.raises(ValueError, match="unknown robot 'h1'"):
@@ -120,7 +126,7 @@ def test_unknown_robot_raises():
 
 
 def safety_config(robot, name):
-    '''golem_safety's config name of robot, as its YAML'''
+    """Return golem_safety's config name of robot, as its YAML."""
     from ament_index_python.packages import get_package_share_directory
     import yaml
     share = Path(get_package_share_directory('golem_safety'))
@@ -129,6 +135,7 @@ def safety_config(robot, name):
 
 @pytest.mark.parametrize('robot', known_robots())
 def test_paired_configs_agree_on_the_topics(robot):
+    """Each pair's controller writes an input its safety config reads, and the gate its output."""
     from golem_upper_ik.config import SAFETY_OUTPUT_TOPIC, load_controller_config
     for safety, controller in pairs_of(robot).items():
         topics = safety_config(robot, safety)['topics']
@@ -143,9 +150,27 @@ def test_paired_configs_agree_on_the_topics(robot):
 
 @pytest.mark.parametrize('robot', known_robots())
 def test_paired_safety_configs_do_not_clip_the_gains(robot):
+    """No pair's safety config clips its controller config's kp or kd."""
     from golem_upper_ik.config import load_controller_config
     for safety, controller in pairs_of(robot).items():
         clip = safety_config(robot, safety)['limits']['clip']
         gains = load_controller_config(robot, controller)['gains']
         assert np.all(gains['kp'] <= clip['kp_max']), (safety, controller)
         assert np.all(gains['kd'] <= clip['kd_max']), (safety, controller)
+
+
+@pytest.mark.parametrize('robot', known_robots())
+def test_example_pairing_yaml_loads_as_a_pairing_yaml(monkeypatch, tmp_path, robot):
+    """Each robot's example.pairing.yaml loads as pairing.yaml, each pair resolving."""
+    import shutil
+    from golem_upper_ik import pairing
+    import yaml
+    example = Path(__file__).resolve().parents[1] / 'config' / robot / 'example.pairing.yaml'
+    path = tmp_path / 'config' / robot / 'pairing.yaml'
+    path.parent.mkdir(parents=True)
+    shutil.copy(example, path)
+    monkeypatch.setattr(pairing, 'get_package_share_directory', lambda package: str(tmp_path))
+    pairs = yaml.safe_load(example.read_text())['pairs']
+    assert pairs
+    for safety, controller in pairs.items():
+        assert pairing.default_controller_config(robot, safety) == controller

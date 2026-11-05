@@ -1,22 +1,22 @@
-'''
-The controller's closed loop over ROS on domain 92, on both robots, against kinematic fake
-robots in this process, each controller sharing the session's robot model.
+"""Check the controller's closed loop over ROS on domain 92, on both robots.
 
-A FollowingRobot executes every command at once and relays it on golem_safety's output, as
-an engaged golem_safety would: the start-up, the held joints' hold, an end-effector target,
-the zero-gain shutdown, and a start-up move cut short by controller.startup_move_timeout.
-Without /lowstate the controller commands nothing and stops with an error. With nothing
-relaying its commands, they stay near the swaying robot, and the start-up stops with an
-error at controller.startup_timeout, well before controller.startup_move_timeout.
+The robots are kinematic fakes in this process, each controller sharing the session's robot
+model. A FollowingRobot executes every command at once and relays it on golem_safety's
+output, as an engaged golem_safety would: the start-up, the held joints' hold, an
+end-effector target, the zero-gain shutdown, and a start-up move cut short by
+controller.startup_move_timeout. Without /lowstate the controller commands nothing and
+stops with an error. With nothing relaying its commands, they stay near the swaying robot,
+and the start-up stops with an error at controller.startup_timeout, well before
+controller.startup_move_timeout.
 
 The others sit behind golem_safety's safety_node, run as a subprocess (RelayedRobot). The
 controller waits for /lowstate and, unless follow_tolerance turns the gate off, never
 commands far from the measured pose before and at engagement, until golem_safety's zero
-stream gives way to the upper input, on both robots with no leg input; when the relay starts
-late, the start-up moves still finish, though the start-up outlasts
+stream gives way to the upper input, on both robots with no leg input; when the relay
+starts late, the start-up moves still finish, though the start-up outlasts
 controller.startup_move_timeout. Once engaged, the controller holds against a push instead
 of following it.
-'''
+"""
 import re
 import threading
 import time
@@ -53,6 +53,7 @@ PUSH = {
 
 
 def config_of(robot, name, **controller):
+    """Return robot's controller config name with controller keys replaced."""
     from golem_upper_ik.config import load_controller_config
     config = load_controller_config(robot, name)
     config['controller'].update(controller)
@@ -60,6 +61,7 @@ def config_of(robot, name, **controller):
 
 
 def build(ros, model, config, init=True):
+    """Return a FrameController built (with init, its start-up run) on a new node."""
     from golem_upper_ik.core.controller.frame_controller import FrameController
     controller = FrameController(ros.node('controller'), model.profile, config,
                                  robot_model=model, init=init)
@@ -68,14 +70,15 @@ def build(ros, model, config, init=True):
 
 
 def build_in_thread(ros, model, config):
-    '''
-    Start building a controller (init=True) in a thread; the thread and its result dict. At
-    the test's end the build is waited for and the controller shut down
-    '''
+    """Start building a controller (init=True) in a thread; return the thread and its result.
+
+    At the test's end the build is waited for and the controller shut down.
+    """
     built = {}
     node = ros.node('controller')
 
     def run():
+        """Build the controller, keeping it or the error."""
         from golem_upper_ik.core.controller.frame_controller import FrameController
         try:
             built['controller'] = FrameController(node, model.profile, config,
@@ -85,6 +88,7 @@ def build_in_thread(ros, model, config):
     builder = threading.Thread(target=run, daemon=True)
 
     def close():
+        """Wait for the build, then shut the controller down."""
         builder.join(45.0)
         if 'controller' in built:
             built['controller'].shutdown()
@@ -94,12 +98,13 @@ def build_in_thread(ros, model, config):
 
 
 def watch_gate_opening(monkeypatch):
-    '''The time of each golem_safety output sample that opens a follow gate'''
+    """Return the times of the golem_safety output samples that open a follow gate."""
     from golem_upper_ik.core import low_cmd_handler
     opened = []
     relays_commands = low_cmd_handler.relays_commands
 
     def relays_and_note(*args):
+        """Call relays_commands, noting the time when it says relayed."""
         relays = relays_commands(*args)
         if relays:
             opened.append(time.monotonic())
@@ -109,12 +114,13 @@ def watch_gate_opening(monkeypatch):
 
 
 def watch_startup(monkeypatch):
-    '''The start-up routine's start and end times, and an event set once it starts'''
+    """Return the start-up routine's start and end times, and an event set once it starts."""
     from golem_upper_ik.core.controller.upper_controller import UpperController
     times = {'started': threading.Event()}
     startup_routine = UpperController._startup_routine
 
     def startup_and_time(self, *args, **kwargs):
+        """Run the start-up routine, noting when it starts and ends."""
         times['start'] = time.monotonic()
         times['started'].set()
         try:
@@ -126,7 +132,7 @@ def watch_startup(monkeypatch):
 
 
 def final_pose(profile, config):
-    '''The upper-slot q the start-up ends at: the last start-up posture, the hold targets'''
+    """Return the upper-slot q the start-up ends at: its last posture, the hold targets."""
     targets = config['controller']['hold_targets']
     q = body_pose(profile, profile.startup_sequence[-1],
                   [targets[joint] for joint in profile.held_joints])
@@ -134,21 +140,22 @@ def final_pose(profile, config):
 
 
 def settles(robot, upper_q, tolerance=0.01, timeout=5.0):
-    '''True once the robot's upper-slot q is within tolerance of upper_q'''
+    """Return True once the robot's upper-slot q is within tolerance of upper_q."""
     upper = list(robot.profile.upper_slots)
     return wait_for(lambda: np.max(np.abs(robot.measured()[upper] - upper_q)) < tolerance,
                     timeout, period=0.02)
 
 
 def ee_position(controller, side):
+    """Return an end effector's position (0 left, 1 right) in the pelvis frame, m."""
     return controller.ee_transformations()[side][:3, 3].copy()
 
 
 def push_and_check_the_hold(controller, robot, recorders):
-    '''
-    Once engaged, push held and arm joints well past the follow tolerance: every command
-    stays where it was, and the joints move by the push and no further
-    '''
+    """Check that an engaged hold resists a push past the follow tolerance.
+
+    Every command stays where it was, and the joints move by the push and no further.
+    """
     profile = robot.profile
     upper = list(profile.upper_slots)
     push = np.zeros(len(profile.body_joints))
@@ -157,8 +164,7 @@ def push_and_check_the_hold(controller, robot, recorders):
     held = controller.low_cmd_handler.q_cmd[upper].astype(np.float64)
     # the held joints hold their targets themselves (as float32 on the wire)
     held_in_upper = [upper.index(slot) for slot in slots_of(profile, profile.held_joints)]
-    np.testing.assert_allclose(held[held_in_upper], controller.low_cmd_handler.hold_targets,
-                               atol=1e-6)
+    np.testing.assert_allclose(held[held_in_upper], controller.hold_targets, atol=1e-6)
     # every recorder has caught up with the held command
     assert wait_for(lambda: all(np.array_equal(r.samples[-1].q, held) for r in recorders), 2.0)
     start = time.monotonic()
@@ -180,6 +186,7 @@ def push_and_check_the_hold(controller, robot, recorders):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_startup_home_ee_target_and_zero_gain_shutdown(ros, models, robot):
+    """The start-up ends at its pose, a 5 cm target is reached, and shutdown goes zero-gain."""
     profile = profile_of(robot)
     config = config_of(robot, CONFIGS[robot])
     upper = list(profile.upper_slots)
@@ -234,15 +241,18 @@ def test_startup_home_ee_target_and_zero_gain_shutdown(ros, models, robot):
 
 @pytest.mark.parametrize('raising', ['handler', 'planner'])
 def test_shutdown_stops_the_planner_and_detaches_the_state_whatever_raises(raising):
-    '''
-    A command handler or planner whose shutdown raises leaves nothing behind: the planner
-    subprocess is still stopped and the state source detached, and the error propagates
-    '''
+    """A handler or planner whose shutdown raises still leaves nothing behind.
+
+    The planner subprocess is still stopped and the state source detached, and the error
+    propagates.
+    """
     from golem_upper_ik.core.controller.upper_controller import UpperController
     calls = []
 
     def part(name):
+        """Return a part whose shutdown is noted, raising for the part under test."""
         def shutdown():
+            """Note the call; raise for the part under test."""
             calls.append(name)
             if name == raising:
                 raise RuntimeError(f'the {name} failed')
@@ -259,6 +269,7 @@ def test_shutdown_stops_the_planner_and_detaches_the_state_whatever_raises(raisi
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_no_lowstate_means_no_command_and_a_clear_error(ros, models, robot):
+    """Without /lowstate nothing is commanded, and the start-up stops with a clear error."""
     profile = profile_of(robot)
     config = config_of(robot, CONFIGS[robot], state_timeout=0.5)
     recorder = CommandRecorder(ros, config['topics']['low_cmd'], profile)
@@ -274,6 +285,7 @@ def test_no_lowstate_means_no_command_and_a_clear_error(ros, models, robot):
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_startup_stops_with_an_error_when_the_safety_layer_never_engages(
         ros, models, robot, monkeypatch):
+    """Unrelayed, commands stay near the robot and the start-up stops at startup_timeout."""
     from golem_upper_ik.core.low_cmd_handler import LowCmdHandler
     from golem_upper_ik.core.robot_model import RobotModel
     # the publisher stops before the state source goes: the robot model's all-zero rest
@@ -281,6 +293,7 @@ def test_startup_stops_with_an_error_when_the_safety_layer_never_engages(
     order = []
     for cls, name in ((LowCmdHandler, 'publisher'), (RobotModel, 'state')):
         def shutdown_and_note(self, _shutdown=cls.shutdown, _name=name):
+            """Note the shutdown, then run it."""
             order.append(_name)
             _shutdown(self)
         monkeypatch.setattr(cls, 'shutdown', shutdown_and_note)
@@ -304,7 +317,8 @@ def test_startup_stops_with_an_error_when_the_safety_layer_never_engages(
     # golem_safety engages each input on its own: no cause waits for another input
     message = str(raised.value)
     assert 'engage gate' not in message and 'walking node' not in message, message
-    # its limit checks run from boot, so the latch may be this start-up's, not only an earlier run's
+    # its limit checks run from boot, so the latch may be this start-up's, not only an
+    # earlier run's
     assert 'at this start-up' in message and 'or in an earlier run' in message, message
     time.sleep(0.3)
     assert 2.0 <= startup['end'] - startup['start'] < 3.0
@@ -318,6 +332,7 @@ def test_startup_stops_with_an_error_when_the_safety_layer_never_engages(
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_startup_move_stops_with_an_error_after_its_own_timeout(ros, models, robot):
+    """A start-up move longer than startup_move_timeout stops mid-move, then silence."""
     profile = profile_of(robot)
     upper = list(profile.upper_slots)
     # relayed at once, so the gate opens at the first command. The G1 moves its elbows 1.25
@@ -345,6 +360,7 @@ def test_startup_move_stops_with_an_error_after_its_own_timeout(ros, models, rob
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_every_command_holds_the_hold_targets_while_the_held_joints_sag(ros, models, robot):
+    """Every command holds the hold targets, goal after goal, though the held joint sags."""
     profile = profile_of(robot)
     config = config_of(robot, CONFIGS[robot])
     upper = list(profile.upper_slots)
@@ -381,6 +397,7 @@ def test_every_command_holds_the_hold_targets_while_the_held_joints_sag(ros, mod
     ids=['h12-gate', 'h12-no_gate', 'g1-gate', 'g1-no_gate'])
 def test_waits_for_state_and_tracks_the_robot_through_engagement(
         ros, models, robot, follow_tolerance, monkeypatch, tmp_path):
+    """Behind safety_node, commands wait for /lowstate and stay near the robot as it engages."""
     profile = profile_of(robot)
     controller_config, safety_config = SPLIT[robot]
     config = config_of(robot, controller_config, follow_tolerance=follow_tolerance)
@@ -447,6 +464,7 @@ def test_waits_for_state_and_tracks_the_robot_through_engagement(
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_split_mode_engages_then_holds_against_a_push(ros, models, robot, monkeypatch,
                                                       tmp_path):
+    """In split mode safety_node engages the arms alone, and the hold resists a push."""
     profile = profile_of(robot)
     controller_config, safety_config = SPLIT[robot]
     config = config_of(robot, controller_config)
@@ -485,6 +503,7 @@ def test_split_mode_engages_then_holds_against_a_push(ros, models, robot, monkey
 
 
 def test_start_up_steps_sleep_a_whole_period_after_their_work(ros, models, monkeypatch):
+    """Each start-up step sleeps a whole control period after its work."""
     from golem_upper_ik.core.controller.upper_controller import UpperController
     from golem_upper_ik.core.low_cmd_handler import LowCmdHandler
     profile = profile_of('g1')
@@ -494,6 +513,7 @@ def test_start_up_steps_sleep_a_whole_period_after_their_work(ros, models, monke
     for cls, name, kind in ((UpperController, 'goto_reduced_configuration', 'posture'),
                             (LowCmdHandler, 'set_hold', 'hold')):
         def slow(self, *args, _call=getattr(cls, name), _kind=kind, **kwargs):
+            """Note the step's time, add 10 ms of work, then step."""
             steps[_kind].append(time.monotonic())
             time.sleep(0.01)
             return _call(self, *args, **kwargs)
@@ -519,6 +539,7 @@ def test_start_up_steps_sleep_a_whole_period_after_their_work(ros, models, monke
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_relay_starting_late_still_gets_the_whole_start_up_move(ros, models, robot,
                                                                monkeypatch, tmp_path):
+    """A relay starting late still gets the whole start-up move budget, counted from engagement."""
     profile = profile_of(robot)
     controller_config, safety_config = LATE[robot]
     q0 = np.zeros(len(profile.body_joints))

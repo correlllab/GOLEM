@@ -1,3 +1,4 @@
+"""Check that rclpy holds a 500 Hz LowCmd publish rate beside IK-sized load (the probe tool)."""
 import json
 import os
 import subprocess
@@ -8,6 +9,7 @@ PROBE = Path(__file__).resolve().parents[1] / 'tools' / 'publish_rate_probe.py'
 
 
 def test_lowcmd_publish_holds_500hz():
+    """rclpy holds 500 Hz beside a 30 Hz IK load: p99 period <= 4 ms, no gap over 20 ms."""
     env = dict(os.environ, ROS_DOMAIN_ID='92')
     done = subprocess.run(
         [sys.executable, str(PROBE), '--rate', '500', '--seconds', '10'],

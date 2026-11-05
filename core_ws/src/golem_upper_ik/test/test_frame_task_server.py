@@ -1,17 +1,16 @@
-'''
-frame_task_server and joint_state_publisher on domain 92.
+"""Check frame_task_server and joint_state_publisher on domain 92, and the launch files.
 
 In this process, frame_task_server against a robot that executes and relays its commands
 (FollowingRobot), sharing the session's robot model: relative and slow-mode frame goals,
 slow-mode named configurations, the fresh-state wait, the stale-state abort, planned goals
-and planning turned off, the goal start from the last command, the hold pinned at a
-limit, and execute_path's pacing.
+and planning turned off, the goal start from the last command, the hold pinned at a limit,
+and execute_path's pacing.
 
 Then the installed console scripts as processes: joint_state_publisher's /joint_states,
-the parameters both nodes refuse, frame_task_server's shutdown on SIGINT, and its command
+the parameters both nodes refuse, frame_task_server's shutdown on a signal, and its command
 rate with the IK running, measured from another process. Last, the package's launch files:
 upper_ik.launch.py's pairing check and controller, and robot_state.launch.py's state nodes.
-'''
+"""
 import json
 import os
 from pathlib import Path
@@ -41,15 +40,13 @@ RATE_TOOL = Path(__file__).resolve().parents[1] / 'tools' / 'frame_task_server_r
 
 
 def config_of(robot, name):
+    """Return robot's controller config name."""
     from golem_upper_ik.config import load_controller_config
     return load_controller_config(robot, name)
 
 
 def edited_config(tmp_path, robot, name, planner=None, **controller):
-    '''
-    A copy of the installed config with controller keys (and the planner keys of planner)
-    replaced, under tmp_path/<robot>/
-    '''
+    """Return a copy of the installed config, keys replaced, written under tmp_path/<robot>/."""
     from ament_index_python.packages import get_package_share_directory
     share = Path(get_package_share_directory('golem_upper_ik'))
     raw = yaml.safe_load((share / 'config' / robot / f'{name}.yaml').read_text())
@@ -62,7 +59,7 @@ def edited_config(tmp_path, robot, name, planner=None, **controller):
 
 
 def server_of(ros, model, config, init=False):
-    '''A started frame_task_server in this process: model's robot, config a name or a path'''
+    """Return a started frame_task_server in this process on model's robot and config."""
     from rclpy.parameter import Parameter
     from golem_upper_ik.ros2.frame_task_server import FrameTaskServer
     server = FrameTaskServer(
@@ -76,33 +73,40 @@ def server_of(ros, model, config, init=False):
 
 
 class Log:
-    '''What this process has written to stderr, where the nodes' loggers write'''
+    """Read what this process has written to stderr, where the nodes' loggers write."""
 
     def __init__(self, capfd):
+        """Read through capfd."""
         self._capfd = capfd
         self._text = ''
 
     def lines(self, text):
+        """Return the stderr lines so far that contain text."""
         self._text += self._capfd.readouterr().err
         return [line for line in self._text.splitlines() if text in line]
 
 
 class PoseRecorder:
+    """Record every pose message on a topic."""
     def __init__(self, ros, topic, msg_type=PoseStamped):
+        """Subscribe to topic for msg_type."""
         self.node = ros.node('pose_recorder')
         self.poses = []
         self.node.create_subscription(msg_type, topic, self.poses.append, 10)
 
     def position(self):
+        """Return the newest pose's position, m."""
         pose = self.poses[-1].pose
         return np.array([pose.position.x, pose.position.y, pose.position.z])
 
     def quaternion(self):
+        """Return the newest pose's orientation (w, x, y, z)."""
         q = self.poses[-1].pose.orientation
         return np.array([q.w, q.x, q.y, q.z])
 
 
 def offset_pose(x=0.0):
+    """Return a pose x m forward with no rotation."""
     pose = Pose()
     pose.position.x = x
     pose.orientation.w = 1.0
@@ -110,6 +114,7 @@ def offset_pose(x=0.0):
 
 
 def frame_goal(frame, target, relative=False, slow_mode=False, plan=False, duration=0.0):
+    """Return a FrameTask goal for one frame."""
     from custom_ros_messages.action import FrameTask
     goal = FrameTask.Goal()
     goal.frame_names = [frame]
@@ -123,6 +128,7 @@ def frame_goal(frame, target, relative=False, slow_mode=False, plan=False, durat
 
 
 def named_goal(name, slow_mode=False, plan=False):
+    """Return a NamedConfig goal."""
     from custom_ros_messages.action import NamedConfig
     goal = NamedConfig.Goal()
     goal.config_name = name
@@ -132,11 +138,12 @@ def named_goal(name, slow_mode=False, plan=False):
 
 
 def ik_slots(profile):
+    """Return the body slots of the IK joints."""
     return slots_of(profile, profile.enabled_joints)
 
 
 def ee_speeds(model, samples, frame_index, ctrl_hz):
-    '''The commanded end-effector speed of each control step, m/s, from the commands'''
+    """Return the commanded end-effector speed of each control step, m/s, from the commands."""
     profile = model.profile
     upper = list(profile.upper_slots)
     arm = [upper.index(slot) for slot in ik_slots(profile)]
@@ -151,7 +158,7 @@ def ee_speeds(model, samples, frame_index, ctrl_hz):
 
 
 def joint_speeds(profile, samples, ctrl_hz):
-    '''The commanded IK-joint speed of each control step, rad/s, the largest over the joints'''
+    """Return the largest commanded IK-joint speed of each control step, rad/s."""
     upper = list(profile.upper_slots)
     arm = [upper.index(slot) for slot in ik_slots(profile)]
     steps = [samples[0].q[arm]]
@@ -163,6 +170,7 @@ def joint_speeds(profile, samples, ctrl_hz):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_relative_frame_goal(ros, models, robot):
+    """A relative frame goal moves the end effector 5 cm forward, keeping its orientation."""
     from custom_ros_messages.action import FrameTask
     profile = profile_of(robot)
     config = config_of(robot, CONFIGS[robot])
@@ -184,7 +192,7 @@ def test_relative_frame_goal(ros, models, robot):
 
 
 def _rotation(axis, angle):
-    '''The 3x3 rotation by angle (rad) about the axis x, y or z'''
+    """Return the 3x3 rotation by angle (rad) about the axis x, y or z."""
     c, s = np.cos(angle), np.sin(angle)
     i, j = {'x': (1, 2), 'y': (2, 0), 'z': (0, 1)}[axis]
     rotation = np.eye(3)
@@ -193,6 +201,7 @@ def _rotation(axis, angle):
 
 
 def _quaternion_wxyz(rotation):
+    """Return a rotation matrix as a quaternion (w, x, y, z)."""
     import pinocchio as pin
     q = pin.Quaternion(rotation)
     return np.array([q.w, q.x, q.y, q.z])
@@ -208,11 +217,13 @@ IMU_ORIENTATIONS = {
 
 
 def _matrix(stamped):
+    """Return a PoseStamped's pose as a 4x4 transformation."""
     from golem_upper_ik.ros2.utility import pose_to_matrix
     return pose_to_matrix(stamped.pose)
 
 
 def _offset(position=(0.0, 0.0, 0.0), rotation=np.eye(3)):
+    """Return a Pose of a translation (m) and a rotation."""
     from golem_upper_ik.ros2.utility import matrix_to_pose
     offset = np.eye(4)
     offset[:3, :3] = rotation
@@ -223,12 +234,12 @@ def _offset(position=(0.0, 0.0, 0.0), rotation=np.eye(3)):
 @pytest.mark.parametrize('imu', IMU_ORIENTATIONS)
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_relative_frame_goal_is_a_pelvis_frame_move(ros, models, robot, imu):
-    '''
-    A relative target is resolved in the pelvis frame whatever the IMU says: its position
-    is the frame's measured pelvis-frame position (/left_ee_pose) plus the offset, its
-    orientation the offset's rotation (pelvis axes) times the frame's measured one; and
-    /frame_poses reports the measured pose in the pelvis frame too
-    '''
+    """A relative target resolves in the pelvis frame whatever the IMU says.
+
+    Its position is the frame's measured pelvis-frame position (/left_ee_pose) plus the offset,
+    its orientation the offset's rotation (pelvis axes) times the frame's measured one; and
+    /frame_poses reports the measured pose in the pelvis frame too.
+    """
     from custom_ros_messages.action import FrameTask
     profile = profile_of(robot)
     config = config_of(robot, CONFIGS[robot])
@@ -273,12 +284,12 @@ def test_relative_frame_goal_is_a_pelvis_frame_move(ros, models, robot, imu):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_slow_mode_scales_speed(ros, models, robot, tmp_path):
-    '''
-    slow_mode scales each IK step's joint velocity by SLOW_MODE_SCALE, after the speed limits.
-    With the carried configs' limits a move's speed is set by the IK's own acceleration limit
+    """slow_mode scales each IK step's joint velocity by SLOW_MODE_SCALE, after the limits.
+
+    With the installed configs' limits a move's speed is set by the IK's own acceleration limit
     and damping, not by v_lim, and a slow move steps through more of that speed curve than a
-    full-speed one; so here v_lim is low enough to bind, and the two moves' peaks compare
-    '''
+    full-speed one; so here v_lim is low enough to bind, and the two moves' peaks compare.
+    """
     from custom_ros_messages.action import FrameTask
     from golem_upper_ik.ros2.frame_task_server import SLOW_MODE_SCALE
     assert SLOW_MODE_SCALE == 0.25
@@ -322,6 +333,7 @@ def test_slow_mode_scales_speed(ros, models, robot, tmp_path):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_named_config_slow_mode(ros, models, robot):
+    """A slow-mode named config moves at a quarter of the joint speed limit and is reached."""
     from custom_ros_messages.action import NamedConfig
     from golem_upper_ik.ros2.frame_task_server import SLOW_MODE_SCALE
     profile = profile_of(robot)
@@ -351,6 +363,7 @@ def test_named_config_slow_mode(ros, models, robot):
 
 
 def test_startup_waits_for_fresh_state(ros, models, tmp_path):
+    """Without /lowstate the server stops at state_timeout, commanding and publishing nothing."""
     profile = profile_of('h12')
     config = edited_config(tmp_path, 'h12', CONFIGS['h12'], state_timeout=0.5)
     recorder = CommandRecorder(ros, '/safety/lowcmd_upper_in', profile)
@@ -369,6 +382,7 @@ def test_startup_waits_for_fresh_state(ros, models, tmp_path):
 
 
 def test_stale_state_aborts_goal(ros, models, monkeypatch, capfd):
+    """On domain 0, /lowstate going stale aborts a goal, and the last command holds."""
     from custom_ros_messages.action import FrameTask
     from golem_upper_ik.core.controller import upper_controller
     profile = profile_of('h12')
@@ -388,6 +402,7 @@ def test_stale_state_aborts_goal(ros, models, monkeypatch, capfd):
     stop_at = []
 
     def stop_state_mid_goal():
+        """Stop /lowstate 1 s into the goal."""
         time.sleep(1.0)
         stop_at.append(time.monotonic())
         robot_.stop_state()
@@ -409,6 +424,7 @@ def test_stale_state_aborts_goal(ros, models, monkeypatch, capfd):
 
 
 def test_stale_state_does_not_abort_a_goal_off_the_real_robots_domain(ros, models, capfd):
+    """Off domain 0 the staleness check is off: a goal runs to its timeout."""
     from custom_ros_messages.action import FrameTask
     profile = profile_of('h12')
     robot_ = FollowingRobot(ros, profile, body_pose(profile, START['h12']), '/lowcmd')
@@ -431,6 +447,7 @@ def test_stale_state_does_not_abort_a_goal_off_the_real_robots_domain(ros, model
 
 
 def test_frame_task_target_never_raises_while_tasks_are_added(ros, models):
+    """frame_task_target never raises while another thread replaces the tasks."""
     from golem_upper_ik.core.controller.frame_controller import FrameController
     profile = profile_of('g1')
     config = config_of('g1', CONFIGS['g1'])
@@ -447,6 +464,7 @@ def test_frame_task_target_never_raises_while_tasks_are_added(ros, models):
     done = threading.Event()
 
     def read():
+        """Read the target in a tight loop, keeping any error."""
         while not done.is_set():
             try:
                 controller.frame_task_target(f'{frame}_task')
@@ -474,6 +492,7 @@ def test_frame_task_target_never_raises_while_tasks_are_added(ros, models):
 
 
 def test_unknown_frame_is_refused_and_the_poses_keep_going(ros, models, capfd):
+    """A goal naming an unknown frame is refused, and the poses keep going out."""
     from custom_ros_messages.action import FrameTask
     from rclpy.action import ActionClient
     profile = profile_of('h12')
@@ -504,11 +523,11 @@ def test_unknown_frame_is_refused_and_the_poses_keep_going(ros, models, capfd):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_planned_goals(ros, models, robot):
-    '''
-    Planned named configurations out to another posture and back, then a planned frame goal.
+    """Planned named configs out and back, then a planned frame goal, are reached.
+
     The G1 goes out to t_pose; the H1-2, whose t_pose is past its planner frames' y limit, to
-    arms_front_45
-    '''
+    arms_front_45.
+    """
     from custom_ros_messages.action import FrameTask, NamedConfig
     profile = profile_of(robot)
     config = config_of(robot, CONFIGS[robot])
@@ -534,7 +553,7 @@ def test_planned_goals(ros, models, robot):
 
 
 def test_planning_turned_off(ros, models, capfd, tmp_path):
-    '''planner.enabled: false refuses every planned goal before any IK solve'''
+    """planner.enabled: false refuses every planned goal before any IK solve."""
     from custom_ros_messages.action import FrameTask, NamedConfig
     profile = profile_of('g1')
     config_path = edited_config(tmp_path, 'g1', CONFIGS['g1'], planner={'enabled': False})
@@ -565,6 +584,7 @@ def test_planning_turned_off(ros, models, capfd, tmp_path):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_goals_start_from_the_last_command(ros, models, robot):
+    """A goal starts from the last command within the gap, past it from the measured pose."""
     profile = profile_of(robot)
     arms = ik_slots(profile)
     # the left elbow sits 0.05 rad below every command (a gravity sag inside the 0.1 rad
@@ -600,6 +620,7 @@ def test_goals_start_from_the_last_command(ros, models, robot):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_hold_pinned_at_a_limit_is_not_converged(ros, models, robot):
+    """A hold pinned at a position clip limit is not converged, naming the joint."""
     profile = profile_of(robot)
     config = config_of(robot, CONFIGS[robot])
     # the G1's configs carry no integral gain; the hold's I-term needs one
@@ -630,6 +651,7 @@ def test_hold_pinned_at_a_limit_is_not_converged(ros, models, robot):
 
 
 def test_execute_path_waits_for_the_follow_gate(ros, models):
+    """execute_path is refused while nothing relays the commands."""
     from golem_upper_ik.core.controller.frame_controller import FrameController
     profile = profile_of('h12')
     config = config_of('h12', CONFIGS['h12'])
@@ -647,6 +669,7 @@ def test_execute_path_waits_for_the_follow_gate(ros, models):
 
 
 def test_execute_path_paces_at_dt_minus_work(ros, models, monkeypatch):
+    """A path plays back at the control period, the checks' time inside it."""
     profile = profile_of('h12')
     config = config_of('h12', CONFIGS['h12'])
     model = shared_model(ros, models, 'h12')
@@ -662,6 +685,7 @@ def test_execute_path_paces_at_dt_minus_work(ros, models, monkeypatch):
     check = model.check_collision_free_reduced
 
     def slow_check(q_reduced):
+        """Check collisions after 10 ms of work."""
         time.sleep(0.01)
         return check(q_reduced)
     monkeypatch.setattr(model, 'check_collision_free_reduced', slow_check)
@@ -674,19 +698,19 @@ def test_execute_path_paces_at_dt_minus_work(ros, models, monkeypatch):
                                atol=1e-6)
 
 
-# the installed console scripts as processes
-
 def executable(name):
+    """Return the installed console script name."""
     from ament_index_python.packages import get_package_prefix
     return str(Path(get_package_prefix('golem_upper_ik')) / 'lib' / 'golem_upper_ik' / name)
 
 
 def node_env():
+    """Return the environment for a node process on the test domain."""
     return dict(os.environ, ROS_DOMAIN_ID=str(TEST_DOMAIN), RCUTILS_COLORIZED_OUTPUT='0')
 
 
 def run_node(name, *params, timeout=30.0):
-    '''Run a console script with -p params until it exits: (exit code, output)'''
+    """Run a console script with -p params until it exits; return (exit code, output)."""
     args = [executable(name), '--ros-args']
     for param in params:
         args += ['-p', param]
@@ -696,7 +720,9 @@ def run_node(name, *params, timeout=30.0):
 
 
 class NodeProcess:
+    """Run an installed console script as a process, collecting its output."""
     def __init__(self, name, *params):
+        """Start the script name with -p params."""
         args = [executable(name), '--ros-args']
         for param in params:
             args += ['-p', param]
@@ -706,22 +732,26 @@ class NodeProcess:
         threading.Thread(target=self._read, daemon=True).start()
 
     def _read(self):
+        """Collect the output lines."""
         for line in self.proc.stdout:
             self.lines.append(line.rstrip('\n'))
 
     def output(self):
+        """Return the output so far."""
         return '\n'.join(self.lines)
 
     def interrupt(self, signals=(signal.SIGINT,), timeout=15.0):
-        '''Send signals one after another; the exit code'''
+        """Send signals one after another; return the exit code."""
         for signum in signals:
             self.proc.send_signal(signum)
         return self.proc.wait(timeout=timeout)
 
     def wait(self, timeout):
+        """Wait for the exit; return the code."""
         return self.proc.wait(timeout=timeout)
 
     def kill(self):
+        """Kill the process if it still runs."""
         if self.proc.poll() is None:
             self.proc.kill()
             self.proc.wait(timeout=5.0)
@@ -729,6 +759,7 @@ class NodeProcess:
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_joint_state_publisher(ros, robot):
+    """joint_state_publisher publishes the body joints' /lowstate positions at 100 Hz."""
     from sensor_msgs.msg import JointState
     profile = profile_of(robot)
     fake = FakeRobot(ros, profile)
@@ -767,6 +798,7 @@ def test_joint_state_publisher(ros, robot):
      ['robot h12', 'no_such_config']),
 ])
 def test_nodes_refuse_bad_parameters(name, params, words):
+    """Both nodes exit non-zero, saying why, on a missing robot or a bad config."""
     code, output = run_node(name, *params)
     assert code != 0, output
     for word in words:
@@ -774,10 +806,7 @@ def test_nodes_refuse_bad_parameters(name, params, words):
 
 
 def assert_zero_gain_last(robot, profile, before):
-    '''
-    The robot's last command arrived before `before` and turns the IK joints off; the G1's
-    held joints (its waist) stay at their hold on /lowcmd
-    '''
+    """Check the last command came before `before`, the IK joints off and the G1's waist held."""
     received, last = robot.last_command
     assert received < before
     held = slots_of(profile, profile.held_joints)
@@ -793,6 +822,7 @@ def assert_zero_gain_last(robot, profile, before):
     (signal.SIGINT,), (signal.SIGTERM,), (signal.SIGINT, signal.SIGINT),
     (signal.SIGTERM, signal.SIGINT)], ids=['SIGINT', 'SIGTERM', 'SIGINT-twice', 'SIGTERM-SIGINT'])
 def test_frame_task_server_shuts_down_with_zero_gains_on_a_signal(ros, signals):
+    """On SIGINT or SIGTERM, once or twice, the server exits 0 after its zero-gain command."""
     profile = profile_of('g1')
     robot_ = FollowingRobot(ros, profile, body_pose(profile, 'home'), '/lowcmd')
     left = PoseRecorder(ros, '/left_ee_pose')
@@ -815,6 +845,7 @@ def test_frame_task_server_shuts_down_with_zero_gains_on_a_signal(ros, signals):
 def test_frame_task_server_start_up_failure_exits_1_after_a_zero_gain_command(ros, tmp_path):
     # /lowstate comes, but nothing relays the commands: the start-up stops at its 2 s
     # startup_timeout after it has begun publishing
+    """A start-up never relayed exits 1 after the zero-gain command."""
     profile = profile_of('g1')
     config_path = edited_config(tmp_path, 'g1', CONFIGS['g1'], startup_timeout=2.0)
     robot_ = RelayedRobot(ros, profile, body_pose(profile, 'home'), '/lowcmd')
@@ -835,9 +866,10 @@ def test_frame_task_server_start_up_failure_exits_1_after_a_zero_gain_command(ro
 
 
 class FollowingCommands:
-    '''Every command on /safety/lowcmd_upper_in: their count and the last, with its time'''
+    """Count the commands on /safety/lowcmd_upper_in and keep the last, with its time."""
 
     def __init__(self, ros, profile):
+        """Subscribe, keeping every sample."""
         from unitree_hg.msg import LowCmd
         from ros_harness import RECORD_QOS
         self.node = ros.node('commands')
@@ -847,6 +879,7 @@ class FollowingCommands:
                                       RECORD_QOS)
 
     def _on_command(self, msg):
+        """Count msg and keep it as the last."""
         self.count += 1
         self.last_command = (time.monotonic(), msg)
 
@@ -858,12 +891,12 @@ MAX_THREADS_NAMED_AS_PROCESS = 16
 
 
 def test_frame_task_server_rate():
-    '''
-    The H1-2's commands through its start-up and its goals, received in another process: at
-    500 Hz, with at most 3 gaps over 20 ms and none over 50 ms. The 99th percentile of the
-    period is printed, not bounded: the IK, rclpy's handling of /lowstate at 500 Hz and the
-    100 Hz pose topics share the GIL with the publisher thread. BLAS runs one thread
-    '''
+    """The H1-2's commands reach another process at 500 Hz through its start-up and goals.
+
+    At most 3 gaps over 20 ms and none over 50 ms. The 99th percentile of the period is
+    printed, not bounded: the IK, rclpy's handling of /lowstate at 500 Hz and the 100 Hz pose
+    topics share the GIL with the publisher thread. BLAS runs one thread.
+    """
     env = dict(os.environ, ROS_DOMAIN_ID=str(TEST_DOMAIN))
     done = subprocess.run([sys.executable, str(RATE_TOOL), '--robot', 'h12', '--seconds', '6'],
                           env=env, capture_output=True, text=True, timeout=180)
@@ -882,6 +915,7 @@ def test_frame_task_server_rate():
 
 
 def _launch_description(launch_file):
+    """Return the installed launch file's LaunchDescription."""
     import importlib.util
     from ament_index_python.packages import get_package_share_directory
     path = Path(get_package_share_directory('golem_upper_ik')) / 'launch' / launch_file
@@ -892,10 +926,11 @@ def _launch_description(launch_file):
 
 
 def _launched(launch_file, **args):
-    '''
-    The declared argument names of launch_file, and [(delay, Node)] it starts with args: its
-    entities run in order, as ros2 launch runs them, so a refusal raises before any node
-    '''
+    """Return launch_file's declared argument names, its [(delay, Node)] and the context.
+
+    Its entities run in order with args, as ros2 launch runs them, so a refusal raises before
+    any node.
+    """
     from launch import LaunchContext
     from launch.actions import DeclareLaunchArgument, TimerAction
     from launch_ros.actions import Node
@@ -905,6 +940,7 @@ def _launched(launch_file, **args):
     started = []
 
     def walk(entities, delay):
+        """Collect the Nodes among entities, adding timer periods to their delay."""
         for entity in entities:
             if isinstance(entity, Node):
                 started.append((delay, entity))
@@ -920,6 +956,7 @@ def _launched(launch_file, **args):
 
 
 def _parameters(node, context):
+    """Return a launched Node's parameters, evaluated in context."""
     from launch_ros.utilities import evaluate_parameters
     parameters = {}
     for params in evaluate_parameters(context, node._Node__parameters):
@@ -928,6 +965,7 @@ def _parameters(node, context):
 
 
 def test_upper_ik_launch_starts_only_frame_task_server():
+    """upper_ik.launch.py checks the pairing, then starts frame_task_server after start_delay."""
     from launch.actions import DeclareLaunchArgument, OpaqueFunction
     declared, started, context = _launched(
         'upper_ik.launch.py', robot='h12', config='sim_safety_split',
@@ -956,6 +994,7 @@ def test_upper_ik_launch_starts_only_frame_task_server():
      'safety config "full" is not one of the G1 pairs'),
 ])
 def test_upper_ik_launch_refuses_a_pairing(args, reason):
+    """upper_ik.launch.py refuses a bad pairing before any node starts."""
     import re
     with pytest.raises(RuntimeError, match='^upper_ik: not starting: ' + re.escape(reason)):
         _launched('upper_ik.launch.py', **args)
@@ -963,6 +1002,7 @@ def test_upper_ik_launch_refuses_a_pairing(args, reason):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_robot_state_launch_starts_both_state_nodes(robot):
+    """robot_state.launch.py starts both state nodes, on the robot's ROS URDF by default."""
     from golem_ros2_models.paths import urdf_path
     declared, started, context = _launched('robot_state.launch.py', robot=robot,
                                            use_sim_time='true')
@@ -983,6 +1023,7 @@ def test_robot_state_launch_starts_both_state_nodes(robot):
 
 
 def test_robot_state_launch_reads_urdf_file(tmp_path):
+    """robot_state.launch.py publishes urdf_file when given."""
     urdf = tmp_path / 'robot.urdf'
     urdf.write_text('<robot name="test"/>')
     _, started, context = _launched('robot_state.launch.py', robot='h12', urdf_file=str(urdf))

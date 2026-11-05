@@ -1,16 +1,16 @@
-'''
-LowCmdHandler: the controller's command, kept for every body joint and published on the
-profile's upper slots to golem_safety's input (topics.low_cmd) by a CommandPublisher.
+"""Keep the controller's command and publish it to golem_safety's upper-body input.
+
+LowCmdHandler keeps a command for every body joint and publishes its upper slots to
+topics.low_cmd through a CommandPublisher.
 
 - Clipping: every q, dq and tau is clipped to the controller config's limits.clip, the q
   again after the follow gate, so every published q is within the clip limits.
 - Held joints (profile.held_joints: the H1-2's torso, the G1's waist): every command carries
   their hold angles, never the q the controller passes for them. start() sets the hold at the
-  measured angles; it moves only through set_hold(), and controller.hold_targets is where the
-  controller's start-up moves it.
+  given or measured angles; it moves only through set_hold().
 - Follow gate (FollowGate, controller.follow_tolerance): until golem_safety is seen relaying
-  the commands on /lowcmd, every upper-body command stays within the tolerance of
-  the measured joints, and the hold restarts from the command the gate let through. Between
+  the commands on /lowcmd, every upper-body command stays within the tolerance of the
+  measured joints, and the hold restarts from the command the gate let through. Between
   control steps a thread re-checks at frequency.check_hz: it opens the gate on a relayed
   sample and keeps the stored command near a drifting pose. Once open, the gate and its
   thread are gone for good. The measured joints are the robot model's state source; without
@@ -20,9 +20,8 @@ profile's upper slots to golem_safety's input (topics.low_cmd) by a CommandPubli
   changes nothing here.
 - shutdown() sends one last command and stops publishing: the IK joints mode 0 with zero
   gains and torque, and the held joints the same, except where the profile keeps them
-  (shutdown_keeps_held_joints, the G1): there they keep their hold angle, gains
-  and torque.
-'''
+  (shutdown_keeps_held_joints, the G1): there they keep their hold angle, gains and torque.
+"""
 import math
 import threading
 import time
@@ -39,14 +38,18 @@ __all__ = ['LowCmdHandler']
 
 
 class LowCmdHandler:
+    """Clip, gate, hold and publish the controller's upper-body command (module doc)."""
+
     def __init__(self, node, profile: RobotProfile, config: dict, robot_model):
-        '''
-        node: the ROS node the publisher and the safety-output subscriber live on
-        profile: the robot's profile
-        config: its controller config (golem_upper_ik.config.load_controller_config)
+        """Create the publisher (and, with the gate on, the /lowcmd reader); publish nothing yet.
+
+        node: the ROS node the publisher and the safety-output subscriber live on.
+        profile: the robot's profile.
+        config: its controller config (golem_upper_ik.config.load_controller_config).
         robot_model: the RobotModel whose state source gives the measured state, which the
-            follow gate and start() read
-        '''
+            follow gate and start() read.
+        ValueError if the config or the model is for another robot.
+        """
         for what, robot in (('controller config', config['robot']),
                             ('robot model', robot_model.profile.robot)):
             if robot != profile.robot:
@@ -65,16 +68,14 @@ class LowCmdHandler:
         self._dq_clip_limits = np.array(limits['dq_clip_limits'], dtype=np.float64)
         self._tau_clip_limits = np.array(limits['tau_clip_limits'], dtype=np.float64)
 
-        # the command of every body joint; only the upper slots are published
+        # the command of every body joint (float32, as on the wire); only the upper slots
+        # are published
         self._q = np.zeros(count, dtype=np.float32)
         self._dq = np.zeros(count, dtype=np.float32)
         self._tau = np.zeros(count, dtype=np.float32)
         self._kp = np.array(config['gains']['kp'], dtype=np.float32)
         self._kd = np.array(config['gains']['kd'], dtype=np.float32)
-        targets = config['controller']['hold_targets']
-        self._hold_targets = np.array([targets[joint] for joint in profile.held_joints],
-                                      dtype=np.float64)
-        self._hold = np.zeros(len(self._held))  # start() sets it to the measured angles
+        self._hold = np.zeros(len(self._held))  # rad; start() sets it
 
         self._shutdown_keeps_held = profile.shutdown_keeps_held_joints
         self._follow_gate = FollowGate(profile.upper_slots,
@@ -97,46 +98,44 @@ class LowCmdHandler:
 
     @property
     def q_cmd(self) -> np.ndarray:
-        '''The commanded q of every body joint (float32, rad); the upper slots are sent'''
+        """Return the commanded q of every body joint (float32, rad); the upper slots are sent."""
         with self._data_lock:
             return self._q.copy()
 
     @property
     def hold(self) -> np.ndarray:
-        '''The held joints' hold angles, rad, in profile.held_joints order'''
+        """Return the held joints' hold angles, rad, in profile.held_joints order."""
         with self._data_lock:
             return self._hold.copy()
 
     @property
-    def hold_targets(self) -> np.ndarray:
-        '''controller.hold_targets, rad, in profile.held_joints order'''
-        return self._hold_targets.copy()
-
-    @property
     def following(self) -> bool:
-        '''False while the follow gate holds the commands near the measured pose'''
+        """Return False while the follow gate holds the commands near the measured pose."""
         return self._follow_gate.following
 
     def _clip_q(self, q, joint_ids=None):
+        """Return q clipped to the position clip limits of every body joint, or of joint_ids."""
         limits = self._q_clip_limits
         if joint_ids is not None:
             limits = limits[joint_ids]
         return np.clip(q, limits[:, 0], limits[:, 1])
 
     def _clip_dq(self, dq, joint_ids=None):
+        """Return dq clipped to the velocity clip limits of every body joint, or of joint_ids."""
         limits = self._dq_clip_limits
         if joint_ids is not None:
             limits = limits[joint_ids]
         return np.clip(dq, -limits, limits)
 
     def _clip_tau(self, tau, joint_ids=None):
+        """Return tau clipped to the torque clip limits of every body joint, or of joint_ids."""
         limits = self._tau_clip_limits
         if joint_ids is not None:
             limits = limits[joint_ids]
         return np.clip(tau, -limits, limits)
 
     def _values(self, name, values, count):
-        '''values as count finite float64 numbers; ValueError otherwise'''
+        """Return values broadcast to count finite float64 numbers; ValueError otherwise."""
         try:
             values = np.broadcast_to(np.asarray(values, dtype=np.float64), (count,))
         except ValueError:
@@ -147,6 +146,7 @@ class LowCmdHandler:
         return values
 
     def _check_running(self):
+        """Raise RuntimeError before start(), after shutdown() or once the gate check failed."""
         if self._shut_down:
             raise RuntimeError('the command handler is shut down')
         if not self._started:
@@ -155,11 +155,12 @@ class LowCmdHandler:
             raise RuntimeError(f'the follow gate check failed: {self._gate_error!r}')
 
     def _measured_q(self):
-        '''
-        The measured q, from the robot model's state source. StaleStateError without a
-        source, or before its first sample: RobotModel then reports the all-zero rest pose,
-        and gating toward it would pull every command toward q = 0
-        '''
+        """Return the measured q from the robot model's state source.
+
+        SAFETY: StaleStateError without a source, or before its first sample: RobotModel then
+        reports the all-zero rest pose, and gating toward it would pull every command toward
+        q = 0.
+        """
         source = self._robot_model.state_subscriber
         if source is None:
             raise StaleStateError('no measured state: the robot model has no state source')
@@ -168,16 +169,18 @@ class LowCmdHandler:
         return np.asarray(source.state['q'], dtype=np.float64)
 
     def _push_locked(self):
+        """Hand the upper slots of the stored command to the publisher (data lock held)."""
         upper = self._upper
         self._publisher.set(self._q[upper], self._dq[upper], self._tau[upper],
                             self._kp[upper], self._kd[upper])
 
     def _commit_locked(self, q, dq, tau, measured_q):
-        '''
-        Store and publish q, dq and tau (float64, every body joint, the held joints at their
-        hold). While the follow gate is shut, q is first held near measured_q, clipped again,
-        and the hold restarts from the result; nothing is stored if it is not finite
-        '''
+        """Store and publish q, dq and tau (data lock held).
+
+        Each is float64 over every body joint, the held joints at their hold. While the
+        follow gate is shut, q is first held near measured_q and clipped again, and the hold
+        restarts from the result; ValueError, storing nothing, if that q is not finite.
+        """
         gated = measured_q is not None and not self._follow_gate.following
         if gated:
             q = self._clip_q(self._follow_gate.limit(q, measured_q))
@@ -192,13 +195,13 @@ class LowCmdHandler:
         self._push_locked()
 
     def start(self, q_init=None, tau=None):
-        '''
-        Command q_init (default: the measured q) with dq 0 and tau (default 0), the hold at
-        q_init's held joints, and start publishing. While the follow gate is shut, q_init is
-        held near the measured pose like any command, so the measured pose is needed:
-        StaleStateError without one. ValueError if q_init is not finite. Either way nothing
-        is published
-        '''
+        """Command q_init (default: measured q) with dq 0 and tau (default 0), and publish.
+
+        The hold starts at q_init's held joints. While the follow gate is shut, q_init is held
+        near the measured pose like any command, so the measured pose is needed:
+        StaleStateError without one, ValueError if q_init is not finite; either way nothing is
+        published. RuntimeError on a second call or after shutdown().
+        """
         with self._data_lock:
             if self._shut_down or self._started:
                 raise RuntimeError('the command handler starts once')
@@ -225,13 +228,13 @@ class LowCmdHandler:
                            dq: Optional[np.ndarray] = None,
                            tau: Optional[np.ndarray] = None,
                            joint_ids: Optional[List[int]] = None):
-        '''
-        Set the command of every body joint, or of joint_ids, atomically: clipped, the held
-        joints at their hold, and, while the follow gate is shut and q is given, held near
-        the measured pose. A q for a held joint named in joint_ids, or a non-finite value,
-        raises ValueError and changes nothing; without a measured pose to gate a q against,
-        StaleStateError
-        '''
+        """Set the command of every body joint, or of joint_ids, atomically.
+
+        The values are clipped, the held joints stay at their hold, and, while the follow
+        gate is shut and q is given, q is held near the measured pose. A q for a held joint
+        named in joint_ids, or a non-finite value, raises ValueError and changes nothing;
+        without a measured pose to gate a q against, StaleStateError.
+        """
         self._check_running()
         if joint_ids is not None:
             joint_ids = np.asarray(joint_ids, dtype=np.int64).reshape(-1)
@@ -261,10 +264,10 @@ class LowCmdHandler:
             self._commit_locked(new_q, new_dq, new_tau, measured_q)
 
     def set_hold(self, q_held):
-        '''
-        Hold the held joints at q_held (rad, profile.held_joints order), clipped, from this
-        command on; while the follow gate is shut, near the measured pose
-        '''
+        """Hold the held joints at q_held (rad, profile.held_joints order), clipped, from now.
+
+        While the follow gate is shut, the hold is held near the measured pose.
+        """
         self._check_running()
         q_held = self._values('hold', q_held, len(self._held))
         measured_q = None if self.following else self._measured_q()
@@ -277,10 +280,12 @@ class LowCmdHandler:
                                 self._tau.astype(np.float64), measured_q)
 
     def _check_follow_gate(self):
-        '''
-        Until the gate opens: open it on a new relayed sample, otherwise keep the stored
-        command within tolerance of the measured pose; then stop reading the safety output
-        '''
+        """Run the gate thread: open on a relayed sample, else keep the command near the pose.
+
+        Runs at frequency.check_hz until the gate opens (then stops reading the safety output)
+        or shutdown(). An error ends it, leaving the last command standing; the commanding
+        calls raise it from then on.
+        """
         relayed = None
         try:
             while not self._gate_stop.is_set():
@@ -301,9 +306,7 @@ class LowCmdHandler:
                             self._q[:] = gated
                             self._push_locked()
                 time.sleep(max(0.0, self._check_dt - (time.monotonic() - start)))
-        except Exception as error:
-            # nothing is written after an error: the last command stands, and
-            # set_joint_commands raises the error from now on
+        except Exception as error:  # reported by _check_running and logged
             self._gate_error = error
             self._node.get_logger().error(f'the follow gate check failed: {error!r}')
             return
@@ -311,7 +314,7 @@ class LowCmdHandler:
             self._close_safety_output()
 
     def _open_if_relayed(self, msg):
-        '''Open the follow gate if msg, a safety output sample, relays the commands'''
+        """Open the follow gate if msg, a /lowcmd sample, relays the stored command."""
         motors = msg.motor_cmd
         count = self._count
         sample_q = np.fromiter((motors[i].q for i in range(count)), np.float64, count)
@@ -327,22 +330,22 @@ class LowCmdHandler:
             'the follow gate is open')
 
     def _close_safety_output(self):
-        '''Stop reading the safety layer's output (never with the data lock held)'''
+        """Stop reading the safety layer's output; never call it with the data lock held."""
         with self._safety_output_lock:
             subscriber, self._safety_output = self._safety_output, None
         if subscriber is not None:
             subscriber.shutdown()
 
     def shutdown(self):
-        '''
-        Send the IK joints mode 0 with zero gains and torque (q and dq as they were), and the
-        held joints the same unless the profile keeps them (shutdown_keeps_held_joints), where
-        their command stands; make sure that command went out, and stop publishing.
+        """Send the shutdown command once, make sure it went out, and stop publishing.
 
-        Call it before the robot model's state source is detached (RobotModel.shutdown()):
-        while the follow gate is shut, a detached source stops the gate's check with an error
-        rather than gating toward the model's all-zero rest pose
-        '''
+        SAFETY: the IK joints get mode 0 with zero gains and torque (q and dq as they were),
+        and the held joints the same unless the profile keeps them
+        (shutdown_keeps_held_joints), where their command stands. Call it before the robot
+        model's state source is detached (RobotModel.shutdown()): while the follow gate is
+        shut, a detached source stops the gate's check with an error rather than gating toward
+        the model's all-zero rest pose. Later calls do nothing.
+        """
         with self._data_lock:
             if self._shut_down:
                 return

@@ -1,0 +1,140 @@
+# Every key of a controller config, with its meaning, units and allowed values; loaded by
+# golem_upper_ik.config.load_controller_config, which refuses an unknown key. This file
+# documents the schema: setup.py does not install it, and test_config.py checks that it
+# loads and holds every key. The values are the loader's defaults where it has one.
+# Every section is optional but gains.
+
+# Topics, ROS names (/x, never the DDS spelling rt/x).
+topics:
+  # golem_safety input the controller publishes its upper-slot commands to; must start with
+  # /safety/ (SAFETY: golem_safety is the only writer of /lowcmd). /safety/lowcmd_upper_in
+  # is the upper-body input of a split safety config, /safety/lowcmd_in the full-body one
+  low_cmd: /safety/lowcmd_upper_in
+  # the robot's measured state, read for every control step and the follow gate
+  low_state: /lowstate
+
+controller:
+  # m/s, > 0: each arm's end-effector linear speed limit on direct (IK-stepped) moves
+  v_lim: 1.0
+  # rad/s, > 0: each arm's end-effector angular speed limit on direct moves
+  w_lim: 2.0
+  # rad/s, > 0: IK joint speed limit on direct moves; the start-up moves the held joints at
+  # the smaller of this and 0.3 rad/s
+  dq_lim: 1.0
+  # m, >= 0: distance the IK's self-collision barrier keeps between sphere pairs
+  d_min: 0.02
+  # s, > 0: how long a goal without a duration runs; also each IK seed's time limit when a
+  # planned frame goal solves for its target
+  timeout: 10.0
+  # rad/s, > 0: a direct goal's IK has converged once no IK joint moves faster than this in
+  # a step; the goal then holds the command (integral control)
+  threshold_ik: 0.001
+  # rad, > 0: a named-config goal is reached once every IK joint is within this
+  threshold_joint: 0.01
+  # m, > 0: a frame goal is reached once every frame is within this of its target...
+  threshold_linear: 0.002
+  # rad, > 0: ...and its orientation within this
+  threshold_angular: 0.01
+  # s, > 0: how long the start-up waits for a fresh /lowstate before it stops, commanding
+  # nothing
+  state_timeout: 5.0
+  # s, > 0: how long the start-up waits for golem_safety to relay the commands (the follow
+  # gate opening) before it sends the shutdown command and stops
+  startup_timeout: 30.0
+  # s, > 0: time for the start-up moves, counted from the follow gate opening
+  startup_move_timeout: 30.0
+  # rad, >= 0: SAFETY: until golem_safety relays the commands, every upper-body command
+  # stays within this of its measured joint (the follow gate); 0 turns the gate off
+  follow_tolerance: 0.05
+  # {held joint: rad}: the angles every command holds the held joints at, and the start-up
+  # moves them to; a held joint left out is 0, a joint that is not held is refused
+  hold_targets:
+    waist_yaw_joint: 0.0
+    waist_roll_joint: 0.0
+    waist_pitch_joint: 0.0
+  # the URDF frame of /lowstate's IMU, from which the pelvis orientation is recovered for
+  # gravity compensation and the end-effector speed limits; default the robot's imu_frame
+  # (robot.yaml)
+  imu_frame: imu_in_pelvis
+  # ms: on the real robots' ROS domain (0) a goal stops (StaleStateError, the last command
+  # holding) once /lowstate is staler than this (its tick lag or its age); <= 0 turns the
+  # check off; default the robot's config_defaults (robot.yaml)
+  max_state_lag_ms: 0.0
+
+# The OMPL planner, for goals with plan: true. It runs only where the robot's profile has a
+# self-collision model; the defaults are PlannerConfig's
+# (golem_upper_ik.core.planner.reduced_joint_planner).
+planner:
+  # true or false: false refuses every planned goal
+  enabled: true
+  # an OMPL geometric planner ReducedJointPlanner._make_planner accepts (case-insensitive)
+  planner: RRTConnect
+  # s, > 0: OMPL's planning time
+  timeout: 1.0
+  # rad, >= 0: the planner's extension length in joint space; 0 lets OMPL choose
+  range: 0.0
+  # true or false: try the straight joint-space path first, and plan only if it is invalid
+  try_direct: true
+  # true or false: simplify an OMPL path (for simplify_time)
+  simplify: true
+  # s, >= 0: OMPL's simplification time
+  simplify_time: 1.0
+  # true or false: with simplify, also shortcut the path and smooth it with a B-spline
+  shortcut: true
+  # m/s, > 0: planner-frame speed that times a path (its longest frame path at this speed)
+  moving_speed: 0.25
+  # s, > 0: time between path waypoints; default the control period (1 / frequency.ctrl_hz)
+  dt: 0.02
+  # whole numbers >= 2 and >= min: the fewest and most waypoints in a path
+  min_interpolation_steps: 2
+  max_interpolation_steps: 300
+  # > 0: OMPL's state validity checking resolution, a fraction of the joint space's extent
+  validity_resolution: 0.0025
+  # whole number >= 1: workspace-bound checks per path segment between waypoints
+  constraint_check_steps: 10
+  # [left, right]: the frames bounded by the frame_* limits and timed by moving_speed;
+  # default the robot's planner_frames (robot.yaml)
+  frame_names: [left_hand_palm_link, right_hand_palm_link]
+  # m in the pelvis frame, or null for no bound: the planner frames' workspace
+  frame_x_max: 0.50
+  frame_y_min: null
+  frame_y_max: null
+  frame_z_min: null
+  frame_z_max: 0.50
+  # m, >= 0: how far a frame may pass a bound above
+  frame_limit_margin: 0.001
+  # m, >= 0: a plan also keeps each frame above the lower of its start and goal heights,
+  # less this
+  frame_z_corridor_margin: 0.05
+  # rad, >= 0: a start joint past its limit by up to this is clamped into it; further, the
+  # plan fails
+  start_limit_tolerance: 0.05
+
+frequency:
+  # Hz, > 0: control steps (IK steps, holds) per second
+  ctrl_hz: 50.0
+  # Hz, > 0: command messages per second to topics.low_cmd
+  pub_hz: 500.0
+  # Hz, > 0: the follow gate's checks per second between control steps
+  check_hz: 1000.0
+
+# Required: kp, kd and ki on the upper slots, each a number (every upper slot) or a list of
+# one value per upper slot in slot order (17 for this robot); the legs get 0.
+gains:
+  kp: 60.0  # N*m/rad
+  kd: 1.5  # N*m*s/rad
+  # N*m/(rad*s): the steady-state hold's integral gain on the position error
+  ki: 0.0
+
+limits:
+  # The clip applied to every command before it is published. Each value is a number
+  # (every body slot), a list over the body slots or a list over the upper slots (the legs
+  # then 0); each >= 0. golem_safety clips again with its own config.
+  clip:
+    # rad: q within [low + this, high - this] of the robot's position limits
+    position_offset: 0.001
+    # |dq| at most this times the robot's velocity limit
+    velocity_ratio: 0.10
+    # |tau| at most this times the robot's torque limit; it also bounds the hold's
+    # integral torque
+    torque_ratio: 0.25

@@ -1,0 +1,9 @@
+# The format of pairing.yaml, read by golem_upper_ik.pairing: one key, pairs, mapping each
+# golem_safety config name (its config/<robot>/ file name without .yaml) to the one
+# controller config name (a file of this directory) that may run with it. A config named
+# sim* is a sim config: the pairing refuses it on the real robot, and a real config in the
+# sim. This file documents the format: setup.py does not install it, and test_pairing.py
+# checks that it loads as a pairing.yaml would.
+pairs:
+  relax_safety_split: safety_split
+  sim_safety_split: sim_safety_split

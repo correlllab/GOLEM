@@ -1,11 +1,11 @@
-'''
-Robot profiles: load_profile(robot) gives everything robot-specific the controller needs.
+"""Load each robot's profile: everything robot-specific the controller needs.
 
-The joint table (names in slot order, limits, slot ranges, mode_machine) is golem_safety's
-share/golem_safety/robots/<robot>.yaml, the one copy both packages read. The rest (frames, held
-and IK joints, named configurations, controller-config defaults) is golem_upper_ik's
-share/golem_upper_ik/config/<robot>/robot.yaml, and the model files are golem_ros2_models'.
-'''
+The joint table (names in slot order, limits, upper slots, mode_machine) is golem_safety's
+share/golem_safety/robots/<robot>.yaml, the one copy both packages read. The rest (frames,
+held and IK joints, named configurations, controller-config defaults) is this package's
+share/golem_upper_ik/config/<robot>/robot.yaml (its keys: config/<robot>/example.robot.yaml),
+and the model files are golem_ros2_models'.
+"""
 from collections.abc import Mapping
 from dataclasses import dataclass
 import os
@@ -18,7 +18,7 @@ import yaml
 
 __all__ = ['RobotProfile', 'known_robots', 'load_profile', 'robot_config']
 
-# the keys of a robot.yaml: every one is required, and no others are allowed
+# robot.yaml must hold exactly these keys
 ROBOT_CONFIG_KEYS = (
     'display_name', 'enabled_joints', 'held_joints', 'shutdown_keeps_held_joints', 'ee_frames',
     'planner_frames', 'imu_frame', 'named_configs', 'startup_sequence', 'config_defaults',
@@ -29,39 +29,46 @@ ROBOT_CONFIG_KEYS = (
 # eq=False: compared and hashed by identity, since an array field has no truth value
 @dataclass(frozen=True, eq=False)
 class RobotProfile:
+    """Hold one robot's joint table, model files, frames and named configurations.
+
+    The joint arrays (q_low, q_high in rad; dq_max in rad/s; tau_max in N*m) hold one
+    read-only value per body joint in /lowcmd slot order. named_configs maps each name to a
+    read-only array over enabled_joints, rad.
+    """
+
     robot: str
     mode_machine: int  # the value /lowstate reports and every command carries
     mode_pr: int
-    body_joints: tuple[str, ...]  # in LowCmd slot order
-    # per body joint, slot order (read-only): position limits in rad, velocity limits in
-    # rad/s, torque limits in N*m
+    body_joints: tuple[str, ...]  # in /lowcmd slot order
     q_low: np.ndarray
     q_high: np.ndarray
     dq_max: np.ndarray
     tau_max: np.ndarray
     upper_slots: range
-    urdf_path: str  # for Pinocchio: relative mesh paths
+    urdf_path: str  # the Pinocchio URDF, whose mesh paths are relative to it
     collision: tuple[str, str] | None  # (sphere URDF, SRDF); None: no self-collision model
     ee_frames: tuple[str, str]  # (left, right)
     planner_frames: tuple[str, str]  # (left, right)
     imu_frame: str
     held_joints: tuple[str, ...]  # upper-body joints the IK does not solve for
-    # true: the controller's shutdown command keeps the held joints at their hold, gains and
-    # torque; false: it turns them off with the IK joints
+    # SAFETY: true keeps the held joints at their hold, gains and torque in the controller's
+    # shutdown command (a walking policy may balance on them); false turns them off with the
+    # IK joints
     shutdown_keeps_held_joints: bool
     enabled_joints: tuple[str, ...]  # joints the IK solves for, the named configs' order
-    # read-only: name -> read-only array over enabled_joints, rad
     named_configs: Mapping[str, np.ndarray]
     startup_sequence: tuple[str, ...]  # named configs the controller moves through at start
 
 
 def _read_only(values) -> np.ndarray:
+    """Return values as a read-only float64 array."""
     array = np.array(values, dtype=np.float64)
     array.flags.writeable = False
     return array
 
 
 def _robot_data(robot: str) -> dict:
+    """Return golem_safety's robots/<robot>.yaml; ValueError if it names another robot."""
     path = os.path.join(get_package_share_directory('golem_safety'), 'robots', f'{robot}.yaml')
     with open(path, encoding='utf-8') as handle:
         data = yaml.safe_load(handle)
@@ -71,10 +78,11 @@ def _robot_data(robot: str) -> dict:
 
 
 def known_robots() -> tuple[str, ...]:
-    '''
-    The robots with data in both packages, sorted: golem_safety's robots/<robot>.yaml and
-    golem_upper_ik's config/<robot>/robot.yaml
-    '''
+    """Return the robots with data in both packages, sorted.
+
+    A robot is known when golem_safety has robots/<robot>.yaml and this package has
+    config/<robot>/robot.yaml.
+    """
     safety = os.path.join(get_package_share_directory('golem_safety'), 'robots')
     upper = os.path.join(get_package_share_directory('golem_upper_ik'), 'config')
     names = (name[:-5] for name in os.listdir(safety) if name.endswith('.yaml'))
@@ -83,10 +91,12 @@ def known_robots() -> tuple[str, ...]:
 
 
 def _unknown_robot(robot: str) -> ValueError:
+    """Return the error for a robot that is not one of known_robots()."""
     return ValueError(f"unknown robot '{robot}': one of {', '.join(known_robots())}")
 
 
 def _strings(where: str, key: str, value, count: int | None = None) -> list[str]:
+    """Return value if it is a list (of count, when given) of non-empty names."""
     ok = (isinstance(value, list) and all(isinstance(item, str) and item for item in value)
           and (count is None or len(value) == count))
     if not ok:
@@ -96,17 +106,18 @@ def _strings(where: str, key: str, value, count: int | None = None) -> list[str]
 
 
 def _number(where: str, key: str, value) -> float:
+    """Return value if it is an int or float (not a bool)."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{where}: '{key}' must be a number, not {value!r}")
     return value
 
 
 def robot_config(robot: str) -> dict:
-    '''
-    The checked data of config/<robot>/robot.yaml (the keys of ROBOT_CONFIG_KEYS). ValueError
-    for an unknown robot, and for a missing or unknown key or a value of the wrong type,
-    naming the robot and the key
-    '''
+    """Return the checked data of config/<robot>/robot.yaml, keyed by ROBOT_CONFIG_KEYS.
+
+    Raises ValueError, naming the robot and the key, for an unknown robot, a missing or
+    unknown key, or a value of the wrong type.
+    """
     if robot not in known_robots():
         raise _unknown_robot(robot)
     path = os.path.join(get_package_share_directory('golem_upper_ik'), 'config', robot,
@@ -160,7 +171,7 @@ def robot_config(robot: str) -> dict:
 
 
 def load_profile(robot: str) -> RobotProfile:
-    '''The profile of robot, one of known_robots(); ValueError for any other name'''
+    """Return the profile of robot, one of known_robots(); ValueError for any other name."""
     config = robot_config(robot)
     data = _robot_data(robot)
     joints = sorted(data['joints'], key=lambda joint: joint['slot'])
@@ -175,8 +186,8 @@ def load_profile(robot: str) -> RobotProfile:
     upper_joints = tuple(body_joints[slot] for slot in upper_slots)
     held_joints = tuple(config['held_joints'])
     enabled_joints = tuple(config['enabled_joints'])
-    # the controller drives the upper slots and nothing else: each upper joint is either
-    # solved by the IK or held
+    # SAFETY: the controller drives the upper slots and nothing else, so each upper joint is
+    # either solved by the IK or held, never left uncommanded
     if sorted(held_joints + enabled_joints) != sorted(upper_joints):
         raise ValueError(
             f'robot {robot}: the held joints {held_joints} and IK joints {enabled_joints} '

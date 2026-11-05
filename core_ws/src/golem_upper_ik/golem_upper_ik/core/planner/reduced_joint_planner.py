@@ -1,26 +1,33 @@
-'''
-ReducedJointPlanner: OMPL planning in the reduced (IK-joint) space of a RobotModel.
+"""Plan in the reduced (IK-joint) space of a RobotModel with OMPL: ReducedJointPlanner.
 
 A path is valid when every joint is within its limits, the self-collision model reports no
-collision, and the planner frames stay within the configured workspace bounds. The
-planner needs a self-collision model; see PlannerClient for a robot without one.
-'''
+collision, and the planner frames stay within the configured workspace bounds. The planner
+needs a self-collision model; PlannerClient refuses requests for a robot without one.
+"""
 import numpy as np
 from ompl import base as ob
 from ompl import geometric as og
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-# two arms of seven IK joints each, left first
+# two arms of seven IK joints each, left first: an arm whose start and goal differ by less
+# than _ARM_MOVE_TOL (rad) on every joint is pinned when the caller gives no active mask
 _ARM_REDUCED_NQ = 14
 _ARM_MOVE_TOL = 2e-2
+# a sparse path is resampled to this many points before its frame path length is measured
 _LENGTH_ESTIMATE_STEPS = 50
-# approximate grasp radius (m) for converting a planner frame's rotation to swept arc length
+# m: the grasp radius that turns a planner frame's rotation into swept arc length
 _FRAME_ROTATION_RADIUS = 0.20
 
 
 @dataclass
 class PlannerConfig:
-    '''Configuration for reduced joint-space planning'''
+    """Hold the planner's settings (the controller config's planner section).
+
+    Units: timeout, simplify_time and dt in s; range, validity_resolution and
+    start_limit_tolerance in rad (joint space); moving_speed in m/s; the frame_* bounds and
+    margins in m, in the pelvis frame, None for no bound.
+    config/<robot>/example.controller.yaml in the source tree describes each key.
+    """
 
     planner: str = 'RRTConnect'
     timeout: float = 1.0
@@ -45,42 +52,40 @@ class PlannerConfig:
     frame_z_max: float = 0.50
     frame_limit_margin: float = 1e-3
     frame_z_corridor_margin: float = 0.05
-    # the start config is the robot's measured pose, which can sit marginally
-    # past a joint limit; clamp overshoots up to this (rad) into limits instead
-    # of aborting the plan. Larger overshoots still fail (genuinely bad pose).
+    # the start is the robot's measured pose, which can sit marginally past a joint limit;
+    # an overshoot up to this is clamped into the limits, a larger one fails the plan
     start_limit_tolerance: float = 0.05
 
 
 @dataclass
 class PlanResult:
-    '''Result returned by reduced joint-space planning'''
+    """Hold a plan's outcome: success, the (N, IK joints) path, and why."""
 
     success: bool
     path: np.ndarray
     reason: str = ''
-    planning_time: float = 0.0
-    planner_name: str = ''
-    metadata: dict = field(default_factory=dict)
 
 
 class ReducedJointPlanner:
+    """Plan valid paths between reduced (IK-joint) configurations with OMPL."""
+
     def __init__(self, robot_model, config: PlannerConfig = None):
+        """Build the OMPL problem once for robot_model; ValueError for a bad model or config."""
         self.robot_model = robot_model
         self.config = config if config is not None else PlannerConfig()
         self._check_robot_model_ready()
         self._check_planner_config()
 
         self.nq = int(self.robot_model.model_body_reduced.nq)
-        self.validity_checks = 0
         self.frame_names = tuple(self.config.frame_names)
         self.frame_min_z = self._make_frame_floor_map(self.config.frame_z_min)
         self.frame_max_z = self._make_frame_floor_map(self.config.frame_z_max)
         self.corridor_min_z = {}
-        # active joint mask and pinned values for inactive joints
+        # the joints that may move, and where the others are pinned
         self.active_mask = np.ones(self.nq, dtype=bool)
         self.pinned_q = np.zeros(self.nq)
 
-        # build OMPL problem objects once; plan() only resets start/goal
+        # the OMPL problem is built once; plan() only resets the start and goal
         self.space = self._make_space()
         self.ss = og.SimpleSetup(self.space)
         self.si = self.ss.getSpaceInformation()
@@ -91,12 +96,14 @@ class ReducedJointPlanner:
         self.ss.setPlanner(self._make_planner())
 
     def _check_robot_model_ready(self):
+        """Raise ValueError unless the model has a reduced and a self-collision model."""
         if getattr(self.robot_model, 'model_body_reduced', None) is None:
             raise ValueError('RobotModel reduced model is not initialized')
         if not self.robot_model.has_collision:
             raise ValueError('RobotModel collision model is not initialized')
 
     def _check_planner_config(self):
+        """Raise ValueError for a config the planner cannot run with."""
         if self.config.frame_names is None:
             raise ValueError('Planner frame_names must be given')
         if self.config.moving_speed <= 0.0:
@@ -127,7 +134,7 @@ class ReducedJointPlanner:
             raise ValueError('Planner frame_y_min must not exceed frame_y_max')
 
     def _make_space(self):
-        # copy Pinocchio reduced joint limits into an OMPL real-vector space
+        """Return an OMPL real-vector space bounded by the reduced model's joint limits."""
         self.model_lower = np.asarray(
             self.robot_model.model_body_reduced.lowerPositionLimit,
             dtype=float,
@@ -153,6 +160,7 @@ class ReducedJointPlanner:
         return space
 
     def _make_bounds(self, lower, upper):
+        """Return OMPL bounds from per-joint lower and upper arrays."""
         bounds = ob.RealVectorBounds(self.nq)
         for idx in range(self.nq):
             bounds.setLow(idx, float(lower[idx]))
@@ -160,16 +168,15 @@ class ReducedJointPlanner:
         return bounds
 
     def _apply_active_bounds(self):
-        '''Collapse OMPL bounds of inactive joints to their pinned value'''
+        """Collapse the OMPL bounds of the inactive joints to their pinned values."""
         lower = np.copy(self.model_lower)
         upper = np.copy(self.model_upper)
-        # pin inactive joints to a tiny window around their start value
         lower[~self.active_mask] = self.pinned_q[~self.active_mask]
         upper[~self.active_mask] = self.pinned_q[~self.active_mask]
         self.space.setBounds(self._make_bounds(lower, upper))
 
     def _project_inactive(self, q):
-        '''Force inactive joints to their pinned start values'''
+        """Return q with the inactive joints at their pinned start values."""
         if np.all(self.active_mask):
             return q
         q = np.array(q, dtype=float)
@@ -177,7 +184,8 @@ class ReducedJointPlanner:
         return q
 
     def _make_planner(self):
-        # resolve by name at runtime because OMPL wheels expose different sets
+        """Return the OMPL planner the config names; ValueError if this OMPL lacks it."""
+        # resolved by name at run time: OMPL builds expose different sets of planners
         planner_name = self.config.planner.lower()
         planner_classes = {
             'rrtconnect': 'RRTConnect',
@@ -200,12 +208,13 @@ class ReducedJointPlanner:
         return planner
 
     def _make_validity_checker(self):
-        # support both common OMPL Python callback binding styles
+        """Return the state validity checker in the form this OMPL binding takes."""
         if hasattr(ob, 'StateValidityCheckerFn'):
             return ob.StateValidityCheckerFn(self._is_state_valid)
         return self._is_state_valid
 
     def _as_reduced_array(self, q, name):
+        """Return q as a finite reduced array; ValueError naming it otherwise."""
         q = np.asarray(q, dtype=float).reshape(-1)
         if q.shape != (self.nq,):
             raise ValueError(f'{name} must have shape ({self.nq},)')
@@ -214,10 +223,11 @@ class ReducedJointPlanner:
         return q
 
     def _empty_path(self):
+        """Return a path with no waypoints."""
         return np.empty((0, self.nq), dtype=float)
 
     def _make_state(self, q):
-        # allocate a state using whichever API this OMPL binding supports
+        """Return an OMPL state at q, allocated the way this OMPL binding supports."""
         try:
             state = ob.State(self.space)
             values = state()
@@ -229,17 +239,18 @@ class ReducedJointPlanner:
         return state
 
     def _state_to_array(self, state):
+        """Return an OMPL state as reduced q, the inactive joints at their pinned values."""
         q = np.asarray([state[idx] for idx in range(self.nq)], dtype=float)
-        # guarantee inactive joints never drift from their pinned value
         return self._project_inactive(q)
 
     def _is_state_valid(self, state):
-        self.validity_checks += 1
+        """Return whether an OMPL state is valid (OMPL's validity callback)."""
         q = self._state_to_array(state)
         reason = self._validity_failure(q, 'state')
         return reason == ''
 
     def _validity_failure(self, q, name):
+        """Return why q (called name) is invalid: limits, self-collision, workspace; or ''."""
         if not self.robot_model.check_within_limits_reduced(q):
             return (
                 f'{name} is outside reduced joint limits: '
@@ -253,6 +264,7 @@ class ReducedJointPlanner:
         return ''
 
     def _format_limit_violations(self, q):
+        """Return the joints of q past their limits, as text."""
         violations = self.robot_model.reduced_limit_violations(q)
         if not violations:
             return '(no joint outside limits; check tolerance)'
@@ -263,11 +275,11 @@ class ReducedJointPlanner:
         )
 
     def _clamp_start_into_limits(self, start):
-        '''
-        Nudge a start config that sits marginally past a joint limit back into
-        bounds. Only overshoots within start_limit_tolerance are clamped;
-        larger ones are left untouched so plan() still rejects a bad pose.
-        '''
+        """Return start with overshoots within start_limit_tolerance clamped into the limits.
+
+        Larger overshoots are left untouched, so plan() still rejects a bad pose. A clamp is
+        printed.
+        """
         tol = self.config.start_limit_tolerance
         if tol is None or tol <= 0.0:
             return start
@@ -293,15 +305,16 @@ class ReducedJointPlanner:
         return result
 
     def _motor_q(self, q_reduced):
+        """Return the measured body q with the IK joints at q_reduced."""
         q = np.copy(self.robot_model.state['q'])
         q[self.robot_model.reduced_mask] = q_reduced
         return q
 
     def _sample_path_for_length(self, path):
+        """Return a sparse path resampled to _LENGTH_ESTIMATE_STEPS points, even in joint space."""
         if len(path) < 2 or len(path) >= _LENGTH_ESTIMATE_STEPS:
             return path
 
-        # sample sparse joint paths before measuring end-effector motion
         segment_lengths = np.linalg.norm(np.diff(path, axis=0), axis=1)
         distance = np.concatenate([[0.0], np.cumsum(segment_lengths)])
         if distance[-1] <= 0.0:
@@ -314,11 +327,13 @@ class ReducedJointPlanner:
         ]).T
 
     def _rotation_angle(self, rotation_a, rotation_b):
+        """Return the angle between two rotation matrices, rad."""
         rotation_delta = rotation_a.T @ rotation_b
         cos_angle = 0.5 * (np.trace(rotation_delta) - 1.0)
         return float(np.arccos(np.clip(cos_angle, -1.0, 1.0)))
 
     def _frame_path_length(self, path, frame_name):
+        """Return (total, translation, rotation-as-arc) path lengths of a frame along path, m."""
         if len(path) < 2:
             return 0.0, 0.0, 0.0
 
@@ -339,7 +354,6 @@ class ReducedJointPlanner:
                 self._rotation_angle(rotations[idx], rotations[idx + 1])
                 for idx in range(len(rotations) - 1)
             )
-            # convert frame rotation to equivalent swept arc length
             rotation_length = _FRAME_ROTATION_RADIUS * rotation_angle
 
         return (
@@ -349,6 +363,11 @@ class ReducedJointPlanner:
         )
 
     def _interpolation_metadata(self, path):
+        """Return the path's waypoint count, duration and lengths at moving_speed and dt.
+
+        The duration comes from the longest planner-frame path, clamped to the
+        interpolation step limits.
+        """
         sample_path = self._sample_path_for_length(path)
         frame_lengths = {
             frame_name: self._frame_path_length(sample_path, frame_name)
@@ -370,7 +389,6 @@ class ReducedJointPlanner:
 
         speed = float(self.config.moving_speed)
         dt = float(self.config.dt)
-        # path duration comes from the longer planner-frame trajectory
         steps = int(np.ceil(path_length / speed / dt)) + 1
 
         steps = max(int(self.config.min_interpolation_steps), steps)
@@ -389,6 +407,7 @@ class ReducedJointPlanner:
         return metadata
 
     def _print_interpolation_metadata(self, metadata, label):
+        """Print a path's interpolation metadata, labelled."""
         frame_lengths = ', '.join(
             f'{name}={length:.4f}m '
             f'(pos={metadata["frame_translation_lengths"][name]:.4f}, '
@@ -407,6 +426,11 @@ class ReducedJointPlanner:
         )
 
     def _workspace_constraint_failure(self, q_reduced, name):
+        """Return why a planner frame at q_reduced leaves the workspace bounds, or ''.
+
+        Each bound is allowed frame_limit_margin; the z floor is the higher of frame_z_min
+        and the plan's corridor floor.
+        """
         if (
             not self.frame_min_z and
             not self.frame_max_z and
@@ -417,7 +441,6 @@ class ReducedJointPlanner:
         ):
             return ''
 
-        # keep selected frames within configured workspace limits
         margin = self.config.frame_limit_margin
         q = self._motor_q(q_reduced)
         for frame_name in self.frame_names:
@@ -470,6 +493,7 @@ class ReducedJointPlanner:
         return ''
 
     def _make_frame_floor_map(self, min_z):
+        """Return {frame: z} from a bound for every frame, a per-frame dict, or None ({})."""
         if min_z is None:
             return {}
         if isinstance(min_z, dict):
@@ -477,6 +501,7 @@ class ReducedJointPlanner:
         return {name: float(min_z) for name in self.frame_names}
 
     def _set_workspace_corridor(self, start, goal):
+        """Floor each planner frame at its lower end z, less frame_z_corridor_margin."""
         self.corridor_min_z = {}
         if not hasattr(self.robot_model, 'get_frame_position'):
             return
@@ -496,12 +521,14 @@ class ReducedJointPlanner:
             )
 
     def _path_validity_failure(self, path):
+        """Return why path is invalid at a waypoint or between two, or ''."""
         for idx, q in enumerate(path):
             reason = self._validity_failure(q, f'path waypoint {idx}')
             if reason:
                 return reason
 
-        # only extra-sample the state-valid z floor between returned waypoints
+        # between waypoints only the workspace bounds are sampled, constraint_check_steps per
+        # segment
         steps = max(1, int(self.config.constraint_check_steps))
         for idx in range(len(path) - 1):
             for sub_idx in range(1, steps):
@@ -517,6 +544,7 @@ class ReducedJointPlanner:
         return ''
 
     def _infer_active_mask(self, start, goal):
+        """Return a mask of the arms whose start and goal differ; None unless 14 IK joints."""
         if self.nq != _ARM_REDUCED_NQ:
             return None
 
@@ -528,21 +556,23 @@ class ReducedJointPlanner:
         return mask
 
     def plan(self, start, goal, active_mask=None):
-        '''Plan a collision-free path between reduced joint configurations'''
+        """Return a PlanResult: a valid path from start to goal (reduced q), or why there is none.
+
+        active_mask (one bool per IK joint) says which joints may move; the others stay at
+        start. Without one, a 14-joint model moves only the arms whose start and goal differ.
+        The direct, smoothstep-timed path is tried first (try_direct), then OMPL.
+        """
         start = self._as_reduced_array(start, 'start')
         goal = self._as_reduced_array(goal, 'goal')
-        # the start reflects the measured pose; legalize tiny limit overshoots
         start = self._clamp_start_into_limits(start)
         if active_mask is None:
             active_mask = self._infer_active_mask(start, goal)
 
-        # restrict planning to active joints; pin the rest to the start value
         self._set_active_mask(active_mask, start)
         goal = self._project_inactive(goal)
         self._set_workspace_corridor(start, goal)
 
-        # reject invalid endpoints before OMPL does any sampling
-        self.validity_checks = 0
+        # invalid endpoints are refused before OMPL does any sampling
         for name, q in [('start', start), ('goal', goal)]:
             reason = self._validity_failure(q, name)
             if reason:
@@ -550,26 +580,19 @@ class ReducedJointPlanner:
                     success=False,
                     path=self._empty_path(),
                     reason=reason,
-                    planner_name=self.config.planner,
-                    metadata={'validity_checks': self.validity_checks},
                 )
 
-        self.validity_checks = 0
         direct_failure = ''
         if self.config.try_direct:
-            path, metadata = self._direct_path(start, goal)
+            path = self._direct_path(start, goal)
             direct_failure = self._path_validity_failure(path)
             if not direct_failure:
-                metadata['validity_checks'] = self.validity_checks
                 return PlanResult(
                     success=True,
                     path=path,
                     reason='direct path',
-                    planner_name=self.config.planner,
-                    metadata=metadata,
                 )
 
-        # reset OMPL state; collapse inactive joint bounds to pin them
         self.si.setStateValidityCheckingResolution(
             float(self.config.validity_resolution)
         )
@@ -586,25 +609,19 @@ class ReducedJointPlanner:
                 success=False,
                 path=self._empty_path(),
                 reason=self._timeout_reason(direct_failure),
-                planner_name=self.config.planner,
-                metadata={'validity_checks': self.validity_checks},
             )
 
-        # bool(PlannerStatus) is True for APPROXIMATE_SOLUTION as well as
-        # EXACT_SOLUTION. An approximate path ends at the closest state OMPL
-        # reached, NOT at the goal, so executing it drives the arm to a
-        # near-miss and leaves the steady-state controller to chase a gap it
-        # cannot close. Treat it as a planning failure instead.
+        # bool(PlannerStatus) is true for APPROXIMATE_SOLUTION as well as EXACT_SOLUTION. An
+        # approximate path ends at the closest state OMPL reached, not at the goal, so
+        # executing it would drive the arm to a near-miss and leave the steady-state hold
+        # chasing a gap it cannot close: it is a planning failure
         if not self.ss.haveExactSolutionPath():
             return PlanResult(
                 success=False,
                 path=self._empty_path(),
                 reason=self._approximate_reason(direct_failure),
-                planner_name=self.config.planner,
-                metadata={'validity_checks': self.validity_checks},
             )
 
-        # simplify once, then validate the final candidate path
         path = self.ss.getSolutionPath()
         self._shorten_path(path)
         sparse_path = self._path_to_array(path, cap=False)
@@ -614,33 +631,29 @@ class ReducedJointPlanner:
         path.interpolate(steps)
         path_array = self._path_to_array(path)
         path_array = self._smooth_path_timing(path_array)
-        metadata['actual_waypoints'] = path_array.shape[0]
         reason = self._path_validity_failure(path_array)
-        metadata['validity_checks'] = self.validity_checks
         if reason:
             return PlanResult(
                 success=False,
                 path=path_array,
                 reason=reason,
-                planner_name=self.config.planner,
-                metadata=metadata,
             )
 
         return PlanResult(
             success=True,
             path=path_array,
             reason='success',
-            planner_name=self.config.planner,
-            metadata=metadata,
         )
 
     def _timeout_reason(self, direct_failure):
+        """Return the reason for an OMPL timeout, with the direct path's failure."""
         reason = 'OMPL failed to find a solution before timeout'
         if direct_failure:
             reason = f'{reason}; direct path failed: {direct_failure}'
         return reason
 
     def _approximate_reason(self, direct_failure):
+        """Return the reason for an approximate OMPL solution, with the direct path's failure."""
         reason = (
             'OMPL returned only an approximate solution '
             '(path does not reach the goal)'
@@ -650,7 +663,7 @@ class ReducedJointPlanner:
         return reason
 
     def _path_to_array(self, path, cap=True):
-        # convert OMPL state objects into a dense numpy waypoint array
+        """Return an OMPL path as an (N, nq) array; with cap, at most max_interpolation_steps."""
         states = path.getStates()
         path_array = np.asarray(
             [self._state_to_array(state) for state in states],
@@ -664,6 +677,7 @@ class ReducedJointPlanner:
         return path_array
 
     def _smooth_path_timing(self, path):
+        """Return path retimed along a smoothstep, so it starts and stops slowly."""
         if len(path) < 3:
             return path
 
@@ -675,12 +689,12 @@ class ReducedJointPlanner:
         ]).T
 
     def _smoothstep(self, steps):
-        # slow start and stop while preserving path endpoints
+        """Return steps points of 3t^2 - 2t^3 over [0, 1]: zero slope at both ends."""
         t = np.linspace(0.0, 1.0, steps)
         return t * t * (3.0 - 2.0 * t)
 
     def _set_active_mask(self, active_mask, start):
-        '''Configure which joints may move and pin the rest to start'''
+        """Set which joints may move (None: all) and pin the rest at start."""
         if active_mask is None:
             self.active_mask = np.ones(self.nq, dtype=bool)
         else:
@@ -691,30 +705,29 @@ class ReducedJointPlanner:
         self.pinned_q = np.array(start, dtype=float)
 
     def _direct_path(self, start, goal):
+        """Return the straight joint path from start to goal, timed by a smoothstep."""
         coarse_path = np.vstack([start, goal])
         metadata = self._interpolation_metadata(coarse_path)
         steps = metadata['waypoint_count']
         alpha = self._smoothstep(steps).reshape(-1, 1)
         path = (1.0 - alpha) * start + alpha * goal
-        # pin inactive joints exactly to the start along the whole path
         path[:, ~self.active_mask] = self.pinned_q[~self.active_mask]
-        metadata['actual_waypoints'] = path.shape[0]
         self._print_interpolation_metadata(metadata, 'direct path')
-        return path, metadata
+        return path
 
     def _shorten_path(self, path, smooth=True):
-        '''Shortcut and smooth an OMPL path to prefer efficient motion'''
+        """Simplify an OMPL path (simplify), then shortcut and smooth it (shortcut).
+
+        B-spline smoothing can overshoot into collision; plan() validates the result.
+        """
         if not self.config.simplify:
             return
 
-        # run OMPL simplification budget first
         self.ss.simplifySolution(float(self.config.simplify_time))
 
-        # then explicitly shortcut/straighten toward more direct motion
         if self.config.shortcut:
             simplifier = og.PathSimplifier(self.si)
             simplifier.ropeShortcutPath(path)
             simplifier.reduceVertices(path)
-            # b-spline smoothing can overshoot into collision; keep optional
             if smooth:
                 simplifier.smoothBSpline(path)

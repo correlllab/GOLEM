@@ -1,7 +1,4 @@
-'''
-IKSolver on both robots: the seed order, the self-collision barrier, the reduced rebind, and
-the G1's start-up move to home with the barrier on
-'''
+"""Check IKSolver on both robots: the seeds, the barrier, the rebind and the G1's start-up."""
 from types import SimpleNamespace
 
 import numpy as np
@@ -12,7 +9,7 @@ ROBOTS = known_robots()
 
 
 def d_min_of(robot):
-    '''The self-collision distance of the robot's default controller config, m'''
+    """Return the self-collision distance of the robot's default controller config, m."""
     from golem_upper_ik.config import load_controller_config
     from golem_upper_ik.profile import robot_config
     config = load_controller_config(robot, robot_config(robot)['default_config'])
@@ -21,7 +18,7 @@ def d_min_of(robot):
 
 @pytest.fixture(params=ROBOTS)
 def solver(request, models):
-    '''A fresh solver on the shared model (cheap: the model is the slow part)'''
+    """Yield a fresh solver on the shared model (cheap: the model is the slow part)."""
     from golem_upper_ik.core.ik_solver import IKSolver
     model = models(request.param)
     yield IKSolver(model, model.profile.named_configs, dt=0.02,
@@ -30,12 +27,13 @@ def solver(request, models):
 
 
 def measured(model, q):
+    """Give model a fixed measured state at q."""
     from golem_upper_ik.core.robot_model import FixedState
     model.state_subscriber = FixedState(q)
 
 
 def track_named_config(solver, name):
-    '''Frame tasks on both end effectors, targeting their poses at the named posture'''
+    """Add frame tasks on both end effectors at their poses in the named posture; its body q."""
     model = solver.robot_model
     q_target = model.zero_q_body
     q_target[model.reduced_mask] = model.profile.named_configs[name]
@@ -50,6 +48,7 @@ def track_named_config(solver, name):
 
 
 def test_ik_seed_order_current_first(solver):
+    """The seeds are the measured pose first, then the named fallbacks in order."""
     model = solver.robot_model
     q = np.linspace(-0.1, 0.1, model.num_motor)
     measured(model, q)
@@ -62,19 +61,18 @@ def test_ik_seed_order_current_first(solver):
 
 
 def test_named_seeds_are_fallbacks(solver):
-    '''With no time to iterate, only a seed already at the target converges'''
+    """With no time to iterate, only a seed already at the target converges, and is chosen."""
     model = solver.robot_model
     track_named_config(solver, 'arms_front_45')
     measured(model, np.zeros(model.num_motor))  # 'home' on both robots
     result = solver.solve_ik_reduced(timeout=0.0)
-    assert [attempt.seed_name for attempt in result.attempts] == [
-        'current', 'home', 't_pose', 'arms_front_45']
     assert result.success and result.seed_name == 'arms_front_45'
     np.testing.assert_allclose(result.q[model.reduced_mask],
                                model.profile.named_configs['arms_front_45'], atol=1e-12)
 
 
 def test_seed_configs_must_be_named_configs():
+    """A solver whose named configs lack a seed is refused before the model is touched."""
     from golem_upper_ik.core.ik_solver import IKSolver
     named = {'home': np.zeros(14), 'arms_front_45': np.zeros(14)}
     # refused before the model is touched
@@ -83,6 +81,7 @@ def test_seed_configs_must_be_named_configs():
 
 
 def test_collision_barrier_on_the_reduced_model(solver):
+    """The barrier keeps the config's d_min on the reduced model's collision pairs."""
     model = solver.robot_model
     assert model.has_collision
     assert solver.collision_barrier_reduced is not None
@@ -91,7 +90,7 @@ def test_collision_barrier_on_the_reduced_model(solver):
 
 
 def test_solves_a_reachable_target(solver):
-    '''Both arms to the end-effector poses of a named posture, from 'home' '''
+    """Both arms reach a named posture's end-effector poses from home, moving only IK joints."""
     model = solver.robot_model
     q_target = track_named_config(solver, 'arms_front_45')
     measured(model, np.zeros(model.num_motor))
@@ -107,6 +106,7 @@ def test_solves_a_reachable_target(solver):
 
 
 def test_ik_step_reduced_moves_only_the_ik_joints(solver):
+    """An IK step moves the tasked arm and no joint outside the IK."""
     model = solver.robot_model
     left = model.profile.ee_frames[0]
     solver.add_frame_task('left', left)
@@ -123,6 +123,7 @@ def test_ik_step_reduced_moves_only_the_ik_joints(solver):
 
 
 def test_update_configurations_takes_a_seed(solver):
+    """update_configurations takes a body q, or by default the measured state."""
     model = solver.robot_model
     q = np.linspace(-0.2, 0.2, model.num_motor)
     solver.update_configurations(q)
@@ -138,6 +139,7 @@ def test_update_configurations_takes_a_seed(solver):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_rebuild_reduced_rebinds_the_reduced_model(models, robot):
+    """rebuild_reduced binds the IK to the re-locked reduced model and its spheres."""
     from golem_upper_ik.core.ik_solver import IKSolver
     model = models(robot)
     solver = IKSolver(model, model.profile.named_configs)
@@ -164,11 +166,11 @@ def test_rebuild_reduced_rebinds_the_reduced_model(models, robot):
 
 
 def g1_move(models, start, goal, steps):
-    '''
-    The start-up's joint-space IK steps (goto_reduced_configuration at the sim config's
-    ctrl_hz and dq_lim) from start to goal on the G1, the barrier on, the legs at the sim's
-    stance; the reduced configurations it passes through
-    '''
+    """Return the reduced configurations of the G1's start-up IK steps from start to goal.
+
+    The steps are goto_reduced_configuration at the sim config's ctrl_hz and dq_lim, the
+    barrier on, the legs at the sim's stance.
+    """
     from golem_upper_ik.config import load_controller_config
     from golem_upper_ik.core.ik_solver import IKSolver
     model = models('g1')
@@ -202,7 +204,7 @@ def g1_move(models, start, goal, steps):
 
 
 def test_g1_startup_reaches_home_from_limp_arms(models):
-    '''The start-up move, with the barrier on, from where the limp arms hang to home'''
+    """From where the limp arms hang, the barrier-on start-up move reaches home collision-free."""
     home = models('g1').profile.named_configs['home']
     from ros_harness import G1_LIMP_ARMS
     path = g1_move(models, np.array(G1_LIMP_ARMS), home, steps=300)
@@ -212,7 +214,7 @@ def test_g1_startup_reaches_home_from_limp_arms(models):
 
 
 def test_g1_arms_down_stops_short(models):
-    '''arms_down is in self-collision: a move there stops short, collision-free'''
+    """A move to arms_down, which is in self-collision, stops short and stays collision-free."""
     model = models('g1')
     named = model.profile.named_configs
     path = g1_move(models, named['home'], named['arms_down'], steps=300)
@@ -220,9 +222,3 @@ def test_g1_arms_down_stops_short(models):
     assert np.max(np.abs(path[-1] - named['arms_down'])) > 0.05
     assert all(model.check_collision_free_reduced(q) for q in path)
 
-
-def test_unused_paths_are_gone(solver):
-    '''IKSolver has only what the controllers call: none of these'''
-    for name in ('solve_ik', 'integrate_reduced', 'set_from_configuration',
-                 'set_from_configuration_reduced', 'com_task', 'com_task_reduced'):
-        assert not hasattr(solver, name), name

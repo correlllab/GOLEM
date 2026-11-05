@@ -1,16 +1,17 @@
-'''
-Which golem_safety and golem_upper_ik configs may run together, for each robot: the one place
-for these checks, used by the bringups. Configs are told apart by name; a directory or a
-.yaml suffix is ignored.
+"""Decide which golem_safety and golem_upper_ik configs may run together on each robot.
 
 Each robot's config/<robot>/pairing.yaml pairs each of its safety configs with the one
-controller config that runs with it. One rule serves every robot, checked in this order:
+controller config that runs with it. Configs are told apart by name: a directory or a .yaml
+suffix is ignored. One rule serves every robot, checked in this order:
 
 - the safety config is one of the robot's pairs;
 - the controller config is the one paired with it;
 - with sim known, neither is a sim config (named sim*) on the real robot or a real config in
   the sim.
-'''
+
+upper_ik.launch.py applies the rule before it starts the controller, and golem_bringup's G1
+core takes its default controller config from default_controller_config().
+"""
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -22,18 +23,18 @@ __all__ = ['config_stem', 'default_controller_config', 'is_sim_config', 'pairing
 
 
 def config_stem(config_name: str) -> str:
-    '''A config name without its directory or .yaml suffix'''
+    """Return a config name without its directory or .yaml suffix."""
     stem = config_name.rsplit('/', 1)[-1]
     return stem[:-5] if stem.endswith('.yaml') else stem
 
 
 def is_sim_config(config_name: str) -> bool:
-    '''True for a sim config (sim_split, sim_safety_split, sim_custom, ...), by its name'''
+    """Return whether a config is a sim config: its name starts with sim."""
     return config_stem(config_name).startswith('sim')
 
 
 def _pairs(robot: str) -> dict[str, str]:
-    '''The safety config -> controller config stems of robot; ValueError for an unknown robot'''
+    """Return robot's safety config -> controller config stems; ValueError if unknown."""
     robot_config(robot)
     path = os.path.join(get_package_share_directory('golem_upper_ik'), 'config', robot,
                         'pairing.yaml')
@@ -51,15 +52,16 @@ def _pairs(robot: str) -> dict[str, str]:
 
 
 def _unpaired(robot: str, safety: str, pairs: dict[str, str]) -> str:
+    """Return the refusal for a safety config that is in none of robot's pairs."""
     return (f'safety config "{safety}" is not one of the {robot_config(robot)["display_name"]} '
             f'pairs: {", ".join(pairs)}')
 
 
 def default_controller_config(robot: str, safety_config: str) -> str:
-    '''
-    The controller config that runs with a safety config of robot. ValueError for an unknown
-    robot or a safety config that is in none of its pairs
-    '''
+    """Return the controller config that runs with a safety config of robot.
+
+    Raises ValueError for an unknown robot or a safety config in none of its pairs.
+    """
     pairs = _pairs(robot)
     safety = config_stem(safety_config)
     if safety not in pairs:
@@ -69,10 +71,10 @@ def default_controller_config(robot: str, safety_config: str) -> str:
 
 def pairing_refusal(robot: str, controller_config: str, safety_config: str,
                     sim: bool | None = None) -> str | None:
-    '''
-    Why the controller and safety configs of robot must not run together, or None. sim is
-    True in the sim, False on the real robot and None when unknown (no sim check)
-    '''
+    """Return why robot's controller and safety configs must not run together, or None.
+
+    sim is True in the sim, False on the real robot and None when unknown (no sim check).
+    """
     pairs = _pairs(robot)
     safety = config_stem(safety_config)
     controller = config_stem(controller_config)

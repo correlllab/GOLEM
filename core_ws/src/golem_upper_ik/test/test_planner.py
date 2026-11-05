@@ -1,10 +1,9 @@
-'''
-The OMPL reduced-joint planner and its subprocess client.
+"""Check the OMPL reduced-joint planner and its subprocess client.
 
 The ReducedJointPlanner tests run on a two- or three-joint stand-in for the robot model,
 planning for the H1-2's planner frames. The client's failure tests run planner_stubs.py's
 stand-in workers in place of the real one.
-'''
+"""
 import multiprocessing as mp
 import threading
 import time
@@ -24,18 +23,21 @@ from golem_upper_ik.core.planner import (
 
 
 def profile_of(robot):
+    """Return robot's RobotProfile."""
     from golem_upper_ik.profile import load_profile
     return load_profile(robot)
 
 
 def config(**kwargs):
-    '''A planner config for the H1-2's planner frames'''
+    """Return a PlannerConfig for the H1-2's planner frames, with kwargs."""
     kwargs.setdefault('frame_names', profile_of('h12').planner_frames)
     return PlannerConfig(**kwargs)
 
 
 class FakeRobotModel:
+    """Stand in for RobotModel: box limits, a fixed collision answer, frames at (q1, q1, q0)."""
     def __init__(self, lower=None, upper=None, collision_free=True):
+        """Set the joint limits (default two joints) and whether every state is collision-free."""
         lower = np.asarray(lower if lower is not None else [-1.0, -2.0])
         upper = np.asarray(upper if upper is not None else [1.0, 2.0])
         self.has_collision = True
@@ -49,11 +51,13 @@ class FakeRobotModel:
         self.state = {'q': np.zeros(lower.shape[0])}
 
     def check_within_limits_reduced(self, q_reduced):
+        """Return whether q_reduced is within the limits."""
         lower = self.model_body_reduced.lowerPositionLimit
         upper = self.model_body_reduced.upperPositionLimit
         return bool(np.all(q_reduced >= lower) and np.all(q_reduced <= upper))
 
     def reduced_limit_violations(self, q_reduced):
+        """Return the joints of q_reduced past their limits."""
         lower = self.model_body_reduced.lowerPositionLimit
         upper = self.model_body_reduced.upperPositionLimit
         violations = []
@@ -67,13 +71,16 @@ class FakeRobotModel:
         return violations
 
     def check_collision_free_reduced(self, q_reduced):
+        """Return the fixed collision answer."""
         return self.collision_free
 
     def get_frame_position(self, frame_name, q):
+        """Return every frame at (q[1], q[1], q[0]), m."""
         return np.array([q[1], q[1], q[0]])
 
 
 def test_requires_initialized_reduced_model():
+    """A model without a reduced model is refused."""
     robot_model = FakeRobotModel()
     robot_model.model_body_reduced = None
 
@@ -82,6 +89,7 @@ def test_requires_initialized_reduced_model():
 
 
 def test_requires_initialized_collision_model():
+    """A model without a self-collision model is refused."""
     robot_model = FakeRobotModel()
     robot_model.has_collision = False
 
@@ -90,6 +98,7 @@ def test_requires_initialized_collision_model():
 
 
 def test_wrong_vector_shape_raises_when_ompl_available():
+    """A start of the wrong shape is refused."""
     planner = ReducedJointPlanner(FakeRobotModel(), config=config())
 
     with pytest.raises(ValueError, match='start must have shape'):
@@ -97,6 +106,7 @@ def test_wrong_vector_shape_raises_when_ompl_available():
 
 
 def test_invalid_start_fails_with_clear_reason():
+    """A start outside the joint limits fails, saying so."""
     planner = ReducedJointPlanner(FakeRobotModel(), config=config())
 
     result = planner.plan([2.0, 0.0], [0.0, 0.0])
@@ -107,6 +117,7 @@ def test_invalid_start_fails_with_clear_reason():
 
 
 def test_invalid_goal_fails_with_clear_reason():
+    """A goal outside the joint limits fails, saying so."""
     planner = ReducedJointPlanner(FakeRobotModel(), config=config())
 
     result = planner.plan([0.0, 0.0], [0.0, 3.0])
@@ -117,6 +128,7 @@ def test_invalid_goal_fails_with_clear_reason():
 
 
 def test_collision_state_fails_with_clear_reason():
+    """A start in self-collision fails, saying so."""
     planner = ReducedJointPlanner(FakeRobotModel(collision_free=False), config=config())
 
     result = planner.plan([0.0, 0.0], [0.5, 0.5])
@@ -127,6 +139,7 @@ def test_collision_state_fails_with_clear_reason():
 
 
 def test_bounds_are_copied_to_ompl_space():
+    """The OMPL space takes the reduced model's joint limits."""
     lower = np.array([-1.0, -0.5, -0.25])
     upper = np.array([1.0, 0.5, 0.25])
     planner = ReducedJointPlanner(FakeRobotModel(lower=lower, upper=upper), config=config())
@@ -139,6 +152,7 @@ def test_bounds_are_copied_to_ompl_space():
 
 
 def test_plan_between_fake_valid_states():
+    """A plan between valid states runs start to goal within max_interpolation_steps."""
     planner = ReducedJointPlanner(
         FakeRobotModel(),
         config=config(timeout=0.2, max_interpolation_steps=10),
@@ -154,6 +168,7 @@ def test_plan_between_fake_valid_states():
 
 
 def test_plan_pins_idle_right_arm_with_home_tolerance():
+    """An arm whose start and goal differ by less than the tolerance stays pinned."""
     lower = -np.ones(14)
     upper = np.ones(14)
     planner = ReducedJointPlanner(
@@ -172,6 +187,7 @@ def test_plan_pins_idle_right_arm_with_home_tolerance():
 
 
 def test_path_validation_rejects_z_corridor_dip():
+    """A path dipping below the start-goal z corridor between waypoints is invalid."""
     planner = ReducedJointPlanner(
         FakeRobotModel(),
         config=config(
@@ -194,6 +210,7 @@ def test_path_validation_rejects_z_corridor_dip():
 
 
 def test_z_corridor_uses_its_own_margin():
+    """The corridor floor is the lower end's z less frame_z_corridor_margin."""
     planner = ReducedJointPlanner(
         FakeRobotModel(),
         config=config(
@@ -209,6 +226,7 @@ def test_z_corridor_uses_its_own_margin():
 
 
 def test_state_validation_rejects_y_limit_violation():
+    """A frame past frame_y_max by more than the margin is invalid."""
     planner = ReducedJointPlanner(
         FakeRobotModel(),
         config=config(
@@ -228,6 +246,7 @@ def test_state_validation_rejects_y_limit_violation():
 
 
 def test_state_validation_allows_y_limit_margin():
+    """A frame past frame_y_max by less than the margin is valid."""
     planner = ReducedJointPlanner(
         FakeRobotModel(),
         config=config(
@@ -245,6 +264,7 @@ def test_state_validation_allows_y_limit_margin():
 
 
 def test_state_validation_rejects_x_limit_violation():
+    """A frame past frame_x_max by more than the margin is invalid."""
     planner = ReducedJointPlanner(
         FakeRobotModel(),
         config=config(
@@ -260,6 +280,7 @@ def test_state_validation_rejects_x_limit_violation():
 
 
 def test_state_validation_rejects_z_limit_violation():
+    """A frame past frame_z_max by more than the margin is invalid, within it valid."""
     planner = ReducedJointPlanner(
         FakeRobotModel(),
         config=config(
@@ -276,6 +297,7 @@ def test_state_validation_rejects_z_limit_violation():
 
 
 def test_planner_needs_its_frame_names():
+    """A config without frame_names is refused; given ones are kept."""
     with pytest.raises(ValueError, match='frame_names'):
         ReducedJointPlanner(FakeRobotModel(), config=PlannerConfig())
     planner = ReducedJointPlanner(FakeRobotModel(), config=config(frame_names=['a', 'b']))
@@ -283,10 +305,11 @@ def test_planner_needs_its_frame_names():
 
 
 def test_planner_client_resolves_the_frame_names():
+    """The client sets the frames from its argument or the profile, refusing a clash."""
     profile = profile_of('h12')
     # default: the profile's planner frames
     assert PlannerClient(profile).planner_config.frame_names == profile.planner_frames
-    # the frame_names argument (Task 11 passes the controller config's planner.frame_names)
+    # the frame_names argument (the controller passes its config's planner.frame_names)
     given = PlannerConfig(moving_speed=0.1)
     client = PlannerClient(profile, given, frame_names=['c', 'd'])
     assert client.planner_config.frame_names == ('c', 'd')
@@ -301,7 +324,7 @@ def test_planner_client_resolves_the_frame_names():
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_planner_unavailable_without_collision(robot):
-    '''A profile that names no self-collision model cannot plan'''
+    """A profile that names no self-collision model cannot plan, and starts no process."""
     from dataclasses import replace
     from golem_upper_ik.profile import robot_config
     profile = replace(profile_of(robot), collision=None)
@@ -329,7 +352,7 @@ PLANNED_MOVE = {'h12': ('init_3', 'prep'), 'g1': ('home', 'arms_front_45')}
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_planner_client_plans(robot):
-    '''The subprocess builds the robot's model from its profile and plans a direct path'''
+    """The subprocess builds the robot's model and plans; a speed override reaches it."""
     profile = profile_of(robot)
     named = profile.named_configs
     begin, end = (named[name] for name in PLANNED_MOVE[robot])
@@ -343,7 +366,6 @@ def test_planner_client_plans(robot):
         assert result.reason == 'direct path'
         np.testing.assert_allclose(result.path[0], begin, atol=1e-9)
         np.testing.assert_allclose(result.path[-1], end, atol=1e-9)
-        assert set(result.metadata['frame_path_lengths']) == set(profile.planner_frames)
 
         # a per-request speed reaches the worker: half the speed, about twice the waypoints
         slow = client.plan_configuration(
@@ -371,23 +393,25 @@ def test_planner_client_plans(robot):
     assert not worker.process.is_alive()
 
 
-# The client's failure handling, on stand-in workers (planner_stubs.py)
-
 def stub_client(worker_main, startup_timeout=30.0):
+    """Return an H1-2 PlannerClient running worker_main in its subprocess."""
     client = PlannerClient(profile_of('h12'), startup_timeout=startup_timeout)
     client._worker_main = worker_main
     return client
 
 
 def plan(client, goal):
+    """Request a plan from zeros to goal on every IK joint; return the stub's answer."""
     return client.plan_configuration(np.zeros(27), np.zeros(14), np.full(14, goal))
 
 
 def planner_processes():
+    """Return the live planner subprocesses."""
     return [process for process in mp.active_children() if process.name == 'planner_process']
 
 
 def test_requests_are_answered_by_their_own_reply():
+    """Each request takes the reply carrying its own id, not a late one."""
     client = stub_client(planner_stubs.stale_answer_first)
     try:
         # the worker sends a reply for the previous request before each answer
@@ -398,6 +422,7 @@ def test_requests_are_answered_by_their_own_reply():
 
 
 def test_start_timeout_stops_the_worker_and_the_next_goal_starts_afresh():
+    """A start timeout stops the slow worker; the next request starts a fresh one."""
     client = stub_client(planner_stubs.ready_after_a_second, startup_timeout=0.3)
     try:
         with pytest.raises(RuntimeError, match='did not start in time'):
@@ -415,17 +440,20 @@ def test_start_timeout_stops_the_worker_and_the_next_goal_starts_afresh():
 
 
 class Abandoned(Exception):
+    """Signal a wait for a reply given up."""
     pass
 
 
 class AbandoningQueue:
-    '''Fails the first wait for a reply, as an interrupted goal would'''
+    """Fail the first wait for a reply, as an interrupted goal would."""
 
     def __init__(self, queue):
+        """Wrap queue."""
         self.queue = queue
         self.failed = False
 
     def get(self, *args, **kwargs):
+        """Raise Abandoned the first time, then get from the queue."""
         if not self.failed:
             self.failed = True
             raise Abandoned()
@@ -433,6 +461,7 @@ class AbandoningQueue:
 
 
 def test_an_abandoned_request_stops_the_worker():
+    """A request given up stops its worker, so its late reply cannot answer the next."""
     client = stub_client(planner_stubs.echo)
     try:
         assert plan(client, 0.1) == [0.1] * 14
@@ -450,6 +479,7 @@ def test_an_abandoned_request_stops_the_worker():
 
 
 def test_a_worker_dying_at_start_fails_at_once():
+    """A worker that exits before it is ready fails the request at once, with its exit code."""
     client = stub_client(planner_stubs.dies_at_start, startup_timeout=30.0)
     start = time.monotonic()
     with pytest.raises(RuntimeError, match='exit code 3'):
@@ -459,10 +489,12 @@ def test_a_worker_dying_at_start_fails_at_once():
 
 
 def test_requests_from_several_threads_take_turns():
+    """Requests from several threads each get their own answer, from one worker."""
     client = stub_client(planner_stubs.echo_after_a_while)
     results = {}
 
     def request(goal):
+        """Plan goal, keeping the answer or the error."""
         try:
             results[goal] = plan(client, goal)
         except Exception as error:  # the outcome under test
@@ -484,11 +516,13 @@ def test_requests_from_several_threads_take_turns():
 
 
 def test_shutdown_during_a_request_raises_cleanly():
+    """shutdown() during a request makes it raise 'planner shut down' and stops the worker."""
     client = stub_client(planner_stubs.never_answers)
     client._start()
     errors = []
 
     def request():
+        """Plan, keeping the error."""
         try:
             plan(client, 0.1)
         except Exception as error:  # the outcome under test

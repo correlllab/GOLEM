@@ -1,7 +1,7 @@
-'''
-What the nodes share: pose conversions, their robot and config parameters, and run(), which
-spins a node until SIGINT or SIGTERM and shuts it down while its context still works.
-'''
+"""Share what the nodes need: pose conversions, their parameters, and run().
+
+run() spins a node until SIGINT or SIGTERM and shuts it down while its context still works.
+"""
 import os
 import signal
 import sys
@@ -30,6 +30,7 @@ EXIT_JOIN_TIMEOUT = 0.5
 
 
 def _project_to_so3(rotation):
+    """Return the rotation matrix nearest a 3x3 matrix (SVD, determinant +1)."""
     u, _, vh = np.linalg.svd(rotation)
     projected = u @ vh
     if np.linalg.det(projected) < 0:
@@ -39,7 +40,7 @@ def _project_to_so3(rotation):
 
 
 def pose_to_matrix(pose):
-    '''A geometry_msgs Pose as a 4x4 transformation'''
+    """Return a geometry_msgs Pose as a 4x4 transformation."""
     position = pose.position
     orientation = pose.orientation
     rotation = Quaternion(
@@ -51,11 +52,11 @@ def pose_to_matrix(pose):
 
 
 def matrix_to_pose(matrix):
-    '''
-    A 4x4 transformation as a geometry_msgs Pose. A non-finite translation becomes 0, a
-    non-finite rotation the identity (with a warning), and a rotation that is not quite
-    orthonormal is projected onto SO(3)
-    '''
+    """Return a 4x4 transformation as a geometry_msgs Pose.
+
+    A non-finite translation becomes 0, a non-finite rotation the identity (with a
+    RuntimeWarning), and a rotation that is not quite orthonormal is projected onto SO(3).
+    """
     pose = Pose()
     translation = np.asarray(matrix[0:3, 3], dtype=float)
     if not np.isfinite(translation).all():
@@ -89,11 +90,11 @@ def matrix_to_pose(matrix):
 
 
 def node_parameters(node):
-    '''
-    (robot, config) from node's parameters: robot is required; config is a controller config
-    name or path, by default the robot's default_config (config/<robot>/robot.yaml).
-    ValueError for a robot missing or unknown
-    '''
+    """Declare and return node's (robot, config) parameters.
+
+    robot is required; config is a controller config name or path, by default the robot's
+    default_config (config/<robot>/robot.yaml). ValueError for a robot missing or unknown.
+    """
     robot = node.declare_parameter('robot', '').value
     if not robot:
         raise ValueError('the robot parameter is required: '
@@ -103,26 +104,28 @@ def node_parameters(node):
 
 
 def _ignored(signum, frame):
-    pass
+    """Ignore a signal."""
 
 
 def _ignore_signals():
-    '''
-    Ignore SIGINT and SIGTERM from now on, through a handler that does nothing: with SIG_IGN,
-    a signal that arrives while the handler changes is reported through sys.unraisablehook
-    as OSError("Signal 2 ignored due to race condition"), a stray traceback on stderr
-    '''
+    """Ignore SIGINT and SIGTERM from now on, through a handler that does nothing.
+
+    With SIG_IGN instead, a signal that arrives while the handler changes is reported through
+    sys.unraisablehook as OSError("Signal 2 ignored due to race condition"), a stray
+    traceback on stderr.
+    """
     signal.signal(signal.SIGINT, _ignored)
     signal.signal(signal.SIGTERM, _ignored)
 
 
 def _interrupt(signum, frame):
-    '''The first SIGINT or SIGTERM: stop the node; any later one is ignored'''
+    """Stop the node on the first SIGINT or SIGTERM; any later one is ignored."""
     _ignore_signals()
     raise KeyboardInterrupt
 
 
 def _spin(executor, errors):
+    """Spin executor until it stops; an error it raises is appended to errors."""
     try:
         executor.spin()
     except Exception as error:  # run() reports it and exits 1
@@ -130,27 +133,25 @@ def _spin(executor, errors):
 
 
 def run(name, make_node, args=None):
-    '''
-    Run the node make_node() builds until SIGINT or SIGTERM, then end the process with the
-    exit code.
+    """Run the node make_node() builds until SIGINT or SIGTERM, then exit the process.
 
     make_node() reads the node's parameters and starts nothing. An executor then spins the
     node in a thread, node.start() starts it in this one, and on the signal node.shutdown()
     runs while the executor still spins. A node that fails to build or start is logged
     (naming its robot and config once it knows them) and exits 1, as does one whose executor
-    stops.
+    stops; a clean shutdown exits 0.
 
-    rclpy's own signal handlers stay off: on SIGINT they shut the context down, after which
-    the controller's last command, which turns the upper body's gains to zero, could not be
-    published. SIGTERM, which launch sends after SIGINT, interrupts the same way. Once the
-    shutdown has begun, both are ignored, so a second signal cannot cut it short.
+    SAFETY: rclpy's own signal handlers stay off: on SIGINT they shut the context down, after
+    which the controller's last command, which turns the upper body's gains to zero, could
+    not be published. SIGTERM, which launch sends after SIGINT, interrupts the same way. Once
+    the shutdown has begun, both are ignored, so a second signal cannot cut it short.
 
     Nothing is destroyed at the end. The multi-threaded executor can start a callback it
     handed to its thread pool just before its shutdown() returned; destroying the node under
     that callback, or the interpreter's exit while a pool thread is inside rclpy, aborts the
     process. So once the executor has stopped and the context is shut down (which also
     flushes the ROS log files), the process ends with os._exit.
-    '''
+    """
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     signal.signal(signal.SIGINT, _interrupt)
     signal.signal(signal.SIGTERM, _interrupt)

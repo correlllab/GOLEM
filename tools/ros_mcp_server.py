@@ -83,6 +83,7 @@ class RosDebugNode(Node):
     def _cb(self, attr):
         """Return a callback that stores its message in attribute attr."""
         def f(msg):
+            """Store msg in attribute attr (an executor thread)."""
             with self._lock:
                 setattr(self, attr, msg)
         return f
@@ -218,8 +219,9 @@ def scan_status() -> dict:
 async def drive(vx: float = 0.0, vy: float = 0.0, wz: float = 0.0,
                 duration: float = 4.0) -> dict:
     """Publish /cmd_vel (body frame, m/s and rad/s) at 20 Hz for `duration`
-    seconds, then stop. vx>0 forward, wz>0 turn left. Needs the sim launched
-    with GOLEM_LOWERBODY=almi. Reports start/end pose so you can see if it moved."""
+    seconds, then stop. vx>0 forward, wz>0 turn left. Needs the sim's leg node
+    (GOLEM_LOWERBODY): almi and walk locomote on /cmd_vel. Reports start/end
+    pose so you can see if it moved."""
     duration = max(0.0, min(float(duration), 30.0))
     p0 = NODE.robot_state()
     hz, end = 0.05, time.time() + duration
@@ -246,6 +248,7 @@ async def wait_for(condition: str, timeout: float = 60.0) -> dict:
     last = None
 
     def check():
+        """Return whether the condition holds now, keeping the robot state it read in last."""
         nonlocal last
         st = NODE.robot_state()
         last = st

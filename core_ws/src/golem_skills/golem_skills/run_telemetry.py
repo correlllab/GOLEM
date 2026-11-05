@@ -52,9 +52,11 @@ def _slug(text):
 
 def describe_goal(goal):
     """
-    Flatten a skill goal's primitive fields into a JSON-friendly dict for result.json.
+    Flatten a skill goal's primitive fields into a JSON-friendly dict.
 
-    Lists and nested messages are summarized (item count, type name), not dumped.
+    result.json and the ModelLogger call record use it. Lists and nested messages
+    are summarized (item count, type name), not dumped; a goal whose fields cannot
+    be read gets its error under '_error'.
     """
     out = {}
     if goal is None:
@@ -68,8 +70,8 @@ def describe_goal(goal):
                 out[name] = f'[{len(v)} items]'
             else:
                 out[name] = type(v).__name__
-    except Exception:
-        pass
+    except Exception as e:
+        out['_error'] = str(e)
     return out
 
 

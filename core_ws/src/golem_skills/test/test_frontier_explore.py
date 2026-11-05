@@ -383,6 +383,22 @@ class FakeStack(Node):
         return NavigateToPose.Result()
 
 
+class Explorer(Node, fe.FrontierExploreSkill):
+    """Serve /skill/frontier_explore from the skill mixin alone, without SkillsNode's services."""
+
+    def __init__(self):
+        """Create the node and serve /skill/frontier_explore on it."""
+        super().__init__('frontier_explore')
+        self._frontier_init()
+        self.server = ActionServer(
+            self, SkillFrontierExplore, '/skill/frontier_explore',
+            execute_callback=self._exec_frontier_explore,
+            goal_callback=self._on_frontier_goal,
+            cancel_callback=lambda _: CancelResponse.ACCEPT,
+            callback_group=self._cb_group,
+        )
+
+
 def _two_rooms():
     """Return two rooms joined by a doorway in the wall at column 60."""
     world = _room(80, 120)
@@ -432,7 +448,7 @@ def _explore(ros, fake, goal=None):
     """Start the explorer and `fake`, send one goal; return (client, goal handle, feedbacks)."""
     client = Node('explore_client')
     action = ActionClient(client, SkillFrontierExplore, '/skill/frontier_explore')
-    ros(fe.FrontierExplore(), fake, client)
+    ros(Explorer(), fake, client)
     assert action.wait_for_server(timeout_sec=10.0)
     feedbacks = []
     sent = action.send_goal_async(
@@ -587,7 +603,7 @@ def test_node_refuses_negative_fields(ros):
     fake = FakeStack(_two_rooms(), (1.0, 1.0))
     client = Node('explore_client')
     action = ActionClient(client, SkillFrontierExplore, '/skill/frontier_explore')
-    ros(fe.FrontierExplore(), fake, client)
+    ros(Explorer(), fake, client)
     assert action.wait_for_server(timeout_sec=10.0)
     sent = action.send_goal_async(SkillFrontierExplore.Goal(min_goal_distance=-1.0))
     assert _done(sent, 10.0) and not sent.result().accepted

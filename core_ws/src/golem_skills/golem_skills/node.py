@@ -19,33 +19,13 @@ from rclpy.action import ActionServer
 from rclpy.executors import MultiThreadedExecutor
 
 from .base import SkillsBase, SKILL_ACTIONS
+from .run_telemetry import describe_goal
 from model_server.model_logging import ModelLogger, declare_logging_params
 from .skills import (
     OpenDoorSkill, CloseDoorSkill, OpenLidSkill, CloseLidSkill, NavigateSkill,
     GraspSkill, PickPlaceSkill, PressSkill, SlideRackSkill, TurnSkill,
     FrontierExploreSkill,
 )
-
-
-def _describe_msg(msg):
-    """
-    Flatten an action goal's primitive fields into a JSON-friendly dict.
-
-    Lists and nested messages are summarized (item count, type name), not dumped.
-    """
-    out = {}
-    try:
-        for fname in msg.get_fields_and_field_types():
-            v = getattr(msg, fname)
-            if isinstance(v, (bool, int, float, str)):
-                out[fname] = v
-            elif isinstance(v, (list, tuple, bytes)):
-                out[fname] = f'[{len(v)} items]'
-            else:
-                out[fname] = type(v).__name__
-    except Exception as e:
-        out['_error'] = str(e)
-    return out
 
 
 class SkillsNode(SkillsBase, OpenDoorSkill, CloseDoorSkill, OpenLidSkill,
@@ -111,7 +91,7 @@ class SkillsNode(SkillsBase, OpenDoorSkill, CloseDoorSkill, OpenLidSkill,
         def _cb(goal_handle):
             """Run `fn` on the goal and record its outcome."""
             rec = self.logger.start()
-            rec.set(skill=label, request=_describe_msg(goal_handle.request))
+            rec.set(skill=label, request=describe_goal(goal_handle.request))
             self._log_head_frame(rec, f'{label}_start')
             # None unless recording is on, the skill is recorded and no
             # recorder is active (pick_place's inner grasp shares the outer one)

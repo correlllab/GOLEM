@@ -32,9 +32,8 @@ from custom_ros_messages.action import SkillFrontierExplore
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import OccupancyGrid
 import numpy as np
-from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
+from rclpy.action import ActionClient, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from scipy import ndimage
@@ -285,7 +284,7 @@ class _Run:
 
 
 class FrontierExploreSkill:
-    """Provide /skill/frontier_explore to SkillsNode or to the standalone FrontierExplore node."""
+    """Provide /skill/frontier_explore to SkillsNode (a mixin on the node that serves it)."""
 
     def _frontier_init(self):
         """Initialize parameters, /map + costmap subscriptions, Nav2 client, and markers."""
@@ -582,19 +581,3 @@ class FrontierExploreSkill:
                     f'goal {sent}: failed ({reason}) after {last_end - start:.1f} s; '
                     'blacklisted'
                 )
-
-
-class FrontierExplore(Node, FrontierExploreSkill):
-    """Standalone node wrapper around FrontierExploreSkill."""
-
-    def __init__(self, **kwargs):
-        """Create the node and serve /skill/frontier_explore on it."""
-        super().__init__('frontier_explore', **kwargs)
-        self._frontier_init()
-        self.server = ActionServer(
-            self, SkillFrontierExplore, '/skill/frontier_explore',
-            execute_callback=self._exec_frontier_explore,
-            goal_callback=self._on_frontier_goal,
-            cancel_callback=lambda _: CancelResponse.ACCEPT,
-            callback_group=self._cb_group,
-        )

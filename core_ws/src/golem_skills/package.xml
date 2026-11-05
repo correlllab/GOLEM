@@ -19,6 +19,10 @@
   <depend>sensor_msgs_py</depend>
   <depend>geometry_msgs</depend>
   <depend>visualization_msgs</depend>
+  <exec_depend>action_msgs</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
   <depend>python3-numpy</depend>
   <depend>python3-scipy</depend>
   <exec_depend>python3-opencv</exec_depend>

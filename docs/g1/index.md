@@ -59,6 +59,7 @@ tests/g1/test_sim_bringup.sh            # arms
 tests/g1/test_sim_bringup.sh --walk     # walking
 tests/g1/test_sim_nav.sh                # Nav2 walks the G1 to a goal
 tests/g1/test_sim_explore.sh            # frontier exploration of the kitchen
+tests/sim/test_sim_stack.sh --g1        # stand, walk to a goal, arm moves and SLAM in one run
 ```
 
 A passing test ends with `PASSED: <n>/<n> checks` and exits 0.

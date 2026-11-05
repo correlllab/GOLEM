@@ -63,7 +63,9 @@ robocasa ros`); they never build them.
 
 - **Containers.** Both containers are the compose services as `docker_run.sh` starts them
   (`robocasa` with the G1 overlay, `ros` from `docker-compose.yml`), plus a `test_compose.yml`
-  that `common.sh` writes into the output directory. The sim container has no network, and the
+  that `common.sh` writes into the output directory. `common.sh` is `tests/sim/common.sh`'s
+  harness, which `tests/sim`'s test of both robots shares, with the G1's build and output
+  names; both containers mount `tests/g1` and `tests/sim` read-only. The sim container has no network, and the
   ros container joins its network namespace. Both use its loopback with multicast, so no DDS
   leaves the host and nothing talks to the robot.
 - **DDS domains.** The arm test uses 195, the walk test 196, the nav test 197 and the explore
@@ -86,6 +88,12 @@ Open issue: the arm test's `t_pose` check sometimes fails with the arms at the p
 large as `frame_task_server`'s success threshold, `controller.threshold_joint` in
 `core_ws/src/golem_upper_ik/config/g1/sim_split.yaml`, so the server sometimes never reports the goal
 reached. Count such a run as failed, and check its arm error against that threshold.
+
+Open issue: the explore test fails (coverage about 25 %, tilt up to 27 deg). After its first
+goal the explorer picks a frontier behind the robot; Nav2's MPPI (`DiffDrive`, `vx_min` -0.20 in
+`core_ws/src/golem_slam/config/g1/nav2.yaml`) walks the G1 backward, HOMIE tilts past the test's
+15 deg, and the progress checker (0.5 m in 10 s) aborts the goal again and again until the
+skill's timeout. `core_ws` at 93f5afa, before the shared navigation graph, fails the same way.
 
 The tests depend on internals of the G1 sim and on the stack's log lines. A change to any of these
 must update the tests in the same commit.

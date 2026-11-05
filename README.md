@@ -59,6 +59,7 @@ the same, and every `ros` container builds and runs both robots' packages.
 
 ```bash
 tests/g1/test_sim_bringup.sh                          # the G1 acceptance test (arms); see tests/g1/README.md
+tests/sim/test_sim_stack.sh --g1                      # the closed-loop test of either robot; see tests/sim/README.md
 docker/scripts/docker_stack.sh up robocasa --g1       # the G1 sim and its bringup (the arms and HOMIE)
 ```
 

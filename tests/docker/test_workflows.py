@@ -383,8 +383,15 @@ if 'config' in sys.argv:
                                'bash', str(self.root / 'tests/g1/common.sh')], cwd='/tmp',
                               env=dict(self.env, OUT=str(out)), text=True, capture_output=True)
 
+    def run_sim_test(self, out, script):
+        """tests/sim/common.sh sourced, then `script`, then its EXIT cleanup, under the stub docker."""
+        return subprocess.run(['bash', '-c', f'set -eo pipefail; source "$1"; {script}',
+                               'bash', str(self.root / 'tests/sim/common.sh')], cwd='/tmp',
+                              env=dict(self.env, OUT=str(out)), text=True, capture_output=True)
+
     def test_g1_test_setup_cleans_up_containers(self):
         self.install_copy('tests/g1/common.sh')
+        self.install_copy('tests/sim/common.sh')
         out = self.root / 'g1 out'
         r = self.run_g1_test_setup(out)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -392,6 +399,63 @@ if 'config' in sys.argv:
         # every container g1_test_setup's runs create is removed on exit, the build's too
         removed = next(c for c in self.calls() if c[:2] == ['rm', '-f'])
         self.assertTrue(any(n.endswith('-ros-build') for n in removed), removed)
+        self.assertTrue(any(n.startswith('golem-g1-bringup-195-') for n in removed), removed)
+        self.assertEqual(json.loads((out / 'run.json').read_text())['robot'], 'g1')
+        self.assertTrue(all(self.overlay() in self.compose_files(c) for c in self.run_calls()))
+
+    def test_sim_test_setup_runs_the_h12_without_the_g1_overlay(self):
+        # A G1 selection left in docker/.env must not reach an H1-2 run.
+        (self.root / 'docker/.env').write_text('GOLEM_ROBOT=g1\n')
+        self.install_copy('tests/sim/common.sh')
+        out = self.root / 'sim out'
+        r = self.run_sim_test(out, 'sim_test_setup h12 sim t stack-h12 stack 199')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        removed = next(c for c in self.calls() if c[:2] == ['rm', '-f'])
+        self.assertTrue(any(n.startswith('golem-sim-stack-h12-199-') for n in removed), removed)
+        self.assertTrue(self.run_calls())
+        self.assertFalse(any(self.overlay() in self.compose_files(c) for c in self.calls()))
+        self.assertEqual(json.loads((out / 'run.json').read_text())['robot'], 'h12')
+        compose = (out / 'test_compose.yml').read_text()
+        self.assertIn('target: /home/code/tests/g1, read_only: true', compose)
+        self.assertIn('target: /home/code/tests/sim, read_only: true', compose)
+        self.assertIn(str(self.root / 'container_cache/sim_tests/build'), compose)
+
+    def test_sim_test_setup_refuses_domain_zero_and_unknown_robots(self):
+        self.install_copy('tests/sim/common.sh')
+        for n, (script, domain) in enumerate((('sim_test_setup h12 sim t stack-h12 stack 199', '0'),
+                                             ('sim_test_setup h1 sim t stack-h1 stack 199', None))):
+            with self.subTest(script=script, domain=domain):
+                (self.root / 'calls').unlink(missing_ok=True)
+                env = {} if domain is None else {'ROS_DOMAIN_ID': domain}
+                r = subprocess.run(['bash', '-c', f'set -eo pipefail; source "$1"; {script}',
+                                    'bash', str(self.root / 'tests/sim/common.sh')], cwd='/tmp',
+                                   env=dict(self.env, OUT=str(self.root / f'out {n}'), **env),
+                                   text=True, capture_output=True)
+                self.assertEqual(r.returncode, 2, r.stderr)
+                self.assertFalse(self.compose_calls())
+
+    def test_sim_test_start_sim_gives_each_robot_its_knobs(self):
+        # The H1-2 sim refuses an empty GOLEM_CMD_TIMEOUT; the G1 sim reads it as its default.
+        self.install_copy('tests/sim/common.sh')
+        for robot in ('h12', 'g1'):
+            with self.subTest(robot=robot):
+                (self.root / 'calls').unlink(missing_ok=True)
+                # the stub sim never comes up, so start_sim stops the run
+                self.run_sim_test(self.root / f'{robot} out', f'sim_test_setup {robot} sim t stack-{robot} stack 199; '
+                                  'SIM_ENV=(-e GOLEM_SPAWN_BACKOFF=2.0); sim_test_start_sim x.py "${SIM_ENV[@]}"')
+                run = next(c for c in self.run_calls() if '-d' in c)
+                env = [b for a, b in zip(run, run[1:]) if a == '-e']
+                self.assertIn(f'GOLEM_ROBOT={robot}', env)
+                self.assertIn('GOLEM_SPAWN_BACKOFF=2.0', env)
+                self.assertEqual('GOLEM_CMD_TIMEOUT=' in env, robot == 'g1')
+                self.assertFalse(any(e.startswith('GOLEM_CMD_TIMEOUT') for e in env if e != 'GOLEM_CMD_TIMEOUT='))
+                self.assertEqual('GOLEM_SPAWN_MARGIN=' in env, robot == 'h12')
+                self.assertEqual(self.overlay() in self.compose_files(run), robot == 'g1')
+                self.assertIn('/home/code/tests/sim/x.py sim --out /out', run[-1])
+                # the H1-2 sim imports magpie_msgs, which launch_robocasa.sh builds into msgs_ws
+                prepares = 'GOLEM_PREPARE_ONLY=1 /home/code/h12_sim_scripts/launch_robocasa.sh' in run[-1]
+                self.assertEqual(prepares, robot == 'h12')
+                self.assertEqual('source /home/code/msgs_ws/install/setup.bash' in run[-1], robot == 'h12')
 
     def test_stack_wrappers_ignore_golem_robot(self):
         # A G1 selection left in docker/.env must not reach the H1 test wrappers.

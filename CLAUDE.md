@@ -1,13 +1,16 @@
 # CLAUDE.md — GOLEM developer guide for coding agents
 
-The safety layer and the arm controller of both robots (`golem_safety`,
-`golem_upper_ik`), the bringup package (`golem_bringup`) and the start-ups it
-runs, the models (`golem_ros2_models`, `CL_Assets/g1`), the robot selection, the G1 text (its packages, sim, start-up and
-invariants), the `mode_machine` identity check, the package tables and the
-stale-install pitfall were checked against the code on 2026-10-28; the
-DDS-domain rules and the H1-2 claims beside them on 2026-10-26; the rest was
-verified on 2026-07-12. Where older docs or script comments disagree with the
-code, the code wins (known stale spots are flagged inline).
+The packages both robots run (`golem_safety`, `golem_upper_ik`, `golem_slam`:
+their per-robot configs and launch files, and the bringups that include them),
+the H1-2's raw-frame lidar, the RoboCasa sims' Unitree DDS interfaces, both leg
+nodes' start-up, the Mac's launch, the package tables and the closed-loop tests
+were checked against the code on 2026-11-05; the models (`golem_ros2_models`,
+`CL_Assets/g1`), the robot selection, the rest of the G1 text (its packages,
+sim, start-up and invariants), the `mode_machine` identity check and the
+stale-install pitfall on 2026-10-28; the DDS-domain rules and the H1-2 claims
+beside them on 2026-10-26; the rest was verified on 2026-07-12. Where older
+docs or script comments disagree with the code, the code wins (known stale
+spots are flagged inline).
 
 ## 1. Project overview
 
@@ -46,7 +49,7 @@ pages are in `docs/g1/` (start at `docs/g1/index.md`).
 | `CL_Assets/` | both robots' URDFs, MJCFs, meshes and self-collision models (the G1's in `CL_Assets/g1/`), Isaac USD (Git-LFS submodule); `golem_ros2_models` installs the models for ROS, and the sims read them directly |
 | `mujoco_mpc/` | MuJoCo-MPC fork submodule (built standalone, outside colcon — see §8) |
 | `unitree_sdk2_python/` | vendored Unitree DDS SDK (Python) |
-| `tests/` | simulator regression and acceptance tests (`tests/README.md`); the G1 acceptance tests are in `tests/g1/` |
+| `tests/` | simulator regression and acceptance tests (`tests/README.md`); the G1 acceptance tests are in `tests/g1/`, the closed-loop test of both robots in `tests/sim/` |
 | `tools/` | standalone debug tools (ROS MCP server for Claude Code; `read_lowstate.py`, which prints the real G1's `rt/lowstate`) |
 | `docs/` | user-facing docs: `SETUP.md`, `RUNNING.md`, `MACOS.md`, `DDS_TUNING.md`, `DOCKER_TESTING.md`, `NAVIGATION_DEMO.md`, `ROS_MCP_DEBUG.md`, and the G1's in `docs/g1/` |
 | `docker/BUILD.md` | deep dive on the image/build system — read it before touching any Dockerfile |
@@ -175,7 +178,7 @@ nests `unitree_api`, `unitree_go`, `unitree_hg`, `unitree_ros2_example`).
 | `golem_ros2_models` | **description (both robots)** | Installs both robots' models from `CL_Assets`: the H1-2 with its Magpie grippers and the G1 with its Dex3-1 hands, each a Pinocchio URDF, a ROS copy with `package://golem_ros2_models/...` URIs, the meshes, and a sphere-packed self-collision model with its SRDF. No nodes and no joint table (that is `golem_safety`'s robot profile) | `golem_ros2_models.paths`; `launch/display.launch.py` (`robot:=h12|g1`) |
 | `deploy_mjpc` | controller (lower body, MPC) | MJPC balance/locomotion controller (C++ cores from the `mujoco_mpc` fork, run as separate processes) + RW-EKF base estimator. No bringup starts the controller today (`lowerbody:=mjpc` starts no leg node), and the estimator only with `use_estimator:=true` | `mjpc_lowerbody_core`, `controller_launcher.py`, `estimator_node.py` |
 | `h12_lowerbody_rl` | controller (lower body, RL) | TorchScript walking, FAME RMA stand/squat and ALMI stand/walk policies, run by one controller pinned to one of them (`active_policy`: `almi` in every bringup; the Mac's `GOLEM_LOWERBODY` picks `fame`, `walk` or `almi`); consumes `/lowstate` + `/cmd_vel`, emits 12-joint PD setpoints | `lowerbody_controller_node` |
-| `lmg_deploy` | controller (whole body, MARL) | The loco-manipulation game's two-agent (legs + IK arms) MARL policy, run by the `lmg_*` bringups | `marl_deploy_node` |
+| `lmg_deploy` | controller (whole body, MARL) | The loco-manipulation game's two-agent (legs + IK arms) MARL policy, run by the `lmg_*` bringups. It reads `/livox/imu` as if `livox_imu_link` were upright; the H1-2's models and RoboCasa sim carry the MID-360's raw, upside-down frame there, so the policy gets an upside-down IMU until `lmg_deploy` is updated (its strict xfail `test_urdf_mount_is_the_livox_pitch`) | `marl_deploy_node` |
 | `golem_slam` | SLAM + navigation (both robots) | One navigation graph for both robots (FAST-LIO deskewed cloud → self filter → floor alignment (`level_odom`)/OctoMap and `level_cloud` → scan → slam_toolbox → Nav2 MPPI, every Nav2 command through the velocity smoother), with the dynamic `body → pelvis` transform (`body_to_pelvis`, following the torso or waist joints) and a static `<lidar link> → livox_frame`. `navigation.launch.py robot:=h12\|g1` picks the robot's config directory, `config/<robot>/`: FAST-LIO (`fastlio.yaml`, the G1 sim's `fastlio_sim.yaml`), the MID360 driver config (`MID360_config.json`, real robot, read by the real-driver launches), Nav2 (`nav2.yaml`), OctoMap (`octomap.yaml`) and the pipeline profile (`pipeline.yaml`: lidar link, scan band, `level_odom` values); slam_toolbox's `config/slam_toolbox.yaml` is shared | `launch/navigation.launch.py`, `body_to_pelvis`, `config/` |
 | `golem_skills` | **skills (both robots)** | Action servers for the 12 `/skill/*` atomic skills an LLM can call (frontier exploration lives here). See §7. | `skills` (SkillsNode) |
 | `model_server` | model server | ROS service servers wrapping ML models: Gemini VLM, SAM3 segmentation, GraspGenX grasp generation, YOLO detection | `gemini_server`, `sam_server`, `graspgen_server`, `yolo_server` |
@@ -216,8 +219,8 @@ thumb:
 - Confine a change to the package it belongs to. If a task seems to require
   edits across packages, stop and coordinate first.
 - Shared infra — `golem_bringup`, `custom_ros_messages`/`magpie_msgs`
-  (both robots use `custom_ros_messages`), `docker/`, `golem_safety` and
-  `golem_upper_ik` (both robots run them), the simulators — affects everyone.
+  (both robots use `custom_ros_messages`), `docker/`, `golem_safety`,
+  `golem_upper_ik` and `golem_slam` (both robots run them), the simulators — affects everyone.
   Treat changes there as interface changes: minimal, deliberate, announced.
 - Submodule packages must be committed and pushed in the submodule repo, then
   the pin bumped here. Never leave a submodule pointing at an unpushed commit.
@@ -531,6 +534,8 @@ three RealSense RGBD camera streams with camera info, and
 `rt/lowcmd` and optional `rt/inspire/cmd`. The default asset is the floating-base Magpie H1-2; `--hand_type inspire`
 selects the Inspire fixture. Magpie exposes the real gripper state, services,
 and DeliGrasp action through a native ROS process inside the Isaac container.
+Its H1-2 (the USD) keeps the MID-360 upright, unlike the RoboCasa sim and the
+real robot's raw frame, so `golem_slam`'s H1-2 configs do not match Isaac's lidar.
 See `tests/README.md` for saved CPU and cross-container integration tests.
 
 ### Ground truth must NEVER be on by default
@@ -545,8 +550,9 @@ sim-to-real transfer.
   TF is gated by `GOLEM_SIM_ODOM` (default `'0'` = off, read in `h12_mujoco.py`
   and `g1/g1_mujoco.py`). No stack opts in: every bringup's navigation, the Mac's included, runs on FAST-LIO, and the G1 bringup and tests refuse it. Keep it that way. The
   experiment surface (`/sim/ground_truth`, `/sim/reset_objects`) is gated by
-  `GOLEM_SIM_EXPERIMENT` (`measurement_bridge.py`). The G1 acceptance tests
-  record the robot's state inside the sim process instead of publishing it.
+  `GOLEM_SIM_EXPERIMENT` (`measurement_bridge.py`). The closed-loop tests
+  (`tests/g1`, `tests/sim`) refuse it too, and record the robot's state inside
+  the sim process instead of publishing it.
 - **Isaac:** no full-scene ground-truth publisher or per-step scene JSON conversion.
 - **Known deviations (do not make worse):** RoboCasa always publishes privileged task signals
   (`/robocasa/success`, `/robocasa/reward`, `/robocasa/task_goal`,
@@ -715,6 +721,12 @@ ros2 action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
   "{target_object: 'vertical fridge handle', arm: 'right', timeout: {sec: 60, nanosec: 0}}" --feedback
 ```
 
+The closed-loop check of the whole H1-2 stack in RoboCasa is
+`tests/sim/test_sim_stack.sh --h12` (`tests/sim/README.md`): the robot standing
+unsupported, a Nav2 goal reached by walking, `/named_config` moves while it
+walks, SLAM healthy throughout and `safety_node` the only `/lowcmd` publisher.
+`tests/stack/run.sh` checks the arms and the legs alone.
+
 ### x86, the G1
 
 ```bash
@@ -742,8 +754,9 @@ ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
 Walking and navigation need the spawn backed into open floor
 (`GOLEM_SPAWN_BACKOFF=2.0` before terminal 1's command); `docs/g1/walking.md`,
 `navigation.md` and `exploration.md` have those flows. The closed-loop checks
-are `tests/g1/test_sim_bringup.sh [--walk]`, `tests/g1/test_sim_nav.sh` and
-`tests/g1/test_sim_explore.sh` (`tests/g1/README.md`).
+are `tests/sim/test_sim_stack.sh --g1` (the same test as the H1-2's:
+`tests/sim/README.md`), `tests/g1/test_sim_bringup.sh [--walk]`,
+`tests/g1/test_sim_nav.sh` and `tests/g1/test_sim_explore.sh` (`tests/g1/README.md`).
 
 ### mac
 

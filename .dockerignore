@@ -1,12 +1,13 @@
-# Deny-all build context. Everything is bind-mounted at runtime via
-# docker-compose.yml, so sending it to the daemon is wasted bandwidth (~11 GB
-# on full builds otherwise). Un-deny only files that a Dockerfile COPYs in.
-#
-# Whitelisted COPY sources:
-#   RobocasaDockerfile, mac/RobocasaDockerfile.arm64, mac/RosDockerfile.slim.arm64
-#                      -> core_ws/src/livox_ros_driver2 (baked-in livox build)
-#   BaseDockerfile   -> unitree_sdk2_python (local SDK install)
-#   IsaacDockerfile  -> magpie_msgs + private Humble runtime packager
+# The build context holds only what a Dockerfile COPYs; everything else (core_ws,
+# the simulators, assets, weights) is bind-mounted at runtime, and sending it
+# would cost about 11 GB per build. Deny all, then re-include the COPY sources:
+#   unitree_sdk2_python                      BaseDockerfile, mac/BaseDockerfile.arm64
+#   core_ws/src/livox_ros_driver2            RobocasaDockerfile, mac/RobocasaDockerfile.arm64,
+#                                            mac/RosDockerfile.slim.arm64
+#   core_ws/src/magpie_msgs                  IsaacDockerfile
+#   docker/scripts/package_humble_runtime.py IsaacDockerfile
+#   docker/locks/**                          every Dockerfile
+# Their .git entries stay out.
 *
 !core_ws
 core_ws/*

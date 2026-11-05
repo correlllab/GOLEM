@@ -1,11 +1,22 @@
 #!/usr/bin/env bash
+# Build the GOLEM images (docker/BUILD.md).
+#
 # Usage: docker_build.sh [--pull] [--no-cache] [isaac|robocasa|ros ...]
+#   isaac, robocasa, ros  the images to build; none: robocasa, ros and (Linux
+#                         only) isaac. robocasa and ros build golem_base first.
+#   --pull                refresh the public base images (CUDA, Isaac Sim)
+#   --no-cache            rebuild every layer
+# Environment: GOLEM_PLATFORM=mac (set by docker_build_mac.sh) builds the arm64
+# images; docker/.env and the shell as in docker_common.sh.
+# Exit status: 0 when every build succeeds; 1 on a bad argument or a missing
+# source; otherwise the failing docker command's status.
 set -eo pipefail
 source "$(dirname "$0")/docker_common.sh"
 load_config
 SERVICES=()
 BUILD_FLAGS=()
 CHILD_FLAGS=()
+# --pull goes only to builds with a public base; --no-cache to every build.
 for arg in "$@"; do
     case "$arg" in
         --pull) BUILD_FLAGS+=("$arg");;
@@ -18,6 +29,9 @@ if [ ${#SERVICES[@]} -eq 0 ]; then
     SERVICES=(robocasa ros)
     [ "${GOLEM_PLATFORM:-linux}" = mac ] || SERVICES+=(isaac)
 fi
+# Check the COPY sources and resolve the MJPC commit before building anything.
+# The ros image builds MJPC at the mujoco_mpc submodule's commit, so the baked
+# build matches the source docker-compose.yml mounts.
 NEEDS_BASE=0
 for service in "${SERVICES[@]}"; do
     case "$service" in
@@ -30,6 +44,7 @@ for service in "${SERVICES[@]}"; do
         echo "MJPC_REF=$MJPC_REF"
     fi
 done
+# golem_base first, under the local tag the children's FROM names.
 if [ "$NEEDS_BASE" = 1 ]; then
     if [ "${GOLEM_PLATFORM:-linux}" = mac ]; then
         docker build --platform linux/arm64 "${BUILD_FLAGS[@]}" -t golem_base:arm64 -f docker/mac/BaseDockerfile.arm64 .
@@ -37,8 +52,9 @@ if [ "$NEEDS_BASE" = 1 ]; then
         docker build --platform linux/amd64 "${BUILD_FLAGS[@]}" -t golem_base:latest -f docker/BaseDockerfile .
     fi
 fi
-# Child images inherit the local base we just built; --pull there would try
-# downloading golem_base from Docker Hub. Isaac has a public upstream base.
+# Isaac has a public base, so it gets --pull. The children build on the local
+# golem_base just built: --pull there would try to download golem_base from
+# Docker Hub.
 CHILDREN=()
 for service in "${SERVICES[@]}"; do
     if [ "$service" = isaac ]; then

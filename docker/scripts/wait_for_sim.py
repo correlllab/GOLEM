@@ -1,34 +1,43 @@
 #!/usr/bin/env python3
-"""Wait for a fresh Unitree lowstate sample before starting ROS bringup, and
-refuse it when the simulator runs another robot than GOLEM_ROBOT (h12 or g1,
-default h12). Both robots' simulators publish the same rt/lowstate IDL, so on
-a shared domain a G1 bringup would otherwise start against the H1-2 sim, or
-the reverse."""
+"""Wait for a simulator's first rt/lowstate sample before the bringup starts.
+
+launch_ros.sh and launch_ros_mac.sh run it when GOLEM_WAIT_FOR_SIM=1 (the
+stack wrappers and tests/stack). Both robots' simulators publish the same
+rt/lowstate type, so it also refuses a simulator of the other robot, told
+apart by LowState_.mode_machine.
+
+Environment: GOLEM_ROBOT (h12 or g1, default h12), ROS_DOMAIN_ID (1..232,
+default 1), GOLEM_SIM_TIMEOUT (s, > 0, default 180).
+Exit status: 0 when a sample of the selected robot arrives; 1 on no sample
+within the timeout or another robot's sample. A bad environment value raises
+ValueError.
+"""
 import os
 import sys
 
-# LowState_.mode_machine of each robot's simulators: both robots' sims report
-# their robot's own value, the one the real robot reports. The H1-2's RoboCasa
-# and Isaac sims set 6 (golem_robocasa/unitree_interface.py,
-# CL_isaaclab_sim/src/python/dds/specialized/h12_robot_dds.py); the G1 sim sets 5
-# (MODE_MACHINE in golem_robocasa/g1/unitree_interface.py).
+# LowState_.mode_machine each robot's simulators report: the real robot's value
+# (golem_robocasa/unitree_interface.py and CL_isaaclab_sim for the H1-2,
+# golem_robocasa/g1/unitree_interface.py for the G1). golem_safety's robot
+# profiles (robots/<robot>.yaml) hold the same values.
 MODE_MACHINE = {'h12': 6, 'g1': 5}
 
 
 def expected_mode_machine(robot: str) -> int:
-    """The mode_machine that a simulator of robot ('h12' or 'g1') reports."""
+    """Return the mode_machine of robot's simulators; ValueError unless robot is h12 or g1."""
     if robot not in MODE_MACHINE:
         raise ValueError(f"GOLEM_ROBOT must be h12 or g1, not {robot!r}")
     return MODE_MACHINE[robot]
 
 
 def main():
+    """Wait for one rt/lowstate sample, check its robot and return the exit status."""
     robot = os.environ.get('GOLEM_ROBOT', '').strip().lower() or 'h12'
     expected = expected_mode_machine(robot)
     domain = int(os.environ.get('ROS_DOMAIN_ID') or '1')
     timeout = float(os.environ.get('GOLEM_SIM_TIMEOUT', '180'))
     if not 1 <= domain <= 232 or timeout <= 0:
         raise ValueError('Expected simulation domain 1..232 and a positive GOLEM_SIM_TIMEOUT')
+    # Imported after the checks, so a bad environment fails without the SDK.
     from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
     from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
 

@@ -1,13 +1,16 @@
-# ==============================
-# Shared base for Isaac and MuJoCo simulation environments
-#
-# Contains: CUDA/Ubuntu base, Python 3.10 via apt, ROS 2 Humble via apt,
-#           CycloneDDS 0.10.x (from source, for PyPI cyclonedds compat),
-#           uv for Python installs, unitree_sdk2_python, PyTorch cu130,
-#           and shared kinematics libs (pin/pink/mink).
-# Build:   docker compose build base
-# ==============================
+# golem_base: the shared foundation of golem_ros (RosDockerfile) and
+# golem_sim_robocasa (RobocasaDockerfile). Holds what both need: Ubuntu 22.04
+# with ROS 2 Humble, Python 3.10, CycloneDDS 0.10.x built from source, the
+# Unitree Python SDK, PyTorch cu130 and the pin / pink / mink kinematics libs.
+# docker/scripts/docker_build.sh builds it as golem_base:latest before either
+# child; docker/BUILD.md §3 describes it.
+
+# CUDA 12.2 devel on Ubuntu 22.04 (Jammy, the platform ROS 2 Humble targets),
+# pinned by digest so every build starts from the same image (locks/SOURCES.md).
 FROM nvidia/cuda:12.2.0-devel-ubuntu22.04@sha256:c4e81887e4aa9f13b1119337323cba89601319ecb282383b879c4ba50510fd17
+# The Python constraint files and the dated apt snapshot sources
+# (locks/apt-sources.sh, with the vendored ROS snapshot key). Every apt and pip
+# step below resolves against these, so a rebuild gets the same versions.
 COPY docker/locks/base-*.txt docker/locks/apt-sources.sh docker/locks/ros-snapshot.asc /opt/golem-locks/
 RUN sh /opt/golem-locks/apt-sources.sh
 
@@ -15,18 +18,26 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=America/Denver
 ENV LANG=C.UTF-8
 ENV ROS_DISTRO=humble
+# Every container talks ROS over CycloneDDS, the same DDS the Unitree SDK uses.
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
+# Optional build-time proxies; cleared at the end of this file so they do not
+# reach the image or its children.
 ARG http_proxy
 ARG https_proxy
 ENV http_proxy=${http_proxy}
 ENV https_proxy=${https_proxy}
 
-# Use US mirror for faster downloads
+# Matches nothing: apt-sources.sh has already replaced archive.ubuntu.com with
+# the dated snapshot. TODO(max): delete with the next deliberate base rebuild
+# (removing it rebuilds every image built on golem_base).
 RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|http://us.archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list
 
-# Superset of packages needed by both simulators: compilers, graphics, Python 3.10,
-# locale setup, ROS repo prerequisites.
+# Packages both simulators and the workspace need: gcc-12 / g++-12 (made the
+# default compilers), cmake, git and git-lfs, Python 3.10 as `python`, the
+# X11 / GL / Vulkan / EGL / OSMesa runtime libraries MuJoCo and the viewers
+# load, and the locale. add-apt-repository rewrites sources.list, so
+# apt-sources.sh runs again afterwards to put the dated snapshots back.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg locales software-properties-common \
         gcc-12 g++-12 cmake build-essential git git-lfs wget unzip \
@@ -42,14 +53,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100 \
     && rm -rf /var/lib/apt/lists/*
 
-# ROS 2 Humble apt repository.
+# The ROS 2 Humble apt source: the 2026-08-07 snapshot, verified with the
+# vendored snapshot key. The rosdistro key downloaded here (pinned to a
+# rosdistro commit) is not referenced by any apt source. TODO(max): drop the
+# download with the next deliberate base rebuild.
 RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/e31287f892ecd01b170d1cbfa298db35abe4a74f/ros.key \
         -o /usr/share/keyrings/ros-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/opt/golem-locks/ros-snapshot.asc] http://snapshots.ros.org/humble/2026-08-07/ubuntu jammy main" \
         > /etc/apt/sources.list.d/ros2.list
 
-# ROS 2 Humble packages needed by the sim processes (rclpy + sensor/TF publishers).
-# ros-humble-ros-base brings rclpy, rclcpp, rmw, launch, ament.
+# ROS 2 Humble for the simulators' ROS side: ros-base (rclpy, rclcpp, launch,
+# ament), the CycloneDDS RMW, and the message / TF / cv_bridge packages their
+# sensor publishers use.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-ros-base \
         ros-humble-rmw-cyclonedds-cpp \
@@ -61,14 +76,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-cv-bridge \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv for fast, deterministic pip-compatible installs.
-# UV_INSTALL_DIR overrides the default ~/.local/bin location.
+# uv 0.12.15 into /usr/local/bin, for the system-wide pip installs below and in
+# RobocasaDockerfile. The installer URL names the version, so it never moves.
 RUN curl -LsSf https://astral.sh/uv/0.12.15/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
     && uv --version
 
-# Build CycloneDDS 0.10.x. Pinned because the PyPI `cyclonedds` wheel (transitive
-# dep of unitree_sdk2_python) references `dds/ddsi/q_radmin.h`, removed post-0.10.
-# CYCLONEDDS_HOME points the PyPI wheel at this install at pip-build time.
+# CycloneDDS 0.10.x from source, at a fixed commit. The PyPI `cyclonedds`
+# binding that unitree_sdk2_python needs includes dds/ddsi/q_radmin.h, which
+# CycloneDDS removed after 0.10; CYCLONEDDS_HOME points the binding's build at
+# this install.
 RUN git clone https://github.com/eclipse-cyclonedds/cyclonedds /cyclonedds && \
     git -C /cyclonedds checkout --quiet 5041f3560c088c99e5088b2b8520b69169621196 && \
     cd /cyclonedds && mkdir build install && cd build && \
@@ -78,32 +94,33 @@ RUN git clone https://github.com/eclipse-cyclonedds/cyclonedds /cyclonedds && \
 
 ENV CYCLONEDDS_HOME=/cyclonedds/install
 
-# Install unitree_sdk2_python from the local checkout and keep the source in
-# the image for development/debugging.
+# The Unitree Python SDK (unitree_sdk2py) from the repo's submodule, whose
+# source stays in the image. setup.py's find_packages skips directories without
+# an __init__.py, among them utils/lib with the native CRC libraries
+# (crc_amd64.so) that rt/lowcmd needs, so the whole package tree is copied over
+# the installed one.
 COPY unitree_sdk2_python /home/code/unitree_sdk2_python
 RUN cd /home/code/unitree_sdk2_python && \
     uv pip install -c /opt/golem-locks/base-amd64-01.txt --system . && \
     SP=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
     cp -r /home/code/unitree_sdk2_python/unitree_sdk2py/* "$SP/unitree_sdk2py/"
 
-# PyTorch with CUDA 13.0 (supports sm_120 / Blackwell, e.g. RTX 5070 Ti).
-# Bundled CUDA runtime is self-contained — no host toolkit version dependency.
-# UV_HTTP_TIMEOUT raised from default 30s because multi-hundred-MB NVIDIA wheels
-# from pypi.nvidia.com can stall past the default on slow links.
+# PyTorch and torchvision, CUDA 13.0 builds: they support sm_120 (Blackwell,
+# e.g. the RTX 5070 Ti) and bundle their own CUDA runtime, so they do not
+# depend on the base image's CUDA 12.2. UV_HTTP_TIMEOUT is 600 s because the
+# multi-hundred-MB NVIDIA wheels can stall past uv's 30 s default.
 RUN UV_HTTP_TIMEOUT=600 uv pip install -c /opt/golem-locks/base-amd64-02.txt --system --no-cache \
         torch torchvision \
         --index-url https://download.pytorch.org/whl/cu130
 
-# Shared kinematics / IK libs used by sim code across Isaac and MuJoCo.
-# PyPI `pin` provides the `pinocchio` module. `pink` / `mink` are Pythonic IK
-# wrappers built on pinocchio. Kept in base so per-sim Dockerfiles don't
-# duplicate them; ROS container is standalone and installs its own pinocchio.
+# Kinematics libraries: `pin` (the pinocchio module) and the pink and mink IK
+# wrappers. golem_ros replaces this pinocchio closure with its own NumPy-1.26
+# build (RosDockerfile).
 RUN uv pip install -c /opt/golem-locks/base-amd64-03.txt --system --no-cache pin pink mink
 
-# Source ROS 2 on every interactive shell.
 RUN echo 'source /opt/ros/humble/setup.bash' >> /root/.bashrc
 
-# Clear build-time proxy vars so they don't leak into the image or child images.
+# Clear the build-time proxies (see the ARGs above).
 ENV http_proxy=
 ENV https_proxy=
 

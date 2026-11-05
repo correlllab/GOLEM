@@ -1,40 +1,43 @@
 #!/bin/bash
-# Apple-Silicon / CPU launcher for the MuJoCo (RoboCasa) sim.
-# Same as launch_robocasa.sh but CPU/software rendering, no NVIDIA EGL.
+# The Mac robocasa container's command: build msgs_ws, then run the RoboCasa
+# simulator of the H1-2 (golem_robocasa/h12_mujoco.py) with CPU rendering.
 #
-# Two display modes, selected by the GOLEM_DISPLAY env var (default: headless):
-#   GOLEM_DISPLAY=headless  OSMesa offscreen, no viewer window (the default)
-#   GOLEM_DISPLAY=vnc       render the interactive MuJoCo viewer with software GL
-#                          (llvmpipe) into an in-container Xvfb and stream it out
-#                          over VNC/noVNC. MuJoCo's GL window cannot be forwarded
-#                          to macOS XQuartz on Apple Silicon (broken indirect
-#                          GLX), so we ship pixels instead. View from the Mac by
-#                          running docker/mac/scripts/mac_vnc_tunnel.sh, then opening
-#                          http://localhost:6080/vnc.html.
-#
-# Extra args pass through to h12_mujoco.py.
+# Usage: launch_robocasa_mac.sh [h12_mujoco.py arguments...]
+# Environment:
+#   ROS_DOMAIN_ID       1..232 (1 when unset); domain 0 is refused
+#   GOLEM_DISPLAY       headless (default): OSMesa offscreen, no viewer, and
+#                       --headless is added. vnc: the interactive viewer,
+#                       rendered with llvmpipe into an in-container Xvfb (:99)
+#                       and served over noVNC on 6080
+#                       (http://localhost:6080/vnc.html through
+#                       docker/mac/scripts/mac_vnc_tunnel.sh); a GL window
+#                       cannot be forwarded to XQuartz on Apple Silicon.
+#   VNC_GEOMETRY        that display's WxHxD (default 1280x800x24)
+#   GOLEM_PREPARE_ONLY  1: build msgs_ws and exit 0 (docker_stack.sh)
+#   the simulator's knobs (docker/mac/docker-compose.yml)
+# Exit status: 1 on a refused domain or when Xvfb does not start; colcon's
+# status when the msgs_ws build fails; otherwise the simulator's.
 set -e
 source "/home/code/golem_common/runtime_common.sh"
 validate_sim_domain
 
 GOLEM_DISPLAY="${GOLEM_DISPLAY:-headless}"
 
-# VNC/noVNC ports (only used when GOLEM_DISPLAY=vnc). Bound to localhost inside the
-# Colima VM; reachable from the Mac only through the SSH tunnel (Colima does not
-# forward host-network container ports, so a tunnel is required — see
-# mac_vnc_tunnel.sh).
+# The viewer's VNC display and ports (GOLEM_DISPLAY=vnc), bound to localhost in
+# the Colima VM. Colima does not forward host-network container ports, so the
+# Mac reaches them through mac_vnc_tunnel.sh's SSH tunnel.
 VNC_DISPLAY=:99
 VNC_PORT=5900
 NOVNC_PORT=6080
 VNC_GEOMETRY="${VNC_GEOMETRY:-1280x800x24}"
 
-# Bring up Xvfb + fluxbox + x11vnc + noVNC and point DISPLAY at the virtual
-# framebuffer. All children are killed on exit via the trap below.
+# Start Xvfb, fluxbox, x11vnc and websockify in the background and point
+# DISPLAY at the Xvfb display; exit 1 when Xvfb does not come up within 15 s.
+# cleanup_vnc_stack stops them on exit.
 start_vnc_stack() {
     echo "[launch_robocasa_mac] starting VNC stack on $VNC_DISPLAY ($VNC_GEOMETRY)"
-    # `docker restart` reuses the container FS, so a stale /tmp/.X99-lock (and the
-    # abstract socket) from the previous run makes Xvfb abort with "Server is
-    # already active for display 99". Clear any leftovers first so restarts work.
+    # `docker restart` keeps the container's filesystem: clear a previous run's
+    # X lock and socket, or Xvfb aborts with "Server is already active".
     dnum="${VNC_DISPLAY#:}"
     pkill -f "Xvfb ${VNC_DISPLAY}" 2>/dev/null || true
     sleep 0.3
@@ -42,7 +45,6 @@ start_vnc_stack() {
     Xvfb "$VNC_DISPLAY" -screen 0 "$VNC_GEOMETRY" +extension GLX +render -noreset \
         >/tmp/xvfb.log 2>&1 &
     export DISPLAY="$VNC_DISPLAY"
-    # wait for the X server to accept connections
     for _ in $(seq 1 30); do
         xdpyinfo -display "$VNC_DISPLAY" >/dev/null 2>&1 && break
         sleep 0.5
@@ -50,12 +52,11 @@ start_vnc_stack() {
     xdpyinfo -display "$VNC_DISPLAY" >/dev/null 2>&1 \
         || { echo "[launch_robocasa_mac] Xvfb failed to start"; cat /tmp/xvfb.log; exit 1; }
 
-    fluxbox >/tmp/fluxbox.log 2>&1 &   # bg set by the fbsetbg shim (Dockerfile)
+    fluxbox >/tmp/fluxbox.log 2>&1 &
     sleep 1
 
-    # -localhost: only accept VNC connections from within the VM (the SSH tunnel
-    # terminates on the VM's loopback). -nopw is safe because the port is not
-    # otherwise reachable from the Mac.
+    # -localhost: VNC accepts connections only from inside the VM, where the
+    # SSH tunnel ends; that is why -nopw (no password) is acceptable.
     x11vnc -display "$VNC_DISPLAY" -rfbport "$VNC_PORT" -localhost \
         -forever -shared -nopw -quiet -bg >/tmp/x11vnc.log 2>&1
     sleep 1
@@ -68,6 +69,7 @@ start_vnc_stack() {
     echo "[launch_robocasa_mac]   http://localhost:${NOVNC_PORT}/vnc.html?autoconnect=1&resize=scale"
 }
 
+# Stop the VNC stack's processes.
 cleanup_vnc_stack() {
     pkill -f "websockify .*${NOVNC_PORT}" 2>/dev/null || true
     pkill -x x11vnc 2>/dev/null || true
@@ -76,15 +78,14 @@ cleanup_vnc_stack() {
 }
 
 source /opt/ros/humble/setup.bash
-# livox_ros_driver2 (CustomMsg/CustomPoint) is baked into the robocasa image at
-# /opt/livox_ws so the sensor suite (h12_sensors.py) can import it.
+# livox_ros_driver2's CustomMsg for h12_sensors.py, baked into the image at
+# /opt/livox_ws.
 source /opt/livox_ws/install/setup.bash
 
-# Build the IDL-only msgs workspace (fast no-op when unchanged).
-# build/install go to /opt paths backed by named docker volumes on the VM's
-# native ext4: writing colcon's --symlink-install tree onto the virtiofs
-# bind-mount stalls for minutes (hundreds of symlinks at ~0% CPU). Named volumes
-# are both fast and persistent, so this is a real no-op on unchanged rebuilds.
+# Build the message-only msgs_ws (magpie_msgs, custom_ros_messages). build/
+# and install/ are named volumes on the VM's own disk: a --symlink-install tree
+# written onto the virtiofs bind mount stalls for minutes. They persist, so an
+# unchanged rebuild is a no-op.
 MSGS_WS=/home/code/msgs_ws
 MSGS_BUILD=/opt/msgs_ws/build
 MSGS_INSTALL=/opt/msgs_ws/install
@@ -95,19 +96,17 @@ echo "[launch_robocasa_mac] building $MSGS_WS -> $MSGS_INSTALL"
 source "$MSGS_INSTALL/setup.bash"
 [ "${GOLEM_PREPARE_ONLY:-0}" != 1 ] || exit 0
 
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-1}"
-
 if [ "$GOLEM_DISPLAY" = "vnc" ]; then
-    # Interactive viewer via software GL into Xvfb, streamed over VNC/noVNC.
+    # The windowed viewer (GLFW) on the Xvfb display, rendered with llvmpipe
+    # (no GPU under Colima); no --headless.
     trap cleanup_vnc_stack EXIT
     start_vnc_stack
-    export LIBGL_ALWAYS_SOFTWARE=1   # force llvmpipe; there is no GPU under Colima
-    export MUJOCO_GL=glfw            # windowed viewer (renders onto Xvfb :99)
-    # Do NOT inject --headless here: the whole point of this mode is the window.
+    export LIBGL_ALWAYS_SOFTWARE=1
+    export MUJOCO_GL=glfw
 else
-    # Pure-software offscreen rendering — the only backend available without a GPU.
+    # OSMesa software rendering offscreen, and --headless: the VM has no X
+    # display.
     export MUJOCO_GL=osmesa
-    # Force headless: there is no reachable X display inside the Colima VM.
     case " $* " in
         *" --headless "*) ;;
         *) set -- "$@" --headless ;;

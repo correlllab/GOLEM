@@ -1,4 +1,10 @@
-# ROS NumPy 1.26 ABI: Pinocchio 2.7 / Boost 1.83, explicit compatible closure.
+# Common constraint set for every pip step in
+# docker/mac/RosDockerfile.slim.arm64: the x86 set's versions without CUDA
+# packages, not yet validated by a native arm64 build. Each numbered
+# ros-arm64-NN.txt includes it with -c and pins the packages whose version
+# changes between steps (huggingface-hub, mujoco, numpy, psutil, setuptools,
+# wheel), which this set leaves out. NumPy stays 1.26 for the apt scipy /
+# pinocchio ABI.
 absl-py==2.5.0
 addict==2.4.0
 aiohappyeyeballs==2.7.1

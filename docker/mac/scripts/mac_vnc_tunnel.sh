@@ -1,32 +1,30 @@
 #!/bin/bash
-# Mac-side helper: SSH-tunnel the in-container noVNC/VNC ports to the Mac's
-# localhost. Colima does NOT forward host-network container ports to the Mac
-# (and this Colima has no reachable VM IP), so a tunnel over Colima's own SSH is
-# the way in. Pairs with GOLEM_DISPLAY=vnc (MuJoCo viewer) and GOLEM_RVIZ=vnc (RViz).
-#
-# Forwards both viewers' ports (harmless if only one is running):
-#   MuJoCo viewer : http://localhost:6080/vnc.html   (VNC localhost:5900)
-#   RViz          : http://localhost:6081/vnc.html   (VNC localhost:5901)
-#   ROS MCP server: http://localhost:6082/mcp        (GOLEM_ROS_MCP=1)
+# Run on the Mac: forward the in-VM viewer and MCP ports to the Mac's
+# localhost through an SSH tunnel over Colima's own SSH config. Colima does not
+# forward host-network container ports to the Mac, so a tunnel is the way in.
+# Forwarding a port nothing listens on yet is harmless.
+#   MuJoCo viewer   http://localhost:6080/vnc.html  (VNC localhost:5900; GOLEM_DISPLAY=vnc)
+#   RViz            http://localhost:6081/vnc.html  (VNC localhost:5901; GOLEM_RVIZ=vnc)
+#   ROS MCP server  http://localhost:6082/mcp       (GOLEM_ROS_MCP=1)
 #
 # Usage:
-#   ./mac_vnc_tunnel.sh          open the tunnel, print the URLs
-#   ./mac_vnc_tunnel.sh --open   ... and open both noVNC pages in the browser
-#   ./mac_vnc_tunnel.sh --stop   close the tunnel
-#
-# Env: COLIMA_PROFILE (default: default).
+#   mac_vnc_tunnel.sh          open the tunnel (replacing an old one), print the URLs
+#   mac_vnc_tunnel.sh --open   ... and open both noVNC pages in the browser
+#   mac_vnc_tunnel.sh --stop   close the tunnel
+# Environment: COLIMA_PROFILE (default: default).
+# Exit status: 0 on success; 1 without colima, when colima ssh-config fails or
+# has no Host entry; ssh's status when the tunnel cannot be opened.
 set -euo pipefail
 
 PROFILE="${COLIMA_PROFILE:-default}"
-# Ports to forward: noVNC (browser) + raw VNC for the MuJoCo viewer and RViz, plus
-# 6082 for the ROS debugging MCP server (GOLEM_ROS_MCP=1).
+# noVNC and VNC of the MuJoCo viewer, then of RViz, then the MCP server.
 PORTS=(6080 5900 6081 5901 6082)
 MUJOCO_URL="http://localhost:6080/vnc.html?autoconnect=1&resize=scale"
 RVIZ_URL="http://localhost:6081/vnc.html?autoconnect=1&resize=scale"
 
-# Kill whatever ssh is holding any of our forwarded ports. We match by listening
-# port (via lsof), NOT by command line: `ssh -f` daemonizes and truncates its
-# argv, so pgrep/pkill on "-L <port>" would miss it.
+# Kill every ssh process listening on one of PORTS. It matches by listening
+# port (lsof), not by command line: `ssh -f` daemonizes and truncates its argv,
+# so pgrep on "-L <port>" would miss it.
 stop_tunnel() {
     local killed=0 pid port
     for port in "${PORTS[@]}"; do
@@ -45,7 +43,7 @@ esac
 
 command -v colima >/dev/null 2>&1 || { echo "ERROR: colima not found on PATH"; exit 1; }
 
-# Ask colima for the SSH config to its VM and extract the Host alias from it.
+# Colima's SSH config for the VM, and the Host alias in it.
 CFG="$(mktemp -t colima-ssh.XXXXXX)"
 if ! colima ssh-config --profile "$PROFILE" >"$CFG" 2>/dev/null; then
     echo "ERROR: 'colima ssh-config' failed — is colima running? (colima start)"; rm -f "$CFG"; exit 1
@@ -53,12 +51,12 @@ fi
 HOST_ALIAS="$(awk '/^Host /{print $2; exit}' "$CFG")"
 [ -n "$HOST_ALIAS" ] || { echo "ERROR: could not read Host alias from colima ssh-config"; rm -f "$CFG"; exit 1; }
 
-# Replace any existing tunnel on these ports (else ExitOnForwardFailure trips).
+# Close an existing tunnel first; a port still bound locally would trip
+# ExitOnForwardFailure.
 stop_tunnel >/dev/null
 sleep 1
 
-# Build -L args for every port (forwarding a port whose remote side isn't
-# listening yet is fine — only a LOCAL bind clash would fail, and we just cleared those).
+# One -L per port, each to the same port on the VM's loopback.
 FWD_ARGS=()
 for port in "${PORTS[@]}"; do
     FWD_ARGS+=(-L "${port}:127.0.0.1:${port}")

@@ -1,3 +1,4 @@
+# Constraints for RobocasaDockerfile: robosuite_models, mimicgen and mink.
 -c robocasa-amd64.txt
 huggingface-hub==1.31.0
 mujoco==3.3.1

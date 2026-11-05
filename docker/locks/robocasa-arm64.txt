@@ -1,5 +1,9 @@
-# Recorded from installed Linux images, 2026-09-17.
-# arm64 files reuse portable versions; require native build validation.
+# Common constraint set for every uv step in
+# docker/mac/RobocasaDockerfile.arm64: the x86 set's versions without CUDA
+# packages, not yet validated by a native arm64 build. Each numbered
+# robocasa-arm64-NN.txt includes it with -c and pins the packages whose
+# version changes between steps (huggingface-hub, mujoco, numpy, psutil),
+# which this set leaves out.
 absl-py==2.5.0
 aiohappyeyeballs==2.7.1
 aiohttp==3.14.3

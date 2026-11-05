@@ -1,3 +1,6 @@
+# Constraints for RosDockerfile: the GraspGenX wheel build. setuptools 77
+# goes only into the staged build directory (/tmp/bsetup), never into the
+# system site-packages.
 -c ros-amd64.txt
 huggingface-hub==0.27.0
 mujoco==3.2.3

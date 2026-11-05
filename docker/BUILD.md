@@ -136,9 +136,10 @@ iterating on volatile pins doesn't bust the heavy layers above. `FROM golem_base
    an *additive constraint*, then add deps + downgrade `huggingface-hub` for
    `diffusers`, and add `viser` — all pinned so nothing already-installed moves.
 9. **MuJoCo MPC** — see §7.
-10. **G1 additions** (last layers): apt `ros-humble-joint-state-publisher-gui`,
-    `python3-evdev`, `python3-xlib`, then pip `onnxruntime==1.23.2` (HOMIE's
-    walking policy) and `pynput==1.8.1` through lock step `ros-amd64-13.txt`.
+10. **G1 additions** (last layers): apt `ros-humble-joint-state-publisher-gui`
+    (`golem_ros2_models`' `display.launch.py`) and `python3-evdev` (the
+    `mujoco_mpc` fork's `wasd_teleop.py`), then pip `onnxruntime==1.23.2`
+    (HOMIE's walking policy) through lock step `ros-amd64-13.txt`.
 
 **Runtime build:** `launch_ros.sh` runs `colcon build --symlink-install` on
 `core_ws` **at container start** (see §8). The image bakes only the *toolchain* and
@@ -171,10 +172,9 @@ Single-stage, `FROM golem_base`. Provides the MuJoCo + RoboCasa kitchen simulato
   `build.sh humble`. At the pinned driver commit `build.sh` runs a plain
   `colcon build` (no `--symlink-install`) and ends in `popd`, so it exits 0
   even when that build fails (`CLAUDE.md` §8). `build/` is left in place.
-- **onnxruntime** (last layer): `onnxruntime==1.23.2` through lock step
-  `robocasa-amd64-05.txt`. Nothing in `golem_robocasa` imports it: the G1 sim
-  reads none of HOMIE's files. The G1 sim's robot description arrives through
-  the base file's `CL_Assets` bind mount (§8), not the image.
+- The G1 sim reads none of HOMIE's files, so this image has no onnxruntime.
+  The G1 sim's robot description arrives through the base file's `CL_Assets`
+  bind mount (§8), not the image.
 
 ---
 

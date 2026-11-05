@@ -1,3 +1,4 @@
+# Constraints for RosDockerfile: onnxruntime, which runs g1_homie's walking
+# policy.
 -c ros-amd64.txt
 onnxruntime==1.23.2
-pynput==1.8.1

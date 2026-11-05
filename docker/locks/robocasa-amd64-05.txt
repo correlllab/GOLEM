@@ -1,2 +1,0 @@
--c robocasa-amd64.txt
-onnxruntime==1.23.2

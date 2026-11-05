@@ -1,12 +1,20 @@
-# Selected by docker_stack.sh; shell launches keep their existing default.
-# For the G1 (GOLEM_ROBOT=g1 or --g1) docker_stack.sh sets GOLEM_BRINGUP_LAUNCH to
-# the G1 bringup; otherwise the H1-2 default below applies.
+# The paired-startup overlay on docker-compose.yml: docker_stack.sh adds it so
+# the workspace container waits for the simulator and then starts the bringup,
+# instead of opening a shell. Containers started by docker_run.sh never get it.
 services:
   ros:
     environment:
+      # Which simulator wait_for_sim.py accepts (h12 or g1, by its
+      # rt/lowstate mode_machine).
       GOLEM_ROBOT: ${GOLEM_ROBOT:-h12}
+      # launch_ros.sh runs wait_for_sim.py after building core_ws.
       GOLEM_WAIT_FOR_SIM: "1"
+      # s wait_for_sim.py waits for a first rt/lowstate sample.
       GOLEM_SIM_TIMEOUT: ${GOLEM_SIM_TIMEOUT:-180}
+    # Build, wait, then the robot's bringup. docker_stack.sh sets
+    # GOLEM_BRINGUP_LAUNCH to g1_sim.launch.py for the G1; unset, the H1-2's
+    # h12_sim.launch.py runs. GOLEM_USE_RVIZ is true or false (docker_stack.sh
+    # defaults it to true when a DISPLAY is set).
     command:
       - /home/code/h12_sim_scripts/launch_ros.sh
       - ros2

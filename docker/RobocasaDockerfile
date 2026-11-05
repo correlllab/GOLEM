@@ -1,45 +1,41 @@
-# ==============================
-# MuJoCo 3.3.1 sim on golem_base.
-# Single-stage: base image already has ROS + Python + torch + unitree_sdk2py.
-# Source tree bind-mounted at runtime (docker-compose.yml -> /home/code/golem_robocasa).
-# Robocasa (kitchen scenes) is installed from git; pins MuJoCo to 3.3.1.
-# ==============================
+# golem_sim_robocasa: the MuJoCo / RoboCasa simulator of both robots, on
+# golem_base (BaseDockerfile). It holds MuJoCo 3.3.1, robosuite and RoboCasa
+# with the kitchen assets, the colcon toolchain for the message-only msgs_ws,
+# and livox_ros_driver2 for the lidar's CustomMsg. The simulator source
+# (golem_robocasa) is bind-mounted at runtime (docker-compose.yml);
+# launch_robocasa.sh starts it. docker/BUILD.md §5 describes the image.
 FROM golem_base:latest
 COPY docker/locks/robocasa-*.txt docker/locks/robocasa-assets.digest /opt/golem-locks/
 
+# Optional build-time proxies (golem_base clears its own).
 ARG http_proxy
 ARG https_proxy
 ENV http_proxy=${http_proxy}
 ENV https_proxy=${https_proxy}
 
 # Offscreen GPU rendering for the RGBD cameras. launch_robocasa.sh exports
-# MUJOCO_GL=egl in both display modes (overriding docker-compose.yml's value);
-# the GUI's passive viewer opens its own GLFW window.
+# MUJOCO_GL=egl as well, in both display modes; the passive viewer opens its
+# own GLFW window.
 ENV MUJOCO_GL=egl
 
-# MuJoCo runtime graphics libs (EGL + OSMesa for headless rendering).
+# MuJoCo's runtime rendering libraries: EGL and OSMesa for headless rendering.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libegl1-mesa libosmesa6 \
     && rm -rf /var/lib/apt/lists/*
 
-# MuJoCo Python binding + Pillow for image encoding.
-# Pinned to 3.3.1 to match Robocasa's hard pin (see below); any other version
-# is silently swapped out mid-install by `pip install robocasa`.
+# The MuJoCo Python bindings and Pillow (image encoding). mujoco is 3.3.1
+# because RoboCasa's setup.py pins exactly that version and would replace any
+# other while installing.
 RUN uv pip install -c /opt/golem-locks/robocasa-amd64-01.txt --system --no-cache \
         "mujoco==3.3.1" \
         "numpy>=2.2.6" \
         "Pillow>=10.0"
 
-# Robocasa kitchen scenes (every h12_mujoco.py task is a RoboCasa kitchen).
-# Both packages are git-only — robocasa is not on PyPI, and Robocasa pins
-# the *master* branch of robosuite (per robocasa.ai install docs). robosuite
-# is required because Robocasa's KitchenArena inherits from
-# robosuite.models.arenas.Arena.
-#
-# Side effect: lerobot (a Robocasa transitive) pins torch==2.7.1, which
-# downgrades the cu130 torch in the base image to a CPU/cu121 build for
-# this image only. Acceptable for the mujoco sim container; the Isaac
-# container retains cu130 because it builds from base independently.
+# robosuite and RoboCasa, at fixed commits: every h12_mujoco.py task is a
+# RoboCasa kitchen, whose KitchenArena subclasses robosuite's Arena. Neither is
+# fully on PyPI, so both install from git, editable. RoboCasa depends on
+# lerobot, which pins torch 2.7.1 and so replaces base's cu130 torch in this
+# image only.
 RUN git clone https://github.com/ARISE-Initiative/robosuite /opt/robosuite && \
     git -C /opt/robosuite checkout --quiet 5ce6643f3092639d08f7b0f90ed1c6a84f50552c && \
     uv pip install -c /opt/golem-locks/robocasa-amd64-02.txt --system --no-cache -e /opt/robosuite
@@ -48,19 +44,15 @@ RUN git clone https://github.com/robocasa/robocasa /opt/robocasa && \
     git -C /opt/robocasa checkout --quiet 4f8a2980def75a55dff96b990745b83540425f09 && \
     uv pip install -c /opt/golem-locks/robocasa-amd64-03.txt --system --no-cache -e /opt/robocasa
 
-# Robocasa & robosuite both warn on first import about a missing private
-# macro file. Run their setup scripts once at build time to suppress the
-# warnings and create the macros file in-image.
+# Write robosuite's and RoboCasa's private macro files now; without them both
+# warn on every import.
 RUN python /opt/robosuite/robosuite/scripts/setup_macros.py && \
     python /opt/robocasa/robocasa/scripts/setup_macros.py
 
-# Optional robosuite/robocasa deps that print "WARNING: not installed" on
-# every import otherwise:
-#   - robosuite_models: extra robot meshes (git-only — not on PyPI).
-#   - mink: whole-body IK; robosuite hard-codes the 0.0.5 pin in its warning.
-#   - mimicgen: demonstration-generation environments (git-only).
-# We don't *use* any of these — installation is purely to silence the
-# import-time warnings.
+# Optional robosuite / RoboCasa dependencies, installed only so their imports
+# stop printing "not installed" warnings; nothing here uses them.
+# robosuite_models (extra robot meshes) and mimicgen are git-only, at fixed
+# commits; mink is 0.0.5, the version robosuite's warning asks for.
 RUN git clone https://github.com/ARISE-Initiative/robosuite_models /opt/robosuite_models && \
     git -C /opt/robosuite_models checkout --quiet 2d63a6b4319bda772420daf10594ce0de5bd793d && \
     uv pip install -c /opt/golem-locks/robocasa-amd64-04.txt --system --no-cache -e /opt/robosuite_models && \
@@ -69,34 +61,28 @@ RUN git clone https://github.com/ARISE-Initiative/robosuite_models /opt/robosuit
     uv pip install -c /opt/golem-locks/robocasa-amd64-04.txt --system --no-cache -e /opt/mimicgen && \
     uv pip install -c /opt/golem-locks/robocasa-amd64-04.txt --system --no-cache --no-deps "mink==0.0.5"
 
-# Robocasa's textures, fixtures, and objects (~10 GB) — required for any
-# h12_mujoco.py run; KitchenArena fails immediately without them.
-# Baked into the image so `docker compose build` produces a ready-to-run
-# container. Tradeoff: image is ~10 GB larger; pushes/pulls take longer.
-# To skip and download manually instead, comment out this RUN step and
-# run inside the container:
-#     echo y | python -m robocasa.scripts.download_kitchen_assets --type all
-#
-# `echo y` answers the script's interactive ~10 Gb confirmation prompt
-# (the script has no --no-input/--yes flag). Per-folder overwrite prompts
-# are suppressed because every entry in DOWNLOAD_ASSET_REGISTRY sets
+# RoboCasa's textures, fixtures and objects (about 10 GB): KitchenArena fails
+# without them, so they are baked in and the container is ready to run. The
+# download script has no --yes flag, so `echo y` answers its confirmation
+# prompt; it asks nothing per folder because every asset registry entry sets
 # check_folder_exists=False.
 RUN echo y | python -m robocasa.scripts.download_kitchen_assets --type all
-# Verify the complete downloaded tree, including additions/removals.
+# Check the downloaded tree against the committed digest of every file's
+# sha256 (locks/SOURCES.md), so a changed, added or missing asset fails the
+# build.
 RUN cd /opt/robocasa/robocasa/models && \
     find assets -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | \
     sha256sum --check /opt/golem-locks/robocasa-assets.digest
 
 WORKDIR /home/code/golem_robocasa
 
+# A shell; docker-compose.yml's command runs launch_robocasa.sh instead.
 CMD ["/bin/bash"]
 
 # -----------------------------------------------------------------------------
-# msgs_ws toolchain — minimal colcon + ament + rosidl_default_generators so
-# launch_robocasa.sh can build the IDL-only workspace at every container start
-# (magpie_msgs + custom_ros_messages, both ament_cmake interface packages).
-# Appended at the end intentionally so iterating on this layer does not bust
-# the heavy mujoco/robocasa/asset layers above.
+# The msgs_ws toolchain: colcon, ament and rosidl, so launch_robocasa.sh can
+# build the message-only workspace (magpie_msgs, custom_ros_messages) at every
+# container start.
 # -----------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-colcon-common-extensions \
@@ -106,15 +92,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-rosidl-default-generators \
     && rm -rf /var/lib/apt/lists/*
 
-# Bind-mount target for ../core_ws/src/{magpie_msgs,custom_ros_messages}.
+# The mount point of core_ws/src/{magpie_msgs,custom_ros_messages}.
 RUN mkdir -p /home/code/msgs_ws/src
 
 # -----------------------------------------------------------------------------
-# Livox-SDK2 — required by livox_ros_driver2's C++ library (and therefore by
-# its message generation, since the package builds them together). Identical
-# recipe to RosDockerfile so both containers' livox builds resolve the same
-# system library. Appended at the end so iterating on this layer does not bust
-# the heavy mujoco/robocasa/asset layers above.
+# Livox-SDK2, which livox_ros_driver2 links (its messages build in the same
+# package), at the commit every image uses (tests/docker/test_source_pins.py),
+# so the images agree on the CustomMsg wire format. The recipe is
+# RosDockerfile's.
 # -----------------------------------------------------------------------------
 RUN git clone https://github.com/Livox-SDK/Livox-SDK2.git /tmp/Livox-SDK2 && \
     git -C /tmp/Livox-SDK2 checkout --quiet 08f523c930b2f0ba1e98a6afaa8d7476bf479908 && \
@@ -124,8 +109,7 @@ RUN git clone https://github.com/Livox-SDK/Livox-SDK2.git /tmp/Livox-SDK2 && \
     rm -rf /tmp/Livox-SDK2
 
 # -----------------------------------------------------------------------------
-# apt deps required by livox_ros_driver2's C++ build (see
-# core_ws/src/livox_ros_driver2/package_ROS2.xml).
+# livox_ros_driver2's C++ build dependencies (its package_ROS2.xml).
 # -----------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpcl-dev libapr1-dev \
@@ -136,25 +120,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
-# livox_ros_driver2 baked into the image so the mujoco bridge can publish
-# proper livox_ros_driver2/msg/CustomMsg on /livox/lidar. Bind-mount would
-# collide with the ros container's bind-mount of core_ws/src (build.sh writes
-# to its source tree: package_ROS2.xml -> package.xml and launch_ROS2/ ->
-# launch/), so we COPY a snapshot in here and build via the upstream-supported
-# build.sh entry point. build.sh rm -rf's ../../build and ../../install before
-# building, so /opt/livox_ws/src must contain only this one package.
+# livox_ros_driver2 at /opt/livox_ws, so the sensor suites (h12_sensors.py,
+# g1/g1_sensors.py) can publish its CustomMsg on /livox/lidar. It is copied
+# rather than bind-mounted: upstream's build.sh rewrites its own source tree
+# (package_ROS2.xml -> package.xml, launch_ROS2/ -> launch/), which would
+# collide with the ros container's mount of core_ws/src. build.sh deletes
+# ../../build and ../../install first, so /opt/livox_ws/src holds only this
+# package. build.sh exits 0 even when its colcon build fails (CLAUDE.md §8).
+# build/ is left in place: it is small, and a --symlink-install build's
+# install/ points into it.
 # -----------------------------------------------------------------------------
 COPY core_ws/src/livox_ros_driver2 /opt/livox_ws/src/livox_ros_driver2
-# Do not rm -rf /opt/livox_ws/build afterwards — build.sh uses
-# --symlink-install, which makes install/ contain symlinks pointing back into
-# build/ for generated message modules and local_setup.bash. Wiping build/
-# breaks those symlinks and the Python `from livox_ros_driver2.msg import
-# CustomMsg` fails at runtime. The build dir is small (~20 MB) so just leave it.
 RUN bash -c "source /opt/ros/humble/setup.bash && \
              cd /opt/livox_ws/src/livox_ros_driver2 && \
              ./build.sh humble"
-
-# Nothing in this image imports onnxruntime: the G1 sim reads none of HOMIE's
-# files (docker/BUILD.md).
-RUN uv pip install -c /opt/golem-locks/robocasa-amd64-05.txt --system --no-cache onnxruntime==1.23.2 \
-    && python3 -c "import onnxruntime"

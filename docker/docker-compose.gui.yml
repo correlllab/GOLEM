@@ -1,14 +1,20 @@
-# Linux desktop additions; the host wrapper selects this only for GUI mode.
+# The X11 desktop overlay on docker-compose.yml, for the Linux GUI mode.
+# configure_display in docker_common.sh adds it when GOLEM_DISPLAY=gui, or with
+# GOLEM_DISPLAY=auto (the default) when DISPLAY is set; it first checks that the
+# Xauthority file and /tmp/.X11-unix exist. It changes nothing in the host's X
+# access policy: the containers authenticate with the user's Xauthority file.
 x-gui: &gui
   environment:
     DISPLAY: ${DISPLAY:?GUI mode needs DISPLAY}
     XAUTHORITY: /root/.Xauthority
   volumes:
+    # The host's X server socket.
     - type: bind
       source: /tmp/.X11-unix
       target: /tmp/.X11-unix
       bind:
         create_host_path: false
+    # The user's Xauthority cookie, read-only.
     - type: bind
       source: ${XAUTHORITY:-${HOME}/.Xauthority}
       target: /root/.Xauthority

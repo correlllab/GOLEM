@@ -1,22 +1,19 @@
-# ==============================
-# Apple-Silicon (arm64) / CPU-only fork of BaseDockerfile.
-#
-# Shared base for the MuJoCo (RoboCasa) and ROS simulation environments,
-# built to run natively under Colima on Apple Silicon — no NVIDIA GPU.
-#
-# Differences from the stock BaseDockerfile:
-#   * FROM ubuntu:22.04            (was nvidia/cuda:12.2.0-devel-ubuntu22.04)
-#   * PyTorch CPU wheels from PyPI (was cu130 from download.pytorch.org)
-# Everything else is identical: Python 3.10 + ROS 2 Humble via apt,
-# CycloneDDS 0.10.x from source, uv, unitree_sdk2_python, pin/pink/mink.
-#
-# Build:  docker build -t golem_base:arm64 -f docker/mac/BaseDockerfile.arm64 .
-# ==============================
+# golem_base:arm64: the Apple-Silicon (arm64, CPU-only) counterpart of
+# docker/BaseDockerfile, the base of the Mac's golem_ros and
+# golem_sim_robocasa images, run under Colima with no NVIDIA GPU. It differs
+# from the x86 base in two places: it starts from plain Ubuntu 22.04 instead of
+# the CUDA image, and it installs PyTorch's CPU wheels instead of cu130. The
+# rest (Python 3.10, ROS 2 Humble, CycloneDDS 0.10.x from source, uv, the
+# Unitree Python SDK, pin / pink / mink) follows BaseDockerfile, whose comments
+# give the reasons. docker_build_mac.sh builds it.
+
 # ubuntu:22.04 has no CA bundle, and apt-sources.sh selects HTTPS snapshots.
 # Take the bundle from a digest-pinned Jammy image so TLS stays verified.
 FROM ros:humble-ros-base-jammy@sha256:1813d3c85d7f96ff7d3012d865204583255740182db5d0065f8f8cd029a83138 AS ca_bundle
+# Ubuntu 22.04 (Jammy), pinned by its multi-arch index digest.
 FROM ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7
 COPY --from=ca_bundle /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+# The Python constraint files and the dated apt snapshot sources.
 COPY docker/locks/base-*.txt docker/locks/apt-sources.sh docker/locks/ros-snapshot.asc /opt/golem-locks/
 RUN sh /opt/golem-locks/apt-sources.sh
 
@@ -24,16 +21,20 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=America/Denver
 ENV LANG=C.UTF-8
 ENV ROS_DISTRO=humble
+# The Mac's compose file switches ROS to FastDDS (rmw_fastrtps_cpp); see
+# docker/mac/docker-compose.yml.
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
+# Optional build-time proxies; cleared at the end of this file.
 ARG http_proxy
 ARG https_proxy
 ENV http_proxy=${http_proxy}
 ENV https_proxy=${https_proxy}
 
-# Superset of packages needed by both simulators: compilers, graphics, Python 3.10,
-# locale setup, ROS repo prerequisites. (No CUDA base, so pull mesa software GL /
-# OSMesa here for CPU rendering.)
+# Compilers (gcc-12 / g++-12 as default), cmake, git, Python 3.10 as `python`,
+# the locale, and Mesa's software GL / EGL / OSMesa for CPU rendering.
+# add-apt-repository rewrites sources.list, so apt-sources.sh runs again to put
+# the dated snapshots back.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg locales software-properties-common \
         gcc-12 g++-12 cmake build-essential git git-lfs wget unzip \
@@ -49,15 +50,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100 \
     && rm -rf /var/lib/apt/lists/*
 
-# ROS 2 Humble apt repository. `dpkg --print-architecture` resolves to arm64 here,
-# and packages.ros.org publishes Humble for arm64 (Ubuntu Jammy).
+# The ROS 2 Humble apt source for this architecture (dpkg reports arm64): the
+# 2026-08-07 snapshot, verified with the vendored snapshot key. The rosdistro
+# key downloaded here is not referenced by any apt source. TODO(max): drop the
+# download with the next deliberate Mac base rebuild.
 RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/e31287f892ecd01b170d1cbfa298db35abe4a74f/ros.key \
         -o /usr/share/keyrings/ros-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/opt/golem-locks/ros-snapshot.asc] http://snapshots.ros.org/humble/2026-08-07/ubuntu jammy main" \
         > /etc/apt/sources.list.d/ros2.list
 
-# ROS 2 Humble packages needed by the sim processes (rclpy + sensor/TF publishers).
-# ros-humble-ros-base brings rclpy, rclcpp, rmw, launch, ament.
+# ROS 2 Humble for the simulator's ROS side: ros-base, the CycloneDDS RMW and
+# the message / TF / cv_bridge packages its sensor publishers use.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-ros-base \
         ros-humble-rmw-cyclonedds-cpp \
@@ -69,14 +72,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-cv-bridge \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv for fast, deterministic pip-compatible installs.
-# UV_INSTALL_DIR overrides the default ~/.local/bin location.
+# uv 0.12.15; the installer URL names the version.
 RUN curl -LsSf https://astral.sh/uv/0.12.15/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
     && uv --version
 
-# Build CycloneDDS 0.10.x. Pinned because the PyPI `cyclonedds` wheel (transitive
-# dep of unitree_sdk2_python) references `dds/ddsi/q_radmin.h`, removed post-0.10.
-# CYCLONEDDS_HOME points the PyPI wheel at this install at pip-build time.
+# CycloneDDS 0.10.x from source at golem_base's commit: the PyPI `cyclonedds`
+# binding unitree_sdk2_python needs includes dds/ddsi/q_radmin.h, which
+# CycloneDDS removed after 0.10.
 RUN git clone https://github.com/eclipse-cyclonedds/cyclonedds /cyclonedds && \
     git -C /cyclonedds checkout --quiet 5041f3560c088c99e5088b2b8520b69169621196 && \
     cd /cyclonedds && mkdir build install && cd build && \
@@ -86,33 +88,29 @@ RUN git clone https://github.com/eclipse-cyclonedds/cyclonedds /cyclonedds && \
 
 ENV CYCLONEDDS_HOME=/cyclonedds/install
 
-# Install unitree_sdk2_python from the local checkout and keep the source in
-# the image for development/debugging.
+# The Unitree Python SDK from the repo's submodule. find_packages skips
+# utils/lib (the native CRC libraries, crc_aarch64.so here), so the whole
+# package tree is copied over the installed one.
 COPY unitree_sdk2_python /home/code/unitree_sdk2_python
 RUN cd /home/code/unitree_sdk2_python && \
     uv pip install -c /opt/golem-locks/base-arm64-01.txt --system . && \
     SP=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
     cp -r /home/code/unitree_sdk2_python/unitree_sdk2py/* "$SP/unitree_sdk2py/"
 
-# PyTorch CPU build (arm64). The stock base pulls cu130 wheels for NVIDIA GPUs.
-# NOTE: PyPI's DEFAULT `torch` wheel is CUDA-enabled even on aarch64 (it bundles
-# ~3 GB of dormant nvidia-*-cu13 libs), so pin the explicit CPU index to get a
-# lean CPU-only build. RoboCasa downgrades torch to a CPU 2.7.1 build anyway.
-# UV_HTTP_TIMEOUT raised because the torch wheels are large.
+# PyTorch and torchvision, CPU builds. PyPI's default aarch64 torch wheel pulls
+# about 3 GB of CUDA libraries that cannot run here, so the CPU index is named
+# explicitly. UV_HTTP_TIMEOUT is 600 s for the large wheels.
 RUN UV_HTTP_TIMEOUT=600 uv pip install -c /opt/golem-locks/base-arm64-02.txt --system --no-cache \
         torch torchvision \
         --index-url https://download.pytorch.org/whl/cpu
 
-# Shared kinematics / IK libs used by sim code across Isaac and MuJoCo.
-# PyPI `pin` provides the `pinocchio` module. `pink` / `mink` are Pythonic IK
-# wrappers built on pinocchio. Kept in base so per-sim Dockerfiles don't
-# duplicate them; ROS container is standalone and installs its own pinocchio.
+# Kinematics libraries: `pin` (the pinocchio module), pink and mink. The Mac's
+# golem_ros replaces this pinocchio with its own NumPy-1.26 build.
 RUN uv pip install -c /opt/golem-locks/base-arm64-03.txt --system --no-cache pin pink mink
 
-# Source ROS 2 on every interactive shell.
 RUN echo 'source /opt/ros/humble/setup.bash' >> /root/.bashrc
 
-# Clear build-time proxy vars so they don't leak into the image or child images.
+# Clear the build-time proxies.
 ENV http_proxy=
 ENV https_proxy=
 

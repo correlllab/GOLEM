@@ -1,3 +1,5 @@
+# Constraints for RobocasaDockerfile: robosuite. numpy 2.2.5: robocasa's
+# setup.py pins it.
 -c robocasa-amd64.txt
 huggingface-hub==1.31.0
 mujoco==3.3.1

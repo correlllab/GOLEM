@@ -1,3 +1,4 @@
+# Constraints for RobocasaDockerfile.arm64: mujoco 3.3.1, numpy and Pillow.
 -c robocasa-arm64.txt
 huggingface-hub==1.31.0
 mujoco==3.3.1

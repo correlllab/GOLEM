@@ -1,5 +1,9 @@
+# The Mac's paired-startup overlay on docker/mac/docker-compose.yml:
+# docker_stack_mac.sh adds it so launch_ros_mac.sh waits for a first
+# rt/lowstate sample (wait_for_sim.py) before it starts the bringup.
 services:
   ros:
     environment:
       GOLEM_WAIT_FOR_SIM: "1"
+      # s wait_for_sim.py waits for that sample.
       GOLEM_SIM_TIMEOUT: ${GOLEM_SIM_TIMEOUT:-180}

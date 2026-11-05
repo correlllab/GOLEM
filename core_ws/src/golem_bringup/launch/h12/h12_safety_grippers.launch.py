@@ -24,7 +24,9 @@ def generate_launch_description():
     safety_config_arg = DeclareLaunchArgument(
         'safety_config',
         default_value='relax_safety_split.yaml',
-        description='golem_safety config: a name under its config/h12/, or a path',
+        description='golem_safety config: a name under its config/h12/, or a path. No '
+                    'controller starts here (use_frame_task is false), so no controller '
+                    'pairing applies',
     )
 
     control = IncludeLaunchDescription(

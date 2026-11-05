@@ -55,11 +55,15 @@ def generate_launch_description():
             description='Start the frame_task_server arm IK action server'),
         DeclareLaunchArgument(
             'safety_config', default_value='relax_safety_split.yaml',
-            description='golem_safety config: a name under its config/h12/, or a path'),
+            description='golem_safety config. With use_frame_task only the safety configs '
+                        'in golem_upper_ik/config/h12/pairing.yaml start, by name (a path '
+                        'only if its file name is one of them), and sim and real configs '
+                        'do not mix'),
         DeclareLaunchArgument(
             'frame_task_config', default_value='safety_split.yaml',
-            description='golem_upper_ik config for frame_task_server: a name under its '
-                        'config/h12/, or a path'),
+            description='golem_upper_ik config for frame_task_server. With use_frame_task '
+                        'it must be the one pairing.yaml pairs with safety_config, by name '
+                        '(a path only if its file name is that one)'),
         # The H1-2's start-up order, on the wall clock: estop_node at once, then
         # safety_node after safety_delay, then frame_task_server after
         # frame_task_delay.

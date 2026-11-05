@@ -9,9 +9,10 @@ specific force also differs by the lever-arm terms (alpha x r + omega x (omega x
 r about 0.4 m up the torso for imu_link), which this leaves out: they vanish standing
 still and stay small at walking rates.
 
-/livox/imu (livox_imu_upright's output, livox_link frame) carries no orientation:
-the driver leaves it zero. The attitude is a complementary filter on the up
-direction u (the unit specific force at rest, torso frame): the gyro carries it,
+/livox/imu carries no orientation: the driver leaves it zero. lmg_deploy expects it
+upright; the H1-2's /livox/imu is the raw, upside-down frame, which lmg_deploy does
+not handle (golem_bringup's lmg_real refuses to start for that). The attitude is a
+complementary filter on the up direction u (the unit specific force at rest, torso frame): the gyro carries it,
 du/dt = -omega x u, and each sample pulls it toward the measured accelerometer
 direction with time constant ``tau_s``.
 
@@ -29,7 +30,8 @@ G_UNIT_MAX_NORM = 4.0    # a mean |acc| below this is in g (1.0), above it in m/
 MAX_DT = 0.05            # s; a longer gap between samples (a dropout) is not integrated
 
 
-LIVOX_IMU_FRAME = "livox_imu_link"   # URDF frame of /livox/imu: the MID360's IMU chip, upright
+# URDF frame lmg_deploy expects /livox/imu in: the MID360's IMU chip, upright
+LIVOX_IMU_FRAME = "livox_imu_link"
 
 
 def livox_to_imu_rotation(kin, imu_frame: str, livox_frame: str = LIVOX_IMU_FRAME) -> np.ndarray:

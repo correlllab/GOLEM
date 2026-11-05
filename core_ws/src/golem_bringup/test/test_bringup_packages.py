@@ -18,7 +18,7 @@ import xml.etree.ElementTree as ElementTree
 
 from golem_ros2_models.paths import urdf_path
 from launch import LaunchContext
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.utilities import normalize_to_list_of_substitutions, perform_substitutions
 import pytest
 
@@ -101,6 +101,20 @@ def test_top_level_files_pass_sim_and_use_estop(launch_file, sim, use_estop, mon
     assert nodes['safety_node'].parameters['sim'] == (sim == 'true')
     assert nodes['safety_node'].parameters['use_estop'] == (use_estop == 'true')
     assert ('estop_node' in nodes) == (use_estop == 'true')
+
+
+def test_lmg_real_refuses_to_start_before_any_node():
+    # lmg_deploy reads /livox/imu as upright and the H1-2's is the raw, upside-down frame
+    description = _load('lmg_real.launch.py').generate_launch_description()
+    assert isinstance(description.entities[0], OpaqueFunction)
+    with pytest.raises(RuntimeError, match='^lmg_real: not starting: lmg_deploy reads /livox/imu'):
+        description.entities[0].execute(LaunchContext())
+
+
+def test_lmg_sim_is_not_guarded(monkeypatch):
+    monkeypatch.setenv('ROS_DOMAIN_ID', '193')
+    description = _load('lmg_sim.launch.py').generate_launch_description()
+    assert not any(isinstance(entity, OpaqueFunction) for entity in description.entities)
 
 
 def test_control_checks_the_pair_before_any_node():

@@ -138,6 +138,10 @@ ros2 topic echo /marl_deploy_node/wrist_error   # m, left and right
 
 ## Real robot
 
+`lmg_real.launch.py` refuses to start, before any node: the node expects `/livox/imu` upright and the
+H1-2's is the raw, upside-down MID-360 frame (see the IMU item below). The rest of this section is
+what it starts once that is handled.
+
 On the onboard PC, run `golem_bringup/launch/h12/lmg_real.launch.py` **instead of**
 `h12_real_robot.launch.py`, never beside it. It starts the same drivers, state publishers, estop, safety
 layer and `golem_slam` navigation stack, without `frame_task_server`, plus the shared game block on wall-clock time. Keep the lower-body RL and MJPC
@@ -159,7 +163,7 @@ ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger         
 - Same `policy`, `safety_config` and `use_slam` arguments as the sim launch; keep `use_slam` on for arm goals.
 
 **Before the first real run:**
-- **IMU.** The node reads only the MID360's `/livox/imu` (`livox_imu_upright`'s output), never `LowState.imu_state`, whose attitude carries a ~2.5 deg calibration error. `/livox/imu` is in the URDF's `livox_imu_link` (the IMU chip). The node carries the readings from there into the frame the policy trained with, `export.yaml`'s `imu.frame`, through the URDF:
+- **IMU.** The node reads only the MID360's `/livox/imu`, never `LowState.imu_state`, whose attitude carries a ~2.5 deg calibration error. It expects `/livox/imu` upright, in the URDF's `livox_imu_link` (the IMU chip). The H1-2's `/livox/imu` is the raw, upside-down MID-360 frame, which `lmg_deploy` does not handle yet (the strict xfail `test_urdf_mount_is_the_livox_pitch`), so `golem_bringup`'s `lmg_real.launch.py` refuses to start. The node carries the readings from there into the frame the policy trained with, `export.yaml`'s `imu.frame`, through the URDF:
   - `livox_imu_link`: as is;
   - `livox_link` (the point frame, 0.7 deg from the chip);
   - `imu_link` on `torso_link` for Explicit500 and older (the default when the export has no `imu` block).

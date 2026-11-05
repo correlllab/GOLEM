@@ -16,6 +16,15 @@ from launch.substitutions import LaunchConfiguration
 #      ramps the legs to the policy's pre-pose crouch and holds there.
 #   2. ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
 #      engages the policy.
+#
+# Before the first real run, besides measuring the leg node's worst /lowstate
+# gap (h12_lowerbody_rl's README), replay at least 3 recorded real-robot bags
+# (record_slam_bag recordings) through navigation.launch.py robot:=h12 and
+# check FAST-LIO, level_odom and the map. Their points were recorded with the
+# driver's roll 180 and the IMU upright, so rotate both back to the raw frame
+# (180 degrees about x) first. Keep the MID-360 unsynced (no PTP: the driver
+# then stamps with the host clock, so lidar and joint-state stamps share one
+# clock), or check that level_odom logs no "waiting for body->pelvis".
 
 
 def _include(package, launch_file, launch_arguments):

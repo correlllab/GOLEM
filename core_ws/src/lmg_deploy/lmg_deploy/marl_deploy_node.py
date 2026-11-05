@@ -82,7 +82,7 @@ projected gravity and the accelerometer agree on the tilt.
 Interfaces
 ----------
 sub  /lowstate                       (unitree_hg/LowState)
-sub  /livox/imu                      (sensor_msgs/Imu)  livox_imu_link frame (livox_imu_upright)
+sub  /livox/imu                      (sensor_msgs/Imu)  livox_imu_link frame, expected upright (the H1-2's is raw)
 sub  /cmd_vel                        (geometry_msgs/Twist)
 sub  /safety/heartbeat               (std_msgs/Bool)
 sub  /Odometry                       (nav_msgs/Odometry)  FAST-LIO body pose

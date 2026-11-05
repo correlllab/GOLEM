@@ -56,6 +56,16 @@ required: `lidar_link` (the URDF link of the raw sensor frame), `scan`
 `livox_link` in `livox_imu_link`; `test/test_navigation_launch.py` checks it
 against the URDF.
 
+## Before the first real H1-2 run
+
+The H1-2's graph has not run on the real robot. Replay at least 3 recorded
+real-robot bags (`record_slam_bag` recordings) through `navigation.launch.py
+robot:=h12` and check FAST-LIO, `level_odom` and the map. Those bags' points
+were recorded with the driver's roll 180 and the IMU upright, so rotate both
+back to the raw frame (180° about x) first. Keep the MID-360 unsynced (no PTP:
+the driver then stamps with the host clock, so lidar and joint-state stamps
+share one clock), or check that `level_odom` logs no "waiting for body->pelvis".
+
 See [G1 navigation](../../../docs/g1/navigation.md) and
 [stale installs after a package rename](../../../docs/RUNNING.md#troubleshooting).
 

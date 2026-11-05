@@ -1,7 +1,8 @@
 """The head's Livox MID-360 IMU attitude: gravity-aligned, from FAST-LIO, carried at the IMU rate by the gyro.
 
-/livox/imu is in the URDF's livox_imu_link, the MID-360's IMU chip (upright, as livox_imu_upright publishes it), and
-FAST-LIO's body frame is that IMU. The MID-360 has no orientation output, so the attitude comes from FAST-LIO:
+/livox/imu is in the URDF's livox_imu_link, the MID-360's IMU chip, and FAST-LIO's body frame is that IMU.
+lmg_deploy expects it upright; the H1-2's /livox/imu is the raw, upside-down frame, which it does not handle.
+The MID-360 has no orientation output, so the attitude comes from FAST-LIO:
 
   * /Odometry gives the IMU body's orientation in camera_init (the IMU frame at FAST-LIO's start, about 9.5 deg
     pitched on the H1-2's head, so not level), at the lidar rate and stamped at the scan's end;

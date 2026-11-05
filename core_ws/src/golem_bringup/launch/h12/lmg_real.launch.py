@@ -3,15 +3,20 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
-# Loco-manipulation game, real robot, onboard PC. Run it INSTEAD of
-# h12_real_robot.launch.py, never beside it: it starts the same drivers,
-# state publishers, estop, safety layer and golem_slam navigation stack
-# (use_slam), but without frame_task_server,
+# Loco-manipulation game, real robot, onboard PC. This launch refuses to start,
+# before any node: lmg_deploy reads /livox/imu as upright, and the H1-2's
+# MID-360 is mounted upside down and publishes it in its raw frame, so the
+# policy would get an upside-down IMU. The refusal goes once lmg_deploy handles
+# the raw frame (the strict xfail test_urdf_mount_is_the_livox_pitch marks it).
+#
+# What it starts otherwise, run INSTEAD of h12_real_robot.launch.py, never
+# beside it: the same drivers, state publishers, estop, safety layer and
+# golem_slam navigation stack (use_slam), but without frame_task_server,
 # because marl_deploy_node owns both safety channels. Keep the lower-body RL
 # controller (h12_real_robot.launch.py's leg control) off.
 #
@@ -26,6 +31,10 @@ from launch.substitutions import LaunchConfiguration
 # Every node joins the launching shell's ROS_DOMAIN_ID, which must be 0, the real
 # robot's command bus; ROS uses 0 when it is unset (see h12_control.launch.py).
 
+NOT_STARTING = ('lmg_real: not starting: lmg_deploy reads /livox/imu as upright, and the H1-2 '
+                'MID-360 is in its raw (upside-down) frame; update lmg_deploy first (see the '
+                'strict xfail test_urdf_mount_is_the_livox_pitch)')
+
 GAME_ARGS = ('start_position_verified', 'policy', 'prepose_ramp_s', 'prepose_max_vel',
              'imu_offset_roll_deg', 'imu_offset_pitch_deg', 'imu_offset_yaw_deg')
 
@@ -39,11 +48,17 @@ def _include(package, launch_file, launch_arguments, condition=None):
     )
 
 
+def _refuse(context):
+    raise RuntimeError(NOT_STARTING)
+
+
 def generate_launch_description():
     # Real robot runs on wall-clock time (no simulator /clock).
     wall_time = {'use_sim_time': 'false'}
 
     return LaunchDescription([
+        # First: the launch stops before any node starts.
+        OpaqueFunction(function=_refuse),
         DeclareLaunchArgument('start_position_verified', default_value='false'),
         DeclareLaunchArgument('policy', description='policies/<name>/ of lmg_deploy (required)'),
         DeclareLaunchArgument('prepose_ramp_s', default_value='6.0'),

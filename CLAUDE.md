@@ -242,12 +242,12 @@ including `h12_control.launch.py`'s `sim`, which has no default.
 | `h12_real_desktop.launch.py` | **real: companion x86 desktop** — rviz, plus the hand cameras with `use_hand_cameras:=true` (default **false**) | models (`use_yolo:=true`) |
 | `h12_safety_grippers.launch.py` | real: actuation-only debug bringup | control (`sim:=false`, estop + safety, no IK), grippers |
 | `lmg_sim.launch.py` | **x86 sim**, loco-manipulation game: the `lmg_deploy` MARL policy (`policy:=`, required; `mid360v2` ships) owns all 27 joints, no operator confirm. Refuses an unset or 0 `ROS_DOMAIN_ID` | state, control (`sim:=true`, no IK, no stagger), locomanipulationgame, navigation (`use_slam`) |
-| `lmg_real.launch.py` | **real, onboard PC**, loco-manipulation game, run *instead of* `h12_real_robot`. Policy behind `start_position_verified:=true` + `/marl_deploy_node/confirm_engage` | real_drivers, state, control (`sim:=false`, `use_estop:=true`, no IK), locomanipulationgame, navigation (`use_slam`) |
+| `lmg_real.launch.py` | **real, onboard PC**, loco-manipulation game, run *instead of* `h12_real_robot`. **Refuses to start, before any node**: `lmg_deploy` reads `/livox/imu` as upright and the H1-2's MID-360 publishes it raw (upside down); the strict xfail `test_urdf_mount_is_the_livox_pitch` marks the fix. Once lifted, the policy is behind `start_position_verified:=true` + `/marl_deploy_node/confirm_engage` | real_drivers, state, control (`sim:=false`, `use_estop:=true`, no IK), locomanipulationgame, navigation (`use_slam`) |
 
 | Building block | Starts |
 |---|---|
 | `h12_state.launch.py` | `golem_upper_ik`'s `robot_state.launch.py` (`robot: h12`, `urdf_file` passed on): `joint_state_publisher` (the 27 body joints from `/lowstate`) + `robot_state_publisher` |
-| `h12_control.launch.py` | [`estop_node`] → `golem_safety`'s `safety_node` (its `safety.launch.py`: `robot: h12`, `safety_config`, `sim`, `use_estop`) → `golem_upper_ik`'s `frame_task_server` (its `upper_ik.launch.py`: `robot: h12`, `frame_task_config`; `use_frame_task`), staggered by `safety_delay` (3 s) / `frame_task_delay` (5 s), passed on as each file's `start_delay`. `sim` has no default: a launch without it fails before any node starts. With `use_frame_task` it includes `upper_ik.launch.py` first, which refuses a `frame_task_config` that does not run with `safety_config` (`golem_upper_ik.pairing`) before anything starts |
+| `h12_control.launch.py` | [`estop_node`] → `golem_safety`'s `safety_node` (its `safety.launch.py`: `robot: h12`, `safety_config`, `sim`, `use_estop`) → `golem_upper_ik`'s `frame_task_server` (its `upper_ik.launch.py`: `robot: h12`, `frame_task_config`; `use_frame_task`), staggered by `safety_delay` (3 s) / `frame_task_delay` (5 s), passed on as each file's `start_delay`. `sim` has no default: a launch without it fails before any node starts. With `use_frame_task` it includes `upper_ik.launch.py` first, which refuses a `frame_task_config` that does not run with `safety_config` (`golem_upper_ik.pairing`) before anything starts. Only the pairs in `golem_upper_ik/config/h12/pairing.yaml` start, by name (a path only if its file name is a paired name), and sim and real configs do not mix |
 | `h12_lowerbody.launch.py` | RL `lowerbody_controller_node` (`lowerbody:=`, params from `lowerbody_params`) and optional MJPC `estimator_node`, both behind `start_position_verified` |
 | `h12_models.launch.py` | gemini + sam servers, [yolo], graspgen + `golem_skills` (`use_skills`) |
 | `h12_real_drivers.launch.py` | Livox MID360 (no extrinsic rotation: the points and `/livox/imu` are both in the sensor's raw, upside-down frame, the URDF's `livox_link` and `livox_imu_link`), RealSense head camera, `h12_grippers.launch.py` (left+right `gripper_node`) |
@@ -796,9 +796,16 @@ pose — it gates leg commands; the policy then holds its pre-pose until
 once `golem_safety` relays `frame_task_server`'s commands, which needs the estop
 box connected: a `safety_node` that starts while `estop_node` reports a failed
 connection latches until restart, and `frame_task_server` exits after
-`controller.startup_timeout` (30 s) when nothing is relayed (§6). Pre-flight:
-before relying on the leg node's `max_state_gap` (0.25 s), measure the worst
-`/lowstate` callback gap on the onboard PC in a hoisted ALMI run.
+`controller.startup_timeout` (30 s) when nothing is relayed (§6).
+Pre-flight, both before the first real run: before relying on the leg node's
+`max_state_gap` (0.25 s), measure the worst `/lowstate` callback gap on the
+onboard PC in a hoisted ALMI run; and replay at least 3 recorded real-robot
+bags (`record_slam_bag` recordings) through `navigation.launch.py robot:=h12`
+and check FAST-LIO, `level_odom` and the map. Those bags' points were recorded
+with the driver's roll 180 and the IMU upright, so rotate both back to the raw
+frame (180° about x) first. Keep the MID-360 unsynced (no PTP: the driver then
+stamps with the host clock, so lidar and joint-state stamps share one clock),
+or check that `level_odom` logs no "waiting for body->pelvis".
 
 G1: in Unitree's debug mode, on a gantry; the procedure for entering debug
 mode on our G1 is not written yet, and nobody runs a session until it is
@@ -855,8 +862,16 @@ HOMIE's walking node, which pre-poses the legs and holds them until
   Until then `launch_ros.sh` (`docker_run.sh ros`, `docker_stack.sh`,
   `tests/g1`) exits before it builds, with `stale installed package '<pkg>' has
   no discovered source`, and a native workspace (the H1-2's onboard PC) keeps
-  answering to the old names. A `--symlink-install` workspace also keeps links
-  to deleted G1 configs that fail the next `golem_upper_ik` build; the change
+  answering to the old names. The same goes for what a package that stayed no
+  longer ships: an old `golem_slam` install keeps the removed
+  `launch/{h12,g1}_navigation.launch.py` and `launch/h12_real_slam.launch.py` (the
+  last moved to `golem_bringup`), and the removed console scripts `g1_body_to_pelvis`
+  (`golem_slam`) and `livox_imu_upright` (`golem_bringup`), so `ros2 launch
+  golem_slam h12_navigation.launch.py` still starts the old graph; delete those
+  two packages' `build` and `install` directories and rebuild. A `--symlink-install` workspace also keeps links
+  to deleted G1 configs that fail the next `golem_upper_ik` build, and
+  `golem_slam/setup.py` skips such dangling links to files deleted from its source
+  (the filter in its `files()`); the change
   report (`docs/superpowers/specs/2026-10-28-golem-bringup-and-g1-debug-mode/change-report.md`)
   has that cleanup and the Mac's.
 - **x86 `ros` container ≠ bringup.** It only builds and gives you a shell.

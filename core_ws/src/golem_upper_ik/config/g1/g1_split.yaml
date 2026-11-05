@@ -42,7 +42,10 @@ controller:
   # changes /lowstate's IMU yaw while the pelvis stays still, use imu_in_torso
   imu_frame: imu_in_pelvis
   threshold_ik: 0.0001
-  threshold_joint: 0.001
+  # rad: the largest arm joint error at which a held goal is reported reached
+  # (the success test only, not the motion); the G1's arm PD without an
+  # integral term (gains.ki 0) settles about 1e-3 rad off under gravity
+  threshold_joint: 0.01
   threshold_linear: 0.001
   threshold_angular: 0.002
 

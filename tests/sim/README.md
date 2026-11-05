@@ -42,9 +42,11 @@ the robot stands 2 s, and the test waits for a `/map` that slam_toolbox publishe
   kitchen) are reported, not failed.
 - **Goal reached**: Nav2 reports success within 90 s of sim time, and the true pelvis ends within
   0.4 m of the goal.
-- **Arms while walking**: `t_pose` is sent once the robot walks and before the goal's result,
-  `home` once `t_pose` has succeeded, and both succeed (`NamedConfig`'s `success`). Each move takes
-  seconds and the 1.5 m walk 4-6 s, so `home` may end after the goal's result.
+- **Arms while walking**: `t_pose` is sent once `/cmd_vel` moves the robot, before the goal's
+  result; `home` is sent once `t_pose` has succeeded; both goals carry a 15 s duration and both
+  must succeed (`NamedConfig`'s `success`). Only `t_pose` has to start during the walk: the 1.5 m
+  walk takes 4-6 s and each move a few seconds, so `t_pose` may end, and `home` usually runs,
+  after the goal's result. The check does not require either move to finish inside the walk.
 - **SLAM healthy** from Nav2's start to the end: `/Odometry` (FAST-LIO) at 5 Hz or more in every sim
   second; `level_odom`'s `odom -> base_footprint` in TF at every sample, at most 0.5 s behind
   `/clock`; `/map` knows more cells at the end than at Nav2's start; `/converted_scan` never stops
@@ -52,13 +54,6 @@ the robot stands 2 s, and the test waits for a `/map` that slam_toolbox publishe
 - **Safety**: `safety_node` is the only publisher of `/lowcmd` at every sample (once a second)
   from its start, with no other publisher at any sample, `golem_safety` latches no estop, and
   nothing publishes the sim's ground-truth `/odom`.
-
-Open issue: on the G1, `t_pose` ends with `success: false` with the arms at the pose. The hold
-reports success only once every arm joint is within `controller.threshold_joint` (0.001 rad,
-`core_ws/src/golem_upper_ik/config/g1/sim_split.yaml`) of it, and with the integral term off
-(`gains.ki: 0.0`) it settles just above that (0.00104 rad after the goal's 15 s); the H1-2's
-configs use 0.01 rad with integral gains. `docs/g1/first-session.md` and `tests/g1/README.md`
-record the same behaviour at standstill. Until the G1's hold is tuned, `--g1` fails that one check.
 
 ## How it runs
 

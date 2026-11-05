@@ -329,10 +329,10 @@ ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
   "{config_name: 'home', plan: false, duration: {sec: 0, nanosec: 0}}"
 ```
 
-A goal that ends with `success: false` while the arms are at the pose is
-expected: the hold reports success only once every arm joint is within
-0.001 rad of the pose (`controller.threshold_joint`), and it may not get that
-close before the goal ends.
+A goal reports `success: true` once every arm joint is within 0.01 rad of the
+pose (`controller.threshold_joint`). A goal that ends with `success: false`
+did not get there before its timeout (`controller.timeout`, or the goal's
+`duration`): check where the arms stopped before sending the next one.
 
 Send no other goals, and start no second controller: a second live writer on
 the safety layer's input latches its estop.

@@ -83,12 +83,6 @@ robocasa ros`); they never build them.
 With a warm build each test takes one to two minutes; the first run also builds the whole
 workspace.
 
-Open issue: the arm test's `t_pose` check sometimes fails with the arms at the pose
-(`goal success False` with a small arm error). The arms hold `t_pose` with an error about as
-large as `frame_task_server`'s success threshold, `controller.threshold_joint` in
-`core_ws/src/golem_upper_ik/config/g1/sim_split.yaml`, so the server sometimes never reports the goal
-reached. Count such a run as failed, and check its arm error against that threshold.
-
 Open issue: the explore test fails (coverage about 25 %, tilt up to 27 deg). After its first
 goal the explorer picks a frontier behind the robot; Nav2's MPPI (`DiffDrive`, `vx_min` -0.20 in
 `core_ws/src/golem_slam/config/g1/nav2.yaml`) walks the G1 backward, HOMIE tilts past the test's

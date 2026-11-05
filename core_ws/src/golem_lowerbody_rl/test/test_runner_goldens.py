@@ -8,11 +8,16 @@ gets the same inputs: the golden ``cmd`` and ``height`` as the supervisor hands 
 a reset where ``reset`` is set (engage and band release, seeded with that step's
 command), and ALMI's onset resets from its own command processing.
 
-The one intended difference is gravity from the normalised quaternion: at the first
-step it changes the gravity inputs by up to 6e-8 and nothing else. The policy's closed
-loop (its last action, its history and an LSTM's memory) carries that through 120
-steps to up to 3.3e-6 in the network's input and output, so those are compared within
-LOOP_ATOL; the leg targets, gains and processed commands stay within ATOL.
+The runner differs from the classes it replaces in two ways, and the goldens are
+replayed bit for bit only with both reverted. Gravity comes from the normalised
+quaternion (the one intended change): at the first step it moves the gravity inputs by
+up to 6e-8. And every term and command is computed in float64 and stored as float32,
+where the H1-2's classes computed in float32 and HOMIE's cast its command to float32:
+that moves the other inputs by rounding, up to about 2e-9 at the first step (5e-8 in
+ALMI's smoothed command). The policy's closed loop (its last action, its history and an
+LSTM's memory) carries both through 120 steps to up to 3.3e-6 in the network's input
+and output, so those are compared within LOOP_ATOL; the leg targets, gains and
+processed commands stay within ATOL.
 """
 
 import os
@@ -29,9 +34,10 @@ GOLDEN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'golden')
 ATOL = 1e-6
 # the network input and output over a whole trace (module docstring)
 LOOP_ATOL = 1e-5
-# the first step's inputs: gravity's, and every other one
+# the first step's inputs: gravity's (normalisation and rounding), and every other one
+# (rounding only)
 GRAVITY_ATOL = 1e-7
-EXACT_ATOL = 1e-8
+ROUNDING_ATOL = 1e-8
 POLICIES = ['walk', 'almi', 'fame', 'homie']
 ROBOT = {'walk': 'h12', 'almi': 'h12', 'fame': 'h12', 'homie': 'g1'}
 
@@ -115,8 +121,8 @@ def test_runner_matches_golden(name: str, torch_threads) -> None:
 
 
 @pytest.mark.parametrize('name', POLICIES)
-def test_first_step_differs_only_in_gravity(name: str, torch_threads) -> None:
-    """The first step's network input equals the golden's except the normalised gravity."""
+def test_first_step_differs_by_gravity_and_rounding(name: str, torch_threads) -> None:
+    """The first step's input differs from the golden's by gravity (< 1e-7), else rounding."""
     golden = _golden(name)
     runner = _runner(name)
     runner.reset(golden['cmd'][0])
@@ -128,5 +134,5 @@ def test_first_step_differs_only_in_gravity(name: str, torch_threads) -> None:
     _close(runner.last_input[gravity], golden['net_input'][0][gravity], 'gravity',
            GRAVITY_ATOL)
     _close(runner.last_input[~gravity], golden['net_input'][0][~gravity], 'the rest',
-           EXACT_ATOL)
+           ROUNDING_ATOL)
     _close(runner.last_output, golden['net_output'][0], 'net_output')

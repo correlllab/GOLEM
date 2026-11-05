@@ -10,7 +10,7 @@ import tempfile
 import numpy as np
 import yaml
 
-from homie_policy import HERE, HomiePolicy
+from homie_policy import HERE, HomiePolicy, load_config
 
 # the legs' default angles in g1.yaml
 DEFAULT_ANGLES = [-0.1, 0.0, 0.0, 0.3, -0.2, 0.0] * 2
@@ -191,6 +191,17 @@ def test_gains():
     np.testing.assert_array_equal(kp, [100, 150, 40, 300, 200, 100, 20, 10])
     np.testing.assert_array_equal(kd, [2, 4, 2, 5, 4, 1, 0.5, 2])
     assert raises(KeyError, policy.gains, ['head_joint'])
+
+
+def test_model_path_found_in_repo():
+    """In the repo, load_config finds xml_path in the repo's CL_Assets/g1."""
+    with open(os.path.join(HERE, 'g1.yaml')) as f:
+        xml_path = yaml.safe_load(f)['xml_path']
+    repo_model = os.path.normpath(os.path.join(HERE, '..', '..', '..', '..', '..', xml_path[len('../'):]))
+    if not os.path.exists(repo_model):
+        return  # not in the repo, or CL_Assets/g1 is not checked out
+    config = load_config(os.path.join(HERE, 'g1.yaml'))
+    assert config['xml_path'] == repo_model
 
 
 if __name__ == '__main__':

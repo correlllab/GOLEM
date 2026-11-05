@@ -35,7 +35,7 @@ def load_config(config_path):
     base = os.path.dirname(os.path.abspath(config_path))
     for path_key in ['policy_path', 'xml_path']:
         path = os.path.normpath(os.path.join(base, config[path_key]))
-        in_repo = os.path.normpath(os.path.join(base, '..', '..', '..', config[path_key]))
+        in_repo = os.path.normpath(os.path.join(base, '..', '..', '..', '..', config[path_key]))
         config[path_key] = path if os.path.exists(path) or not os.path.exists(in_repo) else in_repo
 
     array_keys = ['default_angles', 'cmd_scale', 'cmd_init']

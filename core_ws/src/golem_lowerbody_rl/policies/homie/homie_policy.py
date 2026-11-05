@@ -26,7 +26,7 @@ def load_config(config_path):
     """Load the YAML config; paths in it are relative to the file.
 
     In the containers this directory is /home/code/g1_homie, beside
-    /home/code/CL_Assets; in the repo it is core_ws/src/g1_homie/policy,
+    /home/code/CL_Assets; in the repo it is core_ws/src/golem_lowerbody_rl/policies/homie,
     so a path that is not there is looked up from the repo's root as well.
     """
     with open(config_path, 'r') as f:
@@ -35,7 +35,7 @@ def load_config(config_path):
     base = os.path.dirname(os.path.abspath(config_path))
     for path_key in ['policy_path', 'xml_path']:
         path = os.path.normpath(os.path.join(base, config[path_key]))
-        in_repo = os.path.normpath(os.path.join(base, '..', '..', '..', '..', config[path_key]))
+        in_repo = os.path.normpath(os.path.join(base, '..', '..', '..', config[path_key]))
         config[path_key] = path if os.path.exists(path) or not os.path.exists(in_repo) else in_repo
 
     array_keys = ['default_angles', 'cmd_scale', 'cmd_init']

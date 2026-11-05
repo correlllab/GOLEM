@@ -50,7 +50,7 @@ from g1_homie.locomotion import (
 )
 
 # the package's policy/ (the containers also mount it at /home/code/g1_homie)
-POLICY_DIR = Path(__file__).resolve().parents[1] / 'policy'
+POLICY_DIR = Path(__file__).resolve().parents[2] / 'golem_lowerbody_rl' / 'policies' / 'homie'
 CONFIG_DIR = Path(__file__).resolve().parents[1] / 'config'
 TEST_DOMAIN = 97  # never 0 (the real robot) or 1 (the sim)
 # This one process runs the fakes, the recorders and the node, and the GIL

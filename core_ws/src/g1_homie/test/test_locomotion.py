@@ -40,7 +40,7 @@ from g1_homie.locomotion import (
 )
 
 # the package's policy/ (the containers also mount it at /home/code/g1_homie)
-POLICY_DIR = Path(__file__).resolve().parents[1] / 'policy'
+POLICY_DIR = Path(__file__).resolve().parents[2] / 'golem_lowerbody_rl' / 'policies' / 'homie'
 CONFIG_DIR = Path(__file__).resolve().parents[1] / 'config'
 SAMPLE_DT = 0.002  # rt/lowstate at 500 Hz
 TICK_S = 0.001  # its tick counts ms

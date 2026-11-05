@@ -3,9 +3,11 @@
 The H1-2's leg node, `lowerbody_controller_node`: one policy (`active_policy`:
 `fame`, `walk` or `almi`; every bringup runs `almi`) drives the 12 leg joints
 through `golem_safety`'s lower-body input, `/safety/lowcmd_lower_in`. The
-policies are in `golem_lowerbody_rl/policy.py` and `policies/` (ALMI's
+policies are in `golem_lowerbody_rl/policy_classes.py` and `policies/` (ALMI's
 interface: `policies/almi/README.md`); the bringups set the parameters from
-`golem_bringup/config/h12/lowerbody_{sim,real}.yaml`.
+`golem_bringup/config/h12/lowerbody_{sim,real}.yaml`. The config-driven policy runner,
+`golem_lowerbody_rl/policy/`, runs any robot's policy from its spec in
+`config/<robot>/policies/` (every key in `config/example.policy.yaml`).
 
 ## Start-up and faults
 

@@ -1,5 +1,5 @@
 # TorchScript walking policy for the Unitree H1-2 — consumed by
-# golem_lowerbody_rl.policy.WalkPolicy. Paths are relative to this file.
+# golem_lowerbody_rl.policy_classes.WalkPolicy. Paths are relative to this file.
 policy_path: "walkingPolicy.pt"
 
 kps: [200, 200, 200, 300, 40, 40, 200, 200, 200, 300, 40, 40]

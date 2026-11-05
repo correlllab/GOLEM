@@ -32,7 +32,7 @@ from typing import Callable
 
 import numpy as np
 
-from .policy import NUM_LEG_JOINTS, RobotState
+from .policy_classes import NUM_LEG_JOINTS, RobotState
 
 WAITING = 'waiting'
 RAMPING = 'ramping'

@@ -16,7 +16,7 @@ QUATS = [
     [0.8223631719059994, 0.02226002732222905, 0.4396797395409, 0.3604234056503559],
     [0.5, -0.5, 0.5, 0.5],
 ]
-# golem_lowerbody_rl.policy.gravity_from_quat_walk of each of QUATS
+# golem_lowerbody_rl.policy_classes.gravity_from_quat_walk of each of QUATS
 WALK_GRAVITY = [
     [0.0, -0.0, -1.0],
     [0.0, -0.1736481785774231, -0.9848077297210693],
@@ -24,7 +24,7 @@ WALK_GRAVITY = [
     [0.7071067690849304, -0.3535533845424652, -0.6123724579811096],
     [1.0, -0.0, 0.0],
 ]
-# golem_lowerbody_rl.policy.gravity_from_quat_fame of each of QUATS
+# golem_lowerbody_rl.policy_classes.gravity_from_quat_fame of each of QUATS
 FAME_GRAVITY = [
     [0.0, 0.0, -1.0],
     [0.0, -0.1736481785774231, -0.9848077893257141],
@@ -60,14 +60,14 @@ def test_quaternion_that_is_no_rotation_is_refused(quat):
         projected_gravity(np.array(quat))
 
 
-# golem_lowerbody_rl.policy.imu_offset_quat of each trim (deg, converted with np.radians)
+# golem_lowerbody_rl.policy_classes.imu_offset_quat of each trim (deg, converted with np.radians)
 OLD_TRIMS = {
     (0.5, -2.5, 0.0): [0.9997524619102478, -0.004362270701676607, 0.021814676001667976,
                        -9.518508159089833e-05],
     (1.0, 2.0, 3.0): [0.9994710087776184, -0.008265383541584015, -0.01767415925860405,
                       -0.026019718497991562],
 }
-# golem_lowerbody_rl.policy.apply_imu_offset(float32 QUATS[3], each trim)
+# golem_lowerbody_rl.policy_classes.apply_imu_offset(float32 QUATS[3], each trim)
 OLD_TRIMMED = {
     (0.5, -2.5, 0.0): [0.8126996159553528, 0.010762774385511875, 0.4559403657913208,
                        0.3626595139503479],

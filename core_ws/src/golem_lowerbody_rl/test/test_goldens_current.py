@@ -4,8 +4,8 @@ Replay the golden traces in test/golden/ through today's policy classes.
 The recorder (test/golden/record_goldens.py, its docstring lists every array)
 drives the classes; this test drives fresh instances through the same inputs
 and checks they compute the recorded numbers, which proves the recording is
-deterministic. HOMIE is loaded from the g1_homie source tree beside this
-package and needs onnxruntime.
+deterministic. HOMIE is loaded from policies/homie/ and drives g1_homie's
+CommandFilter from its source tree beside this package; it needs onnxruntime.
 """
 
 import importlib.util

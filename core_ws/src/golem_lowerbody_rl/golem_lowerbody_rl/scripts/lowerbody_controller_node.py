@@ -51,7 +51,7 @@ import time
 
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped, Twist
-from golem_lowerbody_rl.policy import (
+from golem_lowerbody_rl.policy_classes import (
     AlmiPolicy,
     FamePolicy,
     LegCommand,

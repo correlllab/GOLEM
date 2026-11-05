@@ -273,9 +273,9 @@ if 'config' in sys.argv:
     )
     # HOMIE's walking policy, which every ros container mounts.
     G1_POLICY = (
-        'core_ws/src/g1_homie/policy/deploy.onnx',
-        'core_ws/src/g1_homie/policy/g1.yaml',
-        'core_ws/src/g1_homie/policy/homie_policy.py',
+        'core_ws/src/golem_lowerbody_rl/policies/homie/deploy.onnx',
+        'core_ws/src/golem_lowerbody_rl/policies/homie/g1.yaml',
+        'core_ws/src/golem_lowerbody_rl/policies/homie/homie_policy.py',
     )
     LFS_HINT = 'lfs pull'
     LFS_POINTER = 'version https://git-lfs.github.com/spec/v1\noid sha256:0\nsize 1\n'
@@ -546,7 +546,7 @@ if 'config' in sys.argv:
     def test_missing_policy_file_fails_early_for_every_ros_container(self):
         """Every ros container refuses a missing HOMIE policy file; the sims run without it."""
         # Every ros container mounts HOMIE's policy for the walking node; the sim reads none of it.
-        policy = self.root / 'core_ws/src/g1_homie/policy/deploy.onnx'
+        policy = self.root / 'core_ws/src/golem_lowerbody_rl/policies/homie/deploy.onnx'
         policy.unlink()
         for robot in ('g1', 'h12'):
             with self.subTest(robot=robot):
@@ -555,7 +555,7 @@ if 'config' in sys.argv:
                 self.assertNotEqual(r.returncode, 0)
                 self.assertIn('deploy.onnx', r.stderr)
                 self.assertFalse(self.compose_calls())
-        shutil.rmtree(self.root / 'core_ws/src/g1_homie')
+        shutil.rmtree(self.root / 'core_ws/src/golem_lowerbody_rl/policies/homie')
         for args in (('--g1',), ('--h12',)):
             with self.subTest('sim', args=args):
                 (self.root / 'calls').unlink(missing_ok=True)
@@ -735,7 +735,7 @@ if 'config' in sys.argv:
         self.assertNotIn('cyclonedds_local.xml', overlay)
         self.assertNotIn('g1_homie', overlay)
         self.assertNotIn('/home/code/tools', overlay)
-        self.assertFalse([v for v in services['robocasa']['volumes'] if 'g1_homie' in v['source']])
+        self.assertFalse([v for v in services['robocasa']['volumes'] if 'homie' in v['source']])
         # The G1's model comes from the base file's CL_Assets mount.
         mounts = {v['target']: v['source'] for v in services['robocasa']['volumes']}
         self.assertEqual(mounts['/home/code/CL_Assets'], str(self.root / 'CL_Assets'))
@@ -747,7 +747,7 @@ if 'config' in sys.argv:
         # policy for the G1's walking node and tools/ come from the base file.
         ros = self.compose_config('docker-compose.yml', profile='ros')['ros']
         mounts = {v['target']: v for v in ros['volumes']}
-        expected = {'/home/code/g1_homie': str(self.root / 'core_ws/src/g1_homie/policy'),
+        expected = {'/home/code/g1_homie': str(self.root / 'core_ws/src/golem_lowerbody_rl/policies/homie'),
                     '/home/code/tools': str(self.root / 'tools')}
         for target, source in expected.items():
             self.assertEqual(mounts[target]['source'], source)
@@ -755,7 +755,7 @@ if 'config' in sys.argv:
             self.assertFalse(mounts[target].get('bind', {}).get('create_host_path', False), target)
         self.assertNotIn('GOLEM_ROBOT', ros['environment'])
         sim = self.compose_config('docker-compose.yml', profile='robocasa')['robocasa']
-        self.assertFalse([v for v in sim['volumes'] if 'g1_homie' in v['source']])
+        self.assertFalse([v for v in sim['volumes'] if 'homie' in v['source']])
 
     def test_stack_compose_bringup_defaults_and_overrides(self):
         """The stack overlay starts h12_sim.launch.py by default and the launch GOLEM_BRINGUP_LAUNCH names."""

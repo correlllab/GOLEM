@@ -10,9 +10,9 @@ beside this file:
 Each policy runs one scripted 120-step sequence (one step per 20 ms), drawn
 from ``numpy.random.default_rng(7)`` afresh for each policy, and is driven as
 its node drives it: ``WalkPolicy``, ``AlmiPolicy`` and ``FamePolicy`` from
-``golem_lowerbody_rl.policy`` as ``lowerbody_controller_node`` does (reset at
+``golem_lowerbody_rl.policy_classes`` as ``lowerbody_controller_node`` does (reset at
 engage and at the band release, then ``compute``), ``HomiePolicy`` from
-``g1_homie/policy/homie_policy.py`` as ``g1_homie``'s ``LocomotionController``
+``policies/homie/homie_policy.py`` as ``g1_homie``'s ``LocomotionController``
 does (``load_policy``, ``CommandFilter.update`` with ``g1_homie/config/sim.yaml``'s
 ``commands`` at 50 Hz, ``reset`` at engage and at the band release, then
 ``step``). The network (and FAME's encoder) is wrapped to record what it
@@ -33,8 +33,9 @@ H1-2, 29 on the G1):
 - ``gyro`` (N, 3) float32, rad/s: uniform +-0.3.
 - ``cmd`` (N, 3), m/s, m/s, rad/s: the velocity command as the node hands it
   on. H1-2: float32, ``/cmd_vel`` clipped to +-1 per axis
-  (``LegSupervisor.cmd_vel``). G1: float64, the ``/cmd_vel`` request that goes
-  into ``CommandFilter``. The script: 20 steps of zero, a ramp to
+  (``lowerbody_controller_node._on_cmd_vel``, ``CMD_VEL_LIMIT``). G1: float64, the
+  ``/cmd_vel`` request that goes into ``CommandFilter``. The script: 20 steps
+  of zero, a ramp to
   (0.6, 0.0, 0.3) over steps 20-39, a hold to step 69, a ramp down to zero
   over steps 70-79, zero to step 99 (ALMI's effective command falls below
   0.05), a ramp up again over steps 100-119.
@@ -81,7 +82,7 @@ import yaml
 HERE = os.path.dirname(os.path.abspath(__file__))
 PACKAGE_DIR = os.path.normpath(os.path.join(HERE, '..', '..'))
 G1_HOMIE_DIR = os.path.normpath(os.path.join(PACKAGE_DIR, '..', 'g1_homie'))
-HOMIE_POLICY_DIR = os.path.join(G1_HOMIE_DIR, 'policy')
+HOMIE_POLICY_DIR = os.path.join(PACKAGE_DIR, 'policies', 'homie')
 
 POLICIES = ('walk', 'almi', 'fame', 'homie')
 SEED = 7
@@ -236,7 +237,7 @@ def _run_h12(name: str, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     """Drive today's H1-2 class as lowerbody_controller_node does; return what it computed."""
     import torch
 
-    from golem_lowerbody_rl.policy import AlmiPolicy, FamePolicy, RobotState, WalkPolicy
+    from golem_lowerbody_rl.policy_classes import AlmiPolicy, FamePolicy, RobotState, WalkPolicy
 
     torch.set_num_threads(1)
     cls = {'walk': WalkPolicy, 'almi': AlmiPolicy, 'fame': FamePolicy}[name]

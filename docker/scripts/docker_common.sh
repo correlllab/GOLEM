@@ -206,7 +206,7 @@ require_h12_model() {
 # docker-compose.yml bind-mounts them into every x86 ros container. The Mac
 # neither mounts nor builds g1_homie.
 require_g1_policy() {
-    local policy="$GOLEM_ROOT/core_ws/src/g1_homie/policy"
+    local policy="$GOLEM_ROOT/core_ws/src/golem_lowerbody_rl/policies/homie"
     local name
     for name in deploy.onnx g1.yaml homie_policy.py; do
         require_file "$policy/$name"

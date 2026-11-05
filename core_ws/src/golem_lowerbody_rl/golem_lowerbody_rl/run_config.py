@@ -7,12 +7,12 @@ refused, so a typo cannot fall back to a default.
 """
 
 from dataclasses import dataclass
-import math
 import os
 
 from ament_index_python.packages import get_package_share_directory
 import yaml
 
+from golem_lowerbody_rl.checks import check_keys, count, flag, numbers, positive
 from golem_lowerbody_rl.profile import known_robots
 
 __all__ = [
@@ -99,45 +99,9 @@ class RunConfig:
     imu_trim_deg: tuple[float, float, float]  # deg, roll, pitch, yaw (imu.trim_quaternion)
 
 
-def _number(where: str, value) -> float:
-    """Return value as a float if it is a finite int or float (not a bool)."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-        raise ValueError(f'{where} must be a finite number, not {value!r}')
-    return float(value)
-
-
-def _positive(where: str, value) -> float:
-    """Return value as a float if it is a positive finite number."""
-    number = _number(where, value)
-    if number <= 0.0:
-        raise ValueError(f'{where} must be positive, not {value!r}')
-    return number
-
-
-def _count(where: str, value) -> int:
-    """Return value if it is a positive int (not a bool)."""
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f'{where} must be a positive integer, not {value!r}')
-    return value
-
-
-def _flag(where: str, value) -> bool:
-    """Return value if it is true or false."""
-    if not isinstance(value, bool):
-        raise ValueError(f'{where} must be true or false, not {value!r}')
-    return value
-
-
-def _numbers(where: str, value, count: int) -> tuple[float, ...]:
-    """Return value as a tuple of floats if it is a list of count finite numbers."""
-    if not isinstance(value, list) or len(value) != count:
-        raise ValueError(f'{where} must be a list of {count} numbers, not {value!r}')
-    return tuple(_number(where, item) for item in value)
-
-
 def _range(where: str, value) -> tuple[float, float]:
     """Return value if it is a [low, high] list containing zero."""
-    low, high = _numbers(where, value, 2)
+    low, high = numbers(where, value, 2)
     # SAFETY: the node starts at zero velocity and falls back to it on a stale or
     # non-finite /cmd_vel, so zero must lie inside every limit
     if not low <= 0.0 <= high:
@@ -145,35 +109,22 @@ def _range(where: str, value) -> tuple[float, float]:
     return low, high
 
 
-def _check_keys(where: str, mapping, keys) -> None:
-    """Raise ValueError naming the first missing or unknown key of mapping."""
-    if not isinstance(mapping, dict):
-        raise ValueError(f'{where or "the file"} must be a mapping')
-    prefix = f'{where}.' if where else ''
-    for key in mapping:
-        if key not in keys:
-            raise ValueError(f"unknown key '{prefix}{key}'")
-    for key in keys:
-        if key not in mapping:
-            raise ValueError(f"missing key '{prefix}{key}'")
-
-
 def _check(raw, role: str | None) -> RunConfig:
     """Return the RunConfig of raw; role 'sim' or 'real' sets the value sim must have."""
-    _check_keys('', raw, TOP_LEVEL_KEYS)
+    check_keys('', raw, TOP_LEVEL_KEYS)
     for section, keys in SECTION_KEYS.items():
-        _check_keys(section, raw[section], keys)
-    sim = _flag('sim', raw['sim'])
+        check_keys(section, raw[section], keys)
+    sim = flag('sim', raw['sim'])
     if role is not None and sim != (role == 'sim'):
         raise ValueError(f"'sim' must be {str(role == 'sim').lower()} in a {role}.yaml")
 
     startup = raw['startup']
-    tick_rate = _numbers('startup.tick_rate', startup['tick_rate'], 2)
+    tick_rate = numbers('startup.tick_rate', startup['tick_rate'], 2)
     # a tick that keeps to the node's clock must always be accepted
     if not 0.0 < tick_rate[0] <= 1.0 <= tick_rate[1]:
         raise ValueError(f'startup.tick_rate {list(tick_rate)} must be [low, high] with '
                          '0 < low <= 1 <= high')
-    heartbeat_timeout = _positive('heartbeat.timeout', raw['heartbeat']['timeout'])
+    heartbeat_timeout = positive('heartbeat.timeout', raw['heartbeat']['timeout'])
     # a timeout within one beat period would stop the node between two beats
     if heartbeat_timeout <= HEARTBEAT_PERIOD:
         raise ValueError(f"heartbeat.timeout must be longer than golem_safety's beat period "
@@ -181,42 +132,42 @@ def _check(raw, role: str | None) -> RunConfig:
     commands = raw['commands']
     accel = None
     if commands['accel'] is not None:
-        accel = tuple(_positive('commands.accel', value)
-                      for value in _numbers('commands.accel', commands['accel'], 3))
+        accel = tuple(positive('commands.accel', value)
+                      for value in numbers('commands.accel', commands['accel'], 3))
     height_rate = commands['height_rate']
-    trim = _numbers('imu_trim_deg', raw['imu_trim_deg'], 3)
+    trim = numbers('imu_trim_deg', raw['imu_trim_deg'], 3)
     max_latency = raw['faults']['max_latency']
     return RunConfig(
         sim=sim,
         startup=Startup(
-            wait_for_confirm=_flag('startup.wait_for_confirm', startup['wait_for_confirm']),
-            ramp_seconds=_positive('startup.ramp_seconds', startup['ramp_seconds']),
-            settle_tolerance=_positive('startup.settle_tolerance', startup['settle_tolerance']),
-            settle_ticks=_count('startup.settle_ticks', startup['settle_ticks']),
-            settle_max_ticks=_count('startup.settle_max_ticks', startup['settle_max_ticks']),
-            steady_seconds=_positive('startup.steady_seconds', startup['steady_seconds']),
+            wait_for_confirm=flag('startup.wait_for_confirm', startup['wait_for_confirm']),
+            ramp_seconds=positive('startup.ramp_seconds', startup['ramp_seconds']),
+            settle_tolerance=positive('startup.settle_tolerance', startup['settle_tolerance']),
+            settle_ticks=count('startup.settle_ticks', startup['settle_ticks']),
+            settle_max_ticks=count('startup.settle_max_ticks', startup['settle_max_ticks']),
+            steady_seconds=positive('startup.steady_seconds', startup['steady_seconds']),
             tick_rate=(tick_rate[0], tick_rate[1]),
-            upper_fresh_seconds=_positive('startup.upper_fresh_seconds',
-                                          startup['upper_fresh_seconds']),
+            upper_fresh_seconds=positive('startup.upper_fresh_seconds',
+                                         startup['upper_fresh_seconds']),
         ),
         heartbeat=Heartbeat(timeout=heartbeat_timeout),
         band=Band(
-            release=_flag('band.release', raw['band']['release']),
-            max_wait=_positive('band.max_wait', raw['band']['max_wait']),
+            release=flag('band.release', raw['band']['release']),
+            max_wait=positive('band.max_wait', raw['band']['max_wait']),
         ),
         commands=Commands(
-            timeout=_positive('commands.timeout', commands['timeout']),
+            timeout=positive('commands.timeout', commands['timeout']),
             vx=_range('commands.vx', commands['vx']),
             vy=_range('commands.vy', commands['vy']),
             yaw=_range('commands.yaw', commands['yaw']),
             accel=None if accel is None else (accel[0], accel[1], accel[2]),
             height_rate=(None if height_rate is None
-                         else _positive('commands.height_rate', height_rate)),
+                         else positive('commands.height_rate', height_rate)),
         ),
         faults=Faults(
-            max_state_gap=_positive('faults.max_state_gap', raw['faults']['max_state_gap']),
+            max_state_gap=positive('faults.max_state_gap', raw['faults']['max_state_gap']),
             max_latency=(None if max_latency is None
-                         else _positive('faults.max_latency', max_latency)),
+                         else positive('faults.max_latency', max_latency)),
         ),
         imu_trim_deg=(trim[0], trim[1], trim[2]),
     )

@@ -39,6 +39,11 @@ setup(
             glob('policies/fame/*')),
         (os.path.join('share', package_name, 'policies', 'almi'),
             glob('policies/almi/*')),
+        # HOMIE's network with its licence (CC BY-NC-SA) and README; homie_policy.py and
+        # the rest of the folder serve its MuJoCo script and the golden tests
+        (os.path.join('share', package_name, 'policies', 'homie'),
+            ['policies/homie/deploy.onnx', 'policies/homie/LICENSE',
+             'policies/homie/README.md']),
     ] + config_files(),
     package_data={'': ['py.typed']},
     install_requires=['setuptools'],

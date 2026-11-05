@@ -1,0 +1,98 @@
+# HOMIE: OpenHomie's G1 walking policy. The values are transcribed from
+# policies/homie/g1.yaml, which follows HOMIE's training config; the network,
+# deploy.onnx, is under that folder's CC BY-NC-SA licence (its LICENSE and README.md).
+# Every key is described in ../../example.policy.yaml.
+
+runtime:
+  kind: onnx
+  file: policies/homie/deploy.onnx
+  reset: null
+  threads: 1
+  # onnxruntime's first run is slow: take it at load, not in the first policy step
+  warmup: true
+
+rate_hz: 50
+
+# the 29 body joints minus waist roll and waist pitch, which HOMIE's sim locked
+observed_joints:
+  - left_hip_pitch_joint
+  - left_hip_roll_joint
+  - left_hip_yaw_joint
+  - left_knee_joint
+  - left_ankle_pitch_joint
+  - left_ankle_roll_joint
+  - right_hip_pitch_joint
+  - right_hip_roll_joint
+  - right_hip_yaw_joint
+  - right_knee_joint
+  - right_ankle_pitch_joint
+  - right_ankle_roll_joint
+  - waist_yaw_joint
+  - left_shoulder_pitch_joint
+  - left_shoulder_roll_joint
+  - left_shoulder_yaw_joint
+  - left_elbow_joint
+  - left_wrist_roll_joint
+  - left_wrist_pitch_joint
+  - left_wrist_yaw_joint
+  - right_shoulder_pitch_joint
+  - right_shoulder_roll_joint
+  - right_shoulder_yaw_joint
+  - right_elbow_joint
+  - right_wrist_roll_joint
+  - right_wrist_pitch_joint
+  - right_wrist_yaw_joint
+
+# the legs' defaults; every other observed joint is held at 0
+default_pose:
+  left_hip_pitch_joint: -0.1
+  left_hip_roll_joint: 0.0
+  left_hip_yaw_joint: 0.0
+  left_knee_joint: 0.3
+  left_ankle_pitch_joint: -0.2
+  left_ankle_roll_joint: 0.0
+  right_hip_pitch_joint: -0.1
+  right_hip_roll_joint: 0.0
+  right_hip_yaw_joint: 0.0
+  right_knee_joint: 0.3
+  right_ankle_pitch_joint: -0.2
+  right_ankle_roll_joint: 0.0
+
+# 456 inputs: the last six 76-value steps, oldest first, zero at a reset
+groups:
+  - history: 6
+    terms:
+      # HOMIE's deploy scripts had 0.25 for yaw
+      - {term: velocity_command, scale: [2.0, 2.0, 0.5]}
+      # the pelvis height target (m), unscaled
+      - {term: height_command, scale: 1.0}
+      # the pelvis IMU; HOMIE's MuJoCo script had 0.25
+      - {term: ang_vel, scale: 0.5}
+      - {term: projected_gravity}
+      - {term: joint_pos_rel, scale: 1.0}
+      - {term: joint_vel, scale: 0.05}
+      - {term: last_action, clipped: true}
+
+command:
+  # the ranges HOMIE was trained on
+  trained_range:
+    vx: [-0.8, 1.2]
+    vy: [-0.5, 0.5]
+    yaw: [-0.8, 0.8]
+  gain: null
+  clip: null
+  smooth_alpha: null
+  onset_reset: null
+  # 0.74 m is standing; the trained range reaches a deep squat
+  height: {default: 0.74, range: [0.24, 0.74]}
+
+action:
+  scale: 0.25
+  clip_raw: 100.0
+  clip_targets: null
+  # HOMIE's gains, matched to the leg names by substring in training: hips 100/2,
+  # knee 150/4, ankles 40/2
+  kp: [100, 100, 100, 150, 40, 40, 100, 100, 100, 150, 40, 40]
+  kd: [2, 2, 2, 4, 2, 2, 2, 2, 2, 4, 2, 2]
+
+reset_on: [engage, band_release]

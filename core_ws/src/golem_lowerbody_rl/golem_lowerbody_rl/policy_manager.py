@@ -10,7 +10,7 @@ warm-up. The band itself is owned by the node, not here.
 
 from __future__ import annotations
 
-from .policy import LegCommand, Policy, RobotState
+from .policy_classes import LegCommand, Policy, RobotState
 
 
 class PolicyManager:

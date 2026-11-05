@@ -128,8 +128,9 @@ def test_release_drops_limp_robot():
 def test_sim_reads_no_policy():
     """Importing g1_robosuite, which builds the sim's robot, opens nothing of HOMIE's policy.
 
-    It touches no file or directory with "homie" in its path (g1_homie's policy/, mounted at
-    /home/code/g1_homie in the ros container), puts none on sys.path and imports no such module.
+    It touches no file or directory with "homie" in its path (golem_lowerbody_rl's
+    policies/homie/, mounted at /home/code/g1_homie in the ros container), puts none on
+    sys.path and imports no such module.
     """
     code = textwrap.dedent("""
         import os, sys

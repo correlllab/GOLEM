@@ -1,0 +1,186 @@
+# Every key of a policy spec (config/<robot>/policies/<name>.yaml), with its meaning, units
+# and allowed values; read by golem_lowerbody_rl.policy.spec, which requires every key and
+# refuses any other, and checks every joint against the robot's joint table (golem_safety's
+# robots/<robot>.yaml). This file documents the schema: setup.py does not install it, and
+# test_policy_spec.py checks that it holds every key and every term and loads as one of the
+# H1-2's specs would. Its values are ALMI's (config/h12/policies/almi.yaml), plus FAME's
+# terms and the options ALMI leaves null; it is no real policy, and no network takes it.
+
+runtime:
+  # torchscript (torch.jit.load) or onnx (onnxruntime); only the one the active policy
+  # names is imported
+  kind: torchscript
+  # the network, relative to share/golem_lowerbody_rl/; its input size must equal the
+  # observation's (checked at load: an ONNX network declares it, a TorchScript one is
+  # run once on zeros)
+  file: policies/almi/policy_lstm_12800.pt
+  # the TorchScript method that clears the network's recurrent state at a reset, or null
+  # (an ONNX network has none)
+  reset: reset_memory
+  # intra-op threads (integer > 0); 1 in every spec: a wider pool costs cores and slows
+  # the sim
+  threads: 1
+  # true runs the network once on zeros at load, then resets it (onnxruntime's first run
+  # is slow)
+  warmup: false
+
+# Hz (> 0) the policy was trained at; the node steps it on a grid of that period
+rate_hz: 50
+
+# the joints whose positions and velocities the joint_pos_rel and joint_vel terms observe,
+# by URDF name, in the network's order; each must be a joint of the robot
+observed_joints:
+  - left_hip_yaw_joint
+  - left_hip_pitch_joint
+  - left_hip_roll_joint
+  - left_knee_joint
+  - left_ankle_pitch_joint
+  - left_ankle_roll_joint
+  - right_hip_yaw_joint
+  - right_hip_pitch_joint
+  - right_hip_roll_joint
+  - right_knee_joint
+  - right_ankle_pitch_joint
+  - right_ankle_roll_joint
+  - torso_joint
+  - left_shoulder_pitch_joint
+  - left_shoulder_roll_joint
+  - left_shoulder_yaw_joint
+  - left_elbow_joint
+  - right_shoulder_pitch_joint
+  - right_shoulder_roll_joint
+  - right_shoulder_yaw_joint
+  - right_elbow_joint
+
+# rad: the default angle of observed joints (joint_pos_rel observes q - default; an
+# observed joint not listed is 0) and of every leg. SAFETY: each leg must be listed: its
+# angle is the leg's pre-pose and the offset of its action
+default_pose:
+  left_hip_yaw_joint: 0.0
+  left_hip_pitch_joint: -0.4
+  left_hip_roll_joint: 0.0
+  left_knee_joint: 0.8
+  left_ankle_pitch_joint: -0.4
+  left_ankle_roll_joint: 0.0
+  right_hip_yaw_joint: 0.0
+  right_hip_pitch_joint: -0.4
+  right_hip_roll_joint: 0.0
+  right_knee_joint: 0.8
+  right_ankle_pitch_joint: -0.4
+  right_ankle_roll_joint: 0.0
+  torso_joint: 0.0
+  left_shoulder_pitch_joint: 0.4
+  left_shoulder_roll_joint: 0.2
+  left_shoulder_yaw_joint: 0.0
+  left_elbow_joint: 0.3
+  right_shoulder_pitch_joint: 0.4
+  right_shoulder_roll_joint: -0.2
+  right_shoulder_yaw_joint: 0.0
+  right_elbow_joint: 0.3
+
+# the network input: each group's terms make one frame per step; the group keeps its last
+# `history` frames (integer > 0), oldest first, all zero after a reset; the input is the
+# groups' histories in this order. Each term is {term: <name>, <its keys>}
+groups:
+  - history: 1
+    terms:
+      # the IMU's angular velocity (rad/s) times scale: 3 values
+      - {term: ang_vel, scale: 0.25}
+      # gravity's unit direction in the IMU frame, from the normalised quaternion: 3
+      - {term: projected_gravity}
+      # the processed velocity command (command, below) times a scale per axis: 3
+      - {term: velocity_command, scale: [2.0, 2.0, 0.25]}
+      # the processed height command times scale: 1 (FAME, HOMIE)
+      - {term: height_command, scale: 1.0}
+      # (q - default) times scale per observed joint
+      - {term: joint_pos_rel, scale: 1.0}
+      # dq times scale per observed joint
+      - {term: joint_vel, scale: 0.05}
+      # the network's previous output, one per leg, zero after a reset; clipped true
+      # observes it after action.clip_raw (HOMIE), false as the network gave it
+      - {term: last_action, clipped: false}
+      # a gait clock: phase = (time since the first step after a reset mod period (s)) /
+      # period; form sin_cos gives (sin, cos) of 2 pi phase (offset null), left_right_sin
+      # the sines of 2 pi phase and 2 pi (phase + offset), offset in periods; with
+      # stand_below (> 0, or null) both are 0 while the processed command's norm is below
+      # it: 2 values
+      - {term: gait_phase, period: 0.8, form: left_right_sin, offset: 0.5, stand_below: 0.1}
+  - history: 3
+    terms:
+      # an RMA encoder's latent (FAME): encoder.file (relative to the package share) holds
+      # the state_dict of an EnvFactorEncoder with these hidden widths, activation (elu,
+      # relu or tanh) and latent size; its input is the joints' raw positions (rad) then
+      # each force (N, [x, y, z]): latent values
+      - term: latent
+        encoder:
+          file: policies/fame/encoder_3600.pt
+          hidden: [256, 128]
+          activation: elu
+          latent: 8
+        joints:
+          - torso_joint
+          - left_shoulder_pitch_joint
+          - left_shoulder_roll_joint
+          - left_shoulder_yaw_joint
+          - left_elbow_joint
+          - left_wrist_roll_joint
+          - left_wrist_pitch_joint
+          - left_wrist_yaw_joint
+          - right_shoulder_pitch_joint
+          - right_shoulder_roll_joint
+          - right_shoulder_yaw_joint
+          - right_elbow_joint
+          - right_wrist_roll_joint
+          - right_wrist_pitch_joint
+          - right_wrist_yaw_joint
+        forces: [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
+
+# how /cmd_vel (vx, vy in m/s, yaw in rad/s, after the run config's limits) becomes the
+# velocity command the policy observes, in this order: trained_range, gain, clip,
+# smooth_alpha (with onset_reset), then the run config's commands.accel. A reset re-seeds
+# the smoothing and the onset detector from the command; the accel-limited command and the
+# height keep their state. Each null stage is skipped
+command:
+  # [low, high] per axis the policy was trained on, each containing 0 (SAFETY: a stale
+  # /cmd_vel becomes 0), or null
+  trained_range:
+    vx: [-1.0, 1.0]
+    vy: [-1.0, 1.0]
+    yaw: [-1.0, 1.0]
+  # a factor per axis [vx, vy, yaw], or null
+  gain: [1.5, 1.0, 2.0]
+  # (> 0) each axis is clipped to +-clip after the gain, or null
+  clip: 1.0
+  # (0, 1]: each step the command moves this fraction of the way to the request (an
+  # exponential moving average), or null
+  smooth_alpha: 0.15
+  # {rise, fall} (> 0, fall <= rise) or null: when the smoothed command's norm rises
+  # through rise from below fall, the policy is reset and the command re-seeded, and that
+  # step observes the unsmoothed command; it re-arms once the norm falls below fall
+  onset_reset: {rise: 0.1, fall: 0.05}
+  # the height command (the policy's units, FAME's and HOMIE's m) starts at default and
+  # returns to it at engage; range [low, high] containing default clips it, or null; the
+  # run config's commands.height_rate limits its rate
+  height: {default: 1.0, range: null}
+
+# how the network's output (one value per leg, in robot.yaml's legs order) becomes leg
+# targets: clip(raw, +-clip_raw) * scale + default, then clipped to clip_targets
+action:
+  # (> 0)
+  scale: 0.25
+  # (> 0) or null
+  clip_raw: 100.0
+  # rad per leg, lower <= upper, or null; the pre-pose is clipped the same way
+  clip_targets:
+    lower: [-0.37, -3.13, -0.42, -0.11, -0.887334, -0.181799,
+            -0.37, -3.13, -3.13, -0.11, -0.887334, -0.181799]
+    upper: [0.37, 2.49, 3.13, 2.18, 0.513599, 0.181799,
+            0.37, 2.49, 0.42, 2.18, 0.513599, 0.181799]
+  # the legs' position gains (> 0) and velocity gains (>= 0), one per leg
+  kp: [200, 200, 200, 300, 40, 40, 200, 200, 200, 300, 40, 40]
+  kd: [2.5, 2.5, 2.5, 4, 2, 2, 2.5, 2.5, 2.5, 4, 2, 2]
+
+# when the node resets the policy, from engage (the policy takes the legs) and
+# band_release (the sim's elastic band comes off); a reset clears the network's state, the
+# histories and the last action and restarts the gait clock
+reset_on: [engage, band_release]

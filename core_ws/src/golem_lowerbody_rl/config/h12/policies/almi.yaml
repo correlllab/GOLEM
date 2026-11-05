@@ -1,0 +1,110 @@
+# ALMI: TeleHuman/ALMI-Open's lower-body locomotion policy for the H1-2 (BSD-3, see
+# policies/almi/README.md). It stands below a command norm of 0.1 and walks above it.
+# Scales, gains and defaults are from that repo's
+# Data_Collection/mujoco/configs/h1_2_21dof.yaml. Every key is described in
+# ../../example.policy.yaml.
+
+runtime:
+  kind: torchscript
+  file: policies/almi/policy_lstm_12800.pt
+  # legged_gym's PolicyExporterLSTM keeps its LSTM state in buffers, updated by every
+  # step (so the 50 Hz cadence matters); an episode starts from zeroed memory
+  reset: reset_memory
+  threads: 1
+  warmup: false
+
+rate_hz: 50
+
+# ALMI's 21 joints: legs, torso, shoulder pitch/roll/yaw and elbow per arm; the wrists
+# are not observed
+observed_joints:
+  - left_hip_yaw_joint
+  - left_hip_pitch_joint
+  - left_hip_roll_joint
+  - left_knee_joint
+  - left_ankle_pitch_joint
+  - left_ankle_roll_joint
+  - right_hip_yaw_joint
+  - right_hip_pitch_joint
+  - right_hip_roll_joint
+  - right_knee_joint
+  - right_ankle_pitch_joint
+  - right_ankle_roll_joint
+  - torso_joint
+  - left_shoulder_pitch_joint
+  - left_shoulder_roll_joint
+  - left_shoulder_yaw_joint
+  - left_elbow_joint
+  - right_shoulder_pitch_joint
+  - right_shoulder_roll_joint
+  - right_shoulder_yaw_joint
+  - right_elbow_joint
+
+# the trained defaults: a deeper crouch (hip -0.4, knee 0.8) than WALK's
+default_pose:
+  left_hip_yaw_joint: 0.0
+  left_hip_pitch_joint: -0.4
+  left_hip_roll_joint: 0.0
+  left_knee_joint: 0.8
+  left_ankle_pitch_joint: -0.4
+  left_ankle_roll_joint: 0.0
+  right_hip_yaw_joint: 0.0
+  right_hip_pitch_joint: -0.4
+  right_hip_roll_joint: 0.0
+  right_knee_joint: 0.8
+  right_ankle_pitch_joint: -0.4
+  right_ankle_roll_joint: 0.0
+  torso_joint: 0.0
+  left_shoulder_pitch_joint: 0.4
+  left_shoulder_roll_joint: 0.2
+  left_shoulder_yaw_joint: 0.0
+  left_elbow_joint: 0.3
+  right_shoulder_pitch_joint: 0.4
+  right_shoulder_roll_joint: -0.2
+  right_shoulder_yaw_joint: 0.0
+  right_elbow_joint: 0.3
+
+# 65 inputs: one step; the recurrence is inside the network
+groups:
+  - history: 1
+    terms:
+      - {term: ang_vel, scale: 0.25}
+      - {term: projected_gravity}
+      - {term: velocity_command, scale: [2.0, 2.0, 0.25]}
+      - {term: joint_pos_rel, scale: 1.0}
+      - {term: joint_vel, scale: 0.05}
+      - {term: last_action, clipped: false}
+      # the right foot leads the left by half a period; as trained, both are 0 while
+      # standing (processed command norm below 0.1)
+      - {term: gait_phase, period: 0.8, form: left_right_sin, offset: 0.5, stand_below: 0.1}
+
+command:
+  trained_range: null
+  # the checkpoint undertracks its command (yaw about 0.2x, vx about 0.5x), which
+  # starves nav2's path follower; the gain trades command fidelity for authority, and
+  # the clip keeps the observation inside the trained +-1. Tuned in RoboCasa
+  gain: [1.5, 1.0, 2.0]
+  clip: 1.0
+  # about a 0.13 s time constant at 50 Hz: passes nav2's ramps and averages out a
+  # follower's sign-flipping yaw corrections, which the LSTM answers with a wobble
+  smooth_alpha: 0.15
+  # the policy only starts walking when its memory starts with the command present, as
+  # every training episode does: a rise through 0.1 resets it with the command seeded;
+  # falling below 0.05 re-arms, so a ramping command cannot stutter the gait
+  onset_reset: {rise: 0.1, fall: 0.05}
+  # not observed; the H1-2's height command starts here
+  height: {default: 1.0, range: null}
+
+action:
+  scale: 0.25
+  clip_raw: null
+  # the H1-2's leg motor limits
+  clip_targets:
+    lower: [-0.37, -3.13, -0.42, -0.11, -0.887334, -0.181799,
+            -0.37, -3.13, -3.13, -0.11, -0.887334, -0.181799]
+    upper: [0.37, 2.49, 3.13, 2.18, 0.513599, 0.181799,
+            0.37, 2.49, 0.42, 2.18, 0.513599, 0.181799]
+  kp: [200, 200, 200, 300, 40, 40, 200, 200, 200, 300, 40, 40]
+  kd: [2.5, 2.5, 2.5, 4, 2, 2, 2.5, 2.5, 2.5, 4, 2, 2]
+
+reset_on: [engage, band_release]

@@ -19,6 +19,7 @@ import pytest
 @pytest.mark.linter
 @pytest.mark.pep257
 def test_pep257() -> None:
-    # reference/ keeps the original standalone deploy scripts as they were (its README)
-    rc = main(argv=['.', 'test', '--exclude', 'reference'])
+    # reference/ keeps the original standalone deploy scripts as they were (its README);
+    # policies/ holds third-party code beside the weights (HOMIE's, under its own licence)
+    rc = main(argv=['.', 'test', '--exclude', 'reference', 'policies'])
     assert rc == 0, 'Found code style errors / warnings'

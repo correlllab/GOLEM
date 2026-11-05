@@ -53,10 +53,10 @@ def test_examples_hold_every_key_and_load():
 
 
 def test_examples_are_not_installed():
-    """The source has the two example files at config/, and none is installed."""
+    """The source has the three example files at config/, and none is installed."""
     examples = glob.glob(os.path.join(SOURCE_CONFIG, '**', 'example.*'), recursive=True)
     assert sorted(os.path.relpath(path, SOURCE_CONFIG) for path in examples) == [
-        'example.robot.yaml', 'example.run.yaml']
+        'example.policy.yaml', 'example.robot.yaml', 'example.run.yaml']
     share = os.path.join(get_package_share_directory('golem_lowerbody_rl'), 'config')
     assert os.path.isfile(os.path.join(share, EXAMPLE_ROBOT, 'robot.yaml'))
     assert glob.glob(os.path.join(share, '**', 'example.*'), recursive=True) == []

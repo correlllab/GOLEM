@@ -1,3 +1,13 @@
+"""
+Rebuild FAME's environment-factor encoder (Rapid Motor Adaptation) for inference.
+
+RMA (Kumar et al., RSS 2021) trains an encoder that maps privileged environment factors
+e_t to a compact latent z_t, and conditions the policy on (observation, z_t). The robot
+runs the encoder on the e_t it can observe (FAME: upper-body joint positions and hand
+forces). The weights are a state_dict of EnvFactorEncoder, so the module is rebuilt here
+and loaded into; the observation's latent term (policy/observation.py) does that.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,6 +18,7 @@ import torch.nn as nn
 
 def _build_mlp(in_dim: int, hidden_dims: list[int], out_dim: int,
                activation: str = "elu") -> nn.Sequential:
+    """Return Linear layers of the given widths with activation between them."""
     if activation == "elu":
         act: type[nn.Module] = nn.ELU
     elif activation == "relu":
@@ -29,6 +40,8 @@ def _build_mlp(in_dim: int, hidden_dims: list[int], out_dim: int,
 
 @dataclass
 class EnvFactorEncoderCfg:
+    """Hold the encoder's layer sizes and activation."""
+
     in_dim: int = 21  # e_t: 15 upper-body DoF + 3 left hand + 3 right hand (no torso)
     latent_dim: int = 8
     hidden_dims: tuple[int, ...] = (256, 128)
@@ -36,9 +49,10 @@ class EnvFactorEncoderCfg:
 
 
 class EnvFactorEncoder(nn.Module):
-    """Encodes privileged environment factors e_t into a compact latent z_t."""
+    """Encode environment factors e_t into a compact latent z_t."""
 
     def __init__(self, cfg: EnvFactorEncoderCfg | None = None):
+        """Build the encoder's layers from cfg (the defaults are FAME's)."""
         super().__init__()
         self.cfg = cfg if cfg is not None else EnvFactorEncoderCfg()
         self.net = _build_mlp(

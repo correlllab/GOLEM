@@ -602,36 +602,87 @@ identical (the images must agree on the `CustomMsg` wire format), and assert the
 build worked — `python3 -c 'from livox_ros_driver2.msg import CustomMsg'` — so a
 mismatch fails the image build instead of shipping broken.
 
-### Comments describe the code as it is, not how it got there
+### Comments and docstrings
 
-A comment is scoped to what the code does **now**, written for someone who has
-never seen an earlier version. Change history belongs in the commit message and
-the PR, not in the source — git already has it, and a comment about a past edit
-goes stale the moment the next edit lands.
+Comments are written for a person reading and annotating the code who has
+never seen an earlier version of it. They say what the code does **now** and
+why, never what it used to do or what was tried. Change history belongs in the
+commit message and the PR; git already has it.
 
-Don't write:
+**Every definition gets one purpose line.** Every Python module, class,
+function and method has a docstring whose first line is one imperative
+sentence saying what it does (`"""Start the policy from the held pre-pose."""`,
+PEP 257). C++ classes and functions get the same as a `//` line above the
+declaration, shell functions as a `#` line above. Every test's purpose line
+says what it proves (`"""A false heartbeat stops the legs for good."""`). Add
+more lines only for what a caller must know: units, frames, side effects,
+threads, what it raises.
 
-- change narration — `# now uses X instead of Y`, `# switched to CycloneDDS`,
-  `# was 0.5, bumped to 0.8`, `# fixed the TF extrapolation bug`
-- dated or attributed notes — `# 2026-07-12 (max): ...`, `# per review`
-- status chatter about the edit itself — `# new`, `# updated`, `# temporary`,
-  `# deprecated, keep for now`
-- commented-out code kept "just in case" — delete it; git remembers
-- a restatement of the identifier the comment sits above
+**Inside a body, comment sparingly**, only what the code cannot say for itself:
 
-Do write what the code can't say for itself: units and frames (`# rad, pelvis
-frame`), why a non-obvious constant, ordering or sleep is required, invariants
-a caller must uphold, and a link to the upstream issue that forces a workaround.
+- units and frames (`# rad, pelvis frame`, `# s of sim time`);
+- why a non-obvious constant, ordering, sleep or workaround is needed, as a
+  present-tense constraint (`# 3.2.3 matches the MJPC ABI`, not
+  `# downgraded from 3.3.1, MJPC broke`);
+- invariants a caller or a later edit must keep.
 
-Rationale from a past change is welcome when the rationale is still
-load-bearing — but phrase it as a present-tense constraint, not as a diff:
-`# 3.2.3 matches the MJPC ABI` beats `# downgraded from 3.3.1, MJPC broke`.
+**Safety invariants start with `SAFETY:`**, so a reviewer can find every one
+with `grep -rn 'SAFETY:'`. Use it where the comment states what must hold to
+keep the robot or the people near it safe: the single writer of `rt/lowcmd`,
+the estop latch, heartbeat gating, start-up interlocks, limits and clipping,
+what happens to the motors on a fault or an exit
+(`# SAFETY: golem_safety keeps relaying the last leg command after a fault;
+it does not balance the robot.`).
 
-This applies to edits too: when you change behavior, rewrite the nearby comment
-and docstring to describe the new behavior instead of appending a note about the
-change. A comment that duplicates a list the code owns (topics, package names,
-paths, tuning values) is a stale comment waiting to happen — point at the
-authoritative source instead of copying it.
+**Allowed notes**, and only in these forms:
+
+- `TODO(<owner>): <what is missing and why>`; a bare `TODO` is deleted;
+- a link to a doc section, README or upstream issue that holds the long
+  explanation, instead of repeating it;
+- `unmeasured on the real <robot>` beside a value not yet checked on hardware.
+
+**Never write:**
+
+- change narration: `# now uses X instead of Y`, `# was 0.5, bumped to 0.8`,
+  `# fixed the TF extrapolation bug`;
+- dated or attributed notes: `# 2026-07-12 (max): ...`, `# per review`;
+- status chatter: `# new`, `# updated`, `# temporary`, `# deprecated, keep for now`;
+- commented-out code: delete it, git remembers;
+- a restatement of the line or identifier it sits above (`# increment i`);
+- a copy of a list the code or a config owns (topics, package names, paths,
+  tuning values): point at the source instead.
+
+**Configs, launch files, scripts and build files are documented more heavily
+than code**, because nobody can read a function body to learn what a value or
+a step does:
+
+- **YAML configs:** each directory of configs has an `example.yaml` (or
+  `example.<kind>.yaml` where one directory holds several schemas) that
+  contains every key, with a comment on each giving its meaning, units and
+  allowed values. The real configs beside it comment a value only to say why
+  it was chosen. A test or the loader keeps the example's keys in step with
+  the schema where the package already validates its configs.
+- **Launch files:** a module docstring saying what the file starts, in what
+  order and under which conditions; every `DeclareLaunchArgument` has a
+  `description=` with the meaning, units and allowed values; every included
+  file and every node has a comment saying why it is there.
+- **Shell scripts:** a header with usage, arguments, environment variables
+  read, and exit codes; a comment above each step.
+- **Dockerfiles and compose files:** a comment above each stage and layer
+  saying what it installs and why, and why each pin is the version it is.
+- **CMake:** a comment on each target and option.
+
+Functional comments are not comments for this rule and stay as they are:
+shebangs, encoding lines, `noqa`, `type: ignore`, `pragma`, `NOLINT`,
+`# syntax=` directives, licence and copyright headers, and docstrings that
+code reads (`argparse` descriptions from `__doc__`).
+
+**Dead code is deleted**, not commented out or kept "in case": code with no
+caller outside its own tests, settings nothing reads, and dependencies nothing
+imports.
+
+When you change behaviour, rewrite the comments and docstrings next to it to
+describe the new behaviour.
 
 ### Other invariants
 

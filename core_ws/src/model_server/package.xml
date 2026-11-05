@@ -17,11 +17,8 @@
   <depend>python3-numpy</depend>
   <exec_depend>python3-opencv</exec_depend>
 
-  <!-- pip-only deps (no rosdep keys); installed in the ros container:
-       gemini_server:   google-genai, pillow
-       sam_server:      torch, pillow, sam3
-       graspgen_server: torch, graspgenx
-       yolo_server:     torch, ultralytics -->
+  <!-- The servers' model libraries have no rosdep keys; the ros image
+       pip-installs them (README.md, Dependencies). -->
 
   <test_depend>python3-pytest</test_depend>
 

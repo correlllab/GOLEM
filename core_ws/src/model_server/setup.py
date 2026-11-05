@@ -1,3 +1,5 @@
+"""Install the model_server Python package and its four server executables."""
+
 from setuptools import find_packages, setup
 
 package_name = 'model_server'
@@ -10,13 +12,11 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        # NOTE: weights/ is intentionally NOT in data_files. The servers read
-        # checkpoints from the source tree's model_server/weights/: sam_server
-        # and yolo_server via __file__ (_WEIGHTS_DIR), which under
-        # `colcon build --symlink-install` points back at the source tree, and
-        # graspgen_server via GRASPGENX_CHECKPOINT_DIR, which the ros compose
-        # points there. Adding the multi-GB .pt/.pth here would copy them into
-        # install/share on every build for no benefit.
+        # weights/ is not installed: the servers read the checkpoints from the
+        # source tree (sam_server and yolo_server through their module's real
+        # path under --symlink-install, graspgen_server through
+        # GRASPGENX_CHECKPOINT_DIR), and installing them would copy gigabytes
+        # into install/share on every build.
     ],
     install_requires=['setuptools'],
     zip_safe=True,

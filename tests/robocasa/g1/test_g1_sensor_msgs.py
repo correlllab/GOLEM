@@ -1,8 +1,8 @@
-"""Tests for g1_sensor_msgs: the MID-360's and D435's ROS 2 messages, field by field.
+"""Check g1_sensor_msgs: the G1 sim's MID-360 and D435 ROS 2 messages, field by field.
 
-No DDS: messages are only built and (de)serialized. Run in the robocasa image
-with ROS 2 Humble and the Livox messages sourced and golem_robocasa on PYTHONPATH,
-as tests/robocasa/g1/run_in_container.sh does.
+No DDS: messages are only built and (de)serialised. Run in the robocasa image with ROS 2
+Humble and the Livox messages sourced and golem_robocasa on PYTHONPATH, as
+tests/robocasa/g1/run_in_container.sh does.
 """
 import io
 import struct
@@ -20,6 +20,7 @@ from g1 import g1_sensor_msgs as msgs
 
 
 def _frame(n, timebase=12.3456789012, seed=0):
+    """Return a random lidar frame of `n` points at `timebase` (s), offsets sorted."""
     rng = np.random.default_rng(seed)
     return lidar.LidarFrame(
         timebase=timebase,
@@ -29,12 +30,14 @@ def _frame(n, timebase=12.3456789012, seed=0):
 
 
 def test_time_msg():
+    """Sim seconds become (sec, nanosec) rounded to the nanosecond, carrying into the seconds."""
     assert (msgs.time_msg(12.3456789012).sec, msgs.time_msg(12.3456789012).nanosec) == (12, 345678901)
     assert (msgs.time_msg(0.1).sec, msgs.time_msg(0.1).nanosec) == (0, 100_000_000)
     assert (msgs.time_msg(1.9999999999).sec, msgs.time_msg(1.9999999999).nanosec) == (2, 0)
 
 
 def test_custom_msg_fields():
+    """The CustomMsg carries the frame's stamp, points, offsets and lines with the driver's fixed fields."""
     frame = _frame(5)
     msg = msgs.livox_custom_msg(frame)
     assert msg.header.frame_id == "livox_frame"
@@ -48,7 +51,7 @@ def test_custom_msg_fields():
 
 
 def test_custom_msg_cdr_is_rclpys_serialization():
-    """Byte for byte, for frame sizes and frame_id lengths that move the alignment"""
+    """The hand-packed CDR equals rclpy's serialisation for sizes and frame_id lengths that move the alignment."""
     for n in (0, 1, 2, 3, 7, 1000):
         for frame_id in ("livox_frame", "a", "ab", "abc", "abcd", "abcdefgh"):
             frame = _frame(n, timebase=n * 0.1 + 0.000123, seed=n)
@@ -59,7 +62,7 @@ def test_custom_msg_cdr_is_rclpys_serialization():
 
 
 def test_custom_msg_of_a_scan():
-    """A real scan through the serialized form: what a subscriber reads back"""
+    """A real scan survives serialisation: a subscriber reads back every point, offset and line."""
     import test_g1_sensors as scene
     data = mujoco.MjData(scene.ROOM_MODEL)
     scene._place(scene.ROOM_MODEL, data)
@@ -79,12 +82,13 @@ def test_custom_msg_of_a_scan():
 
 
 def test_imu_msg():
+    """The IMU message carries the stamp, rates and accelerations, and nothing the driver leaves unset."""
     msg = msgs.livox_imu_msg(3.005, (0.1, -0.2, 0.3), (-0.05, 0.0, -0.9987))
     assert msg.header.frame_id == "livox_frame"
     assert (msg.header.stamp.sec, msg.header.stamp.nanosec) == (3, 5_000_000)
     w, a = msg.angular_velocity, msg.linear_acceleration
     assert (w.x, w.y, w.z) == (0.1, -0.2, 0.3) and (a.x, a.y, a.z) == (-0.05, 0.0, -0.9987)
-    # the driver sets nothing else: the default orientation, zero covariances
+    # The driver sets nothing else: the default orientation and zero covariances.
     q = msg.orientation
     assert (q.x, q.y, q.z, q.w) == (0.0, 0.0, 0.0, 1.0)
     for cov in (msg.orientation_covariance, msg.angular_velocity_covariance,
@@ -93,6 +97,7 @@ def test_imu_msg():
 
 
 def _images(height=36, width=64):
+    """Return a patterned RGB image and a depth image (mm) with 0, 65535 and 1 in its corner."""
     v, u = np.mgrid[:height, :width]
     rgb = np.stack([4 * u, 7 * v, (2 * u + 3 * v) % 256], axis=-1).astype(np.uint8)
     depth = (u * 1000 + v * 7).astype(np.uint16)
@@ -101,6 +106,7 @@ def _images(height=36, width=64):
 
 
 def test_color_msgs():
+    """The raw and JPEG colour messages carry the image in RGB order with the right layout and stamp."""
     rgb, _ = _images()
     raw = msgs.color_image_msg(1.5, rgb)
     assert raw.header.frame_id == "head_color_optical_frame" and raw.encoding == "rgb8"
@@ -113,11 +119,12 @@ def test_color_msgs():
     assert (jpeg.header.stamp.sec, jpeg.header.stamp.nanosec) == (1, 500_000_000)
     decoded = np.array(PILImage.open(io.BytesIO(bytes(jpeg.data))))
     assert decoded.shape == rgb.shape
-    assert np.abs(decoded.astype(int) - rgb).mean() < 4   # lossy, but these colours, not BGR
+    assert np.abs(decoded.astype(int) - rgb).mean() < 4  # lossy, but these colours, not BGR
     assert deserialize_message(serialize_message(jpeg), CompressedImage).format == jpeg.format
 
 
 def test_depth_msgs():
+    """Raw depth is lossless; compressedDepth is lossless to 10 m and 0 beyond, as the ROS plugin does."""
     _, depth = _images()
     raw = msgs.depth_image_msg(2.0, depth)
     assert raw.encoding == "16UC1" and (raw.height, raw.width, raw.step, raw.is_bigendian) == (36, 64, 128, 0)
@@ -130,12 +137,13 @@ def test_depth_msgs():
     assert png.format == "PNG" and png.mode in ("I;16", "I;16B", "I")
     decoded = np.array(png).astype(np.uint16)
     near = depth <= 10000
-    assert (~near).sum() > 100 and depth[0, 1] == 65535   # the raw image keeps depths over 10 m
-    assert np.array_equal(decoded[near], depth[near])      # lossless up to the plugin's 10 m
-    assert (decoded[~near] == 0).all()                     # and 0 beyond, as the plugin does
+    assert (~near).sum() > 100 and depth[0, 1] == 65535  # the raw image keeps depths over 10 m
+    assert np.array_equal(decoded[near], depth[near])  # lossless up to the plugin's 10 m
+    assert (decoded[~near] == 0).all()  # and 0 beyond, as the plugin does
 
 
 def test_camera_info():
+    """camera_info carries the intrinsics as plumb_bob with no distortion and an identity R."""
     info = msgs.camera_info_msg(4.0, 1280, 720, 649.4, 649.4, 639.5, 359.5)
     assert info.header.frame_id == "head_color_optical_frame"
     assert (info.width, info.height, info.distortion_model) == (1280, 720, "plumb_bob")
@@ -146,6 +154,7 @@ def test_camera_info():
 
 
 if __name__ == "__main__":
+    # Each file runs as a script (run_in_container.sh), so it runs its own test_* functions.
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0
     for name, fn in tests:

@@ -1,7 +1,7 @@
-"""realsense_profile: real-camera placement, intrinsics, TF and point cloud.
+"""Check realsense_profile: the real cameras' placement, intrinsics, TF tree and point cloud.
 
-Needs MuJoCo, NumPy and PyYAML only; the rendering checks skip when no
-offscreen GL context is available (set MUJOCO_GL=egl or osmesa).
+Needs MuJoCo, NumPy and PyYAML only; the rendering check skips when no offscreen GL context
+is available (set MUJOCO_GL=egl or osmesa).
 """
 import math
 import unittest
@@ -12,8 +12,8 @@ import numpy as np
 
 import realsense_profile as rp
 
-# The robot MJCF's head camera mount: a body standing in for camera_link with
-# head_cam as the robot defines it (its optical frame is head_camera_link).
+# The robot MJCF's head camera mount: a body standing in for camera_link, with head_cam as the
+# robot defines it (its optical frame is head_camera_link).
 SCENE = '''<mujoco>
   <visual><global offwidth="1280" offheight="720"/><headlight ambient="1 1 1"/></visual>
   <worldbody>
@@ -26,23 +26,31 @@ SCENE = '''<mujoco>
 
 
 def _optical(model, data, name):
+    """Return a MuJoCo camera's optical frame (z forward, y down) in the world, as a 4x4 transform."""
     cam = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, name)
     return rp._T(data.cam_xmat[cam].reshape(3, 3) @ rp._F, data.cam_xpos[cam])
 
 
 def _angle_deg(R):
+    """Return the rotation angle of a rotation matrix, degrees."""
     return math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(R) - 1.0) / 2.0))))
 
 
 class ProfileTests(unittest.TestCase):
+    """Check the captured RealSense profile against MuJoCo cameras placed from it."""
+
     @classmethod
     def setUpClass(cls):
+        """Load the profile and its head camera."""
         cls.profile = rp.load_profile()
         cls.head = cls.profile["cameras"]["head"]
 
     def _placed(self, marker_opt=None):
-        """Compile SCENE with the profiled head cameras placed, optionally with a
-        red marker at `marker_opt` in the colour optical frame."""
+        """Compile SCENE with the profiled head cameras placed.
+
+        With `marker_opt`, a red marker also sits there, in the colour optical frame (m).
+        Returns (model, data, the head camera's optical frame before placement, depth camera name).
+        """
         root = ET.fromstring(SCENE)
         base = mujoco.MjModel.from_xml_string(SCENE)
         base_data = mujoco.MjData(base)
@@ -61,6 +69,7 @@ class ProfileTests(unittest.TestCase):
         return model, data, anchor, depth
 
     def test_cameras_sit_on_the_captured_tf_chain(self):
+        """The placed colour and depth cameras sit exactly on the captured TF chain from the mount."""
         model, data, anchor, depth = self._placed()
         for name, frame in (("head_cam", self.head["color_frame"]), (depth, self.head["depth_frame"])):
             expected = anchor @ rp.frame_transform(self.head, self.head["anchor_link"], frame)
@@ -69,6 +78,7 @@ class ProfileTests(unittest.TestCase):
             self.assertLess(_angle_deg(err[:3, :3]), 1e-6, frame)
 
     def test_specs_scale_the_real_intrinsics(self):
+        """Camera specs scale the real intrinsics, halve the depth image, and fall back to the MJCF fovy without a profile."""
         model, _, _, _ = self._placed()
         names = [("head", "head_cam"), ("left_hand", "hand_cam")]
         head, hand = rp.camera_specs(model, names, self.profile, 0.5, (256, 256))
@@ -77,12 +87,13 @@ class ProfileTests(unittest.TestCase):
         self.assertAlmostEqual(head.color.fx, fx / 2)
         self.assertAlmostEqual(head.color.cx, (cx + 0.5) / 2 - 0.5)
         self.assertAlmostEqual(head.color.cy, (cy + 0.5) / 2 - 0.5)
-        # Depth camera_info at the undecimated size; the image at half of it.
+        # The depth camera_info is at the undecimated size and the image at half of it.
         self.assertEqual((head.depth_info.width, head.depth_info.height), (640, 360))
         self.assertEqual((head.depth_image.width, head.depth_image.height), (320, 180))
         self.assertEqual(head.depth_camera, "head_cam" + rp.DEPTH_CAMERA_SUFFIX)
         self.assertEqual(head.color_frame, "head_color_optical_frame")
-        # Hand cameras keep the MJCF fovy at the fallback size; depth from the same camera.
+        # A camera without a profile keeps the MJCF fovy at the fallback size, with depth from
+        # the same camera.
         f = 128 / math.tan(math.radians(29))
         self.assertAlmostEqual(hand.color.fx, f)
         self.assertEqual((hand.color.cx, hand.color.cy), (127.5, 127.5))
@@ -91,6 +102,7 @@ class ProfileTests(unittest.TestCase):
         np.testing.assert_allclose(hand.T_color_depth, np.eye(4), atol=1e-12)
 
     def test_tf_tree_matches_the_real_driver(self):
+        """The TF edges give each camera the real driver's frames, each frame one parent, on the robot's mounts."""
         names = ["head", "left_hand", "right_hand"]
         edges = rp.tf_edges(self.profile, names)
         children = [e[1] for e in edges]
@@ -104,6 +116,7 @@ class ProfileTests(unittest.TestCase):
                                   "lg_mount": "left_hand_link", "rg_mount": "right_hand_link"})
 
     def test_rendered_projection_matches_camera_info(self):
+        """A rendered marker lands where camera_info projects it, within half a pixel, at both scales."""
         target = np.array([0.12, 0.07, 1.0])
         model, data, _, depth = self._placed(target)
         opt = mujoco.MjvOption()
@@ -131,11 +144,12 @@ class ProfileTests(unittest.TestCase):
                 self.assertAlmostEqual(ys.mean(), expected[1], delta=0.5, msg=(scale, name))
 
     def test_colored_cloud_layout_and_texture(self):
+        """The coloured cloud drops invalid depth, takes each point's colour from its pixel, and clips to the colour camera's view."""
         intr = rp.Intrinsics(8, 6, 4.0, 4.0, 3.5, 2.5)
         depth = np.full((6, 8), 2.0, dtype=np.float32)
-        depth[0, 0] = 0.0                                # invalid pixel: dropped
+        depth[0, 0] = 0.0  # an invalid pixel, dropped
         rgb = np.zeros((6, 8, 3), dtype=np.uint8)
-        rgb[..., 0] = np.arange(8)[None, :] * 30         # red encodes the column
+        rgb[..., 0] = np.arange(8)[None, :] * 30  # red encodes the column
         rgb[..., 2] = 7
         cloud = rp.colored_cloud(depth, intr, rgb, intr, np.eye(4))
         self.assertEqual(rp.CLOUD_DTYPE.itemsize, 20)

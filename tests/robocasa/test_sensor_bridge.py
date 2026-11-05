@@ -1,4 +1,8 @@
-"""Real MuJoCo rendering and ROS messages; no ROS node or DDS traffic."""
+"""Check the H1-2 sensor suite (h12_sensors.py) with real MuJoCo rendering and ROS messages.
+
+The suite is built without its constructor, on a small scene, with recording publishers: no ROS
+node starts and no DDS traffic flows.
+"""
 import io
 import threading
 import unittest
@@ -18,6 +22,7 @@ from h12_sensors import (
     PC2_DTYPE, _COMPRESSED_DEPTH_HEADER, _JPEG_QUALITY,
 )
 from mujoco_ros_bridge import RosSensorBridge, _sim_time_to_msg
+from sim_timing import LoopTimings
 
 SCENE = '''<mujoco>
   <visual><global offwidth="32" offheight="32"/></visual>
@@ -34,22 +39,30 @@ SCENE = '''<mujoco>
 
 
 class Recorder:
+    """Stand in for a ROS publisher: record messages, and fail one published under the sim lock."""
+
     def __init__(self, lock, subscribers=1):
+        """Watch `lock` and report `subscribers` subscriptions."""
         self.lock = lock
         self.messages = []
         self.subscribers = subscribers
 
     def get_subscription_count(self):
+        """Return the configured subscriber count."""
         return self.subscribers
 
     def publish(self, msg):
+        """Record a message; publishing under the sim lock raises AssertionError."""
         if self.lock.locked():
             raise AssertionError('ROS publication must not hold the simulation lock')
         self.messages.append(msg)
 
 
 class SensorTests(unittest.TestCase):
+    """Run H12Sensors' camera and lidar paths on a small scene."""
+
     def setUp(self):
+        """Build an H12Sensors with one 32x32 head camera (depth from the same camera) and recorders."""
         self.bridge = object.__new__(H12Sensors)
         b = self.bridge
         b.model = mujoco.MjModel.from_xml_string(SCENE)
@@ -77,45 +90,43 @@ class SensorTests(unittest.TestCase):
                                 _camera_info(spec.depth_info, 'depth_optical'),
                                 {k: Recorder(b.sim_lock) for k in keys})]
         b.get_logger = lambda: SimpleNamespace(warn=lambda text: self.fail(text))
-        # Timing is optional for existing callers of the bridge.
-        try:
-            from sim_timing import LoopTimings
-            b.timings = LoopTimings()
-        except ImportError:
-            pass
+        b.timings = LoopTimings()
         self.addCleanup(b.shutdown)
 
     def test_one_scene_update_per_rgb_depth_pair_and_unlocked_render(self):
+        """Colour and aligned depth share one scene update, and capture and rendering run outside the sim lock."""
         b = self.bridge
         original_update = mujoco.Renderer.update_scene
         original_render = mujoco.Renderer.render
         updates = []
 
         def update(renderer, data, *args, **kwargs):
-            # Scene capture reads a snapshot, so physics is never blocked.
+            """Check the scene is captured from a snapshot, outside the sim lock, and record the camera."""
             self.assertFalse(b.sim_lock.locked())
             self.assertIsNot(data, b.data)
             updates.append(kwargs['camera'])
             return original_update(renderer, data, *args, **kwargs)
 
         def render(renderer, *args, **kwargs):
+            """Check rendering runs outside the sim lock."""
             self.assertFalse(b.sim_lock.locked())
             return original_render(renderer, *args, **kwargs)
 
         with patch.object(mujoco.Renderer, 'update_scene', update), patch.object(mujoco.Renderer, 'render', render):
             b._publish_camera_frame(_sim_time_to_msg(b.data.time))
-        # Colour + aligned depth share one scene update; the decimated depth
-        # stream is the second (here the same camera, as on a D405).
+        # Colour and aligned depth share one scene update; the decimated depth stream is the
+        # second (here from the same camera, as on a D405).
         self.assertEqual(updates, [0, 0])
 
     def test_images_match_two_scene_update_reference(self):
+        """The published images, compressed images, frames and stamps match separate reference renders."""
         b = self.bridge
         stamp = _sim_time_to_msg(b.data.time)
         b._publish_camera_frame(stamp)
         cam = b.cameras[0]
         rgb = cam.pubs['color'].messages[0]
         depth = cam.pubs['aligned'].messages[0]
-        # Reference path rebuilds the same scene separately for RGB and depth.
+        # The reference rebuilds the same scene separately for RGB and for depth.
         r = b._renderer[(32, 32)]
         r.disable_depth_rendering()
         r.update_scene(b.data, camera=0, scene_option=b._scene_opt)
@@ -145,7 +156,7 @@ class SensorTests(unittest.TestCase):
             self.assertEqual(cam.pubs[key].messages[0].header.frame_id, 'depth_optical', key)
         self.assertEqual(rgb.encoding, 'rgb8')
         self.assertEqual(depth.encoding, '16UC1')
-        # Decimated depth stream: a separate render at the depth image size.
+        # The decimated depth stream is a separate render at the depth image size.
         rd = b._renderer[(16, 16)]
         rd.enable_depth_rendering()
         rd.update_scene(b.data, camera=0, scene_option=b._scene_opt)
@@ -155,6 +166,7 @@ class SensorTests(unittest.TestCase):
         self.assertEqual((cam.pubs['depth_info'].messages[0].width, cam.pubs['depth'].messages[0].width), (32, 16))
 
     def test_compressed_topics_encode_only_for_subscribers(self):
+        """Compressed topics are encoded only when they have subscribers; raw topics always publish."""
         b = self.bridge
         cam = b.cameras[0]
         for key in ('color_jpeg', 'aligned_png', 'depth_png'):
@@ -166,6 +178,7 @@ class SensorTests(unittest.TestCase):
             self.assertEqual(len(cam.pubs[key].messages), 1, key)
 
     def test_point_cloud_matches_the_real_driver_layout(self):
+        """The camera point cloud has the real driver's field layout and one point per valid depth pixel."""
         b = self.bridge
         b._publish_camera_frame(_sim_time_to_msg(b.data.time))
         msg = b.cameras[0].pubs['points'].messages[0]
@@ -178,6 +191,7 @@ class SensorTests(unittest.TestCase):
         np.testing.assert_allclose(np.sort(points['z']), np.sort(depth[depth > 0] / 1000.0), rtol=1e-6)
 
     def test_camera_worker_matches_inline_frames_and_owns_renderer(self):
+        """Frames from the camera worker thread match inline frames, and shutdown frees its renderer."""
         from concurrent.futures import ThreadPoolExecutor
         b = self.bridge
         stamp = _sim_time_to_msg(b.data.time)
@@ -191,6 +205,7 @@ class SensorTests(unittest.TestCase):
         original = mujoco.Renderer.render
 
         def render(renderer, *args, **kwargs):
+            """Record the rendering thread."""
             threads.append(threading.current_thread())
             return original(renderer, *args, **kwargs)
 
@@ -205,8 +220,10 @@ class SensorTests(unittest.TestCase):
         self.assertEqual([bytes(cam.pubs[k].messages[0].data) for k in ('color', 'aligned')], inline)
 
     def test_tick_preserves_sim_time_schedule_and_publication_order(self):
+        """A tick publishes /clock, IMU, camera and lidar in that order, each on its own sim-time period."""
         b = self.bridge
-        # The mujoco_sensors host publishes /clock, then ticks the suite.
+        # The mujoco_sensors host publishes /clock, then ticks the suite; the suite's publishers
+        # are replaced by event recorders.
         host = object.__new__(RosSensorBridge)
         host.suite, host.data, host.sim_lock, host.base_body_id = b, b.data, b.sim_lock, -1
         host.pub_clock = Recorder(b.sim_lock)
@@ -228,6 +245,7 @@ class SensorTests(unittest.TestCase):
         self.assertEqual([e[0] for e in events], ['clock', 'imu'])
 
     def _configure_lidar(self):
+        """Give the suite a two-ray lidar on the robot body (one ray down, one up) and recorders."""
         b = self.bridge
         b.lidar_body_id = 1
         b.lidar_exclude_body_id = 1
@@ -245,12 +263,13 @@ class SensorTests(unittest.TestCase):
         b.pub_pc2 = Recorder(b.sim_lock)
 
     def test_lidar_snapshot_locked_but_cast_and_messages_unlocked(self):
+        """The lidar casts on a snapshot outside the sim lock, drops misses, and publishes matching CustomMsg and PointCloud2."""
         b = self.bridge
         self._configure_lidar()
         original = mujoco.mj_multiRay
 
         def cast(model, data, *args):
-            # Cast on a snapshot so physics can proceed during the ray cast.
+            """Check the rays are cast on a snapshot, outside the sim lock."""
             self.assertFalse(b.sim_lock.locked())
             self.assertIsNot(data, b.data)
             return original(model, data, *args)
@@ -273,6 +292,7 @@ class SensorTests(unittest.TestCase):
 
 
     def test_lidar_worker_publishes_every_scan_identically(self):
+        """The lidar worker thread publishes every scan, each identical to an inline scan."""
         from concurrent.futures import ThreadPoolExecutor
         b = self.bridge
         self._configure_lidar()
@@ -289,6 +309,7 @@ class SensorTests(unittest.TestCase):
         self.assertEqual([deserialize_message(m, CustomMsg).header.stamp for m in b.pub_lidar.messages], stamps)
 
     def test_packed_livox_scan_matches_rclpy_serialization(self):
+        """The hand-packed CustomMsg is byte-identical to rclpy's serialisation, for 0 to 20161 points."""
         rng = np.random.default_rng(7)
         stamp = _sim_time_to_msg(3.217)
         for count in (0, 1, 2, 20161):

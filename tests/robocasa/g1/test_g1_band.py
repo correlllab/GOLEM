@@ -1,13 +1,12 @@
-"""Tests for the G1 sim's elastic band and its spawn, on the RoboCasa kitchen the
-surface probe runs (tests/robocasa/surface/run.sh: layout 9, style 9, seed 42).
+"""Check the G1 sim's elastic band and spawn, in the kitchen the surface probe uses.
 
-The env is built headless with g1_robosuite.make_kitchen_env, the robot spawned
-and the band built by g1_mujoco's own spawn() and make_band(), and the physics
-stepped as sim_loop steps it: the interface's motor torques (SimInterface, with
-no rt/lowcmd: every motor off), the band's force (apply_band), mj_step. Run it in
-the robocasa image with golem_robocasa on PYTHONPATH:
-tests/robocasa/g1/run_in_container.sh runs it with --network none and
-ROS_DOMAIN_ID=97 (SimInterface opens Unitree DDS channels).
+The kitchen is tests/robocasa/surface/run.sh's: layout 9, style 9, seed 42. The env is built
+headless with g1_robosuite.make_kitchen_env, the robot spawned and the band built by
+g1_mujoco's own spawn() and make_band(), and the physics stepped as sim_loop steps it: the
+interface's motor torques (SimInterface with no rt/lowcmd, so every motor off), the band's
+force (apply_band), mj_step. Run it in the robocasa image with golem_robocasa on PYTHONPATH;
+tests/robocasa/g1/run_in_container.sh runs it with no network on ROS_DOMAIN_ID 97, because
+SimInterface opens Unitree DDS channels.
 """
 import functools
 import math
@@ -24,18 +23,20 @@ from g1 import g1_mujoco, g1_robosuite
 from g1.sim_names import NameResolver
 from g1.unitree_interface import SimInterface
 
-LAYOUT, STYLE, SEED = 9, 9, 42   # the surface probe's G1 kitchen
-HOLD_S = 3.0          # sim s of hanging with nothing commanding the robot
-MAX_TORSO_DZ = 0.05   # m: torso_link z from the band's anchor while it hangs
-MAX_TILT_DEG = 15.0   # pelvis z-axis from world up while it hangs
-DROP_S = 1.5          # sim s after the release
-MIN_DROP = 0.15       # m the pelvis falls in DROP_S once the band is released
+LAYOUT, STYLE, SEED = 9, 9, 42  # the surface probe's G1 kitchen
+HOLD_S = 3.0  # s of sim time hanging with nothing commanding the robot
+MAX_TORSO_DZ = 0.05  # m: torso_link z from the band's anchor while it hangs
+MAX_TILT_DEG = 15.0  # deg: the pelvis z axis from world up while it hangs
+DROP_S = 1.5  # s of sim time after the release
+MIN_DROP = 0.15  # m the pelvis falls in DROP_S once the band is released
 
 
 @functools.lru_cache(maxsize=None)
 def _sim():
-    """The kitchen env with the robot spawned, built once; returns
-    (env, model, data, resolver, interface, the spawn state)"""
+    """Build the kitchen with the robot spawned, once per process.
+
+    Returns (env, model, data, resolver, interface, the spawn state (qpos, qvel, time)).
+    """
     task = sim_common.random_task(seed=SEED)
     env = g1_robosuite.make_kitchen_env(task, layout_ids=LAYOUT, style_ids=STYLE, seed=SEED)
     env.reset()
@@ -48,7 +49,7 @@ def _sim():
 
 
 def _from_spawn():
-    """Back to the spawn state, with a new band anchored there"""
+    """Restore the spawn state and anchor a new band there; return the sim and the band."""
     env, model, data, resolver, iface, (qpos, qvel, t) = _sim()
     data.qpos[:], data.qvel[:], data.time = qpos, qvel, t
     data.ctrl[:] = 0.0
@@ -60,7 +61,7 @@ def _from_spawn():
 
 
 def _run(model, data, iface, band, body, seconds, each_step=None):
-    """Step the physics as sim_loop does, with no rt/lowcmd"""
+    """Step the physics for `seconds` of sim time as sim_loop does, with no rt/lowcmd; call `each_step` after each."""
     vel = np.zeros(6)
     for _ in range(round(seconds / model.opt.timestep)):
         iface.write_ctrl()
@@ -72,32 +73,31 @@ def _run(model, data, iface, band, body, seconds, each_step=None):
 
 
 def _tilt_deg(data, body):
-    """Angle (deg) between a body's z-axis and world up"""
+    """Return the angle between a body's z axis and world up, degrees."""
     return math.degrees(math.acos(max(-1.0, min(1.0, float(data.xmat[body][8])))))
 
 
 def test_spawn_clear_of_floor_and_kitchen():
-    """The robot spawns in the stance without touching the floor or penetrating
-    the kitchen, and the band's anchor is 0.01 m above the torso"""
+    """The robot spawns clear of the floor and the kitchen, with the band anchored 0.01 m above the torso."""
     env, model, data, resolver, iface, spawn = _sim()
     model, data, resolver, iface, band, body = _from_spawn()
     assert g1_robosuite.lowest_robot_point_z(env) > 0.0
     contacts = g1_robosuite._robot_env_contacts(model, data)
     assert not contacts, f"{len(contacts)} robot<->kitchen contacts at spawn"
     assert np.allclose(band.point - data.xpos[body], [0.0, 0.0, 0.01])
-    # twice the H1-2 band's stiffness: at its 1e4 N/m the limp G1 keeps rocking (g1_mujoco)
+    # Twice the H1-2 band's stiffness: at its 1e4 N/m the limp G1 keeps rocking (g1_mujoco.py).
     assert (band.stiffness, band.damping, band.length) == (2e4, 2e3, 0)
     assert band.enabled
 
 
 def test_band_holds_limp_robot():
-    """With nothing commanding it the robot hangs from the band: motors off,
-    torso near the anchor, pelvis near upright"""
+    """With nothing commanding it the robot hangs from the band: motors off, torso near the anchor, pelvis upright."""
     model, data, resolver, iface, band, body = _from_spawn()
     pelvis = resolver.base_body
     worst = {"dz": 0.0, "tilt": 0.0, "ctrl": 0.0}
 
     def check():
+        """Track the worst torso offset, pelvis tilt and motor torque so far."""
         worst["dz"] = max(worst["dz"], abs(float(data.xpos[body][2] - band.point[2])))
         worst["tilt"] = max(worst["tilt"], _tilt_deg(data, pelvis))
         worst["ctrl"] = max(worst["ctrl"], float(np.abs(data.ctrl).max()))
@@ -112,7 +112,7 @@ def test_band_holds_limp_robot():
 
 
 def test_release_drops_limp_robot():
-    """Once released, the band pulls no more and the limp robot falls"""
+    """Once released, the band pulls no more and the limp robot falls."""
     model, data, resolver, iface, band, body = _from_spawn()
     pelvis = resolver.base_body
     _run(model, data, iface, band, body, HOLD_S)
@@ -126,9 +126,11 @@ def test_release_drops_limp_robot():
 
 
 def test_sim_reads_no_policy():
-    """Importing g1_robosuite, which builds the sim's robot, touches no file or
-    directory of HOMIE's policy (g1_homie's policy/, mounted at
-    /home/code/g1_homie in the ros container) and puts none on sys.path"""
+    """Importing g1_robosuite, which builds the sim's robot, opens nothing of HOMIE's policy.
+
+    It touches no file or directory with "homie" in its path (g1_homie's policy/, mounted at
+    /home/code/g1_homie in the ros container), puts none on sys.path and imports no such module.
+    """
     code = textwrap.dedent("""
         import os, sys
         touched = []
@@ -140,7 +142,7 @@ def test_sim_reads_no_policy():
         sys.addaudithook(hook)
         _stat = os.stat
 
-        def stat(path, *args, **kwargs):   # os.path.isdir / exists probe through it
+        def stat(path, *args, **kwargs):  # os.path.isdir and exists probe through it
             if isinstance(path, (str, bytes, os.PathLike)):
                 touched.append(os.fsdecode(path))
             return _stat(path, *args, **kwargs)
@@ -162,6 +164,7 @@ def test_sim_reads_no_policy():
 
 
 if __name__ == "__main__":
+    # Each file runs as a script (run_in_container.sh), so it runs its own test_* functions.
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0
     for name, fn in tests:

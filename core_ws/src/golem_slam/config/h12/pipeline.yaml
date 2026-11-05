@@ -1,8 +1,8 @@
-# The H1-2's values for golem_slam's navigation graph (navigation_launch.py).
-# The MID-360 hangs upside down under the head, on the torso.
-lidar_link: livox_link   # the URDF's link for the raw sensor frame, livox_frame
-scan:                    # m above the floor: /converted_scan's band
+# The H1-2's values for golem_slam's navigation graph; every key is described in
+# ../example.pipeline.yaml.
+lidar_link: livox_link
+scan:                    # above floor returns and FAST-LIO's z drift, below the H1-2's top
   min_height: 0.25
   max_height: 1.7
 level_odom:
-  min_floor_depth: 1.0   # m below the lidar, which is >= ~1.4 m above the floor
+  min_floor_depth: 1.0   # the lidar is at least ~1.4 m above the floor in every stance

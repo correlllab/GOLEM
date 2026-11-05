@@ -1,4 +1,4 @@
-"""SelfFilter skips links that never had a TF and drops clouds when a known link loses its."""
+"""Test self_filter: it skips links that never had a TF and drops clouds when one loses it."""
 from types import SimpleNamespace
 
 import numpy as np
@@ -12,23 +12,27 @@ _BOX = (np.array([-0.1, -0.1, -0.1]), np.array([0.1, 0.1, 0.1]))
 
 
 class _Logger:
+    """Record warnings; ignore info."""
 
     def __init__(self):
+        """Start with no warnings."""
         self.warnings = []
 
     def warn(self, text, **kwargs):
+        """Record a warning."""
         self.warnings.append(text)
 
     def info(self, text, **kwargs):
-        pass
+        """Ignore an info message."""
 
 
 def _filter(links, resolvable):
-    """Build a SelfFilter stand-in; `resolvable` holds, per cloud, the links that have a TF."""
+    """Return (stand-in node, cloud callback, published); resolvable: each cloud's TF links."""
     clouds = iter(resolvable)
     current = {}
 
     def lookup(frame, link, stamp):
+        """Return an identity transform for a link the current cloud has; else raise."""
         if link not in current['links']:
             raise TransformException(f'no TF for {link}')
         return SimpleNamespace(transform=SimpleNamespace(
@@ -44,6 +48,7 @@ def _filter(links, resolvable):
     node.get_logger = lambda: node.logger
 
     def on_cloud(msg):
+        """Run SelfFilter._on_cloud with the next cloud's TF links."""
         current['links'] = next(clouds)
         SelfFilter._on_cloud(node, msg)
 
@@ -51,6 +56,7 @@ def _filter(links, resolvable):
 
 
 def _cloud(sec=100):
+    """Return a two-point cloud stamped sec: one point at the origin, one 1 m out."""
     msg = PointCloud2(header=Header(frame_id='odom'), height=1, width=2, point_step=12,
                       row_step=24, is_dense=True)
     msg.header.stamp.sec = sec
@@ -61,6 +67,7 @@ def _cloud(sec=100):
 
 
 def test_never_seen_links_are_skipped():
+    """A link that never had a TF is skipped once the grace has passed."""
     node, on_cloud, published = _filter(['pelvis', 'finger'], [['pelvis']] * 2)
     on_cloud(_cloud(100))
     on_cloud(_cloud(103))
@@ -70,6 +77,7 @@ def test_never_seen_links_are_skipped():
 
 
 def test_no_link_ever_seen_drops_cloud():
+    """No cloud goes out while no link has ever had a TF."""
     node, on_cloud, published = _filter(['pelvis', 'finger'], [[]] * 3)
     for sec in (100, 103, 200):
         on_cloud(_cloud(sec))
@@ -77,6 +85,7 @@ def test_no_link_ever_seen_drops_cloud():
 
 
 def test_unseen_link_dropped_during_grace_then_skipped():
+    """Clouds are dropped during the grace, then the unseen link is skipped."""
     node, on_cloud, published = _filter(['pelvis', 'finger'], [['pelvis']] * 3)
     on_cloud(_cloud(100))
     on_cloud(_cloud(101))
@@ -88,6 +97,7 @@ def test_unseen_link_dropped_during_grace_then_skipped():
 
 
 def test_lost_link_drops_cloud():
+    """A link that had a TF and lost it drops the cloud."""
     node, on_cloud, published = _filter(['pelvis', 'arm'], [['pelvis', 'arm'], ['pelvis']])
     on_cloud(_cloud(100))
     assert len(published) == 1
@@ -96,6 +106,7 @@ def test_lost_link_drops_cloud():
 
 
 def test_warning_once():
+    """The unseen links are reported once while they stay the same."""
     node, on_cloud, published = _filter(['pelvis', 'finger'], [['pelvis']] * 4)
     for sec in (100, 103, 104, 105):
         on_cloud(_cloud(sec))
@@ -106,6 +117,7 @@ def test_warning_once():
 
 
 def test_warning_again_when_the_set_changes():
+    """The unseen links are reported again when the set changes."""
     node, on_cloud, _ = _filter(['pelvis', 'a', 'b'],
                                 [['pelvis'], ['pelvis'], ['pelvis', 'a']])
     for sec in (100, 103, 104):

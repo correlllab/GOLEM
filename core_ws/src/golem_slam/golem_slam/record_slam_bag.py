@@ -12,7 +12,7 @@ costmaps and plans, compressed camera images) and leaves out:
 - ``/Laser_map``: FAST-LIO appends every scan to one cloud that is never
   cleared and republishes the whole cloud each tick, so the bag grows
   quadratically with run length. FAST-LIO's ``map_save`` service writes the
-  same cloud to a PCD once instead.
+  same cloud to a PCD once instead (with ``pcd_save.pcd_save_en`` on).
 - ``/realsense/accumulated_point_cloud``: cl_realsense's ``pc_acc``, the
   same problem.
 - RealSense ``.../points`` clouds and uncompressed or theora images; their

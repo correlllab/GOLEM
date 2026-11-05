@@ -1,5 +1,5 @@
 """
-URDF collision geometry as per-link bounding boxes, plus small TF/math helpers.
+Reduce URDF collision geometry to per-link bounding boxes; small rotation helpers.
 
 Every collision element (mesh, box, cylinder, sphere) is reduced to its
 axis-aligned bounding box in its link's frame. The boxes are conservative:
@@ -14,7 +14,7 @@ import numpy as np
 
 
 def rpy_to_matrix(roll, pitch, yaw):
-    """URDF convention: R = Rz(yaw) * Ry(pitch) * Rx(roll)."""
+    """Return the rotation of URDF rpy (rad, fixed axes): R = Rz(yaw) Ry(pitch) Rx(roll)."""
     cr, sr = np.cos(roll), np.sin(roll)
     cp, sp = np.cos(pitch), np.sin(pitch)
     cy, sy = np.cos(yaw), np.sin(yaw)
@@ -26,6 +26,7 @@ def rpy_to_matrix(roll, pitch, yaw):
 
 
 def quat_to_matrix(x, y, z, w):
+    """Return the rotation matrix of a quaternion, normalising it; identity for zero."""
     n = x * x + y * y + z * z + w * w
     s = 2.0 / n if n > 0.0 else 0.0
     return np.array([
@@ -53,14 +54,14 @@ def matrix_to_quat(r):
 
 
 def transform_to_rt(transform):
-    """geometry_msgs/Transform -> (3x3 rotation, translation)."""
+    """Return (3x3 rotation, translation) of a geometry_msgs/Transform."""
     q = transform.rotation
     t = transform.translation
     return quat_to_matrix(q.x, q.y, q.z, q.w), np.array([t.x, t.y, t.z])
 
 
 def rotation_aligning(a, b):
-    """Smallest rotation taking unit vector a onto unit vector b."""
+    """Return the smallest rotation taking direction a onto direction b."""
     a = a / np.linalg.norm(a)
     b = b / np.linalg.norm(b)
     v = np.cross(a, b)
@@ -77,7 +78,7 @@ def rotation_aligning(a, b):
 
 
 def load_stl_vertices(path):
-    """Vertices of a binary or ASCII STL as an (N, 3) array."""
+    """Return the vertices of a binary or ASCII STL as an (N, 3) array."""
     with open(path, 'rb') as f:
         data = f.read()
     if len(data) >= 84:
@@ -93,6 +94,7 @@ def load_stl_vertices(path):
 
 
 def resolve_mesh_path(filename):
+    """Return the file path of a URDF mesh filename (package://, file:// or a path)."""
     if filename.startswith('package://'):
         from ament_index_python.packages import get_package_share_directory
         pkg, _, rel = filename[len('package://'):].partition('/')
@@ -103,11 +105,12 @@ def resolve_mesh_path(filename):
 
 
 def _parse_floats(text, default):
+    """Return space-separated floats as an array, or default for no text."""
     return np.array([float(v) for v in text.split()]) if text else np.array(default)
 
 
 def _geometry_points(geom):
-    """Points whose bounding box bounds the geometry, in the geometry's own frame."""
+    """Return points whose bounding box bounds the geometry, in the geometry's own frame."""
     if geom.tag == 'mesh':
         scale = _parse_floats(geom.get('scale'), [1.0, 1.0, 1.0])
         return load_stl_vertices(resolve_mesh_path(geom.get('filename'))) * scale
@@ -125,7 +128,7 @@ def _geometry_points(geom):
 
 
 def link_collision_points(urdf_xml):
-    """{link name: (N, 3) points in the link frame bounding its collision geometry}."""
+    """Return {link name: (N, 3) points in the link frame bounding its collision geometry}."""
     root = ET.fromstring(urdf_xml)
     links = {}
     for link in root.findall('link'):
@@ -146,43 +149,13 @@ def link_collision_points(urdf_xml):
     return links
 
 
-def fixed_transform(urdf_xml, parent, child):
-    """
-    (rotation, translation) of link `child` in link `parent`, every joint at zero.
-
-    Both links must hang off one tree; the path between them may run through movable
-    joints, which count at their zero position.
-    """
-    root = ET.fromstring(urdf_xml)
-    up = {}   # child link -> (parent link, rotation, translation) of its joint origin
-    for joint in root.findall('joint'):
-        origin = joint.find('origin')
-        xyz = _parse_floats(origin.get('xyz') if origin is not None else None, [0.0, 0.0, 0.0])
-        rpy = _parse_floats(origin.get('rpy') if origin is not None else None, [0.0, 0.0, 0.0])
-        up[joint.find('child').get('link')] = (joint.find('parent').get('link'),
-                                               rpy_to_matrix(*rpy), xyz)
-
-    def pose_in_root(link):
-        rot, trans = np.eye(3), np.zeros(3)
-        while link in up:
-            link, r, t = up[link]
-            rot, trans = r @ rot, r @ trans + t
-        return link, rot, trans
-
-    root_p, rot_p, trans_p = pose_in_root(parent)
-    root_c, rot_c, trans_c = pose_in_root(child)
-    if root_p != root_c:
-        raise ValueError(f'{parent!r} and {child!r} are not in one URDF tree')
-    return rot_p.T @ rot_c, rot_p.T @ (trans_c - trans_p)
-
-
 def link_boxes(urdf_xml, padding):
-    """{link name: (lo, hi)} padded axis-aligned boxes in each link's frame."""
+    """Return {link name: (lo, hi)}, padded (m) axis-aligned boxes in each link's frame."""
     return {name: (pts.min(axis=0) - padding, pts.max(axis=0) + padding)
             for name, pts in link_collision_points(urdf_xml).items()}
 
 
 def points_in_box(points, rot, trans, lo, hi):
-    """Mask of points (in frame F) inside box [lo, hi] of a link posed at (rot, trans) in F."""
+    """Return the mask of points (frame F) in box [lo, hi] of a link posed (rot, trans) in F."""
     local = (points - trans) @ rot
     return np.all((local >= lo) & (local <= hi), axis=1)

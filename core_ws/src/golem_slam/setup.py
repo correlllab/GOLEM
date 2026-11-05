@@ -1,19 +1,21 @@
+"""Install golem_slam: its modules, console scripts, launch file, configs and behaviour tree."""
 import os
 from glob import glob
 
 from setuptools import find_packages, setup
 
 package_name = 'golem_slam'
-# config/ (the shared files) and config/<robot>/, each robot's
+# config/ (the shared files) and config/<robot>/, each robot's.
 CONFIG_DIRS = ['config'] + sorted(os.path.dirname(d) for d in glob('config/*/'))
 
 
 def files(*patterns):
-    """Return the files matching patterns that exist."""
-    # a --symlink-install build directory keeps dangling links to files deleted from
-    # the source
+    """Return the files matching patterns that exist, leaving out the example configs."""
+    # A --symlink-install build directory keeps dangling links to files deleted from
+    # the source; they are skipped. config/example.*.yaml documents the keys and is
+    # not a config, so it is not installed.
     return [path for pattern in patterns for path in sorted(glob(pattern))
-            if os.path.exists(path)]
+            if os.path.exists(path) and not os.path.basename(path).startswith('example.')]
 
 
 setup(

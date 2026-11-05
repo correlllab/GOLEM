@@ -1,10 +1,10 @@
 <!--
-  nav2's navigate_to_pose_w_replanning_and_recovery.xml (Humble) adapted to the
-  ALMI-walking H1-2:
-  - No Spin recovery: the stock 1.57 rad spin has a 10 s allowance, and ALMI's
-    in-place yaw (~0.2x of command) can't finish it. MPPI turns in place itself.
+  Nav2's navigate_to_pose_w_replanning_and_recovery.xml (Humble) for a walking humanoid,
+  used by both robots (bt_navigator's default_nav_to_pose_bt_xml):
+  - no Spin recovery: the stock 1.57 rad spin has a 10 s allowance, and ALMI's in-place
+    yaw (about 0.2x of the command) cannot finish it; MPPI turns in place itself;
   - BackUp at 0.15 m/s: the stock 0.05 m/s is below ALMI's stand threshold
-    (||cmd * cmd_gain|| < 0.1), so the robot never moved.
+    (||cmd * cmd_gain|| < 0.1), so the robot would not move.
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">

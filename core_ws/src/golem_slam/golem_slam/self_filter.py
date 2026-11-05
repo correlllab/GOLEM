@@ -41,11 +41,12 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 from golem_slam.robot_geometry import link_boxes, points_in_box, transform_to_rt
 
-# sensor_msgs/PointField datatype -> numpy type
+# sensor_msgs/PointField datatype -> numpy type.
 _FIELD_TYPES = {1: 'i1', 2: 'u1', 3: 'i2', 4: 'u2', 5: 'i4', 6: 'u4', 7: 'f4', 8: 'f8'}
 
 
 def cloud_dtype(msg):
+    """Return the numpy dtype of one point of a PointCloud2 (scalar fields only)."""
     endian = '>' if msg.is_bigendian else '<'
     fields = [f for f in msg.fields if f.count == 1]
     return np.dtype({
@@ -57,7 +58,7 @@ def cloud_dtype(msg):
 
 
 def cloud_points(msg):
-    """(structured array of all points, (N, 3) float64 xyz)."""
+    """Return (structured array of all points, (N, 3) float64 xyz) of a PointCloud2."""
     arr = np.frombuffer(msg.data, dtype=cloud_dtype(msg),
                         count=msg.width * msg.height)
     xyz = np.stack([arr['x'], arr['y'], arr['z']], axis=1).astype(np.float64)
@@ -65,8 +66,10 @@ def cloud_points(msg):
 
 
 class SelfFilter(Node):
+    """Republish each cloud without the points inside the robot's link boxes."""
 
     def __init__(self):
+        """Declare the parameters and subscribe to the robot description and the cloud."""
         super().__init__('self_filter')
         self.padding = self.declare_parameter('padding', 0.05).value
         self.exclude = set(self.declare_parameter('exclude_links', ['']).value) - {''}
@@ -77,7 +80,7 @@ class SelfFilter(Node):
 
         self.boxes = None
         self.seen_links = set()
-        self.first_tf_stamp = None  # s, cloud stamp of the first cloud with any TF
+        self.first_tf_stamp = None  # s, stamp of the first cloud with any link's TF
         self.reported_unseen = frozenset()
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -90,6 +93,7 @@ class SelfFilter(Node):
                                  qos_profile_sensor_data)
 
     def _on_description(self, msg):
+        """Build the link boxes from the URDF, leaving out exclude_links."""
         try:
             boxes = link_boxes(msg.data, self.padding)
         except (OSError, ValueError, KeyError) as e:
@@ -99,6 +103,7 @@ class SelfFilter(Node):
         self.get_logger().info(f'filtering {len(self.boxes)} links, padding {self.padding} m')
 
     def _lookup(self, frame, link, stamp):
+        """Return frame -> link at stamp, else the latest within max_tf_age; else raise."""
         try:
             return self.tf_buffer.lookup_transform(frame, link, stamp)
         except TransformException:
@@ -109,6 +114,7 @@ class SelfFilter(Node):
         return tf
 
     def _on_cloud(self, msg):
+        """Publish the cloud without the body's points, or drop it while a link lacks TF."""
         if self.boxes is None or msg.width * msg.height == 0:
             return
         arr, xyz = cloud_points(msg)
@@ -126,7 +132,7 @@ class SelfFilter(Node):
                 continue
             self.seen_links.add(link)
             rot, trans = transform_to_rt(tf.transform)
-            # Cheap reject: only test points within the box's bounding sphere.
+            # Only points within the box's bounding sphere are tested against the box.
             centre = rot @ (0.5 * (lo + hi)) + trans
             radius = 0.5 * np.linalg.norm(hi - lo)
             near = keep & (np.sum((xyz - centre) ** 2, axis=1) <= radius * radius)
@@ -166,6 +172,7 @@ class SelfFilter(Node):
 
 
 def main(args=None):
+    """Run the self_filter node."""
     rclpy.init(args=args)
     node = SelfFilter()
     try:

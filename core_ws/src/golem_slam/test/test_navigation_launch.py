@@ -1,5 +1,5 @@
 """
-navigation.launch.py's graph, built without starting processes.
+Test navigation.launch.py's graph, built without starting processes.
 
 One graph on both robots: the same nodes, executables and remaps, with each
 robot's differences in its config directory, config/<robot>/.
@@ -20,13 +20,13 @@ from launch_ros.actions import Node, SetRemap
 from launch_ros.utilities import evaluate_parameters
 
 from golem_slam.body_to_pelvis import fastlio_extrinsic
-from golem_slam.robot_geometry import fixed_transform
+from urdf_chain import link_transform
 
 ROBOTS = ('h12', 'g1')
 SHARE = get_package_share_directory('golem_slam')
 CONFIG = os.path.join(SHARE, 'config')
 LAUNCH = os.path.join(SHARE, 'launch', 'navigation.launch.py')
-# the pipeline profiles' values (config/<robot>/pipeline.yaml)
+# The pipeline profiles' values (config/<robot>/pipeline.yaml).
 PROFILES = {
     'h12': {'lidar_link': 'livox_link', 'scan': (0.25, 1.7), 'min_floor_depth': 1.0},
     'g1': {'lidar_link': 'mid360_link', 'scan': (0.15, 1.3), 'min_floor_depth': 0.5},
@@ -34,6 +34,7 @@ PROFILES = {
 
 
 def _description():
+    """Return the installed navigation.launch.py's launch description."""
     spec = importlib.util.spec_from_file_location('navigation_launch_file', LAUNCH)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -71,6 +72,7 @@ def nodes(context, actions):
 
 
 def _text(context, value):
+    """Return a substitution's text in context."""
     return perform_substitutions(context, normalize_to_list_of_substitutions(value))
 
 
@@ -80,6 +82,7 @@ def remaps(context, node):
 
 
 def _include_name(context, include):
+    """Return the file name an include loads."""
     include.launch_description_source.get_launch_description(context)  # resolves its location
     return os.path.basename(include.launch_description_source.location)
 
@@ -104,6 +107,7 @@ def graph(context, actions):
 
 
 def test_robot_is_required_and_the_files_default_per_robot():
+    """The launch declares exactly its arguments, and robot has no default."""
     declared = {a.name: a for a in _description().entities
                 if isinstance(a, DeclareLaunchArgument)}
     assert set(declared) == {'robot', 'use_sim_time', 'fast_lio_config', 'nav2_params_file',
@@ -112,6 +116,7 @@ def test_robot_is_required_and_the_files_default_per_robot():
 
 
 def test_one_graph():
+    """Both robots get the same nodes, remaps and Nav2 include."""
     h12 = graph(*pipeline('h12'))
     g1 = graph(*pipeline('g1'))
     assert h12 == g1
@@ -119,12 +124,13 @@ def test_one_graph():
     assert names == {'livox_frame_tf', 'fast_lio', 'body_to_pelvis', 'level_odom',
                      'self_filter', 'level_cloud', 'octomap_server',
                      'cloud_registered_to_laserscan', 'slam_toolbox'}
-    # Humble's navigation_launch remaps the controller but not the recoveries
+    # Humble's navigation_launch remaps the controller but not the recoveries.
     assert ('remap', 'behavior_server:cmd_vel', 'cmd_vel_nav') in h12
     assert ('include', 'navigation_launch.py') in h12
 
 
 def test_the_scan_reads_the_level_cloud():
+    """The scan reads level_cloud's base_footprint cloud with no target frame of its own."""
     for robot in ROBOTS:
         context, actions = pipeline(robot)
         ns = nodes(context, actions)
@@ -139,6 +145,7 @@ def test_the_scan_reads_the_level_cloud():
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_profiles_drive_the_differences(robot):
+    """The robot's pipeline profile and config files set what differs between robots."""
     profile = PROFILES[robot]
     with open(os.path.join(CONFIG, robot, 'pipeline.yaml')) as f:
         assert yaml.safe_load(f) == {
@@ -152,8 +159,8 @@ def test_profiles_drive_the_differences(robot):
     assert (scan['min_height'], scan['max_height']) == profile['scan']
     assert ns['level_odom'][1]['min_floor_depth'] == profile['min_floor_depth']
     assert 'dynamic_base_transform' not in ns['level_odom'][1]
-    # the driver and both sims stamp the lidar and IMU livox_frame, the raw frame of
-    # the URDF's lidar link
+    # The driver and both sims stamp the lidar and IMU livox_frame, the raw frame of
+    # the URDF's lidar link.
     frame_tf = ns['livox_frame_tf'][0]
     assert list(frame_tf._Node__arguments[-4:]) == [
         '--frame-id', profile['lidar_link'], '--child-frame-id', 'livox_frame']
@@ -168,6 +175,7 @@ def test_profiles_drive_the_differences(robot):
 
 
 def test_the_arguments_override_the_profile_files():
+    """fast_lio_config and use_sim_time reach every node that reads them."""
     sim = os.path.join(CONFIG, 'g1', 'fastlio_sim.yaml')
     ns = nodes(*pipeline('g1', fast_lio_config=sim, use_sim_time='true'))
     assert ns['fast_lio'][2] == [sim]
@@ -178,11 +186,13 @@ def test_the_arguments_override_the_profile_files():
 
 
 def test_a_robot_without_a_config_directory_is_refused():
+    """A robot with no config directory stops the launch."""
     with pytest.raises(RuntimeError, match="no config directory for robot 'h1'"):
         pipeline('h1')
 
 
 def test_a_profile_missing_a_key_is_refused(tmp_path):
+    """A pipeline profile without one of its keys stops the launch, naming the key."""
     from golem_slam.navigation_launch import load_pipeline
     path = tmp_path / 'pipeline.yaml'
     path.write_text('lidar_link: livox_link\nscan: {min_height: 0.25, max_height: 1.7}\n')
@@ -191,17 +201,17 @@ def test_a_profile_missing_a_key_is_refused(tmp_path):
 
 
 def test_h12_extrinsic_matches_urdf():
+    """The H1-2's FAST-LIO extrinsic is the URDF's livox_link in livox_imu_link."""
     with open(urdf_path('h12', ros=True)) as f:
-        rot, trans = fixed_transform(f.read(), 'livox_imu_link', 'livox_link')
+        lidar_in_imu = link_transform(f.read(), 'livox_imu_link', 'livox_link')
     path = os.path.join(CONFIG, 'h12', 'fastlio.yaml')
-    extrinsic = fastlio_extrinsic(path)
-    np.testing.assert_allclose(extrinsic[:3, :3], rot, atol=1e-6)
-    np.testing.assert_allclose(extrinsic[:3, 3], trans, atol=1e-6)
+    np.testing.assert_allclose(fastlio_extrinsic(path), lidar_in_imu, atol=1e-6)
     with open(path) as f:
         assert yaml.safe_load(f)['/**']['ros__parameters']['mapping']['extrinsic_est_en'] is True
 
 
 def test_g1_motion_limits_and_static_map_source_agree():
+    """The G1's MPPI and smoother limits agree, with no strafe; both costmaps use OctoMap."""
     with open(os.path.join(CONFIG, 'g1', 'nav2.yaml')) as source:
         config = yaml.safe_load(source)
     controller = config['controller_server']['ros__parameters']['FollowPath']

@@ -1,0 +1,20 @@
+# Every key of config/<robot>/pipeline.yaml, the robot's profile for golem_slam's
+# navigation graph (golem_slam/navigation_launch.py). Every key is required: the
+# launch stops before any node starts when one is missing. Not installed.
+
+# The URDF link of the MID-360's raw sensor frame. The driver and the sims stamp the
+# points and the IMU livox_frame, and the launch publishes a static identity
+# <lidar_link> -> livox_frame to join it to the robot's TF tree. A link name.
+lidar_link: livox_link
+
+# The height band of /converted_scan, the 2D scan slam_toolbox and the local costmap
+# read: pointcloud_to_laserscan keeps the points between these heights.
+scan:
+  min_height: 0.25   # m above the floor (base_footprint), < max_height
+  max_height: 1.7    # m above the floor (base_footprint)
+
+# Parameters passed to the level_odom node as they are.
+level_odom:
+  # m below the lidar a point must be to count as a floor candidate: deeper than table
+  # tops near lidar height, shallower than the floor in every stance. > 0.
+  min_floor_depth: 1.0

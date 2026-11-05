@@ -1,5 +1,5 @@
 """
-Publish the dynamic body -> pelvis for FAST-LIO, with the transform helpers around it.
+Publish FAST-LIO's dynamic body -> pelvis, with the 4x4 transform helpers around it.
 
     ros2 run golem_slam body_to_pelvis --ros-args -p fastlio_config:=<FAST_LIO yaml>
 
@@ -15,11 +15,8 @@ the lidar's pose: once in FAST-LIO's pose of the IMU, once in
 robot_state_publisher's torso.
 """
 
-from typing import NamedTuple
-import xml.etree.ElementTree as ET
-
 from geometry_msgs.msg import TransformStamped
-from golem_slam.robot_geometry import matrix_to_quat, quat_to_matrix, rpy_to_matrix
+from golem_slam.robot_geometry import matrix_to_quat, quat_to_matrix
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -32,7 +29,7 @@ LIVOX_FRAME = 'livox_frame'
 
 
 def transform(xyz=(0.0, 0.0, 0.0), rotation=None):
-    """Return a 4x4 homogeneous transform."""
+    """Return the 4x4 homogeneous transform of a translation (m) and a 3x3 rotation."""
     t = np.eye(4)
     t[:3, 3] = xyz
     if rotation is not None:
@@ -46,72 +43,6 @@ def invert(t):
     inv[:3, :3] = t[:3, :3].T
     inv[:3, 3] = -t[:3, :3].T @ t[:3, 3]
     return inv
-
-
-def _rotvec_to_matrix(rotvec):
-    """Rodrigues rotation matrix for a rotation vector (axis * angle)."""
-    angle = float(np.linalg.norm(rotvec))
-    if angle < 1e-12:
-        return np.eye(3)
-    axis = rotvec / angle
-    ux, uy, uz = axis
-    cross = np.array([[0.0, -uz, uy], [uz, 0.0, -ux], [-uy, ux, 0.0]])
-    return np.eye(3) + np.sin(angle) * cross + (1.0 - np.cos(angle)) * (cross @ cross)
-
-
-def _floats(element, key, default):
-    text = element.get(key) if element is not None else None
-    return [float(v) for v in text.split()] if text else list(default)
-
-
-class Joint(NamedTuple):
-    """Parsed URDF joint kinematic parameters."""
-
-    name: str
-    parent: str
-    type: str
-    origin: np.ndarray  # 4x4, parent -> joint frame
-    axis: np.ndarray  # unit vector in the joint frame
-
-
-def load_joints(urdf_file):
-    """Return {child link: Joint} from a URDF."""
-    joints = {}
-    for joint in ET.parse(urdf_file).getroot().findall('joint'):
-        origin = joint.find('origin')
-        # URDF rpy is roll, pitch, yaw about the fixed axes: R = Rz Ry Rx
-        rotation = rpy_to_matrix(*_floats(origin, 'rpy', (0, 0, 0)))
-        axis = np.array(_floats(joint.find('axis'), 'xyz', (1, 0, 0)))
-        joints[joint.find('child').get('link')] = Joint(
-            joint.get('name'),
-            joint.find('parent').get('link'),
-            joint.get('type'),
-            transform(_floats(origin, 'xyz', (0, 0, 0)), rotation),
-            axis / np.linalg.norm(axis),
-        )
-    return joints
-
-
-def link_pose(urdf_file, root, tip, positions=None):
-    """Return T_root_tip through the URDF; joints missing from positions are at 0."""
-    joints = load_joints(urdf_file)
-    positions = positions or {}
-    t = np.eye(4)
-    link = tip
-    while link != root:
-        if link not in joints:
-            raise ValueError(f'{tip} is not below {root} in {urdf_file}')
-        joint = joints[link]
-        q = positions.get(joint.name, 0.0)
-        if joint.type in ('revolute', 'continuous'):
-            motion = transform(rotation=_rotvec_to_matrix(joint.axis * q))
-        elif joint.type == 'prismatic':
-            motion = transform(joint.axis * q)
-        else:
-            motion = np.eye(4)
-        t = joint.origin @ motion @ t
-        link = joint.parent
-    return t
 
 
 def fastlio_extrinsic(fastlio_config):
@@ -143,9 +74,19 @@ def to_matrix(tf_msg):
 
 
 class BodyToPelvis(Node):
-    """Publish dynamic body -> pelvis TF from the measured torso or waist joints."""
+    """
+    Publish dynamic body -> pelvis TF from the measured torso or waist joints.
+
+    One transform per new pelvis -> lidar_frame stamp in TF, at that stamp, checked at
+    `rate` Hz. Raises ValueError without a `fastlio_config` parameter.
+
+    ROS parameters: fastlio_config (path of the FAST-LIO yaml whose extrinsic it reads),
+    body_frame (FAST-LIO's IMU frame), base_frame, lidar_frame (the frame the extrinsic's
+    lidar is), rate (Hz).
+    """
 
     def __init__(self, **kwargs):
+        """Read the FAST-LIO extrinsic and start polling TF."""
         super().__init__('body_to_pelvis', **kwargs)
         fastlio_config = self.declare_parameter('fastlio_config', '').value
         if not fastlio_config:
@@ -154,7 +95,7 @@ class BodyToPelvis(Node):
         self.body_frame = self.declare_parameter('body_frame', 'body').value
         self.base_frame = self.declare_parameter('base_frame', BASE_LINK).value
         self.lidar_frame = self.declare_parameter('lidar_frame', LIVOX_FRAME).value
-        rate = self.declare_parameter('rate', 200.0).value
+        rate = self.declare_parameter('rate', 200.0).value  # Hz
         self.buffer = Buffer()
         self.listener = TransformListener(self.buffer, self)
         self.broadcaster = TransformBroadcaster(self)
@@ -162,10 +103,11 @@ class BodyToPelvis(Node):
         self.create_timer(1.0 / rate, self._tick)
 
     def _tick(self):
+        """Publish body -> pelvis for the latest pelvis -> lidar_frame, once per stamp."""
         try:
             lidar = self.buffer.lookup_transform(self.base_frame, self.lidar_frame, Time())
         except TransformException:
-            return  # no joint states yet
+            return  # robot_state_publisher has no joint states yet
         if lidar.header.stamp == self.last_stamp:
             return
         self.last_stamp = lidar.header.stamp

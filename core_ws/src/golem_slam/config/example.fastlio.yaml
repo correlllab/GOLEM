@@ -1,0 +1,94 @@
+# Every key of config/<robot>/fastlio*.yaml, FAST-LIO's parameters (fast_lio's
+# fastlio_mapping). FAST-LIO names its frames camera_init (the IMU's pose at start-up)
+# and body (the IMU); it publishes camera_init -> body, /Odometry and the deskewed
+# scans. body_to_pelvis reads mapping.extrinsic_T and extrinsic_R from the same file.
+# Not installed. Upstream reference: https://github.com/hku-mars/FAST_LIO (README and
+# config/mid360.yaml).
+/**:
+    ros__parameters:
+        # true: extract edge and plane features; false: use the raw points (Livox).
+        feature_extract_enable: false
+        # Keep every n-th point of a scan: >= 1.
+        point_filter_num: 3
+        # Iterated Kalman filter iterations per scan: >= 1.
+        max_iteration: 3
+        # m, voxel size each scan is downsampled to before registration.
+        filter_size_surf: 0.4
+        # m, voxel size of the map points kept for registration.
+        filter_size_map: 0.4
+        # m, side of the local map cube kept around the robot.
+        cube_side_length: 1000.0
+        # true: write a per-scan pose and timing log.
+        runtime_pos_log_enable: false
+        # Path the map_save service writes the PCD map (/Laser_map's cloud) to; the
+        # service saves only with pcd_save.pcd_save_en true.
+        map_file_path: "./test.pcd"
+
+        common:
+            # The lidar's livox_ros_driver2/CustomMsg topic.
+            lid_topic:  "/livox/lidar"
+            # The IMU's sensor_msgs/Imu topic, in the same frame as the points.
+            imu_topic:  "/livox/imu"
+            # true: shift the lidar's clock onto the IMU's in software; only for a
+            # lidar and IMU that share no clock.
+            time_sync_en: false
+            # s, a calibrated lidar-to-IMU time offset, applied whatever time_sync_en is;
+            # 0.0 unless it is known exactly.
+            time_offset_lidar_to_imu: 0.0
+
+        preprocess:
+            # 1 Livox CustomMsg on lid_topic; a PointCloud2 from 2 Velodyne, 3 Ouster,
+            # 4 a MID-360 (sensor_msgs/PointCloud2), any other value a generic cloud.
+            lidar_type: 1
+            # Number of scan lines: a point whose line is >= scan_line is dropped.
+            scan_line:  6
+            # m, points closer to the lidar than this are dropped (the robot's own body).
+            blind: 0.5
+            # Unit of a PointCloud2's per-point time: 0 s, 1 ms, 2 us, 3 ns.
+            # Unused for CustomMsg, whose offset_time is in ns.
+            timestamp_unit: 3
+            # Hz, scans per second.
+            scan_rate: 10
+
+        mapping:
+            # Accelerometer noise covariance, (m/s^2)^2.
+            acc_cov: 0.1
+            # Gyroscope noise covariance, (rad/s)^2.
+            gyr_cov: 0.1
+            # Accelerometer bias random-walk covariance.
+            b_acc_cov: 0.0001
+            # Gyroscope bias random-walk covariance.
+            b_gyr_cov: 0.0001
+            # deg, the lidar's horizontal field of view.
+            fov_degree:    360.0
+            # m, the lidar's range, used to move the local map cube.
+            det_range:     100.0
+            # true: refine the lidar-to-IMU extrinsic online, starting from the values below.
+            extrinsic_est_en:  true
+            # m, the lidar's origin in the IMU frame: p_imu = extrinsic_R p_lidar + extrinsic_T.
+            extrinsic_T: [-0.010474205546, -0.023360766595, 0.044210452410]
+            # The lidar's rotation in the IMU frame, a 3x3 matrix in row-major order.
+            extrinsic_R: [0.999929195836, 0.000000000000, 0.011899719142,
+                          0.000019039543, 0.999998720000, -0.001599886031,
+                          -0.011899703911, 0.001599999317, 0.999927915926]
+
+        publish:
+            # true: publish the trajectory (/path).
+            path_en: true
+            # true: publish the points used in the last update (/cloud_effected).
+            effect_map_en: false
+            # true: publish the whole map (/Laser_map), which grows without bound.
+            map_en: true
+            # false: publish no point cloud at all.
+            scan_publish_en:  true
+            # false: publish the scans (/cloud_registered, /cloud_registered_body)
+            # downsampled to filter_size_surf; true: every deskewed point.
+            dense_publish_en: false
+            # true: publish each deskewed scan in the body frame (/cloud_registered_body).
+            scan_bodyframe_pub_en: true
+
+        pcd_save:
+            # true: save the registered scans to PCD files.
+            pcd_save_en: false
+            # Scans per PCD file; -1 puts every scan in one file, buffered in RAM.
+            interval: -1

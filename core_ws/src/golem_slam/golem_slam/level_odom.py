@@ -55,10 +55,10 @@ from golem_slam.self_filter import cloud_points
 
 def motion_spread(ups, chunks):
     """
-    Measure relative motion of the up direction across a specific-force window.
+    Return how far the up direction moves across a specific-force window.
 
-    Compare the mean of each chunk with the full window's mean, normalized by
-    its magnitude. Inputs are an N x 3 array and a number of chunks.
+    The largest distance between one of `chunks` equal slices' means and the whole
+    window's mean, divided by the mean's norm (so units cancel). ups is N x 3.
     """
     ups = np.asarray(ups, dtype=float)
     mean = ups.mean(axis=0)
@@ -69,7 +69,7 @@ def motion_spread(ups, chunks):
 def find_floor_height(points, up, sensor_height, min_depth, min_points,
                       bin_size=0.02, band=0.04, max_tilt=np.radians(5.0)):
     """
-    Height along ``up`` of the floor plane in ``points``, or None.
+    Return the height along ``up`` of the floor plane in ``points``, or None.
 
     Only points at least ``min_depth`` below the sensor (``sensor_height``
     along up) are candidates, which leaves out walls and furniture tops near
@@ -100,8 +100,24 @@ def find_floor_height(points, up, sensor_height, min_depth, min_points,
 
 
 class LevelOdom(Node):
+    """
+    Publish the static odom -> camera_init once, then odom -> base_footprint per odometry.
+
+    Subscribes imu, cloud and odometry (remapped by the launch file); the module
+    docstring has the sequence. ROS parameters:
+      odom_frame, world_frame (FAST-LIO's camera_init), body_frame (FAST-LIO's IMU),
+      base_frame, footprint_frame
+                        the frames it reads and publishes
+      samples           IMU samples in the stillness window
+      max_accel_spread  largest motion_spread of a still window (0.02 is about 1 deg)
+      motion_chunks     slices the window is split into for motion_spread
+      floor_scans       scans accumulated per floor search
+      min_floor_depth   m below the lidar a floor candidate must be
+      min_floor_points  points the floor's histogram bin needs
+    """
 
     def __init__(self):
+        """Declare the parameters and start the subscriptions and the 50 Hz retry timer."""
         super().__init__('level_odom')
         self.odom_frame = self.declare_parameter('odom_frame', 'odom').value
         self.world_frame = self.declare_parameter('world_frame', 'camera_init').value
@@ -109,12 +125,12 @@ class LevelOdom(Node):
         self.base_frame = self.declare_parameter('base_frame', 'pelvis').value
         self.footprint_frame = self.declare_parameter(
             'footprint_frame', 'base_footprint').value
-        self.samples = self.declare_parameter('samples', 400).value  # ~2 s of MID360 IMU
+        self.samples = self.declare_parameter('samples', 400).value  # 2 s of the 200 Hz IMU
         self.max_spread = self.declare_parameter('max_accel_spread', 0.02).value
         self.motion_chunks = self.declare_parameter('motion_chunks', 4).value
-        self.floor_scans = self.declare_parameter('floor_scans', 10).value  # ~1 s at 10 Hz
+        self.floor_scans = self.declare_parameter('floor_scans', 10).value  # 1 s at 10 Hz
         # m below the lidar: deeper than table tops, shallower than the floor in
-        # every stance (each robot's config/<robot>/pipeline.yaml sets it)
+        # every stance; each robot's config/<robot>/pipeline.yaml sets it.
         self.min_depth = self.declare_parameter('min_floor_depth', 1.0).value
         self.min_points = self.declare_parameter('min_floor_points', 300).value
 
@@ -136,6 +152,7 @@ class LevelOdom(Node):
         self.create_timer(0.02, self._retry_odometry)
 
     def _world_from_body(self, stamp):
+        """Return (rot, trans) of camera_init -> body at stamp, else the latest, else None."""
         try:
             return transform_to_rt(self.tf_buffer.lookup_transform(
                 self.world_frame, self.body_frame, stamp).transform)
@@ -151,6 +168,7 @@ class LevelOdom(Node):
             return None
 
     def _on_imu(self, msg):
+        """Collect the up direction in camera_init until a still window sets it."""
         if self.up is not None:
             return
         rt = self._world_from_body(Time())
@@ -175,6 +193,7 @@ class LevelOdom(Node):
         self.destroy_subscription(self.imu_sub)
 
     def _on_cloud(self, msg):
+        """Collect body-frame scans in camera_init, once up is set, until the floor is found."""
         if self.up is None:
             return
         if msg.header.frame_id != self.body_frame:
@@ -202,6 +221,7 @@ class LevelOdom(Node):
         self._publish(floor, float(trans @ self.up))
 
     def _publish(self, floor, sensor_height):
+        """Publish the static odom -> camera_init that levels up and puts the floor at z = 0."""
         rot = rotation_aligning(self.up, np.array([0.0, 0.0, 1.0]))
         t = TransformStamped()
         t.header.stamp = self.get_clock().now().to_msg()
@@ -219,10 +239,12 @@ class LevelOdom(Node):
             f'lidar {sensor_height - floor:.3f} m above the floor')
 
     def _retry_odometry(self):
+        """Retry the odometry message still waiting for its body -> pelvis."""
         if self.pending_odometry is not None:
             self._on_odometry(self.pending_odometry)
 
     def _on_odometry(self, msg):
+        """Publish odom -> base_footprint (pelvis on the floor, yaw only) at msg's stamp."""
         if self.odom_from_world is None:
             return
         self.pending_odometry = msg
@@ -254,6 +276,7 @@ class LevelOdom(Node):
 
 
 def main(args=None):
+    """Run the level_odom node."""
     rclpy.init(args=args)
     node = LevelOdom()
     try:

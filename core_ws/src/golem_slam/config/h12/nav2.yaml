@@ -1,4 +1,5 @@
 ---
+# Nav2 on the H1-2; every key is described in ../example.nav2.yaml.
 /**:
   ros__parameters:
     robot_base_frame: base_footprint
@@ -13,7 +14,7 @@ controller_server:
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.001
     min_theta_velocity_threshold: 0.001
-    progress_checker_plugin: "progress_checker" # progress_checker_plugin: "progress_checker" For Humble and older
+    progress_checker_plugin: "progress_checker"
     goal_checker_plugins: ["goal_checker"]
     controller_plugins: ["FollowPath"]
 
@@ -55,9 +56,7 @@ controller_server:
       reset_period: 1.0
       regenerate_noises: false
       retry_attempt_limit: 1
-      # Publishes /trajectories (MarkerArray: sampled candidates + the optimal
-      # one) and transformed_global_plan (Path) for RViz. Costs controller CPU;
-      # set false once tuning is done.
+      # On while MPPI is being tuned; it costs controller CPU.
       visualize: true
       TrajectoryVisualizer:
         trajectory_step: 5
@@ -180,7 +179,7 @@ planner_server:
 
 # Both costmaps take obstacles from octomap_server: /projected_map (the 2D
 # projection of the 3D occupancy, see octomap.yaml) as the static layer, plus
-# the self-filtered 3D scan in the local voxel layer for immediate reaction.
+# the level scan in the local obstacle layer for immediate reaction.
 # Obstacle heights are in odom/map, gravity-aligned with the floor at z = 0
 # (level_odom), so the 0.15-1.9 m band matches octomap's occupancy band.
 global_costmap:
@@ -227,14 +226,13 @@ local_costmap:
         map_topic: /projected_map
         map_subscribe_transient_local: True
         footprint_clearing_enabled: True
-      # Live obstacles from the flat /converted_scan (pointcloud_to_laserscan:
-      # 0.25-1.7 m above the floor, 0.3-3.0 m range, no-return beams as inf).
+      # Live obstacles from the flat /converted_scan (pipeline.yaml's height band,
+      # navigation_launch.py's range, no-return beams as inf).
       # A 2D layer frees a cell whenever any beam passes over it, so a moved
-      # object clears within a scan or two. The previous 3D VoxelLayer only
-      # freed a column once rays had crossed every marked voxel in it, and the
-      # tilted MID360 rarely crosses the low ones, so moved objects stuck
-      # around. Obstacles outside the scan band still come from the octomap
-      # static layer above.
+      # object clears within a scan or two. A 3D VoxelLayer frees a column only
+      # once rays have crossed every marked voxel in it, and the tilted MID-360
+      # rarely crosses the low ones, so moved objects would stay. Obstacles
+      # outside the scan band still come from the OctoMap static layer above.
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True

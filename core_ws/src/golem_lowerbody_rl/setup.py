@@ -5,6 +5,25 @@ from setuptools import find_packages, setup
 
 package_name = 'golem_lowerbody_rl'
 
+
+def config_files():
+    """
+    Return (install dir, files) for every directory under config/<robot>/.
+
+    The annotated example.*.yaml files document the schemas and stay in the source tree, so
+    no loader or listing of the installed configs can take one for a real config.
+    """
+    entries = []
+    for robot_dir in sorted(glob('config/*/')):
+        for directory, _, names in sorted(os.walk(robot_dir)):
+            files = sorted(os.path.join(directory, name) for name in names
+                           if not name.startswith('example.'))
+            if files:
+                entries.append((os.path.join('share', package_name,
+                                             os.path.normpath(directory)), files))
+    return entries
+
+
 setup(
     name=package_name,
     version='0.0.0',
@@ -20,7 +39,7 @@ setup(
             glob('policies/fame/*')),
         (os.path.join('share', package_name, 'policies', 'almi'),
             glob('policies/almi/*')),
-    ],
+    ] + config_files(),
     package_data={'': ['py.typed']},
     install_requires=['setuptools'],
     zip_safe=True,

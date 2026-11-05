@@ -1,0 +1,40 @@
+# The H1-2's leg node on the real robot; every key is described in ../example.run.yaml.
+sim: false
+
+startup:
+  # SAFETY: the policy takes the legs only on the operator's /lowerbody/confirm_engage
+  wait_for_confirm: true
+  ramp_seconds: 2.0
+  settle_tolerance: 0.15
+  settle_ticks: 10
+  settle_max_ticks: 400
+  steady_seconds: 1.0
+  tick_rate: [0.9, 1.1]
+  upper_fresh_seconds: 0.5
+
+heartbeat:
+  timeout: 0.5
+
+band:
+  # the real robot has no band; the operator lowers the gantry
+  release: false
+  max_wait: 34.0
+
+commands:
+  timeout: 0.5
+  vx: [-1.0, 1.0]
+  vy: [-1.0, 1.0]
+  yaw: [-1.0, 1.0]
+  accel: null
+  height_rate: null
+
+faults:
+  # catches a dead /lowstate stream without stopping the legs on an executor stall;
+  # unmeasured on the real H1-2
+  max_state_gap: 0.25
+  # unset until the pre-flight measurement of the tick lag on the onboard PC
+  max_latency: null
+
+# negative pitch is an anti-lean bias: the policy believes it pitches further forward and
+# fights harder; the hanging-plumb static calibration would be +0.264
+imu_trim_deg: [0.5, -2.5, 0.0]

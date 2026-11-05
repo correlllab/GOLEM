@@ -289,9 +289,8 @@ whose `golem_ros2_models` installs both robots' models, and in the robocasa
 service for the G1. It checks the policy files for every ros container, and
 `launch_ros.sh` builds every package, the G1's included, whatever
 the robot: one `ros` container runs either robot's bringup. For the G1,
-`docker_stack.sh` sets `GOLEM_BRINGUP_PACKAGE=golem_bringup`
-and `GOLEM_BRINGUP_LAUNCH=g1_sim.launch.py` for the stack overlay, and
-`wait_for_sim.py` refuses a simulator of the other robot. The G1 uses the same
+`docker_stack.sh` sets `GOLEM_BRINGUP_LAUNCH=g1_sim.launch.py` for the stack
+overlay, and `wait_for_sim.py` refuses a simulator of the other robot. The G1 uses the same
 images and container names as the H1-2, and the wrappers refuse it on Mac and
 with Isaac.
 

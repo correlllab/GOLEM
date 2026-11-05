@@ -34,7 +34,6 @@ echo "robot: $GOLEM_ROBOT" >&2
 if [ "$GOLEM_ROBOT" = g1 ]; then
     # Read by docker-compose.stack.yml. Set unconditionally: a value left in the
     # shell or docker/.env would start the H1-2 bringup against the G1 sim.
-    export GOLEM_BRINGUP_PACKAGE=golem_bringup
     export GOLEM_BRINGUP_LAUNCH=g1_sim.launch.py
 fi
 check_domain "$SIM"

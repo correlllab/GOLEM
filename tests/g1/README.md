@@ -104,6 +104,10 @@ must update the tests in the same commit.
   - `golem_safety`'s JSON events `relay_started` and `estop_command_written`, and its
     `estop diagnostic` lines.
 
+`tests/sim/test_sim_stack.py` imports `test_sim_bringup.py` and `test_sim_nav.py` (their log
+parsing, report helpers, geometry, `ContactLog`, `write_live_pose` and `SimDriver`): a change to
+those must keep `tests/sim` working, in the same commit.
+
 ## Output
 
 Each run writes to `tests/results/g1-<test>-<time>-<pid>/`, where `<test>` is `bringup`, `walk`,

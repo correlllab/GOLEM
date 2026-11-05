@@ -269,53 +269,82 @@ def map_scene(out, model, data, base_body):
           f"{goal['spawn_clearance']:.2f} m of room; goal {goal.get('goal', goal.get('error'))}", flush=True)
 
 
-class NavRecorder(bringup_test.Recorder):
-    """test_sim_bringup's recorder, plus robot-environment contacts after every step"""
+def write_live_pose(out, data, base):
+    """<out>/live_pose.json: the sim's pelvis (x, y, yaw) at its stamp, for the drive to place a
+    world goal in the map frame (written whole, then renamed; never published)"""
+    pos = data.xpos[base]
+    rot = data.xmat[base].reshape(3, 3)
+    snapshot = {"stamp": float(data.time),
+                "pose": [float(pos[0]), float(pos[1]), float(math.atan2(rot[1, 0], rot[0, 0]))]}
+    temporary = os.path.join(out, "live_pose.tmp")
+    with open(temporary, "w") as target:
+        json.dump(snapshot, target)
+    os.replace(temporary, os.path.join(out, "live_pose.json"))
+
+
+class ContactLog:
+    """Penetrating contacts between a robot geom (the pelvis's tree) and anything but the
+    floor, after every physics step; shared with tests/sim/test_sim_stack.py"""
 
     MAX_LISTED = 50
 
-    def __init__(self, out):
-        super().__init__(out)
+    def __init__(self):
         self._masks = None
         self.contact_steps = 0          # physics steps with a penetrating robot-env contact
+        self.spans = []                 # [first sim t, last sim t, steps] of consecutive such steps
         self.contacts = []              # the first MAX_LISTED: [sim t, robot geom, env geom, dist]
         self.deepest = 0.0
 
-    def step(self, iface):
-        m, d = iface.model, iface.data
+    def step(self, model, data, base_body):
         if self._masks is None:
-            robot, floor, _, _ = robot_and_floor(m, d, iface.resolver.base_body)
+            robot, floor, _, _ = robot_and_floor(model, data, base_body)
             self._masks = (robot, ~robot & ~floor)
-        n = d.ncon
-        if n:
-            robot, env = self._masks
-            geom = d.contact.geom[:n]
-            dist = d.contact.dist[:n]
-            hit = (dist < 0) & ((robot[geom[:, 0]] & env[geom[:, 1]]) | (robot[geom[:, 1]] & env[geom[:, 0]]))
-            if hit.any():
-                self.contact_steps += 1
-                self.deepest = min(self.deepest, float(dist[hit].min()))
-                for g, gap in zip(geom[hit], dist[hit]):
-                    if len(self.contacts) < self.MAX_LISTED:
-                        r, e = (g[0], g[1]) if robot[g[0]] else (g[1], g[0])
-                        self.contacts.append([float(d.time)] + _geom_names(m, (r, e)) + [float(gap)])
+        n = data.ncon
+        if not n:
+            return
+        robot, env = self._masks
+        geom = data.contact.geom[:n]
+        dist = data.contact.dist[:n]
+        hit = (dist < 0) & ((robot[geom[:, 0]] & env[geom[:, 1]]) | (robot[geom[:, 1]] & env[geom[:, 0]]))
+        if not hit.any():
+            return
+        self.contact_steps += 1
+        now = float(data.time)
+        if self.spans and now - self.spans[-1][1] <= 1.5 * model.opt.timestep:
+            self.spans[-1][1:] = [now, self.spans[-1][2] + 1]
+        else:
+            self.spans.append([now, now, 1])
+        self.deepest = min(self.deepest, float(dist[hit].min()))
+        for g, gap in zip(geom[hit], dist[hit]):
+            if len(self.contacts) < self.MAX_LISTED:
+                r, e = (g[0], g[1]) if robot[g[0]] else (g[1], g[0])
+                self.contacts.append([now] + _geom_names(model, (r, e)) + [float(gap)])
+
+    def save(self, path, steps):
+        """contacts.json: the physics steps, those with contact, the deepest, the spans and the
+        first MAX_LISTED contacts"""
+        with open(path, "w") as f:
+            json.dump({"steps": steps, "contact_steps": self.contact_steps, "deepest": self.deepest,
+                       "spans": self.spans, "first": self.contacts}, f, indent=1)
+
+
+class NavRecorder(bringup_test.Recorder):
+    """test_sim_bringup's recorder, plus robot-environment contacts after every step"""
+
+    def __init__(self, out):
+        super().__init__(out)
+        self.contact_log = ContactLog()
+
+    def step(self, iface):
+        base = iface.resolver.base_body
+        self.contact_log.step(iface.model, iface.data, base)
         if self.steps % 100 == 0:
-            base = iface.resolver.base_body
-            pos = d.xpos[base]
-            rot = d.xmat[base].reshape(3, 3)
-            snapshot = {"stamp": float(d.time),
-                        "pose": [float(pos[0]), float(pos[1]), float(math.atan2(rot[1, 0], rot[0, 0]))]}
-            temporary = os.path.join(self.out, "live_pose.tmp")
-            with open(temporary, "w") as target:
-                json.dump(snapshot, target)
-            os.replace(temporary, os.path.join(self.out, "live_pose.json"))
+            write_live_pose(self.out, iface.data, base)
         super().step(iface)
 
     def save(self):
         super().save()
-        with open(os.path.join(self.out, "contacts.json"), "w") as f:
-            json.dump({"steps": self.steps, "contact_steps": self.contact_steps, "deepest": self.deepest,
-                       "first": self.contacts}, f, indent=1)
+        self.contact_log.save(os.path.join(self.out, "contacts.json"), self.steps)
 
 
 def run_sim(out, sim_args):
@@ -394,23 +423,146 @@ def _process_cpu(names):
     return out
 
 
-class Driver:
-    def __init__(self, out, keep_lidar=False):
+class SimDriver:
+    """The drive's rclpy side, shared with tests/sim/test_sim_stack.py: a node named `name`
+    with /clock (the waits run in sim time), a TF buffer filled on a node of its own,
+    marks (<out>/events.json, printed as [name]) and the waits both tests use. A subclass
+    adds its subscriptions and samples(now), which spin() calls after each callback"""
+
+    def __init__(self, out, name):
         import rclpy
-        from geometry_msgs.msg import Twist
-        from nav_msgs.msg import OccupancyGrid
         from rclpy.node import Node
-        from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+        from rclpy.qos import QoSProfile, ReliabilityPolicy
         from rosgraph_msgs.msg import Clock
         from tf2_ros import Buffer, TransformListener
         rclpy.init()
         self.rclpy = rclpy
-        self.node = Node("test_sim_nav")
+        self.name = name
+        self.node = Node(name)
         self.out = out
         self.events, self.info = [], {}
         self.clock, self.clocks = None, 0
         self.node.create_subscription(Clock, "/clock", self._on_clock,
                                       QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT), raw=True)
+        # TF on a node of its own, spun on the listener's thread: /tf runs at hundreds of Hz
+        self.tf_node = Node(f"{name}_tf")
+        self.tf = Buffer()
+        self.tf_listener = TransformListener(self.tf, self.tf_node, spin_thread=True)
+        self.launch_log = os.path.join(out, "launch.log")
+
+    def _on_clock(self, raw):
+        self.clock = bringup_test._cdr_stamp(raw)
+        self.clocks += 1
+
+    def _sim(self):
+        return math.nan if self.clock is None else self.clock
+
+    def mark(self, name, **extra):
+        self.events.append({"name": name, "wall": time.time(), "sim": self.clock, **extra})
+        print(f"[{self.name}] {name} {extra if extra else ''}", flush=True)
+        with open(os.path.join(self.out, "events.json"), "w") as f:
+            json.dump({"events": self.events, "info": self.info}, f, indent=1)
+
+    def lookup(self, target, source):
+        from rclpy.time import Time
+        try:
+            return self.tf.lookup_transform(target, source, Time())
+        except Exception:
+            return None
+
+    def samples(self, now):
+        """The subclass's periodic samples, at wall time now"""
+
+    def spin(self, timeout=0.05):
+        """One callback, then samples()"""
+        self.rclpy.spin_once(self.node, timeout_sec=timeout)
+        self.samples(time.time())
+
+    def spin_for(self, seconds, wall_limit=120.0):
+        """Spin for `seconds` of sim time; fail if the sim stalls (see test_sim_bringup)"""
+        give_up = time.time() + wall_limit
+        heard = self.clocks
+        while self.clocks == heard and time.time() < give_up:
+            self.spin()
+        if self.clocks == heard:
+            raise RuntimeError("no /clock from the sim")
+        start = self.clock
+        while self.clock < start + seconds:
+            if time.time() > give_up:
+                self.mark("sim_stalled", sim_seconds=self.clock - start, wanted=seconds)
+                raise RuntimeError(f"the sim's clock advanced {self.clock - start:.2f} of {seconds} s "
+                                   f"in {wall_limit:.0f} s wall")
+            self.spin()
+
+    def wait_future(self, future, timeout):
+        end = time.time() + timeout
+        while not future.done() and time.time() < end:
+            self.spin()
+        return future.result() if future.done() else None
+
+    def _log_has(self, text):
+        try:
+            with open(self.launch_log, errors="replace") as f:
+                return text in f.read()
+        except OSError:
+            return False
+
+    def wait_band_released(self, timeout=120.0, refusals=()):
+        """The sim logs the band's release, which the robot's leg node asks for once its
+        policy runs and frame_task_server is up; False on timeout, or at once on one of the
+        launch's refusals (launch.log)"""
+        end = time.time() + timeout
+        sim_log = os.path.join(self.out, "sim.log")
+        while time.time() < end:
+            if bringup_test.file_has(sim_log, bringup_test.BAND_RELEASED_LINE):
+                self.mark("band_released")
+                return True
+            if any(self._log_has(refusal) for refusal in refusals):
+                self.mark("launch_refused")
+                return False
+            for _ in range(20):
+                self.spin()
+        self.mark("band_timeout")
+        return False
+
+    def goal_in_map(self, goal):
+        """The world goal (goal["goal"]: x, y, yaw) in the map frame: the sim's pelvis at one
+        stamp (live_pose.json, written by the sim, never published) against odom -> pelvis at
+        that stamp, then map -> odom"""
+        from rclpy.time import Time
+        from tf2_ros import TransformException
+        with open(os.path.join(self.out, "live_pose.json")) as source:
+            truth = json.load(source)
+        end = time.time() + 5.0
+        while True:
+            try:
+                estimate = self.tf.lookup_transform("odom", "pelvis", Time(seconds=truth["stamp"]))
+                break
+            except TransformException:
+                if time.time() >= end:
+                    raise RuntimeError("no odometry at the recorded ground-truth pose stamp")
+                self.spin()
+        _, ex, ey, _, qx, qy, qz, qw = _tf_parts(estimate)
+        world_odom = se2(*truth["pose"]) @ np.linalg.inv(se2(ex, ey, _yaw_xyzw(qx, qy, qz, qw)))
+        map_odom = self.lookup("map", "odom")
+        if map_odom is None:
+            raise RuntimeError("no map -> odom in TF")
+        _, x, y, _, qx, qy, qz, qw = _tf_parts(map_odom)
+        t = se2(x, y, _yaw_xyzw(qx, qy, qz, qw)) @ np.linalg.inv(world_odom) @ se2(*goal["goal"])
+        return se2_parts(t)
+
+    def close(self):
+        self.tf_node.destroy_node()
+        self.node.destroy_node()
+        self.rclpy.shutdown()
+
+
+class Driver(SimDriver):
+    def __init__(self, out, keep_lidar=False):
+        from geometry_msgs.msg import Twist
+        from nav_msgs.msg import OccupancyGrid
+        from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+        super().__init__(out, "test_sim_nav")
         self.cmds = []   # wall, sim, vx, vy, vz, wx, wy, wz
         self.node.create_subscription(Twist, "/cmd_vel", self._on_cmd, 100)
         self.map = None
@@ -433,18 +585,9 @@ class Driver:
         self.scans = []   # wall, sim, stamp, angle_min, angle_increment, then the ranges
         self.node.create_subscription(LaserScan, "/converted_scan", self._on_scan, qos_profile_sensor_data)
         self._stall_dumped = False
-        # TF on a node of its own, spun on the listener's thread: /tf runs at hundreds of Hz
-        self.tf_node = Node("test_sim_nav_tf")
-        self.tf = Buffer()
-        self.tf_listener = TransformListener(self.tf, self.tf_node, spin_thread=True)
-        self.samples = {"map_pelvis": [], "odom_pelvis": []}   # wall, sim, then _tf_parts
+        self.tf_samples = {"map_pelvis": [], "odom_pelvis": []}   # wall, sim, then _tf_parts
         self._next_sample = 0.0
         self.feedback = None
-        self.launch_log = os.path.join(out, "launch.log")
-
-    def _on_clock(self, raw):
-        self.clock = bringup_test._cdr_stamp(raw)
-        self.clocks += 1
 
     def _on_cmd(self, msg):
         self.cmds.append([time.time(), self._sim(), msg.linear.x, msg.linear.y, msg.linear.z,
@@ -546,26 +689,8 @@ class Driver:
             f.write("\n".join(lines) + "\n")
         self.mark("scan_stall" if scan_stalled else "slam_stall", since_wall_s=now - self.scans[-1][0])
 
-    def _sim(self):
-        return math.nan if self.clock is None else self.clock
-
-    def mark(self, name, **extra):
-        self.events.append({"name": name, "wall": time.time(), "sim": self.clock, **extra})
-        print(f"[test_sim_nav] {name} {extra if extra else ''}", flush=True)
-        with open(os.path.join(self.out, "events.json"), "w") as f:
-            json.dump({"events": self.events, "info": self.info}, f, indent=1)
-
-    def lookup(self, target, source):
-        from rclpy.time import Time
-        try:
-            return self.tf.lookup_transform(target, source, Time())
-        except Exception:
-            return None
-
-    def spin(self, timeout=0.05):
-        """One callback, and the TF samples when they are due"""
-        self.rclpy.spin_once(self.node, timeout_sec=timeout)
-        now = time.time()
+    def samples(self, now):
+        """The TF samples, and the scan path's check, when they are due"""
         if now >= self._next_sample:
             self._next_sample = now + TF_PERIOD_S
             self._check_scan_path(now)
@@ -573,38 +698,9 @@ class Driver:
                 tf = self.lookup(*frames)
                 if tf is not None:
                     parts = _tf_parts(tf)
-                    rows = self.samples[key]
+                    rows = self.tf_samples[key]
                     if not rows or rows[-1][2] != parts[0]:   # a new stamp
                         rows.append([now, self._sim()] + parts)
-
-    def spin_for(self, seconds, wall_limit=120.0):
-        """Spin for `seconds` of sim time; fail if the sim stalls (see test_sim_bringup)"""
-        give_up = time.time() + wall_limit
-        heard = self.clocks
-        while self.clocks == heard and time.time() < give_up:
-            self.spin()
-        if self.clocks == heard:
-            raise RuntimeError("no /clock from the sim")
-        start = self.clock
-        while self.clock < start + seconds:
-            if time.time() > give_up:
-                self.mark("sim_stalled", sim_seconds=self.clock - start, wanted=seconds)
-                raise RuntimeError(f"the sim's clock advanced {self.clock - start:.2f} of {seconds} s "
-                                   f"in {wall_limit:.0f} s wall")
-            self.spin()
-
-    def wait_future(self, future, timeout):
-        end = time.time() + timeout
-        while not future.done() and time.time() < end:
-            self.spin()
-        return future.result() if future.done() else None
-
-    def _log_has(self, text):
-        try:
-            with open(self.launch_log, errors="replace") as f:
-                return text in f.read()
-        except OSError:
-            return False
 
     def wait_walking(self, timeout=240.0):
         """The walking node logs 'walking: policy started' once it has the legs"""
@@ -619,20 +715,6 @@ class Driver:
             for _ in range(20):
                 self.spin()
         self.mark("walking_timeout")
-        return False
-
-    def wait_band_released(self, timeout=120.0):
-        """The sim logs the band's release, which the walking node asks for once its policy
-        runs and frame_task_server is up"""
-        end = time.time() + timeout
-        sim_log = os.path.join(self.out, "sim.log")
-        while time.time() < end:
-            if bringup_test.file_has(sim_log, bringup_test.BAND_RELEASED_LINE):
-                self.mark("band_released")
-                return True
-            for _ in range(20):
-                self.spin()
-        self.mark("band_timeout")
         return False
 
     def wait_nav(self, timeout=180.0):
@@ -664,33 +746,6 @@ class Driver:
         self.mark("nav_timeout", states=states, action_server=self.navigate.server_is_ready(),
                   map_pelvis=self.lookup("map", "pelvis") is not None)
         return False
-
-    def goal_in_map(self, goal):
-        """Place a world goal in map using synchronized true/estimated pelvis poses."""
-        from rclpy.time import Time
-        from tf2_ros import TransformException
-        # The simulator records a pose privately to disk; no ground-truth TF is
-        # published onto the navigation bus. Match its stamp to estimated TF.
-        with open(os.path.join(self.out, "live_pose.json")) as source:
-            truth = json.load(source)
-        end = time.time() + 5.0
-        while True:
-            try:
-                estimate = self.tf.lookup_transform(
-                    "odom", "pelvis", Time(seconds=truth["stamp"]))
-                break
-            except TransformException:
-                if time.time() >= end:
-                    raise RuntimeError("no odometry at the recorded ground-truth pose stamp")
-                self.spin()
-        _, ex, ey, _, qx, qy, qz, qw = _tf_parts(estimate)
-        world_odom = se2(*truth["pose"]) @ np.linalg.inv(se2(ex, ey, _yaw_xyzw(qx, qy, qz, qw)))
-        map_odom = self.lookup("map", "odom")
-        if map_odom is None:
-            raise RuntimeError("no map -> odom in TF")
-        _, x, y, _, qx, qy, qz, qw = _tf_parts(map_odom)
-        t = se2(x, y, _yaw_xyzw(qx, qy, qz, qw)) @ np.linalg.inv(world_odom) @ se2(*goal["goal"])
-        return se2_parts(t)
 
     def navigate_to(self, x, y, yaw):
         from action_msgs.msg import GoalStatus
@@ -761,13 +816,8 @@ class Driver:
         np.savez(os.path.join(self.out, "drive.npz"), cmds=np.array(self.cmds, float).reshape(-1, 8),
                  scans=scans, lidar=np.array(self.arrivals["/livox/lidar"], float).reshape(-1, 3),
                  points=np.array(self.arrivals["/cloud_body_filtered"], float).reshape(-1, 3),
-                 **{k: np.array(v, float).reshape(-1, 10) for k, v in self.samples.items()})
+                 **{k: np.array(v, float).reshape(-1, 10) for k, v in self.tf_samples.items()})
         self.mark("end")
-
-    def close(self):
-        self.tf_node.destroy_node()
-        self.node.destroy_node()
-        self.rclpy.shutdown()
 
 
 def run_drive(out, keep_lidar=False):

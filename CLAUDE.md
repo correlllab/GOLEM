@@ -551,8 +551,9 @@ sim-to-real transfer.
   and `g1/g1_mujoco.py`). No stack opts in: every bringup's navigation, the Mac's included, runs on FAST-LIO, and the G1 bringup and tests refuse it. Keep it that way. The
   experiment surface (`/sim/ground_truth`, `/sim/reset_objects`) is gated by
   `GOLEM_SIM_EXPERIMENT` (`measurement_bridge.py`). The closed-loop tests
-  (`tests/g1`, `tests/sim`) refuse it too, and record the robot's state inside
-  the sim process instead of publishing it.
+  (`tests/g1`, `tests/sim`) run the sim with both off (`GOLEM_SIM_ODOM=0`,
+  `GOLEM_SIM_EXPERIMENT=0`), refuse a `GOLEM_SIM_ODOM` that turns it on, and
+  record the robot's state inside the sim process instead of publishing it.
 - **Isaac:** no full-scene ground-truth publisher or per-step scene JSON conversion.
 - **Known deviations (do not make worse):** RoboCasa always publishes privileged task signals
   (`/robocasa/success`, `/robocasa/reward`, `/robocasa/task_goal`,

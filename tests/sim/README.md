@@ -76,8 +76,10 @@ ros`); it never builds them. The containers are `tests/sim/common.sh`'s, which `
   The runs share that build, so one runs at a time.
 - **Knobs.** The sim's knobs come from the shell or the script, never from `docker/.env`.
 
-The test reuses `tests/g1`'s Python (`test_sim_bringup.py`'s log parsing and report helpers,
-`test_sim_nav.py`'s geometry), which both containers mount. It patches each robot's
+The test reuses `tests/g1`'s Python, which both containers mount: `test_sim_bringup.py`'s log
+parsing and report helpers, and `test_sim_nav.py`'s geometry, its `ContactLog` and
+`write_live_pose` (the sim role) and its `SimDriver` (the drive's clock, marks, TF, waits and
+`goal_in_map`), which `test_sim_nav.py`'s own driver and recorder use too. It patches each robot's
 `SimInterface.__init__` and `after_step` and `measurement_bridge.MeasurementBridge.__init__` (for
 the band), reads the sim's `ROS bridges up`, `elastic band released at t=` and `ROBOT FELL` log lines,
 and from `launch.log` `golem_safety`'s JSON events `relay_started` and `estop_command_written` and

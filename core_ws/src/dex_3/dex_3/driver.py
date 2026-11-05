@@ -1,4 +1,4 @@
-'''DDS driver for one Dex3-1 hand (rt/dex3/<side>/cmd and state), with no ROS'''
+"""Drive one Dex3-1 hand over Unitree DDS (rt/dex3/<side>/cmd and state), with no ROS."""
 
 import math
 import time
@@ -21,18 +21,18 @@ from dex_3.dex3 import (
     validate_positions,
 )
 
-# stop commands sent on release (timeout bit set, zero gains), like the stop in
-# Unitree's Dex3 example; then the driver goes silent
+# Stop commands (timeout bit set, zero gains, as in Unitree's Dex3 example) that
+# release() sends before the driver goes silent.
 RELEASE_MESSAGES = 10
-# how long shutdown() waits for those stop commands to go out (it returns as
-# soon as they have; 10 take 0.1 s at 100 Hz, longer on a starved CPU)
+# s, the longest shutdown() waits for the stop commands to go out. It returns as
+# soon as they have; 10 take 0.1 s at 100 Hz, longer on a starved CPU.
 RELEASE_TIMEOUT_S = 1.0
-# a first command needs hand state newer than this
+# s, the oldest hand state a first command may start from.
 MAX_STATE_AGE_S = 0.5
 
 
 def _check_value(name, value, positive=False):
-    '''value as a float; raise unless finite and >= 0 (> 0 if positive)'''
+    """Return `value` as a float; raise ValueError unless finite and >= 0 (> 0 if positive)."""
     value = float(value)
     bound = '> 0' if positive else '>= 0'
     if not math.isfinite(value) or value < 0.0 or (positive and value == 0.0):
@@ -41,23 +41,30 @@ def _check_value(name, value, positive=False):
 
 
 class Dex3Hand:
-    '''
-    One Dex3-1 hand. Silent until the first command, so a hand driven by another
-    program (or by nobody) is left alone; after that it streams HandCmd_ at
-    rate_hz, holding the current target. No joint is commanded faster than
+    """Command one Dex3-1 hand from a background thread.
+
+    The driver is silent until the first set_pose(), so a hand driven by another
+    program, or by nobody, is left alone. From then on it streams HandCmd_ at
+    rate_hz, holding the current target, and no joint is commanded faster than
     max_speed rad/s. release() sends Unitree's stop and goes silent again.
-    Timing uses time.monotonic(), so a wall-clock step cannot skip a move
-    '''
+    Timing uses time.monotonic(), so a wall-clock step cannot skip a move.
+    """
 
     def __init__(self, side, kp=DEFAULT_KP, kd=DEFAULT_KD, rate_hz=100.0,
                  cmd_topic=None, state_topic=None, max_speed=DEFAULT_MAX_SPEED):
+        """Open the hand's DDS channels and start the command thread.
+
+        kp, kd: PD gains; rate_hz: command rate while commanding; max_speed:
+        rad/s. Raises ValueError on a non-finite or negative setting, or a zero
+        rate_hz or max_speed. ChannelFactoryInitialize must have run first.
+        """
         self.side = side
         self.kp = _check_value('kp', kp)
         self.kd = _check_value('kd', kd)
         self.max_speed = _check_value('max_speed', max_speed, positive=True)
         self._dt = 1.0 / _check_value('rate_hz', rate_hz, positive=True)
         self._lock = threading.Lock()
-        self._interp = None  # None: not commanding
+        self._interp = None  # PoseInterpolator while commanding, else None
         self._release_left = 0
         self._state = None
         self._cmd = HandCmdDefault()
@@ -70,6 +77,7 @@ class Dex3Hand:
         self._thread.start()
 
     def _on_state(self, msg: HandState_) -> None:
+        """Store a HandState_ sample, stamped with time.monotonic(); runs on a DDS thread."""
         if len(msg.motor_state) < NUM_HAND_MOTORS:
             return
         motors = msg.motor_state[:NUM_HAND_MOTORS]
@@ -86,27 +94,30 @@ class Dex3Hand:
 
     @property
     def state(self):
-        '''Latest hand state (q, dq, tau, pressure, time from time.monotonic()) or None'''
+        """Return the latest hand state, or None before the first.
+
+        A dict of q (rad), dq (rad/s), tau (N m), pressure (sensors x 12) and
+        time (s, time.monotonic()).
+        """
         with self._lock:
             return None if self._state is None else dict(self._state)
 
-    @property
-    def commanding(self) -> bool:
-        with self._lock:
-            return self._interp is not None
-
     def set_pose(self, positions, duration: float = 0.0) -> np.ndarray:
-        '''
-        Move to `positions` (7 rad, clipped to the URDF limits) over `duration`
-        s, or longer if a joint would otherwise move faster than max_speed
-        '''
+        """Move to `positions` and return the clipped goal.
+
+        `positions` is 7 joint angles (rad), clipped to the URDF limits; the
+        move takes `duration` s, or longer if a joint would otherwise move
+        faster than max_speed. A first command starts from the measured pose
+        and raises RuntimeError without a finite hand state newer than
+        MAX_STATE_AGE_S; later ones start from the current target. Raises
+        ValueError on bad positions or duration.
+        """
         goal = validate_positions(self.side, positions)
         now = time.monotonic()
         with self._lock:
             if self._interp is not None:
                 start = self._interp.value(now)
             else:
-                # first command: start from where the hand is
                 if self._state is None or now - self._state['time'] > MAX_STATE_AGE_S:
                     raise RuntimeError(
                         f'no recent {self.side} hand state on rt/dex3/{self.side}/state')
@@ -120,10 +131,10 @@ class Dex3Hand:
         return goal
 
     def release(self) -> bool:
-        '''
-        Send Unitree's stop (fingers go limp) and stop commanding. Does nothing,
-        and returns False, if this driver is not commanding the hand
-        '''
+        """Send Unitree's stop, so the fingers go limp, then stop commanding.
+
+        Returns False, and sends nothing, if this driver is not commanding the hand.
+        """
         with self._lock:
             if self._interp is None:
                 return False
@@ -132,6 +143,7 @@ class Dex3Hand:
             return True
 
     def _fill(self, q, kp, kd, timeout):
+        """Write targets `q` (rad) and the gains into every motor of the command message."""
         for i in range(NUM_HAND_MOTORS):
             motor = self._cmd.motor_cmd[i]
             motor.mode = motor_mode(i, timeout=timeout)
@@ -142,6 +154,7 @@ class Dex3Hand:
             motor.kd = float(kd)
 
     def _loop(self):
+        """Publish the interpolated target, or a queued stop, every 1 / rate_hz s."""
         while self._running:
             start_time = time.monotonic()
             send = False
@@ -158,13 +171,14 @@ class Dex3Hand:
             time.sleep(max(0.0, self._dt - (time.monotonic() - start_time)))
 
     def shutdown(self, release: bool = True) -> None:
-        '''
-        Stop the driver. With release (the default), a hand this driver was
-        commanding first gets Unitree's stop, so its fingers go limp. With
-        release=False the driver just stops publishing, and the hand is left
-        with the last command it got (what the Dex3 then does is not documented
-        by Unitree). Stop messages already queued by release() are sent either way
-        '''
+        """Stop the driver and close its DDS channels.
+
+        With `release`, a hand this driver was commanding first gets Unitree's
+        stop, so its fingers go limp. Without it the driver just stops
+        publishing and the hand keeps the last command it got; Unitree does not
+        document what the Dex3 then does. Stop messages already queued by
+        release() are sent either way, waiting up to RELEASE_TIMEOUT_S.
+        """
         if release:
             self.release()
         deadline = time.monotonic() + RELEASE_TIMEOUT_S

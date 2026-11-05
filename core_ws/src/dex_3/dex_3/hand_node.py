@@ -1,4 +1,4 @@
-'''ROS 2 node driving both Dex3-1 hands over rt/dex3/*'''
+"""Run the dex3_hands ROS 2 node, which drives the Dex3-1 hands over rt/dex3/*."""
 
 import os
 import signal
@@ -29,28 +29,32 @@ from dex_3.dex3 import (
 
 
 class Dex3HandNode(Node):
-    '''
-    Per hand <side> in {left, right}:
-    - services /<side>/hand/set_pose (SetHandPose), /<side>/hand/open,
-      /<side>/hand/close and /<side>/hand/release (std_srvs/Trigger)
-    - topic /<side>/hand/pressure (Float32MultiArray, sensors x 12)
-    and /joint_states with the finger joints, for robot_state_publisher.
-    A hand is only commanded after its first service call. On shutdown a hand
-    this node was commanding is released (on_shutdown 'release', the fingers go
-    limp) or simply left with its last command ('silent')
-    '''
+    """Serve pose services for each hand and publish its joint state and pressure.
+
+    Per hand <side>: services /<side>/hand/set_pose (SetHandPose) and
+    /<side>/hand/{open,close,release} (std_srvs/Trigger), and topic
+    /<side>/hand/pressure (Float32MultiArray, sensors x 12); for both hands,
+    /joint_states with the finger joints, for robot_state_publisher.
+    A hand is commanded only after its first service call. On shutdown a hand
+    this node was commanding is released (on_shutdown 'release': the fingers
+    go limp) or left with its last command ('silent').
+
+    SAFETY: this node writes rt/dex3/<side>/cmd directly; golem_safety does not
+    see or limit the hands.
+    """
 
     def __init__(self):
+        """Read the parameters, join Unitree DDS on the ROS domain and start the hands."""
         super().__init__('dex3_hands')
         self.declare_parameter('sides', list(SIDES))
         self.declare_parameter('kp', DEFAULT_KP)
         self.declare_parameter('kd', DEFAULT_KD)
         self.declare_parameter('rate_hz', 100.0)
-        self.declare_parameter('pose_duration', 1.0)  # s, for open and close
+        self.declare_parameter('pose_duration', 1.0)  # s, of open and close
         self.declare_parameter('joint_state_hz', 50.0)
         self.declare_parameter('network_interface', '')
         self.declare_parameter('domain_id', -1)  # used when ROS_DOMAIN_ID is unset; < 0: unset
-        self.declare_parameter('on_shutdown', 'release')  # release | silent
+        self.declare_parameter('on_shutdown', 'release')  # one of SHUTDOWN_ACTIONS
         self.declare_parameter('max_speed', DEFAULT_MAX_SPEED)  # rad/s, any finger joint
 
         sides = [s for s in self.get_parameter('sides').value]
@@ -63,11 +67,10 @@ class Dex3HandNode(Node):
             raise ValueError(f'on_shutdown must be one of {list(SHUTDOWN_ACTIONS)}, '
                              f'got {self._on_shutdown!r}')
 
-        # Unitree DDS on the same domain as ROS (the real robot is domain 0),
-        # never a default one: refused unless it is also the domain this node's
-        # ROS side runs on. The SDK ignores CYCLONEDDS_URI, so the interface
-        # comes from the network_interface parameter or G1_DDS_INTERFACE
-        # (e.g. enp130s0)
+        # SAFETY: Unitree DDS runs on the ROS domain (0 is the real robot), never
+        # on a default one; dds_domain refuses a domain the node's ROS side is
+        # not on. The SDK ignores CYCLONEDDS_URI, so the interface comes from the
+        # network_interface parameter or G1_DDS_INTERFACE (e.g. enp130s0).
         domain = dds_domain(os.environ.get('ROS_DOMAIN_ID'),
                             self.get_parameter('domain_id').value,
                             ros_domain=self.context.get_domain_id())
@@ -103,6 +106,7 @@ class Dex3HandNode(Node):
             f'silent until the first command; on_shutdown={self._on_shutdown}')
 
     def _set_pose(self, side, request, response):
+        """Serve /<side>/hand/set_pose: move to the requested positions (rad) over duration (s)."""
         try:
             goal = self.hands[side].set_pose(request.positions, request.duration)
         except (ValueError, RuntimeError) as err:
@@ -114,6 +118,7 @@ class Dex3HandNode(Node):
         return response
 
     def _named_pose(self, side, name, request, response):
+        """Serve /<side>/hand/<name>: move to the named pose over pose_duration."""
         try:
             self.hands[side].set_pose(named_pose(side, name), self._pose_duration)
         except (ValueError, RuntimeError) as err:
@@ -125,6 +130,7 @@ class Dex3HandNode(Node):
         return response
 
     def _release(self, side, request, response):
+        """Serve /<side>/hand/release: send Unitree's stop and stop commanding the hand."""
         released = self.hands[side].release()
         response.success = True
         response.message = (f'{side} hand released' if released
@@ -132,6 +138,7 @@ class Dex3HandNode(Node):
         return response
 
     def _publish_state(self):
+        """Publish /joint_states and each hand's pressure from the hands that have state."""
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
         for side, hand in self.hands.items():
@@ -154,22 +161,24 @@ class Dex3HandNode(Node):
             self._joint_state_pub.publish(msg)
 
     def destroy_node(self):
+        """Shut the hands down as on_shutdown says, then destroy the node."""
         for hand in self.hands.values():
             hand.shutdown(release=self._on_shutdown == 'release')
         return super().destroy_node()
 
 
-# signals that end the node through destroy_node(), so on_shutdown applies:
+# Signals that end the node through destroy_node(), so on_shutdown applies:
 # Ctrl-C, ros2 launch shutting down (SIGINT, then SIGTERM) and a closed terminal
-# (SIGHUP, whose default would end the process at once). SIGKILL cannot be caught
+# (SIGHUP, whose default would end the process at once). SIGKILL cannot be caught.
 EXIT_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 
 def main(args=None):
-    # an exit signal only requests the exit, however many arrive. rclpy's own
+    """Spin dex3_hands until an exit signal, then shut the hands down."""
+    # An exit signal only requests the exit, however many arrive. rclpy's own
     # handlers stay off: Ctrl-C in a terminal reaches the node twice (from the
     # terminal, and from ros2 launch passing it on), and a second
-    # KeyboardInterrupt would cut the release short
+    # KeyboardInterrupt would cut the release short.
     exit_requested = threading.Event()
     for signum in EXIT_SIGNALS:
         signal.signal(signum, lambda *_: exit_requested.set())

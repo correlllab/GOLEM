@@ -1,3 +1,4 @@
+"""Install dex_3's Python package, launch files and the dex3_hands entry point."""
 from glob import glob
 
 from setuptools import find_packages, setup

@@ -1,3 +1,4 @@
+"""Install lmg_deploy's Python package, deploy configs, policies and marl_deploy_node."""
 import os
 from glob import glob
 
@@ -13,7 +14,9 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        # The annotated example.*.yaml configs document the keys and stay in the source tree.
+        (os.path.join('share', package_name, 'config'),
+            [path for path in glob('config/*.yaml') if not os.path.basename(path).startswith('example.')]),
     ] + [
         # Each policy directory (networks, deploy config, export.yaml) installs to share/lmg_deploy/policies/<name>/.
         (os.path.join('share', package_name, 'policies', os.path.basename(d)), glob(os.path.join(d, '*')))

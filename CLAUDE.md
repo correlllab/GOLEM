@@ -271,7 +271,8 @@ for the includes after it, so pass consistent values (all four blocks share
   beat until those two conditions hold; then it beats true at 10 Hz, and false
   once its estop latches (false from the start if it latched first).
   `h12_lowerbody_rl` pre-poses the legs only from the first beat, and
-  `lmg_deploy` and `golem_skills` read it too.
+  `lmg_deploy` publishes and pre-poses only from it too; `golem_skills`
+  reads it.
 - **`frame_task_server` needs `golem_safety` relaying.** It waits up to
   `controller.state_timeout` (5 s) for a fresh `/lowstate`, then holds the
   measured pose until it sees its commands on `/lowcmd` (the follow gate), for

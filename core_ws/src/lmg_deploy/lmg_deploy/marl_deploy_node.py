@@ -2,7 +2,8 @@
 
 Flow
 ----
-1. Idle until the first /lowstate.
+1. Idle (state ``waiting_heartbeat``, nothing published) until golem_safety's first true
+   /safety/heartbeat, then until the first /lowstate.
 2. Pre-pose: ramp all 27 joint targets (cosine blend) from the measured pose
    to the policy's default pose at the training gains, then wait for the joints
    to settle there. The ramp lasts at least ``prepose_ramp_s`` and is stretched
@@ -37,9 +38,10 @@ must not run beside it (the lmg bringups start neither).
 
 Safety
 ------
-* /safety/heartbeat watchdog, as in h12_lowerbody_rl: armed on the first beat;
-  a False beat (the safety layer's estop latched) or ``heartbeat_timeout`` of
-  silence latches this node silent.
+* /safety/heartbeat gate and watchdog, as in h12_lowerbody_rl: nothing is published, and the
+  pre-pose does not start, before the first true beat (golem_safety beats once it relays);
+  the watchdog is armed on it. A False beat (the safety layer's estop latched) or
+  ``heartbeat_timeout`` of silence latches this node silent.
 * /lowstate older than ``lowstate_timeout`` (wall clock): no policy step and no publish
   that tick (stepping on a frozen state would integrate garbage). The same holds
   for /livox/imu (``livox_imu_timeout``), and the policy doesn't engage until its
@@ -481,6 +483,12 @@ class MarlDeployNode(Node):
         now = time.monotonic()
         if self._hb_last is not None and now - self._hb_last > self._hb_timeout:
             self._latch(f"no {SAFETY_HEARTBEAT_TOPIC} for {self._hb_timeout:.1f} s (safety node down?)")
+            return
+        if self._hb_last is None:
+            self._set_state("waiting_heartbeat")
+            self.get_logger().info(
+                f"no {SAFETY_HEARTBEAT_TOPIC} yet (golem_safety beats once it can relay); sending nothing",
+                throttle_duration_sec=5.0)
             return
         if self._lowstate is None:
             return

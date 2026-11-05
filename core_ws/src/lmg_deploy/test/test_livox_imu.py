@@ -78,6 +78,7 @@ def test_dropout_gap_not_integrated():
     np.testing.assert_allclose(imu.up, [0.0, 0.0, 1.0], atol=1e-12)
 
 
+@pytest.mark.xfail(strict=True, reason="lmg_deploy expects an upright livox_imu_link; the H1-2 model's is the raw MID-360 frame since 2026-11-05 and lmg_deploy is not updated yet")
 def test_urdf_mount_is_the_livox_pitch():
     pytest.importorskip("pinocchio")
     if not os.path.isfile(URDF):

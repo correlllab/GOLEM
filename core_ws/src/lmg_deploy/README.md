@@ -12,7 +12,10 @@ through the split safety layer and obeys `/safety/heartbeat`.
 
 Modelled on `h12_lowerbody_rl`'s `lowerbody_controller_node`. The node goes
 through the same steps (pre-pose ramp, operator confirm, elastic-band
-release) and uses the same heartbeat watchdog.
+release) and uses the same heartbeat gate and watchdog: it publishes nothing, and
+does not start its pre-pose ramp, until `golem_safety`'s first true `/safety/heartbeat`
+(state `waiting_heartbeat`), and a false beat or none for `heartbeat_timeout` (0.5 s) after
+the first latches it silent.
 
 ## Layout
 
@@ -30,6 +33,7 @@ release) and uses the same heartbeat watchdog.
 | `bags/<name>/` | rosbag2 recordings of Explicit500 on the real robot (`policy_bag_walk`: walking to nav2 goals; `reach`: an arm goal, ended by the hardware e-stop), the `.db3` files in Git LFS |
 | `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, SLAM odometry, modes) on `test/data/explicit500.yaml`, Explicit500's deploy config |
 | `test/sim_drive.py` | a scripted drive in the Robocasa sim (stand, walk, turn, side-step, arm goal), measured on FAST-LIO's `/Odometry` |
+| `test/test_heartbeat_gate.py` | a real node with the shipped policy on a non-zero DDS domain: silent, in `waiting_heartbeat`, until the first beat, then it pre-poses from the pose at the beat |
 | `test/test_livox_imu.py`, `test/test_livox_attitude.py` | unit tests of the two `/livox/imu` attitude paths, the gyro low-pass and the URDF mount |
 | `custom_ros_messages/srv/Lmg*.srv` | the node's services: `LmgSetMode` (walk / arm), `LmgSetArmGoals` (left, right pose) |
 
@@ -119,7 +123,7 @@ ros2 topic pub --once /marl_deploy_node/arm_goal geometry_msgs/msg/PoseArray \
   "{poses: [{position: {x: 0.30, y: 0.25, z: 0.05}, orientation: {w: 1.0}},
             {position: {x: 0.30, y: -0.25, z: 0.05}, orientation: {w: 1.0}}]}"  # left, right; pelvis frame
 ros2 service call /marl_deploy_node/end_arm_goal std_srvs/srv/Trigger
-ros2 topic echo /marl_deploy_node/state         # idle, preposing, waiting_confirm, nav, settle_to_arm, arm_goal, settle_to_nav, fault: ...
+ros2 topic echo /marl_deploy_node/state         # idle, waiting_heartbeat, preposing, waiting_imu, waiting_confirm, nav, settle_to_arm, arm_goal, settle_to_nav, fault: ...
 ros2 topic echo /marl_deploy_node/wrist_error   # m, left and right
 ```
 

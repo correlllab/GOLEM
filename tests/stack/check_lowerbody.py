@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Exercise ROS lower-body control; score private simulator telemetry offline.
+"""Drive the H1-2's leg controller through balance, walk and stop, and score the sim's private telemetry.
 
-Telemetry is JSONL with sim_time, position[3], quaternion[WXYZ],
-joint_positions[27] (Unitree wire order), and support_active (band OR fixed base).
+Telemetry is JSONL with sim_time (s), position[3] (m, world), quaternion[WXYZ],
+joint_positions[27] (Unitree wire order) and support_active (band or fixed base).
 It is never published to ROS. Run on an isolated simulation domain only.
 """
 import argparse
@@ -14,6 +14,7 @@ import statistics
 import time
 
 
+# m, degrees and s of sim time; maximum_sample_gap is the longest telemetry gap a phase may have.
 LIMITS = dict(max_tilt_deg=25., minimum_height=.65, max_height_drop=.20,
               balance_drift=.15, minimum_forward=.15, maximum_forward=1.,
               maximum_lateral=.20, minimum_knee_excursion=.08,
@@ -21,6 +22,7 @@ LIMITS = dict(max_tilt_deg=25., minimum_height=.65, max_height_drop=.20,
 
 
 def validate_row(row):
+    """Raise AssertionError unless a telemetry row has finite values of the right sizes and a unit quaternion."""
     for key, size in (('position', 3), ('quaternion', 4), ('joint_positions', 27)):
         if len(row[key]) != size or not all(math.isfinite(x) for x in row[key]):
             raise AssertionError(f'Invalid telemetry {key}')
@@ -34,16 +36,22 @@ def validate_row(row):
 
 
 def tilt_deg(quaternion):
+    """Return the angle between the base's z axis and the world's, degrees, from a WXYZ quaternion."""
     w, x, y, z = quaternion
     return math.degrees(math.acos(max(-1., min(1., 1. - 2.*(x*x+y*y)))))
 
 
 def distance(a, b):
+    """Return the horizontal distance between two rows' base positions, m."""
     return math.hypot(a['position'][0]-b['position'][0], a['position'][1]-b['position'][1])
 
 
 def score_run(rows, phases, policies, expected_walk_policy='walk'):
-    """Score a completed 5 s balance, 3 s walk, 3 s stop experiment."""
+    """Score a completed 5 s balance, 3 s walk and 3 s stop run, or raise AssertionError naming the fault.
+
+    `phases` maps each phase to its (start, end) sim time; `policies` lists (sim time, active
+    policy) changes. Returns the measured values with the limits.
+    """
     selected = {}
     for name, duration in (('balance', 5.), ('walk', 3.), ('stop', 3.)):
         start, end = phases[name]
@@ -68,13 +76,14 @@ def score_run(rows, phases, policies, expected_walk_policy='walk'):
     assert balance_drift <= LIMITS['balance_drift'], 'Standing drift exceeds limit'
 
     def policy_at(stamp):
+        """Return the policy active at a sim time."""
         eligible = [(t, p) for t, p in policies if t <= stamp]
         assert eligible, 'Missing active_policy state'
         return max(eligible, key=lambda pair: pair[0])[1]
     for row in selected['balance']:
         assert policy_at(row['sim_time']) == 'almi', 'ALMI not continuously active during balance'
-    # Handover is allowed for the first second; the last two seconds must run
-    # the requested locomotion policy. Stop must return to ALMI for its last second.
+    # The walk may hand over to its policy in its first second and must run it after that; the
+    # stop must be back on ALMI from 2 s in.
     for phase, policy, settle in (('walk', expected_walk_policy, 1.), ('stop', 'almi', 2.)):
         for row in selected[phase]:
             if row['sim_time'] >= phases[phase][0]+settle:
@@ -99,6 +108,7 @@ def score_run(rows, phases, policies, expected_walk_policy='walk'):
 
 
 def main():
+    """Run the three phases on /cmd_vel while collecting telemetry, then score and write the report."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--telemetry', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
@@ -124,14 +134,17 @@ def main():
     state = dict(clock=None, policy=None, lowstate_at=None, error=None)
     policies, rows, phases = [], [], {}
     def on_clock(msg):
+        """Store the sim time, s; a clock that goes back fails the run."""
         stamp = msg.clock.sec+msg.clock.nanosec*1e-9
         if state['clock'] is not None and stamp < state['clock']:
             state['error'] = 'Simulation clock reset during test'
         state['clock'] = stamp
     def on_policy(msg):
+        """Record a change of the leg controller's active policy at the current sim time."""
         state['policy'] = msg.data
         policies.append((state['clock'] if state['clock'] is not None else 0., msg.data))
     def on_state(msg):
+        """Record when the last /lowstate arrived, wall time."""
         state['lowstate_at'] = time.monotonic()
     node.create_subscription(Clock, '/clock', on_clock, 10)
     node.create_subscription(String, '/lowerbody/active_policy', on_policy,
@@ -142,6 +155,11 @@ def main():
     file_position, pending = 0, ''
     deadline = time.monotonic()+args.wall_timeout
     def pump(speed=0.):
+        """Publish one /cmd_vel, spin once and read new telemetry rows.
+
+        Fails the run past the wall deadline, on a clock reset, on bad or non-monotonic rows, and
+        as soon as an unsupported base collapses or tilts past the limit.
+        """
         nonlocal file_position, pending
         assert time.monotonic() < deadline, 'Stack test wall timeout'
         cmd = Twist(); cmd.linear.x = speed; publisher.publish(cmd)
@@ -181,7 +199,7 @@ def main():
                 pump(speed)
                 assert time.monotonic()-state['lowstate_at'] < 2., 'LowState stopped arriving'
             phases[name] = (start, state['clock'])
-        # Allow the final private telemetry record to flush without advancing a scored phase.
+        # Wait for the sim's last telemetry rows of the stop phase; scored phases are already over.
         while not rows or rows[-1]['sim_time'] < phases['stop'][1]-.05:
             pump()
         report.update(score_run(rows, phases, policies, args.expected_walk_policy))
@@ -191,7 +209,7 @@ def main():
         report['error'] = str(exc)
         raise
     finally:
-        # Stop the robot at once rather than after the controller's cmd_vel_timeout.
+        # Zero velocity now rather than after the controller's cmd_vel_timeout.
         for _ in range(5):
             publisher.publish(Twist())
             rclpy.spin_once(node, timeout_sec=.02)

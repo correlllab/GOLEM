@@ -1,7 +1,8 @@
-"""Test-only passive physics recorder. No privileged measurements enter ROS.
+"""Run the real sim and record its base pose, joints and support to a private JSONL file.
 
-Executed in place of the simulator entry point by run.sh, using the same
-launcher, arguments, and environment. The real simulation loop still runs.
+run.sh runs this in place of the sim's entry point, with the sim's own launcher, arguments
+and environment. It wraps the physics step to write each record to $GOLEM_TEST_TELEMETRY,
+which only the checker reads: nothing it records reaches ROS.
 """
 import json
 import os
@@ -11,12 +12,19 @@ import sys
 
 
 class Recorder:
+    """Write telemetry rows to a line-buffered JSONL file at about 50 Hz of sim time."""
+
     def __init__(self, filename):
+        """Open `filename` for writing."""
         self.stream = open(filename, 'w', buffering=1)
         self.last_time = -1.
 
     def write(self, stamp, position, quaternion, joints, support):
-        # 50 Hz physical measurements, independent of rendering and ROS delivery.
+        """Write one row: sim time (s), base position (m, world), quaternion (WXYZ), joints, support.
+
+        `joints` are the 27 body joints in Unitree wire order; `support` is the band or a fixed
+        base. Rows are 50 Hz of sim time, independent of rendering and ROS delivery.
+        """
         if stamp - self.last_time < .019:
             return
         self.last_time = stamp
@@ -26,6 +34,7 @@ class Recorder:
 
 
 def main():
+    """Wrap the selected sim's physics step with the recorder and run the sim's entry point."""
     simulator = os.environ['SIMULATOR']
     recorder = Recorder(os.environ['GOLEM_TEST_TELEMETRY'])
     if simulator == 'isaac':
@@ -35,6 +44,7 @@ def main():
         make = gym.make
 
         def observed_make(*args, **kwargs):
+            """Make the Isaac env and wrap its step to record the robot after each step."""
             wrapper = make(*args, **kwargs)
             env = wrapper.unwrapped
             step = env.step
@@ -43,6 +53,7 @@ def main():
             indices = [robot.joint_names.index(name) for name in BODY_JOINT_NAMES]
 
             def observed_step(*a, **kw):
+                """Step the env and record the robot's root and body joints."""
                 result = step(*a, **kw)
                 recorder.write(env._sim_step_counter * env.physics_dt,
                     robot.data.root_pos_w[0].tolist(), robot.data.root_quat_w[0].tolist(),
@@ -60,9 +71,10 @@ def main():
         step = mujoco.mj_step
 
         def observed_step(model, data, *args, **kwargs):
+            """Step MuJoCo and, for steps of h12_mujoco.py's main loop, record the pelvis and joints."""
             result = step(model, data, *args, **kwargs)
-            # Only the production loop owns the resolver and band. Ignore
-            # robosuite's initialization/settling calls (which reset time).
+            # Only h12_mujoco.py's main loop has `resolver` and `band` locals; robosuite's
+            # initialisation and settling steps, which reset time, are not recorded.
             caller = sys._getframe(1)
             local = caller.f_locals
             if caller.f_code.co_filename == str(entry) and 'band' in local:

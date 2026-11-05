@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Run every case, retaining all failures rather than stopping at the first one.
+# Run every stack case: arms and locomotion against RoboCasa, then against Isaac.
+#
+# Usage: tests/stack/run_all.sh
+# Environment: whatever run.sh reads (ROS_DOMAIN_ID, GOLEM_TEST_WALL_TIMEOUT, GOLEM_TEST_CAMERAS).
+# Exit: 0 when every case passes, 1 when any fails. Every case runs, even after a failure.
 set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 status=0

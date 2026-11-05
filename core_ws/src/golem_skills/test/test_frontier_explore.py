@@ -1,4 +1,4 @@
-"""Frontier exploration skill tests on synthetic OccupancyGrids and over loopback DDS."""
+"""Test the frontier exploration skill on synthetic OccupancyGrids and over loopback DDS."""
 
 import math
 import os
@@ -24,8 +24,11 @@ from scipy import ndimage
 from tf2_ros import TransformBroadcaster
 import yaml
 
+# m per grid cell
 RES = 0.05
 FOOTPRINT = fe.parse_footprint(fe.G1_FOOTPRINT)
+# a DDS domain and a loopback-only CycloneDDS config of its own, so the test
+# nodes meet no other ROS graph
 TEST_DOMAIN = 97
 DDS_CONFIG = """<CycloneDDS><Domain Id="any">
   <General>
@@ -42,6 +45,7 @@ DDS_CONFIG = """<CycloneDDS><Domain Id="any">
 
 
 def _use_loopback_dds(tmp_dir):
+    """Point this process's DDS at the loopback-only config on TEST_DOMAIN."""
     path = os.path.join(tmp_dir, 'cyclonedds.xml')
     with open(path, 'w') as f:
         f.write(DDS_CONFIG)
@@ -52,10 +56,12 @@ def _use_loopback_dds(tmp_dir):
 
 
 def _grid(data, origin=(0.0, 0.0), stamp=0.0):
+    """Return a Grid of `data` at RES."""
     return fe.Grid(np.array(data, dtype=np.int16), RES, origin, stamp)
 
 
 def _costmap(grid, inscribed=0.20):
+    """Return a Nav2-like costmap of `grid`: lethal walls, inscribed band within `inscribed` m."""
     occupied = grid.data >= fe.OCCUPIED_FROM
     data = np.zeros_like(grid.data)
     data[ndimage.distance_transform_edt(~occupied) * RES <= inscribed + 1e-9] = (
@@ -67,10 +73,12 @@ def _costmap(grid, inscribed=0.20):
 
 
 def _empty_costmap(grid):
+    """Return a costmap of `grid` with every cell free."""
     return grid._replace(data=np.zeros_like(grid.data))
 
 
 def _room(height, width, openings=()):
+    """Return a walled room of free cells, with unknown cells at `openings` (rows, cols)."""
     data = np.zeros((height, width), np.int16)
     data[[0, -1], :] = 100
     data[:, [0, -1]] = 100
@@ -80,10 +88,12 @@ def _room(height, width, openings=()):
 
 
 def _centre(row, col):
+    """Return the map (x, y) of cell (row, col)'s centre."""
     return (col + 0.5) * RES, (row + 0.5) * RES
 
 
 def test_grid_of_an_occupancy_grid():
+    """grid_of converts an OccupancyGrid, and sample reads it (-1 off the grid)."""
     msg = OccupancyGrid()
     msg.header.stamp.sec, msg.header.stamp.nanosec = 12, 500_000_000
     msg.info.width, msg.info.height, msg.info.resolution = 3, 2, 0.05
@@ -99,6 +109,7 @@ def test_grid_of_an_occupancy_grid():
 
 
 def test_frontiers_are_free_cells_next_to_unknown_but_not_next_to_a_wall():
+    """Frontier cells are free, next to unknown and not next to a wall."""
     data = np.full((20, 30), -1)
     data[:, :15] = 0
     data[[0, -1], :15] = 100
@@ -109,12 +120,14 @@ def test_frontiers_are_free_cells_next_to_unknown_but_not_next_to_a_wall():
 
 
 def test_off_the_map_counts_as_unknown():
+    """Cells on the map's edge are frontiers: off the map counts as unknown."""
     expected = np.ones((5, 6), bool)
     expected[1:-1, 1:-1] = False
     np.testing.assert_array_equal(fe.frontier_mask(_grid(np.zeros((5, 6)))), expected)
 
 
 def test_clusters_smaller_than_min_cells_are_left_out():
+    """Frontier clusters smaller than min_cells are left out."""
     room = _room(40, 60, openings=[(slice(5, 10), 59), (slice(20, 28), 59)])
     robot = (1.0, 1.0)
     found = fe.find_frontiers(room, _empty_costmap(room), robot, 6, FOOTPRINT)
@@ -124,6 +137,7 @@ def test_clusters_smaller_than_min_cells_are_left_out():
 
 
 def test_the_goal_is_the_frontier_cell_nearest_the_centroid():
+    """The goal is the cluster cell nearest its centroid, facing from the robot."""
     room = _room(60, 80, openings=[(slice(15, 45), 79)])
     robot = (1.0, 1.475)
     [goal] = fe.find_frontiers(room, _costmap(room), robot, 6, FOOTPRINT)
@@ -133,6 +147,7 @@ def test_the_goal_is_the_frontier_cell_nearest_the_centroid():
 
 
 def test_the_goal_moves_where_the_footprint_fits():
+    """The goal moves to the next cell where the footprint covers no lethal cell."""
     room = _room(60, 80, openings=[(slice(15, 45), 79)])
     costmap = _costmap(room)
     costmap.data[25, 76] = fe.COSTMAP_LETHAL
@@ -144,6 +159,7 @@ def test_the_goal_moves_where_the_footprint_fits():
 
 
 def test_a_gap_the_robot_does_not_fit_through_is_no_frontier():
+    """A gap narrower than the robot is no frontier."""
     robot = (1.5, 1.5)
     room = _room(60, 60, openings=[(slice(27, 33), 59)])
     assert fe.find_frontiers(room, _costmap(room), robot, 1, FOOTPRINT) == []
@@ -153,6 +169,7 @@ def test_a_gap_the_robot_does_not_fit_through_is_no_frontier():
 
 
 def test_frontiers_the_robot_cannot_walk_to_are_left_out():
+    """Frontiers not connected to the robot by walkable cells are left out."""
     room = _room(60, 80, openings=[(slice(15, 45), 0), (slice(15, 45), 79)])
     room.data[:, 40] = 100
     robot = (1.0, 1.5)
@@ -166,6 +183,7 @@ def test_frontiers_the_robot_cannot_walk_to_are_left_out():
 
 
 def test_the_robot_snaps_to_walkable_space_or_there_are_no_frontiers():
+    """The robot snaps to walkable space within ROBOT_SNAP, or there is no answer."""
     room = _room(60, 80, openings=[(slice(15, 45), 79)])
     costmap = _costmap(room)
     assert len(fe.find_frontiers(room, costmap, (0.1, 1.5), 6, FOOTPRINT)) == 1
@@ -175,6 +193,7 @@ def test_the_robot_snaps_to_walkable_space_or_there_are_no_frontiers():
 
 
 def test_the_costmap_can_differ_from_the_map_in_extent():
+    """A costmap of another extent or origin is sampled by position; off it is not walkable."""
     room = _room(60, 80, openings=[(slice(15, 45), 79)])
     costmap = _costmap(room)
     short = costmap._replace(data=costmap.data[:, :70])
@@ -188,6 +207,7 @@ def test_the_costmap_can_differ_from_the_map_in_extent():
 
 
 def test_choose_the_nearest_not_blacklisted_and_not_too_near():
+    """The nearest frontier is chosen, unless blacklisted or too near."""
     frontiers = [fe.Frontier(x, 0.0, 0.0, 10) for x in (1.0, 2.0, 3.0, 6.0)]
     robot = (0.0, 0.0)
     goal, candidates = fe.choose(frontiers, robot, [], 0.6, 0.7)
@@ -198,6 +218,7 @@ def test_choose_the_nearest_not_blacklisted_and_not_too_near():
 
 
 def test_done_when_no_frontier_is_left():
+    """No goal is left in a closed room, past a gap too narrow, or within min_goal_distance."""
     room = _room(60, 80)
     assert fe.find_frontiers(room, _costmap(room), (1.0, 1.5), 6, FOOTPRINT) == []
     room = _room(60, 80, openings=[(slice(20, 31), 79)])
@@ -208,6 +229,7 @@ def test_done_when_no_frontier_is_left():
 
 
 def test_a_goal_on_its_way_is_outdated_once_seen_or_blocked():
+    """A goal in flight is outdated once its frontier is seen or its footprint blocked."""
     room = _room(60, 80, openings=[(slice(15, 45), 79)])
     costmap = _costmap(room)
     [goal] = fe.find_frontiers(room, costmap, (1.0, 1.475), 6, FOOTPRINT)
@@ -224,6 +246,7 @@ def test_a_goal_on_its_way_is_outdated_once_seen_or_blocked():
 
 
 def test_parse_footprint():
+    """parse_footprint reads a polygon and refuses anything else."""
     np.testing.assert_allclose(
         fe.parse_footprint('[[1, 2], [3, 4.5], [0, 0]]'),
         [[1, 2], [3, 4.5], [0, 0]],
@@ -234,6 +257,7 @@ def test_parse_footprint():
 
 
 def test_the_default_footprint_is_g1_nav2_yaml_s():
+    """The default footprint equals golem_slam's G1 nav2.yaml footprints."""
     nav2_config = os.path.join(
         get_package_share_directory('golem_slam'), 'config', 'g1', 'nav2.yaml')
     with open(nav2_config) as f:
@@ -244,11 +268,13 @@ def test_the_default_footprint_is_g1_nav2_yaml_s():
 
 
 class FakeStack(Node):
-    """Fake slam_toolbox and Nav2 for DDS integration tests."""
+    """Stand in for slam_toolbox and Nav2 in the DDS integration tests."""
 
+    # m the fake robot sees around itself
     SEE = 1.5
 
     def __init__(self, world, start, trap=None, hold=False, slow=False, block=None):
+        """Serve /map, the costmap, map -> pelvis TF and /navigate_to_pose over `world`."""
         super().__init__('fake_stack')
         self.world, self.robot, self.trap, self.hold = world, start, trap, hold
         self.slow, self.block = slow, block
@@ -276,16 +302,19 @@ class FakeStack(Node):
         )
 
     def _see(self, xy=None):
+        """Mark the cells within SEE m of `xy` (default the robot) as known."""
         x0, y0 = self.robot if xy is None else xy
         rows, cols = np.indices(self.known.shape)
         x, y = fe.cell_centres(self.world, rows, cols)
         self.known |= np.hypot(x - x0, y - y0) <= self.SEE
 
     def map(self):
+        """Return the map as seen so far: unknown (-1) where not yet known."""
         with self.lock:
             return self.world._replace(data=np.where(self.known, self.world.data, -1))
 
     def _msg(self, grid):
+        """Return `grid` as an OccupancyGrid in the map frame."""
         msg = OccupancyGrid()
         msg.header.frame_id = 'map'
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -297,14 +326,17 @@ class FakeStack(Node):
         return msg
 
     def _publish_map(self):
+        """Publish the map as seen so far."""
         grid = self.map()
         self.map_pub.publish(self._msg(grid))
         self.published = grid
 
     def _publish_costmap(self):
+        """Publish the costmap of the last published map."""
         self.costmap_pub.publish(self._msg(_costmap(self.published)))
 
     def _send_tf(self):
+        """Broadcast map -> pelvis at the robot's position."""
         t = TransformStamped()
         t.header.frame_id, t.child_frame_id = 'map', 'pelvis'
         t.header.stamp = self.get_clock().now().to_msg()
@@ -315,6 +347,7 @@ class FakeStack(Node):
         self.tf.sendTransform(t)
 
     def _navigate(self, gh):
+        """Walk to the goal, or fail, hold, see on the way or block it, as configured."""
         p = gh.request.pose.pose.position
         with self.lock:
             self.goals.append((p.x, p.y))
@@ -351,6 +384,7 @@ class FakeStack(Node):
 
 
 def _two_rooms():
+    """Return two rooms joined by a doorway in the wall at column 60."""
     world = _room(80, 120)
     world.data[:, 60] = 100
     world.data[50:70, 60] = 0
@@ -359,6 +393,7 @@ def _two_rooms():
 
 @pytest.fixture
 def ros(tmp_path):
+    """Yield a function that spins nodes on one MultiThreadedExecutor over loopback DDS."""
     _use_loopback_dds(str(tmp_path))
     rclpy.init()
     executor = MultiThreadedExecutor(num_threads=8)
@@ -366,6 +401,7 @@ def ros(tmp_path):
     nodes = []
 
     def spin(*new_nodes):
+        """Add `new_nodes` to the executor and start spinning."""
         for node in new_nodes:
             executor.add_node(node)
             nodes.append(node)
@@ -380,6 +416,7 @@ def ros(tmp_path):
 
 
 def _until(condition, timeout):
+    """Poll `condition` for up to `timeout` s; return its last value."""
     deadline = time.time() + timeout
     while not condition() and time.time() < deadline:
         time.sleep(0.05)
@@ -387,10 +424,12 @@ def _until(condition, timeout):
 
 
 def _done(future, timeout):
+    """Return whether `future` is done within `timeout` s."""
     return _until(future.done, timeout)
 
 
 def _explore(ros, fake, goal=None):
+    """Start the explorer and `fake`, send one goal; return (client, goal handle, feedbacks)."""
     client = Node('explore_client')
     action = ActionClient(client, SkillFrontierExplore, '/skill/frontier_explore')
     ros(fe.FrontierExplore(), fake, client)
@@ -405,12 +444,14 @@ def _explore(ros, fake, goal=None):
 
 
 def _reachable(world, start):
+    """Return the free cells of `world` 8-connected to `start`."""
     labels, _ = ndimage.label(world.data == 0, structure=fe.EIGHT)
     col, row = (int(v / RES) for v in start)
     return labels == labels[row, col]
 
 
 def test_node_explores_both_rooms_and_says_when_it_is_done(ros):
+    """The node explores both rooms and succeeds with the goal counts."""
     world = _two_rooms()
     fake = FakeStack(world, (1.0, 1.0))
     _, handle, feedbacks = _explore(ros, fake)
@@ -433,6 +474,7 @@ def test_node_explores_both_rooms_and_says_when_it_is_done(ros):
 
 
 def test_node_blacklists_a_goal_that_fails(ros):
+    """A goal Nav2 fails is blacklisted and not retried nearby."""
     world = _two_rooms()
     fake = FakeStack(world, (1.0, 1.0), trap=lambda x, y: x > 2.7)
     _, handle, _ = _explore(ros, fake, SkillFrontierExplore.Goal(blacklist_radius=0.6))
@@ -459,6 +501,7 @@ def test_node_blacklists_a_goal_that_fails(ros):
 
 
 def test_node_cancels_a_goal_seen_on_the_way(ros):
+    """A goal whose frontier is seen on the way is canceled and counted as reached."""
     world = _two_rooms()
     fake = FakeStack(world, (1.0, 1.0), slow=True)
     _, handle, _ = _explore(ros, fake)
@@ -480,6 +523,7 @@ def test_node_cancels_a_goal_seen_on_the_way(ros):
 
 
 def test_node_blacklists_a_goal_blocked_on_the_way_and_does_not_count_it(ros):
+    """A goal blocked on the way is canceled, blacklisted and not counted."""
     world = _two_rooms()
     fake = FakeStack(world, (1.0, 1.0), block=lambda x, y: x > 2.7)
     _, handle, _ = _explore(ros, fake, SkillFrontierExplore.Goal(blacklist_radius=0.6))
@@ -505,6 +549,7 @@ def test_node_blacklists_a_goal_blocked_on_the_way_and_does_not_count_it(ros):
 
 
 def test_node_cancels_nav2_on_a_cancel_and_refuses_a_second_goal(ros):
+    """A cancel cancels the Nav2 goal, and a second goal is refused meanwhile."""
     fake = FakeStack(_two_rooms(), (1.0, 1.0), hold=True)
     action, handle, _ = _explore(ros, fake)
     deadline = time.time() + 10.0
@@ -525,6 +570,7 @@ def test_node_cancels_nav2_on_a_cancel_and_refuses_a_second_goal(ros):
 
 
 def test_node_gives_up_at_its_timeout(ros):
+    """The goal aborts at its timeout and cancels the Nav2 goal."""
     fake = FakeStack(_two_rooms(), (1.0, 1.0), hold=True)
     goal = SkillFrontierExplore.Goal()
     goal.timeout.sec = 2
@@ -537,6 +583,7 @@ def test_node_gives_up_at_its_timeout(ros):
 
 
 def test_node_refuses_negative_fields(ros):
+    """A goal with a negative field is refused."""
     fake = FakeStack(_two_rooms(), (1.0, 1.0))
     client = Node('explore_client')
     action = ActionClient(client, SkillFrontierExplore, '/skill/frontier_explore')

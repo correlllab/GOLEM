@@ -1,4 +1,4 @@
-"""The arms halt on a false or silent /safety/heartbeat."""
+"""Test that the arms halt on a false or silent /safety/heartbeat."""
 
 import os
 import threading
@@ -11,6 +11,8 @@ import rclpy
 from rclpy.task import Future
 from std_msgs.msg import Bool
 
+# a DDS domain and a loopback-only CycloneDDS config of its own, so the test
+# node meets no other ROS graph
 TEST_DOMAIN = 96
 DDS_CONFIG = """<CycloneDDS><Domain Id="any">
   <General>
@@ -30,26 +32,36 @@ LATCHED = 'golem_safety estop latched'
 
 
 class FakeClock:
+    """Stand in for time.monotonic with a clock the test advances by hand."""
+
     def __init__(self):
+        """Start the fake clock at 1000 s."""
         self.now = 1000.0
 
     def __call__(self):
+        """Return the current fake time [s]."""
         return self.now
 
     def advance(self, seconds):
+        """Move the fake clock forward by `seconds`."""
         self.now += seconds
 
 
 class FakeGoalHandle:
+    """Stand in for an accepted action goal handle that records a cancel."""
+
     def __init__(self, result_future):
+        """Hold `result_future` as the goal's result."""
         self.accepted = True
         self.canceled = threading.Event()
         self._result = result_future
 
     def get_result_async(self):
+        """Return the result future the test controls."""
         return self._result
 
     def cancel_goal_async(self):
+        """Record the cancel and return a resolved future."""
         self.canceled.set()
         future = Future()
         future.set_result(None)
@@ -57,13 +69,15 @@ class FakeGoalHandle:
 
 
 class FakeNamedConfigClient:
-    """An action client whose goal never finishes by itself."""
+    """Stand in for the /named_config action client; its goal never finishes by itself."""
 
     def __init__(self):
+        """Create the client with one goal handle that never resolves."""
         self.goals = []
         self.handle = FakeGoalHandle(Future())
 
     def send_goal_async(self, goal, feedback_callback=None):
+        """Record `goal` and return a future resolved with the goal handle."""
         self.goals.append(goal)
         future = Future()
         future.set_result(self.handle)
@@ -72,6 +86,7 @@ class FakeNamedConfigClient:
 
 @pytest.fixture
 def skills(tmp_path):
+    """Yield a SkillsBase on the test domain with no service waits, no telemetry, a fake clock."""
     config = tmp_path / 'cyclonedds.xml'
     config.write_text(DDS_CONFIG)
     os.environ['CYCLONEDDS_URI'] = 'file://' + str(config)
@@ -87,16 +102,19 @@ def skills(tmp_path):
 
 
 def _beat(node, value):
+    """Deliver one /safety/heartbeat message with `value` to `node`."""
     node._on_safety_heartbeat(Bool(data=value))
 
 
 def test_halted_until_the_first_true_beat(skills):
+    """The arms are halted until the first true heartbeat."""
     assert skills.arm_halt_reason() == NOT_YET
     _beat(skills, True)
     assert skills.arm_halt_reason() is None
 
 
 def test_halted_after_a_silent_heartbeat(skills):
+    """The arms halt once the heartbeat is silent past 0.5 s and resume on a beat."""
     _beat(skills, True)
     skills._monotonic.advance(0.4)
     assert skills.arm_halt_reason() is None
@@ -107,6 +125,7 @@ def test_halted_after_a_silent_heartbeat(skills):
 
 
 def test_the_silence_limit_is_a_parameter(skills):
+    """The `heartbeat_timeout` parameter sets the silence limit."""
     skills.set_parameters([rclpy.parameter.Parameter(
         'heartbeat_timeout', rclpy.parameter.Parameter.Type.DOUBLE, 2.0)])
     _beat(skills, True)
@@ -117,6 +136,7 @@ def test_the_silence_limit_is_a_parameter(skills):
 
 
 def test_halted_for_good_after_a_false_beat(skills):
+    """A false beat halts the arms for good; later true beats do not clear it."""
     _beat(skills, True)
     _beat(skills, False)
     assert skills.arm_halt_reason() == LATCHED
@@ -125,17 +145,20 @@ def test_halted_for_good_after_a_false_beat(skills):
 
 
 def test_a_false_first_beat_latches(skills):
+    """A false first beat latches the halt."""
     _beat(skills, False)
     assert skills.arm_halt_reason() == LATCHED
 
 
 def test_a_latched_estop_wins_over_a_silent_heartbeat(skills):
+    """A latched estop is reported in place of a silent heartbeat."""
     _beat(skills, False)
     skills._monotonic.advance(5.0)
     assert skills.arm_halt_reason() == LATCHED
 
 
 def test_no_arm_goal_is_sent_while_halted(skills):
+    """No arm goal is sent while the arms are halted."""
     client = FakeNamedConfigClient()
     skills.named_config_cli = client
     assert skills.goto_named_config('home') is False
@@ -143,6 +166,7 @@ def test_no_arm_goal_is_sent_while_halted(skills):
 
 
 def test_a_silent_heartbeat_cancels_the_arm_goal_in_flight(skills):
+    """A silent heartbeat cancels the arm goal in flight and halts the arms for the goal."""
     client = FakeNamedConfigClient()
     skills.named_config_cli = client
     _beat(skills, True)
@@ -167,6 +191,7 @@ def test_a_silent_heartbeat_cancels_the_arm_goal_in_flight(skills):
 
 
 def test_a_false_beat_cancels_the_arm_goal_in_flight(skills):
+    """A false beat cancels the arm goal in flight."""
     client = FakeNamedConfigClient()
     skills.named_config_cli = client
     _beat(skills, True)
@@ -187,6 +212,7 @@ def test_a_false_beat_cancels_the_arm_goal_in_flight(skills):
 
 
 def test_waits_that_are_not_arm_goals_ignore_the_heartbeat(skills):
+    """Waits that are not arm goals ignore the heartbeat."""
     future = Future()
     threading.Timer(0.3, lambda: future.set_result('done')).start()
     assert skills._wait_future(future, 5.0) == 'done'

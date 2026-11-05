@@ -1,12 +1,12 @@
-"""top_down: ONE steep grasp at the object-cloud mean.
+"""
+Synthesize ONE steep grasp at the object-cloud mean (the `top_down` method).
 
-The tier-1 orientation (approach in the pelvis XZ plane, fingers closing
-along pelvis +Y, wrist as level as the pitch allows) pitched TOP_DOWN_PITCH_DEG
-below horizontal, with the finger contact point on the centroid. This is the
-deployed small-part grasp (battery screws) and what goal.top_down selects;
-paired with goal.visual_servo it is the closed-loop C-VS method. 80 deg is
-past the wrist's practical ~45 deg approach, so expect best-effort
-convergence from the servo.
+The approach lies in the pelvis XZ plane, pitched TOP_DOWN_PITCH_DEG below
+horizontal; the fingers close along pelvis +Y with the wrist as level as the
+pitch allows, and the finger contact point is on the centroid. goal.top_down
+selects it; it is the small-part (battery screw) grasp, usually paired with
+goal.visual_servo. 80 deg is steeper than the H1-2 wrist's practical ~45 deg
+approach, so the servo converges best-effort there.
 """
 
 import math
@@ -16,20 +16,19 @@ import numpy as np
 from .common import grasp_pose, make_candidates
 from .ranking import gate_min_pitch
 
-# Pitch of the approach below horizontal [deg]; it points DOWN and FORWARD,
-# away from the robot (pelvis +X). 90 = straight down.
+# deg below horizontal; the approach points down and forward (pelvis +X), 90 = straight down
 TOP_DOWN_PITCH_DEG = 80.0
 
 
 def top_down_pose(contact):
-    """Gripper-base Pose (pelvis) of the top_down grasp whose finger contact
-    point lands on `contact`."""
+    """Return the top_down gripper-base Pose (pelvis) whose finger contact point is `contact`."""
     pitch = math.radians(TOP_DOWN_PITCH_DEG)
     z_axis = np.array([math.cos(pitch), 0.0, -math.sin(pitch)])
     return grasp_pose(contact, [0.0, 1.0, 0.0], z_axis)
 
 
 def synthesize(inp):
+    """Return (Candidates, None) with the one grasp, or (None, reason) if the gate drops it."""
     c = inp.centroid
     pose = top_down_pose(c)
     if not gate_min_pitch([pose], [0], inp.min_pitch_deg):

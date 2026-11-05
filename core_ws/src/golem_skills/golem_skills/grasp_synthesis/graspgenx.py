@@ -1,15 +1,15 @@
-"""GraspGenX 6-DOF grasps, raw and reachability-filtered.
+"""
+Synthesize GraspGenX 6-DOF grasps, raw or reachability-filtered.
 
-Both methods send the same object + scene clouds to the same graspgen service
-(model_server/graspgen_server.py owns sampling and collision filtering), so the
-difference between them isolates the client-side selection layer:
+Both methods send the same object and scene clouds to the same graspgen
+service (model_server/graspgen_server.py owns sampling and collision
+filtering), so the difference between them is the client-side selection only:
 
-  graspgenx           the server's grasps executed strictly best-first by
-                      model score — no re-roll, re-rank or diversity pick.
-  graspgenx_filtered  the selection chain below: drop cross-body and
-                      unlevelable approaches, re-roll the rest to a level
-                      wrist, order tier-major, then pick mutually diverse
-                      grasps (GGX-F).
+  graspgenx           the server's grasps executed best-first by model score,
+                      with no re-roll, re-rank or diversity pick
+  graspgenx_filtered  drop cross-body and unlevelable approaches, re-roll the
+                      rest to a level wrist, order tier-major, then pick
+                      mutually diverse grasps
 """
 
 import math
@@ -19,19 +19,19 @@ from .ranking import (CROSS_BODY_TIER, gate_min_pitch, priority_tier,
                       select_diverse, tier_histogram)
 from ..perception_utils import pose_to_matrix
 
-# Grasps to try before giving up — the top grasp may be IK-unreachable.
+# grasps tried before giving up; the top one may be IK-unreachable
 MAX_GRASP_ATTEMPTS = 5
-# Diversity thresholds (graspgenx_filtered): a candidate within BOTH of an
-# already-selected one (position AND orientation) is a duplicate and skipped.
+# graspgenx_filtered: a candidate within BOTH thresholds of one already picked
+# (position AND orientation) is a duplicate and skipped
 GRASP_DIVERSITY_LIN_M = 0.02
 GRASP_DIVERSITY_ANG_DEG = 20.0
-# The achievable +Y-from-up after a re-roll equals the approach's tilt off
-# horizontal, so approaches steeper than this can't be leveled and are dropped.
+# deg: after a re-roll, +Y's angle from up equals the approach's tilt off
+# horizontal, so approaches steeper than this cannot be levelled and are dropped
 GRASP_YUP_TOL_DEG = 55.0
 
 
 def _plan(inp):
-    """(resp, None) from the graspgen service, or (None, reason)."""
+    """Return (graspgen response, None), or (None, reason) when the service gives none."""
     resp = inp.plan_grasp(inp.cloud, gripper_name='magpie', frame='pelvis',
                           scene_cloud=inp.scene, arm=inp.arm)
     if resp is None:
@@ -40,6 +40,7 @@ def _plan(inp):
 
 
 def synthesize_raw(inp):
+    """Return the server's top MAX_GRASP_ATTEMPTS grasps in its order, after the pitch gate."""
     resp, err = _plan(inp)
     if err:
         return None, err
@@ -59,10 +60,14 @@ def synthesize_raw(inp):
 
 
 def synthesize_filtered(inp):
-    """Stages, in order: plan; optional downward-pitch gate; arm-side +
-    levelable filter, then re-roll survivors to Y-up; tier-major ordering
-    (stable, so GraspGenX confidence breaks ties); diversity pick of the
-    MAX_GRASP_ATTEMPTS grasps actually tried."""
+    """
+    Return the server's grasps filtered, levelled, tier-ordered and diversified.
+
+    In order: plan; the optional downward-pitch gate; drop cross-body and
+    unlevelable approaches and re-roll the rest to a level wrist; sort by tier
+    (stable, so GraspGenX confidence breaks ties); pick MAX_GRASP_ATTEMPTS
+    mutually diverse grasps.
+    """
     resp, err = _plan(inp)
     if err:
         return None, err
@@ -77,13 +82,14 @@ def synthesize_filtered(inp):
         return None, (f'no grasp for {obj!r} pitched >= '
                       f'{inp.min_pitch_deg:.0f} deg down')
 
-    # Roll about the approach axis is a free parameter, so mis-rolled grasps
-    # are re-leveled instead of dropped. Both remaining gates are on the
-    # approach axis, which the re-roll never moves.
+    # Roll about the approach is free, so mis-rolled grasps are re-levelled
+    # rather than dropped; both gates below test only the approach axis, which
+    # the re-roll does not move.
     tier0 = {i: priority_tier(poses[i], arm) for i in cand}
     yup_sin = math.sin(math.radians(GRASP_YUP_TOL_DEG))
 
     def levelable(i):
+        """Return True when grasp `i`'s approach is shallow enough to level the wrist."""
         return abs(float(pose_to_matrix(poses[i])[2, 2])) <= yup_sin
 
     kept = [i for i in cand if tier0[i] != CROSS_BODY_TIER and levelable(i)]
@@ -101,8 +107,7 @@ def synthesize_filtered(inp):
     for i in kept:
         poses[i] = roll_to_yup(poses[i])
 
-    # Tiers recomputed AFTER the re-roll so the forward tier's finger-axis
-    # check sees the leveled finger direction.
+    # after the re-roll, so the forward tier's finger-axis test sees the levelled fingers
     tier_of = {i: priority_tier(poses[i], arm) for i in kept}
     kept.sort(key=lambda i: tier_of[i])
     inp.log.info(

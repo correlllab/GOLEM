@@ -1,11 +1,12 @@
-"""centroid: fixed grasps at the object's robust centroid.
+"""
+Synthesize fixed grasps at the object's robust centroid (the `centroid` method).
 
-The cloud's median XY (mask-edge outliers drag the mean off the object), at a
-fingertip depth FINGER_SINK_M below its top surface. The fingers always close
-across pelvis +Y, whatever the object's own orientation — the naive baseline
-the shape-aware methods are measured against. Candidates walk
-SURFACE_GRASP_TILTS, then one 45 deg grasp closing across pelvis +X as a
-fallback when the primary yaw is IK-blocked.
+The fingertips go to the cloud's median XY (mask-edge outliers drag the mean
+off the object), FINGER_SINK_M below its top surface, and always close across
+pelvis +Y whatever the object's own orientation: the shape-blind baseline the
+shape-aware methods are compared with. Candidates walk SURFACE_GRASP_TILTS,
+then one 45 deg grasp closing across pelvis +X for when the first yaw is
+IK-blocked.
 """
 
 import math
@@ -18,6 +19,7 @@ from .ranking import gate_min_pitch
 
 
 def synthesize(inp):
+    """Return (Candidates, None) at the centroid, or (None, reason) if the pitch gate drops all."""
     cloud = inp.cloud
     c = np.median(cloud, axis=0)
     tip = surface_contact(c[:2], robust_top_z(cloud),

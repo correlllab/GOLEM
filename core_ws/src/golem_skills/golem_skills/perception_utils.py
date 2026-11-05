@@ -1,10 +1,9 @@
-"""Small, dependency-light perception helpers for the grasp skill.
+"""
+Provide the geometry and decoding helpers the skills share.
 
-Self-contained geometry/IO helpers used by the skills:
-  - `decode_compressed_depth_image` / `transform_to_matrix` decode a ROS2
-    compressedDepth image and convert a geometry_msgs/Transform to a 4x4 matrix.
-  - `deproject_mask` is the pinhole back-projection kernel (mask + depth -> XYZ).
-Plus the rotation/quaternion helpers and a Gemini-JSON extractor the skill needs.
+Decode a compressedDepth image, back-project a pixel mask to camera-frame
+points, convert between poses, transforms, matrices and quaternions, and pull
+JSON out of a Gemini reply. Depends on numpy, OpenCV and geometry_msgs only.
 """
 
 import json
@@ -17,13 +16,17 @@ import cv2
 from geometry_msgs.msg import Pose
 
 
-# --------------------------------------------------------------- depth + cloud
 def decode_compressed_depth_image(msg) -> np.ndarray:
-    """Decode a ROS2 compressedDepth image (format '16UC1; compressedDepth') to a
-    uint16 depth array (millimetres)."""
+    """
+    Decode a ROS 2 compressedDepth image ('16UC1; compressedDepth') to uint16 mm.
+
+    Raises ValueError on another format or an undecodable payload, TypeError
+    when the decoded image is not uint16.
+    """
     if not msg.format.lower().endswith("compresseddepth"):
         raise ValueError(f"Unsupported depth format: {msg.format}")
-    header_size = 12  # 12-byte compressedDepth header precedes the PNG payload
+    # bytes of the compressedDepth config header that precedes the PNG payload
+    header_size = 12
     if len(msg.data) <= header_size:
         raise ValueError("compressedDepth data too short to contain a header")
     compressed_data = bytes(msg.data[header_size:])
@@ -37,12 +40,16 @@ def decode_compressed_depth_image(msg) -> np.ndarray:
 
 
 def deproject_mask(mask, depth_m, fx, fy, cx, cy, min_d=0.1, max_d=3.0):
-    """Back-project the True pixels of `mask` (bool HxW) with finite depth into a
-    (N, 3) float32 XYZ array in the camera optical frame. Standard pinhole
-    back-projection; drops invalid/out-of-range depth.
-    `depth_m` is HxW depth in metres aligned to the mask's pixel grid."""
+    """
+    Back-project the True pixels of `mask` to an (N, 3) float32 array, camera optical frame.
+
+    `mask` is bool HxW and `depth_m` is HxW depth [m] on the same pixel grid;
+    pixels with depth outside (`min_d`, `max_d`) are dropped. Pinhole model
+    with intrinsics fx, fy, cx, cy [px].
+    """
     valid = mask & (depth_m > min_d) & (depth_m < max_d)
-    vs, us = np.nonzero(valid)              # vs = rows (y), us = cols (x)
+    # vs = rows (image y), us = columns (image x)
+    vs, us = np.nonzero(valid)
     z = depth_m[valid].astype(np.float32)
     x = ((us - cx) * z / fx).astype(np.float32)
     y = ((vs - cy) * z / fy).astype(np.float32)
@@ -50,13 +57,17 @@ def deproject_mask(mask, depth_m, fx, fy, cx, cy, min_d=0.1, max_d=3.0):
 
 
 def transform_points(pts, T):
-    """Apply a 4x4 homogeneous transform `T` to an (N, 3) point array."""
+    """Apply the 4x4 homogeneous transform `T` to an (N, 3) point array."""
     return (pts @ T[:3, :3].T) + T[:3, 3]
 
 
-# ----------------------------------------------------------- rotations / poses
 def transform_to_matrix(tf_msg):
-    """Convert a geometry_msgs/Transform into a 4x4 numpy array."""
+    """
+    Convert a geometry_msgs/Transform into a 4x4 numpy array.
+
+    For lookup_transform(target, source) the result maps source-frame
+    coordinates into the target frame.
+    """
     tx, ty, tz = tf_msg.translation.x, tf_msg.translation.y, tf_msg.translation.z
     qx, qy, qz, qw = (tf_msg.rotation.x, tf_msg.rotation.y,
                       tf_msg.rotation.z, tf_msg.rotation.w)
@@ -67,7 +78,7 @@ def transform_to_matrix(tf_msg):
 
 
 def quat_to_rot(qx, qy, qz, qw):
-    """Quaternion (x, y, z, w) -> 3x3 rotation matrix."""
+    """Convert a unit quaternion (x, y, z, w) to a 3x3 rotation matrix."""
     xx, yy, zz = qx * qx, qy * qy, qz * qz
     xy, xz, yz = qx * qy, qx * qz, qy * qz
     wx, wy, wz = qw * qx, qw * qy, qw * qz
@@ -79,7 +90,7 @@ def quat_to_rot(qx, qy, qz, qw):
 
 
 def mat_to_quat(R):
-    """3x3 rotation matrix -> quaternion (x, y, z, w). Shepperd's method."""
+    """Convert a 3x3 rotation matrix to a quaternion (x, y, z, w) by Shepperd's method."""
     m00, m01, m02 = R[0]
     m10, m11, m12 = R[1]
     m20, m21, m22 = R[2]
@@ -100,15 +111,13 @@ def mat_to_quat(R):
 
 
 def quat_geodesic(q1, q2):
-    """Geodesic angle [rad] in [0, pi] between two (x, y, z, w) quaternions;
-    sign-invariant via abs(dot). Mirrors the existing _quat_geodesic in
-    plot/repeatability_report_viewer.py."""
+    """Return the angle [rad, 0..pi] between two (x, y, z, w) quaternions, sign-invariant."""
     dot = min(1.0, abs(q1[0] * q2[0] + q1[1] * q2[1] + q1[2] * q2[2] + q1[3] * q2[3]))
     return 2.0 * math.acos(dot)
 
 
 def pose_to_matrix(pose):
-    """geometry_msgs/Pose -> 4x4 homogeneous matrix."""
+    """Convert a geometry_msgs/Pose to a 4x4 homogeneous matrix."""
     p, q = pose.position, pose.orientation
     T = np.eye(4)
     T[:3, :3] = quat_to_rot(q.x, q.y, q.z, q.w)
@@ -117,7 +126,7 @@ def pose_to_matrix(pose):
 
 
 def matrix_to_pose(T):
-    """4x4 homogeneous matrix -> geometry_msgs/Pose (inverse of pose_to_matrix)."""
+    """Convert a 4x4 homogeneous matrix to a geometry_msgs/Pose (inverse of pose_to_matrix)."""
     pose = Pose()
     pose.position.x, pose.position.y, pose.position.z = (
         float(T[0, 3]), float(T[1, 3]), float(T[2, 3]))
@@ -127,19 +136,21 @@ def matrix_to_pose(T):
     return pose
 
 
-# ------------------------------------------------------------------- gemini io
-# A "box_2d": [y1, x1, y2, x2] entry, for replies that are not valid JSON.
+# a "box_2d": [y1, x1, y2, x2] entry, found in replies that are not valid JSON
 _BOX_2D_RE = re.compile(
     r'"box_2d"\s*:\s*\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,'
     r'\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]')
 
 
 def extract_json(text):
-    """Best-effort extraction of a JSON value from a Gemini text response: strips
-    ```json fences, else falls back to the outermost [...] / {...} span. When
-    nothing parses but the text carries "box_2d": [...] arrays (Gemini sometimes
-    drops a key, e.g. echoes the label as a bare string), returns them as
-    [{"box_2d": [...]}, ...]. Returns the parsed object, or None."""
+    """
+    Return the JSON value in a Gemini text reply, best-effort, or None.
+
+    Strips a ```json fence, else tries the outermost [...] then {...} span.
+    When nothing parses but the text carries "box_2d": [...] arrays (Gemini
+    sometimes drops a key, e.g. echoes the label as a bare string), returns
+    them as [{"box_2d": [...]}, ...].
+    """
     if not text:
         return None
     lines = text.splitlines()

@@ -1,7 +1,9 @@
-"""SkillNavigate: planning -> navigating (preset or detected target)."""
+"""Stub the /skill/navigate executor: every goal aborts as not implemented."""
 
 
 class NavigateSkill:
+    """Provide /skill/navigate's execute callback to SkillsNode."""
+
     def _exec_navigate(self, gh):
-        """planning -> navigating to the named or detected target."""
+        """Raise NotImplementedError, which SkillsNode's wrapper turns into an aborted goal."""
         raise NotImplementedError('navigate skill not implemented')

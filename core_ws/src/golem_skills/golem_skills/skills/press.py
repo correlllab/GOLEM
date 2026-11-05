@@ -1,7 +1,9 @@
-"""SkillPress: detect -> approach -> press past the button plane."""
+"""Stub the /skill/press executor: every goal aborts as not implemented."""
 
 
 class PressSkill:
+    """Provide /skill/press's execute callback to SkillsNode."""
+
     def _exec_press(self, gh):
-        """detect -> approach -> press past the button plane with a closed hand."""
+        """Raise NotImplementedError, which SkillsNode's wrapper turns into an aborted goal."""
         raise NotImplementedError('press skill not implemented')

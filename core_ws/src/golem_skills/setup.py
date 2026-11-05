@@ -1,3 +1,5 @@
+"""Install the golem_skills Python package and its `skills` executable."""
+
 from setuptools import find_packages, setup
 
 package_name = 'golem_skills'

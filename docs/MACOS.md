@@ -142,10 +142,11 @@ controller to the FAME stand/squat policy or the walk-only policy instead.
   `/clock`; restarting it alone resets sim time to 0 while the ROS side keeps its
   old clock, giving TF extrapolation errors and a frozen `0×0` SLAM map. Restart
   `golem_ros` after `robocasa`.
-- **The motor watchdog runs on sim time.** The low-level interface zeroes the
-  motors if no `rt/lowcmd` arrives within `GOLEM_CMD_TIMEOUT` sim-seconds. It is
-  sim time on purpose: a wall-clock timeout is far too tight on a sim running
-  ~0.2× real-time. Raise it if a heavy scene trips it.
+- **The motor watchdog runs on sim time.** Once `rt/lowcmd` has driven the
+  motors, the low-level interface turns every motor off if no valid frame
+  arrives within `GOLEM_CMD_TIMEOUT` sim-seconds. It is sim time on purpose: a
+  wall-clock timeout is far too tight on a sim running ~0.2× real-time. Raise it
+  if a heavy scene trips it.
 - **For nav, `GOLEM_SPAWN_BACKOFF` of `1.5`–`2.0`** keeps the robot clear of the
   counters.
 

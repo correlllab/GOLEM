@@ -582,7 +582,7 @@ if 'config' in sys.argv:
         return json.loads(r.stdout)['services']
 
     def test_base_robocasa_service_has_no_cmd_timeout(self):
-        # H1 raises on an empty GOLEM_CMD_TIMEOUT (golem_robocasa/unitree_interface.py).
+        # The H1-2 sim keeps its own default; only the G1 overlay passes the knob.
         env = self.compose_config('docker-compose.yml', profile='robocasa')['robocasa']['environment']
         self.assertNotIn('GOLEM_CMD_TIMEOUT', env)
         self.assertNotIn('GOLEM_ROBOT', env)

@@ -1,9 +1,8 @@
 """The H1-2 RoboCasa sim's rt/lowstate carries the real H1-2's mode_machine.
 
-The test opens no DDS participant and starts no thread: unitree_interface's DDS channel
-and thread names are replaced by in-process fakes for the length of each test. It runs
-in the standard runner (tests/robocasa/run_in_container.sh) and in a throwaway container
-without a network:
+The test opens no DDS participant: unitree_interface's DDS channel names are replaced by
+in-process fakes for the length of each test. It runs in the standard runner
+(tests/robocasa/run_in_container.sh) and in a throwaway container without a network:
 
     docker run --rm --network none -v "$PWD:/repo:ro" -w /repo -e PYTHONPATH=golem_robocasa \
         -e PYTHONDONTWRITEBYTECODE=1 --entrypoint python3 golem_sim_robocasa:latest \
@@ -37,6 +36,9 @@ class FakePublisher:
     def Write(self, sample):
         self.written.append(sample.mode_machine)
 
+    def Close(self):
+        pass
+
 
 class FakeSubscriber:
     def __init__(self, topic, kind):
@@ -45,13 +47,7 @@ class FakeSubscriber:
     def Init(self, handler, queue_size):
         pass
 
-
-class FakeThread:
-    """Stands in for RecurrentThread: never runs its target."""
-    def __init__(self, interval, target, name):
-        self.target = target
-
-    def Start(self):
+    def Close(self):
         pass
 
 
@@ -84,8 +80,7 @@ class H12SimLowStateTests(unittest.TestCase):
         self.addCleanup(env.stop)
         for name, fake in (('ChannelFactoryInitialize', lambda id: None),
                            ('ChannelPublisher', FakePublisher),
-                           ('ChannelSubscriber', FakeSubscriber),
-                           ('RecurrentThread', FakeThread)):
+                           ('ChannelSubscriber', FakeSubscriber)):
             patcher = mock.patch.object(unitree_interface, name, fake)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -96,7 +91,7 @@ class H12SimLowStateTests(unittest.TestCase):
         self.assertEqual(self.iface.low_state.mode_machine, MODE_MACHINE)
 
     def test_published_sample_carries_it(self):
-        self.iface.publish_low_state()
+        self.iface.after_step()
         self.assertEqual(FakePublisher.written, [MODE_MACHINE])
 
 
@@ -105,11 +100,11 @@ class DomainIdTests(unittest.TestCase):
         for env in ({}, {'ROS_DOMAIN_ID': ''}, {'ROS_DOMAIN_ID': '0'}, {'ROS_DOMAIN_ID': 'x'}):
             with self.subTest(env=env), mock.patch.dict(os.environ, env, clear=True):
                 with self.assertRaises(RuntimeError):
-                    unitree_interface._domain_id()
+                    unitree_interface.domain_id()
 
     def test_reads_sim_domain(self):
         with mock.patch.dict(os.environ, {'ROS_DOMAIN_ID': '7'}):
-            self.assertEqual(unitree_interface._domain_id(), 7)
+            self.assertEqual(unitree_interface.domain_id(), 7)
 
 
 if __name__ == '__main__':

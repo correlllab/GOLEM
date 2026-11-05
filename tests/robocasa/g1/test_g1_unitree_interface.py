@@ -122,7 +122,7 @@ def test_fast_crc_is_the_sdks():
     """The sim's CRC (CRC_ is the same per-process object, sped up by the
     interface) equals unitree_sdk2py's own on random frames, and its
     pure-Python reference on raw bytes"""
-    assert getattr(CRC_, "_g1_sim_fast", False)
+    assert getattr(CRC_, "_sim_fast", False)
     rng = np.random.default_rng(1)
     frames = []
     for _ in range(20):

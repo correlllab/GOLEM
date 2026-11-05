@@ -215,9 +215,9 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     print(f"[h12_mujoco] RoboCasa task {task!r} built around H1_2: "
           f"nq={model.nq} nu={model.nu}; resolver mapped {len(resolver.motor_ctrl)} motors")
 
-    # Shared lock: the DDS + ROS bridge threads touch MjData (read sensors, write
-    # ctrl, render) while the main loop runs mj_step. All MjData access is
-    # serialized through sim_lock.
+    # Shared lock: the ROS bridge and viewer threads touch MjData (read sensors,
+    # write gripper ctrl, render) while the main loop runs mj_step. All MjData
+    # access is serialized through sim_lock.
     sim_lock = threading.Lock()
     pfx = env.robots[0].robot_model.naming_prefix   # "robot0_"
 
@@ -237,10 +237,11 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             print(f"[h12_mujoco] base odom body resolve skipped: {e}")
     print(f"[h12_mujoco] ground-truth sim odom {'ON (GOLEM_SIM_ODOM=1)' if _sim_odom_on else 'OFF'}")
 
-    # DDS control bridge: publishes rt/lowstate, subscribes rt/lowcmd, drives the
-    # 27 body motors by name via the resolver (grippers handled by the hand
-    # bridges below; gripper ctrl indices are disjoint from the body motors).
-    sim_interface = SimInterface(model, data, lock=sim_lock, resolver=resolver)
+    # Unitree DDS: rt/lowcmd drives the 27 body motors by name via the resolver
+    # (grippers handled by the hand bridges below; gripper ctrl indices are
+    # disjoint from the body motors), and the loop publishes rt/lowstate after
+    # every physics step.
+    sim_interface = SimInterface(model, data, resolver=resolver)
 
     init_ros()
 
@@ -440,12 +441,14 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                         data.xfrc_applied[band_body_id, :] = 0.0
                         if rot_body_id >= 0:
                             data.xfrc_applied[rot_body_id, :] = 0.0
-                # Recompute the DDS command's PD torque every sim step (emulates
-                # the real motor's ~1kHz servo) instead of only on each 50Hz
-                # /lowcmd, which held a stale-damping torque and toppled FAME.
+                # Recompute every motor's PD torque every sim step (emulates the
+                # real motors' ~1 kHz servo) from the latched rt/lowcmd.
                 sim_interface.write_ctrl()
                 mujoco.mj_step(model, data)
                 timings.stop("physics", physics_start)
+                lowstate_start = timings.start()
+                sim_interface.after_step()          # publishes rt/lowstate
+                timings.stop("lowstate", lowstate_start)
                 # --- fall logger ---
                 if band is not None and _band_prev_on and not band.enabled:
                     _band_release_t = float(data.time)
@@ -490,6 +493,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         ros_bridge.shutdown()
         for node in (measurement, hand_right, hand_left, ros_bridge):
             node.destroy_node()
+        sim_interface.shutdown()
         shutdown_ros()
 
 

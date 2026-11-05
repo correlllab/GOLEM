@@ -442,7 +442,8 @@ stays the default, and nothing on the G1 path may change its behaviour. The robo
 `sim_common.py`, `measurement_bridge.py` and the `mujoco_sensors` node in
 `mujoco_ros_bridge.py` (`sim_timing.py` is the H1-2's only); each has its own sensor suite
 (`h12_sensors.py`, `g1/g1_sensors.py`) and Unitree DDS interface
-(`unitree_interface.py`, `g1/unitree_interface.py`).
+(`unitree_interface.py`, `g1/unitree_interface.py`), which share their command
+path in `unitree_common.py`.
 
 ### Simulators mimic the real robot's topic surface
 
@@ -454,9 +455,13 @@ RealSense drivers' topics, frame names and camera TF (`/tf_static` + `/tf`) for
 `/realsense/{head,left_hand,right_hand}` — colour, depth and aligned depth with
 their camera_info, and `depth/color/points` — as captured from the robot in
 `golem_robocasa/realsense_profile.yaml`, `/livox/lidar` (CustomMsg), `/livox/pointcloud`, `/livox/imu`,
-`/{left,right}/gripper/state`, and `rt/lowstate` over Unitree DDS (with the
-real robot's `mode_machine`, 6); consumes `rt/lowcmd` and the
-`/{left,right}/gripper/*` services/DeliGrasp action.
+`/{left,right}/gripper/state`, and `rt/lowstate` over Unitree DDS after every
+physics step (with the real robot's `mode_machine`, 6, a millisecond sim-time
+tick, `rpy` and a CRC); consumes `rt/lowcmd` and the `/{left,right}/gripper/*`
+services/DeliGrasp action. Every body motor is off until the first `rt/lowcmd`
+with a valid CRC, `mode_machine` 6, `mode_pr` 0 and finite values (other frames
+are dropped); after that, `GOLEM_CMD_TIMEOUT` of silence turns every motor off
+until frames return.
 (Trust the code over any topic list repeated elsewhere: the sensor suite in
 `h12_sensors.py`, the grippers in `magpie_hand_bridge.py`, `/clock` and the
 opt-in odom in `mujoco_ros_bridge.py`, Unitree DDS in `unitree_interface.py`.)

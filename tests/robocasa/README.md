@@ -40,7 +40,8 @@ camera; `camera_depth_render` the depth stream's render; `camera_publish`
 image conversion, compression, and publishing; `camera_cloud` the point cloud.
 `lidar_cast` includes scene capture and raycasting; `lidar_publish` includes
 point filtering, message construction, and publishing. Physics includes lock
-acquisition and PD control. Timings are silent unless requested.
+acquisition and PD control; `lowstate` is the `rt/lowstate` sample built,
+signed and published after every physics step. Timings are silent unless requested.
 
 Compare the same task/layout/style/seed, display mode, subscribers, and hardware.
 Discard the first interval for renderer warm-up. PD torque is recomputed every

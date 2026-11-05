@@ -22,22 +22,18 @@ rt/lowcmd stops has not been measured.
 The slot layout and header values match golem_safety's G1 profile
 (core_ws/src/golem_safety/robots/g1.yaml).
 """
-import ctypes
-import math
 import os
-import sys
-import threading
-import time
-from typing import NamedTuple
 
 import numpy as np
 
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelPublisher, ChannelSubscriber
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__HandState_ as HandState_default
-from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_ as LowCmd_default
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_ as LowState_default
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_, HandState_, LowCmd_, LowState_
-from unitree_sdk2py.utils.crc import CRC
+
+import unitree_common
+from unitree_common import (MODE_PR, RateLimitedWarnings, domain_id, env_seconds, fast_crc, log,
+                            parse_motor_cmds, rpy_from_quat)
 
 TOPIC_LOWSTATE = 'rt/lowstate'
 TOPIC_LOWCMD = 'rt/lowcmd'
@@ -45,109 +41,21 @@ TOPIC_HAND_CMD = 'rt/dex3/{side}/cmd'
 TOPIC_HAND_STATE = 'rt/dex3/{side}/state'
 
 # rt/lowcmd header values the G1 accepts: our unit (g1_29dof_rev_1_0) reports
-# mode_machine 5, and mode_pr 0 (MODE_PR) drives the ankles' pitch/roll joints
+# mode_machine 5, and mode_pr 0 (unitree_common.MODE_PR) drives the ankles' pitch/roll joints
 MODE_MACHINE = 5
-MODE_PR = 0
 # Dex3 HandCmd_ mode byte (dex_3/dex3.py): bits 0-3 motor index, bits 4-6
 # status (1 = enabled), bit 7 timeout, which the driver sets to release a finger
 HAND_STATUS_ENABLED = 0x01
 HAND_STATE_HZ = 100.0
 
 
-def env_seconds(name, default, env=os.environ):
-    """A timeout knob in sim seconds: unset or empty for the default, else finite
-    and positive. A NaN would never time out (silence > NaN is never true), so
-    a bad value stops the sim at startup, naming the knob."""
-    raw = env.get(name, '').strip()
-    try:
-        value = float(raw) if raw else default
-    except ValueError:
-        raise ValueError(f'{name} must be a number of sim seconds, got {raw!r}') from None
-    if not (math.isfinite(value) and value > 0):
-        raise ValueError(f'{name} must be finite and positive (sim seconds), got {raw!r}')
-    return value
-
-
 # Sim seconds without a frame before rt/lowcmd, once it has driven the motors,
 # turns every motor off (an assumption, see the module docstring)
 LOWCMD_TIMEOUT = env_seconds('GOLEM_CMD_TIMEOUT', 0.5)
-# wall seconds between repeats of one warning
-WARN_PERIOD_S = 5.0
-
-
-class MotorCommand(NamedTuple):
-    """Latched commands of one topic's motors, as arrays, and the sim time they arrived"""
-    on: np.ndarray  # motors that apply their PD; the others are off (zero torque)
-    q: np.ndarray
-    dq: np.ndarray
-    tau: np.ndarray
-    kp: np.ndarray
-    kd: np.ndarray
-    time: float
-
-    def torques(self, q, dq):
-        return np.where(self.on, self.kp * (self.q - q) + self.kd * (self.dq - dq) + self.tau, 0.0)
-
-
-def parse_motor_cmds(motor_cmds, slots, sim_time, motor_on):
-    """MotorCommand for the given slots of a motor_cmd array, with motor_on(mode)
-    deciding which motors are on; None if a value is not finite"""
-    cmds = [motor_cmds[i] for i in slots]
-    values = np.array([[c.q, c.dq, c.tau, c.kp, c.kd] for c in cmds], dtype=np.float64)
-    if not np.all(np.isfinite(values)):
-        return None
-    return MotorCommand(np.array([motor_on(int(c.mode)) for c in cmds]), *values.T, time=sim_time)
-
-
-def _log(text):
-    """One write per line: the DDS handler threads print too"""
-    sys.stdout.write(f'[unitree_interface] {text}\n')
-    sys.stdout.flush()
-
-
-def fast_crc():
-    """unitree_sdk2py's CRC, with its Python loop over the packed words (__Trans)
-    replaced by a numpy view of them: the same field packing and the same C
-    routine, so the same CRC, at about a quarter of the cost (33 instead of 145
-    us a frame, measured over rt/lowstate and rt/lowcmd frames; rt/lowstate is
-    signed every physics step, and every rt/lowcmd frame is checked). The SDK's CRC object is one per process. The result is checked
-    against the SDK's own on sample frames; if it differs, the SDK's loop is
-    kept."""
-    crc = CRC()
-    lib = getattr(crc, 'crc_lib', None)
-    if getattr(crc, '_g1_sim_fast', False) or lib is None:   # done, or not Linux
-        return crc
-    samples = [LowState_default(), LowCmd_default()]
-    rng = np.random.default_rng(0)
-    for msg in samples:
-        for motor in getattr(msg, 'motor_state', None) or msg.motor_cmd:
-            motor.q, motor.dq = (float(v) for v in rng.normal(size=2))
-    expected = [crc.Crc(msg) for msg in samples]
-
-    def words(packed):   # as __Trans: every little-endian uint32 but the last (the crc's)
-        return np.frombuffer(packed, '<u4', count=len(packed) // 4 - 1)
-
-    def crc32(data):
-        return lib.crc32_core(data.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)), len(data))
-
-    crc._CRC__Trans, crc._crc_ctypes = words, crc32
-    if [crc.Crc(msg) for msg in samples] == expected:
-        crc._g1_sim_fast = True
-    else:
-        del crc._CRC__Trans, crc._crc_ctypes
-        _log("WARNING: the fast CRC does not match unitree_sdk2py's; using the SDK's")
-    return crc
-
 
 def lowcmd_error(msg, crc):
     """Why an rt/lowcmd frame must be dropped, or None to accept it"""
-    if crc.Crc(msg) != msg.crc:
-        return 'bad CRC'
-    if msg.mode_machine != MODE_MACHINE:
-        return f'mode_machine {msg.mode_machine}, the G1 reports {MODE_MACHINE}'
-    if msg.mode_pr != MODE_PR:
-        return f'mode_pr {msg.mode_pr}, not MODE_PR ({MODE_PR})'
-    return None
+    return unitree_common.lowcmd_error(msg, crc, MODE_MACHINE, 'G1')
 
 
 def lowcmd_motor_on(mode):
@@ -160,27 +68,6 @@ def hand_motor_on(mode):
     status = (mode >> 4) & 0x07
     timeout = (mode >> 7) & 0x01
     return status == HAND_STATUS_ENABLED and not timeout
-
-
-def rpy_from_quat(w, x, y, z):
-    """Roll, pitch, yaw (rad) of a wxyz quaternion, as the IMU reports them"""
-    roll = math.atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
-    pitch = math.asin(max(-1.0, min(1.0, 2.0 * (w * y - z * x))))
-    yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
-    return [roll, pitch, yaw]
-
-
-def _domain_id():
-    raw = os.environ.get('ROS_DOMAIN_ID', '')
-    try:
-        domain = int(raw)
-    except ValueError:
-        domain = 0
-    if domain <= 0:
-        raise RuntimeError(
-            f'ROS_DOMAIN_ID must be a positive integer, got {raw!r}; domain 0 is '
-            'reserved for the real robot, e.g. export ROS_DOMAIN_ID=1')
-    return domain
 
 
 class SimInterface:
@@ -214,16 +101,15 @@ class SimInterface:
         # The sim's elastic band (mujoco_env.ElasticBand), which sim_loop sets once
         # it has built it, for the tests that record the sim; this class never uses it.
         self.band = None
-        self._warn_lock = threading.Lock()
-        self._warned = {}
+        self._warnings = RateLimitedWarnings()
 
         # Unitree DDS on ROS_DOMAIN_ID. The SDK ignores CYCLONEDDS_URI, so the
         # interface comes from G1_DDS_INTERFACE, as for the rest of the stack.
         interface = os.environ.get('G1_DDS_INTERFACE', '')
         if interface:
-            ChannelFactoryInitialize(_domain_id(), interface)
+            ChannelFactoryInitialize(domain_id(), interface)
         else:
-            ChannelFactoryInitialize(_domain_id())
+            ChannelFactoryInitialize(domain_id())
 
         self.low_state = LowState_default()
         self.low_state.mode_pr = MODE_PR
@@ -247,31 +133,18 @@ class SimInterface:
     # ------------------------------------------------------------------ #
     # DDS handlers: validate and latch
     # ------------------------------------------------------------------ #
-    def _warn(self, key, text):
-        """Print a warning at most once per WARN_PERIOD_S, with how many it stands for"""
-        now = time.monotonic()
-        with self._warn_lock:
-            last, count = self._warned.get(key, (None, 0))
-            count += 1
-            if last is not None and now - last < WARN_PERIOD_S:
-                self._warned[key] = (last, count)
-                return
-            self._warned[key] = (now, 0)
-        repeats = f' ({count} since the last warning)' if count > 1 else ''
-        _log(f'{text}{repeats}')
-
     def _on_lowcmd(self, msg: LowCmd_):
         error = lowcmd_error(msg, self._crc)
         cmd = None if error else parse_motor_cmds(msg.motor_cmd, range(len(self.resolver.body.names)),
                                                   self.sim_time, lowcmd_motor_on)
         if cmd is None:
             error = error or 'a value is not finite'
-            self._warn(f'lowcmd {error}', f'dropped rt/lowcmd: {error}')
+            self._warnings.warn(f'lowcmd {error}', f'dropped rt/lowcmd: {error}')
             return
         self._lowcmd = cmd
         if not self.commanded:
             self.commanded = True
-            _log(f't={cmd.time:.3f}s: first valid rt/lowcmd; it drives all 29 body motors')
+            log(f't={cmd.time:.3f}s: first valid rt/lowcmd; it drives all 29 body motors')
 
     def _on_hand_cmd(self, side, msg: HandCmd_):
         count = len(self.resolver.hands[side].names)
@@ -279,8 +152,8 @@ class SimInterface:
         if len(msg.motor_cmd) >= count:
             cmd = parse_motor_cmds(msg.motor_cmd, range(count), self.sim_time, hand_motor_on)
         if cmd is None:
-            self._warn(f'hand_{side}', f'dropped rt/dex3/{side}/cmd: '
-                       f'{len(msg.motor_cmd)} motors or a value that is not finite')
+            self._warnings.warn(f'hand_{side}', f'dropped rt/dex3/{side}/cmd: '
+                                f'{len(msg.motor_cmd)} motors or a value that is not finite')
             return
         self._hand_cmd[side] = cmd
 
@@ -302,12 +175,12 @@ class SimInterface:
         if now - cmd.time > self.lowcmd_timeout:
             if not self._lowcmd_timed_out:
                 self._lowcmd_timed_out = True
-                _log(f't={now:.3f}s: rt/lowcmd silent for {self.lowcmd_timeout:.2f}s; '
-                     'every motor off (zero torque)')
+                log(f't={now:.3f}s: rt/lowcmd silent for {self.lowcmd_timeout:.2f}s; '
+                    'every motor off (zero torque)')
             return np.zeros_like(q)
         if self._lowcmd_timed_out:
             self._lowcmd_timed_out = False
-            _log(f't={now:.3f}s: rt/lowcmd back')
+            log(f't={now:.3f}s: rt/lowcmd back')
         return cmd.torques(q, dq)
 
     def write_ctrl(self):

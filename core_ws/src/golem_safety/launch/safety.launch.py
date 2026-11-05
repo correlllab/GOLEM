@@ -47,7 +47,7 @@ def _start(context: LaunchContext) -> list:
 
 def generate_launch_description() -> LaunchDescription:
     return LaunchDescription([
-        DeclareLaunchArgument('robot', description='h12 or g1'),
+        DeclareLaunchArgument('robot', description='a robot with a profile in share/golem_safety/robots/'),
         DeclareLaunchArgument(
             'config',
             description='a config name under share/golem_safety/config/<robot>/, or a path'),

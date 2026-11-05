@@ -20,12 +20,14 @@
 #include <signal.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <deque>
 #include <exception>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -35,6 +37,7 @@
 #include <utility>
 #include <vector>
 
+#include "ament_index_cpp/get_package_share_directory.hpp"
 #include "golem_safety/boot_clock.hpp"
 #include "golem_safety/chunk_logger.hpp"
 #include "golem_safety/config.hpp"
@@ -420,6 +423,29 @@ struct Parameters
   bool use_estop = false;
 };
 
+// The robots with a profile in share/golem_safety/robots/, as "a or b".
+std::string profiled_robots()
+{
+  std::vector<std::string> names;
+  try {
+    const std::filesystem::path robots =
+      ament_index_cpp::get_package_share_directory("golem_safety") + "/robots";
+    for (const auto & entry : std::filesystem::directory_iterator(robots)) {
+      if (entry.path().extension() == ".yaml") {
+        names.push_back(entry.path().stem().string());
+      }
+    }
+  } catch (const std::exception &) {
+    return "a robot with a profile in share/golem_safety/robots/";
+  }
+  std::sort(names.begin(), names.end());
+  std::string text;
+  for (const std::string & name : names) {
+    text += (text.empty() ? "" : " or ") + name;
+  }
+  return text;
+}
+
 Parameters read_parameters(rclcpp::Node & node)
 {
   Parameters p;
@@ -428,7 +454,7 @@ Parameters read_parameters(rclcpp::Node & node)
   p.sim = node.declare_parameter<bool>("sim", false);
   p.use_estop = node.declare_parameter<bool>("use_estop", false);
   if (p.robot.empty()) {
-    throw std::runtime_error("parameter 'robot' is required: h12 or g1");
+    throw std::runtime_error("parameter 'robot' is required: " + profiled_robots());
   }
   if (p.config.empty()) {
     throw std::runtime_error(

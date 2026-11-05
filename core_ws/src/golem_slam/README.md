@@ -10,7 +10,6 @@ directory.
   `/livox/lidar` and `/livox/imu`, stamped `livox_frame`. FAST-LIO is the only
   odometry. The bringups include it: the H1-2's with `use_nav` (`use_slam` on
   the `lmg_*` ones), the G1's `g1_core.launch.py` with `use_nav`.
-- `h12_real_slam.launch.py`: H1-2 sensors and navigation without motor control.
 
 Arguments: `use_sim_time` (default false), and the files, each defaulting to
 the robot's: `fast_lio_config` (`config/<robot>/fastlio.yaml`; the G1 sim

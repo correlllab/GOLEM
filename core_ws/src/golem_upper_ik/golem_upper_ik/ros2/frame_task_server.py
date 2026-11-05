@@ -3,8 +3,9 @@ frame_task_server: the upper-body controller of one robot as a ROS node.
 
     ros2 run golem_upper_ik frame_task_server --ros-args -p robot:=h12 -p config:=safety_split
 
-Parameters: robot (h12 or g1, required) and config (a controller config name under
-share/golem_upper_ik/config/<robot>/, or a path; default the robot's default_config).
+Parameters: robot (required; a robot with data in golem_upper_ik's config/) and config (a
+controller config name under share/golem_upper_ik/config/<robot>/, or a path; default the
+robot's default_config).
 
 Once its start-up is done (UpperController), the node serves:
 - /frame_task (custom_ros_messages/FrameTask): pull named frames to target poses in the pelvis

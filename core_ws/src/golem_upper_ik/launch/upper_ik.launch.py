@@ -17,6 +17,7 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 from golem_upper_ik.pairing import pairing_refusal
+from golem_upper_ik.profile import known_robots
 
 
 def _text(context: LaunchContext, name: str) -> str:
@@ -62,7 +63,7 @@ def _start(context: LaunchContext) -> list:
 
 def generate_launch_description() -> LaunchDescription:
     return LaunchDescription([
-        DeclareLaunchArgument('robot', description='h12 or g1'),
+        DeclareLaunchArgument('robot', description=' or '.join(known_robots())),
         DeclareLaunchArgument(
             'config',
             description='a controller config name under share/golem_upper_ik/config/<robot>/, '

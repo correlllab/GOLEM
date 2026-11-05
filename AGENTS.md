@@ -250,8 +250,8 @@ including `h12_control.launch.py`'s `sim`, which has no default.
 | `h12_locomanipulationgame.launch.py` | `marl_deploy_node` (behind `start_position_verified`; holds arm goals in the world by the SLAM `/Odometry`) |
 | `golem_slam/launch/navigation.launch.py` | the shared nav stack, included with `robot: h12` (FAST-LIO → pointcloud_to_laserscan → slam_toolbox → nav2; `golem_slam`'s `config/h12/`) |
 
-`golem_slam` also ships one top-level file of its own, `h12_real_slam.launch.py`
-(`ros2 launch golem_slam h12_real_slam.launch.py`): real robot sensors + SLAM/navigation
+`golem_bringup` has one more top-level file, `h12_real_slam.launch.py`
+(`ros2 launch golem_bringup h12_real_slam.launch.py`): real robot sensors + SLAM/navigation
 only, on wall time — real_drivers, state, navigation; no estop, safety or IK, so
 no joint is commanded. Record its runs with `ros2 run golem_slam record_slam_bag --name <name>`.
 

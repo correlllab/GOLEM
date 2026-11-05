@@ -116,8 +116,7 @@ safety, IK), `h12_lowerbody`, `h12_models` (model servers + skills),
 (`robot:=h12`).
 
 For sensors + SLAM/nav on the real robot with no joint commanded (no estop,
-safety or IK), use `ros2 launch golem_slam h12_real_slam.launch.py`, which lives in
-`golem_slam`; record those runs with `ros2 run golem_slam record_slam_bag --name <name>`.
+safety or IK), use `ros2 launch golem_bringup h12_real_slam.launch.py`; record those runs with `ros2 run golem_slam record_slam_bag --name <name>`.
 
 The x86 sim bringup starts the state publishers, the `frame_task_server` IK
 solver, `safety_node`, the Gemini/SAM/GraspGen model servers, the RL lower-body

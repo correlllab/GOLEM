@@ -205,7 +205,7 @@ def _launch_module(path):
     ('golem_bringup', 'h12/h12_real_robot.launch.py'),
     ('golem_bringup', 'h12/lmg_sim.launch.py'),
     ('golem_bringup', 'h12/lmg_real.launch.py'),
-    ('golem_slam', 'h12_real_slam.launch.py'),
+    ('golem_bringup', 'h12/h12_real_slam.launch.py'),
 ])
 def test_every_h12_includer_passes_robot_h12(package, launch_file, monkeypatch):
     monkeypatch.setenv('ROS_DOMAIN_ID', '87')   # lmg_sim refuses an unset or 0 domain

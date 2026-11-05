@@ -9,12 +9,6 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 # Real robot SLAM + navigation only: sensor drivers, state publishers and the
 # golem_slam nav stack; no estop, safety layer or IK, so no joint is commanded.
 # ROS_DOMAIN_ID must be exported in the launching shell (0 on the real robot).
-#
-# The drivers and state publishers are golem_bringup building blocks (its
-# launch/h12/). golem_bringup is deliberately not an exec_depend of golem_slam:
-# golem_bringup already exec_depends on golem_slam, and colcon rejects the cycle.
-# It is resolved here at launch time, so this file needs golem_bringup built in
-# the same workspace.
 
 
 def _include(package, launch_file, launch_arguments):

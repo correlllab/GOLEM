@@ -15,6 +15,7 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 from golem_ros2_models.paths import urdf_path
+from golem_upper_ik.profile import known_robots
 
 
 def _start(context: LaunchContext) -> list:
@@ -51,7 +52,7 @@ def _start(context: LaunchContext) -> list:
 
 def generate_launch_description() -> LaunchDescription:
     return LaunchDescription([
-        DeclareLaunchArgument('robot', description='h12 or g1'),
+        DeclareLaunchArgument('robot', description=' or '.join(known_robots())),
         DeclareLaunchArgument(
             'use_sim_time', default_value='false',
             description='true to run on a simulator\'s /clock'),

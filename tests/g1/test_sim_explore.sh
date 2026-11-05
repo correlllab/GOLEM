@@ -1,5 +1,5 @@
 #!/bin/bash
-# Closed-loop frontier-exploration test of the G1 RoboCasa sim, run from the host:
+# Run the G1's closed-loop frontier-exploration test in the RoboCasa sim, from the host:
 # golem_skills' frontier explorer walks the G1 through Nav2 from the spawn until
 # it reports the kitchen explored, or its time runs out.
 #
@@ -19,8 +19,7 @@
 # when it exits in split mode), and the sim, with every motor off after
 # GOLEM_CMD_TIMEOUT, would drop the robot while it still runs.
 # Finally it checks the run against the sim's recording (test_sim_explore.py
-# report; see test_sim_explore.py for what is checked). Exits 0 only if every
-# check passes. The camera renders on the GPU (EGL).
+# report; see test_sim_explore.py for what is checked). The camera renders on the GPU (EGL).
 #
 # The containers have no network of their own (common.sh), so no DDS leaves the
 # host, and nothing talks to the robot. ROS_DOMAIN_ID must not be 0.
@@ -41,7 +40,13 @@
 #   GOLEM_LIDAR_POINTS, GOLEM_LIDAR_HZ, GOLEM_CAMERAS, GOLEM_CAMERA_HZ,
 #   GOLEM_CAMERA_SCALE   passed to the sim as the shell has them, docker/.env's
 #               never (g1_sensors.SensorConfig)
+#
+# Exit: 0 when every check passes; 1 when a check, the test's steps or a container fails;
+#   2 for bad arguments or settings, a bad domain or a non-empty OUT; 3 when the core_ws build
+#   fails.
 set -eo pipefail
+
+# Arguments and settings: none, and the sim's ground-truth odometry off.
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [ -n "${1:-}" ]; then
@@ -52,13 +57,16 @@ case "$(echo "${GOLEM_SIM_ODOM:-0}" | tr '[:upper:]' '[:lower:]')" in
     0|off|false|no|'') ;;
     *) echo 'golem_slam requires FAST-LIO: leave GOLEM_SIM_ODOM unset.' >&2; exit 2 ;;
 esac
-# the lidar stays on: the test needs it
+
+# The sim's knobs; the lidar stays on: navigation needs it.
 SIM_ENV=(-e GOLEM_SIM_ODOM=0 -e "GOLEM_SPAWN_BACKOFF=${EXPLORE_BACKOFF:-2.0}" -e GOLEM_LIDAR=)
 source "$HERE/common.sh"
 if [ -n "${GOLEM_TEST_RECORD_EVERY:-}" ]; then
     SIM_ENV+=(-e "GOLEM_TEST_RECORD_EVERY=$GOLEM_TEST_RECORD_EVERY")
 fi
 g1_test_shell_knobs GOLEM_LIDAR_POINTS GOLEM_LIDAR_HZ GOLEM_CAMERAS GOLEM_CAMERA_HZ GOLEM_CAMERA_SCALE
+
+# The containers, the build, then the sim, up before the bringup.
 g1_test_setup test_sim_explore explore explore 198
 g1_test_log_load
 
@@ -67,18 +75,21 @@ g1_test_build_ros
 g1_test_start_sim test_sim_explore.py "${SIM_ENV[@]}"
 echo "[test_sim_explore] sim up; starting the bringup with navigation and the explorer"
 
+# The bringup in the background and the test's steps beside it, at most 1500 s.
+
 g1_test_run_ros 1500 "ros2 launch golem_bringup g1_sim.launch.py use_rviz:=false use_nav:=true \
         use_skills:=true > /out/launch.log 2>&1 &
     LAUNCH=\$!
     python3 -u /home/code/tests/g1/test_sim_explore.py drive --out /out
     rc=\$?
-    # the sim first, with the robot standing: it looks for /out/stop every 500
-    # physics steps, then saves sim.npz and, last, contacts.json; then the bringup
+    # The sim first, with the robot standing: it looks for /out/stop every 500
+    # physics steps, then saves sim.npz and, last, contacts.json; then the bringup.
     touch /out/stop
     for _ in \$(seq 1 60); do [ -e /out/contacts.json ] && break; sleep 1; done
     kill -INT \$LAUNCH
     wait \$LAUNCH
     exit \$rc"
 
+# Stop the sim, then check the run against its recording.
 g1_test_stop_sim
 g1_test_report test_sim_explore.py

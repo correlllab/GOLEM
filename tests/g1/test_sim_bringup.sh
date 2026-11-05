@@ -1,5 +1,5 @@
 #!/bin/bash
-# Acceptance test of the G1 RoboCasa sim with the whole bringup, run from the host.
+# Run the G1 acceptance test (arms, or walking) in the RoboCasa sim with the whole bringup, from the host.
 #
 #   tests/g1/test_sim_bringup.sh           # the arm test
 #   tests/g1/test_sim_bringup.sh --walk    # the walk test
@@ -10,7 +10,7 @@
 # use_rviz:=false' and the test's steps (test_sim_bringup.py drive). It then stops
 # the sim (OUT/stop) and, once the sim has saved its recording, the bringup, so the
 # recording ends with the robot standing. Finally it checks the sim's recording
-# against the steps (test_sim_bringup.py report). See test_sim_bringup.py for what is checked. Exits 0 only if every check passes.
+# against the steps (test_sim_bringup.py report). See test_sim_bringup.py for what is checked.
 # The sim's lidar and head camera are on, as by default; the camera renders on
 # the GPU (EGL).
 #
@@ -32,7 +32,13 @@
 #   GOLEM_LIDAR, GOLEM_LIDAR_POINTS, GOLEM_LIDAR_HZ, GOLEM_CAMERAS, GOLEM_CAMERA_HZ,
 #   GOLEM_CAMERA_SCALE   passed to the sim as the shell has them, docker/.env's
 #               never (g1_sensors.SensorConfig); the test expects what the sim reads
+#
+# Exit: 0 when every check passes; 1 when a check, the test's steps or a container fails;
+#   2 for bad arguments or settings, a bad domain or a non-empty OUT; 3 when the core_ws build
+#   fails.
 set -eo pipefail
+
+# The variant: the arm test, or --walk.
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TEST=arm
@@ -45,13 +51,15 @@ if [ "${1:-}" = "--walk" ]; then
     TEST=walk
     NAME=walk
     DOMAIN=196
-    # the spawn faces a counter: walk into open floor behind it instead
+    # The spawn faces a counter: the robot walks into open floor behind it instead.
     SIM_ENV=(-e GOLEM_SIM_ODOM=0 -e "GOLEM_SPAWN_BACKOFF=${WALK_BACKOFF:-2.0}")
     DRIVE_ARGS="--walk"
 elif [ -n "${1:-}" ]; then
     echo "usage: $0 [--walk]" >&2
     exit 2
 fi
+
+# The sim's knobs, the containers, the build, then the sim, up before the bringup.
 source "$HERE/common.sh"
 if [ -n "${GOLEM_TEST_RECORD_EVERY:-}" ]; then
     SIM_ENV+=(-e "GOLEM_TEST_RECORD_EVERY=$GOLEM_TEST_RECORD_EVERY")
@@ -64,18 +72,21 @@ g1_test_build_ros
 g1_test_start_sim test_sim_bringup.py "${SIM_ENV[@]}"
 echo "[test_sim_bringup] sim up; starting the bringup"
 
+# The bringup in the background and the test's steps beside it, at most 900 s.
+
 g1_test_run_ros 900 "ros2 launch golem_bringup g1_sim.launch.py $LAUNCH_ARGS > /out/launch.log 2>&1 &
     LAUNCH=\$!
     python3 -u /home/code/tests/g1/test_sim_bringup.py drive --out /out $DRIVE_ARGS
     rc=\$?
-    # the sim first, with the robot standing: it looks for /out/stop every 500
+    # The sim first, with the robot standing: it looks for /out/stop every 500
     # physics steps, then saves sim.npz; the bringup goes down after, so the
-    # recording never holds the unpowered robot falling
+    # recording never holds the unpowered robot falling.
     touch /out/stop
     for _ in \$(seq 1 60); do [ -e /out/sim.npz ] && break; sleep 1; done
     kill -INT \$LAUNCH
     wait \$LAUNCH
     exit \$rc"
 
+# Stop the sim, then check the run against its recording.
 g1_test_stop_sim
 g1_test_report test_sim_bringup.py

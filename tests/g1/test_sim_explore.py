@@ -1,7 +1,8 @@
-"""Closed-loop frontier-exploration test of the G1 sim: golem_skills' frontier
-explorer walks the G1 through Nav2 from the spawn until it reports the RoboCasa
-kitchen explored, or its time runs out. The parts that run in the containers;
-test_sim_explore.sh runs them and has the usage. Built on test_sim_nav.py.
+"""Test the G1's frontier exploration in the sim, closed loop: the roles that run in the containers.
+
+golem_skills' frontier explorer walks the G1 through Nav2 from the spawn until it reports the
+RoboCasa kitchen explored, or its time runs out. test_sim_explore.sh runs the roles and has the
+usage. Built on test_sim_nav.py.
 
   sim     test_sim_nav.py's sim role as it is: h12_mujoco.py --g1, recording the robot's
           state (<out>/sim.npz) and any robot-environment contact (<out>/contacts.json),
@@ -9,16 +10,16 @@ test_sim_explore.sh runs them and has the usage. Built on test_sim_nav.py.
           (<out>/scene.npz), among it the floor the robot can reach: the cells of a 5 cm
           grid, 10 x 10 m around the spawn, connected to the spawn through cells at
           least PATH_CLEARANCE (0.35 m) from anything the robot can touch. The nav
-          test's goal (<out>/goal.json) is not used
+          test's goal (<out>/goal.json) is not used.
   drive   in the ros container, beside 'ros2 launch golem_bringup g1_sim.launch.py
           use_nav:=true use_skills:=true': waits until the walking node walks, the
           sim's elastic band is released, Nav2 is active and /skill/frontier_explore is
           served, stands STAND_S, sends one SkillFrontierExplore goal (timeout
           EXPLORE_TIMEOUT_S, the explorer's defaults otherwise) and waits for its result;
           records as the nav test's drive does (<out>/drive.npz, map.npz) and the
-          explorer's feedback and result (<out>/events.json)
+          explorer's feedback and result (<out>/events.json).
   report  anywhere with numpy and scipy: checks the run, prints the numbers and writes
-          <out>/report.json; exit 1 on a failure
+          <out>/report.json; exit 1 on a failure.
 
 Pass if: over the whole recording the pelvis stays above MIN_PELVIS_Z and tilts at
 most MAX_TILT_DEG, and the sim's fall logger logs no fall (never fell); no robot geom
@@ -54,32 +55,27 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import test_sim_nav as nav  # noqa: E402  (the sim role, the drive's recorder, the report's checks)
 
-# the explorer's budget, its goal's timeout (sim s). In 11 runs at the explorer's current
-# settings it was done after 20.7-28.7 s, and in 4 since slam_toolbox's and Nav2's base frame
-# moved to the floor after 23.6-29.8 s; before it canceled goals seen on the way, after
-# 71.6 s (53 s of it on one goal Nav2 could not reach). Four times the longest
+# s of sim time: the explorer's budget, its goal's timeout. Finished explorations have taken
+# 20.7-29.8 s (15 runs); this is four times the longest.
 EXPLORE_TIMEOUT_S = 120
-RESULT_GRACE_S = 30.0      # sim s past it to wait for the result (a Nav2 goal is canceled at the end)
-STAND_S = nav.STAND_S      # sim s standing before the goal, Nav2 up
-SETTLE_S = nav.SETTLE_S    # sim s after the result
-# pass limit: the share of the reachable floor free in the final /map. Each of those 11 runs
-# ended at 100% (6166 cells, 15.4 m^2); one run before the explorer waited for a costmap
-# newer than its /map stopped at 88.7%, the corridor behind the counter peninsula (11% of
-# the floor) unseen. This catches a skipped corridor and leaves room for a few unseen cells
+RESULT_GRACE_S = 30.0  # s of sim time past it to wait for the result (a Nav2 goal is canceled at the end)
+STAND_S = nav.STAND_S  # s of sim time standing before the goal, Nav2 up
+SETTLE_S = nav.SETTLE_S  # s of sim time after the result
+# Pass limit: the share of the reachable floor free in the final /map. A finished exploration
+# ends at 100 % (6166 cells, 15.4 m^2); leaving the corridor behind the counter peninsula (11 %
+# of the floor) unseen gives about 89 %. This fails a skipped corridor and leaves room for a few
+# unseen cells.
 MIN_COVERAGE = 0.95
 MAP_OCCUPIED = nav.MAP_OCCUPIED
-# the explorer's log lines (golem_skills/skills/frontier_explore.py)
+# The explorer's log lines (golem_skills/skills/frontier_explore.py).
 GOAL_SENT = re.compile(r"\[(?:frontier_explore|golem_skills)\]: goal (\d+): \(([-\d.]+), ([-\d.]+)\) yaw ([-\d.]+) deg, "
                        r"(\d+) frontier cells, ([\d.]+) m from the robot")
 GOAL_END = re.compile(r"\[(?:frontier_explore|golem_skills)\]: goal (\d+): (reached|failed|seen on the way)(?: \(([^)]*)\))? "
                       r"after ([\d.]+) s")
 
 
-# --------------------------------------------------------------------------- #
-# drive: the exploration against the running bringup
-# --------------------------------------------------------------------------- #
 def save_grid(path, msg):
-    """A nav_msgs/OccupancyGrid as the nav test's map.npz"""
+    """Save a nav_msgs/OccupancyGrid in the layout of the nav test's map.npz."""
     o = msg.info.origin
     q = o.orientation
     np.savez(path, data=np.array(msg.data, np.int8).reshape(msg.info.height, msg.info.width),
@@ -89,12 +85,15 @@ def save_grid(path, msg):
 
 
 class Driver(nav.Driver):
+    """Drive the explore test: the nav test's recordings, one exploration and its feedback."""
+
     def __init__(self, out):
+        """Record as the nav test's drive does, plus the global costmap."""
         super().__init__(out)
         from nav_msgs.msg import OccupancyGrid
         from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-        self.explore_feedback = []   # sim t, phase, frontiers_remaining, at each change
-        # the global costmap, which the explorer walks on
+        self.explore_feedback = []  # sim t, phase, frontiers_remaining, at each change
+        # The global costmap, which the explorer walks on.
         self.costmap = None
         self.node.create_subscription(OccupancyGrid, "/global_costmap/costmap",
                                       lambda msg: setattr(self, "costmap", msg), QoSProfile(
@@ -102,7 +101,7 @@ class Driver(nav.Driver):
                                           durability=DurabilityPolicy.TRANSIENT_LOCAL))
 
     def wait_explorer(self, timeout=60.0):
-        """/skill/frontier_explore served"""
+        """Wait for /skill/frontier_explore to be served; return whether it was within `timeout` s."""
         from custom_ros_messages.action import SkillFrontierExplore
         from rclpy.action import ActionClient
         self.explorer = ActionClient(self.node, SkillFrontierExplore, "/skill/frontier_explore")
@@ -117,14 +116,18 @@ class Driver(nav.Driver):
         return False
 
     def _on_explore_feedback(self, msg):
+        """Record the explorer's feedback when its phase or frontier count changes."""
         f = msg.feedback
         row = [self.clock, f.phase, f.frontiers_remaining]
         if not self.explore_feedback or self.explore_feedback[-1][1:] != row[1:]:
             self.explore_feedback.append(row)
 
     def explore(self):
-        """One exploration, to its result (or EXPLORE_TIMEOUT_S + RESULT_GRACE_S of sim
-        time, then canceled); True if it ended with a result"""
+        """Run one exploration to its result; return True if it ended with a result.
+
+        After EXPLORE_TIMEOUT_S + RESULT_GRACE_S of sim time, or on a scan-path stall, the goal
+        is canceled.
+        """
         from action_msgs.msg import GoalStatus
         from custom_ros_messages.action import SkillFrontierExplore
         goal = SkillFrontierExplore.Goal()
@@ -150,7 +153,7 @@ class Driver(nav.Driver):
             self.spin()
         response = result.result() if result.done() else None
         r = response.result if response is not None else None
-        # the /map and the costmap the explorer last saw
+        # The /map and the costmap the explorer last saw.
         for name, msg in (("map_done.npz", self.map), ("costmap_done.npz", self.costmap)):
             if msg is not None:
                 save_grid(os.path.join(self.out, name), msg)
@@ -163,6 +166,7 @@ class Driver(nav.Driver):
 
 
 def run_drive(out):
+    """Run the drive role; return 0 when the exploration ended with a result."""
     d = Driver(out)
     ok = False
     try:
@@ -174,17 +178,16 @@ def run_drive(out):
         return 0 if ok else 1
     finally:
         try:
-            d.finish()   # what was recorded, whatever happened
+            d.finish()  # what was recorded, whatever happened
         finally:
             d.close()
 
 
-# --------------------------------------------------------------------------- #
-# report
-# --------------------------------------------------------------------------- #
 def explorer_goals(launch_log):
-    """The explorer's goals from launch.log: [{n, x, y (map), yaw_deg, cells, distance, outcome,
-    why, seconds}]"""
+    """Return the explorer's goals from launch.log.
+
+    Each is {n, x, y (map frame, m), yaw_deg, cells, distance, outcome, why, seconds}.
+    """
     goals = {}
     try:
         with open(launch_log, errors="replace") as f:
@@ -205,10 +208,15 @@ def explorer_goals(launch_log):
 
 
 class Report(nav.Report):
+    """Check an explore run: the nav test's whole-run checks plus the exploration's own."""
+
     def record_only(self, method, *args):
-        """Run one of the nav test's checks for its numbers: its verdict is printed and kept
-        (report.json's "notes"), not counted"""
+        """Run one of the nav test's checks for its numbers, keeping its verdict as a note, not a check.
+
+        The note goes into report.json's "notes" and is printed.
+        """
         def note(name, ok, text):
+            """Record and print a check's verdict as a note."""
             self.notes.append({"check": name, "within_nav_limit": bool(ok), "detail": text})
             print(f"NOTE {name} ({'within' if ok else 'outside'} the nav test's limit): {text}")
         self.check = note
@@ -218,7 +226,7 @@ class Report(nav.Report):
             del self.check
 
     def nav_test(self):
-        """The exploration's checks, in place of the nav test's goal"""
+        """Check the exploration, in place of the nav test's goal."""
         self.notes = []
         s, ev, g = self.s, self.events, self.goal
         self.numbers["spawn"] = {"pelvis": g["spawn"], "yaw_deg": math.degrees(g["spawn_yaw"]),
@@ -260,7 +268,7 @@ class Report(nav.Report):
         self.record_only(self.drift, t0, t1)
 
     def explorer_outcome(self):
-        """What the explorer did: its result, its goals (launch.log) and the time, for the record"""
+        """Record what the explorer did (its result, its goals from launch.log, the time); check goals_reached when done."""
         ev, s = self.events, self.s
         result = ev.get("explore_result", {})
         goals = explorer_goals(os.path.join(self.out, "launch.log"))
@@ -291,7 +299,7 @@ class Report(nav.Report):
                   f"{g['distance']:.2f} m away: {g['outcome']}"
                   + (f" ({g['why']})" if g.get("why") else "")
                   + (f" after {g['seconds']:.1f} s" if g.get("seconds") is not None else ""))
-        # a finished exploration reached its goals: by Nav2, or seen on the way
+        # A finished exploration reached its goals: by Nav2, or seen on the way.
         reached = result.get("goals_reached")
         if outcome == "done":
             self.check("goals reached", reached is not None and reached > 0 and reached == len(by_nav2) + len(seen),
@@ -301,7 +309,7 @@ class Report(nav.Report):
             print(f"     goals reached: not checked, the explorer did not finish ({outcome})")
 
     def coverage(self, world_map):
-        """The share of the reachable floor (scene.npz) that the final /map has free"""
+        """Check the share of the reachable floor (scene.npz) that the final /map has free."""
         path = os.path.join(self.out, "map.npz")
         if not os.path.exists(path):
             self.check("coverage", False, "no /map")
@@ -319,7 +327,7 @@ class Report(nav.Report):
         value[inside] = data[iy[inside], ix[inside]]
         free = (value >= 0) & (value < MAP_OCCUPIED)
         share = float(free.mean()) if len(rows) else 0.0
-        # the grid must hold all of the reachable floor, or the share is of a part of it
+        # The grid must hold all of the reachable floor, or the share is of a part of it.
         edge = int(reachable[[0, -1], :].sum() + reachable[:, [0, -1]].sum())
         unknown = ~free & (value < 0)
         self.numbers["coverage"] = {"reachable_cells": int(len(rows)), "reachable_m2": len(rows) * gres * gres,
@@ -333,8 +341,8 @@ class Report(nav.Report):
                                                                   else ""))
 
     def run(self, out):
+        """Run the nav report, then add the notes to report.json; return its exit status."""
         code = super().run(out)
-        # the notes too
         with open(os.path.join(out, "report.json")) as f:
             report = json.load(f)
         report["notes"] = getattr(self, "notes", [])
@@ -344,6 +352,7 @@ class Report(nav.Report):
 
 
 def main():
+    """Run the role the command line names; return its exit status."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("role", choices=("sim", "drive", "report"))
     parser.add_argument("--out", required=True, help="the shared output directory")

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# The containers of the closed-loop RoboCasa tests, sourced by tests/sim/test_sim_*.sh
-# and, through tests/g1/common.sh, by the G1 acceptance tests.
+# Set up, run and tear down the containers of the closed-loop RoboCasa tests (a library).
 #
-# Both are the compose services as docker_run.sh starts them (robocasa, with the
+# Sourced by tests/sim/test_sim_*.sh and, through tests/g1/common.sh, by the G1 acceptance
+# tests; a test calls sim_test_setup first, then the other sim_test_* functions in run order.
+#
+# Both containers are the compose services as docker_run.sh starts them (robocasa, with the
 # G1 overlay for the G1; ros from docker-compose.yml), with test_compose.yml on
 # top, which sim_test_setup writes into the run's output directory:
 #   - the robocasa container has no network and the ros container joins its
@@ -21,15 +23,19 @@
 # ones from the shell (sim_test_shell_knobs) and the sim's defaults for the
 # rest, so docker/.env never changes what is tested. Each sim ignores the other
 # robot's knobs that the robocasa service also passes.
+#
+# Exit codes of the functions that exit: 1 a container or wait failed, or a check failed
+# (sim_test_report); 2 a bad robot, domain or OUT; 3 the core_ws build failed.
 SIM_TESTS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$SIM_TESTS/../../docker/scripts/docker_common.sh"
 
-# loopback multicast for DDS discovery inside the shared namespace
+# Turns on multicast on the loopback interface (SIOCGIFFLAGS, then SIOCSIFFLAGS with
+# IFF_MULTICAST), for DDS discovery inside the shared, network-less namespace.
 MULTICAST="python3 -c \"import fcntl,socket,struct; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); \
 f=struct.unpack('16sH',fcntl.ioctl(s,0x8913,struct.pack('16sH',b'lo',0)))[1]; \
 fcntl.ioctl(s,0x8914,struct.pack('16sH',b'lo',f|0x1000))\""
 
-# sim_test_shell_knobs NAME...: passes each NAME to the sim as the shell has it,
+# sim_test_shell_knobs NAME...: pass each NAME to the sim as the shell has it,
 # empty (the sim's default) if unset. Call it before sim_test_setup, which reads
 # docker/.env.
 sim_test_shell_knobs() {
@@ -39,6 +45,7 @@ sim_test_shell_knobs() {
     done
 }
 
+# sim_json_string STRING: print STRING as a JSON string literal.
 sim_json_string() {
     local s=$1
     s=${s//\\/\\\\}
@@ -49,7 +56,8 @@ sim_json_string() {
     printf '"%s"' "$s"
 }
 
-# sim_test_setup ROBOT SUITE TAG NAME CASE DOMAIN
+# sim_test_setup ROBOT SUITE TAG NAME CASE DOMAIN: check the run's settings, write its
+# compose overlay and take the suite's build lock.
 #   ROBOT   h12 or g1: the sim's robot
 #   SUITE   the tests' directory under tests/ (g1 or sim): the test's Python is
 #           tests/SUITE/<py>, its build $GOLEM_CACHE_DIR/SUITE_tests
@@ -99,7 +107,7 @@ sim_test_setup() {
 
     OUT=${out:-$GOLEM_ROOT/tests/results/$SIM_TEST_SUITE-$TEST_NAME-$(date +%Y%m%dT%H%M%S)-$$}
     mkdir -p "$OUT"
-    # a run's stop file and recording would end the next one early
+    # A run's stop file and recording would end the next one early.
     if [ -n "$(ls -A "$OUT")" ]; then
         echo "[$TAG] $OUT is not empty; use a new OUT" >&2
         exit 2
@@ -144,6 +152,8 @@ EOF
     trap sim_test_cleanup EXIT
 }
 
+# sim_test_cleanup: the EXIT trap. Remove the containers, hand OUT back to the user and write
+# run.json (exit codes, sim state, domain, git state, image IDs); exit with the run's status.
 sim_test_cleanup() {
     local status=$?
     trap - EXIT
@@ -151,7 +161,7 @@ sim_test_cleanup() {
     local sim_state
     sim_state=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$SIM" 2>/dev/null || echo 'not started')
     docker rm -f "$ROS" "$ROS-build" "$SIM" >/dev/null 2>&1 || true
-    # the containers write as root
+    # The containers write as root.
     "${COMPOSE[@]}" run --rm -T --no-deps --entrypoint chown robocasa -R "$(id -u):$(id -g)" /out \
         >/dev/null 2>&1 || true
     {
@@ -171,14 +181,14 @@ sim_test_cleanup() {
     exit "$status"
 }
 
-# sim_test_log_load: the host's load every 10 s, for the record (<out>/load.log)
+# sim_test_log_load: log the host's load every 10 s, for the record (<out>/load.log).
 sim_test_log_load() {
     ( while true; do uptime >> "$OUT/load.log"; sleep 10; done ) 9>&- &
     LOAD_PID=$!
 }
 
-# sim_test_build_ros: builds core_ws before the sim starts, so the sim never runs
-# beside a whole build (<out>/ros_build.log)
+# sim_test_build_ros: build core_ws before the sim starts, so that the sim never runs beside a
+# whole build (<out>/ros_build.log); exit 3 if it fails.
 sim_test_build_ros() {
     echo "[$TAG] building core_ws"
     if ! "${COMPOSE[@]}" run --rm -T --no-deps --name "$ROS-build" ros \
@@ -189,7 +199,7 @@ sim_test_build_ros() {
     fi
 }
 
-# sim_test_start_sim PY [ARG...]: starts tests/<suite>/PY's sim role for the
+# sim_test_start_sim PY [ARG...]: start tests/<suite>/PY's sim role for the
 # robot, headless in the layout 9 / style 9 / seed 42 kitchen, with the docker
 # run ARGs (SIM_ENV), and waits until its bridges are up; its output goes to
 # <out>/sim.log. The robot's own knobs that the test does not set get the sim's
@@ -224,12 +234,12 @@ sim_test_start_sim() {
     grep -q "ROS bridges up" "$OUT/sim.log" || { echo "[$TAG] the sim did not come up" >&2; exit 1; }
 }
 
-# sim_test_run_ros SECONDS SCRIPT: runs the bash SCRIPT in the ros container, in
+# sim_test_run_ros SECONDS SCRIPT: run the bash SCRIPT in the ros container, in
 # the sim's network namespace with core_ws sourced, for at most SECONDS; its
 # output goes to <out>/drive.log and its exit status to DRIVE_RC.
 # set -m: a launch that SCRIPT starts in the background runs as its own job, so
 # it gets SIGINT like Ctrl-C (a background job of a non-interactive shell would
-# ignore it)
+# ignore it).
 sim_test_run_ros() {
     local seconds=$1 script=$2
     set +e
@@ -241,10 +251,10 @@ sim_test_run_ros() {
     set -e
 }
 
-# sim_test_stop_sim: stops the sim with <out>/stop, which it looks for every 500
-# physics steps before it saves its recording, or after 60 s with docker stop
+# sim_test_stop_sim: stop the sim with <out>/stop, which it looks for every 500
+# physics steps before it saves its recording, or after 60 s with docker stop.
 sim_test_stop_sim() {
-    # (the ros container may have made it already, as root)
+    # The ros container may have made the stop file already, as root.
     [ -e "$OUT/stop" ] || touch "$OUT/stop"
     for _ in $(seq 1 60); do
         docker ps -q --filter "name=^$SIM\$" | grep -q . || break
@@ -258,8 +268,8 @@ sim_test_stop_sim() {
     fi
 }
 
-# sim_test_report PY: tests/<suite>/PY's report role on the run (<out>/report.log,
-# and report.json); exits 0 only if the test's steps and every check passed
+# sim_test_report PY: run tests/<suite>/PY's report role on the run (<out>/report.log and
+# report.json); exit 0 only if the test's steps and every check passed, else 1.
 sim_test_report() {
     set +e
     "${COMPOSE[@]}" run --rm -T --no-deps -e PYTHONDONTWRITEBYTECODE=1 robocasa \

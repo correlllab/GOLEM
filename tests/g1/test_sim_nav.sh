@@ -1,5 +1,5 @@
 #!/bin/bash
-# Closed-loop navigation test of the G1 RoboCasa sim, run from the host: Nav2
+# Run the G1's closed-loop navigation test in the RoboCasa sim, from the host: Nav2
 # walks the G1 to a goal 2-3 m away in the kitchen, or to NAV_GOAL.
 #
 #   tests/g1/test_sim_nav.sh                     # FAST_LIO on the sim's MID-360
@@ -18,8 +18,7 @@
 # GOLEM_CMD_TIMEOUT, would drop the robot while it still runs.
 # Finally it checks the run against the sim's recording (test_sim_nav.py report;
 # see test_sim_nav.py for what is checked), the robot standing to the end of it
-# and no fall in sim.log. Exits 0 only if every check passes. The camera
-# renders on the GPU (EGL).
+# and no fall in sim.log. The camera renders on the GPU (EGL).
 #
 # The containers have no network of their own (common.sh), so no DDS leaves the
 # host, and nothing talks to the robot. ROS_DOMAIN_ID must not be 0.
@@ -48,7 +47,13 @@
 #   GOLEM_LIDAR_POINTS, GOLEM_LIDAR_HZ, GOLEM_CAMERAS, GOLEM_CAMERA_HZ,
 #   GOLEM_CAMERA_SCALE   passed to the sim as the shell has them, docker/.env's
 #               never (g1_sensors.SensorConfig)
+#
+# Exit: 0 when every check passes; 1 when a check, the test's steps or a container fails;
+#   2 for bad arguments or settings, a bad domain or a non-empty OUT; 3 when the core_ws build
+#   fails.
 set -eo pipefail
+
+# Arguments and settings: none, the sim's ground-truth odometry off, a valid NAV_USE_HANDS.
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [ -n "${1:-}" ]; then
@@ -63,7 +68,8 @@ case "${NAV_USE_HANDS:-true}" in
     true|false) ;;
     *) echo 'NAV_USE_HANDS must be true or false.' >&2; exit 2 ;;
 esac
-# the lidar stays on: the test needs it
+
+# The sim's knobs; the lidar stays on: navigation needs it.
 SIM_ENV=(-e GOLEM_SIM_ODOM=0 -e "GOLEM_SPAWN_BACKOFF=${NAV_BACKOFF:-2.0}" -e "NAV_GOAL=${NAV_GOAL:-}"
          -e GOLEM_LIDAR=)
 source "$HERE/common.sh"
@@ -75,6 +81,8 @@ DRIVE_ARGS=
 if [ "${NAV_KEEP_LIDAR:-0}" = 1 ]; then
     DRIVE_ARGS=--keep-lidar
 fi
+
+# The containers, the build, then the sim, up before the bringup.
 g1_test_setup test_sim_nav nav nav 197
 g1_test_log_load
 
@@ -84,18 +92,21 @@ g1_test_start_sim test_sim_nav.py "${SIM_ENV[@]}"
 grep "\[test_sim_nav\]" "$OUT/sim.log" || true
 echo "[test_sim_nav] sim up; starting the bringup with navigation"
 
+# The bringup in the background and the test's steps beside it, at most 900 s.
+
 g1_test_run_ros 900 "ros2 launch golem_bringup g1_sim.launch.py use_rviz:=false use_nav:=true \
         use_hands:=${NAV_USE_HANDS:-true} > /out/launch.log 2>&1 &
     LAUNCH=\$!
     python3 -u /home/code/tests/g1/test_sim_nav.py drive --out /out $DRIVE_ARGS
     rc=\$?
-    # the sim first, with the robot standing: it looks for /out/stop every 500
-    # physics steps, then saves sim.npz and, last, contacts.json; then the bringup
+    # The sim first, with the robot standing: it looks for /out/stop every 500
+    # physics steps, then saves sim.npz and, last, contacts.json; then the bringup.
     touch /out/stop
     for _ in \$(seq 1 60); do [ -e /out/contacts.json ] && break; sleep 1; done
     kill -INT \$LAUNCH
     wait \$LAUNCH
     exit \$rc"
 
+# Stop the sim, then check the run against its recording.
 g1_test_stop_sim
 g1_test_report test_sim_nav.py

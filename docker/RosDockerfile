@@ -422,8 +422,6 @@ RUN cd /home/code/mujoco_mpc \
     && cp -a /home/code/mujoco_mpc/build/lib/libmujoco.so* /usr/local/lib/ \
     && ldconfig \
     && cp -a /home/code/mujoco_mpc/build /opt/mjpc-build-seed \
-    # .mjpc_ref records the commit the seed was built at
-    && echo "${MJPC_REF}" > /opt/mjpc-build-seed/.mjpc_ref \
     && find /opt/mjpc-build-seed/_deps -maxdepth 2 -name .git -prune -exec rm -rf {} + 2>/dev/null || true \
     && rm -rf /home/code/mujoco_mpc
 

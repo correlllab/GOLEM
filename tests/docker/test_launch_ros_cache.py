@@ -265,10 +265,6 @@ sys.exit(int(os.environ.get('BUILD_EXIT', '0')))
         (src / 'CMakeLists.txt').write_text('project(test)')
         dirty = src / 'dirty.cpp'
         dirty.write_text('original')
-        for args in (['init', '-q'], ['add', '.'], ['-c', 'user.name=Test', '-c', 'user.email=t@example.com', 'commit', '-qm', 'seed']):
-            subprocess.run(['git', '-C', str(src), *args], check=True, capture_output=True)
-        ref = subprocess.check_output(['git', '-C', str(src), 'rev-parse', 'HEAD'], text=True)
-        (seed / '.mjpc_ref').write_text(ref)
         (seed / 'CMakeCache.txt').write_text('cache')
         obj = seed / 'dirty.o'
         obj.write_text('old binary')

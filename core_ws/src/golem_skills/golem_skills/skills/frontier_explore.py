@@ -569,4 +569,3 @@ class FrontierExplore(Node, FrontierExploreSkill):
             cancel_callback=lambda _: CancelResponse.ACCEPT,
             callback_group=self._cb_group,
         )
-

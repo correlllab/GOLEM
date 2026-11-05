@@ -1508,8 +1508,8 @@ class GraspSkill:
         if len(dists) == len(GRASP_FRAMES):
             arm = min(dists, key=dists.get)
             self.get_logger().info(
-                'grasp: auto-selected %s arm (hand-to-object %s)' % (arm,
-                ', '.join(f'{a} {d:.3f}m' for a, d in sorted(dists.items()))))
+                'grasp: auto-selected %s arm (hand-to-object %s)' % (
+                    arm, ', '.join(f'{a} {d:.3f}m' for a, d in sorted(dists.items()))))
         else:
             arm = 'left' if centroid_p[1] > 0.0 else 'right'
             self.get_logger().warn(

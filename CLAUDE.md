@@ -272,7 +272,9 @@ for the includes after it, so pass consistent values (all four blocks share
   once its estop latches (false from the start if it latched first).
   `h12_lowerbody_rl` pre-poses the legs only from the first beat, and
   `lmg_deploy` publishes and pre-poses only from it too; `golem_skills`
-  reads it.
+  halts its arm moves until the first true beat, for good after a false one,
+  and while no beat has come for its `heartbeat_timeout` (0.5 s), and the halt
+  cancels the arm goal in flight (§7).
 - **`frame_task_server` needs `golem_safety` relaying.** It waits up to
   `controller.state_timeout` (5 s) for a fresh `/lowstate`, then holds the
   measured pose until it sees its commands on `/lowcmd` (the follow gate), for
@@ -425,6 +427,13 @@ repo serves it yet. On the G1, `golem_skills` starts when `use_skills:=true`
 is passed to `g1_sim.launch.py` (with `wait_for_services: false` so it starts
 immediately without waiting for H1-2 vision/gripper services), serving
 `/skill/frontier_explore`.
+
+Arm moves (`/frame_task`, `/named_config`) need a live `/safety/heartbeat`:
+`golem_skills` refuses to send one before the first true beat, after a false
+beat (until the node restarts) and when the last beat is older than
+`heartbeat_timeout` (0.5 s), and it cancels the move in flight on the server,
+so the skill fails with the halt reason. Grippers, navigation and
+`frontier_explore` do not depend on it.
 
 Skills consume the `frame_task` IK action, the gripper services, and the
 `model_server` perception services (`gemini_query`, `sam_segment`, `graspgen` —

@@ -205,6 +205,10 @@ SLOW_MODE_TIME_SCALE = 4.0
 FRAME_TASK_STABLE_EPS_LIN = 0.0005    # 0.5 mm
 FRAME_TASK_STABLE_EPS_ANG = 0.002     # 2 mrad
 
+# Longest [s] /safety/heartbeat (10 Hz) may stay quiet before arm motion halts;
+# the `heartbeat_timeout` parameter.
+HEARTBEAT_TIMEOUT_SEC = 0.5
+
 # Skills whose runs get a per-run base-sway telemetry directory (see
 # run_telemetry.py). Only the implemented, base-MOVING manipulation skills are
 # worth recording — the stubs abort instantly and frontier_explore is a
@@ -383,11 +387,17 @@ class SkillsBase(Node):
             self, NamedConfig, '/named_config', callback_group=self._cb_group)
 
         # --- arm halt detection -------------------------------------------------
-        # /safety/heartbeat is True until the safety layer latches estop (None
-        # until the first message). A frame_task/named_config goal the server
-        # ABORTS (estop, stale robot state, execution error) halts arm motion
-        # for the rest of the skill goal; see arm_halt_reason().
-        self._safety_alive = None
+        # /safety/heartbeat: nothing until golem_safety can relay, then True at
+        # 10 Hz, and False once its estop latches (until restart). Arm motion
+        # is halted until the first true beat, for good after a false one, and
+        # while no beat has come for `heartbeat_timeout`; a frame_task or
+        # named_config goal the server ABORTS (estop, stale robot state,
+        # execution error) halts it for the rest of the skill goal. See
+        # arm_halt_reason().
+        self.declare_parameter('heartbeat_timeout', HEARTBEAT_TIMEOUT_SEC)
+        self._monotonic = time.monotonic
+        self._last_beat = None            # self._monotonic() of the last beat
+        self._safety_latched = False
         self._arm_halt_reason = None
         self.safety_heartbeat_sub = self.create_subscription(
             Bool, '/safety/heartbeat', self._on_safety_heartbeat, 10,
@@ -613,13 +623,18 @@ class SkillsBase(Node):
         t = float(goal.timeout.sec) + float(goal.timeout.nanosec) * 1e-9
         return t if t > 0.0 else default
 
-    def _wait_future(self, future, timeout_sec, outer_gh=None, stop_event=None):
-        """Block this (executor worker) thread until the future resolves.
+    def _wait_future(self, future, timeout_sec, outer_gh=None, stop_event=None,
+                     halt_check=None):
+        """
+        Block this (executor worker) thread until the future resolves.
+
         Safe under the MultiThreadedExecutor: other threads keep spinning.
         Polls in small increments so a cancel of the outer skill goal
         (outer_gh) is noticed promptly. Returns None on timeout or cancel, or
-        when `stop_event` (an optional threading.Event) is set — the caller uses
-        that to bail out early (e.g. frame_task feedback gone stable)."""
+        when `stop_event` (an optional threading.Event) is set (the caller uses
+        that to bail out early, e.g. frame_task feedback gone stable), or when
+        `halt_check` (an optional callable) returns a reason on any poll.
+        """
         event = threading.Event()
         future.add_done_callback(lambda _f: event.set())
         deadline = time.monotonic() + max(0.0, timeout_sec)
@@ -627,6 +642,8 @@ class SkillsBase(Node):
             if outer_gh is not None and outer_gh.is_cancel_requested:
                 return None
             if stop_event is not None and stop_event.is_set():
+                return None
+            if halt_check is not None and halt_check() is not None:
                 return None
             remaining = deadline - time.monotonic()
             if remaining <= 0.0:
@@ -649,14 +666,18 @@ class SkillsBase(Node):
 
     def _send_action(self, client, goal, feedback_cb=None,
                      accept_timeout=10.0, result_timeout=120.0, outer_gh=None,
-                     stop_event=None):
-        """send_goal -> wait for acceptance -> wait for result.
+                     stop_event=None, halt_check=None):
+        """
+        Send a goal, wait for acceptance, then wait for the result.
+
         Returns the result response (with .status and .result), or None. If the
-        result wait fails (timeout, outer-skill cancel, or `stop_event` set),
-        the in-flight goal is canceled ON THE SERVER — Future.cancel() would
-        only drop the local future and leave the robot executing an orphaned
-        goal. `stop_event` lets a feedback callback end the wait early (e.g.
-        frame_task feedback gone stable)."""
+        result wait fails (timeout, outer-skill cancel, `stop_event` set, or
+        `halt_check` returning a reason), the in-flight goal is canceled ON THE
+        SERVER: Future.cancel() would only drop the local future and leave the
+        robot executing an orphaned goal. `stop_event` lets a feedback callback
+        end the wait early (e.g. frame_task feedback gone stable); arm goals
+        pass `halt_check=self.arm_halt_reason`.
+        """
         if result_timeout <= 0.05:
             self.get_logger().error('no time left to send action goal')
             return None
@@ -666,7 +687,8 @@ class SkillsBase(Node):
             self.get_logger().error('action goal rejected or send timed out')
             return None
         response = self._wait_future(handle.get_result_async(), result_timeout,
-                                     outer_gh, stop_event=stop_event)
+                                     outer_gh, stop_event=stop_event,
+                                     halt_check=halt_check)
         if response is None:
             self.get_logger().warn('canceling in-flight inner action goal')
             self._wait_future(handle.cancel_goal_async(), 2.0)
@@ -1028,23 +1050,48 @@ class SkillsBase(Node):
                                      lin_tol=lin_tol, ang_tol=ang_tol)
 
     def _on_safety_heartbeat(self, msg):
-        self._safety_alive = bool(msg.data)
+        self._last_beat = self._monotonic()
+        if not msg.data:
+            self._safety_latched = True
 
     def arm_halt_reason(self):
-        '''Why arm motion must stop for the current skill goal, or None. Every
-        frame_task / named_config move refuses to send while this is set, so a
-        skill should abort rather than try another target.'''
-        if self._safety_alive is False:
-            return 'safety layer estop latched (/safety/heartbeat false)'
+        '''
+        Return why arm motion must stop for the current skill goal, or None.
+
+        Every frame_task / named_config move refuses to send while this is
+        set, and one in flight is canceled, so a skill should abort rather
+        than try another target. Halted: after a false /safety/heartbeat (for
+        the node's life: golem_safety's estop latches until restart), before
+        the first beat, while the last beat is older than `heartbeat_timeout`,
+        and for the rest of the goal after a move the server aborted or a halt
+        that canceled a move in flight.
+        '''
+        if self._safety_latched:
+            return 'golem_safety estop latched'
+        if self._last_beat is None:
+            return 'safety heartbeat not received yet'
+        silent = self._monotonic() - self._last_beat
+        if silent > self.get_parameter('heartbeat_timeout').value:
+            return f'safety heartbeat silent for {silent:.1f} s'
         return self._arm_halt_reason
 
     def _note_arm_move_status(self, response, what):
-        '''Latch an arm halt when the server aborted the move `what`.'''
+        '''
+        Latch an arm halt for the rest of the goal.
+
+        Latched when the server aborted the move `what`, or when the move has
+        no result because a halt canceled it.
+        '''
         if response is not None and response.status == GoalStatus.STATUS_ABORTED:
             self._arm_halt_reason = (
                 f'{what} was aborted by the server (estop, stale robot state, '
                 'or an execution error)')
             self.get_logger().error(f'arm halted: {self._arm_halt_reason}')
+        elif response is None:
+            halt = self.arm_halt_reason()
+            if halt is not None:
+                self._arm_halt_reason = halt
+                self.get_logger().error(f'{what} canceled: {halt}')
 
     def _send_frame_move(self, frame, pose, duration_sec, outer_gh, do_plan,
                          slow_mode=False, label='', stable_stop_msgs=None,
@@ -1127,7 +1174,7 @@ class SkillsBase(Node):
         response = self._send_action(
             self.frame_task_cli, goal, feedback_cb=_log_feedback,
             result_timeout=float(duration_sec) + 10.0, outer_gh=outer_gh,
-            stop_event=stable_event)
+            stop_event=stable_event, halt_check=self.arm_halt_reason)
         self._note_arm_move_status(response, f'frame_task {tag!r}')
         stable_stopped = stable_event is not None and stable_event.is_set()
         ok = stable_stopped or (
@@ -1197,7 +1244,8 @@ class SkillsBase(Node):
         goal.duration.nanosec = int((duration_sec - int(duration_sec)) * 1e9)
         response = self._send_action(self.named_config_cli, goal,
                                      result_timeout=result_timeout,
-                                     outer_gh=outer_gh)
+                                     outer_gh=outer_gh,
+                                     halt_check=self.arm_halt_reason)
         self._note_arm_move_status(response, f'named_config {name!r}')
         ok = (response is not None
               and response.status == GoalStatus.STATUS_SUCCEEDED
@@ -1368,7 +1416,8 @@ class SkillsBase(Node):
         amount = min(max(float(amount), 0.0), 1.0)
         if not self.set_gripper(arm, amount * GRIPPER_MAX_WIDTH_MM):
             return False
-        self.get_clock().sleep_for(RclpyDuration(seconds=GRIPPER_SETTLE_SEC))   # let the fingers finish before the arm moves
+        # Let the fingers finish before the arm moves.
+        self.get_clock().sleep_for(RclpyDuration(seconds=GRIPPER_SETTLE_SEC))
         return True
 
     def close_gripper(self, arm, force_n=GRIP_FORCE_N):
@@ -1389,7 +1438,8 @@ class SkillsBase(Node):
             return False
         if not self._trigger_gripper(self.gripper_close_clis[arm], f'close({arm})'):
             return False
-        self.get_clock().sleep_for(RclpyDuration(seconds=GRIPPER_SETTLE_SEC))   # let the fingers finish closing before the arm moves
+        # Let the fingers finish closing before the arm moves.
+        self.get_clock().sleep_for(RclpyDuration(seconds=GRIPPER_SETTLE_SEC))
         # Only now, so the loop's first tick can't race the initial close.
         self._start_grip_hold(arm)
         return True

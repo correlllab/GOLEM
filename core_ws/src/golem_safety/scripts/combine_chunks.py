@@ -3,7 +3,9 @@
 Concatenate a safety_node run's .npz log chunks into one .npz file.
 
 Usage: ros2 run golem_safety combine_chunks.py [--load DIR] [--prefix PREFIX] [--save FILE]
---load is the run's directory (logging.base_dir/<YYYYmmdd-HHMMSS>-<pid>), --prefix its
+--load is the run's directory (logging.base_dir/<YYYYmmdd-HHMMSS>-<pid>), or a directory
+of runs such as logging.base_dir (the default, /tmp/golem_safety): with no chunk of its
+own it takes the run directory under it that was written last. --prefix is the run's
 logging.chunk_prefix. Every chunk must have the same keys; each key's arrays are joined on
 the sample axis. Exits 1 with a traceback when no chunk matches or the keys differ.
 """
@@ -17,9 +19,20 @@ def _list_chunks(base_dir: Path, prefix: str) -> list[Path]:
     """Return the chunk files of `prefix` in `base_dir`, in chunk order."""
     return sorted(base_dir.glob(f'{prefix}*.npz'))
 
+
+def run_directory(load: Path, prefix: str) -> Path:
+    """Return load if it holds chunks, else its subdirectory with chunks modified last."""
+    if _list_chunks(load, prefix) or not load.is_dir():
+        return load
+    # A run directory's mtime moves with every chunk it gets; its name's timestamp has
+    # one-second resolution and ties on the pid.
+    runs = [path for path in load.iterdir() if path.is_dir() and _list_chunks(path, prefix)]
+    return max(runs, key=lambda path: path.stat().st_mtime_ns, default=load)
+
+
 def combine_chunks(base_dir: str, prefix: str, output: str) -> Path:
     """Write every chunk's arrays, concatenated per key, to `output`; return its path."""
-    base = Path(base_dir)
+    base = run_directory(Path(base_dir), prefix)
     files = _list_chunks(base, prefix)
     if not files:
         raise FileNotFoundError(f'no chunk files found in {base} with prefix {prefix}')
@@ -48,6 +61,7 @@ def combine_chunks(base_dir: str, prefix: str, output: str) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(out_path, **out_data)
     return out_path
+
 
 def main(load: str, prefix: str, save: str) -> None:
     """Combine the chunks and print where they went."""

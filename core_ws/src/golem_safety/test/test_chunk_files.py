@@ -149,6 +149,24 @@ def test_combine_chunks_concatenates(tmp_path):
         assert_chunk(data, 0, 250, 29)
 
 
+def test_combine_chunks_takes_the_run_written_last_from_a_directory_of_runs(tmp_path):
+    """Given a directory of runs, as logging.base_dir is, combine_chunks.py merges the newest."""
+    older, newer = tmp_path / '20260101-120000-200', tmp_path / '20260101-120000-100'
+    write_chunks(older, per_chunk=100, samples=150, motors=29)
+    write_chunks(newer, per_chunk=100, samples=250, motors=29)
+    # The names sort the other way round: the run is picked by when it was written.
+    os.utime(older, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(newer, ns=(2_000_000_000, 2_000_000_000))
+    combined = tmp_path / 'combined.npz'
+    result = subprocess.run(
+        [sys.executable, str(combine_script()), '--load', str(tmp_path), '--save', str(combined)],
+        capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+
+    with np.load(combined, allow_pickle=False) as data:
+        assert_chunk(data, 0, 250, 29)
+
+
 def test_combine_chunks_defaults_to_the_golem_safety_directory():
     """combine_chunks.py defaults to /tmp/golem_safety and its combined.npz."""
     # Read from the source: argparse does not print defaults in --help, and running without

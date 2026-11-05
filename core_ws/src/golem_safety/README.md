@@ -250,10 +250,13 @@ With `logging.enabled`, each run logs to its own directory,
 `<logging.base_dir>/<YYYYmmdd-HHMMSS>-<pid>/`, in chunks of 1000 samples
 (`<chunk_prefix>000000.npz`, ...): one sample per `/lowstate` the relay took before the
 latch (the latching one included), with its motor fields and IMU, and the last command
-written. `combine_chunks.py` (installed in `lib/golem_safety`) merges one run's chunks:
+written. `combine_chunks.py` (installed in `lib/golem_safety`) merges one run's chunks.
+`--load` is the run's directory, or a directory of runs (the default, `/tmp/golem_safety`),
+from which it takes the run written last:
 
 ```bash
 ros2 run golem_safety combine_chunks.py --load /tmp/golem_safety/<run> --save /tmp/combined.npz
+ros2 run golem_safety combine_chunks.py   # the latest run, into /tmp/golem_safety/combined.npz
 ```
 
 ## Tests

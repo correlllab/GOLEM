@@ -51,7 +51,7 @@ import time
 
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped, Twist
-from h12_lowerbody_rl.policy import (
+from golem_lowerbody_rl.policy import (
     AlmiPolicy,
     FamePolicy,
     LegCommand,
@@ -62,8 +62,8 @@ from h12_lowerbody_rl.policy import (
     apply_imu_offset,
     imu_offset_quat,
 )
-from h12_lowerbody_rl.policy_manager import PolicyManager
-from h12_lowerbody_rl.supervisor import FAULTED, HOLDING, RAMPING, RUNNING, LegSupervisor
+from golem_lowerbody_rl.policy_manager import PolicyManager
+from golem_lowerbody_rl.supervisor import FAULTED, HOLDING, RAMPING, RUNNING, LegSupervisor
 import numpy as np
 from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor, SetParametersResult
 import rclpy
@@ -110,7 +110,7 @@ CONFIRM_REMINDER_SECONDS = 5.0
 
 
 def _share(*parts: str) -> str:
-    return os.path.join(get_package_share_directory("h12_lowerbody_rl"), *parts)
+    return os.path.join(get_package_share_directory("golem_lowerbody_rl"), *parts)
 
 
 class LowerBodyControllerNode(Node):

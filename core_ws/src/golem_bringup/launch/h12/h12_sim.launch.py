@@ -57,7 +57,7 @@ def generate_launch_description():
                               description="true: golem_skills records each grasp and "
                                           "pick_place run under its logs/runs/<skill>/"),
         DeclareLaunchArgument('lowerbody', default_value='almi',
-                              description='The policy h12_lowerbody_rl runs on the legs: '
+                              description='The policy golem_lowerbody_rl runs on the legs: '
                                           'almi, fame or walk. mjpc starts no leg node and '
                                           'no bringup starts the MJPC controller, so it '
                                           'leaves the legs uncommanded'),

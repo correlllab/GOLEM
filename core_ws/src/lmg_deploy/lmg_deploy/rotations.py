@@ -64,7 +64,7 @@ def imu_mount_quat(roll: float, pitch: float, yaw: float) -> np.ndarray:
     """Return the IMU mounting bias Rz(yaw) Ry(pitch) Rx(roll), the attitude the IMU reads with the torso level.
 
     Angles in rad. Positive pitch reads tilted forward, positive roll tilted
-    right, as h12_lowerbody_rl's imu_offset_quat. The torso's attitude is
+    right, as golem_lowerbody_rl's imu_offset_quat. The torso's attitude is
     raw * conj(this); a vector the IMU measures is this applied to it in the
     torso frame.
     """

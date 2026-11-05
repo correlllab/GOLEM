@@ -490,7 +490,7 @@ class FamePolicy(Policy):
         self._encoder = None
         enc_path = _resolve("encoder_path", "encoder_3600.pt")
         if os.path.isfile(enc_path):
-            from h12_lowerbody_rl.rma import EnvFactorEncoder, EnvFactorEncoderCfg
+            from golem_lowerbody_rl.rma import EnvFactorEncoder, EnvFactorEncoderCfg
 
             self._encoder = EnvFactorEncoder(
                 EnvFactorEncoderCfg(in_dim=self.ET_DIM, latent_dim=self.LATENT_DIM))

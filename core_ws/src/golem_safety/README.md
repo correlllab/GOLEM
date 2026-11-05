@@ -52,8 +52,8 @@ or when its exit sequence overruns its length by more than 1 s
 | pub | `/safety/heartbeat` | `std_msgs/Bool` | reliable, depth 10 | 10 Hz on the steady clock once relaying can begin: true, then false once the estop latches |
 
 The topic names are the config's `topics` (and `estop`) values; the table gives the
-defaults, which every carried config uses. `h12_lowerbody_rl`, `lmg_deploy` and `golem_skills`
-read `/safety/heartbeat` on the H1-2, and `h12_lowerbody_rl` starts pre-posing the legs on
+defaults, which every carried config uses. `golem_lowerbody_rl`, `lmg_deploy` and `golem_skills`
+read `/safety/heartbeat` on the H1-2, and `golem_lowerbody_rl` starts pre-posing the legs on
 the first beat, so a beat means relaying can begin. The node publishes none until the
 engage conditions that do not depend on the inputs hold: the newest `/lowstate` reports the
 profile's `mode_machine` and, with `use_estop`, a first hardware estop sample has arrived

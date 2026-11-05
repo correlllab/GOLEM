@@ -9,8 +9,8 @@ import math
 import numpy as np
 import pytest
 
-from h12_lowerbody_rl.policy import NUM_LEG_JOINTS, NUM_POLICY_JOINTS, RobotState
-from h12_lowerbody_rl.supervisor import (
+from golem_lowerbody_rl.policy import NUM_LEG_JOINTS, NUM_POLICY_JOINTS, RobotState
+from golem_lowerbody_rl.supervisor import (
     FAULTED,
     HOLDING,
     RAMPING,

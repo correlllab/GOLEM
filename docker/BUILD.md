@@ -39,7 +39,7 @@ is required before anything builds.
 
 **`core_ws/src` in-tree packages** (versioned directly in this repo, *not*
 submodules): `FAST_LIO`, `golem_ros2_models`, `golem_safety`, `golem_upper_ik`, `deploy_mjpc`,
-`h12_lowerbody_rl`, `golem_slam`, `golem_skills`, `golem_bringup`, `lmg_deploy`,
+`golem_lowerbody_rl`, `golem_slam`, `golem_skills`, `golem_bringup`, `lmg_deploy`,
 `model_server`, and the G1 packages `dex_3` and `g1_homie`.
 
 `golem_safety` (C++, `ament_cmake`) and `golem_upper_ik` (Python) are the

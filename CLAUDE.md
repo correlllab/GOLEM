@@ -177,7 +177,7 @@ nests `unitree_api`, `unitree_go`, `unitree_hg`, `unitree_ros2_example`).
 | `golem_bringup` | **bringup (both robots)** | Launch-only package that starts the whole H1-2 (`launch/h12/`) or G1 (`launch/g1/`), sim or real. See §6. | top-level + building-block launch files, `config/h12/*.yaml` |
 | `golem_ros2_models` | **description (both robots)** | Installs both robots' models from `CL_Assets`: the H1-2 with its Magpie grippers and the G1 with its Dex3-1 hands, each a Pinocchio URDF, a ROS copy with `package://golem_ros2_models/...` URIs, the meshes, and a sphere-packed self-collision model with its SRDF. No nodes and no joint table (that is `golem_safety`'s robot profile) | `golem_ros2_models.paths`; `launch/display.launch.py` (`robot:=h12|g1`) |
 | `deploy_mjpc` | controller (lower body, MPC) | MJPC balance/locomotion controller (C++ cores from the `mujoco_mpc` fork, run as separate processes) + RW-EKF base estimator. No bringup starts the controller today (`lowerbody:=mjpc` starts no leg node), and the estimator only with `use_estimator:=true` | `mjpc_lowerbody_core`, `controller_launcher.py`, `estimator_node.py` |
-| `h12_lowerbody_rl` | controller (lower body, RL) | TorchScript walking, FAME RMA stand/squat and ALMI stand/walk policies, run by one controller pinned to one of them (`active_policy`: `almi` in every bringup; the Mac's `GOLEM_LOWERBODY` picks `fame`, `walk` or `almi`); consumes `/lowstate` + `/cmd_vel`, emits 12-joint PD setpoints | `lowerbody_controller_node` |
+| `golem_lowerbody_rl` | controller (lower body, RL) | TorchScript walking, FAME RMA stand/squat and ALMI stand/walk policies, run by one controller pinned to one of them (`active_policy`: `almi` in every bringup; the Mac's `GOLEM_LOWERBODY` picks `fame`, `walk` or `almi`); consumes `/lowstate` + `/cmd_vel`, emits 12-joint PD setpoints | `lowerbody_controller_node` |
 | `lmg_deploy` | controller (whole body, MARL) | The loco-manipulation game's two-agent (legs + IK arms) MARL policy, run by the `lmg_*` bringups. It reads `/livox/imu` as if `livox_imu_link` were upright; the H1-2's models and RoboCasa sim carry the MID-360's raw, upside-down frame there, so the policy gets an upside-down IMU until `lmg_deploy` is updated (its strict xfail `test_urdf_mount_is_the_livox_pitch`) | `marl_deploy_node` |
 | `golem_slam` | SLAM + navigation (both robots) | One navigation graph for both robots (FAST-LIO deskewed cloud → self filter → floor alignment (`level_odom`)/OctoMap and `level_cloud` → scan → slam_toolbox → Nav2 MPPI, every Nav2 command through the velocity smoother), with the dynamic `body → pelvis` transform (`body_to_pelvis`, following the torso or waist joints) and a static `<lidar link> → livox_frame`. `navigation.launch.py robot:=h12\|g1` picks the robot's config directory, `config/<robot>/`: FAST-LIO (`fastlio.yaml`, the G1 sim's `fastlio_sim.yaml`), the MID360 driver config (`MID360_config.json`, real robot, read by the real-driver launches), Nav2 (`nav2.yaml`), OctoMap (`octomap.yaml`) and the pipeline profile (`pipeline.yaml`: lidar link, scan band, `level_odom` values); slam_toolbox's `config/slam_toolbox.yaml` is shared; `config/example.<kind>.yaml` annotate every key and are not installed | `launch/navigation.launch.py`, `body_to_pelvis`, `config/` |
 | `golem_skills` | **skills (both robots)** | Action servers for the 12 `/skill/*` atomic skills an LLM can call (frontier exploration lives here). See §7. | `skills` (SkillsNode) |
@@ -273,7 +273,7 @@ for the includes after it, so pass consistent values (all four blocks share
 - **`/safety/heartbeat` means relaying can begin.** `safety_node` publishes no
   beat until those two conditions hold; then it beats true at 10 Hz, and false
   once its estop latches (false from the start if it latched first).
-  `h12_lowerbody_rl` pre-poses the legs only from the first beat, and
+  `golem_lowerbody_rl` pre-poses the legs only from the first beat, and
   `lmg_deploy` publishes and pre-poses only from it too; `golem_skills`
   halts its arm moves until the first true beat, for good after a false one,
   and while no beat has come for its `heartbeat_timeout` (0.5 s), and the halt
@@ -310,7 +310,7 @@ for the includes after it, so pass consistent values (all four blocks share
   sample, so the legs pre-pose and the arms start late. `safety_delay` must
   cover the time `estop_node` takes to connect (the comment in
   `h12_control.launch.py`).
-- **The leg node** (`h12_lowerbody_rl`'s `lowerbody_controller_node`, its
+- **The leg node** (`golem_lowerbody_rl`'s `lowerbody_controller_node`, its
   README) is silent until the first true heartbeat and an upright, finite
   `/lowstate`. It then ramps the legs to the policy's crouch, holds there on
   the real robot until `ros2 service call /lowerbody/confirm_engage
@@ -903,13 +903,15 @@ HOMIE's walking node, which pre-poses the legs and holds them until
   unused packages `h12_safety_layer`, `h12_ros2_controller`, `g1_safety_layer`
   and `g1_control` were deleted), or before `golem_ros2_models` replaced
   `h12_ros2_model` and `g1_description`, or before `dex_3` and `g1_homie`
-  replaced `g1_dex3` and `g1_locomotion`, or before `golem_slam`,
+  replaced `g1_dex3` and `g1_locomotion`, or before `golem_lowerbody_rl`
+  replaced the leg packages `h12_lowerbody_rl` and `g1_homie`, or before
+  `golem_slam`,
   `deploy_mjpc` and `golem_skills` replaced `h12_slam`, `h12_deploy_mjpc` and
   `h12_skills` (and `g1_navigation` was folded into `golem_slam` and
   `golem_skills`), keeps their build and install directories.
   From the repo root, on every host that built the workspace (`sudo` for files
   a container left root-owned):
-  `rm -rf {core_ws/build,core_ws/install,core_ws/build_stack_tests,core_ws/install_stack_tests,container_cache/g1_tests/build,container_cache/g1_tests/install}/{h12_bringup,g1_bringup,h12_safety_layer,h12_ros2_controller,g1_safety_layer,g1_control,h12_ros2_model,g1_description,g1_dex3,g1_locomotion,h12_slam,h12_deploy_mjpc,h12_skills,g1_navigation}`.
+  `rm -rf {core_ws/build,core_ws/install,core_ws/build_stack_tests,core_ws/install_stack_tests,container_cache/g1_tests/build,container_cache/g1_tests/install}/{h12_bringup,g1_bringup,h12_safety_layer,h12_ros2_controller,g1_safety_layer,g1_control,h12_ros2_model,g1_description,g1_dex3,g1_locomotion,h12_slam,h12_deploy_mjpc,h12_skills,g1_navigation,h12_lowerbody_rl,g1_homie}`.
   Until then `launch_ros.sh` (`docker_run.sh ros`, `docker_stack.sh`,
   `tests/g1`) exits before it builds, with `stale installed package '<pkg>' has
   no discovered source`, and a native workspace (the H1-2's onboard PC) keeps

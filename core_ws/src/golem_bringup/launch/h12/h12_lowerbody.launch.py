@@ -1,5 +1,5 @@
 """
-Start the H1-2's leg control: h12_lowerbody_rl's controller and, optionally, an estimator.
+Start the H1-2's leg control: golem_lowerbody_rl's controller and, optionally, an estimator.
 
 Both nodes start at once, and only with start_position_verified:=true:
 lowerbody_controller_node runs the lowerbody:= policy (not with lowerbody:=mjpc), and
@@ -60,7 +60,7 @@ def generate_launch_description():
     return LaunchDescription(args + [
         # The RL policy on the 12 leg joints, through safety_node's lower input.
         Node(
-            package='h12_lowerbody_rl',
+            package='golem_lowerbody_rl',
             executable='lowerbody_controller_node',
             name='lowerbody_controller_node',  # the parameter file's top-level key
             parameters=[sim_time_param,

@@ -16,7 +16,7 @@ SAFETY: the legs are behind two operator gates:
   2. ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger engages it.
 
 Before the first real run, besides measuring the leg node's worst /lowstate gap
-(h12_lowerbody_rl's README), replay at least 3 recorded real-robot bags
+(golem_lowerbody_rl's README), replay at least 3 recorded real-robot bags
 (record_slam_bag recordings) through navigation.launch.py robot:=h12 and check
 FAST-LIO, level_odom and the map. Their points were recorded with the driver's roll
 180 and the IMU upright, so rotate both back to the raw frame (180 degrees about x)
@@ -55,7 +55,7 @@ def generate_launch_description():
                               description='true only after checking the robot is in a '
                                           'safe start pose: starts the leg controller'),
         DeclareLaunchArgument('lowerbody', default_value='almi',
-                              description='The policy h12_lowerbody_rl runs on the legs: '
+                              description='The policy golem_lowerbody_rl runs on the legs: '
                                           'almi, fame or walk; mjpc starts no leg node'),
 
         # The MID-360, the head RealSense and the grippers.

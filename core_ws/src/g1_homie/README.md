@@ -73,7 +73,7 @@ The G1 bringups (`golem_bringup`'s `launch/g1/`) start it after the arm controll
 
 ## Behavior
 
-The node follows the H1-2's leg node (`h12_lowerbody_rl`'s
+The node follows the H1-2's leg node (`golem_lowerbody_rl`'s
 `lowerbody_controller_node`): idle until `golem_safety` beats, a pre-pose,
 on the real robot the operator's confirm, the policy, and in the sim the
 band's release.

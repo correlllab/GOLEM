@@ -86,7 +86,7 @@ moves camera_init: restart this node with it.
 
 ``imu_offset_{roll,pitch,yaw}_deg`` (default 0) trim that IMU live (``ros2 param
 set`` or rqt_reconfigure): the attitude it reads with the torso level, as in
-h12_lowerbody_rl. The trim rotates the attitude, the angular velocity and the
+golem_lowerbody_rl. The trim rotates the attitude, the angular velocity and the
 specific force alike, so projected gravity and the accelerometer agree on the
 tilt.
 """

@@ -137,7 +137,7 @@ services:
       # and served over noVNC on 6081, apart from the MuJoCo viewer's 6080.
       - GOLEM_RVIZ=${GOLEM_RVIZ:-0}
       # The leg block of h12_sim_mac.launch.py: fame, walk or almi starts
-      # h12_lowerbody_rl's controller pinned to that policy, which pre-poses
+      # golem_lowerbody_rl's controller pinned to that policy, which pre-poses
       # the legs and then releases the elastic band. fame stands only; walk
       # and almi follow /cmd_vel, and almi also stands (the one for
       # navigation). Empty: no leg controller, the band holds the robot; any

@@ -91,11 +91,12 @@ from pathlib import Path
 import sys
 root, sim, output = sys.argv[1:]
 source = (Path(root)/f'docker/scripts/launch_{sim}.sh').read_text()
-old = '/home/code/CL_isaaclab_sim/sim_main.py' if sim == 'isaac' else 'h12_mujoco.py'
+entry = '/home/code/CL_isaaclab_sim/sim_main.py' if sim == 'isaac' else 'h12_mujoco.py'
+old = entry if sim == 'isaac' else f'exec python -u {entry}'
 assert source.count(old) == 1, 'Canonical launcher changed; update test instrumentation'
 # The copy is mounted at /test_launcher.sh, away from runtime_common.sh, so that path is made absolute.
 source = source.replace('"$(dirname "$0")/runtime_common.sh"', '"/home/code/h12_sim_scripts/runtime_common.sh"')
-Path(output).write_text(source.replace(old, '/home/code/tests/stack/observe_simulator.py'))
+Path(output).write_text(source.replace(old, old.replace(entry, '/home/code/tests/stack/observe_simulator.py')))
 PY
 
 # The sim's arguments: headless and seeded; Isaac with the Magpie grippers, RoboCasa in one task scene.

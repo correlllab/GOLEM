@@ -2,7 +2,7 @@
 
 Starts, at once and in this order: golem_safety's safety_node, golem_upper_ik's
 frame_task_server and joint_state_publisher, robot_state_publisher on the H1-2 URDF and, for
-the locomotion case only, h12_lowerbody_rl's lowerbody_controller_node pinned to ALMI. Every
+the locomotion case only, golem_lowerbody_rl's lowerbody_controller_node pinned to ALMI. Every
 node runs on sim time with the H1-2's sim configs. If any node exits, the whole launch shuts
 down.
 
@@ -49,7 +49,7 @@ def generate_launch_description():
     if case == 'locomotion':
         # The leg controller under test: ALMI with no operator confirm, as the sim bringups run it.
         nodes.append(Node(
-            package='h12_lowerbody_rl', executable='lowerbody_controller_node', name='lowerbody_controller_node',
+            package='golem_lowerbody_rl', executable='lowerbody_controller_node', name='lowerbody_controller_node',
             parameters=[sim_time, {
                 'active_policy': 'almi',
                 'engage_wait_for_confirm': False,

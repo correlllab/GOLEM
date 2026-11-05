@@ -10,7 +10,7 @@ wrist-pose goals through a damped-least-squares IK step plus a learned
 residual. One node, `marl_deploy_node`, owns all 27 joints. It publishes
 through the split safety layer and obeys `/safety/heartbeat`.
 
-Modelled on `h12_lowerbody_rl`'s `lowerbody_controller_node`. The node goes
+Modelled on `golem_lowerbody_rl`'s `lowerbody_controller_node`. The node goes
 through the same steps (pre-pose ramp, operator confirm, elastic-band
 release) and uses the same heartbeat gate and watchdog: it publishes nothing, and
 does not start its pre-pose ramp, until `golem_safety`'s first true `/safety/heartbeat`

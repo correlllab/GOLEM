@@ -13,7 +13,7 @@ import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from std_srvs.srv import Trigger
 
-from h12_lowerbody_rl.scripts.lowerbody_controller_node import LowerBodyControllerNode
+from golem_lowerbody_rl.scripts.lowerbody_controller_node import LowerBodyControllerNode
 
 TEST_DOMAIN = 97  # never 0 (the real robot) or 1 (the sim)
 # other packages' tests on domain 97 serve /elastic_band/toggle too

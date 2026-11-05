@@ -1,4 +1,4 @@
-# Every parameter of h12_lowerbody_rl's lowerbody_controller_node, the keys
+# Every parameter of golem_lowerbody_rl's lowerbody_controller_node, the keys
 # lowerbody_real.yaml and lowerbody_sim.yaml set, with the node's defaults. No launch
 # file loads this file. The node's module docstring has its phases (wait, pre-pose,
 # hold, run, fault).
@@ -11,7 +11,7 @@ lowerbody_controller_node:
     # from lowerbody:=.
     active_policy: fame
     # Each policy's config file (path). The defaults are these files in
-    # h12_lowerbody_rl's share directory.
+    # golem_lowerbody_rl's share directory.
     walk_config: policies/walk/walk.yaml
     fame_config: policies/fame/fame.yaml
     almi_config: policies/almi/almi.yaml

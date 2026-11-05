@@ -116,7 +116,7 @@ RUN printf '#!/bin/sh\nexec fbsetroot -solid "#2b2b2b"\n' > /usr/bin/fbsetbg \
     && chmod +x /usr/bin/fbsetbg
 
 # The DDS-IDL generator that unitree_hg (from unitree_ros2/cyclonedds_ws)
-# find_package()s REQUIRED; h12_lowerbody_rl depends on unitree_hg. torch, the
+# find_package()s REQUIRED; golem_lowerbody_rl depends on unitree_hg. torch, the
 # leg policies' runtime, comes from golem_base.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-rosidl-generator-dds-idl \

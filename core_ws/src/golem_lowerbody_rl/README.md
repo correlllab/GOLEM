@@ -1,15 +1,15 @@
-# h12_lowerbody_rl
+# golem_lowerbody_rl
 
 The H1-2's leg node, `lowerbody_controller_node`: one policy (`active_policy`:
 `fame`, `walk` or `almi`; every bringup runs `almi`) drives the 12 leg joints
 through `golem_safety`'s lower-body input, `/safety/lowcmd_lower_in`. The
-policies are in `h12_lowerbody_rl/policy.py` and `policies/` (ALMI's
+policies are in `golem_lowerbody_rl/policy.py` and `policies/` (ALMI's
 interface: `policies/almi/README.md`); the bringups set the parameters from
 `golem_bringup/config/h12/lowerbody_{sim,real}.yaml`.
 
 ## Start-up and faults
 
-`h12_lowerbody_rl/supervisor.py` (`LegSupervisor`, no ROS) holds the phases
+`golem_lowerbody_rl/supervisor.py` (`LegSupervisor`, no ROS) holds the phases
 and every check, with `g1_homie`'s thresholds; the node's module docstring has
 the rest.
 
@@ -82,7 +82,7 @@ well under 0.25 s, or the legs latch silent.
 
 ## Tests
 
-`colcon test --packages-select h12_lowerbody_rl`: the linters,
+`colcon test --packages-select golem_lowerbody_rl`: the linters,
 `test_supervisor.py` (the phases and faults on a fake clock) and
 `test_band_node.py` (the band release against a fake toggle service, in one
 process on domain 97). The mypy test is skipped where `ament_mypy` is not

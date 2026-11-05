@@ -3,7 +3,7 @@ from glob import glob
 
 from setuptools import find_packages, setup
 
-package_name = 'h12_lowerbody_rl'
+package_name = 'golem_lowerbody_rl'
 
 setup(
     name=package_name,
@@ -26,8 +26,8 @@ setup(
     zip_safe=True,
     maintainer='maxconway',
     maintainer_email='maxlconway@gmail.com',
-    description='TODO: Package description',
-    license='TODO: License declaration',
+    description='Leg controller: runs the RL locomotion policies on the leg joints.',
+    license='MIT',
     extras_require={
         'test': [
             'pytest',
@@ -36,7 +36,7 @@ setup(
     entry_points={
         'console_scripts': [
             'lowerbody_controller_node = '
-            'h12_lowerbody_rl.scripts.lowerbody_controller_node:main',
+            'golem_lowerbody_rl.scripts.lowerbody_controller_node:main',
         ],
     },
 )

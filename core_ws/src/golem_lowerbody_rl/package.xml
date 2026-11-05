@@ -1,11 +1,11 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>h12_lowerbody_rl</name>
+  <name>golem_lowerbody_rl</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Leg controller: runs the RL locomotion policies on the leg joints.</description>
   <maintainer email="maxlconway@gmail.com">maxconway</maintainer>
-  <license>TODO: License declaration</license>
+  <license>MIT</license>
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>

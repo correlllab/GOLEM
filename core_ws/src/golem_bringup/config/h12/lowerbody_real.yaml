@@ -12,6 +12,6 @@ lowerbody_controller_node:
     # The gap is measured between callbacks on the node's one executor, which also
     # runs the policy tick, so it includes executor stalls (a torch step, GC, CPU
     # contention): 0.25 s catches a dead /lowstate stream without silencing the legs
-    # on a stall. Unmeasured on the real H1-2 (h12_lowerbody_rl's README).
+    # on a stall. Unmeasured on the real H1-2 (golem_lowerbody_rl's README).
     max_state_gap: 0.25
     cmd_vel_timeout: 0.5

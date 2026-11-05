@@ -39,7 +39,7 @@ colcon --log-base "$WS/log_stack_tests" build \
     --build-base "$TEST_BUILD_BASE" \
     --install-base "$TEST_INSTALL_BASE" \
     --symlink-install \
-    --packages-up-to golem_safety golem_upper_ik h12_lowerbody_rl unitree_hg unitree_go \
+    --packages-up-to golem_safety golem_upper_ik golem_lowerbody_rl unitree_hg unitree_go \
     --cmake-args -DBUILD_TESTING=OFF -DPython3_EXECUTABLE=/usr/bin/python3
 source "$TEST_INSTALL_BASE/setup.bash"
 

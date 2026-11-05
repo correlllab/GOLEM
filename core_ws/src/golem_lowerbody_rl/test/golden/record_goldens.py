@@ -5,12 +5,12 @@ Run from the repo root in a disposable golem_ros container (torch and
 onnxruntime installed); it writes walk.npz, almi.npz, fame.npz and homie.npz
 beside this file:
 
-    python3 core_ws/src/h12_lowerbody_rl/test/golden/record_goldens.py
+    python3 core_ws/src/golem_lowerbody_rl/test/golden/record_goldens.py
 
 Each policy runs one scripted 120-step sequence (one step per 20 ms), drawn
 from ``numpy.random.default_rng(7)`` afresh for each policy, and is driven as
 its node drives it: ``WalkPolicy``, ``AlmiPolicy`` and ``FamePolicy`` from
-``h12_lowerbody_rl.policy`` as ``lowerbody_controller_node`` does (reset at
+``golem_lowerbody_rl.policy`` as ``lowerbody_controller_node`` does (reset at
 engage and at the band release, then ``compute``), ``HomiePolicy`` from
 ``g1_homie/policy/homie_policy.py`` as ``g1_homie``'s ``LocomotionController``
 does (``load_policy``, ``CommandFilter.update`` with ``g1_homie/config/sim.yaml``'s
@@ -236,7 +236,7 @@ def _run_h12(name: str, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     """Drive today's H1-2 class as lowerbody_controller_node does; return what it computed."""
     import torch
 
-    from h12_lowerbody_rl.policy import AlmiPolicy, FamePolicy, RobotState, WalkPolicy
+    from golem_lowerbody_rl.policy import AlmiPolicy, FamePolicy, RobotState, WalkPolicy
 
     torch.set_num_threads(1)
     cls = {'walk': WalkPolicy, 'almi': AlmiPolicy, 'fame': FamePolicy}[name]

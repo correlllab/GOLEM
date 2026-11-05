@@ -120,7 +120,7 @@ cd "$WS"
 
 # PKGS: what h12_sim_mac.launch.py runs. The state and control blocks
 # (golem_ros2_models, golem_safety, golem_upper_ik), the leg controller
-# (h12_lowerbody_rl and its unitree_hg; GOLEM_LOWERBODY) and golem_slam's
+# (golem_lowerbody_rl and its unitree_hg; GOLEM_LOWERBODY) and golem_slam's
 # navigation graph (golem_slam, fast_lio; GOLEM_SLAM / GOLEM_NAV2), the message
 # packages, and golem_bringup itself, so `ros2 launch golem_bringup ...` resolves.
 # BRINGUP_STUB_DEPS: golem_bringup's in-workspace exec_depends the Mac does not
@@ -130,7 +130,7 @@ cd "$WS"
 # space, so each gets an empty one; with no ament index entry they do not
 # appear in `ros2 pkg list`. A package added to golem_bringup's package.xml
 # goes into one list or the other (CLAUDE.md §6).
-PKGS="custom_ros_messages magpie_msgs golem_ros2_models golem_safety golem_upper_ik golem_slam fast_lio golem_bringup unitree_hg h12_lowerbody_rl"
+PKGS="custom_ros_messages magpie_msgs golem_ros2_models golem_safety golem_upper_ik golem_slam fast_lio golem_bringup unitree_hg golem_lowerbody_rl"
 BRINGUP_STUB_DEPS="estop magpie_control livox_ros_driver2 model_server cl_realsense lmg_deploy dex_3 g1_homie deploy_mjpc golem_skills"
 
 for _dep in $BRINGUP_STUB_DEPS; do

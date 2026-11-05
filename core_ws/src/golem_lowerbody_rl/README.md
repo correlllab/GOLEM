@@ -11,9 +11,11 @@ interface: `policies/almi/README.md`); the bringups set the parameters from
 
 ## Start-up and faults
 
-`golem_lowerbody_rl/supervisor.py` (`LegSupervisor`, no ROS) holds the phases
-and every check, with `g1_homie`'s thresholds; the node's module docstring has
-the rest.
+`golem_lowerbody_rl/legacy_supervisor.py` (`LegSupervisor`, no ROS) holds the
+node's phases and every check, with `g1_homie`'s thresholds; the node's module
+docstring has the rest. `golem_lowerbody_rl/supervisor.py` is the one state
+machine for both robots' legs, driven by the run config (its module docstring);
+no node runs it.
 
 1. **Waiting.** Silent until `golem_safety`'s first true `/safety/heartbeat`
     and a `/lowstate` sample that is finite, has a unit IMU quaternion (within
@@ -85,7 +87,8 @@ well under 0.25 s, or the legs latch silent.
 ## Tests
 
 `colcon test --packages-select golem_lowerbody_rl`: the linters,
-`test_supervisor.py` (the phases and faults on a fake clock) and
+`test_legacy_supervisor.py` and `test_supervisor.py` (the phases and faults
+on a fake clock), `test_band.py` (when the band is released) and
 `test_band_node.py` (the band release against a fake toggle service, in one
 process on domain 97). The mypy test is skipped where `ament_mypy` is not
 installed (the ros image). `reference/` is not linted: it keeps the original

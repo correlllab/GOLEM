@@ -3,7 +3,7 @@ Lower-body controller node: one pinned policy on the H1-2's legs.
 
 Start-up
 --------
-The phases and every check are ``LegSupervisor``'s (``supervisor.py``):
+The phases and every check are ``LegSupervisor``'s (``legacy_supervisor.py``):
 
 1. **waiting**: silent until golem_safety's first true /safety/heartbeat and
    a finite, upright /lowstate. ``active_policy`` (``fame``, ``walk`` or
@@ -26,7 +26,7 @@ The phases and every check are ``LegSupervisor``'s (``supervisor.py``):
    its start-up moves) or ``band_max_wait`` after the start. The reply is
    final: a success takes the band off and resets the policy's history on
    the next tick; a failure is logged and leaves the band on.
-5. **faulted**: a fault (``supervisor.py``: a false or silent heartbeat, a
+5. **faulted**: a fault (``legacy_supervisor.py``: a false or silent heartbeat, a
    stale, non-finite or fallen /lowstate, a policy step that fails or gives
    non-finite targets, an unexpected error in a tick) is logged once, and
    the node publishes nothing from then on and stays up. golem_safety keeps
@@ -63,7 +63,8 @@ from golem_lowerbody_rl.policy_classes import (
     imu_offset_quat,
 )
 from golem_lowerbody_rl.policy_manager import PolicyManager
-from golem_lowerbody_rl.supervisor import FAULTED, HOLDING, RAMPING, RUNNING, LegSupervisor
+from golem_lowerbody_rl.legacy_supervisor import (
+    FAULTED, HOLDING, RAMPING, RUNNING, LegSupervisor)
 import numpy as np
 from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor, SetParametersResult
 import rclpy

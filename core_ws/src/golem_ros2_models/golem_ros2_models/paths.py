@@ -51,11 +51,10 @@ def collision_paths(robot):
 
 def model_paths(robot):
     '''
-    {'urdf_path', 'urdf_ros_path', 'collision'}: the Pinocchio URDF, its ROS copy and
-    (sphere URDF, SRDF), as golem_upper_ik's robot profiles name them
+    {'urdf_path', 'collision'}: the Pinocchio URDF and (sphere URDF, SRDF), as
+    golem_upper_ik's robot profiles name them
     '''
     return {
         'urdf_path': urdf_path(robot),
-        'urdf_ros_path': urdf_path(robot, ros=True),
         'collision': collision_paths(robot),
     }

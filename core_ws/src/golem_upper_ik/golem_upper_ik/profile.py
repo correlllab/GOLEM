@@ -32,7 +32,6 @@ class RobotProfile:
     robot: str
     mode_machine: int  # the value /lowstate reports and every command carries
     mode_pr: int
-    modes: tuple[str, ...]  # golem_safety's modes for this robot
     body_joints: tuple[str, ...]  # in LowCmd slot order
     # per body joint, slot order (read-only): position limits in rad, velocity limits in
     # rad/s, torque limits in N*m
@@ -40,10 +39,8 @@ class RobotProfile:
     q_high: np.ndarray
     dq_max: np.ndarray
     tau_max: np.ndarray
-    lower_slots: range
     upper_slots: range
     urdf_path: str  # for Pinocchio: relative mesh paths
-    urdf_ros_path: str  # for robot_state_publisher and RViz: package:// mesh URIs
     collision: tuple[str, str] | None  # (sphere URDF, SRDF); None: no self-collision model
     ee_frames: tuple[str, str]  # (left, right)
     planner_frames: tuple[str, str]  # (left, right)
@@ -172,7 +169,6 @@ def load_profile(robot: str) -> RobotProfile:
         raise ValueError(f"robot {robot}: golem_safety's joint slots must be "
                          f'0..{len(joints) - 1}, each once, not {slots}')
     body_joints = tuple(joint['name'] for joint in joints)
-    lower_first, lower_last = data['lower_slots']
     upper_first, upper_last = data['upper_slots']
     upper_slots = range(upper_first, upper_last + 1)
 
@@ -201,16 +197,13 @@ def load_profile(robot: str) -> RobotProfile:
         robot=robot,
         mode_machine=int(data['mode_machine']),
         mode_pr=int(data['mode_pr']),
-        modes=tuple(data['modes']),
         body_joints=body_joints,
         q_low=_read_only([joint['position'][0] for joint in joints]),
         q_high=_read_only([joint['position'][1] for joint in joints]),
         dq_max=_read_only([joint['velocity'] for joint in joints]),
         tau_max=_read_only([joint['effort'] for joint in joints]),
-        lower_slots=range(lower_first, lower_last + 1),
         upper_slots=upper_slots,
         urdf_path=files['urdf_path'],
-        urdf_ros_path=files['urdf_ros_path'],
         collision=None if files['collision'] is None else tuple(files['collision']),
         ee_frames=tuple(config['ee_frames']),
         planner_frames=tuple(config['planner_frames']),

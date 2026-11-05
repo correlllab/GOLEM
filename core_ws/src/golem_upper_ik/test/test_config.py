@@ -127,6 +127,7 @@ def test_joint_lists_take_body_or_upper_lengths(robot, tmp_path):
     from golem_upper_ik.profile import load_profile
     profile = load_profile(robot)
     body, upper = len(profile.body_joints), len(profile.upper_slots)
+    lower = [slot for slot in range(body) if slot not in profile.upper_slots]
     raw = minimal(robot)
     raw['gains']['kd'] = [float(i) for i in range(upper)]
     raw['limits'] = {'clip': {'velocity_ratio': [0.5] * body,
@@ -135,10 +136,10 @@ def test_joint_lists_take_body_or_upper_lengths(robot, tmp_path):
 
     kd = config['gains']['kd']
     np.testing.assert_array_equal(kd[list(profile.upper_slots)], range(upper))
-    np.testing.assert_array_equal(kd[list(profile.lower_slots)], 0.0)
+    np.testing.assert_array_equal(kd[lower], 0.0)
     np.testing.assert_array_equal(config['limits']['dq_clip_limits'], profile.dq_max * 0.5)
     tau = config['limits']['tau_clip_limits']
-    np.testing.assert_array_equal(tau[list(profile.lower_slots)], 0.0)
+    np.testing.assert_array_equal(tau[lower], 0.0)
     np.testing.assert_array_equal(tau[list(profile.upper_slots)],
                                   profile.tau_max[list(profile.upper_slots)] * 0.2)
 

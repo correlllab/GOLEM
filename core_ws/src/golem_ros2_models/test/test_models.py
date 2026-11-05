@@ -94,12 +94,11 @@ def test_unknown_robot_is_refused(call):
 @pytest.mark.parametrize('robot', paths.ROBOTS)
 def test_model_paths_exist(robot):
     model = paths.model_paths(robot)
-    assert set(model) == {'urdf_path', 'urdf_ros_path', 'collision'}
+    assert set(model) == {'urdf_path', 'collision'}
     assert model['urdf_path'] == paths.urdf_path(robot)
-    assert model['urdf_ros_path'] == paths.urdf_path(robot, ros=True)
     assert model['collision'] == paths.collision_paths(robot)
     assert len(model['collision']) == 2
-    for path in (model['urdf_path'], model['urdf_ros_path'], *model['collision']):
+    for path in (model['urdf_path'], paths.urdf_path(robot, ros=True), *model['collision']):
         assert os.path.isfile(path), path
         assert os.path.dirname(path) == paths.model_dir(robot)
     assert paths.model_dir(robot) == os.path.join(share_dir(), robot)

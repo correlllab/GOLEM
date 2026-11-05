@@ -10,7 +10,6 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>unitree_hg</exec_depend>
   <exec_depend>custom_ros_messages</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>golem_ros2_models</exec_depend>

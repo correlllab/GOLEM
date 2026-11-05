@@ -19,28 +19,24 @@ EXPECTED = {
     'h12': {
         'joints': 27,
         'mode_machine': 6,
-        'lower_slots': range(0, 12),
         'upper_slots': range(12, 27),
         'ee_frames': ('left_wrist_yaw_link', 'right_wrist_yaw_link'),
         'planner_frames': ('left_grasp_frame', 'right_grasp_frame'),
         'imu_frame': 'torso_link',
         'held_joints': ('torso_joint',),
         'urdf': 'h1_2_magpie.urdf',
-        'urdf_ros': 'h1_2_magpie_ros.urdf',
         'collision': ('h1_2_magpie_sphere.urdf', 'h1_2_magpie_sphere_collision.srdf'),
         'shutdown_keeps_held_joints': False,
     },
     'g1': {
         'joints': 29,
         'mode_machine': 5,
-        'lower_slots': range(0, 12),
         'upper_slots': range(12, 29),
         'ee_frames': ('left_hand_palm_link', 'right_hand_palm_link'),
         'planner_frames': ('left_hand_palm_link', 'right_hand_palm_link'),
         'imu_frame': 'imu_in_pelvis',
         'held_joints': ('waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint'),
         'urdf': 'g1_29dof_with_hand_rev_1_0.urdf',
-        'urdf_ros': 'g1_29dof_with_hand_rev_1_0_ros.urdf',
         'collision': ('g1_sphere.urdf', 'g1_sphere_collision.srdf'),
         'shutdown_keeps_held_joints': True,
     },
@@ -66,7 +62,6 @@ def test_profiles_load(robot):
     assert len(profile.body_joints) == expected['joints']
     assert profile.mode_machine == expected['mode_machine']
     assert profile.mode_pr == 0
-    assert profile.lower_slots == expected['lower_slots']
     assert profile.upper_slots == expected['upper_slots']
     assert profile.ee_frames == expected['ee_frames']
     assert profile.planner_frames == expected['planner_frames']
@@ -81,9 +76,7 @@ def test_profiles_load(robot):
         assert not values.flags.writeable, name
 
     assert Path(profile.urdf_path).name == expected['urdf']
-    assert Path(profile.urdf_ros_path).name == expected['urdf_ros']
     assert os.path.isfile(profile.urdf_path), profile.urdf_path
-    assert os.path.isfile(profile.urdf_ros_path), profile.urdf_ros_path
     assert tuple(Path(path).name for path in profile.collision) == expected['collision']
     for path in profile.collision:
         assert os.path.isfile(path), path
@@ -119,13 +112,10 @@ def test_profile_body_joints_match_safety_data(robot):
     assert profile.body_joints == tuple(joint['name'] for joint in joints)
     assert profile.mode_machine == data['mode_machine']
     assert profile.mode_pr == data['mode_pr']
-    assert profile.modes == tuple(data['modes'])
     np.testing.assert_array_equal(profile.q_low, [joint['position'][0] for joint in joints])
     np.testing.assert_array_equal(profile.q_high, [joint['position'][1] for joint in joints])
     np.testing.assert_array_equal(profile.dq_max, [joint['velocity'] for joint in joints])
     np.testing.assert_array_equal(profile.tau_max, [joint['effort'] for joint in joints])
-    first, last = data['lower_slots']
-    assert profile.lower_slots == range(first, last + 1)
     first, last = data['upper_slots']
     assert profile.upper_slots == range(first, last + 1)
 

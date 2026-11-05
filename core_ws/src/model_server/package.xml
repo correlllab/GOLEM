@@ -3,7 +3,7 @@
 <package format="3">
   <name>model_server</name>
   <version>0.0.0</version>
-  <description>Self-contained ROS 2 service servers for Gemini, SAM3, and GraspGenX.</description>
+  <description>Self-contained ROS 2 service servers for Gemini, SAM3, GraspGenX and YOLO.</description>
   <maintainer email="maxlconway@gmail.com">max</maintainer>
   <license>MIT</license>
 
@@ -16,9 +16,12 @@
   <depend>cv_bridge</depend>
   <depend>python3-numpy</depend>
   <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-trimesh-pip</exec_depend>
 
-  <!-- The servers' model libraries have no rosdep keys; the ros image
-       pip-installs them (README.md, Dependencies). -->
+  <!-- The servers' other model libraries have no rosdep keys; the ros image
+       pip-installs them, trimesh too, at its locked versions (README.md,
+       Dependencies). -->
 
   <test_depend>python3-pytest</test_depend>
 

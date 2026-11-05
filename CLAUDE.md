@@ -310,15 +310,16 @@ for the includes after it, so pass consistent values (all four blocks share
   the real robot until `ros2 service call /lowerbody/confirm_engage
   std_srvs/srv/Trigger` (refused at any other time), and runs the policy. A
   `/cmd_vel` older than `cmd_vel_timeout` (0.5 s) is zero velocity. Once the
-  legs are commanded, a `/lowstate` gap over `max_state_gap` (0.05 s real,
-  0.5 s sim), a non-finite value or non-unit IMU quaternion, a fall, a policy
-  step that fails or gives non-finite targets, and in every phase a false
-  heartbeat or none for 0.5 s after the first, stop it for good: it logs the
-  fault once, publishes nothing more and stays up. In the sim it calls
-  `/elastic_band/toggle` once, when the service is there, once the policy is
-  engaged and `/left_ee_pose` has come (or `band_max_wait`); the reply is
-  final (a failure is logged as `elastic band release failed: ...` and the
-  band stays on), and a success resets the policy's history.
+  legs are commanded, a `/lowstate` gap over `max_state_gap` (0.25 s real,
+  0.5 s sim; measured between callbacks on the node's one executor, so it
+  includes executor stalls), a non-finite value or non-unit IMU quaternion,
+  a fall, a policy step that fails or gives non-finite targets, and in every
+  phase a false heartbeat or none for 0.5 s after the first, stop it for
+  good: it logs the fault once, publishes nothing more and stays up. In the
+  sim it calls `/elastic_band/toggle` once, when the service is there, once
+  the policy is engaged and `/left_ee_pose` has come (or `band_max_wait`);
+  the reply is final (a failure is logged as `elastic band release failed:
+  ...` and the band stays on), and a success resets the policy's history.
 
 **Wiring a new package into bringup:** add it as `exec_depend` in
 `golem_bringup/package.xml`, add a `launch_ros.actions.Node(...)` entry to the
@@ -771,7 +772,9 @@ pose — it gates leg commands; the policy then holds its pre-pose until
 once `golem_safety` relays `frame_task_server`'s commands, which needs the estop
 box connected: a `safety_node` that starts while `estop_node` reports a failed
 connection latches until restart, and `frame_task_server` exits after
-`controller.startup_timeout` (30 s) when nothing is relayed (§6).
+`controller.startup_timeout` (30 s) when nothing is relayed (§6). Pre-flight:
+before relying on the leg node's `max_state_gap` (0.25 s), measure the worst
+`/lowstate` callback gap on the onboard PC in a hoisted ALMI run.
 
 G1: in Unitree's debug mode, on a gantry; the procedure for entering debug
 mode on our G1 is not written yet, and nobody runs a session until it is

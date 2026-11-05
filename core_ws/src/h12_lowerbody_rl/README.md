@@ -32,8 +32,10 @@ the rest.
     is ignored.
 5. **Faulted.** Once the legs are commanded (ramping, holding, running), any
     of these stops the node for good: a gap over `max_state_gap` between
-    `/lowstate` samples, or none for that long (0.05 s on the real robot,
-    0.5 s in the sim, which can run slower than real time); a non-finite
+    `/lowstate` callbacks, or none for that long (0.25 s on the real robot,
+    0.5 s in the sim, which can run slower than real time; the callbacks
+    share one executor with the policy tick, so the gap includes executor
+    stalls); a non-finite
     value or a non-unit IMU quaternion; a fall (gravity z above -0.5, over
     60 deg); a policy step that raises or gives anything but 12 finite
     targets; an unexpected error in a control tick. In every phase, a false
@@ -57,6 +59,10 @@ free steps are not computed from the band-held ones. No response, an
 exception or `success: false` is logged as `elastic band release failed:
 <why>`, and the band stays on.
 
+Before relying on the real robot's `max_state_gap`, measure the worst
+`/lowstate` callback gap on the onboard PC in a hoisted ALMI run: it must stay
+well under 0.25 s, or the legs latch silent.
+
 ## Parameters
 
 | Parameter | Default | `lowerbody_sim.yaml` | `lowerbody_real.yaml` |
@@ -65,7 +71,7 @@ exception or `success: false` is logged as `elastic band release failed:
 | `engage_wait_for_confirm` | true | false | (true) |
 | `prepose_ramp_s` | 2.0 s | | |
 | `heartbeat_timeout` | 0.5 s | | |
-| `max_state_gap` | 0.05 s | 0.5 s | 0.05 s |
+| `max_state_gap` | 0.05 s | 0.5 s | 0.25 s |
 | `cmd_vel_timeout` | 0.5 s | 0.5 s | 0.5 s |
 | `disable_elastic_band` | true | (true) | false |
 | `band_max_wait` | 30.0 s | 34.0 s | |

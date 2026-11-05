@@ -1,2 +1,2 @@
-# Recorded rosbag2 runs: sqlite3 storage tracked via Git LFS, metadata.yaml stays text.
+# The rosbag2 recordings' sqlite3 storage is kept in Git LFS; metadata.yaml stays plain git text.
 *.db3 filter=lfs diff=lfs merge=lfs -text

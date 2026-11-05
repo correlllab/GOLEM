@@ -1,32 +1,35 @@
-"""LocoMotionGameDeploy node: the two-agent MARL policy (legs + IK arms) on the H1-2.
+"""Run marl_deploy_node: the Locomanipulation_game two-agent MARL policy (legs + IK arms) on the H1-2.
 
 Flow
 ----
-1. Idle (state ``waiting_heartbeat``, nothing published) until golem_safety's first true
-   /safety/heartbeat, then until the first /lowstate.
+1. Idle (state ``waiting_heartbeat``, nothing published) until golem_safety's
+   first true /safety/heartbeat, then until the first /lowstate.
 2. Pre-pose: ramp all 27 joint targets (cosine blend) from the measured pose
    to the policy's default pose at the training gains, then wait for the joints
    to settle there. The ramp lasts at least ``prepose_ramp_s`` and is stretched
    so that no target moves faster than ``prepose_max_vel``: a target that runs
    ahead of the joint makes the PD torque spike and trips the safety layer's
    torque e-stop.
-3. With ``engage_wait_for_confirm`` (default true; lmg_real keeps it
-   on, lmg_sim turns it off and engages automatically) hold the
-   pre-pose until an operator calls ~/confirm_engage.
+3. With ``engage_wait_for_confirm`` (default true; lmg_real keeps it on,
+   lmg_sim turns it off and engages automatically) hold the pre-pose until an
+   operator calls ~/confirm_engage.
 4. Engage: the controller starts an episode at the measured state with a zero
-   velocity command (any /cmd_vel received before engaging is dropped) and
-   runs at ``control_hz`` (50 Hz, the training policy rate). In the sim the elastic
-   band is released ``band_release_delay_s`` later and the episode restarts
-   then, so the policy's first free step is its episode's first.
+   velocity command (any /cmd_vel received before engaging is dropped) and runs
+   at ``control_hz`` (50 Hz, the training policy rate). With
+   ``disable_elastic_band`` (the sim) the elastic band is released
+   ``band_release_delay_s`` later and the episode restarts then, so the
+   policy's first free step is its episode's first.
 
 While engaged the robot starts in walking mode and navigates on /cmd_vel. The
-mode is switched by hand with ~/set_mode (custom_ros_messages/LmgSetMode: "walk" or
-"arm"); ~/set_arm_goals (custom_ros_messages/LmgSetArmGoals) sets the left and right
-wrist_yaw_link goals, pelvis frame: in arm mode at once, while walking for the
-next switch to arm mode (until some are set, arm mode holds the rest pose).
-A PoseArray on ~/arm_goal (left then right) sets the goals and switches to arm
-mode in one message, ~/end_arm_goal back to walking. /cmd_vel is ignored in arm
-mode: the policy only ever saw zero there.
+mode is switched by hand with ~/set_mode (custom_ros_messages/LmgSetMode:
+"walk" or "arm"); ~/set_arm_goals (custom_ros_messages/LmgSetArmGoals) sets the
+left and right wrist_yaw_link goals, pelvis frame: in arm mode at once, while
+walking for the next switch to arm mode (until some are set, arm mode holds the
+rest pose). A PoseArray on ~/arm_goal (left then right) sets the goals and
+switches to arm mode in one message, ~/end_arm_goal back to walking. /cmd_vel
+is ignored in arm mode: the policy only ever saw zero there. ~/state (latched)
+names the current state; ~/wrist_error gives each wrist's distance to its
+goal (m) while engaged.
 
 The arm goals stay fixed in the world by the SLAM pipeline's odometry
 (/Odometry, FAST-LIO's camera_init -> body), so golem_slam's navigation launch
@@ -38,63 +41,54 @@ must not run beside it (the lmg bringups start neither).
 
 Safety
 ------
-* /safety/heartbeat gate and watchdog, as in h12_lowerbody_rl: nothing is published, and the
-  pre-pose does not start, before the first true beat (golem_safety beats once it relays);
-  the watchdog is armed on it. A False beat (the safety layer's estop latched) or
-  ``heartbeat_timeout`` of silence latches this node silent.
-* /lowstate older than ``lowstate_timeout`` (wall clock): no policy step and no publish
-  that tick (stepping on a frozen state would integrate garbage). The same holds
-  for /livox/imu (``livox_imu_timeout``), and the policy doesn't engage until its
-  attitude estimate is up.
-* A non-finite observation or target latches the node silent instead of
-  sending it: the safety layer would latch its estop (all motors limp) on it.
-Silent means the safety layer keeps holding the last targets until it is
+SAFETY: the node publishes nothing, and the pre-pose does not start, before
+golem_safety's first true /safety/heartbeat (golem_safety beats once it
+relays). After that, a false beat (golem_safety's estop latched) or
+``heartbeat_timeout`` of silence latches this node silent for good.
+
+SAFETY: a /lowstate older than ``lowstate_timeout`` (wall clock) skips that
+tick's policy step and publish, since stepping on a frozen state would
+integrate garbage. The same holds for /livox/imu (``livox_imu_timeout``) once
+engaged, and the policy does not engage until its attitude estimate is up.
+
+SAFETY: a non-finite state, observation or target latches the node silent
+instead of sending it (golem_safety would latch its estop, every motor limp, on
+it). Silent means golem_safety keeps relaying the last targets until it is
 stopped: its stale times (stale.*_seconds) only report a quiet input.
 
 IMU
 ---
-The policy's IMU observations (angular velocity, specific force, projected gravity)
-come from the MID360's /livox/imu, never LowState.imu_state (its attitude carries a
-~2.5 deg calibration error). They are carried from the chip's frame (URDF
-livox_imu_link) into the frame the policy trained with, export.yaml's ``imu.frame``:
-imu_link on torso_link for runs up to Explicit500 (the default when the export has no
-``imu`` block), livox_link or livox_imu_link from then on. The rotation is the URDF
-mount. The angular velocity passes the livox_imu.GyroLowpass the run trained with
-(``imu.gyro_lowpass_hz``; absent = none), which suppresses the head's ~20 Hz pitch
-resonance while walking.
+The policy's IMU observations (angular velocity, specific force, projected
+gravity) come from the MID360's /livox/imu, never LowState.imu_state, whose
+attitude carries a calibration error of about 2.5 deg. /livox/imu is taken to
+be upright in the URDF's livox_imu_link (the IMU chip). The H1-2 publishes it
+in the MID-360's raw, upside-down frame, which this node does not handle:
+golem_bringup's lmg_real refuses to start for that, and the strict xfail
+test_urdf_mount_is_the_livox_pitch marks the missing fix.
+
+The readings are carried from livox_imu_link into the frame the policy trained
+with, export.yaml's ``imu.frame`` (imu_link on torso_link for exports without
+an ``imu`` block, such as Explicit500; livox_link or livox_imu_link for later
+ones), through the URDF mount. The angular velocity passes the
+livox_imu.GyroLowpass the run trained with (``imu.gyro_lowpass_hz``; absent:
+none), which suppresses the head's pitch resonance (about 20 Hz) while walking.
 
 The attitude (so projected gravity) comes from ``livox_attitude``:
-``fastlio`` (default) FAST-LIO's /Odometry orientation of the IMU body, carried forward
-between poses by the gyro and levelled once from the accelerometer while the robot
-holds the pre-pose (livox_attitude.LivoxAttitude; state ``waiting_imu`` until it is
-still enough to). On the real walking bag it stays within 0.23 deg of FAST-LIO (p95
-0.62), where LivoxImu's complementary filter is 1.9 deg off on average (p95 4.4): the
-filter's pull toward the accelerometer follows the gait. With no /Odometry for
-``livox_odom_timeout`` it falls back to the filter and warns. ``filter`` uses
-LivoxImu's filter throughout (no FAST-LIO needed). A FAST-LIO restart moves
-camera_init: restart this node with it.
+``fastlio`` (default) uses FAST-LIO's /Odometry orientation of the IMU body,
+carried forward between poses by the gyro and levelled once from the
+accelerometer while the robot holds the pre-pose (livox_attitude.LivoxAttitude;
+state ``waiting_imu`` until the robot is still enough). LivoxImu's
+complementary filter is the fallback: its pull toward the accelerometer follows
+the gait's accelerations while walking. With no /Odometry for
+``livox_odom_timeout`` the node falls back to the filter and warns.
+``filter`` uses the filter throughout (no FAST-LIO needed). A FAST-LIO restart
+moves camera_init: restart this node with it.
 
-``imu_offset_{roll,pitch,yaw}_deg`` (default 0) trim that IMU, live (``ros2 param set``
-or rqt_reconfigure): the attitude it reads with the torso level, as in h12_lowerbody_rl.
-The trim rotates the attitude, the angular velocity and the specific force alike, so
-projected gravity and the accelerometer agree on the tilt.
-
-Interfaces
-----------
-sub  /lowstate                       (unitree_hg/LowState)
-sub  /livox/imu                      (sensor_msgs/Imu)  livox_imu_link frame, expected upright (the H1-2's is raw)
-sub  /cmd_vel                        (geometry_msgs/Twist)
-sub  /safety/heartbeat               (std_msgs/Bool)
-sub  /Odometry                       (nav_msgs/Odometry)  FAST-LIO body pose
-sub  ~/arm_goal                      (geometry_msgs/PoseArray)  2 poses, pelvis frame
-pub  /safety/lowcmd_lower_in         (unitree_hg/LowCmd)  rows 0-11
-pub  /safety/lowcmd_upper_in         (unitree_hg/LowCmd)  rows 12-26
-pub  ~/state                         (std_msgs/String, latched)
-pub  ~/wrist_error                   (std_msgs/Float32MultiArray)  m, per arm, while engaged
-srv  ~/confirm_engage                (std_srvs/Trigger)
-srv  ~/set_mode                      (custom_ros_messages/LmgSetMode)      "walk" | "arm"
-srv  ~/set_arm_goals                 (custom_ros_messages/LmgSetArmGoals)  left, right Pose, pelvis frame
-srv  ~/end_arm_goal                  (std_srvs/Trigger)            = set_mode walk
+``imu_offset_{roll,pitch,yaw}_deg`` (default 0) trim that IMU live (``ros2 param
+set`` or rqt_reconfigure): the attitude it reads with the torso level, as in
+h12_lowerbody_rl. The trim rotates the attitude, the angular velocity and the
+specific force alike, so projected gravity and the accelerometer agree on the
+tilt.
 """
 
 import os
@@ -136,30 +130,36 @@ from lmg_deploy.rotations import (
     xyzw_to_wxyz,
 )
 
-MOTOR_MODE_PR = 1
+MOTOR_MODE_PR = 1          # LowCmd motor mode: enabled
 SAFETY_HEARTBEAT_TOPIC = "/safety/heartbeat"
 PREPOSE_TOL = 0.15          # rad; max |q - default| over all 27 joints to count as posed
 PREPOSE_SETTLE_TICKS = 10   # consecutive in-tolerance ticks (0.2 s at 50 Hz)
 PREPOSE_MAX_TICKS = 400     # after the ramp; posed or not, stop waiting (8 s at 50 Hz)
 DEFAULT_IMU_FRAME = "imu_link"   # exports without an imu block (Explicit500) trained on the torso IMU
 IMU_OFFSET_PARAMS = ("imu_offset_roll_deg", "imu_offset_pitch_deg", "imu_offset_yaw_deg")
-IMU_OFFSET_RANGE_DEG = 15.0
-SLAM_STALE_S = 0.5          # /Odometry older than this while reaching: warn that the goals ride with the pelvis
+IMU_OFFSET_RANGE_DEG = 15.0  # deg, the range ros2 param set accepts for each trim
+SLAM_STALE_S = 0.5          # s; /Odometry older than this while reaching: warn that the goals ride with the pelvis
 
 
 class MarlDeployNode(Node):
+    """Gate, pre-pose and engage the MARL policy, and relay its joint targets to golem_safety's inputs."""
+
     def __init__(self):
+        """Load the policy config and networks, then create the node's topics, services and control timer.
+
+        Raises ValueError on a missing or inconsistent config or a bad parameter.
+        """
         super().__init__("marl_deploy_node")
         self.declare_parameter("config", "")   # the policy's yaml, policies/<name>/<name>.yaml
         self.declare_parameter("urdf_path", "/home/code/CL_Assets/ros_assets/h1_2_magpie.urdf")
-        self.declare_parameter("control_hz", 50.0)
+        self.declare_parameter("control_hz", 50.0)        # Hz, must equal 1 / the config's control_dt
         self.declare_parameter("prepose_ramp_s", 6.0)     # s, minimum ramp duration
         self.declare_parameter("prepose_max_vel", 0.25)   # rad/s, peak target speed of any joint
         self.declare_parameter("engage_wait_for_confirm", True)
-        self.declare_parameter("disable_elastic_band", True)
-        self.declare_parameter("band_release_delay_s", 1.0)
-        self.declare_parameter("heartbeat_timeout", 0.5)
-        self.declare_parameter("lowstate_timeout", 0.1)
+        self.declare_parameter("disable_elastic_band", True)   # call /elastic_band/toggle after engaging (sim)
+        self.declare_parameter("band_release_delay_s", 1.0)   # s after engaging
+        self.declare_parameter("heartbeat_timeout", 0.5)   # s, wall clock
+        self.declare_parameter("lowstate_timeout", 0.1)    # s, wall clock
         self.declare_parameter("livox_imu_timeout", 0.1)   # s, wall clock
         self.declare_parameter("livox_gravity_tau_s", 0.5)  # s, attitude filter's pull toward the accelerometer
         self.declare_parameter("livox_attitude", "fastlio")  # "fastlio" | "filter": where projected gravity comes from
@@ -177,7 +177,7 @@ class MarlDeployNode(Node):
         with open(cfg_path) as f:
             cfg = yaml.safe_load(f)
         cfg_dir = os.path.dirname(os.path.abspath(cfg_path))
-        # export_marl.py's per-checkpoint values (rest pose, source files) override the template
+        # export_marl.py's per-checkpoint values (config/example.export.yaml) override the policy's yaml.
         export_path = os.path.join(cfg_dir, "export.yaml")
         if os.path.isfile(export_path):
             with open(export_path) as f:
@@ -199,20 +199,20 @@ class MarlDeployNode(Node):
         kin.update(np.zeros(NUM_JOINTS))
         r_imu_livox = livox_to_imu_rotation(kin, imu_frame)
         self._imu_frame = imu_frame
-        # the gyro low-pass the run trained with; exports without one (Explicit500) saw the raw rate
+        # The gyro low-pass the run trained with; exports without one (Explicit500) saw the raw rate.
         gyro_lowpass_hz = float((cfg.get("imu") or {}).get("gyro_lowpass_hz", 0.0))
         self._livox = LivoxImu(r_imu_livox, tau_s=float(self.get_parameter("livox_gravity_tau_s").value),
                                gyro_lowpass_hz=gyro_lowpass_hz)
         self._gyro_lowpass_hz = gyro_lowpass_hz
         self._livox_time: float | None = None   # monotonic receipt time of the last /livox/imu
-        # the attitude: FAST-LIO's, of the IMU body (/livox/imu's frame), carried into the policy's IMU frame
+        # The attitude: FAST-LIO's, of the IMU body (/livox/imu's frame), carried into the policy's IMU frame.
         source = self.get_parameter("livox_attitude").value
         if source not in ("fastlio", "filter"):
             raise ValueError(f"livox_attitude must be 'fastlio' or 'filter', not {source!r}")
         self._attitude = LivoxAttitude() if source == "fastlio" else None
         self._r_imu_livox = r_imu_livox
         self._odom_timeout = float(self.get_parameter("livox_odom_timeout").value)
-        # the exported networks, next to the config
+        # The exported networks sit next to the config.
         legs = load_network(os.path.join(cfg_dir, cfg["legs"]["policy"]),
                             cfg["legs"]["num_obs"], cfg["legs"]["num_actions"])   # MLP or LSTM
         arms = load_network(os.path.join(cfg_dir, cfg["arms"]["policy"]),
@@ -271,36 +271,39 @@ class MarlDeployNode(Node):
             f"confirm={'required' if self._confirm_wait else 'auto'}, IMU /livox/imu in {self._imu_frame}, "
             f"gyro low-pass {f'{self._gyro_lowpass_hz:g} Hz' if self._gyro_lowpass_hz > 0 else 'off'}")
 
-    # -- callbacks -------------------------------------------------------------------
     def _build_imu_mount(self, deg: dict) -> np.ndarray | None:
+        """Log the IMU trim (deg per IMU_OFFSET_PARAMS name) and return its mount quaternion, None when zero."""
         self.get_logger().info("IMU trim: roll %+.3f pitch %+.3f yaw %+.3f deg" % tuple(deg[n] for n in IMU_OFFSET_PARAMS))
         if not any(deg.values()):
             return None
         return imu_mount_quat(*(np.radians(deg[n]) for n in IMU_OFFSET_PARAMS))
 
     def _on_set_parameters(self, params) -> SetParametersResult:
-        # same single-threaded executor as _tick: swapping the trim here can't race a step
+        """Apply a live IMU trim change; refuse a non-finite one."""
+        # The same single-threaded executor runs _tick, so swapping the trim here can't race a step.
         touched = [p for p in params if p.name in IMU_OFFSET_PARAMS]
         if touched:
             if any(not np.isfinite(p.value) for p in touched):
                 return SetParametersResult(successful=False, reason="IMU trim must be finite")
-            # the new values aren't stored until this returns
+            # The new values aren't stored until this returns.
             deg = {n: float(self.get_parameter(n).value) for n in IMU_OFFSET_PARAMS}
             deg.update({p.name: float(p.value) for p in touched})
             self._imu_mount = self._build_imu_mount(deg)
         return SetParametersResult(successful=True)
 
     def _on_lowstate(self, msg: LowState) -> None:
+        """Keep the latest /lowstate and its receipt time."""
         self._lowstate = msg
         self._lowstate_time = time.monotonic()
 
     def _on_livox_imu(self, msg: Imu) -> None:
+        """Feed a /livox/imu sample to the filter and the FAST-LIO attitude."""
         w, a = msg.angular_velocity, msg.linear_acceleration
         ready = self._livox.ready
         stamp = msg.header.stamp.sec + 1e-9 * msg.header.stamp.nanosec
         self._livox.update(stamp, np.array([w.x, w.y, w.z]), np.array([a.x, a.y, a.z]))
         if self._attitude is not None:
-            self._attitude.add_imu(stamp, [w.x, w.y, w.z], [a.x, a.y, a.z])   # raw: the attitude integrates the raw rate
+            self._attitude.add_imu(stamp, [w.x, w.y, w.z], [a.x, a.y, a.z])   # unfiltered: it integrates the raw rate
         self._livox_time = time.monotonic()
         if self._livox.ready and not ready:
             self.get_logger().info(
@@ -308,6 +311,7 @@ class MarlDeployNode(Node):
                 f"projected gravity {(-self._livox.up).round(3).tolist()}")
 
     def _on_odometry(self, msg: Odometry) -> None:
+        """Feed a FAST-LIO pose to the controller's odometry and the attitude."""
         p, o = msg.pose.pose.position, msg.pose.pose.orientation
         quat = xyzw_to_wxyz(np.array([o.x, o.y, o.z, o.w]))
         self.controller.set_slam_pose(np.array([p.x, p.y, p.z]), quat)
@@ -316,10 +320,11 @@ class MarlDeployNode(Node):
             self._attitude.add_pose(msg.header.stamp.sec + 1e-9 * msg.header.stamp.nanosec, quat)
 
     def _on_cmd_vel(self, msg: Twist) -> None:
+        """Set the velocity command from /cmd_vel."""
         self.controller.set_velocity_command(np.array([msg.linear.x, msg.linear.y, msg.angular.z]))
 
     def _poses(self, poses_msg) -> np.ndarray | str:
-        """(arms, 7) wxyz poses from geometry_msgs Poses (left, right), or why they can't be a goal."""
+        """Return (arms, 7) wxyz poses from geometry_msgs Poses (left, right), or why they can't be a goal."""
         n = self.controller.num_arms
         if len(poses_msg) != n:
             return f"arm goal needs {n} poses (left, right), got {len(poses_msg)}"
@@ -332,6 +337,7 @@ class MarlDeployNode(Node):
         return poses
 
     def _on_arm_goal(self, msg: PoseArray) -> None:
+        """Start an arm goal from ~/arm_goal; ignored before engaging or when malformed."""
         poses = self._poses(msg.poses)
         if isinstance(poses, str):
             self.get_logger().error(f"{poses}; ignored")
@@ -343,6 +349,7 @@ class MarlDeployNode(Node):
         self.get_logger().info(f"arm goal: left {poses[0, :3].round(3)}, right {poses[1, :3].round(3)} (pelvis)")
 
     def _on_heartbeat(self, msg: Bool) -> None:
+        """Latch silent on a false beat; otherwise note the beat's time."""
         if self._dead:
             return
         if not msg.data:
@@ -351,9 +358,10 @@ class MarlDeployNode(Node):
         self._hb_last = time.monotonic()
 
     def _on_confirm(self, _req, resp):
+        """Serve ~/confirm_engage: allow the engage once the pre-pose settles."""
         if not self._engaged:
-            # a /cmd_vel that arrived before the go-ahead is not a command to walk
-            # on (arm goals are already ignored until engaged)
+            # A /cmd_vel that arrived before the go-ahead is not a command to walk
+            # on (arm goals are already ignored until engaged).
             self.controller.set_velocity_command(np.zeros(3))
         self._confirmed = True
         resp.success = True
@@ -362,12 +370,14 @@ class MarlDeployNode(Node):
         return resp
 
     def _on_end_arm_goal(self, _req, resp):
+        """Serve ~/end_arm_goal: return to walking."""
         self.controller.end_arm_goal()
         resp.success = True
         resp.message = f"mode {self.controller.mode.value}"
         return resp
 
     def _on_set_mode(self, req, resp):
+        """Serve ~/set_mode: switch to walk or arm; refused before engaging."""
         mode = req.mode.strip().lower()
         if mode not in (SetMode.Request.WALK, SetMode.Request.ARM):
             resp.success, resp.message = False, f"mode must be '{SetMode.Request.WALK}' or '{SetMode.Request.ARM}', not {req.mode!r}"
@@ -380,6 +390,7 @@ class MarlDeployNode(Node):
         return resp
 
     def _on_set_arm_goals(self, req, resp):
+        """Serve ~/set_arm_goals: set the wrist goals, applied now in arm mode, else at the next switch."""
         poses = self._poses([req.left, req.right])
         if isinstance(poses, str):
             resp.success, resp.message = False, poses
@@ -392,8 +403,9 @@ class MarlDeployNode(Node):
         self.get_logger().info(f"set_arm_goals: {resp.message}")
         return resp
 
-    # -- helpers -------------------------------------------------------------------------
     def _latch(self, reason: str) -> None:
+        """Stop publishing for good and report reason on ~/state and the log."""
+        # SAFETY: one way until the node restarts; golem_safety keeps relaying the last targets.
         self._dead = True
         self._set_state(f"fault: {reason}")
         self.get_logger().error(
@@ -401,15 +413,17 @@ class MarlDeployNode(Node):
             "restart this node once the cause is cleared.")
 
     def _set_state(self, name: str) -> None:
+        """Publish name on ~/state when it changes."""
         if name != self._state_name:
             self._state_name = name
             self._state_pub.publish(String(data=name))
 
     def _robot_state(self, msg: LowState) -> RobotState:
+        """Return the controller's state from /lowstate and the IMU, in the policy's IMU frame, trimmed."""
         motors = msg.motor_state
         if self._livox.ready:
-            # gyro (low-passed) and specific force in the policy's IMU frame from LivoxImu; the attitude from
-            # FAST-LIO when levelled and current, else LivoxImu's filter
+            # Gyro (low-passed) and specific force from LivoxImu; the attitude from
+            # FAST-LIO when levelled and current, else LivoxImu's filter.
             gyro, acc = self._livox.gyro.copy(), self._livox.acc.copy()
             if self._attitude is not None and self._attitude.calibrated and self._odom_fresh(time.monotonic()):
                 quat = in_imu_frame(self._attitude.quat(), self._r_imu_livox)
@@ -419,7 +433,7 @@ class MarlDeployNode(Node):
                                            "/livox/imu filter", throttle_duration_sec=2.0)
                 quat = self._livox.quat()
         else:
-            # only pre-pose runs before the attitude is up, and it reads q alone
+            # Only the pre-pose runs before the attitude is up, and it reads q alone.
             quat, gyro, acc = np.array([1.0, 0.0, 0.0, 0.0]), np.zeros(3), np.zeros(3)
         if self._imu_mount is not None:
             quat = quat_mul(quat, quat_conjugate(self._imu_mount))
@@ -427,25 +441,30 @@ class MarlDeployNode(Node):
         return RobotState(
             q=np.array([motors[i].q for i in range(NUM_JOINTS)], dtype=np.float64),
             dq=np.array([motors[i].dq for i in range(NUM_JOINTS)], dtype=np.float64),
-            tau=np.array([motors[i].tau_est for i in range(NUM_JOINTS)], dtype=np.float64),
             quat=quat, gyro=gyro, acc=acc,
         )
 
     def _odom_fresh(self, now: float) -> bool:
+        """Return whether /Odometry arrived within livox_odom_timeout of now (monotonic s)."""
         return self._slam_time is not None and now - self._slam_time <= self._odom_timeout
 
     def _livox_fresh(self, now: float) -> bool:
+        """Return whether the IMU attitude is up and /livox/imu arrived within livox_imu_timeout of now."""
         return (self._livox.ready and self._livox_time is not None
                 and now - self._livox_time <= float(self.get_parameter("livox_imu_timeout").value))
 
     def _publish(self, cmd: JointCommand, mode_machine: int) -> None:
+        """Publish the legs' rows and the torso and arms' rows on golem_safety's two inputs.
+
+        SAFETY: a non-finite command latches the node silent instead of being sent.
+        """
         if not (np.isfinite(cmd.q).all() and np.isfinite(cmd.kp).all() and np.isfinite(cmd.kd).all()):
             self._latch(f"non-finite joint command {cmd.q.round(3).tolist()}")
             return
         for pub, rows in ((self._lower_pub, range(0, NUM_LEGS)), (self._upper_pub, range(NUM_LEGS, NUM_JOINTS))):
             msg = LowCmd()
             msg.mode_pr = 0
-            msg.mode_machine = mode_machine   # the safety layer copies the header of whichever channel spoke last
+            msg.mode_machine = mode_machine   # echoes /lowstate's robot identity
             for i in rows:
                 m = msg.motor_cmd[i]
                 m.mode = MOTOR_MODE_PR
@@ -457,6 +476,7 @@ class MarlDeployNode(Node):
             pub.publish(msg)
 
     def _release_band(self) -> None:
+        """Call /elastic_band/toggle once it is available, one call at a time."""
         if self._band_released or self._band_inflight:
             return
         if not self._band_cli.service_is_ready():
@@ -466,6 +486,7 @@ class MarlDeployNode(Node):
         self._band_cli.call_async(Trigger.Request()).add_done_callback(self._on_band_toggled)
 
     def _on_band_toggled(self, fut) -> None:
+        """Mark the band released and restart the episode; retry on a failed call."""
         self._band_inflight = False
         result = fut.result()
         if result is None:
@@ -476,8 +497,8 @@ class MarlDeployNode(Node):
         if self._lowstate is not None:
             self.controller.reset(self._robot_state(self._lowstate))
 
-    # -- main loop ---------------------------------------------------------------------------
     def _tick(self) -> None:
+        """Run one control tick: the heartbeat and freshness gates, then the pre-pose or a policy step."""
         if self._dead:
             return
         now = time.monotonic()
@@ -525,10 +546,11 @@ class MarlDeployNode(Node):
         self._err_pub.publish(Float32MultiArray(data=self.controller.wrist_errors().astype(np.float32).tolist()))
 
     def _prepose(self, state: RobotState, mode_machine: int) -> None:
+        """Ramp to and hold the default pose, then engage once settled, levelled and confirmed."""
         ctrl = self.controller
         if self._prepose_start is None:
             self._prepose_start = state.q.copy()
-            # the cosine blend's peak speed is (pi / 2) * distance / duration
+            # The cosine blend's peak speed is (pi / 2) * distance / duration.
             dist = float(np.max(np.abs(ctrl.default - self._prepose_start)))
             ramp_s = max(self._ramp_min_s, 0.5 * np.pi * dist / self._ramp_max_vel)
             self._ramp_ticks = max(1, int(round(ramp_s * self._control_hz)))
@@ -574,7 +596,7 @@ class MarlDeployNode(Node):
             return
         self.get_logger().info(f"pre-posed ({'settled' if settled else 'timeout'}, max err {err:.3f} rad): engaging")
         ctrl.reset(state)
-        # a /cmd_vel that arrived before engaging is not a command to walk now
+        # A /cmd_vel that arrived before engaging is not a command to walk now.
         ctrl.set_velocity_command(np.zeros(3))
         self._engaged = True
         if not self._band_released:
@@ -582,6 +604,7 @@ class MarlDeployNode(Node):
 
 
 def main():
+    """Spin marl_deploy_node until interrupted."""
     rclpy.init()
     node = MarlDeployNode()
     try:

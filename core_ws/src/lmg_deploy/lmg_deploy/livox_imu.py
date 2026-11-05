@@ -1,24 +1,28 @@
-"""The MID360's IMU as the policy's IMU: gyro, accelerometer and attitude in the policy's IMU frame.
+"""Turn /livox/imu into the policy's IMU: gyro, specific force and attitude in the policy's IMU frame.
 
-/livox/imu is in the URDF's livox_imu_link, the MID360's IMU chip. The policy's IMU
-frame is the one it trained with (export.yaml ``imu.frame``): livox_imu_link itself,
-livox_link (the point frame, 0.7 deg from the chip) or the torso's imu_link for older
-runs. All sit on torso_link, so angular velocity and gravity direction are the chip's
-rotated by the fixed mount (r_imu_livox, from the URDF). Away from the chip the
-specific force also differs by the lever-arm terms (alpha x r + omega x (omega x r),
-r about 0.4 m up the torso for imu_link), which this leaves out: they vanish standing
-still and stay small at walking rates.
+/livox/imu is taken to be in the URDF's livox_imu_link, the MID360's IMU chip,
+upright. The H1-2's /livox/imu is the MID-360's raw, upside-down frame, which
+this module does not handle: golem_bringup's lmg_real refuses to start for
+that, and test_urdf_mount_is_the_livox_pitch is a strict xfail until it does.
 
-/livox/imu carries no orientation: the driver leaves it zero. lmg_deploy expects it
-upright; the H1-2's /livox/imu is the raw, upside-down frame, which lmg_deploy does
-not handle (golem_bringup's lmg_real refuses to start for that). The attitude is a
-complementary filter on the up direction u (the unit specific force at rest, torso frame): the gyro carries it,
-du/dt = -omega x u, and each sample pulls it toward the measured accelerometer
-direction with time constant ``tau_s``.
+The policy's IMU frame is the one it trained with (export.yaml ``imu.frame``):
+livox_imu_link itself, livox_link (the point frame, 0.7 deg from the chip) or
+the torso's imu_link for older runs. All sit on torso_link, so angular velocity
+and gravity direction are the chip's rotated by the fixed mount (r_imu_livox,
+from the URDF). Away from the chip the specific force also differs by the
+lever-arm terms (alpha x r + omega x (omega x r), r about 0.4 m up the torso
+for imu_link), which this leaves out: they vanish standing still and stay small
+at walking rates.
 
-The MID360 reports acceleration in g, the simulators' /livox/imu in m/s^2. The unit
-is decided once, from the mean magnitude of the first ``unit_samples`` samples (the
-robot is standing or hanging still before it engages).
+/livox/imu carries no orientation (the driver leaves it zero), so LivoxImu's
+attitude is a complementary filter on the up direction u (the unit specific
+force at rest, IMU frame): the gyro carries it, du/dt = -omega x u, and each
+sample pulls it toward the measured accelerometer direction with time constant
+``tau_s``.
+
+The MID360 reports acceleration in g, the simulators' /livox/imu in m/s^2. The
+unit is decided once, from the mean magnitude of the first ``unit_samples``
+samples, while the robot stands or hangs still before it engages.
 """
 
 import numpy as np
@@ -29,22 +33,23 @@ GRAVITY = 9.81           # m/s^2
 G_UNIT_MAX_NORM = 4.0    # a mean |acc| below this is in g (1.0), above it in m/s^2 (9.81)
 MAX_DT = 0.05            # s; a longer gap between samples (a dropout) is not integrated
 
-
-# URDF frame lmg_deploy expects /livox/imu in: the MID360's IMU chip, upright
+# The URDF frame /livox/imu is taken to be in: the MID360's IMU chip, upright.
 LIVOX_IMU_FRAME = "livox_imu_link"
 
 
 def livox_to_imu_rotation(kin, imu_frame: str, livox_frame: str = LIVOX_IMU_FRAME) -> np.ndarray:
-    """(3, 3) rotation taking livox_frame vectors into imu_frame, from the URDF.
+    """Return the (3, 3) rotation taking livox_frame vectors into imu_frame, from the URDF.
 
-    kin: a kinematics.ArmKinematics updated at any joint state that has both frames
-    (they share torso_link, so the joints don't change it)."""
+    kin: a kinematics.ArmKinematics with both frames among its extra frames,
+    updated at any joint state (both frames sit on torso_link, so the joints
+    don't change the rotation).
+    """
     q_rel = quat_mul(quat_conjugate(kin.frame_pose(imu_frame)[1]), kin.frame_pose(livox_frame)[1])
     return np.stack([quat_apply(q_rel, e) for e in np.eye(3)], axis=1)
 
 
 class GyroLowpass:
-    """Per-axis 2nd-order Butterworth low-pass, the policy's angular-velocity filter.
+    """Low-pass each axis with a 2nd-order Butterworth, the policy's angular-velocity filter.
 
     The continuous filter y'' + 2 zeta w y' + w^2 y = w^2 u (w = 2 pi cutoff_hz,
     zeta = 1/sqrt(2)), state x = (y, y'), discretized exactly (zero-order hold on u)
@@ -57,6 +62,7 @@ class GyroLowpass:
     ZETA = 1.0 / np.sqrt(2.0)
 
     def __init__(self, cutoff_hz: float):
+        """Set the cutoff (Hz); raise ValueError unless it is positive."""
         if cutoff_hz <= 0.0:
             raise ValueError(f"cutoff_hz must be positive, not {cutoff_hz}")
         w = 2.0 * np.pi * float(cutoff_hz)
@@ -66,12 +72,13 @@ class GyroLowpass:
         self._x: np.ndarray | None = None   # (2, axes): y and y' per axis
 
     def reset(self, u: np.ndarray) -> np.ndarray:
+        """Restart the filter at rest on input u and return u."""
         u = np.asarray(u, dtype=np.float64)
         self._x = np.stack([u, np.zeros_like(u)])
         return u.copy()
 
     def _discrete(self, dt: float) -> tuple[np.ndarray, np.ndarray]:
-        """exp(A dt) in closed form (underdamped) and the ZOH input matrix A^-1 (exp(A dt) - I) B."""
+        """Return exp(A dt) in closed form (underdamped) and the ZOH input matrix A^-1 (exp(A dt) - I) B."""
         e, c, sn = np.exp(-self._sigma * dt), np.cos(self._wd * dt), np.sin(self._wd * dt)
         k = self._sigma / self._wd
         ad = e * np.array([[c + k * sn, sn / self._wd], [-self._w2 * sn / self._wd, c - k * sn]])
@@ -79,7 +86,10 @@ class GyroLowpass:
         return ad, bd
 
     def __call__(self, u: np.ndarray, dt: float) -> np.ndarray:
-        """Filtered value after one sample u held over the dt since the last one."""
+        """Return the filtered value after sample u, held over the dt (s) since the last one.
+
+        A first sample, or a dt outside (0, MAX_DT], restarts the filter at u.
+        """
         if self._x is None or not 0.0 < dt <= MAX_DT:
             return self.reset(u)
         ad, bd = self._discrete(dt)
@@ -88,11 +98,11 @@ class GyroLowpass:
 
 
 def _rotation_aligning(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Smallest rotation matrix taking unit vector a onto unit vector b."""
+    """Return the smallest rotation matrix taking unit vector a onto unit vector b."""
     v = np.cross(a, b)
     c = float(np.dot(a, b))
     if c < -1.0 + 1e-9:
-        # antiparallel: half a turn about any axis normal to a
+        # Antiparallel: half a turn about any axis normal to a.
         axis = np.cross(a, [1.0, 0.0, 0.0])
         if np.linalg.norm(axis) < 1e-6:
             axis = np.cross(a, [0.0, 1.0, 0.0])
@@ -103,13 +113,19 @@ def _rotation_aligning(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 class LivoxImu:
+    """Carry /livox/imu samples into the policy's IMU frame and filter an attitude from them."""
+
     def __init__(self, r_imu_livox: np.ndarray, tau_s: float = 0.5, unit_samples: int = 200,
                  gyro_lowpass_hz: float = 0.0):
-        """r_imu_livox: (3, 3) rotation taking /livox/imu vectors into the policy's IMU frame.
+        """Set the mount and filter constants; raise ValueError unless tau_s is positive.
 
+        r_imu_livox: (3, 3) rotation taking /livox/imu vectors into the policy's IMU frame.
+        tau_s: s, the attitude filter's time constant toward the accelerometer.
+        unit_samples: samples that decide the accelerometer unit.
         gyro_lowpass_hz: cutoff of the GyroLowpass on ``gyro`` (the policy's angular
         velocity); 0 leaves it unfiltered. The attitude filter always integrates the
-        raw rate."""
+        raw rate.
+        """
         if tau_s <= 0.0:
             raise ValueError(f"tau_s must be positive, not {tau_s}")
         self._r = np.asarray(r_imu_livox, dtype=np.float64)
@@ -125,15 +141,16 @@ class LivoxImu:
 
     @property
     def ready(self) -> bool:
+        """Return whether the attitude has its first sample."""
         return self._up is not None
 
     @property
     def up(self) -> np.ndarray:
-        """Unit up direction (specific force at rest), IMU frame."""
+        """Return the unit up direction (specific force at rest), IMU frame."""
         return self._up.copy()
 
     def update(self, stamp: float, gyro: np.ndarray, acc: np.ndarray) -> None:
-        """One /livox/imu sample: stamp in s, gyro rad/s and acc (g or m/s^2) in livox_link."""
+        """Take one /livox/imu sample: stamp (s), gyro (rad/s) and acc (g or m/s^2), in livox_imu_link."""
         acc = np.asarray(acc, dtype=np.float64)
         if self.scale is None:
             self._norms.append(float(np.linalg.norm(acc)))
@@ -159,6 +176,5 @@ class LivoxImu:
         self._up = up / np.linalg.norm(up)
 
     def quat(self) -> np.ndarray:
-        """IMU attitude, wxyz, zero yaw: projected_gravity() of it is -up."""
-        # body -> world: the rotation taking the body's up direction onto world +z
+        """Return the IMU attitude (wxyz, body -> world, zero yaw), whose projected_gravity() is -up."""
         return quat_from_matrix(_rotation_aligning(self._up, np.array([0.0, 0.0, 1.0])))

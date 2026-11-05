@@ -1,3 +1,2 @@
-# Exported policy networks: binaries tracked via Git LFS.
-# Config YAMLs and READMEs stay as normal git text.
+# The exported networks are binaries, kept in Git LFS; the YAML files stay plain git text.
 *.pt  filter=lfs diff=lfs merge=lfs -text

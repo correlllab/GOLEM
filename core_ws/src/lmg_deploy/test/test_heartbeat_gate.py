@@ -1,4 +1,4 @@
-"""marl_deploy_node commands nothing until golem_safety's first true /safety/heartbeat.
+"""Test that marl_deploy_node commands nothing until golem_safety's first true /safety/heartbeat.
 
     ROS_DOMAIN_ID=<not 0> python -m pytest test/test_heartbeat_gate.py
 
@@ -29,9 +29,10 @@ BEAT_HZ = 10.0
 
 
 class Rig:
-    """The node under test, a plant publishing /lowstate and the heartbeat, and recorders."""
+    """Hold the node under test, a plant publishing /lowstate and the heartbeat, and recorders."""
 
     def __init__(self):
+        """Start the node and the plant on one executor."""
         rclpy.init(args=["--ros-args", "-p", f"config:={POLICY}", "-p", f"urdf_path:={URDF}",
                          "-p", "disable_elastic_band:=false"])
         self.node = MarlDeployNode()
@@ -56,21 +57,25 @@ class Rig:
         self.plant.create_timer(1.0 / BEAT_HZ, self._publish_beat)
 
     def _publish_lowstate(self):
+        """Publish an H1-2 /lowstate with joint 0 at q0."""
         msg = LowState()
         msg.mode_machine = H12_MODE_MACHINE
         msg.motor_state[0].q = float(self.q0)
         self._lowstate_pub.publish(msg)
 
     def _publish_beat(self):
+        """Publish a true heartbeat while beating."""
         if self.beating:
             self._beat_pub.publish(Bool(data=True))
 
     def spin(self, seconds, until=None):
+        """Spin for up to `seconds`, stopping early once until() holds."""
         end = time.monotonic() + seconds
         while time.monotonic() < end and not (until is not None and until()):
             self.executor.spin_once(timeout_sec=0.005)
 
     def close(self):
+        """Destroy both nodes and shut rclpy down."""
         self.executor.shutdown()
         self.plant.destroy_node()
         self.node.destroy_node()
@@ -79,6 +84,7 @@ class Rig:
 
 @pytest.fixture
 def rig():
+    """Yield a Rig, skipped on domain 0 (the real robots' bus)."""
     if os.environ.get("ROS_DOMAIN_ID", "0") in ("", "0"):
         pytest.skip("publishes /lowstate and /safety/heartbeat: set ROS_DOMAIN_ID to a non-zero domain")
     r = Rig()
@@ -89,12 +95,13 @@ def rig():
 
 
 def test_silent_until_the_first_heartbeat_then_pre_poses_from_the_pose_at_the_beat(rig):
-    # a fresh /lowstate and no heartbeat: nothing on either input for a second, in a named state
+    """The node is silent until the first beat, then pre-poses from the pose at the beat, not at boot."""
+    # A fresh /lowstate and no heartbeat: nothing on either input for a second, in a named state.
     rig.spin(1.0)
     assert rig.lower == [] and rig.upper == []
     assert rig.states[-1] == "waiting_heartbeat"
 
-    # the pose moves while waiting; the ramp starts from the pose at the first beat, not from boot
+    # The pose moves while waiting.
     rig.q0 = 0.3
     rig.spin(0.3)
     assert rig.lower == [] and rig.upper == []

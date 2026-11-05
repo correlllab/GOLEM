@@ -1,6 +1,6 @@
-"""Wrist forward kinematics and the arms' IK step, in the pelvis frame (Pinocchio).
+"""Compute the wrist forward kinematics and the arms' IK step in the pelvis frame, with Pinocchio.
 
-Reproduces mdp.IKResidualArmAction in Locomanipulation_game: per arm, one
+This reproduces mdp.IKResidualArmAction in Locomanipulation_game: per arm, one
 damped-least-squares step (Isaac Lab's DifferentialIKController, pose command,
 absolute, dls) from the measured joint angles toward the commanded wrist pose,
 with the wrist Jacobian expressed in the pelvis frame and restricted to the
@@ -25,15 +25,21 @@ from lmg_deploy.rotations import compute_pose_error, quat_from_matrix, quat_uniq
 
 
 class ArmKinematics:
+    """Hold the H1-2 model and, after update(), the wrist poses, wrist Jacobians and extra frame poses."""
+
     def __init__(self, urdf_path: str, joint_names: list[str], ee_frames: list[str],
                  arm_joint_names: list[list[str]], pelvis_frame: str = "pelvis",
                  extra_frames: list[str] | None = None):
-        """joint_names: the policy's joint order (Unitree motor order); q vectors use it.
-        extra_frames: more frames whose pelvis-frame pose update() computes (frame_pose), e.g. the feet."""
+        """Build the model from the URDF; raise ValueError if a named frame is missing.
+
+        joint_names: the policy's joint order (Unitree motor order), which every q vector uses.
+        ee_frames: the wrist frame per arm. arm_joint_names: each arm's joints.
+        extra_frames: more frames whose pelvis-frame pose update() computes, for frame_pose().
+        """
         self.model = pin.buildModelFromUrdf(urdf_path)
         self.data = self.model.createData()
         self._q_pin = pin.neutral(self.model)
-        # policy index -> pinocchio q index (every policy joint is a 1-dof revolute joint)
+        # Policy index -> Pinocchio q index; every policy joint is a 1-dof revolute joint.
         self._q_idx = np.array([self.model.joints[self.model.getJointId(n)].idx_q for n in joint_names])
         self._pelvis_id = self.model.getFrameId(pelvis_frame)
         self._ee_ids = [self.model.getFrameId(f) for f in ee_frames]
@@ -43,11 +49,11 @@ class ArmKinematics:
                              [self._pelvis_id] + self._ee_ids + list(self._extra_ids.values())):
             if fid >= len(self.model.frames):
                 raise ValueError(f"frame {name!r} not in {urdf_path}")
-        # per arm: columns in the policy's joint order, and in pinocchio's velocity vector
+        # Per arm: its columns in the policy's joint order, and in Pinocchio's velocity vector.
         self.arm_cols = [np.array([joint_names.index(j) for j in arm]) for arm in arm_joint_names]
         self._v_cols = [np.array([self.model.joints[self.model.getJointId(j)].idx_v for j in arm])
                         for arm in arm_joint_names]
-        # each wrist link's own COM (link frame): where PhysX takes the Jacobian's linear rows
+        # Each wrist link's own COM (link frame), where PhysX takes the Jacobian's linear rows.
         self._jac_points = [_inertial_origin(urdf_path, f) for f in ee_frames]
         lower = self.model.lowerPositionLimit[self._q_idx]
         upper = self.model.upperPositionLimit[self._q_idx]
@@ -56,7 +62,7 @@ class ArmKinematics:
         self._poses: list[tuple[np.ndarray, np.ndarray]] = []
 
     def update(self, q: np.ndarray) -> None:
-        """Forward kinematics and wrist Jacobians at joint angles q (policy order)."""
+        """Compute the poses and wrist Jacobians at joint angles q (rad, policy order)."""
         self._q_pin[self._q_idx] = q
         pin.computeJointJacobians(self.model, self.data, self._q_pin)
         pin.updateFramePlacements(self.model, self.data)
@@ -67,7 +73,7 @@ class ArmKinematics:
             o_m_ee = self.data.oMf[fid]
             pelvis_m_ee = o_m_pelvis.actInv(o_m_ee)
             self._poses.append((pelvis_m_ee.translation.copy(), quat_from_matrix(pelvis_m_ee.rotation)))
-            # frame-origin linear and angular velocity, world axes; moved to the COM point
+            # Frame-origin linear and angular rows in world axes; the linear rows move to the COM point.
             jac = pin.getFrameJacobian(self.model, self.data, fid, pin.LOCAL_WORLD_ALIGNED)[:, self._v_cols[arm]]
             r = o_m_ee.rotation @ self._jac_points[arm]
             lin = jac[:3] - _skew(r) @ jac[3:]
@@ -77,17 +83,17 @@ class ArmKinematics:
             self._extra_poses[name] = (pelvis_m_f.translation.copy(), quat_from_matrix(pelvis_m_f.rotation))
 
     def wrist_pose(self, arm: int) -> tuple[np.ndarray, np.ndarray]:
-        """(position, quaternion wxyz with qw >= 0) of the arm's wrist frame in the pelvis frame."""
+        """Return the arm's wrist (position m, quaternion wxyz with qw >= 0) in the pelvis frame."""
         pos, quat = self._poses[arm]
         return pos, quat_unique(quat)
 
     def frame_pose(self, name: str) -> tuple[np.ndarray, np.ndarray]:
-        """(position, quaternion wxyz) of an extra frame in the pelvis frame, at the last update()."""
+        """Return an extra frame's (position m, quaternion wxyz) in the pelvis frame at the last update()."""
         return self._extra_poses[name]
 
     def ik_step(self, arm: int, target_pos: np.ndarray, target_quat: np.ndarray, damping: float,
                 max_step: float) -> np.ndarray:
-        """The capped DLS joint step for one arm toward a pelvis-frame wrist pose, in its arm_cols order."""
+        """Return one arm's capped DLS joint step (rad) toward a pelvis-frame wrist pose, in arm_cols order."""
         pos, quat = self._poses[arm]
         pos_err, rot_err = compute_pose_error(pos, quat, target_pos, target_quat)
         err = np.concatenate([pos_err, rot_err])
@@ -97,11 +103,12 @@ class ArmKinematics:
 
 
 def _skew(v: np.ndarray) -> np.ndarray:
+    """Return the cross-product matrix of v."""
     return np.array([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]])
 
 
 def _inertial_origin(urdf_path: str, link: str) -> np.ndarray:
-    """The <inertial><origin xyz> of a URDF link (its own COM, link frame)."""
+    """Return a URDF link's <inertial><origin xyz> (its COM, link frame, m); raise ValueError if absent."""
     for element in ET.parse(urdf_path).getroot().iter("link"):
         if element.get("name") == link:
             origin = element.find("inertial/origin")

@@ -15,7 +15,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
     ] + [
-        # Each exported policy + its deploy config, installed under share/<pkg>/policies/<name>/.
+        # Each policy directory (networks, deploy config, export.yaml) installs to share/lmg_deploy/policies/<name>/.
         (os.path.join('share', package_name, 'policies', os.path.basename(d)), glob(os.path.join(d, '*')))
         for d in sorted(glob('policies/*')) if os.path.isdir(d)
     ],

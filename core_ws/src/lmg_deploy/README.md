@@ -24,10 +24,11 @@ the first latches it silent.
 | `lmg_deploy/controller.py` | ROS-free env step: SLAM odometry → mode → observations (legs 95, arms 123; 97 and 125 with `gait_phase_cos`) → joint targets |
 | `lmg_deploy/kinematics.py` | Pinocchio wrist FK, Jacobian and IK step, in the pelvis frame |
 | `lmg_deploy/rotations.py` | numpy versions of the isaaclab.utils.math functions training used |
-| `lmg_deploy/networks.py` | TorchScript loader, and the zero stand-ins the unit tests use |
+| `lmg_deploy/networks.py` | TorchScript loader for the exported actors |
 | `lmg_deploy/livox_imu.py` | `/livox/imu` into the policy's IMU frame: the gyro low-pass, the specific force, and a complementary-filter attitude (the fallback, or `livox_attitude:=filter`) |
 | `lmg_deploy/livox_attitude.py` | the policy's attitude from FAST-LIO's `/Odometry`, carried by the gyro, levelled at the pre-pose |
 | `lmg_deploy/marl_deploy_node.py` | the ROS node: safety channels, heartbeat, pre-pose, band, operator interface |
+| `config/example.yaml`, `config/example.export.yaml` | every key of a deploy config and of `export.yaml`, with its meaning and units (nothing loads them; `test/test_example_configs.py` keeps their keys in step) |
 | `config/policy_template.yaml` | the deploy config a new policy starts from: joint order, defaults, gains, scales, bounds, command ranges (each from the training env), and the SLAM body frame |
 | `policies/<name>/<name>.yaml`, `{legs,arms}.pt`, `export.yaml` | a policy: its deploy config and what the export writes, below; the `.pt` files in Git LFS (`policies/.gitattributes`). `mid360v2` ships |
 | `bags/<name>/` | rosbag2 recordings of Explicit500 on the real robot (`policy_bag_walk`: walking to nav2 goals; `reach`: an arm goal, ended by the hardware e-stop), the `.db3` files in Git LFS |

@@ -80,7 +80,7 @@ block `h12_locomanipulationgame.launch.py`):
 - the state publishers;
 - the split safety layer with the real robot's preset (`relax_safety_split`; ankle pitch torque e-stop 95 Nm since 10-20, sport mode peaks at 93);
 - `marl_deploy_node` with `policies/<policy>/`;
-- SLAM: `golem_slam/launch/h12_navigation.launch.py` (FAST-LIO, the pelvis-height laser scan, slam_toolbox and nav2).
+- SLAM: `golem_slam/launch/navigation.launch.py` with `robot: h12` (FAST-LIO, the floor-level laser scan, slam_toolbox and nav2).
   FAST-LIO's `/Odometry` is what keeps the arm goals fixed in the world.
 
 `frame_task_server` and the lower-body RL node stay off, so this node is the only publisher on each safety channel.

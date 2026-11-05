@@ -119,6 +119,8 @@ BAND_CALL_BY_POSE = BAND_CALL + "the policy runs and frame_task_server is up (/l
 BAND_TOGGLED = "elastic band released"
 # a ROS log line in launch.log: level, wall time, logger, text
 LOG_LINE = re.compile(r"\[(DEBUG|INFO|WARN|ERROR|FATAL)\] \[(\d+(?:\.\d+)?)\] \[([^\]]+)\]: (.*)")
+# the colour codes a node launched with emulate_tty wraps its log lines in
+ANSI_COLOUR = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def file_has(path, text):
@@ -136,7 +138,7 @@ def logged(path, logger):
     try:
         with open(path, errors="replace") as f:
             for line in f:
-                m = LOG_LINE.search(line)
+                m = LOG_LINE.search(ANSI_COLOUR.sub("", line))
                 if m and m.group(3) == logger:
                     lines.append((float(m.group(2)), m.group(1), m.group(4).rstrip()))
     except OSError:

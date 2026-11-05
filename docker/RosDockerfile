@@ -218,7 +218,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
-# Nav2 + SLAM + rqt + dev/debug ROS packages used by h12_navigation.launch.py
+# Nav2 + SLAM + rqt + dev/debug ROS packages used by golem_slam navigation.launch.py
 # and day-to-day H1 debugging. Appended at the end (same reasoning as the
 # python3-tk block above) so iterating on this list does not bust the heavy
 # apt / pip / SAM layers earlier in the file.
@@ -414,7 +414,7 @@ RUN mkdir -p "$GRASPGENX_CHECKPOINT_DIR" "$GRASPGENX_GRIPPER_CFG_DIR"
 #    libc++, exactly as CI does — so libc++-*-dev are deliberately NOT installed:
 #    libc++abi-13-dev pulls libunwind-13-dev, which Conflicts with libunwind-dev
 #    and would make apt silently REMOVE libceres-dev -> ros-humble-navigation2 /
-#    nav2-bringup / slam-toolbox, breaking h12_navigation.launch.py).
+#    nav2-bringup / slam-toolbox, breaking golem_slam navigation.launch.py).
 #    llvm-13 + lld-13: MuJoCo builds its deps (ccd, qhull, …) with LTO/IPO, so
 #    CMake archives/links them with clang's `llvm-ar`/`llvm-ranlib`/`ld.lld`
 #    rather than GNU binutils. The bare `clang-13` package doesn't ship those —
@@ -588,7 +588,7 @@ RUN git clone https://github.com/unitreerobotics/unitree_sdk2.git /tmp/unitree_s
     && rm -rf /tmp/unitree_sdk2
 
 # -----------------------------------------------------------------------------
-# 3D occupancy mapping for h12_navigation.launch.py: octomap_server builds the
+# 3D occupancy mapping for golem_slam navigation.launch.py: octomap_server builds the
 # 3D map and the /projected_map the Nav2 costmaps load. The rviz plugins add
 # native OccupancyGrid/OcTree displays. Last, so it can't bust earlier layers.
 # -----------------------------------------------------------------------------

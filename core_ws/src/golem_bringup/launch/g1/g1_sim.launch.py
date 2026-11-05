@@ -20,7 +20,7 @@ g1_split, the walking node's g1); the sim configs keep the faster arm speeds
 (1 rad/s, 0.5 m/s).
 
 use_nav (default true) adds golem_slam on the sim's MID-360 (/livox/lidar,
-/livox/imu), with sim time and g1_fastlio_sim.yaml, and Nav2 drives the
+/livox/imu), with sim time and config/g1/fastlio_sim.yaml, and Nav2 drives the
 walking node on /cmd_vel; send goals to /navigate_to_pose.
 FAST-LIO is the odometry. Start the sim with GOLEM_SIM_ODOM unset;
 otherwise odom -> pelvis has two publishers. use_skills:=true adds

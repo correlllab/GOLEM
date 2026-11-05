@@ -1,0 +1,8 @@
+# The G1's values for golem_slam's navigation graph (navigation_launch.py).
+# The MID-360 is lower than the H1-2's, upside down on the torso.
+lidar_link: mid360_link  # the URDF's link for the raw sensor frame, livox_frame
+scan:                    # m above the floor: /converted_scan's band
+  min_height: 0.15
+  max_height: 1.3
+level_odom:
+  min_floor_depth: 0.5   # m below the lidar

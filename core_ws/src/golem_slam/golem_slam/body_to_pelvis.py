@@ -1,17 +1,18 @@
 """
-Publish the G1's dynamic body -> pelvis for FAST-LIO, with the transform helpers around it.
+Publish the dynamic body -> pelvis for FAST-LIO, with the transform helpers around it.
 
-    ros2 run golem_slam g1_body_to_pelvis --ros-args -p fastlio_config:=<FAST_LIO yaml>
+    ros2 run golem_slam body_to_pelvis --ros-args -p fastlio_config:=<FAST_LIO yaml>
 
 FAST-LIO tracks its IMU, 'body', which sits in the MID-360 on the torso, so the
-pelvis hangs off body through the waist. Each new pelvis -> livox_frame in TF
-(robot_state_publisher at the measured waist angles, then the static
-mid360_link -> livox_frame) gives one body -> pelvis with the same stamp:
-FAST-LIO's lidar-to-IMU extrinsic (from the FAST-LIO config) composed with
-livox_frame -> pelvis. The lidar the scan is cut from and the IMU FAST-LIO
-tracks then stay one rigid body at any waist angle. A fixed body -> pelvis with
-the waist at 0 would count the waist twice in the lidar's pose: once in
-FAST-LIO's pose of the IMU, once in robot_state_publisher's torso.
+pelvis hangs off body through the torso joint (H1-2) or the waist (G1). Each
+new pelvis -> livox_frame in TF (robot_state_publisher at the measured joint
+angles, then navigation.launch.py's static <lidar link> -> livox_frame) gives
+one body -> pelvis with the same stamp: FAST-LIO's lidar-to-IMU extrinsic (from
+the FAST-LIO config) composed with livox_frame -> pelvis. The lidar the scan is
+cut from and the IMU FAST-LIO tracks then stay one rigid body at any joint
+angle. A fixed body -> pelvis with the joints at 0 would count them twice in
+the lidar's pose: once in FAST-LIO's pose of the IMU, once in
+robot_state_publisher's torso.
 """
 
 from typing import NamedTuple
@@ -27,7 +28,6 @@ from tf2_ros import Buffer, TransformBroadcaster, TransformException, TransformL
 import yaml
 
 BASE_LINK = 'pelvis'
-LIDAR_LINK = 'mid360_link'
 LIVOX_FRAME = 'livox_frame'
 
 
@@ -122,16 +122,6 @@ def fastlio_extrinsic(fastlio_config):
     return transform(np.array(params['extrinsic_T'], dtype=float), rotation)
 
 
-def pelvis_to_body(urdf_file, body_from_lidar, lidar_frame=np.eye(4), positions=None):
-    """
-    Return T_pelvis_body, the IMU FAST-LIO tracks; missing joints default to 0.
-
-    lidar_frame is T_mid360_link_livox_frame, the frame the points arrive in.
-    """
-    pelvis_lidar = link_pose(urdf_file, BASE_LINK, LIDAR_LINK, positions) @ lidar_frame
-    return pelvis_lidar @ invert(body_from_lidar)
-
-
 def body_to_pelvis(pelvis_lidar, body_from_lidar):
     """Return T_body_pelvis from T_pelvis_livox_frame and FAST-LIO's T_body_lidar."""
     return body_from_lidar @ invert(pelvis_lidar)
@@ -153,7 +143,7 @@ def to_matrix(tf_msg):
 
 
 class BodyToPelvis(Node):
-    """Publish dynamic body -> pelvis TF from measured waist joint transforms."""
+    """Publish dynamic body -> pelvis TF from the measured torso or waist joints."""
 
     def __init__(self, **kwargs):
         super().__init__('body_to_pelvis', **kwargs)
@@ -191,7 +181,7 @@ class BodyToPelvis(Node):
 
 
 def main(args=None):
-    """Run the g1_body_to_pelvis node."""
+    """Run the body_to_pelvis node."""
     rclpy.init(args=args)
     node = BodyToPelvis()
     try:

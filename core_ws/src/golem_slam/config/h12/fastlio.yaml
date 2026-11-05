@@ -7,11 +7,9 @@
 # in its raw frame, the URDF's livox_link and livox_imu_link: the sims publish them from
 # the MJCF's livox_site and livox_imu_site, and on the real robot
 # livox_ros_driver2 applies no rotation (MID360_config.json's extrinsic is zero) and
-# nothing rotates the IMU. The extrinsic (URDF livox_link in livox_imu_link, under a
-# degree from identity) therefore holds for the inverted frames. FAST-LIO seeds
-# camera_init from the IMU attitude at startup, and golem_slam/navigation_launch.py
-# hangs the robot off its body frame (the IMU's) by the URDF, so the map comes out
-# upright.
+# nothing rotates the IMU. FAST-LIO seeds camera_init from the IMU attitude at startup;
+# level_odom levels it, and body_to_pelvis hangs the robot off FAST-LIO's body (the IMU)
+# by mapping.extrinsic_T/R below and the live torso TF.
 /**:
     ros__parameters:
         feature_extract_enable: false
@@ -50,8 +48,14 @@
             fov_degree:    360.0
             det_range:     100.0
             extrinsic_est_en:  true      # true: enable the online estimation of IMU-LiDAR extrinsic
-            # extrinsic_T / extrinsic_R (the lidar in the IMU frame) come from the URDF's
-            # livox_link and livox_imu_link: golem_slam/navigation_launch.py sets them.
+            # The lidar in the IMU frame (p_imu = R p_lidar + T): the URDF's livox_link in
+            # livox_imu_link (h1_2_magpie_ros.urdf), under a degree from identity because the
+            # points and the IMU share the inversion; test_navigation_launch.py checks it
+            # against the URDF. body_to_pelvis reads these values too.
+            extrinsic_T: [-0.010474205546, -0.023360766595, 0.044210452410]
+            extrinsic_R: [0.999929195836, 0.000000000000, 0.011899719142,
+                          0.000019039543, 0.999998720000, -0.001599886031,
+                          -0.011899703911, 0.001599999317, 0.999927915926]
 
         publish:
             path_en: true                # true: publish Path

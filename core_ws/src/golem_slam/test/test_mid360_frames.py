@@ -1,5 +1,5 @@
 """
-The URDF's MID360 frames as h12_navigation.launch.py reads them.
+The H1-2 URDF's MID360 frames, which config/h12/fastlio.yaml's extrinsic is taken from.
 
 livox_link and livox_imu_link are the MID-360's raw frames: the sensor hangs upside
 down under the head, and the driver applies no rotation, so both frames point their

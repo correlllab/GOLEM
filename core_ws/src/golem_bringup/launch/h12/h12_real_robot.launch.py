@@ -38,7 +38,7 @@ def generate_launch_description():
         DeclareLaunchArgument('lowerbody', default_value='almi'),
 
         _include('golem_bringup', 'h12/h12_real_drivers.launch.py', wall_time),
-        _include('golem_slam', 'h12_navigation.launch.py', wall_time),
+        _include('golem_slam', 'navigation.launch.py', {**wall_time, 'robot': 'h12'}),
         _include('golem_bringup', 'h12/h12_state.launch.py', wall_time),
         _include('golem_bringup', 'h12/h12_control.launch.py', {
             **wall_time,

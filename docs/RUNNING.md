@@ -112,7 +112,8 @@ argument; each passes its own to `h12_control`):
 The top-level files above are assembled from building blocks you can also
 launch on their own: `h12_state` (state publishers), `h12_control` (estop,
 safety, IK), `h12_lowerbody`, `h12_models` (model servers + skills),
-`h12_real_drivers`, `h12_grippers`, and `h12_navigation` (in `golem_slam`).
+`h12_real_drivers`, `h12_grippers`, and `golem_slam`'s `navigation.launch.py`
+(`robot:=h12`).
 
 For sensors + SLAM/nav on the real robot with no joint commanded (no estop,
 safety or IK), use `ros2 launch golem_slam h12_real_slam.launch.py`, which lives in

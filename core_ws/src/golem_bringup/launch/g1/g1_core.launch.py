@@ -54,8 +54,9 @@ motors stay off on golem_safety's zero-gain stream while the arms run.
 use_nav (default true, as the H1-2's bringups start navigation) adds
 golem_slam (odometry, slam_toolbox and Nav2, which drives the walking node
 through /cmd_vel), with the core: on the sim's FAST_LIO config and clock in
-the sim, and on the real robot g1_fastlio.yaml, wall time and the MID-360
-driver (g1_real_drivers.launch.py). FAST_LIO is the only odometry: the shared
+the sim (golem_slam's config/g1/fastlio_sim.yaml), and on the real robot
+config/g1/fastlio.yaml, wall time and the MID-360 driver
+(g1_real_drivers.launch.py). FAST_LIO is the only odometry: the shared
 pipeline needs its deskewed cloud. Leave GOLEM_SIM_ODOM unset to avoid a second
 odom -> pelvis publisher.
 FAST_LIO starts while the sim's elastic band still holds the robot up: the
@@ -241,11 +242,13 @@ def _setup(context):
         # releases it once its policy runs and the controller's start-up moves
         # are done)
         # the arguments of this launch that golem_slam also declares are passed
-        # explicitly, as above
-        actions.append(_include('golem_slam', 'g1_navigation.launch.py', {
-            'fast_lio_config_file': 'g1_fastlio_sim.yaml' if sim else 'g1_fastlio.yaml',
-            'use_sim_time': sim_time_arg,
-        }))
+        # explicitly, as above. FAST_LIO's config defaults to the real robot's,
+        # golem_slam's config/g1/fastlio.yaml; the sim has its own
+        navigation = {'robot': ROBOT, 'use_sim_time': sim_time_arg}
+        if sim:
+            navigation['fast_lio_config'] = os.path.join(
+                get_package_share_directory('golem_slam'), 'config', ROBOT, 'fastlio_sim.yaml')
+        actions.append(_include('golem_slam', 'navigation.launch.py', navigation))
     return actions
 
 

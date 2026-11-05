@@ -78,7 +78,9 @@ def test_g1_floor_with_upside_down_sensor():
     assert abs(floor + 0.9) < 0.01
 
 
-def test_moving_waist_updates_footprint_and_missing_tf_skips():
+def test_level_odom_follows_base():
+    # body -> pelvis moves with the torso or waist: each odometry sample takes the one
+    # at its own stamp
     from types import SimpleNamespace
     from geometry_msgs.msg import TransformStamped
     from nav_msgs.msg import Odometry
@@ -88,8 +90,8 @@ def test_moving_waist_updates_footprint_and_missing_tf_skips():
     buffer = Buffer()
     published = []
     node = SimpleNamespace(
-        odom_from_world=(np.eye(3), np.zeros(3)), body_from_base=None,
-        dynamic_base_transform=True, tf_buffer=buffer, body_frame='body',
+        odom_from_world=(np.eye(3), np.zeros(3)), pending_odometry=None,
+        tf_buffer=buffer, body_frame='body',
         base_frame='pelvis', odom_frame='odom', footprint_frame='base_footprint',
         footprint_broadcaster=SimpleNamespace(sendTransform=published.append),
         get_logger=lambda: SimpleNamespace(info=lambda *a, **kw: None))
@@ -121,12 +123,8 @@ def test_moving_waist_updates_footprint_and_missing_tf_skips():
     assert len(published) == 3
     assert published[-1].transform.translation.x == 2.4
     assert published[-1].header.stamp.sec == 3
-
-    # Fixed mode retains the existing H1-2 behavior, including the cached TF.
-    node.dynamic_base_transform = False
-    LevelOdom._on_odometry(node, msg)
-    assert len(published) == 4
-    assert published[-1].transform.translation.x == 2.4
+    LevelOdom._retry_odometry(node)  # nothing pending once published
+    assert len(published) == 3
 
 
 def test_motion_spread_accepts_sample_lists():

@@ -1,10 +1,10 @@
 # FAST_LIO on the real G1's MID-360, from golem_bringup's g1_real_drivers.launch.py
 # (livox_ros_driver2 in the laptop's golem_ros container, on
-# g1_MID360_config.json). Not yet run on our G1.
+# MID360_config.json beside this file). Not yet run on our G1.
 #
 # FAST_LIO names its frames camera_init (the IMU's start pose) and body (the
 # IMU). level_odom aligns odom -> camera_init from the IMU and floor scan, and
-# g1_body_to_pelvis publishes body -> pelvis from the URDF waist TF and
+# body_to_pelvis publishes body -> pelvis from the URDF waist TF and
 # mapping.extrinsic_T/R below. Edit the extrinsic here, not there.
 /**:
     ros__parameters:
@@ -43,10 +43,10 @@
             det_range: 100.0
             # The MID-360's lidar origin in its own IMU's frame (p_imu = R p_lidar + T):
             # FAST_LIO's upstream MID-360 value. Not estimated online:
-            # g1_body_to_pelvis reads these values for its dynamic body -> pelvis.
+            # body_to_pelvis reads these values for its dynamic body -> pelvis.
             extrinsic_est_en: false
             extrinsic_T: [-0.011, -0.02329, 0.04412]
-            # R is identity for the raw sensor frame: g1_MID360_config.json's
+            # R is identity for the raw sensor frame: MID360_config.json's
             # extrinsic_parameter is all zero (the URDF's mid360_joint holds the
             # upside-down mounting). A nonzero one would rotate the points but not
             # the IMU.

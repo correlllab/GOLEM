@@ -2,14 +2,14 @@
 Publish level, floor-referenced ``odom`` and ``base_footprint`` frames around FAST-LIO.
 
 FAST-LIO's world frame ``camera_init`` is the IMU frame at startup, so it
-carries the MID360's mounting pitch (~9.4 deg on the H1-2) and sits at lidar
-height. Anything that thresholds on height (octomap projection, costmap
-obstacle bands) needs a frame with +z against gravity and z = 0 on the floor.
+carries the MID360's mounting (upside down, pitched ~9 deg on the H1-2) and
+sits at lidar height. Anything that thresholds on height (octomap projection,
+costmap obstacle bands) needs a frame with +z against gravity and z = 0 on the
+floor.
 
 Once at startup this node:
-  1. averages the IMU specific force (``imu``; FAST-LIO's body frame, the same
-     frame the identity extrinsic_R in mid360.yaml assumes) rotated into
-     camera_init through TF, giving the up direction in camera_init. The robot
+  1. averages the IMU specific force (``imu``, in FAST-LIO's body frame, the IMU)
+     rotated into camera_init through TF, giving the up direction in camera_init. The robot
      must hold still for this window (``samples``, ~2 s): the mean of each of
      ``motion_chunks`` equal slices (~0.5 s) must lie within
      ``max_accel_spread`` of the window's mean (~1 deg of up direction), or
@@ -27,7 +27,10 @@ when the feet are off the ground (gantry) or the legs are bent.
 
 From then on, for every FAST-LIO ``odometry`` message it publishes
 odom -> base_footprint: the ``base_frame`` (pelvis) position projected onto the
-floor (z = 0) with its yaw only. slam_toolbox and Nav2 must use this frame as
+floor (z = 0) with its yaw only. body -> pelvis moves with the torso joints
+(body_to_pelvis.py), so each message takes the one at its own stamp; a message
+whose stamp TF has not reached yet is retried every 20 ms until it has, or a
+newer message replaces it. slam_toolbox and Nav2 must use this frame as
 their base: slam_toolbox composes map -> odom through its base frame, so a
 base that rolls, pitches and sits above the floor makes the map frame bob and
 tilt with the robot's sway.
@@ -110,17 +113,14 @@ class LevelOdom(Node):
         self.max_spread = self.declare_parameter('max_accel_spread', 0.02).value
         self.motion_chunks = self.declare_parameter('motion_chunks', 4).value
         self.floor_scans = self.declare_parameter('floor_scans', 10).value  # ~1 s at 10 Hz
-        # m below the lidar; the lidar is >= ~1.4 m above the floor in every
-        # stance, and table tops (~0.75 m) sit closer to it than this.
+        # m below the lidar: deeper than table tops, shallower than the floor in
+        # every stance (each robot's config/<robot>/pipeline.yaml sets it)
         self.min_depth = self.declare_parameter('min_floor_depth', 1.0).value
         self.min_points = self.declare_parameter('min_floor_points', 300).value
 
         self.up = None
         self.odom_from_world = None  # (rot, trans), set once odom is published
-        self.dynamic_base_transform = self.declare_parameter(
-            'dynamic_base_transform', False).value
-        self.body_from_base = None
-        self.pending_odometry = None
+        self.pending_odometry = None  # the latest odometry still waiting for its TF
         self.ups = []
         self.scans = []
         self.tf_buffer = Buffer()
@@ -133,8 +133,7 @@ class LevelOdom(Node):
         self.cloud_sub = self.create_subscription(PointCloud2, 'cloud', self._on_cloud,
                                                   qos_profile_sensor_data)
         self.create_subscription(Odometry, 'odometry', self._on_odometry, 10)
-        if self.dynamic_base_transform:
-            self.create_timer(0.02, self._retry_odometry)
+        self.create_timer(0.02, self._retry_odometry)
 
     def _world_from_body(self, stamp):
         try:
@@ -226,23 +225,19 @@ class LevelOdom(Node):
     def _on_odometry(self, msg):
         if self.odom_from_world is None:
             return
-        if self.dynamic_base_transform:
-            self.pending_odometry = msg  # bounded to the latest unprocessed sample
-        if self.dynamic_base_transform or self.body_from_base is None:
-            stamp = Time.from_msg(msg.header.stamp) if self.dynamic_base_transform else Time()
-            try:
-                self.body_from_base = transform_to_rt(self.tf_buffer.lookup_transform(
-                    self.body_frame, self.base_frame, stamp).transform)
-            except TransformException:
-                self.get_logger().info(
-                    f'waiting for {self.body_frame}->{self.base_frame}',
-                    throttle_duration_sec=5.0)
-                return
+        self.pending_odometry = msg
+        try:
+            r_bp, t_bp = transform_to_rt(self.tf_buffer.lookup_transform(
+                self.body_frame, self.base_frame, Time.from_msg(msg.header.stamp)).transform)
+        except TransformException:
+            self.get_logger().info(
+                f'waiting for {self.body_frame}->{self.base_frame}',
+                throttle_duration_sec=5.0)
+            return
         self.pending_odometry = None
         p, q = msg.pose.pose.position, msg.pose.pose.orientation
         r_wb, t_wb = quat_to_matrix(q.x, q.y, q.z, q.w), np.array([p.x, p.y, p.z])
         r_ow, t_ow = self.odom_from_world
-        r_bp, t_bp = self.body_from_base
         r_ob, t_ob = r_ow @ r_wb, r_ow @ t_wb + t_ow
         r_op, t_op = r_ob @ r_bp, r_ob @ t_bp + t_ob
         yaw = np.arctan2(r_op[1, 0], r_op[0, 0])

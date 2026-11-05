@@ -1,9 +1,16 @@
+"""
+golem_slam's navigation graph, one for every robot (launch/navigation.launch.py).
+
+The robot argument picks a config directory, config/<robot>/: FAST-LIO
+(fastlio.yaml), Nav2 (nav2.yaml), OctoMap (octomap.yaml) and the pipeline
+profile (pipeline.yaml: the lidar link, the scan's height band and level_odom's
+values). The nodes, their executables and remaps are the same on every robot.
+"""
 import os
 
 import yaml
 
 from ament_index_python.packages import get_package_share_directory
-from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, GroupAction, IncludeLaunchDescription,
                             OpaqueFunction)
@@ -12,82 +19,68 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node, SetRemap
 from nav2_common.launch import RewrittenYaml
 
-from golem_slam import g1_body_to_pelvis as frames
-from golem_slam.robot_geometry import fixed_transform, matrix_to_quat
+from golem_slam.body_to_pelvis import LIVOX_FRAME, static_transform_arguments, transform
 
-LIDAR_FRAME = 'livox_link'    # /livox/lidar's points
-IMU_FRAME = 'livox_imu_link'  # /livox/imu, FAST-LIO's 'body'
+# pipeline.yaml's keys, every one required
+PIPELINE_KEYS = (('lidar_link',), ('scan', 'min_height'), ('scan', 'max_height'),
+                 ('level_odom', 'min_floor_depth'))
 
 
-def _fast_lio(context, config_dir, fast_lio_config_file, use_sim_time):
-    """FAST-LIO and its body -> pelvis TF, both from the URDF's MID360 frames."""
-    with open(LaunchConfiguration('urdf_file').perform(context)) as f:
-        urdf = f.read()
-    # FAST-LIO's extrinsic: the lidar in the IMU frame
-    r_il, t_il = fixed_transform(urdf, IMU_FRAME, LIDAR_FRAME)
-    fast_lio_node = Node(
-        package='fast_lio',
-        executable='fastlio_mapping',
-        parameters=[PathJoinSubstitution([config_dir, fast_lio_config_file]),
-                    {'use_sim_time': use_sim_time,
-                     'mapping.extrinsic_T': [float(v) for v in t_il],
-                     'mapping.extrinsic_R': [float(v) for v in r_il.flatten()]}],
-        output='screen'
-    )
-    # FAST-LIO publishes camera_init -> body, body being the IMU frame. Hang the robot
-    # off it by the pelvis's pose in that frame, torso_joint at zero.
-    r_bp, t_bp = fixed_transform(urdf, IMU_FRAME, 'pelvis')
-    qx, qy, qz, qw = matrix_to_quat(r_bp)
-    static_tf_broadcaster = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='body_to_pelvis_broadcaster',
-        arguments=['--x', str(t_bp[0]), '--y', str(t_bp[1]), '--z', str(t_bp[2]),
-                   '--qx', str(qx), '--qy', str(qy), '--qz', str(qz), '--qw', str(qw),
-                   '--frame-id', 'body', '--child-frame-id', 'pelvis'],
-        output='screen'
-    )
-    # The driver and both sims stamp the lidar points and the IMU 'livox_frame', the
-    # raw frame of the URDF's livox_link.
+def _config_dir():
+    return os.path.join(get_package_share_directory('golem_slam'), 'config')
+
+
+def load_pipeline(path):
+    """Return the pipeline profile at path, refusing one that lacks a key."""
+    with open(path) as source:
+        profile = yaml.safe_load(source) or {}
+    for key in PIPELINE_KEYS:
+        value = profile
+        for part in key:
+            if not isinstance(value, dict) or part not in value:
+                raise RuntimeError(f'golem_slam: {path} has no {".".join(key)}')
+            value = value[part]
+    return profile
+
+
+def _pipeline(context):
+    robot = LaunchConfiguration('robot').perform(context)
+    robot_config = os.path.join(_config_dir(), robot)
+    if not robot or not os.path.isdir(robot_config):
+        robots = sorted(d for d in os.listdir(_config_dir())
+                        if os.path.isdir(os.path.join(_config_dir(), d)))
+        raise RuntimeError(f'golem_slam: no config directory for robot {robot!r} '
+                           f'(config/<robot>/ exists for {", ".join(robots)})')
+    profile = load_pipeline(os.path.join(robot_config, 'pipeline.yaml'))
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    fast_lio_config = LaunchConfiguration('fast_lio_config').perform(context)
+
+    # The driver and the sims stamp the lidar points and the IMU 'livox_frame', the
+    # raw sensor frame, which the URDF's lidar link is.
     livox_frame_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='livox_frame_tf',
-        arguments=['--x', '0', '--y', '0', '--z', '0',
-                   '--qx', '0', '--qy', '0', '--qz', '0', '--qw', '1',
-                   '--frame-id', LIDAR_FRAME, '--child-frame-id', 'livox_frame'],
-        output='screen'
+        arguments=static_transform_arguments(transform(), profile['lidar_link'], LIVOX_FRAME),
+        output='screen',
     )
-    return [fast_lio_node, static_tf_broadcaster, livox_frame_tf]
-
-
-def _g1_fast_lio(context, config_dir, use_sim_time):
-    config = os.path.join(config_dir, LaunchConfiguration('fast_lio_config_file').perform(context))
-    return [
-        Node(package='tf2_ros', executable='static_transform_publisher', name='livox_frame_tf',
-             arguments=frames.static_transform_arguments(
-                 frames.transform(), frames.LIDAR_LINK, frames.LIVOX_FRAME), output='screen'),
-        Node(package='fast_lio', executable='fastlio_mapping', name='fast_lio',
-             parameters=[config, {'use_sim_time': use_sim_time}], output='screen'),
-        Node(package='golem_slam', executable='g1_body_to_pelvis', name='body_to_pelvis',
-             parameters=[{'fastlio_config': config, 'use_sim_time': use_sim_time}],
-             output='screen'),
-    ]
-
-
-def _pipeline(context, robot):
-    config_dir = os.path.join(get_package_share_directory('golem_slam'), 'config')
-    use_sim_time = LaunchConfiguration('use_sim_time')
-    fast_lio_config_file = LaunchConfiguration('fast_lio_config_file')
-    nav2_params_file = LaunchConfiguration('nav2_params_file')
-    slam_params_file = LaunchConfiguration('slam_params_file')
-    profile = {}
-    if robot == 'g1':
-        with open(LaunchConfiguration('pipeline_params_file').perform(context)) as source:
-            profile = yaml.safe_load(source)
-        fast_lio = _g1_fast_lio(context, config_dir, use_sim_time)
-    else:
-        fast_lio = _fast_lio(context, config_dir, fast_lio_config_file, use_sim_time)
+    fast_lio_node = Node(
+        package='fast_lio',
+        executable='fastlio_mapping',
+        name='fast_lio',
+        parameters=[fast_lio_config, {'use_sim_time': use_sim_time}],
+        output='screen',
+    )
+    # FAST-LIO publishes camera_init -> body, body being its IMU on the torso; this
+    # hangs the pelvis off it at the measured torso joints (golem_slam/body_to_pelvis.py).
+    body_to_pelvis_node = Node(
+        package='golem_slam',
+        executable='body_to_pelvis',
+        name='body_to_pelvis',
+        parameters=[{'fastlio_config': fast_lio_config, 'lidar_frame': LIVOX_FRAME,
+                     'use_sim_time': use_sim_time}],
+        output='screen',
+    )
 
     # Gravity-aligned, floor-referenced odom -> camera_init (static, computed
     # once at startup: up from the IMU while the robot stands still, floor
@@ -100,7 +93,7 @@ def _pipeline(context, robot):
         executable='level_odom',
         name='level_odom',
         output='screen',
-        parameters=[profile.get('level_odom', {}), {'use_sim_time': use_sim_time}],
+        parameters=[profile['level_odom'], {'use_sim_time': use_sim_time}],
         remappings=[('imu', '/livox/imu'), ('cloud', '/cloud_body_filtered'),
                     ('odometry', '/Odometry')],
     )
@@ -118,6 +111,19 @@ def _pipeline(context, robot):
             ('cloud_in', '/cloud_registered_body'),
             ('cloud_out', '/cloud_body_filtered'),
         ],
+    )
+
+    # The scan's input in base_footprint (level and on the floor, so body sway
+    # doesn't tilt the slice into the floor), transformed without a TF message
+    # filter (golem_slam/level_cloud.py).
+    level_cloud_node = Node(
+        package='golem_slam',
+        executable='level_cloud',
+        name='level_cloud',
+        parameters=[{'use_sim_time': use_sim_time}],
+        remappings=[('cloud_in', '/cloud_body_filtered'),
+                    ('cloud_out', '/cloud_base_filtered')],
+        output='screen',
     )
 
     # 3D occupancy (RViz: /occupied_cells_vis_array) and its 2D projection
@@ -139,15 +145,13 @@ def _pipeline(context, robot):
         name='cloud_registered_to_laserscan',
         output='screen',
         parameters=[
-            # H1-2: base_footprint, level and on the floor, so body sway
-            # doesn't tilt the slice into the floor. G1: none, level_cloud
-            # has already put /cloud_base_filtered in that frame.
-            {'target_frame': '' if robot == 'g1' else 'base_footprint'},
+            # none: level_cloud has already put /cloud_base_filtered in base_footprint
+            {'target_frame': ''},
             {'use_sim_time': use_sim_time},
             # m above the floor: clears floor returns and FAST-LIO z drift,
             # and stays below the robot's height.
-            {'min_height': profile.get('scan', {}).get('min_height', 0.25)},
-            {'max_height': profile.get('scan', {}).get('max_height', 1.7)},
+            {'min_height': profile['scan']['min_height']},
+            {'max_height': profile['scan']['max_height']},
             {'angle_min': -3.14159},
             {'angle_max': 3.14159},
             {'angle_increment': 0.0087},
@@ -161,7 +165,7 @@ def _pipeline(context, robot):
             {'queue_size': 20},
         ],
         remappings=[
-            ('cloud_in', '/cloud_base_filtered' if robot == 'g1' else '/cloud_body_filtered'),
+            ('cloud_in', '/cloud_base_filtered'),
             ('scan', '/converted_scan'),
         ]
     )
@@ -172,7 +176,7 @@ def _pipeline(context, robot):
         name='slam_toolbox',
         output='screen',
         parameters=[
-            slam_params_file,
+            LaunchConfiguration('slam_params_file'),
             {
                 # Must be level and on the floor: slam_toolbox folds its base
                 # frame's height and tilt into map -> odom.
@@ -195,64 +199,50 @@ def _pipeline(context, robot):
     # navigation_launch.py takes no BT argument; bt_navigator reads its tree
     # from the params file, so point that key at the installed humanoid tree.
     nav2_params = RewrittenYaml(
-        source_file=nav2_params_file,
+        source_file=LaunchConfiguration('nav2_params_file'),
         param_rewrites={'default_nav_to_pose_bt_xml': os.path.join(
             get_package_share_directory('golem_slam'), 'behavior_trees',
             'navigate_to_pose_humanoid.xml')},
         convert_types=True,
     )
-    nav2_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(nav2_bringup_dir, 'launch', 'navigation_launch.py')
+    nav2_launch = GroupAction(actions=[
+        # Humble's navigation_launch remaps the controller's cmd_vel to the
+        # velocity smoother's input but not the recoveries'; this node-scoped rule
+        # sends every Nav2 command through the smoother.
+        SetRemap(src='behavior_server:cmd_vel', dst='cmd_vel_nav'),
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(nav2_bringup_dir, 'launch', 'navigation_launch.py')),
+            launch_arguments={
+                'use_sim_time': use_sim_time,
+                'params_file': nav2_params,
+                'autostart': 'true',
+                'namespace': '',
+            }.items(),
         ),
-        launch_arguments={
-            'use_sim_time': use_sim_time,
-            'params_file': nav2_params,
-            'autostart': 'true',
-            'namespace': '',
-        }.items(),
-    )
+    ])
 
-    if robot == 'g1':
-        # Humble's navigation_launch remaps the controller but not recoveries.
-        # Scope a node-specific rule so all G1 commands pass through the smoother.
-        nav2_launch = GroupAction(actions=[
-            SetRemap(src='behavior_server:cmd_vel', dst='cmd_vel_nav'), nav2_launch])
-    actions = fast_lio + [level_odom_node, self_filter_node, octomap_node,
-                          pointcloud_to_laserscan_node, slam_toolbox_node, nav2_launch]
-    if robot == 'g1':
-        actions.append(Node(
-            package='golem_slam', executable='level_cloud', name='level_cloud',
-            parameters=[{'use_sim_time': use_sim_time}],
-            remappings=[('cloud_in', '/cloud_body_filtered'),
-                        ('cloud_out', '/cloud_base_filtered')], output='screen'))
-    return actions
+    return [livox_frame_tf, fast_lio_node, body_to_pelvis_node, level_odom_node,
+            self_filter_node, level_cloud_node, octomap_node, pointcloud_to_laserscan_node,
+            slam_toolbox_node, nav2_launch]
 
 
-def generate_navigation_launch_description(robot):
-    """Build the shared pipeline with explicit robot-specific defaults."""
-    if robot not in ('h12', 'g1'):
-        raise ValueError(f'unsupported robot {robot!r}')
-    config = os.path.join(get_package_share_directory('golem_slam'), 'config')
-    g1 = robot == 'g1'
-    arguments = [
+def _robot_file(name):
+    """config/<robot>/<name>, for the robot argument."""
+    return PathJoinSubstitution([_config_dir(), LaunchConfiguration('robot'), name])
+
+
+def generate_launch_description():
+    """Build the navigation graph for the robot argument's config directory."""
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            'robot', description="the robot, which picks golem_slam's config/<robot>/"),
         DeclareLaunchArgument('use_sim_time', default_value='false'),
-        DeclareLaunchArgument('fast_lio_config_file',
-                              default_value='g1_fastlio_sim.yaml' if g1 else 'mid360.yaml'),
-        DeclareLaunchArgument('nav2_params_file', default_value=os.path.join(
-            config, 'g1_nav2.yaml' if g1 else 'nav2_config.yaml')),
+        DeclareLaunchArgument('fast_lio_config', default_value=_robot_file('fastlio.yaml'),
+                              description="FAST-LIO config (a sim may need its own)"),
+        DeclareLaunchArgument('nav2_params_file', default_value=_robot_file('nav2.yaml')),
+        DeclareLaunchArgument('octomap_params_file', default_value=_robot_file('octomap.yaml')),
         DeclareLaunchArgument('slam_params_file', default_value=os.path.join(
-            config, 'slam_toolbox_h1.yaml')),
-        DeclareLaunchArgument('octomap_params_file', default_value=os.path.join(
-            config, 'g1_octomap.yaml' if g1 else 'octomap.yaml')),
-    ]
-    if g1:
-        arguments += [
-            DeclareLaunchArgument('pipeline_params_file',
-                                  default_value=os.path.join(config, 'g1_pipeline.yaml')),
-        ]
-    else:
-        arguments += [
-            DeclareLaunchArgument('urdf_file', default_value=urdf_path(robot, ros=True)),
-        ]
-    return LaunchDescription(arguments + [OpaqueFunction(function=_pipeline, args=[robot])])
+            _config_dir(), 'slam_toolbox.yaml')),
+        OpaqueFunction(function=_pipeline),
+    ])

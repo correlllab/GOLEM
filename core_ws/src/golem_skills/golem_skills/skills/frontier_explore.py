@@ -59,7 +59,7 @@ MAP_WAIT = 3.0      # s: how long each round waits for a current /map and costma
 COSTMAP_LAG = 0.3   # s: costmap must be at least this much newer than /map
 POLL = 0.05         # s
 MARKER_TOPIC = '/frontier_explore/frontiers'
-# Default footprint (matches golem_slam/config/g1_nav2.yaml; override via 'footprint' param).
+# Default footprint (matches golem_slam/config/g1/nav2.yaml; override via 'footprint' param).
 G1_FOOTPRINT = '[[0.44, 0.24], [0.44, -0.24], [-0.20, -0.24], [-0.20, 0.24]]'
 
 # data (rows y, cols x) int16; res m; origin (x, y) of cell (0, 0)'s corner; stamp s.

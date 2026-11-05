@@ -87,6 +87,6 @@ def generate_launch_description():
             'engage_wait_for_confirm': 'true',
             'disable_elastic_band': 'false',
         }),
-        _include('golem_slam', 'h12_navigation.launch.py', wall_time,
+        _include('golem_slam', 'navigation.launch.py', {**wall_time, 'robot': 'h12'},
                  condition=IfCondition(LaunchConfiguration('use_slam'))),
     ])

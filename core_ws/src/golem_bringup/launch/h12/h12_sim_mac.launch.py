@@ -116,7 +116,7 @@ def generate_launch_description():
     # /map from it against the sim's ground-truth /odom (odom -> pelvis). No
     # FAST-LIO needed. REQUIRES the robocasa/sim container started with
     # GOLEM_SIM_ODOM=1 (off by default) to publish that /odom; without it slam_toolbox
-    # has no odom and the map stays empty. p2l params match h12_navigation.launch.py
+    # has no odom and the map stays empty. p2l params match golem_slam's navigation graph
     # but are fed from the raw /livox/pointcloud instead of FAST-LIO's registered cloud.
     if os.environ.get('GOLEM_SLAM', '').strip().lower() in ('1', 'true', 'on'):
         nodes.append(Node(
@@ -125,7 +125,7 @@ def generate_launch_description():
             name='pointcloud_to_laserscan',
             parameters=[{
                 'target_frame': 'pelvis',
-                # Relaxed vs h12_navigation's FAST-LIO tuning for the raw sim lidar:
+                # Relaxed vs golem_slam's navigation tuning for the raw sim lidar:
                 # a taller band (counter tops / cabinets). range_min 0.65 drops the
                 # robot's OWN legs/feet — the torso lidar looks down and returns them
                 # at ~0.4 m; mapping those puts a phantom obstacle under the robot and
@@ -150,7 +150,7 @@ def generate_launch_description():
             name='slam_toolbox',
             parameters=[
                 os.path.join(get_package_share_directory('golem_slam'),
-                             'config', 'slam_toolbox_h1.yaml'),
+                             'config', 'slam_toolbox.yaml'),
                 {'odom_frame': 'odom', 'scan_topic': '/converted_scan'},
                 sim_time_param,
             ],

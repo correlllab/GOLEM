@@ -13,14 +13,14 @@ def generate_launch_description():
     # Equivalent of `ros2 launch livox_ros_driver2 msg_MID360_launch.py`,
     # inlined so the MID360 driver comes up as part of this bringup. Params
     # mirror msg_MID360_launch.py; user_config_path points at the
-    # humanoid-validated MID360_config.json stored under golem_slam/config
+    # humanoid-validated MID360_config.json stored under golem_slam/config/h12
     # (Unitree onboard net 192.168.123.164 host / 192.168.123.120 lidar). The
     # lidar hangs upside down; the driver applies no extrinsic rotation, so the
     # points (frame 'livox_frame') and the IMU are both in the sensor's raw
     # frame, the URDF's livox_link and livox_imu_link.
     bringup_share = get_package_share_directory('golem_bringup')
     mid360_config = os.path.join(
-        get_package_share_directory('golem_slam'), 'config', 'MID360_config.json')
+        get_package_share_directory('golem_slam'), 'config', 'h12', 'MID360_config.json')
 
     livox_mid360_params = [
         {'xfer_format': 1},      # 0-Pointcloud2(PointXYZRTL), 1-customized pointcloud format

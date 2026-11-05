@@ -235,7 +235,7 @@ def test_parse_footprint():
 
 def test_the_default_footprint_is_g1_nav2_yaml_s():
     nav2_config = os.path.join(
-        get_package_share_directory('golem_slam'), 'config', 'g1_nav2.yaml')
+        get_package_share_directory('golem_slam'), 'config', 'g1', 'nav2.yaml')
     with open(nav2_config) as f:
         config = yaml.safe_load(f)
     for costmap in ('global_costmap', 'local_costmap'):

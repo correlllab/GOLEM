@@ -2,11 +2,11 @@
 The real G1's sensor drivers, run in the laptop's golem_ros container.
 
 The MID-360 driver (livox_ros_driver2), as msg_MID360_launch.py starts it, on
-golem_slam/config/g1_MID360_config.json: the laptop's wired address
+golem_slam/config/g1/MID360_config.json: the laptop's wired address
 (192.168.123.222, docs/g1/dds.md) as the host, the lidar at 192.168.123.120,
 and no extrinsic, so /livox/lidar and /livox/imu are both in the raw sensor
 frame, livox_frame, as the G1 sim publishes them. The URDF's mid360_joint holds
-the sensor's upside-down mounting, and g1_fastlio.yaml's extrinsic_R is the
+the sensor's upside-down mounting, and config/g1/fastlio.yaml's extrinsic_R is the
 identity for that frame. With 10 Hz frames in CustomMsg (xfer_format 1), which
 FAST_LIO's scan_rate and lidar_type expect.
 """
@@ -19,7 +19,7 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     mid360_config = os.path.join(
-        get_package_share_directory('golem_slam'), 'config', 'g1_MID360_config.json')
+        get_package_share_directory('golem_slam'), 'config', 'g1', 'MID360_config.json')
     return LaunchDescription([
         Node(
             package='livox_ros_driver2',
@@ -31,7 +31,7 @@ def generate_launch_description():
                 'xfer_format': 1,      # Livox CustomMsg
                 'multi_topic': 0,      # /livox/lidar and /livox/imu for every lidar
                 'data_src': 0,         # the lidar
-                'publish_freq': 10.0,  # Hz: g1_fastlio.yaml's scan_rate
+                'publish_freq': 10.0,  # Hz: config/g1/fastlio.yaml's scan_rate
                 'output_data_type': 0,
                 'frame_id': 'livox_frame',
                 'user_config_path': mid360_config,

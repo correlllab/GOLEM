@@ -39,7 +39,7 @@
             # The MID-360's lidar origin in its own IMU's frame (p_imu = R p_lidar + T):
             # FAST_LIO's upstream MID-360 value, which the sim has to match. R is
             # identity for the raw sensor frame. Not estimated online:
-            # g1_body_to_pelvis reads these values for its dynamic body -> pelvis.
+            # body_to_pelvis reads these values for its dynamic body -> pelvis.
             extrinsic_est_en: false
             extrinsic_T: [-0.011, -0.02329, 0.04412]
             extrinsic_R: [1., 0., 0.,

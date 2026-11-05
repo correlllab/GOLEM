@@ -75,7 +75,7 @@ instead of copying the numbers.
 | Arm speed limits (`controller.v_lim`, `w_lim`, `dq_lim`) | `golem_upper_ik/config/g1/g1_split.yaml`: deliberately low for the first sessions | `sim_split.yaml` |
 | The walking node | `g1_homie/config/g1.yaml`: starts only with `start_position_verified:=true`, holds the default pose until `/lowerbody/confirm_engage` | `sim.yaml`: always starts, no confirm, releases the band |
 | Walking speed limits (`commands.vx`, `vy`, `yaw`) | `g1.yaml`: inside the trained ranges | `sim.yaml`: the trained ranges |
-| Navigation | on by default (`use_nav`): the MID-360 driver, `g1_fastlio.yaml`; not yet run | on by default (`use_nav`) |
+| Navigation | on by default (`use_nav`): the MID-360 driver, `golem_slam`'s `config/g1/fastlio.yaml`; not yet run | on by default (`use_nav`): `config/g1/fastlio_sim.yaml` |
 | Status | nothing has run on the robot yet | arm, walk, nav and exploration tests pass |
 
 ## Not known yet

@@ -71,7 +71,7 @@ def generate_launch_description():
             'model_clear_logs': LaunchConfiguration('model_clear_logs'),
             'record_runs': LaunchConfiguration('record_runs'),
         }),
-        _include('golem_slam', 'h12_navigation.launch.py', sim_time,
+        _include('golem_slam', 'navigation.launch.py', {**sim_time, 'robot': 'h12'},
                  condition=IfCondition(LaunchConfiguration('use_nav'))),
 
         # For Isaac: its head camera's images are stamped

@@ -53,7 +53,8 @@ def _context(description, **args):
     """Return a LaunchContext with the description's declared defaults, overridden by args."""
     context = LaunchContext()
     for entity in description.entities:
-        if isinstance(entity, DeclareLaunchArgument):
+        # a required argument (no default) is set only by args
+        if isinstance(entity, DeclareLaunchArgument) and entity.default_value is not None:
             context.launch_configurations[entity.name] = perform_substitutions(
                 context, entity.default_value)
     context.launch_configurations.update(args)

@@ -175,7 +175,7 @@ nests `unitree_api`, `unitree_go`, `unitree_hg`, `unitree_ros2_example`).
 | `deploy_mjpc` | controller (lower body, MPC) | MJPC balance/locomotion controller (C++ cores from the `mujoco_mpc` fork, run as separate processes) + RW-EKF base estimator. No bringup starts the controller today (`lowerbody:=mjpc` starts no leg node), and the estimator only with `use_estimator:=true` | `mjpc_lowerbody_core`, `controller_launcher.py`, `estimator_node.py` |
 | `h12_lowerbody_rl` | controller (lower body, RL) | TorchScript walking, FAME RMA stand/squat and ALMI stand/walk policies, run by one controller pinned to one of them (`active_policy`: `almi` in every bringup; the Mac's `GOLEM_LOWERBODY` picks `fame`, `walk` or `almi`); consumes `/lowstate` + `/cmd_vel`, emits 12-joint PD setpoints | `lowerbody_controller_node` |
 | `lmg_deploy` | controller (whole body, MARL) | The loco-manipulation game's two-agent (legs + IK arms) MARL policy, run by the `lmg_*` bringups | `marl_deploy_node` |
-| `golem_slam` | SLAM + navigation (both robots) | Shared navigation for both robots (FAST-LIO deskewed cloud → self filter → floor alignment/OctoMap → slam_toolbox → Nav2 MPPI), the G1's dynamic waist transform (`g1_body_to_pelvis`), and its configs: Livox MID360 driver config (`MID360_config.json`, real robot, read by `h12_real_drivers.launch.py`), FAST-LIO (`mid360.yaml`, `g1_fastlio*.yaml`), the G1's pipeline profile (`g1_pipeline.yaml`), OctoMap (`octomap.yaml`, `g1_octomap.yaml`), slam_toolbox (`slam_toolbox_h1.yaml`, both robots), Nav2 (`nav2_config*.yaml`, `g1_nav2.yaml`) | `launch/h12_navigation.launch.py`, `launch/g1_navigation.launch.py`, `g1_body_to_pelvis`, `config/` |
+| `golem_slam` | SLAM + navigation (both robots) | One navigation graph for both robots (FAST-LIO deskewed cloud → self filter → floor alignment (`level_odom`)/OctoMap and `level_cloud` → scan → slam_toolbox → Nav2 MPPI, every Nav2 command through the velocity smoother), with the dynamic `body → pelvis` transform (`body_to_pelvis`, following the torso or waist joints) and a static `<lidar link> → livox_frame`. `navigation.launch.py robot:=h12\|g1` picks the robot's config directory, `config/<robot>/`: FAST-LIO (`fastlio.yaml`, the G1 sim's `fastlio_sim.yaml`), the MID360 driver config (`MID360_config.json`, real robot, read by the real-driver launches), Nav2 (`nav2.yaml`), OctoMap (`octomap.yaml`) and the pipeline profile (`pipeline.yaml`: lidar link, scan band, `level_odom` values); slam_toolbox's `config/slam_toolbox.yaml` is shared | `launch/navigation.launch.py`, `body_to_pelvis`, `config/` |
 | `golem_skills` | **skills (both robots)** | Action servers for the 12 `/skill/*` atomic skills an LLM can call (frontier exploration lives here). See §7. | `skills` (SkillsNode) |
 | `model_server` | model server | ROS service servers wrapping ML models: Gemini VLM, SAM3 segmentation, GraspGenX grasp generation, YOLO detection | `gemini_server`, `sam_server`, `graspgen_server`, `yolo_server` |
 | `custom_ros_messages` | interfaces (both robots) | 19 actions (13 `Skill*`, `FrameTask`, `NamedConfig`, `DualArm`, …), msgs, srvs (`GeminiQuery`, `SamSegment`, `GraspGen`, `SetHandPose`, …) | rosidl only |
@@ -248,7 +248,7 @@ including `h12_control.launch.py`'s `sim`, which has no default.
 | `h12_models.launch.py` | gemini + sam servers, [yolo], graspgen + `golem_skills` (`use_skills`) |
 | `h12_real_drivers.launch.py` | Livox MID360 (no extrinsic rotation: the points and `/livox/imu` are both in the sensor's raw, upside-down frame, the URDF's `livox_link` and `livox_imu_link`), RealSense head camera, `h12_grippers.launch.py` (left+right `gripper_node`) |
 | `h12_locomanipulationgame.launch.py` | `marl_deploy_node` (behind `start_position_verified`; holds arm goals in the world by the SLAM `/Odometry`) |
-| `golem_slam/launch/h12_navigation.launch.py` | shared nav stack (FAST-LIO → pointcloud_to_laserscan → slam_toolbox → nav2) |
+| `golem_slam/launch/navigation.launch.py` | the shared nav stack, included with `robot: h12` (FAST-LIO → pointcloud_to_laserscan → slam_toolbox → nav2; `golem_slam`'s `config/h12/`) |
 
 `golem_slam` also ships one top-level file of its own, `h12_real_slam.launch.py`
 (`ros2 launch golem_slam h12_real_slam.launch.py`): real robot sensors + SLAM/navigation
@@ -350,8 +350,8 @@ which `golem_upper_ik`'s `upper_ik.launch.py` applies (`upper_ik: not starting:
   off, and the split estop turns every motor off.
 - **Navigation.** `use_nav` (default true on both G1 bringups, as on the
   H1-2's) adds `golem_slam`; on the real G1 it also starts the MID-360 driver
-  (`launch/g1/g1_real_drivers.launch.py`, `golem_slam/config/g1_MID360_config.json`)
-  and FAST-LIO on `g1_fastlio.yaml`. Not yet run on the real G1.
+  (`launch/g1/g1_real_drivers.launch.py`, `golem_slam/config/g1/MID360_config.json`)
+  and FAST-LIO on `config/g1/fastlio.yaml`. Not yet run on the real G1.
 
 **The G1's start-up** (`g1_core.launch.py`'s docstring; `golem_safety`'s,
 `golem_upper_ik`'s and `g1_homie`'s READMEs have the details):

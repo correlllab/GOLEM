@@ -58,7 +58,7 @@ it, so only the arms go limp. The controller stops with an error if
 rt/lowstate does not arrive within 5 s, if golem_safety has not relayed its
 commands within 30 s, or if the move to home is not done within 30 s after
 that. use_nav (default true) starts the MID-360 driver
-(g1_real_drivers.launch.py) and golem_slam on g1_fastlio.yaml: FAST_LIO,
+(g1_real_drivers.launch.py) and golem_slam on config/g1/fastlio.yaml: FAST_LIO,
 slam_toolbox and Nav2, which drives the walking node through /cmd_vel once it
 runs. Neither has been run on our G1. Skills are not part of the real G1
 bringup yet.

@@ -46,6 +46,11 @@ def test_h12_preserves_floor_and_scan_defaults():
     assert (scan['min_height'], scan['max_height'], scan['range_min'], scan['range_max']) == (
         0.25, 1.7, 0.3, 3.0)
     assert 'body_to_pelvis_broadcaster' in ns
+    # the driver and both sims stamp the lidar and IMU 'livox_frame', the raw frame
+    # of the URDF's livox_link
+    frame_tf, _ = ns['livox_frame_tf']
+    assert list(frame_tf._Node__arguments[-4:]) == [
+        '--frame-id', 'livox_link', '--child-frame-id', 'livox_frame']
     assert any(isinstance(a, IncludeLaunchDescription) for a in actions)
 
 

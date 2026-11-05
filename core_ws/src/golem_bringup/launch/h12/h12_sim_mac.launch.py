@@ -8,7 +8,7 @@ intentionally omits. RViz runs outside this launch file (launch_ros_mac.sh,
 GOLEM_RVIZ=vnc).
 
 Nodes started:
-  * static livox_link -> lidar_link TF (so RViz can place /livox/pointcloud)
+  * static livox_link -> livox_frame TF (so RViz can place /livox/pointcloud)
   * joint_state_publisher      (golem_upper_ik)
   * robot_state_publisher
   * frame_task_server          (golem_upper_ik, Pink IK)
@@ -38,14 +38,14 @@ def generate_launch_description():
 
     nodes = [
         # The MuJoCo lidar bridge stamps /livox/{lidar,pointcloud} with frame_id
-        # 'lidar_link', which is co-located with the URDF's 'livox_link' mount but
-        # is not itself a URDF link. Publish the identity bridge so RViz (and any
-        # lidar consumer) can transform the cloud into the robot/TF tree.
+        # 'livox_frame', the raw frame of the URDF's 'livox_link', which is not itself
+        # a URDF link. Publish the identity bridge so RViz (and any lidar consumer)
+        # can transform the cloud into the robot/TF tree.
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
-            name='lidar_frame_broadcaster',
-            arguments=['0', '0', '0', '0', '0', '0', 'livox_link', 'lidar_link'],
+            name='livox_frame_broadcaster',
+            arguments=['0', '0', '0', '0', '0', '0', 'livox_link', 'livox_frame'],
             parameters=[sim_time_param],
             output='screen',
             emulate_tty=True,

@@ -47,7 +47,18 @@ def _fast_lio(context, config_dir, fast_lio_config_file, use_sim_time):
                    '--frame-id', 'body', '--child-frame-id', 'pelvis'],
         output='screen'
     )
-    return [fast_lio_node, static_tf_broadcaster]
+    # The driver and both sims stamp the lidar points and the IMU 'livox_frame', the
+    # raw frame of the URDF's livox_link.
+    livox_frame_tf = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='livox_frame_tf',
+        arguments=['--x', '0', '--y', '0', '--z', '0',
+                   '--qx', '0', '--qy', '0', '--qz', '0', '--qw', '1',
+                   '--frame-id', LIDAR_FRAME, '--child-frame-id', 'livox_frame'],
+        output='screen'
+    )
+    return [fast_lio_node, static_tf_broadcaster, livox_frame_tf]
 
 
 def _g1_fast_lio(context, config_dir, use_sim_time):

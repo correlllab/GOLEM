@@ -3,13 +3,15 @@
 # (correlllab/fast_lio_nav2_humanoid fast_lio_nav2_integration/config/mid360.yaml)
 # except where noted inline.
 #
-# The extrinsic (URDF livox_link in livox_imu_link, under a degree from identity)
-# requires /livox/imu upright like the points. The sims publish both from the
-# MJCF's livox_site and livox_imu_site. On the real robot the stock livox_ros_driver2
-# rotates only the points by MID360_config.json's extrinsic (roll 180, the lidar is
-# mounted inverted), so h12_real_drivers.launch.py routes the IMU through
-# livox_imu_upright. FAST-LIO seeds camera_init from the IMU attitude at startup, so
-# an inverted IMU puts the whole map upside down.
+# The MID-360 hangs upside down under the head, and /livox/lidar and /livox/imu are both
+# in its raw frame, the URDF's livox_link and livox_imu_link: the sims publish them from
+# the MJCF's livox_site and livox_imu_site, and on the real robot
+# livox_ros_driver2 applies no rotation (MID360_config.json's extrinsic is zero) and
+# nothing rotates the IMU. The extrinsic (URDF livox_link in livox_imu_link, under a
+# degree from identity) therefore holds for the inverted frames. FAST-LIO seeds
+# camera_init from the IMU attitude at startup, and golem_slam/navigation_launch.py
+# hangs the robot off its body frame (the IMU's) by the URDF, so the map comes out
+# upright.
 /**:
     ros__parameters:
         feature_extract_enable: false

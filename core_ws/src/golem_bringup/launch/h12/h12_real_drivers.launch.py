@@ -14,8 +14,10 @@ def generate_launch_description():
     # inlined so the MID360 driver comes up as part of this bringup. Params
     # mirror msg_MID360_launch.py; user_config_path points at the
     # humanoid-validated MID360_config.json stored under golem_slam/config
-    # (Unitree onboard net 192.168.123.164 host / 192.168.123.120 lidar,
-    # lidar mounted inverted -> extrinsic roll 180).
+    # (Unitree onboard net 192.168.123.164 host / 192.168.123.120 lidar). The
+    # lidar hangs upside down; the driver applies no extrinsic rotation, so the
+    # points (frame 'livox_frame') and the IMU are both in the sensor's raw
+    # frame, the URDF's livox_link and livox_imu_link.
     bringup_share = get_package_share_directory('golem_bringup')
     mid360_config = os.path.join(
         get_package_share_directory('golem_slam'), 'config', 'MID360_config.json')
@@ -39,21 +41,6 @@ def generate_launch_description():
         emulate_tty=True,
         parameters=livox_mid360_params,
         condition=IfCondition(LaunchConfiguration('use_lidar')),
-        # The driver rotates points by the MID360_config.json extrinsic but
-        # not the IMU; livox_imu_upright applies the same rotation and owns
-        # /livox/imu (see mid360.yaml).
-        remappings=[('/livox/imu', '/livox/imu_raw')],
-    )
-
-    livox_imu_upright = Node(
-        package='golem_bringup',
-        executable='livox_imu_upright',
-        name='livox_imu_upright',
-        output='screen',
-        emulate_tty=True,
-        parameters=[{'livox_config_path': mid360_config}],
-        condition=IfCondition(LaunchConfiguration('use_lidar')),
-        remappings=[('imu_in', '/livox/imu_raw'), ('imu_out', '/livox/imu')],
     )
 
     # Equivalent of `ros2 launch cl_realsense h12_headcamera.launch.py` — brings
@@ -80,13 +67,12 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('use_lidar', default_value='true',
-                              description='Start the MID360 driver and livox_imu_upright'),
+                              description='Start the MID360 driver'),
         DeclareLaunchArgument('use_head_camera', default_value='true',
                               description='Start the head RealSense and its static TF'),
         DeclareLaunchArgument('use_grippers', default_value='true',
                               description='Start the left and right gripper nodes'),
         livox_mid360,
-        livox_imu_upright,
         realsense_cams,
         grippers,
     ])

@@ -59,7 +59,7 @@ def generate_launch_description():
         # The game reads the MID360 for SLAM and as the policy's IMU; marl_deploy_node waits
         # in the pre-pose until /livox/imu is up.
         DeclareLaunchArgument('use_lidar', default_value='true',
-                              description='MID360 driver and livox_imu_upright'),
+                              description='MID360 driver'),
         DeclareLaunchArgument('use_head_camera', default_value='false',
                               description='head RealSense'),
         DeclareLaunchArgument('use_grippers', default_value='false',

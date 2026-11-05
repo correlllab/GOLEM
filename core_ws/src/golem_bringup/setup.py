@@ -36,7 +36,6 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'livox_imu_upright = golem_bringup.livox_imu_upright:main',
         ],
     },
 )

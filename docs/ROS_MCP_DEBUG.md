@@ -13,8 +13,8 @@ DDS is directly reachable) and exposes a single HTTP port, which you reach from 
 Mac over the existing SSH tunnel. Only the MCP protocol crosses the boundary; DDS
 never has to.
 
-A warm `rclpy` node subscribes once to the hot topics (`/odom`, the global costmap,
-`/plan`, `/converted_scan`, `/clock`) and caches the latest message, so status calls
+A warm `rclpy` node subscribes once to the hot topics (the global costmap, `/plan`,
+`/converted_scan`, `/clock`), listens to TF, and caches the latest message, so status calls
 answer instantly instead of paying node-startup + DDS-discovery on every query.
 
 ## Enable it
@@ -54,7 +54,7 @@ To remove: `claude mcp remove ros_debug`.
 
 | Tool | What it does |
 |---|---|
-| `robot_status()` | base position (x,y,z), uprightness (1.0=vertical, <0.5=fallen), posture, sim time |
+| `robot_status()` | base position (x,y,z) from TF with its frame, uprightness (1.0=vertical, <0.5=fallen), posture, sim time |
 | `costmap_summary()` | global-costmap cell counts: lethal / inflated / free / unknown |
 | `nav_status()` | current nav2 plan: exists?, pose count, path length (m) |
 | `scan_status()` | is `/converted_scan` live? stamp + range count |
@@ -72,8 +72,12 @@ The first seven are the warm/fast path; the generic passthroughs shell out to th
 - **In-container reach only.** The server sees everything on the ROS graph. It does
   **not** reach the *other* container's MuJoCo `:99` viewer or the RoboCasa
   fall-logger stdout (a second endpoint or docker-socket access would be needed).
-- **Sensor QoS.** `/odom` and `/converted_scan` are best-effort publishers; the
-  server subscribes best-effort so it receives them regardless of publisher QoS.
+- **Robot pose.** `robot_status` and `wait_for` read TF, not the sim's ground-truth
+  `/odom` (off by default). The position is `base_footprint` in `map`, or in `odom`
+  while there is no map yet; the output's `frame` says which. Posture uses the pelvis
+  in the same frame. Without navigation running there is no such TF and both report it.
+- **Sensor QoS.** `/converted_scan` is a best-effort publisher; the server subscribes
+  best-effort so it receives it regardless of publisher QoS.
 - **Headless runs.** An unauthenticated localhost HTTP MCP server works in
   non-interactive Claude Code runs as long as the tunnel and server are up; there's
   no OAuth to complete.

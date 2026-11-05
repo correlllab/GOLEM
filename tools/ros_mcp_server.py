@@ -8,16 +8,18 @@ the noVNC viewers (see mac_vnc_tunnel.sh). Register it on the Mac with:
 
     claude mcp add --transport http ros_debug http://localhost:6082/mcp
 
-Design: a single warm rclpy node subscribes once to the hot topics (odom,
-costmap, plan, scan, clock) and caches the latest message, so status tools answer
+Design: a single warm rclpy node subscribes once to the hot topics (costmap, plan,
+scan, clock), listens to TF, and caches the latest message, so status tools answer
 instantly instead of paying node-startup + DDS-discovery on every call (the thing
 that made `ros2 topic echo --once` slow to poll). Actuation is /cmd_vel only, on
 a warm publisher. Generic passthroughs (echo/hz/service call for arbitrary
 topics) shell out to the ros2 CLI, which is robust for the rarely-used cold path.
 rclpy spins in a background thread; tool handlers read the thread-safe cache.
 
-The robot pose (robot_status, wait_for) comes from /odom, which the sim publishes
-only with GOLEM_SIM_ODOM=1 (ground truth, opt-in).
+The robot pose (robot_status, wait_for) comes from TF: base_footprint in map, or in
+odom while there is no map yet (golem_slam's level_odom publishes odom -> base_footprint
+and slam_toolbox map -> odom), and the pelvis in the same frame for posture. The
+sim's ground-truth /odom is off by default, so nothing here reads it.
 
 Env: GOLEM_ROS_MCP_PORT (default 6082), ROS_DOMAIN_ID, RMW_IMPLEMENTATION.
 """
@@ -30,13 +32,15 @@ import time
 import numpy as np
 import rclpy
 from geometry_msgs.msg import Twist
-from nav_msgs.msg import OccupancyGrid, Odometry, Path
+from nav_msgs.msg import OccupancyGrid, Path
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                        ReliabilityPolicy)
+from rclpy.time import Time
 from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import LaserScan
+from tf2_ros import Buffer, TransformException, TransformListener
 
 from mcp.server.fastmcp import FastMCP
 
@@ -45,11 +49,15 @@ _LATCHED = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                       durability=DurabilityPolicy.TRANSIENT_LOCAL,
                       history=HistoryPolicy.KEEP_LAST, depth=1)
 # BEST_EFFORT reader is compatible with BOTH best-effort and reliable writers, so
-# it receives sensor/odom topics whatever QoS the publisher chose (the sim's /odom
-# and /converted_scan are best-effort; a reliable reader silently gets nothing).
+# it receives sensor topics whatever QoS the publisher chose (the sim's
+# /converted_scan is best-effort; a reliable reader silently gets nothing).
 _SENSOR = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                      durability=DurabilityPolicy.VOLATILE,
                      history=HistoryPolicy.KEEP_LAST, depth=10)
+# The frames the robot pose is read in, in order: the SLAM map, then odom until there is one.
+POSE_FRAMES = ("map", "odom")
+BASE_FRAME = "base_footprint"
+PELVIS_FRAME = "pelvis"
 
 
 class RosDebugNode(Node):
@@ -58,18 +66,18 @@ class RosDebugNode(Node):
     def __init__(self):
         super().__init__("ros_debug_mcp")
         self._lock = threading.Lock()
-        self._odom = None
         self._costmap = None
         self._plan = None
         self._scan = None
         self._clock = None
-        self.create_subscription(Odometry, "/odom", self._cb("_odom"), _SENSOR)
         self.create_subscription(LaserScan, "/converted_scan", self._cb("_scan"), _SENSOR)
         self.create_subscription(Clock, "/clock", self._cb("_clock"), _SENSOR)
         self.create_subscription(OccupancyGrid, "/global_costmap/costmap",
                                  self._cb("_costmap"), _LATCHED)
         self.create_subscription(Path, "/plan", self._cb("_plan"), _SENSOR)
         self._cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
 
     def _cb(self, attr):
         def f(msg):
@@ -86,16 +94,36 @@ class RosDebugNode(Node):
         c = self.get("_clock")
         return None if c is None else c.clock.sec + c.clock.nanosec * 1e-9
 
-    def robot_state(self):
-        o = self.get("_odom")
-        if o is None:
+    def _lookup(self, frame, child):
+        """Latest transform of child in frame (a geometry_msgs Transform), or None."""
+        try:
+            return self._tf_buffer.lookup_transform(frame, child, Time()).transform
+        except TransformException:
             return None
-        p, q = o.pose.pose.position, o.pose.pose.orientation
+
+    def robot_state(self):
+        """Base position from base_footprint in map (else odom); None without either.
+
+        Posture comes from the pelvis in the same frame: its height above the footprint
+        and its tilt. "unknown" when the pelvis has no transform."""
+        for frame in POSE_FRAMES:
+            base = self._lookup(frame, BASE_FRAME)
+            if base is not None:
+                break
+        else:
+            return None
+        p = base.translation
+        state = {"frame": f"{frame}->{BASE_FRAME}",
+                 "x": round(p.x, 3), "y": round(p.y, 3), "z": round(p.z, 3)}
+        pelvis = self._lookup(frame, PELVIS_FRAME)
+        if pelvis is None:
+            return {**state, "uprightness": None, "posture": "unknown"}
+        q = pelvis.rotation
         upright = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)  # body-up . world-up
-        return {"x": round(p.x, 3), "y": round(p.y, 3), "z": round(p.z, 3),
-                "uprightness": round(upright, 3),
-                "posture": ("standing" if (upright > 0.85 and p.z > 0.7)
-                            else "fallen" if (upright < 0.5 or p.z < 0.4)
+        height = pelvis.translation.z - p.z
+        return {**state, "uprightness": round(upright, 3),
+                "posture": ("standing" if (upright > 0.85 and height > 0.7)
+                            else "fallen" if (upright < 0.5 or height < 0.4)
                             else "leaning/other")}
 
     def costmap_summary(self):
@@ -145,10 +173,12 @@ mcp = FastMCP("ros_debug", host="127.0.0.1", port=PORT)
 # ---- hot tools (warm cache, instant) --------------------------------------
 @mcp.tool()
 def robot_status() -> dict:
-    """H1 base state at a glance: position (x,y,z, odom/world frame), uprightness
-    (1.0 = vertical, <0.5 = fallen), posture, and current sim time. Instant."""
+    """Robot base state at a glance: base_footprint position (x,y,z) in the map frame, or
+    in odom while there is no map ("frame" says which), pelvis uprightness (1.0 =
+    vertical, <0.5 = fallen), posture, and current sim time. Instant."""
     st = NODE.robot_state()
-    return {"error": "no /odom yet"} if st is None else {
+    return {"error": f"no map->{BASE_FRAME} or odom->{BASE_FRAME} TF yet (is the "
+                     "bringup with navigation running?)"} if st is None else {
         **st, "sim_time": NODE.sim_time()}
 
 

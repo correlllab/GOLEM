@@ -225,7 +225,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # odometry, which the bridge publishes as odom -> pelvis TF + /odom (feeds
     # SLAM without needing FAST-LIO). OFF by default so the shared sim bridge does
     # not inject a second odom->pelvis anchor that competes with the real stack's
-    # FAST-LIO (camera_init) TF; the Mac nav/SLAM demo opts in with GOLEM_SIM_ODOM=1.
+    # FAST-LIO (camera_init) TF; no bringup opts in (GOLEM_SIM_ODOM=1).
     odom_base_body_id = -1
     _sim_odom_on = os.environ.get('GOLEM_SIM_ODOM', '0').strip().lower() not in ('0', 'off', 'false', 'no', '')
     if _sim_odom_on:

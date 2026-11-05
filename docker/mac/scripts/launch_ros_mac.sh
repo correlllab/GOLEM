@@ -1,8 +1,8 @@
 #!/bin/bash
 # Apple-Silicon / CPU launcher for the SLIM ROS workspace.
-# Builds only the core bringup package subset (skips the vision / grasp /
-# FAST-LIO packages that need the heavy ML stack), then launches the minimal
-# Mac bringup (h12_sim_mac.launch.py) against the running MuJoCo sim.
+# Builds the packages the Mac bringup runs (skips the vision / grasp packages
+# that need the heavy ML stack, MJPC and the G1's), then launches the Mac
+# bringup (h12_sim_mac.launch.py) against the running MuJoCo sim.
 #
 # Pass `bash` as the first arg to drop to a shell instead of launching.
 #
@@ -96,6 +96,13 @@ start_ros_mcp() {
 }
 
 source /opt/ros/humble/setup.bash
+# livox_ros_driver2, baked into the image (RosDockerfile.slim.arm64): fast_lio
+# builds against its CustomMsg.
+if [ ! -f /opt/livox_ws/install/setup.bash ]; then
+    echo '[launch_ros_mac] missing baked livox_ros_driver2; rebuild with docker/mac/scripts/docker_build_mac.sh ros' >&2
+    exit 1
+fi
+source /opt/livox_ws/install/setup.bash
 
 WS=/home/code/core_ws
 # build/install go to /opt paths backed by named docker volumes on the VM's
@@ -106,24 +113,25 @@ BUILD_BASE=/opt/core_ws/build
 INSTALL_BASE=/opt/core_ws/install
 cd "$WS"
 
-# The packages the minimal Mac bringup needs. golem_bringup (ament_python, just
-# launch/config/rviz files) is included so `ros2 launch golem_bringup <file>`
-# resolves with tab completion — but colcon-ros refuses to build it until its
-# in-workspace exec_depends have a package.sh in the install space, and we
-# deliberately don't build the heavy ones (estop, livox_ros_driver2, fast_lio,
-# model_server, cl_realsense, lmg_deploy — the LIO/ML/driver stack and the
-# loco-manipulation game) or the G1's (the Mac runs the H1-2 only). Empty
-# package.sh stubs (below) satisfy that check; they carry no ament index marker
-# so they never show up in `ros2 pkg list`. NOTE only h12_sim_mac.launch.py runs
-# here — the other launch files exec-launch the omitted packages (nav2,
-# FAST_LIO, model_server...).
-# unitree_hg + h12_lowerbody_rl provide the optional lower-body controller
-# (lowerbody_controller_node with the FAME, walk or ALMI policy). They build
-# cheaply and are only *launched* when GOLEM_LOWERBODY is set (see the bringup).
-# unitree_hg needs ros-humble-rosidl-generator-dds-idl and torch, both in the
-# image. Use GOLEM_LOWERBODY=almi to stand and walk (see docs/MACOS.md).
-PKGS="custom_ros_messages magpie_msgs golem_ros2_models golem_safety golem_upper_ik golem_slam golem_bringup unitree_hg h12_lowerbody_rl"
-BRINGUP_STUB_DEPS="estop livox_ros_driver2 fast_lio model_server cl_realsense lmg_deploy dex_3 g1_homie deploy_mjpc golem_skills"
+# The packages h12_sim_mac.launch.py runs: the state and control blocks
+# (golem_ros2_models, golem_safety, golem_upper_ik), the lower-body controller
+# (unitree_hg + h12_lowerbody_rl, launched when GOLEM_LOWERBODY is set; unitree_hg
+# needs ros-humble-rosidl-generator-dds-idl and torch, both in the image), and
+# golem_slam's navigation graph (golem_slam + fast_lio, launched when GOLEM_SLAM
+# or GOLEM_NAV2 is set; the rest of that graph is apt packages in the image).
+# golem_bringup (ament_python, just launch/config/rviz files) is included so
+# `ros2 launch golem_bringup <file>` resolves with tab completion — but colcon-ros
+# refuses to build a package until its in-workspace dependencies have a
+# package.sh in the install space, and we deliberately don't build the others
+# (estop, model_server, cl_realsense, lmg_deploy, deploy_mjpc, golem_skills — the
+# real-robot drivers, the ML stack, MJPC and the loco-manipulation game — or the
+# G1's: the Mac runs the H1-2 only). livox_ros_driver2 is built into the image
+# (/opt/livox_ws, sourced above), not here. Empty package.sh stubs (below)
+# satisfy that check; they carry no ament index marker so they never show up in
+# `ros2 pkg list`. NOTE only h12_sim_mac.launch.py runs here — the other launch
+# files exec-launch the omitted packages (model_server, estop...).
+PKGS="custom_ros_messages magpie_msgs golem_ros2_models golem_safety golem_upper_ik golem_slam fast_lio golem_bringup unitree_hg h12_lowerbody_rl"
+BRINGUP_STUB_DEPS="estop livox_ros_driver2 model_server cl_realsense lmg_deploy dex_3 g1_homie deploy_mjpc golem_skills"
 
 for _dep in $BRINGUP_STUB_DEPS; do
     mkdir -p "$INSTALL_BASE/$_dep/share/$_dep"
@@ -160,5 +168,5 @@ if [ "$#" -gt 0 ]; then
     exec "$@"
 fi
 
-echo "[launch_ros_mac] launching minimal bringup (ROS_DOMAIN_ID=$ROS_DOMAIN_ID)"
+echo "[launch_ros_mac] launching the Mac bringup (ROS_DOMAIN_ID=$ROS_DOMAIN_ID)"
 exec ros2 launch "$WS/src/golem_bringup/launch/h12/h12_sim_mac.launch.py"

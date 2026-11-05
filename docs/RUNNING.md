@@ -104,7 +104,7 @@ argument; each passes its own to `h12_control`):
 | Launch file | Scenario |
 |---|---|
 | `h12_sim.launch.py` | x86 sim — the full stack |
-| `h12_sim_mac.launch.py` | mac sim — trimmed, toggled by `GOLEM_*` env vars |
+| `h12_sim_mac.launch.py` | mac sim — `h12_sim`'s state, control, lower-body and navigation blocks, the optional ones chosen by `GOLEM_LOWERBODY`, `GOLEM_SLAM`/`GOLEM_NAV2`; no model servers, skills or rviz ([`MACOS.md`](MACOS.md)) |
 | `h12_real_robot.launch.py` | real robot, onboard PC: drivers, state publishers, estop + safety + IK, nav, lower body |
 | `h12_real_desktop.launch.py` | real: companion desktop — model servers, skills, rviz; hand cameras with `use_hand_cameras:=true` |
 | `h12_safety_grippers.launch.py` | real: estop + safety layer + grippers only |

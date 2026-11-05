@@ -3,10 +3,11 @@
 #
 # Deliberately NOT a port of the full RosDockerfile: it omits the x86-tuned,
 # exact-pinned vision / grasp ML stack (transformers, SAM3, CLIP, GraspGenX,
-# diffusers, ultralytics, open3d, viser) and the Nav2 / SLAM / FAST-LIO / rqt
-# layers. It carries only what the CORE robot bringup needs — robot_state_
-# publisher, joint_state_publisher, the Pink IK frame_task_server, and the
-# safety_node — plus the message packages and IK/QP backends they depend on.
+# diffusers, ultralytics, open3d, viser), MJPC and rqt. It carries what
+# h12_sim_mac.launch.py starts — robot_state_publisher, joint_state_publisher,
+# the Pink IK frame_task_server, the safety_node, the lower-body controller and
+# golem_slam's navigation graph (FAST-LIO, OctoMap, slam_toolbox, Nav2) — plus
+# the message packages, libraries and IK/QP backends they depend on.
 #
 # Build:  docker build -t golem_ros:arm64 -f docker/mac/RosDockerfile.slim.arm64 .
 # ==============================
@@ -133,21 +134,53 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-rosidl-generator-dds-idl \
     && rm -rf /var/lib/apt/lists/*
 
-# 2D SLAM (optional, GOLEM_SLAM=1): slam_toolbox builds an occupancy map from a
-# laserscan; pointcloud_to_laserscan flattens the Livox cloud into that scan.
-# Sim ground-truth /odom (from the mujoco bridge) is the odometry source, so no
-# FAST-LIO is needed.
+# golem_slam's navigation graph (GOLEM_SLAM=1 or GOLEM_NAV2=1): slam_toolbox
+# builds the occupancy map from the scan pointcloud_to_laserscan flattens out of
+# the self-filtered FAST-LIO cloud.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-slam-toolbox \
         ros-humble-pointcloud-to-laserscan \
     && rm -rf /var/lib/apt/lists/*
 
-# Optional autonomous navigation (GOLEM_NAV2=1): the nav2 stack plans a
-# collision-free path on the SLAM map + lidar costmap and drives /cmd_vel (which
-# the walk policy follows). See nav2_config_mac.yaml.
+# Nav2, for the same graph: nav2-bringup pulls in the navigation2 metapackage,
+# which carries the MPPI controller and the Smac planner golem_slam's nav2.yaml
+# loads. Nav2 drives /cmd_vel, which the walk policy follows.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-nav2-bringup \
     && rm -rf /var/lib/apt/lists/*
+
+# The rest of the navigation graph: launch_ros_mac.sh builds FAST-LIO (fast_lio)
+# from core_ws, which needs PCL, pcl_ros / pcl_conversions and livox_ros_driver2
+# (below); octomap_server builds the 3D map and the costmaps' static layer.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpcl-dev libapr1-dev \
+        ros-humble-pcl-conversions ros-humble-pcl-ros \
+        ros-humble-rclcpp-components ros-humble-visualization-msgs \
+        ros-humble-nav-msgs ros-humble-std-srvs \
+        ros-humble-octomap-server \
+    && rm -rf /var/lib/apt/lists/*
+
+# Livox-SDK2, required by livox_ros_driver2, at the commit every image builds
+# (tests/docker/test_source_pins.py): the images must agree on the CustomMsg wire
+# format.
+RUN git clone https://github.com/Livox-SDK/Livox-SDK2.git /tmp/Livox-SDK2 && \
+    git -C /tmp/Livox-SDK2 checkout --quiet 08f523c930b2f0ba1e98a6afaa8d7476bf479908 && \
+    cd /tmp/Livox-SDK2 && mkdir build && cd build && \
+    cmake .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5 && make -j"$(nproc)" && make install && \
+    ldconfig && \
+    rm -rf /tmp/Livox-SDK2
+
+# livox_ros_driver2 at /opt/livox_ws, built by upstream build.sh as the RoboCasa
+# images build it (docker/BUILD.md): FAST-LIO reads its CustomMsg. COPY'd, not
+# bind-mounted, because build.sh rewrites its own source tree. build.sh exits 0
+# even when its colcon build fails, so the import fails the image build instead.
+# launch_ros_mac.sh sources /opt/livox_ws/install before it builds core_ws.
+COPY core_ws/src/livox_ros_driver2 /opt/livox_ws/src/livox_ros_driver2
+RUN bash -c "source /opt/ros/humble/setup.bash && \
+             cd /opt/livox_ws/src/livox_ros_driver2 && \
+             ./build.sh humble && \
+             source /opt/livox_ws/install/setup.bash && \
+             python3 -c 'from livox_ros_driver2.msg import CustomMsg'"
 
 # Overlay the colcon install in interactive shells so `docker exec … bash` sees
 # the same packages as the running bringup (incl. golem_bringup, so

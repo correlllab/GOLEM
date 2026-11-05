@@ -89,8 +89,9 @@ docker exec golem_ros bash -lc 'source /opt/core_ws/install/setup.bash; ros2 nod
 docker exec golem_ros bash -lc 'source /opt/core_ws/install/setup.bash; ros2 topic hz /clock'
 ```
 
-Expect the same readiness message, an advancing `/clock`, and the minimal Mac
-controller nodes. The VM uses software rendering and FastDDS; there should be
+Expect the same readiness message, an advancing `/clock`, and the Mac
+bringup's state and control nodes (`joint_state_publisher`,
+`robot_state_publisher`, `safety_node`, `frame_task_server`). The VM uses software rendering and FastDDS; there should be
 no NVIDIA runtime or host X11 mount requirement. Isaac is intentionally rejected.
 
 For the optional browser viewer:

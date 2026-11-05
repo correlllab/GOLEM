@@ -1,22 +1,22 @@
 """
-Minimal, CPU-only (Apple Silicon) bringup for the H1 MuJoCo sim.
+The H1-2 sim bringup on the Mac (docker/mac: arm64, CPU only).
 
-A trimmed variant of h12_sim.launch.py that runs the core robot nodes — no
-vision foundation models (gemini/sam/graspgen), no golem_skills, no FAST-LIO.
-Those need the heavy x86-tuned ML stack that the slim arm64 ROS image
-intentionally omits. RViz runs outside this launch file (launch_ros_mac.sh,
-GOLEM_RVIZ=vnc).
+It includes the blocks h12_sim.launch.py includes, with the arguments that file
+passes them: h12_state, h12_control, h12_lowerbody and golem_slam's navigation.
+The GOLEM_* environment variables (docker/mac/docker-compose.yml passes them)
+choose the optional ones:
 
-Nodes started:
-  * static livox_link -> livox_frame TF (so RViz can place /livox/pointcloud)
-  * joint_state_publisher      (golem_upper_ik)
-  * robot_state_publisher
-  * frame_task_server          (golem_upper_ik, Pink IK)
-  * safety_node                (golem_safety, sim:=true)
-  * lowerbody_controller_node  (h12_lowerbody_rl; GOLEM_LOWERBODY)
-  * pointcloud_to_laserscan + slam_toolbox (GOLEM_SLAM), nav2 (GOLEM_NAV2)
+  GOLEM_LOWERBODY   fame | walk | almi: h12_lowerbody with that policy, which
+                    pre-poses the legs and releases the sim's elastic band; almi
+                    stands and walks on /cmd_vel. Unset or empty: no leg node, and
+                    the band holds the robot. Any other value is refused.
+  GOLEM_SLAM        1 | true | on (either one): golem_slam's navigation graph for
+  GOLEM_NAV2        the H1-2 (FAST-LIO, OctoMap, slam_toolbox, Nav2).
 
-Launch by path from the slim ROS container:
+It starts no model servers, golem_skills or rviz: the slim arm64 image does not
+build the first two, and launch_ros_mac.sh starts RViz itself (GOLEM_RVIZ=vnc).
+Nor h12_sim's camera_link optical frame, which only Isaac's camera needs.
+launch_ros_mac.sh launches this file by path:
   ros2 launch /home/code/core_ws/src/golem_bringup/launch/h12/h12_sim_mac.launch.py
 """
 import os
@@ -26,158 +26,58 @@ from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.actions import Node
+
+POLICIES = ('fame', 'walk', 'almi')
+ON = ('1', 'true', 'on')
+
+
+def _include(package, launch_file, launch_arguments):
+    return IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(get_package_share_directory(package), 'launch', launch_file)),
+        launch_arguments=launch_arguments.items(),
+    )
+
+
+def _env(name):
+    return os.environ.get(name, '').strip().lower()
 
 
 def generate_launch_description():
-    with open(urdf_path('h12', ros=True), 'r') as urdf_file:
-        robot_description = urdf_file.read()
+    bringup_share = get_package_share_directory('golem_bringup')
+    lowerbody = _env('GOLEM_LOWERBODY')
+    if lowerbody and lowerbody not in POLICIES:
+        raise RuntimeError(
+            f'h12_sim_mac: GOLEM_LOWERBODY={lowerbody!r} is not one of '
+            f'{", ".join(POLICIES)} (unset or empty starts no leg node)')
 
-    # MuJoCo publishes /clock with sim time; keep all nodes on it.
-    sim_time_param = {'use_sim_time': True}
+    # MuJoCo publishes /clock with sim time. All nodes use it so TF lookups and
+    # sensor timestamps are coherent with the simulation.
+    sim_time = {'use_sim_time': 'true'}
 
-    nodes = [
-        # The MuJoCo lidar bridge stamps /livox/{lidar,pointcloud} with frame_id
-        # 'livox_frame', the raw frame of the URDF's 'livox_link', which is not itself
-        # a URDF link. Publish the identity bridge so RViz (and any lidar consumer)
-        # can transform the cloud into the robot/TF tree.
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='livox_frame_broadcaster',
-            arguments=['0', '0', '0', '0', '0', '0', 'livox_link', 'livox_frame'],
-            parameters=[sim_time_param],
-            output='screen',
-            emulate_tty=True,
-        ),
-        Node(
-            package='golem_upper_ik',
-            executable='joint_state_publisher',
-            name='joint_state_publisher',
-            parameters=[{'robot': 'h12'}, sim_time_param],
-            output='screen',
-            emulate_tty=True,
-        ),
-        Node(
-            package='robot_state_publisher',
-            executable='robot_state_publisher',
-            name='robot_state_publisher',
-            parameters=[{'robot_description': robot_description}, sim_time_param],
-            output='screen',
-            emulate_tty=True,
-        ),
-        Node(
-            package='golem_upper_ik',
-            executable='frame_task_server',
-            name='frame_task_server',
-            parameters=[{'robot': 'h12', 'config': 'sim_safety_split.yaml'}, sim_time_param],
-            output='screen',
-            emulate_tty=True,
-        ),
-        Node(
-            package='golem_safety',
-            executable='safety_node',
-            name='safety_node',
-            parameters=[{'robot': 'h12', 'config': 'sim_safety_split.yaml', 'sim': True},
-                        sim_time_param],
-            output='screen',
-            emulate_tty=True,
-        ),
+    actions = [
+        _include('golem_bringup', 'h12/h12_state.launch.py', {
+            **sim_time,
+            'urdf_file': urdf_path('h12', ros=True),
+        }),
+        _include('golem_bringup', 'h12/h12_control.launch.py', {
+            **sim_time,
+            'sim': 'true',
+            'safety_config': 'sim_safety_split.yaml',
+            'frame_task_config': 'sim_safety_split.yaml',
+            # No estop in sim, so nothing to wait for.
+            'safety_delay': '0.0',
+            'frame_task_delay': '0.0',
+        }),
     ]
-
-    # Optional lower-body controller (GOLEM_LOWERBODY). Off by default: the
-    # elastic-band tether then holds the robot upright. Set, it starts
-    # lowerbody_controller_node pinned to that policy with the x86 sim's
-    # parameters (h12_lowerbody.launch.py, lowerbody_sim.yaml): it waits for
-    # /safety/heartbeat, pre-poses the legs, engages the policy, releases the
-    # band once frame_task_server is ready, and publishes leg setpoints on
-    # /safety/lowcmd_lower_in for the safety_node to merge.
-    #   GOLEM_LOWERBODY=fame   RMA standing/squatting policy. Does not locomote.
-    #   GOLEM_LOWERBODY=walk   TorchScript walk policy (follows /cmd_vel).
-    #   GOLEM_LOWERBODY=almi   ALMI: stands, and walks on /cmd_vel. This is the one
-    #                         to use for the nav demo — nav2's /cmd_vel makes it
-    #                         walk; it stands again when the command drops to ~0.
-    lowerbody = os.environ.get('GOLEM_LOWERBODY', '').strip().lower()
-    if lowerbody in ('fame', 'walk', 'almi'):
-        nodes.append(Node(
-            package='h12_lowerbody_rl',
-            executable='lowerbody_controller_node',
-            name='lowerbody_controller_node',  # MUST match the yaml key
-            parameters=[sim_time_param,
-                        os.path.join(get_package_share_directory('golem_bringup'),
-                                     'config', 'h12', 'lowerbody_sim.yaml'),
-                        {'active_policy': lowerbody}],
-            output='screen',
-            emulate_tty=True,
-        ))
-
-    # Optional 2D SLAM (GOLEM_SLAM=1): pointcloud_to_laserscan flattens the Livox
-    # hemisphere cloud into a horizontal scan, and slam_toolbox builds an occupancy
-    # /map from it against the sim's ground-truth /odom (odom -> pelvis). No
-    # FAST-LIO needed. REQUIRES the robocasa/sim container started with
-    # GOLEM_SIM_ODOM=1 (off by default) to publish that /odom; without it slam_toolbox
-    # has no odom and the map stays empty. p2l params match golem_slam's navigation graph
-    # but are fed from the raw /livox/pointcloud instead of FAST-LIO's registered cloud.
-    if os.environ.get('GOLEM_SLAM', '').strip().lower() in ('1', 'true', 'on'):
-        nodes.append(Node(
-            package='pointcloud_to_laserscan',
-            executable='pointcloud_to_laserscan_node',
-            name='pointcloud_to_laserscan',
-            parameters=[{
-                'target_frame': 'pelvis',
-                # Relaxed vs golem_slam's navigation tuning for the raw sim lidar:
-                # a taller band (counter tops / cabinets). range_min 0.65 drops the
-                # robot's OWN legs/feet — the torso lidar looks down and returns them
-                # at ~0.4 m; mapping those puts a phantom obstacle under the robot and
-                # nav2 rejects the start as "lethal space". 0.65 clears the body while
-                # still catching the counter (the robot spawns ~1 m off it via
-                # GOLEM_SPAWN_BACKOFF). Lower it only if you also see real obstacles
-                # missed at close range.
-                'min_height': -0.85, 'max_height': 1.2,
-                'angle_min': -3.14159, 'angle_max': 3.14159,
-                'angle_increment': 0.0087,
-                'range_min': 0.65, 'range_max': 8.0,
-                'use_inf': True, 'scan_time': 0.0333,
-                'transform_tolerance': 1.0, 'queue_size': 20,
-            }, sim_time_param],
-            remappings=[('cloud_in', '/livox/pointcloud'), ('scan', '/converted_scan')],
-            output='screen',
-            emulate_tty=True,
-        ))
-        nodes.append(Node(
-            package='slam_toolbox',
-            executable='async_slam_toolbox_node',
-            name='slam_toolbox',
-            parameters=[
-                os.path.join(get_package_share_directory('golem_slam'),
-                             'config', 'slam_toolbox.yaml'),
-                {'odom_frame': 'odom', 'scan_topic': '/converted_scan'},
-                sim_time_param,
-            ],
-            output='screen',
-            emulate_tty=True,
-        ))
-
-    # Optional autonomous navigation (GOLEM_NAV2=1, implies SLAM for the map): the
-    # nav2 stack plans a collision-free path on the SLAM map + lidar costmap and
-    # drives it via /cmd_vel, which the lower-body policy follows (nav2's
-    # velocity_smoother publishes /cmd_vel). Send goals with the RViz "2D Nav Goal"
-    # tool or the /navigate_to_pose action. With GOLEM_LOWERBODY=almi the robot
-    # walks as soon as nav2 publishes /cmd_vel (no manual step). The
-    # robot must be standing in open floor — nav2 rejects a goal if the robot's start
-    # cell is occupied (e.g. pressed against a counter).
-    # nav2_config_mac.yaml is its own nav2 config for this SLAM-only setup:
-    # robot_base_frame pelvis (no base_footprint here), Regulated Pure Pursuit
-    # and the Smac Hybrid planner, costmaps built from slam_toolbox's /map plus
-    # the live scan and Livox cloud, and tighter goal tolerances; see the file.
-    if os.environ.get('GOLEM_NAV2', '').strip().lower() in ('1', 'true', 'on'):
-        nav2_launch = os.path.join(
-            get_package_share_directory('nav2_bringup'), 'launch', 'navigation_launch.py')
-        nav2_cfg = os.path.join(
-            get_package_share_directory('golem_slam'), 'config', 'nav2_config_mac.yaml')
-        nodes.append(IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(nav2_launch),
-            launch_arguments={'params_file': nav2_cfg, 'use_sim_time': 'true'}.items(),
-        ))
-
-    return LaunchDescription(nodes)
+    if lowerbody:
+        actions.append(_include('golem_bringup', 'h12/h12_lowerbody.launch.py', {
+            **sim_time,
+            'start_position_verified': 'true',
+            'lowerbody': lowerbody,
+            'lowerbody_params': os.path.join(bringup_share, 'config', 'h12', 'lowerbody_sim.yaml'),
+        }))
+    if _env('GOLEM_SLAM') in ON or _env('GOLEM_NAV2') in ON:
+        actions.append(
+            _include('golem_slam', 'navigation.launch.py', {**sim_time, 'robot': 'h12'}))
+    return LaunchDescription(actions)

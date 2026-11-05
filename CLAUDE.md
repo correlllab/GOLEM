@@ -122,8 +122,9 @@ at a time on a host.
 
 The Mac wrappers run the H1-2 only; they refuse `--g1` and `GOLEM_ROBOT=g1`.
 Mac feature toggles are env vars read by the compose file: `GOLEM_DISPLAY=vnc`
-(MuJoCo viewer → noVNC :6080), `GOLEM_RVIZ=vnc` (RViz → :6081), `GOLEM_LOWERBODY=fame|walk|almi`,
-`GOLEM_SLAM=1`, `GOLEM_NAV2=1`, `GOLEM_SIM_ODOM=1`, `GOLEM_CAMERAS=0`,
+(MuJoCo viewer → noVNC :6080), `GOLEM_RVIZ=vnc` (RViz → :6081), `GOLEM_LOWERBODY=fame|walk|almi`
+(the leg block; another value stops the bringup), `GOLEM_SLAM=1` or `GOLEM_NAV2=1` (either
+one: `golem_slam`'s navigation, FAST-LIO odometry, so `GOLEM_SIM_ODOM` stays off), `GOLEM_CAMERAS=0`,
 `GOLEM_SPAWN_BACKOFF=<m>`, `GOLEM_CMD_TIMEOUT=<sim-s>`, `GOLEM_ROS_MCP=1`.
 `GOLEM_SPAWN_MARGIN=<m>` (default 0.20; a task env can set its own via
 `spawn_margin`, as `battery_env.py` does) sets the H1-2's minimum spawn
@@ -233,7 +234,7 @@ including `h12_control.launch.py`'s `sim`, which has no default.
 | Top-level launch file | Scenario | Includes |
 |---|---|---|
 | `h12_sim.launch.py` | **x86 sim** (`use_sim_time=true`), plus the camera optical-frame static TF and rviz (`use_rviz`) | state, control (`sim:=true`, `sim_safety_split` for both `safety_node` and `frame_task_server`, no stagger), lowerbody (`lowerbody_sim.yaml`), models (`use_skills`), navigation (`use_nav`) |
-| `h12_sim_mac.launch.py` | **mac sim** — standalone, includes none of the blocks: `robot_state_publisher` and `golem_upper_ik`'s `joint_state_publisher` and `frame_task_server`, `golem_safety`'s `safety_node` (`sim: true`, both on `sim_safety_split`); lower body/SLAM/nav2 gated by `GOLEM_*` env vars, not launch args | — |
+| `h12_sim_mac.launch.py` | **mac sim** — `h12_sim`'s blocks with `h12_sim`'s arguments, chosen by `GOLEM_*` env vars, not launch args: lowerbody when `GOLEM_LOWERBODY` is `fame`, `walk` or `almi` (unset or empty: none; another value is refused), navigation (`robot: h12`) when `GOLEM_SLAM` or `GOLEM_NAV2` is `1`, `true` or `on`. No models, rviz or Isaac camera TF | state, control (`sim:=true`, `sim_safety_split` for both, no stagger), [lowerbody] (`lowerbody_sim.yaml`), [navigation] |
 | `h12_real_robot.launch.py` | **real robot, onboard PC** (native, `ROS_DOMAIN_ID=0`) | real_drivers, navigation, state, control (`sim:=false`, `use_estop:=true`, the defaults `relax_safety_split` and `safety_split`), lowerbody (`lowerbody_real.yaml`, no estimator). Leg control is interlocked behind `start_position_verified:=true` (default **false**) |
 | `h12_real_desktop.launch.py` | **real: companion x86 desktop** — rviz, plus the hand cameras with `use_hand_cameras:=true` (default **false**) | models (`use_yolo:=true`) |
 | `h12_safety_grippers.launch.py` | real: actuation-only debug bringup | control (`sim:=false`, estop + safety, no IK), grippers |
@@ -508,7 +509,7 @@ sim-to-real transfer.
 
 - **RoboCasa complies, for both robots:** ground-truth `/odom` + `odom→pelvis`
   TF is gated by `GOLEM_SIM_ODOM` (default `'0'` = off, read in `h12_mujoco.py`
-  and `g1/g1_mujoco.py`). Only the mac nav demo opts in; the G1 bringup and tests refuse it. Keep it that way. The
+  and `g1/g1_mujoco.py`). No stack opts in: every bringup's navigation, the Mac's included, runs on FAST-LIO, and the G1 bringup and tests refuse it. Keep it that way. The
   experiment surface (`/sim/ground_truth`, `/sim/reset_objects`) is gated by
   `GOLEM_SIM_EXPERIMENT` (`measurement_bridge.py`). The G1 acceptance tests
   record the robot's state inside the sim process instead of publishing it.
@@ -534,9 +535,11 @@ so bumping the driver rebuilds it against whatever SDK headers your cache
 happens to hold. `4a1def9` (Avia2) calls `kLivoxLidarDoubleEchoData` /
 `LivoxLidarDoubleEchoRawPoint`, added in SDK commit `08f523c` — against an
 older cached SDK it fails with "was not declared in this scope".
-**Stale, not re-verified:** both Dockerfiles check out Livox-SDK2 at `08f523c`
-(`RosDockerfile` §2, `RobocasaDockerfile`); the unpinned `master` clone
-described in this paragraph is gone. The pin rule above stands.
+**Stale, not re-verified:** every image that builds the SDK checks out
+Livox-SDK2 at `08f523c` (`RosDockerfile` §2, `RobocasaDockerfile`, and the Mac's
+`RobocasaDockerfile.arm64` and `RosDockerfile.slim.arm64`;
+`tests/docker/test_source_pins.py` keeps them on one commit); the unpinned
+`master` clone described in this paragraph is gone. The pin rule above stands.
 
 The failure is silent. Upstream's `build.sh` ends in `popd`, so it exits 0 even
 when its colcon build fails, and `launch_ros.sh` doesn't check either. The image
@@ -552,8 +555,8 @@ Whether it reproduces depends on how old your Docker cache is, so "it built on
 my machine" proves nothing.
 
 If you genuinely need a newer driver (Avia2/Mid-360s hardware), do it in one
-change: add `ARG LIVOX_SDK2_REF=<matching SDK sha>` to **both** Dockerfiles with
-a pinned `git fetch --depth 1 origin "$LIVOX_SDK2_REF"`, keep the two SHAs
+change: add `ARG LIVOX_SDK2_REF=<matching SDK sha>` to **every** Dockerfile that
+builds the SDK, with a pinned `git fetch --depth 1 origin "$LIVOX_SDK2_REF"`, keep the SHAs
 identical (the images must agree on the `CustomMsg` wire format), and assert the
 build worked — `python3 -c 'from livox_ros_driver2.msg import CustomMsg'` — so a
 mismatch fails the image build instead of shipping broken.
@@ -723,8 +726,9 @@ source /home/code/h12_sim_scripts/robot_cli.sh   # rob_pose, rob_grip, rob_stand
 
 The mac `ros` container auto-runs
 `ros2 launch /home/code/core_ws/src/golem_bringup/launch/h12/h12_sim_mac.launch.py`
-(launched by path; only skills built on mac are available — no `golem_skills`,
-`model_server`, or nav unless `GOLEM_SLAM/GOLEM_NAV2` are set).
+(launched by path): `h12_sim`'s state and control blocks, the leg block with
+`GOLEM_LOWERBODY`, and `golem_slam`'s navigation with `GOLEM_SLAM` or `GOLEM_NAV2`;
+no `golem_skills` or `model_server` (the slim image does not build them).
 
 ### Real robot (for awareness — coordinate before touching)
 

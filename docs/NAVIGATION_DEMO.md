@@ -9,13 +9,16 @@ for the one-time Colima/Docker setup, image builds, and the noVNC tunnel.
 
 ## What it demonstrates
 
-- **2D SLAM** — the Livox lidar cloud is flattened to a laser scan
-  (`pointcloud_to_laserscan`) and fed to `slam_toolbox`, which builds an
-  occupancy `/map` against the sim's ground-truth `/odom` (published only when
-  the sim is started with `GOLEM_SIM_ODOM=1` — off by default).
-- **nav2** — a Smac/RegulatedPurePursuit stack plans a collision-free path on
-  the map **and** a live costmap (2D scan + the full 3D Livox cloud, so it sees
-  counters and appliances the flat slice misses), then drives `/cmd_vel`.
+- **The shared navigation graph** — the Mac runs `golem_slam`'s
+  `navigation.launch.py` for the H1-2, as the x86 sim does (`golem_slam`'s
+  README has the details). FAST-LIO turns the Livox lidar and IMU into odometry
+  (`/Odometry`) and a deskewed cloud; `self_filter` drops the robot's own body
+  from it; `level_odom` publishes the gravity-aligned `odom → base_footprint`;
+  OctoMap builds the 3D map and its 2D projection `/projected_map`; the cloud is
+  flattened to `/converted_scan` for `slam_toolbox`, which publishes
+  `map → odom`. No ground truth is used: the sim's `GOLEM_SIM_ODOM` stays off.
+- **nav2** — the MPPI controller and the Smac planner plan a collision-free path
+  on `/projected_map` and the live scan, then drive `/cmd_vel`.
 - **Locomotion** — the lower-body controller, pinned to ALMI, follows `/cmd_vel`
   directly (stands at zero, walks otherwise).
 - **Frontier exploration** — the `/skill/frontier_explore` action (the
@@ -31,8 +34,8 @@ is publishing before the ROS nodes latch onto sim time):
 
 ```bash
 # from the repo root
-GOLEM_DISPLAY=vnc GOLEM_RVIZ=vnc GOLEM_CAMERAS=0 GOLEM_SIM_ODOM=1 \
-GOLEM_LOWERBODY=almi GOLEM_SLAM=1 GOLEM_NAV2=1 GOLEM_SPAWN_BACKOFF=1.5 \
+GOLEM_DISPLAY=vnc GOLEM_RVIZ=vnc GOLEM_CAMERAS=0 \
+GOLEM_LOWERBODY=almi GOLEM_NAV2=1 GOLEM_SPAWN_BACKOFF=1.5 \
   docker compose -f docker/mac/docker-compose.yml up -d
 
 # open the noVNC tunnel (Colima doesn't forward container ports)
@@ -66,9 +69,8 @@ when no frontiers remain.
 | Variable | For the nav demo | Notes |
 |---|---|---|
 | `GOLEM_LOWERBODY` | `almi` | Lower-body controller pinned to ALMI: stands at zero `/cmd_vel`, walks otherwise. `fame` stands only; `walk` pins the walk-only policy (use `almi`). |
-| `GOLEM_SIM_ODOM` | `1` | Publishes the sim's ground-truth base odom (`/odom` + `odom→pelvis` TF) that SLAM needs. Off by default; **required** for this demo. |
-| `GOLEM_SLAM` | `1` | Adds `pointcloud_to_laserscan` + `slam_toolbox` → `/map`. |
-| `GOLEM_NAV2` | `1` | Adds the nav2 stack (implies SLAM). Send goals via RViz "2D Nav Goal", `/navigate_to_pose`, or `rob_explore`. |
+| `GOLEM_NAV2` (or `GOLEM_SLAM`) | `1` | Starts `golem_slam`'s navigation graph: FAST-LIO, OctoMap, `slam_toolbox` and Nav2 (either variable starts all of it). Send goals via RViz "2D Nav Goal", `/navigate_to_pose`, or `rob_explore`. |
+| `GOLEM_SIM_ODOM` | unset or `0` | Leave it off: FAST-LIO's odometry already parents `pelvis`, and the sim's ground truth would give it a second parent. |
 | `GOLEM_SPAWN_BACKOFF` | `~1.5` | Metres to back the robot into open floor at spawn so nav2 has room. **Baked at container create — change it with `--force-recreate`, not `docker restart`** (see gotchas). |
 | `GOLEM_CAMERAS` | `0` | Drops the 3 RGBD renders — the heaviest per-step CPU cost. Roughly doubles sim rate; the nav demo doesn't need them. |
 | `GOLEM_DISPLAY` / `GOLEM_RVIZ` | `vnc` | MuJoCo viewer on 6080, RViz on 6081. |
@@ -86,12 +88,13 @@ Or set a single goal in RViz with the **2D Nav Goal** tool and let nav2 drive.
 ## How the pipeline fits together
 
 ```
-MuJoCo (robocasa)                        ROS (golem_ros)
-  Livox cloud ─/livox/pointcloud──►  pointcloud_to_laserscan ─/converted_scan─► slam_toolbox ─/map─┐
-  free-joint pose ─/odom, TF──────►  ...............................................................│
-                                     nav2 (global+local costmap: /map + scan + 3D cloud) ◄─────────┘
-                                       └─ plan ─► controller ─/cmd_vel─► lowerbody_controller_node
-  rt/lowcmd ◄──────────────────────────────────────────────────────────────────────┘  (ALMI policy)
+MuJoCo (robocasa)                  ROS (golem_ros)
+  Livox ─/livox/lidar, /livox/imu─► FAST-LIO ─/Odometry, deskewed cloud─► self_filter ─/cloud_body_filtered─┐
+                                      level_odom (odom → base_footprint) ◄─────────────────────────────────┤
+                                      OctoMap ─/projected_map─► nav2 costmaps ◄─────────────────────────────┤
+                                      level_cloud + pointcloud_to_laserscan ─/converted_scan─► slam_toolbox ┘
+                                      nav2 ─ plan ─► controller ─/cmd_vel─► lowerbody_controller_node
+  rt/lowcmd ◄─────────────────────────────────────────── safety_node ◄──────────────┘  (ALMI policy)
 ```
 
 ## Gotchas specific to the nav demo

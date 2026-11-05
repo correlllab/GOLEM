@@ -306,6 +306,12 @@ The Mac wrappers expose the same build/run/stack operations for `robocasa` and
 FastDDS, host networking/IPC, and native VM named volumes for colcon build and
 install trees. Keep those named volumes: host filesystem shares make symlink
 builds slow. VNC is opt-in; there are no NVIDIA or host X11 requirements.
+The slim Mac ROS image (`RosDockerfile.slim.arm64`) carries what
+`h12_sim_mac.launch.py` runs, `golem_slam`'s navigation included: PCL,
+`pcl_ros`, OctoMap, Nav2, and Livox-SDK2 with `livox_ros_driver2` baked at
+`/opt/livox_ws` as in the RoboCasa images (§5), with a `CustomMsg` import
+check after `build.sh`. `launch_ros_mac.sh` sources that install and builds
+only the packages the Mac bringup runs (`PKGS`, `fast_lio` among them).
 
 The ROS image bakes the pinned Unitree C++ SDK at `/opt/unitree_install`.
 No SDK clone or SDK-cache mount is needed at startup. The separate MJPC warm

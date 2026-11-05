@@ -50,9 +50,9 @@ services:
       - GOLEM_CAMERA_POINTCLOUD=${GOLEM_CAMERA_POINTCLOUD:-}
       - GOLEM_CMD_TIMEOUT=${GOLEM_CMD_TIMEOUT:-0.5}
       # GOLEM_SIM_ODOM=1 publishes ground-truth base odometry (odom -> pelvis TF +
-      # /odom) straight from the sim, feeding 2D SLAM without FAST-LIO. Default 0
-      # (off) so the shared sim bridge stays silent; the nav/SLAM demo sets it to 1
-      # (see docs/NAVIGATION_DEMO.md).
+      # /odom) straight from the sim. Default 0 (off): ground truth is opt-in, and
+      # the ros service's navigation (GOLEM_SLAM / GOLEM_NAV2) runs on FAST-LIO,
+      # whose TF already parents pelvis.
       - GOLEM_SIM_ODOM=${GOLEM_SIM_ODOM:-0}
       # GOLEM_SPAWN_BACKOFF (metres) backs the robot off the counter into open floor
       # at spawn (default 0 = at the counter for manipulation). 1.5-2.0 gives nav2
@@ -136,19 +136,19 @@ services:
       # can run either or both. View via docker/mac/scripts/mac_vnc_tunnel.sh:
       #   GOLEM_RVIZ=vnc docker compose -f docker/mac/docker-compose.yml up
       - GOLEM_RVIZ=${GOLEM_RVIZ:-0}
-      # Optional lower-body controller: GOLEM_LOWERBODY=fame|walk|almi runs
-      # lowerbody_controller_node pinned to that policy (it pre-poses the legs,
-      # then releases the elastic band). fame stands only; walk and almi follow
-      # /cmd_vel; almi stands and walks -- the one to use for the nav demo.
-      # Default (unset) keeps the band tether + upper-body IK.
+      # Optional lower-body controller: GOLEM_LOWERBODY=fame|walk|almi includes
+      # h12_lowerbody (lowerbody_controller_node pinned to that policy: it pre-poses
+      # the legs, then releases the elastic band). fame stands only; walk and almi
+      # follow /cmd_vel; almi stands and walks -- the one to use for the nav demo.
+      # Default (unset) keeps the band tether + upper-body IK; any other value stops
+      # the bringup (h12_sim_mac.launch.py).
       - GOLEM_LOWERBODY=${GOLEM_LOWERBODY:-}
-      # GOLEM_SLAM=1 adds pointcloud_to_laserscan + slam_toolbox to the bringup:
-      # the Livox cloud -> 2D scan -> occupancy /map against the sim's /odom.
-      # Needs the robocasa service started with GOLEM_SIM_ODOM=1 to supply /odom.
+      # GOLEM_SLAM=1 or GOLEM_NAV2=1 (either one) includes golem_slam's navigation
+      # graph for the H1-2, the x86 sim's: FAST-LIO odometry, the self filter,
+      # OctoMap, slam_toolbox's /map and Nav2, which drives /cmd_vel (the
+      # lower-body policy follows it). Send goals via RViz "2D Nav Goal" or
+      # /navigate_to_pose.
       - GOLEM_SLAM=${GOLEM_SLAM:-0}
-      # GOLEM_NAV2=1 adds the nav2 stack (implies GOLEM_SLAM for the map): plans a
-      # collision-free path on the SLAM map and drives /cmd_vel (the lower-body
-      # policy follows it). Send goals via RViz "2D Nav Goal" or /navigate_to_pose.
       - GOLEM_NAV2=${GOLEM_NAV2:-0}
       # GOLEM_ROS_MCP=1 starts an in-container ROS debugging MCP server (warm rclpy
       # node + robot_status/wait_for/costmap/drive tools) on localhost:6082. Reach

@@ -84,6 +84,7 @@ def _walk(launch_file, **args):
 
 @pytest.mark.parametrize('launch_file, sim, use_estop', [
     ('h12_sim.launch.py', 'true', 'false'),
+    ('h12_sim_mac.launch.py', 'true', 'false'),
     ('lmg_sim.launch.py', 'true', 'false'),
     ('h12_real_robot.launch.py', 'false', 'true'),
     ('lmg_real.launch.py', 'false', 'true'),

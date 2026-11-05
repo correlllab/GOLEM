@@ -56,10 +56,10 @@ changing one needs the stack `restart` command to recreate both containers.
 |---|---|---|
 | `GOLEM_DISPLAY` | off | `vnc` → MuJoCo viewer on noVNC port 6080 |
 | `GOLEM_RVIZ` | off | `vnc` → RViz on noVNC port 6081 |
-| `GOLEM_LOWERBODY` | off (tethered) | `fame` stand-only, `walk` walk-only policy, `almi` stand + walk (one policy) |
-| `GOLEM_SLAM` | off | `pointcloud_to_laserscan` + `slam_toolbox` → `/map` |
-| `GOLEM_NAV2` | off | nav2 stack (implies SLAM) |
-| `GOLEM_SIM_ODOM` | off | sim ground-truth `/odom` + `odom→pelvis` TF (SLAM needs it) |
+| `GOLEM_LOWERBODY` | off (tethered) | `fame` stand-only, `walk` walk-only policy, `almi` stand + walk (one policy); any other value stops the bringup |
+| `GOLEM_SLAM` | off | `1`/`true`/`on` → `golem_slam`'s navigation graph, the x86 sim's: FAST-LIO → self filter → OctoMap → `slam_toolbox` (`/map`) → Nav2 |
+| `GOLEM_NAV2` | off | the same graph as `GOLEM_SLAM` (either one starts it) |
+| `GOLEM_SIM_ODOM` | off | sim ground-truth `/odom` + `odom→pelvis` TF. Leave it off with navigation: FAST-LIO's odometry already parents `pelvis`, and ground truth would give it a second parent |
 | `GOLEM_CAMERAS` | on | `0` drops the 3 RGBD renders — the heaviest per-step cost |
 | `GOLEM_CAMERA_SCALE` | 0.5 | head-camera render size as a fraction of the real 1280x720 (same projection) |
 | `GOLEM_CAMERA_DEPTH` | on | `0` drops `depth/image_rect_raw` + its camera_info |
@@ -90,8 +90,12 @@ the containers share one network namespace. The launchers handle this.
 
 ## Driving the robot
 
-Bringup starts automatically in the `ros` container (`joint_state_publisher`,
-`robot_state_publisher`, `frame_task_server`, `safety_node`):
+Bringup starts automatically in the `ros` container. `h12_sim_mac.launch.py`
+includes the x86 sim's blocks with its arguments: `joint_state_publisher` and
+`robot_state_publisher`, then `safety_node` and `frame_task_server`, plus the
+leg controller with `GOLEM_LOWERBODY` and navigation with `GOLEM_SLAM` or
+`GOLEM_NAV2`. It starts no model servers or `golem_skills`; RViz comes with
+`GOLEM_RVIZ`:
 
 ```bash
 docker exec -it golem_ros bash          # fallback if the host docker CLI is flaky: colima ssh -- docker exec …

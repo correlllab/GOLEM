@@ -25,6 +25,20 @@ class SourcePinTests(unittest.TestCase):
                     pins = re.findall(r'git (?:-C \S+ )?(?:checkout(?: --quiet)?|reset --hard) "?[0-9a-f]{40}\b', run)
                     self.assertEqual(len(clones), len(pins), f'{path}: {run}')
 
+    def test_every_image_builds_livox_sdk2_at_one_commit(self):
+        # Every image that builds livox_ros_driver2 must agree on its CustomMsg wire format.
+        refs = {}
+        for path in FILES:
+            text = path.read_text().replace('\\\n', ' ')
+            for run in re.findall(r'^RUN .*', text, re.M):
+                if 'Livox-SDK2.git' in run:
+                    pin = re.search(r'checkout(?: --quiet)? ([0-9a-f]{40})\b', run)
+                    refs[path.relative_to(ROOT).as_posix()] = pin and pin.group(1)
+        self.assertLessEqual({'docker/RosDockerfile', 'docker/RobocasaDockerfile',
+                              'docker/mac/RobocasaDockerfile.arm64',
+                              'docker/mac/RosDockerfile.slim.arm64'}, set(refs))
+        self.assertEqual(len(set(refs.values())), 1, refs)
+
     def test_isaaclab_transitive_vcs_pins_are_retained(self):
         text = (ROOT / 'docker/IsaacDockerfile').read_text()
         for pin in (

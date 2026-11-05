@@ -85,8 +85,9 @@ rob_stop() {
     ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "{}" >/dev/null 2>&1
 }
 
-# rob_odom — current base position in the odom (world) frame.
-rob_odom() { timeout 5 ros2 topic echo /odom --field pose.pose.position --once; }
+# rob_odom — FAST-LIO's position of its IMU (body) in camera_init, the frame of
+# its first scan; needs GOLEM_SLAM=1 or GOLEM_NAV2=1.
+rob_odom() { timeout 5 ros2 topic echo /Odometry --field pose.pose.position --once; }
 
 # rob_explore — autonomous frontier-based exploration (needs GOLEM_SLAM=1 GOLEM_NAV2=1
 # and a /skill/frontier_explore server: golem_skills serves it, and the Mac image does

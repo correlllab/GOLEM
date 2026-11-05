@@ -1,6 +1,6 @@
 # lowerbody_controller_node parameters for the simulators. active_policy comes
-# from h12_lowerbody.launch.py's lowerbody:= launch argument, or on the Mac from
-# GOLEM_LOWERBODY (h12_sim_mac.launch.py).
+# from h12_lowerbody.launch.py's lowerbody:= launch argument (on the Mac,
+# h12_sim_mac.launch.py passes GOLEM_LOWERBODY as it).
 lowerbody_controller_node:
   ros__parameters:
     # Sim auto-engages after the pre-pose settles (unattended runs); the

@@ -16,10 +16,13 @@ setup(
         ('share/' + package_name, ['package.xml']),
         # One entry per subdirectory, installed at the same relative path:
         # ros2 launch finds a launch file by name anywhere under the share
-        # directory, so each file is installed once.
+        # directory, so each file is installed once. The annotated example.*.yaml
+        # configs document the keys and stay in the source tree.
         (os.path.join('share', package_name, 'launch', 'h12'), glob('launch/h12/*.launch.py')),
         (os.path.join('share', package_name, 'launch', 'g1'), glob('launch/g1/*.launch.py')),
-        (os.path.join('share', package_name, 'config', 'h12'), glob('config/h12/*.yaml')),
+        (os.path.join('share', package_name, 'config', 'h12'),
+            [path for path in glob('config/h12/*.yaml')
+             if not os.path.basename(path).startswith('example.')]),
         (os.path.join('share', package_name, 'rviz', 'h12'), glob('rviz/h12/*.rviz')),
         (os.path.join('share', package_name, 'rviz', 'g1'), glob('rviz/g1/*.rviz')),
     ],

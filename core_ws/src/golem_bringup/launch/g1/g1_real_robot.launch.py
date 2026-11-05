@@ -51,13 +51,13 @@ The legs:
   zero, keep_writing) turns every motor off and keeps writing that command.
 
 This launch refuses sim configs (any sim_* safety_config), and the controller
-config follows safety_config (g1_split with split); g1_core's docstring lists
-every setting it refuses. When the controller exits it sends one last command,
-with zero gains on the arms; the waist keeps its hold and golem_safety relays
-it, so only the arms go limp. The controller stops with an error if
-rt/lowstate does not arrive within 5 s, if golem_safety has not relayed its
-commands within 30 s, or if the move to home is not done within 30 s after
-that. use_nav (default true) starts the MID-360 driver
+config follows safety_config (golem_upper_ik's config/g1/pairing.yaml);
+g1_core's docstring lists every setting it refuses. When the controller exits
+it sends one last command, with zero gains on the arms; the waist keeps its
+hold and golem_safety relays it, so only the arms go limp. The controller
+stops with an error if rt/lowstate does not arrive within 5 s, if golem_safety
+has not relayed its commands within 30 s, or if the move to home is not done
+within 30 s after that. use_nav (default true) starts the MID-360 driver
 (g1_real_drivers.launch.py) and golem_slam on config/g1/fastlio.yaml: FAST_LIO,
 slam_toolbox and Nav2, which drives the walking node through /cmd_vel once it
 runs. Unmeasured on the real G1: the driver and navigation have not run on it.
@@ -131,7 +131,8 @@ def generate_launch_description():
                 'use_rviz': LaunchConfiguration('use_rviz'),
                 'use_hands': LaunchConfiguration('use_hands'),
                 'safety_config': LaunchConfiguration('safety_config'),
-                # The one safety_config runs with: g1_split with split.
+                # Empty: the one golem_upper_ik's config/g1/pairing.yaml pairs with
+                # safety_config.
                 'controller_config': '',
                 'start_position_verified': LaunchConfiguration('start_position_verified'),
                 'use_nav': LaunchConfiguration('use_nav'),

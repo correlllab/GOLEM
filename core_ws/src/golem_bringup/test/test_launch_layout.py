@@ -56,12 +56,20 @@ def test_top_level_files_exist():
 
 
 def test_setup_installs_every_launch_file(monkeypatch):
-    """setup.py installs every launch, config and rviz file once, at its own relative path."""
+    """setup.py installs every launch, rviz and non-example config file once, at its own path."""
     data_files = _data_files(monkeypatch)
     for pattern in INSTALLED:
-        files = _files(pattern)
+        files = [path for path in _files(pattern) if not path.name.startswith('example.')]
         assert files, pattern
         for path in files:
             destinations = [destination for destination, sources in data_files
                             if path in sources]
             assert destinations == [Path('share', 'golem_bringup', path.parent)], path
+
+
+def test_setup_leaves_out_the_example_configs(monkeypatch):
+    """setup.py installs no example.*.yaml, so nothing reading the share directory takes one."""
+    installed = [source for _, sources in _data_files(monkeypatch) for source in sources]
+    examples = _files('config/**/example.*.yaml')
+    assert examples
+    assert [path for path in examples if path in installed] == []

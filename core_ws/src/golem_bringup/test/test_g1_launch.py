@@ -64,7 +64,7 @@ def _context(description, **args):
 
 
 class Started(NamedTuple):
-    """A node a launch starts: its package, arguments, start delay and ROS parameters."""
+    """Hold one node a launch starts: its package, arguments, start delay and ROS parameters."""
 
     package: str
     arguments: list

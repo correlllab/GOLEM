@@ -15,8 +15,8 @@ golem_safety beats and the controller commands, it moves the legs to the
 policy's default pose, starts the policy at zero velocity (no operator
 confirm in the sim) and releases the band once the controller has finished its
 start-up moves (or band.max_wait after the policy started without them). It
-then walks on /cmd_vel. g1_core refuses the real robot's configs here (split,
-g1_split, the walking node's g1); the sim configs keep the faster arm speeds
+then walks on /cmd_vel. g1_core refuses the real robot's configs here (its
+docstring lists what it refuses); the sim configs keep the faster arm speeds
 (1 rad/s, 0.5 m/s).
 
 use_nav (default true) adds golem_slam on the sim's MID-360 (/livox/lidar,
@@ -70,7 +70,8 @@ def generate_launch_description():
                 'use_rviz': LaunchConfiguration('use_rviz'),
                 'use_hands': LaunchConfiguration('use_hands'),
                 'safety_config': LaunchConfiguration('safety_config'),
-                # The one safety_config runs with: sim_split.
+                # Empty: the one golem_upper_ik's config/g1/pairing.yaml pairs with
+                # safety_config.
                 'controller_config': '',
                 'use_nav': LaunchConfiguration('use_nav'),
                 'use_skills': LaunchConfiguration('use_skills'),

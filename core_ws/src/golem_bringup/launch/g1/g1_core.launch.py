@@ -34,17 +34,16 @@ must finish within controller.startup_move_timeout (30 s) of the gate opening;
 otherwise the controller stops with an error.
 
 The walking node starts `locomotion_delay` seconds after the controller, with
-g1_homie's config for the platform (locomotion_config: sim in the sim, g1
-on the real robot), and drives the legs through golem_safety's split mode. It
-sends nothing until golem_safety beats on /safety/heartbeat, rt/lowstate is
-upright and the controller commands. Then it ramps the legs to the policy's
-default pose. In the sim it starts the policy and releases the sim's elastic
-band once the controller has finished its start-up moves (or band.max_wait
-after the policy started without them); on the real robot it holds the pose
-until the operator calls /lowerbody/confirm_engage (g1_homie's README has
-the details). The controller holds the waist as
-stiffly as golem_safety allows (g1_split.yaml, sim_split.yaml), as the policy
-expects.
+g1_homie's config for the platform (locomotion_config, LOCOMOTION_CONFIGS),
+and drives the legs through golem_safety's split mode. It sends nothing until
+golem_safety beats on /safety/heartbeat, rt/lowstate is upright and the
+controller commands. Then it ramps the legs to the policy's default pose. In
+the sim it starts the policy and releases the sim's elastic band once the
+controller has finished its start-up moves (or band.max_wait after the policy
+started without them); on the real robot it holds the pose until the operator
+calls /lowerbody/confirm_engage (g1_homie's README has the details). The
+controller holds the waist as stiffly as golem_safety allows (every G1
+controller config in pairing.yaml), as the policy expects.
 
 The sim always starts the walking node. The real robot starts it only with
 start_position_verified:=true (default false), as the H1-2's leg node
@@ -72,14 +71,14 @@ The launch refuses to start, before any node, on these settings: g1_core
 refuses the walking node's config (locomotion_refusal) before it returns any
 action, and includes golem_upper_ik's upper_ik.launch.py first, whose pairing
 check (golem_upper_ik.pairing's rules for robot g1) runs before any node starts:
-- The safety config must be one of the G1's pairs (golem_upper_ik's
-  config/g1/pairing.yaml): split or sim_split.
-- Each safety config runs with its paired controller config, and no other:
-  split with g1_split and sim_split with sim_split. controller_config defaults
-  to the paired one.
+- The safety config must be one of the G1's pairs, which golem_upper_ik's
+  config/g1/pairing.yaml lists.
+- Each safety config runs with the controller config pairing.yaml pairs it
+  with, and no other; controller_config defaults to that one.
 - Sim and real configs do not mix: the real robot (sim:=false) refuses every
-  sim_* safety or controller config and the walking node's sim config, and the
-  sim refuses the real robot's (split, g1_split, and the walking node's g1).
+  sim_* safety or controller config, and the sim refuses the real ones
+  (golem_upper_ik.pairing). The walking node's config must be the platform's
+  (LOCOMOTION_CONFIGS below).
 start_position_verified refuses nothing: it decides whether the real robot's
 walking node starts.
 
@@ -153,8 +152,8 @@ def _setup(context):
     sim_time_arg = str(use_sim_time['use_sim_time']).lower()
     default_safety, default_controller = DEFAULT_CONFIGS[sim]
     safety_config = _config(context, 'safety_config') or default_safety
-    # The controller config the safety config runs with: g1_split with split. A
-    # safety config in none of the pairs keeps the default, and upper_ik.launch.py
+    # The controller config pairing.yaml pairs the safety config with. A safety
+    # config in none of the pairs keeps the default, and upper_ik.launch.py
     # refuses it.
     try:
         default_controller = default_controller_config(ROBOT, safety_config)
@@ -283,15 +282,15 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'controller_config', default_value='',
             description='golem_upper_ik controller config, a name under its config/g1/ or '
-                        'a path (default: the one the safety config runs with: g1_split or '
-                        'sim_split)'),
+                        'a path (default: the one its config/g1/pairing.yaml pairs with '
+                        'safety_config)'),
         DeclareLaunchArgument('controller_delay', default_value='2.0',
                               description='s (wall clock) between the safety node and the '
                                           'controller; >= 0'),
         DeclareLaunchArgument(
             'locomotion_config', default_value='',
-            description="g1_homie config, a name under its config/: g1 (real) or sim "
-                        "(default: the platform's)"),
+            description="g1_homie config, a name under its config/; the platform's one "
+                        "(LOCOMOTION_CONFIGS), which is the default"),
         DeclareLaunchArgument('locomotion_delay', default_value='2.0',
                               description='s (wall clock) between the controller and the '
                                           'walking node; >= 0'),

@@ -11,6 +11,8 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>estop</exec_depend>
+  <exec_depend>magpie_control</exec_depend>
+  <exec_depend>livox_ros_driver2</exec_depend>
   <exec_depend>golem_safety</exec_depend>
   <exec_depend>golem_upper_ik</exec_depend>
   <exec_depend>h12_lowerbody_rl</exec_depend>

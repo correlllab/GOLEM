@@ -131,7 +131,7 @@ cd "$WS"
 # appear in `ros2 pkg list`. A package added to golem_bringup's package.xml
 # goes into one list or the other (CLAUDE.md §6).
 PKGS="custom_ros_messages magpie_msgs golem_ros2_models golem_safety golem_upper_ik golem_slam fast_lio golem_bringup unitree_hg h12_lowerbody_rl"
-BRINGUP_STUB_DEPS="estop livox_ros_driver2 model_server cl_realsense lmg_deploy dex_3 g1_homie deploy_mjpc golem_skills"
+BRINGUP_STUB_DEPS="estop magpie_control livox_ros_driver2 model_server cl_realsense lmg_deploy dex_3 g1_homie deploy_mjpc golem_skills"
 
 for _dep in $BRINGUP_STUB_DEPS; do
     mkdir -p "$INSTALL_BASE/$_dep/share/$_dep"

@@ -24,7 +24,7 @@ from launch_ros.utilities import evaluate_parameters
 pytest.importorskip('golem_slam')
 
 from test_g1_launch import (  # noqa: E402
-    _context, _core_nodes, _load, _passed_to_core, core)
+    _context, _core, _core_nodes, _load, _passed_to_core)
 
 NAV_LAUNCH = os.path.join(get_package_share_directory('golem_slam'), 'launch',
                           'g1_navigation.launch.py')
@@ -33,9 +33,12 @@ REAL_VERIFIED = dict(safety_config='split', start_position_verified='true')
 
 
 def _includes(**args):
-    """Return the IncludeLaunchDescription actions g1_core starts with args."""
-    actions = core._setup(_context(core.generate_launch_description(), **args))
-    return [a for a in actions if isinstance(a, IncludeLaunchDescription)]
+    """
+    Return the IncludeLaunchDescription actions g1_core starts with args.
+
+    Not the golem_safety and golem_upper_ik launch files, which start the core's own nodes.
+    """
+    return _core(**args)[1]
 
 
 def _location(include):

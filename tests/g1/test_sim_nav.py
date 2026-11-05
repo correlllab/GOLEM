@@ -613,7 +613,7 @@ class Driver:
             if self._log_has("walking: policy started"):
                 self.mark("walking")
                 return True
-            if self._log_has("g1_core: not starting"):
+            if any(self._log_has(refusal) for refusal in bringup_test.LAUNCH_REFUSALS):
                 self.mark("launch_refused")
                 return False
             for _ in range(20):

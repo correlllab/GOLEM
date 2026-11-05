@@ -9,7 +9,8 @@ limit, and execute_path's pacing.
 
 Then the installed console scripts as processes: joint_state_publisher's /joint_states,
 the parameters both nodes refuse, frame_task_server's shutdown on SIGINT, and its command
-rate with the IK running, measured from another process.
+rate with the IK running, measured from another process. Last, the package's launch files:
+upper_ik.launch.py's pairing check and controller, and robot_state.launch.py's state nodes.
 '''
 import json
 import os
@@ -880,18 +881,111 @@ def test_frame_task_server_rate():
     assert stats['shutdown_zero_gain'] is True, stats
 
 
-def test_launch_file_starts_both_nodes():
+def _launch_description(launch_file):
     import importlib.util
     from ament_index_python.packages import get_package_share_directory
-    from launch_ros.actions import Node
-    path = Path(get_package_share_directory('golem_upper_ik')) / 'launch' / 'upper_ik.launch.py'
-    spec = importlib.util.spec_from_file_location('upper_ik_launch', path)
+    path = Path(get_package_share_directory('golem_upper_ik')) / 'launch' / launch_file
+    spec = importlib.util.spec_from_file_location(launch_file.split('.')[0], path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    description = module.generate_launch_description()
-    nodes = [entity for entity in description.entities if isinstance(entity, Node)]
-    assert sorted(node.node_executable for node in nodes) == [
-        'frame_task_server', 'joint_state_publisher']
-    arguments = {entity.name for entity in description.entities
-                 if type(entity).__name__ == 'DeclareLaunchArgument'}
-    assert arguments == {'robot', 'config', 'use_sim_time'}
+    return module.generate_launch_description()
+
+
+def _launched(launch_file, **args):
+    '''
+    The declared argument names of launch_file, and [(delay, Node)] it starts with args: its
+    entities run in order, as ros2 launch runs them, so a refusal raises before any node
+    '''
+    from launch import LaunchContext
+    from launch.actions import DeclareLaunchArgument, TimerAction
+    from launch_ros.actions import Node
+    description = _launch_description(launch_file)
+    context = LaunchContext()
+    context.launch_configurations.update(args)
+    started = []
+
+    def walk(entities, delay):
+        for entity in entities:
+            if isinstance(entity, Node):
+                started.append((delay, entity))
+            elif isinstance(entity, TimerAction):
+                walk(entity.actions, delay + float(entity.period))
+            else:
+                walk(entity.visit(context) or [], delay)
+
+    walk(description.entities, 0.0)
+    declared = {entity.name for entity in description.entities
+                if isinstance(entity, DeclareLaunchArgument)}
+    return declared, started, context
+
+
+def _parameters(node, context):
+    from launch_ros.utilities import evaluate_parameters
+    parameters = {}
+    for params in evaluate_parameters(context, node._Node__parameters):
+        parameters.update(params)
+    return parameters
+
+
+def test_upper_ik_launch_starts_only_frame_task_server():
+    from launch.actions import DeclareLaunchArgument, OpaqueFunction
+    declared, started, context = _launched(
+        'upper_ik.launch.py', robot='h12', config='sim_safety_split',
+        safety_config='sim_safety_split.yaml', sim='true', start_delay='1.5')
+    assert declared == {'robot', 'config', 'safety_config', 'sim', 'use_sim_time',
+                        'start_delay'}
+    ((delay, node),) = started
+    assert (node.node_package, node.node_executable, node._Node__node_name, delay) == (
+        'golem_upper_ik', 'frame_task_server', 'frame_task_server', 1.5)
+    assert _parameters(node, context) == {
+        'robot': 'h12', 'config': 'sim_safety_split', 'use_sim_time': False}
+    # the pairing check runs first, before the controller starts
+    entities = [entity for entity in _launch_description('upper_ik.launch.py').entities
+                if not isinstance(entity, DeclareLaunchArgument)]
+    assert isinstance(entities[0], OpaqueFunction)
+
+
+@pytest.mark.parametrize('args, reason', [
+    (dict(robot='h12', config='safety_split', safety_config='sim_safety_split', sim='true'),
+     'safety config "sim_safety_split" runs with controller config "sim_safety_split", not '
+     '"safety_split"'),
+    (dict(robot='h12', config='sim_safety_split', safety_config='sim_safety_split',
+          sim='false'),
+     'safety config "sim_safety_split" is a sim config'),
+    (dict(robot='g1', config='sim_split', safety_config='full', sim='true'),
+     'safety config "full" is not one of the G1 pairs'),
+])
+def test_upper_ik_launch_refuses_a_pairing(args, reason):
+    import re
+    with pytest.raises(RuntimeError, match='^upper_ik: not starting: ' + re.escape(reason)):
+        _launched('upper_ik.launch.py', **args)
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_robot_state_launch_starts_both_state_nodes(robot):
+    from golem_ros2_models.paths import urdf_path
+    declared, started, context = _launched('robot_state.launch.py', robot=robot,
+                                           use_sim_time='true')
+    assert declared == {'robot', 'use_sim_time', 'urdf_file'}
+    nodes = {node._Node__node_name: (delay, node) for delay, node in started}
+    assert sorted(nodes) == ['joint_state_publisher', 'robot_state_publisher']
+    delay, publisher = nodes['joint_state_publisher']
+    assert (publisher.node_package, publisher.node_executable, delay) == (
+        'golem_upper_ik', 'joint_state_publisher', 0.0)
+    assert _parameters(publisher, context) == {'robot': robot, 'use_sim_time': True}
+    delay, state = nodes['robot_state_publisher']
+    assert (state.node_package, state.node_executable, delay) == (
+        'robot_state_publisher', 'robot_state_publisher', 0.0)
+    # the robot's ROS URDF by default
+    assert _parameters(state, context) == {
+        'robot_description': Path(urdf_path(robot, ros=True)).read_text(),
+        'use_sim_time': True}
+
+
+def test_robot_state_launch_reads_urdf_file(tmp_path):
+    urdf = tmp_path / 'robot.urdf'
+    urdf.write_text('<robot name="test"/>')
+    _, started, context = _launched('robot_state.launch.py', robot='h12', urdf_file=str(urdf))
+    (state,) = [node for _, node in started if node._Node__node_name == 'robot_state_publisher']
+    assert _parameters(state, context) == {'robot_description': '<robot name="test"/>',
+                                           'use_sim_time': False}

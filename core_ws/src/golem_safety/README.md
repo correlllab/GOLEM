@@ -15,7 +15,9 @@ replaces is in the change report beside it,
 
 ## Running it
 
-The bringups start the node (`golem_bringup`'s `h12_control.launch.py` and
+`launch/safety.launch.py` starts the node after `start_delay` seconds of wall clock (default
+`0.0`), with the parameters below and `use_sim_time` (default `false`) as its arguments. Both
+robots' bringups include it (`golem_bringup`'s `h12_control.launch.py` and
 `g1_core.launch.py`). On its own:
 
 ```bash
@@ -88,7 +90,7 @@ Both robots' `LowCmd`/`LowState` motor arrays hold 35 slots.
 | H1-2 | `default_safety_full`, `relax_safety_full`, `tight_safety_full`, `locomotion_safety_full` | full body | by name |
 | G1 | `split` | split | `g1_real_robot.launch.py` (default) |
 | G1 | `sim_split` | split | `g1_sim.launch.py` (default) |
-| G1 | `full` | full body | refused by `g1_core.launch.py` (it must relay the upper-body input) |
+| G1 | `full` | full body | refused by the G1 bringups (`golem_upper_ik`'s `upper_ik.launch.py`, which `g1_core.launch.py` includes: it must relay the upper-body input) |
 
 What the robots' configs share:
 
@@ -101,7 +103,7 @@ What the robots' configs share:
   the stale times and the estop limits, since the sim can run slower than real time.
 
 Each safety config runs with one `golem_upper_ik` controller config; the bringups refuse
-another pair (`golem_upper_ik.pairing`).
+another pair (`golem_upper_ik.pairing`, checked by its `upper_ik.launch.py`).
 
 ### Keys
 

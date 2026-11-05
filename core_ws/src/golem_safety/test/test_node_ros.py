@@ -256,9 +256,52 @@ def test_sim_refuses_domain_zero(domain):
     assert 'publishers 0 messages 0' in seen, seen
 
 
+def test_the_launch_file_starts_the_node_after_start_delay():
+    import importlib.util
+    from launch import LaunchContext
+    from launch.actions import DeclareLaunchArgument, TimerAction
+    from launch_ros.actions import Node
+    from launch_ros.utilities import evaluate_parameters
+    spec = importlib.util.spec_from_file_location(
+        'safety_launch', share_dir() / 'launch' / 'safety.launch.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    description = module.generate_launch_description()
+    declared = {entity.name: entity for entity in description.entities
+                if isinstance(entity, DeclareLaunchArgument)}
+    assert set(declared) == {'robot', 'config', 'sim', 'use_estop', 'use_sim_time',
+                             'start_delay'}
+    assert declared['robot'].default_value is None
+    assert declared['config'].default_value is None
+    context = LaunchContext()
+    context.launch_configurations.update(robot='g1', config='sim_split', sim='true',
+                                         use_sim_time='true', start_delay='2.5')
+    started = []
+
+    def walk(entities, delay):
+        for entity in entities:
+            if isinstance(entity, Node):
+                started.append((delay, entity))
+            elif isinstance(entity, TimerAction):
+                walk(entity.actions, delay + float(entity.period))
+            else:
+                walk(entity.visit(context) or [], delay)
+
+    walk(description.entities, 0.0)
+    ((delay, node),) = started
+    assert (node.node_package, node.node_executable, node._Node__node_name, delay) == (
+        'golem_safety', 'safety_node', 'safety_node', 2.5)
+    parameters = {}
+    for params in evaluate_parameters(context, node._Node__parameters):
+        parameters.update(params)
+    assert parameters == {'robot': 'g1', 'config': 'sim_split', 'sim': True,
+                          'use_estop': False, 'use_sim_time': True}
+
+
 def test_the_launch_file_runs_the_node():
     command = ['ros2', 'launch', 'golem_safety', 'safety.launch.py', 'robot:=h12',
-               'config:=sim_safety_split', 'sim:=true']
+               'config:=sim_safety_split', 'sim:=true', 'use_sim_time:=false',
+               'start_delay:=0.5']
     launch = subprocess.Popen(command, env=node_env(), text=True, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, start_new_session=True)
     lines = []

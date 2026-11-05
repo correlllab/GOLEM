@@ -18,12 +18,25 @@ replaces is in the change report beside it,
 
 ## Running it
 
-The bringups start both nodes (`golem_bringup`'s `h12_control.launch.py` and
-`h12_state.launch.py`, and its `g1_core.launch.py`), after `golem_safety`'s
-`safety_node`. On their own:
+The package's launch files start both nodes, and both robots' bringups include them
+(`golem_bringup`'s `h12_control.launch.py` and `h12_state.launch.py`, and its
+`g1_core.launch.py`):
+
+- `upper_ik.launch.py` (`robot`, `config`, `safety_config` and `sim` required; `use_sim_time`
+  and `start_delay`, s of wall clock, default `false` and `0.0`) refuses a `config` that does
+  not run with `safety_config` (Safety pairing, below), raising `upper_ik: not starting:
+  <reason>` before it starts anything, then starts `frame_task_server` after `start_delay`.
+  The bringups include it before any other node, so a refused pair stops the launch first.
+- `robot_state.launch.py` (`robot` required; `use_sim_time`; `urdf_file`, empty for the
+  robot's ROS URDF from `golem_ros2_models`) starts `robot_state_publisher` on that URDF and
+  `joint_state_publisher`.
+
+On their own:
 
 ```bash
-ros2 launch golem_upper_ik upper_ik.launch.py robot:=h12 config:=sim_safety_split use_sim_time:=true
+ros2 launch golem_upper_ik upper_ik.launch.py robot:=h12 config:=sim_safety_split \
+    safety_config:=sim_safety_split sim:=true use_sim_time:=true
+ros2 launch golem_upper_ik robot_state.launch.py robot:=h12 use_sim_time:=true
 ros2 run golem_upper_ik frame_task_server --ros-args -p robot:=g1 -p config:=sim_split
 ros2 run golem_upper_ik joint_state_publisher --ros-args -p robot:=h12
 ```
@@ -98,7 +111,7 @@ robot is refused with `ValueError`, naming the known ones.
 
 Each robot's `config/<robot>/pairing.yaml` holds these pairs (`pairs:`, safety config name to
 controller config name), and `golem_upper_ik.pairing` applies one rule to every robot, which
-the bringups check before they start a node. `pairing_refusal(robot, controller, safety, sim)`
+`upper_ik.launch.py` checks before the bringups start a node. `pairing_refusal(robot, controller, safety, sim)`
 gives the first reason a pair must not run, or `None`: the safety config is not in the
 robot's pairs; the controller config is not the one paired with it; or, with `sim` given
 (`True` in the sim, `False` on the real robot), a safety or controller config whose name

@@ -1,15 +1,17 @@
 """
 Core G1 stack, shared by g1_real_robot.launch.py (real robot) and g1_sim.launch.py.
 
-Starts robot_state_publisher, golem_upper_ik's joint_state_publisher (the 29
-body joints), golem_safety's safety_node, the only writer of /lowcmd, the arm
-controller (golem_upper_ik's frame_task_server), HOMIE's walking node
-(g1_homie's locomotion_node; on the real robot only with
-start_position_verified:=true) and, optionally, navigation (golem_slam),
-the Dex3-1 hands and RViz. The golem nodes get robot g1 as a ROS parameter,
-and safety_node and frame_task_server their configs (joint_state_publisher
-reads its default, g1_split). safety_node also gets sim (it refuses sim:=true
-on ROS domain 0) and use_estop false: the G1 stack has no hardware estop node.
+Starts robot_state_publisher and golem_upper_ik's joint_state_publisher (the
+29 body joints; golem_upper_ik's robot_state.launch.py), golem_safety's
+safety_node, the only writer of /lowcmd (golem_safety's safety.launch.py), the
+arm controller (golem_upper_ik's frame_task_server, through its
+upper_ik.launch.py), HOMIE's walking node (g1_homie's locomotion_node; on the
+real robot only with start_position_verified:=true) and, optionally,
+navigation (golem_slam), the Dex3-1 hands and RViz. The golem nodes get robot
+g1 as a ROS parameter, and safety_node and frame_task_server their configs
+(joint_state_publisher reads its default, g1_split). safety_node also gets sim
+(it refuses sim:=true on ROS domain 0) and use_estop false: the G1 stack has no
+hardware estop node.
 
 safety_node runs split mode (split, or sim_split in the sim): it writes every
 motor on /lowcmd, the legs from the walking node's input and the waist and
@@ -62,8 +64,10 @@ moves are done (or band.max_wait after the policy started).
 use_skills:=true starts golem_skills (serving /skill/*, including
 /skill/frontier_explore).
 
-The launch refuses to start, before any node, on these settings
-(startup_refusal; the config rules are golem_upper_ik.pairing's for robot g1):
+The launch refuses to start, before any node, on these settings: g1_core
+refuses the walking node's config (locomotion_refusal) before it returns any
+action, and includes golem_upper_ik's upper_ik.launch.py first, whose pairing
+check (golem_upper_ik.pairing's rules for robot g1) runs before any node starts:
 - The safety config must be one of the G1's pairs (golem_upper_ik's
   config/g1/pairing.yaml): split or sim_split.
 - Each safety config runs with its paired controller config, and no other:
@@ -91,10 +95,8 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterValue
 
-from golem_ros2_models.paths import urdf_path
-from golem_upper_ik.pairing import default_controller_config, pairing_refusal
+from golem_upper_ik.pairing import default_controller_config
 
 ROBOT = 'g1'
 # real / sim defaults: golem_safety config, controller config; the controller
@@ -127,23 +129,24 @@ def locomotion_refusal(sim, locomotion_config):
     return None
 
 
-def startup_refusal(sim, safety_config, controller_config, locomotion_config):
-    """Why g1_core must not start with these settings, or None."""
-    # golem_upper_ik's pairing rules for the G1
-    refusal = pairing_refusal(ROBOT, controller_config, safety_config, sim=sim)
-    if refusal is None:
-        refusal = locomotion_refusal(sim, locomotion_config)
-    return refusal
+def _include(package, launch_file, launch_arguments=None):
+    return IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(get_package_share_directory(package), 'launch', launch_file)),
+        launch_arguments=(launch_arguments or {}).items(),
+    )
 
 
 def _setup(context):
     sim = _as_bool(context, 'sim')
     use_nav = _as_bool(context, 'use_nav')
     use_sim_time = {'use_sim_time': _as_bool(context, 'use_sim_time')}
+    # the value passed to included launch files
+    sim_time_arg = str(use_sim_time['use_sim_time']).lower()
     default_safety, default_controller = DEFAULT_CONFIGS[sim]
     safety_config = _config(context, 'safety_config') or default_safety
     # the controller config the safety config runs with: g1_split with split; a safety
-    # config in none of the pairs keeps the default, and startup_refusal refuses it
+    # config in none of the pairs keeps the default, and upper_ik.launch.py refuses it
     try:
         default_controller = default_controller_config(ROBOT, safety_config)
     except ValueError:
@@ -152,60 +155,41 @@ def _setup(context):
     locomotion_config = _config(context, 'locomotion_config') or LOCOMOTION_CONFIGS[sim]
     delay = float(LaunchConfiguration('controller_delay').perform(context))
     locomotion_delay = float(LaunchConfiguration('locomotion_delay').perform(context))
-    refusal = startup_refusal(sim, safety_config, controller_config, locomotion_config)
+    refusal = locomotion_refusal(sim, locomotion_config)
     if refusal is not None:
         raise RuntimeError(f'g1_core: not starting: {refusal}')
 
-    with open(urdf_path('g1', ros=True)) as urdf_file:
-        robot_description = urdf_file.read()
     rviz_config = os.path.join(get_package_share_directory('golem_bringup'), 'rviz', 'g1',
                                'g1.rviz')
 
+    # Every argument of the included launch files is passed, even at its default:
+    # Humble includes are not scoped, so an included launch file sees every launch
+    # configuration set so far, and an argument left out would take a value set
+    # elsewhere (upper_ik.launch.py's start_delay would delay safety_node)
     actions = [
-        Node(
-            package='robot_state_publisher',
-            executable='robot_state_publisher',
-            name='robot_state_publisher',
-            parameters=[{'robot_description': robot_description}, use_sim_time],
-            output='screen',
-        ),
+        # first: its pairing check refuses before any node starts
+        _include('golem_upper_ik', 'upper_ik.launch.py', {
+            'robot': ROBOT,
+            'config': controller_config,
+            'safety_config': safety_config,
+            'sim': str(sim).lower(),
+            'use_sim_time': sim_time_arg,
+            'start_delay': str(delay),
+        }),
         # body joints (29) from /lowstate; the finger joints come from dex3_hands
-        Node(
-            package='golem_upper_ik',
-            executable='joint_state_publisher',
-            name='joint_state_publisher',
-            parameters=[{'robot': ROBOT}, use_sim_time],
-            output='screen',
-        ),
-        # the config names as typed strings: launch_ros reads a plain string
-        # parameter as YAML, which would make a config named 'on' a bool
-        Node(
-            package='golem_safety',
-            executable='safety_node',
-            name='safety_node',
-            parameters=[{
-                'robot': ROBOT,
-                'config': ParameterValue(safety_config, value_type=str),
-                'sim': sim,
-                'use_estop': False,
-            }, use_sim_time],
-            output='screen',
-        ),
-        TimerAction(
-            period=delay,
-            actions=[
-                Node(
-                    package='golem_upper_ik',
-                    executable='frame_task_server',
-                    name='frame_task_server',
-                    parameters=[{
-                        'robot': ROBOT,
-                        'config': ParameterValue(controller_config, value_type=str),
-                    }, use_sim_time],
-                    output='screen',
-                ),
-            ],
-        ),
+        _include('golem_upper_ik', 'robot_state.launch.py', {
+            'robot': ROBOT,
+            'use_sim_time': sim_time_arg,
+            'urdf_file': '',
+        }),
+        _include('golem_safety', 'safety.launch.py', {
+            'robot': ROBOT,
+            'config': safety_config,
+            'sim': str(sim).lower(),
+            'use_estop': 'false',
+            'use_sim_time': sim_time_arg,
+            'start_delay': '0.0',
+        }),
         Node(
             package='dex_3',
             executable='dex3_hands',
@@ -250,29 +234,18 @@ def _setup(context):
         ))
     if use_nav and not sim:
         # the real MID-360's driver; the sim publishes the lidar itself
-        actions.append(IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(os.path.join(
-                get_package_share_directory('golem_bringup'), 'launch', 'g1',
-                'g1_real_drivers.launch.py')),
-        ))
+        actions.append(_include('golem_bringup', os.path.join('g1', 'g1_real_drivers.launch.py')))
     if use_nav:
         # with the core: FAST_LIO initialises on its first scans, in the sim
         # while its elastic band still holds the robot up (the walking node
         # releases it once its policy runs and the controller's start-up moves
         # are done)
-        nav = os.path.join(get_package_share_directory('golem_slam'), 'launch',
-                           'g1_navigation.launch.py')
         # the arguments of this launch that golem_slam also declares are passed
-        # explicitly: Humble includes are not scoped, so an included launch file sees
-        # every launch configuration set so far, and an argument left out would take a
-        # value set elsewhere
-        actions.append(IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(nav),
-            launch_arguments={
-                'fast_lio_config_file': 'g1_fastlio_sim.yaml' if sim else 'g1_fastlio.yaml',
-                'use_sim_time': str(use_sim_time['use_sim_time']).lower(),
-            }.items(),
-        ))
+        # explicitly, as above
+        actions.append(_include('golem_slam', 'g1_navigation.launch.py', {
+            'fast_lio_config_file': 'g1_fastlio_sim.yaml' if sim else 'g1_fastlio.yaml',
+            'use_sim_time': sim_time_arg,
+        }))
     return actions
 
 

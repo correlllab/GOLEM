@@ -1,46 +1,40 @@
-from golem_upper_ik.pairing import pairing_refusal
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, TimerAction
-from launch.conditions import evaluate_condition_expression, IfCondition
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 
 # The H1-2's command path: [estop_node] -> golem_safety's safety_node, the only
-# writer of /lowcmd -> golem_upper_ik's frame_task_server (use_frame_task).
+# writer of /lowcmd -> golem_upper_ik's frame_task_server (use_frame_task),
+# each package's node from its own launch file (safety.launch.py,
+# upper_ik.launch.py).
 #
 # Every node is a ROS node on the launching shell's ROS_DOMAIN_ID, domain 0 when
 # it is unset. Domain 0 is the real robot's command bus, and safety_node refuses
 # sim:=true on it, so a sim bringup needs a sim domain exported.
 #
 # sim has no default: every top-level file says whether the robot is simulated.
-# check_pairing runs before this file starts any node.
+# upper_ik.launch.py is included first: it refuses a frame_task_config that does
+# not run with safety_config (golem_upper_ik.pairing) before this file starts
+# any node. Without use_frame_task it is not included, and any safety_config
+# passes.
 
 ROBOT = 'h12'
 
 
-def check_pairing(context):
-    """
-    Refuse a frame_task_config that does not run with safety_config.
-
-    Only with use_frame_task: the bringups that run no IK pass any safety_config.
-    The rules are golem_upper_ik.pairing's. Raises RuntimeError with the reason;
-    starts nothing.
-    """
-    def flag(name):
-        return evaluate_condition_expression(context, [LaunchConfiguration(name)])
-
-    if not flag('use_frame_task'):
-        return []
-    refusal = pairing_refusal(
-        ROBOT,
-        LaunchConfiguration('frame_task_config').perform(context),
-        LaunchConfiguration('safety_config').perform(context),
-        sim=flag('sim'))
-    if refusal is not None:
-        raise RuntimeError(f'h12_control: not starting: {refusal}')
-    return []
+def _include(package, launch_file, launch_arguments, condition=None):
+    return IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(get_package_share_directory(package), 'launch', launch_file)),
+        launch_arguments=launch_arguments.items(),
+        condition=condition,
+    )
 
 
 def generate_launch_description():
@@ -92,55 +86,34 @@ def generate_launch_description():
             description='Seconds (wall clock) before starting frame_task_server'),
     ]
 
-    def value(name, value_type):
-        return ParameterValue(LaunchConfiguration(name), value_type=value_type)
-
-    sim_time_param = {'use_sim_time': value('use_sim_time', bool)}
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    safety_config = LaunchConfiguration('safety_config')
+    sim = LaunchConfiguration('sim')
 
     return LaunchDescription(args + [
-        OpaqueFunction(function=check_pairing),
+        _include('golem_upper_ik', 'upper_ik.launch.py', {
+            'robot': ROBOT,
+            'config': LaunchConfiguration('frame_task_config'),
+            'safety_config': safety_config,
+            'sim': sim,
+            'use_sim_time': use_sim_time,
+            'start_delay': LaunchConfiguration('frame_task_delay'),
+        }, condition=IfCondition(LaunchConfiguration('use_frame_task'))),
         Node(
             package='estop',
             executable='estop_node',
             name='estop_node',
-            parameters=[sim_time_param],
+            parameters=[{'use_sim_time': ParameterValue(use_sim_time, value_type=bool)}],
             output='screen',
             emulate_tty=True,
             condition=IfCondition(LaunchConfiguration('use_estop')),
         ),
-        TimerAction(
-            period=LaunchConfiguration('safety_delay'),
-            actions=[
-                Node(
-                    package='golem_safety',
-                    executable='safety_node',
-                    name='safety_node',
-                    parameters=[{
-                        'robot': ROBOT,
-                        'config': value('safety_config', str),
-                        'sim': value('sim', bool),
-                        'use_estop': value('use_estop', bool),
-                    }, sim_time_param],
-                    output='screen',
-                    emulate_tty=True,
-                ),
-            ],
-        ),
-        TimerAction(
-            period=LaunchConfiguration('frame_task_delay'),
-            actions=[
-                Node(
-                    package='golem_upper_ik',
-                    executable='frame_task_server',
-                    name='frame_task_server',
-                    parameters=[{
-                        'robot': ROBOT,
-                        'config': value('frame_task_config', str),
-                    }, sim_time_param],
-                    output='screen',
-                    emulate_tty=True,
-                    condition=IfCondition(LaunchConfiguration('use_frame_task')),
-                ),
-            ],
-        ),
+        _include('golem_safety', 'safety.launch.py', {
+            'robot': ROBOT,
+            'config': safety_config,
+            'sim': sim,
+            'use_estop': LaunchConfiguration('use_estop'),
+            'use_sim_time': use_sim_time,
+            'start_delay': LaunchConfiguration('safety_delay'),
+        }),
     ])

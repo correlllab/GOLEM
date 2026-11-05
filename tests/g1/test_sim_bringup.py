@@ -111,6 +111,8 @@ BAND_RELEASED_LINE = "elastic band released at t="
 # of the band's toggle with its reason, and the toggle's success
 LOCOMOTION_CONFIG = re.compile(r"Loaded (\S+\.yaml) and the policy")
 POLICY_STARTED = "walking: policy started"
+# the bringup's refusals: g1_core's own and golem_upper_ik's pairing check
+LAUNCH_REFUSALS = ("g1_core: not starting", "upper_ik: not starting")
 BAND_CALL = "releasing the elastic band: "
 # BandRelease's reason once /left_ee_pose has come; band.max_wait's names the maximum wait
 BAND_CALL_BY_POSE = BAND_CALL + "the policy runs and frame_task_server is up (/left_ee_pose)"
@@ -417,7 +419,8 @@ class Driver:
         band.max_wait, from the config it logged loading"""
         import yaml
         if not self.spin_until(lambda: file_has(self.sim_log, BAND_RELEASED_LINE)
-                               or file_has(self.launch_log, "g1_core: not starting"), timeout):
+                               or any(file_has(self.launch_log, refusal)
+                                      for refusal in LAUNCH_REFUSALS), timeout):
             self.mark("band_timeout")
             return False
         if not file_has(self.sim_log, BAND_RELEASED_LINE):

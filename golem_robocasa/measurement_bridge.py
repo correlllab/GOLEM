@@ -162,9 +162,6 @@ class MeasurementBridge(Node):
         self.get_logger().info(f"task {self.task_name!r} goal: {self.lang!r}")
         return self.lang
 
-    def reset_episode(self):
-        self._streak = 0
-
     def tick(self):
         """Read success/reward off the (already update_state()'d) env. Returns the
         debounced 'task complete' boolean."""

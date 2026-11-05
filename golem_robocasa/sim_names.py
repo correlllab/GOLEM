@@ -36,25 +36,17 @@ LEG_JOINT_RENAME = {
     for j in ("hip_yaw", "hip_pitch", "hip_roll", "knee", "ankle_pitch", "ankle_roll")
 }
 
-# Gripper actuator names per side, in the merged model. The standalone gripper
-# defines two <position> actuators (left_finger_actuator / right_finger_actuator);
-# robosuite prefixes them gripper0_<side>_.
-GRIPPER_ACTUATORS = ["left_finger_actuator", "right_finger_actuator"]
-
-
 def _id(model, objtype, name):
     return mujoco.mj_name2id(model, objtype, name)
 
 
 class NameResolver:
     """Resolves ROS names to indices/addresses in a (possibly robosuite-merged)
-    MjModel. ``robot_prefix`` is e.g. 'robot0_'; ``gripper_prefix`` formats to a
-    side, e.g. 'gripper0_{side}_'. Use ''/'' for the standalone robot.xml."""
+    MjModel. ``robot_prefix`` is e.g. 'robot0_'; use '' for the standalone robot.xml."""
 
-    def __init__(self, model, robot_prefix="robot0_", gripper_prefix="gripper0_{side}_"):
+    def __init__(self, model, robot_prefix="robot0_"):
         self.model = model
         self.robot_prefix = robot_prefix
-        self.gripper_prefix = gripper_prefix
 
         # body motors: ROS motor i -> (ctrl index, qpos addr, qvel/dof addr,
         # tau sensordata addr)
@@ -91,12 +83,6 @@ class NameResolver:
             if sid >= 0:
                 self.sensor_adr[base] = (model.sensor_adr[sid], model.sensor_dim[sid])
 
-    def gripper_ctrl(self, side):
-        """ctrl indices for [left_finger_actuator, right_finger_actuator] of one
-        gripper side ('right'/'left'). Returns list of ints (or -1 if absent)."""
-        pre = self.gripper_prefix.format(side=side)
-        return [_id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, pre + a) for a in GRIPPER_ACTUATORS]
-
     def site_id(self, name):
         return _id(self.model, mujoco.mjtObj.mjOBJ_SITE, self.robot_prefix + name)
 
@@ -113,7 +99,7 @@ class NameResolver:
 def self_test(robot_xml):
     """Validate the resolver against the standalone robot.xml (prefix='')."""
     m = mujoco.MjModel.from_xml_path(robot_xml)
-    r = NameResolver(m, robot_prefix="", gripper_prefix="")
+    r = NameResolver(m, robot_prefix="")
     assert len(r.motor_ctrl) == 27
     assert (r.motor_ctrl >= 0).all(), "all 27 body actuators resolved"
     assert (r.motor_tau >= 0).all(), "all 27 jointactuatorfrc torque sensors resolved"

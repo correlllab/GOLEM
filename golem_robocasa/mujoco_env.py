@@ -73,10 +73,6 @@ class ElasticBand:
         if key == self._KEY_SPACE:
             self.toggle()
 
-    def print_instructions(self):
-        print('Elastic Band Controls:')
-        print('  SPACE - Toggle elastic band on/off')
-
 
 def draw_band(handle, anchor, body_pos):
     """Draw the elastic band (anchor sphere + capsule to the torso at body_pos) in

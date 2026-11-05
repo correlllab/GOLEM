@@ -34,7 +34,6 @@ from sim_names import NameResolver
 from sim_timing import RealtimePacer, LoopTimings
 from unitree_interface import SimInterface
 
-NUM_LEG_JOINTS = 12
 NUM_MOTORS = 27
 INIT_LEG_POS = np.array([
     0.0, -0.16, 0.0, 0.36, -0.2, 0.0,

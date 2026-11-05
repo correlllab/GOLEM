@@ -24,7 +24,6 @@ import time
 
 import mujoco
 import numpy as np
-import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
@@ -221,7 +220,6 @@ class MagpieHandBridge(Node):
         for act in (self.act_left, self.act_right):
             self.model.actuator_forcelimited[act] = 1
             self.model.actuator_forcerange[act] = [-tau, tau]
-        self._force_limit_n = force_n
         return force_n
 
     # -------------------------------------------------------------- publishers

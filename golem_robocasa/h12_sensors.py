@@ -219,16 +219,16 @@ class H12Sensors:
         self.lidar_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, lidar_body)
         if self.lidar_body_id < 0:
             raise RuntimeError(f"body '{lidar_body}' not found in MJCF")
-        # Lidar self-occlusion mask: ignore returns whose geom is attached to
-        # `torso_link` (the body the lidar is mounted on — its outer shell
-        # would otherwise show as a phantom near-zero return). Limbs hanging
-        # off the torso (arms, head, legs) are deliberately NOT in this mask
-        # so they occlude the scan like real obstacles.
+        # Lidar self-occlusion: the ray cast skips the geoms attached to
+        # `torso_link` (mj_multiRay's bodyexclude; the body the lidar is
+        # mounted on — its outer shell would otherwise show as a phantom
+        # near-zero return). Limbs hanging off the torso (arms, head, legs)
+        # are deliberately NOT excluded, so they occlude the scan like real
+        # obstacles.
         torso_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, lidar_exclude_body)
         if torso_id < 0:
             raise RuntimeError(f"body '{lidar_exclude_body}' not found in MJCF")
         self.lidar_exclude_body_id = int(torso_id)
-        self.geom_excluded = (model.geom_bodyid == self.lidar_exclude_body_id)
         # Optional self-return filter: mj_multiRay's bodyexclude only drops ONE
         # body (the torso the lidar sits on), so the downward rays still hit the
         # robot's own legs/arms/grippers and map a phantom obstacle under the robot
@@ -260,7 +260,6 @@ class H12Sensors:
         # grid is a simplification of the MID-360's non-repetitive scan pattern.
         self.lidar_local_dirs = lidar_fan(lidar_az_rays, lidar_el_rays)
         self.lidar_rays = self.lidar_local_dirs.shape[0]
-        self.lidar_az_rays = lidar_az_rays
         # Mid-360 has 6 laser lines. Map each synthetic ray's elevation index
         # mod 6 to a line number so FAST-LIO's N_SCANS=6 filter accepts all
         # points evenly distributed across scans.

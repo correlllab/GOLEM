@@ -1,7 +1,9 @@
-// golem_safety_dump_config <robot> <config>
+// Print what a safety config derives, as JSON: the derived limits and every parsed value
+// under the schema's keys, loaded with safety_node's own loader. Used to check a config's
+// estop limits against the robot's pose before a real-robot session.
 //
-// Loads a safety config with the node's own loader and prints what it derived as
-// JSON: the derived limits and every parsed value, under the schema's keys.
+// Usage: ros2 run golem_safety golem_safety_dump_config <robot> <config name or path>
+// Exit codes: 0 printed, 1 the profile or config does not load, 2 wrong arguments.
 #include <cstdio>
 #include <iomanip>
 #include <iostream>
@@ -20,7 +22,7 @@ namespace
 using golem_safety::EstopAfter;
 using golem_safety::EstopMode;
 
-// A double that reads back as the same double.
+// Format a double so that it reads back as the same double.
 std::string number(double value)
 {
   std::ostringstream out;
@@ -28,6 +30,7 @@ std::string number(double value)
   return out.str();
 }
 
+// Return `text` as a JSON string, escaping the quote and the backslash.
 std::string quoted(const std::string & text)
 {
   std::string out = "\"";
@@ -40,6 +43,7 @@ std::string quoted(const std::string & text)
   return out + "\"";
 }
 
+// Return `values` as a JSON array.
 std::string array(const std::vector<double> & values)
 {
   std::string out = "[";
@@ -49,8 +53,10 @@ std::string array(const std::vector<double> & values)
   return out + "]";
 }
 
+// Return `value` as a JSON boolean.
 std::string boolean(bool value) {return value ? "true" : "false";}
 
+// Print `c` and the profile's mode_machine to stdout as one JSON object.
 void print(const golem_safety::SafetyConfig & c, const golem_safety::RobotProfile & profile)
 {
   const auto & l = c.limits;

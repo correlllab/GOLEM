@@ -20,21 +20,23 @@ using unitree_hg::msg::LowCmd;
 
 namespace {
 
+// Return the installed H1-2 profile.
 const RobotProfile & h12()
 {
   static const RobotProfile profile = golem_safety::load_robot_profile("h12");
   return profile;
 }
 
+// Return the installed G1 profile.
 const RobotProfile & g1()
 {
   static const RobotProfile profile = golem_safety::load_robot_profile("g1");
   return profile;
 }
 
-// test/fixtures/lowcmd_crc.json, recorded with the Unitree SDK (test/fixtures/README.md).
-// A command entry holds the message fields as columns (one list per field, 35 slots)
-// and the CRC the SDK computed for it.
+// Return test/fixtures/lowcmd_crc.json, recorded with the Unitree SDK
+// (test/fixtures/README.md): each command entry holds the message fields as columns (one
+// list per field over the 35 slots) and the CRC the SDK computed for it.
 YAML::Node fixture()
 {
   static const YAML::Node root =
@@ -42,6 +44,7 @@ YAML::Node fixture()
   return root;
 }
 
+// Return the LowCmd a fixture entry describes.
 LowCmd command_of(const YAML::Node & entry)
 {
   LowCmd cmd;
@@ -63,7 +66,7 @@ LowCmd command_of(const YAML::Node & entry)
   return cmd;
 }
 
-// Every field equal, bit for bit.
+// Expect every field equal, bit for bit.
 void expect_same(const LowCmd & actual, const LowCmd & expected)
 {
   EXPECT_EQ(actual.mode_pr, expected.mode_pr);
@@ -82,7 +85,7 @@ void expect_same(const LowCmd & actual, const LowCmd & expected)
   EXPECT_EQ(actual.crc, expected.crc);
 }
 
-// Any LowCmd with distinct nonzero values, for tests that must not see them again.
+// Return a LowCmd with distinct nonzero values in every field.
 LowCmd busy_command()
 {
   LowCmd cmd;
@@ -104,6 +107,7 @@ LowCmd busy_command()
 
 }  // namespace
 
+// lowcmd_crc() gives the Unitree SDK's CRC for every recorded command.
 TEST(LowCmd, CrcMatchesSdkFixtures)
 {
   const YAML::Node commands = fixture()["commands"];
@@ -114,6 +118,7 @@ TEST(LowCmd, CrcMatchesSdkFixtures)
   }
 }
 
+// Changing any field but crc changes the CRC; changing crc does not.
 TEST(LowCmd, CrcCoversEveryFieldButTheCrc)
 {
   const LowCmd base = busy_command();
@@ -141,6 +146,7 @@ TEST(LowCmd, CrcCoversEveryFieldButTheCrc)
   EXPECT_TRUE(changes([](LowCmd & c) {c.reserve[3] ^= 1U;}));
 }
 
+// Stamping sets each robot's mode_machine and mode_pr, and the CRC over them.
 TEST(LowCmd, StampSetsProfileHeader)
 {
   LowCmd cmd = busy_command();
@@ -155,16 +161,16 @@ TEST(LowCmd, StampSetsProfileHeader)
   EXPECT_EQ(cmd.mode_pr, 0);
   EXPECT_EQ(cmd.crc, golem_safety::lowcmd_crc(cmd));
 
-  // The CRC is over the stamped header: the same body, the other robot's header.
+  // The same body under the other robot's header has another CRC.
   LowCmd other = busy_command();
   golem_safety::stamp_header_and_crc(other, h12());
   EXPECT_NE(other.crc, cmd.crc);
 }
 
+// The zero command is, bit for bit, the H1-2 estop command recorded in the fixture
+// (h12_safety_layer's), with the SDK's CRC.
 TEST(LowCmd, ZeroCommandMatchesTodaysH12EstopCommand)
 {
-  // The H1-2's previous safety layer's estop command, with the header golem_safety stamps on
-  // every command; the fixture holds the SDK's CRC for it.
   const YAML::Node entry = fixture()["old_commands"]["h12_estop"];
   const LowCmd expected = command_of(entry);
   const LowCmd zero = golem_safety::zero_command(h12());
@@ -172,6 +178,7 @@ TEST(LowCmd, ZeroCommandMatchesTodaysH12EstopCommand)
   EXPECT_EQ(zero.crc, entry["crc"].as<uint32_t>());
 }
 
+// The zero command of each robot has mode 0 and every value 0 on every slot.
 TEST(LowCmd, ZeroCommandIsEveryMotorOff)
 {
   for (const RobotProfile * profile : {&h12(), &g1()}) {
@@ -196,19 +203,21 @@ TEST(LowCmd, ZeroCommandIsEveryMotorOff)
   }
 }
 
+// SAFETY: estop mode zero writes exactly the zero command, on both robots.
 TEST(LowCmd, EstopCommandZeroIsTheZeroCommand)
 {
   SafetyConfig config = golem_safety::load_safety_config("split", g1());
   config.estop_response.mode = EstopMode::Zero;
-  const LowCmd last = busy_command();
-  expect_same(golem_safety::estop_command(g1(), config, last), golem_safety::zero_command(g1()));
+  expect_same(golem_safety::estop_command(g1(), config), golem_safety::zero_command(g1()));
 
   SafetyConfig h12_config = golem_safety::load_safety_config("default_safety_full", h12());
   EXPECT_EQ(h12_config.estop_response.mode, EstopMode::Zero);
   expect_same(
-    golem_safety::estop_command(h12(), h12_config, last), golem_safety::zero_command(h12()));
+    golem_safety::estop_command(h12(), h12_config), golem_safety::zero_command(h12()));
 }
 
+// Damp sets mode 1, kp 0 and the configured kd on every body slot and leaves the slots past
+// the body as the zero command has them.
 TEST(LowCmd, DampKeepsKd)
 {
   SafetyConfig config = golem_safety::load_safety_config("split", g1());
@@ -219,8 +228,7 @@ TEST(LowCmd, DampKeepsKd)
     config.estop_response.kd[i] = 0.5 * static_cast<double>(1 + i % 16);
   }
 
-  const LowCmd last = busy_command();
-  const LowCmd cmd = golem_safety::estop_command(g1(), config, last);
+  const LowCmd cmd = golem_safety::estop_command(g1(), config);
   const LowCmd zero = golem_safety::zero_command(g1());
 
   EXPECT_EQ(cmd.mode_machine, 5);
@@ -234,8 +242,6 @@ TEST(LowCmd, DampKeepsKd)
     EXPECT_EQ(cmd.motor_cmd[i].kp, 0.0F);
     EXPECT_EQ(cmd.motor_cmd[i].kd, static_cast<float>(config.estop_response.kd[i]));
   }
-  // Slots past the body stay as the zero command has them: nothing of `last` reaches the
-  // result.
   for (size_t i = body; i < cmd.motor_cmd.size(); ++i) {
     SCOPED_TRACE("slot " + std::to_string(i));
     EXPECT_EQ(cmd.motor_cmd[i].mode, zero.motor_cmd[i].mode);
@@ -250,10 +256,10 @@ TEST(LowCmd, DampKeepsKd)
   EXPECT_EQ(cmd.crc, golem_safety::lowcmd_crc(cmd));
 }
 
+// Damp with the recorded kd is, bit for bit, the G1 damping command recorded in the fixture
+// (g1_safety_layer's), with the SDK's CRC.
 TEST(LowCmd, DampMatchesTodaysG1EstopCommand)
 {
-  // The G1's previous safety layer's damping command; the fixture holds its kd and the
-  // SDK's CRC for the result.
   const YAML::Node entry = fixture()["old_commands"]["g1_damp"];
   SafetyConfig config = golem_safety::load_safety_config("split", g1());
   config.estop_response.mode = EstopMode::Damp;
@@ -263,15 +269,16 @@ TEST(LowCmd, DampMatchesTodaysG1EstopCommand)
   }
   ASSERT_EQ(config.estop_response.kd.size(), g1().joints.size());
 
-  const LowCmd cmd = golem_safety::estop_command(g1(), config, busy_command());
+  const LowCmd cmd = golem_safety::estop_command(g1(), config);
   expect_same(cmd, command_of(entry));
   EXPECT_EQ(cmd.crc, entry["crc"].as<uint32_t>());
 }
 
+// Damp refuses a kd list that has not one entry per body slot.
 TEST(LowCmd, DampNeedsAKdPerBodySlot)
 {
   SafetyConfig config = golem_safety::load_safety_config("split", g1());
   config.estop_response.mode = EstopMode::Damp;
   config.estop_response.kd.assign(g1().joints.size() - 1, 1.0);
-  EXPECT_THROW(golem_safety::estop_command(g1(), config, busy_command()), std::invalid_argument);
+  EXPECT_THROW(golem_safety::estop_command(g1(), config), std::invalid_argument);
 }

@@ -23,28 +23,32 @@ using unitree_hg::msg::LowCmd;
 using unitree_hg::msg::LowState;
 using unitree_hg::msg::MotorCmd;
 
-// The profile parser holds every slot below kMotorSlots, the length of these arrays.
+// The profile parser keeps every slot below kMotorSlots, so it must be these arrays' length.
 static_assert(std::tuple_size<decltype(LowCmd::motor_cmd)>::value == kMotorSlots);
 static_assert(std::tuple_size<decltype(LowState::motor_state)>::value == kMotorSlots);
 
-// Constructed at load time, so a latch never has to allocate it.
+// Built at load time, so that a latch whose reason cannot be built never allocates.
 const std::string kReasonLost = "the estop latched, and its reason could not be recorded";
 
-// A command that does not engage is reported at most this often, s.
+// s between engage_refused reports, so that a controller streaming before the robot is
+// ready does not flood the log.
 constexpr double kRefusalReportSeconds = 1.0;
 
-// The lag baseline may rise this fast, ms per s, to follow drift between the robot's tick
-// and the host clock (500 ppm, well above crystal drift); a delay that builds faster is lag.
+// ms per s the lag baseline may rise, to follow drift between the robot's tick and the host
+// clock: 500 ppm is well above crystal drift, so a delay that builds faster is lag.
 constexpr double kStateLagDriftMsPerS = 0.5;
 
-// LowState.tick is a uint32 millisecond counter.
+// LowState.tick is a uint32 ms counter, so it wraps at 2^32.
 constexpr long long kTickWrap = 1LL << 32;
 
-// The ROS domain of the real robots' command bus; the lag check runs only there.
+// The ROS domain of the real robots' command bus. The lag check runs only there: the sims
+// count tick in sim steps, not wall-clock ms.
 constexpr int kRealRobotDomain = 0;
 
+// Return the index of `input` in SafetyCore::inputs_.
 size_t index_of(Input input) {return static_cast<size_t>(input);}
 
+// Return the name of `input` in event texts.
 const char * input_name(Input input)
 {
   switch (input) {
@@ -58,7 +62,7 @@ const char * input_name(Input input)
   return "unknown";
 }
 
-// %g-style, as short as the value allows: 2, 1.87, nan, -inf.
+// Format a value %g-style, as short as it allows: 2, 1.87, nan, -inf.
 std::string number(double value)
 {
   char text[32];
@@ -66,6 +70,7 @@ std::string number(double value)
   return text;
 }
 
+// Format a value with `decimals` digits after the point.
 std::string fixed(double value, int decimals)
 {
   char text[48];
@@ -73,7 +78,7 @@ std::string fixed(double value, int decimals)
   return text;
 }
 
-// |value| as a multiple of a limit's magnitude, as "1.20x"; "inf x" for a zero limit.
+// Format |value| as a multiple of a limit's magnitude, as "1.20x"; "inf x" for a zero limit.
 std::string multiple(double value, double limit)
 {
   if (limit == 0.0) {
@@ -82,10 +87,10 @@ std::string multiple(double value, double limit)
   return fixed(std::abs(value) / std::abs(limit), 2) + "x";
 }
 
-// A double as Python's json module writes a float (its repr): the fewest digits that read
-// back as the same double, in fixed notation for decimal exponents -4..15 (with ".0" when
-// the value is integral) and in scientific notation, with an exponent of at least two
-// digits, otherwise; NaN, Infinity and -Infinity for the rest.
+// Format a double as Python's json module writes a float (its repr): the fewest digits that
+// read back as the same double, in fixed notation for decimal exponents -4..15 (with ".0"
+// when the value is integral) and in scientific notation with an exponent of at least two
+// digits otherwise; NaN, Infinity and -Infinity for the rest.
 std::string python_float(double value)
 {
   if (std::isnan(value)) {
@@ -137,22 +142,22 @@ std::string python_float(double value)
   return out;
 }
 
-// Python's round(value, 4): the events carry times to 4 decimals.
+// Round as Python's round(value, 4) does: the events carry times to 4 decimals.
 double round4(double value) {return std::round(value * 1e4) / 1e4;}
 
-// A time in an event: rounded to 4 decimals, as Python's json writes it.
+// Format a time for an event: rounded to 4 decimals, as Python's json writes it.
 std::string json_number(double value) {return python_float(round4(value));}
 
-// Milliseconds on the clock `now` is read from.
+// Convert s to whole ms on the same clock.
 long long ms(double seconds) {return std::llround(seconds * 1000.0);}
 
-// numpy.clip: the bounds are applied in this order, so a crossed pair yields `high`.
+// Clip as numpy.clip does: low first, then high, so a crossed pair yields `high`.
 float clip(float value, double low, double high)
 {
   return static_cast<float>(std::min(std::max(static_cast<double>(value), low), high));
 }
 
-// `config`, refused when it was read for another robot.
+// Return `config`; throw when it was read for another robot than `profile`'s.
 SafetyConfig for_robot(SafetyConfig config, const RobotProfile & profile)
 {
   if (config.robot != profile.robot) {
@@ -163,6 +168,7 @@ SafetyConfig for_robot(SafetyConfig config, const RobotProfile & profile)
   return config;
 }
 
+// Return the wall clock, s since the epoch.
 double wall_seconds()
 {
   return std::chrono::duration<double>(
@@ -174,7 +180,7 @@ double wall_seconds()
 SafetyCore::SafetyCore(RobotProfile profile, SafetyConfig config, bool use_estop, int domain_id)
 : profile_(std::move(profile)), config_(for_robot(std::move(config), profile_)),
   use_estop_(use_estop), zero_cmd_(zero_command(profile_)),
-  estop_cmd_(estop_command(profile_, config_, zero_cmd_)),
+  estop_cmd_(estop_command(profile_, config_)),
   lag_checked_(domain_id == kRealRobotDomain && config_.control.state_lag_ms > 0.0),
   last_written_(zero_cmd_)
 {
@@ -236,7 +242,7 @@ void SafetyCore::on_state(const LowState & state, double now)
   }
 }
 
-// The conditions of refusal(), which depend on no input.
+// The same conditions as refusal(), none of which depends on an input.
 void SafetyCore::update_relay_ready()
 {
   const bool ready = state_ && state_->mode_machine == profile_.mode_machine &&
@@ -255,6 +261,8 @@ void SafetyCore::check_state(const LowState & state, double now)
   state_wall_time_ = wall_seconds();
   state_unlogged_ = config_.logging.enabled;
 
+  // SAFETY: before any input engages, another robot's /lowstate only blocks engaging
+  // (refusal() reads it from state_); once an input has engaged it latches.
   if (state.mode_machine != profile_.mode_machine) {
     if (engaged_) {
       latch(
@@ -301,6 +309,7 @@ void SafetyCore::check_state(const LowState & state, double now)
     });
   raise(
     Event::Error, [&] {
+      // The last command written beside the measured state that latched, for diagnosis.
       std::string diagnostic = "estop diagnostic, body slots in order:";
       auto add = [&](const char * name, auto value_of) {
           diagnostic += std::string("\n") + name + ": [";
@@ -319,8 +328,8 @@ void SafetyCore::check_state(const LowState & state, double now)
     });
 }
 
-// The first non-finite value on a checked slot, else the first q, then dq, then tau past
-// its estop limit.
+// Every non-finite value is looked for first, so that a NaN reports as one rather than
+// as a limit; then the first q, then dq, then tau past its estop limit.
 std::optional<SafetyCore::Violation> SafetyCore::limit_violation(const LowState & state) const
 {
   const DerivedLimits & limits = config_.limits;
@@ -357,9 +366,8 @@ std::optional<SafetyCore::Violation> SafetyCore::limit_violation(const LowState 
   return std::nullopt;
 }
 
-// How late, ms, a /lowstate with this tick arrived at `now`: its offset from the robot's
-// ms clock, against the earliest offset seen, which may rise by kStateLagDriftMsPerS to
-// follow clock drift.
+// The lag is the arrival's offset from the robot's ms clock, less the baseline: the smallest
+// offset seen, which may rise by kStateLagDriftMsPerS to follow clock drift.
 double SafetyCore::state_lag_ms(uint32_t tick, double now)
 {
   const long long t = tick;
@@ -380,6 +388,7 @@ double SafetyCore::state_lag_ms(uint32_t tick, double now)
 
 void SafetyCore::on_command(Input input, const LowCmd & cmd, const WriterId & writer, double now)
 {
+  // SAFETY: no command is taken once latched or once the exit has begun.
   if (estopped() || exiting_) {
     return;
   }
@@ -449,7 +458,6 @@ void SafetyCore::accept_command(InputState & in, const LowCmd & cmd, double now)
   }
 }
 
-// Engages `in`, whose newest command has just arrived, unless refusal() names a reason.
 void SafetyCore::try_engage(InputState & in, double now)
 {
   if (const auto refused = refusal()) {
@@ -465,8 +473,8 @@ void SafetyCore::try_engage(InputState & in, double now)
   engaged_ = true;
 }
 
-// Why a command cannot engage now, the first reason in this order: no /lowstate, a newest
-// /lowstate from another robot, and with use_estop no hardware estop sample.
+// The reasons are checked in this order: no /lowstate, a newest /lowstate from another
+// robot, and with use_estop no hardware estop sample.
 std::optional<SafetyCore::Refusal> SafetyCore::refusal() const
 {
   if (!state_ || !state_time_) {
@@ -497,7 +505,6 @@ std::string SafetyCore::refusal_text(const Refusal & r) const
   return "unknown";
 }
 
-// engage_refused (Warn), at most once every kRefusalReportSeconds.
 void SafetyCore::report_refusal(const Refusal & refused, double now)
 {
   if (refusal_reported_ && now - *refusal_reported_ < kRefusalReportSeconds) {
@@ -512,8 +519,7 @@ void SafetyCore::report_refusal(const Refusal & refused, double now)
     });
 }
 
-// input_quiet and state_quiet (Warn), once per gap; the resumed events are raised by the
-// sample that ends it.
+// Each is raised once per gap; the sample that ends the gap raises the resumed event.
 void SafetyCore::report_quiet(double now)
 {
   for (const Input input : mode_inputs_) {
@@ -548,7 +554,7 @@ void SafetyCore::report_quiet(double now)
   }
 }
 
-// The first non-finite q, dq, tau, kp or kd on any body slot of `cmd`, in that field order.
+// Fields are checked in the order q, dq, tau, kp, kd, each over every body slot.
 std::optional<SafetyCore::BadValue> SafetyCore::non_finite_value(const LowCmd & cmd) const
 {
   const std::pair<const char *, float MotorCmd::*> fields[] = {
@@ -571,7 +577,6 @@ LowCmd SafetyCore::clipped(InputState & in, const LowCmd & cmd)
   LowCmd out = cmd;
   for (int slot = in.slots.first; slot <= in.slots.last; ++slot) {
     auto & motor = out.motor_cmd[slot];
-    // gain_clipped: the commanded gain and its maximum.
     auto report_gain = [&](std::vector<bool> & reported, const char * gain, float value,
       double max) {
         if (!(value > max) || reported[slot]) {
@@ -612,8 +617,8 @@ void SafetyCore::on_estop(bool triggered, bool plugged_in, double now)
   }
 }
 
-// From the first hardware estop sample on, latches when the newest is older than
-// estop.timeout_seconds: a dead estop node must not leave its last sample in force.
+// SAFETY: from the first hardware estop sample on, latch when the newest is older than
+// estop.timeout_seconds, so that a dead estop node cannot leave its last sample in force.
 void SafetyCore::check_estop_input(double now)
 {
   if (!use_estop_ || !estop_sample_time_ || estopped()) {
@@ -644,7 +649,7 @@ bool SafetyCore::set_latched(double now, std::optional<double> trigger) noexcept
   return true;
 }
 
-// The estop report, estop_command_written, with sorted keys.
+// Keys are written sorted, as the other JSON events are.
 std::string SafetyCore::estop_report(const PendingReport & report) const
 {
   const long long decision_ms = ms(report.decision);
@@ -692,7 +697,7 @@ std::optional<LowCmd> SafetyCore::estop_output(double now)
   if (out) {
     estop_written_ = true;
   }
-  // The report is built by drain_events(), once this step's command is out.
+  // The report is built by drain_events(), after this step's command is out.
   if (pending_report_ && !pending_report_->acted) {
     pending_report_->acted = true;
     pending_report_->action = now;
@@ -715,6 +720,7 @@ std::optional<LowCmd> SafetyCore::step(double now)
   if (exiting_) {
     return exit_step(now);
   }
+  // First, so that a silent hardware estop latches in the step that notices it.
   check_estop_input(now);
   if (estopped()) {
     return finish(estop_output(now));

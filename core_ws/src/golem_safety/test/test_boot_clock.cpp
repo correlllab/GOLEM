@@ -7,6 +7,7 @@
 namespace
 {
 
+// Return `clock` in s.
 double read(clockid_t clock)
 {
   timespec ts{};
@@ -16,8 +17,7 @@ double read(clockid_t clock)
 
 }  // namespace
 
-// The node times everything on CLOCK_BOOTTIME: a wall-clock step moves neither its timers
-// nor its sleeps, and a suspend counts as a gap.
+// boot_time() reads CLOCK_BOOTTIME.
 TEST(BootClock, IsClockBoottime)
 {
   const double before = read(CLOCK_BOOTTIME);
@@ -27,12 +27,12 @@ TEST(BootClock, IsClockBoottime)
   EXPECT_LE(now, after);
 }
 
+// sleep_until_boot_time() returns at or after the deadline, and at once for a past one.
 TEST(BootClock, SleepUntilWaitsForTheDeadline)
 {
   const double deadline = golem_safety::boot_time() + 0.02;
   golem_safety::sleep_until_boot_time(deadline);
   EXPECT_GE(golem_safety::boot_time(), deadline);
-  // a deadline in the past returns at once
   const double start = golem_safety::boot_time();
   golem_safety::sleep_until_boot_time(start - 1.0);
   EXPECT_LT(golem_safety::boot_time() - start, 0.01);

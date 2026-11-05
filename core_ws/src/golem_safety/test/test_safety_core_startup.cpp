@@ -29,28 +29,33 @@ using unitree_hg::msg::LowState;
 namespace
 {
 
+// A ROS domain other than 0, so the transport-lag check is off.
 constexpr int kDomain = 91;
+// The real robots' domain, where the lag check runs.
 constexpr int kRealRobotDomain = 0;
 constexpr double kStep = 0.01;  // s; the tests feed and step every 10 ms
 
+// Return the installed H1-2 profile.
 const RobotProfile & h12()
 {
   static const RobotProfile profile = golem_safety::load_robot_profile("h12");
   return profile;
 }
 
+// Return the installed G1 profile.
 const RobotProfile & g1()
 {
   static const RobotProfile profile = golem_safety::load_robot_profile("g1");
   return profile;
 }
 
+// Load the installed config `name` for `profile`.
 SafetyConfig config(const RobotProfile & profile, const std::string & name)
 {
   return golem_safety::load_safety_config(name, profile);
 }
 
-// A /lowstate of `profile`'s robot with every joint at rest at q.
+// Return a /lowstate of `profile`'s robot with every joint at rest at q.
 LowState state_of(const RobotProfile & profile, float q = 0.0F)
 {
   LowState state;
@@ -63,7 +68,7 @@ LowState state_of(const RobotProfile & profile, float q = 0.0F)
   return state;
 }
 
-// A controller's command: every body slot enabled at q with kp and kd.
+// Return a controller's command: every body slot enabled at q with kp and kd.
 LowCmd command(const RobotProfile & profile, float q = 0.0F, float kp = 60.0F, float kd = 2.0F)
 {
   LowCmd cmd = golem_safety::zero_command(profile);
@@ -76,11 +81,13 @@ LowCmd command(const RobotProfile & profile, float q = 0.0F, float kp = 60.0F, f
   return cmd;
 }
 
+// Return whether `part` occurs in `text`.
 bool contains(const std::string & text, const std::string & part)
 {
   return text.find(part) != std::string::npos;
 }
 
+// Return how many events are of `kind`.
 size_t count(const std::vector<Event> & events, Event::Kind kind)
 {
   size_t n = 0;
@@ -90,6 +97,7 @@ size_t count(const std::vector<Event> & events, Event::Kind kind)
   return n;
 }
 
+// Return the events as text, one per line, for failure messages.
 std::string texts(const std::vector<Event> & events)
 {
   std::string out;
@@ -99,7 +107,7 @@ std::string texts(const std::vector<Event> & events)
   return out;
 }
 
-// Each JSON event whose "event" is `name`, parsed: (the event, its object).
+// Return each JSON event whose "event" is `name`, with its parsed object.
 std::vector<std::pair<Event, YAML::Node>> named(
   const std::vector<Event> & events, const std::string & name)
 {
@@ -116,7 +124,7 @@ std::vector<std::pair<Event, YAML::Node>> named(
   return out;
 }
 
-// A JSON object's keys, in the order written.
+// Return a JSON object's keys, in the order written.
 std::vector<std::string> keys_of(const YAML::Node & node)
 {
   std::vector<std::string> keys;
@@ -126,7 +134,7 @@ std::vector<std::string> keys_of(const YAML::Node & node)
   return keys;
 }
 
-// Every field equal, bit for bit.
+// Expect every field equal, bit for bit.
 void expect_same(const LowCmd & actual, const LowCmd & expected)
 {
   EXPECT_EQ(actual.mode_pr, expected.mode_pr);
@@ -136,7 +144,7 @@ void expect_same(const LowCmd & actual, const LowCmd & expected)
   EXPECT_EQ(actual.crc, expected.crc);
 }
 
-// The inputs each mode reads, with their writers.
+// Return the inputs the config's mode reads, each with a writer name.
 std::vector<std::pair<Input, const char *>> inputs_of(const SafetyConfig & cfg)
 {
   switch (cfg.mode) {
@@ -148,8 +156,8 @@ std::vector<std::pair<Input, const char *>> inputs_of(const SafetyConfig & cfg)
   return {};
 }
 
-// Feeds /lowstate and `cmd` on every input of the mode every 10 ms over steps first..last,
-// stepping after each; returns the last output.
+// Feed /lowstate and `cmd` on every input of the mode every 10 ms over steps first..last,
+// stepping after each; return the last output.
 std::optional<LowCmd> run(
   SafetyCore & core, const RobotProfile & profile, const SafetyConfig & cfg, const LowCmd & cmd,
   int first, int last)
@@ -168,6 +176,7 @@ std::optional<LowCmd> run(
 
 }  // namespace
 
+// SAFETY: from the first step, with or without use_estop, the H1-2 writes the zero command.
 TEST(Startup, ZeroStreamFromFirstStep)
 {
   const LowCmd zero = golem_safety::zero_command(h12());
@@ -185,6 +194,8 @@ TEST(Startup, ZeroStreamFromFirstStep)
   }
 }
 
+// SAFETY: without the robot's own /lowstate no input engages: the zero command throughout,
+// engage_refused at most once a second, and another robot's /lowstate only delays engaging.
 TEST(Startup, NoLowstateNeverEngages)
 {
   // H1-2: commands for 5 s and no /lowstate. zero_command on every step, and the reason
@@ -278,6 +289,8 @@ TEST(Startup, NoLowstateNeverEngages)
   EXPECT_FALSE(g1_core.estopped());
 }
 
+// Each input engages on its own first valid command after the robot's /lowstate; a command
+// from before it does not engage.
 TEST(Startup, ZeroStreamEngagesPerInput)
 {
   const LowCmd zero = golem_safety::zero_command(h12());
@@ -328,6 +341,7 @@ TEST(Startup, ZeroStreamEngagesPerInput)
   EXPECT_EQ(out->motor_cmd[20], upper.motor_cmd[20]);
 }
 
+// SAFETY: the G1 writes the zero command on all 35 slots from the first step.
 TEST(Startup, G1StreamsZeroFromFirstStep)
 {
   // No /lowstate and no input: zero_command on all 35 slots from the first step, stamped
@@ -351,6 +365,8 @@ TEST(Startup, G1StreamsZeroFromFirstStep)
   EXPECT_TRUE(core.drain_events().empty());
 }
 
+// SAFETY: the G1's arms engage without the legs, whose slots stay at the zero command until
+// the walking node's first command.
 TEST(Startup, G1EngagesEachInputOnItsOwn)
 {
   // The arm controller's commands alone, for 1 s: the waist and arms (12-28) carry them, and
@@ -400,6 +416,8 @@ TEST(Startup, G1EngagesEachInputOnItsOwn)
   EXPECT_FALSE(core.estopped());
 }
 
+// SAFETY: before any input engages, a G1 joint past its estop limit latches, and the estop
+// command follows on every step.
 TEST(Startup, G1LimitChecksFromBoot)
 {
   // Before any input, a /lowstate with the left knee past limits.estop latches, in every G1
@@ -419,8 +437,7 @@ TEST(Startup, G1LimitChecksFromBoot)
       core.estop_reason().rfind("motor 3 (left_knee_joint) q out of estop range: ", 0), 0U) <<
       core.estop_reason();
 
-    const LowCmd expected =
-      golem_safety::estop_command(g1(), cfg, golem_safety::zero_command(g1()));
+    const LowCmd expected = golem_safety::estop_command(g1(), cfg);
     for (int i = 0; i < 1000; ++i) {
       const double t = 0.004 + i * 0.002;
       for (const auto & [input, writer] : inputs_of(cfg)) {
@@ -439,6 +456,7 @@ TEST(Startup, G1LimitChecksFromBoot)
   }
 }
 
+// SAFETY: a first hardware estop sample that is triggered or unplugged latches.
 TEST(Estop, FirstSampleTriggeredLatches)
 {
   struct Case
@@ -457,7 +475,7 @@ TEST(Estop, FirstSampleTriggeredLatches)
       // The estop command, the first of the H1-2's burst and of the G1's keep_writing.
       const auto out = core.step(0.002);
       ASSERT_TRUE(out);
-      expect_same(*out, golem_safety::estop_command(c.profile, cfg, *out));
+      expect_same(*out, golem_safety::estop_command(c.profile, cfg));
     }
     {
       SafetyCore core(c.profile, cfg, true, kDomain);
@@ -468,6 +486,7 @@ TEST(Estop, FirstSampleTriggeredLatches)
   }
 }
 
+// SAFETY: with use_estop, no input engages before the first hardware estop sample.
 TEST(Estop, NoEngageBeforeFirstSample)
 {
   // H1-2: /lowstate and both inputs for 1 s, no estop sample: zero_command throughout.
@@ -511,6 +530,8 @@ TEST(Estop, NoEngageBeforeFirstSample)
   EXPECT_EQ(g1_out->motor_cmd[20].q, 0.1F);
 }
 
+// relay_ready() needs the robot's own /lowstate and, with use_estop, a hardware estop
+// sample; a latching sample never makes it true.
 TEST(Startup, RelayReadyNeedsTheRobotsLowstateAndAnEstopSample)
 {
   struct Case
@@ -568,6 +589,8 @@ TEST(Startup, RelayReadyNeedsTheRobotsLowstateAndAnEstopSample)
   }
 }
 
+// SAFETY: a hardware estop silent for estop.timeout_seconds latches, from the first sample
+// on, engaged or not.
 TEST(Estop, StaleAfterEngageLatches)
 {
   struct Case
@@ -613,6 +636,7 @@ TEST(Estop, StaleAfterEngageLatches)
   EXPECT_TRUE(early.estopped());
 }
 
+// Without use_estop, inputs engage with no estop sample, and silence latches nothing.
 TEST(Estop, IgnoredWithoutUseEstop)
 {
   const SafetyConfig cfg = config(h12(), "sim_safety_split");
@@ -633,6 +657,8 @@ TEST(Estop, IgnoredWithoutUseEstop)
   EXPECT_FALSE(g1_core.estopped());
 }
 
+// SAFETY: an engaged input quiet past its stale time keeps its last command relayed and is
+// reported quiet, then resumed.
 TEST(Quiet, InputHeldAndReported)
 {
   struct Case
@@ -703,6 +729,7 @@ TEST(Quiet, InputHeldAndReported)
   }
 }
 
+// The full-body input uses stale.lower_seconds.
 TEST(Quiet, FullInputUsesLowerSeconds)
 {
   struct Case
@@ -746,6 +773,8 @@ TEST(Quiet, FullInputUsesLowerSeconds)
   }
 }
 
+// SAFETY: a /lowstate gap past stale.state_seconds keeps the relay running and is reported
+// quiet, then resumed.
 TEST(Quiet, LowstateGapHolds)
 {
   struct Case
@@ -794,6 +823,8 @@ TEST(Quiet, LowstateGapHolds)
   }
 }
 
+// SAFETY: on domain 0, /lowstate arriving more than state_lag_ms late against its tick
+// latches; off domain 0, or with state_lag_ms 0, it does not.
 TEST(Lag, Domain0LateTicksLatch)
 {
   // /lowstate every 2 ms on time for 1 s, then each sample 1 ms later against the robot's
@@ -839,6 +870,7 @@ TEST(Lag, Domain0LateTicksLatch)
   }
 }
 
+// A tick wrap and clock drift below 0.5 ms/s are not lag.
 TEST(Lag, TickWrapAndSlowDriftAreNotLag)
 {
   const SafetyConfig cfg = config(h12(), "sim_safety_split");
@@ -866,6 +898,7 @@ TEST(Lag, TickWrapAndSlowDriftAreNotLag)
   }
 }
 
+// SAFETY: without an estop, exit_step() publishes nothing more, in every mode.
 TEST(Exit, SplitStopsAtOnce)
 {
   struct Case
@@ -882,7 +915,6 @@ TEST(Exit, SplitStopsAtOnce)
     const auto out = run(core, c.profile, cfg, command(c.profile, 0.05F), 0, 10);
     ASSERT_TRUE(out);
     ASSERT_EQ(out->motor_cmd[3].q, 0.05F);
-    // The robot holds the last command written; nothing more is published.
     EXPECT_FALSE(core.exit_step(0.11));
     EXPECT_FALSE(core.exit_step(0.12));
     EXPECT_FALSE(core.step(0.13));

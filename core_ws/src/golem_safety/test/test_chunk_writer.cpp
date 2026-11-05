@@ -1,7 +1,8 @@
-// Writes chunks of deterministic samples for test_chunk_files.py, which holds the same
+// Write chunks of deterministic samples for test_chunk_files.py, which holds the same
 // formulas and compares what numpy reads back. Not installed.
 //
-//   test_chunk_writer <dir> <chunk_prefix> <samples_per_chunk> <samples> <motors>
+// Usage: test_chunk_writer <dir> <chunk_prefix> <samples_per_chunk> <samples> <motors>
+// Exit codes: 0 written, 1 a sample was dropped or a chunk failed, 2 wrong arguments.
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -12,7 +13,7 @@
 namespace
 {
 
-// Every value is a small integer times a power of two, exact in float32.
+// Return sample k; every value is a small integer times a power of two, exact in float32.
 golem_safety::LogSample sample_at(size_t motors, int k)
 {
   golem_safety::LogSample s(motors);
@@ -47,6 +48,7 @@ golem_safety::LogSample sample_at(size_t motors, int k)
 
 }  // namespace
 
+// Write the chunks the arguments ask for.
 int main(int argc, char ** argv)
 {
   if (argc != 6) {

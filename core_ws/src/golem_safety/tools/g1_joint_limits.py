@@ -1,19 +1,21 @@
-'''The G1's joint limits, the source of robots/g1.yaml (tools/generate_robot_data.py).
+"""
+Hold the G1's joint table, the source of robots/g1.yaml (tools/generate_robot_data.py).
 
-29 body joints in slot order (Unitree's G1JointIndex): position in rad, velocity in rad/s,
-torque in N*m. They are the limits of Unitree's model (g1_29dof_with_hand_rev_1_0.urdf in
-CL_Assets/g1/g1_description), not measurements of our unit. That URDF gives the ankles and
-waist roll/pitch 35 N*m where the MJCF gives 50 N*m; confirm on hardware before relying on
-either. The Dex3-1 hands are not here: dex_3 keeps their joints.
-'''
+The body joints in slot order (Unitree's G1JointIndex): position in rad, velocity in rad/s,
+torque in N*m, from Unitree's model (g1_29dof_with_hand_rev_1_0.urdf in
+CL_Assets/g1/g1_description). That URDF gives the ankles and waist roll and pitch 35 N*m
+where the MJCF gives 50 N*m; both are unmeasured on the real G1. The Dex3-1 hands' joints
+are not here: dex_3 keeps them.
+"""
 
 MOTOR_COUNT = 29
-LOWCMD_MOTOR_SLOTS = 35  # array length of unitree_hg LowCmd_/LowState_
+LOWCMD_MOTOR_SLOTS = 35  # the length of unitree_hg's LowCmd_/LowState_ motor arrays
 
-# LowCmd_.mode_pr: MODE_PR drives the ankle pitch/roll joints this table names; MODE_AB (1)
-# would drive the two ankle motors directly
+# LowCmd_.mode_pr: 0 (PR) drives the ankle pitch and roll joints this table names; 1 (AB)
+# would drive the two ankle motors directly.
 MODE_PR = 0
 
+# The slot groups: the profile's lower_slots are the legs, its upper_slots the waist and arms.
 LEG_SLOTS = range(0, 12)
 WAIST_SLOTS = range(12, 15)
 RIGHT_ARM_SLOTS = range(22, 29)

@@ -21,13 +21,14 @@ namespace golem_safety
 namespace
 {
 
-// Defaults of the limit derivation.
+// The limit derivation's defaults, for a key a config leaves out.
 constexpr double kDefaultPositionOffset = 0.01;  // rad
 constexpr double kDefaultVelocityRatio = 0.5;
 constexpr double kDefaultTorqueRatio = 0.5;
 constexpr double kDefaultKpMax = 300.0;
 constexpr double kDefaultKdMax = 30.0;
 
+// Identify the config being parsed, for error messages and per-joint list lengths.
 struct Where
 {
   const std::string & robot;
@@ -35,6 +36,7 @@ struct Where
   size_t joint_count;
 };
 
+// Throw the parse error `what` for `key` ("" for the whole config).
 [[noreturn]] void fail(const Where & where, const std::string & key, const std::string & what)
 {
   std::string message = "safety config " + where.source + " (robot " + where.robot + "): ";
@@ -44,7 +46,7 @@ struct Where
   throw std::runtime_error(message + what);
 }
 
-// A finite number, or a failure naming `key`.
+// Return `node` as a finite number; throw naming `key` otherwise.
 double number_of(const Where & where, const YAML::Node & node, const std::string & key)
 {
   double value = 0.0;
@@ -62,7 +64,8 @@ double number_of(const Where & where, const YAML::Node & node, const std::string
   return value;
 }
 
-// A map in the config, addressed by its dotted path ("" for the root).
+// Read one map of the config, addressed by its dotted path ("" for the root); every reader
+// throws naming the full key.
 class Section
 {
 public:
@@ -74,25 +77,29 @@ public:
     }
   }
 
+  // Return the dotted key of `name` in this section.
   std::string key(const std::string & name) const
   {
     return path_.empty() ? name : path_ + "." + name;
   }
 
+  // Throw the parse error `what` for `name`.
   [[noreturn]] void fail_at(const std::string & name, const std::string & what) const
   {
     fail(where_, key(name), what);
   }
 
+  // Return whether the section gives `name`.
   bool has(const std::string & name) const {return node_[name].IsDefined();}
 
-  // A sub-map; an absent one is empty, so each of its keys takes its default, and a
-  // required one (required_number, required_choice) is reported missing.
+  // Return the sub-map `name`. An absent one reads as empty, so each of its keys takes its
+  // default and a required key (required_number, required_choice) is reported missing.
   Section section(const std::string & name) const
   {
     return Section(where_, has(name) ? node_[name] : YAML::Node(YAML::NodeType::Map), key(name));
   }
 
+  // Throw on any key not in `names`, so that a misspelt or removed key never passes silently.
   void allow_only(std::initializer_list<const char *> names) const
   {
     for (const auto & entry : node_) {
@@ -109,11 +116,13 @@ public:
     }
   }
 
+  // Return the finite number `name`, or `fallback` when absent.
   double number(const std::string & name, double fallback) const
   {
     return has(name) ? number_of(where_, node_[name], key(name)) : fallback;
   }
 
+  // Return the number `name`, which must be positive.
   double positive(const std::string & name, double fallback) const
   {
     const double value = number(name, fallback);
@@ -123,6 +132,7 @@ public:
     return value;
   }
 
+  // Return the number `name`, which must not be negative.
   double nonnegative(const std::string & name, double fallback) const
   {
     const double value = number(name, fallback);
@@ -132,7 +142,8 @@ public:
     return value;
   }
 
-  // A number, where a per-joint list would not fit the single limit golem_safety keeps.
+  // Return the nonnegative number `name`, refusing a per-joint list: the limit is one value
+  // for every joint.
   double single_number(const std::string & name, double fallback) const
   {
     if (has(name) && node_[name].IsSequence()) {
@@ -141,6 +152,7 @@ public:
     return nonnegative(name, fallback);
   }
 
+  // Return the integer `name`, which must be at least 1.
   int positive_integer(const std::string & name, int fallback) const
   {
     if (!has(name)) {
@@ -158,6 +170,7 @@ public:
     return value;
   }
 
+  // Return the boolean `name`.
   bool boolean(const std::string & name, bool fallback) const
   {
     if (!has(name)) {
@@ -170,6 +183,7 @@ public:
     }
   }
 
+  // Return the scalar `name` as text.
   std::string text(const std::string & name, const std::string & fallback) const
   {
     if (!has(name)) {
@@ -185,7 +199,8 @@ public:
     }
   }
 
-  // A ROS topic name: absolute, so a DDS name such as rt/lowstate is refused.
+  // Return the ROS topic name `name`, which must be absolute, so that a DDS name such as
+  // rt/lowstate is refused.
   std::string topic(const std::string & name, const std::string & fallback) const
   {
     const std::string value = text(name, fallback);
@@ -197,7 +212,7 @@ public:
     return value;
   }
 
-  // The value of one of `choices`, as its index.
+  // Return the index in `choices` of the text `name`, which must be one of them.
   size_t choice(
     const std::string & name, const std::string & fallback,
     const std::vector<std::string> & choices) const
@@ -210,8 +225,8 @@ public:
     return static_cast<size_t>(found - choices.begin());
   }
 
-  // A finite number for a key with no default: leaving it out is an error, `what` says
-  // what to give.
+  // Return the finite number `name`, which has no default; `what` tells the user what to
+  // give when it is missing.
   double required_number(const std::string & name, const std::string & what) const
   {
     if (!has(name)) {
@@ -220,7 +235,7 @@ public:
     return number_of(where_, node_[name], key(name));
   }
 
-  // As choice, for a key with no default: leaving it out is an error.
+  // Return choice() of `name`, which has no default.
   size_t required_choice(const std::string & name, const std::vector<std::string> & choices) const
   {
     if (!has(name)) {
@@ -229,7 +244,8 @@ public:
     return choice(name, "", choices);
   }
 
-  // A number for every body joint: one scalar for all, or one entry per joint.
+  // Return one number per body joint from `name`: a scalar for every joint, or a list with
+  // one entry per joint in slot order.
   std::vector<double> per_joint(const std::string & name, double fallback) const
   {
     const size_t count = where_.joint_count;
@@ -258,6 +274,7 @@ public:
   }
 
 private:
+  // Return `choices` joined with ", ", for error messages.
   static std::string joined(const std::vector<std::string> & choices)
   {
     std::string list;
@@ -272,13 +289,14 @@ private:
   std::string path_;
 };
 
+// Hold the limits one `limits.clip` or `limits.estop` section derives, per body slot.
 struct LimitSet
 {
   std::vector<double> q_low, q_high, dq, tau;
 };
 
-// The per-slot limits one `limits.clip` or `limits.estop` section derives from the
-// joint table.
+// Derive one section's limits from the joint table; throw when an offset leaves a joint an
+// empty position range.
 LimitSet derive_limits(const RobotProfile & profile, const Section & policy)
 {
   const std::vector<double> offset = policy.per_joint("position_offset", kDefaultPositionOffset);
@@ -303,6 +321,7 @@ LimitSet derive_limits(const RobotProfile & profile, const Section & policy)
   return out;
 }
 
+// Derive the clip and estop limits of the `limits` section.
 DerivedLimits derive_all(const RobotProfile & profile, const Section & limits)
 {
   const Section clip = limits.section("clip");
@@ -327,6 +346,7 @@ DerivedLimits derive_all(const RobotProfile & profile, const Section & limits)
   return out;
 }
 
+// Parse estop_response; kd must lie in [0, limits.clip.kd_max], and Damp requires it.
 EstopResponse parse_estop_response(const Section & section, const DerivedLimits & limits)
 {
   section.allow_only({"mode", "kd", "after", "burst_count"});
@@ -352,6 +372,7 @@ EstopResponse parse_estop_response(const Section & section, const DerivedLimits 
   return out;
 }
 
+// Parse a loaded YAML document into a SafetyConfig, validating every key.
 SafetyConfig parse_checked(
   const YAML::Node & root_node, const std::string & source, const RobotProfile & profile)
 {
@@ -426,7 +447,7 @@ SafetyConfig parse_checked(
   return config;
 }
 
-// Whether `name` is a robot with a profile in share/golem_safety/robots/.
+// Return whether `name` is a robot with a profile in share/golem_safety/robots/.
 bool is_robot(const std::string & name)
 {
   if (name.empty()) {
@@ -441,6 +462,7 @@ bool is_robot(const std::string & name)
   }
 }
 
+// Return whether `text` ends with `suffix`.
 bool ends_with(const std::string & text, const std::string & suffix)
 {
   return text.size() >= suffix.size() &&
@@ -473,8 +495,8 @@ SafetyConfig load_safety_config(const std::string & name_or_path, const RobotPro
               e.what());
     }
   }
-  // Several configs of one robot parse for the other, so a path under another robot's
-  // config directory (config/g1/ for the h12) is refused by the directory's name.
+  // SAFETY: several configs of one robot also parse for the other, so a path under another
+  // robot's config directory (config/g1/ for the h12) is refused by the directory's name.
   const std::string directory = std::filesystem::path(path).parent_path().filename().string();
   if (directory != profile.robot && is_robot(directory)) {
     throw std::runtime_error(

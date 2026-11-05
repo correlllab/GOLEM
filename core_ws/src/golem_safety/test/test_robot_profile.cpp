@@ -18,8 +18,8 @@ using golem_safety::SlotRange;
 
 namespace {
 
-// The message of the std::runtime_error that `fn` throws; fails the test when
-// it throws nothing.
+// Return the message of the std::runtime_error `fn` throws; fail the test when it throws
+// nothing.
 std::string error_of(const std::function<void()> & fn)
 {
   try {
@@ -31,7 +31,7 @@ std::string error_of(const std::function<void()> & fn)
   return "";
 }
 
-// Two body joints, one lower and one upper slot.
+// A valid profile with two body joints, one lower and one upper slot.
 const char * const kValid = R"(
 robot: toy
 mode_machine: 7
@@ -45,6 +45,7 @@ joints:
   - {name: b_joint, slot: 1, position: [-2.0, 2.0], velocity: 11.0, effort: 21.0}
 )";
 
+// Return `text` with its one occurrence of `from` replaced by `to`.
 std::string replaced(std::string text, const std::string & from, const std::string & to)
 {
   const auto at = text.find(from);
@@ -55,6 +56,7 @@ std::string replaced(std::string text, const std::string & from, const std::stri
   return text;
 }
 
+// Return the error parsing `text` as a profile throws.
 std::string parse_error(const std::string & text)
 {
   return error_of([&] {golem_safety::parse_robot_profile(text, "toy.yaml");});
@@ -62,6 +64,7 @@ std::string parse_error(const std::string & text)
 
 }  // namespace
 
+// The installed H1-2 profile has the H1-2's facts, slot ranges, modes and joint order.
 TEST(RobotProfile, LoadsH12)
 {
   const RobotProfile p = golem_safety::load_robot_profile("h12");
@@ -84,6 +87,7 @@ TEST(RobotProfile, LoadsH12)
   EXPECT_EQ(p.joints[26].name, "right_wrist_yaw_joint");
 }
 
+// The H1-2's shoulder roll limits are its joint table's (+-0.38 rad), not its URDF's.
 TEST(RobotProfile, H12ShoulderRollKeepsTheTableLimitsNotTheUrdfs)
 {
   const RobotProfile p = golem_safety::load_robot_profile("h12");
@@ -99,6 +103,7 @@ TEST(RobotProfile, H12ShoulderRollKeepsTheTableLimitsNotTheUrdfs)
   EXPECT_DOUBLE_EQ(right.q_high, 0.38);
 }
 
+// The installed G1 profile has the G1's facts, slot ranges, modes and joint order.
 TEST(RobotProfile, LoadsG1)
 {
   const RobotProfile p = golem_safety::load_robot_profile("g1");
@@ -130,11 +135,11 @@ TEST(RobotProfile, LoadsG1)
   EXPECT_DOUBLE_EQ(last.tau_max, 5.0);
 }
 
+// The G1 profile has exactly the profile keys, with split_mode first.
 TEST(RobotProfile, G1HasNoArmSdk)
 {
   const RobotProfile p = golem_safety::load_robot_profile("g1");
   EXPECT_EQ(p.modes, (std::vector<Mode>{Mode::Split, Mode::FullBody}));
-  // No slot past the body joints carries a value: the file has these keys and no other.
   const YAML::Node root = YAML::LoadFile(
     ament_index_cpp::get_package_share_directory("golem_safety") + "/robots/g1.yaml");
   std::set<std::string> keys;
@@ -146,6 +151,7 @@ TEST(RobotProfile, G1HasNoArmSdk)
       "motor_slots", "robot", "upper_slots"}));
 }
 
+// Loading a robot with no profile throws, naming it.
 TEST(RobotProfile, UnknownRobotThrows)
 {
   const std::string message =
@@ -153,6 +159,7 @@ TEST(RobotProfile, UnknownRobotThrows)
   EXPECT_NE(message.find("no_such_robot"), std::string::npos) << message;
 }
 
+// A minimal valid profile parses.
 TEST(RobotProfile, ParsesAMinimalProfile)
 {
   const RobotProfile p = golem_safety::parse_robot_profile(kValid, "toy.yaml");
@@ -167,6 +174,7 @@ TEST(RobotProfile, ParsesAMinimalProfile)
   EXPECT_EQ(p.modes, (std::vector<Mode>{Mode::Split}));
 }
 
+// A parse error names the source and the key.
 TEST(RobotProfile, ErrorsNameTheSourceAndTheKey)
 {
   const std::string message = parse_error(replaced(kValid, "mode_machine: 7\n", ""));
@@ -174,6 +182,7 @@ TEST(RobotProfile, ErrorsNameTheSourceAndTheKey)
   EXPECT_NE(message.find("mode_machine"), std::string::npos) << message;
 }
 
+// An unknown key is refused.
 TEST(RobotProfile, UnknownKeyThrows)
 {
   const std::string message =
@@ -181,6 +190,7 @@ TEST(RobotProfile, UnknownKeyThrows)
   EXPECT_NE(message.find("modee"), std::string::npos) << message;
 }
 
+// A joint whose slot is not its index in the list is refused.
 TEST(RobotProfile, SlotMustEqualPositionInTheJointList)
 {
   const std::string message = parse_error(replaced(kValid, "slot: 1,", "slot: 3,"));
@@ -188,6 +198,7 @@ TEST(RobotProfile, SlotMustEqualPositionInTheJointList)
   EXPECT_NE(message.find("slot"), std::string::npos) << message;
 }
 
+// A position range with low >= high is refused.
 TEST(RobotProfile, InvertedPositionLimitsThrow)
 {
   const std::string message =
@@ -196,6 +207,7 @@ TEST(RobotProfile, InvertedPositionLimitsThrow)
   EXPECT_NE(message.find("position"), std::string::npos) << message;
 }
 
+// A non-finite limit is refused.
 TEST(RobotProfile, NonFiniteLimitThrows)
 {
   const std::string message =
@@ -203,6 +215,7 @@ TEST(RobotProfile, NonFiniteLimitThrows)
   EXPECT_NE(message.find("velocity"), std::string::npos) << message;
 }
 
+// A slot range reaching past the body joints is refused.
 TEST(RobotProfile, SlotRangeMustLieInsideTheBodyJoints)
 {
   const std::string message =
@@ -210,6 +223,7 @@ TEST(RobotProfile, SlotRangeMustLieInsideTheBodyJoints)
   EXPECT_NE(message.find("upper_slots"), std::string::npos) << message;
 }
 
+// Overlapping lower and upper slot ranges are refused.
 TEST(RobotProfile, LowerAndUpperSlotsMustNotOverlap)
 {
   const std::string message =
@@ -217,6 +231,7 @@ TEST(RobotProfile, LowerAndUpperSlotsMustNotOverlap)
   EXPECT_NE(message.find("overlap"), std::string::npos) << message;
 }
 
+// motor_slots other than the LowCmd array length is refused.
 TEST(RobotProfile, MotorSlotsMustBeTheLowCmdArray)
 {
   for (const char * slots : {"34", "36"}) {
@@ -227,6 +242,7 @@ TEST(RobotProfile, MotorSlotsMustBeTheLowCmdArray)
   }
 }
 
+// More body joints than the LowCmd array holds are refused.
 TEST(RobotProfile, JointsMustFitTheLowCmdArray)
 {
   // 36 body joints, one more than the LowCmd array holds.
@@ -242,6 +258,7 @@ TEST(RobotProfile, JointsMustFitTheLowCmdArray)
   EXPECT_NE(message.find("36 body joints"), std::string::npos) << message;
 }
 
+// Slot ranges that leave a body joint out are refused.
 TEST(RobotProfile, LowerAndUpperSlotsMustCoverEveryBodyJoint)
 {
   const std::string three_joints = replaced(
@@ -252,12 +269,13 @@ TEST(RobotProfile, LowerAndUpperSlotsMustCoverEveryBodyJoint)
   EXPECT_NE(message.find("lower_slots"), std::string::npos) << message;
   EXPECT_NE(message.find("upper_slots"), std::string::npos) << message;
   EXPECT_NE(message.find("c_joint"), std::string::npos) << message;
-  // the same profile with the upper range over both upper joints parses
+  // The same profile with the upper range over both upper joints parses.
   EXPECT_NO_THROW(
     golem_safety::parse_robot_profile(
       replaced(three_joints, "upper_slots: [1, 1]", "upper_slots: [1, 2]"), "toy.yaml"));
 }
 
+// A mode listed twice is refused.
 TEST(RobotProfile, AModeListedTwiceThrows)
 {
   const std::string message = parse_error(
@@ -266,18 +284,21 @@ TEST(RobotProfile, AModeListedTwiceThrows)
   EXPECT_NE(message.find("twice"), std::string::npos) << message;
 }
 
+// parse_mode() and mode_name() agree on both mode names.
 TEST(Mode, ParsesTheTwoModeNames)
 {
   EXPECT_EQ(golem_safety::parse_mode("full_body_mode"), Mode::FullBody);
   EXPECT_EQ(golem_safety::parse_mode("split_mode"), Mode::Split);
 }
 
+// parse_mode() refuses any other name.
 TEST(Mode, UnknownNameThrows)
 {
   const std::string message = error_of([] {golem_safety::parse_mode("full");});
   EXPECT_NE(message.find("full"), std::string::npos) << message;
 }
 
+// A SlotRange contains both of its ends and nothing outside them.
 TEST(SlotRange, ContainsBothEnds)
 {
   const SlotRange r{12, 26};

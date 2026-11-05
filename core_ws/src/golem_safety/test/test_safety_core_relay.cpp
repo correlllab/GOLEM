@@ -29,30 +29,33 @@ using unitree_hg::msg::LowState;
 
 // Every test feeds a /lowstate carrying the profile's mode_machine before any command, so
 // each input engages on its first valid command.
-
 namespace {
 
+// A ROS domain other than 0, so the transport-lag check is off.
 constexpr int kDomain = 91;
 constexpr double kDt = 0.002;  // s, one 500 Hz cycle
 
+// Return the installed H1-2 profile.
 const RobotProfile & h12()
 {
   static const RobotProfile profile = golem_safety::load_robot_profile("h12");
   return profile;
 }
 
+// Return the installed G1 profile.
 const RobotProfile & g1()
 {
   static const RobotProfile profile = golem_safety::load_robot_profile("g1");
   return profile;
 }
 
+// Load the installed config `name` for `profile`.
 SafetyConfig config(const RobotProfile & profile, const std::string & name)
 {
   return golem_safety::load_safety_config(name, profile);
 }
 
-// A /lowstate of `profile`'s robot with every joint at rest at q.
+// Return a /lowstate of `profile`'s robot with every joint at rest at q.
 LowState state_of(const RobotProfile & profile, float q = 0.0F)
 {
   LowState state;
@@ -67,7 +70,7 @@ LowState state_of(const RobotProfile & profile, float q = 0.0F)
   return state;
 }
 
-// A controller's command: every body slot enabled at q with kp and kd, the rest as
+// Return a controller's command: every body slot enabled at q with kp and kd, the rest as
 // zero_command has them.
 LowCmd command(const RobotProfile & profile, float q = 0.0F, float kp = 60.0F, float kd = 2.0F)
 {
@@ -81,7 +84,7 @@ LowCmd command(const RobotProfile & profile, float q = 0.0F, float kp = 60.0F, f
   return cmd;
 }
 
-// Sets every field of slots first..last to nonzero values, and the message's reserve words.
+// Set every field of slots first..last, and the message's reserve words, to nonzero values.
 void fill_junk(LowCmd & cmd, int first, int last)
 {
   for (int slot = first; slot <= last; ++slot) {
@@ -97,6 +100,7 @@ void fill_junk(LowCmd & cmd, int first, int last)
   cmd.reserve = {1, 2, 3, 4};
 }
 
+// Return how many events are of `kind`.
 size_t count(const std::vector<Event> & events, Event::Kind kind)
 {
   size_t n = 0;
@@ -106,11 +110,13 @@ size_t count(const std::vector<Event> & events, Event::Kind kind)
   return n;
 }
 
+// Return whether `part` occurs in `text`.
 bool contains(const std::string & text, const std::string & part)
 {
   return text.find(part) != std::string::npos;
 }
 
+// Return whether an event of `kind` contains `part`.
 bool has_event(const std::vector<Event> & events, Event::Kind kind, const std::string & part)
 {
   for (const auto & event : events) {
@@ -121,6 +127,7 @@ bool has_event(const std::vector<Event> & events, Event::Kind kind, const std::s
   return false;
 }
 
+// Return the field of `motor` named q, dq, tau, kp or kd.
 float & field_of(unitree_hg::msg::MotorCmd & motor, const std::string & name)
 {
   if (name == "q") {
@@ -138,6 +145,7 @@ float & field_of(unitree_hg::msg::MotorCmd & motor, const std::string & name)
   return motor.kd;
 }
 
+// Return the events as text, one per line, for failure messages.
 std::string texts(const std::vector<Event> & events)
 {
   std::string out;
@@ -147,7 +155,7 @@ std::string texts(const std::vector<Event> & events)
   return out;
 }
 
-// Each JSON event, parsed, with its "event" equal to `name`: (the event, its object).
+// Return each JSON event whose "event" is `name`, with its parsed object.
 std::vector<std::pair<Event, YAML::Node>> named(
   const std::vector<Event> & events, const std::string & name)
 {
@@ -170,7 +178,7 @@ std::vector<std::pair<Event, YAML::Node>> named(
   return out;
 }
 
-// A JSON object's keys, in the order written.
+// Return a JSON object's keys, in the order written.
 std::vector<std::string> keys_of(const YAML::Node & node)
 {
   std::vector<std::string> keys;
@@ -180,7 +188,7 @@ std::vector<std::string> keys_of(const YAML::Node & node)
   return keys;
 }
 
-// Every field equal, bit for bit.
+// Expect every field equal, bit for bit.
 void expect_same(const LowCmd & actual, const LowCmd & expected)
 {
   EXPECT_EQ(actual.mode_pr, expected.mode_pr);
@@ -193,6 +201,7 @@ void expect_same(const LowCmd & actual, const LowCmd & expected)
   EXPECT_EQ(actual.crc, expected.crc);
 }
 
+// Expect `cmd` to carry the profile's header and a matching CRC.
 void expect_stamped(const LowCmd & cmd, const RobotProfile & profile)
 {
   EXPECT_EQ(cmd.mode_machine, profile.mode_machine);
@@ -200,7 +209,7 @@ void expect_stamped(const LowCmd & cmd, const RobotProfile & profile)
   EXPECT_EQ(cmd.crc, golem_safety::lowcmd_crc(cmd));
 }
 
-// The estop on a measured q past the estop range of `slot`.
+// Return a /lowstate with slot's q 0.2 rad past its estop range.
 LowState past_estop(const RobotProfile & profile, const SafetyConfig & cfg, int slot)
 {
   LowState state = state_of(profile);
@@ -208,7 +217,8 @@ LowState past_estop(const RobotProfile & profile, const SafetyConfig & cfg, int 
   return state;
 }
 
-// H1-2 split, both inputs engaged at t = 0: Lower from writer "lower", Upper from "A".
+// An H1-2 split core with both inputs engaged at t = 0: Lower from writer "lower", Upper
+// from "A".
 struct H12Split
 {
   SafetyConfig cfg = config(h12(), "sim_safety_split");
@@ -224,6 +234,8 @@ struct H12Split
 
 }  // namespace
 
+// split_mode relays each input's command on its own slots only, under the robot's header
+// whatever header the input carried, on both robots.
 TEST(Relay, SplitMergesUpperAndLowerSlots)
 {
   SafetyCore core(h12(), config(h12(), "sim_safety_split"), false, kDomain);
@@ -272,6 +284,8 @@ TEST(Relay, SplitMergesUpperAndLowerSlots)
   EXPECT_EQ(g1_out->mode_machine, 5);
 }
 
+// SAFETY: slots no input owns, and the reserve words, carry the zero command whatever the
+// inputs send there.
 TEST(Relay, UnownedSlotsAreZeroCommand)
 {
   const LowCmd zero = golem_safety::zero_command(h12());
@@ -327,6 +341,8 @@ TEST(Relay, UnownedSlotsAreZeroCommand)
   expect_stamped(*g1_out, g1());
 }
 
+// SAFETY: q, dq, tau, kp and kd are clipped to the config's limits on each input's slots;
+// gain_clipped is raised once per joint and gain.
 TEST(Clip, PositionVelocityTorqueAndGains)
 {
   const SafetyConfig cfg = config(h12(), "sim_safety_split");
@@ -393,6 +409,8 @@ TEST(Clip, PositionVelocityTorqueAndGains)
   EXPECT_FALSE(core.estopped());
 }
 
+// SAFETY: a non-finite value in an engaged input's command latches, and the estop command
+// follows.
 TEST(Clip, NonFiniteSampleLatches)
 {
   // H1-2 split, engaged: a NaN q on an upper slot latches, and its burst follows.
@@ -408,7 +426,7 @@ TEST(Clip, NonFiniteSampleLatches)
     "motor 20 (right_shoulder_pitch_joint) q is nan");
   const auto out = rig.core.step(0.004);
   ASSERT_TRUE(out);
-  expect_same(*out, golem_safety::estop_command(h12(), rig.cfg, *out));
+  expect_same(*out, golem_safety::estop_command(h12(), rig.cfg));
 
   // G1 split, engaged: the same, then the estop command on every step.
   const SafetyConfig g1_cfg = config(g1(), "sim_split");
@@ -427,7 +445,7 @@ TEST(Clip, NonFiniteSampleLatches)
     g1_core.estop_reason();
   const auto g1_out = g1_core.step(0.004);
   ASSERT_TRUE(g1_out);
-  expect_same(*g1_out, golem_safety::estop_command(g1(), g1_cfg, *g1_out));
+  expect_same(*g1_out, golem_safety::estop_command(g1(), g1_cfg));
 
   // Every field, NaN and either infinity, on both robots and every input; a body slot the
   // input does not own counts too.
@@ -472,6 +490,7 @@ TEST(Clip, NonFiniteSampleLatches)
   }
 }
 
+// SAFETY: a non-finite first command latches before any input engages.
 TEST(Clip, NonFiniteFirstSampleLatches)
 {
   // A first command that is not valid latches before any input engages; the burst is the
@@ -487,10 +506,10 @@ TEST(Clip, NonFiniteFirstSampleLatches)
   EXPECT_TRUE(contains(core.estop_reason(), "left_shoulder_yaw_joint")) << core.estop_reason();
   const auto out = core.step(0.002);
   ASSERT_TRUE(out);
-  expect_same(*out, golem_safety::estop_command(h12(), cfg, *out));
+  expect_same(*out, golem_safety::estop_command(h12(), cfg));
   // A valid command after the latch changes nothing.
   core.on_command(Input::Upper, command(h12(), 0.1F), "upper", 0.003);
-  expect_same(*core.step(0.004), golem_safety::estop_command(h12(), cfg, *out));
+  expect_same(*core.step(0.004), golem_safety::estop_command(h12(), cfg));
 
   // The G1 likewise, and keep_writing writes the estop command on every step.
   const SafetyConfig g1_cfg = config(g1(), "sim_split");
@@ -504,7 +523,7 @@ TEST(Clip, NonFiniteFirstSampleLatches)
   g1_core.on_command(Input::Lower, command(g1()), "lower", 0.002);
   g1_core.on_command(Input::Upper, command(g1()), "upper", 0.002);
   const LowCmd g1_estop =
-    golem_safety::estop_command(g1(), g1_cfg, golem_safety::zero_command(g1()));
+    golem_safety::estop_command(g1(), g1_cfg);
   for (int i = 0; i < 100; ++i) {
     const auto g1_out = g1_core.step(0.003 + i * kDt);
     ASSERT_TRUE(g1_out) << "step " << i;
@@ -514,6 +533,8 @@ TEST(Clip, NonFiniteFirstSampleLatches)
   EXPECT_TRUE(has_event(events, Event::Error, "estop_command_written")) << texts(events);
 }
 
+// SAFETY: a measured q, dq or tau past its estop limit latches, naming the joint and the
+// limit; past the clip range alone does not.
 TEST(Limits, MeasuredPastEstopLatches)
 {
   const SafetyConfig cfg = config(h12(), "sim_safety_split");
@@ -572,6 +593,7 @@ TEST(Limits, MeasuredPastEstopLatches)
   }
 }
 
+// SAFETY: once engaged, a /lowstate with another robot's mode_machine latches.
 TEST(Identity, ForeignSampleAfterEngageLatches)
 {
   SafetyCore core(h12(), config(h12(), "sim_safety_split"), false, kDomain);
@@ -604,6 +626,7 @@ TEST(Identity, ForeignSampleAfterEngageLatches)
   EXPECT_TRUE(g1_core.estopped());
 }
 
+// SAFETY: a second writer on an input within handover_seconds of the first latches.
 TEST(SingleWriter, TwoLiveWritersLatch)
 {
   H12Split rig;
@@ -626,7 +649,7 @@ TEST(SingleWriter, TwoLiveWritersLatch)
   EXPECT_EQ(reason.rfind("second writer on /safety/lowcmd_upper_in", 0), 0U) << reason;
   const auto out = rig.core.step(1.2);
   ASSERT_TRUE(out);
-  expect_same(*out, golem_safety::estop_command(h12(), rig.cfg, *out));
+  expect_same(*out, golem_safety::estop_command(h12(), rig.cfg));
 
   // A gap of exactly handover_seconds is not a handover.
   H12Split edge;
@@ -643,6 +666,8 @@ TEST(SingleWriter, TwoLiveWritersLatch)
     lower.core.estop_reason();
 }
 
+// A new writer after handover_seconds of quiet takes the input over, and the old one then
+// counts as a second writer.
 TEST(SingleWriter, RestartAfterQuietIsAccepted)
 {
   H12Split rig;
@@ -680,6 +705,8 @@ TEST(SingleWriter, RestartAfterQuietIsAccepted)
   EXPECT_TRUE(rig.core.estopped());
 }
 
+// SAFETY: burst_then_silence writes burst_count estop commands, then nothing, whatever
+// comes in.
 TEST(Estop, BurstThenSilence)
 {
   H12Split rig;
@@ -687,7 +714,7 @@ TEST(Estop, BurstThenSilence)
   rig.core.on_state(past_estop(h12(), rig.cfg, 20), 0.002);
   ASSERT_TRUE(rig.core.estopped());
   const LowCmd expected =
-    golem_safety::estop_command(h12(), rig.cfg, golem_safety::zero_command(h12()));
+    golem_safety::estop_command(h12(), rig.cfg);
 
   double t = 0.004;
   for (int i = 0; i < 50; ++i, t += kDt) {
@@ -711,6 +738,7 @@ TEST(Estop, BurstThenSilence)
   EXPECT_TRUE(has_event(events, Event::Error, "right_shoulder_pitch_joint")) << texts(events);
 }
 
+// SAFETY: keep_writing writes the estop command on every step.
 TEST(Estop, KeepWriting)
 {
   const SafetyConfig cfg = config(g1(), "sim_split");
@@ -723,7 +751,7 @@ TEST(Estop, KeepWriting)
   ASSERT_TRUE(core.estopped());
 
   const LowCmd expected =
-    golem_safety::estop_command(g1(), cfg, golem_safety::zero_command(g1()));
+    golem_safety::estop_command(g1(), cfg);
   double t = 0.004;
   for (int i = 0; i < 1000; ++i, t += kDt) {
     const auto out = core.step(t);
@@ -732,6 +760,8 @@ TEST(Estop, KeepWriting)
   }
 }
 
+// SAFETY: with use_estop, a triggered or unplugged hardware estop latches; without it, the
+// samples are ignored.
 TEST(EstopInput, TriggeredOrUnpluggedLatchesWithUseEstop)
 {
   const SafetyConfig cfg = config(h12(), "sim_safety_split");
@@ -760,6 +790,8 @@ TEST(EstopInput, TriggeredOrUnpluggedLatchesWithUseEstop)
   }
 }
 
+// SAFETY: exit_step() is done at once without an estop, and otherwise finishes the estop
+// sequence first.
 TEST(ExitStep, FullAndSplitAreDoneAtOnce)
 {
   H12Split rig;
@@ -794,13 +826,15 @@ TEST(ExitStep, FullAndSplitAreDoneAtOnce)
     } else {
       const auto last = keep.exit_step(0.004);
       ASSERT_TRUE(last);
-      expect_same(*last, golem_safety::estop_command(g1(), g1_cfg, *last));
+      expect_same(*last, golem_safety::estop_command(g1(), g1_cfg));
     }
     EXPECT_FALSE(keep.exit_step(0.006));
     EXPECT_FALSE(keep.step(0.008));
   }
 }
 
+// One log sample per /lowstate up to and including the latching one, on the body slots, with
+// the last command written.
 TEST(Log, OneSamplePerLowstateOnTheBodySlots)
 {
   SafetyConfig cfg = config(h12(), "sim_safety_split");
@@ -849,6 +883,8 @@ TEST(Log, OneSamplePerLowstateOnTheBodySlots)
   EXPECT_EQ(g1_sample->kd_cmd.size(), 29U);
 }
 
+// gain_clipped is the JSON object with sorted keys and Python-formatted numbers, once per
+// joint and gain.
 TEST(Events, GainClippedIsTheOldJson)
 {
   struct Case
@@ -899,6 +935,8 @@ TEST(Events, GainClippedIsTheOldJson)
   }
 }
 
+// estop_command_written is raised once, after the step that writes the estop command, with
+// its times in ms; a hardware estop adds trigger_to_action_ms.
 TEST(Events, EstopReportIsTheOldJsonAfterTheCommand)
 {
   // Built only once the step after the latch has handed its command back.
@@ -939,6 +977,7 @@ TEST(Events, EstopReportIsTheOldJsonAfterTheCommand)
   EXPECT_EQ(reports[0].second["reason"].as<std::string>(), "External estop triggered");
 }
 
+// SAFETY: a config read for another robot is refused.
 TEST(Construction, RefusesAConfigForAnotherRobot)
 {
   EXPECT_THROW(

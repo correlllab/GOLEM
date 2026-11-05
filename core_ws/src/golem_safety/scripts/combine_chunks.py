@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-'''Combine chunked npz logs into one merged npz'''
+"""
+Concatenate a safety_node run's .npz log chunks into one .npz file.
+
+Usage: ros2 run golem_safety combine_chunks.py [--load DIR] [--prefix PREFIX] [--save FILE]
+--load is the run's directory (logging.base_dir/<YYYYmmdd-HHMMSS>-<pid>), --prefix its
+logging.chunk_prefix. Every chunk must have the same keys; each key's arrays are joined on
+the sample axis. Exits 1 with a traceback when no chunk matches or the keys differ.
+"""
 
 import argparse
 import numpy as np
@@ -7,10 +14,11 @@ from pathlib import Path
 
 
 def _list_chunks(base_dir: Path, prefix: str) -> list[Path]:
+    """Return the chunk files of `prefix` in `base_dir`, in chunk order."""
     return sorted(base_dir.glob(f'{prefix}*.npz'))
 
 def combine_chunks(base_dir: str, prefix: str, output: str) -> Path:
-    '''Combine all matching chunk files into one npz'''
+    """Write every chunk's arrays, concatenated per key, to `output`; return its path."""
     base = Path(base_dir)
     files = _list_chunks(base, prefix)
     if not files:
@@ -22,12 +30,10 @@ def combine_chunks(base_dir: str, prefix: str, output: str) -> Path:
     for file_path in files:
         with np.load(file_path, allow_pickle=False) as data:
             keys = list(data.keys())
-            # initialize list for merged file
             if key_order is None:
                 key_order = keys
                 for key in key_order:
                     merged[key] = []
-            # check that keys match previous files
             elif keys != key_order:
                 raise ValueError(f'key mismatch in {file_path.name}')
 
@@ -44,7 +50,7 @@ def combine_chunks(base_dir: str, prefix: str, output: str) -> Path:
     return out_path
 
 def main(load: str, prefix: str, save: str) -> None:
-    '''Run chunk combiner cli'''
+    """Combine the chunks and print where they went."""
     out = combine_chunks(load, prefix, save)
     print(f'combined chunks into {out}')
 

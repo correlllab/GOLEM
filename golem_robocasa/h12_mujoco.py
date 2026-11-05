@@ -1,10 +1,17 @@
+"""Run the RoboCasa MuJoCo sim of the H1-2, or of the G1 with --g1 or GOLEM_ROBOT=g1.
+
+Usage: h12_mujoco.py [--h12 | --g1] [--headless] [--task NAME] [--layout N]
+[--style N] [--seed N] [--timing | --duration S]. The robot is chosen
+(sim_common.select_robot) before the H1-2's imports, and --g1 hands the whole
+command line to g1.g1_mujoco.main. The H1-2's loop is sim_loop below.
+"""
 import sys
 
 import sim_common
 
-# The G1 runs from this entry point too. It is dispatched before the H1-2 imports below,
-# which need magpie_msgs and the H1-2's CL_Assets files; the G1 needs neither (it reads
-# only CL_Assets/g1), and its test containers do not provide magpie_msgs.
+# The G1 is dispatched before the H1-2 imports below, which need magpie_msgs and
+# the H1-2's CL_Assets files: the G1 reads only CL_Assets/g1, and its test
+# containers do not provide magpie_msgs.
 if __name__ == "__main__" and sim_common.select_robot(sys.argv[1:]) == "g1":
     from g1 import g1_mujoco
     sys.exit(g1_mujoco.main(sys.argv[1:]))
@@ -21,9 +28,9 @@ import rclpy.executors
 from mujoco_ros_bridge import init_ros, shutdown_ros
 import mujoco.viewer
 
-import h1_2_robosuite  # registers H1_2 + Magpie grippers, patches RoboCasa
+import h1_2_robosuite  # registers H1_2 and the MAGPIE grippers
 import realsense_profile
-import battery_env  # registers the Battery workcell env
+import battery_env  # registers the Battery env
 import blank_env  # registers the Blank env
 from h12_sensors import H12Sensors
 from magpie_hand_bridge import MagpieHandBridge
@@ -35,6 +42,8 @@ from sim_timing import RealtimePacer, LoopTimings
 from unitree_interface import SimInterface
 
 NUM_MOTORS = 27
+# The spawn pose (rad) in sim_names.ROS_MOTOR_ORDER: bent-knee legs, then the
+# torso and both arms at 0.
 INIT_LEG_POS = np.array([
     0.0, -0.16, 0.0, 0.36, -0.2, 0.0,
     0.0, -0.16, 0.0, 0.36, -0.2, 0.0,
@@ -47,24 +56,26 @@ INIT_ARM_POS = np.array([
 
 
 def _initial_motor_qpos():
-    """Build the 27-motor spawn pose without depending on controller configs."""
+    """Return the 27-motor spawn pose (rad), without reading any controller config."""
     qpos = np.concatenate([INIT_LEG_POS, INIT_ARM_POS])
     if qpos.shape != (NUM_MOTORS,):
         raise ValueError(f"initial motor pose must contain {NUM_MOTORS} entries")
     return qpos
 
 
-# Motor indices (ROS order): 12 torso, 13-19 left arm, 20-26 right arm, each arm
+# Slots in ROS_MOTOR_ORDER: 12 torso, 13-19 left arm, 20-26 right arm, each arm
 # shoulder pitch/roll/yaw, elbow, wrist roll/pitch/yaw.
 _TORSO, _ARMS = 12, (13, 20)
 
 
 def _limp_upper_body_poses(model, motor_qpos, spawn):
-    """Poses the unpowered upper body settles into before the arm controller
-    first commands it, as (qpos indices, values) pairs for the spawn clearance
-    check. Measured in RoboCasa: the torso twists up to ~0.7 rad (either way),
-    shoulders pitch back ~0.25 rad, elbows bend ~0.45 rad and the wrists drop
-    onto their pitch stops, swinging the grippers forward."""
+    """Return the poses the unpowered upper body sags into, as (qpos indices, values) pairs.
+
+    The spawn clearance must hold in them too, since every motor is off until
+    the first command. Measured in RoboCasa: the torso twists up to ~0.7 rad
+    either way, the shoulders pitch back ~0.25 rad, the elbows bend ~0.45 rad
+    and the wrists drop onto their pitch stops, swinging the grippers forward.
+    """
     poses = []
     for twist in (0.75, -0.75):
         q = np.array(spawn, dtype=float)
@@ -79,13 +90,13 @@ def _limp_upper_body_poses(model, motor_qpos, spawn):
     return poses
 
 
-# Viewer display rate. A viewer thread syncs its own MjData at this rate so the
-# ~11 ms handle.sync() (it waits for the render thread) never blocks physics.
+# Hz, wall. The viewer thread syncs its own MjData at this rate, so the ~11 ms
+# handle.sync() (it waits for the render thread) never blocks physics.
 VIEWER_HZ = 60.0
 
 
 def _copy_display_state(dst, src):
-    """Copy the state the viewer draws from src (caller holds sim_lock)."""
+    """Copy the state the viewer draws from src to dst; the caller holds sim_lock."""
     dst.time = src.time
     dst.qpos[:] = src.qpos
     dst.qvel[:] = src.qvel
@@ -95,19 +106,17 @@ def _copy_display_state(dst, src):
 
 
 def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False, duration=0.0):
-    """Launch a task env around the H1-2 (a RoboCasa kitchen, battery_env's
-    Battery or blank_env's Blank) and run the shared-MjData loop.
+    """Run the H1-2 in task (a RoboCasa kitchen, Battery or Blank) until the viewer closes or Ctrl-C.
 
-    Builds the env with robots='H1_2' and steps the env's *own* MjData with our
-    loop (never env.step()), driving the full sim<->ROS bridge layer:
-      - SimInterface     : DDS rt/lowstate + rt/lowcmd (27 body motors, name-resolved)
-      - RosSensorBridge  : /clock, and H12Sensors: RGBD cameras, livox lidar + IMU
-      - MagpieHandBridge : /{left,right}/gripper/* (x2)
-      - MeasurementBridge: /robocasa/{task_goal,success,reward} + /elastic_band/toggle
-    An elastic-band tether holds the robot upright until the ROS walking policy
-    drives it; RoboCasa's _check_success/reward/lang are read off the shared env.
-    duration is part of the signature both runners share; this loop runs until the
-    viewer closes or Ctrl-C, and the command line rejects a non-zero --duration.
+    The loop steps the env's own MjData (never env.step()) and drives:
+      - SimInterface     : Unitree DDS rt/lowstate + rt/lowcmd (27 body motors)
+      - RosSensorBridge  : /clock, opt-in odom, and H12Sensors: RGBD cameras,
+                           MID-360 lidar + IMU
+      - MagpieHandBridge : /{left,right}/gripper/*
+      - MeasurementBridge: /robocasa/*, /elastic_band/toggle
+    An elastic band holds the robot until it is released. timing enables the
+    --timing stage report. duration is in the signature both runners share and
+    is unused here: the command line refuses --duration for the H1-2.
     """
 
     create_kwargs = {}
@@ -120,36 +129,30 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
 
     env = h1_2_robosuite.make_kitchen_env(task, **create_kwargs)
 
-    # robosuite.make() constructs but does NOT reset; reset() builds env.sim, runs
-    # _load_model + _reset_internal (placement patch fires here, sets ep_meta /
-    # init_robot_base_pos), and places the task objects.
+    # robosuite.make() does not reset; reset() builds env.sim, runs the
+    # placement patch (h1_2_robosuite) and places the task objects.
     env.reset()
 
     model = env.sim.model._model
     data = env.sim.data._data
-    resolver = NameResolver(model)  # ROS<->sim name map for the DDS / sensor bridges
+    resolver = NameResolver(model)
 
-    # Clean, contact-free initial state. RoboCasa's zero-action settling loop
-    # perturbs the pose during reset, so restore a baked-in bent-knee stance,
-    # zero all velocities, and re-place the pelvis. Upper-body motors remain at
-    # zero. place_robot_collision_free auto-fits floor clearance AND backs the
-    # base away (the robot's -x) until every robot geom is GOLEM_SPAWN_MARGIN
-    # (unset: the env's spawn_margin, else 0.20 m) from any non-floor geom, in
-    # the spawn pose and in the sagged pose the unpowered upper body falls into,
-    # keeping the widest-gap spot if it can't reach that.
+    # RoboCasa's zero-action settling during reset folds the limp robot, so put
+    # it back in the spawn pose at rest and re-place it: floor clearance fitted,
+    # and backed off (the robot's -x) until every robot geom is
+    # GOLEM_SPAWN_MARGIN (unset: the env's spawn_margin, else 0.20 m) from any
+    # non-floor geom, in the spawn pose and the sagged poses.
     try:
         init_qpos = _initial_motor_qpos()
         data.qpos[resolver.motor_qpos] = init_qpos
         data.qvel[:] = 0.0
-        # GOLEM_SPAWN_BACKOFF backs the robot further off the counter into open
-        # floor (default 0 = at the counter for manipulation). Set ~1.0 for nav2,
-        # which needs the robot's start cell to be free to plan.
+        # GOLEM_SPAWN_BACKOFF (m, default 0: at the counter) backs the robot
+        # further into open floor; Nav2 needs a free start cell to plan (~1.0).
         _spawn_backoff = float(os.environ.get("GOLEM_SPAWN_BACKOFF", "0") or 0)
         _spawn_margin = float(os.environ.get("GOLEM_SPAWN_MARGIN", "").strip()
                               or getattr(env, "spawn_margin", 0.20))
         # GOLEM_SPAWN_OFFSET="dx,dy" (m, world) shifts the task's spawn before
-        # placement, e.g. to stand the robot in front of a different part.
-        # Unset = the task's own spawn.
+        # placement; unset keeps the task's own.
         _spawn_pos = list(env.init_robot_base_pos)
         _offset = os.environ.get("GOLEM_SPAWN_OFFSET", "").strip()
         if _offset:
@@ -162,43 +165,36 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             h1_2_robosuite._euler_to_wxyz(getattr(env, "init_robot_base_ori", None)),
             extra_backoff=_spawn_backoff,
             margin=_spawn_margin,
-            # Motors stay unpowered until the first command, so the margin must
-            # also hold once the torso and arms sag.
             poses=_limp_upper_body_poses(model, resolver.motor_qpos, init_qpos),
         )
         print("[h12_mujoco] initial stance from baked-in sim defaults")
     except Exception as e:
         print(f"[h12_mujoco] clean reset skipped: {e}")
 
-    # Elastic-band balance tether on the torso: holds the free-floating biped
-    # upright until the ROS walking policy takes over. Anchor a fixed point above
-    # the torso's spawn; apply the spring force each step (SPACE / the
-    # /elastic_band/toggle service disables it).
+    # The elastic band on the torso holds the robot until SPACE or
+    # /elastic_band/toggle releases it.
     band = None
     band_body_id = -1
     rot_body_id = -1
     band_vel = np.zeros(6)
     rot_vel = np.zeros(6)
     try:
-        band_body_id = resolver.body_id("torso_link")            # robot0_torso_link
+        band_body_id = resolver.body_id("torso_link")
         anchor = data.xpos[band_body_id].copy()
-        # 4 cm below the torso's spawn position (m): the band hangs the robot
-        # lower than its spawn, so the feet carry part of its weight
+        # 4 cm below the torso's spawn (m): the feet carry part of the weight.
         anchor[2] -= 0.04
-        # Stiff enough to hold the LIMP robot near-upright through the lowerbody
-        # controller's band-held idle phase (~20s of frame_task arm-home startup
-        # before FAME engages); at stiffness=1e3 it pitched forward to ~60deg and
-        # FAME inherited a toppling robot. Static tilt ~ gravity_torque/stiffness.
-        # damping=2e3 N*s/m damps a lateral shove out in well under a second.
-        # GOLEM_SIM_TETHER_ROT_STIFFNESS (N*m/rad, default 0 = off) adds a
-        # rotational hold at the spawn orientation while the band is on: a rigid
-        # hoist fixture for tethered manipulation experiments.
-        # GOLEM_SIM_TETHER_ROT_BODY picks the held body: torso (default) or
-        # pelvis — the pelvis hold also stops the legs spinning the pelvis about
-        # the waist while a policy steps with the feet off the ground. The torque
-        # is applied explicitly, so damping must keep d*dt/I well under 2 at the
-        # 2 ms step: torso yaw I ~0.13 kg*m^2 -> 0.04 s x stiffness; pelvis
-        # ~0.009 kg*m^2 -> 0.006 s x stiffness.
+        # Stiffness 1e4 N/m holds the limp robot near upright through the ~20 s
+        # the leg policy waits under the band for the arms' start-up (static
+        # tilt ~ gravity torque / stiffness; at 1e3 it pitched forward ~60 deg).
+        # Damping 2e3 N*s/m settles a sideways shove well within a second.
+        # GOLEM_SIM_TETHER_ROT_STIFFNESS (N*m/rad, default 0: off) adds a
+        # rotational hold at the spawn orientation while the band is on, a rigid
+        # hoist for tethered manipulation experiments. GOLEM_SIM_TETHER_ROT_BODY
+        # holds the torso (default) or the pelvis, which also stops the legs
+        # spinning the pelvis about the waist with the feet off the ground. The
+        # torque is applied explicitly, so the damping keeps d*dt/I well under 2
+        # at the 2 ms step: torso yaw I ~0.13 kg*m^2 -> 0.04 s x stiffness,
+        # pelvis ~0.009 kg*m^2 -> 0.006 s x stiffness.
         rot_k = float(os.environ.get("GOLEM_SIM_TETHER_ROT_STIFFNESS", "0") or 0)
         rot_body = os.environ.get("GOLEM_SIM_TETHER_ROT_BODY", "torso").strip() or "torso"
         rot_body_id = (resolver.body_id("pelvis") if rot_body == "pelvis" else band_body_id)
@@ -214,17 +210,14 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     print(f"[h12_mujoco] RoboCasa task {task!r} built around H1_2: "
           f"nq={model.nq} nu={model.nu}; resolver mapped {len(resolver.motor_ctrl)} motors")
 
-    # Shared lock: the ROS bridge and viewer threads touch MjData (read sensors,
-    # write gripper ctrl, render) while the main loop runs mj_step. All MjData
-    # access is serialized through sim_lock.
+    # Every MjData access off the main loop's thread (sensors, grippers,
+    # viewer) holds sim_lock, which the main loop holds around mj_step.
     sim_lock = threading.Lock()
-    pfx = env.robots[0].robot_model.naming_prefix   # "robot0_"
+    pfx = env.robots[0].robot_model.naming_prefix
 
-    # Body carrying the pelvis free joint — its world pose is ground-truth base
-    # odometry, which the bridge publishes as odom -> pelvis TF + /odom (feeds
-    # SLAM without needing FAST-LIO). OFF by default so the shared sim bridge does
-    # not inject a second odom->pelvis anchor that competes with the real stack's
-    # FAST-LIO (camera_init) TF; no bringup opts in (GOLEM_SIM_ODOM=1).
+    # Ground-truth odom (odom -> pelvis on /tf, /odom) from the pelvis free
+    # joint's body, only with GOLEM_SIM_ODOM: the real robot has none, and it
+    # would compete with FAST-LIO's odometry.
     odom_base_body_id = -1
     _sim_odom_on = os.environ.get('GOLEM_SIM_ODOM', '0').strip().lower() not in ('0', 'off', 'false', 'no', '')
     if _sim_odom_on:
@@ -236,29 +229,22 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             print(f"[h12_mujoco] base odom body resolve skipped: {e}")
     print(f"[h12_mujoco] ground-truth sim odom {'ON (GOLEM_SIM_ODOM=1)' if _sim_odom_on else 'OFF'}")
 
-    # Unitree DDS: rt/lowcmd drives the 27 body motors by name via the resolver
-    # (grippers handled by the hand bridges below; gripper ctrl indices are
-    # disjoint from the body motors), and the loop publishes rt/lowstate after
-    # every physics step.
+    # The gripper actuators are the hand bridges' and disjoint from the 27 body motors.
     sim_interface = SimInterface(model, data, resolver=resolver)
 
     init_ros()
 
-    # Sensor bridge: /clock, RGBD cameras (head + both hands), livox lidar + IMU.
-    # MuJoCo lookups use robosuite-prefixed names (the head camera rides the robot
-    # prefix, the eye-in-hand cameras the gripper prefixes, as the hand bridges
-    # below); ROS-facing names are the real robot's. Camera rendering and encoding
-    # is the heaviest per-step cost on CPU; GOLEM_CAMERAS=0 drops the cameras to
-    # speed the sim up for locomotion/SLAM (lidar + odom are unaffected).
-    # The cameras publish what the real robot's RealSense drivers do
-    # (realsense_profile.yaml): frame names, TF, intrinsics and topics.
-    # GOLEM_CAMERA_SCALE renders the head camera at that fraction of its real
-    # 1280x720 (same projection, camera_info scaled to match). The hand cameras
-    # keep their gripper-MJCF fovy at GOLEM_HAND_CAMERA_RES=<W>x<H> (default
-    # 256x256; 640x480 is the D405 colour stream). GOLEM_CAMERA_DEPTH=0 drops
-    # depth/image_rect_raw and GOLEM_CAMERA_POINTCLOUD=0 drops depth/color/points
-    # (with both off, the extra depth render is skipped).
+    # The cameras publish what the real RealSense drivers do
+    # (realsense_profile.yaml). Rendering is the heaviest per-step CPU cost:
+    # GOLEM_CAMERAS=0 drops every camera. GOLEM_CAMERA_SCALE renders the head
+    # camera at that fraction of its real 1280x720 (same projection, scaled
+    # camera_info). The hand cameras keep their gripper-MJCF fovy at
+    # GOLEM_HAND_CAMERA_RES=<W>x<H> (default 256x256; the D405's colour stream
+    # is 640x480). GOLEM_CAMERA_DEPTH=0 drops depth/image_rect_raw and
+    # GOLEM_CAMERA_POINTCLOUD=0 drops depth/color/points; with both off the
+    # depth render is skipped.
     def _env_on(name):
+        """Return whether the env flag name is on (default on; 0/off/false/no turn it off)."""
         return os.environ.get(name, '1').strip().lower() not in ('0', 'off', 'false', 'no')
     _cameras_on = _env_on('GOLEM_CAMERAS')
     _camera_scale = float(os.environ.get('GOLEM_CAMERA_SCALE', '').strip() or 0.5)
@@ -287,26 +273,22 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             camera_tf_rate_hz=float(_profile["tf_rate_hz"]),
             depth_stream=_depth_on,
             pointcloud=_cloud_on,
-            # MID-360 fidelity: 360x56 @ 10Hz ~= 201k pts/s (real ~200k), 0.1m near /
-            # 40m far range, per-point offset_time for FAST-LIO deskew. el_rays/rate
-            # are the knobs to dial back if the ray cast (main thread) hurts RTF.
+            # 360 x 56 rays at 10 Hz is ~201k points/s, the real MID-360's
+            # ~200k; 0.1-40 m range.
             lidar_az_rays=360, lidar_el_rays=56,
             lidar_rate_hz=10.0, lidar_max_range=40.0, lidar_min_range=0.1,
-            # 200 Hz IMU matches the real MID-360 (ICM-40609); H12Sensors' default is
-            # 100 Hz. FAST-LIO integrates the IMU to propagate between the 10 Hz lidar
-            # scans, and the walking gait's high-frequency accelerations alias badly
-            # at 100 Hz -> pose drift/divergence. 200 Hz gives cleaner propagation
-            # through the gait wobble. (IMU sensor reads are cheap vs the ray cast.)
+            # The real MID-360's IMU rate. FAST-LIO propagates the pose with the
+            # IMU between scans, and at 100 Hz the gait's accelerations alias
+            # into drift.
             imu_rate_hz=200.0,
             lidar_body=f"{pfx}livox_link",
             lidar_exclude_body=f"{pfx}torso_link",
             imu_quat_sensor=f"{pfx}livox_imu_quat",
             imu_gyro_sensor=f"{pfx}livox_imu_gyro",
             imu_acc_sensor=f"{pfx}livox_imu_acc",
-            # Drop the robot's own legs/arms from the lidar (self-returns otherwise map
-            # a phantom obstacle under the robot and nav2 rejects the start). Default on
-            # for this locomotion/SLAM/nav sim; GOLEM_LIDAR_SELF_FILTER=0 restores them
-            # as occluders.
+            # Drop the robot's own limbs from the scan: their returns map an
+            # obstacle under the robot and Nav2 refuses the start.
+            # GOLEM_LIDAR_SELF_FILTER=0 keeps them as returns.
             lidar_self_prefixes=(
                 (pfx, "gripper0_")
                 if os.environ.get("GOLEM_LIDAR_SELF_FILTER", "1").strip().lower()
@@ -316,11 +298,10 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             sim_lock=sim_lock,
             timings=timings,
         ),
-        base_body_id=odom_base_body_id,   # -> odom -> pelvis TF + /odom
+        base_body_id=odom_base_body_id,
         sim_lock=sim_lock,
     )
 
-    # Gripper bridges (gripper0_<side>_ prefixed actuators/sensors).
     hand_right = MagpieHandBridge(model, data, side="right", sim_lock=sim_lock,
                                   name_prefix="gripper0_right_")
     hand_left = MagpieHandBridge(model, data, side="left", sim_lock=sim_lock,
@@ -329,9 +310,9 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     measurement = MeasurementBridge(env, elastic_band=band, task_name=task)
     print(f"[h12_mujoco] task goal: {measurement.publish_goal()!r}")
 
-    # Background executor serves the gripper services/timers/action + the band
-    # toggle service. ros_bridge.tick() is driven from the main loop instead (its
-    # MuJoCo renderer context is thread-affine), so it is NOT added here.
+    # The executor thread serves the grippers and the band toggle. ros_bridge is
+    # not on it: the main loop calls its tick(), whose renderer GL context is
+    # thread-affine.
     executor = rclpy.executors.MultiThreadedExecutor()
     for node in (measurement, hand_right, hand_left):
         executor.add_node(node)
@@ -341,8 +322,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
           "RGBD /realsense/{head,left_hand,right_hand}, livox lidar+imu, "
           "/{left,right}/gripper/*, /elastic_band/toggle")
 
-    # The viewer draws its own MjData, refreshed from `data` by the viewer
-    # thread below; mouse perturbation forces flow back through viewer_perturb.
+    # The viewer draws its own MjData, refreshed from data by the viewer thread;
+    # its mouse perturbation forces come back through viewer_perturb.
     viewer_data = mujoco.MjData(model) if viewer else None
     if viewer_data is not None:
         with sim_lock:
@@ -355,10 +336,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         else (mujoco.viewer.launch_passive(model, viewer_data) if viewer else None)
     )
     if handle is not None:
-        handle.opt.geomgroup[0] = 0   # hide collision geoms by default
-        # Frame the free camera on the robot's spawn pose (function of robot
-        # position + yaw). band_body_id is the torso; if the band setup failed,
-        # resolve the torso directly so framing still works.
+        handle.opt.geomgroup[0] = 0   # hide collision geoms
+        # Frame the torso, resolved again if the band setup failed.
         cam_body_id = band_body_id
         if cam_body_id < 0:
             try:
@@ -371,22 +350,22 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                     sim_common.frame_viewer_on_robot(handle, viewer_data, cam_body_id)
             except Exception as e:
                 print(f"[h12_mujoco] viewer camera framing skipped: {e}")
-    # Fall logger: watch the torso's uprightness + height and log once when the
-    # robot falls, including how long it stood after the elastic band was released.
+    # The fall logger logs once when the torso tips or drops, with how long the
+    # robot stood after the band's release.
     _fall_logged = False
     _band_release_t = None
     _band_prev_on = bool(band.enabled) if band is not None else False
 
-    # RoboCasa advances fixture state and checks success once per control step
-    # (env._post_action at control_freq, 20 Hz by default), not per physics step.
-    # Several fixtures count calls (toaster heat, scrub contact), and the success
-    # debounce is in control steps, so matching that cadence keeps task semantics.
+    # RoboCasa updates fixtures and checks success once per control step
+    # (20 Hz), not per physics step: several fixtures count calls (toaster
+    # heat, scrub contact), and the success debounce counts control steps.
     task_every = max(1, round(env.control_timestep / model.opt.timestep))
     step_count = 0
     viewer_perturb = np.zeros_like(data.xfrc_applied)
     viewer_stop = threading.Event()
 
     def _viewer_loop():
+        """Refresh the viewer's MjData and sync the viewer at VIEWER_HZ until it closes."""
         period = 1.0 / VIEWER_HZ
         while not viewer_stop.is_set() and handle.is_running():
             frame_start = time.perf_counter()
@@ -394,12 +373,12 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             with sim_lock:
                 _copy_display_state(viewer_data, data)
             mujoco.mj_forward(model, viewer_data)
-            # sync() applies the current mouse perturbation to viewer_data.
+            # Zeroed so that after sync() it holds only the mouse perturbation.
             viewer_data.xfrc_applied[:] = 0.0
             if band is not None and band.enabled:
                 draw_band(handle, band.point, viewer_data.xpos[band_body_id])
             else:
-                handle.user_scn.ngeom = 0   # clear overlay when band off
+                handle.user_scn.ngeom = 0
             handle.sync()
             with sim_lock:
                 viewer_perturb[:] = viewer_data.xfrc_applied
@@ -420,13 +399,12 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             physics_start = timings.start()
             with sim_lock:
                 if viewer_data is not None:
-                    # Mouse perturbation from the viewer's latest sync (zero when idle).
                     data.xfrc_applied[:] = viewer_perturb
                 if band is not None:
-                    # Re-write every step; MuJoCo persists xfrc_applied, so we must
-                    # zero it when the band is disabled or the last force lingers.
+                    # MuJoCo keeps xfrc_applied between steps, so a released
+                    # band's force is zeroed every step.
                     if band.enabled:
-                        # [ang(3), lin(3)] of the torso itself, world frame
+                        # [angular(3), linear(3)] of the torso, world frame
                         mujoco.mj_objectVelocity(model, data, mujoco.mjtObj.mjOBJ_BODY,
                                                  band_body_id, band_vel, 0)
                         data.xfrc_applied[band_body_id, :3] = band.evaluate_force(
@@ -440,21 +418,18 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                         data.xfrc_applied[band_body_id, :] = 0.0
                         if rot_body_id >= 0:
                             data.xfrc_applied[rot_body_id, :] = 0.0
-                # Recompute every motor's PD torque every sim step (emulates the
-                # real motors' ~1 kHz servo) from the latched rt/lowcmd.
                 sim_interface.write_ctrl()
                 mujoco.mj_step(model, data)
                 timings.stop("physics", physics_start)
                 lowstate_start = timings.start()
-                sim_interface.after_step()          # publishes rt/lowstate
+                sim_interface.after_step()
                 timings.stop("lowstate", lowstate_start)
-                # --- fall logger ---
                 if band is not None and _band_prev_on and not band.enabled:
                     _band_release_t = float(data.time)
                     _band_prev_on = False
                     print(f"[fall-logger] elastic band released at t={data.time:.2f}s", flush=True)
                 if band_body_id >= 0 and not _fall_logged:
-                    _upz = float(data.xmat[band_body_id][8])   # torso z-axis . world up (1=upright)
+                    _upz = float(data.xmat[band_body_id][8])   # torso z-axis . world up (1: upright)
                     _torso_h = float(data.xpos[band_body_id][2])
                     if _upz < 0.5 or _torso_h < 0.5:
                         _fall_logged = True
@@ -468,11 +443,11 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                 task_step = step_count % task_every == 0
                 if task_step:
                     task_start = timings.start()
-                    env.update_state()              # REQUIRED before _check_success
+                    env.update_state()              # before _check_success
                     timings.stop("task_update", task_start)
-            # tick owns short sensor capture locks; encoding/publication cannot
-            # block the DDS state reader. No physics step occurs inside tick.
-            ros_bridge.tick()                       # /clock + camera + lidar + imu
+            # tick() takes sim_lock only to capture sensor state, so encoding and
+            # publishing do not hold up physics. No physics step runs inside it.
+            ros_bridge.tick()
             if task_step:
                 task_start = timings.start()
                 with sim_lock:

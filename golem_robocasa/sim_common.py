@@ -1,9 +1,8 @@
-"""What the H1-2 and G1 sims share: the robot selection, the command line, the
-task listing and resolution, and the viewer framing.
+"""Select the robot, parse the command line, resolve tasks and frame the viewer for both sims.
 
-Stdlib only at import time (mujoco and robocasa are imported inside the
-functions that need them): h12_mujoco.py picks the robot with it before it
-imports either robot's modules.
+It imports only the standard library at module level (mujoco and robocasa
+inside the functions that need them): h12_mujoco.py picks the robot with it
+before it imports either robot's modules.
 """
 import argparse
 import math
@@ -15,25 +14,20 @@ from collections.abc import Callable, Mapping, Sequence
 ROBOTS = ("h12", "g1")
 ROBOT_LABELS = {"h12": "the H1-2", "g1": "the G1"}
 
-# Options a robot's loop does not implement; parse_args refuses them for that robot.
+# The option each robot's loop does not implement; parse_args refuses it.
 _UNSUPPORTED = {"h12": "--duration", "g1": "--timing"}
 
-# Viewer free-camera spawn pose, anchored to the robot so the passive viewer
-# opens framed on the robot wherever it spawns (RoboCasa places the base by
-# layout/seed and place_robot_collision_free may back it off), instead of
-# MuJoCo's default whole-scene framing. Top-down (straight down) view: lookat
-# follows the robot base body, elevation looks straight down, and azimuth (the
-# in-plane rotation of the top-down image) is offset from the base yaw so the
-# robot's facing points a consistent way in frame at any spawn orientation.
-# Spawn-time only — the user can orbit/zoom freely after.
-VIEW_CAM_DISTANCE  = 3.0     # m, camera height above lookat (straight down)
-VIEW_CAM_AZIMUTH   = 90.0    # deg, ADDED to robot yaw — rotates the top-down image
-VIEW_CAM_ELEVATION = -90.0   # deg, -90 = look straight down
-VIEW_CAM_LOOKAT_DZ = 0.0     # m, focal point offset along z (irrelevant for top-down)
+# The passive viewer's opening camera: straight down onto the robot wherever
+# RoboCasa and the spawn placement put it, rotated with the robot's yaw so the
+# robot faces the same way in the image at any spawn orientation.
+VIEW_CAM_DISTANCE  = 3.0     # m above the lookat point
+VIEW_CAM_AZIMUTH   = 90.0    # deg, added to the robot's yaw
+VIEW_CAM_ELEVATION = -90.0   # deg, straight down
+VIEW_CAM_LOOKAT_DZ = 0.0     # m, lookat offset above the robot body
 
 
 def add_robot_args(parser: argparse.ArgumentParser) -> None:
-    """--h12 / --g1, mutually exclusive, into dest 'robot' (None when neither is given)."""
+    """Add the mutually exclusive --h12 / --g1 flags, into dest 'robot' (None when neither)."""
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--h12", dest="robot", action="store_const", const="h12",
                        help="run the Unitree H1-2 (the default)")
@@ -42,10 +36,12 @@ def add_robot_args(parser: argparse.ArgumentParser) -> None:
 
 
 def select_robot(argv: Sequence[str], env: Mapping[str, str] = os.environ) -> str:
-    """The robot to run: --h12 or --g1 in argv, else GOLEM_ROBOT (h12 or g1, any
-    case; empty counts as unset), else 'h12'. A flag beats the environment.
-    Exits with an error when argv has both flags or GOLEM_ROBOT names another robot.
-    Matches whole tokens only; parse_args catches an abbreviated flag."""
+    """Return the robot to run: --h12 or --g1 in argv, else GOLEM_ROBOT, else 'h12'.
+
+    GOLEM_ROBOT is h12 or g1 in any case; empty counts as unset. Exits with an
+    error when argv has both flags or GOLEM_ROBOT names another robot. Only
+    whole tokens match; parse_args refuses an abbreviated flag.
+    """
     flags = {arg[2:] for arg in argv if arg in ("--h12", "--g1")}
     if len(flags) > 1:
         sys.exit("Choose one robot: --h12 or --g1.")
@@ -62,9 +58,10 @@ def select_robot(argv: Sequence[str], env: Mapping[str, str] = os.environ) -> st
 def add_common_args(parser: argparse.ArgumentParser, *,
                     task_help: str = "RoboCasa env name (e.g. TurnOnToasterOven). "
                                      "Omit to launch a random registered kitchen task.") -> None:
-    """The options both runners take: --headless, --task, --layout, --style, --seed,
-    --timing, --duration, and the robot pair (add_robot_args). task_help replaces
-    the --task description for a runner that has tasks of its own."""
+    """Add the options both runners take, the robot flags included.
+
+    task_help is the --task help of a runner with tasks of its own.
+    """
     parser.add_argument(
         "--headless",
         action="store_true",
@@ -83,11 +80,12 @@ def add_common_args(parser: argparse.ArgumentParser, *,
 
 
 def parse_args(parser: argparse.ArgumentParser, argv: Sequence[str], robot: str) -> argparse.Namespace:
-    """Parse argv for the runner of `robot` ('h12' or 'g1'), with a usage error (exit 2) for:
-    - a robot flag naming the other robot. h12_mujoco.py hands whole --h12/--g1 tokens to
-      the matching runner, so only an abbreviation (--g for --g1) gets here;
-    - an option this robot's loop does not implement yet (--duration for the H1-2,
-      --timing for the G1)."""
+    """Parse argv for the runner of robot ('h12' or 'g1').
+
+    Exits with a usage error (2) for a robot flag that reads as the other robot
+    (h12_mujoco.py dispatches whole --h12/--g1 tokens, so only an abbreviation
+    such as --g gets here) and for the option in _UNSUPPORTED for this robot.
+    """
     args = parser.parse_args(argv)
     if args.robot not in (None, robot):
         parser.error(f"the robot flag is abbreviated and reads as --{args.robot} here, "
@@ -100,9 +98,10 @@ def parse_args(parser: argparse.ArgumentParser, argv: Sequence[str], robot: str)
 
 def refuse_kitchen_args(parser: argparse.ArgumentParser, args: argparse.Namespace,
                         task: str, no_kitchen: Sequence[str]) -> None:
-    """Usage error (exit 2) when --layout or --style is given for a task in
-    `no_kitchen` (resolved names): those options choose a RoboCasa kitchen, and
-    such a task builds none."""
+    """Exit with a usage error (2) for --layout or --style with a task in no_kitchen.
+
+    Those options choose a RoboCasa kitchen, and such a task builds none.
+    """
     if task in no_kitchen:
         given = [flag for flag in ("--layout", "--style") if getattr(args, flag[2:]) is not None]
         if given:
@@ -112,24 +111,19 @@ def refuse_kitchen_args(parser: argparse.ArgumentParser, args: argparse.Namespac
 
 
 def runnable_tasks() -> tuple[dict[str, type], set[str]]:
-    """Return (env_classes, runnable).
+    """Return (env_classes, runnable): every registered env by name, and the runnable tasks.
 
-    `env_classes` maps every robosuite-registered env name -> its class. This is
-    the same REGISTERED_ENVS that robosuite.make() resolves against, and it DOES
-    include RoboCasa's abstract bases (OpenDoor/CloseDoor/ManipulateDoor/
-    PickPlace) — RoboCasa's metaclass deliberately omits those five from its own
-    REGISTERED_KITCHEN_ENVS, but the robosuite parent metaclass still registers
-    them. We need them here so an abstract base name can be looked up and expanded
-    to its concrete subclasses.
+    env_classes is robosuite's REGISTERED_ENVS, which robosuite.make() resolves
+    against. It includes RoboCasa's abstract bases (OpenDoor, ManipulateDoor,
+    PickPlace, ...), which RoboCasa leaves out of its own REGISTERED_KITCHEN_ENVS,
+    so that resolve_task can expand a base to its concrete subclasses.
 
-    `runnable` is the set of concrete benchmark task names from RoboCasa's curated
-    ATOMIC_/COMPOSITE_TASK_DATASETS (intersected with what's registered, to
-    tolerate version skew). Those bases can't be instantiated directly — they
-    require a `fixture_id` only a concrete subclass supplies — so they are never
-    in `runnable`. Falls back to REGISTERED_KITCHEN_ENVS (which already excludes
-    the five bases) if the curated lists are unavailable.
+    runnable is RoboCasa's ATOMIC_ and COMPOSITE_TASK_DATASETS that are
+    registered, else REGISTERED_KITCHEN_ENVS when those lists are not
+    importable. Neither holds an abstract base: those need a fixture_id only a
+    concrete subclass supplies.
     """
-    import robocasa  # noqa: F401  -> registers all kitchen envs on import
+    import robocasa  # noqa: F401  # registers every kitchen env
     from robosuite.environments.base import REGISTERED_ENVS
     env_classes = dict(REGISTERED_ENVS)
     try:
@@ -145,7 +139,7 @@ def runnable_tasks() -> tuple[dict[str, type], set[str]]:
 
 
 def random_task(seed: int | None = None) -> str:
-    """Pick a random *runnable* (concrete) RoboCasa kitchen env name."""
+    """Return a random runnable RoboCasa kitchen task, reproducible for a seed."""
     _, runnable = runnable_tasks()
     if seed is not None:
         random.seed(seed)
@@ -154,15 +148,13 @@ def random_task(seed: int | None = None) -> str:
 
 def resolve_task(name: str, seed: int | None = None, *, tag: str,
                  robot_task: Callable[[str], str | None] = lambda name: None) -> str:
-    """Resolve a user-supplied --task name to a concrete runnable task.
+    """Return the runnable task a --task name stands for.
 
-    `robot_task(name)` returns the canonical name of a task the calling robot runs
-    outside RoboCasa (blank_env's Blank and battery_env's Battery workcell,
-    matched in any case), else None; a name it returns is used as is. If `name` is
-    already a concrete benchmark task, return it unchanged.
-    If it's an abstract base (e.g. OpenDoor, ManipulateDoor) — registered but not
-    directly instantiable — randomly pick one of its concrete runnable subclasses
-    instead of crashing. Messages are prefixed `[tag]`.
+    robot_task(name) returns the canonical name of a task the runner provides
+    outside RoboCasa (Blank, Battery), else None; that name is used as is. A
+    runnable RoboCasa task is returned unchanged, and an abstract base (OpenDoor,
+    ...) becomes one of its runnable subclasses, chosen at random (seeded by
+    seed). Exits for an unknown name. Messages are prefixed [tag].
     """
     claimed = robot_task(name)
     if claimed is not None:
@@ -190,9 +182,7 @@ def resolve_task(name: str, seed: int | None = None, *, tag: str,
 
 
 def frame_viewer_on_robot(handle, data, body_id: int) -> None:
-    """Set the passive viewer free camera's spawn pose as a function of the robot
-    base body's world pose. lookat tracks the body position; the orbit azimuth is
-    offset from the body's yaw, so framing is invariant to spawn orientation."""
+    """Point the passive viewer's free camera down at body_id, turned with its yaw (VIEW_CAM_*)."""
     import mujoco
     pos = data.xpos[body_id]
     w, x, y, z = (float(v) for v in data.xquat[body_id])

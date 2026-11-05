@@ -1,7 +1,8 @@
-"""The Unitree DDS command path both RoboCasa robots' SimInterface share
-(unitree_interface.py for the H1-2, g1/unitree_interface.py for the G1): the
-command timeout knob, rt/lowcmd validation and latching, rate-limited warnings,
-the CRC, the IMU's rpy and the DDS domain.
+"""Validate and latch Unitree DDS motor commands for both robots' SimInterface.
+
+unitree_interface.py (H1-2) and g1/unitree_interface.py (G1) share the command
+timeout knob, rt/lowcmd validation, the latched MotorCommand, rate-limited
+warnings, the CRC, the IMU's rpy and the DDS domain from here.
 
 A DDS handler validates a frame and latches it as one MotorCommand, swapped in
 by a single assignment, and never touches MjData; the main loop turns the
@@ -21,16 +22,17 @@ from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_ as LowCmd_def
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_ as LowState_default
 from unitree_sdk2py.utils.crc import CRC
 
-# rt/lowcmd mode_pr both robots' stacks write and accept: the ankles' pitch/roll joints
+# rt/lowcmd and rt/lowstate mode_pr of both robots: the ankles in pitch/roll mode.
 MODE_PR = 0
-# wall seconds between repeats of one warning
-WARN_PERIOD_S = 5.0
+WARN_PERIOD_S = 5.0   # wall s between repeats of one warning
 
 
 def env_seconds(name, default, env=os.environ):
-    """A timeout knob in sim seconds: unset or empty for the default, else finite
-    and positive. A NaN would never time out (silence > NaN is never true), so
-    a bad value stops the sim at startup, naming the knob."""
+    """Return the env timeout knob name in sim seconds, or default when unset or empty.
+
+    Raises ValueError, naming the knob, for a value that is not finite and
+    positive: a NaN timeout would never expire (silence > NaN is never true).
+    """
     raw = env.get(name, '').strip()
     try:
         value = float(raw) if raw else default
@@ -42,22 +44,25 @@ def env_seconds(name, default, env=os.environ):
 
 
 class MotorCommand(NamedTuple):
-    """Latched commands of one topic's motors, as arrays, and the sim time they arrived"""
-    on: np.ndarray  # motors that apply their PD; the others are off (zero torque)
-    q: np.ndarray
-    dq: np.ndarray
-    tau: np.ndarray
+    """Hold one topic's latched motor commands, as arrays, and the sim time they arrived."""
+    on: np.ndarray  # bool per motor: apply the PD; the others get zero torque
+    q: np.ndarray   # rad
+    dq: np.ndarray  # rad/s
+    tau: np.ndarray  # N*m feed-forward
     kp: np.ndarray
     kd: np.ndarray
-    time: float
+    time: float     # s of sim time
 
     def torques(self, q, dq):
+        """Return the PD torque (N*m) per motor at measured q (rad) and dq (rad/s), 0 where off."""
         return np.where(self.on, self.kp * (self.q - q) + self.kd * (self.dq - dq) + self.tau, 0.0)
 
 
 def parse_motor_cmds(motor_cmds, slots, sim_time, motor_on):
-    """MotorCommand for the given slots of a motor_cmd array, with motor_on(mode)
-    deciding which motors are on; None if a value is not finite"""
+    """Return the MotorCommand of motor_cmds' slots, or None if a value is not finite.
+
+    motor_on(mode) decides which motors apply their PD.
+    """
     cmds = [motor_cmds[i] for i in slots]
     values = np.array([[c.q, c.dq, c.tau, c.kp, c.kd] for c in cmds], dtype=np.float64)
     if not np.all(np.isfinite(values)):
@@ -66,20 +71,24 @@ def parse_motor_cmds(motor_cmds, slots, sim_time, motor_on):
 
 
 def log(text):
-    """One write per line: the DDS handler threads print too"""
+    """Print a [unitree_interface] line in one write, as the DDS handler threads print too."""
     sys.stdout.write(f'[unitree_interface] {text}\n')
     sys.stdout.flush()
 
 
 class RateLimitedWarnings:
-    """Prints a warning at most once per WARN_PERIOD_S for each key, with how
-    many it stands for; the DDS handler threads call it"""
+    """Print each kind of warning at most once per WARN_PERIOD_S, with how many it stands for.
+
+    Thread-safe: the DDS handler threads call it.
+    """
 
     def __init__(self):
+        """Start with no warning printed."""
         self._lock = threading.Lock()
         self._warned = {}   # key -> (wall time of the last print, warnings since)
 
     def warn(self, key, text):
+        """Print text unless a warning with this key was printed within WARN_PERIOD_S."""
         now = time.monotonic()
         with self._lock:
             last, count = self._warned.get(key, (None, 0))
@@ -93,13 +102,15 @@ class RateLimitedWarnings:
 
 
 def fast_crc():
-    """unitree_sdk2py's CRC, with its Python loop over the packed words (__Trans)
-    replaced by a numpy view of them: the same field packing and the same C
-    routine, so the same CRC, at about a quarter of the cost (33 instead of 145
-    us a frame, measured over rt/lowstate and rt/lowcmd frames; rt/lowstate is
-    signed every physics step, and every rt/lowcmd frame is checked). The SDK's
-    CRC object is one per process. The result is checked against the SDK's own
-    on sample frames; if it differs, the SDK's loop is kept."""
+    """Return unitree_sdk2py's CRC object with its per-word Python loop replaced by numpy.
+
+    The replacement packs the same fields and calls the same C routine, so the
+    CRC is the same at about a quarter of the cost (33 instead of 145 us a
+    frame); rt/lowstate is signed every physics step and every rt/lowcmd frame
+    is checked. The SDK's CRC object is one per process, so the patch applies
+    once. It is checked against the SDK's own result on sample frames and
+    dropped, with a warning, if they differ.
+    """
     crc = CRC()
     lib = getattr(crc, 'crc_lib', None)
     if getattr(crc, '_sim_fast', False) or lib is None:   # done, or not Linux
@@ -111,10 +122,12 @@ def fast_crc():
             motor.q, motor.dq = (float(v) for v in rng.normal(size=2))
     expected = [crc.Crc(msg) for msg in samples]
 
-    def words(packed):   # as __Trans: every little-endian uint32 but the last (the crc's)
+    def words(packed):
+        """Return the packed message's little-endian uint32 words but the last (the crc's)."""
         return np.frombuffer(packed, '<u4', count=len(packed) // 4 - 1)
 
     def crc32(data):
+        """Return the SDK C routine's CRC of the words."""
         return lib.crc32_core(data.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)), len(data))
 
     crc._CRC__Trans, crc._crc_ctypes = words, crc32
@@ -127,8 +140,10 @@ def fast_crc():
 
 
 def lowcmd_error(msg, crc, mode_machine, robot):
-    """Why an rt/lowcmd frame must be dropped, or None to accept it: robot
-    (its name) reports mode_machine"""
+    """Return why an rt/lowcmd frame must be dropped, or None to accept it.
+
+    robot is the robot's name for the message, mode_machine the value it accepts.
+    """
     if crc.Crc(msg) != msg.crc:
         return 'bad CRC'
     if msg.mode_machine != mode_machine:
@@ -139,7 +154,7 @@ def lowcmd_error(msg, crc, mode_machine, robot):
 
 
 def rpy_from_quat(w, x, y, z):
-    """Roll, pitch, yaw (rad) of a wxyz quaternion, as the IMU reports them"""
+    """Return [roll, pitch, yaw] (rad) of a wxyz quaternion, as the IMU's rpy."""
     roll = math.atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
     pitch = math.asin(max(-1.0, min(1.0, 2.0 * (w * y - z * x))))
     yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
@@ -147,7 +162,10 @@ def rpy_from_quat(w, x, y, z):
 
 
 def domain_id():
-    """ROS_DOMAIN_ID, which the Unitree SDK uses too; refuses unset, empty and 0"""
+    """Return ROS_DOMAIN_ID for the Unitree SDK, raising RuntimeError for unset, empty or 0.
+
+    SAFETY: domain 0 is the real robots' command bus; a sim never joins it.
+    """
     raw = os.environ.get('ROS_DOMAIN_ID', '')
     try:
         domain = int(raw)

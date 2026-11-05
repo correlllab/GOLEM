@@ -1,9 +1,9 @@
-"""Battery-workcell task for both sim runners (``h12_mujoco.py --task Battery``,
-``--g1`` for the G1).
+"""Register the Battery task: the robot at the ARPA battery workcell.
 
-A robosuite env (not a RoboCasa kitchen) around the same registered robot the
+Both sim runners run it (``h12_mujoco.py --task Battery``, ``--g1`` for the
+G1). It is a robosuite env, not a RoboCasa kitchen, around the robot the
 kitchen tasks use (``H1_2`` or ``G1Dex3``), so every robot0_/gripper0_ name the
-bridges resolve is identical. The arena is ``CL_Assets/mujoco_assets/battery/
+bridges resolve is the kitchen tasks'. The arena is ``CL_Assets/mujoco_assets/battery/
 battery_cell.xml`` (ARPA cell, battery pack, screw row), plus every MJCF in
 ``battery/objects/``.
 
@@ -26,7 +26,7 @@ unique across the whole scene.
 
 Importing this module registers the env with robosuite (EnvMeta), so
 ``robosuite.make("Battery", robots=...)`` resolves it. The task has no
-scripted success: the RoboCasa task-signal surface the runner reads
+scripted success: the RoboCasa task-signal surface the runners read
 (update_state / _check_success / reward / get_ep_meta) is stubbed.
 """
 import glob
@@ -45,24 +45,27 @@ BATTERY_DIR = os.path.normpath(os.path.join(
 ARENA_XML = os.path.join(BATTERY_DIR, "battery_cell.xml")
 OBJECTS_DIR = os.path.join(BATTERY_DIR, "objects")
 
-# Task names this module provides, as given to h12_mujoco.py --task.
+# The --task names this module provides.
 TASKS = ("Battery",)
 
 # Pelvis spawn (m, world) and orientation (euler rad): facing +x, 0.24 m short
 # of the battery's near wall (x = 0.444), within arm reach of the near modules
-# and the screw row. Each runner's place_robot_collision_free fits the floor
-# clearance and backs the robot off along -x until it clears the cell.
+# and the screw row. Each runner's spawn placement fits the floor clearance and
+# backs the robot off along -x until it clears the cell.
 ROBOT_BASE_POS = (0.20, 0.0, 1.03)
 ROBOT_BASE_ORI = (0.0, 0.0, 0.0)
 
-# The H1-2's default spawn clearance (m) for this task, used when
-# GOLEM_SPAWN_MARGIN is unset (the G1 sim keeps its own). The kitchen default of 0.20 would hold the robot ~0.45 m further
-# back: the binding pose is the sagged, unpowered arms, whose grippers hang
-# ~2 cm above the module tops from this spawn.
+# m, the H1-2's spawn clearance for this task when GOLEM_SPAWN_MARGIN is unset
+# (the G1 sim does not read it). The kitchen default of 0.20 would hold the
+# robot ~0.45 m further back: the binding pose is the sagged, unpowered arms,
+# whose grippers hang ~2 cm above the module tops from this spawn.
 SPAWN_MARGIN = 0.015
 
+# Top-level sections of an object file: merged into the scene, or only for
+# standalone viewing and skipped. Any other section is refused.
 _MERGED_SECTIONS = {"compiler", "default", "asset", "worldbody"}
 _STANDALONE_SECTIONS = {"option", "visual", "statistic", "size"}
+# Asset tags whose file= resolves against meshdir (others: texturedir).
 _MESHDIR_TAGS = {"mesh", "hfield", "skin"}
 # Attributes that name an asset, by the asset tag they refer to.
 _ASSET_REFS = {"material": "material", "mesh": "mesh", "hfield": "hfield"}
@@ -77,11 +80,12 @@ def canonical_task(name):
 
 
 def _fmt(values):
+    """Return values as an MJCF attribute string."""
     return " ".join(f"{v:.9g}" for v in values)
 
 
 def _asset_name(node):
-    """An asset's name; MuJoCo names an unnamed mesh/hfield/skin after its file."""
+    """Return an asset's name, or its file's stem as MuJoCo names an unnamed mesh/hfield/skin."""
     if node.get("name"):
         return node.get("name")
     if node.get("file"):
@@ -90,11 +94,14 @@ def _asset_name(node):
 
 
 def _default_classes(root):
-    """{class name: {tag: attrs}} for the file's <default> tree, with nested
-    classes inheriting their parent's attributes. The root class is 'main'."""
+    """Return {class name: {tag: attrs}} of the file's <default> tree.
+
+    Nested classes inherit their parent's attributes; the root class is 'main'.
+    """
     classes = {}
 
     def walk(el, inherited):
+        """Record el's class with inherited attrs overlaid by its own, then its children."""
         merged = {tag: dict(attrs) for tag, attrs in inherited.items()}
         for child in el:
             if child.tag != "default":
@@ -109,8 +116,10 @@ def _default_classes(root):
 
 
 def _inline_defaults(path, el, classes, active="main"):
-    """Write default-class attributes onto `el` and its subtree (explicit
-    attributes win) and drop the class/childclass references."""
+    """Write default-class attributes onto el and its subtree and drop the class references.
+
+    Explicit attributes win over the class's.
+    """
     cls = el.attrib.pop("class", None) or active
     if cls not in classes and cls != "main":
         raise ValueError(f"[battery_env] {path}: unknown default class {cls!r}")
@@ -122,7 +131,7 @@ def _inline_defaults(path, el, classes, active="main"):
 
 
 def _degrees_to_radians(el):
-    """Convert `el`'s subtree from compiler angle="degree" to radians."""
+    """Convert el's subtree from compiler angle="degree" to radians."""
     deg = math.pi / 180.0
     for node in el.iter():
         if node.get("euler") is not None:
@@ -137,8 +146,10 @@ def _degrees_to_radians(el):
 
 
 def _set_inertials(model, bodies):
-    """Give each body in `bodies` (document order == MuJoCo body id order, from
-    1) the inertial the standalone compile computed for it."""
+    """Give each body in bodies the <inertial> the standalone compile computed for it.
+
+    bodies is in document order, which is MuJoCo's body id order from 1.
+    """
     for body_id, body in enumerate(bodies, start=1):
         if body.find("inertial") is not None or model.body_mass[body_id] <= 0.0:
             continue
@@ -152,18 +163,24 @@ def _set_inertials(model, bodies):
 
 
 class BatteryArena(Arena):
-    """battery_cell.xml with every objects/*.xml merged in (sorted by name).
+    """Build battery_cell.xml with every objects/*.xml merged in, sorted by name.
 
     Objects are merged after Arena.__init__, so robosuite's collision-geom
-    recolouring leaves their materials alone."""
+    recolouring leaves their materials alone.
+    """
 
     def __init__(self, arena_xml=ARENA_XML, objects_dir=OBJECTS_DIR):
+        """Load arena_xml and merge each object file of objects_dir."""
         super().__init__(arena_xml)
         self.object_files = sorted(glob.glob(os.path.join(objects_dir, "*.xml")))
         for path in self.object_files:
             self._merge_object(path)
 
     def _merge_object(self, path):
+        """Merge one object file's bodies and the assets they use into the arena.
+
+        Raises for a section, compiler setting, file or asset name it cannot merge.
+        """
         root = ET.parse(path).getroot()
         unsupported = {c.tag for c in root} - _MERGED_SECTIONS - _STANDALONE_SECTIONS
         if unsupported:
@@ -239,11 +256,10 @@ class BatteryArena(Arena):
 
 
 class Battery(ManipulationEnv):
-    """The robot at the ARPA battery workcell with the objects/ parts on the battery."""
+    """Stand the robot at the ARPA battery workcell with the objects/ parts on the battery."""
 
     def __init__(self, robots, use_object_obs=True, **kwargs):
-        # use_object_obs is part of make_kitchen_env's kwarg set; this env
-        # defines no object observables, so it is stored and otherwise unused.
+        """Build the env; use_object_obs is accepted for make_kitchen_env and unused."""
         self.use_object_obs = use_object_obs
         self.init_robot_base_pos = list(ROBOT_BASE_POS)
         self.init_robot_base_ori = list(ROBOT_BASE_ORI)
@@ -251,16 +267,17 @@ class Battery(ManipulationEnv):
         super().__init__(robots=robots, **kwargs)
 
     def _load_model(self):
+        """Put the robot at ROBOT_BASE_POS in a BatteryArena, with multi-point contacts."""
         super()._load_model()
         self.robots[0].robot_model.set_base_xpos(ROBOT_BASE_POS)
         self.model = ManipulationTask(
             mujoco_arena=BatteryArena(),
             mujoco_robots=[robot.robot_model for robot in self.robots],
         )
-        # The merged scene takes robosuite's <option>, not the arena's. The
-        # arena's multiccd flag must be carried over: with single-point
-        # contacts the screws' small neck cylinders rock at ~6 rad/s on their
-        # walls (MuJoCo 3.3.1).
+        # The merged scene takes robosuite's <option>, not the arena's, so the
+        # arena's multiccd flag is set again: with single-point contacts the
+        # screws' small neck cylinders rock at ~6 rad/s on their walls
+        # (MuJoCo 3.3.1).
         option = self.model.root.find("option")
         if option is None:
             option = ET.SubElement(self.model.root, "option")
@@ -269,15 +286,18 @@ class Battery(ManipulationEnv):
             flag = ET.SubElement(option, "flag")
         flag.set("multiccd", "enable")
 
-    # --- RoboCasa task-signal surface read by h12_mujoco / MeasurementBridge
     def update_state(self):
+        """Do nothing: the task has no fixtures to update."""
         pass
 
     def _check_success(self):
+        """Return False: the task has no success condition."""
         return False
 
     def reward(self, action=None):
+        """Return 0: the task has no reward."""
         return 0.0
 
     def get_ep_meta(self):
+        """Return the episode's language goal, which MeasurementBridge publishes."""
         return {"lang": "battery workcell: manipulate the parts on the battery pack"}

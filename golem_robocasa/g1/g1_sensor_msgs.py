@@ -1,4 +1,4 @@
-"""ROS 2 messages for the G1 sim's MID-360 and head D435, as their drivers publish them.
+"""Build the ROS 2 messages of the G1 sim's MID-360 and head D435 as their drivers publish them.
 
 Message construction only: no node, publisher or DDS. g1_lidar.py and
 g1_head_camera.py produce the data; the sim's ROS bridge publishes these.
@@ -47,29 +47,31 @@ LIVOX_FRAME = "livox_frame"
 HEAD_OPTICAL_FRAME = "head_color_optical_frame"
 REFLECTIVITY = 100
 TAG = 0
-# the driver's lidar_id is its handle cast to uint8: inet_addr of the lidar's IP
-# (192.168.123.120, the lidar's address in golem_slam's config/g1/MID360_config.json),
-# whose low byte on a little-endian host is the first octet
+# The driver's lidar_id is its handle cast to uint8: inet_addr of the lidar's IP
+# (192.168.123.120 in golem_slam's config/g1/MID360_config.json), whose low byte
+# on a little-endian host is the first octet.
 LIDAR_ID = 192
-# image_transport's plugins as installed in Humble (compressed/compressedDepth 2.5.5),
-# checked by republishing through them: JPEG quality 95; compressedDepth zeroes
-# depths over 10 m (its depth_max) and writes its PNG at a zlib level of 2 to 5
-# (out.png_level is 3). PNG is lossless, so the level only sets the size.
+# image_transport's plugins in Humble (compressed/compressedDepth 2.5.5), checked
+# by republishing through them: JPEG quality 95; compressedDepth zeroes depths
+# over 10 m (its depth_max) and writes its PNG at a zlib level of 2 to 5
+# (png_level 3 here). PNG is lossless, so the level only sets the size.
 JPEG_QUALITY = 95
 DEPTH_MAX_MM = 10000
 PNG_LEVEL = 3
 
 
 def time_msg(t):
-    """builtin_interfaces/Time of t seconds (sim time), to the nearest ns"""
+    """Return the builtin_interfaces/Time of t seconds of sim time, to the nearest ns."""
     ns = int(round(t * 1e9))
     return Time(sec=ns // 1_000_000_000, nanosec=ns % 1_000_000_000)
 
 
-# ------------------------------------------------------------------- MID-360
 def livox_custom_msg(frame, frame_id=LIVOX_FRAME):
-    """livox_ros_driver2/CustomMsg of a g1_lidar.LidarFrame (slow for full frames;
-    publish livox_custom_msg_cdr() instead)"""
+    """Return the livox_ros_driver2/CustomMsg of a g1_lidar.LidarFrame.
+
+    Slow for full frames: the sim publishes livox_custom_msg_cdr(), its
+    serialized equivalent.
+    """
     msg = CustomMsg()
     msg.header.stamp = time_msg(frame.timebase)
     msg.header.frame_id = frame_id
@@ -91,12 +93,16 @@ _CDR_POINT = np.dtype({"names": ["offset_time", "x", "y", "z", "reflectivity", "
 
 
 def livox_custom_msg_cdr(frame, frame_id=LIVOX_FRAME):
-    """The CustomMsg of livox_custom_msg(), serialized as rclpy serializes it (plain
-    little-endian CDR, alignment counted from after the 4-byte encapsulation header)"""
+    """Return livox_custom_msg()'s message serialized as rclpy serializes it.
+
+    Plain little-endian CDR, alignment counted from after the 4-byte
+    encapsulation header.
+    """
     stamp = time_msg(frame.timebase)
     out = bytearray(b"\x00\x01\x00\x00")
 
     def align(n):
+        """Pad out to a multiple of n bytes after the header."""
         out.extend(bytes(-(len(out) - 4) % n))
 
     name = frame_id.encode() + b"\x00"
@@ -118,7 +124,7 @@ def livox_custom_msg_cdr(frame, frame_id=LIVOX_FRAME):
 
 
 def livox_imu_msg(t, angular_velocity, linear_acceleration, frame_id=LIVOX_FRAME):
-    """sensor_msgs/Imu as the driver fills it: gyro rad/s, accelerometer in g"""
+    """Return the sensor_msgs/Imu the driver publishes: gyro rad/s, accelerometer in g."""
     msg = Imu()
     msg.header.stamp = time_msg(t)
     msg.header.frame_id = frame_id
@@ -128,8 +134,8 @@ def livox_imu_msg(t, angular_velocity, linear_acceleration, frame_id=LIVOX_FRAME
     return msg
 
 
-# --------------------------------------------------------------------- D435
 def _image(t, frame_id, pixels, encoding):
+    """Return a sensor_msgs/Image of pixels, little-endian."""
     msg = Image()
     msg.header.stamp = time_msg(t)
     msg.header.frame_id = frame_id
@@ -137,12 +143,13 @@ def _image(t, frame_id, pixels, encoding):
     msg.encoding = encoding
     msg.is_bigendian = 0
     msg.step = msg.width * pixels.itemsize * (pixels.shape[2] if pixels.ndim == 3 else 1)
-    # an array.array is copied as is; bytes would be checked one by one
+    # rclpy copies an array.array as is but checks bytes one by one.
     msg.data = array.array("B", np.ascontiguousarray(pixels, pixels.dtype.newbyteorder("<")).tobytes())
     return msg
 
 
 def _compressed(t, frame_id, fmt, data):
+    """Return a sensor_msgs/CompressedImage of data in format fmt."""
     msg = CompressedImage()
     msg.header.stamp = time_msg(t)
     msg.header.frame_id = frame_id
@@ -152,36 +159,38 @@ def _compressed(t, frame_id, fmt, data):
 
 
 def color_image_msg(t, rgb, frame_id=HEAD_OPTICAL_FRAME):
-    """sensor_msgs/Image rgb8 of an (h, w, 3) uint8 image"""
+    """Return the sensor_msgs/Image rgb8 of an (h, w, 3) uint8 image."""
     return _image(t, frame_id, rgb, "rgb8")
 
 
 def color_compressed_msg(t, rgb, frame_id=HEAD_OPTICAL_FRAME, quality=JPEG_QUALITY):
-    """sensor_msgs/CompressedImage JPEG of an (h, w, 3) uint8 rgb image"""
+    """Return the sensor_msgs/CompressedImage JPEG of an (h, w, 3) uint8 rgb image."""
     jpeg = io.BytesIO()
     PILImage.fromarray(rgb).save(jpeg, format="JPEG", quality=quality)
     return _compressed(t, frame_id, "rgb8; jpeg compressed bgr8", jpeg.getvalue())
 
 
 def depth_image_msg(t, depth_mm, frame_id=HEAD_OPTICAL_FRAME):
-    """sensor_msgs/Image 16UC1 of an (h, w) uint16 depth image in mm"""
+    """Return the sensor_msgs/Image 16UC1 of an (h, w) uint16 depth image in mm."""
     return _image(t, frame_id, depth_mm, "16UC1")
 
 
 def depth_compressed_msg(t, depth_mm, frame_id=HEAD_OPTICAL_FRAME, png_level=PNG_LEVEL):
-    """sensor_msgs/CompressedImage compressedDepth of an (h, w) uint16 depth image in mm;
-    like the plugin, depths over DEPTH_MAX_MM read 0 (the raw image keeps them)"""
+    """Return the sensor_msgs/CompressedImage compressedDepth of an (h, w) uint16 depth image in mm.
+
+    As in the plugin, depths over DEPTH_MAX_MM read 0 (the raw image keeps them).
+    """
     depth_mm = np.where(depth_mm > DEPTH_MAX_MM, 0, depth_mm).astype(np.uint16)
     png = io.BytesIO()
     PILImage.fromarray(depth_mm).save(png, format="PNG", compress_level=png_level)
-    # ConfigHeader: compressionFormat INV_DEPTH (0) and two quantization floats that
-    # 16UC1 does not use; all 12 bytes are 0, as in the plugin's own messages
+    # ConfigHeader: compressionFormat INV_DEPTH (0) and two quantization floats
+    # 16UC1 does not use; all 12 bytes are 0, as in the plugin's own messages.
     header = struct.pack("<iff", 0, 0.0, 0.0)
     return _compressed(t, frame_id, "16UC1; compressedDepth", header + png.getvalue())
 
 
 def camera_info_msg(t, width, height, fx, fy, cx, cy, frame_id=HEAD_OPTICAL_FRAME):
-    """sensor_msgs/CameraInfo of an undistorted pinhole camera"""
+    """Return the sensor_msgs/CameraInfo of an undistorted pinhole camera (pixels)."""
     msg = CameraInfo()
     msg.header.stamp = time_msg(t)
     msg.header.frame_id = frame_id

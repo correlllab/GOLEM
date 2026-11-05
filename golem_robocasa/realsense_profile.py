@@ -1,8 +1,9 @@
-"""The real robot's RealSense cameras, as the sim should reproduce them.
+"""Reproduce the H1-2's real RealSense cameras in the sim from realsense_profile.yaml.
 
 realsense_profile.yaml holds the cameras as the real robot publishes them
-(frame names, TF tree, intrinsics). This module has no ROS imports, so
-h1_2_robosuite can use it while building the robot MJCF:
+(frame names, TF tree, intrinsics; example.realsense_profile.yaml documents
+it). This module has no ROS imports, so h1_2_robosuite can use it while
+building the robot MJCF:
 
   place_profiled_cameras()  puts a profiled camera's MJCF colour camera at the
                             real colour optical pose and adds a depth camera at
@@ -31,16 +32,18 @@ import yaml
 PROFILE_YAML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "realsense_profile.yaml")
 DEPTH_CAMERA_SUFFIX = "_depth"
 
+# R_mujoco = R_optical @ _F (see the module docstring).
 _F = np.diag([1.0, -1.0, -1.0])
 
 
 def load_profile(path=PROFILE_YAML):
+    """Return the camera profile loaded from path."""
     with open(path) as f:
         return yaml.safe_load(f)
 
 
-# ----------------------------------------------------------------- transforms
 def _quat_xyzw_to_R(q):
+    """Return the rotation matrix of an xyzw quaternion (normalised first)."""
     x, y, z, w = (float(v) for v in q)
     n = math.sqrt(x * x + y * y + z * z + w * w)
     x, y, z, w = x / n, y / n, z / n, w / n
@@ -52,6 +55,7 @@ def _quat_xyzw_to_R(q):
 
 
 def _R_to_quat_wxyz(R):
+    """Return the unit wxyz quaternion of a rotation matrix."""
     w = math.sqrt(max(0.0, 1.0 + R[0, 0] + R[1, 1] + R[2, 2])) / 2.0
     x = math.copysign(math.sqrt(max(0.0, 1.0 + R[0, 0] - R[1, 1] - R[2, 2])) / 2.0, R[2, 1] - R[1, 2])
     y = math.copysign(math.sqrt(max(0.0, 1.0 - R[0, 0] + R[1, 1] - R[2, 2])) / 2.0, R[0, 2] - R[2, 0])
@@ -61,6 +65,7 @@ def _R_to_quat_wxyz(R):
 
 
 def _T(R, p):
+    """Return the 4x4 transform of rotation R and translation p."""
     T = np.eye(4)
     T[:3, :3] = R
     T[:3, 3] = p
@@ -68,7 +73,7 @@ def _T(R, p):
 
 
 def _edges(cam):
-    """[(parent, child, xyz, quat_xyzw, driver)] of a profiled camera."""
+    """Return a profiled camera's TF edges as [(parent, child, xyz, quat_xyzw, driver)]."""
     out = []
     for e in cam["tf_static"]:
         out.append((e[0], e[1], [float(v) for v in e[2]], [float(v) for v in e[3]],
@@ -77,7 +82,7 @@ def _edges(cam):
 
 
 def frame_transform(cam, a, b):
-    """4x4 pose of frame `b` in frame `a` (p_a = T p_b) over the camera's TF tree."""
+    """Return the 4x4 pose of frame b in frame a (p_a = T p_b) over the camera's TF tree."""
     graph = {}
     for parent, child, xyz, q, _ in _edges(cam):
         T = _T(_quat_xyzw_to_R(q), xyz)
@@ -96,13 +101,14 @@ def frame_transform(cam, a, b):
 
 
 def tf_edges(profile, names):
-    """All TF edges of the named cameras: [(parent, child, xyz, quat_xyzw, driver)]."""
+    """Return every TF edge of the named cameras as [(parent, child, xyz, quat_xyzw, driver)]."""
     return [e for n in names for e in _edges(profile["cameras"][n])]
 
 
-# ----------------------------------------------------------------- intrinsics
 @dataclass(frozen=True)
 class Intrinsics:
+    """Hold a pinhole camera's image size and fx, fy, cx, cy, all in pixels."""
+
     width: int
     height: int
     fx: float
@@ -111,26 +117,26 @@ class Intrinsics:
     cy: float
 
     def scaled(self, width, height):
-        """The same projection sampled at width x height (pixel-centre convention)."""
+        """Return the same projection sampled at width x height (pixel-centre convention)."""
         sx, sy = width / self.width, height / self.height
         return Intrinsics(width, height, self.fx * sx, self.fy * sy,
                           (self.cx + 0.5) * sx - 0.5, (self.cy + 0.5) * sy - 0.5)
 
 
 def _profile_intrinsics(stream):
+    """Return the Intrinsics of a profile stream (width, height, k = [fx, fy, cx, cy])."""
     fx, fy, cx, cy = (float(v) for v in stream["k"])
     return Intrinsics(int(stream["width"]), int(stream["height"]), fx, fy, cx, cy)
 
 
 def fovy_intrinsics(width, height, fovy_deg):
-    """Square-pixel pinhole of a MuJoCo fovy camera rendered at width x height."""
+    """Return the square-pixel pinhole of a MuJoCo fovy camera rendered at width x height."""
     f = (height / 2.0) / math.tan(math.radians(fovy_deg) / 2.0)
     return Intrinsics(width, height, f, f, width / 2.0 - 0.5, height / 2.0 - 0.5)
 
 
-# ------------------------------------------------------------- MJCF placement
 def _camera_pose(el):
-    """Local (R_mujoco, pos) of an MJCF <camera> given by pos + xyaxes or quat."""
+    """Return the local (R_mujoco, pos) of an MJCF <camera> given by pos + xyaxes or quat."""
     pos = np.array([float(v) for v in el.get("pos", "0 0 0").split()])
     if el.get("xyaxes") is not None:
         a = np.array([float(v) for v in el.get("xyaxes").split()])
@@ -147,6 +153,7 @@ def _camera_pose(el):
 
 
 def _set_camera(el, T_body_optical, intr):
+    """Set MJCF <camera> el to the optical pose T_body_optical and the pinhole intr."""
     R = T_body_optical[:3, :3] @ _F
     for key in ("xyaxes", "quat", "euler", "axisangle", "zaxis", "fovy"):
         el.attrib.pop(key, None)
@@ -163,11 +170,14 @@ def _set_camera(el, T_body_optical, intr):
 
 
 def place_profiled_cameras(root, cam_name, cam):
-    """Move MJCF camera `cam_name` (whose optical frame is the profile's
-    anchor_link) to the real colour optical pose with the real colour
-    intrinsics, and add `cam_name + DEPTH_CAMERA_SUFFIX` beside it at the depth
-    optical pose with the depth intrinsics. `root` is any ElementTree element
-    containing the camera; returns the depth camera's name."""
+    """Place MJCF camera cam_name and a depth camera beside it as the real camera's streams.
+
+    cam_name's optical frame is the profile's anchor_link. It moves to the real
+    colour optical pose with the real colour intrinsics, and cam_name +
+    DEPTH_CAMERA_SUFFIX is added at the depth optical pose with the depth
+    intrinsics. root is any ElementTree element containing the camera. Returns
+    the depth camera's name.
+    """
     parent = next((b for b in root.iter() for c in b if c.tag == "camera" and c.get("name") == cam_name), None)
     if parent is None:
         raise KeyError(f"camera {cam_name!r} not in the MJCF")
@@ -187,9 +197,10 @@ def place_profiled_cameras(root, cam_name, cam):
     return depth_name
 
 
-# ------------------------------------------------------------- camera specs
 @dataclass(frozen=True)
 class CameraSpec:
+    """Describe one simulated RealSense camera: its MuJoCo cameras, intrinsics and frames."""
+
     ns: str                    # /realsense/<ns>/...
     color_camera: str          # MuJoCo camera rendering colour + aligned depth
     depth_camera: str          # MuJoCo camera rendering depth/image_rect_raw
@@ -202,12 +213,13 @@ class CameraSpec:
 
 
 def camera_specs(model, cameras, profile, scale, fallback_size):
-    """CameraSpec per (ns, mujoco_color_camera) in `cameras`.
+    """Return a CameraSpec per (ns, mujoco_color_camera) in cameras.
 
-    A camera with profiled intrinsics renders at `scale` x its real resolution
+    A camera with profiled intrinsics renders at scale x its real resolution
     and uses its "<name>_depth" MJCF camera for depth. One without keeps its
-    MJCF fovy at `fallback_size` (w, h), and its depth comes from the same
-    camera, as on a D405."""
+    MJCF fovy at fallback_size (w, h), and its depth comes from the same
+    camera, as on a D405.
+    """
     import mujoco
 
     specs = []
@@ -235,15 +247,17 @@ def camera_specs(model, cameras, profile, scale, fallback_size):
     return specs
 
 
-# --------------------------------------------------------------- point cloud
+# One depth/color/points point as the driver lays it out: x y z (m), 4 pad bytes, rgb.
 CLOUD_DTYPE = np.dtype([("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("_pad", "<f4"), ("rgb", "<f4")])
 
 
 def colored_cloud(depth_m, depth_intr, rgb, color_intr, T_color_depth):
-    """The driver's depth/color/points: every valid depth pixel back-projected
-    into the depth optical frame, coloured from the colour image (nearest
-    pixel) and dropped when it falls outside it. Returns a CLOUD_DTYPE array
-    (x y z, 4 pad bytes, rgb packed as float32 0x00RRGGBB at offset 16)."""
+    """Return the driver's depth/color/points as a CLOUD_DTYPE array.
+
+    Every valid depth pixel is back-projected into the depth optical frame,
+    coloured from the nearest colour pixel, and dropped when it falls outside
+    the colour image. rgb is packed as a float32 holding 0x00RRGGBB.
+    """
     h, w = depth_m.shape
     v, u = np.nonzero(depth_m > 0.0)
     z = depth_m[v, u].astype(np.float64)

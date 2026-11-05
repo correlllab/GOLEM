@@ -1,26 +1,24 @@
-"""Name resolution between the Unitree DDS interfaces and the G1 MuJoCo model.
+"""Map the G1's Unitree DDS motor slots, pelvis IMU and base to indices in its MuJoCo model.
 
-When RoboCasa builds a task around the ``G1Dex3`` robot, every joint, actuator,
-sensor, body and site of the robot gets the ``robot0_`` prefix (no joint is
-renamed), and the actuator order follows the MJCF, which interleaves each hand
-after its arm and orders the right hand's fingers differently. The DDS side
-speaks Unitree's motor slots instead: slot i of rt/lowcmd / rt/lowstate is
-BODY_JOINTS[i], and slot i of rt/dex3/<side>/cmd / state is HAND_JOINTS[side][i].
-This module maps one to the other by name, so nothing depends on the model's
-index order.
+RoboCasa builds a task around the ``G1Dex3`` robot with every name prefixed
+``robot0_`` (no joint is renamed) and the actuators in MJCF order, which puts
+each hand after its arm and orders the right hand's fingers differently. The
+DDS side speaks Unitree's motor slots: slot i of rt/lowcmd / rt/lowstate is
+BODY_JOINTS[i], and slot i of rt/dex3/<side>/cmd / state is
+HAND_JOINTS[side][i]. Everything is resolved by name, so nothing depends on the
+model's index order. ``robot_prefix=""`` resolves the standalone G1 MJCF in
+CL_Assets/g1.
 
-The tables are the sim's own, as the H1-2 sim's are: the same slot orders as
-golem_safety's robots/g1.yaml (body) and dex_3's HAND_JOINTS (hands), neither
-of which the robocasa container mounts.
-
-Works on the standalone G1 MJCF in CL_Assets/g1 with ``robot_prefix=""``.
+The tables are the sim's own copies of golem_safety's robots/g1.yaml slot
+order and dex_3's HAND_JOINTS order: the robocasa container mounts neither
+package.
 """
 from typing import NamedTuple
 
 import mujoco
 import numpy as np
 
-# rt/lowcmd / rt/lowstate slot order (G1JointIndex in Unitree's SDK examples)
+# rt/lowcmd / rt/lowstate slot order.
 BODY_JOINTS = (
     "left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint",
     "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
@@ -35,7 +33,7 @@ BODY_JOINTS = (
     "right_wrist_yaw_joint",
 )
 
-# rt/dex3/<side>/cmd HandCmd_ motor order
+# rt/dex3/<side>/cmd and state motor order.
 HAND_ORDER = ("thumb_0", "thumb_1", "thumb_2", "middle_0", "middle_1", "index_0", "index_1")
 HAND_JOINTS = {
     side: tuple(f"{side}_hand_{finger}_joint" for finger in HAND_ORDER)
@@ -44,8 +42,8 @@ HAND_JOINTS = {
 
 FREE_JOINT = "floating_base_joint"
 
-# the pelvis IMU (site imu_in_pelvis): the file's gyro and accelerometer, plus
-# the framequat g1_robosuite adds
+# The pelvis IMU at site imu_in_pelvis: the MJCF's gyro and accelerometer, and
+# the framequat g1_robosuite adds.
 IMU_SENSORS = {
     "quat": "imu-pelvis-orientation",
     "gyro": "imu-pelvis-angular-velocity",
@@ -54,38 +52,45 @@ IMU_SENSORS = {
 
 
 def _id(model, objtype, name):
+    """Return the id of the named object of objtype, or -1."""
     return mujoco.mj_name2id(model, objtype, name)
 
 
 class Motors(NamedTuple):
-    """Model indices of a group of motors, in DDS slot order."""
+    """Hold the model indices of a group of motors, in DDS slot order."""
     names: tuple        # unprefixed joint names
     qpos: np.ndarray    # qpos address of each joint
     qvel: np.ndarray    # dof address of each joint
-    ctrl: np.ndarray    # the motor actuating each joint
-    tau_min: np.ndarray  # the joint's actuatorfrcrange
-    tau_max: np.ndarray
+    ctrl: np.ndarray    # actuator id of each joint's motor
+    tau_min: np.ndarray  # N*m, the joint's actuatorfrcrange (-inf when unlimited)
+    tau_max: np.ndarray  # N*m (+inf when unlimited)
 
 
 class NameResolver:
-    """Resolves the G1's DDS motors, pelvis IMU and base to indices in a
-    (possibly robosuite-merged) MjModel. ``robot_prefix`` is e.g. 'robot0_'; use
-    '' for the standalone G1 MJCF in CL_Assets/g1."""
+    """Resolve the G1's body and hand motors, pelvis IMU and free base in an MjModel.
+
+    body and hands[side] are Motors; sensor_adr maps quat, gyro and acc to
+    (sensordata address, dimension) for the IMU sensors the model has (the
+    standalone MJCF has no framequat); base_body, base_qpos and base_qvel locate
+    the pelvis free joint.
+    """
 
     def __init__(self, model, robot_prefix="robot0_"):
+        """Resolve everything in model, raising KeyError for a missing motor or free joint.
+
+        robot_prefix is 'robot0_' in a RoboCasa env, '' for the standalone G1 MJCF.
+        """
         self.model = model
         self.robot_prefix = robot_prefix
         self.body = self._motors(BODY_JOINTS)
         self.hands = {side: self._motors(names) for side, names in HAND_JOINTS.items()}
 
-        # IMU sensors -> sensordata address + dim (the standalone MJCF has no framequat)
         self.sensor_adr = {}
         for key, name in IMU_SENSORS.items():
             sid = _id(model, mujoco.mjtObj.mjOBJ_SENSOR, robot_prefix + name)
             if sid >= 0:
                 self.sensor_adr[key] = (int(model.sensor_adr[sid]), int(model.sensor_dim[sid]))
 
-        # the pelvis free joint: its body, and where its pose and twist live
         fj = _id(model, mujoco.mjtObj.mjOBJ_JOINT, robot_prefix + FREE_JOINT)
         if fj < 0 or model.jnt_type[fj] != mujoco.mjtJoint.mjJNT_FREE:
             raise KeyError(f"free joint not found in model: {robot_prefix + FREE_JOINT}")
@@ -94,6 +99,7 @@ class NameResolver:
         self.base_qvel = int(model.jnt_dofadr[fj])
 
     def _motors(self, names):
+        """Return the Motors of the joints names, each of which must carry its own motor."""
         model = self.model
         qpos, qvel, ctrl, tau_min, tau_max = [], [], [], [], []
         for name in names:
@@ -101,7 +107,7 @@ class NameResolver:
             jid = _id(model, mujoco.mjtObj.mjOBJ_JOINT, sim_name)
             if jid < 0:
                 raise KeyError(f"joint not found in model: {sim_name}")
-            # actuator name == joint name in the source MJCF
+            # Each actuator is named after its joint.
             aid = _id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, sim_name)
             if aid < 0 or model.actuator_trnid[aid, 0] != jid:
                 raise KeyError(f"no motor on joint {sim_name}")
@@ -115,13 +121,9 @@ class NameResolver:
                       np.array(tau_min, dtype=float), np.array(tau_max, dtype=float))
 
     def site_id(self, name):
+        """Return the id of the robot's site name (unprefixed), or -1."""
         return _id(self.model, mujoco.mjtObj.mjOBJ_SITE, self.robot_prefix + name)
 
     def body_id(self, name):
+        """Return the id of the robot's body name (unprefixed), or -1."""
         return _id(self.model, mujoco.mjtObj.mjOBJ_BODY, self.robot_prefix + name)
-
-    def strip(self, name):
-        """Strip the robot prefix from a sim name for ROS-facing TF frame_ids."""
-        if name and name.startswith(self.robot_prefix):
-            return name[len(self.robot_prefix):]
-        return name

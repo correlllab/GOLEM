@@ -1,22 +1,22 @@
-"""Blank task for both sim runners (``h12_mujoco.py --task Blank``, with or
-without ``--g1``): the robot alone on a floor, under a light.
+"""Register the Blank task: the robot alone on a floor, under a light.
 
-A robosuite env (not a RoboCasa kitchen) around the robot the runner registers
-(``H1_2`` or ``G1Dex3``), so every robot0_/gripper0_ name the bridges resolve
-is the kitchen tasks'. The arena is robosuite's ``EmptyArena`` without its
-visual walls: its floor plane, skybox, light and fixed cameras (cameras are not
-geoms, and no bridge reads them).
+Both sim runners run it (``h12_mujoco.py --task Blank``, with or without
+``--g1``). It is a robosuite env, not a RoboCasa kitchen, around the robot the
+runner registers (``H1_2`` or ``G1Dex3``), so every robot0_/gripper0_ name the
+bridges resolve is the kitchen tasks'. The arena is robosuite's ``EmptyArena``
+without its visual walls: its floor plane, skybox, light and fixed cameras
+(cameras are not geoms, and no bridge reads them).
 
 Importing this module registers the env with robosuite (EnvMeta), so
 ``robosuite.make("Blank", robots=...)`` resolves it. The task has no scripted
 success: the RoboCasa task-signal surface the runners read (update_state /
-_check_success / reward / get_ep_meta) is stubbed, as battery_env's is.
+_check_success / reward / get_ep_meta) is stubbed.
 """
 from robosuite.environments.manipulation.manipulation_env import ManipulationEnv
 from robosuite.models.arenas import EmptyArena
 from robosuite.models.tasks import ManipulationTask
 
-# Task names this module provides, as given to h12_mujoco.py --task.
+# The --task names this module provides.
 TASKS = ("Blank",)
 
 # Pelvis spawn (m, world) and orientation (euler rad): at the origin, facing +x.
@@ -25,8 +25,7 @@ TASKS = ("Blank",)
 ROBOT_BASE_POS = (0.0, 0.0, 1.0)
 ROBOT_BASE_ORI = (0.0, 0.0, 0.0)
 
-# EmptyArena's geoms other than its floor: walls drawn around the workspace
-# (contype 0, visual only), which would show in the cameras.
+# EmptyArena's walls (contype 0, visual only), which would show in the cameras.
 _WALL_PREFIX = "wall_"
 
 
@@ -39,9 +38,10 @@ def canonical_task(name):
 
 
 class BlankArena(EmptyArena):
-    """robosuite's EmptyArena with its walls removed: a floor and a light."""
+    """Build robosuite's EmptyArena without its walls: a floor and a light."""
 
     def __init__(self):
+        """Load EmptyArena and remove its wall geoms."""
         super().__init__()
         for geom in list(self.worldbody.findall("geom")):
             if (geom.get("name") or "").startswith(_WALL_PREFIX):
@@ -49,17 +49,17 @@ class BlankArena(EmptyArena):
 
 
 class Blank(ManipulationEnv):
-    """The robot standing at the origin of an empty world."""
+    """Stand the robot at the origin of an empty world."""
 
     def __init__(self, robots, use_object_obs=True, **kwargs):
-        # use_object_obs is part of make_kitchen_env's kwarg set; this env
-        # defines no object observables, so it is stored and otherwise unused.
+        """Build the env; use_object_obs is accepted for make_kitchen_env and unused."""
         self.use_object_obs = use_object_obs
         self.init_robot_base_pos = list(ROBOT_BASE_POS)
         self.init_robot_base_ori = list(ROBOT_BASE_ORI)
         super().__init__(robots=robots, **kwargs)
 
     def _load_model(self):
+        """Put the robot at ROBOT_BASE_POS in a BlankArena."""
         super()._load_model()
         self.robots[0].robot_model.set_base_xpos(ROBOT_BASE_POS)
         self.model = ManipulationTask(
@@ -67,15 +67,18 @@ class Blank(ManipulationEnv):
             mujoco_robots=[robot.robot_model for robot in self.robots],
         )
 
-    # --- RoboCasa task-signal surface read by the runners / MeasurementBridge
     def update_state(self):
+        """Do nothing: the task has no fixtures to update."""
         pass
 
     def _check_success(self):
+        """Return False: the task has no success condition."""
         return False
 
     def reward(self, action=None):
+        """Return 0: the task has no reward."""
         return 0.0
 
     def get_ep_meta(self):
+        """Return the episode's language goal, which MeasurementBridge publishes."""
         return {"lang": "blank world: the robot alone on an empty floor"}

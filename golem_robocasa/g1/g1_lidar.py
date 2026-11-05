@@ -1,4 +1,4 @@
-"""The G1's Livox MID-360 in MuJoCo: ray-cast scans and the sensor's built-in IMU.
+"""Model the G1's Livox MID-360 in MuJoCo: ray-cast scans and the sensor's built-in IMU.
 
 Geometry only (numpy + mujoco, no ROS): g1_sensor_msgs.py packs what this module
 returns into the messages the Livox driver publishes (/livox/lidar CustomMsg,
@@ -43,8 +43,8 @@ robot's own body and the body still occludes what is behind it, as on the real
 robot. Only visual geoms (group 1) are hit, the surfaces the camera renders;
 MuJoCo's ray functions also skip geoms with alpha 0, which in RoboCasa are
 placement regions and hidden collision boxes. Rays with no hit within MAX_RANGE
-give no point (the real driver may instead publish them as zero points; not
-checked).
+give no point (the real driver may publish them as zero points instead;
+unchecked).
 
 IMU. imu() gives the angular velocity (rad/s) and the specific force (in g, the
 unit the driver publishes; lidar_imu_data_queue.h) of a point rigidly attached
@@ -89,13 +89,13 @@ STANDARD_GRAVITY = 9.80665           # m/s^2 per g
 
 _GOLDEN = (np.sqrt(5.0) - 1.0) / 2.0  # 1 / golden ratio
 _EPS_T = 1e-9                         # s, tolerance on accumulated sim time
-# sensors for which mj_forward runs mj_rnePostConstraint, filling cacc
+# Sensor types for which mj_forward runs mj_rnePostConstraint, filling cacc.
 _CACC_SENSORS = [int(getattr(mujoco.mjtSensor, f"mjSENS_{name}")) for name in
                  ("ACCELEROMETER", "FORCE", "TORQUE", "FRAMELINACC", "FRAMEANGACC")]
 
 
 class LidarFrame(NamedTuple):
-    """One published scan; the points in the order they were measured."""
+    """Hold one published scan, the points in the order they were measured."""
     timebase: float            # s, time of the first point (the CustomMsg's timebase and stamp)
     offset_time: np.ndarray    # uint32 ns after timebase, non-decreasing
     points: np.ndarray         # float32 (n, 3), m, in livox_frame
@@ -103,11 +103,11 @@ class LidarFrame(NamedTuple):
 
 
 def scan_pattern(frame_index, points_per_frame=POINTS_PER_FRAME, elevation_deg=ELEVATION_DEG):
-    """(unit directions (n, 3) in livox_frame, line numbers) of one frame's rays, in firing order"""
+    """Return (unit directions (n, 3) in livox_frame, line numbers) of a frame's rays, in firing order."""
     k = np.arange(points_per_frame)
     shift = (frame_index * _GOLDEN) % 1.0
     azimuth = 2.0 * np.pi * (k + shift) / points_per_frame
-    g = frame_index * points_per_frame + k   # the elevation sequence runs on across frames
+    g = frame_index * points_per_frame + k   # the elevation sequence continues across frames
     low, high = np.sin(np.radians(elevation_deg))
     elevation = np.arcsin(low + (high - low) * ((g * _GOLDEN) % 1.0))
     cos_el = np.cos(elevation)
@@ -117,14 +117,16 @@ def scan_pattern(frame_index, points_per_frame=POINTS_PER_FRAME, elevation_deg=E
 
 
 class Mid360:
-    """The MID-360 on a G1 MjModel: frames from update(), IMU samples from imu().
-
-    prefix is the robot's name prefix in the model ('robot0_' in a RoboCasa env,
-    '' in the standalone G1 MJCF in CL_Assets/g1).
-    """
+    """Scan and sample the MID-360 on a G1 MjModel: frames from update(), IMU samples from imu()."""
 
     def __init__(self, model, prefix="robot0_", points_per_frame=POINTS_PER_FRAME,
                  rate_hz=FRAME_RATE_HZ, min_range=MIN_RANGE, max_range=MAX_RANGE):
+        """Find the sensor in model; rate_hz is frames per sim second, ranges m.
+
+        prefix is the robot's name prefix ('robot0_' in a RoboCasa env, '' in
+        the standalone G1 MJCF). Raises if the site is missing or not on
+        torso_link, or if the model computes no acceleration-stage sensor.
+        """
         self.model = model
         self.site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, prefix + SITE)
         if self.site_id < 0:
@@ -132,7 +134,7 @@ class Mid360:
         self.torso_id = int(model.site_bodyid[self.site_id])
         if mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, self.torso_id) != prefix + TORSO_BODY:
             raise ValueError(f"{prefix + SITE} is not on {prefix + TORSO_BODY}")
-        # the robot is the subtree of the free-floating pelvis the sensor hangs off
+        # The robot is the subtree of the free-floating pelvis the sensor hangs off.
         root = model.body_rootid[self.torso_id]
         self.robot_geom = model.body_rootid[model.geom_bodyid] == root
         if (not np.isin(model.sensor_type, _CACC_SENSORS).any()
@@ -157,16 +159,18 @@ class Mid360:
         self._frame_index = -1
         self._start = None
 
-    # ----------------------------------------------------------------- geometry
     def pose(self, data):
-        """(position (3,), rotation (3, 3) livox_frame -> world) of the sensor"""
+        """Return the sensor's (position (3,) m, rotation (3, 3) livox_frame -> world)."""
         return (data.site_xpos[self.site_id].copy(),
                 data.site_xmat[self.site_id].reshape(3, 3).copy())
 
     def cast(self, data, directions, dist=None, geomid=None):
-        """Distance (m) along each unit direction (n, 3) in livox_frame to the first
-        surface, from the current pose; NaN where there is no point (no hit within
-        max_range, closer than min_range, or the robot's own body in the way)."""
+        """Return the distance (m) along each unit direction (n, 3) in livox_frame to the first surface.
+
+        NaN where there is no point: no hit within max_range, closer than
+        min_range, or the robot's own body in the way. dist and geomid are
+        optional output buffers.
+        """
         n = len(directions)
         dist = np.empty(n) if dist is None else dist
         geomid = np.empty(n, dtype=np.int32) if geomid is None else geomid
@@ -193,8 +197,8 @@ class Mid360:
         dist[~hit | robot | (dist < self.min_range) | (dist > self.max_range)] = np.nan
         return dist
 
-    # -------------------------------------------------------------------- scans
     def _begin(self, t):
+        """Start the next frame at sim time t."""
         self._frame_index += 1
         self._start = t
         self._timebase = None
@@ -202,6 +206,7 @@ class Mid360:
         self._directions, self._line = scan_pattern(self._frame_index, self.points_per_frame)
 
     def _cast_until(self, data, t, count):
+        """Cast the frame's rays up to index count from the pose in data, labelled with time t."""
         first, last = self._next, count
         if last <= first:
             return
@@ -213,6 +218,7 @@ class Mid360:
         self._next = last
 
     def _finish(self):
+        """Return the frame's valid points as a LidarFrame."""
         valid = np.isfinite(self._dist)
         offset = np.round((self._when[valid] - self._timebase) * 1e9)
         points = self._directions[valid] * self._dist[valid, None]
@@ -220,8 +226,10 @@ class Mid360:
                           self._line[valid].copy())
 
     def update(self, data, t):
-        """Cast the rays due by time t (the time of data's kinematics, see the
-        module docstring). Returns the frame that t completed, else None."""
+        """Cast the rays due by sim time t and return the frame t completed, else None.
+
+        t is the time of data's kinematics (see the module docstring).
+        """
         frame = None
         if self._start is None or t < self._start - _EPS_T:   # first call, or the sim was reset
             self.reset()
@@ -235,15 +243,16 @@ class Mid360:
         self._cast_until(data, t, min(due, self.points_per_frame))
         return frame
 
-    # ---------------------------------------------------------------------- IMU
     def imu(self, data, point=IMU_IN_LIDAR):
-        """(angular velocity rad/s, specific force in g) at point (m, livox_frame) on the
-        sensor, in livox_frame axes; by default the MID-360's IMU"""
+        """Return (angular velocity rad/s, specific force g) at point, in livox_frame axes.
+
+        point is m in livox_frame, by default the MID-360's IMU.
+        """
         mujoco.mj_objectVelocity(self.model, data, mujoco.mjtObj.mjOBJ_SITE, self.site_id,
                                  self._vel, 1)
         mujoco.mj_objectAcceleration(self.model, data, mujoco.mjtObj.mjOBJ_SITE, self.site_id,
                                      self._acc, 1)
         omega, alpha, accel = self._vel[:3], self._acc[:3], self._acc[3:]
-        # the site's specific force carried to the point on the same rigid body
+        # The site's specific force carried to the point on the same rigid body.
         accel = accel + np.cross(alpha, point) + np.cross(omega, np.cross(omega, point))
         return omega.copy(), accel / STANDARD_GRAVITY

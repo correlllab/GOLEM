@@ -1,28 +1,27 @@
-"""Publish RoboCasa task measurements (goal / success / reward) onto ROS.
+"""Publish the RoboCasa task's signals on ROS and serve the elastic band's toggle.
 
-The RoboCasa env shares our MjData (we step it ourselves), so once per control
-step (``env.control_timestep``, as RoboCasa's own ``env.step`` does) the loop
-calls ``env.update_state()`` (refreshes fixture caches: temperature, timer,
-door, rack) and then ``tick()``, which reads ``_check_success``. This bridge
-wraps that read and publishes, at the control rate:
+The sim loop steps the env's own MjData, so once per control step
+(``env.control_timestep``, as RoboCasa's own ``env.step`` does) it calls
+``env.update_state()`` (fixture state: temperature, timer, door, rack) and then
+``tick()``, which reads ``_check_success`` and publishes:
 
-  /robocasa/task_name   std_msgs/String   (the task env name, e.g. "TurnOnToasterOven", latched)
-  /robocasa/task_goal   std_msgs/String   (the language instruction, latched)
-  /robocasa/success     std_msgs/Bool     (sustained success, after debounce)
-  /robocasa/reward      std_msgs/Float32  (sparse instantaneous = float(success))
+  /robocasa/task_name   std_msgs/String   the task env name, latched
+  /robocasa/task_goal   std_msgs/String   the language instruction, latched
+  /robocasa/success     std_msgs/Bool     success held for debounce_steps control steps
+  /robocasa/reward      std_msgs/Float32  float(success) of this control step
 
-Success is debounced over N consecutive successful control steps (RoboCasa
-teleop uses ~15) so a single transient frame does not count as task completion.
+These are privileged task signals the real robot does not have: no robot-stack
+node may depend on them.
 
-Opt-in experiment surface (GOLEM_SIM_EXPERIMENT=1; off by default). It is for
-experiment harnesses only — no robot-stack node may consume or call it, since
-the real robot has no such interface:
+With GOLEM_SIM_EXPERIMENT=1 (off by default) it also serves a ground-truth
+experiment surface, for experiment harnesses only; no robot-stack node may
+consume or call it, since the real robot has no such interface:
 
   /sim/ground_truth     std_msgs/String   JSON at the control rate: sim time,
                         every non-robot free body's world pose ("objects"),
                         the pose of every body attached under one ("links",
-                        e.g. a cable's segments), the robot's whole-body CoM,
-                        and both ankle_roll_link poses
+                        e.g. a cable's segments), the robot's whole-body CoM
+                        and pelvis pose, and both ankle_roll_link poses
                         (poses are [x, y, z, qw, qx, qy, qz], world frame, m)
   /sim/reset_objects    std_srvs/Trigger  put every non-robot free body, and
                         the joints of the bodies attached under it, back at
@@ -38,7 +37,14 @@ from std_srvs.srv import Trigger
 
 
 class MeasurementBridge(Node):
+    """Run the robocasa_measurement node: task signals, the band toggle, the experiment surface."""
+
     def __init__(self, env, debounce_steps=15, elastic_band=None, task_name=""):
+        """Publish env's task signals; serve /elastic_band/toggle when elastic_band is given.
+
+        debounce_steps is how many consecutive successful control steps make a
+        success (RoboCasa teleop uses ~15), so a transient frame does not count.
+        """
         super().__init__("robocasa_measurement")
         self.env = env
         self.debounce_steps = int(debounce_steps)
@@ -46,14 +52,11 @@ class MeasurementBridge(Node):
         self.lang = ""
         self.task_name = task_name
 
-        # Optional elastic-band toggle service (std_srvs/Trigger ->
-        # ElasticBand.toggle()). Lets the band be released without the windowed
-        # viewer / SPACE key.
         self.elastic_band = elastic_band
         if elastic_band is not None:
             self.create_service(Trigger, "/elastic_band/toggle", self._on_elastic_band_toggle)
 
-        # transient_local so late subscribers still get the latched goal
+        # transient_local, so a late subscriber still gets the task name and goal.
         from rclpy.qos import QoSDurabilityPolicy, QoSProfile
 
         latched = QoSProfile(depth=1)
@@ -70,10 +73,12 @@ class MeasurementBridge(Node):
             self._init_experiment()
 
     def _init_experiment(self):
+        """Serve /sim/ground_truth and /sim/reset_objects for every non-robot free body."""
         model = self.env.sim.model._model
-        pfx = self.env.robots[0].robot_model.naming_prefix   # "robot0_"
+        pfx = self.env.robots[0].robot_model.naming_prefix
 
         def body(i):
+            """Return body i's name, or ""."""
             return mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, i) or ""
 
         free = [j for j in range(model.njnt)
@@ -84,14 +89,15 @@ class MeasurementBridge(Node):
         object_roots = set(self._gt_objects.values())
 
         def root_of(b):
+            """Return the child of the world body that body b hangs under."""
             while model.body_parentid[b] != 0:
                 b = model.body_parentid[b]
             return b
 
         self._gt_links = {body(b): b for b in range(1, model.nbody)
                           if b not in object_roots and root_of(b) in object_roots}
-        # (qpos address, qpos width, dof address, dof width) per joint of an
-        # object or a body attached under it; the authored pose is model.qpos0.
+        # (qpos address, qpos width, dof address, dof width) of every joint of an
+        # object or of a body under it; the authored pose is model.qpos0.
         widths = {mujoco.mjtJoint.mjJNT_FREE: (7, 6), mujoco.mjtJoint.mjJNT_BALL: (4, 3),
                   mujoco.mjtJoint.mjJNT_SLIDE: (1, 1), mujoco.mjtJoint.mjJNT_HINGE: (1, 1)}
         self._reset_joints = [
@@ -114,7 +120,7 @@ class MeasurementBridge(Node):
             f"{sorted(self._gt_objects)} (experiment harnesses only)")
 
     def _on_reset_objects(self, request, response):
-        # Applied in tick(), which the sim loop calls under its lock.
+        """Ask tick() to reset the objects, which it does holding the sim lock."""
         self._reset_pending = True
         response.success = True
         response.message = (f"resetting {len(self._gt_objects)} objects "
@@ -122,6 +128,7 @@ class MeasurementBridge(Node):
         return response
 
     def _reset_objects(self):
+        """Put every object joint back at its authored pose, at rest."""
         model, data = self.env.sim.model._model, self.env.sim.data._data
         for qadr, nq, dadr, nv in self._reset_joints:
             data.qpos[qadr:qadr + nq] = model.qpos0[qadr:qadr + nq]
@@ -129,9 +136,11 @@ class MeasurementBridge(Node):
         mujoco.mj_forward(model, data)
 
     def _publish_ground_truth(self):
+        """Publish /sim/ground_truth: poses [x, y, z, qw, qx, qy, qz] (m, world) as JSON."""
         data = self.env.sim.data._data
 
         def pose(b):
+            """Return body b's world pose as [x, y, z, qw, qx, qy, qz]."""
             return [float(v) for v in data.xpos[b]] + [float(v) for v in data.xquat[b]]
 
         msg = {
@@ -146,13 +155,15 @@ class MeasurementBridge(Node):
         self._gt_pub.publish(String(data=json.dumps(msg)))
 
     def _on_elastic_band_toggle(self, request, response):
+        """Toggle the band and answer with its new state."""
         enabled = self.elastic_band.toggle()
         response.success = True
         response.message = "enabled" if enabled else "disabled"
         return response
 
     def publish_goal(self):
-        self._task_pub.publish(String(data=self.task_name))   # task env name (latched)
+        """Publish the task name and the episode's language goal, and return the goal."""
+        self._task_pub.publish(String(data=self.task_name))
         try:
             self.lang = self.env.get_ep_meta().get("lang", "") or ""
         except Exception as e:  # pragma: no cover - container only
@@ -163,8 +174,11 @@ class MeasurementBridge(Node):
         return self.lang
 
     def tick(self):
-        """Read success/reward off the (already update_state()'d) env. Returns the
-        debounced 'task complete' boolean."""
+        """Publish this control step's success and reward and return the debounced success.
+
+        Call after env.update_state(), holding the sim lock: it also applies a
+        pending object reset and publishes ground truth when enabled.
+        """
         try:
             success = bool(self.env._check_success())
         except Exception as e:  # pragma: no cover - container only

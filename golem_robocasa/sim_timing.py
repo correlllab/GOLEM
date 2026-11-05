@@ -1,13 +1,18 @@
-"""Wall-clock pacing and optional stage timings for the single-step simulator."""
+"""Pace the H1-2 sim loop to wall time and report its per-stage timings (--timing)."""
 import math
 import threading
 import time
 
 
 class RealtimePacer:
-    """Keep a wall deadline without skipping physics or repaying long pauses."""
+    """Hold the sim loop to a wall-clock deadline per physics step.
+
+    It never skips a physics step and never repays more than max_lag of wall
+    lag, so a long pause does not turn into minutes of catch-up.
+    """
 
     def __init__(self, timestep, max_lag=0.1, *, clock=time.perf_counter, sleep=time.sleep):
+        """Pace steps of timestep wall seconds, repaying at most max_lag (s) of lag."""
         if not math.isfinite(timestep) or timestep <= 0:
             raise ValueError('timestep must be finite and positive')
         if not math.isfinite(max_lag) or max_lag < 0:
@@ -19,24 +24,26 @@ class RealtimePacer:
         self.deadline = clock()
 
     def wait(self):
+        """Sleep until the next step's deadline, or move the deadline up when far behind."""
         self.deadline += self.timestep
         now = self.clock()
         delay = self.deadline - now
         if delay > 0:
             self.sleep(delay)
         elif -delay > self.max_lag:
-            # Renderer initialization/debugger pauses must not create minutes
-            # of catch-up. Only the wall deadline changes, never simulation time.
+            # Only the wall deadline moves; sim time is never skipped.
             self.deadline = now - self.max_lag
 
 
 class LoopTimings:
-    """Report mean/max stage milliseconds and RTF every few wall seconds.
+    """Collect per-stage wall times and print mean/max ms and the real-time factor.
 
-    Sensor worker threads record stages too, so updates and reports are locked.
+    Disabled (the default) it does nothing. The sensor worker threads record
+    stages too, so updates and reports take a lock.
     """
 
     def __init__(self, enabled=False, interval=5.0, *, clock=time.perf_counter):
+        """Report every interval wall seconds when enabled."""
         self.enabled = enabled
         self.interval = interval
         self.clock = clock
@@ -46,15 +53,18 @@ class LoopTimings:
         self._lock = threading.Lock()
 
     def reset(self, sim_time):
+        """Start a new report interval at sim_time (s) and drop the stages so far."""
         self.wall_start = self.clock() if self.enabled else 0.0
         self.sim_start = sim_time
         with self._lock:
             self.stages.clear()
 
     def start(self):
+        """Return the start mark of a stage, to pass to stop()."""
         return self.clock() if self.enabled else 0.0
 
     def stop(self, name, start):
+        """Record the wall time since start under the stage name."""
         if self.enabled:
             elapsed = self.clock() - start
             with self._lock:
@@ -62,6 +72,7 @@ class LoopTimings:
                 self.stages[name] = (total + elapsed, count + 1, max(longest, elapsed))
 
     def maybe_report(self, sim_time):
+        """Print the report and start a new interval once interval wall seconds have passed."""
         if not self.enabled:
             return
         now = self.clock()

@@ -1,4 +1,7 @@
-"""ROS-container half of CustomMsg interoperability test; exits nonzero on timeout."""
+"""Receive the Isaac-published Livox CustomMsg in ROS and check every field (run_livox_interop.sh).
+
+Runs in the ROS container; exits nonzero when no message arrives within 30 s or a field differs.
+"""
 import time
 import rclpy
 from livox_ros_driver2.msg import CustomMsg

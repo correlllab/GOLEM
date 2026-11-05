@@ -1,4 +1,4 @@
-"""DDS-to-action tests on CPU, with no DDS participant or simulator."""
+"""Check how the Isaac sim turns DDS motor commands into actions, on CPU with no DDS or sim."""
 import importlib.util
 import os
 from pathlib import Path
@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[2] / 'CL_isaaclab_sim'
 sys.path.insert(0, str(ROOT))
 from src.python.control.motor_contract import BODY_ACTION_DIM, MOTOR_FIELDS
 
+# action_provider_dds.py loaded against a stand-in dds_master, so no DDS participant starts.
 stub = ModuleType('src.python.dds.common.dds_master')
 stub.dds_manager = Mock()
 spec = importlib.util.spec_from_file_location('src.python.control._tested_action_provider_dds', ROOT / 'src/python/control/action_provider_dds.py')
@@ -21,11 +22,15 @@ with patch.dict(sys.modules, {stub.__name__: stub}):
 
 
 def command(sequence=1):
+    """Return a robot command whose every motor field holds its own constant on all 27 motors."""
     return {'sequence': sequence, 'motor_cmd': {field: [float(i + 1)] * 27 for i, field in enumerate(MOTOR_FIELDS)}}
 
 
 class ActionProviderTests(unittest.TestCase):
+    """Run DDSActionProvider against stand-in robot and hand bridges."""
+
     def setUp(self):
+        """Make a provider at 10 ms physics steps with a 0.5 s command timeout."""
         self.env = SimpleNamespace(device='cpu', physics_dt=.01, _sim_step_counter=0)
         self.robot, self.hand = Mock(), Mock()
         self.robot.get_robot_command.return_value = command()
@@ -35,12 +40,14 @@ class ActionProviderTests(unittest.TestCase):
             self.provider = provider_module.DDSActionProvider(self.env, SimpleNamespace(robot_type='h1_2', enable_inspire_dds=True))
 
     def test_preserves_every_field_and_reuses_output(self):
+        """Every motor field reaches the action in order, and the action tensor is reused between steps."""
         action = self.provider.get_action(self.env)
         expected = torch.tensor([[float(i + 1)] * 27 for i in range(6)])
         torch.testing.assert_close(action[0, :BODY_ACTION_DIM].reshape(6, 27), expected)
         self.assertEqual(action.data_ptr(), self.provider.get_action(self.env).data_ptr())
 
     def test_stale_sequence_expires_in_simulation_time(self):
+        """A command not renewed releases the motors after 0.5 s of sim time, and a new one re-engages them."""
         self.provider.get_action(self.env)
         self.env._sim_step_counter = 50
         self.assertTrue(self.provider.get_action(self.env)[0, :BODY_ACTION_DIM].any())
@@ -50,17 +57,20 @@ class ActionProviderTests(unittest.TestCase):
         self.assertTrue(self.provider.get_action(self.env)[0, :BODY_ACTION_DIM].any())
 
     def test_time_reversal_releases_old_command(self):
+        """Sim time going back releases the held command."""
         self.env._sim_step_counter = 20
         self.provider.get_action(self.env)
         self.env._sim_step_counter = 0
         self.assertFalse(self.provider.get_action(self.env)[0, :BODY_ACTION_DIM].any())
 
     def test_mode_zero_reaches_the_drive(self):
+        """Motor mode 0 reaches the action as mode 0."""
         self.robot.get_robot_command.return_value['motor_cmd']['mode'] = [0] * 27
         body = self.provider.get_action(self.env)[0, :BODY_ACTION_DIM].reshape(6, 27)
         self.assertFalse(body[5].any())
 
     def test_malformed_command_releases_previous_command(self):
+        """A malformed or non-finite command releases the motors rather than keep the last command."""
         for bad in ({}, {'positions': [1]}, {'positions': [float('nan')] * 27, **{k: [1.] * 27 for k in MOTOR_FIELDS[1:]}}):
             self.robot.get_robot_command.return_value = command(10)
             self.provider._sequence = None
@@ -69,6 +79,7 @@ class ActionProviderTests(unittest.TestCase):
             self.assertFalse(self.provider.get_action(self.env)[0, :BODY_ACTION_DIM].any())
 
     def test_hand_positions_survive_body_timeout(self):
+        """Hand targets stay after the body command times out, and a non-finite hand command is ignored."""
         positions = [i * .1 for i in range(12)]
         self.hand.get_inspire_hand_command.return_value = {'positions': positions}
         self.provider.get_action(self.env)
@@ -80,6 +91,7 @@ class ActionProviderTests(unittest.TestCase):
         torch.testing.assert_close(self.provider.get_action(self.env)[0, BODY_ACTION_DIM:], torch.tensor(positions))
 
     def test_start_and_cleanup_have_no_worker_thread(self):
+        """Start runs no worker thread, and cleanup stops both bridges."""
         self.provider.start()
         self.assertTrue(self.provider.is_running)
         self.assertIsNone(self.provider._thread)

@@ -1,4 +1,4 @@
-"""Validate mimic signs and finite limits using the real USD schema, without GPU."""
+"""Check the Magpie gripper's mimic-joint couplings with the real USD and PhysX schemas, without a GPU."""
 import importlib.util
 from pathlib import Path
 import unittest
@@ -16,7 +16,10 @@ spec.loader.exec_module(module)
 
 @unittest.skipIf(PhysxSchema is None, 'Requires Isaac Sim USD/PhysX schema packages')
 class MagpieCouplingTests(unittest.TestCase):
+    """Apply `add_magpie_couplings` to the Magpie H1-2 USD on an in-memory stage."""
+
     def test_asset_couplings_remap_references_without_editing_source(self):
+        """Each of the 8 follower joints mimics its finger's first joint with the right sign and mirrored limits, on the referencing stage only."""
         asset = ROOT / 'CL_Assets/isaac_assets/robots/h1_2_magpie/h1_2_magpie.usd'
         if not asset.is_file():
             self.skipTest('CL_Assets checkout is required')
@@ -40,11 +43,12 @@ class MagpieCouplingTests(unittest.TestCase):
                              -gearing * reference.GetUpperLimitAttr().Get()])
             self.assertAlmostEqual(follower.GetLowerLimitAttr().Get(), bounds[0])
             self.assertAlmostEqual(follower.GetUpperLimitAttr().Get(), bounds[1])
-        # Applying twice is safe and does not duplicate schema instances.
+        # A second application adds no further mimic joints.
         module.add_magpie_couplings(root)
         self.assertEqual(len([p for p in Usd.PrimRange(root) if p.HasAPI(PhysxSchema.PhysxMimicJointAPI, 'rotX')]), 8)
 
     def test_wrong_asset_fails_loudly(self):
+        """An asset without the gripper's linkage joints raises ValueError."""
         stage = Usd.Stage.CreateInMemory()
         with self.assertRaisesRegex(ValueError, 'missing linkage joints'):
             module.add_magpie_couplings(stage.DefinePrim('/Robot', 'Xform'))

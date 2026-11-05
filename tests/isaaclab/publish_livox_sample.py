@@ -1,4 +1,7 @@
-"""Isaac-container half of CustomMsg interoperability test (no GPU)."""
+"""Publish a fixed two-point Livox CustomMsg over Isaac's CycloneDDS writer for 8 s (run_livox_interop.sh).
+
+Runs in the Isaac container with no GPU sim; check_livox_ros.py checks the same values.
+"""
 import os
 import time
 import numpy as np
@@ -6,6 +9,7 @@ from src.python.sensors.livox_dds import LivoxPublisher
 from src.python.sensors.ros_sensor_bridge import POINT_DTYPE
 
 domain = int(os.environ['ROS_DOMAIN_ID'])
+# SAFETY: never on domain 0, the real robots' command bus.
 assert 1 <= domain <= 232
 publisher = LivoxPublisher(domain)
 points = np.zeros(2, dtype=POINT_DTYPE)

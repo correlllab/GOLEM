@@ -1,4 +1,4 @@
-"""Keep physical state restoration wired into the native reset lifecycle."""
+"""Check that the Isaac task's reset restores the physics before it clears the IMU history."""
 import ast
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,8 +10,11 @@ CONFIG = ROOT / 'CL_isaaclab_sim/tasks/h1-2_tasks/stack_rgyblock_h12_27dof_inspi
 
 
 class PhysicalResetTests(unittest.TestCase):
+    """Run the task's reset events with stand-in functions."""
+
     def test_reset_restores_physics_before_clearing_imu_history(self):
-        # Load the actual event configuration without initializing Kit/GPU.
+        """The reset events restore the scene's default state, then clear the robot's IMU cache."""
+        # The task's own EventCfg, compiled alone so that neither Kit nor a GPU is needed.
         tree = ast.parse(CONFIG.read_text())
         event_class = next(node for node in tree.body
                            if isinstance(node, ast.ClassDef) and node.name == 'EventCfg')

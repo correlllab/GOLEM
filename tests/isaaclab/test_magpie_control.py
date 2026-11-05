@@ -1,4 +1,4 @@
-"""Magpie aperture/force commands reach the physical joint drives."""
+"""Check that Magpie aperture, speed and force commands reach the gripper joint drives."""
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -11,7 +11,10 @@ from src.python.control.robot_variant import robot_variant
 
 
 class MagpieControlTests(unittest.TestCase):
+    """Run MagpieController against a stand-in robot."""
+
     def test_linkage_speed_force_and_measured_state(self):
+        """A command sets the linked finger targets and effort limits, and the measured state reports back."""
         names=list(robot_variant().hand_joints)
         data=SimpleNamespace(joint_names=names,joint_pos=torch.zeros(1,12),joint_vel=torch.zeros(1,12),applied_torque=torch.zeros(1,12),joint_effort_limits=torch.zeros(1,12))
         actuator=SimpleNamespace(effort_limit=torch.zeros(1,12),joint_indices=list(range(12)))

@@ -23,13 +23,14 @@ import time
 
 import numpy as np
 import pytest
+from golem_upper_ik.profile import known_robots
 
 from ros_harness import (
     G1_LIMP_ARMS, CommandRecorder, FollowingRobot, RelayedRobot, SafetyNode, body_pose,
     profile_of, shared_model, slots_of, wait_for,
 )
 
-ROBOTS = ('h12', 'g1')
+ROBOTS = known_robots()
 # the controller config, and the golem_safety config it pairs with, of each test setting
 CONFIGS = {'h12': 'safety_split', 'g1': 'g1_split'}
 SPLIT = {'h12': ('safety_split', 'relax_safety_split'), 'g1': ('g1_split', 'split')}

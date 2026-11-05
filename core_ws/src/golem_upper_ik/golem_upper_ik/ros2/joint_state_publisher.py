@@ -4,7 +4,7 @@ joint_state_publisher: /joint_states for the robot's body joints at 100 Hz, from
     ros2 run golem_upper_ik joint_state_publisher --ros-args -p robot:=h12
 
 Parameters: robot (h12 or g1, required) and config (a controller config name or path, read
-for topics.low_state; default the robot's DEFAULT_CONFIG). Every message names the profile's
+for topics.low_state; default the robot's default_config). Every message names the profile's
 body joints in /lowcmd slot order and carries the newest /lowstate's positions, all 0 before
 the first sample. Joints off the body (the hands', the grippers') come from their own nodes.
 '''

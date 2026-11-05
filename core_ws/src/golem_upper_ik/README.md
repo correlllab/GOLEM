@@ -30,8 +30,8 @@ ros2 run golem_upper_ik joint_state_publisher --ros-args -p robot:=h12
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `robot` | required | `h12` or `g1` |
-| `config` | the robot's `DEFAULT_CONFIG`: `debug` (H1-2), `g1_split` (G1) | a controller config name under `share/golem_upper_ik/config/<robot>/` (with or without `.yaml`), or a path; a path in another robot's config directory is refused. `joint_state_publisher` reads only its `topics.low_state` |
+| `robot` | required | a robot with data in both packages: `h12` or `g1` (Robot profiles, below) |
+| `config` | the robot's `default_config` in `config/<robot>/robot.yaml`: `debug` (H1-2), `g1_split` (G1) | a controller config name under `share/golem_upper_ik/config/<robot>/` (with or without `.yaml`), or a path; a path in another robot's config directory is refused. `joint_state_publisher` reads only its `topics.low_state` |
 
 A node whose robot is missing or unknown, whose config does not load, or whose start-up
 fails logs why (`frame_task_server did not start: ...`, naming the robot and the config once
@@ -61,14 +61,17 @@ first sample. The hands' and grippers' joints come from their own nodes.
 
 ## Robot profiles
 
-`golem_upper_ik.profile.load_profile(robot)` joins two sources: `golem_safety`'s
+`golem_upper_ik.profile.load_profile(robot)` joins three sources: `golem_safety`'s
 `robots/<robot>.yaml` (joint names in slot order, limits, slot ranges, `mode_machine`), the
-one joint table both packages read, and `golem_upper_ik/robots/<robot>.py` (model files,
-frames, IK and held joints, named configurations, start-up sequence, per-robot config
-defaults). Both robots' model files come from `golem_ros2_models`. A robot module imports
-nothing of another robot's packages: the H1-2 builds and runs without the G1's packages.
+one joint table both packages read; `config/<robot>/robot.yaml` in this package (display
+name, IK and held joints, frames, named configurations, start-up sequence, per-robot config
+defaults, default config), which `profile.robot_config(robot)` returns checked (every key
+required, no others); and the model files, from `golem_ros2_models`. A robot is known
+(`profile.known_robots()`) when `robots/<robot>.yaml` and `config/<robot>/robot.yaml` both
+exist, so a new robot is two data files and its configs, with no Python change. An unknown
+robot is refused with `ValueError`, naming the known ones.
 
-| | H1-2 (`robots/h12.py`) | G1 (`robots/g1.py`) |
+| | H1-2 (`config/h12/robot.yaml`) | G1 (`config/g1/robot.yaml`) |
 |---|---|---|
 | IK joints | the 14 arm joints | the 14 arm joints |
 | Held joints | `torso_joint` | `waist_yaw_joint`, `waist_roll_joint`, `waist_pitch_joint` |
@@ -79,7 +82,7 @@ nothing of another robot's packages: the H1-2 builds and runs without the G1's p
 | Model (`golem_ros2_models`) | `h1_2_magpie.urdf` | `g1_29dof_with_hand_rev_1_0.urdf` |
 | Self-collision model | `h1_2_magpie_sphere.urdf` + `h1_2_magpie_sphere_collision.srdf` | `g1_sphere.urdf` + `g1_sphere_collision.srdf`, packed on the rubber-hand G1: two spheres per hand at the Dex3-1 palm, none on the fingers, so the barrier and the planner do not see the Dex3-1 fingers. Its torso spheres stay inside the torso's flanks, where the hanging upper arms are 9 mm from the torso (`CL_Assets/README.md`) |
 | Start-up postures | `init_1`, `init_2`, `init_3`, `home` | `home` |
-| Named configurations | `NAMED_CONFIGS` in `robots/h12.py` (`home`, `t_pose`, `prep`, `staging_left`, ...) | `NAMED_CONFIGS` in `robots/g1.py` (`home`, `arms_down`, `t_pose`, `arms_front_45`) |
+| Named configurations | `named_configs` in `config/h12/robot.yaml` (`home`, `t_pose`, `prep`, `staging_left`, ...) | `named_configs` in `config/g1/robot.yaml` (`home`, `arms_down`, `t_pose`, `arms_front_45`) |
 | `controller.max_state_lag_ms` default | 50 | 0 (off: the real G1's tick has not been measured) |
 
 ## Configs
@@ -93,15 +96,16 @@ nothing of another robot's packages: the H1-2 builds and runs without the G1's p
 | G1 | `g1_split` | `/safety/lowcmd_upper_in` | `split` (a stiff waist, for walking) |
 | G1 | `sim_split` | `/safety/lowcmd_upper_in` | `sim_split` |
 
-`golem_upper_ik.pairing` holds these pairs (`H12_SAFETY_CONTROLLER_CONFIGS`,
-`G1_SAFETY_CONTROLLER_CONFIGS`) and the rules the bringups check before they start a node:
-`pairing_refusal(robot, controller, safety, sim)` gives the reason a pair must not run, and
-`default_controller_config(robot, safety)` the controller config a safety config runs with.
-On the G1 it refuses a safety config that does not relay the upper-body input (any config
-but the two that do, `full` included) and sim and real configs mixed (told apart by the
-`sim` prefix of their names); as one of its pairs is the real robot's and the other the
-sim's, that also keeps each known controller config to its own safety config. On the H1-2 a
-config outside the tables is not refused.
+Each robot's `config/<robot>/pairing.yaml` holds these pairs (`pairs:`, safety config name to
+controller config name), and `golem_upper_ik.pairing` applies one rule to every robot, which
+the bringups check before they start a node. `pairing_refusal(robot, controller, safety, sim)`
+gives the first reason a pair must not run, or `None`: the safety config is not in the
+robot's pairs; the controller config is not the one paired with it; or, with `sim` given
+(`True` in the sim, `False` on the real robot), a safety or controller config whose name
+starts with `sim` differs from it. `default_controller_config(robot, safety)` is the
+controller config a safety config runs with (`ValueError` for a safety config in no pair). A
+config outside the pairs, the H1-2's `debug` included, is refused; a name is taken without
+its directory or `.yaml`.
 
 ### Keys
 

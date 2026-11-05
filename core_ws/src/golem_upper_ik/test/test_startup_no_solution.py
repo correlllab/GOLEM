@@ -9,8 +9,9 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 from pink.exceptions import NoSolutionFound
+from golem_upper_ik.profile import known_robots
 
-ROBOTS = ('h12', 'g1')
+ROBOTS = known_robots()
 
 
 class Logger:

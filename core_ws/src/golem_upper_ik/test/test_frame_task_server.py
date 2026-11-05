@@ -25,13 +25,14 @@ from geometry_msgs.msg import Pose, PoseArray, PoseStamped
 import numpy as np
 import pytest
 import yaml
+from golem_upper_ik.profile import known_robots
 
 from ros_harness import (
     TEST_DOMAIN, CommandRecorder, FakeRobot, FollowingRobot, RelayedRobot, body_pose,
     profile_of, send_goal, shared_model, slots_of, wait_for,
 )
 
-ROBOTS = ('h12', 'g1')
+ROBOTS = known_robots()
 CONFIGS = {'h12': 'safety_split', 'g1': 'g1_split'}
 # where the arms start: a working pose with room to move the end effectors forward
 START = {'h12': 'prep', 'g1': 'home'}

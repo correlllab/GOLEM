@@ -66,10 +66,21 @@ def test_configs_load(case):
     assert list(hold) == list(HELD[robot])
 
 
+def test_every_known_robot_is_tested_and_has_a_default_config():
+    from golem_upper_ik.profile import known_robots, robot_config
+    assert sorted(CONFIGS) == sorted(known_robots())
+    for robot in known_robots():
+        default = robot_config(robot)['default_config']
+        assert default in CONFIGS[robot]
+        assert load(robot, default)['robot'] == robot
+
+
 def test_every_installed_config_is_tested():
     share = Path(get_package_share_directory('golem_upper_ik')) / 'config'
     for robot, names in CONFIGS.items():
-        assert sorted(path.stem for path in (share / robot).glob('*.yaml')) == sorted(names)
+        # robot.yaml and pairing.yaml are the robot's data, not controller configs
+        configs = {path.stem for path in (share / robot).glob('*.yaml')}
+        assert sorted(configs - {'robot', 'pairing'}) == sorted(names)
 
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])

@@ -64,23 +64,21 @@ use_skills:=true starts golem_skills (serving /skill/*, including
 
 The launch refuses to start, before any node, on these settings
 (startup_refusal; the config rules are golem_upper_ik.pairing's for robot g1):
-- The safety config must relay the upper-body channel (split, or sim_split in
-  the sim).
-- Each safety config runs with one controller config: split with g1_split and
-  sim_split with sim_split. controller_config defaults to the one the safety
-  config runs with.
+- The safety config must be one of the G1's pairs (golem_upper_ik's
+  config/g1/pairing.yaml): split or sim_split.
+- Each safety config runs with its paired controller config, and no other:
+  split with g1_split and sim_split with sim_split. controller_config defaults
+  to the paired one.
 - Sim and real configs do not mix: the real robot (sim:=false) refuses every
   sim_* safety or controller config and the walking node's sim config, and the
   sim refuses the real robot's (split, g1_split, and the walking node's g1).
-  Since g1_split is the real robot's and sim_split the sim's, this also keeps
-  each controller config to its own safety config.
 start_position_verified refuses nothing: it decides whether the real robot's
 walking node starts.
 
 Not checked: configs are told apart by name only, so a renamed copy of a sim
-config passes, and a custom controller config is not matched to the safety
-config, nor checked for the stiff waist the walking policy expects;
-start_position_verified is the operator's word, not a measurement.
+config passes, and the paired controller config is not checked for the stiff
+waist the walking policy expects; start_position_verified is the operator's
+word, not a measurement.
 """
 
 import os
@@ -144,8 +142,12 @@ def _setup(context):
     use_sim_time = {'use_sim_time': _as_bool(context, 'use_sim_time')}
     default_safety, default_controller = DEFAULT_CONFIGS[sim]
     safety_config = _config(context, 'safety_config') or default_safety
-    # the controller config the safety config runs with: g1_split with split
-    default_controller = default_controller_config(ROBOT, safety_config) or default_controller
+    # the controller config the safety config runs with: g1_split with split; a safety
+    # config in none of the pairs keeps the default, and startup_refusal refuses it
+    try:
+        default_controller = default_controller_config(ROBOT, safety_config)
+    except ValueError:
+        pass
     controller_config = _config(context, 'controller_config') or default_controller
     locomotion_config = _config(context, 'locomotion_config') or LOCOMOTION_CONFIGS[sim]
     delay = float(LaunchConfiguration('controller_delay').perform(context))

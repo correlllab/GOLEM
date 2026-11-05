@@ -303,17 +303,17 @@ def test_planner_client_resolves_the_frame_names():
 def test_planner_unavailable_without_collision(robot):
     '''A profile that names no self-collision model cannot plan'''
     from dataclasses import replace
-    from golem_upper_ik.robots import robot_module
+    from golem_upper_ik.profile import robot_config
     profile = replace(profile_of(robot), collision=None)
     client = PlannerClient(profile)
 
     assert client.available is False
-    display = robot_module(robot).DISPLAY_NAME
+    display = robot_config(robot)['display_name']
     assert client.unavailable_reason == PLANNER_UNAVAILABLE.format(robot=display, module=robot)
     assert client.unavailable_reason == (
         f'Planning is unavailable: the {display} has no self-collision model (its profile, '
-        f'golem_upper_ik/robots/{robot}.py, names no sphere URDF and SRDF); send the goal with '
-        'plan=false')
+        f'golem_upper_ik/config/{robot}/robot.yaml, names no sphere URDF and SRDF); send the '
+        'goal with plan=false')
     with pytest.raises(PlannerUnavailableError) as error:
         client.plan_configuration(np.zeros(len(profile.body_joints)), np.zeros(14),
                                   np.zeros(14))
@@ -361,7 +361,7 @@ def test_planner_client_plans(robot):
         assert client._worker is worker and worker.process.is_alive()
 
         if robot == 'g1':
-            # arms_down is in self-collision (robots/g1.py): no plan reaches it
+            # arms_down is in self-collision (config/g1/robot.yaml): no plan reaches it
             result = client.plan_configuration(current_q, begin, named['arms_down'])
             assert not result.success
             assert result.reason == 'goal is in self-collision'

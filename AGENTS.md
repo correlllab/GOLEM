@@ -169,7 +169,7 @@ nests `unitree_api`, `unitree_go`, `unitree_hg`, `unitree_ros2_example`).
 | Directory | Role | What it does | Key entry points |
 |---|---|---|---|
 | `golem_safety` | **safety (both robots)** | C++. The only writer of `/lowcmd` (§8): streams zero gains from boot, engages each `/safety/*` input on its own first valid command and relays it, clips it, checks every `/lowstate` (robot identity, estop limits) and latches an estop until restart. A robot profile (`robots/<robot>.yaml`, the joint table both `golem_*` packages read) and configs per robot (`config/h12/`, `config/g1/`) | `safety_node` (`robot`, `config`, `sim`, `use_estop` parameters); `launch/safety.launch.py` |
-| `golem_upper_ik` | **controller (upper body, both robots)** | Pink IK on the 14 arm joints with the torso (H1-2) or waist (G1) held; OMPL planning and a self-collision barrier from each robot's sphere model and SRDF (the G1's spheres were packed on the rubber-hand G1: none on the Dex3-1 fingers; its torso spheres stand inside the torso's flanks, so `home` keeps the H1-2's 20 mm `d_min`; its `arms_down`, where the real hands rest on the hips, is in self-collision); the follow gate; the safety/controller config pairing (`golem_upper_ik.pairing`) the bringups check | `frame_task_server` (`/frame_task`, `/named_config`), `joint_state_publisher`; `launch/upper_ik.launch.py` |
+| `golem_upper_ik` | **controller (upper body, both robots)** | Pink IK on the 14 arm joints with the torso (H1-2) or waist (G1) held; OMPL planning and a self-collision barrier from each robot's sphere model and SRDF (the G1's spheres were packed on the rubber-hand G1: none on the Dex3-1 fingers; its torso spheres stand inside the torso's flanks, so `home` keeps the H1-2's 20 mm `d_min`; its `arms_down`, where the real hands rest on the hips, is in self-collision); the follow gate; the safety/controller config pairing (each robot's `config/<robot>/pairing.yaml`, applied by `golem_upper_ik.pairing`) the bringups check; each robot's data (IK and held joints, frames, named postures) is `config/<robot>/robot.yaml` | `frame_task_server` (`/frame_task`, `/named_config`), `joint_state_publisher`; `launch/upper_ik.launch.py` |
 | `golem_bringup` | **bringup (both robots)** | Launch-only package that starts the whole H1-2 (`launch/h12/`) or G1 (`launch/g1/`), sim or real. See §6. | top-level + building-block launch files, `config/h12/*.yaml` |
 | `golem_ros2_models` | **description (both robots)** | Installs both robots' models from `CL_Assets`: the H1-2 with its Magpie grippers and the G1 with its Dex3-1 hands, each a Pinocchio URDF, a ROS copy with `package://golem_ros2_models/...` URIs, the meshes, and a sphere-packed self-collision model with its SRDF. No nodes and no joint table (that is `golem_safety`'s robot profile) | `golem_ros2_models.paths`; `launch/display.launch.py` (`robot:=h12|g1`) |
 | `deploy_mjpc` | controller (lower body, MPC) | MJPC balance/locomotion controller (C++ cores from the `mujoco_mpc` fork, run as separate processes) + RW-EKF base estimator. No bringup starts the controller today (`lowerbody:=mjpc` starts no leg node), and the estimator only with `use_estimator:=true` | `mjpc_lowerbody_core`, `controller_launcher.py`, `estimator_node.py` |
@@ -332,10 +332,10 @@ The core refuses to start on a bad combination; `startup_refusal` in
 `g1_core.launch.py` and `pairing_refusal` in
 `core_ws/src/golem_upper_ik/golem_upper_ik/pairing.py` are the rules:
 
-- **Config pairing.** The safety config must relay the upper-body channel
+- **Config pairing.** The safety config must be one of the G1's pairs
   (`split` or `sim_split`; `full` is refused), and each runs with exactly one
-  controller config (`G1_SAFETY_CONTROLLER_CONFIGS` in `pairing.py`:
-  `g1_split`, `sim_split`), which `controller_config` defaults to. The real
+  controller config (`config/g1/pairing.yaml` in `golem_upper_ik`: `g1_split`,
+  `sim_split`), which `controller_config` defaults to. The real
   robot refuses every `sim_*` config and the walking node's `sim` config, and
   the sim refuses the real ones (`split`, `g1_split`, the walking node's `g1`).
 - **The leg interlock.** On the real G1 the walking node starts only with

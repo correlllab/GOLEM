@@ -15,8 +15,7 @@ from ament_index_python.packages import get_package_share_directory
 import numpy as np
 import yaml
 
-from golem_upper_ik.profile import ROBOTS, RobotProfile, load_profile
-from golem_upper_ik.robots import robot_module
+from golem_upper_ik.profile import RobotProfile, known_robots, load_profile, robot_config
 
 __all__ = ['load_controller_config', 'SAFETY_INPUT_PREFIX', 'SAFETY_OUTPUT_TOPIC']
 
@@ -305,7 +304,7 @@ def _resolve(robot: str, name_or_path: str) -> str:
     # A config of one robot can parse for the other (a scalar gain fits either), so a file
     # in another robot's config directory (config/g1/ for the h12) is refused by that name
     directory = os.path.basename(os.path.dirname(os.path.abspath(path)))
-    if directory != robot and directory in ROBOTS:
+    if directory != robot and directory in known_robots():
         raise ValueError(f'the controller config {path} is in the config directory of robot '
                          f'{directory}, not of robot {robot}')
     if not os.path.isfile(path):
@@ -316,10 +315,9 @@ def _resolve(robot: str, name_or_path: str) -> str:
 
 def load_controller_config(robot: str, name_or_path: str) -> dict:
     '''The controller config name_or_path of robot, checked and with its defaults filled in'''
-    robot_module(robot)  # ValueError for an unknown robot, before any file is read
+    robot_defaults = robot_config(robot)['config_defaults']  # ValueError for an unknown robot
     path = _resolve(robot, name_or_path)
     profile = load_profile(robot)
-    robot_defaults = robot_module(robot).CONFIG_DEFAULTS
     where = _Where(robot, path)
 
     with open(path, encoding='utf-8') as handle:

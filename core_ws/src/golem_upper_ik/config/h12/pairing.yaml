@@ -1,0 +1,13 @@
+# The controller config each H1-2 safety config runs with (golem_upper_ik.pairing). The
+# *_split ones write the upper-body input (/safety/lowcmd_upper_in), *_full the full-body
+# input (/safety/lowcmd_in), and sim_safety_split's limits suit the sim. debug, which
+# joint_state_publisher reads, is in no pair.
+pairs:
+  relax_safety_split: safety_split
+  default_safety_split: safety_split
+  tight_safety_split: safety_split
+  sim_safety_split: sim_safety_split
+  relax_safety_full: safety_full
+  default_safety_full: safety_full
+  tight_safety_full: safety_full
+  locomotion_safety_full: safety_full

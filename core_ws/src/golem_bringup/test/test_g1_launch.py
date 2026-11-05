@@ -170,21 +170,20 @@ def test_controller_config_follows_the_safety_config():
                                                  'frame_task_server': controller}
 
 
-def test_custom_controller_config_is_not_refused():
-    # a controller config outside the table is not matched to the safety config
-    # (g1_core's "Not checked"), and the walking node starts beside it
-    nodes = _core_nodes(controller_config='custom', start_position_verified='true')
-    assert _configs(nodes) == {'safety_node': 'split', 'frame_task_server': 'custom'}
-    assert 'locomotion_node' in nodes
-    nodes = _core_nodes(sim='true', controller_config='sim_custom')
-    assert _configs(nodes) == {'safety_node': 'sim_split', 'frame_task_server': 'sim_custom'}
-    assert 'locomotion_node' in nodes
+def test_custom_controller_config_is_refused():
+    # the controller config must be the one paired with the safety config
+    _refused('safety config "split" runs with controller config "g1_split", not "custom"',
+             controller_config='custom', start_position_verified='true')
+    _refused('safety config "sim_split" runs with controller config "sim_split", not '
+             '"sim_custom"', sim='true', controller_config='sim_custom')
 
 
 @pytest.mark.parametrize('args, message', [
     (dict(safety_config='sim_split'), 'safety config "sim_split" is a sim config'),
-    (dict(controller_config='sim_split'), 'controller config "sim_split" is a sim config'),
-    (dict(controller_config='sim_fast'), 'controller config "sim_fast" is a sim config'),
+    (dict(controller_config='sim_split'),
+     'safety config "split" runs with controller config "g1_split", not "sim_split"'),
+    (dict(controller_config='sim_fast'),
+     'safety config "split" runs with controller config "g1_split", not "sim_fast"'),
     # the walking node's sim config too, whether or not the legs are verified
     (dict(locomotion_config='sim'), 'locomotion_config:=sim is for the sim; use g1'),
     (dict(locomotion_config='sim', start_position_verified='true'),
@@ -203,7 +202,8 @@ def test_real_refuses_sim_configs(args, message):
 
 @pytest.mark.parametrize('args, message', [
     (dict(safety_config='split'), 'safety config "split" is for the real robot'),
-    (dict(controller_config='g1_split'), 'controller config "g1_split" is for the real robot'),
+    (dict(controller_config='g1_split'),
+     'safety config "sim_split" runs with controller config "sim_split", not "g1_split"'),
     (dict(locomotion_config='g1'), 'locomotion_config:=g1 is for the real robot; use sim'),
 ])
 def test_sim_refuses_real_configs(args, message):
@@ -218,5 +218,5 @@ def test_sim_refuses_real_configs(args, message):
 
 def test_core_refuses_a_safety_config_without_the_upper_body_channel():
     for sim in ('false', 'true'):
-        _refused('safety config "full" must relay the upper-body channel', sim=sim,
+        _refused('safety config "full" is not one of the G1 pairs', sim=sim,
                  safety_config='full', start_position_verified='true')

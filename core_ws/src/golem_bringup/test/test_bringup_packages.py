@@ -117,7 +117,8 @@ def test_control_checks_the_pair_before_any_node(monkeypatch):
 def test_control_refuses_a_mismatched_pair(safety_config, frame_task_config, use_frame_task,
                                            refused):
     control = _load('h12_control.launch.py')
-    context = _context(control.generate_launch_description(), sim='true',
+    context = _context(control.generate_launch_description(),
+                       sim=str(safety_config.startswith('sim')).lower(),
                        safety_config=safety_config, frame_task_config=frame_task_config,
                        use_frame_task=use_frame_task)
     if refused:

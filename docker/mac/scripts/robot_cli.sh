@@ -22,8 +22,8 @@ source /opt/core_ws/install/setup.bash 2>/dev/null
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-1}"
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
-# Named postures available to rob_pose: NAMED_CONFIGS in
-# core_ws/src/golem_upper_ik/golem_upper_ik/robots/h12.py
+# Named postures available to rob_pose: named_configs in
+# core_ws/src/golem_upper_ik/config/h12/robot.yaml
 rob_poses() {
     echo "home t_pose arms_front_45 arms_overhead arms_asym arms_front_yaw init_1 init_2 init_3 prep staging_right staging_left"
 }

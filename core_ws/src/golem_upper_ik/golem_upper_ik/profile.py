@@ -2,8 +2,9 @@
 Robot profiles: load_profile(robot) gives everything robot-specific the controller needs.
 
 The joint table (names in slot order, limits, slot ranges, mode_machine) is golem_safety's
-share/golem_safety/robots/<robot>.yaml, the one copy both packages read. The rest (model
-files, frames, held and IK joints, named configurations) is golem_upper_ik.robots.<robot>.
+share/golem_safety/robots/<robot>.yaml, the one copy both packages read. The rest (frames, held
+and IK joints, named configurations, controller-config defaults) is golem_upper_ik's
+share/golem_upper_ik/config/<robot>/robot.yaml, and the model files are golem_ros2_models'.
 '''
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -11,12 +12,18 @@ import os
 from types import MappingProxyType
 
 from ament_index_python.packages import get_package_share_directory
+from golem_ros2_models import paths as model_files
 import numpy as np
 import yaml
 
-from golem_upper_ik.robots import ROBOTS, robot_module
+__all__ = ['RobotProfile', 'known_robots', 'load_profile', 'robot_config']
 
-__all__ = ['ROBOTS', 'RobotProfile', 'load_profile']
+# the keys of a robot.yaml: every one is required, and no others are allowed
+ROBOT_CONFIG_KEYS = (
+    'display_name', 'enabled_joints', 'held_joints', 'shutdown_keeps_held_joints', 'ee_frames',
+    'planner_frames', 'imu_frame', 'named_configs', 'startup_sequence', 'config_defaults',
+    'default_config',
+)
 
 
 # eq=False: compared and hashed by identity, since an array field has no truth value
@@ -66,9 +73,98 @@ def _robot_data(robot: str) -> dict:
     return data
 
 
+def known_robots() -> tuple[str, ...]:
+    '''
+    The robots with data in both packages, sorted: golem_safety's robots/<robot>.yaml and
+    golem_upper_ik's config/<robot>/robot.yaml
+    '''
+    safety = os.path.join(get_package_share_directory('golem_safety'), 'robots')
+    upper = os.path.join(get_package_share_directory('golem_upper_ik'), 'config')
+    names = (name[:-5] for name in os.listdir(safety) if name.endswith('.yaml'))
+    return tuple(sorted(name for name in names
+                        if os.path.isfile(os.path.join(upper, name, 'robot.yaml'))))
+
+
+def _unknown_robot(robot: str) -> ValueError:
+    return ValueError(f"unknown robot '{robot}': one of {', '.join(known_robots())}")
+
+
+def _strings(where: str, key: str, value, count: int | None = None) -> list[str]:
+    ok = (isinstance(value, list) and all(isinstance(item, str) and item for item in value)
+          and (count is None or len(value) == count))
+    if not ok:
+        size = '' if count is None else f' of {count}'
+        raise ValueError(f"{where}: '{key}' must be a list{size} of names, not {value!r}")
+    return value
+
+
+def _number(where: str, key: str, value) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{where}: '{key}' must be a number, not {value!r}")
+    return value
+
+
+def robot_config(robot: str) -> dict:
+    '''
+    The checked data of config/<robot>/robot.yaml (the keys of ROBOT_CONFIG_KEYS). ValueError
+    for an unknown robot, and for a missing or unknown key or a value of the wrong type,
+    naming the robot and the key
+    '''
+    if robot not in known_robots():
+        raise _unknown_robot(robot)
+    path = os.path.join(get_package_share_directory('golem_upper_ik'), 'config', robot,
+                        'robot.yaml')
+    with open(path, encoding='utf-8') as handle:
+        raw = yaml.safe_load(handle)
+    where = f'robot {robot} ({path})'
+    if not isinstance(raw, dict):
+        raise ValueError(f'{where}: the file must hold a mapping')
+    for key in raw:
+        if key not in ROBOT_CONFIG_KEYS:
+            raise ValueError(f"{where}: unknown key '{key}'")
+    for key in ROBOT_CONFIG_KEYS:
+        if key not in raw:
+            raise ValueError(f"{where}: missing key '{key}'")
+
+    config = dict(raw)
+    if not isinstance(raw['display_name'], str) or not raw['display_name']:
+        raise ValueError(f"{where}: 'display_name' must be a name, not {raw['display_name']!r}")
+    for key in ('enabled_joints', 'held_joints', 'startup_sequence'):
+        _strings(where, key, raw[key])
+    for key in ('ee_frames', 'planner_frames'):
+        _strings(where, key, raw[key], 2)
+    if not isinstance(raw['imu_frame'], str) or not raw['imu_frame']:
+        raise ValueError(f"{where}: 'imu_frame' must be a name, not {raw['imu_frame']!r}")
+    if not isinstance(raw['shutdown_keeps_held_joints'], bool):
+        raise ValueError(f"{where}: 'shutdown_keeps_held_joints' must be true or false, not "
+                         f"{raw['shutdown_keeps_held_joints']!r}")
+    if not isinstance(raw['default_config'], str) or not raw['default_config']:
+        raise ValueError(f"{where}: 'default_config' must be a controller config name, not "
+                         f"{raw['default_config']!r}")
+
+    named = raw['named_configs']
+    if not isinstance(named, dict) or not all(isinstance(name, str) for name in named):
+        raise ValueError(f"{where}: 'named_configs' must map names to lists of numbers")
+    for name, values in named.items():
+        if not isinstance(values, list):
+            raise ValueError(f"{where}: 'named_configs': '{name}' must be a list of numbers, "
+                             f'not {values!r}')
+    config['named_configs'] = {
+        name: [float(_number(where, f'named_configs.{name}', value)) for value in values]
+        for name, values in named.items()}
+
+    defaults = raw['config_defaults']
+    if not isinstance(defaults, dict):
+        raise ValueError(f"{where}: 'config_defaults' must map config keys to numbers")
+    config['config_defaults'] = {
+        str(key): _number(where, f'config_defaults.{key}', value)
+        for key, value in defaults.items()}
+    return config
+
+
 def load_profile(robot: str) -> RobotProfile:
-    '''The profile of robot ('h12' or 'g1'); ValueError for any other name'''
-    module = robot_module(robot)
+    '''The profile of robot, one of known_robots(); ValueError for any other name'''
+    config = robot_config(robot)
     data = _robot_data(robot)
     joints = sorted(data['joints'], key=lambda joint: joint['slot'])
     slots = [joint['slot'] for joint in joints]
@@ -81,8 +177,8 @@ def load_profile(robot: str) -> RobotProfile:
     upper_slots = range(upper_first, upper_last + 1)
 
     upper_joints = tuple(body_joints[slot] for slot in upper_slots)
-    held_joints = tuple(module.HELD_JOINTS)
-    enabled_joints = tuple(module.ENABLED_JOINTS)
+    held_joints = tuple(config['held_joints'])
+    enabled_joints = tuple(config['enabled_joints'])
     # the controller drives the upper slots and nothing else: each upper joint is either
     # solved by the IK or held
     if sorted(held_joints + enabled_joints) != sorted(upper_joints):
@@ -90,17 +186,17 @@ def load_profile(robot: str) -> RobotProfile:
             f'robot {robot}: the held joints {held_joints} and IK joints {enabled_joints} '
             f'must be the upper-body joints {upper_joints}, each once')
     named_configs = MappingProxyType(
-        {name: _read_only(q) for name, q in module.NAMED_CONFIGS.items()})
+        {name: _read_only(q) for name, q in config['named_configs'].items()})
     for name, q in named_configs.items():
         if q.shape != (len(enabled_joints),):
             raise ValueError(f'robot {robot}: named config {name} has {q.size} values, '
                              f'not one per IK joint ({len(enabled_joints)})')
-    startup_sequence = tuple(module.STARTUP_SEQUENCE)
+    startup_sequence = tuple(config['startup_sequence'])
     missing = [name for name in startup_sequence if name not in named_configs]
     if missing:
         raise ValueError(f'robot {robot}: start-up postures {missing} are not named configs')
 
-    paths = module.model_paths()
+    files = model_files.model_paths(robot)
     return RobotProfile(
         robot=robot,
         mode_machine=int(data['mode_machine']),
@@ -113,14 +209,14 @@ def load_profile(robot: str) -> RobotProfile:
         tau_max=_read_only([joint['effort'] for joint in joints]),
         lower_slots=range(lower_first, lower_last + 1),
         upper_slots=upper_slots,
-        urdf_path=paths['urdf_path'],
-        urdf_ros_path=paths['urdf_ros_path'],
-        collision=None if paths['collision'] is None else tuple(paths['collision']),
-        ee_frames=tuple(module.EE_FRAMES),
-        planner_frames=tuple(module.PLANNER_FRAMES),
-        imu_frame=module.IMU_FRAME,
+        urdf_path=files['urdf_path'],
+        urdf_ros_path=files['urdf_ros_path'],
+        collision=None if files['collision'] is None else tuple(files['collision']),
+        ee_frames=tuple(config['ee_frames']),
+        planner_frames=tuple(config['planner_frames']),
+        imu_frame=config['imu_frame'],
         held_joints=held_joints,
-        shutdown_keeps_held_joints=bool(module.SHUTDOWN_KEEPS_HELD_JOINTS),
+        shutdown_keeps_held_joints=bool(config['shutdown_keeps_held_joints']),
         enabled_joints=enabled_joints,
         named_configs=named_configs,
         startup_sequence=startup_sequence,

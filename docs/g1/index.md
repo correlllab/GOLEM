@@ -101,8 +101,8 @@ to `home` once the stack is up. HOMIE's walking node, which the sim bringup
 always starts, moves the legs to its default pose, starts its policy and
 releases the band (`elastic band released` in the bringup's log); from then on
 it keeps the robot standing. The goals then move the arms to a T-pose, and the
-left hand closes and opens. The named postures are `NAMED_CONFIGS` in
-`core_ws/src/golem_upper_ik/golem_upper_ik/robots/g1.py`.
+left hand closes and opens. The named postures are `named_configs` in
+`core_ws/src/golem_upper_ik/config/g1/robot.yaml`.
 
 - Start the sim first. If you restart the sim, restart the `ros` container
   too, because sim time starts again at 0.

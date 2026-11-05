@@ -6,15 +6,16 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from golem_upper_ik.profile import known_robots
 
-ROBOTS = ('h12', 'g1')
+ROBOTS = known_robots()
 
 
 def d_min_of(robot):
     '''The self-collision distance of the robot's default controller config, m'''
     from golem_upper_ik.config import load_controller_config
-    from golem_upper_ik.robots import robot_module
-    config = load_controller_config(robot, robot_module(robot).DEFAULT_CONFIG)
+    from golem_upper_ik.profile import robot_config
+    config = load_controller_config(robot, robot_config(robot)['default_config'])
     return config['controller']['d_min']
 
 

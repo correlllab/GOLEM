@@ -30,8 +30,8 @@ motors ([Control in sim and on the robot](control-path.md)).
 | full body | `full.yaml` | `rt/safety/lowcmd_in` | one upstream controller; the bringup refuses this mode |
 
 `golem_bringup`'s `g1_core.launch.py` runs each safety config with exactly one
-arm-controller config (`G1_SAFETY_CONTROLLER_CONFIGS` in
-`core_ws/src/golem_upper_ik/golem_upper_ik/pairing.py`) and refuses the real
+arm-controller config (`core_ws/src/golem_upper_ik/config/g1/pairing.yaml`,
+applied by `golem_upper_ik.pairing`) and refuses the real
 configs in the sim and the `sim_*` ones on the robot. With `sim:=true`, which
 the sim bringup passes, `safety_node` refuses ROS domain 0, an unset
 `ROS_DOMAIN_ID` included.

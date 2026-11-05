@@ -28,15 +28,14 @@ from golem_upper_ik.core.planner.reduced_joint_planner import (
     PlannerConfig,
     ReducedJointPlanner,
 )
-from golem_upper_ik.profile import RobotProfile, load_profile
-from golem_upper_ik.robots import robot_module
+from golem_upper_ik.profile import RobotProfile, load_profile, robot_config
 
 # why a robot without a self-collision model cannot plan: {robot} is its display name and
-# {module} its robot module
+# {module} its name
 PLANNER_UNAVAILABLE = (
     'Planning is unavailable: the {robot} has no self-collision model (its profile, '
-    'golem_upper_ik/robots/{module}.py, names no sphere URDF and SRDF); send the goal with '
-    'plan=false'
+    'golem_upper_ik/config/{module}/robot.yaml, names no sphere URDF and SRDF); send the '
+    'goal with plan=false'
 )
 STARTUP_TIMEOUT = 30.0  # s for the subprocess to build its model and report ready
 POLL_PERIOD = 0.1  # s between checks on the subprocess while waiting for it
@@ -107,7 +106,7 @@ class PlannerClient:
         self.unavailable_reason = None
         if profile.collision is None:
             self.unavailable_reason = PLANNER_UNAVAILABLE.format(
-                robot=robot_module(profile.robot).DISPLAY_NAME, module=profile.robot)
+                robot=robot_config(profile.robot)['display_name'], module=profile.robot)
 
         self._ctx = mp.get_context('spawn')
         self._worker_main = _planner_worker_main

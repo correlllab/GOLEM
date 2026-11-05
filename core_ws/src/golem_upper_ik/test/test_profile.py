@@ -2,6 +2,7 @@
 The robot profiles against golem_safety's robot data.
 '''
 import dataclasses
+import json
 import os
 from pathlib import Path
 import types
@@ -10,8 +11,9 @@ from ament_index_python.packages import get_package_share_directory
 import numpy as np
 import pytest
 import yaml
+from golem_upper_ik.profile import known_robots
 
-ROBOTS = ('h12', 'g1')
+ROBOTS = known_robots()
 
 EXPECTED = {
     'h12': {
@@ -147,6 +149,78 @@ def test_named_configs_are_over_the_ik_joints(robot):
 
 
 def test_unknown_robot_raises():
-    from golem_upper_ik.profile import load_profile
-    with pytest.raises(ValueError, match='h1'):
-        load_profile('h1')
+    from golem_upper_ik.profile import load_profile, robot_config
+    for function in (load_profile, robot_config):
+        with pytest.raises(ValueError, match="unknown robot 'h1'.*g1, h12"):
+            function('h1')
+
+
+def test_known_robots():
+    assert known_robots() == ('g1', 'h12')
+
+
+def test_a_robot_needs_both_packages_data_to_be_known(monkeypatch, tmp_path):
+    from golem_upper_ik import profile as profile_module
+    (tmp_path / 'golem_safety' / 'robots').mkdir(parents=True)
+    (tmp_path / 'golem_upper_ik' / 'config' / 'a').mkdir(parents=True)
+    (tmp_path / 'golem_upper_ik' / 'config' / 'b').mkdir(parents=True)
+    (tmp_path / 'golem_safety' / 'robots' / 'a.yaml').write_text('robot: a\n')
+    (tmp_path / 'golem_safety' / 'robots' / 'c.yaml').write_text('robot: c\n')
+    (tmp_path / 'golem_upper_ik' / 'config' / 'a' / 'robot.yaml').write_text('{}\n')
+    (tmp_path / 'golem_upper_ik' / 'config' / 'b' / 'robot.yaml').write_text('{}\n')
+    monkeypatch.setattr(profile_module, 'get_package_share_directory',
+                        lambda package: str(tmp_path / package))
+    assert profile_module.known_robots() == ('a',)
+
+
+# robot_config is compared with the expected values of the JSON file this variable names
+# ({'robots': {robot: robot_config(robot)}}); the file is not in the repository, so the test
+# is skipped without it
+REFERENCE_VARIABLE = 'GOLEM_ROBOT_CONFIG_REFERENCE'
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_robot_config_matches_reference(robot):
+    from golem_upper_ik.profile import robot_config
+    path = os.environ.get(REFERENCE_VARIABLE)
+    if not path:
+        pytest.skip(f'{REFERENCE_VARIABLE} names no reference file')
+    with open(path, encoding='utf-8') as handle:
+        reference = json.load(handle)['robots'][robot]
+    config = robot_config(robot)
+    assert sorted(config) == sorted(reference)
+    for key, value in reference.items():
+        assert config[key] == value, key
+
+
+def robot_config_with(monkeypatch, tmp_path, robot, change):
+    '''The profile module reading a copy of robot's robot.yaml that change edits'''
+    from golem_upper_ik import profile as profile_module
+    real = get_package_share_directory('golem_upper_ik')
+    raw = yaml.safe_load((Path(real) / 'config' / robot / 'robot.yaml').read_text())
+    change(raw)
+    path = tmp_path / 'golem_upper_ik' / 'config' / robot / 'robot.yaml'
+    path.parent.mkdir(parents=True)
+    path.write_text(yaml.safe_dump(raw))
+
+    def share(package):
+        return str(tmp_path / package) if package == 'golem_upper_ik' else (
+            get_package_share_directory(package))
+    monkeypatch.setattr(profile_module, 'get_package_share_directory', share)
+    return profile_module.robot_config(robot)
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_robot_config_rejects_unknown_and_missing_keys(monkeypatch, tmp_path, robot):
+    with pytest.raises(ValueError, match=f"{robot}.*'extra_key'"):
+        robot_config_with(monkeypatch, tmp_path / 'extra', robot,
+                          lambda raw: raw.update(extra_key=1))
+    with pytest.raises(ValueError, match=f"{robot}.*'imu_frame'"):
+        robot_config_with(monkeypatch, tmp_path / 'missing', robot,
+                          lambda raw: raw.pop('imu_frame'))
+
+
+def test_robot_config_rejects_a_bad_value(monkeypatch, tmp_path):
+    with pytest.raises(ValueError, match="'named_configs'.*home"):
+        robot_config_with(monkeypatch, tmp_path, 'h12',
+                          lambda raw: raw['named_configs'].update(home='zero'))

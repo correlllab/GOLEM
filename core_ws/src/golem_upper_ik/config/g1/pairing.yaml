@@ -1,0 +1,7 @@
+# The controller config each G1 safety config runs with (golem_upper_ik.pairing). Both
+# safety configs relay the upper-body channel the controller writes, and both controller
+# configs hold the waist stiff for a walking policy; their speed limits suit the real robot
+# or the sim.
+pairs:
+  split: g1_split
+  sim_split: sim_split

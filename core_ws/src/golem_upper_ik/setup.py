@@ -1,4 +1,5 @@
 from glob import glob
+import os
 
 from setuptools import find_packages, setup
 
@@ -7,10 +8,12 @@ package_name = 'golem_upper_ik'
 data_files = [
     ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
     ('share/' + package_name, ['package.xml']),
-    ('share/' + package_name + '/config/h12', glob('config/h12/*.yaml')),
-    ('share/' + package_name + '/config/g1', glob('config/g1/*.yaml')),
     ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
 ]
+# every robot's config/<robot>/ directory
+for robot_dir in sorted(glob('config/*/')):
+    data_files.append(('share/' + package_name + '/' + os.path.dirname(robot_dir),
+                       glob(robot_dir + '*.yaml')))
 
 setup(
     name=package_name,

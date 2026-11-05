@@ -286,8 +286,8 @@ aborts, which reads as a servo failure when it is really budget starvation.
 
 ## Named arm configs (`/named_config`)
 
-Drive the 14 arm joints to a predefined posture (`NAMED_CONFIGS` in
-`golem_upper_ik/golem_upper_ik/robots/h12.py`). `plan: false` (or omitted) servos
+Drive the 14 arm joints to a predefined posture (`named_configs` in
+`golem_upper_ik/config/h12/robot.yaml`). `plan: false` (or omitted) servos
 directly; `plan: true` runs the planner first. `duration` is the goal's time
 limit; `0` uses the controller config's `controller.timeout` (5 s in the H1-2
 configs). `slow_mode: true` moves at a quarter of the speed.

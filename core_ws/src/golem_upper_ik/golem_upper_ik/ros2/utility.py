@@ -16,7 +16,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.logging import get_logger
 from rclpy.signals import SignalHandlerOptions
 
-from golem_upper_ik.robots import ROBOTS, robot_module
+from golem_upper_ik.profile import known_robots, robot_config
 
 __all__ = ['matrix_to_pose', 'node_parameters', 'pose_to_matrix', 'run']
 
@@ -91,15 +91,14 @@ def matrix_to_pose(matrix):
 def node_parameters(node):
     '''
     (robot, config) from node's parameters: robot is required; config is a controller config
-    name or path, by default the robot's DEFAULT_CONFIG. ValueError for a robot missing or
-    unknown
+    name or path, by default the robot's default_config (config/<robot>/robot.yaml).
+    ValueError for a robot missing or unknown
     '''
     robot = node.declare_parameter('robot', '').value
     if not robot:
         raise ValueError('the robot parameter is required: '
-                         + ' or '.join(f'robot:={name}' for name in ROBOTS))
-    module = robot_module(robot)
-    config = node.declare_parameter('config', '').value or module.DEFAULT_CONFIG
+                         + ' or '.join(f'robot:={name}' for name in known_robots()))
+    config = node.declare_parameter('config', '').value or robot_config(robot)['default_config']
     return robot, config
 
 

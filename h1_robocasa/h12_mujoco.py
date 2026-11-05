@@ -131,7 +131,8 @@ def _draw_band(handle, anchor, body_pos):
         scn.ngeom += 1
 
 
-def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False):
+def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False,
+             peg=None, source_hole=None):
     """Launch a RoboCasa task env around the H1-2 and run the shared-MjData loop.
 
     Builds the env with robots='H1_2' and steps the env's *own* MjData with our
@@ -145,6 +146,15 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     """
 
     create_kwargs = {}
+    if peg is not None or source_hole is not None:
+        if peg_in_hole_env.canonical_task(task) is None:
+            raise ValueError("--peg and --source-hole require --task PegInHole")
+        selection = {}
+        if peg is not None:
+            selection["peg_id"] = peg
+        if source_hole is not None:
+            selection["source_hole"] = source_hole
+        create_kwargs["scene_config"] = peg_in_hole_env.PegBoardConfig(**selection)
     if layout is not None:
         create_kwargs["layout_ids"] = layout
     if style is not None:
@@ -616,9 +626,15 @@ if __name__ == "__main__":
     parser.add_argument("--layout", type=int, default=None, help="RoboCasa kitchen layout id")
     parser.add_argument("--style", type=int, default=None, help="RoboCasa kitchen style id")
     parser.add_argument("--seed", type=int, default=None, help="episode seed")
+    parser.add_argument("--peg", default=None, help="PegInHole catalog peg ID (default cylinder_1)")
+    parser.add_argument("--source-hole", default=None,
+                        help="PegInHole initial source hole ID (default cylinder_1)")
     parser.add_argument("--timing", action="store_true",
                         help="Log real-time factor and stage mean/max timings every 5 seconds")
     args = parser.parse_args()
+    if ((args.peg is not None or args.source_hole is not None) and
+            (args.task is None or peg_in_hole_env.canonical_task(args.task) is None)):
+        parser.error("--peg and --source-hole require --task PegInHole")
 
     task = args.task
     if task is None:
@@ -628,4 +644,5 @@ if __name__ == "__main__":
         task = _resolve_task(task, seed=args.seed)
 
     sim_loop(task, viewer=not args.headless,
-             layout=args.layout, style=args.style, seed=args.seed, timing=args.timing)
+             layout=args.layout, style=args.style, seed=args.seed, timing=args.timing,
+             peg=args.peg, source_hole=args.source_hole)

@@ -80,6 +80,34 @@ class BoardMarkerTest(unittest.TestCase):
         corners, ids, _ = detect(cv2, image)
         self.assertEqual(ids.reshape(-1).tolist(), [7])
         self.assertTrue(np.allclose(corners[0][0], ((32, 32), (223, 32), (223, 223), (32, 223)), atol=1))
+        image8 = cv2.imdecode(np.frombuffer(marker_png(marker_id=8), dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+        self.assertTrue(np.array_equal(image8[32:-32, 32:-32], generate(dictionary, 8, 192)))
+        self.assertEqual(detect(cv2, image8)[1].reshape(-1).tolist(), [8])
+
+    def test_second_marker_geometry(self):
+        import json
+        from pathlib import Path
+
+        asset, board = ET.Element("asset"), ET.Element("body")
+        left = mount_board_marker(board, asset)
+        right = mount_board_marker(board, asset, name="pegboard_aruco_8", marker_id=8)
+        self.assertEqual(right["position_board_m"], [.135, .10, .0252])
+        self.assertEqual(right["marker_id"], 8)
+        self.assertGreater(right["position_board_m"][0] - left["position_board_m"][0], .04)
+        catalog = json.loads((Path(__file__).resolve().parent.parent / "CL_Assets" /
+                              "mujoco_assets/manipulation_net/manipulation_catalog.json").read_text())
+        for marker in (left, right):
+            half = marker["outer_size_m"] / 2
+            low = [v - half for v in marker["position_board_m"][:2]]
+            high = [v + half for v in marker["position_board_m"][:2]]
+            for i in (0, 1):
+                self.assertGreaterEqual(low[i], -catalog["board"]["footprint"][i] / 2)
+                self.assertLessEqual(high[i], catalog["board"]["footprint"][i] / 2)
+            for hole in catalog["holes"].values():
+                self.assertTrue(any(high[i] <= min(p[i] for p in hole["profile_xy"]) or
+                                    low[i] >= max(p[i] for p in hole["profile_xy"]) for i in (0, 1)))
+        with self.assertRaises(ValueError):
+            marker_png(marker_id=9)
 
     @unittest.skipUnless(os.environ.get("GOLEM_TEST_MARKER_RENDER") == "1",
                          "set GOLEM_TEST_MARKER_RENDER=1 with a working offscreen GL backend")

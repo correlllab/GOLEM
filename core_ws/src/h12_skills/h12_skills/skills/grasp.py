@@ -1,5 +1,8 @@
 """SkillGrasp: perception, a pluggable synthesis method, one executor.
 
+The immutable marker target backend branches before this legacy AI pipeline;
+its catalog-only, strict execution lives in the MarkerManipulationSkill mixin.
+
 Flow (_exec_grasp, the orchestrator):
 
     prep -> detect_object (box) -> segment_object (cloud)
@@ -58,6 +61,7 @@ from ..model_logging import _log_root
 from ..perception_utils import pose_to_matrix, extract_json
 from ..grasp_synthesis import METHODS, SynthesisInput, method_name
 from ..grasp_synthesis.common import GRIPPER_BASE_TO_CONTACT_M, pose_at
+from .marker import MarkerManipulationSkill
 
 
 # ========================== perception routing ===============================
@@ -358,7 +362,7 @@ class _Targets:
     centroid_w: object      # object centroid as a world Pose (None without TF)
 
 
-class GraspSkill:
+class GraspSkill(MarkerManipulationSkill):
     # ------------------------------------------------------ action entry point
     def _exec_grasp(self, gh):
         """Orchestrate one grasp: prep -> detect_object -> segment_object ->
@@ -383,7 +387,10 @@ class GraspSkill:
         In-process RESULT side channel (for pick_place, same node):
         `self._last_grasp_outcome` is cleared here and only repopulated by a
         SUCCESSFUL grasp, so a failed grasp can never leak a stale outcome.
-        Assumes one grasp goal in flight at a time (true in practice)."""
+        The action wrapper reserves manipulation execution so another goal
+        cannot overwrite this outcome during composed pick/place execution."""
+        if getattr(self, '_target_backend', 'legacy') == 'marker':
+            return self._exec_marker(gh)
         goal = gh.request
         run = _Run(self, gh, SkillGrasp, 'grasp')
         self._last_grasp_outcome = None

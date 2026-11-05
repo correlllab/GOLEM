@@ -1,6 +1,9 @@
 """SkillPickPlace: prep -> detect the place target -> grasp the pick object
-(in-process /skill/grasp) -> lift it clear -> park the graspgenx frame
+(in-process grasp mixin) -> lift it clear -> park the graspgenx frame
 top-down above the place target -> open the gripper.
+
+That is the default legacy backend. Marker mode instead extracts a known
+seated peg and holds at the destination pre-insertion pose without releasing.
 
 The place is deliberately simple: no orientation fan or rest-height
 descent. The place pose reuses the top_down grasp orientation
@@ -26,7 +29,6 @@ import copy
 
 import numpy as np
 
-from action_msgs.msg import GoalStatus
 from builtin_interfaces.msg import Duration
 from rclpy.duration import Duration as RclpyDuration
 from rclpy.time import Time
@@ -91,6 +93,8 @@ class PickPlaceSkill:
             arm); the resolved arm comes back on the outcome.
           top_down, visual_servo — forwarded to /skill/grasp, which also
             reads this node's `grasp_method` parameter."""
+        if getattr(self, '_target_backend', 'legacy') == 'marker':
+            return self._exec_marker(gh, pick_place=True)
         goal = gh.request
         run = _Run(self, gh, SkillPickPlace, 'pick_place')
         arm = self._validated_arm(goal)
@@ -225,15 +229,17 @@ class PickPlaceSkill:
             f'above, grasp score {outcome.score:.2f})')
 
     def _grasp_via_skill(self, goal, obj, arm, run, gh):
-        """Send an in-process /skill/grasp goal for `obj` and return
-        (GraspOutcome, None) or (None, reason). The caller's top_down and
-        visual_servo are forwarded explicitly — an unset field silently
-        defaults to false, which is how visual_servo once got dropped here.
+        """Execute the grasp mixin inside the outer manipulation reservation.
+
+        Return (GraspOutcome, None) or (None, reason). The caller's top_down and
+        visual_servo are forwarded explicitly.
         `arm` None = auto (the grasp skill picks; outcome.arm reports back).
-        Inner feedback is proxied into the 'grasp_object' phase; canceling the
-        outer goal cancels the in-flight inner goal (_send_action's outer_gh
-        plumbing)."""
-        inner_timeout = max(10.0, run.remaining() - PLACE_RESERVE_SEC)
+        Inner feedback and cancellation are proxied without a second action-server
+        callback competing for the same node's rich outcome and arm-halt state.
+        """
+        inner_timeout = run.remaining() - PLACE_RESERVE_SEC
+        if inner_timeout <= 0:
+            return None, 'insufficient time remaining for grasp and placement'
         inner = SkillGrasp.Goal()
         inner.target_object = obj
         inner.arm = arm or ''
@@ -248,19 +254,26 @@ class PickPlaceSkill:
             inner.timeout = Duration(
                 sec=whole, nanosec=int(round((inner_timeout - whole) * 1e9)))
 
-        def _proxy(feedback_msg):
-            run.feedback.phase = 'grasp_object'
-            run.feedback.progress = (
-                0.2 + 0.5 * float(feedback_msg.feedback.progress))
-            gh.publish_feedback(run.feedback)
+        class ComposedGoal:
+            request = inner
 
-        resp = self._send_action(self.grasp_skill_cli, inner, feedback_cb=_proxy,
-                                 result_timeout=inner_timeout + 15.0, outer_gh=gh)
-        if (resp is None or resp.status != GoalStatus.STATUS_SUCCEEDED
-                or not resp.result.success):
-            msg = (resp.result.message if resp is not None
-                   else 'goal failed or timed out')
-            return None, f'grasp failed: {msg}'
+            @property
+            def is_cancel_requested(self):
+                return gh.is_cancel_requested or run.remaining() <= 0
+
+            def publish_feedback(self, feedback):
+                run.feedback.phase = 'grasp_object'
+                run.feedback.progress = 0.2 + 0.5 * float(feedback.progress)
+                gh.publish_feedback(run.feedback)
+
+            def succeed(self):
+                pass
+
+            abort = canceled = succeed
+
+        result = self._exec_grasp(ComposedGoal())
+        if not result.success:
+            return None, f'grasp failed: {result.message}'
         outcome = getattr(self, '_last_grasp_outcome', None)
         if outcome is None:
             return None, f'grasp of {obj!r} returned no outcome for placement'

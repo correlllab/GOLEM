@@ -32,9 +32,12 @@ def generate_launch_description():
     return LaunchDescription([
         declare_use_sim_time,
         declare_urdf_file,
+        DeclareLaunchArgument('joint_state_prefix', default_value='',
+                              description='Optional isolated Python interpreter for joint states'),
         Node(
             package='h12_ros2_controller',
             executable='joint_state_publisher',
+            prefix=LaunchConfiguration('joint_state_prefix'),
             name='joint_state_publisher',
             parameters=[sim_time_param],
             output='screen',

@@ -1,0 +1,36 @@
+source_repository: git@github.com:correlllab/h12_mjlab.git
+source_revision: c946b1a74f6d6812d82f80fdc7651acb2840acd2
+source_config: config/deploy_fame_finetune_real.yaml
+source_contract: h12_mjlab/deploy/deploy_real.py:FameObservationComposer
+original_source_revision: 2a79d8c310b0588f1f689854bd142768efe1d836
+original_source_config: h12_adaptive_policy/deploy_real/h12_fame_finetune.yaml
+source_original_license_status: not established from upstream checkpoint metadata
+artifacts:
+  policy_4599.pt:
+    source: data/third_party/fame/policy_4599.pt
+    format: torchscript
+    sha256: dc0c7e5d6be5bafd64ae51e991722fa79f2ca7ab2a0e65ce28fec5bb403acadc
+  encoder_4599.pt:
+    source: data/third_party/fame/encoder_4599.pt
+    format: tensor_state_dict
+    sha256: 7ebb98fcfe6c990fe1d290eed53debfac3cfda646ce2f199407f8185b033a9d5
+runtime:
+  tested_python: 3.10.12
+  tested_torch: 2.6.0+cpu
+  tested_numpy: 1.26.4
+  tested_pyyaml: 6.0.3
+  policy_hz: 50
+  observation_size: 252
+  frame_size: 76
+  history: 3
+  proprio_padding: right_zero_until_full_then_oldest_to_newest
+  latent_padding: left_zero_oldest_to_newest
+  observation_normalization: false
+  imu_input: torso_wxyz_and_torso_gyro
+  imu_observation: pelvis_remove_waist_yaw_and_rate
+  command: zero_velocity_height_one
+  force_factors: zero_world_xyz_both_hands
+  action: raw_12_unitree_leg_order_scaled_0.25_plus_nominal_then_position_clip
+  upper_body: observed_not_commanded
+  startup: nominal_leg_prepose_not_upstream_lower_start_pos
+  qualification: offline_cpu_only_not_balance_or_hardware_certification

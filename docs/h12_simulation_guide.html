@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>H1-2 Native Simulation Guide | GOLEM</title>
+  <style>
+    :root { --ink:#172a31; --muted:#465b62; --paper:#f6f4ee; --panel:#fff; --line:#ccd5d4; --accent:#085b58; --warn:#785011; --code:#12282f; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; scroll-padding-top:1.5rem; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:1rem/1.65 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    a { color:var(--accent); text-underline-offset:.2em; }
+    a:hover { text-decoration-thickness:2px; }
+    :focus-visible { outline:3px solid #ad5b10; outline-offset:4px; }
+    .skip { position:absolute; left:1rem; top:-6rem; background:white; padding:.8rem; z-index:2; }
+    .skip:focus { top:1rem; }
+    .layout { display:grid; grid-template-columns:16rem minmax(0,1fr); max-width:92rem; margin:auto; }
+    aside { padding:2.5rem 1.5rem; border-right:1px solid var(--line); }
+    nav { position:sticky; top:2rem; }
+    .brand { font-size:.8rem; font-weight:800; letter-spacing:.17em; color:var(--accent); }
+    nav ol { padding:0; list-style:none; }
+    nav li { margin:.5rem 0; }
+    nav a { display:block; padding:.3rem 0; text-decoration:none; }
+    main { min-width:0; padding:3rem clamp(1.25rem,4vw,4rem) 5rem; }
+    header { border-bottom:3px solid var(--accent); padding-bottom:2rem; margin-bottom:2.5rem; }
+    .eyebrow { font-size:.8rem; font-weight:750; letter-spacing:.13em; text-transform:uppercase; color:var(--accent); }
+    h1 { font:600 clamp(2.2rem,5vw,3.8rem)/1.12 Georgia,serif; letter-spacing:-.035em; margin:.6rem 0 1.2rem; }
+    .lede { max-width:48rem; color:var(--muted); font-size:1.15rem; }
+    h2 { font:600 1.8rem/1.25 Georgia,serif; margin:0 0 1rem; }
+    h3 { font-size:1.1rem; margin:1.6rem 0 .6rem; }
+    section { margin:0 0 3.5rem; }
+    p { margin:.65rem 0 1rem; }
+    li { margin:.4rem 0; }
+    code { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.9em; overflow-wrap:anywhere; }
+    p code, li code, td code { background:#e7eeeb; padding:.1em .25em; border-radius:3px; }
+    .callout { border-left:4px solid var(--accent); padding:.9rem 1.1rem; background:#e6efeb; margin:1.25rem 0; }
+    .warning { border-color:var(--warn); background:#f5ead7; }
+    .callout p { margin:.2rem 0; }
+    .table-wrap { overflow-x:auto; margin:1rem 0; }
+    table { width:100%; border-collapse:collapse; background:var(--panel); text-align:left; }
+    caption { text-align:left; font-weight:700; padding:.5rem 0; }
+    th,td { padding:.8rem; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { background:#e7eeeb; font-weight:700; }
+    figure.command { margin:1.1rem 0 1.5rem; border-radius:7px; overflow:hidden; background:var(--code); color:#eef8f5; }
+    figcaption { display:flex; justify-content:space-between; align-items:center; gap:1rem; padding:.55rem .9rem; background:#244049; font-size:.85rem; font-weight:650; }
+    button { border:1px solid #b6d1cd; border-radius:4px; background:#f2f8f6; color:#123d3b; padding:.4rem .75rem; font:600 .8rem system-ui,sans-serif; cursor:pointer; min-height:2.2rem; }
+    button:hover { background:#d8eae3; }
+    pre { margin:0; padding:1rem; overflow-x:auto; line-height:1.6; tab-size:2; }
+    pre code { white-space:pre; overflow-wrap:normal; }
+    .mode { border:1px solid var(--line); background:var(--panel); padding:1.2rem; border-radius:7px; margin:1.2rem 0; }
+    .mode h3 { margin-top:0; }
+    .small { font-size:.9rem; color:var(--muted); }
+    footer { border-top:1px solid var(--line); padding-top:1rem; color:var(--muted); font-size:.9rem; }
+    #copy-status { position:fixed; bottom:1rem; right:1rem; max-width:calc(100% - 2rem); padding:.6rem 1rem; background:#173e3b; color:white; border-radius:5px; }
+    #copy-status:empty { display:none; }
+    @media (max-width:850px) { .layout { display:block; } aside { border-right:0; border-bottom:1px solid var(--line); padding:1.2rem; } nav { position:static; } nav ol { display:flex; flex-wrap:wrap; gap:.2rem 1rem; margin:.5rem 0 0; } nav li { margin:0; } main { padding-top:2rem; } }
+    @media (prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
+    @media print { body { background:white; font-size:10pt; color:black; } .layout { display:block; } aside,.skip,button,#copy-status { display:none; } main { padding:0; } header { padding-bottom:1rem; } section { margin-bottom:1.5rem; } figure.command,pre,figcaption { background:#f1f1f1; color:black; } pre { white-space:pre-wrap; } pre code { white-space:pre-wrap; overflow-wrap:anywhere; } h2,h3,figcaption { break-after:avoid; } figure,table,.callout { break-inside:avoid; } a { color:black; } }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to guide</a>
+  <div class="layout">
+    <aside>
+      <nav aria-label="Guide sections">
+        <div class="brand">GOLEM / FIELD GUIDE</div>
+        <ol>
+          <li><a href="#overview">01 Overview</a></li>
+          <li><a href="#prepare">02 Terminal preparation</a></li>
+          <li><a href="#build">03 First-time build</a></li>
+          <li><a href="#scene">04 Scene configuration</a></li>
+          <li><a href="#run">05 Everyday run</a></li>
+          <li><a href="#rviz">06 View and inspect</a></li>
+          <li><a href="#arm">07 Direct arm commands</a></li>
+          <li><a href="#skills">08 Marker skills</a></li>
+          <li><a href="#reset">09 Stop and reset</a></li>
+          <li><a href="#reference">10 Quick reference</a></li>
+        </ol>
+      </nav>
+    </aside>
+    <main id="main">
+      <header>
+        <div class="eyebrow">Native Linux / MuJoCo / ROS 2 Humble</div>
+        <h1>H1-2 Simulation<br>Operations Guide</h1>
+        <p class="lede">Prepare the isolated environments, inspect the pegboard through the robot camera, and run explicitly gated manipulation experiments. All commands start from the GOLEM repository root.</p>
+        <div class="callout warning"><p><strong>Simulation only.</strong> Use <code>ROS_DOMAIN_ID=1</code>. The native launchers refuse domain 0, the real robot bus. This guide does not cover hardware deployment. Offline checks and available policy files do not prove balance, safe motion, or successful grasping.</p></div>
+      </header>
+
+      <section id="overview" aria-labelledby="overview-title">
+        <h2 id="overview-title">01 / What Runs Where</h2>
+        <p>The simulator, ROS processes, and arm controller use separate Python environments. The root scripts choose the correct interpreter and ROS overlays. Do not activate these environments manually or combine their Python paths.</p>
+        <div class="table-wrap"><table>
+          <caption>Environment roles</caption>
+          <thead><tr><th scope="col">Environment</th><th scope="col">Numerical stack</th><th scope="col">Role</th></tr></thead>
+          <tbody>
+            <tr><td><code>environments/ros</code></td><td>NumPy 1</td><td>ROS CLI, safety, lower-body policy node, geometric ArUco localization, and marker skills.</td></tr>
+            <tr><td><code>environments/controller</code></td><td>NumPy 2</td><td>Isolated Pinocchio/Pink/OMPL arm controller and joint-state publisher, selected by experiment bringup.</td></tr>
+            <tr><td><code>environments/simulator</code></td><td>NumPy 2 / MuJoCo 3.3.1</td><td>PegInHole physics, viewer, cameras, grippers, clock, and DDS/ROS bridges.</td></tr>
+          </tbody>
+        </table></div>
+        <p>This marker workflow uses camera geometry and the local asset catalog. It does not need AI API keys, SAM weights, or cloud model servers. The native environment does not install RoboCasa kitchen scenes.</p>
+        <p>Keep ground-truth odometry off for this workflow. Localization comes from the head camera, its calibration, and timestamped TF, not simulator object poses.</p>
+      </section>
+
+      <section id="prepare" aria-labelledby="prepare-title">
+        <h2 id="prepare-title">02 / Prepare Each Terminal</h2>
+        <p>Use a normal user shell, including zsh. If Conda is active, deactivate it first; repeat the deactivation if environments are nested. Skip that command when Conda is not installed or no environment is active.</p>
+        <figure class="command"><figcaption><span>Each terminal / leave Conda if active</span><button type="button" data-copy="cmd-conda" aria-label="Copy Conda deactivation command">Copy</button></figcaption><pre><code id="cmd-conda">conda deactivate</code></pre></figure>
+        <figure class="command"><figcaption><span>Each terminal / repository and simulation domain</span><button type="button" data-copy="cmd-terminal" aria-label="Copy terminal preparation commands">Copy</button></figcaption><pre><code id="cmd-terminal">cd ~/Programming/GOLEM
+export ROS_DOMAIN_ID=1</code></pre></figure>
+        <p>The wrappers work directly from zsh or bash. Stay at the repository root and use the paths below; do not source ROS setup files, activate a venv, or manually alter <code>PYTHONPATH</code> or library paths. Display credentials are preserved by the wrappers, not repaired by them.</p>
+      </section>
+
+      <section id="build" aria-labelledby="build-title">
+        <h2 id="build-title">03 / First-Time Setup and Build</h2>
+        <p>Complete this once for a prepared checkout, and repeat the relevant build/check after dependency, interface, or source changes. These commands prepare files and run offline checks; they do not start simulator loops or ROS nodes.</p>
+        <h3>Prerequisites</h3>
+        <ul>
+          <li>Linux with ROS 2 Humble under <code>/opt/ros/humble</code> and system Python 3.10 at <code>/usr/bin/python3</code>.</li>
+          <li>Initialized repository submodules and downloaded Git-LFS assets, including the H1-2 model, ManipulationNet catalog, and bundled standing policies.</li>
+          <li>The system packages listed in <code>environments/ros/apt-packages.txt</code>: build tools, CMake, Python development/colcon tools, ROS generators, rclpy, cv_bridge, and standard messages. A working OpenGL stack is needed for rendering; RViz also needs an installed <code>rviz2</code> and a working desktop display.</li>
+          <li>Access to the locked dependency downloads during setup. Setup runs as your normal user and does not install system packages or invoke sudo. Have an administrator provide missing system prerequisites rather than running the whole setup as root.</li>
+        </ul>
+        <p><code>--local-ros-debs</code> downloads and extracts only two allowlisted ROS packages, <code>ros-humble-rosidl-generator-dds-idl</code> and <code>ros-humble-nav2-msgs</code>, into the local environment. It is not a general apt installer or a replacement for ROS Humble.</p>
+        <figure class="command"><figcaption><span>Setup / ROS and simulator dependencies</span><button type="button" data-copy="cmd-setup" aria-label="Copy ROS and simulator setup commands">Copy</button></figcaption><pre><code id="cmd-setup">./scripts/setup_environment.sh ros --local-ros-debs
+./scripts/setup_environment.sh simulator</code></pre></figure>
+        <p>Build the <code>experiment</code> profile, which selects 12 packages, with two parallel compile jobs. Build it before setting up the controller: the controller check needs the generated interfaces.</p>
+        <figure class="command"><figcaption><span>Build / experiment workspace</span><button type="button" data-copy="cmd-build" aria-label="Copy experiment workspace build command">Copy</button></figcaption><pre><code id="cmd-build">./core_ws/scripts/build_ros_workspace.sh build --profile experiment --compile-jobs 2</code></pre></figure>
+        <figure class="command"><figcaption><span>Setup / isolated controller and simulator interfaces</span><button type="button" data-copy="cmd-controller-setup" aria-label="Copy controller and simulator interface setup commands">Copy</button></figcaption><pre><code id="cmd-controller-setup">./scripts/setup_environment.sh controller
+./scripts/setup_environment.sh simulator --build-interfaces</code></pre></figure>
+        <p>The interface step builds message-only Livox support from the pinned checkout. It does not install a hardware driver or resynchronize the simulator dependencies.</p>
+        <figure class="command"><figcaption><span>Check / all three environments</span><button type="button" data-copy="cmd-check" aria-label="Copy offline environment check commands">Copy</button></figcaption><pre><code id="cmd-check">./scripts/setup_environment.sh ros --check --built --profile experiment
+./scripts/setup_environment.sh controller --check
+./scripts/setup_environment.sh simulator --check --bridges</code></pre></figure>
+        <p>Require successful checks before continuing. They check imports, generated interfaces, and offline numerical/bridge operations. They do not qualify standing performance, camera visibility during motion, contact physics, or insertion accuracy. Everyday launch commands do not install or compile anything.</p>
+      </section>
+
+      <section id="scene" aria-labelledby="scene-title">
+        <h2 id="scene-title">04 / Configure the Scene</h2>
+        <p>The default task is <code>PegInHole</code>, with a level table and board on the robot's left and one <code>cylinder_1</code> peg seated in <code>cylinder_1</code>. The board origin is approximately <code>(0.504, 0.185, 0.955)</code> metres in the scene world frame. The board footprint is <code>0.32 x 0.25 m</code>; its entry surface is 25 mm above its origin.</p>
+        <div class="table-wrap"><table>
+          <caption>Scene and localization defaults</caption>
+          <thead><tr><th scope="col">Setting</th><th scope="col">Default / meaning</th></tr></thead>
+          <tbody>
+            <tr><td>Task</td><td><code>--task PegInHole</code></td></tr>
+            <tr><td>Active peg and seated source</td><td><code>--peg cylinder_1 --source-hole cylinder_1</code></td></tr>
+            <tr><td>Markers</td><td><code>DICT_4X4_50</code>, IDs 7 and 8, on opposite upper board corners.</td></tr>
+            <tr><td>Marker dimensions</td><td>30 mm black square, 40 mm total white-paper square. PnP uses the black-square edge, not the paper edge.</td></tr>
+            <tr><td>Localization camera</td><td>Head color image and CameraInfo. Use <code>GOLEM_CAMERA_SCALE=1</code> for full profiled resolution.</td></tr>
+            <tr><td>Skill profile</td><td><code>core_ws/src/h12_skills/h12_skills/marker_profile.json</code>; active <code>cylinder_1</code> at source <code>cylinder_1</code>.</td></tr>
+          </tbody>
+        </table></div>
+        <p>Catalog suffixes <code>0..3</code> are clearance rows, top-to-bottom from tight to loose. They are <strong>not four peg sizes or scale factors</strong>: the source peg geometry is shared across a shape's rows. For example, <code>cylinder_3</code> names the looser destination row, not a larger cylinder.</p>
+        <p>The simulator can select catalog peg/source IDs, but the skills' active-peg profile must match the physical scene exactly. A different source hole requires an explicitly prepared matching profile, supplied with <code>marker_profile_path:=/absolute/path/to/profile.json</code>. Merely changing simulator flags does not update that profile. Catalog fit checks do not provide a grasp calibration: the marker backend supports only cylinder grasps with its nominal profile.</p>
+        <p>For a marker-only session that does not need the standalone depth stream or point cloud, use the following simulator command instead of the normal one. Head RGB, aligned depth, and camera TF remain available. Do not start both simulator commands.</p>
+        <figure class="command"><figcaption><span>Terminal A / alternative marker-only sensor selection</span><button type="button" data-copy="cmd-sim-light" aria-label="Copy alternative marker-only simulator command">Copy</button></figcaption><pre><code id="cmd-sim-light">GOLEM_CAMERA_SCALE=1 GOLEM_CAMERA_DEPTH=0 GOLEM_CAMERA_POINTCLOUD=0 ./scripts/run_simulation.sh --task PegInHole --peg cylinder_1 --source-hole cylinder_1</code></pre></figure>
+      </section>
+
+      <section id="run" aria-labelledby="run-title">
+        <h2 id="run-title">05 / Everyday Run</h2>
+        <h3>Terminal A / start the simulator first</h3>
+        <figure class="command"><figcaption><span>Terminal A / full-resolution pegboard simulator</span><button type="button" data-copy="cmd-sim" aria-label="Copy pegboard simulator launch command">Copy</button></figcaption><pre><code id="cmd-sim">GOLEM_CAMERA_SCALE=1 ./scripts/run_simulation.sh --task PegInHole --peg cylinder_1 --source-hole cylinder_1</code></pre></figure>
+        <p>Leave this terminal running. Without a display, add <code>--headless</code> to the same command instead of starting a second simulator. Verify the scene, the intended seated peg, and the startup message <code>elastic band on torso anchored at ...</code>. The startup tether holds the robot while controllers initialize; a tether is not proof of a safe pose or stable balance.</p>
+        <div class="callout warning"><p>Keep the startup tether enabled. Do not press Space or manually toggle the band to bypass engagement. If the robot is not held in the expected safe posture, stop before starting actuation.</p></div>
+        <h3>Terminal B / choose one bringup mode</h3>
+        <p><strong>The two modes below are alternatives in the same terminal.</strong> Stop the previous bringup with Ctrl+C and wait for its child processes to exit before starting the other. Do not run two localizers, state publishers, or TF trees against the same simulator.</p>
+        <div class="mode">
+          <h3>Alternative A / observation only</h3>
+          <figure class="command"><figcaption><span>Terminal B / no actuation</span><button type="button" data-copy="cmd-observe" aria-label="Copy observation-only experiment command">Copy</button></figcaption><pre><code id="cmd-observe">./scripts/run_experiment.sh</code></pre></figure>
+          <p>Starts joint/robot state publishing and the geometric ArUco localizer on simulation time. It does not start safety-command merging, the arm controller, the lower-body controller, or skill action servers. Use this mode to inspect images, TF, and localization while the simulator is tethered.</p>
+        </div>
+        <div class="mode">
+          <h3>Alternative B / explicitly allow actuation</h3>
+          <p>Use only after operator approval and visual verification of the simulator's held start posture and clear arm workspace. The flag below is an operator assertion, not an automated safety check. Stop observation-only bringup first.</p>
+          <figure class="command"><figcaption><span>Terminal B / verified start, FAME standing policy</span><button type="button" data-copy="cmd-actuate" aria-label="Copy explicitly gated FAME experiment command">Copy</button></figcaption><pre><code id="cmd-actuate">./scripts/run_experiment.sh start_position_verified:=true lowerbody:=fame_finetune</code></pre></figure>
+          <p>Choose <code>lowerbody:=almi_manip_stand</code> in that command instead for the alternative standing policy. Do not launch both. This mode also starts safety, upper-body control, lower-body control, and marker skill servers. Arm initialization and lower-body pre-positioning can move joints before policy engagement.</p>
+          <ol>
+            <li>Keep the simulator running and tethered. Check fresh state and safety heartbeat, and monitor both terminals for rejected or stale control data.</li>
+            <li>Wait for the arm startup sequence <code>init_1</code>, <code>init_2</code>, <code>init_3</code>, <code>home</code>, then torso initialization to finish. Require <code>Frame Task Server initialized</code> and fresh end-effector poses. Do not confirm the lower body during arm initialization.</li>
+            <li>Verify the actual home/staging posture and clearance in the viewer, not just the presence of an action server. If an intended staging move is required, complete and inspect it while safely held before proceeding.</li>
+            <li>Wait for the lower-body prompt reporting <code>legs pre-posed (settled, ...)</code> and waiting for confirmation. A <code>NOT SETTLED (timeout)</code> prompt is not permission to proceed. Verify the safe held posture again.</li>
+            <li>Only then use Terminal C for the separate confirmation call below. The controller runs the manipulation standing policy at 50 Hz and handles tether release after commitment; monitor the resulting logs and motion. Do not send arm/skill goals until the resulting posture is steady and safe.</li>
+          </ol>
+        </div>
+        <figure class="command"><figcaption><span>Terminal C / inspect fresh arm poses before confirmation</span><button type="button" data-copy="cmd-ee" aria-label="Copy end-effector pose inspection commands">Copy</button></figcaption><pre><code id="cmd-ee">./scripts/run_ros.sh topic echo /left_ee_pose --once
+./scripts/run_ros.sh topic echo /right_ee_pose --once</code></pre></figure>
+        <figure class="command"><figcaption><span>Terminal C / operator confirmation, only after all checks above</span><button type="button" data-copy="cmd-confirm" aria-label="Copy lower-body engagement confirmation service call">Copy</button></figcaption><pre><code id="cmd-confirm">./scripts/run_ros.sh service call /lowerbody/confirm_engage std_srvs/srv/Trigger '{}'</code></pre></figure>
+        <div class="callout warning"><p>The confirmation service can record an early confirmation. Do not pre-call it, put it in a launch chain, or treat a successful response as proof of balance. Operators must verify initialization, settling, tether state, and clearance before calling it.</p></div>
+      </section>
+
+      <section id="rviz" aria-labelledby="rviz-title">
+        <h2 id="rviz-title">06 / View and Inspect</h2>
+        <p>Use another prepared terminal for RViz after the simulator and one bringup mode are running. The viewer does not replace bringup and should not start a second localizer.</p>
+        <figure class="command"><figcaption><span>Terminal D / RViz inspection</span><button type="button" data-copy="cmd-rviz" aria-label="Copy RViz launcher command">Copy</button></figcaption><pre><code id="cmd-rviz">./scripts/run_rviz.sh</code></pre></figure>
+        <p>The launcher starts only the RViz client, on simulation time, with <code>pelvis</code> as its fixed frame. It uses the repository's <code>core_ws/src/h12_bringup/rviz/pegboard.rviz</code> configuration. A working display and installed RViz are required. Use <code>--config PATH</code> for a different RViz configuration.</p>
+        <figure class="command"><figcaption><span>Offline / check RViz prerequisites without opening it</span><button type="button" data-copy="cmd-rviz-check" aria-label="Copy RViz prerequisite check command">Copy</button></figcaption><pre><code id="cmd-rviz-check">./scripts/run_rviz.sh --check</code></pre></figure>
+        <div class="table-wrap"><table>
+          <caption>RViz views and visual keys</caption>
+          <thead><tr><th scope="col">Display</th><th scope="col">What to inspect</th></tr></thead>
+          <tbody>
+            <tr><td>Head RGB + Projected Geometry</td><td>Camera view from <code>/realsense/head/color/image_raw</code> with its matching <code>/realsense/head/color/camera_info</code>. Compare projected board/marker geometry with the image. The camera input uses Best Effort QoS.</td></tr>
+            <tr><td>TF and pelvis grid</td><td>Camera and robot frame relationships in the central 3D view. The grid is a frame reference, not a ground-truth map.</td></tr>
+            <tr><td>Accepted Board Pose</td><td>Axes from <code>/perception/pegboard/pose</code>. Check current diagnostics before using a previously drawn pose.</td></tr>
+            <tr><td>Board + Markers + Frustum + Status</td><td><code>/perception/pegboard/markers</code>: board outline, yellow marker outlines, cyan camera frustum, and green VALID or red INVALID status text. Destination axes at <code>cylinder_3</code> are shown when catalog geometry is available. Colors are paired with labels or distinct geometry, not used alone to indicate validity.</td></tr>
+            <tr><td>Optional displays</td><td>Enable RobotModel for the robot mesh. Enable Annotated RGB for <code>/perception/pegboard/annotated</code> when annotated publishing is enabled; native experiment bringup enables it by default. These displays are initially off.</td></tr>
+          </tbody>
+        </table></div>
+        <p><code>/perception/pegboard/pose_optical</code> is the same estimate expressed in the camera optical frame, not a second board. Visualization outlines and projected axes are estimates, not physics or grasp verification.</p>
+        <figure class="command"><figcaption><span>Terminal C / read localization health</span><button type="button" data-copy="cmd-diagnostics" aria-label="Copy localization diagnostic inspection command">Copy</button></figcaption><pre><code id="cmd-diagnostics">./scripts/run_ros.sh topic echo /perception/pegboard/diagnostics --once</code></pre></figure>
+        <div class="table-wrap"><table>
+          <caption>How to interpret localization diagnostics</caption>
+          <thead><tr><th scope="col">Signal</th><th scope="col">Meaning and operator check</th></tr></thead>
+          <tbody>
+            <tr><td><code>valid=true</code>, level OK</td><td>The current image/calibration/TF and geometric quality checks accepted a board observation. This does not verify a grasp or guarantee collision clearance.</td></tr>
+            <tr><td>Waiting for image/calibration</td><td>Localization needs synchronized camera data. Confirm camera topics, advancing simulation time, and matching CameraInfo.</td></tr>
+            <tr><td>No usable marker or ambiguous pose</td><td>Check marker visibility, image resolution, marker IDs, layout, and viewpoint. Do not infer a valid board pose from a rendered model alone.</td></tr>
+            <tr><td>Reprojection / geometry rejection</td><td>The image estimate did not meet configured quality bounds. Check calibration and layout; do not loosen bounds simply to enable motion.</td></tr>
+            <tr><td>Observation TF pending</td><td>The localizer is waiting within a bounded interval for the camera-to-pelvis transform at the original image timestamp. Check one bringup's TF and simulation-time configuration if it persists. It does not substitute the latest TF.</td></tr>
+            <tr><td>Stale observation / clock reset</td><td>The last estimate is no longer safe to use. Default pose-age limits are 0.5 seconds. Restart all ROS processes and RViz after a simulation clock reset.</td></tr>
+          </tbody>
+        </table></div>
+        <p>Inspect observation age and the status message, not only a persistent pose arrow. Input age, processing wall time, and pending-TF count help separate camera delivery, processing, and transform readiness. Low reprojection error is image consistency, not millimetre-level insertion accuracy. A previously drawn pose may remain visible after localization becomes invalid. Skills require fresh valid observations and reject excessive board jumps.</p>
+      </section>
+
+      <section id="arm" aria-labelledby="arm-title">
+        <h2 id="arm-title">07 / Direct Arm Commands</h2>
+        <p>Use Terminal C only in verified actuated mode, after initialization and engagement checks. Run one goal at a time and wait for its result. Do not run these demonstrations concurrently with a marker skill or while holding a peg. Inspect the whole path and the other arm's clearance first.</p>
+        <h3>Named configuration / choose one</h3>
+        <p><code>home</code> and <code>prep</code> are actual named configurations. They are posture examples, not universally collision-free moves. These two commands are alternatives, not a required sequence. Duration zero selects the server's configured timeout.</p>
+        <figure class="command"><figcaption><span>Terminal C / optional home posture</span><button type="button" data-copy="cmd-home" aria-label="Copy home named configuration action goal">Copy</button></figcaption><pre><code id="cmd-home">./scripts/run_ros.sh action send_goal /named_config custom_ros_messages/action/NamedConfig \
+  "{config_name: 'home', plan: false, slow_mode: true, duration: {sec: 0, nanosec: 0}}" --feedback</code></pre></figure>
+        <figure class="command"><figcaption><span>Terminal C / alternative prep posture</span><button type="button" data-copy="cmd-prep" aria-label="Copy prep named configuration action goal">Copy</button></figcaption><pre><code id="cmd-prep">./scripts/run_ros.sh action send_goal /named_config custom_ros_messages/action/NamedConfig \
+  "{config_name: 'prep', plan: false, slow_mode: true, duration: {sec: 30, nanosec: 0}}" --feedback</code></pre></figure>
+        <h3>Small relative frame move</h3>
+        <p>This requests a 20 mm upward offset for <code>right_graspgenx_frame</code>, measured along pelvis-frame Z, with no orientation change. It is <code>plan: false</code> and <code>slow_mode: true</code>. Relative offsets use pelvis axes, not tool-local axes.</p>
+        <figure class="command"><figcaption><span>Terminal C / optional right-arm +20 mm pelvis-Z move</span><button type="button" data-copy="cmd-frame" aria-label="Copy relative right grasp frame action goal">Copy</button></figcaption><pre><code id="cmd-frame">./scripts/run_ros.sh action send_goal /frame_task custom_ros_messages/action/FrameTask \
+  "{plan: false, relative: true, slow_mode: true, frame_names: ['right_graspgenx_frame'], frame_targets: [{position: {x: 0.0, y: 0.0, z: 0.02}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}], duration: {sec: 30, nanosec: 0}}" --feedback</code></pre></figure>
+        <div class="callout"><p><strong>Duration is a timeout, not a trajectory duration.</strong> For both actions, the server interprets a positive <code>duration</code> as the allowed wall-clock execution time; zero uses the server default. It does not force a 30-second movement. Slow mode reduces commanded speed, but neither slow mode nor planning validates contact physics. Check actual measured motion and scene clearance.</p></div>
+        <p>Do not publish direct motor commands to bypass the controller and safety pipeline. Gripper opening is not part of these examples: opening while holding a peg can drop it, and a skill-owned hold must not be overridden casually.</p>
+      </section>
+
+      <section id="skills" aria-labelledby="skills-title">
+        <h2 id="skills-title">08 / Marker Manipulation Skills</h2>
+        <p>Start from a fresh scene with the default seated <code>cylinder_1</code>, a matching active-peg profile, fresh valid board localization, and an initialized, safely engaged robot. Check the left-arm approach, board, table, and destination clearance. The catalog profile is nominal simulation geometry, not measured grip calibration.</p>
+        <div class="callout warning"><p><strong>Choose one alternative from a reset.</strong> Do not run grasp-only and then pick/place. Pick/place already includes its own grasp. Once close is dispatched, the skills treat the source pose as consumed or uncertain, even if the goal later fails. Reset the simulator and restart skills before another attempt; restarting skills alone does not restore the peg.</p></div>
+        <h3>Alternative A / grasp only</h3>
+        <figure class="command"><figcaption><span>Terminal C / grasp at seated source, no extraction</span><button type="button" data-copy="cmd-grasp" aria-label="Copy marker grasp-only action goal">Copy</button></figcaption><pre><code id="cmd-grasp">./scripts/run_ros.sh action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
+  "{target_object: 'cylinder_1', arm: 'left', top_down: false, visual_servo: false, timeout: {sec: 180, nanosec: 0}}" --feedback</code></pre></figure>
+        <p>Approaches the catalog-derived seated source, commands close, and holds there. It does not extract the peg. A successful result means the nominal sequence completed; it is not independent contact or grip verification.</p>
+        <h3>Alternative B / full grasp-to-pre-insertion sequence</h3>
+        <figure class="command"><figcaption><span>Terminal C / fresh reset only, cylinder_1 to cylinder_3 pre-insertion</span><button type="button" data-copy="cmd-pick" aria-label="Copy marker pick and pre-insertion action goal">Copy</button></figcaption><pre><code id="cmd-pick">./scripts/run_ros.sh action send_goal /skill/pick_place custom_ros_messages/action/SkillPickPlace \
+  "{target_object: 'cylinder_1', place_target: 'cylinder_3', arm: 'left', top_down: false, visual_servo: false, timeout: {sec: 180, nanosec: 0}}" --feedback</code></pre></figure>
+        <p>Includes grasp, board-normal extraction, free-space carry, and a final pre-insertion hold. With the default profile, the <strong>peg tip stops 40 mm above the destination entry</strong>, assuming a rigid grasp. It does not insert, release, or verify that the peg is actually held. In marker mode this deliberately narrower behavior overrides the generic action name's implication of a full placement.</p>
+        <p>Keep <code>top_down</code> and <code>visual_servo</code> false: this backend rejects those overrides. Use an explicit arm. Workspace admission, measured frame checks, board freshness, and planner results do not replace physics validation or actual clearance checks. On failure there is no guaranteed automatic retreat or release; inspect the scene before deciding how to stop and reset.</p>
+      </section>
+
+      <section id="reset" aria-labelledby="reset-title">
+        <h2 id="reset-title">09 / Stop and Reset</h2>
+        <ol>
+          <li>Stop issuing goals. Do not assume Ctrl+C on an action CLI cancels its server-side motion, or open a loaded gripper as a shortcut.</li>
+          <li>Stop experiment bringup/controllers in Terminal B with Ctrl+C and wait for its child processes to exit. Keep the simulator running during controller shutdown.</li>
+          <li>Stop RViz and any remaining ROS CLI or inspection processes.</li>
+          <li>Stop the simulator in Terminal A with Ctrl+C.</li>
+          <li>For a new attempt, launch the simulator again, then one bringup mode and RViz. Repeat the initialization and operator engagement checks; do not reuse an earlier confirmation.</li>
+        </ol>
+        <p>A simulator restart resets simulation time. Restart <strong>all ROS processes and RViz</strong> with it so timestamped TF and perception caches do not span clock epochs. Restarting the experiment also clears the skills' consumed-source cache. There is no reset-service command in this workflow.</p>
+      </section>
+
+      <section id="reference" aria-labelledby="reference-title">
+        <h2 id="reference-title">10 / Quick Reference</h2>
+        <p>These are script roles, not a block to execute in sequence. Copy the complete commands from the relevant section after reading their preconditions.</p>
+        <div class="table-wrap"><table>
+          <caption>Root-level entry points</caption>
+          <thead><tr><th scope="col">Command</th><th scope="col">What it starts or does</th></tr></thead>
+          <tbody>
+            <tr><td><code>./scripts/setup_environment.sh ros --local-ros-debs</code></td><td>Prepares local ROS dependencies; no nodes.</td></tr>
+            <tr><td><code>./scripts/setup_environment.sh simulator</code></td><td>Prepares simulator dependencies; no physics loop.</td></tr>
+            <tr><td><code>./core_ws/scripts/build_ros_workspace.sh build --profile experiment --compile-jobs 2</code></td><td>Builds the 12-package native experiment profile; no bringup.</td></tr>
+            <tr><td><code>./scripts/setup_environment.sh controller</code></td><td>Prepares the isolated arm environment after interfaces are built.</td></tr>
+            <tr><td><code>./scripts/setup_environment.sh simulator --build-interfaces</code></td><td>Generates pinned simulator message support and checks bridge imports.</td></tr>
+            <tr><td><code>./scripts/run_simulation.sh --task PegInHole</code></td><td>Simulator, startup tether, sensors, clock, gripper bridge; no robot controllers.</td></tr>
+            <tr><td><code>./scripts/run_experiment.sh</code></td><td>Observation-only state/TF and ArUco localization.</td></tr>
+            <tr><td><code>./scripts/run_experiment.sh start_position_verified:=true lowerbody:=fame_finetune</code></td><td>Also permits safety, arm initialization, lower-body pre-pose, and marker skills; policy engagement still needs the separate operator confirmation.</td></tr>
+            <tr><td><code>./scripts/run_rviz.sh</code></td><td>RViz inspection client; keep only one experiment bringup.</td></tr>
+            <tr><td><code>./scripts/run_ros.sh topic list</code></td><td>Runs one ROS CLI command in the clean native overlay.</td></tr>
+          </tbody>
+        </table></div>
+        <figure class="command"><figcaption><span>Offline CLI reference / does not launch nodes</span><button type="button" data-copy="cmd-help" aria-label="Copy native script help commands">Copy</button></figcaption><pre><code id="cmd-help">./scripts/setup_environment.sh --help
+./scripts/run_simulation.sh --help
+./scripts/run_experiment.sh --help
+./scripts/run_ros.sh --help</code></pre></figure>
+      </section>
+      <footer>GOLEM native simulation guide. Self-contained HTML: no external fonts, scripts, stylesheets, or network resources are required to read it. Copy buttons copy only the command text, without terminal labels.</footer>
+    </main>
+  </div>
+  <div id="copy-status" role="status" aria-live="polite" aria-atomic="true"></div>
+  <script>
+    'use strict';
+    const status = document.getElementById('copy-status');
+    let statusTimer;
+    function fallbackCopy(text) {
+      const previous = document.activeElement;
+      const field = document.createElement('textarea');
+      field.value = text;
+      field.setAttribute('readonly', '');
+      field.setAttribute('aria-label', 'Command text for copying');
+      field.style.cssText = 'position:fixed;left:-10000px;top:0';
+      document.body.appendChild(field);
+      let copied = false;
+      try {
+        field.focus();
+        field.select();
+        copied = document.execCommand('copy');
+      } finally {
+        field.remove();
+        if (previous) previous.focus();
+      }
+      if (!copied) throw new Error('Clipboard unavailable');
+    }
+    document.querySelectorAll('button[data-copy]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const text = document.getElementById(button.dataset.copy).textContent;
+        try {
+          try {
+            if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error('Use fallback');
+            await navigator.clipboard.writeText(text);
+          } catch (_) {
+            fallbackCopy(text);
+          }
+          status.textContent = 'Command copied. Read its preconditions before running it.';
+        } catch (_) {
+          status.textContent = 'Copy unavailable. Select the command text and copy it manually.';
+        }
+        window.clearTimeout(statusTimer);
+        statusTimer = window.setTimeout(() => { status.textContent = ''; }, 6000);
+      });
+    });
+  </script>
+</body>
+</html>

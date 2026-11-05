@@ -4,10 +4,12 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'setup_simulator.py'
+sys.path.insert(0, str(SCRIPT.parent))
 spec = importlib.util.spec_from_file_location('setup_simulator', SCRIPT)
 setup = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(setup)
@@ -15,7 +17,7 @@ spec.loader.exec_module(setup)
 
 class NativeSimulatorTests(unittest.TestCase):
     def test_help_is_independent_of_cwd_and_ros(self):
-        result = subprocess.run([str(SCRIPT.with_suffix('.sh')), '--help'], cwd='/tmp/kilo',
+        result = subprocess.run([str(setup.ROOT / 'scripts/setup_environment.sh'), '--help'], cwd='/tmp/kilo',
                                 env={'HOME': os.environ['HOME'], 'PATH': '/usr/bin:/bin',
                                      'PYTHONPATH': '/invalid', 'VIRTUAL_ENV': '/invalid'},
                                 capture_output=True, text=True)
@@ -46,14 +48,16 @@ class NativeSimulatorTests(unittest.TestCase):
         self.assertNotIn('setup.bash', command)
 
     def test_reject_changed_livox_pin_before_writes(self):
-        with patch.object(setup.subprocess, 'check_output', return_value='unexpected\n'), \
+        with patch.object(Path, 'is_file', return_value=True), \
+                patch.object(setup.subprocess, 'check_output', return_value='unexpected\n'), \
                 patch.object(setup, 'run') as run:
             with self.assertRaisesRegex(RuntimeError, 'Livox must remain'):
                 setup.build_livox(2)
         run.assert_not_called()
 
     def test_reject_modified_message_before_writes(self):
-        with patch.object(setup.subprocess, 'check_output', side_effect=[setup.LIVOX_SHA, b'invalid']), \
+        with patch.object(Path, 'is_file', return_value=True), \
+                patch.object(setup.subprocess, 'check_output', side_effect=[setup.LIVOX_SHA, b'invalid']), \
                 patch.object(setup, 'run') as run:
             with self.assertRaisesRegex(RuntimeError, 'differs from pinned source'):
                 setup.build_livox(2)

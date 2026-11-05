@@ -1,0 +1,90 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 32; 35; 42
+    Fixed Frame: pelvis
+    Frame Rate: 20
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Pelvis Grid
+      Enabled: true
+      Cell Size: 0.1
+      Plane Cell Count: 20
+      Reference Frame: pelvis
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Arrows: true
+      Show Axes: true
+      Show Names: false
+      Marker Scale: 0.15
+    - Class: rviz_default_plugins/RobotModel
+      Name: Robot (Optional)
+      Enabled: false
+      Description Source: Topic
+      Description Topic:
+        Value: /robot_description
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+      Alpha: 0.4
+    - Class: rviz_default_plugins/Camera
+      Name: Head RGB + Projected Geometry
+      Enabled: true
+      Topic:
+        Value: /realsense/head/color/image_raw
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 2
+      Image Rendering: background and overlay
+      Overlay Alpha: 0.5
+    - Class: rviz_default_plugins/Pose
+      Name: Accepted Board Pose (Check Status)
+      Enabled: true
+      Topic:
+        Value: /perception/pegboard/pose
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        Depth: 1
+      Shape: Axes
+      Axes Length: 0.1
+      Axes Radius: 0.005
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Board + Markers + Frustum + Status
+      Enabled: true
+      Topic:
+        Value: /perception/pegboard/markers
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        Depth: 2
+    - Class: rviz_default_plugins/Image
+      Name: Annotated RGB (Future Localizer Launch)
+      Enabled: false
+      Topic:
+        Value: /perception/pegboard/annotated
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        Depth: 1
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 1.8
+      Pitch: 0.35
+      Yaw: 0.8
+      Focal Point:
+        X: 0.4
+        Y: 0.15
+        Z: 0.2
+      Target Frame: pelvis
+Window Geometry:
+  Width: 1600
+  Height: 950

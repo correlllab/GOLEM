@@ -18,6 +18,8 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     args = [
+        DeclareLaunchArgument('frame_task_prefix', default_value='',
+                              description='Optional isolated Python interpreter for arm control'),
         DeclareLaunchArgument(
             'use_sim_time', default_value='false',
             description='Use the simulator /clock if true'),
@@ -77,6 +79,7 @@ def generate_launch_description():
                 Node(
                     package='h12_ros2_controller',
                     executable='frame_task_server',
+                    prefix=LaunchConfiguration('frame_task_prefix'),
                     name='frame_task_server',
                     arguments=['--config', LaunchConfiguration('frame_task_config')],
                     parameters=[sim_time_param],

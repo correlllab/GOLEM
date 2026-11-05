@@ -362,7 +362,7 @@ class AlmiPolicy(Policy):
                 f"almi default_angles must have {len(self.OBS_JOINT_IDX)} entries"
             )
 
-        self._policy = torch.jit.load(policy_path)
+        self._policy = self._load_actor(policy_path)
         self._policy.eval()
 
         self.nominal_lower = self._default_angles[:NUM_LEG_JOINTS].copy()
@@ -370,6 +370,9 @@ class AlmiPolicy(Policy):
         self._obs = np.zeros(self._num_obs, dtype=np.float32)
         self._t_start: float | None = None
         self._walking = False
+
+    def _load_actor(self, policy_path: str):
+        return torch.jit.load(policy_path)
 
     def _effective_cmd(self, cmd: np.ndarray) -> np.ndarray:
         raw = np.clip(cmd * self._cmd_gain, -1.0, 1.0)

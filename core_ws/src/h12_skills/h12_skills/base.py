@@ -31,7 +31,8 @@ from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 
 from action_msgs.msg import GoalStatus
 from builtin_interfaces.msg import Duration
-from geometry_msgs.msg import Point, Pose, Quaternion, Vector3Stamped
+from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion, Vector3Stamped
+from diagnostic_msgs.msg import DiagnosticArray
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 from std_msgs.msg import Bool, Header
 
@@ -315,8 +316,35 @@ class SkillsBase(Node):
 
         # Everything shares one reentrant group so skill execute callbacks can
         # block on inner service/action futures while the executor keeps
-        # spinning (and so pick_place can call the grasp server in-process).
+        # spinning. Composed manipulation calls share one execution reservation.
         self._cb_group = ReentrantCallbackGroup()
+        self._manipulation_lock = threading.Lock()
+        self._target_backend = self.declare_parameter(
+            'target_backend', 'legacy', ParameterDescriptor(read_only=True)).value
+        if self._target_backend not in ('legacy', 'marker'):
+            raise ValueError('target_backend must be legacy or marker')
+        if self._target_backend == 'marker':
+            from .marker_targets import MarkerCatalog, BoardObservation
+            catalog_path = self.declare_parameter(
+                'marker_catalog_path', '', ParameterDescriptor(read_only=True)).value
+            profile_path = self.declare_parameter(
+                'marker_profile_path', '', ParameterDescriptor(read_only=True)).value
+            self._marker_catalog = MarkerCatalog(catalog_path, profile_path or None)
+            self._marker_displaced = set()
+            self._board_observation = BoardObservation(
+                self._marker_catalog.profile['max_pose_age_sec'])
+            pose_topic = self.declare_parameter(
+                'marker_pose_topic', '/perception/pegboard/pose',
+                ParameterDescriptor(read_only=True)).value
+            diagnostics_topic = self.declare_parameter(
+                'marker_diagnostics_topic', '/perception/pegboard/diagnostics',
+                ParameterDescriptor(read_only=True)).value
+            self.create_subscription(PoseStamped, pose_topic,
+                                     self._board_observation.on_pose, 10,
+                                     callback_group=self._cb_group)
+            self.create_subscription(DiagnosticArray, diagnostics_topic,
+                                     self._board_observation.on_diagnostics, 10,
+                                     callback_group=self._cb_group)
 
         # --- gripper service clients (per arm) --------------------------------
         self.gripper_clis = {
@@ -368,12 +396,14 @@ class SkillsBase(Node):
         # --- perception service clients ---------------------------------------
         # gemini_query: image (+/- text) -> Gemini text; sam_segment: image +
         # box/text -> mono8 mask; graspgen: object cloud -> ranked 6-DOF grasps.
-        self.gemini_cli = self.create_client(
-            GeminiQuery, 'gemini_query', callback_group=self._cb_group)
-        self.sam_cli = self.create_client(
-            SamSegment, 'sam_segment', callback_group=self._cb_group)
-        self.graspgen_cli = self.create_client(
-            GraspGen, 'graspgen', callback_group=self._cb_group)
+        self.gemini_cli = self.sam_cli = self.graspgen_cli = None
+        if self._target_backend == 'legacy':
+            self.gemini_cli = self.create_client(
+                GeminiQuery, 'gemini_query', callback_group=self._cb_group)
+            self.sam_cli = self.create_client(
+                SamSegment, 'sam_segment', callback_group=self._cb_group)
+            self.graspgen_cli = self.create_client(
+                GraspGen, 'graspgen', callback_group=self._cb_group)
 
         # --- arm IK action client ---------------------------------------------
         self.frame_task_cli = ActionClient(
@@ -394,16 +424,8 @@ class SkillsBase(Node):
             Bool, '/safety/heartbeat', self._on_safety_heartbeat, 10,
             callback_group=self._cb_group)
 
-        # --- in-process skill composition ---------------------------------------
-        # pick_place drives the grasp through this node's OWN /skill/grasp action
-        # server (the ReentrantCallbackGroup + MultiThreadedExecutor make the
-        # nested call safe). No wait_for_server at startup: the server comes up
-        # with this same node. Because caller and server share the process, rich
-        # RESULTS travel on the instance instead of the action result message —
-        # see skills/grasp.py (GraspOutcome) for the contract.
-        self.grasp_skill_cli = ActionClient(
-            self, SkillGrasp, SKILL_ACTIONS['grasp'][1],
-            callback_group=self._cb_group)
+        # Direct in-process composition shares a single manipulation reservation.
+        # The public action schemas remain unchanged; rich geometry stays local.
         self._last_grasp_outcome = None   # GraspOutcome of the last generic grasp
 
         # --- TF listener + broadcaster ----------------------------------------
@@ -474,10 +496,11 @@ class SkillsBase(Node):
                 qos_profile_sensor_data, callback_group=self._cb_group)
 
         # Wait for the underlying endpoints (non-fatal).
-        self.get_logger().info('Waiting for gemini/sam/graspgen, grippers, frame_task...')
-        self.gemini_cli.wait_for_service(timeout_sec=10.0)
-        self.sam_cli.wait_for_service(timeout_sec=10.0)
-        self.graspgen_cli.wait_for_service(timeout_sec=10.0)
+        self.get_logger().info(f'Waiting for {self._target_backend} backend motion endpoints...')
+        if self._target_backend == 'legacy':
+            self.gemini_cli.wait_for_service(timeout_sec=10.0)
+            self.sam_cli.wait_for_service(timeout_sec=10.0)
+            self.graspgen_cli.wait_for_service(timeout_sec=10.0)
         for clis in (self.gripper_clis, self.gripper_open_clis,
                      self.gripper_close_clis, self.gripper_force_clis):
             for cli in clis.values():
@@ -628,6 +651,12 @@ class SkillsBase(Node):
         """Call `client` and block (executor-safe) for the result. Pass the
         skill's goal handle as `outer_gh` so a cancel of that goal aborts the
         wait promptly instead of blocking on the in-flight call."""
+        if client is None:
+            raise RuntimeError(f'{name} is disabled by target_backend={self._target_backend}')
+        if outer_gh is not None and outer_gh.is_cancel_requested:
+            return None
+        if timeout_sec <= 0:
+            return None
         if not client.service_is_ready():
             self.get_logger().error(f'{name} service not available')
             return None
@@ -647,11 +676,20 @@ class SkillsBase(Node):
         only drop the local future and leave the robot executing an orphaned
         goal. `stop_event` lets a feedback callback end the wait early (e.g.
         frame_task feedback gone stable)."""
-        if result_timeout <= 0.05:
+        if (result_timeout <= 0.05
+                or (outer_gh is not None and outer_gh.is_cancel_requested)):
             self.get_logger().error('no time left to send action goal')
             return None
-        handle = self._wait_future(
-            client.send_goal_async(goal, feedback_callback=feedback_cb), accept_timeout)
+        pending = client.send_goal_async(goal, feedback_callback=feedback_cb)
+        handle = self._wait_future(pending, min(accept_timeout, result_timeout), outer_gh)
+        if handle is None:
+            # A late acceptance must not leave an orphan moving after our caller
+            # has canceled or exhausted its budget.
+            def cancel_late(future):
+                accepted = future.result()
+                if accepted is not None and accepted.accepted:
+                    accepted.cancel_goal_async()
+            pending.add_done_callback(cancel_late)
         if handle is None or not handle.accepted:
             self.get_logger().error('action goal rejected or send timed out')
             return None
@@ -663,6 +701,10 @@ class SkillsBase(Node):
         return response
 
     # ------------------------------------------------- perception (gemini/sam)
+    def _require_legacy_perception(self):
+        if getattr(self, '_target_backend', 'legacy') != 'legacy':
+            raise RuntimeError('AI perception is disabled in marker target backend')
+
     def query_gemini(self, prompt, image=None, timeout_sec=GEMINI_TIMEOUT_SEC,
                      outer_gh=None):
         """Ask the gemini_query service `prompt` about `image` (defaults to the
@@ -671,6 +713,7 @@ class SkillsBase(Node):
         is slow; pass a smaller value (e.g. the skill's remaining budget) for
         latency-sensitive callers. Pass the skill goal handle as `outer_gh` so a
         cancel aborts the (possibly minutes-long) call promptly."""
+        self._require_legacy_perception()
         img = image if image is not None else self.latest_image()
         if img is None:
             self.get_logger().error('query_gemini: no head-camera image yet')
@@ -690,6 +733,7 @@ class SkillsBase(Node):
         head-camera frame) with a text prompt and/or flattened pixel-xyxy box
         exemplars. Returns the mono8 mask (sensor_msgs/Image), or None. Pass the
         skill goal handle as `outer_gh` so a cancel aborts the wait promptly."""
+        self._require_legacy_perception()
         img = image if image is not None else self.latest_image()
         if img is None:
             self.get_logger().error('segment: no head-camera image yet')
@@ -756,6 +800,7 @@ class SkillsBase(Node):
         instance. The box is optional there (text alone is the fallback). Gemini
         latency is highly variable and None is a legitimate "no box", so
         cancel/timeout is disambiguated here before spending the SAM call."""
+        self._require_legacy_perception()
         box = (box_provider or self._gemini_box)(obj, run, gh)  # box (pixel xyxy) or None
         if gh.is_cancel_requested or run.remaining() <= 0.0:
             return None, None, 'detection canceled or timed out'
@@ -969,6 +1014,7 @@ class SkillsBase(Node):
         server keeps only that arm's approach-direction sector (right: forward..+y,
         left: forward..-y). Returns the GraspGen response (ranked `grasps`
         PoseStamped[], `scores`, `gripper_width`) in `frame`, or None."""
+        self._require_legacy_perception()
         if cloud is None or len(cloud) < MIN_GRASP_POINTS:
             self.get_logger().error('plan_grasp: empty/too-small cloud')
             return None
@@ -1104,6 +1150,10 @@ class SkillsBase(Node):
 
         def _log_feedback(feedback_msg):
             fb = feedback_msg.feedback
+            if (getattr(self, '_target_backend', 'legacy') == 'marker'
+                    and (not fb.errors_linear or not fb.errors_angular)):
+                last['lin'], last['ang'] = float('inf'), float('inf')
+                return
             last['lin'] = max(fb.errors_linear) if fb.errors_linear else 0.0
             last['ang'] = max(fb.errors_angular) if fb.errors_angular else 0.0
             self.get_logger().info(
@@ -1140,6 +1190,11 @@ class SkillsBase(Node):
         stable_stopped = stable_event is not None and stable_event.is_set()
         ok = stable_stopped or (
             response is not None and response.status == GoalStatus.STATUS_SUCCEEDED)
+        if getattr(self, '_target_backend', 'legacy') == 'marker':
+            ok = (response is not None
+                  and response.status == GoalStatus.STATUS_SUCCEEDED
+                  and response.result.success and bool(last)
+                  and np.isfinite([last['lin'], last['ang']]).all())
         # The frame_task server reports success even when it times out before
         # converging, so its status alone can't tell a reached target from an
         # unreachable one. Gate on the last streamed pelvis-frame error instead

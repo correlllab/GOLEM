@@ -28,16 +28,16 @@ class WorkspaceBuildTests(unittest.TestCase):
     def test_standard_layout_and_discovery_boundary(self):
         self.assertEqual(workspace.WORKSPACE, HERE.parent)
         self.assertEqual(workspace.ROOT, HERE.parent.parent)
-        self.assertEqual(workspace.ROS_ENV, workspace.WORKSPACE / 'environments')
+        self.assertEqual(workspace.ROS_ENV, workspace.ROOT / 'environments/ros')
         self.assertEqual(workspace.VENV, workspace.ROS_ENV / '.venv')
         self.assertEqual(workspace.INSTALL, workspace.WORKSPACE / 'install')
         self.assertEqual(workspace.environment()['UV_CACHE_DIR'],
-                         str(workspace.WORKSPACE / '.cache/uv'))
-        self.assertTrue((workspace.ROS_ENV / 'COLCON_IGNORE').is_file())
+                         str(workspace.ROS_ENV / '.cache/uv'))
+        self.assertTrue((workspace.ROS_ENV.parent / 'COLCON_IGNORE').is_file())
         self.assertFalse(workspace.ROS_ENV.is_relative_to(workspace.WORKSPACE / 'src'))
         self.assertFalse((workspace.ROS_ENV / 'ros').exists())
         self.assertFalse((workspace.ROOT / 'pyproject.toml').exists())
-        for location in ('build/', 'install/', 'log/', 'environments/.venv/', '.cache/'):
+        for location in ('build/', 'install/', 'log/', '../environments/ros/.venv/', '.cache/'):
             result = subprocess.run(
                 ['git', 'check-ignore', str(workspace.WORKSPACE / location / 'probe')],
                 cwd=workspace.ROOT, capture_output=True, text=True,
@@ -51,6 +51,11 @@ class WorkspaceBuildTests(unittest.TestCase):
             'magpie_control', 'h12_lowerbody_rl', 'h12_skills',
         }
         self.assertEqual(set(workspace.MANIPULATION), expected)
+        self.assertEqual(set(workspace.EXPERIMENT), expected | {'h12_bringup', 'model_server'})
+        experiment = list(map(str, workspace.build_command('experiment')))
+        selected = experiment[experiment.index('--packages-select') + 1:experiment.index('--event-handlers')]
+        self.assertEqual(selected, list(workspace.EXPERIMENT))
+        self.assertNotIn('--packages-up-to', experiment)
         all_names = {ET.parse(path).getroot().findtext('name')
                       for path in (workspace.WORKSPACE / 'src').glob('**/package.xml')}
         for name in expected:
@@ -259,8 +264,8 @@ class WorkspaceBuildTests(unittest.TestCase):
         result = subprocess.run([str(SCRIPT), '--help'], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         for text in ('uv add', 'uv lock', '--no-sync', '--check --offline', '--upgrade-package',
-                      '--locked --inexact --no-build', 'environments/pyproject.toml',
-                      'environments/apt-packages.txt', 'SDK revision', 'outside the uv graph'):
+                      '--locked --inexact --no-build', 'environments/ros/pyproject.toml',
+                      'environments/ros/apt-packages.txt', 'SDK revision', 'outside the uv graph'):
             self.assertIn(text, result.stdout)
 
     @unittest.skipUnless(shutil.which('uv'), 'requires uv')

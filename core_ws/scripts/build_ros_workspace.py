@@ -11,7 +11,7 @@ import sys
 HERE = Path(__file__).resolve().parent
 WORKSPACE = HERE.parent
 ROOT = WORKSPACE.parent
-ROS_ENV = WORKSPACE / 'environments'
+ROS_ENV = ROOT / 'environments/ros'
 VENV = ROS_ENV / '.venv'
 PYTHON = VENV / 'bin/python'
 INSTALL = WORKSPACE / 'install'
@@ -23,6 +23,7 @@ MANIPULATION = INTERFACES + (
     'unitree_hg', 'h12_ros2_model',
     'h12_ros2_controller', 'magpie_control', 'h12_lowerbody_rl', 'h12_skills',
 )
+EXPERIMENT = MANIPULATION + ('model_server', 'h12_bringup')
 
 
 def package_path(name):
@@ -32,7 +33,8 @@ def package_path(name):
 
 
 def packages(profile):
-    return {'core': CORE, 'interfaces': INTERFACES, 'manipulation': MANIPULATION}[profile]
+    return {'core': CORE, 'interfaces': INTERFACES, 'manipulation': MANIPULATION,
+            'experiment': EXPERIMENT}[profile]
 
 
 def run(command, **kwargs):
@@ -51,7 +53,7 @@ def environment():
     env['PYTHONDONTWRITEBYTECODE'] = '1'
     env['UV_NO_CONFIG'] = '1'
     env['UV_PYTHON_DOWNLOADS'] = 'never'
-    env['UV_CACHE_DIR'] = str(WORKSPACE / '.cache/uv')
+    env['UV_CACHE_DIR'] = str(ROS_ENV / '.cache/uv')
     env['UV_PROJECT_ENVIRONMENT'] = str(VENV)
     env['COLCON_HOME'] = str(VENV / 'colcon-home')
     env['COLCON_DEFAULTS_FILE'] = '/dev/null'
@@ -88,7 +90,7 @@ def prerequisites():
 
 def require_venv():
     if not PYTHON.is_file():
-        raise RuntimeError('ROS venv missing; run: ./scripts/build_ros_workspace.sh setup')
+        raise RuntimeError('ROS venv missing; run: scripts/setup_environment.sh ros')
     run([PYTHON, '-c',
          'import sys; from pathlib import Path; '
          f'assert Path(sys.prefix) == Path({str(VENV)!r}); '
@@ -149,7 +151,7 @@ def parser():
         prog='build_ros_workspace.sh',
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''Examples (from core_ws):
-  ./scripts/build_ros_workspace.sh setup --local-ros-debs
+  ../scripts/setup_environment.sh ros --local-ros-debs
   ./scripts/build_ros_workspace.sh build --profile core
   ./scripts/build_ros_workspace.sh build --profile manipulation --compile-jobs 2
   ./scripts/build_ros_workspace.sh check --built --profile manipulation
@@ -169,7 +171,9 @@ build: compile only the selected package profile, using the venv Python.
        interfaces: core plus custom_ros_messages and magpie_msgs (4 packages).
        manipulation: interfaces plus unitree_hg, h12_ros2_model,
          h12_ros2_controller, magpie_control, h12_lowerbody_rl and h12_skills
-         (10 packages; arm control, grippers, standing and scripted skills).
+          (10 packages; arm control, grippers, standing and scripted skills).
+        experiment: manipulation plus model_server and h12_bringup (12 packages).
+          Only geometric marker perception is launched; no ML model installation.
 
 Build parallelism: packages build ONE AT A TIME. --compile-jobs limits
 concurrent compiler/build-tool jobs inside the current package (default: 2).
@@ -177,31 +181,34 @@ It does not mean two packages or two ROS nodes, and has little effect on
 pure Python packages. Increase it for faster C/C++ builds at higher CPU/RAM
 usage, or use 1 for the lowest build concurrency.
 
-Outputs (under core_ws): environments/.venv/, .cache/uv/, and
-{build,install,log}/ (plus existing package setup.py staging).
+Outputs: ../environments/ros/{.venv,.cache}/ and core_ws/{build,install,log}/
+(plus existing package setup.py staging). Prefer root scripts/setup_environment.sh
+for dependency setup and checks; this entrypoint owns workspace compilation.
 No Docker overlays are sourced.
-No arbitrary colcon arguments, packages-up-to, bringup, AI/model_server,
+No arbitrary colcon arguments, packages-up-to, AI model installation,
 navigation/SLAM, MJPC, simulator, assets updates, or system installation.
 
-Dependency maintenance (from core_ws; uv 0.13.4):
+Dependency maintenance (from repository root; uv 0.13.4):
   export UV_NO_CONFIG=1 UV_PYTHON_DOWNLOADS=never
-  export UV_CACHE_DIR="$PWD/.cache/uv"
-  uv add --project environments --python /usr/bin/python3 --no-sync 'name==version'
-  uv lock --project environments --python /usr/bin/python3
-  uv lock --project environments --python /usr/bin/python3 --check --offline
-  ./scripts/build_ros_workspace.sh setup
-Edit environments/pyproject.toml for pin changes/removals, then run uv lock.
+  export UV_CACHE_DIR="$PWD/environments/ros/.cache/uv"
+  uv add --project environments/ros --python /usr/bin/python3 --no-sync 'name==version'
+  uv lock --project environments/ros --python /usr/bin/python3
+  uv lock --project environments/ros --python /usr/bin/python3 --check --offline
+  scripts/setup_environment.sh ros
+Edit environments/ros/pyproject.toml for pin changes/removals, then run uv lock.
 Use uv lock --upgrade-package NAME with the same project/Python flags to refresh
 a transitive dependency within the direct constraints. Never hand-edit uv.lock.
 The lock covers only Python libraries, not apt/ROS packages, C/C++ libraries,
 controller ABI requirements, or the SDK revision. Apt prerequisites live in
-environments/apt-packages.txt. The SDK comes from the existing git-pinned
+environments/ros/apt-packages.txt. The SDK comes from the existing git-pinned
 submodule, outside the uv graph: apt supplies OpenCV, not opencv-python.
 
-Compilation is NOT full runtime qualification: controller math requires a
-separate NumPy 2 environment (Crocoddyl >=3.2.1, pin >=3.9, Pink >=4.1).
-Torch/policies, physical drivers, skill service availability and controller
-runtime are not qualified here. No command launches nodes or creates a DDS
+Compilation is NOT full runtime qualification. Baseline arm math uses the
+separate NumPy 2 environment: scripts/setup_environment.sh controller.
+It checks Pin/Pink/OMPL imports and offline math, without Crocoddyl.
+ROS checks cover CPU Torch/NumPy conversion, not physical policy balance.
+Physical drivers, skill services and live controller runtime are not qualified
+here. No command launches nodes or creates a DDS
 participant, controller, simulator, or serial connection.
 
 Manipulation compilation needs ros-humble-rosidl-generator-dds-idl. Skills runtime
@@ -217,14 +224,15 @@ to install them or explicitly use setup --local-ros-debs. Download failures
     check_parser = sub.add_parser('check', help='non-actuating dependency/import checks')
     check_parser.add_argument('--built', action='store_true',
                               help='also verify compiled packages and generated interfaces')
-    check_parser.add_argument('--profile', choices=('core', 'interfaces', 'manipulation'),
+    check_parser.add_argument('--profile', choices=('core', 'interfaces', 'manipulation', 'experiment'),
                               default='manipulation', help='built package profile to verify (default: manipulation)')
     build_parser = sub.add_parser('build', help='compile only a fixed package profile',
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    build_parser.add_argument('--profile', choices=('core', 'interfaces', 'manipulation'),
+    build_parser.add_argument('--profile', choices=('core', 'interfaces', 'manipulation', 'experiment'),
                               default='manipulation',
                               help='core: safety/estop; interfaces: core + messages; '
-                                   'manipulation: arm/gripper/standing/skills stack')
+                                    'manipulation: arm/gripper/standing/skills; '
+                                    'experiment: manipulation + marker perception/bringup')
     build_parser.add_argument('--compile-jobs', type=int, default=2, choices=range(1, 65),
                               metavar='1..64', help='maximum compiler jobs inside each package; '
                                                    'packages always build one at a time')
@@ -257,7 +265,7 @@ def main():
         check(args.built, args.profile)
     else:
         check()
-        if args.profile == 'manipulation':
+        if args.profile in ('manipulation', 'experiment'):
             try:
                 manipulation_prerequisites()
             except subprocess.CalledProcessError as exc:

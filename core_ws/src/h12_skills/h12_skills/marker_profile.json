@@ -1,0 +1,25 @@
+{
+  "assumptions": "Nominal simulation-only cylinder side pinch at 40 mm above tip; not measured hardware calibration. GRASPGENX +Z approaches downward, +X closes horizontally. Raw donor RPY [0,90,-60] is NOT a GRASPGENX top-down orientation. Board, seated source and gripper rigid grasp are assumed unchanged. Workspace boxes are admission limits, not an IK guarantee.",
+  "active_pegs": {"cylinder_1": {"source_hole": "cylinder_1"}},
+  "aliases": {},
+  "cylinder_contact_from_tip_m": [0.0, 0.0, 0.04],
+  "grasp_rpy_board_deg": [180.0, 0.0, -60.0],
+  "arms": {
+    "left": {"contact_in_graspgenx_m": [0.0, 0.0, 0.1146], "workspace_min_m": [0.15, -0.10, -0.30], "workspace_max_m": [0.80, 0.65, 0.80]},
+    "right": {"contact_in_graspgenx_m": [0.0, 0.0, 0.1146], "workspace_min_m": [0.15, -0.65, -0.30], "workspace_max_m": [0.80, 0.10, 0.80]}
+  },
+  "aperture_margin_m": 0.008,
+  "approach_m": 0.05,
+  "extraction_m": 0.06,
+  "preinsert_tip_height_m": 0.04,
+  "step_m": 0.01,
+  "step_rad": 0.10,
+  "segment_sec": 8.0,
+  "planned_motion_sec": 30.0,
+  "linear_tolerance_m": 0.005,
+  "angular_tolerance_rad": 0.04,
+  "max_pose_age_sec": 0.5,
+  "max_board_jump_m": 0.05,
+  "max_board_jump_rad": 0.15,
+  "max_goal_sec": 180.0
+}

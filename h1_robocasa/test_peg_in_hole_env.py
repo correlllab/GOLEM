@@ -3,6 +3,8 @@
 Run with the simulator Python: python -m unittest test_peg_in_hole_env -v
 """
 import importlib
+import copy
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -15,10 +17,78 @@ import numpy as np
 from robosuite.models.tasks import ManipulationTask
 
 import h1_2_robosuite as robot
-from peg_in_hole_env import PegBoardArena, PegBoardConfig, canonical_task
+from peg_in_hole_env import (SCENE_DIR, PegBoardArena, PegBoardConfig,
+                             _polygon_clearance, canonical_task)
 
 
 class PegBoardSceneTests(unittest.TestCase):
+    def test_all_catalog_variants_seated_geometry(self):
+        with (SCENE_DIR / "manipulation_catalog.json").open() as stream:
+            catalog = json.load(stream)
+        self.assertEqual(set(catalog["variants"]), {"cylinder", "hex", "l", "rectangle", "triangle"})
+        cases = 0
+        for shape, rows in catalog["variants"].items():
+            self.assertEqual(set(rows), {"0", "1", "2", "3"})
+            for row, variant in rows.items():
+                peg_id = f"{shape}_{row}"
+                with self.subTest(peg_id=peg_id):
+                    config = PegBoardConfig(peg_id=peg_id, source_hole=peg_id)
+                    arena = PegBoardArena(config)
+                    model = mujoco.MjModel.from_xml_string(
+                        ManipulationTask(mujoco_arena=arena, mujoco_robots=[]).get_xml())
+                    data = mujoco.MjData(model)
+                    mujoco.mj_forward(model, data)
+                    prefix, hole = config.peg_prefix, catalog["holes"][peg_id]
+                    self.assertEqual(model.njnt, 1)
+                    self.assertEqual(model.jnt_type[0], mujoco.mjtJoint.mjJNT_FREE)
+                    self.assertAlmostEqual(model.body(prefix + "peg").mass[0], variant["mass"])
+                    np.testing.assert_allclose(model.body(prefix + "peg").quat, hole["quat"], atol=1e-11)
+                    tip = data.site(prefix + "tip").xpos
+                    target = data.site("pegboard_" + hole["target_site"]).xpos
+                    np.testing.assert_allclose(tip, target, atol=1e-11)
+                    np.testing.assert_allclose(data.site(prefix + "tip").xmat,
+                        data.site("pegboard_" + hole["target_site"]).xmat, atol=1e-11)
+                    np.testing.assert_allclose(model.site(prefix + "tip").pos, [0, 0, 0])
+                    vertices = []
+                    for i in range(variant["collision_part_count"]):
+                        geom = model.geom(prefix + f"collision_{i}")
+                        mesh = geom.dataid[0]
+                        start, count = model.mesh_vertadr[mesh], model.mesh_vertnum[mesh]
+                        vertices.extend(model.mesh_vert[start:start + count] @
+                                        data.geom_xmat[geom.id].reshape(3, 3).T + data.geom_xpos[geom.id])
+                    vertices = np.asarray(vertices)
+                    self.assertAlmostEqual(vertices[:, 2].min(), config.table_height + .003, places=8)
+                    self.assertAlmostEqual(vertices[:, 2].max(), tip[2] + variant["length"], places=8)
+                    # Initial contact with the blind floor is allowed; wall penetration is not.
+                    self.assertTrue(all(c.dist >= -1e-7 for c in data.contact))
+                    self.assertEqual([m["marker_id"] for m in arena.markers_metadata], [7, 8])
+                    cases += 1
+        self.assertEqual(cases, 20)
+
+    def test_source_hole_is_independent_clearance_row(self):
+        # Every source row uses the same shape's peg, with its own placement/yaw.
+        for shape in ("cylinder", "hex", "l", "rectangle", "triangle"):
+            for peg_row in range(4):
+                for hole_row in range(4):
+                    with self.subTest(shape=shape, peg_row=peg_row, hole_row=hole_row):
+                        PegBoardConfig(peg_id=f"{shape}_{peg_row}", source_hole=f"{shape}_{hole_row}")
+        config = PegBoardConfig(peg_id="hex_3", source_hole="hex_0", marker=False)
+        arena = PegBoardArena(config)
+        body = arena.worldbody.find(f"body[@name='{config.peg_prefix}peg']")
+        np.testing.assert_allclose(np.fromstring(body.get("pos"), sep=" "),
+                                   np.asarray(config.board_pos) + config.source_hole_spec["target"], atol=1e-11)
+        np.testing.assert_allclose(np.fromstring(body.get("quat"), sep=" "),
+                                   config.source_hole_spec["quat"], atol=1e-11)
+
+    def test_polygon_fit_rejects_crossing_and_outside_profiles(self):
+        square = [[0, 0], [2, 0], [2, 2], [0, 2]]
+        self.assertAlmostEqual(_polygon_clearance([[.5, .5], [1, .5], [1, 1]], square), .5)
+        self.assertEqual(_polygon_clearance([[1, 1], [3, 1], [1, 1.5]], square), 0)
+        self.assertEqual(_polygon_clearance([[0, 0], [1, 0], [1, 1]], square), 0)
+        # Both inner endpoints are inside, but their edge crosses the L's notch.
+        notch = [[0, 0], [3, 0], [3, 1], [1, 1], [1, 3], [0, 3]]
+        self.assertEqual(_polygon_clearance([[.5, 2], [2, .5], [.5, .5]], notch), 0)
+
     def test_arena_geometry_and_free_peg(self):
         for side in ("left", "right"):
             for mode in ("loose", "seated"):
@@ -31,6 +101,9 @@ class PegBoardSceneTests(unittest.TestCase):
                     mujoco.mj_forward(model, data)
                     board = model.body("pegboard_board")
                     self.assertEqual(model.body_jntnum[board.id], 0)
+                    self.assertEqual([m["marker_id"] for m in arena.markers_metadata], [7, 8])
+                    for name in ("pegboard_aruco", "pegboard_aruco_8"):
+                        self.assertEqual(model.geom(name).contype[0], 0)
                     collision = np.flatnonzero((model.geom_bodyid == board.id) &
                                                (model.geom_contype != 0))
                     self.assertEqual(len(collision), 3005)
@@ -80,9 +153,40 @@ class PegBoardSceneTests(unittest.TestCase):
         self.assertEqual(canonical_task("peginhole"), "PegInHole")
         self.assertIsNone(canonical_task("Battery"))
         self.assertEqual(PegBoardConfig().peg_mode, "seated")
-        for kwargs in ({"side": "other"}, {"peg_mode": "held"}, {"table_height": 0}):
+        self.assertEqual(PegBoardConfig().peg_id, "cylinder_1")
+        self.assertEqual(PegBoardConfig().source_hole, "cylinder_1")
+        for kwargs in ({"side": "other"}, {"peg_mode": "held"}, {"table_height": 0},
+                       {"peg_id": "unknown"}, {"peg_id": "cylinder_4"}, {"peg_id": "L_1"},
+                       {"source_hole": "missing"}, {"source_hole": "hex_1"},
+                       {"peg_id": []}, {"source_hole": None}):
             with self.assertRaises(ValueError):
                 PegBoardConfig(**kwargs)
+
+    def test_loose_footprint_support(self):
+        # The authored L is 15 mm wide in X, 25 mm in Y; only X spans the strip.
+        config = PegBoardConfig(peg_mode="loose", peg_id="l_1", source_hole="l_1")
+        arena = PegBoardArena(config)
+        bounds = np.asarray(config.peg_variant["bounds"])
+        body = arena.worldbody.find(f"body[@name='{config.peg_prefix}peg']")
+        position = np.fromstring(body.get("pos"), sep=" ")
+        self.assertGreaterEqual(position[0] + bounds[0, 0], config.table_x - .18)
+        self.assertLess(position[0] + bounds[1, 0], config.table_x - .16)
+        with (SCENE_DIR / "manipulation_catalog.json").open() as stream:
+            catalog = copy.deepcopy(json.load(stream))
+        catalog["variants"]["l"]["1"]["bounds"][1][0] = .011
+        with patch("peg_in_hole_env._catalog", return_value=catalog):
+            with self.assertRaisesRegex(ValueError, "support strip"):
+                PegBoardConfig(peg_mode="loose", peg_id="l_1", source_hole="l_1")
+
+    def test_config_checks_actual_polygon_not_just_shape(self):
+        with (SCENE_DIR / "manipulation_catalog.json").open() as stream:
+            catalog = json.load(stream)
+        hole = catalog["holes"]["cylinder_1"]
+        center = np.asarray(hole["target"][:2])
+        hole["profile_xy"] = (center + (np.asarray(hole["profile_xy"]) - center) * .5).tolist()
+        with patch("peg_in_hole_env._catalog", return_value=catalog):
+            with self.assertRaisesRegex(ValueError, "positive clearance"):
+                PegBoardConfig()
 
     def test_native_env_reset_and_mocked_runner(self):
         self._check_native_env("left")
@@ -138,9 +242,20 @@ class PegBoardSceneTests(unittest.TestCase):
                 with patch.object(runner, "_runnable_tasks", side_effect=AssertionError("kitchen")):
                     self.assertEqual(runner._resolve_task("peginhole"), "PegInHole")
                     self.assertEqual(runner._resolve_task("Battery"), "Battery")
-                with patch.object(robot, "make_kitchen_env", return_value=env):
+                with patch.object(robot, "make_kitchen_env", return_value=env) as factory:
+                    selection = ({} if env.scene_config.side == "left" else
+                                 {"peg": "hex_3", "source_hole": "hex_0"})
                     with self.assertRaises(EndLoop):
-                        runner.sim_loop("PegInHole", viewer=False)
+                        runner.sim_loop("PegInHole", viewer=False, **selection)
+                    if selection:
+                        config = factory.call_args.kwargs["scene_config"]
+                        self.assertEqual(config.peg_id, "hex_3")
+                        self.assertEqual(config.source_hole, "hex_0")
+                    else:
+                        self.assertNotIn("scene_config", factory.call_args.kwargs)
+                    for task in ("Battery", "TurnOnToasterOven"):
+                        with self.assertRaisesRegex(ValueError, "require --task PegInHole"):
+                            runner.sim_loop(task, viewer=False, peg="cylinder_1")
                 transport.assert_called_once()
                 transport.return_value.write_ctrl.assert_called_once()
                 self.assertIs(transport.call_args.args[0], env.sim.model._model)
@@ -159,7 +274,9 @@ class PegBoardSceneTests(unittest.TestCase):
 
     def _check_render(self, env):
         """Use clean system OpenCV separately from simulator NumPy 2."""
+        import json
         from PIL import Image
+        from realsense_profile import camera_specs, load_profile, fovy_intrinsics
 
         model, data = env.sim.model._model, env.sim.data._data
         option = mujoco.MjvOption()
@@ -176,18 +293,44 @@ class PegBoardSceneTests(unittest.TestCase):
                 side_suffix = "" if env.scene_config.side == "left" else "_right"
                 path = Path("/tmp/kilo") / f"pegboard_corrected_{label}{side_suffix}.png"
                 Image.fromarray(renderer.render()).save(path)
-                code = ("import cv2,numpy as np,sys; "
-                        "gray=cv2.imread(sys.argv[1],cv2.IMREAD_GRAYSCALE); "
-                        "d=cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50); "
-                        "corners,ids,rejected=cv2.aruco.detectMarkers(gray,d); "
-                        "print(sys.argv[1],ids); "
-                        "assert sys.argv[2]=='optional' or (ids is not None and 7 in ids)")
-                # The right gripper occludes this corner in the unchanged spawn
-                # posture. Detectability there is reported, not a geometry invariant.
-                required = camera == "pegboard_overview" or (width == 1280 and env.scene_config.side == "left")
-                subprocess.run(["/usr/bin/python3", "-c", code, str(path),
-                                "required" if required else "optional"], check=True,
-                                env={**os.environ, "PYTHONNOUSERSITE": "1"})
+                if camera == "robot0_head_cam":
+                    intr = camera_specs(model, [("head", camera)], load_profile(), width / 1280, (width, height))[0].color
+                else:
+                    intr = fovy_intrinsics(width, height, model.cam_fovy[model.camera(camera).id])
+                world_camera = np.eye(4)
+                world_camera[:3, :3] = data.camera(camera).xmat.reshape(3, 3) @ np.diag([1, -1, -1])
+                world_camera[:3, 3] = data.camera(camera).xpos
+                world_board = np.eye(4)
+                world_board[:3, :3] = data.body("pegboard_board").xmat.reshape(3, 3)
+                world_board[:3, 3] = data.body("pegboard_board").xpos
+                fixture = {"K": [[intr.fx, 0, intr.cx], [0, intr.fy, intr.cy], [0, 0, 1]],
+                           "T_camera_board": (np.linalg.inv(world_camera) @ world_board).tolist()}
+                fixture_path = path.with_suffix(".json")
+                fixture_path.write_text(json.dumps(fixture))
+                # Ground truth is strictly evaluation-only in this test fixture.
+                code = ("import cv2,numpy as np,sys,json; "
+                        "from model_server.aruco_geometry import BoardEstimator; "
+                        "e=BoardEstimator(); a=cv2.imread(sys.argv[1],0); "
+                        "f=json.load(open(sys.argv[2])); c,ids,_=e.detect(a); "
+                        "t,q=e.estimate(c,ids,np.array(f['K']),np.zeros(5)); "
+                        "gt=np.array(f['T_camera_board']); "
+                        "dt=np.linalg.norm(t[:3,3]-gt[:3,3]); "
+                        "dr=np.linalg.norm(cv2.Rodrigues(t[:3,:3]@gt[:3,:3].T)[0]); "
+                        "print(sys.argv[1],ids,'translation_m',dt,'rotation_rad',dr,q); "
+                        "assert dt < .05 and dr < .35")
+                if env.scene_config.side == "right" and camera == "robot0_head_cam" and width == 640:
+                    code = ("import cv2,numpy as np,sys,json,unittest\n"
+                            "from model_server.aruco_geometry import BoardEstimator,PoseRejected\n"
+                            "e=BoardEstimator(); a=cv2.imread(sys.argv[1],0)\n"
+                            "f=json.load(open(sys.argv[2])); c,ids,_=e.detect(a)\n"
+                            "with unittest.TestCase().assertRaisesRegex(PoseRejected,'unresolved planar ambiguity') as failure:\n"
+                            "    e.estimate(c,ids,np.array(f['K']),np.zeros(5))\n"
+                            "q=failure.exception.quality\n"
+                            "assert 0 <= q['ambiguity_gap_px'] < e.min_ambiguity_gap_px\n"
+                            "print(sys.argv[1],ids,'REJECTED cold ambiguous view',q)\n")
+                source = str(Path(__file__).resolve().parent.parent / "core_ws/src/model_server")
+                subprocess.run(["/usr/bin/python3", "-c", code, str(path), str(fixture_path)], check=True,
+                                 env={**os.environ, "PYTHONNOUSERSITE": "1", "PYTHONPATH": source})
 
 
 if __name__ == "__main__":

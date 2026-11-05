@@ -10,6 +10,7 @@ dependencies = [
     "PyYAML==6.0.2",
     "pyserial==3.5",
     "cyclonedds==0.10.2",
+    "torch==2.6.0+cpu",
     # Humble ament_python uses setup.py develop/install.
     "setuptools==59.6.0",
     "wheel==0.43.0",
@@ -17,3 +18,11 @@ dependencies = [
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

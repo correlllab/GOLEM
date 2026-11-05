@@ -1,5 +1,4 @@
 build/
 install/
 log/
-environments/.venv/
 .cache/

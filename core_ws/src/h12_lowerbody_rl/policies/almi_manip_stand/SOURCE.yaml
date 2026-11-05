@@ -1,0 +1,27 @@
+source_repository: git@github.com:correlllab/h12_mjlab.git
+source_revision: c946b1a74f6d6812d82f80fdc7651acb2840acd2
+source_config: config/deploy_almi_manip_stand_real.yaml
+source_contract: h12_mjlab/utility/actor.py:ActorInferenceModel
+artifacts:
+  model_almi_manip_stand.pt:
+    source: data/model_almi_manip_stand.pt
+    format: training_checkpoint_weights_only_actor_state_dict
+    sha256: 56593f582e1044111cba3b34ead8451174794cee5fee09f2eda9fdb00bb0f2db
+runtime:
+  tested_python: 3.10.12
+  tested_torch: 2.6.0+cpu
+  tested_numpy: 1.26.4
+  tested_pyyaml: 6.0.3
+  policy_hz: 50
+  observation_size: 65
+  history: 1
+  observation_normalization: false
+  architecture: LSTM_65_64_one_layer_MLP_64_64_ELU_32_ELU_12
+  memory_reset: zero_hidden_and_cell_on_activation
+  observation_joint_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 20, 21, 22, 23]
+  observation_terms: [pelvis_gyro_times_0.25, pelvis_projected_gravity, zero_command, relative_q21, dq21_times_0.05, raw_previous_action12, zero_phase2]
+  imu_input: torso_wxyz_and_torso_gyro
+  imu_observation: pelvis_remove_waist_yaw_and_rate
+  action: raw_12_unitree_leg_order_scaled_0.25_plus_nominal_then_position_clip
+  upper_body: observed_without_wrists_not_commanded
+  qualification: offline_cpu_only_not_balance_or_hardware_certification

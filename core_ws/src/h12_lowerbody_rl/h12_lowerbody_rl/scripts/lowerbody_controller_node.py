@@ -14,7 +14,8 @@ Flow
    real-robot arming step. The sim bringup disables it for unattended runs.
 3. From then on ``active_policy`` drives the legs for the whole run; there is no
    switching between policies. It receives /cmd_vel directly (ALMI and walk
-   locomote on it; FAME stands).
+   locomote on it; FAME stands). The opt-in ``fame_finetune`` and
+   ``almi_manip_stand`` variants force zero velocity and fixed height.
 
 Interfaces
 ----------
@@ -57,7 +58,9 @@ from h12_lowerbody_rl.policy import (
     WalkPolicy,
     apply_imu_offset,
     imu_offset_quat,
+    quat_rotate_inverse,
 )
+from h12_lowerbody_rl.manipulation_policy import AlmiManipStandPolicy, FameFinetunePolicy
 
 # Live-tunable IMU trim parameters (degrees). Declared with a range so
 # rqt_reconfigure renders them as sliders; updates apply on the next control
@@ -117,6 +120,9 @@ class LowerBodyControllerNode(Node):
         self.declare_parameter("walk_config", _share("policies", "walk", "walk.yaml"))
         self.declare_parameter("fame_config", _share("policies", "fame", "fame.yaml"))
         self.declare_parameter("almi_config", _share("policies", "almi", "almi.yaml"))
+        for name in ("fame_finetune", "almi_manip_stand"):
+            self.declare_parameter(name + "_config", _share("policies", name, name + ".yaml"))
+        self.declare_parameter("standing_lowstate_timeout", 0.1)
         # IMU mounting/calibration trim (deg): what the raw quaternion reads
         # when the torso is known to be level (e.g. measured hanging plumb).
         # Positive pitch = reads tilted forward, positive roll = tilted right.
@@ -174,12 +180,27 @@ class LowerBodyControllerNode(Node):
             float(self.get_parameter("prepose_ramp_s").value) * control_hz)))
 
         self.get_logger().info("loading lower-body policies...")
-        policies = {
-            "walk": WalkPolicy(walk_cfg),
-            "fame": FamePolicy(fame_cfg),
-            "almi": AlmiPolicy(almi_cfg),
-        }
-        if not policies["fame"].has_encoder:
+        standing_classes = {"fame_finetune": FameFinetunePolicy,
+                            "almi_manip_stand": AlmiManipStandPolicy}
+        self._standing_policy = None
+        self._standing_state_timeout = float(
+            self.get_parameter("standing_lowstate_timeout").value)
+        if startup_policy in standing_classes:
+            if control_hz != 50.0:
+                raise ValueError("Manipulation standing policies require control_hz=50")
+            if (not np.isfinite(self._standing_state_timeout)
+                    or self._standing_state_timeout <= 0.):
+                raise ValueError("standing_lowstate_timeout must be finite and positive")
+            self._standing_policy = standing_classes[startup_policy](
+                self.get_parameter(startup_policy + "_config").value)
+            policies = {startup_policy: self._standing_policy}
+        else:
+            policies = {
+                "walk": WalkPolicy(walk_cfg),
+                "fame": FamePolicy(fame_cfg),
+                "almi": AlmiPolicy(almi_cfg),
+            }
+        if "fame" in policies and not policies["fame"].has_encoder:
             self.get_logger().warn(
                 "FAME encoder not loaded — z_t will be zeros (out-of-distribution). "
                 "Check policies/fame/encoder_3800.pt."
@@ -189,6 +210,7 @@ class LowerBodyControllerNode(Node):
         )
 
         self._lowstate: LowState | None = None
+        self._lowstate_received_at: float | None = None
         self._cmd = np.zeros(3, dtype=np.float32)
 
         # band / activation state
@@ -197,6 +219,7 @@ class LowerBodyControllerNode(Node):
         self._band_cli = self.create_client(Trigger, "/elastic_band/toggle")
         self._awaiting_band_release = False  # policy committed, band not yet released
         self._band_release_inflight = False  # a toggle call is dispatched, awaiting result
+        self._band_retry_at = 0.0  # monotonic retry deadline after unavailable/failed calls
         self._band_wait_warned = False       # rate-limit the "service not ready" warning
         self._request_time: float | None = None  # when the pending activation was asked
         self._prepose_pass = 0   # consecutive ticks the legs have held at nominal (pre-engage)
@@ -229,9 +252,12 @@ class LowerBodyControllerNode(Node):
 
         self.create_timer(1.0 / control_hz, self._tick)
 
+        command_mode = ("Standing-only: velocity and squat commands ignored."
+                        if self._standing_policy is not None
+                        else "Policy follows /cmd_vel; no start services.")
         self.get_logger().info(
             f"lowerbody_controller ready: policies={self._manager.names()}, "
-            f"control_hz={control_hz}. Policy follows /cmd_vel; no start services."
+            f"control_hz={control_hz}. {command_mode}"
         )
 
         if startup_policy and startup_policy != "none":
@@ -253,6 +279,7 @@ class LowerBodyControllerNode(Node):
     # -- callbacks -----------------------------------------------------------
     def _on_lowstate(self, msg: LowState) -> None:
         self._lowstate = msg
+        self._lowstate_received_at = time.monotonic()
 
     def _on_cmd_vel(self, msg: Twist) -> None:
         self._cmd[0] = msg.linear.x
@@ -356,31 +383,38 @@ class LowerBodyControllerNode(Node):
         self._cmd_pub.publish(cmd_msg)
 
     def _release_band(self, reason: str) -> None:
-        # Called every tick while awaiting release. Only mark the band released
-        # once the sim's toggle actually succeeds — NOT before the service check.
-        # /elastic_band/toggle may not be discovered yet (a startup race, likelier
-        # with the slower non-headless MuJoCo viewer), and marking it released up
-        # front gives up permanently: the robot hangs from the band forever, still
-        # following /cmd_vel but never moving. Retry every tick until
-        # the service is ready and the call returns success.
-        if self._band_released or self._band_release_inflight:
+        # A toggle is not an idempotent disable: allow one outstanding request
+        # and require the simulator's explicit disabled acknowledgment.
+        if (self._band_released or self._band_release_inflight
+                or time.monotonic() < self._band_retry_at):
             return
+        self._band_retry_at = time.monotonic() + 0.5
         if not self._band_cli.service_is_ready():
             if not self._band_wait_warned:
                 self.get_logger().warn(
                     "elastic band toggle service not ready yet — retrying until it appears")
                 self._band_wait_warned = True
-            return  # do NOT mark released; retry on a later tick (non-blocking)
+            return
         self._band_release_inflight = True
         self.get_logger().info(f"releasing elastic band ({reason})")
-        self._band_cli.call_async(Trigger.Request()).add_done_callback(self._on_band_toggled)
+        try:
+            self._band_cli.call_async(Trigger.Request()).add_done_callback(self._on_band_toggled)
+        except Exception as error:
+            self._band_release_inflight = False
+            self.get_logger().warn(f"elastic band toggle dispatch failed: {error}; will retry")
 
     def _on_band_toggled(self, fut) -> None:
         self._band_release_inflight = False
-        result = fut.result()
-        if result is None:
-            self.get_logger().warn("elastic band toggle call failed — will retry")
-            return  # leave _band_released False so the next tick retries
+        self._band_retry_at = time.monotonic() + 0.5
+        try:
+            result = fut.result()
+        except Exception as error:
+            self.get_logger().warn(f"elastic band toggle call failed: {error}; will retry")
+            return
+        if result is None or not result.success or result.message != "disabled":
+            self.get_logger().warn(
+                f"elastic band disable not confirmed: {result}; will retry")
+            return
         self._band_released = True
         self.get_logger().info(f"elastic band toggle: {result.message}")
 
@@ -390,6 +424,8 @@ class LowerBodyControllerNode(Node):
         quat = apply_imu_offset(
             np.asarray(msg.imu_state.quaternion, dtype=np.float32), self._imu_corr)
         gyro = np.asarray(msg.imu_state.gyroscope, dtype=np.float32)
+        if self._standing_policy is not None and self._imu_corr is not None:
+            gyro = quat_rotate_inverse(self._imu_corr, gyro)
         t = self.get_clock().now().nanoseconds * 1e-9
         return RobotState(q=q, dq=dq, quat=quat, gyro=gyro,
                           cmd=self._cmd.copy(), height_cmd=self._height_cmd, t=t)
@@ -411,6 +447,16 @@ class LowerBodyControllerNode(Node):
         if self._lowstate is None:
             return
         state = self._state_from_lowstate(self._lowstate)
+        if self._standing_policy is not None:
+            try:
+                if (self._lowstate_received_at is None
+                        or time.monotonic() - self._lowstate_received_at
+                        > self._standing_state_timeout):
+                    raise ValueError("stale LowState for manipulation standing")
+                self._standing_policy.validate_state(state)
+            except ValueError as error:
+                self._trip_heartbeat(str(error))
+                return
 
         if self._manager.is_pending() and self._manager.is_idle():
             # Pre-pose: PD-drive the legs to the incoming policy's nominal
@@ -470,28 +516,29 @@ class LowerBodyControllerNode(Node):
 
         # Release the band only after a policy is committed and driving the legs
         # (gated on frame_task being ready, or the max-wait timeout).
-        if self._awaiting_band_release and not self._band_released:
-            released = False
-            if self._frame_task_ready:
+        if self._awaiting_band_release:
+            if not self._band_released and self._frame_task_ready:
                 self._release_band("policy active + frame_task ready")
-                released = True
-            elif self._request_time is not None and \
+            elif not self._band_released and self._request_time is not None and \
                     (time.monotonic() - self._request_time) > self.get_parameter("band_max_wait").value:
                 self._release_band("policy active + band_max_wait timeout")
-                released = True
-            if released:
-                # Reset the active policy AT band release so its observation
-                # history (which filled with band-held states) is cleared and it
-                # warms up fresh on free-standing — otherwise FAME's first free
-                # actions are computed from stale band-held obs and it topples.
-                # (This is exactly what fame_node does, and why it stays up.)
+            if self._band_released:
+                # Clear band-held history only after the disable acknowledgment,
+                # on a tick that has passed the state and heartbeat guards.
                 self._manager.reset_active(state)
                 self._awaiting_band_release = False
 
         if self._manager.is_idle():
             return  # nothing requested yet -> band-held, legs uncommanded
 
-        self._publish_leg(self._manager.run(state))
+        try:
+            command = self._manager.run(state)
+        except (ValueError, RuntimeError) as error:
+            if self._standing_policy is None:
+                raise
+            self._trip_heartbeat(f"standing policy inference failed: {error}")
+            return
+        self._publish_leg(command)
 
 
 def main():

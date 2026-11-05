@@ -93,7 +93,7 @@ class SkillsNode(SkillsBase, OpenDoorSkill, CloseDoorSkill, OpenLidSkill,
         """Wrap a skill execute callback so any escaping exception aborts the goal
         with a Result, instead of leaving it stuck in EXECUTING (also catches the
         NotImplementedError from the not-yet-implemented skill stubs)."""
-        def _cb(goal_handle):
+        def _execute(goal_handle):
             rec = self.logger.start()
             rec.set(skill=label, request=_describe_msg(goal_handle.request))
             self._log_head_frame(rec, f'{label}_start')
@@ -119,6 +119,23 @@ class SkillsNode(SkillsBase, OpenDoorSkill, CloseDoorSkill, OpenLidSkill,
                 self._finish_run_telemetry(run_rec, success=False,
                                            message=result.message)
                 return result
+
+        def _cb(goal_handle):
+            # The rich grasp outcome and arm-halt state belong to one composed
+            # manipulation at a time. Nested grasp calls execute directly inside
+            # this reservation, never by reacquiring it on another executor thread.
+            if label not in ('grasp', 'pick_place'):
+                return _execute(goal_handle)
+            if not self._manipulation_lock.acquire(blocking=False):
+                result = action_type.Result()
+                result.success = False
+                result.message = 'another manipulation goal owns the execution reservation'
+                goal_handle.abort()
+                return result
+            try:
+                return _execute(goal_handle)
+            finally:
+                self._manipulation_lock.release()
         return _cb
 
     def _log_head_frame(self, rec, tag):

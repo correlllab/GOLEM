@@ -18,11 +18,20 @@ from pathlib import Path
 
 DICTIONARY = "DICT_4X4_50"
 MARKER_ID = 7
-# Canonical row-major ID 7 payload, checked against OpenCV's predefined dictionary.
-_PAYLOAD = ((1, 1, 0, 0), (0, 1, 0, 0), (1, 1, 1, 1), (0, 0, 1, 0))
+# Canonical row-major payloads, checked against OpenCV's predefined dictionary.
+_PAYLOADS = {
+    7: ((1, 1, 0, 0), (0, 1, 0, 0), (1, 1, 1, 1), (0, 0, 1, 0)),
+    8: ((1, 1, 1, 1), (1, 1, 1, 0), (1, 1, 0, 1), (1, 0, 1, 0)),
+}
 
 
-def marker_pixels(cell_pixels=32, quiet_cells=1):
+def board_marker_layout():
+    """Read the same rigid calibration installed with the perception node."""
+    path = (Path(__file__).resolve().parent.parent / "core_ws/src/model_server/config/pegboard_layout.json")
+    return json.loads(path.read_text())
+
+
+def marker_pixels(cell_pixels=32, quiet_cells=1, marker_id=MARKER_ID):
     """Return square grayscale rows; six cells span the measured black edge.
 
     One black border cell surrounds the 4x4 code. The white quiet zone is
@@ -32,6 +41,9 @@ def marker_pixels(cell_pixels=32, quiet_cells=1):
         raise ValueError("cell_pixels must be a positive integer")
     if type(quiet_cells) is not int or quiet_cells < 1:
         raise ValueError("quiet_cells must be a positive integer")
+    if type(marker_id) is not int or marker_id not in _PAYLOADS:
+        raise ValueError("supported marker IDs are 7 and 8")
+    payload = _PAYLOADS[marker_id]
     cells = 6 + 2 * quiet_cells
     rows = []
     for y in range(cells):
@@ -40,16 +52,16 @@ def marker_pixels(cell_pixels=32, quiet_cells=1):
             mx, my = x - quiet_cells, y - quiet_cells
             value = 255
             if 0 <= mx < 6 and 0 <= my < 6:
-                value = (255 * _PAYLOAD[my - 1][mx - 1]
+                value = (255 * payload[my - 1][mx - 1]
                          if 1 <= mx <= 4 and 1 <= my <= 4 else 0)
             row.extend(bytes([value]) * cell_pixels)
         rows.extend([bytes(row)] * cell_pixels)
     return tuple(rows)
 
 
-def marker_png(cell_pixels=32, quiet_cells=1):
+def marker_png(cell_pixels=32, quiet_cells=1, marker_id=MARKER_ID):
     """Encode the deterministic texture as an 8-bit grayscale PNG, without cv2."""
-    rows = marker_pixels(cell_pixels, quiet_cells)
+    rows = marker_pixels(cell_pixels, quiet_cells, marker_id)
 
     def chunk(kind, data):
         return (struct.pack(">I", len(data)) + kind + data
@@ -61,33 +73,37 @@ def marker_png(cell_pixels=32, quiet_cells=1):
             + chunk(b"IEND", b""))
 
 
-@lru_cache(maxsize=1)
-def _texture_file():
+@lru_cache(maxsize=2)
+def _texture_file(marker_id):
     # Keep the directory alive while MuJoCo/robosuite may recompile the XML.
     directory = tempfile.TemporaryDirectory(prefix="golem_board_marker_")
-    path = Path(directory.name) / "aruco_4x4_50_id7.png"
-    path.write_bytes(marker_png())
+    path = Path(directory.name) / f"aruco_4x4_50_id{marker_id}.png"
+    path.write_bytes(marker_png(marker_id=marker_id))
     return directory, str(path)
 
 
 def mount_board_marker(board_body, asset, *, name="pegboard_aruco",
-                       black_size_m=0.03, mount_pos=None):
+                       black_size_m=None, mount_pos=None, marker_id=MARKER_ID):
     """Append a massless, non-contact print on the board and return calibration data.
 
     Pass the static board body's Element and the scene's asset Element. The
-    default 4 cm paper occupies the top-left corner (x right, y up), with
+    default 4 cm paper occupies the selected top corner (x right, y up), with
     5 mm edge margins. The entire quiet zone must fit on the board and clear
     every catalog hole's bounding box. Geometry axes match the board. The top face is
     at mount_pos; the 0.1 mm visual thickness extends below it. Nothing is
     added to the board's collision geometry or inertial specification.
     """
+    if type(marker_id) is not int or marker_id not in _PAYLOADS:
+        raise ValueError("supported marker IDs are 7 and 8")
+    spec = next(m for m in board_marker_layout()["markers"] if m["id"] == marker_id)
+    black_size_m = spec["black_size_m"] if black_size_m is None else black_size_m
     if not math.isfinite(black_size_m) or black_size_m <= 0:
         raise ValueError("black_size_m must be finite and positive")
     if not name or any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_" for ch in name):
         raise ValueError("name must contain only letters, digits and underscores")
     outer = black_size_m * 8 / 6
     half = outer / 2
-    pos = tuple(mount_pos) if mount_pos is not None else (-0.135, 0.10, 0.0252)
+    pos = tuple(mount_pos) if mount_pos is not None else tuple(spec["position_board_m"])
     if len(pos) != 3 or not all(math.isfinite(v) for v in pos):
         raise ValueError("mount_pos must contain three finite board-local metres")
     catalog = json.loads((Path(__file__).resolve().parent.parent / "CL_Assets" /
@@ -107,7 +123,7 @@ def mount_board_marker(board_body, asset, *, name="pegboard_aruco",
     def fmt(values):
         return " ".join(f"{v:.12g}" for v in values)
 
-    ET.SubElement(asset, "texture", name=name + "_texture", type="2d", file=_texture_file()[1])
+    ET.SubElement(asset, "texture", name=name + "_texture", type="2d", file=_texture_file(marker_id)[1])
     ET.SubElement(asset, "material", name=name + "_material", texture=name + "_texture",
                   texrepeat="1 1", texuniform="false", rgba="1 1 1 1",
                   specular="0", shininess="0", reflectance="0")
@@ -121,7 +137,7 @@ def mount_board_marker(board_body, asset, *, name="pegboard_aruco",
     ET.SubElement(board_body, "geom", name=name, type="mesh", mesh=name + "_mesh",
                   material=name + "_material", pos=fmt(pos), group="1", mass="0",
                   contype="0", conaffinity="0", rgba="1 1 1 1")
-    return {"dictionary": DICTIONARY, "marker_id": MARKER_ID,
+    return {"dictionary": DICTIONARY, "marker_id": marker_id,
             "black_size_m": black_size_m, "quiet_zone_m": black_size_m / 6,
              "outer_size_m": outer, "geom_name": name,
             "position_board_m": list(pos),

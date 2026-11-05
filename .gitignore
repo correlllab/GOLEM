@@ -81,3 +81,7 @@ core.*
 
 # Claude Code local settings
 /.claude/
+
+# Root-managed native Python environments
+/environments/*/.venv/
+/environments/*/.cache/

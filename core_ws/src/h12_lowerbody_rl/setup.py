@@ -13,6 +13,7 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/policies', ['policies/UPSTREAM_LICENSE']),
         # Policy weights + configs, installed under share/<pkg>/policies/<name>/.
         (os.path.join('share', package_name, 'policies', 'walk'),
             glob('policies/walk/*')),
@@ -20,6 +21,10 @@ setup(
             glob('policies/fame/*')),
         (os.path.join('share', package_name, 'policies', 'almi'),
             glob('policies/almi/*')),
+        (os.path.join('share', package_name, 'policies', 'fame_finetune'),
+            glob('policies/fame_finetune/*')),
+        (os.path.join('share', package_name, 'policies', 'almi_manip_stand'),
+            glob('policies/almi_manip_stand/*')),
     ],
     package_data={'': ['py.typed']},
     install_requires=['setuptools'],

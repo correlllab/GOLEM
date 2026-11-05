@@ -10,6 +10,7 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/config', ['config/pegboard_layout.json']),
         # NOTE: weights/ is intentionally NOT in data_files. The servers resolve
         # checkpoints via __file__ (model_server/weights/), which under
         # `colcon build --symlink-install` points back at the source tree. Adding
@@ -33,6 +34,7 @@ setup(
             'sam_server = model_server.sam_server:RunSamServer',
             'graspgen_server = model_server.graspgen_server:main',
             'yolo_server = model_server.yolo_server:RunYoloServer',
+            'aruco_localizer = model_server.aruco_localizer:main',
         ],
     },
 )

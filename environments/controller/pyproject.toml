@@ -1,0 +1,27 @@
+[project]
+name = "golem-native-controller"
+version = "0.0.0"
+description = "Isolated NumPy 2 baseline arm controller libraries, without vision or Crocoddyl"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "numpy==2.2.6",
+    "scipy==1.15.3",
+    "pin==3.9.0",
+    # Pinocchio 3.9 parsers link the urdfdom 4 SONAME, not the latest 6.
+    "cmeel-urdfdom==4.0.1",
+    "cmeel-tinyxml2==10.0.0",
+    "pin-pink==4.1.0",
+    "ompl==2.0.1",
+    "qpsolvers[quadprog]==4.10.0",
+    "meshcat==0.3.2",
+    "meshcat-shapes==1.0.0",
+    "pyquaternion==0.9.9",
+    "tqdm==4.67.3",
+    "PyYAML==6.0.2",
+    "cyclonedds==0.10.2",
+    "setuptools==59.6.0",
+    "wheel==0.43.0",
+]
+
+[tool.uv]
+package = false

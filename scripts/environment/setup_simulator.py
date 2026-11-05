@@ -10,9 +10,9 @@ import subprocess
 import sys
 
 HERE = Path(__file__).resolve().parent
-SIM = HERE.parent
-ROOT = SIM.parent
-PROJECT = SIM / 'environments'
+ROOT = HERE.parent.parent
+SIM = ROOT / 'h1_robocasa'
+PROJECT = ROOT / 'environments/simulator'
 VENV = PROJECT / '.venv'
 PYTHON = VENV / 'bin/python'
 LIVOX = ROOT / 'core_ws/src/livox_ros_driver2'
@@ -37,7 +37,7 @@ def environment():
 
 def require_venv():
     if not PYTHON.is_file():
-        raise RuntimeError('simulator venv missing; run setup_simulator.sh setup')
+        raise RuntimeError('simulator venv missing; run scripts/setup_environment.sh simulator')
     run([PYTHON, '-c', 'import sys, site; from pathlib import Path; '
          f'assert Path(sys.prefix) == Path({str(VENV)!r}); '
          'assert sys.version_info[:2] == (3, 10); assert sys.base_prefix == "/usr"; '
@@ -45,6 +45,8 @@ def require_venv():
 
 
 def build_livox(jobs):
+    if not (ROOT / 'core_ws/install/magpie_msgs/share/magpie_msgs/local_setup.bash').is_file():
+        raise RuntimeError('build core interfaces first: core_ws/scripts/build_ros_workspace.sh build --profile interfaces')
     revision = subprocess.check_output(['git', '-C', str(LIVOX), 'rev-parse', 'HEAD'], text=True).strip()
     if revision != LIVOX_SHA:
         raise RuntimeError(f'Livox must remain at {LIVOX_SHA}; found {revision}')
@@ -83,7 +85,7 @@ def check(bridges=False):
                     VENV / 'livox-interfaces/install/share/livox_ros_driver2/local_setup.bash']
         for overlay in overlays:
             if not overlay.is_file():
-                raise RuntimeError(f'missing {overlay}; build stage1 interfaces and run build-livox-interfaces')
+                raise RuntimeError(f'missing {overlay}; build core interfaces, then run scripts/setup_environment.sh simulator --build-interfaces')
         command += ['--bridges']
         command = ['/bin/bash', '--noprofile', '--norc', '-c',
                    'set -e; source "$1"; source "$2"; shift 2; exec "$@"',
@@ -92,44 +94,7 @@ def check(bridges=False):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
-                                    epilog='''Run from any directory. No command launches nodes, a simulator loop,
-DDS participants, controllers, or bringup. No sudo/global pip/conda.
-
-  setup_simulator.sh setup
-  setup_simulator.sh build-livox-interfaces --compile-jobs 2
-  setup_simulator.sh check --bridges
-
-setup uses /usr/bin/python3 (Humble Python 3.10), system-site-packages for ROS,
-and a separate NumPy 2 environment. Stage1 core_ws stays on NumPy 1/cv_bridge.
-The SDK is installed --no-deps from this checkout, not PyPI. Git robosuite and
-its transitive Python closure are locked; RoboCasa kitchens/ML are not installed.
-check verifies dependencies only; --bridges also requires stage1 native
-magpie_msgs and the optional local Livox interface-only build. It imports the
-real sensor/hand/DDS bridge modules but never calls their constructors.
-build-livox-interfaces builds only the pinned driver's two unchanged messages
-under .venv, without a hardware driver, Livox SDK, PCL, or vendor edits.
-
-The lock does not cover system ROS/native libraries, assets, or SDK revisions.
-To update it explicitly: UV_NO_CONFIG=1 UV_PYTHON_DOWNLOADS=never uv lock
-  --project h1_robocasa/environments --python /usr/bin/python3
-Do not activate this NumPy 2 venv for the NumPy 1 ROS/controller build.
-Successful checks do not qualify task/model/rendering or robot runtime.
-
-Explicit runtime invocation, NOT run by setup/check (from repo root in a clean
-system bash, no conda or previously sourced overlays; starts simulator DDS):
-  env -i HOME="$HOME" PATH=/usr/bin:/bin DISPLAY="${DISPLAY-}" XAUTHORITY="${XAUTHORITY-}" /bin/bash --noprofile --norc
-  source /opt/ros/humble/setup.bash
-  source core_ws/install/local_setup.bash
-  source h1_robocasa/environments/.venv/livox-interfaces/install/share/livox_ros_driver2/local_setup.bash
-  export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 ROS_DOMAIN_ID=1
-  export PYTHONPATH="$PWD/unitree_sdk2_python:$PWD/h1_robocasa:$PYTHONPATH"
-  h1_robocasa/environments/.venv/bin/python h1_robocasa/h12_mujoco.py --task PegInHole
-Use a nonzero simulation DDS domain; 0 is the real robot bus. This does not
-start lower-body control/bringup or qualify unsupported standing. Add
---headless for no viewer; EGL/GL libraries and assets are system prerequisites.
-Without explicit --task PegInHole the existing runner selects RoboCasa kitchens,
-which are deliberately NOT installed in this environment.''')
+    parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('setup', help='create isolated venv, sync locked dependencies, install checkout SDK')
     checking = sub.add_parser('check', help='non-actuating dependency/import checks')
@@ -138,7 +103,7 @@ which are deliberately NOT installed in this environment.''')
     building.add_argument('--compile-jobs', type=int, choices=range(1, 65), default=2, metavar='1..64')
     args = parser.parse_args()
     if sys.version_info[:2] != (3, 10) or sys.base_prefix != '/usr' or os.environ.get('ROS_DISTRO') != 'humble':
-        raise RuntimeError('use setup_simulator.sh with system Python 3.10 and clean Humble')
+        raise RuntimeError('use scripts/setup_environment.sh simulator with system Python 3.10 and clean Humble')
     if args.command == 'setup':
         uv = os.environ.get('GOLEM_NATIVE_UV')
         if not uv or not Path(uv).is_file():

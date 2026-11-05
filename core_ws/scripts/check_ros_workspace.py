@@ -25,7 +25,7 @@ def native_origin(module, package, source=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--built', action='store_true')
-    parser.add_argument('--profile', choices=('core', 'interfaces', 'manipulation'), default='manipulation')
+    parser.add_argument('--profile', choices=('core', 'interfaces', 'manipulation', 'experiment'), default='manipulation')
     args = parser.parse_args()
     assert sys.version_info[:2] == (3, 10), sys.version
     assert Path(sys.prefix) == VENV, sys.prefix
@@ -59,6 +59,11 @@ def main():
     assert installed['url'] == (ROOT / 'unitree_sdk2_python').as_uri(), installed
     assert channel.ChannelFactoryInitialize is not None
     print(f'PASS: NumPy {numpy.__version__}, cv_bridge conversion, CycloneDDS C load, SDK {sdk}')
+    import torch
+    assert torch.__version__ == '2.6.0+cpu', torch.__version__
+    assert torch.version.cuda is None
+    numpy.testing.assert_array_equal(torch.from_numpy(image).numpy(), image)
+    print('PASS: CPU-only Torch 2.6 and NumPy 1 tensor roundtrip')
     if LOCAL_ROS.is_dir():
         from ament_index_python.packages import get_package_prefix
         from rosidl_generator_py import import_type_support
@@ -87,10 +92,10 @@ def main():
         for module in ('estop.estop_node', 'h12_safety_layer.ros2.safety_node'):
             native_origin(importlib.import_module(module), module.split('.')[0], source=True)
             print(f'PASS built import: {module} (no constructor called)')
-        if args.profile in ('interfaces', 'manipulation'):
+        if args.profile in ('interfaces', 'manipulation', 'experiment'):
             from rosidl_generator_py import import_type_support
             generated = ['custom_ros_messages', 'magpie_msgs']
-            if args.profile == 'manipulation':
+            if args.profile in ('manipulation', 'experiment'):
                 generated.append('unitree_hg')
             for package in generated:
                 native_origin(importlib.import_module(package), package)
@@ -99,6 +104,15 @@ def main():
             for module in ('custom_ros_messages.action', 'custom_ros_messages.srv',
                            'magpie_msgs.action', 'magpie_msgs.srv'):
                 importlib.import_module(module)
+        if args.profile == 'experiment':
+            from h12_safety_layer.core.config import load_config
+            safety = load_config(INSTALL / 'h12_bringup/share/h12_bringup/config/safety_experiment.yaml')
+            assert safety['estop']['lower_stale_seconds'] == 0.2
+            print('PASS experiment safety config: lower-command watchdog enabled at 0.2 s')
+            for module in ('model_server.aruco_localizer', 'h12_skills.node',
+                           'h12_lowerbody_rl.scripts.lowerbody_controller_node'):
+                native_origin(importlib.import_module(module), module.split('.')[0], source=True)
+                print(f'PASS experiment module import: {module} (no constructor called)')
     print('PASS: limited native checks; controller/skills/leg runtime NOT qualified; no actuation')
 
 

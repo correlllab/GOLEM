@@ -1,0 +1,21 @@
+policy_path: policy_4599.pt
+encoder_path: encoder_4599.pt
+artifact_sha256:
+  policy_path: dc0c7e5d6be5bafd64ae51e991722fa79f2ca7ab2a0e65ce28fec5bb403acadc
+  encoder_path: 7ebb98fcfe6c990fe1d290eed53debfac3cfda646ce2f199407f8185b033a9d5
+kps: [300, 300, 300, 300, 80, 100, 300, 300, 300, 300, 80, 100]
+kds: [8, 8, 8, 8, 3, 5, 8, 8, 8, 8, 3, 5]
+default_angles: [0, -0.16, 0, 0.36, -0.2, 0, 0, -0.16, 0, 0.36, -0.2, 0]
+default_angles_arms: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+legs_motor_pos_lower_limit_list: [-0.37, -3.13, -0.42, -0.11, -0.887334, -0.181799, -0.37, -3.13, -3.13, -0.11, -0.887334, -0.181799]
+legs_motor_pos_upper_limit_list: [0.37, 2.49, 3.13, 2.18, 0.313599, 0.181799, 0.37, 2.49, 0.42, 2.18, 0.313599, 0.181799]
+ang_vel_scale: 0.25
+dof_pos_scale: 1.0
+dof_vel_scale: 0.05
+action_scale: 0.25
+cmd_scale: [2.0, 2.0, 0.25]
+num_actions: 12
+num_obs: 252
+obs_history_len: 3
+left_hand_force: [0, 0, 0]
+right_hand_force: [0, 0, 0]

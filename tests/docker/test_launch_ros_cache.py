@@ -1,4 +1,4 @@
-"""Run the launcher with temporary mounts and a fake colcon (no ROS/image needed)."""
+"""Run `docker/scripts/launch_ros.sh` against temporary mounts and a fake colcon, without ROS or an image."""
 import os
 import json
 from pathlib import Path
@@ -11,7 +11,10 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 class LaunchCacheTests(unittest.TestCase):
+    """Check what `launch_ros.sh` builds, refuses and caches before it runs its command."""
+
     def setUp(self):
+        """Lay out a fake container root, a fake colcon that logs its build calls, and a relocated launcher."""
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -41,17 +44,19 @@ sys.exit(int(os.environ.get('BUILD_EXIT', '0')))
         colcon.chmod(0o755)
         self.env = dict(os.environ, PATH=str(self.bin) + ':' + os.environ['PATH'],
                         CALLS=str(self.root / 'calls'), HOME=str(self.root))
-        # Relocate fixed container mount paths, keeping the executable logic intact.
+        # The launcher's fixed container paths are rewritten into the temporary root; nothing else changes.
         source = (REPO / 'docker/scripts/launch_ros.sh').read_text()
         self.launcher = self.root / 'launch_ros.sh'
         self.launcher.write_text(source.replace('/home/code', str(self.root / 'home/code'))
                                  .replace('/opt/', str(self.root / 'opt') + '/'))
 
     def run_launch(self, **env):
+        """Run the launcher with `touch started` as its command and `env` added to its environment."""
         return subprocess.run(['bash', str(self.launcher), 'touch', str(self.root / 'started')],
                               env=dict(self.env, **env), text=True, capture_output=True)
 
     def test_source_changes_trigger_incremental_build_even_with_newer_install_marker(self):
+        """Every launch runs a colcon build, so colcon, not a timestamp check, decides what is stale."""
         (self.ws / 'src/demo/node.cpp').write_text('changed source')
         result = self.run_launch()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -61,7 +66,7 @@ sys.exit(int(os.environ.get('BUILD_EXIT', '0')))
         self.assertEqual(len((self.root / 'calls').read_text().splitlines()), 2)
 
     def test_launch_ros_builds_both_robots_whatever_golem_robot(self):
-        # Every ros container builds the G1's packages too, the H1-2's included.
+        """The build selects no packages, so both robots' packages build whatever `GOLEM_ROBOT` is."""
         self.env.pop('GOLEM_ROBOT', None)
         for robot in (None, 'h12', 'g1'):
             with self.subTest(robot=robot):
@@ -72,11 +77,13 @@ sys.exit(int(os.environ.get('BUILD_EXIT', '0')))
                 self.assertFalse([a for a in args if a.startswith('--packages-')], args)
 
     def test_colcon_failure_prevents_command_execution(self):
+        """A failed colcon build exits with colcon's status and never runs the command."""
         result = self.run_launch(BUILD_EXIT='23')
         self.assertEqual(result.returncode, 23, result.stderr)
         self.assertFalse((self.root / 'started').exists())
 
     def test_livox_is_staged_without_running_or_mutating_upstream_build_script(self):
+        """The Livox driver builds from a staged copy with its ROS 2 manifest; its source stays untouched."""
         driver = self.ws / 'src/livox_ros_driver2'
         driver.mkdir()
         upstream = '#!/bin/bash\nexit 0\n'
@@ -99,6 +106,7 @@ sys.exit(int(os.environ.get('BUILD_EXIT', '0')))
         self.assertEqual((staged / 'package.xml').read_text(), '<package>ROS2</package>')
 
     def test_livox_refresh_removes_deleted_sources_and_preserves_other_builds(self):
+        """The staged Livox copy follows deleted and added source files and leaves other packages' builds alone."""
         driver = self.ws / 'src/livox_ros_driver2'
         driver.mkdir()
         (driver / 'package_ROS2.xml').write_text('<package>ROS2</package>')
@@ -120,6 +128,7 @@ sys.exit(int(os.environ.get('BUILD_EXIT', '0')))
         self.assertEqual(other.read_text(), 'keep')
 
     def test_livox_cache_moves_to_staged_source_once(self):
+        """A Livox CMake cache for the mounted source is discarded; one for the staged copy is kept."""
         driver = self.ws / 'src/livox_ros_driver2'
         driver.mkdir()
         (driver / 'package_ROS2.xml').write_text('<package>ROS2</package>')
@@ -138,6 +147,7 @@ sys.exit(int(os.environ.get('BUILD_EXIT', '0')))
         self.assertTrue(cache.exists(), 'an already migrated cache must stay incremental')
 
     def test_livox_same_timestamp_source_edit_invalidates_only_driver_cache(self):
+        """A Livox source edit that keeps its timestamp discards the driver's build and no other."""
         driver = self.ws / 'src/livox_ros_driver2'
         driver.mkdir()
         (driver / 'package_ROS2.xml').write_text('<package>ROS2</package>')
@@ -163,6 +173,7 @@ sys.exit(int(os.environ.get('BUILD_EXIT', '0')))
         self.assertEqual((Path(stage) / 'node.cpp').read_text(), 'new')
 
     def test_removed_package_install_prevents_launch(self):
+        """An installed package with no source refuses the launch and names the package."""
         marker = self.ws / 'install/removed/share/colcon-core/packages/removed'
         marker.parent.mkdir(parents=True)
         marker.write_text('')
@@ -172,11 +183,13 @@ sys.exit(int(os.environ.get('BUILD_EXIT', '0')))
         self.assertFalse((self.root / 'started').exists())
 
     def test_package_discovery_failure_prevents_launch(self):
+        """A failed `colcon list` exits with its status and never runs the command."""
         result = self.run_launch(LIST_EXIT='17')
         self.assertEqual(result.returncode, 17, result.stderr)
         self.assertFalse((self.root / 'started').exists())
 
     def test_existing_backdated_mjpc_cache_is_revalidated_once(self):
+        """MJPC sources older than an existing build are touched newer once, and not on later launches."""
         src = self.root / 'home/code/mujoco_mpc'
         build = src / 'build'
         build.mkdir(parents=True)
@@ -201,8 +214,11 @@ sys.exit(int(os.environ.get('BUILD_EXIT', '0')))
     @unittest.skipUnless(all(shutil.which(x) for x in ('colcon', 'cmake', 'c++')),
                          'requires local colcon, cmake, and C++ compiler')
     def test_real_build_recompiles_cpp_and_generated_input_and_rejects_removed_package(self):
-        # Use a tiny standalone CMake package, exercising actual dependency
-        # checks and installed executables without ROS or the Livox SDK.
+        """A real colcon rebuilds changed C++ and configured inputs, and a removed package refuses the launch.
+
+        A small standalone CMake package stands in for the Livox driver, so real dependency checks
+        and installed executables run without ROS or the Livox SDK.
+        """
         (self.bin / 'colcon').unlink()
         shutil.rmtree(self.ws / 'src/demo')
         driver = self.ws / 'src/livox_ros_driver2'
@@ -241,6 +257,7 @@ sys.exit(int(os.environ.get('BUILD_EXIT', '0')))
         self.assertFalse((self.root / 'started').exists())
 
     def test_dirty_mjpc_source_is_newer_than_hydrated_objects(self):
+        """A dirty MJPC source is newer than the objects hydrated from the image's build seed."""
         src = self.root / 'home/code/mujoco_mpc'
         seed = self.root / 'opt/mjpc-build-seed'
         src.mkdir(parents=True)

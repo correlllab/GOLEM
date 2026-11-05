@@ -6,10 +6,12 @@ axis-aligned bounding box in the link frame (robot_geometry.link_boxes). Each
 cloud is tested against the boxes posed by TF at the cloud's stamp, and points
 inside any box are dropped. All point fields are passed through unchanged.
 
-A link that has never had a TF (for example the Dex3 finger links when no hand
-driver publishes their joints) is skipped, and the skipped links are logged
-once. A link that had a TF and has none now drops the cloud: publishing it
-would put the moving body back into the maps.
+A cloud is dropped while any link lacks a TF: publishing it would put the
+body back into the maps. A link that never had a TF (for example the Dex3
+finger links when no hand driver publishes their joints) is skipped instead,
+and logged once, once ``unseen_link_grace`` has passed since the first cloud in
+which any link had a TF; until then the cloud is dropped, so the TF tree has
+time to come up. A link that had a TF and has none now always drops the cloud.
 
 Subscribes ``cloud_in`` (sensor_msgs/PointCloud2) and ``/robot_description``
 (std_msgs/String, transient local, from robot_state_publisher); publishes
@@ -21,6 +23,10 @@ ROS parameters:
   exclude_links   links never filtered
   max_tf_age      s; if TF at the cloud stamp is unavailable, the latest
                   transform is used as long as it is at most this old
+  unseen_link_grace
+                  s, measured on the cloud stamps (sim time under
+                  use_sim_time); how long after the first cloud with any TF
+                  a link without one is waited for before it is skipped
 """
 
 import numpy as np
@@ -67,8 +73,11 @@ class SelfFilter(Node):
         self.max_tf_age = Duration(
             seconds=self.declare_parameter('max_tf_age', 0.2).value)
 
+        self.unseen_link_grace = self.declare_parameter('unseen_link_grace', 2.0).value
+
         self.boxes = None
         self.seen_links = set()
+        self.first_tf_stamp = None  # s, cloud stamp of the first cloud with any TF
         self.reported_unseen = frozenset()
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -124,6 +133,17 @@ class SelfFilter(Node):
             if near.any():
                 idx = np.flatnonzero(near)
                 keep[idx[points_in_box(xyz[idx], rot, trans, lo, hi)]] = False
+        stamp = Time.from_msg(msg.header.stamp).nanoseconds * 1e-9
+        if self.first_tf_stamp is None and self.seen_links:
+            self.first_tf_stamp = stamp
+        waiting = self.first_tf_stamp is None or (
+            stamp - self.first_tf_stamp < self.unseen_link_grace)
+        if lost or (unseen and waiting):
+            waited = sorted(lost) + sorted(unseen if waiting else ())
+            self.get_logger().warn(
+                f'no TF for {len(waited)} links (e.g. {waited[0]}); dropping cloud',
+                throttle_duration_sec=5.0)
+            return
         unseen = frozenset(unseen)
         if unseen != self.reported_unseen:
             self.reported_unseen = unseen
@@ -131,11 +151,6 @@ class SelfFilter(Node):
                 self.get_logger().warn(
                     f'no TF has ever come for {len(unseen)} links, not filtering them: '
                     + ', '.join(sorted(unseen)))
-        if lost:
-            self.get_logger().warn(
-                f'lost the TF of {len(lost)} links (e.g. {lost[0]}); dropping cloud',
-                throttle_duration_sec=5.0)
-            return
 
         out = PointCloud2()
         out.header = msg.header

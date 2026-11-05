@@ -37,7 +37,8 @@ def _filter(links, resolvable):
 
     published = []
     node = SimpleNamespace(
-        boxes={link: _BOX for link in links}, seen_links=set(),
+        boxes={link: _BOX for link in links}, seen_links=set(), first_tf_stamp=None,
+        unseen_link_grace=2.0,
         reported_unseen=frozenset(), logger=_Logger(), _lookup=lookup,
         pub=SimpleNamespace(publish=published.append))
     node.get_logger = lambda: node.logger
@@ -49,9 +50,10 @@ def _filter(links, resolvable):
     return node, on_cloud, published
 
 
-def _cloud():
+def _cloud(sec=100):
     msg = PointCloud2(header=Header(frame_id='odom'), height=1, width=2, point_step=12,
                       row_step=24, is_dense=True)
+    msg.header.stamp.sec = sec
     msg.fields = [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1)
                   for i, n in enumerate('xyz')]
     msg.data = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype='<f4').tobytes()
@@ -59,8 +61,27 @@ def _cloud():
 
 
 def test_never_seen_links_are_skipped():
-    node, on_cloud, published = _filter(['pelvis', 'finger'], [['pelvis']])
-    on_cloud(_cloud())
+    node, on_cloud, published = _filter(['pelvis', 'finger'], [['pelvis']] * 2)
+    on_cloud(_cloud(100))
+    on_cloud(_cloud(103))
+    assert len(published) == 1
+    _, xyz = cloud_points(published[0])
+    np.testing.assert_allclose(xyz, [[1.0, 0.0, 0.0]])
+
+
+def test_no_link_ever_seen_drops_cloud():
+    node, on_cloud, published = _filter(['pelvis', 'finger'], [[]] * 3)
+    for sec in (100, 103, 200):
+        on_cloud(_cloud(sec))
+    assert not published
+
+
+def test_unseen_link_dropped_during_grace_then_skipped():
+    node, on_cloud, published = _filter(['pelvis', 'finger'], [['pelvis']] * 3)
+    on_cloud(_cloud(100))
+    on_cloud(_cloud(101))
+    assert not published
+    on_cloud(_cloud(102))
     assert len(published) == 1
     _, xyz = cloud_points(published[0])
     np.testing.assert_allclose(xyz, [[1.0, 0.0, 0.0]])
@@ -68,26 +89,28 @@ def test_never_seen_links_are_skipped():
 
 def test_lost_link_drops_cloud():
     node, on_cloud, published = _filter(['pelvis', 'arm'], [['pelvis', 'arm'], ['pelvis']])
-    on_cloud(_cloud())
+    on_cloud(_cloud(100))
     assert len(published) == 1
-    on_cloud(_cloud())
+    on_cloud(_cloud(103))
     assert len(published) == 1
 
 
 def test_warning_once():
-    node, on_cloud, published = _filter(['pelvis', 'finger'], [['pelvis']] * 3)
-    for _ in range(3):
-        on_cloud(_cloud())
+    node, on_cloud, published = _filter(['pelvis', 'finger'], [['pelvis']] * 4)
+    for sec in (100, 103, 104, 105):
+        on_cloud(_cloud(sec))
     assert len(published) == 3
-    assert len(node.logger.warnings) == 1
-    assert 'finger' in node.logger.warnings[0]
+    unseen_warnings = [w for w in node.logger.warnings if 'ever come' in w]
+    assert len(unseen_warnings) == 1
+    assert 'finger' in unseen_warnings[0]
 
 
 def test_warning_again_when_the_set_changes():
     node, on_cloud, _ = _filter(['pelvis', 'a', 'b'],
                                 [['pelvis'], ['pelvis'], ['pelvis', 'a']])
-    for _ in range(3):
-        on_cloud(_cloud())
-    assert len(node.logger.warnings) == 2
-    assert node.logger.warnings[0].endswith('a, b')
-    assert node.logger.warnings[1].endswith('b')
+    for sec in (100, 103, 104):
+        on_cloud(_cloud(sec))
+    unseen_warnings = [w for w in node.logger.warnings if 'ever come' in w]
+    assert len(unseen_warnings) == 2
+    assert unseen_warnings[0].endswith('a, b')
+    assert unseen_warnings[1].endswith('b')

@@ -1,5 +1,5 @@
 """
-The real G1's sensor drivers, run in the laptop's golem_ros container.
+Start the real G1's sensor drivers in the laptop's golem_ros container.
 
 The MID-360 driver (livox_ros_driver2), as msg_MID360_launch.py starts it, on
 golem_slam/config/g1/MID360_config.json: the laptop's wired address
@@ -8,7 +8,8 @@ and no extrinsic, so /livox/lidar and /livox/imu are both in the raw sensor
 frame, livox_frame, as the G1 sim publishes them. The URDF's mid360_joint holds
 the sensor's upside-down mounting, and config/g1/fastlio.yaml's extrinsic_R is the
 identity for that frame. With 10 Hz frames in CustomMsg (xfer_format 1), which
-FAST_LIO's scan_rate and lidar_type expect.
+FAST-LIO's scan_rate and lidar_type expect. g1_core includes it on the real robot with
+use_nav. Unmeasured on the real G1.
 """
 import os
 
@@ -18,9 +19,11 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    """Start the MID-360 driver."""
     mid360_config = os.path.join(
         get_package_share_directory('golem_slam'), 'config', 'g1', 'MID360_config.json')
     return LaunchDescription([
+        # The MID-360's points (/livox/lidar) and IMU (/livox/imu).
         Node(
             package='livox_ros_driver2',
             executable='livox_ros_driver2_node',

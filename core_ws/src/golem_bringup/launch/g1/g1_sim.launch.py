@@ -1,5 +1,5 @@
 r"""
-Simulated G1: the same core stack on DDS domain 1 with sim time and the sim configs.
+Start the simulated G1: the core stack with sim time and the sim configs.
 
     ros2 launch golem_bringup g1_sim.launch.py
     ros2 launch golem_bringup g1_sim.launch.py use_nav:=false   # no SLAM or Nav2
@@ -26,7 +26,9 @@ FAST-LIO is the odometry. Start the sim with GOLEM_SIM_ODOM unset;
 otherwise odom -> pelvis has two publishers. use_skills:=true adds
 golem_skills, which serves /skill/frontier_explore to walk the robot through
 Nav2 to the frontiers of /map.
-tests/g1/test_sim_nav.sh is the closed-loop test.
+tests/g1/test_sim_nav.sh is the closed-loop test. Start the sim first; every node joins
+the launching shell's ROS_DOMAIN_ID, which must be a sim domain (safety_node refuses
+sim:=true on domain 0).
 """
 
 import os
@@ -39,21 +41,27 @@ from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
+    """Declare the sim bringup's arguments and include g1_core with sim:=true."""
     core = os.path.join(get_package_share_directory('golem_bringup'), 'launch', 'g1',
                         'g1_core.launch.py')
     return LaunchDescription([
-        DeclareLaunchArgument('use_rviz', default_value='true'),
-        DeclareLaunchArgument('use_hands', default_value='true'),
-        DeclareLaunchArgument('use_sim_time', default_value='true'),
+        DeclareLaunchArgument('use_rviz', default_value='true',
+                              description='true: start RViz'),
+        DeclareLaunchArgument('use_hands', default_value='true',
+                              description='true: start dex3_hands, the Dex3-1 hand driver'),
+        DeclareLaunchArgument('use_sim_time', default_value='true',
+                              description='true: every node runs on the simulator /clock'),
         DeclareLaunchArgument(
             'safety_config', default_value='',
-            description='golem_safety config (default: sim_split)'),
+            description='golem_safety config, a name under its config/g1/ or a path '
+                        '(default: sim_split)'),
         DeclareLaunchArgument(
             'use_nav', default_value='true',
-            description='golem_slam: odometry, SLAM and Nav2 on /cmd_vel'),
+            description="true: golem_slam's odometry, SLAM and Nav2 on /cmd_vel"),
         DeclareLaunchArgument(
             'use_skills', default_value='false',
-            description='Start the golem_skills action servers (/skill/*)'),
+            description='true: start the golem_skills action servers (/skill/*)'),
+        # The whole stack.
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(core),
             launch_arguments={
@@ -62,7 +70,7 @@ def generate_launch_description():
                 'use_rviz': LaunchConfiguration('use_rviz'),
                 'use_hands': LaunchConfiguration('use_hands'),
                 'safety_config': LaunchConfiguration('safety_config'),
-                # the one safety_config runs with: sim_split
+                # The one safety_config runs with: sim_split.
                 'controller_config': '',
                 'use_nav': LaunchConfiguration('use_nav'),
                 'use_skills': LaunchConfiguration('use_skills'),

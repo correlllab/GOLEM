@@ -1,8 +1,9 @@
 """
-The H1-2 sim bringup on the Mac (docker/mac: arm64, CPU only).
+Start the H1-2 against the Mac's RoboCasa sim (docker/mac: arm64, CPU only).
 
 It includes the blocks h12_sim.launch.py includes, with the arguments that file
-passes them: h12_state, h12_control, h12_lowerbody and golem_slam's navigation.
+passes them, all at once: h12_state, h12_control, h12_lowerbody and golem_slam's
+navigation. It declares no launch arguments.
 The GOLEM_* environment variables (docker/mac/docker-compose.yml passes them)
 choose the optional ones:
 
@@ -32,6 +33,7 @@ ON = ('1', 'true', 'on')
 
 
 def _include(package, launch_file, launch_arguments):
+    """Include a package's launch file with the given arguments."""
     return IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory(package), 'launch', launch_file)),
@@ -40,10 +42,12 @@ def _include(package, launch_file, launch_arguments):
 
 
 def _env(name):
+    """Return an environment variable, stripped and lower-cased; '' when unset."""
     return os.environ.get(name, '').strip().lower()
 
 
 def generate_launch_description():
+    """Include the blocks the GOLEM_* variables choose; refuse an unknown GOLEM_LOWERBODY."""
     bringup_share = get_package_share_directory('golem_bringup')
     lowerbody = _env('GOLEM_LOWERBODY')
     if lowerbody and lowerbody not in POLICIES:
@@ -51,26 +55,29 @@ def generate_launch_description():
             f'h12_sim_mac: GOLEM_LOWERBODY={lowerbody!r} is not one of '
             f'{", ".join(POLICIES)} (unset or empty starts no leg node)')
 
-    # MuJoCo publishes /clock with sim time. All nodes use it so TF lookups and
-    # sensor timestamps are coherent with the simulation.
+    # The simulator publishes /clock; every node uses it so TF lookups and sensor
+    # stamps agree with the simulation.
     sim_time = {'use_sim_time': 'true'}
 
     actions = [
+        # TF of the body from /lowstate.
         _include('golem_bringup', 'h12/h12_state.launch.py', {
             **sim_time,
             'urdf_file': urdf_path('h12', ros=True),
         }),
+        # The command path: safety_node, the only writer of /lowcmd, and the arm IK.
         _include('golem_bringup', 'h12/h12_control.launch.py', {
             **sim_time,
             'sim': 'true',
             'safety_config': 'sim_safety_split.yaml',
             'frame_task_config': 'sim_safety_split.yaml',
-            # No estop in sim, so nothing to wait for.
+            # No estop in the sim, so nothing to wait for.
             'safety_delay': '0.0',
             'frame_task_delay': '0.0',
         }),
     ]
     if lowerbody:
+        # The legs; the sim needs no operator check of the start pose.
         actions.append(_include('golem_bringup', 'h12/h12_lowerbody.launch.py', {
             **sim_time,
             'start_position_verified': 'true',
@@ -78,6 +85,7 @@ def generate_launch_description():
             'lowerbody_params': os.path.join(bringup_share, 'config', 'h12', 'lowerbody_sim.yaml'),
         }))
     if _env('GOLEM_SLAM') in ON or _env('GOLEM_NAV2') in ON:
+        # SLAM and Nav2, driving the legs on /cmd_vel.
         actions.append(
             _include('golem_slam', 'navigation.launch.py', {**sim_time, 'robot': 'h12'}))
     return LaunchDescription(actions)

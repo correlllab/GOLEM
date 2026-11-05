@@ -1,5 +1,5 @@
 r"""
-Real G1, with the whole ROS stack running on the laptop wired to the robot.
+Start the real G1, with the whole ROS stack on the laptop wired to the robot.
 
     ros2 launch golem_bringup g1_real_robot.launch.py   # the arms; the legs stay off
     ros2 launch golem_bringup g1_real_robot.launch.py start_position_verified:=true
@@ -60,8 +60,8 @@ commands within 30 s, or if the move to home is not done within 30 s after
 that. use_nav (default true) starts the MID-360 driver
 (g1_real_drivers.launch.py) and golem_slam on config/g1/fastlio.yaml: FAST_LIO,
 slam_toolbox and Nav2, which drives the walking node through /cmd_vel once it
-runs. Neither has been run on our G1. Skills are not part of the real G1
-bringup yet.
+runs. Unmeasured on the real G1: the driver and navigation have not run on it.
+Skills are not part of the real G1 bringup.
 
 Hazards not handled in code:
 - A controller that dies without its last command leaves the waist + arms
@@ -88,7 +88,7 @@ Hazards not handled in code:
   start" error says how many of them are inside controller.d_min. Hanging
   freely in the sim, the wrists rest on the hips with their spheres 20 mm
   from the hip spheres; arms_down (elbows at pi/2) is inside them.
-- The gains are not tuned on our G1: the waist's damping ratio is
+- The gains are unmeasured on the real G1: the waist's damping ratio is
   about 0.42-0.45 at home (g1_split.yaml).
 """
 
@@ -102,22 +102,27 @@ from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
+    """Declare the real bringup's arguments and include g1_core with sim:=false."""
     core = os.path.join(get_package_share_directory('golem_bringup'), 'launch', 'g1',
                         'g1_core.launch.py')
     return LaunchDescription([
-        DeclareLaunchArgument('use_rviz', default_value='true'),
-        DeclareLaunchArgument('use_hands', default_value='true'),
+        DeclareLaunchArgument('use_rviz', default_value='true',
+                              description='true: start RViz'),
+        DeclareLaunchArgument('use_hands', default_value='true',
+                              description='true: start dex3_hands, the Dex3-1 hand driver, '
+                                          'which writes rt/dex3/* outside golem_safety'),
         DeclareLaunchArgument('safety_config', default_value='split',
                               description='golem_safety config, a name under its config/g1/ '
                                           'or a path'),
-        # the leg-control interlock
+        # SAFETY: the leg-control interlock, false by default.
         DeclareLaunchArgument(
             'start_position_verified', default_value='false',
-            description="HOMIE's walking node on the legs: true only after checking the "
-                        'robot is in a safe start pose'),
+            description="true only after checking the robot is in a safe start pose: "
+                        "starts HOMIE's walking node on the legs"),
         DeclareLaunchArgument('use_nav', default_value='true',
-                              description='the MID-360 driver and golem_slam (FAST_LIO, '
-                                          'slam_toolbox, Nav2)'),
+                              description='true: start the MID-360 driver and golem_slam '
+                                          '(FAST-LIO, slam_toolbox, Nav2)'),
+        # The whole stack.
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(core),
             launch_arguments={
@@ -126,7 +131,7 @@ def generate_launch_description():
                 'use_rviz': LaunchConfiguration('use_rviz'),
                 'use_hands': LaunchConfiguration('use_hands'),
                 'safety_config': LaunchConfiguration('safety_config'),
-                # the one safety_config runs with: g1_split with split
+                # The one safety_config runs with: g1_split with split.
                 'controller_config': '',
                 'start_position_verified': LaunchConfiguration('start_position_verified'),
                 'use_nav': LaunchConfiguration('use_nav'),

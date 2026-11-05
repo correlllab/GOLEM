@@ -1,5 +1,5 @@
 """
-The bringups of both robots start golem_safety and golem_upper_ik through their launch files.
+Test that both robots' bringups start golem_safety and golem_upper_ik through their launch files.
 
 golem_bringup depends on both packages. For the H1-2, h12_state.launch.py includes
 golem_upper_ik's robot_state.launch.py, and h12_control.launch.py, which needs sim from
@@ -29,6 +29,7 @@ PACKAGE = Path(__file__).resolve().parents[1]
 
 
 def test_package_depends_on_golem_safety_and_golem_upper_ik():
+    """package.xml depends on golem_safety and golem_upper_ik."""
     root = ElementTree.parse(PACKAGE / 'package.xml').getroot()
     depends = {element.text for element in root
                if element.tag in ('depend', 'exec_depend', 'build_depend', 'test_depend')}
@@ -36,6 +37,7 @@ def test_package_depends_on_golem_safety_and_golem_upper_ik():
 
 
 def _load(launch_file):
+    """Import a golem_bringup launch file, found by name, as a module."""
     (path,) = (PACKAGE / 'launch').rglob(launch_file)
     spec = importlib.util.spec_from_file_location(launch_file.split('.')[0], path)
     module = importlib.util.module_from_spec(spec)
@@ -44,6 +46,7 @@ def _load(launch_file):
 
 
 def _text(context, value):
+    """Return a substitution's text in context."""
     return perform_substitutions(context, normalize_to_list_of_substitutions(value))
 
 
@@ -58,6 +61,7 @@ def _context(description, **args):
 
 
 def test_control_sim_has_no_default():
+    """h12_control's sim argument has no default."""
     description = _load('h12_control.launch.py').generate_launch_description()
     (sim,) = [entity for entity in description.entities
               if isinstance(entity, DeclareLaunchArgument) and entity.name == 'sim']
@@ -91,11 +95,12 @@ def _walk(launch_file, **args):
     ('h12_safety_grippers.launch.py', 'false', 'true'),
 ])
 def test_top_level_files_pass_sim_and_use_estop(launch_file, sim, use_estop, monkeypatch):
-    # lmg_sim refuses an unset or 0 ROS_DOMAIN_ID
+    """Each top-level H1-2 file passes h12_control its sim and use_estop, which reach the nodes."""
+    # lmg_sim refuses an unset or 0 ROS_DOMAIN_ID.
     monkeypatch.setenv('ROS_DOMAIN_ID', '193')
     arguments = _passed_to(launch_file, 'h12_control.launch.py')
     assert arguments['sim'] == sim
-    # absent: h12_control.launch.py's default, false
+    # Absent: h12_control.launch.py's default, false.
     assert arguments.get('use_estop', 'false') == use_estop
     nodes = _walk('h12_control.launch.py', **arguments)
     assert nodes['safety_node'].parameters['sim'] == (sim == 'true')
@@ -104,7 +109,7 @@ def test_top_level_files_pass_sim_and_use_estop(launch_file, sim, use_estop, mon
 
 
 def test_lmg_real_refuses_to_start_before_any_node():
-    # lmg_deploy reads /livox/imu as upright and the H1-2's is the raw, upside-down frame
+    """lmg_real refuses first: lmg_deploy reads /livox/imu as upright, the H1-2's is not."""
     description = _load('lmg_real.launch.py').generate_launch_description()
     assert isinstance(description.entities[0], OpaqueFunction)
     with pytest.raises(RuntimeError, match='^lmg_real: not starting: lmg_deploy reads /livox/imu'):
@@ -112,14 +117,14 @@ def test_lmg_real_refuses_to_start_before_any_node():
 
 
 def test_lmg_sim_is_not_guarded(monkeypatch):
+    """lmg_sim has no refusal of its own on a sim domain."""
     monkeypatch.setenv('ROS_DOMAIN_ID', '193')
     description = _load('lmg_sim.launch.py').generate_launch_description()
     assert not any(isinstance(entity, OpaqueFunction) for entity in description.entities)
 
 
 def test_control_checks_the_pair_before_any_node():
-    # golem_upper_ik's launch file checks the pair before it starts the controller, and
-    # h12_control includes it first, so a refusal stops the launch before any node starts
+    """h12_control includes upper_ik.launch.py, which checks the pairing, before anything else."""
     entities = [entity for entity in _load('h12_control.launch.py')
                 .generate_launch_description().entities
                 if not isinstance(entity, DeclareLaunchArgument)]
@@ -137,6 +142,7 @@ def test_control_checks_the_pair_before_any_node():
 ])
 def test_control_refuses_a_mismatched_pair(safety_config, frame_task_config, use_frame_task,
                                            refused):
+    """With frame_task_server, a safety and controller config that do not pair are refused."""
     args = dict(sim=str(safety_config.startswith('sim')).lower(),
                 safety_config=safety_config, frame_task_config=frame_task_config,
                 use_frame_task=use_frame_task)
@@ -153,6 +159,7 @@ def test_control_refuses_a_mismatched_pair(safety_config, frame_task_config, use
 
 
 def test_control_starts_safety_and_the_controller_after_their_delays():
+    """The real robot staggers estop_node, safety_node and frame_task_server; the sim does not."""
     nodes = _walk('h12_control.launch.py', sim='false', use_estop='true')
     assert nodes['estop_node'] == Started('estop', [], 0.0, {'use_sim_time': False})
     assert nodes['safety_node'] == Started('golem_safety', [], 3.0, {
@@ -160,7 +167,7 @@ def test_control_starts_safety_and_the_controller_after_their_delays():
         'use_estop': True, 'use_sim_time': False})
     assert nodes['frame_task_server'] == Started('golem_upper_ik', [], 5.0, {
         'robot': 'h12', 'config': 'safety_split.yaml', 'use_sim_time': False})
-    # the sim bringup waits for no estop
+    # The sim bringup waits for no estop.
     sim = _passed_to('h12_sim.launch.py', 'h12_control.launch.py')
     nodes = _walk('h12_control.launch.py', **sim)
     assert set(nodes) == {'safety_node', 'frame_task_server'}
@@ -172,6 +179,7 @@ def test_control_starts_safety_and_the_controller_after_their_delays():
 
 
 def test_state_starts_golem_upper_ik_robot_state():
+    """h12_state starts golem_upper_ik's two state nodes on urdf_file."""
     sim = _passed_to('h12_sim.launch.py', 'h12_state.launch.py')
     nodes = _walk('h12_state.launch.py', **sim)
     assert set(nodes) == {'robot_state_publisher', 'joint_state_publisher'}
@@ -180,7 +188,7 @@ def test_state_starts_golem_upper_ik_robot_state():
     assert nodes['robot_state_publisher'] == Started('robot_state_publisher', [], 0.0, {
         'robot_description': Path(urdf_path('h12', ros=True)).read_text(),
         'use_sim_time': True})
-    # urdf_file passes through
+    # urdf_file passes through.
     nodes = _walk('h12_state.launch.py', urdf_file=str(PACKAGE / 'package.xml'))
     assert nodes['robot_state_publisher'].parameters['robot_description'] == (
         PACKAGE / 'package.xml').read_text()
@@ -200,6 +208,7 @@ def _passed_to_core(launch_file):
 ])
 def test_core_runs_golem_safety_and_golem_upper_ik(launch_file, sim, safety_config,
                                                    controller_config):
+    """Both G1 bringups start golem_safety's and golem_upper_ik's nodes with robot g1."""
     nodes = _core_nodes(**_passed_to_core(launch_file))
     sim_time = {'use_sim_time': sim}
     assert nodes['safety_node'] == Started('golem_safety', [], 0.0, {

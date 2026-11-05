@@ -1,26 +1,23 @@
 #!/usr/bin/env python3
 """
-Live slider GUI for the H1 sim's frame_task_server and magpie grippers.
+Drive the H1-2's frame_task_server and Magpie grippers from a slider window (Tk).
 
-Twelve sliders (XYZ + RPY for each arm) drive the `/frame_task` action targeting
-the GraspGenX gripper-base frames `left_graspgenx_frame` / `right_graspgenx_frame`
-— i.e. the exact frames the grasp skill commands — so you can replay a grasp pose
-by hand and watch the IK converge or contort. Two more sliders drive the
-left/right magpie `gripper/set_position` services (0 = closed, 1 = fully open,
-mapped to millimetres via the `gripper_max_mm` param).
+    ros2 run golem_bringup slider_debugger.py [--ros-args -p target_frames:="[...]"]
 
-The driven frames default to the graspgenx frames but can be overridden at runtime
-(e.g. back to the wrists) without editing this file:
-    -p target_frames:="['left_wrist_yaw_link','right_wrist_yaw_link']"
+Twelve sliders (x, y, z in m and roll, pitch, yaw in rad for each arm) set /frame_task
+targets for the GraspGenX gripper-base frames, left_graspgenx_frame and
+right_graspgenx_frame, the frames the grasp skill commands, so a grasp pose can be
+replayed by hand to watch the IK converge or contort. Two more sliders set each
+gripper's gripper/set_position (0 closed, 1 open, scaled by gripper_max_mm). Send sends
+all of them; each send cancels the arm goal in flight, and closing the window cancels
+the last one.
 
-Note on orientation: RPY is the xyz-euler of the DRIVEN frame in `pelvis`. For the
-graspgenx frames, +Z is the approach axis (the home RPY 0,0,0 points it along
-pelvis +Z); set RPY = 1.5708 0 1.5708 to match the wrist's identity orientation.
+The pose is the driven frame's position and xyz-Euler angles in pelvis. For the
+graspgenx frames +z is the approach axis (roll, pitch, yaw 0 points it along pelvis +z);
+1.5708 0 1.5708 matches the wrist's identity orientation.
 
-Usage:
-    ros2 run golem_bringup slider_debugger.py
-    # or
-    python3 core_ws/src/golem_bringup/scripts/slider_debugger.py
+ROS parameters: target_frames (the two frames driven, left then right),
+left_gripper_service, right_gripper_service, gripper_max_mm (mm, the fully open width).
 """
 
 import math
@@ -38,16 +35,17 @@ from custom_ros_messages.action import FrameTask
 from magpie_msgs.srv import SetGripperPosition
 
 
-# Frames the sliders drive via /frame_task. Default to the GraspGenX gripper-base
-# frames so the slider commands exactly what the grasp skill commands; override at
-# runtime with -p target_frames:="[...]" (e.g. the wrist_yaw_link frames).
+# The default target_frames: the frames the grasp skill commands.
 TARGET_FRAMES = ('left_graspgenx_frame', 'right_graspgenx_frame')
-SPIN_PERIOD_MS = 100
-GOAL_DURATION_SEC = 30
+SPIN_PERIOD_MS = 100  # ms between ROS spins from the Tk loop
+GOAL_DURATION_SEC = 30  # s, each /frame_task goal's duration
 
 
 class SliderDebugger(Node):
+    """Send /frame_task goals and gripper positions from the sliders' values."""
+
     def __init__(self):
+        """Declare the parameters and create the action and service clients."""
         super().__init__('slider_debugger')
 
         self.declare_parameter('left_gripper_service', '/left/gripper/set_position')
@@ -64,7 +62,7 @@ class SliderDebugger(Node):
         self.right_gripper_cli = self.create_client(SetGripperPosition,
                                                     self.right_gripper_srv_name)
 
-        # XYZ in pelvis + RPY (xyz-euler) of the driven frame.
+        # m in pelvis, then rad (xyz-Euler) of the driven frame.
         self._initial_left = (0.3, 0.2, 0.1, 0.0, 0.0, 0.0)
         self._initial_right = (0.3, -0.2, 0.1, 0.0, 0.0, 0.0)
 
@@ -73,6 +71,7 @@ class SliderDebugger(Node):
         self._warned_right_grip = False
 
     def _build_pose(self, x, y, z, r, p, yw) -> Pose:
+        """Return the Pose of a position (m) and xyz-Euler angles (rad)."""
         qx, qy, qz, qw = Rotation.from_euler('xyz', [r, p, yw]).as_quat()
         return Pose(
             position=Point(x=float(x), y=float(y), z=float(z)),
@@ -80,6 +79,7 @@ class SliderDebugger(Node):
         )
 
     def send_targets(self, left_xyzrpy, right_xyzrpy):
+        """Cancel the goal in flight and send both frames' targets, if the server is up."""
         if not self.frame_task_cli.server_is_ready():
             return
         if self._goal_handle is not None:
@@ -101,6 +101,7 @@ class SliderDebugger(Node):
         send_future.add_done_callback(self._on_goal_response)
 
     def _on_goal_response(self, future):
+        """Keep the accepted goal's handle so the next send can cancel it."""
         try:
             handle = future.result()
         except Exception as exc:
@@ -110,6 +111,7 @@ class SliderDebugger(Node):
             self._goal_handle = handle
 
     def send_gripper(self, side: str, slider_val: float):
+        """Set one gripper's opening (0 closed, 1 open); warn once if its service is down."""
         cli = self.left_gripper_cli if side == 'left' else self.right_gripper_cli
         warned_attr = '_warned_left_grip' if side == 'left' else '_warned_right_grip'
         srv_name = self.left_gripper_srv_name if side == 'left' else self.right_gripper_srv_name
@@ -125,6 +127,7 @@ class SliderDebugger(Node):
         cli.call_async(req)
 
     def cancel_active_goal(self):
+        """Cancel the /frame_task goal in flight, if any."""
         if self._goal_handle is not None:
             try:
                 self._goal_handle.cancel_goal_async()
@@ -134,6 +137,7 @@ class SliderDebugger(Node):
 
 
 def _build_wrist_sliders(parent, label_prefix: str, init_xyzrpy):
+    """Return {axis: Scale} of one frame's six sliders, set to init_xyzrpy."""
     sliders = {}
     for name, lo, hi in (('X', -1.0, 1.0), ('Y', -1.0, 1.0), ('Z', -1.0, 1.0)):
         s = tk.Scale(parent, label=f'{label_prefix} {name}',
@@ -157,11 +161,13 @@ def _build_wrist_sliders(parent, label_prefix: str, init_xyzrpy):
 
 
 def _read_wrist(sliders):
+    """Return the six sliders' values as (x, y, z, roll, pitch, yaw)."""
     return (sliders['X'].get(), sliders['Y'].get(), sliders['Z'].get(),
             sliders['Roll'].get(), sliders['Pitch'].get(), sliders['Yaw'].get())
 
 
 def main():
+    """Open the slider window and spin the node from the Tk loop until it closes."""
     rclpy.init()
     node = SliderDebugger()
 
@@ -190,6 +196,7 @@ def main():
     right_grip.pack(pady=2)
 
     def on_send():
+        """Send the arm targets and both gripper positions."""
         if not rclpy.ok():
             return
         left_xyzrpy = _read_wrist(left_sliders)
@@ -203,6 +210,7 @@ def main():
     send_button.pack(side=tk.BOTTOM, pady=10)
 
     def on_close():
+        """Cancel the arm goal and close the window."""
         node.cancel_active_goal()
         try:
             root.destroy()
@@ -212,6 +220,7 @@ def main():
     root.protocol('WM_DELETE_WINDOW', on_close)
 
     def spin_tick():
+        """Spin the node once and schedule the next spin."""
         if rclpy.ok():
             rclpy.spin_once(node, timeout_sec=0.0)
             root.after(SPIN_PERIOD_MS, spin_tick)

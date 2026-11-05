@@ -1,3 +1,20 @@
+"""
+Start the loco-manipulation game against the x86 sim: lmg_deploy's MARL policy on all 27 joints.
+
+    ros2 launch golem_bringup lmg_sim.launch.py policy:=mid360v2
+
+Start the simulator first. Everything starts at once: the state publishers
+(h12_state), the command path (h12_control without frame_task_server, no estop, no
+delay), the policy (h12_locomanipulationgame, with the start pose taken as verified and
+no operator confirm), navigation (use_slam) and RViz for Nav2 goals (use_rviz).
+safety_config defaults to the real robot's preset, relax_safety_split: the policy was
+trained against its estops, and the sim is where to see that it does not trip them.
+lmg_real.launch.py is the real-robot counterpart.
+
+SAFETY: this launch engages and walks without an operator, so it refuses an unset or 0
+ROS_DOMAIN_ID (domain 0, also the DDS default, is the real robot's command bus) before
+any node starts.
+"""
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -10,23 +27,12 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-# Loco-manipulation game bringup (x86 sim): the state publishers, the split
-# safety layer with the real robot's preset (relax_safety_split: the policy was
-# trained against its e-stops, and the sim is where to see that it doesn't trip
-# them), h12_locomanipulationgame.launch.py with no operator confirm, and the
-# golem_slam navigation stack (use_slam), with rviz (use_rviz) for nav2 goals. Start the
-# simulator first. The real-robot counterpart is
-# lmg_real.launch.py.
-#
-# ROS_DOMAIN_ID must be exported in the launching shell (see
-# h12_control.launch.py), and not as 0: this launch engages and walks without an
-# operator, and domain 0 (also the DDS default when the variable is unset) is
-# the real robot's command bus.
-
+# The arguments passed through to h12_locomanipulationgame.launch.py as they are.
 GAME_ARGS = ('policy', 'prepose_ramp_s', 'prepose_max_vel')
 
 
 def _include(package, launch_file, launch_arguments, condition=None):
+    """Include a package's launch file with the given arguments."""
     return IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory(package), 'launch', launch_file)),
@@ -36,6 +42,7 @@ def _include(package, launch_file, launch_arguments, condition=None):
 
 
 def generate_launch_description():
+    """Refuse the real robot's domain, then declare the game's arguments and blocks."""
     if os.environ.get('ROS_DOMAIN_ID', '').strip() in ('', '0'):
         raise RuntimeError(
             'lmg_sim: ROS_DOMAIN_ID is unset or 0, the real robot\'s bus. '
@@ -46,40 +53,58 @@ def generate_launch_description():
     sim_time = {'use_sim_time': LaunchConfiguration('use_sim_time')}
 
     return LaunchDescription([
-        DeclareLaunchArgument('use_sim_time', default_value='true'),
-        DeclareLaunchArgument('policy', description='policies/<name>/ of lmg_deploy (required)'),
-        DeclareLaunchArgument('prepose_ramp_s', default_value='6.0'),
-        DeclareLaunchArgument('prepose_max_vel', default_value='0.25'),
-        DeclareLaunchArgument('safety_config', default_value='relax_safety_split.yaml'),
-        DeclareLaunchArgument('use_slam', default_value='true'),
-        DeclareLaunchArgument('use_rviz', default_value='true'),
+        DeclareLaunchArgument('use_sim_time', default_value='true',
+                              description='true: every node runs on the simulator /clock'),
+        DeclareLaunchArgument('policy',
+                              description='Required. The policy, policies/<name>/ of '
+                                          'lmg_deploy (it ships mid360v2)'),
+        DeclareLaunchArgument('prepose_ramp_s', default_value='6.0',
+                              description='s, the shortest ramp into the default pose'),
+        DeclareLaunchArgument('prepose_max_vel', default_value='0.25',
+                              description='rad/s, the fastest joint target during that ramp; '
+                                          'it lengthens the ramp'),
+        DeclareLaunchArgument('safety_config', default_value='relax_safety_split.yaml',
+                              description='golem_safety config: a name under its config/h12/, '
+                                          'or a path'),
+        DeclareLaunchArgument('use_slam', default_value='true',
+                              description="true: start golem_slam's navigation, which also "
+                                          "gives the policy /Odometry for its arm goals"),
+        DeclareLaunchArgument('use_rviz', default_value='true',
+                              description='true: start RViz on rviz_config'),
         DeclareLaunchArgument(
-            'rviz_config', default_value=os.path.join(bringup_share, 'rviz', 'h12', 'main.rviz')),
+            'rviz_config', default_value=os.path.join(bringup_share, 'rviz', 'h12', 'main.rviz'),
+            description='RViz config file (path)'),
 
+        # TF of the body from /lowstate.
         _include('golem_bringup', 'h12/h12_state.launch.py', {
             **sim_time,
             'urdf_file': urdf_path('h12', ros=True),
         }),
+        # safety_node alone: the policy owns both of its inputs, so no
+        # frame_task_server runs.
         _include('golem_bringup', 'h12/h12_control.launch.py', {
             **sim_time,
             'sim': 'true',
             'use_frame_task': 'false',
             'safety_config': LaunchConfiguration('safety_config'),
-            # no hardware e-stop node in sim to wait for
+            # No hardware estop in the sim, so nothing to wait for.
             'safety_delay': '0.0',
         }),
+        # The policy, on all 27 joints.
         _include('golem_bringup', 'h12/h12_locomanipulationgame.launch.py', {
             **sim_time,
             **{name: LaunchConfiguration(name) for name in GAME_ARGS},
             'urdf_path': urdf_path('h12'),
             'start_position_verified': 'true',
-            # engages as soon as the pre-pose settles, with no operator confirm
+            # Engages as soon as the pre-pose settles, with no operator confirm.
             'engage_wait_for_confirm': 'false',
             'disable_elastic_band': 'true',
         }),
+        # SLAM and Nav2, driving the policy on /cmd_vel.
         _include('golem_slam', 'navigation.launch.py', {**sim_time, 'robot': 'h12'},
                  condition=IfCondition(LaunchConfiguration('use_slam'))),
 
+        # The operator's view, and where Nav2 goals are set.
         Node(
             package='rviz2',
             executable='rviz2',

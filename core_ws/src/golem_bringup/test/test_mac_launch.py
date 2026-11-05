@@ -1,5 +1,5 @@
 """
-The Mac's H1-2 sim bringup includes the x86 sim's blocks and golem_slam's navigation.
+Test that the Mac's H1-2 sim bringup includes the x86 sim's blocks and golem_slam's navigation.
 
 h12_sim_mac.launch.py includes h12_state and h12_control with the arguments
 h12_sim.launch.py passes them, h12_lowerbody when GOLEM_LOWERBODY names a policy, and
@@ -30,6 +30,7 @@ def env(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
     def set_env(**values):
+        """Set the given environment variables for the test."""
         for name, value in values.items():
             monkeypatch.setenv(name, value)
     return set_env
@@ -53,6 +54,7 @@ def _includes():
 
 @pytest.mark.parametrize('lowerbody', [None, ''])
 def test_no_toggles_start_state_and_control(env, lowerbody):
+    """With no toggles, only h12_state and h12_control, with the x86 sim's arguments."""
     if lowerbody is not None:
         env(GOLEM_LOWERBODY=lowerbody)
     includes = _includes()
@@ -63,13 +65,14 @@ def test_no_toggles_start_state_and_control(env, lowerbody):
 
 @pytest.mark.parametrize('policy', ['almi', 'fame', 'walk', ' ALMI '])
 def test_lowerbody_includes_the_leg_block(env, policy):
+    """GOLEM_LOWERBODY includes the leg block with that policy and the x86 sim's arguments."""
     env(GOLEM_LOWERBODY=policy)
     includes = _includes()
     assert set(includes) == {'h12_state.launch.py', 'h12_control.launch.py',
                              'h12_lowerbody.launch.py'}
     arguments = includes['h12_lowerbody.launch.py']
     assert arguments['lowerbody'] == policy.strip().lower()
-    # the x86 sim's arguments, its lowerbody launch argument aside
+    # The x86 sim's arguments, its lowerbody launch argument aside.
     assert arguments == dict(_passed_to('h12_sim.launch.py', 'h12_lowerbody.launch.py'),
                              lowerbody=policy.strip().lower())
     assert arguments['start_position_verified'] == 'true'
@@ -79,6 +82,7 @@ def test_lowerbody_includes_the_leg_block(env, policy):
 
 @pytest.mark.parametrize('policy', ['bogus', 'mjpc'])
 def test_unknown_lowerbody_is_refused(env, policy):
+    """An unknown GOLEM_LOWERBODY is refused, naming the policies."""
     env(GOLEM_LOWERBODY=policy)
     with pytest.raises(RuntimeError, match=f"GOLEM_LOWERBODY={policy!r}.*fame, walk, almi"):
         _includes()
@@ -91,6 +95,7 @@ def test_unknown_lowerbody_is_refused(env, policy):
     dict(GOLEM_NAV2='ON'),
 ])
 def test_slam_or_nav2_includes_navigation(env, toggles):
+    """GOLEM_SLAM or GOLEM_NAV2 includes golem_slam's navigation for the H1-2."""
     env(**toggles)
     includes = _includes()
     assert set(includes) == {'h12_state.launch.py', 'h12_control.launch.py', 'navigation'}
@@ -100,5 +105,6 @@ def test_slam_or_nav2_includes_navigation(env, toggles):
 
 @pytest.mark.parametrize('value', ['0', 'off', 'false'])
 def test_slam_and_nav2_off(env, value):
+    """Off values of both toggles include no navigation."""
     env(GOLEM_SLAM=value, GOLEM_NAV2=value)
     assert 'navigation' not in _includes()

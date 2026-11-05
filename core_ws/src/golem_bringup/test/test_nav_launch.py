@@ -1,5 +1,5 @@
 """
-use_nav and use_skills in the G1 bringup, and the H1-2 bringups' navigation includes.
+Test use_nav and use_skills in the G1 bringup, and the H1-2 bringups' navigation includes.
 
 g1_core includes golem_slam's navigation.launch.py, on by default, with robot g1
 and the sim's or the real robot's arguments, beside the walking node the sim
@@ -45,6 +45,7 @@ def _includes(**args):
 
 
 def _location(include):
+    """Return the path of the launch file include includes."""
     include.launch_description_source.get_launch_description(LaunchContext())
     return include.launch_description_source.location
 
@@ -53,10 +54,11 @@ def _nav_include(**args):
     """Return (path, {argument: value}) of golem_slam's launch file g1_core includes with args."""
     (include,) = [i for i in _includes(**args) if _location(i) == NAV_LAUNCH]
     context = LaunchContext()
-    include.launch_description_source.get_launch_description(context)   # resolves its location
+    include.launch_description_source.get_launch_description(context)  # resolves its location
     path = include.launch_description_source.location
 
     def text(value):
+        """Return a substitution's text in context."""
         return perform_substitutions(context, normalize_to_list_of_substitutions(value))
     return path, {text(key): text(value) for key, value in include.launch_arguments}
 
@@ -72,7 +74,7 @@ def _nav_nodes(path, arguments):
     declared = {e.name: e for e in description.entities if isinstance(e, DeclareLaunchArgument)}
     assert set(arguments) <= set(declared), \
         f'not declared by {path}: {set(arguments) - set(declared)}'
-    # the arguments first: navigation.launch.py's file defaults name the robot
+    # The arguments first: navigation.launch.py's file defaults name the robot.
     context = LaunchContext()
     context.launch_configurations.update(arguments)
     for name, declaration in declared.items():
@@ -83,7 +85,7 @@ def _nav_nodes(path, arguments):
     nodes = {}
     for action in setup.execute(context):
         if isinstance(action, (IncludeLaunchDescription, GroupAction)):
-            continue  # the shared pipeline includes Nav2 navigation_launch.py
+            continue  # Nav2's navigation_launch.py
         assert isinstance(action, Node)
         values, files = {}, []
         for params in evaluate_parameters(context, action._Node__parameters):
@@ -96,7 +98,7 @@ def _nav_nodes(path, arguments):
 
 
 def test_nav_is_on_by_default():
-    # the core, the sim bringup and the real bringup start navigation unless told not to
+    """The core, the sim bringup and the real bringup start navigation unless told not to."""
     assert [_location(i) for i in _includes(**SIM)] == [NAV_LAUNCH]
     for launch_file in ('g1_sim.launch.py', 'g1_real_robot.launch.py'):
         passed = _passed_to_core(launch_file)
@@ -105,6 +107,7 @@ def test_nav_is_on_by_default():
 
 
 def test_real_bringup_starts_the_lidar_driver_and_the_real_fastlio_config():
+    """The real G1 starts the MID-360 driver and golem_slam on the real FAST-LIO config."""
     passed = _passed_to_core('g1_real_robot.launch.py', **REAL_VERIFIED)
     includes = _includes(**passed)
     drivers = os.path.join(get_package_share_directory('golem_bringup'), 'launch', 'g1',
@@ -116,7 +119,7 @@ def test_real_bringup_starts_the_lidar_driver_and_the_real_fastlio_config():
     _, values, files = nodes['fast_lio']
     assert files == [os.path.join(G1_CONFIG, 'fastlio.yaml')]
     assert values.get('use_sim_time') is False
-    # the driver: CustomMsg at FAST_LIO's 10 Hz, on the G1's config
+    # The driver: CustomMsg at FAST-LIO's 10 Hz, on the G1's config.
     description = PythonLaunchDescriptionSource(drivers).get_launch_description(LaunchContext())
     (driver,) = [e for e in description.entities if isinstance(e, Node)]
     context = _context(description)
@@ -124,15 +127,16 @@ def test_real_bringup_starts_the_lidar_driver_and_the_real_fastlio_config():
     assert (params['xfer_format'], params['publish_freq'], params['frame_id']) == (
         1, 10.0, 'livox_frame')
     assert params['user_config_path'] == os.path.join(G1_CONFIG, 'MID360_config.json')
-    # the sim publishes its own lidar
+    # The sim publishes its own lidar.
     sim = _passed_to_core('g1_sim.launch.py')
     assert [_location(i) for i in _includes(**sim)] == [NAV_LAUNCH]
 
 
 def test_sim_bringup_includes_navigation():
+    """The G1 sim includes golem_slam on sim time and the sim's FAST-LIO config."""
     passed = _passed_to_core('g1_sim.launch.py', use_nav='true')
     assert passed['use_nav'] == 'true'
-    # the walking node starts; navigation comes with the core, on sim time
+    # The walking node starts; navigation comes with the core, on sim time.
     assert 'locomotion_node' in _core_nodes(**passed)
     path, arguments = _nav_include(**passed)
     assert path == NAV_LAUNCH
@@ -141,18 +145,17 @@ def test_sim_bringup_includes_navigation():
     assert arguments['fast_lio_config'].endswith('config/g1/fastlio_sim.yaml')
 
     nodes = _nav_nodes(path, arguments)
-    # the sim's FAST_LIO config: the raw sensor frame, every point kept
+    # The sim's FAST-LIO config.
     _, _, files = nodes['fast_lio']
     assert files == [os.path.join(G1_CONFIG, 'fastlio_sim.yaml')]
     for name, (_, values, _) in nodes.items():
         if name.endswith('_tf'):
-            continue   # static_transform_publisher: arguments only
-        # The shared pipeline consistently uses simulation time.
+            continue  # static_transform_publisher: arguments only
         assert values.get('use_sim_time') is True, name
 
 
 def test_use_skills_is_declared_and_starts_golem_skills():
-    # an argument of the sim bringup and of g1_core, off by default
+    """use_skills, off by default in g1_sim and g1_core, starts golem_skills when on."""
     for launch_file in ('g1_sim.launch.py', 'g1_core.launch.py'):
         description = _load(launch_file).generate_launch_description()
         declared = {e.name: e for e in description.entities
@@ -163,7 +166,7 @@ def test_use_skills_is_declared_and_starts_golem_skills():
         assert default == 'false', launch_file
     assert _passed_to_core('g1_sim.launch.py')['use_skills'] == 'false'
 
-    # the sim bringup hands it to g1_core, which starts golem_skills only when asked
+    # The sim bringup hands it to g1_core, which starts golem_skills only when asked.
     for value in ('true', 'false'):
         passed = _passed_to_core('g1_sim.launch.py', use_nav='true', use_skills=value)
         assert passed['use_skills'] == value
@@ -171,13 +174,13 @@ def test_use_skills_is_declared_and_starts_golem_skills():
 
 
 def test_core_passes_use_sim_time_on():
-    # g1_core's use_sim_time reaches golem_slam as it reaches the core's nodes
+    """g1_core's use_sim_time reaches golem_slam as it reaches the core's nodes."""
     _, arguments = _nav_include(**dict(SIM, use_nav='true', use_sim_time='false'))
     assert arguments['use_sim_time'] == 'false'
 
 
 def test_sim_nav_without_use_locomotion():
-    # the sim always starts the walking node, which Nav2 drives through /cmd_vel
+    """The sim always starts the walking node, which Nav2 drives through /cmd_vel."""
     passed = _passed_to_core('g1_sim.launch.py', use_nav='true')
     assert 'use_locomotion' not in passed
     nodes = _core_nodes(**passed)
@@ -188,12 +191,14 @@ def test_sim_nav_without_use_locomotion():
 
 
 def test_real_nav_with_the_legs():
+    """The real G1 with verified legs starts both navigation and the walking node."""
     passed = _passed_to_core('g1_real_robot.launch.py', **REAL_VERIFIED)
     assert (passed['sim'], passed['use_nav']) == ('false', 'true')
     assert 'locomotion_node' in _core_nodes(**passed)
 
 
 def _launch_module(path):
+    """Import a launch file at path as a module."""
     spec = importlib.util.spec_from_file_location(os.path.basename(path).split('.')[0], path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -208,7 +213,8 @@ def _launch_module(path):
     ('golem_bringup', 'h12/h12_real_slam.launch.py'),
 ])
 def test_every_h12_includer_passes_robot_h12(package, launch_file, monkeypatch):
-    monkeypatch.setenv('ROS_DOMAIN_ID', '87')   # lmg_sim refuses an unset or 0 domain
+    """Every H1-2 file that includes navigation passes robot h12 and its clock."""
+    monkeypatch.setenv('ROS_DOMAIN_ID', '87')  # lmg_sim refuses an unset or 0 domain
     path = os.path.join(get_package_share_directory(package), 'launch', launch_file)
     description = _launch_module(path).generate_launch_description()
     context = _context(description)
@@ -217,6 +223,7 @@ def test_every_h12_includer_passes_robot_h12(package, launch_file, monkeypatch):
     assert len(includes) == 1, launch_file
 
     def text(value):
+        """Return a substitution's text in context."""
         return perform_substitutions(context, normalize_to_list_of_substitutions(value))
     arguments = {text(key): text(value) for key, value in includes[0].launch_arguments}
     assert arguments['robot'] == 'h12'

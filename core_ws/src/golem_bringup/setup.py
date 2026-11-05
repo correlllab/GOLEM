@@ -1,3 +1,4 @@
+"""Install golem_bringup's launch files, configs, RViz configs and slider_debugger.py."""
 import os
 from glob import glob
 
@@ -32,10 +33,6 @@ setup(
     extras_require={
         'test': [
             'pytest',
-        ],
-    },
-    entry_points={
-        'console_scripts': [
         ],
     },
 )

@@ -1,3 +1,11 @@
+"""
+Start the perception model servers and the /skill/* action servers.
+
+All start at once: gemini_server and sam_server always, yolo_server with use_yolo, and
+graspgen_server and golem_skills with use_skills. golem_skills waits up to 10 s in
+total for the perception and gripper services and the arm actions (a missing one is
+not fatal), then serves goals.
+"""
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
@@ -6,31 +14,32 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 
-# Perception model servers (model_server) and the /skill/* action servers.
-
-
 def generate_launch_description():
+    """Declare the model block's arguments and start its nodes."""
     args = [
         DeclareLaunchArgument(
             'use_sim_time', default_value='false',
-            description='Use the simulator /clock if true'),
+            description='true: every node runs on the simulator /clock'),
         DeclareLaunchArgument(
             'use_skills', default_value='true',
-            description='Start graspgen_server and the golem_skills action servers'),
+            description='true: start graspgen_server and the golem_skills action servers'),
         DeclareLaunchArgument(
             'use_yolo', default_value='false',
-            description='Start the YOLO-World detection publisher'),
-        # Per-model debug logging + visualization, shared by the graspgen,
-        # gemini, sam, yolo and skills nodes. clear_logs wipes each model's dir
-        # on startup so every run begins fresh. Output lands in each package's
-        # logs/<model>/.
-        DeclareLaunchArgument('model_logging', default_value='true'),
-        DeclareLaunchArgument('model_visualization', default_value='true'),
-        DeclareLaunchArgument('model_clear_logs', default_value='true'),
-        # golem_skills per-run base-sway telemetry (run_telemetry.py): each grasp /
-        # pick_place run writes logs/runs/<skill>/<stamp>/ with a 10 Hz
-        # telemetry.csv + result.json.
-        DeclareLaunchArgument('record_runs', default_value='true'),
+            description='true: start the YOLO-World detection publisher'),
+        # Each node's debug output lands in its package's logs/<model>/.
+        DeclareLaunchArgument('model_logging', default_value='true',
+                              description="true: every node saves each call's inputs and "
+                                          'outputs (enable_logging)'),
+        DeclareLaunchArgument('model_visualization', default_value='true',
+                              description='true: every node saves annotated overlay images '
+                                          '(enable_visualization)'),
+        DeclareLaunchArgument('model_clear_logs', default_value='true',
+                              description="true: each node wipes its log directory at "
+                                          'start-up (clear_logs)'),
+        DeclareLaunchArgument('record_runs', default_value='true',
+                              description='true: golem_skills records each grasp and '
+                                          'pick_place run (base-sway telemetry) under its '
+                                          'logs/runs/<skill>/<stamp>/'),
     ]
 
     sim_time_param = {'use_sim_time': ParameterValue(
@@ -49,6 +58,7 @@ def generate_launch_description():
     }
 
     return LaunchDescription(args + [
+        # Gemini VLM queries (/gemini_query), which the skills use to find objects.
         Node(
             package='model_server',
             executable='gemini_server',
@@ -57,6 +67,7 @@ def generate_launch_description():
             output='screen',
             emulate_tty=True,
         ),
+        # SAM3 segmentation (/sam_segment) of what Gemini found.
         Node(
             package='model_server',
             executable='sam_server',
@@ -66,12 +77,9 @@ def generate_launch_description():
             emulate_tty=True,
         ),
 
-        # YOLO-World open-vocabulary detection. Subscribes to the head + both
-        # hand color cameras (its DEFAULT_IMAGE_TOPICS) and publishes a
-        # DetectionBundle on <image_topic>/detections at 5 Hz per camera, using
-        # the fine-tuned battery weights (weights/yolo_world_battery_best.pt).
-        # The vocabulary is read live from the `queries` param, e.g.:
-        #   ros2 param set /yolo_server queries "['Bolt','Nut','Screw']"
+        # YOLO-World open-vocabulary detection on the head and hand cameras, each
+        # on <image_topic>/detections; the vocabulary is its live `queries`
+        # parameter (yolo_server's docstring).
         Node(
             package='model_server',
             executable='yolo_server',
@@ -82,7 +90,7 @@ def generate_launch_description():
             condition=IfCondition(LaunchConfiguration('use_yolo')),
         ),
 
-        # GraspGenX grasp planning loads a heavy GPU model, so it is gated with
+        # GraspGenX grasp planning loads a heavy GPU model, so it starts only with
         # the skills that use it; the grasp skill chains
         # gemini -> sam -> graspgen -> frame_task.
         Node(
@@ -95,9 +103,7 @@ def generate_launch_description():
             condition=IfCondition(LaunchConfiguration('use_skills')),
         ),
 
-        # On startup the skills node waits ~10 s each (non-fatal) on the vision
-        # and graspgen services, the grippers, and frame_task, then idles ready
-        # for goals.
+        # The LLM-callable /skill/* action servers.
         Node(
             package='golem_skills',
             executable='skills',

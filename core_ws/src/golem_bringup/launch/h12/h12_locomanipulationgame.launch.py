@@ -1,3 +1,13 @@
+"""
+Start lmg_deploy's marl_deploy_node: the loco-manipulation game's MARL policy.
+
+The policy commands all 27 joints through safety_node's split inputs, so frame_task_server
+and the lower-body RL node must not run beside it. lmg_sim.launch.py and
+lmg_real.launch.py include this file and start the state publishers, the safety layer
+and SLAM. The node starts only with start_position_verified:=true; it ramps the joints
+to the policy's default pose, holds it until ~/confirm_engage (with
+engage_wait_for_confirm) and holds its arm goals in the world by SLAM's /Odometry.
+"""
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -6,50 +16,45 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-# Loco-manipulation game: the Locomanipulation_game MARL policy
-# (lmg_deploy's marl_deploy_node, all 27 joints through the split
-# safety layer). Included by lmg_sim.launch.py
-# and lmg_real.launch.py, which start the state publishers, the safety
-# layer and SLAM.
-#
-# marl_deploy_node owns both safety channels, so frame_task_server and the
-# lower-body RL node must not run beside it.
-
 
 def generate_launch_description():
+    """Declare the policy's arguments and start marl_deploy_node behind the interlock."""
     deploy_share = get_package_share_directory('lmg_deploy')
     policy_dir = PathJoinSubstitution([deploy_share, 'policies', LaunchConfiguration('policy')])
     use_sim_time = ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool)
     policy_on = LaunchConfiguration('start_position_verified')
 
     return LaunchDescription([
-        DeclareLaunchArgument('use_sim_time', default_value='false'),
+        DeclareLaunchArgument('use_sim_time', default_value='false',
+                              description='true: the node runs on the simulator /clock'),
         DeclareLaunchArgument(
             'urdf_path',
-            description='Pinocchio URDF for the wrist kinematics (h1_2_magpie.urdf)'),
-        # Interlock: the policy node doesn't start until the operator has
-        # verified the robot is in a safe start position.
+            description='Required. Pinocchio URDF for the wrist kinematics (path of '
+                        "golem_ros2_models' h1_2_magpie.urdf)"),
+        # SAFETY: the interlock; the policy node starts only once the operator has
+        # checked the robot is in a safe start pose.
         DeclareLaunchArgument('start_position_verified', default_value='false',
-                              description='Start marl_deploy_node'),
+                              description='true only after checking the start pose: starts '
+                                          'marl_deploy_node'),
         DeclareLaunchArgument(
             'policy',
-            description='policies/<name>/ of lmg_deploy: <name>.yaml plus the export (required; '
-                        'lmg_deploy ships mid360v2)'),
+            description='Required. policies/<name>/ of lmg_deploy: <name>.yaml plus the '
+                        'export (lmg_deploy ships mid360v2)'),
         DeclareLaunchArgument('engage_wait_for_confirm', default_value='true',
-                              description='hold the pre-pose until ~/confirm_engage'),
+                              description='true: hold the pre-pose until ~/confirm_engage'),
         DeclareLaunchArgument('prepose_ramp_s', default_value='6.0',
-                              description='minimum duration [s] of the ramp into the default '
-                                          'pose'),
+                              description='s, the shortest ramp into the default pose'),
         DeclareLaunchArgument('prepose_max_vel', default_value='0.25',
-                              description='peak joint target speed [rad/s] during that ramp; '
-                                          'lengthens it'),
+                              description='rad/s, the fastest joint target during that ramp; '
+                                          'it lengthens the ramp'),
         DeclareLaunchArgument('disable_elastic_band', default_value='false',
-                              description="release the sim's elastic band through "
-                                          '/elastic_band/toggle once engaged'),
+                              description="true: release the sim's elastic band through "
+                                          '/elastic_band/toggle once engaged (sim only)'),
         *[DeclareLaunchArgument(f'imu_offset_{axis}_deg', default_value='0.0',
                                 description=f'startup IMU {axis} trim [deg]: its reading with the '
                                             'torso level (live: ros2 param set)')
           for axis in ('roll', 'pitch', 'yaw')],
+        # The policy on all 27 joints, through safety_node's split inputs.
         Node(
             package='lmg_deploy',
             executable='marl_deploy_node',

@@ -1,4 +1,4 @@
-"""Host-side Docker workflow regressions; no daemon or GPU required."""
+"""Check the Docker wrappers, launchers and compose files on the host, with a stub docker and no GPU."""
 import json
 import os
 from pathlib import Path
@@ -11,7 +11,14 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 class Workflows(unittest.TestCase):
+    """Run the wrappers in a fixture checkout against a stub docker that logs its calls."""
+
     def setUp(self):
+        """Copy docker/ into a fixture checkout with stand-in files and put the stub docker on PATH.
+
+        The stub logs every call, answers `inspect` (EXISTING set: the container exists) and
+        `info`, and runs the real `docker compose config`.
+        """
         self.tmp = tempfile.TemporaryDirectory(prefix='golem test ')
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -49,14 +56,17 @@ if 'config' in sys.argv:
         self.env.update(PATH=str(self.bin) + ':' + os.environ['PATH'], CALLS=str(self.root / 'calls'), DISPLAY='')
 
     def run_script(self, path, *args, **env):
+        """Run a script of the fixture checkout with `env` added to the environment."""
         return subprocess.run(['bash', str(self.root / path), *args], cwd='/tmp',
                               env=dict(self.env, **env), text=True, capture_output=True)
 
     def calls(self):
+        """Return the stub docker's calls so far, each as its argument list."""
         p = self.root / 'calls'
         return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
 
     def test_pull_refreshes_upstream_base_without_pulling_local_child_base(self):
+        """--pull refreshes the upstream base image but not golem_base, the local base of the child image."""
         r = self.run_script('docker/scripts/docker_build.sh', '--pull', '--no-cache', 'robocasa')
         self.assertEqual(r.returncode, 0, r.stderr)
         builds = [c for c in self.calls() if 'build' in c]
@@ -66,16 +76,19 @@ if 'config' in sys.argv:
         self.assertTrue(all('--no-cache' in c for c in builds))
 
     def test_run_never_force_removes_existing_container(self):
+        """docker_run.sh without --restart never force-removes a container."""
         r = self.run_script('docker/scripts/docker_run.sh', 'robocasa', '--headless')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse(any(c[:2] == ['rm', '-f'] for c in self.calls()))
 
     def test_zero_with_leading_zeros_is_rejected(self):
+        """ROS_DOMAIN_ID=00, domain 0 spelled with a leading zero, is refused for a sim."""
         r = self.run_script('docker/scripts/docker_run.sh', 'robocasa', ROS_DOMAIN_ID='00')
         self.assertNotEqual(r.returncode, 0)
         self.assertFalse(any('run' in c for c in self.calls()))
 
     def test_missing_source_fails_before_container_creation(self):
+        """A missing sim source fails, naming the file, before any container is created."""
         (self.root / 'golem_robocasa/h12_mujoco.py').unlink()
         r = self.run_script('docker/scripts/docker_run.sh', 'robocasa')
         self.assertNotEqual(r.returncode, 0)
@@ -83,11 +96,12 @@ if 'config' in sys.argv:
         self.assertFalse(any('run' in c for c in self.calls()))
 
     def test_isaac_launcher_forwards_options_without_a_terminal(self):
+        """launch_isaac.sh forwards --task and the options after --, adds --headless, and passes the domain."""
         interpreter = self.root / 'isaac lab/_isaac_sim/python.sh'
         interpreter.parent.mkdir(parents=True)
         interpreter.write_text("#!/usr/bin/env python3\nimport json, os, sys\nprint(json.dumps({'args':sys.argv[1:],'domain':os.environ['ROS_DOMAIN_ID']}))\n")
         interpreter.chmod(0o755)
-        # Isolate the compatibility symlink's host filesystem effects.
+        # mkdir and ln are stubbed so that the launcher's compatibility symlink touches nothing on the host.
         for tool in ('mkdir', 'ln'):
             stub = self.bin / tool
             stub.write_text('#!/bin/sh\nexit 0\n')
@@ -103,6 +117,7 @@ if 'config' in sys.argv:
         self.assertEqual(result['args'][result['args'].index('--task') + 1], 'custom')
 
     def test_lfs_pointer_is_not_accepted_as_an_asset(self):
+        """A Git LFS pointer in place of a required file is refused, naming LFS."""
         asset = self.root / 'golem_robocasa/h12_mujoco.py'
         asset.write_text('version https://git-lfs.github.com/spec/v1\noid sha256:123\nsize 10\n')
         r = self.run_script('docker/scripts/docker_run.sh', 'robocasa')
@@ -111,6 +126,7 @@ if 'config' in sys.argv:
         self.assertFalse(any('run' in c for c in self.calls()))
 
     def test_ros_checks_h12_model_for_both_robots(self):
+        """Every ros container, whatever GOLEM_ROBOT, refuses missing or LFS-pointer H1-2 model files; the sim needs none of them."""
         # golem_ros2_models installs both robots' models in every ros container; the sims
         # read none of CL_Assets/ros_assets.
         for name in self.H12_MODEL:
@@ -139,16 +155,19 @@ if 'config' in sys.argv:
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_mac_rejects_isaac(self):
+        """The Mac wrapper refuses the Isaac service."""
         r = self.run_script('docker/mac/scripts/docker_run_mac.sh', 'isaac', TEST_MAC='1')
         self.assertNotEqual(r.returncode, 0)
         self.assertFalse(any('run' in c for c in self.calls()))
 
     def test_shell_domain_overrides_env_file(self):
+        """A ROS_DOMAIN_ID in the shell wins over docker/.env's."""
         (self.root / 'docker/.env').write_text('ROS_DOMAIN_ID=0\n')
         r = self.run_script('docker/scripts/docker_run.sh', 'robocasa', ROS_DOMAIN_ID='7')
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_headless_compose_has_no_desktop_mounts_and_uses_asset_override(self):
+        """The headless robocasa service mounts no X11 files and mounts GOLEM_ASSETS_DIR without creating it."""
         assets = self.root / 'external assets'
         assets.mkdir()
         r = subprocess.run(['/usr/bin/docker', 'compose', '--env-file', '/dev/null', '-f',
@@ -164,6 +183,7 @@ if 'config' in sys.argv:
         self.assertFalse(mounts['/home/code/CL_Assets'].get('bind', {}).get('create_host_path', False))
 
     def test_mac_stack_warms_ros_before_starting_pair(self):
+        """The Mac stack builds the ros container once before it starts both services together."""
         r = self.run_script('docker/mac/scripts/docker_stack_mac.sh', 'up', 'robocasa', TEST_MAC='1')
         self.assertEqual(r.returncode, 0, r.stderr)
         calls = self.calls()
@@ -174,16 +194,19 @@ if 'config' in sys.argv:
         self.assertIn('robocasa', calls[start])
 
     def test_existing_container_requires_explicit_restart(self):
+        """An existing container refuses a new run without --restart and is not removed."""
         r = self.run_script('docker/scripts/docker_run.sh', 'robocasa', EXISTING='1')
         self.assertNotEqual(r.returncode, 0)
         self.assertFalse(any(c[0] == 'rm' or 'run' in c for c in self.calls()))
 
     def test_explicit_restart_removes_only_selected_container(self):
+        """--restart removes only the selected service's container."""
         r = self.run_script('docker/scripts/docker_run.sh', 'robocasa', '--restart', EXISTING='1')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(['rm', '-f', 'golem_sim_robocasa'], self.calls())
 
     def test_asset_and_cache_paths_with_spaces(self):
+        """Asset and cache directories with spaces in their paths work, and the Isaac cache goes under GOLEM_CACHE_DIR."""
         assets = self.root / 'asset disk'
         shutil.copytree(self.root / 'CL_Assets', assets)
         cache = self.root / 'cache disk'
@@ -194,6 +217,7 @@ if 'config' in sys.argv:
         self.assertFalse((self.root / 'CL_isaaclab_sim/.isaac_cache').exists())
 
     def test_runtime_sim_domain_guard_applies_without_wrapper(self):
+        """runtime_common.sh's validate_sim_domain refuses domain 0 and invalid domains in the container too."""
         script = self.root / 'docker/scripts/runtime_common.sh'
         for domain in ('0', '00', '-1', '233', 'invalid'):
             with self.subTest(domain=domain):
@@ -202,6 +226,7 @@ if 'config' in sys.argv:
                 self.assertNotEqual(r.returncode, 0)
 
     def test_mac_compose_keeps_native_build_volumes_without_gpu_requirements(self):
+        """The Mac compose services are arm64 with named build volumes and host IPC, and need no GPU runtime."""
         r = subprocess.run(['/usr/bin/docker', 'compose', '--env-file', '/dev/null', '-f',
                             str(self.root / 'docker/mac/docker-compose.yml'), 'config', '--format', 'json'],
                            env=self.env, text=True, capture_output=True)
@@ -215,6 +240,7 @@ if 'config' in sys.argv:
             self.assertTrue(any(v['type'] == 'volume' and v['target'].endswith('/build') for v in service['volumes']))
 
     def test_stack_restart_replaces_single_service_containers(self):
+        """docker_stack.sh restart removes both single-service containers before it starts the pair."""
         r = self.run_script('docker/scripts/docker_stack.sh', 'restart', 'robocasa', EXISTING='1')
         self.assertEqual(r.returncode, 0, r.stderr)
         calls = self.calls()
@@ -224,12 +250,11 @@ if 'config' in sys.argv:
         self.assertTrue(all(i < first_run for i, c in enumerate(calls) if c[:2] == ['rm', '-f']))
 
     def test_stack_stop_does_not_require_display_or_mounted_assets(self):
+        """docker_stack.sh stop needs neither a display nor the mounted assets, and starts nothing."""
         shutil.rmtree(self.root / 'CL_Assets')
         r = self.run_script('docker/scripts/docker_stack.sh', 'stop', 'robocasa', GOLEM_DISPLAY='gui')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse(any('run' in c or 'up' in c for c in self.calls()))
-
-    # --- robot selection: GOLEM_ROBOT, --g1 / --h12 -------------------------------------------
 
     # The CL_Assets/g1 files the wrappers check: every ros container builds both robots'
     # models (golem_ros2_models), so setUp gives every fixture them; the G1 sim reads the MJCF.
@@ -256,23 +281,29 @@ if 'config' in sys.argv:
     LFS_POINTER = 'version https://git-lfs.github.com/spec/v1\noid sha256:0\nsize 1\n'
 
     def overlay(self):
+        """Return the fixture's G1 compose overlay path."""
         return str(self.root / 'docker/docker-compose.g1.yml')
 
     @staticmethod
     def compose_files(argv):
+        """Return the -f files of a compose call."""
         return [b for a, b in zip(argv, argv[1:]) if a == '-f']
 
     def compose_calls(self):
+        """Return the stub's compose calls."""
         return [c for c in self.calls() if c[0] == 'compose']
 
     def run_calls(self):
+        """Return the stub's compose run calls."""
         return [c for c in self.calls() if c[0] == 'compose' and 'run' in c]
 
     def run_with_input(self, path, *args, stdin='', **env):
+        """Run a script of the fixture checkout with `stdin` as its input."""
         return subprocess.run(['bash', str(self.root / path), *args], cwd='/tmp', input=stdin,
                               env=dict(self.env, **env), text=True, capture_output=True)
 
     def test_default_robot_compose_unchanged(self):
+        """With no robot selected the run uses the base compose file alone; sims print robot: h12, ros prints no robot."""
         base = ['compose', '--env-file', '/dev/null', '-f', str(self.root / 'docker/docker-compose.yml')]
         for service, name in (('robocasa', 'golem_sim_robocasa'), ('ros', 'golem_ros')):
             with self.subTest(service=service):
@@ -286,6 +317,7 @@ if 'config' in sys.argv:
                     self.assertIn('robot: h12', r.stderr)
 
     def test_g1_flag_adds_overlay(self):
+        """--g1 adds the G1 compose overlay to the sim's run and prints robot: g1 once."""
         r = self.run_script('docker/scripts/docker_run.sh', 'robocasa', '--g1')
         self.assertEqual(r.returncode, 0, r.stderr)
         run = self.run_calls()[-1]
@@ -294,6 +326,7 @@ if 'config' in sys.argv:
         self.assertEqual(r.stderr.count('robot: g1'), 1)
 
     def test_robot_flags_are_stripped_wherever_they_appear(self):
+        """A robot flag anywhere in the arguments selects the robot and is not passed on to the container."""
         cases = (
             (('robocasa', '--g1', '--headless'), 'g1', ['launch_robocasa.sh', '--headless']),
             (('robocasa', '--headless', '--g1'), 'g1', ['launch_robocasa.sh', '--headless']),
@@ -313,6 +346,7 @@ if 'config' in sys.argv:
                 self.assertFalse({'--g1', '--h12'} & set(run), run)
 
     def test_ros_rejects_robot_flags(self):
+        """docker_run.sh ros refuses --g1 and --h12 anywhere in its arguments."""
         for args in (('ros', '--g1'), ('--g1', 'ros'), ('ros', '--h12'), ('ros', 'bash', '--g1')):
             with self.subTest(args=args):
                 (self.root / 'calls').unlink(missing_ok=True)
@@ -322,6 +356,7 @@ if 'config' in sys.argv:
                 self.assertFalse(self.compose_calls())
 
     def test_robot_flag_composes_with_restart_in_either_order(self):
+        """--g1 and --restart work together in either order."""
         for args in (('robocasa', '--g1', '--restart'), ('robocasa', '--restart', '--g1')):
             with self.subTest(args=args):
                 (self.root / 'calls').unlink(missing_ok=True)
@@ -331,6 +366,7 @@ if 'config' in sys.argv:
                 self.assertIn(self.overlay(), self.compose_files(self.run_calls()[-1]))
 
     def test_quoted_command_containing_robot_flag_is_left_alone(self):
+        """A robot flag inside a quoted container command is passed on unchanged and selects nothing."""
         r = self.run_script('docker/scripts/docker_run.sh', 'ros', 'bash', '-lc', 'echo --g1')
         self.assertEqual(r.returncode, 0, r.stderr)
         run = self.run_calls()[-1]
@@ -338,6 +374,7 @@ if 'config' in sys.argv:
         self.assertNotIn(self.overlay(), self.compose_files(run))
 
     def test_robot_precedence_flag_over_shell_over_env_file(self):
+        """The robot is the flag, else the shell's GOLEM_ROBOT, else docker/.env's, case-insensitively."""
         (self.root / 'docker/.env').write_text('GOLEM_ROBOT=g1\n')
         cases = (
             ((), {}, True),                                   # .env alone
@@ -356,6 +393,7 @@ if 'config' in sys.argv:
                 self.assertIn('robot: g1' if g1 else 'robot: h12', r.stderr)
 
     def test_env_robot_g1_adds_overlay_for_sim_only(self):
+        """GOLEM_ROBOT=g1 in docker/.env adds the overlay to the sim's run and not to ros's."""
         (self.root / 'docker/.env').write_text('GOLEM_ROBOT=g1\n')
         r = self.run_script('docker/scripts/docker_run.sh', 'robocasa')
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -365,6 +403,7 @@ if 'config' in sys.argv:
         self.assertNotIn(self.overlay(), self.compose_files(self.run_calls()[-1]))
 
     def test_invalid_or_conflicting_robot_is_rejected(self):
+        """An unknown GOLEM_ROBOT, or both robot flags, is refused before compose runs."""
         for args, env in ((('robocasa',), {'GOLEM_ROBOT': 'h1'}),
                           (('robocasa', '--g1', '--h12'), {})):
             with self.subTest(args=args, env=env):
@@ -373,30 +412,32 @@ if 'config' in sys.argv:
                 self.assertFalse(self.compose_calls())
 
     def install_copy(self, name):
+        """Copy a file of the real checkout into the fixture."""
         dest = self.root / name
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(REPO / name, dest)
 
     def run_g1_test_setup(self, out):
-        """tests/g1/common.sh's g1_test_setup, then its EXIT cleanup, under the stub docker."""
+        """Run tests/g1/common.sh's g1_test_setup, then its EXIT cleanup, under the stub docker."""
         return subprocess.run(['bash', '-c', 'set -eo pipefail; source "$1"; g1_test_setup t bringup arm 195',
                                'bash', str(self.root / 'tests/g1/common.sh')], cwd='/tmp',
                               env=dict(self.env, OUT=str(out)), text=True, capture_output=True)
 
     def run_sim_test(self, out, script):
-        """tests/sim/common.sh sourced, then `script`, then its EXIT cleanup, under the stub docker."""
+        """Source tests/sim/common.sh, run `script`, then its EXIT cleanup, under the stub docker."""
         return subprocess.run(['bash', '-c', f'set -eo pipefail; source "$1"; {script}',
                                'bash', str(self.root / 'tests/sim/common.sh')], cwd='/tmp',
                               env=dict(self.env, OUT=str(out)), text=True, capture_output=True)
 
     def test_g1_test_setup_cleans_up_containers(self):
+        """g1_test_setup's cleanup removes every container its runs create and writes run.json for the G1."""
         self.install_copy('tests/g1/common.sh')
         self.install_copy('tests/sim/common.sh')
         out = self.root / 'g1 out'
         r = self.run_g1_test_setup(out)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse((out / 'cyclonedds_local.xml').exists())
-        # every container g1_test_setup's runs create is removed on exit, the build's too
+        # Every container g1_test_setup's runs create is removed on exit, the build's too.
         removed = next(c for c in self.calls() if c[:2] == ['rm', '-f'])
         self.assertTrue(any(n.endswith('-ros-build') for n in removed), removed)
         self.assertTrue(any(n.startswith('golem-g1-bringup-195-') for n in removed), removed)
@@ -404,6 +445,7 @@ if 'config' in sys.argv:
         self.assertTrue(all(self.overlay() in self.compose_files(c) for c in self.run_calls()))
 
     def test_sim_test_setup_runs_the_h12_without_the_g1_overlay(self):
+        """sim_test_setup for the H1-2 uses no G1 overlay, even with GOLEM_ROBOT=g1 in docker/.env, and mounts the tests read-only."""
         # A G1 selection left in docker/.env must not reach an H1-2 run.
         (self.root / 'docker/.env').write_text('GOLEM_ROBOT=g1\n')
         self.install_copy('tests/sim/common.sh')
@@ -421,6 +463,7 @@ if 'config' in sys.argv:
         self.assertIn(str(self.root / 'container_cache/sim_tests/build'), compose)
 
     def test_sim_test_setup_refuses_domain_zero_and_unknown_robots(self):
+        """sim_test_setup exits 2 for domain 0 or an unknown robot, before compose runs."""
         self.install_copy('tests/sim/common.sh')
         for n, (script, domain) in enumerate((('sim_test_setup h12 sim t stack-h12 stack 199', '0'),
                                              ('sim_test_setup h1 sim t stack-h1 stack 199', None))):
@@ -435,12 +478,13 @@ if 'config' in sys.argv:
                 self.assertFalse(self.compose_calls())
 
     def test_sim_test_start_sim_gives_each_robot_its_knobs(self):
+        """sim_test_start_sim passes each robot's own knobs, and prepares the H1-2 sim's messages."""
         # The H1-2 sim refuses an empty GOLEM_CMD_TIMEOUT; the G1 sim reads it as its default.
         self.install_copy('tests/sim/common.sh')
         for robot in ('h12', 'g1'):
             with self.subTest(robot=robot):
                 (self.root / 'calls').unlink(missing_ok=True)
-                # the stub sim never comes up, so start_sim stops the run
+                # The stub sim never comes up, so start_sim stops the run.
                 self.run_sim_test(self.root / f'{robot} out', f'sim_test_setup {robot} sim t stack-{robot} stack 199; '
                                   'SIM_ENV=(-e GOLEM_SPAWN_BACKOFF=2.0); sim_test_start_sim x.py "${SIM_ENV[@]}"')
                 run = next(c for c in self.run_calls() if '-d' in c)
@@ -452,13 +496,14 @@ if 'config' in sys.argv:
                 self.assertEqual('GOLEM_SPAWN_MARGIN=' in env, robot == 'h12')
                 self.assertEqual(self.overlay() in self.compose_files(run), robot == 'g1')
                 self.assertIn('/home/code/tests/sim/x.py sim --out /out', run[-1])
-                # the H1-2 sim imports magpie_msgs, which launch_robocasa.sh builds into msgs_ws
+                # The H1-2 sim imports magpie_msgs, which launch_robocasa.sh builds into msgs_ws.
                 prepares = 'GOLEM_PREPARE_ONLY=1 /home/code/h12_sim_scripts/launch_robocasa.sh' in run[-1]
                 self.assertEqual(prepares, robot == 'h12')
                 self.assertEqual('source /home/code/msgs_ws/install/setup.bash' in run[-1], robot == 'h12')
 
     def test_stack_wrappers_ignore_golem_robot(self):
-        # A G1 selection left in docker/.env must not reach the H1 test wrappers.
+        """The H1-2 test wrappers run the H1-2 even with GOLEM_ROBOT=g1 in docker/.env."""
+        # A G1 selection left in docker/.env must not reach the H1-2 test wrappers.
         (self.root / 'docker/.env').write_text('GOLEM_ROBOT=g1\n')
         for name in ('tests/stack/run.sh', 'tests/robocasa/run_in_container.sh'):
             dest = self.root / name
@@ -474,6 +519,7 @@ if 'config' in sys.argv:
                 self.assertFalse(any(self.overlay() in c for c in self.calls()))
 
     def test_g1_sim_checks_its_model_files(self):
+        """The G1 sim refuses a missing or LFS-pointer MJCF and missing or LFS-pointer meshes, naming them."""
         meshes = str(Path(self.G1_MESH).parent)
         cases = (('missing', self.G1_XML, None, self.G1_XML),
                  ('no meshes', self.G1_MESH, None, meshes),
@@ -497,6 +543,7 @@ if 'config' in sys.argv:
                 self.assertFalse(self.compose_calls())
 
     def test_missing_policy_file_fails_early_for_every_ros_container(self):
+        """Every ros container refuses a missing HOMIE policy file; the sims run without it."""
         # Every ros container mounts HOMIE's policy for the walking node; the sim reads none of it.
         policy = self.root / 'core_ws/src/g1_homie/policy/deploy.onnx'
         policy.unlink()
@@ -516,6 +563,7 @@ if 'config' in sys.argv:
                 self.assertTrue(self.run_calls())
 
     def test_h12_sim_ignores_missing_g1_model(self):
+        """The H1-2 sim runs without CL_Assets/g1."""
         shutil.rmtree(self.root / 'CL_Assets/g1')
         for args in ((), ('--h12',)):
             with self.subTest(args=args):
@@ -524,6 +572,7 @@ if 'config' in sys.argv:
                 self.assertTrue(self.run_calls())
 
     def test_ros_checks_g1_model_for_both_robots(self):
+        """Every ros container, whatever GOLEM_ROBOT, refuses a missing or LFS-pointer G1 sphere model."""
         # golem_ros2_models installs both robots' models in every ros container.
         sphere = 'CL_Assets/g1/g1_sphere.urdf'
         for label, content in (('missing', None), ('LFS pointer', self.LFS_POINTER)):
@@ -547,6 +596,7 @@ if 'config' in sys.argv:
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_g1_rejected_on_mac_and_isaac(self):
+        """The G1 is refused on the Mac wrappers and with the Isaac sim, before compose runs."""
         cases = (
             ('docker/scripts/docker_run.sh', ('robocasa', '--g1'), {'GOLEM_PLATFORM': 'mac', 'TEST_MAC': '1'}),
             ('docker/mac/scripts/docker_run_mac.sh', ('ros', '--g1'), {'TEST_MAC': '1'}),
@@ -563,7 +613,7 @@ if 'config' in sys.argv:
                 self.assertFalse(self.compose_calls())
 
     def domain0_prompt(self, r):
-        """The domain-0 confirmation the wrapper printed, from its first line to the question."""
+        """Return the domain-0 confirmation the wrapper printed, from its first line to the question."""
         start = 'Domain 0 is the REAL ROBOT bus.'
         self.assertIn(start, r.stderr)
         prompt = r.stderr[r.stderr.index(start):]
@@ -571,6 +621,7 @@ if 'config' in sys.argv:
         return prompt[:prompt.index('Proceed? [y/N]')]
 
     def test_domain0_needs_no_interface(self):
+        """Domain 0 asks for confirmation for ros only, without naming an interface; the sims refuse it outright."""
         r = self.run_with_input('docker/scripts/docker_run.sh', 'ros', stdin='n\n', ROS_DOMAIN_ID='0')
         self.assertNotEqual(r.returncode, 0)
         self.assertIn('Real-robot launch cancelled', r.stderr)
@@ -588,7 +639,7 @@ if 'config' in sys.argv:
                 self.assertIn('reserved for the real robot', r.stderr)
 
     def install_env_recording_docker(self):
-        """The stub docker, plus the robot/bringup environment each call was made with."""
+        """Make the stub docker also log the GOLEM_ROBOT and GOLEM_BRINGUP_LAUNCH of each call."""
         docker = self.bin / 'docker'
         docker.write_text(docker.read_text().replace(
             "if sys.argv[1] == 'inspect':",
@@ -598,11 +649,13 @@ if 'config' in sys.argv:
             "if sys.argv[1] == 'inspect':", 1))
 
     def stack_up_env(self):
+        """Return the environment the stack's `up` call was made with."""
         calls = self.calls()
         envs = [json.loads(x) for x in (self.root / 'calls.env').read_text().splitlines()]
         return envs[next(i for i, c in enumerate(calls) if 'up' in c)]
 
     def test_stack_g1_selects_the_g1_sim_launch(self):
+        """docker_stack.sh up --g1 uses the overlay throughout and starts g1_sim.launch.py."""
         self.install_env_recording_docker()
         r = self.run_script('docker/scripts/docker_stack.sh', 'up', 'robocasa', '--g1', '--headless')
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -613,6 +666,7 @@ if 'config' in sys.argv:
         self.assertEqual(r.stderr.count('robot: g1'), 1)
 
     def test_stack_g1_overrides_leftover_bringup_selection(self):
+        """--g1 starts g1_sim.launch.py even when the shell and docker/.env name the H1-2's launch."""
         self.install_env_recording_docker()
         (self.root / 'docker/.env').write_text('GOLEM_BRINGUP_LAUNCH=h12_sim.launch.py\n')
         r = self.run_script('docker/scripts/docker_stack.sh', 'up', 'robocasa', '--g1', '--headless',
@@ -622,6 +676,7 @@ if 'config' in sys.argv:
                                                'GOLEM_BRINGUP_LAUNCH': 'g1_sim.launch.py'})
 
     def test_stack_default_robot_leaves_bringup_to_compose_defaults(self):
+        """Without a robot the stack uses no overlay and leaves the bringup to the compose default."""
         self.install_env_recording_docker()
         r = self.run_script('docker/scripts/docker_stack.sh', 'up', 'robocasa', '--headless')
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -630,6 +685,7 @@ if 'config' in sys.argv:
         self.assertEqual(self.stack_up_env(), {'GOLEM_ROBOT': 'h12', 'GOLEM_BRINGUP_LAUNCH': None})
 
     def test_stack_stop_and_logs_do_not_need_the_robot_selection(self):
+        """docker_stack.sh stop and logs work with an invalid GOLEM_ROBOT."""
         (self.root / 'docker/.env').write_text('GOLEM_ROBOT=nonsense\n')
         for action in ('stop', 'logs'):
             with self.subTest(action=action):
@@ -637,6 +693,7 @@ if 'config' in sys.argv:
                 self.assertEqual(r.returncode, 0, r.stderr)
 
     def compose_config(self, *files, profile, **env):
+        """Return the services of the real `docker compose config` of the fixture's compose files."""
         r = subprocess.run(['/usr/bin/docker', 'compose', '--env-file', '/dev/null',
                             *[a for f in files for a in ('-f', str(self.root / 'docker' / f))],
                             '--profile', profile, 'config', '--format', 'json'],
@@ -645,13 +702,15 @@ if 'config' in sys.argv:
         return json.loads(r.stdout)['services']
 
     def test_base_robocasa_service_has_no_cmd_timeout(self):
+        """The base robocasa service passes neither GOLEM_CMD_TIMEOUT nor GOLEM_ROBOT."""
         # The H1-2 sim keeps its own default; only the G1 overlay passes the knob.
         env = self.compose_config('docker-compose.yml', profile='robocasa')['robocasa']['environment']
         self.assertNotIn('GOLEM_CMD_TIMEOUT', env)
         self.assertNotIn('GOLEM_ROBOT', env)
 
     def test_base_robocasa_service_passes_spawn_and_lidar_knobs_empty(self):
-        # empty: the sim's own defaults (no backoff, self-filter on)
+        """The base robocasa service passes the spawn backoff and lidar self-filter knobs, empty unless set."""
+        # Empty: the sim's own defaults (no backoff, self-filter on).
         env = self.compose_config('docker-compose.yml', profile='robocasa')['robocasa']['environment']
         for key in ('GOLEM_SPAWN_BACKOFF', 'GOLEM_LIDAR_SELF_FILTER'):
             self.assertEqual(env[key], '', key)
@@ -660,10 +719,11 @@ if 'config' in sys.argv:
         self.assertEqual(env['GOLEM_SPAWN_BACKOFF'], '2.0')
 
     def test_g1_overlay_compose_contents(self):
+        """The G1 overlay sets GOLEM_ROBOT=g1 and the G1 sim knobs, empty, and touches neither ros nor the policy."""
         services = self.compose_config('docker-compose.yml', 'docker-compose.g1.yml', profile='robocasa')
         sim = services['robocasa']['environment']
         self.assertEqual(sim['GOLEM_ROBOT'], 'g1')
-        # empty: the sim's own defaults (g1_sensors.py), e.g. camera scale 0.5
+        # Empty: the sim's own defaults (g1_sensors.py), e.g. camera scale 0.5.
         for key in ('GOLEM_CMD_TIMEOUT', 'GOLEM_LIDAR', 'GOLEM_LIDAR_POINTS', 'GOLEM_LIDAR_HZ',
                     'GOLEM_CAMERA_HZ', 'GOLEM_CAMERA_SCALE', 'GOLEM_SPAWN_BACKOFF'):
             self.assertEqual(sim[key], '', key)
@@ -681,6 +741,7 @@ if 'config' in sys.argv:
         self.assertFalse([s for s in mounts.values() if 'third_party' in s])
 
     def test_base_ros_service_mounts_both_robots(self):
+        """The base ros service mounts HOMIE's policy and tools/ read-only, without creating them; the sim mounts no policy."""
         # Every ros container, the H1-2's included, runs either robot's bringup: HOMIE's
         # policy for the G1's walking node and tools/ come from the base file.
         ros = self.compose_config('docker-compose.yml', profile='ros')['ros']
@@ -696,6 +757,7 @@ if 'config' in sys.argv:
         self.assertFalse([v for v in sim['volumes'] if 'g1_homie' in v['source']])
 
     def test_stack_compose_bringup_defaults_and_overrides(self):
+        """The stack overlay starts h12_sim.launch.py by default and the launch GOLEM_BRINGUP_LAUNCH names."""
         files = ('docker-compose.yml', 'docker-compose.stack.yml')
         ros = self.compose_config(*files, profile='ros')['ros']
         self.assertEqual(ros['environment']['GOLEM_ROBOT'], 'h12')

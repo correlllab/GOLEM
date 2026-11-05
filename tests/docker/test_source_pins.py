@@ -1,4 +1,4 @@
-"""Cheap guards against accidentally reintroducing moving build inputs."""
+"""Check that every image builds from pinned inputs: base digests, commits and locked Python packages."""
 from pathlib import Path
 import re
 import unittest
@@ -7,13 +7,17 @@ ROOT = Path(__file__).resolve().parents[2]
 FILES = sorted((ROOT / 'docker').glob('*Dockerfile')) + sorted((ROOT / 'docker/mac').glob('*Dockerfile*'))
 
 class SourcePinTests(unittest.TestCase):
+    """Check the Dockerfiles' base images, clones and downloads are pinned."""
+
     def test_public_base_images_have_digests(self):
+        """Every public base image is pinned by digest."""
         for path in FILES:
             for image in re.findall(r'^FROM (\S+)', path.read_text(), re.M):
                 if not image.startswith('golem_base:'):
                     self.assertRegex(image, r'@sha256:[0-9a-f]{64}$', str(path))
 
     def test_every_git_clone_is_checked_out_at_an_exact_commit(self):
+        """Every git clone in a RUN step is checked out at a full commit hash."""
         for path in FILES:
             text = path.read_text().replace('\\\n', ' ')
             args = dict(re.findall(r'^ARG (\w+)=([0-9a-f]{40})$', text, re.M))
@@ -26,7 +30,7 @@ class SourcePinTests(unittest.TestCase):
                     self.assertEqual(len(clones), len(pins), f'{path}: {run}')
 
     def test_every_image_builds_livox_sdk2_at_one_commit(self):
-        # Every image that builds livox_ros_driver2 must agree on its CustomMsg wire format.
+        """Every image that builds Livox-SDK2 checks out the same commit, so they agree on the CustomMsg wire format."""
         refs = {}
         for path in FILES:
             text = path.read_text().replace('\\\n', ' ')
@@ -40,6 +44,7 @@ class SourcePinTests(unittest.TestCase):
         self.assertEqual(len(set(refs.values())), 1, refs)
 
     def test_isaaclab_transitive_vcs_pins_are_retained(self):
+        """The Isaac image pins rl_games and robomimic to commits, before Isaac Lab's install."""
         text = (ROOT / 'docker/IsaacDockerfile').read_text()
         for pin in (
             'rl_games.git@6b3534f29568158e9e29ec8bf83cc88fce5f0cae',
@@ -49,8 +54,9 @@ class SourcePinTests(unittest.TestCase):
         self.assertLess(text.index('rl_games.git@6b3534f'), text.index('isaaclab.sh --install'))
 
     def test_isaac_locks_stay_compatible_with_bundled_packages(self):
-        # Isaac Sim bundles torch 2.7.0 and psutil 5.9.8 (rl-games needs psutil<6).
-        # stable-baselines3 2.9+ needs torch>=2.8; ipython 9.13+ needs psutil>=7.
+        """The Isaac locks keep torch, stable-baselines3, ipython and psutil compatible with what Isaac Sim bundles."""
+        # Isaac Sim bundles torch 2.7.0 and psutil 5.9.8 (rl-games needs psutil<6);
+        # stable-baselines3 2.9+ needs torch>=2.8 and ipython 9.13+ needs psutil>=7.
         locks = ROOT / 'docker/locks'
         pins = dict(re.findall(r'^([\w.-]+)==(\S+)$', (locks / 'isaac-amd64.txt').read_text(), re.M))
         self.assertEqual(pins['torch'], '2.7.0+cu128')
@@ -60,6 +66,7 @@ class SourcePinTests(unittest.TestCase):
             self.assertIn('\npsutil==5.9.8\n', path.read_text(), str(path))
 
     def test_bare_ubuntu_bases_have_a_ca_bundle_before_https_snapshots(self):
+        """Bare Ubuntu stages copy a CA bundle in before they switch apt to HTTPS snapshots."""
         for path in FILES:
             text = path.read_text()
             if re.search(r'^FROM ubuntu:', text, re.M) and 'apt-sources.sh' in text:
@@ -68,7 +75,8 @@ class SourcePinTests(unittest.TestCase):
                 self.assertLess(copy, text.index('RUN sh /opt/golem-locks/apt-sources.sh'), str(path))
 
     def test_ros_removes_base_kinematics_closure_before_reinstall(self):
-        # Base pin 4 links cmeel-boost 1.90 (NumPy 2); ROS locks pin 2.7 / boost 1.83.
+        """The ROS image uninstalls every package of the base image's Pinocchio closure before reinstalling it."""
+        # The base image's pin 4 links cmeel-boost 1.90 (NumPy 2); the ROS locks pin 2.7 with boost 1.83.
         text = (ROOT / 'docker/RosDockerfile').read_text().replace('\\\n', ' ')
         uninstall = re.search(r'^RUN pip uninstall -y (.*)$', text, re.M).group(1).split()
         base = (ROOT / 'docker/locks/base-amd64.txt').read_text()
@@ -76,13 +84,17 @@ class SourcePinTests(unittest.TestCase):
             self.assertIn(name, uninstall)
 
     def test_downloaded_scripts_do_not_follow_moving_refs(self):
+        """No Dockerfile downloads the uv installer or the ROS key from a moving URL."""
         for path in FILES:
             text = path.read_text()
             self.assertNotIn('https://astral.sh/uv/install.sh', text, str(path))
             self.assertNotIn('ros/rosdistro/master/ros.key', text, str(path))
 
 class PythonLockTests(unittest.TestCase):
+    """Check every pip install goes through a committed lock file of exact pins."""
+
     def test_python_installs_use_committed_constraints(self):
+        """Every pip install uses a committed lock file under /opt/golem-locks."""
         for path in FILES:
             text = path.read_text().replace('\\\n', ' ')
             for line in text.splitlines():
@@ -93,6 +105,7 @@ class PythonLockTests(unittest.TestCase):
                 self.assertTrue((ROOT/'docker/locks'/name).is_file(), name)
 
     def test_lock_requirements_are_exact(self):
+        """Every lock file line is an exact == pin or a -c of another existing lock."""
         for path in (ROOT/'docker/locks').glob('*.txt'):
             for line in path.read_text().splitlines():
                 if not line or line.startswith('#'):

@@ -1,22 +1,16 @@
 #!/usr/bin/env python3
-"""rclpy parameter shell around the fork's FULL proprioceptive base estimator.
+"""Run the mujoco_mpc fork's proprioceptive base estimator, configured by ROS parameters.
 
-The actual estimator is mjpc/deploy/helper_scripts/base_estimator_node.py in the
-bind-mounted mujoco_mpc submodule (badinkajink/mujoco_mpc@extended_hw): a
-RW-EKF (or complementary) leg-odometry + IMU-fusion filter over rt/lowstate,
-publishing SportModeState_ on a side topic, with contact modes, chi2 outlier
-rejection, an accel-health probe, --compare and --selftest. This shell ONLY maps
-ROS parameters -> the estimator's argv and then runs it unmodified — the fork
-stays the single source of truth, and the estimator's unitree_sdk2py DDS I/O
-(one-writer + iface auto-pinning) is deliberately NOT converted to rclpy pub/sub.
+The estimator is mjpc/deploy/helper_scripts/base_estimator_node.py in the
+mujoco_mpc submodule: an RW-EKF (or complementary) leg-odometry and IMU-fusion
+filter over rt/lowstate that publishes SportModeState_ on a side topic. This
+node maps its ROS parameters to the estimator's arguments, shuts rclpy down,
+and runs the script unmodified in this process, so the fork stays the one
+source of the estimator and its unitree_sdk2py DDS I/O stays as it is.
 
-There is no hard contact gate (dropping swing feet entirely): the fork filter
-handles outliers via load-scaled measurement noise + chi2 rejection. Bench a
-gate on the twin before adding one.
-
-Contract: the estimator's IMU_OFFSET must equal the controller core's kImuOffset
-(both are {-0.04452, -0.01891, 0.27756}; both ends of the IMU-site -> pelvis
-reconstruction must agree or the base pose is wrong).
+The estimator's IMU_OFFSET must equal the controller core's kImuOffset
+(deploy_common.h): both ends of the IMU-site -> pelvis reconstruction must
+agree or the base pose is wrong.
 """
 
 import os
@@ -26,14 +20,14 @@ import sys
 import rclpy
 from rclpy.node import Node
 
-# In-container defaults (docker-compose mounts). MJPC_ROOT can override for a
-# host/dev checkout.
+# Defaults for the container's mounts; MJPC_ROOT overrides the fork's location.
 _MJPC_ROOT = os.environ.get("MJPC_ROOT", "/home/code/mujoco_mpc")
 _DEFAULT_SCRIPT = os.path.join(
     _MJPC_ROOT, "mjpc", "deploy", "helper_scripts", "base_estimator_node.py")
-# The estimator only needs SOME H1-2 model with a free base + the 27 joints in
-# lowstate motor order + *ankle_roll* foot bodies; use the same staged task XML
-# the controller loads (assets live next to it in the hydrated build tree).
+# Any H1-2 model with a free base, the 27 joints in lowstate motor order and
+# *ankle_roll* foot bodies serves; this is the staged task XML the controller
+# loads, with its assets beside it in the build tree. MJPC_TASKS_DIR overrides
+# the tasks directory.
 _DEFAULT_SCENE = os.path.join(
     os.environ.get("MJPC_TASKS_DIR",
                    os.path.join(_MJPC_ROOT, "build", "mjpc", "tasks")),
@@ -41,6 +35,7 @@ _DEFAULT_SCENE = os.path.join(
 
 
 def main() -> None:
+    """Read the parameters, shut rclpy down, then run the fork's estimator script in this process."""
     rclpy.init()
     node = Node("deploy_mjpc_estimator")
 
@@ -48,17 +43,16 @@ def main() -> None:
     script = p("estimator_script", _DEFAULT_SCRIPT).value
     scene = p("scene", _DEFAULT_SCENE).value
     domain = p("domain_id", int(os.environ.get("ROS_DOMAIN_ID", "0"))).value
-    iface = p("iface", "").value               # "" = auto-pin robot subnet
+    iface = p("iface", "").value               # "": the estimator picks the robot subnet's interface
     no_auto_iface = p("no_auto_iface", False).value
     rate = p("rate", 200.0).value              # publish Hz
-    # Plant-clock the filter: plant seconds per lowstate tick (0 = wall-clocked,
-    # the validated real/twin behavior). Set to the sim's physics timestep on
-    # slower-than-realtime plants — see the fork estimator's --tick-dt help.
+    # s of plant time per lowstate tick; 0 clocks the filter on the wall clock,
+    # as on the real robot. A slower-than-real-time sim passes its physics step
+    # (the estimator's --tick-dt).
     tick_dt = p("tick_dt", 0.0).value
     lowstate_topic = p("lowstate_topic", "rt/lowstate").value
-    # Side topic by default: in sim nothing else publishes sportmodestate, but a
-    # side topic keeps the one-writer rule trivially safe; the controller's
-    # sportstate_topic param points here.
+    # A side topic, so the estimator is never a second writer of
+    # rt/sportmodestate; the controller's sportstate_topic points here.
     out_topic = p("out_topic", "rt/sportmodestate_est").value
     vel_lpf_ms = p("vel_lpf_ms", 30.0).value
     imu_fusion = p("imu_fusion", True).value
@@ -79,7 +73,7 @@ def main() -> None:
     node.get_logger().info(
         f"running fork estimator {script} (filter={filt}, out={out_topic}, "
         f"domain={domain})")
-    # Params sourced; the estimator is a pure-DDS worker from here on.
+    # The estimator is a DDS-only worker from here on.
     node.destroy_node()
     rclpy.shutdown()
 
@@ -120,8 +114,8 @@ def main() -> None:
         argv.append("--selftest")
 
     sys.argv = argv
-    # run_name="__main__" fires the script's own entry point; SIGINT from
-    # `ros2 launch` lands as KeyboardInterrupt in its loop, same as a terminal ^C.
+    # run_name="__main__" runs the script's own entry point; SIGINT from ros2
+    # launch reaches its loop as KeyboardInterrupt, as a terminal Ctrl-C does.
     runpy.run_path(script, run_name="__main__")
 
 

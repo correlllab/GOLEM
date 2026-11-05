@@ -166,10 +166,6 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
           f"nq={model.nq} nu={model.nu}; resolver mapped {len(resolver.body.names)} body "
           f"+ {sum(len(h.names) for h in resolver.hands.values())} hand motors")
 
-    # Only the main loop takes sim_lock: the sensor threads work on copies of
-    # the state, and the ROS callbacks only set flags the loop reads.
-    sim_lock = threading.Lock()
-
     # Ground-truth odom (odom -> pelvis on /tf, /odom) from the pelvis, only
     # with GOLEM_SIM_ODOM: the real robot has none, and it would compete with
     # FAST-LIO's odometry.
@@ -184,8 +180,9 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     sys.setswitchinterval(GIL_SWITCH_S)
     init_ros()
 
-    # The loop calls tick() holding sim_lock, which is not reentrant, so the
-    # bridge takes no lock of its own.
+    # Only the main loop touches MjData: the sensor threads work on copies of the
+    # state tick() takes, and the ROS and DDS callbacks only latch values the loop
+    # reads. So the bridge takes no lock, and the loop calls tick() between steps.
     ros_bridge = RosSensorBridge(
         model, data,
         lambda node: G1Sensors(node, model, data, prefix=pfx, config=sensors),
@@ -238,42 +235,41 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         while max_steps is None or steps < max_steps:
             if viewer and not handle.is_running():
                 break
-            with sim_lock:
-                apply_band(model, data, band, band_body, band_vel)
-                sim_interface.write_ctrl()
-                _before = float(data.time)
-                mujoco.mj_step(model, data)
-                # MuJoCo's auto-reset clears the warning counters and then counts
-                # the one warning, so they are cleared here to see every reset;
-                # the reset also puts the sim time back to 0.
-                if any(data.warning[w].number for w in UNSTABLE) or data.time < _before:
-                    for w in UNSTABLE:
-                        data.warning[w].number = 0
-                    _resets += 1
-                    sim_interface.physics_reset()
-                    print(f"[g1_mujoco] *** WARNING: the physics went unstable and MuJoCo reset the "
-                          f"whole scene, robot and kitchen, to its initial state and the sim time to 0 "
-                          f"(reset {_resets} at step {steps}); restart the sim ***", flush=True)
-                sim_interface.after_step()
-                if _release_t is None and not band.enabled:
-                    _release_t = float(data.time)
-                    print(f"[fall-logger] elastic band released at t={data.time:.2f}s", flush=True)
-                if not _fall_logged:
-                    _upz = float(data.xmat[pelvis][8])   # pelvis z-axis . world up (1: upright)
-                    _pelvis_h = float(data.xpos[pelvis][2])
-                    if _upz < FALL_UPRIGHTNESS or _pelvis_h < FALL_PELVIS_HEIGHT:
-                        _fall_logged = True
-                        _since = (f"{data.time - _release_t:.2f}s after band release"
-                                  if _release_t is not None
-                                  else f"{data.time:.2f}s (band still on)")
-                        print(f"[fall-logger] *** ROBOT FELL at sim t={data.time:.2f}s — stood "
-                              f"{_since} (uprightness={_upz:.2f}, pelvis_h={_pelvis_h:.2f}) ***",
-                              flush=True)
-                ros_bridge.tick()
-                steps += 1
-                if steps % task_every == 0:
-                    env.update_state()              # before _check_success
-                    done = measurement.tick()
+            apply_band(model, data, band, band_body, band_vel)
+            sim_interface.write_ctrl()
+            _before = float(data.time)
+            mujoco.mj_step(model, data)
+            # MuJoCo's auto-reset clears the warning counters and then counts
+            # the one warning, so they are cleared here to see every reset;
+            # the reset also puts the sim time back to 0.
+            if any(data.warning[w].number for w in UNSTABLE) or data.time < _before:
+                for w in UNSTABLE:
+                    data.warning[w].number = 0
+                _resets += 1
+                sim_interface.physics_reset()
+                print(f"[g1_mujoco] *** WARNING: the physics went unstable and MuJoCo reset the "
+                      f"whole scene, robot and kitchen, to its initial state and the sim time to 0 "
+                      f"(reset {_resets} at step {steps}); restart the sim ***", flush=True)
+            sim_interface.after_step()
+            if _release_t is None and not band.enabled:
+                _release_t = float(data.time)
+                print(f"[fall-logger] elastic band released at t={data.time:.2f}s", flush=True)
+            if not _fall_logged:
+                _upz = float(data.xmat[pelvis][8])   # pelvis z-axis . world up (1: upright)
+                _pelvis_h = float(data.xpos[pelvis][2])
+                if _upz < FALL_UPRIGHTNESS or _pelvis_h < FALL_PELVIS_HEIGHT:
+                    _fall_logged = True
+                    _since = (f"{data.time - _release_t:.2f}s after band release"
+                              if _release_t is not None
+                              else f"{data.time:.2f}s (band still on)")
+                    print(f"[fall-logger] *** ROBOT FELL at sim t={data.time:.2f}s — stood "
+                          f"{_since} (uprightness={_upz:.2f}, pelvis_h={_pelvis_h:.2f}) ***",
+                          flush=True)
+            ros_bridge.tick()
+            steps += 1
+            if steps % task_every == 0:
+                env.update_state()              # before _check_success
+                done = measurement.tick()
             if done and not _success:
                 print("[g1_mujoco] task success (debounced).")
             _success = done

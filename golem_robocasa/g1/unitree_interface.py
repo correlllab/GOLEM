@@ -8,10 +8,12 @@ In Unitree's debug mode nothing but rt/lowcmd drives the body.
   rt/dex3/<side>/state  published at 100 Hz sim time
 
 Every motor is off (zero torque) until the first rt/lowcmd frame with a valid
-CRC, mode_machine 5 and mode_pr 0; from then on rt/lowcmd drives every body
-motor, and motor mode 0 turns one off. A hand's motors are off until its first
-rt/dex3/<side>/cmd. Until a command drives it the robot hangs from the sim's
-elastic band (g1_mujoco), as the H1-2 does in its sim.
+CRC, mode_machine 5, mode_pr 0 and finite values on the 29 body motors; other
+frames are dropped. From then on rt/lowcmd drives every body motor, and motor
+mode 0 turns one off. A hand's motors are off until its first rt/dex3/<side>/cmd
+with finite values on its 7 motors; other hand frames are dropped too. Until a
+command drives it the robot hangs from the sim's elastic band (g1_mujoco), as
+the H1-2 does in its sim.
 
 Every torque is recomputed every physics step from the latched commands and the
 current state (write_ctrl), which emulates the motors' own servo loop, and is

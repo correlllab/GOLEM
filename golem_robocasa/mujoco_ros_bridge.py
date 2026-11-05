@@ -163,7 +163,7 @@ class RosSensorBridge(Node):
         self.pub_odom.publish(odom)
 
 
-def init_ros() -> bool:
+def init_ros() -> None:
     """Initialise rclpy, raising RuntimeError unless ROS_DOMAIN_ID is a positive integer.
 
     SAFETY: domain 0 is the real robots' command bus; a sim never joins it.
@@ -188,7 +188,6 @@ def init_ros() -> bool:
         )
     if not rclpy.ok():
         rclpy.init()
-    return True
 
 
 def shutdown_ros() -> None:

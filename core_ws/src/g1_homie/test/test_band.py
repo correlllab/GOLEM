@@ -1,6 +1,6 @@
 '''
 The sim's band release with no ROS: when /elastic_band/toggle is called, and that the
-toggle (which flips the band) is never sent twice
+toggle (which flips the band) is called once, its reply final
 '''
 
 from g1_homie.band import BandRelease
@@ -45,14 +45,16 @@ def test_band_release_one_call_in_flight():
     assert band.released
 
 
-def test_band_release_retries_after_failure():
+def test_failed_release_is_not_retried():
     band = BandRelease(enabled=True, max_wait=MAX_WAIT)
     assert band.poll(START + 1.0, START, frame_task_ready=True, service_ready=True) is not None
     band.result(False)
     assert not band.released
-    assert band.poll(START + 1.1, START, frame_task_ready=True, service_ready=True) is not None
+    # the reply is final: nothing is ever sent again, and a late success changes nothing
+    for now in (START + 1.1, START + 2 * MAX_WAIT):
+        assert band.poll(now, START, frame_task_ready=True, service_ready=True) is None
     band.result(True)
-    assert band.released
+    assert not band.released
 
 
 def test_band_release_never_after_success():

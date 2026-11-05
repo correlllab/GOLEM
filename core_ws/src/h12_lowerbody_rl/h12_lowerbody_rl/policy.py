@@ -1,4 +1,5 @@
-"""Lower-body policy plugins.
+"""
+Lower-body policy plugins.
 
 A ``Policy`` turns the current robot state into a 12-joint lower-body PD setpoint
 (``LegCommand``). Each policy is fully self-describing — it owns its observation
@@ -118,8 +119,10 @@ def quat_mul(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
 
 
 def imu_offset_quat(roll_rad: float, pitch_rad: float, yaw_rad: float) -> np.ndarray | None:
-    """Correction quaternion for a fixed IMU mounting/calibration bias, or None
-    when all three angles are zero (the no-op fast path).
+    """
+    Return the correction quaternion for a fixed IMU mounting/calibration bias.
+
+    None when all three angles are zero (the no-op fast path).
 
     The angles are what the raw IMU *reads* when the torso is actually level
     (e.g. measured hanging plumb): positive pitch = reads tilted forward,
@@ -200,10 +203,13 @@ class Policy(ABC):
         """Run one inference step and return a 12-joint leg setpoint."""
 
     def nominal_command(self) -> LegCommand:
-        """A PD setpoint that just holds the nominal leg pose (``default_angles``).
+        """
+        Return a PD setpoint that just holds the nominal leg pose (``default_angles``).
+
         The controller drives the legs here — band-held — before committing the
         policy, so the RMA warm-up starts from the trained default crouch instead
-        of the straight-leg spawn (which it can't recover before band release)."""
+        of the straight-leg spawn (which it can't recover before band release).
+        """
         target = _clip_leg_positions(
             self.nominal_lower.copy(),
             getattr(self, "_lower_limit", None),
@@ -268,10 +274,10 @@ class WalkPolicy(Policy):
         self._obs[0:3] = omega
         self._obs[3:6] = gravity
         self._obs[6:9] = state.cmd * self._cmd_scale
-        self._obs[9 : 9 + n] = qj
-        self._obs[9 + n : 9 + 2 * n] = dqj
-        self._obs[9 + 2 * n : 9 + 3 * n] = self._action
-        self._obs[9 + 3 * n : 9 + 3 * n + 2] = (sin_phase, cos_phase)
+        self._obs[9:9 + n] = qj
+        self._obs[9 + n:9 + 2 * n] = dqj
+        self._obs[9 + 2 * n:9 + 3 * n] = self._action
+        self._obs[9 + 3 * n:9 + 3 * n + 2] = (sin_phase, cos_phase)
 
         with torch.no_grad():
             self._action = self._policy(torch.from_numpy(self._obs).unsqueeze(0)).numpy().squeeze()
@@ -284,7 +290,8 @@ class WalkPolicy(Policy):
 # ALMI adversarial locomotion policy (TeleHuman/ALMI-Open)
 # --------------------------------------------------------------------------- #
 class AlmiPolicy(Policy):
-    """ALMI lower-body policy: stateful LSTM, observes 21 joints, commands 12 legs.
+    """
+    ALMI lower-body policy: stateful LSTM, observes 21 joints, commands 12 legs.
 
     The TorchScript module (legged_gym ``PolicyExporterLSTM``) keeps its LSTM
     hidden/cell state in internal buffers updated by every forward call, so
@@ -432,7 +439,8 @@ class AlmiPolicy(Policy):
 # FAME standing / squatting policy (RMA)
 # --------------------------------------------------------------------------- #
 class FamePolicy(Policy):
-    """RMA loco-manipulation policy: env-factor encoder + history-conditioned actor.
+    """
+    RMA loco-manipulation policy: env-factor encoder + history-conditioned actor.
 
     Controls the 12 legs; reads all 27 joints. ``e_t`` is built from the 15
     upper-body joint positions plus left/right wrist forces. There are no wrist
@@ -484,12 +492,15 @@ class FamePolicy(Policy):
         if os.path.isfile(enc_path):
             from h12_lowerbody_rl.rma import EnvFactorEncoder, EnvFactorEncoderCfg
 
-            self._encoder = EnvFactorEncoder(EnvFactorEncoderCfg(in_dim=self.ET_DIM, latent_dim=self.LATENT_DIM))
-            self._encoder.load_state_dict(torch.load(enc_path, map_location="cpu", weights_only=True))
+            self._encoder = EnvFactorEncoder(
+                EnvFactorEncoderCfg(in_dim=self.ET_DIM, latent_dim=self.LATENT_DIM))
+            self._encoder.load_state_dict(
+                torch.load(enc_path, map_location="cpu", weights_only=True))
             self._encoder.eval()
 
         self.nominal_lower = self._default_angles.copy()
-        self._single_obs_dim = 3 + 1 + 3 + 3 + NUM_POLICY_JOINTS + NUM_POLICY_JOINTS + NUM_LEG_JOINTS  # 76
+        self._single_obs_dim = (  # 76
+            3 + 1 + 3 + 3 + NUM_POLICY_JOINTS + NUM_POLICY_JOINTS + NUM_LEG_JOINTS)
         self._action = np.zeros(self._num_actions, dtype=np.float32)
         self._obs_history: collections.deque = collections.deque(maxlen=self._obs_history_len)
         self._z_history = np.zeros((self.Z_HISTORY, self.LATENT_DIM), dtype=np.float32)
@@ -509,9 +520,10 @@ class FamePolicy(Policy):
         obs[3:4] = state.height_cmd
         obs[4:7] = omega
         obs[7:10] = gravity
-        obs[10 : 10 + NUM_POLICY_JOINTS] = qj
-        obs[10 + NUM_POLICY_JOINTS : 10 + 2 * NUM_POLICY_JOINTS] = dqj
-        obs[10 + 2 * NUM_POLICY_JOINTS : 10 + 2 * NUM_POLICY_JOINTS + NUM_LEG_JOINTS] = self._action
+        obs[10:10 + NUM_POLICY_JOINTS] = qj
+        obs[10 + NUM_POLICY_JOINTS:10 + 2 * NUM_POLICY_JOINTS] = dqj
+        actions = 10 + 2 * NUM_POLICY_JOINTS
+        obs[actions:actions + NUM_LEG_JOINTS] = self._action
         return obs
 
     def _encode(self, state: RobotState) -> np.ndarray:

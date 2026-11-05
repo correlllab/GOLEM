@@ -18,7 +18,7 @@ lists its environment knobs, and each `test_sim_*.py` docstring says what it che
 
 Every test starts the G1 as it starts in debug mode. The limp robot hangs from the sim's elastic
 band while `golem_safety` streams zero-gain `rt/lowcmd`. HOMIE's walking node pre-poses the legs,
-starts its policy under the band and releases the band once `frame_task_server` is up.
+starts its policy once `frame_task_server` is up and then releases the band.
 
 - **Arm and walk tests, the start-up**:
   - `band holds`: while the band is on, the pelvis tilts at most 15 deg;

@@ -38,10 +38,11 @@ class LocomotionDriver:
     On every wake, a sample or not, it first checks golem_safety's heartbeat
     and rt/lowstate for silence (LocomotionController.check_stale): from the
     first wake past either's timeout, nothing more is sent. The heartbeat
-    itself, the operator's confirm, the commands and the band's release come
-    from the caller's threads (the ROS node). Each leg target the controller
-    returns is checked for latency (LocomotionController.latency_ok, from the
-    sample's DDS write, see SourceClock) and written at once to
+    itself, the operator's confirm, the commands, the start block's lifting
+    and the band's release come from the caller's threads (the ROS node).
+    Each leg target the controller returns is checked for latency
+    (LocomotionController.latency_ok, from the sample's DDS write, see
+    SourceClock) and written at once to
     topics['low_cmd'] (golem_safety's lower-body input, which holds it at
     500 Hz): slots 0-11 with mode 1, dq = tau = 0 and the training gains,
     every other slot zero.
@@ -119,6 +120,11 @@ class LocomotionDriver:
         '''The operator's go-ahead; (accepted, message), see LocomotionController.confirm'''
         with self._lock:
             return self._controller.confirm()
+
+    def unblock_start(self):
+        '''Lift the controller's start block; see LocomotionController.block_start'''
+        with self._lock:
+            self._controller.unblock_start()
 
     def on_band_released(self):
         '''The sim's elastic band has come off; see LocomotionController.on_band_released'''

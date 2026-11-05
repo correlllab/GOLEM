@@ -6,7 +6,8 @@ import torch
 import torch.nn as nn
 
 
-def _build_mlp(in_dim: int, hidden_dims: list[int], out_dim: int, activation: str = "elu") -> nn.Sequential:
+def _build_mlp(in_dim: int, hidden_dims: list[int], out_dim: int,
+               activation: str = "elu") -> nn.Sequential:
     if activation == "elu":
         act: type[nn.Module] = nn.ELU
     elif activation == "relu":
@@ -48,10 +49,10 @@ class EnvFactorEncoder(nn.Module):
         )
 
     def forward(self, env_factors: torch.Tensor) -> torch.Tensor:
-        """Args:
-        env_factors: Tensor of shape (N, in_dim)
-        Returns:
-        z: Tensor of shape (N, latent_dim)
+        """
+        Encode env_factors (N, in_dim) into z (N, latent_dim).
+
+        Raises ValueError for any other shape.
         """
         if env_factors.ndim != 2 or env_factors.shape[-1] != self.cfg.in_dim:
             raise ValueError(

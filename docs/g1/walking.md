@@ -8,11 +8,11 @@ node (`locomotion_node`, with `g1_homie`'s `sim.yaml`), with the safety
 layer on `sim_split` and the arm controller on its `sim_split` config. No
 launch argument turns it on or off. The robot starts hanging from the sim's
 elastic band, its leg motors off. Once `golem_safety` beats on
-`/safety/heartbeat` and the arm controller commands, the walking node moves the
-legs to the policy's default pose over 2 s and starts the policy at zero
-velocity, still under the band. It releases the band once the arm controller
-has finished its start-up moves (its first `/left_ee_pose`), or `band.max_wait`
-after the policy started without one. From then on HOMIE keeps the robot
+`/safety/heartbeat`, the walking node moves the legs to the policy's default
+pose over 2 s and holds it. Once the arm controller has finished its start-up
+moves (its first `/left_ee_pose`), it starts the policy at zero velocity and
+releases the band about 0.1 s later; without a `/left_ee_pose`, each waits
+`band.max_wait`. From then on HOMIE keeps the robot
 standing and walks it on `/cmd_vel`.
 
 ## Check it

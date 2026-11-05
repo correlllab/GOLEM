@@ -29,7 +29,8 @@ startup:
   # pre-pose), as the H1-2's leg node does: the band holds the robot meanwhile
   ramp_seconds: 2.0
   # hold the default pose until /lowerbody/confirm_engage is called: not in the
-  # sim, where the policy starts once the timing below holds
+  # sim, where the policy starts once the timing below holds and
+  # frame_task_server is up (band)
   wait_for_confirm: false
   # s of rt/lowstate tick per s of wall clock the policy start accepts, measured
   # while the legs hold the pre-pose: the sim's real-time factor, which drops
@@ -44,11 +45,14 @@ heartbeat:
   timeout: 0.5
 
 band:
-  # call the sim's /elastic_band/toggle once the policy runs and frame_task_server
-  # is up (its first /left_ee_pose); the toggle flips the band, so it is called
-  # until one call succeeds, and never again
+  # the policy starts once frame_task_server is up (its first /left_ee_pose),
+  # and the node then calls the sim's /elastic_band/toggle once. Run under the
+  # band for long (about 1.5 s or more), HOMIE crouches with the feet off the
+  # floor and the robot stumbles at the release. The toggle flips the band, so
+  # its reply is final: a failed call is logged and the band stays on
   release: true
-  # s after the policy started at which the band is released without /left_ee_pose
+  # s without /left_ee_pose after which the policy starts anyway (from the
+  # default pose) and the band is released anyway (from the policy's start)
   max_wait: 30.0
 
 commands:

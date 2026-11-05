@@ -38,11 +38,16 @@ class LocomotionNode(Node):
       at any other time
     - with band.release (the sim): /left_ee_pose (geometry_msgs/PoseStamped),
       which frame_task_server publishes once its start-up moves are done, and
-      a client of the sim's /elastic_band/toggle (std_srvs/Trigger), called
-      from a 10 Hz timer as BandRelease says: once the policy runs and a
-      /left_ee_pose has come, or band.max_wait after the policy started. When
-      the call takes the band off, the policy's history restarts
-      (LocomotionController.on_band_released)
+      a client of the sim's /elastic_band/toggle (std_srvs/Trigger). The
+      policy's start waits for the first /left_ee_pose, or band.max_wait
+      after the legs reached the default pose (block_start): run under the
+      band for long (about 1.5 s or more), the policy settles into a stance
+      the robot stumbles from at the release. A 10 Hz timer then calls the
+      toggle once, as BandRelease says: once the policy runs and a
+      /left_ee_pose has come, or band.max_wait after the policy started.
+      The reply is final. When the call takes the band off, the policy's
+      history restarts (LocomotionController.on_band_released); when it
+      fails, the error is logged and the band stays on
     The legs go to golem_safety's lower-body input over Unitree DDS; see
     LocomotionController for the startup and the faults.
 
@@ -68,12 +73,15 @@ class LocomotionNode(Node):
             f'until the timing is steady and the arm controller commands on '
             f'{config["topics"]["upper_cmd"]}'
             + (' and /lowerbody/confirm_engage is called,' if startup['wait_for_confirm'] else ',')
+            + (' and /left_ee_pose has come,' if config['band']['release'] else '')
             + ' and the policy starts'
-            + ('; the elastic band is released once the policy runs and /left_ee_pose has come'
-               if config['band']['release'] else ''))
+            + ('; then the elastic band is released' if config['band']['release'] else ''))
 
         domain_id = init_channel_factory(config)
         controller = LocomotionController(policy, config, log=self._log)
+        if config['band']['release']:
+            controller.block_start('frame_task_server is not up yet (no /left_ee_pose)',
+                                   config['band']['max_wait'])
         self.create_subscription(Twist, '/cmd_vel', self._on_cmd_vel, 10)
         self.create_subscription(Float32, '/locomotion/height', self._on_height, 10)
         self.create_subscription(Bool, '/safety/heartbeat', self._on_heartbeat, 10)
@@ -114,6 +122,8 @@ class LocomotionNode(Node):
         return response
 
     def _on_ee_pose(self, msg: PoseStamped):
+        if not self._frame_task_ready:
+            self._driver.unblock_start()
         self._frame_task_ready = True
 
     def _on_band_timer(self):
@@ -135,18 +145,20 @@ class LocomotionNode(Node):
     def _on_band_toggled(self, future):
         try:
             response = future.result()
-            failure = 'no response' if response is None else response.message
-        except Exception as e:  # noqa: BLE001 - a failed call is sent again
+            failure = None if response is not None and response.success else (
+                'no response' if response is None
+                else f'the service answered "{response.message}"')
+        except Exception as e:  # noqa: BLE001 - reported once; the call is never sent again
             response, failure = None, repr(e)
-        success = response is not None and response.success
-        self._band.result(success)
-        if not success:
-            self._log('warn', f'/elastic_band/toggle failed ({failure}): calling it again')
-            return
+        self._band.result(failure is None)
         self._band_timer.cancel()
         if self._pose_sub is not None:
             self.destroy_subscription(self._pose_sub)
             self._pose_sub = None
+        if failure is not None:
+            self._log('error', f'elastic band release failed: {failure}. The band stays on; '
+                               'the node does not call /elastic_band/toggle again')
+            return
         if response.message == BAND_ON:
             # the band was already off (SPACE in the viewer), and the toggle hung the
             # robot from it again. Another call would take it off again, under a

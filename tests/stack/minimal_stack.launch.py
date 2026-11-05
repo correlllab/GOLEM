@@ -36,6 +36,7 @@ def generate_launch_description():
                 'active_policy': 'almi',
                 'engage_wait_for_confirm': False,
                 'imu_offset_roll_deg': 0., 'imu_offset_pitch_deg': 0., 'imu_offset_yaw_deg': 0.,
+                'max_state_gap': 0.5, 'cmd_vel_timeout': 0.5,
             }], output='screen'))
     # A dead controller invalidates a test; never continue with a partial stack.
     guards = [RegisterEventHandler(OnProcessExit(target_action=node, on_exit=[

@@ -19,7 +19,8 @@ import pytest
 @pytest.mark.flake8
 @pytest.mark.linter
 def test_flake8() -> None:
-    rc, errors = main_with_errors(argv=[])
+    # reference/ keeps the original standalone deploy scripts as they were (its README)
+    rc, errors = main_with_errors(argv=['--exclude', 'reference'])
     assert rc == 0, \
         'Found %d code style errors / warnings:\n' % len(errors) + \
         '\n'.join(errors)

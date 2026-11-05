@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ament_mypy.main import main
 import pytest
+
+# the ros image has neither mypy nor ament_mypy
+main = pytest.importorskip('ament_mypy.main').main
 
 
 @pytest.mark.mypy

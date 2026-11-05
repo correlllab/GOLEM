@@ -650,6 +650,44 @@ def test_sim_config_starts_the_policy_once_ready(policy, trained):
     assert len(rig.session.inputs) == 1
 
 
+FRAME_TASK_BLOCK = 'frame_task_server is not up yet (no /left_ee_pose)'
+
+
+def test_a_start_block_holds_the_default_pose_until_lifted(policy, trained):
+    # the node's block in the sim: the policy waits for frame_task_server, so that it
+    # runs under the elastic band only briefly
+    rig = Rig(policy, trained, config='sim.yaml', wait_for_confirm=None)  # a 0.1 s ramp
+    rig.controller.block_start(FRAME_TASK_BLOCK, 30.0)
+    state = _standing(policy, np.asarray(policy.default_angles) + 0.2)
+    rig.until(state, HOLDING)
+    # 3 s, well past the steady second: the default pose, every policy step
+    held = [t for t in rig.feed(state, 3 * SAMPLES_TO_START) if t is not None]
+    assert len(held) == 3 * SAMPLES_TO_START // SAMPLES_PER_STEP
+    for targets in held:
+        np.testing.assert_array_equal(targets, policy.default_angles)
+    assert rig.controller.phase == HOLDING and not rig.session.inputs
+    assert _messages(rig.log).count(f'the policy waits: {FRAME_TASK_BLOCK}') == 1, rig.log
+    rig.controller.unblock_start()
+    rig.feed(state, SAMPLES_PER_STEP)
+    assert rig.controller.phase == WALKING and len(rig.session.inputs) == 1
+    assert not _messages(rig.log, 'warn')
+
+
+def test_a_start_block_ends_max_wait_after_the_default_pose(policy, trained):
+    rig = Rig(policy, trained, config='sim.yaml', wait_for_confirm=None)
+    rig.controller.block_start(FRAME_TASK_BLOCK, 2.0)
+    state = _standing(policy, np.asarray(policy.default_angles) + 0.2)
+    rig.until(state, HOLDING)
+    holding_at = rig.clock.t
+    rig.feed(state, round(1.9 / SAMPLE_DT))
+    assert rig.controller.phase == HOLDING
+    rig.until(state, WALKING)
+    assert rig.clock.t - holding_at == pytest.approx(2.0, abs=POLICY_DT)
+    warnings = _messages(rig.log, 'warn')
+    assert len(warnings) == 1 and warnings[0].startswith(FRAME_TASK_BLOCK), warnings
+    assert 'no longer waits' in warnings[0]
+
+
 def test_ramp_then_policy_from_zero_command_and_standing_height(policy, trained):
     rig = Rig(policy, trained, ramp_seconds=0.1)  # 5 policy steps
     legs = np.asarray(policy.default_angles) + np.linspace(-0.3, 0.3, 12)

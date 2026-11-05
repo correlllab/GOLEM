@@ -31,10 +31,14 @@ class FakeDriver:
         self.heights = []
         self.beats = []
         self.band_released = 0
+        self.unblocked = 0
         self.walking_since = walking_since
 
     def on_band_released(self):
         self.band_released += 1
+
+    def unblock_start(self):
+        self.unblocked += 1
 
     def set_cmd_vel(self, vx, vy, yaw):
         self.cmd_vel.append((vx, vy, yaw))
@@ -86,6 +90,8 @@ def _graph(node):
 def test_node_starts_silent_and_logs_every_severity(node):
     assert node.get_parameter('policy_dir').value == str(POLICY_DIR)
     assert node._driver.phase == WAITING
+    # no band (g1.yaml): nothing blocks the policy's start
+    assert node._driver._controller._start_block is None
     # rclpy refuses a change of severity at one call site, which once hid a fault
     for level in ('info', 'warn', 'error', 'info', 'error'):
         node._log(level, f'test {level}')
@@ -186,6 +192,8 @@ def test_confirm_service_and_band_client(tmp_path, monkeypatch):
         assert _spin(executor, 5.0, future.done)
         assert not future.result().success and 'waiting' in future.result().message
 
+        # with the band, the policy's start waits for frame_task_server
+        assert '/left_ee_pose' in node._driver._controller._start_block
         # the policy runs: no toggle without /left_ee_pose (band.max_wait is 30 s)
         node._driver.shutdown()
         node._driver = FakeDriver(walking_since=time.monotonic())
@@ -198,6 +206,8 @@ def test_confirm_service_and_band_client(tmp_path, monkeypatch):
         _spin(executor, 1.0)
         assert len(toggles) == 1, toggles
         assert node._driver.band_released == 1
+        # the first pose lifted the start block, once
+        assert node._driver.unblocked == 1
     finally:
         executor.shutdown()
         helper.destroy_node()
@@ -240,6 +250,47 @@ def test_band_toggle_that_hangs_the_robot_again_warns_once(tmp_path, monkeypatch
         warnings = [message for level, message in log if level == 'warn' and '"enabled"' in message]
         assert len(warnings) == 1 and 'is now ON' in warnings[0], log
         assert not any(message.startswith('elastic band released') for _, message in log), log
+    finally:
+        executor.shutdown()
+        helper.destroy_node()
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+def test_a_failed_band_release_is_not_retried(tmp_path, monkeypatch):
+    # the toggle answers success false: an error, the band stays on, and no second call
+    config = _node_config(tmp_path, monkeypatch, band_release=True)
+    rclpy.init(args=['--ros-args', '-p', f'policy_dir:={POLICY_DIR}'], domain_id=TEST_DOMAIN)
+    node = LocomotionNode(config_name=str(config))
+    helper = rclpy.create_node('test_locomotion_helper')
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    executor.add_node(helper)
+    toggles = []
+    log = []
+    node._log = lambda level, message: log.append((level, message))
+
+    def toggle(request, response):
+        toggles.append(time.monotonic())
+        response.success = False
+        response.message = 'nope'
+        return response
+
+    try:
+        helper.create_service(Trigger, '/elastic_band/toggle', toggle)
+        pose = helper.create_publisher(PoseStamped, '/left_ee_pose', 10)
+        node._driver.shutdown()
+        node._driver = FakeDriver(walking_since=time.monotonic())
+        assert _spin(executor, 5.0, node._band_client.service_is_ready)
+        assert _spin(executor, 5.0, lambda: pose.get_subscription_count() > 0)
+        pose.publish(PoseStamped())
+        assert _spin(executor, 5.0, lambda: any(level == 'error' for level, _ in log))
+        _spin(executor, 1.0)
+        assert len(toggles) == 1, toggles
+        assert node._driver.band_released == 0 and not node._band.released
+        errors = [message for level, message in log if level == 'error']
+        assert len(errors) == 1 and errors[0].startswith('elastic band release failed: '), log
+        assert '"nope"' in errors[0]
     finally:
         executor.shutdown()
         helper.destroy_node()

@@ -16,3 +16,8 @@ lowerbody_controller_node:
     # after this node starts in tests/stack and about 29 s under the full sim
     # bringup; a band released before then drops the robot.
     band_max_wait: 34.0
+    # Longest wall-clock gap (s) between /lowstate samples once the legs are
+    # commanded: the sim can run slower than real time.
+    max_state_gap: 0.5
+    # A /cmd_vel older than this (s) is zero velocity.
+    cmd_vel_timeout: 0.5

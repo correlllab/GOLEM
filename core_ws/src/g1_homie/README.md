@@ -31,8 +31,9 @@ containers mount `policy/`.
     legs hold the default pose; refused at any other time, naming the phase.
 - With `band.release` (`sim.yaml`): `/left_ee_pose`
     (`geometry_msgs/PoseStamped`), which `frame_task_server` publishes once its
-    start-up moves are done, and a client of the sim's `/elastic_band/toggle`
-    (`std_srvs/Trigger`). `g1.yaml` has neither.
+    start-up moves are done (the policy's start waits for it), and a client of
+    the sim's `/elastic_band/toggle` (`std_srvs/Trigger`). `g1.yaml` has
+    neither.
 - Parameter `policy_dir`: the policy's directory (this package's `policy/`).
 - `--config`: `g1.yaml` (real robot), `sim.yaml` (sim), or a path.
 - `use_sim_time` is always false, whatever the launch passes. The node times
@@ -108,8 +109,11 @@ band's release.
     laptop that cannot keep up keeps the legs in the pre-pose instead of
     faulting the policy. The tick check catches a `tick_seconds` that does
     not match the robot's tick, which would run the policy at the wrong
-    rate. In the sim (`sim.yaml`) the policy starts as soon as that holds.
-    With `startup.wait_for_confirm` (`g1.yaml`) the node also waits for
+    rate. In the sim (`sim.yaml`) the policy also waits for the first
+    `/left_ee_pose` (Band release, 6), or `band.max_wait` (30 s) after the
+    legs reached the default pose without one, which it warns about; it
+    starts as soon as that holds. With `startup.wait_for_confirm` (`g1.yaml`)
+    the node also waits for
     `ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger`,
     which it logs; a call before the timing holds is refused with the
     reason, as is a call in any other phase, naming the phase. The policy
@@ -129,31 +133,37 @@ band's release.
     clipped to the trained ranges, then to the `commands` limits, and move
     toward the request by at most `commands.accel` (velocities) and
     `commands.height_rate` (height).
-6. **Band release (sim).** With `band.release` (`sim.yaml`), a 10 Hz timer
-    calls the sim's `/elastic_band/toggle` once the policy runs and a
-    `/left_ee_pose` has come (`frame_task_server` publishes it only after
-    its start-up moves), or `band.max_wait` (30 s) after the policy started
-    without one. The service flips the band, so `band.py`'s `BandRelease`
-    keeps at most one call in flight, with no timeout (a late response can
-    never meet a second call), sends a failed call again, and sends nothing
-    after one has succeeded. A call that never answers leaves the band on.
-    Nothing is called once the node has faulted. When the call has taken the
-    band off (the service answers `disabled`), the policy's history and last
-    action restart empty, as the H1-2's leg node resets its policy at the
-    release: its first steps on the free robot are not computed from the
-    steps the band held. The command, the height and the step grid carry on.
-    If it answers `enabled`, the band was already off (SPACE in the viewer)
-    and now holds the robot again: the node warns and calls nothing more.
-    The release waits for `frame_task_server`, whose start-up moves (about
-    1.9 s in the sim) start on the same `rt/lowstate` sample as the 2 s
-    pre-pose, so the policy runs under the band for only a few steps. When
-    it runs there longer, it crouches toward its 0.74 m height while the
-    band holds the pelvis at 0.78 m, with the feet off the floor, and
-    stumbles at the release: forced to 1.5 s (`ramp_seconds: 0.5`), the
-    robot tilted 23-28 deg and stepped 26-45 cm, with or without the
-    history reset (the history is 6 steps, 0.12 s).
+6. **Band release (sim).** With `band.release` (`sim.yaml`), the policy
+    starts only once `frame_task_server` is up (its first `/left_ee_pose`;
+    `LocomotionController.block_start`), and a 10 Hz timer then calls the
+    sim's `/elastic_band/toggle` once the policy runs and a `/left_ee_pose`
+    has come, so the policy runs under the band for about one 0.1 s poll.
+    Without a `/left_ee_pose`, the policy starts `band.max_wait` (30 s) after
+    the legs reached the default pose, and the band comes off `band.max_wait`
+    after the policy started. The toggle is called once, when the service is
+    there (`band.py`'s `BandRelease`); the service flips the band, so its
+    reply is final, and the call stays in flight until it answers (no
+    timeout, so a late response can never meet a second call). A call that
+    never answers leaves the band on. No response, an exception or `success:
+    false` is logged as an error, `elastic band release failed: <why>`, and
+    leaves the band on. Nothing is called once the node has faulted. When
+    the call has taken the band off (the service answers `disabled`), the
+    policy's history and last action restart empty, as the H1-2's leg node
+    resets its policy at the release: its first steps on the free robot are
+    not computed from the steps the band held. The command, the height and
+    the step grid carry on. If it answers `enabled`, the band was already off
+    (SPACE in the viewer) and now holds the robot again: the node warns and
+    calls nothing more.
+    The policy must not run long under the band: there it crouches toward
+    its 0.74 m height while the band holds the pelvis at 0.78 m, with the
+    feet off the floor, and settles into a stance the robot stumbles from at
+    the release. Run 1.5-3 s under the band (started before
+    `frame_task_server`'s moves were done, or forced with `ramp_seconds:
+    0.5`), the robot tilted 21-28 deg and stepped 20-45 cm, with or without the history
+    reset (the history is 6 steps, 0.12 s); 0.85 s or less gave about
+    7.5 deg.
     The real robot has no band (`g1.yaml`: `band.release: false`), and the
-    node has no client then.
+    node has no client then and nothing blocks the policy's start.
 7. **Faults.** Once the legs are commanded (pre-pose, hold or walking), any
     of these stops all output for good and logs why:
     - a gap over `faults.max_state_gap` between the `rt/lowstate` samples
@@ -289,7 +299,7 @@ latency fault cannot see that part.
 | `startup.tick_rate` | [0.9, 1.1]: the robot keeps real time | [0.25, 1.25]: the sim's real-time factor |
 | `heartbeat.timeout` | 0.5 s, above the 0.1 s beat period | same |
 | `band.release` | false: no band | true: call `/elastic_band/toggle` |
-| `band.max_wait` | 30.0 s (unused) | 30.0 s from the policy's start |
+| `band.max_wait` | 30.0 s (unused) | 30.0 s: without `/left_ee_pose`, from the default pose to the policy's start, and from there to the release |
 | `commands.vx`, `vy`, `yaw` | [-0.3, 0.5], [-0.3, 0.3], [-0.6, 0.6] | the trained ranges: [-0.8, 1.2], [-0.5, 0.5], [-0.8, 0.8] |
 | `commands.accel` | 0.5 m/s², 0.5 m/s², 1.0 rad/s² | same |
 | `commands.timeout` | 0.5 s | same |

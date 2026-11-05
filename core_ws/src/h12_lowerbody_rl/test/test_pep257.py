@@ -19,5 +19,6 @@ import pytest
 @pytest.mark.linter
 @pytest.mark.pep257
 def test_pep257() -> None:
-    rc = main(argv=['.', 'test'])
+    # reference/ keeps the original standalone deploy scripts as they were (its README)
+    rc = main(argv=['.', 'test', '--exclude', 'reference'])
     assert rc == 0, 'Found code style errors / warnings'

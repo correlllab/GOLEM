@@ -304,6 +304,21 @@ for the includes after it, so pass consistent values (all four blocks share
   sample, so the legs pre-pose and the arms start late. `safety_delay` must
   cover the time `estop_node` takes to connect (the comment in
   `h12_control.launch.py`).
+- **The leg node** (`h12_lowerbody_rl`'s `lowerbody_controller_node`, its
+  README) is silent until the first true heartbeat and an upright, finite
+  `/lowstate`. It then ramps the legs to the policy's crouch, holds there on
+  the real robot until `ros2 service call /lowerbody/confirm_engage
+  std_srvs/srv/Trigger` (refused at any other time), and runs the policy. A
+  `/cmd_vel` older than `cmd_vel_timeout` (0.5 s) is zero velocity. Once the
+  legs are commanded, a `/lowstate` gap over `max_state_gap` (0.05 s real,
+  0.5 s sim), a non-finite value or non-unit IMU quaternion, a fall, a policy
+  step that fails or gives non-finite targets, and in every phase a false
+  heartbeat or none for 0.5 s after the first, stop it for good: it logs the
+  fault once, publishes nothing more and stays up. In the sim it calls
+  `/elastic_band/toggle` once, when the service is there, once the policy is
+  engaged and `/left_ee_pose` has come (or `band_max_wait`); the reply is
+  final (a failure is logged as `elastic band release failed: ...` and the
+  band stays on), and a success resets the policy's history.
 
 **Wiring a new package into bringup:** add it as `exec_depend` in
 `golem_bringup/package.xml`, add a `launch_ros.actions.Node(...)` entry to the
@@ -377,11 +392,14 @@ which `golem_upper_ik`'s `upper_ik.launch.py` applies (`upper_ik: not starting:
   `rt/lowstate` (its tick within `startup.tick_rate` of the wall clock) and the
   arm controller's commands. On the real robot (`g1.yaml`) it also holds until
   `ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger` (the H1-2
-  leg node's service); in the sim (`sim.yaml`) the policy then starts, under
-  the sim's elastic band, and the node releases the band through
-  `/elastic_band/toggle` once `/left_ee_pose` has come (`frame_task_server`
-  publishes it after its start-up moves), or `band.max_wait` (30 s) after the
-  policy started. A false heartbeat, or none for 0.5 s after the first, stops
+  leg node's service). In the sim (`sim.yaml`) it also holds until the first
+  `/left_ee_pose` (`frame_task_server` publishes it after its start-up moves),
+  or `band.max_wait` (30 s) after the legs reached the pose: the policy must
+  not run long under the sim's elastic band (about 1.5 s or more there, and
+  the robot stumbles at the release). The policy then starts, and the node
+  calls `/elastic_band/toggle` once, as the H1-2's leg node does: once
+  `/left_ee_pose` has come, or `band.max_wait` after the policy started; the
+  reply is final. A false heartbeat, or none for 0.5 s after the first, stops
   it for good in every phase.
 - After any estop, restart the whole bringup.
 

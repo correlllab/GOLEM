@@ -1,4 +1,5 @@
-"""Minimal RMA modules kept for FAME *inference*.
+"""
+Minimal RMA modules kept for FAME *inference*.
 
 Rapid Motor Adaptation (Kumar et al., RSS 2021) trains an env-factor encoder
 that maps privileged factors ``e_t`` to a compact latent ``z_t``; the policy is

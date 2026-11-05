@@ -1,4 +1,5 @@
-"""Policy registry + idle/active state.
+"""
+Policy registry + idle/active state.
 
 The manager holds the lower-body policies and at most one *active* policy.
 ``active_name`` is ``None`` when **idle**: the robot is held by the elastic band
@@ -38,13 +39,16 @@ class PolicyManager:
         return list(self._policies)
 
     def desired_policy(self) -> Policy | None:
-        """The pending (requested but not yet committed) policy, or None if idle."""
+        """Return the pending (requested but not yet committed) policy, or None if idle."""
         return self._policies.get(self._desired) if self._desired is not None else None
 
     # -- control -------------------------------------------------------------
     def request(self, name: str) -> tuple[bool, str]:
-        """Request a policy. Returns (accepted, message). The node commits it
-        once the legs are pre-posed."""
+        """
+        Request a policy; return (accepted, message).
+
+        The node commits it once the legs are pre-posed.
+        """
         if name not in self._policies:
             return False, f"unknown policy {name!r}; have {self.names()}"
         if name == self._active and not self.is_pending():

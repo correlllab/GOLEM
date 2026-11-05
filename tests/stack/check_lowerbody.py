@@ -191,7 +191,7 @@ def main():
         report['error'] = str(exc)
         raise
     finally:
-        # /cmd_vel is latched by the controller: explicit zero is mandatory.
+        # Stop the robot at once rather than after the controller's cmd_vel_timeout.
         for _ in range(5):
             publisher.publish(Twist())
             rclpy.spin_once(node, timeout_sec=.02)

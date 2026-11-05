@@ -46,14 +46,15 @@ ros2 launch golem_bringup h12_real_robot.launch.py start_position_verified:=true
 
 What happens, in order (`lowerbody_controller_node`):
 
-1. The three policies load, then `active_policy='almi': auto-activating`.
+1. The three policies load. The node stays silent until `golem_safety`'s
+   first true `/safety/heartbeat` and an upright, finite `/lowstate`.
 2. **Pre-pose**: the legs ramp (cosine blend over `prepose_ramp_s`, default
    2 s) from the measured pose to the ALMI crouch (hip −0.4, knee 0.8,
    ankle −0.4). The ramp starts at the measured pose so full-gain PD never
    sees a step — stepping straight to nominal tripped the safety layer's
    hip-yaw dq e-stop on the real robot.
 3. **Arming gate**: the node holds the crouch and reminds every 5 s until
-   the operator confirms:
+   the operator confirms (a confirm before the crouch is refused):
 
    ```bash
    ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
@@ -72,7 +73,8 @@ What happens, in order (`lowerbody_controller_node`):
 ### Driving it
 
 One policy covers both modes: `||[vx, vy, wz]|| < 0.1` stands (gait phase
-forced to 0), above it walks. Publish `/cmd_vel` (teleop or nav2):
+forced to 0), above it walks. Publish `/cmd_vel` continuously (teleop or
+nav2): a command older than `cmd_vel_timeout` (0.5 s) is zero velocity.
 
 - Crossing 0.1 from below resets the LSTM once — the trained episode-start
   condition; without it the gait never engages from a quiet stand (see the

@@ -1,21 +1,36 @@
-"""Lower-body controller node: band-held idle -> pre-pose -> one pinned policy.
+"""
+Lower-body controller node: one pinned policy on the H1-2's legs.
 
-Flow
-----
-1. The robot starts held by the elastic band, **idle** (no policy drives the legs).
-2. At startup the ``active_policy`` (``fame``, ``walk`` or ``almi``; the bringups
-   set it from ``lowerbody:=``) is auto-activated: once the
-   safety layer's /safety/heartbeat arrives, the node pre-poses the legs (ramping
-   the target from the measured pose to the policy's nominal crouch over
-   ``prepose_ramp_s`` — never a step at full gains), releases
-   the elastic band (gated on frame_task being ready, /left_ee_pose), and engages
-   the policy. With ``engage_wait_for_confirm``
-   (the default) the node HOLDS at the pre-pose crouch and only engages the policy
-   after the operator calls the /lowerbody/confirm_engage Trigger service — the
-   real-robot arming step. The sim bringup disables it for unattended runs.
-3. From then on ``active_policy`` drives the legs for the whole run; there is no
-   switching between policies. It receives /cmd_vel directly (ALMI and walk
-   locomote on it; FAME stands).
+Start-up
+--------
+The phases and every check are ``LegSupervisor``'s (``supervisor.py``):
+
+1. **waiting**: silent until golem_safety's first true /safety/heartbeat and
+   a finite, upright /lowstate. ``active_policy`` (``fame``, ``walk`` or
+   ``almi``; the bringups set it from ``lowerbody:=``) is the policy for the
+   whole run; there is no switching between policies.
+2. **ramping**: the node pre-poses the legs, ramping the target from the
+   measured pose to the policy's nominal crouch over ``prepose_ramp_s``
+   (never a step at full gains), until they settle there or
+   PREPOSE_MAX_TICKS pass.
+3. **holding** (``engage_wait_for_confirm``, the default, the real robot):
+   the node holds the crouch until the operator calls the
+   /lowerbody/confirm_engage Trigger service, accepted only now. The sim
+   bringup disables it for unattended runs.
+4. **running**: the policy engages at zero velocity and the default squat
+   height and drives the legs for the whole run. It receives /cmd_vel (ALMI
+   and walk locomote on it; FAME stands); a command older than
+   ``cmd_vel_timeout`` is zero velocity. With ``disable_elastic_band`` (the
+   sim) the node then calls /elastic_band/toggle once, when the service is
+   there, once /left_ee_pose has come (frame_task_server publishes it after
+   its start-up moves) or ``band_max_wait`` after the start. The reply is
+   final: a success takes the band off and resets the policy's history on
+   the next tick; a failure is logged and leaves the band on.
+5. **faulted**: a fault (``supervisor.py``: a false or silent heartbeat, a
+   stale, non-finite or fallen /lowstate, a policy step that fails or gives
+   non-finite targets, an unexpected error in a tick) is logged once, and
+   the node publishes nothing from then on and stays up. golem_safety keeps
+   relaying the last leg command.
 
 Interfaces
 ----------
@@ -23,68 +38,61 @@ sub  /lowstate                 (unitree_hg/LowState)   robot state
 sub  /cmd_vel                  (geometry_msgs/Twist)   velocity command -> policy
 sub  /lowerbody/squat_cmd      (std_msgs/Float32)      base-height / squat (FAME)
 sub  /left_ee_pose             (geometry_msgs/PoseStamped)  frame_task-ready signal
-sub  /safety/heartbeat         (std_msgs/Bool)         safety-layer liveness; a False
-                                                       beat OR silence for
-                                                       heartbeat_timeout latches this
-                                                       node silent (see watchdog)
+sub  /safety/heartbeat         (std_msgs/Bool)         golem_safety's: true while it relays
 pub  /safety/lowcmd_lower_in   (unitree_hg/LowCmd)     12-joint leg setpoints
 pub  /lowerbody/active_policy  (std_msgs/String, latched)  active policy ("idle" when none)
-srv  /lowerbody/confirm_engage (std_srvs/Trigger)      operator go-ahead: engage the
-                                                       pre-posed policy (see Flow #2);
-                                                       clears /cmd_vel and squat_cmd
+srv  /lowerbody/confirm_engage (std_srvs/Trigger)      operator go-ahead while holding
+cli  /elastic_band/toggle      (std_srvs/Trigger)      the sim's band, with disable_elastic_band
 """
 
+import dataclasses
 import os
 import time
 
-import numpy as np
-import rclpy
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped, Twist
+from h12_lowerbody_rl.policy import (
+    AlmiPolicy,
+    FamePolicy,
+    LegCommand,
+    NUM_LEG_JOINTS,
+    NUM_POLICY_JOINTS,
+    RobotState,
+    WalkPolicy,
+    apply_imu_offset,
+    imu_offset_quat,
+)
+from h12_lowerbody_rl.policy_manager import PolicyManager
+from h12_lowerbody_rl.supervisor import FAULTED, HOLDING, RAMPING, RUNNING, LegSupervisor
+import numpy as np
 from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor, SetParametersResult
+import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, Float32, String
 from std_srvs.srv import Trigger
 from unitree_hg.msg import LowCmd, LowState
 
-from h12_lowerbody_rl.policy import (
-    NUM_LEG_JOINTS,
-    NUM_POLICY_JOINTS,
-    AlmiPolicy,
-    FamePolicy,
-    LegCommand,
-    RobotState,
-    WalkPolicy,
-    apply_imu_offset,
-    imu_offset_quat,
-)
-
 # Live-tunable IMU trim parameters (degrees). Declared with a range so
-# rqt_reconfigure renders them as sliders; updates apply on the next control
-# tick. Only orientation axes exist — no policy observes base position, so
+# rqt_reconfigure renders them as sliders; updates apply on the next /lowstate
+# sample. Only orientation axes exist — no policy observes base position, so
 # there is nothing an x/y/z offset could feed into.
 IMU_OFFSET_PARAMS = ("imu_offset_roll_deg", "imu_offset_pitch_deg", "imu_offset_yaw_deg")
 IMU_OFFSET_RANGE_DEG = 15.0
-from h12_lowerbody_rl.policy_manager import PolicyManager
 
 MOTOR_MODE_PR = 1
 # LowCmd header: ankle pitch/roll mode and the H1-2 machine id.
 MODE_PR = 0
 MODE_MACHINE = 6
 
-# Safety-layer liveness flag (published by safety_node at 10 Hz: True while
-# commands are relayed, False once its estop latches). The watchdog below arms
-# on the FIRST beat received — so a bringup where the safety node comes up
-# later (or a sim without one) is not tripped by startup silence — and then
-# latches this node silent on a False beat or on heartbeat_timeout of silence.
 SAFETY_HEARTBEAT_TOPIC = "/safety/heartbeat"
+# /cmd_vel components are clipped to this (m/s, m/s, rad/s)
+CMD_VEL_LIMIT = 1.0
 
-# Pre-pose: before engaging the policy, PD-drive the legs to the incoming policy's
-# nominal crouch (band-held) and wait until they settle there. The RMA policy warms
+# Pre-pose: before engaging the policy, PD-drive the legs to its nominal crouch
+# (band-held in the sim) and wait until they settle there. The RMA policy warms
 # up from its trained default pose; released from the straight-leg spawn it can't
-# recover the transition before the band drops. Only once the legs reach nominal do
-# we commit the policy (and, later, release the band).
+# recover the transition before the band drops.
 #
 # The pre-pose target is RAMPED (cosine blend over ``prepose_ramp_s``) from the
 # measured leg pose captured at the first pre-pose tick to nominal. Stepping
@@ -93,7 +101,9 @@ SAFETY_HEARTBEAT_TOPIC = "/safety/heartbeat"
 # estop (hip yaw limit 0.2 x 23 = 4.6 rad/s) the moment the relay opened.
 PREPOSE_TOL = 0.15          # rad; max |q - nominal| across the 12 legs to count as posed
 PREPOSE_SETTLE_TICKS = 10   # consecutive in-tolerance ticks required (~0.2s @ 50Hz)
-PREPOSE_MAX_TICKS = 400     # ~8s @ 50Hz after the ramp; commit anyway if never settled (safety)
+PREPOSE_MAX_TICKS = 400     # ~8s @ 50Hz after the ramp; posed anyway if never settled
+# how often the holding node reminds the operator to confirm (s)
+CONFIRM_REMINDER_SECONDS = 5.0
 
 
 def _share(*parts: str) -> str:
@@ -101,13 +111,14 @@ def _share(*parts: str) -> str:
 
 
 class LowerBodyControllerNode(Node):
+    """The leg node (module docstring)."""
+
     def __init__(self):
         super().__init__("lowerbody_controller_node")
 
         self.declare_parameter("control_hz", 50.0)
-        # Policy to auto-activate at startup (releases the band when ready):
-        # fame (stands), walk or almi (both follow /cmd_vel). "none" leaves the
-        # robot band-held idle forever.
+        # The policy for the whole run: fame (stands), walk or almi (both follow
+        # /cmd_vel). "none" leaves the legs uncommanded (band-held in the sim).
         self.declare_parameter("active_policy", "fame")
         self.declare_parameter("walk_config", _share("policies", "walk", "walk.yaml"))
         self.declare_parameter("fame_config", _share("policies", "fame", "fame.yaml"))
@@ -115,10 +126,11 @@ class LowerBodyControllerNode(Node):
         # IMU mounting/calibration trim (deg): what the raw quaternion reads
         # when the torso is known to be level (e.g. measured hanging plumb).
         # Positive pitch = reads tilted forward, positive roll = tilted right.
-        # Applied once in _state_from_lowstate so every policy's gravity obs
-        # sees the corrected orientation. DYNAMIC — adjust live during a run
-        # via rqt_reconfigure sliders or `ros2 param set` (see the parameter
-        # callback below); launch files seed the startup values.
+        # Applied to every /lowstate sample, so every policy's gravity obs and
+        # the upright and fall checks see the corrected orientation. DYNAMIC —
+        # adjust live during a run via rqt_reconfigure sliders or
+        # `ros2 param set` (see _on_set_parameters); launch files seed the
+        # startup values.
         for pname in IMU_OFFSET_PARAMS:
             self.declare_parameter(pname, 0.0, ParameterDescriptor(
                 description="live IMU orientation trim, degrees (raw reading at true level)",
@@ -126,9 +138,6 @@ class LowerBodyControllerNode(Node):
                     from_value=-IMU_OFFSET_RANGE_DEG, to_value=IMU_OFFSET_RANGE_DEG,
                     step=0.0)]))
         self.declare_parameter("default_height_cmd", 1.0)
-        # NOTE: /cmd_vel is latched, so if a publisher stops mid-command the last
-        # (nonzero) value holds and the robot keeps walking -- publish an
-        # explicit zero to stand.
         # Seconds to ramp the pre-pose target from the measured leg pose to the
         # policy's nominal (cosine blend; see the PREPOSE block above). Starting
         # at the measured pose means zero initial PD error, so full gains apply
@@ -138,22 +147,31 @@ class LowerBodyControllerNode(Node):
         # the /lowerbody/confirm_engage Trigger service. Default TRUE — on the
         # real robot the engage is the moment the policy takes authority, so it
         # must be an explicit operator action. The sim bringup passes false to
-        # keep unattended runs auto-engaging. While waiting,
-        # the pre-pose timeout never auto-commits.
+        # keep unattended runs auto-engaging. A pre-pose that never settles
+        # holds for the confirm too.
         self.declare_parameter("engage_wait_for_confirm", True)
+        # true: the sim's elastic band holds the robot and the node releases it
         self.declare_parameter("disable_elastic_band", True)
         # Release the band only after frame_task_server has finished its open-loop
         # startup (it publishes /left_ee_pose only then); earlier release crashes
         # frame_task and free-falls the robot.
         self.declare_parameter("band_wait_for_frame_task", True)
         self.declare_parameter("band_release_topic", "/left_ee_pose")
+        # s from the node's start to releasing the band without /left_ee_pose
         self.declare_parameter("band_max_wait", 30.0)
         # Seconds of /safety/heartbeat silence (after the first beat) before
-        # this node latches silent. The heartbeat runs at 10 Hz, so 0.5 s =
-        # five consecutive missed beats — enough slack for scheduler jitter,
-        # short enough that a dead safety node stops leg commands within half
-        # a second.
+        # this node faults. The heartbeat runs at 10 Hz, so 0.5 s = five
+        # consecutive missed beats — enough slack for scheduler jitter, short
+        # enough that a dead safety node stops leg commands within half a
+        # second.
         self.declare_parameter("heartbeat_timeout", 0.5)
+        # Longest wall-clock gap (s) between /lowstate samples once the legs
+        # are commanded; the sim configs relax it, since the sim can run
+        # slower than real time.
+        self.declare_parameter("max_state_gap", 0.05)
+        # A /cmd_vel older than this (s) is zero velocity: publishers send it
+        # continuously (Nav2, teleop at 20 Hz).
+        self.declare_parameter("cmd_vel_timeout", 0.5)
 
         control_hz = float(self.get_parameter("control_hz").value)
         startup_policy = str(self.get_parameter("active_policy").value).strip().lower()
@@ -162,11 +180,16 @@ class LowerBodyControllerNode(Node):
         almi_cfg = self.get_parameter("almi_config").value
         self._imu_corr = self._build_imu_corr()
         self.add_on_set_parameters_callback(self._on_set_parameters)
-        self._height_cmd = float(self.get_parameter("default_height_cmd").value)
-        self._confirm_wait = bool(self.get_parameter("engage_wait_for_confirm").value)
-        self._engage_confirmed = False
         self._prepose_ramp_ticks = max(1, int(round(
             float(self.get_parameter("prepose_ramp_s").value) * control_hz)))
+
+        self._sup = LegSupervisor(
+            heartbeat_timeout=float(self.get_parameter("heartbeat_timeout").value),
+            max_state_gap=float(self.get_parameter("max_state_gap").value),
+            cmd_vel_timeout=float(self.get_parameter("cmd_vel_timeout").value),
+            wait_for_confirm=bool(self.get_parameter("engage_wait_for_confirm").value),
+            default_height=float(self.get_parameter("default_height_cmd").value),
+            log=lambda level, message: self._log(level, message))
 
         self.get_logger().info("loading lower-body policies...")
         policies = {
@@ -183,25 +206,26 @@ class LowerBodyControllerNode(Node):
             policies, log=lambda m: self.get_logger().info(m)
         )
 
-        self._lowstate: LowState | None = None
-        self._cmd = np.zeros(3, dtype=np.float32)
-
-        # band / activation state
-        self._band_released = not bool(self.get_parameter("disable_elastic_band").value)
-        self._frame_task_ready = not bool(self.get_parameter("band_wait_for_frame_task").value)
-        self._band_cli = self.create_client(Trigger, "/elastic_band/toggle")
-        self._awaiting_band_release = False  # policy committed, band not yet released
-        self._band_release_inflight = False  # a toggle call is dispatched, awaiting result
-        self._band_wait_warned = False       # rate-limit the "service not ready" warning
-        self._request_time: float | None = None  # when the pending activation was asked
-        self._prepose_pass = 0   # consecutive ticks the legs have held at nominal (pre-engage)
+        # the newest /lowstate sample (cmd, height_cmd and t are filled per tick)
+        self._state: RobotState | None = None
+        self._gains: LegCommand | None = None   # the engaged policy's PD gains
+        self._prepose_pass = 0   # consecutive ticks the legs have held at nominal
         self._prepose_ticks = 0  # total pre-pose ticks so far (ramp phase + settle timeout)
         self._prepose_start_q: np.ndarray | None = None  # measured legs at first pre-pose tick
+        self._posed_note = ""    # how the pre-pose ended, for the confirm reminder
+        self._last_reminder: float | None = None
 
-        # safety-heartbeat watchdog state (see SAFETY_HEARTBEAT_TOPIC)
-        self._hb_timeout = float(self.get_parameter("heartbeat_timeout").value)
-        self._hb_last: float | None = None  # monotonic stamp of the last healthy beat
-        self._hb_dead = False               # latched: never publishes again once True
+        # the sim's elastic band: one call to /elastic_band/toggle, its reply final
+        self._band_enabled = bool(self.get_parameter("disable_elastic_band").value)
+        self._frame_task_ready = not bool(self.get_parameter("band_wait_for_frame_task").value)
+        self._band_max_wait = float(self.get_parameter("band_max_wait").value)
+        self._band_cli = self.create_client(Trigger, "/elastic_band/toggle")
+        self._band_due = False        # the policy is engaged and the band still on
+        self._band_called = False     # the one call has been sent
+        self._band_released = False   # the call took the band off
+        self._band_wait_warned = False
+        self._reset_due = False       # reset the policy's history on the next tick
+        self._start_time = time.monotonic()
 
         lowstate_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                                   history=HistoryPolicy.KEEP_LAST, depth=1)
@@ -230,80 +254,47 @@ class LowerBodyControllerNode(Node):
         )
 
         if startup_policy and startup_policy != "none":
-            self.get_logger().info(f"active_policy={startup_policy!r}: auto-activating at startup")
-            ok, msg = self._request_policy(startup_policy)
+            ok, msg = self._manager.request(startup_policy)
             if not ok:
-                self.get_logger().error(f"active_policy: {msg} -> robot stays band-held idle")
+                self.get_logger().error(f"active_policy: {msg} -> the legs stay uncommanded")
         else:
             self.get_logger().warn(
-                "active_policy='none' -> robot stays band-held idle forever. "
+                "active_policy='none' -> the legs stay uncommanded. "
                 f"Set active_policy to one of {self._manager.names()}."
             )
 
-    # -- request entry points ------------------------------------------------
-    def _request_policy(self, name: str) -> tuple[bool, str]:
-        ok, msg = self._manager.request(name)
-        if ok and self._manager.is_pending() and self._manager.is_idle():
-            self._request_time = time.monotonic()  # start band-release timeout
-        return ok, msg
+    def _log(self, level: str, message: str) -> None:
+        # one call per severity: rclpy refuses a change of severity at one call site
+        if level == "error":
+            self.get_logger().error(message)
+        elif level == "warn":
+            self.get_logger().warning(message)
+        else:
+            self.get_logger().info(message)
 
     # -- callbacks -----------------------------------------------------------
     def _on_lowstate(self, msg: LowState) -> None:
-        self._lowstate = msg
+        self._state = self._read_state(msg)
+        self._sup.on_lowstate(self._state, time.monotonic())
 
     def _on_cmd_vel(self, msg: Twist) -> None:
-        self._cmd[0] = msg.linear.x
-        self._cmd[1] = msg.linear.y
-        self._cmd[2] = msg.angular.z
-        np.clip(self._cmd, -1.0, 1.0, out=self._cmd)
+        cmd = np.clip([msg.linear.x, msg.linear.y, msg.angular.z], -CMD_VEL_LIMIT, CMD_VEL_LIMIT)
+        self._sup.set_cmd_vel(*cmd, time.monotonic())
 
     def _on_squat_cmd(self, msg: Float32) -> None:
-        self._height_cmd = float(msg.data)
+        self._sup.set_height_cmd(float(msg.data))
 
     def _on_frame_task_ready(self, _msg: PoseStamped) -> None:
         self._frame_task_ready = True
 
     def _on_heartbeat(self, msg: Bool) -> None:
-        # First beat ARMS the watchdog; a False beat means the safety layer's
-        # estop latched (it keeps publishing False after the latch — see
-        # safety_node._publish_heartbeat), so leg commands are pointless at
-        # best and a fight against the latch at worst.
-        if self._hb_dead:
-            return
-        if not msg.data:
-            self._trip_heartbeat("safety layer reports estop latched (heartbeat False)")
-            return
-        self._hb_last = time.monotonic()
-
-    def _trip_heartbeat(self, reason: str) -> None:
-        """Latch the node silent: log once, and _tick never publishes again.
-        Deliberately NOT recoverable at runtime — the safety layer's own latch
-        needs a safety_node restart, so this node restarts with it."""
-        self._hb_dead = True
-        self.get_logger().error(
-            f"SAFETY HEARTBEAT LOST: {reason} — stopping all "
-            "/safety/lowcmd_lower_in output (latched; restart this node once "
-            "the safety layer is back)")
+        self._sup.on_heartbeat(bool(msg.data), time.monotonic())
 
     def _on_confirm_engage(self, _req, resp):
-        pending = self._manager.desired_name if self._manager.is_pending() else None
-        if self._engage_confirmed:
-            resp.success = True
-            resp.message = "already confirmed"
-            return resp
-        self._engage_confirmed = True
-        self._clear_commands()
-        resp.success = True
-        resp.message = (f"confirmed — engaging {pending!r} once the pre-pose settles"
-                        if pending else "confirmed (no activation pending)")
-        self.get_logger().info(f"operator confirm: {resp.message}")
+        resp.success, resp.message = self._sup.confirm()
+        self._log("info" if resp.success else "warn",
+                  f"/lowerbody/confirm_engage: {resp.message}")
         return resp
-
-    def _clear_commands(self) -> None:
-        # Commands that arrived before the operator's go-ahead are not commands
-        # to act on now: zero the velocity and restore the default squat height.
-        self._cmd[:] = 0.0
-        self._height_cmd = float(self.get_parameter("default_height_cmd").value)
 
     # -- IMU trim ------------------------------------------------------------
     def _build_imu_corr(self):
@@ -349,142 +340,131 @@ class LowerBodyControllerNode(Node):
             m.kd = float(leg.kd[i])
         self._cmd_pub.publish(cmd_msg)
 
-    def _release_band(self, reason: str) -> None:
-        # Called every tick while awaiting release. Only mark the band released
-        # once the sim's toggle actually succeeds — NOT before the service check.
-        # /elastic_band/toggle may not be discovered yet (a startup race, likelier
-        # with the slower non-headless MuJoCo viewer), and marking it released up
-        # front gives up permanently: the robot hangs from the band forever, still
-        # following /cmd_vel but never moving. Retry every tick until
-        # the service is ready and the call returns success.
-        if self._band_released or self._band_release_inflight:
-            return
-        if not self._band_cli.service_is_ready():
-            if not self._band_wait_warned:
-                self.get_logger().warn(
-                    "elastic band toggle service not ready yet — retrying until it appears")
-                self._band_wait_warned = True
-            return  # do NOT mark released; retry on a later tick (non-blocking)
-        self._band_release_inflight = True
-        self.get_logger().info(f"releasing elastic band ({reason})")
-        self._band_cli.call_async(Trigger.Request()).add_done_callback(self._on_band_toggled)
-
-    def _on_band_toggled(self, fut) -> None:
-        self._band_release_inflight = False
-        result = fut.result()
-        if result is None:
-            self.get_logger().warn("elastic band toggle call failed — will retry")
-            return  # leave _band_released False so the next tick retries
-        self._band_released = True
-        self.get_logger().info(f"elastic band toggle: {result.message}")
-
-    def _state_from_lowstate(self, msg: LowState) -> RobotState:
+    def _read_state(self, msg: LowState) -> RobotState:
+        """Return a /lowstate sample, IMU trimmed; cmd, height_cmd and t are placeholders."""
         q = np.array([msg.motor_state[i].q for i in range(NUM_POLICY_JOINTS)], dtype=np.float32)
         dq = np.array([msg.motor_state[i].dq for i in range(NUM_POLICY_JOINTS)], dtype=np.float32)
         quat = apply_imu_offset(
             np.asarray(msg.imu_state.quaternion, dtype=np.float32), self._imu_corr)
         gyro = np.asarray(msg.imu_state.gyroscope, dtype=np.float32)
-        t = self.get_clock().now().nanoseconds * 1e-9
         return RobotState(q=q, dq=dq, quat=quat, gyro=gyro,
-                          cmd=self._cmd.copy(), height_cmd=self._height_cmd, t=t)
+                          cmd=np.zeros(3, dtype=np.float32), height_cmd=0.0, t=0.0)
+
+    def _policy_state(self, now: float) -> RobotState:
+        """Return the newest sample with the commands at now and the node clock's time."""
+        assert self._state is not None
+        return dataclasses.replace(
+            self._state, cmd=self._sup.cmd_vel(now), height_cmd=self._sup.height_cmd,
+            t=self.get_clock().now().nanoseconds * 1e-9)
+
+    # -- elastic band (sim) --------------------------------------------------
+    def _update_band(self, now: float) -> None:
+        """Send the one /elastic_band/toggle call once it is due and the service is there."""
+        if not self._band_due or self._band_called:
+            return
+        if self._frame_task_ready:
+            reason = "the policy is engaged and frame_task_server is up (/left_ee_pose)"
+        elif now - self._start_time > self._band_max_wait:
+            reason = (f"the policy is engaged and band_max_wait ({self._band_max_wait:.0f} s) "
+                      "has passed with no /left_ee_pose")
+        else:
+            return
+        if not self._band_cli.service_is_ready():
+            if not self._band_wait_warned:
+                self._log("warn", "the elastic band is due for release, but "
+                                  "/elastic_band/toggle is not there yet: waiting for it")
+                self._band_wait_warned = True
+            return
+        self._band_called = True
+        self._log("info", f"releasing the elastic band: {reason}")
+        self._band_cli.call_async(Trigger.Request()).add_done_callback(self._on_band_toggled)
+
+    def _on_band_toggled(self, future) -> None:
+        try:
+            response = future.result()
+            failure = None if response is not None and response.success else (
+                "no response" if response is None
+                else f'the service answered "{response.message}"')
+        except Exception as e:  # noqa: BLE001 - reported once; the call is never sent again
+            response, failure = None, repr(e)
+        if failure is not None:
+            self._log("error", f"elastic band release failed: {failure}. The band stays on; "
+                               "the node does not call /elastic_band/toggle again")
+            return
+        self._band_released = True
+        # the policy's history filled with band-held states: it restarts on the
+        # free robot, or FAME's first free actions come from stale obs and it topples
+        self._reset_due = True
+        self._log("info", f"elastic band released (/elastic_band/toggle: {response.message})")
 
     # -- main loop -----------------------------------------------------------
     def _tick(self) -> None:
-        # Safety-heartbeat watchdog: once tripped (False beat, or silence past
-        # heartbeat_timeout after the first beat), publish NOTHING — no policy
-        # step, no pre-pose, no band release. Checked before anything else so
-        # every publish path in this tick is behind the gate.
-        if self._hb_dead:
-            return
-        if (self._hb_last is not None
-                and time.monotonic() - self._hb_last > self._hb_timeout):
-            self._trip_heartbeat(
-                f"no /safety/heartbeat for {self._hb_timeout:.1f}s "
-                "(safety node died or stopped publishing)")
-            return
-        if self._lowstate is None:
-            return
-        state = self._state_from_lowstate(self._lowstate)
+        try:
+            self._step(time.monotonic())
+        except Exception as e:  # noqa: BLE001 - never leave the legs on a broken node
+            self._sup.latch(f"unexpected error: {e!r}")
 
-        if self._manager.is_pending() and self._manager.is_idle():
-            # Pre-pose: PD-drive the legs to the incoming policy's nominal
-            # crouch (band-held) and wait until they settle BEFORE engaging it.
-            # The RMA policy warms up from its trained default pose; from the
-            # straight-leg spawn it can't recover the transition before the band
-            # drops. The band stays held throughout — the release below is gated
-            # on _awaiting_band_release, which we only set once committed.
-            pending = self._manager.desired_policy()
-            if pending is None:
-                return
-            # Leg commands only reach the motors once the safety layer is
-            # relaying. Ramping before then runs the ramp out against legs
-            # that never move, and the first relayed command steps them to
-            # the full crouch at full gains.
-            if self._hb_last is None:
-                self.get_logger().info(
-                    "waiting for /safety/heartbeat before pre-posing the legs",
-                    throttle_duration_sec=5.0)
-                return
-            cmd = pending.nominal_command()
-            if self._prepose_start_q is None:
-                self._prepose_start_q = state.q[:NUM_LEG_JOINTS].copy()
-            if self._prepose_ticks < self._prepose_ramp_ticks:
-                frac = self._prepose_ticks / self._prepose_ramp_ticks
-                alpha = 0.5 * (1.0 - np.cos(np.pi * frac))
-                cmd.target_q = (1.0 - alpha) * self._prepose_start_q + alpha * cmd.target_q
-            self._publish_leg(cmd)
-            err = float(np.max(np.abs(state.q[:NUM_LEG_JOINTS] - pending.nominal_lower)))
-            self._prepose_ticks += 1
-            self._prepose_pass = self._prepose_pass + 1 if err < PREPOSE_TOL else 0
-            settled = self._prepose_pass >= PREPOSE_SETTLE_TICKS
-            timed_out = self._prepose_ticks >= self._prepose_ramp_ticks + PREPOSE_MAX_TICKS
-            if not settled and not timed_out:
-                return  # keep posing; don't engage the policy or drop the band yet
-            if self._confirm_wait and not self._engage_confirmed:
-                # ARMING GATE: hold the legs at the pre-pose crouch until the
-                # operator explicitly confirms. Applies to the timeout path
-                # too — an unsettled pre-pose must never auto-engage on real.
-                self.get_logger().info(
-                    f"legs pre-posed ({'settled' if settled else 'NOT SETTLED (timeout)'}, "
-                    f"err={err:.3f} rad) — holding; to engage "
-                    f"{self._manager.desired_name!r} run: ros2 service call "
-                    "/lowerbody/confirm_engage std_srvs/srv/Trigger",
-                    throttle_duration_sec=5.0)
-                return
-            self.get_logger().info(
-                f"legs pre-posed to nominal ({'settled' if settled else 'timeout'}, "
-                f"err={err:.3f} rad) — engaging {self._manager.desired_name!r}")
-            # Now engage the policy; it drives the legs while the band still holds.
-            # Engage from zero commands (the policy reset below seeds from them).
-            self._clear_commands()
-            state = self._state_from_lowstate(self._lowstate)
-            self._manager.commit(state)   # resets policy -> clean warm-up
-            self._publish_active()
-            self._awaiting_band_release = not self._band_released
-
-        # Release the band only after a policy is committed and driving the legs
-        # (gated on frame_task being ready, or the max-wait timeout).
-        if self._awaiting_band_release and not self._band_released:
-            released = False
-            if self._frame_task_ready:
-                self._release_band("policy active + frame_task ready")
-                released = True
-            elif self._request_time is not None and \
-                    (time.monotonic() - self._request_time) > self.get_parameter("band_max_wait").value:
-                self._release_band("policy active + band_max_wait timeout")
-                released = True
-            if released:
-                # Reset the active policy AT band release so its observation
-                # history (which filled with band-held states) is cleared and it
-                # warms up fresh on free-standing — otherwise FAME's first free
-                # actions are computed from stale band-held obs and it topples.
-                self._manager.reset_active(state)
-                self._awaiting_band_release = False
-
+    def _step(self, now: float) -> None:
+        self._sup.check_stale(now)
+        phase = self._sup.phase
+        if phase == FAULTED or self._state is None:
+            return
+        policy = self._manager.desired_policy()
+        if policy is None or phase not in (RAMPING, HOLDING, RUNNING):
+            return
+        if phase == RAMPING:
+            self._prepose(policy)
+            return
+        if phase == HOLDING:
+            self._publish_leg(policy.nominal_command())
+            if (self._last_reminder is None
+                    or now - self._last_reminder >= CONFIRM_REMINDER_SECONDS):
+                self._last_reminder = now
+                self._log("info", f"legs pre-posed ({self._posed_note}) — holding; to engage "
+                                  f"{self._manager.desired_name!r} run: ros2 service call "
+                                  "/lowerbody/confirm_engage std_srvs/srv/Trigger")
+            return
+        state = self._policy_state(now)
         if self._manager.is_idle():
-            return  # nothing requested yet -> band-held, legs uncommanded
+            self._manager.commit(state)   # resets the policy -> clean warm-up
+            self._gains = policy.nominal_command()
+            self._publish_active()
+            self._band_due = self._band_enabled
+        self._update_band(now)
+        if self._reset_due:
+            self._reset_due = False
+            self._manager.reset_active(state)
+        targets = self._sup.step_policy(lambda: self._manager.run(state).target_q)
+        if targets is None:
+            return
+        assert self._gains is not None
+        self._publish_leg(LegCommand(target_q=targets, kp=self._gains.kp, kd=self._gains.kd))
 
-        self._publish_leg(self._manager.run(state))
+    def _prepose(self, policy) -> None:
+        """PD-drive the legs along the ramp to the policy's nominal crouch, then call posed()."""
+        assert self._state is not None
+        q = self._state.q[:NUM_LEG_JOINTS]
+        cmd = policy.nominal_command()
+        if self._prepose_start_q is None:
+            self._prepose_start_q = q.copy()
+        if self._prepose_ticks < self._prepose_ramp_ticks:
+            frac = self._prepose_ticks / self._prepose_ramp_ticks
+            alpha = 0.5 * (1.0 - np.cos(np.pi * frac))
+            cmd.target_q = (1.0 - alpha) * self._prepose_start_q + alpha * cmd.target_q
+        self._publish_leg(cmd)
+        err = float(np.max(np.abs(q - policy.nominal_lower)))
+        self._prepose_ticks += 1
+        self._prepose_pass = self._prepose_pass + 1 if err < PREPOSE_TOL else 0
+        settled = self._prepose_pass >= PREPOSE_SETTLE_TICKS
+        timed_out = self._prepose_ticks >= self._prepose_ramp_ticks + PREPOSE_MAX_TICKS
+        if not settled and not timed_out:
+            return
+        # an unsettled pre-pose (timeout) holds for the confirm too: never an
+        # auto-engage on the real robot
+        self._posed_note = (f"{'settled' if settled else 'NOT SETTLED (timeout)'}, "
+                            f"err={err:.3f} rad")
+        self._log("info", f"legs pre-posed to nominal ({self._posed_note})")
+        self._sup.posed()
 
 
 def main():

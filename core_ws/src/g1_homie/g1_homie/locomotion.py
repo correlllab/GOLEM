@@ -212,7 +212,9 @@ class LocomotionController:
       faults.max_state_gap) for
       STEADY_SECONDS, its tick has kept to the wall clock within
       startup.tick_rate over that time (a wrong tick_seconds would change the
-      policy's rate), the arm controller is commanding, and, with
+      policy's rate), the arm controller is commanding, no block_start
+      blocks it (the node blocks it in the sim until frame_task_server is up,
+      so the policy runs under the elastic band only briefly), and, with
       startup.wait_for_confirm, the operator has confirmed (confirm)
     - walking: the policy runs, starting at zero velocity and the standing
       height, with an empty history; in the sim its history empties again
@@ -277,7 +279,11 @@ class LocomotionController:
         self._ramp_step = 0
         self._beat_time = None  # when the last true heartbeat came
         self._walking_since = None
+        self._holding_since = None  # when the legs reached the default pose
         self._ready_reason = 'rt/lowstate has not been steady yet'  # None once the policy may start
+        # block_start's reason and max_wait (s), while it blocks the policy's start
+        self._start_block = None
+        self._block_max_wait = None
 
     @property
     def command(self):
@@ -329,6 +335,18 @@ class LocomotionController:
             return
         self.policy.reset()
         self._log('info', 'elastic band off: the policy carries on from an empty history')
+
+    def block_start(self, reason, max_wait):
+        '''
+        Keep the policy from starting, with this reason, until unblock_start() or
+        max_wait s after the legs reach the default pose, whichever comes first;
+        the legs hold the default pose meanwhile
+        '''
+        self._start_block, self._block_max_wait = reason, max_wait
+
+    def unblock_start(self):
+        '''Lift block_start's block: the policy starts once the other conditions hold'''
+        self._start_block = None
 
     def on_upper_cmd(self, now):
         '''The arm controller commanded (a sample on topics.upper_cmd) at now (s)'''
@@ -515,7 +533,7 @@ class LocomotionController:
         '''
         While the legs pre-pose and hold: set _ready_reason to why the policy
         may not start yet, or None once the timing has held for STEADY_SECONDS
-        of ticks and the arm controller is commanding
+        of ticks, the arm controller is commanding and no block_start blocks it
         '''
         reason = None
         if gap is not None and gap > self._max_gap:
@@ -536,6 +554,14 @@ class LocomotionController:
         upper_age = None if self._upper_time is None else now - self._upper_time
         if reason is None and (upper_age is None or upper_age > UPPER_FRESH_SECONDS):
             reason = f'no commands from the arm controller on {self._upper_topic}'
+        if reason is None and self._start_block is not None:
+            held = None if self._holding_since is None else now - self._holding_since
+            if held is not None and held >= self._block_max_wait:
+                self._log('warn', f'{self._start_block}, {held:.0f} s after the legs reached the '
+                                  'default pose: the policy no longer waits for it')
+                self._start_block = None
+            else:
+                reason = self._start_block
         if reason is None and tick_delta(tick, self._good_since) < self._steady_ticks:
             # the steady window is still filling: nothing to report
             self._ready_reason = 'rt/lowstate has not been steady for long enough yet'
@@ -578,6 +604,7 @@ class LocomotionController:
             # the default pose was just sent: the hold or the policy takes over on
             # the next step
             self.phase = HOLDING
+            self._holding_since = now
             if self._wait_for_confirm:
                 self._log('info', 'legs at the default pose: holding it until the operator '
                                   'confirms (ros2 service call /lowerbody/confirm_engage '

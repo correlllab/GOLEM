@@ -17,6 +17,7 @@
 #                       server, on localhost:GOLEM_ROS_MCP_PORT (default 6082)
 #   GOLEM_WAIT_FOR_SIM  1: run wait_for_sim.py before the bringup (the stack)
 #   GOLEM_LOWERBODY, GOLEM_SLAM, GOLEM_NAV2: read by h12_sim_mac.launch.py
+#                       (GOLEM_LOWERBODY is the leg block's policy:=)
 # Exit status: 1 on a refused domain or without the baked livox_ros_driver2;
 # colcon's or wait_for_sim.py's status when they fail; otherwise the bringup's
 # or the command's.
@@ -119,9 +120,10 @@ INSTALL_BASE=/opt/core_ws/install
 cd "$WS"
 
 # PKGS: what h12_sim_mac.launch.py runs. The state and control blocks
-# (golem_ros2_models, golem_safety, golem_upper_ik), the leg controller
-# (golem_lowerbody_rl and its unitree_hg; GOLEM_LOWERBODY) and golem_slam's
-# navigation graph (golem_slam, fast_lio; GOLEM_SLAM / GOLEM_NAV2), the message
+# (golem_ros2_models, golem_safety, golem_upper_ik), the leg node
+# (golem_lowerbody_rl, its unitree_hg and golem_safety's joint tables;
+# GOLEM_LOWERBODY) and golem_slam's navigation graph (golem_slam, fast_lio;
+# GOLEM_SLAM / GOLEM_NAV2), the message
 # packages, and golem_bringup itself, so `ros2 launch golem_bringup ...` resolves.
 # BRINGUP_STUB_DEPS: golem_bringup's in-workspace exec_depends the Mac does not
 # build (real-robot drivers, the ML stack, MJPC, the loco-manipulation game,

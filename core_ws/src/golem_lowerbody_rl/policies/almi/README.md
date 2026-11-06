@@ -9,7 +9,7 @@ Locomotion and Motion Imitation for Humanoid Policy Learning",
 `save_trajectory_data.py` to collect the ALMI-X dataset (copied unmodified,
 2026-07-18).
 
-## Interface (what `AlmiPolicy` in `policy.py` implements)
+## Interface (what its spec, `config/h12/policies/almi.yaml`, describes)
 
 - TorchScript `PolicyExporterLSTM` (legged_gym export): an LSTM whose
   hidden/cell state live **inside the module** as buffers, updated on every
@@ -36,7 +36,7 @@ frame_task IK plays that role through the safety layer.
 ### Real robot (onboard PC)
 
 The onboard bringup, `h12_real_robot.launch.py`, defaults to ALMI
-(`lowerbody:=almi`); every leg path stays behind the `start_position_verified`
+(`policy:=almi`); every leg path stays behind the `start_position_verified`
 interlock. Hoist the robot first — snug, legs free to bend — and keep a hand
 on the e-stop. Launching IS the start of motion:
 
@@ -46,27 +46,29 @@ ros2 launch golem_bringup h12_real_robot.launch.py start_position_verified:=true
 
 What happens, in order (`lowerbody_controller_node`):
 
-1. The three policies load. The node stays silent until `golem_safety`'s
-   first true `/safety/heartbeat` and an upright, finite `/lowstate`.
-2. **Pre-pose**: the legs ramp (cosine blend over `prepose_ramp_s`, default
-   2 s) from the measured pose to the ALMI crouch (hip −0.4, knee 0.8,
+1. ALMI loads (`loaded run config ... and policy ...`). The node stays silent
+   until `golem_safety`'s first true `/safety/heartbeat` and an upright,
+   finite `/lowstate`.
+2. **Pre-pose**: the legs ramp (cosine blend over the run config's
+   `startup.ramp_seconds`, 2 s) from the measured pose to the ALMI crouch (hip −0.4, knee 0.8,
    ankle −0.4). The ramp starts at the measured pose so full-gain PD never
    sees a step — stepping straight to nominal tripped the safety layer's
    hip-yaw dq e-stop on the real robot.
-3. **Arming gate**: the node holds the crouch and reminds every 5 s until
-   the operator confirms (a confirm before the crouch is refused):
+3. **Arming gate**: the node holds the crouch. Once `/lowstate` has been
+   steady for 1 s and the arm controller commands, it reminds every 5 s until
+   the operator confirms (a confirm before then is refused, with the reason):
 
    ```bash
    ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
    ```
 
-   If the log says `NOT SETTLED (timeout)`, do **not** confirm — the legs
-   never reached the crouch; investigate first. (The sim bringup passes
-   `engage_wait_for_confirm: false` and auto-engages for unattended runs.)
+   If the log says `NOT SETTLED`, do **not** confirm — the legs never reached
+   the crouch; investigate first. (The sim's run config, `config/h12/sim.yaml`,
+   sets `startup.wait_for_confirm: false` and starts unattended runs itself.)
 4. On confirm the LSTM engages at zero command (stand), a clean trained
-   stand-start. The elastic band is a sim fixture: `lowerbody_real.yaml`
-   sets `disable_elastic_band: false`, so on the real robot the node never
-   calls `/elastic_band/toggle`.
+   stand-start. The elastic band is a sim fixture: `config/h12/real.yaml`
+   sets `band.release: false`, so on the real robot the node never calls
+   `/elastic_band/toggle`.
 5. Slacken the hoist gradually. There is no post-engage ramp — the hoist is
    the ramp.
 
@@ -74,20 +76,21 @@ What happens, in order (`lowerbody_controller_node`):
 
 One policy covers both modes: `||[vx, vy, wz]|| < 0.1` stands (gait phase
 forced to 0), above it walks. Publish `/cmd_vel` continuously (teleop or
-nav2): a command older than `cmd_vel_timeout` (0.5 s) is zero velocity.
+nav2): a command older than the run config's `commands.timeout` (0.5 s) is
+zero velocity.
 
 - Crossing 0.1 from below resets the LSTM once — the trained episode-start
-  condition; without it the gait never engages from a quiet stand (see the
-  `AlmiPolicy` docstring). Dropping below 0.05 re-arms the reset and the
+  condition; without it the gait never engages from a quiet stand (the
+  spec's `command.onset_reset`). Dropping below 0.05 re-arms the reset and the
   robot stands again.
-- `cmd_gain` `[1.5, 1.0, 2.0]` amplifies commands before the policy sees
-  them (the checkpoint undertracks, yaw worst) and `cmd_smooth_alpha` 0.15
+- `command.gain` `[1.5, 1.0, 2.0]` amplifies commands before the policy sees
+  them (the checkpoint undertracks, yaw worst) and `command.smooth_alpha` 0.15
   averages out sign-flipping follower corrections. Start with vx 0.2–0.3.
-- The controller never switches policies — `lowerbody:=almi` drives the legs
-  for the whole run.
+- The node never switches policies — `policy:=almi` drives the legs for the
+  whole run.
 
 ### Sim
 
 ```bash
-ros2 launch golem_bringup h12_sim.launch.py lowerbody:=almi
+ros2 launch golem_bringup h12_sim.launch.py policy:=almi
 ```

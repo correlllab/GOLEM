@@ -56,7 +56,7 @@ changing one needs the stack `restart` command to recreate both containers.
 |---|---|---|
 | `GOLEM_DISPLAY` | off | `vnc` → MuJoCo viewer on noVNC port 6080 |
 | `GOLEM_RVIZ` | off | `vnc` → RViz on noVNC port 6081 |
-| `GOLEM_LOWERBODY` | off (tethered) | `fame` stand-only, `walk` walk-only policy, `almi` stand + walk (one policy); any other value stops the bringup |
+| `GOLEM_LOWERBODY` | off (tethered) | the leg node's `policy:=`: `fame` stand-only, `walk` walk-only policy, `almi` stand + walk (one policy); any other value stops the bringup |
 | `GOLEM_SLAM` | off | `1`/`true`/`on` → `golem_slam`'s navigation graph, the x86 sim's: FAST-LIO → self filter → OctoMap → `slam_toolbox` (`/map`) → Nav2 |
 | `GOLEM_NAV2` | off | the same graph as `GOLEM_SLAM` (either one starts it) |
 | `GOLEM_SIM_ODOM` | off | sim ground-truth `/odom` + `odom→pelvis` TF. Leave it off with navigation: FAST-LIO's odometry already parents `pelvis`, and ground truth would give it a second parent |
@@ -113,7 +113,7 @@ By default an elastic-band tether holds the robot upright and only the upper
 body is controlled. `GOLEM_LOWERBODY` releases the tether and balances the robot:
 
 ```bash
-# stand free (and squat via /lowerbody/squat_cmd), but no locomotion
+# stand free (and squat via /lowerbody/height), but no locomotion
 GOLEM_DISPLAY=vnc GOLEM_LOWERBODY=fame docker/mac/scripts/docker_stack_mac.sh up robocasa
 
 # stand AND walk — the lower-body controller pinned to ALMI

@@ -17,7 +17,7 @@ from golem_lowerbody_rl.profile import known_robots
 
 __all__ = [
     'Band', 'Commands', 'Faults', 'Heartbeat', 'RUN_NAMES', 'RunConfig', 'SECTION_KEYS',
-    'Startup', 'TOP_LEVEL_KEYS', 'load_run_config',
+    'Startup', 'TOP_LEVEL_KEYS', 'load_run_config', 'run_config_path',
 ]
 
 # section -> the keys it must hold
@@ -173,6 +173,24 @@ def _check(raw, role: str | None) -> RunConfig:
     )
 
 
+def run_config_path(robot: str, name_or_path: str) -> str:
+    """
+    Return the file of robot's run config name_or_path.
+
+    name_or_path is one of RUN_NAMES (the installed config/<robot>/<name>.yaml) or the path
+    of a .yaml file. Raises ValueError for an unknown robot or name.
+    """
+    if robot not in known_robots():
+        raise ValueError(f"unknown robot '{robot}': one of {', '.join(known_robots())}")
+    if name_or_path.endswith('.yaml'):
+        return name_or_path
+    if name_or_path in RUN_NAMES:
+        return os.path.join(get_package_share_directory('golem_lowerbody_rl'), 'config', robot,
+                            f'{name_or_path}.yaml')
+    raise ValueError(f"unknown run config '{name_or_path}' of robot {robot}: one of "
+                     f"{', '.join(RUN_NAMES)}, or the path of a .yaml file")
+
+
 def load_run_config(robot: str, name_or_path: str) -> RunConfig:
     """
     Return the checked run config of robot.
@@ -182,16 +200,7 @@ def load_run_config(robot: str, name_or_path: str) -> RunConfig:
     Raises ValueError, naming the file and the key, for an unknown robot or name, a missing
     or unknown key, or a value of the wrong type or out of range.
     """
-    if robot not in known_robots():
-        raise ValueError(f"unknown robot '{robot}': one of {', '.join(known_robots())}")
-    if name_or_path.endswith('.yaml'):
-        path = name_or_path
-    elif name_or_path in RUN_NAMES:
-        path = os.path.join(get_package_share_directory('golem_lowerbody_rl'), 'config', robot,
-                            f'{name_or_path}.yaml')
-    else:
-        raise ValueError(f"unknown run config '{name_or_path}' of robot {robot}: one of "
-                         f"{', '.join(RUN_NAMES)}, or the path of a .yaml file")
+    path = run_config_path(robot, name_or_path)
     stem = os.path.splitext(os.path.basename(path))[0]
     with open(path, encoding='utf-8') as handle:
         raw = yaml.safe_load(handle)

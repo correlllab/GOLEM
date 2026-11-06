@@ -47,15 +47,12 @@ def generate_launch_description():
              output='screen'),
     ]
     if case == 'locomotion':
-        # The leg controller under test: ALMI with no operator confirm, as the sim bringups run it.
+        # The leg controller under test: ALMI on the H1-2's sim run config, as the sim bringups
+        # run it (no operator confirm; it releases the band). Its start needs frame_task_server's
+        # fresh commands and first /left_ee_pose, so the arm controller above runs in this case too.
         nodes.append(Node(
             package='golem_lowerbody_rl', executable='lowerbody_controller_node', name='lowerbody_controller_node',
-            parameters=[sim_time, {
-                'active_policy': 'almi',
-                'engage_wait_for_confirm': False,
-                'imu_offset_roll_deg': 0., 'imu_offset_pitch_deg': 0., 'imu_offset_yaw_deg': 0.,
-                'max_state_gap': 0.5, 'cmd_vel_timeout': 0.5,
-            }], output='screen'))
+            parameters=[sim_time, {'robot': 'h12', 'config': 'sim', 'policy': 'almi'}], output='screen'))
     # A dead controller invalidates the test, so no run continues with part of the stack.
     guards = [RegisterEventHandler(OnProcessExit(target_action=node, on_exit=[
         EmitEvent(event=Shutdown(reason='A required integration-test ROS node exited')),

@@ -7,10 +7,11 @@ navigation. It declares no launch arguments.
 The GOLEM_* environment variables (docker/mac/docker-compose.yml passes them)
 choose the optional ones:
 
-  GOLEM_LOWERBODY   fame | walk | almi: h12_lowerbody with that policy, which
-                    pre-poses the legs and releases the sim's elastic band; almi
-                    stands and walks on /cmd_vel. Unset or empty: no leg node, and
-                    the band holds the robot. Any other value is refused.
+  GOLEM_LOWERBODY   one of the H1-2's policies (golem_lowerbody_rl's
+                    config/h12/robot.yaml): h12_lowerbody with policy:= that policy,
+                    which pre-poses the legs and releases the sim's elastic band; almi
+                    stands and walks on /cmd_vel. Unset or empty: no leg node, and the
+                    band holds the robot. Any other value is refused.
   GOLEM_SLAM        1 | true | on (either one): golem_slam's navigation graph for
   GOLEM_NAV2        the H1-2 (FAST-LIO, OctoMap, slam_toolbox, Nav2).
 
@@ -23,12 +24,12 @@ launch_ros_mac.sh launches this file by path:
 import os
 
 from ament_index_python.packages import get_package_share_directory
+from golem_lowerbody_rl.profile import load_profile
 from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
-POLICIES = ('fame', 'walk', 'almi')
 ON = ('1', 'true', 'on')
 
 
@@ -48,12 +49,12 @@ def _env(name):
 
 def generate_launch_description():
     """Include the blocks the GOLEM_* variables choose; refuse an unknown GOLEM_LOWERBODY."""
-    bringup_share = get_package_share_directory('golem_bringup')
-    lowerbody = _env('GOLEM_LOWERBODY')
-    if lowerbody and lowerbody not in POLICIES:
+    policy = _env('GOLEM_LOWERBODY')
+    policies = load_profile('h12').policies
+    if policy and policy not in policies:
         raise RuntimeError(
-            f'h12_sim_mac: GOLEM_LOWERBODY={lowerbody!r} is not one of '
-            f'{", ".join(POLICIES)} (unset or empty starts no leg node)')
+            f'h12_sim_mac: GOLEM_LOWERBODY={policy!r} is not one of '
+            f'{", ".join(policies)} (unset or empty starts no leg node)')
 
     # The simulator publishes /clock; every node uses it so TF lookups and sensor
     # stamps agree with the simulation.
@@ -76,13 +77,14 @@ def generate_launch_description():
             'frame_task_delay': '0.0',
         }),
     ]
-    if lowerbody:
+    if policy:
         # The legs; the sim needs no operator check of the start pose.
         actions.append(_include('golem_bringup', 'h12/h12_lowerbody.launch.py', {
             **sim_time,
             'start_position_verified': 'true',
-            'lowerbody': lowerbody,
-            'lowerbody_params': os.path.join(bringup_share, 'config', 'h12', 'lowerbody_sim.yaml'),
+            'policy': policy,
+            'sim': 'true',
+            'lowerbody_config': 'sim',
         }))
     if _env('GOLEM_SLAM') in ON or _env('GOLEM_NAV2') in ON:
         # SLAM and Nav2, driving the legs on /cmd_vel.

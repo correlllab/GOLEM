@@ -15,14 +15,14 @@ def run_data():
             joints[3]=.4+.1*math.sin((t-5.)*2*math.pi)
             joints[9]=.4-.1*math.sin((t-5.)*2*math.pi)
         rows.append(dict(sim_time=t, position=[forward,0.,1.], quaternion=[1.,0.,0.,0.], joint_positions=joints, support_active=False))
-    return rows, dict(balance=(0.,5.),walk=(5.,8.),stop=(8.,11.)), [(0.,'almi'),(5.1,'walk'),(8.5,'almi')]
+    return rows, dict(balance=(0.,5.),walk=(5.,8.),stop=(8.,11.)), [(0.,'almi')]
 
 
 class LowerbodyScoringTests(unittest.TestCase):
     """Score a passing run and variants of it with one fault each."""
 
-    def test_successful_walk_and_return_to_almi(self):
-        """A run that balances, walks 0.45 m and returns to ALMI passes."""
+    def test_successful_walk_on_almi(self):
+        """A run that balances, walks 0.45 m and stops, on ALMI throughout, passes."""
         report=score_run(*run_data())
         self.assertAlmostEqual(report['forward_displacement'],.45)
     def test_supported_robot_cannot_pass_balance(self):
@@ -52,15 +52,17 @@ class LowerbodyScoringTests(unittest.TestCase):
         for row in rows: row['position'][0]=0.
         with self.assertRaisesRegex(AssertionError,'Forward displacement'):
             score_run(rows,phases,policies)
-    def test_must_return_to_almi_after_stop(self):
-        """A run that stays on the walking policy after the stop fails."""
-        rows,phases,policies=run_data();policies.pop()
+    def test_policy_must_stay_active(self):
+        """A run whose policy stops (idle, a fault) in a scored phase fails."""
+        rows,phases,policies=run_data();policies.append((9.,'idle'))
         with self.assertRaisesRegex(AssertionError,'expected active policy almi'):
             score_run(rows,phases,policies)
-    def test_direct_almi_locomotion_is_selectable(self):
-        """With `expected_walk_policy=almi`, ALMI throughout passes."""
+    def test_expected_policy_is_selectable(self):
+        """With `expected_policy=walk`, WALK throughout passes and ALMI fails."""
         rows,phases,_=run_data()
-        score_run(rows,phases,[(0.,'almi')],expected_walk_policy='almi')
+        score_run(rows,phases,[(0.,'walk')],expected_policy='walk')
+        with self.assertRaisesRegex(AssertionError,'expected active policy walk'):
+            score_run(rows,phases,[(0.,'almi')],expected_policy='walk')
     def test_missing_telemetry_cannot_hide_fall(self):
         """A one-second telemetry gap fails as stale."""
         rows,phases,policies=run_data();rows=[r for r in rows if not 6. < r['sim_time'] < 7.]

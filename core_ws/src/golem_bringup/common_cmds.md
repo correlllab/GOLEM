@@ -39,10 +39,14 @@ source ~/GOLEM/core_ws/install/setup.bash
 ros2 launch golem_bringup h12_real_robot.launch.py start_position_verified:=true
 ```
 
-The leg controller logs `waiting for /safety/heartbeat before pre-posing the
-legs`, ramps the legs into the ALMI crouch, then holds and logs
-`legs pre-posed (settled, err=...) — holding`. If it reports `NOT SETTLED` or
-the legs jump, Ctrl-C and do not engage.
+The leg node logs `loaded run config .../config/h12/real.yaml and policy
+.../config/h12/policies/almi.yaml`, then `waiting to pre-pose the legs: no
+/safety/heartbeat yet`, ramps the legs into the ALMI crouch, then holds and logs
+`legs pre-posed (settled, max error ... rad) — holding until the operator
+confirms`. If it reports `NOT SETTLED` or the legs jump, Ctrl-C and do not
+engage. The confirm is accepted only once the node logs `legs pre-posed (...) —
+holding; the policy may start` (every 5 s): 1 s of steady `/lowstate` and the
+arm controller commanding; until then it logs `the policy waits: <reason>`.
 
 Two start-up failures to watch for in this terminal:
 
@@ -57,8 +61,9 @@ Two start-up failures to watch for in this terminal:
   boards, lengthen the attempt. Restart the whole bringup. An attempt that
   outlasts the 3 s and then connects only delays the start: `safety_node`
   publishes no `/safety/heartbeat` before the first estop sample (and a
-  `/lowstate` reporting `mode_machine` 6), so the leg controller keeps logging
-  `waiting for /safety/heartbeat` and the legs stay at zero gain until then.
+  `/lowstate` reporting `mode_machine` 6), so the leg node keeps logging
+  `waiting to pre-pose the legs: no /safety/heartbeat yet` and the legs stay at
+  zero gain until then.
 - **The arms start only once `golem_safety` relays them.** `frame_task_server`
   (`golem_upper_ik`) holds the arms where they are until it sees its commands
   on `/lowcmd`. If that has not happened within 30 s
@@ -80,6 +85,21 @@ sample for 0.5 s), and then writes 50 zero-gain commands and goes silent.
 
 ```bash
 ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
+```
+
+A refused confirm answers `refused: ...` with the reason; the leg node logs
+`policy started` when it takes the legs. To run another H1-2 policy, launch
+with `policy:=fame` or `policy:=walk`. FAME's height command is
+`/lowerbody/height` (`std_msgs/Float32`, in the policy's own units):
+
+```bash
+ros2 topic pub --once /lowerbody/height std_msgs/msg/Float32 "{data: 0.9}"
+```
+
+The IMU trim is live (deg, within ±15; `real.yaml`'s `imu_trim_deg` seeds it):
+
+```bash
+ros2 param set /lowerbody_controller_node imu_trim_pitch_deg -2.0
 ```
 
 **3. Desktop — perception and skills:**

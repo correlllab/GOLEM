@@ -1,12 +1,32 @@
 """
 Replay the golden traces in test/golden/ through the config-driven policy runner.
 
-The traces (test/golden/record_goldens.py, its docstring lists every array) hold what
-the policy classes the runner replaces computed from scripted inputs. Each policy's
-runner, built from the robot's sim run config and its spec in config/<robot>/policies/,
-gets the same inputs: the golden ``cmd`` and ``height`` as the supervisor hands them on,
-a reset where ``reset`` is set (engage and band release, seeded with that step's
-command), and ALMI's onset resets from its own command processing.
+The traces hold what the policy classes the runner replaces computed from scripted inputs
+(their recorder is test/golden/record_goldens.py at commit a4ea767; it needs those
+classes). Each policy's runner, built from the robot's sim run config and its spec in
+config/<robot>/policies/, gets the same inputs: the golden ``cmd`` and ``height`` as the
+supervisor hands them on, a reset where ``reset`` is set (engage and band release, seeded
+with that step's command), and ALMI's onset resets from its own command processing.
+
+Arrays in every ``<policy>.npz`` (N = 120 steps, one per 20 ms; S = 27 body slots on the
+H1-2, 29 on the G1):
+
+- ``t`` (N,) float64, s: the node clock handed to the policy; 5.0 at step 0, 0.02 apart.
+- ``q``, ``dq`` (N, S) float32, rad and rad/s: every body slot of ``rt/lowstate``.
+- ``quat_wxyz`` (N, 4) float32: the IMU orientation, w first, a unit quaternion.
+- ``gyro`` (N, 3) float32, rad/s.
+- ``cmd`` (N, 3), m/s, m/s, rad/s: the raw velocity command; steps of zero, ramps up and
+  down, and a hold, so ALMI's onset resets twice.
+- ``height`` (N,) float64: the raw height command (1.0 on the H1-2; 0.74, then 0.60 from
+  step 40 on the G1).
+- ``reset`` (N,) bool: the policy is reset before this step (0, engage; 60, band release).
+- ``net_input`` (N, I) and ``net_output`` (N, 12) float32: what the network got and
+  returned; ``targets`` (N, 12) float32, rad: the leg targets in leg order.
+- ``kp``, ``kd`` (12,): the leg gains.
+- ALMI ``onset`` (N,) bool and ``cmd_policy`` (N, 3): its onset resets and the command the
+  network observed before its scale. FAME ``enc_input`` (N, 21) and ``z`` (N, 8): its
+  encoder's input and latent. HOMIE ``cmd_policy`` (N, 3) and ``height_policy`` (N,): the
+  filtered commands its network observed.
 
 The runner differs from the classes it replaces in two ways, and the goldens are
 replayed bit for bit only with both reverted. Gravity comes from the normalised

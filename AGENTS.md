@@ -176,8 +176,8 @@ nests `unitree_api`, `unitree_go`, `unitree_hg`, `unitree_ros2_example`).
 | `golem_upper_ik` | **controller (upper body, both robots)** | Pink IK on the 14 arm joints with the torso (H1-2) or waist (G1) held; OMPL planning and a self-collision barrier from each robot's sphere model and SRDF (the G1's spheres were packed on the rubber-hand G1: none on the Dex3-1 fingers; its torso spheres stand inside the torso's flanks, so `home` keeps the H1-2's 20 mm `d_min`; its `arms_down`, where the real hands rest on the hips, is in self-collision); the follow gate; the safety/controller config pairing (each robot's `config/<robot>/pairing.yaml`, applied by `golem_upper_ik.pairing`) that `upper_ik.launch.py` checks; each robot's data (IK and held joints, frames, named postures) is `config/<robot>/robot.yaml` | `frame_task_server` (`/frame_task`, `/named_config`), `joint_state_publisher`; `launch/upper_ik.launch.py` (the pairing check, then `frame_task_server` after `start_delay`) and `launch/robot_state.launch.py` (`robot_state_publisher` on the robot's URDF + `joint_state_publisher`), which both robots' bringups include |
 | `golem_bringup` | **bringup (both robots)** | Launch-only package that starts the whole H1-2 (`launch/h12/`) or G1 (`launch/g1/`), sim or real. See §6. | top-level + building-block launch files, `config/h12/*.yaml` |
 | `golem_ros2_models` | **description (both robots)** | Installs both robots' models from `CL_Assets`: the H1-2 with its Magpie grippers and the G1 with its Dex3-1 hands, each a Pinocchio URDF, a ROS copy with `package://golem_ros2_models/...` URIs, the meshes, and a sphere-packed self-collision model with its SRDF. No nodes and no joint table (that is `golem_safety`'s robot profile) | `golem_ros2_models.paths`; `launch/display.launch.py` (`robot:=h12|g1`) |
-| `deploy_mjpc` | controller (lower body, MPC) | MJPC balance/locomotion controller (C++ cores from the `mujoco_mpc` fork, run as separate processes) + RW-EKF base estimator. No bringup starts the controller today (`lowerbody:=mjpc` starts no leg node), and the estimator only with `use_estimator:=true` | `mjpc_lowerbody_core`, `controller_launcher.py`, `estimator_node.py` |
-| `golem_lowerbody_rl` | controller (lower body, RL) | TorchScript walking, FAME RMA stand/squat and ALMI stand/walk policies, run by one controller pinned to one of them (`active_policy`: `almi` in every bringup; the Mac's `GOLEM_LOWERBODY` picks `fame`, `walk` or `almi`); consumes `/lowstate` + `/cmd_vel`, emits 12-joint PD setpoints | `lowerbody_controller_node` |
+| `deploy_mjpc` | controller (lower body, MPC) | MJPC balance/locomotion controller (C++ cores from the `mujoco_mpc` fork, run as separate processes) + RW-EKF base estimator. No bringup starts the controller today (`policy:=mjpc` starts no leg node), and the estimator only with `use_estimator:=true` | `mjpc_lowerbody_core`, `controller_launcher.py`, `estimator_node.py` |
+| `golem_lowerbody_rl` | controller (lower body, RL) | One leg node, run from config: a robot's `config/<robot>/` (its policies, `sim.yaml`, `real.yaml`) and each policy's spec in `config/<robot>/policies/` (observation, runtime, action). The H1-2 runs the TorchScript walking, FAME RMA stand/squat and ALMI stand/walk policies, one per run (`policy:=`: `almi` in every bringup; the Mac's `GOLEM_LOWERBODY` picks `fame`, `walk` or `almi`); consumes `/lowstate` + `/cmd_vel` (+ `/lowerbody/height`), emits 12-joint PD setpoints | `lowerbody_controller_node`; `launch/lowerbody.launch.py` (`robot`, `config`, `policy`, `sim`; refuses a run config for the other platform or an unlisted policy before any node starts), which `h12_lowerbody.launch.py` includes |
 | `lmg_deploy` | controller (whole body, MARL) | The loco-manipulation game's two-agent (legs + IK arms) MARL policy, run by the `lmg_*` bringups. It reads `/livox/imu` as if `livox_imu_link` were upright; the H1-2's models and RoboCasa sim carry the MID-360's raw, upside-down frame there, so the policy gets an upside-down IMU until `lmg_deploy` is updated (its strict xfail `test_urdf_mount_is_the_livox_pitch`) | `marl_deploy_node` |
 | `golem_slam` | SLAM + navigation (both robots) | One navigation graph for both robots (FAST-LIO deskewed cloud → self filter → floor alignment (`level_odom`)/OctoMap and `level_cloud` → scan → slam_toolbox → Nav2 MPPI, every Nav2 command through the velocity smoother), with the dynamic `body → pelvis` transform (`body_to_pelvis`, following the torso or waist joints) and a static `<lidar link> → livox_frame`. `navigation.launch.py robot:=h12\|g1` picks the robot's config directory, `config/<robot>/`: FAST-LIO (`fastlio.yaml`, the G1 sim's `fastlio_sim.yaml`), the MID360 driver config (`MID360_config.json`, real robot, read by the real-driver launches), Nav2 (`nav2.yaml`), OctoMap (`octomap.yaml`) and the pipeline profile (`pipeline.yaml`: lidar link, scan band, `level_odom` values); slam_toolbox's `config/slam_toolbox.yaml` is shared; `config/example.<kind>.yaml` annotate every key and are not installed | `launch/navigation.launch.py`, `body_to_pelvis`, `config/` |
 | `golem_skills` | **skills (both robots)** | Action servers for the 12 `/skill/*` atomic skills an LLM can call (frontier exploration lives here). See §7. | `skills` (SkillsNode) |
@@ -236,9 +236,9 @@ including `h12_control.launch.py`'s `sim`, which has no default.
 
 | Top-level launch file | Scenario | Includes |
 |---|---|---|
-| `h12_sim.launch.py` | **x86 sim** (`use_sim_time=true`), plus the camera optical-frame static TF and rviz (`use_rviz`) | state, control (`sim:=true`, `sim_safety_split` for both `safety_node` and `frame_task_server`, no stagger), lowerbody (`lowerbody_sim.yaml`), models (`use_skills`), navigation (`use_nav`) |
-| `h12_sim_mac.launch.py` | **mac sim** — `h12_sim`'s blocks with `h12_sim`'s arguments, chosen by `GOLEM_*` env vars, not launch args: lowerbody when `GOLEM_LOWERBODY` is `fame`, `walk` or `almi` (unset or empty: none; another value is refused), navigation (`robot: h12`) when `GOLEM_SLAM` or `GOLEM_NAV2` is `1`, `true` or `on`. No models, rviz or Isaac camera TF | state, control (`sim:=true`, `sim_safety_split` for both, no stagger), [lowerbody] (`lowerbody_sim.yaml`), [navigation] |
-| `h12_real_robot.launch.py` | **real robot, onboard PC** (native, `ROS_DOMAIN_ID=0`) | real_drivers, navigation, state, control (`sim:=false`, `use_estop:=true`, the defaults `relax_safety_split` and `safety_split`), lowerbody (`lowerbody_real.yaml`, no estimator). Leg control is interlocked behind `start_position_verified:=true` (default **false**) |
+| `h12_sim.launch.py` | **x86 sim** (`use_sim_time=true`), plus the camera optical-frame static TF and rviz (`use_rviz`) | state, control (`sim:=true`, `sim_safety_split` for both `safety_node` and `frame_task_server`, no stagger), lowerbody (run config `sim`), models (`use_skills`), navigation (`use_nav`) |
+| `h12_sim_mac.launch.py` | **mac sim** — `h12_sim`'s blocks with `h12_sim`'s arguments, chosen by `GOLEM_*` env vars, not launch args: lowerbody when `GOLEM_LOWERBODY` is `fame`, `walk` or `almi` (unset or empty: none; another value is refused), navigation (`robot: h12`) when `GOLEM_SLAM` or `GOLEM_NAV2` is `1`, `true` or `on`. No models, rviz or Isaac camera TF | state, control (`sim:=true`, `sim_safety_split` for both, no stagger), [lowerbody] (run config `sim`, `policy:=` `GOLEM_LOWERBODY`), [navigation] |
+| `h12_real_robot.launch.py` | **real robot, onboard PC** (native, `ROS_DOMAIN_ID=0`) | real_drivers, navigation, state, control (`sim:=false`, `use_estop:=true`, the defaults `relax_safety_split` and `safety_split`), lowerbody (run config `real`, no estimator). Leg control is interlocked behind `start_position_verified:=true` (default **false**) |
 | `h12_real_desktop.launch.py` | **real: companion x86 desktop** — rviz, plus the hand cameras with `use_hand_cameras:=true` (default **false**) | models (`use_yolo:=true`) |
 | `h12_safety_grippers.launch.py` | real: actuation-only debug bringup | control (`sim:=false`, estop + safety, no IK), grippers |
 | `lmg_sim.launch.py` | **x86 sim**, loco-manipulation game: the `lmg_deploy` MARL policy (`policy:=`, required; `mid360v2` ships) owns all 27 joints, no operator confirm. Refuses an unset or 0 `ROS_DOMAIN_ID` | state, control (`sim:=true`, no IK, no stagger), locomanipulationgame, navigation (`use_slam`) |
@@ -248,7 +248,7 @@ including `h12_control.launch.py`'s `sim`, which has no default.
 |---|---|
 | `h12_state.launch.py` | `golem_upper_ik`'s `robot_state.launch.py` (`robot: h12`, `urdf_file` passed on): `joint_state_publisher` (the 27 body joints from `/lowstate`) + `robot_state_publisher` |
 | `h12_control.launch.py` | [`estop_node`] → `golem_safety`'s `safety_node` (its `safety.launch.py`: `robot: h12`, `safety_config`, `sim`, `use_estop`) → `golem_upper_ik`'s `frame_task_server` (its `upper_ik.launch.py`: `robot: h12`, `frame_task_config`; `use_frame_task`), staggered by `safety_delay` (3 s) / `frame_task_delay` (5 s), passed on as each file's `start_delay`. `sim` has no default: a launch without it fails before any node starts. With `use_frame_task` it includes `upper_ik.launch.py` first, which refuses a `frame_task_config` that does not run with `safety_config` (`golem_upper_ik.pairing`) before anything starts. Only the pairs in `golem_upper_ik/config/h12/pairing.yaml` start, by name (a path only if its file name is a paired name), and sim and real configs do not mix |
-| `h12_lowerbody.launch.py` | RL `lowerbody_controller_node` (`lowerbody:=`, params from `lowerbody_params`) and optional MJPC `estimator_node`, both behind `start_position_verified` |
+| `h12_lowerbody.launch.py` | `golem_lowerbody_rl`'s `lowerbody.launch.py` (`robot: h12`, `policy:=`, run config `lowerbody_config`, `sim`, every argument passed) and optional MJPC `estimator_node`, both behind `start_position_verified`; `policy:=mjpc` starts no leg node |
 | `h12_models.launch.py` | gemini + sam servers, [yolo], graspgen + `golem_skills` (`use_skills`) |
 | `h12_real_drivers.launch.py` | Livox MID360 (no extrinsic rotation: the points and `/livox/imu` are both in the sensor's raw, upside-down frame, the URDF's `livox_link` and `livox_imu_link`), RealSense head camera, `h12_grippers.launch.py` (left+right `gripper_node`) |
 | `h12_locomanipulationgame.launch.py` | `marl_deploy_node` (behind `start_position_verified`; holds arm goals in the world by the SLAM `/Odometry`) |
@@ -311,21 +311,28 @@ for the includes after it, so pass consistent values (all four blocks share
   cover the time `estop_node` takes to connect (the comment in
   `h12_control.launch.py`).
 - **The leg node** (`golem_lowerbody_rl`'s `lowerbody_controller_node`, its
-  README) is silent until the first true heartbeat and an upright, finite
-  `/lowstate`. It then ramps the legs to the policy's crouch, holds there on
-  the real robot until `ros2 service call /lowerbody/confirm_engage
+  README; the values are the run config's, `config/h12/{sim,real}.yaml`) is
+  silent until the first true heartbeat and an upright, finite `/lowstate`. It
+  then ramps the legs over 2 s to the policy's crouch and holds there. The
+  policy may start once `/lowstate` has been steady for 1 s (its tick
+  advancing at the node clock's rate, so Isaac's tick, which counts publishes,
+  never qualifies), the arm controller's commands are fresh within 0.5 s and,
+  in the sim, `frame_task_server`'s first `/left_ee_pose` has come (or
+  `band.max_wait`, 34 s); the node logs why it waits. On the real robot it
+  then holds until `ros2 service call /lowerbody/confirm_engage
   std_srvs/srv/Trigger` (refused at any other time), and runs the policy. A
-  `/cmd_vel` older than `cmd_vel_timeout` (0.5 s) is zero velocity. Once the
-  legs are commanded, a `/lowstate` gap over `max_state_gap` (0.25 s real,
-  0.5 s sim; measured between callbacks on the node's one executor, so it
-  includes executor stalls), a non-finite value or non-unit IMU quaternion,
-  a fall, a policy step that fails or gives non-finite targets, and in every
-  phase a false heartbeat or none for 0.5 s after the first, stop it for
-  good: it logs the fault once, publishes nothing more and stays up. In the
-  sim it calls `/elastic_band/toggle` once, when the service is there, once
-  the policy is engaged and `/left_ee_pose` has come (or `band_max_wait`);
+  `/cmd_vel` older than 0.5 s is zero velocity; `/lowerbody/height`
+  (`std_msgs/Float32`) is the policy's height command. Once the legs are
+  commanded, a `/lowstate` gap over `max_state_gap` (0.25 s real, 0.5 s sim;
+  `/lowstate` has its own executor thread), a tick that goes back, a
+  non-finite value or non-unit IMU quaternion, a fall, a policy step that
+  fails or gives non-finite targets, and in every phase a false heartbeat or
+  none for 0.5 s after the first, stop it for good: it logs the fault once,
+  publishes nothing more and stays up. In the sim it calls
+  `/elastic_band/toggle` once, when the service is there, once the policy runs
+  and `/left_ee_pose` has come (or `band.max_wait` after the policy started);
   the reply is final (a failure is logged as `elastic band release failed:
-  ...` and the band stays on), and a success resets the policy's history.
+  ...` and the band stays on), and a success resets the policy at once.
 
 **Wiring a new package into bringup:** add it as `exec_depend` in
 `golem_bringup/package.xml`, add a `launch_ros.actions.Node(...)` entry to the

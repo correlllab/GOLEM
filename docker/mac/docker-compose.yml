@@ -136,12 +136,12 @@ services:
       # vnc (or 1) also runs RViz2, rendered with llvmpipe into its own Xvfb
       # and served over noVNC on 6081, apart from the MuJoCo viewer's 6080.
       - GOLEM_RVIZ=${GOLEM_RVIZ:-0}
-      # The leg block of h12_sim_mac.launch.py: fame, walk or almi starts
-      # golem_lowerbody_rl's controller pinned to that policy, which pre-poses
-      # the legs and then releases the elastic band. fame stands only; walk
-      # and almi follow /cmd_vel, and almi also stands (the one for
-      # navigation). Empty: no leg controller, the band holds the robot; any
-      # other value stops the bringup.
+      # The leg block of h12_sim_mac.launch.py, as its policy:=: one of the
+      # H1-2's policies (fame, walk or almi) starts golem_lowerbody_rl's leg
+      # node on it, which pre-poses the legs and then releases the elastic
+      # band. fame stands only; walk and almi follow /cmd_vel, and almi also
+      # stands (the one for navigation). Empty: no leg node, the band holds
+      # the robot; any other value stops the bringup.
       - GOLEM_LOWERBODY=${GOLEM_LOWERBODY:-}
       # 1 (true, on) on either one starts golem_slam's navigation graph for
       # the H1-2: FAST-LIO odometry, the self filter, OctoMap, slam_toolbox

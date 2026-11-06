@@ -46,11 +46,12 @@ def distance(a, b):
     return math.hypot(a['position'][0]-b['position'][0], a['position'][1]-b['position'][1])
 
 
-def score_run(rows, phases, policies, expected_walk_policy='walk'):
+def score_run(rows, phases, policies, expected_policy='almi'):
     """Score a completed 5 s balance, 3 s walk and 3 s stop run, or raise AssertionError naming the fault.
 
     `phases` maps each phase to its (start, end) sim time; `policies` lists (sim time, active
-    policy) changes. Returns the measured values with the limits.
+    policy) changes, and expected_policy must be active throughout. Returns the measured values
+    with the limits.
     """
     selected = {}
     for name, duration in (('balance', 5.), ('walk', 3.), ('stop', 3.)):
@@ -80,14 +81,8 @@ def score_run(rows, phases, policies, expected_walk_policy='walk'):
         eligible = [(t, p) for t, p in policies if t <= stamp]
         assert eligible, 'Missing active_policy state'
         return max(eligible, key=lambda pair: pair[0])[1]
-    for row in selected['balance']:
-        assert policy_at(row['sim_time']) == 'almi', 'ALMI not continuously active during balance'
-    # The walk may hand over to its policy in its first second and must run it after that; the
-    # stop must be back on ALMI from 2 s in.
-    for phase, policy, settle in (('walk', expected_walk_policy, 1.), ('stop', 'almi', 2.)):
-        for row in selected[phase]:
-            if row['sim_time'] >= phases[phase][0]+settle:
-                assert policy_at(row['sim_time']) == policy, f'{phase}: expected active policy {policy}'
+    for row in all_rows:
+        assert policy_at(row['sim_time']) == expected_policy, f'expected active policy {expected_policy} throughout'
     first, last = selected['walk'][0], selected['walk'][-1]
     w, x, y, z = first['quaternion']
     yaw = math.atan2(2.*(w*z+x*y), 1.-2.*(y*y+z*z))
@@ -112,7 +107,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--telemetry', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--expected-walk-policy', choices=('walk', 'almi'), default='walk')
+    parser.add_argument('--expected-policy', default='almi',
+                        help='The policy /lowerbody/active_policy must name in every scored phase')
     parser.add_argument('--confirm-engage', action='store_true', help='Call confirm_engage on the isolated simulation domain')
     parser.add_argument('--wall-timeout', type=float, default=600.)
     args = parser.parse_args()
@@ -179,7 +175,7 @@ def main():
                 if not row['support_active']:
                     assert row['position'][2] >= LIMITS['minimum_height'], 'Unsupported base collapsed before completing acceptance'
                     assert tilt_deg(row['quaternion']) <= LIMITS['max_tilt_deg'], 'Unsupported base exceeded tilt limit before completing acceptance'
-    report = dict(success=False, expected_walk_policy=args.expected_walk_policy, phases=phases)
+    report = dict(success=False, expected_policy=args.expected_policy, phases=phases)
     try:
         while True:
             pump()
@@ -188,7 +184,7 @@ def main():
             if future is not None and future.done():
                 response = future.result()
                 assert response is not None and response.success, f'Engage rejected: {response}'
-            if (state['clock'] is not None and state['policy'] == 'almi' and
+            if (state['clock'] is not None and state['policy'] == args.expected_policy and
                 state['lowstate_at'] is not None and time.monotonic()-state['lowstate_at'] < 2. and
                 rows and abs(rows[-1]['sim_time']-state['clock']) < .25 and not rows[-1]['support_active']):
                 break
@@ -202,7 +198,7 @@ def main():
         # Wait for the sim's last telemetry rows of the stop phase; scored phases are already over.
         while not rows or rows[-1]['sim_time'] < phases['stop'][1]-.05:
             pump()
-        report.update(score_run(rows, phases, policies, args.expected_walk_policy))
+        report.update(score_run(rows, phases, policies, args.expected_policy))
         report['success'] = True
         print('LOWERBODY_STACK_PASS', flush=True)
     except Exception as exc:

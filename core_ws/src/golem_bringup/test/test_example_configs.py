@@ -7,7 +7,6 @@ import yaml
 CONFIG = Path(__file__).resolve().parents[1] / 'config' / 'h12'
 # example kind -> the configs it describes.
 DESCRIBED = {
-    'lowerbody': ('lowerbody_real.yaml', 'lowerbody_sim.yaml'),
     'mjpc': ('mjpc_real.yaml', 'mjpc_sim.yaml'),
 }
 

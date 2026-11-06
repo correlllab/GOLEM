@@ -19,8 +19,8 @@ GOLDEN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'golden')
 SOURCE_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'config')
 DT = 0.02  # s, one 50 Hz policy step
 ATOL = 1e-6
-# golem_lowerbody_rl.policy_classes.FamePolicy._encode of FAME's golden step 0 with the hand
-# forces FORCES (computed with that class before the runner replaced it)
+# FAME's latent at its golden step 0 with the hand forces FORCES, as its policy class
+# computed it (policy_classes.FamePolicy._encode at commit a4ea767)
 FORCES = [[1.0, -2.0, 3.0], [0.5, 0.0, -1.0]]
 OLD_FAME_Z = [0.03601088374853134, -1.5208951234817505, 1.9404932260513306,
               2.3350117206573486, 0.4966792166233063, 0.23099984228610992,

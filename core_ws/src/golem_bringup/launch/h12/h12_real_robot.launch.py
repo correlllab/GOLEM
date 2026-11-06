@@ -11,7 +11,7 @@ frame_task_server after h12_control's default delays) and the leg controller
 (h12_lowerbody, no estimator).
 
 SAFETY: the legs are behind two operator gates:
-  1. start_position_verified:=true starts the lowerbody:= policy, which ramps the legs
+  1. start_position_verified:=true starts the policy:= policy, which ramps the legs
      to the policy's pre-pose crouch and holds there;
   2. ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger engages it.
 
@@ -47,14 +47,12 @@ def generate_launch_description():
     # The real robot runs on the wall clock: there is no /clock.
     wall_time = {'use_sim_time': 'false'}
 
-    bringup_share = get_package_share_directory('golem_bringup')
-
     return LaunchDescription([
         # SAFETY: false by default, so a bare launch never commands the legs.
         DeclareLaunchArgument('start_position_verified', default_value='false',
                               description='true only after checking the robot is in a '
                                           'safe start pose: starts the leg controller'),
-        DeclareLaunchArgument('lowerbody', default_value='almi',
+        DeclareLaunchArgument('policy', default_value='almi',
                               description='The policy golem_lowerbody_rl runs on the legs: '
                                           'almi, fame or walk; mjpc starts no leg node'),
 
@@ -74,9 +72,9 @@ def generate_launch_description():
         _include('golem_bringup', 'h12/h12_lowerbody.launch.py', {
             **wall_time,
             'start_position_verified': LaunchConfiguration('start_position_verified'),
-            'lowerbody': LaunchConfiguration('lowerbody'),
-            'lowerbody_params': os.path.join(bringup_share, 'config', 'h12',
-                                             'lowerbody_real.yaml'),
+            'policy': LaunchConfiguration('policy'),
+            'sim': 'false',
+            'lowerbody_config': 'real',
             'use_estimator': 'false',
         }),
     ])

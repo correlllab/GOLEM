@@ -56,7 +56,7 @@ def generate_launch_description():
         DeclareLaunchArgument('record_runs', default_value='true',
                               description="true: golem_skills records each grasp and "
                                           "pick_place run under its logs/runs/<skill>/"),
-        DeclareLaunchArgument('lowerbody', default_value='almi',
+        DeclareLaunchArgument('policy', default_value='almi',
                               description='The policy golem_lowerbody_rl runs on the legs: '
                                           'almi, fame or walk. mjpc starts no leg node and '
                                           'no bringup starts the MJPC controller, so it '
@@ -92,8 +92,9 @@ def generate_launch_description():
         _include('golem_bringup', 'h12/h12_lowerbody.launch.py', {
             **sim_time,
             'start_position_verified': 'true',
-            'lowerbody': LaunchConfiguration('lowerbody'),
-            'lowerbody_params': os.path.join(bringup_share, 'config', 'h12', 'lowerbody_sim.yaml'),
+            'policy': LaunchConfiguration('policy'),
+            'sim': 'true',
+            'lowerbody_config': 'sim',
         }),
         # Perception servers and the LLM-callable skills.
         _include('golem_bringup', 'h12/h12_models.launch.py', {

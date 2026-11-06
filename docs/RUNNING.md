@@ -124,7 +124,7 @@ controller, the skills node, nav, and RViz. Common arguments:
 
 ```bash
 ros2 launch golem_bringup h12_sim.launch.py \
-  use_rviz:=false use_nav:=false use_skills:=false lowerbody:=fame
+  use_rviz:=false use_nav:=false use_skills:=false policy:=fame
 ```
 
 ## Worked example — open the fridge
@@ -169,8 +169,10 @@ G1's packages included, since `golem_bringup` exec_depends on them. The build in
 robot description from that package, not from `CL_Assets` directly.
 
 Leg commands are gated behind `start_position_verified:=true` (default false) —
-set it only after physically verifying the robot's pose. The `lowerbody:=` policy
-(default `almi`) then ramps the legs to its pre-pose crouch and holds until
+set it only after physically verifying the robot's pose. The `policy:=` policy
+(default `almi`; `golem_lowerbody_rl`'s `config/h12/robot.yaml` lists the H1-2's)
+then ramps the legs to its pre-pose crouch and, once `/lowstate` has been steady
+for 1 s and the arm controller commands, holds until
 
 ```bash
 ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger

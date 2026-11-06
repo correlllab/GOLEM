@@ -6,6 +6,13 @@ from setuptools import find_packages, setup
 package_name = 'golem_lowerbody_rl'
 
 
+def files(pattern):
+    """Return the files matching pattern that exist, sorted."""
+    # A --symlink-install build directory keeps dangling links to files deleted from the
+    # source; they are skipped.
+    return [path for path in sorted(glob(pattern)) if os.path.isfile(path)]
+
+
 def config_files():
     """
     Return (install dir, files) for every directory under config/<robot>/.
@@ -16,11 +23,12 @@ def config_files():
     entries = []
     for robot_dir in sorted(glob('config/*/')):
         for directory, _, names in sorted(os.walk(robot_dir)):
-            files = sorted(os.path.join(directory, name) for name in names
+            paths = sorted(os.path.join(directory, name) for name in names
                            if not name.startswith('example.'))
-            if files:
+            paths = [path for path in paths if os.path.isfile(path)]
+            if paths:
                 entries.append((os.path.join('share', package_name,
-                                             os.path.normpath(directory)), files))
+                                             os.path.normpath(directory)), paths))
     return entries
 
 
@@ -32,13 +40,14 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        # Policy weights + configs, installed under share/<pkg>/policies/<name>/.
+        (os.path.join('share', package_name, 'launch'), files('launch/*.launch.py')),
+        # the H1-2 policies' weights and READMEs; their specs are config/h12/policies/
         (os.path.join('share', package_name, 'policies', 'walk'),
-            glob('policies/walk/*')),
+            files('policies/walk/*')),
         (os.path.join('share', package_name, 'policies', 'fame'),
-            glob('policies/fame/*')),
+            files('policies/fame/*')),
         (os.path.join('share', package_name, 'policies', 'almi'),
-            glob('policies/almi/*')),
+            files('policies/almi/*')),
         # HOMIE's network with its licence (CC BY-NC-SA) and README; homie_policy.py and
         # the rest of the folder serve its MuJoCo script and the golden tests
         (os.path.join('share', package_name, 'policies', 'homie'),
@@ -59,8 +68,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'lowerbody_controller_node = '
-            'golem_lowerbody_rl.scripts.lowerbody_controller_node:main',
+            'lowerbody_controller_node = golem_lowerbody_rl.node:main',
         ],
     },
 )

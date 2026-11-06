@@ -2,7 +2,8 @@
 Test that the Mac's H1-2 sim bringup includes the x86 sim's blocks and golem_slam's navigation.
 
 h12_sim_mac.launch.py includes h12_state and h12_control with the arguments
-h12_sim.launch.py passes them, h12_lowerbody when GOLEM_LOWERBODY names a policy, and
+h12_sim.launch.py passes them, h12_lowerbody when GOLEM_LOWERBODY names one of the H1-2's
+policies (passed as policy:=), and
 golem_slam's navigation.launch.py for the H1-2 when GOLEM_SLAM or GOLEM_NAV2 is on. It
 reads the environment when its description is generated, so each case sets it first.
 Needs the workspace built and sourced (golem_bringup and golem_slam installed).
@@ -52,11 +53,11 @@ def _includes():
     return includes
 
 
-@pytest.mark.parametrize('lowerbody', [None, ''])
-def test_no_toggles_start_state_and_control(env, lowerbody):
+@pytest.mark.parametrize('policy', [None, ''])
+def test_no_toggles_start_state_and_control(env, policy):
     """With no toggles, only h12_state and h12_control, with the x86 sim's arguments."""
-    if lowerbody is not None:
-        env(GOLEM_LOWERBODY=lowerbody)
+    if policy is not None:
+        env(GOLEM_LOWERBODY=policy)
     includes = _includes()
     assert set(includes) == {'h12_state.launch.py', 'h12_control.launch.py'}
     for name, arguments in includes.items():
@@ -65,26 +66,26 @@ def test_no_toggles_start_state_and_control(env, lowerbody):
 
 @pytest.mark.parametrize('policy', ['almi', 'fame', 'walk', ' ALMI '])
 def test_lowerbody_includes_the_leg_block(env, policy):
-    """GOLEM_LOWERBODY includes the leg block with that policy and the x86 sim's arguments."""
+    """GOLEM_LOWERBODY includes the leg block with policy:= it and the x86 sim's arguments."""
     env(GOLEM_LOWERBODY=policy)
     includes = _includes()
     assert set(includes) == {'h12_state.launch.py', 'h12_control.launch.py',
                              'h12_lowerbody.launch.py'}
     arguments = includes['h12_lowerbody.launch.py']
-    assert arguments['lowerbody'] == policy.strip().lower()
-    # The x86 sim's arguments, its lowerbody launch argument aside.
+    assert arguments['policy'] == policy.strip().lower()
+    # The x86 sim's arguments, its policy launch argument aside.
     assert arguments == dict(_passed_to('h12_sim.launch.py', 'h12_lowerbody.launch.py'),
-                             lowerbody=policy.strip().lower())
+                             policy=policy.strip().lower())
     assert arguments['start_position_verified'] == 'true'
     assert arguments['use_sim_time'] == 'true'
-    assert Path(arguments['lowerbody_params']).name == 'lowerbody_sim.yaml'
+    assert (arguments['sim'], arguments['lowerbody_config']) == ('true', 'sim')
 
 
 @pytest.mark.parametrize('policy', ['bogus', 'mjpc'])
 def test_unknown_lowerbody_is_refused(env, policy):
-    """An unknown GOLEM_LOWERBODY is refused, naming the policies."""
+    """An unknown GOLEM_LOWERBODY is refused, naming the H1-2's policies."""
     env(GOLEM_LOWERBODY=policy)
-    with pytest.raises(RuntimeError, match=f"GOLEM_LOWERBODY={policy!r}.*fame, walk, almi"):
+    with pytest.raises(RuntimeError, match=f"GOLEM_LOWERBODY={policy!r}.*almi, walk, fame"):
         _includes()
 
 

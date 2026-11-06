@@ -29,7 +29,11 @@ isolated arm test; RoboCasa retains its normal support tether.
 
 Locomotion requires 5 simulation seconds of unsupported ALMI balance,
 3 seconds of forward `/cmd_vel`, and 3 seconds stopping, with ALMI the active
-policy throughout, as in bringup. Tests check physical height, tilt, displacement, both knees, support
+policy throughout, as in bringup. The leg node runs on the H1-2's sim run config
+(`golem_lowerbody_rl`'s `config/h12/sim.yaml`): its policy starts only once the
+arm controller's commands are fresh and `frame_task_server` has published its
+first `/left_ee_pose`, so this case runs `frame_task_server` too, holding the
+torso and arms as the sim bringup does. Tests check physical height, tilt, displacement, both knees, support
 release, telemetry continuity, and active policies. No fixed base is allowed.
 Isaac currently lacks RoboCasa's startup support tether, which may cause a
 real startup/balance failure. Thresholds are in `check_lowerbody.py`.

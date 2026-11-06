@@ -1,21 +1,26 @@
 """
-Test that both robots' bringups start golem_safety and golem_upper_ik through their launch files.
+Test that both robots' bringups start the shared packages' nodes through their launch files.
 
-golem_bringup depends on both packages. For the H1-2, h12_state.launch.py includes
-golem_upper_ik's robot_state.launch.py, and h12_control.launch.py, which needs sim from
+golem_bringup depends on golem_safety, golem_upper_ik and golem_lowerbody_rl. For the
+H1-2, h12_state.launch.py includes golem_upper_ik's robot_state.launch.py, and
+h12_control.launch.py, which needs sim from
 every top-level file (the real-robot ones pass use_estop), includes golem_upper_ik's
 upper_ik.launch.py first, whose pairing check refuses a frame_task_config that does not
 run with its safety_config, then golem_safety's safety.launch.py. For the G1,
 g1_core.launch.py includes the same three files: safety_node with robot g1, the safety
 config, sim as the top-level file says and no hardware estop, and frame_task_server and
-joint_state_publisher with robot g1. The nodes are read by walking those includes, as ros2
-launch runs them. The launch tests need the workspace built and sourced.
+joint_state_publisher with robot g1. The H1-2's h12_lowerbody.launch.py includes
+golem_lowerbody_rl's lowerbody.launch.py with robot h12 and every argument it takes, behind
+start_position_verified and not with policy:=mjpc. The nodes are read by walking those
+includes, as ros2 launch runs them. The launch tests need the workspace built and sourced.
 """
 
 import importlib.util
+import os
 from pathlib import Path
 import xml.etree.ElementTree as ElementTree
 
+from ament_index_python.packages import get_package_share_directory
 from golem_ros2_models.paths import urdf_path
 from launch import LaunchContext
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
@@ -26,14 +31,16 @@ from test_g1_launch import (
     _core_nodes, _location, _started, Started, UPPER_IK_LAUNCH)
 
 PACKAGE = Path(__file__).resolve().parents[1]
+LOWERBODY_LAUNCH = os.path.join(get_package_share_directory('golem_lowerbody_rl'), 'launch',
+                                'lowerbody.launch.py')
 
 
-def test_package_depends_on_golem_safety_and_golem_upper_ik():
-    """package.xml depends on golem_safety and golem_upper_ik."""
+def test_package_depends_on_the_shared_packages():
+    """package.xml depends on golem_safety, golem_upper_ik and golem_lowerbody_rl."""
     root = ElementTree.parse(PACKAGE / 'package.xml').getroot()
     depends = {element.text for element in root
                if element.tag in ('depend', 'exec_depend', 'build_depend', 'test_depend')}
-    assert {'golem_safety', 'golem_upper_ik'} <= depends
+    assert {'golem_safety', 'golem_upper_ik', 'golem_lowerbody_rl'} <= depends
 
 
 def _load(launch_file):
@@ -217,3 +224,56 @@ def test_core_runs_golem_safety_and_golem_upper_ik(launch_file, sim, safety_conf
         'robot': 'g1', 'config': controller_config, **sim_time})
     assert nodes['joint_state_publisher'] == Started('golem_upper_ik', [], 0.0, {
         'robot': 'g1', **sim_time})
+
+
+def _legs(**args):
+    """Return {executable: Started} of what h12_lowerbody starts with args."""
+    description = _load('h12_lowerbody.launch.py').generate_launch_description()
+    context = _context(description, **args)
+    return _started(description.entities, context, descend={LOWERBODY_LAUNCH})[0]
+
+
+@pytest.mark.parametrize('launch_file, sim, config', [
+    ('h12_sim.launch.py', 'true', 'sim'),
+    ('h12_real_robot.launch.py', 'false', 'real'),
+])
+def test_top_level_files_run_the_leg_node(launch_file, sim, config):
+    """The x86 sim and the real robot run ALMI on their run config, through lowerbody.launch.py."""
+    arguments = _passed_to(launch_file, 'h12_lowerbody.launch.py')
+    assert (arguments['policy'], arguments['sim'], arguments['lowerbody_config']) == (
+        'almi', sim, config)
+    # SAFETY: the real robot passes the operator's start_position_verified, false by default
+    assert arguments['start_position_verified'] == ('true' if sim == 'true' else 'false')
+    nodes = _legs(**dict(arguments, start_position_verified='true'))
+    assert nodes['lowerbody_controller_node'] == Started('golem_lowerbody_rl', [], 0.0, {
+        'robot': 'h12', 'config': config, 'policy': 'almi', 'use_sim_time': sim == 'true'})
+    assert 'estimator_node' not in nodes
+
+
+def test_leg_block_passes_every_argument():
+    """An earlier include's config and start_delay (Humble leaks them) do not reach the node."""
+    nodes = _legs(sim='true', lowerbody_config='sim', start_position_verified='true',
+                  policy='fame', config='sim_safety_split.yaml', start_delay='5.0')
+    assert nodes['lowerbody_controller_node'] == Started('golem_lowerbody_rl', [], 0.0, {
+        'robot': 'h12', 'config': 'sim', 'policy': 'fame', 'use_sim_time': False})
+
+
+@pytest.mark.parametrize('args', [
+    dict(start_position_verified='false'),
+    dict(start_position_verified='true', policy='mjpc'),
+])
+def test_leg_block_interlock_and_mjpc_start_no_leg_node(args):
+    """SAFETY: no leg node without start_position_verified, and none with policy:=mjpc."""
+    nodes = _legs(sim='false', lowerbody_config='real', **args)
+    assert 'lowerbody_controller_node' not in nodes
+
+
+@pytest.mark.parametrize('args, reason', [
+    (dict(sim='true', lowerbody_config='real'), "run config 'real' is for the real robot"),
+    (dict(sim='false', lowerbody_config='sim'), "run config 'sim' is for a simulator"),
+    (dict(sim='true', lowerbody_config='sim', policy='homie'), "unknown policy 'homie'"),
+])
+def test_leg_block_refuses_before_the_leg_node(args, reason):
+    """lowerbody.launch.py refuses a run config for the other platform and an unlisted policy."""
+    with pytest.raises(RuntimeError, match=f'^lowerbody: not starting: {reason}'):
+        _legs(start_position_verified='true', **args)

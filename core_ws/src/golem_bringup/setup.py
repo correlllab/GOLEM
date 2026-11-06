@@ -6,6 +6,16 @@ from setuptools import find_packages, setup
 
 package_name = 'golem_bringup'
 
+
+def files(pattern):
+    """Return the files matching pattern that exist, leaving out the example configs."""
+    # A --symlink-install build directory keeps dangling links to files deleted from the
+    # source; they are skipped. The annotated example.*.yaml configs document the keys and
+    # stay in the source tree.
+    return [path for path in sorted(glob(pattern))
+            if os.path.isfile(path) and not os.path.basename(path).startswith('example.')]
+
+
 setup(
     name=package_name,
     version='0.0.0',
@@ -16,15 +26,12 @@ setup(
         ('share/' + package_name, ['package.xml']),
         # One entry per subdirectory, installed at the same relative path:
         # ros2 launch finds a launch file by name anywhere under the share
-        # directory, so each file is installed once. The annotated example.*.yaml
-        # configs document the keys and stay in the source tree.
-        (os.path.join('share', package_name, 'launch', 'h12'), glob('launch/h12/*.launch.py')),
-        (os.path.join('share', package_name, 'launch', 'g1'), glob('launch/g1/*.launch.py')),
-        (os.path.join('share', package_name, 'config', 'h12'),
-            [path for path in glob('config/h12/*.yaml')
-             if not os.path.basename(path).startswith('example.')]),
-        (os.path.join('share', package_name, 'rviz', 'h12'), glob('rviz/h12/*.rviz')),
-        (os.path.join('share', package_name, 'rviz', 'g1'), glob('rviz/g1/*.rviz')),
+        # directory, so each file is installed once.
+        (os.path.join('share', package_name, 'launch', 'h12'), files('launch/h12/*.launch.py')),
+        (os.path.join('share', package_name, 'launch', 'g1'), files('launch/g1/*.launch.py')),
+        (os.path.join('share', package_name, 'config', 'h12'), files('config/h12/*.yaml')),
+        (os.path.join('share', package_name, 'rviz', 'h12'), files('rviz/h12/*.rviz')),
+        (os.path.join('share', package_name, 'rviz', 'g1'), files('rviz/g1/*.rviz')),
     ],
     scripts=['scripts/slider_debugger.py'],
     install_requires=['setuptools'],

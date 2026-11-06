@@ -2,7 +2,7 @@
 Test use_nav and use_skills in the G1 bringup, and the H1-2 bringups' navigation includes.
 
 g1_core includes golem_slam's navigation.launch.py, on by default, with robot g1
-and the sim's or the real robot's arguments, beside the walking node the sim
+and the sim's or the real robot's arguments, beside the leg node the sim
 always starts; on the real robot also the MID-360 driver. The real and sim
 launches pass use_nav on. use_skills starts golem_skills on the G1 bringup. The
 H1-2's includers pass robot h12. Needs the workspace built and sourced
@@ -136,8 +136,8 @@ def test_sim_bringup_includes_navigation():
     """The G1 sim includes golem_slam on sim time and the sim's FAST-LIO config."""
     passed = _passed_to_core('g1_sim.launch.py', use_nav='true')
     assert passed['use_nav'] == 'true'
-    # The walking node starts; navigation comes with the core, on sim time.
-    assert 'locomotion_node' in _core_nodes(**passed)
+    # The leg node starts; navigation comes with the core, on sim time.
+    assert 'lowerbody_controller_node' in _core_nodes(**passed)
     path, arguments = _nav_include(**passed)
     assert path == NAV_LAUNCH
     assert arguments == {'robot': 'g1', 'use_sim_time': 'true',
@@ -180,21 +180,21 @@ def test_core_passes_use_sim_time_on():
 
 
 def test_sim_nav_without_use_locomotion():
-    """The sim always starts the walking node, which Nav2 drives through /cmd_vel."""
+    """The sim always starts the leg node, which Nav2 drives through /cmd_vel."""
     passed = _passed_to_core('g1_sim.launch.py', use_nav='true')
     assert 'use_locomotion' not in passed
     nodes = _core_nodes(**passed)
-    assert nodes['locomotion_node'].arguments == ['--config', 'sim.yaml']
+    assert nodes['lowerbody_controller_node'].parameters['config'] == 'sim'
     path, arguments = _nav_include(**passed)
     assert path == NAV_LAUNCH
     assert arguments['fast_lio_config'] == os.path.join(G1_CONFIG, 'fastlio_sim.yaml')
 
 
 def test_real_nav_with_the_legs():
-    """The real G1 with verified legs starts both navigation and the walking node."""
+    """The real G1 with verified legs starts both navigation and the leg node."""
     passed = _passed_to_core('g1_real_robot.launch.py', **REAL_VERIFIED)
     assert (passed['sim'], passed['use_nav']) == ('false', 'true')
-    assert 'locomotion_node' in _core_nodes(**passed)
+    assert 'lowerbody_controller_node' in _core_nodes(**passed)
 
 
 def _launch_module(path):

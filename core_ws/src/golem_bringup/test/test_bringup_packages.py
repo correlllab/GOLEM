@@ -11,7 +11,8 @@ g1_core.launch.py includes the same three files: safety_node with robot g1, the 
 config, sim as the top-level file says and no hardware estop, and frame_task_server and
 joint_state_publisher with robot g1. The H1-2's h12_lowerbody.launch.py includes
 golem_lowerbody_rl's lowerbody.launch.py with robot h12 and every argument it takes, behind
-start_position_verified and not with policy:=mjpc. The nodes are read by walking those
+start_position_verified and not with policy:=mjpc (g1_core's include, robot g1, is in
+test_g1_launch.py). The nodes are read by walking those
 includes, as ros2 launch runs them. The launch tests need the workspace built and sourced.
 """
 

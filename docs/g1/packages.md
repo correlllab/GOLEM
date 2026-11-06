@@ -3,9 +3,9 @@
 The G1's own ROS 2 packages are `dex_3` and `g1_homie`, in
 `core_ws/src/`. `launch_ros.sh` builds
 them in every `ros` container, whichever robot the wrappers selected, so one
-container runs either robot's bringup. The G1 shares six packages with the H1-2, built for both robots: the
-safety layer `golem_safety` and the arm controller `golem_upper_ik`, each with
-a profile and configs per robot, the models `golem_ros2_models`, the
+container runs either robot's bringup. The G1 shares seven packages with the H1-2, built for both robots: the
+safety layer `golem_safety`, the arm controller `golem_upper_ik` and the leg node
+`golem_lowerbody_rl`, each with a profile or data and configs per robot, the models `golem_ros2_models`, the
 bringup `golem_bringup`, navigation `golem_slam`, and skills `golem_skills`. Each package
 below has its own README with the full details, except the launch-only
 `golem_bringup`.
@@ -14,7 +14,7 @@ below has its own README with the full details, except the launch-only
 
 | Package | What it does | Key nodes and launch files | README |
 |---|---|---|---|
-| `g1_homie` | HOMIE's walking policy on the legs, driven by `/cmd_vel`: waits for `golem_safety`'s heartbeat, pre-poses the legs, on the real robot holds until `/lowerbody/confirm_engage`, and in the sim releases the elastic band. | `locomotion_node` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1_homie/README.md) |
+| `g1_homie` | HOMIE's walking node on the Unitree SDK. No bringup starts it: the G1's legs run `golem_lowerbody_rl` (below). | `locomotion_node` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1_homie/README.md) |
 | `dex_3` | Dex3-1 hand driver. Bypasses the safety layer. | `dex3_hands` (`/<side>/hand/set_pose`, `open`, `close`, `release`); `hands.launch.py` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/dex_3/README.md) |
 
 ## Shared with the H1-2
@@ -25,6 +25,7 @@ below has its own README with the full details, except the launch-only
 | `golem_ros2_models` | both robots' models from `CL_Assets`: the G1's URDF (and its ROS copy with `package://` URIs) and meshes, and its sphere-packed self-collision model and SRDF. `golem_upper_ik`, `golem_slam` and the bringups' `robot_state_publisher` read them; `display.launch.py` shows a model in RViz with joint sliders ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_ros2_models/README.md)). |
 | `golem_safety` | the safety layer, node `safety_node`: the only writer of the body command topic, `rt/lowcmd`. It streams zero gains from boot, engages each input on its own first command, clips commands, holds quiet inputs and latches estops ([Safety layer](safety.md)). The G1's profile is `robots/g1.yaml`, its configs `config/g1/` ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_safety/README.md)). |
 | `golem_upper_ik` | the arm IK controller (Pink) for the 14 arm joints, with the waist held at its hold targets: `frame_task_server` (`/frame_task`, `/named_config`) and `joint_state_publisher` (the 29 body joints). A self-collision barrier in the IK and OMPL planning, from the G1's sphere model, as on the H1-2; its spheres cover the Dex3-1 palms but not the fingers. The G1's data is `config/g1/robot.yaml`, its configs and pairs `config/g1/` ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_upper_ik/README.md)). |
+| `golem_lowerbody_rl` | the leg node both robots run, `lowerbody_controller_node`: HOMIE on the G1's legs (policy `homie`), driven by `/cmd_vel`. It waits for `golem_safety`'s heartbeat and an upright `rt/lowstate`, pre-poses the legs, starts the policy once `rt/lowstate` is steady and the arm controller commands, on the real robot only on `/lowerbody/confirm_engage`, and in the sim releases the elastic band. `g1_core.launch.py` includes its `lowerbody.launch.py`; the G1's data and run configs are `config/g1/`, HOMIE's network `policies/homie/` ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_lowerbody_rl/README.md)). |
 | `golem_slam` | the SLAM and Nav2 graph both robots run (`navigation.launch.py robot:=g1`, on its `config/g1/`), with the dynamic body-to-pelvis transform node that follows the waist (`body_to_pelvis`) ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_slam/README.md)). |
 | `golem_skills` | action servers for `/skill/*`, including `/skill/frontier_explore`, started by `use_skills:=true` in the G1 bringup. |
 | `custom_ros_messages` | the actions and services (`FrameTask`, `NamedConfig`, `SetHandPose`, `SkillFrontierExplore`, ...). |

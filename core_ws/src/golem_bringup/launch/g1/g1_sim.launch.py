@@ -10,18 +10,18 @@ The G1 RoboCasa sim (golem_robocasa/g1/) takes rt/lowcmd and rt/dex3/*, and
 holds the robot up on an elastic band until /elastic_band/toggle releases it.
 golem_safety runs sim_split and the controller sim_split: golem_safety streams
 zero gains on every motor from boot and engages each input on its own first
-command. HOMIE's walking node always runs, with g1_homie's sim.yaml: once
-golem_safety beats and the controller commands, it moves the legs to the
-policy's default pose, starts the policy at zero velocity (no operator
-confirm in the sim) and releases the band once the controller has finished its
-start-up moves (or band.max_wait after the policy started without them). It
-then walks on /cmd_vel. g1_core refuses the real robot's configs here (its
-docstring lists what it refuses); the sim configs keep the faster arm speeds
-(1 rad/s, 0.5 m/s).
+command. The leg node (golem_lowerbody_rl's lowerbody_controller_node) always
+runs HOMIE, on golem_lowerbody_rl's config/g1/sim.yaml: once golem_safety beats
+and rt/lowstate is upright, it moves the legs to the policy's default pose;
+once the controller commands and has finished its start-up moves, it starts
+the policy at zero velocity (no operator confirm in the sim) and releases the
+band. It then walks on /cmd_vel. g1_core refuses the real robot's configs here
+(its docstring lists what it refuses); the sim configs keep the faster arm
+speeds (1 rad/s, 0.5 m/s).
 
 use_nav (default true) adds golem_slam on the sim's MID-360 (/livox/lidar,
 /livox/imu), with sim time and config/g1/fastlio_sim.yaml, and Nav2 drives the
-walking node on /cmd_vel; send goals to /navigate_to_pose.
+leg node on /cmd_vel; send goals to /navigate_to_pose.
 FAST-LIO is the odometry. Start the sim with GOLEM_SIM_ODOM unset;
 otherwise odom -> pelvis has two publishers. use_skills:=true adds
 golem_skills, which serves /skill/frontier_explore to walk the robot through

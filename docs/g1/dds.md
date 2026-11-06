@@ -3,8 +3,8 @@
 The stack talks to the robot (or the sim) over **Unitree DDS** (CycloneDDS).
 `golem_safety` and `golem_upper_ik` read and write those topics as ROS 2
 topics, which run on CycloneDDS too (ROS `/lowcmd` is DDS `rt/lowcmd`, the
-same wire type); `g1_homie` and `dex_3` use the Unitree SDK in
-`unitree_sdk2_python/`. ROS 2 also carries the user-facing topics.
+same wire type), as does `golem_lowerbody_rl`'s leg node; `dex_3` uses the
+Unitree SDK in `unitree_sdk2_python/`. ROS 2 also carries the user-facing topics.
 
 ## Domains
 

@@ -17,25 +17,27 @@ with its reason, and the last line reads `FAILED: <passed>/<total> checks`. Each
 lists its environment knobs, and each `test_sim_*.py` docstring says what it checks.
 
 Every test starts the G1 as it starts in debug mode. The limp robot hangs from the sim's elastic
-band while `golem_safety` streams zero-gain `rt/lowcmd`. HOMIE's walking node pre-poses the legs,
-starts its policy once `frame_task_server` is up and then releases the band.
+band while `golem_safety` streams zero-gain `rt/lowcmd`. The leg node (`golem_lowerbody_rl`'s
+`lowerbody_controller_node`, running HOMIE) pre-poses the legs, starts its policy once
+`frame_task_server` is up and then releases the band.
 
 - **Arm and walk tests, the start-up**:
   - `band holds`: while the band is on, the pelvis tilts at most 15 deg;
   - `no estop during start-up`: `golem_safety` logs no estop from its start to the end of the
     test's steps;
-  - `walking node starts`: the walking node logs `walking: policy started` once, and no fault;
+  - `walking node starts`: the leg node logs `policy started at zero velocity ...` once, and no
+    fault;
   - `band released after the controller is ready`: the band comes off once and stays off,
-    because `frame_task_server` is up: every toggle call the walking node logs gives
+    because `frame_task_server` is up: every toggle call the leg node logs gives
     `/left_ee_pose` as its reason, so a release by `band.max_wait` fails the check. The band is
-    off after the first `/left_ee_pose` the test sees and within the walking node's
+    off after the first `/left_ee_pose` the test sees and within the leg node's run config's
     `band.max_wait` of the policy's start;
   - `standing after release`: the robot stands for 5 s after the release.
 
   The report also prints the pelvis and the feet around the release, for the record.
 - **Arm test**: after the release, the arms are at `home` from the controller's start-up, a
   `t_pose` goal succeeds and the arms reach it, and `/left/hand/close` closes the left hand. Then
-  `frame_task_server` alone is stopped while the walking node balances the robot. Its shutdown
+  `frame_task_server` alone is stopped while the leg node balances the robot. Its shutdown
   command keeps the waist at its hold, so the waist roll and pitch stay within 0.1 rad of it
   for 4 s (a limp waist slumps about 0.5 rad), and the robot keeps standing. The test finds the
   controller by its process, `lib/golem_upper_ik/frame_task_server`.
@@ -98,9 +100,11 @@ must update the tests in the same commit.
 - They rely on the sensor node's name `mujoco_sensors`.
 - They rely on the sim's `ROS bridges up`, `elastic band released at t=` and `ROBOT FELL` log lines.
 - From `launch.log` they rely on:
-  - the walking node's `Loaded <config> and the policy` and `walking: policy started` lines,
-    its `releasing the elastic band: <reason>` and `elastic band released` lines, its `fault:`
-    lines, and its config's `band.max_wait`;
+  - the leg node's logger, `lowerbody_controller_node`, and its `loaded run config <path> and
+    policy <path>` and `policy started at zero velocity` lines, its `releasing the elastic band:
+    <reason>` and `elastic band released` lines, its `fault:` lines, and its run config's
+    `band.max_wait`;
+  - the refusals `upper_ik: not starting` and `lowerbody: not starting`;
   - `golem_safety`'s JSON events `relay_started` and `estop_command_written`, and its
     `estop diagnostic` lines.
 

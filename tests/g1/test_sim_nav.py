@@ -739,10 +739,10 @@ class Driver(SimDriver):
                         rows.append([now, self._sim()] + parts)
 
     def wait_walking(self, timeout=240.0):
-        """Wait for the walking node's 'walking: policy started'; return False on a timeout or a refused launch."""
+        """Wait for the leg node's policy start (launch.log); return False on a timeout or a refused launch."""
         end = time.time() + timeout
         while time.time() < end:
-            if self._log_has("walking: policy started"):
+            if self._log_has(bringup_test.POLICY_STARTED):
                 self.mark("walking")
                 return True
             if any(self._log_has(refusal) for refusal in bringup_test.LAUNCH_REFUSALS):
@@ -833,7 +833,7 @@ class Driver(SimDriver):
 
     def finish(self):
         """Save the final map, what publishes /cmd_vel and /odom, the scan path's CPU and the samples."""
-        self.info["cpu_cores"] = _process_cpu(SCAN_PATH + ("fastlio_mapping", "locomotion_node"))
+        self.info["cpu_cores"] = _process_cpu(SCAN_PATH + ("fastlio_mapping", bringup_test.LEG_NODE))
         self.info["cmd_vel_publishers"] = sorted(
             i.node_name for i in self.node.get_publishers_info_by_topic("/cmd_vel"))
         self.info["odom_publishers"] = sorted(

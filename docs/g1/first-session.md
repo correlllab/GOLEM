@@ -67,9 +67,10 @@ below depend on it.
   moves the arms to `home` (forearms forward at waist height) and the waist to
   its hold angles, at up to 0.3 rad/s per joint. The leg motors stay off.
 - **The pre-pose** (second launch only). The walking node waits for the
-  heartbeat, a steady and upright `rt/lowstate` and the arm controller's
-  commands, then moves the legs from where they hang to HOMIE's default pose
-  over 2 s (`input_engaged`, `split_mode_lower`) and holds them there.
+  heartbeat and an upright `rt/lowstate`, then moves the legs from where they
+  hang to HOMIE's default pose over 2 s (`input_engaged`, `split_mode_lower`)
+  and holds them there. It accepts the confirm only once `rt/lowstate` has been
+  steady for 1 s and the arm controller commands.
 - **The confirm** (second launch only). `/lowerbody/confirm_engage` starts
   HOMIE's policy at zero velocity. When the robot bears its own weight on its
   legs is part of the procedure that is not written yet ([Entering debug mode
@@ -84,7 +85,7 @@ estop, restart the whole bringup.
 - **Hands.** The Dex3 driver bypasses the safety layer, so it stays off.
 - **Walking on `/cmd_vel`.** The session ends at the confirm at most. Know this
   before any walking session: a fault of the walking node (a stale
-  `rt/lowstate`, a non-finite IMU value, a fall, a late command) silences it,
+  `rt/lowstate`, a non-finite value, a fall, a failed policy step) silences it,
   and the safety layer then **holds its last leg command instead of turning
   every motor off**. That frozen target does not balance the robot, and it
   stands until the safety layer estops for another reason or the bringup stops
@@ -117,10 +118,10 @@ The workspace is built with `--symlink-install`, so a Python edit under
   the session ends.
 - Steps 7 to 10 have not been rehearsed against the real robot. The sim's arm
   test (`tests/g1/test_sim_bringup.sh`) runs the same core
-  (`g1_core.launch.py`, with the sim configs: the walking node always runs, and
+  (`g1_core.launch.py`, with the sim configs: the leg node always runs, and
   without the confirm) and stops the controller the same way (SIGINT). If
   `core_ws/src/golem_safety/README.md`, `core_ws/src/golem_upper_ik/README.md`
-  or `core_ws/src/g1_homie/README.md` at the frozen commit disagrees
+  or `core_ws/src/golem_lowerbody_rl/README.md` at the frozen commit disagrees
   with them, fix this checklist before the session.
 
 ### 2. Network and docker/.env (laptop shell)
@@ -385,21 +386,24 @@ PYTHONUNBUFFERED=1 ros2 launch golem_bringup g1_real_robot.launch.py use_hands:=
 
 What you should see, beyond step 7:
 
-1. `locomotion_node` prints `Loaded .../g1.yaml and the policy in
-   /home/code/g1_homie. Silent until golem_safety beats on
-   /safety/heartbeat, ...`. It starts 2 s after the controller and sends nothing
-   while it waits; it may print `waiting to start: <reason>`. It waits for the
-   heartbeat and an upright `rt/lowstate` (`g1_homie`'s README, Behavior).
-2. `moving the legs from where they are to the default pose over 2.0 s`, and the safety
-   layer's `input_engaged` with `"source": "split_mode_lower"`. The legs move in
-   a straight line from where they hang to HOMIE's default pose over 2 s.
-3. `legs at the default pose: holding it until the operator confirms (ros2
-   service call /lowerbody/confirm_engage std_srvs/srv/Trigger)`. The legs hold
-   the pose, with every fault check active. `the policy may start
-   (rt/lowstate's tick ran at 1.00 s per s of wall clock)` follows once 1 s of
-   steady, on-time `rt/lowstate`, the tick at 0.9-1.1 s per s of wall clock and
-   the arm controller's commands have held; until then a confirm is refused with
-   the reason, and the node may print `the policy waits: <reason>`.
+1. The leg node, `lowerbody_controller_node`, prints `loaded run config
+   .../config/g1/real.yaml and policy .../config/g1/policies/homie.yaml`. It
+   starts 2 s after the controller and sends nothing while it waits; it may
+   print `waiting to pre-pose the legs: <reason>`. It waits for the heartbeat
+   and an upright `rt/lowstate` (`golem_lowerbody_rl`'s README, Phases).
+2. `pre-posing the legs: a cosine ramp from where they are to the pre-pose
+   over 2.0 s`, and the safety layer's `input_engaged` with `"source":
+   "split_mode_lower"`. The legs blend from where they hang to HOMIE's default
+   pose over 2 s.
+3. `legs pre-posed (settled, max error <x> rad) — holding until the operator
+   confirms (ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger)`
+   (`NOT SETTLED: ...` instead, as a warning, when the legs did not reach the
+   pose). The legs hold the pose, with every fault check active. `the policy
+   may start (/lowstate's tick ran at 1.00 s per s of the node's clock)`
+   follows once 1 s of steady, on-time `rt/lowstate`, the tick at 0.9-1.1 s
+   per s of wall clock and the arm controller's commands have held; until then
+   a confirm is refused with the reason, and the node may print `the policy
+   waits: <reason>`. Once it may start, the node reminds you every 5 s.
 4. The confirm, in terminal 2:
 
    ```bash
@@ -407,15 +411,15 @@ What you should see, beyond step 7:
    ```
 
    It answers `success=True` with `confirmed: the policy starts on the next
-   policy step`, and the walking node prints `walking: policy started at zero
-   velocity and 0.74 m height`: HOMIE's policy commands the legs from then on,
+   policy step`, and the leg node prints `policy started at zero velocity and
+   the default height 0.74`: HOMIE's policy commands the legs from then on,
    at zero velocity. When the robot may bear its own weight, and so when to
    confirm and what the policy does with the gantry still carrying the robot,
    is part of the missing procedure ([Entering debug mode (not yet
    written)](#entering-debug-mode-not-yet-written)). A call at any other time
    is refused, naming the phase.
 
-A `fault:` line from the walking node means it has stopped commanding the legs
+A `fault:` line from the leg node means it has stopped commanding the legs
 for good, and the safety layer keeps relaying their last command, which does
 not balance the robot: go to step 9. Stop this launch with step 9 too; the
 walking node keeps commanding the legs until the Ctrl+C.

@@ -29,7 +29,9 @@ ros2 launch golem_lowerbody_rl lowerbody.launch.py robot:=h12 config:=sim sim:=t
 `startup.wait_for_confirm` or with `band.release`, and a policy the robot's
 `robot.yaml` does not list. The node applies the same check when it starts.
 The H1-2's bringups include it from `golem_bringup`'s `h12_lowerbody.launch.py`
-(`policy:=`, default `almi`; `policy:=mjpc` starts no leg node).
+(`policy:=`, default `almi`; `policy:=mjpc` starts no leg node), the G1's from
+`g1_core.launch.py` (policy `homie`, after the arm controller, the sim always
+and the real robot with `start_position_verified:=true`).
 
 | Node parameter | Meaning |
 |---|---|
@@ -119,8 +121,13 @@ timing log): the gap must stay well under 0.25 s, or the legs latch silent.
 `test_runner_goldens.py` (the policy runner against the golden traces in
 `test/golden/`); `test_supervisor.py` and `test_band.py` (the phases and faults
 on a fake clock); `test_launch.py` (the launch file's refusals); and
-`test_node.py` (the node in one process against fake publishers, on
-`ROS_DOMAIN_ID`, or 97 when it is unset, 0 or 1). The mypy test is skipped where
+`test_node.py` (the node in one process against fake publishers) and
+`test_node_safety.py` (the G1's node on HOMIE behind the installed
+`golem_safety` `safety_node`, `sim_split.yaml`, as a subprocess: start-up,
+heartbeat loss and bad `/lowstate`), both on `ROS_DOMAIN_ID`, or 97 when it is
+unset, 0 or 1, with every name of a `test_node_safety.py` run under a prefix of
+its own. `test_node_safety.py` needs DDS discovery between processes: not
+`--network none`. The mypy test is skipped where
 `ament_mypy` is not installed (the ros image). `policies/homie/test_homie_policy.py`
 checks HOMIE's own policy file. `reference/` is not linted: it keeps the
 original standalone deploy scripts as they were.

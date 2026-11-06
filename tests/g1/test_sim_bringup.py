@@ -13,22 +13,22 @@ test_sim_bringup.sh runs them; see it for the usage.
           prints the numbers and writes <out>/report.json; exit 1 on a failure.
 
 Both tests start as the G1 starts in debug mode: the limp robot hangs from the
-sim's elastic band while golem_safety streams zero-gain rt/lowcmd, HOMIE's
-walking node pre-poses the legs and starts its policy under the band, and it
-releases the band once frame_task_server is up. Both check that start-up: the
-band holds the robot upright, golem_safety latches no estop, the walking node
-starts, the band comes off once because frame_task_server is up (the walking
-node's log gives /left_ee_pose as the reason for every toggle call, not
-band.max_wait; the band is off after the first /left_ee_pose the test sees and
-within band.max_wait of the policy's start), and the robot stands for 5 s
-after it. The report also gives the pelvis and the feet
+sim's elastic band while golem_safety streams zero-gain rt/lowcmd, the leg node
+(golem_lowerbody_rl's lowerbody_controller_node, running HOMIE) pre-poses the
+legs, starts its policy under the band once frame_task_server is up, and then
+releases the band. Both check that start-up: the band holds the robot upright,
+golem_safety latches no estop, the leg node's policy starts, the band comes off
+once because frame_task_server is up (the leg node's log gives /left_ee_pose as
+the reason for every toggle call, not band.max_wait; the band is off after the
+first /left_ee_pose the test sees and within band.max_wait of the policy's
+start), and the robot stands for 5 s after it. The report also gives the pelvis and the feet
 around the release, for the record.
 
 The arm test (default), after the release: frame_task_server took the arms
 to 'home' at startup, a NamedConfig 't_pose' goal succeeds and the arms reach
 it, /left/hand/close closes the left hand, and stopping frame_task_server
 leaves the waist roll and pitch at their hold (its shutdown command keeps them
-stiff on rt/lowcmd) while the walking node keeps the robot standing. The walk
+stiff on rt/lowcmd) while the leg node keeps the robot standing. The walk
 test (--walk) stands 5 s after the release, walks on /cmd_vel 0.3 m/s forward
 for 5 s, and after the sensors stops frame_task_server alone, with the same
 waist check. Both tests listen to the sensors from the ros container for 10 s
@@ -42,7 +42,7 @@ sim's own state; no ground truth is published.
 The steps wait in sim time (/clock) and the checks measure motion in sim time,
 so a sim slower than real time stretches the test instead of failing it; the
 band's release against the policy's start is checked in wall time, as the
-walking node times its band.max_wait.
+leg node times its band.max_wait.
 """
 import argparse
 import json
@@ -70,13 +70,13 @@ HAND_TOL = 0.05            # rad: measured fingers vs the close pose
 MIN_PELVIS_Z = 0.70        # m: HOMIE stands at 0.744
 # pelvis z-axis from vertical: the limp robot hangs from the band within 4 deg,
 # HOMIE stands at ~2 deg and leans ~6.5 deg with the arms in t_pose; well short of
-# the walking node's 25 deg upright gate
+# the leg node's 25 deg upright gate
 MAX_TILT_DEG = 15.0
 HOME_CMD_TOL = 0.01        # rad: the commanded arm targets vs home
 RELEASE_STANDING_S = 5.0   # sim s after the band's release that the robot must stand
 RELEASE_MEASURE_S = 3.0    # sim s after the band's release that the report measures, for the record
-# wall s past the walking node's band.max_wait that the release may come: the node
-# polls at 10 Hz, then calls the sim's /elastic_band/toggle
+# wall s past the leg node's band.max_wait that the release may come: the node
+# checks at 100 Hz, then calls the sim's /elastic_band/toggle
 BAND_POLL_SLACK_S = 0.5
 WALK_SPEED_TOL = 0.3       # mean forward speed within 30% of WALK_SPEED
 WAIST_HOLD_SECONDS = 4.0   # sim s after the controller stops
@@ -108,12 +108,14 @@ OPTICAL_IN_LINK_XYZW = (-0.5, 0.5, -0.5, 0.5)   # rpy (-pi/2, 0, -pi/2), REP 103
 FEET = ("left_ankle_roll_link", "right_ankle_roll_link")
 # the sim's log line once the band is off (golem_robocasa/g1/g1_mujoco.py's fall logger)
 BAND_RELEASED_LINE = "elastic band released at t="
-# the walking node's log lines (g1_homie): its config, the policy's start, each call
-# of the band's toggle with its reason, and the toggle's success
-LOCOMOTION_CONFIG = re.compile(r"Loaded (\S+\.yaml) and the policy")
-POLICY_STARTED = "walking: policy started"
-# the bringup's refusals: g1_core's own and golem_upper_ik's pairing check
-LAUNCH_REFUSALS = ("g1_core: not starting", "upper_ik: not starting")
+# the leg node (golem_lowerbody_rl): its ROS logger, and its log lines: its run config,
+# the policy's start, each call of the band's toggle with its reason, and the toggle's
+# success
+LEG_NODE = "lowerbody_controller_node"
+RUN_CONFIG = re.compile(r"loaded run config (\S+\.yaml) and policy ")
+POLICY_STARTED = "policy started at zero velocity"
+# the bringup's refusals: golem_upper_ik's pairing check and golem_lowerbody_rl's
+LAUNCH_REFUSALS = ("upper_ik: not starting", "lowerbody: not starting")
 BAND_CALL = "releasing the elastic band: "
 # BandRelease's reason once /left_ee_pose has come; band.max_wait's names the maximum wait
 BAND_CALL_BY_POSE = BAND_CALL + "the policy runs and frame_task_server is up (/left_ee_pose)"
@@ -437,8 +439,8 @@ class Driver:
     def wait_band_released(self, timeout=240.0):
         """Wait for the sim to log the band's release; return False on a timeout or a refused launch.
 
-        The walking node asks for the release once its policy runs and frame_task_server is up.
-        Records the walking node's band.max_wait, from the config it logged loading.
+        The leg node asks for the release once its policy runs and frame_task_server is up.
+        Records the leg node's band.max_wait, from the run config it logged loading.
         """
         import yaml
         if not self.spin_until(lambda: file_has(self.sim_log, BAND_RELEASED_LINE)
@@ -451,11 +453,11 @@ class Driver:
             return False
         self.mark("band_released")
         self.info["band_max_wait"] = None
-        for _, _, text in logged(self.launch_log, "locomotion_node"):
-            m = LOCOMOTION_CONFIG.match(text)
+        for _, _, text in logged(self.launch_log, LEG_NODE):
+            m = RUN_CONFIG.match(text)
             if m:
                 with open(m.group(1)) as f:
-                    self.info["locomotion_config"] = m.group(1)
+                    self.info["lowerbody_config"] = m.group(1)
                     self.info["band_max_wait"] = float(yaml.safe_load(f)["band"]["max_wait"])
                 break
         return True
@@ -647,7 +649,7 @@ def run_drive(out, walk):
               "walk_speed": WALK_SPEED, "walk_seconds": WALK_SECONDS}
     try:
         if walk:
-            # The walking node releases the band once its policy runs and the controller is up.
+            # The leg node releases the band once its policy runs and the controller is up.
             if not d.wait_band_released():
                 return 1
             d.spin_for(5.0)
@@ -663,7 +665,7 @@ def run_drive(out, walk):
             d.spin_for(1.0)
             d.trigger("/left/hand/close")
             d.spin_for(2.5)  # the hand check averages the last 0.5 s of it
-        # The controller alone stops while the walking node balances the robot.
+        # The controller alone stops while the leg node balances the robot.
         d.stop_frame_task_server()
         d.spin_for(WAIST_HOLD_SECONDS)
         d.mark("end")
@@ -806,7 +808,7 @@ class Report:
     def startup(self):
         """Check the G1's start-up; return the release's first sample, or None.
 
-        The band holds the limp robot, golem_safety latches no estop, the walking node starts
+        The band holds the limp robot, golem_safety latches no estop, the leg node starts its policy
         and releases the band once frame_task_server is up, and the robot stands after.
         """
         release = self.release()
@@ -870,11 +872,11 @@ class Report:
         self.check("no estop during start-up", bool(started) and not estops, text)
 
     def walking_node_starts(self):
-        """Check HOMIE's node (launch.log) started its policy once and did not fault; return the start's wall time.
+        """Check the leg node (launch.log) started its policy once and did not fault; return the start's wall time.
 
         Returns None when it never started. Faults count up to the end of the test's steps.
         """
-        lines = logged(os.path.join(self.out, "launch.log"), "locomotion_node")
+        lines = logged(os.path.join(self.out, "launch.log"), LEG_NODE)
         end = self.end_wall()
         starts = [wall for wall, _, text in lines if text.startswith(POLICY_STARTED)]
         faults = [text for wall, _, text in lines if wall <= end and text.startswith("fault:")]
@@ -884,7 +886,7 @@ class Report:
             t = float(self.s["t"][int(min(np.searchsorted(self.s["wall"], wall), len(self.s["t"]) - 1))])
         self.numbers["policy_started"] = {"wall": wall, "sim_t": t, "starts": len(starts), "faults": faults}
         if not starts:
-            text = "launch.log has no 'walking: policy started' from locomotion_node"
+            text = f"launch.log has no '{POLICY_STARTED}' from {LEG_NODE}"
         else:
             text = f"the policy started at sim t {t:.2f} s"
             text += "" if len(starts) == 1 else f", {len(starts)} times"
@@ -896,7 +898,7 @@ class Report:
     def band_released(self, release, policy_wall):
         """Check the band comes off once and stays off, because frame_task_server is up.
 
-        Every toggle call the walking node logged gives /left_ee_pose as its reason (not
+        Every toggle call the leg node logged gives /left_ee_pose as its reason (not
         band.max_wait), the band is off after the first /left_ee_pose the test saw (its stamp,
         sim time), and within band.max_wait of the policy's start (wall time).
         """
@@ -904,7 +906,7 @@ class Report:
         states = changes[:, 2].tolist()
         pose = self.events.get("left_ee_pose_first")
         max_wait = self.info.get("band_max_wait")
-        reasons = [text for _, _, text in logged(os.path.join(self.out, "launch.log"), "locomotion_node")
+        reasons = [text for _, _, text in logged(os.path.join(self.out, "launch.log"), LEG_NODE)
                    if text.startswith(BAND_CALL) or text.startswith(BAND_TOGGLED)]
         calls = [text for text in reasons if text.startswith(BAND_CALL)]
         by_pose = bool(calls) and all(text == BAND_CALL_BY_POSE for text in calls)
@@ -928,11 +930,11 @@ class Report:
                 + f"; {since:.2f} s (wall) after the policy's start (band.max_wait {max_wait} s, "
                 f"+{BAND_POLL_SLACK_S} s for the node's poll)")
         if not calls:
-            text += "; locomotion_node logged no call of /elastic_band/toggle"
+            text += f"; {LEG_NODE} logged no call of /elastic_band/toggle"
         elif not by_pose:
-            text += "; locomotion_node released it for another reason than /left_ee_pose"
+            text += f"; {LEG_NODE} released it for another reason than /left_ee_pose"
         if reasons:
-            text += f"; locomotion_node: {' / '.join(reasons)}"
+            text += f"; {LEG_NODE}: {' / '.join(reasons)}"
         self.check("band released after the controller is ready", once and after_pose and in_time and by_pose,
                    text)
 
@@ -1011,7 +1013,7 @@ class Report:
                    f"{err.max():.4f} rad, per joint {np.round(err, 4).tolist()} (from "
                    f"{np.round(before[left], 2).tolist()} before); the right hand moved {right_moved:.4f} "
                    f"rad meanwhile")
-        # Stopping frame_task_server leaves the waist at its hold, the walking node standing the robot.
+        # Stopping frame_task_server leaves the waist at its hold, the leg node standing the robot.
         self.waist_after_controller_stop()
         stop = self.at("controller_stopped")
         released = samples if r is None else r

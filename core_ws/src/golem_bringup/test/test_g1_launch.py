@@ -1,13 +1,13 @@
 """
-Test the G1's bringups: HOMIE's walking node, and the configs they refuse.
+Test the G1's bringups: the leg node running HOMIE, and the configs they refuse.
 
-g1_core always starts the walking node (locomotion_node) in the sim, and on the
-real robot only with start_position_verified:=true, as the H1-2's leg node is
-started. It runs the split-mode configs and refuses sim/real mixes, and the
-real and sim launches pass their settings on. g1_core starts golem_safety and
-golem_upper_ik through their launch files, so the nodes are read by walking
-those includes, as ros2 launch runs them. Needs the workspace built and
-sourced (golem_bringup, golem_ros2_models, golem_safety and golem_upper_ik
+g1_core always starts golem_lowerbody_rl's leg node (lowerbody_controller_node, robot g1,
+policy homie) in the sim, and on the real robot only with start_position_verified:=true,
+as the H1-2's leg node is started. It runs the split-mode configs and refuses sim/real
+mixes, and the real and sim launches pass their settings on. g1_core starts golem_safety,
+golem_upper_ik and golem_lowerbody_rl through their launch files, so the nodes are read by
+walking those includes, as ros2 launch runs them. Needs the workspace built and sourced
+(golem_bringup, golem_ros2_models, golem_safety, golem_upper_ik and golem_lowerbody_rl
 installed).
 """
 
@@ -36,8 +36,16 @@ def _package_launch(package, launch_file):
 SAFETY_LAUNCH = _package_launch('golem_safety', 'safety.launch.py')
 UPPER_IK_LAUNCH = _package_launch('golem_upper_ik', 'upper_ik.launch.py')
 ROBOT_STATE_LAUNCH = _package_launch('golem_upper_ik', 'robot_state.launch.py')
+LOWERBODY_LAUNCH = _package_launch('golem_lowerbody_rl', 'lowerbody.launch.py')
 # The shared packages' launch files, which the bringups include for their nodes.
-PACKAGE_LAUNCHES = {SAFETY_LAUNCH, UPPER_IK_LAUNCH, ROBOT_STATE_LAUNCH}
+PACKAGE_LAUNCHES = {SAFETY_LAUNCH, UPPER_IK_LAUNCH, ROBOT_STATE_LAUNCH, LOWERBODY_LAUNCH}
+LEGS = 'lowerbody_controller_node'
+
+
+def _legs_started(config, delay, sim_time):
+    """Return the leg node g1_core starts: HOMIE on run config config, delay s after launch."""
+    return Started('golem_lowerbody_rl', [], delay, {
+        'robot': 'g1', 'config': config, 'policy': 'homie', 'use_sim_time': sim_time})
 
 
 def _load(name):
@@ -159,69 +167,93 @@ def _refused(message, **args):
     """
     Assert that g1_core refuses to start with args, with message.
 
-    The pairing refusals are golem_upper_ik's (upper_ik: not starting: ...), the
-    walking node's g1_core's own (g1_core: not starting: ...).
+    The pairing refusals are golem_upper_ik's (upper_ik: not starting: ...), the leg
+    node's golem_lowerbody_rl's (lowerbody: not starting: ...).
     """
     with pytest.raises(RuntimeError, match='^' + re.escape(message)):
         _core_nodes(**args)
 
 
-def test_use_locomotion_not_declared():
-    """No G1 launch file declares or passes use_locomotion."""
+def test_no_walking_node_arguments():
+    """No G1 launch file declares or passes use_locomotion or locomotion_config."""
     for launch_file in ('g1_sim.launch.py', 'g1_real_robot.launch.py', 'g1_core.launch.py'):
-        assert 'use_locomotion' not in _declared(launch_file), launch_file
+        assert not {'use_locomotion', 'locomotion_config'} & _declared(launch_file), launch_file
     for launch_file in ('g1_sim.launch.py', 'g1_real_robot.launch.py'):
-        assert 'use_locomotion' not in _passed_to_core(launch_file), launch_file
+        assert not {'use_locomotion', 'locomotion_config'} & set(_passed_to_core(launch_file)), \
+            launch_file
 
 
-def test_sim_always_starts_locomotion():
-    """The sim starts the walking node whatever start_position_verified says."""
+def test_sim_always_starts_the_legs():
+    """The sim starts the leg node, HOMIE on the sim run config, verified or not."""
     for args in (dict(), dict(start_position_verified='false'),
                  dict(start_position_verified='true')):
         nodes = _core_nodes(sim='true', **args)
         assert _configs(nodes) == {'safety_node': 'sim_split', 'frame_task_server': 'sim_split'}
-        assert nodes['locomotion_node'].arguments == ['--config', 'sim.yaml']
+        assert nodes[LEGS] == _legs_started('sim', 4.0, False)
+    assert 'locomotion_node' not in nodes
 
     passed = _passed_to_core('g1_sim.launch.py')
     assert passed['sim'] == 'true'
     nodes = _core_nodes(**passed)
     assert _configs(nodes) == {'safety_node': 'sim_split', 'frame_task_server': 'sim_split'}
-    assert nodes['locomotion_node'].arguments == ['--config', 'sim.yaml']
+    assert nodes[LEGS] == _legs_started('sim', 4.0, True)
 
 
-def test_real_starts_locomotion_only_when_verified():
-    """The real robot starts the walking node only with start_position_verified:=true."""
+def test_real_starts_the_legs_only_when_verified():
+    """SAFETY: the real robot starts the leg node only with start_position_verified:=true."""
     # Without it the legs stay on golem_safety's zero-gain stream, and the arms and
     # the safety layer start.
     for args in (dict(), dict(start_position_verified='false'),
                  dict(start_position_verified='no')):
         nodes = _core_nodes(**args)
-        assert 'locomotion_node' not in nodes
+        assert LEGS not in nodes
         assert {'robot_state_publisher', 'joint_state_publisher'} <= set(nodes)
         assert _configs(nodes) == {'safety_node': 'split', 'frame_task_server': 'g1_split'}
     nodes = _core_nodes(start_position_verified='true')
     assert _configs(nodes) == {'safety_node': 'split', 'frame_task_server': 'g1_split'}
-    assert nodes['locomotion_node'].arguments == ['--config', 'g1.yaml']
+    assert nodes[LEGS] == _legs_started('real', 4.0, False)
+    assert 'locomotion_node' not in nodes
 
     # The real bringup passes the interlock on, false by default.
     passed = _passed_to_core('g1_real_robot.launch.py')
     assert (passed['sim'], passed['start_position_verified']) == ('false', 'false')
     nodes = _core_nodes(**passed)
-    assert 'locomotion_node' not in nodes
+    assert LEGS not in nodes
     assert _configs(nodes) == {'safety_node': 'split', 'frame_task_server': 'g1_split'}
     passed = _passed_to_core('g1_real_robot.launch.py', start_position_verified='true')
     assert passed['start_position_verified'] == 'true'
-    assert _core_nodes(**passed)['locomotion_node'].arguments == ['--config', 'g1.yaml']
+    assert _core_nodes(**passed)[LEGS] == _legs_started('real', 4.0, False)
 
 
-def test_locomotion_starts_after_the_controller():
-    """The walking node starts locomotion_delay after the controller."""
+def test_legs_start_after_the_controller():
+    """The leg node starts locomotion_delay after the controller."""
     nodes = _core_nodes(start_position_verified='true')
     assert nodes['safety_node'].delay == 0.0
     assert nodes['frame_task_server'].delay == 2.0
-    assert nodes['locomotion_node'].delay == nodes['frame_task_server'].delay + 2.0
+    assert nodes[LEGS].delay == nodes['frame_task_server'].delay + 2.0
     nodes = _core_nodes(sim='true', controller_delay='1.0', locomotion_delay='1.5')
-    assert nodes['locomotion_node'].delay == 2.5
+    assert nodes['frame_task_server'].delay == 1.0
+    assert nodes[LEGS].delay == 2.5
+
+
+def test_legs_get_their_own_arguments():
+    """The leg include gets its own config and start_delay, not the ones an earlier include set."""
+    # upper_ik.launch.py and safety.launch.py set config and start_delay before it, and
+    # Humble includes are not scoped
+    nodes = _core_nodes(sim='true', config='sim_split', start_delay='9.0', policy='almi')
+    assert nodes[LEGS] == _legs_started('sim', 4.0, False)
+    path = os.path.join(get_package_share_directory('golem_lowerbody_rl'), 'config', 'g1',
+                        'sim.yaml')
+    nodes = _core_nodes(sim='true', lowerbody_config=path)
+    assert nodes[LEGS].parameters['config'] == path
+
+
+def test_core_checks_the_legs_before_any_node():
+    """The leg include comes right after the pairing check, so its refusal starts no node."""
+    for sim, verified in (('true', 'false'), ('false', 'true')):
+        actions = core._setup(_context(core.generate_launch_description(), sim=sim,
+                                       start_position_verified=verified))
+        assert [_location(a) for a in actions[:2]] == [UPPER_IK_LAUNCH, LOWERBODY_LAUNCH]
 
 
 def test_controller_config_follows_the_safety_config():
@@ -254,11 +286,9 @@ def test_custom_controller_config_is_refused():
     (dict(controller_config='sim_fast'),
      'upper_ik: not starting: safety config "split" runs with controller config "g1_split", '
      'not "sim_fast"'),
-    # The walking node's sim config too, whether or not the legs are verified.
-    (dict(locomotion_config='sim'),
-     'g1_core: not starting: locomotion_config:=sim is for the sim; use g1'),
-    (dict(locomotion_config='sim', start_position_verified='true'),
-     'g1_core: not starting: locomotion_config:=sim is for the sim; use g1'),
+    # The leg node's sim run config too, once the legs are verified.
+    (dict(lowerbody_config='sim', start_position_verified='true'),
+     "lowerbody: not starting: run config 'sim' is for a simulator"),
 ])
 def test_real_refuses_sim_configs(args, message):
     """The real robot refuses every sim config, directly and through g1_real_robot."""
@@ -278,8 +308,8 @@ def test_real_refuses_sim_configs(args, message):
     (dict(controller_config='g1_split'),
      'upper_ik: not starting: safety config "sim_split" runs with controller config '
      '"sim_split", not "g1_split"'),
-    (dict(locomotion_config='g1'),
-     'g1_core: not starting: locomotion_config:=g1 is for the real robot; use sim'),
+    (dict(lowerbody_config='real'),
+     "lowerbody: not starting: run config 'real' is for the real robot"),
 ])
 def test_sim_refuses_real_configs(args, message):
     """The sim refuses every real config, directly and through g1_sim."""

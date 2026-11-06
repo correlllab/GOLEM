@@ -86,10 +86,11 @@ reference. The node logs `loaded run config <path> and policy <path>`, then:
 ## Threads
 
 `/lowstate` has a callback group of its own and the node spins a two-thread
-executor, so the other callbacks (heartbeat, commands, the 100 Hz steady-clock
-watchdog timer, the service, the band) never delay a state sample. One lock
-serialises every call into the supervisor and the policy: the band reply's
-policy reset never runs inside a policy step.
+executor, so a state sample never queues behind the other callbacks (heartbeat,
+commands, the 100 Hz steady-clock watchdog timer, the service, the band). One
+lock serialises every call into the supervisor and the policy: the band reply's
+policy reset never runs inside a policy step, and a callback holding the lock
+delays a state sample by as long as it holds it.
 
 ## Elastic band (sim)
 

@@ -9,8 +9,8 @@ estimator runs with use_estimator:=true. Only one lower-body controller may feed
 legs uncommanded.
 
 lowerbody.launch.py refuses, before any node starts, a run config whose sim differs from
-sim, a real-robot run config without the operator's confirm, and a policy the H1-2 does
-not list (golem_lowerbody_rl's config/h12/robot.yaml).
+sim, a real-robot run config without the operator's confirm or with the elastic band's
+release, and a policy the H1-2 does not list (golem_lowerbody_rl's config/h12/robot.yaml).
 
 SAFETY: start_position_verified is the operator's word that the robot is in a safe start
 pose; without it nothing here starts, and safety_node keeps the legs on its zero-gain

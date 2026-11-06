@@ -8,7 +8,6 @@ on an isolated simulation domain:
 ROS_DOMAIN_ID=193 tests/stack/run.sh robocasa arms
 ROS_DOMAIN_ID=193 tests/stack/run.sh robocasa locomotion
 ROS_DOMAIN_ID=193 tests/stack/run.sh isaac arms
-ROS_DOMAIN_ID=193 tests/stack/run.sh isaac locomotion
 ```
 
 Each run builds the minimal actual ROS controller stack, waits for simulator
@@ -35,8 +34,11 @@ arm controller's commands are fresh and `frame_task_server` has published its
 first `/left_ee_pose`, so this case runs `frame_task_server` too, holding the
 torso and arms as the sim bringup does. Tests check physical height, tilt, displacement, both knees, support
 release, telemetry continuity, and active policies. No fixed base is allowed.
-Isaac currently lacks RoboCasa's startup support tether, which may cause a
-real startup/balance failure. Thresholds are in `check_lowerbody.py`.
+`isaac locomotion` cannot pass and `run_all.sh` skips it: Isaac's
+`rt/lowstate` tick counts publishes, not milliseconds of the node's clock, so
+the leg node's readiness check never passes and the policy never starts (the
+node logs that the tick is off the node's clock), and Isaac serves no
+`/elastic_band/toggle`. Thresholds are in `check_lowerbody.py`.
 
 The scoring unit tests run in the GitHub CPU merge workflow:
 
@@ -45,6 +47,6 @@ python3 -m unittest discover -s tests/stack -p 'test_*.py' -v
 ```
 
 Live acceptance runs on trusted NVIDIA workers through the manual GitHub
-workflow. `tests/stack/run_all.sh` runs all four cases and returns nonzero if
-any fails. Physical failures remain release blockers; CPU scoring tests alone
+workflow. `tests/stack/run_all.sh` runs the three cases that can pass and returns
+nonzero if any fails. Physical failures remain release blockers; CPU scoring tests alone
 do not establish simulator/controller stability.

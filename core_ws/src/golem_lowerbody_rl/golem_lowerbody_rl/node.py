@@ -34,9 +34,10 @@ Interfaces:
 - cli /elastic_band/toggle (std_srvs/Trigger): the sim's band, with band.release.
 
 Threads: /lowstate has a callback group of its own and everything else shares another,
-under a two-thread executor (make_executor), so a slow callback never delays a state
-sample. One lock serialises every call into the supervisor and the policy, so a band
-reply's policy reset never runs inside a policy step.
+under a two-thread executor (make_executor), so a state sample never queues behind the
+other callbacks. One lock serialises every call into the supervisor and the policy, so a
+band reply's policy reset never runs inside a policy step; a callback holding the lock
+delays a state sample by as long as it holds it.
 """
 
 import sys
@@ -50,6 +51,7 @@ from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor, SetParam
 import rclpy
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.clock import Clock, ClockType
+from rclpy.exceptions import ParameterException
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -95,7 +97,8 @@ class LowerBodyControllerNode(Node):
         Load the robot, run config and policy, then create the node's interfaces.
 
         kwargs go to rclpy's Node (context, parameter_overrides). Raises ValueError for a
-        missing parameter or a refused robot, run config or policy, before any interface
+        missing parameter or a refused robot, run config or policy, and rclpy's
+        ParameterException for an IMU trim override outside its range, before any interface
         exists.
         """
         super().__init__(NODE_NAME, **kwargs)
@@ -130,7 +133,9 @@ class LowerBodyControllerNode(Node):
                 description='live IMU trim, deg: what the IMU reads when the body is level',
                 floating_point_range=[FloatingPointRange(
                     from_value=-IMU_TRIM_RANGE_DEG, to_value=IMU_TRIM_RANGE_DEG, step=0.0)]))
-        self._trim = trim_quaternion(*self._run.imu_trim_deg)
+        # the declared values: an override given at start-up wins over the run config's
+        self._trim = trim_quaternion(*(float(self.get_parameter(name).value)
+                                       for name in IMU_TRIM_PARAMS))
         self.add_on_set_parameters_callback(self._on_set_parameters)
 
         state_group = MutuallyExclusiveCallbackGroup()
@@ -346,7 +351,7 @@ def main(args=None) -> int:
     rclpy.init(args=args)
     try:
         node = LowerBodyControllerNode()
-    except ValueError as error:
+    except (ValueError, ParameterException) as error:
         rclpy.logging.get_logger(NODE_NAME).error(f'not starting: {error}')
         rclpy.try_shutdown()
         return 1

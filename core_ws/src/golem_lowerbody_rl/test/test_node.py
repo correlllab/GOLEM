@@ -16,7 +16,8 @@ import time
 
 from geometry_msgs.msg import PoseStamped, Twist
 import golem_lowerbody_rl.node as node_module
-from golem_lowerbody_rl.node import LowerBodyControllerNode, make_executor
+from golem_lowerbody_rl.imu import apply_trim, IDENTITY, trim_quaternion
+from golem_lowerbody_rl.node import LowerBodyControllerNode, main, make_executor
 from golem_lowerbody_rl.policy import PolicyRunner
 from golem_lowerbody_rl.profile import load_profile
 from golem_lowerbody_rl.supervisor import Phase
@@ -225,11 +226,11 @@ def rig(monkeypatch):
                domain_id=TEST_DOMAIN)
     spinning = []
 
-    def start(config, policy='almi'):
-        """Start the node on config and policy, and the fake robot beside it."""
+    def start(config, policy='almi', overrides=()):
+        """Start the node on config and policy (and overrides), and the fake robot beside it."""
         node = RecordingNode([], context=context, parameter_overrides=[
             Parameter('robot', value='h12'), Parameter('config', value=config),
-            Parameter('policy', value=policy)])
+            Parameter('policy', value=policy), *overrides])
         # the legs stand 0.05 rad from the pre-pose: the ramp starts where they are
         robot = Robot(context, node.runner.prepose + 0.05)
         robot_executor = SingleThreadedExecutor(context=context)
@@ -403,13 +404,42 @@ def test_confirm_service(rig):
 
 
 def test_imu_trim_is_live_and_bounded(rig):
-    """The trim parameters start at the run config's values and refuse more than 15 deg."""
-    node, _ = rig('real')
+    """A start-up override and a later set are applied to /lowstate; over 15 deg is refused."""
+    node, robot = rig('real', overrides=[Parameter('imu_trim_pitch_deg', value=-3.0)])
     trim = [node.get_parameter(f'imu_trim_{axis}_deg').value
             for axis in ('roll', 'pitch', 'yaw')]
-    assert trim == [0.5, -2.5, 0.0]
+    # roll and yaw from the run config, pitch from the override
+    assert trim == [0.5, -3.0, 0.0]
+    seen = []
+    on_state = node.supervisor.on_state
+
+    def record(sample, mono, node_t):
+        """Keep the quaternion the supervisor gets, then hand the sample on."""
+        seen.append(np.array(sample.quat_wxyz))
+        return on_state(sample, mono, node_t)
+    node.supervisor.on_state = record
+
+    def applied():
+        """Return the newest quaternion the supervisor got."""
+        count = len(seen)
+        assert _wait(lambda: len(seen) > count + 1, 2.0)
+        return seen[-1]
+
+    # the fake robot reads level: what the supervisor gets is the trim alone
+    np.testing.assert_allclose(applied(), apply_trim(IDENTITY, trim_quaternion(0.5, -3.0, 0.0)),
+                               atol=1e-7)
     (result,) = node.set_parameters([Parameter('imu_trim_pitch_deg', value=20.0)])
     assert not result.successful
-    (result,) = node.set_parameters([Parameter('imu_trim_pitch_deg', value=-3.0)])
+    (result,) = node.set_parameters([Parameter('imu_trim_roll_deg', value=1.0)])
     assert result.successful
-    assert any('IMU trim' in m and '-3.000' in m for _, m in node.records)
+    assert any('IMU trim' in m and '+1.000' in m and '-3.000' in m for _, m in node.records)
+    np.testing.assert_allclose(applied(), apply_trim(IDENTITY, trim_quaternion(1.0, -3.0, 0.0)),
+                               atol=1e-7)
+
+
+def test_out_of_range_trim_override_does_not_start(monkeypatch):
+    """main() refuses a trim override over 15 deg with "not starting", exit status 1."""
+    # main() joins the shell's domain: the test's, never 0
+    monkeypatch.setenv('ROS_DOMAIN_ID', str(TEST_DOMAIN))
+    assert main(['--ros-args', '-p', 'robot:=h12', '-p', 'config:=real',
+                 '-p', 'imu_trim_pitch_deg:=20.0']) == 1

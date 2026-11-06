@@ -940,9 +940,9 @@ on the real G1 yet; follow `docs/g1/first-session.md` step by step.
   `golem_slam` and `golem_skills`), keeps their build and install directories.
   From the repo root, on every host that built the workspace (`sudo` for files
   a container left root-owned):
-  `rm -rf {core_ws/build,core_ws/install,core_ws/build_stack_tests,core_ws/install_stack_tests,container_cache/g1_tests/build,container_cache/g1_tests/install}/{h12_bringup,g1_bringup,h12_safety_layer,h12_ros2_controller,g1_safety_layer,g1_control,h12_ros2_model,g1_description,g1_dex3,g1_locomotion,h12_slam,h12_deploy_mjpc,h12_skills,g1_navigation,h12_lowerbody_rl,g1_homie}`.
+  `rm -rf {core_ws/build,core_ws/install,core_ws/build_stack_tests,core_ws/install_stack_tests,container_cache/g1_tests/build,container_cache/g1_tests/install,container_cache/sim_tests/build,container_cache/sim_tests/install}/{h12_bringup,g1_bringup,h12_safety_layer,h12_ros2_controller,g1_safety_layer,g1_control,h12_ros2_model,g1_description,g1_dex3,g1_locomotion,h12_slam,h12_deploy_mjpc,h12_skills,g1_navigation,h12_lowerbody_rl,g1_homie}`.
   Until then `launch_ros.sh` (`docker_run.sh ros`, `docker_stack.sh`,
-  `tests/g1`) exits before it builds, with `stale installed package '<pkg>' has
+  `tests/g1`, `tests/sim`) exits before it builds, with `stale installed package '<pkg>' has
   no discovered source`, and a native workspace (the H1-2's onboard PC) keeps
   answering to the old names. The same goes for what a package that stayed no
   longer ships: an old `golem_slam` install keeps the removed

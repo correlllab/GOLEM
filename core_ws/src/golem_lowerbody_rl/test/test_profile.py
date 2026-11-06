@@ -42,14 +42,13 @@ def test_mode_machine_from_the_safety_table():
     assert load_profile('g1').mode_pr == 0
 
 
-@pytest.mark.parametrize('robot, imu_frame, policies, default', [
-    ('h12', 'torso_link', ('almi', 'walk', 'fame'), 'almi'),
-    ('g1', 'pelvis', ('homie',), 'homie'),
+@pytest.mark.parametrize('robot, policies, default', [
+    ('h12', ('almi', 'walk', 'fame'), 'almi'),
+    ('g1', ('homie',), 'homie'),
 ])
-def test_robot_data(robot, imu_frame, policies, default):
-    """Each robot's IMU frame, policies and default policy are its robot.yaml's."""
+def test_robot_data(robot, policies, default):
+    """Each robot's policies and default policy are its robot.yaml's."""
     profile = load_profile(robot)
-    assert profile.imu_frame == imu_frame
     assert profile.policies == policies
     assert profile.default_policy == default
     assert len(profile.legs) == 12
@@ -76,24 +75,26 @@ G1_LEGS = ('[left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint, left
 
 def test_a_robot_yaml_path_loads(tmp_path):
     """load_profile reads a robot.yaml given by path in place of the installed one."""
-    path = _write(tmp_path, f'legs: {G1_LEGS}\nimu_frame: pelvis\n'
-                            'policies: [homie]\ndefault_policy: homie\n')
+    path = _write(tmp_path, f'legs: {G1_LEGS}\npolicies: [homie]\ndefault_policy: homie\n')
     assert load_profile('g1', path).legs == load_profile('g1').legs
 
 
 @pytest.mark.parametrize('text, message', [
-    (f'legs: {G1_LEGS}\nimu_frame: pelvis\npolicies: [homie]\n', "missing key 'default_policy'"),
-    (f'legs: {G1_LEGS}\nimu_frame: pelvis\npolicies: [homie]\ndefault_policy: homie\n'
-     'trim: 0\n', "unknown key 'trim'"),
-    (f'legs: {G1_LEGS}\nimu_frame: pelvis\npolicies: [homie]\ndefault_policy: walk\n',
+    (f'legs: {G1_LEGS}\npolicies: [homie]\n', "missing key 'default_policy'"),
+    (f'legs: {G1_LEGS}\npolicies: [homie]\ndefault_policy: homie\ntrim: 0\n',
+     "unknown key 'trim'"),
+    (f'legs: {G1_LEGS}\npolicies: [homie]\ndefault_policy: walk\n',
      "default_policy 'walk' is not one of"),
-    (f'legs: {G1_LEGS}\nimu_frame: pelvis\npolicies: [homie, homie]\ndefault_policy: homie\n',
+    (f'legs: {G1_LEGS}\npolicies: [homie, homie]\ndefault_policy: homie\n',
      "'policies' must name each entry once"),
-    (f'legs: {G1_LEGS.replace("left_knee_joint", "waist_yaw_joint")}\nimu_frame: pelvis\n'
+    (f'legs: {G1_LEGS.replace("left_knee_joint", "waist_yaw_joint")}\n'
      'policies: [homie]\ndefault_policy: homie\n', 'lower-body joints'),
-    (f'legs: {G1_LEGS}\nimu_frame: ""\npolicies: [homie]\ndefault_policy: homie\n',
-     "'imu_frame' must be a name"),
-], ids=['missing', 'unknown', 'default', 'repeated', 'not-legs', 'empty-frame'])
+    (f'legs: {G1_LEGS}\nimu_frame: pelvis\npolicies: [homie]\ndefault_policy: homie\n',
+     "unknown key 'imu_frame'"),
+    (f'legs: {G1_LEGS}\npolicies: [homie]\ndefault_policy: ""\n',
+     "'default_policy' must be a name"),
+], ids=['missing', 'unknown', 'default', 'repeated', 'not-legs', 'no-imu-frame',
+        'empty-default'])
 def test_bad_robot_yaml_is_refused(tmp_path, text, message):
     """A robot.yaml with a missing, unknown or inconsistent key is refused, naming it."""
     with pytest.raises(ValueError, match=message):

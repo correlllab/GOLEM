@@ -33,7 +33,9 @@ TOP_LEVEL_KEYS = ('sim',) + tuple(SECTION_KEYS) + ('imu_trim_deg',)
 # the installed run configs of each robot, by name; a file named after one must have
 # sim true exactly for 'sim'
 RUN_NAMES = ('sim', 'real')
-# golem_safety's /safety/heartbeat period (s); heartbeat.timeout must be longer
+# s: the period of golem_safety's /safety/heartbeat, which safety_node publishes at 10 Hz
+# (golem_safety's README); heartbeat.timeout must be longer. Kept here, not read from
+# golem_safety, which publishes the rate in no file
 HEARTBEAT_PERIOD = 0.1
 
 
@@ -137,6 +139,13 @@ def _check(raw, role: str | None) -> RunConfig:
     height_rate = commands['height_rate']
     trim = numbers('imu_trim_deg', raw['imu_trim_deg'], 3)
     max_latency = raw['faults']['max_latency']
+    # SAFETY: tick lag is the tick's age on the monotonic clock, and a sim's tick counts
+    # sim time: a sim slower than real time builds up lag and would stop the legs within
+    # seconds
+    if sim and max_latency is not None:
+        raise ValueError('faults.max_latency must be null in a sim run config (sim true): '
+                         "a sim's tick counts sim time, and the lag is measured against "
+                         f'the monotonic clock; not {max_latency!r}')
     return RunConfig(
         sim=sim,
         startup=Startup(

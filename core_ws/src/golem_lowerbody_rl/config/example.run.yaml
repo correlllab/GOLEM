@@ -64,7 +64,9 @@ faults:
   # longer one stops the node for good
   max_state_gap: 0.5
   # s (> 0) or null: the largest tick lag of /lowstate while the policy runs; a larger one
-  # stops the node for good; null skips the check
+  # stops the node for good; null skips the check. Null in a sim run config (sim true),
+  # which refuses any other value: the lag is measured on the monotonic clock and a sim's
+  # tick counts sim time
   max_latency: null
 
 # [roll, pitch, yaw] in deg: what the IMU reads when the body is level (positive pitch reads

@@ -139,3 +139,20 @@ def test_unknown_run_name_is_refused():
     """A name that is not a run config of the robot is refused."""
     with pytest.raises(ValueError, match="'robot'"):
         load_run_config('h12', 'robot')
+
+
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_max_latency_is_refused_in_a_sim_run(tmp_path, robot):
+    """
+    SAFETY: a sim run config with faults.max_latency is refused; a real one may set it.
+
+    Tick lag is measured against the monotonic clock, and a sim's tick counts sim time, so
+    a sim slower than real time would build up lag and stop the legs within seconds.
+    """
+    raw = _source(robot, 'sim')
+    raw['faults']['max_latency'] = 0.025
+    with pytest.raises(ValueError, match='faults.max_latency must be null in a sim run'):
+        load_run_config(robot, _write(tmp_path, raw))
+    raw = _source(robot, 'real')
+    raw['faults']['max_latency'] = 0.025
+    assert load_run_config(robot, _write(tmp_path, raw)).faults.max_latency == 0.025

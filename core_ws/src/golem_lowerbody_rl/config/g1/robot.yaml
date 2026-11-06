@@ -12,7 +12,5 @@ legs:
   - right_knee_joint
   - right_ankle_pitch_joint
   - right_ankle_roll_joint
-# HOMIE was trained on the pelvis IMU and reads /lowstate's IMU as it
-imu_frame: pelvis
 policies: [homie]
 default_policy: homie

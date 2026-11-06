@@ -3,7 +3,7 @@ Load each robot's leg profile: its joint table and the leg data this package kee
 
 The joint table (names in /lowcmd slot order, mode_machine, mode_pr, the lower-body slots)
 is golem_safety's share/golem_safety/robots/<robot>.yaml, the one copy every package reads.
-The rest (leg joints in action order, IMU frame, the policies the robot may run) is this
+The rest (leg joints in action order, the policies the robot may run) is this
 package's share/golem_lowerbody_rl/config/<robot>/robot.yaml, whose keys are documented in
 config/example.robot.yaml.
 """
@@ -19,7 +19,7 @@ import yaml
 __all__ = ['ROBOT_KEYS', 'RobotProfile', 'known_robots', 'load_profile']
 
 # robot.yaml must hold exactly these keys
-ROBOT_KEYS = ('legs', 'imu_frame', 'policies', 'default_policy')
+ROBOT_KEYS = ('legs', 'policies', 'default_policy')
 
 
 @dataclass(frozen=True)
@@ -31,7 +31,6 @@ class RobotProfile:
     mode_pr: int
     body_joints: tuple[str, ...]  # in /lowcmd slot order
     legs: tuple[str, ...]  # the commanded leg joints, in the policies' action order
-    imu_frame: str  # the URDF link of /lowstate's IMU
     policies: tuple[str, ...]  # the policies this robot may run
     default_policy: str
 
@@ -110,9 +109,9 @@ def _robot_config(robot: str, path: str) -> dict:
     for key in ROBOT_KEYS:
         if key not in raw:
             raise ValueError(f"{where}: missing key '{key}'")
-    for key in ('imu_frame', 'default_policy'):
-        if not isinstance(raw[key], str) or not raw[key]:
-            raise ValueError(f"{where}: '{key}' must be a name, not {raw[key]!r}")
+    if not isinstance(raw['default_policy'], str) or not raw['default_policy']:
+        raise ValueError(f"{where}: 'default_policy' must be a name, not "
+                         f"{raw['default_policy']!r}")
     config = dict(raw)
     config['legs'] = _names(where, 'legs', raw['legs'])
     config['policies'] = _names(where, 'policies', raw['policies'])
@@ -155,7 +154,6 @@ def load_profile(robot: str, robot_yaml: str | None = None) -> RobotProfile:
         mode_pr=int(data['mode_pr']),
         body_joints=body_joints,
         legs=config['legs'],
-        imu_frame=config['imu_frame'],
         policies=config['policies'],
         default_policy=config['default_policy'],
     )

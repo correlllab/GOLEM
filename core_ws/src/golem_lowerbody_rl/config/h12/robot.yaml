@@ -12,8 +12,6 @@ legs:
   - right_knee_joint
   - right_ankle_pitch_joint
   - right_ankle_roll_joint
-# golem_upper_ik's config/h12/robot.yaml names the same link
-imu_frame: torso_link
 policies: [almi, walk, fame]
 # every H1-2 bringup runs ALMI: it stands and walks in one policy
 default_policy: almi

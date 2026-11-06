@@ -202,17 +202,6 @@ require_h12_model() {
     done
 }
 
-# Fail unless HOMIE's walking policy files exist and are not LFS pointers;
-# docker-compose.yml bind-mounts them into every x86 ros container. The Mac
-# neither mounts nor builds g1_homie.
-require_g1_policy() {
-    local policy="$GOLEM_ROOT/core_ws/src/golem_lowerbody_rl/policies/homie"
-    local name
-    for name in deploy.onnx g1.yaml homie_policy.py; do
-        require_file "$policy/$name"
-    done
-}
-
 # Check the bind sources service $1 needs, before any container starts, and
 # create the cache directories it mounts (Compose never creates a bind source).
 prepare_mounts() {
@@ -222,7 +211,6 @@ prepare_mounts() {
         ros)
             require_h12_model
             require_g1_model ros
-            [ "${GOLEM_PLATFORM:-linux}" = mac ] || require_g1_policy
             ;;
         robocasa) [ "${GOLEM_ROBOT:-h12}" != g1 ] || require_g1_model robocasa ;;
     esac

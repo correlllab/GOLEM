@@ -34,7 +34,7 @@ arm controller's commands are fresh and `frame_task_server` has published its
 first `/left_ee_pose`, so this case runs `frame_task_server` too, holding the
 torso and arms as the sim bringup does. Tests check physical height, tilt, displacement, both knees, support
 release, telemetry continuity, and active policies. No fixed base is allowed.
-`isaac locomotion` cannot pass and `run_all.sh` skips it: Isaac's
+`isaac locomotion` cannot pass: `run.sh` refuses it and `run_all.sh` skips it. Isaac's
 `rt/lowstate` tick counts publishes, not milliseconds of the node's clock, so
 the leg node's readiness check never passes and the policy never starts (the
 node logs that the tick is off the node's clock), and Isaac serves no

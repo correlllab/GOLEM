@@ -108,9 +108,12 @@ band stays on. A success whose message is `enabled` means the band was already
 off (SPACE in the viewer) and the call hung the robot from it again: the node
 warns, counts no release and sends no further call.
 
-Before relying on the real robot's `max_state_gap`, measure the worst
-`/lowstate` gap and tick lag on the onboard PC in a hoisted ALMI run (the
-timing log): the gap must stay well under 0.25 s, or the legs latch silent.
+Before each robot's first real run, measure the leg node's worst `/lowstate`
+gap and tick lag on the ROS path (the timing log): on the H1-2's onboard PC in
+a hoisted ALMI run, on the G1's laptop with the robot on the gantry. Set
+`config/<robot>/real.yaml`'s `faults.max_state_gap` (0.25 s until then) and
+`faults.max_latency` (null, no latency fault, until then) from them: the gap
+must stay well under `max_state_gap`, or the legs latch silent.
 
 ## Tests
 
@@ -120,7 +123,9 @@ timing log): the gap must stay well under 0.25 s, or the legs latch silent.
 `test_timing.py`, `test_commands.py`, `test_observation.py` and
 `test_runner_goldens.py` (the policy runner against the golden traces in
 `test/golden/`); `test_supervisor.py` and `test_band.py` (the phases and faults
-on a fake clock); `test_launch.py` (the launch file's refusals); and
+on a fake clock); `test_launch.py` (the launch file's refusals);
+`test_no_sdk.py` (no `unitree_sdk2py` or `cyclonedds` in the package: ROS only;
+`tests/docker/test_shared_packages.py` keeps robot names out of its code); and
 `test_node.py` (the node in one process against fake publishers) and
 `test_node_safety.py` (the G1's node on HOMIE behind the installed
 `golem_safety` `safety_node`, `sim_split.yaml`, as a subprocess: start-up,

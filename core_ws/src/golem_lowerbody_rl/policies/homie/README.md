@@ -2,11 +2,13 @@
 
 The walking policy for GOLEM's Unitree G1. It holds HOMIE's pretrained
 locomotion policy and a MuJoCo script that runs it in simulation (sim2sim).
-The `g1_homie` package runs it on the G1's legs (`locomotion_node`), from
-the `ros` container's mount of this folder at `/home/code/g1_homie`;
-`golem_lowerbody_rl`, which holds the folder, installs `deploy.onnx` with its
-`LICENSE` and `README.md`, and its `config/g1/policies/homie.yaml` transcribes
-`g1.yaml`'s policy values. The G1 sim reads none of its files.
+`golem_lowerbody_rl`, which holds this folder, runs it on the G1's legs: its
+`lowerbody_controller_node` loads the policy through
+`config/g1/policies/homie.yaml`, which transcribes `g1.yaml`'s policy values,
+and the package installs `deploy.onnx` with its `LICENSE` and `README.md`.
+`homie_policy.py` serves the MuJoCo script and is the reference implementation
+the package's HOMIE golden trace (`test/golden/homie.npz`) was recorded from.
+The G1 sim reads none of its files.
 
 The policy and the script come from [OpenHomie](https://github.com/InternRobotics/OpenHomie);
 see [Credits](#credits). We kept only its MuJoCo deployment. The training code
@@ -178,4 +180,4 @@ The code is for non-commercial use only. OpenHomie's `LICENSE` file is CC BY-NC
 4.0, but its README says CC BY-NC-SA 4.0, which also requires changed versions
 to be shared under the same license. Treat it as the stricter CC BY-NC-SA 4.0.
 This license is different from the MIT license of GOLEM's packages
-(`golem_lowerbody_rl`, which holds this folder, `dex_3`, `g1_homie`).
+(`golem_lowerbody_rl`, which holds this folder, and `dex_3`).

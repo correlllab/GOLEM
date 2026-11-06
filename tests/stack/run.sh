@@ -3,7 +3,9 @@
 #
 # Usage: tests/stack/run.sh isaac|robocasa arms|locomotion
 #   arms         both wrists 2 cm forward and back through /frame_task (check_frame_task.py)
-#   locomotion   ALMI balance, walk and stop on /cmd_vel (check_lowerbody.py)
+#   locomotion   ALMI balance, walk and stop on /cmd_vel (check_lowerbody.py); RoboCasa only:
+#                `isaac locomotion` is refused, since Isaac's rt/lowstate tick counts publishes
+#                and the leg node never starts there (tests/stack/README.md)
 # Environment:
 #   ROS_DOMAIN_ID            DDS domain, default 193; check_domain refuses 0.
 #   GOLEM_TEST_WALL_TIMEOUT  the checker's wall timeout, s, default 900.
@@ -12,14 +14,18 @@
 # Starts three disposable containers (golem-stack-test-<domain>-<pid>-{ros,sim,check}) and leaves
 # their logs, telemetry, the checker's report and run.json in tests/results/stack-<sim>-<case>-*.
 # Exit: the checker's status (0 pass); 1 when a container exits early or a wait times out;
-#   2 for an unknown simulator or case or a bad GOLEM_TEST_WALL_TIMEOUT; nonzero with the usage
-#   for a missing argument.
+#   2 for an unknown simulator or case, `isaac locomotion` or a bad GOLEM_TEST_WALL_TIMEOUT;
+#   nonzero with the usage for a missing argument.
 set -eo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 SIMULATOR=${1:?Usage: run.sh isaac|robocasa arms|locomotion}
 TEST_CASE=${2:?Usage: run.sh isaac|robocasa arms|locomotion}
 case "$SIMULATOR" in isaac|robocasa) ;; *) exit 2 ;; esac
 case "$TEST_CASE" in arms|locomotion) ;; *) exit 2 ;; esac
+if [[ "$SIMULATOR/$TEST_CASE" == isaac/locomotion ]]; then
+    echo "run.sh: isaac locomotion cannot pass: Isaac's rt/lowstate tick counts publishes, so the leg node never starts (tests/stack/README.md)" >&2
+    exit 2
+fi
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-193}
 export GOLEM_TEST_WALL_TIMEOUT=${GOLEM_TEST_WALL_TIMEOUT:-900}
 # The controllers read no images, and CPU-rendered RoboCasa cameras slow physics several-fold
@@ -103,8 +109,8 @@ PY
 sim_args=(--headless --seed 42)
 if [[ "$SIMULATOR" == isaac ]]; then
     sim_args+=(--hand_type magpie)
-    # The arm case fixes Isaac's base to keep the arms apart from balance; locomotion runs free.
-    [[ "$TEST_CASE" != arms ]] || sim_args+=(--fix_base)
+    # The arm case, the only one Isaac runs, fixes its base to keep the arms apart from balance.
+    sim_args+=(--fix_base)
 else
     sim_args+=(--task AirDryFruit)
 fi

@@ -51,7 +51,7 @@ below depend on it.
 | 7. First launch: the arms | `ros2 launch golem_bringup g1_real_robot.launch.py use_hands:=false use_rviz:=false`: the zero-gain stream, the heartbeat, the arms' start-up. The legs stay limp. |
 | 8. Named configs | Send only `arms_front_45` and `home` on `/named_config`, one at a time, `home` last. |
 | 9. Stop the bringup | Stop the controller alone (the arms go limp, the waist holds), then Ctrl+C the launch, with the gantry carrying the robot. |
-| 10. Second launch: the legs | Step 6's last checks again (no other writer, the joints inside the estop limits), then the same launch with `start_position_verified:=true`: the walking node's pre-pose and hold, then the confirm. Stop with step 9. |
+| 10. Second launch: the legs | Step 6's last checks again (no other writer, the joints inside the estop limits), then the same launch with `start_position_verified:=true`: the walking node's pre-pose and hold, then the confirm. Stop with step 9. While the legs hold, the leg node's `timing over the last ...` lines (step spacing and tick lag on the laptop's ROS path) are the measurement that sets `golem_lowerbody_rl`'s `config/g1/real.yaml` `faults.max_state_gap` and `faults.max_latency` before any walking. |
 | 11. End the session | Copy the safety layer's logs out, exit the container, set `docker/.env` back to the sim. |
 
 ## What you should see

@@ -23,7 +23,7 @@ class Workflows(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         shutil.copytree(REPO / 'docker', self.root / 'docker', ignore=shutil.ignore_patterns('.env', '__pycache__'))
-        for name in ('unitree_sdk2_python/setup.py', *self.H12_MODEL, *self.G1_MODEL, *self.G1_POLICY,
+        for name in ('unitree_sdk2_python/setup.py', *self.H12_MODEL, *self.G1_MODEL,
                      'CL_isaaclab_sim/sim_main.py', 'golem_robocasa/h12_mujoco.py',
                      'core_ws/src/magpie_msgs/package.xml', 'core_ws/src/custom_ros_messages/package.xml',
                      'core_ws/src/livox_ros_driver2/package_ROS2.xml', 'core_ws/cyclonedds.xml',
@@ -270,12 +270,6 @@ if 'config' in sys.argv:
         'CL_Assets/ros_assets/h1_2_magpie.urdf', 'CL_Assets/ros_assets/h1_2_magpie_sphere.urdf',
         'CL_Assets/ros_assets/h1_2_magpie_sphere_collision.srdf',
         'CL_Assets/meshes/h1_2/pelvis.STL', 'CL_Assets/meshes/magpie/mount.stl',
-    )
-    # HOMIE's walking policy, which every ros container mounts.
-    G1_POLICY = (
-        'core_ws/src/golem_lowerbody_rl/policies/homie/deploy.onnx',
-        'core_ws/src/golem_lowerbody_rl/policies/homie/g1.yaml',
-        'core_ws/src/golem_lowerbody_rl/policies/homie/homie_policy.py',
     )
     LFS_HINT = 'lfs pull'
     LFS_POINTER = 'version https://git-lfs.github.com/spec/v1\noid sha256:0\nsize 1\n'
@@ -543,23 +537,14 @@ if 'config' in sys.argv:
                 self.assertIn(self.LFS_HINT, r.stderr)
                 self.assertFalse(self.compose_calls())
 
-    def test_missing_policy_file_fails_early_for_every_ros_container(self):
-        """Every ros container refuses a missing HOMIE policy file; the sims run without it."""
-        # Every ros container mounts HOMIE's policy for the walking node; the sim reads none of it.
-        policy = self.root / 'core_ws/src/golem_lowerbody_rl/policies/homie/deploy.onnx'
-        policy.unlink()
-        for robot in ('g1', 'h12'):
-            with self.subTest(robot=robot):
+    def test_no_container_needs_the_leg_policies(self):
+        """No wrapper checks the leg policies: golem_lowerbody_rl installs its own weights."""
+        # The fixture has no core_ws/src/golem_lowerbody_rl at all.
+        self.assertFalse((self.root / 'core_ws/src/golem_lowerbody_rl').exists())
+        for profile, args in (('ros', ()), ('robocasa', ('--g1',)), ('robocasa', ('--h12',))):
+            with self.subTest(profile=profile, args=args):
                 (self.root / 'calls').unlink(missing_ok=True)
-                r = self.run_script('docker/scripts/docker_run.sh', 'ros', GOLEM_ROBOT=robot)
-                self.assertNotEqual(r.returncode, 0)
-                self.assertIn('deploy.onnx', r.stderr)
-                self.assertFalse(self.compose_calls())
-        shutil.rmtree(self.root / 'core_ws/src/golem_lowerbody_rl/policies/homie')
-        for args in (('--g1',), ('--h12',)):
-            with self.subTest('sim', args=args):
-                (self.root / 'calls').unlink(missing_ok=True)
-                r = self.run_script('docker/scripts/docker_run.sh', 'robocasa', *args)
+                r = self.run_script('docker/scripts/docker_run.sh', profile, *args)
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertTrue(self.run_calls())
 
@@ -733,7 +718,7 @@ if 'config' in sys.argv:
         overlay = (self.root / 'docker/docker-compose.g1.yml').read_text()
         self.assertNotIn('ros:', overlay)
         self.assertNotIn('cyclonedds_local.xml', overlay)
-        self.assertNotIn('g1_homie', overlay)
+        self.assertNotIn('homie', overlay)
         self.assertNotIn('/home/code/tools', overlay)
         self.assertFalse([v for v in services['robocasa']['volumes'] if 'homie' in v['source']])
         # The G1's model comes from the base file's CL_Assets mount.
@@ -742,20 +727,19 @@ if 'config' in sys.argv:
         self.assertFalse([s for s in mounts.values() if 'third_party' in s])
 
     def test_base_ros_service_mounts_both_robots(self):
-        """The base ros service mounts HOMIE's policy and tools/ read-only, without creating them; the sim mounts no policy."""
-        # Every ros container, the H1-2's included, runs either robot's bringup: HOMIE's
-        # policy for the G1's walking node and tools/ come from the base file.
+        """The base ros service mounts tools/ read-only, without creating it, and no policy; nor does the sim."""
+        # Every ros container, the H1-2's included, runs either robot's bringup: tools/ comes
+        # from the base file, and the leg policies from golem_lowerbody_rl's install.
         ros = self.compose_config('docker-compose.yml', profile='ros')['ros']
         mounts = {v['target']: v for v in ros['volumes']}
-        expected = {'/home/code/g1_homie': str(self.root / 'core_ws/src/golem_lowerbody_rl/policies/homie'),
-                    '/home/code/tools': str(self.root / 'tools')}
-        for target, source in expected.items():
-            self.assertEqual(mounts[target]['source'], source)
-            self.assertTrue(mounts[target]['read_only'], target)
-            self.assertFalse(mounts[target].get('bind', {}).get('create_host_path', False), target)
+        tools = mounts['/home/code/tools']
+        self.assertEqual(tools['source'], str(self.root / 'tools'))
+        self.assertTrue(tools['read_only'])
+        self.assertFalse(tools.get('bind', {}).get('create_host_path', False))
         self.assertNotIn('GOLEM_ROBOT', ros['environment'])
         sim = self.compose_config('docker-compose.yml', profile='robocasa')['robocasa']
-        self.assertFalse([v for v in sim['volumes'] if 'homie' in v['source']])
+        for service in (ros, sim):
+            self.assertFalse([v for v in service['volumes'] if 'homie' in v['source']])
 
     def test_stack_compose_bringup_defaults_and_overrides(self):
         """The stack overlay starts h12_sim.launch.py by default and the launch GOLEM_BRINGUP_LAUNCH names."""

@@ -45,13 +45,14 @@ Isaac (H1-2 only) — see [`docs/MACOS.md`](docs/MACOS.md).
 
 ## The G1
 
-GOLEM also runs the Unitree G1 (29 DoF, two Dex3-1 hands): its own packages
-(`core_ws/src/g1_homie`, HOMIE's walking policy; `core_ws/src/dex_3`, the
-Dex3-1 hands), the
-safety layer, arm IK, models, bringup, SLAM/navigation and skills packages it shares with the H1-2
+GOLEM also runs the Unitree G1 (29 DoF, two Dex3-1 hands): its own package
+(`core_ws/src/dex_3`, the Dex3-1 hands), the safety layer, arm IK, leg
+controller (HOMIE's walking policy on the G1), models, bringup,
+SLAM/navigation and skills packages it shares with the H1-2
 (`core_ws/src/golem_safety`, `core_ws/src/golem_upper_ik`,
-`core_ws/src/golem_ros2_models`, `core_ws/src/golem_bringup`,
-`core_ws/src/golem_slam`, `core_ws/src/golem_skills`), its models in
+`core_ws/src/golem_lowerbody_rl`, `core_ws/src/golem_ros2_models`,
+`core_ws/src/golem_bringup`, `core_ws/src/golem_slam`,
+`core_ws/src/golem_skills`), its models in
 `CL_Assets/g1`, and a RoboCasa sim in
 `golem_robocasa/g1/`. The H1-2 stays the default; `--g1` on a wrapper, or
 `GOLEM_ROBOT=g1`, selects the G1 (x86 Linux, RoboCasa only). The images are
@@ -69,18 +70,19 @@ session follows [`docs/g1/first-session.md`](docs/g1/first-session.md). Start
 at [`docs/g1/index.md`](docs/g1/index.md).
 
 **Licence note.** HOMIE's walking policy in
-`core_ws/src/g1_homie/policy/` (from
+`core_ws/src/golem_lowerbody_rl/policies/homie/` (from
 [OpenHomie](https://github.com/InternRobotics/OpenHomie)) is for
 non-commercial use only. Its `LICENSE` is CC BY-NC 4.0, but OpenHomie's README
 says CC BY-NC-SA 4.0, which also requires changed versions to be shared under
-the same licence: treat it as CC BY-NC-SA 4.0. The G1 packages around it
-(`g1_homie`, `dex_3`) are MIT. See the policy's `README.md`.
+the same licence: treat it as CC BY-NC-SA 4.0. The packages around it
+(`golem_lowerbody_rl`, which runs it, and `dex_3`) are MIT. See the policy's
+`README.md`.
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `core_ws/` | the ROS 2 workspace — 23 packages, the G1's in `core_ws/src/{g1_homie,dex_3}`; where most development happens |
+| `core_ws/` | the ROS 2 workspace — 22 packages, the G1's own in `core_ws/src/dex_3`; where most development happens |
 | `golem_robocasa/` | RoboCasa/MuJoCo simulator entry point for both robots and its ROS/DDS bridges; the G1 sim in `golem_robocasa/g1/` |
 | `CL_isaaclab_sim/` | Isaac Lab simulator (H1-2) |
 | `CL_Assets/` | both robots' URDFs, MJCFs, meshes and self-collision models (the G1's in `CL_Assets/g1/`), Isaac USD (Git-LFS) |

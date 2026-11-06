@@ -25,9 +25,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 def load_config(config_path):
     """Load the YAML config; paths in it are relative to the file.
 
-    In the containers this directory is /home/code/g1_homie, beside
-    /home/code/CL_Assets; in the repo it is core_ws/src/golem_lowerbody_rl/policies/homie,
-    so a path that is not there is looked up from the repo's root as well.
+    This directory is core_ws/src/golem_lowerbody_rl/policies/homie in the repo (in the
+    ros container, under /home/code, beside /home/code/CL_Assets), so a path that is not
+    there is looked up from the repo's root as well.
     """
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)

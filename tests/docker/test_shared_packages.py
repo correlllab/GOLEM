@@ -1,8 +1,8 @@
 """Check that the packages both robots run name no robot in their code.
 
-golem_safety, golem_upper_ik and golem_slam serve both robots: what differs per robot is
-data (golem_safety's `robots/<robot>.yaml` profiles, each package's `config/<robot>/`),
-never a branch or a literal in code. The robot names are the profiles golem_safety ships.
+golem_safety, golem_upper_ik, golem_slam and golem_lowerbody_rl serve both robots: what
+differs per robot is data (golem_safety's `robots/<robot>.yaml` profiles, each package's
+`config/<robot>/`), never a branch or a literal in code. The robot names are the profiles golem_safety ships.
 """
 import ast
 from pathlib import Path
@@ -23,6 +23,9 @@ SCANNED = [
     SRC / 'golem_slam/golem_slam',
     SRC / 'golem_slam/launch',
     SRC / 'golem_slam/setup.py',
+    SRC / 'golem_lowerbody_rl/golem_lowerbody_rl',
+    SRC / 'golem_lowerbody_rl/launch',
+    SRC / 'golem_lowerbody_rl/setup.py',
 ]
 CODE_SUFFIXES = {'.py', '.cpp', '.hpp', '.h', '.cc'}
 
@@ -151,7 +154,7 @@ class ScannerTests(unittest.TestCase):
 
     def test_python_string_literals(self):
         """A Python literal equal to or prefixed by a robot name is found; one merely containing it is not."""
-        source = 'a = "h12"\nb = "g1_homie"\nc = f"h12/{x}"\nd = "other"\ne = "h12 or g1"\n'
+        source = 'a = "h12"\nb = "g1_legs"\nc = f"h12/{x}"\nd = "other"\ne = "h12 or g1"\n'
         self.assertEqual([line for line, _ in python_hits(source, self.NAMES)], [1, 2, 3])
 
     def test_python_comparisons(self):

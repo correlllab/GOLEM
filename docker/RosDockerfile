@@ -487,7 +487,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # The G1's additions. joint_state_publisher_gui: golem_ros2_models'
 # display.launch.py. python3-evdev: mujoco_mpc's
 # mjpc/deploy/helper_scripts/wasd_teleop.py reads the keyboard through it.
-# onnxruntime 1.23.2: g1_homie runs HOMIE's walking policy with it.
+# onnxruntime 1.23.2: golem_lowerbody_rl runs HOMIE's walking policy with it.
 # -----------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-joint-state-publisher-gui python3-evdev \

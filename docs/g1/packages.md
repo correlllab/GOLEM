@@ -1,8 +1,8 @@
 # Packages
 
-The G1's own ROS 2 packages are `dex_3` and `g1_homie`, in
+The G1's own ROS 2 package is `dex_3`, in
 `core_ws/src/`. `launch_ros.sh` builds
-them in every `ros` container, whichever robot the wrappers selected, so one
+it in every `ros` container, whichever robot the wrappers selected, so one
 container runs either robot's bringup. The G1 shares seven packages with the H1-2, built for both robots: the
 safety layer `golem_safety`, the arm controller `golem_upper_ik` and the leg node
 `golem_lowerbody_rl`, each with a profile or data and configs per robot, the models `golem_ros2_models`, the
@@ -10,11 +10,10 @@ bringup `golem_bringup`, navigation `golem_slam`, and skills `golem_skills`. Eac
 below has its own README with the full details, except the launch-only
 `golem_bringup`.
 
-## G1 packages
+## The G1's package
 
 | Package | What it does | Key nodes and launch files | README |
 |---|---|---|---|
-| `g1_homie` | HOMIE's walking node on the Unitree SDK. No bringup starts it: the G1's legs run `golem_lowerbody_rl` (below). | `locomotion_node` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1_homie/README.md) |
 | `dex_3` | Dex3-1 hand driver. Bypasses the safety layer. | `dex3_hands` (`/<side>/hand/set_pose`, `open`, `close`, `release`); `hands.launch.py` | [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/dex_3/README.md) |
 
 ## Shared with the H1-2
@@ -35,8 +34,8 @@ below has its own README with the full details, except the launch-only
 
 Outside `core_ws`:
 
-- `unitree_sdk2_python/` is the Unitree DDS SDK that `g1_homie`,
-  `dex_3` and the sim use. `golem_safety` and `golem_upper_ik` reach the
+- `unitree_sdk2_python/` is the Unitree DDS SDK that `dex_3` and the sim
+  use. `golem_safety`, `golem_upper_ik` and `golem_lowerbody_rl` reach the
   same DDS topics as ROS 2 topics (ROS `/lowcmd` is DDS `rt/lowcmd`).
 - `CL_Assets/g1` (in the `CL_Assets` submodule) holds the G1's models, which
   `golem_ros2_models` installs and the sim builds its robot from. The wrappers
@@ -44,10 +43,10 @@ Outside `core_ws`:
   (`git -C CL_Assets lfs pull`). `CL_Assets/g1/README.md` has their
   provenance, the Dex3-1 joint order and the loader quirks; our unit is
   [Our G1](hardware.md).
-- HOMIE's policy is in `core_ws/src/g1_homie/policy/`
-  ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/g1_homie/policy/README.md)), for
-  non-commercial use only. The `ros` container mounts it at
-  `/home/code/g1_homie`; the sim reads none of its files.
+- HOMIE's policy is in `core_ws/src/golem_lowerbody_rl/policies/homie/`
+  ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_lowerbody_rl/policies/homie/README.md)), for
+  non-commercial use only. `golem_lowerbody_rl` installs its network; the sim
+  reads none of its files.
 
 ## Tests
 
@@ -70,7 +69,7 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest test/test_g1_launch.py test/t
 HOMIE's policy test needs no simulator:
 
 ```bash
-cd /home/code/g1_homie && python3 test_homie_policy.py
+cd /home/code/core_ws/src/golem_lowerbody_rl/policies/homie && python3 test_homie_policy.py
 ```
 
 The G1 sim's unit tests, the topic-surface probe and the acceptance tests run

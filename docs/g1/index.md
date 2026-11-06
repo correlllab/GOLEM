@@ -1,7 +1,8 @@
 # The Unitree G1 in GOLEM
 
 GOLEM runs a second robot beside the H1-2: the Correll Lab's Unitree G1
-(29 DoF, two Dex3-1 hands). Its ROS 2 packages are `core_ws/src/g1_homie` and `dex_3`. Navigation
+(29 DoF, two Dex3-1 hands). Its own ROS 2 package is `core_ws/src/dex_3`, the Dex3-1 hands; its
+legs run HOMIE's walking policy in the shared `golem_lowerbody_rl`, and navigation
 and frontier exploration use the shared `golem_slam` and `golem_skills`; its
 models (Unitree's URDFs, MJCFs and meshes, and a sphere-packed self-collision
 model) are in `CL_Assets/g1`, installed for ROS by `golem_ros2_models` with the
@@ -98,8 +99,8 @@ ros2 service call /left/hand/open std_srvs/srv/Trigger
 
 **What to expect:** the robot starts hanging from the sim's elastic band with
 every motor off, as the real G1 starts in Unitree's debug mode. The arms move
-to `home` once the stack is up. HOMIE's walking node, which the sim bringup
-always starts, moves the legs to its default pose, starts its policy and
+to `home` once the stack is up. The leg node (`golem_lowerbody_rl`, running
+HOMIE), which the sim bringup always starts, moves the legs to its default pose, starts its policy and
 releases the band (`elastic band released` in the bringup's log); from then on
 it keeps the robot standing. The goals then move the arms to a T-pose, and the
 left hand closes and opens. The named postures are `named_configs` in
@@ -139,6 +140,7 @@ left hand closes and opens. The named postures are `named_configs` in
 
 ## Licence
 
-The G1 packages (`dex_3`, `g1_homie`) are MIT. HOMIE's walking policy in
-`core_ws/src/g1_homie/policy/` is for non-commercial use only (CC BY-NC
+The packages the G1 runs (`dex_3`, `golem_lowerbody_rl` and the other shared
+`golem_*` packages) are MIT. HOMIE's walking policy in
+`core_ws/src/golem_lowerbody_rl/policies/homie/` is for non-commercial use only (CC BY-NC
 4.0 by its `LICENSE`; treat it as CC BY-NC-SA 4.0); see its `README.md`.

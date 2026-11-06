@@ -4,8 +4,8 @@ Test the command processing between /cmd_vel and a policy's velocity and height 
 The goldens hold commands inside every limit, so the clip order, the trained range, the
 run config's limits and the height processing are pinned here. Expected values follow
 the code each policy ran before: the H1-2 node's per-axis clip to +-1 then ALMI's
-clip(cmd * cmd_gain, +-1) and its smoothing; g1_homie's CommandFilter (trained range,
-the run config's limits, then the acceleration and height-rate limits at 50 Hz).
+clip(cmd * cmd_gain, +-1) and its smoothing; the G1 node's HOMIE command filter (trained
+range, the run config's limits, then the acceleration and height-rate limits at 50 Hz).
 """
 
 import dataclasses

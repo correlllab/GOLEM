@@ -49,7 +49,7 @@ setup(
         (os.path.join('share', package_name, 'policies', 'almi'),
             files('policies/almi/*')),
         # HOMIE's network with its licence (CC BY-NC-SA) and README; homie_policy.py and
-        # the rest of the folder serve its MuJoCo script and the golden tests
+        # the rest of the folder serve its MuJoCo script and stay in the source tree
         (os.path.join('share', package_name, 'policies', 'homie'),
             ['policies/homie/deploy.onnx', 'policies/homie/LICENSE',
              'policies/homie/README.md']),

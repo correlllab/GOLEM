@@ -23,7 +23,8 @@ from .sim_names import BODY_JOINTS, NameResolver
 from .unitree_interface import SimInterface
 
 # The fall logger's test: the pelvis tilted more than 60 deg from upright (as
-# g1_homie's policy/mujoco_deploy_g1.py tests it), or down on the floor.
+# golem_lowerbody_rl's policies/homie/mujoco_deploy_g1.py tests it), or down on
+# the floor.
 FALL_UPRIGHTNESS = 0.5   # pelvis z-axis . world up
 FALL_PELVIS_HEIGHT = 0.2  # m
 

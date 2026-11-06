@@ -40,10 +40,11 @@ is required before anything builds.
 **`core_ws/src` in-tree packages** (versioned directly in this repo, *not*
 submodules): `FAST_LIO`, `golem_ros2_models`, `golem_safety`, `golem_upper_ik`, `deploy_mjpc`,
 `golem_lowerbody_rl`, `golem_slam`, `golem_skills`, `golem_bringup`, `lmg_deploy`,
-`model_server`, and the G1 packages `dex_3` and `g1_homie`.
+`model_server`, and the G1's own package `dex_3`.
 
-`golem_safety` (C++, `ament_cmake`) and `golem_upper_ik` (Python) are the
-safety layer and arm controller of both robots, so they build for both; the
+`golem_safety` (C++, `ament_cmake`), `golem_upper_ik` and `golem_lowerbody_rl`
+(Python) are the safety layer, arm controller and leg controller of both
+robots, so they build for both; the
 `ros` image has `golem_safety`'s build dependencies (`rclcpp`, `libyaml-cpp-dev`,
 `zlib1g-dev`).
 
@@ -139,7 +140,8 @@ iterating on volatile pins doesn't bust the heavy layers above. `FROM golem_base
 10. **G1 additions** (last layers): apt `ros-humble-joint-state-publisher-gui`
     (`golem_ros2_models`' `display.launch.py`) and `python3-evdev` (the
     `mujoco_mpc` fork's `wasd_teleop.py`), then pip `onnxruntime==1.23.2`
-    (HOMIE's walking policy) through lock step `ros-amd64-13.txt`.
+    (`golem_lowerbody_rl` runs HOMIE's walking policy with it; imported only
+    by its ONNX backend) through lock step `ros-amd64-13.txt`.
 
 **Runtime build:** `launch_ros.sh` runs `colcon build --symlink-install` on
 `core_ws` **at container start** (see §8). The image bakes only the *toolchain* and
@@ -276,17 +278,17 @@ flag). For the G1 they add `docker/docker-compose.g1.yml` after
 
 - the robocasa service gets `GOLEM_ROBOT=g1` and the G1 sim's knobs
   (`CLAUDE.md` §8);
-- the ros service needs no overlay: the base file mounts HOMIE's policy,
-  `core_ws/src/g1_homie/policy` (at `/home/code/g1_homie`, for the walking
-  node), and `tools/` (at `/home/code/tools`) into every ros container,
-  read-only with `create_host_path: false`, uses `core_ws/cyclonedds.xml`
-  directly, and the G1's model is in `CL_Assets/g1`, which the base file mounts
-  for both robots.
+- the ros service needs no overlay: the base file mounts `tools/` (at
+  `/home/code/tools`) into every ros container, read-only with
+  `create_host_path: false`, it uses `core_ws/cyclonedds.xml` directly, the
+  G1's model is in `CL_Assets/g1`, which the base file mounts for both robots,
+  and HOMIE's weights are installed by `golem_lowerbody_rl` from the
+  `core_ws` mount.
 
 `prepare_mounts` checks the `CL_Assets/g1` files each service reads for missing
 files and LFS pointers before any container starts: in every ros container,
 whose `golem_ros2_models` installs both robots' models, and in the robocasa
-service for the G1. It checks the policy files for every ros container, and
+service for the G1.
 `launch_ros.sh` builds every package, the G1's included, whatever
 the robot: one `ros` container runs either robot's bringup. For the G1,
 `docker_stack.sh` sets `GOLEM_BRINGUP_LAUNCH=g1_sim.launch.py` for the stack

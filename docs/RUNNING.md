@@ -190,7 +190,7 @@ anywhere in their arguments, or with `GOLEM_ROBOT=g1` in the shell or
 (`robot: g1`) before the DDS domain check. The robot matters where it is
 inherent: which robot the sim runs, and which bringup `docker_stack.sh` starts
 and which sim it waits for. Every `ros` container mounts and builds both
-robots' packages (`dex_3` and `g1_homie` included) and uses the default
+robots' packages (`dex_3` and `golem_lowerbody_rl` included) and uses the default
 CycloneDDS configuration (`core_ws/cyclonedds.xml`), so `docker_run.sh ros`
 takes no `--g1` flag and runs both `g1_sim.launch.py` / `g1_real_robot.launch.py`
 and the H1-2's launches. The G1 runs on x86 Linux with RoboCasa only. Both
@@ -204,12 +204,13 @@ docker/scripts/docker_run.sh ros                             # builds both robot
 ros2 launch golem_bringup g1_sim.launch.py                   # use_nav:=true use_skills:=true ...
 ```
 
-The G1 bringup always starts HOMIE's walking node in the sim. The robot hangs
-from the sim's elastic band with every motor off until the arm controller's
-first command; from then on the controller drives the waist and arms, and the
-leg motors stay off until the walking node moves the legs to its default pose.
-The walking node then starts its policy, and releases the band once
-`frame_task_server` has finished its start-up moves.
+The G1 bringup always starts the leg node (`golem_lowerbody_rl`, running
+HOMIE) in the sim. The robot hangs from the sim's elastic band with every
+motor off until the arm controller's first command; from then on the
+controller drives the waist and arms, and the leg motors stay off until the
+leg node moves the legs to HOMIE's default pose. The leg node then starts its
+policy, once `frame_task_server` has finished its start-up moves, and
+releases the band.
 
 The paired startup refuses a simulator of the other robot on the domain; the
 single-service flow does not check. On the real G1 the `ros` container runs on
@@ -233,22 +234,14 @@ session follows [`g1/first-session.md`](g1/first-session.md).
   <sim> --restart`); for Isaac run `git submodule update` first, since the
   change is in the `CL_isaaclab_sim` pin.
 - **Stale installs of removed packages.** colcon never removes a package that
-  is gone from `core_ws/src`. A workspace built before `golem_bringup` replaced
-  `h12_bringup` and `g1_bringup` (and `h12_safety_layer`,
-  `h12_ros2_controller`, `g1_safety_layer` and `g1_control` were deleted),
-  before `golem_ros2_models` replaced `h12_ros2_model` and `g1_description`,
-  before `dex_3` and `g1_homie` replaced `g1_dex3` and `g1_locomotion`, or
-  before `golem_slam`, `deploy_mjpc` and `golem_skills` replaced `h12_slam`,
-  `h12_deploy_mjpc` and `h12_skills` (`g1_navigation` went into `golem_slam`
-  and `golem_skills`; the skills node is `/golem_skills`), keeps their build
-  and install directories, and `launch_ros.sh` then stops with
-  `stale installed package '<pkg>' has no discovered source`. Stop the
-  processes that use them, then delete them once, from the repo root, on every
-  host that built the workspace (`sudo` for files a container left root-owned):
-
-  ```bash
-  rm -rf {core_ws/build,core_ws/install,core_ws/build_stack_tests,core_ws/install_stack_tests,container_cache/g1_tests/build,container_cache/g1_tests/install}/{h12_bringup,g1_bringup,h12_safety_layer,h12_ros2_controller,g1_safety_layer,g1_control,h12_ros2_model,g1_description,g1_dex3,g1_locomotion,h12_slam,h12_deploy_mjpc,h12_skills,g1_navigation}
-  ```
+  is gone from `core_ws/src`. A workspace built before a package was renamed,
+  merged or deleted keeps its build and install directories, and
+  `launch_ros.sh` then stops with `stale installed package '<pkg>' has no
+  discovered source`. Stop the processes that use them, then delete them once,
+  from the repo root, on every host that built the workspace (`sudo` for files
+  a container left root-owned), with the `rm -rf` command under "Delete the
+  stale installs of removed packages" in [`CLAUDE.md`](../CLAUDE.md) §10, which
+  lists every removed package.
 
   A native workspace (the H1-2's onboard PC) has no such check and keeps
   answering to the old names until they are deleted. On the Mac, delete the

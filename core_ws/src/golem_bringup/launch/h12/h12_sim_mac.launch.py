@@ -3,7 +3,8 @@ Start the H1-2 against the Mac's RoboCasa sim (docker/mac: arm64, CPU only).
 
 It includes the blocks h12_sim.launch.py includes, with the arguments that file
 passes them, all at once: h12_state, h12_control, h12_lowerbody and golem_slam's
-navigation. It declares no launch arguments.
+navigation, with the leg node's check (golem_bringup.h12_legs.leg_check) first when it
+includes h12_lowerbody. It declares no launch arguments.
 The GOLEM_* environment variables (docker/mac/docker-compose.yml passes them)
 choose the optional ones:
 
@@ -24,6 +25,7 @@ launch_ros_mac.sh launches this file by path:
 import os
 
 from ament_index_python.packages import get_package_share_directory
+from golem_bringup.h12_legs import leg_check
 from golem_lowerbody_rl.profile import load_profile
 from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
@@ -79,13 +81,17 @@ def generate_launch_description():
     ]
     if policy:
         # The legs; the sim needs no operator check of the start pose.
-        actions.append(_include('golem_bringup', 'h12/h12_lowerbody.launch.py', {
+        legs = {
             **sim_time,
             'start_position_verified': 'true',
             'policy': policy,
             'sim': 'true',
             'lowerbody_config': 'sim',
-        }))
+        }
+        # SAFETY: first, so a refused run config starts no node: the leg block, which
+        # checks it too, is included after the others.
+        actions.insert(0, leg_check(legs))
+        actions.append(_include('golem_bringup', 'h12/h12_lowerbody.launch.py', legs))
     if _env('GOLEM_SLAM') in ON or _env('GOLEM_NAV2') in ON:
         # SLAM and Nav2, driving the legs on /cmd_vel.
         actions.append(

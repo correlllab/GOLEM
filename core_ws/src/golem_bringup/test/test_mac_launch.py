@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
-from launch.actions import IncludeLaunchDescription
+from launch.actions import IncludeLaunchDescription, OpaqueFunction
 import pytest
 
 from test_bringup_packages import _context, _load, _passed_to, _text
@@ -38,13 +38,20 @@ def env(monkeypatch):
 
 
 def _includes():
-    """Return {included file name: {argument: value}} of what h12_sim_mac includes."""
+    """
+    Return {included file name: {argument: value}} of what h12_sim_mac includes.
+
+    With a leg block, the leg node's check comes first (test_bringup_packages.py runs it).
+    """
     description = _load('h12_sim_mac.launch.py').generate_launch_description()
     context = _context(description)
+    entities = list(description.entities)
+    if entities and isinstance(entities[0], OpaqueFunction):
+        entities = entities[1:]
     assert all(isinstance(entity, IncludeLaunchDescription)
-               for entity in description.entities), 'starts more than its includes'
+               for entity in entities), 'starts more than its includes'
     includes = {}
-    for entity in description.entities:
+    for entity in entities:
         path = _location(entity)
         name = 'navigation' if path == NAV_LAUNCH else Path(path).name
         assert name not in includes, f'{name} included twice'

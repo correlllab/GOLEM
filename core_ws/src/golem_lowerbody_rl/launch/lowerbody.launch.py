@@ -9,7 +9,8 @@ In order:
 2. lowerbody_controller_node, start_delay seconds (wall clock) later.
 
 Both robots' bringups include this file (golem_bringup's h12_lowerbody.launch.py and
-g1_core.launch.py). On its own:
+g1_core.launch.py); a bringup that includes it after other nodes runs the same check
+(lowerbody_check) first. On its own:
 
     ros2 launch golem_lowerbody_rl lowerbody.launch.py robot:=h12 config:=sim sim:=true \
         use_sim_time:=true
@@ -22,7 +23,7 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-from golem_lowerbody_rl.launch_check import lowerbody_refusal
+from golem_lowerbody_rl.launch_check import lowerbody_check
 from golem_lowerbody_rl.profile import known_robots
 
 
@@ -34,15 +35,6 @@ def _text(context: LaunchContext, name: str) -> str:
 def _flag(context: LaunchContext, name: str) -> bool:
     """Return launch argument name as a bool (true/false, 1/0, ...)."""
     return evaluate_condition_expression(context, [LaunchConfiguration(name)])
-
-
-def _check(context: LaunchContext) -> list:
-    """Raise RuntimeError, starting nothing, when the leg node must not run."""
-    refusal = lowerbody_refusal(_text(context, 'robot'), _text(context, 'config'),
-                                _text(context, 'policy'), sim=_flag(context, 'sim'))
-    if refusal is not None:
-        raise RuntimeError(f'lowerbody: not starting: {refusal}')
-    return []
 
 
 def _start(context: LaunchContext) -> list:
@@ -100,6 +92,7 @@ def generate_launch_description() -> LaunchDescription:
             'start_delay', default_value='0.0',
             description='s of wall time (>= 0) from the check to starting the node'),
         # the check runs first, so a refusal starts nothing
-        OpaqueFunction(function=_check),
+        lowerbody_check(LaunchConfiguration('robot'), LaunchConfiguration('config'),
+                        LaunchConfiguration('policy'), LaunchConfiguration('sim')),
         OpaqueFunction(function=_start),
     ])

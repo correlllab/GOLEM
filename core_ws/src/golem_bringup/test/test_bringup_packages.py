@@ -22,6 +22,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ElementTree
 
 from ament_index_python.packages import get_package_share_directory
+from golem_lowerbody_rl import launch_check
 from golem_ros2_models.paths import urdf_path
 from launch import LaunchContext
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
@@ -278,3 +279,72 @@ def test_leg_block_refuses_before_the_leg_node(args, reason):
     """lowerbody.launch.py refuses a run config for the other platform and an unlisted policy."""
     with pytest.raises(RuntimeError, match=f'^lowerbody: not starting: {reason}'):
         _legs(start_position_verified='true', **args)
+
+
+def _after_the_arguments(description):
+    """Return description's entities after its DeclareLaunchArguments."""
+    return [entity for entity in description.entities
+            if not isinstance(entity, DeclareLaunchArgument)]
+
+
+# (launch file, environment, arguments, run config, sim) of each top-level H1-2 file that
+# includes the leg block, set so that the leg node starts
+LEG_BRINGUPS = [
+    ('h12_sim.launch.py', {}, {}, 'sim', True),
+    ('h12_real_robot.launch.py', {}, {'start_position_verified': 'true'}, 'real', False),
+    ('h12_sim_mac.launch.py', {'GOLEM_LOWERBODY': 'almi'}, {}, 'sim', True),
+]
+
+
+@pytest.mark.parametrize('launch_file, env, args, config, sim', LEG_BRINGUPS,
+                         ids=[bringup[0] for bringup in LEG_BRINGUPS])
+def test_h12_bringups_check_the_legs_before_any_node(launch_file, env, args, config, sim,
+                                                     monkeypatch):
+    """
+    SAFETY: each H1-2 bringup with legs runs the leg node's check first.
+
+    The leg block is included last, so its own check would refuse only after the other
+    blocks' nodes started; the bringup's copy, first, refuses before any node, checking
+    what the leg block is passed.
+    """
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    description = _load(launch_file).generate_launch_description()
+    assert isinstance(_after_the_arguments(description)[0], OpaqueFunction)
+    calls = []
+
+    def refuse(*arguments, **keywords):
+        """Record the check's arguments and refuse."""
+        calls.append((arguments, keywords))
+        return 'refused for the test'
+    monkeypatch.setattr(launch_check, 'lowerbody_refusal', refuse)
+    with pytest.raises(RuntimeError, match='^lowerbody: not starting: refused for the test$'):
+        _started(description.entities, _context(description, **args))
+    assert calls == [(('h12', config, 'almi'), {'sim': sim})]
+
+
+@pytest.mark.parametrize('launch_file, args', [
+    ('h12_sim.launch.py', {'policy': 'homie'}),
+    ('h12_real_robot.launch.py', {'policy': 'homie', 'start_position_verified': 'true'}),
+])
+def test_h12_bringups_refuse_an_unlisted_policy_first(launch_file, args):
+    """A policy the H1-2 does not list is refused by the bringup's first action."""
+    description = _load(launch_file).generate_launch_description()
+    context = _context(description, **args)
+    with pytest.raises(RuntimeError, match="^lowerbody: not starting: unknown policy 'homie'"):
+        _after_the_arguments(description)[0].execute(context)
+
+
+@pytest.mark.parametrize('launch_file, args', [
+    ('h12_real_robot.launch.py', {'policy': 'homie'}),
+    ('h12_real_robot.launch.py', {'policy': 'mjpc', 'start_position_verified': 'true'}),
+    ('h12_sim.launch.py', {'policy': 'mjpc'}),
+], ids=['not verified', 'real mjpc', 'sim mjpc'])
+def test_h12_bringups_check_no_leg_node_they_do_not_start(launch_file, args, monkeypatch):
+    """Check no leg node where the leg block starts none: no verified start pose, or mjpc."""
+    monkeypatch.setattr(launch_check, 'lowerbody_refusal', lambda *a, **k: 'never asked')
+    description = _load(launch_file).generate_launch_description()
+    context = _context(description, **args)
+    check = _after_the_arguments(description)[0]
+    assert isinstance(check, OpaqueFunction)
+    assert not check.condition.evaluate(context)

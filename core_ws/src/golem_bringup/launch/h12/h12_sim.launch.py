@@ -3,12 +3,14 @@ Start the whole H1-2 against the x86 RoboCasa or Isaac sim, on sim time.
 
     ros2 launch golem_bringup h12_sim.launch.py [use_rviz:=false] [use_nav:=false] ...
 
-Start the simulator first: every node runs on its /clock. Everything starts at once:
-the state publishers (h12_state), the command path (h12_control: the safety/controller
-pairing check before any node, then safety_node and frame_task_server, with no estop and
-no stagger), the leg controller (h12_lowerbody, with the start pose taken as verified),
-the model servers and golem_skills (h12_models), navigation (use_nav), the static
-camera_link -> camera_color_optical_frame TF and RViz (use_rviz).
+Start the simulator first: every node runs on its /clock. The leg node's check
+(golem_bringup.h12_legs.leg_check) runs first, so a refused policy starts no node; then
+everything starts at once: the state publishers (h12_state), the command path
+(h12_control: the safety/controller pairing check before any node, then safety_node and
+frame_task_server, with no estop and no stagger), the leg controller (h12_lowerbody, with
+the start pose taken as verified), the model servers and golem_skills (h12_models),
+navigation (use_nav), the static camera_link -> camera_color_optical_frame TF and RViz
+(use_rviz).
 
 Every node joins the launching shell's ROS_DOMAIN_ID; safety_node refuses sim:=true on
 domain 0, the real robot's command bus, so export a sim domain first.
@@ -16,6 +18,7 @@ domain 0, the real robot's command bus, so export a sim domain first.
 import os
 
 from ament_index_python.packages import get_package_share_directory
+from golem_bringup.h12_legs import leg_check
 from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
@@ -43,6 +46,14 @@ def generate_launch_description():
     # The simulator publishes /clock; every node uses it so TF lookups and sensor
     # stamps agree with the simulation.
     sim_time = {'use_sim_time': 'true'}
+    # The legs; the sim needs no operator check of the start pose.
+    legs = {
+        **sim_time,
+        'start_position_verified': 'true',
+        'policy': LaunchConfiguration('policy'),
+        'sim': 'true',
+        'lowerbody_config': 'sim',
+    }
 
     return LaunchDescription([
         DeclareLaunchArgument('use_rviz', default_value='true',
@@ -73,6 +84,9 @@ def generate_launch_description():
         DeclareLaunchArgument('rviz_config', default_value=default_rviz,
                               description='RViz config file (path)'),
 
+        # SAFETY: first, so a refused policy or run config starts no node: the leg
+        # block, which checks them too, is included after the others.
+        leg_check(legs),
         # TF of the body from /lowstate.
         _include('golem_bringup', 'h12/h12_state.launch.py', {
             **sim_time,
@@ -88,14 +102,8 @@ def generate_launch_description():
             'safety_delay': '0.0',
             'frame_task_delay': '0.0',
         }),
-        # The legs; the sim needs no operator check of the start pose.
-        _include('golem_bringup', 'h12/h12_lowerbody.launch.py', {
-            **sim_time,
-            'start_position_verified': 'true',
-            'policy': LaunchConfiguration('policy'),
-            'sim': 'true',
-            'lowerbody_config': 'sim',
-        }),
+        # The legs.
+        _include('golem_bringup', 'h12/h12_lowerbody.launch.py', legs),
         # Perception servers and the LLM-callable skills.
         _include('golem_bringup', 'h12/h12_models.launch.py', {
             **sim_time,

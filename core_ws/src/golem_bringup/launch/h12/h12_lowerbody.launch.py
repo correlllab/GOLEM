@@ -8,9 +8,11 @@ estimator runs with use_estimator:=true. Only one lower-body controller may feed
 /safety/lowcmd_lower_in; no bringup starts the MJPC controller, so policy:=mjpc leaves the
 legs uncommanded.
 
-lowerbody.launch.py refuses, before any node starts, a run config whose sim differs from
+lowerbody.launch.py refuses, before its node starts, a run config whose sim differs from
 sim, a real-robot run config without the operator's confirm or with the elastic band's
 release, and a policy the H1-2 does not list (golem_lowerbody_rl's config/h12/robot.yaml).
+The top-level files include this block after the others, so each runs the same check
+first (golem_bringup.h12_legs.leg_check): a refusal starts no node.
 
 SAFETY: start_position_verified is the operator's word that the robot is in a safe start
 pose; without it nothing here starts, and safety_node keeps the legs on its zero-gain
@@ -20,11 +22,12 @@ real robot, holds the pre-pose until /lowerbody/confirm_engage.
 import os
 
 from ament_index_python.packages import get_package_share_directory
+from golem_bringup.h12_legs import leg_node_condition
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import AndSubstitution, LaunchConfiguration, PythonExpression
+from launch.substitutions import AndSubstitution, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -82,10 +85,8 @@ def generate_launch_description():
                 'use_sim_time': LaunchConfiguration('use_sim_time'),
                 'start_delay': '0.0',
             }.items(),
-            condition=IfCondition(AndSubstitution(
-                LaunchConfiguration('start_position_verified'),
-                PythonExpression(["'", LaunchConfiguration('policy'), "' != 'mjpc'"]),
-            )),
+            condition=leg_node_condition(LaunchConfiguration('start_position_verified'),
+                                         LaunchConfiguration('policy')),
         ),
         # The MJPC controller's base state, from leg odometry and the IMU.
         Node(

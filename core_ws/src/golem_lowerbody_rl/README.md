@@ -4,8 +4,8 @@ The leg node, `lowerbody_controller_node`: one policy drives a robot's 12 leg
 joints through `golem_safety`'s lower-body input, `/safety/lowcmd_lower_in`.
 The code names no robot and no policy; config says everything:
 
-- `config/<robot>/robot.yaml`: the leg joints, the IMU frame, the policies the
-  robot may run and its default one (keys: `config/example.robot.yaml`). The
+- `config/<robot>/robot.yaml`: the leg joints, the policies the robot may run
+  and its default one (keys: `config/example.robot.yaml`). The
   joint table, `mode_machine` and `mode_pr` are `golem_safety`'s
   `robots/<robot>.yaml`.
 - `config/<robot>/{sim,real}.yaml`: the run config, what differs between a
@@ -27,7 +27,9 @@ ros2 launch golem_lowerbody_rl lowerbody.launch.py robot:=h12 config:=sim sim:=t
 `lowerbody: not starting: <reason>`: an unknown robot, a run config whose
 `sim` differs from `sim:=`, a real-robot run config without
 `startup.wait_for_confirm` or with `band.release`, and a policy the robot's
-`robot.yaml` does not list. The node applies the same check when it starts.
+`robot.yaml` does not list. The node applies the same check when it starts,
+and a bringup that includes the launch file after other nodes puts the same
+check (`golem_lowerbody_rl.launch_check.lowerbody_check`) before them.
 The H1-2's bringups include it from `golem_bringup`'s `h12_lowerbody.launch.py`
 (`policy:=`, default `almi`; `policy:=mjpc` starts no leg node), the G1's from
 `g1_core.launch.py` (policy `homie`, after the arm controller, the sim always
@@ -55,9 +57,12 @@ reference. The node logs `loaded run config <path> and policy <path>`, then:
     until they settle (within 0.15 rad for 10 steps) or 400 steps pass
     (`legs pre-posed (NOT SETTLED: ...)`, held all the same).
 3. **Holding.** `legs pre-posed (...) — holding`. The policy may start once
-    `/lowstate`'s tick has advanced for 1 s at the rate of the node's clock
-    (sim time in the sims; a tick that is not in ms of that clock, as Isaac's,
-    never qualifies), the arm controller's `/safety/lowcmd_upper_in` is fresh
+    `/lowstate`'s tick advanced at the rate of the node's clock over the last
+    full 1 s window of ticks (sim time in the sims; a tick that is not in ms of
+    that clock, as Isaac's, never qualifies, and a node clock that stands
+    still, with no `/clock`, is named). Each window starts where the last
+    ended and its verdict stands while the next fills, so a recent stall makes
+    the policy not ready again however long the hold. The arm controller's `/safety/lowcmd_upper_in` is fresh
     within 0.5 s and, with `band.release` (the sims), `frame_task_server`'s
     first `/left_ee_pose` has come or `band.max_wait` has passed. The node logs
     `the policy waits: <reason>` every 5 s. On the real robot it then waits
@@ -68,16 +73,19 @@ reference. The node logs `loaded run config <path> and policy <path>`, then:
     policy raw (its spec clips and shapes it); one older than
     `commands.timeout` (0.5 s), or non-finite, is zero velocity.
     `/lowerbody/height` (`std_msgs/Float32`, in the policy's own units) is its
-    height command; a non-finite one is ignored. Every 10 s the node logs
+    height command; a non-finite one is ignored. A non-finite command is
+    warned about at most every 5 s. Every 10 s the node logs
     `timing over the last 10 s: ...` (step spacing and tick lag).
 5. **Faulted.** Once the legs are commanded, any of these stops the node for
     good: a `/lowstate` gap over `faults.max_state_gap` (0.25 s real, 0.5 s
     sim), or none for that long; a tick that goes back; a non-finite value or
     a non-unit IMU quaternion; a fall (gravity z above -0.5); while running, a
     tick lag over `faults.max_latency` when it is set (null in every shipped
-    config); a policy step that fails or gives anything but 12 finite targets.
+    config, and refused in a sim run config: the lag is measured on the
+    monotonic clock and a sim's tick counts sim time); a policy step that fails or gives anything but 12 finite targets.
     In every phase, a false heartbeat (`golem_safety`'s estop has latched) or
-    none for `heartbeat.timeout` (0.5 s) after the first does too. The node
+    none for `heartbeat.timeout` (0.5 s) after the first does too, checked by
+    the 100 Hz timer and on every `/lowstate` sample. The node
     logs `fault: <reason>` once, publishes nothing more and stays up.
     `golem_safety` keeps relaying its last leg command, which does not balance
     the robot. Restart the node (after a heartbeat fault, the bringup).

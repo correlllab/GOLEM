@@ -330,8 +330,8 @@ def test_tick_not_in_ms_never_becomes_ready(ticks):
     assert rig.sup.phase is Phase.HOLDING and rig.sup.fault is None
     assert not rig.runner.inputs
     rate = ticks / 2
-    reason = (f"/lowstate's tick is off the node's clock ({rate:.2f} s of tick per s, needs "
-              "0.90-1.10: the tick must count ms of the node's clock)")
+    reason = (f"/lowstate's tick is off the node's clock ({rate:.3f} s of tick per s, needs "
+              "0.900-1.100: the tick must count ms of the node's clock)")
     times = [t for (_, m), t in zip(rig.log, rig.log_times) if m == f'the policy waits: {reason}']
     assert 3 <= len(times) <= 4, rig.messages()
     assert np.all(np.diff(times) >= 5.0 - 1e-9) and np.all(np.diff(times) < 5.0 + 0.1)
@@ -378,7 +378,7 @@ def test_ready_needs_fresh_upper_command():
     rig.sup.on_upper_cmd(rig.mono - 0.4)
     rig.feed(SAMPLES_PER_STEP, upper=False)
     assert rig.sup.phase is Phase.RUNNING and len(rig.runner.inputs) == 1
-    assert any(m.startswith("the policy may start (/lowstate's tick ran at 1.00 s per s")
+    assert any(m.startswith("the policy may start (/lowstate's tick ran at 1.000 s per s")
                for m in rig.messages())
 
 
@@ -473,9 +473,12 @@ def test_non_finite_cmd_is_zero():
         rig.feed(SAMPLES_PER_STEP)
         cmd = rig.runner.inputs[-1].cmd
         assert np.all(np.isfinite(cmd)) and cmd.tolist() == [0.0, 0.0, 0.0]
+    # one warning per WAIT_LOG_SECONDS, however many come
     warnings = rig.messages('warn')
-    assert len(warnings) == 3 and warnings[0] == '/cmd_vel is not finite ([0.3, nan, 0.0]): ' \
-        'zero velocity'
+    assert warnings == ['/cmd_vel is not finite ([0.3, nan, 0.0]): zero velocity']
+    rig.feed(round(5.0 / SAMPLE_DT))
+    rig.sup.on_cmd(math.nan, 0.0, 0.0, rig.mono)
+    assert rig.messages('warn')[1:] == ['/cmd_vel is not finite ([nan, 0.0, 0.0]): zero velocity']
 
 
 def test_stale_cmd_is_zero_after_0_5_s():
@@ -517,6 +520,9 @@ def test_non_finite_height_is_ignored():
     rig.feed(SAMPLES_PER_STEP)
     assert rig.runner.inputs[-1].height == 0.5
     assert rig.messages('warn') == ['ignoring a height command that is not finite (nan)']
+    for _ in range(3):
+        rig.sup.on_height(math.inf, rig.mono)
+    assert len(rig.messages('warn')) == 1, 'logged at most every WAIT_LOG_SECONDS'
 
 
 # -- the elastic band ----------------------------------------------------------------------
@@ -891,3 +897,166 @@ def test_timing_is_logged_every_10_s():
     assert timing[0].startswith('timing over the last 10 s: ')
     assert '20-20 ms of /lowstate tick apart (mean 20.0 ms)' in timing[0]
     assert timing[0].endswith('tick lag median 0.0 ms, max 0.0 ms (unchecked)')
+
+
+# -- readiness over the last steady window --------------------------------------------------
+
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_a_recent_stall_after_a_long_hold_is_not_ready(robot):
+    """
+    SAFETY: judge the tick over about the last steady_seconds, not since the hold began.
+
+    After a minute of steady hold, 2 s in which /lowstate's tick advances 1 ms per 2 ms of
+    the node's clock make the policy not ready, and the confirm is refused.
+    """
+    rig = Rig(robot, 'real')
+    rig.until(Phase.HOLDING)
+    rig.feed(round(62.0 / SAMPLE_DT))
+    assert rig.sup.wait_reason == 'the operator has not confirmed yet'
+    rig.feed(round(2.0 / SAMPLE_DT), ticks=1)
+    assert rig.sup.wait_reason.startswith("/lowstate's tick is off the node's clock"), \
+        rig.sup.wait_reason
+    ok, message = rig.sup.confirm(rig.mono)
+    assert not ok and "tick is off the node's clock" in message
+    assert rig.sup.phase is Phase.HOLDING and not rig.runner.inputs
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_a_ready_node_stays_ready_while_the_next_window_fills(robot):
+    """Keep the last window's verdict while the next one fills: ready stays ready."""
+    rig = Rig(robot, 'real')
+    rig.until(Phase.HOLDING)
+    rig.feed(SAMPLES_PER_STEP)
+    while rig.sup.wait_reason != 'the operator has not confirmed yet':
+        rig.feed(1)
+    for _ in range(round(3.0 / SAMPLE_DT)):
+        rig.feed(1)
+        assert rig.sup.wait_reason == 'the operator has not confirmed yet'
+    assert rig.messages().count("the policy may start (/lowstate's tick ran at 1.000 s per s "
+                                "of the node's clock)") == 1
+    assert rig.sup.confirm(rig.mono)[0]
+
+
+def test_the_rate_is_logged_to_three_decimals():
+    """Print the tick's rate to 0.001 s per s, so a rate just under the limit reads so."""
+    rig = Rig('h12', 'real')
+    rig.feed(round(4.0 / SAMPLE_DT), node_dt=SAMPLE_DT / 0.899)
+    assert rig.sup.phase is Phase.HOLDING
+    assert rig.sup.wait_reason == ("/lowstate's tick is off the node's clock (0.899 s of tick "
+                                   "per s, needs 0.900-1.100: the tick must count ms of the "
+                                   "node's clock)")
+
+
+def test_a_node_clock_that_stands_still_is_named():
+    """Say that the node's clock does not advance (no /clock) rather than blame the tick."""
+    rig = Rig('g1', 'sim')
+    rig.to(Phase.WAITING)
+    rig.feed(round(4.0 / SAMPLE_DT), node_dt=0.0)
+    assert rig.sup.phase is Phase.HOLDING and not rig.runner.inputs
+    reason = ("the node's clock is not advancing (it stood still over 1000 ms of /lowstate "
+              'tick: with use_sim_time, nothing publishes /clock?)')
+    assert rig.sup.wait_reason == reason
+    assert f'the policy waits: {reason}' in rig.messages()
+
+
+# -- the heartbeat on every sample ----------------------------------------------------------
+
+@_phases('RAMPING', 'HOLDING', 'RUNNING')
+def test_a_silent_heartbeat_stops_the_next_sample_without_check(phase):
+    """SAFETY: a sample after heartbeat.timeout of silence latches, whether check() ran or not."""
+    rig = Rig('h12', 'sim')
+    rig.to(phase)
+    rig.beating = False
+    last = rig.last_beat
+    out = []
+    while rig.sup.phase is not Phase.FAULTED and rig.mono - last < 1.0:
+        out += rig.feed(1)
+    assert rig.sup.phase is Phase.FAULTED and out[-1] is None
+    assert 0.5 < rig.mono - last <= 0.5 + SAMPLE_DT + 1e-9
+    assert rig.sup.fault.startswith('no /safety/heartbeat for ')
+
+
+def test_a_silent_heartbeat_never_starts_the_ramp():
+    """SAFETY: an upright sample after heartbeat.timeout of silence latches; no ramp starts."""
+    rig = Rig('g1', 'real')
+    _waiting_after_a_beat(rig)
+    rig.beating = False
+    assert rig.feed(1, dt=0.6) == [None]
+    assert rig.sup.phase is Phase.FAULTED
+    assert rig.feed(10) == [None] * 10
+
+
+# -- failures inside the supervisor ---------------------------------------------------------
+
+def _raise_on_reset(rig):
+    """Make rig's runner raise on every reset."""
+    def reset(seed_cmd=None):
+        raise RuntimeError('reset broke')
+    rig.runner.reset = reset
+
+
+def test_an_engage_reset_that_fails_refuses_the_confirm_and_latches():
+    """SAFETY: a policy that cannot reset at engage never runs; the confirm says why."""
+    rig = Rig('h12', 'real')
+    rig.to(Phase.HOLDING)
+    _raise_on_reset(rig)
+    ok, message = rig.sup.confirm(rig.mono)
+    assert not ok
+    assert message == "refused: the policy could not start: policy reset failed: " \
+        "RuntimeError('reset broke')"
+    assert rig.sup.phase is Phase.FAULTED
+    assert rig.feed(5 * SAMPLES_PER_STEP) == [None] * (5 * SAMPLES_PER_STEP)
+    assert not rig.runner.inputs
+
+
+def test_a_band_reset_that_fails_latches():
+    """SAFETY: a policy that cannot reset at the band's release stops the legs for good."""
+    rig = Rig('g1', 'sim')
+    rig.to(Phase.RUNNING)
+    assert rig.sup.band_due(rig.mono) is not None
+    _raise_on_reset(rig)
+    steps = len(rig.runner.inputs)
+    rig.sup.on_band_reply(True, 'disabled')
+    assert rig.sup.phase is Phase.FAULTED
+    assert rig.sup.fault == "policy reset failed: RuntimeError('reset broke')"
+    assert rig.feed(5 * SAMPLES_PER_STEP) == [None] * (5 * SAMPLES_PER_STEP)
+    assert len(rig.runner.inputs) == steps
+
+
+@_phases('WAITING', 'RUNNING')
+def test_an_unexpected_error_in_on_state_latches(phase):
+    """SAFETY: an exception inside on_state latches "unexpected error" and returns None."""
+    rig = Rig('h12', 'sim')
+    rig.to(phase)
+    sample = replace(rig.sample(), tick=None)
+    assert rig.sup.on_state(sample, rig.mono + SAMPLE_DT, rig.node_t + SAMPLE_DT) is None
+    assert rig.sup.phase is Phase.FAULTED
+    assert rig.sup.fault.startswith('unexpected error: TypeError(')
+    assert rig.feed(10) == [None] * 10
+
+
+@pytest.mark.parametrize('name, value', [
+    ('kp', np.full(12, math.nan)), ('kd', np.zeros(11)), ('kp', np.full(12, math.inf)),
+], ids=['kp nan', 'kd size', 'kp inf'])
+def test_gains_must_be_one_finite_value_per_leg(name, value):
+    """SAFETY: refuse policy gains that are not one finite value per leg."""
+    profile = load_profile('h12')
+    config = load_run_config('h12', 'sim')
+    runner = FakeRunner(12)
+    setattr(runner, name, value)
+    with pytest.raises(ValueError, match=f'the policy {name} must be 12 finite gains'):
+        LegSupervisor(config, profile, np.zeros(12), runner, log=lambda *_: None)
+
+
+# -- the band once faulted ------------------------------------------------------------------
+
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_a_faulted_node_never_releases_the_band(robot):
+    """SAFETY: a node that faulted while running, /left_ee_pose seen, never asks for the band."""
+    rig = Rig(robot, 'sim')
+    rig.to(Phase.RUNNING)
+    rig.feed(1, quat=_rolled(70.0))
+    assert rig.sup.phase is Phase.FAULTED
+    for later in (0.0, 1.0, 100.0):
+        assert rig.sup.band_due(rig.mono + later) is None
+    assert not any(m.startswith('releasing the elastic band') for m in rig.messages())

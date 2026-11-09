@@ -11,9 +11,9 @@ g1_core.launch.py includes the same three files: safety_node with robot g1, the 
 config, sim as the top-level file says and no hardware estop, and frame_task_server and
 joint_state_publisher with robot g1. The H1-2's h12_lowerbody.launch.py includes
 golem_lowerbody_rl's lowerbody.launch.py with robot h12 and every argument it takes, behind
-start_position_verified and not with policy:=mjpc (g1_core's include, robot g1, is in
-test_g1_launch.py). The nodes are read by walking those
-includes, as ros2 launch runs them. The launch tests need the workspace built and sourced.
+start_position_verified (g1_core's include, robot g1, is in test_g1_launch.py). The nodes
+are read by walking those includes, as ros2 launch runs them. The launch tests need the
+workspace built and sourced.
 """
 
 import importlib.util
@@ -248,7 +248,6 @@ def test_top_level_files_run_the_leg_node(launch_file, sim, config):
     nodes = _legs(**dict(arguments, start_position_verified='true'))
     assert nodes['lowerbody_controller_node'] == Started('golem_lowerbody_rl', [], 0.0, {
         'robot': 'h12', 'config': config, 'policy': 'almi', 'use_sim_time': sim == 'true'})
-    assert 'estimator_node' not in nodes
 
 
 def test_leg_block_passes_every_argument():
@@ -259,13 +258,9 @@ def test_leg_block_passes_every_argument():
         'robot': 'h12', 'config': 'sim', 'policy': 'fame', 'use_sim_time': False})
 
 
-@pytest.mark.parametrize('args', [
-    dict(start_position_verified='false'),
-    dict(start_position_verified='true', policy='mjpc'),
-])
-def test_leg_block_interlock_and_mjpc_start_no_leg_node(args):
-    """SAFETY: no leg node without start_position_verified, and none with policy:=mjpc."""
-    nodes = _legs(sim='false', lowerbody_config='real', **args)
+def test_leg_block_interlock_starts_no_leg_node():
+    """SAFETY: no leg node without start_position_verified."""
+    nodes = _legs(sim='false', lowerbody_config='real', start_position_verified='false')
     assert 'lowerbody_controller_node' not in nodes
 
 
@@ -273,6 +268,7 @@ def test_leg_block_interlock_and_mjpc_start_no_leg_node(args):
     (dict(sim='true', lowerbody_config='real'), "run config 'real' is for the real robot"),
     (dict(sim='false', lowerbody_config='sim'), "run config 'sim' is for a simulator"),
     (dict(sim='true', lowerbody_config='sim', policy='homie'), "unknown policy 'homie'"),
+    (dict(sim='false', lowerbody_config='real', policy='mjpc'), "unknown policy 'mjpc'"),
 ])
 def test_leg_block_refuses_before_the_leg_node(args, reason):
     """lowerbody.launch.py refuses a run config for the other platform and an unlisted policy."""
@@ -321,26 +317,24 @@ def test_h12_bringups_check_the_legs_before_any_node(launch_file, args, config, 
 
 @pytest.mark.parametrize('launch_file, args', [
     ('h12_sim.launch.py', {'policy': 'homie'}),
+    ('h12_sim.launch.py', {'policy': 'mjpc'}),
     ('h12_real_robot.launch.py', {'policy': 'homie', 'start_position_verified': 'true'}),
+    ('h12_real_robot.launch.py', {'policy': 'mjpc', 'start_position_verified': 'true'}),
 ])
 def test_h12_bringups_refuse_an_unlisted_policy_first(launch_file, args):
-    """A policy the H1-2 does not list is refused by the bringup's first action."""
+    """A policy the H1-2 does not list (homie, mjpc) is refused by the bringup's first action."""
     description = _load(launch_file).generate_launch_description()
     context = _context(description, **args)
-    with pytest.raises(RuntimeError, match="^lowerbody: not starting: unknown policy 'homie'"):
+    match = f"^lowerbody: not starting: unknown policy '{args['policy']}'"
+    with pytest.raises(RuntimeError, match=match):
         _after_the_arguments(description)[0].execute(context)
 
 
-@pytest.mark.parametrize('launch_file, args', [
-    ('h12_real_robot.launch.py', {'policy': 'homie'}),
-    ('h12_real_robot.launch.py', {'policy': 'mjpc', 'start_position_verified': 'true'}),
-    ('h12_sim.launch.py', {'policy': 'mjpc'}),
-], ids=['not verified', 'real mjpc', 'sim mjpc'])
-def test_h12_bringups_check_no_leg_node_they_do_not_start(launch_file, args, monkeypatch):
-    """Check no leg node where the leg block starts none: no verified start pose, or mjpc."""
+def test_h12_bringups_check_no_leg_node_they_do_not_start(monkeypatch):
+    """Check no leg node where the leg block starts none: no verified start pose."""
     monkeypatch.setattr(launch_check, 'lowerbody_refusal', lambda *a, **k: 'never asked')
-    description = _load(launch_file).generate_launch_description()
-    context = _context(description, **args)
+    description = _load('h12_real_robot.launch.py').generate_launch_description()
+    context = _context(description, policy='homie')
     check = _after_the_arguments(description)[0]
     assert isinstance(check, OpaqueFunction)
     assert not check.condition.evaluate(context)

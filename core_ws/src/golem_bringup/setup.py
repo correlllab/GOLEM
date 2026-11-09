@@ -1,4 +1,4 @@
-"""Install golem_bringup's launch files, configs, RViz configs and slider_debugger.py."""
+"""Install golem_bringup's launch files, RViz configs and slider_debugger.py."""
 import os
 from glob import glob
 
@@ -8,12 +8,10 @@ package_name = 'golem_bringup'
 
 
 def files(pattern):
-    """Return the files matching pattern that exist, leaving out the example configs."""
+    """Return the files matching pattern that exist."""
     # A --symlink-install build directory keeps dangling links to files deleted from the
-    # source; they are skipped. The annotated example.*.yaml configs document the keys and
-    # stay in the source tree.
-    return [path for path in sorted(glob(pattern))
-            if os.path.isfile(path) and not os.path.basename(path).startswith('example.')]
+    # source; they are skipped.
+    return [path for path in sorted(glob(pattern)) if os.path.isfile(path)]
 
 
 setup(
@@ -29,7 +27,6 @@ setup(
         # directory, so each file is installed once.
         (os.path.join('share', package_name, 'launch', 'h12'), files('launch/h12/*.launch.py')),
         (os.path.join('share', package_name, 'launch', 'g1'), files('launch/g1/*.launch.py')),
-        (os.path.join('share', package_name, 'config', 'h12'), files('config/h12/*.yaml')),
         (os.path.join('share', package_name, 'rviz', 'h12'), files('rviz/h12/*.rviz')),
         (os.path.join('share', package_name, 'rviz', 'g1'), files('rviz/g1/*.rviz')),
     ],

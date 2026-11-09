@@ -59,9 +59,7 @@ def generate_launch_description():
                                           "pick_place run under its logs/runs/<skill>/"),
         DeclareLaunchArgument('policy', default_value='almi',
                               description='The policy golem_lowerbody_rl runs on the legs: '
-                                          'almi, fame or walk. mjpc starts no leg node and '
-                                          'no bringup starts the MJPC controller, so it '
-                                          'leaves the legs uncommanded'),
+                                          'almi, fame or walk; any other is refused'),
         DeclareLaunchArgument('model_logging', default_value='true',
                               description="true: the model servers and golem_skills save "
                                           "each call's inputs and outputs (enable_logging)"),

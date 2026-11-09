@@ -1,7 +1,4 @@
-# Constraints for RosDockerfile: MJPC's gRPC Agent API (grpcio, protobuf,
-# mujoco 3.2.3).
+# Constraints for RosDockerfile: onnxruntime, which runs HOMIE's walking
+# policy in golem_lowerbody_rl.
 -c ros-amd64.txt
-huggingface-hub==0.25.2
-mujoco==3.2.3
-numpy==1.26.4
-psutil==5.9.8
+onnxruntime==1.23.2

@@ -11,24 +11,17 @@ from golem_lowerbody_rl.launch_check import lowerbody_check
 from launch.actions import OpaqueFunction
 from launch.conditions import IfCondition
 from launch.some_substitutions_type import SomeSubstitutionsType
-from launch.substitutions import AndSubstitution, PythonExpression
 
 __all__ = ['leg_check', 'leg_node_condition']
 
-# the policy:= that starts no leg node: no bringup starts the MJPC controller
-MJPC = 'mjpc'
 
-
-def leg_node_condition(start_position_verified: SomeSubstitutionsType,
-                       policy: SomeSubstitutionsType) -> IfCondition:
+def leg_node_condition(start_position_verified: SomeSubstitutionsType) -> IfCondition:
     """
     Return the condition under which the leg block starts the leg node.
 
-    SAFETY: only once the operator has verified the start pose (start_position_verified),
-    and not for policy:=mjpc.
+    SAFETY: only once the operator has verified the start pose (start_position_verified).
     """
-    return IfCondition(AndSubstitution(
-        start_position_verified, PythonExpression(["'", policy, f"' != '{MJPC}'"])))
+    return IfCondition(start_position_verified)
 
 
 def leg_check(legs: dict) -> OpaqueFunction:
@@ -37,8 +30,8 @@ def leg_check(legs: dict) -> OpaqueFunction:
 
     legs holds start_position_verified, policy, sim and lowerbody_config. The check runs
     where the block starts the leg node, and raises "lowerbody: not starting: ..." on a
-    refusal.
+    refusal, an unlisted policy among them.
     """
     return lowerbody_check(
         'h12', legs['lowerbody_config'], legs['policy'], legs['sim'],
-        condition=leg_node_condition(legs['start_position_verified'], legs['policy']))
+        condition=leg_node_condition(legs['start_position_verified']))

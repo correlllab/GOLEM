@@ -9,7 +9,7 @@ command bus; ROS uses 0 when it is unset. The leg node's check
 policy starts no node; then the includes start at once: the sensor drivers and grippers
 (h12_real_drivers), navigation, the state publishers (h12_state), the command path
 (h12_control with the hardware estop: estop_node, then safety_node and frame_task_server
-after h12_control's default delays) and the leg controller (h12_lowerbody, no estimator).
+after h12_control's default delays) and the leg controller (h12_lowerbody).
 
 SAFETY: the legs are behind two operator gates:
   1. start_position_verified:=true starts the policy:= policy, which ramps the legs
@@ -44,7 +44,6 @@ def generate_launch_description():
         'policy': LaunchConfiguration('policy'),
         'sim': 'false',
         'lowerbody_config': 'real',
-        'use_estimator': 'false',
     }
 
     return LaunchDescription([
@@ -54,11 +53,11 @@ def generate_launch_description():
                                           'safe start pose: starts the leg controller'),
         DeclareLaunchArgument('policy', default_value='almi',
                               description='The policy golem_lowerbody_rl runs on the legs: '
-                                          'almi, fame or walk; mjpc starts no leg node'),
+                                          'almi, fame or walk; any other is refused'),
 
         # SAFETY: first, so a refused policy or run config starts no node: the leg
         # block, which checks them too, is included after the others. It checks only
-        # where the leg node starts (start_position_verified, not policy:=mjpc).
+        # where the leg node starts (start_position_verified).
         leg_check(legs),
         # The MID-360, the head RealSense and the grippers.
         include('golem_bringup', 'h12/h12_real_drivers.launch.py'),

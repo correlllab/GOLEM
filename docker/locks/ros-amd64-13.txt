@@ -1,4 +1,0 @@
-# Constraints for RosDockerfile: onnxruntime, which runs HOMIE's walking
-# policy in golem_lowerbody_rl.
--c ros-amd64.txt
-onnxruntime==1.23.2

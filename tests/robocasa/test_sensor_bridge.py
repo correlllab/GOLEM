@@ -3,6 +3,7 @@
 The suite is built without its constructor, on a small scene, with recording publishers: no ROS
 node starts and no DDS traffic flows.
 """
+import copy
 import io
 import threading
 import unittest
@@ -56,6 +57,118 @@ class Recorder:
         if self.lock.locked():
             raise AssertionError('ROS publication must not hold the simulation lock')
         self.messages.append(msg)
+
+
+# A scene with what the scene update reads of MjData besides plain geoms: a spot light on a
+# target, a light and a camera that ride a moving body, tracking and fixed cameras, a tendon,
+# and a transparent geom.
+MOVING_SCENE = '''<mujoco>
+  <visual><global offwidth="48" offheight="48"/></visual>
+  <worldbody>
+    <light name="sun" pos="0 0 3" dir="0 0 -1"/>
+    <light name="spot" mode="targetbody" target="base" pos="2 -2 3" cutoff="30"/>
+    <geom type="plane" size="4 4 .1" group="1" rgba=".4 .5 .6 1"/>
+    <body name="base" pos="0 0 1">
+      <freejoint/>
+      <geom type="box" size=".2 .1 .3" group="1" rgba="1 0 0 1"/>
+      <body name="arm" pos=".3 0 0">
+        <joint type="hinge" axis="0 1 0"/>
+        <geom type="capsule" size=".05 .2" group="1" rgba="0 1 0 1"/>
+        <camera name="on_arm" pos="0 0 .3" xyaxes="1 0 0 0 1 0"/>
+        <light name="arm_light" pos="0 0 .3" dir="0 0 1"/>
+        <site name="tip" pos="0 0 .2" size=".03"/>
+      </body>
+    </body>
+    <body name="slider" pos="1 1 .5">
+      <joint type="slide" axis="0 0 1"/>
+      <geom type="sphere" size=".1" group="1" rgba="0 0 1 .5"/>
+      <site name="top" size=".05"/>
+    </body>
+    <camera name="track" mode="targetbody" target="base" pos="2 -3 2"/>
+    <camera name="fixed" pos="0 -3 2" xyaxes="1 0 0 0 .316 .949"/>
+    <camera name="com" mode="trackcom" pos="0 -3 2" xyaxes="1 0 0 0 .316 .949"/>
+  </worldbody>
+  <tendon><spatial name="cord" width=".02"><site site="tip"/><site site="top"/></spatial></tendon>
+</mujoco>'''
+
+
+class CameraSnapshotTests(unittest.TestCase):
+    """Check the camera snapshot against a full MjData copy."""
+
+    def setUp(self):
+        """Build an H12Sensors holding only the model, data and sim lock the snapshot reads."""
+        self.bridge = object.__new__(H12Sensors)
+        b = self.bridge
+        b.model = mujoco.MjModel.from_xml_string(MOVING_SCENE)
+        b.data = mujoco.MjData(b.model)
+        b.sim_lock = threading.Lock()
+        self.renderer = mujoco.Renderer(b.model, height=48, width=48)
+        self.addCleanup(self.renderer.close)
+        self.option = mujoco.MjvOption()
+        self.option.geomgroup[:] = 0
+        self.option.geomgroup[1] = 1
+        self.option.sitegroup[:] = 0
+
+    def render(self, data, camera):
+        """Return (rgb, depth) of camera rendered from data."""
+        r = self.renderer
+        r.disable_depth_rendering()
+        r.update_scene(data, camera=camera, scene_option=self.option)
+        rgb = r.render().copy()
+        r.enable_depth_rendering()
+        r.update_scene(data, camera=camera, scene_option=self.option)
+        depth = r.render().copy()
+        r.disable_depth_rendering()
+        return rgb, depth
+
+    def test_camera_snapshot_renders_the_same_image(self):
+        """Every camera renders the same pixels and depths from the partial snapshot as from a full copy."""
+        b = self.bridge
+        rng = np.random.default_rng(0)
+        cameras = range(b.model.ncam)
+        for _ in range(6):
+            b.data.qpos[:] += rng.normal(0, .3, b.model.nq)
+            b.data.qpos[3:7] /= np.linalg.norm(b.data.qpos[3:7])
+            for _ in range(3):
+                mujoco.mj_step(b.model, b.data)
+            snapshot = b._capture_camera_snapshot()
+            full = copy.copy(b.data)
+            for camera in cameras:
+                for got, want in zip(self.render(snapshot, camera), self.render(full, camera)):
+                    np.testing.assert_array_equal(got, want)
+
+    def test_camera_snapshot_is_preallocated_and_alternates_two_slots(self):
+        """Frames are captured into two preallocated MjData in turn, never the live one, with the kinematics current."""
+        b = self.bridge
+        slots = []
+        for step in range(4):
+            b.data.qpos[2] = 1.0 + step
+            mujoco.mj_forward(b.model, b.data)
+            snapshot = b._capture_camera_snapshot()
+            self.assertIsNot(snapshot, b.data)
+            np.testing.assert_array_equal(snapshot.geom_xpos, b.data.geom_xpos)
+            slots.append(snapshot)
+        self.assertIs(slots[0], slots[2])
+        self.assertIs(slots[1], slots[3])
+        self.assertIsNot(slots[0], slots[1])
+
+    def test_camera_snapshot_is_taken_under_the_sim_lock(self):
+        """The snapshot is filled while the sim lock is held, and the lock is free afterwards."""
+        b = self.bridge
+        held = []
+
+        class Spy:
+            """Stand in for the data to record the lock's state when its fields are read."""
+
+            def __getattr__(inner, name):
+                held.append(b.sim_lock.locked())
+                return getattr(real, name)
+
+        real = b.data
+        b.data = Spy()
+        b._capture_camera_snapshot()
+        self.assertTrue(held and all(held))
+        self.assertFalse(b.sim_lock.locked())
 
 
 class SensorTests(unittest.TestCase):

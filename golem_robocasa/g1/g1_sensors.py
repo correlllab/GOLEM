@@ -11,6 +11,9 @@
   /realsense/head/color/camera_info          sensor_msgs/CameraInfo
   /tf_static                                 d435_link -> head_color_optical_frame, with the camera
 
+As with image_transport on the robot, each compressed image is encoded only
+while something subscribes to its topic.
+
 G1Sensors is the sensor suite of the mujoco_sensors node
 (mujoco_ros_bridge.RosSensorBridge), which publishes /clock and the optional
 ground-truth odom and calls tick() once per sim step after them.
@@ -404,8 +407,12 @@ class _HeadCamera:
                 pub["color"].publish(sm.color_image_msg(t, rgb))
                 pub["depth"].publish(sm.depth_image_msg(t, depth))
                 pub["info"].publish(sm.camera_info_msg(t, cam.width, cam.height, cam.fx, cam.fy, cam.cx, cam.cy))
-                pub["color_jpeg"].publish(sm.color_compressed_msg(t, rgb))
-                pub["depth_png"].publish(sm.depth_compressed_msg(t, depth))
+                # As the driver's image_transport plugins do, encode a compressed
+                # image only while something subscribes to its topic.
+                if pub["color_jpeg"].get_subscription_count() > 0:
+                    pub["color_jpeg"].publish(sm.color_compressed_msg(t, rgb))
+                if pub["depth_png"].get_subscription_count() > 0:
+                    pub["depth_png"].publish(sm.depth_compressed_msg(t, depth))
                 self.published += 1
             except Exception as e:
                 self._warn_once(e, f"WARNING: /realsense/head frame failed at sim t {t:.3f}: {e!r}")

@@ -146,6 +146,24 @@ _CameraPub = namedtuple("_CameraPub", "spec color_id depth_id color_info depth_i
 _COMPRESSED_DEPTH_HEADER = struct.pack("<III", 0, 9, 0)
 _JPEG_QUALITY = 95   # image_transport's compressed default, as on the robot
 
+
+# Preallocated MjData the camera frames are captured into: one being rendered
+# while the next is filled.
+_CAMERA_SNAPSHOTS = 2
+
+
+def _camera_snapshot_fields(model):
+    """Return the MjData fields mujoco.Renderer.update_scene reads for the geoms, cameras and lights shown.
+
+    Geoms, fixed, tracking and body cameras, and lights come from the world
+    poses of kinematics; tendons (drawn by default) also from their wrap points.
+    """
+    fields = ("geom_xpos", "geom_xmat", "cam_xpos", "cam_xmat", "light_xpos", "light_xdir")
+    if model.ntendon:
+        fields += ("ten_wrapadr", "ten_wrapnum", "wrap_xpos", "wrap_obj", "ten_length")
+    return fields
+
+
 # depth/color/points as the real driver lays it out (x y z, pad, rgb).
 CLOUD_FIELDS = [
     PointField(name="x",   offset=0,  datatype=PointField.FLOAT32, count=1),
@@ -470,8 +488,7 @@ class H12Sensors:
     def _publish_camera_frame(self, stamp: TimeMsg) -> None:
         """Snapshot MjData and render and publish every camera from it, on the worker when there is one."""
         capture_start = self.timings.start()
-        with self.sim_lock or nullcontext():
-            snapshot = copy.copy(self.data)
+        snapshot = self._capture_camera_snapshot()
         self.timings.stop("camera_capture", capture_start)
         worker = getattr(self, "_camera_worker", None)
         if worker is None:
@@ -485,6 +502,31 @@ class H12Sensors:
             pending.result()
         self.timings.stop("camera_wait", wait_start)
         self._camera_pending = worker.submit(self._render_and_publish_cameras, stamp, snapshot)
+
+    def _capture_camera_snapshot(self):
+        """Return an MjData holding what the cameras' scenes read of self.data, taken under the sim lock.
+
+        It is one of _CAMERA_SNAPSHOTS preallocated MjData, filled with
+        _camera_snapshot_fields() only, in turn. This runs while the previous
+        frame's job may still render, but the one before that finished before the
+        previous was submitted, so the slot reused here is idle. A model with
+        flexes or skins, whose scenes read more than those fields, takes a full
+        copy of self.data instead.
+        """
+        slots = getattr(self, "_camera_slots", None)
+        if slots is None:
+            full_copy = self.model.nflex > 0 or self.model.nskin > 0
+            slots = self._camera_slots = [] if full_copy else [
+                mujoco.MjData(self.model) for _ in range(_CAMERA_SNAPSHOTS)]
+            self._camera_slot_count = 0
+        with self.sim_lock or nullcontext():
+            if not slots:
+                return copy.copy(self.data)
+            snapshot = slots[self._camera_slot_count % len(slots)]
+            self._camera_slot_count += 1
+            for field in _camera_snapshot_fields(self.model):
+                getattr(snapshot, field)[:] = getattr(self.data, field)
+        return snapshot
 
     def _render_sizes(self):
         """Return the (width, height) of every render the cameras need."""

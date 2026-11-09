@@ -207,20 +207,30 @@ def test_lidar_thread_sees_runtime_alpha_edits():
 
 
 class _Node:
-    """Stand in for the bridge's node: each publisher appends to a list per topic."""
+    """Stand in for the bridge's node: each publisher appends to a list per topic.
+
+    `subscribers` maps a topic to its subscription count (0 for a topic it does not name).
+    """
 
     def __init__(self):
-        """Start with no topics."""
+        """Start with no topics and no subscribers."""
         self.sent = {}
+        self.subscribers = {}
 
     def create_publisher(self, kind, topic, qos):
         """Return a publisher that appends to the topic's list."""
         sent = self.sent.setdefault(topic, [])
+        subscribers = self.subscribers
 
         class Publisher:
             """Append each published message to the topic's list."""
 
             publish = staticmethod(sent.append)
+
+            @staticmethod
+            def get_subscription_count():
+                """Return the topic's subscription count."""
+                return subscribers.get(topic, 0)
         return Publisher()
 
 
@@ -271,6 +281,56 @@ def test_head_camera_thread_renders_the_state_at_its_tick():
     k = info[0].k
     assert (k[0], k[4], k[2], k[5]) == (reference.fx, reference.fy, reference.cx, reference.cy)
     print(f"  6 frames as render() gives them; tick {max(tick_ms):.2f} ms at most on the physics thread")
+
+
+def test_g1_compressed_not_encoded_without_a_subscriber():
+    """The head camera encodes a compressed image only while its topic has a subscriber.
+
+    The raw images and camera_info publish regardless; each compressed topic is judged for
+    every frame on its own, so a subscriber that appears or leaves changes the next frame.
+    """
+    model = _model()
+    data = _standing(model)
+    node = _Node()
+    config = bridge.SensorConfig(lidar=False)
+    camera = bridge._HeadCamera(node, model, data, "", config)
+    jpeg_topic = "/realsense/head/color/image_raw/compressed"
+    png_topic = "/realsense/head/aligned_depth_to_color/image_raw/compressedDepth"
+    encoded = []
+    real = {name: getattr(sm, name) for name in ("color_compressed_msg", "depth_compressed_msg")}
+
+    def counting(name):
+        """Return sm's encoder `name` that also records its calls."""
+        def encode(*args, **kwargs):
+            encoded.append(name)
+            return real[name](*args, **kwargs)
+        return encode
+
+    for name in real:
+        setattr(sm, name, counting(name))
+    try:
+        period = camera._schedule.period
+        # Frames 0-3: no subscriber, then the JPEG topic's, then both, then only the depth's.
+        steps = [({}, [], 0, 0), ({jpeg_topic: 1}, ["color_compressed_msg"], 1, 0),
+                 ({jpeg_topic: 1, png_topic: 2}, ["color_compressed_msg", "depth_compressed_msg"], 2, 1),
+                 ({png_topic: 1}, ["depth_compressed_msg"], 2, 2)]
+        for k, (subscribers, calls, jpegs, pngs) in enumerate(steps):
+            node.subscribers.clear()
+            node.subscribers.update(subscribers)
+            assert camera._idle.wait(10.0)
+            encoded.clear()
+            camera.tick(data, k * period)
+            deadline = time.time() + 10.0
+            while camera.published <= k and time.time() < deadline:
+                time.sleep(0.01)
+            assert camera.published == k + 1, camera.stats()
+            assert sorted(encoded) == sorted(calls), (k, encoded)
+            assert (len(node.sent[jpeg_topic]), len(node.sent[png_topic])) == (jpegs, pngs), k
+            assert len(node.sent["/realsense/head/color/image_raw"]) == k + 1
+    finally:
+        for name, encode in real.items():
+            setattr(sm, name, encode)
+        camera.close()
 
 
 def test_g1_sensors_stamp_one_step_before_sim_t_and_build_what_the_config_enables():

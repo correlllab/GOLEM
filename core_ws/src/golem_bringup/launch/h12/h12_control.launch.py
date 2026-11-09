@@ -28,28 +28,16 @@ connects only delays the start: safety_node engages nothing and publishes no
 until that first sample. frame_task_server waits up to its controller.startup_timeout
 for safety_node to relay its commands.
 """
-import os
 
-from ament_index_python.packages import get_package_share_directory
+from golem_bringup.include import include
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 ROBOT = 'h12'
-
-
-def _include(package, launch_file, launch_arguments, condition=None):
-    """Include a package's launch file with the given arguments."""
-    return IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory(package), 'launch', launch_file)),
-        launch_arguments=launch_arguments.items(),
-        condition=condition,
-    )
 
 
 def generate_launch_description():
@@ -98,7 +86,7 @@ def generate_launch_description():
 
     return LaunchDescription(args + [
         # First: its pairing check refuses before any node starts.
-        _include('golem_upper_ik', 'upper_ik.launch.py', {
+        include('golem_upper_ik', 'upper_ik.launch.py', {
             'robot': ROBOT,
             'config': LaunchConfiguration('frame_task_config'),
             'safety_config': safety_config,
@@ -117,7 +105,7 @@ def generate_launch_description():
             condition=IfCondition(LaunchConfiguration('use_estop')),
         ),
         # The only writer of /lowcmd.
-        _include('golem_safety', 'safety.launch.py', {
+        include('golem_safety', 'safety.launch.py', {
             'robot': ROBOT,
             'config': safety_config,
             'sim': sim,

@@ -18,27 +18,17 @@ any node starts.
 import os
 
 from ament_index_python.packages import get_package_share_directory
+from golem_bringup.include import include
 from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 # The arguments passed through to h12_locomanipulationgame.launch.py as they are.
 GAME_ARGS = ('policy', 'prepose_ramp_s', 'prepose_max_vel')
-
-
-def _include(package, launch_file, launch_arguments, condition=None):
-    """Include a package's launch file with the given arguments."""
-    return IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory(package), 'launch', launch_file)),
-        launch_arguments=launch_arguments.items(),
-        condition=condition,
-    )
 
 
 def generate_launch_description():
@@ -76,13 +66,13 @@ def generate_launch_description():
             description='RViz config file (path)'),
 
         # TF of the body from /lowstate.
-        _include('golem_bringup', 'h12/h12_state.launch.py', {
+        include('golem_bringup', 'h12/h12_state.launch.py', {
             **sim_time,
             'urdf_file': urdf_path('h12', ros=True),
         }),
         # safety_node alone: the policy owns both of its inputs, so no
         # frame_task_server runs.
-        _include('golem_bringup', 'h12/h12_control.launch.py', {
+        include('golem_bringup', 'h12/h12_control.launch.py', {
             **sim_time,
             'sim': 'true',
             'use_frame_task': 'false',
@@ -91,7 +81,7 @@ def generate_launch_description():
             'safety_delay': '0.0',
         }),
         # The policy, on all 27 joints.
-        _include('golem_bringup', 'h12/h12_locomanipulationgame.launch.py', {
+        include('golem_bringup', 'h12/h12_locomanipulationgame.launch.py', {
             **sim_time,
             **{name: LaunchConfiguration(name) for name in GAME_ARGS},
             'urdf_path': urdf_path('h12'),
@@ -101,8 +91,8 @@ def generate_launch_description():
             'disable_elastic_band': 'true',
         }),
         # SLAM and Nav2, driving the policy on /cmd_vel.
-        _include('golem_slam', 'navigation.launch.py', {**sim_time, 'robot': 'h12'},
-                 condition=IfCondition(LaunchConfiguration('use_slam'))),
+        include('golem_slam', 'navigation.launch.py', {**sim_time, 'robot': 'h12'},
+                condition=IfCondition(LaunchConfiguration('use_slam'))),
 
         # The operator's view, and where Nav2 goals are set.
         Node(

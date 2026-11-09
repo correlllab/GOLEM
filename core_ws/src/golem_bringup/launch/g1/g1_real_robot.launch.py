@@ -95,19 +95,14 @@ Hazards not handled in code:
   about 0.42-0.45 at home (g1_split.yaml).
 """
 
-import os
-
-from ament_index_python.packages import get_package_share_directory
+from golem_bringup.include import include
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
     """Declare the real bringup's arguments and include g1_core with sim:=false."""
-    core = os.path.join(get_package_share_directory('golem_bringup'), 'launch', 'g1',
-                        'g1_core.launch.py')
     return LaunchDescription([
         DeclareLaunchArgument('use_rviz', default_value='true',
                               description='true: start RViz'),
@@ -126,9 +121,9 @@ def generate_launch_description():
                               description='true: start the MID-360 driver and golem_slam '
                                           '(FAST-LIO, slam_toolbox, Nav2)'),
         # The whole stack.
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(core),
-            launch_arguments={
+        include(
+            'golem_bringup', 'g1/g1_core.launch.py',
+            {
                 'sim': 'false',
                 'use_sim_time': 'false',
                 'use_rviz': LaunchConfiguration('use_rviz'),
@@ -139,6 +134,6 @@ def generate_launch_description():
                 'controller_config': '',
                 'start_position_verified': LaunchConfiguration('start_position_verified'),
                 'use_nav': LaunchConfiguration('use_nav'),
-            }.items(),
+            },
         ),
     ])

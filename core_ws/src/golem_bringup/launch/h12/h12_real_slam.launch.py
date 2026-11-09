@@ -8,21 +8,9 @@ state publishers (h12_state) and golem_slam's navigation. No estop, safety layer
 starts, so no joint is commanded. Export the robot's ROS_DOMAIN_ID (0) in the launching
 shell. Record runs with ros2 run golem_slam record_slam_bag --name <name>.
 """
-import os
 
-from ament_index_python.packages import get_package_share_directory
+from golem_bringup.include import include
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-
-
-def _include(package, launch_file, launch_arguments):
-    """Include a package's launch file with the given arguments."""
-    return IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory(package), 'launch', launch_file)),
-        launch_arguments=launch_arguments.items(),
-    )
 
 
 def generate_launch_description():
@@ -32,9 +20,9 @@ def generate_launch_description():
 
     return LaunchDescription([
         # The MID-360, the head RealSense and the grippers.
-        _include('golem_bringup', 'h12/h12_real_drivers.launch.py', wall_time),
+        include('golem_bringup', 'h12/h12_real_drivers.launch.py'),
         # TF of the body from /lowstate, which golem_slam's body_to_pelvis needs.
-        _include('golem_bringup', 'h12/h12_state.launch.py', wall_time),
+        include('golem_bringup', 'h12/h12_state.launch.py', wall_time),
         # FAST-LIO, OctoMap, slam_toolbox and Nav2.
-        _include('golem_slam', 'navigation.launch.py', {**wall_time, 'robot': 'h12'}),
+        include('golem_slam', 'navigation.launch.py', {**wall_time, 'robot': 'h12'}),
     ])

@@ -10,19 +10,14 @@ to reach a motor safely, for gripper and low-level actuation work. h12_real_robo
 normal bringup. Every node joins the launching shell's ROS_DOMAIN_ID, which must be 0,
 the real robot's command bus; ROS uses 0 when it is unset.
 """
-import os
-
-from ament_index_python.packages import get_package_share_directory
+from golem_bringup.include import include
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
     """Declare safety_config and include the command path and the grippers."""
-    bringup_share = get_package_share_directory('golem_bringup')
-
     # The full real bringup's default, overridable so a session can tighten or
     # relax the limits without editing a launch file.
     safety_config_arg = DeclareLaunchArgument(
@@ -34,25 +29,19 @@ def generate_launch_description():
     )
 
     # The command path with the hardware estop and no arm IK.
-    control = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(bringup_share, 'launch', 'h12', 'h12_control.launch.py')
-        ),
-        launch_arguments={
+    control = include(
+        'golem_bringup', 'h12/h12_control.launch.py',
+        {
             'use_sim_time': 'false',
             'sim': 'false',
             'use_estop': 'true',
             'use_frame_task': 'false',
             'safety_config': LaunchConfiguration('safety_config'),
-        }.items(),
+        },
     )
 
     # Both Magpie grippers.
-    grippers = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(bringup_share, 'launch', 'h12', 'h12_grippers.launch.py')
-        ),
-    )
+    grippers = include('golem_bringup', 'h12/h12_grippers.launch.py')
 
     return LaunchDescription([
         safety_config_arg,

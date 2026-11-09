@@ -31,19 +31,14 @@ the launching shell's ROS_DOMAIN_ID, which must be a sim domain (safety_node ref
 sim:=true on domain 0).
 """
 
-import os
-
-from ament_index_python.packages import get_package_share_directory
+from golem_bringup.include import include
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
     """Declare the sim bringup's arguments and include g1_core with sim:=true."""
-    core = os.path.join(get_package_share_directory('golem_bringup'), 'launch', 'g1',
-                        'g1_core.launch.py')
     return LaunchDescription([
         DeclareLaunchArgument('use_rviz', default_value='true',
                               description='true: start RViz'),
@@ -62,9 +57,9 @@ def generate_launch_description():
             'use_skills', default_value='false',
             description='true: start the golem_skills action servers (/skill/*)'),
         # The whole stack.
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(core),
-            launch_arguments={
+        include(
+            'golem_bringup', 'g1/g1_core.launch.py',
+            {
                 'sim': 'true',
                 'use_sim_time': LaunchConfiguration('use_sim_time'),
                 'use_rviz': LaunchConfiguration('use_rviz'),
@@ -75,6 +70,6 @@ def generate_launch_description():
                 'controller_config': '',
                 'use_nav': LaunchConfiguration('use_nav'),
                 'use_skills': LaunchConfiguration('use_skills'),
-            }.items(),
+            },
         ),
     ])

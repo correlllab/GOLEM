@@ -11,22 +11,12 @@ safety layer, frame_task_server and leg control run on the onboard PC
 import os
 
 from ament_index_python.packages import get_package_share_directory
+from golem_bringup.include import include
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-
-
-def _include(package, launch_file, launch_arguments=None, condition=None):
-    """Include a package's launch file with the given arguments."""
-    return IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory(package), 'launch', launch_file)),
-        launch_arguments=(launch_arguments or {}).items(),
-        condition=condition,
-    )
 
 
 def generate_launch_description():
@@ -60,11 +50,11 @@ def generate_launch_description():
         # Both hand RealSense cameras and their camera -> link static TFs. They
         # run here because the wrists' USB cables do; the head camera starts
         # with the onboard drivers (h12_real_drivers.launch.py).
-        _include('cl_realsense', 'h12_hand_cameras.launch.py',
-                 condition=IfCondition(LaunchConfiguration('use_hand_cameras'))),
+        include('cl_realsense', 'h12_hand_cameras.launch.py',
+                condition=IfCondition(LaunchConfiguration('use_hand_cameras'))),
 
         # Perception servers, YOLO and the LLM-callable skills.
-        _include('golem_bringup', 'h12/h12_models.launch.py', {
+        include('golem_bringup', 'h12/h12_models.launch.py', {
             **wall_time,
             'use_yolo': 'true',
             'use_skills': LaunchConfiguration('use_skills'),

@@ -25,23 +25,12 @@ first. Keep the MID-360 unsynced (no PTP: the driver then stamps with the host c
 so lidar and joint-state stamps share one clock), or check that level_odom logs no
 "waiting for body->pelvis".
 """
-import os
 
-from ament_index_python.packages import get_package_share_directory
 from golem_bringup.h12_legs import leg_check
+from golem_bringup.include import include
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
-
-
-def _include(package, launch_file, launch_arguments):
-    """Include a package's launch file with the given arguments."""
-    return IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory(package), 'launch', launch_file)),
-        launch_arguments=launch_arguments.items(),
-    )
 
 
 def generate_launch_description():
@@ -72,17 +61,17 @@ def generate_launch_description():
         # where the leg node starts (start_position_verified, not policy:=mjpc).
         leg_check(legs),
         # The MID-360, the head RealSense and the grippers.
-        _include('golem_bringup', 'h12/h12_real_drivers.launch.py', wall_time),
+        include('golem_bringup', 'h12/h12_real_drivers.launch.py'),
         # SLAM and Nav2, driving the legs on /cmd_vel.
-        _include('golem_slam', 'navigation.launch.py', {**wall_time, 'robot': 'h12'}),
+        include('golem_slam', 'navigation.launch.py', {**wall_time, 'robot': 'h12'}),
         # TF of the body from /lowstate.
-        _include('golem_bringup', 'h12/h12_state.launch.py', wall_time),
+        include('golem_bringup', 'h12/h12_state.launch.py', wall_time),
         # The command path, with the hardware estop.
-        _include('golem_bringup', 'h12/h12_control.launch.py', {
+        include('golem_bringup', 'h12/h12_control.launch.py', {
             **wall_time,
             'sim': 'false',
             'use_estop': 'true',
         }),
         # The legs.
-        _include('golem_bringup', 'h12/h12_lowerbody.launch.py', legs),
+        include('golem_bringup', 'h12/h12_lowerbody.launch.py', legs),
     ])

@@ -25,14 +25,12 @@ through /marl_deploy_node/set_mode and set_arm_goals.
 Every node joins the launching shell's ROS_DOMAIN_ID, which must be 0, the real robot's
 command bus; ROS uses 0 when it is unset.
 """
-import os
 
-from ament_index_python.packages import get_package_share_directory
+from golem_bringup.include import include
 from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
-from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
 NOT_STARTING = ('lmg_real: not starting: lmg_deploy reads /livox/imu as upright, and the H1-2 '
@@ -42,16 +40,6 @@ NOT_STARTING = ('lmg_real: not starting: lmg_deploy reads /livox/imu as upright,
 # The arguments passed through to h12_locomanipulationgame.launch.py as they are.
 GAME_ARGS = ('start_position_verified', 'policy', 'prepose_ramp_s', 'prepose_max_vel',
              'imu_offset_roll_deg', 'imu_offset_pitch_deg', 'imu_offset_yaw_deg')
-
-
-def _include(package, launch_file, launch_arguments, condition=None):
-    """Include a package's launch file with the given arguments."""
-    return IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory(package), 'launch', launch_file)),
-        launch_arguments=launch_arguments.items(),
-        condition=condition,
-    )
 
 
 def _refuse(context):
@@ -104,16 +92,14 @@ def generate_launch_description():
                               description='true: start the left and right gripper nodes'),
 
         # The MID-360 and, when asked, the head camera and the grippers.
-        _include('golem_bringup', 'h12/h12_real_drivers.launch.py', {
-            **wall_time,
-            **{name: LaunchConfiguration(name)
-               for name in ('use_lidar', 'use_head_camera', 'use_grippers')},
-        }),
+        include('golem_bringup', 'h12/h12_real_drivers.launch.py', {
+            name: LaunchConfiguration(name)
+            for name in ('use_lidar', 'use_head_camera', 'use_grippers')}),
         # TF of the body from /lowstate.
-        _include('golem_bringup', 'h12/h12_state.launch.py', wall_time),
+        include('golem_bringup', 'h12/h12_state.launch.py', wall_time),
         # safety_node with the hardware estop; the policy owns both of its inputs,
         # so no frame_task_server runs.
-        _include('golem_bringup', 'h12/h12_control.launch.py', {
+        include('golem_bringup', 'h12/h12_control.launch.py', {
             **wall_time,
             'sim': 'false',
             'use_estop': 'true',
@@ -121,7 +107,7 @@ def generate_launch_description():
             'safety_config': LaunchConfiguration('safety_config'),
         }),
         # The policy, on all 27 joints, behind the operator gates.
-        _include('golem_bringup', 'h12/h12_locomanipulationgame.launch.py', {
+        include('golem_bringup', 'h12/h12_locomanipulationgame.launch.py', {
             **wall_time,
             **{name: LaunchConfiguration(name) for name in GAME_ARGS},
             'urdf_path': urdf_path('h12'),
@@ -131,6 +117,6 @@ def generate_launch_description():
             'disable_elastic_band': 'false',
         }),
         # SLAM and Nav2, driving the policy on /cmd_vel.
-        _include('golem_slam', 'navigation.launch.py', {**wall_time, 'robot': 'h12'},
-                 condition=IfCondition(LaunchConfiguration('use_slam'))),
+        include('golem_slam', 'navigation.launch.py', {**wall_time, 'robot': 'h12'},
+                condition=IfCondition(LaunchConfiguration('use_slam'))),
     ])

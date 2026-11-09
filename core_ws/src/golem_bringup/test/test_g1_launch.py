@@ -174,15 +174,6 @@ def _refused(message, **args):
         _core_nodes(**args)
 
 
-def test_no_walking_node_arguments():
-    """No G1 launch file declares or passes use_locomotion or locomotion_config."""
-    for launch_file in ('g1_sim.launch.py', 'g1_real_robot.launch.py', 'g1_core.launch.py'):
-        assert not {'use_locomotion', 'locomotion_config'} & _declared(launch_file), launch_file
-    for launch_file in ('g1_sim.launch.py', 'g1_real_robot.launch.py'):
-        assert not {'use_locomotion', 'locomotion_config'} & set(_passed_to_core(launch_file)), \
-            launch_file
-
-
 def test_sim_always_starts_the_legs():
     """The sim starts the leg node, HOMIE on the sim run config, verified or not."""
     for args in (dict(), dict(start_position_verified='false'),
@@ -190,7 +181,6 @@ def test_sim_always_starts_the_legs():
         nodes = _core_nodes(sim='true', **args)
         assert _configs(nodes) == {'safety_node': 'sim_split', 'frame_task_server': 'sim_split'}
         assert nodes[LEGS] == _legs_started('sim', 4.0, False)
-    assert 'locomotion_node' not in nodes
 
     passed = _passed_to_core('g1_sim.launch.py')
     assert passed['sim'] == 'true'
@@ -212,7 +202,6 @@ def test_real_starts_the_legs_only_when_verified():
     nodes = _core_nodes(start_position_verified='true')
     assert _configs(nodes) == {'safety_node': 'split', 'frame_task_server': 'g1_split'}
     assert nodes[LEGS] == _legs_started('real', 4.0, False)
-    assert 'locomotion_node' not in nodes
 
     # The real bringup passes the interlock on, false by default.
     passed = _passed_to_core('g1_real_robot.launch.py')

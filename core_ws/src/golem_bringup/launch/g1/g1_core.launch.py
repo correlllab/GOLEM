@@ -96,10 +96,10 @@ is the operator's word, not a measurement.
 import os
 
 from ament_index_python.packages import get_package_share_directory
+from golem_bringup.include import include
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
-from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -124,15 +124,6 @@ def _as_bool(context, name):
 def _config(context, name):
     """Return a launch configuration's text."""
     return LaunchConfiguration(name).perform(context)
-
-
-def _include(package, launch_file, launch_arguments=None):
-    """Include a package's launch file with the given arguments."""
-    return IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory(package), 'launch', launch_file)),
-        launch_arguments=(launch_arguments or {}).items(),
-    )
 
 
 def _setup(context):
@@ -167,7 +158,7 @@ def _setup(context):
     actions = [
         # SAFETY: first, so its pairing check refuses before any node starts; then
         # frame_task_server after controller_delay.
-        _include('golem_upper_ik', 'upper_ik.launch.py', {
+        include('golem_upper_ik', 'upper_ik.launch.py', {
             'robot': ROBOT,
             'config': controller_config,
             'safety_config': safety_config,
@@ -181,7 +172,7 @@ def _setup(context):
     # so its check refuses before any node starts; the node starts locomotion_delay
     # after the controller.
     if sim or _as_bool(context, 'start_position_verified'):
-        actions.append(_include('golem_lowerbody_rl', 'lowerbody.launch.py', {
+        actions.append(include('golem_lowerbody_rl', 'lowerbody.launch.py', {
             'robot': ROBOT,
             'config': lowerbody_config,
             'policy': POLICY,
@@ -191,13 +182,13 @@ def _setup(context):
         }))
     actions += [
         # TF: the 29 body joints from /lowstate; the finger joints come from dex3_hands.
-        _include('golem_upper_ik', 'robot_state.launch.py', {
+        include('golem_upper_ik', 'robot_state.launch.py', {
             'robot': ROBOT,
             'use_sim_time': sim_time_arg,
             'urdf_file': '',
         }),
         # The only writer of rt/lowcmd, at once.
-        _include('golem_safety', 'safety.launch.py', {
+        include('golem_safety', 'safety.launch.py', {
             'robot': ROBOT,
             'config': safety_config,
             'sim': str(sim).lower(),
@@ -236,7 +227,7 @@ def _setup(context):
         ))
     if use_nav and not sim:
         # The real MID-360's driver; the sim publishes the lidar itself.
-        actions.append(_include('golem_bringup', os.path.join('g1', 'g1_real_drivers.launch.py')))
+        actions.append(include('golem_bringup', os.path.join('g1', 'g1_real_drivers.launch.py')))
     if use_nav:
         # SLAM and Nav2, at once with the core: FAST-LIO initialises on its first
         # scans, in the sim while the elastic band still holds the robot up. The
@@ -247,7 +238,7 @@ def _setup(context):
         if sim:
             navigation['fast_lio_config'] = os.path.join(
                 get_package_share_directory('golem_slam'), 'config', ROBOT, 'fastlio_sim.yaml')
-        actions.append(_include('golem_slam', 'navigation.launch.py', navigation))
+        actions.append(include('golem_slam', 'navigation.launch.py', navigation))
     return actions
 
 

@@ -19,23 +19,13 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from golem_bringup.h12_legs import leg_check
+from golem_bringup.include import include
 from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-
-
-def _include(package, launch_file, launch_arguments, condition=None):
-    """Include a package's launch file with the given arguments."""
-    return IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory(package), 'launch', launch_file)),
-        launch_arguments=launch_arguments.items(),
-        condition=condition,
-    )
 
 
 def generate_launch_description():
@@ -88,12 +78,12 @@ def generate_launch_description():
         # block, which checks them too, is included after the others.
         leg_check(legs),
         # TF of the body from /lowstate.
-        _include('golem_bringup', 'h12/h12_state.launch.py', {
+        include('golem_bringup', 'h12/h12_state.launch.py', {
             **sim_time,
             'urdf_file': urdf_path('h12', ros=True),
         }),
         # The command path: safety_node, the only writer of /lowcmd, and the arm IK.
-        _include('golem_bringup', 'h12/h12_control.launch.py', {
+        include('golem_bringup', 'h12/h12_control.launch.py', {
             **sim_time,
             'sim': 'true',
             'safety_config': 'sim_safety_split.yaml',
@@ -103,9 +93,9 @@ def generate_launch_description():
             'frame_task_delay': '0.0',
         }),
         # The legs.
-        _include('golem_bringup', 'h12/h12_lowerbody.launch.py', legs),
+        include('golem_bringup', 'h12/h12_lowerbody.launch.py', legs),
         # Perception servers and the LLM-callable skills.
-        _include('golem_bringup', 'h12/h12_models.launch.py', {
+        include('golem_bringup', 'h12/h12_models.launch.py', {
             **sim_time,
             'use_skills': LaunchConfiguration('use_skills'),
             'model_logging': LaunchConfiguration('model_logging'),
@@ -114,8 +104,8 @@ def generate_launch_description():
             'record_runs': LaunchConfiguration('record_runs'),
         }),
         # SLAM and Nav2, driving the legs on /cmd_vel.
-        _include('golem_slam', 'navigation.launch.py', {**sim_time, 'robot': 'h12'},
-                 condition=IfCondition(LaunchConfiguration('use_nav'))),
+        include('golem_slam', 'navigation.launch.py', {**sim_time, 'robot': 'h12'},
+                condition=IfCondition(LaunchConfiguration('use_nav'))),
 
         # For Isaac: its head camera's images are stamped
         # camera_color_optical_frame (CL_isaaclab_sim's ros_sensor_bridge.py,

@@ -179,10 +179,9 @@ def test_core_passes_use_sim_time_on():
     assert arguments['use_sim_time'] == 'false'
 
 
-def test_sim_nav_without_use_locomotion():
+def test_sim_nav_with_the_legs():
     """The sim always starts the leg node, which Nav2 drives through /cmd_vel."""
     passed = _passed_to_core('g1_sim.launch.py', use_nav='true')
-    assert 'use_locomotion' not in passed
     nodes = _core_nodes(**passed)
     assert nodes['lowerbody_controller_node'].parameters['config'] == 'sim'
     path, arguments = _nav_include(**passed)

@@ -14,17 +14,16 @@ golem_slam's H1-2 configs expect.
 import os
 
 from ament_index_python.packages import get_package_share_directory
+from golem_bringup.include import include
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
     """Declare the driver toggles and start the drivers."""
-    bringup_share = get_package_share_directory('golem_bringup')
     mid360_config = os.path.join(
         get_package_share_directory('golem_slam'), 'config', 'h12', 'MID360_config.json')
 
@@ -53,22 +52,13 @@ def generate_launch_description():
     )
 
     # The head RealSense and its camera -> link static TF.
-    realsense_share = get_package_share_directory('cl_realsense')
-    realsense_cams = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(realsense_share, 'launch', 'h12_headcamera.launch.py')
-        ),
-        condition=IfCondition(LaunchConfiguration('use_head_camera')),
-    )
+    realsense_cams = include('cl_realsense', 'h12_headcamera.launch.py',
+                             condition=IfCondition(LaunchConfiguration('use_head_camera')))
 
     # Both Magpie grippers, from the file h12_safety_grippers.launch.py includes
     # too, so their ports and calibration live in one place.
-    grippers = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(bringup_share, 'launch', 'h12', 'h12_grippers.launch.py')
-        ),
-        condition=IfCondition(LaunchConfiguration('use_grippers')),
-    )
+    grippers = include('golem_bringup', 'h12/h12_grippers.launch.py',
+                       condition=IfCondition(LaunchConfiguration('use_grippers')))
 
     return LaunchDescription([
         DeclareLaunchArgument('use_lidar', default_value='true',

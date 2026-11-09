@@ -1,0 +1,19 @@
+# Dead code in the submodules, for their owners
+
+The 2026-11-09 repo cleanup did not edit these submodules (CLAUDE.md §5). These
+findings come from its audits (`.superpowers/sdd/2026-11-09-dead-code/audit-D.md`,
+section B, and `audit-A.md` row 31), made at GOLEM 1e86e92. Each owner decides
+whether to act. The evidence is a `grep -rw` over this repo and every checked-out
+submodule; other lab repos that use these packages were not searched.
+
+| # | Submodule | What | Kind | Evidence | Confidence |
+|---|---|---|---|---|---|
+| S1 | `custom_ros_messages` | `msg/Dummy`, `msg/MotorCmd`, `msg/MotorCmds`, `msg/MotorState`, `msg/MotorStates` | dead | Nothing imports them. The `Motor*` names in `golem_safety` and `tests/isaaclab` are `unitree_hg`/`unitree_go` types. | medium |
+| S2 | `custom_ros_messages` | `srv/Query`, `ResetBeliefs`, `UpdateBeliefs`, `UpdateTrackedObject`, `SetHandAngles`, `UR16BehaviorTrigger`, `EthernetMotor`, `ParkerGetPoseTrigger`, `RemovePart`, `GoHome` | dead | Services for other robots and projects (UR16e, Parker, belief tracking); no code here imports them. | low (other lab repos may use them) |
+| S3 | `custom_ros_messages` | `action/DualArm`, `HandAdaptiveForce`, `ParkerGotoPose`, `ScanBattery`, `SkillRetrieveMemory` | dead | No server or client. `DualArm` and `SkillRetrieveMemory` appear only in CLAUDE.md ("no node serves it yet"). | medium |
+| S4 | `magpie_msgs` | `action/ExecutePolicy`, `ExecuteTrajectory`, `ForceControl`; `msg/Episode`, `Observation`, `PolicyAction`; `srv/CaptureFrame`, `DetectObjects`, `GetPose`, `MoveJoint`, `MoveLinear`, `SegmentObject`, `SetSpeed`, `StartEpisode`, `StartRecording`, `StopRecording` | dead | 16 of the 21 interfaces are unused. The used ones are `DeliGrasp`, `DeliGraspParams`, `GripperState`, `SetGripperForce` and `SetGripperPosition`. The Isaac image COPYs and builds the whole package, so a change there rebuilds it. | medium |
+| S5 | `magpie_control` | `BT.py`, `ur5.py`, `arm_utils.py`, `grasp.py`, `homog_utils.py`, `motor_code.py`, `poses.py`, `utils.py`, `realsense_wrapper.py`, `realsense_device_manager.py`, `dxl_setup.py`, `flesh.png`, `tests/*.ipynb`, `za_Docs/*.pdf`; the dependencies `py-trees`, `ur-rtde`, `splines`, `spatialmath-python`, `pyrealsense2`, `rerun` | dead | UR5-era modules that the three entry points do not reach: `gripper_node` reaches gripper, ax12 and eflesh; `ft_sensor_node` reaches ft_sensor; `tactile_sensor_node` reaches eflesh (import closure of `src/magpie_control`). | medium |
+| S6 | `cl_realsense` | `scripts/another_node.py` and its console script, `launch/ur16e_rs_cams.launch.py`, `launch/h12_rs_cams.launch.py`, `Rviz/RS_Rviz.rviz` | dead | A hello-world node, the UR16e launch, and the old combined H1-2 launch. `h12_headcamera` and `h12_hand_cameras` replaced the H1-2 launch, and the bringup uses those. Outside the package, only its README and old specs name them. | medium |
+| S7 | `estop` | `scripts/estop_serial_test.py`, `estop/serial_status_test.py`, `estop/raw_dds_subscriber.py`, `arduino/test.cc` | dead | Bench tools with console scripts. No launch file or doc outside the package names them; only the package README does. | low (documented bench tools) |
+| S8 | `CL_isaaclab_sim` | 78 unused imports (`pyflakes`), for example `src/python/envs/common/scene.py:9,12,14`, `robots.py:6,8`, `control/unitree_action.py:5`, `dds/specialized/inspire_dds.py:8,13`; `tools/data_json_load.py` (referenced by nothing); `sim_main.py:61` imports `tasks` but never uses it; `tests/` holds only `__pycache__` | dead | `python3 -m pyflakes CL_isaaclab_sim`; `git grep data_json_load` finds nothing | medium |
+| S9 | `CL_isaaclab_sim` | `src/python/control/pacing.py:6` `RealtimePacer` against `golem_robocasa/sim_timing.py:7` `RealtimePacer` | redundant | The same pacing logic; the RoboCasa one adds `rate`. The two sims run in separate images, so sharing one copy would need a new package. | low |

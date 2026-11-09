@@ -63,7 +63,3 @@ startup_sequence: [home]
 # robots do not share (controller.max_state_lag_ms, ms)
 config_defaults:
   controller.max_state_lag_ms: 0.0
-
-# the controller config both nodes load when their config parameter is not given (a name
-# under this directory)
-default_config: g1_split

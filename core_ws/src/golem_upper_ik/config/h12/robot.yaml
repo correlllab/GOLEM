@@ -80,5 +80,3 @@ startup_sequence: [init_1, init_2, init_3, home]
 
 config_defaults:
   controller.max_state_lag_ms: 50.0
-
-default_config: debug

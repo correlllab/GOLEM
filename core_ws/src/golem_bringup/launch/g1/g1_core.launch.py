@@ -10,9 +10,8 @@ lowerbody_controller_node, through its lowerbody.launch.py; on the real robot
 only with start_position_verified:=true) and, optionally, navigation
 (golem_slam), the Dex3-1 hands and RViz. The golem nodes get robot g1 as a ROS
 parameter, safety_node and frame_task_server their configs and the leg node its
-run config (joint_state_publisher reads its default, g1_split). safety_node also gets sim
-(it refuses sim:=true on ROS domain 0) and use_estop false: the G1 stack has no
-hardware estop node.
+run config. safety_node also gets sim (it refuses sim:=true on ROS domain 0) and
+use_estop false: the G1 stack has no hardware estop node.
 
 safety_node runs split mode (split, or sim_split in the sim): it writes every
 motor on /lowcmd, the legs from the leg node's input and the waist and

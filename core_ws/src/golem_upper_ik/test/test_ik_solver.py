@@ -9,10 +9,9 @@ ROBOTS = known_robots()
 
 
 def d_min_of(robot):
-    """Return the self-collision distance of the robot's default controller config, m."""
+    """Return the self-collision distance of the robot's real-robot controller config, m."""
     from golem_upper_ik.config import load_controller_config
-    from golem_upper_ik.profile import robot_config
-    config = load_controller_config(robot, robot_config(robot)['default_config'])
+    config = load_controller_config(robot, {'h12': 'safety_split', 'g1': 'g1_split'}[robot])
     return config['controller']['d_min']
 
 

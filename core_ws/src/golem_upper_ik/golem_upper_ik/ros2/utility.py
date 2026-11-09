@@ -16,9 +16,9 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.logging import get_logger
 from rclpy.signals import SignalHandlerOptions
 
-from golem_upper_ik.profile import known_robots, robot_config
+from golem_upper_ik.profile import known_robots
 
-__all__ = ['matrix_to_pose', 'node_parameters', 'pose_to_matrix', 'run']
+__all__ = ['matrix_to_pose', 'pose_to_matrix', 'robot_parameter', 'run']
 
 # s to wait at exit for the callbacks still running (a goal sees the shut-down controller
 # refuse its next command and ends within a control step), then for the executor's thread.
@@ -89,18 +89,16 @@ def matrix_to_pose(matrix):
     return pose
 
 
-def node_parameters(node):
-    """Declare and return node's (robot, config) parameters.
+def robot_parameter(node):
+    """Declare and return node's robot parameter; ValueError when it is missing.
 
-    robot is required; config is a controller config name or path, by default the robot's
-    default_config (config/<robot>/robot.yaml). ValueError for a robot missing or unknown.
+    An unknown robot is refused where its profile is loaded (profile.load_profile).
     """
     robot = node.declare_parameter('robot', '').value
     if not robot:
         raise ValueError('the robot parameter is required: '
                          + ' or '.join(f'robot:={name}' for name in known_robots()))
-    config = node.declare_parameter('config', '').value or robot_config(robot)['default_config']
-    return robot, config
+    return robot
 
 
 def _ignored(signum, frame):
@@ -138,8 +136,8 @@ def run(name, make_node, args=None):
     make_node() reads the node's parameters and starts nothing. An executor then spins the
     node in a thread, node.start() starts it in this one, and on the signal node.shutdown()
     runs while the executor still spins. A node that fails to build or start is logged
-    (naming its robot and config once it knows them) and exits 1, as does one whose executor
-    stops; a clean shutdown exits 0.
+    (with its node.summary, its robot and settings, once built) and exits 1, as does one whose
+    executor stops; a clean shutdown exits 0.
 
     SAFETY: rclpy's own signal handlers stay off: on SIGINT they shut the context down, after
     which the controller's last command, which turns the upper body's gains to zero, could
@@ -174,7 +172,7 @@ def run(name, make_node, args=None):
     except KeyboardInterrupt:
         pass
     except Exception as error:
-        where = '' if node is None else f' (robot {node.robot}, config {node.config_name})'
+        where = '' if node is None else f' ({node.summary})'
         logger.error(f'{name}{where} did not start: {error}')
         code = 1
     finally:

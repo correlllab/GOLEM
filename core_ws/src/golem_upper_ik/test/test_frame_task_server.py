@@ -820,18 +820,40 @@ def test_joint_state_publisher(ros, robot):
     assert 95.0 <= rate <= 105.0, rate
 
 
+def test_joint_state_publisher_reads_its_low_state_topic(ros):
+    """joint_state_publisher takes the positions from low_state_topic when it is given."""
+    from sensor_msgs.msg import JointState
+    profile = profile_of('g1')
+    fake = FakeRobot(ros, profile, topic='/other/lowstate')
+    fake.q[:] = np.clip(0.02, profile.q_low, profile.q_high)
+    fake.start(rate_hz=200.0)
+    received = []
+    ros.node('joint_states_recorder').create_subscription(
+        JointState, '/joint_states', received.append, 100)
+    process = NodeProcess('joint_state_publisher', 'robot:=g1',
+                          'low_state_topic:=/other/lowstate')
+    try:
+        expected = fake.q.astype(np.float32)
+        assert wait_for(lambda: received and np.array_equal(
+            np.float32(received[-1].position), expected), 20.0), process.output()
+    finally:
+        assert process.interrupt() == 0, process.output()
+
+
 @pytest.mark.parametrize('name, params, words', [
     ('frame_task_server', [], ['robot', 'h12', 'g1']),
     ('frame_task_server', ['robot:=h1'], ["unknown robot 'h1'"]),
+    ('frame_task_server', ['robot:=h12'], ['robot h12', 'config parameter is required']),
     ('frame_task_server', ['robot:=h12', 'config:=g1_split'], ['robot h12', "'g1_split'"]),
     ('frame_task_server', ['robot:=h12', 'config:=/nonexistent/g1/g1.yaml'],
      ['robot h12', 'config directory of robot g1']),
     ('joint_state_publisher', [], ['robot', 'h12', 'g1']),
-    ('joint_state_publisher', ['robot:=h12', 'config:=no_such_config'],
-     ['robot h12', 'no_such_config']),
+    ('joint_state_publisher', ['robot:=h1'], ["unknown robot 'h1'"]),
+    ('joint_state_publisher', ['robot:=h12', 'low_state_topic:=no such topic'],
+     ['no such topic']),
 ])
 def test_nodes_refuse_bad_parameters(name, params, words):
-    """Both nodes exit non-zero, saying why, on a missing robot or a bad config."""
+    """Both nodes exit non-zero, saying why, on a bad robot, config or state topic."""
     code, output = run_node(name, *params)
     assert code != 0, output
     for word in words:

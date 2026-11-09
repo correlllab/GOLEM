@@ -71,5 +71,3 @@ startup_sequence: [home]
 config_defaults:
   # 0 (off): its /lowstate tick lag is unmeasured on the real G1
   controller.max_state_lag_ms: 0.0
-
-default_config: g1_split

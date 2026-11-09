@@ -1,4 +1,4 @@
-"""Load controller configs: the values frame_task_server and joint_state_publisher run on.
+"""Load controller configs: the values frame_task_server runs on.
 
 load_controller_config(robot, name_or_path) reads one YAML file and returns it with every
 default filled in and the joint arrays derived for the robot's body slots. A bare name

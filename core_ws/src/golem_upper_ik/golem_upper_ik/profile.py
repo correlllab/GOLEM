@@ -22,7 +22,6 @@ __all__ = ['RobotProfile', 'known_robots', 'load_profile', 'robot_config']
 ROBOT_CONFIG_KEYS = (
     'display_name', 'enabled_joints', 'held_joints', 'shutdown_keeps_held_joints', 'ee_frames',
     'planner_frames', 'imu_frame', 'named_configs', 'startup_sequence', 'config_defaults',
-    'default_config',
 )
 
 
@@ -146,9 +145,6 @@ def robot_config(robot: str) -> dict:
     if not isinstance(raw['shutdown_keeps_held_joints'], bool):
         raise ValueError(f"{where}: 'shutdown_keeps_held_joints' must be true or false, not "
                          f"{raw['shutdown_keeps_held_joints']!r}")
-    if not isinstance(raw['default_config'], str) or not raw['default_config']:
-        raise ValueError(f"{where}: 'default_config' must be a controller config name, not "
-                         f"{raw['default_config']!r}")
 
     named = raw['named_configs']
     if not isinstance(named, dict) or not all(isinstance(name, str) for name in named):

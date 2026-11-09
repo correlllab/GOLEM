@@ -2,9 +2,8 @@
 
     ros2 run golem_upper_ik frame_task_server --ros-args -p robot:=h12 -p config:=safety_split
 
-Parameters: robot (required; a robot with data in golem_upper_ik's config/) and config (a
-controller config name under share/golem_upper_ik/config/<robot>/, or a path; default the
-robot's default_config).
+Parameters: robot (required; a robot with data in golem_upper_ik's config/) and config
+(required; a controller config name under share/golem_upper_ik/config/<robot>/, or a path).
 
 Once its start-up is done (UpperController), the node serves:
 - /frame_task (custom_ros_messages/FrameTask): pull named frames to target poses in the
@@ -39,7 +38,7 @@ from golem_upper_ik.core.controller.frame_controller import FrameController  # n
 from golem_upper_ik.core.ros_io import StaleStateError  # noqa: E402
 from golem_upper_ik.profile import load_profile  # noqa: E402
 from golem_upper_ik.ros2.utility import (  # noqa: E402
-    matrix_to_pose, node_parameters, pose_to_matrix, run,
+    matrix_to_pose, pose_to_matrix, robot_parameter, run,
 )
 
 __all__ = ['FrameTaskServer', 'SLOW_MODE_SCALE', 'main']
@@ -65,8 +64,13 @@ class FrameTaskServer(Node):
         init: run the controller's start-up moves.
         """
         super().__init__('frame_task_server', **node_kwargs)
-        self.robot, self.config_name = node_parameters(self)
+        self.robot = robot_parameter(self)
         self.profile = load_profile(self.robot)
+        self.config_name = self.declare_parameter('config', '').value
+        if not self.config_name:
+            raise ValueError(f'robot {self.robot}: the config parameter is required: a '
+                             'controller config name or path, e.g. config:=sim_split')
+        self.summary = f'robot {self.robot}, config {self.config_name}'
         self.config = load_controller_config(self.robot, self.config_name)
         controller = self.config['controller']
         self.timeout = controller['timeout']
@@ -111,8 +115,7 @@ class FrameTaskServer(Node):
             self, NamedConfig, 'named_config',
             execute_callback=self.named_config_callback,
             cancel_callback=self.cancel_callback)
-        self.get_logger().info(
-            f'Frame Task Server initialized (robot {self.robot}, config {self.config_name})')
+        self.get_logger().info(f'Frame Task Server initialized ({self.summary})')
 
     def shutdown(self):
         """Shut the controller down: its shutdown command, then silence."""

@@ -2,11 +2,10 @@
 
     ros2 run golem_upper_ik joint_state_publisher --ros-args -p robot:=h12
 
-Parameters: robot (required; a robot with data in golem_upper_ik's config/) and config (a
-controller config name or path, read for topics.low_state; default the robot's
-default_config). Every message names the profile's body joints in /lowcmd slot order and
-carries the newest /lowstate's positions, all 0 before the first sample. Joints off the body
-(the hands', the grippers') come from their own nodes.
+Parameters: robot (required; a robot with data in golem_upper_ik's config/) and
+low_state_topic (the robot's state, default /lowstate). Every message names the profile's
+body joints in /lowcmd slot order and carries the newest state's positions, all 0 before
+the first sample. Joints off the body (the hands', the grippers') come from their own nodes.
 """
 import os
 
@@ -18,35 +17,36 @@ os.environ['OMP_NUM_THREADS'] = '1'
 from rclpy.node import Node  # noqa: E402
 from sensor_msgs.msg import JointState  # noqa: E402
 
-from golem_upper_ik.config import load_controller_config  # noqa: E402
 from golem_upper_ik.core.ros_io import StateSubscriber  # noqa: E402
 from golem_upper_ik.profile import load_profile  # noqa: E402
-from golem_upper_ik.ros2.utility import node_parameters, run  # noqa: E402
+from golem_upper_ik.ros2.utility import robot_parameter, run  # noqa: E402
 
-__all__ = ['JointStatePublisher', 'PUBLISH_HZ', 'main']
+__all__ = ['JointStatePublisher', 'LOW_STATE_TOPIC', 'PUBLISH_HZ', 'main']
 
 PUBLISH_HZ = 100.0
+# the low_state_topic parameter's default, the topic both robots publish their state on
+LOW_STATE_TOPIC = '/lowstate'
 
 
 class JointStatePublisher(Node):
     """Republish the newest /lowstate's body-joint positions as /joint_states."""
 
     def __init__(self, **node_kwargs):
-        """Read the parameters, the profile and the config; start() starts publishing."""
+        """Read the parameters and the profile; start() starts publishing."""
         super().__init__('joint_state_publisher', **node_kwargs)
-        self.robot, self.config_name = node_parameters(self)
+        self.robot = robot_parameter(self)
         profile = load_profile(self.robot)
-        config = load_controller_config(self.robot, self.config_name)
+        topic = self.declare_parameter('low_state_topic', LOW_STATE_TOPIC).value
+        self.summary = f'robot {self.robot}, state from {topic}'
         self._names = list(profile.body_joints)
-        self._state = StateSubscriber(self, profile, topic=config['topics']['low_state'])
+        self._state = StateSubscriber(self, profile, topic=topic)
         self._publisher = None
 
     def start(self):
         """Start publishing /joint_states at PUBLISH_HZ."""
         self._publisher = self.create_publisher(JointState, 'joint_states', 10)
         self.timer = self.create_timer(1.0 / PUBLISH_HZ, self.publish_joint_states)
-        self.get_logger().info(
-            f'publishing /joint_states (robot {self.robot}, config {self.config_name})')
+        self.get_logger().info(f'publishing /joint_states ({self.summary})')
 
     def publish_joint_states(self):
         """Publish the newest measured body-joint positions, rad."""

@@ -101,7 +101,7 @@ def test_mismatched_controllers_are_refused(robot):
     """A controller config other than the paired one is refused, naming both."""
     pairs = pairs_of(robot)
     for safety, paired in pairs.items():
-        for controller in set(pairs.values()) | {'custom', 'debug'}:
+        for controller in set(pairs.values()) | {'custom'}:
             if controller == paired:
                 continue
             for sim in SIMS:

@@ -1,8 +1,7 @@
 # The controller config each H1-2 safety config runs with (golem_upper_ik.pairing). The
 # *_split safety configs relay the upper-body input safety_split writes, the *_full ones
-# the full-body input safety_full writes, and sim_safety_split's limits suit the sim. debug,
-# the H1-2's default_config (which joint_state_publisher loads), is in no pair, so
-# upper_ik.launch.py never starts the controller on it. Format: example.pairing.yaml.
+# the full-body input safety_full writes, and sim_safety_split's limits suit the sim.
+# Format: example.pairing.yaml.
 pairs:
   relax_safety_split: safety_split
   default_safety_split: safety_split

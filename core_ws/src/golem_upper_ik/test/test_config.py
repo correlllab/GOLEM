@@ -9,7 +9,7 @@ import pytest
 import yaml
 
 CONFIGS = {
-    'h12': ['safety_split', 'sim_safety_split', 'safety_full', 'debug'],
+    'h12': ['safety_split', 'sim_safety_split', 'safety_full'],
     'g1': ['g1_split', 'sim_split'],
 }
 CASES = [f'{robot}/{name}' for robot, names in CONFIGS.items() for name in names]
@@ -67,14 +67,10 @@ def test_configs_load(case):
     assert list(hold) == list(HELD[robot])
 
 
-def test_every_known_robot_is_tested_and_has_a_default_config():
-    """Every known robot has configs here, and its default_config is one of them and loads."""
-    from golem_upper_ik.profile import known_robots, robot_config
+def test_every_known_robot_is_tested():
+    """Every known robot has configs here."""
+    from golem_upper_ik.profile import known_robots
     assert sorted(CONFIGS) == sorted(known_robots())
-    for robot in known_robots():
-        default = robot_config(robot)['default_config']
-        assert default in CONFIGS[robot]
-        assert load(robot, default)['robot'] == robot
 
 
 def test_every_installed_config_is_tested():

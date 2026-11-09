@@ -218,12 +218,12 @@ class FakeRobot:
     Each message carries q, dq and tick, the profile's mode_machine and a level IMU.
     """
 
-    def __init__(self, ros, profile):
-        """Create the publisher (reliable, depth 100) with q and dq at 0."""
+    def __init__(self, ros, profile, topic='/lowstate'):
+        """Create the publisher on topic (reliable, depth 100) with q and dq at 0."""
         self.profile = profile
         self.node = ros.node('fake_robot')
         self._publisher = self.node.create_publisher(
-            LowState, '/lowstate',
+            LowState, topic,
             QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                        history=HistoryPolicy.KEEP_LAST, depth=100))
         count = len(profile.body_joints)

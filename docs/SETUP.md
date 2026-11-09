@@ -70,4 +70,4 @@ any directory.
 For how the images are layered, what is pinned and why, see
 [`../docker/BUILD.md`](https://github.com/correlllab/GOLEM/blob/main/docker/BUILD.md).
 
-For paired startup and the two-machine smoke test, see [Docker testing](DOCKER_TESTING.md).
+For paired startup and the Docker smoke tests, see [Docker testing](DOCKER_TESTING.md).

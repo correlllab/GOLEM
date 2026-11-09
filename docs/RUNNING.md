@@ -60,16 +60,10 @@ service name; otherwise attach with `docker exec`.
 
 ### RoboCasa
 
-Publishes `rt/lowstate` over CycloneDDS, and on the chosen ROS domain: `/clock`;
-the real RealSense drivers' topics, frame names and camera TF for
-`/realsense/{head,left_hand,right_hand}` (colour, depth and aligned depth, raw and
-compressed, with their camera_info, plus `depth/color/points`), as captured from
-the robot in `golem_robocasa/realsense_profile.yaml`. The head camera renders at
-`GOLEM_CAMERA_SCALE` (default 0.5) of the real 1280x720 with the real
-intrinsics; `GOLEM_CAMERA_DEPTH=0` and `GOLEM_CAMERA_POINTCLOUD=0` drop the depth
-stream and point cloud. Then the Livox topics `/livox/lidar` (CustomMsg),
-`/livox/pointcloud`, `/livox/imu`; and `/{left,right}/gripper/state`. It consumes
-`rt/lowcmd` and the `/{left,right}/gripper/*` services.
+It publishes and consumes what the real robot does: `CLAUDE.md` §8 ("Simulators
+mimic the real robot's topic surface") describes each robot's surface and its
+knobs, and `tests/robocasa/surface/{h12,g1}.json` is the measured surface the
+surface probe checks.
 
 The sim needs an NVIDIA GPU: without one it stops at start, before any ROS or
 DDS traffic. `GOLEM_SIM_RATE` sets its target real-time factor (default 1, real
@@ -102,21 +96,9 @@ starting both containers does not imply full navigation/skills parity.
 ## Bringup
 
 `golem_bringup` is launch-only (the H1-2's files are in its `launch/h12/`), and
-sim versus real are separate launch files (no top-level file takes a `sim:=`
-argument; each passes its own to `h12_control`):
-
-| Launch file | Scenario |
-|---|---|
-| `h12_sim.launch.py` | sim — the full stack |
-| `h12_real_robot.launch.py` | real robot, onboard PC: drivers, state publishers, estop + safety + IK, nav, lower body |
-| `h12_real_desktop.launch.py` | real: companion desktop — model servers, skills, rviz; hand cameras with `use_hand_cameras:=true` |
-| `h12_safety_grippers.launch.py` | real: estop + safety layer + grippers only |
-
-The top-level files above are assembled from building blocks you can also
-launch on their own: `h12_state` (state publishers), `h12_control` (estop,
-safety, IK), `h12_lowerbody`, `h12_models` (model servers + skills),
-`h12_real_drivers`, `h12_grippers`, and `golem_slam`'s `navigation.launch.py`
-(`robot:=h12`).
+sim versus real are separate launch files. `CLAUDE.md` §6 lists the top-level
+files and the building blocks they include; each launch file's docstring is its
+reference.
 
 For sensors + SLAM/nav on the real robot with no joint commanded (no estop,
 safety or IK), use `ros2 launch golem_bringup h12_real_slam.launch.py`; record those runs with `ros2 run golem_slam record_slam_bag --name <name>`.
@@ -262,8 +244,5 @@ session follows [`g1/first-session.md`](g1/first-session.md).
   host-mounted). Force one with `colcon build --symlink-install` inside the
   container; for a clean message rebuild, wipe `container_cache/msgs_ws/` on the
   host.
-- **MJPC C++ iteration** uses `docker exec -it golem_ros
-  /home/code/h12_sim_scripts/rebuild_mjpc.sh` (`--install` also refreshes assets
-  and proto), not colcon.
 - **Laggy point clouds or images** are usually kernel UDP buffer drops — see
   [`DDS_TUNING.md`](DDS_TUNING.md).

@@ -31,7 +31,7 @@ ros2 launch golem_lowerbody_rl lowerbody.launch.py robot:=h12 config:=sim sim:=t
 and a bringup that includes the launch file after other nodes puts the same
 check (`golem_lowerbody_rl.launch_check.lowerbody_check`) before them.
 The H1-2's bringups include it from `golem_bringup`'s `h12_lowerbody.launch.py`
-(`policy:=`, default `almi`; `policy:=mjpc` starts no leg node), the G1's from
+(`policy:=`, default `almi`), the G1's from
 `g1_core.launch.py` (policy `homie`, after the arm controller, the sim always
 and the real robot with `start_position_verified:=true`).
 

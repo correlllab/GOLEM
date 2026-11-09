@@ -37,5 +37,5 @@ frontier the lidar saw on the way there; blocked or failed goals are not
 counted. The result message gives each count. A goal field left at 0 takes the
 node's default (see `custom_ros_messages/action/SkillFrontierExplore.action`). The test is
 the exercised path, but the shared pipeline currently fails its coverage and
-stability checks; see [validation status](navigation.md#validation-status-2026-10-29).
+stability checks; see [validation status](navigation.md#validation-status).
 These commands have not been run by hand.

@@ -5,13 +5,7 @@ validate domains and source mounts, and create cache directories. Commands
 below run from the GOLEM checkout. Do not run two simulators on the same DDS
 domain at once. Keep domain 0 reserved for the real robot.
 
-## Before copying to another machine
-
-The Isaac DDS fix includes an edit in
-`CL_isaaclab_sim/src/python/dds/common/dds_master.py`. A superproject commit alone
-does not include that file. Commit/push the simulator change in its own repo,
-then update GOLEM's submodule pin before testing a fresh clone. No dependency
-submodule pins, including Livox, need to change for these Docker fixes.
+## Before you start
 
 Initialize submodules and Git LFS assets as described in [SETUP.md](SETUP.md).
 Copy `docker/.env.example` to `docker/.env` if it does not exist. The full

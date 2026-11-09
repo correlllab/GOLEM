@@ -75,34 +75,14 @@ the same licence: treat it as CC BY-NC-SA 4.0. The packages around it
 (`golem_lowerbody_rl`, which runs it, and `dex_3`) are MIT. See the policy's
 `README.md`.
 
-## Layout
+## Layout and documentation
 
-| Path | What it is |
-|---|---|
-| `core_ws/` | the ROS 2 workspace — 22 packages, the G1's own in `core_ws/src/dex_3`; where most development happens |
-| `golem_robocasa/` | RoboCasa/MuJoCo simulator entry point for both robots and its ROS/DDS bridges; the G1 sim in `golem_robocasa/g1/` |
-| `CL_isaaclab_sim/` | Isaac Lab simulator (H1-2) |
-| `CL_Assets/` | both robots' URDFs, MJCFs, meshes and self-collision models (the G1's in `CL_Assets/g1/`), Isaac USD (Git-LFS) |
-| `docker/` | the images, compose files (with the G1 overlay), and the build/run scripts |
-| `mujoco_mpc/`, `unitree_sdk2_python/` | vendored upstream dependencies |
-| `tests/` | simulator regression and acceptance tests |
-| `tools/` | standalone debugging tools |
-
-Most of the tree is git submodules, and large assets are Git-LFS.
-
-## Documentation
-
-| Document | Covers |
-|---|---|
-| [`docs/SETUP.md`](docs/SETUP.md) | prerequisites, `.env`, model weights, building the images |
-| [`docs/RUNNING.md`](docs/RUNNING.md) | run flows, bringup, skills, real robot, troubleshooting |
-| [`docs/NAVIGATION_DEMO.md`](docs/NAVIGATION_DEMO.md) | autonomous SLAM + nav2 frontier exploration |
-| [`docs/DDS_TUNING.md`](docs/DDS_TUNING.md) | kernel and CycloneDDS tuning for the sensor streams |
-| [`docs/DOCKER_TESTING.md`](docs/DOCKER_TESTING.md) | the Docker smoke tests |
-| [`docs/g1/`](docs/g1/index.md) | the G1: sim flows, safety layer, DDS, walking, navigation, exploration, the first real session |
-| [`tests/README.md`](tests/README.md) | the simulator regression and acceptance tests |
-| [`docker/BUILD.md`](docker/BUILD.md) | how the images are layered and what is pinned |
-| [`CLAUDE.md`](CLAUDE.md) | orientation for coding agents: packages, conventions, invariants |
+The repo layout is in [`CLAUDE.md`](CLAUDE.md) §2 (most of the tree is git
+submodules, and large assets are Git-LFS). The user pages are in
+[`docs/`](docs/index.md); [`tests/README.md`](tests/README.md) covers the
+simulator regression and acceptance tests, and
+[`docker/BUILD.md`](docker/BUILD.md) how the images are layered and what is
+pinned.
 
 Individual packages document themselves — start with the package's own
 `README.md` and source.

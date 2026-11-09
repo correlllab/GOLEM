@@ -13,9 +13,6 @@ the real robot, which speaks the same Unitree DDS interface.
 On the real G1 every node runs in Docker on a laptop wired to the robot.
 Nothing is installed on, or run from, the robot's own computers.
 
-The G1 packages, sim, tests and these pages come from
-[correlllab/G1_GOLEM](https://github.com/correlllab/G1_GOLEM).
-
 ## What works today
 
 | Feature | In the sim | On the real robot |

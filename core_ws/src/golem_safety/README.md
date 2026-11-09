@@ -101,8 +101,10 @@ What the robots' configs share:
   `stale.upper_seconds` 2.0 in `default_safety_split` and `tight_safety_split`, 0 (off) in
   `relax_safety_split` and `sim_safety_split`; logging off.
 - **G1:** `estop_response` `zero`, `keep_writing`; `control.state_lag_ms: 0` (off: the real
-  G1's tick has not been measured); logging on, to `/tmp/golem_safety`. `sim_split` relaxes
-  the stale times and the estop limits, since the sim can run slower than real time.
+  G1's tick has not been measured); logging on, to `/tmp/golem_safety`. `sim_split` lengthens
+  the stale times, which count sim time there, where the controllers' wall-time delays on a
+  loaded host add up (more of them at a `GOLEM_SIM_RATE` above 1), and relaxes the estop
+  limits, so that the sim's contact spikes do not latch.
 
 Each safety config runs with one `golem_upper_ik` controller config; the bringups refuse
 another pair (`golem_upper_ik.pairing`, checked by its `upper_ik.launch.py`).
@@ -115,7 +117,7 @@ another pair (`golem_upper_ik.pairing`, checked by its `upper_ik.launch.py`).
 | `topics.low_cmd_in`, `low_cmd_lower_in`, `low_cmd_upper_in` | `/safety/lowcmd_in`, `/safety/lowcmd_lower_in`, `/safety/lowcmd_upper_in` | the inputs; absolute ROS names (`rt/...` is refused) |
 | `topics.low_cmd_out` | `/lowcmd` | the output |
 | `topics.low_state` | `/lowstate` | the robot's state |
-| `control.publish_hz` | 500 | the relay rate, per s of robot time; under `use_sim_time` at most one cycle per `/clock` message |
+| `control.publish_hz` | 500 | the relay rate, per s of robot time; under `use_sim_time` about one cycle per `/clock` step, up to two when a step spans more than two periods (Relay, below) |
 | `control.state_lag_ms` | required | the transport-lag estop, ms; on ROS domain 0 only; <= 0 turns it off |
 | `stale.upper_seconds`, `lower_seconds`, `state_seconds` | 0, 0.2, 0.1 | quiet times of the upper input, the lower or full input and `/lowstate`, s of robot time; <= 0 turns the report off |
 | `single_writer.handover_seconds` | 0.5 | how long the current writer must be quiet before another is accepted, s of robot time |
@@ -157,10 +159,12 @@ only on domain 0, where robot time is always the boot clock.
 
 **Relay, newest only.** One relay thread runs at `control.publish_hz`, sleeping to absolute
 deadlines of robot time. Under `use_sim_time` a sleep ends only when `/clock` moves, so the
-rate is at most one cycle per `/clock` message: RoboCasa publishes `/clock` every 2 ms
-physics step (500 Hz of sim time), Isaac once per control step. Each cycle it takes the newest `/lowstate`, the newest hardware
-estop values and the newest command of each input (keep-last 1, so no queue builds up), and
-publishes one command. A cycle that ends more than a period late restarts the schedule: a
+rate follows `/clock`'s steps: RoboCasa publishes `/clock` every 2 ms physics step (500 Hz of
+sim time), one cycle per step; Isaac once per control step, and a step that spans more than
+two periods gets two cycles (the schedule restarts at the step, below), so Isaac's coarser
+`/clock` gives fewer than 500 cycles per s of sim time. Each cycle it takes the newest
+`/lowstate`, the newest hardware estop values and the newest command of each input (keep-last
+1, so no queue builds up), and publishes one command. A cycle that ends more than a period late restarts the schedule: a
 slow cycle lowers the rate, and nothing is replayed to catch up. No timer in the node runs
 on the wall clock.
 

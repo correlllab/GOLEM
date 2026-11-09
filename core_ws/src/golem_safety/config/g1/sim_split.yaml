@@ -16,8 +16,9 @@ control:
 
 stale:
   upper_seconds: 2.0
-  # The sim can run slower than real time, and these are measured on the host's clock,
-  # not in sim time.
+  # Longer than split.yaml's: these count sim time (use_sim_time), and the controllers'
+  # wall-time delays on a loaded host count as sim time here, more of it at a
+  # GOLEM_SIM_RATE above 1.
   lower_seconds: 1.0
   state_seconds: 1.0
 

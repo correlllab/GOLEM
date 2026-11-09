@@ -585,16 +585,16 @@ for the band.) Its knobs are `GOLEM_LIDAR`, `GOLEM_LIDAR_POINTS` (points per
 frame, default the real sensor's 20,000), `GOLEM_LIDAR_HZ`, `GOLEM_CAMERAS`,
 `GOLEM_CAMERA_HZ`,
 `GOLEM_CAMERA_SCALE` (G1 default 0.5), `GOLEM_CMD_TIMEOUT`,
-`GOLEM_SPAWN_BACKOFF`, `GOLEM_SIM_ODOM`, `GOLEM_SIM_EXPERIMENT`,
+`GOLEM_SPAWN_BACKOFF`, `GOLEM_SIM_ODOM`,
 `GOLEM_SIM_RATE` (as on the H1-2, above). Their
 defaults are in the code
 that reads them: `SensorConfig` in `g1/g1_sensors.py` (sensors),
 `g1/unitree_interface.py` (the command timeout), `g1/g1_mujoco.py`
-(spawn, odom), `measurement_bridge.py` (experiment) and `sim_common.py`
+(spawn, odom) and `sim_common.py`
 (rate); the compose files pass them
 (`docker/docker-compose.g1.yml` the G1-only ones). The G1 sim ignores the H1-2-only
 knobs (`GOLEM_SPAWN_MARGIN`, `GOLEM_SPAWN_OFFSET`, `GOLEM_HAND_CAMERA_RES`,
-`GOLEM_CAMERA_DEPTH`, `GOLEM_CAMERA_POINTCLOUD`, the tether ones). It refuses
+`GOLEM_CAMERA_DEPTH`, `GOLEM_CAMERA_POINTCLOUD`). It refuses
 `--timing`, and the H1-2 sim refuses `--duration` (`sim_common.py`).
 
 The measured surface of each RoboCasa robot is checked in as a golden:
@@ -629,11 +629,9 @@ sim-to-real transfer.
 - **RoboCasa complies, for both robots:** ground-truth `/odom` + `odom→pelvis`
   TF is gated by `GOLEM_SIM_ODOM` (default `'0'` = off, read in `h12_mujoco.py`
   and `g1/g1_mujoco.py`). No stack opts in: every bringup's navigation runs on FAST-LIO, and the G1 bringup and tests refuse it. Keep it that way. The
-  experiment surface (`/sim/ground_truth`, `/sim/reset_objects`) is gated by
-  `GOLEM_SIM_EXPERIMENT` (`measurement_bridge.py`). The closed-loop tests
-  (`tests/g1`, `tests/sim`) run the sim with both off (`GOLEM_SIM_ODOM=0`,
-  `GOLEM_SIM_EXPERIMENT=0`), refuse a `GOLEM_SIM_ODOM` that turns it on, and
-  record the robot's state inside the sim process instead of publishing it.
+  closed-loop tests (`tests/g1`, `tests/sim`) run the sim with it off
+  (`GOLEM_SIM_ODOM=0`), refuse a `GOLEM_SIM_ODOM` that turns it on, and record
+  the robot's state inside the sim process instead of publishing it.
 - **Isaac:** no full-scene ground-truth publisher or per-step scene JSON conversion.
 - **Known deviations (do not make worse):** RoboCasa always publishes privileged task signals
   (`/robocasa/success`, `/robocasa/reward`, `/robocasa/task_goal`,

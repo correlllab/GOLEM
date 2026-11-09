@@ -220,11 +220,10 @@ sim_test_start_sim() {
         prepare="GOLEM_PREPARE_ONLY=1 /home/code/h12_sim_scripts/launch_robocasa.sh && \
         source /home/code/msgs_ws/install/setup.bash && "
         robot_env=(-e GOLEM_SPAWN_MARGIN= -e GOLEM_SPAWN_OFFSET= -e GOLEM_LIDAR_SELF_FILTER=
-                   -e GOLEM_CAMERA_DEPTH= -e GOLEM_CAMERA_POINTCLOUD= -e GOLEM_HAND_CAMERA_RES=
-                   -e GOLEM_SIM_TETHER_ROT_STIFFNESS=0 -e GOLEM_SIM_TETHER_ROT_BODY=)
+                   -e GOLEM_CAMERA_DEPTH= -e GOLEM_CAMERA_POINTCLOUD= -e GOLEM_HAND_CAMERA_RES=)
     fi
     "${COMPOSE[@]}" run -d --no-deps --name "$SIM" -e "GOLEM_ROBOT=$SIM_TEST_ROBOT" -e G1_DDS_INTERFACE=lo \
-        -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONUNBUFFERED=1 -e MUJOCO_GL=egl -e GOLEM_SIM_EXPERIMENT=0 \
+        -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONUNBUFFERED=1 -e MUJOCO_GL=egl \
         "${robot_env[@]}" "$@" robocasa bash -c "$MULTICAST && source /opt/ros/humble/setup.bash && \
         source /opt/livox_ws/install/setup.bash && $prepare cd /home/code/golem_robocasa && \
         exec python3 -u /home/code/tests/$SIM_TEST_SUITE/$py sim --out /out -- --headless --layout 9 --style 9 --seed 42" >/dev/null

@@ -131,16 +131,6 @@ services:
       # 1 publishes ground-truth /odom and the odom -> pelvis TF. Ground truth
       # stays opt-in: no bringup uses it (CLAUDE.md §8).
       - GOLEM_SIM_ODOM=${GOLEM_SIM_ODOM:-0}
-      # 1 serves the experiment surface (/sim/ground_truth,
-      # /sim/reset_objects; measurement_bridge.py). Off by default, as ground
-      # truth.
-      - GOLEM_SIM_EXPERIMENT=${GOLEM_SIM_EXPERIMENT:-0}
-      # H1-2: N*m/rad of rotational hold the elastic band adds at the spawn
-      # orientation, a rigid hoist for tethered experiments; 0 (default) is
-      # the linear band only. GOLEM_SIM_TETHER_ROT_BODY picks the held body:
-      # torso (empty) or pelvis.
-      - GOLEM_SIM_TETHER_ROT_STIFFNESS=${GOLEM_SIM_TETHER_ROT_STIFFNESS:-0}
-      - GOLEM_SIM_TETHER_ROT_BODY=${GOLEM_SIM_TETHER_ROT_BODY:-}
       # H1-2: "dx,dy", m in the world frame, added to the task's spawn.
       - GOLEM_SPAWN_OFFSET=${GOLEM_SPAWN_OFFSET:-}
     volumes:

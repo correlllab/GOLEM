@@ -191,9 +191,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # /elastic_band/toggle releases it.
     band = None
     band_body_id = -1
-    rot_body_id = -1
     band_vel = np.zeros(6)
-    rot_vel = np.zeros(6)
     try:
         band_body_id = resolver.body_id("torso_link")
         anchor = data.xpos[band_body_id].copy()
@@ -203,23 +201,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         # the leg policy waits under the band for the arms' start-up (static
         # tilt ~ gravity torque / stiffness; at 1e3 it pitched forward ~60 deg).
         # Damping 2e3 N*s/m settles a sideways shove well within a second.
-        # GOLEM_SIM_TETHER_ROT_STIFFNESS (N*m/rad, default 0: off) adds a
-        # rotational hold at the spawn orientation while the band is on, a rigid
-        # hoist for tethered manipulation experiments. GOLEM_SIM_TETHER_ROT_BODY
-        # holds the torso (default) or the pelvis, which also stops the legs
-        # spinning the pelvis about the waist with the feet off the ground. The
-        # torque is applied explicitly, so the damping keeps d*dt/I well under 2
-        # at the 2 ms step: torso yaw I ~0.13 kg*m^2 -> 0.04 s x stiffness,
-        # pelvis ~0.009 kg*m^2 -> 0.006 s x stiffness.
-        rot_k = float(os.environ.get("GOLEM_SIM_TETHER_ROT_STIFFNESS", "0") or 0)
-        rot_body = os.environ.get("GOLEM_SIM_TETHER_ROT_BODY", "torso").strip() or "torso"
-        rot_body_id = (resolver.body_id("pelvis") if rot_body == "pelvis" else band_body_id)
-        rot_d = (0.006 if rot_body == "pelvis" else 0.04) * rot_k
-        band = ElasticBand(anchor, length=0, stiffness=1e4, damping=2e3,
-                           orientation=data.xquat[rot_body_id].copy(),
-                           rot_stiffness=rot_k, rot_damping=rot_d)
-        print(f"[h12_mujoco] elastic band on torso anchored at {anchor.round(3)}"
-              + (f", rotational hold {rot_k:g} N*m/rad on the {rot_body}" if rot_k > 0 else ""))
+        band = ElasticBand(anchor, length=0, stiffness=1e4, damping=2e3)
+        print(f"[h12_mujoco] elastic band on torso anchored at {anchor.round(3)}")
     except Exception as e:
         print(f"[h12_mujoco] elastic band setup skipped: {e}")
 
@@ -405,15 +388,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                                                  band_body_id, band_vel, 0)
                         data.xfrc_applied[band_body_id, :3] = band.evaluate_force(
                             data.xpos[band_body_id], band_vel[3:])
-                        if band.rot_stiffness > 0.0:
-                            mujoco.mj_objectVelocity(model, data, mujoco.mjtObj.mjOBJ_BODY,
-                                                     rot_body_id, rot_vel, 0)
-                            data.xfrc_applied[rot_body_id, 3:] = band.evaluate_torque(
-                                data.xquat[rot_body_id], rot_vel[:3])
                     else:
-                        data.xfrc_applied[band_body_id, :] = 0.0
-                        if rot_body_id >= 0:
-                            data.xfrc_applied[rot_body_id, :] = 0.0
+                        data.xfrc_applied[band_body_id, :3] = 0.0
                 sim_interface.write_ctrl()
                 mujoco.mj_step(model, data)
                 timings.stop("physics", physics_start)

@@ -3,7 +3,8 @@
 sim_common.egl_renderer() is the probe and sim_common.require_gpu() the stop. The probe is made
 to fail three ways: a failing probe passed in, MuJoCo not on EGL (MUJOCO_GL=osmesa) and Mesa's
 software EGL in place of NVIDIA's, the last two in h12_mujoco.py run as a subprocess for each
-robot. Run it in the robocasa image, on its GPU:
+robot; with the probe failing, --help and a usage error still answer. Run it in the robocasa
+image, on its GPU:
 ROS_DOMAIN_ID=231 tests/robocasa/run_in_container.sh -p test_gpu_required.py
 """
 import os
@@ -51,21 +52,39 @@ class RequireGpuTests(unittest.TestCase):
 class SimStartTests(unittest.TestCase):
     """Run each robot's sim with the probe made to fail and check it stops at start."""
 
-    def start(self, robot, **env):
-        """Run h12_mujoco.py for robot, headless in the Blank task, with env added; return the CompletedProcess."""
-        r = subprocess.run([sys.executable, "-u", SIM, f"--{robot}", "--headless", "--task", "Blank"],
+    def start(self, robot, *args, **env):
+        """Run h12_mujoco.py for robot with args (default: headless in the Blank task) and env added.
+
+        Returns the CompletedProcess.
+        """
+        args = args or ("--headless", "--task", "Blank")
+        r = subprocess.run([sys.executable, "-u", SIM, f"--{robot}", *args],
                            capture_output=True, text=True, env=dict(os.environ, **env),
                            timeout=START_TIMEOUT_S, cwd=os.path.dirname(SIM))
         print(f"\n  {robot}: exit {r.returncode}: {r.stderr.strip().splitlines()[-1:] or r.stdout[-300:]}")
         return r
 
-    def assert_refused(self, r, reason):
-        """Assert the sim exited 1 with GPU_REQUIRED and reason on its last stderr line, before building a scene."""
+    def assert_refused(self, r, *reasons):
+        """Assert the sim exited 1 with GPU_REQUIRED and one of reasons on its last stderr line, before building a scene."""
         last = r.stderr.strip().splitlines()[-1] if r.stderr.strip() else ""
         self.assertEqual(r.returncode, 1, (r.stdout + r.stderr)[-2000:])
         self.assertTrue(last.startswith(f"{sim_common.GPU_REQUIRED}: "), last)
-        self.assertIn(reason, last)
+        self.assertTrue(any(reason in last for reason in reasons), (reasons, last))
         self.assertNotIn("RoboCasa task", r.stdout)
+
+    def test_help_and_usage_errors_need_no_gpu(self):
+        """--help and a usage error answer as argparse does with the probe failing, for either robot."""
+        for robot in ("h12", "g1"):
+            with self.subTest(robot=robot, case="--help"):
+                r = self.start(robot, "--help", MUJOCO_GL="osmesa")
+                self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-2000:])
+                self.assertIn("usage:", r.stdout)
+                self.assertNotIn(sim_common.GPU_REQUIRED, r.stderr)
+            with self.subTest(robot=robot, case="usage error"):
+                r = self.start(robot, "--layout", "one", MUJOCO_GL="osmesa")
+                self.assertEqual(r.returncode, 2, (r.stdout + r.stderr)[-2000:])
+                self.assertIn("--layout: invalid int value", r.stderr)
+                self.assertNotIn(sim_common.GPU_REQUIRED, r.stderr)
 
     def test_without_egl_both_sims_stop_at_start(self):
         """MUJOCO_GL=osmesa stops either robot's sim at start, naming MUJOCO_GL."""
@@ -81,7 +100,7 @@ class SimStartTests(unittest.TestCase):
             with self.subTest(robot=robot):
                 r = self.start(robot, MUJOCO_GL="egl", __EGL_VENDOR_LIBRARY_FILENAMES=MESA_EGL_VENDOR)
                 # Mesa either gives a software renderer or no EGL device at all.
-                self.assert_refused(r, "")
+                self.assert_refused(r, ", a software renderer", ": no EGL device: ")
 
 
 if __name__ == "__main__":

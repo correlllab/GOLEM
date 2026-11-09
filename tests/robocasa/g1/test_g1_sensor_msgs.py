@@ -75,12 +75,12 @@ def test_custom_msg_of_a_scan():
     """A real scan survives serialisation: a subscriber reads back every point, offset and line."""
     import test_g1_sensors as scene
     data = mujoco.MjData(scene.ROOM_MODEL)
-    scene._place(scene.ROOM_MODEL, data)
+    scene.place(scene.ROOM_MODEL, data)
     sensor = lidar.Mid360(scene.ROOM_MODEL, prefix="")
-    scanner = lidar.make_scanner(scene._exact(sensor))
+    scanner = lidar.make_scanner(scene.exact_caster(sensor))
     try:
-        scanner.update(sensor.snapshot(data), 7.0)
-        frame = scanner.update(sensor.snapshot(data), 7.1)
+        scanner.update(scene.snapshot(sensor, data), 7.0)
+        frame = scanner.update(scene.snapshot(sensor, data), 7.1)
     finally:
         scanner.caster.close()
     msg = deserialize_message(msgs.livox_custom_msg_cdr(frame), CustomMsg)

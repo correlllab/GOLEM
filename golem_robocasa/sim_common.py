@@ -254,16 +254,21 @@ def exclude_fixture_collisions(env) -> int:
     any with a robot or object (env.objects) geom in it included, collides as before, so
     objects still rest in drawers, cabinets and racks. Rewrites geom_contype and
     geom_conaffinity (and the bodies' body_contype and body_conaffinity) of the compiled model
-    in place: call it once on every model the sim steps, after env.reset() compiles it.
+    in place: call it on every model the sim steps, after env.reset() compiles it. A second
+    call on the same model changes nothing and logs that it was already applied.
 
     Returns the number of geom pairs, on bodies not welded together, whose contype/conaffinity
-    test it turns off, and logs it. An env without fixtures (Blank, Battery) and a model with
-    flexes are left as they are (0).
+    test it turns off, and logs it. An env without fixtures (Blank, Battery), a model with
+    flexes and a repeat call are left as they are (0).
     """
     import mujoco
     import numpy as np
 
     model = env.sim.model._model
+    if getattr(env, "_fixture_collisions_model", None) is model:
+        print("[sim_common] fixture collisions: already excluded on this model, left as it is",
+              flush=True)
+        return 0
     fixtures = getattr(env, "fixtures", None) or {}
     if not fixtures or model.nflex:
         reason = "the model has flexes" if fixtures else "the scene has no RoboCasa fixtures"
@@ -305,7 +310,7 @@ def exclude_fixture_collisions(env) -> int:
     classes = list(zip(contype[moving].tolist(), conaffinity[moving].tolist()))
     type0, affinity0 = max(set(classes), key=classes.count) if classes else (0, 0)
     odd = {str(fixture[g]) for g in np.flatnonzero(moving)
-           if not type0 & affinity0 or (contype[g], conaffinity[g]) != (type0, affinity0)}
+           if not (type0 & affinity0) or (contype[g], conaffinity[g]) != (type0, affinity0)}
     moving &= ~np.isin(fixture, sorted(odd))
     names = sorted(set(fixture[moving]))
 
@@ -355,6 +360,7 @@ def exclude_fixture_collisions(env) -> int:
         per_body = np.zeros(model.nbody, dtype=np.int64)
         np.bitwise_or.at(per_body, geom_body, bits)
         getattr(model, field_name)[:] = per_body
+    env._fixture_collisions_model = model
     print(f"[sim_common] fixture collisions: excluded {count} geom pairs inside {len(names)} RoboCasa "
           f"fixtures with moving parts and between those parts and the static scene"
           + (f"; left as they are: {sorted(odd)}" if odd else ""), flush=True)

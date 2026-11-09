@@ -283,8 +283,8 @@ class ScanRingTests(unittest.TestCase):
         return ring
 
     def test_ring_holds_one_frame_period_of_casts(self):
-        """The ring has frame period / interval slots, at least one."""
-        for interval, slots in ((0.01, 10), (0.02, 5), (0.1, 1), (0.03, 4)):
+        """The ring has as many slots as whole intervals fit in a frame period, at least one."""
+        for interval, slots in ((0.01, 10), (0.02, 5), (0.1, 1), (0.03, 3), (0.15, 1)):
             with self.subTest(interval=interval):
                 self.assertEqual(self.ring(interval=interval).slots, slots)
 
@@ -329,7 +329,7 @@ class ScanRingTests(unittest.TestCase):
         self.assertEqual((ring.waits, ring.casts, len(self.frames)), (0, 21, 2))
 
     def test_tick_raises_when_the_scan_thread_has_stopped(self):
-        """A full ring whose thread has stopped raises instead of waiting forever."""
+        """A full ring whose thread has stopped raises at once, on every later cast too."""
         ring = self.ring(interval=0.1)   # one slot
         release = threading.Event()
         ring.scanner.update = lambda snapshot, t: release.wait(30.0) and None
@@ -338,8 +338,12 @@ class ScanRingTests(unittest.TestCase):
         release.set()
         ring._thread.join(10.0)
         ring.tick(self.data, 0.1)   # takes the freed slot; the stopped thread never frees it
-        with self.assertRaisesRegex(RuntimeError, "scan thread has stopped"):
-            ring.tick(self.data, 0.2)
+        for k in (2, 3):
+            start = time.perf_counter()
+            with self.assertRaisesRegex(RuntimeError, "scan thread has stopped"):
+                ring.tick(self.data, 0.1 * k)
+            # well under mid360._SLOT_POLL_S: the wait for a slot is skipped
+            self.assertLess(time.perf_counter() - start, 0.2)
 
 
 if __name__ == "__main__":

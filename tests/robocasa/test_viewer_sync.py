@@ -1,4 +1,6 @@
 """Check the shared viewer thread (viewer_sync.py) against a fake viewer handle, without a display."""
+import contextlib
+import io
 import threading
 import time
 import unittest
@@ -116,7 +118,7 @@ class ViewerSyncTests(unittest.TestCase):
             return bool(np.any(self.data.xfrc_applied))
 
     def test_viewer_sync_stops_when_handle_closes(self):
-        """The thread ends within two periods of the window closing, and stop() returns."""
+        """The thread ends within two periods of the window closing (plus 0.1 s of scheduling slack), and stop() returns."""
         hz = 50.0
         handle = FakeHandle()
         sync = self.make(handle, hz=hz)
@@ -148,6 +150,24 @@ class ViewerSyncTests(unittest.TestCase):
         sync.start()
         self.assertTrue(wait_for(lambda: handle.syncs > 0))
         self.assertEqual(handle.user_scn.ngeom, 0)
+
+    def test_an_error_ends_the_thread_and_is_logged(self):
+        """A sync() that raises ends the thread, with the error and its traceback in the log."""
+        handle = FakeHandle()
+
+        def broken_sync():
+            """Fail as a closed GL context would."""
+            raise RuntimeError("sync failed")
+
+        handle.sync = broken_sync
+        sync = self.make(handle)
+        log = io.StringIO()
+        with contextlib.redirect_stdout(log):
+            sync.start()
+            sync._thread.join(timeout=2.0)
+        self.assertFalse(sync._thread.is_alive())
+        self.assertIn("[viewer_sync] the viewer's sync thread stopped", log.getvalue())
+        self.assertIn("RuntimeError: sync failed", log.getvalue())
 
 
 if __name__ == "__main__":

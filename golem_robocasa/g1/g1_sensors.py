@@ -36,15 +36,15 @@ The IMU's 200 Hz falls between the 2 ms physics steps: its samples alternate
 Threads. tick() runs on the physics thread between steps, with the sim lock
 held. The sensors' heavy work runs on two threads of their own, which never
 touch the sim's MjData:
-  - mid360_scan casts the lidar's rays (20,000 per frame by default) through
-    mid360.GpuCaster, from depth renders on the GPU. Every caster's batch_s of
-    sim time (20 ms) the physics thread copies what a cast reads, every geom's
+  - mid360_scan casts the lidar's rays (g1_lidar.POINTS_PER_FRAME per frame by
+    default) through mid360.GpuCaster, from depth renders on the GPU. Every
+    caster's batch_s of sim time the physics thread copies what a cast reads, every geom's
     pose and the sensor's, into a slot of a ring; the thread copies the slot
     into its own MjData and casts the rays due by then, labelled with that time.
     The caster casts on its own copy of the model and releases the GIL while it
-    renders, so the casts run beside the physics; casting every step instead
-    would wake the thread 500 times a sim second, and its Python between casts
-    would hold up the physics thread.
+    renders, so the casts run beside the physics; casting every physics step
+    instead would wake the thread so often that its Python between casts would
+    hold up the physics thread.
     The slot also carries the geoms' and materials' alpha, which RoboCasa tasks
     change at runtime (liquids, fruit, hidden walls) and the rays skip at 0.
     Other runtime edits of the model do not reach the caster's copy; RoboCasa's
@@ -55,16 +55,15 @@ touch the sim's MjData:
     factor drops instead (mid360.ScanRing).
   - head_camera renders, converts, compresses and publishes each frame. At the
     camera's rate the physics thread copies what the camera sees into the
-    renderer's scene (mjv_updateScene, which reads MjData: about 0.1 ms in the
-    G1-only model, CPU only); the thread owns the renderer's GL context (it is
-    thread-affine) and renders that scene, with the GIL released, so the render
-    (15-20 ms a frame at 1280x720) does not hold up the physics or rt/lowstate
-    (and g1_mujoco's 0.5 ms GIL switch interval keeps the thread's Python work
-    from doing so). It renders under mid360.GL_LOCK, taking turns with the GPU
+    renderer's scene (mjv_updateScene, which reads MjData, on the CPU); the
+    thread owns the renderer's GL context (it is thread-affine) and renders that
+    scene, with the GIL released, so the render, far longer than the copy, does
+    not hold up the physics or rt/lowstate (and g1_mujoco's GIL_SWITCH_S keeps
+    the thread's Python work from doing so). It renders under mid360.GL_LOCK, taking turns with the GPU
     caster (g1_head_camera.py). The scene is handed over, not copied: a frame
     that comes due while the thread still renders the last is dropped (and
     counted).
-The IMU is read and published on the physics thread (tens of us a sample).
+The IMU is read and published on the physics thread, a small cost per sample.
 """
 import math
 import os
@@ -207,7 +206,7 @@ class _Schedule:
 class _LidarScans(mid360.ScanRing):
     """Cast the MID-360's scans on the mid360_scan thread (a mid360.ScanRing; see the module docstring)."""
 
-    def __init__(self, model, data, prefix, config, publish):
+    def __init__(self, model, prefix, config, publish):
         """Build the GPU caster and start the thread, which calls publish(cdr bytes).
 
         Raises RuntimeError when EGL fails to render.
@@ -226,14 +225,14 @@ class _LidarScans(mid360.ScanRing):
 class _Mid360:
     """Publish /livox/lidar (scans on their own thread) and /livox/imu (on the physics thread)."""
 
-    def __init__(self, node, model, data, prefix, config):
+    def __init__(self, node, model, prefix, config):
         """Create the publishers and start the scan thread."""
         self.pub_lidar = node.create_publisher(CustomMsg, "/livox/lidar", LIVOX_QOS)
         self.pub_imu = node.create_publisher(Imu, "/livox/imu", LIVOX_QOS)
         self._imu = g1_lidar.Mid360(model, prefix)   # for imu() on the live MjData only
         self._imu_schedule = _Schedule(config.imu_hz)
         self.imu_samples = 0
-        self.scans = _LidarScans(model, data, prefix, config, self.pub_lidar.publish)
+        self.scans = _LidarScans(model, prefix, config, self.pub_lidar.publish)
 
     def tick(self, data, t):
         """Submit a cast every scans.interval and publish the IMU when due, at sim time t."""
@@ -380,7 +379,7 @@ class G1Sensors:
         self.model = model
         self.data = data
         config = SensorConfig.from_env() if config is None else config
-        self.mid360 = _Mid360(node, model, data, prefix, config) if config.lidar else None
+        self.mid360 = _Mid360(node, model, prefix, config) if config.lidar else None
         self.head_camera = _HeadCamera(node, model, data, prefix, config) if config.camera else None
 
     def tick(self, sim_t, stamp):

@@ -277,7 +277,7 @@ class Battery(ManipulationEnv):
         # The merged scene takes robosuite's <option>, not the arena's, so the
         # arena's multiccd flag is set again: with single-point contacts the
         # screws' small neck cylinders rock at ~6 rad/s on their walls
-        # (MuJoCo 3.3.1).
+        # (measured on MuJoCo 3.3.1; unmeasured on the image's 3.17.0).
         option = self.model.root.find("option")
         if option is None:
             option = ET.SubElement(self.model.root, "option")

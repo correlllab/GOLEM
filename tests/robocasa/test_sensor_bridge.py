@@ -67,6 +67,14 @@ class Recorder:
 # A scene with what the scene update reads of MjData besides plain geoms: a spot light on a
 # target, a light and a camera that ride a moving body, tracking and fixed cameras, a tendon,
 # and a transparent geom.
+# A cloth of 3 x 3 vertices: a model with a flex, whose scenes read more than the partial
+# snapshot carries.
+FLEX_SCENE = '''<mujoco>
+  <worldbody>
+    <flexcomp name="cloth" type="grid" count="3 3 1" spacing="0.1 0.1 0.1" dim="2" pos="0 0 1"/>
+  </worldbody>
+</mujoco>'''
+
 MOVING_SCENE = '''<mujoco>
   <visual><global offwidth="48" offheight="48"/></visual>
   <worldbody>
@@ -157,6 +165,20 @@ class CameraSnapshotTests(unittest.TestCase):
         self.assertIs(slots[1], slots[3])
         self.assertIsNot(slots[0], slots[1])
 
+    def test_a_model_with_a_flex_takes_full_copies(self):
+        """With a flex in the model, each frame is a full copy of the data, never the live one."""
+        b = self.bridge
+        b.model = mujoco.MjModel.from_xml_string(FLEX_SCENE)
+        b.data = mujoco.MjData(b.model)
+        self.assertGreater(b.model.nflex, 0)
+        for step in range(3):
+            mujoco.mj_step(b.model, b.data)
+            snapshot = b._capture_camera_snapshot()
+            self.assertIsNot(snapshot, b.data)
+            np.testing.assert_array_equal(snapshot.qpos, b.data.qpos)
+            np.testing.assert_array_equal(snapshot.flexvert_xpos, b.data.flexvert_xpos)
+        self.assertEqual(b._camera_slots, [])
+
     def test_camera_snapshot_is_taken_under_the_sim_lock(self):
         """The snapshot is filled while the sim lock is held, and the lock is free afterwards."""
         b = self.bridge
@@ -166,6 +188,7 @@ class CameraSnapshotTests(unittest.TestCase):
             """Stand in for the data to record the lock's state when its fields are read."""
 
             def __getattr__(inner, name):
+                """Record whether the sim lock is held, then read the real data's field."""
                 held.append(b.sim_lock.locked())
                 return getattr(real, name)
 
@@ -635,6 +658,7 @@ class LidarTests(unittest.TestCase):
             """Stand in for the data to record the lock's state when its fields are read."""
 
             def __getattr__(inner, name):
+                """Record whether the sim lock is held, then read the real data's field."""
                 held.append(self.lock.locked())
                 return getattr(real, name)
 

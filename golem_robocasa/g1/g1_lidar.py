@@ -14,8 +14,8 @@ Scans. Both robots' MID-360 is the shared model in golem_robocasa/mid360.py: the
 real non-repetitive scan pattern, the blind zone, the maximum range and the
 range noise are there, with its GPU caster and its frame timing. This module gives
 it the G1's mount: make_caster() casts from the mid360_link site and
-make_scanner() fires POINTS_PER_FRAME rays per frame, the real sensor's 20,000
-(200,000 points/s at 10 Hz). A frame costs a few ms of render time on the GPU.
+make_scanner() fires POINTS_PER_FRAME rays per frame, the real sensor's
+(mid360.POINTS_PER_SECOND at mid360.FRAME_RATE_HZ).
 
 Self returns. The sensor sits inside the head mesh, which belongs to torso_link,
 so rays pass through torso_link's geoms (MuJoCo's bodyexclude); in the FOV that
@@ -50,7 +50,7 @@ SITE = "mid360_link"
 TORSO_BODY = "torso_link"
 
 FRAME_RATE_HZ = mid360.FRAME_RATE_HZ
-POINTS_PER_FRAME = int(mid360.POINTS_PER_SECOND / FRAME_RATE_HZ)   # the real sensor's 20,000
+POINTS_PER_FRAME = int(mid360.POINTS_PER_SECOND / FRAME_RATE_HZ)   # the real sensor's per frame
 GEOM_GROUPS = (0, 1, 0, 0, 0, 0)     # visual geoms only
 
 # The IMU's position in livox_frame, m. FAST_LIO's MID-360 extrinsic_T
@@ -72,7 +72,7 @@ def make_scanner(caster, points_per_frame=POINTS_PER_FRAME, rate_hz=FRAME_RATE_H
 
 
 class Mid360:
-    """Locate the MID-360 on a G1 MjModel: its pose and snapshots, a caster for its scans, its IMU."""
+    """Locate the MID-360 on a G1 MjModel: its pose, a caster for its scans, its IMU."""
 
     def __init__(self, model, prefix="robot0_"):
         """Find the sensor in model.
@@ -102,15 +102,6 @@ class Mid360:
         """Return the sensor's (position (3,) m, rotation (3, 3) livox_frame -> world)."""
         return (data.site_xpos[self.site_id].copy(),
                 data.site_xmat[self.site_id].reshape(3, 3).copy())
-
-    def snapshot(self, data, geom_alpha=None, mat_alpha=None):
-        """Return the mid360.Snapshot a scan of data's kinematics reads.
-
-        geom_alpha and mat_alpha are the model's live alpha (Snapshot's fields); data is
-        referenced, not copied.
-        """
-        position, rotation = self.pose(data)
-        return mid360.Snapshot(position, rotation, data, geom_alpha, mat_alpha)
 
     def make_caster(self):
         """Return a mid360.GpuCaster through torso_link, visual geoms only.

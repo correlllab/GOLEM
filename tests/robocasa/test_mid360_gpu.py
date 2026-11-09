@@ -42,6 +42,22 @@ WALLS = """
   </worldbody>
 </mujoco>
 """
+# A closed cube room around the origin, its walls' inner faces 2 m away along each axis.
+CUBE = """
+<mujoco>
+  <worldbody>
+    <geom type="box" group="1" pos="2.05 0 0" size="0.05 2.1 2.1"/>
+    <geom type="box" group="1" pos="-2.05 0 0" size="0.05 2.1 2.1"/>
+    <geom type="box" group="1" pos="0 2.05 0" size="2.1 0.05 2.1"/>
+    <geom type="box" group="1" pos="0 -2.05 0" size="2.1 0.05 2.1"/>
+    <geom type="box" group="1" pos="0 0 2.05" size="2.1 2.1 0.05"/>
+    <geom type="box" group="1" pos="0 0 -2.05" size="2.1 2.1 0.05"/>
+  </worldbody>
+</mujoco>
+"""
+CUBE_HALF = 2.0                       # m, the cube room's inner half-width
+MAX_EDGE_ERROR = 0.01                 # m, a ray on or beside a face boundary against the exact cast
+
 
 class Kitchen(NamedTuple):
     """Hold a spawned robot's kitchen and how its lidar casts in it."""
@@ -224,6 +240,50 @@ class GpuCasterTests(unittest.TestCase):
                     expected = wall_x / local[:, 0]   # the wall's face at x = wall_x
                     for got in ranges:
                         np.testing.assert_allclose(got, expected, rtol=0.0, atol=0.01)
+        finally:
+            gpu.close()
+
+    def test_rays_on_the_cube_map_face_boundaries(self):
+        """Rays along the cube map's edges and corners, and just beside them, return as the exact casts do.
+
+        In a cube room, axis by axis, every ray along an edge (two components of equal size) or
+        a corner (three), and each turned 1e-4 rad either way, returns the wall at
+        CUBE_HALF / its largest component, within MAX_EDGE_ERROR of mj_ray: no gap opens where
+        two faces meet. The faces are the world's, so the same world rays are cast with the
+        sensor on the world axes and turned, upside down as on the robots.
+        """
+        model = mujoco.MjModel.from_xml_string(CUBE)
+        data = mujoco.MjData(model)
+        mujoco.mj_forward(model, data)
+        signs = (-1.0, 1.0)
+        edges = [v for a in signs for b in signs
+                 for v in ((a, b, 0.0), (a, 0.0, b), (0.0, a, b))]
+        corners = [(a, b, c) for a in signs for b in signs for c in signs]
+        axes = [tuple(row) for row in np.vstack([np.eye(3), -np.eye(3)])]
+        base = np.array(edges + corners + axes, dtype=np.float64)
+        base /= np.linalg.norm(base, axis=1, keepdims=True)
+        rng = np.random.default_rng(5)
+        beside = []
+        for sign in signs:
+            nudge = rng.normal(size=base.shape)
+            nudge -= (nudge * base).sum(axis=1, keepdims=True) * base   # square to the ray
+            nudge /= np.linalg.norm(nudge, axis=1, keepdims=True)
+            beside.append(base + sign * 1e-4 * nudge)
+        world = np.vstack([base] + beside)   # the rays in the world, where the faces are
+        world /= np.linalg.norm(world, axis=1, keepdims=True)
+        wall = CUBE_HALF / np.abs(world).max(axis=1)
+        exact = ExactCaster(model, -1, (0, 1, 0, 0, 0, 0))
+        gpu = mid360.GpuCaster(model, -1, (0, 1, 0, 0, 0, 0))
+        try:
+            for label, rotation in (("on the world axes", np.eye(3)),
+                                    ("turned", _rotation("z", 30.0) @ _rotation("x", 180.0))):
+                with self.subTest(sensor=label):
+                    local = world @ rotation   # the same world rays, in the sensor's frame
+                    expected = exact.cast(np.zeros(3), rotation, local, data)
+                    got = gpu.cast(np.zeros(3), rotation, local, data)
+                    np.testing.assert_allclose(expected, wall, rtol=0.0, atol=1e-6)
+                    self.assertFalse(np.isnan(got).any(), np.flatnonzero(np.isnan(got)))
+                    np.testing.assert_allclose(got, expected, rtol=0.0, atol=MAX_EDGE_ERROR)
         finally:
             gpu.close()
 

@@ -2,26 +2,44 @@
 
 Usage: h12_mujoco.py [--h12 | --g1] [--headless] [--task NAME] [--layout N]
 [--style N] [--seed N] [--timing | --duration S]. The robot is chosen
-(sim_common.select_robot) and the GPU checked (sim_common.require_gpu: either
-sim stops here without one) before the H1-2's imports, and --g1 hands the whole
-command line to g1.g1_mujoco.main. The H1-2's loop is sim_loop below.
+(sim_common.select_robot) before the H1-2's imports, and --g1 hands the whole
+command line to g1.g1_mujoco.main. Each runner parses its command line, then
+checks the GPU (sim_common.require_gpu: either sim stops there without one), so
+--help and a usage error need no GPU; the H1-2 does both before its imports. The
+H1-2's loop is sim_loop below.
 """
+import argparse
 import sys
 
 import sim_common
 
-# Both robots' sims render their cameras and the lidar's rays through EGL on the
-# GPU, so either stops here without one. The G1 is dispatched before the H1-2
-# imports below, which need magpie_msgs and the H1-2's CL_Assets files: the G1
-# reads only CL_Assets/g1, and its test containers do not provide magpie_msgs.
+
+def _parser() -> argparse.ArgumentParser:
+    """Return the H1-2 runner's argument parser."""
+    parser = argparse.ArgumentParser(description="Run the H1-2 RoboCasa MuJoCo sim")
+    sim_common.add_common_args(
+        parser,
+        task_help="RoboCasa env name (e.g. TurnOnToasterOven), Battery for the "
+                  "battery workcell (CL_Assets/mujoco_assets/battery), or Blank for "
+                  "the robot alone on a floor (no --layout or --style). "
+                  "Omit to launch a random registered kitchen task.",
+    )
+    return parser
+
+
+# The G1 is dispatched before the H1-2 imports below, which need magpie_msgs and
+# the H1-2's CL_Assets files: the G1 reads only CL_Assets/g1, and its test
+# containers do not provide magpie_msgs. The H1-2 parses its command line and
+# checks the GPU (its cameras and the lidar's rays render through EGL on it) first.
 if __name__ == "__main__":
     _robot = sim_common.select_robot(sys.argv[1:])
-    sim_common.require_gpu()
     if _robot == "g1":
         from g1 import g1_mujoco
         sys.exit(g1_mujoco.main(sys.argv[1:]))
+    _PARSER = _parser()
+    _ARGS = sim_common.parse_args(_PARSER, sys.argv[1:], "h12")
+    sim_common.require_gpu()
 
-import argparse
 import os
 import threading
 
@@ -308,15 +326,11 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
 
     # The executor thread serves the grippers and the band toggle. ros_bridge is
     # not on it: the main loop calls its tick(), whose renderer GL context is
-    # thread-affine.
+    # thread-affine. The thread starts just before the loop's try, whose finally
+    # shuts it down.
     executor = rclpy.executors.MultiThreadedExecutor()
     for node in (measurement, hand_right, hand_left):
         executor.add_node(node)
-    executor_thread = threading.Thread(target=executor.spin, daemon=True, name="ros_bridge_exec")
-    executor_thread.start()
-    print("[h12_mujoco] ROS bridges up: rt/lowstate+rt/lowcmd, /clock, "
-          "RGBD /realsense/{head,left_hand,right_hand}, livox lidar+imu, "
-          "/{left,right}/gripper/*, /elastic_band/toggle")
 
     # The viewer draws its own MjData, refreshed from data by the viewer thread;
     # its mouse perturbation forces come back through view_sync.
@@ -369,6 +383,11 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
 
     timings.reset(float(data.time))
     pacer = RealtimePacer(model.opt.timestep, sim_rate)
+    executor_thread = threading.Thread(target=executor.spin, daemon=True, name="ros_bridge_exec")
+    executor_thread.start()
+    print("[h12_mujoco] ROS bridges up: rt/lowstate+rt/lowcmd, /clock, "
+          "RGBD /realsense/{head,left_hand,right_hand}, livox lidar+imu, "
+          "/{left,right}/gripper/*, /elastic_band/toggle")
     try:
         while True:
             if viewer and not handle.is_running():
@@ -439,14 +458,15 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             pacer.wait()
             timings.maybe_report(float(data.time), ros_bridge.stats)
     finally:
+        # A DeliGrasp settle waits on the sim clock, which no longer advances: end it first,
+        # whatever the viewer's shutdown does, so its goal aborts and the executor's worker
+        # thread can exit.
+        hand_right.stop()
+        hand_left.stop()
         if view_sync is not None:
             view_sync.stop()
         if handle is not None:
             handle.close()
-        # A DeliGrasp settle waits on the sim clock, which no longer advances: end it so its
-        # goal aborts and the executor's worker thread can exit.
-        hand_right.stop()
-        hand_left.stop()
         executor.shutdown()
         ros_bridge.shutdown()
         for node in (measurement, hand_right, hand_left, ros_bridge):
@@ -456,15 +476,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run the H1-2 RoboCasa MuJoCo sim")
-    sim_common.add_common_args(
-        parser,
-        task_help="RoboCasa env name (e.g. TurnOnToasterOven), Battery for the "
-                  "battery workcell (CL_Assets/mujoco_assets/battery), or Blank for "
-                  "the robot alone on a floor (no --layout or --style). "
-                  "Omit to launch a random registered kitchen task.",
-    )
-    args = sim_common.parse_args(parser, sys.argv[1:], "h12")
+    args = _ARGS
 
     task = args.task
     if task is None:
@@ -474,7 +486,7 @@ if __name__ == "__main__":
         task = sim_common.resolve_task(
             task, seed=args.seed, tag="h12_mujoco",
             robot_task=lambda name: battery_env.canonical_task(name) or blank_env.canonical_task(name))
-    sim_common.refuse_kitchen_args(parser, args, task, blank_env.TASKS)
+    sim_common.refuse_kitchen_args(_PARSER, args, task, blank_env.TASKS)
 
     sim_loop(task, viewer=not args.headless,
              layout=args.layout, style=args.style, seed=args.seed, timing=args.timing,

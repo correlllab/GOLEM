@@ -211,15 +211,10 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     print(f"[g1_mujoco] task goal: {measurement.publish_goal()!r}")
 
     # The executor thread serves the band toggle and the parameter services.
-    # ros_bridge is not on it: the main loop calls its tick() between steps.
+    # ros_bridge is not on it: the main loop calls its tick() between steps. The
+    # thread starts just before the loop's try, whose finally shuts it down.
     executor = rclpy.executors.MultiThreadedExecutor()
     executor.add_node(measurement)
-    executor_thread = threading.Thread(target=executor.spin, daemon=True, name="ros_bridge_exec")
-    executor_thread.start()
-    print("[g1_mujoco] ROS bridges up: rt/lowstate, rt/lowcmd, "
-          "rt/dex3/{left,right}/{cmd,state}, /clock, "
-          + ("/livox/lidar, /livox/imu, " if sensors.lidar else "")
-          + ("/realsense/head/*, " if sensors.camera else "") + "/robocasa/*, /elastic_band/toggle")
 
     # The viewer draws its own MjData, refreshed from data by the viewer thread;
     # its mouse perturbation forces come back through view_sync.
@@ -256,6 +251,12 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # The real-time factor log's sim time, wall time and time slept since its last line.
     log_sim, log_wall, slept = float(data.time), time.time(), 0.0
 
+    executor_thread = threading.Thread(target=executor.spin, daemon=True, name="ros_bridge_exec")
+    executor_thread.start()
+    print("[g1_mujoco] ROS bridges up: rt/lowstate, rt/lowcmd, "
+          "rt/dex3/{left,right}/{cmd,state}, /clock, "
+          + ("/livox/lidar, /livox/imu, " if sensors.lidar else "")
+          + ("/realsense/head/*, " if sensors.camera else "") + "/robocasa/*, /elastic_band/toggle")
     try:
         while max_steps is None or steps < max_steps:
             if viewer and not handle.is_running():
@@ -296,9 +297,11 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             ros_bridge.tick()
             steps += 1
             if steps % task_every == 0:
+                # measurement.tick() resets objects on request: it writes data, which the
+                # viewer's sync thread copies under physics_lock.
                 with physics_lock:
                     env.update_state()          # before _check_success
-                done = measurement.tick()
+                    done = measurement.tick()
             if done and not _success:
                 print("[g1_mujoco] task success (debounced).")
             _success = done
@@ -346,6 +349,8 @@ def main(argv):
                                        robot_task=lambda name: battery_env.canonical_task(name)
                                        or blank_env.canonical_task(name))
     sim_common.refuse_kitchen_args(parser, args, task, blank_env.TASKS)
+    # The camera and the lidar's rays render through EGL on the GPU: stop here without one.
+    sim_common.require_gpu()
 
     sim_loop(task, viewer=not args.headless,
              layout=args.layout, style=args.style, seed=args.seed, timing=args.timing,

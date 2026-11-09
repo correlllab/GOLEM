@@ -147,7 +147,7 @@ def test_lidar_thread_matches_live_casts():
     data = _standing(model)
     config = bridge.SensorConfig()
     got = []
-    scans = bridge._LidarScans(model, data, "", config, got.append)
+    scans = bridge._LidarScans(model, "", config, got.append)
     sensor = lidar.Mid360(model, "")
     live = lidar.make_scanner(sensor.make_caster(), config.lidar_points, config.lidar_hz)
     try:
@@ -169,7 +169,8 @@ def test_lidar_thread_matches_live_casts():
             t = float(data.time) - model.opt.timestep
             if schedule.due(t):
                 _submit(scans, data, t)
-                frame = live.update(sensor.snapshot(data, model.geom_rgba[:, 3].copy(),
+                position, rotation = sensor.pose(data)
+                frame = live.update(mid360.Snapshot(position, rotation, data, model.geom_rgba[:, 3].copy(),
                                                     model.mat_rgba[:, 3].copy()), t)
                 if frame is not None:
                     want.append(sm.livox_custom_msg_cdr(frame))
@@ -198,7 +199,7 @@ def test_lidar_thread_sees_runtime_alpha_edits():
     data = _standing(model)
     screen = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "screen_geom")
     got = []
-    scans = bridge._LidarScans(model, data, "", bridge.SensorConfig(), got.append)
+    scans = bridge._LidarScans(model, "", bridge.SensorConfig(), got.append)
     period = scans.interval  # s of sim time between casts
     # Cast indices: the geom screen hidden over 0.2-0.4 s, the material one over 0.3-0.5 s.
     geom_hidden = range(round(0.2 / period), round(0.4 / period))
@@ -236,17 +237,23 @@ def test_casts_come_every_batch_or_every_frame():
     """The physics submits a cast every caster's batch_s, or every frame period when frames come faster.
 
     So every frame is cast from a pose of its own: at 100 Hz the GPU caster's 20 ms batch would
-    merge frames. Skips, passing, without a GPU.
+    merge frames. Checked on the interval and on the casts that 0.2 s of physics steps submit.
+    Skips, passing, without a GPU.
     """
     if _no_gpu():
         return
     model = _model()
     data = _standing(model)
     batch = mid360.GpuCaster.batch_s
+    step = model.opt.timestep
     for hz, interval in ((10.0, batch), (100.0, 0.01)):
-        scans = bridge._LidarScans(model, data, "", bridge.SensorConfig(lidar_hz=hz), [].append)
+        scans = bridge._LidarScans(model, "", bridge.SensorConfig(lidar_hz=hz), [].append)
         try:
             assert scans.caster.batch_s == batch and scans.interval == interval, (hz, scans.interval)
+            # 0.2 s of physics steps: a cast at 0 and then one every interval
+            for k in range(round(0.2 / step) + 1):
+                scans.tick(data, k * step)
+            assert scans.casts == round(0.2 / interval) + 1, (hz, scans.casts)
         finally:
             scans.close()
 
@@ -347,6 +354,7 @@ def test_g1_compressed_not_encoded_without_a_subscriber():
     def counting(name):
         """Return sm's encoder `name` that also records its calls."""
         def encode(*args, **kwargs):
+            """Record the call, then encode as sm's encoder does."""
             encoded.append(name)
             return real[name](*args, **kwargs)
         return encode

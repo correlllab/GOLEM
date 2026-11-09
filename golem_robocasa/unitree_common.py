@@ -145,6 +145,11 @@ class _LayoutError(Exception):
     """Report that a LowState_ field was not found where a probe expected it."""
 
 
+def _pad4(ser):
+    """Return serialized CDR bytes padded with zeros to a multiple of 4, as DataWriter.write pads them."""
+    return ser.ljust((len(ser) + 3) & ~3, b'\0')
+
+
 # A float32 and a uint32 whose four little-endian bytes are all distinct and non-zero.
 _PROBE_F32 = float(np.frombuffer(bytes.fromhex('11223344'), '<f4')[0])
 _PROBE_U32 = 0x44332211
@@ -216,7 +221,8 @@ class LowStateWriter:
     ChannelPublisher.Write without a timeout, it writes whether or not a reader is matched.
 
     If the publisher has no cyclonedds DataWriter, the SDK's LowState_ packer is missing, or the
-    bytes of a probe state differ from the SDK's, it logs one warning and takes the SDK's
+    bytes of a probe state differ from the SDK's (or building or checking them raises), it logs
+    one warning and takes the SDK's
     path instead: it fills one LowState_, signs it with fast_crc() and hands it to
     publisher.Write. Not thread-safe: the physics thread owns it.
     """
@@ -251,6 +257,8 @@ class LowStateWriter:
                     reason = "the numpy bytes differ from the SDK's"
             except _LayoutError as e:
                 reason = f'the numpy path cannot be built: {e}'
+            except Exception as e:   # an SDK or cyclonedds change the probes did not foresee
+                reason = f'the numpy path failed its check: {e!r}'
         self.fast = reason is None
         if reason:
             log(f"WARNING: rt/lowstate: {reason}; using the SDK's serializer")
@@ -269,8 +277,7 @@ class LowStateWriter:
 
         def cdr(msg):
             """Return msg as DataWriter.write hands it to ddspy_write."""
-            ser = msg.serialize(use_version_2=self._use_version_2)
-            return ser.ljust((len(ser) + 3) & ~3, b'\0')
+            return _pad4(msg.serialize(use_version_2=self._use_version_2))
 
         def packed(msg):
             """Return the little-endian words the SDK's CRC runs over (the packed struct but its crc)."""
@@ -309,8 +316,7 @@ class LowStateWriter:
                          quat / np.linalg.norm(quat), rng.normal(size=3), rng.normal(size=3))
                 msg = self._fill_msg(*state)
                 msg.crc = sdk.Crc(msg)
-                ser = msg.serialize(use_version_2=self._use_version_2)
-                if bytes(self._fill(*state)) != ser.ljust((len(ser) + 3) & ~3, b'\0'):
+                if bytes(self._fill(*state)) != _pad4(msg.serialize(use_version_2=self._use_version_2)):
                     return False
             return True
         finally:
@@ -358,19 +364,21 @@ class LowStateWriter:
 
         tick is the uint32 tick (ms); q (rad), dq (rad/s) and tau (N*m) hold one value per motor
         slot filled; quat_wxyz, gyro (rad/s) and acc (m/s^2) are the IMU's, or all None to
-        leave the IMU fields as they are (zero unless an earlier write set them).
+        leave the IMU fields as they are (zero unless an earlier write set them). The fields
+        are float32, as in the IDL: a value beyond float32's range is written as inf on the
+        numpy path (numpy warns), while the SDK's serializer raises.
         """
         if self.fast:
             return bytes(self._fill(tick, q, dq, tau, quat_wxyz, gyro, acc))
         msg = self._fill_msg(tick, q, dq, tau, quat_wxyz, gyro, acc)
         msg.crc = self._crc.Crc(msg)
-        ser = msg.serialize(use_version_2=self._use_version_2)
-        return ser.ljust((len(ser) + 3) & ~3, b'\0')
+        return _pad4(msg.serialize(use_version_2=self._use_version_2))
 
     def write(self, tick, q, dq, tau, quat_wxyz, gyro, acc):
         """Publish the state on rt/lowstate; the arguments are bytes_for's.
 
-        A write cyclonedds refuses is reported in a rate-limited warning, as the SDK's
+        A value beyond float32's range goes out as bytes_for says (inf on the numpy path, a
+        raise on the SDK's). A write cyclonedds refuses is reported in a rate-limited warning, as the SDK's
         ChannelPublisher.Write prints and returns.
         """
         if not self.fast:

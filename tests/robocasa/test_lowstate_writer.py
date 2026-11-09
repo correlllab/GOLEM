@@ -156,6 +156,22 @@ class LowStateWriterTests(unittest.TestCase):
         self.assertEqual(len(pub.samples), 1)
         self.assertEqual(sdk_bytes(pub.samples[0], None), sdk_bytes(sdk_message(6, 27, *state), None))
 
+    def test_an_unforeseen_error_in_the_check_takes_the_sdk_path(self):
+        """Any exception while building the numpy path leaves it off, with one warning naming it."""
+        def broken(self):
+            """Fail as an SDK change the probes do not know would."""
+            raise TypeError("unexpected SDK layout")
+
+        pub = dds_publisher()
+        with mock.patch.object(LowStateWriter, '_build', broken):
+            writer, lines = quiet(LowStateWriter, pub, 6, 27)
+        self.assertFalse(writer.fast)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("unexpected SDK layout", lines[0])
+        self.assertIn("SDK's serializer", lines[0])
+        state = next(random_states(np.random.default_rng(5), 27, 1))
+        self.assertEqual(writer.bytes_for(*state), sdk_bytes(sdk_message(6, 27, *state), None))
+
     def test_layout_mismatch_takes_the_sdk_path(self):
         """Bytes that differ from the SDK's at start-up leave the fast path off, with one warning."""
         real_fill = LowStateWriter._fill

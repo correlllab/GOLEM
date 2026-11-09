@@ -279,6 +279,11 @@ class H12Sensors:
     renders, encodes or publishes.
     """
 
+    # The camera snapshots' MjData (_capture_camera_snapshot), made on the first frame; an
+    # empty list for a model with flexes or skins, which takes full copies.
+    _camera_slots = None
+    _camera_slot_count = 0
+
     def __init__(
         self,
         node,
@@ -560,7 +565,7 @@ class H12Sensors:
         flexes or skins, whose scenes read more than those fields, takes a full
         copy of self.data instead.
         """
-        slots = getattr(self, "_camera_slots", None)
+        slots = self._camera_slots
         if slots is None:
             full_copy = self.model.nflex > 0 or self.model.nskin > 0
             slots = self._camera_slots = [] if full_copy else [
@@ -605,6 +610,9 @@ class H12Sensors:
         # Sites are hidden: a hand camera looks straight at robosuite's
         # grip_site, which is faint in colour but solid in depth.
         self._scene_opt.sitegroup[:] = 0
+        # Rangefinder rays are not drawn: no camera sees them, and the partial snapshot does
+        # not carry the sensor data they are drawn from.
+        self._scene_opt.flags[mujoco.mjtVisFlag.mjVIS_RANGEFINDER] = 0
 
     def _depth_mm(self, depth):
         """Return depth (m) as 16UC1 mm, with no surface (far plane, non-finite, <= 0) as 0.

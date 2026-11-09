@@ -125,7 +125,7 @@ def _record_pairs(model, data, steps):
     """Return the geom pairs (lower id first) MuJoCo's collision passes to its geom filter over steps physics steps.
 
     A contact filter set with mujoco.set_mjcb_contactfilter replaces MuJoCo's own
-    contype/conaffinity test (mj_collideGeoms in MuJoCo 3.3.1's engine_collision_driver.c)
+    contype/conaffinity test (mj_collideGeoms in MuJoCo 3.17.0's engine_collision_driver.c)
     after the body-pair filters and the broadphase have run, so this filter applies that test
     itself: it records a pair and lets it through when the test passes, and drops it otherwise,
     so the physics stepped is the model's own. The filter is process-global; the previous one
@@ -167,8 +167,9 @@ class FixtureCollisionTests(unittest.TestCase):
     def test_only_fixture_internal_pairs_are_excluded(self):
         """Over 100 steps from the spawn, the exclusion removes exactly the rule's pairs, none with a robot or object geom.
 
-        Each robot in the surface probe's kitchen; then the G1 in the resting check's kitchens,
-        which hold objects and a loose fixture whose pairs must all be kept.
+        The model's contype/conaffinity table loses exactly those pairs too, and a second call
+        changes nothing. Each robot in the surface probe's kitchen; then the G1 in the resting
+        check's kitchens, which hold objects and a loose fixture whose pairs must all be kept.
         """
         cases = [(robot, sim_common.random_task(seed=SEED)) for robot in KITCHENS]
         cases += [("g1", task) for task in RESTING_TASKS]
@@ -180,12 +181,14 @@ class FixtureCollisionTests(unittest.TestCase):
                 spec = mujoco.mjtState.mjSTATE_INTEGRATION
                 spawn = np.empty(mujoco.mj_stateSize(model, spec))
                 mujoco.mj_getState(model, data, spawn, spec)
-                expected_count = len({p for p in _bitmask_pairs(model, geoms.weld) if geoms.named(*p)})
+                table_before = _bitmask_pairs(model, geoms.weld)
+                expected = {p for p in table_before if geoms.named(*p)}
 
                 before = _record_pairs(model, data, PAIR_STEPS)
                 mujoco.mj_setState(model, data, spawn, spec)
                 mujoco.mj_forward(model, data)
                 count = sim_common.exclude_fixture_collisions(env)
+                table_after = _bitmask_pairs(model, geoms.weld)
                 after = _record_pairs(model, data, PAIR_STEPS)
 
                 named = {p for p in before if geoms.named(*p)}
@@ -198,7 +201,16 @@ class FixtureCollisionTests(unittest.TestCase):
                 self.assertEqual(new, [], "pairs appeared that were not tested before")
                 removed = before - after
                 self.assertFalse(any(geoms.robot[g] or geoms.object[g] for p in removed for g in p))
-                self.assertEqual(count, expected_count)
+                # The static contype/conaffinity table loses exactly the rule's pairs and gains none.
+                self.assertEqual(sorted(geoms.label(p) for p in table_before - table_after),
+                                 sorted(geoms.label(p) for p in expected))
+                self.assertEqual(sorted(geoms.label(p) for p in table_after - table_before), [])
+                self.assertEqual(count, len(expected))
+                # A second call on the same model changes nothing.
+                bits = (model.geom_contype.copy(), model.geom_conaffinity.copy())
+                self.assertEqual(sim_common.exclude_fixture_collisions(env), 0)
+                np.testing.assert_array_equal(model.geom_contype, bits[0])
+                np.testing.assert_array_equal(model.geom_conaffinity, bits[1])
                 print(f"\n[{robot} {task}] {count} geom pairs excluded; broadphase pairs over "
                       f"{PAIR_STEPS} steps {len(before)} -> {len(after)}", flush=True)
                 del env

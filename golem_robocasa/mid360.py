@@ -29,10 +29,10 @@ caster's batch_s of sim time.
 
 Returns. A ray returns when its first hit lies between MIN_RANGE (the blind zone) and
 MAX_RANGE (the range at 10% reflectivity). The measured range is the true range plus
-Gaussian noise of RANGE_NOISE (1 sigma; the MID-360's 2 cm range precision); the blind zone
-and the maximum range apply to the true range. Every ray fired is a point of its frame: one
-without a return is (0, 0, 0) with its own offset_time and line, as the real driver
-publishes it, and consumers drop such points by range (FAST_LIO's blind).
+Gaussian noise of the scanner's range_noise (1 sigma; RANGE_NOISE, the MID-360's 2 cm range
+precision); the blind zone and the maximum range apply to the true range. Every ray fired is
+a point of its frame: one without a return is (0, 0, 0) with its own offset_time and line,
+as the real driver publishes it, and consumers drop such points by range (FAST_LIO's blind).
 
 Self returns. The sensor sits inside a shell of the body it is mounted on, so rays pass
 through that body's geoms (MuJoCo's bodyexclude). A ray whose first hit is any other geom
@@ -145,8 +145,10 @@ class GpuCaster:
     under MIN_RANGE are returned, for the scanner to drop.
 
     Threads. The GL context is current only inside cast() and close(), under GL_LOCK, so any
-    thread may build the caster and cast, one cast at a time. Call close() to free the GL
-    context; the caster otherwise frees it at exit.
+    thread may build the caster and cast, one cast at a time. The model copy, its MjData and
+    the scene are the caster's own, so cast() sets the copy's alpha and fills the scene before
+    it takes GL_LOCK. Call close() to free the GL context; the caster otherwise frees it at
+    exit, and the exit hook holds an unclosed caster alive until then.
     """
 
     # s of sim time between the scanner's update() calls. A cast costs about one render per
@@ -386,6 +388,7 @@ class Mid360Scanner:
         rng_seed seeds the range noise, so the same seed and calls give the same frames.
         """
         self.caster = caster
+        self.range_noise = RANGE_NOISE   # m, 1 sigma; 0 puts every point on the surface its ray hit
         self.pattern = load_pattern()
         self.points_per_frame = int(round(points_per_second / rate_hz))
         self.period = 1.0 / rate_hz
@@ -432,7 +435,7 @@ class Mid360Scanner:
         with np.errstate(invalid="ignore"):   # NaN, no hit, compares False
             valid = (self._dist >= MIN_RANGE) & (self._dist <= MAX_RANGE)
         measured = np.zeros(self.points_per_frame)
-        measured[valid] = self._dist[valid] + self._rng.normal(0.0, RANGE_NOISE, int(valid.sum()))
+        measured[valid] = self._dist[valid] + self._rng.normal(0.0, self.range_noise, int(valid.sum()))
         offset = np.round((self._when - self._timebase) * 1e9)
         points = self._directions * measured[:, None]
         return LidarFrame(self._timebase, offset.astype(np.uint32), points.astype(np.float32),
@@ -483,10 +486,11 @@ class ScanRing:
     completes to publish(frame). The caster casts on its own copy of the model and releases the
     GIL, so the casts run beside the physics; other runtime edits of the model do not reach it.
 
-    Backpressure. The ring holds one frame period of casts, the one being cast included. When it
-    is full, tick() waits for the thread (counted in waits, timed as the lidar_wait stage): a
-    published frame trails the sim by at most one frame period and no ray is dropped; the sim's
-    real-time factor drops instead.
+    Backpressure. The ring holds the whole casts that fit in one frame period (at least one), the
+    one being cast included. When it is full, tick() waits for the thread (counted in waits,
+    timed as the lidar_wait stage): a published frame trails the sim by at most one frame period
+    (one interval when the interval is longer) and no ray is dropped; the sim's real-time
+    factor drops instead.
 
     Threads. tick() runs on the physics thread between steps; it holds lock, when given, only
     for the copy, and the live model's alpha is read under it. publish runs on the scan thread.
@@ -504,7 +508,8 @@ class ScanRing:
         self.scanner = scanner
         self.caster = scanner.caster
         self.interval = float(interval)
-        self.slots = max(1, math.ceil(scanner.period / self.interval - 1e-9))
+        # Whole casts that fit in a frame period, so the ring never holds more than one period.
+        self.slots = max(1, math.floor(scanner.period / self.interval + 1e-9))
         self._live = model
         self._pose = pose
         self._publish = publish
@@ -549,12 +554,15 @@ class ScanRing:
         """Copy what a cast of data's kinematics at sim time t reads into a slot, for the thread.
 
         Waits for a free slot while the ring is full (see the class docstring); raises
-        RuntimeError if the scan thread has stopped meanwhile.
+        RuntimeError, without waiting, when the ring is full and the scan thread has stopped,
+        or once it stops during the wait.
         """
         self.casts += 1
         try:
             slot = self._free.get_nowait()
         except queue.Empty:
+            if not self._thread.is_alive():
+                raise RuntimeError("the lidar's scan thread has stopped") from None
             self.waits += 1
             wait_start = self.timings.start()
             slot = None

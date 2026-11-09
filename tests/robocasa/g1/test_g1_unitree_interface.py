@@ -249,6 +249,21 @@ def test_hand_commands_by_joint_name_and_mode_byte():
     assert np.all(DATA.ctrl[RESOLVER.hands["left"].ctrl] == 0.0)
 
 
+def _wait_matched(received, timeout=5.0):
+    """Write probe rt/lowstate samples until the reader appending to received has one, then clear it.
+
+    The probes leave the IMU fields as they are. Fails after timeout s of wall time.
+    """
+    n = len(BODY_JOINTS)
+    deadline = time.monotonic() + timeout
+    while not received:
+        assert time.monotonic() < deadline, f"no reader matched rt/lowstate within {timeout} s"
+        IFACE._low_state.write(0, np.zeros(n), np.zeros(n), np.zeros(n), None, None, None)
+        time.sleep(0.01)
+    time.sleep(0.05)   # s: probes still in flight arrive before the clear
+    received.clear()
+
+
 def test_lowstate_and_hand_state():
     """rt/lowstate goes out every step and hand state at 100 Hz, with the tick, mode_machine 5, CRC, joints and IMU.
 
@@ -261,7 +276,7 @@ def test_lowstate_and_hand_state():
     received = []
     reader = ChannelSubscriber(ui.TOPIC_LOWSTATE, LowState_)
     reader.Init(received.append, 0)
-    time.sleep(0.5)   # s: the reader matches the writer
+    _wait_matched(received)
     hand_writes = 0
 
     def count_hand(msg, *args):

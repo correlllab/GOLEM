@@ -8,8 +8,10 @@ to apply.
 """
 import threading
 import time
+import traceback
 
 import mujoco
+import numpy as np
 
 from mujoco_env import draw_band
 
@@ -60,7 +62,7 @@ class ViewerSync:
         self._draw = draw
         self._period = 1.0 / hz
         self._timings = timings
-        self._perturb = data.xfrc_applied.copy() * 0.0
+        self._perturb = np.zeros_like(data.xfrc_applied)
         self._stop = threading.Event()
         self._thread = None
 
@@ -80,11 +82,19 @@ class ViewerSync:
         self._data.xfrc_applied[:] = self._perturb
 
     def _run(self):
-        """Sync frames at the configured rate until stop() or the viewer closes."""
-        while not self._stop.is_set() and self._handle.is_running():
-            frame_start = time.perf_counter()
-            self._frame()
-            self._stop.wait(max(0.0, self._period - (time.perf_counter() - frame_start)))
+        """Sync frames at the configured rate until stop() or the viewer closes.
+
+        An exception ends the thread, logged with its traceback; the physics loop goes on with
+        the viewer no longer refreshed.
+        """
+        try:
+            while not self._stop.is_set() and self._handle.is_running():
+                frame_start = time.perf_counter()
+                self._frame()
+                self._stop.wait(max(0.0, self._period - (time.perf_counter() - frame_start)))
+        except Exception:
+            print("[viewer_sync] the viewer's sync thread stopped; the viewer no longer "
+                  "refreshes:\n" + traceback.format_exc(), flush=True)
 
     def _frame(self):
         """Copy the state, draw the overlay, sync the viewer and keep its mouse force."""

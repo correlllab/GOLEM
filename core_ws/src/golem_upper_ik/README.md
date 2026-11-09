@@ -268,8 +268,8 @@ model, IK and planner (`test_robot_model.py`, `test_ik_solver.py`, `test_planner
 robots with their collision models), the ROS I/O, command handler and follow gate
 (`test_ros_io.py`, `test_low_cmd_handler.py`), the controller and the nodes
 (`test_controller_loop.py`, `test_frame_task_server.py`), a start-up IK step with no
-solution (`test_startup_no_solution.py`) and that nothing imports `unitree_sdk2py`
-(`test_no_sdk.py`).
+solution (`test_startup_no_solution.py`), the goal loops against a scripted controller
+(`test_goal_loops.py`) and that nothing imports `unitree_sdk2py` (`test_no_sdk.py`).
 
 ## Tools
 

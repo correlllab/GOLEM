@@ -8,10 +8,6 @@ images** driven by two independent build systems that meet at runtime:
 2. **colcon** builds the ROS 2 workspace(s) at *container start*, from
    bind-mounted source, into a host-persisted cache.
 
-A third, standalone **CMake** build (MuJoCo MPC) is layered on top of the `ros`
-image with a dev loop that lets you rebuild it in-container without rebuilding
-the image — see [MuJoCo MPC dev loop](#mujoco-mpc-mjpc-dev-loop).
-
 The guiding principle throughout: **bake stable/heavy things into the image; keep
 fast-moving source on the host and bind-mount it in.** Almost every dependency is
 a git submodule, and almost every source tree is mounted, not copied — so the
@@ -31,14 +27,13 @@ is required before anything builds.
 | `CL_Assets` | both robots' URDFs, MJCFs and meshes (the G1's in `g1/`), Isaac USD (Git-LFS) |
 | `CL_isaaclab_sim` | Isaac Sim task/runtime code |
 | `unitree_sdk2_python` | Unitree DDS SDK (Python) |
-| `mujoco_mpc` | MuJoCo MPC fork (`badinkajink @ extended_hw_patched`) — see §7 |
 
 **`core_ws/src` submodules:** `cl_realsense`, `custom_ros_messages`, `estop`,
 `livox_ros_driver2`, `magpie_control`, `magpie_msgs`,
 `unitree_ros2`.
 
 **`core_ws/src` in-tree packages** (versioned directly in this repo, *not*
-submodules): `FAST_LIO`, `golem_ros2_models`, `golem_safety`, `golem_upper_ik`, `deploy_mjpc`,
+submodules): `FAST_LIO`, `golem_ros2_models`, `golem_safety`, `golem_upper_ik`,
 `golem_lowerbody_rl`, `golem_slam`, `golem_skills`, `golem_bringup`, `lmg_deploy`,
 `model_server`, and the G1's own package `dex_3`.
 
@@ -85,66 +80,47 @@ stack per domain.
 
 ## 3. `golem_base` (`docker/BaseDockerfile`)
 
-The shared foundation for the ROS and RoboCasa images.
-
-- **Base:** `nvidia/cuda:12.2.0-devel-ubuntu22.04`; env pins `ROS_DISTRO=humble`,
-  `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`, US apt mirror.
-- **apt:** `gcc-12`/`g++-12` (set as default via update-alternatives), cmake,
-  git/git-lfs, Python 3.10 (`python-is-python3`), and the X11/GL/Vulkan/EGL/OSMesa
-  runtime libs both simulators dlopen.
-- **ROS 2 Humble:** `ros-humble-ros-base` + `rmw-cyclonedds-cpp` + a few msg/TF
-  packages (`sensor-msgs-py`, `tf2-ros`, `geometry-msgs`, `cv-bridge`, …).
-- **uv:** installed to `/usr/local/bin` for fast, deterministic system pip installs.
-- **CycloneDDS 0.10.x from source** → `CYCLONEDDS_HOME=/cyclonedds/install`. Pinned
-  because the PyPI `cyclonedds` wheel (a transitive dep of `unitree_sdk2_python`)
-  references `dds/ddsi/q_radmin.h`, which was removed after 0.10.
-- **`unitree_sdk2_python`:** `COPY`'d from the local submodule checkout, installed
-  `uv pip --system`, then its sub-packages copied into site-packages.
-- **PyTorch cu130** (`torch`, `torchvision`) — the CUDA-13 wheels have native
-  `sm_120`/Blackwell (RTX 5070 Ti) support and bundle their own CUDA runtime.
-- **Kinematics libs:** `pin` (pinocchio), `pink`, `mink` — shared IK stack.
-- Build-time `http(s)_proxy` ARGs are cleared at the end so they don't leak into
-  child images.
+The shared foundation for the ROS and RoboCasa images: Ubuntu 22.04 on the
+digest-pinned CUDA 12.2 devel image, the dated Ubuntu and ROS apt snapshots
+(`docker/locks/apt-sources.sh`), ROS 2 Humble's `ros-base` with the CycloneDDS
+RMW, CycloneDDS 0.10.x built from source (the PyPI `cyclonedds` binding that
+`unitree_sdk2_python` needs includes a header removed after 0.10), the Unitree
+Python SDK from the submodule, PyTorch cu130 (native Blackwell support, its own
+CUDA runtime) and the kinematics libraries. The Dockerfile's comment above each
+step says what it installs and why; the package lists are there, not here.
 
 ---
 
 ## 4. `golem_ros` (`docker/RosDockerfile`)
 
-The workspace image. Layers are ordered **most-stable → least-stable** so that
-iterating on volatile pins doesn't bust the heavy layers above. `FROM golem_base`.
+The workspace image, `FROM golem_base`. Layers are ordered **most-stable →
+least-stable** so that iterating on volatile pins doesn't bust the heavy layers
+above. In order:
 
-1. **apt build/workspace deps:** `colcon`, `rosdep`, `vcstool`; apt
-   numpy/scipy/yaml/transforms3d (must match system C-extension ABIs); C++ libs
-   (`libpcl-dev`, `libeigen3-dev`, `libyaml-cpp-dev`, `libopencv-dev`); the
-   ament/rosidl build system; many `ros-humble-*` message/description/PCL/TF/RViz
-   packages; and **apt `pinocchio`** (C++ symbols) alongside base's pip `pin`.
-2. **Livox-SDK2 from source** — required by `livox_ros_driver2`. Placed before the
-   Python layers so pip iteration doesn't rebuild it.
-3. **Controller / IK pip stack:** `numpy<2` forced first (binds C-extensions to the
-   1.x ABI), `pin-pink`, `qpsolvers` + `quadprog`/`proxsuite`, `meshcat`, `open3d`, …
-4. **Vision ML stack** (exact-pinned): `transformers==4.47.1`, `google-genai`,
-   `timm`, `ultralytics`, `opencv-python-headless`, CLIP (from a git SHA), etc.
-5. **SAM3** — cloned to `/opt/sam3` and exposed via `PYTHONPATH` (its `setup.py`
-   produces a bogus version, so it is *not* pip-installed).
-6. **setuptools/wheel/numpy clamp:** restores `numpy<2`, `setuptools==59.6.0`,
-   `wheel<0.44` (later pip steps bump them). This clamp recurs several times in the
-   file — colcon's `python_setup_py` and torch require `setuptools<80`, and the
-   80+-era `distutils-precedence.pth` otherwise spams `_distutils_hack` errors.
-7. **Nav2 / SLAM / rqt / teleop / rosbag2 / foxglove** — appended late.
-8. **GraspGenX** (NVlabs) — installed in-place with an elaborate constraint dance:
-   build a modern-setuptools wheel in a staging dir (the system setuptools 59.6 is
-   too old for its PEP 621 metadata), install `--no-deps`, freeze the whole env as
-   an *additive constraint*, then add deps + downgrade `huggingface-hub` for
-   `diffusers`, and add `viser` — all pinned so nothing already-installed moves.
-9. **MuJoCo MPC** — see §7.
-10. **G1 additions** (last layers): apt `ros-humble-joint-state-publisher-gui`
-    (`golem_ros2_models`' `display.launch.py`) and `python3-evdev` (the
-    `mujoco_mpc` fork's `wasd_teleop.py`), then pip `onnxruntime==1.23.2`
-    (`golem_lowerbody_rl` runs HOMIE's walking policy with it; imported only
-    by its ONNX backend) through lock step `ros-amd64-13.txt`.
+1. **apt:** the colcon / ament / rosidl build system, the C++ libraries the
+   workspace links, the ROS packages it builds against, and apt `pinocchio`.
+2. **Livox-SDK2 from source**, which `livox_ros_driver2` links, at the commit
+   every image uses.
+3. **Controller / IK pip stack:** base's NumPy-2 pinocchio closure is removed,
+   then `numpy<2` binds the C extensions to the 1.x ABI of apt's scipy and
+   pinocchio.
+4. **Vision ML stack** (exact-pinned) and CLIP at a fixed commit.
+5. **SAM3** at a fixed commit, on `PYTHONPATH` (its `setup.py` builds a bogus
+   package name, so it is not pip-installed).
+6. **The setuptools / wheel / numpy clamp** (§9).
+7. **Tkinter, Nav2 / SLAM / rqt / teleop / rosbag2.**
+8. **GraspGenX** (NVlabs): its wheel is built against a newer setuptools in a
+   staging directory (the system setuptools 59.6 predates its PEP 621
+   metadata) and installed `--no-deps`; the whole environment is then frozen as
+   an *additive constraint*, so its dependencies, `diffusers` (with an older
+   `huggingface-hub`) and `viser` install without moving anything installed.
+9. **The RealSense driver, OctoMap and the G1's additions** (last layers),
+   the G1's through lock step `ros-amd64-11.txt`.
+
+Each step's comment in the Dockerfile names its packages and why each is there.
 
 **Runtime build:** `launch_ros.sh` runs `colcon build --symlink-install` on
-`core_ws` **at container start** (see §8). The image bakes only the *toolchain* and
+`core_ws` **at container start** (see §7). The image bakes only the *toolchain* and
 Python deps; the ROS packages themselves are compiled from the bind-mounted source.
 
 ---
@@ -168,9 +144,9 @@ Single-stage, `FROM golem_base`. Provides the MuJoCo + RoboCasa kitchen simulato
   is needed. `pip check` still reports robosuite's `mujoco<3.10` and
   RoboCasa's `mujoco==3.3.1` requirements, which the image overrides.
   `golem_robocasa` calls 3.17.0's API directly.
-- **RoboCasa + robosuite** installed from git (neither fully on PyPI; robosuite
-  from `master`). Also `robosuite_models`, `mimicgen`, `mink==0.0.5` — installed
-  only to silence import-time "not installed" warnings.
+- **RoboCasa + robosuite** installed from git at fixed commits (neither fully on
+  PyPI). Also `robosuite_models`, `mimicgen`, `mink==0.0.5` — installed only to
+  silence import-time "not installed" warnings.
   - *Side effect:* `lerobot` (a RoboCasa transitive) pins `torch==2.7.1`, which
     downgrades base's cu130 torch to a CPU/cu121 build **in this image only**
     (accepted; Isaac uses its own NVIDIA image).
@@ -187,7 +163,7 @@ Single-stage, `FROM golem_base`. Provides the MuJoCo + RoboCasa kitchen simulato
   even when that build fails (`CLAUDE.md` §8). `build/` is left in place.
 - The G1 sim reads none of HOMIE's files, so this image has no onnxruntime.
   The G1 sim's robot description arrives through the base file's `CL_Assets`
-  bind mount (§8), not the image.
+  bind mount (§7), not the image.
 
 ---
 
@@ -202,8 +178,7 @@ the Unitree Python SDK, simulator dependencies, and ROS Jazzy tooling.
 
 Source and assets are bind-mounted. Persistent caches default to
 `container_cache/isaac/{ov,nvidia,local_share_ov,isaacsim}`. Set `GOLEM_CACHE_DIR`
-to relocate them. Existing `CL_isaaclab_sim/.isaac_cache` contents may be copied
-there with containers stopped; otherwise caches regenerate on first launch.
+to relocate them; caches regenerate on first launch.
 
 `launch_isaac.sh` accepts a task name or `--task NAME`, `--headless`, and
 `--reset-cache`, `--hand_type magpie|inspire`, and `--fix_base` for a bench
@@ -224,43 +199,11 @@ container's libc unchanged.
 
 ---
 
-## 7. MuJoCo MPC (MJPC) dev loop
-
-MJPC is a CMake/FetchContent project (it fetches and builds its own MuJoCo 3.2.3 +
-gRPC + abseil + glfw). It is **built standalone, outside colcon** — the thin ROS
-bridge `deploy_mjpc` is the only mjpc-related colcon package.
-
-**At image build** (`RosDockerfile` MJPC block): the `mujoco_mpc` submodule's
-pinned commit is cloned (step 2); then `agent_server` is compiled with
-clang-13/Ninja (step 4), the importable
-`mujoco_mpc` package is installed into `dist-packages` (the durable import target),
-the build's own `libmujoco.so` is staged into `/usr/local/lib`, and — instead of
-deleting `build/` — the whole warm build tree is stashed to `/opt/mjpc-build-seed`.
-The source clone is then removed (the submodule bind mount re-supplies it).
-
-The three build fixes that used to be `sed`'d in at build time now live as **real
-commits on the fork's `extended_hw_patched` branch** (drop `ui_agent_server`,
-magpie `patch`→`copy`, case-insensitive `.STL` globs), so the baked build and the
-mounted source are byte-identical — a requirement for the warm cache below.
-
-**At runtime:** `docker-compose` mounts the submodule source over
-`/home/code/mujoco_mpc` and a persistent build cache
-(`container_cache/mjpc_build`) at the exact in-tree build path. On first launch
-`launch_ros.sh` hydrates the cache from the seed and refreshes source timestamps to avoid
-reusing stale objects for local edits. The first `docker exec … rebuild_mjpc.sh` revalidates source objects while retaining built dependencies; subsequent launches
-use normal incremental builds. `rebuild_mjpc.sh` rebuilds `agent_server` and copies it
-into `dist-packages` (the path `from mujoco_mpc import agent` auto-spawns).
-
-> The submodule gitlink and `MJPC_REF` are pinned to the **same** patched-fork SHA.
-> Bumping mjpc = rebase the patches, push, move both pins, rebuild the image.
-
----
-
-## 8. Build & run orchestration
+## 7. Build & run orchestration
 
 **Build** — `docker/scripts/docker_build.sh [--pull] [--no-cache] [service ...]`.
-Defaults to all three services. Builds `golem_base` first for ROS/RoboCasa;
-propagates the committed MJPC pin into the ROS build. `--pull` refreshes public
+Defaults to all three services. Builds `golem_base` first for ROS/RoboCasa.
+`--pull` refreshes public
 upstream images (base and Isaac); child builds use the freshly built local
 `golem_base`, rather than attempting to pull that private local tag.
 
@@ -312,17 +255,13 @@ Compose is headless by itself. The wrapper selects
 host's X access policy. `--headless` avoids desktop mounts entirely. Every
 service uses the NVIDIA runtime and host networking.
 
-The ROS image bakes the pinned Unitree C++ SDK at `/opt/unitree_install`.
-No SDK clone or SDK-cache mount is needed at startup. The separate MJPC warm
-build cache and source mounts remain for controller development.
-
 `.dockerignore` restricts build context to sources actually copied by the
 Dockerfiles: the Unitree Python SDK and Livox driver. Simulation source, model
 weights, and assets stay outside the context and arrive through bind mounts.
 
 ---
 
-## 9. The colcon workspace(s)
+## 8. The colcon workspace(s)
 
 colcon is invoked **at container start**, never at image-build time, against
 bind-mounted source, with output persisted on the host:
@@ -339,7 +278,7 @@ are near-instant; wipe the host dir for a clean rebuild.
 
 ---
 
-## 10. Cross-cutting invariants & gotchas
+## 9. Cross-cutting invariants & gotchas
 
 - **`setuptools==59.6.0`, `wheel<0.44`, `numpy<2`** are re-clamped after any pip
   step that bumps them — required for colcon's `python_setup_py`, torch, and the
@@ -347,9 +286,9 @@ are near-instant; wipe the host dir for a clean rebuild.
   `distutils-precedence.pth`).
 - **CycloneDDS is pinned to 0.10.x from source** in every base/Isaac image (PyPI
   wheel needs the removed `q_radmin.h`).
-- **MuJoCo versions are pinned per image and must not drift:** `3.2.3` in `ros`
-  (matches the mjpc C++ server's ABI byte-for-byte), `3.17.0` in `robocasa`
-  (with the patches in `docker/patches/`, §5).
+- **MuJoCo is pinned per image:** `3.17.0` in `robocasa` (with the patches in
+  `docker/patches/`, §5); `ros` keeps `golem_base`'s, which nothing in the
+  workspace imports.
 - **Layer-order discipline:** heavy/stable layers first; volatile pins appended
   last. New deps go at the *end* of a Dockerfile so they don't bust cached layers.
 - **CUDA wheel split:** `ros`/base use torch **cu130**; Isaac inherits NVIDIA's
@@ -358,7 +297,7 @@ are near-instant; wipe the host dir for a clean rebuild.
 
 ---
 
-## 11. Common commands
+## 10. Common commands
 
 ```bash
 # one-time
@@ -378,8 +317,4 @@ docker/scripts/docker_run.sh isaac
 # inside the ros container
 ros2 launch golem_bringup h12_sim.launch.py
 colcon build --symlink-install                   # force a rebuild
-
-# MJPC iteration (inside golem_ros)
-docker exec -it golem_ros /home/code/h12_sim_scripts/rebuild_mjpc.sh            # C++ edit
-docker exec -it golem_ros /home/code/h12_sim_scripts/rebuild_mjpc.sh --install  # + assets/proto
 ```

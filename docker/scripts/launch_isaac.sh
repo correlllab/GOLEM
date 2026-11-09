@@ -9,8 +9,8 @@
 #   --reset-cache  delete Isaac's texture cache first
 #   --             pass the rest to sim_main.py; so does any other --option,
 #                  with everything after it (e.g. --hand_type inspire, --fix_base)
-# Environment: ROS_DOMAIN_ID (1..232, 1 when unset), HEADLESS=1 (as
-#   --headless), DISPLAY, ISAACLAB_PATH (default /workspace/golem/isaac/IsaacLab).
+# Environment: ROS_DOMAIN_ID (1..232, 1 when unset), DISPLAY, ISAACLAB_PATH
+#   (default /workspace/golem/isaac/IsaacLab).
 # Exit status: 1 on a refused domain, 2 on --task without a name; otherwise
 # the simulator's.
 set -e
@@ -29,7 +29,6 @@ export LD_LIBRARY_PATH=${CYCLONEDDS_HOME}/lib:/isaac-sim/exts/isaacsim.ros2.brid
 
 TASK="base"
 HEADLESS_FLAG=""
-[ "${HEADLESS:-0}" = "1" ] && HEADLESS_FLAG="--headless"
 # Run headless when no display is reachable (SSH without X11, CI).
 if [ -z "$HEADLESS_FLAG" ] && [ -z "${DISPLAY:-}" ]; then
     echo "[launch_isaac] no DISPLAY set — forcing --headless"

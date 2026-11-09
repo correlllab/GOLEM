@@ -34,7 +34,6 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
       - QT_X11_NO_MITSHM=1
-      - LIBGL_ALWAYS_INDIRECT=0
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-1}
     volumes:
       - type: bind
@@ -103,7 +102,6 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
       - QT_X11_NO_MITSHM=1
-      - LIBGL_ALWAYS_INDIRECT=0
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-1}
       # H1-2: m of clearance between the robot and any non-floor geom at
       # spawn. Empty: the task's spawn_margin, else 0.20 (h12_mujoco.py).

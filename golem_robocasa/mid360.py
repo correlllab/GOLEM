@@ -37,8 +37,17 @@ of the robot gives no point, so the scan holds no returns from the robot's own l
 the limbs still occlude what is behind them. Only geoms in the caster's geomgroup are hit;
 MuJoCo's ray functions also skip geoms with alpha 0 (RoboCasa's placement regions and
 hidden collision boxes).
+
+Casters. CpuCaster casts every ray exactly on the CPU; GpuCaster reads the ranges from depth
+images the GPU renders around the sensor (EGL), at a fraction of the cost, and follows the same
+rules (see its docstring for how close its ranges come). make_caster() picks one by the
+backend GOLEM_LIDAR_BACKEND names: the GPU wherever MuJoCo renders on a GPU through EGL, else
+the CPU (the Mac).
 """
+import atexit
+import copy
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor, wait
 from typing import NamedTuple
 
@@ -61,6 +70,27 @@ DEFAULT_THREADS = max(1, min(4, (os.cpu_count() or 1) // 4))
 # the work of about 10 rays in a kitchen.
 _MIN_RAYS_PER_THREAD = 250
 _EPS_T = 1e-9                        # s, tolerance on accumulated sim time
+
+BACKENDS = ("auto", "gpu", "cpu")    # make_caster's backends, GOLEM_LIDAR_BACKEND's values
+# Serialises OpenGL rendering across the process's threads: with two threads rendering in
+# their own contexts at once, NVIDIA's driver slows each render several-fold, and the GPU
+# caster's casts fall far behind beside the H1-2's cameras. GpuCaster holds it while it
+# renders; every other renderer in the process (the sims' cameras) should hold it around its
+# update_scene() and render() calls.
+GL_LOCK = threading.Lock()
+# GL_RENDERER substrings of software rasterisers, on which rendering is slower than the CPU
+# caster's exact rays.
+_SOFTWARE_RENDERERS = ("llvmpipe", "softpipe", "swrast", "software", "swiftshader")
+# The GPU caster's cube map: each face's (forward, up) in the world. The faces are aligned
+# with the world axes, so walls and floors aligned with them read back exactly (their depth
+# is constant across a pixel). A face's image x runs along forward x up, its y along up.
+_FACE_AXES = np.array([[[1, 0, 0], [0, 0, 1]], [[-1, 0, 0], [0, 0, 1]],
+                       [[0, 1, 0], [0, 0, 1]], [[0, -1, 0], [0, 0, 1]],
+                       [[0, 0, 1], [1, 0, 0]], [[0, 0, -1], [1, 0, 0]]], dtype=np.float64)
+_FACE_RIGHT = np.cross(_FACE_AXES[:, 0], _FACE_AXES[:, 1])
+# m along a face's axis, the renders' near plane: well inside the blind zone, so geometry
+# there still blocks the rays as it does on the CPU caster (the scanner then drops the return).
+_GPU_NEAR = 0.01
 
 
 class LidarFrame(NamedTuple):
@@ -190,6 +220,259 @@ class CpuCaster:
         robot = hit & self.robot_geoms[np.where(hit, geomid, 0)]
         dist[~hit | robot] = np.nan
         return dist
+
+
+class GpuCaster:
+    """Read each ray's range from depth images rendered on the GPU around the sensor (EGL).
+
+    The renders form a cube map: six 90-degree faces of width x width pixels, aligned with the
+    world axes, so every direction is covered whatever the sensor's orientation. A cast
+    renders the faces its rays fall in side by side into one offscreen image, reads it back
+    once, and gives each ray the depth of the pixel its direction falls in, divided by the
+    cosine of the ray's angle off the face's axis. Surfaces square to a face's axis read back
+    exactly; on surfaces seen obliquely and at silhouettes a ray takes its pixel centre's
+    range (tests/robocasa/test_mid360_gpu.py holds the agreement with CpuCaster).
+
+    The renders follow CpuCaster's rules. The caster draws its own copy of the model, in
+    which a geom is drawn, opaque, exactly when a ray would hit it: in geomgroup, alpha not 0
+    (the material's alpha when it has a material), not on exclude_body. A
+    segmentation render beside the depth tells which geom each pixel shows, so a ray whose
+    first hit is the robot gives no return. Range limits are CpuCaster's: no return past
+    MAX_RANGE; ranges under MIN_RANGE are returned, for the scanner to drop.
+
+    Threads. The GL context is current only inside cast() and close(), under GL_LOCK, so any
+    thread may build the caster and cast, one cast at a time. Call close() to free the GL
+    context; the caster otherwise frees it at exit.
+    """
+
+    # s of sim time between the scanner's update() calls. A cast costs about one render per
+    # face whatever its ray count, so the GPU casts fewer, larger batches than the CPU; this
+    # interval keeps the lidar thread a few times faster than real time beside the H1-2's
+    # cameras.
+    batch_s = 0.02
+
+    def __init__(self, model, exclude_body, geomgroup, width=512, robot_geoms=None):
+        """Render a copy of model, without the geoms of body id exclude_body (-1: none).
+
+        geomgroup is the 6 flags of the geom groups the rays hit; width is each face's size in
+        pixels. robot_geoms is a bool mask (ngeom,) of geoms whose first hit gives no return; by
+        default every geom of exclude_body's root subtree, none with exclude_body -1. Raises
+        RuntimeError, naming why, when the GPU cannot render the rays: MuJoCo not on EGL
+        (MUJOCO_GL), no EGL device, a software renderer, or a model the renders cannot match.
+        """
+        backend = os.environ.get("MUJOCO_GL", "")
+        if backend.strip().lower() != "egl":
+            raise RuntimeError(f"MUJOCO_GL is {backend!r}, not 'egl'")
+        if model.nflex:
+            raise RuntimeError("the model has flexes, which the renders do not match")
+        try:
+            from mujoco import egl
+            from OpenGL import GL
+        except ImportError as exc:
+            raise RuntimeError(f"no EGL: {exc}") from exc
+        self._egl = egl
+        self._gl = None
+        self._context = None
+        self.width = w = int(width)
+        self.exclude_body = int(exclude_body)
+        self.model = m = copy.copy(model)
+        if robot_geoms is not None:
+            self.robot_geoms = np.asarray(robot_geoms, dtype=bool)
+        elif self.exclude_body >= 0:
+            root = m.body_rootid[self.exclude_body]
+            self.robot_geoms = m.body_rootid[m.geom_bodyid] == root
+        else:
+            self.robot_geoms = np.zeros(m.ngeom, dtype=bool)
+
+        # Draw exactly the geoms mj_multiRay hits, opaque: a geom colour other than MuJoCo's
+        # default overrides its material's, and geoms with alpha 0 are not drawn.
+        group = np.array(geomgroup, dtype=bool).reshape(6)
+        alpha = m.geom_rgba[:, 3].copy()
+        has_material = m.geom_matid >= 0
+        alpha[has_material] = m.mat_rgba[m.geom_matid[has_material], 3]
+        drawn = (group[np.clip(m.geom_group, 0, 5)] & (alpha > 0)
+                 & (m.geom_bodyid != self.exclude_body))
+        m.geom_rgba[:] = 1.0
+        m.geom_rgba[~drawn, 3] = 0.0
+        # The faces sit side by side, 3 x 2; no multisampling, which would blend the
+        # segmentation colours at silhouettes into other geoms' ids.
+        m.vis.global_.offwidth = 3 * w
+        m.vis.global_.offheight = 2 * w
+        m.vis.quality.offsamples = 0
+        # Segmentation renders read no texture: upload each as one texel rather than the
+        # kitchen's textures again, most of the render context's GPU memory.
+        m.tex_width[:] = 1
+        m.tex_height[:] = 1
+        self.data = mujoco.MjData(m)
+
+        self._option = mujoco.MjvOption()
+        self._option.geomgroup[:] = 1          # the geoms' alpha decides what is drawn
+        self._option.sitegroup[:] = 0
+        self._option.flags[:] = 0
+        self._option.flags[mujoco.mjtVisFlag.mjVIS_STATIC] = 1
+        self._camera = mujoco.MjvCamera()      # mjv_updateScene needs one; cast() sets the view
+        self._scene = mujoco.MjvScene(m, maxgeom=max(1, int(drawn.sum())))
+        # Segmentation colours only: no lighting effects, and no back-face culling, since rays
+        # hit a face from either side.
+        self._scene.flags[:] = 0
+        self._scene.flags[mujoco.mjtRndFlag.mjRND_SEGMENT] = 1
+        self._scene.flags[mujoco.mjtRndFlag.mjRND_IDCOLOR] = 1
+        self._update_scene()
+        geoms = self._scene.geoms[:self._scene.ngeom]
+        objid = np.array([g.objid for g in geoms], dtype=np.intp)
+        if (any(g.objtype != mujoco.mjtObj.mjOBJ_GEOM for g in geoms)
+                or not np.array_equal(objid, np.flatnonzero(drawn))):
+            raise RuntimeError("the scene does not draw exactly the geoms the rays hit")
+        # Segmentation colour (scene index + 1, 0 where nothing is drawn) -> robot or not.
+        self._robot_segment = np.concatenate([[False], self.robot_geoms[objid]])
+
+        self._viewports = [mujoco.MjrRect((k % 3) * w, (k // 3) * w, w, w) for k in range(6)]
+        self._image = mujoco.MjrRect(0, 0, 3 * w, 2 * w)
+        self._rgb = np.empty((2 * w, 3 * w, 3), dtype=np.uint8)   # rows from the bottom
+        self._depth = np.empty((2 * w, 3 * w), dtype=np.float32)
+        # The depth buffer's reversed-Z values -> m along the face's axis, computed as
+        # mujoco.Renderer does (float32 projection coefficients, as glFrustum makes them).
+        near, far = np.float32(_GPU_NEAR), np.float32(MAX_RANGE)
+        c = -(far + near) / (far - near)
+        d = -(np.float32(2) * far * near) / (far - near)
+        self._depth_c = float(np.float32(-0.5) * c - np.float32(0.5))
+        self._depth_d = float(np.float32(-0.5) * d)
+
+        with GL_LOCK:
+            try:
+                self._gl = egl.GLContext(3 * w, 2 * w)
+                self._gl.make_current()
+                renderer = GL.glGetString(GL.GL_RENDERER).decode(errors="replace")
+                if any(name in renderer.lower() for name in _SOFTWARE_RENDERERS):
+                    raise RuntimeError(f"the GL renderer is {renderer}, a software renderer")
+                self._context = mujoco.MjrContext(m, mujoco.mjtFontScale.mjFONTSCALE_100)
+                mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_OFFSCREEN, self._context)
+                self._context.readDepthMap = mujoco.mjtDepthMap.mjDEPTH_ZEROFAR
+            except Exception as exc:
+                self._free()
+                if isinstance(exc, RuntimeError):
+                    raise
+                raise RuntimeError(f"EGL rendering failed: {exc!r}") from exc
+            finally:
+                self._release()
+        self.gl_renderer = renderer
+        atexit.register(self.close)
+
+    def _update_scene(self):
+        """Fill the scene with the drawn geoms at the caster's MjData's poses."""
+        mujoco.mjv_updateScene(self.model, self.data, self._option, None, self._camera,
+                               mujoco.mjtCatBit.mjCAT_STATIC | mujoco.mjtCatBit.mjCAT_DYNAMIC,
+                               self._scene)
+
+    def _release(self):
+        """Make no GL context current on this thread, so another thread can take the caster's."""
+        egl = self._egl
+        if egl.EGL_DISPLAY is not None:
+            egl.EGL.eglMakeCurrent(egl.EGL_DISPLAY, egl.EGL.EGL_NO_SURFACE,
+                                   egl.EGL.EGL_NO_SURFACE, egl.EGL.EGL_NO_CONTEXT)
+
+    def _free(self):
+        """Free the MuJoCo render context and the GL context; call with GL_LOCK held."""
+        try:
+            if self._context is not None:
+                self._gl.make_current()
+                self._context.free()
+        finally:
+            self._context = None
+            if self._gl is not None:
+                self._gl.free()
+                self._gl = None
+
+    def close(self):
+        """Free the GL context and what the caster uploaded to it; later casts raise."""
+        atexit.unregister(self.close)
+        with GL_LOCK:
+            self._free()
+
+    def cast(self, origin, rotation, directions, data):
+        """Return the distance (m) along each unit direction (n, 3) to its first hit, NaN for none.
+
+        As CpuCaster.cast(): origin (3,) m and rotation (3, 3) sensor -> world are the sensor's
+        pose; directions are in its own frame; data holds the geom poses (geom_xpos,
+        geom_xmat). NaN where nothing is drawn within MAX_RANGE or the robot is drawn first.
+        """
+        n = len(directions)
+        dist = np.full(n, np.nan)
+        if n == 0:
+            return dist
+        world = np.asarray(directions, dtype=np.float64) @ np.asarray(rotation, dtype=np.float64).T
+        axis = np.abs(world).argmax(axis=1)
+        face = 2 * axis + (world[np.arange(n), axis] < 0)
+        faces = np.unique(face)
+        np.copyto(self.data.geom_xpos, data.geom_xpos)
+        np.copyto(self.data.geom_xmat, data.geom_xmat)
+        self._update_scene()
+        if self._scene.ngeom != len(self._robot_segment) - 1:
+            raise RuntimeError("the scene's geoms changed since the caster was built")
+        with GL_LOCK:
+            if self._context is None:
+                raise RuntimeError("cast() after close()")
+            self._gl.make_current()
+            try:
+                for camera in self._scene.camera:   # both eyes; mjr_render averages them
+                    camera.pos[:] = origin
+                    camera.frustum_center = 0.0
+                    camera.frustum_width = 0.0       # 0: from the viewport's aspect, square
+                    camera.frustum_bottom = -_GPU_NEAR   # 90 deg field of view
+                    camera.frustum_top = _GPU_NEAR
+                    camera.frustum_near = _GPU_NEAR
+                    camera.frustum_far = MAX_RANGE
+                    camera.orthographic = 0
+                for k in faces:
+                    for camera in self._scene.camera:
+                        camera.forward[:] = _FACE_AXES[k, 0]
+                        camera.up[:] = _FACE_AXES[k, 1]
+                    mujoco.mjr_render(self._viewports[k], self._scene, self._context)
+                mujoco.mjr_readPixels(self._rgb, self._depth, self._image, self._context)
+            finally:
+                self._release()
+        w = self.width
+        for k in faces:
+            rows = np.flatnonzero(face == k)
+            ray = world[rows]
+            along = ray @ _FACE_AXES[k, 0]   # cosine of the ray's angle off the face's axis
+            col = np.minimum(((ray @ _FACE_RIGHT[k] / along + 1.0) * 0.5 * w).astype(np.intp),
+                             w - 1) + (k % 3) * w
+            row = np.minimum(((ray @ _FACE_AXES[k, 1] / along + 1.0) * 0.5 * w).astype(np.intp),
+                             w - 1) + (k // 3) * w
+            rgb = self._rgb[row, col].astype(np.intp)
+            segment = rgb[:, 0] | (rgb[:, 1] << 8) | (rgb[:, 2] << 16)
+            depth = self._depth_d / (self._depth[row, col].astype(np.float64) + self._depth_c)
+            ranges = depth / along
+            ranges[(segment == 0) | self._robot_segment[segment] | (ranges > MAX_RANGE)] = np.nan
+            dist[rows] = ranges
+        return dist
+
+
+def _log(text):
+    """Print text to the sim's log at once."""
+    print(text, flush=True)
+
+
+def make_caster(model, exclude_body, geomgroup, backend="auto", robot_geoms=None, log=_log):
+    """Return the caster backend names, casting on model through body exclude_body.
+
+    backend is one of BACKENDS (GOLEM_LIDAR_BACKEND): auto builds a GpuCaster and falls back to
+    a CpuCaster, with one log() line naming why, when it cannot; gpu builds a GpuCaster or
+    raises RuntimeError; cpu builds a CpuCaster without trying the GPU. ValueError for any
+    other backend. geomgroup and robot_geoms are the casters' own; the CpuCaster edits model
+    while it casts (CpuCaster's docstring), the GpuCaster casts on a copy.
+    """
+    if backend not in BACKENDS:
+        raise ValueError(f"lidar backend must be one of {', '.join(BACKENDS)}, got {backend!r}")
+    if backend != "cpu":
+        try:
+            return GpuCaster(model, exclude_body, geomgroup, robot_geoms=robot_geoms)
+        except Exception as exc:   # under auto, any failure to build falls back to the CPU
+            if backend == "gpu":
+                raise RuntimeError(f"lidar backend gpu: no GPU caster: {exc}") from exc
+            log(f"[mid360] lidar rays cast on the CPU: no GPU caster ({exc})")
+    return CpuCaster(model, exclude_body, geomgroup, robot_geoms=robot_geoms)
 
 
 class Mid360Scanner:

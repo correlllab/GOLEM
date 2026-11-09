@@ -106,3 +106,69 @@ in free space (0 of 2.1 million in the band within 4 m).
 Every figure here is a single run unless the table says otherwise. The localisation check of the
 nav runs on the final values peaked at 1.48-2.47 cm against its 2.5 cm limit (Tier 1's runs:
 about 1.0 cm).
+
+## Tier 3a
+
+Tier 3a changes the physics of the kitchen only: at scene build, both robots' sims stop the
+collisions between the parts of one RoboCasa fixture and between a fixture's moving parts and
+the static scene (`exclude_fixture_collisions` in `golem_robocasa/sim_common.py`). The robot, the
+objects and loose fixtures on a free joint keep every contact.
+
+Measured 2026-11-08 on the i7-14700F with an RTX 5070 Ti, at commit `ce26c02` (branch
+`sim_speed`), `cpus: sim 0-15, ros 16-27`. The closed-loop suites cast the lidar on the GPU (each
+sim logged `lidar rays cast on the GPU every 20 ms of sim time`) unless the row says otherwise.
+
+| | Tier 2 H1-2 | Tier 2 G1 | Tier 3a H1-2 | Tier 3a G1 |
+|---|---|---|---|---|
+| Full stack (`tests/sim`), GPU caster | 1.00x (capped) | 1.00x (capped) | 1.00x (capped; no cast waited) | 1.00x (capped; no cast waited) |
+| Full stack (`tests/sim`), CPU caster | 0.74x: the physics waited for the lidar at 4827 of 5500 casts | not measured | 0.80x: the physics waited for the lidar at 5613 of 5700 casts | not measured |
+| `mj_step`, the robot standing (median) | | | 0.935 ms without the exclusion, 0.496 ms with it: -46.9% | 0.810 ms without, 0.465 ms with: -42.5% |
+| Geom pairs excluded (the sim's log line) | | | 499,524 in 45 fixtures | 499,524 in 45 fixtures |
+
+The full-stack rows on the GPU caster cannot show the gain: both robots already ran at the
+real-time ceiling in Tier 2. The CPU-caster row is one run with `GOLEM_LIDAR_BACKEND=cpu` in the
+shell, the path a host without a GPU caster (and the Mac) takes; there the lidar, not the
+physics, still sets the pace, so the step time saved shows only in part. The spec predicted -28%
+(dishwasher and drawers) to -52% (every jointed fixture) of step time.
+
+How the step time was taken: the surface probe's kitchen (layout 9, style 9, seed 42, task
+`CloseStandMixerHead`), each robot spawned by its sim's own code and backed 2.0 m into open floor
+as the closed-loop tests back it, held on its sim's elastic band with a joint PD on its spawn pose
+and settled for 2 s; then, from that saved state, only the `mj_step` call timed, in a disposable
+`golem_sim_robocasa` container pinned to CPUs 0-15. One model build per robot, its collision bits
+switched between the original and the excluded ones in alternating blocks of 3000 steps, three
+blocks each (9000 steps per condition; the blocks' medians agreed within 1.1%). The robot stood
+the same either way (pelvis height equal to the millimetre at the end of every block); MuJoCo's contact
+count (median per step) fell from 26 to 8.
+
+`tests/stack/run.sh` builds its own kitchen (task `AirDryFruit`), where the sim excluded 188,284
+geom pairs in 35 fixtures.
+
+The closed-loop suites, all passing on the first run:
+
+| Suite | Result | Real-time factor |
+|---|---|---|
+| `tests/sim/test_sim_stack.sh --h12` | 14/14 | 1.00x |
+| `tests/sim/test_sim_stack.sh --g1` | 14/14 | 1.00x |
+| `tests/g1/test_sim_bringup.sh --walk` | 22/22 | 1.00x (min 1.00) |
+| `tests/g1/test_sim_nav.sh` | 13/13 | 1.00x (min 1.00) |
+| `tests/stack/run.sh robocasa arms` | passed | not reported |
+| `tests/stack/run.sh robocasa locomotion` | passed | not reported |
+| extra: `GOLEM_LIDAR_BACKEND=cpu tests/sim/test_sim_stack.sh --h12` | 14/14 | 0.80x |
+| extra: `tests/g1/test_sim_explore.sh` | 7/9, then 9/10: coverage (17.7%, then 25.6%) both runs, tilt (26.3 deg) the first; the open issue in `tests/g1/README.md` | 1.00x |
+
+The SLAM gates on the same runs: the nav run's localisation peaked at 1.53 cm against its 2.5 cm
+limit (Tier 2's three runs: 1.48-2.47 cm), its final map had no phantom cell (0 of 489 occupied
+cells more than 0.15 m from the scene) and its scan 11 phantom returns of 190,639 (0.01%, limit
+0.1%); the longest `/converted_scan` gap was 0.13 s in the H1-2 stack run, 0.10 s in the G1's and
+the nav run's, and 0.21 s in the CPU-caster run (limit 0.5 s).
+
+The explore runs fail as before Tier 3a, on the explorer's frontier choices: in the first, the
+explorer's first goal was a 7-cell frontier behind the robot, which it walked backward toward
+until the skill's 120 s timeout; in the second, it reached one 373-cell frontier and reported the
+map explored. Neither run had a robot contact other than the floor or a map phantom. The
+exclusion leaves the scene the lidar sees as it was: over 150 s with the G1 standing in the same
+kitchen, every fixture joint moved as far with the exclusion as without it, except the
+dishwasher's two spring-loaded buttons, which rest 5.7 mm further out on their joint limit.
+
+Every figure here is a single run unless the table says otherwise.

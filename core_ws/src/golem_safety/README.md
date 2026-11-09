@@ -115,7 +115,7 @@ another pair (`golem_upper_ik.pairing`, checked by its `upper_ik.launch.py`).
 | `topics.low_cmd_in`, `low_cmd_lower_in`, `low_cmd_upper_in` | `/safety/lowcmd_in`, `/safety/lowcmd_lower_in`, `/safety/lowcmd_upper_in` | the inputs; absolute ROS names (`rt/...` is refused) |
 | `topics.low_cmd_out` | `/lowcmd` | the output |
 | `topics.low_state` | `/lowstate` | the robot's state |
-| `control.publish_hz` | 500 | the relay rate, per s of robot time |
+| `control.publish_hz` | 500 | the relay rate, per s of robot time; under `use_sim_time` at most one cycle per `/clock` message |
 | `control.state_lag_ms` | required | the transport-lag estop, ms; on ROS domain 0 only; <= 0 turns it off |
 | `stale.upper_seconds`, `lower_seconds`, `state_seconds` | 0, 0.2, 0.1 | quiet times of the upper input, the lower or full input and `/lowstate`, s of robot time; <= 0 turns the report off |
 | `single_writer.handover_seconds` | 0.5 | how long the current writer must be quiet before another is accepted, s of robot time |
@@ -156,7 +156,9 @@ stop the beats or hold up an exit or an estop burst at exit. The transport-lag c
 only on domain 0, where robot time is always the boot clock.
 
 **Relay, newest only.** One relay thread runs at `control.publish_hz`, sleeping to absolute
-deadlines of robot time. Each cycle it takes the newest `/lowstate`, the newest hardware
+deadlines of robot time. Under `use_sim_time` a sleep ends only when `/clock` moves, so the
+rate is at most one cycle per `/clock` message: RoboCasa publishes `/clock` every 2 ms
+physics step (500 Hz of sim time), Isaac once per control step. Each cycle it takes the newest `/lowstate`, the newest hardware
 estop values and the newest command of each input (keep-last 1, so no queue builds up), and
 publishes one command. A cycle that ends more than a period late restarts the schedule: a
 slow cycle lowers the rate, and nothing is replayed to catch up. No timer in the node runs
@@ -180,7 +182,8 @@ first valid command that arrives once the newest `/lowstate` reports the profile
 `mode_machine` (and, with `use_estop`, a first hardware estop sample has arrived); its slots
 carry its commands from then on (`input_engaged`). The slots of an input that has not
 engaged stay at zero gain: in split mode the robot runs arms-only, with its leg motors off,
-until the leg node commands. The `/lowstate` limit checks run from boot.
+until the leg node commands. The `/lowstate` limit checks run from boot (under
+`use_sim_time`, from the first `/clock`).
 
 A command that cannot engage raises `engage_refused` (Warn) with the first reason, at most
 once a second: `no /lowstate received yet`, `/lowstate mode_machine is 0, expected 6`, or

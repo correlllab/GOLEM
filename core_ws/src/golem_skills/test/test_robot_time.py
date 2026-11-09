@@ -80,7 +80,7 @@ def sim(tmp_path):
     node._monotonic = steady
     yield node, SimClock(node), steady
     node.destroy_node()
-    rclpy.shutdown()
+    rclpy.try_shutdown()
 
 
 @pytest.fixture
@@ -174,3 +174,17 @@ def test_the_grip_hold_period_counts_sim_time(sim):
     stop.set()
     waiter.join(timeout=1.0)
     assert done == [False, True]
+
+
+def test_a_sim_time_wait_ends_at_shutdown_with_clock_stopped(sim):
+    """Under use_sim_time, with /clock stood still, a robot-time wait ends at shutdown."""
+    node, _, _ = sim
+    outcome = []
+    waiter = threading.Thread(target=lambda: outcome.append(
+        node._wait_future(Future(), 60.0, robot_time=True)), daemon=True)
+    waiter.start()
+    time.sleep(0.3)
+    assert waiter.is_alive()
+    rclpy.shutdown()
+    waiter.join(timeout=1.0)
+    assert not waiter.is_alive() and outcome == [None]

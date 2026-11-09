@@ -59,8 +59,10 @@ class RobotClock:
         """Return robot time, s."""
         if self._ros_clock is None:
             return time.monotonic()
-        ros_ns = self._ros_clock.now().nanoseconds
         with self._lock:
+            # read under the lock: a read that lands after a newer one would step the last
+            # reading back and count the step between them twice
+            ros_ns = self._ros_clock.now().nanoseconds
             if self._last_ros_ns is None:
                 self._time_ns = ros_ns
             elif ros_ns > self._last_ros_ns:

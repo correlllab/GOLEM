@@ -3,10 +3,11 @@
 import os
 import signal
 import threading
-import time
 from functools import partial
 
 import rclpy
+from rclpy.clock import JumpThreshold
+from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.signals import SignalHandlerOptions
 from std_srvs.srv import Trigger
@@ -29,16 +30,21 @@ from dex_3.dex3 import (
 )
 
 
-# s of steady time between a sim-time wait's looks at /clock
-SIM_TIME_POLL_S = 0.001
+# s of steady time: the longest a sim-time wait goes without checking its stop
+SIM_TIME_WAIT_SLICE_S = 0.005
 
 
 class SimTime:
     """Give the hand drivers robot time on a node's clock, which follows the sim's /clock."""
 
     def __init__(self, node):
-        """Read node's clock (use_sim_time)."""
+        """Read node's clock (use_sim_time); a wait wakes on its every /clock step."""
         self._clock = node.get_clock()
+        self._wake = threading.Condition()
+        threshold = JumpThreshold(min_forward=Duration(nanoseconds=1),
+                                  min_backward=Duration(nanoseconds=-1), on_clock_change=True)
+        self._jump_handle = self._clock.create_jump_callback(threshold,
+                                                             post_callback=self._on_jump)
 
     def started(self):
         """Return whether the first /clock has come."""
@@ -49,13 +55,22 @@ class SimTime:
         return self._clock.now().nanoseconds * 1e-9
 
     def sleep(self, seconds, stop):
-        """Wait seconds of sim time, or less once stop() is true or /clock steps back."""
+        """Wait seconds of sim time, or less once stop() is true or /clock steps back.
+
+        stop() is checked at least every SIM_TIME_WAIT_SLICE_S of steady time.
+        """
         start = self.now()
-        while not stop():
-            now = self.now()
-            if now >= start + seconds or now < start:
-                return
-            time.sleep(SIM_TIME_POLL_S)
+        with self._wake:
+            while not stop():
+                now = self.now()
+                if now >= start + seconds or now < start:
+                    return
+                self._wake.wait(SIM_TIME_WAIT_SLICE_S)
+
+    def _on_jump(self, _jump):
+        """Wake the waits: /clock has moved (the jump callback, on the executor's thread)."""
+        with self._wake:
+            self._wake.notify_all()
 
 
 class Dex3HandNode(Node):

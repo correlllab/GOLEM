@@ -315,7 +315,8 @@ for the includes after it, so pass consistent values (all four blocks share
   started before the sims reported 6), no first estop sample with
   `use_estop:=true`, a safety config that does not pair with its controller
   config, or an estop latched at this start-up (the limit checks run from
-  boot, so a joint already past `limits.estop` latches it) or in an earlier
+  boot, in the sim from the first `/clock`, so a joint already past
+  `limits.estop` latches it) or in an earlier
   run. The other nodes keep running, without `/frame_task` and
   `/named_config`.
 - **`use_estop`.** `use_estop:=true` (the real bringups and
@@ -423,7 +424,8 @@ which `golem_upper_ik`'s `upper_ik.launch.py` applies (`upper_ik: not starting:
 
 - `safety_node` streams zero-gain `/lowcmd` (every motor off) from boot (in the
   sim, from the first `/clock`), checks
-  every `/lowstate` against the estop limits from the first sample, and engages
+  every `/lowstate` against the estop limits from the first sample (in the
+  sim, from the first `/clock`), and engages
   each input on that input's own first valid command once `/lowstate` reports
   `mode_machine` 5, as on the H1-2; until then it logs `engage_refused`. Its
   heartbeat is the H1-2's: none until `/lowstate` reports 5, then true at
@@ -790,7 +792,8 @@ describe the new behaviour.
 - **The estop latch** is one way until restart. It latches on a command with a
   non-finite value, a second live writer on an input (a new writer is accepted
   after `single_writer.handover_seconds`, 0.5 s, of quiet), a measured joint
-  past `limits.estop` or not finite (checked from boot, on both robots), another
+  past `limits.estop` or not finite (checked from boot, on both robots; under
+  `use_sim_time` from the first `/clock`), another
   robot's `mode_machine` once an input has engaged, the transport-lag check
   (`control.state_lag_ms`, on domain 0; off in every G1 config), and with
   `use_estop` a hardware estop that is triggered, unplugged or silent. What it
@@ -824,7 +827,9 @@ describe the new behaviour.
 - **Robot time.** `golem_safety`, `golem_upper_ik`, `golem_lowerbody_rl`,
   `golem_skills` and `dex_3` measure rates, freshness and fault windows and
   timeouts on robot time, the sim's `/clock` under `use_sim_time` and the steady
-  clock otherwise (the real robots, unchanged), keeping on the steady clock only
+  (`golem_safety`: boot) clock otherwise (the real robots, unchanged), so under
+  `use_sim_time` a rate is at most one cycle per `/clock` message, keeping on the
+  steady clock only
   the liveness checks that must fire while `/clock` stops (`golem_safety`'s
   heartbeat and its readers' silence checks) and the exits; `safety_node`
   refuses `use_sim_time:=true` without `sim:=true`, and every node of a sim

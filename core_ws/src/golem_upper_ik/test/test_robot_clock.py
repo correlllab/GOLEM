@@ -7,6 +7,7 @@ stopped /clock.
 """
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -144,3 +145,44 @@ def test_wait_for_clock_is_bounded(ros):
     with pytest.raises(RuntimeError, match=r'No /clock within 0.3 s'):
         clock.wait_for_clock(0.3)
     assert 0.3 <= time.monotonic() - start < 0.6
+
+
+class _InterleavedRosClock:
+    """Stand in for a ROS clock whose reader 'slow' gets the older time and returns last."""
+
+    def __init__(self):
+        """Read 1 s until the threads start."""
+        self.fast_done = threading.Event()
+        self.started = False
+
+    def now(self):
+        """Return 2 s to the slow reader, after the fast one has read 3 s (or 0.3 s passed)."""
+        name = threading.current_thread().name
+        if not self.started:
+            seconds = 1.0
+        elif name == 'slow':
+            seconds = 2.0
+            self.fast_done.wait(0.3)
+        else:
+            seconds = 3.0
+            if name == 'fast':
+                self.fast_done.set()
+        return SimpleNamespace(nanoseconds=int(seconds * 1e9))
+
+
+def test_concurrent_reads_never_count_a_step_twice(ros):
+    """Two threads reading at once never make robot time run ahead of /clock."""
+    from golem_upper_ik.core.robot_clock import RobotClock
+    clock = RobotClock(ros.node('controller', sim_time=True))
+    fake = _InterleavedRosClock()
+    clock._ros_clock = fake
+    assert clock.now() == 1.0
+    fake.started = True
+    slow = threading.Thread(target=clock.now, name='slow')
+    slow.start()
+    time.sleep(0.05)
+    fast = threading.Thread(target=clock.now, name='fast')
+    fast.start()
+    slow.join(1.0)
+    fast.join(1.0)
+    assert clock.now() == 3.0

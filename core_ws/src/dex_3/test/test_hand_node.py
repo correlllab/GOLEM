@@ -194,3 +194,35 @@ def test_no_pose_before_the_first_clock(channel_inits):
         assert not response.success and 'first /clock' in response.message
     finally:
         node.destroy_node()
+
+
+def test_sim_time_sleep_wakes_on_clock_and_on_stop(channel_inits):
+    """A sim-time sleep ends when /clock reaches its end, or once stop() is true."""
+    from rclpy.clock import ClockType
+    from rclpy.time import Time
+    node = _make_node(f'domain_id:={ROS_TEST_DOMAIN}', 'use_sim_time:=true')
+    try:
+        clock = node.get_clock()
+
+        def set_time(seconds):
+            """Set sim time, as a /clock message does."""
+            clock.set_ros_time_override(Time(nanoseconds=int(seconds * 1e9),
+                                             clock_type=ClockType.ROS_TIME))
+        set_time(100.0)
+        sim = hand_node.SimTime(node)
+        done = threading.Event()
+        threading.Thread(target=lambda: (sim.sleep(0.1, lambda: False), done.set()),
+                         daemon=True).start()
+        time.sleep(0.2)
+        assert not done.is_set(), 'the sleep ended with /clock stood still'
+        set_time(100.1)
+        assert done.wait(0.05), 'the sleep did not wake on /clock'
+        stop = threading.Event()
+        done.clear()
+        threading.Thread(target=lambda: (sim.sleep(10.0, stop.is_set), done.set()),
+                         daemon=True).start()
+        time.sleep(0.05)
+        stop.set()
+        assert done.wait(0.05), 'the sleep did not end on stop'
+    finally:
+        node.destroy_node()

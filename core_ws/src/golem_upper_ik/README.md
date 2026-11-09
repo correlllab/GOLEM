@@ -241,7 +241,10 @@ then moves only in the start-up step 4.
   check runs only on domain 0.
 
 **Commands.** A publisher thread sends the newest command at `frequency.pub_hz` on absolute
-deadlines of robot time. Every q, dq and tau is clipped to `limits.clip`; a
+deadlines of robot time. Under `use_sim_time` a robot-time wait ends only when `/clock` moves,
+so every rate (`pub_hz`, `check_hz`, `ctrl_hz`) is at most one cycle per `/clock` message
+(RoboCasa's every 2 ms of sim time; Isaac's once per control step), and the publisher makes up
+a short lag with a burst of the newest command. Every q, dq and tau is clipped to `limits.clip`; a
 non-finite value is refused (`ValueError`) and the last good command keeps going out, since
 `golem_safety` latches its estop on a non-finite command. Only the upper slots are written:
 the lower slots and the slots past the body are mode 0 with every value 0. The header

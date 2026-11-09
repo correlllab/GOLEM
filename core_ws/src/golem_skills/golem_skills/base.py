@@ -626,9 +626,12 @@ class SkillsBase(Node):
         outer skill goal `outer_gh` is asked to cancel, when `stop_event` (a
         threading.Event) is set, or when `halt_check` (a callable) returns a
         reason. `timeout_sec` is s of steady time (a service's or a link's
-        latency), or of robot time with `robot_time` (a robot's motion).
+        latency), or of robot time with `robot_time` (a robot's motion). A
+        wait on sim time also returns None once the node's context has shut
+        down, so a stopped /clock cannot hold it at exit.
         """
         now = self.robot_now if robot_time else time.monotonic
+        on_sim_time = robot_time and self._sim_time
         event = threading.Event()
         future.add_done_callback(lambda _f: event.set())
         deadline = now() + max(0.0, timeout_sec)
@@ -638,6 +641,8 @@ class SkillsBase(Node):
             if stop_event is not None and stop_event.is_set():
                 return None
             if halt_check is not None and halt_check() is not None:
+                return None
+            if on_sim_time and not self.context.ok():
                 return None
             remaining = deadline - now()
             if remaining <= 0.0:

@@ -51,7 +51,7 @@ jobs:
         env:
           PYTHONPATH: golem_robocasa
         run: python -m unittest discover -s tests/robocasa -p test_robot_select.py -v
-      - name: Linux and Mac Docker workflow regressions
+      - name: Docker workflow regressions
         run: python -m unittest discover -s tests/docker -v
       - name: Controller integration acceptance scoring
         run: python -m unittest discover -s tests/stack -p 'test_*.py' -v

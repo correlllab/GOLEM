@@ -1,7 +1,7 @@
 #!/bin/bash
 # Rebuild MuJoCo MPC's agent_server from the mounted mujoco_mpc submodule, in
 # the persistent build tree, and install it where `from mujoco_mpc import
-# agent` starts it. Runs inside the x86 ros container; launch_ros.sh runs it
+# agent` starts it. Runs inside the ros container; launch_ros.sh runs it
 # at every start (a no-op when nothing changed).
 #
 # Usage:

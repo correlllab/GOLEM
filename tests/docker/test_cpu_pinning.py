@@ -154,12 +154,6 @@ print(json.dumps({"sim": os.environ.get("GOLEM_SIM_CPUSET"), "ros": os.environ.g
         r = self.result(ROS_DOMAIN_ID='0', GOLEM_SIM_CPUSET='2-3')
         self.assertEqual((r['sim'], r['ros'], r['overlays']), (None, None, []))
 
-    def test_mac_platform_pins_nothing(self):
-        """The Mac wrappers' platform pins nothing, even with a hybrid sysfs and explicit knobs."""
-        self.fake_cpus()
-        r = self.result(GOLEM_PLATFORM='mac', GOLEM_SIM_CPUSET='2-3')
-        self.assertEqual((r['sim'], r['ros'], r['overlays']), (None, None, []))
-
     def test_env_file_values_apply(self):
         """GOLEM_CPU_PINNING in docker/.env is read, and a shell value wins over it."""
         self.fake_cpus()

@@ -8,7 +8,7 @@ assets are verified against a complete-tree digest. This is dependency-version
 reproducibility, not a claim of byte-identical OCI layers: timestamps, compiler
 outputs, and isolated Python build backends require separate verification.
 
-## Existing x86 images used as evidence
+## Existing images used as evidence
 
 | Image | Local image ID at audit |
 | --- | --- |
@@ -21,12 +21,10 @@ Inspected with `docker compose run --rm --no-deps --entrypoint bash` through the
 shared `docker_common.sh` configuration. No simulation was launched. Git SHAs
 came from each image's retained `.git` directory; IsaacLab extras came from
 `pip freeze` VCS metadata. uv's version was `0.12.15` in the base and its children.
-The macOS Dockerfiles reuse the same source revisions; no arm64 built image was
-available for validation.
 
 | Source | Revision | Evidence |
 | --- | --- | --- |
-| CycloneDDS | 5041f3560c088c99e5088b2b8520b69169621196 | All three x86 child images |
+| CycloneDDS | 5041f3560c088c99e5088b2b8520b69169621196 | All three child images |
 | SAM3 | 660a5e9e1b8b4c02c0ad97229b88a09a6e4ff5b7 | ROS image |
 | GraspGenX | b9429097728cb1c430dd78b92edf17ba318aad03 | ROS image |
 | robosuite | 5ce6643f3092639d08f7b0f90ed1c6a84f50552c | RoboCasa image |
@@ -46,9 +44,8 @@ Existing explicit CLIP, IsaacLab, MJPC and Unitree C++ revisions remain unchange
 The base SDK COPY still uses the repository's Unitree Python submodule checkout.
 
 CUDA and Isaac base digests come from locally installed images' `RepoDigests`.
-Humble ROS and Ubuntu 22.04 digests were resolved from registry manifest indexes;
-the latter retains platform selection for arm64. These two registry pins need
-fresh build validation. Local `golem_base` tags intentionally refer to the base
+The Humble ROS digest (Isaac's `magpie_humble` stage) was resolved from its
+registry manifest index and needs fresh build validation. Local `golem_base` tags intentionally refer to the base
 built by the repository wrapper, not to a remotely published digest.
 
 Guard against regressing source pins with:
@@ -68,12 +65,8 @@ It was obtained from Ubuntu's keyserver and checked against the ROS snapshot
 maintainers' documented fingerprint. Expired Release metadata freshness checks
 are disabled for historical snapshots; package signatures are not disabled.
 
-The Ubuntu snapshot is HTTPS-only (HTTP redirects to HTTPS). The bare arm64
-`ubuntu:22.04` base has no CA bundle, so `mac/BaseDockerfile.arm64` copies
-`/etc/ssl/certs/ca-certificates.crt` from the digest-pinned multi-arch
-`ros:humble-ros-base-jammy` index before running `apt-sources.sh`. TLS peer
-verification stays enabled. The bootstrap was probe-built on amd64 from the same
-two indexes; a native arm64 build has not been run.
+The Ubuntu snapshot is HTTPS-only (HTTP redirects to HTTPS); TLS peer
+verification stays enabled.
 
 `apt-sources.sh` also disables inherited `cuda*`/`nvidia*` APT lists, which
 are live and undated. No build step installs from them; CUDA libraries come
@@ -91,8 +84,7 @@ References: [Ubuntu snapshots](https://snapshot.ubuntu.com/),
 
 Each `*-amd64.txt` is the common Python constraint set. Numbered files include
 that set and declare intentional per-install transitions (NumPy, Hugging Face,
-MuJoCo, and build tools). The arm64 sets reuse portable versions without CUDA
-packages; native Mac build/runtime validation remains required.
+MuJoCo, and build tools).
 
 The G1 stack's Python dependency is the last step of the ROS image, and
 MuJoCo 3.17.0 the last step of the RoboCasa image:

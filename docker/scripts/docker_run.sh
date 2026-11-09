@@ -2,7 +2,7 @@
 # Start one GOLEM container in the foreground (docker compose run --rm).
 #
 # Usage: docker_run.sh SERVICE [--restart] [command... | launcher flags...]
-#   SERVICE     robocasa, ros or (Linux only) isaac; the container is
+#   SERVICE     robocasa, ros or isaac; the container is
 #               golem_ros or golem_sim_<SERVICE>
 #   --restart   replace an existing container of that name; without it an
 #               existing container is an error
@@ -10,12 +10,11 @@
 #   flags       a first argument starting with - runs the service's launcher
 #               (launch_<SERVICE>.sh) with all the arguments, e.g. --headless
 #   --g1/--h12  anywhere: the simulator's robot (not for ros, which serves both)
-# Environment: GOLEM_ROBOT=h12|g1 (simulators), GOLEM_DISPLAY=auto|gui|headless
-# (Linux), GOLEM_CPU_PINNING, GOLEM_SIM_CPUSET and GOLEM_ROS_CPUSET (the CPUs
-# robocasa and ros are pinned to; on a hybrid CPU, the performance and
-# efficiency cores), ROS_DOMAIN_ID and the rest of docker_common.sh;
-# GOLEM_PLATFORM=mac from docker_run_mac.sh. Prints the robot and the CPUs it
-# pinned to (`cpus: ...`) on stderr.
+# Environment: GOLEM_ROBOT=h12|g1 (simulators), GOLEM_DISPLAY=auto|gui|headless,
+# GOLEM_CPU_PINNING, GOLEM_SIM_CPUSET and GOLEM_ROS_CPUSET (the CPUs robocasa
+# and ros are pinned to; on a hybrid CPU, the performance and efficiency
+# cores), ROS_DOMAIN_ID and the rest of docker_common.sh. Prints the robot and
+# the CPUs it pinned to (`cpus: ...`) on stderr.
 # Exit status: 1 when a check fails or the domain-0 prompt is declined;
 # otherwise the container command's.
 set -eo pipefail
@@ -49,6 +48,6 @@ if docker inspect --type container "$NAME" >/dev/null 2>&1; then
     docker rm -f "$NAME"
 fi
 if [ $# -gt 0 ] && [ "${1#-}" != "$1" ]; then
-    set -- "/home/code/h12_sim_scripts/launch_${SIM}${LAUNCH_SUFFIX}.sh" "$@"
+    set -- "/home/code/h12_sim_scripts/launch_${SIM}.sh" "$@"
 fi
 exec "${COMPOSE[@]}" run --rm --name "$NAME" "$SIM" "$@"

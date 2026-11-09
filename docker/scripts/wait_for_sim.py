@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Wait for a simulator's first rt/lowstate sample before the bringup starts.
 
-launch_ros.sh and launch_ros_mac.sh run it when GOLEM_WAIT_FOR_SIM=1 (the
-stack wrappers and tests/stack). Both robots' simulators publish the same
+launch_ros.sh runs it when GOLEM_WAIT_FOR_SIM=1 (docker_stack.sh's
+docker-compose.stack.yml), and tests/stack's launch_ros_stack.sh runs it
+directly. Both robots' simulators publish the same
 rt/lowstate type, so it also refuses a simulator of the other robot, told
 apart by LowState_.mode_machine.
 

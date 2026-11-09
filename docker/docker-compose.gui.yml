@@ -1,4 +1,4 @@
-# The X11 desktop overlay on docker-compose.yml, for the Linux GUI mode.
+# The X11 desktop overlay on docker-compose.yml, for the GUI mode.
 # configure_display in docker_common.sh adds it when GOLEM_DISPLAY=gui, or with
 # GOLEM_DISPLAY=auto (the default) when DISPLAY is set; it first checks that the
 # Xauthority file and /tmp/.X11-unix exist. It changes nothing in the host's X

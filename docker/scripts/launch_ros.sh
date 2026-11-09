@@ -1,5 +1,5 @@
 #!/bin/bash
-# The x86 ros container's command: build the bind-mounted core_ws (both robots'
+# The ros container's command: build the bind-mounted core_ws (both robots'
 # packages) incrementally, source it, then run a command. It does not start
 # a bringup unless that is the command (docker-compose.stack.yml).
 #

@@ -7,7 +7,7 @@
 #   restart   remove both containers (also ones docker_run.sh made), then up
 #   stop      stop both containers; caches are kept
 #   logs      follow both containers' logs
-#   --headless / --gui  the display mode (Mac: --gui is vnc)
+#   --headless / --gui  the display mode
 #   --g1 / --h12        the robot (anywhere in the arguments)
 # The ros container builds core_ws, waits in wait_for_sim.py for a fresh
 # rt/lowstate from a simulator of the selected robot, then starts its bringup
@@ -16,8 +16,7 @@
 # wait), GOLEM_USE_RVIZ (true|false; default true when DISPLAY is set),
 # GOLEM_CPU_PINNING, GOLEM_SIM_CPUSET and GOLEM_ROS_CPUSET (the CPUs the RoboCasa
 # sim and ros are pinned to; on a hybrid CPU, the performance and efficiency
-# cores), ROS_DOMAIN_ID and the rest of docker_common.sh; GOLEM_PLATFORM=mac from
-# docker_stack_mac.sh.
+# cores), ROS_DOMAIN_ID and the rest of docker_common.sh.
 # Exit status: 0 once both containers are started or stopped; 1 when a check
 # fails; otherwise the failing docker command's.
 set -eo pipefail
@@ -34,7 +33,7 @@ case "$ACTION" in up|restart|stop|logs) ;; *) fail "Unknown action: $ACTION";; e
 for arg in "$@"; do
     case "$arg" in
         --headless) export GOLEM_DISPLAY=headless;;
-        --gui) if [ "${GOLEM_PLATFORM:-linux}" = mac ]; then export GOLEM_DISPLAY=vnc; else export GOLEM_DISPLAY=gui; fi;;
+        --gui) export GOLEM_DISPLAY=gui;;
         *) fail "Unknown option: $arg";;
     esac
 done
@@ -77,23 +76,19 @@ else
 fi
 # Build the workspaces before any physics runs: a simulator left alone while
 # colcon builds would time out its motor commands. The ros build runs without
-# the wait, RViz or the MCP server; the robocasa run builds msgs_ws and exits
+# the wait for the sim; the robocasa run builds msgs_ws and exits
 # (GOLEM_PREPARE_ONLY).
-"${COMPOSE[@]}" run --rm -T -e GOLEM_WAIT_FOR_SIM=0 -e GOLEM_RVIZ=0 -e GOLEM_ROS_MCP=0 \
-    ros "/home/code/h12_sim_scripts/launch_ros${LAUNCH_SUFFIX}.sh" /bin/true
+"${COMPOSE[@]}" run --rm -T -e GOLEM_WAIT_FOR_SIM=0 \
+    ros /home/code/h12_sim_scripts/launch_ros.sh /bin/true
 if [ "$SIM" = robocasa ]; then
     "${COMPOSE[@]}" run --rm -T -e GOLEM_PREPARE_ONLY=1 robocasa
 fi
 # Add the stack overlay (wait for the sim, then bringup).
-if [ "${GOLEM_PLATFORM:-linux}" = mac ]; then
-    COMPOSE+=(-f "$GOLEM_ROOT/docker/mac/docker-compose.stack.yml")
+if [ -n "${DISPLAY:-}" ]; then
+    export GOLEM_USE_RVIZ=${GOLEM_USE_RVIZ:-true}
 else
-    if [ -n "${DISPLAY:-}" ]; then
-        export GOLEM_USE_RVIZ=${GOLEM_USE_RVIZ:-true}
-    else
-        export GOLEM_USE_RVIZ=${GOLEM_USE_RVIZ:-false}
-    fi
-    COMPOSE+=(-f "$GOLEM_ROOT/docker/docker-compose.stack.yml")
+    export GOLEM_USE_RVIZ=${GOLEM_USE_RVIZ:-false}
 fi
+COMPOSE+=(-f "$GOLEM_ROOT/docker/docker-compose.stack.yml")
 "${COMPOSE[@]}" up -d --no-build --force-recreate "$SIM" ros
 echo "Started $SIM + ros. Use the stack logs command to follow readiness and bringup."

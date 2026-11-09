@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
-# Shared host-side helpers for the Linux and Mac wrappers (docker_build.sh,
-# docker_run.sh, docker_stack.sh and the docker/mac/scripts wrappers, which
-# set GOLEM_PLATFORM=mac). Sourced, not run.
+# Shared host-side helpers for the wrappers (docker_build.sh, docker_run.sh,
+# docker_stack.sh). Sourced, not run.
 #
 # Environment read:
-#   GOLEM_PLATFORM     linux (default) or mac: which compose file and launchers
 #   ROS_DOMAIN_ID      0..232, 1 when unset; 0 is the real robots' bus
 #   GOLEM_ROBOT        h12 (default) or g1, for the simulator services
 #   GOLEM_ASSETS_DIR   host CL_Assets (default: the checkout's)
 #   GOLEM_CACHE_DIR    host cache root (default: the checkout's container_cache)
-#   GOLEM_DISPLAY      Linux: auto (default), gui or headless
+#   GOLEM_DISPLAY      auto (default), gui or headless
 #   DISPLAY, XAUTHORITY  the X server for gui mode
 #   GOLEM_CPU_PINNING  1 (default) or 0: 0 pins no container, explicit lists too
 #   GOLEM_SIM_CPUSET, GOLEM_ROS_CPUSET  CPUs the robocasa and ros containers may
@@ -22,9 +20,9 @@
 #                      with git)
 #   docker/.env        any of the above; exported shell values win
 # Globals set: GOLEM_ROOT, COMPOSE (the docker compose command line, extended
-# by configure_robot, configure_display and configure_cpus), LAUNCH_SUFFIX,
-# ENV_FILE, ROBOT_FLAG, WRAPPER_ARGS; GOLEM_SIM_CPUSET and GOLEM_ROS_CPUSET are
-# set or unset by configure_cpus.
+# by configure_robot, configure_display and configure_cpus), ENV_FILE,
+# ROBOT_FLAG, WRAPPER_ARGS; GOLEM_SIM_CPUSET and GOLEM_ROS_CPUSET are set or
+# unset by configure_cpus.
 # Every check fails through fail(): an "ERROR:" line on stderr and exit 1.
 GOLEM_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 
@@ -40,8 +38,8 @@ require_file() {
 # Fail unless directory $1 exists.
 require_dir() { [ -d "$1" ] || fail "Missing mount directory: $1"; }
 
-# Load docker/.env, resolve the mount roots and the domain, and pick the
-# platform's compose file. Changes into the checkout.
+# Load docker/.env, resolve the mount roots and the domain, and start the
+# compose command line. Changes into the checkout.
 load_config() {
     cd "$GOLEM_ROOT"
     # Values exported in the shell win over docker/.env, as in Compose: save
@@ -56,7 +54,7 @@ load_config() {
     fi
     export GOLEM_ASSETS_DIR="${GOLEM_ASSETS_DIR:-$GOLEM_ROOT/CL_Assets}"
     export GOLEM_CACHE_DIR="${GOLEM_CACHE_DIR:-$GOLEM_ROOT/container_cache}"
-    # Relative paths are relative to the checkout, on both platforms.
+    # Relative paths are relative to the checkout.
     case "$GOLEM_ASSETS_DIR" in /*) ;; *) GOLEM_ASSETS_DIR="$GOLEM_ROOT/$GOLEM_ASSETS_DIR";; esac
     case "$GOLEM_CACHE_DIR" in /*) ;; *) GOLEM_CACHE_DIR="$GOLEM_ROOT/$GOLEM_CACHE_DIR";; esac
     # The domain: at most three decimal digits, read base 10 (bash would read
@@ -69,22 +67,14 @@ load_config() {
     # Compose gets the same env file explicitly (/dev/null when there is none).
     ENV_FILE="$GOLEM_ROOT/docker/.env"
     [ -f "$ENV_FILE" ] || ENV_FILE=/dev/null
-    if [ "${GOLEM_PLATFORM:-linux}" = mac ]; then
-        COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$GOLEM_ROOT/docker/mac/docker-compose.yml")
-        LAUNCH_SUFFIX=_mac
-    else
-        COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$GOLEM_ROOT/docker/docker-compose.yml")
-        LAUNCH_SUFFIX=
-    fi
+    COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$GOLEM_ROOT/docker/docker-compose.yml")
 }
 
-# Fail unless $1 is a service of this platform: robocasa, ros, or (Linux only)
-# isaac.
+# Fail unless $1 is a service: robocasa, ros or isaac.
 validate_service() {
     case "$1" in
-        robocasa|ros) ;;
-        isaac) [ "${GOLEM_PLATFORM:-linux}" != mac ] || fail 'Isaac requires NVIDIA and is unavailable on Mac.';;
-        *) fail "Unknown service '$1'; use robocasa, ros, or isaac (Linux only).";;
+        robocasa|ros|isaac) ;;
+        *) fail "Unknown service '$1'; use robocasa, ros, or isaac.";;
     esac
 }
 
@@ -108,14 +98,13 @@ parse_robot_flags() {
 
 # Select the robot of simulator service $1 and export it as GOLEM_ROBOT (h12 or
 # g1): ROBOT_FLAG, else the shell's or docker/.env's GOLEM_ROBOT, else h12. The
-# G1 adds docker-compose.g1.yml and runs only on x86 Linux with RoboCasa.
+# G1 adds docker-compose.g1.yml and runs only with RoboCasa.
 configure_robot() {
     local service=$1 robot
     robot=$(printf '%s' "${ROBOT_FLAG:-${GOLEM_ROBOT:-h12}}" | tr '[:upper:]' '[:lower:]')
     case "$robot" in
         h12) ;;
         g1)
-            [ "${GOLEM_PLATFORM:-linux}" != mac ] || fail 'G1 is not available on Mac; use an x86 Linux host.'
             [ "$service" != isaac ] || fail 'G1 is not available with the Isaac simulator; use robocasa.'
             COMPOSE+=(-f "$GOLEM_ROOT/docker/docker-compose.g1.yml")
             ;;
@@ -125,12 +114,12 @@ configure_robot() {
 }
 
 # SAFETY: domain 0 is the real robots' command bus. Refuse it for every service
-# but the x86 workspace container, and for that one ask on stdin. The prompt
+# but the workspace container, and for that one ask on stdin. The prompt
 # goes to stderr whether or not stdin is a terminal, so a log shows that
 # domain 0 was confirmed.
 check_domain() {
     if [ "$ROS_DOMAIN_ID" = 0 ]; then
-        [ "$1" = ros ] && [ "${GOLEM_PLATFORM:-linux}" != mac ] || fail 'Domain 0 is reserved for the real robot.'
+        [ "$1" = ros ] || fail 'Domain 0 is reserved for the real robot.'
         local reply
         {
             echo 'Domain 0 is the REAL ROBOT bus.'
@@ -141,11 +130,10 @@ check_domain() {
     fi
 }
 
-# Linux: resolve GOLEM_DISPLAY (auto: gui when DISPLAY is set) and, for gui,
-# check the X socket and Xauthority file and add docker-compose.gui.yml;
-# headless clears DISPLAY. The Mac's display is the compose file's GOLEM_DISPLAY.
+# Resolve GOLEM_DISPLAY (auto: gui when DISPLAY is set) and, for gui, check
+# the X socket and Xauthority file and add docker-compose.gui.yml; headless
+# clears DISPLAY.
 configure_display() {
-    [ "${GOLEM_PLATFORM:-linux}" != mac ] || return 0
     local mode=${GOLEM_DISPLAY:-auto}
     [ "$mode" != auto ] || { if [ -n "${DISPLAY:-}" ]; then mode=gui; else mode=headless; fi; }
     case "$mode" in
@@ -157,7 +145,7 @@ configure_display() {
             require_dir /tmp/.X11-unix
             COMPOSE+=(-f "$GOLEM_ROOT/docker/docker-compose.gui.yml")
             ;;
-        *) fail 'Linux GOLEM_DISPLAY must be auto, gui, or headless.';;
+        *) fail 'GOLEM_DISPLAY must be auto, gui, or headless.';;
     esac
 }
 
@@ -201,7 +189,6 @@ check_cpuset() {
 #     and pins without a hybrid CPU; GOLEM_CPU_PINNING=0 pins nothing at all.
 #   - Every set list is checked against the online CPUs before any container
 #     starts.
-#   - The Mac wrappers pin nothing.
 # SAFETY: domain 0 is the real robots' bus and pins nothing: the real G1's ros
 # container keeps every core, so an explicit GOLEM_ROS_CPUSET there is refused,
 # not applied. No simulator runs on domain 0.
@@ -211,7 +198,6 @@ configure_cpus() {
     local sim=${GOLEM_SIM_CPUSET:-} ros=${GOLEM_ROS_CPUSET:-}
     local root=${GOLEM_SYSFS_ROOT:-} core atom online=''
     unset GOLEM_SIM_CPUSET GOLEM_ROS_CPUSET
-    [ "${GOLEM_PLATFORM:-linux}" != mac ] || return 0
     if [ "$ROS_DOMAIN_ID" = 0 ]; then
         [ -z "$ros" ] || fail "GOLEM_ROS_CPUSET='$ros' is set on domain 0, the real robot's bus, where the ros container keeps every core. Unset GOLEM_ROS_CPUSET."
         echo 'cpus: not pinned (domain 0)' >&2
@@ -326,17 +312,15 @@ prepare_mounts() {
             ;;
         ros)
             require_file "$GOLEM_ROOT/core_ws/src/golem_bringup/package.xml"
-            if [ "${GOLEM_PLATFORM:-linux}" != mac ]; then
-                require_file "$GOLEM_ROOT/core_ws/cyclonedds.xml"
-                require_file "$GOLEM_ROOT/mujoco_mpc/CMakeLists.txt"
-                require_dir "$GOLEM_ASSETS_DIR/graspgenx/assets/magpie"
-                require_dir "$GOLEM_ASSETS_DIR/graspgenx/assets/meshes/magpie"
-                # mujoco_mpc/.git is a file naming the real git directory;
-                # docker-compose.yml mounts that directory.
-                export GOLEM_MJPC_GIT_DIR="${GOLEM_MJPC_GIT_DIR:-$(git -C "$GOLEM_ROOT/mujoco_mpc" rev-parse --absolute-git-dir 2>/dev/null || echo "$GOLEM_ROOT/.git/modules/mujoco_mpc")}"
-                require_dir "$GOLEM_MJPC_GIT_DIR"
-                mkdir -p "$GOLEM_CACHE_DIR/mjpc_build" "$GOLEM_ROOT/mujoco_mpc/build"
-            fi
+            require_file "$GOLEM_ROOT/core_ws/cyclonedds.xml"
+            require_file "$GOLEM_ROOT/mujoco_mpc/CMakeLists.txt"
+            require_dir "$GOLEM_ASSETS_DIR/graspgenx/assets/magpie"
+            require_dir "$GOLEM_ASSETS_DIR/graspgenx/assets/meshes/magpie"
+            # mujoco_mpc/.git is a file naming the real git directory;
+            # docker-compose.yml mounts that directory.
+            export GOLEM_MJPC_GIT_DIR="${GOLEM_MJPC_GIT_DIR:-$(git -C "$GOLEM_ROOT/mujoco_mpc" rev-parse --absolute-git-dir 2>/dev/null || echo "$GOLEM_ROOT/.git/modules/mujoco_mpc")}"
+            require_dir "$GOLEM_MJPC_GIT_DIR"
+            mkdir -p "$GOLEM_CACHE_DIR/mjpc_build" "$GOLEM_ROOT/mujoco_mpc/build"
             ;;
     esac
 }

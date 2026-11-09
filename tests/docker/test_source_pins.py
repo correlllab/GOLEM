@@ -4,7 +4,7 @@ import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-FILES = sorted((ROOT / 'docker').glob('*Dockerfile')) + sorted((ROOT / 'docker/mac').glob('*Dockerfile*'))
+FILES = sorted((ROOT / 'docker').glob('*Dockerfile'))
 
 class SourcePinTests(unittest.TestCase):
     """Check the Dockerfiles' base images, clones and downloads are pinned."""
@@ -38,9 +38,7 @@ class SourcePinTests(unittest.TestCase):
                 if 'Livox-SDK2.git' in run:
                     pin = re.search(r'checkout(?: --quiet)? ([0-9a-f]{40})\b', run)
                     refs[path.relative_to(ROOT).as_posix()] = pin and pin.group(1)
-        self.assertLessEqual({'docker/RosDockerfile', 'docker/RobocasaDockerfile',
-                              'docker/mac/RobocasaDockerfile.arm64',
-                              'docker/mac/RosDockerfile.slim.arm64'}, set(refs))
+        self.assertLessEqual({'docker/RosDockerfile', 'docker/RobocasaDockerfile'}, set(refs))
         self.assertEqual(len(set(refs.values())), 1, refs)
 
     def test_robocasa_patches_name_the_pinned_checkouts(self):
@@ -75,15 +73,6 @@ class SourcePinTests(unittest.TestCase):
         self.assertEqual(pins['ipython'], '9.10.1')
         for path in sorted(locks.glob('isaac-amd64-*.txt')):
             self.assertIn('\npsutil==5.9.8\n', path.read_text(), str(path))
-
-    def test_bare_ubuntu_bases_have_a_ca_bundle_before_https_snapshots(self):
-        """Bare Ubuntu stages copy a CA bundle in before they switch apt to HTTPS snapshots."""
-        for path in FILES:
-            text = path.read_text()
-            if re.search(r'^FROM ubuntu:', text, re.M) and 'apt-sources.sh' in text:
-                copy = text.find('COPY --from=ca_bundle /etc/ssl/certs/ca-certificates.crt')
-                self.assertNotEqual(copy, -1, str(path))
-                self.assertLess(copy, text.index('RUN sh /opt/golem-locks/apt-sources.sh'), str(path))
 
     def test_ros_removes_base_kinematics_closure_before_reinstall(self):
         """The ROS image uninstalls every package of the base image's Pinocchio closure before reinstalling it."""

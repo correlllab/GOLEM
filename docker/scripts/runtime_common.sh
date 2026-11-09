@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # In-container helpers for the launchers that must never run on the real
-# robots' domain: launch_robocasa.sh, launch_isaac.sh and both Mac launchers.
+# robots' domain: launch_robocasa.sh and launch_isaac.sh.
 # Sourced, not run. The check runs inside the container, so a direct
 # `docker compose` run that skips the host wrappers is guarded too.
 

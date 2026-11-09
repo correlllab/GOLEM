@@ -1,5 +1,5 @@
 #!/bin/bash
-# The x86 robocasa container's command: build msgs_ws, then run the RoboCasa
+# The robocasa container's command: build msgs_ws, then run the RoboCasa
 # simulator (golem_robocasa/h12_mujoco.py) of the selected robot.
 #
 # Usage: launch_robocasa.sh [h12_mujoco.py arguments...]

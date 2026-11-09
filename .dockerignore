@@ -1,9 +1,8 @@
 # The build context holds only what a Dockerfile COPYs; everything else (core_ws,
 # the simulators, assets, weights) is bind-mounted at runtime, and sending it
 # would cost about 11 GB per build. Deny all, then re-include the COPY sources:
-#   unitree_sdk2_python                      BaseDockerfile, mac/BaseDockerfile.arm64
-#   core_ws/src/livox_ros_driver2            RobocasaDockerfile, mac/RobocasaDockerfile.arm64,
-#                                            mac/RosDockerfile.slim.arm64
+#   unitree_sdk2_python                      BaseDockerfile
+#   core_ws/src/livox_ros_driver2            RobocasaDockerfile
 #   core_ws/src/magpie_msgs                  IsaacDockerfile
 #   docker/scripts/package_humble_runtime.py IsaacDockerfile
 #   docker/locks/**                          every Dockerfile

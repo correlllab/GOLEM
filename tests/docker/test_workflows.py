@@ -18,7 +18,7 @@ class Workflows(unittest.TestCase):
         """Copy docker/ into a fixture checkout with stand-in files and put the stub docker on PATH.
 
         The stub logs every call, answers `inspect` (EXISTING set: the container exists) and
-        `info`, and runs the real `docker compose config`.
+        runs the real `docker compose config`.
         """
         self.tmp = tempfile.TemporaryDirectory(prefix='golem test ')
         self.addCleanup(self.tmp.cleanup)
@@ -47,8 +47,6 @@ if sys.argv[1] == 'inspect':
         print('true')
     else:
         sys.exit(1)
-if sys.argv[1] == 'info':
-    print('aarch64' if os.environ.get('TEST_MAC') else 'x86_64')
 if 'config' in sys.argv:
     os.execv('/usr/bin/docker', ['docker'] + sys.argv[1:])
 ''')
@@ -157,12 +155,6 @@ if 'config' in sys.argv:
         r = self.run_script('docker/scripts/docker_run.sh', 'robocasa')
         self.assertEqual(r.returncode, 0, r.stderr)
 
-    def test_mac_rejects_isaac(self):
-        """The Mac wrapper refuses the Isaac service."""
-        r = self.run_script('docker/mac/scripts/docker_run_mac.sh', 'isaac', TEST_MAC='1')
-        self.assertNotEqual(r.returncode, 0)
-        self.assertFalse(any('run' in c for c in self.calls()))
-
     def test_shell_domain_overrides_env_file(self):
         """A ROS_DOMAIN_ID in the shell wins over docker/.env's."""
         (self.root / 'docker/.env').write_text('ROS_DOMAIN_ID=0\n')
@@ -185,9 +177,9 @@ if 'config' in sys.argv:
         self.assertEqual(mounts['/home/code/CL_Assets']['source'], str(assets))
         self.assertFalse(mounts['/home/code/CL_Assets'].get('bind', {}).get('create_host_path', False))
 
-    def test_mac_stack_warms_ros_before_starting_pair(self):
-        """The Mac stack builds the ros container once before it starts both services together."""
-        r = self.run_script('docker/mac/scripts/docker_stack_mac.sh', 'up', 'robocasa', TEST_MAC='1')
+    def test_stack_warms_ros_before_starting_pair(self):
+        """docker_stack.sh builds the ros container once before it starts both services together."""
+        r = self.run_script('docker/scripts/docker_stack.sh', 'up', 'robocasa', '--headless')
         self.assertEqual(r.returncode, 0, r.stderr)
         calls = self.calls()
         warm = next(i for i, c in enumerate(calls) if 'run' in c and '/bin/true' in c)
@@ -227,20 +219,6 @@ if 'config' in sys.argv:
                 r = subprocess.run(['bash', '-c', 'source "$1"; validate_sim_domain', 'bash', str(script)],
                                    env=dict(self.env, ROS_DOMAIN_ID=domain), capture_output=True)
                 self.assertNotEqual(r.returncode, 0)
-
-    def test_mac_compose_keeps_native_build_volumes_without_gpu_requirements(self):
-        """The Mac compose services are arm64 with named build volumes and host IPC, and need no GPU runtime."""
-        r = subprocess.run(['/usr/bin/docker', 'compose', '--env-file', '/dev/null', '-f',
-                            str(self.root / 'docker/mac/docker-compose.yml'), 'config', '--format', 'json'],
-                           env=self.env, text=True, capture_output=True)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        services = json.loads(r.stdout)['services']
-        self.assertEqual(set(services), {'ros', 'robocasa'})
-        for service in services.values():
-            self.assertEqual(service['platform'], 'linux/arm64')
-            self.assertNotIn('runtime', service)
-            self.assertEqual(service['ipc'], 'host')
-            self.assertTrue(any(v['type'] == 'volume' and v['target'].endswith('/build') for v in service['volumes']))
 
     def test_stack_restart_replaces_single_service_containers(self):
         """docker_stack.sh restart removes both single-service containers before it starts the pair."""
@@ -490,12 +468,11 @@ if 'config' in sys.argv:
                 for call in calls:
                     self.assertEqual(self.pin_overlays(call), pinned, call)
 
-    def test_wrappers_do_not_pin_isaac_the_mac_or_domain_zero(self):
-        """The Isaac simulator, the Mac wrappers and the real robots' domain 0 get no pinning overlay."""
+    def test_wrappers_do_not_pin_isaac_or_domain_zero(self):
+        """The Isaac simulator and the real robots' domain 0 get no pinning overlay."""
         env = dict(GOLEM_CPU_PINNING='1', GOLEM_SYSFS_ROOT=self.hybrid_sysfs())
         cases = ((('docker/scripts/docker_run.sh', 'isaac', '--headless'), {}, ''),
                  (('docker/scripts/docker_stack.sh', 'up', 'isaac', '--headless'), {}, ''),
-                 (('docker/mac/scripts/docker_stack_mac.sh', 'up', 'robocasa'), {'TEST_MAC': '1'}, ''),
                  (('docker/scripts/docker_run.sh', 'ros'), {'ROS_DOMAIN_ID': '0'}, 'y\n'))
         for args, extra, stdin in cases:
             with self.subTest(args=args):
@@ -654,12 +631,9 @@ if 'config' in sys.argv:
         r = self.run_script('docker/scripts/docker_run.sh', 'ros', GOLEM_ROBOT='h12')
         self.assertEqual(r.returncode, 0, r.stderr)
 
-    def test_g1_rejected_on_mac_and_isaac(self):
-        """The G1 is refused on the Mac wrappers and with the Isaac sim, before compose runs."""
+    def test_g1_rejected_with_isaac(self):
+        """The G1 is refused with the Isaac sim, before compose runs."""
         cases = (
-            ('docker/scripts/docker_run.sh', ('robocasa', '--g1'), {'GOLEM_PLATFORM': 'mac', 'TEST_MAC': '1'}),
-            ('docker/mac/scripts/docker_run_mac.sh', ('ros', '--g1'), {'TEST_MAC': '1'}),
-            ('docker/mac/scripts/docker_stack_mac.sh', ('up', 'robocasa', '--g1'), {'TEST_MAC': '1'}),
             ('docker/scripts/docker_run.sh', ('isaac', '--g1'), {}),
             ('docker/scripts/docker_run.sh', ('isaac',), {'GOLEM_ROBOT': 'g1'}),
             ('docker/scripts/docker_stack.sh', ('up', 'isaac', '--g1'), {}),
@@ -778,14 +752,12 @@ if 'config' in sys.argv:
         self.assertEqual(env['GOLEM_SPAWN_BACKOFF'], '2.0')
         self.assertEqual(env['GOLEM_LIDAR_BACKEND'], 'cpu')
 
-    def test_robocasa_services_pass_the_sim_rate_empty_unless_set(self):
-        """The x86 and Mac robocasa services pass GOLEM_SIM_RATE, empty (the sims' real time) unless set."""
-        for files in (('docker-compose.yml',), ('mac/docker-compose.yml',)):
-            with self.subTest(files=files):
-                env = self.compose_config(*files, profile='robocasa')['robocasa']['environment']
-                self.assertEqual(env['GOLEM_SIM_RATE'], '')
-                env = self.compose_config(*files, profile='robocasa', GOLEM_SIM_RATE='max')['robocasa']['environment']
-                self.assertEqual(env['GOLEM_SIM_RATE'], 'max')
+    def test_robocasa_service_passes_the_sim_rate_empty_unless_set(self):
+        """The robocasa service passes GOLEM_SIM_RATE, empty (the sims' real time) unless set."""
+        env = self.compose_config('docker-compose.yml', profile='robocasa')['robocasa']['environment']
+        self.assertEqual(env['GOLEM_SIM_RATE'], '')
+        env = self.compose_config('docker-compose.yml', profile='robocasa', GOLEM_SIM_RATE='max')['robocasa']['environment']
+        self.assertEqual(env['GOLEM_SIM_RATE'], 'max')
 
     def test_closed_loop_tests_forward_the_sim_rate_from_the_shell(self):
         """Every closed-loop test script hands GOLEM_SIM_RATE to sim_test_shell_knobs (the shell's value, never docker/.env's)."""

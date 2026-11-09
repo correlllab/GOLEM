@@ -1,7 +1,0 @@
-# Constraints for RobocasaDockerfile.arm64: robocasa (numpy 2.2.5 and
-# mujoco 3.3.1 by its setup.py).
--c robocasa-arm64.txt
-huggingface-hub==1.31.0
-mujoco==3.3.1
-numpy==2.2.5
-psutil==7.2.2

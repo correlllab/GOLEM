@@ -1,5 +1,4 @@
 # Recorded from installed Linux images, 2026-09-17.
-# arm64 files reuse portable versions; require native build validation.
 absl-py==2.5.0
 argcomplete==1.8.1
 attrs==21.2.0

@@ -175,14 +175,13 @@ def test_profiles_drive_the_differences(robot):
 
 
 def test_the_arguments_override_the_profile_files():
-    """fast_lio_config and use_sim_time reach every node that reads them."""
+    """fast_lio_config reaches every node that reads it, and use_sim_time every node."""
     sim = os.path.join(CONFIG, 'g1', 'fastlio_sim.yaml')
     ns = nodes(*pipeline('g1', fast_lio_config=sim, use_sim_time='true'))
     assert ns['fast_lio'][2] == [sim]
     assert ns['body_to_pelvis'][1]['fastlio_config'] == sim
     for name, (_, values, _) in ns.items():
-        if name != 'livox_frame_tf':   # static_transform_publisher: arguments only
-            assert values['use_sim_time'] is True, name
+        assert values['use_sim_time'] is True, name
 
 
 def test_a_robot_without_a_config_directory_is_refused():

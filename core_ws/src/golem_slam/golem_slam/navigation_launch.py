@@ -72,6 +72,7 @@ def _pipeline(context):
         executable='static_transform_publisher',
         name='livox_frame_tf',
         arguments=static_transform_arguments(transform(), profile['lidar_link'], LIVOX_FRAME),
+        parameters=[{'use_sim_time': use_sim_time}],
         output='screen',
     )
     # LiDAR-inertial odometry: camera_init -> body, /Odometry and the deskewed

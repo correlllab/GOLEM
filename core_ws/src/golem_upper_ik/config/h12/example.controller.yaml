@@ -115,7 +115,8 @@ frequency:
   # Hz, > 0: control steps (IK steps, holds) per s of robot time
   ctrl_hz: 50.0
   # Hz, > 0: command messages per s of robot time to topics.low_cmd; under use_sim_time
-  # every rate here is at most one cycle per /clock message
+  # every rate here follows /clock's steps: about one cycle per step while a step is no
+  # longer than the period, and a burst of the newest command on a longer one
   pub_hz: 500.0
   # Hz, > 0: the follow gate's checks per s of robot time between control steps
   check_hz: 1000.0

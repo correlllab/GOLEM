@@ -242,9 +242,11 @@ then moves only in the start-up step 4.
 
 **Commands.** A publisher thread sends the newest command at `frequency.pub_hz` on absolute
 deadlines of robot time. Under `use_sim_time` a robot-time wait ends only when `/clock` moves,
-so every rate (`pub_hz`, `check_hz`, `ctrl_hz`) is at most one cycle per `/clock` message
-(RoboCasa's every 2 ms of sim time; Isaac's once per control step), and the publisher makes up
-a short lag with a burst of the newest command. Every q, dq and tau is clipped to `limits.clip`; a
+so every rate (`pub_hz`, `check_hz`, `ctrl_hz`) follows `/clock`'s steps (RoboCasa's every
+2 ms of sim time; Isaac's once per control step): about one cycle per step while a step is no
+longer than the period. The publisher makes up a longer step, or a short lag, with a burst of
+the newest command (up to `MAX_CATCH_UP_S` of robot time, `core/ros_io.py`), and a control
+step whose work outlasts its period starts the next at once. Every q, dq and tau is clipped to `limits.clip`; a
 non-finite value is refused (`ValueError`) and the last good command keeps going out, since
 `golem_safety` latches its estop on a non-finite command. Only the upper slots are written:
 the lower slots and the slots past the body are mode 0 with every value 0. The header

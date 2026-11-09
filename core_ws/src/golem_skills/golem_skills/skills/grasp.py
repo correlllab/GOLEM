@@ -28,10 +28,7 @@ the tuning knobs, grouped by pipeline stage.
 
 import copy
 import math
-import os
-import re
 from dataclasses import dataclass
-from datetime import datetime
 
 import cv2
 import numpy as np
@@ -49,8 +46,7 @@ from custom_ros_messages.msg import Detection
 
 from ..base import (_Run, GRASP_FRAMES, SLOW_MODE_TIME_SCALE, WORLD_FRAME,
                     GEMINI_TIMEOUT_SEC)
-from model_server.model_logging import _log_root
-from ..perception_utils import pose_to_matrix, extract_json
+from ..perception_utils import pose_to_matrix, extract_json, quat_geodesic
 from ..grasp_synthesis import METHODS, SynthesisInput, method_name
 from ..grasp_synthesis.common import GRIPPER_BASE_TO_CONTACT_M, pose_at
 
@@ -129,23 +125,6 @@ POST_CLOSE_SETTLE_SEC = 4.0
 # m the contact move stops short of the grasp pose; default of the node's
 # `contact_offset` parameter, which the move reads
 CONTACT_OFFSET = 0.25 * APPROACH_DIST
-# Testing switch: hold at the pre-grasp until Enter is pressed on the skills
-# node's terminal (needs interactive stdin; ignores cancel while it waits).
-CONFIRM_BEFORE_CONTACT = False
-
-# ---- approach snapshot (APPROACH_IMAGE_ONLY) --------------------------------
-# Testing switch: END the skill at the pre-grasp. After the approach the skill
-# settles, saves ONE frame from the grasping arm's hand-camera color stream (no
-# head-camera fallback), returns the arms to 'prep' and succeeds. No visual
-# servo (goal.visual_servo is ignored: it aligns a close that never happens,
-# and a servo failure would abort before the image), no contact move, no close
-# and no GraspOutcome, so pick_place's inner grasp fails while this is on.
-# Images go to <golem_skills>/logs/approach_images/ (host-persistent through
-# the core_ws bind mount).
-APPROACH_IMAGE_ONLY = False
-# s of robot time to wait for a hand-camera frame captured at the pre-grasp before
-# saving the latest cached one instead
-APPROACH_IMAGE_WAIT_SEC = 3.0
 
 # ---- visual servo (goal.visual_servo) ---------------------------------------
 # Closed-loop hand-camera alignment at the pre-grasp (servo()). The hand camera
@@ -363,9 +342,6 @@ class GraspSkill:
             far below horizontal;
           visual_servo: replace the contact move with servo().
 
-        With APPROACH_IMAGE_ONLY on, the run ends at the pre-grasp (see the
-        constant) and sets no GraspOutcome.
-
         `self._last_grasp_outcome` is cleared at the start and set only by a
         successful grasp, so a failed grasp never leaks a stale outcome to
         pick_place; one grasp goal runs at a time. TARGET_FRAME is broadcast
@@ -454,30 +430,6 @@ class GraspSkill:
             # no retreat: a failed walk ends with the arms reset to reset_cfg,
             # and a halted arm must not be moved at all
             return run.abort(err)
-        # The snapshot mode pre-empts the visual servo and the contact confirm:
-        # both set up a close that never happens here, and a servo failure
-        # would abort before the image is taken.
-        if APPROACH_IMAGE_ONLY:
-            if not run.phase('save_image', 0.75):
-                return run.result
-            # the arm is still moving by several mm when frame_task reports
-            # done, which would blur the frame
-            self.get_clock().sleep_for(
-                RclpyDuration(seconds=PRE_CLOSE_SETTLE_SEC))
-            path = self._save_approach_image(arm, obj)
-            if path is None:
-                return fail(f'no {arm} hand-camera frame to save at the '
-                            f'pre-grasp for {obj!r}')
-            if not run.phase('return_to_prep', 0.9):
-                return run.result
-            if not self.goto_named_config('prep', plan=True, slow_mode=True,
-                                          duration_sec=30.0, result_timeout=90.0,
-                                          outer_gh=gh):
-                return fail(f"saved {path} but the return to 'prep' failed")
-            return run.succeed(
-                f'approached {obj!r} and saved {path}; no grasp executed '
-                f'(APPROACH_IMAGE_ONLY)')
-
         # On success the servo replaces the contact move: the gripper closes
         # where the loop parked it.
         servo_pose_p = None
@@ -492,11 +444,6 @@ class GraspSkill:
                     f'grasp: visual servo did not converge ({err}) — closing '
                     'anyway at the current pose (best-effort)')
                 servo_pose_p = self._frame_pose_in_pelvis(GRASP_FRAMES[arm])
-        if CONFIRM_BEFORE_CONTACT:
-            self.get_logger().info(
-                f'grasp: holding at pre-grasp for {obj!r} — press Enter on the '
-                f'skills node terminal to execute the grasp')
-            input(f'at pre-grasp for {obj!r} — press Enter to execute the grasp ')
 
         if not run.phase('close_gripper', 0.75):
             return run.result
@@ -734,7 +681,7 @@ class GraspSkill:
         q0 = _pose_quat(cur)
         q1 = _pose_quat(target)
         dist = float(np.linalg.norm(p1 - p0))
-        angle = _quat_angle(q0, q1)
+        angle = quat_geodesic(q0, q1)
         n = max(1, int(math.ceil(max(dist / step_m, angle / step_rad))))
         self.get_logger().info(
             f'grasp: {label}: {dist * 100:.1f}cm / {math.degrees(angle):.0f}deg '
@@ -1345,56 +1292,6 @@ class GraspSkill:
             self.get_logger().warn(f'servo image publish failed: {e}',
                                    throttle_duration_sec=5.0)
 
-    def _save_approach_image(self, arm, obj):
-        """
-        Save `arm`'s hand-camera view of `obj` at the pre-grasp (APPROACH_IMAGE_ONLY).
-
-        Saves the color stream's next frame (only frames captured from now on,
-        so a mid-move frame is never saved); without one within
-        APPROACH_IMAGE_WAIT_SEC, the latest cached hand frame, with a warning.
-        There is no head-camera fallback: the point is the hand view. Returns
-        the absolute path written, or None when no hand frame could be decoded
-        or written.
-        """
-        after = _stamp_tuple(self.get_clock().now().to_msg())
-        deadline = self.robot_now() + APPROACH_IMAGE_WAIT_SEC
-        msg = None
-        while self.robot_now() < deadline:
-            fresh = self.latest_arm_image(arm)
-            if (fresh is not None
-                    and _stamp_tuple(fresh.header.stamp) > after):
-                msg = fresh
-                break
-            self.get_clock().sleep_for(RclpyDuration(seconds=0.1))
-        if msg is None:
-            msg = self.latest_arm_image(arm)
-            if msg is not None:
-                self.get_logger().warn(
-                    f'grasp: no {arm} hand-camera frame newer than the '
-                    f'pre-grasp arrival within {APPROACH_IMAGE_WAIT_SEC:.0f}s '
-                    f'— saving the latest cached hand frame')
-        if msg is None or not msg.data:
-            return None
-        img = cv2.imdecode(np.frombuffer(bytes(msg.data), dtype=np.uint8),
-                           cv2.IMREAD_COLOR)
-        if img is None:
-            return None
-        slug = re.sub(r'[^A-Za-z0-9]+', '_', obj).strip('_').lower() or 'object'
-        stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]
-        path = os.path.join(_log_root('golem_skills', __file__),
-                            'approach_images', f'{stamp}_{slug}_{arm}.png')
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            if not cv2.imwrite(path, img):
-                raise OSError('cv2.imwrite returned False')
-        except OSError as e:
-            self.get_logger().warn(f'grasp: could not write {path}: {e}')
-            return None
-        self.get_logger().info(
-            f'grasp: saved {arm} hand-camera approach image for {obj!r} '
-            f'to {path}')
-        return path
-
     def _retreat_after_failure(self, arm, gh):
         """
         Lift `arm`'s hand FAILURE_RETRACT_M straight up (pelvis +Z) before a failure is reported.
@@ -1636,11 +1533,6 @@ def _pose_quat(pose):
     q = np.array([pose.orientation.x, pose.orientation.y,
                   pose.orientation.z, pose.orientation.w], dtype=float)
     return q / np.linalg.norm(q)
-
-
-def _quat_angle(q0, q1):
-    """Return the rotation angle [rad] between unit quaternions q0 and q1."""
-    return 2.0 * math.acos(min(1.0, abs(float(np.dot(q0, q1)))))
 
 
 def _quat_slerp(q0, q1, t):

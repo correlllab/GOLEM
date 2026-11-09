@@ -81,12 +81,6 @@ ARM_DETECTION_TOPICS = {
     'left':  '/realsense/left_hand/color/image_raw/compressed/detections',
     'right': '/realsense/right_hand/color/image_raw/compressed/detections',
 }
-# The hand cameras' color streams, cached directly so the grasp skill's
-# approach snapshot has a frame even when yolo_server's hand channels are down.
-ARM_COLOR_IMAGE_TOPICS = {
-    'left':  '/realsense/left_hand/color/image_raw/compressed',
-    'right': '/realsense/right_hand/color/image_raw/compressed',
-}
 
 # URDF gripper-BASE frames whose axes match GraspGenX's grasp convention (+Z
 # approach, +X finger closing, origin at the magpie gripper base), so a grasp
@@ -216,11 +210,11 @@ class _Run:
 
     In an execute callback:
 
-        run = _Run(self, goal_handle, SkillOpenDoor, 'open_door')
-        if not run.phase('detect', 0.0):
+        run = _Run(self, goal_handle, SkillGrasp, 'grasp')
+        if not run.phase('detect_object', 0.0):
             return run.result            # canceled or timed out
         ...
-        return run.succeed('door opened')   # or run.abort('reason')
+        return run.succeed('grasped')       # or run.abort('reason')
     """
 
     def __init__(self, node, goal_handle, action_type, label):
@@ -434,7 +428,6 @@ class SkillsBase(Node):
         # head-camera YOLO DetectionBundle
         self._latest_detections = None
         self._latest_arm_detections = {arm: None for arm in ARM_DETECTION_TOPICS}
-        self._latest_arm_images = {arm: None for arm in ARM_COLOR_IMAGE_TOPICS}
         self.create_subscription(
             CompressedImage, COLOR_IMAGE_TOPIC, self._on_color_image,
             qos_profile_sensor_data, callback_group=self._cb_group)
@@ -451,11 +444,6 @@ class SkillsBase(Node):
             self.create_subscription(
                 DetectionBundle, topic,
                 lambda msg, a=arm: self._on_arm_detections(a, msg),
-                qos_profile_sensor_data, callback_group=self._cb_group)
-        for arm, topic in ARM_COLOR_IMAGE_TOPICS.items():
-            self.create_subscription(
-                CompressedImage, topic,
-                lambda msg, a=arm: self._on_arm_image(a, msg),
                 qos_profile_sensor_data, callback_group=self._cb_group)
 
         # With `wait_for_services`, wait for the H1-2's perception and gripper
@@ -525,10 +513,6 @@ class SkillsBase(Node):
         """Cache the latest hand-camera YOLO DetectionBundle for `arm`."""
         self._latest_arm_detections[arm] = msg
 
-    def _on_arm_image(self, arm, msg: CompressedImage):
-        """Cache the latest hand-camera color frame for `arm`."""
-        self._latest_arm_images[arm] = msg
-
     def latest_image(self):
         """Return the latest head-camera color frame (CompressedImage), or None."""
         return self._latest_image
@@ -544,10 +528,6 @@ class SkillsBase(Node):
     def latest_arm_detections(self, arm):
         """Return the latest hand-camera YOLO DetectionBundle for `arm`, or None."""
         return self._latest_arm_detections.get(arm)
-
-    def latest_arm_image(self, arm):
-        """Return the latest hand-camera color frame (CompressedImage) for `arm`, or None."""
-        return self._latest_arm_images.get(arm)
 
     def publish_tf(self, transform):
         """

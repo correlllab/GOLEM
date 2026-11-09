@@ -18,6 +18,7 @@ import textwrap
 import mujoco
 import numpy as np
 
+import robosuite_common
 import sim_common
 from g1 import g1_mujoco, g1_robosuite
 from g1.sim_names import NameResolver
@@ -82,7 +83,7 @@ def test_spawn_clear_of_floor_and_kitchen():
     env, model, data, resolver, iface, spawn = _sim()
     model, data, resolver, iface, band, body = _from_spawn()
     assert g1_robosuite.lowest_robot_point_z(env) > 0.0
-    contacts = g1_robosuite._robot_env_contacts(model, data)
+    contacts = robosuite_common.robot_env_contacts(model, data)
     assert not contacts, f"{len(contacts)} robot<->kitchen contacts at spawn"
     assert np.allclose(band.point - data.xpos[body], [0.0, 0.0, 0.01])
     # Twice the H1-2 band's stiffness: at its 1e4 N/m the limp G1 keeps rocking (g1_mujoco.py).

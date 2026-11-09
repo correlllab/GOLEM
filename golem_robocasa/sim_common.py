@@ -209,6 +209,14 @@ def random_task(seed: int | None = None) -> str:
     return random.choice(sorted(runnable))
 
 
+def canonical_task(name: str, tasks: Sequence[str]) -> str | None:
+    """Return the entry of tasks matching name case-insensitively, else None."""
+    for task in tasks:
+        if name.lower() == task.lower():
+            return task
+    return None
+
+
 def resolve_task(name: str, seed: int | None = None, *, tag: str,
                  robot_task: Callable[[str], str | None] = lambda name: None) -> str:
     """Return the runnable task a --task name stands for.

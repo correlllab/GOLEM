@@ -1,9 +1,10 @@
 """Register the Unitree G1 (29 DoF, Dex3-1 hands) as a robosuite robot, and place it.
 
 Importing this module makes ``robots="G1Dex3"`` resolvable; make_kitchen_env
-installs the RoboCasa placement patch, which positions the legged robot by its
-pelvis free joint (RoboCasa's own placement writes mobile-base joints this
-robot lacks), and builds a task env.
+installs the RoboCasa placement patch (robosuite_common), which positions the
+legged robot by its pelvis free joint (RoboCasa's own placement writes
+mobile-base joints this robot lacks), and builds a task env.
+place_robot_collision_free keeps the robot clear of the floor and the fixtures.
 
 The robot MJCF is generated at import time from CL_Assets/g1's
 g1_29dof_with_hand_rev_1_0.xml and the sensor frames of its URDF into a temp
@@ -32,13 +33,14 @@ from robosuite.models.robots.manipulators.legged_manipulator_model import (
 )
 from robosuite.robots import register_robot_class
 
+import robosuite_common
+from robosuite_common import backward_dir, euler_to_wxyz, robot_env_contacts
+
 G1_ASSETS = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "..", "..", "CL_Assets", "g1", "g1_description"))
 SOURCE_XML = os.path.join(G1_ASSETS, "g1_29dof_with_hand_rev_1_0.xml")
 SOURCE_URDF = os.path.join(G1_ASSETS, "g1_29dof_with_hand_rev_1_0.urdf")
-
-FREE_JOINT_NAME = "floating_base_joint"
 
 # The joint dynamics and the stance are Unitree's, from unitree_rl_gym
 # (github.com/unitreerobotics/unitree_rl_gym, BSD-3-Clause): the default joint
@@ -81,31 +83,6 @@ _CAM_IN_D435 = np.array([0.5, 0.5, -0.5, -0.5])
 HEAD_CAM_FOVY = 42.5
 
 
-def _euler_to_wxyz(euler):
-    """Return the wxyz quaternion of a RoboCasa base orientation or a URDF rpy.
-
-    Accepts euler [roll, pitch, yaw] (rad, fixed axes as URDF rpy; RoboCasa's
-    init_robot_base_ori), a yaw scalar, a wxyz quaternion, or None (identity).
-    """
-    if euler is None:
-        return np.array([1.0, 0.0, 0.0, 0.0])
-    e = np.asarray(euler, dtype=float).reshape(-1)
-    if e.size == 4:
-        return e
-    if e.size == 1:
-        e = np.array([0.0, 0.0, float(e[0])])
-    r, p, y = e[0], e[1], e[2]
-    cr, sr = np.cos(r / 2), np.sin(r / 2)
-    cp, sp = np.cos(p / 2), np.sin(p / 2)
-    cy, sy = np.cos(y / 2), np.sin(y / 2)
-    return np.array([
-        cr * cp * cy + sr * sp * sy,
-        sr * cp * cy - cr * sp * sy,
-        cr * sp * cy + sr * cp * sy,
-        cr * cp * sy - sr * sp * cy,
-    ])
-
-
 def _urdf_frame(urdf_root, joint_name):
     """Return (parent link, child link, pos m, wxyz quat) of a URDF fixed joint."""
     joint = urdf_root.find(f"joint[@name='{joint_name}']")
@@ -113,7 +90,7 @@ def _urdf_frame(urdf_root, joint_name):
         raise KeyError(f"URDF joint {joint_name} not found")
     origin = joint.find("origin")
     pos = np.array(origin.get("xyz", "0 0 0").split(), dtype=float)
-    quat = _euler_to_wxyz(np.array(origin.get("rpy", "0 0 0").split(), dtype=float))
+    quat = euler_to_wxyz(np.array(origin.get("rpy", "0 0 0").split(), dtype=float))
     return joint.find("parent").get("link"), joint.find("child").get("link"), pos, quat
 
 
@@ -159,11 +136,11 @@ def build_robot_xml(source_xml=SOURCE_XML, source_urdf=SOURCE_URDF):
 
     pelvis = root.find("worldbody/body")
     free = pelvis.find("joint[@type='free']")
-    if free is None or free.get("name") != FREE_JOINT_NAME:
-        raise ValueError(f"expected the free joint {FREE_JOINT_NAME} on the root body")
+    if free is None or free.get("name") != robosuite_common.FREE_JOINT_NAME:
+        raise ValueError(f"expected the free joint {robosuite_common.FREE_JOINT_NAME} on the root body")
     index = list(pelvis).index(free)
     pelvis.remove(free)
-    pelvis.insert(index, ET.Element("freejoint", {"name": FREE_JOINT_NAME}))
+    pelvis.insert(index, ET.Element("freejoint", {"name": robosuite_common.FREE_JOINT_NAME}))
 
     for joint in pelvis.iter("joint"):
         dynamics = HAND_JOINT_DYNAMICS if "_hand_" in joint.get("name") else BODY_JOINT_DYNAMICS
@@ -308,86 +285,18 @@ class G1Dex3(LeggedManipulatorModel):
         return {"right": "right_hand_palm_link", "left": "left_hand_palm_link"}
 
 
-def place_robot_freejoint(env, pos, quat_wxyz):
-    """Write the pelvis free joint's pose (pos m, quat_wxyz, world) and run sim.forward()."""
-    sim = env.sim
-    jname = f"{env.robots[0].robot_model.naming_prefix}{FREE_JOINT_NAME}"
-    addr = sim.model.get_joint_qpos_addr(jname)
-    start = addr[0] if isinstance(addr, tuple) else addr
-    sim.data.qpos[start : start + 3] = np.asarray(pos, dtype=float)
-    sim.data.qpos[start + 3 : start + 7] = np.asarray(quat_wxyz, dtype=float)
-    sim.forward()
+def lowest_robot_point_z(env):
+    """Return the lowest world z (m) of the G1's colliding geoms (robosuite_common.lowest_robot_point_z).
 
-
-def lowest_robot_point_z(env, prefixes=("robot0_", "gripper0_")):
-    """Return the lowest world z (m) of the robot's colliding geoms, from each geom's AABB.
-
-    The bounding sphere (geom_rbound) is far too conservative for flat feet.
     Visual geoms are skipped: the G1's foot meshes reach 1.7 cm below its
     collision spheres.
     """
-    m = env.sim.model._model
-    d = env.sim.data._data
-    corners = np.array(
-        [[sx, sy, sz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)], dtype=float
-    )
-    best = float("inf")
-    for i in range(m.ngeom):
-        bn = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, m.geom_bodyid[i]) or ""
-        if not bn.startswith(prefixes) or not (m.geom_contype[i] or m.geom_conaffinity[i]):
-            continue
-        aabb = m.geom_aabb[i]
-        world = (corners * aabb[3:] + aabb[:3]) @ d.geom_xmat[i].reshape(3, 3).T + d.geom_xpos[i]
-        best = min(best, float(world[:, 2].min()))
-    return best
+    return robosuite_common.lowest_robot_point_z(env, colliding_only=True)
 
 
 def place_robot_clear(env, pos, quat_wxyz, clearance=0.02):
-    """Place the pelvis at pos, quat_wxyz, then shift it in z so the robot clears the floor.
-
-    The robot's lowest point (lowest_robot_point_z) ends clearance (m) above z = 0.
-    """
-    place_robot_freejoint(env, pos, quat_wxyz)
-    low = lowest_robot_point_z(env)
-    if low != float("inf"):
-        sim = env.sim
-        jname = f"{env.robots[0].robot_model.naming_prefix}{FREE_JOINT_NAME}"
-        addr = sim.model.get_joint_qpos_addr(jname)
-        start = addr[0] if isinstance(addr, tuple) else addr
-        sim.data.qpos[start + 2] += clearance - low
-        sim.forward()
-
-
-def _backward_dir(base_quat):
-    """Return the level world unit vector behind a robot at base_quat (wxyz), which faces its +x.
-
-    Falls back to world -x when the robot's x axis is vertical.
-    """
-    fwd = np.zeros(3)
-    mujoco.mju_rotVecQuat(fwd, np.array([1.0, 0.0, 0.0]), np.asarray(base_quat, dtype=float))
-    back = -fwd
-    back[2] = 0.0
-    n = np.linalg.norm(back)
-    return back / n if n > 1e-9 else np.array([-1.0, 0.0, 0.0])
-
-
-def _robot_env_contacts(model, data, prefixes=("robot0_", "gripper0_")):
-    """Return the current contacts in which a robot geom penetrates (dist < 0) an environment geom.
-
-    Self-contacts are skipped: moving the base cannot fix them. The floor never
-    shows, as place_robot_clear keeps the robot above it.
-    """
-    out = []
-    for i in range(data.ncon):
-        c = data.contact[i]
-        if c.dist >= 0:
-            continue
-        b1 = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, model.geom_bodyid[c.geom1]) or ""
-        b2 = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, model.geom_bodyid[c.geom2]) or ""
-        if b1.startswith(prefixes) == b2.startswith(prefixes):
-            continue
-        out.append(c)
-    return out
+    """Place the pelvis at pos, quat_wxyz, its lowest colliding geom clearance (m) above the floor."""
+    robosuite_common.place_robot_clear(env, pos, quat_wxyz, clearance, colliding_only=True)
 
 
 def place_robot_collision_free(env, base_pos, base_quat, step=0.02, max_iters=25,
@@ -402,14 +311,14 @@ def place_robot_collision_free(env, base_pos, base_quat, step=0.02, max_iters=25
     still starts. extra_backoff (m) then backs it further into open floor while
     it stays clear, for Nav2, which needs a free start cell.
     """
-    back = _backward_dir(base_quat)
+    back = backward_dir(base_quat)
     model = env.sim.model._model
     data = env.sim.data._data
     pos = np.array(base_pos, dtype=float)
     best_pos, best_score = None, None
     for i in range(max_iters + 1):
         place_robot_clear(env, pos, base_quat, clearance)
-        contacts = _robot_env_contacts(model, data)
+        contacts = robot_env_contacts(model, data)
         score = (len(contacts), sum(-c.dist for c in contacts))
         if best_score is None or score < best_score:
             best_score, best_pos = score, pos.copy()
@@ -421,7 +330,7 @@ def place_robot_collision_free(env, base_pos, base_quat, step=0.02, max_iters=25
                 for _ in range(int(extra_backoff / step)):
                     pos[:2] += step * back[:2]
                     place_robot_clear(env, pos, base_quat, clearance)
-                    if _robot_env_contacts(model, data):
+                    if robot_env_contacts(model, data):
                         break
                     last_clear, moved = pos.copy(), moved + step
                 place_robot_clear(env, last_clear, base_quat, clearance)
@@ -435,115 +344,17 @@ def place_robot_collision_free(env, base_pos, base_quat, step=0.02, max_iters=25
           f"({best_score[0]} contact(s), {best_score[1]:.3f} m penetration)")
 
 
-_PATCHED = False
-
-
-def install_robocasa_patches():
-    """Patch RoboCasa's robot placement to write the G1Dex3's pelvis free joint, once per process.
-
-    Kitchen._reset_internal places the robot through env_utils.set_robot_base
-    (a new episode; it returns the position the kitchen stores) or
-    set_robot_to_position (an episode from ep_meta). Both write the
-    mobilebase0_joint_mobile_* joints this robot lacks and would raise, so for
-    a G1Dex3 env neither original runs; other robots are untouched.
-    set_robot_base calls set_robot_to_position internally, so it is replaced
-    whole rather than wrapped.
-    """
-    global _PATCHED
-    if _PATCHED:
-        return
-    import warnings
-
-    try:
-        from robocasa.utils import env_utils as EU
-    except Exception as e:  # pragma: no cover - container only
-        warnings.warn(f"[g1_robosuite] robocasa not importable: {e}")
-        return
-
-    # RoboCasa's placement offset (m): x, y along the fixture from its anchor,
-    # which stands a mobile base 0.20 m off the counter front, then the pelvis
-    # z. At the stance the forearms point forward and the fingers reach 0.42 m
-    # ahead of the pelvis at counter-top height: 8 of 12 kitchens tried needed
-    # the pelvis 0.27 m further back than the anchor to clear the counter, so it
-    # stands 0.30 m back. Pelvis z 0.80 keeps the soles ~1.5 cm clear at the
-    # stance until g1_mujoco.spawn re-places the robot.
-    offsets = getattr(EU, "_ROBOT_POS_OFFSETS", None)
-    if isinstance(offsets, dict):
-        offsets.setdefault("G1Dex3", [0.0, -0.30, 0.80])
-
-    def _is_g1(env):
-        """Return whether env's robot is a G1Dex3."""
-        try:
-            return isinstance(env.robots[0].robot_model, G1Dex3)
-        except Exception:
-            return False
-
-    orig_set_base = getattr(EU, "set_robot_base", None)
-    orig_set_pos = getattr(EU, "set_robot_to_position", None)
-
-    if orig_set_base is not None:
-        def set_robot_base(*args, **kwargs):
-            """Place a G1Dex3 at anchor_pos/anchor_ori and return the position; else call RoboCasa's."""
-            env = kwargs.get("env", args[0] if args else None)
-            if env is not None and _is_g1(env):
-                anchor_pos = kwargs.get("anchor_pos", args[1] if len(args) > 1 else None)
-                anchor_ori = kwargs.get("anchor_ori", args[2] if len(args) > 2 else None)
-                pos = np.array(anchor_pos, dtype=float) if anchor_pos is not None else np.zeros(3)
-                env.init_robot_base_pos = pos
-                env.init_robot_base_ori = (
-                    np.array(anchor_ori, dtype=float) if anchor_ori is not None else np.zeros(3)
-                )
-                place_robot_freejoint(env, pos, _euler_to_wxyz(anchor_ori))
-                return pos
-            return orig_set_base(*args, **kwargs)
-
-        EU.set_robot_base = set_robot_base
-
-    if orig_set_pos is not None:
-        def set_robot_to_position(*args, **kwargs):
-            """Place a G1Dex3 at global_pos; else call RoboCasa's."""
-            env = kwargs.get("env", args[0] if args else None)
-            global_pos = kwargs.get("global_pos", args[1] if len(args) > 1 else None)
-            if env is not None and _is_g1(env) and global_pos is not None:
-                ori = getattr(env, "init_robot_base_ori", None)
-                place_robot_freejoint(env, np.array(global_pos, dtype=float), _euler_to_wxyz(ori))
-                return
-            return orig_set_pos(*args, **kwargs)
-
-        EU.set_robot_to_position = set_robot_to_position
-
-    if orig_set_base is None and orig_set_pos is None:
-        warnings.warn(
-            "[g1_robosuite] no RoboCasa placement entry point found to patch; "
-            "call place_robot_freejoint(env, pos, quat) from the harness after reset."
-        )
-    _PATCHED = True
+# RoboCasa's placement offset (m): x, y along the fixture from its anchor,
+# which stands a mobile base 0.20 m off the counter front, then the pelvis z.
+# At the stance the forearms point forward and the fingers reach 0.42 m ahead
+# of the pelvis at counter-top height: 8 of 12 kitchens tried needed the pelvis
+# 0.27 m further back than the anchor to clear the counter, so it stands 0.30 m
+# back. Pelvis z 0.80 keeps the soles ~1.5 cm clear at the stance until
+# g1_mujoco.spawn re-places the robot.
+POS_OFFSET = (0.0, -0.30, 0.80)
 
 
 def make_kitchen_env(env_name, layout_ids=None, style_ids=None, seed=None, **kwargs):
-    """Return the task env env_name around a G1Dex3, without robosuite's renderer or camera observations.
-
-    robocasa's env_utils.create_env is not used: it forces
-    has_offscreen_renderer, use_camera_obs and agentview cameras, and
-    robosuite's reset() then fails on the missing cameras. The sim draws with
-    mujoco.viewer and reads env state directly. Importing robocasa registers
-    the kitchen tasks, so robosuite.make resolves them by name.
-    """
-    install_robocasa_patches()
-    import robocasa  # noqa: F401  # registers the kitchen tasks
-    import robosuite
-
-    env_kwargs = dict(
-        env_name=env_name,
-        robots="G1Dex3",
-        has_renderer=False,
-        has_offscreen_renderer=False,
-        use_camera_obs=False,
-        render_camera=None,   # robosuite looks up no camera for None
-        ignore_done=True,
-    )
-    for k, v in (("layout_ids", layout_ids), ("style_ids", style_ids), ("seed", seed)):
-        if v is not None:
-            env_kwargs[k] = v
-    env_kwargs.update(kwargs)
-    return robosuite.make(**env_kwargs)
+    """Return the task env env_name around a G1Dex3 (robosuite_common.make_kitchen_env)."""
+    return robosuite_common.make_kitchen_env(G1Dex3, POS_OFFSET, env_name, layout_ids, style_ids, seed,
+                                             **kwargs)

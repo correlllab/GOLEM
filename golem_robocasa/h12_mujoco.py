@@ -52,6 +52,7 @@ import mujoco.viewer
 
 import h1_2_robosuite  # registers H1_2 and the MAGPIE grippers
 import realsense_profile
+import robosuite_common
 import battery_env  # registers the Battery env
 import blank_env  # registers the Blank env
 from h12_sensors import H12Sensors
@@ -113,6 +114,32 @@ def _limp_upper_body_poses(model, motor_qpos, spawn):
     return poses
 
 
+def spawn(env, resolver, backoff=0.0, margin=None, offset=(0.0, 0.0)):
+    """Put the robot at rest in its spawn pose, clear of the fixtures by margin, in the sagged poses too.
+
+    Call after env.reset(), whose zero-action settling folds the limp robot.
+    The robot is placed at RoboCasa's spawn shifted by offset ((dx, dy) m,
+    world), its lowest geom 2 cm above the floor, and backed off (its -x) until
+    every robot geom is margin (m; None: the env's spawn_margin, else 0.20)
+    from any non-floor geom, in the spawn pose and the poses the unpowered
+    upper body sags into; backoff (m) then backs it up to that much further
+    into open floor. Zeroes every velocity in the scene.
+    """
+    data = env.sim.data._data
+    init_qpos = _initial_motor_qpos()
+    data.qpos[resolver.motor_qpos] = init_qpos
+    data.qvel[:] = 0.0
+    pos = list(env.init_robot_base_pos)
+    pos[0] += offset[0]
+    pos[1] += offset[1]
+    h1_2_robosuite.place_robot_collision_free(
+        env, pos, robosuite_common.euler_to_wxyz(getattr(env, "init_robot_base_ori", None)),
+        extra_backoff=backoff,
+        margin=getattr(env, "spawn_margin", 0.20) if margin is None else margin,
+        poses=_limp_upper_body_poses(env.sim.model._model, resolver.motor_qpos, init_qpos),
+    )
+
+
 def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False, duration=0.0):
     """Run the H1-2 in task (a RoboCasa kitchen, Battery or Blank) until the viewer closes or Ctrl-C.
 
@@ -153,36 +180,19 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     data = env.sim.data._data
     resolver = NameResolver(model)
 
-    # RoboCasa's zero-action settling during reset folds the limp robot, so put
-    # it back in the spawn pose at rest and re-place it: floor clearance fitted,
-    # and backed off (the robot's -x) until every robot geom is
-    # GOLEM_SPAWN_MARGIN (unset: the env's spawn_margin, else 0.20 m) from any
-    # non-floor geom, in the spawn pose and the sagged poses.
     try:
-        init_qpos = _initial_motor_qpos()
-        data.qpos[resolver.motor_qpos] = init_qpos
-        data.qvel[:] = 0.0
         # GOLEM_SPAWN_BACKOFF (m, default 0: at the counter) backs the robot
         # further into open floor; Nav2 needs a free start cell to plan (~1.0).
-        _spawn_backoff = float(os.environ.get("GOLEM_SPAWN_BACKOFF", "0") or 0)
-        _spawn_margin = float(os.environ.get("GOLEM_SPAWN_MARGIN", "").strip()
-                              or getattr(env, "spawn_margin", 0.20))
-        # GOLEM_SPAWN_OFFSET="dx,dy" (m, world) shifts the task's spawn before
-        # placement; unset keeps the task's own.
-        _spawn_pos = list(env.init_robot_base_pos)
+        # GOLEM_SPAWN_MARGIN (m, unset: the env's spawn_margin, else 0.20) is
+        # the clearance to the fixtures. GOLEM_SPAWN_OFFSET="dx,dy" (m, world)
+        # shifts the task's spawn before placement; unset keeps the task's own.
+        _spawn_margin = os.environ.get("GOLEM_SPAWN_MARGIN", "").strip()
         _offset = os.environ.get("GOLEM_SPAWN_OFFSET", "").strip()
+        _dx, _dy = (float(v) for v in _offset.split(",")) if _offset else (0.0, 0.0)
         if _offset:
-            _dx, _dy = (float(v) for v in _offset.split(","))
-            _spawn_pos[0] += _dx
-            _spawn_pos[1] += _dy
             print(f"[h12_mujoco] spawn offset ({_dx:+.3f}, {_dy:+.3f}) m")
-        h1_2_robosuite.place_robot_collision_free(
-            env, _spawn_pos,
-            h1_2_robosuite._euler_to_wxyz(getattr(env, "init_robot_base_ori", None)),
-            extra_backoff=_spawn_backoff,
-            margin=_spawn_margin,
-            poses=_limp_upper_body_poses(model, resolver.motor_qpos, init_qpos),
-        )
+        spawn(env, resolver, backoff=float(os.environ.get("GOLEM_SPAWN_BACKOFF", "0") or 0),
+              margin=float(_spawn_margin) if _spawn_margin else None, offset=(_dx, _dy))
         print("[h12_mujoco] initial stance from baked-in sim defaults")
     except Exception as e:
         print(f"[h12_mujoco] clean reset skipped: {e}")
@@ -222,7 +232,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     if _sim_odom_on:
         try:
             _fj = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT,
-                                    f"{pfx}{h1_2_robosuite.FREE_JOINT_NAME}")
+                                    f"{pfx}{robosuite_common.FREE_JOINT_NAME}")
             odom_base_body_id = int(model.jnt_bodyid[_fj])
         except Exception as e:
             print(f"[h12_mujoco] base odom body resolve skipped: {e}")
@@ -461,7 +471,7 @@ if __name__ == "__main__":
     else:
         task = sim_common.resolve_task(
             task, seed=args.seed, tag="h12_mujoco",
-            robot_task=lambda name: battery_env.canonical_task(name) or blank_env.canonical_task(name))
+            robot_task=lambda name: sim_common.canonical_task(name, battery_env.TASKS + blank_env.TASKS))
     sim_common.refuse_kitchen_args(_PARSER, args, task, blank_env.TASKS)
 
     sim_loop(task, viewer=not args.headless,

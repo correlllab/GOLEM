@@ -16,10 +16,9 @@ import blank_env
 import sim_common
 
 # The --task hooks passed to resolve_task, one per runner, each claiming the Battery and Blank tasks.
-H12_TASKS = {'tag': 'h12_mujoco',
-             'robot_task': lambda name: battery_env.canonical_task(name) or blank_env.canonical_task(name)}
-G1_TASKS = {'tag': 'g1_mujoco',
-            'robot_task': lambda name: battery_env.canonical_task(name) or blank_env.canonical_task(name)}
+OWN_TASKS = battery_env.TASKS + blank_env.TASKS
+H12_TASKS = {'tag': 'h12_mujoco', 'robot_task': lambda name: sim_common.canonical_task(name, OWN_TASKS)}
+G1_TASKS = {'tag': 'g1_mujoco', 'robot_task': lambda name: sim_common.canonical_task(name, OWN_TASKS)}
 
 
 def _resolve(*args, **kwargs):
@@ -65,7 +64,8 @@ class ResolveTaskTests(unittest.TestCase):
 
     def test_robot_hook_claims_its_task_first(self):
         """A runner's task hook resolves its own task before RoboCasa's."""
-        task, out = _resolve('battery', tag='h12_mujoco', robot_task=battery_env.canonical_task)
+        task, out = _resolve('battery', tag='h12_mujoco',
+                             robot_task=lambda name: sim_common.canonical_task(name, battery_env.TASKS))
         self.assertEqual((task, out), ('Battery', ''))
 
     def test_blank_resolves_in_any_case_for_both_robots(self):

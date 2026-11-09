@@ -97,7 +97,7 @@ def _g1():
 
 @functools.lru_cache(maxsize=None)
 def _h12():
-    """Return the H1-2's Kitchen, spawned with h12_mujoco's pose and placement call."""
+    """Return the H1-2's Kitchen, spawned by h12_mujoco.spawn() at RoboCasa's spawn."""
     if "magpie_hand_bridge" not in sys.modules:   # needs magpie_msgs, which the shell lacks
         stub = types.ModuleType("magpie_hand_bridge")
         stub.MagpieHandBridge = None
@@ -110,14 +110,7 @@ def _h12():
     env.reset()
     model, data = env.sim.model._model, env.sim.data._data
     resolver = NameResolver(model)
-    init_qpos = h12_mujoco._initial_motor_qpos()
-    data.qpos[resolver.motor_qpos] = init_qpos
-    data.qvel[:] = 0.0
-    h1_2_robosuite.place_robot_collision_free(
-        env, list(env.init_robot_base_pos),
-        h1_2_robosuite._euler_to_wxyz(getattr(env, "init_robot_base_ori", None)),
-        extra_backoff=0.0, margin=getattr(env, "spawn_margin", 0.20),
-        poses=h12_mujoco._limp_upper_body_poses(model, resolver.motor_qpos, init_qpos))
+    h12_mujoco.spawn(env, resolver)
     mujoco.mj_forward(model, data)
     lidar = resolver.body_id("livox_link")
     return Kitchen(model, data, resolver.body_id("torso_link"), H12_GROUPS,

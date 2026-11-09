@@ -16,6 +16,7 @@ import mujoco.viewer
 from . import g1_robosuite  # registers G1Dex3 and its gripper
 import battery_env  # registers the Battery env
 import blank_env  # registers the Blank env
+import robosuite_common
 import sim_common
 from measurement_bridge import MeasurementBridge
 from mujoco_env import ElasticBand
@@ -78,7 +79,7 @@ def spawn(env, resolver, backoff=0.0):
     data.qvel[:] = 0.0
     g1_robosuite.place_robot_collision_free(
         env, env.init_robot_base_pos,
-        g1_robosuite._euler_to_wxyz(getattr(env, "init_robot_base_ori", None)),
+        robosuite_common.euler_to_wxyz(getattr(env, "init_robot_base_ori", None)),
         clearance=SPAWN_CLEARANCE, extra_backoff=backoff,
     )
 
@@ -346,8 +347,8 @@ def main(argv):
         print(f"[g1_mujoco] no --task given; randomly selected {task!r}")
     else:
         task = sim_common.resolve_task(task, seed=args.seed, tag="g1_mujoco",
-                                       robot_task=lambda name: battery_env.canonical_task(name)
-                                       or blank_env.canonical_task(name))
+                                       robot_task=lambda name: sim_common.canonical_task(
+                                           name, battery_env.TASKS + blank_env.TASKS))
     sim_common.refuse_kitchen_args(parser, args, task, blank_env.TASKS)
     # The camera and the lidar's rays render through EGL on the GPU: stop here without one.
     sim_common.require_gpu()

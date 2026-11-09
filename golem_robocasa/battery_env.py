@@ -27,7 +27,8 @@ unique across the whole scene.
 Importing this module registers the env with robosuite (EnvMeta), so
 ``robosuite.make("Battery", robots=...)`` resolves it. The task has no
 scripted success: the RoboCasa task-signal surface the runners read
-(update_state / _check_success / reward / get_ep_meta) is stubbed.
+(update_state / _check_success / reward / get_ep_meta) is stubbed
+(blank_env.FixedTask).
 """
 import glob
 import math
@@ -37,7 +38,8 @@ import xml.etree.ElementTree as ET
 import mujoco
 from robosuite.environments.manipulation.manipulation_env import ManipulationEnv
 from robosuite.models.arenas import Arena
-from robosuite.models.tasks import ManipulationTask
+
+from blank_env import FixedTask
 
 BATTERY_DIR = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -69,14 +71,6 @@ _STANDALONE_SECTIONS = {"option", "visual", "statistic", "size"}
 _MESHDIR_TAGS = {"mesh", "hfield", "skin"}
 # Attributes that name an asset, by the asset tag they refer to.
 _ASSET_REFS = {"material": "material", "mesh": "mesh", "hfield": "hfield"}
-
-
-def canonical_task(name):
-    """Return the TASKS entry matching `name` case-insensitively, else None."""
-    for task in TASKS:
-        if name.lower() == task.lower():
-            return task
-    return None
 
 
 def _fmt(values):
@@ -255,24 +249,21 @@ class BatteryArena(Arena):
               + (f"; standalone-only, skipped: {skipped}" if skipped else ""))
 
 
-class Battery(ManipulationEnv):
+class Battery(FixedTask, ManipulationEnv):
     """Stand the robot at the ARPA battery workcell with the objects/ parts on the battery."""
 
-    def __init__(self, robots, **kwargs):
-        """Build the env around robots (robosuite's robots argument)."""
-        self.init_robot_base_pos = list(ROBOT_BASE_POS)
-        self.init_robot_base_ori = list(ROBOT_BASE_ORI)
-        self.spawn_margin = SPAWN_MARGIN
-        super().__init__(robots=robots, **kwargs)
+    ROBOT_BASE_POS = ROBOT_BASE_POS
+    ROBOT_BASE_ORI = ROBOT_BASE_ORI
+    GOAL = "battery workcell: manipulate the parts on the battery pack"
+    spawn_margin = SPAWN_MARGIN
+
+    def make_arena(self):
+        """Return a BatteryArena."""
+        return BatteryArena()
 
     def _load_model(self):
-        """Put the robot at ROBOT_BASE_POS in a BatteryArena, with multi-point contacts."""
+        """Build FixedTask's scene, with multi-point contacts."""
         super()._load_model()
-        self.robots[0].robot_model.set_base_xpos(ROBOT_BASE_POS)
-        self.model = ManipulationTask(
-            mujoco_arena=BatteryArena(),
-            mujoco_robots=[robot.robot_model for robot in self.robots],
-        )
         # The merged scene takes robosuite's <option>, not the arena's, so the
         # arena's multiccd flag is set again: with single-point contacts the
         # screws' small neck cylinders rock at ~6 rad/s on their walls
@@ -284,19 +275,3 @@ class Battery(ManipulationEnv):
         if flag is None:
             flag = ET.SubElement(option, "flag")
         flag.set("multiccd", "enable")
-
-    def update_state(self):
-        """Do nothing: the task has no fixtures to update."""
-        pass
-
-    def _check_success(self):
-        """Return False: the task has no success condition."""
-        return False
-
-    def reward(self, action=None):
-        """Return 0: the task has no reward."""
-        return 0.0
-
-    def get_ep_meta(self):
-        """Return the episode's language goal, which MeasurementBridge publishes."""
-        return {"lang": "battery workcell: manipulate the parts on the battery pack"}

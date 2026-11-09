@@ -2,9 +2,9 @@
 
 The env builds, holds only the floor and the robot, spawns the robot at the origin facing +x,
 and the elastic band holds the limp robot up. Each robot is spawned and banded as its runner
-does it: the G1 with g1_mujoco's own spawn() and make_band(); the H1-2 with h12_mujoco's spawn
-pose and placement call and its band's values, which sit inline in its sim loop. No motor is
-driven (ctrl 0), as in both sims before the first rt/lowcmd.
+does it: the G1 with g1_mujoco's own spawn() and make_band(); the H1-2 with h12_mujoco's spawn()
+and its band's values, which sit inline in its sim loop. No motor is driven (ctrl 0), as in both
+sims before the first rt/lowcmd.
 
 Needs RoboCasa and MuJoCo, so it runs in the robocasa container:
 ROS_DOMAIN_ID=187 tests/robocasa/run_in_container.sh
@@ -55,6 +55,7 @@ def _h12():
     Returns (env, model, data, pelvis body, band, band body, lowest robot geom z).
     """
     import h1_2_robosuite
+    import robosuite_common
     from mujoco_env import ElasticBand
     from sim_names import NameResolver
     h12_mujoco = _h12_mujoco()
@@ -62,21 +63,14 @@ def _h12():
     env.reset()
     model, data = env.sim.model._model, env.sim.data._data
     resolver = NameResolver(model)
-    init_qpos = h12_mujoco._initial_motor_qpos()
-    data.qpos[resolver.motor_qpos] = init_qpos
-    data.qvel[:] = 0.0
-    h1_2_robosuite.place_robot_collision_free(
-        env, list(env.init_robot_base_pos),
-        h1_2_robosuite._euler_to_wxyz(getattr(env, "init_robot_base_ori", None)),
-        extra_backoff=0.0, margin=getattr(env, "spawn_margin", 0.20),
-        poses=h12_mujoco._limp_upper_body_poses(model, resolver.motor_qpos, init_qpos))
+    h12_mujoco.spawn(env, resolver)
     torso = resolver.body_id("torso_link")
     anchor = data.xpos[torso].copy()
     anchor[2] += H12_BAND["dz"]
     band = ElasticBand(anchor, length=0, stiffness=H12_BAND["stiffness"],
                        damping=H12_BAND["damping"])
     return env, model, data, resolver.body_id("pelvis"), band, torso, \
-        h1_2_robosuite.lowest_robot_point_z(env)
+        robosuite_common.lowest_robot_point_z(env)
 
 
 @functools.lru_cache(maxsize=None)

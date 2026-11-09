@@ -28,6 +28,12 @@ projection check renders, so give it an offscreen GL context:
 MUJOCO_GL=egl PYTHONPATH=golem_robocasa python3 -m unittest discover -s tests/robocasa -p test_realsense_profile.py -v
 ```
 
+The spawn placement both robots build on (`robosuite_common.py`) and the H1-2's search
+for its margin to the fixtures (`h1_2_robosuite.place_robot_collision_free`) are checked
+on a small MuJoCo scene by `test_robosuite_common.py` and `test_h12_spawn_collision.py`
+(`spawn_scene.py` holds the scene and a stand-in env); the G1's search is
+`g1/test_g1_spawn_collision.py`'s.
+
 Pure pacing/timing tests also run without ROS or MuJoCo:
 
 ```bash

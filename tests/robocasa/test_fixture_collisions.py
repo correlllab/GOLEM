@@ -26,7 +26,7 @@ RESTING_TASKS = ("CloseDrawer", "PickPlaceCabinetToCounter", "OpenBlenderLid")
 
 
 def _h12_kitchen(task):
-    """Return the H1-2's env for task, spawned with h12_mujoco's pose and placement call."""
+    """Return the H1-2's env for task, spawned by h12_mujoco.spawn()."""
     if "magpie_hand_bridge" not in sys.modules:   # needs magpie_msgs, which the image lacks
         stub = types.ModuleType("magpie_hand_bridge")
         stub.MagpieHandBridge = None
@@ -37,15 +37,7 @@ def _h12_kitchen(task):
     env = h1_2_robosuite.make_kitchen_env(task, layout_ids=LAYOUT, style_ids=STYLE, seed=SEED)
     env.reset()
     model, data = env.sim.model._model, env.sim.data._data
-    resolver = NameResolver(model)
-    init_qpos = h12_mujoco._initial_motor_qpos()
-    data.qpos[resolver.motor_qpos] = init_qpos
-    data.qvel[:] = 0.0
-    h1_2_robosuite.place_robot_collision_free(
-        env, list(env.init_robot_base_pos),
-        h1_2_robosuite._euler_to_wxyz(getattr(env, "init_robot_base_ori", None)),
-        extra_backoff=0.0, margin=getattr(env, "spawn_margin", 0.20),
-        poses=h12_mujoco._limp_upper_body_poses(model, resolver.motor_qpos, init_qpos))
+    h12_mujoco.spawn(env, NameResolver(model))
     mujoco.mj_forward(model, data)
     return env
 

@@ -1,7 +1,8 @@
 """Build the ROS 2 messages of the G1 sim's MID-360 and head D435 as their drivers publish them.
 
-Message construction only: no node, publisher or DDS. g1_lidar.py and
-g1_head_camera.py produce the data; the sim's ROS bridge publishes these.
+Message construction only: no node, publisher or DDS. mid360.py (through
+g1_lidar.py) and g1_head_camera.py produce the data; the sim's ROS bridge
+publishes these.
 
 MID-360 (livox_ros_driver2 in CustomMsg mode, xfer_format 1, msg_MID360_launch.py):
   /livox/lidar  livox_ros_driver2/CustomMsg, frame_id livox_frame (the launch
@@ -67,7 +68,7 @@ def time_msg(t):
 
 
 def livox_custom_msg(frame, frame_id=LIVOX_FRAME):
-    """Return the livox_ros_driver2/CustomMsg of a g1_lidar.LidarFrame.
+    """Return the livox_ros_driver2/CustomMsg of a mid360.LidarFrame.
 
     Slow for full frames: the sim publishes livox_custom_msg_cdr(), its
     serialized equivalent.

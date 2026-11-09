@@ -1,11 +1,14 @@
-"""Check the G1 sim's sensor models, g1_lidar (MID-360 scans and IMU) and g1_head_camera (D435), without ROS.
+"""Check the G1 sim's sensor models, g1_lidar (the MID-360's mount, scans and IMU) and g1_head_camera (D435), without ROS.
 
 The G1 is g1_robosuite's robot MJCF (names unprefixed), in small scenes of
 known geometry. Expected values come from the URDF and the scenes' analytic
-geometry, not from MuJoCo's kinematics. Run in the robocasa image (robosuite
-for g1_robosuite, EGL for the camera) with golem_robocasa on PYTHONPATH, as
-tests/robocasa/g1/run_in_container.sh does.
+geometry, not from MuJoCo's kinematics. The scans come from the shared MID-360
+model (mid360.py) on the exact CPU caster; one test compares the GPU caster with it.
+Run in the robocasa image (robosuite for g1_robosuite, EGL for the camera and the
+GPU caster) with golem_robocasa on PYTHONPATH, as tests/robocasa/g1/run_in_container.sh
+does.
 """
+import contextlib
 import sys
 import xml.etree.ElementTree as ET
 
@@ -13,6 +16,7 @@ import mujoco
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+import mid360
 from g1 import g1_head_camera as cam
 from g1 import g1_lidar as lidar
 from g1 import g1_robosuite
@@ -100,13 +104,34 @@ def _on_room(world):
     return np.min(np.abs([z, x - FRONT, x - BACK, y - LEFT, y - RIGHT]), axis=0)
 
 
-def _frame_at_rest(sensor, data):
-    """Return one frame from a robot that does not move: update() at its start and its end."""
-    sensor.reset()
-    assert sensor.update(data, 0.0) is None
-    frame = sensor.update(data, sensor.period)
+def _frame_at_rest(scanner, sensor, data):
+    """Return one frame of a robot that does not move: update() at its start and at its end."""
+    scanner.reset()
+    snapshot = sensor.snapshot(data)
+    assert scanner.update(snapshot, 0.0) is None
+    frame = scanner.update(snapshot, scanner.period)
     assert frame is not None
     return frame
+
+
+@contextlib.contextmanager
+def _exact_ranges():
+    """Turn the scanner's range noise off, so every point lies on the surface its ray hit."""
+    noise = mid360.RANGE_NOISE
+    mid360.RANGE_NOISE = 0.0
+    try:
+        yield
+    finally:
+        mid360.RANGE_NOISE = noise
+
+
+def _gpu_unavailable():
+    """Return why no GPU caster can be built here, or None when one can."""
+    try:
+        mid360.GpuCaster(ROOM_MODEL, -1, lidar.GEOM_GROUPS).close()
+    except mid360.GpuUnavailable as e:
+        return str(e)
+    return None
 
 
 ROOM_MODEL = _model(ROOM)
@@ -114,7 +139,7 @@ T_PELVIS_LIDAR = _urdf_pose("mid360_link")
 
 
 def test_lidar_site_is_the_urdf_mount():
-    """The lidar's pose is the URDF's mid360_link, upside down."""
+    """The lidar's pose is the URDF's mid360_link, upside down, and its snapshot carries it."""
     data = mujoco.MjData(ROOM_MODEL)
     _place(ROOM_MODEL, data)
     sensor = lidar.Mid360(ROOM_MODEL, prefix="")
@@ -123,16 +148,23 @@ def test_lidar_site_is_the_urdf_mount():
     assert np.allclose(position, expected[:3, 3], atol=1e-6), (position, expected[:3, 3])
     assert np.allclose(rotation, expected[:3, :3], atol=1e-6)
     assert rotation[2, 2] < -0.99  # upside down: the sensor's z points at the floor
+    alpha = ROOM_MODEL.geom_rgba[:, 3].copy()
+    snapshot = sensor.snapshot(data, geom_alpha=alpha)
+    assert np.array_equal(snapshot.origin, position) and np.array_equal(snapshot.rotation, rotation)
+    assert snapshot.data is data and snapshot.geom_alpha is alpha and snapshot.mat_alpha is None
 
 
 def test_wall_at_known_range_and_direction():
     """Rays hit the walls at the ranges the mount predicts: the sensor's +x is the robot's front and its +y the robot's right."""
     data = mujoco.MjData(ROOM_MODEL)
     _place(ROOM_MODEL, data)
-    sensor = lidar.Mid360(ROOM_MODEL, prefix="")
+    caster = lidar.Mid360(ROOM_MODEL, prefix="").make_caster("cpu")
     position, rotation = (_pelvis() @ T_PELVIS_LIDAR)[:3, 3], (_pelvis() @ T_PELVIS_LIDAR)[:3, :3]
     rays = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [-1.0, 0.0, 0.0]])
-    dist = sensor.cast(data, rays)
+    try:
+        dist = caster.cast(position, rotation, rays, data)
+    finally:
+        caster.close()
     pitch = 0.05112069379091391  # rad, mid360_joint's rpy: x leans down by it, so ahead hits the front wall
     expected = [(FRONT - position[0]) / np.cos(pitch), position[1] - RIGHT, LEFT - position[1],
                 (position[0] - BACK) / np.cos(pitch)]
@@ -143,12 +175,20 @@ def test_wall_at_known_range_and_direction():
 
 
 def test_frame_matches_the_room_and_the_mount():
-    """Every point of a frame lies at the range the URDF mount predicts, within the MID-360's field."""
+    """Every point of a frame lies on the room where the URDF mount predicts, within the MID-360's field.
+
+    Range noise off, on the exact CPU caster.
+    """
     data = mujoco.MjData(ROOM_MODEL)
     _place(ROOM_MODEL, data)
     sensor = lidar.Mid360(ROOM_MODEL, prefix="")
-    frame = _frame_at_rest(sensor, data)
-    n = sensor.points_per_frame
+    scanner = lidar.make_scanner(sensor.make_caster("cpu"))
+    try:
+        with _exact_ranges():
+            frame = _frame_at_rest(scanner, sensor, data)
+    finally:
+        scanner.caster.close()
+    n = scanner.points_per_frame
     assert 0.9 * n < len(frame.points) <= n, len(frame.points)
     pose = _pelvis() @ T_PELVIS_LIDAR
     rng = np.linalg.norm(frame.points, axis=1)
@@ -158,9 +198,9 @@ def test_frame_matches_the_room_and_the_mount():
     assert np.abs(rng - expected).max() < 1e-4, np.abs(rng - expected).max()
     world = pose[:3, 3] + frame.points @ pose[:3, :3].T
     assert _on_room(world).max() < 1e-4
-    # Elevation within -7..52 deg of the sensor frame.
+    # Elevation within the pattern's -7..52 deg of the sensor frame (its rows reach -7.3 and 52.2).
     elevation = np.degrees(np.arcsin(directions[:, 2]))
-    assert elevation.min() > -7.0 - 1e-4 and elevation.max() < 52.0 + 1e-4
+    assert elevation.min() > -7.3 and elevation.max() < 52.2, (elevation.min(), elevation.max())
     # Upside down: the floor is at the sensor's +z, the left wall at its -y.
     floor = np.abs(world[:, 2]) < 1e-4
     left = np.abs(world[:, 1] - LEFT) < 1e-4
@@ -169,6 +209,70 @@ def test_frame_matches_the_room_and_the_mount():
     # Each floor point is where the mount predicts, at range h / -dz.
     assert np.allclose(rng[floor], -pose[2, 3] / world_dirs[floor, 2], atol=1e-4)
     assert set(np.unique(frame.line)) == {0, 1, 2, 3}
+
+
+def test_g1_frame_has_20000_rays():
+    """A G1 frame fires 20,000 rays of the MID-360's pattern, in order, and the next frame the rows after.
+
+    Each point lies along its ray, at the exact cast's range plus 2 cm (1 sigma) of noise.
+    """
+    assert lidar.POINTS_PER_FRAME == 20_000
+    data = mujoco.MjData(ROOM_MODEL)
+    _place(ROOM_MODEL, data)
+    sensor = lidar.Mid360(ROOM_MODEL, prefix="")
+    scanner = lidar.make_scanner(sensor.make_caster("cpu"))
+    pattern = mid360.load_pattern()
+    position, rotation = sensor.pose(data)
+    snapshot = sensor.snapshot(data)
+    errors = []
+    try:
+        frames = [f for k in range(21) if (f := scanner.update(snapshot, 0.01 * k)) is not None]
+        assert len(frames) == 2, len(frames)
+        for k, frame in enumerate(frames):
+            assert frame.rays == 20_000 and scanner.points_per_frame == 20_000
+            rays = mid360.directions(pattern, k * 20_000, 20_000)
+            exact = scanner.caster.cast(position, rotation, rays, data)
+            with np.errstate(invalid="ignore"):
+                valid = (exact >= mid360.MIN_RANGE) & (exact <= mid360.MAX_RANGE)
+            assert 0.9 * 20_000 < valid.sum() == len(frame.points), (valid.sum(), len(frame.points))
+            measured = np.linalg.norm(frame.points.astype(np.float64), axis=1)
+            assert np.allclose(frame.points / measured[:, None], rays[valid], atol=1e-6)
+            assert np.array_equal(frame.line, (np.arange(20_000) % 4)[valid])
+            errors.append(measured - exact[valid])
+    finally:
+        scanner.caster.close()
+    error = np.concatenate(errors)
+    assert abs(error.mean()) < 0.002 and 0.018 < error.std() < 0.022, (error.mean(), error.std())
+    print(f"  {len(error)} points over 2 frames, range noise {error.std() * 100:.2f} cm (1 sigma)")
+
+
+def test_gpu_caster_matches_the_cpu_on_the_g1():
+    """The G1's GPU caster agrees with its exact CPU caster on a frame's rays, the robot excluded as on the CPU.
+
+    Skips, passing, without a GPU.
+    """
+    reason = _gpu_unavailable()
+    if reason is not None:
+        print(f"  (skipped: {reason})")
+        return
+    data = mujoco.MjData(ROOM_MODEL)
+    _place(ROOM_MODEL, data, yaw=0.3)
+    sensor = lidar.Mid360(ROOM_MODEL, prefix="")
+    position, rotation = sensor.pose(data)
+    rays = mid360.directions(mid360.load_pattern(), 0, lidar.POINTS_PER_FRAME)
+    gpu, cpu = sensor.make_caster("gpu"), sensor.make_caster("cpu")
+    try:
+        assert isinstance(gpu, mid360.GpuCaster) and isinstance(cpu, mid360.CpuCaster)
+        got, want = gpu.cast(position, rotation, rays, data), cpu.cast(position, rotation, rays, data)
+    finally:
+        gpu.close()
+        cpu.close()
+    same = np.isnan(got) == np.isnan(want)
+    both = ~np.isnan(got) & ~np.isnan(want)
+    error = np.abs(got[both] - want[both])
+    assert same.mean() > 0.99 and np.median(error) < 0.002, (same.mean(), np.median(error))
+    assert np.isnan(want).sum() > 0.01 * len(rays)  # the robot's arms block some rays on both
+    print(f"  {same.mean():.4f} agree on return or not, median error {np.median(error) * 1e3:.3f} mm")
 
 
 def _mj_ray(model, data, position, world_dirs, bodyexclude):
@@ -191,7 +295,7 @@ def test_no_returns_from_the_robot():
     data = mujoco.MjData(ROOM_MODEL)
     _place(ROOM_MODEL, data)
     sensor = lidar.Mid360(ROOM_MODEL, prefix="")
-    directions, _ = lidar.scan_pattern(0)
+    directions = mid360.directions(mid360.load_pattern(), 0, lidar.POINTS_PER_FRAME)
     position, rotation = sensor.pose(data)
     n = len(directions)
     world = directions @ rotation.T
@@ -206,7 +310,11 @@ def test_no_returns_from_the_robot():
               for b in ROOM_MODEL.geom_bodyid[geomid[blocked]]}
     print(f"  {blocked.sum()} of {n} rays blocked by {sorted(bodies)}")
     assert 0 < blocked.sum() < 0.1 * n, blocked.sum()  # shoulders, wrists and hands are in the FOV
-    measured = sensor.cast(data, directions)
+    caster = sensor.make_caster("cpu")
+    try:
+        measured = caster.cast(position, rotation, directions, data)
+    finally:
+        caster.close()
     assert np.isnan(measured[blocked]).all()
     assert np.isfinite(measured[~blocked]).all()
     assert np.array_equal(measured[~blocked], dist[~blocked])
@@ -215,7 +323,7 @@ def test_no_returns_from_the_robot():
 
 
 def test_cast_is_exact_where_multiray_culls():
-    """cast() hits a wall where mj_multiRay's culling misses it.
+    """The G1's CPU caster hits a wall where mj_multiRay's culling misses it, on its own model copy.
 
     The ray passes just below the wall's corners but above its bottom edge; mj_multiRay's own
     culling sends it through the wall to the floor behind.
@@ -230,23 +338,30 @@ def test_cast_is_exact_where_multiray_culls():
     geomid, dist = np.zeros((1, 1), np.int32), np.zeros((1, 1))
     group = np.array(lidar.GEOM_GROUPS, np.uint8).reshape(6, 1)
     mujoco.mj_multiRay(ROOM_MODEL, data, position.reshape(3, 1), v.reshape(3, 1).copy(), group, 1,
-                       sensor.torso_id, geomid, dist, 1, lidar.MAX_RANGE)
+                       sensor.torso_id, geomid, dist, 1, mid360.MAX_RANGE)
     floor = mujoco.mj_name2id(ROOM_MODEL, mujoco.mjtObj.mjOBJ_GEOM, "floor")
     assert geomid[0, 0] == floor  # MuJoCo 3.3.1's culling; if this fails, MuJoCo fixed it
     bvhadr = ROOM_MODEL.body_bvhadr.copy()
-    measured = sensor.cast(data, (rotation.T @ v)[None])
+    caster = sensor.make_caster("cpu")
+    try:
+        assert caster.model is not ROOM_MODEL  # mj_step reads the body_bvhadr a cast clears
+        measured = caster.cast(position, rotation, (rotation.T @ v)[None], data)
+        assert np.array_equal(caster.model.body_bvhadr, bvhadr)  # restored
+    finally:
+        caster.close()
     assert abs(measured[0] - np.linalg.norm(target - position)) < 1e-9
-    assert np.array_equal(ROOM_MODEL.body_bvhadr, bvhadr) and (bvhadr != -1).any()  # restored
+    assert np.array_equal(ROOM_MODEL.body_bvhadr, bvhadr) and (bvhadr != -1).any()
 
 
 def test_offset_time_labels_the_pose_each_point_was_cast_from():
     """offset_time labels the pose each point was cast from, for a robot that walks and turns.
 
     offset_time is monotonic and, with the true pose at timebase + offset_time, every point
-    lands on the room.
+    lands on the room (range noise off).
     """
     data = mujoco.MjData(ROOM_MODEL)
     sensor = lidar.Mid360(ROOM_MODEL, prefix="")
+    scanner = lidar.make_scanner(sensor.make_caster("cpu"))
     dt, speed, turn = 0.002, 0.5, 2.0  # s, m/s, rad/s
 
     def pose(t):
@@ -254,17 +369,22 @@ def test_offset_time_labels_the_pose_each_point_was_cast_from():
         return _pelvis((speed * t, 0.0, PELVIS_Z), yaw=turn * t) @ T_PELVIS_LIDAR
 
     frames = []
-    for k in range(126):  # 0 to 0.25 s
-        t = k * dt
-        _place(ROOM_MODEL, data, (speed * t, 0.0, PELVIS_Z), yaw=turn * t)
-        frame = sensor.update(data, t)
-        if frame is not None:
-            frames.append(frame)
+    try:
+        with _exact_ranges():
+            for k in range(126):  # 0 to 0.25 s
+                t = k * dt
+                _place(ROOM_MODEL, data, (speed * t, 0.0, PELVIS_Z), yaw=turn * t)
+                frame = scanner.update(sensor.snapshot(data), t)
+                if frame is not None:
+                    frames.append(frame)
+    finally:
+        scanner.caster.close()
     assert len(frames) == 2
     assert abs(frames[0].timebase) < 1e-9 and abs(frames[1].timebase - 0.1) < 1e-9
     for frame in frames:
         offset = frame.offset_time.astype(np.int64)
-        assert offset[0] == 0 and (np.diff(offset) >= 0).all()
+        # The first point is the frame's first ray with a return: the robot blocks some rays.
+        assert offset[0] <= 2_000_000 and (np.diff(offset) >= 0).all()
         assert offset[-1] == 100_000_000  # the last rays are cast at the frame's end
         assert (offset % 2_000_000 == 0).all()  # one group per physics step
         times = frame.timebase + offset * 1e-9
@@ -283,29 +403,22 @@ def test_frames_are_back_to_back_at_the_rate():
     """Frames come back to back at 10 Hz without drift, and a sim reset starts them over."""
     data = mujoco.MjData(ROOM_MODEL)
     _place(ROOM_MODEL, data)
-    sensor = lidar.Mid360(ROOM_MODEL, prefix="", points_per_frame=2000)
-    stamps = [f.timebase for k in range(1001) if (f := sensor.update(data, k * 0.003)) is not None]
-    # A 3 ms loop over 3 s: frame i is due over [0.1 i, 0.1 (i + 1)) and ends on the first step
-    # at or past its end, so the stamps keep 10 Hz without drifting.
-    assert len(stamps) == 30, len(stamps)
-    assert all(0.097 < d < 0.103 for d in np.diff(stamps)), np.diff(stamps)
-    assert abs(stamps[-1] - 2.901) < 1e-9
-    # A sim reset (time back to 0) starts over.
-    assert sensor.update(data, 0.0) is None and sensor.update(data, 0.1).timebase == 0.0
-
-
-def test_scan_pattern_is_non_repetitive_and_uniform():
-    """Successive scan patterns differ, sweep one turn in azimuth and are uniform in solid angle."""
-    a, line = lidar.scan_pattern(0)
-    b, _ = lidar.scan_pattern(1)
-    assert a.shape == (lidar.POINTS_PER_FRAME, 3) and np.allclose(np.linalg.norm(a, axis=1), 1.0)
-    assert np.abs(a - b).max() > 0.1 and (line == np.arange(len(a)) % 4).all()
-    azimuth = np.unwrap(np.arctan2(a[:, 1], a[:, 0]))
-    assert (np.diff(azimuth) > 0).all() and azimuth[-1] - azimuth[0] < 2 * np.pi
-    # Uniform in solid angle: sin(elevation) is uniform over the band.
-    s = np.sort(a[:, 2])
-    low, high = np.sin(np.radians(lidar.ELEVATION_DEG))
-    assert np.abs(s - np.linspace(low, high, len(s))).max() < 0.01
+    sensor = lidar.Mid360(ROOM_MODEL, prefix="")
+    scanner = lidar.make_scanner(sensor.make_caster("cpu"), points_per_frame=2000)
+    snapshot = sensor.snapshot(data)
+    try:
+        stamps = [f.timebase for k in range(1001) if (f := scanner.update(snapshot, k * 0.003)) is not None]
+        # A 3 ms loop over 3 s: frame i is due over [0.1 i, 0.1 (i + 1)) and ends on the first step
+        # at or past its end, so the stamps keep 10 Hz without drifting.
+        assert len(stamps) == 30, len(stamps)
+        assert all(0.097 < d < 0.103 for d in np.diff(stamps)), np.diff(stamps)
+        assert abs(stamps[-1] - 2.901) < 1e-9
+        # A sim reset (time back to 0) starts over.
+        assert scanner.update(snapshot, 0.0) is None
+        frame = scanner.update(snapshot, 0.1)
+        assert frame.timebase == 0.0 and frame.rays == 2000
+    finally:
+        scanner.caster.close()
 
 
 def test_imu_reads_gravity_upside_down():

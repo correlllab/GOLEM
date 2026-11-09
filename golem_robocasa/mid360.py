@@ -136,9 +136,9 @@ class CpuCaster:
 
     Threads. cast() clears model.body_bvhadr for its duration, and mj_step's collision
     reads it: give the caster a model no other thread steps or casts on while it runs (as
-    g1_sensors' scan thread casts on its own copy of the model), and call cast() from one
-    thread at a time. The extra threads cast on scratch MjData of their own, since
-    mj_multiRay allocates on the MjData it is given.
+    make_caster() does, with a copy of the model), and call cast() from one thread at a
+    time. The extra threads cast on scratch MjData of their own, since mj_multiRay
+    allocates on the MjData it is given.
     """
 
     batch_s = 0.01             # s of sim time between the scanner's update() calls
@@ -328,7 +328,9 @@ class GpuCaster:
         self._option.flags[:] = 0
         self._option.flags[mujoco.mjtVisFlag.mjVIS_STATIC] = 1
         self._camera = mujoco.MjvCamera()      # mjv_updateScene needs one; cast() sets the view
-        self._scene = mujoco.MjvScene(m, maxgeom=max(1, int(self._candidates.sum())))
+        # One slot over the candidates: mjv_updateScene warns once a scene is full, even when
+        # nothing more is drawn.
+        self._scene = mujoco.MjvScene(m, maxgeom=int(self._candidates.sum()) + 1)
         # Segmentation colours only: no lighting effects, and no back-face culling, since rays
         # hit a face from either side.
         self._scene.flags[:] = 0
@@ -505,8 +507,10 @@ def make_caster(model, exclude_body, geomgroup, backend="auto", robot_geoms=None
     backend is one of BACKENDS (GOLEM_LIDAR_BACKEND): auto builds a GpuCaster and falls back to
     a CpuCaster, with one log() line naming why, when it cannot; gpu builds a GpuCaster or
     raises RuntimeError; cpu builds a CpuCaster without trying the GPU. ValueError for any
-    other backend. geomgroup and robot_geoms are the casters' own; the CpuCaster edits model
-    while it casts (CpuCaster's docstring), the GpuCaster casts on a copy.
+    other backend. geomgroup and robot_geoms are the casters' own. Either caster casts on its
+    own copy of model (the CpuCaster edits the model it casts on, CpuCaster's docstring), so
+    the physics may step model while it casts; runtime edits of model reach the casts only
+    through the snapshot (poses, alpha).
     """
     if backend not in BACKENDS:
         raise ValueError(f"lidar backend must be one of {', '.join(BACKENDS)}, got {backend!r}")
@@ -517,7 +521,7 @@ def make_caster(model, exclude_body, geomgroup, backend="auto", robot_geoms=None
             if backend == "gpu":
                 raise RuntimeError(f"lidar backend gpu: no GPU caster: {exc}") from exc
             log(f"[mid360] lidar rays cast on the CPU: no GPU caster ({exc})")
-    return CpuCaster(model, exclude_body, geomgroup, robot_geoms=robot_geoms)
+    return CpuCaster(copy.copy(model), exclude_body, geomgroup, robot_geoms=robot_geoms)
 
 
 class Mid360Scanner:

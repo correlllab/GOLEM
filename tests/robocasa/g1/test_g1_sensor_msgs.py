@@ -15,6 +15,7 @@ from PIL import Image as PILImage
 from rclpy.serialization import deserialize_message, serialize_message
 from sensor_msgs.msg import CompressedImage, Image
 
+import mid360
 from g1 import g1_lidar as lidar
 from g1 import g1_sensor_msgs as msgs
 
@@ -22,11 +23,11 @@ from g1 import g1_sensor_msgs as msgs
 def _frame(n, timebase=12.3456789012, seed=0):
     """Return a random lidar frame of `n` points at `timebase` (s), offsets sorted."""
     rng = np.random.default_rng(seed)
-    return lidar.LidarFrame(
+    return mid360.LidarFrame(
         timebase=timebase,
         offset_time=np.sort(rng.integers(0, 100_000_000, n)).astype(np.uint32),
         points=rng.uniform(-5.0, 5.0, (n, 3)).astype(np.float32),
-        line=(np.arange(n) % 4).astype(np.uint8))
+        line=(np.arange(n) % 4).astype(np.uint8), rays=n)
 
 
 def test_time_msg():
@@ -67,16 +68,23 @@ def test_custom_msg_of_a_scan():
     data = mujoco.MjData(scene.ROOM_MODEL)
     scene._place(scene.ROOM_MODEL, data)
     sensor = lidar.Mid360(scene.ROOM_MODEL, prefix="")
-    sensor.update(data, 7.0)
-    frame = sensor.update(data, 7.1)
+    scanner = lidar.make_scanner(sensor.make_caster("cpu"))
+    try:
+        scanner.update(sensor.snapshot(data), 7.0)
+        frame = scanner.update(sensor.snapshot(data), 7.1)
+    finally:
+        scanner.caster.close()
     msg = deserialize_message(msgs.livox_custom_msg_cdr(frame), CustomMsg)
-    assert msg.point_num == len(msg.points) == len(frame.points) > 0.9 * sensor.points_per_frame
+    assert msg.point_num == len(msg.points) == len(frame.points) > 0.9 * scanner.points_per_frame
+    assert scanner.points_per_frame == 20_000
     assert msg.timebase == 7_000_000_000 and (msg.header.stamp.sec, msg.header.stamp.nanosec) == (7, 0)
     assert msg.lidar_id == 192 and list(msg.rsvd) == [0, 0, 0]
     xyz = np.array([(p.x, p.y, p.z) for p in msg.points], dtype=np.float32)
     assert np.array_equal(xyz, frame.points)
     assert [p.offset_time for p in msg.points] == frame.offset_time.tolist()
-    assert msg.points[0].offset_time == 0 and msg.points[-1].offset_time == 100_000_000
+    # Cast by the two calls: the frame's first ray at 7.0 s, the rest at 7.1 s.
+    assert {p.offset_time for p in msg.points} <= {0, 100_000_000}
+    assert msg.points[-1].offset_time == 100_000_000
     assert [p.line for p in msg.points] == frame.line.tolist()
     assert {p.reflectivity for p in msg.points} == {msgs.REFLECTIVITY} and {p.tag for p in msg.points} == {0}
 

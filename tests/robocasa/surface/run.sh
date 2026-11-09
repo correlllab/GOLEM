@@ -45,9 +45,10 @@ pinned=(GOLEM_CAMERAS GOLEM_CAMERA_SCALE GOLEM_CAMERA_DEPTH GOLEM_CAMERA_POINTCL
         GOLEM_SIM_ODOM GOLEM_SIM_EXPERIMENT GOLEM_SIM_TETHER_ROT_STIFFNESS
         GOLEM_SIM_TETHER_ROT_BODY GOLEM_SPAWN_MARGIN GOLEM_SPAWN_BACKOFF GOLEM_SPAWN_OFFSET
         GOLEM_CMD_TIMEOUT G1_DDS_INTERFACE)
-# Interpolated by the sim service but not pinned: names this script sets itself and host mount
-# roots, none of which changes what the sim publishes.
-allowed=(GOLEM_ROBOT GOLEM_DISPLAY GOLEM_ASSETS_DIR GOLEM_CACHE_DIR)
+# Interpolated by the sim service but not pinned: names this script sets itself, host mount
+# roots and the lidar backend (how the rays are cast, not what is published), none of which
+# changes the surface.
+allowed=(GOLEM_ROBOT GOLEM_DISPLAY GOLEM_ASSETS_DIR GOLEM_CACHE_DIR GOLEM_LIDAR_BACKEND)
 for knob in "${pinned[@]}"; do
     export "$knob="
 done

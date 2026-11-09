@@ -21,7 +21,7 @@ done
 # The tests expect each knob's default, so a value from the shell or docker/.env is cleared
 # (an interface named in G1_DDS_INTERFACE does not exist in the container).
 for knob in GOLEM_CAMERAS GOLEM_CAMERA_SCALE GOLEM_CAMERA_HZ GOLEM_LIDAR GOLEM_LIDAR_POINTS \
-            GOLEM_LIDAR_HZ GOLEM_CMD_TIMEOUT GOLEM_SPAWN_BACKOFF \
+            GOLEM_LIDAR_HZ GOLEM_LIDAR_BACKEND GOLEM_CMD_TIMEOUT GOLEM_SPAWN_BACKOFF \
             GOLEM_SIM_ODOM GOLEM_SIM_EXPERIMENT G1_DDS_INTERFACE; do
     export "$knob="
 done

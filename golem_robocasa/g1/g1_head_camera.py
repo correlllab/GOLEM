@@ -40,9 +40,13 @@ render_scene() renders that scene on the renderer's thread (GL); depth_mm()
 converts the depth, on any thread. render() does all three on the caller's
 thread. The scene is the renderer's own, so update_scene() must not run while
 render_scene() does; the sim's bridge hands the scene between its two threads.
+render_scene() renders under mid360.GL_LOCK, so it takes turns with the lidar's GPU
+caster: two threads rendering at once slow each other several-fold (mid360.py).
 """
 import mujoco
 import numpy as np
+
+import mid360
 
 CAMERA = "head_cam"
 WIDTH, HEIGHT = 1280, 720
@@ -120,14 +124,15 @@ class HeadCamera:
     def render_scene(self):
         """Return (rgb uint8 (h, w, 3), depth float32 (h, w) m) of the scene update_scene() last filled.
 
-        New arrays; runs on the renderer's thread.
+        New arrays; runs on the renderer's thread, holding mid360.GL_LOCK while it renders.
         """
         r = self._renderer
-        r.disable_depth_rendering()
-        rgb = r.render()
-        r.enable_depth_rendering()
-        depth = r.render()
-        r.disable_depth_rendering()
+        with mid360.GL_LOCK:
+            r.disable_depth_rendering()
+            rgb = r.render()
+            r.enable_depth_rendering()
+            depth = r.render()
+            r.disable_depth_rendering()
         return rgb, depth
 
     def depth_mm(self, depth):

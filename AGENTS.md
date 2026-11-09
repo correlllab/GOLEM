@@ -229,7 +229,8 @@ indexes the packages the G1 runs.
 Third-party/vendored (do not refactor): `FAST_LIO`, `livox_ros_driver2`,
 `unitree_ros2`, plus the top-level `unitree_sdk2_python` and `mujoco_mpc`,
 Unitree's G1 models in `CL_Assets/g1` (kept byte-for-byte upstream; its
-`README.md`), and HOMIE's policy in
+`README.md`), MuJoCo-LiDAR's MID-360 scan pattern in
+`golem_robocasa/third_party/mujoco_lidar/` (MIT; its `README.md`), and HOMIE's policy in
 `core_ws/src/golem_lowerbody_rl/policies/homie/` (non-commercial licence, §8).
 
 ## 5. Ownership & scoping convention
@@ -550,10 +551,15 @@ and `mode_pr` 0, and an elastic band on `torso_link` holds the robot until the
 toggle (or SPACE in the viewer) releases it; the G1 bringup's leg node
 calls it. It reads none of HOMIE's files. (Trust `g1/g1_sensors.py` for
 the ROS side, `g1/unitree_interface.py` for the DDS side and `g1/g1_mujoco.py`
-for the band.) Its knobs are `GOLEM_LIDAR`, `GOLEM_LIDAR_POINTS`,
-`GOLEM_LIDAR_HZ`, `GOLEM_CAMERAS`, `GOLEM_CAMERA_HZ`, `GOLEM_CAMERA_SCALE` (G1
-default 0.5), `GOLEM_CMD_TIMEOUT`, `GOLEM_SPAWN_BACKOFF`, `GOLEM_SIM_ODOM`,
-`GOLEM_SIM_EXPERIMENT`. Their defaults are in the code
+for the band.) Its knobs are `GOLEM_LIDAR`, `GOLEM_LIDAR_POINTS` (points per
+frame, default the real sensor's 20,000), `GOLEM_LIDAR_HZ`,
+`GOLEM_LIDAR_BACKEND` (how the MID-360's rays are cast, `golem_robocasa/mid360.py`:
+`auto`, the default, renders them on the GPU where MuJoCo renders through EGL on
+one and else casts them exactly on the CPU, logging why; `gpu` stops the sim
+without a GPU; `cpu` always uses the CPU), `GOLEM_CAMERAS`, `GOLEM_CAMERA_HZ`,
+`GOLEM_CAMERA_SCALE` (G1 default 0.5), `GOLEM_CMD_TIMEOUT`,
+`GOLEM_SPAWN_BACKOFF`, `GOLEM_SIM_ODOM`, `GOLEM_SIM_EXPERIMENT`. Their
+defaults are in the code
 that reads them: `SensorConfig` in `g1/g1_sensors.py` (sensors),
 `g1/unitree_interface.py` (the command timeout), `g1/g1_mujoco.py`
 (spawn, odom) and `measurement_bridge.py` (experiment); the compose files pass them

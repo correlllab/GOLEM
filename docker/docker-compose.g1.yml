@@ -18,7 +18,7 @@ services:
       GOLEM_CMD_TIMEOUT: ${GOLEM_CMD_TIMEOUT:-}
       # 0 drops the MID-360 (/livox/lidar, /livox/imu).
       GOLEM_LIDAR: ${GOLEM_LIDAR:-}
-      # Points per lidar frame.
+      # Points per lidar frame (default 20,000, the real MID-360's).
       GOLEM_LIDAR_POINTS: ${GOLEM_LIDAR_POINTS:-}
       # Lidar frames per sim second (at most 100).
       GOLEM_LIDAR_HZ: ${GOLEM_LIDAR_HZ:-}

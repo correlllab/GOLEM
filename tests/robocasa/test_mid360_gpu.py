@@ -289,10 +289,14 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(len(logged), 1)
 
     def test_cpu_backend_never_tries_the_gpu(self):
-        """cpu returns a CpuCaster without constructing a GpuCaster; an unknown backend raises."""
+        """cpu returns a CpuCaster on its own copy of the model, without trying the GPU; an unknown backend raises."""
         with mock.patch.object(mid360, "GpuCaster", _Refused):
             caster = mid360.make_caster(self.model, -1, (0, 1, 0, 0, 0, 0), "cpu", log=self.fail)
             caster.close()
+            # The cast clears body_bvhadr, which mj_step on the caller's model reads.
+            for field in ("body_bvhadr", "geom_rgba", "mat_rgba"):
+                self.assertFalse(np.shares_memory(getattr(caster.model, field),
+                                                  getattr(self.model, field)), field)
             with self.assertRaises(ValueError):
                 mid360.make_caster(self.model, -1, (0, 1, 0, 0, 0, 0), "cuda", log=self.fail)
         self.assertIsInstance(caster, mid360.CpuCaster)

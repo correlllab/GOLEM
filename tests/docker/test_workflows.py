@@ -767,14 +767,15 @@ if 'config' in sys.argv:
         self.assertNotIn('GOLEM_ROBOT', env)
 
     def test_base_robocasa_service_passes_spawn_and_lidar_knobs_empty(self):
-        """The base robocasa service passes the spawn backoff and lidar self-filter knobs, empty unless set."""
-        # Empty: the sim's own defaults (no backoff, self-filter on).
+        """The base robocasa service passes the spawn backoff, lidar self-filter and lidar backend knobs, empty unless set."""
+        # Empty: the sim's own defaults (no backoff, self-filter on, backend auto).
         env = self.compose_config('docker-compose.yml', profile='robocasa')['robocasa']['environment']
-        for key in ('GOLEM_SPAWN_BACKOFF', 'GOLEM_LIDAR_SELF_FILTER'):
+        for key in ('GOLEM_SPAWN_BACKOFF', 'GOLEM_LIDAR_SELF_FILTER', 'GOLEM_LIDAR_BACKEND'):
             self.assertEqual(env[key], '', key)
-        env = self.compose_config('docker-compose.yml', profile='robocasa',
-                                  GOLEM_SPAWN_BACKOFF='2.0')['robocasa']['environment']
+        env = self.compose_config('docker-compose.yml', profile='robocasa', GOLEM_SPAWN_BACKOFF='2.0',
+                                  GOLEM_LIDAR_BACKEND='cpu')['robocasa']['environment']
         self.assertEqual(env['GOLEM_SPAWN_BACKOFF'], '2.0')
+        self.assertEqual(env['GOLEM_LIDAR_BACKEND'], 'cpu')
 
     def test_g1_overlay_compose_contents(self):
         """The G1 overlay sets GOLEM_ROBOT=g1 and the G1 sim knobs, empty, and touches neither ros nor the policy."""

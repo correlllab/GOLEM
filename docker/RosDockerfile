@@ -362,3 +362,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install -c /opt/golem-locks/ros-amd64-11.txt --no-cache-dir onnxruntime==1.23.2 \
     && python3 -c "import onnxruntime"
+
+# -----------------------------------------------------------------------------
+# Clamp setuptools, wheel and numpy again, for the reasons of step 6: the
+# GraspGenX dependency step (ros-amd64-08) installs setuptools 84 and its
+# distutils-precedence.pth, which break colcon's ament_python builds. Last, so
+# it also covers every step above. It installs only the three pinned names
+# (--no-deps), so step 6's lock, which pins them at these versions, serves.
+# -----------------------------------------------------------------------------
+RUN rm -rf /usr/local/lib/python3.10/dist-packages/setuptools \
+           /usr/local/lib/python3.10/dist-packages/setuptools-*.dist-info \
+           /usr/local/lib/python3.10/dist-packages/pkg_resources \
+           /usr/local/lib/python3.10/dist-packages/pkg_resources-*.dist-info \
+           /usr/local/lib/python3.10/dist-packages/_distutils_hack \
+           /usr/local/lib/python3.10/dist-packages/wheel \
+           /usr/local/lib/python3.10/dist-packages/wheel-*.dist-info \
+    && pip install -c /opt/golem-locks/ros-amd64-06.txt --no-cache-dir --no-deps "numpy<2" "setuptools==59.6.0" "wheel<0.44" \
+    && rm -f /usr/local/lib/python3.10/dist-packages/distutils-precedence.pth \
+    && python3 -c "import setuptools, wheel, numpy; assert setuptools.__version__ == '59.6.0', setuptools.__version__; assert numpy.__version__.startswith('1.'), numpy.__version__; print('clamp ok:', setuptools.__version__, wheel.__version__, numpy.__version__)"

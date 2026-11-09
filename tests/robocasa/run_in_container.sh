@@ -3,8 +3,8 @@
 #
 # Usage: tests/robocasa/run_in_container.sh [unittest discover options]
 #   e.g. -p test_sensor_bridge.py to run one file. A running sim container is left alone.
-# Environment: ROS_DOMAIN_ID (check_domain refuses 0), docker/.env and the shell through
-#   docker_common.sh's load_config.
+# Environment: ROS_DOMAIN_ID (check_domain refuses 0), GOLEM_CPU_PINNING and GOLEM_SIM_CPUSET
+#   (configure_cpus), docker/.env and the shell through docker_common.sh's load_config.
 # Exit: the unittest run's status; 1 when a wrapper check fails.
 set -eo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -17,6 +17,8 @@ load_config
 check_domain robocasa
 export GOLEM_DISPLAY=headless
 configure_display
+# Pin the container to the sim's CPUs, as the sims run (docker_common.sh's configure_cpus).
+configure_cpus
 prepare_mounts robocasa
 
 # EGL renders the cameras offscreen; the Livox workspace provides the CustomMsg type.

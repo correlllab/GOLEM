@@ -41,8 +41,10 @@ sim's own state; no ground truth is published.
 
 The steps wait in sim time (/clock) and the checks measure motion in sim time,
 so a sim slower than real time stretches the test instead of failing it; the
-band's release against the policy's start is checked in wall time, as the
-leg node times its band.max_wait.
+band's release against the policy's start is checked in wall time (the policy's
+start comes from the leg node's log), while the leg node times its band.max_wait
+in robot time, sim time here: the two agree at the GOLEM_SIM_RATE of 1 the test
+is a gate at.
 """
 import argparse
 import json

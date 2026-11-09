@@ -5,8 +5,8 @@
 #   With no files, runs every test_g1_*.py here. A running sim container is left alone.
 # The container has no network and uses DDS domain 97, whatever ROS_DOMAIN_ID says:
 #   test_g1_unitree_interface.py opens real Unitree DDS channels.
-# Environment: docker/.env and the shell through load_config; the sim knobs listed below are
-#   cleared.
+# Environment: GOLEM_CPU_PINNING and GOLEM_SIM_CPUSET (configure_cpus), docker/.env and the
+#   shell through load_config; the sim knobs listed below are cleared.
 # Exit: 0 when every file passes; 1 when any fails or a wrapper check fails; 2 for an argument
 #   that is not a test_g1_*.py file here.
 set -eo pipefail
@@ -35,6 +35,8 @@ configure_robot robocasa
 check_domain robocasa
 export GOLEM_DISPLAY=headless
 configure_display
+# Pin the container to the sim's CPUs, as the sims run (docker_common.sh's configure_cpus).
+configure_cpus
 prepare_mounts robocasa
 
 # A compose overlay that takes the container off every network.

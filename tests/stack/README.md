@@ -17,8 +17,8 @@ failure, including startup failures and timeouts. Controllers cannot access
 the private telemetry mount. The default wall timeout is 900 seconds; override
 with `GOLEM_TEST_WALL_TIMEOUT` for slower workers.
 Simulator cameras are off by default (`GOLEM_TEST_CAMERAS=0`) because these
-controllers use no images and CPU camera rendering slows RoboCasa physics well
-below the real-time pace the wall-clock controllers assume. `run.json` records
+controllers read no images, and RoboCasa's camera renders cost the sim physics
+time (the physics waits for a frame still rendering). `run.json` records
 the camera setting, the git state and the exact image IDs used.
 
 Arms move both wrist frames forward 2 cm and back through `/frame_task`.

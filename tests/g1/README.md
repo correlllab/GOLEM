@@ -91,6 +91,13 @@ goal the explorer picks a frontier behind the robot; Nav2's MPPI (`DiffDrive`, `
 15 deg, and the progress checker (0.5 m in 10 s) aborts the goal again and again until the
 skill's timeout. `core_ws` at 93f5afa, before the shared navigation graph, fails the same way.
 
+Known failure: the nav test's `map has no phantoms` check fails in about 2 of 5 runs, on a
+one-cell phantom near the same spot of the map (about x 3.9-4.1, y -0.8 to -0.9 m in the sim's
+world frame, as the check prints it), and is then usually the only check that fails.
+The cell is floor returns that `golem_slam`'s scan path lifts into the scan's height band; the
+raw `/livox/lidar` returns hold none there (`docs/superpowers/specs/2026-11-05-sim-speed-results.md`,
+Tier 2). A failure of that check on more than one cell, or away from that spot, is not this one.
+
 The tests depend on internals of the G1 sim and on the stack's log lines. A change to any of these
 must update the tests in the same commit.
 

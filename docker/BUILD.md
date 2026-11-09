@@ -114,8 +114,9 @@ above. In order:
    metadata) and installed `--no-deps`; the whole environment is then frozen as
    an *additive constraint*, so its dependencies, `diffusers` (with an older
    `huggingface-hub`) and `viser` install without moving anything installed.
-9. **The RealSense driver, OctoMap and the G1's additions** (last layers),
-   the G1's through lock step `ros-amd64-11.txt`.
+9. **The RealSense driver, OctoMap and the G1's additions**, the G1's through
+   lock step `ros-amd64-11.txt`.
+10. **The clamp again**, last: the GraspGenX dependency step moves setuptools.
 
 Each step's comment in the Dockerfile names its packages and why each is there.
 

@@ -123,8 +123,8 @@ On a hybrid CPU (an Intel P-core/E-core part such as the i7-14700F: P-cores 0-15
 E-cores 16-27) the sim's physics thread otherwise lands on an E-core about half
 the time, so `docker/scripts/docker_common.sh`'s `configure_cpus` pins the
 `robocasa` container to the P-cores (`cpu_core` in sysfs) and the `ros` container
-to the E-cores (`cpu_atom`): the H1-2 sim ran at 0.86x real time instead of
-0.79x, the G1 at 0.98x instead of 0.92x. `docker_run.sh` (`robocasa`, `ros`),
+to the E-cores (`cpu_atom`); the measured real-time factors are in
+`docs/superpowers/specs/2026-11-05-sim-speed-results.md`. `docker_run.sh` (`robocasa`, `ros`),
 `docker_stack.sh up|restart robocasa` and the closed-loop tests (`tests/sim`,
 `tests/g1`, `tests/stack` on RoboCasa) apply it, and print `cpus: sim <list>, ros
 <list>` (or `cpus: not pinned`) beside the `robot:` line; the Isaac simulator and

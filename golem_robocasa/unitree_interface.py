@@ -60,6 +60,9 @@ class SimInterface(LowCmdLatch):
         self.have_imu = "imu_quat" in resolver.sensor_adr
         # Every motor is off until the first valid rt/lowcmd frame.
         self._init_lowcmd(MOTOR_NUM, float(data.time))
+        # The sim's ElasticBand, set by sim_loop for the tests that record the
+        # sim from inside its process; this class never reads it.
+        self.band = None
 
         ChannelFactoryInitialize(id=domain_id())
         self._low_state_pub = ChannelPublisher(TOPIC_LOWSTATE, LowState_)

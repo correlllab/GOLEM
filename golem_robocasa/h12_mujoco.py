@@ -229,6 +229,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
 
     # The gripper actuators are the hand bridges' and disjoint from the 27 body motors.
     sim_interface = SimInterface(model, data, resolver=resolver)
+    # For the closed-loop tests that record the sim from inside its process.
+    sim_interface.band = band
 
     init_ros()
 

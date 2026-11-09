@@ -150,10 +150,12 @@ configure_display() {
 }
 
 # Print the CPU numbers in the list $1 (docker's cpuset syntax: 0-3,8), one per
-# line, and fail on any other syntax. Ranges are capped at CPU 65535 so a typo
-# cannot loop for long.
+# line, and fail on any other syntax (an empty item, a trailing comma included).
+# Ranges are capped at CPU 65535 so a typo cannot loop for long.
 expand_cpu_list() {
     local items item
+    # read drops a trailing empty field, so a trailing comma is refused here.
+    [[ $1 != *, ]] || return 1
     IFS=, read -ra items <<< "$1"
     [ "${#items[@]}" -gt 0 ] || return 1
     for item in "${items[@]}"; do
@@ -164,7 +166,8 @@ expand_cpu_list() {
     done
 }
 
-# Fail unless every CPU of list $2 is in the online list $3, naming knob $1.
+# Fail unless every CPU of list $2 is in the online list $3, naming its source
+# $1: the knob that set it, or the sysfs file it was detected from.
 check_cpuset() {
     local knob=$1 list=$2 online=$3 cpus cpu
     cpus=$(expand_cpu_list "$list") || fail "$knob='$list' is not a CPU list such as 0-15 or 0,2,4-5."
@@ -192,10 +195,11 @@ check_cpuset() {
 # SAFETY: domain 0 is the real robots' bus and pins nothing: the real G1's ros
 # container keeps every core, so an explicit GOLEM_ROS_CPUSET there is refused,
 # not applied. No simulator runs on domain 0.
-# Call it after load_config and check_domain, for the robocasa and ros services
-# only (the Isaac simulator is not pinned).
+# Call it after load_config, for the robocasa and ros services only (the Isaac
+# simulator is not pinned); docker_run.sh calls it before check_domain's prompt.
 configure_cpus() {
     local sim=${GOLEM_SIM_CPUSET:-} ros=${GOLEM_ROS_CPUSET:-}
+    local sim_from=GOLEM_SIM_CPUSET ros_from=GOLEM_ROS_CPUSET
     local root=${GOLEM_SYSFS_ROOT:-} core atom online=''
     unset GOLEM_SIM_CPUSET GOLEM_ROS_CPUSET
     if [ "$ROS_DOMAIN_ID" = 0 ]; then
@@ -212,8 +216,9 @@ configure_cpus() {
             && IFS= read -r core < "$root/sys/devices/cpu_core/cpus" \
             && IFS= read -r atom < "$root/sys/devices/cpu_atom/cpus" \
             && [ -n "$core" ] && [ -n "$atom" ]; then
-        sim=${sim:-$core}
-        ros=${ros:-$atom}
+        # A detected list is checked as an explicit one is, named by its sysfs file.
+        [ -n "$sim" ] || { sim=$core; sim_from='sysfs cpu_core/cpus (detected)'; }
+        [ -n "$ros" ] || { ros=$atom; ros_from='sysfs cpu_atom/cpus (detected)'; }
     fi
     if [ -r "$root/sys/devices/system/cpu/online" ]; then
         IFS= read -r online < "$root/sys/devices/system/cpu/online" || online=''
@@ -223,12 +228,12 @@ configure_cpus() {
         return 0
     fi
     if [ -n "$sim" ]; then
-        check_cpuset GOLEM_SIM_CPUSET "$sim" "$online"
+        check_cpuset "$sim_from" "$sim" "$online"
         export GOLEM_SIM_CPUSET=$sim
         COMPOSE+=(-f "$GOLEM_ROOT/docker/docker-compose.cpus-sim.yml")
     fi
     if [ -n "$ros" ]; then
-        check_cpuset GOLEM_ROS_CPUSET "$ros" "$online"
+        check_cpuset "$ros_from" "$ros" "$online"
         export GOLEM_ROS_CPUSET=$ros
         COMPOSE+=(-f "$GOLEM_ROOT/docker/docker-compose.cpus-ros.yml")
     fi

@@ -485,11 +485,12 @@ if 'config' in sys.argv:
                 self.assertEqual([self.pin_overlays(c) for c in calls], [[]] * len(calls))
 
     def test_domain_zero_refuses_an_explicit_ros_cpuset_before_any_container(self):
-        """docker_run.sh ros on domain 0 with GOLEM_ROS_CPUSET fails, naming the knob, and starts nothing."""
+        """docker_run.sh ros on domain 0 with GOLEM_ROS_CPUSET fails, naming the knob, before the prompt and any container."""
         r = self.run_with_input('docker/scripts/docker_run.sh', 'ros', stdin='y\n', ROS_DOMAIN_ID='0',
                                 GOLEM_CPU_PINNING='1', GOLEM_ROS_CPUSET='16-27', GOLEM_SYSFS_ROOT=self.hybrid_sysfs())
         self.assertNotEqual(r.returncode, 0)
         self.assertIn('GOLEM_ROS_CPUSET', r.stderr)
+        self.assertNotIn('Proceed? [y/N]', r.stderr)
         self.assertFalse(self.run_calls())
 
     def test_sim_test_setup_pins_both_containers(self):

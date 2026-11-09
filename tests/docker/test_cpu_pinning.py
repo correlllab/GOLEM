@@ -127,11 +127,19 @@ print(json.dumps({"sim": os.environ.get("GOLEM_SIM_CPUSET"), "ros": os.environ.g
     def test_malformed_cpuset_fails_naming_the_knob(self):
         """A cpuset that is not a list of CPU numbers and ranges fails, naming its knob."""
         self.fake_cpus()
-        for value in ('a', '3-1', '1-', '1,,2', '-4', '0-99999999'):
+        for value in ('a', '3-1', '1-', '1,,2', '-4', '0-99999999', '1,', ',1'):
             with self.subTest(value=value):
                 r = self.configure(GOLEM_ROS_CPUSET=value)
                 self.assertNotEqual(r.returncode, 0)
                 self.assertIn('GOLEM_ROS_CPUSET', r.stderr)
+
+    def test_a_detected_list_off_the_online_cpus_fails_naming_sysfs(self):
+        """A detected cpu_core list naming an offline CPU fails, naming its sysfs file, not a knob."""
+        self.fake_cpus(online='0-7,16-27')
+        r = self.configure()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('sysfs cpu_core/cpus (detected)', r.stderr)
+        self.assertNotIn('GOLEM_SIM_CPUSET', r.stderr)
 
     def test_domain_zero_pins_nothing(self):
         """On ROS_DOMAIN_ID=0, the real robots' bus, a hybrid CPU still pins nothing."""

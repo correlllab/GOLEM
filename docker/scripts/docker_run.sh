@@ -34,12 +34,14 @@ else
 fi
 RESTART=0
 if [ "${1:-}" = --restart ]; then RESTART=1; shift; fi
+# Pin the container to its CPUs (robocasa, ros; not the Isaac simulator). Before the
+# domain-0 prompt, so a GOLEM_ROS_CPUSET that domain 0 refuses fails before the operator
+# confirms.
+[ "$SIM" = isaac ] || configure_cpus
 check_domain "$SIM"
 # A --headless for the launcher also skips the desktop mounts.
 for arg in "$@"; do [ "$arg" != --headless ] || export GOLEM_DISPLAY=headless; done
 configure_display
-# Pin the container to its CPUs (robocasa, ros; not the Isaac simulator).
-[ "$SIM" = isaac ] || configure_cpus
 prepare_mounts "$SIM"
 # Never remove an existing container implicitly.
 NAME=$(container_name "$SIM")

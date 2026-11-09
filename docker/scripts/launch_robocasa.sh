@@ -42,8 +42,9 @@ case " $* " in
         ;;
 esac
 
-# EGL renders the RGBD cameras offscreen, needs no display, and can render on
-# the camera worker thread; the passive viewer opens its own GLFW window.
+# EGL renders the RGBD cameras and the MID-360's rays offscreen on the GPU, needs
+# no display, and can render on the sensors' worker threads; the passive viewer
+# opens its own GLFW window.
 export MUJOCO_GL=egl
 
 cd /home/code/golem_robocasa

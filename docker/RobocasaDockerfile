@@ -1,9 +1,10 @@
 # golem_sim_robocasa: the MuJoCo / RoboCasa simulator of both robots, on
 # golem_base (BaseDockerfile). It holds MuJoCo 3.17.0, robosuite and RoboCasa
-# (patched for 3.17.0) with the kitchen assets, the colcon toolchain for the message-only msgs_ws,
-# and livox_ros_driver2 for the lidar's CustomMsg. The simulator source
-# (golem_robocasa) is bind-mounted at runtime (docker-compose.yml);
-# launch_robocasa.sh starts it. docker/BUILD.md §5 describes the image.
+# (patched for 3.17.0) with the kitchen assets, the colcon toolchain for the
+# message-only msgs_ws, and livox_ros_driver2 for the lidar's CustomMsg. The
+# simulator source (golem_robocasa) is bind-mounted at runtime
+# (docker-compose.yml); launch_robocasa.sh starts it. docker/BUILD.md §5
+# describes the image.
 FROM golem_base:latest
 COPY docker/locks/robocasa-*.txt docker/locks/robocasa-assets.digest /opt/golem-locks/
 

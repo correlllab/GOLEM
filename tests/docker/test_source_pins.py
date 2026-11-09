@@ -42,7 +42,11 @@ class SourcePinTests(unittest.TestCase):
         self.assertEqual(len(set(refs.values())), 1, refs)
 
     def test_robocasa_patches_name_the_pinned_checkouts(self):
-        """Each patch the RoboCasa image applies is committed and names the commit its repository is checked out at."""
+        """Each patch the RoboCasa image applies is committed and names the commit its repository is checked out at.
+
+        This checks the patch's header only; that its hunks apply to that commit is checked by
+        the image build, whose `git apply` fails the build when they do not.
+        """
         text = (ROOT / 'docker/RobocasaDockerfile').read_text().replace('\\\n', ' ')
         checkouts = dict(re.findall(r'git -C (/opt/\w+) checkout --quiet ([0-9a-f]{40})', text))
         applies = re.findall(r'git -C (/opt/\w+) apply /opt/golem-patches/([\w.-]+)', text)

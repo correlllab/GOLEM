@@ -2,7 +2,7 @@
 # configure_cpus adds this overlay only when it has set GOLEM_SIM_CPUSET, so an
 # unpinned run never interpolates an empty cpuset. On a hybrid CPU the list is
 # the performance cores', which keeps the physics thread off the efficiency
-# cores (about 0.79x -> 0.86x real time for the H1-2 on an i7-14700F).
+# cores (the measured gain: docs/superpowers/specs/2026-11-05-sim-speed-results.md).
 services:
   robocasa:
     cpuset: ${GOLEM_SIM_CPUSET:?set by configure_cpus in docker_common.sh}

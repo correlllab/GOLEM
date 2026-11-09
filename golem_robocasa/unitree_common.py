@@ -1,8 +1,9 @@
-"""Validate and latch Unitree DDS motor commands for both robots' SimInterface.
+"""Validate and latch Unitree DDS motor commands and write rt/lowstate for both robots' SimInterface.
 
 unitree_interface.py (H1-2) and g1/unitree_interface.py (G1) share the command
 timeout knob, rt/lowcmd validation, the latched MotorCommand, rate-limited
-warnings, the CRC, the IMU's rpy and the DDS domain from here.
+warnings, the CRC, the rt/lowstate writer, the IMU's rpy and the DDS domain
+from here.
 
 A DDS handler validates a frame and latches it as one MotorCommand, swapped in
 by a single assignment, and never touches MjData; the main loop turns the
@@ -18,6 +19,7 @@ from typing import NamedTuple
 
 import numpy as np
 
+from cyclonedds._clayer import ddspy_write
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_ as LowCmd_default
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_ as LowState_default
 from unitree_sdk2py.utils.crc import CRC
@@ -137,6 +139,248 @@ def fast_crc():
         del crc._CRC__Trans, crc._crc_ctypes
         log("WARNING: the fast CRC does not match unitree_sdk2py's; using the SDK's")
     return crc
+
+
+class _LayoutError(Exception):
+    """Report that a LowState_ field was not found where a probe expected it."""
+
+
+# A float32 and a uint32 whose four little-endian bytes are all distinct and non-zero.
+_PROBE_F32 = float(np.frombuffer(bytes.fromhex('11223344'), '<f4')[0])
+_PROBE_U32 = 0x44332211
+
+
+def _sdk_crc():
+    """Return a CRC object running unitree_sdk2py's own code, whatever fast_crc() did to CRC()."""
+    crc = object.__new__(CRC)   # CRC() is a per-process singleton, which fast_crc() patches
+    crc.__init__()
+    return crc
+
+
+def _word_index(encode, msg, base, set_value, value):
+    """Return the uint32 index of the 4-byte field set_value(msg, v) writes in encode(msg).
+
+    base is encode(msg) as msg is. Raises _LayoutError unless setting the field to value (whose
+    little-endian bytes are 11 22 33 44) changes exactly one aligned word, to those bytes.
+    """
+    set_value(msg, value)
+    changed = encode(msg)
+    set_value(msg, 0)
+    diff = np.flatnonzero(np.frombuffer(changed, np.uint8) != np.frombuffer(base, np.uint8))
+    pattern = bytes.fromhex('11223344')
+    if len(diff) == 0 or diff[0] % 4 or diff[-1] >= diff[0] + 4 \
+            or changed[diff[0]:diff[0] + 4] != pattern:
+        raise _LayoutError(f'field not found as a little-endian word (bytes {diff[:8]})')
+    return int(diff[0]) // 4
+
+
+def _field_words(encode, msg, motors):
+    """Return the uint32 indices of tick, then of every float field LowStateWriter fills, in encode(msg).
+
+    The floats are in LowStateWriter's value order: q, dq, tau_est of each motor slot, then the
+    IMU's quaternion, gyroscope, accelerometer and rpy.
+    """
+    base = encode(msg)
+
+    def element(get_list, i):
+        """Return a setter of element i of the list get_list(msg) returns."""
+        def set_value(m, v):
+            """Set the element."""
+            get_list(m)[i] = v
+        return set_value
+
+    def attribute(get_obj, name):
+        """Return a setter of attribute name of the object get_obj(msg) returns."""
+        return lambda m, v: setattr(get_obj(m), name, v)
+
+    tick = _word_index(encode, msg, base, attribute(lambda m: m, 'tick'), _PROBE_U32)
+    setters = [attribute(lambda m, i=i: m.motor_state[i], name)
+               for name in ('q', 'dq', 'tau_est') for i in range(motors)]
+    for name, size in (('quaternion', 4), ('gyroscope', 3), ('accelerometer', 3), ('rpy', 3)):
+        setters += [element(lambda m, name=name: getattr(m.imu_state, name), i) for i in range(size)]
+    floats = [_word_index(encode, msg, base, set_value, _PROBE_F32) for set_value in setters]
+    return tick, np.array(floats, dtype=np.intp)
+
+
+class LowStateWriter:
+    """Write rt/lowstate samples built with numpy instead of unitree_sdk2py's Python serializer.
+
+    The sample is the LowState_ that unitree_sdk2py serializes for: mode_pr MODE_PR, the robot's
+    mode_machine, the tick, q, dq and tau_est of the first `motors` slots, the IMU's quaternion,
+    gyroscope, accelerometer and rpy (rpy_from_quat), every other field the IDL's zero, and the
+    SDK's CRC. Its CDR bytes and the CRC's packed struct are kept in two preallocated buffers;
+    each write fills their fields through numpy indices found once, at construction, by
+    serializing and packing probe samples with the SDK, computes the CRC with the SDK's C routine
+    over the same words as fast_crc(), and hands the bytes to cyclonedds' ddspy_write, the call
+    DataWriter.write makes after serializing (padded to 4 bytes as it pads). Like the SDK's
+    ChannelPublisher.Write without a timeout, it writes whether or not a reader is matched.
+
+    If the publisher has no cyclonedds DataWriter, the SDK's CRC routine is missing (not Linux),
+    or the bytes of a probe state differ from the SDK's, it logs one warning and takes the SDK's
+    path instead: it fills one LowState_, signs it with fast_crc() and hands it to
+    publisher.Write. Not thread-safe: the physics thread owns it.
+    """
+
+    def __init__(self, publisher, mode_machine, motors):
+        """Find the publisher's DataWriter and the sample's field offsets, and check them against the SDK.
+
+        publisher is an initialised unitree_sdk2py ChannelPublisher of LowState_; motors is the
+        number of motor slots filled (27 on the H1-2, 29 on the G1).
+        """
+        self._publisher = publisher
+        self.mode_machine = mode_machine
+        self.motors = motors
+        self._crc = fast_crc()
+        self._msg = LowState_default()
+        self._msg.mode_pr = MODE_PR
+        self._msg.mode_machine = mode_machine
+        self._warnings = RateLimitedWarnings()
+        # The DataWriter of the SDK's Channel; only its entity handle is kept, so that the
+        # publisher's Close still deletes the writer.
+        channel = getattr(publisher, '_ChannelPublisher__channel', None)
+        writer = getattr(getattr(channel, '_Channel__writer', None), '_Writer__writer', None)
+        self._ref = getattr(writer, '_ref', None)
+        self._use_version_2 = getattr(writer, '_use_version_2', None)
+        reason = None
+        if self._ref is None:
+            reason = 'the publisher has no cyclonedds DataWriter'
+        else:
+            try:
+                self._build()
+                if not self._matches_sdk():
+                    reason = "the numpy bytes differ from the SDK's"
+            except _LayoutError as e:
+                reason = f'the numpy path cannot be built: {e}'
+        self.fast = reason is None
+        if reason:
+            log(f"WARNING: rt/lowstate: {reason}; using the SDK's serializer")
+
+    def _build(self):
+        """Make the CDR and packed-struct buffers, their numpy views and the field indices.
+
+        Raises _LayoutError if a field is not a 4-byte little-endian word in either encoding
+        or the SDK's CRC routine or packer is missing.
+        """
+        sdk = _sdk_crc()
+        lib = getattr(sdk, 'crc_lib', None)
+        pack = getattr(sdk, '_CRC__PackHGLowState', None)   # the SDK CRC's packed struct, as words
+        if lib is None or pack is None:
+            raise _LayoutError("unitree_sdk2py's CRC library or LowState_ packer is missing")
+
+        def cdr(msg):
+            """Return msg as DataWriter.write hands it to ddspy_write."""
+            ser = msg.serialize(use_version_2=self._use_version_2)
+            return ser.ljust((len(ser) + 3) & ~3, b'\0')
+
+        def packed(msg):
+            """Return the little-endian words the SDK's CRC runs over (the packed struct but its crc)."""
+            return np.asarray(pack(msg), dtype='<u4').tobytes()
+
+        probe = LowState_default()
+        probe.mode_pr = MODE_PR
+        probe.mode_machine = self.mode_machine
+        self._cdr = bytearray(cdr(probe))
+        self._packed = bytearray(packed(probe))
+        self._cdr_tick, self._cdr_floats = _field_words(cdr, probe, self.motors)
+        self._packed_tick, self._packed_floats = _field_words(packed, probe, self.motors)
+        self._cdr_crc = _word_index(cdr, probe, bytes(self._cdr), lambda m, v: setattr(m, 'crc', v),
+                                    _PROBE_U32)
+        self._cdr_f32 = np.frombuffer(self._cdr, '<f4')
+        self._cdr_u32 = np.frombuffer(self._cdr, '<u4')
+        self._packed_f32 = np.frombuffer(self._packed, '<f4')
+        self._packed_u32 = np.frombuffer(self._packed, '<u4')
+        self._values = np.zeros(len(self._cdr_floats))   # q, dq, tau, quat, gyro, acc, rpy
+        self._crc32 = lib.crc32_core
+        self._packed_ptr = self._packed_u32.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32))
+        self._packed_words = len(self._packed_u32)
+
+    def _matches_sdk(self):
+        """Return whether the bytes of random probe states equal the SDK's serialized, signed LowState_.
+
+        Leaves both paths' IMU fields at the IDL's zeros, which a caller without an IMU keeps.
+        """
+        sdk = _sdk_crc()
+        rng = np.random.default_rng(0)
+        try:
+            for _ in range(3):
+                quat = rng.normal(size=4)
+                state = (int(rng.integers(0, 2**32)), rng.normal(size=self.motors),
+                         rng.normal(size=self.motors), rng.normal(size=self.motors),
+                         quat / np.linalg.norm(quat), rng.normal(size=3), rng.normal(size=3))
+                msg = self._fill_msg(*state)
+                msg.crc = sdk.Crc(msg)
+                ser = msg.serialize(use_version_2=self._use_version_2)
+                if bytes(self._fill(*state)) != ser.ljust((len(ser) + 3) & ~3, b'\0'):
+                    return False
+            return True
+        finally:
+            zero = (0, np.zeros(self.motors), np.zeros(self.motors), np.zeros(self.motors),
+                    np.zeros(4), np.zeros(3), np.zeros(3))
+            self._fill(*zero)
+            self._fill_msg(*zero)
+
+    def _fill(self, tick, q, dq, tau, quat_wxyz, gyro, acc):
+        """Fill the CDR buffer with the state and its CRC, and return it (the buffer, not a copy)."""
+        n = self.motors
+        values = self._values
+        values[:n] = q
+        values[n:2 * n] = dq
+        values[2 * n:3 * n] = tau
+        if quat_wxyz is not None:
+            values[3 * n:3 * n + 4] = quat_wxyz
+            values[3 * n + 4:3 * n + 13] = (*gyro, *acc, *rpy_from_quat(*quat_wxyz))
+        self._cdr_f32[self._cdr_floats] = values
+        self._packed_f32[self._packed_floats] = values
+        self._cdr_u32[self._cdr_tick] = tick
+        self._packed_u32[self._packed_tick] = tick
+        self._cdr_u32[self._cdr_crc] = self._crc32(self._packed_ptr, self._packed_words)
+        return self._cdr
+
+    def _fill_msg(self, tick, q, dq, tau, quat_wxyz, gyro, acc):
+        """Fill the SDK path's LowState_ with the state and return it, its crc not yet set."""
+        msg = self._msg
+        msg.tick = tick
+        for i, motor in enumerate(msg.motor_state[:self.motors]):
+            motor.q = float(q[i])
+            motor.dq = float(dq[i])
+            motor.tau_est = float(tau[i])
+        if quat_wxyz is not None:
+            imu = msg.imu_state
+            quat = [float(v) for v in quat_wxyz]
+            imu.quaternion = quat
+            imu.gyroscope = [float(v) for v in gyro]
+            imu.accelerometer = [float(v) for v in acc]
+            imu.rpy = rpy_from_quat(*quat)
+        return msg
+
+    def bytes_for(self, tick, q, dq, tau, quat_wxyz, gyro, acc):
+        """Return the bytes write() puts on the wire for this state.
+
+        tick is the uint32 tick (ms); q (rad), dq (rad/s) and tau (N*m) hold one value per motor
+        slot filled; quat_wxyz, gyro (rad/s) and acc (m/s^2) are the IMU's, or all None to
+        leave the IMU fields as they are (zero unless an earlier write set them).
+        """
+        if self.fast:
+            return bytes(self._fill(tick, q, dq, tau, quat_wxyz, gyro, acc))
+        msg = self._fill_msg(tick, q, dq, tau, quat_wxyz, gyro, acc)
+        msg.crc = self._crc.Crc(msg)
+        ser = msg.serialize(use_version_2=self._use_version_2)
+        return ser.ljust((len(ser) + 3) & ~3, b'\0')
+
+    def write(self, tick, q, dq, tau, quat_wxyz, gyro, acc):
+        """Publish the state on rt/lowstate; the arguments are bytes_for's.
+
+        A write cyclonedds refuses is reported in a rate-limited warning, as the SDK's
+        ChannelPublisher.Write prints and returns.
+        """
+        if not self.fast:
+            msg = self._fill_msg(tick, q, dq, tau, quat_wxyz, gyro, acc)
+            msg.crc = self._crc.Crc(msg)
+            self._publisher.Write(msg)
+            return
+        ret = ddspy_write(self._ref, self._fill(tick, q, dq, tau, quat_wxyz, gyro, acc))
+        if ret < 0:
+            self._warnings.warn('lowstate write', f'rt/lowstate write failed: DDS return code {ret}')
 
 
 def lowcmd_error(msg, crc, mode_machine, robot):

@@ -1,8 +1,9 @@
 """Check that the H1-2 RoboCasa sim's rt/lowstate carries the real H1-2's mode_machine.
 
-The test opens no DDS participant: unitree_interface's DDS channel names are replaced by
-in-process fakes for the length of each test. It runs in the standard runner
-(tests/robocasa/run_in_container.sh) and in a throwaway container without a network:
+The test opens no DDS participant: unitree_interface's DDS channel names and cyclonedds'
+ddspy_write are replaced by in-process fakes for the length of each test. It runs in the
+standard runner (tests/robocasa/run_in_container.sh) and in a throwaway container without a
+network:
 
     docker run --rm --network none -v "$PWD:/repo:ro" -w /repo -e PYTHONPATH=golem_robocasa \
         -e PYTHONDONTWRITEBYTECODE=1 --entrypoint python3 golem_sim_robocasa:latest \
@@ -18,28 +19,40 @@ from unittest import mock
 import mujoco
 import numpy as np
 
+from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
+
+import unitree_common
 import unitree_interface
 
 MODE_MACHINE = 6  # what the real H1-2 reports in every LowState_, in recordings of real runs
 
 
 class FakePublisher:
-    """Stand in for ChannelPublisher, recording the mode_machine of each sample written."""
+    """Stand in for ChannelPublisher, with a stand-in DataWriter that fake_ddspy_write writes to.
+
+    It has the private attribute chain of unitree_sdk2py's ChannelPublisher, so that the sim's
+    LowStateWriter finds the DataWriter.
+    """
     written = []
 
     def __init__(self, topic, kind):
         """Keep the topic; open nothing."""
         self.topic = topic
+        writer = types.SimpleNamespace(_ref=1, _use_version_2=None)
+        self._ChannelPublisher__channel = types.SimpleNamespace(
+            _Channel__writer=types.SimpleNamespace(_Writer__writer=writer))
 
     def Init(self):
         """Do nothing: there is no channel."""
 
-    def Write(self, sample):
-        """Record the sample's mode_machine."""
-        self.written.append(sample.mode_machine)
-
     def Close(self):
         """Do nothing: there is no channel."""
+
+
+def fake_ddspy_write(ref, data):
+    """Record the mode_machine of the sample written, decoded by the SDK's LowState_, and report success."""
+    FakePublisher.written.append(LowState_.deserialize(bytes(data)).mode_machine)
+    return 0
 
 
 class FakeSubscriber:
@@ -88,18 +101,20 @@ class H12SimLowStateTests(unittest.TestCase):
         env = mock.patch.dict(os.environ, {'ROS_DOMAIN_ID': '199'})
         env.start()
         self.addCleanup(env.stop)
-        for name, fake in (('ChannelFactoryInitialize', lambda id: None),
-                           ('ChannelPublisher', FakePublisher),
-                           ('ChannelSubscriber', FakeSubscriber)):
-            patcher = mock.patch.object(unitree_interface, name, fake)
+        for module, name, fake in ((unitree_interface, 'ChannelFactoryInitialize', lambda id: None),
+                                   (unitree_interface, 'ChannelPublisher', FakePublisher),
+                                   (unitree_interface, 'ChannelSubscriber', FakeSubscriber),
+                                   (unitree_common, 'ddspy_write', fake_ddspy_write)):
+            patcher = mock.patch.object(module, name, fake)
             patcher.start()
             self.addCleanup(patcher.stop)
         model, resolver = dummy_model_and_resolver()
         self.iface = unitree_interface.SimInterface(model, mujoco.MjData(model), resolver=resolver)
 
     def test_h12_sim_lowstate_reports_6(self):
-        """The sim's LowState reports mode_machine 6."""
-        self.assertEqual(self.iface.low_state.mode_machine, MODE_MACHINE)
+        """The sim's rt/lowstate writer reports mode_machine 6, on the numpy path."""
+        self.assertEqual(self.iface._low_state.mode_machine, MODE_MACHINE)
+        self.assertTrue(self.iface._low_state.fast)
 
     def test_published_sample_carries_it(self):
         """The sample written after a physics step carries mode_machine 6."""

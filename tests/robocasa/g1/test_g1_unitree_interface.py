@@ -9,16 +9,20 @@ network on ROS_DOMAIN_ID 97, with golem_robocasa on PYTHONPATH.
 import math
 import os
 import sys
+import time
 
 import mujoco
 import numpy as np
 
+from unitree_sdk2py.core.channel import ChannelSubscriber
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__HandCmd_ as HandCmd_default
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_ as LowCmd_default
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_ as LowState_default
+from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
 from unitree_sdk2py.utils.crc import CRC
 
 import g1
+import unitree_common
 from g1.sim_names import BODY_JOINTS, HAND_JOINTS, NameResolver
 from g1 import unitree_interface as ui
 
@@ -246,20 +250,38 @@ def test_hand_commands_by_joint_name_and_mode_byte():
 
 
 def test_lowstate_and_hand_state():
-    """rt/lowstate goes out every step and hand state at 100 Hz, with the tick, mode_machine 5, CRC, joints and IMU."""
+    """rt/lowstate goes out every step and hand state at 100 Hz, with the tick, mode_machine 5, CRC, joints and IMU.
+
+    rt/lowstate is read back through a DDS reader in this process, so the samples are the bytes
+    the numpy writer put on the wire, decoded by unitree_sdk2py.
+    """
+    assert IFACE._low_state.fast
     q0 = np.linspace(-0.2, 0.2, len(BODY_JOINTS))
     _reset(q0)
-    writes = {"lowstate": 0, "hand": 0}
-    IFACE._low_state_pub.Write = lambda msg, *a: writes.__setitem__("lowstate", writes["lowstate"] + 1)
+    received = []
+    reader = ChannelSubscriber(ui.TOPIC_LOWSTATE, LowState_)
+    reader.Init(received.append, 0)
+    time.sleep(0.5)   # s: the reader matches the writer
+    hand_writes = 0
+
+    def count_hand(msg, *args):
+        """Count one hand state sample."""
+        nonlocal hand_writes
+        hand_writes += 1
+
     for pub in IFACE._hand_state_pub.values():
-        pub.Write = lambda msg, *a: writes.__setitem__("hand", writes["hand"] + 1)
+        pub.Write = count_hand
     IFACE._steps = 0
     for _ in range(5):
         IFACE.write_ctrl()
         mujoco.mj_step(MODEL, DATA)
         IFACE.after_step()
-    msg = IFACE.low_state
-    assert writes == {"lowstate": 5, "hand": 2}  # 500 Hz and 100 Hz of sim time, both hands
+    deadline = time.monotonic() + 2.0
+    while len(received) < 5 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    reader.Close()
+    assert (len(received), hand_writes) == (5, 2)  # 500 Hz and 100 Hz of sim time, both hands
+    msg = received[-1]
     assert msg.tick == round(DATA.time * 1000) == 10
     assert (msg.mode_machine, msg.mode_pr) == (5, 0)
     assert CRC_.Crc(msg) == msg.crc
@@ -270,7 +292,7 @@ def test_lowstate_and_hand_state():
     assert np.allclose(msg.imu_state.quaternion, quat, atol=1e-6) and quat[0] > 0.99  # w first
     acc = DATA.sensordata[RESOLVER.sensor_adr["acc"][0]:][:3]
     assert np.allclose(msg.imu_state.accelerometer, acc, atol=1e-5)
-    assert np.allclose(msg.imu_state.rpy, ui.rpy_from_quat(*quat), atol=1e-6)
+    assert np.allclose(msg.imu_state.rpy, unitree_common.rpy_from_quat(*quat), atol=1e-6)
     hand = RESOLVER.hands["left"]
     state = IFACE._hand_state["left"]
     assert np.allclose([m.q for m in state.motor_state[:7]], DATA.qpos[hand.qpos], atol=1e-6)

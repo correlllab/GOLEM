@@ -29,12 +29,11 @@ import numpy as np
 
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelPublisher, ChannelSubscriber
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__HandState_ as HandState_default
-from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_ as LowState_default
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_, HandState_, LowCmd_, LowState_
 
 import unitree_common
-from unitree_common import (MODE_PR, RateLimitedWarnings, domain_id, env_seconds, fast_crc, log,
-                            parse_motor_cmds, rpy_from_quat)
+from unitree_common import (LowStateWriter, RateLimitedWarnings, domain_id, env_seconds, fast_crc,
+                            log, parse_motor_cmds)
 
 TOPIC_LOWSTATE = 'rt/lowstate'
 TOPIC_LOWCMD = 'rt/lowcmd'
@@ -116,11 +115,13 @@ class SimInterface:
         else:
             ChannelFactoryInitialize(domain_id())
 
-        self.low_state = LowState_default()
-        self.low_state.mode_pr = MODE_PR
-        self.low_state.mode_machine = MODE_MACHINE
         self._low_state_pub = ChannelPublisher(TOPIC_LOWSTATE, LowState_)
         self._low_state_pub.Init()
+        self._low_state = LowStateWriter(self._low_state_pub, MODE_MACHINE, len(resolver.body.names))
+        adr = resolver.sensor_adr
+        self._imu = (slice(adr['quat'][0], adr['quat'][0] + 4),   # w, x, y, z
+                     slice(adr['gyro'][0], adr['gyro'][0] + 3),
+                     slice(adr['acc'][0], adr['acc'][0] + 3))
         self._hand_state = {side: HandState_default() for side in resolver.hands}
         self._hand_state_pub = {}
         for side in resolver.hands:
@@ -217,25 +218,11 @@ class SimInterface:
     def _publish_low_state(self, q, dq):
         """Publish rt/lowstate with the body motors at q (rad), dq (rad/s) and the pelvis IMU."""
         d = self.data
-        r = self.resolver
         sd = d.sensordata
-        msg = self.low_state
-        msg.tick = int(round(d.time * 1000.0)) & 0xFFFFFFFF  # ms of sim time
+        tick = int(round(d.time * 1000.0)) & 0xFFFFFFFF  # ms of sim time
         # tau_est: the torque the joint got, the motor's after the actuatorfrcrange clamp.
-        tau = d.qfrc_actuator[r.body.qvel]
-        for i, motor in enumerate(msg.motor_state[:len(q)]):
-            motor.q = float(q[i])
-            motor.dq = float(dq[i])
-            motor.tau_est = float(tau[i])
-        imu = msg.imu_state
-        adr = r.sensor_adr
-        quat = [float(v) for v in sd[adr['quat'][0]:adr['quat'][0] + 4]]  # w, x, y, z
-        imu.quaternion = quat
-        imu.gyroscope = [float(v) for v in sd[adr['gyro'][0]:adr['gyro'][0] + 3]]
-        imu.accelerometer = [float(v) for v in sd[adr['acc'][0]:adr['acc'][0] + 3]]
-        imu.rpy = rpy_from_quat(*quat)
-        msg.crc = self._crc.Crc(msg)
-        self._low_state_pub.Write(msg)
+        tau = d.qfrc_actuator[self.resolver.body.qvel]
+        self._low_state.write(tick, q, dq, tau, *(sd[part] for part in self._imu))
 
     def _publish_hand_state(self, side):
         """Publish rt/dex3/<side>/state; pressure stays 0, as the sim has no tactile sensors."""

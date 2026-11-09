@@ -4,8 +4,8 @@ rt/lowcmd frames are validated and latched whole, every motor is off until the
 first valid frame, the command timeout runs in sim time inside the physics step,
 and rt/lowstate is published after every physics step. The model is a stand-in
 for the robot (27 hinge motors and a free-floating IMU body, no kitchen), and
-the DDS channels are in-process fakes for the length of each test, so no DDS
-participant opens. It runs in the standard runner
+the DDS channels and cyclonedds' ddspy_write are in-process fakes for the
+length of each test, so no DDS participant opens. It runs in the standard runner
 (tests/robocasa/run_in_container.sh); see test_h12_mode_machine.py for a
 throwaway-container command.
 """
@@ -24,6 +24,7 @@ import mujoco
 import numpy as np
 
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_ as LowCmd_default
+from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
 from unitree_sdk2py.utils.crc import CRC
 
 import unitree_common
@@ -78,22 +79,41 @@ def model_and_resolver():
 
 
 class FakePublisher:
-    """Stand in for ChannelPublisher, counting the samples written."""
+    """Stand in for ChannelPublisher, keeping the samples written to its DataWriter.
+
+    It has the private attribute chain of unitree_sdk2py's ChannelPublisher, ending in a
+    stand-in DataWriter, so that LowStateWriter writes through fake_ddspy_write.
+    """
+    by_ref = {}
 
     def __init__(self, topic, kind):
         """Keep the topic; open nothing."""
-        self.topic, self.writes, self.closed = topic, 0, False
+        self.topic, self.sent, self.closed = topic, [], False
+        writer = types.SimpleNamespace(_ref=len(FakePublisher.by_ref) + 1, _use_version_2=None)
+        FakePublisher.by_ref[writer._ref] = self
+        self._ChannelPublisher__channel = types.SimpleNamespace(
+            _Channel__writer=types.SimpleNamespace(_Writer__writer=writer))
 
     def Init(self):
         """Do nothing: there is no channel."""
 
     def Write(self, sample):
-        """Count one sample."""
-        self.writes += 1
+        """Fail: the sim writes rt/lowstate's bytes, not SDK samples."""
+        raise AssertionError('rt/lowstate took the SDK path')
 
     def Close(self):
         """Mark the publisher closed."""
         self.closed = True
+
+    def last(self):
+        """Return the last sample written, decoded by the SDK's LowState_."""
+        return LowState_.deserialize(self.sent[-1])
+
+
+def fake_ddspy_write(ref, data):
+    """Keep the bytes written to a FakePublisher's DataWriter, and report success."""
+    FakePublisher.by_ref[ref].sent.append(bytes(data))
+    return 0
 
 
 class FakeSubscriber:
@@ -133,10 +153,12 @@ class H12UnitreeInterfaceTests(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
         FakeSubscriber.by_topic = {}
-        for name, fake in (('ChannelFactoryInitialize', lambda id: None),
-                           ('ChannelPublisher', FakePublisher),
-                           ('ChannelSubscriber', FakeSubscriber)):
-            patcher = mock.patch.object(ui, name, fake)
+        FakePublisher.by_ref = {}
+        for module, name, fake in ((ui, 'ChannelFactoryInitialize', lambda id: None),
+                                   (ui, 'ChannelPublisher', FakePublisher),
+                                   (ui, 'ChannelSubscriber', FakeSubscriber),
+                                   (unitree_common, 'ddspy_write', fake_ddspy_write)):
+            patcher = mock.patch.object(module, name, fake)
             patcher.start()
             self.addCleanup(patcher.stop)
         self.model, self.r = model_and_resolver()
@@ -295,8 +317,9 @@ class H12UnitreeInterfaceTests(unittest.TestCase):
             self.iface.write_ctrl()
             mujoco.mj_step(self.model, self.data)
             self.iface.after_step()
-        msg = self.iface.low_state
-        self.assertEqual(pub.writes, 5)
+        self.assertTrue(self.iface._low_state.fast)
+        self.assertEqual(len(pub.sent), 5)
+        msg = pub.last()
         self.assertEqual(msg.tick, round(self.data.time * 1000))
         self.assertEqual(msg.tick, 10)
         self.assertEqual((msg.mode_machine, msg.mode_pr), (6, 0))
@@ -320,7 +343,7 @@ class H12UnitreeInterfaceTests(unittest.TestCase):
         """The millisecond tick wraps at 2**32."""
         self.data.time = (2 ** 32 + 7) / 1000.0
         self.iface.after_step()
-        self.assertEqual(self.iface.low_state.tick, 7)
+        self.assertEqual(self.iface._low_state_pub.last().tick, 7)
 
     def test_shutdown_closes_channels(self):
         """Shutdown closes both DDS channels."""

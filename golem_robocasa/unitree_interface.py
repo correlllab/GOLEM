@@ -23,12 +23,11 @@ profile (core_ws/src/golem_safety/robots/h12.yaml).
 import numpy as np
 
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelPublisher, ChannelSubscriber
-from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_ as LowState_default
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
 
 import unitree_common
-from unitree_common import (MODE_PR, RateLimitedWarnings, domain_id, env_seconds, fast_crc, log,
-                            parse_motor_cmds, rpy_from_quat)
+from unitree_common import (LowStateWriter, RateLimitedWarnings, domain_id, env_seconds, fast_crc,
+                            log, parse_motor_cmds)
 
 TOPIC_LOWCMD = 'rt/lowcmd'
 TOPIC_LOWSTATE = 'rt/lowstate'
@@ -80,11 +79,14 @@ class SimInterface:
         self._warnings = RateLimitedWarnings()
 
         ChannelFactoryInitialize(id=domain_id())
-        self.low_state = LowState_default()
-        self.low_state.mode_pr = MODE_PR
-        self.low_state.mode_machine = MODE_MACHINE
         self._low_state_pub = ChannelPublisher(TOPIC_LOWSTATE, LowState_)
         self._low_state_pub.Init()
+        self._low_state = LowStateWriter(self._low_state_pub, MODE_MACHINE, MOTOR_NUM)
+        if self.have_imu:
+            adr = {name: a for name, (a, _dim) in resolver.sensor_adr.items()}
+            self._imu = (slice(adr['imu_quat'], adr['imu_quat'] + 4),   # w, x, y, z
+                         slice(adr['imu_gyro'], adr['imu_gyro'] + 3),
+                         slice(adr['imu_acc'], adr['imu_acc'] + 3))
         self._lowcmd_sub = ChannelSubscriber(TOPIC_LOWCMD, LowCmd_)
         self._lowcmd_sub.Init(self._on_lowcmd, 10)
 
@@ -132,26 +134,13 @@ class SimInterface:
         r = self.resolver
         sd = d.sensordata
         self.sim_time = float(d.time)
-        msg = self.low_state
-        msg.tick = int(round(d.time * 1000.0)) & 0xFFFFFFFF  # ms of sim time
+        tick = int(round(d.time * 1000.0)) & 0xFFFFFFFF  # ms of sim time
         # tau_est is the <jointactuatorfrc> sensor, the torque after the joint's
         # actuatorfrcrange clamp, as the real motor measures it. The unclamped
         # data.actuator_force would trip golem_safety's estop limits.
         q, dq, tau = d.qpos[r.motor_qpos], d.qvel[r.motor_qvel], sd[r.motor_tau]
-        for i, motor in enumerate(msg.motor_state[:MOTOR_NUM]):
-            motor.q = float(q[i])
-            motor.dq = float(dq[i])
-            motor.tau_est = float(tau[i])
-        if self.have_imu:
-            imu = msg.imu_state
-            adr = {name: a for name, (a, _dim) in r.sensor_adr.items()}
-            quat = [float(v) for v in sd[adr['imu_quat']:adr['imu_quat'] + 4]]  # w, x, y, z
-            imu.quaternion = quat
-            imu.gyroscope = [float(v) for v in sd[adr['imu_gyro']:adr['imu_gyro'] + 3]]
-            imu.accelerometer = [float(v) for v in sd[adr['imu_acc']:adr['imu_acc'] + 3]]
-            imu.rpy = rpy_from_quat(*quat)
-        msg.crc = self._crc.Crc(msg)
-        self._low_state_pub.Write(msg)
+        imu = [sd[part] for part in self._imu] if self.have_imu else [None] * 3
+        self._low_state.write(tick, q, dq, tau, *imu)
 
     def shutdown(self):
         """Close the DDS topics."""

@@ -1,9 +1,10 @@
-"""Model the elastic band both sim runners hang the robot from until a policy drives it.
+"""Model the elastic band both sim runners hang the robot from until a policy drives it, and log a fall.
 
 The band is a spring-damper pulling a body (the torso) toward a fixed anchor
 above its spawn. h12_mujoco.sim_loop and g1.g1_mujoco.sim_loop apply it every
-physics step while it is enabled; SPACE in the viewer or /elastic_band/toggle
-(MeasurementBridge) releases it.
+physics step while it is enabled (apply_band); SPACE in the viewer or
+/elastic_band/toggle (MeasurementBridge) releases it. FallLogger logs the
+band's release and the robot's first fall, which the closed-loop tests read.
 """
 import mujoco
 import numpy as np
@@ -53,6 +54,52 @@ class ElasticBand:
         """Toggle the band on SPACE (the passive viewer's key_callback)."""
         if key == self._KEY_SPACE:
             self.toggle()
+
+
+def apply_band(model, data, band, body, vel):
+    """Write the band's force on body into xfrc_applied for the next physics step.
+
+    Its pull while enabled, else zero: MuJoCo keeps xfrc_applied between steps,
+    so call it before every mj_step. vel is a 6-vector scratch buffer.
+    """
+    if band.enabled:
+        # [angular(3), linear(3)] of the body, world frame
+        mujoco.mj_objectVelocity(model, data, mujoco.mjtObj.mjOBJ_BODY, body, vel, 0)
+        data.xfrc_applied[body, :3] = band.evaluate_force(data.xpos[body], vel[3:])
+    else:
+        data.xfrc_applied[body, :3] = 0.0
+
+
+class FallLogger:
+    """Log the band's release once, and once the robot's first fall, with how long it stood after the release.
+
+    The robot has fallen when body's z axis . world up drops below upright_min
+    or its height below height_min (m); label names the body's height in the
+    log line.
+    """
+
+    def __init__(self, body, label, upright_min, height_min):
+        """Watch body (an id; -1 watches no fall)."""
+        self.body, self.label = body, label
+        self.upright_min, self.height_min = upright_min, height_min
+        self.release_t = None   # s of sim time, once the band is released
+        self.fell = False
+
+    def step(self, data, band):
+        """Check the state mj_step just produced; band is the sim's ElasticBand or None."""
+        if band is not None and self.release_t is None and not band.enabled:
+            self.release_t = float(data.time)
+            print(f"[fall-logger] elastic band released at t={data.time:.2f}s", flush=True)
+        if self.body < 0 or self.fell:
+            return
+        upz = float(data.xmat[self.body][8])   # body z-axis . world up (1: upright)
+        height = float(data.xpos[self.body][2])
+        if upz < self.upright_min or height < self.height_min:
+            self.fell = True
+            since = (f"{data.time - self.release_t:.2f}s after band release" if self.release_t is not None
+                     else f"{data.time:.2f}s (band still on)")
+            print(f"[fall-logger] *** ROBOT FELL at sim t={data.time:.2f}s — stood {since} "
+                  f"(uprightness={upz:.2f}, {self.label}_h={height:.2f}) ***", flush=True)
 
 
 def draw_band(handle, anchor, body_pos):

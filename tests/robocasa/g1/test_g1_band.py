@@ -4,7 +4,7 @@ The kitchen is tests/robocasa/surface/run.sh's: layout 9, style 9, seed 42. The 
 headless with g1_robosuite.make_kitchen_env, the robot spawned and the band built by
 g1_mujoco's own spawn() and make_band(), and the physics stepped as sim_loop steps it: the
 interface's motor torques (SimInterface with no rt/lowcmd, so every motor off), the band's
-force (apply_band), mj_step. Run it in the robocasa image with golem_robocasa on PYTHONPATH;
+force (mujoco_env.apply_band), mj_step. Run it in the robocasa image with golem_robocasa on PYTHONPATH;
 tests/robocasa/g1/run_in_container.sh runs it with no network on ROS_DOMAIN_ID 97, because
 SimInterface opens Unitree DDS channels.
 """
@@ -18,6 +18,7 @@ import textwrap
 import mujoco
 import numpy as np
 
+import mujoco_env
 import robosuite_common
 import sim_common
 from g1 import g1_mujoco, g1_robosuite
@@ -66,7 +67,7 @@ def _run(model, data, iface, band, body, seconds, each_step=None):
     vel = np.zeros(6)
     for _ in range(round(seconds / model.opt.timestep)):
         iface.write_ctrl()
-        g1_mujoco.apply_band(model, data, band, body, vel)
+        mujoco_env.apply_band(model, data, band, body, vel)
         mujoco.mj_step(model, data)
         iface.after_step()
         if each_step is not None:

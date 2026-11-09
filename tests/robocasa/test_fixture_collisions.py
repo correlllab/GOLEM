@@ -215,6 +215,7 @@ class FixtureCollisionTests(unittest.TestCase):
         """
         from g1 import g1_mujoco
         from g1.sim_names import NameResolver
+        from mujoco_env import apply_band
         for task in RESTING_TASKS:
             with self.subTest(task=task):
                 env = _g1_kitchen(task)
@@ -238,7 +239,7 @@ class FixtureCollisionTests(unittest.TestCase):
                         resting[root] = (None, float(data.xpos[root][2]))
                 self.assertTrue(resting, f"{task} put nothing in or on a fixture")
                 for _ in range(round(REST_S / model.opt.timestep)):
-                    g1_mujoco.apply_band(model, data, band, band_body, vel)
+                    apply_band(model, data, band, band_body, vel)
                     mujoco.mj_step(model, data)
                 touching = set()
                 for c in data.contact[:data.ncon]:

@@ -117,6 +117,33 @@ class RefuseKitchenArgsTests(unittest.TestCase):
                                        'OpenFridge', blank_env.TASKS)
 
 
+class SelectTaskTests(unittest.TestCase):
+    """Check select_task, both runners' task choice from their arguments."""
+
+    def _select(self, argv):
+        """Return (task, what select_task printed) for argv, with the runners' own tasks."""
+        parser = argparse.ArgumentParser(prog='h12_mujoco.py')
+        sim_common.add_common_args(parser)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            task = sim_common.select_task(parser, parser.parse_args(argv), tag='g1_mujoco', own_tasks=OWN_TASKS,
+                                          no_kitchen=blank_env.TASKS)
+        return task, out.getvalue()
+
+    def test_no_task_picks_a_seeded_kitchen_and_says_so(self):
+        """Without --task the seeded random pick is chosen and logged under the tag."""
+        self.assertEqual(self._select(['--seed', '42']),
+                         ('CloseStandMixerHead', "[g1_mujoco] no --task given; randomly selected "
+                                                 "'CloseStandMixerHead'\n"))
+
+    def test_own_task_in_any_case_and_its_kitchen_refusal(self):
+        """The runner's own task resolves in any case, and --layout is refused for Blank."""
+        self.assertEqual(self._select(['--task', 'BATTERY', '--layout', '9']), ('Battery', ''))
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+            self._select(['--task', 'blank', '--layout', '9'])
+        self.assertEqual(caught.exception.code, 2)
+
+
 class RandomTaskTests(unittest.TestCase):
     """Check random_task's seeded picks."""
 

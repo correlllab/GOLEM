@@ -4,7 +4,8 @@ The viewer's handle.sync() takes ~11 ms because it waits for the render thread,
 so a physics loop that calls it every step runs far below real time. Here a
 60 Hz thread copies the simulation's display state into a separate MjData the
 viewer draws, syncs, and hands the mouse perturbation back for the physics loop
-to apply.
+to apply. open_viewer and close_viewer start and end the viewer and the
+thread for both sim loops.
 """
 import threading
 import time
@@ -38,6 +39,49 @@ def band_overlay(band, body_id):
         else:
             handle.user_scn.ngeom = 0
     return draw
+
+
+def open_viewer(model, data, lock, band, body, tag, timings=None):
+    """Launch the passive viewer on its own copy of data, framed on body, and start its sync thread.
+
+    lock is the physics loop's lock (ViewerSync). band, the sim's ElasticBand
+    or None, is drawn while enabled and toggled by SPACE. Collision geoms are
+    hidden. A framing failure is logged under [tag]. Returns (handle,
+    view_sync); close them with close_viewer.
+    """
+    import mujoco.viewer
+
+    import sim_common
+
+    viewer_data = mujoco.MjData(model)
+    with lock:
+        copy_display_state(viewer_data, data)
+    mujoco.mj_forward(model, viewer_data)
+    if band is not None:
+        # SPACE in the viewer toggles the band (ElasticBand.key_callback).
+        handle = mujoco.viewer.launch_passive(model, viewer_data, key_callback=band.key_callback)
+    else:
+        handle = mujoco.viewer.launch_passive(model, viewer_data)
+    handle.opt.geomgroup[0] = 0   # hide collision geoms
+    if body >= 0:
+        try:
+            with handle.lock():
+                sim_common.frame_viewer_on_robot(handle, viewer_data, body)
+        except Exception as e:
+            print(f"[{tag}] viewer camera framing skipped: {e}")
+    view_sync = ViewerSync(model, data, handle, lock, viewer_data,
+                           draw=band_overlay(band, body) if band is not None else None,
+                           timings=timings)
+    view_sync.start()
+    return handle, view_sync
+
+
+def close_viewer(handle, view_sync):
+    """Stop the sync thread, then close the viewer; either may be None."""
+    if view_sync is not None:
+        view_sync.stop()
+    if handle is not None:
+        handle.close()
 
 
 class ViewerSync:

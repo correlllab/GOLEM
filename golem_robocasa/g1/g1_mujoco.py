@@ -11,7 +11,6 @@ import numpy as np
 import rclpy.executors
 
 from mujoco_ros_bridge import RosSensorBridge, init_ros, shutdown_ros
-import mujoco.viewer
 
 from . import g1_robosuite  # registers G1Dex3 and its gripper
 import battery_env  # registers the Battery env
@@ -19,12 +18,12 @@ import blank_env  # registers the Blank env
 import robosuite_common
 import sim_common
 from measurement_bridge import MeasurementBridge
-from mujoco_env import ElasticBand
+from mujoco_env import ElasticBand, FallLogger, apply_band
 from sim_timing import RealtimePacer
 from .g1_sensors import G1Sensors, SensorConfig
 from .sim_names import BODY_JOINTS, NameResolver
 from .unitree_interface import SimInterface
-from viewer_sync import ViewerSync, band_overlay, copy_display_state
+from viewer_sync import close_viewer, open_viewer
 
 # The fall logger's test: the pelvis tilted more than 60 deg from upright (as
 # golem_lowerbody_rl's policies/homie/mujoco_deploy_g1.py tests it), or down on
@@ -97,21 +96,7 @@ def make_band(data, resolver):
     return ElasticBand(anchor, length=0, stiffness=BAND_STIFFNESS, damping=BAND_DAMPING), body
 
 
-def apply_band(model, data, band, body, vel):
-    """Write the band's force on body into xfrc_applied for the next physics step.
-
-    Its pull while enabled, else zero: MuJoCo keeps xfrc_applied between steps,
-    so call it before every mj_step. vel is a 6-vector scratch buffer.
-    """
-    if band.enabled:
-        # [angular(3), linear(3)] of the torso, world frame
-        mujoco.mj_objectVelocity(model, data, mujoco.mjtObj.mjOBJ_BODY, body, vel, 0)
-        data.xfrc_applied[body, :3] = band.evaluate_force(data.xpos[body], vel[3:])
-    else:
-        data.xfrc_applied[body, :3] = 0.0
-
-
-def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False, duration=0.0):
+def sim_loop(task, viewer=True, layout=None, style=None, seed=None, duration=0.0):
     """Run the G1 in task (a RoboCasa kitchen, Battery or Blank) for duration or until stopped.
 
     The loop steps the env's own MjData (never env.step()) and drives:
@@ -128,24 +113,13 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     SPACE in the viewer releases it. The loop paces to GOLEM_SIM_RATE
     (sim_common.sim_rate_from_env; default real time). duration is sim seconds
     from the first step, counted in physics steps (0: until the viewer closes
-    or Ctrl-C).
-    timing is in the signature both runners share and is unused here: the
-    command line refuses --timing for the G1, which logs its real-time factor
-    itself.
+    or Ctrl-C). The G1 logs its real-time factor itself (no --timing).
     """
-
-    create_kwargs = {}
-    if layout is not None:
-        create_kwargs["layout_ids"] = layout
-    if style is not None:
-        create_kwargs["style_ids"] = style
-    if seed is not None:
-        create_kwargs["seed"] = seed
 
     # Before the slow env build: a bad knob fails fast.
     sensors = SensorConfig.from_env()
     sim_rate = sim_common.sim_rate_from_env()
-    env = g1_robosuite.make_kitchen_env(task, **create_kwargs)
+    env = g1_robosuite.make_kitchen_env(task, layout_ids=layout, style_ids=style, seed=seed)
 
     # robosuite.make() does not reset; reset() builds env.sim, runs the
     # placement patch (g1_robosuite) and places the task objects.
@@ -170,7 +144,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # The band holds the robot from the first physics step; every motor is off
     # until the first valid rt/lowcmd.
     band, band_body = make_band(data, resolver)
-    band_vel = np.zeros(6)
+    band_vel = np.zeros(6)   # apply_band's scratch
     print(f"[g1_mujoco] elastic band on {BAND_BODY} anchored at {band.point.round(3)}; "
           "/elastic_band/toggle or SPACE in the viewer releases it")
 
@@ -181,7 +155,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # Ground-truth odom (odom -> pelvis on /tf, /odom) from the pelvis, only
     # with GOLEM_SIM_ODOM: the real robot has none, and it would compete with
     # FAST-LIO's odometry.
-    _sim_odom_on = os.environ.get('GOLEM_SIM_ODOM', '0').strip().lower() not in ('0', 'off', 'false', 'no', '')
+    _sim_odom_on = sim_common.env_flag('GOLEM_SIM_ODOM', False)
     odom_base_body_id = resolver.base_body if _sim_odom_on else -1
     print(f"[g1_mujoco] ground-truth sim odom {'ON (GOLEM_SIM_ODOM=1)' if _sim_odom_on else 'OFF'}")
 
@@ -217,29 +191,15 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     executor = rclpy.executors.MultiThreadedExecutor()
     executor.add_node(measurement)
 
-    # The viewer draws its own MjData, refreshed from data by the viewer thread;
-    # its mouse perturbation forces come back through view_sync.
-    viewer_data = mujoco.MjData(model) if viewer else None
+    # The viewer draws its own MjData, refreshed from data by the viewer thread,
+    # with the band while it is enabled; its mouse perturbation forces come back
+    # through view_sync.apply_perturbation().
     handle = view_sync = None
     if viewer:
-        copy_display_state(viewer_data, data)
-        mujoco.mj_forward(model, viewer_data)
-        # SPACE in the viewer toggles the band (ElasticBand.key_callback).
-        handle = mujoco.viewer.launch_passive(model, viewer_data, key_callback=band.key_callback)
-        handle.opt.geomgroup[0] = 0   # hide collision geoms
-        try:
-            with handle.lock():
-                sim_common.frame_viewer_on_robot(handle, viewer_data, band_body)
-        except Exception as e:
-            print(f"[g1_mujoco] viewer camera framing skipped: {e}")
-        view_sync = ViewerSync(model, data, handle, physics_lock, viewer_data,
-                               draw=band_overlay(band, band_body))
-        view_sync.start()
-    # The fall logger logs once when the pelvis tips or drops, with how long the
-    # robot stood after the band's release.
-    _fall_logged = False
-    _release_t = None
-    pelvis = resolver.base_body
+        handle, view_sync = open_viewer(model, data, physics_lock, band, band_body, "g1_mujoco")
+    # Logs the band's release and the first time the pelvis tips or drops.
+    fall_logger = FallLogger(resolver.base_body, "pelvis", upright_min=FALL_UPRIGHTNESS,
+                             height_min=FALL_PELVIS_HEIGHT)
     # RoboCasa updates its fixtures once per control step (its timers count
     # update_state() calls), so the loop updates them and reads the task's
     # success at env.control_freq (20 Hz) of sim time, not every physics step.
@@ -281,25 +241,12 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                           f"whole scene, robot and kitchen, to its initial state and the sim time to 0 "
                           f"(reset {_resets} at step {steps}); restart the sim ***", flush=True)
                 sim_interface.after_step()
-            if _release_t is None and not band.enabled:
-                _release_t = float(data.time)
-                print(f"[fall-logger] elastic band released at t={data.time:.2f}s", flush=True)
-            if not _fall_logged:
-                _upz = float(data.xmat[pelvis][8])   # pelvis z-axis . world up (1: upright)
-                _pelvis_h = float(data.xpos[pelvis][2])
-                if _upz < FALL_UPRIGHTNESS or _pelvis_h < FALL_PELVIS_HEIGHT:
-                    _fall_logged = True
-                    _since = (f"{data.time - _release_t:.2f}s after band release"
-                              if _release_t is not None
-                              else f"{data.time:.2f}s (band still on)")
-                    print(f"[fall-logger] *** ROBOT FELL at sim t={data.time:.2f}s — stood "
-                          f"{_since} (uprightness={_upz:.2f}, pelvis_h={_pelvis_h:.2f}) ***",
-                          flush=True)
+            fall_logger.step(data, band)
             ros_bridge.tick()
             steps += 1
             if steps % task_every == 0:
-                # measurement.tick() resets objects on request: it writes data, which the
-                # viewer's sync thread copies under physics_lock.
+                # The fixtures' update writes data, which the viewer's sync thread copies
+                # under physics_lock.
                 with physics_lock:
                     env.update_state()          # before _check_success
                     done = measurement.tick()
@@ -317,10 +264,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                       + (f"; {_stats}" if _stats else ""), flush=True)
                 log_sim, log_wall, slept = float(data.time), time.time(), 0.0
     finally:
-        if view_sync is not None:
-            view_sync.stop()
-        if handle is not None:
-            handle.close()
+        close_viewer(handle, view_sync)
         executor.shutdown()
         ros_bridge.shutdown()
         for node in (measurement, ros_bridge):
@@ -340,19 +284,10 @@ def main(argv):
                   "Omit to launch a random registered kitchen task.",
     )
     args = sim_common.parse_args(parser, argv, "g1")
-
-    task = args.task
-    if task is None:
-        task = sim_common.random_task(seed=args.seed)
-        print(f"[g1_mujoco] no --task given; randomly selected {task!r}")
-    else:
-        task = sim_common.resolve_task(task, seed=args.seed, tag="g1_mujoco",
-                                       robot_task=lambda name: sim_common.canonical_task(
-                                           name, battery_env.TASKS + blank_env.TASKS))
-    sim_common.refuse_kitchen_args(parser, args, task, blank_env.TASKS)
+    task = sim_common.select_task(parser, args, tag="g1_mujoco",
+                                  own_tasks=battery_env.TASKS + blank_env.TASKS, no_kitchen=blank_env.TASKS)
     # The camera and the lidar's rays render through EGL on the GPU: stop here without one.
     sim_common.require_gpu()
 
     sim_loop(task, viewer=not args.headless,
-             layout=args.layout, style=args.style, seed=args.seed, timing=args.timing,
-             duration=args.duration)
+             layout=args.layout, style=args.style, seed=args.seed, duration=args.duration)

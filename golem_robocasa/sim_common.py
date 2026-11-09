@@ -1,4 +1,4 @@
-"""Select the robot, check the GPU, parse the command line and GOLEM_SIM_RATE, resolve tasks and frame the viewer for both sims.
+"""Select the robot, check the GPU, parse the command line and the sims' knobs, resolve tasks and frame the viewer for both sims.
 
 It imports only the standard library at module level (mujoco and robocasa
 inside the functions that need them): h12_mujoco.py picks the robot and checks
@@ -96,6 +96,12 @@ def require_gpu(probe: Callable[[], str] = egl_renderer) -> str:
     return renderer
 
 
+def env_flag(name: str, default: bool, env: Mapping[str, str] = os.environ) -> bool:
+    """Return the on/off knob name: default when unset or empty, off for 0/off/false/no in any case, else on."""
+    raw = env.get(name, "").strip().lower()
+    return default if raw == "" else raw not in ("0", "off", "false", "no")
+
+
 def sim_rate_from_env(env: Mapping[str, str] = os.environ) -> float:
     """Return GOLEM_SIM_RATE, the target real-time factor: sim seconds per wall second.
 
@@ -179,6 +185,25 @@ def refuse_kitchen_args(parser: argparse.ArgumentParser, args: argparse.Namespac
             verb = "choose" if len(given) > 1 else "chooses"
             parser.error(f"{' and '.join(given)} {verb} a RoboCasa kitchen; "
                          f"task {task!r} has none")
+
+
+def select_task(parser: argparse.ArgumentParser, args: argparse.Namespace, *, tag: str,
+                own_tasks: Sequence[str], no_kitchen: Sequence[str]) -> str:
+    """Return the task the runner's arguments name, or a random kitchen task when --task is not given.
+
+    own_tasks are the runner's tasks outside RoboCasa, matched in any case
+    (resolve_task); --layout and --style are refused for a task in no_kitchen
+    (refuse_kitchen_args). Messages are prefixed [tag].
+    """
+    task = args.task
+    if task is None:
+        task = random_task(seed=args.seed)
+        print(f"[{tag}] no --task given; randomly selected {task!r}")
+    else:
+        task = resolve_task(task, seed=args.seed, tag=tag,
+                            robot_task=lambda name: canonical_task(name, own_tasks))
+    refuse_kitchen_args(parser, args, task, no_kitchen)
+    return task
 
 
 def runnable_tasks() -> tuple[dict[str, type], set[str]]:

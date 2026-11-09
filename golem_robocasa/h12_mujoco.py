@@ -48,7 +48,6 @@ import numpy as np
 import rclpy.executors
 
 from mujoco_ros_bridge import init_ros, shutdown_ros
-import mujoco.viewer
 
 import h1_2_robosuite  # registers H1_2 and the MAGPIE grippers
 import realsense_profile
@@ -58,12 +57,12 @@ import blank_env  # registers the Blank env
 from h12_sensors import H12Sensors
 from magpie_hand_bridge import MagpieHandBridge
 from measurement_bridge import MeasurementBridge
-from mujoco_env import ElasticBand
+from mujoco_env import ElasticBand, FallLogger, apply_band
 from mujoco_ros_bridge import RosSensorBridge
 from sim_names import NameResolver
 from sim_timing import RealtimePacer, LoopTimings
 from unitree_interface import SimInterface
-from viewer_sync import ViewerSync, band_overlay, copy_display_state
+from viewer_sync import close_viewer, open_viewer
 
 NUM_MOTORS = 27
 # The spawn pose (rad) in sim_names.ROS_MOTOR_ORDER: bent-knee legs, then the
@@ -140,7 +139,7 @@ def spawn(env, resolver, backoff=0.0, margin=None, offset=(0.0, 0.0)):
     )
 
 
-def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False, duration=0.0):
+def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False):
     """Run the H1-2 in task (a RoboCasa kitchen, Battery or Blank) until the viewer closes or Ctrl-C.
 
     The loop steps the env's own MjData (never env.step()) and drives:
@@ -151,23 +150,13 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
       - MeasurementBridge: /robocasa/*, /elastic_band/toggle
     An elastic band holds the robot until it is released. The loop paces to
     GOLEM_SIM_RATE (sim_common.sim_rate_from_env; default real time). timing
-    enables the --timing stage report. duration is in the signature both
-    runners share and is unused here: the command line refuses --duration for
-    the H1-2.
+    enables the --timing stage report.
     """
 
     # A bad GOLEM_SIM_RATE stops the sim before the kitchen is built.
     sim_rate = sim_common.sim_rate_from_env()
 
-    create_kwargs = {}
-    if layout is not None:
-        create_kwargs["layout_ids"] = layout
-    if style is not None:
-        create_kwargs["style_ids"] = style
-    if seed is not None:
-        create_kwargs["seed"] = seed
-
-    env = h1_2_robosuite.make_kitchen_env(task, **create_kwargs)
+    env = h1_2_robosuite.make_kitchen_env(task, layout_ids=layout, style_ids=style, seed=seed)
 
     # robosuite.make() does not reset; reset() builds env.sim, runs the
     # placement patch (h1_2_robosuite) and places the task objects.
@@ -201,7 +190,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # /elastic_band/toggle releases it.
     band = None
     band_body_id = -1
-    band_vel = np.zeros(6)
+    band_vel = np.zeros(6)   # apply_band's scratch
     try:
         band_body_id = resolver.body_id("torso_link")
         anchor = data.xpos[band_body_id].copy()
@@ -228,7 +217,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # joint's body, only with GOLEM_SIM_ODOM: the real robot has none, and it
     # would compete with FAST-LIO's odometry.
     odom_base_body_id = -1
-    _sim_odom_on = os.environ.get('GOLEM_SIM_ODOM', '0').strip().lower() not in ('0', 'off', 'false', 'no', '')
+    _sim_odom_on = sim_common.env_flag('GOLEM_SIM_ODOM', False)
     if _sim_odom_on:
         try:
             _fj = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT,
@@ -252,10 +241,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # is 640x480). GOLEM_CAMERA_DEPTH=0 drops depth/image_rect_raw and
     # GOLEM_CAMERA_POINTCLOUD=0 drops depth/color/points; with both off the
     # depth render is skipped.
-    def _env_on(name):
-        """Return whether the env flag name is on (default on; 0/off/false/no turn it off)."""
-        return os.environ.get(name, '1').strip().lower() not in ('0', 'off', 'false', 'no')
-    _cameras_on = _env_on('GOLEM_CAMERAS')
+    _cameras_on = sim_common.env_flag('GOLEM_CAMERAS', True)
     _camera_scale = float(os.environ.get('GOLEM_CAMERA_SCALE', '').strip() or 0.5)
     _profile = realsense_profile.load_profile()
     _camera_names = [
@@ -266,7 +252,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     _hand_res = tuple(int(v) for v in
                       (os.environ.get('GOLEM_HAND_CAMERA_RES', '').strip() or '256x256').lower().split('x'))
     _cameras = realsense_profile.camera_specs(model, _camera_names, _profile, _camera_scale, _hand_res)
-    _depth_on, _cloud_on = _env_on('GOLEM_CAMERA_DEPTH'), _env_on('GOLEM_CAMERA_POINTCLOUD')
+    _depth_on = sim_common.env_flag('GOLEM_CAMERA_DEPTH', True)
+    _cloud_on = sim_common.env_flag('GOLEM_CAMERA_POINTCLOUD', True)
     print(f"[h12_mujoco] RGBD cameras {'ON' if _cameras_on else 'OFF (GOLEM_CAMERAS=0)'}"
           + (f": head {_cameras[0].color.width}x{_cameras[0].color.height} "
              f"(GOLEM_CAMERA_SCALE={_camera_scale:g}), hands {_hand_res[0]}x{_hand_res[1]}, "
@@ -295,10 +282,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             # obstacle under the robot and Nav2 refuses the start.
             # GOLEM_LIDAR_SELF_FILTER=0 keeps them as returns.
             lidar_self_prefixes=(
-                (pfx, "gripper0_")
-                if os.environ.get("GOLEM_LIDAR_SELF_FILTER", "1").strip().lower()
-                not in ("0", "off", "false", "no")
-                else ()
+                (pfx, "gripper0_") if sim_common.env_flag("GOLEM_LIDAR_SELF_FILTER", True) else ()
             ),
             sim_lock=sim_lock,
             timings=timings,
@@ -325,54 +309,21 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     for node in (measurement, hand_right, hand_left):
         executor.add_node(node)
 
-    # The viewer draws its own MjData, refreshed from data by the viewer thread;
-    # its mouse perturbation forces come back through view_sync.
-    viewer_data = mujoco.MjData(model) if viewer else None
-    if viewer_data is not None:
-        with sim_lock:
-            copy_display_state(viewer_data, data)
-        mujoco.mj_forward(model, viewer_data)
-    # SPACE in the viewer toggles the band (ElasticBand.key_callback).
-    handle = (
-        mujoco.viewer.launch_passive(model, viewer_data, key_callback=band.key_callback)
-        if viewer and band is not None
-        else (mujoco.viewer.launch_passive(model, viewer_data) if viewer else None)
-    )
-    if handle is not None:
-        handle.opt.geomgroup[0] = 0   # hide collision geoms
-        # Frame the torso, resolved again if the band setup failed.
-        cam_body_id = band_body_id
-        if cam_body_id < 0:
-            try:
-                cam_body_id = resolver.body_id("torso_link")
-            except Exception:
-                cam_body_id = -1
-        if cam_body_id >= 0:
-            try:
-                with handle.lock():
-                    sim_common.frame_viewer_on_robot(handle, viewer_data, cam_body_id)
-            except Exception as e:
-                print(f"[h12_mujoco] viewer camera framing skipped: {e}")
-    # The fall logger logs once when the torso tips or drops, with how long the
-    # robot stood after the band's release.
-    _fall_logged = False
-    _band_release_t = None
-    _band_prev_on = bool(band.enabled) if band is not None else False
+    # The viewer draws its own MjData, refreshed from data by the viewer thread,
+    # with the band while it is enabled; its mouse perturbation forces come back
+    # through view_sync.apply_perturbation().
+    handle = view_sync = None
+    if viewer:
+        handle, view_sync = open_viewer(model, data, sim_lock, band, band_body_id, "h12_mujoco",
+                                        timings=timings)
+    # Logs the band's release and the first time the torso tips or drops.
+    fall_logger = FallLogger(band_body_id, "torso", upright_min=0.5, height_min=0.5)
 
     # RoboCasa updates fixtures and checks success once per control step
     # (20 Hz), not per physics step: several fixtures count calls (toaster
     # heat, scrub contact), and the success debounce counts control steps.
     task_every = max(1, round(env.control_timestep / model.opt.timestep))
     step_count = 0
-    # The viewer thread draws the band while it is enabled; mouse forces come back
-    # through view_sync.apply_perturbation().
-    view_sync = None
-    if handle is not None:
-        view_sync = ViewerSync(
-            model, data, handle, sim_lock, viewer_data,
-            draw=band_overlay(band, band_body_id) if band is not None else None,
-            timings=timings)
-        view_sync.start()
 
     timings.reset(float(data.time))
     pacer = RealtimePacer(model.opt.timestep, sim_rate)
@@ -390,37 +341,14 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                 if view_sync is not None:
                     view_sync.apply_perturbation()
                 if band is not None:
-                    # MuJoCo keeps xfrc_applied between steps, so a released
-                    # band's force is zeroed every step.
-                    if band.enabled:
-                        # [angular(3), linear(3)] of the torso, world frame
-                        mujoco.mj_objectVelocity(model, data, mujoco.mjtObj.mjOBJ_BODY,
-                                                 band_body_id, band_vel, 0)
-                        data.xfrc_applied[band_body_id, :3] = band.evaluate_force(
-                            data.xpos[band_body_id], band_vel[3:])
-                    else:
-                        data.xfrc_applied[band_body_id, :3] = 0.0
+                    apply_band(model, data, band, band_body_id, band_vel)
                 sim_interface.write_ctrl()
                 mujoco.mj_step(model, data)
                 timings.stop("physics", physics_start)
                 lowstate_start = timings.start()
                 sim_interface.after_step()
                 timings.stop("lowstate", lowstate_start)
-                if band is not None and _band_prev_on and not band.enabled:
-                    _band_release_t = float(data.time)
-                    _band_prev_on = False
-                    print(f"[fall-logger] elastic band released at t={data.time:.2f}s", flush=True)
-                if band_body_id >= 0 and not _fall_logged:
-                    _upz = float(data.xmat[band_body_id][8])   # torso z-axis . world up (1: upright)
-                    _torso_h = float(data.xpos[band_body_id][2])
-                    if _upz < 0.5 or _torso_h < 0.5:
-                        _fall_logged = True
-                        _since = (f"{data.time - _band_release_t:.2f}s after band release"
-                                  if _band_release_t is not None
-                                  else f"{data.time:.2f}s (band still on)")
-                        print(f"[fall-logger] *** ROBOT FELL at sim t={data.time:.2f}s — stood "
-                              f"{_since} (uprightness={_upz:.2f}, torso_h={_torso_h:.2f}) ***",
-                              flush=True)
+                fall_logger.step(data, band)
                 step_count += 1
                 task_step = step_count % task_every == 0
                 if task_step:
@@ -449,10 +377,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         # thread can exit.
         hand_right.stop()
         hand_left.stop()
-        if view_sync is not None:
-            view_sync.stop()
-        if handle is not None:
-            handle.close()
+        close_viewer(handle, view_sync)
         executor.shutdown()
         ros_bridge.shutdown()
         for node in (measurement, hand_right, hand_left, ros_bridge):
@@ -462,18 +387,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
 
 
 if __name__ == "__main__":
-    args = _ARGS
-
-    task = args.task
-    if task is None:
-        task = sim_common.random_task(seed=args.seed)
-        print(f"[h12_mujoco] no --task given; randomly selected {task!r}")
-    else:
-        task = sim_common.resolve_task(
-            task, seed=args.seed, tag="h12_mujoco",
-            robot_task=lambda name: sim_common.canonical_task(name, battery_env.TASKS + blank_env.TASKS))
-    sim_common.refuse_kitchen_args(_PARSER, args, task, blank_env.TASKS)
-
-    sim_loop(task, viewer=not args.headless,
-             layout=args.layout, style=args.style, seed=args.seed, timing=args.timing,
-             duration=args.duration)
+    _TASK = sim_common.select_task(_PARSER, _ARGS, tag="h12_mujoco",
+                                   own_tasks=battery_env.TASKS + blank_env.TASKS, no_kitchen=blank_env.TASKS)
+    sim_loop(_TASK, viewer=not _ARGS.headless,
+             layout=_ARGS.layout, style=_ARGS.style, seed=_ARGS.seed, timing=_ARGS.timing)

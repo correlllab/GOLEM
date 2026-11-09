@@ -78,6 +78,7 @@ from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Imu
 from tf2_ros import StaticTransformBroadcaster
 
 import mid360
+import sim_common
 from . import g1_head_camera
 from . import g1_lidar
 from . import g1_sensor_msgs as sm
@@ -95,12 +96,6 @@ _EPS_T = 1e-9   # s, tolerance on accumulated sim time
 def _log(text):
     """Print a [g1_sensors] line."""
     print(f"[g1_sensors] {text}", flush=True)
-
-
-def _env_flag(env, name, default):
-    """Return the env flag name: default when unset or empty, off for 0/off/false/no."""
-    raw = env.get(name, "").strip().lower()
-    return default if raw == "" else raw not in ("0", "off", "false", "no")
 
 
 def _env_number(env, name, default, kind):
@@ -165,10 +160,10 @@ class SensorConfig(NamedTuple):
         camera_hz = _env_number(env, "GOLEM_CAMERA_HZ", cls._field_defaults["camera_hz"], float)
         if camera_hz > MAX_CAMERA_HZ:
             raise ValueError(f"GOLEM_CAMERA_HZ must be at most {MAX_CAMERA_HZ:g}, got {camera_hz:g}")
-        return cls(lidar=_env_flag(env, "GOLEM_LIDAR", True),
+        return cls(lidar=sim_common.env_flag("GOLEM_LIDAR", True, env),
                    lidar_points=_env_number(env, "GOLEM_LIDAR_POINTS", cls._field_defaults["lidar_points"], int),
                    lidar_hz=lidar_hz,
-                   camera=_env_flag(env, "GOLEM_CAMERAS", True),
+                   camera=sim_common.env_flag("GOLEM_CAMERAS", True, env),
                    camera_hz=camera_hz,
                    camera_width=width, camera_height=height)
 

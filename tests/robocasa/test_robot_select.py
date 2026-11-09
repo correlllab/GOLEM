@@ -4,7 +4,7 @@ import contextlib
 import io
 import unittest
 
-from sim_common import add_common_args, add_robot_args, parse_args, select_robot
+from sim_common import add_common_args, add_robot_args, env_flag, parse_args, select_robot
 
 
 class SelectRobotTests(unittest.TestCase):
@@ -33,6 +33,23 @@ class SelectRobotTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as caught:
                 select_robot(argv, env={})
             self.assertEqual(caught.exception.code, 'Choose one robot: --h12 or --g1.')
+
+
+class EnvFlagTests(unittest.TestCase):
+    """Check env_flag, the sims' on/off knobs."""
+
+    def test_unset_or_empty_is_the_default(self):
+        """An unset or blank knob is its default."""
+        for default in (True, False):
+            self.assertIs(env_flag('K', default, env={}), default)
+            self.assertIs(env_flag('K', default, env={'K': ' '}), default)
+
+    def test_off_words_and_anything_else(self):
+        """0, off, false and no in any case turn a knob off; any other value turns it on."""
+        for value in ('0', 'off', 'FALSE', ' No '):
+            self.assertFalse(env_flag('K', True, env={'K': value}), value)
+        for value in ('1', 'on', 'yes', 'true', '2'):
+            self.assertTrue(env_flag('K', False, env={'K': value}), value)
 
 
 class AddRobotArgsTests(unittest.TestCase):

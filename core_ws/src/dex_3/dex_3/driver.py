@@ -187,8 +187,9 @@ class Dex3Hand:
                 self._pub.Write(self._cmd)
             pause = max(0.0, self._dt - (self._now() - start_time))
             if moving and self._clock is not None:
-                # SAFETY: a release or shutdown ends the wait at once, so the stop goes
-                # out on time while the robot clock stands still
+                # SAFETY: a release or shutdown ends the wait within one wait slice of
+                # steady time (SimTime.sleep), so the stop goes out on time while the robot
+                # clock stands still
                 self._clock.sleep(pause, self._move_ended)
             else:
                 time.sleep(pause)

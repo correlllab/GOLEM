@@ -226,3 +226,31 @@ def test_sim_time_sleep_wakes_on_clock_and_on_stop(channel_inits):
         assert done.wait(0.05), 'the sleep did not end on stop'
     finally:
         node.destroy_node()
+
+
+def test_sim_time_close_unregisters_the_jump_callback(channel_inits):
+    """After close(), a /clock step no longer reaches the SimTime's jump callback."""
+    from rclpy.clock import ClockType
+    from rclpy.time import Time
+    node = _make_node(f'domain_id:={ROS_TEST_DOMAIN}', 'use_sim_time:=true')
+    try:
+        clock = node.get_clock()
+        sim = hand_node.SimTime(node)
+        wakes = []
+
+        class CountingCondition(threading.Condition):
+            """Count notify_all() calls, the jump callback's only effect."""
+
+            def notify_all(self):
+                """Record the wake and pass it on."""
+                wakes.append(1)
+                super().notify_all()
+
+        sim._wake = CountingCondition()
+        clock.set_ros_time_override(Time(seconds=1, clock_type=ClockType.ROS_TIME))
+        assert len(wakes) == 1, 'the jump callback did not run on a /clock step'
+        sim.close()
+        clock.set_ros_time_override(Time(seconds=2, clock_type=ClockType.ROS_TIME))
+        assert len(wakes) == 1, 'the jump callback ran after close()'
+    finally:
+        node.destroy_node()

@@ -72,6 +72,10 @@ class SimTime:
         with self._wake:
             self._wake.notify_all()
 
+    def close(self):
+        """Unregister the jump callback from the node's clock."""
+        self._jump_handle.unregister()
+
 
 class Dex3HandNode(Node):
     """Serve pose services for each hand and publish its joint state and pressure.
@@ -228,6 +232,8 @@ class Dex3HandNode(Node):
         """Shut the hands down as on_shutdown says, then destroy the node."""
         for hand in self.hands.values():
             hand.shutdown(release=self._on_shutdown == 'release')
+        if self._sim_time is not None:
+            self._sim_time.close()
         return super().destroy_node()
 
 

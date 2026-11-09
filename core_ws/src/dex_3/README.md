@@ -82,8 +82,9 @@ Besides `sides`, `kp`, `kd`, `rate_hz`, `pose_duration`, `joint_state_hz` and
     the hand's measured pose. It needs `rt/dex3/<side>/state` from the last
     0.5 s with finite joint positions, or it is refused.
 - While commanding, `HandCmd_` streams at `rate_hz` (default 100) holding the
-    current target. Timing uses the monotonic clock, so a wall-clock step (NTP)
-    cannot cut a move short. On shutdown, see `on_shutdown`.
+    current target. Timing uses robot time (the monotonic clock on the real
+    robot, `use_sim_time` above), so a wall-clock step (NTP) cannot cut a move
+    short. On shutdown, see `on_shutdown`.
 - Gains start at Unitree's Dex3 example values, kp 1.5 and kd 0.1 (launch args
     `kp`, `kd`). The hand's real gains are not in any model; tune on hardware.
     Negative or non-finite gains are refused.

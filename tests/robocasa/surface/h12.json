@@ -7,7 +7,7 @@
       "/lowcmd": "unitree_hg/msg/LowCmd"
     }
   },
-  "livox_imu_mean_acc": 9.8125,
+  "livox_imu_mean_acc": 9.8141,
   "lowstate_ticks_advance": true,
   "meta": {
     "launcher": [
@@ -170,7 +170,7 @@
         "reliability": "RELIABLE"
       },
       "rate_clock": "wall",
-      "rate_hz": 10.0,
+      "rate_hz": 9.962,
       "received": true,
       "type": "magpie_msgs/msg/GripperState",
       "width": null
@@ -798,7 +798,7 @@
         "reliability": "RELIABLE"
       },
       "rate_clock": "wall",
-      "rate_hz": 9.988,
+      "rate_hz": 10.032,
       "received": true,
       "type": "magpie_msgs/msg/GripperState",
       "width": null
@@ -873,7 +873,7 @@
         "reliability": "RELIABLE"
       },
       "rate_clock": "sim",
-      "rate_hz": 9.915,
+      "rate_hz": 9.936,
       "received": true,
       "type": "tf2_msgs/msg/TFMessage",
       "width": null

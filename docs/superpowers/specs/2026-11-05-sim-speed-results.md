@@ -64,7 +64,7 @@ behind, the physics waits for them instead of dropping rays. The G1 sim's FAST-L
 (`golem_slam/config/g1/fastlio_sim.yaml`) are retuned for the denser, noisier scan; the H1-2's
 `fastlio.yaml`, shared with the real robot, is unchanged.
 
-Measured 2026-11-08 on the i7-14700F with an RTX 5070 Ti, at this table's commit (branch
+Measured 2026-11-08 on the i7-14700F with an RTX 5070 Ti, on the tree committed as 128186f (a unit test tightened after the runs; branch
 `sim_speed`, on top of `1693ad4`), `cpus: sim 0-15, ros 16-27`. The closed-loop suites give their
 sim container the GPU (the nvidia runtime and `MUJOCO_GL=egl`), so `auto` cast on the GPU; each
 sim logged `lidar rays cast on the GPU every 20 ms of sim time`.

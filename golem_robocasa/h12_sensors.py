@@ -198,7 +198,7 @@ class _LidarScans(mid360.ScanRing):
 
         The sensor's pose is body body_id's; the rays pass through body exclude_body_id's
         geoms, and a ray whose first hit is in the bool mask robot_geoms (ngeom,) gives no
-        point. Each frame goes to publish_lidar(CustomMsg CDR bytes) and
+        return (a zero point). Each frame goes to publish_lidar(CustomMsg CDR bytes) and
         publish_cloud(PointCloud2) in frame_id. sim_lock is held for the snapshot copies only.
         Raises RuntimeError when backend is gpu and no GPU caster can be built.
         """

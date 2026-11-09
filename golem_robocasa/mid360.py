@@ -45,7 +45,7 @@ Casters. CpuCaster casts every ray exactly on the CPU; GpuCaster reads the range
 images the GPU renders around the sensor (EGL), at a fraction of the cost, and follows the same
 rules (see its docstring for how close its ranges come). make_caster() picks one by the
 backend GOLEM_LIDAR_BACKEND names: the GPU wherever MuJoCo renders on a GPU through EGL, else
-the CPU (the Mac).
+the CPU.
 """
 import atexit
 import copy
@@ -58,8 +58,6 @@ from typing import NamedTuple
 
 import mujoco
 import numpy as np
-
-import mj_compat
 
 POINTS_PER_SECOND = 200_000          # the MID-360's point rate
 FRAME_RATE_HZ = 10.0                 # the driver's publish_freq (msg_MID360_launch.py)
@@ -188,9 +186,10 @@ class CpuCaster:
         if source is not d:
             np.copyto(d.geom_xpos, source.geom_xpos)
             np.copyto(d.geom_xmat, source.geom_xmat)
-        mj_compat.multi_ray(self.model, d, origin, world[lo:hi].reshape(-1, 1), self._geomgroup,
-                            1, self.exclude_body, geomid[lo:hi].reshape(-1, 1),
-                            dist[lo:hi].reshape(-1, 1), hi - lo, MAX_RANGE)
+        # The binding releases the GIL while it casts; None skips the surface normals.
+        mujoco.mj_multiRay(self.model, d, origin, world[lo:hi].reshape(-1, 1), self._geomgroup,
+                           1, self.exclude_body, geomid[lo:hi].reshape(-1, 1),
+                           dist[lo:hi].reshape(-1, 1), None, hi - lo, MAX_RANGE)
 
     def cast(self, origin, rotation, directions, data, geom_alpha=None, mat_alpha=None):
         """Return the distance (m) along each unit direction (n, 3) to its first hit, NaN for none.
@@ -215,14 +214,13 @@ class CpuCaster:
         origin = np.array(origin, dtype=np.float64).reshape(3, 1)
         chunks = min(self.threads, max(1, n // _MIN_RAYS_PER_THREAD))
         bounds = np.linspace(0, n, chunks + 1).astype(int)
-        # Up to MuJoCo 3.4 (the Mac's 3.3.1; mj_compat.MULTI_RAY_CULLS), mj_multiRay culls
-        # each geom by the azimuth and elevation of its bounding box's 8 corners as seen
-        # from the sensor, a range that can be narrower than the geom's: a wall's bottom
-        # edge is seen lower than its corners, so rays in between pass through the wall (3
-        # to 5% of the rays in a RoboCasa kitchen, up to 1.6 m too far or with no return).
-        # MuJoCo skips the culling for bodies without a BVH, so for this call none has one;
-        # the result is then mj_ray's, ray for ray, on every version. Cleared once around
-        # every thread's cast, and restored only once they have all finished.
+        # mj_multiRay culls a body through its BVH, which it places with the body's pose,
+        # but the scratch MjData and the scan thread's snapshot carry only geom poses: with
+        # the BVH in place their casts miss geoms (6% of the rays in
+        # tests/robocasa/test_mid360.py's kitchen). MuJoCo skips the BVH for bodies without
+        # one, so for this call none has one, and each geom is tested from its own pose: the
+        # result is mj_ray's, ray for ray. Cleared once around every thread's cast, and
+        # restored only once they have all finished.
         bvhadr = self.model.body_bvhadr.copy()
         self.model.body_bvhadr[:] = -1
         futures = []

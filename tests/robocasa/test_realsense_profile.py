@@ -165,5 +165,38 @@ class ProfileTests(unittest.TestCase):
         self.assertLess(rp.colored_cloud(depth, intr, rgb, intr, shifted).size, cloud.size)
 
 
+class SetCameraTests(unittest.TestCase):
+    """Check _set_camera's principalpixel against a rendered marker."""
+
+    def test_off_centre_principal_point_renders_at_the_pinhole_projection(self):
+        """A camera _set_camera places renders a marker where an off-centre pinhole (fx, fy, cx, cy) projects it."""
+        width, height, fx, fy = 320, 180, 150.0, 140.0
+        for cx, cy in ((150.3, 82.7), (171.0, 97.4)):
+            root = ET.fromstring(f"""<mujoco><visual><global offwidth="{width}" offheight="{height}"/>
+              <headlight ambient="1 1 1"/></visual><worldbody>
+              <camera name="c" pos="0 0 0" xyaxes="1 0 0 0 1 0"/>
+              <geom name="m" type="sphere" size="0.03" pos="0.11 0.07 -1" rgba="1 0 0 1"/>
+            </worldbody></mujoco>""")
+            # Optical frame: x right = world x, y down = world -y, z forward = world -z (1 m).
+            rp._set_camera(root.find(".//camera"), rp._T(np.diag([1.0, -1.0, -1.0]), np.zeros(3)),
+                           rp.Intrinsics(width, height, fx, fy, cx, cy))
+            model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
+            data = mujoco.MjData(model)
+            mujoco.mj_forward(model, data)
+            try:
+                renderer = mujoco.Renderer(model, height, width)
+            except Exception as e:  # no offscreen GL context in this environment
+                self.skipTest(f"no offscreen renderer: {e}")
+            try:
+                renderer.update_scene(data, camera="c")
+                img = renderer.render().astype(int)
+            finally:
+                renderer.close()
+            ys, xs = np.nonzero((img[:, :, 0] > 120) & (img[:, :, 1] < 60))
+            self.assertGreater(len(xs), 5)
+            self.assertAlmostEqual(xs.mean(), fx * 0.11 + cx, delta=0.5)
+            self.assertAlmostEqual(ys.mean(), fy * -0.07 + cy, delta=0.5)
+
+
 if __name__ == "__main__":
     unittest.main()

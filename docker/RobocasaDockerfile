@@ -140,12 +140,11 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
 # robosuite and RoboCasa need for it (docker/patches/, each file says why).
 # 3.17.0 is the newest MuJoCo with a wheel for this image's Python 3.10 (4.0
 # drops 3.10), and it steps both robots' kitchens about 40% faster than 3.3.1
-# (docs/superpowers/specs/2026-11-05-sim-speed-results.md). The ros image keeps
-# 3.2.3 for MJPC's ABI and the Mac's image keeps 3.3.1; golem_robocasa's
-# mj_compat.py runs the sims on either. The step comes after robosuite's and
-# RoboCasa's installs, which would put 3.3.1 back. `git apply` fails the build
-# when a patch no longer applies at the pinned commits, and the import checks
-# that robosuite and RoboCasa load on 3.17.0.
+# (docs/superpowers/specs/2026-11-05-sim-speed-results.md); golem_robocasa
+# calls its API directly. The ros image keeps 3.2.3 for MJPC's ABI. The step
+# comes after robosuite's and RoboCasa's installs, which would put 3.3.1 back.
+# `git apply` fails the build when a patch no longer applies at the pinned
+# commits, and the import checks that robosuite and RoboCasa load on 3.17.0.
 # -----------------------------------------------------------------------------
 COPY docker/patches/robosuite-mujoco-3.17.0.patch docker/patches/robocasa-mujoco-3.17.0.patch /opt/golem-patches/
 RUN uv pip install -c /opt/golem-locks/robocasa-amd64-05.txt --system --no-cache "mujoco==3.17.0" && \

@@ -12,7 +12,6 @@ import mujoco
 import numpy as np
 
 import mid360
-import mj_compat
 from sim_timing import LoopTimings
 
 FRAME_POINTS = 20_000                 # POINTS_PER_SECOND / FRAME_RATE_HZ
@@ -41,8 +40,8 @@ def _cube_room(half):
 # A 4 x 4 m room with a floor and ceiling, furniture of several geom types (a tilted box, a
 # cylinder, a sphere, a mesh) and a stand-in robot: the sensor sits in a head shell on
 # "torso" (the excluded body), with an arm beside it and a pelvis below, all one subtree.
-# Seen from the sensor, each wall's bottom edge straight ahead is lower than its corners, the
-# geometry that makes mj_multiRay's culling miss it.
+# Seen from the sensor, each wall's bottom edge straight ahead is lower than its corners, and
+# the rays between them must still hit the wall.
 _KITCHEN = """
 <mujoco>
   <asset>
@@ -71,6 +70,24 @@ _KITCHEN = """
         </body>
       </body>
     </body>
+  </worldbody>
+</mujoco>
+"""
+
+# Spheres, one of them in geom group 2, which test_multi_ray_matches_mj_ray's casts leave out,
+# one on the excluded body "self" around the origin and one past the cutoff. The scene is open
+# above, so some rays hit nothing.
+_SPHERES = """
+<mujoco>
+  <worldbody>
+    <body name="self"><geom type="sphere" size="0.2" group="1"/></body>
+    <geom type="sphere" group="1" pos="2 0 0" size="0.5"/>
+    <geom type="sphere" group="1" pos="0 3 0.5" size="0.8"/>
+    <geom type="sphere" group="1" pos="-4 -1 -1" size="1.0"/>
+    <geom type="sphere" group="1" pos="0 0 -16" size="12"/>
+    <geom type="sphere" group="1" pos="25 0 12" size="4"/>
+    <geom type="sphere" group="2" pos="0 -2 0" size="0.6"/>
+    <geom type="sphere" group="1" pos="0 -5 0" size="1.5"/>
   </worldbody>
 </mujoco>
 """
@@ -130,16 +147,15 @@ class PatternTests(unittest.TestCase):
 
 
 class CpuCasterTests(unittest.TestCase):
-    """Compare CpuCaster with MuJoCo's exact per-ray mj_ray."""
+    """Compare CpuCaster and mj_multiRay with MuJoCo's exact per-ray mj_ray."""
 
     def test_cpu_caster_matches_mj_ray(self):
         """2,000 rays on the furnished room equal per-ray mj_ray within 1e-9 m and on hit or miss.
 
         A ray whose first hit is the robot (other than the excluded torso) has no return.
-        The scene must catch mj_multiRay's culling where the installed MuJoCo culls
-        (mj_compat.MULTI_RAY_CULLS): with the BVH left in place some rays differ there, and none
-        on a version that does not cull.
-        The same caster casts again after the robot moves, so every thread sees fresh poses.
+        The caster's threads cast on MjData that carry only geom poses, where mj_multiRay's BVH
+        culling would miss geoms. The same caster casts again after the robot moves, so every
+        thread sees fresh poses.
         """
         model, data = _scene(_KITCHEN)
         site = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "lidar")
@@ -173,22 +189,7 @@ class CpuCasterTests(unittest.TestCase):
                 self.assertGreater(robot_hits, 0, "no ray hits the robot")
                 self.assertGreater(np.isfinite(expected).sum(), 1500)
 
-                if pose == 0:   # the culling this caster works around misses some of these rays
-                    culled_id = np.empty(len(world), dtype=np.int32)
-                    culled = np.empty(len(world))
-                    mj_compat.multi_ray(model, data, origin.reshape(3, 1),
-                                        np.ascontiguousarray(world).reshape(-1, 1), geomgroup, 1,
-                                        torso, culled_id.reshape(-1, 1), culled.reshape(-1, 1),
-                                        len(world), mid360.MAX_RANGE)
-                    culled[(culled_id < 0) | robot[np.where(culled_id >= 0, culled_id, 0)]] = np.nan
-                    differ = ((np.isnan(culled) != np.isnan(expected))
-                              | (np.abs(culled - expected) > 1e-6))
-                    if mj_compat.MULTI_RAY_CULLS:
-                        self.assertGreater(differ.sum(), 0,
-                                           "the scene does not trigger mj_multiRay's culling")
-                    else:
-                        self.assertEqual(differ.sum(), 0, "mj_multiRay culls on this version")
-                else:   # the move changes the ranges in every thread's chunk
+                if pose == 1:   # the move changes the ranges in every thread's chunk
                     for chunk in np.array_split(np.arange(len(world)), 4):
                         moved = np.abs(np.nan_to_num(expected[chunk] - previous[chunk])) > 1e-3
                         self.assertGreater(moved.sum(), 0)
@@ -214,6 +215,41 @@ class CpuCasterTests(unittest.TestCase):
         finally:
             caster.close()
         np.testing.assert_array_equal(model.body_bvhadr, bvhadr)
+
+    def test_multi_ray_matches_mj_ray(self):
+        """mj_multiRay gives every ray mj_ray's geom and distance, and none past the cutoff."""
+        model = mujoco.MjModel.from_xml_string(_SPHERES)
+        data = mujoco.MjData(model)
+        mujoco.mj_forward(model, data)
+        origin = np.zeros(3)
+        geomgroup = np.array([0, 1, 0, 0, 0, 0], np.uint8)
+        exclude = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "self")
+        cutoff = 20.0   # m: the sphere at (25, 0, 12) is past it
+        v = np.random.default_rng(3).normal(size=(2000, 3))
+        world = v / np.linalg.norm(v, axis=1, keepdims=True)
+        geomid = np.empty(len(world), np.int32)
+        dist = np.empty(len(world))
+        mujoco.mj_multiRay(model, data, origin.reshape(3, 1), world.reshape(-1, 1), geomgroup, 1,
+                           exclude, geomid.reshape(-1, 1), dist.reshape(-1, 1), None, len(world),
+                           cutoff)
+
+        one = np.empty((1, 1), np.int32)
+        expected_id = np.empty(len(world), np.int32)
+        expected = np.empty(len(world))
+        for i, vec in enumerate(world):
+            d = mujoco.mj_ray(model, data, origin.reshape(3, 1), vec.reshape(3, 1), geomgroup, 1,
+                              exclude, one)
+            hit = one[0, 0] >= 0 and d <= cutoff
+            expected_id[i] = one[0, 0] if hit else -1
+            expected[i] = d if hit else -1.0
+        hits = expected_id >= 0
+        self.assertGreater(hits.sum(), 200)
+        self.assertGreater((~hits).sum(), 200)
+        # Every group-1 sphere but "self" and the one past the cutoff.
+        self.assertEqual(len(set(expected_id[hits].tolist())), 5)
+        np.testing.assert_array_equal(geomid, expected_id)
+        np.testing.assert_allclose(dist[hits], expected[hits], rtol=0.0, atol=1e-9)
+        np.testing.assert_array_equal(dist[~hits], -1.0)
 
 
 class _FakeCaster:

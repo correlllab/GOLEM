@@ -303,7 +303,7 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(_Refused.attempts, 0)
 
     def test_gpu_caster_needs_egl(self):
-        """Without MUJOCO_GL=egl (the Mac's osmesa or glfw) the GPU caster refuses to build."""
+        """Without MUJOCO_GL=egl (osmesa or glfw) the GPU caster refuses to build."""
         for value in ("osmesa", "glfw", ""):
             with self.subTest(MUJOCO_GL=value), mock.patch.dict(os.environ, {"MUJOCO_GL": value}):
                 with self.assertRaisesRegex(mid360.GpuUnavailable, "MUJOCO_GL"):

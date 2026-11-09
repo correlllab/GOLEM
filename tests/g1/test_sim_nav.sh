@@ -49,7 +49,7 @@
 #               never (g1_sensors.SensorConfig)
 #   GOLEM_LIDAR_BACKEND   passed to the sim as the shell has it, docker/.env's never:
 #               unset is auto (the GPU caster when the sim has a GPU, see SIM_GPUS, else
-#               the CPU's), cpu casts every ray on the CPU as on the Mac; the sim logs
+#               the CPU's), cpu casts every ray on the CPU; the sim logs
 #               the caster it built
 #   GOLEM_SIM_RATE   passed to the sim as the shell has it, docker/.env's never: the target
 #               real-time factor (unset is 1, real time; or 2, max, ...); the checks are gates only at 1,

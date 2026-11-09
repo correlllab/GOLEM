@@ -35,8 +35,6 @@ from rclpy.node import Node
 from std_msgs.msg import Bool, Float32, String
 from std_srvs.srv import Trigger
 
-import mj_compat
-
 
 class MeasurementBridge(Node):
     """Run the robocasa_measurement node: task signals, the band toggle, the experiment surface."""
@@ -99,12 +97,14 @@ class MeasurementBridge(Node):
         self._gt_links = {body(b): b for b in range(1, model.nbody)
                           if b not in object_roots and root_of(b) in object_roots}
         # (qpos address, qpos width, dof address, dof width) of every joint of an
-        # object or of a body under it; the authored pose is model.qpos0.
+        # object or of a body under it; the authored pose is model.qpos0. The
+        # joint type is read as a Python int: the binding's numpy integers do not
+        # find mjtJoint keys of a dict.
         widths = {mujoco.mjtJoint.mjJNT_FREE: (7, 6), mujoco.mjtJoint.mjJNT_BALL: (4, 3),
                   mujoco.mjtJoint.mjJNT_SLIDE: (1, 1), mujoco.mjtJoint.mjJNT_HINGE: (1, 1)}
         self._reset_joints = [
-            (int(model.jnt_qposadr[j]), widths[mj_compat.joint_type(model, j)][0],
-             int(model.jnt_dofadr[j]), widths[mj_compat.joint_type(model, j)][1])
+            (int(model.jnt_qposadr[j]), widths[int(model.jnt_type[j])][0],
+             int(model.jnt_dofadr[j]), widths[int(model.jnt_type[j])][1])
             for j in range(model.njnt) if root_of(model.jnt_bodyid[j]) in object_roots]
         robot_roots = [int(model.jnt_bodyid[j]) for j in free
                        if body(model.jnt_bodyid[j]).startswith(pfx)]

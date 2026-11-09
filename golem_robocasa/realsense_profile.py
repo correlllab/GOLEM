@@ -159,10 +159,12 @@ def _set_camera(el, T_body_optical, intr):
         el.attrib.pop(key, None)
     el.set("pos", " ".join(f"{v:.9g}" for v in T_body_optical[:3, 3]))
     el.set("quat", " ".join(f"{v:.9g}" for v in _R_to_quat_wxyz(R)))
-    # MuJoCo pinhole; principalpixel's sign convention depends on the MuJoCo
-    # version (mj_compat.principalpixel).
-    import mj_compat
-    px, py = mj_compat.principalpixel(intr.width, intr.height, intr.cx, intr.cy)
+    # MuJoCo pinhole. principalpixel is the principal point's offset from the
+    # image centre in continuous pixel coordinates (camera_info's cx + 0.5): +x
+    # moves the image left and +y moves it up (MuJoCo 3.17.0, measured with
+    # tests/robocasa/test_realsense_profile.py's rendered marker).
+    px = intr.width / 2.0 - (intr.cx + 0.5)
+    py = intr.height / 2.0 - (intr.cy + 0.5)
     el.set("resolution", f"{intr.width} {intr.height}")
     el.set("sensorsize", "1 1")
     el.set("focalpixel", f"{intr.fx:.9g} {intr.fy:.9g}")

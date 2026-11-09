@@ -273,7 +273,7 @@ class H12UnitreeInterfaceTests(unittest.TestCase):
     def test_lowcmd_timeout_turns_motors_off(self):
         """Motors turn off after the command timeout in sim time and on again when commands resume, each logged once."""
         timeout = self.iface.lowcmd_timeout
-        self.assertEqual(timeout, ui.LOWCMD_TIMEOUT)
+        self.assertEqual(timeout, unitree_common.LOWCMD_TIMEOUT)
         self.quiet(self.deliver, lowcmd())
         self.data.time = timeout - 0.01  # s of sim time, however long it took on the wall
         self.iface.write_ctrl()
@@ -293,12 +293,12 @@ class H12UnitreeInterfaceTests(unittest.TestCase):
     def test_timeout_knob_must_be_finite_and_positive(self):
         """GOLEM_CMD_TIMEOUT must be finite and positive, and a bad value stops the sim at import."""
         name = 'GOLEM_CMD_TIMEOUT'
-        self.assertEqual(ui.env_seconds(name, 0.5, {}), 0.5)
-        self.assertEqual(ui.env_seconds(name, 0.5, {name: ' '}), 0.5)
-        self.assertEqual(ui.env_seconds(name, 0.5, {name: '0.25'}), 0.25)
+        self.assertEqual(unitree_common.env_seconds(name, 0.5, {}), 0.5)
+        self.assertEqual(unitree_common.env_seconds(name, 0.5, {name: ' '}), 0.5)
+        self.assertEqual(unitree_common.env_seconds(name, 0.5, {name: '0.25'}), 0.25)
         for bad in ('nan', 'inf', '-inf', '-0.5', '0', 'fast'):
             with self.subTest(bad), self.assertRaises(ValueError) as caught:
-                ui.env_seconds(name, 0.5, {name: bad})
+                unitree_common.env_seconds(name, 0.5, {name: bad})
             self.assertIn(name, str(caught.exception))
             self.assertIn(repr(bad), str(caught.exception))
         # The sim refuses a bad value when it starts, which is when it imports the interface.

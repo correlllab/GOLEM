@@ -1,9 +1,9 @@
 """Validate and latch Unitree DDS motor commands and write rt/lowstate for both robots' SimInterface.
 
 unitree_interface.py (H1-2) and g1/unitree_interface.py (G1) share the command
-timeout knob, rt/lowcmd validation, the latched MotorCommand, rate-limited
-warnings, the CRC, the rt/lowstate writer, the IMU's rpy and the DDS domain
-from here.
+timeout knob, the rt/lowcmd command path (LowCmdLatch: validation, the latched
+MotorCommand, the timeout), rate-limited warnings, the CRC, the rt/lowstate
+writer, the IMU's rpy and the DDS domain from here.
 
 A DDS handler validates a frame and latches it as one MotorCommand, swapped in
 by a single assignment, and never touches MjData; the main loop turns the
@@ -43,6 +43,12 @@ def env_seconds(name, default, env=os.environ):
     if not (math.isfinite(value) and value > 0):
         raise ValueError(f'{name} must be finite and positive (sim seconds), got {raw!r}')
     return value
+
+
+# s of sim time without an rt/lowcmd frame, once frames have driven the motors,
+# before every body motor turns off (GOLEM_CMD_TIMEOUT; unmeasured on the real
+# G1). A bad value stops the sim when it imports its interface.
+LOWCMD_TIMEOUT = env_seconds('GOLEM_CMD_TIMEOUT', 0.5)
 
 
 class MotorCommand(NamedTuple):
@@ -389,6 +395,67 @@ class LowStateWriter:
         ret = ddspy_write(self._ref, self._fill(tick, q, dq, tau, quat_wxyz, gyro, acc))
         if ret < 0:
             self._warnings.warn('lowstate write', f'rt/lowstate write failed: DDS return code {ret}')
+
+
+class LowCmdLatch:
+    """Latch each robot's valid rt/lowcmd frames and turn the latest into body torques: SimInterface's command path.
+
+    A subclass sets MODE_MACHINE (the value accepted), ROBOT (its name in the
+    messages) and lowcmd_motor_on(mode) (which motor modes apply the PD), and
+    calls _init_lowcmd before it subscribes. Every body motor is off until the
+    first valid frame (commanded). _on_lowcmd runs on the DDS thread and only
+    validates and swaps in one MotorCommand; _lowcmd_torques runs on the
+    physics thread.
+    """
+
+    MODE_MACHINE = None
+    ROBOT = ''
+
+    @staticmethod
+    def lowcmd_motor_on(mode):
+        """Return whether an rt/lowcmd motor mode applies the PD."""
+        raise NotImplementedError
+
+    def _init_lowcmd(self, motors, sim_time):
+        """Start with no command, for `motors` body slots, at sim_time (s): every motor off."""
+        self._motors = motors
+        self.lowcmd_timeout = LOWCMD_TIMEOUT
+        self._crc = fast_crc()
+        # s, sim time of the last step: the handlers stamp commands with it
+        # instead of reading MjData.
+        self.sim_time = sim_time
+        self._lowcmd = None
+        self.commanded = False
+        self._lowcmd_timed_out = False
+        self._warnings = RateLimitedWarnings()
+
+    def _on_lowcmd(self, msg):
+        """Latch a valid rt/lowcmd frame, or drop it with a rate-limited warning (DDS thread)."""
+        error = lowcmd_error(msg, self._crc, self.MODE_MACHINE, self.ROBOT)
+        cmd = None if error else parse_motor_cmds(msg.motor_cmd, range(self._motors),
+                                                  self.sim_time, self.lowcmd_motor_on)
+        if cmd is None:
+            error = error or 'a value is not finite'
+            self._warnings.warn(f'lowcmd {error}', f'dropped rt/lowcmd: {error}')
+            return
+        self._lowcmd = cmd
+        if not self.commanded:
+            self.commanded = True
+            log(f't={cmd.time:.3f}s: first valid rt/lowcmd; it drives all {self._motors} body motors')
+
+    def _lowcmd_torques(self, q, dq, now):
+        """Return the latched command's torques at q, dq, or zeros once it is older than the timeout."""
+        cmd = self._lowcmd
+        if now - cmd.time > self.lowcmd_timeout:
+            if not self._lowcmd_timed_out:
+                self._lowcmd_timed_out = True
+                log(f't={now:.3f}s: rt/lowcmd silent for {self.lowcmd_timeout:.2f}s; '
+                    'every motor off (zero torque)')
+            return np.zeros_like(q)
+        if self._lowcmd_timed_out:
+            self._lowcmd_timed_out = False
+            log(f't={now:.3f}s: rt/lowcmd back')
+        return cmd.torques(q, dq)
 
 
 def lowcmd_error(msg, crc, mode_machine, robot):

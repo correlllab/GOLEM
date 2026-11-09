@@ -589,7 +589,7 @@ frame, default the real sensor's 20,000), `GOLEM_LIDAR_HZ`, `GOLEM_CAMERAS`,
 `GOLEM_SIM_RATE` (as on the H1-2, above). Their
 defaults are in the code
 that reads them: `SensorConfig` in `g1/g1_sensors.py` (sensors),
-`g1/unitree_interface.py` (the command timeout), `g1/g1_mujoco.py`
+`unitree_common.py` (the command timeout), `g1/g1_mujoco.py`
 (spawn, odom) and `sim_common.py`
 (rate); the compose files pass them
 (`docker/docker-compose.g1.yml` the G1-only ones). The G1 sim ignores the H1-2-only

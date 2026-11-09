@@ -20,8 +20,10 @@ current state (write_ctrl), which emulates the motors' own servo loop, and is
 limited to the joint's actuatorfrcrange. rt/lowcmd silent for GOLEM_CMD_TIMEOUT
 (0.5 s of sim time, so a sim running slower than real time does not trip it)
 turns every body motor off (zero torque) until frames return, as in the H1-2
-sim; unmeasured on the real G1. The slot layout and header values match
-golem_safety's G1 profile (core_ws/src/golem_safety/robots/g1.yaml).
+sim; unmeasured on the real G1. The body's command path (validation, latch,
+timeout) is unitree_common.LowCmdLatch, shared with the H1-2's sim. The slot
+layout and header values match golem_safety's G1 profile
+(core_ws/src/golem_safety/robots/g1.yaml).
 """
 import os
 
@@ -31,36 +33,17 @@ from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelPublish
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__HandState_ as HandState_default
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_, HandState_, LowCmd_, LowState_
 
-import unitree_common
-from unitree_common import (LowStateWriter, RateLimitedWarnings, domain_id, env_seconds, fast_crc,
-                            log, parse_motor_cmds)
+from unitree_common import LowCmdLatch, LowStateWriter, domain_id, parse_motor_cmds
 
 TOPIC_LOWSTATE = 'rt/lowstate'
 TOPIC_LOWCMD = 'rt/lowcmd'
 TOPIC_HAND_CMD = 'rt/dex3/{side}/cmd'
 TOPIC_HAND_STATE = 'rt/dex3/{side}/state'
 
-# The real G1's mode_machine (our g1_29dof_rev_1_0 unit), in rt/lowstate and
-# accepted on rt/lowcmd.
-MODE_MACHINE = 5
 # The Dex3 HandCmd_ mode byte (dex_3/dex3.py): bits 0-3 motor index, bits 4-6
 # status (1: enabled), bit 7 timeout, which the driver sets to release a finger.
 HAND_STATUS_ENABLED = 0x01
 HAND_STATE_HZ = 100.0   # Hz of sim time
-
-# s of sim time without an rt/lowcmd frame, once frames have driven the motors,
-# before every body motor turns off (unmeasured on the real G1).
-LOWCMD_TIMEOUT = env_seconds('GOLEM_CMD_TIMEOUT', 0.5)
-
-
-def lowcmd_error(msg, crc):
-    """Return why an rt/lowcmd frame must be dropped, or None to accept it."""
-    return unitree_common.lowcmd_error(msg, crc, MODE_MACHINE, 'G1')
-
-
-def lowcmd_motor_on(mode):
-    """Return whether an rt/lowcmd motor mode applies the PD: every mode but 0 does."""
-    return mode != 0
 
 
 def hand_motor_on(mode):
@@ -70,13 +53,23 @@ def hand_motor_on(mode):
     return status == HAND_STATUS_ENABLED and not timeout
 
 
-class SimInterface:
+class SimInterface(LowCmdLatch):
     """Drive the G1's body and hand motors from DDS commands and publish their state.
 
     The main loop calls write_ctrl() before and after_step() after every
     mj_step, holding the sim lock. The DDS handlers only validate and latch
     commands (one reference swap each) and never touch MjData.
     """
+
+    # The real G1's mode_machine (our g1_29dof_rev_1_0 unit), in rt/lowstate and
+    # accepted on rt/lowcmd.
+    MODE_MACHINE = 5
+    ROBOT = 'G1'
+
+    @staticmethod
+    def lowcmd_motor_on(mode):
+        """Return whether an rt/lowcmd motor mode applies the PD: every mode but 0 does."""
+        return mode != 0
 
     def __init__(self, model, data, resolver):
         """Open the DDS topics on ROS_DOMAIN_ID; resolver is the model's g1.sim_names.NameResolver.
@@ -89,23 +82,14 @@ class SimInterface:
         missing = {'quat', 'gyro', 'acc'} - set(resolver.sensor_adr)
         if missing:
             raise KeyError(f'pelvis IMU sensors missing from the model: {sorted(missing)}')
-        self.lowcmd_timeout = LOWCMD_TIMEOUT
-        self._crc = fast_crc()
+        # Every body motor is off until the first valid rt/lowcmd frame.
+        self._init_lowcmd(len(resolver.body.names), float(data.time))
         self._hand_state_every = max(1, round(1.0 / (HAND_STATE_HZ * model.opt.timestep)))
         self._steps = 0
-        # s, sim time of the last step: the handlers stamp commands with it
-        # instead of reading MjData.
-        self.sim_time = float(data.time)
-
-        self._lowcmd = None
         self._hand_cmd = {side: None for side in resolver.hands}
-        # Every body motor is off until the first valid rt/lowcmd frame.
-        self.commanded = False
-        self._lowcmd_timed_out = False
         # The sim's ElasticBand, set by sim_loop for the tests that record the
         # sim from inside its process; this class never reads it.
         self.band = None
-        self._warnings = RateLimitedWarnings()
 
         # The SDK ignores CYCLONEDDS_URI, so the network interface comes from
         # G1_DDS_INTERFACE (unset: the SDK's default).
@@ -117,7 +101,7 @@ class SimInterface:
 
         self._low_state_pub = ChannelPublisher(TOPIC_LOWSTATE, LowState_)
         self._low_state_pub.Init()
-        self._low_state = LowStateWriter(self._low_state_pub, MODE_MACHINE, len(resolver.body.names))
+        self._low_state = LowStateWriter(self._low_state_pub, self.MODE_MACHINE, len(resolver.body.names))
         adr = resolver.sensor_adr
         self._imu = (slice(adr['quat'][0], adr['quat'][0] + 4),   # w, x, y, z
                      slice(adr['gyro'][0], adr['gyro'][0] + 3),
@@ -134,20 +118,6 @@ class SimInterface:
             topic = TOPIC_HAND_CMD.format(side=side)
             self._subscribers[topic] = ChannelSubscriber(topic, HandCmd_)
             self._subscribers[topic].Init(lambda msg, side=side: self._on_hand_cmd(side, msg), 10)
-
-    def _on_lowcmd(self, msg: LowCmd_):
-        """Latch a valid rt/lowcmd frame, or drop it with a rate-limited warning (DDS thread)."""
-        error = lowcmd_error(msg, self._crc)
-        cmd = None if error else parse_motor_cmds(msg.motor_cmd, range(len(self.resolver.body.names)),
-                                                  self.sim_time, lowcmd_motor_on)
-        if cmd is None:
-            error = error or 'a value is not finite'
-            self._warnings.warn(f'lowcmd {error}', f'dropped rt/lowcmd: {error}')
-            return
-        self._lowcmd = cmd
-        if not self.commanded:
-            self.commanded = True
-            log(f't={cmd.time:.3f}s: first valid rt/lowcmd; it drives all 29 body motors')
 
     def _on_hand_cmd(self, side, msg: HandCmd_):
         """Latch a valid rt/dex3/<side>/cmd frame, or drop it with a rate-limited warning (DDS thread)."""
@@ -171,20 +141,6 @@ class SimInterface:
         self.sim_time = now
         if self._lowcmd is not None:
             self._lowcmd = self._lowcmd._replace(time=now)
-
-    def _lowcmd_torques(self, q, dq, now):
-        """Return the latched command's torques at q, dq, or zeros once it is older than the timeout."""
-        cmd = self._lowcmd
-        if now - cmd.time > self.lowcmd_timeout:
-            if not self._lowcmd_timed_out:
-                self._lowcmd_timed_out = True
-                log(f't={now:.3f}s: rt/lowcmd silent for {self.lowcmd_timeout:.2f}s; '
-                    'every motor off (zero torque)')
-            return np.zeros_like(q)
-        if self._lowcmd_timed_out:
-            self._lowcmd_timed_out = False
-            log(f't={now:.3f}s: rt/lowcmd back')
-        return cmd.torques(q, dq)
 
     def write_ctrl(self):
         """Write every motor's torque for the next physics step, limited to its actuatorfrcrange."""

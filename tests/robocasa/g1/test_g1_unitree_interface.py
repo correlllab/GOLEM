@@ -121,7 +121,7 @@ def test_invalid_lowcmd_ignored():
         IFACE.write_ctrl()
         assert not IFACE.commanded and IFACE._lowcmd is None
         assert np.all(DATA.ctrl[RESOLVER.body.ctrl] == 0.0)
-    assert ui.lowcmd_error(_lowcmd(), CRC_) is None
+    assert unitree_common.lowcmd_error(_lowcmd(), CRC_, ui.SimInterface.MODE_MACHINE, "G1") is None
     IFACE._on_lowcmd(_lowcmd())
     assert IFACE.commanded
 
@@ -153,21 +153,6 @@ def test_fast_crc_is_the_sdks():
         assert CRC_._crc_py(CRC_._CRC__Trans(raw)) == fast_raw
     finally:
         CRC_._CRC__Trans, CRC_._crc_ctypes = fast_words, fast_crc32
-
-
-def test_timeout_knob_must_be_finite_and_positive():
-    """GOLEM_CMD_TIMEOUT must be finite and positive; empty gives the default."""
-    name = "GOLEM_CMD_TIMEOUT"
-    assert ui.env_seconds(name, 0.5, {}) == 0.5
-    assert ui.env_seconds(name, 0.5, {name: " "}) == 0.5  # empty, as compose passes an unset knob
-    assert ui.env_seconds(name, 0.5, {name: "0.25"}) == 0.25
-    for bad in ("nan", "inf", "-inf", "-0.5", "0", "fast"):
-        try:
-            ui.env_seconds(name, 0.5, {name: bad})
-        except ValueError as e:
-            assert name in str(e) and repr(bad) in str(e), e
-        else:
-            raise AssertionError(f"{name}={bad!r} accepted")
 
 
 def test_first_valid_lowcmd_drives_motors():

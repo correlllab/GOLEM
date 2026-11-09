@@ -19,6 +19,10 @@
 # The tests of a suite share that build, so one runs at a time: each holds
 # $GOLEM_CACHE_DIR/<suite>_tests.lock on fd 9, which its background jobs close.
 #
+# Each container is pinned to the CPUs the wrappers pin its service to (docker_common.sh's
+# configure_cpus: GOLEM_CPU_PINNING, GOLEM_SIM_CPUSET, GOLEM_ROS_CPUSET), so a run's real-time
+# factor is the one the wrappers' stack gets.
+#
 # The sim gets every knob its robot's sim reads explicitly: the test's own, the
 # ones from the shell (sim_test_shell_knobs) and the sim's defaults for the
 # rest, so docker/.env never changes what is tested. Each sim ignores the other
@@ -95,6 +99,7 @@ sim_test_setup() {
     configure_robot robocasa
     check_domain robocasa
     configure_display
+    configure_cpus
     prepare_mounts robocasa
     prepare_mounts ros
     docker image inspect "$SIM_IMAGE" >/dev/null 2>&1 || fail "No $SIM_IMAGE image; build it with docker/scripts/docker_build.sh robocasa."

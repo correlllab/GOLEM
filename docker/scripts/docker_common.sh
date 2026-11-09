@@ -11,12 +11,20 @@
 #   GOLEM_CACHE_DIR    host cache root (default: the checkout's container_cache)
 #   GOLEM_DISPLAY      Linux: auto (default), gui or headless
 #   DISPLAY, XAUTHORITY  the X server for gui mode
+#   GOLEM_CPU_PINNING  1 (default) or 0: 0 pins no container, explicit lists too
+#   GOLEM_SIM_CPUSET, GOLEM_ROS_CPUSET  CPUs the robocasa and ros containers may
+#                      use, as docker's --cpuset-cpus lists (0-15, 0,2,4-5);
+#                      default on a hybrid CPU: the performance cores for the
+#                      sim and the efficiency cores for ros; unset otherwise
+#   GOLEM_SYSFS_ROOT   prefix of the /sys files configure_cpus reads (default
+#                      empty; the host-script tests set it)
 #   GOLEM_MJPC_GIT_DIR the mujoco_mpc submodule's git directory (default: found
 #                      with git)
 #   docker/.env        any of the above; exported shell values win
 # Globals set: GOLEM_ROOT, COMPOSE (the docker compose command line, extended
-# by configure_robot and configure_display), LAUNCH_SUFFIX, ENV_FILE,
-# ROBOT_FLAG, WRAPPER_ARGS.
+# by configure_robot, configure_display and configure_cpus), LAUNCH_SUFFIX,
+# ENV_FILE, ROBOT_FLAG, WRAPPER_ARGS; GOLEM_SIM_CPUSET and GOLEM_ROS_CPUSET are
+# set or unset by configure_cpus.
 # Every check fails through fail(): an "ERROR:" line on stderr and exit 1.
 GOLEM_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 
@@ -151,6 +159,94 @@ configure_display() {
             ;;
         *) fail 'Linux GOLEM_DISPLAY must be auto, gui, or headless.';;
     esac
+}
+
+# Print the CPU numbers in the list $1 (docker's cpuset syntax: 0-3,8), one per
+# line, and fail on any other syntax. Ranges are capped at CPU 65535 so a typo
+# cannot loop for long.
+expand_cpu_list() {
+    local items item
+    IFS=, read -ra items <<< "$1"
+    [ "${#items[@]}" -gt 0 ] || return 1
+    for item in "${items[@]}"; do
+        [[ $item =~ ^([0-9]+)(-([0-9]+))?$ ]] || return 1
+        local lo=$((10#${BASH_REMATCH[1]})) hi=$((10#${BASH_REMATCH[3]:-${BASH_REMATCH[1]}}))
+        { [ "$lo" -le "$hi" ] && [ "$hi" -le 65535 ]; } || return 1
+        seq "$lo" "$hi"
+    done
+}
+
+# Fail unless every CPU of list $2 is in the online list $3, naming knob $1.
+check_cpuset() {
+    local knob=$1 list=$2 online=$3 cpus cpu
+    cpus=$(expand_cpu_list "$list") || fail "$knob='$list' is not a CPU list such as 0-15 or 0,2,4-5."
+    [ -n "$online" ] || return 0
+    online=" $(expand_cpu_list "$online" | tr '\n' ' ') "
+    for cpu in $cpus; do
+        case "$online" in
+            *" $cpu "*) ;;
+            *) fail "$knob='$list' names CPU $cpu, which is not online (online: ${online# }).";;
+        esac
+    done
+}
+
+# Choose the CPUs the simulator and ros containers are pinned to and export them
+# as GOLEM_SIM_CPUSET and GOLEM_ROS_CPUSET, or unset them; add the compose
+# overlay of each one that is set, so an unpinned run has no cpuset key. Then
+# print `cpus: sim <list>, ros <list>` (or `cpus: not pinned`) on stderr.
+#   - On a hybrid CPU (cpu_core and cpu_atom both in sysfs) the sim gets the
+#     performance cores and ros the efficiency cores: the sim's physics thread
+#     otherwise lands on an efficiency core about half the time.
+#   - An explicit GOLEM_SIM_CPUSET or GOLEM_ROS_CPUSET wins over that detection
+#     and pins without a hybrid CPU; GOLEM_CPU_PINNING=0 pins nothing at all.
+#   - Every set list is checked against the online CPUs before any container
+#     starts.
+#   - The Mac wrappers pin nothing.
+# SAFETY: domain 0 is the real robots' bus and pins nothing: the real G1's ros
+# container keeps every core, so an explicit GOLEM_ROS_CPUSET there is refused,
+# not applied. No simulator runs on domain 0.
+# Call it after load_config and check_domain, for the robocasa and ros services
+# only (the Isaac simulator is not pinned).
+configure_cpus() {
+    local sim=${GOLEM_SIM_CPUSET:-} ros=${GOLEM_ROS_CPUSET:-}
+    local root=${GOLEM_SYSFS_ROOT:-} core atom online=''
+    unset GOLEM_SIM_CPUSET GOLEM_ROS_CPUSET
+    [ "${GOLEM_PLATFORM:-linux}" != mac ] || return 0
+    if [ "$ROS_DOMAIN_ID" = 0 ]; then
+        [ -z "$ros" ] || fail "GOLEM_ROS_CPUSET='$ros' is set on domain 0, the real robot's bus, where the ros container keeps every core. Unset GOLEM_ROS_CPUSET."
+        echo 'cpus: not pinned (domain 0)' >&2
+        return 0
+    fi
+    case "${GOLEM_CPU_PINNING:-1}" in
+        1) ;;
+        0) echo 'cpus: not pinned (GOLEM_CPU_PINNING=0)' >&2; return 0;;
+        *) fail "GOLEM_CPU_PINNING must be 0 or 1, not '$GOLEM_CPU_PINNING'.";;
+    esac
+    if [ -r "$root/sys/devices/cpu_core/cpus" ] && [ -r "$root/sys/devices/cpu_atom/cpus" ] \
+            && IFS= read -r core < "$root/sys/devices/cpu_core/cpus" \
+            && IFS= read -r atom < "$root/sys/devices/cpu_atom/cpus" \
+            && [ -n "$core" ] && [ -n "$atom" ]; then
+        sim=${sim:-$core}
+        ros=${ros:-$atom}
+    fi
+    if [ -r "$root/sys/devices/system/cpu/online" ]; then
+        IFS= read -r online < "$root/sys/devices/system/cpu/online" || online=''
+    fi
+    if [ -z "$sim$ros" ]; then
+        echo 'cpus: not pinned' >&2
+        return 0
+    fi
+    if [ -n "$sim" ]; then
+        check_cpuset GOLEM_SIM_CPUSET "$sim" "$online"
+        export GOLEM_SIM_CPUSET=$sim
+        COMPOSE+=(-f "$GOLEM_ROOT/docker/docker-compose.cpus-sim.yml")
+    fi
+    if [ -n "$ros" ]; then
+        check_cpuset GOLEM_ROS_CPUSET "$ros" "$online"
+        export GOLEM_ROS_CPUSET=$ros
+        COMPOSE+=(-f "$GOLEM_ROOT/docker/docker-compose.cpus-ros.yml")
+    fi
+    echo "cpus: sim ${sim:-all}, ros ${ros:-all}" >&2
 }
 
 # Fail unless the CL_Assets/g1 files service $1 reads exist and are not Git LFS

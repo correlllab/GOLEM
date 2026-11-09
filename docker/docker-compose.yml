@@ -3,8 +3,9 @@
 # docker/scripts/docker_run.sh or docker_stack.sh, which load docker/.env, check
 # the DDS domain and the bind sources, and add the overlays:
 # docker-compose.gui.yml (X11 desktop), docker-compose.g1.yml (the G1 sim) and
-# docker-compose.stack.yml (paired startup). Paths are relative to this
-# directory; GOLEM_ASSETS_DIR and GOLEM_CACHE_DIR relocate the asset and cache
+# docker-compose.stack.yml (paired startup) and, when pinning CPUs,
+# docker-compose.cpus-sim.yml and docker-compose.cpus-ros.yml (cpuset for
+# robocasa and ros). Paths are relative to this directory; GOLEM_ASSETS_DIR and GOLEM_CACHE_DIR relocate the asset and cache
 # mounts. Every bind source must exist (create_host_path: false); the wrappers
 # create only the cache directories.
 #

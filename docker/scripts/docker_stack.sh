@@ -14,7 +14,9 @@
 # (docker-compose.stack.yml): h12_sim.launch.py, or g1_sim.launch.py for the G1.
 # Environment: GOLEM_ROBOT=h12|g1, GOLEM_DISPLAY, GOLEM_SIM_TIMEOUT (s, the
 # wait), GOLEM_USE_RVIZ (true|false; default true when DISPLAY is set),
-# ROS_DOMAIN_ID and the rest of docker_common.sh; GOLEM_PLATFORM=mac from
+# GOLEM_CPU_PINNING, GOLEM_SIM_CPUSET and GOLEM_ROS_CPUSET (the CPUs the RoboCasa
+# sim and ros are pinned to; on a hybrid CPU, the performance and efficiency
+# cores), ROS_DOMAIN_ID and the rest of docker_common.sh; GOLEM_PLATFORM=mac from
 # docker_stack_mac.sh.
 # Exit status: 0 once both containers are started or stopped; 1 when a check
 # fails; otherwise the failing docker command's.
@@ -56,6 +58,8 @@ if [ "$GOLEM_ROBOT" = g1 ]; then
 fi
 check_domain "$SIM"
 configure_display
+# Pin the simulator and ros to their CPUs (RoboCasa only; not Isaac).
+[ "$SIM" != robocasa ] || configure_cpus
 prepare_mounts "$SIM"
 prepare_mounts ros
 if [ "$ACTION" = restart ]; then

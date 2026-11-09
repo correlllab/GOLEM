@@ -11,8 +11,11 @@
 #               (launch_<SERVICE>.sh) with all the arguments, e.g. --headless
 #   --g1/--h12  anywhere: the simulator's robot (not for ros, which serves both)
 # Environment: GOLEM_ROBOT=h12|g1 (simulators), GOLEM_DISPLAY=auto|gui|headless
-# (Linux), ROS_DOMAIN_ID and the rest of docker_common.sh; GOLEM_PLATFORM=mac
-# from docker_run_mac.sh.
+# (Linux), GOLEM_CPU_PINNING, GOLEM_SIM_CPUSET and GOLEM_ROS_CPUSET (the CPUs
+# robocasa and ros are pinned to; on a hybrid CPU, the performance and
+# efficiency cores), ROS_DOMAIN_ID and the rest of docker_common.sh;
+# GOLEM_PLATFORM=mac from docker_run_mac.sh. Prints the robot and the CPUs it
+# pinned to (`cpus: ...`) on stderr.
 # Exit status: 1 when a check fails or the domain-0 prompt is declined;
 # otherwise the container command's.
 set -eo pipefail
@@ -36,6 +39,8 @@ check_domain "$SIM"
 # A --headless for the launcher also skips the desktop mounts.
 for arg in "$@"; do [ "$arg" != --headless ] || export GOLEM_DISPLAY=headless; done
 configure_display
+# Pin the container to its CPUs (robocasa, ros; not the Isaac simulator).
+[ "$SIM" = isaac ] || configure_cpus
 prepare_mounts "$SIM"
 # Never remove an existing container implicitly.
 NAME=$(container_name "$SIM")

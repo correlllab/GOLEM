@@ -70,7 +70,7 @@ container names. They can be invoked from any directory.
 | Script | Verified arguments | Notes |
 |---|---|---|
 | `docker/scripts/docker_build.sh [profile ...]` | `isaac`, `robocasa`, `ros` (no args = all three) | `golem_base` is built first automatically for `robocasa`/`ros`; `isaac` is self-contained. Pins the MJPC build to the `mujoco_mpc` submodule SHA (`MJPC_REF`). The images serve both robots. |
-| `docker/scripts/docker_run.sh <profile> [--restart] [cmd...]` | `isaac`, `robocasa`, `ros`; `--restart` right after the profile replaces an existing container; then optionally `bash` (shell instead of default launcher) or any command; a leading `-flag` (e.g. `--headless`) is forwarded to the default launcher; on simulator profiles (`robocasa`, `isaac`), `--g1` / `--h12` anywhere in the arguments select the robot (`ros` takes no robot flag) | Container names: `golem_ros`, `golem_sim_robocasa`, `golem_sim_isaac`, for either robot. Simulator profiles print `robot: h12` or `robot: g1` before the domain check. |
+| `docker/scripts/docker_run.sh <profile> [--restart] [cmd...]` | `isaac`, `robocasa`, `ros`; `--restart` right after the profile replaces an existing container; then optionally `bash` (shell instead of default launcher) or any command; a leading `-flag` (e.g. `--headless`) is forwarded to the default launcher; on simulator profiles (`robocasa`, `isaac`), `--g1` / `--h12` anywhere in the arguments select the robot (`ros` takes no robot flag) | Container names: `golem_ros`, `golem_sim_robocasa`, `golem_sim_isaac`, for either robot. Simulator profiles print `robot: h12` or `robot: g1` before the domain check. On x86 they pin the container's CPUs (CPU pinning, below). |
 
 Paired startup: `docker/scripts/docker_stack.sh up robocasa|isaac [--headless|--gui] [--g1|--h12]`.
 Use `restart`, `stop`, or `logs` with the same simulator name. It prepares the
@@ -116,6 +116,30 @@ bringup. `golem_ros2_models` installs both robots' models from `CL_Assets`, and
 `golem_upper_ik` loads the G1's only when a node runs with `robot:=g1`. Both
 robots use the same images and container names, so the wrappers run one robot
 at a time on a host.
+
+### CPU pinning (x86 only)
+
+On a hybrid CPU (an Intel P-core/E-core part such as the i7-14700F: P-cores 0-15,
+E-cores 16-27) the sim's physics thread otherwise lands on an E-core about half
+the time, so `docker/scripts/docker_common.sh`'s `configure_cpus` pins the
+`robocasa` container to the P-cores (`cpu_core` in sysfs) and the `ros` container
+to the E-cores (`cpu_atom`): the H1-2 sim ran at 0.86x real time instead of
+0.79x, the G1 at 0.98x instead of 0.92x. `docker_run.sh` (`robocasa`, `ros`),
+`docker_stack.sh up|restart robocasa` and the closed-loop tests (`tests/sim`,
+`tests/g1`, `tests/stack` on RoboCasa) apply it, and print `cpus: sim <list>, ros
+<list>` (or `cpus: not pinned`) beside the `robot:` line; the Isaac simulator and
+the Mac wrappers are never pinned. A pinned service gets `cpuset:` from
+`docker/docker-compose.cpus-sim.yml` or `docker-compose.cpus-ros.yml`, added
+only when pinned, so an unpinned run has no `cpuset` key.
+
+- `GOLEM_CPU_PINNING=0` pins nothing (the explicit lists below included).
+- `GOLEM_SIM_CPUSET` / `GOLEM_ROS_CPUSET` (docker's `--cpuset-cpus` lists, e.g.
+  `0-15`) win over the detection and pin without a hybrid CPU. A list naming a
+  CPU that is not in `/sys/devices/system/cpu/online` fails before any container
+  starts, naming the knob. All three knobs are in `docker/.env.example`.
+- On `ROS_DOMAIN_ID=0`, the real robots' bus (the real G1's laptop `golem_ros`),
+  nothing is pinned and the `ros` container keeps every core; an explicit
+  `GOLEM_ROS_CPUSET` there is refused with a message.
 
 ### mac (`docker/mac`, limited)
 

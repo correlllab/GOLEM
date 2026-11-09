@@ -10,6 +10,9 @@
 #   ROS_DOMAIN_ID            DDS domain, default 193; check_domain refuses 0.
 #   GOLEM_TEST_WALL_TIMEOUT  the checker's wall timeout, s, default 900.
 #   GOLEM_TEST_CAMERAS       the sim's GOLEM_CAMERAS, default 0.
+#   GOLEM_CPU_PINNING, GOLEM_SIM_CPUSET, GOLEM_ROS_CPUSET   the CPUs the RoboCasa sim and the
+#                            ROS containers are pinned to, as the wrappers pin them
+#                            (docker_common.sh's configure_cpus); Isaac is not pinned.
 #   docker/.env and the shell, through docker_common.sh's load_config.
 # Starts three disposable containers (golem-stack-test-<domain>-<pid>-{ros,sim,check}) and leaves
 # their logs, telemetry, the checker's report and run.json in tests/results/stack-<sim>-<case>-*.
@@ -40,6 +43,8 @@ load_config
 check_domain "$SIMULATOR"
 export GOLEM_DISPLAY=headless
 configure_display
+# Pin the RoboCasa sim and the ROS containers to their CPUs, as the wrappers do (not Isaac).
+[[ "$SIMULATOR" != robocasa ]] || configure_cpus
 prepare_mounts "$SIMULATOR"
 prepare_mounts ros
 

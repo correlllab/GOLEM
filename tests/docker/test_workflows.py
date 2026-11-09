@@ -54,6 +54,8 @@ if 'config' in sys.argv:
         docker.chmod(0o755)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(('GOLEM_', 'ROS_', 'G1_'))}
         self.env.update(PATH=str(self.bin) + ':' + os.environ['PATH'], CALLS=str(self.root / 'calls'), DISPLAY='')
+        # The host's own CPUs must not change what a test sees; the pinning tests turn it on.
+        self.env['GOLEM_CPU_PINNING'] = '0'
 
     def run_script(self, path, *args, **env):
         """Run a script of the fixture checkout with `env` added to the environment."""
@@ -455,6 +457,76 @@ if 'config' in sys.argv:
         self.assertIn('target: /home/code/tests/g1, read_only: true', compose)
         self.assertIn('target: /home/code/tests/sim, read_only: true', compose)
         self.assertIn(str(self.root / 'container_cache/sim_tests/build'), compose)
+
+    def hybrid_sysfs(self):
+        """Write a fake sysfs of a hybrid CPU (P-cores 0-15, E-cores 16-27); return its root."""
+        sysfs = self.root / 'sysfs'
+        for path, cpus in (('sys/devices/cpu_core/cpus', '0-15'), ('sys/devices/cpu_atom/cpus', '16-27'),
+                           ('sys/devices/system/cpu/online', '0-27')):
+            (sysfs / path).parent.mkdir(parents=True, exist_ok=True)
+            (sysfs / path).write_text(cpus + '\n')
+        return str(sysfs)
+
+    def pin_overlays(self, argv):
+        """Return the names of the CPU pinning overlays among a compose call's -f files."""
+        return sorted(Path(f).name for f in self.compose_files(argv) if 'cpus' in Path(f).name)
+
+    def test_wrappers_pin_robocasa_and_ros_on_a_hybrid_cpu(self):
+        """docker_run.sh robocasa and ros and docker_stack.sh up robocasa add both pinning overlays to every compose call."""
+        pinned = ['docker-compose.cpus-ros.yml', 'docker-compose.cpus-sim.yml']
+        env = dict(GOLEM_CPU_PINNING='1', GOLEM_SYSFS_ROOT=self.hybrid_sysfs())
+        for args in (('docker/scripts/docker_run.sh', 'robocasa', '--headless'),
+                     ('docker/scripts/docker_run.sh', 'ros'),
+                     ('docker/scripts/docker_stack.sh', 'up', 'robocasa', '--headless'),
+                     ('docker/scripts/docker_stack.sh', 'restart', 'robocasa', '--g1', '--headless')):
+            with self.subTest(args=args):
+                (self.root / 'calls').unlink(missing_ok=True)
+                r = self.run_script(*args, **env)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn('cpus: sim 0-15, ros 16-27', r.stderr)
+                calls = [c for c in self.compose_calls() if 'config' not in c]
+                self.assertTrue(calls)
+                for call in calls:
+                    self.assertEqual(self.pin_overlays(call), pinned, call)
+
+    def test_wrappers_do_not_pin_isaac_the_mac_or_domain_zero(self):
+        """The Isaac simulator, the Mac wrappers and the real robots' domain 0 get no pinning overlay."""
+        env = dict(GOLEM_CPU_PINNING='1', GOLEM_SYSFS_ROOT=self.hybrid_sysfs())
+        cases = ((('docker/scripts/docker_run.sh', 'isaac', '--headless'), {}, ''),
+                 (('docker/scripts/docker_stack.sh', 'up', 'isaac', '--headless'), {}, ''),
+                 (('docker/mac/scripts/docker_stack_mac.sh', 'up', 'robocasa'), {'TEST_MAC': '1'}, ''),
+                 (('docker/scripts/docker_run.sh', 'ros'), {'ROS_DOMAIN_ID': '0'}, 'y\n'))
+        for args, extra, stdin in cases:
+            with self.subTest(args=args):
+                (self.root / 'calls').unlink(missing_ok=True)
+                r = self.run_with_input(*args, stdin=stdin, **env, **extra)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertNotIn('sim 0-15', r.stderr)
+                calls = [c for c in self.compose_calls() if 'config' not in c]
+                self.assertTrue(calls)
+                self.assertEqual([self.pin_overlays(c) for c in calls], [[]] * len(calls))
+
+    def test_domain_zero_refuses_an_explicit_ros_cpuset_before_any_container(self):
+        """docker_run.sh ros on domain 0 with GOLEM_ROS_CPUSET fails, naming the knob, and starts nothing."""
+        r = self.run_with_input('docker/scripts/docker_run.sh', 'ros', stdin='y\n', ROS_DOMAIN_ID='0',
+                                GOLEM_CPU_PINNING='1', GOLEM_ROS_CPUSET='16-27', GOLEM_SYSFS_ROOT=self.hybrid_sysfs())
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('GOLEM_ROS_CPUSET', r.stderr)
+        self.assertFalse(self.run_calls())
+
+    def test_sim_test_setup_pins_both_containers(self):
+        """sim_test_setup adds the pinning overlays, so every container of a closed-loop test is pinned."""
+        self.install_copy('tests/sim/common.sh')
+        out = self.root / 'pinned out'
+        r = subprocess.run(['bash', '-c', 'set -eo pipefail; source "$1"; sim_test_setup h12 sim t pin pin 199; '
+                            'sim_test_build_ros', 'bash', str(self.root / 'tests/sim/common.sh')], cwd='/tmp',
+                           env=dict(self.env, OUT=str(out), GOLEM_CPU_PINNING='1',
+                                    GOLEM_SYSFS_ROOT=self.hybrid_sysfs()), text=True, capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        runs = self.run_calls()
+        self.assertTrue(runs)
+        for call in runs:
+            self.assertEqual(self.pin_overlays(call), ['docker-compose.cpus-ros.yml', 'docker-compose.cpus-sim.yml'])
 
     def test_sim_test_setup_refuses_domain_zero_and_unknown_robots(self):
         """sim_test_setup exits 2 for domain 0 or an unknown robot, before compose runs."""

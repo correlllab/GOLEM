@@ -21,7 +21,7 @@ def create_node():
     from rclpy.qos import qos_profile_sensor_data
     from rclpy.time import Time
     from rclpy.duration import Duration
-    from sensor_msgs.msg import Image, CameraInfo
+    from sensor_msgs.msg import Image, CompressedImage, CameraInfo
     from geometry_msgs.msg import PoseStamped
     from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
     from cv_bridge import CvBridge
@@ -32,6 +32,7 @@ def create_node():
             super().__init__("aruco_localizer")
             defaults = {
                 "image_topic": "/realsense/head/color/image_raw",
+                "image_transport": "raw",
                 "camera_info_topic": "/realsense/head/color/camera_info",
                 "target_frame": "pelvis", "layout_path": "",
                 "image_rectified": False, "max_reprojection_px": 2.0,
@@ -44,6 +45,8 @@ def create_node():
             for key, value in defaults.items():
                 self.declare_parameter(key, value)
             self.settings = {key: self.get_parameter(key).value for key in defaults}
+            if self.settings["image_transport"] not in ("raw", "compressed"):
+                raise ValueError("image_transport must be raw or compressed")
             for name in ("max_reprojection_px", "min_marker_area_px", "stale_timeout_sec", "max_observation_age_sec",
                          "min_ambiguity_gap_px", "max_prior_translation_m", "max_prior_rotation_rad"):
                 value = self.settings[name]
@@ -78,13 +81,19 @@ def create_node():
             self.processed_stamp = None
             self.last_clock_ns = self.get_clock().now().nanoseconds
             self.prior = None
+            self.prior_target = None
             self.prior_key = None
             self.active_calibration_key = None
             self.valid = False
             self.reason = "waiting for synchronized image and calibration"
             self.metrics = {}
             self.create_subscription(CameraInfo, self.settings["camera_info_topic"], self.on_info, qos_profile_sensor_data)
-            self.create_subscription(Image, self.settings["image_topic"], self.on_image, qos_profile_sensor_data)
+            compressed = self.settings["image_transport"] == "compressed"
+            image_topic = self.settings["image_topic"]
+            if compressed:
+                image_topic = image_topic.rstrip("/") + "/compressed"
+            self.create_subscription(CompressedImage if compressed else Image,
+                                     image_topic, self.on_image, qos_profile_sensor_data)
             self.create_timer(.1, self.heartbeat)
 
         def on_info(self, info):
@@ -115,6 +124,7 @@ def create_node():
             self.pending_tf.clear()
             if discard_prior:
                 self.prior, self.prior_key = None, None
+                self.prior_target = None
                 self.active_calibration_key = None
             self.metrics = quality or {}
             self.heartbeat()
@@ -149,7 +159,21 @@ def create_node():
             self.processed_stamp = stamp
             started = time.monotonic()
             try:
-                rgb = self.bridge.imgmsg_to_cv2(image, desired_encoding="rgb8")
+                if self.settings["image_transport"] == "compressed":
+                    import cv2
+                    encoding = image.format.strip().lower()
+                    parts = encoding.split(";")
+                    if not (encoding in ("jpeg", "jpg") or
+                            (len(parts) == 2 and parts[0].strip() in ("rgb8", "bgr8") and
+                             parts[1].split() in (["jpeg", "compressed", "bgr8"],
+                                                  ["jpeg", "compressed", "rgb8"]))):
+                        raise ValueError("compressed RGB input requires JPEG color format")
+                    pixels = cv2.imdecode(np.frombuffer(image.data, dtype=np.uint8), cv2.IMREAD_COLOR)
+                    if pixels is None:
+                        raise ValueError("invalid JPEG image data")
+                    rgb = cv2.cvtColor(pixels, cv2.COLOR_BGR2RGB)
+                else:
+                    rgb = self.bridge.imgmsg_to_cv2(image, desired_encoding="rgb8")
                 if self.settings["image_rectified"]:
                     projection = np.asarray(info.p, dtype=float).reshape(3, 4)
                     if not np.allclose(projection[:, 3], 0):
@@ -163,15 +187,10 @@ def create_node():
                 if calibration_key != self.active_calibration_key:
                     self.pending_tf.clear()
                     self.prior, self.prior_key = None, None
+                    self.prior_target = None
                     self.active_calibration_key = calibration_key
                     self.valid, self.reason = False, "camera calibration changed; waiting for observation TF"
                 corners, ids, _ = self.estimator.detect(rgb)
-                # A pending pair or missing TF does not erase the last accepted
-                # geometry. Its original timestamp still bounds prior lifetime.
-                prior = (self.prior if self.last_stamp is not None and
-                         0 < (stamp-self.last_stamp)/1e9 <= self.settings["stale_timeout_sec"] else None)
-                optical, metrics = self.estimator.estimate(corners, ids, k, d, prior)
-                pose_distance(optical, optical)
             except Exception as exc:
                 # Rejected branches cannot replace or refresh the accepted
                 # anchor, nor turn the next jump into an unguarded cold start.
@@ -180,23 +199,24 @@ def create_node():
                                 quality=getattr(exc, "quality", None))
                 return
             self.input_metrics["processing_wall_sec"] = time.monotonic() - started
-            self.pending_tf[stamp] = (image.header, optical, metrics, calibration_key, rgb, k, d, corners, ids)
+            self.pending_tf[stamp] = (image.header, calibration_key, rgb, k, d, corners, ids)
             while len(self.pending_tf) > 10:
                 self.pending_tf.popitem(last=False)
             self.heartbeat()
 
         def retry_pending_tf(self, now):
             for stamp, observation in list(self.pending_tf.items()):
-                header, optical, metrics, calibration_key, rgb, k, d, corners, ids = observation
+                header, calibration_key, rgb, k, d, corners, ids = observation
                 if calibration_key != self.active_calibration_key:
                     self.pending_tf.pop(stamp)
                     continue
-                age = (now - stamp) / 1e9
-                if (age < 0 or age > self.settings["max_observation_age_sec"] or
-                        (self.last_stamp is not None and stamp <= self.last_stamp)):
+                if self.last_stamp is not None and stamp <= self.last_stamp:
                     self.pending_tf.pop(stamp)
-                    if age < 0 or age > self.settings["max_observation_age_sec"]:
-                        self.valid, self.reason = False, "pending TF observation expired"
+                    continue
+                age = (now - stamp) / 1e9
+                if age < 0 or age > self.settings["max_observation_age_sec"]:
+                    self.pending_tf.pop(stamp)
+                    self.valid, self.reason = False, "pending TF observation expired"
                     continue
                 try:
                     # Never block the executor that must receive the missing TF.
@@ -204,15 +224,33 @@ def create_node():
                         self.settings["target_frame"], header.frame_id,
                         Time.from_msg(header.stamp), timeout=Duration(seconds=0.0))
                     t, q = tf.transform.translation, tf.transform.rotation
-                    target = transform_matrix([t.x, t.y, t.z], [q.x, q.y, q.z, q.w]) @ optical
+                    target_from_camera = transform_matrix([t.x, t.y, t.z], [q.x, q.y, q.z, q.w])
                 except Exception as exc:
                     self.input_metrics["last_tf_error"] = str(exc)
-                    # A newer, geometrically accepted frame waiting for TF does
-                    # not revoke the still-fresh, previously transformed frame.
+                    # Waiting for exact-time TF does not revoke a fresh accepted pose.
                     if not self.valid:
                         self.reason = f"observation TF pending: {exc}"
                     continue
                 self.pending_tf.pop(stamp)
+                try:
+                    # Compare board motion in one target frame, not two moving
+                    # camera frames. Both poses passed to the estimator are C_now_B.
+                    prior = None
+                    if (self.prior_target is not None and self.prior_key == calibration_key and
+                            self.last_stamp is not None and
+                            0 < (stamp-self.last_stamp)/1e9 <= self.settings["stale_timeout_sec"] and
+                            0 <= (now-self.last_stamp)/1e9 <= self.settings["stale_timeout_sec"]):
+                        prior = np.linalg.inv(target_from_camera) @ self.prior_target
+                    optical, metrics = self.estimator.estimate(corners, ids, k, d, prior)
+                    pose_distance(optical, optical)
+                    target = target_from_camera @ optical
+                except Exception as exc:
+                    # A rejection neither advances the anchor nor leaves queued
+                    # observations able to resurrect it in this retry pass.
+                    self.invalidate(f"observation rejected: {exc}",
+                                    discard_prior=not isinstance(exc, PoseRejected),
+                                    quality=getattr(exc, "quality", None))
+                    return
                 metrics["tf_wait_age_sec"] = age
                 self.accept_observation(header, optical, target, metrics, calibration_key, rgb, k, d, corners, ids)
 
@@ -221,6 +259,7 @@ def create_node():
             # Both output topics retain the original camera observation timestamp.
             self.last_stamp, self.last_frame = stamp, header.frame_id
             self.prior, self.metrics, self.valid = optical, metrics, True
+            self.prior_target = target
             self.prior_key = calibration_key
             self.reason = "board observation valid"
             self.optical_pub.publish(self.pose_message(optical, header, header.frame_id))
@@ -242,12 +281,15 @@ def create_node():
             age = None if self.last_stamp is None else (now.nanoseconds-self.last_stamp)/1e9
             if age is not None and age > self.settings["stale_timeout_sec"]:
                 self.prior, self.prior_key = None, None
+                self.prior_target = None
             if self.valid and (clock_reset or age < 0 or age > self.settings["stale_timeout_sec"]):
                 self.valid, self.reason, self.prior = False, "stale observation or clock reset", None
+                self.prior_target = None
             if clock_reset:
                 # Clear timestamp-keyed caches across simulation clock epochs.
                 self.last_stamp, self.processed_stamp = None, None
                 self.prior, self.prior_key = None, None
+                self.prior_target = None
                 self.metrics = {}
                 self.active_calibration_key = None
                 self.valid, self.reason = False, "clock reset; waiting for a new observation"
@@ -280,7 +322,8 @@ def main(args=None):
     if "--help" in (sys.argv[1:] if args is None else args):
         print("aruco_localizer [--ros-args -p use_sim_time:=true ...]\n"
               "Independent image/CameraInfo -> /perception/pegboard/pose (pelvis).\n"
-              "Parameters: image_topic, camera_info_topic, target_frame, layout_path,\n"
+              "Parameters: image_topic (base topic), image_transport (raw|compressed; default raw),\n"
+              "camera_info_topic, target_frame, layout_path,\n"
               "image_rectified, max_reprojection_px, min_marker_area_px, stale_timeout_sec,\n"
               "max_observation_age_sec, min_ambiguity_gap_px, max_prior_translation_m,\n"
                "max_prior_rotation_rad, publish_annotated, publish_visualization,\n"

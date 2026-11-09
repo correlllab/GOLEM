@@ -22,6 +22,7 @@ from mujoco_env import ElasticBand
 from mujoco_ros_bridge import RosSensorBridge
 from sim_names import NameResolver
 from sim_timing import RealtimePacer, LoopTimings
+from policy_initialization import POLICY_CHOICES, load_leg_pose, make_foot_placer, sole_gaps
 from unitree_interface import SimInterface
 
 # Viewer free-camera spawn pose, anchored to the robot so the passive viewer
@@ -132,7 +133,7 @@ def _draw_band(handle, anchor, body_pos):
 
 
 def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False,
-             peg=None, source_hole=None):
+             peg=None, source_hole=None, lowerbody=None, record=None, record_fps=20):
     """Launch a RoboCasa task env around the H1-2 and run the shared-MjData loop.
 
     Builds the env with robots='H1_2' and steps the env's *own* MjData with our
@@ -145,6 +146,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     drives it; RoboCasa's _check_success/reward/lang are read off the shared env.
     """
 
+    # Validate requested files before constructing any DDS/ROS bridge.
+    policy_legs = load_leg_pose(lowerbody) if lowerbody is not None else None
     create_kwargs = {}
     if peg is not None or source_hole is not None:
         if peg_in_hole_env.canonical_task(task) is None:
@@ -173,18 +176,32 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     data = env.sim.data._data
     resolver = NameResolver(model)  # ROS<->sim name map for the DDS / sensor bridges
 
-    # Clean, contact-free initial state. RoboCasa's zero-action settling loop
-    # perturbs the pose during reset, so restore a baked-in bent-knee stance,
-    # zero all velocities, and re-place the pelvis. Upper-body motors remain at
-    # zero. place_robot_collision_free auto-fits floor clearance AND backs the
+    # RoboCasa's zero-action settling loop perturbs the pose during reset, so
+    # restore the baked stance (or explicitly selected policy legs), zero
+    # velocities, and re-place the pelvis. Upper-body motors remain at zero.
+    # Default placement clears the floor by 2 cm; policy placement grounds soles
+    # without changing task orientation. Collision-free placement backs the
     # base away (the robot's -x) until every robot geom is GOLEM_SPAWN_MARGIN
     # (unset: the env's spawn_margin, else 0.20 m) from any non-floor geom, in
     # the spawn pose and in the sagged pose the unpowered upper body falls into,
     # keeping the widest-gap spot if it can't reach that.
     try:
         init_qpos = _initial_motor_qpos()
+        placement_kwargs = {}
+        if policy_legs is not None:
+            if (len(resolver.motor_qpos) != NUM_MOTORS or
+                    len(set(resolver.motor_qpos[:NUM_LEG_JOINTS])) != NUM_LEG_JOINTS):
+                raise ValueError("policy initialization requires 12 distinct name-resolved leg joints")
+            init_qpos[:NUM_LEG_JOINTS] = policy_legs
+            foot_placer, feet, floors = make_foot_placer(env, h1_2_robosuite.place_robot_freejoint)
+            placement_kwargs = {"clearance": 0.0, "placer": foot_placer}
         data.qpos[resolver.motor_qpos] = init_qpos
         data.qvel[:] = 0.0
+        if policy_legs is not None:
+            data.qacc[:] = 0.0
+            data.qacc_warmstart[:] = 0.0
+            data.act[:] = 0.0
+            data.ctrl[:] = 0.0
         # GOLEM_SPAWN_BACKOFF backs the robot further off the counter into open
         # floor (default 0 = at the counter for manipulation). Set ~1.0 for nav2,
         # which needs the robot's start cell to be free to plan.
@@ -209,9 +226,27 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             # Motors stay unpowered until the first command, so the margin must
             # also hold once the torso and arms sag.
             poses=_limp_upper_body_poses(model, resolver.motor_qpos, init_qpos),
+            **placement_kwargs,
         )
-        print("[h12_mujoco] initial stance from baked-in sim defaults")
+        if policy_legs is None:
+            print("[h12_mujoco] initial stance from baked-in sim defaults")
+        else:
+            mujoco.mj_forward(model, data)
+            data.qacc[:] = 0.0
+            data.qacc_warmstart[:] = 0.0
+            gaps = sole_gaps(model, data, feet, floors)
+            pelvis_body = resolver.body_id("pelvis")
+            print(f"[h12_mujoco] initial legs from {lowerbody}; upper 15 motors unchanged; "
+                  f"task pelvis orientation preserved (not aligned to toes); "
+                  f"sole gaps left={gaps['left']:.9f} m right={gaps['right']:.9f} m")
+            print(f"[h12_mujoco] pelvis world xyz={data.xpos[pelvis_body].round(6)} m; "
+                  f"quaternion wxyz={data.xquat[pelvis_body].round(6)}")
+            if max(gaps.values()) > 1e-4:
+                print("[h12_mujoco] unequal sole heights: fixed pelvis orientation and faithful "
+                      "policy angles cannot put both feet on the floor by Z translation alone")
     except Exception as e:
+        if policy_legs is not None:
+            raise ValueError(f"policy initialization failed for {lowerbody}: {e}") from e
         print(f"[h12_mujoco] clean reset skipped: {e}")
 
     # Elastic-band balance tether on the torso: holds the free-floating biped
@@ -260,6 +295,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # ctrl, render) while the main loop runs mj_step. All MjData access is
     # serialized through sim_lock.
     sim_lock = threading.Lock()
+    recorder = None
     pfx = env.robots[0].robot_model.naming_prefix   # "robot0_"
 
     # Body carrying the pelvis free joint — its world pose is ground-truth base
@@ -448,9 +484,14 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         viewer_thread = threading.Thread(target=_viewer_loop, daemon=True, name="viewer_sync")
         viewer_thread.start()
 
-    timings.reset(float(data.time))
-    pacer = RealtimePacer(model.opt.timestep)
     try:
+        if record is not None:
+            from video_recording import VideoRecorder
+            recorder = VideoRecorder(model, env, record, record_fps)
+            with sim_lock:
+                recorder.capture(data, band)
+        timings.reset(float(data.time))
+        pacer = RealtimePacer(model.opt.timestep)
         while True:
             if viewer and not handle.is_running():
                 break
@@ -506,6 +547,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                     task_start = timings.start()
                     env.update_state()              # REQUIRED before _check_success
                     timings.stop("task_update", task_start)
+                if recorder is not None:
+                    recorder.capture(data, band)
             # tick owns short sensor capture locks; encoding/publication cannot
             # block the DDS state reader. No physics step occurs inside tick.
             ros_bridge.tick()                       # /clock + camera + lidar + imu
@@ -519,6 +562,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             pacer.wait()
             timings.maybe_report(float(data.time))
     finally:
+        if recorder is not None:
+            recorder.close()
         viewer_stop.set()
         if viewer_thread is not None:
             viewer_thread.join()
@@ -627,11 +672,27 @@ if __name__ == "__main__":
     parser.add_argument("--style", type=int, default=None, help="RoboCasa kitchen style id")
     parser.add_argument("--seed", type=int, default=None, help="episode seed")
     parser.add_argument("--peg", default=None, help="PegInHole catalog peg ID (default cylinder_1)")
+    parser.add_argument("--lowerbody", choices=POLICY_CHOICES, default=None,
+                        help="Initialize legs from policy YAML and ground soles without rotating pelvis; "
+                             "omitting preserves baked pose and 2 cm floor clearance")
     parser.add_argument("--source-hole", default=None,
                         help="PegInHole initial source hole ID (default cylinder_1)")
     parser.add_argument("--timing", action="store_true",
-                        help="Log real-time factor and stage mean/max timings every 5 seconds")
+                         help="Log real-time factor and stage mean/max timings every 5 seconds")
+    parser.add_argument("--record", metavar="PATH", help="Opt-in WebM and evaluation-only JSONL recording")
+    parser.add_argument("--record-fps", type=float, default=20,
+                        help="Recording frames per simulation second (default 20; not wall time)")
     args = parser.parse_args()
+    if args.record is not None:
+        import signal
+        from video_recording import recording_fps
+        try:
+            recording_fps(args.record_fps)
+        except ValueError as exc:
+            parser.error(str(exc))
+        def _stop_recording(signum, frame):
+            raise KeyboardInterrupt
+        signal.signal(signal.SIGTERM, _stop_recording)
     if ((args.peg is not None or args.source_hole is not None) and
             (args.task is None or peg_in_hole_env.canonical_task(args.task) is None)):
         parser.error("--peg and --source-hole require --task PegInHole")
@@ -645,4 +706,5 @@ if __name__ == "__main__":
 
     sim_loop(task, viewer=not args.headless,
              layout=args.layout, style=args.style, seed=args.seed, timing=args.timing,
-             peg=args.peg, source_hole=args.source_hole)
+               peg=args.peg, source_hole=args.source_hole, lowerbody=args.lowerbody,
+               record=args.record, record_fps=args.record_fps)

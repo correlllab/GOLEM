@@ -2,6 +2,7 @@
 
 import ast
 import copy
+import json
 from concurrent.futures import Future, ThreadPoolExecutor
 import threading
 import time
@@ -106,6 +107,26 @@ def test_catalog_geometry_tip_contact_and_destination():
     np.testing.assert_allclose(pose_to_matrix(candidate.pose), board @ g.grasp, atol=1e-7)
 
 
+@pytest.mark.parametrize('arm', ['left', 'right'])
+def test_top_down_matches_workspace_analysis_axes_and_contact(arm):
+    catalog = MarkerCatalog(CATALOG)
+    report = ROOT / 'core_ws/src/h12_ros2_controller/docs/workspace_analysis/head_camera.json'
+    sample = json.loads(report.read_text())['boxes'][f'pitch90_{arm}']
+    grasp_rotation = Rotation.from_euler('xyz', sample['rpy_deg'], degrees=True).as_matrix()
+    # G axes in grasp_frame: closing=+Y, lateral=+Z, approach=+X.
+    grasp_to_g = np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0]])
+    g = catalog.geometry('cylinder_1', 'cylinder_3', arm, top_down=True)
+    np.testing.assert_allclose(g.grasp[:3, :3], grasp_rotation @ grasp_to_g, atol=1e-14)
+    np.testing.assert_allclose(g.grasp[:3, 2], [0, 0, -1], atol=1e-14)
+    contact = g.grasp @ [0, 0, .1146, 1]
+    np.testing.assert_allclose(contact[:3], g.source_tip[:3, 3] + [0, 0, .04])
+    np.testing.assert_allclose(g.approach[:3, 3] - g.grasp[:3, 3], [0, 0, .05], atol=1e-14)
+    # Preserve the non-top-down calibrated default, for both arms.
+    legacy = catalog.geometry('cylinder_1', 'cylinder_3', arm)
+    np.testing.assert_allclose(legacy.grasp[:3, :3], Rotation.from_euler(
+        'xyz', [180, 0, -60], degrees=True).as_matrix())
+
+
 def test_all_catalog_shapes_use_actual_polygon_not_row_scale():
     catalog = MarkerCatalog(CATALOG)
     for shape in catalog.catalog['variants']:
@@ -144,8 +165,9 @@ def test_present_peg_source_alias_and_unsupported_grasp():
 
 @pytest.mark.parametrize('failure', ['missing', 'invalid', 'stale', 'future', 'frame',
                                       'quaternion', 'nan', 'stamp_mismatch', 'clock_reset'])
-def test_observation_fail_closed(failure):
-    cache = BoardObservation(.5)
+@pytest.mark.parametrize('use_sim_time', [False, True])
+def test_observation_fail_closed(failure, use_sim_time):
+    cache = BoardObservation(.5, use_sim_time=use_sim_time)
     pose, diag = observation()
     now = 10 * 10**9
     if failure == 'invalid':
@@ -169,8 +191,9 @@ def test_observation_fail_closed(failure):
         cache.matrix(now)
 
 
-def test_explicit_invalidation_overrides_still_fresh_pose():
-    cache = BoardObservation(.5)
+@pytest.mark.parametrize('use_sim_time', [False, True])
+def test_explicit_invalidation_overrides_still_fresh_pose(use_sim_time):
+    cache = BoardObservation(.5, use_sim_time=use_sim_time)
     pose, diag = observation()
     cache.on_diagnostics(diag)
     cache.on_pose(pose)
@@ -179,6 +202,49 @@ def test_explicit_invalidation_overrides_still_fresh_pose():
     cache.on_diagnostics(invalid)
     with pytest.raises(ValueError, match='invalid'):
         cache.matrix(10 * 10**9)
+
+
+@pytest.mark.parametrize('failure,reason', [
+    ('invalid', 'observation invalidated by invalid pose or diagnostics'),
+    ('observation_age', 'stale observation ROS age'),
+    ('diagnostic_age', 'stale diagnostic ROS age'),
+    ('wall_age', 'stale monotonic wall receipt age'),
+    ('future_observation', 'observation timestamp is in the future'),
+    ('future_diagnostic', 'diagnostic timestamp is in the future'),
+    ('pending_pose', 'pending future observation timestamp'),
+    ('pending_diagnostic', 'pending future diagnostic timestamp'),
+])
+def test_observation_rejection_explains_existing_condition(failure, reason, monkeypatch):
+    wall = [100.0]
+    monkeypatch.setattr('h12_skills.marker_targets.time.monotonic', lambda: wall[0])
+    cache = BoardObservation(.5)
+    accept(cache, 10 * 10**9)
+    now = 10 * 10**9
+    if failure == 'invalid':
+        _, diag = observation(valid=False)
+        cache.on_diagnostics(diag)
+    elif failure == 'observation_age':
+        now += 501_000_000
+    elif failure == 'diagnostic_age':
+        # Isolate the existing independent diagnostic-age check.
+        stamp, matrix, _, received = cache._accepted
+        cache._accepted = (stamp, matrix, stamp - 600_000_000, received)
+    elif failure == 'wall_age':
+        wall[0] += .501
+    elif failure == 'future_observation':
+        now -= 1
+    elif failure == 'future_diagnostic':
+        stamp, matrix, _, received = cache._accepted
+        cache._accepted = (stamp, matrix, stamp + 1, received)
+    elif failure == 'pending_pose':
+        pose, _ = observation_ns(now + 1)
+        cache.on_pose(pose)
+    else:
+        _, diag = observation_ns(now + 1)
+        cache.on_diagnostics(diag)
+    with pytest.raises(ValueError) as exc:
+        cache.matrix(now)
+    assert str(exc.value) == 'board localization invalid, stale, future, or clock reset: ' + reason
 
 
 class Harness(GraspSkill, PickPlaceSkill):
@@ -281,8 +347,10 @@ def test_marker_grasp_uses_existing_schema_without_extracting():
 
 
 @pytest.mark.parametrize('failure', ['move', 'cancel', 'timeout', 'stale', 'invalid', 'jump'])
-def test_abort_before_close_and_never_release(failure, monkeypatch):
+@pytest.mark.parametrize('top_down', [False, True])
+def test_abort_before_close_and_never_release(failure, top_down, monkeypatch):
     node, gh = Harness(), request()
+    gh.request.top_down = top_down
     original = node.move_frame_to
 
     def fail(frame, pose, **kwargs):
@@ -311,9 +379,95 @@ def test_abort_before_close_and_never_release(failure, monkeypatch):
     assert node._last_grasp_outcome is None
 
 
-@pytest.mark.parametrize('failure', ['unknown', 'absent', 'shape', 'servo', 'override', 'workspace'])
-def test_rejects_before_motion_or_gripper(failure):
+@pytest.mark.parametrize('failure,reason', [
+    ('invalid', 'board localization invalid, stale, future, or clock reset: '
+                'observation invalidated by invalid pose or diagnostics'),
+    ('cancel', 'user cancellation requested'),
+    ('timeout', 'skill deadline expired'),
+    ('halt', 'arm halted: hardware stop'),
+    ('workspace', 'target outside configured arm workspace; no motion permitted'),
+    ('move', None),
+])
+def test_marker_move_reports_first_guard_cause(failure, reason):
+    node, gh = Harness(), request(False)
+    run = SimpleNamespace(remaining=lambda: 30.0)
+    geometry = node._marker_catalog.geometry('cylinder_1', 'cylinder_3', 'left')
+
+    def fail(frame, pose, **kwargs):
+        guard = kwargs['outer_gh']
+        if failure == 'move':
+            return False  # No guard rejection: retain controller failure wording.
+        if failure == 'invalid':
+            _, diag = observation_ns(node.now_ns, valid=False)
+            node._board_observation.on_diagnostics(diag)
+        elif failure == 'cancel':
+            gh.is_cancel_requested = True
+        elif failure == 'timeout':
+            run.remaining = lambda: 0.0
+        elif failure == 'halt':
+            node._arm_halt_reason = 'hardware stop'
+        else:
+            node.board[0, 3] += .04  # Below jump limit, outside arm workspace.
+            node._marker_catalog.profile['arms']['left']['workspace_max_m'][0] = .1
+            node.refresh()
+        assert guard.is_cancel_requested
+        assert guard.reason == reason
+        node._arm_halt_reason = 'later stop'
+        assert guard.is_cancel_requested
+        assert guard.reason == reason
+        return False
+
+    node.move_frame_to = fail
+    expected = (f'pregrasp canceled: {reason}' if reason is not None
+                else 'pregrasp waypoint not reached')
+    with pytest.raises(ValueError) as exc:
+        node._marker_move('approach', geometry, run, gh, 'pregrasp', planned=True)
+    assert str(exc.value) == expected + '; no subsequent close or release'
+    assert node.commands == []
+
+
+def test_pregrasp_guard_failure_never_closes_or_releases():
     node, gh = Harness(), request()
+
+    def fail(frame, pose, **kwargs):
+        _, diag = observation_ns(node.now_ns, valid=False)
+        node._board_observation.on_diagnostics(diag)
+        assert kwargs['outer_gh'].is_cancel_requested
+        return False
+
+    node.move_frame_to = fail
+    result = node._exec_pick_place(gh)
+    assert not result.success
+    assert result.message == (
+        'pregrasp canceled: board localization invalid, stale, future, or clock reset: '
+        'observation invalidated by invalid pose or diagnostics; no subsequent close or release'
+        '; no automatic retreat or release')
+    assert node.commands == ['position']
+    assert node._last_grasp_outcome is None
+
+
+def test_valid_updated_observation_does_not_cancel_motion():
+    node, gh = Harness(), request(False)
+    original = node.move_frame_to
+
+    def move(frame, pose, **kwargs):
+        guard = kwargs['outer_gh']
+        assert not guard.is_cancel_requested
+        node.refresh()
+        assert not guard.is_cancel_requested
+        assert guard.reason is None
+        return original(frame, pose, **kwargs)
+
+    node.move_frame_to = move
+    assert node._exec_grasp(gh).success
+    assert node.commands == ['position', 'force', 'close']
+
+
+@pytest.mark.parametrize('failure', ['unknown', 'absent', 'shape', 'servo', 'workspace'])
+@pytest.mark.parametrize('top_down', [False, True])
+def test_rejects_before_motion_or_gripper(failure, top_down):
+    node, gh = Harness(), request()
+    gh.request.top_down = top_down
     if failure == 'unknown':
         gh.request.place_target = 'unknown'
     elif failure == 'absent':
@@ -322,13 +476,135 @@ def test_rejects_before_motion_or_gripper(failure):
         gh.request.place_target = 'triangle_3'
     elif failure == 'servo':
         gh.request.visual_servo = True
-    elif failure == 'override':
-        gh.request.top_down = True
     else:
         node.board[0, 3] += 2
         node.refresh()
     assert not node._exec_pick_place(gh).success
     assert not node.moves and not node.commands
+
+
+@pytest.mark.parametrize('arm', ['left', 'right'])
+@pytest.mark.parametrize('board_rpy', [[0, 0, 0], [2, -3, 3], [-3, 2, -3]])
+@pytest.mark.parametrize('pick_place,minimum', [(False, 0.0), (False, 90.0), (True, None)])
+def test_explicit_top_down_is_geometric_and_controls_only_requested_arm(
+        arm, minimum, board_rpy, pick_place):
+    node, gh = Harness(), request(pick_place)
+    gh.request.arm, gh.request.top_down = arm, True
+    if not pick_place:
+        gh.request.min_downward_pitch_deg = minimum
+    node.board[:3, 3] = [.58, .225 if arm == 'left' else -.225, -.05]
+    node.board[:3, :3] = Rotation.from_euler('xyz', board_rpy, degrees=True).as_matrix()
+    node.gripper_clis[arm] = 'position'
+    node.gripper_force_clis[arm] = 'force'
+    node.gripper_close_clis[arm] = 'close'
+    geometry = node._marker_catalog.geometry(
+        'cylinder_1', 'cylinder_3' if pick_place else 'cylinder_1', arm, top_down=True)
+    node.current = matrix_to_pose(geometry.target_matrix(node.board, 'approach'))
+    node.refresh()
+    execute = node._exec_pick_place if pick_place else node._exec_grasp
+    result = execute(gh)
+    assert result.success, result.message
+    assert node.commands == ['position', 'force', 'close']
+    assert all(frame == f'{arm}_graspgenx_frame' for frame, _, _ in node.moves)
+    np.testing.assert_allclose(pose_to_matrix(node.current),
+                               geometry.target_matrix(node.board, 'preinsert' if pick_place else 'grasp'),
+                               atol=1e-7)
+    np.testing.assert_allclose(pose_to_matrix(node.current)[:3, :3], geometry.grasp[:3, :3], atol=1e-14)
+    commands = node.commands.copy()
+    assert not execute(gh).success
+    assert node.commands == commands
+
+
+@pytest.mark.parametrize('fault', ['tilted_profile', 'invalid_minimum', 'servo'])
+def test_top_down_rejects_nonvertical_or_ai_before_any_command(fault):
+    node, gh = Harness(), request(False)
+    gh.request.top_down = True
+    if fault == 'tilted_profile':
+        node._marker_catalog.profile['top_down_rpy_pelvis_deg']['left'] = [179.999, 0, 30]
+    elif fault == 'invalid_minimum':
+        gh.request.min_downward_pitch_deg = float('nan')
+    else:
+        gh.request.visual_servo = True
+    result = node._exec_grasp(gh)
+    assert not result.success
+    assert not node.commands and not node.moves
+
+
+def test_known_left_fixture_transform_remains_outside_right_arm_admission():
+    catalog = MarkerCatalog(CATALOG)
+    board = np.eye(4)
+    # Reference fixture world (.5,.185,.95), pelvis (-.134,-.04,.99);
+    # runtime admission always uses the actual stamped board observation.
+    board[:3, 3] = [.634, .225, -.04]
+    geometry = catalog.geometry('cylinder_1', 'cylinder_1', 'right', top_down=True)
+    np.testing.assert_allclose(geometry.target_matrix(board, 'grasp')[:3, 3],
+                               [.5061622983, .2375282240, .1176], atol=1e-10)
+    with pytest.raises(ValueError, match='outside configured arm workspace'):
+        catalog.check_workspace(board, geometry)
+    board[1, 3] = -.225
+    catalog.check_workspace(board, geometry)
+
+
+def test_top_down_tracks_updated_board_position_without_rotating_pelvis_orientation():
+    node, gh = Harness(), request(False)
+    gh.request.top_down = True
+    original = node.move_frame_to
+
+    def action(frame, pose, **kwargs):
+        result = original(frame, pose, **kwargs)
+        if kwargs['do_plan']:
+            node.board[:3, :3] = Rotation.from_euler('xyz', [2, -1, 3], degrees=True).as_matrix()
+            node.board[:3, 3] += [.001, -.002, .001]
+            node.refresh()
+        return result
+
+    node.move_frame_to = action
+    result = node._exec_grasp(gh)
+    assert result.success, result.message
+    assert node.commands == ['position', 'force', 'close']
+    g = node._marker_catalog.geometry('cylinder_1', 'cylinder_1', 'left', top_down=True)
+    np.testing.assert_allclose(pose_to_matrix(node.current), g.target_matrix(node.board, 'grasp'), atol=1e-14)
+    for _, pose, _ in node.moves:
+        np.testing.assert_allclose(pose_to_matrix(pose)[:3, :3], g.grasp[:3, :3], atol=1e-14)
+
+
+@pytest.mark.parametrize('arm', ['left', 'right'])
+def test_top_down_tilted_board_resolves_contact_offset_and_all_waypoints(arm):
+    catalog = MarkerCatalog(CATALOG)
+    offset = np.array([.002, -.003, .1146])
+    catalog.profile['arms'][arm]['contact_in_graspgenx_m'] = offset.tolist()
+    g = catalog.geometry('cylinder_1', 'cylinder_3', arm, top_down=True)
+    board = np.eye(4)
+    board[:3, :3] = Rotation.from_euler('xyz', [3, -2, 3], degrees=True).as_matrix()
+    board[:3, 3] = [.58, .225 if arm == 'left' else -.225, -.05]
+    grasp = g.target_matrix(board, 'grasp')
+    expected_contact = board @ g.source_tip @ np.array([0, 0, .04, 1])
+    np.testing.assert_allclose(grasp @ np.r_[offset, 1], expected_contact, atol=1e-14)
+    np.testing.assert_allclose(g.target_matrix(board, 'approach')[:3, 3] - grasp[:3, 3],
+                               [0, 0, .05], atol=1e-14)
+    np.testing.assert_allclose(g.target_matrix(board, 'extracted')[:3, 3] - grasp[:3, 3],
+                               board[:3, :3] @ [0, 0, .06], atol=1e-14)
+    grasp_to_tip = np.linalg.inv(grasp) @ board @ g.source_tip
+    carried_tip = g.target_matrix(board, 'preinsert') @ grasp_to_tip
+    expected_tip = board @ np.r_[np.array(catalog.catalog['holes']['cylinder_3']['entry'])
+                                 + [0, 0, .04], 1]
+    np.testing.assert_allclose(carried_tip[:, 3], expected_tip, atol=1e-14)
+    for name in ('grasp', 'approach', 'extracted', 'preinsert', 'carry'):
+        np.testing.assert_allclose(g.target_matrix(board, name)[:3, :3], g.grasp[:3, :3], atol=1e-14)
+    np.testing.assert_allclose(pose_to_matrix(g.candidates(board).grasps[0].pose), grasp, atol=1e-14)
+    catalog.check_workspace(board, g)
+
+
+def test_legacy_waypoint_resolution_remains_board_relative_when_tilted():
+    g = MarkerCatalog(CATALOG).geometry('cylinder_1', 'cylinder_3', 'left')
+    board = np.eye(4)
+    board[:3, :3] = Rotation.from_euler('xyz', [3, -2, 3], degrees=True).as_matrix()
+    board[:3, 3] = [.58, .225, -.05]
+    for name in ('grasp', 'approach', 'extracted', 'preinsert'):
+        np.testing.assert_allclose(g.target_matrix(board, name), board @ getattr(g, name))
+    carry = g.preinsert.copy()
+    carry[2, 3] = max(g.extracted[2, 3], carry[2, 3]) + .02
+    np.testing.assert_allclose(g.target_matrix(board, 'carry'), board @ carry)
 
 
 def test_no_close_after_cancel_between_force_and_close():
@@ -565,9 +841,53 @@ def accept(cache, stamp_ns, board=None):
     return pose, diag
 
 
+@pytest.mark.parametrize('use_sim_time', [False, True])
+def test_marker_cache_initialization_uses_node_sim_time_parameter(use_sim_time):
+    source = ast.parse((Path(__file__).parents[1] / 'h12_skills/base.py').read_text())
+    assignment = next(statement for statement in ast.walk(source)
+                      if isinstance(statement, ast.Assign)
+                      and any(isinstance(target, ast.Attribute) and target.attr == '_board_observation'
+                              for target in statement.targets))
+    node = SimpleNamespace(
+        _marker_catalog=SimpleNamespace(profile={'max_pose_age_sec': .5}),
+        get_parameter=lambda name: SimpleNamespace(value=use_sim_time)
+        if name == 'use_sim_time' else pytest.fail('unexpected parameter'))
+    exec(compile(ast.Module(body=[assignment], type_ignores=[]), '<cache initialization>', 'exec'),
+         {'self': node, 'BoardObservation': BoardObservation})
+    assert node._board_observation.use_sim_time is use_sim_time
+    assert node._board_observation.max_age == .5
+
+
+@pytest.mark.parametrize('use_sim_time', [False, True])
+def test_slow_simulation_freshness_uses_selected_clock(use_sim_time, monkeypatch):
+    wall = [100.0]
+    monkeypatch.setattr('h12_skills.marker_targets.time.monotonic', lambda: wall[0])
+    cache = BoardObservation(.5, use_sim_time=use_sim_time)
+    accept(cache, 10 * 10**9)
+    wall[0] += .81
+    if use_sim_time:
+        np.testing.assert_allclose(cache.matrix(10_363_000_000), np.eye(4))
+    else:
+        with pytest.raises(ValueError, match='stale'):
+            cache.matrix(10_363_000_000)
+    with pytest.raises(ValueError, match='stale'):
+        cache.matrix(10_501_000_000)
+
+
+def test_paused_simulation_does_not_expire_observation_in_wall_time(monkeypatch):
+    wall = [100.0]
+    monkeypatch.setattr('h12_skills.marker_targets.time.monotonic', lambda: wall[0])
+    cache = BoardObservation(.5, use_sim_time=True)
+    accept(cache, 10 * 10**9)
+    cache.matrix(10 * 10**9)
+    wall[0] += 60
+    np.testing.assert_allclose(cache.matrix(10 * 10**9), np.eye(4))
+
+
 @pytest.mark.parametrize('pose_first', [True, False])
-def test_unmatched_good_update_preserves_latest_matched_pair(pose_first):
-    cache = BoardObservation(.5)
+@pytest.mark.parametrize('use_sim_time', [False, True])
+def test_unmatched_good_update_preserves_latest_matched_pair(pose_first, use_sim_time):
+    cache = BoardObservation(.5, use_sim_time=use_sim_time)
     accept(cache, 10 * 10**9)
     board = np.eye(4)
     board[0, 3] = .01
@@ -597,8 +917,9 @@ def test_old_heartbeat_between_new_pose_and_diagnostics_does_not_abort():
     np.testing.assert_allclose(cache.matrix(10_150_000_000), np.eye(4))
 
 
-def test_new_invalid_observation_blocks_late_old_pairs_and_same_stamp_revalidation():
-    cache = BoardObservation(.5)
+@pytest.mark.parametrize('use_sim_time', [False, True])
+def test_new_invalid_observation_blocks_late_old_pairs_and_same_stamp_revalidation(use_sim_time):
+    cache = BoardObservation(.5, use_sim_time=use_sim_time)
     old_pose, old_diag = accept(cache, 10 * 10**9)
     _, invalid = observation_ns(10_200_000_000, valid=False)
     cache.on_diagnostics(invalid)
@@ -661,8 +982,9 @@ def test_same_stamp_heartbeat_and_pose_cannot_renew_wall_lease_with_frozen_ros(m
 
 
 @pytest.mark.parametrize('kind', ['pose', 'diagnostic'])
-def test_pending_future_stamp_still_fails_closed(kind):
-    cache = BoardObservation(.5)
+@pytest.mark.parametrize('use_sim_time', [False, True])
+def test_pending_future_stamp_still_fails_closed(kind, use_sim_time):
+    cache = BoardObservation(.5, use_sim_time=use_sim_time)
     accept(cache, 10 * 10**9)
     pose, diag = observation_ns(10_300_000_000)
     if kind == 'pose':
@@ -707,8 +1029,9 @@ def test_pending_caches_bounded_independently_and_do_not_evict_accepted_pair():
     assert cache._accepted[0] == 10_029_000_000
 
 
-def test_clock_reset_requires_new_epoch_pair():
-    cache = BoardObservation(.5)
+@pytest.mark.parametrize('use_sim_time', [False, True])
+def test_clock_reset_requires_new_epoch_pair(use_sim_time):
+    cache = BoardObservation(.5, use_sim_time=use_sim_time)
     accept(cache, 10 * 10**9)
     cache.matrix(10 * 10**9)
     with pytest.raises(ValueError, match='clock reset'):

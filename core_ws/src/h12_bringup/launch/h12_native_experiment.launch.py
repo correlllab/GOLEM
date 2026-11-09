@@ -43,25 +43,21 @@ def _launch(context):
              parameters=[{'use_sim_time': True, 'target_frame': 'pelvis',
                           'stale_timeout_sec': 0.5, 'max_observation_age_sec': 0.5,
                            'max_reprojection_px': 2.0,
-                           'publish_annotated': LaunchConfiguration('publish_annotated'),
+                            'publish_annotated': LaunchConfiguration('publish_annotated'),
+                            'image_transport': LaunchConfiguration('image_transport'),
                            'publish_visualization': True,
                            'visualization_catalog_path': LaunchConfiguration('marker_catalog_path')}], output='screen'),
     ]
     # Pre-pose and upper-controller initialization can command before engagement.
     # Do not even include their process actions until the global interlock passes.
     if verified == 'true':
-        from h12_safety_layer.core.config import load_config
-        safety_path = bringup / 'config/safety_experiment.yaml'
-        safety = load_config(safety_path)
-        if safety.get('estop', {}).get('lower_stale_seconds', 0.0) != 0.2:
-            raise RuntimeError('Experiment requires the opt-in lower-command watchdog implementation')
         catalog = LaunchConfiguration('marker_catalog_path').perform(context)
         if not Path(catalog).is_absolute() or not Path(catalog).is_file():
             raise RuntimeError('Experiment requires an absolute marker catalog path; use scripts/run_experiment.sh')
         actions.extend([
             _include('h12_control.launch.py', {
                 **sim_time, 'use_estop': 'false', 'use_frame_task': 'true',
-                'safety_config': str(safety_path),
+                'safety_config': 'sim_safety_split.yaml',
                 'frame_task_config': 'sim_safety_split.yaml',
                 'frame_task_prefix': shlex.quote(python),
                 'safety_delay': '0.0', 'frame_task_delay': '2.0',
@@ -94,5 +90,7 @@ def generate_launch_description():
                                description='Optional explicit active peg/source calibration profile'),
         DeclareLaunchArgument('publish_annotated', default_value='true',
                               description='Publish calibrated head RGB with observed/projected board geometry'),
+        DeclareLaunchArgument('image_transport', default_value='raw',
+                              description='Head RGB input transport: raw | compressed (JPEG)'),
         OpaqueFunction(function=_launch),
     ])

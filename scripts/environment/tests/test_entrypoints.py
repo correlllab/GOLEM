@@ -1,6 +1,8 @@
 """Offline entrypoint safety and composition; never execute the simulator."""
 
 import json
+import io
+from html.parser import HTMLParser
 import os
 from pathlib import Path
 import shutil
@@ -20,6 +22,19 @@ import run_ros as ros_runtime
 
 
 class EntrypointTests(unittest.TestCase):
+    def test_optional_recording_options_forward_without_changing_defaults(self):
+        options = ['--record', '/tmp/kilo/trial clip.webm', '--record-fps', '20']
+        with patch.dict(os.environ, {}, clear=True), \
+                patch.object(sys, 'argv', ['run_simulation.py', *options]), \
+                patch.object(Path, 'is_file', return_value=True), patch.object(simulator, 'check'), \
+                patch.object(os, 'execve') as execute:
+            runtime.main()
+        self.assertEqual(execute.call_args.args[1][-4:],
+                         ['--record', '/tmp/kilo/trial clip.webm', '--record-fps', '20.0'])
+        defaults = runtime.parser().parse_args([])
+        self.assertIsNone(defaults.record)
+        self.assertIsNone(defaults.record_fps)
+
     def test_help_without_dependencies_and_from_other_cwd(self):
         for script in ('setup_environment.sh', 'run_simulation.sh', 'run_experiment.sh', 'run_ros.sh'):
             result = subprocess.run([str(ROOT / 'scripts' / script), '--help'], cwd='/tmp/kilo',
@@ -52,8 +67,121 @@ class EntrypointTests(unittest.TestCase):
             runtime.main()
         _, command, env = execute.call_args.args
         self.assertEqual(command[-2:], ['--task', 'PegInHole'])
+        self.assertNotIn('--lowerbody', command)
         self.assertEqual(env['ROS_DOMAIN_ID'], '1')
         self.assertEqual(env['GOLEM_SIM_ODOM'], '0')
+        self.assertEqual({key: env[key] for key in runtime.PEGBOARD_CAMERA_DEFAULTS},
+                         {'GOLEM_CAMERA_SCALE': '1', 'GOLEM_CAMERA_DEPTH': '0',
+                           'GOLEM_CAMERA_POINTCLOUD': '0'})
+
+    def test_omitted_policy_reports_legacy_spawn(self):
+        with patch.dict(os.environ, {}, clear=True), patch.object(sys, 'argv', ['run_simulation.py']), \
+                patch.object(Path, 'is_file', return_value=True), patch.object(simulator, 'check'), \
+                patch.object(os, 'execve'), patch('sys.stdout', new_callable=io.StringIO) as output:
+            runtime.main()
+        self.assertIn('legacy baked spawn (--lowerbody omitted); no policy selected', output.getvalue())
+
+    def test_selected_policies_forward_unchanged_without_controller_launch(self):
+        for policy in ('fame_finetune', 'almi_manip_stand'):
+            with self.subTest(policy=policy), patch.dict(os.environ, {}, clear=True), \
+                    patch.object(sys, 'argv', ['run_simulation.py', '--lowerbody', policy]), \
+                    patch.object(Path, 'is_file', return_value=True), patch.object(simulator, 'check'), \
+                    patch.object(os, 'execve') as execute, \
+                    patch('sys.stdout', new_callable=io.StringIO) as output:
+                runtime.main()
+            command = execute.call_args.args[1]
+            self.assertEqual(command[-4:], ['--task', 'PegInHole', '--lowerbody', policy])
+            self.assertIn(str(ROOT / 'h1_robocasa/h12_mujoco.py'), command)
+            self.assertIn(f'lowerbody:={policy}', output.getvalue())
+            self.assertIn('does not start or confirm controllers', output.getvalue())
+
+    def test_invalid_policy_rejected_before_prerequisites_even_with_mocked_check(self):
+        for policy in ('unknown', '/tmp/policy.yaml', 'almi_manip_stand; touch /invalid'):
+            with self.subTest(policy=policy), \
+                    patch.object(sys, 'argv', ['run_simulation.py', '--lowerbody', policy]), \
+                    patch.object(simulator, 'check') as check, \
+                    patch.object(Path, 'is_file') as prerequisite, patch.object(os, 'execve') as execute, \
+                    patch('sys.stderr', new_callable=io.StringIO):
+                with self.assertRaises(SystemExit) as error:
+                    runtime.main()
+                self.assertEqual(error.exception.code, 2)
+            check.assert_not_called()
+            prerequisite.assert_not_called()
+            execute.assert_not_called()
+
+    def test_scene_options_and_policy_compose_without_changing_values(self):
+        options = ['--layout', '2', '--style', '3', '--seed', '42', '--peg', 'cylinder_2',
+                   '--source-hole', 'cylinder_1', '--lowerbody', 'almi_manip_stand']
+        with patch.dict(os.environ, {}, clear=True), \
+                patch.object(sys, 'argv', ['run_simulation.py', *options]), \
+                patch.object(Path, 'is_file', return_value=True), patch.object(simulator, 'check'), \
+                patch.object(os, 'execve') as execute:
+            runtime.main()
+        self.assertEqual(execute.call_args.args[1][-len(options):], options)
+
+    def test_guide_anchors_copy_targets_and_simulator_policy_examples(self):
+        class GuideParser(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.ids = []
+                self.targets = []
+                self.code = []
+                self.current_code = None
+
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                if 'id' in attrs:
+                    self.ids.append(attrs['id'])
+                if attrs.get('href', '').startswith('#'):
+                    self.targets.append(attrs['href'][1:])
+                if 'data-copy' in attrs:
+                    self.targets.append(attrs['data-copy'])
+                if tag == 'code':
+                    self.current_code = []
+
+            def handle_data(self, data):
+                if self.current_code is not None:
+                    self.current_code.append(data)
+
+            def handle_endtag(self, tag):
+                if tag == 'code' and self.current_code is not None:
+                    self.code.append(''.join(self.current_code))
+                    self.current_code = None
+
+        guide = GuideParser()
+        guide.feed((ROOT / 'docs/h12_simulation_guide.html').read_text())
+        self.assertEqual(len(guide.ids), len(set(guide.ids)))
+        self.assertTrue(guide.targets)
+        self.assertFalse(set(guide.targets) - set(guide.ids))
+        commands = [code for code in guide.code if './scripts/run_simulation.sh --task' in code]
+        self.assertGreaterEqual(len(commands), 5)
+        for command in commands:
+            self.assertIn('--lowerbody ', command)
+        self.assertIn('./scripts/run_simulation.sh --task PegInHole --lowerbody almi_manip_stand',
+                      guide.code)
+
+    def test_pegboard_camera_defaults_preserve_explicit_overrides(self):
+        overrides = {'GOLEM_CAMERA_SCALE': '0.5', 'GOLEM_CAMERA_DEPTH': '1',
+                     'GOLEM_CAMERA_POINTCLOUD': '1'}
+        with patch.dict(os.environ, overrides, clear=True), \
+                patch.object(sys, 'argv', ['run_simulation.py']), \
+                patch.object(Path, 'is_file', return_value=True), patch.object(simulator, 'check'), \
+                patch.object(os, 'execve') as execute:
+            runtime.main()
+        env = execute.call_args.args[2]
+        for key, value in overrides.items():
+            self.assertEqual(env[key], value)
+
+    def test_other_tasks_keep_existing_camera_defaults(self):
+        for task in ('Battery', 'OpenFridge'):
+            with self.subTest(task=task), patch.dict(os.environ, {}, clear=True), \
+                    patch.object(sys, 'argv', ['run_simulation.py', '--task', task]), \
+                    patch.object(Path, 'is_file', return_value=True), patch.object(simulator, 'check'), \
+                    patch.object(os, 'execve') as execute:
+                runtime.main()
+            env = execute.call_args.args[2]
+            for key in runtime.PEGBOARD_CAMERA_DEFAULTS:
+                self.assertNotIn(key, env)
 
     @unittest.skipUnless(shutil.which('zsh'), 'requires zsh')
     def test_zsh_caller_needs_no_shell_switch(self):
@@ -167,6 +295,30 @@ class EntrypointTests(unittest.TestCase):
                 os.close(first)
             replacement = ros_runtime.acquire_experiment_lock('1')
             os.close(replacement)
+
+    def test_experiment_forwards_standard_image_transport(self):
+        import build_ros_workspace as workspace
+        for transport in ('raw', 'compressed'):
+            with self.subTest(transport=transport), \
+                    patch.object(sys, 'argv', ['run_ros.py', '--experiment',
+                                              f'image_transport:={transport}']), \
+                    patch.dict(os.environ, {'ROS_DOMAIN_ID': '41'}, clear=True), \
+                    patch.object(workspace, 'require_venv'), \
+                    patch.object(ros_runtime, 'acquire_experiment_lock'), \
+                    patch.object(Path, 'is_file', return_value=True), \
+                    patch.object(os, 'execve') as execute:
+                ros_runtime.main()
+            self.assertEqual(execute.call_args.args[1][-1], f'image_transport:={transport}')
+
+    def test_experiment_rejects_unknown_image_transport_before_launch(self):
+        import build_ros_workspace as workspace
+        with patch.object(sys, 'argv', ['run_ros.py', '--experiment', 'image_transport:=invalid']), \
+                patch.object(workspace, 'require_venv'), \
+                patch.object(Path, 'is_file', return_value=True), \
+                patch.object(os, 'execve') as execute:
+            with self.assertRaisesRegex(RuntimeError, 'raw or compressed'):
+                ros_runtime.main()
+        execute.assert_not_called()
 
     def test_experiment_rejects_unowned_launch_parameters(self):
         import build_ros_workspace as workspace

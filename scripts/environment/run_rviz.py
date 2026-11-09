@@ -10,7 +10,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', type=Path, default=ROOT / 'core_ws/src/h12_bringup/rviz/pegboard.rviz')
+    parser.add_argument('--config', type=Path, default=ROOT / 'core_ws/src/h12_bringup/rviz/pegboard.rviz',
+                        help='RViz recipe (default: main.rviz-derived pegboard.rviz in the source checkout)')
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
     domain = os.environ.get('ROS_DOMAIN_ID', '1')

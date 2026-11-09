@@ -33,8 +33,6 @@ class NativeExperimentTests(unittest.TestCase):
             'launch.substitutions': {'LaunchConfiguration': Configuration,
                                      'EnvironmentVariable': action('EnvironmentVariable')},
             'launch_ros.actions': {'Node': action('Node')},
-            'h12_safety_layer.core.config': {
-                'load_config': lambda path: {'estop': {'lower_stale_seconds': 0.2}}},
         }
         modules = {}
         for name, attributes in definitions.items():
@@ -66,6 +64,7 @@ class NativeExperimentTests(unittest.TestCase):
         self.assertEqual(actions[1].parameters[0]['use_sim_time'], True)
         self.assertTrue(actions[1].parameters[0]['publish_visualization'])
         self.assertEqual(actions[1].parameters[0]['publish_annotated'].name, 'publish_annotated')
+        self.assertEqual(actions[1].parameters[0]['image_transport'].name, 'image_transport')
 
     def test_explicit_verified_start_has_one_baseline_upper_and_one_standing(self):
         self.context['start_position_verified'] = 'true'
@@ -77,7 +76,7 @@ class NativeExperimentTests(unittest.TestCase):
             lower = dict(actions[3].launch_arguments)
             self.assertTrue(actions[2].args[0].endswith('/h12_control.launch.py'))
             self.assertEqual(control['frame_task_prefix'], '/usr/bin/python3')
-            self.assertTrue(control['safety_config'].endswith('/config/safety_experiment.yaml'))
+            self.assertEqual(control['safety_config'], 'sim_safety_split.yaml')
             self.assertEqual(lower['start_position_verified'], 'true')
             self.assertEqual(lower['lowerbody'], policy)
             self.assertEqual(lower['use_estimator'], 'false')
@@ -108,12 +107,12 @@ class NativeExperimentTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'run_experiment'):
             self.compose()
 
-    def test_actuation_requires_watchdog_capable_safety_and_catalog(self):
+    def test_actuation_requires_catalog_without_custom_safety_implementation(self):
         self.context['start_position_verified'] = 'true'
-        with patch.object(sys.modules['h12_safety_layer.core.config'], 'load_config',
-                          return_value={'estop': {}}):
-            with self.assertRaisesRegex(RuntimeError, 'watchdog implementation'):
-                self.compose()
+        with patch.dict(sys.modules, {'h12_safety_layer.core.config': None}):
+            actions = self.compose()
+        self.assertEqual(dict(actions[2].launch_arguments)['safety_config'],
+                         'sim_safety_split.yaml')
         self.context['marker_catalog_path'] = ''
         with self.assertRaisesRegex(RuntimeError, 'absolute marker catalog'):
             self.compose()
@@ -124,14 +123,12 @@ class NativeExperimentTests(unittest.TestCase):
         self.assertEqual(verified.default_value, 'false')
         annotated = next(item for item in descriptions if item.args == ('publish_annotated',))
         self.assertEqual(annotated.default_value, 'true')
+        transport = next(item for item in descriptions if item.args == ('image_transport',))
+        self.assertEqual(transport.default_value, 'raw')
 
-    def test_experiment_configs_preserve_sim_limits_and_confirm_interlock(self):
+    def test_experiment_preserves_confirm_interlock(self):
         import yaml
         package = SOURCE.parents[1]
-        safety = yaml.safe_load((package / 'config/safety_experiment.yaml').read_text())
-        baseline = yaml.safe_load((package.parent / 'h12_safety_layer/config/sim_safety_split.yaml').read_text())
-        self.assertEqual(safety['estop'].pop('lower_stale_seconds'), 0.2)
-        self.assertEqual(safety, baseline)
         lower = yaml.safe_load((package / 'config/lowerbody_experiment.yaml').read_text())
         params = lower['lowerbody_controller_node']['ros__parameters']
         self.assertEqual(params['control_hz'], 50.0)

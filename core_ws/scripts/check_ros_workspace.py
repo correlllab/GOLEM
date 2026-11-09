@@ -106,9 +106,9 @@ def main():
                 importlib.import_module(module)
         if args.profile == 'experiment':
             from h12_safety_layer.core.config import load_config
-            safety = load_config(INSTALL / 'h12_bringup/share/h12_bringup/config/safety_experiment.yaml')
-            assert safety['estop']['lower_stale_seconds'] == 0.2
-            print('PASS experiment safety config: lower-command watchdog enabled at 0.2 s')
+            safety = load_config(INSTALL / 'h12_safety_layer/share/h12_safety_layer/config/sim_safety_split.yaml')
+            assert safety['mode'] == 'split_mode'
+            print('PASS upstream safety config: sim_safety_split.yaml')
             for module in ('model_server.aruco_localizer', 'h12_skills.node',
                            'h12_lowerbody_rl.scripts.lowerbody_controller_node'):
                 native_origin(importlib.import_module(module), module.split('.')[0], source=True)

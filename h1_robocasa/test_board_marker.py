@@ -36,14 +36,14 @@ class BoardMarkerTest(unittest.TestCase):
         self.assertAlmostEqual(metadata["black_size_m"], .03)
         self.assertAlmostEqual(metadata["quiet_zone_m"], .005)
         self.assertAlmostEqual(metadata["outer_size_m"], .04)
-        self.assertEqual(metadata["position_board_m"], [-.135, .10, .0252])
-        self.assertEqual(metadata["T_board_marker"], [[1, 0, 0, -.135], [0, 1, 0, .10],
+        self.assertEqual(metadata["position_board_m"], [-.14, .105, .0252])
+        self.assertEqual(metadata["T_board_marker"], [[1, 0, 0, -.14], [0, 1, 0, .105],
                                                     [0, 0, 1, .0252], [0, 0, 0, 1]])
         import json
         from pathlib import Path
         catalog = json.loads((Path(__file__).resolve().parent.parent / "CL_Assets" /
                               "mujoco_assets/manipulation_net/manipulation_catalog.json").read_text())
-        low, high = (-.155, .08), (-.115, .12)
+        low, high = (-.16, .085), (-.12, .125)
         for i in (0, 1):
             self.assertGreaterEqual(low[i], -catalog["board"]["footprint"][i] / 2)
             self.assertLessEqual(high[i], catalog["board"]["footprint"][i] / 2)
@@ -91,7 +91,7 @@ class BoardMarkerTest(unittest.TestCase):
         asset, board = ET.Element("asset"), ET.Element("body")
         left = mount_board_marker(board, asset)
         right = mount_board_marker(board, asset, name="pegboard_aruco_8", marker_id=8)
-        self.assertEqual(right["position_board_m"], [.135, .10, .0252])
+        self.assertEqual(right["position_board_m"], [.14, .105, .0252])
         self.assertEqual(right["marker_id"], 8)
         self.assertGreater(right["position_board_m"][0] - left["position_board_m"][0], .04)
         catalog = json.loads((Path(__file__).resolve().parent.parent / "CL_Assets" /
@@ -106,6 +106,10 @@ class BoardMarkerTest(unittest.TestCase):
             for hole in catalog["holes"].values():
                 self.assertTrue(any(high[i] <= min(p[i] for p in hole["profile_xy"]) or
                                     low[i] >= max(p[i] for p in hole["profile_xy"]) for i in (0, 1)))
+            self.assertAlmostEqual(high[1], catalog["board"]["footprint"][1] / 2)
+            outer_x = low[0] if marker["marker_id"] == 7 else high[0]
+            self.assertAlmostEqual(abs(outer_x), catalog["board"]["footprint"][0] / 2)
+        self.assertAlmostEqual(right["position_board_m"][0] - left["position_board_m"][0], .28)
         with self.assertRaises(ValueError):
             marker_png(marker_id=9)
 
@@ -118,7 +122,7 @@ class BoardMarkerTest(unittest.TestCase):
 
         root = ET.fromstring('<mujoco><asset/><worldbody><light pos="0 0 1"/><body name="board">'
                              '<geom type="box" size=".16 .125 .0125" pos="0 0 .0125"/>'
-                             '</body><camera name="test" pos="-.135 .10 .35" fovy="45"/></worldbody></mujoco>')
+                             '</body><camera name="test" pos="-.14 .105 .35" fovy="45"/></worldbody></mujoco>')
         baseline = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
         metadata = mount_board_marker(root.find("worldbody/body"), root.find("asset"))
         model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))

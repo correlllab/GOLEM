@@ -1,9 +1,11 @@
 {
-  "assumptions": "Nominal simulation-only cylinder side pinch at 40 mm above tip; not measured hardware calibration. GRASPGENX +Z approaches downward, +X closes horizontally. Raw donor RPY [0,90,-60] is NOT a GRASPGENX top-down orientation. Board, seated source and gripper rigid grasp are assumed unchanged. Workspace boxes are admission limits, not an IK guarantee.",
+  "assumptions": "Nominal simulation-only cylinder side pinch at 40 mm above tip; not measured hardware calibration. GRASPGENX +Z approaches downward, +X closes horizontally. Raw donor RPY [0,90,-60] is NOT a GRASPGENX top-down orientation. Board, seated source and gripper rigid grasp are assumed unchanged. Workspace boxes bound controlled GRASPGENX origins in pelvis, not fingertip/contact positions; they are admission limits, not an IK guarantee. The 0.1146 m contact offset is nominal calibration, not the URDF grasp_frame fixed translation.",
   "active_pegs": {"cylinder_1": {"source_hole": "cylinder_1"}},
   "aliases": {},
   "cylinder_contact_from_tip_m": [0.0, 0.0, 0.04],
   "grasp_rpy_board_deg": [180.0, 0.0, -60.0],
+  "top_down_guidance": "h12_ros2_controller/docs/workspace_analysis/head_camera.json pitch90: pelvis-fixed grasp_frame RPY left [0,90,-60], right [0,90,60]. grasp_frame +X is approach; GRASPGENX +Z is approach, +X is grasp_frame +Y, +Y is grasp_frame +Z (ideal fixed-axis convention, excluding URDF Euler rounding). Hole/contact positions remain board-local; top-down orientation and approach remain pelvis-fixed. Positions in that report are grasp_frame fingertip positions, NOT GRASPGENX origins or the nominal contact below. Published boxes are certified subsets, not exhaustive workspace bounds.",
+  "top_down_rpy_pelvis_deg": {"left": [180.0, 0.0, 30.0], "right": [180.0, 0.0, 150.0]},
   "arms": {
     "left": {"contact_in_graspgenx_m": [0.0, 0.0, 0.1146], "workspace_min_m": [0.15, -0.10, -0.30], "workspace_max_m": [0.80, 0.65, 0.80]},
     "right": {"contact_in_graspgenx_m": [0.0, 0.0, 0.1146], "workspace_min_m": [0.15, -0.65, -0.30], "workspace_max_m": [0.80, 0.10, 0.80]}

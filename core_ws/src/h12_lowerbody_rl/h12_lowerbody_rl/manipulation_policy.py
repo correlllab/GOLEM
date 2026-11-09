@@ -94,8 +94,16 @@ class FameFinetunePolicy(_StandingContract, FamePolicy):
     name = "fame_finetune"
 
     def __init__(self, config_path):
-        self._validate_config(config_path)
+        cfg = self._validate_config(config_path)
+        startup = np.asarray(cfg["lower_start_pos"], dtype=np.float32)
+        if (startup.shape != (12,) or not np.isfinite(startup).all()
+                or np.any(startup < np.asarray(cfg["legs_motor_pos_lower_limit_list"], dtype=np.float32))
+                or np.any(startup > np.asarray(cfg["legs_motor_pos_upper_limit_list"], dtype=np.float32))
+                or cfg["startup_seconds"] != 2):
+            raise ValueError("Invalid FAME startup pose or duration")
         super().__init__(config_path)
+        self.startup_lower = startup
+        self.startup_seconds = float(cfg["startup_seconds"])
         if not self.has_encoder:
             raise ValueError("FAME finetune requires its encoder")
         self._policy.cpu()
@@ -103,6 +111,10 @@ class FameFinetunePolicy(_StandingContract, FamePolicy):
             output = self._policy(torch.zeros(1, 252))
         if output.shape != (1, 12) or not torch.isfinite(output).all():
             raise ValueError("FAME actor must map 252 observations to 12 finite actions")
+
+    def prepose_command(self):
+        """Hold deploy lower_start_pos, not the trained observation/action center."""
+        return LegCommand(self.startup_lower.copy(), self._kps, self._kds)
 
     def reset(self, state):
         self.validate_state(state)

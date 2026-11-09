@@ -5,10 +5,11 @@ Flow
 1. The robot starts held by the elastic band, **idle** (no policy drives the legs).
 2. At startup the ``active_policy`` (default ``fame``) is auto-activated: once the
    safety layer's /safety/heartbeat arrives, the node pre-poses the legs (ramping
-   the target from the measured pose to the policy's nominal crouch over
-   ``prepose_ramp_s`` — never a step at full gains), releases
-   the elastic band (gated on frame_task being ready, /left_ee_pose), and engages
-   the policy. With ``engage_wait_for_confirm``
+   the target from the measured pose to the policy's startup pose over
+   ``prepose_ramp_s`` (FAME finetune uses its upstream 2s linear ramp)). Band
+   release requires policy commitment and frame_task readiness (/left_ee_pose).
+   FAME finetune sends its first policy output before requesting release.
+   With ``engage_wait_for_confirm``
    (the default) the node HOLDS at the pre-pose crouch and only engages the policy
    after the operator calls the /lowerbody/confirm_engage Trigger service — the
    real-robot arming step. The sim bringup disables it for unattended runs.
@@ -88,18 +89,16 @@ WALK = "walk"   # TorchScript walk policy (follows /cmd_vel)
 ALMI = "almi"   # ALMI LSTM policy: stands (incl. under arm motion) and walks on
                 # /cmd_vel; AlmiPolicy resets its LSTM at gait onset
 
-# Pre-pose: before engaging the policy, PD-drive the legs to the incoming policy's
-# nominal crouch (band-held) and wait until they settle there. The RMA policy warms
-# up from its trained default pose; released from the straight-leg spawn it can't
-# recover the transition before the band drops. Only once the legs reach nominal do
-# we commit the policy (and, later, release the band).
+# Pre-pose: before engaging the policy, PD-drive the legs to its startup target
+# (band-held). Legacy policies use their nominal crouch; FAME finetune uses the
+# upstream lower_start_pos and 2s linear ramp. The legacy RMA policy requires its
+# trained crouch before the band drops, rather than the straight-leg spawn pose.
+# Commit follows measured settling or the existing timeout, plus operator confirm.
 #
-# The pre-pose target is RAMPED (cosine blend over ``prepose_ramp_s``) from the
-# measured leg pose captured at the first pre-pose tick to nominal. Stepping
-# straight to nominal at full kp jerked the real robot's hanging legs hard enough
-# (0.24 rad hip-yaw error x kp 200 -> 4.7 rad/s) to trip the safety layer's dq
-# estop (hip yaw limit 0.2 x 23 = 4.6 rad/s) the moment the relay opened.
-PREPOSE_TOL = 0.15          # rad; max |q - nominal| across the 12 legs to count as posed
+# Legacy targets use a cosine blend over ``prepose_ramp_s`` from the first
+# measured leg pose. The ramp begins only once the safety relay is live to avoid
+# a full-gain position step when commands first reach the motors.
+PREPOSE_TOL = 0.15          # rad; max |q - startup target| across all 12 leg joints
 PREPOSE_SETTLE_TICKS = 10   # consecutive in-tolerance ticks required (~0.2s @ 50Hz)
 PREPOSE_MAX_TICKS = 400     # ~8s @ 50Hz after the ramp; commit anyway if never settled (safety)
 
@@ -458,13 +457,11 @@ class LowerBodyControllerNode(Node):
                 self._trip_heartbeat(str(error))
                 return
 
+        committed = False
         if self._manager.is_pending() and self._manager.is_idle():
-            # Pre-pose: PD-drive the legs to the incoming policy's nominal
-            # crouch (band-held) and wait until they settle BEFORE engaging it.
-            # The RMA policy warms up from its trained default pose; from the
-            # straight-leg spawn it can't recover the transition before the band
-            # drops. The band stays held throughout — the release below is gated
-            # on _awaiting_band_release, which we only set once committed.
+            # Hold the policy's startup pose before engagement. FAME finetune's
+            # deploy lower_start_pos differs from its observation/action center.
+            # The band stays held until the policy is committed.
             pending = self._manager.desired_policy()
             if pending is None:
                 return
@@ -477,19 +474,37 @@ class LowerBodyControllerNode(Node):
                     "waiting for /safety/heartbeat before pre-posing the legs",
                     throttle_duration_sec=5.0)
                 return
-            cmd = pending.nominal_command()
+            fame_startup = pending.name == "fame_finetune"
+            cmd = pending.prepose_command() if fame_startup else pending.nominal_command()
+            prepose_target = cmd.target_q.copy()
+            ramp_ticks = (round(pending.startup_seconds * pending.control_hz)
+                          if fame_startup else self._prepose_ramp_ticks)
             if self._prepose_start_q is None:
                 self._prepose_start_q = state.q[:NUM_LEG_JOINTS].copy()
-            if self._prepose_ticks < self._prepose_ramp_ticks:
-                frac = self._prepose_ticks / self._prepose_ramp_ticks
-                alpha = 0.5 * (1.0 - np.cos(np.pi * frac))
+                if fame_startup and (
+                        np.any(self._prepose_start_q < pending._lower_limit)
+                        or np.any(self._prepose_start_q > pending._upper_limit)):
+                    # deploy_real.py:_move_to_default_pose rejects out-of-limit
+                    # measured initial joints before sending any startup command.
+                    self._trip_heartbeat("FAME startup joints outside configured limits")
+                    return
+            if self._prepose_ticks < ramp_ticks:
+                frac = self._prepose_ticks / ramp_ticks
+                alpha = ((self._prepose_ticks + 1) / ramp_ticks if fame_startup
+                         else 0.5 * (1.0 - np.cos(np.pi * frac)))
                 cmd.target_q = (1.0 - alpha) * self._prepose_start_q + alpha * cmd.target_q
+                if fame_startup:
+                    cmd.target_q = np.clip(cmd.target_q, pending._lower_limit, pending._upper_limit)
             self._publish_leg(cmd)
-            err = float(np.max(np.abs(state.q[:NUM_LEG_JOINTS] - pending.nominal_lower)))
+            err = float(np.max(np.abs(state.q[:NUM_LEG_JOINTS] - prepose_target)))
             self._prepose_ticks += 1
-            self._prepose_pass = self._prepose_pass + 1 if err < PREPOSE_TOL else 0
+            ramp_done = not fame_startup or self._prepose_ticks >= ramp_ticks
+            self._prepose_pass = (self._prepose_pass + 1
+                                 if ramp_done and err < PREPOSE_TOL else 0)
             settled = self._prepose_pass >= PREPOSE_SETTLE_TICKS
-            timed_out = self._prepose_ticks >= self._prepose_ramp_ticks + PREPOSE_MAX_TICKS
+            timed_out = self._prepose_ticks >= ramp_ticks + PREPOSE_MAX_TICKS
+            if fame_startup and self._prepose_ticks < ramp_ticks:
+                return  # Complete the upstream 2s ramp even if already near the target.
             if not settled and not timed_out:
                 return  # keep posing; don't engage the policy or drop the band yet
             if self._confirm_wait and not self._engage_confirmed:
@@ -504,28 +519,32 @@ class LowerBodyControllerNode(Node):
                     throttle_duration_sec=5.0)
                 return
             self.get_logger().info(
-                f"legs pre-posed to nominal ({'settled' if settled else 'timeout'}, "
+                f"legs pre-posed to startup target ({'settled' if settled else 'timeout'}, "
                 f"err={err:.3f} rad) — engaging {self._manager.desired_name!r}")
             # Now engage the policy; it drives the legs while the band still holds.
             # Engage from zero commands (the policy reset below seeds from them).
             self._clear_commands()
             state = self._state_from_lowstate(self._lowstate)
             self._manager.commit(state)   # resets policy -> clean warm-up
+            committed = True
             self._publish_active()
             self._awaiting_band_release = not self._band_released
 
         # Release the band only after a policy is committed and driving the legs
         # (gated on frame_task being ready, or the max-wait timeout).
-        if self._awaiting_band_release:
+        fame_active = (self._standing_policy is not None
+                       and self._standing_policy.name == "fame_finetune")
+        if self._awaiting_band_release and not (fame_active and committed):
             if not self._band_released and self._frame_task_ready:
                 self._release_band("policy active + frame_task ready")
             elif not self._band_released and self._request_time is not None and \
                     (time.monotonic() - self._request_time) > self.get_parameter("band_max_wait").value:
                 self._release_band("policy active + band_max_wait timeout")
             if self._band_released:
-                # Clear band-held history only after the disable acknowledgment,
-                # on a tick that has passed the state and heartbeat guards.
-                self._manager.reset_active(state)
+                # FAME's upstream history starts at confirm and runs continuously;
+                # a GOLEM tether acknowledgment must not replay its first action.
+                if not fame_active:
+                    self._manager.reset_active(state)
                 self._awaiting_band_release = False
 
         if self._manager.is_idle():

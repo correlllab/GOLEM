@@ -3,7 +3,7 @@
   "board_frame": "pegboard",
   "origin": "authored board center bottom; x right, y up, z out of top",
   "markers": [
-    {"id": 7, "black_size_m": 0.03, "position_board_m": [-0.135, 0.10, 0.0252]},
-    {"id": 8, "black_size_m": 0.03, "position_board_m": [0.135, 0.10, 0.0252]}
+    {"id": 7, "black_size_m": 0.03, "position_board_m": [-0.14, 0.105, 0.0252]},
+    {"id": 8, "black_size_m": 0.03, "position_board_m": [0.14, 0.105, 0.0252]}
   ]
 }

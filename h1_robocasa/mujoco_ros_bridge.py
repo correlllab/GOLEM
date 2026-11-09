@@ -707,7 +707,7 @@ class RosSensorBridge(Node):
                 self._publish_info(pubs["depth_info"], cam.depth_info, stamp)
             self.timings.stop("camera_publish", publish_start)
 
-            if self.pointcloud:
+            if self.pointcloud and pubs["points"].get_subscription_count() > 0:
                 cloud_start = self.timings.start()
                 points = realsense_profile.colored_cloud(
                     depth_mm.astype(np.float32) / 1000.0, spec.depth_image,

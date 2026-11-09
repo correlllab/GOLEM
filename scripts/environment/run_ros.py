@@ -68,11 +68,15 @@ def main():
     env.update(OMP_NUM_THREADS='1', MKL_NUM_THREADS='1')
     arguments = args.arguments
     if args.experiment:
-        allowed = {'start_position_verified', 'lowerbody', 'marker_profile_path', 'publish_annotated'}
+        allowed = {'start_position_verified', 'lowerbody', 'marker_profile_path',
+                   'publish_annotated', 'image_transport'}
         if any(':=' not in arg or arg.split(':=', 1)[0] not in allowed for arg in arguments):
             raise RuntimeError('experiment arguments: start_position_verified:=true|false, '
                                'lowerbody:=fame_finetune|almi_manip_stand, marker_profile_path:=PATH, '
-                               'publish_annotated:=true|false only')
+                               'publish_annotated:=true|false, image_transport:=raw|compressed only')
+        if any(arg.startswith('image_transport:=') and arg.split(':=', 1)[1] not in ('raw', 'compressed')
+               for arg in arguments):
+            raise RuntimeError('image_transport must be raw or compressed')
         python = ROOT / 'environments/controller/.venv/bin/python'
         if not python.is_file():
             raise RuntimeError('run scripts/setup_environment.sh controller first')

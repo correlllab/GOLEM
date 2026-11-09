@@ -351,18 +351,19 @@ def _overlaps_behind(model, data, pos, back):
                for c in _robot_env_contacts(model, data))
 
 
-def _placed_gap(env, pos, base_quat, clearance, margin, poses, back):
+def _placed_gap(env, pos, base_quat, clearance, margin, poses, back, placer=None):
     """(gap, blocked) at base `pos` over the current joint state and every pose in
     `poses` (each a (qpos indices, values) pair). `blocked` means some pose
     overlaps a geom behind the base. Leaves the current joint state placed."""
     model = env.sim.model._model
     data = env.sim.data._data
+    place = place_robot_clear if placer is None else placer
     gap, blocked = margin, False
     for idx, values in ((None, None), *poses):
         if idx is not None:
             spawn = data.qpos[idx].copy()
             data.qpos[idx] = values
-        place_robot_clear(env, pos, base_quat, clearance)
+        place(env, pos, base_quat, clearance)
         pose_gap = _robot_env_gap(model, data, margin)
         if pose_gap < 0.0:
             blocked = blocked or _overlaps_behind(model, data, pos, back)
@@ -370,12 +371,13 @@ def _placed_gap(env, pos, base_quat, clearance, margin, poses, back):
         if idx is not None:
             data.qpos[idx] = spawn
     if poses:
-        place_robot_clear(env, pos, base_quat, clearance)
+        place(env, pos, base_quat, clearance)
     return gap, blocked
 
 
 def place_robot_collision_free(env, base_pos, base_quat, step=0.02, max_iters=50,
-                               clearance=0.02, extra_backoff=0.0, margin=0.0, poses=()):
+                               clearance=0.02, extra_backoff=0.0, margin=0.0, poses=(),
+                               placer=None):
     """Place the robot at spawn with at least `margin` metres of free space
     between every robot geom and every non-floor environment geom.
 
@@ -391,6 +393,9 @@ def place_robot_collision_free(env, base_pos, base_quat, step=0.02, max_iters=50
     arms settle into before a controller takes over). The robot is left in its
     current joint state.
 
+    placer: optional (env, pos, quat_wxyz, clearance) callback replacing the
+    default floor-clearance fit at every candidate, extra pose and final restore.
+
     Tracks the position with the largest gap seen. If `margin` is not reached
     after max_iters, or the robot starts overlapping something behind its base,
     restores that best position and warns (best-effort), so
@@ -401,12 +406,14 @@ def place_robot_collision_free(env, base_pos, base_quat, step=0.02, max_iters=50
     more metres (stopping before the gap behind drops below `margin`) so the
     robot stands in OPEN FLOOR with room in front — needed for nav2, which
     rejects a goal when the robot's start cell is occupied."""
+    # A custom floor fitter is applied to every candidate and extra joint pose.
+    place = place_robot_clear if placer is None else placer
     back = _backward_dir(base_quat)
     margin = max(margin, 1e-3)   # geoms that merely touch still generate contacts
     pos = np.array(base_pos, dtype=float)
     best_pos, best_gap = None, None
     for i in range(max_iters + 1):
-        gap, blocked = _placed_gap(env, pos, base_quat, clearance, margin, poses, back)
+        gap, blocked = _placed_gap(env, pos, base_quat, clearance, margin, poses, back, placer)
         if i and blocked:
             break  # backed into something behind; never search past it
         if best_gap is None or gap > best_gap:
@@ -419,15 +426,15 @@ def place_robot_collision_free(env, base_pos, base_quat, step=0.02, max_iters=50
                 last_clear, moved = pos.copy(), 0.0
                 for _ in range(int(extra_backoff / step)):
                     pos[:2] += step * back[:2]
-                    if _placed_gap(env, pos, base_quat, clearance, margin, poses, back)[0] < margin:
+                    if _placed_gap(env, pos, base_quat, clearance, margin, poses, back, placer)[0] < margin:
                         break
                     last_clear, moved = pos.copy(), moved + step
-                place_robot_clear(env, last_clear, base_quat, clearance)
+                place(env, last_clear, base_quat, clearance)
                 if moved:
                     print(f"[h1_2_robosuite] backed robot {moved:.2f} m further into open floor (nav spawn)")
             return
         pos[:2] += step * back[:2]
-    place_robot_clear(env, best_pos, base_quat, clearance)  # restore the widest-gap try
+    place(env, best_pos, base_quat, clearance)  # restore the widest-gap try
     print(f"[h1_2_robosuite] WARNING: best spawn clearance {best_gap:.3f} m is below the "
           f"requested {margin:.2f} m (searched {i * step:.2f} m back); keeping the "
           f"widest-gap position")

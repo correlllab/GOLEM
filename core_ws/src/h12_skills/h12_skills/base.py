@@ -332,7 +332,8 @@ class SkillsBase(Node):
             self._marker_catalog = MarkerCatalog(catalog_path, profile_path or None)
             self._marker_displaced = set()
             self._board_observation = BoardObservation(
-                self._marker_catalog.profile['max_pose_age_sec'])
+                self._marker_catalog.profile['max_pose_age_sec'],
+                use_sim_time=self.get_parameter('use_sim_time').value)
             pose_topic = self.declare_parameter(
                 'marker_pose_topic', '/perception/pegboard/pose',
                 ParameterDescriptor(read_only=True)).value

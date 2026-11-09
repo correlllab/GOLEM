@@ -8,7 +8,7 @@ import sys
 import numpy as np
 
 from model_server import aruco_localizer as localizer
-from model_server.aruco_geometry import PoseRejected
+from model_server.aruco_geometry import BoardEstimator, PoseRejected, marker_points, pose_distance, quaternion_xyzw
 
 
 def header(sec=10, frame="head_color_optical_frame", nanosec=0):
@@ -26,6 +26,7 @@ class FakeNode:
         self.params = {}
         self.now_ns = 10_000_000_000
         self.publishers = {}
+        self.subscriptions = []
 
     def declare_parameter(self, name, value):
         self.params[name] = value
@@ -38,6 +39,7 @@ class FakeNode:
         return self.publishers[topic]
 
     def create_subscription(self, *args):
+        self.subscriptions.append(args)
         return MagicMock()
 
     def create_timer(self, *args):
@@ -59,6 +61,7 @@ class LocalizerTransportTests(unittest.TestCase):
         modules["rclpy.time"].Time = NS(from_msg=lambda stamp: (stamp.sec, stamp.nanosec))
         modules["rclpy.duration"].Duration = lambda **kw: kw
         modules["sensor_msgs.msg"].Image = NS
+        modules["sensor_msgs.msg"].CompressedImage = type("CompressedImage", (), {})
         modules["sensor_msgs.msg"].CameraInfo = NS
         modules["geometry_msgs.msg"].PoseStamped = Pose
         modules["diagnostic_msgs.msg"].DiagnosticArray = lambda: NS(header=header(), status=[])
@@ -110,6 +113,81 @@ class LocalizerTransportTests(unittest.TestCase):
         self.assertAlmostEqual(message.pose.position.z, 3.8)
         self.assertEqual(self.buffer.lookup_transform.call_args.args[2], (10, 0))
         self.assertEqual(self.buffer.lookup_transform.call_args.args[:2], ("pelvis", "head_color_optical_frame"))
+
+    def test_transport_subscription_default_raw_and_explicit_compressed(self):
+        raw = self.node.subscriptions[-1]
+        self.assertIs(raw[0], NS)
+        self.assertEqual(raw[1], '/realsense/head/color/image_raw')
+        original = FakeNode.declare_parameter
+        def compressed(node, name, value):
+            original(node, name, 'compressed' if name == 'image_transport' else value)
+        with patch.object(FakeNode, 'declare_parameter', compressed), \
+                patch.object(localizer, 'BoardEstimator', return_value=self.estimator):
+            node = localizer.create_node()
+        subscription = node.subscriptions[-1]
+        self.assertEqual(subscription[0].__name__, 'CompressedImage')
+        self.assertEqual(subscription[1], '/realsense/head/color/image_raw/compressed')
+
+    def jpeg_image(self):
+        import cv2
+        bgr = np.full((360, 640, 3), (20, 80, 180), dtype=np.uint8)
+        ok, data = cv2.imencode('.jpg', bgr)
+        self.assertTrue(ok)
+        return NS(header=header(), format='rgb8; jpeg compressed bgr8', data=data.tobytes())
+
+    def test_unknown_transport_rejected_before_subscriptions(self):
+        original = FakeNode.declare_parameter
+        def invalid(node, name, value):
+            original(node, name, 'compressedDepth' if name == 'image_transport' else value)
+        with patch.object(FakeNode, 'declare_parameter', invalid):
+            with self.assertRaisesRegex(ValueError, 'image_transport must be'):
+                localizer.create_node()
+
+    def test_compressed_exact_pair_decodes_rgb_and_preserves_stamp_tf(self):
+        self.node.settings['image_transport'] = 'compressed'
+        self.image = self.jpeg_image()
+        self.node.on_image(self.image)
+        self.node.pose_pub.publish.assert_not_called()
+        self.node.on_info(self.info)
+        self.assertTrue(self.node.valid)
+        self.bridge.imgmsg_to_cv2.assert_not_called()
+        rgb = self.estimator.detect.call_args.args[0]
+        np.testing.assert_allclose(rgb[0, 0], [180, 80, 20], atol=2)
+        self.assertIs(self.node.pose_pub.publish.call_args.args[0].header.stamp, self.image.header.stamp)
+        self.assertEqual(self.buffer.lookup_transform.call_args.args[2], (10, 0))
+
+    def test_compressed_rejects_bad_format_payload_and_resolution(self):
+        for invalid in ('format', 'data', 'resolution'):
+            with self.subTest(invalid=invalid):
+                self.node.settings['image_transport'] = 'compressed'
+                self.node.processed_stamp = None
+                self.image = self.jpeg_image()
+                if invalid == 'format':
+                    self.image.format = '16UC1; compressedDepth png'
+                elif invalid == 'data':
+                    self.image.data = b'not JPEG'
+                else:
+                    self.info.width = 1280
+                self.observe()
+                self.assertFalse(self.node.valid)
+                self.node.pose_pub.publish.assert_not_called()
+
+    def test_compressed_does_not_relax_matching_age_or_geometry(self):
+        self.node.settings['image_transport'] = 'compressed'
+        self.image = self.jpeg_image()
+        self.info.header = header(frame='wrong_optical')
+        self.observe()
+        self.estimator.detect.assert_not_called()
+        self.info.header = self.image.header
+        self.node.now_ns += 600_000_000
+        self.node.on_info(self.info)
+        self.assertIn('stale image timestamp', self.node.reason)
+        self.node.pose_pub.publish.assert_not_called()
+        self.node.now_ns = 10_000_000_000
+        self.estimator.estimate.side_effect = PoseRejected('unresolved planar ambiguity', {})
+        self.observe()
+        self.assertIn('unresolved planar ambiguity', self.node.reason)
+        self.node.pose_pub.publish.assert_not_called()
 
     def test_unmatched_stamp_and_frame_never_publish(self):
         self.node.on_info(self.info)
@@ -188,7 +266,7 @@ class LocalizerTransportTests(unittest.TestCase):
             np.testing.assert_array_equal(self.node.prior, accepted)
             self.node.on_info(self.info)
             self.assertTrue(self.node.valid)
-            np.testing.assert_array_equal(self.estimator.estimate.call_args.args[4], accepted)
+            np.testing.assert_allclose(self.estimator.estimate.call_args.args[4], accepted, atol=1e-14, rtol=0)
             self.assertEqual(self.node.last_stamp, self.node.now_ns)
         for call in self.node.diagnostics_pub.publish.call_args_list:
             values = {v.key: v.value for v in call.args[0].status[0].values}
@@ -281,7 +359,7 @@ class LocalizerTransportTests(unittest.TestCase):
             self.advance_frame()
             self.observe()
             self.assertFalse(self.node.valid)
-            np.testing.assert_array_equal(self.estimator.estimate.call_args.args[4], prior)
+            np.testing.assert_allclose(self.estimator.estimate.call_args.args[4], prior, atol=1e-14, rtol=0)
             self.assertEqual(self.node.last_stamp, stamp)
             self.node.pose_pub.publish.assert_called_once()
         self.node.now_ns += 600_000_000
@@ -302,6 +380,7 @@ class LocalizerTransportTests(unittest.TestCase):
         self.observe()
         self.assertFalse(self.node.valid)
         self.assertIsNone(self.node.prior)
+        self.assertIsNone(self.node.prior_target)
 
     def test_missing_tf_preserves_bounded_last_accepted_prior(self):
         self.observe()
@@ -322,6 +401,7 @@ class LocalizerTransportTests(unittest.TestCase):
         self.assertFalse(self.node.valid)
         self.assertEqual(len(self.node.pending_tf), 1)
         self.node.pose_pub.publish.assert_not_called()
+        self.estimator.estimate.assert_not_called()
         self.buffer.lookup_transform.side_effect = None
         self.node.now_ns += 100_000_000
         self.node.heartbeat()
@@ -330,6 +410,8 @@ class LocalizerTransportTests(unittest.TestCase):
         self.assertEqual(self.node.pose_pub.publish.call_args.args[0].header.stamp.sec, 10)
         self.assertEqual(self.buffer.lookup_transform.call_args.args[2], (10, 0))
         self.estimator.detect.assert_called_once()
+        self.bridge.imgmsg_to_cv2.assert_called_once()
+        self.estimator.estimate.assert_called_once()
         self.assertEqual(len(self.node.pending_tf), 0)
 
     def test_pending_tf_expiry_clock_reset_and_rejection_cannot_resurrect_pose(self):
@@ -391,6 +473,7 @@ class LocalizerTransportTests(unittest.TestCase):
         self.buffer.lookup_transform.side_effect = lookup
         self.observe()
         self.node.pose_pub.publish.assert_not_called()
+        self.assertIsNone(self.node.prior_target)
         self.assertNotIn(old_stamp, self.node.pending_tf)
         # The retry path also independently rejects a foreign calibration epoch.
         self.node.pending_tf[old_stamp] = old_observation
@@ -402,6 +485,167 @@ class LocalizerTransportTests(unittest.TestCase):
         self.assertTrue(self.node.valid)
         self.assertEqual(self.node.last_stamp, self.node.now_ns)
         self.assertEqual(self.node.prior_key, self.node.active_calibration_key)
+
+    def projected_frame(self, camera, board, indices=(0, 1), noise=None):
+        import cv2
+        estimator = BoardEstimator()
+        optical = np.linalg.inv(camera) @ board
+        markers = [estimator.layout['markers'][i] for i in indices]
+        corners = [cv2.projectPoints(marker_points(m), cv2.Rodrigues(optical[:3, :3])[0],
+                                    optical[:3, 3], np.array(self.info.k).reshape(3, 3),
+                                    np.array(self.info.d))[0].reshape(1, 4, 2) for m in markers]
+        if noise is not None:
+            corners = [c + noise.normal(0, .1, c.shape) for c in corners]
+        ids = np.array([[m['id']] for m in markers])
+        estimator.detect = MagicMock(return_value=(corners, ids, []))
+        estimator.estimate = MagicMock(wraps=estimator.estimate)
+        self.node.estimator = estimator
+        q = quaternion_xyzw(camera[:3, :3])
+        self.buffer.lookup_transform.return_value = NS(transform=NS(
+            translation=NS(**dict(zip(('x', 'y', 'z'), camera[:3, 3]))),
+            rotation=NS(**dict(zip(('x', 'y', 'z', 'w'), q)))))
+        return optical, corners, ids, estimator
+
+    def camera_yaw_and_board(self):
+        import cv2
+        camera, board = np.eye(4), np.eye(4)
+        camera[:3, :3] = cv2.Rodrigues(np.array([0., np.deg2rad(20), 0.]))[0]
+        camera[:3, 3] = [.03, -.02, .01]
+        board[:3, :3] = cv2.Rodrigues(np.array([.2, -.15, .08]))[0] @ np.diag([1., -1., -1.])
+        board[:3, 3] = [.02, -.03, .7]
+        return camera, board
+
+    def test_camera_yaw_compensation_accepts_stationary_target_board(self):
+        camera, board = self.camera_yaw_and_board()
+        self.projected_frame(np.eye(4), board)
+        self.observe()
+        old_optical = self.node.prior.copy()
+        self.advance_frame()
+        optical, corners, ids, estimator = self.projected_frame(camera, board)
+        self.assertGreater(pose_distance(optical, old_optical)[0], .036)
+        with self.assertRaisesRegex(PoseRejected, 'continuity'):
+            estimator.estimate(corners, ids, np.array(self.info.k).reshape(3, 3), np.array(self.info.d), old_optical)
+        self.observe()
+        self.assertTrue(self.node.valid)
+        np.testing.assert_allclose(self.node.prior_target, board, atol=1e-10)
+        np.testing.assert_allclose(estimator.estimate.call_args.args[4], optical, atol=1e-10)
+        self.assertLess(self.node.metrics['prior_translation_delta_m'], 1e-10)
+        self.assertLess(self.node.metrics['prior_rotation_delta_rad'], 1e-6)
+        self.assertEqual(self.buffer.lookup_transform.call_args.args[2], (10, 66_666_667))
+        self.assertEqual(self.node.pose_pub.publish.call_count, 2)
+
+    def test_compensated_prior_still_rejects_target_translation_and_rotation_jumps(self):
+        import cv2
+        camera, board = self.camera_yaw_and_board()
+        self.projected_frame(np.eye(4), board)
+        self.observe()
+        accepted = self.node.prior_target.copy()
+        for shift, angle in ((.021, 0.), (0., .101)):
+            with self.subTest(shift=shift, angle=angle):
+                self.advance_frame()
+                moved = board.copy()
+                moved[0, 3] += shift
+                moved[:3, :3] = cv2.Rodrigues(np.array([0., 0., angle]))[0] @ moved[:3, :3]
+                self.projected_frame(camera, moved)
+                self.observe()
+                self.assertFalse(self.node.valid)
+                self.assertIn('continuity', self.node.reason)
+                np.testing.assert_array_equal(self.node.prior_target, accepted)
+                self.assertEqual(self.node.last_stamp, 10_000_000_000)
+                self.node.pose_pub.publish.assert_called_once()
+
+    def test_ambiguous_single_marker_requires_tf_compensated_qualified_prior(self):
+        import cv2
+        camera, _ = self.camera_yaw_and_board()
+        optical = np.eye(4)
+        optical[:3, :3] = cv2.Rodrigues(np.array([.12, .08, 0.]))[0] @ np.diag([1., -1., -1.])
+        optical[:3, 3] = [-.135, .10, .8]
+        self.info.k = [700., 0., 320., 0., 700., 240., 0., 0., 1.]
+        board = camera @ optical
+        self.projected_frame(np.eye(4), board)
+        self.observe()
+        accepted_stamp = self.node.last_stamp
+        self.assertTrue(self.node.valid)
+        self.advance_frame()
+        _, corners, ids, estimator = self.projected_frame(camera, board, (1,), np.random.default_rng(3))
+        with self.assertRaisesRegex(PoseRejected, 'no qualified recent prior'):
+            estimator.estimate(corners, ids, np.array(self.info.k).reshape(3, 3), np.array(self.info.d))
+        self.buffer.lookup_transform.side_effect = RuntimeError('exact TF pending')
+        estimator.estimate.reset_mock()
+        self.observe()
+        estimator.estimate.assert_not_called()
+        self.assertEqual(self.node.last_stamp, accepted_stamp)
+        self.buffer.lookup_transform.side_effect = None
+        self.node.heartbeat()
+        self.assertTrue(self.node.valid)
+        self.assertEqual(self.node.metrics['acceptance_reason'], 'bounded_prior')
+        self.assertLess(self.node.metrics['ambiguity_gap_px'], .15)
+        self.assertEqual(self.node.metrics['prior_bounded_candidate_count'], 1)
+        self.node.estimator.detect.assert_called_once()
+
+    def test_newer_tf_acceptance_cannot_be_overwritten_by_older_pending_frame(self):
+        self.observe()
+        self.advance_frame()
+        old_stamp = self.node.now_ns
+        old_time = (self.image.header.stamp.sec, self.image.header.stamp.nanosec)
+        available = self.buffer.lookup_transform.return_value
+        def lookup(*args, **kwargs):
+            if args[2] == old_time:
+                raise RuntimeError('older TF missing')
+            return available
+        self.buffer.lookup_transform.side_effect = lookup
+        self.observe()
+        self.advance_frame()
+        self.observe()
+        self.assertEqual(self.node.last_stamp, self.node.now_ns)
+        target = self.node.prior_target.copy()
+        self.assertIn(old_stamp, self.node.pending_tf)
+        self.buffer.lookup_transform.side_effect = None
+        self.node.now_ns = old_stamp + 501_000_000
+        self.node.heartbeat()
+        self.assertTrue(self.node.valid)
+        self.assertEqual(self.node.last_stamp, old_stamp + 66_666_667)
+        np.testing.assert_array_equal(self.node.prior_target, target)
+        self.assertNotIn(old_stamp, self.node.pending_tf)
+        self.assertEqual(self.node.pose_pub.publish.call_count, 2)
+
+    def test_prior_target_clears_with_optical_anchor_on_reset_and_expiry(self):
+        for reset in (False, True):
+            with self.subTest(reset=reset):
+                self.setUp()
+                self.observe()
+                self.assertIsNotNone(self.node.prior_target)
+                self.node.now_ns = 1_000_000_000 if reset else 10_600_000_000
+                self.node.heartbeat()
+                self.assertIsNone(self.node.prior_target)
+                self.assertIsNone(self.node.prior)
+
+    def test_queued_detections_use_latest_accepted_target_anchor(self):
+        camera, board = self.camera_yaw_and_board()
+        self.projected_frame(np.eye(4), board)
+        self.observe()
+        self.buffer.lookup_transform.side_effect = RuntimeError('exact TF pending')
+        transforms = {}
+        estimators = []
+        for shift in (.015, .030):
+            self.advance_frame()
+            moved = board.copy()
+            moved[0, 3] += shift
+            _, _, _, estimator = self.projected_frame(camera, moved)
+            estimators.append(estimator)
+            transforms[(self.image.header.stamp.sec, self.image.header.stamp.nanosec)] = self.buffer.lookup_transform.return_value
+            self.observe()
+            estimator.estimate.assert_not_called()
+        self.assertEqual(len(self.node.pending_tf), 2)
+        self.buffer.lookup_transform.side_effect = lambda *args, **kw: transforms[args[2]]
+        self.node.heartbeat()
+        self.assertTrue(self.node.valid)
+        self.assertEqual(self.node.pose_pub.publish.call_count, 3)
+        self.assertEqual(len(self.node.pending_tf), 0)
+        np.testing.assert_allclose(self.node.prior_target, moved, atol=1e-10)
+        self.assertAlmostEqual(self.node.metrics['prior_translation_delta_m'], .015)
+        for estimator in estimators:
+            estimator.detect.assert_called_once()
 
 
 if __name__ == "__main__":

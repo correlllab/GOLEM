@@ -76,6 +76,11 @@ def fits(peg, hole):
 
 @dataclass(frozen=True)
 class TargetGeometry:
+    """Board-local waypoint templates; use target_matrix for controlled pelvis poses.
+
+    For top-down, template rotations describe the board-identity reference only;
+    grasp rotation is also the fixed pelvis orientation used by the resolver.
+    """
     peg_id: str
     source_hole: str
     destination: str
@@ -87,9 +92,36 @@ class TargetGeometry:
     preinsert: np.ndarray
     aperture_m: float
     length_m: float
+    top_down: bool
+    contact_offset: np.ndarray
+    approach_m: float
+
+    def target_matrix(self, board, name):
+        """Resolve a named waypoint, preserving its contact point and frame convention."""
+        if name == 'carry':
+            target = self.preinsert.copy()
+            target[2, 3] = max(self.extracted[2, 3], target[2, 3]) + 0.02
+        elif name in ('grasp', 'approach', 'extracted', 'preinsert'):
+            target = getattr(self, name)
+        else:
+            raise ValueError(f'unknown marker waypoint {name!r}')
+        if not self.top_down:
+            return board @ target
+        if name == 'approach':
+            resolved = self.target_matrix(board, 'grasp')
+            resolved[:3, 3] -= self.approach_m * resolved[:3, 2]
+            return resolved
+        # Positions remain board-local, but the documented orientation is in
+        # pelvis. Rotate the contact into pelvis BEFORE subtracting the G offset.
+        contact = target[:3, 3] + target[:3, :3] @ self.contact_offset
+        resolved = np.eye(4)
+        resolved[:3, :3] = self.grasp[:3, :3]
+        resolved[:3, 3] = (board[:3, :3] @ contact + board[:3, 3]
+                           - resolved[:3, :3] @ self.contact_offset)
+        return resolved
 
     def candidates(self, board):
-        return make_candidates([matrix_to_pose(board @ self.grasp)],
+        return make_candidates([matrix_to_pose(self.target_matrix(board, 'grasp'))],
                                [self.peg_id + ':catalog'], self.arm,
                                gripper_width=self.aperture_m)
 
@@ -127,7 +159,7 @@ class MarkerCatalog:
             raise ValueError('peg shape/dimensions do not fit destination hole')
         return peg
 
-    def geometry(self, peg_id, destination, arm):
+    def geometry(self, peg_id, destination, arm, *, top_down=False):
         peg_id, destination = self.resolve(peg_id), self.resolve(destination)
         peg = self.compatible(peg_id, destination)
         active = self.profile['active_pegs'].get(peg_id)
@@ -147,8 +179,13 @@ class MarkerCatalog:
         target = self.catalog['holes'][destination]
         tip = hole_transform(source, 'target')
         grasp = np.eye(4)
+        # workspace_analysis/head_camera.json specifies grasp_frame, whose +X
+        # approaches. The per-arm profile converts its inward yaw to GRASPGENX
+        # (+Z approach, +X closing); applying Euler pitch=90 to G is incorrect.
+        rpy = (self.profile['top_down_rpy_pelvis_deg'][arm] if top_down
+               else self.profile['grasp_rpy_board_deg'])
         grasp[:3, :3] = Rotation.from_euler(
-            'xyz', self.profile['grasp_rpy_board_deg'], degrees=True).as_matrix()
+            'xyz', rpy, degrees=True).as_matrix()
         # A cylinder side pinch must close across the shaft, not along its axis.
         if abs(grasp[2, 0]) > 0.1 or grasp[2, 2] > -0.5:
             raise ValueError('profile is not a downward GRASPGENX cylinder pinch')
@@ -174,14 +211,19 @@ class MarkerCatalog:
         if not 0 < aperture <= 0.106:
             raise ValueError('peg exceeds gripper aperture')
         return TargetGeometry(peg_id, source_id, destination, arm, tip, grasp,
-                              approach, extracted, preinsert, aperture, peg['length'])
+                              approach, extracted, preinsert, aperture, peg['length'],
+                              top_down, offset, self.profile['approach_m'])
 
     def check_workspace(self, board, geometry):
         limits = self.profile['arms'][geometry.arm]
-        carry = geometry.preinsert.copy()
-        carry[2, 3] = max(geometry.extracted[2, 3], carry[2, 3]) + 0.02
-        for target in (geometry.approach, geometry.grasp, geometry.extracted, geometry.preinsert, carry):
-            point = (board @ target)[:3, 3]
+        if geometry.top_down:
+            approach = geometry.target_matrix(board, 'grasp')[:3, 2]
+            pitch = math.degrees(math.atan2(-approach[2], np.linalg.norm(approach[:2])))
+            # Validate the resolved pelvis orientation, not board tilt or motion tolerance.
+            if pitch + 1e-10 < 90.0:
+                raise ValueError('marker grasp violates requested downward pitch')
+        for name in ('approach', 'grasp', 'extracted', 'preinsert', 'carry'):
+            point = geometry.target_matrix(board, name)[:3, 3]
             if (np.any(point < limits['workspace_min_m'])
                     or np.any(point > limits['workspace_max_m'])):
                 raise ValueError('target outside configured arm workspace; no motion permitted')
@@ -197,8 +239,9 @@ class BoardObservation:
 
     PENDING_LIMIT = 4
 
-    def __init__(self, max_age):
+    def __init__(self, max_age, use_sim_time=False):
         self.max_age = max_age
+        self.use_sim_time = use_sim_time
         self.lock = threading.Lock()
         self._poses = {}
         self._diagnostics = {}
@@ -292,14 +335,26 @@ class BoardObservation:
                 self._invalid_through = 0
                 raise ValueError('board localization clock reset; waiting for new observations')
             if self._accepted is None:
-                raise ValueError('waiting for board pose and valid matching diagnostics')
+                cause = ('invalid observation or diagnostics' if self._invalid_through
+                         else 'no matched observation and valid diagnostics')
+                raise ValueError(f'waiting for board pose and valid matching diagnostics: {cause}')
             stamp, matrix, diagnostic_stamp, received = self._accepted
-            if (stamp <= self._invalid_through
-                    or not 0 <= (now_ns - stamp) / 1e9 <= self.max_age
-                    or not 0 <= (now_ns - diagnostic_stamp) / 1e9 <= self.max_age
-                    or time.monotonic() - received > self.max_age
-                    or any(key > now_ns for key in self._poses)
-                    or any(key > now_ns or value[0] > now_ns
-                           for key, value in self._diagnostics.items())):
-                raise ValueError('board localization invalid, stale, future, or clock reset')
-            return matrix.copy()
+            if stamp <= self._invalid_through:
+                cause = 'observation invalidated by invalid pose or diagnostics'
+            elif not 0 <= (now_ns - stamp) / 1e9 <= self.max_age:
+                cause = ('observation timestamp is in the future' if stamp > now_ns
+                         else 'stale observation ROS age')
+            elif not 0 <= (now_ns - diagnostic_stamp) / 1e9 <= self.max_age:
+                cause = ('diagnostic timestamp is in the future' if diagnostic_stamp > now_ns
+                         else 'stale diagnostic ROS age')
+            # Paused or slow simulation ages observations only in ROS time.
+            elif not self.use_sim_time and time.monotonic() - received > self.max_age:
+                cause = 'stale monotonic wall receipt age'
+            elif any(key > now_ns for key in self._poses):
+                cause = 'pending future observation timestamp'
+            elif any(key > now_ns or value[0] > now_ns
+                     for key, value in self._diagnostics.items()):
+                cause = 'pending future diagnostic timestamp'
+            else:
+                return matrix.copy()
+            raise ValueError(f'board localization invalid, stale, future, or clock reset: {cause}')

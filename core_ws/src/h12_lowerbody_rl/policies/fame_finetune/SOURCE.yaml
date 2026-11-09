@@ -2,6 +2,7 @@ source_repository: git@github.com:correlllab/h12_mjlab.git
 source_revision: c946b1a74f6d6812d82f80fdc7651acb2840acd2
 source_config: config/deploy_fame_finetune_real.yaml
 source_contract: h12_mjlab/deploy/deploy_real.py:FameObservationComposer
+source_startup_contract: h12_mjlab/deploy/deploy_real.py:_RealPolicyRunner
 original_source_revision: 2a79d8c310b0588f1f689854bd142768efe1d836
 original_source_config: h12_adaptive_policy/deploy_real/h12_fame_finetune.yaml
 source_original_license_status: not established from upstream checkpoint metadata
@@ -32,5 +33,10 @@ runtime:
   force_factors: zero_world_xyz_both_hands
   action: raw_12_unitree_leg_order_scaled_0.25_plus_nominal_then_position_clip
   upper_body: observed_not_commanded
-  startup: nominal_leg_prepose_not_upstream_lower_start_pos
+  startup: measured_legs_linear_2s_to_lower_start_pos_then_existing_settle_or_timeout_and_confirm
+  startup_joint_order: [left_hip_yaw, left_hip_pitch, left_hip_roll, left_knee, left_ankle_pitch, left_ankle_roll, right_hip_yaw, right_hip_pitch, right_hip_roll, right_knee, right_ankle_pitch, right_ankle_roll]
+  startup_target_source: config/deploy_fame_finetune_real.yaml:fame.lower_start_pos
+  observation_and_action_center_source: config/deploy_fame_finetune_real.yaml:robot.lower_default_pos
+  policy_transition: reset_history_then_direct_clipped_default_plus_scaled_raw_action_no_blend
+  tether: golem_only_release_after_first_policy_output_no_policy_reset_on_ack
   qualification: offline_cpu_only_not_balance_or_hardware_certification

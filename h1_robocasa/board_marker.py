@@ -87,8 +87,8 @@ def mount_board_marker(board_body, asset, *, name="pegboard_aruco",
     """Append a massless, non-contact print on the board and return calibration data.
 
     Pass the static board body's Element and the scene's asset Element. The
-    default 4 cm paper occupies the selected top corner (x right, y up), with
-    5 mm edge margins. The entire quiet zone must fit on the board and clear
+    default 4 cm paper sits flush with the top and outer side board edges
+    (x right, y up). The entire quiet zone must fit on the board and clear
     every catalog hole's bounding box. Geometry axes match the board. The top face is
     at mount_pos; the 0.1 mm visual thickness extends below it. Nothing is
     added to the board's collision geometry or inertial specification.

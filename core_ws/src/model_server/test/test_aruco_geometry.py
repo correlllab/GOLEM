@@ -82,7 +82,7 @@ class GeometryTests(unittest.TestCase):
         points += np.random.default_rng(3).normal(0, .1, points.shape)
         with self.assertRaisesRegex(PoseRejected, "unresolved planar ambiguity") as rejected:
             self.estimator.estimate([points], np.array([[8]]), k, np.zeros(5))
-        self.assertAlmostEqual(rejected.exception.quality["ambiguity_gap_px"], .05364, delta=.001)
+        self.assertAlmostEqual(rejected.exception.quality["ambiguity_gap_px"], .04658, delta=.001)
         prior = np.eye(4)
         prior[:3, :3], prior[:3, 3] = rotation, translation
         matrix, quality = self.estimator.estimate([points], np.array([[8]]), k, np.zeros(5), prior)

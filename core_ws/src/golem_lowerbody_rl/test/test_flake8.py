@@ -19,9 +19,8 @@ import pytest
 @pytest.mark.flake8
 @pytest.mark.linter
 def test_flake8() -> None:
-    # reference/ keeps the original standalone deploy scripts as they were (its README);
     # policies/ holds third-party code beside the weights (HOMIE's, under its own licence)
-    rc, errors = main_with_errors(argv=['--exclude', 'reference', 'policies'])
+    rc, errors = main_with_errors(argv=['--exclude', 'policies'])
     assert rc == 0, \
         'Found %d code style errors / warnings:\n' % len(errors) + \
         '\n'.join(errors)

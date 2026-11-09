@@ -34,11 +34,6 @@ class BandRelease:
         self._in_flight = False
         self._called = False  # the one call has been asked for
 
-    @property
-    def in_flight(self) -> bool:
-        """Return whether the one call has been asked for and has no result yet."""
-        return self._in_flight
-
     def poll(self, now: float, running_since: float | None, ee_pose_seen: bool,
              service_ready: bool) -> str | None:
         """

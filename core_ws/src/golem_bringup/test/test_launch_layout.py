@@ -16,7 +16,7 @@ import setuptools
 PACKAGE = Path(__file__).resolve().parents[1]
 
 TOP_LEVEL = {
-    'h12': ('h12_sim', 'h12_sim_mac', 'h12_real_robot', 'h12_real_desktop',
+    'h12': ('h12_sim', 'h12_real_robot', 'h12_real_desktop',
             'h12_safety_grippers', 'lmg_sim', 'lmg_real'),
     'g1': ('g1_sim', 'g1_real_robot'),
 }

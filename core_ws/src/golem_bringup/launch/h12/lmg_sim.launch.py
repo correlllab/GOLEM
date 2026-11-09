@@ -1,5 +1,5 @@
 """
-Start the loco-manipulation game against the x86 sim: lmg_deploy's MARL policy on all 27 joints.
+Start the loco-manipulation game against the sim: lmg_deploy's MARL policy on all 27 joints.
 
     ros2 launch golem_bringup lmg_sim.launch.py policy:=mid360v2
 

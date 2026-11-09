@@ -97,7 +97,6 @@ def _walk(launch_file, **args):
 
 @pytest.mark.parametrize('launch_file, sim, use_estop', [
     ('h12_sim.launch.py', 'true', 'false'),
-    ('h12_sim_mac.launch.py', 'true', 'false'),
     ('lmg_sim.launch.py', 'true', 'false'),
     ('h12_real_robot.launch.py', 'false', 'true'),
     ('lmg_real.launch.py', 'false', 'true'),
@@ -240,7 +239,7 @@ def _legs(**args):
     ('h12_real_robot.launch.py', 'false', 'real'),
 ])
 def test_top_level_files_run_the_leg_node(launch_file, sim, config):
-    """The x86 sim and the real robot run ALMI on their run config, through lowerbody.launch.py."""
+    """The sim and the real robot run ALMI on their run config, through lowerbody.launch.py."""
     arguments = _passed_to(launch_file, 'h12_lowerbody.launch.py')
     assert (arguments['policy'], arguments['sim'], arguments['lowerbody_config']) == (
         'almi', sim, config)
@@ -287,18 +286,17 @@ def _after_the_arguments(description):
             if not isinstance(entity, DeclareLaunchArgument)]
 
 
-# (launch file, environment, arguments, run config, sim) of each top-level H1-2 file that
-# includes the leg block, set so that the leg node starts
+# (launch file, arguments, run config, sim) of each top-level H1-2 file that includes the
+# leg block, set so that the leg node starts
 LEG_BRINGUPS = [
-    ('h12_sim.launch.py', {}, {}, 'sim', True),
-    ('h12_real_robot.launch.py', {}, {'start_position_verified': 'true'}, 'real', False),
-    ('h12_sim_mac.launch.py', {'GOLEM_LOWERBODY': 'almi'}, {}, 'sim', True),
+    ('h12_sim.launch.py', {}, 'sim', True),
+    ('h12_real_robot.launch.py', {'start_position_verified': 'true'}, 'real', False),
 ]
 
 
-@pytest.mark.parametrize('launch_file, env, args, config, sim', LEG_BRINGUPS,
+@pytest.mark.parametrize('launch_file, args, config, sim', LEG_BRINGUPS,
                          ids=[bringup[0] for bringup in LEG_BRINGUPS])
-def test_h12_bringups_check_the_legs_before_any_node(launch_file, env, args, config, sim,
+def test_h12_bringups_check_the_legs_before_any_node(launch_file, args, config, sim,
                                                      monkeypatch):
     """
     SAFETY: each H1-2 bringup with legs runs the leg node's check first.
@@ -307,8 +305,6 @@ def test_h12_bringups_check_the_legs_before_any_node(launch_file, env, args, con
     blocks' nodes started; the bringup's copy, first, refuses before any node, checking
     what the leg block is passed.
     """
-    for name, value in env.items():
-        monkeypatch.setenv(name, value)
     description = _load(launch_file).generate_launch_description()
     assert isinstance(_after_the_arguments(description)[0], OpaqueFunction)
     calls = []

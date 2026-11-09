@@ -1,14 +1,13 @@
 """
 Test that every node a top-level launch starts runs on the right clock: use_sim_time.
 
-Each sim bringup (the H1-2's x86 and Mac ones, the loco-manipulation game's and the G1's)
-starts every node with use_sim_time true; each real bringup starts every node with it
-false, given or by ROS's default (a node that does not set it). The launch is walked as
-ros2 launch runs it, into every include (golem_slam's navigation, Nav2's
-navigation_launch.py, the drivers'), and a node's use_sim_time is read from its
-parameters: a dict, or a parameter file's `/**` or node-name section (Nav2's params file,
-which RewrittenYaml rewrites with the launch's use_sim_time). Needs the workspace built
-and sourced.
+Each sim bringup (the H1-2's, the loco-manipulation game's and the G1's) starts every
+node with use_sim_time true; each real bringup starts every node with it false, given or
+by ROS's default (a node that does not set it). The launch is walked as ros2 launch runs
+it, into every include (golem_slam's navigation, Nav2's navigation_launch.py, the
+drivers'), and a node's use_sim_time is read from its parameters: a dict, or a parameter
+file's `/**` or node-name section (Nav2's params file, which RewrittenYaml rewrites with
+the launch's use_sim_time). Needs the workspace built and sourced.
 """
 
 import importlib.util
@@ -30,7 +29,6 @@ SIM_DOMAIN = '221'
 # arguments that start the most nodes.
 TOP_LEVEL = [
     ('h12_sim.launch.py', {'use_skills': 'true', 'use_nav': 'true', 'use_rviz': 'true'}, True),
-    ('h12_sim_mac.launch.py', {}, True),
     ('lmg_sim.launch.py', {'policy': 'mid360v2', 'use_slam': 'true'}, True),
     ('g1_sim.launch.py', {'use_skills': 'true', 'use_nav': 'true', 'use_rviz': 'true'}, True),
     ('h12_real_robot.launch.py', {'start_position_verified': 'true'}, False),
@@ -40,8 +38,6 @@ TOP_LEVEL = [
     ('g1_real_robot.launch.py', {'start_position_verified': 'true', 'use_rviz': 'true'},
      False),
 ]
-# The Mac bringup reads its blocks from GOLEM_* variables: every block on.
-MAC_ENV = {'GOLEM_LOWERBODY': 'almi', 'GOLEM_SLAM': '1'}
 
 
 def _load(launch_file):
@@ -128,8 +124,6 @@ def _nodes(launch_file, args):
 def test_every_node_runs_on_its_bringups_clock(launch_file, args, sim_time, monkeypatch):
     """Every node of a sim bringup runs with use_sim_time true, of a real one false or unset."""
     monkeypatch.setenv('ROS_DOMAIN_ID', SIM_DOMAIN if sim_time else '0')
-    for name, value in MAC_ENV.items():
-        monkeypatch.setenv(name, value)
     nodes = _nodes(launch_file, args)
     assert len(nodes) > 3, nodes
     allowed = (True,) if sim_time else (False, None)

@@ -1,5 +1,5 @@
 """
-Start the whole H1-2 against the x86 RoboCasa or Isaac sim, on sim time.
+Start the whole H1-2 against the RoboCasa or Isaac sim, on sim time.
 
     ros2 launch golem_bringup h12_sim.launch.py [use_rviz:=false] [use_nav:=false] ...
 

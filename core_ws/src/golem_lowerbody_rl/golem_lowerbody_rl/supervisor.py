@@ -18,8 +18,9 @@ Phases (Phase):
   steps have passed (logged NOT SETTLED; held all the same).
 - HOLDING: the pre-pose every step until the policy may start. It may start once ready:
   /lowstate's tick advancing at the node clock's rate (within startup.tick_rate) over the
-  last full window of startup.steady_seconds of ticks (each window starts where the last
-  ended, and its verdict stands while the next fills), no gap over faults.max_state_gap,
+  last full window (startup.steady_seconds of tick or of the node's clock, whichever comes
+  first; each window starts where the last ended, and its verdict stands while the next
+  fills), no gap over faults.max_state_gap,
   the arm controller commanding within startup.upper_fresh_seconds and, with band.release,
   a first /left_ee_pose or band.max_wait since HOLDING began. With
   startup.wait_for_confirm it then also waits for the operator's confirm, accepted only
@@ -555,7 +556,10 @@ class LegSupervisor:
             self._rate_verdict = STEADY_FILLING
         elif self._window is None:
             self._window = (tick, node_t)
-        elif tick_delta(self._window[0], tick) >= self._steady_ticks:
+        elif (tick_delta(self._window[0], tick) >= self._steady_ticks
+              or node_t - self._window[1] >= self._run.startup.steady_seconds):
+            # SAFETY: the window closes after steady_seconds of the node's clock as well as
+            # of tick, so a slowed tick is judged within steady_seconds however slow it is
             self._judge_window(self._window, tick, node_t)
         if reason is None:
             reason = self._upper_reason(mono)

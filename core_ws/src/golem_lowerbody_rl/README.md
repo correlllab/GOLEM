@@ -58,11 +58,13 @@ reference. The node logs `loaded run config <path> and policy <path>`, then:
     (`legs pre-posed (NOT SETTLED: ...)`, held all the same).
 3. **Holding.** `legs pre-posed (...) — holding`. The policy may start once
     `/lowstate`'s tick advanced at the rate of the node's clock over the last
-    full 1 s window of ticks (sim time in the sims; a tick that is not in ms of
+    full 1 s window, closed after 1 s of tick or of the node's clock (sim time
+    with `use_sim_time`), whichever comes first (a tick that is not in ms of
     that clock, as Isaac's, never qualifies, and a node clock that stands
     still, with no `/clock`, is named). Each window starts where the last
     ended and its verdict stands while the next fills, so a recent stall makes
-    the policy not ready again however long the hold. The arm controller's `/safety/lowcmd_upper_in` is fresh
+    the policy not ready again however long the hold, and a slowed tick does
+    within 1 s of the node's clock. The arm controller's `/safety/lowcmd_upper_in` is fresh
     within 0.5 s and, with `band.release` (the sims), `frame_task_server`'s
     first `/left_ee_pose` has come or `band.max_wait` has passed. The node logs
     `the policy waits: <reason>` every 5 s. On the real robot it then waits

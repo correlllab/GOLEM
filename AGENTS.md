@@ -314,10 +314,11 @@ for the includes after it, so pass consistent values (all four blocks share
   README; the values are the run config's, `config/h12/{sim,real}.yaml`) is
   silent until the first true heartbeat and an upright, finite `/lowstate`. It
   then ramps the legs over 2 s to the policy's crouch and holds there. The
-  policy may start once `/lowstate` is steady over the last 1 s window of its
-  tick (the tick advancing at the node clock's rate, so Isaac's tick, which
-  counts publishes, never qualifies; the windows follow one another, so a
-  recent stall makes it not ready again), the arm controller's commands are fresh within 0.5 s and,
+  policy may start once `/lowstate` is steady over the last 1 s window (1 s
+  of the tick or of the node's clock, sim time with `use_sim_time`, whichever
+  comes first: the tick advancing at the node clock's rate, so Isaac's tick,
+  which counts publishes, never qualifies; the windows follow one another, so
+  a recent stall or a slowed tick makes it not ready again within 1 s), the arm controller's commands are fresh within 0.5 s and,
   in the sim, `frame_task_server`'s first `/left_ee_pose` has come (or
   `band.max_wait`, 34 s); the node logs why it waits. On the real robot it
   then holds until `ros2 service call /lowerbody/confirm_engage

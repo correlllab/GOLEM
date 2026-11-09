@@ -922,6 +922,31 @@ def test_a_recent_stall_after_a_long_hold_is_not_ready(robot):
 
 
 @pytest.mark.parametrize('robot', ROBOTS)
+@pytest.mark.parametrize('rate', (0.5, 0.05, 0.01))
+def test_a_slowed_tick_is_not_ready_within_steady_seconds_of_the_node_clock(robot, rate):
+    """
+    SAFETY: judge a slowed tick within steady_seconds of the node's clock.
+
+    The steady window closes after steady_seconds of the node's clock or of tick. After a
+    minute of steady hold, /lowstate samples whose tick advances at rate s per s of the
+    node's clock, every sample within max_state_gap, make the policy not ready within
+    steady_seconds (1 s) of the node's clock and one sample.
+    """
+    rig = Rig(robot, 'real')
+    rig.until(Phase.HOLDING)
+    rig.feed(round(62.0 / SAMPLE_DT))
+    assert rig.sup.wait_reason == 'the operator has not confirmed yet'
+    dt = max(0.02, TICK_S / rate)  # s between samples: at least one tick each
+    start = rig.node_t
+    while rig.sup.wait_reason == 'the operator has not confirmed yet':
+        rig.feed(1, dt=dt, ticks=round(rate * dt / TICK_S))
+        assert rig.node_t - start <= 1.0 + dt + 1e-9, 'still ready after steady_seconds'
+    assert rig.sup.wait_reason.startswith("/lowstate's tick is off the node's clock"), \
+        rig.sup.wait_reason
+    assert not rig.sup.confirm(rig.mono)[0]
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
 def test_a_ready_node_stays_ready_while_the_next_window_fills(robot):
     """Keep the last window's verdict while the next one fills: ready stays ready."""
     rig = Rig(robot, 'real')

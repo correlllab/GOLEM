@@ -216,11 +216,12 @@ class CpuCaster:
         bounds = np.linspace(0, n, chunks + 1).astype(int)
         # mj_multiRay culls a body through its BVH, which it places with the body's pose,
         # but the scratch MjData and the scan thread's snapshot carry only geom poses: with
-        # the BVH in place their casts miss geoms (6% of the rays in
-        # tests/robocasa/test_mid360.py's kitchen). MuJoCo skips the BVH for bodies without
-        # one, so for this call none has one, and each geom is tested from its own pose: the
-        # result is mj_ray's, ray for ray. Cleared once around every thread's cast, and
-        # restored only once they have all finished.
+        # the BVH in place their casts miss geoms (121 of the 2,000 rays
+        # test_cpu_caster_matches_mj_ray casts in tests/robocasa/test_mid360.py's _KITCHEN,
+        # cast on a fresh MjData given only the geom poses). MuJoCo skips the BVH for bodies
+        # without one, so for this call none has one, and each geom is tested from its own
+        # pose: the result is mj_ray's, ray for ray. Cleared once around every thread's
+        # cast, and restored only once they have all finished.
         bvhadr = self.model.body_bvhadr.copy()
         self.model.body_bvhadr[:] = -1
         futures = []

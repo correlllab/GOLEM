@@ -103,9 +103,9 @@ class MeasurementBridge(Node):
         widths = {mujoco.mjtJoint.mjJNT_FREE: (7, 6), mujoco.mjtJoint.mjJNT_BALL: (4, 3),
                   mujoco.mjtJoint.mjJNT_SLIDE: (1, 1), mujoco.mjtJoint.mjJNT_HINGE: (1, 1)}
         self._reset_joints = [
-            (int(model.jnt_qposadr[j]), widths[int(model.jnt_type[j])][0],
-             int(model.jnt_dofadr[j]), widths[int(model.jnt_type[j])][1])
-            for j in range(model.njnt) if root_of(model.jnt_bodyid[j]) in object_roots]
+            (int(model.jnt_qposadr[j]), width[0], int(model.jnt_dofadr[j]), width[1])
+            for j in range(model.njnt) if root_of(model.jnt_bodyid[j]) in object_roots
+            for width in [widths[int(model.jnt_type[j])]]]
         robot_roots = [int(model.jnt_bodyid[j]) for j in free
                        if body(model.jnt_bodyid[j]).startswith(pfx)]
         self._gt_robot_root = robot_roots[0] if robot_roots else None

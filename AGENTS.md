@@ -6,10 +6,10 @@ bringups that include them), the H1-2's raw-frame lidar, the RoboCasa sims'
 Unitree DDS interfaces, the leg node's start-up on both robots, the `ros`
 container's mounts and checks, the HOMIE licence rule, the package tables,
 the G1's packages and the closed-loop tests were checked against the code on
-2026-11-05; the single platform (§2, §3, §9) on 2026-11-09; the models (`golem_ros2_models`,
-`CL_Assets/g1`), the robot selection, the rest of the G1 text (its sim and
-invariants), the `mode_machine` identity check and the stale-install pitfall
-on 2026-10-28; the DDS-domain rules and the H1-2 claims
+2026-11-05; the single platform (§2, §3, §9) on 2026-11-09; the models
+(`golem_ros2_models`, `CL_Assets/g1`), the robot selection, the rest of the G1
+text (its sim and invariants), the `mode_machine` identity check and the
+stale-install pitfall on 2026-10-28; the DDS-domain rules and the H1-2 claims
 beside them on 2026-10-26; the rest was verified on 2026-07-12. Where older
 docs or script comments disagree with the code, the code wins (known stale
 spots are flagged inline).

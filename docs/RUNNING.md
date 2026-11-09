@@ -83,7 +83,7 @@ the elastic band as in a kitchen (`golem_robocasa/blank_env.py`); it refuses
 
 ### Isaac
 
-Uses the same wrappers, on NVIDIA Linux only. The launcher honors
+Uses the same wrappers. The launcher honors
 `ROS_DOMAIN_ID` and communicates directly on that simulation domain; zero is
 rejected. Select a task with `docker_run.sh isaac --task base --headless`.
 Magpie H1-2 is the default asset, with a floating base. Start the ROS lower-body

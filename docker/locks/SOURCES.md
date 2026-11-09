@@ -45,8 +45,9 @@ The base SDK COPY still uses the repository's Unitree Python submodule checkout.
 
 CUDA and Isaac base digests come from locally installed images' `RepoDigests`.
 The Humble ROS digest (Isaac's `magpie_humble` stage) was resolved from its
-registry manifest index and needs fresh build validation. Local `golem_base` tags intentionally refer to the base
-built by the repository wrapper, not to a remotely published digest.
+registry manifest index and needs fresh build validation. Local `golem_base`
+tags intentionally refer to the base built by the repository wrapper, not to a
+remotely published digest.
 
 Guard against regressing source pins with:
 

@@ -69,7 +69,7 @@ sim_json_string() {
 #   NAME    the output directory's name, tests/results/SUITE-NAME-<time>-<pid>
 #   CASE    the variant, recorded in run.json
 #   DOMAIN  the DDS domain unless ROS_DOMAIN_ID is set; a positive integer
-# Reads CORE_WS, OUT, SIM_IMAGE, ROS_IMAGE and SIM_GPUS (the test scripts'
+# Reads CORE_WS, OUT, SIM_IMAGE and ROS_IMAGE (the test scripts'
 # headers) and sets OUT, SIM, ROS and COMPOSE. On exit the containers are
 # removed and OUT gets run.json.
 sim_test_setup() {
@@ -86,7 +86,6 @@ sim_test_setup() {
     export ROS_DOMAIN_ID=$domain
     SIM_IMAGE=${SIM_IMAGE:-golem_sim_robocasa:latest}
     ROS_IMAGE=${ROS_IMAGE:-golem_ros:latest}
-    SIM_GPUS=${SIM_GPUS-all}
     local core_ws='' out=''
     [ -z "${CORE_WS:-}" ] || core_ws=$(cd -- "$CORE_WS" && pwd)
     if [ -n "${OUT:-}" ]; then
@@ -140,8 +139,6 @@ services:
   robocasa:
     image: "$SIM_IMAGE"
     network_mode: none
-    environment:
-      NVIDIA_VISIBLE_DEVICES: "${SIM_GPUS:-void}"
     volumes:
       - {type: bind, source: "$GOLEM_ROOT/golem_robocasa", target: /home/code/golem_robocasa, read_only: true}
 $shared

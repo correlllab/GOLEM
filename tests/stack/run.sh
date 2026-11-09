@@ -33,8 +33,8 @@ if [[ "$SIMULATOR/$TEST_CASE" == isaac/locomotion ]]; then
 fi
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-193}
 export GOLEM_TEST_WALL_TIMEOUT=${GOLEM_TEST_WALL_TIMEOUT:-900}
-# The controllers read no images, and CPU-rendered RoboCasa cameras slow physics several-fold
-# while the wall-clock controllers keep real-time pace, which the real robot never has to absorb.
+# The controllers read no images, and RoboCasa's camera renders slow the physics while the
+# wall-clock controllers keep real-time pace, which the real robot never has to absorb.
 export GOLEM_TEST_CAMERAS=${GOLEM_TEST_CAMERAS:-0}
 [[ "$GOLEM_TEST_WALL_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || exit 2
 # Set up docker compose, the domain check and the mounts as the wrappers do, for the H1-2 only:

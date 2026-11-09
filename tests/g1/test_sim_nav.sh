@@ -42,15 +42,9 @@
 #   GOLEM_TEST_RECORD_EVERY  physics steps per recorded sample (default 10, 50 Hz)
 #   NAV_KEEP_LIDAR  1: also keep the /livox/lidar frames from the goal on (lidar_frames.npz,
 #               about 1 MB per sim second)
-#   SIM_GPUS    the sim container's NVIDIA_VISIBLE_DEVICES (default all; empty for
-#               none: Mesa's software EGL then renders the camera, far slower)
 #   GOLEM_LIDAR_POINTS, GOLEM_LIDAR_HZ, GOLEM_CAMERAS, GOLEM_CAMERA_HZ,
 #   GOLEM_CAMERA_SCALE   passed to the sim as the shell has them, docker/.env's
 #               never (g1_sensors.SensorConfig)
-#   GOLEM_LIDAR_BACKEND   passed to the sim as the shell has it, docker/.env's never:
-#               unset is auto (the GPU caster when the sim has a GPU, see SIM_GPUS, else
-#               the CPU's), cpu casts every ray on the CPU; the sim logs
-#               the caster it built
 #   GOLEM_SIM_RATE   passed to the sim as the shell has it, docker/.env's never: the target
 #               real-time factor (unset is 1, real time; or 2, max, ...); the checks are gates only at 1,
 #               and the summary records the rate the sim logged
@@ -84,7 +78,7 @@ if [ -n "${GOLEM_TEST_RECORD_EVERY:-}" ]; then
     SIM_ENV+=(-e "GOLEM_TEST_RECORD_EVERY=$GOLEM_TEST_RECORD_EVERY")
 fi
 g1_test_shell_knobs GOLEM_LIDAR_POINTS GOLEM_LIDAR_HZ GOLEM_CAMERAS GOLEM_CAMERA_HZ GOLEM_CAMERA_SCALE \
-    GOLEM_LIDAR_BACKEND GOLEM_SIM_RATE
+    GOLEM_SIM_RATE
 DRIVE_ARGS=
 if [ "${NAV_KEEP_LIDAR:-0}" = 1 ]; then
     DRIVE_ARGS=--keep-lidar

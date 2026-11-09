@@ -138,14 +138,12 @@ def file_has(path, text):
         return False
 
 
-# The sim's start-up lines (sim.log) naming how it casts the lidar's rays and the rate it paces
-# to (GOLEM_SIM_RATE).
-SIM_SETTING_LINES = {"rate": re.compile(r"sim rate: [^\n]*"),
-                     "lidar": re.compile(r"lidar rays cast on the [^\n]*")}
+# The sim's start-up lines (sim.log) naming the rate it paces to (GOLEM_SIM_RATE).
+SIM_SETTING_LINES = {"rate": re.compile(r"sim rate: [^\n]*")}
 
 
 def sim_settings(out):
-    """Return the sim's start-up settings from <out>/sim.log, {"rate": line, "lidar": line}; None for one not logged."""
+    """Return the sim's start-up settings from <out>/sim.log, {"rate": line}; None for one not logged."""
     try:
         with open(os.path.join(out, "sim.log"), errors="replace") as f:
             text = f.read()
@@ -158,8 +156,7 @@ def sim_settings(out):
 def record_sim_settings(numbers, out):
     """Put the sim's start-up settings (sim_settings) into numbers["sim"] and print them, beside the real-time factor."""
     settings = numbers["sim"] = sim_settings(out)
-    print(f"     {settings['rate'] or 'the sim logged no sim rate'}; "
-          f"{settings['lidar'] or 'the sim logged no lidar caster'}")
+    print(f"     {settings['rate'] or 'the sim logged no sim rate'}")
 
 
 def logged(path, logger):

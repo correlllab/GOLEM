@@ -65,9 +65,9 @@ robocasa ros`); they never build them.
 
 - **Containers.** Both containers are the compose services as `docker_run.sh` starts them
   (`robocasa` with the G1 overlay, `ros` from `docker-compose.yml`), plus a `test_compose.yml`
-  that `common.sh` writes into the output directory. `common.sh` is `tests/sim/common.sh`'s
-  harness, which `tests/sim`'s test of both robots shares, with the G1's build and output
-  names; both containers mount `tests/g1` and `tests/sim` read-only. The sim container has no network, and the
+  that `tests/sim/common.sh` writes into the output directory. That harness, which the scripts
+  source and `tests/sim`'s test of both robots shares, runs them as the `g1` suite (the G1's
+  build and output names); both containers mount `tests/g1` and `tests/sim` read-only. The sim container has no network, and the
   ros container joins its network namespace. Both use its loopback with multicast, so no DDS
   leaves the host and nothing talks to the robot.
 - **DDS domains.** The arm test uses 195, the walk test 196, the nav test 197 and the explore

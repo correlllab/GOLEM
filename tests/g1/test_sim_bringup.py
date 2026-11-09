@@ -47,6 +47,7 @@ in robot time, sim time here: the two agree at the GOLEM_SIM_RATE of 1 the test
 is a gate at.
 """
 import argparse
+import importlib
 import json
 import math
 import os
@@ -189,41 +190,85 @@ class StopRecording(Exception):
     """Signal that <out>/stop appeared: end the sim."""
 
 
-class Recorder:
-    """Record the G1's state from inside the sim, after every physics step, under the sim lock."""
+class StepRecorder:
+    """Record the robot's state from inside the sim after every physics step, under the sim lock: the shared part.
+
+    It counts the steps, keeps the elastic band's state at each change (band_changes: sim t, wall
+    t, 1 on, 0 off, NaN no band), raises StopRecording once <out>/stop appears (checked every 500
+    steps) and samples every RECORD_EVERY steps into rows. A recorder of one test adds what it
+    records every step (every_step) and at each sample (sample). Used by test_sim_nav.py and
+    tests/sim/test_sim_stack.py too.
+    """
+
+    TAG = "test_sim_bringup"   # the log prefix of save()'s line
+    ROWS = ()   # the names of the rows sample() appends to
 
     def __init__(self, out):
         """Record into `out`, stopping when its stop file appears."""
         self.out = out
         self.stop_file = os.path.join(out, "stop")
-        self.rows = {k: [] for k in ("t", "wall", "pelvis", "quat", "upz", "vel", "q", "dq", "gyro",
-                                     "hands", "feet", "band", "commanded", "lowcmd_q", "lowcmd_t",
-                                     "leg_changes", "leg_hold_max", "lidar_pos", "lidar_mat")}
+        self.rows = {k: [] for k in self.ROWS}
         self.steps = 0
-        self.names = None
-        self.dt = None
-        self._lidar_site = None
-        self._feet = None
-        # every step: the band's state (1 on, 0 off, NaN no band) at each change, with
-        # its sim and wall time, and the first step with SimInterface.commanded
-        self._band = None
         self.band_changes = []
-        self.commanded_at = None
-        # every step: how often rt/lowcmd's leg targets change, and the longest
-        # they stayed the same (physics steps) since the last sample
-        self._legs, self.leg_changes, self._hold, self._hold_max = None, 0, 0, 0
+        self._band = None
 
     def step(self, iface):
-        """Record one physics step: band, first command and leg-target changes always, the rest every RECORD_EVERY steps.
-
-        Raises StopRecording when the stop file appears (checked every 500 steps).
-        """
+        """Record one physics step of the SimInterface iface, whose band is the sim's ElasticBand or None."""
         self.steps += 1
         on = None if iface.band is None else bool(iface.band.enabled)
         band = math.nan if on is None else float(on)
         if not self.band_changes or on != self._band:
             self._band = on
             self.band_changes.append([float(iface.data.time), time.time(), band])
+        self.every_step(iface)
+        if self.steps % 500 == 0 and os.path.exists(self.stop_file):
+            raise StopRecording()
+        if self.steps % RECORD_EVERY == 0:
+            self.sample(iface, band)
+
+    def every_step(self, iface):
+        """Record what this test needs from every physics step (nothing here)."""
+
+    def sample(self, iface, band):
+        """Append one sample of iface's state to rows; band is the band's state (1, 0 or NaN)."""
+        raise NotImplementedError
+
+    def save_npz(self, **extra):
+        """Write sim.npz, atomically: the rows, hz, band_changes and the extra arrays."""
+        arrays = {k: np.array(v) for k, v in self.rows.items()}
+        # Written under another name and renamed, so that a file named sim.npz is complete.
+        tmp = os.path.join(self.out, "sim.tmp.npz")
+        np.savez(tmp, hz=500.0 / RECORD_EVERY, band_changes=np.array(self.band_changes, float).reshape(-1, 3),
+                 **extra, **arrays)
+        os.replace(tmp, os.path.join(self.out, "sim.npz"))
+        print(f"[{self.TAG}] saved {len(self.rows['t'])} samples to {self.out}/sim.npz", flush=True)
+
+    def save(self):
+        """Write the recording."""
+        self.save_npz()
+
+
+class Recorder(StepRecorder):
+    """Record the G1's state from inside the sim: StepRecorder's, the first command and the leg targets' changes."""
+
+    ROWS = ("t", "wall", "pelvis", "quat", "upz", "vel", "q", "dq", "gyro", "hands", "feet", "band", "commanded",
+            "lowcmd_q", "lowcmd_t", "leg_changes", "leg_hold_max", "lidar_pos", "lidar_mat")
+
+    def __init__(self, out):
+        """Record into `out`, stopping when its stop file appears."""
+        super().__init__(out)
+        self.names = None
+        self.dt = None
+        self._lidar_site = None
+        self._feet = None
+        # every step: the sim and wall time of the first step with SimInterface.commanded
+        self.commanded_at = None
+        # every step: how often rt/lowcmd's leg targets change, and the longest
+        # they stayed the same (physics steps) since the last sample
+        self._legs, self.leg_changes, self._hold, self._hold_max = None, 0, 0, 0
+
+    def every_step(self, iface):
+        """Note the first command and the leg targets' changes."""
         if self.commanded_at is None and iface.commanded:
             self.commanded_at = [float(iface.data.time), time.time()]
         if iface._lowcmd is not None:
@@ -233,10 +278,9 @@ class Recorder:
             else:
                 self._hold += 1
                 self._hold_max = max(self._hold_max, self._hold)
-        if self.steps % 500 == 0 and os.path.exists(self.stop_file):
-            raise StopRecording()
-        if self.steps % RECORD_EVERY:
-            return
+
+    def sample(self, iface, band):
+        """Append the G1's base, joints, hands, feet, command and lidar pose to rows."""
         d, r = iface.data, iface.resolver
         if self.names is None:
             self.names = {"body": list(r.body.names),
@@ -271,56 +315,72 @@ class Recorder:
         rows["lidar_mat"].append(d.site_xmat[self._lidar_site].copy())
 
     def save(self):
-        """Write sim.npz, atomically."""
-        arrays = {k: np.array(v) for k, v in self.rows.items()}
-        # Written under another name and renamed, so that a file named sim.npz is complete.
-        tmp = os.path.join(self.out, "sim.tmp.npz")
-        np.savez(tmp, names=json.dumps(self.names),
-                 hz=500.0 / RECORD_EVERY, dt=self.dt,
-                 band_changes=np.array(self.band_changes, float).reshape(-1, 3),
-                 commanded_at=np.array(self.commanded_at or [math.nan, math.nan], float), **arrays)
-        os.replace(tmp, os.path.join(self.out, "sim.npz"))
-        print(f"[test_sim_bringup] saved {len(self.rows['t'])} samples to {self.out}/sim.npz", flush=True)
+        """Write sim.npz, atomically, with the joint names, the time step and the first command's times."""
+        self.save_npz(names=json.dumps(self.names), dt=self.dt,
+                      commanded_at=np.array(self.commanded_at or [math.nan, math.nan], float))
 
 
-def run_sim(out, sim_args):
-    """Run h12_mujoco.py --g1 with the recorder hooked into SimInterface.after_step.
+def import_sim(name):
+    """Import and return the sim's module name, putting golem_robocasa on sys.path (the sim role's)."""
+    if SIM not in sys.path:
+        sys.path.insert(0, SIM)
+    return importlib.import_module(name)
 
-    Also writes sensors.json, the sensor config the sim reads from its knobs, for the drive.
+
+def write_sensor_config(out):
+    """Write <out>/sensors.json: the G1 sensors' config as the sim reads its knobs, which the drive expects to hear."""
+    config = import_sim("g1.g1_sensors").SensorConfig.from_env()
+    with open(os.path.join(out, "sensors.json"), "w") as f:
+        json.dump(config._asdict(), f, indent=1)
+
+
+def run_recorded_sim(out, robot, sim_args, recorder, tag, on_init=None):
+    """Run h12_mujoco.py for robot ('h12' or 'g1') as __main__ with recorder.step after every SimInterface.after_step.
+
+    on_init(iface), if given, runs once the SimInterface is made: the robot is at the spawn, in
+    the sim's stance, before the first step and the bridges. SIGTERM, like Ctrl-C, ends the sim,
+    as StopRecording does; the recording is saved however the sim ends. Logs under [tag].
     """
     import runpy
     import signal
 
-    sys.path.insert(0, SIM)
-    # The G1's own classes: golem_robocasa's top-level unitree_interface is the H1-2's.
-    from g1 import unitree_interface
-    from g1.g1_sensors import SensorConfig
-
-    # What the drive expects to hear: the sensors as the sim reads its knobs.
-    with open(os.path.join(out, "sensors.json"), "w") as f:
-        json.dump(SensorConfig.from_env()._asdict(), f, indent=1)
-    recorder = Recorder(out)
-    after_step = unitree_interface.SimInterface.after_step
+    # Each robot's own class: golem_robocasa's top-level unitree_interface is the H1-2's.
+    interface = import_sim("unitree_interface" if robot == "h12" else "g1.unitree_interface").SimInterface
+    after_step = interface.after_step
+    init = interface.__init__
 
     def recorded_after_step(self):
         """Publish rt/lowstate as the sim does, then record the step."""
         after_step(self)
         recorder.step(self)
 
+    def hooked_init(self, *args, **kwargs):
+        """Make the interface, then run on_init on it."""
+        init(self, *args, **kwargs)
+        on_init(self)
+
     def interrupt(signum, frame):
         """Turn SIGTERM into KeyboardInterrupt, so that the recording is saved."""
         raise KeyboardInterrupt()
 
-    unitree_interface.SimInterface.after_step = recorded_after_step
+    interface.after_step = recorded_after_step
+    if on_init is not None:
+        interface.__init__ = hooked_init
     signal.signal(signal.SIGTERM, interrupt)
     script = os.path.join(SIM, "h12_mujoco.py")
-    sys.argv = [script, "--g1"] + sim_args
+    sys.argv = [script, f"--{robot}"] + sim_args
     try:
         runpy.run_path(script, run_name="__main__")
     except (StopRecording, KeyboardInterrupt):
-        print("[test_sim_bringup] sim stopped", flush=True)
+        print(f"[{tag}] sim stopped", flush=True)
     finally:
         recorder.save()
+
+
+def run_sim(out, sim_args):
+    """Run h12_mujoco.py --g1 with the recorder; write sensors.json, for the drive, first."""
+    write_sensor_config(out)
+    run_recorded_sim(out, "g1", sim_args, Recorder(out), "test_sim_bringup")
 
 
 def _cdr_stamp(raw):

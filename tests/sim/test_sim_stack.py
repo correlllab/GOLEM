@@ -7,7 +7,7 @@ the roles and has the usage.
   sim     in the robocasa container: h12_mujoco.py as __main__ for GOLEM_ROBOT's
           robot (--h12 or --g1), recording from the sim's own state: after every
           physics step the elastic band's state and any penetrating contact between
-          a robot geom and anything but the floor, and every RECORD_EVERY steps the
+          a robot geom and anything but the floor, and every test_sim_bringup.RECORD_EVERY steps the
           pelvis (<out>/sim.npz, contacts.json). At startup, with the robot at the
           spawn, it maps the kitchen from the sim's geometry (<out>/scene.npz) and
           places the goal GOAL_AHEAD m ahead of the pelvis (<out>/goal.json). It
@@ -75,8 +75,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), "g1"))
 import test_sim_bringup as bringup_test  # noqa: E402
 import test_sim_nav as nav_test  # noqa: E402
 
-SIM = bringup_test.SIM
-RECORD_EVERY = bringup_test.RECORD_EVERY  # physics steps per sample (50 Hz)
 # Per robot, m: min_pelvis_z is the pelvis' lowest height while standing or walking, below each
 # robot's stand (HOMIE stands the G1 at 0.744 m, tests/g1; ALMI stands the H1-2 at 0.977 m, and
 # tests/stack's check_lowerbody allows 0.20 m below the stand). height is the top of the band
@@ -125,27 +123,11 @@ def map_scene(out, robot, model, data, base_body):
 
     The goal gets an "error" when it is not reachable or not in open floor.
     """
-    from scipy import ndimage
-    is_robot, floor, low, high = nav_test.robot_and_floor(model, data, base_body)
-    visual = model.geom_group == 1
-    colliding = (model.geom_contype > 0) | (model.geom_conaffinity > 0)
-    env = ~is_robot & ~floor
-    pelvis = data.xpos[base_body].copy()
-    yaw = float(nav_test.yaw_of(data.xquat[base_body]))
-    res = nav_test.GRID_RES
-    n = int(round(2 * nav_test.GRID_HALF / res))
-    origin = np.round((pelvis[:2] - nav_test.GRID_HALF) / res) * res
     z_range = (0.02, ROBOTS[robot]["height"])
-    solid = nav_test.raster(low, high, env & (visual | colliding), z_range, origin, (n, n))
-    clearance = ndimage.distance_transform_edt(~solid) * res
-
-    def cell(xy):
-        """Return the grid cell (row, column) of a world xy, m."""
-        return tuple(np.floor((np.asarray(xy)[::-1] - origin[::-1]) / res).astype(int))
-
-    spawn_cell = cell(pelvis[:2])
-    labels, _ = ndimage.label(clearance >= PATH_CLEARANCE)
-    reachable = (labels == labels[spawn_cell]) & (labels[spawn_cell] > 0)
+    grid = nav_test.spawn_grid(model, data, base_body, z_range, visual=model.geom_group == 1)
+    pelvis, yaw, origin, res = grid.pelvis, grid.yaw, grid.origin, nav_test.GRID_RES
+    solid, clearance, reachable, cell = grid.solid, grid.clearance, grid.reachable, grid.cell
+    spawn_cell = grid.spawn_cell
     gx, gy = pelvis[0] + GOAL_AHEAD * math.cos(yaw), pelvis[1] + GOAL_AHEAD * math.sin(yaw)
     goal_cell = cell((gx, gy))
     np.savez(os.path.join(out, "scene.npz"), origin=origin, res=res, solid=solid, clearance=clearance,
@@ -167,43 +149,29 @@ def map_scene(out, robot, model, data, base_body):
           f"{goal['goal_clearance']:.2f} m of room" + (f"; {goal['error']}" if "error" in goal else ""), flush=True)
 
 
-class Recorder:
-    """Record the robot's state from inside the sim, after every physics step, under the sim lock."""
+class Recorder(bringup_test.StepRecorder):
+    """Record the robot's pelvis, contacts and live pose from inside the sim (test_sim_bringup.StepRecorder)."""
+
+    TAG = "test_sim_stack"
+    ROWS = ("t", "wall", "pelvis", "quat", "upz")
 
     def __init__(self, out):
         """Record into `out`, stopping when its stop file appears."""
-        self.out = out
-        self.stop_file = os.path.join(out, "stop")
-        self.band = None  # the sim's ElasticBand, from its MeasurementBridge
-        self.rows = {k: [] for k in ("t", "wall", "pelvis", "quat", "upz")}
-        self.steps = 0
-        self.band_changes = []  # sim t, wall, state (1 on, 0 off, NaN no band) at each change
-        self._band_state = None
+        super().__init__(out)
         self._base = None
         self.contact_log = nav_test.ContactLog()
 
-    def step(self, iface):
-        """Record one physics step: band changes and contacts always, the pelvis every RECORD_EVERY steps.
-
-        Writes the live pose every 100 steps and raises StopRecording when the stop file appears
-        (checked every 500 steps).
-        """
-        m, d = iface.model, iface.data
-        self.steps += 1
+    def every_step(self, iface):
+        """Log contacts every step and the live pose every 100 steps."""
         if self._base is None:
             self._base = iface.resolver.body_id("pelvis")
-        base = self._base
-        on = None if self.band is None else bool(self.band.enabled)
-        if not self.band_changes or on != self._band_state:
-            self._band_state = on
-            self.band_changes.append([float(d.time), time.time(), math.nan if on is None else float(on)])
-        self.contact_log.step(m, d, base)
+        self.contact_log.step(iface.model, iface.data, self._base)
         if self.steps % 100 == 0:
-            nav_test.write_live_pose(self.out, d, base)
-        if self.steps % 500 == 0 and os.path.exists(self.stop_file):
-            raise bringup_test.StopRecording()
-        if self.steps % RECORD_EVERY:
-            return
+            nav_test.write_live_pose(self.out, iface.data, self._base)
+
+    def sample(self, iface, band):
+        """Append the pelvis' pose and uprightness to rows."""
+        d, base = iface.data, self._base
         rows = self.rows
         rows["t"].append(float(d.time))
         rows["wall"].append(time.time())
@@ -213,67 +181,16 @@ class Recorder:
 
     def save(self):
         """Write sim.npz, then contacts.json, whose presence means the recording is complete."""
-        arrays = {k: np.array(v) for k, v in self.rows.items()}
-        # Written under another name and renamed, so that a file named sim.npz is complete.
-        tmp = os.path.join(self.out, "sim.tmp.npz")
-        np.savez(tmp, hz=500.0 / RECORD_EVERY, band_changes=np.array(self.band_changes, float).reshape(-1, 3),
-                 **arrays)
-        os.replace(tmp, os.path.join(self.out, "sim.npz"))
+        self.save_npz()
         self.contact_log.save(os.path.join(self.out, "contacts.json"), self.steps)
-        print(f"[test_sim_stack] saved {len(self.rows['t'])} samples to {self.out}/sim.npz", flush=True)
 
 
 def run_sim(out, sim_args):
-    """Run h12_mujoco.py for GOLEM_ROBOT's robot with the recorder, the scene map and the band hooked in."""
-    import importlib
-    import inspect
-    import runpy
-    import signal
-
+    """Run h12_mujoco.py for GOLEM_ROBOT's robot with the recorder, the scene map and the goal."""
     robot = robot_from_env()
-    sys.path.insert(0, SIM)
-    # Each robot's own SimInterface: golem_robocasa's top-level unitree_interface is the H1-2's.
-    interface = importlib.import_module("unitree_interface" if robot == "h12" else "g1.unitree_interface")
-    import measurement_bridge
-
-    recorder = Recorder(out)
-    after_step = interface.SimInterface.after_step
-    init = interface.SimInterface.__init__
-    bridge_init = measurement_bridge.MeasurementBridge.__init__
-
-    def recorded_after_step(self):
-        """Publish rt/lowstate as the sim does, then record the step."""
-        after_step(self)
-        recorder.step(self)
-
-    def mapped_init(self, *args, **kwargs):
-        """Make the interface, then map the scene and place the goal."""
-        # The robot is at the spawn, in the sim's stance, before the first step and the bridges.
-        init(self, *args, **kwargs)
-        map_scene(out, robot, self.model, self.data, self.resolver.body_id("pelvis"))
-
-    def band_init(self, *args, **kwargs):
-        """Keep the sim's elastic band for the recorder, then make the bridge."""
-        # Both sims hand their elastic band to the bridge that serves /elastic_band/toggle.
-        recorder.band = inspect.signature(bridge_init).bind(self, *args, **kwargs).arguments.get("elastic_band")
-        bridge_init(self, *args, **kwargs)
-
-    def interrupt(signum, frame):
-        """Turn SIGTERM into KeyboardInterrupt, so that the recording is saved."""
-        raise KeyboardInterrupt()
-
-    interface.SimInterface.after_step = recorded_after_step
-    interface.SimInterface.__init__ = mapped_init
-    measurement_bridge.MeasurementBridge.__init__ = band_init
-    signal.signal(signal.SIGTERM, interrupt)
-    script = os.path.join(SIM, "h12_mujoco.py")
-    sys.argv = [script, f"--{robot}"] + sim_args
-    try:
-        runpy.run_path(script, run_name="__main__")
-    except (bringup_test.StopRecording, KeyboardInterrupt):
-        print("[test_sim_stack] sim stopped", flush=True)
-    finally:
-        recorder.save()
+    bringup_test.run_recorded_sim(
+        out, robot, sim_args, Recorder(out), "test_sim_stack",
+        on_init=lambda iface: map_scene(out, robot, iface.model, iface.data, iface.resolver.body_id("pelvis")))
 
 
 def _known_cells(msg):

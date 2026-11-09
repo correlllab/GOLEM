@@ -8,8 +8,8 @@ network on ROS_DOMAIN_ID 97, with golem_robocasa on PYTHONPATH.
 """
 import math
 import os
-import sys
 import time
+import unittest
 
 import mujoco
 import numpy as np
@@ -21,6 +21,7 @@ from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_ as LowState
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
 from unitree_sdk2py.utils.crc import CRC
 
+import function_tests
 import g1
 import unitree_common
 from g1.sim_names import BODY_JOINTS, HAND_JOINTS, NameResolver
@@ -298,17 +299,12 @@ def test_lowstate_and_hand_state():
     assert np.allclose([m.q for m in state.motor_state[:7]], DATA.qpos[hand.qpos], atol=1e-6)
 
 
-if __name__ == "__main__":
-    # Each file runs as a script (run_in_container.sh), so it runs its own test_* functions.
-    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
-    failed = 0
-    for name, fn in tests:
-        try:
-            fn()
-            print(f"PASS {name}")
-        except Exception as e:  # noqa: BLE001
-            failed += 1
-            print(f"FAIL {name}: {type(e).__name__}: {e}")
-    print(f"{len(tests) - failed}/{len(tests)} passed")
+def tearDownModule():
+    """Close the shared interface's DDS channels."""
     IFACE.shutdown()
-    sys.exit(1 if failed else 0)
+
+
+G1UnitreeInterfaceTests = function_tests.test_case(globals(), "G1UnitreeInterfaceTests")
+
+if __name__ == "__main__":
+    unittest.main()

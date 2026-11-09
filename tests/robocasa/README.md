@@ -68,7 +68,8 @@ acquisition and PD control; `lowstate` is the `rt/lowstate` sample built,
 signed and published after every physics step. Timings are silent unless requested.
 Both sims build that sample with numpy (`LowStateWriter` in `unitree_common.py`);
 `test_lowstate_writer.py` checks its bytes against `unitree_sdk2py`'s serializer and
-CRC and prints both paths' microseconds per sample.
+CRC, and that they take at most a third of the SDK path's time, printing both paths'
+microseconds per sample.
 
 Compare the same task/layout/style/seed, display mode, subscribers, and hardware.
 Discard the first interval for renderer warm-up. PD torque is recomputed every

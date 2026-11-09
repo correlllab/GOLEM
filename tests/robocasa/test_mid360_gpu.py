@@ -8,9 +8,7 @@ skipped, naming why, without one. Run them in the robocasa image:
 ROS_DOMAIN_ID=231 tests/robocasa/run_in_container.sh -p test_mid360_gpu.py
 """
 import functools
-import sys
 import time
-import types
 import unittest
 from typing import NamedTuple
 
@@ -20,6 +18,7 @@ import numpy as np
 import mid360
 import sim_common
 from exact_rays import ExactCaster
+from spawn_scene import import_h12_mujoco
 
 LAYOUT, STYLE, SEED = 9, 9, 42        # the surface probe's kitchen
 FRAME_POINTS = 20_000                 # one 10 Hz frame of the pattern
@@ -98,11 +97,7 @@ def _g1():
 @functools.lru_cache(maxsize=None)
 def _h12():
     """Return the H1-2's Kitchen, spawned by h12_mujoco.spawn() at RoboCasa's spawn."""
-    if "magpie_hand_bridge" not in sys.modules:   # needs magpie_msgs, which the shell lacks
-        stub = types.ModuleType("magpie_hand_bridge")
-        stub.MagpieHandBridge = None
-        sys.modules["magpie_hand_bridge"] = stub
-    import h12_mujoco
+    h12_mujoco = import_h12_mujoco()
     import h1_2_robosuite
     from sim_names import NameResolver
     env = h1_2_robosuite.make_kitchen_env(sim_common.random_task(seed=SEED), layout_ids=LAYOUT,

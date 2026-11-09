@@ -6,7 +6,7 @@ tests/robocasa/g1/run_in_container.sh does.
 """
 import io
 import struct
-import sys
+import unittest
 
 import mujoco
 import numpy as np
@@ -15,6 +15,7 @@ from PIL import Image as PILImage
 from rclpy.serialization import deserialize_message, serialize_message
 from sensor_msgs.msg import CompressedImage, Image
 
+import function_tests
 import mid360
 from g1 import g1_lidar as lidar
 from g1 import g1_sensor_msgs as msgs
@@ -191,16 +192,7 @@ def test_camera_info():
     assert list(info.r) == [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
 
 
+G1SensorMsgsTests = function_tests.test_case(globals(), "G1SensorMsgsTests")
+
 if __name__ == "__main__":
-    # Each file runs as a script (run_in_container.sh), so it runs its own test_* functions.
-    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
-    failed = 0
-    for name, fn in tests:
-        try:
-            fn()
-            print(f"PASS {name}")
-        except Exception as e:  # noqa: BLE001
-            failed += 1
-            print(f"FAIL {name}: {type(e).__name__}: {e}")
-    print(f"{len(tests) - failed}/{len(tests)} passed")
-    sys.exit(1 if failed else 0)
+    unittest.main()

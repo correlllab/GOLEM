@@ -121,6 +121,12 @@ tests/robocasa/g1/run_in_container.sh                         # every test_g1_*.
 tests/robocasa/g1/run_in_container.sh test_g1_sensors.py      # one file
 ```
 
+Each file is a unittest module (its `test_*` functions collected by
+`g1/function_tests.py`), so the H1-2 runner can run the ones that open no Unitree DDS
+channel too, e.g. `tests/robocasa/run_in_container.sh -s /home/code/tests/robocasa/g1 -p
+test_g1_sensor_msgs.py`; `test_g1_band.py`, `test_g1_sim_rate.py` and
+`test_g1_unitree_interface.py` open them and belong in the G1 runner's container.
+
 The acceptance tests start the G1 sim headless with the whole G1 bringup and
 check the sim's own recording of the run. They need the `golem_sim_robocasa`
 and `golem_ros` images and Docker's NVIDIA runtime, run with no network of their

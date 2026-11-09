@@ -20,13 +20,13 @@
 # see test_sim_nav.py for what is checked), the robot standing to the end of it
 # and no fall in sim.log. The camera renders on the GPU (EGL).
 #
-# The containers have no network of their own (common.sh), so no DDS leaves the
+# The containers have no network of their own (tests/sim/common.sh), so no DDS leaves the
 # host, and nothing talks to the robot. ROS_DOMAIN_ID must not be 0.
 #
 # Env:
 #   GOLEM_SIM_ODOM must be unset or 0: the shared pipeline needs FAST-LIO.
 #   CORE_WS     a core_ws to build in place and use (default the repo's, built
-#               into container_cache/g1_tests; see common.sh)
+#               into container_cache/g1_tests; see tests/sim/common.sh)
 #   OUT         output directory, new or empty (default
 #               tests/results/g1-nav-<time>-<pid>)
 #   SIM_IMAGE   default golem_sim_robocasa:latest
@@ -73,11 +73,11 @@ esac
 # The sim's knobs; the lidar stays on: navigation needs it.
 SIM_ENV=(-e GOLEM_SIM_ODOM=0 -e "GOLEM_SPAWN_BACKOFF=${NAV_BACKOFF:-2.0}" -e "NAV_GOAL=${NAV_GOAL:-}"
          -e GOLEM_LIDAR=)
-source "$HERE/common.sh"
+source "$HERE/../sim/common.sh"
 if [ -n "${GOLEM_TEST_RECORD_EVERY:-}" ]; then
     SIM_ENV+=(-e "GOLEM_TEST_RECORD_EVERY=$GOLEM_TEST_RECORD_EVERY")
 fi
-g1_test_shell_knobs GOLEM_LIDAR_POINTS GOLEM_LIDAR_HZ GOLEM_CAMERAS GOLEM_CAMERA_HZ GOLEM_CAMERA_SCALE \
+sim_test_shell_knobs GOLEM_LIDAR_POINTS GOLEM_LIDAR_HZ GOLEM_CAMERAS GOLEM_CAMERA_HZ GOLEM_CAMERA_SCALE \
     GOLEM_SIM_RATE
 DRIVE_ARGS=
 if [ "${NAV_KEEP_LIDAR:-0}" = 1 ]; then
@@ -85,18 +85,18 @@ if [ "${NAV_KEEP_LIDAR:-0}" = 1 ]; then
 fi
 
 # The containers, the build, then the sim, up before the bringup.
-g1_test_setup test_sim_nav nav nav 197
-g1_test_log_load
+sim_test_setup g1 g1 test_sim_nav nav nav 197
+sim_test_log_load
 
 echo "[test_sim_nav] DDS domain $ROS_DOMAIN_ID, output in $OUT"
-g1_test_build_ros
-g1_test_start_sim test_sim_nav.py "${SIM_ENV[@]}"
+sim_test_build_ros
+sim_test_start_sim test_sim_nav.py "${SIM_ENV[@]}"
 grep "\[test_sim_nav\]" "$OUT/sim.log" || true
 echo "[test_sim_nav] sim up; starting the bringup with navigation"
 
 # The bringup in the background and the test's steps beside it, at most 900 s.
 
-g1_test_run_ros 900 "ros2 launch golem_bringup g1_sim.launch.py use_rviz:=false use_nav:=true \
+sim_test_run_ros 900 "ros2 launch golem_bringup g1_sim.launch.py use_rviz:=false use_nav:=true \
         use_hands:=${NAV_USE_HANDS:-true} > /out/launch.log 2>&1 &
     LAUNCH=\$!
     python3 -u /home/code/tests/g1/test_sim_nav.py drive --out /out $DRIVE_ARGS
@@ -110,5 +110,5 @@ g1_test_run_ros 900 "ros2 launch golem_bringup g1_sim.launch.py use_rviz:=false 
     exit \$rc"
 
 # Stop the sim, then check the run against its recording.
-g1_test_stop_sim
-g1_test_report test_sim_nav.py
+sim_test_stop_sim
+sim_test_report test_sim_nav.py

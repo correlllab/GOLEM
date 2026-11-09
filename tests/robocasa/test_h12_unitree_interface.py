@@ -4,8 +4,8 @@ rt/lowcmd frames are validated and latched whole, every motor is off until the
 first valid frame, the command timeout runs in sim time inside the physics step,
 and rt/lowstate is published after every physics step. The model is a stand-in
 for the robot (27 hinge motors and a free-floating IMU body, no kitchen), and
-the DDS channels and cyclonedds' ddspy_write are in-process fakes for the
-length of each test, so no DDS participant opens. It runs in the standard runner
+the DDS channels and cyclonedds' ddspy_write are in-process fakes
+(dds_fakes.py) for the length of each test, so no DDS participant opens. It runs in the standard runner
 (tests/robocasa/run_in_container.sh); see test_h12_mode_machine.py for a
 throwaway-container command.
 """
@@ -24,11 +24,11 @@ import mujoco
 import numpy as np
 
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_ as LowCmd_default
-from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
 from unitree_sdk2py.utils.crc import CRC
 
 import unitree_common
 import unitree_interface as ui
+from dds_fakes import FakeSubscriber, fake_dds
 
 N = ui.MOTOR_NUM
 CRC_ = CRC()
@@ -78,62 +78,6 @@ def model_and_resolver():
     return model, resolver
 
 
-class FakePublisher:
-    """Stand in for ChannelPublisher, keeping the samples written to its DataWriter.
-
-    It has the private attribute chain of unitree_sdk2py's ChannelPublisher, ending in a
-    stand-in DataWriter, so that LowStateWriter writes through fake_ddspy_write.
-    """
-    by_ref = {}
-
-    def __init__(self, topic, kind):
-        """Keep the topic; open nothing."""
-        self.topic, self.sent, self.closed = topic, [], False
-        writer = types.SimpleNamespace(_ref=len(FakePublisher.by_ref) + 1, _use_version_2=None)
-        FakePublisher.by_ref[writer._ref] = self
-        self._ChannelPublisher__channel = types.SimpleNamespace(
-            _Channel__writer=types.SimpleNamespace(_Writer__writer=writer))
-
-    def Init(self):
-        """Do nothing: there is no channel."""
-
-    def Write(self, sample):
-        """Fail: the sim writes rt/lowstate's bytes, not SDK samples."""
-        raise AssertionError('rt/lowstate took the SDK path')
-
-    def Close(self):
-        """Mark the publisher closed."""
-        self.closed = True
-
-    def last(self):
-        """Return the last sample written, decoded by the SDK's LowState_."""
-        return LowState_.deserialize(self.sent[-1])
-
-
-def fake_ddspy_write(ref, data):
-    """Keep the bytes written to a FakePublisher's DataWriter, and report success."""
-    FakePublisher.by_ref[ref].sent.append(bytes(data))
-    return 0
-
-
-class FakeSubscriber:
-    """Stand in for ChannelSubscriber, keeping the handler so that a test delivers frames through it."""
-    by_topic = {}
-
-    def __init__(self, topic, kind):
-        """Register the subscriber by topic; open nothing."""
-        self.topic, self.handler, self.closed = topic, None, False
-        FakeSubscriber.by_topic[topic] = self
-
-    def Init(self, handler, queue_size):
-        """Keep the handler."""
-        self.handler = handler
-
-    def Close(self):
-        """Mark the subscriber closed."""
-        self.closed = True
-
-
 def lowcmd(q=0.3, dq=0.1, kp=40.0, kd=2.0, tau=0.5, mode=1, mode_machine=6, mode_pr=0):
     """Return a LowCmd_ giving every body motor the same command, with a valid CRC."""
     msg = LowCmd_default()
@@ -149,18 +93,7 @@ class H12UnitreeInterfaceTests(unittest.TestCase):
 
     def setUp(self):
         """Fake the DDS channels, make a SimInterface and keep its rt/lowcmd handler."""
-        env = mock.patch.dict(os.environ, {'ROS_DOMAIN_ID': '199'})  # reaches no network: the fakes below
-        env.start()
-        self.addCleanup(env.stop)
-        FakeSubscriber.by_topic = {}
-        FakePublisher.by_ref = {}
-        for module, name, fake in ((ui, 'ChannelFactoryInitialize', lambda id: None),
-                                   (ui, 'ChannelPublisher', FakePublisher),
-                                   (ui, 'ChannelSubscriber', FakeSubscriber),
-                                   (unitree_common, 'ddspy_write', fake_ddspy_write)):
-            patcher = mock.patch.object(module, name, fake)
-            patcher.start()
-            self.addCleanup(patcher.stop)
+        fake_dds(self, ui)
         self.model, self.r = model_and_resolver()
         self.data = mujoco.MjData(self.model)
         mujoco.mj_forward(self.model, self.data)

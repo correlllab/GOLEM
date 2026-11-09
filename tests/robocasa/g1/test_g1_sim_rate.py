@@ -10,6 +10,9 @@ import os
 import subprocess
 import sys
 import textwrap
+import unittest
+
+import function_tests
 
 DURATION = 0.05  # s of sim time each loop runs
 
@@ -83,16 +86,7 @@ def test_bad_rate_stops_before_the_scene_is_built():
     assert "RoboCasa task" not in r.stdout
 
 
+G1SimRateTests = function_tests.test_case(globals(), "G1SimRateTests")
+
 if __name__ == "__main__":
-    # Each file runs as a script (run_in_container.sh), so it runs its own test_* functions.
-    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
-    failed = 0
-    for name, fn in tests:
-        try:
-            fn()
-            print(f"PASS {name}")
-        except Exception as e:  # noqa: BLE001
-            failed += 1
-            print(f"FAIL {name}: {type(e).__name__}: {e}")
-    print(f"{len(tests) - failed}/{len(tests)} passed")
-    sys.exit(1 if failed else 0)
+    unittest.main()

@@ -21,13 +21,13 @@
 # Finally it checks the run against the sim's recording (test_sim_explore.py
 # report; see test_sim_explore.py for what is checked). The camera renders on the GPU (EGL).
 #
-# The containers have no network of their own (common.sh), so no DDS leaves the
+# The containers have no network of their own (tests/sim/common.sh), so no DDS leaves the
 # host, and nothing talks to the robot. ROS_DOMAIN_ID must not be 0.
 #
 # Env:
 #   GOLEM_SIM_ODOM must be unset or 0: the shared pipeline needs FAST-LIO.
 #   CORE_WS     a core_ws to build in place and use (default the repo's, built
-#               into container_cache/g1_tests; see common.sh)
+#               into container_cache/g1_tests; see tests/sim/common.sh)
 #   OUT         output directory, new or empty (default
 #               tests/results/g1-explore-<time>-<pid>)
 #   SIM_IMAGE   default golem_sim_robocasa:latest
@@ -61,25 +61,25 @@ esac
 
 # The sim's knobs; the lidar stays on: navigation needs it.
 SIM_ENV=(-e GOLEM_SIM_ODOM=0 -e "GOLEM_SPAWN_BACKOFF=${EXPLORE_BACKOFF:-2.0}" -e GOLEM_LIDAR=)
-source "$HERE/common.sh"
+source "$HERE/../sim/common.sh"
 if [ -n "${GOLEM_TEST_RECORD_EVERY:-}" ]; then
     SIM_ENV+=(-e "GOLEM_TEST_RECORD_EVERY=$GOLEM_TEST_RECORD_EVERY")
 fi
-g1_test_shell_knobs GOLEM_LIDAR_POINTS GOLEM_LIDAR_HZ GOLEM_CAMERAS GOLEM_CAMERA_HZ GOLEM_CAMERA_SCALE \
+sim_test_shell_knobs GOLEM_LIDAR_POINTS GOLEM_LIDAR_HZ GOLEM_CAMERAS GOLEM_CAMERA_HZ GOLEM_CAMERA_SCALE \
     GOLEM_SIM_RATE
 
 # The containers, the build, then the sim, up before the bringup.
-g1_test_setup test_sim_explore explore explore 198
-g1_test_log_load
+sim_test_setup g1 g1 test_sim_explore explore explore 198
+sim_test_log_load
 
 echo "[test_sim_explore] DDS domain $ROS_DOMAIN_ID, output in $OUT"
-g1_test_build_ros
-g1_test_start_sim test_sim_explore.py "${SIM_ENV[@]}"
+sim_test_build_ros
+sim_test_start_sim test_sim_explore.py "${SIM_ENV[@]}"
 echo "[test_sim_explore] sim up; starting the bringup with navigation and the explorer"
 
 # The bringup in the background and the test's steps beside it, at most 1500 s.
 
-g1_test_run_ros 1500 "ros2 launch golem_bringup g1_sim.launch.py use_rviz:=false use_nav:=true \
+sim_test_run_ros 1500 "ros2 launch golem_bringup g1_sim.launch.py use_rviz:=false use_nav:=true \
         use_skills:=true > /out/launch.log 2>&1 &
     LAUNCH=\$!
     python3 -u /home/code/tests/g1/test_sim_explore.py drive --out /out
@@ -93,5 +93,5 @@ g1_test_run_ros 1500 "ros2 launch golem_bringup g1_sim.launch.py use_rviz:=false
     exit \$rc"
 
 # Stop the sim, then check the run against its recording.
-g1_test_stop_sim
-g1_test_report test_sim_explore.py
+sim_test_stop_sim
+sim_test_report test_sim_explore.py

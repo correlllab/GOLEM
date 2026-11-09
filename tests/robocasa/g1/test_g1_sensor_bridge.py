@@ -10,8 +10,8 @@ read can change at runtime, as RoboCasa tasks change them. Run in the robocasa i
 ROS 2 Humble and the Livox messages sourced and golem_robocasa on PYTHONPATH, as
 tests/robocasa/g1/run_in_container.sh does.
 """
-import sys
 import time
+import unittest
 import xml.etree.ElementTree as ET
 
 import mujoco
@@ -19,6 +19,7 @@ import numpy as np
 from livox_ros_driver2.msg import CustomMsg
 from rclpy.serialization import deserialize_message
 
+import function_tests
 import mid360
 import sim_common
 from g1 import g1_head_camera
@@ -420,16 +421,7 @@ def test_g1_sensors_stamp_one_step_before_sim_t_and_build_what_the_config_enable
     assert none.mid360 is None and none.head_camera is None and none.stats() == ""
 
 
+G1SensorBridgeTests = function_tests.test_case(globals(), "G1SensorBridgeTests")
+
 if __name__ == "__main__":
-    # Each file runs as a script (run_in_container.sh), so it runs its own test_* functions.
-    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
-    failed = 0
-    for name, fn in tests:
-        try:
-            fn()
-            print(f"PASS {name}")
-        except Exception as e:  # noqa: BLE001
-            failed += 1
-            print(f"FAIL {name}: {type(e).__name__}: {e}")
-    print(f"{len(tests) - failed}/{len(tests)} passed")
-    sys.exit(1 if failed else 0)
+    unittest.main()

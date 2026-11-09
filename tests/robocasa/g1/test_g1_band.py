@@ -14,10 +14,12 @@ import os
 import subprocess
 import sys
 import textwrap
+import unittest
 
 import mujoco
 import numpy as np
 
+import function_tests
 import mujoco_env
 import robosuite_common
 import sim_common
@@ -165,18 +167,13 @@ def test_sim_reads_no_policy():
     assert r.returncode == 0, r.returncode
 
 
-if __name__ == "__main__":
-    # Each file runs as a script (run_in_container.sh), so it runs its own test_* functions.
-    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
-    failed = 0
-    for name, fn in tests:
-        try:
-            fn()
-            print(f"PASS {name}")
-        except Exception as e:  # noqa: BLE001
-            failed += 1
-            print(f"FAIL {name}: {type(e).__name__}: {e}")
-    print(f"{len(tests) - failed}/{len(tests)} passed")
+def tearDownModule():
+    """Close the shared interface's DDS channels, if a test built it."""
     if _sim.cache_info().currsize:
         _sim()[4].shutdown()
-    sys.exit(1 if failed else 0)
+
+
+G1BandTests = function_tests.test_case(globals(), "G1BandTests")
+
+if __name__ == "__main__":
+    unittest.main()

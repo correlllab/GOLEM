@@ -10,12 +10,12 @@ Needs RoboCasa and MuJoCo, so it runs in the robocasa container:
 ROS_DOMAIN_ID=187 tests/robocasa/run_in_container.sh
 """
 import functools
-import sys
-import types
 import unittest
 
 import mujoco
 import numpy as np
+
+from spawn_scene import import_h12_mujoco
 
 STEPS = 500  # physics steps with the band on
 # m the pelvis may sink below its spawn height while hanging: the feet drop onto the floor from
@@ -34,20 +34,6 @@ ARENA_MOCAP_BODIES = {"left_eef_target", "right_eef_target"}
 ROBOT_PREFIXES = ("robot0_", "gripper0_")
 
 
-def _h12_mujoco():
-    """Import h12_mujoco with a stand-in gripper bridge.
-
-    The real bridge needs magpie_msgs, which the container's shell does not source, and these
-    tests do not use it.
-    """
-    if "magpie_hand_bridge" not in sys.modules:
-        stub = types.ModuleType("magpie_hand_bridge")
-        stub.MagpieHandBridge = None
-        sys.modules["magpie_hand_bridge"] = stub
-    import h12_mujoco
-    return h12_mujoco
-
-
 @functools.lru_cache(maxsize=None)
 def _h12():
     """Spawn the H1-2 in the Blank task as its runner does, once per process.
@@ -58,7 +44,7 @@ def _h12():
     import robosuite_common
     from mujoco_env import ElasticBand
     from sim_names import NameResolver
-    h12_mujoco = _h12_mujoco()
+    h12_mujoco = import_h12_mujoco()
     env = h1_2_robosuite.make_kitchen_env("Blank")
     env.reset()
     model, data = env.sim.model._model, env.sim.data._data

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Set up, run and tear down the containers of the closed-loop RoboCasa tests (a library).
 #
-# Sourced by tests/sim/test_sim_*.sh and, through tests/g1/common.sh, by the G1 acceptance
-# tests; a test calls sim_test_setup first, then the other sim_test_* functions in run order.
+# Sourced by tests/sim/test_sim_*.sh and the G1 acceptance tests, tests/g1/test_sim_*.sh (with
+# robot and suite g1); a test calls sim_test_setup first, then the other sim_test_* functions in
+# run order.
 #
 # Both containers are the compose services as docker_run.sh starts them (robocasa, with the
 # G1 overlay for the G1; ros from docker-compose.yml), with test_compose.yml on

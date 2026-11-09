@@ -392,12 +392,6 @@ if 'config' in sys.argv:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(REPO / name, dest)
 
-    def run_g1_test_setup(self, out):
-        """Run tests/g1/common.sh's g1_test_setup, then its EXIT cleanup, under the stub docker."""
-        return subprocess.run(['bash', '-c', 'set -eo pipefail; source "$1"; g1_test_setup t bringup arm 195',
-                               'bash', str(self.root / 'tests/g1/common.sh')], cwd='/tmp',
-                              env=dict(self.env, OUT=str(out)), text=True, capture_output=True)
-
     def run_sim_test(self, out, script):
         """Source tests/sim/common.sh, run `script`, then its EXIT cleanup, under the stub docker."""
         return subprocess.run(['bash', '-c', f'set -eo pipefail; source "$1"; {script}',
@@ -405,14 +399,13 @@ if 'config' in sys.argv:
                               env=dict(self.env, OUT=str(out)), text=True, capture_output=True)
 
     def test_g1_test_setup_cleans_up_containers(self):
-        """g1_test_setup's cleanup removes every container its runs create and writes run.json for the G1."""
-        self.install_copy('tests/g1/common.sh')
+        """sim_test_setup's cleanup for a G1 test removes every container its runs create and writes run.json for the G1."""
         self.install_copy('tests/sim/common.sh')
         out = self.root / 'g1 out'
-        r = self.run_g1_test_setup(out)
+        r = self.run_sim_test(out, 'sim_test_setup g1 g1 t bringup arm 195')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse((out / 'cyclonedds_local.xml').exists())
-        # Every container g1_test_setup's runs create is removed on exit, the build's too.
+        # Every container the G1 test's runs create is removed on exit, the build's too.
         removed = next(c for c in self.calls() if c[:2] == ['rm', '-f'])
         self.assertTrue(any(n.endswith('-ros-build') for n in removed), removed)
         self.assertTrue(any(n.startswith('golem-g1-bringup-195-') for n in removed), removed)
@@ -773,11 +766,11 @@ if 'config' in sys.argv:
                        'tests/g1/test_sim_explore.sh'):
             with self.subTest(script=script):
                 text = (REPO / script).read_text()
-                calls = re.findall(r'^\s*(?:sim|g1)_test_shell_knobs ((?:[^\n]*\\\n)*[^\n]*)', text, re.M)
+                calls = re.findall(r'^\s*sim_test_shell_knobs ((?:[^\n]*\\\n)*[^\n]*)', text, re.M)
                 self.assertTrue(calls, script)
                 for call in calls:
                     self.assertIn('GOLEM_SIM_RATE', call.split(), call)
-                self.assertLess(text.index('_test_shell_knobs '), text.index('_test_setup '))
+                self.assertLess(text.index('sim_test_shell_knobs '), text.index('sim_test_setup '))
 
     def test_stack_tests_run_the_sim_at_real_time(self):
         """tests/stack/run.sh clears GOLEM_SIM_RATE for its containers: its checks are gates at real time."""

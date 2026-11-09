@@ -67,6 +67,7 @@ import math
 import os
 import sys
 import time
+import types
 
 import numpy as np
 
@@ -219,27 +220,52 @@ def robot_and_floor(model, data, base_body):
     return robot, floor, low, high
 
 
-def map_scene(out, model, data, base_body):
-    """Map the kitchen around the spawn (scene.npz) and pick the goal, or take NAV_GOAL's (goal.json)."""
+def spawn_grid(model, data, base_body, z_range, visual):
+    """Rasterise the scene around the spawn on GRID_RES cells, GRID_HALF m each way: what is solid, the room, the reach.
+
+    A geom is solid between z_range (m) when it is neither the robot's nor the floor's
+    (robot_and_floor) and is visual (the mask visual) or colliding. Returns a SimpleNamespace:
+    pelvis and yaw (the spawn's), origin (the grid's corner, m), env (the geoms that are neither
+    the robot's nor the floor's), low and high (every geom's world box), floor (the floor's geoms),
+    solid, clearance (m to the nearest solid cell), cell(xy) (a world xy's (row, column)),
+    spawn_cell and reachable (the cells PATH_CLEARANCE m clear joined to the spawn's).
+    Shared with tests/sim/test_sim_stack.py.
+    """
     from scipy import ndimage
     robot, floor, low, high = robot_and_floor(model, data, base_body)
-    alpha = model.geom_rgba[:, 3].copy()
-    mat = model.geom_matid
-    alpha[mat >= 0] = np.minimum(alpha[mat >= 0], model.mat_rgba[mat[mat >= 0], 3])
-    # What the lidar can hit: g1_lidar casts against visual geoms with alpha > 0.
-    visual = (model.geom_group == 1) & (alpha > 0)
     colliding = (model.geom_contype > 0) | (model.geom_conaffinity > 0)
     env = ~robot & ~floor
     pelvis = data.xpos[base_body].copy()
     yaw = float(yaw_of(data.xquat[base_body]))
     n = int(round(2 * GRID_HALF / GRID_RES))
     origin = np.round((pelvis[:2] - GRID_HALF) / GRID_RES) * GRID_RES
-    solid = raster(low, high, env & (visual | colliding), GOAL_Z, origin, (n, n))
-    band = raster(low, high, env & visual, MAP_BAND_Z, origin, (n, n))
+    solid = raster(low, high, env & (visual | colliding), z_range, origin, (n, n))
     clearance = ndimage.distance_transform_edt(~solid) * GRID_RES
-    spawn_cell = tuple(np.floor((pelvis[1::-1] - origin[::-1]) / GRID_RES).astype(int))
+
+    def cell(xy):
+        """Return the grid cell (row, column) of a world xy, m."""
+        return tuple(np.floor((np.asarray(xy)[::-1] - origin[::-1]) / GRID_RES).astype(int))
+
+    spawn_cell = cell(pelvis[:2])
     labels, _ = ndimage.label(clearance >= PATH_CLEARANCE)
     reachable = (labels == labels[spawn_cell]) & (labels[spawn_cell] > 0)
+    return types.SimpleNamespace(pelvis=pelvis, yaw=yaw, origin=origin, env=env, low=low, high=high,
+                                 floor=floor, solid=solid, clearance=clearance, cell=cell,
+                                 spawn_cell=spawn_cell, reachable=reachable)
+
+
+def map_scene(out, model, data, base_body):
+    """Map the kitchen around the spawn (scene.npz) and pick the goal, or take NAV_GOAL's (goal.json)."""
+    alpha = model.geom_rgba[:, 3].copy()
+    mat = model.geom_matid
+    alpha[mat >= 0] = np.minimum(alpha[mat >= 0], model.mat_rgba[mat[mat >= 0], 3])
+    # What the lidar can hit: g1_lidar casts against visual geoms with alpha > 0.
+    visual = (model.geom_group == 1) & (alpha > 0)
+    colliding = (model.geom_contype > 0) | (model.geom_conaffinity > 0)
+    grid = spawn_grid(model, data, base_body, GOAL_Z, visual)
+    pelvis, yaw, origin, env = grid.pelvis, grid.yaw, grid.origin, grid.env
+    solid, clearance, spawn_cell, reachable = grid.solid, grid.clearance, grid.spawn_cell, grid.reachable
+    band = raster(grid.low, grid.high, env & visual, MAP_BAND_Z, origin, solid.shape)
     override = os.environ.get("NAV_GOAL", "").strip()
     if override:
         picked, goal_yaw, error = override_goal(override, clearance, reachable, origin, pelvis[:2])
@@ -253,7 +279,7 @@ def map_scene(out, model, data, base_body):
             "spawn_clearance": float(clearance[spawn_cell]), "grid_origin": origin.tolist(),
             "res": GRID_RES, "goal_z": list(GOAL_Z), "band_z": list(MAP_BAND_Z),
             "env_geoms": {"visual": int((env & visual).sum()), "colliding": int((env & colliding).sum())},
-            "floor_geoms": _geom_names(model, np.nonzero(floor)[0])}
+            "floor_geoms": _geom_names(model, np.nonzero(grid.floor)[0])}
     if override:
         goal["goal_override"] = override
     if picked is None:
@@ -342,13 +368,13 @@ class NavRecorder(bringup_test.Recorder):
         super().__init__(out)
         self.contact_log = ContactLog()
 
-    def step(self, iface):
-        """Log contacts every step and the live pose every 100 steps, then record as the base does."""
+    def every_step(self, iface):
+        """Log contacts every step and the live pose every 100 steps, then note what the base notes."""
         base = iface.resolver.base_body
         self.contact_log.step(iface.model, iface.data, base)
-        if self.steps % 100 == 0:
+        if self.steps % 100 == 1:
             write_live_pose(self.out, iface.data, base)
-        super().step(iface)
+        super().every_step(iface)
 
     def save(self):
         """Write sim.npz, then contacts.json, whose presence means the recording is complete."""
@@ -357,47 +383,11 @@ class NavRecorder(bringup_test.Recorder):
 
 
 def run_sim(out, sim_args):
-    """Run h12_mujoco.py --g1 with the recorder, the scene map and the goal hooked into SimInterface."""
-    import runpy
-    import signal
-
-    sys.path.insert(0, bringup_test.SIM)
-    # The G1's own classes: golem_robocasa's top-level unitree_interface is the H1-2's.
-    from g1 import unitree_interface
-    from g1.g1_sensors import SensorConfig
-
-    with open(os.path.join(out, "sensors.json"), "w") as f:
-        json.dump(SensorConfig.from_env()._asdict(), f, indent=1)
-    recorder = NavRecorder(out)
-    after_step = unitree_interface.SimInterface.after_step
-    init = unitree_interface.SimInterface.__init__
-
-    def recorded_after_step(self):
-        """Publish rt/lowstate as the sim does, then record the step."""
-        after_step(self)
-        recorder.step(self)
-
-    def mapped_init(self, model, data, resolver, *args, **kwargs):
-        """Make the interface, then map the scene and pick the goal."""
-        # The robot is at the spawn, in the sim's stance, before the first step and the bridges.
-        init(self, model, data, resolver, *args, **kwargs)
-        map_scene(out, model, data, resolver.base_body)
-
-    def interrupt(signum, frame):
-        """Turn SIGTERM into KeyboardInterrupt, so that the recording is saved."""
-        raise KeyboardInterrupt()
-
-    unitree_interface.SimInterface.after_step = recorded_after_step
-    unitree_interface.SimInterface.__init__ = mapped_init
-    signal.signal(signal.SIGTERM, interrupt)
-    script = os.path.join(bringup_test.SIM, "h12_mujoco.py")
-    sys.argv = [script, "--g1"] + sim_args
-    try:
-        runpy.run_path(script, run_name="__main__")
-    except (bringup_test.StopRecording, KeyboardInterrupt):
-        print("[test_sim_nav] sim stopped", flush=True)
-    finally:
-        recorder.save()
+    """Run h12_mujoco.py --g1 with the recorder, the scene map and the goal; write sensors.json, for the drive, first."""
+    bringup_test.write_sensor_config(out)
+    bringup_test.run_recorded_sim(
+        out, "g1", sim_args, NavRecorder(out), "test_sim_nav",
+        on_init=lambda iface: map_scene(out, iface.model, iface.data, iface.resolver.base_body))
 
 
 def _tf_parts(tf):

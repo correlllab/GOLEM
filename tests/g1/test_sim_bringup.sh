@@ -14,12 +14,12 @@
 # The sim's lidar and head camera are on, as by default; the camera renders on
 # the GPU (EGL).
 #
-# The containers have no network of their own (common.sh), so no DDS leaves the
+# The containers have no network of their own (tests/sim/common.sh), so no DDS leaves the
 # host, and nothing talks to the robot. ROS_DOMAIN_ID must not be 0.
 #
 # Env:
 #   CORE_WS     a core_ws to build in place and use (default the repo's, built
-#               into container_cache/g1_tests; see common.sh)
+#               into container_cache/g1_tests; see tests/sim/common.sh)
 #   OUT         output directory, new or empty (default tests/results/g1-bringup-<time>-<pid>,
 #               or g1-walk-...)
 #   SIM_IMAGE   default golem_sim_robocasa:latest
@@ -61,22 +61,22 @@ elif [ -n "${1:-}" ]; then
 fi
 
 # The sim's knobs, the containers, the build, then the sim, up before the bringup.
-source "$HERE/common.sh"
+source "$HERE/../sim/common.sh"
 if [ -n "${GOLEM_TEST_RECORD_EVERY:-}" ]; then
     SIM_ENV+=(-e "GOLEM_TEST_RECORD_EVERY=$GOLEM_TEST_RECORD_EVERY")
 fi
-g1_test_shell_knobs GOLEM_LIDAR GOLEM_LIDAR_POINTS GOLEM_LIDAR_HZ GOLEM_CAMERAS GOLEM_CAMERA_HZ GOLEM_CAMERA_SCALE \
+sim_test_shell_knobs GOLEM_LIDAR GOLEM_LIDAR_POINTS GOLEM_LIDAR_HZ GOLEM_CAMERAS GOLEM_CAMERA_HZ GOLEM_CAMERA_SCALE \
     GOLEM_SIM_RATE
-g1_test_setup test_sim_bringup "$NAME" "$TEST" "$DOMAIN"
+sim_test_setup g1 g1 test_sim_bringup "$NAME" "$TEST" "$DOMAIN"
 
 echo "[test_sim_bringup] $TEST test on DDS domain $ROS_DOMAIN_ID, output in $OUT"
-g1_test_build_ros
-g1_test_start_sim test_sim_bringup.py "${SIM_ENV[@]}"
+sim_test_build_ros
+sim_test_start_sim test_sim_bringup.py "${SIM_ENV[@]}"
 echo "[test_sim_bringup] sim up; starting the bringup"
 
 # The bringup in the background and the test's steps beside it, at most 900 s.
 
-g1_test_run_ros 900 "ros2 launch golem_bringup g1_sim.launch.py $LAUNCH_ARGS > /out/launch.log 2>&1 &
+sim_test_run_ros 900 "ros2 launch golem_bringup g1_sim.launch.py $LAUNCH_ARGS > /out/launch.log 2>&1 &
     LAUNCH=\$!
     python3 -u /home/code/tests/g1/test_sim_bringup.py drive --out /out $DRIVE_ARGS
     rc=\$?
@@ -90,5 +90,5 @@ g1_test_run_ros 900 "ros2 launch golem_bringup g1_sim.launch.py $LAUNCH_ARGS > /
     exit \$rc"
 
 # Stop the sim, then check the run against its recording.
-g1_test_stop_sim
-g1_test_report test_sim_bringup.py
+sim_test_stop_sim
+sim_test_report test_sim_bringup.py

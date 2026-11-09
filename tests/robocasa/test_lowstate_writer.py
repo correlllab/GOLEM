@@ -3,13 +3,13 @@
 The writer must put on the wire exactly the bytes cyclonedds' DataWriter.write puts there for a
 LowState_ filled the way the sims filled it through unitree_sdk2py: the IDL serializer's CDR,
 padded to 4 bytes, with the SDK's CRC. No DDS participant opens: the publishers are in-process
-stand-ins and cyclonedds' ddspy_write is replaced for the length of a test. It runs in the
+stand-ins (dds_fakes.FakePublisher) and cyclonedds' ddspy_write is replaced for the length of a
+test. It runs in the
 standard runner (tests/robocasa/run_in_container.sh -p test_lowstate_writer.py).
 """
 import contextlib
 import io
 import time
-import types
 import unittest
 from unittest import mock
 
@@ -19,13 +19,16 @@ from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_ as LowState
 from unitree_sdk2py.utils.crc import CRC
 
 import unitree_common
+from dds_fakes import FakePublisher
 from unitree_common import LowStateWriter, rpy_from_quat
 
 # (mode_machine, motor slots filled) of the H1-2 and the G1.
 ROBOTS = ((6, 27), (5, 29))
 SAMPLES = 200
 TIMED_SAMPLES = 2000
-REF = 4242   # the stand-in DataWriter's entity handle
+# How many times faster than the SDK's fill, CRC and serialize the writer's bytes must be: it
+# measures about 11x (27 against 310 us per sample); 3x leaves room for a loaded host.
+MIN_SPEEDUP = 3.0
 
 
 def sdk_crc():
@@ -36,31 +39,6 @@ def sdk_crc():
 
 
 SDK_CRC = sdk_crc()
-
-
-class FakePublisher:
-    """Stand in for ChannelPublisher, keeping the samples its Write is given."""
-
-    def __init__(self):
-        """Start with nothing written."""
-        self.samples = []
-
-    def Write(self, sample):
-        """Keep the sample."""
-        self.samples.append(sample)
-
-
-def dds_publisher():
-    """Return a stand-in ChannelPublisher whose channel holds a cyclonedds-like DataWriter.
-
-    It has the private attribute chain of unitree_sdk2py's ChannelPublisher, ending in an object
-    with DataWriter's _ref and _use_version_2.
-    """
-    writer = types.SimpleNamespace(_ref=REF, _use_version_2=None)
-    channel = types.SimpleNamespace(_Channel__writer=types.SimpleNamespace(_Writer__writer=writer))
-    pub = FakePublisher()
-    pub._ChannelPublisher__channel = channel
-    return pub
 
 
 def random_states(rng, motors, count):
@@ -113,7 +91,7 @@ class LowStateWriterTests(unittest.TestCase):
     def test_lowstate_bytes_match_the_sdk(self):
         """The writer's bytes equal the SDK's serialized, padded, CRC-signed LowState_ for random states."""
         for mode_machine, motors in ROBOTS:
-            writer, lines = quiet(LowStateWriter, dds_publisher(), mode_machine, motors)
+            writer, lines = quiet(LowStateWriter, FakePublisher(), mode_machine, motors)
             self.assertEqual(lines, [])
             self.assertTrue(writer.fast)
             rng = np.random.default_rng(0)
@@ -123,7 +101,7 @@ class LowStateWriterTests(unittest.TestCase):
 
     def test_write_hands_ddspy_write_the_bytes(self):
         """write() hands cyclonedds' ddspy_write the writer's entity and the SDK's bytes, and never the publisher."""
-        pub = dds_publisher()
+        pub = FakePublisher()
         writer = LowStateWriter(pub, 6, 27)
         sent = []
         with mock.patch.object(unitree_common, 'ddspy_write',
@@ -131,12 +109,12 @@ class LowStateWriterTests(unittest.TestCase):
             states = list(random_states(np.random.default_rng(1), 27, 3))
             for state in states:
                 writer.write(*state)
-        self.assertEqual(sent, [(REF, sdk_bytes(sdk_message(6, 27, *s), None)) for s in states])
+        self.assertEqual(sent, [(pub.ref, sdk_bytes(sdk_message(6, 27, *s), None)) for s in states])
         self.assertEqual(pub.samples, [])
 
     def test_failed_write_is_warned(self):
         """A write that cyclonedds refuses is reported in a rate-limited warning, not raised."""
-        writer = LowStateWriter(dds_publisher(), 5, 29)
+        writer = LowStateWriter(FakePublisher(), 5, 29)
         state = next(random_states(np.random.default_rng(2), 29, 1))
         with mock.patch.object(unitree_common, 'ddspy_write', lambda ref, data: -3):
             _, lines = quiet(lambda: [writer.write(*state) for _ in range(3)])
@@ -145,7 +123,7 @@ class LowStateWriterTests(unittest.TestCase):
 
     def test_publisher_without_a_datawriter_takes_the_sdk_path(self):
         """A publisher with no cyclonedds DataWriter gets SDK LowState_ samples through its Write, with a warning."""
-        pub = FakePublisher()
+        pub = FakePublisher(writer=False)
         writer, lines = quiet(LowStateWriter, pub, 6, 27)
         self.assertFalse(writer.fast)
         self.assertEqual(len(lines), 1, lines)
@@ -161,7 +139,7 @@ class LowStateWriterTests(unittest.TestCase):
             """Fail as an SDK change the probes do not know would."""
             raise TypeError("unexpected SDK layout")
 
-        pub = dds_publisher()
+        pub = FakePublisher()
         with mock.patch.object(LowStateWriter, '_build', broken):
             writer, lines = quiet(LowStateWriter, pub, 6, 27)
         self.assertFalse(writer.fast)
@@ -181,7 +159,7 @@ class LowStateWriterTests(unittest.TestCase):
             buf[100] ^= 0xFF
             return buf
 
-        pub = dds_publisher()
+        pub = FakePublisher()
         with mock.patch.object(LowStateWriter, '_fill', corrupt):
             writer, lines = quiet(LowStateWriter, pub, 5, 29)
             self.assertFalse(writer.fast)
@@ -196,16 +174,16 @@ class LowStateWriterTests(unittest.TestCase):
 
     def test_missing_imu_leaves_it_zero(self):
         """IMU arguments of None leave the IMU fields at the IDL's zeros, as an H1-2 model without IMU sensors gets."""
-        writer = LowStateWriter(dds_publisher(), 6, 27)
+        writer = LowStateWriter(FakePublisher(), 6, 27)
         tick, q, dq, tau, *_ = next(random_states(np.random.default_rng(5), 27, 1))
         msg = sdk_message(6, 27, tick, q, dq, tau, np.zeros(4), np.zeros(3), np.zeros(3))
         self.assertEqual(writer.bytes_for(tick, q, dq, tau, None, None, None), sdk_bytes(msg, None))
 
     def test_lowstate_writer_is_faster(self):
-        """Print the mean time per sample of the writer's bytes and of the SDK's fill, CRC and serialize."""
+        """The writer's bytes take at most 1/MIN_SPEEDUP of the SDK's fill, CRC and serialize; both are printed."""
         crc = unitree_common.fast_crc()
         for mode_machine, motors in ROBOTS:
-            writer = LowStateWriter(dds_publisher(), mode_machine, motors)
+            writer = LowStateWriter(FakePublisher(), mode_machine, motors)
             states = list(random_states(np.random.default_rng(6), motors, TIMED_SAMPLES))
             start = time.perf_counter()
             for state in states:
@@ -217,6 +195,8 @@ class LowStateWriterTests(unittest.TestCase):
             sdk_us = (time.perf_counter() - start) / TIMED_SAMPLES * 1e6
             print(f'\nrt/lowstate, {motors} motors: SDK path {sdk_us:.1f} us per sample, '
                   f'fast path {fast_us:.1f} us per sample')
+            self.assertTrue(writer.fast)
+            self.assertLess(fast_us * MIN_SPEEDUP, sdk_us, (motors, fast_us, sdk_us))
 
 
 if __name__ == '__main__':

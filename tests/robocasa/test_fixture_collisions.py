@@ -6,14 +6,13 @@ on its band, in two of RoboCasa's tasks that put an object in a fixture, a drawe
 part) and a cabinet shelf (a static part), and in one with a loose fixture on a free joint (a
 blender lid). Run it with tests/robocasa/run_in_container.sh.
 """
-import sys
-import types
 import unittest
 
 import mujoco
 import numpy as np
 
 import sim_common
+from spawn_scene import import_h12_mujoco
 
 LAYOUT, STYLE, SEED = 9, 9, 42        # the surface probe's kitchen
 PAIR_STEPS = 100                      # physics steps over which the broadphase pairs are recorded
@@ -27,11 +26,7 @@ RESTING_TASKS = ("CloseDrawer", "PickPlaceCabinetToCounter", "OpenBlenderLid")
 
 def _h12_kitchen(task):
     """Return the H1-2's env for task, spawned by h12_mujoco.spawn()."""
-    if "magpie_hand_bridge" not in sys.modules:   # needs magpie_msgs, which the image lacks
-        stub = types.ModuleType("magpie_hand_bridge")
-        stub.MagpieHandBridge = None
-        sys.modules["magpie_hand_bridge"] = stub
-    import h12_mujoco
+    h12_mujoco = import_h12_mujoco()
     import h1_2_robosuite
     from sim_names import NameResolver
     env = h1_2_robosuite.make_kitchen_env(task, layout_ids=LAYOUT, style_ids=STYLE, seed=SEED)

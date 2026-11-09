@@ -10,7 +10,7 @@ import sys
 
 import mujoco
 import numpy as np
-from livox_ros_driver2.msg import CustomMsg
+from livox_ros_driver2.msg import CustomMsg, CustomPoint
 from PIL import Image as PILImage
 from rclpy.serialization import deserialize_message, serialize_message
 from sensor_msgs.msg import CompressedImage, Image
@@ -34,6 +34,23 @@ def _frame(n, timebase=12.3456789012, seed=0):
         points=points, line=(np.arange(n) % 4).astype(np.uint8), rays=n)
 
 
+def _custom_msg(frame, frame_id="livox_frame"):
+    """Return the CustomMsg the driver publishes for a frame, built field by field: the CDR's reference.
+
+    Reflectivity is REFLECTIVITY for a return and 0 for a ray without one, at (0, 0, 0).
+    """
+    msg = CustomMsg()
+    msg.header.stamp = msgs.time_msg(frame.timebase)
+    msg.header.frame_id = frame_id
+    msg.timebase = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+    msg.point_num = len(frame.points)
+    msg.lidar_id = 192
+    msg.points = [CustomPoint(offset_time=o, x=p[0], y=p[1], z=p[2], reflectivity=msgs.REFLECTIVITY if any(p) else 0,
+                              tag=0, line=line)
+                  for o, p, line in zip(frame.offset_time.tolist(), frame.points.tolist(), frame.line.tolist())]
+    return msg
+
+
 def test_time_msg():
     """Sim seconds become (sec, nanosec) rounded to the nanosecond, carrying into the seconds."""
     assert (msgs.time_msg(12.3456789012).sec, msgs.time_msg(12.3456789012).nanosec) == (12, 345678901)
@@ -47,7 +64,7 @@ def test_custom_msg_fields():
     A point without a return, (0, 0, 0), has reflectivity 0, as the real driver's do.
     """
     frame = _frame(5)
-    msg = msgs.livox_custom_msg(frame)
+    msg = deserialize_message(msgs.livox_custom_msg_cdr(frame), CustomMsg)
     assert msg.header.frame_id == "livox_frame"
     assert (msg.header.stamp.sec, msg.header.stamp.nanosec) == (12, 345678901)
     assert msg.timebase == 12_345_678_901 and msg.point_num == 5
@@ -66,7 +83,7 @@ def test_custom_msg_cdr_is_rclpys_serialization():
         for frame_id in ("livox_frame", "a", "ab", "abc", "abcd", "abcdefgh"):
             frame = _frame(n, timebase=n * 0.1 + 0.000123, seed=n)
             cdr = msgs.livox_custom_msg_cdr(frame, frame_id)
-            assert cdr == serialize_message(msgs.livox_custom_msg(frame, frame_id)), (n, frame_id)
+            assert cdr == serialize_message(_custom_msg(frame, frame_id)), (n, frame_id)
             back = deserialize_message(cdr, CustomMsg)
             assert back.header.frame_id == frame_id and back.point_num == n
 

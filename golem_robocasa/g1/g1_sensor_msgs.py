@@ -10,10 +10,10 @@ MID-360 (livox_ros_driver2 in CustomMsg mode, xfer_format 1, msg_MID360_launch.p
                 offset_time in ns after it, lidar_id 192, rsvd 0. The sim has no
                 reflectance model: every return has reflectivity REFLECTIVITY, a
                 ray without a return (at 0, 0, 0) reflectivity 0 as the driver's,
-                and every point tag 0. livox_custom_msg_cdr() gives the same message
-                already serialized, which rclpy's Publisher.publish() accepts as
-                bytes: building and converting 20,000 CustomPoint objects costs
-                ~190 ms in Python, the serialized form under 1 ms.
+                and every point tag 0. livox_custom_msg_cdr() builds the message
+                serialized, which rclpy's Publisher.publish() accepts as bytes:
+                building and converting 20,000 CustomPoint objects costs ~190 ms
+                in Python, the serialized form under 1 ms.
   /livox/imu    sensor_msgs/Imu, frame_id livox_frame (hard-coded in the driver's
                 lddc.cpp), angular_velocity in rad/s and linear_acceleration in g,
                 as the driver passes the sensor's values through. The driver sets
@@ -41,7 +41,6 @@ import struct
 
 import numpy as np
 from builtin_interfaces.msg import Time
-from livox_ros_driver2.msg import CustomMsg, CustomPoint
 from PIL import Image as PILImage
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Imu
 
@@ -68,25 +67,6 @@ def time_msg(t):
     return Time(sec=ns // 1_000_000_000, nanosec=ns % 1_000_000_000)
 
 
-def livox_custom_msg(frame, frame_id=LIVOX_FRAME):
-    """Return the livox_ros_driver2/CustomMsg of a mid360.LidarFrame.
-
-    Slow for full frames: the sim publishes livox_custom_msg_cdr(), its
-    serialized equivalent.
-    """
-    msg = CustomMsg()
-    msg.header.stamp = time_msg(frame.timebase)
-    msg.header.frame_id = frame_id
-    msg.timebase = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
-    msg.point_num = len(frame.points)
-    msg.lidar_id = LIDAR_ID
-    msg.points = [CustomPoint(offset_time=o, x=x, y=y, z=z, reflectivity=r, tag=TAG, line=line)
-                  for o, (x, y, z), r, line in zip(frame.offset_time.tolist(), frame.points.tolist(),
-                                                   _reflectivity(frame).tolist(),
-                                                   frame.line.tolist())]
-    return msg
-
-
 def _reflectivity(frame):
     """Return each point's reflectivity: REFLECTIVITY, 0 for a ray without a return at (0, 0, 0)."""
     return np.where(frame.points.any(axis=1), REFLECTIVITY, 0).astype(np.uint8)
@@ -100,7 +80,7 @@ _CDR_POINT = np.dtype({"names": ["offset_time", "x", "y", "z", "reflectivity", "
 
 
 def livox_custom_msg_cdr(frame, frame_id=LIVOX_FRAME):
-    """Return livox_custom_msg()'s message serialized as rclpy serializes it.
+    """Return the livox_ros_driver2/CustomMsg of a mid360.LidarFrame, serialized as rclpy serializes it.
 
     Plain little-endian CDR, alignment counted from after the 4-byte
     encapsulation header.

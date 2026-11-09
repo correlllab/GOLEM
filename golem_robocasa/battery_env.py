@@ -258,9 +258,8 @@ class BatteryArena(Arena):
 class Battery(ManipulationEnv):
     """Stand the robot at the ARPA battery workcell with the objects/ parts on the battery."""
 
-    def __init__(self, robots, use_object_obs=True, **kwargs):
-        """Build the env; use_object_obs is accepted for make_kitchen_env and unused."""
-        self.use_object_obs = use_object_obs
+    def __init__(self, robots, **kwargs):
+        """Build the env around robots (robosuite's robots argument)."""
         self.init_robot_base_pos = list(ROBOT_BASE_POS)
         self.init_robot_base_ori = list(ROBOT_BASE_ORI)
         self.spawn_margin = SPAWN_MARGIN

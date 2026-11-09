@@ -539,7 +539,6 @@ def make_kitchen_env(env_name, layout_ids=None, style_ids=None, seed=None, **kwa
         has_renderer=False,
         has_offscreen_renderer=False,
         use_camera_obs=False,
-        use_object_obs=True,
         render_camera=None,   # robosuite looks up no camera for None
         ignore_done=True,
     )

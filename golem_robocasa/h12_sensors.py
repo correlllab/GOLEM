@@ -230,6 +230,9 @@ _CameraPub = namedtuple("_CameraPub", "spec color_id depth_id color_info depth_i
 # depth-quantization words, the first 9 and the second 0.
 _COMPRESSED_DEPTH_HEADER = struct.pack("<III", 0, 9, 0)
 _JPEG_QUALITY = 95   # image_transport's compressed default, as on the robot
+# The MID-360 driver's frame_id on /livox/lidar, /livox/pointcloud and /livox/imu.
+LIVOX_FRAME = "livox_frame"
+CAMERA_RATE_HZ = 15.0   # Hz of sim time, every camera's frames
 
 
 # Preallocated MjData the camera frames are captured into: one being rendered
@@ -295,13 +298,10 @@ class H12Sensors:
         depth_stream: bool = True,
         pointcloud: bool = True,
         lidar_body: str = "livox_link",
-        lidar_frame: str = "livox_frame",
         lidar_exclude_body: str = "torso_link",
-        cam_rate_hz: float = 15.0,
         imu_quat_sensor: str = "livox_imu_quat",
         imu_gyro_sensor: str = "livox_imu_gyro",
         imu_acc_sensor: str = "livox_imu_acc",
-        imu_frame: str = "livox_frame",
         imu_rate_hz: float = 100.0,
         lidar_self_prefixes: tuple = (),
         sim_lock=None,
@@ -341,7 +341,7 @@ class H12Sensors:
         # still occlude what is behind them, but map no obstacle under the robot.
         self.geom_is_robot = self_filter_geoms(model, lidar_self_prefixes)
 
-        self.cam_period = 1.0 / cam_rate_hz
+        self.cam_period = 1.0 / CAMERA_RATE_HZ
         # m, MuJoCo's far plane: depth there means no surface.
         self.zfar = float(model.vis.map.zfar * model.stat.extent)
 
@@ -373,7 +373,6 @@ class H12Sensors:
             QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                        history=HistoryPolicy.KEEP_LAST, depth=10))
 
-        self.imu_frame = imu_frame
         self.imu_period = 1.0 / imu_rate_hz
         self.imu_quat_adr, self.imu_quat_dim = self._sensor_adr(imu_quat_sensor)
         self.imu_gyro_adr, self.imu_gyro_dim = self._sensor_adr(imu_gyro_sensor)
@@ -388,7 +387,7 @@ class H12Sensors:
         # The scan thread publishes both lidar topics; its GPU caster makes its
         # EGL context here, before the passive viewer's window exists.
         self._lidar = _LidarScans(model, self.lidar_body_id, self.lidar_exclude_body_id,
-                                  self.geom_is_robot, lidar_frame,
+                                  self.geom_is_robot, LIVOX_FRAME,
                                   self.pub_lidar.publish, self.pub_pc2.publish,
                                   self.timings, sim_lock)
         # The cameras render on a worker thread, through EGL, while physics runs.
@@ -528,7 +527,7 @@ class H12Sensors:
 
         msg = Imu()
         msg.header.stamp = stamp
-        msg.header.frame_id = self.imu_frame
+        msg.header.frame_id = LIVOX_FRAME
         msg.orientation.w = float(q[0])
         msg.orientation.x = float(q[1])
         msg.orientation.y = float(q[2])

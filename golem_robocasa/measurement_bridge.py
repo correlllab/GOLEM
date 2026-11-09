@@ -7,7 +7,7 @@ The sim loop steps the env's own MjData, so once per control step
 
   /robocasa/task_name   std_msgs/String   the task env name, latched
   /robocasa/task_goal   std_msgs/String   the language instruction, latched
-  /robocasa/success     std_msgs/Bool     success held for debounce_steps control steps
+  /robocasa/success     std_msgs/Bool     success held for DEBOUNCE_STEPS control steps
   /robocasa/reward      std_msgs/Float32  float(success) of this control step
 
 These are privileged task signals the real robot does not have: no robot-stack
@@ -17,19 +17,18 @@ from rclpy.node import Node
 from std_msgs.msg import Bool, Float32, String
 from std_srvs.srv import Trigger
 
+# Consecutive successful control steps that make a success (RoboCasa teleop
+# uses ~15), so a transient frame does not count.
+DEBOUNCE_STEPS = 15
+
 
 class MeasurementBridge(Node):
     """Run the robocasa_measurement node: the task signals and the band toggle."""
 
-    def __init__(self, env, debounce_steps=15, elastic_band=None, task_name=""):
-        """Publish env's task signals; serve /elastic_band/toggle when elastic_band is given.
-
-        debounce_steps is how many consecutive successful control steps make a
-        success (RoboCasa teleop uses ~15), so a transient frame does not count.
-        """
+    def __init__(self, env, elastic_band=None, task_name=""):
+        """Publish env's task signals; serve /elastic_band/toggle when elastic_band is given."""
         super().__init__("robocasa_measurement")
         self.env = env
-        self.debounce_steps = int(debounce_steps)
         self._streak = 0
         self.lang = ""
         self.task_name = task_name
@@ -78,7 +77,7 @@ class MeasurementBridge(Node):
             self.get_logger().warn(f"_check_success failed: {e}")
             success = False
         self._streak = self._streak + 1 if success else 0
-        held = self._streak >= self.debounce_steps
+        held = self._streak >= DEBOUNCE_STEPS
         self._succ_pub.publish(Bool(data=held))
         self._rew_pub.publish(Float32(data=float(success)))
         return held

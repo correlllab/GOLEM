@@ -17,8 +17,6 @@ import unittest
 import mujoco
 import numpy as np
 
-import blank_env
-
 STEPS = 500  # physics steps with the band on
 # m the pelvis may sink below its spawn height while hanging: the feet drop onto the floor from
 # the spawn clearance and the band stretches under the robot's weight (the H1-2 sinks about

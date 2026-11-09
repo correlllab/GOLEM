@@ -27,6 +27,11 @@ from rclpy.node import Node
 from rosgraph_msgs.msg import Clock
 from tf2_ros import TransformBroadcaster
 
+# The ground-truth odom's frames and rate (Hz of sim time).
+ODOM_FRAME = "odom"
+BASE_FRAME = "pelvis"
+ODOM_RATE_HZ = 50.0
+
 
 def _sim_time_to_msg(sim_time: float) -> TimeMsg:
     """Convert MuJoCo sim time (float seconds) to a ROS Time message."""
@@ -64,15 +69,12 @@ class RosSensorBridge(Node):
         make_sensors: Callable[[Node], SensorSuite],
         *,
         base_body_id: int = -1,
-        odom_frame: str = "odom",
-        base_frame: str = "pelvis",
-        odom_rate_hz: float = 50.0,
         sim_lock=None,
     ) -> None:
         """Build the suite with make_sensors(node).
 
-        base_body_id >= 0 publishes that body's world pose as odom_frame ->
-        base_frame on /tf and /odom at odom_rate_hz of sim time. sim_lock, when
+        base_body_id >= 0 publishes that body's world pose as ODOM_FRAME ->
+        BASE_FRAME on /tf and /odom at ODOM_RATE_HZ of sim time. sim_lock, when
         given, is held only while reading MjData.
         """
         super().__init__("mujoco_sensors")
@@ -87,9 +89,7 @@ class RosSensorBridge(Node):
 
         # Ground truth, which the real robot does not have: GOLEM_SIM_ODOM opts in.
         self.base_body_id = int(base_body_id)
-        self.odom_frame = odom_frame
-        self.base_frame = base_frame
-        self.odom_period = 1.0 / odom_rate_hz
+        self.odom_period = 1.0 / ODOM_RATE_HZ
         self._last_odom_sim_t = 0.0
         if self.base_body_id >= 0:
             self._tf_broadcaster = TransformBroadcaster(self)
@@ -127,7 +127,7 @@ class RosSensorBridge(Node):
         self.suite.tick(sim_t, stamp)
 
     def _publish_odom(self, stamp: TimeMsg) -> None:
-        """Publish the base body's world pose as odom_frame -> base_frame on /tf and /odom."""
+        """Publish the base body's world pose as ODOM_FRAME -> BASE_FRAME on /tf and /odom."""
         # MuJoCo quaternions are (w, x, y, z); ROS's are (x, y, z, w).
         with self.sim_lock or nullcontext():
             pos = self.data.xpos[self.base_body_id]
@@ -138,8 +138,8 @@ class RosSensorBridge(Node):
 
         tf = TransformStamped()
         tf.header.stamp = stamp
-        tf.header.frame_id = self.odom_frame
-        tf.child_frame_id = self.base_frame
+        tf.header.frame_id = ODOM_FRAME
+        tf.child_frame_id = BASE_FRAME
         tf.transform.translation.x = px
         tf.transform.translation.y = py
         tf.transform.translation.z = pz
@@ -151,8 +151,8 @@ class RosSensorBridge(Node):
 
         odom = Odometry()
         odom.header.stamp = stamp
-        odom.header.frame_id = self.odom_frame
-        odom.child_frame_id = self.base_frame
+        odom.header.frame_id = ODOM_FRAME
+        odom.child_frame_id = BASE_FRAME
         odom.pose.pose.position.x = px
         odom.pose.pose.position.y = py
         odom.pose.pose.position.z = pz

@@ -5,9 +5,7 @@ RoboCasa builds a task around the ``H1_2`` robot with every name prefixed
 ``left_leg_hip_yaw_joint``), in robosuite's index order. The DDS side speaks
 the original Unitree names in golem_safety's 27-slot H1-2 order
 (core_ws/src/golem_safety/robots/h12.yaml), so the DDS interface and the sim
-loop resolve every index by name here. ``robot_prefix=""`` resolves
-the standalone robot.xml in CL_Assets/robosuite_assets, whose legs are already
-renamed.
+loop resolve every index by name here.
 """
 import mujoco
 import numpy as np
@@ -35,6 +33,10 @@ LEG_JOINT_RENAME = {
 }
 
 
+# RoboCasa's prefix of every robot name.
+ROBOT_PREFIX = "robot0_"
+
+
 def _id(model, objtype, name):
     """Return the id of the named object of objtype, or -1."""
     return mujoco.mj_name2id(model, objtype, name)
@@ -49,20 +51,16 @@ class NameResolver:
     dimension) when the model has them.
     """
 
-    def __init__(self, model, robot_prefix="robot0_"):
-        """Resolve every motor in model, raising KeyError for a missing one.
-
-        robot_prefix is 'robot0_' in a RoboCasa env, '' for the standalone robot.xml.
-        """
+    def __init__(self, model):
+        """Resolve every motor in model, raising KeyError for a missing one."""
         self.model = model
-        self.robot_prefix = robot_prefix
 
         self.motor_ctrl = np.empty(len(ROS_MOTOR_ORDER), dtype=int)
         self.motor_qpos = np.empty(len(ROS_MOTOR_ORDER), dtype=int)
         self.motor_qvel = np.empty(len(ROS_MOTOR_ORDER), dtype=int)
         self.motor_tau = np.empty(len(ROS_MOTOR_ORDER), dtype=int)
         for i, ros_name in enumerate(ROS_MOTOR_ORDER):
-            sim_joint = robot_prefix + LEG_JOINT_RENAME.get(ros_name, ros_name)
+            sim_joint = ROBOT_PREFIX + LEG_JOINT_RENAME.get(ros_name, ros_name)
             jid = _id(model, mujoco.mjtObj.mjOBJ_JOINT, sim_joint)
             if jid < 0:
                 raise KeyError(f"joint not found in model: {sim_joint}")
@@ -76,7 +74,7 @@ class NameResolver:
             # The <jointactuatorfrc> sensor "<ros_name>_torque" (not leg-renamed)
             # reports the torque applied after the joint's actuatorfrcrange
             # clamp, as the real motor's measured torque does, not the demand.
-            tau_sensor = robot_prefix + ros_name + "_torque"
+            tau_sensor = ROBOT_PREFIX + ros_name + "_torque"
             sid = _id(model, mujoco.mjtObj.mjOBJ_SENSOR, tau_sensor)
             if sid < 0:
                 raise KeyError(f"torque sensor not found in model: {tau_sensor}")
@@ -84,10 +82,10 @@ class NameResolver:
 
         self.sensor_adr = {}
         for base in ("imu_quat", "imu_gyro", "imu_acc"):
-            sid = _id(model, mujoco.mjtObj.mjOBJ_SENSOR, robot_prefix + base)
+            sid = _id(model, mujoco.mjtObj.mjOBJ_SENSOR, ROBOT_PREFIX + base)
             if sid >= 0:
                 self.sensor_adr[base] = (model.sensor_adr[sid], model.sensor_dim[sid])
 
     def body_id(self, name):
         """Return the id of the robot's body name (unprefixed), or -1."""
-        return _id(self.model, mujoco.mjtObj.mjOBJ_BODY, self.robot_prefix + name)
+        return _id(self.model, mujoco.mjtObj.mjOBJ_BODY, ROBOT_PREFIX + name)

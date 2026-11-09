@@ -16,7 +16,6 @@ from unittest import mock
 import numpy as np
 
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_ as LowState_default
-from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
 from unitree_sdk2py.utils.crc import CRC
 
 import unitree_common

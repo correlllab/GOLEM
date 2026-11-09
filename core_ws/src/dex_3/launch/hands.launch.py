@@ -42,7 +42,9 @@ def generate_launch_description():
                               description='Unitree DDS domain if ROS_DOMAIN_ID is unset '
                                           '(-1: none); must equal the ROS domain'),
         DeclareLaunchArgument('use_sim_time', default_value='false',
-                              description='stamp /joint_states with /clock: true or false'),
+                              description='true or false: run on /clock (a sim): the moves, '
+                                          'the command rate and the /joint_states stamps '
+                                          'count sim time'),
         # The hand driver; it writes rt/dex3/<side>/cmd itself, outside golem_safety.
         Node(
             package='dex_3',

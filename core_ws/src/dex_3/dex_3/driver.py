@@ -24,10 +24,10 @@ from dex_3.dex3 import (
 # Stop commands (timeout bit set, zero gains, as in Unitree's Dex3 example) that
 # release() sends before the driver goes silent.
 RELEASE_MESSAGES = 10
-# s, the longest shutdown() waits for the stop commands to go out. It returns as
-# soon as they have; 10 take 0.1 s at 100 Hz, longer on a starved CPU.
+# s of steady time, the longest shutdown() waits for the stop commands to go out. It
+# returns as soon as they have; 10 take 0.1 s at 100 Hz, longer on a starved CPU.
 RELEASE_TIMEOUT_S = 1.0
-# s, the oldest hand state a first command may start from.
+# s of robot time, the oldest hand state a first command may start from.
 MAX_STATE_AGE_S = 0.5
 
 
@@ -47,22 +47,31 @@ class Dex3Hand:
     program, or by nobody, is left alone. From then on it streams HandCmd_ at
     rate_hz, holding the current target, and no joint is commanded faster than
     max_speed rad/s. release() sends Unitree's stop and goes silent again.
-    Timing uses time.monotonic(), so a wall-clock step cannot skip a move.
+
+    Moves, the command rate while moving and the state's age count robot time:
+    the clock given, or time.monotonic() without one (the real robot), so a
+    wall-clock step cannot skip a move. Idle and while sending the stop the
+    thread paces on the steady clock, so a robot clock that has stopped (a
+    paused sim) never holds up the stop at a release or at shutdown.
     """
 
     def __init__(self, side, kp=DEFAULT_KP, kd=DEFAULT_KD, rate_hz=100.0,
-                 cmd_topic=None, state_topic=None, max_speed=DEFAULT_MAX_SPEED):
+                 cmd_topic=None, state_topic=None, max_speed=DEFAULT_MAX_SPEED, clock=None):
         """Open the hand's DDS channels and start the command thread.
 
-        kp, kd: PD gains; rate_hz: command rate while commanding; max_speed:
-        rad/s. Raises ValueError on a non-finite or negative setting, or a zero
-        rate_hz or max_speed. ChannelFactoryInitialize must have run first.
+        kp, kd: PD gains; rate_hz: command rate while commanding, per s of
+        robot time; max_speed: rad/s. clock: the robot time, an object with
+        now() -> s and sleep(seconds, stop) that waits seconds of it or less
+        once stop() is true; None for the steady clock. Raises ValueError on a
+        non-finite or negative setting, or a zero rate_hz or max_speed.
+        ChannelFactoryInitialize must have run first.
         """
         self.side = side
         self.kp = _check_value('kp', kp)
         self.kd = _check_value('kd', kd)
         self.max_speed = _check_value('max_speed', max_speed, positive=True)
         self._dt = 1.0 / _check_value('rate_hz', rate_hz, positive=True)
+        self._clock = clock
         self._lock = threading.Lock()
         self._interp = None  # PoseInterpolator while commanding, else None
         self._release_left = 0
@@ -76,8 +85,12 @@ class Dex3Hand:
         self._thread = threading.Thread(target=self._loop, name=f'dex3_{side}', daemon=True)
         self._thread.start()
 
+    def _now(self):
+        """Return robot time, s: the clock's, or time.monotonic() without one."""
+        return time.monotonic() if self._clock is None else self._clock.now()
+
     def _on_state(self, msg: HandState_) -> None:
-        """Store a HandState_ sample, stamped with time.monotonic(); runs on a DDS thread."""
+        """Store a HandState_ sample, stamped with robot time; runs on a DDS thread."""
         if len(msg.motor_state) < NUM_HAND_MOTORS:
             return
         motors = msg.motor_state[:NUM_HAND_MOTORS]
@@ -87,7 +100,7 @@ class Dex3Hand:
             'tau': np.array([m.tau_est for m in motors], dtype=np.float64),
             'pressure': np.array([list(p.pressure) for p in msg.press_sensor_state],
                                  dtype=np.float32).reshape(-1, 12),
-            'time': time.monotonic(),
+            'time': self._now(),
         }
         with self._lock:
             self._state = state
@@ -97,7 +110,7 @@ class Dex3Hand:
         """Return the latest hand state, or None before the first.
 
         A dict of q (rad), dq (rad/s), tau (N m), pressure (sensors x 12) and
-        time (s, time.monotonic()).
+        time (s of robot time).
         """
         with self._lock:
             return None if self._state is None else dict(self._state)
@@ -106,14 +119,14 @@ class Dex3Hand:
         """Move to `positions` and return the clipped goal.
 
         `positions` is 7 joint angles (rad), clipped to the URDF limits; the
-        move takes `duration` s, or longer if a joint would otherwise move
+        move takes `duration` s of robot time, or longer if a joint would otherwise move
         faster than max_speed. A first command starts from the measured pose
         and raises RuntimeError without a finite hand state newer than
         MAX_STATE_AGE_S; later ones start from the current target. Raises
         ValueError on bad positions or duration.
         """
         goal = validate_positions(self.side, positions)
-        now = time.monotonic()
+        now = self._now()
         with self._lock:
             if self._interp is not None:
                 start = self._interp.value(now)
@@ -154,21 +167,35 @@ class Dex3Hand:
             motor.kd = float(kd)
 
     def _loop(self):
-        """Publish the interpolated target, or a queued stop, every 1 / rate_hz s."""
+        """Publish the interpolated target, or a queued stop, every 1 / rate_hz s.
+
+        While moving the period is robot time; idle or sending the stop it is
+        steady time (the class docstring).
+        """
         while self._running:
-            start_time = time.monotonic()
-            send = False
+            start_time = self._now()
+            send = moving = False
             with self._lock:
                 if self._interp is not None:
                     self._fill(self._interp.value(start_time), self.kp, self.kd, timeout=False)
-                    send = True
+                    send = moving = True
                 elif self._release_left > 0:
                     self._fill(np.zeros(NUM_HAND_MOTORS), 0.0, 0.0, timeout=True)
                     self._release_left -= 1
                     send = True
             if send:
                 self._pub.Write(self._cmd)
-            time.sleep(max(0.0, self._dt - (time.monotonic() - start_time)))
+            pause = max(0.0, self._dt - (self._now() - start_time))
+            if moving and self._clock is not None:
+                # SAFETY: a release or shutdown ends the wait at once, so the stop goes
+                # out on time while the robot clock stands still
+                self._clock.sleep(pause, self._move_ended)
+            else:
+                time.sleep(pause)
+
+    def _move_ended(self):
+        """Return whether the move is over: released, or the driver stopping."""
+        return not self._running or self._interp is None
 
     def shutdown(self, release: bool = True) -> None:
         """Stop the driver and close its DDS channels.

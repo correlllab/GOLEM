@@ -168,3 +168,29 @@ def test_main_releases_once_through_repeated_exit_signals(channel_inits, monkeyp
                 signal.signal(signum, handler)
     assert unhandled == []
     assert [hand.shutdowns for hand in FakeHand.instances] == [[True]]
+
+
+@pytest.mark.parametrize('sim_time', [False, True])
+def test_the_hands_keep_the_robot_clock(channel_inits, sim_time):
+    """Under use_sim_time the hands get the node's clock; otherwise none (the steady clock)."""
+    node = _make_node(f'domain_id:={ROS_TEST_DOMAIN}',
+                      f'use_sim_time:={"true" if sim_time else "false"}')
+    try:
+        clocks = [hand.kwargs['clock'] for hand in FakeHand.instances]
+        assert len(clocks) == 2
+        if sim_time:
+            assert all(clock is not None for clock in clocks)
+        else:
+            assert clocks == [None, None]
+    finally:
+        node.destroy_node()
+
+
+def test_no_pose_before_the_first_clock(channel_inits):
+    """Under use_sim_time a pose is refused before the first /clock: robot time has not begun."""
+    node = _make_node(f'domain_id:={ROS_TEST_DOMAIN}', 'use_sim_time:=true')
+    try:
+        response = node._named_pose('left', 'close', None, hand_node.Trigger.Response())
+        assert not response.success and 'first /clock' in response.message
+    finally:
+        node.destroy_node()

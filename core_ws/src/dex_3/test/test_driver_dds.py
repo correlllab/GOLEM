@@ -1,4 +1,8 @@
-"""Test Dex3Hand against a fake hand over DDS inside one process (no robot, no network)."""
+"""Test Dex3Hand against a fake hand over DDS inside one process (no robot, no network).
+
+By default the driver keeps the steady clock; given a robot clock (a sim's, under
+use_sim_time), its moves count that clock's time.
+"""
 
 import gc
 import time
@@ -293,3 +297,66 @@ def test_shutdown_releases_or_just_goes_silent(release):
     count = len(received)
     time.sleep(0.1)
     assert len(received) == count, 'silent after shutdown'
+
+
+class ManualClock:
+    """Stand in for a sim's robot clock: the test sets its time; a sleep waits for it."""
+
+    def __init__(self):
+        """Start at 100 s."""
+        self.t = 100.0
+
+    def now(self):
+        """Return the clock's time, s."""
+        return self.t
+
+    def sleep(self, seconds, stop):
+        """Wait until the clock has moved seconds on, or stop() is true."""
+        end = self.t + seconds
+        while self.t < end and not stop():
+            time.sleep(0.001)
+
+
+def test_a_move_counts_the_robot_clock():
+    """With a robot clock, a move's duration is that clock's time, not the wall clock's."""
+    clock = ManualClock()
+    start = np.zeros(7)
+    goal = np.array([0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0])  # middle_0, inside the right limits
+    state_pub, state = _state_publisher('right', start)
+    received = _Recorder('right')
+    hand = Dex3Hand('right', rate_hz=200.0, clock=clock)
+    try:
+        _publish_state(state_pub, state)
+        hand.set_pose(goal, duration=1.0)
+        # 0.5 s of wall time with the robot clock stood still: the hand stays at the start
+        time.sleep(0.5)
+        qs, _ = received.since(0)
+        assert len(qs) >= 1 and np.allclose(qs[-1], start, atol=1e-6)
+        clock.t += 0.5
+        _wait_until(lambda: np.allclose(received.since(0)[0][-1], goal / 2, atol=1e-6))
+        assert np.allclose(received.since(0)[0][-1], goal / 2, atol=1e-6), 'halfway'
+        clock.t += 0.6
+        _wait_until(lambda: np.allclose(received.since(0)[0][-1], goal, atol=1e-6))
+        assert np.allclose(received.since(0)[0][-1], goal, atol=1e-6)
+    finally:
+        hand.shutdown()
+
+
+def test_a_stopped_robot_clock_never_holds_up_the_release():
+    """With the robot clock stood still mid-move, the release still sends Unitree's stop."""
+    clock = ManualClock()
+    state_pub, state = _state_publisher('right', np.zeros(7))
+    received = _Recorder('right')
+    hand = Dex3Hand('right', rate_hz=200.0, clock=clock)
+    try:
+        _publish_state(state_pub, state)
+        hand.set_pose(named_pose('right', 'close'), duration=1.0)
+        time.sleep(0.2)
+        n = len(received)
+        assert hand.release() is True
+        _wait_until(lambda: len(_stops_after(received.messages[n:])) >= RELEASE_MESSAGES)
+        assert len(_stops_after(received.messages[n:])) == RELEASE_MESSAGES
+    finally:
+        start = time.monotonic()
+        hand.shutdown()
+        assert time.monotonic() - start < 0.5, 'shutdown waited on the stopped clock'

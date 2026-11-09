@@ -37,6 +37,12 @@ ros2 service call /right/hand/set_pose custom_ros_messages/srv/SetHandPose \
 Besides `sides`, `kp`, `kd`, `rate_hz`, `pose_duration`, `joint_state_hz` and
 `network_interface` (empty: `G1_DDS_INTERFACE`):
 
+- `use_sim_time` (default false): the moves' durations, the command rate while
+    moving and the hand state's age count robot time: the sim's `/clock` with
+    `true`, the steady clock otherwise (the real robot). Under `true` no pose is
+    taken before the first `/clock`. Idle and while sending Unitree's stop the
+    driver paces on the steady clock, so a paused sim never holds up a release.
+
 - `domain_id` (default -1, unset): the Unitree DDS domain is `ROS_DOMAIN_ID`'s
     (0 is the real robot, 1 the sim). With `ROS_DOMAIN_ID` unset or empty, this
     parameter must give it; with neither, the node refuses to start. There is

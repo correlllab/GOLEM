@@ -25,20 +25,13 @@ for arg in "$@"; do
     esac
 done
 [ ${#SERVICES[@]} -gt 0 ] || SERVICES=(robocasa ros isaac)
-# Check the COPY sources and resolve the MJPC commit before building anything.
-# The ros image builds MJPC at the mujoco_mpc submodule's commit, so the baked
-# build matches the source docker-compose.yml mounts.
+# Check the COPY sources before building anything.
 NEEDS_BASE=0
 for service in "${SERVICES[@]}"; do
     case "$service" in
         ros|robocasa) NEEDS_BASE=1; require_file unitree_sdk2_python/setup.py;;
     esac
     if [ "$service" = robocasa ]; then require_file core_ws/src/livox_ros_driver2/package_ROS2.xml; fi
-    if [ "$service" = ros ]; then
-        export MJPC_REF
-        MJPC_REF=$(git rev-parse HEAD:mujoco_mpc) || fail 'Cannot resolve the committed mujoco_mpc pin.'
-        echo "MJPC_REF=$MJPC_REF"
-    fi
 done
 # golem_base first, under the local tag the children's FROM names.
 if [ "$NEEDS_BASE" = 1 ]; then

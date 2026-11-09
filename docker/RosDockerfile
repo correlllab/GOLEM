@@ -5,8 +5,8 @@
 # container start. On top of base it adds colcon and the ament / rosidl build
 # system, the C++ libraries the workspace links (PCL, Eigen, yaml-cpp, OpenCV,
 # pinocchio), Livox-SDK2, the Pink IK / OMPL stack, the model_server ML stack
-# (transformers, CLIP, SAM3, YOLO, Gemini), Nav2 and SLAM, GraspGenX, MuJoCo
-# MPC, the RealSense driver, the Unitree C++ SDK and the G1's dependencies.
+# (transformers, CLIP, SAM3, YOLO, Gemini), Nav2 and SLAM, GraspGenX, the
+# RealSense driver, OctoMap and the G1's dependencies.
 #
 # Layers run from most to least stable, and blocks added later go at the end,
 # so editing a late block does not rebuild the heavy layers above it. Every pip
@@ -331,126 +331,6 @@ RUN grep -viE '^psutil==' /opt/graspgenx-constraints.txt \
 RUN mkdir -p "$GRASPGENX_CHECKPOINT_DIR" "$GRASPGENX_GRIPPER_CFG_DIR"
 
 # -----------------------------------------------------------------------------
-# MuJoCo MPC (badinkajink/mujoco_mpc, the extended_hw_patched branch): the C++
-# agent_server and the importable `mujoco_mpc` package (its gRPC Agent API),
-# which deploy_mjpc uses. The heaviest layer of the image: CMake FetchContent
-# builds MuJoCo 3.2.3, gRPC, abseil, glfw and the task models from source
-# (gRPC alone takes 10-20 min; lower -j if the build runs out of memory).
-#
-# The checkout here exists only at build time: the package is installed into
-# dist-packages, the warm build tree is stashed at /opt/mjpc-build-seed and the
-# source is removed. At runtime docker-compose.yml mounts the mujoco_mpc
-# submodule over /home/code/mujoco_mpc and a persistent build tree inside it,
-# launch_ros.sh seeds that tree from the stash, and rebuild_mjpc.sh rebuilds
-# incrementally. MJPC_REF and the submodule pin name the same commit, so the
-# mounted source matches the baked build (docker/BUILD.md §7).
-# -----------------------------------------------------------------------------
-
-# 1. C++ build dependencies, as upstream CI installs them. clang-13 is the only
-#    compiler upstream tests. It links libstdc++, as CI does: libc++-13-dev is
-#    not installed, because its libunwind-13-dev conflicts with libunwind-dev
-#    and apt would remove libceres-dev and with it Nav2 and slam_toolbox.
-#    llvm-13 and lld-13 provide llvm-ar / llvm-ranlib / ld.lld, which the
-#    LTO-built MuJoCo dependencies (ccd, qhull, ...) archive and link with;
-#    without them CMake records CMAKE_C_COMPILER_AR-NOTFOUND. The GLFW / X11
-#    headers are needed because configuring processes the whole project, UI
-#    included, though only agent_server is built. `patch` applies the task
-#    XML patches of mjpc/tasks.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        clang-13 llvm-13 lld-13 \
-        ninja-build zlib1g-dev patch \
-        libgl1-mesa-dev libxinerama-dev libxcursor-dev libxrandr-dev libxi-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# 2. Clone the fork at MJPC_REF. agent_server is compiled from this checkout,
-#    so it knows only the tasks present at MJPC_REF. docker_build.sh passes the
-#    mujoco_mpc submodule's commit (git rev-parse HEAD:mujoco_mpc); this default
-#    applies only to a bare `docker build`. The fork is fetched over https, so
-#    MJPC_REF must be reachable from its public branches.
-ARG MJPC_REF=c7fc99f5028d2c09d14060d6d85202a377eefe49
-RUN git clone \
-        https://github.com/badinkajink/mujoco_mpc.git /home/code/mujoco_mpc \
-    && git -C /home/code/mujoco_mpc checkout --quiet "${MJPC_REF}"
-
-# 3. The Agent API's Python dependencies: grpcio, grpcio-tools (build-time
-#    proto generation), protobuf and mujoco. mujoco is 3.2.3, the version the
-#    C++ server is built against (MUJOCO_MPC_MUJOCO_GIT_TAG): Agent.init() sends
-#    the model as version-specific mjb bytes, so both sides must match. This
-#    moves base's newer mujoco back and pip warns that mink needs a newer one;
-#    nothing in this image imports mink. The constraint is the freeze without
-#    the packages resolved here, so torch and numpy<2 stay put. grpcio-tools
-#    moves setuptools, which step 5 clamps back.
-RUN grep -viE '^(grpcio|grpcio-tools|grpcio-status|protobuf|mujoco)==' \
-        /opt/graspgenx-constraints.txt > /opt/mjpc-constraints.txt \
-    && PIP_CONSTRAINT=/opt/mjpc-constraints.txt pip install -c /opt/golem-locks/ros-amd64-11.txt --no-cache-dir \
-        grpcio grpcio-tools protobuf "mujoco==3.2.3"
-
-# 4. Build agent_server with CMake first: setup.py's copy_task_assets needs
-#    build/mjpc/tasks, which only the CMake build creates (building
-#    agent_server also runs the targets that fill it), and setup.py's own
-#    build_ext then finds nothing to do. The fork's commits carry its build
-#    fixes (no ui_agent_server target, the base model copied rather than
-#    patched, case-insensitive .STL globs so the H1-2's meshes are installed),
-#    so the build tree matches the mounted source byte for byte.
-#    setup.py install --single-version-externally-managed copies the built
-#    package (agent_server, generated protos, task XMLs and meshes) into
-#    dist-packages without installing install_requires (brax, mujoco-mjx,
-#    ...), which would break the numpy<2 and cu130 torch pins; the Agent API
-#    does not need them.
-#    agent_server links libmujoco.so.3.2.3 from build/lib, which setup.py does
-#    not copy, so the build's own libmujoco goes to /usr/local/lib. It must be
-#    this library: the pip mujoco 3.2.3 wheel's libmujoco has the same soname
-#    but comes from another commit, and agent_server misreads mjModel with it.
-#    The build tree is copied with cp -a (mtimes, symlinks, ninja state kept)
-#    to /opt/mjpc-build-seed. It is built in-tree at /home/code/mujoco_mpc/build,
-#    the path the runtime build mount uses, so CMakeCache's absolute paths stay
-#    valid when launch_ros.sh restores it there. The seed adds several GB (the
-#    whole _deps tree); only the dependencies' .git metadata is trimmed. Then
-#    the source clone is removed.
-RUN cd /home/code/mujoco_mpc \
-    && cmake -S . -B build -G Ninja \
-        -DCMAKE_C_COMPILER=clang-13 -DCMAKE_CXX_COMPILER=clang++-13 \
-        -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
-        -DMJPC_BUILD_GRPC_SERVICE=ON \
-        -DMJPC_BUILD_TESTS=OFF -DMJPC_GRPC_BUILD_TESTS=OFF -DPYMJPC_BUILD_TESTS=OFF \
-    && cmake --build build --target agent_server -j"$(nproc)" \
-    && cd python \
-    && CC=clang-13 CXX=clang++-13 CMAKE_GENERATOR=Ninja \
-       python setup.py install --single-version-externally-managed \
-                               --record /tmp/mjpc-install-files.txt \
-    && rm -f /tmp/mjpc-install-files.txt \
-    && cp -a /home/code/mujoco_mpc/build/lib/libmujoco.so* /usr/local/lib/ \
-    && ldconfig \
-    && cp -a /home/code/mujoco_mpc/build /opt/mjpc-build-seed \
-    && find /opt/mjpc-build-seed/_deps -maxdepth 2 -name .git -prune -exec rm -rf {} + 2>/dev/null || true \
-    && rm -rf /home/code/mujoco_mpc
-
-# 5. Clamp setuptools / wheel / numpy again after step 3, for the reasons of
-#    the first clamp (§6) and §8's distutils-precedence.pth.
-RUN rm -rf /usr/local/lib/python3.10/dist-packages/setuptools \
-           /usr/local/lib/python3.10/dist-packages/setuptools-*.dist-info \
-           /usr/local/lib/python3.10/dist-packages/pkg_resources \
-           /usr/local/lib/python3.10/dist-packages/pkg_resources-*.dist-info \
-           /usr/local/lib/python3.10/dist-packages/_distutils_hack \
-           /usr/local/lib/python3.10/dist-packages/wheel \
-           /usr/local/lib/python3.10/dist-packages/wheel-*.dist-info \
-    && pip install -c /opt/golem-locks/ros-amd64-12.txt --no-cache-dir --no-deps "numpy<2" "setuptools==59.6.0" "wheel<0.44" \
-    && rm -f /usr/local/lib/python3.10/dist-packages/distutils-precedence.pth
-
-# 6. Fail the build if agent_server has an unresolved shared library, the
-#    package does not import, or the binary was not installed. This runs after
-#    the source clone is gone, so it checks what runtime has before any rebuild:
-#    dist-packages and /usr/local/lib alone.
-RUN BIN=/usr/local/lib/python3.10/dist-packages/mujoco_mpc/mjpc/agent_server; \
-    if ldd "$BIN" | grep -q 'not found'; then \
-        echo 'ERROR: agent_server has unresolved shared libraries:'; ldd "$BIN" | grep 'not found'; exit 1; \
-    fi; \
-    python -c "import mujoco, mujoco_mpc, pathlib; from mujoco_mpc import agent; \
-b = pathlib.Path(mujoco_mpc.__file__).parent / 'mjpc' / 'agent_server'; \
-assert b.exists(), f'agent_server binary missing at {b}'; \
-print('MJPC OK — mujoco', mujoco.__version__, '| agent_server:', b)"
-
-# -----------------------------------------------------------------------------
 # The Intel RealSense ROS driver: h12_real_desktop.launch.py includes
 # cl_realsense's h12_hand_cameras.launch.py, which runs realsense2_camera_node
 # for the wrist cameras. image-transport-plugins supplies the compressed
@@ -461,17 +341,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-realsense2-camera \
         ros-humble-image-transport-plugins \
     && rm -rf /var/lib/apt/lists/*
-
-# The Unitree C++ SDK at a fixed commit, installed to /opt/unitree_install,
-# where deploy_mjpc's CMake finds it for the MJPC deploy core. Baked in so a
-# workspace build needs no network; launch_ros.sh refuses to start without it.
-ARG UNITREE_SDK_REF=63c6f53103e2f28e23b807d7399e92338c9d07d3
-RUN git clone https://github.com/unitreerobotics/unitree_sdk2.git /tmp/unitree_sdk2 \
-    && git -C /tmp/unitree_sdk2 checkout --quiet "${UNITREE_SDK_REF}" \
-    && cmake -S /tmp/unitree_sdk2 -B /tmp/unitree_sdk2/build -DCMAKE_INSTALL_PREFIX=/opt/unitree_install \
-    && cmake --install /tmp/unitree_sdk2/build \
-    && test -f /opt/unitree_install/lib/libunitree_sdk2.a \
-    && rm -rf /tmp/unitree_sdk2
 
 # -----------------------------------------------------------------------------
 # OctoMap for golem_slam's navigation.launch.py: octomap_server builds the 3D
@@ -485,12 +354,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # -----------------------------------------------------------------------------
 # The G1's additions. joint_state_publisher_gui: golem_ros2_models'
-# display.launch.py. python3-evdev: mujoco_mpc's
-# mjpc/deploy/helper_scripts/wasd_teleop.py reads the keyboard through it.
-# onnxruntime 1.23.2: golem_lowerbody_rl runs HOMIE's walking policy with it.
+# display.launch.py. onnxruntime 1.23.2: golem_lowerbody_rl runs HOMIE's
+# walking policy with it.
 # -----------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ros-humble-joint-state-publisher-gui python3-evdev \
+        ros-humble-joint-state-publisher-gui \
     && rm -rf /var/lib/apt/lists/*
-RUN pip install -c /opt/golem-locks/ros-amd64-13.txt --no-cache-dir onnxruntime==1.23.2 \
+RUN pip install -c /opt/golem-locks/ros-amd64-11.txt --no-cache-dir onnxruntime==1.23.2 \
     && python3 -c "import onnxruntime"

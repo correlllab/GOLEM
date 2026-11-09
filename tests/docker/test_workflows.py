@@ -28,12 +28,12 @@ class Workflows(unittest.TestCase):
                      'CL_isaaclab_sim/sim_main.py', 'golem_robocasa/h12_mujoco.py',
                      'core_ws/src/magpie_msgs/package.xml', 'core_ws/src/custom_ros_messages/package.xml',
                      'core_ws/src/livox_ros_driver2/package_ROS2.xml', 'core_ws/cyclonedds.xml',
-                     'core_ws/src/golem_bringup/package.xml', 'mujoco_mpc/CMakeLists.txt'):
+                     'core_ws/src/golem_bringup/package.xml'):
             p = self.root / name
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text('fixture')
         for name in ('CL_Assets/graspgenx/assets/magpie', 'CL_Assets/graspgenx/assets/meshes/magpie',
-                     '.git/modules/mujoco_mpc', 'tools'):
+                     'tools'):
             (self.root / name).mkdir(parents=True, exist_ok=True)
         self.bin = self.root / 'bin'
         self.bin.mkdir()

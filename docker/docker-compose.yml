@@ -183,11 +183,6 @@ services:
     build:
       context: ..
       dockerfile: docker/RosDockerfile
-      # The commit MJPC is built at. docker_build.sh exports the mujoco_mpc
-      # submodule's (git rev-parse HEAD:mujoco_mpc); unset, RosDockerfile's
-      # default applies.
-      args:
-        - MJPC_REF
     image: golem_ros:latest
     platform: linux/amd64
     init: true
@@ -262,33 +257,6 @@ services:
       - type: bind
         source: ../tools
         target: /home/code/tools
-        read_only: true
-        bind:
-          create_host_path: false
-      # MuJoCo MPC development (docker/BUILD.md §7). The mujoco_mpc submodule,
-      # read-write, at the path the image built it from; the installed
-      # `mujoco_mpc` package is baked into dist-packages, so it imports without
-      # a rebuild. Keep the submodule at MJPC_REF.
-      - type: bind
-        source: ../mujoco_mpc
-        target: /home/code/mujoco_mpc
-        bind:
-          create_host_path: false
-      # The persistent CMake build tree, inside the source mount at the path
-      # the image's seed was built at, so CMakeCache's absolute paths match.
-      # launch_ros.sh fills it from /opt/mjpc-build-seed on first use.
-      - type: bind
-        source: ${GOLEM_CACHE_DIR:-../container_cache}/mjpc_build
-        target: /home/code/mujoco_mpc/build
-        bind:
-          create_host_path: false
-      # The submodule's git metadata, read-only. mujoco_mpc/.git is a file
-      # pointing at ../.git/modules/mujoco_mpc; with this mount, git commands
-      # on the mounted source work, including those a CMake reconfigure runs.
-      # docker_common.sh resolves GOLEM_MJPC_GIT_DIR.
-      - type: bind
-        source: ${GOLEM_MJPC_GIT_DIR:-../.git/modules/mujoco_mpc}
-        target: /home/code/.git/modules/mujoco_mpc
         read_only: true
         bind:
           create_host_path: false

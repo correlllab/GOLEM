@@ -28,7 +28,7 @@ export PYTHONUNBUFFERED=1
 WS=/home/code/core_ws
 
 # Build only the controllers' dependency closure into its own build and install bases, so the
-# test inherits no stale interfaces from core_ws/install and builds neither MJPC nor vision.
+# test inherits no stale interfaces from core_ws/install and builds no vision.
 # golem_ros2_models' setup.py stages the models from CL_Assets at ../../../CL_Assets relative to
 # itself, even from colcon's build copy, so the build base sits at the depth of src.
 TEST_BUILD_BASE=$WS/build_stack_tests

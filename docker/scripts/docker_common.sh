@@ -16,8 +16,6 @@
 #                      sim and the efficiency cores for ros; unset otherwise
 #   GOLEM_SYSFS_ROOT   prefix of the /sys files configure_cpus reads (default
 #                      empty; the host-script tests set it)
-#   GOLEM_MJPC_GIT_DIR the mujoco_mpc submodule's git directory (default: found
-#                      with git)
 #   docker/.env        any of the above; exported shell values win
 # Globals set: GOLEM_ROOT, COMPOSE (the docker compose command line, extended
 # by configure_robot, configure_display and configure_cpus), ENV_FILE,
@@ -318,14 +316,8 @@ prepare_mounts() {
         ros)
             require_file "$GOLEM_ROOT/core_ws/src/golem_bringup/package.xml"
             require_file "$GOLEM_ROOT/core_ws/cyclonedds.xml"
-            require_file "$GOLEM_ROOT/mujoco_mpc/CMakeLists.txt"
             require_dir "$GOLEM_ASSETS_DIR/graspgenx/assets/magpie"
             require_dir "$GOLEM_ASSETS_DIR/graspgenx/assets/meshes/magpie"
-            # mujoco_mpc/.git is a file naming the real git directory;
-            # docker-compose.yml mounts that directory.
-            export GOLEM_MJPC_GIT_DIR="${GOLEM_MJPC_GIT_DIR:-$(git -C "$GOLEM_ROOT/mujoco_mpc" rev-parse --absolute-git-dir 2>/dev/null || echo "$GOLEM_ROOT/.git/modules/mujoco_mpc")}"
-            require_dir "$GOLEM_MJPC_GIT_DIR"
-            mkdir -p "$GOLEM_CACHE_DIR/mjpc_build" "$GOLEM_ROOT/mujoco_mpc/build"
             ;;
     esac
 }

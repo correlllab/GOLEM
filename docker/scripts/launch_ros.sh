@@ -9,50 +9,11 @@
 #                       GOLEM_SIM_TIMEOUT) after the build and before the command
 # build/, install/ and log/ live in the host's core_ws, so builds persist across
 # containers.
-# Exit status: 1 without the baked Unitree SDK or with a stale installed
-# package; colcon's or wait_for_sim.py's status when they fail; otherwise the
-# command's.
+# Exit status: 1 with a stale installed package; colcon's or wait_for_sim.py's
+# status when they fail; otherwise the command's.
 set -e
 
 source /opt/ros/humble/setup.bash
-# deploy_mjpc links the Unitree C++ SDK the image installs (RosDockerfile).
-if [ ! -f /opt/unitree_install/lib/libunitree_sdk2.a ]; then
-    echo '[launch_ros] missing baked Unitree SDK; rebuild with docker/scripts/docker_build.sh ros' >&2
-    exit 1
-fi
-
-# MuJoCo MPC's persistent build tree (docker-compose.yml mounts it inside the
-# mujoco_mpc source): fill it from the image's warm seed when it is empty.
-MJPC_SRC=/home/code/mujoco_mpc
-MJPC_BUILD=/home/code/mujoco_mpc/build
-MJPC_SEED=/opt/mjpc-build-seed
-if [ -f "$MJPC_SRC/CMakeLists.txt" ] && [ ! -e "$MJPC_BUILD/CMakeCache.txt" ] \
-   && [ -d "$MJPC_SEED" ]; then
-    echo "[launch_ros] hydrating MJPC build cache from seed ($MJPC_SEED -> $MJPC_BUILD)"
-    mkdir -p "$MJPC_BUILD"
-    cp -a "$MJPC_SEED/." "$MJPC_BUILD/"
-fi
-
-# On a build tree's first use, touch every mounted source file once. The
-# mounted source can differ from what the seed was built from even at the same
-# commit (local edits, untracked files), and its mtimes prove nothing, so ninja
-# must recompile everything that depends on it; the seeded dependencies stay
-# built. The marker is written right after the touch: a later failed build
-# still retries, because the sources stay newer than its objects.
-if [ -f "$MJPC_SRC/CMakeLists.txt" ] && [ -e "$MJPC_BUILD/CMakeCache.txt" ] \
-   && [ ! -f "$MJPC_BUILD/.golem-source-revalidated-v1" ]; then
-    find "$MJPC_SRC" \( -path "$MJPC_BUILD" -o -name .git \) -prune -o \
-         -exec touch -h {} +
-    touch "$MJPC_BUILD/.golem-source-revalidated-v1"
-fi
-
-# Rebuild agent_server and the staged task assets from the mounted source
-# (a no-op ninja scan when nothing changed) before colcon links deploy_mjpc
-# against the build tree.
-if [ -f "$MJPC_SRC/CMakeLists.txt" ] && [ -e "$MJPC_BUILD/CMakeCache.txt" ]; then
-    /home/code/h12_sim_scripts/rebuild_mjpc.sh
-fi
-
 WS=/home/code/core_ws
 cd "$WS"
 

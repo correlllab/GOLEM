@@ -23,10 +23,9 @@ class LaunchCacheTests(unittest.TestCase):
         (self.ws / 'src/demo/package.xml').write_text('<package/>')
         (self.ws / 'install').mkdir()
         (self.ws / 'install/setup.bash').write_text(':')
-        for name in ('opt/ros/humble/setup.bash', 'opt/unitree_install/lib/libunitree_sdk2.a'):
-            p = self.root / name
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(':')
+        ros_setup = self.root / 'opt/ros/humble/setup.bash'
+        ros_setup.parent.mkdir(parents=True)
+        ros_setup.write_text(':')
         self.bin = self.root / 'bin'
         self.bin.mkdir()
         colcon = self.bin / 'colcon'
@@ -188,29 +187,6 @@ sys.exit(int(os.environ.get('BUILD_EXIT', '0')))
         self.assertEqual(result.returncode, 17, result.stderr)
         self.assertFalse((self.root / 'started').exists())
 
-    def test_existing_backdated_mjpc_cache_is_revalidated_once(self):
-        """MJPC sources older than an existing build are touched newer once, and not on later launches."""
-        src = self.root / 'home/code/mujoco_mpc'
-        build = src / 'build'
-        build.mkdir(parents=True)
-        source = src / 'CMakeLists.txt'
-        source.write_text('project(test)')
-        os.utime(source, (946684800, 946684800))
-        (build / 'CMakeCache.txt').write_text('cache')
-        obj = build / 'cached.o'
-        obj.write_text('object')
-        rebuild = self.root / 'home/code/h12_sim_scripts/rebuild_mjpc.sh'
-        rebuild.parent.mkdir()
-        rebuild.write_text('#!/bin/bash\nexit 0\n')
-        rebuild.chmod(0o755)
-        result = self.run_launch()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertGreater(source.stat().st_mtime_ns, obj.stat().st_mtime_ns)
-        stamp = source.stat().st_mtime_ns
-        result = self.run_launch()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(source.stat().st_mtime_ns, stamp)
-
     @unittest.skipUnless(all(shutil.which(x) for x in ('colcon', 'cmake', 'c++')),
                          'requires local colcon, cmake, and C++ compiler')
     def test_real_build_recompiles_cpp_and_generated_input_and_rejects_removed_package(self):
@@ -255,28 +231,6 @@ sys.exit(int(os.environ.get('BUILD_EXIT', '0')))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('stale installed package', result.stderr)
         self.assertFalse((self.root / 'started').exists())
-
-    def test_dirty_mjpc_source_is_newer_than_hydrated_objects(self):
-        """A dirty MJPC source is newer than the objects hydrated from the image's build seed."""
-        src = self.root / 'home/code/mujoco_mpc'
-        seed = self.root / 'opt/mjpc-build-seed'
-        src.mkdir(parents=True)
-        seed.mkdir(parents=True)
-        (src / 'CMakeLists.txt').write_text('project(test)')
-        dirty = src / 'dirty.cpp'
-        dirty.write_text('original')
-        (seed / 'CMakeCache.txt').write_text('cache')
-        obj = seed / 'dirty.o'
-        obj.write_text('old binary')
-        dirty.write_text('dirty edits')
-        os.utime(dirty, (946684800, 946684800))
-        rebuild = self.root / 'home/code/h12_sim_scripts/rebuild_mjpc.sh'
-        rebuild.parent.mkdir()
-        rebuild.write_text('#!/bin/bash\nexit 0\n')
-        rebuild.chmod(0o755)
-        result = self.run_launch()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertGreater(dirty.stat().st_mtime_ns, (src / 'build/dirty.o').stat().st_mtime_ns)
 
 
 if __name__ == '__main__':

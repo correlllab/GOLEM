@@ -71,6 +71,10 @@ stream and point cloud. Then the Livox topics `/livox/lidar` (CustomMsg),
 `/livox/pointcloud`, `/livox/imu`; and `/{left,right}/gripper/state`. It consumes
 `rt/lowcmd` and the `/{left,right}/gripper/*` services.
 
+The sim needs an NVIDIA GPU: without one it stops at start, before any ROS or
+DDS traffic. `GOLEM_SIM_RATE` sets its target real-time factor (default 1, real
+time; `max` never sleeps); `CLAUDE.md` §8 has both.
+
 Scene flags are passed straight through, e.g.
 `docker_run.sh robocasa --task OpenFridge --layout 1 --style 1 --seed 42`.
 `--task Battery` loads the battery workcell instead of a kitchen

@@ -74,8 +74,8 @@ instead of copying the numbers.
 | Who holds the robot until the legs stand | a gantry | the elastic band, until the leg node releases it |
 | Motor torques | the robot's motor drivers | PD law every physics step, in sim time |
 | Silence on `rt/lowcmd` | not measured | `GOLEM_CMD_TIMEOUT` turns the motors off |
-| Time | wall clock | sim time, paced to at most real time; the safety layer's stale times still run on the host's clock |
-| Safety timings | `golem_safety/config/g1/split.yaml` | `sim_split.yaml`: looser, since the sim can run slower than real time |
+| Time | robot time on the boot and steady clocks | robot time is sim time under `use_sim_time`, paced to `GOLEM_SIM_RATE` (default real time); the heartbeat and its watchdogs stay on the steady clock |
+| Safety timings | `golem_safety/config/g1/split.yaml` | `sim_split.yaml`: longer stale times, in sim time, where the controllers' wall-time delays on a loaded host add up; estop limits relaxed for the sim's contact spikes |
 | Arm speed limits (`controller.v_lim`, `w_lim`, `dq_lim`) | `golem_upper_ik/config/g1/g1_split.yaml`: deliberately low for the first sessions | `sim_split.yaml` |
 | The leg node | `golem_lowerbody_rl/config/g1/real.yaml`: starts only with `start_position_verified:=true`, holds the default pose until `/lowerbody/confirm_engage` | `sim.yaml`: always starts, no confirm, releases the band |
 | Walking speed limits (`commands.vx`, `vy`, `yaw`) | `real.yaml`: inside the trained ranges | `sim.yaml`: the trained ranges |

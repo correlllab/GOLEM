@@ -71,7 +71,7 @@ container names. They can be invoked from any directory.
 | Script | Verified arguments | Notes |
 |---|---|---|
 | `docker/scripts/docker_build.sh [profile ...]` | `isaac`, `robocasa`, `ros` (no args = all three) | `golem_base` is built first automatically for `robocasa`/`ros`; `isaac` is self-contained. Pins the MJPC build to the `mujoco_mpc` submodule SHA (`MJPC_REF`). The images serve both robots. |
-| `docker/scripts/docker_run.sh <profile> [--restart] [cmd...]` | `isaac`, `robocasa`, `ros`; `--restart` right after the profile replaces an existing container; then optionally `bash` (shell instead of default launcher) or any command; a leading `-flag` (e.g. `--headless`) is forwarded to the default launcher; on simulator profiles (`robocasa`, `isaac`), `--g1` / `--h12` anywhere in the arguments select the robot (`ros` takes no robot flag) | Container names: `golem_ros`, `golem_sim_robocasa`, `golem_sim_isaac`, for either robot. Simulator profiles print `robot: h12` or `robot: g1` before the domain check. They pin the container's CPUs (CPU pinning, below). |
+| `docker/scripts/docker_run.sh <profile> [--restart] [cmd...]` | `isaac`, `robocasa`, `ros`; `--restart` right after the profile replaces an existing container; then optionally `bash` (shell instead of default launcher) or any command; a leading `-flag` (e.g. `--headless`) is forwarded to the default launcher; on simulator profiles (`robocasa`, `isaac`), `--g1` / `--h12` anywhere in the arguments select the robot (`ros` takes no robot flag) | Container names: `golem_ros`, `golem_sim_robocasa`, `golem_sim_isaac`, for either robot. Simulator profiles print `robot: h12` or `robot: g1` before the domain check. `robocasa` and `ros` are pinned (CPU pinning, below); `isaac` never is. |
 
 Paired startup: `docker/scripts/docker_stack.sh up robocasa|isaac [--headless|--gui] [--g1|--h12]`.
 Use `restart`, `stop`, or `logs` with the same simulator name. It prepares the
@@ -126,8 +126,9 @@ the time, so `docker/scripts/docker_common.sh`'s `configure_cpus` pins the
 `robocasa` container to the P-cores (`cpu_core` in sysfs) and the `ros` container
 to the E-cores (`cpu_atom`); the measured real-time factors are in
 `docs/superpowers/specs/2026-11-05-sim-speed-results.md`. `docker_run.sh` (`robocasa`, `ros`),
-`docker_stack.sh up|restart robocasa` and the closed-loop tests (`tests/sim`,
-`tests/g1`, `tests/stack` on RoboCasa) apply it, and print `cpus: sim <list>, ros
+`docker_stack.sh up|restart robocasa`, the closed-loop tests (`tests/sim`,
+`tests/g1`, `tests/stack` on RoboCasa) and the `tests/robocasa` unit-test runners
+apply it, and print `cpus: sim <list>, ros
 <list>` (or `cpus: not pinned`) beside the `robot:` line; the Isaac simulator is
 never pinned. A pinned service gets `cpuset:` from
 `docker/docker-compose.cpus-sim.yml` or `docker-compose.cpus-ros.yml`, added
@@ -506,8 +507,8 @@ picks the robot (`--h12`/`--g1`, else `GOLEM_ROBOT`, else `h12`) before its
 H1-2 imports and hands the G1 over to `golem_robocasa/g1/g1_mujoco.py`. Both
 sims render their cameras and the MID-360's rays through EGL on an NVIDIA GPU:
 without one (MuJoCo not on EGL, no EGL device, a software renderer) the sim
-stops at start, before either robot's imports, with one message
-(`sim_common.require_gpu`). The H1-2
+stops at start, once its command line is parsed and before it builds a scene or
+starts ROS or DDS, with one message (`sim_common.require_gpu`). The H1-2
 stays the default, and nothing on the G1 path may change its behaviour. The robots share
 `sim_common.py`, `measurement_bridge.py`, the pacer in `sim_timing.py` (its
 `--timing` report is the H1-2's only) and the `mujoco_sensors` node in
@@ -553,9 +554,11 @@ unset or empty is 1, real time, the default; `2` runs twice real time, `0.5`
 half; `max` (any case) never sleeps; anything else stops the sim at start. The
 sim logs `sim rate: ...` at start. At any rate the pacer repays at most 0.1 s of
 wall lag, so a pause is not caught up. Every rate the robot sees counts sim time (the grippers'
-state and DeliGrasp settles included); only the viewer, the logs and their rate
-limits, and the limits that end a wait once the physics has stopped run on wall
-time. Faster than real time gives every ROS node (FAST-LIO,
+state and DeliGrasp settles included), though the G1's head camera drops a frame
+that falls due while it is still rendering the last (`g1/g1_sensors.py`), where the
+H1-2's cameras and the lidar make the physics wait; only the viewer, the logs and
+their rate limits, and the limits that end a wait once the physics has stopped run
+on wall time. Faster than real time gives every ROS node (FAST-LIO,
 Nav2, the leg policy, `golem_safety`) less wall time per sim second: a stack that
 falls behind sends stale commands, and `GOLEM_CMD_TIMEOUT` (sim time) turns the
 motors off as at 1x. The closed-loop tests are gates only at 1x: `tests/sim`
@@ -816,7 +819,9 @@ describe the new behaviour.
   `golem_skills` and `dex_3` measure rates, freshness and fault windows and
   timeouts on robot time, the sim's `/clock` under `use_sim_time` and the steady
   (`golem_safety`: boot) clock otherwise (the real robots, unchanged), so under
-  `use_sim_time` a rate is at most one cycle per `/clock` message, keeping on the
+  `use_sim_time` a rate follows `/clock`'s steps (about one cycle per step while a
+  step is no longer than the period; a longer step gets up to two `golem_safety`
+  writes, or a catch-up burst from `golem_upper_ik`'s publisher), keeping on the
   steady clock only
   the liveness checks that must fire while `/clock` stops (`golem_safety`'s
   heartbeat and its readers' silence checks) and the exits; `safety_node`

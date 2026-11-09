@@ -41,7 +41,8 @@ the sim bringup passes, `safety_node` refuses ROS domain 0, an unset
 
 The G1 starts as the H1-2 does; no config key chooses it.
 
-1. **Zero gains from boot.** From its start the layer writes `rt/lowcmd` at
+1. **Zero gains from boot.** From its start (under `use_sim_time`, from the
+   first `/clock`) the layer writes `rt/lowcmd` at
    `control.publish_hz` with mode 0 and every value 0 on every slot, stamped
    with `mode_machine` 5: every motor is off. It checks every `rt/lowstate`
    against the estop limits from the first sample (below).

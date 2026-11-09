@@ -49,8 +49,8 @@ Pinning alone, measured separately on 2026-11-05 (one run each, before the other
 the H1-2 sim ran at 0.86x instead of 0.79x unpinned, and the G1 at 0.98x instead of 0.92x. That
 is not part of the table above, which is the whole of Tier 1.
 
-Every figure here is a single run. The H1-2's full-stack 0.83x against the pinning-alone 0.86x is
-within run-to-run spread, not a regression shown.
+Every figure here is a single run, so the run-to-run spread is not measured: the H1-2's
+full-stack 0.83x against the pinning-alone 0.86x neither shows a regression nor rules one out.
 
 ## Tier 2
 
@@ -64,8 +64,9 @@ behind, the physics waits for them instead of dropping rays. The G1 sim's FAST-L
 (`golem_slam/config/g1/fastlio_sim.yaml`) are retuned for the denser, noisier scan; the H1-2's
 `fastlio.yaml`, shared with the real robot, is unchanged.
 
-Measured 2026-11-08 on the i7-14700F with an RTX 5070 Ti, on the tree committed as 128186f (a unit test tightened after the runs; branch
-`sim_speed`, on top of `1693ad4`), `cpus: sim 0-15, ros 16-27`. The closed-loop suites give their
+Measured 2026-11-08 on the i7-14700F with an RTX 5070 Ti, on the tree committed as 128186f
+(a unit test tightened after the runs; branch `sim_speed`, on top of `1693ad4`), `cpus: sim
+0-15, ros 16-27`. The closed-loop suites give their
 sim container the GPU (the nvidia runtime and `MUJOCO_GL=egl`), so `auto` cast on the GPU; each
 sim logged `lidar rays cast on the GPU every 20 ms of sim time`.
 
@@ -138,8 +139,8 @@ and settled for 2 s; then, from that saved state, only the `mj_step` call timed,
 `golem_sim_robocasa` container pinned to CPUs 0-15. One model build per robot, its collision bits
 switched between the original and the excluded ones in alternating blocks of 3000 steps, three
 blocks each (9000 steps per condition; the blocks' medians agreed within 1.1%). The robot stood
-the same either way (pelvis height equal to the millimetre at the end of every block); MuJoCo's contact
-count (median per step) fell from 26 to 8.
+the same either way (pelvis height equal to the millimetre at the end of every block); MuJoCo's
+contact count (median per step) fell from 26 to 8.
 
 `tests/stack/run.sh` builds its own kitchen (task `AirDryFruit`), where the sim excluded 188,284
 geom pairs in 35 fixtures.

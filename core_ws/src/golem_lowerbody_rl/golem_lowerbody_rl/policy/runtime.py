@@ -1,9 +1,8 @@
 """
 Run a policy network: TorchScript or ONNX, as its spec's runtime.kind says.
 
-Each backend imports its library when it is built, never at import time, so a robot
-whose policies are all TorchScript (the Mac image has no onnxruntime) never imports
-onnxruntime.
+torch is imported only when a TorchScript network is built, so a robot whose policies are
+all ONNX (the G1's HOMIE) never loads it.
 """
 
 from __future__ import annotations
@@ -12,6 +11,7 @@ import os
 from typing import Protocol
 
 import numpy as np
+import onnxruntime as ort
 
 from golem_lowerbody_rl.policy.spec import RuntimeSpec
 
@@ -119,8 +119,6 @@ class OnnxRuntime:
 
     def __init__(self, path: str, threads: int):
         """Open an inference session on the network at path."""
-        import onnxruntime as ort
-
         options = ort.SessionOptions()
         options.intra_op_num_threads = threads
         options.inter_op_num_threads = 1

@@ -3,8 +3,8 @@ Run a leg policy from its spec: the spec loader, term registry, runtimes and run
 
 config/<robot>/policies/<name>.yaml says how the policy's observation is built from
 /lowstate and the commands, which network runs it, and how its action becomes leg
-targets; nothing here names a robot or a policy. Only the active policy's runtime
-library is imported (torch or onnxruntime), when its runner is built.
+targets; nothing here names a robot or a policy. torch is imported only when a
+TorchScript policy's runner is built.
 """
 
 from golem_lowerbody_rl.policy.commands import CommandProcessor

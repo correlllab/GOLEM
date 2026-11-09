@@ -64,8 +64,6 @@ ROBOT = {'walk': 'h12', 'almi': 'h12', 'fame': 'h12', 'homie': 'g1'}
 
 def _runner(name: str) -> PolicyRunner:
     """Return a fresh runner of policy name on its robot's sim run config."""
-    if name == 'homie':
-        pytest.importorskip('onnxruntime', reason='HOMIE runs on onnxruntime')
     robot = ROBOT[name]
     return PolicyRunner(load_profile(robot), load_run_config(robot, 'sim'),
                         load_policy_spec(robot, name),

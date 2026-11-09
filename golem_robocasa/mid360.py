@@ -218,6 +218,7 @@ class Mid360Scanner:
         The range noise restarts from rng_seed.
         """
         self._start = None
+        self._last_t = None
         self._pattern_start = 0
         self._rng = np.random.default_rng(self._rng_seed)
 
@@ -254,11 +255,12 @@ class Mid360Scanner:
     def update(self, snapshot, t):
         """Cast the rays due by sim time t from snapshot; return the frame t completed, else None.
 
-        t (s) is the time of the snapshot's kinematics. Time going back (a sim reset)
-        drops the frame in progress and starts again as after reset().
+        t (s) is the time of the snapshot's kinematics. Time going back from the last call's
+        (a sim reset, even to within the frame in progress) drops the frame in progress and
+        starts again as after reset().
         """
         frame = None
-        if self._start is None or t < self._start - _EPS_T:   # first call, or the sim was reset
+        if self._last_t is None or t < self._last_t - _EPS_T:   # first call, or the sim was reset
             self.reset()
             self._begin(t)
         elif t - self._start >= self.period - _EPS_T:
@@ -268,4 +270,5 @@ class Mid360Scanner:
             self._begin(following if t - following < self.period - _EPS_T else t)
         due = int(np.floor((t - self._start) / self.period * self.points_per_frame + 1e-6)) + 1
         self._cast_until(snapshot, t, min(due, self.points_per_frame))
+        self._last_t = t
         return frame

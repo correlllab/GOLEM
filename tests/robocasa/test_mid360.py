@@ -133,50 +133,64 @@ class CpuCasterTests(unittest.TestCase):
 
         A ray whose first hit is the robot (other than the excluded torso) has no return.
         The scene must catch mj_multiRay's culling: with the BVH left in place some rays differ.
+        The same caster casts again after the robot moves, so every thread sees fresh poses.
         """
         model, data = _scene(_KITCHEN)
         site = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "lidar")
         torso = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "torso")
-        origin = data.site_xpos[site].copy()
-        rotation = data.site_xmat[site].reshape(3, 3).copy()
         local = mid360.directions(mid360.load_pattern(), 123_456, 2000)
-        world = local @ rotation.T
         geomgroup = np.array(VISUAL, dtype=np.uint8).reshape(6, 1)
         robot = model.body_rootid[model.geom_bodyid] == model.body_rootid[torso]
-
-        expected = np.empty(len(world))
-        robot_hits = 0
-        geomid = np.empty((1, 1), dtype=np.int32)
-        for i, vec in enumerate(world):
-            dist = mujoco.mj_ray(model, data, origin.reshape(3, 1), vec.reshape(3, 1), geomgroup,
-                                 1, torso, geomid)
-            hit_robot = geomid[0, 0] >= 0 and robot[geomid[0, 0]]
-            robot_hits += hit_robot
-            miss = geomid[0, 0] < 0 or hit_robot or dist > mid360.MAX_RANGE
-            expected[i] = np.nan if miss else dist
-        self.assertGreater(robot_hits, 0, "no ray hits the robot")
-        self.assertGreater(np.isfinite(expected).sum(), 1500)
-
-        # The culling this caster works around misses some of these rays.
-        culled_id = np.empty(len(world), dtype=np.int32)
-        culled = np.empty(len(world))
-        mujoco.mj_multiRay(model, data, origin.reshape(3, 1),
-                           np.ascontiguousarray(world).reshape(-1, 1), geomgroup, 1, torso,
-                           culled_id.reshape(-1, 1), culled.reshape(-1, 1), len(world),
-                           mid360.MAX_RANGE)
-        culled[(culled_id < 0) | robot[np.where(culled_id >= 0, culled_id, 0)]] = np.nan
-        differ = (np.isnan(culled) != np.isnan(expected)) | (np.abs(culled - expected) > 1e-6)
-        self.assertGreater(differ.sum(), 0, "the scene does not trigger mj_multiRay's culling")
-
         bvhadr = model.body_bvhadr.copy()
         caster = mid360.CpuCaster(model, exclude_body=torso, geomgroup=VISUAL, threads=4)
+        previous = None
         try:
-            got = caster.cast(origin, rotation, local, data)
+            for pose in range(2):
+                if pose == 1:   # the robot steps 0.3 m forward and turns 40 deg left
+                    data.qpos[0] += 0.3
+                    mujoco.mju_euler2Quat(data.qpos[3:7], np.radians([0.0, 0.0, 40.0]), "xyz")
+                    mujoco.mj_forward(model, data)
+                origin = data.site_xpos[site].copy()
+                rotation = data.site_xmat[site].reshape(3, 3).copy()
+                world = local @ rotation.T
+
+                expected = np.empty(len(world))
+                robot_hits = 0
+                geomid = np.empty((1, 1), dtype=np.int32)
+                for i, vec in enumerate(world):
+                    dist = mujoco.mj_ray(model, data, origin.reshape(3, 1), vec.reshape(3, 1),
+                                         geomgroup, 1, torso, geomid)
+                    hit_robot = geomid[0, 0] >= 0 and robot[geomid[0, 0]]
+                    robot_hits += hit_robot
+                    miss = geomid[0, 0] < 0 or hit_robot or dist > mid360.MAX_RANGE
+                    expected[i] = np.nan if miss else dist
+                self.assertGreater(robot_hits, 0, "no ray hits the robot")
+                self.assertGreater(np.isfinite(expected).sum(), 1500)
+
+                if pose == 0:   # the culling this caster works around misses some of these rays
+                    culled_id = np.empty(len(world), dtype=np.int32)
+                    culled = np.empty(len(world))
+                    mujoco.mj_multiRay(model, data, origin.reshape(3, 1),
+                                       np.ascontiguousarray(world).reshape(-1, 1), geomgroup, 1,
+                                       torso, culled_id.reshape(-1, 1), culled.reshape(-1, 1),
+                                       len(world), mid360.MAX_RANGE)
+                    culled[(culled_id < 0) | robot[np.where(culled_id >= 0, culled_id, 0)]] = np.nan
+                    differ = ((np.isnan(culled) != np.isnan(expected))
+                              | (np.abs(culled - expected) > 1e-6))
+                    self.assertGreater(differ.sum(), 0,
+                                       "the scene does not trigger mj_multiRay's culling")
+                else:   # the move changes the ranges in every thread's chunk
+                    for chunk in np.array_split(np.arange(len(world)), 4):
+                        moved = np.abs(np.nan_to_num(expected[chunk] - previous[chunk])) > 1e-3
+                        self.assertGreater(moved.sum(), 0)
+
+                got = caster.cast(origin, rotation, local, data)
+                np.testing.assert_array_equal(np.isnan(got), np.isnan(expected))
+                hit = np.isfinite(expected)
+                np.testing.assert_allclose(got[hit], expected[hit], rtol=0.0, atol=1e-9)
+                previous = expected
         finally:
             caster.close()
-        np.testing.assert_array_equal(np.isnan(got), np.isnan(expected))
-        hit = np.isfinite(expected)
-        np.testing.assert_allclose(got[hit], expected[hit], rtol=0.0, atol=1e-9)
         np.testing.assert_array_equal(model.body_bvhadr, bvhadr)
 
     def test_bvh_restored_when_a_cast_raises(self):
@@ -191,6 +205,14 @@ class CpuCasterTests(unittest.TestCase):
         finally:
             caster.close()
         np.testing.assert_array_equal(model.body_bvhadr, bvhadr)
+
+
+class _FakeCaster:
+    """Return the snapshot's data, a distance in m, for every ray."""
+
+    def cast(self, origin, rotation, directions, data):
+        """Return data (m) for each of directions."""
+        return np.full(len(directions), float(data))
 
 
 class ScannerTests(unittest.TestCase):
@@ -263,6 +285,23 @@ class ScannerTests(unittest.TestCase):
         for frame in after:
             self.assertEqual(frame.rays, FRAME_POINTS)
             self.assertLessEqual(int(frame.offset_time.max()), 100_000_000)
+
+    def test_scanner_restarts_after_a_reset_inside_the_first_frame(self):
+        """Time going back to the frame's own start drops the frame; no frame mixes both scenes.
+
+        Before the reset every ray returns 2 m, after it 3 m.
+        """
+        scanner = mid360.Mid360Scanner(_FakeCaster())
+        before = mid360.Snapshot(np.zeros(3), np.eye(3), 2.0)
+        after = mid360.Snapshot(np.zeros(3), np.eye(3), 3.0)
+        self.assertEqual(_run(scanner, before, _steps(0.0, 0.08)), [])
+        frames = _run(scanner, after, _steps(0.0, 0.2))
+        self.assertEqual([round(f.timebase, 9) for f in frames], [0.0, 0.1])
+        for frame in frames:
+            self.assertEqual(frame.rays, FRAME_POINTS)
+            self.assertEqual(len(frame.points), FRAME_POINTS)
+            ranges = np.linalg.norm(frame.points, axis=1)
+            self.assertLess(np.abs(ranges - 3.0).max(), 0.2)   # 10 sigma of the noise
 
 
 if __name__ == "__main__":

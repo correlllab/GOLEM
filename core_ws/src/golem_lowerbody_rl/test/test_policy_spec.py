@@ -141,6 +141,7 @@ def test_input_size_mismatch_is_refused(tmp_path, torch_threads):
 
 def test_onnx_input_size_mismatch_is_refused(tmp_path):
     """An ONNX network's declared input size is checked against the spec at load."""
+    pytest.importorskip('onnxruntime', reason='HOMIE runs on onnxruntime')
     raw = _source('g1', 'homie')
     raw['groups'][0]['history'] = 5
     with pytest.raises(ValueError, match='380 inputs.*456'):

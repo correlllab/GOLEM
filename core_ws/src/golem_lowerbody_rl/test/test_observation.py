@@ -1,6 +1,9 @@
 """Test the observation terms, the runner's checks and ALMI's onset reset."""
 
 import os
+import subprocess
+import sys
+import textwrap
 
 from ament_index_python.packages import get_package_share_directory
 from golem_lowerbody_rl.policy import (
@@ -221,3 +224,31 @@ def test_fame_observes_the_height_command_unscaled(torch_threads):
     expected = golden['net_input'][0].copy()
     expected[2 * 76 + 3] = 0.8  # the newest of three 76-value frames; height is its 4th value
     np.testing.assert_allclose(runner.last_input, expected, rtol=0, atol=ATOL)
+
+
+def test_onnx_is_not_imported_for_torchscript_policies():
+    """Running ALMI, TorchScript only, never imports onnxruntime, which its host may lack."""
+    pytest.importorskip('torch', reason='the H1-2 policies run on torch')
+    code = textwrap.dedent("""
+        import sys
+        import numpy as np
+        from ament_index_python.packages import get_package_share_directory
+        import golem_lowerbody_rl.policy as policy
+        from golem_lowerbody_rl.profile import load_profile
+        from golem_lowerbody_rl.run_config import load_run_config
+        runner = policy.PolicyRunner(
+            load_profile('h12'), load_run_config('h12', 'sim'),
+            policy.load_policy_spec('h12', 'almi'),
+            get_package_share_directory('golem_lowerbody_rl'))
+        runner.reset()
+        runner.step(policy.PolicyInput(
+            t=0.0, q=np.zeros(27, np.float32), dq=np.zeros(27, np.float32),
+            quat_wxyz=np.array([1, 0, 0, 0], np.float32), gyro=np.zeros(3, np.float32),
+            cmd=np.zeros(3, np.float32), height=1.0))
+        assert 'onnxruntime' not in sys.modules, 'onnxruntime was imported'
+        print('ok')
+    """)
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True,
+                            timeout=120)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().endswith('ok')

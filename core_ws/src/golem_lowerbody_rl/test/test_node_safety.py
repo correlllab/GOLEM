@@ -43,6 +43,8 @@ from std_srvs.srv import Trigger
 from unitree_hg.msg import LowCmd, LowState
 import yaml
 
+pytest.importorskip('onnxruntime', reason='HOMIE runs on onnxruntime')
+
 # the shell's ROS_DOMAIN_ID, but never 0 (the real robot) or 1 (the sim): 97 then
 _SHELL_DOMAIN = int(os.environ.get('ROS_DOMAIN_ID') or 0)
 TEST_DOMAIN = _SHELL_DOMAIN if _SHELL_DOMAIN > 1 else 97

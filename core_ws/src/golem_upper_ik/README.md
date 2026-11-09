@@ -122,31 +122,10 @@ its directory or `.yaml`.
 
 ### Keys
 
-| Key | Default | Meaning |
-|---|---|---|
-| `topics.low_cmd` | `/safety/lowcmd_upper_in` | the `golem_safety` input written; a topic outside `/safety/` is refused |
-| `topics.low_state` | `/lowstate` | the robot's state |
-| `controller.v_lim`, `w_lim` | 1.0, 2.0 | end-effector linear (m/s) and angular (rad/s) speed limits |
-| `controller.dq_lim` | 1.0 | IK joint speed limit, rad/s |
-| `controller.d_min` | 0.02 | self-collision distance the IK keeps between sphere pairs, m; every config of both robots keeps it (the G1's closest pairs at `home`, the upper arms against the torso, are 0.025 m apart) |
-| `controller.timeout` | 10.0 | s of robot time per goal sent with a zero `duration` |
-| `controller.threshold_ik`, `threshold_joint`, `threshold_linear`, `threshold_angular` | 0.001, 0.01, 0.002, 0.01 | convergence: IK velocity, rad, m, rad |
-| `controller.hold_targets` | 0 for each held joint | the held joints' angles, rad, a mapping by joint name |
-| `controller.state_timeout` | 5.0 | s of robot time to wait for a fresh `/lowstate` at start (under `use_sim_time`, first as many s of steady time for the first `/clock`) |
-| `controller.startup_timeout` | 30.0 | s of robot time for `golem_safety` to be seen relaying the commands |
-| `controller.startup_move_timeout` | 30.0 | s of robot time for the start-up moves, from the follow gate opening |
-| `controller.follow_tolerance` | 0.05 | rad; 0 turns the follow gate off |
-| `controller.imu_frame` | the profile's | the frame of `/lowstate`'s IMU in the model |
-| `controller.max_state_lag_ms` | per robot (above) | the stale-state limit on domain 0, ms; <= 0 turns it off |
-| `frequency.ctrl_hz`, `pub_hz`, `check_hz` | 50, 500, 1000 | IK steps, command publishing, the follow gate's checks between steps, per s of robot time |
-| `gains.kp`, `kd`, `ki` | | per upper-body joint |
-| `limits.clip.position_offset`, `velocity_ratio`, `torque_ratio` | 0.001, 0.10, 0.25 | the command clip, as in `golem_safety` |
-| `planner.*` | `enabled: true`, `frame_names` the profile's | the OMPL planner (`planner`, `timeout`, `moving_speed`, the frame bounds, ...); the rest take `PlannerConfig`'s defaults |
-
-Every config sets `ctrl_hz` 30 and `pub_hz` 500, except the H1-2's `sim_safety_split`, which
-leaves `frequency` out and so solves IK at 50 Hz. The loader refuses, naming the robot, the
-file and the key: an unknown key at any level; a non-finite number, a number out of its
-range or a value of the wrong kind.
+Every key of a controller config, with its meaning, units, default and allowed values, is in
+`config/<robot>/example.controller.yaml`. The loader refuses, naming the robot, the file and
+the key: an unknown key at any level; a non-finite number, a number out of its range or a
+value of the wrong kind.
 
 ## Behavior
 
@@ -289,11 +268,10 @@ model, IK and planner (`test_robot_model.py`, `test_ik_solver.py`, `test_planner
 robots with their collision models), the ROS I/O, command handler and follow gate
 (`test_ros_io.py`, `test_low_cmd_handler.py`), the controller and the nodes
 (`test_controller_loop.py`, `test_frame_task_server.py`), a start-up IK step with no
-solution (`test_startup_no_solution.py`), the publish rate
-(`test_publish_rate.py`) and that nothing imports `unitree_sdk2py` (`test_no_sdk.py`).
+solution (`test_startup_no_solution.py`) and that nothing imports `unitree_sdk2py`
+(`test_no_sdk.py`).
 
 ## Tools
 
-- `tools/publish_rate_probe.py`, `tools/command_publisher_rate.py`,
-  `tools/frame_task_server_rate.py`: measure the 500 Hz command rate of a bare `rclpy`
-  publisher, of `CommandPublisher`, and of the installed `frame_task_server` with its IK.
+- `tools/command_publisher_rate.py`, `tools/frame_task_server_rate.py`: measure the 500 Hz
+  command rate of `CommandPublisher` and of the installed `frame_task_server` with its IK.

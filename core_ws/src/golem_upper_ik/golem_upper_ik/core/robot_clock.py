@@ -50,11 +50,6 @@ class RobotClock:
             self._jump_handle = self._ros_clock.create_jump_callback(
                 threshold, post_callback=self._on_jump)
 
-    @property
-    def sim_time(self) -> bool:
-        """Return whether robot time is the sim's /clock."""
-        return self._ros_clock is not None
-
     def now(self) -> float:
         """Return robot time, s."""
         if self._ros_clock is None:

@@ -21,7 +21,6 @@ controller:
   follow_tolerance: 0.05
   startup_timeout: 30.0
   startup_move_timeout: 30.0
-  imu_frame: imu_in_pelvis
   threshold_ik: 0.0001
   # the arm PD without an integral term (gains.ki 0) settles about 1e-3 rad off under
   # gravity, inside this

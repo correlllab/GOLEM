@@ -22,14 +22,13 @@ class RobotDynamics:
         """Compute on robot_model's free-flyer model and measured state."""
         self.robot_model = robot_model
 
-    def get_gravity_compensation(self, q: np.ndarray=None, imu_quat=None):
-        """Return the body joints' gravity torques at q (default: measured), N*m.
+    def get_gravity_compensation(self, q: np.ndarray):
+        """Return the body joints' gravity torques at body q, N*m.
 
-        The pelvis is oriented by imu_quat (w, x, y, z), default the measured IMU (full_q).
+        The pelvis is oriented by the measured IMU (full_q).
         """
         robot = self.robot_model
-        q = robot.state['q'] if q is None else q
-        q_full = robot.full_q(q, imu_quat)
+        q_full = robot.full_q(q)
         tau_full = pin.rnea(robot.model,
                             robot.data,
                             q_full,
@@ -37,18 +36,14 @@ class RobotDynamics:
                             np.zeros(robot.model.nv))
         return tau_full[FREEFLYER_NV:]
 
-    def get_frame_jacobian(self, frame_name: str, q: np.ndarray=None, imu_quat=None):
+    def get_frame_jacobian(self, frame_name: str):
         """Return a frame's 6 x body-joint Jacobian, world-aligned at the frame (linear first).
 
-        At q (on data of its own) or, by default, at the measured state on the model's data.
+        At the measured state, on the model's data.
         """
         robot = self.robot_model
-        if q is not None:
-            q_full = robot.full_q(q, imu_quat)
-            data = robot.model.createData()
-        else:
-            q_full = robot.full_q(robot.state['q'])
-            data = robot.data
+        q_full = robot.full_q(robot.state['q'])
+        data = robot.data
         pin.forwardKinematics(robot.model, data, q_full)
         pin.updateFramePlacements(robot.model, data)
         frame_id = robot.model.getFrameId(frame_name)

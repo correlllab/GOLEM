@@ -98,7 +98,7 @@ class ReducedJointPlanner:
 
     def _check_robot_model_ready(self):
         """Raise ValueError unless the model has a reduced and a self-collision model."""
-        if getattr(self.robot_model, 'model_body_reduced', None) is None:
+        if self.robot_model.model_body_reduced is None:
             raise ValueError('RobotModel reduced model is not initialized')
         if not self.robot_model.has_collision:
             raise ValueError('RobotModel collision model is not initialized')
@@ -345,17 +345,15 @@ class ReducedJointPlanner:
         deltas = np.diff(positions, axis=0)
         translation_length = float(np.sum(np.linalg.norm(deltas, axis=1)))
 
-        rotation_length = 0.0
-        if hasattr(self.robot_model, 'get_frame_rotation'):
-            rotations = [
-                self.robot_model.get_frame_rotation(frame_name, q)
-                for q in motor_path
-            ]
-            rotation_angle = sum(
-                self._rotation_angle(rotations[idx], rotations[idx + 1])
-                for idx in range(len(rotations) - 1)
-            )
-            rotation_length = _FRAME_ROTATION_RADIUS * rotation_angle
+        rotations = [
+            self.robot_model.get_frame_rotation(frame_name, q)
+            for q in motor_path
+        ]
+        rotation_angle = sum(
+            self._rotation_angle(rotations[idx], rotations[idx + 1])
+            for idx in range(len(rotations) - 1)
+        )
+        rotation_length = _FRAME_ROTATION_RADIUS * rotation_angle
 
         return (
             translation_length + rotation_length,
@@ -504,9 +502,6 @@ class ReducedJointPlanner:
     def _set_workspace_corridor(self, start, goal):
         """Floor each planner frame at its lower end z, less frame_z_corridor_margin."""
         self.corridor_min_z = {}
-        if not hasattr(self.robot_model, 'get_frame_position'):
-            return
-
         margin = float(self.config.frame_z_corridor_margin)
         for frame_name in self.frame_names:
             start_pos = self.robot_model.get_frame_position(

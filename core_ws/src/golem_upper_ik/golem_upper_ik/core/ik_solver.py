@@ -24,23 +24,12 @@ ANGULAR_THRESHOLD = 1e-2  # rad
 
 
 @dataclass
-class IKAttemptResult:
-    """Hold the outcome of solve_ik_reduced from one seed.
+class IKResult:
+    """Hold the outcome of the IK from one seed, as solve_ik_reduced returns it.
 
     q is per body joint (the frozen joints 0); the errors are the frame tasks' summed
     residuals, m and rad.
     """
-
-    q: np.ndarray
-    success: bool
-    linear_error: float
-    angular_error: float
-    seed_name: str
-
-
-@dataclass
-class IKResult:
-    """Hold solve_ik_reduced's answer: the first converged seed's, else the best seed's."""
 
     q: np.ndarray
     success: bool
@@ -167,15 +156,10 @@ class IKSolver:
             task.transform_target_to_world = target
         self.frame_tasks[task_name] = task
 
-    def remove_frame_task(self, task_name: str):
-        """Remove a frame task; KeyError for an unknown task."""
-        del self.frame_tasks[task_name]
-
     def clear_frame_tasks(self):
         """Remove every frame task."""
-        task_names = list(self.frame_tasks.keys())
-        for task_name in task_names:
-            self.remove_frame_task(task_name)
+        for task_name in list(self.frame_tasks.keys()):
+            del self.frame_tasks[task_name]
 
     def update_configurations(self, q=None):
         """Set both configurations from body q (default: the measured state)."""
@@ -260,19 +244,12 @@ class IKSolver:
         return [(seed_name, self._normalize_reduced_seed(seed, seed_name))
                 for seed_name, seed in self._default_seed_items()]
 
-    def _result_from_attempts(self, attempts):
-        """Return the IKResult of the converged attempt with the least error, else of any."""
+    def _best_attempt(self, attempts):
+        """Return the converged attempt with the least error, else the attempt with the least."""
         candidates = [attempt for attempt in attempts if attempt.success]
         if not candidates:
             candidates = attempts
-        best = min(candidates, key=self._task_error_score)
-        return IKResult(
-            q=np.copy(best.q),
-            success=best.success,
-            linear_error=best.linear_error,
-            angular_error=best.angular_error,
-            seed_name=best.seed_name,
-        )
+        return min(candidates, key=self._task_error_score)
 
     def _solve_ik_reduced_attempt(self, seed_name, q_seed, alpha, timeout):
         """Iterate the IK from q_seed in steps of alpha until it converges or timeout.
@@ -300,7 +277,7 @@ class IKSolver:
                 self.configuration_reduced,
             )
 
-        return IKAttemptResult(
+        return IKResult(
             q=self._reduced_q_to_full(self.configuration_reduced.q),
             success=(
                 linear_err < LINEAR_THRESHOLD and
@@ -332,9 +309,9 @@ class IKSolver:
             attempt = self._solve_ik_reduced_attempt(seed_name, q_seed, alpha, timeout)
             attempts.append(attempt)
             if attempt.success:
-                return self._result_from_attempts(attempts)
+                return self._best_attempt(attempts)
 
-        result = self._result_from_attempts(attempts)
+        result = self._best_attempt(attempts)
         self.configuration_reduced.update(result.q[self.robot_model.reduced_mask])
         return result
 

@@ -348,12 +348,10 @@ class RobotModel:
             return 0.0
         return self.state_subscriber.staleness_ms
 
-    def update_kinematics(self, imu_quat=None):
+    def update_kinematics(self):
         """Update every model's frame placements from one sample of the measured state."""
         state = self.state
-        if imu_quat is None:
-            imu_quat = self._imu_quaternion(state)
-        q_full = self._full_q(state['q'], imu_quat)
+        q_full = self._full_q(state['q'], self._imu_quaternion(state))
         dq_full = self.full_v(state['dq'])
         pin.forwardKinematics(self.model, self.data, q_full, dq_full)
         pin.updateFramePlacements(self.model, self.data)
@@ -364,30 +362,19 @@ class RobotModel:
                               reduced['q'], reduced['dq'])
         pin.updateFramePlacements(self.model_body_reduced, self.data_body_reduced)
 
-    def _get_frame_transformation(self, frame_name, q: np.ndarray=None):
-        """Return a frame's free-flyer SE3 at body q (own data), or at the measured state."""
-        frame_id = self.model.getFrameId(frame_name)
-        if q is not None:
-            q_full = self.full_q(q)
-            data_temp = self.model.createData()
-            pin.forwardKinematics(self.model, data_temp, q_full)
-            pin.updateFramePlacements(self.model, data_temp)
-            transformation = data_temp.oMf[frame_id]
-        else:
-            self.update_kinematics()
-            transformation = self.data.oMf[frame_id]
-        return transformation
+    def _get_frame_transformation(self, frame_name, q: np.ndarray):
+        """Return a frame's free-flyer SE3 at body q, on data of its own."""
+        data = self.model.createData()
+        pin.forwardKinematics(self.model, data, self.full_q(q))
+        pin.updateFramePlacements(self.model, data)
+        return data.oMf[self.model.getFrameId(frame_name)]
 
-    def get_frame_transformation(self, frame_name: str, q: np.ndarray=None):
-        """Return a frame's 4x4 placement in the free-flyer model's world frame."""
-        return self._get_frame_transformation(frame_name, q).np
-
-    def get_frame_position(self, frame_name: str, q: np.ndarray=None):
-        """Return a frame's position in the free-flyer model's world frame, m."""
+    def get_frame_position(self, frame_name: str, q: np.ndarray):
+        """Return a frame's position at body q in the free-flyer model's world frame, m."""
         return self._get_frame_transformation(frame_name, q).translation
 
-    def get_frame_rotation(self, frame_name: str, q: np.ndarray = None):
-        """Return a frame's 3x3 rotation in the free-flyer model's world frame."""
+    def get_frame_rotation(self, frame_name: str, q: np.ndarray):
+        """Return a frame's 3x3 rotation at body q in the free-flyer model's world frame."""
         return self._get_frame_transformation(frame_name, q).rotation
 
     def get_frame_transformation_body(self, frame_name: str, q: np.ndarray):
@@ -400,22 +387,15 @@ class RobotModel:
         pin.updateFramePlacements(self.model_body, data)
         return data.oMf[self.model_body.getFrameId(frame_name)].np
 
-    def _get_frame_transformation_reduced(self, frame_name, q_reduced: np.ndarray=None):
-        """Return a frame's reduced-model SE3 at q_reduced (own data), or at the measured state."""
-        frame_id = self.model_body_reduced.getFrameId(frame_name)
-        if q_reduced is not None:
-            data_body_reduced_temp = self.model_body_reduced.createData()
-            pin.forwardKinematics(self.model_body_reduced, data_body_reduced_temp, q_reduced)
-            pin.updateFramePlacements(self.model_body_reduced, data_body_reduced_temp)
-            transformation = data_body_reduced_temp.oMf[frame_id]
-        else:
-            self.update_kinematics()
-            transformation = self.data_body_reduced.oMf[frame_id]
-        return transformation
+    def get_frame_transformation_reduced(self, frame_name: str, q_reduced: np.ndarray):
+        """Return a frame's 4x4 placement in the pelvis frame at q_reduced on the reduced model.
 
-    def get_frame_transformation_reduced(self, frame_name: str, q_reduced: np.ndarray=None):
-        """Return a frame's 4x4 placement in the pelvis frame on the reduced model."""
-        return self._get_frame_transformation_reduced(frame_name, q_reduced).np
+        Computed on data of its own.
+        """
+        data = self.model_body_reduced.createData()
+        pin.forwardKinematics(self.model_body_reduced, data, q_reduced)
+        pin.updateFramePlacements(self.model_body_reduced, data)
+        return data.oMf[self.model_body_reduced.getFrameId(frame_name)].np
 
     def check_within_limits_reduced(self, q_reduced):
         """Return whether every IK joint of q_reduced is within its URDF position limits."""

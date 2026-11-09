@@ -24,7 +24,7 @@ def test_without_sim_time_it_is_the_steady_clock(ros, monkeypatch):
     """Without use_sim_time, now() is time.monotonic() and sleep() is time.sleep()."""
     from golem_upper_ik.core import robot_clock
     clock = clock_of(ros, sim_time=False)
-    assert not clock.sim_time
+    assert clock._ros_clock is None
     calls = []
     monkeypatch.setattr(robot_clock.time, 'monotonic', lambda: 42.0)
     monkeypatch.setattr(robot_clock.time, 'sleep', calls.append)
@@ -41,7 +41,7 @@ def test_no_node_is_the_steady_clock():
     """A RobotClock without a node is the steady clock."""
     from golem_upper_ik.core.robot_clock import RobotClock
     clock = RobotClock()
-    assert not clock.sim_time
+    assert clock._ros_clock is None
     assert abs(clock.now() - time.monotonic()) < 0.01
 
 
@@ -50,7 +50,7 @@ def test_with_sim_time_it_follows_clock(ros, rate):
     """With use_sim_time, now() follows /clock and a sleep lasts seconds of sim time."""
     sim = SimClock(ros, rate=rate)
     clock = clock_of(ros, sim_time=True)
-    assert clock.sim_time
+    assert clock._ros_clock is not None
     sim.start()
     clock.wait_for_clock(2.0)
     assert abs(clock.now() - sim.now) < 0.05

@@ -78,6 +78,10 @@ class FakeRobotModel:
         """Return every frame at (q[1], q[1], q[0]), m."""
         return np.array([q[1], q[1], q[0]])
 
+    def get_frame_rotation(self, frame_name, q):
+        """Return every frame's rotation: the identity, so a path's frames never turn."""
+        return np.eye(3)
+
 
 def test_requires_initialized_reduced_model():
     """A model without a reduced model is refused."""

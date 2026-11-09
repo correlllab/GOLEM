@@ -376,7 +376,7 @@ def test_startup_moves_count_sim_time(ros, models, rate):
     sim_start = sim.now
     controller = build(ros, model, config, sim_time=True)
     sim_seconds = sim.now - sim_start
-    assert controller.clock.sim_time
+    assert controller.clock._ros_clock is not None
     # the H1-2's start-up postures take at least 4 s of sim time at 1 rad/s per s of it;
     # stepped on the wall clock, they would take 2 s of sim time at half speed
     assert 4.0 <= sim_seconds < config['controller']['startup_move_timeout'], sim_seconds

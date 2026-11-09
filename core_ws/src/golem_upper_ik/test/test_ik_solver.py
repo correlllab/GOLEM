@@ -177,7 +177,7 @@ def test_rebuild_reduced_rebinds_the_reduced_model(models, robot):
         solver.update_configurations(q)
         np.testing.assert_allclose(
             solver.configuration_reduced.get_transform_frame_to_world(frame).np,
-            model.get_frame_transformation(frame, q), atol=1e-12)
+            model.get_frame_transformation_body(frame, q), atol=1e-12)
     finally:
         model.rebuild_reduced_model(np.zeros(model.num_motor))
 

@@ -113,13 +113,13 @@ def test_rebuild_reduced_relocks_at_measured(models):
         model.state_subscriber = fixed_state(q)  # measured: the torso turned 0.3 rad
 
         built = model.get_frame_transformation_reduced(frame, q[model.reduced_mask])
-        np.testing.assert_allclose(built, model.get_frame_transformation(frame, at_zero),
+        np.testing.assert_allclose(built, model.get_frame_transformation_body(frame, at_zero),
                                    atol=1e-12)
-        assert not np.allclose(built, model.get_frame_transformation(frame, q), atol=1e-3)
+        assert not np.allclose(built, model.get_frame_transformation_body(frame, q), atol=1e-3)
 
         model.rebuild_reduced_model()
         relocked = model.get_frame_transformation_reduced(frame, q[model.reduced_mask])
-        np.testing.assert_allclose(relocked, model.get_frame_transformation(frame, q),
+        np.testing.assert_allclose(relocked, model.get_frame_transformation_body(frame, q),
                                    atol=1e-12)
 
         # the reduced collision model is re-locked with it: the torso's spheres turn too
@@ -145,7 +145,7 @@ def test_rebuild_reduced_relocks_at_measured(models):
         model.rebuild_reduced_model(at_zero)
         np.testing.assert_allclose(
             model.get_frame_transformation_reduced(frame, q[model.reduced_mask]),
-            model.get_frame_transformation(frame, at_zero), atol=1e-12)
+            model.get_frame_transformation_body(frame, at_zero), atol=1e-12)
     finally:
         model.state_subscriber = None
         model.rebuild_reduced_model(np.zeros(model.num_motor))

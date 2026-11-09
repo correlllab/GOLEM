@@ -383,7 +383,7 @@ def test_goal_duration_counts_sim_time(ros, models, rate):
     sim.start()
     model = shared_model(ros, models, 'h12')
     server = server_of(ros, model, CONFIGS['h12'], sim_time=True)
-    assert server.controller.clock.sim_time
+    assert server.controller.clock._ros_clock is not None
     assert wait_for(lambda: server.controller.low_cmd_handler.following, 5.0)
     start, sim_start = time.monotonic(), sim.now
     status, result = send_goal(ros, NamedConfig, '/named_config',

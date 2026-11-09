@@ -2,7 +2,9 @@
 Test safety_node over ROS on domain 91, against a fake robot.
 
 Covers the start-up refusals, the relay, the zero-gain start-up, the estop latch, the
-heartbeat, the hardware estop and the exit, each for the robots whose behaviour it pins.
+heartbeat, the hardware estop and the exit, each for the robots whose behaviour it pins, and
+robot time: under use_sim_time the relay and the stale times count a /clock that runs at
+other speeds than the wall clock, and the exit keeps the boot clock.
 Timing is read from the node's own publish times (the source timestamps), and assertions on
 time keep generous margins.
 """
@@ -265,6 +267,111 @@ def test_sim_refuses_domain_zero(domain):
     assert len(refusal) == 1 and 'sim' in refusal[0] and 'domain 0' in refusal[0], output
     assert 'relay_started' not in output
     assert 'publishers 0 messages 0' in seen, seen
+
+
+def test_use_sim_time_needs_sim():
+    """SAFETY: use_sim_time:=true without sim:=true is refused: real robots keep the boot clock."""
+    node = SafetyNode('h12', 'sim_safety_split', sim=False, params={'use_sim_time': 'true'})
+    try:
+        code = node.wait_exit(30.0)
+    finally:
+        node.stop()
+    output = node.output()
+    assert code != 0, output
+    refusal = [line for line in output.splitlines() if 'refuses to start' in line]
+    assert len(refusal) == 1, output
+    assert 'use_sim_time:=true needs sim:=true' in refusal[0], output
+    assert 'relay_started' not in output
+
+
+SIM_TIME = {'use_sim_time': 'true'}
+
+
+@pytest.mark.parametrize('use_sim_time, per_wall_s', [(True, 250), (False, 500)],
+                         ids=['sim_time', 'boot_clock'])
+def test_relay_rate_counts_robot_time(stack, sim_clock, use_sim_time, per_wall_s):
+    """
+    The relay writes control.publish_hz per s of robot time: of /clock under use_sim_time, of
+    the boot clock otherwise; on /clock it starts with the first one and stops while it does.
+    """
+    clock = sim_clock(rate=0.5)
+    run = stack('g1', 'sim_split', params=SIM_TIME if use_sim_time else None)
+    time.sleep(0.5)
+    if use_sim_time:
+        assert run.outputs() == [], 'relayed before the first /clock'
+        assert 'waiting for the first /clock' in run.node.output()
+    clock.start()
+    time.sleep(0.5)
+    start = time.time()
+    time.sleep(1.0)
+    end = time.time()
+    written = len([t for t, _ in run.outputs(since=start) if t < end])
+    # publish_hz 500 per s of robot time: 250 per wall s with /clock at half speed
+    assert 0.85 * per_wall_s < written < 1.1 * per_wall_s, written
+    clock.pause()
+    time.sleep(0.1)
+    paused = time.time()
+    time.sleep(0.4)
+    stalled = len(run.outputs(since=paused))
+    assert (stalled == 0) if use_sim_time else (stalled > 150), stalled
+
+
+def test_quiet_input_counts_sim_time(stack, sim_clock):
+    """Under use_sim_time an input is reported quiet after stale seconds of sim time."""
+    seconds = 0.2
+    clock = sim_clock(rate=0.25)
+    clock.start()
+    run = stack('g1', 'sim_split', stale={'lower_seconds': seconds}, params=SIM_TIME)
+    pairs = input_pairs(run)
+    run.robot.stream(*pairs)
+    run.robot.wait_for_output('/lowcmd', lambda msg: carries(msg, run), timeout=15.0)
+    time.sleep(0.5)
+    run.robot.stream(*[(pub, cmd) for pub, cmd in pairs if pub.topic_name != LOWER])
+    stopped = time.monotonic()
+    event = run.node.wait_for_event('input_quiet', timeout=10.0)
+    waited = time.monotonic() - stopped
+    # 0.2 s of sim time: 0.8 s of wall time at a quarter speed
+    assert waited > 0.6, waited
+    assert event['topic'] == LOWER and event['seconds'] == seconds
+    assert seconds <= event['age'] < seconds + 0.1, event
+    assert estop_events(run.node) == []
+
+
+def test_sim_time_exit_finishes_the_burst_with_clock_stopped(stack, sim_clock):
+    """
+    SAFETY: under use_sim_time the exit sequence runs on the boot clock: with /clock stopped
+    mid-burst, a SIGTERM still writes the rest of the H1-2's estop burst and exits 0.
+    """
+    clock = sim_clock(rate=0.1)
+    clock.start()
+    run = stack('h12', 'sim_safety_split', params=SIM_TIME)
+    pairs = input_pairs(run)
+    run.robot.stream(*pairs)
+    run.robot.wait_for_output('/lowcmd', lambda msg: carries(msg, run), timeout=15.0)
+    second = run.robot.publisher(UPPER)
+    # the first upper writer stops, so the next upper command the relay takes is the second
+    # writer's, 0.5 s of sim time (5 s of wall time) within the first's last: a latch. At a
+    # tenth of the wall clock's speed the burst of 50 then takes 1 s of wall time
+    run.robot.stream(*[(pub, cmd) for pub, cmd in pairs if pub.topic_name != UPPER])
+    run.robot.publish_for(0.1, (second, run.robot.command(shoulder=SHOULDER_Q + 0.05)))
+    run.node.wait_for_event('estop_command_written', timeout=5.0)
+    clock.pause()
+    time.sleep(0.1)
+    sent = time.time()
+    run.node.proc.send_signal(signal.SIGTERM)
+    code = run.node.wait_exit(5.0)
+    assert code == 0, run.node.output()
+    assert time.time() - sent < 1.5
+    time.sleep(0.2)
+    joints = len(run.robot.profile.joints)
+    written = run.outputs()
+    first = next(i for i, (_, msg) in enumerate(written) if carries(msg, run))
+    burst = [(t, msg) for t, msg in written[first:] if not carries(msg, run)]
+    assert len(burst) == 50 and all(is_zeroed(msg, joints) for _, msg in burst), len(burst)
+    # the rest of the burst, after the SIGTERM, at publish_hz (500) of the boot clock
+    rest = [t for t, _ in burst if t > sent]
+    gaps = sorted(b - a for a, b in zip(rest, rest[1:]))
+    assert len(rest) > 10 and gaps[len(gaps) // 2] > 0.0015, gaps
 
 
 def test_the_launch_file_starts_the_node_after_start_delay():

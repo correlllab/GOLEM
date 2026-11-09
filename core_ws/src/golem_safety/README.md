@@ -31,11 +31,13 @@ ros2 run golem_safety safety_node --ros-args -p robot:=g1 -p config:=sim_split -
 | `config` | required | a config name in `config/<robot>/` (with or without `.yaml`), or a path; a path whose directory is named after another robot with a profile (`.../g1/split.yaml` for the `h12`) is refused |
 | `sim` | `false` | `true` for a simulator: the node then refuses ROS domain 0, the real robots' command bus, an unset `ROS_DOMAIN_ID` included |
 | `use_estop` | `false` | `true` to read the hardware estop on the config's `estop` topics; `false` ignores them |
+| `use_sim_time` | `false` | `true` for robot time on a simulator's `/clock` (Robot time, below); refused without `sim:=true` |
 
 The node refuses to start, with one `FATAL` line and exit code 1, when a parameter is
 missing, the profile or config does not load (`safety_node refuses to start: robot <robot>,
-config <config>: <reason>`), or `sim:=true` meets domain 0 (`safety_node refuses to start:
-sim:=true on ROS domain 0, ...`). It exits 1 as well when its relay loop
+config <config>: <reason>`), `sim:=true` meets domain 0 (`safety_node refuses to start:
+sim:=true on ROS domain 0, ...`), or `use_sim_time:=true` comes without `sim:=true`
+(`use_sim_time:=true needs sim:=true: ...`). It exits 1 as well when its relay loop
 fails, when its executor thread (the heartbeat's) fails, after running the exit sequence,
 or when its exit sequence overruns its length by more than 1 s
 (`exit_hand_back_timeout`); 0 otherwise.
@@ -113,12 +115,12 @@ another pair (`golem_upper_ik.pairing`, checked by its `upper_ik.launch.py`).
 | `topics.low_cmd_in`, `low_cmd_lower_in`, `low_cmd_upper_in` | `/safety/lowcmd_in`, `/safety/lowcmd_lower_in`, `/safety/lowcmd_upper_in` | the inputs; absolute ROS names (`rt/...` is refused) |
 | `topics.low_cmd_out` | `/lowcmd` | the output |
 | `topics.low_state` | `/lowstate` | the robot's state |
-| `control.publish_hz` | 500 | the relay rate |
+| `control.publish_hz` | 500 | the relay rate, per s of robot time |
 | `control.state_lag_ms` | required | the transport-lag estop, ms; on ROS domain 0 only; <= 0 turns it off |
-| `stale.upper_seconds`, `lower_seconds`, `state_seconds` | 0, 0.2, 0.1 | quiet times of the upper input, the lower or full input and `/lowstate`, s; <= 0 turns the report off |
-| `single_writer.handover_seconds` | 0.5 | how long the current writer must be quiet before another is accepted, s |
+| `stale.upper_seconds`, `lower_seconds`, `state_seconds` | 0, 0.2, 0.1 | quiet times of the upper input, the lower or full input and `/lowstate`, s of robot time; <= 0 turns the report off |
+| `single_writer.handover_seconds` | 0.5 | how long the current writer must be quiet before another is accepted, s of robot time |
 | `estop.triggered_topic`, `plugged_in_topic` | `/estop/triggered`, `/estop/plugged_in` | the hardware estop's topics |
-| `estop.timeout_seconds` | 0.5 | the oldest a hardware estop sample may be, s |
+| `estop.timeout_seconds` | 0.5 | the oldest a hardware estop sample may be, s of robot time (the boot clock on the real robots) |
 | `estop_response.mode` | `zero` | `zero`: every motor off (mode 0, every value 0); `damp`: every body motor on with kp 0 and `kd` |
 | `estop_response.kd` | none | `damp` only (required there): one number or one per body joint, at most `limits.clip.kd_max` |
 | `estop_response.after` | required | `burst_then_silence` or `keep_writing` |
@@ -140,12 +142,25 @@ missing required key.
 
 ## Behavior
 
+**Robot time.** The relay's rate and every timing of the core (the stale times, the
+single-writer handover, the hardware estop's silence, the once-a-second refusal reports, the
+estop report's times) count robot time. On the real robots that is the boot-time clock
+(`CLOCK_BOOTTIME`: monotonic, and a suspend shows as a gap). With `use_sim_time:=true`, which
+needs `sim:=true` (so never on domain 0, the real robots' bus), it is the simulator's `/clock`,
+so the layer keeps its timing in sim seconds whatever the sim's speed: it advances by each
+forward step of `/clock`, stands still while `/clock` does (the relay then writes nothing),
+and never goes back (a restarted sim leaves it where it was). The relay writes nothing
+before the first `/clock`, logging that it waits (again every 5 s). The heartbeat and the
+exit sequence stay on the steady and boot clocks, so a sim whose `/clock` has stopped cannot
+stop the beats or hold up an exit or an estop burst at exit. The transport-lag check runs
+only on domain 0, where robot time is always the boot clock.
+
 **Relay, newest only.** One relay thread runs at `control.publish_hz`, sleeping to absolute
-deadlines on the boot-time clock. Each cycle it takes the newest `/lowstate`, the newest
-hardware estop values and the newest command of each input (keep-last 1, so no queue builds
-up), and publishes one command. A cycle that ends more than a period late restarts the
-schedule: a slow cycle lowers the rate, and nothing is replayed to catch up. Every timer in
-the node runs on the boot-time or steady clock, never on the wall clock or on `/clock`.
+deadlines of robot time. Each cycle it takes the newest `/lowstate`, the newest hardware
+estop values and the newest command of each input (keep-last 1, so no queue builds up), and
+publishes one command. A cycle that ends more than a period late restarts the schedule: a
+slow cycle lowers the rate, and nothing is replayed to catch up. No timer in the node runs
+on the wall clock.
 
 **What it writes.** Each engaged input's newest valid command on that input's own slots
 (`full`: every body slot; `split`: the lower and upper slots). Every other slot, the slots
@@ -158,8 +173,9 @@ the input's own or not; any other command latches the estop. A valid command is 
 its input's slots: q, dq and tau to `limits.clip`, kp and kd to [0, `kp_max`] and [0,
 `kd_max`]. A gain above its maximum raises `gain_clipped` (Warn) once per joint and gain.
 
-**Start-up**, the same on both robots (no config key chooses it): from boot the layer
-streams `zero_command` on every slot, so every motor is off. Each input engages on its own
+**Start-up**, the same on both robots (no config key chooses it): from boot (under
+`use_sim_time`, from the first `/clock`) the layer streams `zero_command` on every slot, so
+every motor is off. Each input engages on its own
 first valid command that arrives once the newest `/lowstate` reports the profile's
 `mode_machine` (and, with `use_estop`, a first hardware estop sample has arrived); its slots
 carry its commands from then on (`input_engaged`). The slots of an input that has not
@@ -226,13 +242,14 @@ latch:
 - `keep_writing` (the G1): the estop command every cycle.
 
 The estop report (Error) is `estop_command_written`: the reason, `decision_ms` (the latch),
-`action_ms` (the first step after it) and, for the hardware estop, `trigger_stamp_ms`, all on
-the boot-time clock. The heartbeat turns false, or starts false when the relay was not ready
+`action_ms` (the first step after it) and, for the hardware estop, `trigger_stamp_ms`, all in
+robot time. The heartbeat turns false, or starts false when the relay was not ready
 yet.
 
 **Exit** (SIGINT, SIGTERM, SIGHUP; `main()` takes them, and a closed stderr cannot stop the
-exit). The layer stops publishing at once; an estop burst in progress is finished first, and
-with `keep_writing` the estop command is written once if none has been since the latch. The
+exit). The layer stops publishing at once; an estop burst in progress is finished first, at
+`control.publish_hz` of the boot clock, and with `keep_writing` the estop command is written
+once if none has been since the latch. The
 sims then turn every body motor off after `GOLEM_CMD_TIMEOUT` (0.5 s of sim time) of
 `rt/lowcmd` silence; what the real robots do when it stops has not been measured.
 
@@ -272,8 +289,9 @@ docker/scripts/docker_run.sh ros --restart /home/code/h12_sim_scripts/launch_ros
 - gtests: `SafetyCore` (`test_safety_core_relay`, `test_safety_core_startup`: the relay,
   clipping, identity, single writer, quiet inputs, the start-up, the hardware estop,
   the latch responses, exit), the config loader (`test_config`), the profile loader, the
-  `LowCmd` builders and CRC (`test_lowcmd`, against SDK-computed values), the chunk logger
-  and the boot clock.
+  `LowCmd` builders and CRC (`test_lowcmd`, against SDK-computed values), the chunk logger,
+  the boot clock and robot time (`test_robot_clock`: a ROS clock set by hand, as `/clock`
+  sets it).
 - `test/test_node_ros.py` runs the installed `safety_node` against a fake robot over ROS on
   `ROS_DOMAIN_ID` 91 (`test/conftest.py`), for both robots. `test_spinner` (the executor
   thread) runs on 91 too.

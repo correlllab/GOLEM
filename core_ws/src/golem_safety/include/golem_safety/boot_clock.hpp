@@ -9,7 +9,9 @@ namespace golem_safety
 
 // Return s on CLOCK_BOOTTIME. It is monotonic, so a wall-clock step neither fires nor hides
 // a timeout, and it counts the time the host was suspended, so a suspend shows as a gap.
-// SAFETY: every timeout of the safety layer is measured on this clock.
+// SAFETY: on the real robots every timeout of the safety layer is measured on this clock; a
+// simulator's /clock replaces it (robot_clock.hpp) only under use_sim_time, which needs
+// sim:=true.
 inline double boot_time()
 {
   timespec ts{};

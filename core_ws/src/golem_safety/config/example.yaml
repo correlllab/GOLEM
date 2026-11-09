@@ -25,7 +25,8 @@ topics:
   low_state: /lowstate
 
 control:
-  # Hz the node writes low_cmd_out at; > 0.
+  # Hz, per s of robot time (the boot clock; a sim's /clock under use_sim_time), the node
+  # writes low_cmd_out at; > 0.
   publish_hz: 500.0
   # ms; the estop latches when a /lowstate arrives more than this late against the robot's
   # ms tick. Checked only on ROS domain 0, the real robots' bus (the sims count tick in sim
@@ -33,9 +34,9 @@ control:
   # robot's value by leaving it out.
   state_lag_ms: 0.0
 
-# s of silence after which an engaged input, or /lowstate, is reported as quiet (and as
-# resumed when it returns) while its last command keeps being relayed. <= 0 turns a report
-# off; any finite number is accepted.
+# s of robot time of silence after which an engaged input, or /lowstate, is reported as
+# quiet (and as resumed when it returns) while its last command keeps being relayed. <= 0
+# turns a report off; any finite number is accepted.
 stale:
   # The upper-body input of split_mode.
   upper_seconds: 0.0
@@ -45,8 +46,9 @@ stale:
   state_seconds: 0.1
 
 single_writer:
-  # s the current writer of an input must be quiet before a command from another DDS
-  # writer takes the input over; a second writer inside this gap latches the estop. > 0.
+  # s of robot time the current writer of an input must be quiet before a command from
+  # another DDS writer takes the input over; a second writer inside this gap latches the
+  # estop. > 0.
   handover_seconds: 0.5
 
 # The hardware estop, read only when the node runs with use_estop:=true.
@@ -55,7 +57,8 @@ estop:
   triggered_topic: /estop/triggered
   # std_msgs/Bool, false when the estop box is unplugged: latches.
   plugged_in_topic: /estop/plugged_in
-  # s; from the first sample on, no new sample for longer than this latches. > 0.
+  # s of robot time (the boot clock on the real robots, which the hardware estop is on);
+  # from the first sample on, no new sample for longer than this latches. > 0.
   timeout_seconds: 0.5
 
 # What the node writes once the estop has latched, until it restarts.

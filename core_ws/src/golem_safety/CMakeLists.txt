@@ -101,6 +101,11 @@ if(BUILD_TESTING)
   ament_add_gtest(test_boot_clock test/test_boot_clock.cpp)
   target_include_directories(test_boot_clock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+  # RobotClock: the boot clock, or a ROS clock set by hand as /clock sets it.
+  ament_add_gtest(test_robot_clock test/test_robot_clock.cpp)
+  target_include_directories(test_robot_clock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  ament_target_dependencies(test_robot_clock rclcpp)
+
   # The Spinner's stop and failure paths; creates a node, on the package's test domain.
   ament_add_gtest(test_spinner test/test_spinner.cpp ENV ROS_DOMAIN_ID=91)
   target_include_directories(test_spinner PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

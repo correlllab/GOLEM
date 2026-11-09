@@ -3,8 +3,9 @@ Provide the safety_node test fixtures, on ROS domain 91.
 
 The node runs as a subprocess, and a fake robot publishes /lowstate (and the controllers'
 commands and the hardware estop) and records /lowcmd and /safety/heartbeat with their
-source timestamps. rclpy is imported only inside these fixtures, so the other pytest files
-in this directory, which load this conftest too, need no ROS domain.
+source timestamps. A sim clock publishes /clock, for a node run with use_sim_time. rclpy is
+imported only inside these fixtures, so the other pytest files in this directory, which load
+this conftest too, need no ROS domain.
 """
 
 import os
@@ -353,6 +354,64 @@ class FakeRobot:
         self.node.destroy_node()
 
 
+class SimClock:
+    """
+    Publish /clock as a simulator does: one STEP_S step of sim time per message.
+
+    rate is sim seconds per wall second; nothing is published before start(), and pause()
+    stops /clock until resume().
+    """
+
+    STEP_S = 0.002
+
+    def __init__(self, context, rate: float = 1.0, start_s: float = 100.0) -> None:
+        """Create the node and its publisher."""
+        import rclpy
+        from rosgraph_msgs.msg import Clock
+        self._msg = Clock()
+        self.node = rclpy.create_node(f'sim_clock_{os.getpid()}_{next(_names)}', context=context)
+        self._pub = self.node.create_publisher(Clock, '/clock', 10)
+        self.rate = rate
+        self._t_ns = int(start_s * 1e9)
+        self._running = threading.Event()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    @property
+    def now(self) -> float:
+        """Return the last sim time published, s."""
+        return self._t_ns * 1e-9
+
+    def start(self) -> None:
+        """Publish /clock from now on (again, after pause())."""
+        self._running.set()
+
+    def pause(self) -> None:
+        """Stop publishing /clock."""
+        self._running.clear()
+
+    def _run(self) -> None:
+        """Publish a step every STEP_S / rate s of wall time while running, until close()."""
+        next_write = time.monotonic()
+        while not self._stop.is_set():
+            if self._running.is_set():
+                self._t_ns += int(self.STEP_S * 1e9)
+                self._msg.clock.sec, self._msg.clock.nanosec = divmod(self._t_ns, 10**9)
+                self._pub.publish(self._msg)
+            next_write += self.STEP_S / self.rate
+            delay = next_write - time.monotonic()
+            if delay < -0.1:
+                next_write = time.monotonic()
+            time.sleep(max(0.0, delay))
+
+    def close(self) -> None:
+        """Stop the thread and destroy the node."""
+        self._stop.set()
+        self._thread.join(timeout=5.0)
+        self.node.destroy_node()
+
+
 class Run:
     """Hold one test's safety node, fake robot and config."""
     def __init__(self, robot: FakeRobot, node: SafetyNode, config: dict, path: Path) -> None:
@@ -426,6 +485,22 @@ def fake_robot(ros_context):
 
 
 @pytest.fixture
+def sim_clock(ros_context):
+    """Yield sim_clock(rate=1.0) -> SimClock (not yet publishing), closed after the test."""
+    clocks = []
+
+    def make(rate: float = 1.0) -> SimClock:
+        """Return a new sim clock at `rate` sim seconds per wall second."""
+        made = SimClock(ros_context, rate)
+        clocks.append(made)
+        return made
+
+    yield make
+    for made in clocks:
+        made.close()
+
+
+@pytest.fixture
 def stack(tmp_path, ros_context):
     """
     Yield stack(robot, config, ...) -> Run: a fake robot, then the node, started and discovered.
@@ -439,8 +514,12 @@ def stack(tmp_path, ros_context):
 
     def start(robot: str, config: str, *, stream_state: bool = True, use_estop: bool = False,
               state_stale: float | None = 1.0, logging: dict | None = None,
-              state_q: dict | None = None, **sections) -> Run:
-        """Start a fake robot and the node on the edited config; return the run once discovered."""
+              state_q: dict | None = None, params: dict | None = None, **sections) -> Run:
+        """
+        Start a fake robot and the node on the edited config; return the run once discovered.
+
+        params: more node parameters (use_sim_time, for one).
+        """
         sections = copy.deepcopy(sections)
         if state_stale is not None:
             sections['stale'] = dict(sections.get('stale', {}), state_seconds=state_stale)
@@ -449,7 +528,7 @@ def stack(tmp_path, ros_context):
         # The measured q of these slots from the first /lowstate on.
         for slot, q in (state_q or {}).items():
             robot_.state.motor_state[slot].q = q
-        node = SafetyNode(robot, path, use_estop=use_estop)
+        node = SafetyNode(robot, path, use_estop=use_estop, params=params)
         run = Run(robot_, node, raw, path)
         runs.append(run)
         node.wait_for_event('relay_started')

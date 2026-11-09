@@ -32,8 +32,8 @@ struct Event
 };
 
 // Make every decision of the safety layer, without ROS: the node feeds it the samples it
-// receives and publishes what step() returns. `now` is s on the boot-time clock and must
-// never go backwards.
+// receives and publishes what step() returns. `now` is s of robot time (RobotClock: the
+// boot-time clock, or under use_sim_time a simulator's /clock) and must never go backwards.
 //
 // Relay. Each input keeps its newest valid command. step() starts from zero_command and
 // copies onto each engaged input's slots that input's newest command, so a slot no engaged
@@ -93,7 +93,7 @@ struct Event
 // command, and the drain_events() after it adds estop_command_written (Error): the reason,
 // decision_ms (when the core latched), action_ms (that step's `now`) and their difference,
 // plus, for the hardware estop, trigger_stamp_ms (the sample's arrival) and
-// trigger_to_action_ms; all ms on the boot-time clock. It is built after the step so that
+// trigger_to_action_ms; all ms of robot time. It is built after the step so that
 // nothing is formatted before the step's command is handed back.
 //
 // Events. engage_refused, input_engaged, input_quiet, input_resumed, state_quiet,

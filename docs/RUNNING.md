@@ -225,7 +225,7 @@ session follows [`g1/first-session.md`](g1/first-session.md).
   discovered source`. Stop the processes that use them, then delete them once,
   from the repo root, on every host that built the workspace (`sudo` for files
   a container left root-owned), with the `rm -rf` command under "Delete the
-  stale installs of removed packages" in [`CLAUDE.md`](../CLAUDE.md) §10, which
+  stale installs of removed packages" in [`CLAUDE.md`](https://github.com/correlllab/GOLEM/blob/main/CLAUDE.md) §10, which
   lists every removed package.
 
   A native workspace (the H1-2's onboard PC) has no such check and keeps

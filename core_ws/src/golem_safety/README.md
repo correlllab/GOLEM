@@ -88,7 +88,7 @@ Both robots' `LowCmd`/`LowState` motor arrays hold 35 slots.
 |---|---|---|---|
 | H1-2 | `relax_safety_split` | split | `h12_real_robot` (the `h12_control.launch.py` default), `lmg_sim`, `lmg_real`, `h12_safety_grippers` (their defaults) |
 | H1-2 | `default_safety_split`, `tight_safety_split` | split | by name (`safety_config:=`) |
-| H1-2 | `sim_safety_split` | split | `h12_sim`, the Mac bringup, `tests/stack` |
+| H1-2 | `sim_safety_split` | split | `h12_sim`, `tests/stack` |
 | H1-2 | `default_safety_full`, `relax_safety_full`, `tight_safety_full`, `locomotion_safety_full` | full body | by name |
 | G1 | `split` | split | `g1_real_robot.launch.py` (default) |
 | G1 | `sim_split` | split | `g1_sim.launch.py` (default) |

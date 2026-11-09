@@ -1,6 +1,6 @@
-# Running the stack (x86)
+# Running the stack
 
-Setup first: [`SETUP.md`](SETUP.md). For Apple Silicon see [`MACOS.md`](MACOS.md).
+Setup first: [`SETUP.md`](SETUP.md).
 
 Always start containers through the provided scripts — they wire up
 `docker/.env`, the DDS domain check, bind-mount pre-creation, and stable
@@ -103,8 +103,7 @@ argument; each passes its own to `h12_control`):
 
 | Launch file | Scenario |
 |---|---|
-| `h12_sim.launch.py` | x86 sim — the full stack |
-| `h12_sim_mac.launch.py` | mac sim — `h12_sim`'s state, control, lower-body and navigation blocks, the optional ones chosen by `GOLEM_LOWERBODY`, `GOLEM_SLAM`/`GOLEM_NAV2`; no model servers, skills or rviz ([`MACOS.md`](MACOS.md)) |
+| `h12_sim.launch.py` | sim — the full stack |
 | `h12_real_robot.launch.py` | real robot, onboard PC: drivers, state publishers, estop + safety + IK, nav, lower body |
 | `h12_real_desktop.launch.py` | real: companion desktop — model servers, skills, rviz; hand cameras with `use_hand_cameras:=true` |
 | `h12_safety_grippers.launch.py` | real: estop + safety layer + grippers only |
@@ -118,7 +117,7 @@ safety, IK), `h12_lowerbody`, `h12_models` (model servers + skills),
 For sensors + SLAM/nav on the real robot with no joint commanded (no estop,
 safety or IK), use `ros2 launch golem_bringup h12_real_slam.launch.py`; record those runs with `ros2 run golem_slam record_slam_bag --name <name>`.
 
-The x86 sim bringup starts the state publishers, the `frame_task_server` IK
+The sim bringup starts the state publishers, the `frame_task_server` IK
 solver, `safety_node`, the Gemini/SAM/GraspGen model servers, the RL lower-body
 controller, the skills node, nav, and RViz. Common arguments:
 
@@ -193,7 +192,7 @@ and which sim it waits for. Every `ros` container mounts and builds both
 robots' packages (`dex_3` and `golem_lowerbody_rl` included) and uses the default
 CycloneDDS configuration (`core_ws/cyclonedds.xml`), so `docker_run.sh ros`
 takes no `--g1` flag and runs both `g1_sim.launch.py` / `g1_real_robot.launch.py`
-and the H1-2's launches. The G1 runs on x86 Linux with RoboCasa only. Both
+and the H1-2's launches. The G1 runs with RoboCasa only. Both
 robots use the same container names and DDS topics: run one at a time.
 
 ```bash
@@ -244,13 +243,12 @@ session follows [`g1/first-session.md`](g1/first-session.md).
   lists every removed package.
 
   A native workspace (the H1-2's onboard PC) has no such check and keeps
-  answering to the old names until they are deleted. On the Mac, delete the
-  same package prefixes from the build/install named volumes. A `--symlink-install`
+  answering to the old names until they are deleted. A `--symlink-install`
   workspace also keeps links to four deleted G1 config files, which fail the
   next `golem_upper_ik` build (`can't copy ... doesn't exist or not a regular
   file`); the change report,
   `docs/superpowers/specs/2026-10-28-golem-bringup-and-g1-debug-mode/change-report.md`,
-  has their cleanup and the Mac's.
+  has their cleanup.
 - **X11 / GUI:** set `XAUTHORITY` to your session's existing authorization file.
   Use `GOLEM_DISPLAY=headless` or `--headless` when no X server is available.
 - **Talking to the sim from the host** bypasses the run scripts and so misses

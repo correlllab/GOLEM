@@ -43,8 +43,7 @@ sim it waits for. Every `ros` container mounts and builds both robots' packages
 and uses `core_ws/cyclonedds.xml` directly, so `docker_run.sh ros` takes no
 `--g1` or `--h12` flag. `CLAUDE.md` §3 has the details.
 
-- x86 Linux with an NVIDIA GPU only: the Mac wrappers and the Isaac simulator
-  refuse the G1.
+- RoboCasa only: the Isaac simulator refuses the G1.
 - Both robots use the same images (`docker/scripts/docker_build.sh robocasa ros`).
 - The robots share container names (`golem_ros`, `golem_sim_robocasa`), node
   names and DDS topics. Run one robot at a time on a host, and never two robot

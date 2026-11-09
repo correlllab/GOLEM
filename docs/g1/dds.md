@@ -36,8 +36,8 @@ topic names, with identical `unitree_hg` types, so two of them on one domain
 command each other's robots. `docker/scripts/wait_for_sim.py` refuses to start
 a bringup against a simulator of the other robot (it reads `mode_machine` from
 `rt/lowstate`: 5 for the G1, 6 for the H1-2, each sim reporting its real
-robot's value), but only in `docker_stack.sh` and the mac stack
-(`GOLEM_WAIT_FOR_SIM=1`) and in `tests/stack`. `docker_run.sh ros` followed by
+robot's value), but only in `docker_stack.sh` (`GOLEM_WAIT_FOR_SIM=1`) and in
+`tests/stack`. `docker_run.sh ros` followed by
 a manual `ros2 launch` is not checked by the wrappers. `golem_safety` checks
 the value as well: it engages no input on another robot's `rt/lowstate` and
 latches its estop on one once engaged. That does not replace one robot per

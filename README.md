@@ -13,7 +13,7 @@ between them unchanged.
 
 ## Quick start
 
-x86 Linux with an NVIDIA GPU is the primary platform. Full detail in
+The stack runs on x86 Linux with an NVIDIA GPU. Full detail in
 [`docs/SETUP.md`](docs/SETUP.md) and [`docs/RUNNING.md`](docs/RUNNING.md).
 
 ```bash
@@ -40,9 +40,6 @@ ros2 action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
   "{target_object: 'vertical fridge handle', arm: 'right', timeout: {sec: 60, nanosec: 0}}" --feedback
 ```
 
-On Apple Silicon there is a CPU-only port that runs ROS 2 + MuJoCo without
-Isaac (H1-2 only) — see [`docs/MACOS.md`](docs/MACOS.md).
-
 ## The G1
 
 GOLEM also runs the Unitree G1 (29 DoF, two Dex3-1 hands): its own package
@@ -55,7 +52,7 @@ SLAM/navigation and skills packages it shares with the H1-2
 `core_ws/src/golem_skills`), its models in
 `CL_Assets/g1`, and a RoboCasa sim in
 `golem_robocasa/g1/`. The H1-2 stays the default; `--g1` on a wrapper, or
-`GOLEM_ROBOT=g1`, selects the G1 (x86 Linux, RoboCasa only). The images are
+`GOLEM_ROBOT=g1`, selects the G1 (RoboCasa only). The images are
 the same, and every `ros` container builds and runs both robots' packages.
 
 ```bash
@@ -86,8 +83,7 @@ the same licence: treat it as CC BY-NC-SA 4.0. The packages around it
 | `golem_robocasa/` | RoboCasa/MuJoCo simulator entry point for both robots and its ROS/DDS bridges; the G1 sim in `golem_robocasa/g1/` |
 | `CL_isaaclab_sim/` | Isaac Lab simulator (H1-2) |
 | `CL_Assets/` | both robots' URDFs, MJCFs, meshes and self-collision models (the G1's in `CL_Assets/g1/`), Isaac USD (Git-LFS) |
-| `docker/` | x86 images, compose files (with the G1 overlay), and the build/run scripts |
-| `docker/mac/` | the self-contained Apple-Silicon port |
+| `docker/` | the images, compose files (with the G1 overlay), and the build/run scripts |
 | `mujoco_mpc/`, `unitree_sdk2_python/` | vendored upstream dependencies |
 | `tests/` | simulator regression and acceptance tests |
 | `tools/` | standalone debugging tools |
@@ -100,11 +96,9 @@ Most of the tree is git submodules, and large assets are Git-LFS.
 |---|---|
 | [`docs/SETUP.md`](docs/SETUP.md) | prerequisites, `.env`, model weights, building the images |
 | [`docs/RUNNING.md`](docs/RUNNING.md) | run flows, bringup, skills, real robot, troubleshooting |
-| [`docs/MACOS.md`](docs/MACOS.md) | the Apple-Silicon CPU port and its feature toggles |
 | [`docs/NAVIGATION_DEMO.md`](docs/NAVIGATION_DEMO.md) | autonomous SLAM + nav2 frontier exploration |
-| [`docs/ROS_MCP_DEBUG.md`](docs/ROS_MCP_DEBUG.md) | the in-container ROS debugging MCP server |
 | [`docs/DDS_TUNING.md`](docs/DDS_TUNING.md) | kernel and CycloneDDS tuning for the sensor streams |
-| [`docs/DOCKER_TESTING.md`](docs/DOCKER_TESTING.md) | the Docker smoke tests on Ubuntu NVIDIA and Apple-Silicon Mac |
+| [`docs/DOCKER_TESTING.md`](docs/DOCKER_TESTING.md) | the Docker smoke tests |
 | [`docs/g1/`](docs/g1/index.md) | the G1: sim flows, safety layer, DDS, walking, navigation, exploration, the first real session |
 | [`tests/README.md`](tests/README.md) | the simulator regression and acceptance tests |
 | [`docker/BUILD.md`](docker/BUILD.md) | how the images are layered and what is pinned |

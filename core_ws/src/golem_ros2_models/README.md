@@ -8,7 +8,7 @@ table is `golem_safety`'s robot profile.
 
 `setup.py` reads the repo's `CL_Assets` submodule at `../../../CL_Assets`, so the package
 builds only from `<repo>/core_ws/src/golem_ros2_models` with `CL_Assets` checked out and its
-meshes pulled from Git-LFS. Every x86 `ros` container mounts `CL_Assets` at
+meshes pulled from Git-LFS. Every `ros` container mounts `CL_Assets` at
 `/home/code/CL_Assets`. The build stops with a message when:
 
 - `CL_Assets` is missing, or a file the package installs is;

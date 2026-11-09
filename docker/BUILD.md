@@ -165,8 +165,7 @@ Single-stage, `FROM golem_base`. Provides the MuJoCo + RoboCasa kitchen simulato
   patch that no longer applies fails the build; each file's header says why it
   is needed. `pip check` still reports robosuite's `mujoco<3.10` and
   RoboCasa's `mujoco==3.3.1` requirements, which the image overrides.
-  `golem_robocasa/mj_compat.py` keeps the sim code running on this 3.17.0 and
-  the Mac image's 3.3.1.
+  `golem_robocasa` calls 3.17.0's API directly.
 - **RoboCasa + robosuite** installed from git (neither fully on PyPI; robosuite
   from `master`). Also `robosuite_models`, `mimicgen`, `mink==0.0.5` — installed
   only to silence import-time "not installed" warnings.
@@ -303,26 +302,13 @@ service for the G1.
 the robot: one `ros` container runs either robot's bringup. For the G1,
 `docker_stack.sh` sets `GOLEM_BRINGUP_LAUNCH=g1_sim.launch.py` for the stack
 overlay, and `wait_for_sim.py` refuses a simulator of the other robot. The G1 uses the same
-images and container names as the H1-2, and the wrappers refuse it on Mac and
-with Isaac.
+images and container names as the H1-2, and the wrappers refuse it with Isaac.
 
-Linux Compose is headless by itself. The wrapper selects
+Compose is headless by itself. The wrapper selects
 `docker-compose.gui.yml` when `GOLEM_DISPLAY=gui`, or automatically when
 `DISPLAY` is set. GUI mode requires an Xauthority file; it does not change the
-host's X access policy. `--headless` avoids desktop mounts entirely. NVIDIA
-runtime and host networking remain in the Linux configuration.
-
-The Mac wrappers expose the same build/run/stack operations for `robocasa` and
-`ros` only. Images use the `:arm64` tag and `linux/arm64` platform. Mac uses
-FastDDS, host networking/IPC, and native VM named volumes for colcon build and
-install trees. Keep those named volumes: host filesystem shares make symlink
-builds slow. VNC is opt-in; there are no NVIDIA or host X11 requirements.
-The slim Mac ROS image (`RosDockerfile.slim.arm64`) carries what
-`h12_sim_mac.launch.py` runs, `golem_slam`'s navigation included: PCL,
-`pcl_ros`, OctoMap, Nav2, and Livox-SDK2 with `livox_ros_driver2` baked at
-`/opt/livox_ws` as in the RoboCasa images (§5), with a `CustomMsg` import
-check after `build.sh`. `launch_ros_mac.sh` sources that install and builds
-only the packages the Mac bringup runs (`PKGS`, `fast_lio` among them).
+host's X access policy. `--headless` avoids desktop mounts entirely. Every
+service uses the NVIDIA runtime and host networking.
 
 The ROS image bakes the pinned Unitree C++ SDK at `/opt/unitree_install`.
 No SDK clone or SDK-cache mount is needed at startup. The separate MJPC warm
@@ -361,8 +347,7 @@ are near-instant; wipe the host dir for a clean rebuild.
   wheel needs the removed `q_radmin.h`).
 - **MuJoCo versions are pinned per image and must not drift:** `3.2.3` in `ros`
   (matches the mjpc C++ server's ABI byte-for-byte), `3.17.0` in `robocasa`
-  (with the patches in `docker/patches/`, §5), `3.3.1` in the Mac's robocasa
-  image (RoboCasa's own pin).
+  (with the patches in `docker/patches/`, §5).
 - **Layer-order discipline:** heavy/stable layers first; volatile pins appended
   last. New deps go at the *end* of a Dockerfile so they don't bust cached layers.
 - **CUDA wheel split:** `ros`/base use torch **cu130**; Isaac inherits NVIDIA's

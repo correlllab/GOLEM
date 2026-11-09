@@ -1,4 +1,4 @@
-# Network / DDS tuning (x86)
+# Network / DDS tuning
 
 The stack moves bursty, high-bandwidth sensor data (camera images, Livox point
 clouds) over CycloneDDS. On a gigabit link the wire has headroom, but the default

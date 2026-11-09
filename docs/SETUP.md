@@ -1,7 +1,6 @@
-# Setup (x86 / Linux + NVIDIA)
+# Setup
 
-One-time setup for the preferred platform. For Apple Silicon see
-[`MACOS.md`](MACOS.md).
+One-time setup for the stack's one platform, x86 Linux with an NVIDIA GPU.
 
 ## Prerequisites
 

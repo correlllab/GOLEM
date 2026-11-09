@@ -1,20 +1,26 @@
 """Check that the H1-2 sim's MID-360 hangs upside down, in the URDF's raw sensor frames.
 
 Both MJCFs (the hand-written source and robosuite's robot.xml generated from it) must orient
-livox_link and livox_imu_site as the URDF orients livox_link and livox_imu_link, and
-h12_sensors' ray fan, cast from that upside-down frame, must reach the floor below the robot
-and the space above the horizon. Needs MuJoCo, NumPy and h12_sensors' imports (ROS, the
-Livox messages): run it with tests/robocasa/run_in_container.sh.
+livox_link and livox_imu_site as the URDF orients livox_link and livox_imu_link; the MID-360's
+scan pattern, cast from that upside-down frame, must reach the floor below the robot and the
+space above the horizon; and h12_sensors' scan thread must fire the pattern from livox_link.
+Needs MuJoCo, NumPy and h12_sensors' imports (ROS, the Livox messages): run it with
+tests/robocasa/run_in_container.sh.
 """
 import math
 import os
+import time
 import unittest
 import xml.etree.ElementTree as ET
 
 import mujoco
 import numpy as np
+from livox_ros_driver2.msg import CustomMsg
+from rclpy.serialization import deserialize_message
 
 import h12_sensors
+import mid360
+from sim_timing import LoopTimings
 
 ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'CL_Assets')
 URDF = os.path.join(ASSETS, 'ros_assets', 'h1_2_magpie.urdf')
@@ -51,7 +57,7 @@ def _urdf_rotation_in_pelvis(link):
 
 
 class LidarMountTests(unittest.TestCase):
-    """Compare the URDF's lidar frames with both MJCFs and the ray fan."""
+    """Compare the URDF's lidar frames with both MJCFs, the scan pattern and the H1-2's scans."""
 
     @classmethod
     def setUpClass(cls):
@@ -90,9 +96,9 @@ class LidarMountTests(unittest.TestCase):
                 np.testing.assert_allclose(self._in_pelvis(model, data, 'site', 'livox_imu_site'),
                                            self.urdf_imu, atol=1e-6)
 
-    def test_fan_reaches_the_floor_and_above_the_horizon(self):
-        """The fan reaches below -45 degrees and above the horizon, mostly downwards."""
-        local = h12_sensors.lidar_fan(360, 56)  # the azimuth x elevation grid h12_mujoco uses
+    def test_pattern_reaches_the_floor_and_above_the_horizon(self):
+        """A frame of the MID-360's pattern reaches below -45 degrees and above the horizon, mostly downwards."""
+        local = mid360.directions(mid360.load_pattern(), 0, 20_000)   # one 10 Hz frame
         for name, (model, data) in self.sims.items():
             with self.subTest(mjcf=name):
                 rot = data.xmat[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, 'livox_link')]
@@ -102,6 +108,65 @@ class LidarMountTests(unittest.TestCase):
                 self.assertLess(elevation.min(), -45.0)
                 self.assertGreater(elevation.max(), 0.0)
                 self.assertGreater(np.mean(elevation < 0.0), 0.5)
+
+    def test_h12_frame_has_20000_rays_on_4_lines(self):
+        """The H1-2's scan thread fires 20,000 pattern rays a frame from livox_link, numbered on lines 0-3.
+
+        In a walled room around the standing H1-2 (its MJCF), with the robot's own geoms
+        self-filtered as h12_mujoco does: each frame casts the next 20,000 rows of the pattern,
+        the returns are those rays in order, on line row % 4, and most rays return.
+        """
+        spec = mujoco.MjSpec.from_file(MJCFS['mujoco'])
+        for pos, size in (((3.05, 0, 1.5), (.05, 3.1, 1.5)), ((-3.05, 0, 1.5), (.05, 3.1, 1.5)),
+                          ((0, 3.05, 1.5), (3.1, .05, 1.5)), ((0, -3.05, 1.5), (3.1, .05, 1.5))):
+            spec.worldbody.add_geom(type=mujoco.mjtGeom.mjGEOM_BOX, pos=pos, size=size)
+        model = spec.compile()
+        data = mujoco.MjData(model)
+        mujoco.mj_forward(model, data)
+        body = lambda name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
+        torso = body('torso_link')
+        robot = model.body_rootid[model.geom_bodyid] == model.body_rootid[torso]
+        published = []
+        scans = h12_sensors._LidarScans(model, body('livox_link'), torso, robot, 'cpu', 'livox_frame',
+                                        published.append, lambda msg: None, LoopTimings())
+        frames = []
+        update = scans.scanner.update
+
+        def record(snapshot, t):
+            """Keep each frame the scanner completes."""
+            frame = update(snapshot, t)
+            if frame is not None:
+                frames.append(frame)
+            return frame
+
+        scans.scanner.update = record
+        try:
+            dt = model.opt.timestep
+            for k in range(round(0.2 / dt) + 1):   # two frames
+                while scans._free.empty():
+                    time.sleep(0.0005)
+                scans.tick(data, k * dt)
+            end = time.time() + 60.0
+            while len(published) < 2 and time.time() < end:
+                time.sleep(0.01)
+        finally:
+            scans.close()
+        self.assertEqual(len(frames), 2)
+        pattern = mid360.load_pattern()
+        for f, frame in enumerate(frames):
+            self.assertEqual(frame.rays, 20_000)
+            self.assertGreater(len(frame.points), 0.9 * 20_000)
+            self.assertEqual(deserialize_message(published[f], CustomMsg).point_num, len(frame.points))
+            rays = mid360.directions(pattern, 20_000 * f, 20_000)
+            unit = frame.points / np.linalg.norm(frame.points, axis=1)[:, None]
+            rows, j = [], 0
+            for u in unit:   # the returns are a subsequence of the frame's rays
+                while np.linalg.norm(rays[j] - u) > 1e-4:
+                    j += 1
+                rows.append(j)
+                j += 1
+            np.testing.assert_array_equal(frame.line, np.array(rows) % 4)
+            self.assertEqual(set(frame.line.tolist()), {0, 1, 2, 3})
 
 
 if __name__ == '__main__':

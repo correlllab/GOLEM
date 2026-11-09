@@ -36,10 +36,13 @@ docker/scripts/docker_run.sh robocasa --headless --task OpenFridge --layout 1 --
 Every five wall-clock seconds, `[sim-timing]` reports simulation/wall-clock time
 (RTF: 1 means real time) and mean/max milliseconds per stage call, with call
 counts. `camera_render` includes scene capture and both render passes per
-camera; `camera_depth_render` the depth stream's render; `camera_publish`
-image conversion, compression, and publishing; `camera_cloud` the point cloud.
-`lidar_cast` includes scene capture and raycasting; `lidar_publish` includes
-point filtering, message construction, and publishing. Physics includes lock
+camera (with the wait for `mid360.GL_LOCK`, which the cameras and the lidar's
+GPU caster take turns on); `camera_depth_render` the depth stream's render;
+`camera_publish` image conversion, compression, and publishing; `camera_cloud`
+the point cloud. `lidar_capture` is the physics thread's copy of the poses one
+lidar cast reads, under the sim lock; `lidar_cast` one cast of the rays due
+since the last (every caster's `batch_s` of sim time, on the lidar's thread);
+`lidar_publish` packing and publishing a frame on both lidar topics. Physics includes lock
 acquisition and PD control; `lowstate` is the `rt/lowstate` sample built,
 signed and published after every physics step. Timings are silent unless requested.
 Both sims build that sample with numpy (`LowStateWriter` in `unitree_common.py`);
@@ -51,11 +54,14 @@ Discard the first interval for renderer warm-up. PD torque is recomputed every
 physics step. RoboCasa fixture updates and success checks run once per control
 step (`env.control_timestep`, 20 Hz), matching RoboCasa's own `env.step`.
 
-Lidar scans and camera frames are produced from a ~1 ms `MjData` snapshot on
-one worker thread per sensor, overlapping physics, with one job in flight per
-sensor. A due job waits for the previous one rather than being dropped, so
-schedules, stamps, message formats and topics are unchanged. `*_capture` is the
-locked snapshot, `*_wait` is time the loop blocked on the previous job.
+Camera frames are rendered from a partial `MjData` snapshot on a worker
+thread, overlapping physics, with one job in flight. A due job waits for the
+previous one rather than being dropped, so every scheduled frame is published.
+`camera_capture` is the locked snapshot, `camera_wait` is time the loop blocked
+on the previous job. The MID-360's casts run on their own thread from a ring of
+pose snapshots (`h12_sensors.py`'s module docstring): the loop never waits for
+them, and when the thread falls a ring behind a cast is skipped instead,
+logged, and counted in the `sensors published ...` line at shutdown.
 The launcher selects EGL for offscreen camera rendering in both display modes;
 the camera context is created before the passive viewer opens, because a new
 EGL context cannot be made current once the GLFW window exists. The viewer

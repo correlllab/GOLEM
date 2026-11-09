@@ -534,7 +534,12 @@ tick, `rpy` and a CRC); consumes `rt/lowcmd` and the `/{left,right}/gripper/*`
 services/DeliGrasp action. Every body motor is off until the first `rt/lowcmd`
 with a valid CRC, `mode_machine` 6, `mode_pr` 0 and finite values (other frames
 are dropped); after that, `GOLEM_CMD_TIMEOUT` of silence turns every motor off
-until frames return.
+until frames return. Its MID-360 is the model both robots share
+(`golem_robocasa/mid360.py`): the real scan pattern, 20,000 points a 10 Hz
+frame on lines 0-3, each point's `offset_time` the time of the pose it was cast
+from; `/livox/lidar` and `/livox/pointcloud` carry the same frame. Its rays are
+cast as `GOLEM_LIDAR_BACKEND` says (as on the G1, below), and
+`GOLEM_LIDAR_SELF_FILTER=0` keeps the robot's own returns.
 (Trust the code over any topic list repeated elsewhere: the sensor suite in
 `h12_sensors.py`, the grippers in `magpie_hand_bridge.py`, `/clock` and the
 opt-in odom in `mujoco_ros_bridge.py`, Unitree DDS in `unitree_interface.py`.)

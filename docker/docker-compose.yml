@@ -118,10 +118,10 @@ services:
       # H1-2: 0 keeps the robot's own links in its lidar scan as occluders.
       # Empty: they are filtered out (h12_mujoco.py).
       - GOLEM_LIDAR_SELF_FILTER=${GOLEM_LIDAR_SELF_FILTER:-}
-      # G1: how the MID-360's rays are cast (golem_robocasa/mid360.py). Empty
-      # or auto: rendered on the GPU where MuJoCo renders through EGL on one,
-      # else cast exactly on the CPU (logged); gpu stops the sim without a GPU;
-      # cpu always casts on the CPU.
+      # Both robots: how the MID-360's rays are cast (golem_robocasa/mid360.py).
+      # Empty or auto: rendered on the GPU where MuJoCo renders through EGL on
+      # one, else cast exactly on the CPU (logged); gpu stops the sim without a
+      # GPU; cpu always casts on the CPU.
       - GOLEM_LIDAR_BACKEND=${GOLEM_LIDAR_BACKEND:-}
       # Both robots: 0 drops every RGBD camera (the heaviest per-step cost).
       - GOLEM_CAMERAS=${GOLEM_CAMERAS:-}

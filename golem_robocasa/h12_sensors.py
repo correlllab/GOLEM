@@ -25,15 +25,44 @@ livox_frame:
 H12Sensors is the sensor suite of the mujoco_sensors node
 (mujoco_ros_bridge.RosSensorBridge), which publishes /clock and the optional
 ground-truth odom and calls tick() once per sim step after them. The IMU and
-camera TF are published at their rates keyed off sim time; camera frames and
-lidar scans are rate-throttled the same way and produced from MjData snapshots
-on worker threads. MuJoCo's renderer GL context is thread-affine: it is
-created, used and freed on the thread that renders (see _camera_worker).
+camera TF are published at their rates keyed off sim time; camera frames are
+rate-throttled the same way and rendered from MjData snapshots on a worker
+thread. MuJoCo's renderer GL context is thread-affine: it is created, used and
+freed on the thread that renders (see _camera_worker). The renders hold
+mid360.GL_LOCK, taking turns with the lidar's GPU caster.
+
+The MID-360 is the model both robots share (golem_robocasa/mid360.py): the
+real non-repetitive scan pattern, 20,000 points a 10 Hz frame (200,000
+points/s), lines 0-3, the blind zone, maximum range and range noise, with each
+point's offset_time the time of the pose it was cast from. The rays leave
+livox_link and pass through torso_link's geoms, in which the sensor sits; a ray
+whose first hit is a self-filtered geom (self_filter_geoms) gives no point, so
+the limbs still occlude what is behind them. /livox/lidar and /livox/pointcloud
+carry the same frame, stamped at its first point, as the driver stamps them.
+
+Threads. The lidar's rays are cast on the mid360_scan thread (_LidarScans)
+through the caster mid360.make_caster() picks by GOLEM_LIDAR_BACKEND: depth
+renders on the GPU, else exact rays on the CPU. Every caster's batch_s of sim
+time, tick() copies under the sim lock what a cast reads (every geom's pose,
+the sensor's, and the geoms' and materials' live alpha, which RoboCasa tasks
+change and the rays skip at 0) into a slot of a ring; the thread casts the
+rays due by then, labelled with that time, and packs and publishes each frame
+it completes. The caster casts on its own copy of the model, and both casters
+release the GIL while they cast, so the casts run beside the physics. When the
+thread falls LIDAR_SLOTS casts behind, a due cast is skipped (and counted) and
+the next one casts its rays: the physics never waits for the lidar.
+
+State time. tick() runs after mj_step, which leaves the kinematics of the
+state it started from, so the lidar's casts are labelled one physics step
+before sim_t, as the G1's are.
 """
 import copy
 import io
 import os
+import queue
 import struct
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from array import array as _array
 from collections import namedtuple
@@ -52,6 +81,7 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Imu, PointCloud2, PointField
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
+import mid360
 import realsense_profile
 from mujoco_ros_bridge import _sim_time_to_msg
 
@@ -91,25 +121,43 @@ LIVOX_POINT_DTYPE = np.dtype([
     ("reflectivity", "u1"), ("tag", "u1"), ("line", "u1"), ("pad", "u1"),
 ])
 
-# The MID-360's elevation span (deg) in its raw frame, the MJCF's livox_link. The
-# sensor hangs upside down, so in the world the fan covers about -52 to +7 deg.
-LIDAR_ELEVATION_DEG = (-7.0, 52.0)
+# Geom groups the lidar's rays hit: all six, the robot's and the scene's collision geoms included.
+LIDAR_GEOM_GROUPS = (1, 1, 1, 1, 1, 1)
+# Casts the lidar's ring holds before the physics thread skips one.
+LIDAR_SLOTS = 20
+WARN_PERIOD_S = 5.0   # wall s between repeats of the lidar's skip warning
+_EPS_T = 1e-9   # s, tolerance on accumulated sim time
 
 
-def lidar_fan(az_rays: int, el_rays: int) -> np.ndarray:
-    """Return unit ray directions (az_rays * el_rays, 3) in the lidar's raw frame.
+def _log(text):
+    """Print an [h12_sensors] line."""
+    print(f"[h12_sensors] {text}", flush=True)
 
-    A uniform azimuth x elevation grid, elevation-major and azimuth-fast.
+
+def lidar_backend_from_env(env=os.environ):
+    """Return GOLEM_LIDAR_BACKEND, one of mid360.BACKENDS (unset or empty: auto, any case).
+
+    Raises ValueError, naming the knob, for any other value.
     """
-    az = np.linspace(0.0, 2.0 * np.pi, az_rays, endpoint=False, dtype=np.float64)
-    low, high = np.deg2rad(LIDAR_ELEVATION_DEG)
-    el = np.linspace(low, high, el_rays, endpoint=False, dtype=np.float64)
-    az_grid, el_grid = np.meshgrid(az, el, indexing="xy")
-    cos_el = np.cos(el_grid)
-    return np.stack(
-        [cos_el * np.cos(az_grid), cos_el * np.sin(az_grid), np.sin(el_grid)],
-        axis=-1,
-    ).reshape(-1, 3)
+    raw = env.get("GOLEM_LIDAR_BACKEND", "")
+    backend = raw.strip().lower() or "auto"
+    if backend not in mid360.BACKENDS:
+        raise ValueError(f"GOLEM_LIDAR_BACKEND must be one of {', '.join(mid360.BACKENDS)}, got {raw!r}")
+    return backend
+
+
+def self_filter_geoms(model, prefixes) -> np.ndarray:
+    """Return the bool mask (ngeom,) of geoms on bodies whose names start with one of prefixes.
+
+    A lidar ray whose first hit is one of them gives no point. No prefixes mark none.
+    """
+    mask = np.zeros(model.ngeom, dtype=bool)
+    prefixes = tuple(prefixes)
+    if prefixes:
+        for g in range(model.ngeom):
+            name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, int(model.geom_bodyid[g])) or ""
+            mask[g] = name.startswith(prefixes)
+    return mask
 
 
 def _serialize_livox_scan(stamp, frame_id, timebase, offset_time, points, lines) -> bytes:
@@ -133,6 +181,164 @@ def _serialize_livox_scan(stamp, frame_id, timebase, offset_time, points, lines)
     packed["x"], packed["y"], packed["z"] = points[:, 0], points[:, 1], points[:, 2]
     packed["line"] = lines
     return prefix[:-4] + struct.pack("<I", msg.point_num) + packed.tobytes()[:-1]
+
+
+def _livox_pointcloud(stamp, frame_id, offset_time, points, lines) -> PointCloud2:
+    """Return a /livox/pointcloud PointCloud2 of a scan, in the driver's xfer_format 0 layout.
+
+    timestamp is offset_time (ns, as float64); intensity and tag stay 0, as the sim has no
+    reflectivity.
+    """
+    arr = np.zeros(points.shape[0], dtype=PC2_DTYPE)
+    arr["x"], arr["y"], arr["z"] = points[:, 0], points[:, 1], points[:, 2]
+    arr["line"] = lines
+    arr["timestamp"] = offset_time.astype(np.float64)
+    msg = PointCloud2()
+    msg.header.stamp = stamp
+    msg.header.frame_id = frame_id
+    msg.height = 1
+    msg.width = int(points.shape[0])
+    msg.fields = PC2_FIELDS
+    msg.is_bigendian = False
+    msg.point_step = PC2_POINT_STEP
+    msg.row_step = PC2_POINT_STEP * msg.width
+    msg.is_dense = True
+    msg.data = _array("B", arr.tobytes())
+    return msg
+
+
+class _LidarScans:
+    """Cast the MID-360's scans on the mid360_scan thread and publish each frame (module docstring).
+
+    tick() runs on the physics thread, between steps, without the sim lock; it takes the lock
+    only to copy what a cast reads into the ring.
+    """
+
+    def __init__(self, model, body_id, exclude_body_id, robot_geoms, backend, frame_id,
+                 publish_lidar, publish_cloud, timings=None, sim_lock=None):
+        """Build the caster backend names and start the thread.
+
+        The sensor's pose is body body_id's; the rays pass through body exclude_body_id's
+        geoms, and a ray whose first hit is in the bool mask robot_geoms (ngeom,) gives no
+        point. Each frame goes to publish_lidar(CustomMsg CDR bytes) and
+        publish_cloud(PointCloud2) in frame_id. Raises RuntimeError when backend is gpu and
+        no GPU caster can be built.
+        """
+        self._live = model   # read under the sim lock only, for the alpha
+        self._body = int(body_id)
+        self._frame_id = frame_id
+        self._publish_lidar = publish_lidar
+        self._publish_cloud = publish_cloud
+        self._lock = sim_lock
+        self.timings = timings if timings is not None else LoopTimings()
+        self.caster = mid360.make_caster(model, exclude_body_id, LIDAR_GEOM_GROUPS, backend,
+                                         robot_geoms=robot_geoms, log=_log)
+        self.scanner = mid360.Mid360Scanner(self.caster)
+        self.interval = self.caster.batch_s   # s of sim time between casts
+        _log(f"lidar rays cast on the {'GPU' if isinstance(self.caster, mid360.GpuCaster) else 'CPU'} "
+             f"every {self.interval * 1e3:g} ms of sim time")
+        self.data = mujoco.MjData(model)   # the thread's: only its geom poses are read
+        self._geom_xpos = np.empty((LIDAR_SLOTS, model.ngeom, 3))
+        self._geom_xmat = np.empty((LIDAR_SLOTS, model.ngeom, 9))
+        self._origin = np.empty((LIDAR_SLOTS, 3))
+        self._rotation = np.empty((LIDAR_SLOTS, 9))
+        self._geom_alpha = np.empty((LIDAR_SLOTS, model.ngeom), model.geom_rgba.dtype)
+        self._mat_alpha = np.empty((LIDAR_SLOTS, model.nmat), model.mat_rgba.dtype)
+        self._free = queue.SimpleQueue()
+        for slot in range(LIDAR_SLOTS):
+            self._free.put(slot)
+        self._work = queue.SimpleQueue()
+        self._next = self._last = None
+        self.frames = self.casts = self.skipped = 0
+        self._errors = set()
+        self._warned = -WARN_PERIOD_S
+        self._thread = threading.Thread(target=self._run, name="mid360_scan", daemon=True)
+        self._thread.start()
+
+    def tick(self, data, t):
+        """Submit a cast of data's kinematics when one is due at their sim time t (s).
+
+        The schedule starts again when t goes back (a sim reset).
+        """
+        if self._next is None or t < self._last - _EPS_T:
+            self._next = t
+        self._last = t
+        if t < self._next - _EPS_T:
+            return
+        self._next += self.interval
+        self.submit(data, t)
+
+    def submit(self, data, t):
+        """Copy the poses of data's kinematics at sim time t, and the model's alpha, into a ring slot.
+
+        Takes the sim lock for the copy. If the thread is LIDAR_SLOTS casts behind, this one
+        is skipped: the next casts the rays due by then.
+        """
+        self.casts += 1
+        try:
+            slot = self._free.get_nowait()
+        except queue.Empty:
+            self.skipped += 1
+            if time.monotonic() - self._warned >= WARN_PERIOD_S:
+                self._warned = time.monotonic()
+                _log(f"WARNING: the lidar thread is {LIDAR_SLOTS} casts behind at sim t {t:.2f} s (short of "
+                     f"CPU or GPU); skipping casts, the next one casts their rays ({self.skipped} skipped so far)")
+            return
+        capture_start = self.timings.start()
+        with self._lock or nullcontext():
+            np.copyto(self._geom_xpos[slot], data.geom_xpos)
+            np.copyto(self._geom_xmat[slot], data.geom_xmat)
+            self._origin[slot] = data.xpos[self._body]
+            self._rotation[slot] = data.xmat[self._body]
+            self._geom_alpha[slot] = self._live.geom_rgba[:, 3]
+            self._mat_alpha[slot] = self._live.mat_rgba[:, 3]
+        self.timings.stop("lidar_capture", capture_start)
+        self._work.put((slot, t))
+
+    def _run(self):
+        """Cast the submitted slots and publish each completed frame, until close()."""
+        d = self.data
+        while (item := self._work.get()) is not None:
+            slot, t = item
+            np.copyto(d.geom_xpos, self._geom_xpos[slot])
+            np.copyto(d.geom_xmat, self._geom_xmat[slot])
+            # Copies: the slot goes back to the physics thread before the cast reads them.
+            snapshot = mid360.Snapshot(self._origin[slot].copy(), self._rotation[slot].reshape(3, 3).copy(),
+                                       d, self._geom_alpha[slot].copy(), self._mat_alpha[slot].copy())
+            self._free.put(slot)
+            try:
+                cast_start = self.timings.start()
+                frame = self.scanner.update(snapshot, t)
+                self.timings.stop("lidar_cast", cast_start)
+                if frame is not None:
+                    publish_start = self.timings.start()
+                    self._publish(frame)
+                    self.timings.stop("lidar_publish", publish_start)
+                    self.frames += 1
+            except Exception as e:   # keeps the sim running; logged once per kind
+                if type(e) not in self._errors:
+                    self._errors.add(type(e))
+                    _log(f"WARNING: /livox/lidar scan failed at sim t {t:.3f}: {e!r}")
+
+    def _publish(self, frame):
+        """Publish a mid360.LidarFrame on /livox/lidar and /livox/pointcloud, stamped at its first point."""
+        timebase = int(round(frame.timebase * 1e9))   # ns
+        stamp = TimeMsg(sec=timebase // 1_000_000_000, nanosec=timebase % 1_000_000_000)
+        self._publish_lidar(_serialize_livox_scan(stamp, self._frame_id, timebase, frame.offset_time,
+                                                  frame.points, frame.line))
+        self._publish_cloud(_livox_pointcloud(stamp, self._frame_id, frame.offset_time, frame.points,
+                                              frame.line))
+
+    def close(self):
+        """Stop the thread after the queued casts, then free the caster (if the thread has stopped)."""
+        self._work.put(None)
+        self._thread.join(timeout=5.0)
+        if not self._thread.is_alive():
+            self.caster.close()
+
+    def stats(self):
+        """Return the frame and skipped-cast counts."""
+        return f"{self.frames} lidar frames ({self.skipped} of {self.casts} casts skipped)"
 
 
 # One RealSense camera: its realsense_profile.CameraSpec, MuJoCo camera ids,
@@ -208,11 +414,7 @@ class H12Sensors:
         lidar_frame: str = "livox_frame",
         lidar_exclude_body: str = "torso_link",
         cam_rate_hz: float = 15.0,
-        lidar_az_rays: int = 180,
-        lidar_el_rays: int = 28,
-        lidar_rate_hz: float = 5.0,
-        lidar_max_range: float = 30.0,
-        lidar_min_range: float = 0.1,
+        lidar_backend: str = "auto",
         imu_quat_sensor: str = "livox_imu_quat",
         imu_gyro_sensor: str = "livox_imu_gyro",
         imu_acc_sensor: str = "livox_imu_acc",
@@ -227,18 +429,18 @@ class H12Sensors:
         cameras are realsense_profile.CameraSpec and camera_tf the profile's TF
         edges (realsense_profile.tf_edges), the driver's re-published at
         camera_tf_rate_hz. depth_stream and pointcloud switch the depth stream
-        and depth/color/points on. lidar_exclude_body is the body the lidar
-        rides in, whose geoms the rays pass through; geoms of bodies named with
-        a lidar_self_prefixes prefix give no return. Rates are Hz of sim time,
-        ranges m.
+        and depth/color/points on. The lidar's pose is lidar_body's;
+        lidar_exclude_body is the body it rides in, whose geoms the rays pass
+        through; geoms of bodies named with a lidar_self_prefixes prefix give no
+        return. lidar_backend is mid360.make_caster's (GOLEM_LIDAR_BACKEND,
+        lidar_backend_from_env); gpu raises RuntimeError without a GPU caster.
+        Rates are Hz of sim time.
         """
         self.node = node
         self.model = model
         self.data = data
         self.sim_lock = sim_lock
         self.timings = timings if timings is not None else LoopTimings()
-
-        self.lidar_frame = lidar_frame
 
         self._camera_specs = list(cameras)
         self.depth_stream = bool(depth_stream)
@@ -247,49 +449,19 @@ class H12Sensors:
         self.lidar_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, lidar_body)
         if self.lidar_body_id < 0:
             raise RuntimeError(f"body '{lidar_body}' not found in MJCF")
-        # The rays pass through the torso's own geoms (mj_multiRay's
-        # bodyexclude): the lidar sits inside its shell. Limbs still occlude.
+        # The rays pass through the torso's own geoms (the casters'
+        # exclude_body): the lidar sits inside its shell. Limbs still occlude.
         torso_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, lidar_exclude_body)
         if torso_id < 0:
             raise RuntimeError(f"body '{lidar_exclude_body}' not found in MJCF")
         self.lidar_exclude_body_id = int(torso_id)
         # Rays whose first hit is one of these geoms give no point: the limbs
         # still occlude what is behind them, but map no obstacle under the robot.
-        self.geom_is_robot = np.zeros(model.ngeom, dtype=bool)
-        if lidar_self_prefixes:
-            _pfx = tuple(lidar_self_prefixes)
-            for g in range(model.ngeom):
-                bn = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY,
-                                       int(model.geom_bodyid[g])) or ""
-                if bn.startswith(_pfx):
-                    self.geom_is_robot[g] = True
-        # mj_multiRay takes a (6, 1) column vector here.
-        self.lidar_geomgroup = np.array([1, 1, 1, 1, 1, 1], dtype=np.uint8).reshape(6, 1)
+        self.geom_is_robot = self_filter_geoms(model, lidar_self_prefixes)
 
         self.cam_period = 1.0 / cam_rate_hz
         # m, MuJoCo's far plane: depth there means no surface.
         self.zfar = float(model.vis.map.zfar * model.stat.extent)
-
-        self.lidar_period = 1.0 / lidar_rate_hz
-        self.lidar_max_range = lidar_max_range
-        self.lidar_min_range = lidar_min_range
-        # Rays and points are in the sensor's raw frame. The uniform grid
-        # stands in for the MID-360's non-repetitive scan pattern.
-        self.lidar_local_dirs = lidar_fan(lidar_az_rays, lidar_el_rays)
-        self.lidar_rays = self.lidar_local_dirs.shape[0]
-        # Line number = elevation index mod 6, spreading the points evenly over
-        # the lines FAST-LIO's N_SCANS = 6 accepts.
-        self.lidar_lines = ((np.arange(self.lidar_rays) // lidar_az_rays) % 6).astype(np.uint8)
-        # ns, each point's offset_time in the scan, for FAST-LIO's deskew: the
-        # azimuth sweeps once per scan period at a constant rate, and every
-        # elevation at one azimuth fires together.
-        az_idx = np.arange(self.lidar_rays) % lidar_az_rays
-        self.lidar_offset_time_ns = (
-            (az_idx / lidar_az_rays) * self.lidar_period * 1e9).astype(np.uint32)
-        # mj_multiRay's output buffers; mujoco 3.3.1's binding takes (n, 1)
-        # column vectors for them.
-        self._lidar_dists = np.full((self.lidar_rays, 1), -1.0, dtype=np.float64)
-        self._lidar_geomids = np.full((self.lidar_rays, 1), -1, dtype=np.int32)
 
         self.cameras = [self._make_camera_pub(spec) for spec in self._camera_specs]
 
@@ -330,10 +502,13 @@ class H12Sensors:
 
         # s of sim time, so the rates do not depend on the real-time factor.
         self._last_cam_sim_t = 0.0
-        self._last_lidar_sim_t = 0.0
         self._last_imu_sim_t = 0.0
-        self._lidar_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lidar")
-        self._lidar_pending = None
+        # The scan thread publishes both lidar topics; its GPU caster, if any,
+        # makes its EGL context here, before the passive viewer's window exists.
+        self._lidar = _LidarScans(model, self.lidar_body_id, self.lidar_exclude_body_id,
+                                  self.geom_is_robot, lidar_backend, lidar_frame,
+                                  self.pub_lidar.publish, self.pub_pc2.publish,
+                                  self.timings, sim_lock)
         # A GLFW context lives on the main thread; EGL and OSMesa contexts can
         # live on a worker thread, which renders while physics runs.
         self._camera_worker = (
@@ -400,14 +575,16 @@ class H12Sensors:
         return self.node.get_logger()
 
     def stats(self) -> str:
-        """Return "": every scheduled frame and scan is published, so there is nothing to report."""
-        return ""
+        """Return the lidar's frame and skipped-cast counts (every scheduled camera frame is published)."""
+        lidar = getattr(self, "_lidar", None)
+        return lidar.stats() if lidar is not None else ""
 
     def shutdown(self) -> None:
-        """Stop the worker threads and free the renderers on the thread that owns them."""
-        if getattr(self, "_lidar_worker", None) is not None:
-            self._lidar_worker.shutdown(wait=True)
-            self._lidar_worker = None
+        """Stop the worker threads, log the lidar's counts and free the renderers on the thread that owns them."""
+        lidar = getattr(self, "_lidar", None)
+        if lidar is not None:
+            lidar.close()
+            _log(f"sensors published {lidar.stats()}")
         camera_worker = getattr(self, "_camera_worker", None)
         if camera_worker is not None:
             camera_worker.submit(self._close_renderer).result()
@@ -426,13 +603,14 @@ class H12Sensors:
         self._renderer = None
 
     def tick(self, sim_t: float, stamp: TimeMsg) -> None:
-        """Publish the IMU, camera TF, camera frames and lidar scan due at sim_t (s).
+        """Publish the IMU, camera TF and camera frames due at sim_t (s), and submit the lidar's casts.
 
         The host calls it once per sim step, after /clock and odom; stamp is
-        sim_t as a ROS time. Camera frames and lidar scans come from MjData
-        snapshots on worker threads, one job in flight per sensor (the cameras
-        stay on this thread under GLFW). Call it without holding sim_lock, on
-        the thread that steps the physics.
+        sim_t as a ROS time. Camera frames come from MjData snapshots on a
+        worker thread, one job in flight (the cameras stay on this thread under
+        GLFW); the lidar's casts are labelled with the state time, one physics
+        step before sim_t (module docstring). Call it without holding sim_lock,
+        on the thread that steps the physics.
         """
         if sim_t - self._last_imu_sim_t >= self.imu_period:
             self._last_imu_sim_t = sim_t
@@ -453,12 +631,10 @@ class H12Sensors:
             except Exception as e:
                 self.get_logger().warn(f"camera publish failed: {e}")
 
-        if sim_t - self._last_lidar_sim_t >= self.lidar_period:
-            self._last_lidar_sim_t = sim_t
-            try:
-                self._publish_lidar_scan(stamp)
-            except Exception as e:
-                self.get_logger().warn(f"lidar publish failed: {e}")
+        try:
+            self._lidar.tick(self.data, sim_t - self.model.opt.timestep)
+        except Exception as e:
+            self.get_logger().warn(f"lidar capture failed: {e}")
 
     def _publish_imu(self, stamp: TimeMsg) -> None:
         """Publish /livox/imu from the IMU site's sensors."""
@@ -618,9 +794,11 @@ class H12Sensors:
             r, (rgb_buf, depth_buf) = self._renderer[size], self._buffers[size]
             r.disable_depth_rendering()
             r.update_scene(data, camera=cam.color_id, scene_option=self._scene_opt)
-            rgb_u8 = r.render(out=rgb_buf)
-            r.enable_depth_rendering()
-            aligned_mm = self._depth_mm(r.render(out=depth_buf))
+            with mid360.GL_LOCK:
+                rgb_u8 = r.render(out=rgb_buf)
+                r.enable_depth_rendering()
+                aligned = r.render(out=depth_buf)
+            aligned_mm = self._depth_mm(aligned)
             self.timings.stop("camera_render", render_start)
 
             depth_mm = None
@@ -630,7 +808,9 @@ class H12Sensors:
                 rd, (_, ddepth_buf) = self._renderer[size], self._buffers[size]
                 rd.enable_depth_rendering()
                 rd.update_scene(data, camera=cam.depth_id, scene_option=self._scene_opt)
-                depth_mm = self._depth_mm(rd.render(out=ddepth_buf))
+                with mid360.GL_LOCK:
+                    depth = rd.render(out=ddepth_buf)
+                depth_mm = self._depth_mm(depth)
                 self.timings.stop("camera_depth_render", depth_start)
 
             publish_start = self.timings.start()
@@ -675,91 +855,3 @@ class H12Sensors:
                 msg.data = _array("B", points.tobytes())
                 pubs["points"].publish(msg)
                 self.timings.stop("camera_cloud", cloud_start)
-
-    def _publish_lidar_scan(self, stamp: TimeMsg) -> None:
-        """Snapshot MjData and cast and publish a scan from it on the lidar worker.
-
-        The snapshot takes ~1 ms in a kitchen; the ~75 ms cast runs beside the
-        physics, as mj_multiRay releases the GIL.
-        """
-        capture_start = self.timings.start()
-        with self.sim_lock or nullcontext():
-            snapshot = copy.copy(self.data)
-        self.timings.stop("lidar_capture", capture_start)
-        worker = getattr(self, "_lidar_worker", None)
-        if worker is None:
-            self._cast_and_publish_lidar(stamp, snapshot)
-            return
-        # One scan in flight at most: wait rather than drop, so every scheduled
-        # scan is published. result() re-raises the last one's failure.
-        wait_start = self.timings.start()
-        pending, self._lidar_pending = self._lidar_pending, None
-        if pending is not None:
-            pending.result()
-        self.timings.stop("lidar_wait", wait_start)
-        self._lidar_pending = worker.submit(self._cast_and_publish_lidar, stamp, snapshot)
-
-    def _cast_and_publish_lidar(self, stamp: TimeMsg, data) -> None:
-        """Cast and publish one scan from the MjData snapshot data; never touches self.data."""
-        cast_start = self.timings.start()
-        timebase = int(data.time * 1e9)
-        origin = np.ascontiguousarray(data.xpos[self.lidar_body_id], dtype=np.float64).reshape(3, 1)
-        rot = np.array(data.xmat[self.lidar_body_id], dtype=np.float64).reshape(3, 3)
-
-        # rot maps lidar to world for column vectors, so rows go through rot.T.
-        world_dirs = np.ascontiguousarray(self.lidar_local_dirs @ rot.T, dtype=np.float64)
-
-        # bodyexclude skips the torso the lidar sits in; otherwise every ray
-        # would hit its shell at ~2 cm.
-        dists = self._lidar_dists
-        geomids = self._lidar_geomids
-        dists.fill(-1.0)
-        geomids.fill(-1)
-        mujoco.mj_multiRay(
-            self.model, data,
-            origin, world_dirs.reshape(-1, 1),
-            self.lidar_geomgroup,
-            1,                              # include static geoms
-            self.lidar_exclude_body_id,
-            geomids, dists,
-            self.lidar_rays,
-            self.lidar_max_range,
-        )
-        self.timings.stop("lidar_cast", cast_start)
-        publish_start = self.timings.start()
-        hit_dists = dists.ravel()
-
-        if self.geom_is_robot.any():
-            gid = geomids.ravel()
-            self_hit = (gid >= 0) & self.geom_is_robot[np.where(gid >= 0, gid, 0)]
-            hit_dists = np.where(self_hit, -1.0, hit_dists)
-
-        valid = (hit_dists >= self.lidar_min_range) & (hit_dists <= self.lidar_max_range)
-        pts = (self.lidar_local_dirs[valid] * hit_dists[valid, np.newaxis]).astype(np.float32)
-        lines = self.lidar_lines[valid]
-        offs = self.lidar_offset_time_ns[valid]
-
-        self.pub_lidar.publish(
-            _serialize_livox_scan(stamp, self.lidar_frame, timebase, offs, pts, lines))
-
-        # The same scan on /livox/pointcloud: timestamp is offset_time (ns, as
-        # float64); intensity and tag stay 0, as the sim has no reflectivity.
-        arr = np.zeros(pts.shape[0], dtype=PC2_DTYPE)
-        arr["x"] = pts[:, 0]
-        arr["y"] = pts[:, 1]
-        arr["z"] = pts[:, 2]
-        arr["line"] = lines
-        arr["timestamp"] = offs.astype(np.float64)
-        pc2 = PointCloud2()
-        pc2.header.stamp = stamp
-        pc2.header.frame_id = self.lidar_frame
-        pc2.height = 1
-        pc2.width = int(pts.shape[0])
-        pc2.fields = PC2_FIELDS
-        pc2.is_bigendian = False
-        pc2.point_step = PC2_POINT_STEP
-        pc2.row_step = PC2_POINT_STEP * pc2.width
-        pc2.is_dense = True
-        pc2.data = _array("B", arr.tobytes())
-        self.pub_pc2.publish(pc2)
-        self.timings.stop("lidar_publish", publish_start)

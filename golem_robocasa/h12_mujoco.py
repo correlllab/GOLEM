@@ -31,7 +31,7 @@ import h1_2_robosuite  # registers H1_2 and the MAGPIE grippers
 import realsense_profile
 import battery_env  # registers the Battery env
 import blank_env  # registers the Blank env
-from h12_sensors import H12Sensors
+from h12_sensors import H12Sensors, lidar_backend_from_env
 from magpie_hand_bridge import MagpieHandBridge
 from measurement_bridge import MeasurementBridge
 from mujoco_env import ElasticBand
@@ -103,6 +103,9 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     --timing stage report. duration is in the signature both runners share and
     is unused here: the command line refuses --duration for the H1-2.
     """
+
+    # A bad GOLEM_LIDAR_BACKEND stops the sim before the kitchen is built.
+    lidar_backend = lidar_backend_from_env()
 
     create_kwargs = {}
     if layout is not None:
@@ -258,10 +261,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             camera_tf_rate_hz=float(_profile["tf_rate_hz"]),
             depth_stream=_depth_on,
             pointcloud=_cloud_on,
-            # 360 x 56 rays at 10 Hz is ~201k points/s, the real MID-360's
-            # ~200k; 0.1-40 m range.
-            lidar_az_rays=360, lidar_el_rays=56,
-            lidar_rate_hz=10.0, lidar_max_range=40.0, lidar_min_range=0.1,
+            # The MID-360's scans (mid360.py), cast as GOLEM_LIDAR_BACKEND says.
+            lidar_backend=lidar_backend,
             # The real MID-360's IMU rate. FAST-LIO propagates the pose with the
             # IMU between scans, and at 100 Hz the gait's accelerations alias
             # into drift.

@@ -1,5 +1,6 @@
 """Run the G1 RoboCasa MuJoCo sim: h12_mujoco.py hands --g1 and GOLEM_ROBOT=g1 to main()."""
 import argparse
+import contextlib
 import os
 import sys
 import threading
@@ -17,10 +18,11 @@ import battery_env  # registers the Battery env
 import blank_env  # registers the Blank env
 import sim_common
 from measurement_bridge import MeasurementBridge
-from mujoco_env import ElasticBand, draw_band
+from mujoco_env import ElasticBand
 from .g1_sensors import G1Sensors, SensorConfig
 from .sim_names import BODY_JOINTS, NameResolver
 from .unitree_interface import SimInterface
+from viewer_sync import ViewerSync, band_overlay, copy_display_state
 
 # The fall logger's test: the pelvis tilted more than 60 deg from upright (as
 # golem_lowerbody_rl's policies/homie/mujoco_deploy_g1.py tests it), or down on
@@ -181,9 +183,13 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     sys.setswitchinterval(GIL_SWITCH_S)
     init_ros()
 
-    # Only the main loop touches MjData: the sensor threads work on copies of the
-    # state tick() takes, and the ROS and DDS callbacks only latch values the loop
-    # reads. So the bridge takes no lock, and the loop calls tick() between steps.
+    # The physics loop is the only writer of MjData: the sensor threads work on
+    # copies of the state tick() takes, and the ROS and DDS callbacks only latch
+    # values the loop reads, so the bridge takes no lock and the loop calls
+    # tick() between steps. The one other reader is the viewer's sync thread,
+    # which copies the state under physics_lock (held around the step; a
+    # null context headless, where nothing else reads).
+    physics_lock = threading.Lock() if viewer else contextlib.nullcontext()
     ros_bridge = RosSensorBridge(
         model, data,
         lambda node: G1Sensors(node, model, data, prefix=pfx, config=sensors),
@@ -206,15 +212,24 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
           + ("/livox/lidar, /livox/imu, " if sensors.lidar else "")
           + ("/realsense/head/*, " if sensors.camera else "") + "/robocasa/*, /elastic_band/toggle")
 
-    # SPACE in the viewer toggles the band (ElasticBand.key_callback).
-    handle = mujoco.viewer.launch_passive(model, data, key_callback=band.key_callback) if viewer else None
-    if handle is not None:
+    # The viewer draws its own MjData, refreshed from data by the viewer thread;
+    # its mouse perturbation forces come back through view_sync.
+    viewer_data = mujoco.MjData(model) if viewer else None
+    handle = view_sync = None
+    if viewer:
+        copy_display_state(viewer_data, data)
+        mujoco.mj_forward(model, viewer_data)
+        # SPACE in the viewer toggles the band (ElasticBand.key_callback).
+        handle = mujoco.viewer.launch_passive(model, viewer_data, key_callback=band.key_callback)
         handle.opt.geomgroup[0] = 0   # hide collision geoms
         try:
             with handle.lock():
-                sim_common.frame_viewer_on_robot(handle, data, band_body)
+                sim_common.frame_viewer_on_robot(handle, viewer_data, band_body)
         except Exception as e:
             print(f"[g1_mujoco] viewer camera framing skipped: {e}")
+        view_sync = ViewerSync(model, data, handle, physics_lock, viewer_data,
+                               draw=band_overlay(band, band_body))
+        view_sync.start()
     # The fall logger logs once when the pelvis tips or drops, with how long the
     # robot stood after the band's release.
     _fall_logged = False
@@ -236,22 +251,25 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         while max_steps is None or steps < max_steps:
             if viewer and not handle.is_running():
                 break
-            apply_band(model, data, band, band_body, band_vel)
-            sim_interface.write_ctrl()
-            _before = float(data.time)
-            mujoco.mj_step(model, data)
-            # MuJoCo's auto-reset clears the warning counters and then counts
-            # the one warning, so they are cleared here to see every reset;
-            # the reset also puts the sim time back to 0.
-            if any(data.warning[w].number for w in UNSTABLE) or data.time < _before:
-                for w in UNSTABLE:
-                    data.warning[w].number = 0
-                _resets += 1
-                sim_interface.physics_reset()
-                print(f"[g1_mujoco] *** WARNING: the physics went unstable and MuJoCo reset the "
-                      f"whole scene, robot and kitchen, to its initial state and the sim time to 0 "
-                      f"(reset {_resets} at step {steps}); restart the sim ***", flush=True)
-            sim_interface.after_step()
+            with physics_lock:
+                if view_sync is not None:
+                    view_sync.apply_perturbation()
+                apply_band(model, data, band, band_body, band_vel)
+                sim_interface.write_ctrl()
+                _before = float(data.time)
+                mujoco.mj_step(model, data)
+                # MuJoCo's auto-reset clears the warning counters and then counts
+                # the one warning, so they are cleared here to see every reset;
+                # the reset also puts the sim time back to 0.
+                if any(data.warning[w].number for w in UNSTABLE) or data.time < _before:
+                    for w in UNSTABLE:
+                        data.warning[w].number = 0
+                    _resets += 1
+                    sim_interface.physics_reset()
+                    print(f"[g1_mujoco] *** WARNING: the physics went unstable and MuJoCo reset the "
+                          f"whole scene, robot and kitchen, to its initial state and the sim time to 0 "
+                          f"(reset {_resets} at step {steps}); restart the sim ***", flush=True)
+                sim_interface.after_step()
             if _release_t is None and not band.enabled:
                 _release_t = float(data.time)
                 print(f"[fall-logger] elastic band released at t={data.time:.2f}s", flush=True)
@@ -269,17 +287,12 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             ros_bridge.tick()
             steps += 1
             if steps % task_every == 0:
-                env.update_state()              # before _check_success
+                with physics_lock:
+                    env.update_state()          # before _check_success
                 done = measurement.tick()
             if done and not _success:
                 print("[g1_mujoco] task success (debounced).")
             _success = done
-            if viewer:
-                if band.enabled:
-                    draw_band(handle, band.point, data.xpos[band_body])
-                else:
-                    handle.user_scn.ngeom = 0
-                handle.sync()
             ahead = (data.time - sim_start) - (time.time() - wall_start)
             if ahead > 0:
                 _t = time.time()
@@ -297,6 +310,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                       + (f"; {_stats}" if _stats else ""), flush=True)
                 log_sim, log_wall, slept = float(data.time), time.time(), 0.0
     finally:
+        if view_sync is not None:
+            view_sync.stop()
         if handle is not None:
             handle.close()
         executor.shutdown()

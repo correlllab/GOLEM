@@ -19,7 +19,6 @@ if __name__ == "__main__" and sim_common.select_robot(sys.argv[1:]) == "g1":
 import argparse
 import os
 import threading
-import time
 
 import mujoco
 import numpy as np
@@ -35,11 +34,12 @@ import blank_env  # registers the Blank env
 from h12_sensors import H12Sensors
 from magpie_hand_bridge import MagpieHandBridge
 from measurement_bridge import MeasurementBridge
-from mujoco_env import ElasticBand, draw_band
+from mujoco_env import ElasticBand
 from mujoco_ros_bridge import RosSensorBridge
 from sim_names import NameResolver
 from sim_timing import RealtimePacer, LoopTimings
 from unitree_interface import SimInterface
+from viewer_sync import ViewerSync, band_overlay, copy_display_state
 
 NUM_MOTORS = 27
 # The spawn pose (rad) in sim_names.ROS_MOTOR_ORDER: bent-knee legs, then the
@@ -88,21 +88,6 @@ def _limp_upper_body_poses(model, motor_qpos, spawn):
             q[base + 5] = model.jnt_range[wrist_pitch, 0]
         poses.append((motor_qpos, q))
     return poses
-
-
-# Hz, wall. The viewer thread syncs its own MjData at this rate, so the ~11 ms
-# handle.sync() (it waits for the render thread) never blocks physics.
-VIEWER_HZ = 60.0
-
-
-def _copy_display_state(dst, src):
-    """Copy the state the viewer draws from src to dst; the caller holds sim_lock."""
-    dst.time = src.time
-    dst.qpos[:] = src.qpos
-    dst.qvel[:] = src.qvel
-    dst.act[:] = src.act
-    dst.mocap_pos[:] = src.mocap_pos
-    dst.mocap_quat[:] = src.mocap_quat
 
 
 def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False, duration=0.0):
@@ -323,11 +308,11 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
           "/{left,right}/gripper/*, /elastic_band/toggle")
 
     # The viewer draws its own MjData, refreshed from data by the viewer thread;
-    # its mouse perturbation forces come back through viewer_perturb.
+    # its mouse perturbation forces come back through view_sync.
     viewer_data = mujoco.MjData(model) if viewer else None
     if viewer_data is not None:
         with sim_lock:
-            _copy_display_state(viewer_data, data)
+            copy_display_state(viewer_data, data)
         mujoco.mj_forward(model, viewer_data)
     # SPACE in the viewer toggles the band (ElasticBand.key_callback).
     handle = (
@@ -361,34 +346,15 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # heat, scrub contact), and the success debounce counts control steps.
     task_every = max(1, round(env.control_timestep / model.opt.timestep))
     step_count = 0
-    viewer_perturb = np.zeros_like(data.xfrc_applied)
-    viewer_stop = threading.Event()
-
-    def _viewer_loop():
-        """Refresh the viewer's MjData and sync the viewer at VIEWER_HZ until it closes."""
-        period = 1.0 / VIEWER_HZ
-        while not viewer_stop.is_set() and handle.is_running():
-            frame_start = time.perf_counter()
-            viewer_start = timings.start()
-            with sim_lock:
-                _copy_display_state(viewer_data, data)
-            mujoco.mj_forward(model, viewer_data)
-            # Zeroed so that after sync() it holds only the mouse perturbation.
-            viewer_data.xfrc_applied[:] = 0.0
-            if band is not None and band.enabled:
-                draw_band(handle, band.point, viewer_data.xpos[band_body_id])
-            else:
-                handle.user_scn.ngeom = 0
-            handle.sync()
-            with sim_lock:
-                viewer_perturb[:] = viewer_data.xfrc_applied
-            timings.stop("viewer", viewer_start)
-            viewer_stop.wait(max(0.0, period - (time.perf_counter() - frame_start)))
-
-    viewer_thread = None
+    # The viewer thread draws the band while it is enabled; mouse forces come back
+    # through view_sync.apply_perturbation().
+    view_sync = None
     if handle is not None:
-        viewer_thread = threading.Thread(target=_viewer_loop, daemon=True, name="viewer_sync")
-        viewer_thread.start()
+        view_sync = ViewerSync(
+            model, data, handle, sim_lock, viewer_data,
+            draw=band_overlay(band, band_body_id) if band is not None else None,
+            timings=timings)
+        view_sync.start()
 
     timings.reset(float(data.time))
     pacer = RealtimePacer(model.opt.timestep)
@@ -398,8 +364,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                 break
             physics_start = timings.start()
             with sim_lock:
-                if viewer_data is not None:
-                    data.xfrc_applied[:] = viewer_perturb
+                if view_sync is not None:
+                    view_sync.apply_perturbation()
                 if band is not None:
                     # MuJoCo keeps xfrc_applied between steps, so a released
                     # band's force is zeroed every step.
@@ -458,9 +424,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             pacer.wait()
             timings.maybe_report(float(data.time))
     finally:
-        viewer_stop.set()
-        if viewer_thread is not None:
-            viewer_thread.join()
+        if view_sync is not None:
+            view_sync.stop()
         if handle is not None:
             handle.close()
         executor.shutdown()

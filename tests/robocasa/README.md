@@ -57,8 +57,10 @@ The launcher selects EGL for offscreen camera rendering in both display modes;
 the camera context is created before the passive viewer opens, because a new
 EGL context cannot be made current once the GLFW window exists. The viewer
 draws its own `MjData`, refreshed and synced at 60 Hz on a separate thread
-(`viewer` stage), so `handle.sync()` never blocks physics. Mouse perturbation
-forces from each sync are applied to the simulation on every step.
+(`viewer_sync.py`, shared by both sims; the H1-2's `viewer` stage), so
+`handle.sync()` never blocks physics. Mouse perturbation forces from each sync
+are applied to the simulation on every step. `test_viewer_sync.py` checks the
+thread against a fake handle.
 
 The pacer repays at most 100 ms of wall-clock lag without dropping simulation
 steps. It does not make an overloaded scene run in real time.

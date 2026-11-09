@@ -442,6 +442,10 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             view_sync.stop()
         if handle is not None:
             handle.close()
+        # A DeliGrasp settle waits on the sim clock, which no longer advances: end it so its
+        # goal aborts and the executor's worker thread can exit.
+        hand_right.stop()
+        hand_left.stop()
         executor.shutdown()
         ros_bridge.shutdown()
         for node in (measurement, hand_right, hand_left, ros_bridge):

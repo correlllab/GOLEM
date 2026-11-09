@@ -183,6 +183,16 @@ time gives every ROS node less wall time per sim second, so the closed-loop test
 1x; the runs above 1x below are informational, the "before" numbers for moving the ROS packages
 onto sim time (robot time).
 
+Every wall-clock timer left in the two sims is one whose meaning is per wall second: the viewer's
+60 Hz sync (`viewer_sync.py`), the repeated-warning rate limit (`unitree_common.WARN_PERIOD_S`), the
+`throttle_duration_sec` log throttles (`h12_sensors.py`'s lidar capture warning, `g1_sensors.py`'s
+head camera warning), the `--timing` report interval (`sim_timing.LoopTimings`), the lidar scan
+thread's liveness poll while the physics waits (`mid360._SLOT_POLL_S`), the head camera's start-up
+timeout (`g1_sensors.CAMERA_START_S`), the shutdown `join(timeout=5.0)` of the lidar and head
+camera threads (`mid360.py`, `g1_sensors.py`) and the DeliGrasp settle's wall limit
+(`magpie_hand_bridge.SETTLE_WALL_LIMIT_S`, 20 s, a way out when the physics loop has stopped).
+Everything the robot sees counts sim time.
+
 Measured 2026-11-09 on the i7-14700F with an RTX 5070 Ti, on the tree committed on top of
 `dbce9c4` (branch `sim_speed`), `cpus: sim 0-15, ros 16-27`, the lidar on the GPU caster (each sim
 logged `lidar rays cast on the GPU every 20 ms of sim time`). Both sims step 2 ms of physics.

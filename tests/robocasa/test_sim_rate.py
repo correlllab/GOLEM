@@ -1,15 +1,19 @@
-"""Check GOLEM_SIM_RATE, the sims' target real-time factor: its parse, the shared pacer and the gripper clocks.
+"""Check GOLEM_SIM_RATE, the sims' target real-time factor: its parse, the shared pacer, the gripper clocks and the H1-2's loop.
 
 The parse and the pacer need neither ROS nor MuJoCo:
 PYTHONPATH=golem_robocasa python3 -m unittest discover -s tests/robocasa -p test_sim_rate.py -v
-The gripper tests need rclpy (they stand in for magpie_msgs), so they run in the robocasa
-container: ROS_DOMAIN_ID=221 tests/robocasa/run_in_container.sh -p test_sim_rate.py
+The gripper tests (with stand-ins for magpie_msgs) and the H1-2 loop test need rclpy and the
+sim's dependencies, so they run in the robocasa container:
+ROS_DOMAIN_ID=221 tests/robocasa/run_in_container.sh -p test_sim_rate.py
 """
 import functools
 import importlib.util
+import json
 import math
 import os
+import subprocess
 import sys
+import textwrap
 import threading
 import types
 import unittest
@@ -174,6 +178,21 @@ class FakeData:
         self.time = 0.0
 
 
+class FakeClock2:
+    """Stand in for the wall clock of a settle: each look advances it by step seconds."""
+
+    def __init__(self, step):
+        """Start at 0 s; every call advances the clock by step (s)."""
+        self.now = 0.0
+        self.step = step
+
+    def __call__(self):
+        """Return the wall time (s), then advance it."""
+        now = self.now
+        self.now += self.step
+        return now
+
+
 @unittest.skipUnless(HAVE_RCLPY, "needs rclpy (the robocasa container)")
 class GripperSimClockTests(unittest.TestCase):
     """Check that the H1-2 sim's grippers keep their rates per sim second, whatever GOLEM_SIM_RATE is."""
@@ -184,8 +203,7 @@ class GripperSimClockTests(unittest.TestCase):
         bridge = cls.__new__(cls)
         bridge.data = FakeData()
         bridge.sim_lock = threading.Lock()
-        bridge._publish_period = 0.1
-        bridge._next_state_t = -math.inf
+        bridge._init_sim_clock(10.0)
         bridge.published = []
         bridge._publish_state = lambda: bridge.published.append(bridge.data.time)
         return bridge
@@ -198,6 +216,17 @@ class GripperSimClockTests(unittest.TestCase):
             bridge.tick(bridge.data.time)
         self.assertEqual(len(bridge.published), 11)
         self.assertAlmostEqual(bridge.published[1] - bridge.published[0], 0.1)
+
+    def test_state_schedule_restarts_when_sim_time_goes_back(self):
+        """After MuJoCo's reset puts the sim time back, the state publishes at once and every period after."""
+        bridge = self.bridge()
+        for step in range(5001):   # 5 s
+            bridge.tick(step * 0.001)
+        published = len(bridge.published)
+        for step in range(301):    # the reset: 0-0.3 s again
+            bridge.data.time = step * 0.001
+            bridge.tick(bridge.data.time)
+        self.assertEqual([round(t, 6) for t in bridge.published[published:]], [0.0, 0.1, 0.2, 0.3])
 
     def test_settle_waits_for_sim_time(self):
         """The DeliGrasp settle returns once its seconds of sim time have passed, not of wall time."""
@@ -212,6 +241,126 @@ class GripperSimClockTests(unittest.TestCase):
         bridge._sleep_sim(0.25, sleep=sleep)
         self.assertEqual(bridge.data.time, 0.25)
         self.assertEqual(len(polls), 4)
+
+    def test_settle_returns_when_sim_time_goes_back(self):
+        """A settle returns when the sim time falls below its start (MuJoCo's reset)."""
+        bridge = self.bridge()
+        bridge.data.time = 5.0
+
+        def sleep(delay):
+            """Reset the sim's clock to 0 at the first poll."""
+            bridge.data.time = 0.0
+
+        bridge._sleep_sim(0.2, sleep=sleep)
+        self.assertEqual(bridge.data.time, 0.0)
+
+    def test_stop_ends_a_settle_whose_clock_never_advances(self):
+        """stop() from another thread ends a settle on a frozen sim clock at once, aborting its goal."""
+        bridge = self.bridge()
+        done = threading.Event()
+        errors = []
+
+        def settle():
+            """Run a settle on the frozen clock, with the default wait, and record how it ended."""
+            try:
+                bridge._sleep_sim(0.2)
+            except RuntimeError as e:
+                errors.append(str(e))
+            done.set()
+
+        thread = threading.Thread(target=settle, daemon=True)
+        thread.start()
+        self.assertFalse(done.wait(0.1))   # still waiting on the frozen clock
+        bridge.stop()
+        self.assertTrue(done.wait(2.0))
+        self.assertEqual(errors, ["the sim stopped during a settle"])
+
+    def test_settle_gives_up_after_its_wall_limit(self):
+        """A settle on a frozen sim clock aborts after SETTLE_WALL_LIMIT_S of wall time."""
+        bridge = self.bridge()
+        limit = _magpie_hand_bridge().SETTLE_WALL_LIMIT_S
+        self.assertGreaterEqual(limit, 10.0)
+        polls = []
+        with self.assertRaisesRegex(RuntimeError, "did not advance"):
+            bridge._sleep_sim(0.2, sleep=polls.append, clock=FakeClock2(1.0))
+        self.assertEqual(len(polls), int(limit))
+
+
+# The H1-2 sim's loop, run in a subprocess (it starts ROS and Unitree DDS) in the Blank task,
+# cameras off, with the pacer recorded and the gripper bridges replaced by nodes that record
+# their ticks; the pacer stops the loop with a KeyboardInterrupt after STEPS waits.
+H12_LOOP = textwrap.dedent("""
+    import json, sys, types
+    import rclpy.node
+    import sim_timing
+
+    hands = []
+
+    class RecordedHand(rclpy.node.Node):
+        def __init__(self, model, data, side, sim_lock, name_prefix=""):
+            super().__init__(f"magpie_hand_{side}")
+            self.side, self.ticks, self.stopped = side, [], False
+            hands.append(self)
+
+        def tick(self, sim_t):
+            self.ticks.append(sim_t)
+
+        def stop(self):
+            self.stopped = True
+
+    stub = types.ModuleType("magpie_hand_bridge")
+    stub.MagpieHandBridge = RecordedHand
+    sys.modules["magpie_hand_bridge"] = stub
+    import h12_mujoco
+
+    pacers = []
+
+    class RecordedPacer(sim_timing.RealtimePacer):
+        def __init__(self, timestep, rate=1.0, *args, **kwargs):
+            super().__init__(timestep, rate, *args, **kwargs)
+            pacers.append({"timestep": timestep, "rate": rate, "waits": 0})
+
+        def wait(self):
+            pacers[-1]["waits"] += 1
+            if pacers[-1]["waits"] >= %d:
+                raise KeyboardInterrupt
+            return super().wait()
+
+    h12_mujoco.RealtimePacer = RecordedPacer
+    try:
+        h12_mujoco.sim_loop("Blank", viewer=False)
+    except KeyboardInterrupt:
+        pass
+    print("RESULT " + json.dumps({"pacers": pacers, "hands": [
+        {"side": h.side, "ticks": h.ticks, "stopped": h.stopped} for h in hands]}))
+""")
+H12_LOOP_STEPS = 25
+
+
+@unittest.skipUnless(HAVE_RCLPY, "needs rclpy and the sim's dependencies (the robocasa container)")
+class H12LoopWiringTests(unittest.TestCase):
+    """Check that the H1-2 sim's loop paces to GOLEM_SIM_RATE and ticks both grippers every step."""
+
+    def test_rate_reaches_the_pacer_and_both_hands_tick_every_step(self):
+        """GOLEM_SIM_RATE=2 builds one pacer at rate 2, is logged, and both hands tick once per step and are stopped."""
+        env = dict(os.environ, GOLEM_SIM_RATE="2", GOLEM_CAMERAS="0", GOLEM_LIDAR_BACKEND="cpu")
+        r = subprocess.run([sys.executable, "-c", H12_LOOP % H12_LOOP_STEPS], capture_output=True, text=True,
+                           env=env, timeout=300)
+        self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-3000:])
+        line = next((line for line in r.stdout.splitlines() if line.startswith("RESULT ")), None)
+        self.assertIsNotNone(line, (r.stdout + r.stderr)[-3000:])
+        result = json.loads(line[len("RESULT "):])
+        (pacer,) = result["pacers"]
+        self.assertEqual(pacer["rate"], 2.0)
+        self.assertEqual(pacer["waits"], H12_LOOP_STEPS)
+        self.assertIn("[h12_mujoco] sim rate: 2x real time (GOLEM_SIM_RATE)", r.stdout)
+        self.assertEqual(sorted(h["side"] for h in result["hands"]), ["left", "right"])
+        for hand in result["hands"]:
+            self.assertEqual(len(hand["ticks"]), H12_LOOP_STEPS, hand["side"])
+            steps = [b - a for a, b in zip(hand["ticks"], hand["ticks"][1:])]
+            for step in steps:
+                self.assertAlmostEqual(step, pacer["timestep"])
+            self.assertTrue(hand["stopped"], hand["side"])
 
 
 if __name__ == "__main__":

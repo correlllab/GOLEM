@@ -558,7 +558,8 @@ half; `max` (any case) never sleeps; anything else stops the sim at start. The
 sim logs `sim rate: ...` at start. At any rate the pacer repays at most 0.1 s of
 wall lag, so a pause is not caught up. Every rate the robot sees counts sim time (the grippers'
 state and DeliGrasp settles included); only the viewer, the logs and their rate
-limits run on wall time. Faster than real time gives every ROS node (FAST-LIO,
+limits, and the limits that end a wait once the physics has stopped run on wall
+time. Faster than real time gives every ROS node (FAST-LIO,
 Nav2, the leg policy, `golem_safety`) less wall time per sim second: a stack that
 falls behind sends stale commands, and `GOLEM_CMD_TIMEOUT` (sim time) turns the
 motors off as at 1x. The closed-loop tests are gates only at 1x: `tests/sim`

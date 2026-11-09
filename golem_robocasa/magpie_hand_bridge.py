@@ -64,6 +64,12 @@ FINGER_LEVER_M = 0.044
 MAX_FORCE_N = 32.0
 # s of wall time between looks at the sim clock while a DeliGrasp settle waits.
 SIM_POLL_S = 0.005
+# s of wall time one settle may wait for its sim time before the goal aborts. A
+# 0.2 s settle takes 20 s of wall time only below 0.01x real time, far slower
+# than any sim measured (the slowest, the H1-2 with the CPU lidar caster and the
+# stack beside it, ran at 0.74x), so reaching it means the physics loop has
+# stopped advancing the clock.
+SETTLE_WALL_LIMIT_S = 20.0
 # s of sim time: a state publish due within this of the sim time is published now.
 _EPS_T = 1e-9
 
@@ -135,8 +141,7 @@ class MagpieHandBridge(Node):
         # node has none, so the side is part of each name.
         ns = f"{side}/gripper"
         self.pub_state = self.create_publisher(GripperState, f"{ns}/state", 10)
-        self._publish_period = 1.0 / publish_rate_hz   # s of sim time
-        self._next_state_t = -math.inf   # sim time the next state publish is due
+        self._init_sim_clock(publish_rate_hz)
 
         self.create_service(Trigger, f"{ns}/open", self._on_open,
                             callback_group=self._cb_group)
@@ -223,12 +228,31 @@ class MagpieHandBridge(Node):
             self.model.actuator_forcerange[act] = [-tau, tau]
         return force_n
 
+    def _init_sim_clock(self, publish_rate_hz: float) -> None:
+        """Set up the state schedule (publish_rate_hz of sim time) and the stop event the settles watch."""
+        self._publish_period = 1.0 / publish_rate_hz   # s of sim time
+        self._next_state_t = -math.inf   # sim time the next state publish is due
+        self._last_tick_t = -math.inf   # sim time of the last tick()
+        self._stopping = threading.Event()
+
+    def stop(self) -> None:
+        """End any DeliGrasp settle in progress (its goal aborts); call it before the executor shuts down.
+
+        After the physics loop has left, the sim clock no longer advances, so a settle would
+        otherwise wait on it until SETTLE_WALL_LIMIT_S.
+        """
+        self._stopping.set()
+
     def tick(self, sim_t: float) -> None:
         """Publish /<side>/gripper/state when it is due at sim time sim_t (s): publish_rate_hz of sim time.
 
         Call it from the physics loop after each step, without holding sim_lock. After a jump
-        in sim time the next publish is a period after sim_t, not a burst of the ones missed.
+        in sim time the next publish is a period after sim_t, not a burst of the ones missed;
+        when the sim time goes back (MuJoCo's reset) the schedule starts again at sim_t.
         """
+        if sim_t < self._last_tick_t:
+            self._next_state_t = sim_t
+        self._last_tick_t = sim_t
         if sim_t < self._next_state_t - _EPS_T:
             return
         self._next_state_t += self._publish_period
@@ -236,14 +260,28 @@ class MagpieHandBridge(Node):
             self._next_state_t = sim_t + self._publish_period
         self._publish_state()
 
-    def _sleep_sim(self, seconds: float, sleep=time.sleep) -> None:
-        """Return once seconds of sim time have passed, looking at the sim clock every SIM_POLL_S of wall time."""
+    def _sleep_sim(self, seconds: float, sleep=None, clock=time.monotonic) -> None:
+        """Return once seconds of sim time have passed, looking at the sim clock every SIM_POLL_S of wall time.
+
+        Also returns when the sim time goes back (MuJoCo's reset). Raises RuntimeError, which
+        aborts the DeliGrasp goal, when stop() is called or after SETTLE_WALL_LIMIT_S of wall
+        time (clock) without the sim time getting there. sleep(s) waits between looks
+        (default: the stop event's wait, so stop() ends it at once).
+        """
+        sleep = sleep or self._stopping.wait
         with self.sim_lock:
-            end = float(self.data.time) + seconds
+            start = float(self.data.time)
+        wall_start = clock()
         while True:
             with self.sim_lock:
-                if float(self.data.time) >= end:
-                    return
+                now = float(self.data.time)
+            if now >= start + seconds or now < start:
+                return
+            if self._stopping.is_set():
+                raise RuntimeError("the sim stopped during a settle")
+            if clock() - wall_start > SETTLE_WALL_LIMIT_S:
+                raise RuntimeError(f"the sim clock did not advance {seconds:g} s within "
+                                   f"{SETTLE_WALL_LIMIT_S:g} s of wall time")
             sleep(SIM_POLL_S)
 
     def _publish_state(self) -> None:

@@ -129,16 +129,16 @@ its directory or `.yaml`.
 | `controller.v_lim`, `w_lim` | 1.0, 2.0 | end-effector linear (m/s) and angular (rad/s) speed limits |
 | `controller.dq_lim` | 1.0 | IK joint speed limit, rad/s |
 | `controller.d_min` | 0.02 | self-collision distance the IK keeps between sphere pairs, m; every config of both robots keeps it (the G1's closest pairs at `home`, the upper arms against the torso, are 0.025 m apart) |
-| `controller.timeout` | 10.0 | s per goal sent with a zero `duration` |
+| `controller.timeout` | 10.0 | s of robot time per goal sent with a zero `duration` |
 | `controller.threshold_ik`, `threshold_joint`, `threshold_linear`, `threshold_angular` | 0.001, 0.01, 0.002, 0.01 | convergence: IK velocity, rad, m, rad |
 | `controller.hold_targets` | 0 for each held joint | the held joints' angles, rad, a mapping by joint name |
-| `controller.state_timeout` | 5.0 | s to wait for a fresh `/lowstate` at start |
-| `controller.startup_timeout` | 30.0 | s for `golem_safety` to be seen relaying the commands |
-| `controller.startup_move_timeout` | 30.0 | s for the start-up moves, from the follow gate opening |
+| `controller.state_timeout` | 5.0 | s of robot time to wait for a fresh `/lowstate` at start (under `use_sim_time`, first as many s of steady time for the first `/clock`) |
+| `controller.startup_timeout` | 30.0 | s of robot time for `golem_safety` to be seen relaying the commands |
+| `controller.startup_move_timeout` | 30.0 | s of robot time for the start-up moves, from the follow gate opening |
 | `controller.follow_tolerance` | 0.05 | rad; 0 turns the follow gate off |
 | `controller.imu_frame` | the profile's | the frame of `/lowstate`'s IMU in the model |
 | `controller.max_state_lag_ms` | per robot (above) | the stale-state limit on domain 0, ms; <= 0 turns it off |
-| `frequency.ctrl_hz`, `pub_hz`, `check_hz` | 50, 500, 1000 | IK steps, command publishing, the follow gate's checks between steps, Hz |
+| `frequency.ctrl_hz`, `pub_hz`, `check_hz` | 50, 500, 1000 | IK steps, command publishing, the follow gate's checks between steps, per s of robot time |
 | `gains.kp`, `kd`, `ki` | | per upper-body joint |
 | `limits.clip.position_offset`, `velocity_ratio`, `torque_ratio` | 0.001, 0.10, 0.25 | the command clip, as in `golem_safety` |
 | `planner.*` | `enabled: true`, `frame_names` the profile's | the OMPL planner (`planner`, `timeout`, `moving_speed`, the frame bounds, ...); the rest take `PlannerConfig`'s defaults |
@@ -150,10 +150,18 @@ range or a value of the wrong kind.
 
 ## Behavior
 
+**Robot time.** Every rate, wait and timeout of `frame_task_server` (the start-up, the goals,
+the publisher, the follow gate) counts robot time: the sim's `/clock` with `use_sim_time:=true`,
+so the controller keeps its timing in sim seconds whatever the sim's speed, and the steady
+(monotonic) clock otherwise, on the real robots (`golem_upper_ik.core.robot_clock`). Under
+`use_sim_time` robot time stands still while `/clock` does, and never steps back. The IK's
+and OMPL's time limits are host compute budgets, in s of steady time.
+
 **Start-up**, before any goal:
 
-1. Wait up to `controller.state_timeout` for a `/lowstate` younger than 0.1 s with finite
-   joint positions. Otherwise stop with an error and publish nothing.
+1. Under `use_sim_time`, wait up to `controller.state_timeout` s of steady time for the first
+   `/clock`. Then wait up to `controller.state_timeout` for a `/lowstate` younger than 0.1 s
+   with finite joint positions. Otherwise stop with an error and publish nothing.
 2. The first command is every upper-body slot at the measured pose, with the gravity torque
    there.
 3. Hold that pose until `golem_safety` is seen relaying the commands (the follow gate opens)
@@ -233,7 +241,7 @@ then moves only in the start-up step 4.
   check runs only on domain 0.
 
 **Commands.** A publisher thread sends the newest command at `frequency.pub_hz` on absolute
-deadlines of the monotonic clock. Every q, dq and tau is clipped to `limits.clip`; a
+deadlines of robot time. Every q, dq and tau is clipped to `limits.clip`; a
 non-finite value is refused (`ValueError`) and the last good command keeps going out, since
 `golem_safety` latches its estop on a non-finite command. Only the upper slots are written:
 the lower slots and the slots past the body are mode 0 with every value 0. The header

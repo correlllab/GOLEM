@@ -28,8 +28,8 @@ import yaml
 from golem_upper_ik.profile import known_robots
 
 from ros_harness import (
-    TEST_DOMAIN, CommandRecorder, FakeRobot, FollowingRobot, RelayedRobot, body_pose,
-    profile_of, send_goal, shared_model, slots_of, wait_for,
+    TEST_DOMAIN, CommandRecorder, FakeRobot, FollowingRobot, RelayedRobot, SimClock,
+    body_pose, profile_of, send_goal, shared_model, slots_of, wait_for,
 )
 
 ROBOTS = known_robots()
@@ -58,14 +58,18 @@ def edited_config(tmp_path, robot, name, planner=None, **controller):
     return path
 
 
-def server_of(ros, model, config, init=False):
-    """Return a started frame_task_server in this process on model's robot and config."""
+def server_of(ros, model, config, init=False, sim_time=False):
+    """Return a started frame_task_server in this process on model's robot and config.
+
+    sim_time: the node runs with use_sim_time.
+    """
     from rclpy.parameter import Parameter
     from golem_upper_ik.ros2.frame_task_server import FrameTaskServer
     server = FrameTaskServer(
         context=ros.context, robot_model=model, init=init,
         parameter_overrides=[Parameter('robot', value=model.profile.robot),
-                             Parameter('config', value=str(config))])
+                             Parameter('config', value=str(config)),
+                             Parameter('use_sim_time', value=sim_time)])
     ros.add(server)
     ros.on_close(server.shutdown)
     server.start()
@@ -127,13 +131,15 @@ def frame_goal(frame, target, relative=False, slow_mode=False, plan=False, durat
     return goal
 
 
-def named_goal(name, slow_mode=False, plan=False):
-    """Return a NamedConfig goal."""
+def named_goal(name, slow_mode=False, plan=False, duration=0.0):
+    """Return a NamedConfig goal; duration in s, 0 for controller.timeout."""
     from custom_ros_messages.action import NamedConfig
     goal = NamedConfig.Goal()
     goal.config_name = name
     goal.slow_mode = slow_mode
     goal.plan = plan
+    goal.duration.sec = int(duration)
+    goal.duration.nanosec = int((duration - int(duration)) * 1e9)
     return goal
 
 
@@ -360,6 +366,33 @@ def test_named_config_slow_mode(ros, models, robot):
     dq_lim = config['controller']['dq_lim']
     assert np.max(speeds) <= SLOW_MODE_SCALE * dq_lim * 1.001 + 1e-4
     assert np.max(speeds) > 0.5 * SLOW_MODE_SCALE * dq_lim
+
+
+@pytest.mark.parametrize('rate', [0.5, 2.0])
+def test_goal_duration_counts_sim_time(ros, models, rate):
+    """Under use_sim_time a goal's duration is s of sim time at any sim speed."""
+    from custom_ros_messages.action import NamedConfig
+    profile = profile_of('h12')
+    name = START['h12']
+    # the left elbow settles 0.05 rad short of every command, so the hold never converges
+    # and the goal runs for its whole duration
+    sag = np.zeros(len(profile.body_joints))
+    sag[profile.body_joints.index('left_elbow_joint')] = 0.05
+    FollowingRobot(ros, profile, body_pose(profile, name), '/lowcmd', sag=sag)
+    sim = SimClock(ros, rate=rate)
+    sim.start()
+    model = shared_model(ros, models, 'h12')
+    server = server_of(ros, model, CONFIGS['h12'], sim_time=True)
+    assert server.controller.clock.sim_time
+    assert wait_for(lambda: server.controller.low_cmd_handler.following, 5.0)
+    start, sim_start = time.monotonic(), sim.now
+    status, result = send_goal(ros, NamedConfig, '/named_config',
+                               named_goal(name, duration=1.0))
+    wall, sim_seconds = time.monotonic() - start, sim.now - sim_start
+    assert status == GoalStatus.STATUS_SUCCEEDED and not result.success
+    # 1 s of sim time: 2 s of wall time at half speed, 0.5 s at twice
+    assert 1.0 <= sim_seconds < 1.3, sim_seconds
+    assert 1.0 / rate - 0.1 <= wall < 1.0 / rate + 0.4, wall
 
 
 def test_startup_waits_for_fresh_state(ros, models, tmp_path):

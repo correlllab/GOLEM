@@ -16,6 +16,9 @@ stream gives way to the upper input, on both robots with no leg input; when the 
 starts late, the start-up moves still finish, though the start-up outlasts
 controller.startup_move_timeout. Once engaged, the controller holds against a push instead
 of following it.
+
+Under use_sim_time the start-up's waits count the sim's /clock (SimClock): its timeouts are s
+of sim time, whether the sim runs faster or slower than the wall clock.
 """
 import re
 import threading
@@ -26,8 +29,8 @@ import pytest
 from golem_upper_ik.profile import known_robots
 
 from ros_harness import (
-    G1_LIMP_ARMS, CommandRecorder, FollowingRobot, RelayedRobot, SafetyNode, body_pose,
-    profile_of, shared_model, slots_of, wait_for,
+    G1_LIMP_ARMS, CommandRecorder, FollowingRobot, RelayedRobot, SafetyNode, SimClock,
+    body_pose, profile_of, shared_model, slots_of, wait_for,
 )
 
 ROBOTS = known_robots()
@@ -60,11 +63,14 @@ def config_of(robot, name, **controller):
     return config
 
 
-def build(ros, model, config, init=True):
-    """Return a FrameController built (with init, its start-up run) on a new node."""
+def build(ros, model, config, init=True, sim_time=False):
+    """Return a FrameController built (with init, its start-up run) on a new node.
+
+    sim_time: the node runs with use_sim_time.
+    """
     from golem_upper_ik.core.controller.frame_controller import FrameController
-    controller = FrameController(ros.node('controller'), model.profile, config,
-                                 robot_model=model, init=init)
+    controller = FrameController(ros.node('controller', sim_time=sim_time), model.profile,
+                                 config, robot_model=model, init=init)
     ros.on_close(controller.shutdown)
     return controller
 
@@ -243,28 +249,29 @@ def test_startup_home_ee_target_and_zero_gain_shutdown(ros, models, robot):
 def test_shutdown_stops_the_planner_and_detaches_the_state_whatever_raises(raising):
     """A handler or planner whose shutdown raises still leaves nothing behind.
 
-    The planner subprocess is still stopped and the state source detached, and the error
-    propagates.
+    The planner subprocess is still stopped, the state source detached and the robot clock
+    closed, and the error propagates.
     """
     from golem_upper_ik.core.controller.upper_controller import UpperController
     calls = []
 
-    def part(name):
-        """Return a part whose shutdown is noted, raising for the part under test."""
-        def shutdown():
+    def part(name, method='shutdown'):
+        """Return a part whose method is noted, raising for the part under test."""
+        def stop():
             """Note the call; raise for the part under test."""
             calls.append(name)
             if name == raising:
                 raise RuntimeError(f'the {name} failed')
-        return type(name, (), {'shutdown': staticmethod(shutdown)})()
+        return type(name, (), {method: staticmethod(stop)})()
 
     controller = UpperController.__new__(UpperController)
     controller.low_cmd_handler = part('handler')
     controller.planner = part('planner')
     controller.robot_model = part('state')
+    controller.clock = part('clock', 'close')
     with pytest.raises(RuntimeError, match=f'the {raising} failed'):
         controller.shutdown()
-    assert calls == ['handler', 'planner', 'state']
+    assert calls == ['handler', 'planner', 'state', 'clock']
 
 
 @pytest.mark.parametrize('robot', ROBOTS)
@@ -328,6 +335,82 @@ def test_startup_stops_with_an_error_when_the_safety_layer_never_engages(
     assert max(np.max(np.abs(s.q - s.measured)) for s in samples) <= tolerance + SLACK
     assert all(s.t < stopped + 0.05 for s in samples), 'still publishing'
     assert order == ['publisher', 'state']
+
+
+@pytest.mark.parametrize('rate', [0.5, 2.0])
+def test_startup_timeout_counts_sim_time(ros, models, rate, monkeypatch):
+    """Under use_sim_time, startup_timeout is s of sim time at any sim speed."""
+    profile = profile_of('h12')
+    sim = SimClock(ros, rate=rate)
+    sim.start()
+    config = config_of('h12', CONFIGS['h12'], startup_timeout=1.0, startup_move_timeout=10.0)
+    q0 = np.zeros(len(profile.body_joints))
+    q0[slots_of(profile, ('left_elbow_joint', 'right_elbow_joint'))] = 0.8
+    # nothing relays the commands, so the start-up waits out startup_timeout
+    robot_ = RelayedRobot(ros, profile, q0, '/lowcmd')
+    robot_.start()
+    startup = watch_startup(monkeypatch)
+    model = shared_model(ros, models, 'h12')
+    with pytest.raises(RuntimeError, match=re.escape(
+            'golem_safety did not relay the commands within controller.startup_timeout (1 s)')):
+        build(ros, model, config, sim_time=True)
+    # 1 s of sim time: 2 s of wall time at half speed, 0.5 s at twice
+    wall = startup['end'] - startup['start']
+    assert 1.0 / rate - 0.1 <= wall < 1.0 / rate + 0.4, wall
+
+
+@pytest.mark.parametrize('rate', [0.5, 2.0])
+def test_startup_moves_count_sim_time(ros, models, rate):
+    """Under use_sim_time the start-up moves step in s of sim time and finish at any speed.
+
+    Each step sleeps one control period of sim time after its work, so the arms move at
+    dq_lim per s of sim time; the moves finish within startup_move_timeout of sim time at
+    twice the wall clock's speed, where the IK's work takes more sim time per step.
+    """
+    profile = profile_of('h12')
+    sim = SimClock(ros, rate=rate)
+    sim.start()
+    config = config_of('h12', CONFIGS['h12'])
+    FollowingRobot(ros, profile, body_pose(profile, 'home', [0.0]), '/lowcmd')
+    model = shared_model(ros, models, 'h12')
+    sim_start = sim.now
+    controller = build(ros, model, config, sim_time=True)
+    sim_seconds = sim.now - sim_start
+    assert controller.clock.sim_time
+    # the H1-2's start-up postures take at least 4 s of sim time at 1 rad/s per s of it;
+    # stepped on the wall clock, they would take 2 s of sim time at half speed
+    assert 4.0 <= sim_seconds < config['controller']['startup_move_timeout'], sim_seconds
+
+
+def test_without_sim_time_the_start_up_waits_on_the_steady_clock(ros, models, monkeypatch):
+    """Without use_sim_time a /clock does not reach the start-up: it waits on the steady clock."""
+    profile = profile_of('h12')
+    # a sim at a quarter of the wall clock's speed would stretch a sim-time timeout fourfold
+    SimClock(ros, rate=0.25).start()
+    config = config_of('h12', CONFIGS['h12'], startup_timeout=1.0, startup_move_timeout=10.0)
+    q0 = np.zeros(len(profile.body_joints))
+    robot_ = RelayedRobot(ros, profile, q0, '/lowcmd')
+    robot_.start()
+    startup = watch_startup(monkeypatch)
+    model = shared_model(ros, models, 'h12')
+    with pytest.raises(RuntimeError, match=re.escape('controller.startup_timeout (1 s)')):
+        build(ros, model, config)
+    assert 1.0 <= startup['end'] - startup['start'] < 1.4
+
+
+def test_without_clock_the_sim_time_start_up_stops_after_state_timeout(ros, models):
+    """Under use_sim_time with no /clock, the start-up stops after state_timeout of steady time."""
+    profile = profile_of('h12')
+    config = config_of('h12', CONFIGS['h12'], state_timeout=0.5)
+    FollowingRobot(ros, profile, body_pose(profile, 'home', [0.0]), '/lowcmd')
+    recorder = CommandRecorder(ros, config['topics']['low_cmd'], profile)
+    model = shared_model(ros, models, 'h12')
+    start = time.monotonic()
+    with pytest.raises(RuntimeError, match=r'No /clock within 0.5 s'):
+        build(ros, model, config, sim_time=True)
+    assert 0.5 <= time.monotonic() - start < 1.5
+    time.sleep(0.2)
+    assert recorder.count == 0, 'nothing may be commanded before the first /clock'
 
 
 @pytest.mark.parametrize('robot', ROBOTS)

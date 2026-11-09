@@ -12,6 +12,9 @@ golem_safety's output topic, with golem_safety's safety_node run as a subprocess
 (SafetyNode); CommandRecorder also notes the robot's measured pose; send_goal is an action
 client.
 
+SimClock publishes /clock as a sim would, at a chosen rate of sim seconds per wall second, and
+Ros.node(name, sim_time=True) makes a node that runs on it (use_sim_time).
+
 Every node lives in the test's context, so they share one DDS participant and discover each
 other at once.
 """
@@ -27,7 +30,9 @@ import numpy as np
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
+from rclpy.parameter import Parameter
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rosgraph_msgs.msg import Clock
 from unitree_hg.msg import LowCmd, LowState
 import yaml
 
@@ -96,9 +101,14 @@ class Ros:
         except Exception as error:  # close() fails the test with it
             self.spin_error = error
 
-    def node(self, name):
-        """Return a new spinning node named name (made unique), destroyed at the end."""
-        node = rclpy.create_node(f'{name}_{next(_names)}', context=self.context)
+    def node(self, name, sim_time=False):
+        """Return a new spinning node named name (made unique), destroyed at the end.
+
+        sim_time: run the node with use_sim_time, on /clock (SimClock).
+        """
+        overrides = [Parameter('use_sim_time', value=True)] if sim_time else []
+        node = rclpy.create_node(f'{name}_{next(_names)}', context=self.context,
+                                 parameter_overrides=overrides)
         return self.add(node)
 
     def add(self, node):
@@ -131,6 +141,75 @@ class Ros:
             raise AssertionError(f'the executor stopped spinning: {self.spin_error!r}')
         if errors:
             raise errors[0]
+
+
+class SimClock:
+    """Publish /clock as a sim does: one STEP_S step of sim time per message, from start().
+
+    rate is sim seconds per wall second (2.0 runs the sim twice as fast as the wall clock);
+    pause() stops /clock, resume() starts it again, step_back() sets it back by seconds.
+    """
+
+    STEP_S = 0.002
+
+    def __init__(self, ros, rate=1.0, start_s=100.0):
+        """Create the publisher; /clock starts at start_s s of sim time on start()."""
+        self.node = ros.node('sim_clock')
+        self._publisher = self.node.create_publisher(Clock, '/clock', 10)
+        self._lock = threading.Lock()
+        self._rate = float(rate)
+        self._t_ns = int(start_s * 1e9)
+        self._running = threading.Event()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        ros.on_close(self.stop)
+
+    @property
+    def now(self):
+        """Return the last sim time published, s."""
+        with self._lock:
+            return self._t_ns * 1e-9
+
+    def start(self):
+        """Start publishing."""
+        self._running.set()
+        self._thread.start()
+
+    def _run(self):
+        """Publish a step every STEP_S / rate s of wall time on absolute deadlines."""
+        next_at = time.monotonic()
+        msg = Clock()
+        while not self._stop.is_set():
+            if self._running.is_set():
+                with self._lock:
+                    self._t_ns += int(self.STEP_S * 1e9)
+                    t_ns = self._t_ns
+                msg.clock.sec, msg.clock.nanosec = divmod(t_ns, 10**9)
+                self._publisher.publish(msg)
+            next_at += self.STEP_S / self._rate
+            now = time.monotonic()
+            if now - next_at > 0.05:
+                next_at = now
+            time.sleep(max(0.0, next_at - now))
+
+    def pause(self):
+        """Stop publishing /clock."""
+        self._running.clear()
+
+    def resume(self):
+        """Publish /clock again."""
+        self._running.set()
+
+    def step_back(self, seconds):
+        """Set sim time back by seconds."""
+        with self._lock:
+            self._t_ns -= int(seconds * 1e9)
+
+    def stop(self):
+        """Stop the thread."""
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=2.0)
 
 
 class FakeRobot:

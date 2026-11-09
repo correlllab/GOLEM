@@ -15,7 +15,8 @@ and publishes at 100 Hz frame_names, frame_targets and frame_poses (the current 
 frames, their targets and their measured poses), {left,right}_ee_pose (the end effectors'
 measured poses, which tell the robot's other nodes the controller is up) and
 {left,right}_ee_target (the current goal's targets for the end-effector frames). Every pose
-is in the pelvis frame.
+is in the pelvis frame. A goal's duration and control period are s of robot time (the
+controller's clock: the sim's /clock under use_sim_time, the steady clock otherwise).
 """
 import os
 
@@ -25,7 +26,6 @@ os.environ['OPENBLAS_NUM_THREADS'] = '1'
 os.environ['OMP_NUM_THREADS'] = '1'
 
 import threading  # noqa: E402
-import time  # noqa: E402
 
 from custom_ros_messages.action import FrameTask, NamedConfig  # noqa: E402
 from custom_ros_messages.msg import StringArray  # noqa: E402
@@ -231,7 +231,7 @@ class FrameTaskServer(Node):
                 self.controller.speed_scale = 1.0
 
     def _goal_timeout(self, goal):
-        """Return the goal's duration, s, or controller.timeout without one."""
+        """Return the goal's duration, s of robot time, or controller.timeout without one."""
         duration = goal.duration.sec + goal.duration.nanosec * 1e-9
         return duration if duration > 0.0 else self.timeout
 
@@ -257,17 +257,19 @@ class FrameTaskServer(Node):
         return result
 
     def _direct_frame_task_callback(self, goal_handle, timeout):
-        """Step the IK to the targets, then hold until reached, blocked or timeout (s).
+        """Step the IK to the targets, then hold until reached, blocked or timeout.
 
         The goal succeeds; its result's success says whether the IK converged (threshold_ik)
-        and the frames came within threshold_linear and threshold_angular.
+        and the frames came within threshold_linear and threshold_angular. timeout is in s of
+        robot time.
         """
-        start_time = time.monotonic()
+        clock = self.controller.clock
+        start_time = clock.now()
         ik_converged = False
         steady_state_converged = False
         blocked = None
-        while time.monotonic() - start_time < timeout:
-            step_start = time.monotonic()
+        while clock.now() - start_time < timeout:
+            step_start = clock.now()
             if not ik_converged:
                 vel = self.controller.control_step_reduced()
                 vel_error = np.max(np.abs(vel))
@@ -298,7 +300,7 @@ class FrameTaskServer(Node):
                 if steady_state_converged:
                     break
 
-            time.sleep(max(0.0, self.controller.dt - (time.monotonic() - step_start)))
+            clock.sleep(max(0.0, self.controller.dt - (clock.now() - step_start)))
 
         if not ik_converged:
             self.get_logger().warn('Timed out before IK convergence')
@@ -314,16 +316,17 @@ class FrameTaskServer(Node):
         """Plan to the IK solution, execute it, then hold until reached, blocked or timeout.
 
         A planning or execution failure aborts the goal; otherwise it succeeds, its result's
-        success saying whether the hold reached the targets. timeout is in s.
+        success saying whether the hold reached the targets. timeout is in s of robot time.
         """
         self.get_logger().info('Planning path to target frame poses')
+        clock = self.controller.clock
         try:
             path = self.controller.plan_to_ik_target(ik_timeout=self.timeout)
             self.get_logger().info(f'Executing planned path with {len(path)} waypoints')
-            execute_start = time.monotonic()
+            execute_start = clock.now()
             self.controller.execute_path(path)
             self.get_logger().info(
-                f'Path execution finished in {time.monotonic() - execute_start:.2f}s; '
+                f'Path execution finished in {clock.now() - execute_start:.2f}s; '
                 f'holding steady state (timeout {timeout:.1f}s)')
         except Exception as error:
             self.get_logger().warn(f'Planning or execution failed: {error}')
@@ -333,11 +336,11 @@ class FrameTaskServer(Node):
             return result
 
         self.controller.init_steady_state()
-        start_time = time.monotonic()
+        start_time = clock.now()
         steady_state_converged = False
         blocked = None
-        while time.monotonic() - start_time < timeout:
-            step_start = time.monotonic()
+        while clock.now() - start_time < timeout:
+            step_start = clock.now()
             if goal_handle.is_cancel_requested:
                 return self._canceled(goal_handle, FrameTask.Result())
 
@@ -357,7 +360,7 @@ class FrameTaskServer(Node):
             if steady_state_converged:
                 break
 
-            time.sleep(max(0.0, self.controller.dt - (time.monotonic() - step_start)))
+            clock.sleep(max(0.0, self.controller.dt - (clock.now() - step_start)))
 
         self._log_hold_outcome(steady_state_converged, blocked)
 
@@ -448,17 +451,18 @@ class FrameTaskServer(Node):
                 self.controller.speed_scale = 1.0
 
     def _direct_named_config_callback(self, goal_handle, q_reduced, timeout):
-        """Step the IK to q_reduced, then hold until reached, blocked or timeout (s).
+        """Step the IK to q_reduced, then hold until reached, blocked or timeout.
 
         The goal succeeds; its result's success says whether the IK converged (threshold_ik)
-        and every IK joint came within threshold_joint.
+        and every IK joint came within threshold_joint. timeout is in s of robot time.
         """
-        start_time = time.monotonic()
+        clock = self.controller.clock
+        start_time = clock.now()
         ik_converged = False
         steady_state_converged = False
         blocked = None
-        while time.monotonic() - start_time < timeout:
-            step_start = time.monotonic()
+        while clock.now() - start_time < timeout:
+            step_start = clock.now()
             if not ik_converged:
                 vel = self.controller.goto_reduced_configuration(q_reduced)
                 vel_error = np.max(np.abs(vel))
@@ -486,7 +490,7 @@ class FrameTaskServer(Node):
                     self.get_logger().info('Named config reached')
                     break
 
-            time.sleep(max(0.0, self.controller.dt - (time.monotonic() - step_start)))
+            clock.sleep(max(0.0, self.controller.dt - (clock.now() - step_start)))
 
         if not ik_converged:
             self.get_logger().warn('Timed out before IK convergence')
@@ -499,19 +503,20 @@ class FrameTaskServer(Node):
         return result
 
     def _plan_named_config_callback(self, goal_handle, q_reduced, timeout):
-        """Plan to q_reduced, execute it, then hold until reached, blocked or timeout (s).
+        """Plan to q_reduced, execute it, then hold until reached, blocked or timeout.
 
         A planning or execution failure aborts the goal; otherwise it succeeds, its result's
-        success saying whether the hold reached q_reduced.
+        success saying whether the hold reached q_reduced. timeout is in s of robot time.
         """
         self.get_logger().info('Planning path to named configuration')
+        clock = self.controller.clock
         try:
             path = self.controller.plan_to_configuration(q_reduced)
             self.get_logger().info(f'Executing planned path with {len(path)} waypoints')
-            execute_start = time.monotonic()
+            execute_start = clock.now()
             self.controller.execute_path(path)
             self.get_logger().info(
-                f'Path execution finished in {time.monotonic() - execute_start:.2f}s; '
+                f'Path execution finished in {clock.now() - execute_start:.2f}s; '
                 f'holding steady state (timeout {timeout:.1f}s)')
         except Exception as error:
             self.get_logger().warn(f'Planning or execution failed: {error}')
@@ -524,11 +529,11 @@ class FrameTaskServer(Node):
         self.controller.set_reduced_configuration_target(q_reduced)
 
         self.controller.init_steady_state()
-        start_time = time.monotonic()
+        start_time = clock.now()
         steady_state_converged = False
         blocked = None
-        while time.monotonic() - start_time < timeout:
-            step_start = time.monotonic()
+        while clock.now() - start_time < timeout:
+            step_start = clock.now()
             if goal_handle.is_cancel_requested:
                 return self._canceled(goal_handle, NamedConfig.Result())
 
@@ -543,7 +548,7 @@ class FrameTaskServer(Node):
             if steady_state_converged:
                 break
 
-            time.sleep(max(0.0, self.controller.dt - (time.monotonic() - step_start)))
+            clock.sleep(max(0.0, self.controller.dt - (clock.now() - step_start)))
 
         self._log_hold_outcome(steady_state_converged, blocked)
 

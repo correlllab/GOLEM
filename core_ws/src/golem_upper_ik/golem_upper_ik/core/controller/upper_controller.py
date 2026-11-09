@@ -4,7 +4,11 @@ UpperController reads /lowstate through a StateSubscriber, solves the Pink IK on
 model's reduced model, plans with the OMPL planner where the profile has a self-collision
 model, and commands golem_safety's input through a LowCmdHandler.
 
-Start-up, before any command: a fresh /lowstate with finite joint positions within
+Every rate, wait and timeout is in s of robot time (golem_upper_ik.core.robot_clock, the
+controller's clock): the sim's /clock under use_sim_time, the steady clock otherwise.
+
+Start-up, before any command: under use_sim_time a first /clock within controller.state_timeout
+of steady time, then a fresh /lowstate with finite joint positions within
 controller.state_timeout, else RuntimeError and nothing published. The first command is the
 measured pose with its gravity torque. With init, the controller then waits for golem_safety
 to relay its commands (the follow gate opening) within controller.startup_timeout, and moves
@@ -19,8 +23,6 @@ step first checks that /lowstate is no staler than controller.max_state_lag_ms
 (StaleStateError otherwise; the last command keeps going out). Commands carry the gravity
 torque plus the steady-state hold's integral bias, which fades over a move.
 """
-import time
-
 import numpy as np
 from pink.exceptions import NoSolutionFound
 
@@ -28,6 +30,7 @@ from golem_upper_ik.config import SAFETY_OUTPUT_TOPIC
 from golem_upper_ik.core.ik_solver import IKSolver
 from golem_upper_ik.core.low_cmd_handler import LowCmdHandler
 from golem_upper_ik.core.planner import PlannerClient, PlannerConfig, PlannerUnavailableError
+from golem_upper_ik.core.robot_clock import RobotClock
 from golem_upper_ik.core.robot_model import RobotModel
 from golem_upper_ik.core.ros_io import StaleStateError, StateSubscriber
 from golem_upper_ik.profile import RobotProfile
@@ -37,7 +40,7 @@ __all__ = ['UpperController', 'ros_domain_id']
 # The real robots' command bus; the staleness check runs only there, since the sims stamp
 # /lowstate's tick in sim steps, not in ms of the robot's clock
 REAL_ROBOT_DOMAIN_ID = 0
-# s: /lowstate older than this is too old to seed the first command from
+# s of robot time: /lowstate older than this is too old to seed the first command from
 STATE_MAX_AGE = 0.1
 # rad: the largest gap on any IK joint between the last command and the measured position at
 # which a new move starts from the command. A larger gap means the arm is blocked or was
@@ -68,7 +71,9 @@ class UpperController:
         """Wait for /lowstate, command the measured pose, then run the start-up (with init).
 
         node: the ROS node the controller's subscriptions, publisher and logger live on; an
-            executor must spin it, since the start-up waits on its /lowstate subscription.
+            executor must spin it, since the start-up waits on its /lowstate subscription
+            (and, under use_sim_time, on its /clock). Its use_sim_time picks the controller's
+            clock (RobotClock).
         profile, config: the robot's profile and controller config
             (golem_upper_ik.config.load_controller_config).
         robot_model: the profile's RobotModel at controller.imu_frame, default built here;
@@ -94,6 +99,8 @@ class UpperController:
         self.config = config
         self.robot_model = robot_model
         self._logger = node.get_logger()
+        # robot time: every rate, wait and timeout of the controller counts it
+        self.clock = RobotClock(node)
 
         self.dt = 1.0 / float(config['frequency']['ctrl_hz'])
         self.v_lim = controller['v_lim']
@@ -127,7 +134,8 @@ class UpperController:
         self.low_cmd_handler = None
         self.planner = None
         self.state_topic = config['topics']['low_state']
-        self.state_subscriber = StateSubscriber(node, profile, topic=self.state_topic)
+        self.state_subscriber = StateSubscriber(node, profile, topic=self.state_topic,
+                                                clock=self.clock)
         robot_model.state_subscriber = self.state_subscriber
         try:
             # SAFETY: nothing is commanded before a fresh /lowstate, so no command starts from
@@ -135,11 +143,13 @@ class UpperController:
             self._wait_for_state()
         except BaseException:
             robot_model.shutdown()
+            self.clock.close()
             raise
         try:
             robot_model.update_kinematics()
             # the first command is where the robot is, gravity compensated
-            self.low_cmd_handler = LowCmdHandler(node, profile, config, robot_model)
+            self.low_cmd_handler = LowCmdHandler(node, profile, config, robot_model,
+                                                 clock=self.clock)
             q_measured = np.asarray(robot_model.state['q'], dtype=np.float64)
             self.low_cmd_handler.start(
                 q_init=q_measured,
@@ -164,15 +174,21 @@ class UpperController:
         return PlannerConfig(**settings)
 
     def _wait_for_state(self):
-        """Block until a fresh /lowstate with finite joint positions; RuntimeError at timeout."""
+        """Block until a fresh /lowstate with finite joint positions; RuntimeError at timeout.
+
+        Under use_sim_time the first /clock comes first, within state_timeout of steady time,
+        since robot time starts with it.
+        """
+        clock = self.clock
+        clock.wait_for_clock(self.state_timeout)
         subscriber = self.state_subscriber
-        deadline = time.monotonic() + self.state_timeout
-        while time.monotonic() < deadline:
+        deadline = clock.now() + self.state_timeout
+        while clock.now() < deadline:
             age = subscriber.age_s()
             if age is not None and age < STATE_MAX_AGE and \
                     np.all(np.isfinite(subscriber.state['q'])):
                 return
-            time.sleep(0.01)
+            clock.sleep(0.01)
         raise RuntimeError(
             f'No fresh {self.state_topic} with finite joint positions within '
             f'{self.state_timeout:.1f} s on ROS domain {ros_domain_id(self.node)}; not '
@@ -187,10 +203,10 @@ class UpperController:
         postures, then the held joints to their targets) must end within
         startup_move_timeout of the gate opening. RuntimeError otherwise.
         """
-        self._wait_until_following(time.monotonic() + self.startup_timeout)
+        self._wait_until_following(self.clock.now() + self.startup_timeout)
         # the moves get their own budget from the gate opening on: a late engagement must not
         # cut them short once golem_safety has taken over
-        deadline = time.monotonic() + self.startup_move_timeout
+        deadline = self.clock.now() + self.startup_move_timeout
         for name in self.profile.startup_sequence:
             self._move_to_reduced_configuration(
                 self.profile.named_configs[name], deadline, desc=f'Moving {name}')
@@ -203,15 +219,16 @@ class UpperController:
             return
         topic = SAFETY_OUTPUT_TOPIC
         self._logger.info(f'Waiting for golem_safety to relay the commands on {topic}...')
+        clock = self.clock
         while not handler.following:
-            if time.monotonic() > deadline:
+            if clock.now() > deadline:
                 raise RuntimeError(self._not_relayed_error(topic))
-            start = time.monotonic()
+            start = clock.now()
             # the IK and the hold sit on the gated command; each step refreshes the gravity
             # torque
             self._apply_joint_position(self.ik_solver.q)
             self.update_robot_model()
-            time.sleep(max(0.0, self.dt - (time.monotonic() - start)))
+            clock.sleep(max(0.0, self.dt - (clock.now() - start)))
 
     def _not_relayed_error(self, topic):
         """Return the start-up error for commands golem_safety never relayed, with its causes."""
@@ -252,9 +269,9 @@ class UpperController:
                 raise self._no_ik_solution_error(desc, error) from error
             if np.max(np.abs(self.ik_solver.q_reduced - q_reduced)) < STARTUP_THRESHOLD:
                 return
-            if time.monotonic() > deadline:
+            if self.clock.now() > deadline:
                 raise self._startup_timeout_error(desc)
-            time.sleep(self.dt)
+            self.clock.sleep(self.dt)
 
     def _no_ik_solution_error(self, desc, error):
         """Return the error for a start-up IK step with no solution, and log the closest pairs.
@@ -292,7 +309,7 @@ class UpperController:
         targets = self.hold_targets
         self._logger.info(f'{desc}...')
         while np.any(handler.hold != targets):
-            if time.monotonic() > deadline:
+            if self.clock.now() > deadline:
                 raise self._startup_timeout_error(desc)
             remaining = targets - handler.hold
             # the last step lands on the targets themselves
@@ -300,7 +317,7 @@ class UpperController:
                                       handler.hold + np.clip(remaining, -step, step)))
             self._apply_joint_position(self.ik_solver.q)
             self.update_robot_model()
-            time.sleep(self.dt)
+            self.clock.sleep(self.dt)
 
     def ee_transformations(self):
         """Return the left and right end effectors' 4x4 placements in the pelvis frame.
@@ -479,8 +496,9 @@ class UpperController:
         # lower moving_speed and come back with more waypoints), so it always plays back at
         # the control period: each step sleeps the period less the work already done, or
         # the checks and FK would stretch a path past its planned duration
+        clock = self.clock
         for q_reduced in path:
-            start = time.monotonic()
+            start = clock.now()
             self.check_state_fresh()
             if validate:
                 if not self.robot_model.check_within_limits_reduced(q_reduced):
@@ -491,7 +509,7 @@ class UpperController:
             q[self.robot_model.reduced_mask] = q_reduced
             self._apply_joint_position(q)
             self.update_robot_model()
-            time.sleep(max(0.0, self.dt - (time.monotonic() - start)))
+            clock.sleep(max(0.0, self.dt - (clock.now() - start)))
 
     def update_robot_model(self):
         """Update the robot model's kinematics from the measured state."""
@@ -637,7 +655,9 @@ class UpperController:
         is detached, since a detached source would leave the follow gate nothing to hold the
         commands near. The planner and the state source are stopped even when an earlier step
         raises, so no planner subprocess outlives the controller; the error propagates.
-        Calling it again does nothing more.
+        Then the robot clock closes, after the publisher has stopped: a goal waiting on a
+        stopped /clock ends with an error instead of waiting for ever. Calling it again does
+        nothing more.
         """
         try:
             if self.low_cmd_handler is not None:
@@ -647,4 +667,7 @@ class UpperController:
                 if self.planner is not None:
                     self.planner.shutdown()
             finally:
-                self.robot_model.shutdown()
+                try:
+                    self.robot_model.shutdown()
+                finally:
+                    self.clock.close()

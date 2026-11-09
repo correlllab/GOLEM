@@ -1,7 +1,8 @@
 """Check the controller's ROS I/O (golem_upper_ik.core.ros_io) on domain 92.
 
 StateSubscriber against a fake /lowstate, with its tick-lag measurement and the RobotModel
-state-source protocol; CommandPublisher's rate, header and refusals.
+state-source protocol; CommandPublisher's rate, header and refusals. Under use_sim_time a
+sample's age and the command rate count the sim's /clock (SimClock).
 """
 import json
 import os
@@ -14,7 +15,7 @@ import numpy as np
 import pytest
 from rclpy.qos import HistoryPolicy, ReliabilityPolicy
 
-from ros_harness import FakeRobot, Recorder, TEST_DOMAIN, wait_for
+from ros_harness import FakeRobot, Recorder, SimClock, TEST_DOMAIN, wait_for
 
 RATE_TOOL = Path(__file__).resolve().parents[1] / 'tools' / 'command_publisher_rate.py'
 COMMAND_TOPIC = '/safety/lowcmd_upper_in'
@@ -81,6 +82,63 @@ def test_staleness_grows_with_the_newest_samples_age(ros):
     assert subscriber.age_s() >= 0.35
     assert subscriber.staleness_ms >= 350.0
     assert issubclass(StaleStateError, RuntimeError)
+
+
+def test_staleness_counts_sim_time(ros):
+    """Under use_sim_time a sample's age is s of sim time: it stands still with /clock."""
+    from golem_upper_ik.core.robot_clock import RobotClock
+    from golem_upper_ik.core.ros_io import StateSubscriber
+    profile = profile_of('h12')
+    sim = SimClock(ros, rate=2.0)
+    sim.start()
+    node = ros.node('controller', sim_time=True)
+    clock = RobotClock(node)
+    clock.wait_for_clock(2.0)
+    subscriber = StateSubscriber(node, profile, clock=clock)
+    ros.on_close(subscriber.shutdown)
+    robot = FakeRobot(ros, profile)
+    assert wait_for(lambda: robot.publish() or subscriber.latest() is not None, 2.0)
+    robot.publish(tick=9000)
+    assert wait_for(lambda: subscriber.latest()[0].tick == 9000, 2.0)
+    time.sleep(0.25)
+    # 0.25 s of wall time is 0.5 s of sim time at twice the speed
+    assert 0.45 < subscriber.age_s() < 0.65, subscriber.age_s()
+    sim.pause()
+    time.sleep(0.05)
+    paused = subscriber.age_s()
+    time.sleep(0.3)
+    assert subscriber.age_s() == paused, 'the age grew with /clock stopped'
+
+
+@pytest.mark.parametrize('rate', [0.5, 2.0])
+def test_command_rate_counts_sim_time(ros, rate):
+    """Under use_sim_time CommandPublisher sends pub_hz commands per s of sim time."""
+    from golem_upper_ik.core.robot_clock import RobotClock
+    from golem_upper_ik.core.ros_io import CommandPublisher
+    profile = profile_of('h12')
+    sim = SimClock(ros, rate=rate)
+    sim.start()
+    node = ros.node('controller', sim_time=True)
+    clock = RobotClock(node)
+    clock.wait_for_clock(2.0)
+    recorder = Recorder(ros, COMMAND_TOPIC)
+    publisher = CommandPublisher(node, COMMAND_TOPIC, 200.0, profile, clock=clock)
+    ros.on_close(publisher.stop)
+    count = len(profile.upper_slots)
+    publisher.set(*([np.zeros(count)] * 5))
+    assert wait_for(lambda: recorder.count > 0, 2.0)
+    start, sim_start = recorder.count, sim.now
+    time.sleep(1.0)
+    sent, sim_seconds = recorder.count - start, sim.now - sim_start
+    # 200 per s of sim time: 100 per s of wall time at half speed, 400 at twice
+    assert 0.85 * 200 * sim_seconds < sent < 1.1 * 200 * sim_seconds, (sent, sim_seconds)
+    sim.pause()
+    time.sleep(0.05)
+    paused = recorder.count
+    time.sleep(0.3)
+    assert recorder.count - paused <= 1, 'commands went out with /clock stopped'
+    sim.resume()
+    assert wait_for(lambda: recorder.count > paused + 10, 2.0)
 
 
 def test_tick_lag_tracker():

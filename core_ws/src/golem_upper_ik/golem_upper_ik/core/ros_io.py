@@ -7,6 +7,9 @@
 - SafetyOutputSubscriber: the newest command golem_safety relays (/lowcmd), which the follow
   gate reads and nothing here ever writes.
 
+Times are s of robot time (golem_upper_ik.core.robot_clock: the sim's /clock under
+use_sim_time, the steady clock otherwise), each class on the RobotClock it is given.
+
 The subscribers keep one sample (keep-last 1, best effort): a reader that falls behind gets
 the newest sample, never a queue of old ones. Each takes its samples in a mutually exclusive
 callback group, its own unless the caller passes one, so a long callback elsewhere in the
@@ -22,7 +25,6 @@ destroyed, which is harmless.
 """
 import math
 import threading
-import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -31,6 +33,7 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from unitree_hg.msg import LowCmd, LowState
 
 from golem_upper_ik.config import SAFETY_INPUT_PREFIX, SAFETY_OUTPUT_TOPIC
+from golem_upper_ik.core.robot_clock import RobotClock
 from golem_upper_ik.profile import RobotProfile
 
 __all__ = [
@@ -52,9 +55,9 @@ TICK_WRAP = 1 << 32
 LAG_DRIFT_MS_PER_S = 0.5
 # largest magnitude rosidl accepts in a float32 message field
 FLOAT32_MAX = 3.402823466e+38
-# s. The publisher keeps to absolute deadlines and makes up a short stall with a burst; a
-# stall longer than this restarts the deadlines from now, so it is not followed by a long
-# burst of the same command.
+# s of robot time. The publisher keeps to absolute deadlines and makes up a short stall with
+# a burst; a stall longer than this restarts the deadlines from now, so it is not followed by
+# a long burst of the same command.
 MAX_CATCH_UP_S = 0.02
 
 
@@ -78,7 +81,7 @@ class TickLagTracker:
         self._base_time = 0.0
 
     def update(self, tick: int, now: float) -> float:
-        """Return the lag (ms) of a sample with tick that arrived at now (s, a steady clock)."""
+        """Return the lag (ms) of a sample with tick that arrived at now (s of robot time)."""
         tick = int(tick)
         if self._last_tick is not None and tick < self._last_tick - TICK_WRAP // 2:
             self._wraps += 1
@@ -132,7 +135,7 @@ class _ClosableSubscription:
 class StateSubscriber:
     """Keep the newest /lowstate of one robot, as RobotModel's state source.
 
-    latest(): (message, receive time on time.monotonic()), or None before the first sample.
+    latest(): (message, receive time in s of robot time), or None before the first sample.
     state: the newest sample as arrays, each read the reader's own copy: 'q' (rad) and 'dq'
         (rad/s), float32, one value per body joint in slot order, and 'imu_state', whose
         quaternion (w, x, y, z) is a float32 array. Before the first sample every array is 0
@@ -143,8 +146,12 @@ class StateSubscriber:
     """
 
     def __init__(self, node, profile: RobotProfile, topic: str = '/lowstate',
-                 callback_group=None):
-        """Subscribe to topic on node for the profile's body joints."""
+                 callback_group=None, clock: RobotClock = None):
+        """Subscribe to topic on node for the profile's body joints.
+
+        clock: the robot time the samples are timed on, default node's (RobotClock).
+        """
+        self._clock = RobotClock(node) if clock is None else clock
         self._count = len(profile.body_joints)
         self._lock = threading.Lock()
         self._latest = None
@@ -158,14 +165,14 @@ class StateSubscriber:
 
     def _receive(self, msg: LowState) -> None:
         """Keep msg as the newest sample, with its receive time and tick lag."""
-        now = time.monotonic()
+        now = self._clock.now()
         with self._lock:
             self._lag_ms = self._lag.update(msg.tick, now)
             self._latest = (msg, now)
             self._sequence += 1
 
     def latest(self):
-        """Return (the newest LowState, its receive time on time.monotonic()), or None."""
+        """Return (the newest LowState, its receive time in s of robot time), or None."""
         with self._lock:
             return self._latest
 
@@ -212,10 +219,10 @@ class StateSubscriber:
             return self._lag_ms
 
     def age_s(self) -> float | None:
-        """Return the seconds since the newest sample arrived, or None before the first."""
+        """Return the s of robot time since the newest sample arrived, or None before it."""
         with self._lock:
             latest = self._latest
-        return None if latest is None else time.monotonic() - latest[1]
+        return None if latest is None else self._clock.now() - latest[1]
 
     @property
     def staleness_ms(self) -> float:
@@ -224,7 +231,7 @@ class StateSubscriber:
             latest, lag_ms = self._latest, self._lag_ms
         if latest is None:
             return float('inf')
-        return max(lag_ms, (time.monotonic() - latest[1]) * 1000.0)
+        return max(lag_ms, (self._clock.now() - latest[1]) * 1000.0)
 
     def shutdown(self) -> None:
         """Take no more samples; latest() and state keep the last one."""
@@ -241,13 +248,15 @@ class CommandPublisher:
     slots and the slots past the body are mode 0 with every value 0, and its CRC is 0
     (golem_safety computes the CRC of what it writes).
 
-    The thread keeps to absolute deadlines on time.monotonic(). If it fails, set() raises.
-    stop() makes sure the newest command has been published once, then stops.
+    The thread keeps to absolute deadlines of robot time, pub_hz per s of it. If it fails,
+    set() raises. stop() makes sure the newest command has been published once, then stops.
     """
 
-    def __init__(self, node, topic: str, pub_hz: float, profile: RobotProfile):
+    def __init__(self, node, topic: str, pub_hz: float, profile: RobotProfile,
+                 clock: RobotClock = None):
         """Create the publisher on topic and start the thread; nothing goes out before set().
 
+        clock: the robot time the rate counts, default node's (RobotClock).
         SAFETY: ValueError for a topic outside golem_safety's inputs (SAFETY_INPUT_PREFIX),
         and for a pub_hz that is not a positive rate.
         """
@@ -258,6 +267,7 @@ class CommandPublisher:
         if not math.isfinite(pub_hz) or pub_hz <= 0.0:
             raise ValueError(f'pub_hz must be a positive rate, not {pub_hz}')
         self._node = node
+        self._clock = RobotClock(node) if clock is None else clock
         self._topic = topic
         self._period = 1.0 / pub_hz
         self._slots = tuple(profile.upper_slots)
@@ -337,15 +347,16 @@ class CommandPublisher:
     def _run(self) -> None:
         """Publish at pub_hz on absolute deadlines until stop(); an error ends the thread."""
         period = self._period
-        next_at = time.monotonic()
+        clock = self._clock
+        next_at = clock.now()
         try:
             while not self._stop.is_set():
                 self._publish_newest()
                 next_at += period
-                now = time.monotonic()
+                now = clock.now()
                 if now - next_at > MAX_CATCH_UP_S:
                     next_at = now
-                time.sleep(max(0.0, next_at - now))
+                clock.sleep(max(0.0, next_at - now), self._stop)
         except Exception as error:  # reported by set() and logged; publishing has stopped
             with self._lock:
                 self._error = error
@@ -373,8 +384,9 @@ class SafetyOutputSubscriber:
     Only read: the controller never writes golem_safety's output.
     """
 
-    def __init__(self, node, callback_group=None):
-        """Subscribe to SAFETY_OUTPUT_TOPIC on node."""
+    def __init__(self, node, callback_group=None, clock: RobotClock = None):
+        """Subscribe to SAFETY_OUTPUT_TOPIC on node; clock times the samples (RobotClock)."""
+        self._clock = RobotClock(node) if clock is None else clock
         self._lock = threading.Lock()
         self._latest = None
         self._subscription = _ClosableSubscription(
@@ -382,12 +394,12 @@ class SafetyOutputSubscriber:
 
     def _receive(self, msg: LowCmd) -> None:
         """Keep msg as the newest sample, with its receive time."""
-        now = time.monotonic()
+        now = self._clock.now()
         with self._lock:
             self._latest = (msg, now)
 
     def latest(self):
-        """Return (the newest LowCmd, its receive time on time.monotonic()), or None."""
+        """Return (the newest LowCmd, its receive time in s of robot time), or None."""
         with self._lock:
             return self._latest
 

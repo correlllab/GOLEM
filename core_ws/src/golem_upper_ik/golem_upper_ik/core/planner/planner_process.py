@@ -36,9 +36,9 @@ PLANNER_UNAVAILABLE = (
     'golem_upper_ik/config/{module}/robot.yaml, names no sphere URDF and SRDF); send the '
     'goal with plan=false'
 )
-STARTUP_TIMEOUT = 30.0  # s for the subprocess to build its model and report ready
-POLL_PERIOD = 0.1  # s between checks on the subprocess while waiting for it
-SHUTDOWN_GRACE = 2.0  # s a graceful shutdown waits for the subprocess before terminating it
+STARTUP_TIMEOUT = 30.0  # steady s for the subprocess to build its model and report ready
+POLL_PERIOD = 0.1  # steady s between checks on the subprocess while waiting for it
+SHUTDOWN_GRACE = 2.0  # steady s a graceful shutdown waits before terminating the subprocess
 
 
 class PlannerUnavailableError(RuntimeError):
@@ -95,7 +95,8 @@ class PlannerClient:
             set from frame_names, and a config naming other frames is refused (ValueError).
         frame_names: the (left, right) planner frames, default the profile's planner frames
             (the controller passes the controller config's planner.frame_names).
-        startup_timeout: s for the subprocess to build its model and report ready.
+        startup_timeout: s of steady time for the subprocess to build its model and report
+            ready.
         """
         self.robot = profile.robot
         frames = tuple(profile.planner_frames if frame_names is None else frame_names)

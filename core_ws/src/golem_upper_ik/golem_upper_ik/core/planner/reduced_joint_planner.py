@@ -23,7 +23,8 @@ _FRAME_ROTATION_RADIUS = 0.20
 class PlannerConfig:
     """Hold the planner's settings (the controller config's planner section).
 
-    Units: timeout, simplify_time and dt in s; range, validity_resolution and
+    Units: timeout and simplify_time in s of steady time (host compute budgets), dt in s of
+    robot time (a waypoint per control period); range, validity_resolution and
     start_limit_tolerance in rad (joint space); moving_speed in m/s; the frame_* bounds and
     margins in m, in the pelvis frame, None for no bound.
     config/<robot>/example.controller.yaml in the source tree describes each key.

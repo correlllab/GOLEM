@@ -275,17 +275,21 @@ class IKSolver:
         )
 
     def _solve_ik_reduced_attempt(self, seed_name, q_seed, alpha, timeout):
-        """Iterate the IK from q_seed in steps of alpha until it converges or timeout (s)."""
+        """Iterate the IK from q_seed in steps of alpha until it converges or timeout.
+
+        timeout is s of steady time: a budget of host compute, not of robot time, so a sim's
+        stopped /clock cannot make it endless.
+        """
         self.configuration_reduced.update(q_seed)
         linear_err, angular_err = self._frame_task_errors(
             self.configuration_reduced,
         )
-        start_time = time.time()
+        start_time = time.monotonic()
 
         while (
             linear_err >= LINEAR_THRESHOLD or
             angular_err >= ANGULAR_THRESHOLD
-        ) and time.time() - start_time < timeout:
+        ) and time.monotonic() - start_time < timeout:
             self.posture_task.set_target_from_configuration(
                 self.configuration_reduced,
             )
@@ -319,8 +323,9 @@ class IKSolver:
     def solve_ik_reduced(self, alpha=0.1, timeout=1.0):
         """Return an IKResult: the IK iterated to convergence from each seed in turn.
 
-        alpha is the iteration step, s; timeout bounds each seed's iterations, s. A converged
-        seed ends the search; without one, the reduced configuration is left at the best.
+        alpha is the iteration step, s; timeout bounds each seed's iterations, s of steady
+        time. A converged seed ends the search; without one, the reduced configuration is left
+        at the best.
         """
         attempts = []
         for seed_name, q_seed in self._seed_list():

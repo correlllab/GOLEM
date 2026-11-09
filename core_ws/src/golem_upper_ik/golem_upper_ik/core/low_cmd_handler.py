@@ -11,7 +11,8 @@ topics.low_cmd through a CommandPublisher.
 - Follow gate (FollowGate, controller.follow_tolerance): until golem_safety is seen relaying
   the commands on /lowcmd, every upper-body command stays within the tolerance of the
   measured joints, and the hold restarts from the command the gate let through. Between
-  control steps a thread re-checks at frequency.check_hz: it opens the gate on a relayed
+  control steps a thread re-checks at frequency.check_hz (per s of robot time,
+  golem_upper_ik.core.robot_clock): it opens the gate on a relayed
   sample and keeps the stored command near a drifting pose. Once open, the gate and its
   thread are gone for good. The measured joints are the robot model's state source; without
   one (detached, or before its first sample) nothing is gated: a call that needs the measured
@@ -24,13 +25,13 @@ topics.low_cmd through a CommandPublisher.
 """
 import math
 import threading
-import time
 from typing import List, Optional
 
 import numpy as np
 
 from golem_upper_ik.config import SAFETY_OUTPUT_TOPIC
 from golem_upper_ik.core.follow_gate import FollowGate, relays_commands
+from golem_upper_ik.core.robot_clock import RobotClock
 from golem_upper_ik.core.ros_io import CommandPublisher, SafetyOutputSubscriber, StaleStateError
 from golem_upper_ik.profile import RobotProfile
 
@@ -40,10 +41,12 @@ __all__ = ['LowCmdHandler']
 class LowCmdHandler:
     """Clip, gate, hold and publish the controller's upper-body command (module doc)."""
 
-    def __init__(self, node, profile: RobotProfile, config: dict, robot_model):
+    def __init__(self, node, profile: RobotProfile, config: dict, robot_model,
+                 clock: RobotClock = None):
         """Create the publisher (and, with the gate on, the /lowcmd reader); publish nothing yet.
 
         node: the ROS node the publisher and the safety-output subscriber live on.
+        clock: the robot time the publisher and the gate thread pace on, default node's.
         profile: the robot's profile.
         config: its controller config (golem_upper_ik.config.load_controller_config).
         robot_model: the RobotModel whose state source gives the measured state, which the
@@ -55,6 +58,7 @@ class LowCmdHandler:
             if robot != profile.robot:
                 raise ValueError(f'the {what} is for robot {robot}, not {profile.robot}')
         self._node = node
+        self._clock = RobotClock(node) if clock is None else clock
         self._profile = profile
         self._robot_model = robot_model
         count = len(profile.body_joints)
@@ -91,10 +95,11 @@ class LowCmdHandler:
         self._safety_output_lock = threading.Lock()
 
         self._publisher = CommandPublisher(
-            node, config['topics']['low_cmd'], config['frequency']['pub_hz'], profile)
+            node, config['topics']['low_cmd'], config['frequency']['pub_hz'], profile,
+            clock=self._clock)
         self._safety_output = None
         if not self._follow_gate.following:
-            self._safety_output = SafetyOutputSubscriber(node)
+            self._safety_output = SafetyOutputSubscriber(node, clock=self._clock)
 
     @property
     def q_cmd(self) -> np.ndarray:
@@ -287,9 +292,10 @@ class LowCmdHandler:
         calls raise it from then on.
         """
         relayed = None
+        clock = self._clock
         try:
             while not self._gate_stop.is_set():
-                start = time.monotonic()
+                start = clock.now()
                 sample = self._safety_output.latest()
                 if sample is not None and sample[0] is not relayed:
                     relayed = sample[0]
@@ -305,7 +311,7 @@ class LowCmdHandler:
                                 gated.astype(np.float32), self._q):
                             self._q[:] = gated
                             self._push_locked()
-                time.sleep(max(0.0, self._check_dt - (time.monotonic() - start)))
+                clock.sleep(max(0.0, self._check_dt - (clock.now() - start)), self._gate_stop)
         except Exception as error:  # reported by _check_running and logged
             self._gate_error = error
             self._node.get_logger().error(f'the follow gate check failed: {error!r}')

@@ -23,8 +23,9 @@ controller:
   dq_lim: 1.0
   # m, >= 0: distance the IK's self-collision barrier keeps between sphere pairs
   d_min: 0.02
-  # s, > 0: how long a goal without a duration runs; also each IK seed's time limit when a
-  # planned frame goal solves for its target
+  # s of robot time (the sim's /clock under use_sim_time, else steady), > 0: how long a
+  # goal without a duration runs; also each IK seed's time limit, in s of steady time, when
+  # a planned frame goal solves for its target
   timeout: 10.0
   # rad/s, > 0: a direct goal's IK has converged once no IK joint moves faster than this in
   # a step; the goal then holds the command (integral control)
@@ -35,13 +36,14 @@ controller:
   threshold_linear: 0.002
   # rad, > 0: ...and its orientation within this
   threshold_angular: 0.01
-  # s, > 0: how long the start-up waits for a fresh /lowstate before it stops, commanding
-  # nothing
+  # s of robot time, > 0: how long the start-up waits for a fresh /lowstate before it stops,
+  # commanding nothing; under use_sim_time it first waits as many s of steady time for the
+  # first /clock
   state_timeout: 5.0
-  # s, > 0: how long the start-up waits for golem_safety to relay the commands (the follow
-  # gate opening) before it sends the shutdown command and stops
+  # s of robot time, > 0: how long the start-up waits for golem_safety to relay the
+  # commands (the follow gate opening) before it sends the shutdown command and stops
   startup_timeout: 30.0
-  # s, > 0: time for the start-up moves, counted from the follow gate opening
+  # s of robot time, > 0: time for the start-up moves, counted from the follow gate opening
   startup_move_timeout: 30.0
   # rad, >= 0: SAFETY: until golem_safety relays the commands, every upper-body command
   # stays within this of its measured joint (the follow gate); 0 turns the gate off
@@ -69,7 +71,7 @@ planner:
   enabled: true
   # an OMPL geometric planner ReducedJointPlanner._make_planner accepts (case-insensitive)
   planner: RRTConnect
-  # s, > 0: OMPL's planning time
+  # s of steady time, > 0: OMPL's planning time
   timeout: 1.0
   # rad, >= 0: the planner's extension length in joint space; 0 lets OMPL choose
   range: 0.0
@@ -77,13 +79,14 @@ planner:
   try_direct: true
   # true or false: simplify an OMPL path (for simplify_time)
   simplify: true
-  # s, >= 0: OMPL's simplification time
+  # s of steady time, >= 0: OMPL's simplification time
   simplify_time: 1.0
   # true or false: with simplify, also shortcut the path and smooth it with a B-spline
   shortcut: true
   # m/s, > 0: planner-frame speed that times a path (its longest frame path at this speed)
   moving_speed: 0.25
-  # s, > 0: time between path waypoints; default the control period (1 / frequency.ctrl_hz)
+  # s of robot time, > 0: time between path waypoints; default the control period
+  # (1 / frequency.ctrl_hz)
   dt: 0.02
   # whole numbers >= 2 and >= min: the fewest and most waypoints in a path
   min_interpolation_steps: 2
@@ -111,11 +114,11 @@ planner:
   start_limit_tolerance: 0.05
 
 frequency:
-  # Hz, > 0: control steps (IK steps, holds) per second
+  # Hz, > 0: control steps (IK steps, holds) per s of robot time
   ctrl_hz: 50.0
-  # Hz, > 0: command messages per second to topics.low_cmd
+  # Hz, > 0: command messages per s of robot time to topics.low_cmd
   pub_hz: 500.0
-  # Hz, > 0: the follow gate's checks per second between control steps
+  # Hz, > 0: the follow gate's checks per s of robot time between control steps
   check_hz: 1000.0
 
 # Required: kp, kd and ki on the upper slots, each a number (every upper slot) or a list of

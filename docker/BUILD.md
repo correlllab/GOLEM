@@ -156,7 +156,17 @@ Single-stage, `FROM golem_base`. Provides the MuJoCo + RoboCasa kitchen simulato
 - `MUJOCO_GL=egl` baked as default; `launch_robocasa.sh` exports `egl` in both
   display modes for the offscreen cameras, and the passive viewer opens its own
   GLFW window.
-- **`mujoco==3.3.1`** (pinned to match RoboCasa's hard pin), `numpy>=2.2.6`, Pillow.
+- **`mujoco==3.17.0`**, `numpy>=2.2.6`, Pillow. RoboCasa's setup.py pins
+  `mujoco==3.3.1`, so the first step installs 3.3.1 and the last step
+  (lock `robocasa-amd64-05.txt`) replaces it with 3.17.0, the newest MuJoCo
+  with a Python 3.10 wheel (4.0 drops 3.10). That step also applies
+  `docker/patches/robosuite-mujoco-3.17.0.patch` and
+  `robocasa-mujoco-3.17.0.patch` with `git apply`, at the pinned commits, so a
+  patch that no longer applies fails the build; each file's header says why it
+  is needed. `pip check` still reports robosuite's `mujoco<3.10` and
+  RoboCasa's `mujoco==3.3.1` requirements, which the image overrides.
+  `golem_robocasa/mj_compat.py` keeps the sim code running on this 3.17.0 and
+  the Mac image's 3.3.1.
 - **RoboCasa + robosuite** installed from git (neither fully on PyPI; robosuite
   from `master`). Also `robosuite_models`, `mimicgen`, `mink==0.0.5` — installed
   only to silence import-time "not installed" warnings.
@@ -350,8 +360,9 @@ are near-instant; wipe the host dir for a clean rebuild.
 - **CycloneDDS is pinned to 0.10.x from source** in every base/Isaac image (PyPI
   wheel needs the removed `q_radmin.h`).
 - **MuJoCo versions are pinned per image and must not drift:** `3.2.3` in `ros`
-  (matches the mjpc C++ server's ABI byte-for-byte), `3.3.1` in `robocasa` (matches
-  RoboCasa's pin).
+  (matches the mjpc C++ server's ABI byte-for-byte), `3.17.0` in `robocasa`
+  (with the patches in `docker/patches/`, §5), `3.3.1` in the Mac's robocasa
+  image (RoboCasa's own pin).
 - **Layer-order discipline:** heavy/stable layers first; volatile pins appended
   last. New deps go at the *end* of a Dockerfile so they don't bust cached layers.
 - **CUDA wheel split:** `ros`/base use torch **cu130**; Isaac inherits NVIDIA's

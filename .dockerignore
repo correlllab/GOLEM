@@ -7,6 +7,7 @@
 #   core_ws/src/magpie_msgs                  IsaacDockerfile
 #   docker/scripts/package_humble_runtime.py IsaacDockerfile
 #   docker/locks/**                          every Dockerfile
+#   docker/patches/**                        RobocasaDockerfile
 # Their .git entries stay out.
 *
 !core_ws
@@ -28,3 +29,5 @@ docker/scripts/*
 !docker/scripts/package_humble_runtime.py
 !docker/locks
 !docker/locks/**
+!docker/patches
+!docker/patches/**

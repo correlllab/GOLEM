@@ -17,6 +17,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 import mid360
+import mj_compat
 from g1 import g1_head_camera as cam
 from g1 import g1_lidar as lidar
 from g1 import g1_robosuite
@@ -331,8 +332,9 @@ def test_no_returns_from_the_robot():
 def test_cast_is_exact_where_multiray_culls():
     """The G1's CPU caster hits a wall where mj_multiRay's culling misses it, on its own model copy.
 
-    The ray passes just below the wall's corners but above its bottom edge; mj_multiRay's own
-    culling sends it through the wall to the floor behind.
+    The ray passes just below the wall's corners but above its bottom edge; where the installed
+    MuJoCo culls (mj_compat.MULTI_RAY_CULLS), mj_multiRay's own culling sends it through the wall
+    to the floor behind.
     """
     data = mujoco.MjData(ROOM_MODEL)
     _place(ROOM_MODEL, data)
@@ -343,10 +345,11 @@ def test_cast_is_exact_where_multiray_culls():
     v = (target - position) / np.linalg.norm(target - position)
     geomid, dist = np.zeros((1, 1), np.int32), np.zeros((1, 1))
     group = np.array(lidar.GEOM_GROUPS, np.uint8).reshape(6, 1)
-    mujoco.mj_multiRay(ROOM_MODEL, data, position.reshape(3, 1), v.reshape(3, 1).copy(), group, 1,
-                       sensor.torso_id, geomid, dist, 1, mid360.MAX_RANGE)
+    mj_compat.multi_ray(ROOM_MODEL, data, position.reshape(3, 1), v.reshape(3, 1).copy(), group, 1,
+                        sensor.torso_id, geomid, dist, 1, mid360.MAX_RANGE)
     floor = mujoco.mj_name2id(ROOM_MODEL, mujoco.mjtObj.mjOBJ_GEOM, "floor")
-    assert geomid[0, 0] == floor  # MuJoCo 3.3.1's culling; if this fails, MuJoCo fixed it
+    # Where the installed MuJoCo culls, mj_multiRay misses the wall and hits the floor behind.
+    assert (geomid[0, 0] == floor) == mj_compat.MULTI_RAY_CULLS
     bvhadr = ROOM_MODEL.body_bvhadr.copy()
     caster = sensor.make_caster("cpu")
     try:

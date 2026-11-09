@@ -159,14 +159,14 @@ def _set_camera(el, T_body_optical, intr):
         el.attrib.pop(key, None)
     el.set("pos", " ".join(f"{v:.9g}" for v in T_body_optical[:3, 3]))
     el.set("quat", " ".join(f"{v:.9g}" for v in _R_to_quat_wxyz(R)))
-    # MuJoCo pinhole: principalpixel is the principal point's offset from the
-    # image centre, +x moving it left and +y moving it down (continuous pixel
-    # coordinates, so cx + 0.5).
+    # MuJoCo pinhole; principalpixel's sign convention depends on the MuJoCo
+    # version (mj_compat.principalpixel).
+    import mj_compat
+    px, py = mj_compat.principalpixel(intr.width, intr.height, intr.cx, intr.cy)
     el.set("resolution", f"{intr.width} {intr.height}")
     el.set("sensorsize", "1 1")
     el.set("focalpixel", f"{intr.fx:.9g} {intr.fy:.9g}")
-    el.set("principalpixel", f"{intr.width / 2.0 - (intr.cx + 0.5):.9g} "
-                             f"{(intr.cy + 0.5) - intr.height / 2.0:.9g}")
+    el.set("principalpixel", f"{px:.9g} {py:.9g}")
 
 
 def place_profiled_cameras(root, cam_name, cam):

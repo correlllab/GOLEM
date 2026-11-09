@@ -12,6 +12,7 @@ import mujoco
 import numpy as np
 
 import mid360
+import mj_compat
 from sim_timing import LoopTimings
 
 FRAME_POINTS = 20_000                 # POINTS_PER_SECOND / FRAME_RATE_HZ
@@ -135,7 +136,9 @@ class CpuCasterTests(unittest.TestCase):
         """2,000 rays on the furnished room equal per-ray mj_ray within 1e-9 m and on hit or miss.
 
         A ray whose first hit is the robot (other than the excluded torso) has no return.
-        The scene must catch mj_multiRay's culling: with the BVH left in place some rays differ.
+        The scene must catch mj_multiRay's culling where the installed MuJoCo culls
+        (mj_compat.MULTI_RAY_CULLS): with the BVH left in place some rays differ there, and none
+        on a version that does not cull.
         The same caster casts again after the robot moves, so every thread sees fresh poses.
         """
         model, data = _scene(_KITCHEN)
@@ -173,15 +176,18 @@ class CpuCasterTests(unittest.TestCase):
                 if pose == 0:   # the culling this caster works around misses some of these rays
                     culled_id = np.empty(len(world), dtype=np.int32)
                     culled = np.empty(len(world))
-                    mujoco.mj_multiRay(model, data, origin.reshape(3, 1),
-                                       np.ascontiguousarray(world).reshape(-1, 1), geomgroup, 1,
-                                       torso, culled_id.reshape(-1, 1), culled.reshape(-1, 1),
-                                       len(world), mid360.MAX_RANGE)
+                    mj_compat.multi_ray(model, data, origin.reshape(3, 1),
+                                        np.ascontiguousarray(world).reshape(-1, 1), geomgroup, 1,
+                                        torso, culled_id.reshape(-1, 1), culled.reshape(-1, 1),
+                                        len(world), mid360.MAX_RANGE)
                     culled[(culled_id < 0) | robot[np.where(culled_id >= 0, culled_id, 0)]] = np.nan
                     differ = ((np.isnan(culled) != np.isnan(expected))
                               | (np.abs(culled - expected) > 1e-6))
-                    self.assertGreater(differ.sum(), 0,
-                                       "the scene does not trigger mj_multiRay's culling")
+                    if mj_compat.MULTI_RAY_CULLS:
+                        self.assertGreater(differ.sum(), 0,
+                                           "the scene does not trigger mj_multiRay's culling")
+                    else:
+                        self.assertEqual(differ.sum(), 0, "mj_multiRay culls on this version")
                 else:   # the move changes the ranges in every thread's chunk
                     for chunk in np.array_split(np.arange(len(world)), 4):
                         moved = np.abs(np.nan_to_num(expected[chunk] - previous[chunk])) > 1e-3

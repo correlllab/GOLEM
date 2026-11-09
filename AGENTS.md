@@ -845,7 +845,11 @@ describe the new behaviour.
   `LICENSE` and `README.md` beside the files (the package installs both with
   `deploy.onnx`), and keep `homie_policy.py` inside `policies/homie/`.
 - MuJoCo versions are pinned per image (`3.2.3` in `ros` to match the MJPC ABI,
-  `3.3.1` in `robocasa`) — never bump one without the other side of its pin.
+  `3.17.0` in the x86 `robocasa` image, with robosuite and RoboCasa patched for
+  it in `docker/patches/`, and `3.3.1` in the Mac's) — never bump one without
+  the other side of its pin. Both sims run on 3.3.1 and 3.17.0: a MuJoCo call
+  that behaves differently between them goes through
+  `golem_robocasa/mj_compat.py` (`tests/robocasa/test_mj_compat.py`).
 - `numpy<2`, `setuptools==59.6.0`, `wheel<0.44` are deliberately re-clamped in
   the Dockerfiles; add new pip deps at the END of a Dockerfile (layer-order
   discipline), each through a lock step (`-c /opt/golem-locks/<step>.txt`,

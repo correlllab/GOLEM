@@ -94,11 +94,13 @@ that set and declare intentional per-install transitions (NumPy, Hugging Face,
 MuJoCo, and build tools). The arm64 sets reuse portable versions without CUDA
 packages; native Mac build/runtime validation remains required.
 
-The G1 stack's Python dependency is the last step of the ROS image:
+The G1 stack's Python dependency is the last step of the ROS image, and
+MuJoCo 3.17.0 the last step of the RoboCasa image:
 
 | Step file | Image | Direct pins | Other pins added to the common set |
 | --- | --- | --- | --- |
 | `ros-amd64-13.txt` | golem_ros | `onnxruntime==1.23.2` | `coloredlogs==15.0.1`, `flatbuffers==25.12.19`, `humanfriendly==10.0` |
+| `robocasa-amd64-05.txt` | golem_sim_robocasa | `mujoco==3.17.0` | `websockets==16.1.1` |
 
 They were resolved with uv 0.12.15 inside the previously built image; no
 already-locked package (NumPy, protobuf, sympy, ...) moved. The ROS image
@@ -111,7 +113,8 @@ NumPy 1.26 coexisted with cmeel-boost 1.90 and OpenCV 5, which require NumPy 2.
 The ROS locks now use Pinocchio 2.7 / Boost 1.83 / eigenpy 3.5.1 / hpp-fcl 2.4.4
 and OpenCV 4.10.0.84. They must be validated together after rebuilding; this is
 an intentional dependency correction, not a claim those versions were all in
-the old image. MuJoCo remains 3.2.3 for ROS and 3.3.1 for RoboCasa.
+the old image. MuJoCo remains 3.2.3 for ROS; the RoboCasa image installs 3.3.1
+(RoboCasa's pin) and then 3.17.0 over it (`robocasa-amd64-05.txt`).
 The ROS image first uninstalls the base image's whole Pinocchio/cmeel closure;
 otherwise the `--ignore-installed` reinstall left cmeel-boost 1.83 and 1.90
 (and two urdfdom/assimp versions) installed side by side.

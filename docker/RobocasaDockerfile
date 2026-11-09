@@ -1,6 +1,6 @@
 # golem_sim_robocasa: the MuJoCo / RoboCasa simulator of both robots, on
-# golem_base (BaseDockerfile). It holds MuJoCo 3.3.1, robosuite and RoboCasa
-# with the kitchen assets, the colcon toolchain for the message-only msgs_ws,
+# golem_base (BaseDockerfile). It holds MuJoCo 3.17.0, robosuite and RoboCasa
+# (patched for 3.17.0) with the kitchen assets, the colcon toolchain for the message-only msgs_ws,
 # and livox_ros_driver2 for the lidar's CustomMsg. The simulator source
 # (golem_robocasa) is bind-mounted at runtime (docker-compose.yml);
 # launch_robocasa.sh starts it. docker/BUILD.md §5 describes the image.
@@ -24,8 +24,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # The MuJoCo Python bindings and Pillow (image encoding). mujoco is 3.3.1
-# because RoboCasa's setup.py pins exactly that version and would replace any
-# other while installing.
+# here because RoboCasa's setup.py pins exactly that version and would replace
+# any other while installing; the last step replaces it with 3.17.0.
 RUN uv pip install -c /opt/golem-locks/robocasa-amd64-01.txt --system --no-cache \
         "mujoco==3.3.1" \
         "numpy>=2.2.6" \
@@ -134,3 +134,21 @@ COPY core_ws/src/livox_ros_driver2 /opt/livox_ws/src/livox_ros_driver2
 RUN bash -c "source /opt/ros/humble/setup.bash && \
              cd /opt/livox_ws/src/livox_ros_driver2 && \
              ./build.sh humble"
+
+# -----------------------------------------------------------------------------
+# MuJoCo 3.17.0 over the 3.3.1 that RoboCasa installs above, and the patches
+# robosuite and RoboCasa need for it (docker/patches/, each file says why).
+# 3.17.0 is the newest MuJoCo with a wheel for this image's Python 3.10 (4.0
+# drops 3.10), and it steps both robots' kitchens about 40% faster than 3.3.1
+# (docs/superpowers/specs/2026-11-05-sim-speed-results.md). The ros image keeps
+# 3.2.3 for MJPC's ABI and the Mac's image keeps 3.3.1; golem_robocasa's
+# mj_compat.py runs the sims on either. The step comes after robosuite's and
+# RoboCasa's installs, which would put 3.3.1 back. `git apply` fails the build
+# when a patch no longer applies at the pinned commits, and the import checks
+# that robosuite and RoboCasa load on 3.17.0.
+# -----------------------------------------------------------------------------
+COPY docker/patches/robosuite-mujoco-3.17.0.patch docker/patches/robocasa-mujoco-3.17.0.patch /opt/golem-patches/
+RUN uv pip install -c /opt/golem-locks/robocasa-amd64-05.txt --system --no-cache "mujoco==3.17.0" && \
+    git -C /opt/robosuite apply /opt/golem-patches/robosuite-mujoco-3.17.0.patch && \
+    git -C /opt/robocasa apply /opt/golem-patches/robocasa-mujoco-3.17.0.patch && \
+    cd / && python -c "import mujoco, robosuite, robocasa; assert mujoco.__version__ == '3.17.0', mujoco.__version__"

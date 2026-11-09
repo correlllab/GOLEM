@@ -43,6 +43,17 @@ class SourcePinTests(unittest.TestCase):
                               'docker/mac/RosDockerfile.slim.arm64'}, set(refs))
         self.assertEqual(len(set(refs.values())), 1, refs)
 
+    def test_robocasa_patches_name_the_pinned_checkouts(self):
+        """Each patch the RoboCasa image applies is committed and names the commit its repository is checked out at."""
+        text = (ROOT / 'docker/RobocasaDockerfile').read_text().replace('\\\n', ' ')
+        checkouts = dict(re.findall(r'git -C (/opt/\w+) checkout --quiet ([0-9a-f]{40})', text))
+        applies = re.findall(r'git -C (/opt/\w+) apply /opt/golem-patches/([\w.-]+)', text)
+        self.assertEqual({repo for repo, _ in applies}, {'/opt/robosuite', '/opt/robocasa'})
+        for repo, name in applies:
+            patch = ROOT / 'docker/patches' / name
+            self.assertTrue(patch.is_file(), name)
+            self.assertIn(checkouts[repo], patch.read_text().split('diff --git')[0], name)
+
     def test_isaaclab_transitive_vcs_pins_are_retained(self):
         """The Isaac image pins rl_games and robomimic to commits, before Isaac Lab's install."""
         text = (ROOT / 'docker/IsaacDockerfile').read_text()

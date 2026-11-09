@@ -262,3 +262,61 @@ and 5.1 s at 1x) and 1.76 times the sim time. At 1x the start-up takes 24 s of i
 `startup_move_timeout` raised to 60 s for one run (not committed) the H1-2 stood, walked and
 reached the goal at 1.80x (12/14): `t_pose` did not converge within its 15 s goal duration, for the
 same reason, and the slow arm moves touched the kitchen.
+
+## Tier 3b
+
+Tier 3b moves the x86 `golem_sim_robocasa` image from MuJoCo 3.3.1 to 3.17.0, the newest release
+with a wheel for the image's Python 3.10 (4.0 drops 3.10). The image installs the PyPI wheel
+through lock step `robocasa-amd64-05.txt` and patches robosuite (`mj_fullM`'s argument order, the
+joint-type comparisons under pybind11 3) and RoboCasa (its MuJoCo version assert) from
+`docker/patches/`. `golem_robocasa/mj_compat.py` keeps the sims' own code on both 3.17.0 and the
+Mac image's 3.3.1. The `ros` image keeps 3.2.3.
+
+Measured 2026-11-09 on the i7-14700F with an RTX 5070 Ti, on the uncommitted tree on top of
+`67dc408` (branch `sim_speed`), `cpus: sim 0-15, ros 16-27`, the lidar on the GPU caster unless
+the row says otherwise.
+
+| | 3.3.1 H1-2 | 3.3.1 G1 | 3.17.0 H1-2 | 3.17.0 G1 |
+|---|---|---|---|---|
+| Full stack (`tests/sim`), GPU caster | 1.00x (capped) | 1.00x (capped) | 1.00x (capped) | 1.00x (capped) |
+| `mj_step`, the robot standing, fixture collisions excluded (median, two rounds) | 0.497, 0.492 ms | 0.457, 0.466 ms | 0.288, 0.286 ms: -42% | 0.275, 0.270 ms: -41% |
+| `mj_step`, without the exclusion | 0.937 ms | 0.810 ms | 0.565, 0.561 ms | 0.502, 0.497 ms |
+| MuJoCo contacts per step (median), excluded / not | 8 / 26 | 8 / 26 | 8 / 132 | 8 / 24 |
+| Sim alone, `GOLEM_SIM_RATE=max` | 2.56-2.64x | 2.43x | 2.89-3.12x | 3.27x |
+
+The step times are the Task 13 method on the same saved scenes (the surface probe's kitchen,
+layout 9 / style 9 / seed 42, each robot backed 2.0 m and settled on its band; only `mj_step`
+timed, 9000 steps per condition, in a disposable container pinned to CPUs 0-15); the 3.3.1
+column is Task 13's. The robot stands the same on both versions: pelvis 1.0096 m (H1-2) and
+0.7838 m (G1) at the end of every block. Without the exclusion the H1-2's contact count rises
+from 26 to 132 on 3.17.0, all of them inside the kitchen's fixtures, which the sims exclude.
+
+The unpaced ceiling, the sim alone (no ROS stack), headless, in the same kitchen with the spawn
+backed 2.0 m, pinned to CPUs 0-15, on DDS domain 229:
+
+| Sim alone, `max`, 3.17.0 | Real-time factor | What bounds it (the sim's own stats) |
+|---|---|---|
+| H1-2 (`--timing`, about 165 s of sim time) | 2.89-3.12x (eleven 5 s intervals) | per 2 ms step `physics` 0.36 ms (0.61 ms on 3.3.1) and `lowstate` 0.06 ms, `task_update` 0.87 ms at 20 Hz; the physics thread now also waits 5-6 ms for the camera worker at each camera capture (`camera_wait`), which renders colour about 3.2 ms, depth about 2.8 ms and the cloud 1.2 ms per frame, so the camera worker sets the pace; the lidar's thread casts 5.6 ms per 20 ms of sim time (0 of 8779 casts waited) |
+| G1 (`--duration 60`) | 3.27x (sim t 1-31 s) | the physics loop: idle 0%, 1 of 1501 casts waited for the lidar, no head camera frame dropped |
+
+The closed-loop suites on 3.17.0, all passing on the first run:
+
+| Suite | Result | Real-time factor |
+|---|---|---|
+| `tests/sim/test_sim_stack.sh --h12` | 14/14 | 1.00x |
+| `tests/sim/test_sim_stack.sh --g1` | 14/14 | 1.00x |
+| `tests/g1/test_sim_bringup.sh --walk` | 22/22 | 1.00x (min 1.00) |
+| `tests/g1/test_sim_nav.sh` | 13/13 | 1.00x (min 1.00) |
+| `tests/stack/run.sh robocasa arms` | passed | not reported |
+| `tests/stack/run.sh robocasa locomotion` | passed | not reported |
+
+The walking on 3.17.0 sits inside the spread of the 3.3.1 runs of 2026-11-08 and 11-09: H1-2
+stack tilt max 5.2 deg (3.3.1: 5.3-6.2), pelvis 0.201 m from the goal at the result (0.153-0.241);
+G1 stack tilt 9.5 deg (9.0-9.5), 0.224 m (0.208-0.265); G1 walk 1.123 m forward and +0.065 m
+lateral at the stop (1.118-1.122 m, +0.059 to +0.065 m); G1 nav localisation 2.01 cm (1.03-2.47 cm,
+limit 2.5 cm), 0.226 m from the goal (0.172-0.260). Both surface probes match their goldens on
+3.17.0 (H1-2 worst deviation 0.38%, G1 0.36%), the H1-2's also with `GOLEM_LIDAR_BACKEND=cpu`
+(the sim logged `lidar rays cast on the CPU every 10 ms of sim time`, 169 frames, no cast
+waited), so no golden changed.
+
+Every figure here is a single run unless the table says otherwise.

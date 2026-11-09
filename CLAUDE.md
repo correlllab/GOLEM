@@ -6,7 +6,8 @@ bringups that include them), the H1-2's raw-frame lidar, the RoboCasa sims'
 Unitree DDS interfaces, the leg node's start-up on both robots, the `ros`
 container's mounts and checks, the HOMIE licence rule, the package tables,
 the G1's packages and the closed-loop tests were checked against the code on
-2026-11-05; the single platform (§2, §3, §9) on 2026-11-09; the models
+2026-11-05; the single platform (§2, §3, §9) and the RoboCasa sims' GPU
+requirement (§8) on 2026-11-09; the models
 (`golem_ros2_models`, `CL_Assets/g1`), the robot selection, the rest of the G1
 text (its sim and invariants), the `mode_machine` identity check and the
 stale-install pitfall on 2026-10-28; the DDS-domain rules and the H1-2 claims
@@ -502,7 +503,11 @@ necessary, and their **default behaviors must be preserved**. Everyone's
 sim-vs-real workflow depends on them behaving like the real robot.
 `golem_robocasa/h12_mujoco.py` is the one RoboCasa entry point for both robots: it
 picks the robot (`--h12`/`--g1`, else `GOLEM_ROBOT`, else `h12`) before its
-H1-2 imports and hands the G1 over to `golem_robocasa/g1/g1_mujoco.py`. The H1-2
+H1-2 imports and hands the G1 over to `golem_robocasa/g1/g1_mujoco.py`. Both
+sims render their cameras and the MID-360's rays through EGL on an NVIDIA GPU:
+without one (MuJoCo not on EGL, no EGL device, a software renderer) the sim
+stops at start, before either robot's imports, with one message
+(`sim_common.require_gpu`). The H1-2
 stays the default, and nothing on the G1 path may change its behaviour. The robots share
 `sim_common.py`, `measurement_bridge.py`, the pacer in `sim_timing.py` (its
 `--timing` report is the H1-2's only) and the `mujoco_sensors` node in
@@ -536,11 +541,12 @@ until frames return. Its MID-360 is the model both robots share
 frame on lines 0-3, each point's `offset_time` the time of the pose it was cast
 from, and each ray without a return a point at (0, 0, 0), as the real driver
 publishes it; `/livox/lidar` and `/livox/pointcloud` carry the same frame. Its rays are
-cast as `GOLEM_LIDAR_BACKEND` says (as on the G1, below), and
-`GOLEM_LIDAR_SELF_FILTER=0` keeps the robot's own returns. On both robots the
-casts run beside the physics, and when they fall a frame behind (the CPU caster
-on a slow host) the physics waits for them (`mid360.ScanRing`): the
-real-time factor drops, and no frame trails the sim by more than one frame.
+read from depth images rendered on the GPU (`mid360.GpuCaster`, as on the G1),
+and `GOLEM_LIDAR_SELF_FILTER=0` keeps the robot's own returns. On both robots the
+casts run on a thread of their own beside the physics, and when they fall a frame
+behind (under load, or faster than real time) the physics waits for them
+(`mid360.ScanRing`): the real-time factor drops, and no frame trails the sim by
+more than one frame.
 Both sims pace to `GOLEM_SIM_RATE`, the target real-time factor in sim seconds
 per wall second (`sim_common.sim_rate_from_env`, `sim_timing.RealtimePacer`):
 unset or empty is 1, real time, the default; `2` runs twice real time, `0.5`
@@ -573,11 +579,8 @@ toggle (or SPACE in the viewer) releases it; the G1 bringup's leg node
 calls it. It reads none of HOMIE's files. (Trust `g1/g1_sensors.py` for
 the ROS side, `g1/unitree_interface.py` for the DDS side and `g1/g1_mujoco.py`
 for the band.) Its knobs are `GOLEM_LIDAR`, `GOLEM_LIDAR_POINTS` (points per
-frame, default the real sensor's 20,000), `GOLEM_LIDAR_HZ`,
-`GOLEM_LIDAR_BACKEND` (how the MID-360's rays are cast, `golem_robocasa/mid360.py`:
-`auto`, the default, renders them on the GPU where MuJoCo renders through EGL on
-one and else casts them exactly on the CPU, logging why; `gpu` stops the sim
-without a GPU; `cpu` always uses the CPU), `GOLEM_CAMERAS`, `GOLEM_CAMERA_HZ`,
+frame, default the real sensor's 20,000), `GOLEM_LIDAR_HZ`, `GOLEM_CAMERAS`,
+`GOLEM_CAMERA_HZ`,
 `GOLEM_CAMERA_SCALE` (G1 default 0.5), `GOLEM_CMD_TIMEOUT`,
 `GOLEM_SPAWN_BACKOFF`, `GOLEM_SIM_ODOM`, `GOLEM_SIM_EXPERIMENT`,
 `GOLEM_SIM_RATE` (as on the H1-2, above). Their

@@ -12,12 +12,10 @@ config assumes), so the real points arrive in the same raw frame.
 
 Scans. Both robots' MID-360 is the shared model in golem_robocasa/mid360.py: the
 real non-repetitive scan pattern, the blind zone, the maximum range and the
-range noise are there, with its casters and its frame timing. This module gives
+range noise are there, with its GPU caster and its frame timing. This module gives
 it the G1's mount: make_caster() casts from the mid360_link site and
 make_scanner() fires POINTS_PER_FRAME rays per frame, the real sensor's 20,000
-(200,000 points/s at 10 Hz). On the GPU caster a frame costs a few ms of render
-time; on the CPU caster about 0.1 s of CPU time in a RoboCasa kitchen (an exact
-ray costs 4 to 6 us), split over its threads (mid360.py's casters).
+(200,000 points/s at 10 Hz). A frame costs a few ms of render time on the GPU.
 
 Self returns. The sensor sits inside the head mesh, which belongs to torso_link,
 so rays pass through torso_link's geoms (MuJoCo's bodyexclude); in the FOV that
@@ -114,14 +112,13 @@ class Mid360:
         position, rotation = self.pose(data)
         return mid360.Snapshot(position, rotation, data, geom_alpha, mat_alpha)
 
-    def make_caster(self, backend="auto", **kwargs):
-        """Return the caster mid360.make_caster() builds for backend, through torso_link, visual geoms only.
+    def make_caster(self):
+        """Return a mid360.GpuCaster through torso_link, visual geoms only.
 
         Rays whose first hit is another robot geom give no return. The caster casts on its own
-        copy of the model; close() it when done. kwargs go to mid360.make_caster (log).
+        copy of the model; close() it when done. Raises RuntimeError when EGL fails to render.
         """
-        return mid360.make_caster(self.model, self.torso_id, GEOM_GROUPS, backend,
-                                  robot_geoms=self.robot_geom, **kwargs)
+        return mid360.GpuCaster(self.model, self.torso_id, GEOM_GROUPS, robot_geoms=self.robot_geom)
 
     def imu(self, data, point=IMU_IN_LIDAR):
         """Return (angular velocity rad/s, specific force g) at point, in livox_frame axes.

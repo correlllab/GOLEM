@@ -4,7 +4,8 @@ Both MJCFs (the hand-written source and robosuite's robot.xml generated from it)
 livox_link and livox_imu_site as the URDF orients livox_link and livox_imu_link; the MID-360's
 scan pattern, cast from that upside-down frame, must reach the floor below the robot and the
 space above the horizon; and h12_sensors' scan thread must fire the pattern from livox_link.
-Needs MuJoCo, NumPy and h12_sensors' imports (ROS, the Livox messages): run it with
+Needs MuJoCo, NumPy and h12_sensors' imports (ROS, the Livox messages), and a GPU for the scan
+thread's test, which is skipped, naming why, without one: run it with
 tests/robocasa/run_in_container.sh.
 """
 import math
@@ -20,6 +21,7 @@ from rclpy.serialization import deserialize_message
 
 import h12_sensors
 import mid360
+import sim_common
 from sim_timing import LoopTimings
 
 ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'CL_Assets')
@@ -117,6 +119,10 @@ class LidarMountTests(unittest.TestCase):
         and holds them in order, point k on line k % 4, each return along its ray and each ray
         without one at (0, 0, 0); most rays return.
         """
+        try:
+            sim_common.egl_renderer()
+        except RuntimeError as e:
+            self.skipTest(f'no GPU: {e}')
         spec = mujoco.MjSpec.from_file(MJCFS['mujoco'])
         for pos, size in (((3.05, 0, 1.5), (.05, 3.1, 1.5)), ((-3.05, 0, 1.5), (.05, 3.1, 1.5)),
                           ((0, 3.05, 1.5), (3.1, .05, 1.5)), ((0, -3.05, 1.5), (3.1, .05, 1.5))):
@@ -128,7 +134,7 @@ class LidarMountTests(unittest.TestCase):
         torso = body('torso_link')
         robot = model.body_rootid[model.geom_bodyid] == model.body_rootid[torso]
         published = []
-        scans = h12_sensors._LidarScans(model, body('livox_link'), torso, robot, 'cpu', 'livox_frame',
+        scans = h12_sensors._LidarScans(model, body('livox_link'), torso, robot, 'livox_frame',
                                         published.append, lambda msg: None, LoopTimings())
         frames = []
         update = scans.scanner.update

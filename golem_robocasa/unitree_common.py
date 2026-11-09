@@ -114,9 +114,9 @@ def fast_crc():
     dropped, with a warning, if they differ.
     """
     crc = CRC()
-    lib = getattr(crc, 'crc_lib', None)
-    if getattr(crc, '_sim_fast', False) or lib is None:   # done, or not Linux
+    if getattr(crc, '_sim_fast', False):
         return crc
+    lib = crc.crc_lib
     samples = [LowState_default(), LowCmd_default()]
     rng = np.random.default_rng(0)
     for msg in samples:
@@ -215,8 +215,8 @@ class LowStateWriter:
     DataWriter.write makes after serializing (padded to 4 bytes as it pads). Like the SDK's
     ChannelPublisher.Write without a timeout, it writes whether or not a reader is matched.
 
-    If the publisher has no cyclonedds DataWriter, the SDK's CRC routine is missing (not Linux),
-    or the bytes of a probe state differ from the SDK's, it logs one warning and takes the SDK's
+    If the publisher has no cyclonedds DataWriter, the SDK's LowState_ packer is missing, or the
+    bytes of a probe state differ from the SDK's, it logs one warning and takes the SDK's
     path instead: it fills one LowState_, signs it with fast_crc() and hands it to
     publisher.Write. Not thread-safe: the physics thread owns it.
     """
@@ -259,13 +259,13 @@ class LowStateWriter:
         """Make the CDR and packed-struct buffers, their numpy views and the field indices.
 
         Raises _LayoutError if a field is not a 4-byte little-endian word in either encoding
-        or the SDK's CRC routine or packer is missing.
+        or the SDK's LowState_ packer is missing.
         """
         sdk = _sdk_crc()
-        lib = getattr(sdk, 'crc_lib', None)
+        lib = sdk.crc_lib
         pack = getattr(sdk, '_CRC__PackHGLowState', None)   # the SDK CRC's packed struct, as words
-        if lib is None or pack is None:
-            raise _LayoutError("unitree_sdk2py's CRC library or LowState_ packer is missing")
+        if pack is None:
+            raise _LayoutError("unitree_sdk2py's LowState_ packer is missing")
 
         def cdr(msg):
             """Return msg as DataWriter.write hands it to ddspy_write."""

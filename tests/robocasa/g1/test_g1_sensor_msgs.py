@@ -77,7 +77,7 @@ def test_custom_msg_of_a_scan():
     data = mujoco.MjData(scene.ROOM_MODEL)
     scene._place(scene.ROOM_MODEL, data)
     sensor = lidar.Mid360(scene.ROOM_MODEL, prefix="")
-    scanner = lidar.make_scanner(sensor.make_caster("cpu"))
+    scanner = lidar.make_scanner(scene._exact(sensor))
     try:
         scanner.update(sensor.snapshot(data), 7.0)
         frame = scanner.update(sensor.snapshot(data), 7.1)

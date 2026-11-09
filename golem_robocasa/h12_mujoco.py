@@ -2,19 +2,24 @@
 
 Usage: h12_mujoco.py [--h12 | --g1] [--headless] [--task NAME] [--layout N]
 [--style N] [--seed N] [--timing | --duration S]. The robot is chosen
-(sim_common.select_robot) before the H1-2's imports, and --g1 hands the whole
+(sim_common.select_robot) and the GPU checked (sim_common.require_gpu: either
+sim stops here without one) before the H1-2's imports, and --g1 hands the whole
 command line to g1.g1_mujoco.main. The H1-2's loop is sim_loop below.
 """
 import sys
 
 import sim_common
 
-# The G1 is dispatched before the H1-2 imports below, which need magpie_msgs and
-# the H1-2's CL_Assets files: the G1 reads only CL_Assets/g1, and its test
-# containers do not provide magpie_msgs.
-if __name__ == "__main__" and sim_common.select_robot(sys.argv[1:]) == "g1":
-    from g1 import g1_mujoco
-    sys.exit(g1_mujoco.main(sys.argv[1:]))
+# Both robots' sims render their cameras and the lidar's rays through EGL on the
+# GPU, so either stops here without one. The G1 is dispatched before the H1-2
+# imports below, which need magpie_msgs and the H1-2's CL_Assets files: the G1
+# reads only CL_Assets/g1, and its test containers do not provide magpie_msgs.
+if __name__ == "__main__":
+    _robot = sim_common.select_robot(sys.argv[1:])
+    sim_common.require_gpu()
+    if _robot == "g1":
+        from g1 import g1_mujoco
+        sys.exit(g1_mujoco.main(sys.argv[1:]))
 
 import argparse
 import os
@@ -28,7 +33,6 @@ from mujoco_ros_bridge import init_ros, shutdown_ros
 import mujoco.viewer
 
 import h1_2_robosuite  # registers H1_2 and the MAGPIE grippers
-import mid360
 import realsense_profile
 import battery_env  # registers the Battery env
 import blank_env  # registers the Blank env
@@ -107,8 +111,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     the H1-2.
     """
 
-    # A bad GOLEM_LIDAR_BACKEND or GOLEM_SIM_RATE stops the sim before the kitchen is built.
-    lidar_backend = mid360.backend_from_env()
+    # A bad GOLEM_SIM_RATE stops the sim before the kitchen is built.
     sim_rate = sim_common.sim_rate_from_env()
 
     create_kwargs = {}
@@ -268,8 +271,6 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             camera_tf_rate_hz=float(_profile["tf_rate_hz"]),
             depth_stream=_depth_on,
             pointcloud=_cloud_on,
-            # The MID-360's scans (mid360.py), cast as GOLEM_LIDAR_BACKEND says.
-            lidar_backend=lidar_backend,
             # The real MID-360's IMU rate. FAST-LIO propagates the pose with the
             # IMU between scans, and at 100 Hz the gait's accelerations alias
             # into drift.

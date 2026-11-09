@@ -13,6 +13,13 @@ participants. They cover pixel/payload equivalence, sensor scheduling, lock
 boundaries, and pacing, plus how `--task` names resolve and where the viewer
 frames the robot. The image must include the existing Livox messages.
 
+The sims render through EGL on the NVIDIA GPU and stop at start without one;
+`test_gpu_required.py` checks that refusal for both robots. Tests that render the
+lidar's rays (`mid360.GpuCaster`) are skipped, naming why, without a GPU. The
+scanner's, the scan ring's and the G1 mount's tests cast through `exact_rays.py`
+(MuJoCo's exact `mj_ray`, the reference the GPU caster is checked against)
+and fakes, so they need none.
+
 The RealSense profile tests (camera placement, projection against
 camera_info, TF tree, point cloud) need only MuJoCo, NumPy and PyYAML; the
 projection check renders, so give it an offscreen GL context:

@@ -1,4 +1,4 @@
-"""Model the Livox MID-360's scans in MuJoCo for both robots: the real scan pattern, cast exactly.
+"""Model the Livox MID-360's scans in MuJoCo for both robots: the real scan pattern, rendered on the GPU.
 
 Geometry only (numpy + mujoco, no ROS): each robot's sensor code takes the sensor's pose
 from its model, runs a Mid360Scanner on a ScanRing (its scan thread, fed with pose snapshots
@@ -41,11 +41,10 @@ the limbs still occlude what is behind them. Only geoms in the caster's geomgrou
 MuJoCo's ray functions also skip geoms with alpha 0 (RoboCasa's placement regions and
 hidden collision boxes).
 
-Casters. CpuCaster casts every ray exactly on the CPU; GpuCaster reads the ranges from depth
-images the GPU renders around the sensor (EGL), at a fraction of the cost, and follows the same
-rules (see its docstring for how close its ranges come). make_caster() picks one by the
-backend GOLEM_LIDAR_BACKEND names: the GPU wherever MuJoCo renders on a GPU through EGL, else
-the CPU.
+Caster. GpuCaster reads the ranges from depth images the GPU renders around the sensor
+(EGL), under MuJoCo's ray rules (see its docstring for how close its ranges come to MuJoCo's
+exact mj_ray). The sims check at start that they render on a GPU (sim_common.require_gpu).
+Mid360Scanner and ScanRing take any caster with GpuCaster's cast(), close() and batch_s.
 """
 import atexit
 import copy
@@ -53,7 +52,6 @@ import math
 import os
 import queue
 import threading
-from concurrent.futures import ThreadPoolExecutor, wait
 from typing import NamedTuple
 
 import mujoco
@@ -68,15 +66,8 @@ RANGE_NOISE = 0.02                   # m, 1 sigma
 
 PATTERN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "third_party", "mujoco_lidar", "mid360.npy")
-# Worker threads of a CpuCaster: a quarter of the cores, at most 4, so the casts leave the
-# physics and the cameras their cores.
-DEFAULT_THREADS = max(1, min(4, (os.cpu_count() or 1) // 4))
-# Rays below which another thread is not used: handing a chunk to a thread costs tens of us,
-# the work of about 10 rays in a kitchen.
-_MIN_RAYS_PER_THREAD = 250
 _EPS_T = 1e-9                        # s, tolerance on accumulated sim time
 
-BACKENDS = ("auto", "gpu", "cpu")    # make_caster's backends, GOLEM_LIDAR_BACKEND's values
 _SLOT_POLL_S = 1.0                   # wall s between checks that the scan thread lives, while waiting
 # Serialises OpenGL rendering across the process's threads: with two threads rendering in
 # their own contexts at once, NVIDIA's driver slows each render several-fold, and the GPU
@@ -84,9 +75,6 @@ _SLOT_POLL_S = 1.0                   # wall s between checks that the scan threa
 # renders; every other renderer in the process (the sims' cameras) should hold it around its
 # update_scene() and render() calls.
 GL_LOCK = threading.Lock()
-# GL_RENDERER substrings of software rasterisers, on which rendering is slower than the CPU
-# caster's exact rays.
-_SOFTWARE_RENDERERS = ("llvmpipe", "softpipe", "swrast", "software", "swiftshader")
 # The GPU caster's cube map: each face's (forward, up) in the world. The faces are aligned
 # with the world axes, so walls and floors aligned with them read back exactly (their depth
 # is constant across a pixel). A face's image x runs along forward x up, its y along up.
@@ -95,7 +83,7 @@ _FACE_AXES = np.array([[[1, 0, 0], [0, 0, 1]], [[-1, 0, 0], [0, 0, 1]],
                        [[0, 0, 1], [1, 0, 0]], [[0, 0, -1], [1, 0, 0]]], dtype=np.float64)
 _FACE_RIGHT = np.cross(_FACE_AXES[:, 0], _FACE_AXES[:, 1])
 # m along a face's axis, the renders' near plane: well inside the blind zone, so geometry
-# there still blocks the rays as it does on the CPU caster (the scanner then drops the return).
+# there still blocks the rays, as in MuJoCo's mj_ray (the scanner then drops the return).
 _GPU_NEAR = 0.01
 
 
@@ -137,114 +125,6 @@ def directions(pattern, start, count):
                     axis=-1)
 
 
-class CpuCaster:
-    """Cast rays exactly with mj_multiRay, split over threads.
-
-    Threads. cast() clears model.body_bvhadr for its duration, and mj_step's collision
-    reads it: give the caster a model no other thread steps or casts on while it runs (as
-    make_caster() does, with a copy of the model), and call cast() from one thread at a
-    time. The extra threads cast on scratch MjData of their own, since mj_multiRay
-    allocates on the MjData it is given.
-    """
-
-    batch_s = 0.01             # s of sim time between the scanner's update() calls
-
-    def __init__(self, model, exclude_body, geomgroup, threads=DEFAULT_THREADS,
-                 robot_geoms=None):
-        """Cast on model, through the geoms of body id exclude_body (-1: none).
-
-        geomgroup is the 6 flags of the geom groups the rays hit. threads is how many
-        threads cast at once, the calling one included. robot_geoms is a bool mask
-        (ngeom,) of geoms whose first hit gives no return; by default every geom of
-        exclude_body's root subtree (the robot the sensor is on), none with exclude_body -1.
-        """
-        self.model = model
-        self.exclude_body = int(exclude_body)
-        self._geomgroup = np.array(geomgroup, dtype=np.uint8).reshape(6, 1)
-        if robot_geoms is not None:
-            self.robot_geoms = np.asarray(robot_geoms, dtype=bool)
-        elif self.exclude_body >= 0:
-            root = model.body_rootid[self.exclude_body]
-            self.robot_geoms = model.body_rootid[model.geom_bodyid] == root
-        else:
-            self.robot_geoms = np.zeros(model.ngeom, dtype=bool)
-        # The scratch MjData carry geom poses only, so a model with flexes casts on the
-        # caller's MjData alone.
-        self.threads = 1 if model.nflex else max(1, int(threads))
-        self._scratch = [mujoco.MjData(model) for _ in range(self.threads - 1)]
-        self._pool = (ThreadPoolExecutor(self.threads - 1, thread_name_prefix="mid360_cast")
-                      if self.threads > 1 else None)
-
-    def close(self):
-        """Stop the worker threads."""
-        if self._pool is not None:
-            self._pool.shutdown(wait=True)
-            self._pool = None
-
-    def _cast_chunk(self, d, source, origin, world, geomid, dist, lo, hi):
-        """Cast rays lo..hi on d, after copying source's geom poses into it unless source is d."""
-        if source is not d:
-            np.copyto(d.geom_xpos, source.geom_xpos)
-            np.copyto(d.geom_xmat, source.geom_xmat)
-        # The binding releases the GIL while it casts; None skips the surface normals.
-        mujoco.mj_multiRay(self.model, d, origin, world[lo:hi].reshape(-1, 1), self._geomgroup,
-                           1, self.exclude_body, geomid[lo:hi].reshape(-1, 1),
-                           dist[lo:hi].reshape(-1, 1), None, hi - lo, MAX_RANGE)
-
-    def cast(self, origin, rotation, directions, data, geom_alpha=None, mat_alpha=None):
-        """Return the distance (m) along each unit direction (n, 3) to its first hit, NaN for none.
-
-        origin (3,) m and rotation (3, 3) sensor -> world are the sensor's pose; directions
-        are in its own frame; data holds the geom poses. geom_alpha (ngeom,) and mat_alpha
-        (nmat,) are written into the model's geom_rgba and mat_rgba alpha first (Snapshot's
-        fields; None leaves them). NaN where nothing is hit within MAX_RANGE or the robot is
-        hit first.
-        """
-        if geom_alpha is not None:
-            self.model.geom_rgba[:, 3] = geom_alpha
-        if mat_alpha is not None:
-            self.model.mat_rgba[:, 3] = mat_alpha
-        n = len(directions)
-        dist = np.empty(n)
-        geomid = np.empty(n, dtype=np.int32)
-        if n == 0:
-            return dist
-        world = np.ascontiguousarray(np.asarray(directions) @ np.asarray(rotation).T,
-                                     dtype=np.float64)
-        origin = np.array(origin, dtype=np.float64).reshape(3, 1)
-        chunks = min(self.threads, max(1, n // _MIN_RAYS_PER_THREAD))
-        bounds = np.linspace(0, n, chunks + 1).astype(int)
-        # mj_multiRay culls a body through its BVH, which it places with the body's pose,
-        # but the scratch MjData and the scan thread's snapshot carry only geom poses: with
-        # the BVH in place their casts miss geoms (121 of the 2,000 rays
-        # test_cpu_caster_matches_mj_ray casts in tests/robocasa/test_mid360.py's _KITCHEN,
-        # cast on a fresh MjData given only the geom poses). MuJoCo skips the BVH for bodies
-        # without one, so for this call none has one, and each geom is tested from its own
-        # pose: the result is mj_ray's, ray for ray. Cleared once around every thread's
-        # cast, and restored only once they have all finished.
-        bvhadr = self.model.body_bvhadr.copy()
-        self.model.body_bvhadr[:] = -1
-        futures = []
-        try:
-            for k, scratch in enumerate(self._scratch[:chunks - 1], start=1):
-                futures.append(self._pool.submit(self._cast_chunk, scratch, data, origin, world,
-                                                 geomid, dist, bounds[k], bounds[k + 1]))
-            self._cast_chunk(data, data, origin, world, geomid, dist, bounds[0], bounds[1])
-            for future in futures:
-                future.result()
-        finally:
-            wait(futures)
-            self.model.body_bvhadr[:] = bvhadr
-        hit = geomid >= 0
-        robot = hit & self.robot_geoms[np.where(hit, geomid, 0)]
-        dist[~hit | robot] = np.nan
-        return dist
-
-
-class GpuUnavailable(RuntimeError):
-    """Say this process cannot render on a GPU: MuJoCo not on EGL, no EGL device, software GL."""
-
-
 class GpuCaster:
     """Read each ray's range from depth images rendered on the GPU around the sensor (EGL).
 
@@ -254,15 +134,15 @@ class GpuCaster:
     once, and gives each ray the depth of the pixel its direction falls in, divided by the
     cosine of the ray's angle off the face's axis. Surfaces square to a face's axis read back
     exactly; on surfaces seen obliquely and at silhouettes a ray takes its pixel centre's
-    range (tests/robocasa/test_mid360_gpu.py holds the agreement with CpuCaster).
+    range (tests/robocasa/test_mid360_gpu.py holds the agreement with MuJoCo's exact
+    mj_ray).
 
-    The renders follow CpuCaster's rules. The caster draws its own copy of the model, in
-    which a geom is drawn, opaque, exactly when a ray would hit it: in geomgroup, alpha not 0
-    (the material's alpha when it has a material; each cast's live alpha, as CpuCaster), not
-    on exclude_body. A
-    segmentation render beside the depth tells which geom each pixel shows, so a ray whose
-    first hit is the robot gives no return. Range limits are CpuCaster's: no return past
-    MAX_RANGE; ranges under MIN_RANGE are returned, for the scanner to drop.
+    The renders follow MuJoCo's ray rules (mj_ray). The caster draws its own copy of the
+    model, in which a geom is drawn, opaque, exactly when a ray would hit it: in geomgroup,
+    alpha not 0 (the material's alpha when it has a material; each cast's live alpha), not on
+    exclude_body. A segmentation render beside the depth tells which geom each pixel shows,
+    so a ray whose first hit is the robot gives no return. No return past MAX_RANGE; ranges
+    under MIN_RANGE are returned, for the scanner to drop.
 
     Threads. The GL context is current only inside cast() and close(), under GL_LOCK, so any
     thread may build the caster and cast, one cast at a time. Call close() to free the GL
@@ -270,9 +150,9 @@ class GpuCaster:
     """
 
     # s of sim time between the scanner's update() calls. A cast costs about one render per
-    # face whatever its ray count, so the GPU casts fewer, larger batches than the CPU; this
-    # interval keeps the lidar thread a few times faster than real time beside the H1-2's
-    # cameras, provided they hold GL_LOCK while they render.
+    # face whatever its ray count, so fewer, larger batches cost less; this interval keeps the
+    # lidar thread a few times faster than real time beside the H1-2's cameras, provided they
+    # hold GL_LOCK while they render.
     batch_s = 0.02
 
     def __init__(self, model, exclude_body, geomgroup, width=512, robot_geoms=None):
@@ -281,20 +161,15 @@ class GpuCaster:
         geomgroup is the 6 flags of the geom groups the rays hit; width is each face's size in
         pixels. robot_geoms is a bool mask (ngeom,) of geoms whose first hit gives no return; by
         default every geom of exclude_body's root subtree, none with exclude_body -1. Raises
-        GpuUnavailable, naming why, when this process cannot render on a GPU (MuJoCo not on
-        EGL, no EGL device, a software renderer), and RuntimeError when the GPU fails to
-        render or the renders cannot match the rays (a model with flexes).
+        RuntimeError when EGL fails to render (sim_common.egl_renderer says whether this process
+        renders on a GPU) or the renders cannot match the rays (a model with flexes).
         """
-        backend = os.environ.get("MUJOCO_GL", "")
-        if backend.strip().lower() != "egl":
-            raise GpuUnavailable(f"MUJOCO_GL is {backend!r}, not 'egl'")
         if model.nflex:
             raise RuntimeError("the model has flexes, which the renders do not match")
         try:
-            from mujoco import egl
-            from OpenGL import GL
+            from mujoco import egl   # makes the EGL display on its first import
         except ImportError as exc:
-            raise GpuUnavailable(f"no EGL: {exc}") from exc
+            raise RuntimeError(f"no EGL: {exc}") from exc
         self._egl = egl
         self._gl = None
         self._context = None
@@ -309,7 +184,7 @@ class GpuCaster:
         else:
             self.robot_geoms = np.zeros(m.ngeom, dtype=bool)
 
-        # Draw exactly the geoms mj_multiRay hits, opaque: a geom colour other than MuJoCo's
+        # Draw exactly the geoms mj_ray hits, opaque: a geom colour other than MuJoCo's
         # default overrides its material's, and geoms with alpha 0 are not drawn. Which are
         # hit depends on the live alpha, so _draw() sets the copy's alpha before each cast.
         group = np.array(geomgroup, dtype=bool).reshape(6)
@@ -368,25 +243,16 @@ class GpuCaster:
 
         with GL_LOCK:
             try:
-                try:
-                    self._gl = egl.GLContext(3 * w, 2 * w)
-                    self._gl.make_current()
-                    renderer = GL.glGetString(GL.GL_RENDERER).decode(errors="replace")
-                except Exception as exc:   # EGL's and PyOpenGL's own error types
-                    raise GpuUnavailable(f"no EGL device: {exc!r}") from exc
-                if any(name in renderer.lower() for name in _SOFTWARE_RENDERERS):
-                    raise GpuUnavailable(f"the GL renderer is {renderer}, a software renderer")
+                self._gl = egl.GLContext(3 * w, 2 * w)
+                self._gl.make_current()
                 self._context = mujoco.MjrContext(m, mujoco.mjtFontScale.mjFONTSCALE_100)
                 mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_OFFSCREEN, self._context)
                 self._context.readDepthMap = mujoco.mjtDepthMap.mjDEPTH_ZEROFAR
-            except Exception as exc:
+            except Exception as exc:   # EGL's, PyOpenGL's and MuJoCo's own error types
                 self._free()
-                if isinstance(exc, RuntimeError):
-                    raise
                 raise RuntimeError(f"EGL rendering failed: {exc!r}") from exc
             finally:
                 self._release()
-        self.gl_renderer = renderer
         atexit.register(self.close)
 
     def _draw(self, geom_alpha, mat_alpha):
@@ -445,10 +311,11 @@ class GpuCaster:
     def cast(self, origin, rotation, directions, data, geom_alpha=None, mat_alpha=None):
         """Return the distance (m) along each unit direction (n, 3) to its first hit, NaN for none.
 
-        As CpuCaster.cast(): origin (3,) m and rotation (3, 3) sensor -> world are the sensor's
-        pose; directions are in its own frame; data holds the geom poses (geom_xpos,
-        geom_xmat); geom_alpha and mat_alpha are the live alpha (None: the last cast's). NaN
-        where nothing is drawn within MAX_RANGE or the robot is drawn first.
+        origin (3,) m and rotation (3, 3) sensor -> world are the sensor's pose; directions are
+        in its own frame; data holds the geom poses (geom_xpos, geom_xmat; nothing else is
+        read); geom_alpha (ngeom,) and mat_alpha (nmat,) are the sim model's live alpha
+        (Snapshot's fields; None: the last cast's). NaN where nothing is drawn within MAX_RANGE
+        or the robot is drawn first.
         """
         if self.model is None:
             raise RuntimeError("cast() after close()")
@@ -509,47 +376,12 @@ def _log(text):
     print(text, flush=True)
 
 
-def backend_from_env(env=os.environ):
-    """Return GOLEM_LIDAR_BACKEND, one of BACKENDS: unset or empty is auto; case and spaces are ignored.
-
-    Raises ValueError, naming the knob, for any other value.
-    """
-    raw = env.get("GOLEM_LIDAR_BACKEND", "")
-    backend = raw.strip().lower() or "auto"
-    if backend not in BACKENDS:
-        raise ValueError(f"GOLEM_LIDAR_BACKEND must be one of {', '.join(BACKENDS)}, got {raw!r}")
-    return backend
-
-
-def make_caster(model, exclude_body, geomgroup, backend="auto", robot_geoms=None, log=_log):
-    """Return the caster backend names, casting on model through body exclude_body.
-
-    backend is one of BACKENDS (GOLEM_LIDAR_BACKEND): auto builds a GpuCaster and falls back to
-    a CpuCaster, with one log() line naming why, when it cannot; gpu builds a GpuCaster or
-    raises RuntimeError; cpu builds a CpuCaster without trying the GPU. ValueError for any
-    other backend. geomgroup and robot_geoms are the casters' own. Either caster casts on its
-    own copy of model (the CpuCaster edits the model it casts on, CpuCaster's docstring), so
-    the physics may step model while it casts; runtime edits of model reach the casts only
-    through the snapshot (poses, alpha).
-    """
-    if backend not in BACKENDS:
-        raise ValueError(f"lidar backend must be one of {', '.join(BACKENDS)}, got {backend!r}")
-    if backend != "cpu":
-        try:
-            return GpuCaster(model, exclude_body, geomgroup, robot_geoms=robot_geoms)
-        except Exception as exc:   # under auto, any failure to build falls back to the CPU
-            if backend == "gpu":
-                raise RuntimeError(f"lidar backend gpu: no GPU caster: {exc}") from exc
-            log(f"[mid360] lidar rays cast on the CPU: no GPU caster ({exc})")
-    return CpuCaster(copy.copy(model), exclude_body, geomgroup, robot_geoms=robot_geoms)
-
-
 class Mid360Scanner:
     """Fire the MID-360's pattern through a caster and assemble its 10 Hz frames."""
 
     def __init__(self, caster, rng_seed=0, points_per_second=POINTS_PER_SECOND,
                  rate_hz=FRAME_RATE_HZ):
-        """Scan with caster (its cast() as CpuCaster's); rates are per sim second.
+        """Scan with caster (its cast() as GpuCaster's); rates are per sim second.
 
         rng_seed seeds the range noise, so the same seed and calls give the same frames.
         """

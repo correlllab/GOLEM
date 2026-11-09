@@ -1,8 +1,9 @@
-"""Check the shared MID-360 model (golem_robocasa/mid360.py): pattern, CPU caster, scanner and scan ring.
+"""Check the shared MID-360 model (golem_robocasa/mid360.py): pattern, scanner and scan ring.
 
-The scenes are small MJCFs built here (closed box rooms, and a room with a stand-in robot
-for the caster), so no RoboCasa env is built. Needs MuJoCo, NumPy and sim_timing only; run
-it with ROS_DOMAIN_ID=231 tests/robocasa/run_in_container.sh -p test_mid360.py
+The scanner and the ring cast through casters that need no GPU: the tests' exact reference
+(exact_rays.ExactCaster, MuJoCo's mj_ray) and fakes. The scenes are small MJCFs (closed box
+rooms), so no RoboCasa env is built. Needs MuJoCo, NumPy and sim_timing only; run it with
+ROS_DOMAIN_ID=231 tests/robocasa/run_in_container.sh -p test_mid360.py
 """
 import threading
 import time
@@ -12,10 +13,11 @@ import mujoco
 import numpy as np
 
 import mid360
+from exact_rays import ExactCaster
 from sim_timing import LoopTimings
 
 FRAME_POINTS = 20_000                 # POINTS_PER_SECOND / FRAME_RATE_HZ
-STEP_S = 0.01                         # s of sim time between update() calls (CpuCaster.batch_s)
+STEP_S = 0.01                         # s of sim time between update() calls (ExactCaster.batch_s)
 VISUAL = (0, 1, 0, 0, 0, 0)           # geomgroup: visual geoms only, as the G1 casts
 UPSIDE_DOWN = np.diag([1.0, -1.0, -1.0])   # sensor -> world, rpy pi 0 0, as both robots hang it
 
@@ -37,62 +39,6 @@ def _cube_room(half):
     return f'<mujoco><worldbody>{"".join(walls)}</worldbody></mujoco>'
 
 
-# A 4 x 4 m room with a floor and ceiling, furniture of several geom types (a tilted box, a
-# cylinder, a sphere, a mesh) and a stand-in robot: the sensor sits in a head shell on
-# "torso" (the excluded body), with an arm beside it and a pelvis below, all one subtree.
-# Seen from the sensor, each wall's bottom edge straight ahead is lower than its corners, and
-# the rays between them must still hit the wall.
-_KITCHEN = """
-<mujoco>
-  <asset>
-    <mesh name="tetra" vertex="0 0 0  0.6 0 0  0 0.6 0  0 0 0.6"/>
-  </asset>
-  <worldbody>
-    <geom type="box" group="1" pos="0 0 -0.05" size="2.1 2.1 0.05"/>
-    <geom type="box" group="1" pos="0 0 2.55" size="2.1 2.1 0.05"/>
-    <geom type="box" group="1" pos="2.05 0 1.25" size="0.05 2.1 1.3"/>
-    <geom type="box" group="1" pos="-2.05 0 1.25" size="0.05 2.1 1.3"/>
-    <geom type="box" group="1" pos="0 2.05 1.25" size="2.1 0.05 1.3"/>
-    <geom type="box" group="1" pos="0 -2.05 1.25" size="2.1 0.05 1.3"/>
-    <geom type="box" group="1" pos="1.2 0.8 0.45" size="0.4 0.3 0.45" euler="0 0 30"/>
-    <geom type="cylinder" group="1" pos="-1.0 1.1 0.5" size="0.25 0.5"/>
-    <geom type="sphere" group="1" pos="-1.2 -1.0 0.3" size="0.3"/>
-    <geom type="mesh" group="1" mesh="tetra" pos="0.9 -1.2 0.0" euler="0 0 20"/>
-    <geom type="box" group="0" pos="1.5 -0.5 0.3" size="0.2 0.2 0.3"/>
-    <body name="pelvis" pos="0 0 0.9">
-      <freejoint/>
-      <geom type="box" group="1" size="0.12 0.15 0.08"/>
-      <body name="torso" pos="0 0 0.35">
-        <geom type="sphere" group="1" size="0.1"/>
-        <site name="lidar" pos="0 0 0" euler="180 0 0"/>
-        <body name="arm" pos="0 -0.22 -0.05">
-          <geom type="capsule" group="1" fromto="0 0 0 0.15 0 -0.35" size="0.05"/>
-        </body>
-      </body>
-    </body>
-  </worldbody>
-</mujoco>
-"""
-
-# Spheres, one of them in geom group 2, which test_multi_ray_matches_mj_ray's casts leave out,
-# one on the excluded body "self" around the origin and one past the cutoff. The scene is open
-# above, so some rays hit nothing.
-_SPHERES = """
-<mujoco>
-  <worldbody>
-    <body name="self"><geom type="sphere" size="0.2" group="1"/></body>
-    <geom type="sphere" group="1" pos="2 0 0" size="0.5"/>
-    <geom type="sphere" group="1" pos="0 3 0.5" size="0.8"/>
-    <geom type="sphere" group="1" pos="-4 -1 -1" size="1.0"/>
-    <geom type="sphere" group="1" pos="0 0 -16" size="12"/>
-    <geom type="sphere" group="1" pos="25 0 12" size="4"/>
-    <geom type="sphere" group="2" pos="0 -2 0" size="0.6"/>
-    <geom type="sphere" group="1" pos="0 -5 0" size="1.5"/>
-  </worldbody>
-</mujoco>
-"""
-
-
 def _scene(xml):
     """Compile xml and return (model, data) after mj_forward."""
     model = mujoco.MjModel.from_xml_string(xml)
@@ -104,7 +50,7 @@ def _scene(xml):
 def _cube_snapshot(half, rotation=np.eye(3)):
     """Return (caster, snapshot) for a sensor centred in a closed cube room, half-size half (m)."""
     model, data = _scene(_cube_room(half))
-    caster = mid360.CpuCaster(model, exclude_body=-1, geomgroup=VISUAL, threads=2)
+    caster = ExactCaster(model, exclude_body=-1, geomgroup=VISUAL)
     return caster, mid360.Snapshot(np.zeros(3), rotation, data)
 
 
@@ -146,110 +92,23 @@ class PatternTests(unittest.TestCase):
         np.testing.assert_allclose(np.arcsin(tail[:3, 2]), pattern[-3:, 1], atol=1e-12)
 
 
-class CpuCasterTests(unittest.TestCase):
-    """Compare CpuCaster and mj_multiRay with MuJoCo's exact per-ray mj_ray."""
+class _RoomCaster:
+    """Return each ray's distance to the walls of a closed cube room of half-size half (m) around the sensor.
 
-    def test_cpu_caster_matches_mj_ray(self):
-        """2,000 rays on the furnished room equal per-ray mj_ray within 1e-9 m and on hit or miss.
+    It reads no MjData, so the ring's snapshots, which hold only geom poses, cast the same.
+    """
 
-        A ray whose first hit is the robot (other than the excluded torso) has no return.
-        The caster's threads cast on MjData that carry only geom poses, where mj_multiRay's BVH
-        culling would miss geoms. The same caster casts again after the robot moves, so every
-        thread sees fresh poses.
-        """
-        model, data = _scene(_KITCHEN)
-        site = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "lidar")
-        torso = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "torso")
-        local = mid360.directions(mid360.load_pattern(), 123_456, 2000)
-        geomgroup = np.array(VISUAL, dtype=np.uint8).reshape(6, 1)
-        robot = model.body_rootid[model.geom_bodyid] == model.body_rootid[torso]
-        bvhadr = model.body_bvhadr.copy()
-        caster = mid360.CpuCaster(model, exclude_body=torso, geomgroup=VISUAL, threads=4)
-        previous = None
-        try:
-            for pose in range(2):
-                if pose == 1:   # the robot steps 0.3 m forward and turns 40 deg left
-                    data.qpos[0] += 0.3
-                    mujoco.mju_euler2Quat(data.qpos[3:7], np.radians([0.0, 0.0, 40.0]), "xyz")
-                    mujoco.mj_forward(model, data)
-                origin = data.site_xpos[site].copy()
-                rotation = data.site_xmat[site].reshape(3, 3).copy()
-                world = local @ rotation.T
+    def __init__(self, half):
+        """Cast in a room of inner half-size half (m)."""
+        self.half = half
 
-                expected = np.empty(len(world))
-                robot_hits = 0
-                geomid = np.empty((1, 1), dtype=np.int32)
-                for i, vec in enumerate(world):
-                    dist = mujoco.mj_ray(model, data, origin.reshape(3, 1), vec.reshape(3, 1),
-                                         geomgroup, 1, torso, geomid)
-                    hit_robot = geomid[0, 0] >= 0 and robot[geomid[0, 0]]
-                    robot_hits += hit_robot
-                    miss = geomid[0, 0] < 0 or hit_robot or dist > mid360.MAX_RANGE
-                    expected[i] = np.nan if miss else dist
-                self.assertGreater(robot_hits, 0, "no ray hits the robot")
-                self.assertGreater(np.isfinite(expected).sum(), 1500)
+    def cast(self, origin, rotation, directions, data, geom_alpha=None, mat_alpha=None):
+        """Return half / the largest world component of each of directions (m)."""
+        world = np.asarray(directions) @ np.asarray(rotation).T
+        return self.half / np.abs(world).max(axis=1)
 
-                if pose == 1:   # the move changes the ranges in every thread's chunk
-                    for chunk in np.array_split(np.arange(len(world)), 4):
-                        moved = np.abs(np.nan_to_num(expected[chunk] - previous[chunk])) > 1e-3
-                        self.assertGreater(moved.sum(), 0)
-
-                got = caster.cast(origin, rotation, local, data)
-                np.testing.assert_array_equal(np.isnan(got), np.isnan(expected))
-                hit = np.isfinite(expected)
-                np.testing.assert_allclose(got[hit], expected[hit], rtol=0.0, atol=1e-9)
-                previous = expected
-        finally:
-            caster.close()
-        np.testing.assert_array_equal(model.body_bvhadr, bvhadr)
-
-    def test_bvh_restored_when_a_cast_raises(self):
-        """A cast that raises leaves model.body_bvhadr as it was."""
-        model, _ = _scene(_KITCHEN)
-        bvhadr = model.body_bvhadr.copy()
-        caster = mid360.CpuCaster(model, exclude_body=-1, geomgroup=VISUAL, threads=2)
-        local = mid360.directions(mid360.load_pattern(), 0, 4000)
-        try:
-            with self.assertRaises(Exception):
-                caster.cast(np.zeros(3), np.eye(3), local, None)   # no MjData to cast in
-        finally:
-            caster.close()
-        np.testing.assert_array_equal(model.body_bvhadr, bvhadr)
-
-    def test_multi_ray_matches_mj_ray(self):
-        """mj_multiRay gives every ray mj_ray's geom and distance, and none past the cutoff."""
-        model = mujoco.MjModel.from_xml_string(_SPHERES)
-        data = mujoco.MjData(model)
-        mujoco.mj_forward(model, data)
-        origin = np.zeros(3)
-        geomgroup = np.array([0, 1, 0, 0, 0, 0], np.uint8)
-        exclude = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "self")
-        cutoff = 20.0   # m: the sphere at (25, 0, 12) is past it
-        v = np.random.default_rng(3).normal(size=(2000, 3))
-        world = v / np.linalg.norm(v, axis=1, keepdims=True)
-        geomid = np.empty(len(world), np.int32)
-        dist = np.empty(len(world))
-        mujoco.mj_multiRay(model, data, origin.reshape(3, 1), world.reshape(-1, 1), geomgroup, 1,
-                           exclude, geomid.reshape(-1, 1), dist.reshape(-1, 1), None, len(world),
-                           cutoff)
-
-        one = np.empty((1, 1), np.int32)
-        expected_id = np.empty(len(world), np.int32)
-        expected = np.empty(len(world))
-        for i, vec in enumerate(world):
-            d = mujoco.mj_ray(model, data, origin.reshape(3, 1), vec.reshape(3, 1), geomgroup, 1,
-                              exclude, one)
-            hit = one[0, 0] >= 0 and d <= cutoff
-            expected_id[i] = one[0, 0] if hit else -1
-            expected[i] = d if hit else -1.0
-        hits = expected_id >= 0
-        self.assertGreater(hits.sum(), 200)
-        self.assertGreater((~hits).sum(), 200)
-        # Every group-1 sphere but "self" and the one past the cutoff.
-        self.assertEqual(len(set(expected_id[hits].tolist())), 5)
-        np.testing.assert_array_equal(geomid, expected_id)
-        np.testing.assert_allclose(dist[hits], expected[hits], rtol=0.0, atol=1e-9)
-        np.testing.assert_array_equal(dist[~hits], -1.0)
+    def close(self):
+        """Do nothing: the caster holds nothing."""
 
 
 class _FakeCaster:
@@ -395,7 +254,7 @@ class ScannerTests(unittest.TestCase):
 
 
 class ScanRingTests(unittest.TestCase):
-    """Check ScanRing's depth, backpressure and frame lag, and the backend knob."""
+    """Check ScanRing's depth, backpressure and frame lag."""
 
     def ring(self, cast_s=0.0, interval=STEP_S, timings=None):
         """Return a started ScanRing in a 3 m cube room whose casts take at least cast_s wall s.
@@ -403,7 +262,7 @@ class ScanRingTests(unittest.TestCase):
         Frames go to self.frames, each with the ring's sim time when it was published.
         """
         model, data = _scene(_cube_room(3.0))
-        caster = mid360.CpuCaster(model, exclude_body=-1, geomgroup=VISUAL, threads=2)
+        caster = _RoomCaster(3.0)
         cast = caster.cast
 
         def slow(*args, **kwargs):
@@ -481,16 +340,6 @@ class ScanRingTests(unittest.TestCase):
         ring.tick(self.data, 0.1)   # takes the freed slot; the stopped thread never frees it
         with self.assertRaisesRegex(RuntimeError, "scan thread has stopped"):
             ring.tick(self.data, 0.2)
-
-    def test_backend_from_env(self):
-        """GOLEM_LIDAR_BACKEND gives auto unset or empty, any case and spaces; a bad value names the knob."""
-        self.assertEqual(mid360.backend_from_env({}), "auto")
-        self.assertEqual(mid360.backend_from_env({"GOLEM_LIDAR_BACKEND": ""}), "auto")
-        self.assertEqual(mid360.backend_from_env({"GOLEM_LIDAR_BACKEND": " CPU "}), "cpu")
-        self.assertEqual(mid360.backend_from_env({"GOLEM_LIDAR_BACKEND": "gpu"}), "gpu")
-        for bad in ("cuda", "0", "egl"):
-            with self.assertRaisesRegex(ValueError, "GOLEM_LIDAR_BACKEND"):
-                mid360.backend_from_env({"GOLEM_LIDAR_BACKEND": bad})
 
 
 if __name__ == "__main__":

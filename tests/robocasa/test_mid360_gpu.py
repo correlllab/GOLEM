@@ -1,32 +1,32 @@
-"""Check the MID-360's GPU caster (golem_robocasa/mid360.py) against the exact CPU caster.
+"""Check the MID-360's GPU caster (golem_robocasa/mid360.py) against MuJoCo's exact mj_ray.
 
-The scenes are the surface probe's RoboCasa kitchen (layout 9, style 9, seed 42) with each
-robot spawned as its runner spawns it, built once per process (about 20 s for both); the
-casters see them as the sims do. The GPU tests need MuJoCo on EGL with a GPU renderer and are
-skipped, naming why, without one; the backend tests need neither. Run them in the robocasa
-image: ROS_DOMAIN_ID=231 tests/robocasa/run_in_container.sh -p test_mid360_gpu.py
+The reference is exact_rays.ExactCaster (mj_ray on the full MjData, under the caster's
+rules). The scenes are the surface probe's RoboCasa kitchen (layout 9, style 9, seed 42) with
+each robot spawned as its runner spawns it, built once per process (about 20 s for both); the
+casters see them as the sims do. The tests need MuJoCo on EGL with a GPU renderer and are
+skipped, naming why, without one. Run them in the robocasa image:
+ROS_DOMAIN_ID=231 tests/robocasa/run_in_container.sh -p test_mid360_gpu.py
 """
 import functools
-import os
 import sys
 import time
 import types
 import unittest
 from typing import NamedTuple
-from unittest import mock
 
 import mujoco
 import numpy as np
 
 import mid360
 import sim_common
+from exact_rays import ExactCaster
 
 LAYOUT, STYLE, SEED = 9, 9, 42        # the surface probe's kitchen
 FRAME_POINTS = 20_000                 # one 10 Hz frame of the pattern
 NEAR = 0.15                           # m: rays shorter than this on either caster are not compared
 MAX_MEDIAN_ERROR = 0.002              # m
 MIN_AGREEMENT = 0.99                  # fraction of rays on which both casters return or both do not
-# Fraction of the rays that hit the robot first on the CPU that give no return on the GPU too:
+# Fraction of the rays that hit the robot first in the exact cast that give no return on the GPU too:
 # lower than MIN_AGREEMENT, since a thin limb's silhouette pixels are a larger share of its rays.
 MIN_ROBOT_AGREEMENT = 0.95
 MAX_CAST_S = 0.025                    # s per 20,000-ray cast; catches a broken path only
@@ -42,9 +42,6 @@ WALLS = """
   </worldbody>
 </mujoco>
 """
-TINY = ('<mujoco><worldbody><geom type="box" group="1" pos="2 0 0" size="0.1 1 1"/>'
-        '</worldbody></mujoco>')               # one wall in front of the origin
-
 
 class Kitchen(NamedTuple):
     """Hold a spawned robot's kitchen and how its lidar casts in it."""
@@ -113,13 +110,11 @@ def _h12():
 
 @functools.lru_cache(maxsize=None)
 def _no_gpu_reason():
-    """Return why no GPU caster can be built here, or None when one can."""
-    model = mujoco.MjModel.from_xml_string(TINY)
+    """Return why this process cannot render on a GPU (sim_common.egl_renderer), or None when it can."""
     try:
-        caster = mid360.GpuCaster(model, -1, (0, 1, 0, 0, 0, 0))
-    except mid360.GpuUnavailable as exc:   # any other failure is a fault the tests must show
-        return f"no GPU caster: {exc}"
-    caster.close()
+        sim_common.egl_renderer()
+    except RuntimeError as exc:
+        return f"no GPU: {exc}"
     return None
 
 
@@ -129,7 +124,7 @@ def _frame():
 
 
 class GpuCasterTests(unittest.TestCase):
-    """Compare GpuCaster with CpuCaster in both robots' kitchens."""
+    """Compare GpuCaster with the exact casts in both robots' kitchens."""
 
     @classmethod
     def setUpClass(cls):
@@ -150,18 +145,15 @@ class GpuCasterTests(unittest.TestCase):
             caster.close()
 
     def _compare(self, name, rotation):
-        """Cast a frame from the sensor turned to rotation on both casters; return (cpu, gpu).
+        """Cast a frame from the sensor turned to rotation, exactly and on the GPU; return (exact, gpu).
 
         Asserts the median range error and the agreement on return or no return, rays within
-        NEAR of the sensor on either caster left out.
+        NEAR of the sensor in either cast left out.
         """
         kitchen = self.kitchens[name]
         local = _frame()
-        cpu = mid360.CpuCaster(kitchen.model, kitchen.exclude_body, kitchen.geomgroup)
-        try:
-            expected = cpu.cast(kitchen.origin, rotation, local, kitchen.data)
-        finally:
-            cpu.close()
+        exact = ExactCaster(kitchen.model, kitchen.exclude_body, kitchen.geomgroup)
+        expected = exact.cast(kitchen.origin, rotation, local, kitchen.data)
         got = self.gpu[name].cast(kitchen.origin, rotation, local, kitchen.data)
         with np.errstate(invalid="ignore"):   # NaN, no return, compares False
             compared = ~(expected < NEAR) & ~(got < NEAR)
@@ -175,7 +167,7 @@ class GpuCasterTests(unittest.TestCase):
         self.assertLessEqual(error, MAX_MEDIAN_ERROR)
         return expected, got
 
-    def test_gpu_matches_cpu(self):
+    def test_gpu_matches_exact_rays(self):
         """20,000 pattern rays: median error within 2 mm, return or none agreed on 99% of rays.
 
         Both robots, sensor as mounted. Rays whose first hit is the robot give no return on
@@ -184,19 +176,16 @@ class GpuCasterTests(unittest.TestCase):
         for name, kitchen in self.kitchens.items():
             with self.subTest(robot=name):
                 expected, got = self._compare(name, kitchen.rotation)
-                cpu = mid360.CpuCaster(kitchen.model, kitchen.exclude_body, kitchen.geomgroup,
-                                       robot_geoms=np.zeros(kitchen.model.ngeom, dtype=bool))
-                try:
-                    robot_too = cpu.cast(kitchen.origin, kitchen.rotation, _frame(), kitchen.data)
-                finally:
-                    cpu.close()
+                exact = ExactCaster(kitchen.model, kitchen.exclude_body, kitchen.geomgroup,
+                                    robot_geoms=np.zeros(kitchen.model.ngeom, dtype=bool))
+                robot_too = exact.cast(kitchen.origin, kitchen.rotation, _frame(), kitchen.data)
                 on_robot = np.isfinite(robot_too) & np.isnan(expected) & ~(robot_too < NEAR)
                 self.assertGreater(on_robot.sum(), 0, "no ray hits the robot")
                 print(f"{name}: {on_robot.sum()} rays hit the robot first, "
                       f"{np.isnan(got[on_robot]).mean():.4f} of them without a return on the GPU")
                 self.assertGreaterEqual(np.isnan(got[on_robot]).mean(), MIN_ROBOT_AGREEMENT)
 
-    def test_gpu_matches_cpu_at_any_orientation(self):
+    def test_gpu_matches_exact_rays_at_any_orientation(self):
         """The same holds with the sensor turned 90 deg about x or 180 deg about y (a fall)."""
         for name, kitchen in self.kitchens.items():
             for axis, degrees in (("x", 90.0), ("y", 180.0)):
@@ -204,7 +193,7 @@ class GpuCasterTests(unittest.TestCase):
                     self._compare(name, _rotation(axis, degrees) @ kitchen.rotation)
 
     def test_live_alpha_hides_and_shows_geoms(self):
-        """A geom made transparent between casts stops returning on both casters, which agree.
+        """A geom made transparent between casts stops returning on the GPU and in the exact casts, which agree.
 
         Hiding the near wall's geom alpha shows the far wall; hiding the far wall's material
         alpha leaves no return; alpha None keeps the last cast's; the model's alpha restores
@@ -224,19 +213,18 @@ class GpuCasterTests(unittest.TestCase):
                  ("paint hidden", None, np.zeros_like(visible_mats), np.nan),
                  ("alpha kept", None, None, np.nan),
                  ("restored", visible_geoms, visible_mats, 1.0)]
-        cpu = mid360.CpuCaster(model, -1, (0, 1, 0, 0, 0, 0), threads=1)
+        exact = ExactCaster(model, -1, (0, 1, 0, 0, 0, 0))
         gpu = mid360.GpuCaster(model, -1, (0, 1, 0, 0, 0, 0))
         try:
             for label, geom_alpha, mat_alpha, wall_x in steps:
                 with self.subTest(step=label):
                     ranges = [caster.cast(np.zeros(3), np.eye(3), local, data,
                                           geom_alpha=geom_alpha, mat_alpha=mat_alpha)
-                              for caster in (cpu, gpu)]
+                              for caster in (exact, gpu)]
                     expected = wall_x / local[:, 0]   # the wall's face at x = wall_x
                     for got in ranges:
                         np.testing.assert_allclose(got, expected, rtol=0.0, atol=0.01)
         finally:
-            cpu.close()
             gpu.close()
 
     def test_gpu_cast_time(self):
@@ -251,63 +239,6 @@ class GpuCasterTests(unittest.TestCase):
             mean = (time.perf_counter() - start) / 20
             print(f"\n{name}: GPU cast of {FRAME_POINTS} rays {mean * 1e3:.2f} ms (mean of 20)")
             self.assertLess(mean, MAX_CAST_S)
-
-
-class _Refused:
-    """Stand in for a GpuCaster whose construction fails, counting the attempts."""
-
-    attempts = 0
-
-    def __init__(self, *args, **kwargs):
-        """Raise as a GpuCaster without a GPU renderer does."""
-        type(self).attempts += 1
-        raise RuntimeError("the GL renderer is llvmpipe, a software renderer")
-
-
-class BackendTests(unittest.TestCase):
-    """Check make_caster's choice of caster for each backend; needs no GPU."""
-
-    def setUp(self):
-        """Compile a one-box scene and count GPU caster attempts from zero."""
-        self.model = mujoco.MjModel.from_xml_string(TINY)
-        _Refused.attempts = 0
-
-    def test_auto_backend_falls_back_to_cpu(self):
-        """auto falls back to a CpuCaster, logging why once, when the GPU's fails; gpu raises."""
-        logged = []
-        with mock.patch.object(mid360, "GpuCaster", _Refused):
-            caster = mid360.make_caster(self.model, -1, (0, 1, 0, 0, 0, 0), "auto",
-                                        log=logged.append)
-            try:
-                self.assertIsInstance(caster, mid360.CpuCaster)
-            finally:
-                caster.close()
-            self.assertEqual(len(logged), 1)
-            self.assertIn("llvmpipe", logged[0])
-            with self.assertRaisesRegex(RuntimeError, "llvmpipe"):
-                mid360.make_caster(self.model, -1, (0, 1, 0, 0, 0, 0), "gpu", log=logged.append)
-        self.assertEqual(len(logged), 1)
-
-    def test_cpu_backend_never_tries_the_gpu(self):
-        """cpu returns a CpuCaster on its own copy of the model, without trying the GPU; an unknown backend raises."""
-        with mock.patch.object(mid360, "GpuCaster", _Refused):
-            caster = mid360.make_caster(self.model, -1, (0, 1, 0, 0, 0, 0), "cpu", log=self.fail)
-            caster.close()
-            # The cast clears body_bvhadr, which mj_step on the caller's model reads.
-            for field in ("body_bvhadr", "geom_rgba", "mat_rgba"):
-                self.assertFalse(np.shares_memory(getattr(caster.model, field),
-                                                  getattr(self.model, field)), field)
-            with self.assertRaises(ValueError):
-                mid360.make_caster(self.model, -1, (0, 1, 0, 0, 0, 0), "cuda", log=self.fail)
-        self.assertIsInstance(caster, mid360.CpuCaster)
-        self.assertEqual(_Refused.attempts, 0)
-
-    def test_gpu_caster_needs_egl(self):
-        """Without MUJOCO_GL=egl (osmesa or glfw) the GPU caster refuses to build."""
-        for value in ("osmesa", "glfw", ""):
-            with self.subTest(MUJOCO_GL=value), mock.patch.dict(os.environ, {"MUJOCO_GL": value}):
-                with self.assertRaisesRegex(mid360.GpuUnavailable, "MUJOCO_GL"):
-                    mid360.GpuCaster(self.model, -1, (0, 1, 0, 0, 0, 0))
 
 
 if __name__ == "__main__":

@@ -37,15 +37,14 @@ Threads. tick() runs on the physics thread between steps, with the sim lock
 held. The sensors' heavy work runs on two threads of their own, which never
 touch the sim's MjData:
   - mid360_scan casts the lidar's rays (20,000 per frame by default) through
-    the caster mid360.make_caster() picks by GOLEM_LIDAR_BACKEND: depth renders
-    on the GPU, else exact rays on the CPU. Every caster's batch_s of sim time
-    (20 ms on the GPU, 10 ms on the CPU) the physics thread copies what a cast
-    reads, every geom's pose and the sensor's, into a slot of a ring; the thread
-    copies the slot into its own MjData and casts the rays due by then, labelled
-    with that time. The caster casts on its own copy of the model, and both
-    casters release the GIL while they cast, so the casts run beside the
-    physics; casting every step instead would wake the thread 500 times a sim
-    second, and its Python between casts would hold up the physics thread.
+    mid360.GpuCaster, from depth renders on the GPU. Every caster's batch_s of
+    sim time (20 ms) the physics thread copies what a cast reads, every geom's
+    pose and the sensor's, into a slot of a ring; the thread copies the slot
+    into its own MjData and casts the rays due by then, labelled with that time.
+    The caster casts on its own copy of the model and releases the GIL while it
+    renders, so the casts run beside the physics; casting every step instead
+    would wake the thread 500 times a sim second, and its Python between casts
+    would hold up the physics thread.
     The slot also carries the geoms' and materials' alpha, which RoboCasa tasks
     change at runtime (liquids, fruit, hidden walls) and the rays skip at 0.
     Other runtime edits of the model do not reach the caster's copy; RoboCasa's
@@ -135,11 +134,6 @@ class SensorConfig(NamedTuple):
                             more sparsely
       GOLEM_LIDAR_HZ        lidar frames per sim second (default 10, the driver's;
                             at most 100)
-      GOLEM_LIDAR_BACKEND   how the lidar's rays are cast (mid360.make_caster):
-                            auto (default) renders them on the GPU where MuJoCo
-                            renders through EGL on one, else casts them exactly on
-                            the CPU, logging why; gpu stops the sim without a GPU;
-                            cpu always casts on the CPU
       GOLEM_CAMERAS=0       no head camera (/realsense/head/*, its /tf_static)
       GOLEM_CAMERA_HZ       head camera frames per sim second (default 6; at most
                             30, the D435's top rate at 1280x720)
@@ -152,7 +146,6 @@ class SensorConfig(NamedTuple):
     lidar: bool = True
     lidar_points: int = g1_lidar.POINTS_PER_FRAME
     lidar_hz: float = g1_lidar.FRAME_RATE_HZ
-    lidar_backend: str = "auto"
     imu_hz: float = g1_lidar.IMU_RATE_HZ
     camera: bool = True
     camera_hz: float = 6.0
@@ -170,22 +163,19 @@ class SensorConfig(NamedTuple):
         lidar_hz = _env_number(env, "GOLEM_LIDAR_HZ", cls._field_defaults["lidar_hz"], float)
         if lidar_hz > 100.0:
             raise ValueError(f"GOLEM_LIDAR_HZ must be at most 100, got {lidar_hz:g}")
-        lidar_backend = mid360.backend_from_env(env)
         camera_hz = _env_number(env, "GOLEM_CAMERA_HZ", cls._field_defaults["camera_hz"], float)
         if camera_hz > MAX_CAMERA_HZ:
             raise ValueError(f"GOLEM_CAMERA_HZ must be at most {MAX_CAMERA_HZ:g}, got {camera_hz:g}")
         return cls(lidar=_env_flag(env, "GOLEM_LIDAR", True),
                    lidar_points=_env_number(env, "GOLEM_LIDAR_POINTS", cls._field_defaults["lidar_points"], int),
                    lidar_hz=lidar_hz,
-                   lidar_backend=lidar_backend,
                    camera=_env_flag(env, "GOLEM_CAMERAS", True),
                    camera_hz=camera_hz,
                    camera_width=width, camera_height=height)
 
     def describe(self):
         """Return a one-line summary for the sim's log."""
-        lidar = (f"MID-360 {self.lidar_points} points x {self.lidar_hz:g} Hz (backend "
-                 f"{self.lidar_backend}) + IMU {self.imu_hz:g} Hz"
+        lidar = (f"MID-360 {self.lidar_points} points x {self.lidar_hz:g} Hz + IMU {self.imu_hz:g} Hz"
                  if self.lidar else "no lidar (GOLEM_LIDAR=0)")
         camera = (f"head D435 {self.camera_width}x{self.camera_height} at {self.camera_hz:g} Hz"
                   if self.camera else "no head camera (GOLEM_CAMERAS=0)")
@@ -218,17 +208,16 @@ class _LidarScans(mid360.ScanRing):
     """Cast the MID-360's scans on the mid360_scan thread (a mid360.ScanRing; see the module docstring)."""
 
     def __init__(self, model, data, prefix, config, publish):
-        """Build the caster config.lidar_backend names and start the thread, which calls publish(cdr bytes).
+        """Build the GPU caster and start the thread, which calls publish(cdr bytes).
 
-        Raises RuntimeError when the backend is gpu and no GPU caster can be built.
+        Raises RuntimeError when EGL fails to render.
         """
         self.mid360 = g1_lidar.Mid360(model, prefix)
-        caster = self.mid360.make_caster(config.lidar_backend)
+        caster = self.mid360.make_caster()
         # s of sim time between casts: the caster's batch, or each frame's period when that
         # is shorter, so that every frame is cast from a pose of its own.
         interval = min(caster.batch_s, 1.0 / config.lidar_hz)
-        _log(f"lidar rays cast on the {'GPU' if isinstance(caster, mid360.GpuCaster) else 'CPU'} "
-             f"every {interval * 1e3:g} ms of sim time")
+        _log(f"lidar rays cast on the GPU every {interval * 1e3:g} ms of sim time")
         super().__init__(g1_lidar.make_scanner(caster, config.lidar_points, config.lidar_hz), model,
                          self.mid360.pose, lambda frame: publish(sm.livox_custom_msg_cdr(frame)),
                          interval, log=_log)

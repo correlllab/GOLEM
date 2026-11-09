@@ -1,8 +1,8 @@
-"""Select the robot, parse the command line and GOLEM_SIM_RATE, resolve tasks and frame the viewer for both sims.
+"""Select the robot, check the GPU, parse the command line and GOLEM_SIM_RATE, resolve tasks and frame the viewer for both sims.
 
 It imports only the standard library at module level (mujoco and robocasa
-inside the functions that need them): h12_mujoco.py picks the robot with it
-before it imports either robot's modules.
+inside the functions that need them): h12_mujoco.py picks the robot and checks
+the GPU with it before it imports either robot's modules.
 """
 import argparse
 import math
@@ -24,6 +24,12 @@ VIEW_CAM_DISTANCE  = 3.0     # m above the lookat point
 VIEW_CAM_AZIMUTH   = 90.0    # deg, added to the robot's yaw
 VIEW_CAM_ELEVATION = -90.0   # deg, straight down
 VIEW_CAM_LOOKAT_DZ = 0.0     # m, lookat offset above the robot body
+
+# The start-up refusal without a GPU: both sims render their cameras and the MID-360's rays
+# (mid360.GpuCaster) through EGL.
+GPU_REQUIRED = "the RoboCasa sims need an NVIDIA GPU, rendering through EGL (MUJOCO_GL=egl)"
+# GL_RENDERER substrings of software rasterisers, which EGL falls back to without a GPU.
+SOFTWARE_RENDERERS = ("llvmpipe", "softpipe", "swrast", "software", "swiftshader")
 
 
 def add_robot_args(parser: argparse.ArgumentParser) -> None:
@@ -53,6 +59,41 @@ def select_robot(argv: Sequence[str], env: Mapping[str, str] = os.environ) -> st
     if robot not in ROBOTS:
         sys.exit(f"GOLEM_ROBOT must be {' or '.join(ROBOTS)}, not {robot!r}.")
     return robot
+
+
+def egl_renderer(env: Mapping[str, str] = os.environ) -> str:
+    """Return the GL renderer of an EGL context made and freed here, the GPU the sim renders on.
+
+    Raises RuntimeError, naming why, when MUJOCO_GL in env is not egl, EGL gives no context
+    (no EGL device, as without NVIDIA's EGL) or the renderer is a software rasteriser.
+    """
+    backend = env.get("MUJOCO_GL", "")
+    if backend.strip().lower() != "egl":
+        raise RuntimeError(f"MUJOCO_GL is {backend!r}, not 'egl'")
+    try:
+        from mujoco import egl
+        from OpenGL import GL
+        context = egl.GLContext(1, 1)
+    except Exception as exc:   # EGL's, PyOpenGL's and mujoco.egl's own error types
+        raise RuntimeError(f"no EGL device: {exc!r}") from exc
+    try:
+        context.make_current()
+        renderer = GL.glGetString(GL.GL_RENDERER).decode(errors="replace")
+    finally:
+        context.free()
+    if any(name in renderer.lower() for name in SOFTWARE_RENDERERS):
+        raise RuntimeError(f"the GL renderer is {renderer}, a software renderer")
+    return renderer
+
+
+def require_gpu(probe: Callable[[], str] = egl_renderer) -> str:
+    """Return the GL renderer probe() finds, logging it; exit with GPU_REQUIRED and the reason when it raises."""
+    try:
+        renderer = probe()
+    except Exception as exc:
+        sys.exit(f"{GPU_REQUIRED}: {exc}")
+    print(f"[sim_common] rendering through EGL on {renderer}", flush=True)
+    return renderer
 
 
 def sim_rate_from_env(env: Mapping[str, str] = os.environ) -> float:
@@ -149,22 +190,14 @@ def runnable_tasks() -> tuple[dict[str, type], set[str]]:
     so that resolve_task can expand a base to its concrete subclasses.
 
     runnable is RoboCasa's ATOMIC_ and COMPOSITE_TASK_DATASETS that are
-    registered, else REGISTERED_KITCHEN_ENVS when those lists are not
-    importable. Neither holds an abstract base: those need a fixture_id only a
+    registered. Neither holds an abstract base: those need a fixture_id only a
     concrete subclass supplies.
     """
     import robocasa  # noqa: F401  # registers every kitchen env
+    from robocasa.utils.dataset_registry import ATOMIC_TASK_DATASETS, COMPOSITE_TASK_DATASETS
     from robosuite.environments.base import REGISTERED_ENVS
     env_classes = dict(REGISTERED_ENVS)
-    try:
-        from robocasa.utils.dataset_registry import (
-            ATOMIC_TASK_DATASETS,
-            COMPOSITE_TASK_DATASETS,
-        )
-        runnable = (set(ATOMIC_TASK_DATASETS) | set(COMPOSITE_TASK_DATASETS)) & set(env_classes)
-    except Exception:
-        from robocasa.environments.kitchen.kitchen import REGISTERED_KITCHEN_ENVS
-        runnable = set(REGISTERED_KITCHEN_ENVS) & set(env_classes)
+    runnable = (set(ATOMIC_TASK_DATASETS) | set(COMPOSITE_TASK_DATASETS)) & set(env_classes)
     return env_classes, runnable
 
 

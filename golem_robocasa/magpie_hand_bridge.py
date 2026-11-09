@@ -66,9 +66,8 @@ MAX_FORCE_N = 32.0
 SIM_POLL_S = 0.005
 # s of wall time one settle may wait for its sim time before the goal aborts. A
 # 0.2 s settle takes 20 s of wall time only below 0.01x real time, far slower
-# than any sim measured (the slowest, the H1-2 with the CPU lidar caster and the
-# stack beside it, ran at 0.74x), so reaching it means the physics loop has
-# stopped advancing the clock.
+# than any sim measured (the slowest ran at 0.74x, with the stack beside it), so
+# reaching it means the physics loop has stopped advancing the clock.
 SETTLE_WALL_LIMIT_S = 20.0
 # s of sim time: a state publish due within this of the sim time is published now.
 _EPS_T = 1e-9

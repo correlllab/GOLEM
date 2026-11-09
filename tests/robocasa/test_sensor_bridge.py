@@ -1,13 +1,16 @@
 """Check the H1-2 sensor suite (h12_sensors.py) with real MuJoCo rendering and ROS messages.
 
 The suite is built without its constructor, on a small scene, with recording publishers: no ROS
-node starts and no DDS traffic flows.
+node starts and no DDS traffic flows. The cameras and the lidar render through EGL on the GPU;
+the lidar's tests are skipped, naming why, without one.
 """
 import copy
+import functools
 import io
 import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -19,6 +22,7 @@ from rclpy.serialization import deserialize_message, serialize_message
 
 import mid360
 import realsense_profile as rp
+import sim_common
 from h12_sensors import (
     H12Sensors, _CameraPub, _LidarScans, _camera_info, _serialize_livox_scan,
     self_filter_geoms, PC2_DTYPE, _COMPRESSED_DEPTH_HEADER, _JPEG_QUALITY,
@@ -204,7 +208,18 @@ class SensorTests(unittest.TestCase):
                                 {k: Recorder(b.sim_lock) for k in keys})]
         b.get_logger = lambda: SimpleNamespace(warn=lambda text: self.fail(text))
         b.timings = LoopTimings()
+        b._camera_worker, b._camera_pending = ThreadPoolExecutor(max_workers=1), None
         self.addCleanup(b.shutdown)
+
+    def publish(self, stamp):
+        """Publish one camera frame at stamp and wait for the worker to render and publish it."""
+        b = self.bridge
+        b._publish_camera_frame(stamp)
+        b._camera_pending.result()
+
+    def on_worker(self, fn):
+        """Return fn() run on the camera worker, the thread that owns the renderers."""
+        return self.bridge._camera_worker.submit(fn).result()
 
     def test_one_scene_update_per_rgb_depth_pair_and_unlocked_render(self):
         """Colour and aligned depth share one scene update, and capture and rendering run outside the sim lock."""
@@ -226,7 +241,7 @@ class SensorTests(unittest.TestCase):
             return original_render(renderer, *args, **kwargs)
 
         with patch.object(mujoco.Renderer, 'update_scene', update), patch.object(mujoco.Renderer, 'render', render):
-            b._publish_camera_frame(_sim_time_to_msg(b.data.time))
+            self.publish(_sim_time_to_msg(b.data.time))
         # Colour and aligned depth share one scene update; the decimated depth stream is the
         # second (here from the same camera, as on a D405).
         self.assertEqual(updates, [0, 0])
@@ -243,7 +258,7 @@ class SensorTests(unittest.TestCase):
             return original(renderer, *args, **kwargs)
 
         with patch.object(mujoco.Renderer, 'render', render):
-            b._publish_camera_frame(_sim_time_to_msg(b.data.time))
+            self.publish(_sim_time_to_msg(b.data.time))
         # Colour, aligned depth and the decimated depth stream.
         self.assertEqual(held, [True, True, True])
         self.assertFalse(mid360.GL_LOCK.locked())
@@ -252,18 +267,22 @@ class SensorTests(unittest.TestCase):
         """The published images, compressed images, frames and stamps match separate reference renders."""
         b = self.bridge
         stamp = _sim_time_to_msg(b.data.time)
-        b._publish_camera_frame(stamp)
+        self.publish(stamp)
         cam = b.cameras[0]
         rgb = cam.pubs['color'].messages[0]
         depth = cam.pubs['aligned'].messages[0]
-        # The reference rebuilds the same scene separately for RGB and for depth.
-        r = b._renderer[(32, 32)]
-        r.disable_depth_rendering()
-        r.update_scene(b.data, camera=0, scene_option=b._scene_opt)
-        reference_rgb = r.render()
-        r.enable_depth_rendering()
-        r.update_scene(b.data, camera=0, scene_option=b._scene_opt)
-        reference_depth = r.render()
+
+        def reference():
+            """Rebuild the same scene separately for RGB and for depth; return both renders."""
+            r = b._renderer[(32, 32)]
+            r.disable_depth_rendering()
+            r.update_scene(b.data, camera=0, scene_option=b._scene_opt)
+            rgb = r.render().copy()
+            r.enable_depth_rendering()
+            r.update_scene(b.data, camera=0, scene_option=b._scene_opt)
+            return rgb, r.render().copy()
+
+        reference_rgb, reference_depth = self.on_worker(reference)
         invalid = ~np.isfinite(reference_depth) | (reference_depth <= 0) | (reference_depth >= .999 * b.zfar)
         reference_mm = np.clip(reference_depth * 1000, 0, 65535).astype(np.uint16)
         reference_mm[invalid] = 0
@@ -287,12 +306,17 @@ class SensorTests(unittest.TestCase):
         self.assertEqual(rgb.encoding, 'rgb8')
         self.assertEqual(depth.encoding, '16UC1')
         # The decimated depth stream is a separate render at the depth image size.
-        rd = b._renderer[(16, 16)]
-        rd.enable_depth_rendering()
-        rd.update_scene(b.data, camera=0, scene_option=b._scene_opt)
+
+        def decimated():
+            """Render the depth stream's reference at the depth image size."""
+            rd = b._renderer[(16, 16)]
+            rd.enable_depth_rendering()
+            rd.update_scene(b.data, camera=0, scene_option=b._scene_opt)
+            return b._depth_mm(rd.render())
+
         np.testing.assert_array_equal(
             np.frombuffer(bytes(cam.pubs['depth'].messages[0].data), dtype=np.uint16).reshape(16, 16),
-            b._depth_mm(rd.render()))
+            self.on_worker(decimated))
         self.assertEqual((cam.pubs['depth_info'].messages[0].width, cam.pubs['depth'].messages[0].width), (32, 16))
 
     def test_compressed_topics_encode_only_for_subscribers(self):
@@ -301,7 +325,7 @@ class SensorTests(unittest.TestCase):
         cam = b.cameras[0]
         for key in ('color_jpeg', 'aligned_png', 'depth_png'):
             cam.pubs[key].subscribers = 0
-        b._publish_camera_frame(_sim_time_to_msg(b.data.time))
+        self.publish(_sim_time_to_msg(b.data.time))
         for key in ('color_jpeg', 'aligned_png', 'depth_png'):
             self.assertEqual(cam.pubs[key].messages, [], key)
         for key in ('color', 'aligned', 'depth', 'points'):
@@ -310,7 +334,7 @@ class SensorTests(unittest.TestCase):
     def test_point_cloud_matches_the_real_driver_layout(self):
         """The camera point cloud has the real driver's field layout and one point per valid depth pixel."""
         b = self.bridge
-        b._publish_camera_frame(_sim_time_to_msg(b.data.time))
+        self.publish(_sim_time_to_msg(b.data.time))
         msg = b.cameras[0].pubs['points'].messages[0]
         self.assertEqual([(f.name, f.offset, f.datatype, f.count) for f in msg.fields],
                          [('x', 0, 7, 1), ('y', 4, 7, 1), ('z', 8, 7, 1), ('rgb', 16, 7, 1)])
@@ -320,17 +344,10 @@ class SensorTests(unittest.TestCase):
         points = np.frombuffer(bytes(msg.data), dtype=rp.CLOUD_DTYPE)
         np.testing.assert_allclose(np.sort(points['z']), np.sort(depth[depth > 0] / 1000.0), rtol=1e-6)
 
-    def test_camera_worker_matches_inline_frames_and_owns_renderer(self):
-        """Frames from the camera worker thread match inline frames, and shutdown frees its renderer."""
-        from concurrent.futures import ThreadPoolExecutor
+    def test_camera_worker_renders_every_frame_and_owns_renderer(self):
+        """Frames render on the camera worker thread, never the caller's, each the same; shutdown frees the renderer."""
         b = self.bridge
         stamp = _sim_time_to_msg(b.data.time)
-        b._publish_camera_frame(stamp)
-        inline = [bytes(b.cameras[0].pubs[k].messages[0].data) for k in ('color', 'aligned')]
-        b._close_renderer()
-        for pub in b.cameras[0].pubs.values():
-            pub.messages.clear()
-        b._camera_worker, b._camera_pending = ThreadPoolExecutor(max_workers=1), None
         threads = []
         original = mujoco.Renderer.render
 
@@ -347,7 +364,8 @@ class SensorTests(unittest.TestCase):
         self.assertIsNone(b._renderer)
         cam = b.cameras[0]
         self.assertEqual(len(cam.pubs['color'].messages), 2)
-        self.assertEqual([bytes(cam.pubs[k].messages[0].data) for k in ('color', 'aligned')], inline)
+        for key in ('color', 'aligned'):
+            self.assertEqual(bytes(cam.pubs[key].messages[0].data), bytes(cam.pubs[key].messages[1].data), key)
 
     def test_tick_preserves_sim_time_schedule_and_publication_order(self):
         """A tick publishes /clock, IMU and camera on their sim-time periods, then ticks the lidar, in that order."""
@@ -422,14 +440,14 @@ LIDAR_ROOM = """<mujoco>
 HAND_DOWN = -2.0   # m, the arm's qpos that puts the hand under the floor
 
 
-def _lidar_backends():
-    """Return the lidar backends to test: cpu, and gpu when a GPU renders (else say why not)."""
+@functools.lru_cache(maxsize=None)
+def _no_gpu_reason():
+    """Return why this process cannot render on a GPU (sim_common.egl_renderer), or None when it can."""
     try:
-        mid360.GpuCaster(mujoco.MjModel.from_xml_string(LIDAR_ROOM), -1, (1,) * 6).close()
-    except mid360.GpuUnavailable as e:
-        print(f'  (gpu skipped: {e})')
-        return ('cpu',)
-    return ('cpu', 'gpu')
+        sim_common.egl_renderer()
+    except RuntimeError as e:
+        return f'no GPU: {e}'
+    return None
 
 
 def _points(msg):
@@ -453,11 +471,16 @@ class LidarTests(unittest.TestCase):
         self.lidar, self.torso = body('livox_link'), body('torso_link')
         self.robot = self_filter_geoms(self.model, ('torso_link', 'livox_link', 'arm_link'))
 
-    def scans(self, backend='cpu', robot_geoms=None):
-        """Return a started _LidarScans on the room, publishing to recorders; closed at cleanup."""
+    def scans(self, robot_geoms=None):
+        """Return a started _LidarScans on the room, publishing to recorders; closed at cleanup.
+
+        Skips the test, naming why, without a GPU.
+        """
+        if _no_gpu_reason():
+            self.skipTest(_no_gpu_reason())
         self.cloud, self.custom = Recorder(self.lock), Recorder(self.lock)
         scans = _LidarScans(self.model, self.lidar, self.torso,
-                            self.robot if robot_geoms is None else robot_geoms, backend, 'livox_frame',
+                            self.robot if robot_geoms is None else robot_geoms, 'livox_frame',
                             self.custom.publish, self.cloud.publish, LoopTimings(), self.lock)
         self.addCleanup(scans.close)
         return scans
@@ -490,74 +513,69 @@ class LidarTests(unittest.TestCase):
         offsets (its timestamp field) under the same header.
         """
         pattern = mid360.load_pattern()
-        for backend in _lidar_backends():
-            with self.subTest(backend=backend):
-                scans = self.scans(backend)
-                self.assertEqual(scans.interval, scans.caster.batch_s)
-                frames = self.run_ticks(scans, 0.3, start=2.0)
-                self.assertEqual(len(self.custom.messages), frames)
-                self.assertEqual(len(self.cloud.messages), frames)
-                for f, (raw, pc2) in enumerate(zip(self.custom.messages, self.cloud.messages)):
-                    msg = deserialize_message(raw, CustomMsg)
-                    points, lines, offsets = _points(msg)
-                    self.assertEqual(msg.point_num, 20_000)
-                    stamp = msg.header.stamp
-                    self.assertEqual(stamp.sec * 10**9 + stamp.nanosec, msg.timebase)
-                    self.assertEqual(msg.timebase, round((2.0 + 0.1 * f) * 1e9))
-                    self.assertEqual(msg.header.frame_id, 'livox_frame')
-                    want = mid360.directions(pattern, 20_000 * f, 20_000)
-                    got = points / np.linalg.norm(points, axis=1)[:, None]
-                    np.testing.assert_allclose(got, want, atol=1e-5)
-                    np.testing.assert_array_equal(lines, np.arange(20_000) % 4)
-                    self.assertTrue(np.all(np.diff(offsets.astype(np.int64)) >= 0))
-                    self.assertLessEqual(int(offsets[-1]), 100_000_000)
-                    cloud = np.frombuffer(bytes(pc2.data), dtype=PC2_DTYPE)
-                    self.assertEqual(pc2.header, msg.header)
-                    self.assertEqual((pc2.width, pc2.height, pc2.row_step), (20_000, 1, 20_000 * 26))
-                    np.testing.assert_array_equal(np.stack([cloud['x'], cloud['y'], cloud['z']], 1),
-                                                  points.astype(np.float32))
-                    np.testing.assert_array_equal(cloud['line'], lines)
-                    np.testing.assert_array_equal(cloud['timestamp'], offsets.astype(np.float64))
+        scans = self.scans()
+        self.assertEqual(scans.interval, scans.caster.batch_s)
+        frames = self.run_ticks(scans, 0.3, start=2.0)
+        self.assertEqual(len(self.custom.messages), frames)
+        self.assertEqual(len(self.cloud.messages), frames)
+        for f, (raw, pc2) in enumerate(zip(self.custom.messages, self.cloud.messages)):
+            msg = deserialize_message(raw, CustomMsg)
+            points, lines, offsets = _points(msg)
+            self.assertEqual(msg.point_num, 20_000)
+            stamp = msg.header.stamp
+            self.assertEqual(stamp.sec * 10**9 + stamp.nanosec, msg.timebase)
+            self.assertEqual(msg.timebase, round((2.0 + 0.1 * f) * 1e9))
+            self.assertEqual(msg.header.frame_id, 'livox_frame')
+            want = mid360.directions(pattern, 20_000 * f, 20_000)
+            got = points / np.linalg.norm(points, axis=1)[:, None]
+            np.testing.assert_allclose(got, want, atol=1e-5)
+            np.testing.assert_array_equal(lines, np.arange(20_000) % 4)
+            self.assertTrue(np.all(np.diff(offsets.astype(np.int64)) >= 0))
+            self.assertLessEqual(int(offsets[-1]), 100_000_000)
+            cloud = np.frombuffer(bytes(pc2.data), dtype=PC2_DTYPE)
+            self.assertEqual(pc2.header, msg.header)
+            self.assertEqual((pc2.width, pc2.height, pc2.row_step), (20_000, 1, 20_000 * 26))
+            np.testing.assert_array_equal(np.stack([cloud['x'], cloud['y'], cloud['z']], 1),
+                                          points.astype(np.float32))
+            np.testing.assert_array_equal(cloud['line'], lines)
+            np.testing.assert_array_equal(cloud['timestamp'], offsets.astype(np.float64))
 
     def test_scan_thread_matches_live_casts(self):
         """The thread's messages are byte-identical to a scanner casting on the live data at the same times.
 
         The hand moves through the view while the thread works from its ring of pose snapshots.
         """
-        for backend in _lidar_backends():
-            with self.subTest(backend=backend):
-                scans = self.scans(backend)
-                live = mid360.Mid360Scanner(mid360.make_caster(self.model, self.torso, (1,) * 6, backend,
-                                                               robot_geoms=self.robot))
-                self.addCleanup(live.caster.close)
-                want = []
-                dt = self.model.opt.timestep
-                due = []
+        scans = self.scans()
+        live = mid360.Mid360Scanner(mid360.GpuCaster(self.model, self.torso, (1,) * 6, robot_geoms=self.robot))
+        self.addCleanup(live.caster.close)
+        want = []
+        dt = self.model.opt.timestep
+        due = []
 
-                def step(k):
-                    """Move the hand and cast the live reference when the thread's cast is due."""
-                    self.data.qpos[0] = HAND_DOWN + 2.0 * min(1.0, k * dt / 0.3)
-                    mujoco.mj_forward(self.model, self.data)
-                    t = k * dt
-                    if not due or t >= due[-1] + scans.interval - 1e-9:
-                        due.append(t)
-                        pose = (self.data.xpos[self.lidar].copy(), self.data.xmat[self.lidar].reshape(3, 3).copy())
-                        frame = live.update(mid360.Snapshot(*pose, self.data, self.model.geom_rgba[:, 3].copy(),
-                                                            self.model.mat_rgba[:, 3].copy()), t)
-                        if frame is not None:
-                            want.append(frame)
+        def step(k):
+            """Move the hand and cast the live reference when the thread's cast is due."""
+            self.data.qpos[0] = HAND_DOWN + 2.0 * min(1.0, k * dt / 0.3)
+            mujoco.mj_forward(self.model, self.data)
+            t = k * dt
+            if not due or t >= due[-1] + scans.interval - 1e-9:
+                due.append(t)
+                pose = (self.data.xpos[self.lidar].copy(), self.data.xmat[self.lidar].reshape(3, 3).copy())
+                frame = live.update(mid360.Snapshot(*pose, self.data, self.model.geom_rgba[:, 3].copy(),
+                                                    self.model.mat_rgba[:, 3].copy()), t)
+                if frame is not None:
+                    want.append(frame)
 
-                self.run_ticks(scans, 0.5, step=step)
-                self.assertEqual(scans.waits, 0)
-                self.assertEqual(len(want), 5)
-                self.assertEqual(len(self.custom.messages), len(want))
-                for raw, frame in zip(self.custom.messages, want):
-                    msg = deserialize_message(raw, CustomMsg)
-                    points, lines, offsets = _points(msg)
-                    np.testing.assert_array_equal(points.astype(np.float32), frame.points)
-                    np.testing.assert_array_equal(lines, frame.line)
-                    np.testing.assert_array_equal(offsets, frame.offset_time)
-                    self.assertEqual(msg.timebase, round(frame.timebase * 1e9))
+        self.run_ticks(scans, 0.5, step=step)
+        self.assertEqual(scans.waits, 0)
+        self.assertEqual(len(want), 5)
+        self.assertEqual(len(self.custom.messages), len(want))
+        for raw, frame in zip(self.custom.messages, want):
+            msg = deserialize_message(raw, CustomMsg)
+            points, lines, offsets = _points(msg)
+            np.testing.assert_array_equal(points.astype(np.float32), frame.points)
+            np.testing.assert_array_equal(lines, frame.line)
+            np.testing.assert_array_equal(offsets, frame.offset_time)
+            self.assertEqual(msg.timebase, round(frame.timebase * 1e9))
 
     def test_self_filter_drops_the_robots_returns_but_keeps_its_shadow(self):
         """A ray whose first hit is a self-filtered geom gives a zero point; unfiltered, the hand gives points.
@@ -569,28 +587,27 @@ class LidarTests(unittest.TestCase):
         mujoco.mj_forward(self.model, self.data)
         hand = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, 'hand')
         none = np.zeros(self.model.ngeom, dtype=bool)
-        for backend in _lidar_backends():
-            for robot_geoms, filtered in ((self.robot, True), (none, False)):
-                with self.subTest(backend=backend, filtered=filtered):
-                    scans = self.scans(backend, robot_geoms)
-                    self.run_ticks(scans, 0.1)
-                    msg = deserialize_message(self.custom.messages[0], CustomMsg)
-                    self.assertEqual(msg.point_num, 20_000)
-                    points, _, _ = _points(msg)
-                    returns = points.any(axis=1)
-                    points = points[returns]
-                    world = self.data.xpos[self.lidar] + points @ self.data.xmat[self.lidar].reshape(3, 3).T
-                    local = (world - self.data.geom_xpos[hand]) @ self.data.geom_xmat[hand].reshape(3, 3)
-                    on_hand = np.all(np.abs(local) < self.model.geom_size[hand] + 0.08, axis=1)
-                    # The floor under the hand, seen past it from the sensor at (0, 0, 1).
-                    shadow = (np.abs(world[:, 2]) < 0.1) & (np.abs(world[:, 1]) < 0.1) & \
-                        (world[:, 0] > 1.3) & (world[:, 0] < 1.5)
-                    self.assertEqual(int(shadow.sum()), 0)
-                    if filtered:
-                        self.assertEqual(int(on_hand.sum()), 0)
-                        self.assertGreater(int((~returns).sum()), 100)
-                    else:
-                        self.assertGreater(int(on_hand.sum()), 100)
+        for robot_geoms, filtered in ((self.robot, True), (none, False)):
+            with self.subTest(filtered=filtered):
+                scans = self.scans(robot_geoms)
+                self.run_ticks(scans, 0.1)
+                msg = deserialize_message(self.custom.messages[0], CustomMsg)
+                self.assertEqual(msg.point_num, 20_000)
+                points, _, _ = _points(msg)
+                returns = points.any(axis=1)
+                points = points[returns]
+                world = self.data.xpos[self.lidar] + points @ self.data.xmat[self.lidar].reshape(3, 3).T
+                local = (world - self.data.geom_xpos[hand]) @ self.data.geom_xmat[hand].reshape(3, 3)
+                on_hand = np.all(np.abs(local) < self.model.geom_size[hand] + 0.08, axis=1)
+                # The floor under the hand, seen past it from the sensor at (0, 0, 1).
+                shadow = (np.abs(world[:, 2]) < 0.1) & (np.abs(world[:, 1]) < 0.1) & \
+                    (world[:, 0] > 1.3) & (world[:, 0] < 1.5)
+                self.assertEqual(int(shadow.sum()), 0)
+                if filtered:
+                    self.assertEqual(int(on_hand.sum()), 0)
+                    self.assertGreater(int((~returns).sum()), 100)
+                else:
+                    self.assertGreater(int(on_hand.sum()), 100)
 
     def test_self_filter_geoms_by_body_prefix(self):
         """self_filter_geoms marks the geoms of bodies whose names start with a prefix; none without one."""

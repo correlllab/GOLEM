@@ -1,7 +1,7 @@
 """Check realsense_profile: the real cameras' placement, intrinsics, TF tree and point cloud.
 
 Needs MuJoCo, NumPy and PyYAML only; the rendering check skips when no offscreen GL context
-is available (set MUJOCO_GL=egl or osmesa).
+is available (MUJOCO_GL=egl on the GPU, as in the robocasa image).
 """
 import math
 import unittest

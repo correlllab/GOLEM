@@ -26,9 +26,9 @@ H12Sensors is the sensor suite of the mujoco_sensors node
 (mujoco_ros_bridge.RosSensorBridge), which publishes /clock and the optional
 ground-truth odom and calls tick() once per sim step after them. The IMU and
 camera TF are published at their rates keyed off sim time; camera frames are
-rate-throttled the same way and rendered from MjData snapshots on a worker
-thread. MuJoCo's renderer GL context is thread-affine: it is created, used and
-freed on the thread that renders (see _camera_worker). The renders hold
+rate-throttled the same way and rendered from MjData snapshots on the camera
+worker thread, through EGL. MuJoCo's renderer GL context is thread-affine: it is
+created, used and freed on that thread (see _camera_worker). The renders hold
 mid360.GL_LOCK, taking turns with the lidar's GPU caster.
 
 The MID-360 is the model both robots share (golem_robocasa/mid360.py): the
@@ -41,14 +41,13 @@ the limbs still occlude what is behind them. /livox/lidar and /livox/pointcloud
 carry the same frame, stamped at its first point, as the driver stamps them.
 
 Threads. The lidar's rays are cast on the mid360_scan thread (_LidarScans, a
-mid360.ScanRing, as on the G1) through the caster mid360.make_caster() picks by
-GOLEM_LIDAR_BACKEND: depth renders on the GPU, else exact rays on the CPU.
-Every caster's batch_s of sim time, tick() copies under the sim lock what a
-cast reads (every geom's pose, the sensor's, and the geoms' and materials' live
-alpha, which RoboCasa tasks change and the rays skip at 0) into a slot of a
-ring; the thread casts the rays due by then, labelled with that time, and packs
-and publishes each frame it completes. The caster casts on its own copy of the
-model, and both casters release the GIL while they cast, so the casts run
+mid360.ScanRing, as on the G1) through mid360.GpuCaster, from depth renders on
+the GPU. Every caster's batch_s of sim time, tick() copies under the sim lock
+what a cast reads (every geom's pose, the sensor's, and the geoms' and
+materials' live alpha, which RoboCasa tasks change and the rays skip at 0) into
+a slot of a ring; the thread casts the rays due by then, labelled with that
+time, and packs and publishes each frame it completes. The caster casts on its
+own copy of the model and releases the GIL while it renders, so the casts run
 beside the physics. The ring holds one frame of casts: when the thread falls
 that far behind, tick() waits for it (the lidar_wait stage), so a frame trails
 the sim by at most one frame period and the real-time factor drops instead.
@@ -59,7 +58,6 @@ before sim_t, as the G1's are.
 """
 import copy
 import io
-import os
 import struct
 from concurrent.futures import ThreadPoolExecutor
 from array import array as _array
@@ -192,24 +190,22 @@ def _livox_pointcloud(stamp, frame_id, offset_time, points, lines) -> PointCloud
 class _LidarScans(mid360.ScanRing):
     """Cast the MID-360's scans on the mid360_scan thread (a mid360.ScanRing) and publish both lidar topics."""
 
-    def __init__(self, model, body_id, exclude_body_id, robot_geoms, backend, frame_id,
+    def __init__(self, model, body_id, exclude_body_id, robot_geoms, frame_id,
                  publish_lidar, publish_cloud, timings=None, sim_lock=None):
-        """Build the caster backend names and start the thread.
+        """Build the GPU caster and start the thread.
 
         The sensor's pose is body body_id's; the rays pass through body exclude_body_id's
         geoms, and a ray whose first hit is in the bool mask robot_geoms (ngeom,) gives no
         return (a zero point). Each frame goes to publish_lidar(CustomMsg CDR bytes) and
         publish_cloud(PointCloud2) in frame_id. sim_lock is held for the snapshot copies only.
-        Raises RuntimeError when backend is gpu and no GPU caster can be built.
+        Raises RuntimeError when EGL fails to render.
         """
         body = int(body_id)
         self._frame_id = frame_id
         self._publish_lidar = publish_lidar
         self._publish_cloud = publish_cloud
-        caster = mid360.make_caster(model, exclude_body_id, LIDAR_GEOM_GROUPS, backend,
-                                    robot_geoms=robot_geoms, log=_log)
-        _log(f"lidar rays cast on the {'GPU' if isinstance(caster, mid360.GpuCaster) else 'CPU'} "
-             f"every {caster.batch_s * 1e3:g} ms of sim time")
+        caster = mid360.GpuCaster(model, exclude_body_id, LIDAR_GEOM_GROUPS, robot_geoms=robot_geoms)
+        _log(f"lidar rays cast on the GPU every {caster.batch_s * 1e3:g} ms of sim time")
         super().__init__(mid360.Mid360Scanner(caster), model,
                          lambda data: (data.xpos[body], data.xmat[body].reshape(3, 3)),
                          self._publish_frame, caster.batch_s, sim_lock, timings, _log)
@@ -297,7 +293,6 @@ class H12Sensors:
         lidar_frame: str = "livox_frame",
         lidar_exclude_body: str = "torso_link",
         cam_rate_hz: float = 15.0,
-        lidar_backend: str = "auto",
         imu_quat_sensor: str = "livox_imu_quat",
         imu_gyro_sensor: str = "livox_imu_gyro",
         imu_acc_sensor: str = "livox_imu_acc",
@@ -315,9 +310,8 @@ class H12Sensors:
         and depth/color/points on. The lidar's pose is lidar_body's;
         lidar_exclude_body is the body it rides in, whose geoms the rays pass
         through; geoms of bodies named with a lidar_self_prefixes prefix give no
-        return. lidar_backend is mid360.make_caster's (GOLEM_LIDAR_BACKEND,
-        mid360.backend_from_env); gpu raises RuntimeError without a GPU caster.
-        Rates are Hz of sim time.
+        return. The lidar's GPU caster raises RuntimeError when EGL fails to
+        render. Rates are Hz of sim time.
         """
         self.node = node
         self.model = model
@@ -386,19 +380,16 @@ class H12Sensors:
         # s of sim time, so the rates do not depend on the real-time factor.
         self._last_cam_sim_t = 0.0
         self._last_imu_sim_t = 0.0
-        # The scan thread publishes both lidar topics; its GPU caster, if any,
-        # makes its EGL context here, before the passive viewer's window exists.
+        # The scan thread publishes both lidar topics; its GPU caster makes its
+        # EGL context here, before the passive viewer's window exists.
         self._lidar = _LidarScans(model, self.lidar_body_id, self.lidar_exclude_body_id,
-                                  self.geom_is_robot, lidar_backend, lidar_frame,
+                                  self.geom_is_robot, lidar_frame,
                                   self.pub_lidar.publish, self.pub_pc2.publish,
                                   self.timings, sim_lock)
-        # A GLFW context lives on the main thread; EGL and OSMesa contexts can
-        # live on a worker thread, which renders while physics runs.
-        self._camera_worker = (
-            ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera")
-            if os.environ.get("MUJOCO_GL", "").strip().lower() in ("egl", "osmesa") else None)
+        # The cameras render on a worker thread, through EGL, while physics runs.
+        self._camera_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera")
         self._camera_pending = None
-        if self._camera_worker is not None and self.cameras:
+        if self.cameras:
             # Make the EGL context now: once the passive viewer's GLFW window
             # exists, a new EGL context can no longer be made current.
             self._camera_worker.submit(self._ensure_renderer).result()
@@ -463,7 +454,11 @@ class H12Sensors:
         return lidar.stats() if lidar is not None else ""
 
     def shutdown(self) -> None:
-        """Stop the worker threads, log the lidar's counts and free the renderers on the thread that owns them."""
+        """Stop the worker threads, log the lidar's counts and free the renderers on the thread that owns them.
+
+        A second call, or one on a suite whose constructor failed before the threads started,
+        stops what is left.
+        """
         lidar = getattr(self, "_lidar", None)
         if lidar is not None:
             lidar.close()
@@ -473,8 +468,6 @@ class H12Sensors:
             camera_worker.submit(self._close_renderer).result()
             camera_worker.shutdown(wait=True)
             self._camera_worker = None
-        else:
-            self._close_renderer()
 
     def _close_renderer(self) -> None:
         """Close every renderer, on the thread that made them."""
@@ -489,11 +482,10 @@ class H12Sensors:
         """Publish the IMU, camera TF and camera frames due at sim_t (s), and submit the lidar's casts.
 
         The host calls it once per sim step, after /clock and odom; stamp is
-        sim_t as a ROS time. Camera frames come from MjData snapshots on a
-        worker thread, one job in flight (the cameras stay on this thread under
-        GLFW); the lidar's casts are labelled with the state time, one physics
-        step before sim_t (module docstring). Call it without holding sim_lock,
-        on the thread that steps the physics.
+        sim_t as a ROS time. Camera frames come from MjData snapshots on the
+        camera worker thread, one job in flight; the lidar's casts are labelled
+        with the state time, one physics step before sim_t (module docstring).
+        Call it without holding sim_lock, on the thread that steps the physics.
         """
         if sim_t - self._last_imu_sim_t >= self.imu_period:
             self._last_imu_sim_t = sim_t
@@ -545,14 +537,10 @@ class H12Sensors:
         self.pub_imu.publish(msg)
 
     def _publish_camera_frame(self, stamp: TimeMsg) -> None:
-        """Snapshot MjData and render and publish every camera from it, on the worker when there is one."""
+        """Snapshot MjData and submit rendering and publishing every camera from it to the camera worker."""
         capture_start = self.timings.start()
         snapshot = self._capture_camera_snapshot()
         self.timings.stop("camera_capture", capture_start)
-        worker = getattr(self, "_camera_worker", None)
-        if worker is None:
-            self._render_and_publish_cameras(stamp, snapshot)
-            return
         # One frame set in flight at most: wait rather than drop, so every
         # scheduled frame is published. result() re-raises the last one's failure.
         wait_start = self.timings.start()
@@ -560,7 +548,7 @@ class H12Sensors:
         if pending is not None:
             pending.result()
         self.timings.stop("camera_wait", wait_start)
-        self._camera_pending = worker.submit(self._render_and_publish_cameras, stamp, snapshot)
+        self._camera_pending = self._camera_worker.submit(self._render_and_publish_cameras, stamp, snapshot)
 
     def _capture_camera_snapshot(self):
         """Return an MjData holding what the cameras' scenes read of self.data, taken under the sim lock.

@@ -343,7 +343,11 @@ class H12LoopWiringTests(unittest.TestCase):
 
     def test_rate_reaches_the_pacer_and_both_hands_tick_every_step(self):
         """GOLEM_SIM_RATE=2 builds one pacer at rate 2, is logged, and both hands tick once per step and are stopped."""
-        env = dict(os.environ, GOLEM_SIM_RATE="2", GOLEM_CAMERAS="0", GOLEM_LIDAR_BACKEND="cpu")
+        try:
+            sim_common.egl_renderer()
+        except RuntimeError as e:
+            self.skipTest(f"no GPU for the sim's lidar: {e}")
+        env = dict(os.environ, GOLEM_SIM_RATE="2", GOLEM_CAMERAS="0")
         r = subprocess.run([sys.executable, "-c", H12_LOOP % H12_LOOP_STEPS], capture_output=True, text=True,
                            env=env, timeout=300)
         self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-3000:])

@@ -160,13 +160,13 @@ only on domain 0, where robot time is always the boot clock.
 **Relay, newest only.** One relay thread runs at `control.publish_hz`, sleeping to absolute
 deadlines of robot time. Under `use_sim_time` a sleep ends only when `/clock` moves, so the
 rate follows `/clock`'s steps: RoboCasa publishes `/clock` every 2 ms physics step (500 Hz of
-sim time), one cycle per step; Isaac once per control step, and a step that spans more than
-two periods gets two cycles (the schedule restarts at the step, below), so Isaac's coarser
-`/clock` gives fewer than 500 cycles per s of sim time. Each cycle it takes the newest
-`/lowstate`, the newest hardware estop values and the newest command of each input (keep-last
-1, so no queue builds up), and publishes one command. A cycle that ends more than a period late restarts the schedule: a
-slow cycle lowers the rate, and nothing is replayed to catch up. No timer in the node runs
-on the wall clock.
+sim time), one cycle per step; Isaac publishes it once per control step, and a step of two
+periods or more gets two cycles back to back, so Isaac's coarser `/clock` gives fewer than
+500 cycles per s of sim time. Each cycle it takes the newest `/lowstate`, the newest hardware
+estop values and the newest command of each input (keep-last 1, so no queue builds up), and
+publishes one command. A cycle that ends more than a period late restarts the schedule at
+the time it ends: a slow cycle lowers the rate, and the relay catches up by at most one
+cycle. No timer in the node runs on the wall clock.
 
 **What it writes.** Each engaged input's newest valid command on that input's own slots
 (`full`: every body slot; `split`: the lower and upper slots). Every other slot, the slots

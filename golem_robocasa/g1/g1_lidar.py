@@ -14,8 +14,8 @@ Scans. Both robots' MID-360 is the shared model in golem_robocasa/mid360.py: the
 real non-repetitive scan pattern, the blind zone, the maximum range and the
 range noise are there, with its GPU caster and its frame timing. This module gives
 it the G1's mount: make_caster() casts from the mid360_link site and
-make_scanner() fires POINTS_PER_FRAME rays per frame, the real sensor's
-(mid360.POINTS_PER_SECOND at mid360.FRAME_RATE_HZ).
+make_scanner() fires POINTS_PER_FRAME rays per frame, the real sensor's count
+(mid360.POINTS_PER_SECOND over mid360.FRAME_RATE_HZ frames a second).
 
 Self returns. The sensor sits inside the head mesh, which belongs to torso_link,
 so rays pass through torso_link's geoms (MuJoCo's bodyexclude); in the FOV that

@@ -11,8 +11,8 @@
         point_filter_num: 3
         max_iteration: 3
         # 0.2 m: the coarser map leaves fewer floor returns lifted into the scan band, which
-        # show as phantom cells in the nav test's map (the known failure in tests/g1/README.md
-        # remains; docs/superpowers/specs/2026-11-05-sim-speed-results.md, Tier 2).
+        # show as phantom cells in the nav test's map (tests/g1/README.md;
+        # docs/superpowers/specs/2026-11-05-sim-speed-results.md, Tier 2).
         filter_size_surf: 0.2
         filter_size_map: 0.2
         cube_side_length: 1000.0

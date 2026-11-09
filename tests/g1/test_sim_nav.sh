@@ -47,6 +47,10 @@
 #   GOLEM_LIDAR_POINTS, GOLEM_LIDAR_HZ, GOLEM_CAMERAS, GOLEM_CAMERA_HZ,
 #   GOLEM_CAMERA_SCALE   passed to the sim as the shell has them, docker/.env's
 #               never (g1_sensors.SensorConfig)
+#   GOLEM_LIDAR_BACKEND   passed to the sim as the shell has it, docker/.env's never:
+#               unset is auto (the GPU caster when the sim has a GPU, see SIM_GPUS, else
+#               the CPU's), cpu casts every ray on the CPU as on the Mac; the sim logs
+#               the caster it built
 #
 # Exit: 0 when every check passes; 1 when a check, the test's steps or a container fails;
 #   2 for bad arguments or settings, a bad domain or a non-empty OUT; 3 when the core_ws build
@@ -76,7 +80,8 @@ source "$HERE/common.sh"
 if [ -n "${GOLEM_TEST_RECORD_EVERY:-}" ]; then
     SIM_ENV+=(-e "GOLEM_TEST_RECORD_EVERY=$GOLEM_TEST_RECORD_EVERY")
 fi
-g1_test_shell_knobs GOLEM_LIDAR_POINTS GOLEM_LIDAR_HZ GOLEM_CAMERAS GOLEM_CAMERA_HZ GOLEM_CAMERA_SCALE
+g1_test_shell_knobs GOLEM_LIDAR_POINTS GOLEM_LIDAR_HZ GOLEM_CAMERAS GOLEM_CAMERA_HZ GOLEM_CAMERA_SCALE \
+    GOLEM_LIDAR_BACKEND
 DRIVE_ARGS=
 if [ "${NAV_KEEP_LIDAR:-0}" = 1 ]; then
     DRIVE_ARGS=--keep-lidar

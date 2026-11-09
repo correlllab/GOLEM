@@ -23,9 +23,9 @@ Self returns. The sensor sits inside the head mesh, which belongs to torso_link,
 so rays pass through torso_link's geoms (MuJoCo's bodyexclude); in the FOV that
 is only the head shell, since torso_link is rigid with the sensor. A ray whose
 first hit is any other robot geom (shoulders, wrists, hands: 3% of a frame's
-rays with every joint at 0) gives no point, so the scan has no returns from the
-robot's own body and the body still occludes what is behind it, as on the real
-robot. Only visual geoms (group 1) are hit, the surfaces the camera
+rays with every joint at 0) gives no return (a zero point), so the scan has no
+returns from the robot's own body and the body still occludes what is behind
+it, as on the real robot. Only visual geoms (group 1) are hit, the surfaces the camera
 renders; geoms with alpha 0, which in RoboCasa are placement regions and hidden
 collision boxes, are not.
 

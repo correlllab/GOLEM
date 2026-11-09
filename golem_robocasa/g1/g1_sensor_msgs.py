@@ -8,8 +8,9 @@ MID-360 (livox_ros_driver2 in CustomMsg mode, xfer_format 1, msg_MID360_launch.p
   /livox/lidar  livox_ros_driver2/CustomMsg, frame_id livox_frame (the launch
                 file's frame_id), header stamp = timebase = the first point's time,
                 offset_time in ns after it, lidar_id 192, rsvd 0. The sim has no
-                reflectance model: every point has reflectivity REFLECTIVITY and
-                tag 0 (a normal point). livox_custom_msg_cdr() gives the same message
+                reflectance model: every return has reflectivity REFLECTIVITY, a
+                ray without a return (at 0, 0, 0) reflectivity 0 as the driver's,
+                and every point tag 0. livox_custom_msg_cdr() gives the same message
                 already serialized, which rclpy's Publisher.publish() accepts as
                 bytes: building and converting 20,000 CustomPoint objects costs
                 ~190 ms in Python, the serialized form under 1 ms.
@@ -79,11 +80,16 @@ def livox_custom_msg(frame, frame_id=LIVOX_FRAME):
     msg.timebase = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
     msg.point_num = len(frame.points)
     msg.lidar_id = LIDAR_ID
-    msg.points = [CustomPoint(offset_time=o, x=x, y=y, z=z, reflectivity=REFLECTIVITY, tag=TAG,
-                              line=line)
-                  for o, (x, y, z), line in zip(frame.offset_time.tolist(), frame.points.tolist(),
-                                                frame.line.tolist())]
+    msg.points = [CustomPoint(offset_time=o, x=x, y=y, z=z, reflectivity=r, tag=TAG, line=line)
+                  for o, (x, y, z), r, line in zip(frame.offset_time.tolist(), frame.points.tolist(),
+                                                   _reflectivity(frame).tolist(),
+                                                   frame.line.tolist())]
     return msg
+
+
+def _reflectivity(frame):
+    """Return each point's reflectivity: REFLECTIVITY, 0 for a ray without a return at (0, 0, 0)."""
+    return np.where(frame.points.any(axis=1), REFLECTIVITY, 0).astype(np.uint8)
 
 
 # CustomPoint in CDR: uint32 offset_time, float32 x y z, uint8 reflectivity tag
@@ -117,7 +123,7 @@ def livox_custom_msg_cdr(frame, frame_id=LIVOX_FRAME):
         points = np.zeros(count, dtype=_CDR_POINT)
         points["offset_time"] = frame.offset_time
         points["x"], points["y"], points["z"] = frame.points.T
-        points["reflectivity"] = REFLECTIVITY
+        points["reflectivity"] = _reflectivity(frame)
         points["tag"] = TAG
         points["line"] = frame.line
         out += points.tobytes()[:-1]   # no padding after the last element

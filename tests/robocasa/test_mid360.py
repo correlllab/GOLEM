@@ -218,8 +218,52 @@ class _FakeCaster:
         return np.full(len(directions), float(data))
 
 
+class _PatternedCaster:
+    """Return, by ray index in the call, no hit, a hit in the blind zone, past MAX_RANGE or at 2 m.
+
+    Keeps every distance it returned, in order, in self.cast_dist.
+    """
+
+    def __init__(self):
+        """Start with no casts."""
+        self.cast_dist = []
+
+    def cast(self, origin, rotation, directions, data, geom_alpha=None, mat_alpha=None):
+        """Return NaN, 0.05 m, 50 m, 2 m and 2 m in turn for each of directions."""
+        dist = np.resize([np.nan, 0.05, 50.0, 2.0, 2.0], len(directions))
+        self.cast_dist.append(dist)
+        return dist
+
+
 class ScannerTests(unittest.TestCase):
-    """Check Mid360Scanner's frames, timing, blind zone and noise."""
+    """Check Mid360Scanner's frames, timing, blind zone, noise and rays without a return."""
+
+    def test_rays_without_a_return_are_zero_points(self):
+        """Every ray fired is a point; one without a return is (0, 0, 0), as the driver publishes it.
+
+        No hit, a hit in the blind zone and one past MAX_RANGE are all no return; each such
+        point keeps its offset_time and line, so a frame is the pattern's 20,000 rays in order.
+        """
+        caster = _PatternedCaster()
+        scanner = mid360.Mid360Scanner(caster)
+        snapshot = mid360.Snapshot(np.zeros(3), np.eye(3), None)
+        frames = _run(scanner, snapshot, _steps(0.0, 0.1))
+        self.assertEqual(len(frames), 1)
+        frame = frames[0]
+        self.assertEqual(frame.rays, FRAME_POINTS)
+        self.assertEqual(len(frame.points), FRAME_POINTS)
+        self.assertEqual(len(frame.offset_time), FRAME_POINTS)
+        np.testing.assert_array_equal(frame.line, np.arange(FRAME_POINTS) % mid360.LINES)
+        self.assertTrue(np.all(np.diff(frame.offset_time.astype(np.int64)) >= 0))
+        ranges = np.linalg.norm(frame.points.astype(np.float64), axis=1)
+        zero = np.all(frame.points == 0.0, axis=1)
+        # The rays in the order they were cast; the call that ends the frame also casts the
+        # next frame's first ray.
+        cast = np.concatenate(caster.cast_dist)
+        self.assertEqual(len(cast), FRAME_POINTS + 1)
+        np.testing.assert_array_equal(zero, cast[:FRAME_POINTS] != 2.0)
+        self.assertGreater(zero.sum(), 0)
+        self.assertLess(np.abs(ranges[~zero] - 2.0).max(), 0.2)   # 10 sigma of the noise
 
     def test_frames_are_20000_points_at_10hz(self):
         """1 s of updates every 10 ms in a closed room gives 10 frames of 20,000 rays.
@@ -249,7 +293,7 @@ class ScannerTests(unittest.TestCase):
                 unit, mid360.directions(pattern, k * FRAME_POINTS, FRAME_POINTS), atol=1e-5)
 
     def test_blind_zone_and_noise(self):
-        """Walls at 0.05 m give no points; at 2 m, ranges are unbiased with 2 cm of noise.
+        """Walls at 0.05 m give only zero points; at 2 m, ranges are unbiased with 2 cm of noise.
 
         The same seed gives the same frame.
         """
@@ -258,7 +302,8 @@ class ScannerTests(unittest.TestCase):
         caster.close()
         self.assertEqual(len(frames), 1)
         self.assertEqual(frames[0].rays, FRAME_POINTS)
-        self.assertEqual(len(frames[0].points), 0)
+        self.assertEqual(len(frames[0].points), FRAME_POINTS)
+        self.assertFalse(frames[0].points.any())
 
         caster, snapshot = _cube_snapshot(2.0, UPSIDE_DOWN)
         first = _run(mid360.Mid360Scanner(caster, rng_seed=7), snapshot, _steps(0.0, 0.1))

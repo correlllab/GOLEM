@@ -113,8 +113,9 @@ class LidarMountTests(unittest.TestCase):
         """The H1-2's scan thread fires 20,000 pattern rays a frame from livox_link, numbered on lines 0-3.
 
         In a walled room around the H1-2 at its MJCF's default pose, with every geom of the
-        robot's subtree giving no return: each frame casts the next 20,000 rows of the pattern,
-        the returns are those rays in order, on line row % 4, and most rays return.
+        robot's subtree giving no return: each frame casts the next 20,000 rows of the pattern
+        and holds them in order, point k on line k % 4, each return along its ray and each ray
+        without one at (0, 0, 0); most rays return.
         """
         spec = mujoco.MjSpec.from_file(MJCFS['mujoco'])
         for pos, size in (((3.05, 0, 1.5), (.05, 3.1, 1.5)), ((-3.05, 0, 1.5), (.05, 3.1, 1.5)),
@@ -155,18 +156,15 @@ class LidarMountTests(unittest.TestCase):
         pattern = mid360.load_pattern()
         for f, frame in enumerate(frames):
             self.assertEqual(frame.rays, 20_000)
-            self.assertGreater(len(frame.points), 0.9 * 20_000)
-            self.assertEqual(deserialize_message(published[f], CustomMsg).point_num, len(frame.points))
+            self.assertEqual(len(frame.points), 20_000)
+            self.assertEqual(deserialize_message(published[f], CustomMsg).point_num, 20_000)
+            returns = frame.points.any(axis=1)
+            self.assertGreater(returns.sum(), 0.9 * 20_000)
             rays = mid360.directions(pattern, 20_000 * f, 20_000)
-            unit = frame.points / np.linalg.norm(frame.points, axis=1)[:, None]
-            rows, j = [], 0
-            for u in unit:   # the returns are a subsequence of the frame's rays
-                while np.linalg.norm(rays[j] - u) > 1e-4:
-                    j += 1
-                rows.append(j)
-                j += 1
-            np.testing.assert_array_equal(frame.line, np.array(rows) % 4)
-            self.assertEqual(set(frame.line.tolist()), {0, 1, 2, 3})
+            hits = frame.points[returns].astype(np.float64)
+            np.testing.assert_allclose(hits / np.linalg.norm(hits, axis=1)[:, None], rays[returns],
+                                       atol=1e-4)
+            np.testing.assert_array_equal(frame.line, np.arange(20_000) % 4)
 
 
 if __name__ == '__main__':

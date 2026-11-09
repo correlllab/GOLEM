@@ -51,3 +51,58 @@ is not part of the table above, which is the whole of Tier 1.
 
 Every figure here is a single run. The H1-2's full-stack 0.83x against the pinning-alone 0.86x is
 within run-to-run spread, not a regression shown.
+
+## Tier 2
+
+Tier 2 changes only the lidar's points: both robots' sims publish the shared MID-360 model
+(`golem_robocasa/mid360.py`), the real scan pattern at 200,000 points per second in 20,000-ray
+frames at 10 Hz, 0.1 m blind zone and 2 cm range noise, with each ray without a return a point
+at (0, 0, 0) as the real driver publishes it. The rays are cast on a scan thread beside the
+physics, from depth images on the GPU where MuJoCo renders through EGL (the `auto` backend), else
+exactly on the CPU (`GOLEM_LIDAR_BACKEND=cpu`, the Mac's path). If the casts fall more than a frame
+behind, the physics waits for them instead of dropping rays. The G1 sim's FAST-LIO values
+(`golem_slam/config/g1/fastlio_sim.yaml`) are retuned for the denser, noisier scan; the H1-2's
+`fastlio.yaml`, shared with the real robot, is unchanged.
+
+Measured 2026-11-08 on the i7-14700F with an RTX 5070 Ti, at this table's commit (branch
+`sim_speed`, on top of `1693ad4`), `cpus: sim 0-15, ros 16-27`. The closed-loop suites give their
+sim container the GPU (the nvidia runtime and `MUJOCO_GL=egl`), so `auto` cast on the GPU; each
+sim logged `lidar rays cast on the GPU every 20 ms of sim time`.
+
+| | Tier 1 H1-2 | Tier 1 G1 | Tier 2 H1-2 | Tier 2 G1 |
+|---|---|---|---|---|
+| Full stack (`tests/sim`), GPU caster | 0.83x | 1.00x (capped) | 1.00x (capped; no cast waited) | 1.00x (capped; no cast waited) |
+| Full stack (`tests/sim`), CPU caster | | | 0.74x: the physics waited for the lidar at 4827 of 5500 casts | not measured |
+
+The CPU row is one extra run with `GOLEM_LIDAR_BACKEND=cpu` in the shell, which the closed-loop
+harnesses now pass to the sim: it shows what a host without a GPU caster gets with the stack beside
+it, not the Mac itself (the Mac image cannot be built on this host).
+
+The closed-loop suites on the final values, all on the GPU caster:
+
+| Suite | Result | Real-time factor |
+|---|---|---|
+| `tests/sim/test_sim_stack.sh --h12` | 14/14 | 1.00x |
+| `tests/sim/test_sim_stack.sh --g1` | 14/14 | 1.00x |
+| `tests/g1/test_sim_nav.sh` | 13/13 in each of 3 runs | 1.00x |
+| `tests/g1/test_sim_bringup.sh` | 22/22 | 1.00x |
+| `tests/g1/test_sim_bringup.sh --walk` | 22/22 | 1.00x |
+| `tests/g1/test_sim_explore.sh` | 7/9 in each of 2 runs: coverage and tilt, the open issue in `tests/g1/README.md` (6/9 and 7/9 before Tier 2) | 1.00x |
+
+How the G1's FAST-LIO values were chosen, one nav run or more per setting (the test's goal is the
+same in every run):
+
+| `point_filter_num` | `filter_size_surf`, `filter_size_map` | Nav runs |
+|---|---|---|
+| 1 | 0.1 m | 2 failed (10/13): FAST-LIO fell behind the scans, Nav2's controller missed its rate 58-69 times and lost the robot's pose in the plan's frame, and the robot tilted past 15 deg |
+| 3 | 0.1 m | 1 passed, 1 failed (12/13: one phantom map cell); a CPU-caster run failed the same way |
+| 4 | 0.1 m | 1 passed, 1 failed (12/13: two phantom map cells) |
+| 3 | 0.2 m | 3 passed (the final values) |
+
+The phantom cells are floor returns that the navigation pipeline lifts into the scan's height
+band: the raw `/livox/lidar` returns of a run, placed with the sim's true sensor pose, hold none
+in free space (0 of 2.1 million in the band within 4 m).
+
+Every figure here is a single run unless the table says otherwise. The localisation check of the
+nav runs on the final values peaked at 1.48-2.47 cm against its 2.5 cm limit (Tier 1's runs:
+about 1.0 cm).

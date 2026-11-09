@@ -175,9 +175,10 @@ def test_wall_at_known_range_and_direction():
 
 
 def test_frame_matches_the_room_and_the_mount():
-    """Every point of a frame lies on the room where the URDF mount predicts, within the MID-360's field.
+    """Every return of a frame lies on the room where the URDF mount predicts, within the MID-360's field.
 
-    Range noise off, on the exact CPU caster.
+    Range noise off, on the exact CPU caster. The frame holds all its rays; the rest are zero
+    points.
     """
     data = mujoco.MjData(ROOM_MODEL)
     _place(ROOM_MODEL, data)
@@ -189,14 +190,16 @@ def test_frame_matches_the_room_and_the_mount():
     finally:
         scanner.caster.close()
     n = scanner.points_per_frame
-    assert 0.9 * n < len(frame.points) <= n, len(frame.points)
+    assert len(frame.points) == n
+    points = frame.points[frame.points.any(axis=1)]
+    assert 0.9 * n < len(points), len(points)
     pose = _pelvis() @ T_PELVIS_LIDAR
-    rng = np.linalg.norm(frame.points, axis=1)
-    directions = frame.points / rng[:, None]
+    rng = np.linalg.norm(points, axis=1)
+    directions = points / rng[:, None]
     world_dirs = directions @ pose[:3, :3].T
     expected = _room_range(pose[:3, 3], world_dirs)
     assert np.abs(rng - expected).max() < 1e-4, np.abs(rng - expected).max()
-    world = pose[:3, 3] + frame.points @ pose[:3, :3].T
+    world = pose[:3, 3] + points @ pose[:3, :3].T
     assert _on_room(world).max() < 1e-4
     # Elevation within the pattern's -7..52 deg of the sensor frame (its rows reach -7.3 and 52.2).
     elevation = np.degrees(np.arcsin(directions[:, 2]))
@@ -205,7 +208,7 @@ def test_frame_matches_the_room_and_the_mount():
     floor = np.abs(world[:, 2]) < 1e-4
     left = np.abs(world[:, 1] - LEFT) < 1e-4
     assert floor.sum() > 0.3 * n and left.sum() > 0.05 * n
-    assert (frame.points[floor, 2] > 0).all() and (frame.points[left, 1] < 0).all()
+    assert (points[floor, 2] > 0).all() and (points[left, 1] < 0).all()
     # Each floor point is where the mount predicts, at range h / -dz.
     assert np.allclose(rng[floor], -pose[2, 3] / world_dirs[floor, 2], atol=1e-4)
     assert set(np.unique(frame.line)) == {0, 1, 2, 3}
@@ -214,7 +217,8 @@ def test_frame_matches_the_room_and_the_mount():
 def test_g1_frame_has_20000_rays():
     """A G1 frame fires 20,000 rays of the MID-360's pattern, in order, and the next frame the rows after.
 
-    Each point lies along its ray, at the exact cast's range plus 2 cm (1 sigma) of noise.
+    Each return lies along its ray, at the exact cast's range plus 2 cm (1 sigma) of noise;
+    each ray without one is a zero point in its place.
     """
     assert lidar.POINTS_PER_FRAME == 20_000
     data = mujoco.MjData(ROOM_MODEL)
@@ -234,10 +238,12 @@ def test_g1_frame_has_20000_rays():
             exact = scanner.caster.cast(position, rotation, rays, data)
             with np.errstate(invalid="ignore"):
                 valid = (exact >= mid360.MIN_RANGE) & (exact <= mid360.MAX_RANGE)
-            assert 0.9 * 20_000 < valid.sum() == len(frame.points), (valid.sum(), len(frame.points))
-            measured = np.linalg.norm(frame.points.astype(np.float64), axis=1)
-            assert np.allclose(frame.points / measured[:, None], rays[valid], atol=1e-6)
-            assert np.array_equal(frame.line, (np.arange(20_000) % 4)[valid])
+            assert len(frame.points) == 20_000 and 0.9 * 20_000 < valid.sum()
+            assert np.array_equal(frame.points.any(axis=1), valid)
+            returns = frame.points[valid].astype(np.float64)
+            measured = np.linalg.norm(returns, axis=1)
+            assert np.allclose(returns / measured[:, None], rays[valid], atol=1e-6)
+            assert np.array_equal(frame.line, np.arange(20_000) % 4)
             errors.append(measured - exact[valid])
     finally:
         scanner.caster.close()
@@ -356,7 +362,7 @@ def test_cast_is_exact_where_multiray_culls():
 def test_offset_time_labels_the_pose_each_point_was_cast_from():
     """offset_time labels the pose each point was cast from, for a robot that walks and turns.
 
-    offset_time is monotonic and, with the true pose at timebase + offset_time, every point
+    offset_time is monotonic and, with the true pose at timebase + offset_time, every return
     lands on the room (range noise off).
     """
     data = mujoco.MjData(ROOM_MODEL)
@@ -383,20 +389,20 @@ def test_offset_time_labels_the_pose_each_point_was_cast_from():
     assert abs(frames[0].timebase) < 1e-9 and abs(frames[1].timebase - 0.1) < 1e-9
     for frame in frames:
         offset = frame.offset_time.astype(np.int64)
-        # The first point is the frame's first ray with a return: the robot blocks some rays.
-        assert offset[0] <= 2_000_000 and (np.diff(offset) >= 0).all()
+        assert offset[0] == 0 and (np.diff(offset) >= 0).all()
         assert offset[-1] == 100_000_000  # the last rays are cast at the frame's end
         assert (offset % 2_000_000 == 0).all()  # one group per physics step
-        times = frame.timebase + offset * 1e-9
-        world = np.empty_like(frame.points, dtype=float)
+        returns = frame.points.any(axis=1)   # the robot blocks some rays
+        points, times = frame.points[returns], frame.timebase + offset[returns] * 1e-9
+        world = np.empty_like(points, dtype=float)
         for t in np.unique(times):
             at = times == t
             p = pose(t)
-            world[at] = p[:3, 3] + frame.points[at] @ p[:3, :3].T
+            world[at] = p[:3, 3] + points[at] @ p[:3, :3].T
         assert _on_room(world).max() < 1e-4, _on_room(world).max()
         # The labels matter: every point at the timebase pose misses the room by far.
         p = pose(frame.timebase)
-        assert _on_room(p[:3, 3] + frame.points @ p[:3, :3].T).max() > 0.05
+        assert _on_room(p[:3, 3] + points @ p[:3, :3].T).max() > 0.05
 
 
 def test_frames_are_back_to_back_at_the_rate():

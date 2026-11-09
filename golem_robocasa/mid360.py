@@ -27,14 +27,16 @@ k / points_per_frame of the frame period. A frame's timebase is its first point'
 in the driver (lddc.cpp InitCustomMsg). The caller decides how often to call: every
 caster's batch_s of sim time.
 
-Returns. A ray gives a point when its first hit lies between MIN_RANGE (the blind zone)
-and MAX_RANGE (the range at 10% reflectivity). The measured range is the true range plus
+Returns. A ray returns when its first hit lies between MIN_RANGE (the blind zone) and
+MAX_RANGE (the range at 10% reflectivity). The measured range is the true range plus
 Gaussian noise of RANGE_NOISE (1 sigma; the MID-360's 2 cm range precision); the blind zone
-and the maximum range apply to the true range. Rays without a return give no point.
+and the maximum range apply to the true range. Every ray fired is a point of its frame: one
+without a return is (0, 0, 0) with its own offset_time and line, as the real driver
+publishes it, and consumers drop such points by range (FAST_LIO's blind).
 
 Self returns. The sensor sits inside a shell of the body it is mounted on, so rays pass
 through that body's geoms (MuJoCo's bodyexclude). A ray whose first hit is any other geom
-of the robot gives no point, so the scan holds no returns from the robot's own limbs while
+of the robot gives no return, so the scan holds no returns from the robot's own limbs while
 the limbs still occlude what is behind them. Only geoms in the caster's geomgroup are hit;
 MuJoCo's ray functions also skip geoms with alpha 0 (RoboCasa's placement regions and
 hidden collision boxes).
@@ -592,14 +594,15 @@ class Mid360Scanner:
         self._next = last
 
     def _finish(self):
-        """Return the frame's returns, with range noise, as a LidarFrame."""
+        """Return every ray of the frame as a LidarFrame: returns with range noise, the rest at 0."""
         with np.errstate(invalid="ignore"):   # NaN, no hit, compares False
             valid = (self._dist >= MIN_RANGE) & (self._dist <= MAX_RANGE)
-        measured = self._dist[valid] + self._rng.normal(0.0, RANGE_NOISE, int(valid.sum()))
-        offset = np.round((self._when[valid] - self._timebase) * 1e9)
-        points = self._directions[valid] * measured[:, None]
+        measured = np.zeros(self.points_per_frame)
+        measured[valid] = self._dist[valid] + self._rng.normal(0.0, RANGE_NOISE, int(valid.sum()))
+        offset = np.round((self._when - self._timebase) * 1e9)
+        points = self._directions * measured[:, None]
         return LidarFrame(self._timebase, offset.astype(np.uint32), points.astype(np.float32),
-                          self._line[valid].copy(), self.points_per_frame)
+                          self._line.copy(), self.points_per_frame)
 
     def update(self, snapshot, t):
         """Cast the rays due by sim time t from snapshot; return the frame t completed, else None.

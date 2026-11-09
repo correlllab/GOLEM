@@ -21,13 +21,17 @@ from g1 import g1_sensor_msgs as msgs
 
 
 def _frame(n, timebase=12.3456789012, seed=0):
-    """Return a random lidar frame of `n` points at `timebase` (s), offsets sorted."""
+    """Return a random lidar frame of `n` points at `timebase` (s), offsets sorted.
+
+    Every third point, from the second on, is a ray without a return, at (0, 0, 0).
+    """
     rng = np.random.default_rng(seed)
+    points = rng.uniform(-5.0, 5.0, (n, 3)).astype(np.float32)
+    points[1::3] = 0.0
     return mid360.LidarFrame(
         timebase=timebase,
         offset_time=np.sort(rng.integers(0, 100_000_000, n)).astype(np.uint32),
-        points=rng.uniform(-5.0, 5.0, (n, 3)).astype(np.float32),
-        line=(np.arange(n) % 4).astype(np.uint8), rays=n)
+        points=points, line=(np.arange(n) % 4).astype(np.uint8), rays=n)
 
 
 def test_time_msg():
@@ -38,7 +42,10 @@ def test_time_msg():
 
 
 def test_custom_msg_fields():
-    """The CustomMsg carries the frame's stamp, points, offsets and lines with the driver's fixed fields."""
+    """The CustomMsg carries the frame's stamp, points, offsets and lines with the driver's fixed fields.
+
+    A point without a return, (0, 0, 0), has reflectivity 0, as the real driver's do.
+    """
     frame = _frame(5)
     msg = msgs.livox_custom_msg(frame)
     assert msg.header.frame_id == "livox_frame"
@@ -48,7 +55,9 @@ def test_custom_msg_fields():
     for p, offset, xyz, line in zip(msg.points, frame.offset_time, frame.points, frame.line):
         assert p.offset_time == offset and p.line == line
         assert np.array_equal(np.float32([p.x, p.y, p.z]), xyz)
-        assert p.reflectivity == msgs.REFLECTIVITY and p.tag == 0
+        assert p.reflectivity == (msgs.REFLECTIVITY if xyz.any() else 0) and p.tag == 0
+    assert [p.reflectivity for p in msg.points] == [msgs.REFLECTIVITY, 0, msgs.REFLECTIVITY,
+                                                    msgs.REFLECTIVITY, 0]
 
 
 def test_custom_msg_cdr_is_rclpys_serialization():
@@ -75,8 +84,10 @@ def test_custom_msg_of_a_scan():
     finally:
         scanner.caster.close()
     msg = deserialize_message(msgs.livox_custom_msg_cdr(frame), CustomMsg)
-    assert msg.point_num == len(msg.points) == len(frame.points) > 0.9 * scanner.points_per_frame
+    assert msg.point_num == len(msg.points) == len(frame.points) == scanner.points_per_frame
     assert scanner.points_per_frame == 20_000
+    returns = frame.points.any(axis=1)
+    assert returns.sum() > 0.9 * scanner.points_per_frame
     assert msg.timebase == 7_000_000_000 and (msg.header.stamp.sec, msg.header.stamp.nanosec) == (7, 0)
     assert msg.lidar_id == 192 and list(msg.rsvd) == [0, 0, 0]
     xyz = np.array([(p.x, p.y, p.z) for p in msg.points], dtype=np.float32)
@@ -86,7 +97,9 @@ def test_custom_msg_of_a_scan():
     assert {p.offset_time for p in msg.points} <= {0, 100_000_000}
     assert msg.points[-1].offset_time == 100_000_000
     assert [p.line for p in msg.points] == frame.line.tolist()
-    assert {p.reflectivity for p in msg.points} == {msgs.REFLECTIVITY} and {p.tag for p in msg.points} == {0}
+    reflectivity = np.array([p.reflectivity for p in msg.points])
+    assert (reflectivity == np.where(returns, msgs.REFLECTIVITY, 0)).all()
+    assert {p.tag for p in msg.points} == {0}
 
 
 def test_imu_msg():

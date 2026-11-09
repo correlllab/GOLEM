@@ -36,7 +36,7 @@ real non-repetitive scan pattern, 20,000 points a 10 Hz frame (200,000
 points/s), lines 0-3, the blind zone, maximum range and range noise, with each
 point's offset_time the time of the pose it was cast from. The rays leave
 livox_link and pass through torso_link's geoms, in which the sensor sits; a ray
-whose first hit is a self-filtered geom (self_filter_geoms) gives no point, so
+whose first hit is a self-filtered geom (self_filter_geoms) gives no return, so
 the limbs still occlude what is behind them. /livox/lidar and /livox/pointcloud
 carry the same frame, stamped at its first point, as the driver stamps them.
 
@@ -131,7 +131,7 @@ def _log(text):
 def self_filter_geoms(model, prefixes) -> np.ndarray:
     """Return the bool mask (ngeom,) of geoms on bodies whose names start with one of prefixes.
 
-    A lidar ray whose first hit is one of them gives no point. No prefixes mark none.
+    A lidar ray whose first hit is one of them gives no return. No prefixes mark none.
     """
     mask = np.zeros(model.ngeom, dtype=bool)
     prefixes = tuple(prefixes)
@@ -338,7 +338,7 @@ class H12Sensors:
         if torso_id < 0:
             raise RuntimeError(f"body '{lidar_exclude_body}' not found in MJCF")
         self.lidar_exclude_body_id = int(torso_id)
-        # Rays whose first hit is one of these geoms give no point: the limbs
+        # Rays whose first hit is one of these geoms give no return: the limbs
         # still occlude what is behind them, but map no obstacle under the robot.
         self.geom_is_robot = self_filter_geoms(model, lidar_self_prefixes)
 

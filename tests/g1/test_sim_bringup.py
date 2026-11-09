@@ -98,7 +98,10 @@ MAX_GAP_PERIODS = {"reliable": 1.5, "best_effort": 3.0}
 COVER_START_S = 0.5
 COVER_END_S = 0.3
 FLOOR_TOL = 0.01           # m: a lidar point this close to z = 0 is on the floor
-MIN_FLOOR_SHARE = 0.10     # of a frame's points (see lidar_floor)
+# m: a lidar return this far under z = 0 is below the floor; 5 sigma of the MID-360's range
+# noise (golem_robocasa/mid360.py RANGE_NOISE), which spreads floor returns a few cm either way.
+BELOW_TOL = 0.10
+MIN_FLOOR_SHARE = 0.10     # of a frame's returns (see lidar_floor)
 HEAD_OPTICAL_FRAME = "head_color_optical_frame"
 # camera_info's vertical FOV, deg: the D435's color stream (Intel: 69 x 42, +-1),
 # which aligned depth follows, not the depth sensor's 58
@@ -1215,9 +1218,10 @@ class Report:
     def lidar_floor(self, config):
         """Check one /livox/lidar frame against the sensor's pose in the sim.
 
-        Placed with the pose at each point's time, a share of its points lie on the floor
-        (z = 0), none below it, and in livox_frame those are at +z, where the upside-down mount
-        puts the floor.
+        Placed with the pose at each point's time, a share of its returns lie on the floor
+        (z = 0), none below it beyond the range noise (BELOW_TOL), and in livox_frame those
+        are at +z, where the upside-down mount puts the floor. Rays without a return are
+        points at (0, 0, 0), as the driver publishes them, and are left out.
         """
         path = os.path.join(self.out, "lidar_frame.npz")
         if not os.path.exists(path):
@@ -1225,7 +1229,10 @@ class Report:
             return
         f = np.load(path)
         p = np.stack([f["x"], f["y"], f["z"]], axis=1).astype(np.float64)
-        when = int(f["timebase"]) * 1e-9 + f["offset_time"] * 1e-9
+        rays = len(p)
+        returns = p.any(axis=1)
+        p = p[returns]
+        when = int(f["timebase"]) * 1e-9 + f["offset_time"][returns] * 1e-9
         # The recorded pose of the kinematics at t - dt nearest each point's time.
         t_pose = self.s["t"] - self.dt
         k = np.clip(np.searchsorted(t_pose, when), 1, len(t_pose) - 1)
@@ -1235,26 +1242,26 @@ class Report:
         world = np.einsum("nij,nj->ni", rot, p) + self.s["lidar_pos"][k]
         z = world[:, 2]
         floor = np.abs(z) <= FLOOR_TOL
-        below = int((z < -FLOOR_TOL).sum())
+        below = int((z < -BELOW_TOL).sum())
         up = rot[len(rot) // 2].T @ [0.0, 0.0, 1.0]  # world up in livox_frame
         height = float(self.s["lidar_pos"][k[len(k) // 2], 2])
         lz = p[floor, 2]
         meta_ok = (str(f["frame_id"]) == "livox_frame" and int(f["lidar_id"]) == 192
-                   and int(f["point_num"]) == len(p) and abs(float(f["stamp"]) - int(f["timebase"]) * 1e-9) < 1e-9
+                   and int(f["point_num"]) == rays and abs(float(f["stamp"]) - int(f["timebase"]) * 1e-9) < 1e-9
                    and np.all(np.diff(f["offset_time"].astype(np.int64)) >= 0)
                    and int(f["offset_time"].max()) <= 1e9 / config["lidar_hz"])
         share = float(floor.mean()) if len(p) else 0.0
         self.numbers["lidar_frame"] = {
-            "points": len(p), "configured": config["lidar_points"], "floor_share": share,
+            "points": rays, "returns": len(p), "configured": config["lidar_points"], "floor_share": share,
             "floor_rms_mm": float(np.sqrt(np.mean(z[floor] ** 2)) * 1e3) if floor.any() else None,
             "below_floor": below, "floor_livox_z": [float(lz.min()), float(lz.max())] if lz.size else None,
             "sensor_height": height, "world_up_in_livox": up.tolist(), "pose_time_off_s": float(off)}
         self.check("lidar frame on the floor",
                    meta_ok and share >= MIN_FLOOR_SHARE and below == 0 and lz.size and lz.min() > 0
                    and len(p) >= 0.5 * config["lidar_points"] and off <= 1.0 / self.hz,
-                   f"{len(p)} points ({config['lidar_points']} rays), lidar_id {int(f['lidar_id'])}, "
+                   f"{rays} points, {len(p)} returns ({config['lidar_points']} rays), lidar_id {int(f['lidar_id'])}, "
                    f"frame_id {str(f['frame_id'])}; {share:.0%} on the floor (within {FLOOR_TOL * 100:.0f} cm "
-                   f"of z = 0, RMS {self.numbers['lidar_frame']['floor_rms_mm'] or 0:.2f} mm), {below} below it; "
+                   f"of z = 0, RMS {self.numbers['lidar_frame']['floor_rms_mm'] or 0:.2f} mm), {below} more than {BELOW_TOL * 100:.0f} cm below it; "
                    f"the sensor {height:.3f} m up, world up = {np.round(up, 3).tolist()} in livox_frame, so the "
                    f"floor points are at livox z {lz.min() if lz.size else 0:+.3f} to "
                    f"{lz.max() if lz.size else 0:+.3f} m")

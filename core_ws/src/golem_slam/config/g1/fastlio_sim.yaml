@@ -5,11 +5,15 @@
 /**:
     ros__parameters:
         feature_extract_enable: false
-        point_filter_num: 1          # keep every point: a synthetic scan is sparser than the real one
+        # Every third point, as on the real G1: the sim's MID-360 scan has the real pattern
+        # and point rate (golem_robocasa/mid360.py), and on every point FAST-LIO falls behind
+        # the scans in tests/g1's nav test.
+        point_filter_num: 3
         max_iteration: 3
-        # 0.1 m kept FAST-LIO within about 1 cm on a synthetic scan, 0.2 m 5 cm off.
-        filter_size_surf: 0.1
-        filter_size_map: 0.1
+        # 0.2 m: at 0.1 the nav test's map gains a phantom cell or two in half its runs (floor
+        # returns lifted into the scan band); 0.2 passed every run.
+        filter_size_surf: 0.2
+        filter_size_map: 0.2
         cube_side_length: 1000.0
         runtime_pos_log_enable: false
         map_file_path: ""

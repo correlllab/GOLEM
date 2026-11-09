@@ -560,7 +560,7 @@ class LidarTests(unittest.TestCase):
                     self.assertEqual(msg.timebase, round(frame.timebase * 1e9))
 
     def test_self_filter_drops_the_robots_returns_but_keeps_its_shadow(self):
-        """A ray whose first hit is a self-filtered geom gives no point; unfiltered, the hand gives points.
+        """A ray whose first hit is a self-filtered geom gives a zero point; unfiltered, the hand gives points.
 
         The hand in view hides the floor behind it either way (GOLEM_LIDAR_SELF_FILTER=0 keeps
         the robot's returns).
@@ -575,7 +575,10 @@ class LidarTests(unittest.TestCase):
                     scans = self.scans(backend, robot_geoms)
                     self.run_ticks(scans, 0.1)
                     msg = deserialize_message(self.custom.messages[0], CustomMsg)
+                    self.assertEqual(msg.point_num, 20_000)
                     points, _, _ = _points(msg)
+                    returns = points.any(axis=1)
+                    points = points[returns]
                     world = self.data.xpos[self.lidar] + points @ self.data.xmat[self.lidar].reshape(3, 3).T
                     local = (world - self.data.geom_xpos[hand]) @ self.data.geom_xmat[hand].reshape(3, 3)
                     on_hand = np.all(np.abs(local) < self.model.geom_size[hand] + 0.08, axis=1)
@@ -585,7 +588,7 @@ class LidarTests(unittest.TestCase):
                     self.assertEqual(int(shadow.sum()), 0)
                     if filtered:
                         self.assertEqual(int(on_hand.sum()), 0)
-                        self.assertLess(msg.point_num, 20_000 - 100)
+                        self.assertGreater(int((~returns).sum()), 100)
                     else:
                         self.assertGreater(int(on_hand.sum()), 100)
 

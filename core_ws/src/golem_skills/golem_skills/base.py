@@ -16,6 +16,11 @@ inherits from it and from every mixin under skills/). It owns:
     mask_to_cloud, plan_grasp) and the motion primitives (move_frame_to,
     servo_frame_to_world, goto_named_config, the gripper calls);
   * the arm halt on /safety/heartbeat (arm_halt_reason).
+
+Skill deadlines, arm-move waits, the grip-hold period and the camera waits count robot time
+(robot_now): the node's clock, the sim's /clock, under use_sim_time, and the steady clock
+otherwise. The heartbeat's silence counts the steady clock always, and so do the waits on
+services, the action accepts and the cancels: host and link latency, not robot time.
 """
 
 import threading
@@ -176,8 +181,10 @@ SLOW_MODE_TIME_SCALE = 4.0
 FRAME_TASK_STABLE_EPS_LIN = 0.0005    # m
 FRAME_TASK_STABLE_EPS_ANG = 0.002     # rad
 
-# s; default of the `heartbeat_timeout` parameter: the longest /safety/heartbeat
-# (10 Hz) may stay silent before arm motion halts
+# s of steady time: the longest a robot-time wait goes without checking its stop event
+ROBOT_WAIT_POLL_SEC = 0.01
+# s of steady time; default of the `heartbeat_timeout` parameter: the longest
+# /safety/heartbeat (10 Hz) may stay silent before arm motion halts
 HEARTBEAT_TIMEOUT_SEC = 0.5
 
 # Skills whose runs get a run_telemetry directory: the implemented manipulation
@@ -205,7 +212,7 @@ SKILL_ACTIONS = {
 
 class _Run:
     """
-    Track one skill goal: feedback, result, cancel and its wall-clock deadline.
+    Track one skill goal: feedback, result, cancel and its deadline in robot time.
 
     In an execute callback:
 
@@ -223,13 +230,13 @@ class _Run:
         self._label = label
         self.feedback = action_type.Feedback()
         self.result = action_type.Result()
-        self.deadline = time.monotonic() + node._timeout_sec(goal_handle.request)
+        self.deadline = node.robot_now() + node._timeout_sec(goal_handle.request)
         # an aborted arm move halts the arms for the goal that saw it only
         node._arm_halt_reason = None
 
     def remaining(self):
-        """Return the seconds left before the deadline (0 when past; inf without one)."""
-        return max(0.0, self.deadline - time.monotonic())
+        """Return the s of robot time left before the deadline (0 when past; inf without one)."""
+        return max(0.0, self.deadline - self._node.robot_now())
 
     def _finish_canceled(self):
         """End the goal as canceled and return its result."""
@@ -249,7 +256,7 @@ class _Run:
         if self._gh.is_cancel_requested:
             self._finish_canceled()
             return False
-        if time.monotonic() > self.deadline:
+        if self._node.robot_now() > self.deadline:
             self.result.success = False
             self.result.message = 'skill timeout'
             self._gh.abort()
@@ -363,8 +370,11 @@ class SkillsBase(Node):
         # ABORTS (estop, stale robot state, execution error) halts the arms for
         # the rest of the skill goal. See arm_halt_reason().
         self.declare_parameter('heartbeat_timeout', HEARTBEAT_TIMEOUT_SEC)
-        # replaced by a fake clock in the tests
+        # SAFETY: the steady clock, whatever use_sim_time says, so a golem_safety that has
+        # stopped halts the arms while a sim's /clock stands still; a fake in the tests
         self._monotonic = time.monotonic
+        # robot time is the node's clock (the sim's /clock) under use_sim_time
+        self._sim_time = bool(self.get_parameter('use_sim_time').value)
         # self._monotonic() at the last beat
         self._last_beat = None
         self._safety_latched = False
@@ -579,25 +589,49 @@ class SkillsBase(Node):
         """Accept every cancel request of a skill goal."""
         return CancelResponse.ACCEPT
 
+    def robot_now(self):
+        """Return robot time, s: the node's clock under use_sim_time, else the steady clock."""
+        if self._sim_time:
+            return self.get_clock().now().nanoseconds * 1e-9
+        return time.monotonic()
+
+    def _sleep_robot(self, seconds, stop):
+        """
+        Wait `seconds` of robot time, or less once `stop` (a threading.Event) is set.
+
+        Return whether `stop` is set. Without use_sim_time it is stop.wait(seconds); under
+        it the wait ends with the deadline of sim time, so it lasts while /clock stands
+        still, and checks `stop` every ROBOT_WAIT_POLL_SEC of steady time.
+        """
+        if not self._sim_time:
+            return stop.wait(seconds)
+        end = self.robot_now() + seconds
+        while self.robot_now() < end:
+            if stop.wait(ROBOT_WAIT_POLL_SEC):
+                return True
+        return stop.is_set()
+
     def _timeout_sec(self, goal, default=DEFAULT_SKILL_TIMEOUT):
         """Return goal.timeout in seconds, or `default` when it is zero."""
         t = float(goal.timeout.sec) + float(goal.timeout.nanosec) * 1e-9
         return t if t > 0.0 else default
 
     def _wait_future(self, future, timeout_sec, outer_gh=None, stop_event=None,
-                     halt_check=None):
+                     halt_check=None, robot_time=False):
         """
         Block this executor worker thread until `future` resolves; return its result or None.
 
         Safe under the MultiThreadedExecutor: the other threads keep spinning.
-        Polls every 0.1 s and returns None on timeout, when the outer skill
-        goal `outer_gh` is asked to cancel, when `stop_event` (a
+        Polls every 0.1 s of steady time and returns None on timeout, when the
+        outer skill goal `outer_gh` is asked to cancel, when `stop_event` (a
         threading.Event) is set, or when `halt_check` (a callable) returns a
-        reason.
+        reason. `timeout_sec` is s of steady time (a service's or a link's
+        latency), or of robot time with `robot_time` (a robot's motion).
         """
+        now = self.robot_now if robot_time else time.monotonic
         event = threading.Event()
         future.add_done_callback(lambda _f: event.set())
-        deadline = time.monotonic() + max(0.0, timeout_sec)
+        deadline = now() + max(0.0, timeout_sec)
         while not event.is_set():
             if outer_gh is not None and outer_gh.is_cancel_requested:
                 return None
@@ -605,7 +639,7 @@ class SkillsBase(Node):
                 return None
             if halt_check is not None and halt_check() is not None:
                 return None
-            remaining = deadline - time.monotonic()
+            remaining = deadline - now()
             if remaining <= 0.0:
                 return None
             event.wait(timeout=min(0.1, remaining))
@@ -633,7 +667,8 @@ class SkillsBase(Node):
         """
         Send an action goal, wait for acceptance, then for the result; return it or None.
 
-        The result response has .status and .result. When the result wait
+        The result response has .status and .result. `accept_timeout` is s of
+        steady time, `result_timeout` s of robot time. When the result wait
         ends early (timeout, outer-skill cancel, `stop_event` set or
         `halt_check` returning a reason), the goal is canceled ON THE SERVER.
         Arm goals pass `halt_check=self.arm_halt_reason`.
@@ -646,9 +681,10 @@ class SkillsBase(Node):
         if handle is None or not handle.accepted:
             self.get_logger().error('action goal rejected or send timed out')
             return None
+        # the result comes when the robot has moved: robot time
         response = self._wait_future(handle.get_result_async(), result_timeout,
                                      outer_gh, stop_event=stop_event,
-                                     halt_check=halt_check)
+                                     halt_check=halt_check, robot_time=True)
         if response is None:
             # SAFETY: cancel on the server; dropping the local future would
             # leave the robot executing an orphaned goal
@@ -1437,7 +1473,7 @@ class SkillsBase(Node):
 
     def _grip_hold_loop(self, arm, stop):
         """
-        Re-assert the grip on `arm` every 1/GRIP_HOLD_RATE_HZ s until `stop` is set.
+        Re-assert the grip on `arm` every 1/GRIP_HOLD_RATE_HZ s of robot time until `stop`.
 
         This loop prevents gripper overload crashes: each tick calls
         reset_overload (clears a Dynamixel overload without releasing) then
@@ -1475,7 +1511,7 @@ class SkillsBase(Node):
                         f'gripper {arm}: grip-hold {failed} failed '
                         f'({fails + 1} consecutive tick(s)); still retrying')
                 fails += 1
-            if stop.wait(period):
+            if self._sleep_robot(period, stop):
                 break
 
     def _validated_arm(self, goal):

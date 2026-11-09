@@ -30,7 +30,6 @@ import copy
 import math
 import os
 import re
-import time
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -144,8 +143,8 @@ CONFIRM_BEFORE_CONTACT = False
 # Images go to <golem_skills>/logs/approach_images/ (host-persistent through
 # the core_ws bind mount).
 APPROACH_IMAGE_ONLY = False
-# s to wait for a hand-camera frame captured at the pre-grasp before saving the
-# latest cached one instead
+# s of robot time to wait for a hand-camera frame captured at the pre-grasp before
+# saving the latest cached one instead
 APPROACH_IMAGE_WAIT_SEC = 3.0
 
 # ---- visual servo (goal.visual_servo) ---------------------------------------
@@ -174,10 +173,10 @@ VISUAL_SERVO_DEPTH_M = 0.10
 VISUAL_SERVO_X_TOL_M = 0.00025  # +/-0.25 mm -> X band (11.75, 12.25) at the 12 mm target
 VISUAL_SERVO_Y_TOL_M = 0.005
 VISUAL_SERVO_RANGE_TOL_M = 0.001
-# s for the whole loop (~VISUAL_SERVO_MOVE_SEC per iteration); the goal's own
-# timeout still wins
+# s of robot time for the whole loop (~VISUAL_SERVO_MOVE_SEC per iteration); the
+# goal's own timeout still wins
 VISUAL_SERVO_TIMEOUT_SEC = 90.0
-# s without a usable hand-camera detection before sight counts as lost
+# s of robot time without a usable hand-camera detection before sight counts as lost
 # (yolo_server publishes at ~5 Hz)
 VISUAL_SERVO_DETECT_WAIT_SEC = 5.0
 # Box source on the hand-camera frame while BATTERY_USE_GEMINI is off: a
@@ -940,8 +939,8 @@ class GraspSkill:
         # mode sight is lost only after ~1.5 queries
         detect_wait = (1.5 * SERVO_GEMINI_TIMEOUT_SEC if use_gemini
                        else VISUAL_SERVO_DETECT_WAIT_SEC)
-        deadline = time.monotonic() + VISUAL_SERVO_TIMEOUT_SEC
-        last_seen = time.monotonic()
+        deadline = self.robot_now() + VISUAL_SERVO_TIMEOUT_SEC
+        last_seen = self.robot_now()
         retracts = 0
         best_err, stalled = None, 0
         # consecutive readings inside VISUAL_SERVO_MIN_RANGE_M
@@ -962,7 +961,7 @@ class GraspSkill:
         while True:
             if gh.is_cancel_requested or run.remaining() <= 0.0:
                 return None, 'canceled or timed out during visual servo'
-            if time.monotonic() >= deadline:
+            if self.robot_now() >= deadline:
                 return None, (
                     f'visual servo did not converge on {obj!r} within '
                     f'{VISUAL_SERVO_TIMEOUT_SEC:.0f}s ({it} iteration(s), tol '
@@ -998,7 +997,7 @@ class GraspSkill:
             else:
                 too_close_hits = 0
             lost = (p_cam is None
-                    and time.monotonic() - last_seen > detect_wait)
+                    and self.robot_now() - last_seen > detect_wait)
             too_close = too_close_hits >= VISUAL_SERVO_TOO_CLOSE_STRIKES
             if lost or too_close:
                 why = (f'lost sight of {obj!r} in the {arm} hand camera for '
@@ -1033,7 +1032,7 @@ class GraspSkill:
                 # (frames from before the move show the old vantage point) and
                 # the lost-sight wait, stall counters and depth prediction reset.
                 after = _stamp_tuple(self.get_clock().now().to_msg())
-                last_seen = time.monotonic()
+                last_seen = self.robot_now()
                 best_err, stalled = None, 0
                 last_z = pred_z = None
                 too_close_hits = 0
@@ -1041,7 +1040,7 @@ class GraspSkill:
             if p_cam is None:
                 self.get_clock().sleep_for(RclpyDuration(seconds=0.1))
                 continue
-            last_seen = time.monotonic()
+            last_seen = self.robot_now()
             err = p_cam - target
             ex, ey = float(abs(err[0])), float(abs(err[1]))
             rng = float(abs(err[2]))
@@ -1358,9 +1357,9 @@ class GraspSkill:
         or written.
         """
         after = _stamp_tuple(self.get_clock().now().to_msg())
-        deadline = time.monotonic() + APPROACH_IMAGE_WAIT_SEC
+        deadline = self.robot_now() + APPROACH_IMAGE_WAIT_SEC
         msg = None
-        while time.monotonic() < deadline:
+        while self.robot_now() < deadline:
             fresh = self.latest_arm_image(arm)
             if (fresh is not None
                     and _stamp_tuple(fresh.header.stamp) > after):

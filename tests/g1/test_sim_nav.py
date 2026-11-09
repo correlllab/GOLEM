@@ -1276,6 +1276,7 @@ class Report(bringup_test.Report):
         print(f"     {len(t)} samples, sim t {t[0]:.1f}-{t[-1]:.1f} s, real-time factor "
               f"{self.numbers['real_time_factor']:.2f} (per sim second: min {per_s.min():.2f}, 5th percentile "
               f"{np.percentile(per_s, 5):.2f}, median {np.median(per_s):.2f}){steps}")
+        bringup_test.record_sim_settings(self.numbers, out)
         try:
             self.nav_test()
         except KeyError as e:

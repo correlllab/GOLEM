@@ -1,6 +1,7 @@
 """Check the Docker wrappers, launchers and compose files on the host, with a stub docker and no GPU."""
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -776,6 +777,31 @@ if 'config' in sys.argv:
                                   GOLEM_LIDAR_BACKEND='cpu')['robocasa']['environment']
         self.assertEqual(env['GOLEM_SPAWN_BACKOFF'], '2.0')
         self.assertEqual(env['GOLEM_LIDAR_BACKEND'], 'cpu')
+
+    def test_robocasa_services_pass_the_sim_rate_empty_unless_set(self):
+        """The x86 and Mac robocasa services pass GOLEM_SIM_RATE, empty (the sims' real time) unless set."""
+        for files in (('docker-compose.yml',), ('mac/docker-compose.yml',)):
+            with self.subTest(files=files):
+                env = self.compose_config(*files, profile='robocasa')['robocasa']['environment']
+                self.assertEqual(env['GOLEM_SIM_RATE'], '')
+                env = self.compose_config(*files, profile='robocasa', GOLEM_SIM_RATE='max')['robocasa']['environment']
+                self.assertEqual(env['GOLEM_SIM_RATE'], 'max')
+
+    def test_closed_loop_tests_forward_the_sim_rate_from_the_shell(self):
+        """Every closed-loop test script hands GOLEM_SIM_RATE to sim_test_shell_knobs (the shell's value, never docker/.env's)."""
+        for script in ('tests/sim/test_sim_stack.sh', 'tests/g1/test_sim_bringup.sh', 'tests/g1/test_sim_nav.sh',
+                       'tests/g1/test_sim_explore.sh'):
+            with self.subTest(script=script):
+                text = (REPO / script).read_text()
+                calls = re.findall(r'^\s*(?:sim|g1)_test_shell_knobs ((?:[^\n]*\\\n)*[^\n]*)', text, re.M)
+                self.assertTrue(calls, script)
+                for call in calls:
+                    self.assertIn('GOLEM_SIM_RATE', call.split(), call)
+                self.assertLess(text.index('_test_shell_knobs '), text.index('_test_setup '))
+
+    def test_stack_tests_run_the_sim_at_real_time(self):
+        """tests/stack/run.sh clears GOLEM_SIM_RATE for its containers: its checks are gates at real time."""
+        self.assertIn('-e GOLEM_SIM_RATE=)', (REPO / 'tests/stack/run.sh').read_text())
 
     def test_g1_overlay_compose_contents(self):
         """The G1 overlay sets GOLEM_ROBOT=g1 and the G1 sim knobs, empty, and touches neither ros nor the policy."""

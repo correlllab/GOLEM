@@ -44,7 +44,7 @@ pinned=(GOLEM_CAMERAS GOLEM_CAMERA_SCALE GOLEM_CAMERA_DEPTH GOLEM_CAMERA_POINTCL
         GOLEM_LIDAR_SELF_FILTER
         GOLEM_SIM_ODOM GOLEM_SIM_EXPERIMENT GOLEM_SIM_TETHER_ROT_STIFFNESS
         GOLEM_SIM_TETHER_ROT_BODY GOLEM_SPAWN_MARGIN GOLEM_SPAWN_BACKOFF GOLEM_SPAWN_OFFSET
-        GOLEM_CMD_TIMEOUT G1_DDS_INTERFACE)
+        GOLEM_CMD_TIMEOUT GOLEM_SIM_RATE G1_DDS_INTERFACE)
 # Interpolated by the sim service but not pinned: names this script sets itself, host mount
 # roots and the lidar backend (how the rays are cast, not what is published), none of which
 # changes the surface.

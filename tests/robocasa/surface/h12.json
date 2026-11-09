@@ -169,7 +169,7 @@
         "durability": "VOLATILE",
         "reliability": "RELIABLE"
       },
-      "rate_clock": "wall",
+      "rate_clock": "sim",
       "rate_hz": 9.962,
       "received": true,
       "type": "magpie_msgs/msg/GripperState",
@@ -797,7 +797,7 @@
         "durability": "VOLATILE",
         "reliability": "RELIABLE"
       },
-      "rate_clock": "wall",
+      "rate_clock": "sim",
       "rate_hz": 10.032,
       "received": true,
       "type": "magpie_msgs/msg/GripperState",

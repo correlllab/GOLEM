@@ -172,3 +172,60 @@ kitchen, every fixture joint moved as far with the exclusion as without it, exce
 dishwasher's two spring-loaded buttons, which rest 5.7 mm further out on their joint limit.
 
 Every figure here is a single run unless the table says otherwise.
+
+## Faster than real time
+
+`GOLEM_SIM_RATE` sets both sims' target real-time factor (sim seconds per wall second; unset is
+1, the default, and `max` never sleeps). Both sims pace through one pacer
+(`sim_timing.RealtimePacer`), the H1-2's gripper state and DeliGrasp settles count sim time, and
+the closed-loop summaries print the rate the sim logged beside its lidar caster. Faster than real
+time gives every ROS node less wall time per sim second, so the closed-loop tests are gates only at
+1x; the runs above 1x below are informational, the "before" numbers for moving the ROS packages
+onto sim time (robot time).
+
+Measured 2026-11-09 on the i7-14700F with an RTX 5070 Ti, on the tree committed on top of
+`dbce9c4` (branch `sim_speed`), `cpus: sim 0-15, ros 16-27`, the lidar on the GPU caster (each sim
+logged `lidar rays cast on the GPU every 20 ms of sim time`). Both sims step 2 ms of physics.
+
+| `tests/sim/test_sim_stack.sh` | Rate | Result | Real-time factor (summary) | The sim's own log | Host load (1 min, median) |
+|---|---|---|---|---|---|
+| `--h12` | 1 (default) | 14/14 | 1.00x | (no `--timing` in the test) | 8.2 |
+| `--g1` | 1 (default) | 14/14 | 1.00x | | 10.7 |
+| `--h12` | 2 | 4/6: stack up, no fall | 1.81x | | 16.1 |
+| `--g1` | 2 | 14/14 | 1.79x | 1.69x, then 1.85x per 30 s, the loop idle 2% then 0% | 7.9 |
+| `--h12` | max | 4/6: stack up, no fall | 1.81x | | 13.4 |
+| `--g1` | max | 14/14 | 1.78x | 1.74x, then 1.83x, idle 0% | 8.0 |
+
+Neither robot's stack held 2x: both sims ran flat out at about 1.8x with the stack beside them,
+so the rate-2 and `max` runs are the same runs in effect.
+
+Why the H1-2 failed at 2 and `max` (both runs the same way), from its `launch.log`: the stack fell
+behind on a wall clock, not the sim's command timeout. `frame_task_server`'s start-up moves are
+timed with `time.monotonic()`, and its `controller.startup_move_timeout` (30 s of wall time from
+the follow gate) ran out during the move to `home` (the moves took 4.0, 7.4 and 13.6 s of wall time
+against 3.3, 5.1 and 9.5 s at 1x, the host's load doubled). It sent its last zero-gain command, so
+the arms went limp, and exited. The leg node, on the sim's clock, started ALMI anyway after its
+`band.max_wait` without `/left_ee_pose`, released the band 34 s later, and the robot fell 12 s
+(rate 2) and 43 s (`max`) of sim time after the release. With the robot down, Nav2 never got
+`map -> base` and the goal was never sent. No `rt/lowcmd` timeout fired, `golem_safety` latched no
+estop, and no lidar cast waited.
+
+The G1 passed every check at both rates: its arm controller's start-up fits its wall-clock limits
+and HOMIE stood and walked to the goal at 1.8x. Its localisation and scan gaps stayed in limits
+(longest `/converted_scan` gap 0.26 s at 2 and 0.24 s at `max`, limit 0.5 s; `odom ->
+base_footprint` at most 0.17 s behind `/clock`).
+
+The unpaced ceiling, the sim alone (no ROS stack), headless, `GOLEM_SIM_RATE=max`, in the same
+kitchen with the spawn backed 2.0 m, pinned to CPUs 0-15, on DDS domain 222:
+
+| Sim alone, `max` | Real-time factor | What bounds it (the sim's own stats) |
+|---|---|---|
+| H1-2 (`--timing`, about 60 s of sim time) | 2.56-2.64x (six 5 s intervals) | the physics thread: per 2 ms step `physics` 0.61 ms and `lowstate` 0.06 ms, plus `task_update` 1.0 ms at 20 Hz, about 94% of each wall second; the lidar's own thread casts 5.6 ms per 20 ms of sim time (about 75% busy, no cast waited) and the camera worker about 70% |
+| G1 (`--duration 60`) | 2.43x (sim t 1-31 s) | the physics loop: idle 0%, 1 of 1501 casts waited for the lidar, no head camera frame dropped; at 2.43x a 2 ms step takes 0.82 ms of wall time, of which `mj_step` is about 0.47 ms (Tier 3a), the rest the loop's per-step work (band, `rt/lowstate`, `/clock`, sensor capture) |
+
+So on the GPU caster the physics loop, not the lidar or the cameras, sets the unpaced ceiling of
+both sims; with the stack beside them both fall to about 1.8x. On the CPU caster the lidar's
+backpressure sets the pace already at 1x (0.80x on the H1-2 in Tier 3a), so a rate above 1 gains
+nothing there.
+
+Every figure here is a single run.

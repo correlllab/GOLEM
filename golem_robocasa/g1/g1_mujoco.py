@@ -19,6 +19,7 @@ import blank_env  # registers the Blank env
 import sim_common
 from measurement_bridge import MeasurementBridge
 from mujoco_env import ElasticBand
+from sim_timing import RealtimePacer
 from .g1_sensors import G1Sensors, SensorConfig
 from .sim_names import BODY_JOINTS, NameResolver
 from .unitree_interface import SimInterface
@@ -45,12 +46,12 @@ BAND_DAMPING = 2e3       # N*s/m
 # m: the spawn puts the lowest collision geom this far above the floor, so the
 # robot hangs from the band with its feet on the floor.
 SPAWN_CLEARANCE = 0.001
-# s of wall lag past which real-time pacing resyncs instead of catching up.
+# s of wall lag the pacer repays at most; past it, it resyncs instead of catching up.
 MAX_LAG = 0.1
 # s of sim time between the loop's real-time factor logs.
 RTF_LOG_S = 30.0
 # s, Python's GIL switch interval while the sim runs (default 5 ms). The physics
-# loop sleeps between steps to keep real time and needs the GIL back to wake;
+# loop sleeps between steps to keep its pace and needs the GIL back to wake;
 # at 5 ms the sensor threads' Python work (the head camera's messages) stalled
 # rt/lowstate 5-9 ms, where the real G1 sends it every 2 ms. At 0.5 ms the sim
 # with both sensors had no gap over 5 ms in 51 s of sim time.
@@ -123,8 +124,10 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
       - MeasurementBridge: /robocasa/{task_name,task_goal,success,reward} +
                            /elastic_band/toggle
     An elastic band on the torso holds the robot until /elastic_band/toggle or
-    SPACE in the viewer releases it. duration is sim seconds from the first
-    step, counted in physics steps (0: until the viewer closes or Ctrl-C).
+    SPACE in the viewer releases it. The loop paces to GOLEM_SIM_RATE
+    (sim_common.sim_rate_from_env; default real time). duration is sim seconds
+    from the first step, counted in physics steps (0: until the viewer closes
+    or Ctrl-C).
     timing is in the signature both runners share and is unused here: the
     command line refuses --timing for the G1, which logs its real-time factor
     itself.
@@ -138,7 +141,9 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     if seed is not None:
         create_kwargs["seed"] = seed
 
-    sensors = SensorConfig.from_env()   # before the slow env build: a bad knob fails fast
+    # Before the slow env build: a bad knob fails fast.
+    sensors = SensorConfig.from_env()
+    sim_rate = sim_common.sim_rate_from_env()
     env = g1_robosuite.make_kitchen_env(task, **create_kwargs)
 
     # robosuite.make() does not reset; reset() builds env.sim, runs the
@@ -200,6 +205,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         sim_lock=None,
     )
     print(f"[g1_mujoco] sensors: {sensors.describe()}")
+    print(f"[g1_mujoco] {sim_common.describe_sim_rate(sim_rate)}", flush=True)
 
     measurement = MeasurementBridge(env, elastic_band=band, task_name=task)
     print(f"[g1_mujoco] task goal: {measurement.publish_goal()!r}")
@@ -246,7 +252,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     max_steps = round(duration / model.opt.timestep) if duration > 0 else None
     done = _success = False
     _resets = 0
-    wall_start, sim_start = time.time(), float(data.time)
+    pacer = RealtimePacer(model.opt.timestep, sim_rate, max_lag=MAX_LAG)
     # The real-time factor log's sim time, wall time and time slept since its last line.
     log_sim, log_wall, slept = float(data.time), time.time(), 0.0
 
@@ -296,13 +302,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             if done and not _success:
                 print("[g1_mujoco] task success (debounced).")
             _success = done
-            ahead = (data.time - sim_start) - (time.time() - wall_start)
-            if ahead > 0:
-                _t = time.time()
-                time.sleep(ahead)
-                slept += time.time() - _t
-            elif ahead < -MAX_LAG:
-                wall_start, sim_start = time.time(), float(data.time)
+            slept += pacer.wait()
             if data.time < log_sim:   # MuJoCo reset the time
                 log_sim, log_wall, slept = float(data.time), time.time(), 0.0
             elif data.time - log_sim >= RTF_LOG_S:

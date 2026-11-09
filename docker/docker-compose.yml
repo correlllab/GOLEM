@@ -123,6 +123,10 @@ services:
       # one, else cast exactly on the CPU (logged); gpu stops the sim without a
       # GPU; cpu always casts on the CPU.
       - GOLEM_LIDAR_BACKEND=${GOLEM_LIDAR_BACKEND:-}
+      # Both robots: the target real-time factor, sim seconds per wall second
+      # (golem_robocasa/sim_common.py). Empty: 1, real time; 2 twice real time;
+      # max unpaced. Above 1 every ROS node gets less wall time per sim second.
+      - GOLEM_SIM_RATE=${GOLEM_SIM_RATE:-}
       # Both robots: 0 drops every RGBD camera (the heaviest per-step cost).
       - GOLEM_CAMERAS=${GOLEM_CAMERAS:-}
       # Head camera size as a fraction of the real 1280x720 (default 0.5).

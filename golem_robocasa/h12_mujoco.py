@@ -100,13 +100,16 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                            MID-360 lidar + IMU
       - MagpieHandBridge : /{left,right}/gripper/*
       - MeasurementBridge: /robocasa/*, /elastic_band/toggle
-    An elastic band holds the robot until it is released. timing enables the
-    --timing stage report. duration is in the signature both runners share and
-    is unused here: the command line refuses --duration for the H1-2.
+    An elastic band holds the robot until it is released. The loop paces to
+    GOLEM_SIM_RATE (sim_common.sim_rate_from_env; default real time). timing
+    enables the --timing stage report. duration is in the signature both
+    runners share and is unused here: the command line refuses --duration for
+    the H1-2.
     """
 
-    # A bad GOLEM_LIDAR_BACKEND stops the sim before the kitchen is built.
+    # A bad GOLEM_LIDAR_BACKEND or GOLEM_SIM_RATE stops the sim before the kitchen is built.
     lidar_backend = mid360.backend_from_env()
+    sim_rate = sim_common.sim_rate_from_env()
 
     create_kwargs = {}
     if layout is not None:
@@ -292,6 +295,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         sim_lock=sim_lock,
     )
 
+    print(f"[h12_mujoco] {sim_common.describe_sim_rate(sim_rate)}", flush=True)
+
     hand_right = MagpieHandBridge(model, data, side="right", sim_lock=sim_lock,
                                   name_prefix="gripper0_right_")
     hand_left = MagpieHandBridge(model, data, side="left", sim_lock=sim_lock,
@@ -362,7 +367,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         view_sync.start()
 
     timings.reset(float(data.time))
-    pacer = RealtimePacer(model.opt.timestep)
+    pacer = RealtimePacer(model.opt.timestep, sim_rate)
     try:
         while True:
             if viewer and not handle.is_running():
@@ -419,6 +424,10 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             # tick() takes sim_lock only to capture sensor state, so encoding and
             # publishing do not hold up physics. No physics step runs inside it.
             ros_bridge.tick()
+            # The grippers' state publishes at its rate of sim time.
+            sim_t = float(data.time)
+            hand_right.tick(sim_t)
+            hand_left.tick(sim_t)
             if task_step:
                 task_start = timings.start()
                 with sim_lock:

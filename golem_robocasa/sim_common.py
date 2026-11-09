@@ -1,4 +1,4 @@
-"""Select the robot, parse the command line, resolve tasks and frame the viewer for both sims.
+"""Select the robot, parse the command line and GOLEM_SIM_RATE, resolve tasks and frame the viewer for both sims.
 
 It imports only the standard library at module level (mujoco and robocasa
 inside the functions that need them): h12_mujoco.py picks the robot with it
@@ -53,6 +53,36 @@ def select_robot(argv: Sequence[str], env: Mapping[str, str] = os.environ) -> st
     if robot not in ROBOTS:
         sys.exit(f"GOLEM_ROBOT must be {' or '.join(ROBOTS)}, not {robot!r}.")
     return robot
+
+
+def sim_rate_from_env(env: Mapping[str, str] = os.environ) -> float:
+    """Return GOLEM_SIM_RATE, the target real-time factor: sim seconds per wall second.
+
+    Unset or empty is 1 (real time); a finite number above 0 is that factor; max, in any
+    case, is math.inf (sim_timing.RealtimePacer never sleeps). Spaces are ignored. Exits,
+    naming the knob and the value, for anything else (0, a negative number, nan, inf, text).
+    """
+    raw = env.get("GOLEM_SIM_RATE", "")
+    text = raw.strip().lower()
+    if not text:
+        return 1.0
+    if text == "max":
+        return math.inf
+    try:
+        rate = float(text)
+    except ValueError:
+        rate = math.nan
+    if not math.isfinite(rate) or rate <= 0:
+        sys.exit(f"GOLEM_SIM_RATE must be a number above 0 (the target real-time factor) or max, "
+                 f"not {raw!r}")
+    return rate
+
+
+def describe_sim_rate(rate: float) -> str:
+    """Return the start-up log line for the rate sim_rate_from_env returned."""
+    if math.isinf(rate):
+        return "sim rate: unpaced, as fast as the loop runs (GOLEM_SIM_RATE=max)"
+    return f"sim rate: {rate:g}x real time (GOLEM_SIM_RATE)"
 
 
 def add_common_args(parser: argparse.ArgumentParser, *,

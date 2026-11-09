@@ -45,6 +45,9 @@
 #               unset is auto (the GPU caster when the sim has a GPU, see SIM_GPUS, else
 #               the CPU's), cpu casts every ray on the CPU as on the Mac; the sim logs
 #               the caster it built
+#   GOLEM_SIM_RATE   passed to the sim as the shell has it, docker/.env's never: the target
+#               real-time factor (unset is 1, real time; or 2, max, ...); the checks are gates only at 1,
+#               and the summary records the rate the sim logged
 #
 # Exit: 0 when every check passes; 1 when a check, the test's steps or a container fails;
 #   2 for bad arguments, a set GOLEM_SIM_ODOM, a bad domain or a non-empty OUT; 3 when the
@@ -78,10 +81,10 @@ if [ "$ROBOT" = g1 ]; then
     # The lidar stays on: navigation needs it.
     SIM_ENV+=(-e GOLEM_LIDAR=)
     sim_test_shell_knobs GOLEM_LIDAR_POINTS GOLEM_LIDAR_HZ GOLEM_CAMERAS GOLEM_CAMERA_HZ GOLEM_CAMERA_SCALE \
-        GOLEM_LIDAR_BACKEND
+        GOLEM_LIDAR_BACKEND GOLEM_SIM_RATE
     BRINGUP="g1_sim.launch.py use_rviz:=false"
 else
-    sim_test_shell_knobs GOLEM_CAMERAS GOLEM_CAMERA_SCALE GOLEM_LIDAR_BACKEND
+    sim_test_shell_knobs GOLEM_CAMERAS GOLEM_CAMERA_SCALE GOLEM_LIDAR_BACKEND GOLEM_SIM_RATE
     BRINGUP="h12_sim.launch.py use_rviz:=false use_skills:=false"
 fi
 

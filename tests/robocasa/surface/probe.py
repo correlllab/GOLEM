@@ -18,8 +18,8 @@ measured only prints a warning; the comparison decides.
 
 Rates are per second of simulated time, taken from message header stamps where a message has
 them and from the latest /clock sample otherwise, so they do not depend on the machine's
-real-time factor. WALL_TIMER_TOPICS are the exception: the sim publishes them from a
-wall-clock ROS timer, as the real driver does, so their rate is wall-clock Hz.
+real-time factor or GOLEM_SIM_RATE: both sims publish every topic on sim time (each topic's
+rate_clock is "sim").
 
 Only the comparison code is stdlib-only; observing needs ROS, the message workspaces and
 unitree_sdk2py, that is the robocasa image.
@@ -45,9 +45,6 @@ PROBE_NODE = "surface_probe"
 BARE_DDS_NODE = "_CREATED_BY_BARE_DDS_APP_"  # how rmw names a non-ROS DDS participant
 READY_LINE = re.compile(r"ROS bridges up")
 IMU_TOPIC = "/livox/imu"
-
-# Published from a wall-clock timer, so their sim-time rate scales with 1/RTF.
-WALL_TIMER_TOPICS = re.compile(r"^/(left|right)/gripper/state$")
 
 # Present on every rclpy node; not part of what a sim chooses to publish.
 INFRA_TOPICS = ("/rosout", "/parameter_events")
@@ -371,10 +368,7 @@ def rate_hz(topic, samples, window):
     samples = [s for s in samples if in_window(s, window)]
     if len(samples) < 2:
         return None
-    if WALL_TIMER_TOPICS.match(topic):
-        span = samples[-1][0] - samples[0][0]
-        rate = (len(samples) - 1) / span if span > 0 else None
-    elif all(s[2] is not None for s in samples):
+    if all(s[2] is not None for s in samples):
         stamps = sorted(s[2] for s in samples)
         deltas = [b - a for a, b in zip(stamps, stamps[1:])]
         # A best-effort drop is a gap of several periods; it is not the publish rate.
@@ -473,7 +467,7 @@ def observe(args, sim, node):
             type=type_name,
             qos={"reliability": qos.reliability.name, "durability": qos.durability.name},
             received=bool(collector.samples),
-            rate_clock="wall" if WALL_TIMER_TOPICS.match(topic) else "sim",
+            rate_clock="sim",
             rate_hz=rate_hz(topic, collector.samples, window))
     imu = collectors.get(IMU_TOPIC)
     imu_norms = [] if imu is None else [

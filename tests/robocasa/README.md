@@ -25,7 +25,12 @@ Pure pacing/timing tests also run without ROS or MuJoCo:
 
 ```bash
 PYTHONPATH=golem_robocasa python3 -m unittest discover -s tests/robocasa -p test_loop_timing.py -v
+PYTHONPATH=golem_robocasa python3 -m unittest discover -s tests/robocasa -p test_sim_rate.py -v
 ```
+
+`test_sim_rate.py` covers `GOLEM_SIM_RATE` (the parse and the pacer at a target real-time
+factor); its gripper tests, which check that the grippers' rates count sim time, need rclpy and
+are skipped outside the container.
 
 To measure the actual kitchen loop, add `--timing` to a normal launch:
 

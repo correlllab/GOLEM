@@ -159,6 +159,8 @@ one: `golem_slam`'s navigation, FAST-LIO odometry, so `GOLEM_SIM_ODOM` stays off
 clearance from non-floor geoms on both platforms. `GOLEM_CAMERA_SCALE=<f>`
 (H1-2 default 0.5 of the real 1280x720), `GOLEM_CAMERA_DEPTH=0` and
 `GOLEM_CAMERA_POINTCLOUD=0` tune the H1-2's RoboCasa cameras on both platforms.
+`GOLEM_SIM_RATE=<factor>|max` sets the sims' target real-time factor on both
+platforms (default 1, real time; §8).
 GUIs stream over noVNC via `docker/mac/scripts/mac_vnc_tunnel.sh` (no XQuartz).
 
 ### DDS domain safety (both platforms)
@@ -512,8 +514,9 @@ sim-vs-real workflow depends on them behaving like the real robot.
 picks the robot (`--h12`/`--g1`, else `GOLEM_ROBOT`, else `h12`) before its
 H1-2 imports and hands the G1 over to `golem_robocasa/g1/g1_mujoco.py`. The H1-2
 stays the default, and nothing on the G1 path may change its behaviour. The robots share
-`sim_common.py`, `measurement_bridge.py` and the `mujoco_sensors` node in
-`mujoco_ros_bridge.py` (`sim_timing.py` is the H1-2's only); each has its own sensor suite
+`sim_common.py`, `measurement_bridge.py`, the pacer in `sim_timing.py` (its
+`--timing` report is the H1-2's only) and the `mujoco_sensors` node in
+`mujoco_ros_bridge.py`; each has its own sensor suite
 (`h12_sensors.py`, `g1/g1_sensors.py`) and Unitree DDS interface
 (`unitree_interface.py`, `g1/unitree_interface.py`), which share their command
 path in `unitree_common.py`. Both sims stop the collisions inside each RoboCasa
@@ -548,6 +551,20 @@ cast as `GOLEM_LIDAR_BACKEND` says (as on the G1, below), and
 casts run beside the physics, and when they fall a frame behind (the CPU caster
 on a slow host, the Mac) the physics waits for them (`mid360.ScanRing`): the
 real-time factor drops, and no frame trails the sim by more than one frame.
+Both sims pace to `GOLEM_SIM_RATE`, the target real-time factor in sim seconds
+per wall second (`sim_common.sim_rate_from_env`, `sim_timing.RealtimePacer`):
+unset or empty is 1, real time, the default; `2` runs twice real time, `0.5`
+half; `max` (any case) never sleeps; anything else stops the sim at start. The
+sim logs `sim rate: ...` at start. At any rate the pacer repays at most 0.1 s of
+wall lag, so a pause is not caught up. Every rate the robot sees counts sim time (the grippers'
+state and DeliGrasp settles included); only the viewer, the logs and their rate
+limits run on wall time. Faster than real time gives every ROS node (FAST-LIO,
+Nav2, the leg policy, `golem_safety`) less wall time per sim second: a stack that
+falls behind sends stale commands, and `GOLEM_CMD_TIMEOUT` (sim time) turns the
+motors off as at 1x. The closed-loop tests are gates only at 1x: `tests/sim`
+and `tests/g1` pass the shell's `GOLEM_SIM_RATE` (never `docker/.env`'s) and
+their summaries print the rate the sim logged; `tests/stack` and the surface
+probe clear it.
 (Trust the code over any topic list repeated elsewhere: the sensor suite in
 `h12_sensors.py`, the grippers in `magpie_hand_bridge.py`, `/clock` and the
 opt-in odom in `mujoco_ros_bridge.py`, Unitree DDS in `unitree_interface.py`.)
@@ -571,11 +588,13 @@ frame, default the real sensor's 20,000), `GOLEM_LIDAR_HZ`,
 one and else casts them exactly on the CPU, logging why; `gpu` stops the sim
 without a GPU; `cpu` always uses the CPU), `GOLEM_CAMERAS`, `GOLEM_CAMERA_HZ`,
 `GOLEM_CAMERA_SCALE` (G1 default 0.5), `GOLEM_CMD_TIMEOUT`,
-`GOLEM_SPAWN_BACKOFF`, `GOLEM_SIM_ODOM`, `GOLEM_SIM_EXPERIMENT`. Their
+`GOLEM_SPAWN_BACKOFF`, `GOLEM_SIM_ODOM`, `GOLEM_SIM_EXPERIMENT`,
+`GOLEM_SIM_RATE` (as on the H1-2, above). Their
 defaults are in the code
 that reads them: `SensorConfig` in `g1/g1_sensors.py` (sensors),
 `g1/unitree_interface.py` (the command timeout), `g1/g1_mujoco.py`
-(spawn, odom) and `measurement_bridge.py` (experiment); the compose files pass them
+(spawn, odom), `measurement_bridge.py` (experiment) and `sim_common.py`
+(rate); the compose files pass them
 (`docker/docker-compose.g1.yml` the G1-only ones). The G1 sim ignores the H1-2-only
 knobs (`GOLEM_SPAWN_MARGIN`, `GOLEM_SPAWN_OFFSET`, `GOLEM_HAND_CAMERA_RES`,
 `GOLEM_CAMERA_DEPTH`, `GOLEM_CAMERA_POINTCLOUD`, the tether ones). It refuses

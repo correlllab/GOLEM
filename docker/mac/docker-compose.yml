@@ -45,6 +45,10 @@ services:
       # s of sim time of rt/lowcmd silence after which the sim turns every
       # motor off.
       - GOLEM_CMD_TIMEOUT=${GOLEM_CMD_TIMEOUT:-0.5}
+      # The target real-time factor, sim seconds per wall second
+      # (golem_robocasa/sim_common.py). Empty: 1, real time; 2 twice real time;
+      # max unpaced. Above 1 every ROS node gets less wall time per sim second.
+      - GOLEM_SIM_RATE=${GOLEM_SIM_RATE:-}
       # 1 publishes ground-truth /odom and the odom -> pelvis TF. Off by
       # default: ground truth is opt-in, and the workspace's navigation
       # (GOLEM_SLAM / GOLEM_NAV2) runs on FAST-LIO, whose TF already parents

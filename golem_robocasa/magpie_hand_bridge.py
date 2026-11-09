@@ -1,13 +1,16 @@
 """Serve the H1-2 sim's MAGPIE grippers on the real magpie_control driver's ROS surface.
 
 One MagpieHandBridge serves one gripper. h12_mujoco.py spins one per side on
-its background MultiThreadedExecutor; every MjData or MjModel access holds the
-sim lock, since mj_step runs on the main thread.
+its background MultiThreadedExecutor, and its physics loop calls tick() after
+every step; every MjData or MjModel access holds the sim lock, since mj_step
+runs on the main thread. The state rate and the DeliGrasp settles count sim
+time, so they keep the real driver's rates per robot second at any
+GOLEM_SIM_RATE.
 
 Per side, as the real driver (magpie_control's gripper_node.py, launched in the
 <side> namespace) names them; the real driver's gripper/reset_overload service
 is not simulated:
-  /<side>/gripper/state                       magpie_msgs/msg/GripperState (10 Hz)
+  /<side>/gripper/state                       magpie_msgs/msg/GripperState (10 Hz of sim time)
   /<side>/gripper/open                        std_srvs/srv/Trigger
   /<side>/gripper/close                       std_srvs/srv/Trigger
   /<side>/gripper/set_position                magpie_msgs/srv/SetGripperPosition
@@ -16,6 +19,7 @@ is not simulated:
   /<side>/gripper/reset_parameters            std_srvs/srv/Trigger
   /<side>/gripper/deligrasp                   magpie_msgs/action/DeliGrasp
 """
+import math
 import threading
 import time
 
@@ -58,6 +62,10 @@ CLOSED_RAD = 2.05
 FINGER_LEVER_M = 0.044
 # N, MAGPIE's maximum grasp force (two AX-12A servos); requests are clipped to it.
 MAX_FORCE_N = 32.0
+# s of wall time between looks at the sim clock while a DeliGrasp settle waits.
+SIM_POLL_S = 0.005
+# s of sim time: a state publish due within this of the sim time is published now.
+_EPS_T = 1e-9
 
 
 def mm_to_rad(mm: float) -> float:
@@ -90,7 +98,7 @@ class MagpieHandBridge(Node):
 
     def __init__(self, model, data, side: str, sim_lock: threading.Lock,
                  publish_rate_hz: float = 10.0, name_prefix=""):
-        """Open the gripper and serve it on /<side>/gripper/*, state at publish_rate_hz wall Hz.
+        """Open the gripper and serve it on /<side>/gripper/*, state at publish_rate_hz of sim time (tick()).
 
         Raises for a side other than left or right, or a missing actuator or sensor.
         """
@@ -127,9 +135,8 @@ class MagpieHandBridge(Node):
         # node has none, so the side is part of each name.
         ns = f"{side}/gripper"
         self.pub_state = self.create_publisher(GripperState, f"{ns}/state", 10)
-        self._publish_period = 1.0 / publish_rate_hz
-        self.timer = self.create_timer(
-            self._publish_period, self._publish_state, callback_group=self._cb_group)
+        self._publish_period = 1.0 / publish_rate_hz   # s of sim time
+        self._next_state_t = -math.inf   # sim time the next state publish is due
 
         self.create_service(Trigger, f"{ns}/open", self._on_open,
                             callback_group=self._cb_group)
@@ -216,8 +223,31 @@ class MagpieHandBridge(Node):
             self.model.actuator_forcerange[act] = [-tau, tau]
         return force_n
 
+    def tick(self, sim_t: float) -> None:
+        """Publish /<side>/gripper/state when it is due at sim time sim_t (s): publish_rate_hz of sim time.
+
+        Call it from the physics loop after each step, without holding sim_lock. After a jump
+        in sim time the next publish is a period after sim_t, not a burst of the ones missed.
+        """
+        if sim_t < self._next_state_t - _EPS_T:
+            return
+        self._next_state_t += self._publish_period
+        if self._next_state_t <= sim_t:
+            self._next_state_t = sim_t + self._publish_period
+        self._publish_state()
+
+    def _sleep_sim(self, seconds: float, sleep=time.sleep) -> None:
+        """Return once seconds of sim time have passed, looking at the sim clock every SIM_POLL_S of wall time."""
+        with self.sim_lock:
+            end = float(self.data.time) + seconds
+        while True:
+            with self.sim_lock:
+                if float(self.data.time) >= end:
+                    return
+            sleep(SIM_POLL_S)
+
     def _publish_state(self) -> None:
-        """Publish /<side>/gripper/state (wall-clock timer)."""
+        """Publish /<side>/gripper/state."""
         try:
             with self.sim_lock:
                 aperture_mm, finger_positions = self._read_aperture_mm_locked()
@@ -306,7 +336,7 @@ class MagpieHandBridge(Node):
     def _on_deligrasp(self, goal_handle):
         """Run a DeliGrasp goal: go to goal_aperture, then close until the force target is met.
 
-        After each SETTLE_S wall-second settle, while the measured force is
+        After each settle of SETTLE_S of sim time, while the measured force is
         below the target, it closes additional_closure mm further and raises
         the force limit by additional_force N, at most MAX_ITERS times. Stops
         on reaching the force, on cancellation, or after MAX_ITERS. The goal
@@ -332,7 +362,7 @@ class MagpieHandBridge(Node):
                 self._set_force_limit_locked(current_force_target)
                 self._write_aperture_rad_locked(mm_to_rad(current_aperture))
 
-            time.sleep(SETTLE_S)
+            self._sleep_sim(SETTLE_S)
 
             feedback.phase = "initial_close"
             goal_handle.publish_feedback(feedback)
@@ -371,7 +401,7 @@ class MagpieHandBridge(Node):
                 with self.sim_lock:
                     self._set_force_limit_locked(current_force_target)
                     self._write_aperture_rad_locked(mm_to_rad(current_aperture))
-                time.sleep(SETTLE_S)
+                self._sleep_sim(SETTLE_S)
 
             if params.complete_grasp:
                 feedback.phase = "complete"

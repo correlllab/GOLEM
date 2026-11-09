@@ -732,6 +732,7 @@ class Report:
         self.numbers["real_time_factor"] = float((t[-1] - t[0]) / (wall[-1] - wall[0]))
         print(f"     {self.robot}: {len(t)} samples, sim t {t[0]:.1f}-{t[-1]:.1f} s, real-time factor "
               f"{self.numbers['real_time_factor']:.2f}")
+        bringup_test.record_sim_settings(self.numbers, out)
         g = self.goal
         release = None
         if "error" in g:

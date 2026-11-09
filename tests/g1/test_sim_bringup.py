@@ -138,6 +138,30 @@ def file_has(path, text):
         return False
 
 
+# The sim's start-up lines (sim.log) naming how it casts the lidar's rays and the rate it paces
+# to (GOLEM_SIM_RATE).
+SIM_SETTING_LINES = {"rate": re.compile(r"sim rate: [^\n]*"),
+                     "lidar": re.compile(r"lidar rays cast on the [^\n]*")}
+
+
+def sim_settings(out):
+    """Return the sim's start-up settings from <out>/sim.log, {"rate": line, "lidar": line}; None for one not logged."""
+    try:
+        with open(os.path.join(out, "sim.log"), errors="replace") as f:
+            text = f.read()
+    except OSError:
+        text = ""
+    return {key: (match.group(0) if (match := line.search(text)) else None)
+            for key, line in SIM_SETTING_LINES.items()}
+
+
+def record_sim_settings(numbers, out):
+    """Put the sim's start-up settings (sim_settings) into numbers["sim"] and print them, beside the real-time factor."""
+    settings = numbers["sim"] = sim_settings(out)
+    print(f"     {settings['rate'] or 'the sim logged no sim rate'}; "
+          f"{settings['lidar'] or 'the sim logged no lidar caster'}")
+
+
 def logged(path, logger):
     """Return (wall time, level, text) of every line the ROS logger `logger` wrote to a launch log, in order."""
     lines = []
@@ -1286,6 +1310,7 @@ class Report:
         print(f"     {len(t)} samples, sim t {t[0]:.1f}-{t[-1]:.1f} s, real-time factor "
               f"{self.numbers['real_time_factor']:.2f} (per sim second: min {per_s.min():.2f}, 5th percentile "
               f"{np.percentile(per_s, 5):.2f}, median {np.median(per_s):.2f}){steps}")
+        record_sim_settings(self.numbers, out)
         try:
             self.walk_test() if self.info["mode"] == "walk" else self.arm_test()
         except KeyError as e:

@@ -13,7 +13,9 @@
 #   GOLEM_CPU_PINNING, GOLEM_SIM_CPUSET, GOLEM_ROS_CPUSET   the CPUs the RoboCasa sim and the
 #                            ROS containers are pinned to, as the wrappers pin them
 #                            (docker_common.sh's configure_cpus); Isaac is not pinned.
-#   docker/.env and the shell, through docker_common.sh's load_config.
+#   docker/.env and the shell, through docker_common.sh's load_config. GOLEM_SIM_RATE is cleared
+#                            whatever they say: the sim runs at real time, the only rate the
+#                            checks are gates at.
 # Starts three disposable containers (golem-stack-test-<domain>-<pid>-{ros,sim,check}) and leaves
 # their logs, telemetry, the checker's report and run.json in tests/results/stack-<sim>-<case>-*.
 # Exit: the checker's status (0 pass); 1 when a container exits early or a wait times out;
@@ -85,7 +87,7 @@ PYREPORT
 trap cleanup EXIT
 
 # Start the ROS container: it builds the test install and prints STACK_BUILD_READY within 600 s.
-env_args=(-e "SIMULATOR=$SIMULATOR" -e "TEST_CASE=$TEST_CASE" -e "GOLEM_TEST_WALL_TIMEOUT=$GOLEM_TEST_WALL_TIMEOUT" -e "GOLEM_CAMERAS=$GOLEM_TEST_CAMERAS")
+env_args=(-e "SIMULATOR=$SIMULATOR" -e "TEST_CASE=$TEST_CASE" -e "GOLEM_TEST_WALL_TIMEOUT=$GOLEM_TEST_WALL_TIMEOUT" -e "GOLEM_CAMERAS=$GOLEM_TEST_CAMERAS" -e GOLEM_SIM_RATE=)
 tests_mount=(-v "$ROOT/tests/stack:/home/code/tests/stack:ro")
 "${COMPOSE[@]}" run -d --no-deps --name "$stack" "${env_args[@]}" "${tests_mount[@]}" --entrypoint bash ros /home/code/tests/stack/launch_ros_stack.sh >/dev/null
 for ((attempt=0; attempt<600; attempt++)); do

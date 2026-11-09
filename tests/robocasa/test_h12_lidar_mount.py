@@ -112,8 +112,8 @@ class LidarMountTests(unittest.TestCase):
     def test_h12_frame_has_20000_rays_on_4_lines(self):
         """The H1-2's scan thread fires 20,000 pattern rays a frame from livox_link, numbered on lines 0-3.
 
-        In a walled room around the standing H1-2 (its MJCF), with the robot's own geoms
-        self-filtered as h12_mujoco does: each frame casts the next 20,000 rows of the pattern,
+        In a walled room around the H1-2 at its MJCF's default pose, with every geom of the
+        robot's subtree giving no return: each frame casts the next 20,000 rows of the pattern,
         the returns are those rays in order, on line row % 4, and most rays return.
         """
         spec = mujoco.MjSpec.from_file(MJCFS['mujoco'])

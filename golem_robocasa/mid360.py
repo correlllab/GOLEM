@@ -1,8 +1,9 @@
 """Model the Livox MID-360's scans in MuJoCo for both robots: the real scan pattern, cast exactly.
 
 Geometry only (numpy + mujoco, no ROS): each robot's sensor code takes the sensor's pose
-from its model, calls Mid360Scanner.update() and packs the LidarFrame it returns into the
-messages the Livox driver publishes. The MID-360's IMU is not here: g1/g1_lidar.py (G1) and
+from its model, runs a Mid360Scanner on a ScanRing (its scan thread, fed with pose snapshots
+from the physics thread) and packs each LidarFrame into the messages the Livox driver
+publishes. The MID-360's IMU is not here: g1/g1_lidar.py (G1) and
 h12_sensors.py (H1-2) model it.
 
 Frames. Directions and points are in the sensor's own frame (livox_frame, the frame the
@@ -46,7 +47,9 @@ the CPU (the Mac).
 """
 import atexit
 import copy
+import math
 import os
+import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor, wait
 from typing import NamedTuple
@@ -72,6 +75,7 @@ _MIN_RAYS_PER_THREAD = 250
 _EPS_T = 1e-9                        # s, tolerance on accumulated sim time
 
 BACKENDS = ("auto", "gpu", "cpu")    # make_caster's backends, GOLEM_LIDAR_BACKEND's values
+_SLOT_POLL_S = 1.0                   # wall s between checks that the scan thread lives, while waiting
 # Serialises OpenGL rendering across the process's threads: with two threads rendering in
 # their own contexts at once, NVIDIA's driver slows each render several-fold, and the GPU
 # caster's casts fall far behind beside the H1-2's cameras. GpuCaster holds it while it
@@ -501,6 +505,18 @@ def _log(text):
     print(text, flush=True)
 
 
+def backend_from_env(env=os.environ):
+    """Return GOLEM_LIDAR_BACKEND, one of BACKENDS: unset or empty is auto; case and spaces are ignored.
+
+    Raises ValueError, naming the knob, for any other value.
+    """
+    raw = env.get("GOLEM_LIDAR_BACKEND", "")
+    backend = raw.strip().lower() or "auto"
+    if backend not in BACKENDS:
+        raise ValueError(f"GOLEM_LIDAR_BACKEND must be one of {', '.join(BACKENDS)}, got {raw!r}")
+    return backend
+
+
 def make_caster(model, exclude_body, geomgroup, backend="auto", robot_geoms=None, log=_log):
     """Return the caster backend names, casting on model through body exclude_body.
 
@@ -605,3 +621,172 @@ class Mid360Scanner:
         self._cast_until(snapshot, t, min(due, self.points_per_frame))
         self._last_t = t
         return frame
+
+
+class _NoTimings:
+    """Stand in for sim_timing.LoopTimings when no stage is timed."""
+
+    @staticmethod
+    def start():
+        """Return a dummy start mark."""
+        return 0.0
+
+    @staticmethod
+    def stop(name, start):
+        """Record nothing."""
+
+
+class ScanRing:
+    """Cast a scanner's rays on a thread of its own, fed with pose snapshots from the physics thread.
+
+    Every `interval` s of sim time, tick() copies what one cast reads into a free slot of a ring:
+    every geom's pose, the sensor's pose (pose(data)) and the live model's geom and material
+    alpha, which RoboCasa tasks change at run time and the rays skip at 0. The mid360_scan thread
+    casts the rays due by then from the slot, labelled with its time, and hands each frame it
+    completes to publish(frame). The caster casts on its own copy of the model and releases the
+    GIL, so the casts run beside the physics; other runtime edits of the model do not reach it.
+
+    Backpressure. The ring holds one frame period of casts, the one being cast included. When it
+    is full, tick() waits for the thread (counted in waits, timed as the lidar_wait stage): a
+    published frame trails the sim by at most one frame period and no ray is dropped; the sim's
+    real-time factor drops instead.
+
+    Threads. tick() runs on the physics thread between steps; it holds lock, when given, only
+    for the copy, and the live model's alpha is read under it. publish runs on the scan thread.
+    timings (sim_timing.LoopTimings' start() and stop()) times the stages lidar_capture (the
+    copy), lidar_wait, lidar_cast (one scanner update) and lidar_publish.
+    """
+
+    def __init__(self, scanner, model, pose, publish, interval, lock=None, timings=None, log=_log):
+        """Start the scan thread for scanner, whose caster casts on a copy of model (the live one).
+
+        pose(data) returns the sensor's (origin (3,) m, rotation (3, 3) sensor -> world) in data;
+        interval is the s of sim time between casts. A scan that raises is logged with log() once
+        per exception type and the thread goes on.
+        """
+        self.scanner = scanner
+        self.caster = scanner.caster
+        self.interval = float(interval)
+        self.slots = max(1, math.ceil(scanner.period / self.interval - 1e-9))
+        self._live = model
+        self._pose = pose
+        self._publish = publish
+        self._lock = lock
+        self.timings = timings if timings is not None else _NoTimings()
+        self._log = log
+        self.data = mujoco.MjData(model)   # the thread's: only its geom poses are read
+        n = self.slots
+        self._geom_xpos = np.empty((n, model.ngeom, 3))
+        self._geom_xmat = np.empty((n, model.ngeom, 9))
+        self._origin = np.empty((n, 3))
+        self._rotation = np.empty((n, 3, 3))
+        self._geom_alpha = np.empty((n, model.ngeom), model.geom_rgba.dtype)
+        self._mat_alpha = np.empty((n, model.nmat), model.mat_rgba.dtype)
+        self._free = queue.SimpleQueue()
+        for slot in range(n):
+            self._free.put(slot)
+        self._work = queue.SimpleQueue()
+        self._next = self._last = None
+        self.now = None              # s, the sim time of the last tick()
+        self.frames = self.casts = self.waits = 0
+        self.max_lag = 0.0           # s of sim time the sim was ahead of a frame at its end
+        self._errors = set()
+        self._thread = threading.Thread(target=self._run, name="mid360_scan", daemon=True)
+        self._thread.start()
+
+    def tick(self, data, t):
+        """Submit a cast of data's kinematics, at sim time t (s), when one is due.
+
+        The schedule starts again from t when t goes back (a sim reset).
+        """
+        self.now = t
+        if self._next is None or t < self._last:
+            self._next = t
+        self._last = t
+        if t < self._next - _EPS_T:
+            return
+        self._next += self.interval
+        self.submit(data, t)
+
+    def submit(self, data, t):
+        """Copy what a cast of data's kinematics at sim time t reads into a slot, for the thread.
+
+        Waits for a free slot while the ring is full (see the class docstring); raises
+        RuntimeError if the scan thread has stopped meanwhile.
+        """
+        self.casts += 1
+        try:
+            slot = self._free.get_nowait()
+        except queue.Empty:
+            self.waits += 1
+            wait_start = self.timings.start()
+            slot = None
+            while slot is None:
+                try:
+                    slot = self._free.get(timeout=_SLOT_POLL_S)
+                except queue.Empty:
+                    if not self._thread.is_alive():
+                        raise RuntimeError("the lidar's scan thread has stopped") from None
+            self.timings.stop("lidar_wait", wait_start)
+        capture_start = self.timings.start()
+        lock = self._lock
+        if lock is not None:
+            lock.acquire()
+        try:
+            np.copyto(self._geom_xpos[slot], data.geom_xpos)
+            np.copyto(self._geom_xmat[slot], data.geom_xmat)
+            origin, rotation = self._pose(data)
+            self._origin[slot] = origin
+            self._rotation[slot] = rotation
+            self._geom_alpha[slot] = self._live.geom_rgba[:, 3]
+            self._mat_alpha[slot] = self._live.mat_rgba[:, 3]
+        finally:
+            if lock is not None:
+                lock.release()
+        self.timings.stop("lidar_capture", capture_start)
+        self._work.put((slot, t))
+
+    def _run(self):
+        """Cast the submitted slots and publish each completed frame, until close().
+
+        A slot is freed only once its cast and any frame it completes are done, so the ring
+        counts the cast in progress.
+        """
+        d = self.data
+        timings = self.timings
+        while (item := self._work.get()) is not None:
+            slot, t = item
+            try:
+                np.copyto(d.geom_xpos, self._geom_xpos[slot])
+                np.copyto(d.geom_xmat, self._geom_xmat[slot])
+                snapshot = Snapshot(self._origin[slot], self._rotation[slot], d,
+                                    self._geom_alpha[slot], self._mat_alpha[slot])
+                cast_start = timings.start()
+                frame = self.scanner.update(snapshot, t)
+                timings.stop("lidar_cast", cast_start)
+                if frame is not None:
+                    now = self.now
+                    if now is not None:
+                        self.max_lag = max(self.max_lag, now - t)
+                    publish_start = timings.start()
+                    self._publish(frame)
+                    timings.stop("lidar_publish", publish_start)
+                    self.frames += 1
+            except Exception as e:   # keeps the sim running; logged once per kind
+                if type(e) not in self._errors:
+                    self._errors.add(type(e))
+                    self._log(f"WARNING: /livox/lidar scan failed at sim t {t:.3f}: {e!r}")
+            finally:
+                self._free.put(slot)
+
+    def close(self):
+        """Stop the thread after the queued casts, then free the caster (if the thread has stopped)."""
+        self._work.put(None)
+        self._thread.join(timeout=5.0)
+        if not self._thread.is_alive():
+            self.caster.close()
+
+    def stats(self):
+        """Return the frame count, the casts that waited for a free slot and the largest frame lag."""
+        return (f"{self.frames} lidar frames ({self.waits} of {self.casts} casts waited for the lidar, "
+                f"frames at most {self.max_lag * 1e3:.0f} ms behind the sim)")

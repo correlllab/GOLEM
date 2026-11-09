@@ -539,7 +539,10 @@ until frames return. Its MID-360 is the model both robots share
 frame on lines 0-3, each point's `offset_time` the time of the pose it was cast
 from; `/livox/lidar` and `/livox/pointcloud` carry the same frame. Its rays are
 cast as `GOLEM_LIDAR_BACKEND` says (as on the G1, below), and
-`GOLEM_LIDAR_SELF_FILTER=0` keeps the robot's own returns.
+`GOLEM_LIDAR_SELF_FILTER=0` keeps the robot's own returns. On both robots the
+casts run beside the physics, and when they fall a frame behind (the CPU caster
+on a slow host, the Mac) the physics waits for them (`mid360.ScanRing`): the
+real-time factor drops, and no frame trails the sim by more than one frame.
 (Trust the code over any topic list repeated elsewhere: the sensor suite in
 `h12_sensors.py`, the grippers in `magpie_hand_bridge.py`, `/clock` and the
 opt-in odom in `mujoco_ros_bridge.py`, Unitree DDS in `unitree_interface.py`.)

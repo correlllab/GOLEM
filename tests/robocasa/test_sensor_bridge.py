@@ -20,8 +20,8 @@ from rclpy.serialization import deserialize_message, serialize_message
 import mid360
 import realsense_profile as rp
 from h12_sensors import (
-    H12Sensors, LIDAR_SLOTS, _CameraPub, _LidarScans, _camera_info, _serialize_livox_scan,
-    lidar_backend_from_env, self_filter_geoms, PC2_DTYPE, _COMPRESSED_DEPTH_HEADER, _JPEG_QUALITY,
+    H12Sensors, _CameraPub, _LidarScans, _camera_info, _serialize_livox_scan,
+    self_filter_geoms, PC2_DTYPE, _COMPRESSED_DEPTH_HEADER, _JPEG_QUALITY,
 )
 from mujoco_ros_bridge import RosSensorBridge, _sim_time_to_msg
 from sim_timing import LoopTimings
@@ -187,9 +187,8 @@ class SensorTests(unittest.TestCase):
         b.zfar = float(b.model.vis.map.zfar * b.model.stat.extent)
         b._renderer = None
         b.cam_period = 1 / 15
-        b.lidar_period = .1
         b.imu_period = .005
-        b._last_cam_sim_t = b._last_lidar_sim_t = b._last_imu_sim_t = 0.
+        b._last_cam_sim_t = b._last_imu_sim_t = 0.
         b.depth_stream = b.pointcloud = True
         b._camera_tf = []
         color = rp.fovy_intrinsics(32, 32, 45)
@@ -487,7 +486,7 @@ class LidarTests(unittest.TestCase):
 
         Every ray hits the room, so the published points are the frame's rays in order: point k
         lies along pattern row 20,000 f + k, on line k % 4. offset_time rises within the frame
-        period (no cast is skipped here), and /livox/pointcloud holds the same points, lines and
+        period (no cast waits here), and /livox/pointcloud holds the same points, lines and
         offsets (its timestamp field) under the same header.
         """
         pattern = mid360.load_pattern()
@@ -549,7 +548,7 @@ class LidarTests(unittest.TestCase):
                             want.append(frame)
 
                 self.run_ticks(scans, 0.5, step=step)
-                self.assertEqual(scans.skipped, 0)
+                self.assertEqual(scans.waits, 0)
                 self.assertEqual(len(want), 5)
                 self.assertEqual(len(self.custom.messages), len(want))
                 for raw, frame in zip(self.custom.messages, want):
@@ -628,31 +627,6 @@ class LidarTests(unittest.TestCase):
         self.assertTrue(casts and all(t is not threading.current_thread() and not locked for t, locked in casts))
         self.assertEqual(len(self.custom.messages), 1)   # Recorder fails a publish under the lock
 
-    def test_casts_behind_the_ring_are_skipped_and_counted(self):
-        """With the thread LIDAR_SLOTS casts behind, a due cast is skipped and counted, not waited for."""
-        scans = self.scans()
-        busy, release = threading.Event(), threading.Event()
-        original = scans.caster.cast
-
-        def cast(*args, **kwargs):
-            """Hold the first cast until released."""
-            busy.set()
-            release.wait(30.0)
-            return original(*args, **kwargs)
-
-        scans.caster.cast = cast
-        interval = scans.interval
-        scans.tick(self.data, 0.0)
-        self.assertTrue(busy.wait(10.0))
-        start = time.perf_counter()
-        for k in range(1, LIDAR_SLOTS + 4):
-            scans.tick(self.data, k * interval)
-        self.assertLess(time.perf_counter() - start, 1.0)
-        self.assertEqual((scans.casts, scans.skipped), (LIDAR_SLOTS + 4, 3))
-        release.set()
-        scans.close()
-        self.assertIn(f'(3 of {LIDAR_SLOTS + 4} casts skipped)', scans.stats())
-
     def test_suite_ticks_the_lidar_at_the_state_time_and_shuts_it_down(self):
         """H12Sensors.tick(sim_t) casts at sim_t - timestep, the state mj_step started from; shutdown closes the caster.
 
@@ -681,16 +655,6 @@ class LidarTests(unittest.TestCase):
         self.assertEqual((msg.header.stamp.sec, msg.header.stamp.nanosec, msg.timebase), (0, 0, 0))
         self.assertIn('1 lidar frames (0 of', b.stats())
         self.assertTrue(any('1 lidar frames' in str(c) for c in printed.call_args_list))
-
-    def test_lidar_backend_from_env(self):
-        """GOLEM_LIDAR_BACKEND gives auto unset or empty, any case and spaces; a bad value names the knob."""
-        self.assertEqual(lidar_backend_from_env({}), 'auto')
-        self.assertEqual(lidar_backend_from_env({'GOLEM_LIDAR_BACKEND': ''}), 'auto')
-        self.assertEqual(lidar_backend_from_env({'GOLEM_LIDAR_BACKEND': ' CPU '}), 'cpu')
-        self.assertEqual(lidar_backend_from_env({'GOLEM_LIDAR_BACKEND': 'gpu'}), 'gpu')
-        for bad in ('cuda', '0', 'egl'):
-            with self.assertRaisesRegex(ValueError, 'GOLEM_LIDAR_BACKEND'):
-                lidar_backend_from_env({'GOLEM_LIDAR_BACKEND': bad})
 
 
 if __name__ == '__main__':

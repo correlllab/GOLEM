@@ -50,7 +50,10 @@ touch the sim's MjData:
     change at runtime (liquids, fruit, hidden walls) and the rays skip at 0.
     Other runtime edits of the model do not reach the caster's copy; RoboCasa's
     others (body poses, which reach the casts through the geom poses, sites and
-    contact flags) do not change what a ray hits.
+    contact flags) do not change what a ray hits. The ring holds one frame of
+    casts: when the thread falls that far behind, the physics thread waits for
+    it, so a frame trails the sim by at most one frame period and the real-time
+    factor drops instead (mid360.ScanRing).
   - head_camera renders, converts, compresses and publishes each frame. At the
     camera's rate the physics thread copies what the camera sees into the
     renderer's scene (mjv_updateScene, which reads MjData: about 0.1 ms in the
@@ -68,11 +71,8 @@ import math
 import os
 import queue
 import threading
-import time
 from typing import NamedTuple
 
-import mujoco
-import numpy as np
 from geometry_msgs.msg import TransformStamped
 from livox_ros_driver2.msg import CustomMsg
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
@@ -89,11 +89,8 @@ HEAD_CAMERA_NS = "/realsense/head"
 HEAD_CAMERA_LINK = "d435_link"
 # The real driver's QoS on both MID-360 topics: reliable, queue 256.
 LIVOX_QOS = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=256)
-# Casts the lidar's ring holds before the physics thread skips one.
-LIDAR_SLOTS = 20
 MAX_CAMERA_HZ = 30.0   # the D435's top rate at 1280x720
 CAMERA_START_S = 60.0   # wall s for the head camera's thread to make and try its renderer
-WARN_PERIOD_S = 5.0   # wall s between repeats of one warning
 _EPS_T = 1e-9   # s, tolerance on accumulated sim time
 
 
@@ -173,10 +170,7 @@ class SensorConfig(NamedTuple):
         lidar_hz = _env_number(env, "GOLEM_LIDAR_HZ", cls._field_defaults["lidar_hz"], float)
         if lidar_hz > 100.0:
             raise ValueError(f"GOLEM_LIDAR_HZ must be at most 100, got {lidar_hz:g}")
-        lidar_backend = env.get("GOLEM_LIDAR_BACKEND", "").strip().lower() or cls._field_defaults["lidar_backend"]
-        if lidar_backend not in mid360.BACKENDS:
-            raise ValueError(f"GOLEM_LIDAR_BACKEND must be one of {', '.join(mid360.BACKENDS)}, "
-                             f"got {env.get('GOLEM_LIDAR_BACKEND')!r}")
+        lidar_backend = mid360.backend_from_env(env)
         camera_hz = _env_number(env, "GOLEM_CAMERA_HZ", cls._field_defaults["camera_hz"], float)
         if camera_hz > MAX_CAMERA_HZ:
             raise ValueError(f"GOLEM_CAMERA_HZ must be at most {MAX_CAMERA_HZ:g}, got {camera_hz:g}")
@@ -220,97 +214,24 @@ class _Schedule:
         return True
 
 
-class _LidarScans:
-    """Cast the MID-360's scans on the mid360_scan thread (see the module docstring).
-
-    submit() runs on the physics thread, between steps, every `interval` s of sim time.
-    """
+class _LidarScans(mid360.ScanRing):
+    """Cast the MID-360's scans on the mid360_scan thread (a mid360.ScanRing; see the module docstring)."""
 
     def __init__(self, model, data, prefix, config, publish):
         """Build the caster config.lidar_backend names and start the thread, which calls publish(cdr bytes).
 
         Raises RuntimeError when the backend is gpu and no GPU caster can be built.
         """
-        self._live = model   # read on the physics thread only, for the alpha
         self.mid360 = g1_lidar.Mid360(model, prefix)
-        self.caster = self.mid360.make_caster(config.lidar_backend)
-        self.scanner = g1_lidar.make_scanner(self.caster, config.lidar_points, config.lidar_hz)
+        caster = self.mid360.make_caster(config.lidar_backend)
         # s of sim time between casts: the caster's batch, or each frame's period when that
         # is shorter, so that every frame is cast from a pose of its own.
-        self.interval = min(self.caster.batch_s, 1.0 / config.lidar_hz)
-        _log(f"lidar rays cast on the {'GPU' if isinstance(self.caster, mid360.GpuCaster) else 'CPU'} "
-             f"every {self.interval * 1e3:g} ms of sim time")
-        self.data = mujoco.MjData(model)   # the thread's: only its geom and site poses are read
-        self._site = self.mid360.site_id
-        self._publish = publish
-        self._geom_xpos = np.empty((LIDAR_SLOTS,) + data.geom_xpos.shape)
-        self._geom_xmat = np.empty((LIDAR_SLOTS,) + data.geom_xmat.shape)
-        self._site_xpos = np.empty((LIDAR_SLOTS, 3))
-        self._site_xmat = np.empty((LIDAR_SLOTS, 9))
-        self._geom_alpha = np.empty((LIDAR_SLOTS, model.ngeom), model.geom_rgba.dtype)
-        self._mat_alpha = np.empty((LIDAR_SLOTS, model.nmat), model.mat_rgba.dtype)
-        self._free = queue.SimpleQueue()
-        for slot in range(LIDAR_SLOTS):
-            self._free.put(slot)
-        self._work = queue.SimpleQueue()
-        self.frames = self.casts = self.skipped = 0
-        self._errors = set()
-        self._warned = -WARN_PERIOD_S
-        self._thread = threading.Thread(target=self._run, name="mid360_scan", daemon=True)
-        self._thread.start()
-
-    def submit(self, data, t):
-        """Hand the poses of data's kinematics at sim time t, and the model's alpha, to the thread.
-
-        If it is LIDAR_SLOTS casts behind, this one is skipped: the next casts
-        the rays due by then.
-        """
-        self.casts += 1
-        try:
-            slot = self._free.get_nowait()
-        except queue.Empty:
-            self.skipped += 1
-            if time.monotonic() - self._warned >= WARN_PERIOD_S:
-                self._warned = time.monotonic()
-                _log(f"WARNING: the lidar thread is {LIDAR_SLOTS} casts behind at sim t {t:.2f} s (short of "
-                     f"CPU or GPU); skipping casts, the next one casts their rays ({self.skipped} skipped so far)")
-            return
-        np.copyto(self._geom_xpos[slot], data.geom_xpos)
-        np.copyto(self._geom_xmat[slot], data.geom_xmat)
-        self._site_xpos[slot] = data.site_xpos[self._site]
-        self._site_xmat[slot] = data.site_xmat[self._site]
-        self._geom_alpha[slot] = self._live.geom_rgba[:, 3]
-        self._mat_alpha[slot] = self._live.mat_rgba[:, 3]
-        self._work.put((slot, t))
-
-    def _run(self):
-        """Cast the submitted slots and publish each completed frame, until close()."""
-        d = self.data
-        while (item := self._work.get()) is not None:
-            slot, t = item
-            np.copyto(d.geom_xpos, self._geom_xpos[slot])
-            np.copyto(d.geom_xmat, self._geom_xmat[slot])
-            d.site_xpos[self._site] = self._site_xpos[slot]
-            d.site_xmat[self._site] = self._site_xmat[slot]
-            # Copies: the slot goes back to the physics thread before the cast reads the alpha.
-            snapshot = self.mid360.snapshot(d, self._geom_alpha[slot].copy(), self._mat_alpha[slot].copy())
-            self._free.put(slot)
-            try:
-                frame = self.scanner.update(snapshot, t)
-                if frame is not None:
-                    self._publish(sm.livox_custom_msg_cdr(frame))   # rclpy publishes CDR bytes as is
-                    self.frames += 1
-            except Exception as e:   # keeps the sim running; logged once per kind
-                if type(e) not in self._errors:
-                    self._errors.add(type(e))
-                    _log(f"WARNING: /livox/lidar scan failed at sim t {t:.3f}: {e!r}")
-
-    def close(self):
-        """Stop the thread after the queued casts, then free the caster (if the thread has stopped)."""
-        self._work.put(None)
-        self._thread.join(timeout=5.0)
-        if not self._thread.is_alive():
-            self.caster.close()
+        interval = min(caster.batch_s, 1.0 / config.lidar_hz)
+        _log(f"lidar rays cast on the {'GPU' if isinstance(caster, mid360.GpuCaster) else 'CPU'} "
+             f"every {interval * 1e3:g} ms of sim time")
+        super().__init__(g1_lidar.make_scanner(caster, config.lidar_points, config.lidar_hz), model,
+                         self.mid360.pose, lambda frame: publish(sm.livox_custom_msg_cdr(frame)),
+                         interval, log=_log)
 
 
 class _Mid360:
@@ -324,12 +245,10 @@ class _Mid360:
         self._imu_schedule = _Schedule(config.imu_hz)
         self.imu_samples = 0
         self.scans = _LidarScans(model, data, prefix, config, self.pub_lidar.publish)
-        self._cast_schedule = _Schedule(1.0 / self.scans.interval)
 
     def tick(self, data, t):
         """Submit a cast every scans.interval and publish the IMU when due, at sim time t."""
-        if self._cast_schedule.due(t):
-            self.scans.submit(data, t)
+        self.scans.tick(data, t)
         if self._imu_schedule.due(t):
             angular_velocity, specific_force = self._imu.imu(data)
             self.pub_imu.publish(sm.livox_imu_msg(t, angular_velocity, specific_force))
@@ -340,9 +259,8 @@ class _Mid360:
         self.scans.close()
 
     def stats(self):
-        """Return the frame, skipped-cast and IMU sample counts."""
-        return (f"{self.scans.frames} lidar frames ({self.scans.skipped} of {self.scans.casts} casts "
-                f"skipped), {self.imu_samples} IMU samples")
+        """Return the lidar's counts (mid360.ScanRing.stats) and the IMU sample count."""
+        return f"{self.scans.stats()}, {self.imu_samples} IMU samples"
 
 
 class _HeadCamera:

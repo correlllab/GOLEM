@@ -71,8 +71,12 @@ class LoopTimings:
                 total, count, longest = self.stages.get(name, (0.0, 0, 0.0))
                 self.stages[name] = (total + elapsed, count + 1, max(longest, elapsed))
 
-    def maybe_report(self, sim_time):
-        """Print the report and start a new interval once interval wall seconds have passed."""
+    def maybe_report(self, sim_time, stats=None):
+        """Print the report and start a new interval once interval wall seconds have passed.
+
+        stats, when given, is called at each report and what it returns ("" for nothing) is
+        appended to the line (the sensors' counts).
+        """
         if not self.enabled:
             return
         now = self.clock()
@@ -85,7 +89,8 @@ class LoopTimings:
             f'{name}={1000 * total / count:.2f}/{1000 * longest:.2f}ms(n={count})'
             for name, (total, count, longest) in stages.items()
         )
+        extra = stats() if stats is not None else ''
         print(f'[sim-timing] RTF={(sim_time - self.sim_start) / wall:.3f} '
-              f'(stage mean/max) {fields}', flush=True)
+              f'(stage mean/max) {fields}' + (f'; {extra}' if extra else ''), flush=True)
         self.wall_start = now
         self.sim_start = sim_time

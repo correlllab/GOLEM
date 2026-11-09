@@ -28,10 +28,11 @@ from mujoco_ros_bridge import init_ros, shutdown_ros
 import mujoco.viewer
 
 import h1_2_robosuite  # registers H1_2 and the MAGPIE grippers
+import mid360
 import realsense_profile
 import battery_env  # registers the Battery env
 import blank_env  # registers the Blank env
-from h12_sensors import H12Sensors, lidar_backend_from_env
+from h12_sensors import H12Sensors
 from magpie_hand_bridge import MagpieHandBridge
 from measurement_bridge import MeasurementBridge
 from mujoco_env import ElasticBand
@@ -105,7 +106,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     """
 
     # A bad GOLEM_LIDAR_BACKEND stops the sim before the kitchen is built.
-    lidar_backend = lidar_backend_from_env()
+    lidar_backend = mid360.backend_from_env()
 
     create_kwargs = {}
     if layout is not None:
@@ -423,7 +424,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                 if done:
                     print("[h12_mujoco] task success (debounced).")
             pacer.wait()
-            timings.maybe_report(float(data.time))
+            timings.maybe_report(float(data.time), ros_bridge.stats)
     finally:
         if view_sync is not None:
             view_sync.stop()

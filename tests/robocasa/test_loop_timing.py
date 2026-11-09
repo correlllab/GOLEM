@@ -99,6 +99,25 @@ class PacingTests(unittest.TestCase):
         self.assertIn('physics', output.getvalue())
         self.assertIn('20.00', output.getvalue())
 
+    def test_timing_report_appends_the_sensor_stats(self):
+        """stats() is called only when a report is due, and its text ends the line."""
+        clock = FakeClock()
+        timing = LoopTimings(enabled=True, interval=1, clock=clock)
+        calls = []
+
+        def stats():
+            """Return the sensors' counts and record the call."""
+            calls.append(clock.now)
+            return '9 lidar frames'
+
+        with redirect_stdout(io.StringIO()) as output:
+            clock.now = 0.5
+            timing.maybe_report(0.5, stats)
+            clock.now = 1.0
+            timing.maybe_report(1.0, stats)
+        self.assertEqual(calls, [1.0])
+        self.assertTrue(output.getvalue().rstrip().endswith('; 9 lidar frames'), output.getvalue())
+
 
 if __name__ == '__main__':
     unittest.main()

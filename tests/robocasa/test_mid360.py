@@ -1,15 +1,18 @@
-"""Check the shared MID-360 model (golem_robocasa/mid360.py): pattern, CPU caster and scanner.
+"""Check the shared MID-360 model (golem_robocasa/mid360.py): pattern, CPU caster, scanner and scan ring.
 
 The scenes are small MJCFs built here (closed box rooms, and a room with a stand-in robot
-for the caster), so no RoboCasa env is built. Needs MuJoCo and NumPy only; run it with
-ROS_DOMAIN_ID=231 tests/robocasa/run_in_container.sh -p test_mid360.py
+for the caster), so no RoboCasa env is built. Needs MuJoCo, NumPy and sim_timing only; run
+it with ROS_DOMAIN_ID=231 tests/robocasa/run_in_container.sh -p test_mid360.py
 """
+import threading
+import time
 import unittest
 
 import mujoco
 import numpy as np
 
 import mid360
+from sim_timing import LoopTimings
 
 FRAME_POINTS = 20_000                 # POINTS_PER_SECOND / FRAME_RATE_HZ
 STEP_S = 0.01                         # s of sim time between update() calls (CpuCaster.batch_s)
@@ -302,6 +305,105 @@ class ScannerTests(unittest.TestCase):
             self.assertEqual(len(frame.points), FRAME_POINTS)
             ranges = np.linalg.norm(frame.points, axis=1)
             self.assertLess(np.abs(ranges - 3.0).max(), 0.2)   # 10 sigma of the noise
+
+
+class ScanRingTests(unittest.TestCase):
+    """Check ScanRing's depth, backpressure and frame lag, and the backend knob."""
+
+    def ring(self, cast_s=0.0, interval=STEP_S, timings=None):
+        """Return a started ScanRing in a 3 m cube room whose casts take at least cast_s wall s.
+
+        Frames go to self.frames, each with the ring's sim time when it was published.
+        """
+        model, data = _scene(_cube_room(3.0))
+        caster = mid360.CpuCaster(model, exclude_body=-1, geomgroup=VISUAL, threads=2)
+        cast = caster.cast
+
+        def slow(*args, **kwargs):
+            """Cast, then sleep out the rest of cast_s."""
+            start = time.perf_counter()
+            dist = cast(*args, **kwargs)
+            time.sleep(max(0.0, cast_s - (time.perf_counter() - start)))
+            return dist
+
+        caster.cast = slow
+        self.frames = []
+        ring = mid360.ScanRing(mid360.Mid360Scanner(caster), model,
+                               lambda d: (np.zeros(3), UPSIDE_DOWN),
+                               lambda frame: self.frames.append((frame, ring.now)), interval,
+                               timings=timings)
+        self.addCleanup(ring.close)
+        self.data = data
+        return ring
+
+    def test_ring_holds_one_frame_period_of_casts(self):
+        """The ring has frame period / interval slots, at least one."""
+        for interval, slots in ((0.01, 10), (0.02, 5), (0.1, 1), (0.03, 4)):
+            with self.subTest(interval=interval):
+                self.assertEqual(self.ring(interval=interval).slots, slots)
+
+    def test_a_slow_caster_makes_tick_wait_and_no_frame_lags_a_frame_period(self):
+        """With casts slower than real time, tick() waits for the thread instead of dropping rays.
+
+        Casts of 25 ms every 10 ms of sim time: the physics loop below, which would run far
+        faster than real time, is held to the casts' pace. Every frame still fires all 20,000
+        rays (each hits the room), and at its publication the sim is at most one frame period
+        past the frame's end. Each wait is timed as the lidar_wait stage.
+        """
+        timings = LoopTimings(enabled=True)
+        ring = self.ring(cast_s=0.025, timings=timings)
+        start = time.perf_counter()
+        for k in range(301):   # 0.6 s of sim time in 2 ms steps
+            ring.tick(self.data, k * 0.002)
+        elapsed = time.perf_counter() - start
+        ring.close()
+        self.assertEqual(ring.casts, 61)
+        self.assertGreater(ring.waits, 40)
+        # 61 casts of 25 ms; at most one frame of casts (10) is still queued when the loop ends.
+        self.assertGreater(elapsed, (61 - 10) * 0.025 * 0.9)
+        self.assertEqual(len(self.frames), 6)
+        for frame, now in self.frames:
+            self.assertEqual(len(frame.points), FRAME_POINTS)
+            end = frame.timebase + 0.1
+            self.assertLessEqual(now - end, 0.1 + 1e-9)
+        self.assertGreater(ring.max_lag, 0.05)
+        self.assertLessEqual(ring.max_lag, 0.1 + 1e-9)
+        self.assertIn(f"6 lidar frames ({ring.waits} of 61 casts waited", ring.stats())
+        self.assertEqual(timings.stages["lidar_wait"][1], ring.waits)
+        self.assertEqual(timings.stages["lidar_capture"][1], 61)
+
+    def test_a_fast_caster_never_waits(self):
+        """tick() does not wait, nor count a wait, while the casts keep up with the loop."""
+        ring = self.ring()
+        for k in range(101):
+            while ring._free.empty():   # the loop outruns real time
+                time.sleep(0.0005)
+            ring.tick(self.data, k * 0.002)
+        ring.close()
+        self.assertEqual((ring.waits, ring.casts, len(self.frames)), (0, 21, 2))
+
+    def test_tick_raises_when_the_scan_thread_has_stopped(self):
+        """A full ring whose thread has stopped raises instead of waiting forever."""
+        ring = self.ring(interval=0.1)   # one slot
+        release = threading.Event()
+        ring.scanner.update = lambda snapshot, t: release.wait(30.0) and None
+        ring.tick(self.data, 0.0)
+        ring._work.put(None)   # the thread stops after the cast in progress
+        release.set()
+        ring._thread.join(10.0)
+        ring.tick(self.data, 0.1)   # takes the freed slot; the stopped thread never frees it
+        with self.assertRaisesRegex(RuntimeError, "scan thread has stopped"):
+            ring.tick(self.data, 0.2)
+
+    def test_backend_from_env(self):
+        """GOLEM_LIDAR_BACKEND gives auto unset or empty, any case and spaces; a bad value names the knob."""
+        self.assertEqual(mid360.backend_from_env({}), "auto")
+        self.assertEqual(mid360.backend_from_env({"GOLEM_LIDAR_BACKEND": ""}), "auto")
+        self.assertEqual(mid360.backend_from_env({"GOLEM_LIDAR_BACKEND": " CPU "}), "cpu")
+        self.assertEqual(mid360.backend_from_env({"GOLEM_LIDAR_BACKEND": "gpu"}), "gpu")
+        for bad in ("cuda", "0", "egl"):
+            with self.assertRaisesRegex(ValueError, "GOLEM_LIDAR_BACKEND"):
+                mid360.backend_from_env({"GOLEM_LIDAR_BACKEND": bad})
 
 
 if __name__ == "__main__":

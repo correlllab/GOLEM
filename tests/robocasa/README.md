@@ -40,9 +40,12 @@ camera (with the wait for `mid360.GL_LOCK`, which the cameras and the lidar's
 GPU caster take turns on); `camera_depth_render` the depth stream's render;
 `camera_publish` image conversion, compression, and publishing; `camera_cloud`
 the point cloud. `lidar_capture` is the physics thread's copy of the poses one
-lidar cast reads, under the sim lock; `lidar_cast` one cast of the rays due
-since the last (every caster's `batch_s` of sim time, on the lidar's thread);
-`lidar_publish` packing and publishing a frame on both lidar topics. Physics includes lock
+lidar cast reads, under the sim lock; `lidar_wait` the physics thread waiting
+for a free slot when the lidar's thread is a frame behind; `lidar_cast` one
+cast of the rays due since the last (every caster's `batch_s` of sim time, on
+the lidar's thread); `lidar_publish` packing and publishing a frame on both
+lidar topics. The line ends with the lidar's counts: frames, the casts that
+waited, and how far behind the sim a frame was at most. Physics includes lock
 acquisition and PD control; `lowstate` is the `rt/lowstate` sample built,
 signed and published after every physics step. Timings are silent unless requested.
 Both sims build that sample with numpy (`LowStateWriter` in `unitree_common.py`);
@@ -59,9 +62,9 @@ thread, overlapping physics, with one job in flight. A due job waits for the
 previous one rather than being dropped, so every scheduled frame is published.
 `camera_capture` is the locked snapshot, `camera_wait` is time the loop blocked
 on the previous job. The MID-360's casts run on their own thread from a ring of
-pose snapshots (`h12_sensors.py`'s module docstring): the loop never waits for
-them, and when the thread falls a ring behind a cast is skipped instead,
-logged, and counted in the `sensors published ...` line at shutdown.
+pose snapshots (`mid360.ScanRing`): the ring holds one frame of casts, and when
+the thread falls that far behind the loop waits for it, so the real-time factor
+drops instead of the lidar falling more than a frame behind.
 The launcher selects EGL for offscreen camera rendering in both display modes;
 the camera context is created before the passive viewer opens, because a new
 EGL context cannot be made current once the GLFW window exists. The viewer

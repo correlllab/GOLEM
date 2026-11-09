@@ -67,7 +67,7 @@ def _standing(model):
 def _submit(scans, data, t):
     """Submit a cast once the ring has a free slot.
 
-    The loops here outrun real time, and a skipped cast would change the frames.
+    The loops here outrun real time; waiting here keeps submit() from waiting (and counting it).
     """
     while scans._free.empty():
         time.sleep(0.0005)
@@ -181,7 +181,7 @@ def test_lidar_thread_matches_live_casts():
             scans.close()
             live.caster.close()
         assert max(z) - min(z) > 0.3, (max(z), min(z))  # the robot fell
-        assert scans.skipped == 0, scans.skipped
+        assert scans.waits == 0, scans.waits
         assert len(want) == 49 and len(got) == len(want), (backend, len(got), len(want))
         same = sum(bytes(a) == bytes(b) for a, b in zip(got, want))
         assert same == len(want), f"{backend}: {same}/{len(want)} frames byte-identical"
@@ -406,7 +406,7 @@ def test_g1_sensors_stamp_one_step_before_sim_t_and_build_what_the_config_enable
     assert len(stamps) == sensors.mid360.imu_samples == 200
     assert "200 IMU samples" in sensors.stats() and "head camera" not in sensors.stats()
     # Frames complete at 0.1 ... 0.9 s; the last tick is stamped 0.998 s.
-    assert f"9 lidar frames (0 of {casts} casts skipped)" in sensors.stats(), sensors.stats()
+    assert f"9 lidar frames (0 of {casts} casts waited" in sensors.stats(), sensors.stats()
     none = bridge.G1Sensors(_Node(), model, data, "", bridge.SensorConfig(lidar=False, camera=False))
     none.tick(dt, bridge._sim_time_to_msg(dt))
     none.shutdown()

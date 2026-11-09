@@ -16,7 +16,6 @@ Runs in the ros container, where GraspGenX is pip-installed.
 """
 
 import inspect
-import math
 import os
 import threading
 from collections import namedtuple
@@ -40,6 +39,7 @@ from graspgenx.utils.collision_filter import filter_colliding_grasps
 from custom_ros_messages.srv import GraspGen
 
 from model_server.model_logging import ModelLogger, declare_logging_params
+from model_server.rotations import mat_to_quat
 import cv2
 
 # viser (imported by graspgenx.utils.viser_utils) is an optional,
@@ -122,27 +122,6 @@ PLANNER_KWARGS = dict(
     moe_skip_obb_rule='auto', moe_obb_density='dense-topandside',
     moe_obb_position_spacing_cm=0.5,
 )
-
-
-def mat_to_quat(R):
-    """Convert a 3x3 rotation matrix to a quaternion (x, y, z, w) by Shepperd's method."""
-    m00, m01, m02 = R[0]
-    m10, m11, m12 = R[1]
-    m20, m21, m22 = R[2]
-    tr = m00 + m11 + m22
-    if tr > 0.0:
-        s = math.sqrt(tr + 1.0) * 2.0
-        w, x, y, z = 0.25 * s, (m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s
-    elif m00 > m11 and m00 > m22:
-        s = math.sqrt(1.0 + m00 - m11 - m22) * 2.0
-        w, x, y, z = (m21 - m12) / s, 0.25 * s, (m01 + m10) / s, (m02 + m20) / s
-    elif m11 > m22:
-        s = math.sqrt(1.0 + m11 - m00 - m22) * 2.0
-        w, x, y, z = (m02 - m20) / s, (m01 + m10) / s, 0.25 * s, (m12 + m21) / s
-    else:
-        s = math.sqrt(1.0 + m22 - m00 - m11) * 2.0
-        w, x, y, z = (m10 - m01) / s, (m02 + m20) / s, (m12 + m21) / s, 0.25 * s
-    return (x, y, z, w)
 
 
 def _sampler_width(sampler):

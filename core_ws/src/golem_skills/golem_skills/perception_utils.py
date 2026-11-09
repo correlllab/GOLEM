@@ -3,7 +3,8 @@ Provide the geometry and decoding helpers the skills share.
 
 Decode a compressedDepth image, back-project a pixel mask to camera-frame
 points, convert between poses, transforms, matrices and quaternions, and pull
-JSON out of a Gemini reply. Depends on numpy, OpenCV and geometry_msgs only.
+JSON out of a Gemini reply. Depends on numpy, OpenCV, geometry_msgs and
+model_server's rotations (mat_to_quat, which graspgen_server shares).
 """
 
 import json
@@ -14,6 +15,7 @@ import numpy as np
 import cv2
 
 from geometry_msgs.msg import Pose
+from model_server.rotations import mat_to_quat
 
 
 def decode_compressed_depth_image(msg) -> np.ndarray:
@@ -87,27 +89,6 @@ def quat_to_rot(qx, qy, qz, qw):
         [2 * (xy + wz),     1 - 2 * (xx + zz), 2 * (yz - wx)],
         [2 * (xz - wy),     2 * (yz + wx),     1 - 2 * (xx + yy)],
     ])
-
-
-def mat_to_quat(R):
-    """Convert a 3x3 rotation matrix to a quaternion (x, y, z, w) by Shepperd's method."""
-    m00, m01, m02 = R[0]
-    m10, m11, m12 = R[1]
-    m20, m21, m22 = R[2]
-    tr = m00 + m11 + m22
-    if tr > 0.0:
-        s = math.sqrt(tr + 1.0) * 2.0
-        w, x, y, z = 0.25 * s, (m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s
-    elif m00 > m11 and m00 > m22:
-        s = math.sqrt(1.0 + m00 - m11 - m22) * 2.0
-        w, x, y, z = (m21 - m12) / s, 0.25 * s, (m01 + m10) / s, (m02 + m20) / s
-    elif m11 > m22:
-        s = math.sqrt(1.0 + m11 - m00 - m22) * 2.0
-        w, x, y, z = (m02 - m20) / s, (m01 + m10) / s, 0.25 * s, (m12 + m21) / s
-    else:
-        s = math.sqrt(1.0 + m22 - m00 - m11) * 2.0
-        w, x, y, z = (m10 - m01) / s, (m02 + m20) / s, (m12 + m21) / s, 0.25 * s
-    return (x, y, z, w)
 
 
 def quat_geodesic(q1, q2):

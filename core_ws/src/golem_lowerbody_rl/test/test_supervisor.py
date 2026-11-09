@@ -65,7 +65,12 @@ class FakeRunner:
 
 
 class Rig:
-    """A LegSupervisor on fake clocks with one of a robot's shipped run configs."""
+    """
+    A LegSupervisor on fake clocks with one of a robot's shipped run configs.
+
+    mono is robot time, steady the steady clock (the heartbeat's), node_t the node's clock;
+    each advances by a sample's dt unless feed() says otherwise.
+    """
 
     def __init__(self, robot='h12', run='sim', tick=1000, reset_on=('engage', 'band_release'),
                  **sections):
@@ -81,6 +86,7 @@ class Rig:
         self.legs = self.prepose.astype(np.float64)  # the measured legs
         self.runner = FakeRunner(legs, reset_on)
         self.mono, self.node_t, self.tick = 100.0, 50.0, tick
+        self.steady = 200.0
         self.log = []
         self.log_times = []
         self.steps = []  # the ticks of the returned targets
@@ -104,30 +110,33 @@ class Rig:
                            quat_wxyz=np.asarray(quat, dtype=np.float64),
                            gyro=np.asarray(gyro, dtype=np.float64))
 
-    def feed(self, n=1, dt=SAMPLE_DT, ticks=None, node_dt=None, upper=True, check=False,
-             **sample):
+    def feed(self, n=1, dt=SAMPLE_DT, ticks=None, node_dt=None, steady_dt=None, upper=True,
+             check=False, **sample):
         """
-        Feed n samples dt s apart and return what each gave.
+        Feed n samples dt s of robot time apart and return what each gave.
 
-        Their ticks advance ticks (dt in ms by default) and the node's clock node_dt (dt by
-        default). Beats come every BEAT_DT while beating, the arm controller commands with
-        each sample while upper, and check() runs before each sample with check.
+        Their ticks advance ticks (dt in ms by default), the node's clock node_dt and the
+        steady clock steady_dt (dt by default). Beats come every BEAT_DT of the steady clock
+        while beating, the arm controller commands with each sample while upper, and check()
+        runs before each sample with check.
         """
         out = []
         for _ in range(n):
             self.mono += dt
             self.node_t += dt if node_dt is None else node_dt
+            self.steady += dt if steady_dt is None else steady_dt
             step = round(dt / TICK_S) if ticks is None else ticks
             self.tick = (self.tick + step) % TICK_MODULO
             if self.beating and (self.last_beat is None
-                                 or self.mono - self.last_beat >= BEAT_DT - 1e-9):
-                self.sup.on_heartbeat(True, self.mono)
-                self.last_beat = self.mono
+                                 or self.steady - self.last_beat >= BEAT_DT - 1e-9):
+                self.sup.on_heartbeat(True, self.steady)
+                self.last_beat = self.steady
             if upper:
                 self.sup.on_upper_cmd(self.mono)
             if check:
-                self.sup.check(self.mono)
-            targets = self.sup.on_state(self.sample(**sample), self.mono, self.node_t)
+                self.sup.check(self.mono, self.steady)
+            targets = self.sup.on_state(self.sample(**sample), self.mono, self.node_t,
+                                        self.steady)
             if targets is not None:
                 self.steps.append(self.tick)
             out.append(targets)
@@ -261,7 +270,7 @@ def test_waits_for_the_first_beat():
     rig = Rig()
     rig.beating = False
     assert rig.feed(1000) == [None] * 1000
-    rig.sup.check(rig.mono + 10.0)  # silence before the first beat is no fault
+    rig.sup.check(rig.mono + 10.0, rig.steady + 10.0)  # silence before the first beat is no fault
     assert rig.sup.phase is Phase.WAITING and rig.sup.fault is None
     assert rig.messages() == ['waiting to pre-pose the legs: no /safety/heartbeat yet '
                               '(golem_safety beats once it can relay)']
@@ -626,7 +635,7 @@ def test_false_heartbeat_latches_in_every_phase(phase):
     else:
         rig.to(phase)
     steps = len(rig.runner.inputs)
-    rig.sup.on_heartbeat(False, rig.mono)
+    rig.sup.on_heartbeat(False, rig.steady)
     reason = "golem_safety's /safety/heartbeat is false: its estop has latched"
     assert rig.sup.phase is Phase.FAULTED and rig.sup.fault == reason
     assert rig.feed(200) == [None] * 200
@@ -641,7 +650,7 @@ def test_a_false_first_beat_latches():
     rig = Rig()
     rig.beating = False
     rig.feed(50)
-    rig.sup.on_heartbeat(False, rig.mono)
+    rig.sup.on_heartbeat(False, rig.steady)
     rig.beating = True
     assert rig.feed(1000) == [None] * 1000
     assert rig.sup.phase is Phase.FAULTED and len(rig.messages('error')) == 1
@@ -658,13 +667,42 @@ def test_silent_heartbeat_latches_after_0_5_s(phase):
     rig.beating = False
     last = rig.last_beat
     quat = _rolled(40.0) if phase is Phase.WAITING else (1.0, 0.0, 0.0, 0.0)
-    while rig.mono + SAMPLE_DT - last < 0.5 - 1e-6:
+    while rig.steady + SAMPLE_DT - last < 0.5 - 1e-6:
         rig.feed(1, check=True, quat=quat)
     assert rig.sup.phase is phase and rig.sup.fault is None
-    rig.sup.check(last + 0.51)
+    rig.sup.check(rig.mono, last + 0.51)
     assert rig.sup.phase is Phase.FAULTED
     assert rig.sup.fault.startswith('no /safety/heartbeat for 510 ms (> 500 ms)')
     assert rig.feed(100, quat=quat) == [None] * 100
+
+
+@_phases('WAITING', 'RAMPING', 'HOLDING', 'RUNNING')
+def test_the_heartbeat_watchdog_counts_steady_time_while_robot_time_stands_still(phase):
+    """SAFETY: with robot time stopped (a sim's /clock), a silent heartbeat still latches."""
+    rig = Rig('h12', 'sim')
+    if phase is Phase.WAITING:
+        _waiting_after_a_beat(rig)
+    else:
+        rig.to(phase)
+    rig.beating = False
+    rig.sup.check(rig.mono, rig.last_beat + 0.49)
+    assert rig.sup.phase is phase and rig.sup.fault is None
+    rig.sup.check(rig.mono, rig.last_beat + 0.51)
+    assert rig.sup.fault.startswith('no /safety/heartbeat for 510 ms (> 500 ms)')
+
+
+@_phases('RAMPING', 'HOLDING', 'RUNNING')
+def test_the_state_gap_counts_robot_time_not_steady_time(phase):
+    """A sim much slower than the wall clock is no gap; a gap of robot time is."""
+    rig = Rig('h12', 'sim')
+    rig.to(phase)
+    # 2 s of steady time between samples 4 ms of robot time apart: a sim at 1/500 speed
+    rig.feed(5, steady_dt=0.4)
+    assert rig.sup.phase is phase and rig.sup.fault is None
+    max_gap = rig.config.faults.max_state_gap
+    rig.sup.check(rig.mono + max_gap + 0.01, rig.steady)
+    assert rig.sup.fault == (f'/lowstate stale: no sample for {(max_gap + 0.01) * 1000:.0f} '
+                             f'ms (> {max_gap * 1000:.0f} ms)')
 
 
 @pytest.mark.parametrize('robot', ROBOTS)
@@ -683,9 +721,9 @@ def test_gap_over_limit_faults_once_commanded(robot, how, phase):
         rig.feed(1, dt=0.26)
         assert rig.sup.fault == '/lowstate stale: 260 ms between samples (> 250 ms)'
     else:
-        rig.sup.check(rig.mono + 0.249)
+        rig.sup.check(rig.mono + 0.249, rig.steady)
         assert rig.sup.phase is phase
-        rig.sup.check(rig.mono + 0.251)
+        rig.sup.check(rig.mono + 0.251, rig.steady)
         assert rig.sup.fault == '/lowstate stale: no sample for 251 ms (> 250 ms)'
     assert rig.sup.phase is Phase.FAULTED
     (error,) = rig.messages('error')
@@ -700,7 +738,7 @@ def test_a_tick_that_did_not_advance_is_ignored_and_not_fresh():
     steps = len(rig.runner.inputs)
     assert rig.feed(130, ticks=0) == [None] * 130
     assert len(rig.runner.inputs) == steps
-    rig.sup.check(rig.mono)
+    rig.sup.check(rig.mono, rig.steady)
     assert rig.sup.fault == '/lowstate stale: no sample for 260 ms (> 250 ms)'
 
 
@@ -994,10 +1032,10 @@ def test_a_silent_heartbeat_stops_the_next_sample_without_check(phase):
     rig.beating = False
     last = rig.last_beat
     out = []
-    while rig.sup.phase is not Phase.FAULTED and rig.mono - last < 1.0:
+    while rig.sup.phase is not Phase.FAULTED and rig.steady - last < 1.0:
         out += rig.feed(1)
     assert rig.sup.phase is Phase.FAULTED and out[-1] is None
-    assert 0.5 < rig.mono - last <= 0.5 + SAMPLE_DT + 1e-9
+    assert 0.5 < rig.steady - last <= 0.5 + SAMPLE_DT + 1e-9
     assert rig.sup.fault.startswith('no /safety/heartbeat for ')
 
 
@@ -1054,7 +1092,8 @@ def test_an_unexpected_error_in_on_state_latches(phase):
     rig = Rig('h12', 'sim')
     rig.to(phase)
     sample = replace(rig.sample(), tick=None)
-    assert rig.sup.on_state(sample, rig.mono + SAMPLE_DT, rig.node_t + SAMPLE_DT) is None
+    assert rig.sup.on_state(sample, rig.mono + SAMPLE_DT, rig.node_t + SAMPLE_DT,
+                            rig.steady + SAMPLE_DT) is None
     assert rig.sup.phase is Phase.FAULTED
     assert rig.sup.fault.startswith('unexpected error: TypeError(')
     assert rig.feed(10) == [None] * 10

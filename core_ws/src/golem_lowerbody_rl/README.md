@@ -46,7 +46,12 @@ and the real robot with `start_position_verified:=true`).
 
 `golem_lowerbody_rl/supervisor.py` (`LegSupervisor`, no ROS) holds the phases
 and every check, with the run config's values; its module docstring is the
-reference. The node logs `loaded run config <path> and policy <path>`, then:
+reference. Its times are robot time: the sim's `/clock` with `use_sim_time:=true`
+(so the gaps, freshness windows and waits below are s of sim time, whatever the
+sim's speed), the steady clock otherwise, on the real robots. The heartbeat
+watchdog alone is on the steady clock always: a `golem_safety` that has stopped
+is caught while a sim's `/clock` stands still. Under `use_sim_time` the node
+takes no `/lowstate` before the first `/clock`, and logs that it waits. The node logs `loaded run config <path> and policy <path>`, then:
 
 1. **Waiting.** Silent until `golem_safety`'s first true `/safety/heartbeat`
     and a `/lowstate` sample that is finite, has a unit IMU quaternion (within
@@ -83,8 +88,9 @@ reference. The node logs `loaded run config <path> and policy <path>`, then:
     sim), or none for that long; a tick that goes back; a non-finite value or
     a non-unit IMU quaternion; a fall (gravity z above -0.5); while running, a
     tick lag over `faults.max_latency` when it is set (null in every shipped
-    config, and refused in a sim run config: the lag is measured on the
-    monotonic clock and a sim's tick counts sim time); a policy step that fails or gives anything but 12 finite targets.
+    config, and refused in a sim run config: a sim's tick counts sim time, and
+    without `use_sim_time` the lag is measured on the steady clock); a policy
+    step that fails or gives anything but 12 finite targets.
     In every phase, a false heartbeat (`golem_safety`'s estop has latched) or
     none for `heartbeat.timeout` (0.5 s) after the first does too, checked by
     the 100 Hz timer and on every `/lowstate` sample. The node

@@ -20,11 +20,12 @@ class BandRelease:
     late reply could meet a second call. Disabled (the real robots, which have no band),
     it never asks.
 
-    Not thread-safe: the caller serialises the calls. Times are one monotonic clock, in s.
+    Not thread-safe: the caller serialises the calls. Times are s of robot time (the sim's
+    clock under use_sim_time, the steady clock on the robots).
     """
 
     def __init__(self, enabled: bool, max_wait: float):
-        """Ask only when enabled; max_wait (s) after the policy started without /left_ee_pose."""
+        """Ask only when enabled; max_wait s of robot time after a start with no /left_ee_pose."""
         self.enabled = enabled
         self.max_wait = max_wait
         self.released = False

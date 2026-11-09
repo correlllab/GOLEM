@@ -146,8 +146,9 @@ def test_max_latency_is_refused_in_a_sim_run(tmp_path, robot):
     """
     SAFETY: a sim run config with faults.max_latency is refused; a real one may set it.
 
-    Tick lag is measured against the monotonic clock, and a sim's tick counts sim time, so
-    a sim slower than real time would build up lag and stop the legs within seconds.
+    Tick lag is measured against robot time, the steady clock without use_sim_time, and a
+    sim's tick counts sim time, so there a sim slower than real time would build up lag and
+    stop the legs within seconds.
     """
     raw = _source(robot, 'sim')
     raw['faults']['max_latency'] = 0.025

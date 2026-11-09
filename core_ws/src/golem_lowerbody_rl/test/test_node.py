@@ -7,6 +7,7 @@ node's clock here), golem_safety's /safety/heartbeat, the arm controller's
 /safety/lowcmd_upper_in, frame_task_server's /left_ee_pose and the sim's band toggle,
 served under a name of the test's own (TOGGLE_REMAP). The node runs ALMI, its runner
 wrapped to record every step and reset, in a MultiThreadedExecutor as main() spins it.
+Under use_sim_time a SimClock publishes /clock at other speeds than the wall clock's.
 Needs the package, golem_safety and torch installed.
 """
 
@@ -27,6 +28,7 @@ import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rosgraph_msgs.msg import Clock
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 from unitree_hg.msg import LowCmd, LowState
@@ -139,6 +141,7 @@ class Robot:
         self.q = np.zeros(len(profile.body_joints))
         self.q[profile.slots(profile.legs)] = legs_q
         self.heartbeat = False
+        self.state = True
         self.upper = True
         self.ee_pose = True
         self.cmd = None
@@ -158,7 +161,9 @@ class Robot:
         self.node.create_timer(0.1, self._publish_beat)
 
     def _publish_state(self):
-        """Publish /lowstate: upright, legs at q, the tick in ms of the wall clock."""
+        """Publish /lowstate while state is on: upright, legs at q, the tick in ms of wall time."""
+        if not self.state:
+            return
         msg = LowState()
         msg.tick = int((time.monotonic() - self._t0) * 1000.0) & 0xFFFFFFFF
         msg.mode_machine = 6
@@ -203,6 +208,41 @@ class Robot:
         return got[-1] if got else None
 
 
+class SimClock:
+    """Publish /clock in 2 ms steps of sim time at rate sim s per wall s, from start()."""
+
+    STEP_S = 0.002
+
+    def __init__(self, context, rate):
+        """Create the node and its thread; nothing is published before start()."""
+        self.node = rclpy.create_node('test_lowerbody_sim_clock', context=context)
+        self._pub = self.node.create_publisher(Clock, '/clock', 10)
+        self.rate = rate
+        self._t_ns = 100 * 10**9
+        self.running = threading.Event()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        """Publish a step every STEP_S / rate s of wall time while running."""
+        msg = Clock()
+        next_at = time.monotonic()
+        while not self._stop.is_set():
+            if self.running.is_set():
+                self._t_ns += int(self.STEP_S * 1e9)
+                msg.clock.sec, msg.clock.nanosec = divmod(self._t_ns, 10**9)
+                self._pub.publish(msg)
+            next_at += self.STEP_S / self.rate
+            time.sleep(max(0.0, next_at - time.monotonic()))
+
+    def close(self):
+        """Stop the thread and destroy the node."""
+        self._stop.set()
+        self._thread.join(timeout=2.0)
+        self.node.destroy_node()
+
+
 def _wait(condition, timeout):
     """Poll condition until it holds or timeout s pass; return whether it held."""
     deadline = time.monotonic() + timeout
@@ -225,9 +265,17 @@ def rig(monkeypatch):
     rclpy.init(args=['--ros-args', '-r', TOGGLE_REMAP], context=context,
                domain_id=TEST_DOMAIN)
     spinning = []
+    clocks = []
 
-    def start(config, policy='almi', overrides=()):
-        """Start the node on config and policy (and overrides), and the fake robot beside it."""
+    def start(config, policy='almi', overrides=(), clock_rate=None):
+        """
+        Start the node on config and policy (and overrides), and the fake robot beside it.
+
+        clock_rate: run the node with use_sim_time, and return (node, robot, SimClock) with
+        the sim clock at that rate, not yet publishing.
+        """
+        if clock_rate is not None:
+            overrides = [*overrides, Parameter('use_sim_time', value=True)]
         node = RecordingNode([], context=context, parameter_overrides=[
             Parameter('robot', value='h12'), Parameter('config', value=config),
             Parameter('policy', value=policy), *overrides])
@@ -240,9 +288,15 @@ def rig(monkeypatch):
             thread = threading.Thread(target=executor.spin, daemon=True)
             thread.start()
             spinning.append((spun, executor, thread))
-        return node, robot
+        if clock_rate is None:
+            return node, robot
+        clock = SimClock(context, clock_rate)
+        clocks.append(clock)
+        return node, robot, clock
 
     yield start
+    for clock in clocks:
+        clock.close()
     for spun, executor, thread in spinning:
         executor.shutdown()
         thread.join(timeout=5.0)
@@ -279,6 +333,51 @@ def test_publishes_nothing_before_the_first_true_heartbeat(rig):
     q, *_ = _legs(robot.lower[0][1], slots)
     # ramp step 0 is where the legs are
     np.testing.assert_allclose(q, robot.q[slots], atol=1e-6)
+
+
+def test_sim_time_takes_no_lowstate_before_the_first_clock(rig):
+    """Under use_sim_time no /lowstate is taken before the first /clock; the legs start after."""
+    node, robot, clock = rig('sim', clock_rate=1.0)
+    robot.heartbeat = True
+    time.sleep(1.0)
+    assert robot.lower == [] and node.supervisor.phase is Phase.WAITING
+    assert [m for _, m in node.records if m.startswith('waiting for the first /clock')]
+    clock.running.set()
+    assert _wait(lambda: robot.lower, 3.0)
+
+
+def test_sim_time_state_gap_counts_sim_time(rig):
+    """Under use_sim_time a /lowstate gap is s of sim time: 0.8 s of wall time at 1/4 is 0.2."""
+    node, robot, clock = rig('sim', clock_rate=0.25)
+    clock.running.set()
+    robot.heartbeat = True
+    assert _wait(lambda: node.supervisor.phase in (Phase.RAMPING, Phase.HOLDING), 5.0)
+    robot.state = False
+    time.sleep(0.8)
+    robot.state = True
+    time.sleep(0.3)
+    assert node.supervisor.fault is None, node.supervisor.fault
+    # max_state_gap is 0.5 s of sim time: 2 s of wall time
+    robot.state = False
+    stopped = time.monotonic()
+    assert _wait(lambda: node.supervisor.phase is Phase.FAULTED, 5.0)
+    assert time.monotonic() - stopped > 1.5
+    assert node.supervisor.fault.startswith('/lowstate stale'), node.supervisor.fault
+
+
+def test_sim_time_heartbeat_silence_counts_steady_time(rig):
+    """SAFETY: under use_sim_time, with /clock stopped, a silent heartbeat still stops the legs."""
+    node, robot, clock = rig('sim', clock_rate=1.0)
+    clock.running.set()
+    robot.heartbeat = True
+    assert _wait(lambda: node.supervisor.phase in (Phase.RAMPING, Phase.HOLDING), 5.0)
+    clock.running.clear()
+    time.sleep(0.1)
+    robot.heartbeat = False
+    stopped = time.monotonic()
+    assert _wait(lambda: node.supervisor.phase is Phase.FAULTED, 3.0)
+    assert 0.4 < time.monotonic() - stopped < 1.0
+    assert node.supervisor.fault.startswith('no /safety/heartbeat'), node.supervisor.fault
 
 
 def test_walks_on_cmd_vel_with_the_policy_targets(rig):
@@ -413,10 +512,10 @@ def test_imu_trim_is_live_and_bounded(rig):
     seen = []
     on_state = node.supervisor.on_state
 
-    def record(sample, mono, node_t):
+    def record(sample, now, node_t, steady):
         """Keep the quaternion the supervisor gets, then hand the sample on."""
         seen.append(np.array(sample.quat_wxyz))
-        return on_state(sample, mono, node_t)
+        return on_state(sample, now, node_t, steady)
     node.supervisor.on_state = record
 
     def applied():

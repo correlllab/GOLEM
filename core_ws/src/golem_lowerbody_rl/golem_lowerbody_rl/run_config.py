@@ -139,13 +139,13 @@ def _check(raw, role: str | None) -> RunConfig:
     height_rate = commands['height_rate']
     trim = numbers('imu_trim_deg', raw['imu_trim_deg'], 3)
     max_latency = raw['faults']['max_latency']
-    # SAFETY: tick lag is the tick's age on the monotonic clock, and a sim's tick counts
-    # sim time: a sim slower than real time builds up lag and would stop the legs within
-    # seconds
+    # SAFETY: tick lag is the tick's age on robot time, which is the steady clock without
+    # use_sim_time, and a sim's tick counts sim time: there a sim slower than real time
+    # builds up lag and would stop the legs within seconds
     if sim and max_latency is not None:
         raise ValueError('faults.max_latency must be null in a sim run config (sim true): '
-                         "a sim's tick counts sim time, and the lag is measured against "
-                         f'the monotonic clock; not {max_latency!r}')
+                         "a sim's tick counts sim time, and without use_sim_time the lag is "
+                         f'measured against the steady clock; not {max_latency!r}')
     return RunConfig(
         sim=sim,
         startup=Startup(

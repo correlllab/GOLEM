@@ -33,6 +33,11 @@ Interfaces:
 - srv /lowerbody/confirm_engage (std_srvs/Trigger): the operator's go-ahead.
 - cli /elastic_band/toggle (std_srvs/Trigger): the sim's band, with band.release.
 
+Clocks: robot time times the state gaps, the commands, the readiness waits and the band:
+the node's clock (the sim's /clock) under use_sim_time, the steady clock otherwise. Under
+use_sim_time the node takes no /lowstate before the first /clock, logging that it waits.
+The heartbeat watchdog is on the steady clock always (LegSupervisor's module docstring).
+
 Threads: /lowstate has a callback group of its own and everything else shares another,
 under a two-thread executor (make_executor), so a state sample never queues behind the
 other callbacks. One lock serialises every call into the supervisor and the policy, so a
@@ -72,7 +77,8 @@ NODE_NAME = 'lowerbody_controller_node'
 IMU_TRIM_PARAMS = ('imu_trim_roll_deg', 'imu_trim_pitch_deg', 'imu_trim_yaw_deg')
 # deg: a trim beyond this is a mounting fault, not a calibration
 IMU_TRIM_RANGE_DEG = 15.0
-# s: the steady timer runs the heartbeat and /lowstate watchdogs and the band at 100 Hz
+# s of steady time: the steady timer runs the heartbeat and /lowstate watchdogs and the band
+# at 100 Hz
 CHECK_PERIOD = 0.01
 # LowCmd motor mode: the joint is driven
 MOTOR_ON = 1
@@ -124,6 +130,9 @@ class LowerBodyControllerNode(Node):
             log=lambda level, message: self._log(level, message))
         self._body = len(self._profile.body_joints)
         self._leg_slots = [int(slot) for slot in self._profile.slots(self._profile.legs)]
+        # robot time is the node's clock (the sim's /clock) under use_sim_time
+        self._sim_time = bool(self.get_parameter('use_sim_time').value)
+        self._clock_wait_logged = False
 
         for name, value in zip(IMU_TRIM_PARAMS, self._run.imu_trim_deg):
             if abs(value) > IMU_TRIM_RANGE_DEG:
@@ -162,8 +171,9 @@ class LowerBodyControllerNode(Node):
                                                callback_group=group)
         self.create_service(Trigger, '/lowerbody/confirm_engage', self._on_confirm,
                             callback_group=group)
-        # steady time: the watchdogs and the band's waits run on the monotonic clock even
-        # when the node's clock is a simulator's
+        # SAFETY: a steady timer, whatever use_sim_time says: the heartbeat watchdog it runs
+        # must fire while a sim's /clock stands still. The /lowstate watchdog and the band it
+        # runs too count robot time
         self.create_timer(CHECK_PERIOD, self._on_check, callback_group=group,
                           clock=Clock(clock_type=ClockType.STEADY_TIME))
         self._log('info', f'loaded run config {run_config_path(robot, config)} and policy '
@@ -206,11 +216,37 @@ class LowerBodyControllerNode(Node):
         """Return the node clock's time, s (a simulator's in the sims)."""
         return self.get_clock().now().nanoseconds * 1e-9
 
+    def _times(self) -> tuple[float, float]:
+        """
+        Return (robot time, steady time), s: the node's clock under use_sim_time, else steady.
+
+        On the steady clock both are the one reading, as the supervisor takes them on the
+        robots.
+        """
+        steady = time.monotonic()
+        return (self._node_t() if self._sim_time else steady), steady
+
+    def _clock_started(self) -> bool:
+        """
+        Return whether robot time has started (under use_sim_time, a first /clock).
+
+        Logs once while it has not.
+        """
+        if not self._sim_time or self.get_clock().now().nanoseconds > 0:
+            return True
+        if not self._clock_wait_logged:
+            self._clock_wait_logged = True
+            self._log('info', 'waiting for the first /clock (use_sim_time): no /lowstate is '
+                              'taken before it')
+        return False
+
     # -- callbacks ---------------------------------------------------------------------
 
     def _on_lowstate(self, msg: LowState) -> None:
         """Hand a /lowstate sample to the supervisor and publish the targets it returns."""
-        mono = time.monotonic()
+        if not self._clock_started():
+            return
+        now, steady = self._times()
         try:
             sample = self._sample(msg)
         except Exception as e:  # noqa: BLE001 - a sample that cannot be read stops the legs
@@ -220,7 +256,7 @@ class LowerBodyControllerNode(Node):
             return
         node_t = self._node_t()
         with self._lock:
-            targets = self._supervisor.on_state(sample, mono, node_t)
+            targets = self._supervisor.on_state(sample, now, node_t, steady)
             self._publish_active()
             if targets is not None:
                 self._publish_legs(targets)
@@ -256,15 +292,15 @@ class LowerBodyControllerNode(Node):
         """Take a /cmd_vel."""
         with self._lock:
             self._supervisor.on_cmd(msg.linear.x, msg.linear.y, msg.angular.z,
-                                    time.monotonic())
+                                    self._times()[0])
 
     def _on_height(self, msg: Float32) -> None:
         """Take a /lowerbody/height."""
         with self._lock:
-            self._supervisor.on_height(float(msg.data), time.monotonic())
+            self._supervisor.on_height(float(msg.data), self._times()[0])
 
     def _on_heartbeat(self, msg: Bool) -> None:
-        """Take golem_safety's heartbeat."""
+        """Take golem_safety's heartbeat, on the steady clock (LegSupervisor.on_heartbeat)."""
         with self._lock:
             self._supervisor.on_heartbeat(bool(msg.data), time.monotonic())
             self._publish_active()
@@ -272,12 +308,12 @@ class LowerBodyControllerNode(Node):
     def _on_upper(self, _msg: LowCmd) -> None:
         """Note that the arm controller commands."""
         with self._lock:
-            self._supervisor.on_upper_cmd(time.monotonic())
+            self._supervisor.on_upper_cmd(self._times()[0])
 
     def _on_ee_pose(self, _msg: PoseStamped) -> None:
         """Take the first /left_ee_pose and drop the subscription."""
         with self._lock:
-            self._supervisor.on_ee_pose(time.monotonic())
+            self._supervisor.on_ee_pose(self._times()[0])
         if self._ee_sub is not None:
             self.destroy_subscription(self._ee_sub)
             self._ee_sub = None
@@ -285,7 +321,7 @@ class LowerBodyControllerNode(Node):
     def _on_confirm(self, _request, response):
         """Answer /lowerbody/confirm_engage with the supervisor's verdict."""
         with self._lock:
-            response.success, response.message = self._supervisor.confirm(time.monotonic())
+            response.success, response.message = self._supervisor.confirm(self._times()[0])
             self._publish_active()
         self._log('info' if response.success else 'warn',
                   f'/lowerbody/confirm_engage: {response.message}')
@@ -293,12 +329,12 @@ class LowerBodyControllerNode(Node):
 
     def _on_check(self) -> None:
         """Run the watchdogs; call the band toggle once it is due."""
-        mono = time.monotonic()
+        now, steady = self._times()
         ready = self._band_client.service_is_ready() if self._run.band.release else False
         with self._lock:
-            self._supervisor.check(mono)
+            self._supervisor.check(now, steady)
             self._publish_active()
-            due = (self._supervisor.band_due(mono, service_ready=ready)
+            due = (self._supervisor.band_due(now, service_ready=ready)
                    if self._run.band.release else None)
         if due is not None:
             # SAFETY: the one call; its reply is final (BandRelease)

@@ -36,10 +36,14 @@ Phases (Phase):
   false heartbeat, or none for heartbeat.timeout after the first (checked by check() and
   on every sample).
 
-Clocks: every mono argument is one monotonic clock (s), for gaps, the heartbeat, the
-commands and the band's waits. node_t is the node's clock (sim time in the sims, wall
-time on the robots), against which the tick's rate is checked and which the policy gets
-as its time. Steps follow /lowstate's tick on a grid one policy period apart (TickGrid).
+Clocks: every now argument is robot time (s), for the state gaps, the commands, the
+upper and ee-pose waits, the band's waits and the log throttles: the sim's clock under
+use_sim_time, the steady clock on the robots. Every steady argument is the steady clock
+(s), for the heartbeat watchdog alone: golem_safety's liveness must be judged even while a
+sim's clock stands still. On the robots the node passes the same steady reading as both.
+node_t is the node's clock (sim time in the sims, wall time on the robots), against which
+the tick's rate is checked and which the policy gets as its time. Steps follow /lowstate's
+tick on a grid one policy period apart (TickGrid).
 
 Not thread-safe: the caller holds one lock around every call, so a band reply's policy
 reset never runs inside a policy step.
@@ -177,9 +181,9 @@ class LegSupervisor:
 
         self._phase = Phase.WAITING
         self._fault: str | None = None
-        self._beat_mono: float | None = None  # when the last true beat came
+        self._beat_steady: float | None = None  # when the last true beat came
         self._last_tick: int | None = None  # the newest tick taken
-        self._last_mono: float | None = None  # when it was taken
+        self._last_t: float | None = None  # when it was taken
         self._lag = TickLag()
         self._wait_reason = 'no /lowstate sample yet'
         self._logged: dict[str, float] = {}  # when each kind of repeated message was last logged
@@ -197,13 +201,13 @@ class LegSupervisor:
         self._ready_reason: str | None = STEADY_FILLING
         self._rate_verdict: str | None = STEADY_FILLING
         self._rate = 0.0
-        self._upper_mono: float | None = None
+        self._upper_t: float | None = None
         self._ee_seen = False
         self._ee_wait_over = False
         # running
         self._running_since: float | None = None
         self._cmd = np.zeros(3)
-        self._cmd_mono: float | None = None
+        self._cmd_t: float | None = None
         self._height = self._default_height
         self._band_missing_logged = False
         # timing log: step spacing (ticks) and tick lag (ms) per step
@@ -237,8 +241,12 @@ class LegSupervisor:
 
     # -- inputs ------------------------------------------------------------------------
 
-    def on_heartbeat(self, value: bool, mono: float) -> None:
-        """Take golem_safety's /safety/heartbeat: true while it relays, false once latched."""
+    def on_heartbeat(self, value: bool, steady: float) -> None:
+        """
+        Take golem_safety's /safety/heartbeat, received at steady (s of the steady clock).
+
+        True while it relays, false once latched.
+        """
         if self._phase is Phase.FAULTED:
             return
         # SAFETY: a false beat means golem_safety's estop has latched; whatever the phase,
@@ -247,58 +255,72 @@ class LegSupervisor:
             self._latch("golem_safety's /safety/heartbeat is false: its estop has latched",
                         HEARTBEAT_TAIL)
             return
-        self._beat_mono = mono
+        self._beat_steady = steady
 
-    def on_cmd(self, vx: float, vy: float, yaw: float, mono: float) -> None:
-        """Take a /cmd_vel (m/s, m/s, rad/s) received at mono; a non-finite one is zero."""
+    def on_cmd(self, vx: float, vy: float, yaw: float, now: float) -> None:
+        """
+        Take a /cmd_vel (m/s, m/s, rad/s) received at now (s of robot time).
+
+        A non-finite one is zero.
+        """
         cmd = np.array([vx, vy, yaw], dtype=np.float64)
         # SAFETY: the policy never observes a non-finite command: one means stop
         if not np.all(np.isfinite(cmd)):
             self._log_every('warn', f'/cmd_vel is not finite ({cmd.tolist()}): zero velocity',
-                            mono)
+                            now)
             cmd = np.zeros(3)
-        self._cmd, self._cmd_mono = cmd, mono
+        self._cmd, self._cmd_t = cmd, now
 
-    def on_height(self, h: float, mono: float) -> None:
+    def on_height(self, h: float, now: float) -> None:
         """Take a height command (the policy's own units); a non-finite one is ignored."""
         if not math.isfinite(h):
             self._log_every('warn', f'ignoring a height command that is not finite ({h})',
-                            mono)
+                            now)
             return
         self._height = float(h)
 
-    def on_upper_cmd(self, mono: float) -> None:
-        """Take a command of the arm controller's, received at mono (readiness only)."""
-        self._upper_mono = mono
+    def on_upper_cmd(self, now: float) -> None:
+        """Take a command of the arm controller's, received at now (readiness only)."""
+        self._upper_t = now
 
-    def on_ee_pose(self, mono: float) -> None:
+    def on_ee_pose(self, now: float) -> None:
         """Take a /left_ee_pose: frame_task_server has finished its start-up moves."""
         self._ee_seen = True
 
-    def check(self, mono: float) -> None:
-        """Latch when the heartbeat, or /lowstate while the legs are commanded, went quiet."""
-        if self._phase is Phase.FAULTED or self._heartbeat_silent(mono):
+    def check(self, now: float, steady: float) -> None:
+        """
+        Latch when the heartbeat, or /lowstate while the legs are commanded, went quiet.
+
+        now is robot time, steady the steady clock (the module docstring), both s.
+        """
+        if self._phase is Phase.FAULTED or self._heartbeat_silent(steady):
             return
-        if self._phase not in COMMANDED or self._last_mono is None:
+        if self._phase not in COMMANDED or self._last_t is None:
             return
-        age = mono - self._last_mono
+        age = now - self._last_t
         max_gap = self._run.faults.max_state_gap
         if age > max_gap:
             self._latch(f'/lowstate stale: no sample for {age * 1000:.0f} ms '
                         f'(> {max_gap * 1000:.0f} ms)')
 
-    def _heartbeat_silent(self, mono: float) -> bool:
-        """Latch and return True when no beat came for heartbeat.timeout after the first."""
+    def _heartbeat_silent(self, steady: float) -> bool:
+        """
+        Latch and return True when no beat came for heartbeat.timeout after the first.
+
+        SAFETY: steady is the steady clock (s): golem_safety's liveness, judged even while a
+        sim's clock stands still.
+        """
         timeout = self._run.heartbeat.timeout
         # SAFETY: the watchdog arms on the first true beat, and then holds in every phase
-        if self._beat_mono is not None and mono - self._beat_mono > timeout:
-            self._latch(f'no /safety/heartbeat for {(mono - self._beat_mono) * 1000:.0f} ms '
+        if self._beat_steady is not None and steady - self._beat_steady > timeout:
+            silent_ms = (steady - self._beat_steady) * 1000
+            self._latch(f'no /safety/heartbeat for {silent_ms:.0f} ms '
                         f'(> {timeout * 1000:.0f} ms): golem_safety has stopped or cannot '
                         'keep up', HEARTBEAT_TAIL)
             return True
         return False
 
-    def confirm(self, mono: float) -> tuple[bool, str]:
+    def confirm(self, now: float) -> tuple[bool, str]:
         """Take the operator's go-ahead; return (accepted, message)."""
         if self._phase is not Phase.HOLDING:
             return False, (f'refused: the node is {self._phase.value}; the policy starts on '
@@ -308,12 +330,12 @@ class LegSupervisor:
         # are ready, whoever asks
         if self._ready_reason is not None:
             return False, f'refused: the policy cannot start yet: {self._ready_reason}'
-        self._start(mono)
+        self._start(now)
         if self._phase is not Phase.RUNNING:
             return False, f'refused: the policy could not start: {self._fault}'
         return True, 'confirmed: the policy starts on the next policy step'
 
-    def band_due(self, mono: float, service_ready: bool = True) -> str | None:
+    def band_due(self, now: float, service_ready: bool = True) -> str | None:
         """
         Return the reason to call /elastic_band/toggle now, once; otherwise None.
 
@@ -325,7 +347,7 @@ class LegSupervisor:
         # balance
         if self._phase is not Phase.RUNNING:
             return None
-        reason = self._band.poll(mono, self._running_since, self._ee_seen, service_ready)
+        reason = self._band.poll(now, self._running_since, self._ee_seen, service_ready)
         if self._band.service_missing and not self._band_missing_logged:
             self._band_missing_logged = True
             self._log('warn', 'the elastic band is due for release, but /elastic_band/toggle '
@@ -368,42 +390,43 @@ class LegSupervisor:
         if self._phase is not Phase.FAULTED:
             self._latch(reason)
 
-    def on_state(self, sample: StateSample, mono: float, node_t: float) -> LegTargets | None:
+    def on_state(self, sample: StateSample, now: float, node_t: float,
+                 steady: float) -> LegTargets | None:
         """
-        Take a /lowstate sample received at mono (node clock node_t).
+        Take a /lowstate sample received at now (robot time; node clock node_t, steady s).
 
         Return the leg targets to publish when a step is due on its tick, else None. A
         sample whose tick did not advance is ignored.
         """
         try:
-            return self._on_state(sample, mono, node_t)
+            return self._on_state(sample, now, node_t, steady)
         except Exception as e:  # noqa: BLE001 - never leave the legs to a broken check
             self.latch(f'unexpected error: {e!r}')
             return None
 
     # -- the state machine -------------------------------------------------------------
 
-    def _on_state(self, sample: StateSample, mono: float,
-                  node_t: float) -> LegTargets | None:
+    def _on_state(self, sample: StateSample, now: float, node_t: float,
+                  steady: float) -> LegTargets | None:
         """Run on_state."""
         tick = int(sample.tick)
         delta = None if self._last_tick is None else tick_delta(self._last_tick, tick)
         if delta == 0:
             return None
-        gap = None if self._last_mono is None else mono - self._last_mono
+        gap = None if self._last_t is None else now - self._last_t
         previous = self._last_tick
-        self._last_tick, self._last_mono = tick, mono
+        self._last_tick, self._last_t = tick, now
         went_back = delta is not None and delta < 0
         if went_back and self._phase is Phase.WAITING:
             # a sim restarted before the legs were commanded: measure from the new tick
             self._lag = TickLag()
-        lag_ms = self._lag.update(tick, mono)
+        lag_ms = self._lag.update(tick, now)
         # SAFETY: a sample never moves the legs after the heartbeat went quiet, whether or
         # not check() has run since
-        if self._phase is Phase.FAULTED or self._heartbeat_silent(mono):
+        if self._phase is Phase.FAULTED or self._heartbeat_silent(steady):
             return None
         if self._phase is Phase.WAITING:
-            return self._wait(sample, tick, mono, node_t, gap)
+            return self._wait(sample, tick, now, node_t, gap)
 
         # SAFETY: the legs are commanded: every problem with /lowstate stops them for good
         max_gap = self._run.faults.max_state_gap
@@ -426,19 +449,19 @@ class LegSupervisor:
             return self._stop(f'/lowstate late: tick lag {lag_ms:.1f} ms '
                               f'(> {max_latency * 1000:.0f} ms)')
         if self._phase is not Phase.RUNNING:
-            self._track_ready(tick, mono, node_t, gap)
+            self._track_ready(tick, now, node_t, gap)
         if not self._grid.due(tick):
             return None
         self._note_step(tick, lag_ms)
         out: LegTargets | None
         if self._phase is Phase.RAMPING:
-            out = self._ramp(sample, mono)
+            out = self._ramp(sample, now)
         elif self._phase is Phase.HOLDING:
-            out = self._hold_step(sample, mono, node_t)
+            out = self._hold_step(sample, now, node_t)
         else:
-            out = self._run_step(sample, mono, node_t)
+            out = self._run_step(sample, now, node_t)
         if out is not None:
-            self._log_timing(mono)
+            self._log_timing(now)
         return out
 
     def _state_problem(self, sample: StateSample) -> str | None:
@@ -460,7 +483,7 @@ class LegSupervisor:
             return f'the /lowstate IMU quaternion is not a unit quaternion (norm {norm:.3f})'
         return None
 
-    def _wait(self, sample: StateSample, tick: int, mono: float, node_t: float,
+    def _wait(self, sample: StateSample, tick: int, now: float, node_t: float,
               gap: float | None) -> LegTargets | None:
         """Start the pre-pose on the first usable, upright sample after the first true beat."""
         reason = self._state_problem(sample)
@@ -469,11 +492,11 @@ class LegSupervisor:
             if gz >= UPRIGHT_GRAVITY_Z:
                 reason = (f'the robot is not upright (gravity z {gz:.2f} in the IMU frame, '
                           f'needs < {UPRIGHT_GRAVITY_Z})')
-        if reason is None and self._beat_mono is None:
+        if reason is None and self._beat_steady is None:
             reason = 'no /safety/heartbeat yet (golem_safety beats once it can relay)'
         if reason is not None:
             self._wait_reason = reason
-            self._log_every('info', f'waiting to pre-pose the legs: {reason}', mono)
+            self._log_every('info', f'waiting to pre-pose the legs: {reason}', now)
             return None
         self._phase = Phase.RAMPING
         self._grid.due(tick)  # the first step sets the grid
@@ -481,8 +504,8 @@ class LegSupervisor:
         self._ramp_start = np.asarray(sample.q, dtype=np.float64)[self._leg_slots].copy()
         self._log('info', 'pre-posing the legs: a cosine ramp from where they are to the '
                           f'pre-pose over {self._ramp_steps / self._run_rate():.1f} s')
-        self._track_ready(tick, mono, node_t, gap)
-        return self._ramp(sample, mono)
+        self._track_ready(tick, now, node_t, gap)
+        return self._ramp(sample, now)
 
     def _run_rate(self) -> float:
         """Return the policy's steps per second."""
@@ -493,7 +516,7 @@ class LegSupervisor:
         return LegTargets(q=np.asarray(q, dtype=np.float32), kp=self._kp.copy(),
                           kd=self._kd.copy())
 
-    def _ramp(self, sample: StateSample, mono: float) -> LegTargets:
+    def _ramp(self, sample: StateSample, now: float) -> LegTargets:
         """Return the next pre-pose target; after the ramp, check whether the legs settled."""
         step = self._ramp_step
         self._ramp_step += 1
@@ -511,41 +534,41 @@ class LegSupervisor:
         self._settle_count = self._settle_count + 1 if err < startup.settle_tolerance else 0
         after = step - n + 1
         if self._settle_count >= startup.settle_ticks:
-            self._enter_hold(f'settled, max error {err:.3f} rad', 'info', mono)
+            self._enter_hold(f'settled, max error {err:.3f} rad', 'info', now)
         elif after >= startup.settle_max_ticks:
             # held all the same: with a confirm the operator decides, in the sim the
             # policy starts from where the legs are
             self._enter_hold(f'NOT SETTLED: max error {err:.3f} rad after {after} steps',
-                             'warn', mono)
+                             'warn', now)
         return self._targets(self._prepose)
 
-    def _enter_hold(self, note: str, level: str, mono: float) -> None:
+    def _enter_hold(self, note: str, level: str, now: float) -> None:
         """Hold the pre-pose until the policy may start."""
         self._phase = Phase.HOLDING
-        self._holding_since = mono
-        self._reminded = mono
+        self._holding_since = now
+        self._reminded = now
         self._posed_note = note
         until = (f'until the operator confirms ({CONFIRM_CALL})'
                  if self._run.startup.wait_for_confirm else 'until the policy may start')
         self._log(level, f'legs pre-posed ({note}) — holding {until}')
 
-    def _hold_step(self, sample: StateSample, mono: float,
+    def _hold_step(self, sample: StateSample, now: float,
                    node_t: float) -> LegTargets | None:
         """Hold the pre-pose, or start the policy once ready when no confirm is needed."""
         ready = self._ready_reason is None
         if ready and not self._run.startup.wait_for_confirm:
-            self._start(mono)
+            self._start(now)
             if self._phase is not Phase.RUNNING:
                 return None
-            return self._run_step(sample, mono, node_t)
+            return self._run_step(sample, now, node_t)
         if ready and self._run.startup.wait_for_confirm and (
-                self._reminded is None or mono - self._reminded >= CONFIRM_REMINDER_SECONDS):
-            self._reminded = mono
+                self._reminded is None or now - self._reminded >= CONFIRM_REMINDER_SECONDS):
+            self._reminded = now
             self._log('info', f'legs pre-posed ({self._posed_note}) — holding; the policy may '
                               f'start: {CONFIRM_CALL}')
         return self._targets(self._prepose)
 
-    def _track_ready(self, tick: int, mono: float, node_t: float, gap: float | None) -> None:
+    def _track_ready(self, tick: int, now: float, node_t: float, gap: float | None) -> None:
         """Set why the policy may not start yet, or None once it may (the module docstring)."""
         max_gap = self._run.faults.max_state_gap
         reason = None
@@ -562,16 +585,16 @@ class LegSupervisor:
             # of tick, so a slowed tick is judged within steady_seconds however slow it is
             self._judge_window(self._window, tick, node_t)
         if reason is None:
-            reason = self._upper_reason(mono)
+            reason = self._upper_reason(now)
         if reason is None:
-            reason = self._ee_pose_reason(mono)
+            reason = self._ee_pose_reason(now)
         if reason is None:
             reason = self._rate_verdict
             if reason == STEADY_FILLING:
                 self._ready_reason = reason
                 return
         if reason is not None:
-            self._log_every('info', f'the policy waits: {reason}', mono)
+            self._log_every('info', f'the policy waits: {reason}', now)
         elif self._ready_reason is not None:
             self._log('info', f"the policy may start (/lowstate's tick ran at {self._rate:.3f} "
                               "s per s of the node's clock)")
@@ -603,24 +626,24 @@ class LegSupervisor:
                 f"/lowstate's tick is off the node's clock ({self._rate:.3f} s of tick per s, "
                 f"needs {low:.3f}-{high:.3f}: the tick must count ms of the node's clock)")
 
-    def _upper_reason(self, mono: float) -> str | None:
+    def _upper_reason(self, now: float) -> str | None:
         """Return why the arm controller does not count as commanding, or None."""
         # SAFETY: in split mode an arm with no command is limp; the legs' policy does not
         # take over a robot whose arms are not held
         fresh = self._run.startup.upper_fresh_seconds
-        if self._upper_mono is None:
+        if self._upper_t is None:
             return f'{UPPER_KIND} (none yet)'
-        age = mono - self._upper_mono
+        age = now - self._upper_t
         if age > fresh:
             return f'{UPPER_KIND} (the last {age:.2f} s ago, max {fresh:.2f} s)'
         return None
 
-    def _ee_pose_reason(self, mono: float) -> str | None:
+    def _ee_pose_reason(self, now: float) -> str | None:
         """Return why the policy waits for frame_task_server under the band, or None."""
         band = self._run.band
         if not band.release or self._ee_seen or self._ee_wait_over:
             return None
-        held = None if self._holding_since is None else mono - self._holding_since
+        held = None if self._holding_since is None else now - self._holding_since
         if held is not None and held >= band.max_wait:
             self._ee_wait_over = True
             self._log('warn', f'{EE_POSE_MISSING} {held:.0f} s after the legs were pre-posed: '
@@ -630,7 +653,7 @@ class LegSupervisor:
         # at the release
         return EE_POSE_MISSING
 
-    def _log_every(self, level: str, message: str, mono: float) -> None:
+    def _log_every(self, level: str, message: str, now: float) -> None:
         """
         Log message at most every WAIT_LOG_SECONDS per kind.
 
@@ -639,16 +662,16 @@ class LegSupervisor:
         """
         kind = message.split(' (')[0]
         last = self._logged.get(kind)
-        if last is None or mono - last >= WAIT_LOG_SECONDS:
-            self._logged[kind] = mono
+        if last is None or now - last >= WAIT_LOG_SECONDS:
+            self._logged[kind] = now
             self._log(level, message)
 
-    def _start(self, mono: float) -> None:
+    def _start(self, now: float) -> None:
         """Start the policy at zero velocity and its default height, reset as its spec says."""
         self._phase = Phase.RUNNING
-        self._running_since = mono
+        self._running_since = now
         # a /cmd_vel or height request from before the start is dropped
-        self._cmd, self._cmd_mono = np.zeros(3), None
+        self._cmd, self._cmd_t = np.zeros(3), None
         self._height = self._default_height
         if 'engage' in self._reset_on and not self._reset(np.zeros(3)):
             return
@@ -664,17 +687,17 @@ class LegSupervisor:
             return False
         return True
 
-    def _command(self, mono: float) -> np.ndarray:
+    def _command(self, now: float) -> np.ndarray:
         """Return the velocity command: zero once older than commands.timeout."""
-        if self._cmd_mono is None or mono - self._cmd_mono > self._run.commands.timeout:
+        if self._cmd_t is None or now - self._cmd_t > self._run.commands.timeout:
             return np.zeros(3)
         return self._cmd.copy()
 
-    def _run_step(self, sample: StateSample, mono: float,
+    def _run_step(self, sample: StateSample, now: float,
                   node_t: float) -> LegTargets | None:
         """Return one policy step's targets; latch on any failure."""
         inp = PolicyInput(t=node_t, q=sample.q, dq=sample.dq, quat_wxyz=sample.quat_wxyz,
-                          gyro=sample.gyro, cmd=self._command(mono), height=self._height)
+                          gyro=sample.gyro, cmd=self._command(now), height=self._height)
         try:
             out = self._runner.step(inp)
         except PolicyError as e:
@@ -695,22 +718,22 @@ class LegSupervisor:
         self._last_step_tick = tick
         self._lags.append(lag_ms)
 
-    def _log_timing(self, mono: float) -> None:
+    def _log_timing(self, now: float) -> None:
         """Log the step spacing and the tick lag once every STATS_SECONDS."""
         if self._stats_start is None:
-            self._stats_start = mono
+            self._stats_start = now
             return
-        if mono - self._stats_start < STATS_SECONDS or not self._step_gaps:
+        if now - self._stats_start < STATS_SECONDS or not self._step_gaps:
             return
         gaps = np.array(self._step_gaps, dtype=np.float64) * TICK_MS
         lags = np.array(self._lags, dtype=np.float64)
         max_latency = self._run.faults.max_latency
         limit = 'unchecked' if max_latency is None else f'limit {max_latency * 1000:.0f} ms'
-        self._log('info', f'timing over the last {mono - self._stats_start:.0f} s: '
+        self._log('info', f'timing over the last {now - self._stats_start:.0f} s: '
                           f'{lags.size} steps, {gaps.min():.0f}-{gaps.max():.0f} ms of '
                           f'/lowstate tick apart (mean {gaps.mean():.1f} ms); tick lag median '
                           f'{np.median(lags):.1f} ms, max {lags.max():.1f} ms ({limit})')
-        self._step_gaps, self._lags, self._stats_start = [], [], mono
+        self._step_gaps, self._lags, self._stats_start = [], [], now
 
     def _latch(self, reason: str, tail: str = LATCH_TAIL) -> None:
         """Fault for good: log reason once and publish nothing more."""

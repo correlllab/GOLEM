@@ -28,24 +28,26 @@ startup:
   # [low, high], 0 < low <= 1 <= high: s of /lowstate tick per s of the node's clock (sim
   # time in the sims) the start accepts; a tick that is not in ms of that clock never starts
   tick_rate: [0.9, 1.1]
-  # s (> 0): the arm controller counts as commanding while its last command is this recent
+  # s of robot time (> 0; the sim's /clock under use_sim_time, the steady clock otherwise):
+  # the arm controller counts as commanding while its last command is this recent
   upper_fresh_seconds: 0.5
 
 heartbeat:
-  # s (> golem_safety's 0.1 s beat period) without /safety/heartbeat after the first beat
-  # that stops the node for good, as a false beat does
+  # s of the steady clock (> golem_safety's 0.1 s beat period), whatever use_sim_time says,
+  # without /safety/heartbeat after the first beat that stops the node for good, as a false
+  # beat does
   timeout: 0.5
 
 band:
   # true or false: true calls the sim's /elastic_band/toggle once the policy has started
   # (false on the real robot, which has no band)
   release: true
-  # s (> 0): how long the policy waits for the first /left_ee_pose after the pre-pose, and
-  # the band release after the policy starts, before going ahead anyway
+  # s of robot time (> 0): how long the policy waits for the first /left_ee_pose after the
+  # pre-pose, and the band release after the policy starts, before going ahead anyway
   max_wait: 34.0
 
 commands:
-  # s (> 0): a /cmd_vel older than this is zero velocity
+  # s of robot time (> 0): a /cmd_vel older than this is zero velocity
   timeout: 0.5
   # [low, high] with low <= 0 <= high: the deployment limits on /cmd_vel's linear x (m/s),
   # linear y (m/s) and angular z (rad/s); SAFETY: zero must lie inside, since the node
@@ -60,13 +62,13 @@ commands:
   height_rate: null
 
 faults:
-  # s (> 0): the longest gap between /lowstate samples once the legs are commanded; a
-  # longer one stops the node for good
+  # s of robot time (> 0): the longest gap between /lowstate samples once the legs are
+  # commanded; a longer one stops the node for good
   max_state_gap: 0.5
-  # s (> 0) or null: the largest tick lag of /lowstate while the policy runs; a larger one
-  # stops the node for good; null skips the check. Null in a sim run config (sim true),
-  # which refuses any other value: the lag is measured on the monotonic clock and a sim's
-  # tick counts sim time
+  # s of robot time (> 0) or null: the largest tick lag of /lowstate while the policy runs;
+  # a larger one stops the node for good; null skips the check. Null in a sim run config
+  # (sim true), which refuses any other value: a sim's tick counts sim time, and without
+  # use_sim_time the lag is measured on the steady clock
   max_latency: null
 
 # [roll, pitch, yaw] in deg: what the IMU reads when the body is level (positive pitch reads

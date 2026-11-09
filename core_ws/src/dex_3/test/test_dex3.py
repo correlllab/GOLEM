@@ -141,3 +141,27 @@ def test_dds_domain_must_be_the_nodes_ros_domain():
     # rcl reads '010' as octal 8.
     with pytest.raises(ValueError, match='runs ROS on domain 8'):
         dds_domain('010', -1, ros_domain=8)
+
+
+def test_launch_defaults_are_the_drivers():
+    """hands.launch.py's kp, kd and max_speed default to the driver's own defaults."""
+    import importlib.util
+    from pathlib import Path
+
+    from launch import LaunchContext
+    from launch.actions import DeclareLaunchArgument
+
+    from dex_3.dex3 import DEFAULT_KD, DEFAULT_KP
+
+    path = Path(__file__).resolve().parents[1] / 'launch' / 'hands.launch.py'
+    spec = importlib.util.spec_from_file_location('hands_launch', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    context = LaunchContext()
+    defaults = {
+        entity.name: ''.join(part.perform(context) for part in entity.default_value)
+        for entity in module.generate_launch_description().entities
+        if isinstance(entity, DeclareLaunchArgument)}
+    assert float(defaults['kp']) == DEFAULT_KP
+    assert float(defaults['kd']) == DEFAULT_KD
+    assert float(defaults['max_speed']) == DEFAULT_MAX_SPEED

@@ -17,6 +17,7 @@ unset, domain_id must be given and match the domain ROS itself then runs on
 
 from typing import List
 
+from dex_3.dex3 import DEFAULT_KD, DEFAULT_KP, DEFAULT_MAX_SPEED
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -29,11 +30,11 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('sides', default_value='[left, right]',
                               description='hands to drive: a list of left and/or right'),
-        DeclareLaunchArgument('kp', default_value='1.5',
+        DeclareLaunchArgument('kp', default_value=str(DEFAULT_KP),
                               description='finger PD stiffness, >= 0'),
-        DeclareLaunchArgument('kd', default_value='0.1',
+        DeclareLaunchArgument('kd', default_value=str(DEFAULT_KD),
                               description='finger PD damping, >= 0'),
-        DeclareLaunchArgument('max_speed', default_value='2.0',
+        DeclareLaunchArgument('max_speed', default_value=str(DEFAULT_MAX_SPEED),
                               description='cap on any finger joint, rad/s, > 0'),
         DeclareLaunchArgument('on_shutdown', default_value='release',
                               description='on exit, release (fingers go limp) or silent '

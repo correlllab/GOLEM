@@ -31,7 +31,8 @@ commands:
   height_rate: null
 
 faults:
-  # the sim can run slower than real time
+  # longer than real.yaml's: gaps count sim time, and a delivery delay on a loaded host
+  # counts as sim time here, more of it at a GOLEM_SIM_RATE above 1
   max_state_gap: 0.5
   # the sim's tick is sim time, so tick lag is not a delivery delay there
   max_latency: null

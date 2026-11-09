@@ -27,7 +27,7 @@ topics:
 control:
   # Hz, per s of robot time (the boot clock; a sim's /clock under use_sim_time), the node
   # writes low_cmd_out at; > 0. Under use_sim_time about one write per /clock step, and two
-  # when a step spans more than two periods.
+  # when a step spans two periods or more.
   publish_hz: 500.0
   # ms; the estop latches when a /lowstate arrives more than this late against the robot's
   # ms tick. Checked only on ROS domain 0, the real robots' bus (the sims count tick in sim

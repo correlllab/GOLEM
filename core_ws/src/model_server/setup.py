@@ -24,11 +24,6 @@ setup(
     maintainer_email='maxlconway@gmail.com',
     description='ROS 2 model servers for Gemini, SAM3, GraspGenX and YOLO-World.',
     license='MIT',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
     entry_points={
         'console_scripts': [
             'gemini_server = model_server.gemini_server:RunGeminiServer',

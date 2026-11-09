@@ -46,7 +46,7 @@ def test_trimmed_accelerometer_agrees_with_trimmed_gravity():
 
 
 def test_matches_lowerbody_composition_order():
-    """The trim composes Rz(yaw) Ry(pitch) Rx(roll), as golem_lowerbody_rl.policy.imu_offset_quat does."""
+    """The trim composes Rz(yaw) Ry(pitch) Rx(roll), the bias golem_lowerbody_rl.imu.trim_quaternion uses."""
     r, p, y = 0.1, -0.2, 0.3
     half = lambda a, i: np.array([np.cos(a / 2), *(np.sin(a / 2) * np.eye(3)[i])])
     expect = R.quat_mul(R.quat_mul(half(y, 2), half(p, 1)), half(r, 0))

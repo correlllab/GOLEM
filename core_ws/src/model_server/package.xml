@@ -23,8 +23,6 @@
        pip-installs them, trimesh too, at its locked versions (README.md,
        Dependencies). -->
 
-  <test_depend>python3-pytest</test_depend>
-
   <export>
     <build_type>ament_python</build_type>
   </export>

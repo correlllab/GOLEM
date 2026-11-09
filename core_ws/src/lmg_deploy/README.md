@@ -145,8 +145,8 @@ what it starts once that is handled.
 
 On the onboard PC, run `golem_bringup/launch/h12/lmg_real.launch.py` **instead of**
 `h12_real_robot.launch.py`, never beside it. It starts the same drivers, state publishers, estop, safety
-layer and `golem_slam` navigation stack, without `frame_task_server`, plus the shared game block on wall-clock time. Keep the lower-body RL and MJPC
-controllers off.
+layer and `golem_slam` navigation stack, without `frame_task_server`, plus the shared game block on wall-clock time. Keep the lower-body RL controller
+off.
 
 ```bash
 export ROS_DOMAIN_ID=0

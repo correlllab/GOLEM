@@ -1009,11 +1009,17 @@ on the real G1 yet; follow `docs/g1/first-session.md` step by step.
   (`golem_slam`) and `livox_imu_upright` (`golem_bringup`), so `ros2 launch
   golem_slam h12_navigation.launch.py` still starts the old graph; delete those
   two packages' `build` and `install` directories and rebuild. A `--symlink-install` workspace also keeps links
-  to deleted G1 configs that fail the next `golem_upper_ik` build, and
-  `golem_slam/setup.py` skips such dangling links to files deleted from its source
-  (the filter in its `files()`); the change
+  to configs deleted from the source (the G1 configs `golem_bringup` replaced, the H1-2's
+  `golem_upper_ik/config/h12/debug.yaml`); `golem_upper_ik/setup.py` and
+  `golem_slam/setup.py` (the filter in its `files()`) skip such dangling links, so the
+  build goes on, but the dangling links stay in `build/` and `install/`. Delete the
+  `debug.yaml` ones once, from the repo root (`sudo`: the containers left them
+  root-owned):
+  `rm -f {core_ws/build,core_ws/build_stack_tests,container_cache/g1_tests/build,container_cache/sim_tests/build}/golem_upper_ik/config/h12/debug.yaml {core_ws/install,core_ws/install_stack_tests,container_cache/g1_tests/install,container_cache/sim_tests/install}/golem_upper_ik/share/golem_upper_ik/config/h12/debug.yaml`
+  (on the host every link in those trees points into the container's `/home/code`, so
+  a search for dangling links there would match them all); the change
   report (`docs/superpowers/specs/2026-10-28-golem-bringup-and-g1-debug-mode/change-report.md`)
-  has that cleanup.
+  has the G1 cleanup.
 - **The `ros` container ≠ bringup.** It only builds and gives you a shell.
 - **Check the `robot:` line on simulator and stack runs.** `docker_run.sh robocasa|isaac`
   and `docker_stack.sh up` print the robot they selected; a `GOLEM_ROBOT` left

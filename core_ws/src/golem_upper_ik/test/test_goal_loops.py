@@ -244,7 +244,12 @@ class FakeGoalHandle:
 
 
 def server_of(controller, trace):
-    """Return a FrameTaskServer on controller, built without a ROS node."""
+    """Return a FrameTaskServer on controller, built without a ROS node.
+
+    Its attributes mirror those FrameTaskServer.__init__ and start() set that the goal paths
+    read (the profile, the thresholds, the controller, the goal's frames and the lock); a new
+    one the goal paths read must be added here too.
+    """
     from golem_upper_ik.ros2.frame_task_server import FrameTaskServer
     server = FrameTaskServer.__new__(FrameTaskServer)
     logger = FakeLogger(trace)

@@ -73,13 +73,29 @@ def test_every_known_robot_is_tested():
     assert sorted(CONFIGS) == sorted(known_robots())
 
 
+def installed_configs(directory):
+    """Return the names of the controller configs installed in a robot's config directory.
+
+    robot.yaml and pairing.yaml are the robot's data, not controller configs. A dangling link
+    is skipped: a --symlink-install workspace keeps links to configs deleted from the source.
+    """
+    return {path.stem for path in directory.glob('*.yaml') if path.exists()} - {
+        'robot', 'pairing'}
+
+
 def test_every_installed_config_is_tested():
     """Every installed controller config of every robot is in CONFIGS."""
     share = Path(get_package_share_directory('golem_upper_ik')) / 'config'
     for robot, names in CONFIGS.items():
-        # robot.yaml and pairing.yaml are the robot's data, not controller configs
-        configs = {path.stem for path in (share / robot).glob('*.yaml')}
-        assert sorted(configs - {'robot', 'pairing'}) == sorted(names)
+        assert sorted(installed_configs(share / robot)) == sorted(names)
+
+
+def test_installed_configs_skips_a_dangling_link(tmp_path):
+    """A dangling link left in an install's config directory is not taken for a config."""
+    (tmp_path / 'robot.yaml').write_text('')
+    (tmp_path / 'safety_split.yaml').write_text('')
+    (tmp_path / 'debug.yaml').symlink_to(tmp_path / 'deleted' / 'debug.yaml')
+    assert installed_configs(tmp_path) == {'safety_split'}
 
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])

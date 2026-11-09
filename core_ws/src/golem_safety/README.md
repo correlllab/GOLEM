@@ -94,43 +94,16 @@ Both robots' `LowCmd`/`LowState` motor arrays hold 35 slots.
 | G1 | `sim_split` | split | `g1_sim.launch.py` (default) |
 | G1 | `full` | full body | refused by the G1 bringups (`golem_upper_ik`'s `upper_ik.launch.py`, which `g1_core.launch.py` includes: it must relay the upper-body input) |
 
-What the robots' configs share:
-
-- **H1-2:** `estop_response` `zero`, `burst_then_silence`, 50 commands;
-  `control.state_lag_ms: 100`; `stale.lower_seconds` 0.2 and `state_seconds` 0.1;
-  `stale.upper_seconds` 2.0 in `default_safety_split` and `tight_safety_split`, 0 (off) in
-  `relax_safety_split` and `sim_safety_split`; logging off.
-- **G1:** `estop_response` `zero`, `keep_writing`; `control.state_lag_ms: 0` (off: the real
-  G1's tick has not been measured); logging on, to `/tmp/golem_safety`. `sim_split` lengthens
-  the stale times, which count sim time there, where the controllers' wall-time delays on a
-  loaded host add up (more of them at a `GOLEM_SIM_RATE` above 1), and relaxes the estop
-  limits, so that the sim's contact spikes do not latch.
+Each config's values, with why they were chosen, are in its file
+(`config/<robot>/<config>.yaml`).
 
 Each safety config runs with one `golem_upper_ik` controller config; the bringups refuse
 another pair (`golem_upper_ik.pairing`, checked by its `upper_ik.launch.py`).
 
 ### Keys
 
-| Key | Default | Meaning |
-|---|---|---|
-| `mode` | the profile's first mode | `full_body_mode` or `split_mode`; a mode the profile lacks is refused, naming the profile's modes |
-| `topics.low_cmd_in`, `low_cmd_lower_in`, `low_cmd_upper_in` | `/safety/lowcmd_in`, `/safety/lowcmd_lower_in`, `/safety/lowcmd_upper_in` | the inputs; absolute ROS names (`rt/...` is refused) |
-| `topics.low_cmd_out` | `/lowcmd` | the output |
-| `topics.low_state` | `/lowstate` | the robot's state |
-| `control.publish_hz` | 500 | the relay rate, per s of robot time; under `use_sim_time` about one cycle per `/clock` step, up to two when a step spans more than two periods (Relay, below) |
-| `control.state_lag_ms` | required | the transport-lag estop, ms; on ROS domain 0 only; <= 0 turns it off |
-| `stale.upper_seconds`, `lower_seconds`, `state_seconds` | 0, 0.2, 0.1 | quiet times of the upper input, the lower or full input and `/lowstate`, s of robot time; <= 0 turns the report off |
-| `single_writer.handover_seconds` | 0.5 | how long the current writer must be quiet before another is accepted, s of robot time |
-| `estop.triggered_topic`, `plugged_in_topic` | `/estop/triggered`, `/estop/plugged_in` | the hardware estop's topics |
-| `estop.timeout_seconds` | 0.5 | the oldest a hardware estop sample may be, s of robot time (the boot clock on the real robots) |
-| `estop_response.mode` | `zero` | `zero`: every motor off (mode 0, every value 0); `damp`: every body motor on with kp 0 and `kd` |
-| `estop_response.kd` | none | `damp` only (required there): one number or one per body joint, at most `limits.clip.kd_max` |
-| `estop_response.after` | required | `burst_then_silence` or `keep_writing` |
-| `estop_response.burst_count` | 50 | the commands of `burst_then_silence` |
-| `limits.clip.position_offset`, `velocity_ratio`, `torque_ratio` | 0.01, 0.5, 0.5 | one number, or one per body joint in slot order |
-| `limits.clip.kp_max`, `kd_max` | 300, 30 | one number for every joint |
-| `limits.estop.position_offset`, `velocity_ratio`, `torque_ratio` | 0.01, 0.5, 0.5 | as `limits.clip`, for the measured state |
-| `logging.enabled`, `base_dir`, `chunk_prefix` | `false`, `/tmp/golem_safety`, `chunk_` | the `.npz` sample log |
+Every key of a config, with its meaning, units, default and allowed values, is in
+`config/example.yaml`.
 
 The limits derive from the profile's joint
 table: q within [low + `position_offset`, high - `position_offset`] (a negative offset widens

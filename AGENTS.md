@@ -516,7 +516,11 @@ stays the default, and nothing on the G1 path may change its behaviour. The robo
 `mujoco_ros_bridge.py` (`sim_timing.py` is the H1-2's only); each has its own sensor suite
 (`h12_sensors.py`, `g1/g1_sensors.py`) and Unitree DDS interface
 (`unitree_interface.py`, `g1/unitree_interface.py`), which share their command
-path in `unitree_common.py`.
+path in `unitree_common.py`. Both sims stop the collisions inside each RoboCasa
+fixture with moving parts, and between those parts and the static scene, once
+`env.reset()` has built the kitchen (`sim_common.exclude_fixture_collisions`);
+the robot, the objects and loose fixtures (on a free joint, such as a blender
+lid) collide with everything as before.
 
 ### Simulators mimic the real robot's topic surface
 

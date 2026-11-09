@@ -144,6 +144,9 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # robosuite.make() does not reset; reset() builds env.sim, runs the
     # placement patch (g1_robosuite) and places the task objects.
     env.reset()
+    # The fixtures' own parts stop colliding with each other and with the static scene; the
+    # robot and the objects collide with everything as before.
+    sim_common.exclude_fixture_collisions(env)
 
     model = env.sim.model._model
     data = env.sim.data._data

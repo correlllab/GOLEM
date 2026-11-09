@@ -181,6 +181,123 @@ def resolve_task(name: str, seed: int | None = None, *, tag: str,
     return choice
 
 
+def exclude_fixture_collisions(env) -> int:
+    """Stop the collisions inside each RoboCasa fixture with moving parts, and between those parts and the static scene.
+
+    Excluded: pairs of geoms of one fixture (env.fixtures) where at least one is on a jointed
+    body, and pairs of a fixture's jointed-body geom and a static (world-welded) geom. A
+    fixture body on a free joint (a loose blender lid or accessory) rests on the scene as an
+    object does, so it is not a jointed body here and keeps every contact. Every other pair,
+    any with a robot or object (env.objects) geom in it included, collides as before, so
+    objects still rest in drawers, cabinets and racks. Rewrites geom_contype and
+    geom_conaffinity (and the bodies' body_contype and body_conaffinity) of the compiled model
+    in place: call it once on every model the sim steps, after env.reset() compiles it.
+
+    Returns the number of geom pairs, on bodies not welded together, whose contype/conaffinity
+    test it turns off, and logs it. An env without fixtures (Blank, Battery) and a model with
+    flexes are left as they are (0).
+    """
+    import mujoco
+    import numpy as np
+
+    model = env.sim.model._model
+    fixtures = getattr(env, "fixtures", None) or {}
+    if not fixtures or model.nflex:
+        reason = "the model has flexes" if fixtures else "the scene has no RoboCasa fixtures"
+        print(f"[sim_common] fixture collisions: none excluded, {reason}", flush=True)
+        return 0
+
+    # Each body belongs to the fixture or object whose root body is the nearest above it.
+    body = mujoco.mjtObj.mjOBJ_BODY
+    roots = {mujoco.mj_name2id(model, body, f.root_body): ("fixture", name)
+             for name, f in fixtures.items()}
+    roots.update({mujoco.mj_name2id(model, body, o.root_body): ("object", name)
+                  for name, o in (getattr(env, "objects", None) or {}).items()})
+    # A body on a free joint, or below one, floats.
+    free_bodies = set(model.jnt_bodyid[model.jnt_type == mujoco.mjtJoint.mjJNT_FREE].tolist())
+    owner = [None] * model.nbody
+    floating = np.zeros(model.nbody, dtype=bool)
+    for b in range(1, model.nbody):
+        parent = int(model.body_parentid[b])   # bodies are numbered parents first
+        owner[b] = roots.get(b, owner[parent])
+        floating[b] = floating[parent] or b in free_bodies
+    robot_roots = [model.body_rootid[mujoco.mj_name2id(model, body, r.robot_model.root_body)]
+                   for r in env.robots]
+
+    geom_body = model.geom_bodyid
+    weld = model.body_weldid[geom_body]
+    contype = model.geom_contype.astype(np.int64)
+    conaffinity = model.geom_conaffinity.astype(np.int64)
+    fixture = np.array([owner[b][1] if owner[b] and owner[b][0] == "fixture" else ""
+                        for b in geom_body])
+    is_object = np.array([bool(owner[b]) and owner[b][0] == "object" for b in geom_body])
+    is_robot = np.isin(model.body_rootid[geom_body], robot_roots)
+    moving = ((fixture != "") & (weld != 0) & ~floating[geom_body]
+              & ((contype | conaffinity) != 0))
+    static = (weld == 0) & ~is_robot & ~is_object
+
+    # The bit scheme below needs every moving part's colliding geoms in one contype/conaffinity
+    # class that collides with itself (RoboCasa's 1/1); a fixture with another class is left
+    # as it is.
+    classes = list(zip(contype[moving].tolist(), conaffinity[moving].tolist()))
+    type0, affinity0 = max(set(classes), key=classes.count) if classes else (0, 0)
+    odd = {str(fixture[g]) for g in np.flatnonzero(moving)
+           if not type0 & affinity0 or (contype[g], conaffinity[g]) != (type0, affinity0)}
+    moving &= ~np.isin(fixture, sorted(odd))
+    names = sorted(set(fixture[moving]))
+
+    # New bits, from those no geom uses yet (bit 31 stays clear of the sign): a moving-part bit
+    # and a field holding a distinct nonzero code per fixture.
+    used = int(np.bitwise_or.reduce(contype | conaffinity))
+    free = [1 << i for i in range(30, -1, -1) if not used >> i & 1]
+    width = len(names).bit_length()
+    if not names or len(free) < 1 + width:
+        print(f"[sim_common] fixture collisions: none excluded, "
+              f"{'no fixture qualifies' if not names else 'too few free contype bits'}", flush=True)
+        return 0
+    moving_bit, field_bits = free[0], free[1:1 + width]
+    field = sum(field_bits)
+    code = {name: sum(bit for k, bit in enumerate(field_bits) if (i + 1) >> k & 1)
+            for i, name in enumerate(names)}
+
+    # MuJoCo collides two geoms when (contype1 & conaffinity2) | (contype2 & conaffinity1) != 0.
+    # A moving part's geom becomes contype = moving bit | its fixture's code, conaffinity = the
+    # field without its code: two parts collide only when their codes differ (other fixtures),
+    # and never with a static geom, which keeps its own bits. Every geom that is neither a
+    # moving part nor static (the robot, objects, loose fixtures) and collided with the moving
+    # parts' class gains the moving bit in conaffinity, so it still collides with them, and
+    # nothing else changes for it: no geom outside the moving parts has the new bits in contype.
+    new_type, new_affinity = contype.copy(), conaffinity.copy()
+    other = ~moving & ~static & (((type0 & conaffinity) | (contype & affinity0)) != 0)
+    new_affinity[other] |= moving_bit
+    part_code = np.array([code.get(name, 0) for name in fixture], dtype=np.int64)
+    new_type[moving] = moving_bit | part_code[moving]
+    new_affinity[moving] = field & ~part_code[moving]
+
+    def collide(t1, a1, t2, a2):
+        """Return MuJoCo's contype/conaffinity test of every row geom against every column geom."""
+        return ((t1[:, None] & a2[None, :]) | (t2[None, :] & a1[:, None])) != 0
+
+    # Only pairs with a moving part in them change; a pair of two moving parts shows twice.
+    rows = np.flatnonzero(moving)
+    turned_off = (collide(contype[rows], conaffinity[rows], contype, conaffinity)
+                  & ~collide(new_type[rows], new_affinity[rows], new_type, new_affinity)
+                  & (weld[rows][:, None] != weld[None, :]))
+    count = int(turned_off[:, ~moving].sum() + turned_off[:, moving].sum() // 2)
+
+    model.geom_contype[:] = new_type
+    model.geom_conaffinity[:] = new_affinity
+    # MuJoCo's body-pair filter reads each body's OR of its geoms' bits.
+    for field_name, bits in (("body_contype", new_type), ("body_conaffinity", new_affinity)):
+        per_body = np.zeros(model.nbody, dtype=np.int64)
+        np.bitwise_or.at(per_body, geom_body, bits)
+        getattr(model, field_name)[:] = per_body
+    print(f"[sim_common] fixture collisions: excluded {count} geom pairs inside {len(names)} RoboCasa "
+          f"fixtures with moving parts and between those parts and the static scene"
+          + (f"; left as they are: {sorted(odd)}" if odd else ""), flush=True)
+    return count
+
+
 def frame_viewer_on_robot(handle, data, body_id: int) -> None:
     """Point the passive viewer's free camera down at body_id, turned with its yaw (VIEW_CAM_*)."""
     import mujoco

@@ -239,3 +239,26 @@ backpressure sets the pace already at 1x (0.80x on the H1-2 in Tier 3a), so a ra
 nothing there.
 
 Every figure here is a single run.
+
+### Robot time (Task 12c)
+
+The golem packages now time their rates, freshness windows and timeouts on robot time (the sim's
+`/clock` under `use_sim_time`, the steady clock on the real robots). The same 2x runs on that tree,
+2026-11-09, same host, pinning and GPU caster:
+
+| `tests/sim/test_sim_stack.sh` | Rate | Before (12b) | After (12c) | Real-time factor |
+|---|---|---|---|---|
+| `--h12` | 1 | 14/14 | 14/14 | 1.00x |
+| `--g1` | 1 | 14/14 | 14/14 | 1.00x |
+| `--h12` | 2 | 4/6: start-up timed out (wall clock) | 4/6: start-up timed out (sim time) | 1.76x |
+| `--g1` | 2 | 14/14 | 14/14 | 1.76x |
+
+The H1-2's start-up now fails at `controller.startup_move_timeout` counted in sim time, during
+`init_3` (30 s of sim time is 17 s of wall time at 1.76x): its moves are bound by the IK's compute,
+not by the clock. Each start-up step does its IK work and then sleeps one 20 ms control period; on
+the `ros` container's E-cores the work is about as long as the period, so the moves take about the
+same wall time at any rate (`init_1` 3.6 s and `init_2` 7.0 s of wall time at 1.76x, against 3.6
+and 5.1 s at 1x) and 1.76 times the sim time. At 1x the start-up takes 24 s of its 30 s. With
+`startup_move_timeout` raised to 60 s for one run (not committed) the H1-2 stood, walked and
+reached the goal at 1.80x (12/14): `t_pose` did not converge within its 15 s goal duration, for the
+same reason, and the slow arm moves touched the kitchen.

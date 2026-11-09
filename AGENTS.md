@@ -199,7 +199,7 @@ nests `unitree_api`, `unitree_go`, `unitree_hg`, `unitree_ros2_example`).
 
 | Directory | Role | What it does | Key entry points |
 |---|---|---|---|
-| `golem_safety` | **safety (both robots)** | C++. The only writer of `/lowcmd` (§8): streams zero gains from boot, engages each `/safety/*` input on its own first valid command and relays it, clips it, checks every `/lowstate` (robot identity, estop limits) and latches an estop until restart. A robot profile (`robots/<robot>.yaml`, the joint table `golem_upper_ik` and `golem_lowerbody_rl` read) and configs per robot (`config/h12/`, `config/g1/`) | `safety_node` (`robot`, `config`, `sim`, `use_estop` parameters); `launch/safety.launch.py` (`safety_node` after `start_delay`), which both robots' bringups include |
+| `golem_safety` | **safety (both robots)** | C++. The only writer of `/lowcmd` (§8): streams zero gains from boot (under `use_sim_time`, from the first `/clock`), engages each `/safety/*` input on its own first valid command and relays it, clips it, checks every `/lowstate` (robot identity, estop limits) and latches an estop until restart. A robot profile (`robots/<robot>.yaml`, the joint table `golem_upper_ik` and `golem_lowerbody_rl` read) and configs per robot (`config/h12/`, `config/g1/`) | `safety_node` (`robot`, `config`, `sim`, `use_estop` parameters; `use_sim_time` needs `sim`); `launch/safety.launch.py` (`safety_node` after `start_delay`), which both robots' bringups include |
 | `golem_upper_ik` | **controller (upper body, both robots)** | Pink IK on the 14 arm joints with the torso (H1-2) or waist (G1) held; OMPL planning and a self-collision barrier from each robot's sphere model and SRDF (the G1's spheres were packed on the rubber-hand G1: none on the Dex3-1 fingers; its torso spheres stand inside the torso's flanks, so `home` keeps the H1-2's 20 mm `d_min`; its `arms_down`, where the real hands rest on the hips, is in self-collision); the follow gate; the safety/controller config pairing (each robot's `config/<robot>/pairing.yaml`, applied by `golem_upper_ik.pairing`) that `upper_ik.launch.py` checks; each robot's data (IK and held joints, frames, named postures) is `config/<robot>/robot.yaml` | `frame_task_server` (`/frame_task`, `/named_config`), `joint_state_publisher`; `launch/upper_ik.launch.py` (the pairing check, then `frame_task_server` after `start_delay`) and `launch/robot_state.launch.py` (`robot_state_publisher` on the robot's URDF + `joint_state_publisher`), which both robots' bringups include |
 | `golem_bringup` | **bringup (both robots)** | Launch-only package that starts the whole H1-2 (`launch/h12/`) or G1 (`launch/g1/`), sim or real. See §6. | top-level + building-block launch files, `config/h12/*.yaml` |
 | `golem_ros2_models` | **description (both robots)** | Installs both robots' models from `CL_Assets`: the H1-2 with its Magpie grippers and the G1 with its Dex3-1 hands, each a Pinocchio URDF, a ROS copy with `package://golem_ros2_models/...` URIs, the meshes, and a sphere-packed self-collision model with its SRDF. No nodes and no joint table (that is `golem_safety`'s robot profile) | `golem_ros2_models.paths`; `launch/display.launch.py` (`robot:=h12|g1`) |
@@ -293,7 +293,8 @@ for the includes after it, so pass consistent values (all four blocks share
 **The H1-2's start-up** (`h12_control.launch.py`; `golem_safety`'s and
 `golem_upper_ik`'s READMEs have the details):
 
-- `safety_node` streams zero-gain `/lowcmd` from boot. It engages each input on
+- `safety_node` streams zero-gain `/lowcmd` from boot (in the sim, from the first
+  `/clock`). It engages each input on
   that input's first valid command once `/lowstate` reports `mode_machine` 6,
   and, with `use_estop:=true`, once a first hardware estop sample has arrived;
   until then it logs `engage_refused` with the reason, at most once a second.
@@ -420,7 +421,8 @@ which `golem_upper_ik`'s `upper_ik.launch.py` applies (`upper_ik: not starting:
 **The G1's start-up** (`g1_core.launch.py`'s docstring; `golem_safety`'s,
 `golem_upper_ik`'s and `golem_lowerbody_rl`'s READMEs have the details):
 
-- `safety_node` streams zero-gain `/lowcmd` (every motor off) from boot, checks
+- `safety_node` streams zero-gain `/lowcmd` (every motor off) from boot (in the
+  sim, from the first `/clock`), checks
   every `/lowstate` against the estop limits from the first sample, and engages
   each input on that input's own first valid command once `/lowstate` reports
   `mode_machine` 5, as on the H1-2; until then it logs `engage_refused`. Its
@@ -819,6 +821,14 @@ describe the new behaviour.
   latch). Once `rt/lowcmd` falls silent, the sims turn every body motor off
   after `GOLEM_CMD_TIMEOUT` (0.5 s of sim time); what the real robots do then
   has not been measured.
+- **Robot time.** `golem_safety`, `golem_upper_ik`, `golem_lowerbody_rl`,
+  `golem_skills` and `dex_3` measure rates, freshness and fault windows and
+  timeouts on robot time, the sim's `/clock` under `use_sim_time` and the steady
+  clock otherwise (the real robots, unchanged), keeping on the steady clock only
+  the liveness checks that must fire while `/clock` stops (`golem_safety`'s
+  heartbeat and its readers' silence checks) and the exits; `safety_node`
+  refuses `use_sim_time:=true` without `sim:=true`, and every node of a sim
+  bringup runs with `use_sim_time` true (`golem_bringup/test/test_sim_time.py`).
 - **One robot stack per DDS domain** (§3). Never run the H1-2's and the G1's
   stacks on one domain.
 - **HOMIE's policy is non-commercial.**

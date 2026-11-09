@@ -153,9 +153,11 @@ Python deps; the ROS packages themselves are compiled from the bind-mounted sour
 
 Single-stage, `FROM golem_base`. Provides the MuJoCo + RoboCasa kitchen simulator.
 
-- `MUJOCO_GL=egl` baked as default; `launch_robocasa.sh` exports `egl` in both
-  display modes for the offscreen cameras, and the passive viewer opens its own
-  GLFW window.
+- `MUJOCO_GL=egl` baked in, for shells in the container too; `launch_robocasa.sh`
+  exports `egl` in both display modes. The sims render the cameras and the
+  MID-360's rays through EGL on the NVIDIA GPU and stop at start without one
+  (`golem_robocasa/sim_common.py`'s `require_gpu`); the passive viewer opens
+  its own GLFW window.
 - **`mujoco==3.17.0`**, `numpy>=2.2.6`, Pillow. RoboCasa's setup.py pins
   `mujoco==3.3.1`, so the first step installs 3.3.1 and the last step
   (lock `robocasa-amd64-05.txt`) replaces it with 3.17.0, the newest MuJoCo

@@ -13,9 +13,10 @@ ARG https_proxy
 ENV http_proxy=${http_proxy}
 ENV https_proxy=${https_proxy}
 
-# Offscreen GPU rendering for the RGBD cameras. launch_robocasa.sh exports
-# MUJOCO_GL=egl as well, in both display modes; the passive viewer opens its
-# own GLFW window.
+# Offscreen GPU rendering for the RGBD cameras and the MID-360's rays, in the
+# sims and in shells; the sims stop at start without a GPU to render on.
+# launch_robocasa.sh exports MUJOCO_GL=egl as well, in both display modes; the
+# passive viewer opens its own GLFW window.
 ENV MUJOCO_GL=egl
 
 # MuJoCo's runtime rendering libraries: EGL and OSMesa for headless rendering.

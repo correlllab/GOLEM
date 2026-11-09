@@ -104,10 +104,6 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=all
       - QT_X11_NO_MITSHM=1
       - LIBGL_ALWAYS_INDIRECT=0
-      # For shells in the container: launch_robocasa.sh exports MUJOCO_GL=egl
-      # (offscreen cameras) in both display modes, and the passive viewer
-      # opens its own GLFW window.
-      - MUJOCO_GL=${MUJOCO_GL:-glfw}
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-1}
       # H1-2: m of clearance between the robot and any non-floor geom at
       # spawn. Empty: the task's spawn_margin, else 0.20 (h12_mujoco.py).
@@ -118,11 +114,6 @@ services:
       # H1-2: 0 keeps the robot's own links in its lidar scan as occluders.
       # Empty: they are filtered out (h12_mujoco.py).
       - GOLEM_LIDAR_SELF_FILTER=${GOLEM_LIDAR_SELF_FILTER:-}
-      # Both robots: how the MID-360's rays are cast (golem_robocasa/mid360.py).
-      # Empty or auto: rendered on the GPU where MuJoCo renders through EGL on
-      # one, else cast exactly on the CPU (logged); gpu stops the sim without a
-      # GPU; cpu always casts on the CPU.
-      - GOLEM_LIDAR_BACKEND=${GOLEM_LIDAR_BACKEND:-}
       # Both robots: the target real-time factor, sim seconds per wall second
       # (golem_robocasa/sim_common.py). Empty: 1, real time; 2 twice real time;
       # max unpaced. Above 1 every ROS node gets less wall time per sim second.

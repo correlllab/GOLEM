@@ -742,15 +742,22 @@ if 'config' in sys.argv:
         self.assertNotIn('GOLEM_ROBOT', env)
 
     def test_base_robocasa_service_passes_spawn_and_lidar_knobs_empty(self):
-        """The base robocasa service passes the spawn backoff, lidar self-filter and lidar backend knobs, empty unless set."""
-        # Empty: the sim's own defaults (no backoff, self-filter on, backend auto).
+        """The base robocasa service passes the spawn backoff and lidar self-filter knobs, empty unless set."""
+        # Empty: the sim's own defaults (no backoff, self-filter on).
         env = self.compose_config('docker-compose.yml', profile='robocasa')['robocasa']['environment']
-        for key in ('GOLEM_SPAWN_BACKOFF', 'GOLEM_LIDAR_SELF_FILTER', 'GOLEM_LIDAR_BACKEND'):
+        for key in ('GOLEM_SPAWN_BACKOFF', 'GOLEM_LIDAR_SELF_FILTER'):
             self.assertEqual(env[key], '', key)
-        env = self.compose_config('docker-compose.yml', profile='robocasa', GOLEM_SPAWN_BACKOFF='2.0',
-                                  GOLEM_LIDAR_BACKEND='cpu')['robocasa']['environment']
+        env = self.compose_config('docker-compose.yml', profile='robocasa',
+                                  GOLEM_SPAWN_BACKOFF='2.0')['robocasa']['environment']
         self.assertEqual(env['GOLEM_SPAWN_BACKOFF'], '2.0')
-        self.assertEqual(env['GOLEM_LIDAR_BACKEND'], 'cpu')
+
+    def test_robocasa_service_keeps_the_images_egl_and_its_gpu(self):
+        """The robocasa service runs on the NVIDIA runtime and leaves MUJOCO_GL to the image's egl, whatever the shell says."""
+        # The sims render through EGL on the GPU and stop at start otherwise.
+        service = self.compose_config('docker-compose.yml', profile='robocasa', MUJOCO_GL='glfw')['robocasa']
+        self.assertEqual(service['runtime'], 'nvidia')
+        self.assertEqual(service['environment']['NVIDIA_VISIBLE_DEVICES'], 'all')
+        self.assertNotIn('MUJOCO_GL', service['environment'])
 
     def test_robocasa_service_passes_the_sim_rate_empty_unless_set(self):
         """The robocasa service passes GOLEM_SIM_RATE, empty (the sims' real time) unless set."""

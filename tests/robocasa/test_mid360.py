@@ -210,7 +210,7 @@ class CpuCasterTests(unittest.TestCase):
 class _FakeCaster:
     """Return the snapshot's data, a distance in m, for every ray."""
 
-    def cast(self, origin, rotation, directions, data):
+    def cast(self, origin, rotation, directions, data, geom_alpha=None, mat_alpha=None):
         """Return data (m) for each of directions."""
         return np.full(len(directions), float(data))
 

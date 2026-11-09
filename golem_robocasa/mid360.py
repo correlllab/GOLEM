@@ -103,10 +103,15 @@ class LidarFrame(NamedTuple):
 
 
 class Snapshot(NamedTuple):
-    """Hold what one cast reads: the sensor's pose and the MjData of the scene's geom poses."""
+    """Hold what one cast reads: the sensor's pose, the scene's geom poses and its live alpha."""
     origin: np.ndarray         # (3,) m, the sensor's position in the world
     rotation: np.ndarray       # (3, 3), sensor -> world
     data: mujoco.MjData        # its geom_xpos and geom_xmat are what the rays hit
+    # The sim model's geom_rgba[:, 3] and mat_rgba[:, 3] at the snapshot: RoboCasa hides and
+    # shows geoms at run time, and rays skip those with alpha 0. None keeps the alpha the
+    # caster last cast with (at first its model's).
+    geom_alpha: np.ndarray = None
+    mat_alpha: np.ndarray = None
 
 
 def load_pattern():
@@ -179,13 +184,19 @@ class CpuCaster:
                            1, self.exclude_body, geomid[lo:hi].reshape(-1, 1),
                            dist[lo:hi].reshape(-1, 1), hi - lo, MAX_RANGE)
 
-    def cast(self, origin, rotation, directions, data):
+    def cast(self, origin, rotation, directions, data, geom_alpha=None, mat_alpha=None):
         """Return the distance (m) along each unit direction (n, 3) to its first hit, NaN for none.
 
         origin (3,) m and rotation (3, 3) sensor -> world are the sensor's pose; directions
-        are in its own frame; data holds the geom poses. NaN where nothing is hit within
-        MAX_RANGE or the robot is hit first.
+        are in its own frame; data holds the geom poses. geom_alpha (ngeom,) and mat_alpha
+        (nmat,) are written into the model's geom_rgba and mat_rgba alpha first (Snapshot's
+        fields; None leaves them). NaN where nothing is hit within MAX_RANGE or the robot is
+        hit first.
         """
+        if geom_alpha is not None:
+            self.model.geom_rgba[:, 3] = geom_alpha
+        if mat_alpha is not None:
+            self.model.mat_rgba[:, 3] = mat_alpha
         n = len(directions)
         dist = np.empty(n)
         geomid = np.empty(n, dtype=np.int32)
@@ -222,6 +233,10 @@ class CpuCaster:
         return dist
 
 
+class GpuUnavailable(RuntimeError):
+    """Say this process cannot render on a GPU: MuJoCo not on EGL, no EGL device, software GL."""
+
+
 class GpuCaster:
     """Read each ray's range from depth images rendered on the GPU around the sensor (EGL).
 
@@ -235,7 +250,8 @@ class GpuCaster:
 
     The renders follow CpuCaster's rules. The caster draws its own copy of the model, in
     which a geom is drawn, opaque, exactly when a ray would hit it: in geomgroup, alpha not 0
-    (the material's alpha when it has a material), not on exclude_body. A
+    (the material's alpha when it has a material; each cast's live alpha, as CpuCaster), not
+    on exclude_body. A
     segmentation render beside the depth tells which geom each pixel shows, so a ray whose
     first hit is the robot gives no return. Range limits are CpuCaster's: no return past
     MAX_RANGE; ranges under MIN_RANGE are returned, for the scanner to drop.
@@ -248,7 +264,7 @@ class GpuCaster:
     # s of sim time between the scanner's update() calls. A cast costs about one render per
     # face whatever its ray count, so the GPU casts fewer, larger batches than the CPU; this
     # interval keeps the lidar thread a few times faster than real time beside the H1-2's
-    # cameras.
+    # cameras, provided they hold GL_LOCK while they render.
     batch_s = 0.02
 
     def __init__(self, model, exclude_body, geomgroup, width=512, robot_geoms=None):
@@ -257,19 +273,20 @@ class GpuCaster:
         geomgroup is the 6 flags of the geom groups the rays hit; width is each face's size in
         pixels. robot_geoms is a bool mask (ngeom,) of geoms whose first hit gives no return; by
         default every geom of exclude_body's root subtree, none with exclude_body -1. Raises
-        RuntimeError, naming why, when the GPU cannot render the rays: MuJoCo not on EGL
-        (MUJOCO_GL), no EGL device, a software renderer, or a model the renders cannot match.
+        GpuUnavailable, naming why, when this process cannot render on a GPU (MuJoCo not on
+        EGL, no EGL device, a software renderer), and RuntimeError when the GPU fails to
+        render or the renders cannot match the rays (a model with flexes).
         """
         backend = os.environ.get("MUJOCO_GL", "")
         if backend.strip().lower() != "egl":
-            raise RuntimeError(f"MUJOCO_GL is {backend!r}, not 'egl'")
+            raise GpuUnavailable(f"MUJOCO_GL is {backend!r}, not 'egl'")
         if model.nflex:
             raise RuntimeError("the model has flexes, which the renders do not match")
         try:
             from mujoco import egl
             from OpenGL import GL
         except ImportError as exc:
-            raise RuntimeError(f"no EGL: {exc}") from exc
+            raise GpuUnavailable(f"no EGL: {exc}") from exc
         self._egl = egl
         self._gl = None
         self._context = None
@@ -285,15 +302,15 @@ class GpuCaster:
             self.robot_geoms = np.zeros(m.ngeom, dtype=bool)
 
         # Draw exactly the geoms mj_multiRay hits, opaque: a geom colour other than MuJoCo's
-        # default overrides its material's, and geoms with alpha 0 are not drawn.
+        # default overrides its material's, and geoms with alpha 0 are not drawn. Which are
+        # hit depends on the live alpha, so _draw() sets the copy's alpha before each cast.
         group = np.array(geomgroup, dtype=bool).reshape(6)
-        alpha = m.geom_rgba[:, 3].copy()
-        has_material = m.geom_matid >= 0
-        alpha[has_material] = m.mat_rgba[m.geom_matid[has_material], 3]
-        drawn = (group[np.clip(m.geom_group, 0, 5)] & (alpha > 0)
-                 & (m.geom_bodyid != self.exclude_body))
+        self._candidates = (group[np.clip(m.geom_group, 0, 5)]
+                            & (m.geom_bodyid != self.exclude_body))
+        self._geom_alpha = m.geom_rgba[:, 3].copy()
+        self._mat_alpha = m.mat_rgba[:, 3].copy()
+        self._drawn = None
         m.geom_rgba[:] = 1.0
-        m.geom_rgba[~drawn, 3] = 0.0
         # The faces sit side by side, 3 x 2; no multisampling, which would blend the
         # segmentation colours at silhouettes into other geoms' ids.
         m.vis.global_.offwidth = 3 * w
@@ -311,20 +328,21 @@ class GpuCaster:
         self._option.flags[:] = 0
         self._option.flags[mujoco.mjtVisFlag.mjVIS_STATIC] = 1
         self._camera = mujoco.MjvCamera()      # mjv_updateScene needs one; cast() sets the view
-        self._scene = mujoco.MjvScene(m, maxgeom=max(1, int(drawn.sum())))
+        self._scene = mujoco.MjvScene(m, maxgeom=max(1, int(self._candidates.sum())))
         # Segmentation colours only: no lighting effects, and no back-face culling, since rays
         # hit a face from either side.
         self._scene.flags[:] = 0
         self._scene.flags[mujoco.mjtRndFlag.mjRND_SEGMENT] = 1
         self._scene.flags[mujoco.mjtRndFlag.mjRND_IDCOLOR] = 1
+        # The scene lists the drawn geoms in model order, so a segmentation colour (scene
+        # index + 1) maps to a geom without reading the scene back; checked once here.
+        self._draw(None, None)
         self._update_scene()
         geoms = self._scene.geoms[:self._scene.ngeom]
         objid = np.array([g.objid for g in geoms], dtype=np.intp)
         if (any(g.objtype != mujoco.mjtObj.mjOBJ_GEOM for g in geoms)
-                or not np.array_equal(objid, np.flatnonzero(drawn))):
+                or not np.array_equal(objid, np.flatnonzero(self._drawn))):
             raise RuntimeError("the scene does not draw exactly the geoms the rays hit")
-        # Segmentation colour (scene index + 1, 0 where nothing is drawn) -> robot or not.
-        self._robot_segment = np.concatenate([[False], self.robot_geoms[objid]])
 
         self._viewports = [mujoco.MjrRect((k % 3) * w, (k // 3) * w, w, w) for k in range(6)]
         self._image = mujoco.MjrRect(0, 0, 3 * w, 2 * w)
@@ -340,11 +358,14 @@ class GpuCaster:
 
         with GL_LOCK:
             try:
-                self._gl = egl.GLContext(3 * w, 2 * w)
-                self._gl.make_current()
-                renderer = GL.glGetString(GL.GL_RENDERER).decode(errors="replace")
+                try:
+                    self._gl = egl.GLContext(3 * w, 2 * w)
+                    self._gl.make_current()
+                    renderer = GL.glGetString(GL.GL_RENDERER).decode(errors="replace")
+                except Exception as exc:   # EGL's and PyOpenGL's own error types
+                    raise GpuUnavailable(f"no EGL device: {exc!r}") from exc
                 if any(name in renderer.lower() for name in _SOFTWARE_RENDERERS):
-                    raise RuntimeError(f"the GL renderer is {renderer}, a software renderer")
+                    raise GpuUnavailable(f"the GL renderer is {renderer}, a software renderer")
                 self._context = mujoco.MjrContext(m, mujoco.mjtFontScale.mjFONTSCALE_100)
                 mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_OFFSCREEN, self._context)
                 self._context.readDepthMap = mujoco.mjtDepthMap.mjDEPTH_ZEROFAR
@@ -357,6 +378,27 @@ class GpuCaster:
                 self._release()
         self.gl_renderer = renderer
         atexit.register(self.close)
+
+    def _draw(self, geom_alpha, mat_alpha):
+        """Draw the geoms the rays hit with this alpha (None: the last); map segments to robot.
+
+        geom_alpha (ngeom,) and mat_alpha (nmat,) are the sim model's alpha (Snapshot's).
+        """
+        if geom_alpha is not None:
+            np.copyto(self._geom_alpha, geom_alpha)
+        if mat_alpha is not None:
+            np.copyto(self._mat_alpha, mat_alpha)
+        m = self.model
+        alpha = self._geom_alpha.copy()
+        has_material = m.geom_matid >= 0
+        alpha[has_material] = self._mat_alpha[m.geom_matid[has_material]]
+        drawn = self._candidates & (alpha > 0)
+        if self._drawn is not None and np.array_equal(drawn, self._drawn):
+            return
+        self._drawn = drawn
+        m.geom_rgba[:, 3] = drawn
+        # Segmentation colour (scene index + 1, 0 where nothing is drawn) -> robot or not.
+        self._robot_segment = np.concatenate([[False], self.robot_geoms[drawn]])
 
     def _update_scene(self):
         """Fill the scene with the drawn geoms at the caster's MjData's poses."""
@@ -384,18 +426,23 @@ class GpuCaster:
                 self._gl = None
 
     def close(self):
-        """Free the GL context and what the caster uploaded to it; later casts raise."""
+        """Free the GL context, what was uploaded to it and the model copy; later casts raise."""
         atexit.unregister(self.close)
         with GL_LOCK:
             self._free()
+        self.model = self.data = self._scene = None
 
-    def cast(self, origin, rotation, directions, data):
+    def cast(self, origin, rotation, directions, data, geom_alpha=None, mat_alpha=None):
         """Return the distance (m) along each unit direction (n, 3) to its first hit, NaN for none.
 
         As CpuCaster.cast(): origin (3,) m and rotation (3, 3) sensor -> world are the sensor's
         pose; directions are in its own frame; data holds the geom poses (geom_xpos,
-        geom_xmat). NaN where nothing is drawn within MAX_RANGE or the robot is drawn first.
+        geom_xmat); geom_alpha and mat_alpha are the live alpha (None: the last cast's). NaN
+        where nothing is drawn within MAX_RANGE or the robot is drawn first.
         """
+        if self.model is None:
+            raise RuntimeError("cast() after close()")
+        self._draw(geom_alpha, mat_alpha)
         n = len(directions)
         dist = np.full(n, np.nan)
         if n == 0:
@@ -408,10 +455,8 @@ class GpuCaster:
         np.copyto(self.data.geom_xmat, data.geom_xmat)
         self._update_scene()
         if self._scene.ngeom != len(self._robot_segment) - 1:
-            raise RuntimeError("the scene's geoms changed since the caster was built")
+            raise RuntimeError("the scene does not draw exactly the geoms the rays hit")
         with GL_LOCK:
-            if self._context is None:
-                raise RuntimeError("cast() after close()")
             self._gl.make_current()
             try:
                 for camera in self._scene.camera:   # both eyes; mjr_render averages them
@@ -520,8 +565,9 @@ class Mid360Scanner:
             return
         if self._timebase is None:
             self._timebase = t
-        self._dist[first:last] = self.caster.cast(snapshot.origin, snapshot.rotation,
-                                                  self._directions[first:last], snapshot.data)
+        self._dist[first:last] = self.caster.cast(
+            snapshot.origin, snapshot.rotation, self._directions[first:last], snapshot.data,
+            geom_alpha=snapshot.geom_alpha, mat_alpha=snapshot.mat_alpha)
         self._when[first:last] = t
         self._next = last
 

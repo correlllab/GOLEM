@@ -31,6 +31,17 @@ MIN_AGREEMENT = 0.99                  # fraction of rays on which both casters r
 MIN_ROBOT_AGREEMENT = 0.95
 MAX_CAST_S = 0.025                    # s per 20,000-ray cast; catches a broken path only
 H12_GROUPS = (1, 1, 1, 1, 1, 1)       # the H1-2's rays hit every geom group (h12_sensors)
+# Two walls ahead of the origin, their faces at x = 1 m (a plain geom) and 3 m (a geom with a
+# material).
+WALLS = """
+<mujoco>
+  <asset><material name="paint" rgba="0.8 0.8 0.8 1"/></asset>
+  <worldbody>
+    <geom name="near" type="box" group="1" pos="1.05 0 0" size="0.05 5 5"/>
+    <geom name="far" type="box" group="1" material="paint" pos="3.05 0 0" size="0.05 5 5"/>
+  </worldbody>
+</mujoco>
+"""
 TINY = ('<mujoco><worldbody><geom type="box" group="1" pos="2 0 0" size="0.1 1 1"/>'
         '</worldbody></mujoco>')               # one wall in front of the origin
 
@@ -106,7 +117,7 @@ def _no_gpu_reason():
     model = mujoco.MjModel.from_xml_string(TINY)
     try:
         caster = mid360.GpuCaster(model, -1, (0, 1, 0, 0, 0, 0))
-    except RuntimeError as exc:   # GpuCaster raises this for every missing piece
+    except mid360.GpuUnavailable as exc:   # any other failure is a fault the tests must show
         return f"no GPU caster: {exc}"
     caster.close()
     return None
@@ -192,6 +203,42 @@ class GpuCasterTests(unittest.TestCase):
                 with self.subTest(robot=name, axis=axis):
                     self._compare(name, _rotation(axis, degrees) @ kitchen.rotation)
 
+    def test_live_alpha_hides_and_shows_geoms(self):
+        """A geom made transparent between casts stops returning on both casters, which agree.
+
+        Hiding the near wall's geom alpha shows the far wall; hiding the far wall's material
+        alpha leaves no return; alpha None keeps the last cast's; the model's alpha restores
+        both walls.
+        """
+        model = mujoco.MjModel.from_xml_string(WALLS)
+        data = mujoco.MjData(model)
+        mujoco.mj_forward(model, data)
+        near = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "near")
+        rng = np.random.default_rng(3)
+        local = np.column_stack([np.ones(300), rng.uniform(-0.5, 0.5, (300, 2))])
+        local /= np.linalg.norm(local, axis=1, keepdims=True)
+        visible_geoms, visible_mats = model.geom_rgba[:, 3].copy(), model.mat_rgba[:, 3].copy()
+        hidden_near = visible_geoms.copy()
+        hidden_near[near] = 0.0
+        steps = [("as built", None, None, 1.0), ("near hidden", hidden_near, None, 3.0),
+                 ("paint hidden", None, np.zeros_like(visible_mats), np.nan),
+                 ("alpha kept", None, None, np.nan),
+                 ("restored", visible_geoms, visible_mats, 1.0)]
+        cpu = mid360.CpuCaster(model, -1, (0, 1, 0, 0, 0, 0), threads=1)
+        gpu = mid360.GpuCaster(model, -1, (0, 1, 0, 0, 0, 0))
+        try:
+            for label, geom_alpha, mat_alpha, wall_x in steps:
+                with self.subTest(step=label):
+                    ranges = [caster.cast(np.zeros(3), np.eye(3), local, data,
+                                          geom_alpha=geom_alpha, mat_alpha=mat_alpha)
+                              for caster in (cpu, gpu)]
+                    expected = wall_x / local[:, 0]   # the wall's face at x = wall_x
+                    for got in ranges:
+                        np.testing.assert_allclose(got, expected, rtol=0.0, atol=0.01)
+        finally:
+            cpu.close()
+            gpu.close()
+
     def test_gpu_cast_time(self):
         """A 20,000-ray cast takes under 25 ms on average over 20 calls; the mean is printed."""
         local = _frame()
@@ -255,7 +302,7 @@ class BackendTests(unittest.TestCase):
         """Without MUJOCO_GL=egl (the Mac's osmesa or glfw) the GPU caster refuses to build."""
         for value in ("osmesa", "glfw", ""):
             with self.subTest(MUJOCO_GL=value), mock.patch.dict(os.environ, {"MUJOCO_GL": value}):
-                with self.assertRaisesRegex(RuntimeError, "MUJOCO_GL"):
+                with self.assertRaisesRegex(mid360.GpuUnavailable, "MUJOCO_GL"):
                     mid360.GpuCaster(self.model, -1, (0, 1, 0, 0, 0, 0))
 
 

@@ -449,11 +449,19 @@ def test_stale_state_aborts_goal(ros, models, monkeypatch, capfd):
     assert wait_for(lambda: log.lines('[frame_task_server]: Aborting goal: /lowstate is '), 2.0)
     line = log.lines('Aborting goal')[0]
     assert 'ms stale (> 50 ms); holding the last command' in line, line
-    # the last command holds
-    time.sleep(0.2)
-    held = [s.q for s in recorder.samples if s.t > ended]
-    assert len(held) > 50
-    assert all(np.array_equal(q, held[0]) for q in held)
+    # the last command holds: once it arrives it never changes. Samples carry their receive
+    # time, so commands published before the abort can still arrive after it under load.
+
+    def held():
+        """Return the samples since the last command first arrived after the goal ended."""
+        received = [s.q for s in recorder.samples if s.t > ended]
+        if not received:
+            return []
+        return received[next(i for i, q in enumerate(received)
+                             if np.array_equal(q, received[-1])):]
+    assert wait_for(lambda: len(held()) > 50, 2.0)
+    samples = held()
+    assert all(np.array_equal(q, samples[0]) for q in samples)
 
 
 def test_stale_state_does_not_abort_a_goal_off_the_real_robots_domain(ros, models, capfd):

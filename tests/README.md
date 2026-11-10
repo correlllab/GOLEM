@@ -15,7 +15,7 @@ its `cpu` job as a required branch-protection check to gate merges.
 | `tests/robocasa/surface/` | the topic surface of the RoboCasa sim, per robot, against a golden | `tests/robocasa/surface/README.md` |
 | `tests/stack/` | H1-2 sim + ROS stack integration (arms, locomotion) | `tests/stack/README.md` |
 | `tests/g1/` | the G1 acceptance tests: sim + whole G1 bringup | `tests/g1/README.md` |
-| `tests/sim/` | one closed-loop test of either robot: sim + whole bringup with navigation (standing, walking to a goal, arm moves, SLAM) | `tests/sim/README.md` |
+| `tests/sim/` | one closed-loop test of either robot: sim + whole bringup with navigation (standing, walking to a goal, arm moves, SLAM); and the H1-2's frontier exploration on `lmg_deploy`'s policy | `tests/sim/README.md` |
 | `tests/docker/` | the wrappers, compose files, launchers and pins (CPU) | this page |
 
 No test runs on DDS domain 0. The H1-2 tests use the domains shown on this

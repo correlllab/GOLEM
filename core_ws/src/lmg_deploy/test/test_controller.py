@@ -14,7 +14,7 @@ import pytest
 import yaml
 
 from lmg_deploy import rotations as R
-from lmg_deploy.controller import MarlController, Mode, RobotState
+from lmg_deploy.controller import ARMS_OBS_TERMS, LEGS_OBS_TERMS, MarlController, Mode, RobotState
 from lmg_deploy.kinematics import ArmKinematics
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -572,3 +572,64 @@ def test_set_mode_arm_goes_through_the_settle():
         ctrl.step(state)
     assert ctrl.mode == Mode.ARM
     np.testing.assert_allclose(ctrl.believed, goal, atol=1e-9)
+
+
+def test_per_joint_action_scales():
+    """Per-joint scales map each action to its target and back to the observed action; a wrong count raises."""
+    scales = np.linspace(0.1, 0.3, 12)
+    residual = np.linspace(0.05, 0.4, 14)
+    legs = ConstNetwork(np.ones(12))
+    ctrl, cfg = _controller(legs=legs, arms=ConstNetwork(np.ones(14)), leg_action_scales=scales.tolist(),
+                            arm_residual_scales=residual.tolist(), torque_headroom=None, target_limits=None,
+                            target_margin=1.0)
+    state = _state(cfg)
+    ctrl.reset(state)
+    cmd = ctrl.step(state)
+    np.testing.assert_allclose(cmd.q[:12], np.array(cfg["default_joint_pos"][:12]) + scales)
+    np.testing.assert_allclose(ctrl.legs_last, np.ones(12))              # observed back in action units
+    with pytest.raises(ValueError):
+        _controller(leg_action_scales=[0.25] * 11)
+
+
+def test_command_filter_low_passes_the_observed_command():
+    """With command_filter_tau the policies see the command low-passed, zero during an arm goal and after a reset."""
+    legs = ConstNetwork(np.zeros(12))
+    ctrl, cfg = _controller(legs=legs, command_filter_tau=0.5)
+    state = _state(cfg)
+    ctrl.reset(state)
+    ctrl.set_velocity_command(np.array([0.5, 0.0, 0.0]))
+    alpha = 1.0 - np.exp(-ctrl.dt / 0.5)
+    ctrl.step(state)
+    np.testing.assert_allclose(legs.inputs[-1][9:12], [0.5 * alpha, 0, 0])
+    ctrl.step(state)
+    np.testing.assert_allclose(legs.inputs[-1][9:12], [0.5 * (1 - (1 - alpha) ** 2), 0, 0])
+    ctrl.set_mode("arm")
+    while ctrl.mode != Mode.ARM:
+        ctrl.step(state)
+    ctrl.step(state)
+    np.testing.assert_allclose(legs.inputs[-1][9:12], 0.0)               # zero during an arm goal
+    ctrl.reset(state)
+    np.testing.assert_allclose(ctrl.observed_command(), 0.0)             # and from zero after a reset
+
+
+def test_obs_terms_must_match_the_layout():
+    """An export's observation term lists must be the controller's own; matching lists and none both build."""
+    legs = [t for t in LEGS_OBS_TERMS if t != "gait_phase_cos"]   # explicit500 has no gait_phase_cos
+    arms = [t for t in ARMS_OBS_TERMS if t != "gait_phase_cos"]
+    _controller(legs_obs_terms=legs, arms_obs_terms=arms)
+    with pytest.raises(ValueError):
+        _controller(legs_obs_terms=legs[:-1] + ["height_scan", "actions"], arms_obs_terms=arms)
+    with pytest.raises(ValueError):
+        _controller(legs_obs_terms=legs, arms_obs_terms=LEGS_OBS_TERMS)
+
+
+def test_arm_goals_refused_for_a_policy_that_never_trained_one():
+    """With arm_goals false, set_mode arm and request_arm_goal raise and the controller keeps navigating."""
+    ctrl, cfg = _controller(arm_goals=False)
+    ctrl.reset(_state(cfg))
+    with pytest.raises(ValueError):
+        ctrl.set_mode("arm")
+    with pytest.raises(ValueError):
+        ctrl.request_arm_goal(ctrl.rest_pose)
+    assert ctrl.mode == Mode.NAV
+    ctrl.set_mode("walk")                       # walking stays allowed

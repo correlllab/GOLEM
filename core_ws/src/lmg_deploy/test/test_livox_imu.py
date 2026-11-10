@@ -82,11 +82,10 @@ def test_dropout_gap_not_integrated():
     np.testing.assert_allclose(imu.up, [0.0, 0.0, 1.0], atol=1e-12)
 
 
-@pytest.mark.xfail(strict=True, reason="lmg_deploy expects an upright livox_imu_link; the H1-2 model's is the raw MID-360 frame since 2026-11-05 and lmg_deploy is not updated yet")
-def test_urdf_mount_is_the_livox_pitch():
-    """The URDF mount from livox_imu_link to each policy IMU frame is the upright MID-360's pitch.
+def test_urdf_mount_takes_the_raw_livox_frame_to_each_policy_frame():
+    """/livox/imu's raw, upside-down chip frame goes into each policy IMU frame through the upright MID-360's pitch.
 
-    It fails, as a strict xfail, while the H1-2's URDF carries the raw, upside-down MID-360 frame.
+    The URDF carries the MID-360 frames raw: each is the upright frame the policies trained on, half a turn about x.
     """
     pytest.importorskip("pinocchio")
     if not os.path.isfile(URDF):
@@ -102,13 +101,16 @@ def test_urdf_mount_is_the_livox_pitch():
     q = np.zeros(len(names))
     q[12] = 0.7   # torso yaw must not change the mount
     kin.update(q)
-    chip = _ry(CHIP_RPY[1]) @ _rx(CHIP_RPY[0])   # URDF rpy, yaw 0
+    chip = _ry(CHIP_RPY[1]) @ _rx(CHIP_RPY[0])   # the upright chip in the upright point frame, URDF rpy, yaw 0
+    upright_from_raw = _rx(np.pi)
     # imu_link carries no rotation on torso_link: older exports read the chip through the mount.
-    np.testing.assert_allclose(livox_to_imu_rotation(kin, "imu_link"), _ry(LIVOX_PITCH) @ chip, atol=1e-9)
-    np.testing.assert_allclose(livox_to_imu_rotation(kin, "torso_link"), _ry(LIVOX_PITCH) @ chip, atol=1e-9)
-    # livox_link exports trained on the point frame's axes; livox_imu_link exports read it as is.
-    np.testing.assert_allclose(livox_to_imu_rotation(kin, "livox_link"), chip, atol=1e-9)
-    np.testing.assert_allclose(livox_to_imu_rotation(kin, "livox_imu_link"), np.eye(3), atol=1e-12)
+    np.testing.assert_allclose(livox_to_imu_rotation(kin, "imu_link"), _ry(LIVOX_PITCH) @ chip @ upright_from_raw,
+                               atol=1e-9)
+    np.testing.assert_allclose(livox_to_imu_rotation(kin, "torso_link"), _ry(LIVOX_PITCH) @ chip @ upright_from_raw,
+                               atol=1e-9)
+    # livox_link exports trained on the upright point frame's axes; livox_imu_link exports on the upright chip's.
+    np.testing.assert_allclose(livox_to_imu_rotation(kin, "livox_link"), chip @ upright_from_raw, atol=1e-9)
+    np.testing.assert_allclose(livox_to_imu_rotation(kin, "livox_imu_link"), upright_from_raw, atol=1e-9)
 
 
 def _lowpass_sine(cutoff, freq, dt, seconds=4.0):

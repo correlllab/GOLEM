@@ -1,15 +1,15 @@
 """Turn /livox/imu into the policy's IMU: gyro, specific force and attitude in the policy's IMU frame.
 
-/livox/imu is taken to be in the URDF's livox_imu_link, the MID360's IMU chip,
-upright. The H1-2's /livox/imu is the MID-360's raw, upside-down frame, which
-this module does not handle: golem_bringup's lmg_real refuses to start for
-that, and test_urdf_mount_is_the_livox_pitch is a strict xfail until it does.
-
-The policy's IMU frame is the one it trained with (export.yaml ``imu.frame``):
-livox_imu_link itself, livox_link (the point frame, 0.7 deg from the chip) or
-the torso's imu_link for older runs. All sit on torso_link, so angular velocity
-and gravity direction are the chip's rotated by the fixed mount (r_imu_livox,
-from the URDF). Away from the chip the specific force also differs by the
+/livox/imu is in the URDF's livox_imu_link, the MID360's IMU chip in the
+sensor's raw frame, which on the H1-2's head is upside down (CL_Assets
+d7ef401 on). The policy's IMU frame is the one it trained with (export.yaml
+``imu.frame``): livox_imu_link, livox_link (the point frame, 0.7 deg from the
+chip) or the torso's imu_link for older runs. The policies trained on the
+MID-360 frames upright (Locomanipulation_game's CL_Assets pin is older than
+d7ef401): each is its raw URDF frame turned half a turn about its x axis,
+UPRIGHT_FROM_RAW. All sit on torso_link, so angular velocity and gravity
+direction are the chip's rotated by the fixed mount (r_imu_livox, from the URDF
+and that turn). Away from the chip the specific force also differs by the
 lever-arm terms (alpha x r + omega x (omega x r), r about 0.4 m up the torso
 for imu_link), which this leaves out: they vanish standing still and stay small
 at walking rates.
@@ -33,19 +33,26 @@ GRAVITY = 9.81           # m/s^2
 G_UNIT_MAX_NORM = 4.0    # a mean |acc| below this is in g (1.0), above it in m/s^2 (9.81)
 MAX_DT = 0.05            # s; a longer gap between samples (a dropout) is not integrated
 
-# The URDF frame /livox/imu is taken to be in: the MID360's IMU chip, upright.
+# The URDF frame /livox/imu is in: the MID360's IMU chip, in the sensor's raw (upside-down) frame.
 LIVOX_IMU_FRAME = "livox_imu_link"
+# The policy IMU frames that trained upright, and the turn taking a raw URDF frame's vectors into its upright one:
+# half a turn about x.
+UPRIGHT_TRAINED_FRAMES = ("livox_link", "livox_imu_link")
+UPRIGHT_FROM_RAW = np.diag([1.0, -1.0, -1.0])
 
 
 def livox_to_imu_rotation(kin, imu_frame: str, livox_frame: str = LIVOX_IMU_FRAME) -> np.ndarray:
-    """Return the (3, 3) rotation taking livox_frame vectors into imu_frame, from the URDF.
+    """Return the (3, 3) rotation taking livox_frame vectors into the policy's imu_frame.
 
+    The URDF's mount, then, for the frames the policies trained upright
+    (UPRIGHT_TRAINED_FRAMES), the half turn from the URDF's raw frame to the upright one.
     kin: a kinematics.ArmKinematics with both frames among its extra frames,
     updated at any joint state (both frames sit on torso_link, so the joints
     don't change the rotation).
     """
     q_rel = quat_mul(quat_conjugate(kin.frame_pose(imu_frame)[1]), kin.frame_pose(livox_frame)[1])
-    return np.stack([quat_apply(q_rel, e) for e in np.eye(3)], axis=1)
+    r = np.stack([quat_apply(q_rel, e) for e in np.eye(3)], axis=1)
+    return UPRIGHT_FROM_RAW @ r if imu_frame in UPRIGHT_TRAINED_FRAMES else r
 
 
 class GyroLowpass:

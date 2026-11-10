@@ -1,5 +1,5 @@
 # The deploy config a new policy starts from; example.yaml says what each key means. Copy it to
-# policies/<name>/<name>.yaml next to the export (legs.pt, arms.pt, export.yaml) and set legs.num_obs and
+# policies/<robot>/<robot>.yaml next to the export (legs.pt, arms.pt, export.yaml) and set legs.num_obs and
 # arms.num_obs to the sizes export_marl.py prints. The values are Mid360's (Locomanipulation_game branch
 # marl-direct 7fca440, on CL_Assets ed592de's MID-360 mount): the Explicit500 setup (LSTM actors, explicit PD at
 # 500 Hz, 0-20 ms target delay, GOLEM e-stop target clip, 85% torque headroom) with its ankle-roll target clip. Each

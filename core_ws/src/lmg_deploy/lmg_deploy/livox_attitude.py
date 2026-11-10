@@ -1,8 +1,8 @@
 """Estimate the head IMU's gravity-aligned attitude from FAST-LIO, carried at the IMU rate by the gyro.
 
-/livox/imu is taken to be in the URDF's livox_imu_link, the MID-360's IMU chip,
-upright, and FAST-LIO's body frame is that IMU. The H1-2's /livox/imu is the
-raw, upside-down frame, which lmg_deploy does not handle (see livox_imu).
+/livox/imu is in the URDF's livox_imu_link, the MID-360's IMU chip in the
+sensor's raw (on the H1-2, upside-down) frame, and FAST-LIO's body frame is
+that IMU; in_imu_frame() turns it into the policy's (see livox_imu).
 The MID-360 has no orientation output, so the attitude comes from FAST-LIO:
 
   * /Odometry gives the IMU body's orientation in camera_init (the IMU frame at

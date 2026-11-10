@@ -100,3 +100,32 @@ Each run writes to `tests/results/sim-stack-<robot>-<time>-<pid>/`:
 The test stops the sim (`stop` file) and waits for its recording before it stops the bringup, so
 the recording ends with the robot standing, not with it falling once `rt/lowcmd` is silent. When a
 test fails, keep the whole directory.
+
+## Frontier exploration on the loco-manipulation game's policy (H1-2)
+
+```bash
+tests/sim/test_lmg_explore.sh                      # lmg_deploy's one H1-2 policy, policies/h12/
+GOLEM_TEST_VIDEO=1 tests/sim/test_lmg_explore.sh   # and the video
+```
+
+The H1-2 counterpart of `tests/g1/test_sim_explore.sh`, on the same containers and kitchen: the ros
+container runs `lmg_sim.launch.py use_rviz:=false use_skills:=true`, so `lmg_deploy`'s
+`marl_deploy_node` owns all 27 joints and walks on Nav2's `/cmd_vel`, and `golem_skills`
+serves `/skill/frontier_explore` on the H1-2's Nav2 footprint. Once the policy node has released the
+band, Nav2 is active and the explorer is served, the test stands 3 s and sends one
+`SkillFrontierExplore` goal with a 240 s budget (the H1-2 walks at most 0.3 m/s).
+
+It checks what `test_sim_stack.sh` checks of the whole run (standing unsupported, no contact, no fall,
+no estop, one `/lowcmd` writer, no sim `/odom`), plus the G1 explore test's coverage (at least 95 % of
+the reachable floor free in the final `/map`) and, when the explorer finishes, its `goals_reached`.
+The explorer's outcome and goals are reported either way. `test_lmg_explore.py`'s docstring has the
+details.
+
+With `GOLEM_TEST_VIDEO=1` the run also gets `explore.mp4`, rendered in the robocasa container from the
+recordings: a chase camera on the robot, its head camera and `/map` as slam_toolbox published it, with
+the robot's path and the explorer's goals. The sim saves its compiled model (`model.mjb`) and every
+joint at each sample (`sim.npz` `qpos`); the drive saves every `/map` (`maps.npz`) and `map -> pelvis`
+(`drive.npz` `map_pelvis`).
+
+Output: `tests/results/sim-lmg-explore-<time>-<pid>/`, as above plus `map.npz`, `maps.npz`,
+`map_done.npz`, `costmap_done.npz`, `model.mjb`, and with the video `explore.mp4` and `video.log`.

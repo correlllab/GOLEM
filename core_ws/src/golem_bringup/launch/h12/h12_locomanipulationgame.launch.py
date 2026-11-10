@@ -4,15 +4,18 @@ Start lmg_deploy's marl_deploy_node: the loco-manipulation game's MARL policy.
 The policy commands all 27 joints through safety_node's split inputs, so frame_task_server
 and the lower-body RL node must not run beside it. lmg_sim.launch.py and
 lmg_real.launch.py include this file and start the state publishers, the safety layer
-and SLAM. The node starts only with start_position_verified:=true; it ramps the joints
-to the policy's default pose, holds it until ~/confirm_engage (with
-engage_wait_for_confirm) and holds its arm goals in the world by SLAM's /Odometry.
+and SLAM. The node runs lmg_deploy's policies/h12/, the H1-2's one policy. It starts only
+with start_position_verified:=true; it ramps the joints to the policy's default pose,
+holds it until ~/confirm_engage (with engage_wait_for_confirm) and holds its arm goals in
+the world by SLAM's /Odometry.
 """
+import os
+
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -20,7 +23,8 @@ from launch_ros.parameter_descriptions import ParameterValue
 def generate_launch_description():
     """Declare the policy's arguments and start marl_deploy_node behind the interlock."""
     deploy_share = get_package_share_directory('lmg_deploy')
-    policy_dir = PathJoinSubstitution([deploy_share, 'policies', LaunchConfiguration('policy')])
+    # The H1-2's one policy (lmg_deploy's policies/README.md: one iteration per robot).
+    policy_config = os.path.join(deploy_share, 'policies', 'h12', 'h12.yaml')
     use_sim_time = ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool)
     policy_on = LaunchConfiguration('start_position_verified')
 
@@ -36,10 +40,6 @@ def generate_launch_description():
         DeclareLaunchArgument('start_position_verified', default_value='false',
                               description='true only after checking the start pose: starts '
                                           'marl_deploy_node'),
-        DeclareLaunchArgument(
-            'policy',
-            description='Required. policies/<name>/ of lmg_deploy: <name>.yaml plus the '
-                        'export (lmg_deploy ships mid360v2)'),
         DeclareLaunchArgument('engage_wait_for_confirm', default_value='true',
                               description='true: hold the pre-pose until ~/confirm_engage'),
         DeclareLaunchArgument('prepose_ramp_s', default_value='6.0',
@@ -64,8 +64,7 @@ def generate_launch_description():
             condition=IfCondition(policy_on),
             parameters=[{
                 'use_sim_time': use_sim_time,
-                'config': ParameterValue(
-                    [policy_dir, '/', LaunchConfiguration('policy'), '.yaml'], value_type=str),
+                'config': policy_config,
                 'urdf_path': LaunchConfiguration('urdf_path'),
                 'engage_wait_for_confirm': ParameterValue(
                     LaunchConfiguration('engage_wait_for_confirm'), value_type=bool),

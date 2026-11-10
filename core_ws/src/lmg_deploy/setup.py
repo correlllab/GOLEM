@@ -18,7 +18,8 @@ setup(
         (os.path.join('share', package_name, 'config'),
             [path for path in glob('config/*.yaml') if not os.path.basename(path).startswith('example.')]),
     ] + [
-        # Each policy directory (networks, deploy config, export.yaml) installs to share/lmg_deploy/policies/<name>/.
+        # Each robot's policy directory (networks, deploy config, export.yaml) installs to
+        # share/lmg_deploy/policies/<robot>/.
         (os.path.join('share', package_name, 'policies', os.path.basename(d)), glob(os.path.join(d, '*')))
         for d in sorted(glob('policies/*')) if os.path.isdir(d)
     ],

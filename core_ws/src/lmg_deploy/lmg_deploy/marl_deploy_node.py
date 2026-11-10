@@ -15,7 +15,8 @@ Flow
    operator calls ~/confirm_engage.
 4. Engage: the controller starts an episode at the measured state with a zero
    velocity command (any /cmd_vel received before engaging is dropped) and runs
-   at ``control_hz`` (50 Hz, the training policy rate). With
+   at the policy's training rate (export.yaml's control_dt: 50 Hz, or 100 Hz
+   for the sport-mode runs; ``control_hz`` only confirms it). With
    ``disable_elastic_band`` (the sim) the elastic band is released
    ``band_release_delay_s`` later and the episode restarts then, so the
    policy's first free step is its episode's first.
@@ -60,16 +61,15 @@ IMU
 ---
 The policy's IMU observations (angular velocity, specific force, projected
 gravity) come from the MID360's /livox/imu, never LowState.imu_state, whose
-attitude carries a calibration error of about 2.5 deg. /livox/imu is taken to
-be upright in the URDF's livox_imu_link (the IMU chip). The H1-2 publishes it
-in the MID-360's raw, upside-down frame, which this node does not handle:
-golem_bringup's lmg_real refuses to start for that, and the strict xfail
-test_urdf_mount_is_the_livox_pitch marks the missing fix.
+attitude carries a calibration error of about 2.5 deg. /livox/imu is in the
+URDF's livox_imu_link (the IMU chip), the MID-360's raw frame, upside down on
+the H1-2's head.
 
 The readings are carried from livox_imu_link into the frame the policy trained
 with, export.yaml's ``imu.frame`` (imu_link on torso_link for exports without
 an ``imu`` block, such as Explicit500; livox_link or livox_imu_link for later
-ones), through the URDF mount. The angular velocity passes the
+ones, which trained upright: the raw frames turned half a turn about x),
+through the URDF mount (livox_imu.livox_to_imu_rotation). The angular velocity passes the
 livox_imu.GyroLowpass the run trained with (``imu.gyro_lowpass_hz``; absent:
 none), which suppresses the head's pitch resonance (about 20 Hz) while walking.
 
@@ -133,8 +133,8 @@ from lmg_deploy.rotations import (
 MOTOR_MODE_PR = 1          # LowCmd motor mode: enabled
 SAFETY_HEARTBEAT_TOPIC = "/safety/heartbeat"
 PREPOSE_TOL = 0.15          # rad; max |q - default| over all 27 joints to count as posed
-PREPOSE_SETTLE_TICKS = 10   # consecutive in-tolerance ticks (0.2 s at 50 Hz)
-PREPOSE_MAX_TICKS = 400     # after the ramp; posed or not, stop waiting (8 s at 50 Hz)
+PREPOSE_SETTLE_S = 0.2      # s of consecutive in-tolerance ticks
+PREPOSE_MAX_S = 8.0         # s after the ramp; posed or not, stop waiting
 DEFAULT_IMU_FRAME = "imu_link"   # exports without an imu block (Explicit500) trained on the torso IMU
 IMU_OFFSET_PARAMS = ("imu_offset_roll_deg", "imu_offset_pitch_deg", "imu_offset_yaw_deg")
 IMU_OFFSET_RANGE_DEG = 15.0  # deg, the range ros2 param set accepts for each trim
@@ -150,9 +150,9 @@ class MarlDeployNode(Node):
         Raises ValueError on a missing or inconsistent config or a bad parameter.
         """
         super().__init__("marl_deploy_node")
-        self.declare_parameter("config", "")   # the policy's yaml, policies/<name>/<name>.yaml
+        self.declare_parameter("config", "")   # the policy's yaml, policies/<robot>/<robot>.yaml
         self.declare_parameter("urdf_path", "/home/code/CL_Assets/ros_assets/h1_2_magpie.urdf")
-        self.declare_parameter("control_hz", 50.0)        # Hz, must equal 1 / the config's control_dt
+        self.declare_parameter("control_hz", 0.0)         # Hz; 0: the policy's, 1 / control_dt, else it must match
         self.declare_parameter("prepose_ramp_s", 6.0)     # s, minimum ramp duration
         self.declare_parameter("prepose_max_vel", 0.25)   # rad/s, peak target speed of any joint
         self.declare_parameter("engage_wait_for_confirm", True)
@@ -172,8 +172,8 @@ class MarlDeployNode(Node):
 
         cfg_path = self.get_parameter("config").value
         if not cfg_path:
-            raise ValueError("config:= the policy's deploy yaml, policies/<name>/<name>.yaml (lmg_deploy ships "
-                             "mid360v2; README 'Exporting a checkpoint' adds others)")
+            raise ValueError("config:= the policy's deploy yaml, policies/<robot>/<robot>.yaml (lmg_deploy ships "
+                             "policies/h12/h12.yaml; README 'Exporting a checkpoint' replaces it)")
         with open(cfg_path) as f:
             cfg = yaml.safe_load(f)
         cfg_dir = os.path.dirname(os.path.abspath(cfg_path))
@@ -183,7 +183,7 @@ class MarlDeployNode(Node):
             with open(export_path) as f:
                 cfg.update(yaml.safe_load(f) or {})
             self.get_logger().info(f"export: {cfg.get('source')}")
-        control_hz = float(self.get_parameter("control_hz").value)
+        control_hz = float(self.get_parameter("control_hz").value) or 1.0 / float(cfg["control_dt"])
         if abs(1.0 / control_hz - float(cfg["control_dt"])) > 1e-6:
             raise ValueError(f"control_hz {control_hz} doesn't match the policy's control_dt {cfg['control_dt']}")
 
@@ -225,6 +225,8 @@ class MarlDeployNode(Node):
         self._confirm_wait = bool(self.get_parameter("engage_wait_for_confirm").value)
         self._confirmed = False
         self._control_hz = control_hz
+        self._prepose_settle_ticks = max(1, int(round(PREPOSE_SETTLE_S * control_hz)))
+        self._prepose_max_ticks = int(round(PREPOSE_MAX_S * control_hz))
         self._ramp_min_s = float(self.get_parameter("prepose_ramp_s").value)
         self._ramp_max_vel = float(self.get_parameter("prepose_max_vel").value)
         if self._ramp_max_vel <= 0.0:
@@ -345,7 +347,11 @@ class MarlDeployNode(Node):
         if not self._engaged:
             self.get_logger().warn("arm goal before the policy is engaged; ignored")
             return
-        self.controller.request_arm_goal(poses)
+        try:
+            self.controller.request_arm_goal(poses)
+        except ValueError as e:
+            self.get_logger().error(f"arm goal refused: {e}")
+            return
         self.get_logger().info(f"arm goal: left {poses[0, :3].round(3)}, right {poses[1, :3].round(3)} (pelvis)")
 
     def _on_heartbeat(self, msg: Bool) -> None:
@@ -384,7 +390,12 @@ class MarlDeployNode(Node):
         elif not self._engaged:
             resp.success, resp.message = False, "not engaged yet: the policy starts in walking mode once it engages"
         else:
-            self.controller.set_mode(mode)
+            try:
+                self.controller.set_mode(mode)
+            except ValueError as e:
+                resp.success, resp.message = False, str(e)
+                self.get_logger().warn(f"set_mode {mode} refused: {e}")
+                return resp
             resp.success, resp.message = True, f"mode {self.controller.mode.value}"
             self.get_logger().info(f"set_mode {mode}: {resp.message}")
         return resp
@@ -567,8 +578,8 @@ class MarlDeployNode(Node):
         self._prepose_ticks += 1
         err = float(np.max(np.abs(state.q - ctrl.default)))
         self._prepose_pass = self._prepose_pass + 1 if err < PREPOSE_TOL else 0
-        settled = self._prepose_pass >= PREPOSE_SETTLE_TICKS
-        timed_out = self._prepose_ticks >= self._ramp_ticks + PREPOSE_MAX_TICKS
+        settled = self._prepose_pass >= self._prepose_settle_ticks
+        timed_out = self._prepose_ticks >= self._ramp_ticks + self._prepose_max_ticks
         if not settled and not timed_out:
             return
         if not self._livox_fresh(time.monotonic()):

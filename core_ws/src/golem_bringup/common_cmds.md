@@ -371,7 +371,7 @@ by the SLAM odometry, so keep `use_slam` on). You drive it yourself (see
 `lmg_deploy/README.md` for all launch arguments):
 
 ```bash
-ros2 launch golem_bringup lmg_sim.launch.py policy:=<name>   # a policies/<name>/ of lmg_deploy
+ros2 launch golem_bringup lmg_sim.launch.py   # lmg_deploy's policies/h12/, its one H1-2 policy
 ```
 
 Walk:

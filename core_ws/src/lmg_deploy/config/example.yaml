@@ -1,8 +1,9 @@
-# Every key of a policy's deploy config, policies/<name>/<name>.yaml, which marl_deploy_node reads through its
+# Every key of a policy's deploy config, policies/<robot>/<robot>.yaml, which marl_deploy_node reads through its
 # `config` parameter. export.yaml beside it is loaded over it, top-level key by key (example.export.yaml). Nothing
 # loads this file; policy_template.yaml is the starting point for a new policy.
 
-# s, the policy step: the training env's sim dt x decimation. marl_deploy_node's control_hz must be its inverse.
+# s, the policy step: the training env's sim dt x decimation (0.02, or 0.01 for the sport-mode runs, set by
+# export.yaml). marl_deploy_node runs at its inverse; a control_hz parameter other than 0 must equal it.
 control_dt: 0.02
 
 # The policy's 27 joints in Unitree motor order 0..26; every per-joint list below and every q vector uses this order.
@@ -77,6 +78,26 @@ arms:
   ee_frames: [left_wrist_yaw_link, right_wrist_yaw_link]   # URDF wrist frames the arm goals are for, left then right
   ik_damping: 0.05          # damping of the damped-least-squares IK step
   max_ik_step: 0.1          # rad, the largest IK step of any arm joint per policy step
+
+# Per joint, over legs.action_scale and arms.residual_scale: 12 leg action scales and 14 arm residual scales.
+# export.yaml sets them for runs that matched their scales to their PD gains (the sport-mode runs). Absent: the
+# single numbers above for every joint.
+leg_action_scales: [0.2, 0.2, 0.2, 0.1875, 0.125, 0.25, 0.2, 0.2, 0.2, 0.1875, 0.125, 0.25]
+arm_residual_scales: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+# rad, over arms.max_ik_step: the run's largest IK step per policy step, set by export.yaml.
+max_ik_step: 0.05
+# s, time constant of the first-order low-pass on the velocity command the policies see and the gait clock reads,
+# stepped once per policy step, zeroed at reset and held at zero during an arm goal. Absent or 0: no low-pass.
+command_filter_tau: 0.5
+# false: the run never trained an arm goal (arm_goal_prob 0), and the controller refuses one (set_mode arm,
+# ~/arm_goal). export.yaml sets it. Absent: true.
+arm_goals: false
+# The observation terms each actor trained on, in order; export.yaml writes them. The controller refuses a config
+# whose lists are not the observations it builds. Absent: not checked.
+legs_obs_terms: [base_lin_acc, base_ang_vel, projected_gravity, velocity_commands, arm_goal, ee_targets, joint_pos,
+                 joint_vel, gait_phase, gait_phase_cos, actions]
+arms_obs_terms: [base_lin_acc, base_ang_vel, projected_gravity, velocity_commands, arm_goal, ee_targets, joint_pos,
+                 joint_vel, gait_phase, gait_phase_cos, actions, wrist_poses, wrist_errors]
 
 # URDF frame of FAST-LIO's body (/Odometry, camera_init -> body), which forward kinematics carries to the pelvis to
 # keep the arm goals fixed in the world. FAST-LIO's body is the IMU it integrates /livox/imu in: livox_imu_link.

@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>H1-2 Real Deployment Guide | GOLEM</title>
+  <style>
+    :root { --ink:#172a31; --muted:#465b62; --paper:#f6f4ee; --panel:#fff; --line:#ccd5d4; --accent:#085b58; --warn:#785011; --code:#12282f; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; scroll-padding-top:1.5rem; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:1rem/1.65 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    a { color:var(--accent); text-underline-offset:.2em; }
+    :focus-visible { outline:3px solid #ad5b10; outline-offset:4px; }
+    .skip { position:absolute; left:1rem; top:-6rem; background:white; padding:.8rem; z-index:2; }
+    .skip:focus { top:1rem; }
+    .layout { display:grid; grid-template-columns:16rem minmax(0,1fr); max-width:92rem; margin:auto; }
+    aside { padding:2.5rem 1.5rem; border-right:1px solid var(--line); }
+    nav { position:sticky; top:2rem; }
+    .brand { font-size:.8rem; font-weight:800; letter-spacing:.17em; color:var(--accent); }
+    nav ol { padding:0; list-style:none; }
+    nav li { margin:.5rem 0; }
+    nav a { display:block; padding:.3rem 0; text-decoration:none; }
+    main { min-width:0; padding:3rem clamp(1.25rem,4vw,4rem) 5rem; }
+    header { border-bottom:3px solid var(--accent); padding-bottom:2rem; margin-bottom:2.5rem; }
+    .eyebrow { font-size:.8rem; font-weight:750; letter-spacing:.13em; text-transform:uppercase; color:var(--accent); }
+    h1 { font:600 clamp(2.2rem,5vw,3.8rem)/1.12 Georgia,serif; letter-spacing:-.035em; margin:.6rem 0 1.2rem; }
+    .lede { max-width:48rem; color:var(--muted); font-size:1.15rem; }
+    h2 { font:600 1.8rem/1.25 Georgia,serif; margin:0 0 1rem; }
+    h3 { font-size:1.1rem; margin:1.6rem 0 .6rem; }
+    section { margin:0 0 3.5rem; }
+    p { margin:.65rem 0 1rem; }
+    li { margin:.4rem 0; }
+    code { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.9em; overflow-wrap:anywhere; }
+    p code,li code,td code { background:#e7eeeb; padding:.1em .25em; border-radius:3px; }
+    .callout { border-left:4px solid var(--accent); padding:.9rem 1.1rem; background:#e6efeb; margin:1.25rem 0; }
+    .warning { border-color:var(--warn); background:#f5ead7; }
+    .callout p { margin:.2rem 0; }
+    .table-wrap { overflow-x:auto; margin:1rem 0; }
+    table { width:100%; border-collapse:collapse; background:var(--panel); text-align:left; }
+    caption { text-align:left; font-weight:700; padding:.5rem 0; }
+    th,td { padding:.8rem; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { background:#e7eeeb; }
+    figure.command { margin:1.1rem 0 1.5rem; border-radius:7px; overflow:hidden; background:var(--code); color:#eef8f5; }
+    figcaption { display:flex; justify-content:space-between; align-items:center; gap:1rem; padding:.55rem .9rem; background:#244049; font-size:.85rem; font-weight:650; }
+    button { border:1px solid #b6d1cd; border-radius:4px; background:#f2f8f6; color:#123d3b; padding:.4rem .75rem; font:600 .8rem system-ui,sans-serif; cursor:pointer; min-height:2.2rem; }
+    button:hover { background:#d8eae3; }
+    pre { margin:0; padding:1rem; overflow-x:auto; line-height:1.6; tab-size:2; }
+    pre code { white-space:pre; overflow-wrap:normal; }
+    details { border:1px solid var(--line); background:var(--panel); padding:1rem; border-radius:7px; margin:1.2rem 0; }
+    summary { cursor:pointer; font-weight:700; }
+    .small,footer { color:var(--muted); font-size:.9rem; }
+    footer { border-top:1px solid var(--line); padding-top:1rem; }
+    #copy-status { position:fixed; bottom:1rem; right:1rem; max-width:calc(100% - 2rem); padding:.6rem 1rem; background:#173e3b; color:white; border-radius:5px; }
+    #copy-status:empty { display:none; }
+    @media (max-width:850px) { .layout { display:block; } aside { border-right:0; border-bottom:1px solid var(--line); padding:1.2rem; } nav { position:static; } nav ol { display:flex; flex-wrap:wrap; gap:.2rem 1rem; margin:.5rem 0 0; } nav li { margin:0; } main { padding-top:2rem; } }
+    @media (prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
+    @media print { body { background:white; font-size:10pt; color:black; } .layout { display:block; } aside,.skip,button,#copy-status { display:none; } main { padding:0; } section { margin-bottom:1.5rem; } figure.command,pre,figcaption { background:#f1f1f1; color:black; } pre,pre code { white-space:pre-wrap; overflow-wrap:anywhere; } h2,h3,figcaption,summary { break-after:avoid; } figure,table,.callout { break-inside:avoid; } details { border:1px solid #aaa; } details::details-content { content-visibility:visible; } a { color:black; } }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to guide</a>
+  <div class="layout">
+    <aside><nav aria-label="Guide sections">
+      <div class="brand">GOLEM / FIELD GUIDE</div>
+      <ol>
+        <li><a href="#scope">01 Scope</a></li>
+        <li><a href="#roles">02 Roles</a></li>
+        <li><a href="#build">03 Native setup</a></li>
+        <li><a href="#preflight">04 Preflight</a></li>
+        <li><a href="#shell">05 Terminals</a></li>
+        <li><a href="#observe">06 Observation</a></li>
+        <li><a href="#control">07 Control stages</a></li>
+        <li><a href="#compare">08 Comparison</a></li>
+        <li><a href="#markers">09 Marker tasks</a></li>
+        <li><a href="#stop">10 Stop and record</a></li>
+      </ol>
+    </nav></aside>
+    <main id="main">
+      <header>
+        <div class="eyebrow">Native Linux / ROS 2 Humble / Real robot</div>
+        <h1>H1-2 Real<br>Deployment Guide</h1>
+        <p class="lede">A staged procedure template for the onboard control computer and a companion computer. Use existing components, separate observation from actuation, and qualify each hardware stage before proceeding.</p>
+        <div class="callout warning" role="note"><p><strong>Procedure template, not hardware validated by this work.</strong> This work implements comparison and simulation tests only. No real robot commands were run to create this guide. Team approval, a tested physical E-stop, and physical start-pose approval are required before hardware control. Counter and its planned comparison batch are <strong>not yet hardware certified</strong>. A passing import, offline test, or simulation is not permission to actuate.</p></div>
+      </header>
+
+      <section id="scope" aria-labelledby="scope-title">
+        <h2 id="scope-title">01 / Scope</h2>
+        <p>Read the whole guide before connecting to the robot. Commands below are templates for an approved operator, not a hardware acceptance report. The missing approvals, calibration files, policies, and limits must be supplied by the responsible team. There is no ready-to-run, hardware-qualified common Frame/Counter configuration supplied here.</p>
+        <div class="callout warning"><p><code>start_position_verified:=false</code> is <strong>not a universal actuator interlock</strong>. The full <code>h12_real_robot_bringup.launch.py</code> still launches safety and upper-arm initialization; that flag gates only the lower-body controller and estimator. Upper initialization and lower pre-positioning can move joints before any action goal or policy confirmation.</p></div>
+        <p>This guide chooses <strong>one staged component flow</strong>. Do not also launch either full real bringup. The standard onboard launch includes drivers, navigation, state, control, and gated legs. The companion <code>h12_real_desktop_bringup.launch.py</code> includes AI model servers, YOLO enabled, skills, and RViz; it is not a lean marker-only entry point. An established team may choose those full bringups instead, but then must not add duplicate components from this page.</p>
+        <p>The root helpers <code>run_simulation.sh</code>, <code>run_experiment.sh</code>, <code>run_ros.sh</code>, and <code>run_rviz.sh</code> under <code>scripts/</code> are <strong>simulation only and reject domain 0</strong>. Do not use them on the real system, bypass their guards, or add an allow-real helper. Use native ROS commands below only after preflight. Do not run a simulator on the hardware bus.</p>
+      </section>
+
+      <section id="roles" aria-labelledby="roles-title">
+        <h2 id="roles-title">02 / Roles</h2>
+        <div class="table-wrap"><table>
+          <caption>One owner per running component</caption>
+          <thead><tr><th scope="col">Computer</th><th scope="col">Components</th><th scope="col">Environment</th></tr></thead>
+          <tbody>
+            <tr><td>Onboard</td><td>One state/TF authority, head camera, approved Magpie drivers, serial E-stop bridge, one safety relay, one upper controller, one approved lower policy.</td><td>ROS Python for safety, drivers, and lower policy. Controller Python for arm control and joint states.</td></tr>
+            <tr><td>Companion</td><td>Independent geometric ArUco localizer, marker skills only when approved, RViz. Optional hand cameras only if separately needed and assigned.</td><td>ROS Python / NumPy 1 for vision, skills, calibration and <code>cv_bridge</code>. Native installed RViz binary.</td></tr>
+          </tbody>
+        </table></div>
+        <p><code>environments/ros/.venv</code> uses NumPy 1. <code>environments/controller/.venv</code> uses NumPy 2 with the isolated Pinocchio/Pink/Counter stack. Generated colcon console entry points retain their ROS-Python shebang. Merely activating the controller venv does not switch them: use <code>frame_task_prefix</code> and <code>joint_state_prefix</code> as shown below. Do not mix the two environments' site-packages, overwrite global pip/Conda packages, or copy desktop install trees or absolute-path venvs onto the robot.</p>
+        <p>The marker path needs no AI API keys, cloud service, SAM weights, or AI model servers. The <code>model_server</code> package can run <code>aruco_localizer</code> independently. Skills use <code>target_backend:=marker</code> as a ROS parameter, not the legacy AI backend.</p>
+      </section>
+
+      <section id="build" aria-labelledby="build-title">
+        <h2 id="build-title">03 / Native Setup</h2>
+        <p>Do this with the hardware disconnected or under the team's non-actuating maintenance procedure. Start in the host's own GOLEM checkout. An administrator must provide Ubuntu/ROS Humble, system Python 3.10, the packages in <code>environments/ros/apt-packages.txt</code>, ROS DDS-IDL generators and required message packages (including <code>nav2_msgs</code> interfaces). Do not run whole-workspace rosdep or install the AI/Nav2 runtime for this lean workflow.</p>
+        <figure class="command"><figcaption><span>Each host / architecture only</span><button type="button" data-copy="cmd-arch">Copy</button></figcaption><pre><code id="cmd-arch">uname -m</code></pre></figure>
+        <p>Check both machines. The same Ubuntu version does not guarantee Pinocchio, Crocoddyl, OMPL, Torch, or native wheel ABI compatibility on an ARM onboard computer. The locked controller setup uses binary wheels and disables source builds. If the architecture is unsupported, stop and obtain an approved build and numerical validation for that architecture; do not replace pins or assume x86 checks qualify ARM.</p>
+        <p>Initialize submodules and obtain Git-LFS assets through the team's checkout process. Set <code>GOLEM_ROOT</code> to this host's absolute checkout path. Leave Conda before setup; repeat deactivation for nested environments, and skip it if Conda is absent or inactive.</p>
+        <figure class="command"><figcaption><span>Only when Conda is active</span><button type="button" data-copy="cmd-conda">Copy</button></figcaption><pre><code id="cmd-conda">conda deactivate</code></pre></figure>
+        <figure class="command"><figcaption><span>Native dependencies / supported architecture and prepared checkout required</span><button type="button" data-copy="cmd-build">Copy</button></figcaption><pre><code id="cmd-build">cd "${GOLEM_ROOT:?set the absolute GOLEM checkout path on this host}" &amp;&amp;
+./scripts/setup_environment.sh ros &amp;&amp;
+./core_ws/scripts/build_ros_workspace.sh build --profile experiment --compile-jobs 2 &amp;&amp;
+./scripts/setup_environment.sh controller</code></pre></figure>
+        <p>The existing <code>experiment</code> profile selects 12 packages, including the control, safety, interface, lower-policy, marker skill and localizer packages. It is reusable native infrastructure, <strong>not a hardware-driver installer</strong>. No simulator environment is needed on the robot. Offline setup checks do not certify hardware operation.</p>
+        <h3>Hardware additions</h3>
+        <ul>
+          <li>The experiment profile does not build <code>cl_realsense</code>. Provide an approved installation of that package and external <code>realsense2_camera</code>, matching librealsense, USB permissions and image-transport plugins. Confirm the actual head camera serial; the repository launch hardcodes one unit.</li>
+          <li>Building <code>magpie_control</code> does not install all physical Dynamixel/OpenRB prerequisites or udev rules. Approve servo communication, motor calibration, serial permissions and stable left/right device IDs before launching its drivers. Driver initialization may actuate grippers.</li>
+          <li>The physical E-stop serial bridge requires the correct device, permissions, wiring, status polarity and independent physical stop test. ROS status alone does not prove a working emergency stop.</li>
+          <li>Use the team's approved driver stack, or a manually selected package build only after confirming its exact source and dependencies are available. This page deliberately supplies no guessed driver install/build command. Livox/navigation are not needed for the lean marker experiment; if used separately, follow their approved stack without changing the pinned Livox submodule.</li>
+        </ul>
+      </section>
+
+      <section id="preflight" aria-labelledby="preflight-title">
+        <h2 id="preflight-title">04 / Preflight</h2>
+        <ol>
+          <li>Obtain team approval for the hardware, software revisions, operator roles, physical safety rig, workspace exclusion area, fall risks, and stop/power sequence. A qualified person must hold the physical E-stop. Verify its behavior independently of ROS action cancellation.</li>
+          <li>Verify the robot's physical start pose, support, joint/hand clearances and payload. Empty both hands for initial control and comparison qualification. Mechanical rig verification and a later freestanding benchmark are separate experiments; neither is established by this guide.</li>
+          <li>Verify the actual hardware-facing NIC, link, addressing and DDS configuration on each host. Do not assume <code>eno1</code> exists or reaches the robot. Match raw Unitree DDS domain 0 and ROS domain 0, approved RMW/Cyclone settings, discovery and clock synchronization. Do not change a NIC or DDS URI by guesswork.</li>
+          <li>Assign exactly one final <code>rt/lowcmd</code> writer: the approved safety relay. The upper controller writes only <code>rt/safety/lowcmd_upper_in</code>; the lower role writes only <code>rt/safety/lowcmd_lower_in</code>. Check raw DDS ownership using the team's approved method, not just ROS graph topic counts. No other vendor controller, old process or second bringup may compete.</li>
+          <li>Approve matching real upper/safety configs: motor mapping, gains, joint/velocity/torque limits, stale-data behavior, E-stop handling, NIC/domain and Counter settings. Inspect effective Counter limits after all controller, publisher and safety clipping, not just nominal solver limits. Use the same approved common config for both comparison conditions.</li>
+          <li>Approve the policy and lower YAML with their owner: checkpoint, physical startup pose, IMU trim, command limits, confirmation behavior and support procedure. <code>APPROVED_LOWERBODY</code> below is a policy selector, not a file path. Bundled ALMI/FAME simulation and offline checks are not real-robot approval.</li>
+          <li>Verify fresh measured state, TF and camera timestamps before motion. All hardware nodes use wall time, <code>use_sim_time:=false</code>. Do not publish simulated clock, simulated odometry, or ground-truth object poses.</li>
+        </ol>
+        <div class="callout warning"><p><code>real_benchmark_upper.yaml</code> currently publishes to <code>rt/safety/lowcmd_upper_in</code>, not final <code>rt/lowcmd</code>. It still hardcodes <code>eno1</code> and includes <code>reactive_counter_balance</code>; its name does not establish approval for the Counter adapter's effective settings. Require an operator-approved common configuration with the appropriate Counter section. Never substitute <code>counter_safety_split.yaml</code>, a domain-1 simulation profile, merely because an environment variable overrides its domain. Reject any alternate upper config that writes directly to final <code>rt/lowcmd</code>; do not run it alongside safety.</p></div>
+      </section>
+
+      <section id="shell" aria-labelledby="shell-title">
+        <h2 id="shell-title">05 / Terminals</h2>
+        <p><strong>Only after operator preflight:</strong> use a clean native zsh terminal on each host, with Conda and any previous venv inactive. Remove inherited foreign Python/Conda overlays by opening a clean shell, not by copying another machine's paths. Set this host's <code>GOLEM_ROOT</code> first. The following setup intentionally joins the hardware domain; it is not an observation permission bypass.</p>
+        <figure class="command"><figcaption><span>Each terminal / approved hardware network only</span><button type="button" data-copy="cmd-shell">Copy</button></figcaption><pre><code id="cmd-shell">cd "${GOLEM_ROOT:?set the absolute GOLEM checkout path on this host}" &amp;&amp;
+source /opt/ros/humble/setup.zsh &amp;&amp;
+source "$GOLEM_ROOT/core_ws/install/local_setup.zsh" &amp;&amp;
+export PYTHONNOUSERSITE=1 ROS_DOMAIN_ID=0
+export ROS_PY="${GOLEM_ROOT:?}/environments/ros/.venv/bin/python"
+export CTRL_PY="${GOLEM_ROOT:?}/environments/controller/.venv/bin/python"
+export PYTHONPATH="${GOLEM_ROOT:?}/unitree_sdk2_python${PYTHONPATH:+:$PYTHONPATH}"
+ros_cli() { "${ROS_PY:?set ROS Python path}" /opt/ros/humble/bin/ros2 "$@"; }</code></pre></figure>
+        <p>Require every setup line to succeed before continuing. Use <code>local_setup.zsh</code>, not a copied <code>setup.zsh</code> underlay chain. Bash users use the corresponding <code>.bash</code> setup files in a clean bash shell. The function invokes the actual ROS CLI file using ROS Python; no guessed Python <code>__main__</code> module is used. Do not activate Controller Python globally or add its NumPy 2 site-packages to ROS vision.</p>
+        <p>All <code>APPROVED_*</code> variables are mandatory values from the responsible operator, not defaults supplied by this guide. File variables must be absolute, existing, reviewed files on the host running the component. A value being set or a file existing does not grant approval. Do not copy a block until its stated preconditions hold.</p>
+      </section>
+
+      <section id="observe" aria-labelledby="observe-title">
+        <h2 id="observe-title">06 / Observation</h2>
+        <p>Start no control or gripper drivers in this stage. Require the native driver prerequisites and approved head calibration/serial first. Use a separate prepared terminal for each long-running process. Only one computer publishes robot state and each TF edge.</p>
+        <h3>Onboard / state</h3>
+        <p>The state launch reads joint state and publishes TF; it does not start the arm command server. It has no controller-config launch argument: the joint publisher reads the default <code>safety_split.yaml</code>, whose YAML domain is 1 and interface is empty. The exported hardware domain overrides that domain. Before using this command, the owner must verify the installed default's state topic and that SDK interface selection resolves to the approved NIC. Stop if this cannot be established; this guide does not edit source/configs to resolve it.</p>
+        <figure class="command"><figcaption><span>Onboard terminal / approved URDF and DDS reader settings required</span><button type="button" data-copy="cmd-state">Copy</button></figcaption><pre><code id="cmd-state">ros_cli launch h12_bringup h12_state.launch.py \
+  use_sim_time:=false \
+  joint_state_prefix:="${CTRL_PY:?set Controller Python path}" \
+  urdf_file:="${APPROVED_URDF:?set absolute reviewed real robot URDF path}"</code></pre></figure>
+        <h3>Onboard / head camera</h3>
+        <figure class="command"><figcaption><span>New onboard terminal / approved serial, USB stack and extrinsics required</span><button type="button" data-copy="cmd-head">Copy</button></figcaption><pre><code id="cmd-head">ros_cli launch cl_realsense h12_headcamera.launch.py</code></pre></figure>
+        <p>This launch sets wall time internally, resets the selected camera and publishes camera TF. Its head transform appears after a 10-second timer; wait for it and verify the correct frame direction. Do not also start a second camera TF publisher. Do not use all of <code>h12_real_drivers.launch.py</code> as an actuator-free camera shortcut: grippers are enabled by default and can move during initialization.</p>
+        <h3>Companion / localizer</h3>
+        <p>First verify the actual color stream, matching <code>CameraInfo</code> intrinsics/distortion and image dimensions, timestamp synchronization and camera-to-pelvis TF. The default compressed subscription is the standard real-camera <code>/realsense/head/color/image_raw/compressed</code>; select raw transport only if that is the approved available stream. Do not relax reprojection, age or ambiguity thresholds to hide failed calibration.</p>
+        <figure class="command"><figcaption><span>Companion terminal / calibrated head stream and TF required</span><button type="button" data-copy="cmd-localizer">Copy</button></figcaption><pre><code id="cmd-localizer">ros_cli run model_server aruco_localizer --ros-args \
+  -p use_sim_time:=false -p target_frame:=pelvis \
+  -p image_transport:=compressed -p publish_annotated:=true \
+  -p max_reprojection_px:=2.0 \
+  -p max_observation_age_sec:=0.5 -p stale_timeout_sec:=0.5</code></pre></figure>
+        <figure class="command"><figcaption><span>Companion inspection terminal / no motion goals</span><button type="button" data-copy="cmd-observe">Copy</button></figcaption><pre><code id="cmd-observe">ros_cli topic echo /perception/pegboard/diagnostics --once
+ros_cli topic echo /perception/pegboard/pose --once
+ros_cli topic echo /joint_states --once</code></pre></figure>
+        <p>Check sustained freshness, not a single good sample. ROS graph visibility does not establish raw DDS command safety. The localizer publishes observations, not TF or motion commands.</p>
+        <h3>Companion / RViz</h3>
+        <figure class="command"><figcaption><span>New prepared terminal / installed native RViz and display required</span><button type="button" data-copy="cmd-rviz">Copy</button></figcaption><pre><code id="cmd-rviz">/opt/ros/humble/bin/rviz2 \
+  -d "${GOLEM_ROOT:?}/core_ws/src/h12_bringup/rviz/pegboard.rviz" \
+  --ros-args -p use_sim_time:=false</code></pre></figure>
+        <p>Use <code>pelvis</code> as fixed frame. RViz supplies no state, camera or localizer. Inspect actual frame names and the measured grasp frame, not only wrist-link <code>/left_ee_pose</code> or <code>/right_ee_pose</code>, when evaluating a grasp-frame target.</p>
+      </section>
+
+      <section id="control" aria-labelledby="control-title">
+        <h2 id="control-title">07 / Control Stages</h2>
+        <div class="callout warning"><p>Everything in the following collapsed stage can enable motion, including startup. Complete independent hardware qualification of the selected components and their initialization first. Team approval, the physical E-stop operator, physical start-pose approval and the approved mechanical safety rig must be in place. No automatic engagement or stop-release command is provided.</p></div>
+        <details><summary>After hardware qualification / onboard control</summary>
+          <p>Keep the observation components running. Launch control <strong>once</strong>, in one new onboard terminal. Confirm E-stop status arrives before safety starts; the launch's default delays are 3 seconds for safety and 5 seconds for arms, not readiness proofs. It starts the serial E-stop bridge, safety, and a Counter-capable FrameTaskServer. Counter startup is required for the later comparison endpoint; ordinary <code>/frame_task</code> behavior remains the selected Counter backend, not a switchable Frame trial.</p>
+          <figure class="command"><figcaption><span>Onboard / physical approval and approved common split configs required</span><button type="button" data-copy="cmd-control">Copy</button></figcaption><pre><code id="cmd-control">ros_cli launch h12_bringup h12_control.launch.py \
+  use_sim_time:=false use_estop:=true upper_controller:=counter \
+  frame_task_prefix:="${CTRL_PY:?set Controller Python path}" \
+  safety_config:="${APPROVED_REAL_SAFETY:?set absolute approved real split safety YAML}" \
+  frame_task_config:="${APPROVED_REAL_UPPER:?set absolute approved common real Counter-capable split upper YAML}"</code></pre></figure>
+          <p>Upper initialization commands both arms and torso through its named startup sequence. Inspect actual poses, fresh state, E-stop/safety status and the initialization completion log before goals. A server appearing in the graph does not prove safe initialization. Do not run a second Frame server beside this one. For a separately approved Frame-only qualification, the owner selects <code>upper_controller:=frame</code> instead, as an alternative startup, not an additional process.</p>
+          <h3>Lower body</h3>
+          <p>Only after physical pose verification and the policy owner's approval, start one lower controller in a separate onboard terminal. This command starts the pre-positioning sequence; it is already actuation. The <code>start_position_verified</code> assertion is not a sensor-based safety check.</p>
+          <figure class="command"><figcaption><span>Onboard / separately approved policy and physical start pose required</span><button type="button" data-copy="cmd-lower">Copy</button></figcaption><pre><code id="cmd-lower">ros_cli launch h12_bringup h12_lowerbody.launch.py \
+  use_sim_time:=false start_position_verified:=true use_estimator:=false \
+  lowerbody:="${APPROVED_LOWERBODY:?set owner-approved real policy selector}" \
+  lowerbody_params:="${APPROVED_LOWER_CONFIG:?set absolute approved real lower-body YAML}"</code></pre></figure>
+          <p>The lower node waits for fresh state and safety heartbeat, ramps measured legs toward its pre-pose and waits for operator confirmation when configured to do so. A settle timeout is not approval to proceed. For FAME finetune, <code>lower_start_pos</code> and its upstream two-second ramp are the startup posture; <code>lower_default_pos</code> is a different observation/action reference. Review the actual selected policy's sequence rather than copying another policy's pose.</p>
+          <p>Do not pre-call, script or chain <code>/lowerbody/confirm_engage</code>. An early confirmation can be recorded. The real lower YAML includes a simulation-band-related setting; its release path can wait for a missing simulation service. The owner must approve real timing and configuration. Never create a mock band service, use a simulator tether/hoist option, or treat service success as balance approval. The operator handles the actual mechanical safety rig under the team's procedure.</p>
+          <h3>Initial motion</h3>
+          <p>Qualify empty-hand single-mode goals first, separately for Frame and Counter, with an inspected path and verified clearance. The small relative example below is <strong>not automatically tested or universally safe</strong>: it moves 2 cm along pelvis +X from the current left grasp frame, with no requested rotation. Use it only if the owner has approved that exact frame, direction, clearance and backend. Counter can move the opposite arm too. Do not send it as a first blind hardware test or reuse the simulation's large absolute target.</p>
+          <figure class="command"><figcaption><span>Approved single-mode trial only / 2 cm relative target, both hands empty</span><button type="button" data-copy="cmd-small">Copy</button></figcaption><pre><code id="cmd-small">ros_cli action send_goal /frame_task custom_ros_messages/action/FrameTask \
+  '{plan: true, relative: true, slow_mode: true, frame_names: [left_grasp_frame], frame_targets: [{position: {x: 0.02, y: 0.0, z: 0.0}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}], duration: {sec: 30, nanosec: 0}}' \
+  --feedback</code></pre></figure>
+          <p>A planned action plans <em>and executes</em>; <code>plan: true</code> is not a preview-only flag. Use the team's independent plan-inspection procedure before authorizing execution. Ordinary FrameTask duration is not a certified overall emergency-stop deadline, and planning/cancellation latency is not instantaneous.</p>
+        </details>
+      </section>
+
+      <section id="compare" aria-labelledby="compare-title">
+        <h2 id="compare-title">08 / Comparison</h2>
+        <p><strong>Counter planned batches are not yet hardware certified.</strong> The new <code>/compare_frame_task</code> action uses <code>custom_ros_messages/action/FrameTask</code> in the same Counter-capable FrameTaskServer process. It is not a second arm controller. Ordinary <code>/frame_task</code> stays unchanged. Rebuild and verify the installed API against this checkout before relying on it.</p>
+        <ul>
+          <li>Use <code>plan: true</code> with exactly one arm frame and one pose. The comparison order is the ROS string parameter <code>comparison_order</code>, default <code>frame,counter</code>; CSV duplicates allow <code>frame,counter,counter,frame</code> (ABBA).</li>
+          <li>The batch freezes its order and preparation settings. Change them only while idle. <code>upper_controller</code> is startup-only; do not try to hot-swap it with a parameter command.</li>
+          <li>Both trial conditions use one common approved preparation posture, common configuration and planned moving-arm path. Only the upper trial state resets. The lower standing-policy process/history continues during the same run; do not restart or re-engage it between trials.</li>
+          <li>The batch duration is an overall wall-clock budget, including preparation, planning, replay and settling; zero selects 300 seconds. It is not a guarantee of instant preemption inside a blocking planner or a replacement for the physical E-stop.</li>
+          <li>The FrameTask result contains <code>success</code>; per-trial details belong in the logged comparison summary. The server prints the path to <code>planned-comparison-*.json</code> under <code>ROS_LOG_DIR</code>, or the ROS home log directory (normally <code>~/.ros/log</code>). <code>step_timing</code> contains work-time and overrun aggregates; its scope excludes observer-callback overhead, so it is not an end-to-end deadline guarantee. Do not infer measured balance benefit, contact success or hardware qualification from action success alone.</li>
+        </ul>
+        <details><summary>After hardware qualification / prepare a later batch</summary>
+          <p>Required progression: qualify both empty-hand single modes; approve and verify the common named prep posture; inspect the common plan; qualify a small Counter trial and effective counter-arm limits; only then authorize ABBA. The default named posture <code>prep</code> is not automatically safe on this robot. <code>APPROVED_PREP_CONFIG</code> must name an existing reviewed named configuration, not a YAML path. Keep the free arm and torso clear throughout.</p>
+          <figure class="command"><figcaption><span>Idle server only / approved named prep and separate batch qualification required</span><button type="button" data-copy="cmd-compare-params">Copy</button></figcaption><pre><code id="cmd-compare-params">ros_cli param set /frame_task_server comparison_prepare_config \
+  "${APPROVED_PREP_CONFIG:?set approved existing named prep posture}" &amp;&amp;
+ros_cli param set /frame_task_server comparison_order 'frame,counter,counter,frame'</code></pre></figure>
+          <p>This only sets parameters; it does not authorize a goal. No hardware batch target is supplied here. After separate hardware qualification, the responsible operator supplies the complete inspected goal YAML, including <code>plan: true</code>, one approved frame/pose, and the whole-batch duration. The following template refuses an unset payload; setting the variable does not replace physical approval.</p>
+          <figure class="command"><figcaption><span>Qualified operator only / inspected hardware target required</span><button type="button" data-copy="cmd-approved-batch">Copy</button></figcaption><pre><code id="cmd-approved-batch">ros_cli action send_goal /compare_frame_task custom_ros_messages/action/FrameTask \
+  "${APPROVED_COMPARISON_GOAL:?set the complete inspected and approved hardware batch goal YAML}" \
+  --feedback</code></pre></figure>
+          <p>A relative batch target is defined from the common prepared posture, not a fresh incremental displacement on every trial. One action plans one reference; all conditions in that batch share it. A new comparison action can produce a different plan. Check the installed implementation's semantics and reference hash before comparing results.</p>
+          <p>Record order, configuration hashes, software revisions, common-path identity, state freshness, trial start/end errors, counter excursion/velocity, clipping, cancellation/failure status, lower-policy continuity and physical support condition. The same run preserves policy history, but does not make physical trial starts identical or remove order effects. Stop on any failed preparation or trial instead of continuing blindly.</p>
+        </details>
+      </section>
+
+      <section id="markers" aria-labelledby="markers-title">
+        <h2 id="markers-title">09 / Marker Tasks</h2>
+        <p>Use the same measured marker layout: <code>DICT_4X4_50</code>, ID 7 top-left and ID 8 top-right, each 30 mm black code inside a 40 mm outer square. Mount the paper flush to the top and adjacent side edges of the 320 x 250 mm board, with unchanged orientation and full 5 mm white border. Nominal centres are (-140, 105) and (140, 105) mm in board-local X/Y. PnP uses the black 30 mm edge, not the paper size. Confirm actual print scale, mounting, board orientation, holes and active peg geometry physically.</p>
+        <div class="callout warning"><p><strong>Never use <code>marker_profile_sim_extraction.json</code> on the real robot.</strong> Its <code>0.03465</code> gripper service compensation and <code>0.1786</code> distal geometry belong to the simulation extraction calibration. Neither that file nor nominal <code>marker_profile.json</code> is a real grasp calibration. Supply a physically verified real profile with the active peg and named source hole matched to the actual board.</p></div>
+        <p>Calibrate camera extrinsics, TCP/grasp-frame transforms and physical gripper command units against the real hardware. The shipped head transform documents about +/-13 mm and 1.5 degrees uncertainty and should be treated as a stale profile until recalibrated for this setup. Matching CameraInfo and low reprojection error do not eliminate extrinsic or TCP error. Micron-level peg/hole clearance claims need metrology; precision insertion is not implemented or demonstrated by this workflow.</p>
+        <p>Catalog suffixes <code>0..3</code> describe clearance rows, not four peg sizes. A skill profile must match the real active peg, source hole and physical seating. Verify the named source actually contains the expected peg; a restored source is an operator assumption until physically checked. A previous extraction can leave source-consumption state in the skills process. Restarting software does not restore a peg.</p>
+        <details><summary>After hardware qualification / grippers and marker skills</summary>
+          <p>Complete physical gripper qualification, calibration and port ownership first, with fingers clear. The existing launch contains per-side device IDs and angle calibration; use it only if those exact identities and values have been approved for the attached hardware. Start it once on the onboard host, outside the control launch, not also through full real drivers.</p>
+          <figure class="command"><figcaption><span>Onboard / approved physical gripper driver configuration required</span><button type="button" data-copy="cmd-grippers">Copy</button></figcaption><pre><code id="cmd-grippers">ros_cli launch h12_bringup h12_grippers.launch.py</code></pre></figure>
+          <p>Then, in a separate companion terminal, start marker skills only after the motion endpoints, gripper endpoints, fresh localizer and physically calibrated real profile are approved. Check the profile exists on this host before using it. Starting servers does not authorize sending a grasp goal.</p>
+          <figure class="command"><figcaption><span>Companion / real calibrated profile and matched catalog required</span><button type="button" data-copy="cmd-skills">Copy</button></figcaption><pre><code id="cmd-skills">test -f "${APPROVED_REAL_MARKER_PROFILE:?set absolute physically calibrated real marker profile}" &amp;&amp;
+test -f "${APPROVED_MARKER_CATALOG:?set absolute board-matched catalog path}" &amp;&amp;
+ros_cli run h12_skills skills --ros-args \
+  -p use_sim_time:=false -p target_backend:=marker \
+  -p marker_profile_path:="${APPROVED_REAL_MARKER_PROFILE:?}" \
+  -p marker_catalog_path:="${APPROVED_MARKER_CATALOG:?}"</code></pre></figure>
+          <p>Hardware extraction requires its own staged acceptance: unloaded approach, verified TCP clearance, calibrated contact/force limits, supervised closure and controlled lift. No automatic peg-extraction or insertion goal is supplied here. Do not run marker skills concurrently with a comparison batch or another upper-arm action client.</p>
+        </details>
+      </section>
+
+      <section id="stop" aria-labelledby="stop-title">
+        <h2 id="stop-title">10 / Stop and Record</h2>
+        <ol>
+          <li>For an emergency, use the tested physical E-stop and the team's hardware emergency procedure. ROS action cancellation, Ctrl+C, and safety software are not independent emergency stops. Do not improvise E-stop release or power removal while the robot is unsupported.</li>
+          <li>For a normal stop, stop issuing goals and follow the approved support/hold and payload procedure first. Ctrl+C on an action client does not guarantee the server-side goal stopped; cancellation may wait for planning or execution checks, and a last command can remain held.</li>
+          <li>With the robot physically secured and the approved shutdown sequence active, use Ctrl+C to stop skill clients/servers and the assigned control components, then wait for their children to exit. The safety/lower/upper stop order and hardware power sequence must be specified by the team, not guessed from terminal order.</li>
+          <li>Stop observation, camera and RViz processes when their data is no longer needed. Confirm no command writers remain by the approved hardware/DDS method before the team's power sequence. Never restart a controller without repeating pose, state, E-stop and clearance checks.</li>
+          <li>Keep logs, comparison summaries, configuration/calibration hashes, software revisions, policy/checkpoint identity, architecture, device identities, effective limits, operator approvals and the mechanical support condition. Label every result as offline, simulation, rig-qualified or freestanding hardware; do not combine those claims.</li>
+        </ol>
+        <h3>Source references</h3>
+        <p>Commands and caveats are derived from the current checkout's launch/config files, not hardware execution. Review these when updating the procedure:</p>
+        <ul>
+          <li><a href="../core_ws/src/h12_bringup/launch/h12_real_robot_bringup.launch.py">Real onboard launch</a> and <a href="../core_ws/src/h12_bringup/launch/h12_real_desktop_bringup.launch.py">real companion launch</a>.</li>
+          <li><a href="../core_ws/src/h12_bringup/launch/h12_control.launch.py">Control</a>, <a href="../core_ws/src/h12_bringup/launch/h12_state.launch.py">state</a>, <a href="../core_ws/src/h12_bringup/launch/h12_lowerbody.launch.py">lower body</a>, <a href="../core_ws/src/h12_bringup/launch/h12_real_drivers.launch.py">drivers</a>, and <a href="../core_ws/src/h12_bringup/config/lowerbody_real.yaml">real lower YAML</a>.</li>
+          <li><a href="../core_ws/src/cl_realsense/launch/h12_headcamera.launch.py">Head camera</a>, <a href="../core_ws/src/h12_bringup/launch/h12_grippers.launch.py">gripper hardware identities</a>, and <a href="../core_ws/src/h12_safety_layer/config/default_safety_split.yaml">split safety reference</a>.</li>
+          <li><a href="../core_ws/src/h12_ros2_controller/config/real_benchmark_upper.yaml">Real upper reference</a>, <a href="../core_ws/src/custom_ros_messages/action/FrameTask.action">FrameTask fields</a>, and <a href="../core_ws/src/h12_ros2_controller/h12_ros2_controller/ros2/frame_task_server.py">action server and comparison parameters</a>.</li>
+          <li><a href="h12_simulation_guide.html">Simulation guide</a> for isolated simulation only. Its helpers, fixture support and extraction profile must not be transferred to real hardware.</li>
+        </ul>
+      </section>
+      <footer>GOLEM real deployment procedure template. Not hardware validated by this work. Self-contained HTML with no external fonts, scripts or stylesheets. Copy buttons copy command text only; they never execute commands.</footer>
+    </main>
+  </div>
+  <div id="copy-status" role="status" aria-live="polite" aria-atomic="true"></div>
+  <script>
+    'use strict';
+    const status = document.getElementById('copy-status');
+    let statusTimer;
+    function fallbackCopy(text) {
+      const previous = document.activeElement;
+      const field = document.createElement('textarea');
+      field.value = text;
+      field.setAttribute('readonly', '');
+      field.setAttribute('aria-label', 'Command text for copying');
+      field.style.cssText = 'position:fixed;left:-10000px;top:0';
+      document.body.appendChild(field);
+      let copied = false;
+      try {
+        field.focus();
+        field.select();
+        copied = document.execCommand('copy');
+      } finally {
+        field.remove();
+        if (previous) previous.focus();
+      }
+      if (!copied) throw new Error('Clipboard unavailable');
+    }
+    document.querySelectorAll('button[data-copy]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const text = document.getElementById(button.dataset.copy).textContent;
+        try {
+          try {
+            if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error('Use fallback');
+            await navigator.clipboard.writeText(text);
+          } catch (_) {
+            fallbackCopy(text);
+          }
+          status.textContent = 'Command copied. Check all preconditions before use.';
+        } catch (_) {
+          status.textContent = 'Copy unavailable. Select the command text to copy it manually.';
+        }
+        clearTimeout(statusTimer);
+        statusTimer = setTimeout(() => { status.textContent = ''; }, 5000);
+      });
+    });
+    window.addEventListener('beforeprint', () => {
+      document.querySelectorAll('details').forEach((item) => {
+        item.dataset.printOpen = String(item.open);
+        item.open = true;
+      });
+    });
+    window.addEventListener('afterprint', () => {
+      document.querySelectorAll('details[data-print-open]').forEach((item) => {
+        item.open = item.dataset.printOpen === 'true';
+        delete item.dataset.printOpen;
+      });
+    });
+  </script>
+</body>
+</html>

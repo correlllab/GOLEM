@@ -48,6 +48,7 @@ class NativeExperimentTests(unittest.TestCase):
             spec.loader.exec_module(self.launch)
         self.context = {'controller_python': '/usr/bin/python3', 'lowerbody': 'fame_finetune',
                         'upper_controller': 'frame',
+                        'comparison_order': 'frame,counter',
                         'start_position_verified': 'false', 'marker_catalog_path': str(SOURCE)}
 
     def compose(self):
@@ -79,6 +80,7 @@ class NativeExperimentTests(unittest.TestCase):
             self.assertEqual(control['frame_task_prefix'], '/usr/bin/python3')
             self.assertEqual(control['safety_config'], 'sim_safety_split.yaml')
             self.assertEqual(control['upper_controller'], 'frame')
+            self.assertEqual(control['comparison_order'], 'frame,counter')
             self.assertEqual(control['frame_task_config'], 'sim_safety_split.yaml')
             self.assertEqual(lower['start_position_verified'], 'true')
             self.assertEqual(lower['lowerbody'], policy)
@@ -110,6 +112,19 @@ class NativeExperimentTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'upper_controller must be frame or counter'):
                 self.compose()
 
+    def test_comparison_order_is_validated_and_forwarded_without_config_switch(self):
+        self.context.update(start_position_verified='true', upper_controller='counter',
+                            comparison_order='counter,frame,frame,counter')
+        control = dict(self.compose()[2].launch_arguments)
+        self.assertEqual(control['comparison_order'], 'counter,frame,frame,counter')
+        self.assertEqual(control['frame_task_config'], 'counter_safety_split.yaml')
+        self.context['start_position_verified'] = 'false'
+        self.assertEqual(len(self.compose()), 2)
+        for order in ('', 'frame,', 'counter,blue', 'frame; touch /invalid'):
+            self.context['comparison_order'] = order
+            with self.assertRaises(RuntimeError):
+                self.compose()
+
     def test_control_hook_passes_typed_parameter_to_exactly_one_upper(self):
         def action(*args, **kwargs):
             return SimpleNamespace(args=args, **kwargs)
@@ -137,6 +152,12 @@ class NativeExperimentTests(unittest.TestCase):
         declared = next(item for item in actions if item.args == ('upper_controller',))
         self.assertEqual(declared.default_value, 'frame')
         self.assertEqual(declared.choices, ['frame', 'counter'])
+        order = upper[0].parameters[1]['comparison_order']
+        self.assertIs(order.value_type, str)
+        self.assertEqual(order.value.perform({'comparison_order': 'frame,counter,counter,frame'}),
+                         'frame,counter,counter,frame')
+        declared_order = next(item for item in actions if item.args == ('comparison_order',))
+        self.assertEqual(declared_order.default_value, 'frame,counter')
 
     def test_invalid_domains_are_rejected_before_actions(self):
         for domain in ('0', '', '-1', '233', 'garbage'):

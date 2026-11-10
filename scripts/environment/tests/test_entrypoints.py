@@ -367,6 +367,43 @@ class EntrypointTests(unittest.TestCase):
             execute.assert_not_called()
             lock.assert_not_called()
 
+    def test_comparison_order_forwards_as_one_argument_and_rejects_invalid_csv(self):
+        import build_ros_workspace as workspace
+        for order in ('frame,counter', 'counter,frame,frame,counter',
+                      '', 'frame,blue', 'frame,', 'counter; touch /invalid'):
+            valid = order in ('frame,counter', 'counter,frame,frame,counter')
+            arguments = ['upper_controller:=counter', f'comparison_order:={order}']
+            with self.subTest(order=order), \
+                    patch.object(sys, 'argv', ['run_ros.py', '--experiment', *arguments]), \
+                    patch.dict(os.environ, {'ROS_DOMAIN_ID': '45'}, clear=True), \
+                    patch.object(workspace, 'require_venv'), \
+                    patch.object(Path, 'is_file', return_value=True), \
+                    patch.object(ros_runtime, 'acquire_experiment_lock') as lock, \
+                    patch.object(os, 'execve') as execute:
+                if valid:
+                    ros_runtime.main()
+                    self.assertEqual(execute.call_args.args[1][-2:], arguments)
+                    self.assertNotIn('eval', execute.call_args.args[1][4])
+                else:
+                    with self.assertRaisesRegex(RuntimeError, 'comparison_order'):
+                        ros_runtime.main()
+                    lock.assert_not_called()
+                    execute.assert_not_called()
+
+    def test_generic_param_cli_preserves_full_standard_arguments(self):
+        import build_ros_workspace as workspace
+        arguments = ['param', 'set', '/frame_task_server', 'comparison_order',
+                     'counter,frame,frame,counter']
+        with patch.object(sys, 'argv', ['run_ros.py', *arguments]), \
+                patch.dict(os.environ, {'ROS_DOMAIN_ID': '45'}, clear=True), \
+                patch.object(workspace, 'require_venv'), \
+                patch.object(Path, 'is_file', return_value=True), \
+                patch.object(ros_runtime, 'acquire_experiment_lock') as lock, \
+                patch.object(os, 'execve') as execute:
+            ros_runtime.main()
+        self.assertEqual(execute.call_args.args[1][-len(arguments):], arguments)
+        lock.assert_not_called()
+
     def test_experiment_rejects_unowned_launch_parameters(self):
         import build_ros_workspace as workspace
         for argument in ('controller_python:=/foreign/python', 'use_sim_time:=false', '--show-args'):

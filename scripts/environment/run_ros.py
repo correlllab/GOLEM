@@ -41,9 +41,13 @@ Actuation only after separate approval and safe simulation start verification:
 scripts/run_experiment.sh start_position_verified:=true lowerbody:=fame_finetune
 Alternative standing policy: lowerbody:=almi_manip_stand
 Upper controller: upper_controller:=frame|counter (default frame).
+Same-run comparison requires upper_controller:=counter, including frame trials.
+comparison_order:=frame,counter (CSV; duplicates allowed, e.g. frame,counter,counter,frame).
+Change order between batches: scripts/run_ros.sh param set /frame_task_server comparison_order "counter,frame"
 The lower-body engage_wait_for_confirm interlock remains enabled.
 Start the simulator separately, preferably GOLEM_CAMERA_SCALE=1 scripts/run_simulation.sh.
 Generic CLI: scripts/run_ros.sh topic list
+Generic parameter CLI: scripts/run_ros.sh param set NODE PARAM VALUE
 No launch command installs/builds. Nonzero simulation domain required.
 Offline checks do not qualify live control, balance, or insertion accuracy.''',
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -70,12 +74,18 @@ def main():
     arguments = args.arguments
     if args.experiment:
         allowed = {'start_position_verified', 'lowerbody', 'marker_profile_path',
-                    'publish_annotated', 'image_transport', 'upper_controller'}
+                    'publish_annotated', 'image_transport', 'upper_controller', 'comparison_order'}
         if any(':=' not in arg or arg.split(':=', 1)[0] not in allowed for arg in arguments):
             raise RuntimeError('experiment arguments: start_position_verified:=true|false, '
                                'lowerbody:=fame_finetune|almi_manip_stand, marker_profile_path:=PATH, '
                                 'publish_annotated:=true|false, image_transport:=raw|compressed, '
-                                'upper_controller:=frame|counter only')
+                                'upper_controller:=frame|counter, comparison_order:=frame,counter')
+        for arg in arguments:
+            if arg.startswith('comparison_order:='):
+                value = arg.split(':=', 1)[1]
+                if not value or any(mode.strip() not in ('frame', 'counter')
+                                    for mode in value.split(',')):
+                    raise RuntimeError('comparison_order must be CSV containing only frame or counter')
         if any(arg.startswith('upper_controller:=') and arg.split(':=', 1)[1] not in ('frame', 'counter')
                for arg in arguments):
             raise RuntimeError('upper_controller must be frame or counter')

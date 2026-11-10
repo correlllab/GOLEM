@@ -28,6 +28,9 @@ def _launch(context):
     upper = LaunchConfiguration('upper_controller').perform(context)
     if upper not in ('frame', 'counter'):
         raise RuntimeError('upper_controller must be frame or counter')
+    order = LaunchConfiguration('comparison_order').perform(context)
+    if not order or any(mode.strip() not in ('frame', 'counter') for mode in order.split(',')):
+        raise RuntimeError('comparison_order must be CSV containing only frame or counter')
     verified = LaunchConfiguration('start_position_verified').perform(context)
     if verified not in ('true', 'false'):
         raise RuntimeError('start_position_verified must be true or false')
@@ -62,6 +65,7 @@ def _launch(context):
                 **sim_time, 'use_estop': 'false', 'use_frame_task': 'true',
                 'safety_config': 'sim_safety_split.yaml',
                 'upper_controller': upper,
+                'comparison_order': order,
                 'frame_task_config': ('counter_safety_split.yaml' if upper == 'counter'
                                       else 'sim_safety_split.yaml'),
                 'frame_task_prefix': shlex.quote(python),
@@ -90,6 +94,8 @@ def generate_launch_description():
         DeclareLaunchArgument('upper_controller', default_value='frame',
                               choices=['frame', 'counter'],
                               description='Upper controller backend: frame | counter'),
+        DeclareLaunchArgument('comparison_order', default_value='frame,counter',
+                              description='Comparison CSV, duplicates allowed; counter container required'),
         DeclareLaunchArgument('controller_python', default_value=EnvironmentVariable(
             'GOLEM_CONTROLLER_PYTHON', default_value='')),
         DeclareLaunchArgument('marker_catalog_path', default_value=EnvironmentVariable(

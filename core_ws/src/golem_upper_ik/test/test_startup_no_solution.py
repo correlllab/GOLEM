@@ -1,31 +1,37 @@
-'''
-A start-up move whose IK step has no solution stops the controller with an error that names
-the closest self-collision pairs against controller.d_min, on both robots. On the G1, from
-arms_down (each hand and wrist sphere inside its hip-pitch sphere) the barrier's quadratic
-program has no solution at the first step toward home.
-'''
+"""Check the error of a start-up move whose IK step has no solution, on both robots.
+
+It stops the controller with an error that names the closest self-collision pairs against
+controller.d_min. On the G1, from arms_down (each hand and wrist sphere inside its
+hip-pitch sphere) the barrier's quadratic program has no solution at the first step toward
+home.
+"""
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from pink.exceptions import NoSolutionFound
+from golem_upper_ik.profile import known_robots
 
-ROBOTS = ('h12', 'g1')
+ROBOTS = known_robots()
 
 
 class Logger:
+    """Collect the error lines a controller logs."""
     def __init__(self):
+        """Start with no errors."""
         self.errors = []
 
     def info(self, message):
+        """Drop an info line."""
         pass
 
     def error(self, message):
+        """Keep an error line."""
         self.errors.append(message)
 
 
 def controller_at(model, q_reduced, step):
-    '''An UpperController with only what a start-up move reads, its IK at q_reduced'''
+    """Return an UpperController with only what a start-up move reads, its IK at q_reduced."""
     from golem_upper_ik.core.controller.upper_controller import UpperController
     controller = UpperController.__new__(UpperController)
     controller.robot_model = model
@@ -39,11 +45,12 @@ def controller_at(model, q_reduced, step):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_no_solution_names_the_closest_pairs(models, robot):
-    '''Every pair keeps d_min at home: the error says so and logs the closest pairs'''
+    """At home every pair keeps d_min: the error says so, and the closest pairs are logged."""
     model = models(robot)
     home = model.profile.named_configs['home']
 
     def no_solution(_):
+        """Raise NoSolutionFound, as an infeasible IK step does."""
         raise NoSolutionFound(None, None)
 
     controller = controller_at(model, home, no_solution)
@@ -59,7 +66,7 @@ def test_no_solution_names_the_closest_pairs(models, robot):
 
 
 def test_g1_start_inside_a_pair_says_self_collision(models):
-    '''From arms_down the first IK step toward home has no solution: self-collision'''
+    """From arms_down the first IK step toward home has no solution: self-collision."""
     from golem_upper_ik.core.ik_solver import IKSolver
     from golem_upper_ik.core.robot_model import FixedState
     model = models('g1')
@@ -86,6 +93,7 @@ def test_g1_start_inside_a_pair_says_self_collision(models):
 
 
 def test_closest_pairs_are_sorted_and_counted(models):
+    """closest_collision_pairs returns count pairs, closest first."""
     model = models('g1')
     pairs = model.closest_collision_pairs(model.profile.named_configs['home'], count=5)
     assert len(pairs) == 5

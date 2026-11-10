@@ -1,10 +1,14 @@
 """
-Transform the filtered cloud before scan conversion, without a TF message filter.
+Transform the filtered cloud into the scan's frame before scan conversion.
 
-The G1 can stall Humble's pointcloud_to_laserscan TF filter while walking.
-This adapter uses nonblocking, stamp-exact lookups and a bounded queue instead.
-It preserves FAST-LIO deskewing, point fields and timestamps. OctoMap and floor
-alignment still consume the original body-frame cloud.
+Humble's pointcloud_to_laserscan TF message filter can stall while the G1 walks, so
+the scan reads this node's output in target_frame instead. Each cloud waits in a
+bounded queue for the transform at its own stamp (non-blocking lookups), keeping
+FAST-LIO's deskewing, every point field and the stamp. OctoMap and level_odom read
+the body-frame cloud, not this one.
+
+Subscribes cloud_in, publishes cloud_out (sensor_msgs/PointCloud2, sensor-data QoS).
+ROS parameter: target_frame.
 """
 from collections import deque
 from copy import deepcopy
@@ -20,8 +24,10 @@ from golem_slam.self_filter import cloud_points
 
 
 class LevelCloud(Node):
+    """Republish each cloud in target_frame once TF has the transform at its stamp."""
 
     def __init__(self):
+        """Declare target_frame and start the subscription and the 50 Hz retry timer."""
         super().__init__('level_cloud')
         self.target_frame = self.declare_parameter('target_frame', 'base_footprint').value
         self.pending = deque(maxlen=20)  # at most two seconds at the sensor's 10 Hz
@@ -32,6 +38,7 @@ class LevelCloud(Node):
         self.create_timer(0.02, self._drain)
 
     def _on_cloud(self, msg):
+        """Queue the cloud, dropping the oldest when full, and publish what is ready."""
         if len(self.pending) == self.pending.maxlen:
             self.get_logger().warn('dropping oldest cloud waiting for scan-frame TF',
                                    throttle_duration_sec=5.0)
@@ -39,7 +46,8 @@ class LevelCloud(Node):
         self._drain()
 
     def _drain(self):
-        # A missing old transform must not prevent a newer transformable scan.
+        """Publish every queued cloud whose transform is in TF; keep the rest queued."""
+        # A missing old transform must not hold back a newer transformable cloud.
         waiting = []
         while self.pending:
             msg = self.pending.popleft()
@@ -68,6 +76,7 @@ class LevelCloud(Node):
 
 
 def main(args=None):
+    """Run the level_cloud node."""
     rclpy.init(args=args)
     node = LevelCloud()
     try:

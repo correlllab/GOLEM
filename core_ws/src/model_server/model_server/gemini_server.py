@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-gemini_server — ROS 2 service node exposing custom_ros_messages/srv/GeminiQuery.
+Serve custom_ros_messages/srv/GeminiQuery on `gemini_query`: image and/or prompt in, text out.
 
-Send an image and/or a text prompt; get Gemini's free-form text answer back.
-
-Uses an env-var API key (GEMINI_API_KEY / GOOGLE_API_KEY), the GEMINI_MODEL
-constant below, and a GEMINI_MAX_RETRIES retry loop, with a general
-spatial-reasoning system prompt (SYSTEM_INSTRUCTION) and no forced JSON mime type,
-so the caller's prompt chooses the output format (plain text, JSON, coordinates).
+The node calls GEMINI_MODEL with the API key from GEMINI_API_KEY (or
+GOOGLE_API_KEY), retrying up to GEMINI_MAX_RETRIES times, under a general
+spatial-reasoning system prompt (SYSTEM_INSTRUCTION). No response MIME type is
+forced, so each caller's prompt chooses the output format (plain text, JSON,
+coordinates).
 """
 import os
 import time
@@ -26,33 +25,29 @@ from custom_ros_messages.srv import GeminiQuery
 
 from model_server.model_logging import ModelLogger, declare_logging_params
 
-# ----- config -----
 GEMINI_MODEL = "gemini-robotics-er-2-preview"
 GEMINI_MAX_RETRIES = 4
-# Per-attempt HTTP timeout in MILLISECONDS (google-genai expects ms). The SDK
-# sets NO timeout by default and passes timeout=None straight to httpx, so a
-# stalled/half-open socket makes generate_content() block FOREVER — the retry
-# loop below never fires because a hang is not an exception. With this set, a
-# stall raises after the deadline and the loop can retry / fail cleanly.
-# 210 s sits just under the skills client's 240 s GEMINI_TIMEOUT_SEC, so the
-# first attempt gets the full budget before that ceiling fires (a retry would
-# push past it, so under the live skill expect ~one full-length attempt).
+# ms per attempt (google-genai takes milliseconds). The SDK's default is no
+# timeout, and a stalled socket then blocks generate_content() forever: a hang
+# is not an exception, so the retry loop never runs. 210 s is just under
+# golem_skills' 240 s GEMINI_TIMEOUT_SEC, so the first attempt gets the full
+# budget; under a skill a retry would outlast the caller.
 GEMINI_HTTP_TIMEOUT_MS = 210_000
-# "Thinking" (reasoning) token budget for Robotics-ER. UNSET defaults to dynamic
-# (-1): the model self-allocates a variable amount of reasoning per request, which
-# is the main reason latency swings wildly (a few seconds to >170 s on the same
-# detection). 0 DISABLES thinking — Google's Robotics-ER docs use thinking_budget=0
-# for object detection / pointing / bounding boxes (our use), giving the lowest,
-# most consistent latency. Raise it (e.g. 1024) or set -1 only if a caller needs
-# complex spatial reasoning (counting, gauge reading) at the cost of latency.
+# Robotics-ER's reasoning-token budget. Unset means dynamic (-1): the model
+# picks a different amount of reasoning per request, and latency then ranges
+# from seconds to over 170 s on the same detection. 0 disables reasoning, as
+# Google's Robotics-ER docs do for detection, pointing and bounding boxes (this
+# service's use), for the lowest, steadiest latency. Raise it (e.g. 1024) or
+# set -1 only for a caller that needs complex spatial reasoning (counting,
+# gauge reading).
 GEMINI_THINKING_BUDGET = 0
 
 
-# Robust, task-agnostic system prompt for the shared gemini_query service. It
-# pins output discipline (obey the caller's format; JSON-only when JSON is asked,
-# no fences) and the image-coordinate convention (normalized 0-1000, y-first,
-# box_2d=[y1,x1,y2,x2]) so downstream parsers — e.g. the grasp skill's box parse
-# — are reliable, without forcing any one output format on every caller.
+# Task-agnostic system prompt of the shared service: it fixes output discipline
+# (follow the caller's format; JSON only, without fences, when JSON is asked)
+# and the coordinate convention (normalized 0-1000, y first,
+# box_2d = [y1, x1, y2, x2]) that the callers' box parsers rely on, without
+# forcing one output format on every caller.
 SYSTEM_INSTRUCTION = """\
 You are a precise visual-perception and spatial-reasoning assistant for a humanoid robot. \
 You are given a camera image together with a question or instruction, \
@@ -79,16 +74,20 @@ score if the requested format includes one).
 
 
 def _wrap(text, width):
-    """Wrap text to lines of at most `width` chars for the overlay caption."""
+    """Wrap `text` to lines of at most `width` characters for the overlay caption."""
     import textwrap
     text = (text or "").replace("\n", " ")
     return textwrap.wrap(text, width) or [""]
 
 
 def _extract_boxes(text):
-    """Best-effort: pull "box_2d": [y1,x1,y2,x2] boxes (normalized 0-1000, y first)
-    out of a Gemini JSON answer. Strips ```json fences and tolerates a bare object
-    or array. Returns a list of [y1,x1,y2,x2] (empty when none/unparseable)."""
+    """
+    Return the "box_2d" boxes of a Gemini JSON answer as [y1, x1, y2, x2] lists.
+
+    Coordinates are normalized to 0-1000, y first. Strips ```json fences and
+    accepts a bare object or an array; returns [] when there is none or the
+    answer does not parse.
+    """
     import json
     import re
     if not text:
@@ -120,31 +119,27 @@ def _extract_boxes(text):
 
 
 class GeminiServer(Node):
+    """Serve gemini_query with the Gemini API."""
+
     def __init__(self):
+        """Create the Gemini client and the service; raise RuntimeError without an API key."""
         super().__init__("gemini_server")
         self.bridge = CvBridge()
         log, viz, clear = declare_logging_params(self)
         self.logger = ModelLogger(self, 'gemini', 'model_server', __file__,
                                   log=log, visualize=viz, clear=clear)
 
-        # Model from the constant above; API key from the environment.
         self.model = GEMINI_MODEL
         api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
         if not api_key:
             raise RuntimeError(
                 "GEMINI_API_KEY not set — export it before running gemini_server "
                 "(get a key at https://aistudio.google.com/apikey)")
-        # http_options.timeout (ms) bounds each call so a stalled network raises
-        # instead of hanging generate_content() indefinitely — see the constant.
         self.client = genai.Client(
             api_key=api_key,
             http_options=types.HttpOptions(timeout=GEMINI_HTTP_TIMEOUT_MS),
         )
 
-        # General-purpose spatial-reasoning config: a robust system_instruction
-        # (format obedience + the 0-1000 y-first coordinate convention) but no
-        # forced response_mime_type — callers choose their own output format
-        # (plain text, JSON, ...) in their prompt.
         self.gen_config = types.GenerateContentConfig(
             system_instruction=SYSTEM_INSTRUCTION,
             safety_settings=[
@@ -154,15 +149,13 @@ class GeminiServer(Node):
                 ),
             ],
             temperature=0.1,
-            # Pin the reasoning budget (see GEMINI_THINKING_BUDGET) so detection
-            # latency is low and consistent instead of dynamically variable.
             thinking_config=types.ThinkingConfig(
                 thinking_budget=GEMINI_THINKING_BUDGET),
         )
         self.max_retries = GEMINI_MAX_RETRIES
 
-        # Network-bound + stateless per call, so a reentrant group + multithreaded
-        # executor lets concurrent requests run without serializing.
+        # calls are network-bound and stateless, so concurrent requests run in
+        # parallel (reentrant group, multithreaded executor)
         self.srv = self.create_service(
             GeminiQuery, "gemini_query", self.query_callback,
             callback_group=ReentrantCallbackGroup(),
@@ -170,6 +163,12 @@ class GeminiServer(Node):
         self.get_logger().info(f"gemini_server ready (model={self.model})")
 
     def query_callback(self, request, response):
+        """
+        Answer one GeminiQuery: send the image and/or prompt to Gemini, retrying on errors.
+
+        Fails (success false, message set) on an undecodable image, an empty
+        request, or GEMINI_MAX_RETRIES failed attempts.
+        """
         t_start = time.monotonic()
         rec = self.logger.start()
         rec.set(prompt=request.prompt, has_image=len(request.image.data) > 0,
@@ -182,7 +181,6 @@ class GeminiServer(Node):
             f"request received: image={has_image} prompt={preview!r} "
             f"(model={self.model})")
 
-        # Build the Gemini contents list from whichever inputs were provided.
         contents = []
         rgb = None
         if has_image:
@@ -209,9 +207,8 @@ class GeminiServer(Node):
             rec.finish(success=False, message=response.message)
             return response
 
-        # Retry loop. Gemini calls are slow (the grasp model can take minutes), so
-        # log when each attempt starts and how long it waited — operators otherwise
-        # can't tell a slow call from a hung one.
+        # Each attempt's start and wait are logged: a call can take minutes, and
+        # without the log a slow call looks like a hung one.
         errors = []
         while len(errors) < self.max_retries:
             attempt = len(errors) + 1
@@ -239,8 +236,6 @@ class GeminiServer(Node):
                     f"Gemini responded in {wait:.2f}s ({len(boxes)} box(es), "
                     f"{len(response.response)} chars); total "
                     f"{time.monotonic() - t_start:.2f}s")
-                # Print the model output itself so operators see what Gemini
-                # actually answered (not just timing/length).
                 self.get_logger().info(f"Gemini response: {response.response}")
                 return response
             except Exception as e:
@@ -260,9 +255,12 @@ class GeminiServer(Node):
         return response
 
     def _save_gemini_overlay(self, rec, rgb, prompt, answer, boxes=()):
-        """Save the input image with any returned bounding box(es) drawn on it and
-        the prompt + answer as a caption banner. `boxes` are [y1,x1,y2,x2]
-        normalized to 0-1000 (y first). Visualization-only; skipped without an image."""
+        """
+        Save the input image with the answer's boxes drawn and a prompt/answer caption.
+
+        `boxes` are [y1, x1, y2, x2] normalized to 0-1000. Only with
+        enable_visualization on and an image in the request.
+        """
         if not self.logger.visualize or rgb is None:
             return
         try:
@@ -286,6 +284,7 @@ class GeminiServer(Node):
 
 
 def RunGeminiServer(args=None):
+    """Spin a GeminiServer on a MultiThreadedExecutor until interrupted."""
     rclpy.init(args=args)
     node = GeminiServer()
     executor = MultiThreadedExecutor()

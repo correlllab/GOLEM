@@ -1,8 +1,10 @@
-"""Per-skill mixin classes for SkillsNode.
+"""
+Collect the per-skill mixin classes SkillsNode inherits from.
 
-Each module defines one mixin whose _exec_* method operates on `self`; SkillsNode
-(golem_skills/node.py) multiply-inherits from SkillsBase plus every mixin here, so
-the bodies resolve self.detect_grasp/self.move_frame_to/... at runtime."""
+Each module defines one mixin whose `_exec_<name>` method runs on the
+SkillsNode instance, so it calls SkillsBase's clients and primitives through
+`self`.
+"""
 
 from .open_door import OpenDoorSkill
 from .close_door import CloseDoorSkill

@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
-"""Per-model debug logging + visualization for the perception/skill nodes.
+"""
+Log each model call's inputs, outputs and overlays to disk, behind two ROS parameters.
 
-A small, dependency-light helper each model node (graspgen / gemini / sam /
-skills) instantiates from two ROS parameters:
+Each model node (gemini, sam, graspgen, yolo, and golem_skills' skills node)
+declares the parameters with declare_logging_params:
 
-    enable_logging        save raw inputs/outputs + a per-call metadata record
+    enable_logging        save raw inputs/outputs and a per-call metadata record
     enable_visualization  save annotated overlay images
-    clear_logs            wipe this model's log dir on startup (default true)
+    clear_logs            wipe this model's log directory at startup (default true)
 
-Output goes to a package-relative tree so it persists on the host through the
+Output goes to a package-relative tree, so it persists on the host through the
 core_ws bind mount and survives container restarts:
 
     <package>/logs/<model_name>/
         calls.jsonl                  one JSON line per call (when enabled)
         <id>_<tag>.{png,npy,txt}     per-call artifacts
 
-<id> is "<YYYYmmdd_HHMMSS_mmm>_<seq>" so artifacts sort chronologically and
-group by call. Set MODEL_LOG_DIR to override the output root (mainly for tests).
+<id> is "<YYYYmmdd_HHMMSS_mmm>_<seq>", so artifacts sort chronologically and
+group by call. MODEL_LOG_DIR overrides the output root.
 
-This module is intentionally duplicated verbatim in golem_skills and
-model_server — they are independent ROS packages with no shared dependency.
-Keep the copies in sync.
+golem_skills imports this module from model_server (its exec_depend).
 """
 
 import json
@@ -34,13 +33,13 @@ import numpy as np
 
 
 def _log_root(pkg_name, anchor_file):
-    """Resolve "<package>/logs" for pkg_name (the per-model subdir is appended by
-    ModelLogger).
+    """
+    Return the "<package>/logs" directory of `pkg_name`; ModelLogger appends the model's subdir.
 
-    Order: MODEL_LOG_DIR override -> the bind-mounted source tree
-    (/home/code/core_ws/src/<pkg>) -> walk up from anchor_file to the dir
-    holding package.xml -> cwd. The source-tree branch is what makes output
-    persist on the host (the nodes run from build/, which a clean rebuild wipes).
+    In order: MODEL_LOG_DIR; the bind-mounted source tree
+    (/home/code/core_ws/src/<pkg>), so output persists on the host rather than
+    in a build/ or install/ tree a clean rebuild wipes; the directory holding
+    package.xml above `anchor_file`; the working directory.
     """
     override = os.environ.get('MODEL_LOG_DIR')
     if override:
@@ -60,7 +59,7 @@ def _log_root(pkg_name, anchor_file):
 
 
 def _imwrite(path, img, rgb):
-    """Write an image with cv2 (lazy import). img is BGR unless rgb=True."""
+    """Write an image with OpenCV; `img` is BGR unless `rgb`."""
     import cv2
     img = np.asarray(img)
     if rgb and img.ndim == 3 and img.shape[2] == 3:
@@ -69,10 +68,15 @@ def _imwrite(path, img, rgb):
 
 
 class _Call:
-    """One model invocation's artifact sink. Every method is gated by the parent
-    logger's flags, so node code can call them unconditionally."""
+    """
+    Collect one model call's artifacts and metadata record.
+
+    Every save is gated by the parent logger's toggles, so node code calls
+    them unconditionally.
+    """
 
     def __init__(self, logger, seq):
+        """Start the call's latency clock and name its artifacts by time and `seq`."""
         self._logger = logger
         self._t0 = time.monotonic()
         stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]
@@ -80,43 +84,47 @@ class _Call:
         self.meta = {'id': self.id, 'model': logger.model_name}
 
     def path(self, tag, ext):
-        """Absolute path for an artifact of this call (caller writes it itself)."""
+        """Return the absolute path of this call's `tag` artifact; the caller writes it."""
         return os.path.join(self._logger.dir, f'{self.id}_{tag}.{ext}')
 
     def set(self, **fields):
-        """Merge metadata fields into this call's JSONL record."""
+        """Merge `fields` into this call's metadata record; return self."""
         self.meta.update(fields)
         return self
 
-    # --- raw artifacts: gated on enable_logging --------------------------------
     def save_image(self, tag, img, rgb=False):
+        """Save an input/output image as PNG when enable_logging is on."""
         if self._logger.log:
             self._safe(lambda: _imwrite(self.path(tag, 'png'), img, rgb), tag)
 
     def save_array(self, tag, arr):
+        """Save an array as .npy when enable_logging is on."""
         if self._logger.log:
             self._safe(lambda: np.save(self.path(tag, 'npy'), np.asarray(arr)), tag)
 
     def save_text(self, tag, text):
+        """Save text as .txt when enable_logging is on."""
         if self._logger.log:
             def _w():
+                """Write the text file."""
                 with open(self.path(tag, 'txt'), 'w') as f:
                     f.write('' if text is None else str(text))
             self._safe(_w, tag)
 
-    # --- annotated overlays: gated on enable_visualization ---------------------
     def save_overlay(self, tag, img, rgb=False):
+        """Save an annotated image as PNG when enable_visualization is on."""
         if self._logger.visualize:
             self._safe(lambda: _imwrite(self.path(tag, 'png'), img, rgb), tag)
 
     def _safe(self, fn, tag):
+        """Run the write `fn`; a failure is logged, never raised (logging never fails a call)."""
         try:
             fn()
-        except Exception as e:  # logging must never take down the service
+        except Exception as e:
             self._logger._warn(f'failed to write {tag}: {e}')
 
     def finish(self, success=None, message=None):
-        """Append the metadata record (latency auto-filled). Call once per call."""
+        """Append the metadata record, with latency_ms filled in, to calls.jsonl; call once."""
         if success is not None:
             self.meta['success'] = bool(success)
         if message is not None:
@@ -132,37 +140,50 @@ class _Call:
 
 
 class _NullCall:
-    """No-op call returned when both toggles are off — keeps node code branch-free."""
+    """Accept and ignore every _Call method, so node code needs no branch when output is off."""
+
     id = ''
 
     def path(self, *a, **k):
+        """Return os.devnull."""
         return os.devnull
 
     def set(self, **_):
+        """Ignore the fields; return self."""
         return self
 
     def save_image(self, *a, **k):
+        """Do nothing."""
         pass
 
     def save_array(self, *a, **k):
+        """Do nothing."""
         pass
 
     def save_text(self, *a, **k):
+        """Do nothing."""
         pass
 
     def save_overlay(self, *a, **k):
+        """Do nothing."""
         pass
 
     def finish(self, *a, **k):
+        """Do nothing."""
         pass
 
 
 class ModelLogger:
-    """Owns the per-model output dir and the two toggles. Construct from ROS
-    params; call start() once per request to get a per-call artifact sink."""
+    """
+    Own one model's output directory and its logging and visualization toggles.
+
+    Construct from the declare_logging_params values; call start() once per
+    request to get that call's artifact sink.
+    """
 
     def __init__(self, node, model_name, pkg_name, anchor_file,
                  log=False, visualize=False, clear=False):
+        """Resolve the output directory, clear it when asked, and create it when output is on."""
         self._node = node
         self.model_name = model_name
         self.log = bool(log)
@@ -171,8 +192,7 @@ class ModelLogger:
         self._meta_path = os.path.join(self.dir, 'calls.jsonl')
         self._lock = threading.Lock()
         self._seq = 0
-        # Wipe this model's log dir on startup so each run begins fresh (independent
-        # of the log/viz toggles — clears stale artifacts even when output is off).
+        # cleared whatever the toggles say, so stale artifacts go even with output off
         if clear:
             self._clear_dir()
         if self.enabled:
@@ -185,7 +205,7 @@ class ModelLogger:
                 self.log = self.visualize = False
 
     def _clear_dir(self):
-        """Remove any existing contents of this model's log dir (best-effort)."""
+        """Remove this model's log directory, best-effort."""
         try:
             if os.path.isdir(self.dir):
                 shutil.rmtree(self.dir)
@@ -195,10 +215,11 @@ class ModelLogger:
 
     @property
     def enabled(self):
+        """Return True when logging or visualization is on."""
         return self.log or self.visualize
 
     def start(self):
-        """Begin a call. Returns a sink; a no-op sink when both toggles are off."""
+        """Begin a call; return its sink, a no-op one when both toggles are off."""
         if not self.enabled:
             return _NullCall()
         with self._lock:
@@ -207,16 +228,17 @@ class ModelLogger:
         return _Call(self, seq)
 
     def _info(self, msg):
+        """Log `msg` at info level, tagged with the model name."""
         self._node.get_logger().info(f'[{self.model_name} log] {msg}')
 
     def _warn(self, msg):
+        """Log `msg` at warn level, tagged with the model name."""
         self._node.get_logger().warn(f'[{self.model_name} log] {msg}')
 
 
 def declare_logging_params(node, *, log_default=False, viz_default=False,
                            clear_default=True):
-    """Declare the standard toggles on `node` and return (log, visualize, clear).
-    `clear_logs` defaults True: the model's log dir is wiped on startup."""
+    """Declare enable_logging, enable_visualization and clear_logs on `node`; return the values."""
     log = node.declare_parameter('enable_logging', log_default).value
     viz = node.declare_parameter('enable_visualization', viz_default).value
     clear = node.declare_parameter('clear_logs', clear_default).value

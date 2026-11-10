@@ -1,5 +1,5 @@
 r"""
-Real G1, with the whole ROS stack running on the laptop wired to the robot.
+Start the real G1, with the whole ROS stack on the laptop wired to the robot.
 
     ros2 launch golem_bringup g1_real_robot.launch.py   # the arms; the legs stay off
     ros2 launch golem_bringup g1_real_robot.launch.py start_position_verified:=true
@@ -11,7 +11,7 @@ Before launching:
   on rt/lowcmd, from the moment golem_safety starts. Nothing in this stack
   enters debug mode or checks that the robot is in it.
 - The gantry carries the robot whenever the legs are off: they hang limp until
-  the walking node commands them, and split.yaml's estop turns every motor off.
+  the leg node commands them, and split.yaml's estop turns every motor off.
 - ROS_DOMAIN_ID=0 (the robot's DDS domain) in docker/.env.
 - Nothing else may be commanding rt/lowcmd or rt/dex3/*: two publishers fight
   over the motors.
@@ -20,28 +20,31 @@ Before launching:
   0.3 rad/s per joint.
 
 golem_safety runs split.yaml: it writes every motor on rt/lowcmd, the legs
-from the walking node's input and the waist and arms from the arm
+from the leg node's input and the waist and arms from the arm
 controller's (g1_split.yaml). From boot it streams zero gains on every motor
 (every motor off) and engages each input on its own first command: the arms on
 the controller's first command, and the move to home starts once the
 controller sees golem_safety relay it on rt/lowcmd.
 
 The legs:
-- start_position_verified gates the legs. Without it (the default) HOMIE's
-  walking node does not start: the leg motors stay off on golem_safety's
-  zero-gain stream while the arms run. Set start_position_verified:=true only
-  after checking the robot is in a safe start pose.
-- With it, the walking node (g1_homie's g1.yaml) waits for golem_safety's
-  heartbeat, upright rt/lowstate and the arm controller's commands, moves the
-  legs from where they are to the policy's default pose over 2 s, and holds
-  that pose. golem_safety engages the leg input on its first command.
-- /lowerbody/confirm_engage starts the policy. Check the stance, then
+- start_position_verified gates the legs. Without it (the default) the leg
+  node does not start: the leg motors stay off on golem_safety's zero-gain
+  stream while the arms run. Set start_position_verified:=true only after
+  checking the robot is in a safe start pose.
+- With it, the leg node (golem_lowerbody_rl's lowerbody_controller_node,
+  running HOMIE on its config/g1/real.yaml) waits for golem_safety's heartbeat
+  and upright rt/lowstate, moves the legs from where they are to the policy's
+  default pose over 2 s, and holds that pose. golem_safety engages the leg
+  input on its first command.
+- /lowerbody/confirm_engage starts the policy, once rt/lowstate has been
+  steady for 1 s and the arm controller commands (the node logs why it waits).
+  Check the stance, then
   `ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger`; until
   then the legs hold the default pose. The policy starts at zero velocity and
   0.74 m height and walks on /cmd_vel.
 - A false or missing heartbeat (golem_safety's estop latched, or it stopped)
-  stops the walking node for good. If the node stops on a stale or fallen
-  state, a non-finite IMU value or a late command, golem_safety keeps relaying
+  stops the leg node for good. If the node stops on a stale or fallen state, a
+  non-finite IMU value or a failed policy step, golem_safety keeps relaying
   its last leg command, which does not balance the robot, and reports the
   quiet input (input_quiet) 0.2 s later. It does not estop on it: the command
   stands until golem_safety estops for another reason (a fall that drives a
@@ -51,17 +54,17 @@ The legs:
   zero, keep_writing) turns every motor off and keeps writing that command.
 
 This launch refuses sim configs (any sim_* safety_config), and the controller
-config follows safety_config (g1_split with split); g1_core's docstring lists
-every setting it refuses. When the controller exits it sends one last command,
-with zero gains on the arms; the waist keeps its hold and golem_safety relays
-it, so only the arms go limp. The controller stops with an error if
-rt/lowstate does not arrive within 5 s, if golem_safety has not relayed its
-commands within 30 s, or if the move to home is not done within 30 s after
-that. use_nav (default true) starts the MID-360 driver
-(g1_real_drivers.launch.py) and golem_slam on g1_fastlio.yaml: FAST_LIO,
-slam_toolbox and Nav2, which drives the walking node through /cmd_vel once it
-runs. Neither has been run on our G1. Skills are not part of the real G1
-bringup yet.
+config follows safety_config (golem_upper_ik's config/g1/pairing.yaml);
+g1_core's docstring lists every setting it refuses. When the controller exits
+it sends one last command, with zero gains on the arms; the waist keeps its
+hold and golem_safety relays it, so only the arms go limp. The controller
+stops with an error if rt/lowstate does not arrive within 5 s, if golem_safety
+has not relayed its commands within 30 s, or if the move to home is not done
+within 30 s after that. use_nav (default true) starts the MID-360 driver
+(g1_real_drivers.launch.py) and golem_slam on config/g1/fastlio.yaml: FAST_LIO,
+slam_toolbox and Nav2, which drives the leg node through /cmd_vel once it
+runs. Unmeasured on the real G1: the driver and navigation have not run on it.
+Skills are not part of the real G1 bringup.
 
 Hazards not handled in code:
 - A controller that dies without its last command leaves the waist + arms
@@ -88,48 +91,49 @@ Hazards not handled in code:
   start" error says how many of them are inside controller.d_min. Hanging
   freely in the sim, the wrists rest on the hips with their spheres 20 mm
   from the hip spheres; arms_down (elbows at pi/2) is inside them.
-- The gains are not tuned on our G1: the waist's damping ratio is
+- The gains are unmeasured on the real G1: the waist's damping ratio is
   about 0.42-0.45 at home (g1_split.yaml).
 """
 
-import os
-
-from ament_index_python.packages import get_package_share_directory
+from golem_bringup.include import include
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
-    core = os.path.join(get_package_share_directory('golem_bringup'), 'launch', 'g1',
-                        'g1_core.launch.py')
+    """Declare the real bringup's arguments and include g1_core with sim:=false."""
     return LaunchDescription([
-        DeclareLaunchArgument('use_rviz', default_value='true'),
-        DeclareLaunchArgument('use_hands', default_value='true'),
+        DeclareLaunchArgument('use_rviz', default_value='true',
+                              description='true: start RViz'),
+        DeclareLaunchArgument('use_hands', default_value='true',
+                              description='true: start dex3_hands, the Dex3-1 hand driver, '
+                                          'which writes rt/dex3/* outside golem_safety'),
         DeclareLaunchArgument('safety_config', default_value='split',
                               description='golem_safety config, a name under its config/g1/ '
                                           'or a path'),
-        # the leg-control interlock
+        # SAFETY: the leg-control interlock, false by default.
         DeclareLaunchArgument(
             'start_position_verified', default_value='false',
-            description="HOMIE's walking node on the legs: true only after checking the "
-                        'robot is in a safe start pose'),
+            description="true only after checking the robot is in a safe start pose: "
+                        "starts the leg node, HOMIE on the legs"),
         DeclareLaunchArgument('use_nav', default_value='true',
-                              description='the MID-360 driver and golem_slam (FAST_LIO, '
-                                          'slam_toolbox, Nav2)'),
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(core),
-            launch_arguments={
+                              description='true: start the MID-360 driver and golem_slam '
+                                          '(FAST-LIO, slam_toolbox, Nav2)'),
+        # The whole stack.
+        include(
+            'golem_bringup', 'g1/g1_core.launch.py',
+            {
                 'sim': 'false',
                 'use_sim_time': 'false',
                 'use_rviz': LaunchConfiguration('use_rviz'),
                 'use_hands': LaunchConfiguration('use_hands'),
                 'safety_config': LaunchConfiguration('safety_config'),
-                # the one safety_config runs with: g1_split with split
+                # Empty: the one golem_upper_ik's config/g1/pairing.yaml pairs with
+                # safety_config.
                 'controller_config': '',
                 'start_position_verified': LaunchConfiguration('start_position_verified'),
                 'use_nav': LaunchConfiguration('use_nav'),
-            }.items(),
+            },
         ),
     ])

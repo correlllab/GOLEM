@@ -1,1 +1,1 @@
-'''Dex3-1 hand driver for the Unitree G1'''
+"""Drive the Unitree G1's Dex3-1 hands over Unitree DDS."""

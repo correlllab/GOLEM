@@ -45,9 +45,9 @@ only way out of the sim loop, and checks that it exits.
   during the window.
 
 `rate_hz` is per second of simulated time, so it does not depend on how fast the machine runs the
-sim. The exception is a topic that the sim publishes from a wall-clock timer (the gripper state,
-10 Hz like the real driver); its `rate_clock` is `wall` and `WALL_TIMER_TOPICS` in `probe.py` lists
-it. The window length and the other timings are `probe.py` arguments.
+sim or on `GOLEM_SIM_RATE` (the probe clears it): both sims publish every topic on sim time, the
+gripper state included (10 Hz of sim time, like the real driver's 10 Hz), so every topic's
+`rate_clock` is `sim`. The window length and the other timings are `probe.py` arguments.
 
 ## Comparison
 

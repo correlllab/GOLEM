@@ -1,32 +1,39 @@
-# CLAUDE.md — GOLEM developer guide for coding agents
+# CLAUDE.md / AGENTS.md — GOLEM developer guide for coding agents
 
-The safety layer and the arm controller of both robots (`golem_safety`,
-`golem_upper_ik`), the bringup package (`golem_bringup`) and the start-ups it
-runs, the models (`golem_ros2_models`, `CL_Assets/g1`), the robot selection, the G1 text (its packages, sim, start-up and
-invariants), the `mode_machine` identity check, the package tables and the
-stale-install pitfall were checked against the code on 2026-10-28; the
-DDS-domain rules and the H1-2 claims beside them on 2026-10-26; the rest was
-verified on 2026-07-12. Where older docs or script comments disagree with the
-code, the code wins (known stale spots are flagged inline).
+The packages both robots run (`golem_safety`, `golem_upper_ik`, `golem_slam`,
+`golem_lowerbody_rl`: their per-robot configs and launch files, and the
+bringups that include them), the H1-2's raw-frame lidar, the RoboCasa sims'
+Unitree DDS interfaces, the leg node's start-up on both robots, the `ros`
+container's mounts and checks, the HOMIE licence rule, the package tables,
+the G1's packages and the closed-loop tests were checked against the code on
+2026-11-05; the single platform (§2, §3, §9) and the RoboCasa sims' GPU
+requirement (§8) on 2026-11-09; the models
+(`golem_ros2_models`, `CL_Assets/g1`), the robot selection, the rest of the G1
+text (its sim and invariants), the `mode_machine` identity check and the
+stale-install pitfall on 2026-10-28; the DDS-domain rules and the H1-2 claims
+beside them on 2026-10-26; the rest was verified on 2026-07-12. Where older
+docs or script comments disagree with the code, the code wins (known stale
+spots are flagged inline).
 
 ## 1. Project overview
 
 GOLEM (Generalized Open Layered Embodied Modules) is the software stack for two
 Unitree humanoids, the H1-2 and the G1 (29 DoF, two Dex3-1 hands). The H1-2 has
 MuJoCo/RoboCasa and Isaac Lab simulators and a ROS 2 Humble workspace
-(drivers, upper-body IK control, lower-body MPC/RL locomotion, safety layer,
+(drivers, upper-body IK control, lower-body RL locomotion, safety layer,
 perception model servers, and an LLM-callable skills layer), all running in
 separate Docker containers that share one DDS domain. The G1 has its own
-packages in the same workspace (`g1_homie`, HOMIE's walking policy; `dex_3`,
-the Dex3-1 hands) and a RoboCasa sim (no Isaac). Both robots' models
-are in `CL_Assets`, installed for ROS by one package, `golem_ros2_models`.
-Both robots run one safety layer, `golem_safety`, and one arm IK controller,
-`golem_upper_ik`, each with a profile per robot, and start from one bringup
-package, `golem_bringup`. Each robot speaks its own Unitree DDS interface
+package in the same workspace (`dex_3`, the Dex3-1 hands) and a RoboCasa sim
+(no Isaac). Both robots' models are in `CL_Assets`, installed for ROS by one
+package, `golem_ros2_models`. Both robots run one safety layer,
+`golem_safety`, one arm IK controller, `golem_upper_ik`, and one leg
+controller, `golem_lowerbody_rl` (HOMIE's walking policy on the G1), each
+configured per robot, and start from one bringup package, `golem_bringup`. Each robot speaks its own Unitree DDS interface
 (`rt/lowcmd` / `rt/lowstate`, and on the G1 also `rt/dex3/*`) identically
 against its sim and the real robot, so code moves between them unchanged. The
 G1 runs in Unitree's debug mode: Unitree's own controller is released, and the
-stack drives every motor on `rt/lowcmd`, as on the H1-2.
+stack drives every motor on `rt/lowcmd`, as on the H1-2. The stack runs on one
+platform, x86 Linux with an NVIDIA GPU.
 
 The H1-2 is the default everywhere. `GOLEM_ROBOT=g1` or `--g1` on a simulator or
 stack wrapper selects the G1 where the attached robot matters: the sim and
@@ -38,17 +45,15 @@ pages are in `docs/g1/` (start at `docs/g1/index.md`).
 
 | Path | What it is |
 |---|---|
-| `docker/` | x86 setup — the fully-featured, preferred platform (Dockerfiles, `docker-compose.yml`, the G1 overlay `docker-compose.g1.yml`, `scripts/`) |
-| `docker/mac/` | self-contained Apple-Silicon (arm64, CPU-only) port — limited: H1-2 only, no Isaac, no ML/vision stack, FastDDS instead of CycloneDDS |
-| `core_ws/` | the ROS 2 workspace — where the bulk of development happens (see §4); the G1's packages are `core_ws/src/g1_homie/` and `core_ws/src/dex_3/`, the safety layer, arm controller, SLAM/navigation and skills both robots run in `core_ws/src/golem_safety/`, `core_ws/src/golem_upper_ik/`, `core_ws/src/golem_slam/` and `core_ws/src/golem_skills/` |
+| `docker/` | the images and containers (Dockerfiles, `docker-compose.yml`, the G1 overlay `docker-compose.g1.yml`, `scripts/`) |
+| `core_ws/` | the ROS 2 workspace — where the bulk of development happens (see §4); the G1's own package is `core_ws/src/dex_3/`, the safety layer, arm controller, leg controller, SLAM/navigation and skills both robots run in `core_ws/src/golem_safety/`, `core_ws/src/golem_upper_ik/`, `core_ws/src/golem_lowerbody_rl/`, `core_ws/src/golem_slam/` and `core_ws/src/golem_skills/` |
 | `golem_robocasa/` | RoboCasa/MuJoCo simulator entry point for both robots (`h12_mujoco.py`; `--g1` hands over to the G1 sim package `golem_robocasa/g1/`) and the ROS/DDS bridges |
 | `CL_isaaclab_sim/` | Isaac Lab simulator, H1-2 only (`sim_main.py`, DDS bridges, tasks) |
 | `CL_Assets/` | both robots' URDFs, MJCFs, meshes and self-collision models (the G1's in `CL_Assets/g1/`), Isaac USD (Git-LFS submodule); `golem_ros2_models` installs the models for ROS, and the sims read them directly |
-| `mujoco_mpc/` | MuJoCo-MPC fork submodule (built standalone, outside colcon — see §8) |
 | `unitree_sdk2_python/` | vendored Unitree DDS SDK (Python) |
-| `tests/` | simulator regression and acceptance tests (`tests/README.md`); the G1 acceptance tests are in `tests/g1/` |
-| `tools/` | standalone debug tools (ROS MCP server for Claude Code; `read_lowstate.py`, which prints the real G1's `rt/lowstate`) |
-| `docs/` | user-facing docs: `SETUP.md`, `RUNNING.md`, `MACOS.md`, `DDS_TUNING.md`, `DOCKER_TESTING.md`, `NAVIGATION_DEMO.md`, `ROS_MCP_DEBUG.md`, and the G1's in `docs/g1/` |
+| `tests/` | simulator regression and acceptance tests (`tests/README.md`); the G1 acceptance tests are in `tests/g1/`, the closed-loop test of both robots in `tests/sim/` |
+| `tools/` | standalone debug tools (`read_lowstate.py`, which prints the real G1's `rt/lowstate`) |
+| `docs/` | user-facing docs: `SETUP.md`, `RUNNING.md`, `DDS_TUNING.md`, `DOCKER_TESTING.md`, `NAVIGATION_DEMO.md`, and the G1's in `docs/g1/` |
 | `docker/BUILD.md` | deep dive on the image/build system — read it before touching any Dockerfile |
 
 Most of the tree is **git submodules** (`git submodule update --init --recursive`
@@ -60,12 +65,12 @@ Never `docker run` the images by hand — the scripts wire up `docker/.env`, DDS
 domain safety checks, bind-mount pre-creation, robot selection and stable
 container names. They can be invoked from any directory.
 
-### x86 (preferred platform)
+### Scripts
 
 | Script | Verified arguments | Notes |
 |---|---|---|
-| `docker/scripts/docker_build.sh [profile ...]` | `isaac`, `robocasa`, `ros` (no args = all three) | `golem_base` is built first automatically for `robocasa`/`ros`; `isaac` is self-contained. Pins the MJPC build to the `mujoco_mpc` submodule SHA (`MJPC_REF`). The images serve both robots. |
-| `docker/scripts/docker_run.sh <profile> [--restart] [cmd...]` | `isaac`, `robocasa`, `ros`; `--restart` right after the profile replaces an existing container; then optionally `bash` (shell instead of default launcher) or any command; a leading `-flag` (e.g. `--headless`) is forwarded to the default launcher; on simulator profiles (`robocasa`, `isaac`), `--g1` / `--h12` anywhere in the arguments select the robot (`ros` takes no robot flag) | Container names: `golem_ros`, `golem_sim_robocasa`, `golem_sim_isaac`, for either robot. Simulator profiles print `robot: h12` or `robot: g1` before the domain check. |
+| `docker/scripts/docker_build.sh [profile ...]` | `isaac`, `robocasa`, `ros` (no args = all three) | `golem_base` is built first automatically for `robocasa`/`ros`; `isaac` is self-contained. The images serve both robots. |
+| `docker/scripts/docker_run.sh <profile> [--restart] [cmd...]` | `isaac`, `robocasa`, `ros`; `--restart` right after the profile replaces an existing container; then optionally `bash` (shell instead of default launcher) or any command; a leading `-flag` (e.g. `--headless`) is forwarded to the default launcher; on simulator profiles (`robocasa`, `isaac`), `--g1` / `--h12` anywhere in the arguments select the robot (`ros` takes no robot flag) | Container names: `golem_ros`, `golem_sim_robocasa`, `golem_sim_isaac`, for either robot. Simulator profiles print `robot: h12` or `robot: g1` before the domain check. `robocasa` and `ros` are pinned (CPU pinning, below); `isaac` never is. |
 
 Paired startup: `docker/scripts/docker_stack.sh up robocasa|isaac [--headless|--gui] [--g1|--h12]`.
 Use `restart`, `stop`, or `logs` with the same simulator name. It prepares the
@@ -75,14 +80,14 @@ simulator of the selected robot (`wait_for_sim.py`). The bringup it starts is
 g1_sim.launch.py` for the G1 (with only `use_rviz` set).
 `GOLEM_ASSETS_DIR` and `GOLEM_CACHE_DIR` relocate host mounts. Shell exports
 win over `docker/.env`. Existing single-service containers require explicit
-`--restart`. See `docs/DOCKER_TESTING.md` for both platform smoke tests.
+`--restart`. See `docs/DOCKER_TESTING.md` for the smoke test.
 
 Default launchers (compose `command`): `docker/scripts/launch_isaac.sh`,
 `launch_robocasa.sh`, `launch_ros.sh`. The `ros` launcher colcon-builds
 `core_ws` (incrementally, on every start) and **drops to a shell — it does not
 launch bringup**.
 
-### Robot selection (x86 only)
+### Robot selection
 
 `docker/scripts/docker_common.sh` owns this. On simulator and stack wrappers,
 the robot is `--g1`/`--h12` on the wrapper, else `GOLEM_ROBOT` from the shell,
@@ -91,19 +96,19 @@ attached" and matters only where that is inherent: which robot the RoboCasa sim
 runs, and which bringup `docker_stack.sh` starts and which sim
 `wait_for_sim.py` expects. Every `ros` container serves both robots (`docker_run.sh ros`
 takes no `--g1`/`--h12` flag and uses `core_ws/cyclonedds.xml` directly): the
-base compose file bind-mounts `core_ws/src/g1_homie/policy` (at
-`/home/code/g1_homie`, HOMIE's policy) and `tools/` (at `/home/code/tools`, for
-`read_lowstate.py`) read-only into the `ros` service (the sim reads none of
-HOMIE's files), and `CL_Assets/g1` into both services. For `g1` the simulator
-and stack wrappers:
+base compose file bind-mounts `tools/` (at `/home/code/tools`, for
+`read_lowstate.py`) read-only into the `ros` service, and `CL_Assets/g1` into
+both services. No container mounts the leg policies: `golem_lowerbody_rl`
+installs their weights, HOMIE's included, and the sims read none of them. For
+`g1` the simulator and stack wrappers:
 
 - add `docker/docker-compose.g1.yml` to the `robocasa` service: it sets
   `GOLEM_ROBOT=g1` and passes the G1 sim knobs (§8);
 - check in `prepare_mounts` that the G1 sim's `CL_Assets/g1` files (its MJCF,
   URDF and meshes) exist and are not LFS pointers, before any container starts
   (every `ros` container, either robot, gets the same check of the
-  `CL_Assets/g1` files `golem_ros2_models` installs and of the policy files);
-- refuse the Mac wrappers and the Isaac simulator.
+  `CL_Assets/g1` files `golem_ros2_models` installs);
+- refuse the Isaac simulator.
 
 `launch_ros.sh` builds every package in `core_ws`, the G1's included,
 whatever `GOLEM_ROBOT` says, so one `ros` container runs either robot's
@@ -112,30 +117,48 @@ bringup. `golem_ros2_models` installs both robots' models from `CL_Assets`, and
 robots use the same images and container names, so the wrappers run one robot
 at a time on a host.
 
-### mac (`docker/mac`, limited)
+### CPU pinning
 
-| Script | Verified arguments | Notes |
-|---|---|---|
-| `docker/mac/scripts/docker_build_mac.sh [service ...]` | `robocasa`, `ros` (no args = both) | **No `isaac`** — Isaac Sim needs an NVIDIA GPU. arm64 base built from `docker/mac/BaseDockerfile.arm64`. |
-| `docker/mac/scripts/docker_run_mac.sh <service> [cmd...]` | `robocasa`, `ros` | Starts ONE service. For paired startup use `docker/mac/scripts/docker_stack_mac.sh up robocasa` (RoboCasa running alone for a few seconds lets the robot collapse — motor command timeout). |
+On a hybrid CPU (an Intel P-core/E-core part such as the i7-14700F: P-cores 0-15,
+E-cores 16-27) the sim's physics thread otherwise lands on an E-core about half
+the time, so `docker/scripts/docker_common.sh`'s `configure_cpus` pins the
+`robocasa` container to the P-cores (`cpu_core` in sysfs) and the `ros` container
+to the E-cores (`cpu_atom`); the measured real-time factors are in
+`docs/superpowers/specs/2026-11-05-sim-speed-results.md`. `docker_run.sh` (`robocasa`, `ros`),
+`docker_stack.sh up|restart robocasa`, the closed-loop tests (`tests/sim`,
+`tests/g1`, `tests/stack` on RoboCasa) and the `tests/robocasa` unit-test runners
+apply it, and print `cpus: sim <list>, ros
+<list>` (or `cpus: not pinned`) beside the `robot:` line; the Isaac simulator is
+never pinned. A pinned service gets `cpuset:` from
+`docker/docker-compose.cpus-sim.yml` or `docker-compose.cpus-ros.yml`, added
+only when pinned, so an unpinned run has no `cpuset` key.
 
-The Mac wrappers run the H1-2 only; they refuse `--g1` and `GOLEM_ROBOT=g1`.
-Mac feature toggles are env vars read by the compose file: `GOLEM_DISPLAY=vnc`
-(MuJoCo viewer → noVNC :6080), `GOLEM_RVIZ=vnc` (RViz → :6081), `GOLEM_LOWERBODY=fame|walk|almi`,
-`GOLEM_SLAM=1`, `GOLEM_NAV2=1`, `GOLEM_SIM_ODOM=1`, `GOLEM_CAMERAS=0`,
-`GOLEM_SPAWN_BACKOFF=<m>`, `GOLEM_CMD_TIMEOUT=<sim-s>`, `GOLEM_ROS_MCP=1`.
+- `GOLEM_CPU_PINNING=0` pins nothing (the explicit lists below included).
+- `GOLEM_SIM_CPUSET` / `GOLEM_ROS_CPUSET` (docker's `--cpuset-cpus` lists, e.g.
+  `0-15`) win over the detection and pin without a hybrid CPU. A list naming a
+  CPU that is not in `/sys/devices/system/cpu/online` fails before any container
+  starts, naming the knob. All three knobs are in `docker/.env.example`.
+- On `ROS_DOMAIN_ID=0`, the real robots' bus (the real G1's laptop `golem_ros`),
+  nothing is pinned and the `ros` container keeps every core; an explicit
+  `GOLEM_ROS_CPUSET` there is refused with a message.
+
+### Simulator knobs
+
+The compose files pass the RoboCasa sims' knobs from the shell or `docker/.env`:
+`GOLEM_DISPLAY=auto|gui|headless` (the wrappers' display mode), `GOLEM_CAMERAS=0`,
+`GOLEM_SPAWN_BACKOFF=<m>`, `GOLEM_CMD_TIMEOUT=<sim-s>`.
 `GOLEM_SPAWN_MARGIN=<m>` (default 0.20; a task env can set its own via
 `spawn_margin`, as `battery_env.py` does) sets the H1-2's minimum spawn
-clearance from non-floor geoms on both platforms. `GOLEM_CAMERA_SCALE=<f>`
+clearance from non-floor geoms. `GOLEM_CAMERA_SCALE=<f>`
 (H1-2 default 0.5 of the real 1280x720), `GOLEM_CAMERA_DEPTH=0` and
-`GOLEM_CAMERA_POINTCLOUD=0` tune the H1-2's RoboCasa cameras on both platforms.
-GUIs stream over noVNC via `docker/mac/scripts/mac_vnc_tunnel.sh` (no XQuartz).
+`GOLEM_CAMERA_POINTCLOUD=0` tune the H1-2's RoboCasa cameras.
+`GOLEM_SIM_RATE=<factor>|max` sets the sims' target real-time factor (default
+1, real time; §8). The G1's own knobs are in §8.
 
-### DDS domain safety (both platforms)
+### DDS domain safety
 
 `ROS_DOMAIN_ID=0` is the **real robots' command bus**. The run scripts refuse to
-start a sim on it (the x86 `ros` profile asks for interactive confirmation; mac
-always rejects). Unset/empty defaults to `1` (the sim domain). Set it in
+start a sim on it (the `ros` profile asks for interactive confirmation). Unset/empty defaults to `1` (the sim domain). Set it in
 `docker/.env` (copy from `docker/.env.example`; also holds `GEMINI_API_KEY`,
 which the `ros` container needs for the vision servers and `golem_skills`, and
 `GOLEM_ROBOT`).
@@ -149,7 +172,7 @@ its onboard PC). Both robots use the default CycloneDDS configuration
 topic names, with identical `unitree_hg` types. Each robot's sims report its
 real robot's `rt/lowstate` `mode_machine`: 6 for the H1-2, 5 for the G1.
 `wait_for_sim.py` refuses a simulator of the other robot by that value, but it
-runs only in `docker_stack.sh` and the mac stack (`GOLEM_WAIT_FOR_SIM=1`) and in
+runs only in `docker_stack.sh` (`GOLEM_WAIT_FOR_SIM=1`) and in
 `tests/stack`. `docker_run.sh ros` followed by a manual `ros2 launch` is not
 guarded by the wrappers. `golem_safety` checks `rt/lowstate`'s value too (§8),
 but that does not replace one stack per domain: the stacks share the
@@ -159,54 +182,53 @@ does not check `rt/lowstate`'s `mode_machine`.
 
 ## 4. `core_ws/src` packages
 
-23 ROS packages in 20 top-level directories: 21 (the H1-2's, the shared ones
-and the six shared `golem_*` packages) and the 2 G1 packages
+21 ROS packages in 18 top-level directories: 20 (the H1-2's, the shared ones
+and the seven shared `golem_*` packages) and the G1's own package, `dex_3`
 (below). Note two name mismatches: dir
 `FAST_LIO` → package `fast_lio`; dir `unitree_ros2` is not itself a package (it
 nests `unitree_api`, `unitree_go`, `unitree_hg`, `unitree_ros2_example`).
 
 | Directory | Role | What it does | Key entry points |
 |---|---|---|---|
-| `golem_safety` | **safety (both robots)** | C++. The only writer of `/lowcmd` (§8): streams zero gains from boot, engages each `/safety/*` input on its own first valid command and relays it, clips it, checks every `/lowstate` (robot identity, estop limits) and latches an estop until restart. A robot profile (`robots/<robot>.yaml`, the joint table both `golem_*` packages read) and configs per robot (`config/h12/`, `config/g1/`) | `safety_node` (`robot`, `config`, `sim`, `use_estop` parameters); `launch/safety.launch.py` |
-| `golem_upper_ik` | **controller (upper body, both robots)** | Pink IK on the 14 arm joints with the torso (H1-2) or waist (G1) held; OMPL planning and a self-collision barrier from each robot's sphere model and SRDF (the G1's spheres were packed on the rubber-hand G1: none on the Dex3-1 fingers; its torso spheres stand inside the torso's flanks, so `home` keeps the H1-2's 20 mm `d_min`; its `arms_down`, where the real hands rest on the hips, is in self-collision); the follow gate; the safety/controller config pairing (`golem_upper_ik.pairing`) the bringups check | `frame_task_server` (`/frame_task`, `/named_config`), `joint_state_publisher`; `launch/upper_ik.launch.py` |
-| `golem_bringup` | **bringup (both robots)** | Launch-only package that starts the whole H1-2 (`launch/h12/`) or G1 (`launch/g1/`), sim or real. See §6. | top-level + building-block launch files, `config/h12/*.yaml` |
+| `golem_safety` | **safety (both robots)** | C++. The only writer of `/lowcmd` (§8): streams zero gains from boot (under `use_sim_time`, from the first `/clock`), engages each `/safety/*` input on its own first valid command and relays it, clips it, checks every `/lowstate` (robot identity, estop limits) and latches an estop until restart. A robot profile (`robots/<robot>.yaml`, the joint table `golem_upper_ik` and `golem_lowerbody_rl` read) and configs per robot (`config/h12/`, `config/g1/`) | `safety_node` (`robot`, `config`, `sim`, `use_estop` parameters; `use_sim_time` needs `sim`); `launch/safety.launch.py` (`safety_node` after `start_delay`), which both robots' bringups include |
+| `golem_upper_ik` | **controller (upper body, both robots)** | Pink IK on the 14 arm joints with the torso (H1-2) or waist (G1) held; OMPL planning and a self-collision barrier from each robot's sphere model and SRDF (the G1's spheres were packed on the rubber-hand G1: none on the Dex3-1 fingers; its torso spheres stand inside the torso's flanks, so `home` keeps the H1-2's 20 mm `d_min`; its `arms_down`, where the real hands rest on the hips, is in self-collision); the follow gate; the safety/controller config pairing (each robot's `config/<robot>/pairing.yaml`, applied by `golem_upper_ik.pairing`) that `upper_ik.launch.py` checks; each robot's data (IK and held joints, frames, named postures) is `config/<robot>/robot.yaml` | `frame_task_server` (`/frame_task`, `/named_config`), `joint_state_publisher`; `launch/upper_ik.launch.py` (the pairing check, then `frame_task_server` after `start_delay`) and `launch/robot_state.launch.py` (`robot_state_publisher` on the robot's URDF + `joint_state_publisher`), which both robots' bringups include |
+| `golem_bringup` | **bringup (both robots)** | Launch-only package that starts the whole H1-2 (`launch/h12/`) or G1 (`launch/g1/`), sim or real. See §6. | top-level + building-block launch files, RViz configs |
 | `golem_ros2_models` | **description (both robots)** | Installs both robots' models from `CL_Assets`: the H1-2 with its Magpie grippers and the G1 with its Dex3-1 hands, each a Pinocchio URDF, a ROS copy with `package://golem_ros2_models/...` URIs, the meshes, and a sphere-packed self-collision model with its SRDF. No nodes and no joint table (that is `golem_safety`'s robot profile) | `golem_ros2_models.paths`; `launch/display.launch.py` (`robot:=h12|g1`) |
-| `deploy_mjpc` | controller (lower body, MPC) | MJPC balance/locomotion controller (C++ cores from the `mujoco_mpc` fork, run as separate processes) + RW-EKF base estimator | `mjpc_lowerbody_core`, `controller_launcher.py`, `estimator_node.py` |
-| `h12_lowerbody_rl` | controller (lower body, RL) | TorchScript walking, FAME RMA stand/squat and ALMI stand/walk policies; controller runs one pinned policy; consumes `/lowstate` + `/cmd_vel`, emits 12-joint PD setpoints | `walking_node`, `fame_node`, `lowerbody_controller_node` |
-| `lmg_deploy` | controller (whole body, MARL) | The loco-manipulation game's two-agent (legs + IK arms) MARL policy, run by the `lmg_*` bringups | `marl_deploy_node` |
-| `golem_slam` | SLAM + navigation (both robots) | Shared navigation for both robots (FAST-LIO deskewed cloud → self filter → floor alignment/OctoMap → slam_toolbox → Nav2 MPPI), the G1's dynamic waist transform (`g1_body_to_pelvis`), and its configs: Livox MID360 driver config (`MID360_config.json`, real robot, read by `h12_real_drivers.launch.py`), FAST-LIO (`mid360.yaml`, `g1_fastlio*.yaml`), slam_toolbox (`slam_toolbox_h1.yaml`, `slam_toolbox_g1.yaml`), Nav2 (`nav2_config*.yaml`) | `launch/h12_navigation.launch.py`, `launch/g1_navigation.launch.py`, `g1_body_to_pelvis`, `config/` |
+| `golem_lowerbody_rl` | **controller (lower body, both robots)** | One leg node for both robots, run from config, with no robot or policy name in its code: a robot's `config/<robot>/` (`robot.yaml`: leg joints and the policies it may run; `sim.yaml` and `real.yaml`: start-up, band, command and fault limits of the run) and each policy's spec in `config/<robot>/policies/<name>.yaml` (runtime, TorchScript or ONNX; observation terms; command processing; action mapping); joint slots and `mode_machine` come from `golem_safety`'s robot profile. The H1-2 runs the TorchScript walking, FAME RMA stand/squat and ALMI stand/walk policies, one per run (`policy:=`, `almi` by default in every bringup); the G1 runs HOMIE's ONNX walking policy (its weights under their own licence in `policies/homie/`, §8). ROS only (no Unitree SDK): consumes `/lowstate`, `/cmd_vel` and `/lowerbody/height`, publishes the 12 leg joints' PD setpoints on `golem_safety`'s `/safety/lowcmd_lower_in` | `lowerbody_controller_node` (`/lowerbody/confirm_engage`, `/lowerbody/active_policy`); `launch/lowerbody.launch.py` (`robot`, `config`, `policy`, `sim`; refuses a run config for the other platform, a real-robot run config without the operator's confirm, or an unlisted policy before any node starts: `lowerbody: not starting: ...`), which `h12_lowerbody.launch.py` and `g1_core.launch.py` include; the H1-2's top-level files, which include the leg block last, run the same check first (`golem_bringup.h12_legs.leg_check`) |
+| `lmg_deploy` | controller (whole body, MARL) | The loco-manipulation game's two-agent (legs + IK arms) MARL policy, run by the `lmg_*` bringups. It reads `/livox/imu` as if `livox_imu_link` were upright; the H1-2's models and RoboCasa sim carry the MID-360's raw, upside-down frame there, so the policy gets an upside-down IMU until `lmg_deploy` is updated (its strict xfail `test_urdf_mount_is_the_livox_pitch`) | `marl_deploy_node` |
+| `golem_slam` | SLAM + navigation (both robots) | One navigation graph for both robots (FAST-LIO deskewed cloud → self filter → floor alignment (`level_odom`)/OctoMap and `level_cloud` → scan → slam_toolbox → Nav2 MPPI, every Nav2 command through the velocity smoother), with the dynamic `body → pelvis` transform (`body_to_pelvis`, following the torso or waist joints) and a static `<lidar link> → livox_frame`. `navigation.launch.py robot:=h12\|g1` picks the robot's config directory, `config/<robot>/`: FAST-LIO (`fastlio.yaml`, the G1 sim's `fastlio_sim.yaml`), the MID360 driver config (`MID360_config.json`, real robot, read by the real-driver launches), Nav2 (`nav2.yaml`), OctoMap (`octomap.yaml`) and the pipeline profile (`pipeline.yaml`: lidar link, scan band, `level_odom` values); slam_toolbox's `config/slam_toolbox.yaml` is shared; `config/example.<kind>.yaml` annotate every key and are not installed | `launch/navigation.launch.py`, `body_to_pelvis`, `config/` |
 | `golem_skills` | **skills (both robots)** | Action servers for the 12 `/skill/*` atomic skills an LLM can call (frontier exploration lives here). See §7. | `skills` (SkillsNode) |
 | `model_server` | model server | ROS service servers wrapping ML models: Gemini VLM, SAM3 segmentation, GraspGenX grasp generation, YOLO detection | `gemini_server`, `sam_server`, `graspgen_server`, `yolo_server` |
 | `custom_ros_messages` | interfaces (both robots) | 19 actions (13 `Skill*`, `FrameTask`, `NamedConfig`, `DualArm`, …), msgs, srvs (`GeminiQuery`, `SamSegment`, `GraspGen`, `SetHandPose`, …) | rosidl only |
 | `magpie_control` | driver (gripper/sensors) | Dynamixel gripper node (`/left|right/gripper/*` services, DeliGrasp action), F/T + tactile sensor nodes | `gripper_node`, `ft_sensor_node` |
 | `magpie_msgs` | interfaces | Gripper/manipulation interfaces (`GripperState`, `SetGripperPosition/Force`, `DeliGrasp`, …) | rosidl only |
 | `estop` | safety (hardware) | Serial e-stop bridge → ROS Bool (real robot only; launched by real bringup, not sim) | `estop_node` |
-| `cl_realsense` | perception util | Point-cloud accumulator (tf2 + Open3D) for the RealSense cams; ships the real-camera launch file | `pc_acc`; `launch/h12_rs_cams.launch.py` |
+| `cl_realsense` | perception util | Point-cloud accumulator (tf2 + Open3D) for the RealSense cams; ships the real cameras' launch files | `pc_acc`; `launch/h12_headcamera.launch.py` (`h12_real_drivers`), `launch/h12_hand_cameras.launch.py` (`h12_real_desktop`) |
 | `FAST_LIO` (`fast_lio`) | SLAM (vendored) | LiDAR-inertial odometry/mapping from the Livox cloud (used by `golem_slam`) | `fastlio_mapping` |
 | `livox_ros_driver2` | driver (vendored) | Livox MID360 lidar driver (builds via its own `build.sh humble`) | `livox_ros_driver2_node` |
 | `unitree_ros2/*` | interfaces (vendored) | Unitree IDL packages — `unitree_hg` `LowCmd_`/`LowState_` are the stack's spine | rosidl only |
 
-### The G1 packages
+### The G1 package
 
-Built in every `ros` container, for either robot (§3). Their interfaces are in
-`custom_ros_messages`; each package has a README with the
-details, and `docs/g1/packages.md` indexes them.
+Built in every `ros` container, for either robot (§3). Its interfaces are in
+`custom_ros_messages`; its README has the details, and `docs/g1/packages.md`
+indexes the packages the G1 runs.
 
 | Directory | Role | What it does | Key entry points |
 |---|---|---|---|
-| `g1_homie` | controller (lower body) | HOMIE's walking policy (onnxruntime) on the 12 leg joints, driven by `/cmd_vel` through `golem_safety`'s split mode. Follows the H1-2's leg node: waits for `/safety/heartbeat`, pre-poses the legs, on the real robot holds until `/lowerbody/confirm_engage`, and in the sim releases the elastic band | `locomotion_node` |
 | `dex_3` | driver (hands) | Dex3-1 hands on `rt/dex3/<side>/*`: `/<side>/hand/{set_pose,open,close,release}`; bypasses the safety layer | `dex3_hands`; `launch/hands.launch.py` |
 
 Third-party/vendored (do not refactor): `FAST_LIO`, `livox_ros_driver2`,
-`unitree_ros2`, plus the top-level `unitree_sdk2_python` and `mujoco_mpc`,
+`unitree_ros2`, plus the top-level `unitree_sdk2_python`,
 Unitree's G1 models in `CL_Assets/g1` (kept byte-for-byte upstream; its
-`README.md`), and HOMIE's policy in
-`core_ws/src/g1_homie/policy/` (non-commercial licence, §8).
+`README.md`), MuJoCo-LiDAR's MID-360 scan pattern in
+`golem_robocasa/third_party/mujoco_lidar/` (MIT; its `README.md`), and HOMIE's policy in
+`core_ws/src/golem_lowerbody_rl/policies/homie/` (non-commercial licence, §8).
 
 ## 5. Ownership & scoping convention
 
 Development is **scoped to a single package**. Each package (the ROS 2
-controller, the MJPC deploy package, the lower-body RL package, the skills
+controller, the lower-body RL package, the skills
 package, the model servers, the simulators, the G1 packages, …) has its own
 owner; several are separate git submodules with their own history. Rules of
 thumb:
@@ -214,8 +236,8 @@ thumb:
 - Confine a change to the package it belongs to. If a task seems to require
   edits across packages, stop and coordinate first.
 - Shared infra — `golem_bringup`, `custom_ros_messages`/`magpie_msgs`
-  (both robots use `custom_ros_messages`), `docker/`, `golem_safety` and
-  `golem_upper_ik` (both robots run them), the simulators — affects everyone.
+  (both robots use `custom_ros_messages`), `docker/`, `golem_safety`,
+  `golem_upper_ik`, `golem_lowerbody_rl` and `golem_slam` (both robots run them), the simulators — affects everyone.
   Treat changes there as interface changes: minimal, deliberate, announced.
 - Submodule packages must be committed and pushed in the submodule repo, then
   the pin bumped here. Never leave a submodule pointing at an unpushed commit.
@@ -231,26 +253,25 @@ including `h12_control.launch.py`'s `sim`, which has no default.
 
 | Top-level launch file | Scenario | Includes |
 |---|---|---|
-| `h12_sim.launch.py` | **x86 sim** (`use_sim_time=true`), plus the camera optical-frame static TF and rviz (`use_rviz`) | state, control (`sim:=true`, `sim_safety_split` for both `safety_node` and `frame_task_server`, no stagger), lowerbody (`lowerbody_sim.yaml`), models (`use_skills`), navigation (`use_nav`) |
-| `h12_sim_mac.launch.py` | **mac sim** — standalone, includes none of the blocks: `robot_state_publisher` and `golem_upper_ik`'s `joint_state_publisher` and `frame_task_server`, `golem_safety`'s `safety_node` (`sim: true`, both on `sim_safety_split`); lower body/SLAM/nav2 gated by `GOLEM_*` env vars, not launch args | — |
-| `h12_real_robot.launch.py` | **real robot, onboard PC** (native, `ROS_DOMAIN_ID=0`) | real_drivers, navigation, state, control (`sim:=false`, `use_estop:=true`, the defaults `relax_safety_split` and `safety_split`), lowerbody (`lowerbody_real.yaml`, no estimator). Leg control is interlocked behind `start_position_verified:=true` (default **false**) |
+| `h12_sim.launch.py` | **sim** (`use_sim_time=true`), plus the camera optical-frame static TF and rviz (`use_rviz`) | state, control (`sim:=true`, `sim_safety_split` for both `safety_node` and `frame_task_server`, no stagger), lowerbody (run config `sim`), models (`use_skills`), navigation (`use_nav`) |
+| `h12_real_robot.launch.py` | **real robot, onboard PC** (native, `ROS_DOMAIN_ID=0`) | real_drivers, navigation, state, control (`sim:=false`, `use_estop:=true`, the defaults `relax_safety_split` and `safety_split`), lowerbody (run config `real`). Leg control is interlocked behind `start_position_verified:=true` (default **false**) |
 | `h12_real_desktop.launch.py` | **real: companion x86 desktop** — rviz, plus the hand cameras with `use_hand_cameras:=true` (default **false**) | models (`use_yolo:=true`) |
 | `h12_safety_grippers.launch.py` | real: actuation-only debug bringup | control (`sim:=false`, estop + safety, no IK), grippers |
-| `lmg_sim.launch.py` | **x86 sim**, loco-manipulation game: the `lmg_deploy` MARL policy (Explicit500) owns all 27 joints, no operator confirm. Refuses an unset or 0 `ROS_DOMAIN_ID` | state, control (`sim:=true`, no IK, no stagger), locomanipulationgame, navigation (`use_slam`) |
-| `lmg_real.launch.py` | **real, onboard PC**, loco-manipulation game, run *instead of* `h12_real_robot`. Policy behind `start_position_verified:=true` + `/marl_deploy_node/confirm_engage` | real_drivers, state, control (`sim:=false`, `use_estop:=true`, no IK), locomanipulationgame, navigation (`use_slam`) |
+| `lmg_sim.launch.py` | **sim**, loco-manipulation game: the `lmg_deploy` MARL policy (`policy:=`, required; `mid360v2` ships) owns all 27 joints, no operator confirm. Refuses an unset or 0 `ROS_DOMAIN_ID` | state, control (`sim:=true`, no IK, no stagger), locomanipulationgame, navigation (`use_slam`) |
+| `lmg_real.launch.py` | **real, onboard PC**, loco-manipulation game, run *instead of* `h12_real_robot`. **Refuses to start, before any node**: `lmg_deploy` reads `/livox/imu` as upright and the H1-2's MID-360 publishes it raw (upside down); the strict xfail `test_urdf_mount_is_the_livox_pitch` marks the fix. Once lifted, the policy is behind `start_position_verified:=true` + `/marl_deploy_node/confirm_engage` | real_drivers, state, control (`sim:=false`, `use_estop:=true`, no IK), locomanipulationgame, navigation (`use_slam`) |
 
 | Building block | Starts |
 |---|---|
-| `h12_state.launch.py` | `golem_upper_ik`'s `joint_state_publisher` (`robot: h12`, the 27 body joints from `/lowstate`) + `robot_state_publisher` (`urdf_file` arg) |
-| `h12_control.launch.py` | [`estop_node`] → `golem_safety`'s `safety_node` (`robot: h12`, `safety_config`, `sim`, `use_estop`) → `golem_upper_ik`'s `frame_task_server` (`robot: h12`, `frame_task_config`; `use_frame_task`), staggered by `safety_delay` (3 s) / `frame_task_delay` (5 s). `sim` has no default: a launch without it fails before any node starts. With `use_frame_task` it refuses a `frame_task_config` that does not run with `safety_config` (`golem_upper_ik.pairing`) before starting anything |
-| `h12_lowerbody.launch.py` | RL `lowerbody_controller_node` (`lowerbody:=`, params from `lowerbody_params`) and optional MJPC `estimator_node`, both behind `start_position_verified` |
+| `h12_state.launch.py` | `golem_upper_ik`'s `robot_state.launch.py` (`robot: h12`, `urdf_file` passed on): `joint_state_publisher` (the 27 body joints from `/lowstate`) + `robot_state_publisher` |
+| `h12_control.launch.py` | [`estop_node`] → `golem_safety`'s `safety_node` (its `safety.launch.py`: `robot: h12`, `safety_config`, `sim`, `use_estop`) → `golem_upper_ik`'s `frame_task_server` (its `upper_ik.launch.py`: `robot: h12`, `frame_task_config`; `use_frame_task`), staggered by `safety_delay` (3 s) / `frame_task_delay` (5 s), passed on as each file's `start_delay`. `sim` has no default: a launch without it fails before any node starts. With `use_frame_task` it includes `upper_ik.launch.py` first, which refuses a `frame_task_config` that does not run with `safety_config` (`golem_upper_ik.pairing`) before anything starts. Only the pairs in `golem_upper_ik/config/h12/pairing.yaml` start, by name (a path only if its file name is a paired name), and sim and real configs do not mix |
+| `h12_lowerbody.launch.py` | `golem_lowerbody_rl`'s `lowerbody.launch.py` (`robot: h12`, `policy:=`, run config `lowerbody_config`, `sim`, every argument passed), behind `start_position_verified`; a policy the H1-2 does not list is refused. `h12_sim` and `h12_real_robot` include it last and put its check (`golem_bringup.h12_legs.leg_check`, with the arguments they pass it) first, so a refused policy or run config starts no node |
 | `h12_models.launch.py` | gemini + sam servers, [yolo], graspgen + `golem_skills` (`use_skills`) |
-| `h12_real_drivers.launch.py` | Livox MID360 (+ `livox_imu_upright`, which rotates `/livox/imu_raw` into the point frame — the stock driver rotates only points), RealSense head camera, `h12_grippers.launch.py` (left+right `gripper_node`) |
+| `h12_real_drivers.launch.py` | Livox MID360 (no extrinsic rotation: the points and `/livox/imu` are both in the sensor's raw, upside-down frame, the URDF's `livox_link` and `livox_imu_link`), RealSense head camera, `h12_grippers.launch.py` (left+right `gripper_node`) |
 | `h12_locomanipulationgame.launch.py` | `marl_deploy_node` (behind `start_position_verified`; holds arm goals in the world by the SLAM `/Odometry`) |
-| `golem_slam/launch/h12_navigation.launch.py` | shared nav stack (FAST-LIO → pointcloud_to_laserscan → slam_toolbox → nav2) |
+| `golem_slam/launch/navigation.launch.py` | the shared nav stack, included with `robot: h12` (FAST-LIO → pointcloud_to_laserscan → slam_toolbox → nav2; `golem_slam`'s `config/h12/`) |
 
-`golem_slam` also ships one top-level file of its own, `h12_real_slam.launch.py`
-(`ros2 launch golem_slam h12_real_slam.launch.py`): real robot sensors + SLAM/navigation
+`golem_bringup` has one more top-level file, `h12_real_slam.launch.py`
+(`ros2 launch golem_bringup h12_real_slam.launch.py`): real robot sensors + SLAM/navigation
 only, on wall time — real_drivers, state, navigation; no estop, safety or IK, so
 no joint is commanded. Record its runs with `ros2 run golem_slam record_slam_bag --name <name>`.
 
@@ -261,15 +282,19 @@ for the includes after it, so pass consistent values (all four blocks share
 **The H1-2's start-up** (`h12_control.launch.py`; `golem_safety`'s and
 `golem_upper_ik`'s READMEs have the details):
 
-- `safety_node` streams zero-gain `/lowcmd` from boot. It engages each input on
+- `safety_node` streams zero-gain `/lowcmd` from boot (in the sim, from the first
+  `/clock`). It engages each input on
   that input's first valid command once `/lowstate` reports `mode_machine` 6,
   and, with `use_estop:=true`, once a first hardware estop sample has arrived;
   until then it logs `engage_refused` with the reason, at most once a second.
 - **`/safety/heartbeat` means relaying can begin.** `safety_node` publishes no
   beat until those two conditions hold; then it beats true at 10 Hz, and false
   once its estop latches (false from the start if it latched first).
-  `h12_lowerbody_rl` pre-poses the legs only from the first beat, and
-  `lmg_deploy` and `golem_skills` read it too.
+  `golem_lowerbody_rl` pre-poses the legs only from the first beat, and
+  `lmg_deploy` publishes and pre-poses only from it too; `golem_skills`
+  halts its arm moves until the first true beat, for good after a false one,
+  and while no beat has come for its `heartbeat_timeout` (0.5 s), and the halt
+  cancels the arm goal in flight (§7).
 - **`frame_task_server` needs `golem_safety` relaying.** It waits up to
   `controller.state_timeout` (5 s) for a fresh `/lowstate`, then holds the
   measured pose until it sees its commands on `/lowcmd` (the follow gate), for
@@ -279,7 +304,8 @@ for the includes after it, so pass consistent values (all four blocks share
   started before the sims reported 6), no first estop sample with
   `use_estop:=true`, a safety config that does not pair with its controller
   config, or an estop latched at this start-up (the limit checks run from
-  boot, so a joint already past `limits.estop` latches it) or in an earlier
+  boot, in the sim from the first `/clock`, so a joint already past
+  `limits.estop` latches it) or in an earlier
   run. The other nodes keep running, without `/frame_task` and
   `/named_config`.
 - **`use_estop`.** `use_estop:=true` (the real bringups and
@@ -302,17 +328,40 @@ for the includes after it, so pass consistent values (all four blocks share
   sample, so the legs pre-pose and the arms start late. `safety_delay` must
   cover the time `estop_node` takes to connect (the comment in
   `h12_control.launch.py`).
+- **The leg node** (`golem_lowerbody_rl`'s `lowerbody_controller_node`, its
+  README; the values are the run config's, `config/h12/{sim,real}.yaml`) is
+  silent until the first true heartbeat and an upright, finite `/lowstate`. It
+  then ramps the legs over 2 s to the policy's crouch and holds there. The
+  policy may start once `/lowstate` is steady over the last 1 s window (1 s
+  of the tick or of the node's clock, sim time with `use_sim_time`, whichever
+  comes first: the tick advancing at the node clock's rate, so Isaac's tick,
+  which counts publishes, never qualifies; the windows follow one another, so
+  a recent stall or a slowed tick makes it not ready again within 1 s), the arm controller's commands are fresh within 0.5 s and,
+  in the sim, `frame_task_server`'s first `/left_ee_pose` has come (or
+  `band.max_wait`, 34 s); the node logs why it waits. On the real robot it
+  then holds until `ros2 service call /lowerbody/confirm_engage
+  std_srvs/srv/Trigger` (refused at any other time), and runs the policy. A
+  `/cmd_vel` older than 0.5 s is zero velocity; `/lowerbody/height`
+  (`std_msgs/Float32`) is the policy's height command. Once the legs are
+  commanded, a `/lowstate` gap over `max_state_gap` (0.25 s real, 0.5 s sim;
+  `/lowstate` has its own executor thread), a tick that goes back, a
+  non-finite value or non-unit IMU quaternion, a fall, a policy step that
+  fails or gives non-finite targets, and in every phase a false heartbeat or
+  none for 0.5 s after the first, stop it for good: it logs the fault once,
+  publishes nothing more and stays up. In the sim it calls
+  `/elastic_band/toggle` once, when the service is there, once the policy runs
+  and `/left_ee_pose` has come (or `band.max_wait` after the policy started);
+  the reply is final (a failure is logged as `elastic band release failed:
+  ...` and the band stays on), and a success resets the policy at once.
 
 **Wiring a new package into bringup:** add it as `exec_depend` in
 `golem_bringup/package.xml`, add a `launch_ros.actions.Node(...)` entry to the
-relevant launch file (put node params in `golem_bringup/config/h12/<file>.yaml` — the
-top-level YAML key must match the node `name`), and gate optional nodes with
+relevant launch file (put node params in a YAML under `golem_bringup/config/<robot>/`,
+installed through `setup.py`'s `data_files` — the top-level YAML key must match the
+node `name`), and gate optional nodes with
 `IfCondition(LaunchConfiguration(...))`. Add the node to the building block it
 belongs to (or a new block included by the top-level files), not to a top-level
-file; see `h12_lowerbody.launch.py` as the model. **Mac only:** also add the package to
-the `PKGS` list in `docker/mac/scripts/launch_ros_mac.sh` or the slim image
-won't build it; a package the Mac does not build goes into `BRINGUP_STUB_DEPS`
-there instead, or the Mac build of `golem_bringup` fails. For the G1 the node
+file; see `h12_lowerbody.launch.py` as the model. For the G1 the node
 goes into `launch/g1/g1_core.launch.py`, with the same `exec_depend`.
 
 ### The G1 (`golem_bringup`, `launch/g1/`)
@@ -323,21 +372,28 @@ reference.
 
 | Launch file | Scenario | Starts |
 |---|---|---|
-| `g1_sim.launch.py` | **G1 sim** (sim time; `sim_split` for `golem_safety` and the controller, `g1_homie`'s `sim.yaml`). Always starts HOMIE's walking node. `use_nav` (default true) adds shared navigation (`golem_slam`, `odom_source:=fastlio` only), `use_skills:=true` starts `golem_skills` (including `/skill/frontier_explore`) | `g1_core` |
-| `g1_real_robot.launch.py` | **real G1** in Unitree's debug mode, every node in the laptop's `golem_ros` container on domain 0 (`split` and `g1_split`, `g1_homie`'s `g1.yaml`). The walking node only with `start_position_verified:=true` (default **false**): without it the leg motors stay off and the arms run. `use_nav` (default true) adds the MID-360 driver and `golem_slam`; no skills yet | `g1_core` |
-| `g1_core.launch.py` | shared core: `robot_state_publisher`, `golem_upper_ik`'s `joint_state_publisher` (`robot: g1`), `golem_safety`'s `safety_node` (`robot: g1`, `safety_config`, `sim`, `use_estop: false`: the G1 has no estop node), then `golem_upper_ik`'s `frame_task_server` (`robot: g1`, `controller_config`) after `controller_delay` (2 s), then `g1_homie`'s `locomotion_node` (`locomotion_config`) after `locomotion_delay` (2 s more: always in the sim, with `start_position_verified` on the real robot); [`dex3_hands`] (`use_hands`), [rviz] (`use_rviz`), [`golem_slam`] (`use_nav`), [`golem_skills`] (`use_skills`) | — |
+| `g1_sim.launch.py` | **G1 sim** (sim time; `sim_split` for `golem_safety` and the controller, `golem_lowerbody_rl`'s `config/g1/sim.yaml`). Always starts the leg node, running HOMIE. `use_nav` (default true) adds shared navigation (`golem_slam`, FAST-LIO odometry), `use_skills:=true` starts `golem_skills` (including `/skill/frontier_explore`) | `g1_core` |
+| `g1_real_robot.launch.py` | **real G1** in Unitree's debug mode, every node in the laptop's `golem_ros` container on domain 0 (`split` and `g1_split`, `golem_lowerbody_rl`'s `config/g1/real.yaml`). The leg node only with `start_position_verified:=true` (default **false**): without it the leg motors stay off and the arms run. `use_nav` (default true) adds the MID-360 driver and `golem_slam`; no skills yet | `g1_core` |
+| `g1_core.launch.py` | shared core, starting `golem_safety`'s and `golem_upper_ik`'s nodes through their launch files (`safety.launch.py`, `upper_ik.launch.py`, `robot_state.launch.py`), as the H1-2's blocks do: `robot_state_publisher`, `golem_upper_ik`'s `joint_state_publisher` (`robot: g1`), `golem_safety`'s `safety_node` (`robot: g1`, `safety_config`, `sim`, `use_estop: false`: the G1 has no estop node), then `golem_upper_ik`'s `frame_task_server` (`robot: g1`, `controller_config`) after `controller_delay` (2 s), then `golem_lowerbody_rl`'s `lowerbody_controller_node` (its `lowerbody.launch.py`: `robot: g1`, `policy: homie`, run config `lowerbody_config`) after `locomotion_delay` (2 s more: always in the sim, with `start_position_verified` on the real robot); [`dex3_hands`] (`use_hands`), [rviz] (`use_rviz`), [`golem_slam`] (`use_nav`), [`golem_skills`] (`use_skills`) | — |
 
-The core refuses to start on a bad combination; `startup_refusal` in
-`g1_core.launch.py` and `pairing_refusal` in
-`core_ws/src/golem_upper_ik/golem_upper_ik/pairing.py` are the rules:
+The core refuses to start on a bad combination, before any node starts:
+`pairing_refusal` in `core_ws/src/golem_upper_ik/golem_upper_ik/pairing.py`,
+which `golem_upper_ik`'s `upper_ik.launch.py` applies (`upper_ik: not starting:
+...`; `g1_core` includes it first), and `lowerbody_refusal` in
+`core_ws/src/golem_lowerbody_rl/golem_lowerbody_rl/launch_check.py`, which
+`golem_lowerbody_rl`'s `lowerbody.launch.py` applies when the legs start
+(`lowerbody: not starting: ...`; included second), are the rules:
 
-- **Config pairing.** The safety config must relay the upper-body channel
+- **Config pairing.** The safety config must be one of the G1's pairs
   (`split` or `sim_split`; `full` is refused), and each runs with exactly one
-  controller config (`G1_SAFETY_CONTROLLER_CONFIGS` in `pairing.py`:
-  `g1_split`, `sim_split`), which `controller_config` defaults to. The real
-  robot refuses every `sim_*` config and the walking node's `sim` config, and
-  the sim refuses the real ones (`split`, `g1_split`, the walking node's `g1`).
-- **The leg interlock.** On the real G1 the walking node starts only with
+  controller config (`config/g1/pairing.yaml` in `golem_upper_ik`: `g1_split`,
+  `sim_split`), which `controller_config` defaults to. The real
+  robot refuses every `sim_*` config, and the sim refuses the real ones
+  (`split`, `g1_split`). The leg node's run config must be for the platform
+  (its `sim` key), and a real robot's must wait for the operator's confirm and
+  release no band; a real G1 whose legs are not verified starts no leg node,
+  so its run config is not checked.
+- **The leg interlock.** On the real G1 the leg node starts only with
   `start_position_verified:=true`, set only after checking the robot is in a
   safe start pose; the argument refuses nothing. The bringup writes `rt/lowcmd` from the
   moment `safety_node` starts, so the operator puts the G1 into Unitree's debug
@@ -347,38 +403,45 @@ The core refuses to start on a bad combination; `startup_refusal` in
   off, and the split estop turns every motor off.
 - **Navigation.** `use_nav` (default true on both G1 bringups, as on the
   H1-2's) adds `golem_slam`; on the real G1 it also starts the MID-360 driver
-  (`launch/g1/g1_real_drivers.launch.py`, `golem_slam/config/g1_MID360_config.json`)
-  and FAST-LIO on `g1_fastlio.yaml`. Not yet run on the real G1.
+  (`launch/g1/g1_real_drivers.launch.py`, `golem_slam/config/g1/MID360_config.json`)
+  and FAST-LIO on `config/g1/fastlio.yaml`. Not yet run on the real G1.
 
 **The G1's start-up** (`g1_core.launch.py`'s docstring; `golem_safety`'s,
-`golem_upper_ik`'s and `g1_homie`'s READMEs have the details):
+`golem_upper_ik`'s and `golem_lowerbody_rl`'s READMEs have the details):
 
-- `safety_node` streams zero-gain `/lowcmd` (every motor off) from boot, checks
-  every `/lowstate` against the estop limits from the first sample, and engages
+- `safety_node` streams zero-gain `/lowcmd` (every motor off) from boot (in the
+  sim, from the first `/clock`), checks
+  every `/lowstate` against the estop limits from the first sample (in the
+  sim, from the first `/clock`), and engages
   each input on that input's own first valid command once `/lowstate` reports
   `mode_machine` 5, as on the H1-2; until then it logs `engage_refused`. Its
   heartbeat is the H1-2's: none until `/lowstate` reports 5, then true at
   10 Hz, false once latched.
 - `frame_task_server` holds the measured pose until its follow gate sees
   `golem_safety` relay its commands, which happens on its first command, with
-  or without the walking node; then it moves the arms to `home` and the waist
+  or without the leg node; then it moves the arms to `home` and the waist
   to its hold. It stops with an error if `/lowstate` is not fresh within
   `controller.state_timeout` (5 s), if nothing is relayed within
   `controller.startup_timeout` (30 s), or if the moves take longer than
   `controller.startup_move_timeout` (30 s). The leg motors stay off until the
-  walking node commands them.
-- `locomotion_node` sends nothing until the first true `/safety/heartbeat` and
-  an upright `rt/lowstate`, as the H1-2's leg node. Then it moves the legs to
-  HOMIE's default pose over 2.0 s and holds it until 1 s of steady, on-time
-  `rt/lowstate` (its tick within `startup.tick_rate` of the wall clock) and the
-  arm controller's commands. On the real robot (`g1.yaml`) it also holds until
-  `ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger` (the H1-2
-  leg node's service); in the sim (`sim.yaml`) the policy then starts, under
-  the sim's elastic band, and the node releases the band through
-  `/elastic_band/toggle` once `/left_ee_pose` has come (`frame_task_server`
-  publishes it after its start-up moves), or `band.max_wait` (30 s) after the
-  policy started. A false heartbeat, or none for 0.5 s after the first, stops
-  it for good in every phase.
+  leg node commands them.
+- The leg node is the H1-2's (`golem_lowerbody_rl`'s
+  `lowerbody_controller_node`, above), running HOMIE on `config/g1/sim.yaml`
+  or `real.yaml`, with the same start-up and faults. It sends nothing until
+  the first true `/safety/heartbeat` and an upright, finite `rt/lowstate`.
+  Then it ramps the legs over 2 s to HOMIE's default pose and holds it until
+  `rt/lowstate` has been steady for 1 s (its tick advancing at the node
+  clock's rate) and the arm controller's commands are fresh. On the real robot
+  it also holds until `ros2 service call /lowerbody/confirm_engage
+  std_srvs/srv/Trigger`. In the sim it also holds until the first
+  `/left_ee_pose` (`frame_task_server` publishes it after its start-up moves),
+  or `band.max_wait` (30 s) after the legs reached the pose: the policy must
+  not run long under the sim's elastic band (about 1.5 s or more there, and
+  the robot stumbles at the release). The policy then starts, and the node
+  calls `/elastic_band/toggle` once: once `/left_ee_pose` has come, or
+  `band.max_wait` after the policy started; the reply is final. A false
+  heartbeat, or none for 0.5 s after the first, stops it for good in every
+  phase.
 - After any estop, restart the whole bringup.
 
 ## 7. Skills (`golem_skills`) — the LLM-callable layer
@@ -387,7 +450,8 @@ Each skill is a mixin class in `golem_skills/skills/` with one
 `_exec_<name>()` method; `SkillsNode` registers one action server per entry in
 the `SKILL_ACTIONS` table (`base.py`). All types are
 `custom_ros_messages/action/Skill*`; every goal has a `timeout` Duration
-(0 → 300 s default); every result is `success` + `message`; feedback is
+(0 = no deadline for `grasp` and `pick_place`; `frontier_explore` uses its
+`default_timeout` parameter, 300 s); every result is `success` + `message`; feedback is
 `phase` + `progress`.
 
 | Action server | Status |
@@ -401,11 +465,18 @@ is passed to `g1_sim.launch.py` (with `wait_for_services: false` so it starts
 immediately without waiting for H1-2 vision/gripper services), serving
 `/skill/frontier_explore`.
 
+Arm moves (`/frame_task`, `/named_config`) need a live `/safety/heartbeat`:
+`golem_skills` refuses to send one before the first true beat, after a false
+beat (until the node restarts) and when the last beat is older than
+`heartbeat_timeout` (0.5 s), and it cancels the move in flight on the server,
+so the skill fails with the halt reason. Grippers, navigation and
+`frontier_explore` do not depend on it.
+
 Skills consume the `frame_task` IK action, the gripper services, and the
 `model_server` perception services (`gemini_query`, `sam_segment`, `graspgen` —
 this is why the `ros` container needs `GEMINI_API_KEY`). There is currently no
 autonomous LLM orchestrator in-repo that calls them; they are invoked over ROS
-(by a human, an external agent, or the `tools/ros_mcp_server.py` debug MCP).
+(by a human or an external agent).
 
 Verified invocation examples (from a shell inside `golem_ros`):
 
@@ -432,12 +503,22 @@ necessary, and their **default behaviors must be preserved**. Everyone's
 sim-vs-real workflow depends on them behaving like the real robot.
 `golem_robocasa/h12_mujoco.py` is the one RoboCasa entry point for both robots: it
 picks the robot (`--h12`/`--g1`, else `GOLEM_ROBOT`, else `h12`) before its
-H1-2 imports and hands the G1 over to `golem_robocasa/g1/g1_mujoco.py`. The H1-2
+H1-2 imports and hands the G1 over to `golem_robocasa/g1/g1_mujoco.py`. Both
+sims render their cameras and the MID-360's rays through EGL on an NVIDIA GPU:
+without one (MuJoCo not on EGL, no EGL device, a software renderer) the sim
+stops at start, once its command line is parsed and before it builds a scene or
+starts ROS or DDS, with one message (`sim_common.require_gpu`). The H1-2
 stays the default, and nothing on the G1 path may change its behaviour. The robots share
-`sim_common.py`, `measurement_bridge.py` and the `mujoco_sensors` node in
-`mujoco_ros_bridge.py` (`sim_timing.py` is the H1-2's only); each has its own sensor suite
+`sim_common.py`, `measurement_bridge.py`, the pacer in `sim_timing.py` (its
+`--timing` report is the H1-2's only) and the `mujoco_sensors` node in
+`mujoco_ros_bridge.py`; each has its own sensor suite
 (`h12_sensors.py`, `g1/g1_sensors.py`) and Unitree DDS interface
-(`unitree_interface.py`, `g1/unitree_interface.py`).
+(`unitree_interface.py`, `g1/unitree_interface.py`), which share their command
+path in `unitree_common.py`. Both sims stop the collisions inside each RoboCasa
+fixture with moving parts, and between those parts and the static scene, once
+`env.reset()` has built the kitchen (`sim_common.exclude_fixture_collisions`);
+the robot, the objects and loose fixtures (on a free joint, such as a blender
+lid) collide with everything as before.
 
 ### Simulators mimic the real robot's topic surface
 
@@ -449,9 +530,40 @@ RealSense drivers' topics, frame names and camera TF (`/tf_static` + `/tf`) for
 `/realsense/{head,left_hand,right_hand}` — colour, depth and aligned depth with
 their camera_info, and `depth/color/points` — as captured from the robot in
 `golem_robocasa/realsense_profile.yaml`, `/livox/lidar` (CustomMsg), `/livox/pointcloud`, `/livox/imu`,
-`/{left,right}/gripper/state`, and `rt/lowstate` over Unitree DDS (with the
-real robot's `mode_machine`, 6); consumes `rt/lowcmd` and the
-`/{left,right}/gripper/*` services/DeliGrasp action.
+`/{left,right}/gripper/state`, and `rt/lowstate` over Unitree DDS after every
+physics step (with the real robot's `mode_machine`, 6, a millisecond sim-time
+tick, `rpy` and a CRC); consumes `rt/lowcmd` and the `/{left,right}/gripper/*`
+services/DeliGrasp action. Every body motor is off until the first `rt/lowcmd`
+with a valid CRC, `mode_machine` 6, `mode_pr` 0 and finite values (other frames
+are dropped); after that, `GOLEM_CMD_TIMEOUT` of silence turns every motor off
+until frames return. Its MID-360 is the model both robots share
+(`golem_robocasa/mid360.py`): the real scan pattern, 20,000 points a 10 Hz
+frame on lines 0-3, each point's `offset_time` the time of the pose it was cast
+from, and each ray without a return a point at (0, 0, 0), as the real driver
+publishes it; `/livox/lidar` and `/livox/pointcloud` carry the same frame. Its rays are
+read from depth images rendered on the GPU (`mid360.GpuCaster`, as on the G1),
+and `GOLEM_LIDAR_SELF_FILTER=0` keeps the robot's own returns. On both robots the
+casts run on a thread of their own beside the physics, and when they fall a frame
+behind (under load, or faster than real time) the physics waits for them
+(`mid360.ScanRing`): the real-time factor drops, and no frame trails the sim by
+more than one frame.
+Both sims pace to `GOLEM_SIM_RATE`, the target real-time factor in sim seconds
+per wall second (`sim_common.sim_rate_from_env`, `sim_timing.RealtimePacer`):
+unset or empty is 1, real time, the default; `2` runs twice real time, `0.5`
+half; `max` (any case) never sleeps; anything else stops the sim at start. The
+sim logs `sim rate: ...` at start. At any rate the pacer repays at most 0.1 s of
+wall lag, so a pause is not caught up. Every rate the robot sees counts sim time (the grippers'
+state and DeliGrasp settles included), though the G1's head camera drops a frame
+that falls due while it is still rendering the last (`g1/g1_sensors.py`), where the
+H1-2's cameras and the lidar make the physics wait; only the viewer, the logs and
+their rate limits, and the limits that end a wait once the physics has stopped run
+on wall time. Faster than real time gives every ROS node (FAST-LIO,
+Nav2, the leg policy, `golem_safety`) less wall time per sim second: a stack that
+falls behind sends stale commands, and `GOLEM_CMD_TIMEOUT` (sim time) turns the
+motors off as at 1x. The closed-loop tests are gates only at 1x: `tests/sim`
+and `tests/g1` pass the shell's `GOLEM_SIM_RATE` (never `docker/.env`'s) and
+their summaries print the rate the sim logged; `tests/stack` and the surface
+probe clear it.
 (Trust the code over any topic list repeated elsewhere: the sensor suite in
 `h12_sensors.py`, the grippers in `magpie_hand_bridge.py`, `/clock` and the
 opt-in odom in `mujoco_ros_bridge.py`, Unitree DDS in `unitree_interface.py`.)
@@ -465,19 +577,23 @@ and `rt/dex3/{left,right}/state`, and serves `/elastic_band/toggle`
 `rt/dex3/{left,right}/cmd`. It plays the robot in Unitree's debug mode: every
 motor is off until the first `rt/lowcmd` with a valid CRC, `mode_machine` 5
 and `mode_pr` 0, and an elastic band on `torso_link` holds the robot until the
-toggle (or SPACE in the viewer) releases it; the G1 bringup's walking node
+toggle (or SPACE in the viewer) releases it; the G1 bringup's leg node
 calls it. It reads none of HOMIE's files. (Trust `g1/g1_sensors.py` for
 the ROS side, `g1/unitree_interface.py` for the DDS side and `g1/g1_mujoco.py`
-for the band.) Its knobs are `GOLEM_LIDAR`, `GOLEM_LIDAR_POINTS`,
-`GOLEM_LIDAR_HZ`, `GOLEM_CAMERAS`, `GOLEM_CAMERA_HZ`, `GOLEM_CAMERA_SCALE` (G1
-default 0.5), `GOLEM_CMD_TIMEOUT`, `GOLEM_SPAWN_BACKOFF`, `GOLEM_SIM_ODOM`,
-`GOLEM_SIM_EXPERIMENT`. Their defaults are in the code
+for the band.) Its knobs are `GOLEM_LIDAR`, `GOLEM_LIDAR_POINTS` (points per
+frame, default the real sensor's 20,000), `GOLEM_LIDAR_HZ`, `GOLEM_CAMERAS`,
+`GOLEM_CAMERA_HZ`,
+`GOLEM_CAMERA_SCALE` (G1 default 0.5), `GOLEM_CMD_TIMEOUT`,
+`GOLEM_SPAWN_BACKOFF`, `GOLEM_SIM_ODOM`,
+`GOLEM_SIM_RATE` (as on the H1-2, above). Their
+defaults are in the code
 that reads them: `SensorConfig` in `g1/g1_sensors.py` (sensors),
-`g1/unitree_interface.py` (the command timeout), `g1/g1_mujoco.py`
-(spawn, odom) and `measurement_bridge.py` (experiment); the compose files pass them
+`unitree_common.py` (the command timeout), `g1/g1_mujoco.py`
+(spawn, odom) and `sim_common.py`
+(rate); the compose files pass them
 (`docker/docker-compose.g1.yml` the G1-only ones). The G1 sim ignores the H1-2-only
 knobs (`GOLEM_SPAWN_MARGIN`, `GOLEM_SPAWN_OFFSET`, `GOLEM_HAND_CAMERA_RES`,
-`GOLEM_CAMERA_DEPTH`, `GOLEM_CAMERA_POINTCLOUD`, the tether ones). It refuses
+`GOLEM_CAMERA_DEPTH`, `GOLEM_CAMERA_POINTCLOUD`). It refuses
 `--timing`, and the H1-2 sim refuses `--duration` (`sim_common.py`).
 
 The measured surface of each RoboCasa robot is checked in as a golden:
@@ -492,6 +608,13 @@ three RealSense RGBD camera streams with camera info, and
 `rt/lowcmd` and optional `rt/inspire/cmd`. The default asset is the floating-base Magpie H1-2; `--hand_type inspire`
 selects the Inspire fixture. Magpie exposes the real gripper state, services,
 and DeliGrasp action through a native ROS process inside the Isaac container.
+Its H1-2 (the USD) keeps the MID-360 upright, unlike the RoboCasa sim and the
+real robot's raw frame, so `golem_slam`'s H1-2 configs do not match Isaac's lidar.
+Its `rt/lowstate` tick counts publishes, not milliseconds, so
+`golem_lowerbody_rl`'s readiness check never passes there: the leg node
+pre-poses the legs and holds them, the policy never starts, and the node logs
+that the tick is off its clock. `tests/stack` skips `isaac locomotion`
+(`run_all.sh`; `run.sh` refuses it).
 See `tests/README.md` for saved CPU and cross-container integration tests.
 
 ### Ground truth must NEVER be on by default
@@ -504,13 +627,14 @@ sim-to-real transfer.
 
 - **RoboCasa complies, for both robots:** ground-truth `/odom` + `odom→pelvis`
   TF is gated by `GOLEM_SIM_ODOM` (default `'0'` = off, read in `h12_mujoco.py`
-  and `g1/g1_mujoco.py`). Only the mac nav demo opts in; the G1 bringup and tests refuse it. Keep it that way. The
-  experiment surface (`/sim/ground_truth`, `/sim/reset_objects`) is gated by
-  `GOLEM_SIM_EXPERIMENT` (`measurement_bridge.py`). The G1 acceptance tests
-  record the robot's state inside the sim process instead of publishing it.
+  and `g1/g1_mujoco.py`). No stack opts in: every bringup's navigation runs on FAST-LIO, and the G1 bringup and tests refuse it. Keep it that way. The
+  closed-loop tests (`tests/g1`, `tests/sim`) run the sim with it off
+  (`GOLEM_SIM_ODOM=0`), refuse a `GOLEM_SIM_ODOM` that turns it on, and record
+  the robot's state inside the sim process instead of publishing it.
 - **Isaac:** no full-scene ground-truth publisher or per-step scene JSON conversion.
 - **Known deviations (do not make worse):** RoboCasa always publishes privileged task signals
-  (`/robocasa/success`, `/robocasa/reward`, `/robocasa/task_goal`), for both
+  (`/robocasa/success`, `/robocasa/reward`, `/robocasa/task_goal`,
+  `/robocasa/task_name`), for both
   robots. Never make robot-stack code *depend* on any of these, and don't add
   new ungated ground-truth publishers.
 
@@ -529,9 +653,10 @@ so bumping the driver rebuilds it against whatever SDK headers your cache
 happens to hold. `4a1def9` (Avia2) calls `kLivoxLidarDoubleEchoData` /
 `LivoxLidarDoubleEchoRawPoint`, added in SDK commit `08f523c` — against an
 older cached SDK it fails with "was not declared in this scope".
-**Stale, not re-verified:** both Dockerfiles check out Livox-SDK2 at `08f523c`
-(`RosDockerfile` §2, `RobocasaDockerfile`); the unpinned `master` clone
-described in this paragraph is gone. The pin rule above stands.
+**Stale, not re-verified:** every image that builds the SDK checks out
+Livox-SDK2 at `08f523c` (`RosDockerfile` §2 and `RobocasaDockerfile`;
+`tests/docker/test_source_pins.py` keeps them on one commit); the unpinned
+`master` clone described in this paragraph is gone. The pin rule above stands.
 
 The failure is silent. Upstream's `build.sh` ends in `popd`, so it exits 0 even
 when its colcon build fails, and `launch_ros.sh` doesn't check either. The image
@@ -547,42 +672,93 @@ Whether it reproduces depends on how old your Docker cache is, so "it built on
 my machine" proves nothing.
 
 If you genuinely need a newer driver (Avia2/Mid-360s hardware), do it in one
-change: add `ARG LIVOX_SDK2_REF=<matching SDK sha>` to **both** Dockerfiles with
-a pinned `git fetch --depth 1 origin "$LIVOX_SDK2_REF"`, keep the two SHAs
+change: add `ARG LIVOX_SDK2_REF=<matching SDK sha>` to **every** Dockerfile that
+builds the SDK, with a pinned `git fetch --depth 1 origin "$LIVOX_SDK2_REF"`, keep the SHAs
 identical (the images must agree on the `CustomMsg` wire format), and assert the
 build worked — `python3 -c 'from livox_ros_driver2.msg import CustomMsg'` — so a
 mismatch fails the image build instead of shipping broken.
 
-### Comments describe the code as it is, not how it got there
+### Comments and docstrings
 
-A comment is scoped to what the code does **now**, written for someone who has
-never seen an earlier version. Change history belongs in the commit message and
-the PR, not in the source — git already has it, and a comment about a past edit
-goes stale the moment the next edit lands.
+Comments are written for a person reading and annotating the code who has
+never seen an earlier version of it. They say what the code does **now** and
+why, never what it used to do or what was tried. Change history belongs in the
+commit message and the PR; git already has it.
 
-Don't write:
+**Every definition gets one purpose line.** Every Python module, class,
+function and method has a docstring whose first line is one imperative
+sentence saying what it does (`"""Start the policy from the held pre-pose."""`,
+PEP 257). C++ classes and functions get the same as a `//` line above the
+declaration, shell functions as a `#` line above. Every test's purpose line
+says what it proves (`"""A false heartbeat stops the legs for good."""`). Add
+more lines only for what a caller must know: units, frames, side effects,
+threads, what it raises.
 
-- change narration — `# now uses X instead of Y`, `# switched to CycloneDDS`,
-  `# was 0.5, bumped to 0.8`, `# fixed the TF extrapolation bug`
-- dated or attributed notes — `# 2026-07-12 (max): ...`, `# per review`
-- status chatter about the edit itself — `# new`, `# updated`, `# temporary`,
-  `# deprecated, keep for now`
-- commented-out code kept "just in case" — delete it; git remembers
-- a restatement of the identifier the comment sits above
+**Inside a body, comment sparingly**, only what the code cannot say for itself:
 
-Do write what the code can't say for itself: units and frames (`# rad, pelvis
-frame`), why a non-obvious constant, ordering or sleep is required, invariants
-a caller must uphold, and a link to the upstream issue that forces a workaround.
+- units and frames (`# rad, pelvis frame`, `# s of sim time`);
+- why a non-obvious constant, ordering, sleep or workaround is needed, as a
+  present-tense constraint (`# 59.6.0: colcon's python_setup_py fails on 69+`,
+  not `# downgraded from 69, colcon broke`);
+- invariants a caller or a later edit must keep.
 
-Rationale from a past change is welcome when the rationale is still
-load-bearing — but phrase it as a present-tense constraint, not as a diff:
-`# 3.2.3 matches the MJPC ABI` beats `# downgraded from 3.3.1, MJPC broke`.
+**Safety invariants start with `SAFETY:`**, so a reviewer can find every one
+with `grep -rn 'SAFETY:'`. Use it where the comment states what must hold to
+keep the robot or the people near it safe: the single writer of `rt/lowcmd`,
+the estop latch, heartbeat gating, start-up interlocks, limits and clipping,
+what happens to the motors on a fault or an exit
+(`# SAFETY: golem_safety keeps relaying the last leg command after a fault;
+it does not balance the robot.`).
 
-This applies to edits too: when you change behavior, rewrite the nearby comment
-and docstring to describe the new behavior instead of appending a note about the
-change. A comment that duplicates a list the code owns (topics, package names,
-paths, tuning values) is a stale comment waiting to happen — point at the
-authoritative source instead of copying it.
+**Allowed notes**, and only in these forms:
+
+- `TODO(<owner>): <what is missing and why>`; a bare `TODO` is deleted;
+- a link to a doc section, README or upstream issue that holds the long
+  explanation, instead of repeating it;
+- `unmeasured on the real <robot>` beside a value not yet checked on hardware.
+
+**Never write:**
+
+- change narration: `# now uses X instead of Y`, `# was 0.5, bumped to 0.8`,
+  `# fixed the TF extrapolation bug`;
+- dated or attributed notes: `# 2026-07-12 (max): ...`, `# per review`;
+- status chatter: `# new`, `# updated`, `# temporary`, `# deprecated, keep for now`;
+- commented-out code: delete it, git remembers;
+- a restatement of the line or identifier it sits above (`# increment i`);
+- a copy of a list the code or a config owns (topics, package names, paths,
+  tuning values): point at the source instead.
+
+**Configs, launch files, scripts and build files are documented more heavily
+than code**, because nobody can read a function body to learn what a value or
+a step does:
+
+- **YAML configs:** each directory of configs has an `example.yaml` (or
+  `example.<kind>.yaml` where one directory holds several schemas) that
+  contains every key, with a comment on each giving its meaning, units and
+  allowed values. The real configs beside it comment a value only to say why
+  it was chosen. A test or the loader keeps the example's keys in step with
+  the schema where the package already validates its configs.
+- **Launch files:** a module docstring saying what the file starts, in what
+  order and under which conditions; every `DeclareLaunchArgument` has a
+  `description=` with the meaning, units and allowed values; every included
+  file and every node has a comment saying why it is there.
+- **Shell scripts:** a header with usage, arguments, environment variables
+  read, and exit codes; a comment above each step.
+- **Dockerfiles and compose files:** a comment above each stage and layer
+  saying what it installs and why, and why each pin is the version it is.
+- **CMake:** a comment on each target and option.
+
+Functional comments are not comments for this rule and stay as they are:
+shebangs, encoding lines, `noqa`, `type: ignore`, `pragma`, `NOLINT`,
+`# syntax=` directives, licence and copyright headers, and docstrings that
+code reads (`argparse` descriptions from `__doc__`).
+
+**Dead code is deleted**, not commented out or kept "in case": code with no
+caller outside its own tests, settings nothing reads, and dependencies nothing
+imports.
+
+When you change behaviour, rewrite the comments and docstrings next to it to
+describe the new behaviour.
 
 ### Other invariants
 
@@ -590,20 +766,22 @@ authoritative source instead of copying it.
   robots.** Its `safety_node` is the only publisher of `rt/lowcmd` (ROS
   `/lowcmd`), which drives every body motor (the G1 runs in Unitree's debug
   mode).
-  Controllers publish only to its `rt/safety/*` inputs: `golem_upper_ik` and
-  `g1_homie` refuse a command topic outside them. The exception is
+  Controllers publish only to its `rt/safety/*` inputs: `golem_upper_ik`
+  refuses a command topic outside them, and `golem_lowerbody_rl` publishes
+  only on `/safety/lowcmd_lower_in`. The exception is
   `dex_3`, which writes `rt/dex3/<side>/cmd` directly, with no safety layer.
 - **Quiet inputs are held and reported, not estopped.** Once an input has
   engaged, an input with no new command for its `stale.*_seconds` keeps its
   last command relayed (`input_quiet`, then `input_resumed`), and a quiet
   `rt/lowstate` leaves the relay running (`state_quiet`, `state_resumed`). This
-  includes the G1's split mode: a walking-node fault silences
-  `locomotion_node`, and `golem_safety` keeps relaying its last leg command,
+  includes the G1's split mode: a leg-node fault silences
+  `lowerbody_controller_node`, and `golem_safety` keeps relaying its last leg command,
   which does not balance the robot, instead of turning every motor off.
 - **The estop latch** is one way until restart. It latches on a command with a
   non-finite value, a second live writer on an input (a new writer is accepted
   after `single_writer.handover_seconds`, 0.5 s, of quiet), a measured joint
-  past `limits.estop` or not finite (checked from boot, on both robots), another
+  past `limits.estop` or not finite (checked from boot, on both robots; under
+  `use_sim_time` from the first `/clock`), another
   robot's `mode_machine` once an input has engaged, the transport-lag check
   (`control.state_lag_ms`, on domain 0; off in every G1 config), and with
   `use_estop` a hardware estop that is triggered, unplugged or silent. What it
@@ -623,38 +801,55 @@ authoritative source instead of copying it.
   `frame_task_server` sends its upper-body slots one command with mode 0 and
   zero kp, kd and tau on the IK joints, then stops publishing. The held joints
   get the same, except on the G1 (the profile's
-  `shutdown_keeps_held_joints_on_lowcmd`). On the H1-2 `golem_safety` relays
+  `shutdown_keeps_held_joints`). On the H1-2 `golem_safety` relays
   it, so the torso and arms go limp and stay so (the quiet input keeps its last
   command relayed). On the G1, in split mode (the only one its bringups run),
   it relays it too: the waist keeps its hold angle, gains and torque and only
-  the arms go limp, while the walking node keeps the legs. No estop latches.
+  the arms go limp, while the leg node keeps the legs. No estop latches.
 - **`golem_safety`'s own exit** (SIGINT, SIGTERM, SIGHUP): it stops publishing
   at once (an estop burst in progress is finished first, and with
   `keep_writing` the estop command is written once if none has been since the
   latch). Once `rt/lowcmd` falls silent, the sims turn every body motor off
   after `GOLEM_CMD_TIMEOUT` (0.5 s of sim time); what the real robots do then
   has not been measured.
+- **Robot time.** `golem_safety`, `golem_upper_ik`, `golem_lowerbody_rl`,
+  `golem_skills` and `dex_3` measure rates, freshness and fault windows and
+  timeouts on robot time, the sim's `/clock` under `use_sim_time` and the steady
+  (`golem_safety`: boot) clock otherwise (the real robots, unchanged), so under
+  `use_sim_time` a rate follows `/clock`'s steps (about one cycle per step while a
+  step is no longer than the period; a longer step gets up to two `golem_safety`
+  writes, or a catch-up burst from `golem_upper_ik`'s publisher), keeping on the
+  steady clock only
+  the liveness checks that must fire while `/clock` stops (`golem_safety`'s
+  heartbeat and its readers' silence checks) and the exits; `safety_node`
+  refuses `use_sim_time:=true` without `sim:=true`, and every node of a sim
+  bringup runs with `use_sim_time` true (`golem_bringup/test/test_sim_time.py`).
 - **One robot stack per DDS domain** (§3). Never run the H1-2's and the G1's
   stacks on one domain.
-- **HOMIE's policy is non-commercial.** `core_ws/src/g1_homie/policy/`
-  holds OpenHomie's pretrained policy, CC BY-NC 4.0 by its `LICENSE` (its
-  README says CC BY-NC-SA 4.0): treat it as CC BY-NC-SA 4.0, unlike the MIT
-  G1 packages. Keep its `LICENSE` and `README.md` beside the files, and keep
-  `homie_policy.py` inside `policy/`.
-- MuJoCo versions are pinned per image (`3.2.3` in `ros` to match the MJPC ABI,
-  `3.3.1` in `robocasa`) — never bump one without the other side of its pin.
+- **HOMIE's policy is non-commercial.**
+  `core_ws/src/golem_lowerbody_rl/policies/homie/` holds OpenHomie's
+  pretrained policy and its code (`homie_policy.py`, `mujoco_deploy_g1.py`,
+  `g1.yaml`), CC BY-NC 4.0 by its `LICENSE` (its README says CC BY-NC-SA 4.0):
+  treat it as CC BY-NC-SA 4.0, unlike the MIT `golem_lowerbody_rl` around it,
+  whose `config/g1/policies/homie.yaml` transcribes its values. Keep its
+  `LICENSE` and `README.md` beside the files (the package installs both with
+  `deploy.onnx`), and keep `homie_policy.py` inside `policies/homie/`.
+- MuJoCo is pinned in the `robocasa` image (`3.17.0`, with robosuite and
+  RoboCasa patched for it in `docker/patches/`): the sims call its API
+  directly, so bump it together with those patches. The `ros` image keeps
+  `golem_base`'s MuJoCo, which nothing the workspace runs imports (HOMIE's
+  vendored `mujoco_deploy_g1.py` does, and nothing runs it).
 - `numpy<2`, `setuptools==59.6.0`, `wheel<0.44` are deliberately re-clamped in
   the Dockerfiles; add new pip deps at the END of a Dockerfile (layer-order
-  discipline), each through a lock step (`-c /opt/golem-locks/<step>.txt`,
+  discipline; in `RosDockerfile`, before its final clamp, which must stay its
+  last pip step), each through a lock step (`-c /opt/golem-locks/<step>.txt`,
   enforced by `tests/docker/test_source_pins.py`). Details in `docker/BUILD.md`.
-- After bumping the `mujoco_mpc` submodule: rebuild the `ros` image at the
-  matching `MJPC_REF` and wipe stale `core_ws/build/deploy_mjpc`.
 
 ## 9. Running the robot — the standard three-terminal flow
 
 Everyone runs their package through bringup, which starts the whole robot.
 
-### x86, the H1-2
+### The H1-2
 
 ```bash
 # Terminal 1 — simulator (start FIRST so /clock is publishing)
@@ -673,7 +868,13 @@ ros2 action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
   "{target_object: 'vertical fridge handle', arm: 'right', timeout: {sec: 60, nanosec: 0}}" --feedback
 ```
 
-### x86, the G1
+The closed-loop check of the whole H1-2 stack in RoboCasa is
+`tests/sim/test_sim_stack.sh --h12` (`tests/sim/README.md`): the robot standing
+unsupported, a Nav2 goal reached by walking, `/named_config` moves while it
+walks, SLAM healthy throughout and `safety_node` the only `/lowcmd` publisher.
+`tests/stack/run.sh` checks the arms and the legs alone.
+
+### The G1
 
 ```bash
 # Paired: the sim plus g1_sim.launch.py (the arms and HOMIE), gated on the sim's robot
@@ -687,7 +888,7 @@ docker/scripts/docker_run.sh robocasa --g1 --layout 9 --style 9 --seed 42
 # Terminal 2 — builds core_ws (both robots' packages), drops to a shell; no
 # --g1 needed: the ros container runs either robot's bringup
 docker/scripts/docker_run.sh ros
-ros2 launch golem_bringup g1_sim.launch.py     # wait for the walking node's "elastic band released"
+ros2 launch golem_bringup g1_sim.launch.py     # wait for the leg node's "elastic band released"
 # variants: use_rviz:=false use_hands:=false use_nav:=false use_skills:=true
 
 # Terminal 3
@@ -700,32 +901,15 @@ ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
 Walking and navigation need the spawn backed into open floor
 (`GOLEM_SPAWN_BACKOFF=2.0` before terminal 1's command); `docs/g1/walking.md`,
 `navigation.md` and `exploration.md` have those flows. The closed-loop checks
-are `tests/g1/test_sim_bringup.sh [--walk]`, `tests/g1/test_sim_nav.sh` and
-`tests/g1/test_sim_explore.sh` (`tests/g1/README.md`).
-
-### mac
-
-```bash
-# Terminals 1+2 in one: start BOTH services together (bringup auto-launches in ros)
-docker/mac/scripts/docker_stack_mac.sh up robocasa
-# or two terminals: docker/mac/scripts/docker_run_mac.sh robocasa  /  ... ros
-# (start ros within seconds of robocasa or the robot collapses)
-
-# Terminal 3
-docker exec -it golem_ros bash                    # fallback: colima ssh -- docker exec -it golem_ros bash
-source /home/code/h12_sim_scripts/robot_cli.sh   # rob_pose, rob_grip, rob_stand, rob_explore, ...
-```
-
-The mac `ros` container auto-runs
-`ros2 launch /home/code/core_ws/src/golem_bringup/launch/h12/h12_sim_mac.launch.py`
-(launched by path; only skills built on mac are available — no `golem_skills`,
-`model_server`, or nav unless `GOLEM_SLAM/GOLEM_NAV2` are set).
+are `tests/sim/test_sim_stack.sh --g1` (the same test as the H1-2's:
+`tests/sim/README.md`), `tests/g1/test_sim_bringup.sh [--walk]`,
+`tests/g1/test_sim_nav.sh` and `tests/g1/test_sim_explore.sh` (`tests/g1/README.md`).
 
 ### Real robot (for awareness — coordinate before touching)
 
 H1-2: onboard PC, native (no docker): build the whole workspace, as
-`launch_ros.sh` does (the G1's packages included: `golem_bringup`
-exec_depends on them). The build
+`launch_ros.sh` does (the G1's `dex_3` included: `golem_bringup`
+exec_depends on it). The build
 includes `golem_ros2_models`, which installs both robots' models from the
 checkout's `CL_Assets` (its LFS meshes pulled): the H1-2's launches read the
 robot description from `golem_ros2_models`, not from `CL_Assets` directly.
@@ -740,6 +924,21 @@ once `golem_safety` relays `frame_task_server`'s commands, which needs the estop
 box connected: a `safety_node` that starts while `estop_node` reports a failed
 connection latches until restart, and `frame_task_server` exits after
 `controller.startup_timeout` (30 s) when nothing is relayed (§6).
+Pre-flight, both before the first real run: measure the leg node's worst
+`/lowstate` gap and its tick lag on the onboard PC (the ROS path) in a hoisted
+ALMI run, and set `golem_lowerbody_rl`'s `config/h12/real.yaml`
+`faults.max_state_gap` (0.25 s until then) and `faults.max_latency` (null, no
+latency fault, until then) from them. In that first start, the leg node logs
+`the policy may start (/lowstate's tick ran at ... s per s of the node's
+clock)` only if the real `/lowstate` tick counts milliseconds of the node's
+clock; if it does not, the legs stay in the pre-pose and the node logs why
+(`the policy waits: /lowstate's tick is off the node's clock ...`). And replay at least 3 recorded real-robot
+bags (`record_slam_bag` recordings) through `navigation.launch.py robot:=h12`
+and check FAST-LIO, `level_odom` and the map. Those bags' points were recorded
+with the driver's roll 180 and the IMU upright, so rotate both back to the raw
+frame (180° about x) first. Keep the MID-360 unsynced (no PTP: the driver then
+stamps with the host clock, so lidar and joint-state stamps share one clock),
+or check that `level_odom` logs no "waiting for body->pelvis".
 
 G1: in Unitree's debug mode, on a gantry; the procedure for entering debug
 mode on our G1 is not written yet, and nobody runs a session until it is
@@ -747,9 +946,14 @@ mode on our G1 is not written yet, and nobody runs a session until it is
 `ROS_DOMAIN_ID=0` in `docker/.env`, `docker/scripts/docker_run.sh ros`, then
 `ros2 launch golem_bringup g1_real_robot.launch.py use_hands:=false use_rviz:=false`
 — the arms; the leg motors stay off. `start_position_verified:=true` adds
-HOMIE's walking node, which pre-poses the legs and holds them until
-`/lowerbody/confirm_engage`. Nothing has run on the real G1 yet; follow
-`docs/g1/first-session.md` step by step.
+the leg node (`golem_lowerbody_rl`, running HOMIE), which pre-poses the legs
+and holds them until `/lowerbody/confirm_engage`. Before the legs' first
+session, measure the leg node's worst `/lowstate` gap and tick lag on the
+laptop (the ROS path) and set `config/g1/real.yaml`'s `faults.max_state_gap`
+(0.25 s, the H1-2's value) and `faults.max_latency` (null) from them: the leg
+node has no latency check on the DDS source timestamp, which a ROS subscriber
+on Humble cannot see, so tick lag is its only latency check. Nothing has run
+on the real G1 yet; follow `docs/g1/first-session.md` step by step.
 
 ## 10. Getting-started checklist for a new agent
 
@@ -764,7 +968,7 @@ HOMIE's walking node, which pre-poses the legs and holds them until
    and `ros2 action list | grep skill` inside `golem_ros`.
 6. Trigger `/skill/grasp` or the frontier explorer (§7).
 7. Read first: `docs/RUNNING.md` (run flows), `docker/BUILD.md` (build system),
-   your target package's source. `README.md` indexes the rest of `docs/`; the
+   your target package's source. `docs/index.md` indexes the rest of `docs/`; the
    G1 starts at `docs/g1/index.md`.
 
 ### Common pitfalls
@@ -786,19 +990,42 @@ HOMIE's walking node, which pre-poses the legs and holds them until
   unused packages `h12_safety_layer`, `h12_ros2_controller`, `g1_safety_layer`
   and `g1_control` were deleted), or before `golem_ros2_models` replaced
   `h12_ros2_model` and `g1_description`, or before `dex_3` and `g1_homie`
-  replaced `g1_dex3` and `g1_locomotion`, keeps their build and install
-  directories.
+  replaced `g1_dex3` and `g1_locomotion`, or before `golem_lowerbody_rl`
+  replaced the leg packages `h12_lowerbody_rl` and `g1_homie`, or before
+  `golem_slam`, `deploy_mjpc` and `golem_skills` replaced `h12_slam`,
+  `h12_deploy_mjpc` and `h12_skills` (and `g1_navigation` was folded into
+  `golem_slam` and `golem_skills`), or before MuJoCo MPC was retired
+  (`deploy_mjpc` deleted), keeps their build and install directories.
   From the repo root, on every host that built the workspace (`sudo` for files
   a container left root-owned):
-  `rm -rf {core_ws/build,core_ws/install,core_ws/build_stack_tests,core_ws/install_stack_tests,container_cache/g1_tests/build,container_cache/g1_tests/install}/{h12_bringup,g1_bringup,h12_safety_layer,h12_ros2_controller,g1_safety_layer,g1_control,h12_ros2_model,g1_description,g1_dex3,g1_locomotion,h12_slam,h12_deploy_mjpc,h12_skills,g1_navigation}`.
+  `rm -rf {core_ws/build,core_ws/install,core_ws/build_stack_tests,core_ws/install_stack_tests,container_cache/g1_tests/build,container_cache/g1_tests/install,container_cache/sim_tests/build,container_cache/sim_tests/install}/{h12_bringup,g1_bringup,h12_safety_layer,h12_ros2_controller,g1_safety_layer,g1_control,h12_ros2_model,g1_description,g1_dex3,g1_locomotion,h12_slam,h12_deploy_mjpc,h12_skills,g1_navigation,h12_lowerbody_rl,g1_homie,deploy_mjpc}`.
   Until then `launch_ros.sh` (`docker_run.sh ros`, `docker_stack.sh`,
-  `tests/g1`) exits before it builds, with `stale installed package '<pkg>' has
+  `tests/g1`, `tests/sim`) exits before it builds, with `stale installed package '<pkg>' has
   no discovered source`, and a native workspace (the H1-2's onboard PC) keeps
-  answering to the old names. A `--symlink-install` workspace also keeps links
-  to deleted G1 configs that fail the next `golem_upper_ik` build; the change
+  answering to the old names. The same goes for what a package that stayed no
+  longer ships: an old `golem_slam` install keeps the removed
+  `launch/{h12,g1}_navigation.launch.py` and `launch/h12_real_slam.launch.py` (the
+  last moved to `golem_bringup`), and the removed console scripts `g1_body_to_pelvis`
+  (`golem_slam`) and `livox_imu_upright` (`golem_bringup`), so `ros2 launch
+  golem_slam h12_navigation.launch.py` still starts the old graph; delete those
+  two packages' `build` and `install` directories and rebuild. A `--symlink-install` workspace also keeps links
+  to configs deleted from the source (the G1 configs `golem_bringup` replaced, its
+  MJPC configs in `config/h12/`, the H1-2's `golem_upper_ik/config/h12/debug.yaml`); `golem_upper_ik/setup.py` and
+  `golem_slam/setup.py` (the filter in its `files()`) skip such dangling links, so the
+  build goes on, but the dangling links stay in `build/` and `install/`. Delete the
+  `debug.yaml` ones once, from the repo root (`sudo`: the containers left them
+  root-owned):
+  `rm -f {core_ws/build,core_ws/build_stack_tests,container_cache/g1_tests/build,container_cache/sim_tests/build}/golem_upper_ik/config/h12/debug.yaml {core_ws/install,core_ws/install_stack_tests,container_cache/g1_tests/install,container_cache/sim_tests/install}/golem_upper_ik/share/golem_upper_ik/config/h12/debug.yaml`
+  (on the host every link in those trees points into the container's `/home/code`, so
+  a search for dangling links there would match them all); the change
   report (`docs/superpowers/specs/2026-10-28-golem-bringup-and-g1-debug-mode/change-report.md`)
-  has that cleanup and the Mac's.
-- **x86 `ros` container ≠ bringup.** It only builds and gives you a shell.
+  has the G1 cleanup.
+  MuJoCo MPC's retirement also leaves two things outside the workspace, both safe
+  to delete: `container_cache/mjpc_build` (MJPC's build directory, several GB,
+  which the `ros` container used to mount and no compose file mounts now) and
+  `.git/modules/mujoco_mpc` (the removed submodule's git directory); after a pull
+  an untracked `mujoco_mpc/` checkout may also remain. Nothing reads them.
+- **The `ros` container ≠ bringup.** It only builds and gives you a shell.
 - **Check the `robot:` line on simulator and stack runs.** `docker_run.sh robocasa|isaac`
   and `docker_stack.sh up` print the robot they selected; a `GOLEM_ROBOT` left
   in the shell or `docker/.env` switches simulator robots silently otherwise.
@@ -806,25 +1033,11 @@ HOMIE's walking node, which pre-poses the legs and holds them until
 - Rebuild is incremental across container restarts (build/install are
   host-mounted); `colcon build --symlink-install` inside the container forces
   it; wipe `container_cache/msgs_ws/` for a clean message rebuild.
-- MJPC C++ iteration: `docker exec -it golem_ros /home/code/h12_sim_scripts/rebuild_mjpc.sh`
-  (`--install` to also refresh assets/proto) — not colcon.
 - 9 of the 12 `/skill/*` actions are stubs (§7) — a goal that immediately
   aborts with "not implemented" is expected, not a regression.
 - Talking to the sim from the host bypasses `docker/.env`; run
   `set -a; source docker/.env; set +a` first or topics will be invisible.
-- Laggy point clouds/images on x86 are usually kernel UDP buffer drops — see
+- Laggy point clouds/images are usually kernel UDP buffer drops — see
   `docs/DDS_TUNING.md` (sysctls + IRQ pinning).
 - Isaac's launcher accepts `--task NAME` and `--headless`; Unitree DDS reads
   `ROS_DOMAIN_ID` directly and rejects domain 0. There is no domain relay.
-
-### Navigation/package migration (2026-10-29)
-
-`h12_slam`, `h12_deploy_mjpc` and `h12_skills` directories and Python modules
-are now `golem_slam`, `deploy_mjpc` and `golem_skills`, and `g1_navigation` was
-removed (`g1_body_to_pelvis` moved into `golem_slam` and `/skill/frontier_explore`
-unified in `golem_skills`). Clean their old build/install prefixes as documented
-in `docs/RUNNING.md`. G1 bringup uses the shared SLAM pipeline with G1 profiles
-(scan matching/loop closure, OctoMap, MPPI). The G1 launch requires FAST-LIO and
-refuses real mode and sim_gt. H1-2 defaults are preserved. G1 floor alignment
-uses a 0.5 m minimum floor depth, and its dynamic base transform is refreshed per
-odometry sample. Do not infer real G1 validation from simulated navigation checks.

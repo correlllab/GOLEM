@@ -40,11 +40,13 @@ const char * mode_name(Mode mode)
 namespace
 {
 
+// Throw the profile error `what` for `source`.
 [[noreturn]] void fail(const std::string & source, const std::string & what)
 {
   throw std::runtime_error("robot profile " + source + ": " + what);
 }
 
+// Throw unless `map` is a map whose keys are all in `allowed`; `where` prefixes the error.
 void reject_unknown_keys(
   const YAML::Node & map, const std::set<std::string> & allowed,
   const std::string & source, const std::string & where)
@@ -60,6 +62,7 @@ void reject_unknown_keys(
   }
 }
 
+// Return `map[key]`; throw when it is missing.
 YAML::Node require(
   const YAML::Node & map, const std::string & key, const std::string & source,
   const std::string & where)
@@ -71,6 +74,7 @@ YAML::Node require(
   return node;
 }
 
+// Return `node` as a T; throw naming `key` when it does not convert.
 template<typename T>
 T scalar_as(
   const YAML::Node & node, const std::string & key, const std::string & source,
@@ -83,6 +87,7 @@ T scalar_as(
   }
 }
 
+// Return the required scalar `map[key]` as a T.
 template<typename T>
 T require_scalar(
   const YAML::Node & map, const std::string & key, const std::string & source,
@@ -91,6 +96,7 @@ T require_scalar(
   return scalar_as<T>(require(map, key, source, where), key, source, where);
 }
 
+// Return the required integer `map[key]`, which must fit a uint8.
 uint8_t require_byte(
   const YAML::Node & map, const std::string & key, const std::string & source)
 {
@@ -101,6 +107,7 @@ uint8_t require_byte(
   return static_cast<uint8_t>(value);
 }
 
+// Return the two entries of the required list `map[key]`.
 std::pair<YAML::Node, YAML::Node> require_pair(
   const YAML::Node & map, const std::string & key, const std::string & source,
   const std::string & where)
@@ -112,6 +119,7 @@ std::pair<YAML::Node, YAML::Node> require_pair(
   return {node[0], node[1]};
 }
 
+// Return the required [first, last] slot list `map[key]`.
 SlotRange require_range(
   const YAML::Node & map, const std::string & key, const std::string & source)
 {
@@ -120,6 +128,7 @@ SlotRange require_range(
     scalar_as<int>(ends.first, key, source, ""), scalar_as<int>(ends.second, key, source, "")};
 }
 
+// Parse joints[index]; its slot must equal its index, and its limits be finite and ordered.
 JointLimit parse_joint(
   const YAML::Node & node, size_t index, const std::string & source)
 {
@@ -154,6 +163,7 @@ JointLimit parse_joint(
   return joint;
 }
 
+// Throw unless `range` is an inclusive range inside the body joints.
 void check_range(
   const SlotRange & range, const std::string & key, size_t joint_count,
   const std::string & source)
@@ -166,6 +176,7 @@ void check_range(
   }
 }
 
+// Parse a loaded YAML document into a RobotProfile, validating every key.
 RobotProfile parse_checked(const YAML::Node & root, const std::string & source)
 {
   reject_unknown_keys(

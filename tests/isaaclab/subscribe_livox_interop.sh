@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# Build only the pinned interfaces in an ephemeral workspace; never the driver.
+# Build the pinned Livox message interfaces in a temporary workspace and run check_livox_ros.py.
+#
+# Runs in the ROS container that run_livox_interop.sh starts. Builds only the CustomMsg and
+# CustomPoint definitions from core_ws/src/livox_ros_driver2, never the driver itself.
+# Prints SUBSCRIBER_READY before it subscribes. Exit: the check's status.
 set -eo pipefail
 source /opt/ros/humble/setup.bash
+
+# An interface-only package named livox_ros_driver2, so the type names match the driver's.
 workspace=$(mktemp -d)
 mkdir -p "$workspace/src/livox_ros_driver2/msg"
 cp /home/code/core_ws/src/livox_ros_driver2/msg/Custom{Msg,Point}.msg "$workspace/src/livox_ros_driver2/msg/"
@@ -25,6 +31,7 @@ rosidl_generate_interfaces(${PROJECT_NAME} "msg/CustomMsg.msg" "msg/CustomPoint.
 ament_package()
 CMAKE
 cd "$workspace"
+# The system Python, the one check_livox_ros.py runs with.
 colcon build --packages-select livox_ros_driver2 --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
 source install/setup.bash
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp

@@ -1,0 +1,65 @@
+# Every key of a robot's controller data (robot.yaml), with its meaning and allowed values;
+# read by golem_upper_ik.profile, which requires every key and refuses any other. This file
+# documents the schema: setup.py does not install it, and test_profile.py checks that it
+# loads as a robot.yaml would. The values are this robot's.
+
+# the robot's name in messages
+display_name: G1
+
+# the joints the IK solves for, by URDF name, in the order of every named configuration;
+# with held_joints, exactly golem_safety's upper-slot joints (robots/<robot>.yaml)
+enabled_joints:
+  - left_shoulder_pitch_joint
+  - left_shoulder_roll_joint
+  - left_shoulder_yaw_joint
+  - left_elbow_joint
+  - left_wrist_roll_joint
+  - left_wrist_pitch_joint
+  - left_wrist_yaw_joint
+  - right_shoulder_pitch_joint
+  - right_shoulder_roll_joint
+  - right_shoulder_yaw_joint
+  - right_elbow_joint
+  - right_wrist_roll_joint
+  - right_wrist_pitch_joint
+  - right_wrist_yaw_joint
+
+# the upper-body joints the IK does not solve for (its reduced model locks them at their
+# measured angles at each goal's start); every command holds them at controller.hold_targets
+held_joints:
+  - waist_yaw_joint
+  - waist_roll_joint
+  - waist_pitch_joint
+# true or false. SAFETY: true keeps the held joints at their hold, gains and torque in the
+# controller's shutdown command (for a walking policy balancing on a stiff waist); false
+# turns them off with the IK joints (mode 0, zero gains and torque)
+shutdown_keeps_held_joints: true
+
+# [left, right] end-effector frames: the speed limits' frames and the
+# {left,right}_ee_pose topics' frames
+ee_frames: [left_hand_palm_link, right_hand_palm_link]
+# [left, right]: the planner's default frames (controller config planner.frame_names)
+planner_frames: [left_hand_palm_link, right_hand_palm_link]
+# the URDF frame of /lowstate's IMU, from which the pelvis orientation is recovered; the
+# default of controller.imu_frame
+imu_frame: imu_in_pelvis
+
+# name -> one angle per enabled joint, rad, within the joint limits: the postures
+# /named_config moves to. The IK's fallback seeds (ik_solver.SEED_CONFIGS: home, t_pose,
+# arms_front_45) must be among them.
+named_configs:
+  home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+         0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  t_pose: [0.0, 1.5707963267948966, 0.0, 1.5707963267948966, 0.0, 0.0, 0.0,
+           0.0, -1.5707963267948966, 0.0, 1.5707963267948966, 0.0, 0.0, 0.0]
+  arms_front_45: [-0.7853981633974483, 0.0, 0.0, 1.5707963267948966, 0.0, 0.0, 0.0,
+                  -0.7853981633974483, 0.0, 0.0, 1.5707963267948966, 0.0, 0.0, 0.0]
+
+# named configs the controller's start-up moves through, in order, before it moves the held
+# joints to controller.hold_targets
+startup_sequence: [home]
+
+# {controller config key: number}: this robot's defaults for the controller-config keys the
+# robots do not share (controller.max_state_lag_ms, ms)
+config_defaults:
+  controller.max_state_lag_ms: 0.0

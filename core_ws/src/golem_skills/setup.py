@@ -1,3 +1,5 @@
+"""Install the golem_skills Python package and its `skills` executable."""
+
 from setuptools import find_packages, setup
 
 package_name = 'golem_skills'
@@ -13,10 +15,10 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='root',
-    maintainer_email='root@todo.todo',
-    description='TODO: Package description',
-    license='TODO: License declaration',
+    maintainer='maxconway',
+    maintainer_email='maxlconway@gmail.com',
+    description='Action servers for the LLM-callable /skill/* atomic skills (both robots)',
+    license='MIT',
     extras_require={
         'test': [
             'pytest',

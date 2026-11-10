@@ -10,7 +10,6 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>unitree_hg</exec_depend>
   <exec_depend>custom_ros_messages</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>golem_ros2_models</exec_depend>
@@ -19,11 +18,13 @@
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>pinocchio</exec_depend>
-  <exec_depend>action_msgs</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
+  <test_depend>rosgraph_msgs</test_depend>
+  <test_depend>action_msgs</test_depend>
 
   <export>
     <build_type>ament_python</build_type>

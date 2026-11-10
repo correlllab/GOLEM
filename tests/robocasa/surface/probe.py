@@ -1,30 +1,28 @@
 #!/usr/bin/env python3
-"""Records and checks the externally visible ROS/DDS surface of the RoboCasa sim.
+"""Measure the RoboCasa sim's externally visible ROS 2 and DDS surface, and check or record it.
 
 Runs inside the robocasa container, next to the simulator it launches:
 
     probe.py --robot h12|g1 --out observed.json [--golden golden.json] [--record]
              [--window 10] [--sim-log sim.log] -- <launcher command ...>
 
-It starts the launcher as a child process, waits for its "ROS bridges up" line,
-measures the surface over a window of simulated time, stops the sim with
-SIGINT (the loop runs until interrupted, and its `finally` block tears the
-bridges down), and writes the JSON. With --golden it compares the observation
-against the golden file.
+It starts the launcher as a child process, waits for its "ROS bridges up" line, measures the
+surface over a window of simulated time, stops the sim with SIGINT (the sim loop runs until
+interrupted, and its `finally` block tears the bridges down), and writes the JSON. With
+--golden it compares the observation against the golden file.
 
-Exit status: 0 success or match, 1 mismatch against the golden, 2 the probe
-could not measure (sim failed to start, domain shared with another sim, a
-required measurement missing, ...). A sim that crashes or hangs on SIGINT after
-the surface was measured only prints a warning; the comparison decides.
+Exit status: 0 success or match, 1 mismatch against the golden, 2 the probe could not
+measure (the sim failed to start, the domain is shared with another sim, a required
+measurement is missing). A sim that crashes or hangs on SIGINT after the surface was
+measured only prints a warning; the comparison decides.
 
-Rates are per second of simulated time, taken from message header stamps where
-a message has them and from the latest /clock sample otherwise, so they do not
-depend on the machine's real-time factor. WALL_TIMER_TOPICS are the exception:
-the sim publishes them from a wall-clock ROS timer, as the real driver does,
-so their rate is wall-clock Hz.
+Rates are per second of simulated time, taken from message header stamps where a message has
+them and from the latest /clock sample otherwise, so they do not depend on the machine's
+real-time factor or GOLEM_SIM_RATE: both sims publish every topic on sim time (each topic's
+rate_clock is "sim").
 
-Only the comparison code is stdlib-only; observing needs ROS, the message
-workspaces and unitree_sdk2py, i.e. the robocasa image.
+Only the comparison code is stdlib-only; observing needs ROS, the message workspaces and
+unitree_sdk2py, that is the robocasa image.
 """
 import argparse
 import json
@@ -44,12 +42,9 @@ RTOL = 0.05
 TOLERANT_KEYS = ("rate_hz", "livox_imu_mean_acc")
 
 PROBE_NODE = "surface_probe"
-BARE_DDS_NODE = "_CREATED_BY_BARE_DDS_APP_"   # how rmw names a non-ROS DDS participant
+BARE_DDS_NODE = "_CREATED_BY_BARE_DDS_APP_"  # how rmw names a non-ROS DDS participant
 READY_LINE = re.compile(r"ROS bridges up")
 IMU_TOPIC = "/livox/imu"
-
-# Published from a wall-clock timer, so their sim-time rate scales with 1/RTF.
-WALL_TIMER_TOPICS = re.compile(r"^/(left|right)/gripper/state$")
 
 # Present on every rclpy node; not part of what a sim chooses to publish.
 INFRA_TOPICS = ("/rosout", "/parameter_events")
@@ -60,28 +55,33 @@ PARAMETER_SERVICES = ("describe_parameters", "get_parameter_types", "get_paramet
 QUEUE_DEPTH = {"/clock": 5000, IMU_TOPIC: 2000}
 DEFAULT_QUEUE_DEPTH = 200
 
-CLEAN_SIM_EXIT = (0, 130, -signal.SIGINT)   # 130: a shell's view of death by SIGINT
+CLEAN_SIM_EXIT = (0, 130, -signal.SIGINT)  # 130: a shell's view of death by SIGINT
 NO_FACTS = dict(frame_id=None, encoding=None, width=None, height=None, point_fields=None)
 
 
-MISSING = object()   # stands for a key one of the two surfaces lacks
+MISSING = object()  # stands for a key one of the two surfaces lacks
 
 
 class ProbeError(Exception):
-    """The surface could not be measured (as opposed to differing from the golden)."""
+    """Signal that the surface could not be measured, as opposed to differing from the golden."""
 
 
-# --------------------------------------------------------------------------- comparison
 
 class Comparison:
-    """Differences between a golden and an observation, and the worst tolerant error."""
+    """Collect the differences between a golden and an observation, and the worst tolerant error."""
 
     def __init__(self, rtol=RTOL):
+        """Compare tolerant values to relative tolerance `rtol`."""
         self.rtol = rtol
         self.diffs = []
-        self.worst = (0.0, "")   # relative error and path of the worst tolerant value
+        self.worst = (0.0, "")  # relative error and path of the worst tolerant value
 
     def walk(self, golden, observed, path="", key=""):
+        """Compare two values recursively, recording each difference under its path.
+
+        Dicts compare key by key, lists ignore order, TOLERANT_KEYS numbers compare to `rtol`,
+        and everything else must be equal and of the same type.
+        """
         if isinstance(golden, dict) and isinstance(observed, dict):
             for name in sorted(set(golden) | set(observed)):
                 child = _join(path, name)
@@ -107,11 +107,12 @@ class Comparison:
             self._add(path, golden, observed)
 
     def _add(self, path, golden, observed):
+        """Record one difference."""
         self.diffs.append(f"{path}: golden {_brief(golden)}, observed {_brief(observed)}")
 
 
 def _brief(value):
-    """repr for a value; a whole entry that is present on one side only shows just its type."""
+    """Return a short repr; a whole entry present on one side only shows just its type."""
     if value is MISSING:
         return "<missing>"
     if isinstance(value, dict):
@@ -120,33 +121,36 @@ def _brief(value):
 
 
 def _is_number(value):
+    """Return whether `value` is an int or float and not a bool."""
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _join(path, name):
+    """Return the path of `name` under `path`, bracketed when the name is a ROS name."""
     if not path:
         return name
     return f'{path}["{name}"]' if name.startswith("/") else f"{path}.{name}"
 
 
 def _canonical(items):
+    """Return a list sorted by each item's JSON, so that order does not count."""
     return sorted(items, key=lambda x: json.dumps(x, sort_keys=True))
 
 
 def compare(golden, observed, rtol=RTOL):
-    """The Comparison of two surfaces; "meta" is not part of the surface."""
+    """Return the Comparison of two surfaces; "meta" is not part of the surface."""
     result = Comparison(rtol)
     result.walk({k: v for k, v in golden.items() if k != "meta"},
                 {k: v for k, v in observed.items() if k != "meta"})
     return result
 
 
-# --------------------------------------------------------------------------- the sim process
 
 class Sim:
-    """The launcher as a child process, in its own process group."""
+    """Run the launcher as a child process in its own process group, logging its output."""
 
     def __init__(self, command, log_path):
+        """Start `command`, copying its output to `log_path` from a thread."""
         self.log = open(log_path, "w", buffering=1)
         self.ready = threading.Event()
         self.proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -155,15 +159,18 @@ class Sim:
         self._pump_thread.start()
 
     def _pump(self):
+        """Copy the sim's output to the log and note the ready line."""
         for line in self.proc.stdout:
             self.log.write(line)
             if READY_LINE.search(line):
                 self.ready.set()
 
     def alive(self):
+        """Return whether the sim is still running."""
         return self.proc.poll() is None
 
     def wait_ready(self, timeout):
+        """Wait up to `timeout` s for the ready line; raise ProbeError if the sim exits or times out."""
         deadline = time.monotonic() + timeout
         while not self.ready.wait(1.0):
             if not self.alive():
@@ -173,7 +180,7 @@ class Sim:
                 raise ProbeError(f"the sim was not up after {timeout:.0f} s")
 
     def stop(self, timeout=60.0):
-        """Interrupts the sim and waits for it; returns its exit status (None if it hung)."""
+        """Interrupt the sim and wait for it; return its exit status, or None if it hung and was killed."""
         if self.alive():
             os.killpg(self.proc.pid, signal.SIGINT)
         try:
@@ -187,32 +194,36 @@ class Sim:
         return status
 
 
-# --------------------------------------------------------------------------- graph snapshot
 
 def _fqn(namespace, name):
+    """Return a node's fully qualified name."""
     return namespace.rstrip("/") + "/" + name
 
 
 def _type_string(types):
+    """Return a topic's types as one sorted, comma-separated string."""
     return ", ".join(sorted(types))
 
 
 def _is_action_internal(name):
+    """Return whether a name is one of an action's internal topics or services."""
     return "/_action/" in name
 
 
 def _shown_topic(name):
+    """Return whether a topic belongs in the surface (not rclpy's infrastructure or an action's internals)."""
     return name not in INFRA_TOPICS and not _is_action_internal(name)
 
 
 def _shown_service(node_fqn, name):
+    """Return whether a node's service belongs in the surface (not its parameter services or an action's)."""
     prefix = node_fqn + "/"
     return not (_is_action_internal(name)
                 or (name.startswith(prefix) and name[len(prefix):] in PARAMETER_SERVICES))
 
 
 def snapshot_nodes(node):
-    """Every sim node's publishers, subscriptions, services and actions, with types."""
+    """Return every sim node's publishers, subscriptions, services and actions, with types."""
     import rclpy.action
     nodes = {}
     for name, namespace in node.get_node_names_and_namespaces():
@@ -233,10 +244,10 @@ def snapshot_nodes(node):
 
 
 def snapshot_topics(node):
-    """Returns ({topic: (type, publisher qos)} for ROS publishers, the bare DDS surface).
+    """Return ({topic: (type, publisher QoS)} for ROS publishers, the bare DDS surface).
 
-    The Unitree SDK's rt/lowstate and rt/lowcmd belong to a bare DDS participant
-    with no ROS node, so they are listed apart from the nodes' topics.
+    The Unitree SDK's rt/lowstate and rt/lowcmd belong to a bare DDS participant with no ROS
+    node, so they are listed apart from the nodes' topics.
     """
     topics, bare = {}, {"publishes": {}, "subscribes": {}}
     for name, types in node.get_topic_names_and_types():
@@ -256,7 +267,8 @@ def snapshot_topics(node):
 
 
 def require_empty_domain(node):
-    time.sleep(3.0)   # discovery of anything already on the domain
+    """Raise ProbeError if any node or topic is already on the domain."""
+    time.sleep(3.0)  # s: discovery of anything already on the domain
     others = [n for n, _ in node.get_node_names_and_namespaces() if n != PROBE_NODE]
     topics = [t for t, _ in node.get_topic_names_and_types() if t not in INFRA_TOPICS]
     if others or topics:
@@ -265,7 +277,7 @@ def require_empty_domain(node):
 
 
 def require_single_sim(node):
-    """Fails if a second sim has come up on the domain: a node name or /clock twice."""
+    """Raise ProbeError if a second sim has come up on the domain: a node name or /clock twice."""
     names = [_fqn(namespace, name) for name, namespace in node.get_node_names_and_namespaces()
              if name != PROBE_NODE]
     duplicates = sorted({n for n in names if names.count(n) > 1})
@@ -275,32 +287,31 @@ def require_single_sim(node):
                          f"duplicate nodes {duplicates}, {clock_publishers} publishers on /clock")
 
 
-# --------------------------------------------------------------------------- message statistics
 
 def message_facts(msg):
-    """frame_id, encoding, size and point layout of one message (None where n/a)."""
+    """Return one message's frame_id, encoding, size and point layout (None where they do not apply)."""
     facts = dict(NO_FACTS)
     header = getattr(msg, "header", None)
     if header is not None:
         facts["frame_id"] = header.frame_id
-    if hasattr(msg, "fields") and hasattr(msg, "point_step"):      # PointCloud2
+    if hasattr(msg, "fields") and hasattr(msg, "point_step"):  # PointCloud2
         facts["height"] = int(msg.height)
         # An unorganized cloud's width is its point count, which depends on the scene.
         if msg.height > 1:
             facts["width"] = int(msg.width)
         facts["point_fields"] = [[f.name, int(f.offset), int(f.datatype), int(f.count)]
                                  for f in msg.fields]
-    elif hasattr(msg, "width") and hasattr(msg, "height"):         # Image, CameraInfo
+    elif hasattr(msg, "width") and hasattr(msg, "height"):  # Image, CameraInfo
         facts["width"], facts["height"] = int(msg.width), int(msg.height)
-    if hasattr(msg, "encoding"):                                    # Image
+    if hasattr(msg, "encoding"):  # Image
         facts["encoding"] = msg.encoding
-    elif hasattr(msg, "format"):                                    # CompressedImage
+    elif hasattr(msg, "format"):  # CompressedImage
         facts["encoding"] = msg.format
     return facts
 
 
 def message_stamp(msg):
-    """Sim time (s) a message carries: Clock, a header stamp or a TF's first stamp."""
+    """Return the sim time (s) a message carries: a Clock, a header stamp or a TF's first stamp."""
     if hasattr(msg, "clock"):
         stamp = msg.clock
     elif hasattr(msg, "header"):
@@ -313,23 +324,25 @@ def message_stamp(msg):
 
 
 class SimClock:
-    """The latest /clock sample (s), written by the /clock subscription."""
+    """Hold the latest /clock sample (s), written by the /clock subscription."""
 
     latest = None
 
 
 class Collector:
-    """What one subscription saw: when each message came, and the first one's facts."""
+    """Record what one subscription saw: when each message came, and the first one's facts."""
 
     def __init__(self, topic, clock):
+        """Collect for `topic`, reading and (for /clock) writing `clock`."""
         self.topic = topic
         self.clock = clock
-        self.samples = []      # (wall time, latest /clock sample, message stamp)
+        self.samples = []  # (wall time, latest /clock sample, message stamp)
         self.accel_norms = []  # |linear_acceleration| per sample, None for other types
         self.facts = None
-        self.edges = set()     # "parent -> child" over a TFMessage's transforms
+        self.edges = set()  # "parent -> child" over a TFMessage's transforms
 
     def __call__(self, msg):
+        """Record one message."""
         stamp = message_stamp(msg)
         self.samples.append((time.monotonic(), self.clock.latest, stamp))
         if self.topic == "/clock":
@@ -344,20 +357,18 @@ class Collector:
 
 
 def in_window(sample, window):
+    """Return whether a sample's stamp (else its /clock time) falls in the sim-time window."""
     _, clock, stamp = sample
     t = stamp if stamp is not None else clock
     return t is not None and window[0] <= t <= window[1]
 
 
 def rate_hz(topic, samples, window):
-    """Messages per second in the window, or None with fewer than two of them."""
+    """Return the messages per second in the window, or None with fewer than two of them."""
     samples = [s for s in samples if in_window(s, window)]
     if len(samples) < 2:
         return None
-    if WALL_TIMER_TOPICS.match(topic):
-        span = samples[-1][0] - samples[0][0]
-        rate = (len(samples) - 1) / span if span > 0 else None
-    elif all(s[2] is not None for s in samples):
+    if all(s[2] is not None for s in samples):
         stamps = sorted(s[2] for s in samples)
         deltas = [b - a for a, b in zip(stamps, stamps[1:])]
         # A best-effort drop is a gap of several periods; it is not the publish rate.
@@ -371,29 +382,31 @@ def rate_hz(topic, samples, window):
 
 
 class LowStateReader:
-    """rt/lowstate through unitree_sdk2py, the way the sim's own consumers read it."""
+    """Read rt/lowstate through unitree_sdk2py, the way the sim's own consumers read it."""
 
     def __init__(self, domain):
+        """Open a polled rt/lowstate subscriber on `domain`."""
         from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
         from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
         ChannelFactoryInitialize(domain)
         self._subscriber = ChannelSubscriber("rt/lowstate", LowState_)
-        # Polled, not handler-driven: closing a handler-driven subscriber while
-        # samples arrive makes the SDK's listener fail on the freed reader.
+        # Polled, not handler-driven: closing a handler-driven subscriber while samples arrive
+        # makes the SDK's listener fail on the freed reader.
         self._subscriber.Init()
 
     def tick(self, timeout=5.0):
-        """The tick of the next sample, or None if none arrives in `timeout` seconds."""
+        """Return the tick of the next sample, or None if none arrives in `timeout` s."""
         sample = self._subscriber.Read(timeout)
         return None if sample is None else int(sample.tick)
 
     def close(self):
+        """Close the subscriber."""
         self._subscriber.Close()
 
 
-# --------------------------------------------------------------------------- observation
 
 def wait_for(predicate, timeout, what):
+    """Poll `predicate` every 0.1 s; raise ProbeError naming `what` after `timeout` s."""
     deadline = time.monotonic() + timeout
     while not predicate():
         if time.monotonic() > deadline:
@@ -402,7 +415,7 @@ def wait_for(predicate, timeout, what):
 
 
 def observe(args, sim, node):
-    """Measures the surface of the sim `sim` has started; `node` is the probe's node."""
+    """Measure the surface of the sim `sim` has started, through the probe's `node`; return it."""
     from rclpy.qos import HistoryPolicy, QoSProfile
     from rosidl_runtime_py.utilities import get_message
 
@@ -411,7 +424,7 @@ def observe(args, sim, node):
     sim.wait_ready(args.ready_timeout)
     print(f"[probe] sim up after {time.monotonic() - started:.0f} s", flush=True)
     wait_for(lambda: "/clock" in dict(node.get_topic_names_and_types()), 60, "/clock")
-    time.sleep(args.settle)   # the rest of the graph is discovered by now
+    time.sleep(args.settle)  # the rest of the graph is discovered by now
     require_single_sim(node)
 
     nodes = snapshot_nodes(node)
@@ -454,7 +467,7 @@ def observe(args, sim, node):
             type=type_name,
             qos={"reliability": qos.reliability.name, "durability": qos.durability.name},
             received=bool(collector.samples),
-            rate_clock="wall" if WALL_TIMER_TOPICS.match(topic) else "sim",
+            rate_clock="sim",
             rate_hz=rate_hz(topic, collector.samples, window))
     imu = collectors.get(IMU_TOPIC)
     imu_norms = [] if imu is None else [
@@ -472,7 +485,7 @@ def observe(args, sim, node):
 
 
 def run_probe(args):
-    """Runs the sim and observes it; returns (observation, the sim's exit status)."""
+    """Run the sim and observe it; return (observation, the sim's exit status)."""
     import rclpy
     from rclpy.executors import SingleThreadedExecutor
     rclpy.init()
@@ -491,8 +504,8 @@ def run_probe(args):
             print(f"[probe] last lines of {args.sim_log}:\n{tail(args.sim_log)}", file=sys.stderr)
         raise
     finally:
-        # Stop the sim only once the probe's subscriptions are gone, so its
-        # teardown has no remote subscribers to encode and publish for.
+        # Stop the sim only once the probe's subscriptions are gone, so its teardown has no remote
+        # subscribers to encode and publish for.
         executor.shutdown()
         spin_thread.join(5.0)
         node.destroy_node()
@@ -503,8 +516,11 @@ def run_probe(args):
 
 
 def report_sim_exit(args, shutdown):
-    """Records how the sim stopped. The surface is already measured, so a sim that
-    crashes or hangs on SIGINT is a warning, not a failed measurement."""
+    """Record how the sim stopped, and warn if it did not stop cleanly.
+
+    The surface is already measured, so a sim that crashes or hangs on SIGINT is a warning,
+    not a failed measurement.
+    """
     clean = shutdown in CLEAN_SIM_EXIT
     status = "did not exit and was killed" if shutdown is None else shutdown
     if args.sim_exit:
@@ -517,7 +533,7 @@ def report_sim_exit(args, shutdown):
 
 
 def check_fit_to_record(observed):
-    """What a golden must at least contain, so a broken run is never recorded."""
+    """Return what the observation lacks that a golden must contain, so a broken run is never recorded."""
     problems = []
     if not observed["nodes"]:
         problems.append("no sim nodes were found")
@@ -531,6 +547,7 @@ def check_fit_to_record(observed):
 
 
 def tail(path, lines=40):
+    """Return the last `lines` lines of a file, or '' if it cannot be read."""
     try:
         with open(path) as f:
             return "".join(f.readlines()[-lines:])
@@ -539,6 +556,7 @@ def tail(path, lines=40):
 
 
 def main(argv):
+    """Run the probe as the command line asks; return the exit status."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--robot", required=True, choices=("h12", "g1"))
     parser.add_argument("--out", required=True, help="where to write the observed JSON")

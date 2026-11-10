@@ -1,5 +1,4 @@
-"""Point-cloud leveling preserves stamps/fields and waits for exact TF."""
-import importlib
+"""Test level_cloud: it waits for the transform at the cloud's stamp and keeps every field."""
 from collections import deque
 from types import SimpleNamespace
 
@@ -11,7 +10,7 @@ from tf2_ros import Buffer
 
 
 def test_cloud_waits_for_transform_and_preserves_fields():
-    assert importlib.util.find_spec('golem_slam.level_cloud'), 'level cloud adapter is missing'
+    """A cloud waits for its transform, then goes out in target_frame with its stamp and fields."""
     from golem_slam.level_cloud import LevelCloud
     from golem_slam.self_filter import cloud_points
     published = []
@@ -38,4 +37,4 @@ def test_cloud_waits_for_transform_and_preserves_fields():
     fields, xyz = cloud_points(result)
     np.testing.assert_allclose(xyz, [[1.0, 2.0, 0.5]])
     assert fields['intensity'][0] == 42.0
-    assert msg.header.frame_id == 'body'  # no mutation of the input cloud
+    assert msg.header.frame_id == 'body'  # the input cloud is not modified

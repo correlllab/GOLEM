@@ -1,0 +1,8 @@
+# Pins the ros workspace container to the CPUs in GOLEM_ROS_CPUSET. docker_common.sh's
+# configure_cpus adds this overlay only when it has set GOLEM_ROS_CPUSET, so an
+# unpinned run never interpolates an empty cpuset. On a hybrid CPU the list is
+# the efficiency cores', which leaves the performance cores to the simulator.
+# It is never added on domain 0, where the real robot's stack keeps every core.
+services:
+  ros:
+    cpuset: ${GOLEM_ROS_CPUSET:?set by configure_cpus in docker_common.sh}

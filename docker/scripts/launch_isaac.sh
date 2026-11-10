@@ -1,16 +1,25 @@
 #!/bin/bash
-# Usage: ./launch_isaac.sh [task_name] [--headless] [--reset-cache]
-# Defaults to task "base" — the only env CL_isaaclab_sim registers at the current
-# submodule pin (tasks/h1-2_tasks/stack_rgyblock_h12_27dof_inspire/__init__.py).
-# HEADLESS=1 also forces --headless.
+# The isaac container's command: run CL_isaaclab_sim's sim_main.py (the H1-2)
+# with Isaac Sim's bundled Python.
 #
-# ROS publishing uses Isaac-Sim's bundled isaacsim.ros2.bridge extension
-# (loaded by Kit at app startup); use its interpreter for simulation imports.
+# Usage: launch_isaac.sh [TASK | --task TASK] [--headless] [--reset-cache] [-- sim_main.py args...]
+#   TASK           the gym task id (default: base, the one CL_isaaclab_sim
+#                  registers, in tasks/h1-2_tasks/stack_rgyblock_h12_27dof_inspire)
+#   --headless     no viewer; added anyway without a DISPLAY
+#   --reset-cache  delete Isaac's texture cache first
+#   --             pass the rest to sim_main.py; so does any other --option,
+#                  with everything after it (e.g. --hand_type inspire, --fix_base)
+# Environment: ROS_DOMAIN_ID (1..232, 1 when unset), DISPLAY, ISAACLAB_PATH
+#   (default /workspace/golem/isaac/IsaacLab).
+# Exit status: 1 on a refused domain, 2 on --task without a name; otherwise
+# the simulator's.
 set -e
 source "$(dirname "$0")/runtime_common.sh"
 validate_sim_domain
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-# Python DDS and ROS RMW must load the same native Cyclone library.
+# The Unitree Python DDS binding and the ROS RMW must load the same native
+# CycloneDDS library: the image's build, ahead of Isaac's bundled Humble bridge
+# libraries, which the simulator publishes ROS topics through.
 export CYCLONEDDS_HOME=/workspace/golem/isaac/cyclonedds/install
 
 ISAACLAB_PATH="${ISAACLAB_PATH:-/workspace/golem/isaac/IsaacLab}"
@@ -20,8 +29,7 @@ export LD_LIBRARY_PATH=${CYCLONEDDS_HOME}/lib:/isaac-sim/exts/isaacsim.ros2.brid
 
 TASK="base"
 HEADLESS_FLAG=""
-[ "${HEADLESS:-0}" = "1" ] && HEADLESS_FLAG="--headless"
-# Auto-headless if no display is reachable (SSH without X11, cloud VM, CI).
+# Run headless when no display is reachable (SSH without X11, CI).
 if [ -z "$HEADLESS_FLAG" ] && [ -z "${DISPLAY:-}" ]; then
     echo "[launch_isaac] no DISPLAY set — forcing --headless"
     HEADLESS_FLAG="--headless"
@@ -42,18 +50,15 @@ while [ "$#" -gt 0 ]; do
 done
 
 export PYTHONUNBUFFERED=1
-# Use Isaac Sim's bundled Kit interpreter via IsaacLab's python.sh wrapper.
-# Compose runs this script non-interactively, so ~/.bashrc (which defines the
-# `python` alias) is not sourced, and python.sh is what sets CARB_APP_PATH /
-# EXP_PATH / PYTHONPATH / LD_PRELOAD=libcarb.so — a bare `python3` cannot
-# import isaacsim.
+# The simulator runs under IsaacLab's python.sh, Isaac Sim's Kit interpreter:
+# python.sh sets CARB_APP_PATH, EXP_PATH, PYTHONPATH and LD_PRELOAD, without
+# which isaacsim does not import. The .bashrc `python` alias is not available
+# here, as Compose runs this script non-interactively.
 
-# Shim for hardcoded developer paths inside CL_isaaclab_sim: src/python/envs/
-# common/{scene,robots}.py load USDs from /workspace/golem/isaac/mateo_ws/
-# CL_Assets (one dev's personal workspace layout), but compose mounts the assets
-# at /home/code/CL_Assets. Symlinked here rather than patched in the submodule —
-# the sim packages are owned elsewhere (CLAUDE.md §5/§8). Drop this once the
-# asset root is made relative/env-driven upstream.
+# CL_isaaclab_sim's src/python/envs/common/{scene,robots}.py load their USDs
+# from /workspace/golem/isaac/mateo_ws/CL_Assets, while the assets are mounted
+# at /home/code/CL_Assets: link the one to the other. TODO(max): drop the link
+# once CL_isaaclab_sim takes its asset root from the environment.
 MATEO_WS=/workspace/golem/isaac/mateo_ws
 mkdir -p "$MATEO_WS"
 ln -sfn /home/code/CL_Assets "$MATEO_WS/CL_Assets"

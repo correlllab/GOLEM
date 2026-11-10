@@ -1,5 +1,8 @@
-"""Unit tests for golem_skills.grasp_synthesis: every method on synthetic clouds,
-no ROS graph needed (geometry_msgs only)."""
+"""
+Test every grasp_synthesis method on synthetic clouds.
+
+No ROS graph is needed (geometry_msgs only).
+"""
 
 import math
 from types import SimpleNamespace
@@ -19,23 +22,28 @@ from golem_skills.perception_utils import pose_to_matrix
 
 
 class _Log:
+    """Stand in for an rclpy logger and drop every line."""
+
     def info(self, *_):
+        """Drop the log line."""
         pass
 
     warn = error = info
 
 
 def _box_cloud(center, size, n=2000, seed=0):
-    """Points filling an axis-aligned box (pelvis frame)."""
+    """Return `n` random points filling an axis-aligned box (pelvis frame)."""
     rng = np.random.default_rng(seed)
     return (np.asarray(center) +
             (rng.random((n, 3)) - 0.5) * np.asarray(size)).astype(np.float32)
 
 
 def _fake_planner(poses, scores=None, width=0.05):
+    """Return a plan_grasp stand-in that answers with `poses` and records its calls."""
     calls = []
 
     def plan_grasp(cloud, gripper_name, frame, scene_cloud=None, arm=''):
+        """Return a graspgen-like response holding `poses`, scored best-first."""
         calls.append(dict(frame=frame, arm=arm))
         grasps = []
         for p in poses:
@@ -53,17 +61,20 @@ def _fake_planner(poses, scores=None, width=0.05):
 
 
 def _input(cloud, arm='right', min_pitch=0.0, planner=None):
+    """Build a SynthesisInput for the object 'thing'."""
     return SynthesisInput(obj='thing', arm=arm, cloud=cloud, scene=None,
                           min_pitch_deg=min_pitch,
                           plan_grasp=planner or _fake_planner([]), log=_Log())
 
 
 def _contact(pose):
+    """Return the finger contact point of a gripper-base `pose`."""
     T = pose_to_matrix(pose)
     return T[:3, 3] + GRIPPER_BASE_TO_CONTACT_M * T[:3, 2]
 
 
 def _assert_valid(cands):
+    """Assert `cands` is non-empty, consistent, in the pelvis frame and properly rotated."""
     assert cands.grasps
     n = len(cands.grasps)
     assert len(cands.scores) == len(cands.labels) == len(cands.tiers) == n
@@ -75,13 +86,17 @@ def _assert_valid(cands):
         assert np.linalg.det(R) == pytest.approx(1.0, abs=1e-6)
 
 
-# A forward reachable set for the planner-based methods: level-wrist
-# approaches at a few azimuths/pitches, plus one mis-rolled and one
-# cross-body grasp.
+# m, the synthetic object's centre (pelvis frame)
 OBJ = np.array([0.45, -0.20, 0.05])
 
 
 def _planner_pool():
+    """
+    Return the planner's grasps: level-wrist approaches, one mis-rolled, one cross-body.
+
+    Index 1 is the level grasp at azimuth 10 deg rolled 90 deg and the last one
+    approaches from azimuth -120 deg (cross-body for the right arm).
+    """
     poses = [level_pose(OBJ, approach_from_az_pitch(az, p))
              for az, p in ((0, 30), (30, 30), (60, 10), (0, 10))]
     rolled = level_pose(OBJ, approach_from_az_pitch(10, 15))
@@ -94,6 +109,7 @@ def _planner_pool():
 
 
 def test_registry():
+    """The registry holds the six methods, the default among them, and only top_down is staged."""
     assert DEFAULT_METHOD in METHODS
     assert set(METHODS) == {'heuristic', 'top_down', 'centroid', 'antipodal',
                             'graspgenx', 'graspgenx_filtered'}
@@ -101,12 +117,14 @@ def test_registry():
 
 
 def test_goal_top_down_overrides_the_parameter():
+    """goal.top_down selects top_down over the parameter, which is stripped."""
     assert method_name(True, 'antipodal') == 'top_down'
     assert method_name(False, ' antipodal ') == 'antipodal'
 
 
 @pytest.mark.parametrize('name', sorted(METHODS))
 def test_every_method_produces_valid_candidates(name):
+    """Every method returns valid candidates for a box-shaped object."""
     cloud = _box_cloud(OBJ, (0.04, 0.10, 0.06))
     cands, err = METHODS[name].synthesize(
         _input(cloud, planner=_fake_planner(_planner_pool())))
@@ -115,6 +133,7 @@ def test_every_method_produces_valid_candidates(name):
 
 
 def test_top_down_contact_on_centroid():
+    """top_down puts the contact point on the centroid, 80 deg down, closing along pelvis +Y."""
     cloud = _box_cloud(OBJ, (0.03, 0.03, 0.03))
     cands, _ = METHODS['top_down'].synthesize(_input(cloud))
     assert len(cands.grasps) == 1
@@ -126,6 +145,7 @@ def test_top_down_contact_on_centroid():
 
 
 def test_heuristic_level_wrist_and_tier_order():
+    """Heuristic grasps have a level wrist, contact on the centroid, in tier order."""
     cloud = _box_cloud(OBJ, (0.05, 0.05, 0.05))
     cands, _ = METHODS['heuristic'].synthesize(_input(cloud))
     assert cands.tiers == sorted(cands.tiers)
@@ -140,6 +160,7 @@ def test_heuristic_level_wrist_and_tier_order():
 
 @pytest.mark.parametrize('arm', ['left', 'right'])
 def test_heuristic_mirrors_per_arm(arm):
+    """The heuristic method never approaches from across the body, for either arm."""
     cloud = _box_cloud(OBJ, (0.05, 0.05, 0.05))
     cands, _ = METHODS['heuristic'].synthesize(_input(cloud, arm=arm))
     sign = 1.0 if arm == 'right' else -1.0
@@ -149,6 +170,7 @@ def test_heuristic_mirrors_per_arm(arm):
 
 
 def test_centroid_closes_across_pelvis_y():
+    """The centroid method closes across pelvis Y first and ends with the 45 deg X fallback."""
     cloud = _box_cloud(OBJ, (0.10, 0.02, 0.04))
     cands, _ = METHODS['centroid'].synthesize(_input(cloud))
     first = pose_to_matrix(cands.grasps[0].pose)[:3, :3]
@@ -158,6 +180,7 @@ def test_centroid_closes_across_pelvis_y():
 
 @pytest.mark.parametrize('long_axis', ['x', 'y'])
 def test_antipodal_closes_across_minor_axis(long_axis):
+    """The antipodal method closes across the minor axis and plans the minor extent."""
     size = (0.12, 0.03, 0.04) if long_axis == 'x' else (0.03, 0.12, 0.04)
     cloud = _box_cloud(OBJ, size)
     cands, _ = METHODS['antipodal'].synthesize(_input(cloud))
@@ -170,6 +193,7 @@ def test_antipodal_closes_across_minor_axis(long_axis):
 
 
 def test_graspgenx_raw_executes_server_order_untouched():
+    """The graspgenx method keeps the server's top five grasps unchanged and in order."""
     pool = _planner_pool()
     planner = _fake_planner(pool)
     cands, _ = METHODS['graspgenx'].synthesize(_input(
@@ -183,6 +207,7 @@ def test_graspgenx_raw_executes_server_order_untouched():
 
 
 def test_graspgenx_filtered_rerolls_and_drops_cross_body():
+    """graspgenx_filtered drops the cross-body grasp and re-levels the mis-rolled one."""
     pool = _planner_pool()
     cands, _ = METHODS['graspgenx_filtered'].synthesize(_input(
         _box_cloud(OBJ, (0.04, 0.04, 0.04)), planner=_fake_planner(pool)))
@@ -198,6 +223,7 @@ def test_graspgenx_filtered_rerolls_and_drops_cross_body():
 
 @pytest.mark.parametrize('name', sorted(METHODS))
 def test_min_pitch_gate(name):
+    """Every method honours the minimum downward pitch or reports why it cannot."""
     cloud = _box_cloud(OBJ, (0.04, 0.04, 0.04))
     cands, err = METHODS[name].synthesize(
         _input(cloud, min_pitch=25.0, planner=_fake_planner(_planner_pool())))
@@ -209,7 +235,9 @@ def test_min_pitch_gate(name):
 
 
 def test_planner_failure_is_a_reason_not_an_exception():
+    """A planner returning nothing gives a reason, not an exception."""
     def no_plan(*_, **__):
+        """Return no plan."""
         return None
     for name in ('graspgenx', 'graspgenx_filtered'):
         cands, err = METHODS[name].synthesize(

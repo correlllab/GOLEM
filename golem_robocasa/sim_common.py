@@ -1,9 +1,8 @@
-"""What the H1-2 and G1 sims share: the robot selection, the command line, the
-task listing and resolution, and the viewer framing.
+"""Select the robot, check the GPU, parse the command line and the sims' knobs, resolve tasks and frame the viewer for both sims.
 
-Stdlib only at import time (mujoco and robocasa are imported inside the
-functions that need them): h12_mujoco.py picks the robot with it before it
-imports either robot's modules.
+It imports only the standard library at module level (mujoco and robocasa
+inside the functions that need them): h12_mujoco.py picks the robot and checks
+the GPU with it before it imports either robot's modules.
 """
 import argparse
 import math
@@ -15,25 +14,26 @@ from collections.abc import Callable, Mapping, Sequence
 ROBOTS = ("h12", "g1")
 ROBOT_LABELS = {"h12": "the H1-2", "g1": "the G1"}
 
-# Options a robot's loop does not implement; parse_args refuses them for that robot.
+# The option each robot's loop does not implement; parse_args refuses it.
 _UNSUPPORTED = {"h12": "--duration", "g1": "--timing"}
 
-# Viewer free-camera spawn pose, anchored to the robot so the passive viewer
-# opens framed on the robot wherever it spawns (RoboCasa places the base by
-# layout/seed and place_robot_collision_free may back it off), instead of
-# MuJoCo's default whole-scene framing. Top-down (straight down) view: lookat
-# follows the robot base body, elevation looks straight down, and azimuth (the
-# in-plane rotation of the top-down image) is offset from the base yaw so the
-# robot's facing points a consistent way in frame at any spawn orientation.
-# Spawn-time only — the user can orbit/zoom freely after.
-VIEW_CAM_DISTANCE  = 3.0     # m, camera height above lookat (straight down)
-VIEW_CAM_AZIMUTH   = 90.0    # deg, ADDED to robot yaw — rotates the top-down image
-VIEW_CAM_ELEVATION = -90.0   # deg, -90 = look straight down
-VIEW_CAM_LOOKAT_DZ = 0.0     # m, focal point offset along z (irrelevant for top-down)
+# The passive viewer's opening camera: straight down onto the robot wherever
+# RoboCasa and the spawn placement put it, rotated with the robot's yaw so the
+# robot faces the same way in the image at any spawn orientation.
+VIEW_CAM_DISTANCE  = 3.0     # m above the lookat point
+VIEW_CAM_AZIMUTH   = 90.0    # deg, added to the robot's yaw
+VIEW_CAM_ELEVATION = -90.0   # deg, straight down
+VIEW_CAM_LOOKAT_DZ = 0.0     # m, lookat offset above the robot body
+
+# The start-up refusal without a GPU: both sims render their cameras and the MID-360's rays
+# (mid360.GpuCaster) through EGL.
+GPU_REQUIRED = "the RoboCasa sims need an NVIDIA GPU, rendering through EGL (MUJOCO_GL=egl)"
+# GL_RENDERER substrings of software rasterisers, which EGL falls back to without a GPU.
+SOFTWARE_RENDERERS = ("llvmpipe", "softpipe", "swrast", "software", "swiftshader")
 
 
 def add_robot_args(parser: argparse.ArgumentParser) -> None:
-    """--h12 / --g1, mutually exclusive, into dest 'robot' (None when neither is given)."""
+    """Add the mutually exclusive --h12 / --g1 flags, into dest 'robot' (None when neither)."""
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--h12", dest="robot", action="store_const", const="h12",
                        help="run the Unitree H1-2 (the default)")
@@ -42,10 +42,12 @@ def add_robot_args(parser: argparse.ArgumentParser) -> None:
 
 
 def select_robot(argv: Sequence[str], env: Mapping[str, str] = os.environ) -> str:
-    """The robot to run: --h12 or --g1 in argv, else GOLEM_ROBOT (h12 or g1, any
-    case; empty counts as unset), else 'h12'. A flag beats the environment.
-    Exits with an error when argv has both flags or GOLEM_ROBOT names another robot.
-    Matches whole tokens only; parse_args catches an abbreviated flag."""
+    """Return the robot to run: --h12 or --g1 in argv, else GOLEM_ROBOT, else 'h12'.
+
+    GOLEM_ROBOT is h12 or g1 in any case; empty counts as unset. Exits with an
+    error when argv has both flags or GOLEM_ROBOT names another robot. Only
+    whole tokens match; parse_args refuses an abbreviated flag.
+    """
     flags = {arg[2:] for arg in argv if arg in ("--h12", "--g1")}
     if len(flags) > 1:
         sys.exit("Choose one robot: --h12 or --g1.")
@@ -59,12 +61,84 @@ def select_robot(argv: Sequence[str], env: Mapping[str, str] = os.environ) -> st
     return robot
 
 
+def egl_renderer(env: Mapping[str, str] = os.environ) -> str:
+    """Return the GL renderer of an EGL context made and freed here, the GPU the sim renders on.
+
+    Raises RuntimeError, naming why, when MUJOCO_GL in env is not egl, EGL gives no context
+    (no EGL device, as without NVIDIA's EGL) or the renderer is a software rasteriser.
+    """
+    backend = env.get("MUJOCO_GL", "")
+    if backend.strip().lower() != "egl":
+        raise RuntimeError(f"MUJOCO_GL is {backend!r}, not 'egl'")
+    try:
+        from mujoco import egl
+        from OpenGL import GL
+        context = egl.GLContext(1, 1)
+    except Exception as exc:   # EGL's, PyOpenGL's and mujoco.egl's own error types
+        raise RuntimeError(f"no EGL device: {exc!r}") from exc
+    try:
+        context.make_current()
+        renderer = GL.glGetString(GL.GL_RENDERER).decode(errors="replace")
+    finally:
+        context.free()
+    if any(name in renderer.lower() for name in SOFTWARE_RENDERERS):
+        raise RuntimeError(f"the GL renderer is {renderer}, a software renderer")
+    return renderer
+
+
+def require_gpu(probe: Callable[[], str] = egl_renderer) -> str:
+    """Return the GL renderer probe() finds, logging it; exit with GPU_REQUIRED and the reason when it raises."""
+    try:
+        renderer = probe()
+    except Exception as exc:
+        sys.exit(f"{GPU_REQUIRED}: {exc}")
+    print(f"[sim_common] rendering through EGL on {renderer}", flush=True)
+    return renderer
+
+
+def env_flag(name: str, default: bool, env: Mapping[str, str] = os.environ) -> bool:
+    """Return the on/off knob name: default when unset or empty, off for 0/off/false/no in any case, else on."""
+    raw = env.get(name, "").strip().lower()
+    return default if raw == "" else raw not in ("0", "off", "false", "no")
+
+
+def sim_rate_from_env(env: Mapping[str, str] = os.environ) -> float:
+    """Return GOLEM_SIM_RATE, the target real-time factor: sim seconds per wall second.
+
+    Unset or empty is 1 (real time); a finite number above 0 is that factor; max, in any
+    case, is math.inf (sim_timing.RealtimePacer never sleeps). Spaces are ignored. Exits,
+    naming the knob and the value, for anything else (0, a negative number, nan, inf, text).
+    """
+    raw = env.get("GOLEM_SIM_RATE", "")
+    text = raw.strip().lower()
+    if not text:
+        return 1.0
+    if text == "max":
+        return math.inf
+    try:
+        rate = float(text)
+    except ValueError:
+        rate = math.nan
+    if not math.isfinite(rate) or rate <= 0:
+        sys.exit(f"GOLEM_SIM_RATE must be a number above 0 (the target real-time factor) or max, "
+                 f"not {raw!r}")
+    return rate
+
+
+def describe_sim_rate(rate: float) -> str:
+    """Return the start-up log line for the rate sim_rate_from_env returned."""
+    if math.isinf(rate):
+        return "sim rate: unpaced, as fast as the loop runs (GOLEM_SIM_RATE=max)"
+    return f"sim rate: {rate:g}x real time (GOLEM_SIM_RATE)"
+
+
 def add_common_args(parser: argparse.ArgumentParser, *,
                     task_help: str = "RoboCasa env name (e.g. TurnOnToasterOven). "
                                      "Omit to launch a random registered kitchen task.") -> None:
-    """The options both runners take: --headless, --task, --layout, --style, --seed,
-    --timing, --duration, and the robot pair (add_robot_args). task_help replaces
-    the --task description for a runner that has tasks of its own."""
+    """Add the options both runners take, the robot flags included.
+
+    task_help is the --task help of a runner with tasks of its own.
+    """
     parser.add_argument(
         "--headless",
         action="store_true",
@@ -83,11 +157,12 @@ def add_common_args(parser: argparse.ArgumentParser, *,
 
 
 def parse_args(parser: argparse.ArgumentParser, argv: Sequence[str], robot: str) -> argparse.Namespace:
-    """Parse argv for the runner of `robot` ('h12' or 'g1'), with a usage error (exit 2) for:
-    - a robot flag naming the other robot. h12_mujoco.py hands whole --h12/--g1 tokens to
-      the matching runner, so only an abbreviation (--g for --g1) gets here;
-    - an option this robot's loop does not implement yet (--duration for the H1-2,
-      --timing for the G1)."""
+    """Parse argv for the runner of robot ('h12' or 'g1').
+
+    Exits with a usage error (2) for a robot flag that reads as the other robot
+    (h12_mujoco.py dispatches whole --h12/--g1 tokens, so only an abbreviation
+    such as --g gets here) and for the option in _UNSUPPORTED for this robot.
+    """
     args = parser.parse_args(argv)
     if args.robot not in (None, robot):
         parser.error(f"the robot flag is abbreviated and reads as --{args.robot} here, "
@@ -100,9 +175,10 @@ def parse_args(parser: argparse.ArgumentParser, argv: Sequence[str], robot: str)
 
 def refuse_kitchen_args(parser: argparse.ArgumentParser, args: argparse.Namespace,
                         task: str, no_kitchen: Sequence[str]) -> None:
-    """Usage error (exit 2) when --layout or --style is given for a task in
-    `no_kitchen` (resolved names): those options choose a RoboCasa kitchen, and
-    such a task builds none."""
+    """Exit with a usage error (2) for --layout or --style with a task in no_kitchen.
+
+    Those options choose a RoboCasa kitchen, and such a task builds none.
+    """
     if task in no_kitchen:
         given = [flag for flag in ("--layout", "--style") if getattr(args, flag[2:]) is not None]
         if given:
@@ -111,58 +187,70 @@ def refuse_kitchen_args(parser: argparse.ArgumentParser, args: argparse.Namespac
                          f"task {task!r} has none")
 
 
-def runnable_tasks() -> tuple[dict[str, type], set[str]]:
-    """Return (env_classes, runnable).
+def select_task(parser: argparse.ArgumentParser, args: argparse.Namespace, *, tag: str,
+                own_tasks: Sequence[str], no_kitchen: Sequence[str]) -> str:
+    """Return the task the runner's arguments name, or a random kitchen task when --task is not given.
 
-    `env_classes` maps every robosuite-registered env name -> its class. This is
-    the same REGISTERED_ENVS that robosuite.make() resolves against, and it DOES
-    include RoboCasa's abstract bases (OpenDoor/CloseDoor/ManipulateDoor/
-    PickPlace) — RoboCasa's metaclass deliberately omits those five from its own
-    REGISTERED_KITCHEN_ENVS, but the robosuite parent metaclass still registers
-    them. We need them here so an abstract base name can be looked up and expanded
-    to its concrete subclasses.
-
-    `runnable` is the set of concrete benchmark task names from RoboCasa's curated
-    ATOMIC_/COMPOSITE_TASK_DATASETS (intersected with what's registered, to
-    tolerate version skew). Those bases can't be instantiated directly — they
-    require a `fixture_id` only a concrete subclass supplies — so they are never
-    in `runnable`. Falls back to REGISTERED_KITCHEN_ENVS (which already excludes
-    the five bases) if the curated lists are unavailable.
+    own_tasks are the runner's tasks outside RoboCasa, matched in any case
+    (resolve_task); --layout and --style are refused for a task in no_kitchen
+    (refuse_kitchen_args). Messages are prefixed [tag].
     """
-    import robocasa  # noqa: F401  -> registers all kitchen envs on import
+    task = args.task
+    if task is None:
+        task = random_task(seed=args.seed)
+        print(f"[{tag}] no --task given; randomly selected {task!r}")
+    else:
+        task = resolve_task(task, seed=args.seed, tag=tag,
+                            robot_task=lambda name: canonical_task(name, own_tasks))
+    refuse_kitchen_args(parser, args, task, no_kitchen)
+    return task
+
+
+def runnable_tasks() -> tuple[dict[str, type], set[str]]:
+    """Return (env_classes, runnable): every registered env by name, and the runnable tasks.
+
+    env_classes is robosuite's REGISTERED_ENVS, which robosuite.make() resolves
+    against. It includes RoboCasa's abstract bases (OpenDoor, ManipulateDoor,
+    PickPlace, ...), which RoboCasa leaves out of its own REGISTERED_KITCHEN_ENVS,
+    so that resolve_task can expand a base to its concrete subclasses.
+
+    runnable is RoboCasa's ATOMIC_ and COMPOSITE_TASK_DATASETS that are
+    registered. Neither holds an abstract base: those need a fixture_id only a
+    concrete subclass supplies.
+    """
+    import robocasa  # noqa: F401  # registers every kitchen env
+    from robocasa.utils.dataset_registry import ATOMIC_TASK_DATASETS, COMPOSITE_TASK_DATASETS
     from robosuite.environments.base import REGISTERED_ENVS
     env_classes = dict(REGISTERED_ENVS)
-    try:
-        from robocasa.utils.dataset_registry import (
-            ATOMIC_TASK_DATASETS,
-            COMPOSITE_TASK_DATASETS,
-        )
-        runnable = (set(ATOMIC_TASK_DATASETS) | set(COMPOSITE_TASK_DATASETS)) & set(env_classes)
-    except Exception:
-        from robocasa.environments.kitchen.kitchen import REGISTERED_KITCHEN_ENVS
-        runnable = set(REGISTERED_KITCHEN_ENVS) & set(env_classes)
+    runnable = (set(ATOMIC_TASK_DATASETS) | set(COMPOSITE_TASK_DATASETS)) & set(env_classes)
     return env_classes, runnable
 
 
 def random_task(seed: int | None = None) -> str:
-    """Pick a random *runnable* (concrete) RoboCasa kitchen env name."""
+    """Return a random runnable RoboCasa kitchen task, reproducible for a seed."""
     _, runnable = runnable_tasks()
     if seed is not None:
         random.seed(seed)
     return random.choice(sorted(runnable))
 
 
+def canonical_task(name: str, tasks: Sequence[str]) -> str | None:
+    """Return the entry of tasks matching name case-insensitively, else None."""
+    for task in tasks:
+        if name.lower() == task.lower():
+            return task
+    return None
+
+
 def resolve_task(name: str, seed: int | None = None, *, tag: str,
                  robot_task: Callable[[str], str | None] = lambda name: None) -> str:
-    """Resolve a user-supplied --task name to a concrete runnable task.
+    """Return the runnable task a --task name stands for.
 
-    `robot_task(name)` returns the canonical name of a task the calling robot runs
-    outside RoboCasa (blank_env's Blank and battery_env's Battery workcell,
-    matched in any case), else None; a name it returns is used as is. If `name` is
-    already a concrete benchmark task, return it unchanged.
-    If it's an abstract base (e.g. OpenDoor, ManipulateDoor) — registered but not
-    directly instantiable — randomly pick one of its concrete runnable subclasses
-    instead of crashing. Messages are prefixed `[tag]`.
+    robot_task(name) returns the canonical name of a task the runner provides
+    outside RoboCasa (Blank, Battery), else None; that name is used as is. A
+    runnable RoboCasa task is returned unchanged, and an abstract base (OpenDoor,
+    ...) becomes one of its runnable subclasses, chosen at random (seeded by
+    seed). Exits for an unknown name. Messages are prefixed [tag].
     """
     claimed = robot_task(name)
     if claimed is not None:
@@ -189,10 +277,131 @@ def resolve_task(name: str, seed: int | None = None, *, tag: str,
     return choice
 
 
+def exclude_fixture_collisions(env) -> int:
+    """Stop the collisions inside each RoboCasa fixture with moving parts, and between those parts and the static scene.
+
+    Excluded: pairs of geoms of one fixture (env.fixtures) where at least one is on a jointed
+    body, and pairs of a fixture's jointed-body geom and a static (world-welded) geom. A
+    fixture body on a free joint (a loose blender lid or accessory) rests on the scene as an
+    object does, so it is not a jointed body here and keeps every contact. Every other pair,
+    any with a robot or object (env.objects) geom in it included, collides as before, so
+    objects still rest in drawers, cabinets and racks. Rewrites geom_contype and
+    geom_conaffinity (and the bodies' body_contype and body_conaffinity) of the compiled model
+    in place: call it on every model the sim steps, after env.reset() compiles it. A second
+    call on the same model changes nothing and logs that it was already applied.
+
+    Returns the number of geom pairs, on bodies not welded together, whose contype/conaffinity
+    test it turns off, and logs it. An env without fixtures (Blank, Battery), a model with
+    flexes and a repeat call are left as they are (0).
+    """
+    import mujoco
+    import numpy as np
+
+    model = env.sim.model._model
+    if getattr(env, "_fixture_collisions_model", None) is model:
+        print("[sim_common] fixture collisions: already excluded on this model, left as it is",
+              flush=True)
+        return 0
+    fixtures = getattr(env, "fixtures", None) or {}
+    if not fixtures or model.nflex:
+        reason = "the model has flexes" if fixtures else "the scene has no RoboCasa fixtures"
+        print(f"[sim_common] fixture collisions: none excluded, {reason}", flush=True)
+        return 0
+
+    # Each body belongs to the fixture or object whose root body is the nearest above it.
+    body = mujoco.mjtObj.mjOBJ_BODY
+    roots = {mujoco.mj_name2id(model, body, f.root_body): ("fixture", name)
+             for name, f in fixtures.items()}
+    roots.update({mujoco.mj_name2id(model, body, o.root_body): ("object", name)
+                  for name, o in (getattr(env, "objects", None) or {}).items()})
+    # A body on a free joint, or below one, floats.
+    free_bodies = set(model.jnt_bodyid[model.jnt_type == mujoco.mjtJoint.mjJNT_FREE].tolist())
+    owner = [None] * model.nbody
+    floating = np.zeros(model.nbody, dtype=bool)
+    for b in range(1, model.nbody):
+        parent = int(model.body_parentid[b])   # bodies are numbered parents first
+        owner[b] = roots.get(b, owner[parent])
+        floating[b] = floating[parent] or b in free_bodies
+    robot_roots = [model.body_rootid[mujoco.mj_name2id(model, body, r.robot_model.root_body)]
+                   for r in env.robots]
+
+    geom_body = model.geom_bodyid
+    weld = model.body_weldid[geom_body]
+    contype = model.geom_contype.astype(np.int64)
+    conaffinity = model.geom_conaffinity.astype(np.int64)
+    fixture = np.array([owner[b][1] if owner[b] and owner[b][0] == "fixture" else ""
+                        for b in geom_body])
+    is_object = np.array([bool(owner[b]) and owner[b][0] == "object" for b in geom_body])
+    is_robot = np.isin(model.body_rootid[geom_body], robot_roots)
+    moving = ((fixture != "") & (weld != 0) & ~floating[geom_body]
+              & ((contype | conaffinity) != 0))
+    static = (weld == 0) & ~is_robot & ~is_object
+
+    # The bit scheme below needs every moving part's colliding geoms in one contype/conaffinity
+    # class that collides with itself (RoboCasa's 1/1); a fixture with another class is left
+    # as it is.
+    classes = list(zip(contype[moving].tolist(), conaffinity[moving].tolist()))
+    type0, affinity0 = max(set(classes), key=classes.count) if classes else (0, 0)
+    odd = {str(fixture[g]) for g in np.flatnonzero(moving)
+           if not (type0 & affinity0) or (contype[g], conaffinity[g]) != (type0, affinity0)}
+    moving &= ~np.isin(fixture, sorted(odd))
+    names = sorted(set(fixture[moving]))
+
+    # New bits, from those no geom uses yet (bit 31 stays clear of the sign): a moving-part bit
+    # and a field holding a distinct nonzero code per fixture.
+    used = int(np.bitwise_or.reduce(contype | conaffinity))
+    free = [1 << i for i in range(30, -1, -1) if not used >> i & 1]
+    width = len(names).bit_length()
+    if not names or len(free) < 1 + width:
+        print(f"[sim_common] fixture collisions: none excluded, "
+              f"{'no fixture qualifies' if not names else 'too few free contype bits'}", flush=True)
+        return 0
+    moving_bit, field_bits = free[0], free[1:1 + width]
+    field = sum(field_bits)
+    code = {name: sum(bit for k, bit in enumerate(field_bits) if (i + 1) >> k & 1)
+            for i, name in enumerate(names)}
+
+    # MuJoCo collides two geoms when (contype1 & conaffinity2) | (contype2 & conaffinity1) != 0.
+    # A moving part's geom becomes contype = moving bit | its fixture's code, conaffinity = the
+    # field without its code: two parts collide only when their codes differ (other fixtures),
+    # and never with a static geom, which keeps its own bits. Every geom that is neither a
+    # moving part nor static (the robot, objects, loose fixtures) and collided with the moving
+    # parts' class gains the moving bit in conaffinity, so it still collides with them, and
+    # nothing else changes for it: no geom outside the moving parts has the new bits in contype.
+    new_type, new_affinity = contype.copy(), conaffinity.copy()
+    other = ~moving & ~static & (((type0 & conaffinity) | (contype & affinity0)) != 0)
+    new_affinity[other] |= moving_bit
+    part_code = np.array([code.get(name, 0) for name in fixture], dtype=np.int64)
+    new_type[moving] = moving_bit | part_code[moving]
+    new_affinity[moving] = field & ~part_code[moving]
+
+    def collide(t1, a1, t2, a2):
+        """Return MuJoCo's contype/conaffinity test of every row geom against every column geom."""
+        return ((t1[:, None] & a2[None, :]) | (t2[None, :] & a1[:, None])) != 0
+
+    # Only pairs with a moving part in them change; a pair of two moving parts shows twice.
+    rows = np.flatnonzero(moving)
+    turned_off = (collide(contype[rows], conaffinity[rows], contype, conaffinity)
+                  & ~collide(new_type[rows], new_affinity[rows], new_type, new_affinity)
+                  & (weld[rows][:, None] != weld[None, :]))
+    count = int(turned_off[:, ~moving].sum() + turned_off[:, moving].sum() // 2)
+
+    model.geom_contype[:] = new_type
+    model.geom_conaffinity[:] = new_affinity
+    # MuJoCo's body-pair filter reads each body's OR of its geoms' bits.
+    for field_name, bits in (("body_contype", new_type), ("body_conaffinity", new_affinity)):
+        per_body = np.zeros(model.nbody, dtype=np.int64)
+        np.bitwise_or.at(per_body, geom_body, bits)
+        getattr(model, field_name)[:] = per_body
+    env._fixture_collisions_model = model
+    print(f"[sim_common] fixture collisions: excluded {count} geom pairs inside {len(names)} RoboCasa "
+          f"fixtures with moving parts and between those parts and the static scene"
+          + (f"; left as they are: {sorted(odd)}" if odd else ""), flush=True)
+    return count
+
+
 def frame_viewer_on_robot(handle, data, body_id: int) -> None:
-    """Set the passive viewer free camera's spawn pose as a function of the robot
-    base body's world pose. lookat tracks the body position; the orbit azimuth is
-    offset from the body's yaw, so framing is invariant to spawn orientation."""
+    """Point the passive viewer's free camera down at body_id, turned with its yaw (VIEW_CAM_*)."""
     import mujoco
     pos = data.xpos[body_id]
     w, x, y, z = (float(v) for v in data.xquat[body_id])

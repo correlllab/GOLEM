@@ -1,5 +1,4 @@
-"""The H1-2's sensors, as its real drivers publish them: RGBD cameras and the
-Livox MID-360 lidar + IMU.
+"""Simulate the H1-2's RealSense cameras and MID-360 lidar + IMU as their drivers publish them.
 
 Each camera publishes the topics, frames and TF of the real robot's RealSense
 driver (realsense_profile.yaml / realsense_profile.py), under
@@ -17,22 +16,48 @@ driver (realsense_profile.yaml / realsense_profile.py), under
   /realsense/head/depth/color/points                            sensor_msgs/PointCloud2 (pointcloud)
   /tf_static, /tf                                               mount + driver camera frames
 As with image_transport on the robot, the compressed topics are encoded only
-while something subscribes to them.
+while something subscribes to them. The MID-360, in its raw (upside-down)
+livox_frame:
   /livox/lidar                                                  livox_ros_driver2/CustomMsg
   /livox/pointcloud                                             sensor_msgs/PointCloud2 (same scan, driver-native layout)
-  /livox/imu                                                    sensor_msgs/Imu (co-located w/ lidar)
+  /livox/imu                                                    sensor_msgs/Imu (the MJCF's livox_imu_site)
 
 H12Sensors is the sensor suite of the mujoco_sensors node
 (mujoco_ros_bridge.RosSensorBridge), which publishes /clock and the optional
 ground-truth odom and calls tick() once per sim step after them. The IMU and
-camera TF are published at their rates keyed off sim time; camera frames and
-lidar scans are rate-throttled the same way and produced from MjData snapshots
-on worker threads. MuJoCo's renderer GL context is thread-affine: it is
-created, used and freed on the thread that renders (see _camera_worker).
+camera TF are published at their rates keyed off sim time; camera frames are
+rate-throttled the same way and rendered from MjData snapshots on the camera
+worker thread, through EGL. MuJoCo's renderer GL context is thread-affine: it is
+created, used and freed on that thread (see _camera_worker). The renders hold
+mid360.GL_LOCK, taking turns with the lidar's GPU caster.
+
+The MID-360 is the model both robots share (golem_robocasa/mid360.py): the
+real non-repetitive scan pattern, 20,000 points a 10 Hz frame (200,000
+points/s), lines 0-3, the blind zone, maximum range and range noise, with each
+point's offset_time the time of the pose it was cast from. The rays leave
+livox_link and pass through torso_link's geoms, in which the sensor sits; a ray
+whose first hit is a self-filtered geom (self_filter_geoms) gives no return, so
+the limbs still occlude what is behind them. /livox/lidar and /livox/pointcloud
+carry the same frame, stamped at its first point, as the driver stamps them.
+
+Threads. The lidar's rays are cast on the mid360_scan thread (_LidarScans, a
+mid360.ScanRing, as on the G1) through mid360.GpuCaster, from depth renders on
+the GPU. Every caster's batch_s of sim time, tick() copies under the sim lock
+what a cast reads (every geom's pose, the sensor's, and the geoms' and
+materials' live alpha, which RoboCasa tasks change and the rays skip at 0) into
+a slot of a ring; the thread casts the rays due by then, labelled with that
+time, and packs and publishes each frame it completes. The caster casts on its
+own copy of the model and releases the GIL while it renders, so the casts run
+beside the physics. The ring holds one frame of casts: when the thread falls
+that far behind, tick() waits for it (the lidar_wait stage), so a frame trails
+the sim by at most one frame period and the real-time factor drops instead.
+
+State time. tick() runs after mj_step, which leaves the kinematics of the
+state it started from, so the lidar's casts are labelled one physics step
+before sim_t, as the G1's are.
 """
 import copy
 import io
-import os
 import struct
 from concurrent.futures import ThreadPoolExecutor
 from array import array as _array
@@ -52,14 +77,13 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Imu, PointCloud2, PointField
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
+import mid360
 import realsense_profile
 from mujoco_ros_bridge import _sim_time_to_msg
 
 
-# PointCloud2 layout mirrors livox_ros_driver2's native xfer_format=0 output
-# (LivoxPointXyzrtlt in lddc.cpp:262-296): 26-byte unaligned point. Keep this
-# in sync with the real driver so downstream nodes don't care whether the
-# scan comes from sim or hardware.
+# /livox/pointcloud's point, as livox_ros_driver2 lays it out with
+# xfer_format 0 (LivoxPointXyzrtlt in its lddc.cpp): 26 bytes, unaligned.
 PC2_DTYPE = np.dtype(
     [
         ("x", np.float32),
@@ -93,13 +117,36 @@ LIVOX_POINT_DTYPE = np.dtype([
     ("reflectivity", "u1"), ("tag", "u1"), ("line", "u1"), ("pad", "u1"),
 ])
 
+# Geom groups the lidar's rays hit: all six, the robot's and the scene's collision geoms included.
+LIDAR_GEOM_GROUPS = (1, 1, 1, 1, 1, 1)
+
+
+def _log(text):
+    """Print an [h12_sensors] line."""
+    print(f"[h12_sensors] {text}", flush=True)
+
+
+def self_filter_geoms(model, prefixes) -> np.ndarray:
+    """Return the bool mask (ngeom,) of geoms on bodies whose names start with one of prefixes.
+
+    A lidar ray whose first hit is one of them gives no return. No prefixes mark none.
+    """
+    mask = np.zeros(model.ngeom, dtype=bool)
+    prefixes = tuple(prefixes)
+    if prefixes:
+        for g in range(model.ngeom):
+            name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, int(model.geom_bodyid[g])) or ""
+            mask[g] = name.startswith(prefixes)
+    return mask
+
 
 def _serialize_livox_scan(stamp, frame_id, timebase, offset_time, points, lines) -> bytes:
-    """Serialize a CustomMsg without building one Python object per point.
+    """Return a /livox/lidar CustomMsg serialized, without one Python object per point.
 
     rclpy serializes the header and fixed fields of a point-free message; the
     empty points sequence is its trailing uint32 length, replaced by the count
-    and followed by the packed points. Identical to serializing the message.
+    and followed by the packed points. The bytes are those of the full message.
+    stamp is a ROS time, timebase ns, offset_time ns per point.
     """
     msg = CustomMsg()
     msg.header.stamp = stamp
@@ -116,16 +163,94 @@ def _serialize_livox_scan(stamp, frame_id, timebase, offset_time, points, lines)
     return prefix[:-4] + struct.pack("<I", msg.point_num) + packed.tobytes()[:-1]
 
 
+def _livox_pointcloud(stamp, frame_id, offset_time, points, lines) -> PointCloud2:
+    """Return a /livox/pointcloud PointCloud2 of a scan, in the driver's xfer_format 0 layout.
+
+    timestamp is offset_time (ns, as float64); intensity and tag stay 0, as the sim has no
+    reflectivity.
+    """
+    arr = np.zeros(points.shape[0], dtype=PC2_DTYPE)
+    arr["x"], arr["y"], arr["z"] = points[:, 0], points[:, 1], points[:, 2]
+    arr["line"] = lines
+    arr["timestamp"] = offset_time.astype(np.float64)
+    msg = PointCloud2()
+    msg.header.stamp = stamp
+    msg.header.frame_id = frame_id
+    msg.height = 1
+    msg.width = int(points.shape[0])
+    msg.fields = PC2_FIELDS
+    msg.is_bigendian = False
+    msg.point_step = PC2_POINT_STEP
+    msg.row_step = PC2_POINT_STEP * msg.width
+    msg.is_dense = True
+    msg.data = _array("B", arr.tobytes())
+    return msg
+
+
+class _LidarScans(mid360.ScanRing):
+    """Cast the MID-360's scans on the mid360_scan thread (a mid360.ScanRing) and publish both lidar topics."""
+
+    def __init__(self, model, body_id, exclude_body_id, robot_geoms, frame_id,
+                 publish_lidar, publish_cloud, timings=None, sim_lock=None):
+        """Build the GPU caster and start the thread.
+
+        The sensor's pose is body body_id's; the rays pass through body exclude_body_id's
+        geoms, and a ray whose first hit is in the bool mask robot_geoms (ngeom,) gives no
+        return (a zero point). Each frame goes to publish_lidar(CustomMsg CDR bytes) and
+        publish_cloud(PointCloud2) in frame_id. sim_lock is held for the snapshot copies only.
+        Raises RuntimeError when EGL fails to render.
+        """
+        body = int(body_id)
+        self._frame_id = frame_id
+        self._publish_lidar = publish_lidar
+        self._publish_cloud = publish_cloud
+        caster = mid360.GpuCaster(model, exclude_body_id, LIDAR_GEOM_GROUPS, robot_geoms=robot_geoms)
+        _log(f"lidar rays cast on the GPU every {caster.batch_s * 1e3:g} ms of sim time")
+        super().__init__(mid360.Mid360Scanner(caster), model,
+                         lambda data: (data.xpos[body], data.xmat[body].reshape(3, 3)),
+                         self._publish_frame, caster.batch_s, sim_lock, timings, _log)
+
+    def _publish_frame(self, frame):
+        """Publish a mid360.LidarFrame on /livox/lidar and /livox/pointcloud, stamped at its first point."""
+        timebase = int(round(frame.timebase * 1e9))   # ns
+        stamp = TimeMsg(sec=timebase // 1_000_000_000, nanosec=timebase % 1_000_000_000)
+        self._publish_lidar(_serialize_livox_scan(stamp, self._frame_id, timebase, frame.offset_time,
+                                                  frame.points, frame.line))
+        self._publish_cloud(_livox_pointcloud(stamp, self._frame_id, frame.offset_time, frame.points,
+                                              frame.line))
+
+
 # One RealSense camera: its realsense_profile.CameraSpec, MuJoCo camera ids,
-# camera_info messages and publishers keyed by topic suffix (a stream that is
-# switched off has no publishers).
+# camera_info messages and publishers by stream key (a stream switched off has
+# none).
 _CameraPub = namedtuple("_CameraPub", "spec color_id depth_id color_info depth_info pubs")
 
 # The real driver's compressedDepth ConfigHeader for 16UC1 PNG, byte for byte
 # as captured from the robot: compression format 0 (PNG), then two 32-bit
 # depth-quantization words, the first 9 and the second 0.
 _COMPRESSED_DEPTH_HEADER = struct.pack("<III", 0, 9, 0)
-_JPEG_QUALITY = 95   # image_transport's compressed default, which the robot runs
+_JPEG_QUALITY = 95   # image_transport's compressed default, as on the robot
+# The MID-360 driver's frame_id on /livox/lidar, /livox/pointcloud and /livox/imu.
+LIVOX_FRAME = "livox_frame"
+CAMERA_RATE_HZ = 15.0   # Hz of sim time, every camera's frames
+
+
+# Preallocated MjData the camera frames are captured into: one being rendered
+# while the next is filled.
+_CAMERA_SNAPSHOTS = 2
+
+
+def _camera_snapshot_fields(model):
+    """Return the MjData fields mujoco.Renderer.update_scene reads for the geoms, cameras and lights shown.
+
+    Geoms, fixed, tracking and body cameras, and lights come from the world
+    poses of kinematics; tendons (drawn by default) also from their wrap points.
+    """
+    fields = ("geom_xpos", "geom_xmat", "cam_xpos", "cam_xmat", "light_xpos", "light_xdir")
+    if model.ntendon:
+        fields += ("ten_wrapadr", "ten_wrapnum", "wrap_xpos", "wrap_obj", "ten_length")
+    return fields
+
 
 # depth/color/points as the real driver lays it out (x y z, pad, rgb).
 CLOUD_FIELDS = [
@@ -137,7 +262,7 @@ CLOUD_FIELDS = [
 
 
 def _camera_info(intr, frame_id: str) -> CameraInfo:
-    """camera_info for a realsense_profile.Intrinsics, distortion-free."""
+    """Return the distortion-free camera_info of a realsense_profile.Intrinsics."""
     info = CameraInfo()
     info.width = intr.width
     info.height = intr.height
@@ -151,9 +276,16 @@ def _camera_info(intr, frame_id: str) -> CameraInfo:
 
 
 class H12Sensors:
-    """The H1-2's sensor suite. It publishes on `node` (the mujoco_sensors host)
-    and holds sim_lock only while it touches MuJoCo state, never while it
-    renders, encodes or publishes."""
+    """Publish the H1-2's cameras, lidar and IMU on the mujoco_sensors node.
+
+    It holds sim_lock only while it reads MuJoCo state, never while it
+    renders, encodes or publishes.
+    """
+
+    # The camera snapshots' MjData (_capture_camera_snapshot), made on the first frame; an
+    # empty list for a model with flexes or skins, which takes full copies.
+    _camera_slots = None
+    _camera_slot_count = 0
 
     def __init__(
         self,
@@ -166,34 +298,32 @@ class H12Sensors:
         depth_stream: bool = True,
         pointcloud: bool = True,
         lidar_body: str = "livox_link",
-        lidar_frame: str = "lidar_link",
         lidar_exclude_body: str = "torso_link",
-        cam_rate_hz: float = 15.0,
-        lidar_az_rays: int = 180,
-        lidar_el_rays: int = 28,
-        lidar_rate_hz: float = 5.0,
-        lidar_max_range: float = 30.0,
-        lidar_min_range: float = 0.1,
         imu_quat_sensor: str = "livox_imu_quat",
         imu_gyro_sensor: str = "livox_imu_gyro",
         imu_acc_sensor: str = "livox_imu_acc",
-        imu_frame: str = "lidar_link",
         imu_rate_hz: float = 100.0,
         lidar_self_prefixes: tuple = (),
         sim_lock=None,
         timings=None,
     ):
+        """Build the sensors; raise RuntimeError for a body, camera or sensor missing from model.
+
+        cameras are realsense_profile.CameraSpec and camera_tf the profile's TF
+        edges (realsense_profile.tf_edges), the driver's re-published at
+        camera_tf_rate_hz. depth_stream and pointcloud switch the depth stream
+        and depth/color/points on. The lidar's pose is lidar_body's;
+        lidar_exclude_body is the body it rides in, whose geoms the rays pass
+        through; geoms of bodies named with a lidar_self_prefixes prefix give no
+        return. The lidar's GPU caster raises RuntimeError when EGL fails to
+        render. Rates are Hz of sim time.
+        """
         self.node = node
         self.model = model
         self.data = data
         self.sim_lock = sim_lock
         self.timings = timings if timings is not None else LoopTimings()
 
-        self.lidar_frame = lidar_frame
-
-        # cameras: realsense_profile.CameraSpec per camera, each publishing the
-        # real driver's topic set under /realsense/<ns>/*. camera_tf: the
-        # profile's TF edges (realsense_profile.tf_edges).
         self._camera_specs = list(cameras)
         self.depth_stream = bool(depth_stream)
         self.pointcloud = bool(pointcloud)
@@ -201,85 +331,25 @@ class H12Sensors:
         self.lidar_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, lidar_body)
         if self.lidar_body_id < 0:
             raise RuntimeError(f"body '{lidar_body}' not found in MJCF")
-        # Lidar self-occlusion mask: ignore returns whose geom is attached to
-        # `torso_link` (the body the lidar is mounted on — its outer shell
-        # would otherwise show as a phantom near-zero return). Limbs hanging
-        # off the torso (arms, head, legs) are deliberately NOT in this mask
-        # so they occlude the scan like real obstacles.
+        # The rays pass through the torso's own geoms (the casters'
+        # exclude_body): the lidar sits inside its shell. Limbs still occlude.
         torso_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, lidar_exclude_body)
         if torso_id < 0:
             raise RuntimeError(f"body '{lidar_exclude_body}' not found in MJCF")
         self.lidar_exclude_body_id = int(torso_id)
-        self.geom_excluded = (model.geom_bodyid == self.lidar_exclude_body_id)
-        # Optional self-return filter: mj_multiRay's bodyexclude only drops ONE
-        # body (the torso the lidar sits on), so the downward rays still hit the
-        # robot's own legs/arms/grippers and map a phantom obstacle under the robot
-        # (nav2 then rejects the start as "lethal space"). When lidar_self_prefixes
-        # is given, flag every geom whose body name starts with one of them so
-        # those hits are dropped in _publish_lidar_scan. Off by default (the limbs
-        # occlude like real obstacles); enabled for locomotion/SLAM/nav.
-        self.geom_is_robot = np.zeros(model.ngeom, dtype=bool)
-        if lidar_self_prefixes:
-            _pfx = tuple(lidar_self_prefixes)
-            for g in range(model.ngeom):
-                bn = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY,
-                                       int(model.geom_bodyid[g])) or ""
-                if bn.startswith(_pfx):
-                    self.geom_is_robot[g] = True
-        # mj_multiRay / mj_ray require a (6, 1) column vector here.
-        self.lidar_geomgroup = np.array([1, 1, 1, 1, 1, 1], dtype=np.uint8).reshape(6, 1)
+        # Rays whose first hit is one of these geoms give no return: the limbs
+        # still occlude what is behind them, but map no obstacle under the robot.
+        self.geom_is_robot = self_filter_geoms(model, lidar_self_prefixes)
 
-        self.cam_period = 1.0 / cam_rate_hz
-        # Far-plane distance in world units. MuJoCo's depth buffer reports
-        # zfar for rays that miss; mask those pixels to "no return" so
-        # consumers don't treat the far plane as a real surface.
+        self.cam_period = 1.0 / CAMERA_RATE_HZ
+        # m, MuJoCo's far plane: depth there means no surface.
         self.zfar = float(model.vis.map.zfar * model.stat.extent)
-
-        self.lidar_period = 1.0 / lidar_rate_hz
-        self.lidar_max_range = lidar_max_range
-        self.lidar_min_range = lidar_min_range
-        # Livox MID-360 FOV in WORLD coordinates is el ∈ [-7°, +52°] (mostly
-        # above horizon). The sensor is mounted upside-down in the MJCF, so
-        # local +Z = world -Z; flipping signs gives a LOCAL elevation range
-        # of [-52°, +7°] that produces the correct world coverage.
-        # The sim runs 360 az × 56 el rays at 10 Hz ≈ 200,000 pts/s, matching
-        # the real sensor's per-second density. The uniform grid is a
-        # simplification of the MID-360's non-repetitive scan pattern.
-        az = np.linspace(0.0, 2.0 * np.pi, lidar_az_rays, endpoint=False, dtype=np.float64)
-        el = np.linspace(-np.deg2rad(52.0), np.deg2rad(7.0), lidar_el_rays, endpoint=False, dtype=np.float64)
-        az_grid, el_grid = np.meshgrid(az, el, indexing="xy")
-        cos_el = np.cos(el_grid)
-        self.lidar_local_dirs = np.stack(
-            [cos_el * np.cos(az_grid), cos_el * np.sin(az_grid), np.sin(el_grid)],
-            axis=-1,
-        ).reshape(-1, 3)
-        self.lidar_rays = self.lidar_local_dirs.shape[0]
-        self.lidar_az_rays = lidar_az_rays
-        # Mid-360 has 6 laser lines. Map each synthetic ray's elevation index
-        # mod 6 to a line number so FAST-LIO's N_SCANS=6 filter accepts all
-        # points evenly distributed across scans.
-        self.lidar_lines = ((np.arange(self.lidar_rays) // lidar_az_rays) % 6).astype(np.uint8)
-        # Per-point acquisition time within a scan: model a constant-angular-
-        # velocity azimuth sweep (rotary approximation — all elevations at a
-        # given azimuth fire together), so offset_time depends only on the
-        # azimuth index. The grid above is elevation-major / azimuth-fast, so
-        # ray i has azimuth index (i % lidar_az_rays). FAST-LIO's AVIA path
-        # reads CustomPoint.offset_time [ns] and divides by 1e6 → per-point
-        # time [ms] for motion deskew. Span = one scan period (1 / rate).
-        az_idx = np.arange(self.lidar_rays) % lidar_az_rays
-        self.lidar_offset_time_ns = (
-            (az_idx / lidar_az_rays) * self.lidar_period * 1e9).astype(np.uint32)
-        # Preallocated mj_multiRay output buffers (overwritten each tick).
-        # mujoco 3.3.1's pybind binding requires column-vector shapes
-        # (m, 1) for the geomid / dist / vec / pnt / geomgroup args.
-        self._lidar_dists = np.full((self.lidar_rays, 1), -1.0, dtype=np.float64)
-        self._lidar_geomids = np.full((self.lidar_rays, 1), -1, dtype=np.int32)
 
         self.cameras = [self._make_camera_pub(spec) for spec in self._camera_specs]
 
-        # Camera frames: every edge latched on /tf_static once, as the robot's
-        # static mounts and the driver do; the driver's own edges also on /tf at
-        # camera_tf_rate_hz, as the driver re-publishes them.
+        # Every edge is latched on /tf_static once, as the robot's mounts and
+        # the driver do; the driver's own edges also go on /tf at
+        # camera_tf_rate_hz, as it re-publishes them.
         self._camera_tf = list(camera_tf)
         self._camera_tf_period = 1.0 / camera_tf_rate_hz
         self._last_camera_tf_sim_t = -float("inf")
@@ -288,9 +358,8 @@ class H12Sensors:
             self._static_tf.sendTransform(
                 [self._tf_msg(e, _sim_time_to_msg(float(data.time))) for e in self._camera_tf])
             self._camera_tf_broadcaster = TransformBroadcaster(self.node)
-        # FAST-LIO subscribes to /livox/lidar (CustomMsg) and /livox/imu (Imu)
-        # with RELIABLE QoS (laserMapping.cpp:923,929). Match it so DDS doesn't
-        # drop scans on a QoS mismatch.
+        # Reliable, as FAST-LIO subscribes (laserMapping.cpp); a best-effort
+        # publisher would not match it.
         self.pub_lidar = self.node.create_publisher(
             CustomMsg, "/livox/lidar",
             QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
@@ -304,35 +373,33 @@ class H12Sensors:
             QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                        history=HistoryPolicy.KEEP_LAST, depth=10))
 
-        self.imu_frame = imu_frame
         self.imu_period = 1.0 / imu_rate_hz
         self.imu_quat_adr, self.imu_quat_dim = self._sensor_adr(imu_quat_sensor)
         self.imu_gyro_adr, self.imu_gyro_dim = self._sensor_adr(imu_gyro_sensor)
         self.imu_acc_adr, self.imu_acc_dim = self._sensor_adr(imu_acc_sensor)
 
-        # Lazy renderers, one per render size — created on the first camera
-        # frame, on the thread that renders (see _camera_worker).
+        # One renderer per render size, made on the rendering thread.
         self._renderer = None
 
-        # Rate throttling uses sim time (data.time) not wall-clock, so topic
-        # rates are consistent regardless of real-time factor.
+        # s of sim time, so the rates do not depend on the real-time factor.
         self._last_cam_sim_t = 0.0
-        self._last_lidar_sim_t = 0.0
         self._last_imu_sim_t = 0.0
-        self._lidar_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lidar")
-        self._lidar_pending = None
-        # GLFW contexts must live on the main thread (the windowed launch); EGL
-        # and OSMesa contexts are per thread, so headless cameras get a worker.
-        self._camera_worker = (
-            ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera")
-            if os.environ.get("MUJOCO_GL", "").strip().lower() in ("egl", "osmesa") else None)
+        # The scan thread publishes both lidar topics; its GPU caster makes its
+        # EGL context here, before the passive viewer's window exists.
+        self._lidar = _LidarScans(model, self.lidar_body_id, self.lidar_exclude_body_id,
+                                  self.geom_is_robot, LIVOX_FRAME,
+                                  self.pub_lidar.publish, self.pub_pc2.publish,
+                                  self.timings, sim_lock)
+        # The cameras render on a worker thread, through EGL, while physics runs.
+        self._camera_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera")
         self._camera_pending = None
-        if self._camera_worker is not None and self.cameras:
-            # Create the EGL context now: once the passive viewer's GLFW window
+        if self.cameras:
+            # Make the EGL context now: once the passive viewer's GLFW window
             # exists, a new EGL context can no longer be made current.
             self._camera_worker.submit(self._ensure_renderer).result()
 
     def _make_camera_pub(self, spec) -> _CameraPub:
+        """Return a camera's MuJoCo ids, camera_info and publishers for the streams switched on."""
         ids = []
         for name in (spec.color_camera, spec.depth_camera):
             cam_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, name)
@@ -363,6 +430,7 @@ class H12Sensors:
 
     @staticmethod
     def _tf_msg(edge, stamp) -> TransformStamped:
+        """Return a profile TF edge as a TransformStamped at stamp."""
         parent, child, xyz, q, _ = edge
         t = TransformStamped()
         t.header.stamp = stamp
@@ -374,32 +442,39 @@ class H12Sensors:
         return t
 
     def _sensor_adr(self, name: str):
+        """Return (sensordata address, dimension) of the named sensor."""
         sid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, name)
         if sid < 0:
             raise RuntimeError(f"sensor '{name}' not found in MJCF")
         return int(self.model.sensor_adr[sid]), int(self.model.sensor_dim[sid])
 
     def get_logger(self):
+        """Return the host node's logger."""
         return self.node.get_logger()
 
     def stats(self) -> str:
-        """Nothing to report: every scheduled frame and scan is published."""
-        return ""
+        """Return the lidar's counts (mid360.ScanRing.stats); every scheduled camera frame is published."""
+        lidar = getattr(self, "_lidar", None)
+        return lidar.stats() if lidar is not None else ""
 
     def shutdown(self) -> None:
-        if getattr(self, "_lidar_worker", None) is not None:
-            self._lidar_worker.shutdown(wait=True)
-            self._lidar_worker = None
+        """Stop the worker threads, log the lidar's counts and free the renderers on the thread that owns them.
+
+        A second call, or one on a suite whose constructor failed before the threads started,
+        stops what is left.
+        """
+        lidar = getattr(self, "_lidar", None)
+        if lidar is not None:
+            lidar.close()
+            _log(f"sensors published {lidar.stats()}")
         camera_worker = getattr(self, "_camera_worker", None)
         if camera_worker is not None:
-            # Free the GL context on the thread that owns it.
             camera_worker.submit(self._close_renderer).result()
             camera_worker.shutdown(wait=True)
             self._camera_worker = None
-        else:
-            self._close_renderer()
 
     def _close_renderer(self) -> None:
+        """Close every renderer, on the thread that made them."""
         for r in (self._renderer or {}).values():
             try:
                 r.close()
@@ -408,16 +483,13 @@ class H12Sensors:
         self._renderer = None
 
     def tick(self, sim_t: float, stamp: TimeMsg) -> None:
-        """Called by the host once per sim step, after /clock and odom, with the
-        sim time (s) it read and that time as a ROS stamp.
+        """Publish the IMU, camera TF and camera frames due at sim_t (s), and submit the lidar's casts.
 
-        TF and IMU are published at their
-        target rates keyed off sim time. Camera and lidar are rate-throttled
-        the same way but run less frequently. Camera frames and lidar scans are
-        produced from MjData snapshots on worker threads, one job in flight per
-        sensor (cameras stay on this thread under the windowed GLFW backend). Call without holding sim_lock: each sensor
-        protects its own MuJoCo reads, then encodes/publishes outside the lock.
-        Physics must stay on this thread so the state cannot advance mid-tick.
+        The host calls it once per sim step, after /clock and odom; stamp is
+        sim_t as a ROS time. Camera frames come from MjData snapshots on the
+        camera worker thread, one job in flight; the lidar's casts are labelled
+        with the state time, one physics step before sim_t (module docstring).
+        Call it without holding sim_lock, on the thread that steps the physics.
         """
         if sim_t - self._last_imu_sim_t >= self.imu_period:
             self._last_imu_sim_t = sim_t
@@ -438,24 +510,24 @@ class H12Sensors:
             except Exception as e:
                 self.get_logger().warn(f"camera publish failed: {e}")
 
-        if sim_t - self._last_lidar_sim_t >= self.lidar_period:
-            self._last_lidar_sim_t = sim_t
-            try:
-                self._publish_lidar_scan(stamp)
-            except Exception as e:
-                self.get_logger().warn(f"lidar publish failed: {e}")
+        try:
+            self._lidar.tick(self.data, sim_t - self.model.opt.timestep)
+        except Exception as e:
+            self.get_logger().warn(f"lidar capture failed: {e}", throttle_duration_sec=5.0)
 
     def _publish_imu(self, stamp: TimeMsg) -> None:
+        """Publish /livox/imu from the IMU site's sensors."""
         with self.sim_lock or nullcontext():
             sd = self.data.sensordata
-            # framequat sensor returns (w, x, y, z) world-frame; gyro/accel are site-local.
+            # framequat is (w, x, y, z) in the world; gyro and accelerometer are
+            # in the site's frame (rad/s, m/s^2).
             q = sd[self.imu_quat_adr : self.imu_quat_adr + self.imu_quat_dim].copy()
             w = sd[self.imu_gyro_adr : self.imu_gyro_adr + self.imu_gyro_dim].copy()
             a = sd[self.imu_acc_adr : self.imu_acc_adr + self.imu_acc_dim].copy()
 
         msg = Imu()
         msg.header.stamp = stamp
-        msg.header.frame_id = self.imu_frame
+        msg.header.frame_id = LIVOX_FRAME
         msg.orientation.w = float(q[0])
         msg.orientation.x = float(q[1])
         msg.orientation.y = float(q[2])
@@ -469,32 +541,53 @@ class H12Sensors:
         self.pub_imu.publish(msg)
 
     def _publish_camera_frame(self, stamp: TimeMsg) -> None:
-        # Snapshot MjData so scene capture, both render passes and encoding run
-        # on the camera worker while physics continues (see _camera_worker).
+        """Snapshot MjData and submit rendering and publishing every camera from it to the camera worker."""
         capture_start = self.timings.start()
-        with self.sim_lock or nullcontext():
-            snapshot = copy.copy(self.data)
+        snapshot = self._capture_camera_snapshot()
         self.timings.stop("camera_capture", capture_start)
-        worker = getattr(self, "_camera_worker", None)
-        if worker is None:
-            self._render_and_publish_cameras(stamp, snapshot)
-            return
-        # At most one frame set in flight: wait rather than drop, so every
-        # scheduled frame is published. This re-raises the previous failure.
+        # One frame set in flight at most: wait rather than drop, so every
+        # scheduled frame is published. result() re-raises the last one's failure.
         wait_start = self.timings.start()
         pending, self._camera_pending = self._camera_pending, None
         if pending is not None:
             pending.result()
         self.timings.stop("camera_wait", wait_start)
-        self._camera_pending = worker.submit(self._render_and_publish_cameras, stamp, snapshot)
+        self._camera_pending = self._camera_worker.submit(self._render_and_publish_cameras, stamp, snapshot)
+
+    def _capture_camera_snapshot(self):
+        """Return an MjData holding what the cameras' scenes read of self.data, taken under the sim lock.
+
+        It is one of _CAMERA_SNAPSHOTS preallocated MjData, filled with
+        _camera_snapshot_fields() only, in turn. This runs while the previous
+        frame's job may still render, but the one before that finished before the
+        previous was submitted, so the slot reused here is idle. A model with
+        flexes or skins, whose scenes read more than those fields, takes a full
+        copy of self.data instead.
+        """
+        slots = self._camera_slots
+        if slots is None:
+            full_copy = self.model.nflex > 0 or self.model.nskin > 0
+            slots = self._camera_slots = [] if full_copy else [
+                mujoco.MjData(self.model) for _ in range(_CAMERA_SNAPSHOTS)]
+            self._camera_slot_count = 0
+        with self.sim_lock or nullcontext():
+            if not slots:
+                return copy.copy(self.data)
+            snapshot = slots[self._camera_slot_count % len(slots)]
+            self._camera_slot_count += 1
+            for field in _camera_snapshot_fields(self.model):
+                getattr(snapshot, field)[:] = getattr(self.data, field)
+        return snapshot
 
     def _render_sizes(self):
+        """Return the (width, height) of every render the cameras need."""
         sizes = {(c.spec.color.width, c.spec.color.height) for c in self.cameras}
         if self.depth_stream or self.pointcloud:
             sizes |= {(c.spec.depth_image.width, c.spec.depth_image.height) for c in self.cameras}
         return sizes
 
     def _ensure_renderer(self) -> None:
+        """Make the renderers and scene options on the calling thread, once."""
         if self._renderer is not None:
             return
         sizes = self._render_sizes()
@@ -506,24 +599,25 @@ class H12Sensors:
         self._renderer = {(w, h): mujoco.Renderer(self.model, height=h, width=w) for w, h in sizes}
         self._buffers = {(w, h): (np.empty((h, w, 3), dtype=np.uint8), np.empty((h, w), dtype=np.float32))
                          for w, h in sizes}
-        # Group 0: red collision primitives (joint spheres, mesh
-        # duplicates) — hide. Group 1: H1 body visual meshes — show.
-        # Group 2: magpie hand visuals + h12 wrist mount — show.
-        # Group 3: magpie collision meshes + finger pad boxes — hide.
+        # Shown: geom group 1 (the H1-2's visual meshes) and 2 (the MAGPIE
+        # visuals and wrist mounts). Hidden: 0 (collision primitives) and 3
+        # (MAGPIE collision meshes and finger pads).
         self._scene_opt = mujoco.MjvOption()
         self._scene_opt.geomgroup[:] = 0
         self._scene_opt.geomgroup[1] = 1
         self._scene_opt.geomgroup[2] = 1
-        # Hide all site markers from camera output. Sites are non-physical
-        # debug markers (camera/lidar mounts, robosuite's required grip_site
-        # at the grasp center, etc.); a hand camera looking down the gripper
-        # axis stares straight at grip_site, whose semi-transparent geom is
-        # faint in RGB but writes a solid blob into the depth image.
+        # Sites are hidden: a hand camera looks straight at robosuite's
+        # grip_site, which is faint in colour but solid in depth.
         self._scene_opt.sitegroup[:] = 0
+        # Rangefinder rays are not drawn: no camera sees them, and the partial snapshot does
+        # not carry the sensor data they are drawn from.
+        self._scene_opt.flags[mujoco.mjtVisFlag.mjVIS_RANGEFINDER] = 0
 
     def _depth_mm(self, depth):
-        """Metres -> 16UC1 mm, "no hit" (far-plane sentinel, non-finite, <= 0)
-        as 0, the RealSense invalid value that compressed_depth honours."""
+        """Return depth (m) as 16UC1 mm, with no surface (far plane, non-finite, <= 0) as 0.
+
+        0 is the RealSense's "no depth", which compressed_depth honours.
+        """
         invalid = ~np.isfinite(depth) | (depth <= 0) | (depth >= 0.999 * self.zfar)
         depth_mm = np.clip(depth * 1000.0, 0, 65535).astype(np.uint16)
         depth_mm[invalid] = 0
@@ -531,6 +625,7 @@ class H12Sensors:
 
     @staticmethod
     def _image_msg(stamp, frame, pixels, encoding, bytes_per_pixel) -> Image:
+        """Return a sensor_msgs/Image of pixels."""
         msg = Image()
         msg.header.stamp = stamp
         msg.header.frame_id = frame
@@ -538,18 +633,14 @@ class H12Sensors:
         msg.encoding = encoding
         msg.is_bigendian = 0
         msg.step = msg.width * bytes_per_pixel
-        # Wrap byte payloads in array.array('B', …) — rclpy's auto-generated
-        # message setters validate the data field element-by-element when fed
-        # raw bytes (one isinstance check per byte → ~17 ms/frame at 320×240
-        # RGB+depth). array.array('B') tells the binding "uint8 array, no
-        # validation needed" and the setter copies in O(N) C.
+        # rclpy checks bytes one element at a time (~17 ms a 320x240 colour and
+        # depth frame); an array.array('B') is copied as is.
         msg.data = _array("B", np.ascontiguousarray(pixels).tobytes())
         return msg
 
     @staticmethod
     def _compressed_depth_msg(stamp, frame, depth_mm) -> CompressedImage:
-        # 16UC1 mm → PNG → compressedDepth (12-byte ConfigHeader + PNG), which
-        # image_transport's compressed_depth plugin decodes directly.
+        """Return depth_mm (16UC1) as compressedDepth: the 12-byte ConfigHeader, then a PNG."""
         png = io.BytesIO()
         PILImage.fromarray(depth_mm, mode="I;16").save(png, format="PNG")
         msg = CompressedImage()
@@ -560,17 +651,18 @@ class H12Sensors:
         return msg
 
     def _publish_info(self, pub, info, stamp) -> None:
+        """Publish camera_info info stamped at stamp."""
         info.header.stamp = stamp
         pub.publish(info)
 
     def _render_and_publish_cameras(self, stamp: TimeMsg, data) -> None:
-        """Render and publish every camera from an MjData snapshot.
+        """Render and publish every camera from the MjData snapshot data.
 
-        The renderers' GL contexts are created, used and freed on the calling
-        thread only (the camera worker when there is one). Per camera: the
-        colour camera renders colour + aligned depth from one scene update; the
-        depth camera (the colour camera itself on a D405) renders the decimated
-        depth stream and point cloud.
+        The renderers' GL contexts are made, used and freed on the calling
+        thread only (the camera worker when there is one). Per camera, the
+        colour camera renders colour and aligned depth from one scene update,
+        and the depth camera (the colour camera itself on a D405) the decimated
+        depth stream and the point cloud.
         """
         self._ensure_renderer()
         for cam in self.cameras:
@@ -579,11 +671,12 @@ class H12Sensors:
             size = (spec.color.width, spec.color.height)
             r, (rgb_buf, depth_buf) = self._renderer[size], self._buffers[size]
             r.disable_depth_rendering()
-            # Both passes consume the same MjvScene, captured from the snapshot.
             r.update_scene(data, camera=cam.color_id, scene_option=self._scene_opt)
-            rgb_u8 = r.render(out=rgb_buf)
-            r.enable_depth_rendering()
-            aligned_mm = self._depth_mm(r.render(out=depth_buf))
+            with mid360.GL_LOCK:
+                rgb_u8 = r.render(out=rgb_buf)
+                r.enable_depth_rendering()
+                aligned = r.render(out=depth_buf)
+            aligned_mm = self._depth_mm(aligned)
             self.timings.stop("camera_render", render_start)
 
             depth_mm = None
@@ -593,7 +686,9 @@ class H12Sensors:
                 rd, (_, ddepth_buf) = self._renderer[size], self._buffers[size]
                 rd.enable_depth_rendering()
                 rd.update_scene(data, camera=cam.depth_id, scene_option=self._scene_opt)
-                depth_mm = self._depth_mm(rd.render(out=ddepth_buf))
+                with mid360.GL_LOCK:
+                    depth = rd.render(out=ddepth_buf)
+                depth_mm = self._depth_mm(depth)
                 self.timings.stop("camera_depth_render", depth_start)
 
             publish_start = self.timings.start()
@@ -638,100 +733,3 @@ class H12Sensors:
                 msg.data = _array("B", points.tobytes())
                 pubs["points"].publish(msg)
                 self.timings.stop("camera_cloud", cloud_start)
-
-    def _publish_lidar_scan(self, stamp: TimeMsg) -> None:
-        # Snapshot MjData (~1 ms for a kitchen) so the ~75 ms raycast can run on
-        # the lidar worker while physics continues; mj_multiRay releases the GIL.
-        capture_start = self.timings.start()
-        with self.sim_lock or nullcontext():
-            snapshot = copy.copy(self.data)
-        self.timings.stop("lidar_capture", capture_start)
-        worker = getattr(self, "_lidar_worker", None)
-        if worker is None:
-            self._cast_and_publish_lidar(stamp, snapshot)
-            return
-        # At most one scan in flight: wait rather than drop, so every scheduled
-        # scan is published. This re-raises a failure from the previous scan.
-        wait_start = self.timings.start()
-        pending, self._lidar_pending = self._lidar_pending, None
-        if pending is not None:
-            pending.result()
-        self.timings.stop("lidar_wait", wait_start)
-        self._lidar_pending = worker.submit(self._cast_and_publish_lidar, stamp, snapshot)
-
-    def _cast_and_publish_lidar(self, stamp: TimeMsg, data) -> None:
-        """Cast and publish one scan from an MjData snapshot; never touches self.data."""
-        cast_start = self.timings.start()
-        timebase = int(data.time * 1e9)
-        origin = np.ascontiguousarray(data.xpos[self.lidar_body_id], dtype=np.float64).reshape(3, 1)
-        rot = np.array(data.xmat[self.lidar_body_id], dtype=np.float64).reshape(3, 3)
-
-        # Rotate local ray directions to world frame.
-        # rot maps local→world (column vecs); for row-vec array: world = local @ rot.T
-        world_dirs = np.ascontiguousarray(self.lidar_local_dirs @ rot.T, dtype=np.float64)
-
-        # Single batched cast. bodyexclude=torso skips the torso shell at the
-        # source: the lidar sits inside the torso visual mesh and otherwise
-        # every ray would self-hit at ~2 cm, forcing a per-ray retry loop
-        # (~280 ms/scan). Excluding here gives ~80 ms/scan.
-        dists = self._lidar_dists
-        geomids = self._lidar_geomids
-        dists.fill(-1.0)
-        geomids.fill(-1)
-        mujoco.mj_multiRay(
-            self.model, data,
-            origin, world_dirs.reshape(-1, 1),
-            self.lidar_geomgroup,
-            1,                              # include static geoms
-            self.lidar_exclude_body_id,     # skip torso geoms
-            geomids, dists,
-            self.lidar_rays,
-            self.lidar_max_range,
-        )
-        self.timings.stop("lidar_cast", cast_start)
-        publish_start = self.timings.start()
-        hit_dists = dists.ravel()
-
-        # Drop self-returns: rays that hit the robot's own body (legs/arms/grippers
-        # — the torso is already excluded at cast time). Uses the per-geom robot
-        # mask so real obstacles are kept even when a limb is at the same range.
-        if self.geom_is_robot.any():
-            gid = geomids.ravel()
-            self_hit = (gid >= 0) & self.geom_is_robot[np.where(gid >= 0, gid, 0)]
-            hit_dists = np.where(self_hit, -1.0, hit_dists)
-
-        # Points in lidar-local frame: local_dir * distance.
-        valid = (hit_dists >= self.lidar_min_range) & (hit_dists <= self.lidar_max_range)
-        pts = (self.lidar_local_dirs[valid] * hit_dists[valid, np.newaxis]).astype(np.float32)
-        lines = self.lidar_lines[valid]
-        offs = self.lidar_offset_time_ns[valid]
-
-        self.pub_lidar.publish(
-            _serialize_livox_scan(stamp, self.lidar_frame, timebase, offs, pts, lines))
-
-        # Parallel sensor_msgs/PointCloud2 on /livox/pointcloud — same scan,
-        # same stamp/frame, driver-native field layout. timestamp carries the
-        # per-point offset_time [ns, as float64] for parity with the real driver
-        # (nothing in FAST-LIO subscribes to this topic); intensity/tag stay
-        # zero (sim has no reflectivity, matching the CustomMsg's reflectivity=0).
-        arr = np.zeros(pts.shape[0], dtype=PC2_DTYPE)
-        arr["x"] = pts[:, 0]
-        arr["y"] = pts[:, 1]
-        arr["z"] = pts[:, 2]
-        arr["line"] = lines
-        arr["timestamp"] = offs.astype(np.float64)
-        pc2 = PointCloud2()
-        pc2.header.stamp = stamp
-        pc2.header.frame_id = self.lidar_frame
-        pc2.height = 1
-        pc2.width = int(pts.shape[0])
-        pc2.fields = PC2_FIELDS
-        pc2.is_bigendian = False
-        pc2.point_step = PC2_POINT_STEP
-        pc2.row_step = PC2_POINT_STEP * pc2.width
-        pc2.is_dense = True
-        # A typed byte array avoids rclpy's per-byte Python validation; the
-        # serialized PointCloud2 payload is identical to the packed NumPy bytes.
-        pc2.data = _array("B", arr.tobytes())
-        self.pub_pc2.publish(pc2)
-        self.timings.stop("lidar_publish", publish_start)

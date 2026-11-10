@@ -1,20 +1,20 @@
-'''
-LowCmdHandler on domain 92 against a fake robot publishing /lowstate, on both robots: the
-held joints, the follow gate, command clipping, no controller-side estop, no gating without
-a measured state, and the shutdown command. Then FollowGate and relays_commands on their
-own.
+"""Check LowCmdHandler, FollowGate and relays_commands, on both robots.
 
-The handler reads the measured state through a shared RobotModel whose state source is a
-StateSubscriber on the fake /lowstate; every test puts the model back at rest.
-'''
+LowCmdHandler runs on domain 92 against a fake robot publishing /lowstate: the held joints,
+the follow gate, command clipping, no controller-side estop, no gating without a measured
+state, and the shutdown command. It reads the measured state through a shared RobotModel
+whose state source is a StateSubscriber on the fake /lowstate; every test puts the model
+back at rest. FollowGate and relays_commands are then checked on their own.
+"""
 import time
 
 import numpy as np
 import pytest
+from golem_upper_ik.profile import known_robots
 
 from ros_harness import Echo, FakeRobot, Recorder, upper_q, wait_for
 
-ROBOTS = ('h12', 'g1')
+ROBOTS = known_robots()
 CONFIGS = {'h12': 'safety_split', 'g1': 'g1_split'}
 SAG = -0.08  # rad: where the fake robot's held joints (torso, waist) sit
 ARM_Q = 0.1  # rad: the fake robot's arm joints
@@ -22,14 +22,16 @@ FLOAT32 = 1e-6  # rad: what a command loses as float32
 
 
 def profile_of(robot):
+    """Return robot's RobotProfile."""
     from golem_upper_ik.profile import load_profile
     return load_profile(robot)
 
 
 class Rig:
-    '''A fake robot, a StateSubscriber feeding the shared model, a recorder of the commands'''
+    """Hold a fake robot, a StateSubscriber feeding the shared model, and a command recorder."""
 
     def __init__(self, ros, models, robot, config=None, **controller):
+        """Start the fake robot (arms at ARM_Q, held joints at SAG) and the subscriber."""
         from golem_upper_ik.config import load_controller_config
         from golem_upper_ik.core.ros_io import StateSubscriber
         self.ros = ros
@@ -55,37 +57,39 @@ class Rig:
         self.recorder = Recorder(ros, self.config['topics']['low_cmd'])
 
     def _release_model(self):
+        """Detach the shared model's state source."""
         self.model.state_subscriber = None
 
     def handler(self):
+        """Return a LowCmdHandler on the rig, shut down at the test's end."""
         from golem_upper_ik.core.low_cmd_handler import LowCmdHandler
         handler = LowCmdHandler(self.node, self.profile, self.config, self.model)
         self.ros.on_close(handler.shutdown)
         return handler
 
     def clip(self, q):
+        """Return q clipped to the config's position clip limits."""
         limits = self.config['limits']['q_clip_limits']
         return np.clip(q, limits[:, 0], limits[:, 1])
 
     def echo(self, **kwargs):
-        '''An Echo of the commands on the config's safety output'''
+        """Return an Echo relaying the commands on golem_safety's output (/lowcmd)."""
         topics = self.config['topics']
-        return Echo(self.ros, topics['low_cmd'], topics['safety_out'], **kwargs)
+        return Echo(self.ros, topics['low_cmd'], '/lowcmd', **kwargs)
 
 
 def command(rig, handler, q):
-    '''One control step: the full-body q, dq 0 and tau 0, as the controller sends'''
+    """Send one control step: the body q, dq 0 and tau 0, as the controller does."""
     count = len(rig.profile.body_joints)
     handler.set_joint_commands(q=q, dq=np.zeros(count), tau=np.zeros(count))
 
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_held_joints_carry_hold_target(ros, models, robot):
+    """Every command carries the hold, which only set_hold moves; dq and tau set as any joint's."""
     rig = Rig(ros, models, robot, follow_tolerance=0.0)
     targets = {'h12': [0.05], 'g1': [0.03, -0.04, 0.06]}[robot]
-    rig.config['controller']['hold_targets'] = dict(zip(rig.profile.held_joints, targets))
     handler = rig.handler()
-    np.testing.assert_array_equal(handler.hold_targets, targets)
 
     # enabled where the robot is: the hold starts at the measured, sagging angles
     handler.start()
@@ -95,9 +99,10 @@ def test_held_joints_carry_hold_target(ros, models, robot):
     held_in_upper = [rig.upper.index(slot) for slot in rig.held]
 
     def carries_targets(msg):
+        """Return whether msg's held joints carry the targets."""
         return np.allclose(upper_q(msg, rig.profile)[held_in_upper], targets, atol=FLOAT32)
 
-    handler.set_hold(handler.hold_targets)
+    handler.set_hold(targets)
     # a message already on its way may still carry the old hold; from the first that carries
     # the targets on, every one does
     assert wait_for(lambda: carries_targets(rig.recorder.last), 2.0)
@@ -129,6 +134,7 @@ def test_held_joints_carry_hold_target(ros, models, robot):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_follow_gate_holds_until_relayed(ros, models, robot):
+    """Until relayed, every command stays within the tolerance of the measured pose; then free."""
     rig = Rig(ros, models, robot)
     tolerance = rig.config['controller']['follow_tolerance']
     assert tolerance == 0.05
@@ -152,9 +158,7 @@ def test_follow_gate_holds_until_relayed(ros, models, robot):
         gap = np.abs(upper_q(msg, rig.profile) - rig.measured[rig.upper])
         assert np.max(gap) <= tolerance + FLOAT32
 
-    safety_out = rig.config['topics']['safety_out']
-    assert safety_out == '/lowcmd'
-    Echo(ros, rig.config['topics']['low_cmd'], safety_out)
+    Echo(ros, rig.config['topics']['low_cmd'], '/lowcmd')
     assert wait_for(lambda: handler.following, 3.0)
 
     # open: the commands go where the controller sends them
@@ -171,6 +175,7 @@ def test_follow_gate_holds_until_relayed(ros, models, robot):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_no_controller_side_estop(ros, models, robot):
+    """Measured velocities past the limits stop nothing: commands go on with the motors on."""
     rig = Rig(ros, models, robot, follow_tolerance=0.0)
     # every upper joint measured at twice its velocity limit
     rig.robot.dq[rig.upper] = 2.0 * rig.profile.dq_max[rig.upper]
@@ -193,6 +198,7 @@ def test_no_controller_side_estop(ros, models, robot):
 
 
 def test_commands_are_clipped(ros, models):
+    """q, dq and tau are clipped to the config's limits, for every joint or a subset."""
     rig = Rig(ros, models, 'h12', follow_tolerance=0.0)
     handler = rig.handler()
     handler.start()
@@ -219,6 +225,7 @@ def test_commands_are_clipped(ros, models):
 
 
 def test_non_finite_command_is_refused(ros, models):
+    """A command before start() or with a non-finite value is refused; the last good one stands."""
     rig = Rig(ros, models, 'h12', follow_tolerance=0.0)
     handler = rig.handler()
     with pytest.raises(RuntimeError, match='start'):
@@ -245,6 +252,7 @@ def test_non_finite_command_is_refused(ros, models):
 
 
 def test_start_refuses_a_non_finite_pose(ros, models):
+    """start() with a non-finite pose is refused and publishes nothing."""
     rig = Rig(ros, models, 'h12', follow_tolerance=0.0)
     handler = rig.handler()
     q = rig.measured.copy()
@@ -255,21 +263,21 @@ def test_start_refuses_a_non_finite_pose(ros, models):
     assert rig.recorder.count == 0
 
 
-# (robot, controller config, golem_safety's output, whether the shutdown keeps the held joints)
-SHUTDOWNS = [('h12', 'safety_split', '/lowcmd', False), ('h12', 'safety_full', '/lowcmd', False),
-             ('g1', 'g1_split', '/lowcmd', True)]
+# (robot, controller config, whether the shutdown keeps the held joints)
+SHUTDOWNS = [('h12', 'safety_split', False), ('h12', 'safety_full', False),
+             ('g1', 'g1_split', True)]
 
 
-@pytest.mark.parametrize('robot, config, safety_out, keeps_held', SHUTDOWNS,
-                         ids=[f'{r}-{c}' for r, c, _, _ in SHUTDOWNS])
-def test_shutdown_command_then_silence(ros, models, robot, config, safety_out, keeps_held):
-    '''
+@pytest.mark.parametrize('robot, config, keeps_held', SHUTDOWNS,
+                         ids=[f'{r}-{c}' for r, c, _ in SHUTDOWNS])
+def test_shutdown_command_then_silence(ros, models, robot, config, keeps_held):
+    """The shutdown command goes out once, then nothing more.
+
     The IK joints go limp: mode 0, kp, kd and tau 0, q as they were. The held joints too,
     except on the G1, where a walking policy may be on the legs: there they keep their hold
-    angle, gains and torque
-    '''
+    angle, gains and torque.
+    """
     rig = Rig(ros, models, robot, config=config, follow_tolerance=0.0)
-    assert rig.config['topics']['safety_out'] == safety_out
     handler = rig.handler()
     handler.start()
     command(rig, handler, rig.measured)
@@ -303,6 +311,7 @@ def test_shutdown_command_then_silence(ros, models, robot, config, safety_out, k
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_set_hold_while_the_gate_is_shut(ros, models, robot):
+    """While the gate is shut a hold stays within the tolerance of the measured angle."""
     rig = Rig(ros, models, robot)
     tolerance = rig.config['controller']['follow_tolerance']
     handler = rig.handler()
@@ -323,6 +332,7 @@ def test_set_hold_while_the_gate_is_shut(ros, models, robot):
 
 
 def test_zero_gain_output_keeps_the_gate_shut(ros, models):
+    """A relay with kp 0 (golem_safety before it engages) never opens the gate."""
     rig = Rig(ros, models, 'h12')
     handler = rig.handler()
     handler.start()
@@ -338,8 +348,8 @@ def test_zero_gain_output_keeps_the_gate_shut(ros, models):
 
 
 def test_g1_split_gate_opens_on_lowcmd(ros, models):
+    """The G1 split config's gate opens on its relayed commands on /lowcmd."""
     rig = Rig(ros, models, 'g1', config='g1_split')
-    assert rig.config['topics']['safety_out'] == '/lowcmd'
     handler = rig.handler()
     handler.start()
     time.sleep(0.3)
@@ -349,6 +359,7 @@ def test_g1_split_gate_opens_on_lowcmd(ros, models):
 
 
 def test_gated_command_stays_within_the_clip_limits(ros, models):
+    """A gated command near a joint past its clip limit stays clipped, and still opens the gate."""
     rig = Rig(ros, models, 'h12')
     limits = rig.config['limits']['q_clip_limits']
     elbow = rig.profile.body_joints.index('left_elbow_joint')
@@ -374,6 +385,7 @@ def test_gated_command_stays_within_the_clip_limits(ros, models):
 
 
 def test_start_needs_a_measured_state(ros, models):
+    """start() without a state source, or before its first sample, raises and publishes nothing."""
     from golem_upper_ik.config import load_controller_config
     from golem_upper_ik.core.low_cmd_handler import LowCmdHandler
     from golem_upper_ik.core.ros_io import StaleStateError, StateSubscriber
@@ -405,6 +417,7 @@ def test_start_needs_a_measured_state(ros, models):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_start_holds_the_initial_pose_near_the_measured_one(ros, models, robot):
+    """start()'s initial pose is gated like any command, and the hold starts from it."""
     rig = Rig(ros, models, robot)
     handler = rig.handler()
     tolerance = rig.config['controller']['follow_tolerance']
@@ -421,6 +434,7 @@ def test_start_holds_the_initial_pose_near_the_measured_one(ros, models, robot):
 
 
 def test_detached_state_source_leaves_the_last_command(ros, models):
+    """A detached state source stops the gate check, leaving the last command; gating raises."""
     from golem_upper_ik.core.ros_io import StaleStateError
     rig = Rig(ros, models, 'h12')
     handler = rig.handler()
@@ -458,10 +472,8 @@ def test_detached_state_source_leaves_the_last_command(ros, models):
     assert issubclass(StaleStateError, RuntimeError)
 
 
-# FollowGate and relays_commands on their own
-
 def _creep(gate, measured, target, steps, step=0.01):
-    '''Step an IK command toward target from the gated command, as the controller does'''
+    """Step an IK command toward target from the gated command; return it and the gaps."""
     q_cmd = np.asarray(measured(0, None), dtype=float).copy()
     gaps = []
     for k in range(steps):
@@ -472,6 +484,7 @@ def _creep(gate, measured, target, steps, step=0.01):
 
 
 def test_follow_gate_keeps_commands_near_a_robot_that_does_not_follow():
+    """A shut gate keeps commands within tolerance of a robot at rest, swaying or pushed."""
     from golem_upper_ik.core.follow_gate import FollowGate
     # slot 0 commanded 0.8 rad away, slot 1 at its target; slot 2 is not gated
     target = np.array([1.0, 0.1, 1.0])
@@ -483,6 +496,7 @@ def test_follow_gate_keeps_commands_near_a_robot_that_does_not_follow():
 
     # swaying 0.1 rad: the command is dragged along
     def sway(k, q):
+        """Return a pose swaying 0.1 rad on slot 0 at step k."""
         return [0.2 + 0.1 * np.sin(k / 10.0), 0.1, 0.0]
     _, gaps = _creep(gate, sway, target, 300)
     assert max(gaps) <= 0.05 + 1e-12 and not gate.following
@@ -496,6 +510,7 @@ def test_follow_gate_keeps_commands_near_a_robot_that_does_not_follow():
 
 
 def test_follow_gate_opens_only_when_told():
+    """Following motion does not open the gate; once open it never moves a command."""
     from golem_upper_ik.core.follow_gate import FollowGate
     target = np.array([1.0, -1.0, 0.0])
     gate = FollowGate([0, 1], 0.05)
@@ -503,6 +518,7 @@ def test_follow_gate_opens_only_when_told():
 
     def follows(k, q_cmd):
         # the robot reaches each command one step later
+        """Return the measured pose, which reaches each command one step later."""
         measured = lagged['q'].copy()
         if q_cmd is not None:
             lagged['q'] = q_cmd.copy()
@@ -522,6 +538,7 @@ def test_follow_gate_opens_only_when_told():
 
 
 def test_relays_commands_needs_every_joint_close_with_kp():
+    """A relay counts only with every gated joint close and kp > 0."""
     from golem_upper_ik.core.follow_gate import relays_commands
     ids = [12, 13, 14, 15]
     q_cmd = np.zeros(29)
@@ -547,6 +564,7 @@ def test_relays_commands_needs_every_joint_close_with_kp():
 
 
 def test_follow_gate_tolerance_zero_is_off():
+    """Tolerance 0 leaves the gate open; a negative one is refused."""
     from golem_upper_ik.core.follow_gate import FollowGate
     gate = FollowGate([0, 1], 0.0)
     assert gate.following

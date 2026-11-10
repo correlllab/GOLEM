@@ -17,25 +17,27 @@ with its reason, and the last line reads `FAILED: <passed>/<total> checks`. Each
 lists its environment knobs, and each `test_sim_*.py` docstring says what it checks.
 
 Every test starts the G1 as it starts in debug mode. The limp robot hangs from the sim's elastic
-band while `golem_safety` streams zero-gain `rt/lowcmd`. HOMIE's walking node pre-poses the legs,
-starts its policy under the band and releases the band once `frame_task_server` is up.
+band while `golem_safety` streams zero-gain `rt/lowcmd`. The leg node (`golem_lowerbody_rl`'s
+`lowerbody_controller_node`, running HOMIE) pre-poses the legs, starts its policy once
+`frame_task_server` is up and then releases the band.
 
 - **Arm and walk tests, the start-up**:
   - `band holds`: while the band is on, the pelvis tilts at most 15 deg;
   - `no estop during start-up`: `golem_safety` logs no estop from its start to the end of the
     test's steps;
-  - `walking node starts`: the walking node logs `walking: policy started` once, and no fault;
+  - `walking node starts`: the leg node logs `policy started at zero velocity ...` once, and no
+    fault;
   - `band released after the controller is ready`: the band comes off once and stays off,
-    because `frame_task_server` is up: every toggle call the walking node logs gives
+    because `frame_task_server` is up: every toggle call the leg node logs gives
     `/left_ee_pose` as its reason, so a release by `band.max_wait` fails the check. The band is
-    off after the first `/left_ee_pose` the test sees and within the walking node's
+    off after the first `/left_ee_pose` the test sees and within the leg node's run config's
     `band.max_wait` of the policy's start;
   - `standing after release`: the robot stands for 5 s after the release.
 
   The report also prints the pelvis and the feet around the release, for the record.
 - **Arm test**: after the release, the arms are at `home` from the controller's start-up, a
   `t_pose` goal succeeds and the arms reach it, and `/left/hand/close` closes the left hand. Then
-  `frame_task_server` alone is stopped while the walking node balances the robot. Its shutdown
+  `frame_task_server` alone is stopped while the leg node balances the robot. Its shutdown
   command keeps the waist at its hold, so the waist roll and pitch stay within 0.1 rad of it
   for 4 s (a limp waist slumps about 0.5 rad), and the robot keeps standing. The test finds the
   controller by its process, `lib/golem_upper_ik/frame_task_server`.
@@ -44,7 +46,9 @@ starts its policy under the band and releases the band once `frame_task_server` 
 - **Arm and walk tests, the sensors**: every sensor topic arrives at its rate with the right
   frames, and the sim's sensor node publishes nothing else.
 - **Nav test**: once the band is released, Nav2 walks the robot to one goal 2-3 m from the
-  spawn. The goal is picked from the sim's own geometry (or `NAV_GOAL`).
+  spawn. The goal is picked from the sim's own geometry (or `NAV_GOAL`). `NAV_USE_HANDS=false`
+  runs the bringup without the hand driver (`use_hands:=false`), so the Dex3 finger links have
+  no TF and `golem_slam`'s `self_filter` skips them.
   - The goal must succeed, and the robot must end near it by the sim's truth.
   - The robot must stay up and touch nothing, and `golem_safety` must latch no estop.
   - `/cmd_vel`, `/scan`, the map and the localisation must stay within their limits.
@@ -61,7 +65,9 @@ robocasa ros`); they never build them.
 
 - **Containers.** Both containers are the compose services as `docker_run.sh` starts them
   (`robocasa` with the G1 overlay, `ros` from `docker-compose.yml`), plus a `test_compose.yml`
-  that `common.sh` writes into the output directory. The sim container has no network, and the
+  that `tests/sim/common.sh` writes into the output directory. That harness, which the scripts
+  source and `tests/sim`'s test of both robots shares, runs them as the `g1` suite (the G1's
+  build and output names); both containers mount `tests/g1` and `tests/sim` read-only. The sim container has no network, and the
   ros container joins its network namespace. Both use its loopback with multicast, so no DDS
   leaves the host and nothing talks to the robot.
 - **DDS domains.** The arm test uses 195, the walk test 196, the nav test 197 and the explore
@@ -79,11 +85,18 @@ robocasa ros`); they never build them.
 With a warm build each test takes one to two minutes; the first run also builds the whole
 workspace.
 
-Open issue: the arm test's `t_pose` check sometimes fails with the arms at the pose
-(`goal success False` with a small arm error). The arms hold `t_pose` with an error about as
-large as `frame_task_server`'s success threshold, `controller.threshold_joint` in
-`core_ws/src/golem_upper_ik/config/g1/sim_split.yaml`, so the server sometimes never reports the goal
-reached. Count such a run as failed, and check its arm error against that threshold.
+Open issue: the explore test fails (coverage about 25 %, tilt up to 27 deg). After its first
+goal the explorer picks a frontier behind the robot; Nav2's MPPI (`DiffDrive`, `vx_min` -0.20 in
+`core_ws/src/golem_slam/config/g1/nav2.yaml`) walks the G1 backward, HOMIE tilts past the test's
+15 deg, and the progress checker (0.5 m in 10 s) aborts the goal again and again until the
+skill's timeout. `core_ws` at 93f5afa, before the shared navigation graph, fails the same way.
+
+Known failure: the nav test's `map has no phantoms` check fails in about 2 of 5 runs, on a
+one-cell phantom near the same spot of the map (about x 3.9-4.1, y -0.8 to -0.9 m in the sim's
+world frame, as the check prints it), and is then usually the only check that fails.
+The cell is floor returns that `golem_slam`'s scan path lifts into the scan's height band; the
+raw `/livox/lidar` returns hold none there (`docs/superpowers/specs/2026-11-05-sim-speed-results.md`,
+Tier 2). A failure of that check on more than one cell, or away from that spot, is not this one.
 
 The tests depend on internals of the G1 sim and on the stack's log lines. A change to any of these
 must update the tests in the same commit.
@@ -94,16 +107,22 @@ must update the tests in the same commit.
 - They rely on the sensor node's name `mujoco_sensors`.
 - They rely on the sim's `ROS bridges up`, `elastic band released at t=` and `ROBOT FELL` log lines.
 - From `launch.log` they rely on:
-  - the walking node's `Loaded <config> and the policy` and `walking: policy started` lines,
-    its `releasing the elastic band: <reason>` and `elastic band released` lines, its `fault:`
-    lines, and its config's `band.max_wait`;
+  - the leg node's logger, `lowerbody_controller_node`, and its `loaded run config <path> and
+    policy <path>` and `policy started at zero velocity` lines, its `releasing the elastic band:
+    <reason>` and `elastic band released` lines, its `fault:` lines, and its run config's
+    `band.max_wait`;
+  - the refusals `upper_ik: not starting` and `lowerbody: not starting`;
   - `golem_safety`'s JSON events `relay_started` and `estop_command_written`, and its
     `estop diagnostic` lines.
+
+`tests/sim/test_sim_stack.py` imports `test_sim_bringup.py` and `test_sim_nav.py` (their log
+parsing, report helpers, geometry, `ContactLog`, `write_live_pose` and `SimDriver`): a change to
+those must keep `tests/sim` working, in the same commit.
 
 ## Output
 
 Each run writes to `tests/results/g1-<test>-<time>-<pid>/`, where `<test>` is `bringup`, `walk`,
-`nav-fastlio` or `explore-fastlio`. The directory holds:
+`nav` or `explore`. The directory holds:
 
 - `run.json`: the exit codes, the domain, the commit, the submodules, the working tree and the
   image IDs.

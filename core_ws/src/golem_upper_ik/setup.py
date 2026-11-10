@@ -1,4 +1,6 @@
+"""Install golem_upper_ik: its Python package, launch files and each robot's configs."""
 from glob import glob
+import os
 
 from setuptools import find_packages, setup
 
@@ -7,10 +9,17 @@ package_name = 'golem_upper_ik'
 data_files = [
     ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
     ('share/' + package_name, ['package.xml']),
-    ('share/' + package_name + '/config/h12', glob('config/h12/*.yaml')),
-    ('share/' + package_name + '/config/g1', glob('config/g1/*.yaml')),
     ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
 ]
+# Every robot's config/<robot>/ directory. The annotated example.*.yaml files document the
+# schemas and stay in the source tree, so no loader or listing of the installed configs
+# can take one for a real config. A --symlink-install build directory keeps dangling links
+# to configs deleted from the source; they are skipped.
+for robot_dir in sorted(glob('config/*/')):
+    data_files.append(('share/' + package_name + '/' + os.path.dirname(robot_dir),
+                       [path for path in glob(robot_dir + '*.yaml')
+                        if os.path.exists(path)
+                        and not os.path.basename(path).startswith('example.')]))
 
 setup(
     name=package_name,

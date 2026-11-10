@@ -2,16 +2,20 @@
 
 Runs a two-agent MARL policy from Locomanipulation_game (branch `marl-direct`,
 `LocoManip-Marl-Direct-v0`: LSTM actors, explicit PD at 500 Hz, a 0-20 ms target
-delay in training) on the H1-2. No policy ships with the package: export one into
-`policies/<name>/` (below) and launch with `policy:=<name>`. A
+delay in training) on the H1-2. One policy ships with the package,
+`policies/mid360v2/`; export others into `policies/<name>/` (below) and launch with
+`policy:=<name>`. A
 **legs** agent that walks on `/cmd_vel`, and an **arms** agent that reaches
 wrist-pose goals through a damped-least-squares IK step plus a learned
 residual. One node, `marl_deploy_node`, owns all 27 joints. It publishes
 through the split safety layer and obeys `/safety/heartbeat`.
 
-Modelled on `h12_lowerbody_rl`'s `lowerbody_controller_node`. The node goes
+Modelled on `golem_lowerbody_rl`'s `lowerbody_controller_node`. The node goes
 through the same steps (pre-pose ramp, operator confirm, elastic-band
-release) and uses the same heartbeat watchdog.
+release) and uses the same heartbeat gate and watchdog: it publishes nothing, and
+does not start its pre-pose ramp, until `golem_safety`'s first true `/safety/heartbeat`
+(state `waiting_heartbeat`), and a false beat or none for `heartbeat_timeout` (0.5 s) after
+the first latches it silent.
 
 ## Layout
 
@@ -20,15 +24,17 @@ release) and uses the same heartbeat watchdog.
 | `lmg_deploy/controller.py` | ROS-free env step: SLAM odometry → mode → observations (legs 95, arms 123; 97 and 125 with `gait_phase_cos`) → joint targets |
 | `lmg_deploy/kinematics.py` | Pinocchio wrist FK, Jacobian and IK step, in the pelvis frame |
 | `lmg_deploy/rotations.py` | numpy versions of the isaaclab.utils.math functions training used |
-| `lmg_deploy/networks.py` | TorchScript loader, and the zero stand-ins the unit tests use |
+| `lmg_deploy/networks.py` | TorchScript loader for the exported actors |
 | `lmg_deploy/livox_imu.py` | `/livox/imu` into the policy's IMU frame: the gyro low-pass, the specific force, and a complementary-filter attitude (the fallback, or `livox_attitude:=filter`) |
 | `lmg_deploy/livox_attitude.py` | the policy's attitude from FAST-LIO's `/Odometry`, carried by the gyro, levelled at the pre-pose |
 | `lmg_deploy/marl_deploy_node.py` | the ROS node: safety channels, heartbeat, pre-pose, band, operator interface |
+| `config/example.yaml`, `config/example.export.yaml` | every key of a deploy config and of `export.yaml`, with its meaning and units (nothing loads them; `test/test_example_configs.py` keeps their keys in step) |
 | `config/policy_template.yaml` | the deploy config a new policy starts from: joint order, defaults, gains, scales, bounds, command ranges (each from the training env), and the SLAM body frame |
-| `policies/<name>/<name>.yaml`, `{legs,arms}.pt`, `export.yaml` | a policy: its deploy config and what the export writes, below; the `.pt` files in Git LFS (`policies/.gitattributes`). Mid360v2 since 10-20 (Explicit500, Tune3Track2 and Mid360 were removed 10-19) |
+| `policies/<name>/<name>.yaml`, `{legs,arms}.pt`, `export.yaml` | a policy: its deploy config and what the export writes, below; the `.pt` files in Git LFS (`policies/.gitattributes`). `mid360v2` ships |
 | `bags/<name>/` | rosbag2 recordings of Explicit500 on the real robot (`policy_bag_walk`: walking to nav2 goals; `reach`: an arm goal, ended by the hardware e-stop), the `.db3` files in Git LFS |
 | `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, SLAM odometry, modes) on `test/data/explicit500.yaml`, Explicit500's deploy config |
 | `test/sim_drive.py` | a scripted drive in the Robocasa sim (stand, walk, turn, side-step, arm goal), measured on FAST-LIO's `/Odometry` |
+| `test/test_heartbeat_gate.py` | a real node with the shipped policy on a non-zero DDS domain: silent, in `waiting_heartbeat`, until the first beat, then it pre-poses from the pose at the beat |
 | `test/test_livox_imu.py`, `test/test_livox_attitude.py` | unit tests of the two `/livox/imu` attitude paths, the gyro low-pass and the URDF mount |
 | `custom_ros_messages/srv/Lmg*.srv` | the node's services: `LmgSetMode` (walk / arm), `LmgSetArmGoals` (left, right pose) |
 
@@ -79,7 +85,7 @@ block `h12_locomanipulationgame.launch.py`):
 - the state publishers;
 - the split safety layer with the real robot's preset (`relax_safety_split`; ankle pitch torque e-stop 95 Nm since 10-20, sport mode peaks at 93);
 - `marl_deploy_node` with `policies/<policy>/`;
-- SLAM: `golem_slam/launch/h12_navigation.launch.py` (FAST-LIO, the pelvis-height laser scan, slam_toolbox and nav2).
+- SLAM: `golem_slam/launch/navigation.launch.py` with `robot: h12` (FAST-LIO, the floor-level laser scan, slam_toolbox and nav2).
   FAST-LIO's `/Odometry` is what keeps the arm goals fixed in the world.
 
 `frame_task_server` and the lower-body RL node stay off, so this node is the only publisher on each safety channel.
@@ -118,7 +124,7 @@ ros2 topic pub --once /marl_deploy_node/arm_goal geometry_msgs/msg/PoseArray \
   "{poses: [{position: {x: 0.30, y: 0.25, z: 0.05}, orientation: {w: 1.0}},
             {position: {x: 0.30, y: -0.25, z: 0.05}, orientation: {w: 1.0}}]}"  # left, right; pelvis frame
 ros2 service call /marl_deploy_node/end_arm_goal std_srvs/srv/Trigger
-ros2 topic echo /marl_deploy_node/state         # idle, preposing, waiting_confirm, nav, settle_to_arm, arm_goal, settle_to_nav, fault: ...
+ros2 topic echo /marl_deploy_node/state         # idle, waiting_heartbeat, preposing, waiting_imu, waiting_confirm, nav, settle_to_arm, arm_goal, settle_to_nav, fault: ...
 ros2 topic echo /marl_deploy_node/wrist_error   # m, left and right
 ```
 
@@ -133,10 +139,14 @@ ros2 topic echo /marl_deploy_node/wrist_error   # m, left and right
 
 ## Real robot
 
+`lmg_real.launch.py` refuses to start, before any node: the node expects `/livox/imu` upright and the
+H1-2's is the raw, upside-down MID-360 frame (see the IMU item below). The rest of this section is
+what it starts once that is handled.
+
 On the onboard PC, run `golem_bringup/launch/h12/lmg_real.launch.py` **instead of**
 `h12_real_robot.launch.py`, never beside it. It starts the same drivers, state publishers, estop, safety
-layer and `golem_slam` navigation stack, without `frame_task_server`, plus the shared game block on wall-clock time. Keep the lower-body RL and MJPC
-controllers off.
+layer and `golem_slam` navigation stack, without `frame_task_server`, plus the shared game block on wall-clock time. Keep the lower-body RL controller
+off.
 
 ```bash
 export ROS_DOMAIN_ID=0
@@ -154,10 +164,10 @@ ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger         
 - Same `policy`, `safety_config` and `use_slam` arguments as the sim launch; keep `use_slam` on for arm goals.
 
 **Before the first real run:**
-- **IMU.** The node reads only the MID360's `/livox/imu` (`livox_imu_upright`'s output), never `LowState.imu_state`, whose attitude carries a ~2.5 deg calibration error. `/livox/imu` is in the URDF's `livox_imu_link` (the IMU chip). The node carries the readings from there into the frame the policy trained with, `export.yaml`'s `imu.frame`, through the URDF:
+- **IMU.** The node reads only the MID360's `/livox/imu`, never `LowState.imu_state`, whose attitude carries a ~2.5 deg calibration error. It expects `/livox/imu` upright, in the URDF's `livox_imu_link` (the IMU chip). The H1-2's `/livox/imu` is the raw, upside-down MID-360 frame, which `lmg_deploy` does not handle yet (the strict xfail `test_urdf_mount_is_the_livox_pitch`), so `golem_bringup`'s `lmg_real.launch.py` refuses to start. The node carries the readings from there into the frame the policy trained with, `export.yaml`'s `imu.frame`, through the URDF:
   - `livox_imu_link`: as is;
   - `livox_link` (the point frame, 0.7 deg from the chip);
   - `imu_link` on `torso_link` for Explicit500 and older (the default when the export has no `imu` block).
 
   The attitude (so projected gravity) comes from FAST-LIO by default (`livox_attitude:=fastlio`): `/Odometry` is the IMU body's pose in `camera_init`, carried forward between poses by the gyro and levelled once from the accelerometer while the robot holds the pre-pose (`lmg_deploy/livox_attitude.py`; state `waiting_imu` until the head is still, so FAST-LIO must run, `use_slam:=true`). On the real walking bag it is 0.23 deg off FAST-LIO's poses (p95 0.62), where the complementary filter (`lmg_deploy/livox_imu.py`) is 1.9 deg off (p95 4.4): its pull toward the accelerometer follows the gait. With no `/Odometry` for `livox_odom_timeout` (1 s) the node falls back to the filter and warns; `livox_attitude:=filter` uses the filter throughout. Restart the node with FAST-LIO (it moves `camera_init`). The angular velocity passes the gyro low-pass the run trained with, `imu.gyro_lowpass_hz` in `export.yaml` (absent: none, as for Explicit500). `livox_imu.GyroLowpass` is a 2nd-order Butterworth, discretized exactly over each sample's dt, so training's physics rate and the MID360's 200 Hz realize the same filter. At 8 Hz it takes the head's ~20 Hz pitch resonance while walking from 0.5-0.9 to ~0.1 rad/s rms. `livox_joint` and `livox_imu_joint` carry the real robot's measured mount (point frame 8.77 deg, chip 9.45 deg pitch); `imu_offset_{roll,pitch,yaw}_deg` (default 0) trims what is left, live.
-- **Safety-layer gaps.** The safety layer holds the last command on a silent channel: neither input channel has a staleness watchdog in the sim or real configs (`upper_stale_seconds: 0.0`). If this node latches silent, the safety layer keeps sending its last targets until it is stopped.
+- **Safety-layer gaps.** The safety layer holds the last command on a silent channel. Its stale times only report a quiet input (`input_quiet`): in `relax_safety_split`, the lmg bringups' preset, `stale.lower_seconds` is 0.2 and `stale.upper_seconds` 0 (off), and neither stops the relay. If this node latches silent, the safety layer keeps sending its last targets until it is stopped.

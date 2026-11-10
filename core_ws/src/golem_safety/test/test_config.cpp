@@ -6,10 +6,13 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <yaml-cpp/yaml.h>
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
 #include "golem_safety/config.hpp"
@@ -23,26 +26,30 @@ using golem_safety::SafetyConfig;
 
 namespace {
 
+// Return the installed H1-2 profile.
 const RobotProfile & h12()
 {
   static const RobotProfile profile = golem_safety::load_robot_profile("h12");
   return profile;
 }
 
+// Return the installed G1 profile.
 const RobotProfile & g1()
 {
   static const RobotProfile profile = golem_safety::load_robot_profile("g1");
   return profile;
 }
 
+// Every config under config/h12/.
 const char * const kH12Configs[] = {
   "default_safety_full", "default_safety_split", "locomotion_safety_full", "relax_safety_full",
   "relax_safety_split", "sim_safety_split", "tight_safety_full", "tight_safety_split"};
 
+// Every config under config/g1/.
 const char * const kG1Configs[] = {"full", "sim_split", "split"};
 
-// The message of the std::runtime_error that `fn` throws; fails the test when
-// it throws nothing.
+// Return the message of the std::runtime_error `fn` throws; fail the test when it throws
+// nothing.
 std::string error_of(const std::function<void()> & fn)
 {
   try {
@@ -54,12 +61,13 @@ std::string error_of(const std::function<void()> & fn)
   return "";
 }
 
+// Return whether `part` occurs in `text`.
 bool contains(const std::string & text, const std::string & part)
 {
   return text.find(part) != std::string::npos;
 }
 
-// A config file in a private temp directory, removed with the object.
+// Write a config file in a private temporary directory, removed with the object.
 class TempConfig
 {
 public:
@@ -82,9 +90,8 @@ private:
   std::string path_;
 };
 
-// estop_response.after and control.state_lag_ms have no default, so most tests that are
-// not about them leave them to this: `text` plus whichever of the two sections it does not
-// give, with the robot's carried values.
+// Return `text` plus whichever of control.state_lag_ms and estop_response.after it leaves
+// out, with the robot's values: those keys have no default, and most tests are not about them.
 std::string completed(const std::string & text, const RobotProfile & profile)
 {
   const bool g1 = profile.robot == "g1";
@@ -99,26 +106,31 @@ std::string completed(const std::string & text, const RobotProfile & profile)
   return out;
 }
 
+// Parse `text` as it is.
 SafetyConfig parse_raw(const std::string & text, const RobotProfile & profile)
 {
   return golem_safety::parse_safety_config(text, "case.yaml", profile);
 }
 
+// Return the error parsing `text` as it is throws.
 std::string parse_raw_error(const std::string & text, const RobotProfile & profile)
 {
   return error_of([&] {parse_raw(text, profile);});
 }
 
+// Parse completed(`text`).
 SafetyConfig parse(const std::string & text, const RobotProfile & profile)
 {
   return parse_raw(completed(text, profile), profile);
 }
 
+// Return the error parsing completed(`text`) throws.
 std::string parse_error(const std::string & text, const RobotProfile & profile)
 {
   return error_of([&] {parse(text, profile);});
 }
 
+// Return a YAML list of `count` copies of `value`.
 std::string list_of(double value, size_t count)
 {
   std::string text = "[";
@@ -130,6 +142,8 @@ std::string list_of(double value, size_t count)
 
 }  // namespace
 
+// A bare name, with or without .yaml, resolves under config/<robot>/; a path is used as
+// given; a missing name reports the robot and the file looked for.
 TEST(Config, ResolvesBareNameUnderRobotDir)
 {
   const SafetyConfig plain = golem_safety::load_safety_config("default_safety_split", h12());
@@ -146,17 +160,16 @@ TEST(Config, ResolvesBareNameUnderRobotDir)
   EXPECT_EQ(split.mode, Mode::Split);
   EXPECT_TRUE(contains(split.source, "/config/g1/split.yaml")) << split.source;
 
-  // A path with a directory is used as given.
   const TempConfig file(completed("mode: split_mode\n", h12()));
   EXPECT_EQ(golem_safety::load_safety_config(file.path(), h12()).source, file.path());
 
-  // A name the robot lacks reports the robot and the file it looked for.
   const std::string message =
     error_of([] {golem_safety::load_safety_config("split", h12());});
   EXPECT_TRUE(contains(message, "h12")) << message;
   EXPECT_TRUE(contains(message, "/config/h12/split.yaml")) << message;
 }
 
+// An unknown key, at the root or nested, is refused naming the robot, the file and the key.
 TEST(Config, UnknownKeyThrows)
 {
   const TempConfig top(completed("mode: split_mode\nbogus: 1\n", h12()));
@@ -172,105 +185,12 @@ TEST(Config, UnknownKeyThrows)
   EXPECT_TRUE(contains(message, nested.path())) << message;
   EXPECT_TRUE(contains(message, "'limits.clip.kp_maxx'")) << message;
 
-  // The estop-section keys are not valid in the estop limits.
+  // limits.estop takes no gain limits.
   EXPECT_TRUE(
     contains(parse_error("limits:\n  estop:\n    kp_max: 1.0\n", h12()), "'limits.estop.kp_max'"));
 }
 
-TEST(Config, RemovedAndRenamedKeysNameTheirReplacement)
-{
-  EXPECT_TRUE(contains(parse_error("network: {domain_id: 1}\n", h12()), "removed"));
-  EXPECT_TRUE(contains(parse_error("robot: real\n", g1()), "sim"));
-  EXPECT_TRUE(contains(parse_error("estop: {enabled: true}\n", h12()), "use_estop"));
-  EXPECT_TRUE(contains(parse_error("estop: {poll_hz: 500.0}\n", h12()), "use_estop"));
-  EXPECT_TRUE(
-    contains(parse_error("estop: {upper_stale_seconds: 2.0}\n", h12()), "stale.upper_seconds"));
-  EXPECT_TRUE(
-    contains(parse_error("estop: {state_lag_ms: 100.0}\n", h12()), "control.state_lag_ms"));
-  EXPECT_TRUE(
-    contains(
-      parse_error("control: {lower_stale_estop_seconds: 0.2}\n", g1()), "stale.lower_seconds"));
-  EXPECT_TRUE(
-    contains(
-      parse_error("control: {state_stale_estop_seconds: 0.1}\n", g1()), "stale.state_seconds"));
-}
-
-TEST(Config, ArmSdkModeRefused)
-{
-  // The G1 runs split_mode or full_body_mode: the message names the mode it was given and the
-  // robot's own.
-  const std::string message = parse_error("mode: arm_sdk_mode\n", g1());
-  EXPECT_TRUE(contains(message, "(robot g1)")) << message;
-  EXPECT_TRUE(contains(message, "'mode'")) << message;
-  EXPECT_TRUE(
-    contains(message, "'arm_sdk_mode' is not a mode of robot g1 (split_mode, full_body_mode)")) <<
-    message;
-}
-
-TEST(Config, ArmSdkKeysRefused)
-{
-  const std::string reason =
-    "unknown key (arm_sdk mode was removed: the G1 runs split_mode or full_body_mode)";
-  for (const char * section : {
-      "arm_sdk: {engage_seconds: 1.0, release_seconds: 3.0}\n", "arm_sdk: {waist_kp_min: 40.0}\n",
-      "arm_sdk: {}\n"})
-  {
-    SCOPED_TRACE(section);
-    const std::string message = parse_error(std::string("mode: split_mode\n") + section, g1());
-    EXPECT_TRUE(
-      contains(message, "safety config case.yaml (robot g1): key 'arm_sdk': " + reason)) <<
-      message;
-  }
-  // The H1-2's configs are refused the same way.
-  const std::string h12_message = parse_error("arm_sdk: {}\n", h12());
-  EXPECT_TRUE(contains(h12_message, "key 'arm_sdk': " + reason)) << h12_message;
-}
-
-TEST(Config, StartupAndEngageKeysRefused)
-{
-  // Every robot streams zero gains from boot, so neither section has a choice left to make.
-  const std::string zero_stream =
-    "unknown key (removed: every robot streams zero gains from boot and engages each input "
-    "on its own first valid command)";
-  // engage.mode_machine has a reason of its own, wherever it sits in the section.
-  const std::string profile = "unknown key (removed: mode_machine comes from the robot profile)";
-  struct Case
-  {
-    const RobotProfile & profile;
-    std::string rest;  // the required keys, with the robot's carried values
-  };
-  const Case cases[] = {
-    {h12(), "control: {state_lag_ms: 100.0}\nestop_response: {after: burst_then_silence}\n"},
-    {g1(), "control: {state_lag_ms: 0.0}\nestop_response: {after: keep_writing}\n"},
-  };
-  struct Section
-  {
-    const char * key;
-    const char * yaml;
-    const std::string & reason;
-  };
-  const Section sections[] = {
-    {"startup", "startup: {rule: zero_stream}\n", zero_stream},
-    {"startup", "startup: {rule: engage_gate}\n", zero_stream},
-    {"startup", "startup: {}\n", zero_stream},
-    {"engage", "engage: {max_state_age_seconds: 0.1, max_position_error: 0.15}\n", zero_stream},
-    {"engage", "engage: {}\n", zero_stream},
-    {"engage.mode_machine", "engage: {mode_machine: 5}\n", profile},
-    {"engage.mode_machine", "engage: {max_position_error: 0.15, mode_machine: 6}\n", profile},
-  };
-  for (const Case & c : cases) {
-    for (const Section & section : sections) {
-      SCOPED_TRACE(c.profile.robot + ": " + section.yaml);
-      const std::string message =
-        parse_raw_error("mode: split_mode\n" + c.rest + section.yaml, c.profile);
-      EXPECT_TRUE(
-        contains(
-          message, "safety config case.yaml (robot " + c.profile.robot + "): key '" +
-          section.key + "': " + section.reason)) << message;
-    }
-  }
-}
-
+// A mode the profile lacks is refused, listing the profile's modes.
 TEST(Config, ModeNotInProfileThrows)
 {
   const TempConfig file("mode: legs_only_mode\n");
@@ -293,19 +213,21 @@ TEST(Config, ModeNotInProfileThrows)
       parse_error("mode: full_body_mode\n", split_only),
       "'full_body_mode' is not a mode of robot g1 (split_mode)"));
 
-  // Both robots have both.
   for (const RobotProfile * profile : {&h12(), &g1()}) {
     EXPECT_EQ(parse("mode: split_mode\n", *profile).mode, Mode::Split);
     EXPECT_EQ(parse("mode: full_body_mode\n", *profile).mode, Mode::FullBody);
   }
 }
 
+// A config without a mode runs the profile's first mode.
 TEST(Config, ModeDefaultsToTheProfilesFirstMode)
 {
   EXPECT_EQ(parse("", h12()).mode, Mode::FullBody);
   EXPECT_EQ(parse("", g1()).mode, Mode::Split);
 }
 
+// A per-joint list must have one entry per body joint of the robot, and applies joint by
+// joint.
 TEST(Config, ListLengthMustMatchJoints)
 {
   const TempConfig short_list(
@@ -317,14 +239,12 @@ TEST(Config, ListLengthMustMatchJoints)
   EXPECT_TRUE(contains(message, "'limits.clip.velocity_ratio'")) << message;
   EXPECT_TRUE(contains(message, "27")) << message;
 
-  // A list for the other robot's joint count is just as wrong.
   message = parse_error("limits:\n  estop:\n    torque_ratio: " + list_of(0.5, 29) + "\n", h12());
   EXPECT_TRUE(contains(message, "'limits.estop.torque_ratio'")) << message;
   message = parse_error("limits:\n  clip:\n    position_offset: " + list_of(0.0, 27) + "\n", g1());
   EXPECT_TRUE(contains(message, "'limits.clip.position_offset'")) << message;
   EXPECT_TRUE(contains(message, "29")) << message;
 
-  // One entry per joint is accepted and applies joint by joint.
   const SafetyConfig ok =
     parse("limits:\n  clip:\n    velocity_ratio: " + list_of(0.25, 27) + "\n", h12());
   ASSERT_EQ(ok.limits.dq_clip.size(), 27u);
@@ -337,6 +257,8 @@ TEST(Config, ListLengthMustMatchJoints)
   EXPECT_TRUE(contains(message, "'estop_response.kd'")) << message;
 }
 
+// SAFETY: every H1-2 config writes a burst of 50 zero commands after an estop, with the
+// H1-2's stale times, lag check and topics.
 TEST(Config, CarriedH12ConfigsAreZeroStreamAndBurst)
 {
   for (const char * name : kH12Configs) {
@@ -356,9 +278,9 @@ TEST(Config, CarriedH12ConfigsAreZeroStreamAndBurst)
   }
 }
 
+// control.state_lag_ms has no default: leaving it out is refused, naming robot and file.
 TEST(Config, StateLagMsIsRequired)
 {
-  // Everything but control.state_lag_ms.
   const std::string h12_rest = "estop_response: {after: burst_then_silence}\n";
   const std::string g1_rest = "estop_response: {after: keep_writing}\n";
   std::string message = parse_raw_error(h12_rest, h12());
@@ -378,13 +300,13 @@ TEST(Config, StateLagMsIsRequired)
     contains(
       parse_raw_error("control: {state_lag_ms: .nan}\n" + h12_rest, h12()), "state_lag_ms"));
 
-  // The same through a file: the message names the file.
   const TempConfig file("mode: split_mode\n" + h12_rest);
   message = error_of([&] {golem_safety::load_safety_config(file.path(), h12());});
   EXPECT_TRUE(contains(message, file.path())) << message;
   EXPECT_TRUE(contains(message, "'control.state_lag_ms'")) << message;
 }
 
+// estop_response.after has no default; burst_count keeps its default of 50.
 TEST(Config, EstopResponseAfterIsRequired)
 {
   const std::string lag = "control: {state_lag_ms: 100.0}\n";
@@ -403,13 +325,12 @@ TEST(Config, EstopResponseAfterIsRequired)
   EXPECT_EQ(
     parse("estop_response: {after: burst_then_silence}\n", h12()).estop_response.after,
     EstopAfter::BurstThenSilence);
-  // burst_count is the one key here that keeps a default.
   EXPECT_EQ(parse("", h12()).estop_response.burst_count, 50);
 }
 
+// The H1-2 split configs' upper_seconds are 2.0 (default, tight) and 0.0 (relax, sim).
 TEST(Config, H12UpperStaleSecondsAreTheOldEffectiveValues)
 {
-  // default_safety_split and tight_safety_split had no key, so the old loader's 2.0 applied.
   EXPECT_DOUBLE_EQ(golem_safety::load_safety_config("default_safety_split", h12())
     .stale.upper_seconds, 2.0);
   EXPECT_DOUBLE_EQ(golem_safety::load_safety_config("tight_safety_split", h12())
@@ -420,6 +341,8 @@ TEST(Config, H12UpperStaleSecondsAreTheOldEffectiveValues)
     .stale.upper_seconds, 0.0);
 }
 
+// SAFETY: every G1 config writes the zero estop command until restart, logs, and runs
+// without the lag check.
 TEST(Config, G1ConfigsKeepWriting)
 {
   for (const char * name : kG1Configs) {
@@ -428,7 +351,6 @@ TEST(Config, G1ConfigsKeepWriting)
     EXPECT_EQ(config.estop_response.mode, EstopMode::Zero) << name;
     EXPECT_TRUE(config.logging.enabled) << name;
     EXPECT_EQ(config.logging.base_dir, "/tmp/golem_safety") << name;
-    // The G1's lag check is off.
     EXPECT_DOUBLE_EQ(config.control.state_lag_ms, 0.0) << name;
     EXPECT_DOUBLE_EQ(config.limits.kp_max, 200.0) << name;
     EXPECT_DOUBLE_EQ(config.limits.kd_max, 10.0) << name;
@@ -453,6 +375,7 @@ TEST(Config, G1ConfigsKeepWriting)
   EXPECT_EQ(full.topics.low_cmd_out, "/lowcmd");
 }
 
+// Every installed config loads for its robot.
 TEST(Config, EveryCarriedConfigLoads)
 {
   for (const char * name : kH12Configs) {
@@ -463,9 +386,9 @@ TEST(Config, EveryCarriedConfigLoads)
   }
 }
 
+// A config name resolves only for its own robot.
 TEST(Config, ConfigNamesBelongToTheirRobot)
 {
-  // The H1-2's names do not exist for the G1 and the other way round.
   for (const char * name : kH12Configs) {
     EXPECT_THROW(golem_safety::load_safety_config(name, g1()), std::runtime_error) << name;
   }
@@ -474,11 +397,11 @@ TEST(Config, ConfigNamesBelongToTheirRobot)
   }
 }
 
+// SAFETY: a path under another robot's config directory is refused, since several configs
+// of one robot also parse for the other.
 TEST(Config, PathInAnotherRobotsDirectoryIsRefused)
 {
-  // Several configs of one robot parse for the other (the G1's full.yaml for the H1-2, the
-  // H1-2's sim_safety_split.yaml for the G1), so a path under another robot's config
-  // directory is refused by that directory's name.
+  // The G1's full.yaml parses for the H1-2, and the H1-2's sim_safety_split.yaml for the G1.
   const std::string share = ament_index_cpp::get_package_share_directory("golem_safety");
   for (const char * name : kG1Configs) {
     const std::string path = share + "/config/g1/" + name + ".yaml";
@@ -494,13 +417,14 @@ TEST(Config, PathInAnotherRobotsDirectoryIsRefused)
       error_of([&] {golem_safety::load_safety_config(path, g1());});
     EXPECT_TRUE(contains(message, "robot h12")) << message;
   }
-  // The robot's own directory, given as a path, and a directory of any other name load.
   EXPECT_NO_THROW(
     golem_safety::load_safety_config(share + "/config/h12/sim_safety_split.yaml", h12()));
   const TempConfig file(completed("mode: split_mode\n", h12()));
   EXPECT_NO_THROW(golem_safety::load_safety_config(file.path(), h12()));
 }
 
+// A config without limits derives them from the defaults: offset 0.01 rad, ratios 0.5,
+// kp_max 300, kd_max 30.
 TEST(Config, DerivedLimitsUseTheSchemaDefaults)
 {
   const SafetyConfig c = parse("mode: split_mode\n", h12());
@@ -521,30 +445,7 @@ TEST(Config, DerivedLimitsUseTheSchemaDefaults)
   EXPECT_EQ(parse("", g1()).limits.q_clip_low.size(), 29u);
 }
 
-TEST(Config, EnforceAndKpAbsKdAbsAreAliases)
-{
-  const SafetyConfig c = parse(
-    "mode: full_body_mode\n"
-    "limits:\n"
-    "  enforce: {position_offset: 0.02, velocity_ratio: 0.2, torque_ratio: 0.3,"
-    " kp_abs: 111.0, kd_abs: 7.0}\n", h12());
-  EXPECT_DOUBLE_EQ(c.limits.q_clip_low[0], h12().joints[0].q_low + 0.02);
-  EXPECT_DOUBLE_EQ(c.limits.dq_clip[0], h12().joints[0].dq_max * 0.2);
-  EXPECT_DOUBLE_EQ(c.limits.tau_clip[0], h12().joints[0].tau_max * 0.3);
-  EXPECT_DOUBLE_EQ(c.limits.kp_max, 111.0);
-  EXPECT_DOUBLE_EQ(c.limits.kd_max, 7.0);
-  // The estop limits keep their own defaults.
-  EXPECT_DOUBLE_EQ(c.limits.q_estop_low[0], h12().joints[0].q_low + 0.01);
-
-  // An alias next to its own key is ambiguous.
-  EXPECT_TRUE(
-    contains(
-      parse_error("limits:\n  clip: {kp_max: 1.0, kp_abs: 2.0}\n", h12()), "limits.clip.kp_abs"));
-  EXPECT_TRUE(
-    contains(
-      parse_error("limits:\n  clip: {}\n  enforce: {}\n", h12()), "limits.enforce"));
-}
-
+// A negative offset widens a range; an offset that empties a joint's range is refused.
 TEST(Config, NegativePositionOffsetWidensAndTooLargeThrows)
 {
   const SafetyConfig wide =
@@ -562,6 +463,7 @@ TEST(Config, NegativePositionOffsetWidensAndTooLargeThrows)
     "'limits.estop.position_offset'"));
 }
 
+// kp_max and kd_max must be single nonnegative numbers.
 TEST(Config, KpAndKdMaxAreSingleNonNegativeNumbers)
 {
   const std::string list = parse_error(
@@ -573,6 +475,7 @@ TEST(Config, KpAndKdMaxAreSingleNonNegativeNumbers)
   EXPECT_DOUBLE_EQ(parse("limits:\n  clip: {kp_max: 0.0}\n", h12()).limits.kp_max, 0.0);
 }
 
+// NaN, infinity and non-numbers are refused.
 TEST(Config, NonFiniteNumbersAreRefused)
 {
   EXPECT_TRUE(
@@ -583,6 +486,7 @@ TEST(Config, NonFiniteNumbersAreRefused)
   EXPECT_TRUE(contains(parse_error("control: {publish_hz: abc}\n", h12()), "number"));
 }
 
+// Topics must be absolute ROS names, and default to the documented ones.
 TEST(Config, TopicsAreRosNames)
 {
   const std::string message = parse_error("topics: {low_state: rt/lowstate}\n", h12());
@@ -603,6 +507,7 @@ TEST(Config, TopicsAreRosNames)
   EXPECT_EQ(c.logging.base_dir, "/tmp/golem_safety");
 }
 
+// Out-of-range scalars and unknown choices are refused; a stale time <= 0 is accepted.
 TEST(Config, ScalarRangesAreChecked)
 {
   EXPECT_TRUE(contains(parse_error("control: {publish_hz: 0.0}\n", h12()), "publish_hz"));
@@ -617,12 +522,12 @@ TEST(Config, ScalarRangesAreChecked)
   EXPECT_TRUE(contains(parse_error("estop_response: {mode: loud, after: burst_then_silence}\n", h12()),
     "estop_response.mode"));
 
-  // A value <= 0 disables a stale report, so a negative one is accepted.
   const SafetyConfig c = parse("stale: {upper_seconds: -1.0, lower_seconds: 0.0}\n", h12());
   EXPECT_DOUBLE_EQ(c.stale.upper_seconds, -1.0);
   EXPECT_DOUBLE_EQ(c.stale.lower_seconds, 0.0);
 }
 
+// single_writer.handover_seconds must be positive.
 TEST(Config, HandoverSecondsMustBePositive)
 {
   for (const char * value : {"0.0", "0", "-0.1"}) {
@@ -637,6 +542,7 @@ TEST(Config, HandoverSecondsMustBePositive)
     0.25);
 }
 
+// Damp requires kd, per joint, in [0, limits.clip.kd_max]; kd defaults to 0.
 TEST(Config, EstopResponseDamp)
 {
   EXPECT_TRUE(
@@ -647,7 +553,6 @@ TEST(Config, EstopResponseDamp)
   ASSERT_EQ(damp.estop_response.kd.size(), 29u);
   EXPECT_DOUBLE_EQ(damp.estop_response.kd[28], 5.0);
 
-  // kd stays within what the clip allows a controller.
   EXPECT_TRUE(
     contains(
       parse_error("limits:\n  clip: {kd_max: 4.0}\nestop_response: {after: keep_writing, kd: 5.0}\n", g1()),
@@ -659,6 +564,7 @@ TEST(Config, EstopResponseDamp)
   EXPECT_DOUBLE_EQ(none.estop_response.kd[0], 0.0);
 }
 
+// The root and every section must be maps, and a YAML error names the source.
 TEST(Config, RootAndSectionsMustBeMaps)
 {
   EXPECT_TRUE(contains(parse_raw_error("- a\n- b\n", h12()), "mapping"));
@@ -669,4 +575,83 @@ TEST(Config, RootAndSectionsMustBeMaps)
   EXPECT_TRUE(contains(parse_error("mode: [a]\n", h12()), "'mode'"));
   EXPECT_TRUE(contains(parse_error("logging: {enabled: maybe}\n", h12()), "'logging.enabled'"));
   EXPECT_TRUE(contains(parse_error("a: [\n", h12()), "case.yaml"));
+}
+
+// Add the dotted path of every key under `node` to `out`, sections and their keys alike.
+static void collect_keys(
+  const YAML::Node & node, const std::string & prefix, std::set<std::string> & out)
+{
+  for (const auto & entry : node) {
+    const std::string key = prefix + entry.first.as<std::string>();
+    out.insert(key);
+    if (entry.second.IsMap()) {
+      collect_keys(entry.second, key + ".", out);
+    }
+  }
+}
+
+// config/example.yaml loads through the loader for every robot, names every key of the
+// schema and no other, and holds the loader's default wherever a key has one.
+TEST(Config, ExampleHasEveryKeyAndTheDefaults)
+{
+  const std::string path =
+    ament_index_cpp::get_package_share_directory("golem_safety") + "/config/example.yaml";
+  std::set<std::string> keys;
+  collect_keys(YAML::LoadFile(path), "", keys);
+  const std::set<std::string> schema = {
+    "mode",
+    "topics", "topics.low_cmd_in", "topics.low_cmd_lower_in", "topics.low_cmd_upper_in",
+    "topics.low_cmd_out", "topics.low_state",
+    "control", "control.publish_hz", "control.state_lag_ms",
+    "stale", "stale.upper_seconds", "stale.lower_seconds", "stale.state_seconds",
+    "single_writer", "single_writer.handover_seconds",
+    "estop", "estop.triggered_topic", "estop.plugged_in_topic", "estop.timeout_seconds",
+    "estop_response", "estop_response.mode", "estop_response.kd", "estop_response.after",
+    "estop_response.burst_count",
+    "limits", "limits.clip", "limits.clip.position_offset", "limits.clip.velocity_ratio",
+    "limits.clip.torque_ratio", "limits.clip.kp_max", "limits.clip.kd_max",
+    "limits.estop", "limits.estop.position_offset", "limits.estop.velocity_ratio",
+    "limits.estop.torque_ratio",
+    "logging", "logging.enabled", "logging.base_dir", "logging.chunk_prefix"};
+  EXPECT_EQ(keys, schema);
+
+  for (const RobotProfile * profile : {&h12(), &g1()}) {
+    SCOPED_TRACE(profile->robot);
+    const SafetyConfig example = golem_safety::load_safety_config(path, *profile);
+    const SafetyConfig defaults = parse_raw(
+      "mode: split_mode\ncontrol: {state_lag_ms: 0.0}\n"
+      "estop_response: {after: burst_then_silence}\n", *profile);
+    EXPECT_EQ(example.mode, defaults.mode);
+    EXPECT_EQ(example.topics.low_cmd_in, defaults.topics.low_cmd_in);
+    EXPECT_EQ(example.topics.low_cmd_lower_in, defaults.topics.low_cmd_lower_in);
+    EXPECT_EQ(example.topics.low_cmd_upper_in, defaults.topics.low_cmd_upper_in);
+    EXPECT_EQ(example.topics.low_cmd_out, defaults.topics.low_cmd_out);
+    EXPECT_EQ(example.topics.low_state, defaults.topics.low_state);
+    EXPECT_EQ(example.control.publish_hz, defaults.control.publish_hz);
+    EXPECT_EQ(example.control.state_lag_ms, defaults.control.state_lag_ms);
+    EXPECT_EQ(example.stale.upper_seconds, defaults.stale.upper_seconds);
+    EXPECT_EQ(example.stale.lower_seconds, defaults.stale.lower_seconds);
+    EXPECT_EQ(example.stale.state_seconds, defaults.stale.state_seconds);
+    EXPECT_EQ(example.single_writer.handover_seconds, defaults.single_writer.handover_seconds);
+    EXPECT_EQ(example.estop.triggered_topic, defaults.estop.triggered_topic);
+    EXPECT_EQ(example.estop.plugged_in_topic, defaults.estop.plugged_in_topic);
+    EXPECT_EQ(example.estop.timeout_seconds, defaults.estop.timeout_seconds);
+    EXPECT_EQ(example.estop_response.mode, defaults.estop_response.mode);
+    EXPECT_EQ(example.estop_response.kd, defaults.estop_response.kd);
+    EXPECT_EQ(example.estop_response.after, defaults.estop_response.after);
+    EXPECT_EQ(example.estop_response.burst_count, defaults.estop_response.burst_count);
+    EXPECT_EQ(example.limits.q_clip_low, defaults.limits.q_clip_low);
+    EXPECT_EQ(example.limits.q_clip_high, defaults.limits.q_clip_high);
+    EXPECT_EQ(example.limits.dq_clip, defaults.limits.dq_clip);
+    EXPECT_EQ(example.limits.tau_clip, defaults.limits.tau_clip);
+    EXPECT_EQ(example.limits.q_estop_low, defaults.limits.q_estop_low);
+    EXPECT_EQ(example.limits.q_estop_high, defaults.limits.q_estop_high);
+    EXPECT_EQ(example.limits.dq_estop, defaults.limits.dq_estop);
+    EXPECT_EQ(example.limits.tau_estop, defaults.limits.tau_estop);
+    EXPECT_EQ(example.limits.kp_max, defaults.limits.kp_max);
+    EXPECT_EQ(example.limits.kd_max, defaults.limits.kd_max);
+    EXPECT_EQ(example.logging.enabled, defaults.logging.enabled);
+    EXPECT_EQ(example.logging.base_dir, defaults.logging.base_dir);
+    EXPECT_EQ(example.logging.chunk_prefix, defaults.logging.chunk_prefix);
+  }
 }

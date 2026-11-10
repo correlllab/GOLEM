@@ -1,0 +1,49 @@
+robosuite at 5ce6643f3092639d08f7b0f90ed1c6a84f50552c, for MuJoCo 3.17.0
+(docker/RobocasaDockerfile applies it with `git apply`, which fails the build
+if it no longer applies). robosuite's setup.py asks for mujoco<3.10; the image
+installs 3.17.0 over that requirement and patches the two places that break:
+
+- controllers/parts/controller.py: MuJoCo 3.10 changed mj_fullM(m, dst, qM)
+  to mj_fullM(m, d, dst) (MuJoCo's changelog, 3.10.0, breaking change 14).
+  env.reset() reaches this call.
+- utils/binding_utils.py: under MuJoCo 3.17.0's pybind11 3 bindings,
+  `mjtJoint == numpy integer` is False with the enum on the left, so
+  get_joint_qpos_addr's and get_joint_qvel_addr's checks of jnt_type fail
+  (the assert in env.reset()). Reading the type as a Python int compares
+  equal on every version.
+
+diff --git a/robosuite/controllers/parts/controller.py b/robosuite/controllers/parts/controller.py
+index 2b3b4f58..616b1899 100644
+--- a/robosuite/controllers/parts/controller.py
++++ b/robosuite/controllers/parts/controller.py
+@@ -224,7 +224,7 @@ class Controller(object, metaclass=abc.ABCMeta):
+             self.joint_vel = np.array(self.sim.data.qvel[self.qvel_index])
+ 
+             mass_matrix = np.ndarray(shape=(self.sim.model.nv, self.sim.model.nv), dtype=np.float64, order="C")
+-            mujoco.mj_fullM(self.sim.model._model, mass_matrix, self.sim.data.qM)
++            mujoco.mj_fullM(self.sim.model._model, self.sim.data._data, mass_matrix)
+             mass_matrix = np.reshape(mass_matrix, (len(self.sim.data.qvel), len(self.sim.data.qvel)))
+             self.mass_matrix = mass_matrix[self.qvel_index, :][:, self.qvel_index]
+ 
+diff --git a/robosuite/utils/binding_utils.py b/robosuite/utils/binding_utils.py
+index 0859d0cc..62db2247 100644
+--- a/robosuite/utils/binding_utils.py
++++ b/robosuite/utils/binding_utils.py
+@@ -518,7 +518,7 @@ class MjModel(metaclass=_MjModelMeta):
+             returns the a (start, end) tuple for pos[start:end] access.
+         """
+         joint_id = self.joint_name2id(name)
+-        joint_type = self.jnt_type[joint_id]
++        joint_type = int(self.jnt_type[joint_id])
+         joint_addr = self.jnt_qposadr[joint_id]
+         if joint_type == mujoco.mjtJoint.mjJNT_FREE:
+             ndim = 7
+@@ -543,7 +543,7 @@ class MjModel(metaclass=_MjModelMeta):
+             returns the a (start, end) tuple for vel[start:end] access.
+         """
+         joint_id = self.joint_name2id(name)
+-        joint_type = self.jnt_type[joint_id]
++        joint_type = int(self.jnt_type[joint_id])
+         joint_addr = self.jnt_dofadr[joint_id]
+         if joint_type == mujoco.mjtJoint.mjJNT_FREE:
+             ndim = 6

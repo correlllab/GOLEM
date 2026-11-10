@@ -1,0 +1,112 @@
+# Every key of a policy's deploy config, policies/<name>/<name>.yaml, which marl_deploy_node reads through its
+# `config` parameter. export.yaml beside it is loaded over it, top-level key by key (example.export.yaml). Nothing
+# loads this file; policy_template.yaml is the starting point for a new policy.
+
+# s, the policy step: the training env's sim dt x decimation. marl_deploy_node's control_hz must be its inverse.
+control_dt: 0.02
+
+# The policy's 27 joints in Unitree motor order 0..26; every per-joint list below and every q vector uses this order.
+# Legs are 0-11, torso_joint 12, the left arm 13-19 and the right arm 20-26.
+joint_names: [
+  left_hip_yaw_joint, left_hip_pitch_joint, left_hip_roll_joint,
+  left_knee_joint, left_ankle_pitch_joint, left_ankle_roll_joint,
+  right_hip_yaw_joint, right_hip_pitch_joint, right_hip_roll_joint,
+  right_knee_joint, right_ankle_pitch_joint, right_ankle_roll_joint,
+  torso_joint,
+  left_shoulder_pitch_joint, left_shoulder_roll_joint, left_shoulder_yaw_joint,
+  left_elbow_joint, left_wrist_roll_joint, left_wrist_pitch_joint, left_wrist_yaw_joint,
+  right_shoulder_pitch_joint, right_shoulder_roll_joint, right_shoulder_yaw_joint,
+  right_elbow_joint, right_wrist_roll_joint, right_wrist_pitch_joint, right_wrist_yaw_joint]
+
+# rad, 27 values: the pose the pre-pose ramps to, and the offset of the legs' actions and of the q observation.
+default_joint_pos: [
+  0.0, -0.3, 0.0, 0.5, -0.2, 0.0,
+  0.0, -0.3, 0.0, 0.5, -0.2, 0.0,
+  0.0,
+  0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+  0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+# Nm/rad, 27 values: the PD stiffness sent with every target, the pre-pose's included.
+kp: [
+  200, 200, 200, 300, 40, 40,
+  200, 200, 200, 300, 40, 40,
+  300,
+  120, 120, 120, 80, 40, 40, 40,
+  120, 120, 120, 80, 40, 40, 40]
+# Nm s/rad, 27 values: the PD damping sent with every target.
+kd: [
+  2.5, 2.5, 2.5, 4.0, 2.0, 2.0,
+  2.5, 2.5, 2.5, 4.0, 2.0, 2.0,
+  3.0,
+  2.0, 2.0, 2.0, 1.0, 1.0, 1.0, 1.0,
+  2.0, 2.0, 2.0, 1.0, 1.0, 1.0, 1.0]
+
+# Nm, 27 values: the torque limits torque_headroom scales. Read only when torque_headroom is set.
+effort_limits: [
+  200, 200, 200, 300, 60, 40,
+  200, 200, 200, 300, 60, 40,
+  200,
+  40, 40, 18, 18, 19, 19, 19,
+  40, 40, 18, 18, 19, 19, 19]
+
+# Every raw action is clamped to +-this before it is used.
+clip_actions: 10.0
+# rad: the joint target bounds are the URDF hard limits widened by this; negative keeps the targets inside them.
+target_margin: -0.001
+# joint name -> [low, high] rad, narrowing the target bounds of the joints it names; every name must be a policy
+# joint. null: no narrowing. export.yaml sets it for runs trained inside GOLEM's position e-stop range.
+target_limits: null
+# Share of effort_limits (0-1) the PD torque of each target may ask for at the measured state,
+# kp (target - q) - kd dq; applied after the position bounds. null: no torque bound.
+torque_headroom: 0.85
+
+legs:
+  policy: legs.pt           # the legs' TorchScript actor, relative to this file
+  num_obs: 97               # the actor's input size: 95, or 97 with gait_phase_cos
+  num_actions: 12           # one action per leg joint
+  action_scale: 0.25        # leg target = action_scale * action + default_joint_pos
+
+arms:
+  policy: arms.pt           # the arms' TorchScript actor, relative to this file
+  num_obs: 125              # the actor's input size: 123, or 125 with gait_phase_cos
+  num_actions: 14           # one residual per arm joint
+  residual_scale: 0.2       # arm target = q + IK step + residual_scale * residual
+  # Hz: the arms' action passes a one-pole low-pass (per policy step) to become the residual the arms observe.
+  # Absent or null: no low-pass.
+  residual_cutoff_hz: 3.0
+  ee_frames: [left_wrist_yaw_link, right_wrist_yaw_link]   # URDF wrist frames the arm goals are for, left then right
+  ik_damping: 0.05          # damping of the damped-least-squares IK step
+  max_ik_step: 0.1          # rad, the largest IK step of any arm joint per policy step
+
+# URDF frame of FAST-LIO's body (/Odometry, camera_init -> body), which forward kinematics carries to the pelvis to
+# keep the arm goals fixed in the world. FAST-LIO's body is the IMU it integrates /livox/imu in: livox_imu_link.
+slam_frame: livox_imu_link
+
+# s, the gait clock's period; the legs' phases start at 0 and 0.5 at the episode start and advance together.
+gait_period: 0.8
+# m/s or rad/s: a velocity command with a smaller norm counts as standing, both legs at phase 0.
+zero_cmd_eps: 0.1
+# true: the actors also observe each leg's gait phase cos after its sin. Absent: false. export.yaml sets it.
+gait_phase_cos: true
+
+# [low, high] of each velocity command term; /cmd_vel is clipped to them. m/s for lin_vel_x and lin_vel_y
+# (body frame), rad/s for ang_vel_z.
+command_ranges:
+  lin_vel_x: [-0.7, 0.7]
+  lin_vel_y: [-0.3, 0.3]
+  ang_vel_z: [-0.5, 0.5]
+
+# s of zero velocity before an arm goal takes over from navigation; 0: none.
+settle_to_arm_s: 0.0
+# s of zero velocity before navigation resumes after an arm goal; 0: none.
+settle_to_nav_s: 0.0
+
+# The navigation rest pose: one wrist pose per arm, [x, y, z (m), qw, qx, qy, qz], pelvis frame, left then right.
+# null: forward kinematics at default_joint_pos. export.yaml sets it from the run's arm target tables.
+rest_pose: null
+
+# The frame the policy's IMU trained in and its gyro low-pass; export.yaml sets it. Absent: frame imu_link, no
+# low-pass.
+imu:
+  frame: livox_imu_link     # URDF frame: livox_imu_link, livox_link or imu_link
+  gyro_lowpass_hz: 8.0      # Hz, cutoff of the 2nd-order Butterworth on the angular velocity; 0 or absent: none

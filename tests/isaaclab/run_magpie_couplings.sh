@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# Real USD-schema validation without starting Kit or allocating GPU simulation.
+# Run test_magpie_couplings.py against Isaac's own USD and PhysX schema libraries.
+#
+# Validates the Magpie gripper's USD with the real schemas without starting Kit or a GPU sim.
+# Usage: tests/isaaclab/run_magpie_couplings.sh
+# Environment: as run_in_container.sh.
+# Exit: the unittest run's status.
 set -eo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+# The schema libraries live in versioned extension directories; take the first match of each.
 exec "$ROOT/tests/isaaclab/run_in_container.sh" '
 set -e
 usd_dirs=(/isaac-sim/extscache/omni.usd.libs-*.cp311)

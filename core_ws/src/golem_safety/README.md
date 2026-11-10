@@ -15,7 +15,9 @@ replaces is in the change report beside it,
 
 ## Running it
 
-The bringups start the node (`golem_bringup`'s `h12_control.launch.py` and
+`launch/safety.launch.py` starts the node after `start_delay` seconds of wall clock (default
+`0.0`), with the parameters below and `use_sim_time` (default `false`) as its arguments. Both
+robots' bringups include it (`golem_bringup`'s `h12_control.launch.py` and
 `g1_core.launch.py`). On its own:
 
 ```bash
@@ -29,11 +31,13 @@ ros2 run golem_safety safety_node --ros-args -p robot:=g1 -p config:=sim_split -
 | `config` | required | a config name in `config/<robot>/` (with or without `.yaml`), or a path; a path whose directory is named after another robot with a profile (`.../g1/split.yaml` for the `h12`) is refused |
 | `sim` | `false` | `true` for a simulator: the node then refuses ROS domain 0, the real robots' command bus, an unset `ROS_DOMAIN_ID` included |
 | `use_estop` | `false` | `true` to read the hardware estop on the config's `estop` topics; `false` ignores them |
+| `use_sim_time` | `false` | `true` for robot time on a simulator's `/clock` (Robot time, below); refused without `sim:=true` |
 
 The node refuses to start, with one `FATAL` line and exit code 1, when a parameter is
 missing, the profile or config does not load (`safety_node refuses to start: robot <robot>,
-config <config>: <reason>`), or `sim:=true` meets domain 0 (`safety_node refuses to start:
-sim:=true on ROS domain 0, ...`). It exits 1 as well when its relay loop
+config <config>: <reason>`), `sim:=true` meets domain 0 (`safety_node refuses to start:
+sim:=true on ROS domain 0, ...`), or `use_sim_time:=true` comes without `sim:=true`
+(`use_sim_time:=true needs sim:=true: ...`). It exits 1 as well when its relay loop
 fails, when its executor thread (the heartbeat's) fails, after running the exit sequence,
 or when its exit sequence overruns its length by more than 1 s
 (`exit_hand_back_timeout`); 0 otherwise.
@@ -50,8 +54,8 @@ or when its exit sequence overruns its length by more than 1 s
 | pub | `/safety/heartbeat` | `std_msgs/Bool` | reliable, depth 10 | 10 Hz on the steady clock once relaying can begin: true, then false once the estop latches |
 
 The topic names are the config's `topics` (and `estop`) values; the table gives the
-defaults, which every carried config uses. `h12_lowerbody_rl`, `lmg_deploy` and `golem_skills`
-read `/safety/heartbeat` on the H1-2, and `h12_lowerbody_rl` starts pre-posing the legs on
+defaults, which every carried config uses. `golem_lowerbody_rl`, `lmg_deploy` and `golem_skills`
+read `/safety/heartbeat` on the H1-2, and `golem_lowerbody_rl` starts pre-posing the legs on
 the first beat, so a beat means relaying can begin. The node publishes none until the
 engage conditions that do not depend on the inputs hold: the newest `/lowstate` reports the
 profile's `mode_machine` and, with `use_estop`, a first hardware estop sample has arrived
@@ -84,68 +88,58 @@ Both robots' `LowCmd`/`LowState` motor arrays hold 35 slots.
 |---|---|---|---|
 | H1-2 | `relax_safety_split` | split | `h12_real_robot` (the `h12_control.launch.py` default), `lmg_sim`, `lmg_real`, `h12_safety_grippers` (their defaults) |
 | H1-2 | `default_safety_split`, `tight_safety_split` | split | by name (`safety_config:=`) |
-| H1-2 | `sim_safety_split` | split | `h12_sim`, the Mac bringup, `tests/stack` |
+| H1-2 | `sim_safety_split` | split | `h12_sim`, `tests/stack` |
 | H1-2 | `default_safety_full`, `relax_safety_full`, `tight_safety_full`, `locomotion_safety_full` | full body | by name |
 | G1 | `split` | split | `g1_real_robot.launch.py` (default) |
 | G1 | `sim_split` | split | `g1_sim.launch.py` (default) |
-| G1 | `full` | full body | refused by `g1_core.launch.py` (it must relay the upper-body input) |
+| G1 | `full` | full body | refused by the G1 bringups (`golem_upper_ik`'s `upper_ik.launch.py`, which `g1_core.launch.py` includes: it must relay the upper-body input) |
 
-What the robots' configs share:
-
-- **H1-2:** `estop_response` `zero`, `burst_then_silence`, 50 commands;
-  `control.state_lag_ms: 100`; `stale.lower_seconds` 0.2 and `state_seconds` 0.1;
-  `stale.upper_seconds` 2.0 in `default_safety_split` and `tight_safety_split`, 0 (off) in
-  `relax_safety_split` and `sim_safety_split`; logging off.
-- **G1:** `estop_response` `zero`, `keep_writing`; `control.state_lag_ms: 0` (off: the real
-  G1's tick has not been measured); logging on, to `/tmp/golem_safety`. `sim_split` relaxes
-  the stale times and the estop limits, since the sim can run slower than real time.
+Each config's values, with why they were chosen, are in its file
+(`config/<robot>/<config>.yaml`).
 
 Each safety config runs with one `golem_upper_ik` controller config; the bringups refuse
-another pair (`golem_upper_ik.pairing`).
+another pair (`golem_upper_ik.pairing`, checked by its `upper_ik.launch.py`).
 
 ### Keys
 
-| Key | Default | Meaning |
-|---|---|---|
-| `mode` | the profile's first mode | `full_body_mode` or `split_mode`; a mode the profile lacks is refused, naming the profile's modes |
-| `topics.low_cmd_in`, `low_cmd_lower_in`, `low_cmd_upper_in` | `/safety/lowcmd_in`, `/safety/lowcmd_lower_in`, `/safety/lowcmd_upper_in` | the inputs; absolute ROS names (`rt/...` is refused) |
-| `topics.low_cmd_out` | `/lowcmd` | the output |
-| `topics.low_state` | `/lowstate` | the robot's state |
-| `control.publish_hz` | 500 | the relay rate |
-| `control.state_lag_ms` | required | the transport-lag estop, ms; on ROS domain 0 only; <= 0 turns it off |
-| `stale.upper_seconds`, `lower_seconds`, `state_seconds` | 0, 0.2, 0.1 | quiet times of the upper input, the lower or full input and `/lowstate`, s; <= 0 turns the report off |
-| `single_writer.handover_seconds` | 0.5 | how long the current writer must be quiet before another is accepted, s |
-| `estop.triggered_topic`, `plugged_in_topic` | `/estop/triggered`, `/estop/plugged_in` | the hardware estop's topics |
-| `estop.timeout_seconds` | 0.5 | the oldest a hardware estop sample may be, s |
-| `estop_response.mode` | `zero` | `zero`: every motor off (mode 0, every value 0); `damp`: every body motor on with kp 0 and `kd` |
-| `estop_response.kd` | none | `damp` only (required there): one number or one per body joint, at most `limits.clip.kd_max` |
-| `estop_response.after` | required | `burst_then_silence` or `keep_writing` |
-| `estop_response.burst_count` | 50 | the commands of `burst_then_silence` |
-| `limits.clip.position_offset`, `velocity_ratio`, `torque_ratio` | 0.01, 0.5, 0.5 | one number, or one per body joint in slot order |
-| `limits.clip.kp_max`, `kd_max` | 300, 30 | one number for every joint (`kp_abs`, `kd_abs` are aliases) |
-| `limits.estop.position_offset`, `velocity_ratio`, `torque_ratio` | 0.01, 0.5, 0.5 | as `limits.clip`, for the measured state |
-| `logging.enabled`, `base_dir`, `chunk_prefix` | `false`, `/tmp/golem_safety`, `chunk_` | the `.npz` sample log |
+Every key of a config, with its meaning, units, default and allowed values, is in
+`config/example.yaml`.
 
-`limits.enforce` is an alias of `limits.clip`. The limits derive from the profile's joint
+The limits derive from the profile's joint
 table: q within [low + `position_offset`, high - `position_offset`] (a negative offset widens
 the range), |dq| up to velocity limit x `velocity_ratio`, |tau| up to effort limit x
 `torque_ratio`. `golem_safety_dump_config <robot> <config>` (installed in
 `lib/golem_safety`) prints every derived and parsed value as JSON.
 
 The loader refuses, naming the robot, the file and the key: an unknown key at any level; a
-key of an older schema (`network`, `robot`, `startup`, `engage`, `estop.enabled`, ...),
-saying why it was removed or which key replaces it; a non-finite or out-of-range number; a
-list whose length is not the profile's joint count; an alias given with the key it aliases;
-a missing required key.
+non-finite or out-of-range number; a list whose length is not the profile's joint count; a
+missing required key.
 
 ## Behavior
 
+**Robot time.** The relay's rate and every timing of the core (the stale times, the
+single-writer handover, the hardware estop's silence, the once-a-second refusal reports, the
+estop report's times) count robot time. On the real robots that is the boot-time clock
+(`CLOCK_BOOTTIME`: monotonic, and a suspend shows as a gap). With `use_sim_time:=true`, which
+needs `sim:=true` (so never on domain 0, the real robots' bus), it is the simulator's `/clock`,
+so the layer keeps its timing in sim seconds whatever the sim's speed: it advances by each
+forward step of `/clock`, stands still while `/clock` does (the relay then writes nothing),
+and never goes back (a restarted sim leaves it where it was). The relay writes nothing
+before the first `/clock`, logging that it waits (again every 5 s). The heartbeat and the
+exit sequence stay on the steady and boot clocks, so a sim whose `/clock` has stopped cannot
+stop the beats or hold up an exit or an estop burst at exit. The transport-lag check runs
+only on domain 0, where robot time is always the boot clock.
+
 **Relay, newest only.** One relay thread runs at `control.publish_hz`, sleeping to absolute
-deadlines on the boot-time clock. Each cycle it takes the newest `/lowstate`, the newest
-hardware estop values and the newest command of each input (keep-last 1, so no queue builds
-up), and publishes one command. A cycle that ends more than a period late restarts the
-schedule: a slow cycle lowers the rate, and nothing is replayed to catch up. Every timer in
-the node runs on the boot-time or steady clock, never on the wall clock or on `/clock`.
+deadlines of robot time. Under `use_sim_time` a sleep ends only when `/clock` moves, so the
+rate follows `/clock`'s steps: RoboCasa publishes `/clock` every 2 ms physics step (500 Hz of
+sim time), one cycle per step; Isaac publishes it once per control step, and a step of two
+periods or more gets two cycles back to back, so Isaac's coarser `/clock` gives fewer than
+500 cycles per s of sim time. Each cycle it takes the newest `/lowstate`, the newest hardware
+estop values and the newest command of each input (keep-last 1, so no queue builds up), and
+publishes one command. A cycle that ends more than a period late restarts the schedule at
+the time it ends: a slow cycle lowers the rate, and the relay catches up by at most one
+cycle. No timer in the node runs on the wall clock.
 
 **What it writes.** Each engaged input's newest valid command on that input's own slots
 (`full`: every body slot; `split`: the lower and upper slots). Every other slot, the slots
@@ -158,13 +152,15 @@ the input's own or not; any other command latches the estop. A valid command is 
 its input's slots: q, dq and tau to `limits.clip`, kp and kd to [0, `kp_max`] and [0,
 `kd_max`]. A gain above its maximum raises `gain_clipped` (Warn) once per joint and gain.
 
-**Start-up**, the same on both robots (no config key chooses it): from boot the layer
-streams `zero_command` on every slot, so every motor is off. Each input engages on its own
+**Start-up**, the same on both robots (no config key chooses it): from boot (under
+`use_sim_time`, from the first `/clock`) the layer streams `zero_command` on every slot, so
+every motor is off. Each input engages on its own
 first valid command that arrives once the newest `/lowstate` reports the profile's
 `mode_machine` (and, with `use_estop`, a first hardware estop sample has arrived); its slots
 carry its commands from then on (`input_engaged`). The slots of an input that has not
 engaged stay at zero gain: in split mode the robot runs arms-only, with its leg motors off,
-until the leg node commands. The `/lowstate` limit checks run from boot.
+until the leg node commands. The `/lowstate` limit checks run from boot (under
+`use_sim_time`, from the first `/clock`).
 
 A command that cannot engage raises `engage_refused` (Warn) with the first reason, at most
 once a second: `no /lowstate received yet`, `/lowstate mode_machine is 0, expected 6`, or
@@ -226,13 +222,14 @@ latch:
 - `keep_writing` (the G1): the estop command every cycle.
 
 The estop report (Error) is `estop_command_written`: the reason, `decision_ms` (the latch),
-`action_ms` (the first step after it) and, for the hardware estop, `trigger_stamp_ms`, all on
-the boot-time clock. The heartbeat turns false, or starts false when the relay was not ready
+`action_ms` (the first step after it) and, for the hardware estop, `trigger_stamp_ms`, all in
+robot time. The heartbeat turns false, or starts false when the relay was not ready
 yet.
 
 **Exit** (SIGINT, SIGTERM, SIGHUP; `main()` takes them, and a closed stderr cannot stop the
-exit). The layer stops publishing at once; an estop burst in progress is finished first, and
-with `keep_writing` the estop command is written once if none has been since the latch. The
+exit). The layer stops publishing at once; an estop burst in progress is finished first, at
+`control.publish_hz` of the boot clock, and with `keep_writing` the estop command is written
+once if none has been since the latch. The
 sims then turn every body motor off after `GOLEM_CMD_TIMEOUT` (0.5 s of sim time) of
 `rt/lowcmd` silence; what the real robots do when it stops has not been measured.
 
@@ -250,10 +247,13 @@ With `logging.enabled`, each run logs to its own directory,
 `<logging.base_dir>/<YYYYmmdd-HHMMSS>-<pid>/`, in chunks of 1000 samples
 (`<chunk_prefix>000000.npz`, ...): one sample per `/lowstate` the relay took before the
 latch (the latching one included), with its motor fields and IMU, and the last command
-written. `combine_chunks.py` (installed in `lib/golem_safety`) merges one run's chunks:
+written. `combine_chunks.py` (installed in `lib/golem_safety`) merges one run's chunks.
+`--load` is the run's directory, or a directory of runs (the default, `/tmp/golem_safety`),
+from which it takes the run written last:
 
 ```bash
 ros2 run golem_safety combine_chunks.py --load /tmp/golem_safety/<run> --save /tmp/combined.npz
+ros2 run golem_safety combine_chunks.py   # the latest run, into /tmp/golem_safety/combined.npz
 ```
 
 ## Tests
@@ -269,13 +269,13 @@ docker/scripts/docker_run.sh ros --restart /home/code/h12_sim_scripts/launch_ros
 - gtests: `SafetyCore` (`test_safety_core_relay`, `test_safety_core_startup`: the relay,
   clipping, identity, single writer, quiet inputs, the start-up, the hardware estop,
   the latch responses, exit), the config loader (`test_config`), the profile loader, the
-  `LowCmd` builders and CRC (`test_lowcmd`, against SDK-computed values), the chunk logger
-  and the boot clock.
+  `LowCmd` builders and CRC (`test_lowcmd`, against SDK-computed values), the chunk logger,
+  the boot clock and robot time (`test_robot_clock`: a ROS clock set by hand, as `/clock`
+  sets it).
 - `test/test_node_ros.py` runs the installed `safety_node` against a fake robot over ROS on
   `ROS_DOMAIN_ID` 91 (`test/conftest.py`), for both robots. `test_spinner` (the executor
   thread) runs on 91 too.
-- `test_limit_parity.py` compares every config's derived limits with fixtures from the
-  previous safety layers' loaders, `test_robot_data.py` the profiles with their sources,
+- `test_robot_data.py` compares the profiles with their sources,
   `test_chunk_files.py` the chunks with numpy and `combine_chunks.py`, and `test_no_sdk.py`
   that nothing imports `unitree_sdk2py`.
 

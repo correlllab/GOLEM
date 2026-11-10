@@ -1,0 +1,76 @@
+# Every key of a run config (config/<robot>/sim.yaml and real.yaml), with its meaning,
+# units and allowed values; read by golem_lowerbody_rl.run_config, which requires every key
+# and refuses any other. This file documents the schema: setup.py does not install it, and
+# test_example_configs.py checks that it loads as a run config would. The values are the
+# H1-2 sim's.
+
+# true for a simulator, false for the real robot; must be true in a sim.yaml and false in a
+# real.yaml, and the launch file refuses a run config whose sim is not its own
+sim: true
+
+startup:
+  # true or false. SAFETY: true holds the pre-pose until the operator calls
+  # /lowerbody/confirm_engage, the moment the policy takes the legs; every real.yaml has it
+  wait_for_confirm: false
+  # s (> 0) of the cosine ramp of the legs from their measured positions to the policy's
+  # default pose
+  ramp_seconds: 2.0
+  # rad (> 0): the largest leg error from the default pose that counts as posed
+  settle_tolerance: 0.15
+  # policy steps (integer > 0) in a row within settle_tolerance that settle the pre-pose
+  settle_ticks: 10
+  # policy steps (integer > 0) after the ramp after which the node holds the pre-pose
+  # anyway, logging NOT SETTLED
+  settle_max_ticks: 400
+  # s (> 0) the start conditions (steady /lowstate, its tick rate, the arm controller's
+  # commands) must hold before the policy may start
+  steady_seconds: 1.0
+  # [low, high], 0 < low <= 1 <= high: s of /lowstate tick per s of the node's clock (sim
+  # time in the sims) the start accepts; a tick that is not in ms of that clock never starts
+  tick_rate: [0.9, 1.1]
+  # s of robot time (> 0; the sim's /clock under use_sim_time, the steady clock otherwise):
+  # the arm controller counts as commanding while its last command is this recent
+  upper_fresh_seconds: 0.5
+
+heartbeat:
+  # s of the steady clock (> golem_safety's 0.1 s beat period), whatever use_sim_time says,
+  # without /safety/heartbeat after the first beat that stops the node for good, as a false
+  # beat does
+  timeout: 0.5
+
+band:
+  # true or false: true calls the sim's /elastic_band/toggle once the policy has started
+  # (false on the real robot, which has no band)
+  release: true
+  # s of robot time (> 0): how long the policy waits for the first /left_ee_pose after the
+  # pre-pose, and the band release after the policy starts, before going ahead anyway
+  max_wait: 34.0
+
+commands:
+  # s of robot time (> 0): a /cmd_vel older than this is zero velocity
+  timeout: 0.5
+  # [low, high] with low <= 0 <= high: the deployment limits on /cmd_vel's linear x (m/s),
+  # linear y (m/s) and angular z (rad/s); SAFETY: zero must lie inside, since the node
+  # starts at and falls back to zero velocity
+  vx: [-1.0, 1.0]
+  vy: [-1.0, 1.0]
+  yaw: [-1.0, 1.0]
+  # [vx, vy, yaw] (each > 0; m/s^2, m/s^2, rad/s^2): the largest change of the velocity
+  # command per second, or null for none
+  accel: null
+  # m/s (> 0): the largest change of the height command per second, or null for none
+  height_rate: null
+
+faults:
+  # s of robot time (> 0): the longest gap between /lowstate samples once the legs are
+  # commanded; a longer one stops the node for good
+  max_state_gap: 0.5
+  # s of robot time (> 0) or null: the largest tick lag of /lowstate while the policy runs;
+  # a larger one stops the node for good; null skips the check. Null in a sim run config
+  # (sim true), which refuses any other value: a sim's tick counts sim time, and without
+  # use_sim_time the lag is measured on the steady clock
+  max_latency: null
+
+# [roll, pitch, yaw] in deg: what the IMU reads when the body is level (positive pitch reads
+# tilted forward, positive roll tilted right); the node corrects every /lowstate sample by it
+imu_trim_deg: [0.0, 0.0, 0.0]

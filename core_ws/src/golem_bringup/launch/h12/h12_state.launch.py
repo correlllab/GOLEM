@@ -1,44 +1,35 @@
+"""
+Start the H1-2's state for TF: robot_state_publisher and joint_state_publisher.
+
+Both come from golem_upper_ik's robot_state.launch.py, at once: robot_state_publisher
+on urdf_file, and golem_upper_ik's joint_state_publisher, which publishes the 27 body
+joints from /lowstate.
+"""
+from golem_bringup.include import include
 from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import Command, LaunchConfiguration
-from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterValue
+from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
-    declare_use_sim_time = DeclareLaunchArgument(
-        'use_sim_time', default_value='false',
-        description='Use the simulator /clock if true'
-    )
-    declare_urdf_file = DeclareLaunchArgument(
-        'urdf_file',
-        default_value=urdf_path('h12', ros=True),
-        description='Absolute path to the robot URDF'
-    )
-
-    sim_time_param = {'use_sim_time': ParameterValue(
-        LaunchConfiguration('use_sim_time'), value_type=bool)}
-    robot_description = ParameterValue(
-        Command(['cat ', LaunchConfiguration('urdf_file')]), value_type=str)
-
+    """Declare the state block's arguments and include golem_upper_ik's robot_state."""
     return LaunchDescription([
-        declare_use_sim_time,
-        declare_urdf_file,
-        Node(
-            package='golem_upper_ik',
-            executable='joint_state_publisher',
-            name='joint_state_publisher',
-            parameters=[{'robot': 'h12'}, sim_time_param],
-            output='screen',
-            emulate_tty=True,
-        ),
-        Node(
-            package='robot_state_publisher',
-            executable='robot_state_publisher',
-            name='robot_state_publisher',
-            parameters=[{'robot_description': robot_description}, sim_time_param],
-            output='screen',
-            emulate_tty=True,
+        DeclareLaunchArgument(
+            'use_sim_time', default_value='false',
+            description='true: both nodes run on the simulator /clock'),
+        DeclareLaunchArgument(
+            'urdf_file',
+            default_value=urdf_path('h12', ros=True),
+            description="Absolute path of the URDF robot_state_publisher publishes "
+                        "(default: golem_ros2_models' H1-2 ROS URDF)"),
+        # The robot's TF from its measured joints.
+        include(
+            'golem_upper_ik', 'robot_state.launch.py',
+            {
+                'robot': 'h12',
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
+                'urdf_file': LaunchConfiguration('urdf_file'),
+            },
         ),
     ])

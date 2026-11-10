@@ -1,8 +1,9 @@
-'''
-The controller's ROS I/O on domain 92 (golem_upper_ik.core.ros_io): StateSubscriber against a
-fake /lowstate, including its tick-lag measurement and the RobotModel state-source protocol,
-and CommandPublisher's rate and header.
-'''
+"""Check the controller's ROS I/O (golem_upper_ik.core.ros_io) on domain 92.
+
+StateSubscriber against a fake /lowstate, with its tick-lag measurement and the RobotModel
+state-source protocol; CommandPublisher's rate, header and refusals. Under use_sim_time a
+sample's age and the command rate count the sim's /clock (SimClock).
+"""
 import json
 import os
 from pathlib import Path
@@ -14,19 +15,20 @@ import numpy as np
 import pytest
 from rclpy.qos import HistoryPolicy, ReliabilityPolicy
 
-from ros_harness import FakeRobot, Recorder, TEST_DOMAIN, wait_for
+from ros_harness import FakeRobot, Recorder, SimClock, TEST_DOMAIN, wait_for
 
 RATE_TOOL = Path(__file__).resolve().parents[1] / 'tools' / 'command_publisher_rate.py'
 COMMAND_TOPIC = '/safety/lowcmd_upper_in'
 
 
 def profile_of(robot):
+    """Return robot's RobotProfile."""
     from golem_upper_ik.profile import load_profile
     return load_profile(robot)
 
 
 def subscribed(ros, profile, robot):
-    '''A StateSubscriber on a controller node that has received robot's first sample'''
+    """Return a StateSubscriber on a controller node that has received robot's first sample."""
     from golem_upper_ik.core.ros_io import StateSubscriber
     subscriber = StateSubscriber(ros.node('controller'), profile)
     ros.on_close(subscriber.shutdown)
@@ -35,6 +37,7 @@ def subscribed(ros, profile, robot):
 
 
 def test_state_subscriber_keeps_newest(ros):
+    """The subscriber keeps only the newest sample (keep-last 1, best effort)."""
     profile = profile_of('h12')
     robot = FakeRobot(ros, profile)
     subscriber = subscribed(ros, profile, robot)
@@ -53,20 +56,20 @@ def test_state_subscriber_keeps_newest(ros):
 
 
 def subscriber_endpoints(ros, topic):
-    '''The subscriptions to topic in the test's context'''
+    """Return the subscriptions to topic in the test's context."""
     node = ros.node('graph')
     assert wait_for(lambda: len(node.get_subscriptions_info_by_topic(topic)) > 0, 2.0)
     return node.get_subscriptions_info_by_topic(topic)
 
 
-def test_check_fresh_raises_when_stale(ros):
+def test_staleness_grows_with_the_newest_samples_age(ros):
+    """Staleness is infinite before the first sample, then grows with the newest one's age."""
     from golem_upper_ik.core.ros_io import StaleStateError, StateSubscriber
     profile = profile_of('h12')
     subscriber = StateSubscriber(ros.node('controller'), profile)
     ros.on_close(subscriber.shutdown)
-    with pytest.raises(StaleStateError, match='no /lowstate received'):
-        subscriber.check_fresh(0.1)
     assert subscriber.staleness_ms == float('inf')
+    assert subscriber.age_s() is None
 
     robot = FakeRobot(ros, profile)
     assert wait_for(lambda: robot.publish() or subscriber.latest() is not None, 2.0)
@@ -74,15 +77,72 @@ def test_check_fresh_raises_when_stale(ros):
     # arrive in order, so once this one is the newest none is left to come
     robot.publish(tick=9000)
     assert wait_for(lambda: subscriber.latest()[0].tick == 9000, 2.0)
-    subscriber.check_fresh(0.1)
+    assert subscriber.age_s() < 0.1
     time.sleep(0.35)
-    with pytest.raises(StaleStateError, match=r'/lowstate is 0\.(3[5-9]|[4-9])[0-9]* s old'):
-        subscriber.check_fresh(0.1)
+    assert subscriber.age_s() >= 0.35
     assert subscriber.staleness_ms >= 350.0
     assert issubclass(StaleStateError, RuntimeError)
 
 
+def test_staleness_counts_sim_time(ros):
+    """Under use_sim_time a sample's age is s of sim time: it stands still with /clock."""
+    from golem_upper_ik.core.robot_clock import RobotClock
+    from golem_upper_ik.core.ros_io import StateSubscriber
+    profile = profile_of('h12')
+    sim = SimClock(ros, rate=2.0)
+    sim.start()
+    node = ros.node('controller', sim_time=True)
+    clock = RobotClock(node)
+    clock.wait_for_clock(2.0)
+    subscriber = StateSubscriber(node, profile, clock=clock)
+    ros.on_close(subscriber.shutdown)
+    robot = FakeRobot(ros, profile)
+    assert wait_for(lambda: robot.publish() or subscriber.latest() is not None, 2.0)
+    robot.publish(tick=9000)
+    assert wait_for(lambda: subscriber.latest()[0].tick == 9000, 2.0)
+    time.sleep(0.25)
+    # 0.25 s of wall time is 0.5 s of sim time at twice the speed
+    assert 0.45 < subscriber.age_s() < 0.65, subscriber.age_s()
+    sim.pause()
+    time.sleep(0.05)
+    paused = subscriber.age_s()
+    time.sleep(0.3)
+    assert subscriber.age_s() == paused, 'the age grew with /clock stopped'
+
+
+@pytest.mark.parametrize('rate', [0.5, 2.0])
+def test_command_rate_counts_sim_time(ros, rate):
+    """Under use_sim_time CommandPublisher sends pub_hz commands per s of sim time."""
+    from golem_upper_ik.core.robot_clock import RobotClock
+    from golem_upper_ik.core.ros_io import CommandPublisher
+    profile = profile_of('h12')
+    sim = SimClock(ros, rate=rate)
+    sim.start()
+    node = ros.node('controller', sim_time=True)
+    clock = RobotClock(node)
+    clock.wait_for_clock(2.0)
+    recorder = Recorder(ros, COMMAND_TOPIC)
+    publisher = CommandPublisher(node, COMMAND_TOPIC, 200.0, profile, clock=clock)
+    ros.on_close(publisher.stop)
+    count = len(profile.upper_slots)
+    publisher.set(*([np.zeros(count)] * 5))
+    assert wait_for(lambda: recorder.count > 0, 2.0)
+    start, sim_start = recorder.count, sim.now
+    time.sleep(1.0)
+    sent, sim_seconds = recorder.count - start, sim.now - sim_start
+    # 200 per s of sim time: 100 per s of wall time at half speed, 400 at twice
+    assert 0.85 * 200 * sim_seconds < sent < 1.1 * 200 * sim_seconds, (sent, sim_seconds)
+    sim.pause()
+    time.sleep(0.05)
+    paused = recorder.count
+    time.sleep(0.3)
+    assert recorder.count - paused <= 1, 'commands went out with /clock stopped'
+    sim.resume()
+    assert wait_for(lambda: recorder.count > paused + 10, 2.0)
+
+
 def test_tick_lag_tracker():
+    """The tick lag is 0 on time, the delay when late, follows drift and survives the tick wrap."""
     from golem_upper_ik.core.ros_io import TICK_WRAP, TickLagTracker
     tracker = TickLagTracker()
     # a steady stream (any constant offset between the clocks) shows no lag
@@ -105,6 +165,7 @@ def test_tick_lag_tracker():
 
 
 def test_state_subscriber_measures_tick_lag(ros):
+    """A sample delivered 100 ms after its tick shows about 100 ms of lag and staleness."""
     profile = profile_of('h12')
     robot = FakeRobot(ros, profile)
     subscriber = subscribed(ros, profile, robot)
@@ -123,6 +184,7 @@ def test_state_subscriber_measures_tick_lag(ros):
 
 
 def test_state_subscriber_is_a_state_source(ros, models):
+    """The subscriber is a StateSource whose every read is the reader's own copy."""
     from golem_upper_ik.core.robot_model import StateSource
     profile = profile_of('h12')
     model = models('h12')
@@ -166,6 +228,7 @@ def test_state_subscriber_is_a_state_source(ros, models):
 
 
 def test_state_before_the_first_sample_is_at_rest(ros):
+    """Before the first sample the state is all zeros and there is no lag."""
     from golem_upper_ik.core.ros_io import StateSubscriber
     profile = profile_of('h12')
     subscriber = StateSubscriber(ros.node('controller'), profile)
@@ -178,6 +241,7 @@ def test_state_before_the_first_sample_is_at_rest(ros):
 
 
 def test_state_subscriber_shutdown_stops_taking_samples(ros):
+    """After shutdown the subscriber takes no samples and its subscription goes."""
     from rclpy.callback_groups import ReentrantCallbackGroup
     from golem_upper_ik.core.ros_io import StateSubscriber
     profile = profile_of('h12')
@@ -198,7 +262,7 @@ def test_state_subscriber_shutdown_stops_taking_samples(ros):
 
 
 def measure_rate(*flags):
-    '''The receive-side JSON of tools/command_publisher_rate.py at 500 Hz for 3 s'''
+    """Return the receive-side JSON of tools/command_publisher_rate.py at 500 Hz for 3 s."""
     env = dict(os.environ, ROS_DOMAIN_ID=str(TEST_DOMAIN))
     done = subprocess.run(
         [sys.executable, str(RATE_TOOL), '--rate', '500', '--seconds', '3', *flags],
@@ -211,6 +275,7 @@ def measure_rate(*flags):
 
 
 def test_command_publisher_rate():
+    """CommandPublisher holds 500 Hz beside IK-sized load."""
     stats = measure_rate()
     assert stats['mean_hz'] >= 495, stats
     assert stats['p99_period_ms'] <= 4.0, stats
@@ -218,7 +283,7 @@ def test_command_publisher_rate():
 
 
 def test_command_publisher_rate_with_the_gate_thread():
-    '''LowCmdHandler with its follow gate shut: the 1 kHz gate check runs beside the publisher'''
+    """CommandPublisher holds 500 Hz with a shut follow gate's 1 kHz check running too."""
     stats = measure_rate('--gate')
     assert stats['gate_shut'] is True, stats
     assert stats['mean_hz'] >= 495, stats
@@ -228,6 +293,7 @@ def test_command_publisher_rate_with_the_gate_thread():
 
 @pytest.mark.parametrize('robot, mode_machine', [('h12', 6), ('g1', 5)])
 def test_header_is_profile(ros, robot, mode_machine):
+    """Messages carry the profile's mode_machine and mode_pr, CRC 0, and only the upper slots."""
     from golem_upper_ik.core.ros_io import CommandPublisher
     profile = profile_of(robot)
     assert profile.mode_machine == mode_machine
@@ -272,6 +338,7 @@ def test_header_is_profile(ros, robot, mode_machine):
 
 
 def test_command_publisher_refuses_bad_commands(ros):
+    """A non-safety topic, a bad rate, a bad value or a set after stop() is refused."""
     from golem_upper_ik.core.ros_io import CommandPublisher
     profile = profile_of('h12')
     node = ros.node('controller')

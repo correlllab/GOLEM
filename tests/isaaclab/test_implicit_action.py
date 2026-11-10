@@ -1,4 +1,7 @@
-"""Drive regression without Kit; actual physics response is checked by run_robot_interop.sh."""
+"""Check that the Isaac action term hands motor targets and gains to the solver's drives, without Kit.
+
+The physics response itself is checked by run_robot_interop.sh.
+"""
 import importlib.util
 from pathlib import Path
 import sys
@@ -11,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[2] / 'CL_isaaclab_sim'
 sys.path.insert(0, str(ROOT))
 from src.python.control.motor_contract import BODY_ACTION_DIM, ACTION_DIM
 
+# unitree_action.py loaded against stand-in isaaclab modules, so Isaac Lab is not needed.
 managers = ModuleType('isaaclab.managers')
 managers.ActionTerm = object
 managers.ActionTermCfg = object
@@ -23,7 +27,10 @@ with patch.dict(sys.modules, {'isaaclab.managers': managers, 'isaaclab.utils': u
 
 
 class ImplicitActionTests(unittest.TestCase):
+    """Run UnitreeMotorAction against a stand-in asset."""
+
     def test_targets_and_gains_reach_solver_without_explicit_pd_torque(self):
+        """Targets, gains and feed-forward torque reach the drives with no PD torque added, unchanged gains are not rewritten, and mode 0 zeroes them."""
         action = object.__new__(module.UnitreeMotorAction)
         action.num_envs = 1
         action._body_ids = list(range(27))
@@ -41,7 +48,7 @@ class ImplicitActionTests(unittest.TestCase):
         asset.write_joint_stiffness_to_sim.side_effect = lambda value,joint_ids: data.joint_stiffness.__setitem__((slice(None),joint_ids),value)
         asset.write_joint_damping_to_sim.side_effect = lambda value,joint_ids: data.joint_damping.__setitem__((slice(None),joint_ids),value)
         action._asset = asset
-        # Targets q=1,dq=2, feedforward3,kp4,kd5, enabledmode1.
+        # Body fields in order: q 1, dq 2, feed-forward torque 3, kp 4, kd 5, mode 1 (enabled).
         command=torch.zeros(1,ACTION_DIM)
         for field,value in enumerate((1,2,3,4,5,1)): command[:,field*27:(field+1)*27]=value
         action.process_actions(command)

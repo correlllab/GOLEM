@@ -1,5 +1,5 @@
 """
-Where golem_bringup's launch, config and rviz files live, and how they install.
+Test where golem_bringup's launch and rviz files live, and how they install.
 
 `ros2 launch golem_bringup <file>` finds a file by name anywhere under the
 package's share directory and refuses a name it finds twice, so a launch file
@@ -16,15 +16,16 @@ import setuptools
 PACKAGE = Path(__file__).resolve().parents[1]
 
 TOP_LEVEL = {
-    'h12': ('h12_sim', 'h12_sim_mac', 'h12_real_robot', 'h12_real_desktop',
+    'h12': ('h12_sim', 'h12_real_robot', 'h12_real_desktop',
             'h12_safety_grippers', 'lmg_sim', 'lmg_real'),
     'g1': ('g1_sim', 'g1_real_robot'),
 }
 
-INSTALLED = ('launch/**/*.launch.py', 'config/**/*.yaml', 'rviz/**/*.rviz')
+INSTALLED = ('launch/**/*.launch.py', 'rviz/**/*.rviz')
 
 
 def _files(pattern):
+    """Return the package files matching pattern, relative to the package."""
     return sorted(path.relative_to(PACKAGE) for path in PACKAGE.glob(pattern))
 
 
@@ -39,6 +40,7 @@ def _data_files(monkeypatch):
 
 
 def test_launch_names_unique():
+    """No two launch files share a name."""
     launch_files = _files('launch/**/*.launch.py')
     assert launch_files
     names = Counter(path.name for path in launch_files)
@@ -46,6 +48,7 @@ def test_launch_names_unique():
 
 
 def test_top_level_files_exist():
+    """Every top-level launch file is in its robot's directory."""
     for robot, names in TOP_LEVEL.items():
         for name in names:
             path = PACKAGE / 'launch' / robot / f'{name}.launch.py'
@@ -53,6 +56,7 @@ def test_top_level_files_exist():
 
 
 def test_setup_installs_every_launch_file(monkeypatch):
+    """setup.py installs every launch and rviz file once, at its own path."""
     data_files = _data_files(monkeypatch)
     for pattern in INSTALLED:
         files = _files(pattern)

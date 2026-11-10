@@ -1,4 +1,4 @@
-"""Actual rclpy transport; run via run_sensor_transport.sh without a GPU app."""
+"""Check the Isaac sensor bridge over real rclpy transport; run by run_sensor_transport.sh, no GPU."""
 import os
 import time
 import unittest
@@ -12,7 +12,10 @@ from src.python.sensors.ros_sensor_bridge import RosSensorBridge, POINT_DTYPE
 
 @unittest.skipUnless(os.environ.get('GOLEM_TEST_ROS_TRANSPORT') == '1', 'requires bundled ROS library paths')
 class SensorTransportTests(unittest.TestCase):
+    """Run RosSensorBridge with Isaac's bundled ROS libraries."""
+
     def test_failed_node_creation_releases_context(self):
+        """A failed node creation shuts the bridge's ROS context down."""
         from src.python.sensors.ros_sensor_bridge import bootstrap_ros
         rclpy = bootstrap_ros()
         bridge = RosSensorBridge.__new__(RosSensorBridge)
@@ -26,6 +29,7 @@ class SensorTransportTests(unittest.TestCase):
                 bridge.context.shutdown()
 
     def test_real_ros_subscriber_receives_clock_rgb_depth_intrinsics_cloud_and_imu(self):
+        """A ROS subscriber receives the clock, camera, depth, intrinsics, cloud and IMU, beside a Unitree SDK participant."""
         camera = NS(cfg=NS(update_period=.02, spawn=NS(clipping_range=(.1, 100.))), data=NS(
             output={'rgb': np.full((1, 2, 3, 4), 77, dtype=np.uint8),
                     'distance_to_image_plane': np.array([[[[1.], [np.inf], [2.]], [[.5], [0.], [100.]]]])},
@@ -35,7 +39,7 @@ class SensorTransportTests(unittest.TestCase):
         imu = NS(cfg=NS(update_period=.02), data=NS(ang_vel_b=np.array([[.1, .2, .3]]), lin_acc_b=np.array([[0., 0., 9.81]])))
         bridge = RosSensorBridge(NS(sensors={'front_camera': camera, 'lidar': lidar, 'imu': imu}))
         from src.python.dds.common.transport import initialize, ChannelPublisher
-        # RMW must create Cyclone's explicit domain before the SDK participant.
+        # The ROS node above created CycloneDDS's domain first; the SDK participant must come after it.
         initialize(int(os.environ['ROS_DOMAIN_ID']))
         from unitree_sdk2py.idl.std_msgs.msg.dds_ import String_
         sdk_publisher = ChannelPublisher('rt/test_isaac_sensor_transport', String_)
@@ -50,6 +54,7 @@ class SensorTransportTests(unittest.TestCase):
         executor.add_node(node)
         received = {}
         def receive(key):
+            """Return a callback that stores the latest message under `key`."""
             return lambda msg: received.__setitem__(key, msg)
         subscriptions = []
         for key, msg_type, topic in (

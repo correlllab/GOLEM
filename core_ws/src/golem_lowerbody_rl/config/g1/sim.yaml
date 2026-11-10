@@ -1,0 +1,41 @@
+# The G1's leg node in the RoboCasa sim; every key is described in ../example.run.yaml.
+sim: true
+
+startup:
+  # unattended sim runs start the policy once the pre-pose holds and the timing is ready
+  wait_for_confirm: false
+  ramp_seconds: 2.0
+  settle_tolerance: 0.15
+  settle_ticks: 10
+  settle_max_ticks: 400
+  steady_seconds: 1.0
+  tick_rate: [0.9, 1.1]
+  upper_fresh_seconds: 0.5
+
+heartbeat:
+  timeout: 0.5
+
+band:
+  # HOMIE run long under the band crouches with the feet off the floor and stumbles at
+  # the release, so the policy starts on frame_task_server's first /left_ee_pose
+  release: true
+  max_wait: 30.0
+
+commands:
+  timeout: 0.5
+  # HOMIE's trained ranges
+  vx: [-0.8, 1.2]
+  vy: [-0.5, 0.5]
+  yaw: [-0.8, 0.8]
+  accel: [0.5, 0.5, 1.0]
+  height_rate: 0.1
+
+faults:
+  # longer than real.yaml's: gaps count sim time, and a delivery delay on a loaded host
+  # counts as sim time here, more of it at a GOLEM_SIM_RATE above 1
+  max_state_gap: 0.5
+  # the sim's tick is sim time, so tick lag is not a delivery delay there
+  max_latency: null
+
+# the sim IMU has no mounting bias
+imu_trim_deg: [0.0, 0.0, 0.0]

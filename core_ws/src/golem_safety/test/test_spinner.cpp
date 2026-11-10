@@ -29,6 +29,7 @@ private:
   const bool std_exception_;
 };
 
+// Wait up to 5 s for the spinner to report a failure; return whether it did.
 bool wait_failed(const golem_safety::Spinner & spinner)
 {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -38,6 +39,7 @@ bool wait_failed(const golem_safety::Spinner & spinner)
   return spinner.failed();
 }
 
+// Initialise rclcpp around each test.
 class SpinnerTest : public ::testing::Test
 {
 protected:
@@ -47,6 +49,7 @@ protected:
 
 }  // namespace
 
+// A std::exception escaping spin() ends the thread with failed() and its text.
 TEST_F(SpinnerTest, AnExceptionFromSpinIsCaughtAndReported)
 {
   ThrowingExecutor executor(true);
@@ -56,6 +59,7 @@ TEST_F(SpinnerTest, AnExceptionFromSpinIsCaughtAndReported)
   spinner.stop();
 }
 
+// Any other exception escaping spin() is caught and reported too.
 TEST_F(SpinnerTest, ANonStandardExceptionIsCaughtToo)
 {
   ThrowingExecutor executor(false);
@@ -65,6 +69,7 @@ TEST_F(SpinnerTest, ANonStandardExceptionIsCaughtToo)
   spinner.stop();
 }
 
+// stop() ends a normal spin without a failure, and a second stop() does nothing.
 TEST_F(SpinnerTest, StopEndsANormalSpin)
 {
   rclcpp::executors::SingleThreadedExecutor executor;
@@ -75,5 +80,5 @@ TEST_F(SpinnerTest, StopEndsANormalSpin)
   EXPECT_FALSE(spinner.failed());
   spinner.stop();
   EXPECT_FALSE(spinner.failed());
-  spinner.stop();  // a second stop does nothing
+  spinner.stop();
 }

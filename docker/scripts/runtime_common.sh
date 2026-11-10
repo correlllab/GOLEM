@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-# Simulator-side guard also applies when users invoke Compose directly.
+# In-container helpers for the launchers that must never run on the real
+# robots' domain: launch_robocasa.sh and launch_isaac.sh.
+# Sourced, not run. The check runs inside the container, so a direct
+# `docker compose` run that skips the host wrappers is guarded too.
+
+# SAFETY: refuse domain 0, the real robots' command bus.
+# Export ROS_DOMAIN_ID (1 when unset) as a base-10 integer in 1..232; return 1
+# otherwise.
 validate_sim_domain() {
     export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-1}"
     case "$ROS_DOMAIN_ID" in ''|*[!0-9]*) echo 'Invalid simulation ROS_DOMAIN_ID' >&2; return 1;; esac

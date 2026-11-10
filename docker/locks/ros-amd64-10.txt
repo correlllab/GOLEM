@@ -1,5 +1,6 @@
+# Constraints for RosDockerfile: viser. psutil 5.9.8: viser 0.2.23 needs
+# psutil>=5.9.5.
 -c ros-amd64.txt
 huggingface-hub==0.25.2
-mujoco==3.2.3
 numpy==1.26.4
 psutil==5.9.8

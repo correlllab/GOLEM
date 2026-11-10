@@ -1,25 +1,29 @@
 #!/bin/bash
-# Usage: ./launch_robocasa.sh [--headless]
-# Windowed MuJoCo sim by default; pass --headless to disable the passive viewer
-# (auto-applied when no DISPLAY is reachable, e.g. SSH without X11 / CI).
-# The sim publishes rt/lowstate over CycloneDDS plus its camera / lidar / clock
-# (and, for the H1-2, gripper) topics on ROS 2 (ROS_DOMAIN_ID=1 unless overridden).
-# The robot's modules are the authority on that list: h12_sensors.py and
-# magpie_hand_bridge.py, or g1/g1_sensors.py for the G1.
+# The robocasa container's command: build msgs_ws, then run the RoboCasa
+# simulator (golem_robocasa/h12_mujoco.py) of the selected robot.
+#
+# Usage: launch_robocasa.sh [h12_mujoco.py arguments...]
+#   e.g. --headless or --layout 9 --style 9 --seed 42. Without a DISPLAY,
+#   --headless is added (no passive viewer).
+# Environment: ROS_DOMAIN_ID (1..232, 1 when unset), DISPLAY,
+#   GOLEM_PREPARE_ONLY=1 (build msgs_ws and exit 0; docker_stack.sh), and the
+#   simulator's own knobs (docker-compose.yml, docker-compose.g1.yml).
+# The simulator's topics are listed by its sensor modules (h12_sensors.py and
+# magpie_hand_bridge.py, or g1/g1_sensors.py) and CLAUDE.md §8.
+# Exit status: 1 on a refused domain; colcon's status when the msgs_ws build
+# fails; otherwise the simulator's.
 set -e
 source "$(dirname "$0")/runtime_common.sh"
 validate_sim_domain
 
 source /opt/ros/humble/setup.bash
-# livox_ros_driver2 (CustomMsg/CustomPoint) is baked into the robocasa image at
-# /opt/livox_ws by RobocasaDockerfile. Source it so the sensor suites can
-# import livox_ros_driver2.msg.
+# livox_ros_driver2's CustomMsg, baked into the image at /opt/livox_ws.
 source /opt/livox_ws/install/setup.bash
 
-# Run colcon every launch — it's a fast no-op when nothing's changed.
-# build/install/log are bind-mounted from the host at container_cache/msgs_ws/
-# (see docker-compose.yml), so they persist across `docker compose run --rm`
-# cycles. Wipe that host directory if you need a clean rebuild.
+# Build magpie_msgs and custom_ros_messages, the message packages the
+# simulator serves. build/install/log persist on the host in
+# container_cache/msgs_ws, so an unchanged rebuild is a quick no-op; delete
+# that directory for a clean build.
 MSGS_WS=/home/code/msgs_ws
 echo "[launch_robocasa] building $MSGS_WS"
 (cd "$MSGS_WS" && colcon build --symlink-install \
@@ -27,9 +31,7 @@ echo "[launch_robocasa] building $MSGS_WS"
 source "$MSGS_WS/install/setup.bash"
 [ "${GOLEM_PREPARE_ONLY:-0}" != 1 ] || exit 0
 
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-1}"
-
-# Auto-add --headless if no display is reachable (SSH without X11, cloud VM, CI).
+# Run headless when no display is reachable (SSH without X11, CI).
 case " $* " in
     *" --headless "*) ;;
     *)
@@ -40,13 +42,12 @@ case " $* " in
         ;;
 esac
 
-# MUJOCO_GL selects the offscreen renderer for the RGBD cameras. EGL needs no
-# display and can render on the camera worker thread; the passive viewer opens
-# its own GLFW window independently of it.
+# EGL renders the RGBD cameras and the MID-360's rays offscreen on the GPU, needs
+# no display, and can render on the sensors' worker threads; the passive viewer
+# opens its own GLFW window.
 export MUJOCO_GL=egl
 
 cd /home/code/golem_robocasa
-# -u: docker-compose captures stdout via a pipe, which block-buffers python's
-# print()s — the "[h12_mujoco] ROS bridges up" readiness line otherwise sits in
-# the buffer indefinitely on a quiet headless run.
+# -u: Compose reads stdout through a pipe, which would block-buffer print() and
+# hold back the "ROS bridges up" readiness line on a quiet headless run.
 exec python -u h12_mujoco.py "$@"

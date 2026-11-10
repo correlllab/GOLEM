@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Exercise both arms through the real /frame_task server and save measured metrics.
+"""Move both H1-2 wrists forward and back through the real /frame_task server and score the motion.
 
-Contract: FrameTaskServer publishes /{left,right}_ee_pose in pelvis coordinates
-(metres, quaternion XYZW). UpperController binds those poses to the wrist yaw
-links. Unitree LowState slots 13:20 / 20:27 are the left / right arm motors.
-The action server interprets goal.duration as WALL seconds; acceptance below
-uses /clock simulation seconds with an independent wall timeout.
+frame_task_server publishes /{left,right}_ee_pose in the pelvis frame (m, quaternion XYZW)
+for its end-effector frames, the H1-2's wrist yaw links. LowState motor slots 13:20 and 20:27
+are the left and right arm motors. The server reads goal.duration as wall seconds; the phases
+here are timed in /clock sim seconds, under a separate wall timeout. Writes a JSON report and
+exits 0 only when both phases pass.
 """
 import argparse
 import copy
@@ -17,7 +17,11 @@ import time
 
 
 def arm_metrics(start_pose, target_pose, pose, start_joints, joints):
-    """Evaluate measured motion; pose = XYZ followed by quaternion XYZW."""
+    """Return an arm's measured motion from its start towards a target.
+
+    Poses are XYZ (m) followed by a quaternion XYZW; joints are the arm's 7 motor positions
+    (rad). Raises ValueError for non-finite values, a target at the start or a zero quaternion.
+    """
     values = start_pose + target_pose + pose + start_joints + joints
     if not all(math.isfinite(v) for v in values):
         raise ValueError('Nonfinite arm pose or motor state')
@@ -42,6 +46,7 @@ def arm_metrics(start_pose, target_pose, pose, start_joints, joints):
 
 
 def motion_passes(metrics, position_tolerance=.01):
+    """Return whether an arm reached its target, moved most of the way there and moved its joints."""
     return (metrics['position_error_m'] <= position_tolerance
             and metrics['directed_progress_m'] >= .4 * metrics['target_distance_m']
             and metrics['displacement_m'] >= .4 * metrics['target_distance_m']
@@ -50,11 +55,13 @@ def motion_passes(metrics, position_tolerance=.01):
 
 
 def pose_values(pose):
+    """Return a geometry_msgs Pose as [x, y, z, qx, qy, qz, qw]."""
     return [pose.position.x, pose.position.y, pose.position.z,
             pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
 
 
 def main():
+    """Run the forward and return phases on both arms and write the report; return the exit code."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--simulator', choices=('isaac', 'robocasa'), required=True)
@@ -96,12 +103,14 @@ def main():
     subscriptions = []
 
     def clock(msg):
+        """Store the sim time, s; a clock that goes back fails the run."""
         now = msg.clock.sec + msg.clock.nanosec * 1e-9
         if 'clock' in latest and now < latest['clock']:
             raise AssertionError('Simulation clock reversed during arm test')
         latest['clock'] = now
 
     def ee(side, msg):
+        """Store one side's measured end-effector pose, which must be finite and in the pelvis frame."""
         if msg.header.frame_id != 'pelvis':
             raise AssertionError(f'{side} EE frame must be pelvis, got {msg.header.frame_id}')
         if not all(math.isfinite(v) for v in pose_values(msg.pose)):
@@ -110,6 +119,7 @@ def main():
         counts[side] += 1
 
     def state(msg):
+        """Store the 27 body joint positions and when the LowState tick last changed."""
         joints = [float(m.q) for m in msg.motor_state[:27]]
         if len(joints) != 27 or not all(math.isfinite(v) for v in joints):
             raise AssertionError('LowState must contain 27 finite motor positions')
@@ -125,6 +135,7 @@ def main():
         subscriptions.append(node.create_subscription(PoseStamped, f'/{side}_ee_pose', lambda msg, side=side: ee(side, msg), qos_profile_sensor_data))
 
     def spin():
+        """Spin once; raise TimeoutError past the wall deadline."""
         if time.monotonic() >= deadline:
             raise TimeoutError(f'Wall timeout after {args.wall_timeout}s; received {counts}')
         rclpy.spin_once(node, timeout_sec=.02)
@@ -150,12 +161,13 @@ def main():
             goal.frame_names = report['frame_names']
             goal.frame_targets = [targets['left'], targets['right']]
             remaining = max(1., deadline - time.monotonic())
-            goal.duration.sec = math.ceil(remaining)  # Server timeout is wall time.
+            goal.duration.sec = math.ceil(remaining)  # s of wall time: the server's goal timeout
             phase = {'name': phase_name, 'sim_start': latest['clock'], 'action_success': False,
                      'starts': start_poses, 'targets': {s: pose_values(p) for s, p in targets.items()}}
             report['phases'].append(phase)
             feedback_samples = []
             def feedback(message):
+                """Keep the action's per-frame linear (m) and angular (rad) errors."""
                 feedback_samples.append({'linear_m': list(message.feedback.errors_linear),
                                          'angular_rad': list(message.feedback.errors_angular)})
             pending = client.send_goal_async(goal, feedback_callback=feedback)

@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
-"""Writes the robot data files golem_safety and golem_upper_ik read.
+"""
+Write the robot profiles golem_safety and golem_upper_ik read: robots/h12.yaml and robots/g1.yaml.
 
-Outputs, relative to the package: robots/h12.yaml and robots/g1.yaml.
-
-Sources:
-
-  H1-2  tools/h12_joint_limits.py (JOINT_NAMES, URDF_POSITION_LIMITS,
-        URDF_VELOCITY_LIMITS, URDF_TORQUE_LIMITS). The H1-2 limits are this table,
-        which is what the robot runs, not the URDF: shoulder roll is +-0.38 here
-        and +-0.19 in h1_2_magpie.urdf.
-  G1    tools/g1_joint_limits.py (the same lists, and the slot layout and mode_pr).
+Sources: tools/h12_joint_limits.py and tools/g1_joint_limits.py (JOINT_NAMES,
+URDF_POSITION_LIMITS, URDF_VELOCITY_LIMITS, URDF_TORQUE_LIMITS; the G1's also its slot
+layout and mode_pr), and the robot facts in main(). Each file is checked to read back as
+exactly its source before it is written; the script exits non-zero otherwise.
 
 Run it where PyYAML imports (the ros container):
 
@@ -28,12 +24,12 @@ ROBOT_FILE_HEADER = (
 
 
 def number(value):
-    """A float as YAML text that reads back as the same float."""
+    """Return a float as YAML text that reads back as the same float."""
     return repr(float(value))
 
 
 def table_joints(table):
-    """(name, slot, low, high, velocity, effort) per body joint of a joint-limit table."""
+    """Return (name, slot, low, high, velocity, effort) per body joint of a limit table."""
     return [
         (name, slot, limits['low'], limits['high'], velocity, effort)
         for slot, (name, limits, velocity, effort) in enumerate(zip(
@@ -43,18 +39,27 @@ def table_joints(table):
 
 
 def robot_text(source, facts, joints):
+    """Return the profile text of one robot, with a comment on every key."""
     lines = [ROBOT_FILE_HEADER.format(source=source)]
+    lines.append('# The robot name: the file name, and the robot:= launch argument.\n')
     lines.append(f'robot: {facts["robot"]}\n')
-    lines.append(f'mode_machine: {facts["mode_machine"]}  '
-                 '# the value /lowstate reports and every command carries\n')
+    lines.append('# The machine type rt/lowstate reports and every rt/lowcmd carries; '
+                 'golem_safety\n# engages no input on a /lowstate with another value.\n')
+    lines.append(f'mode_machine: {facts["mode_machine"]}\n')
+    lines.append("# LowCmd's mode_pr, which every command carries: 0 is Unitree's "
+                 'pitch/roll ankle mode.\n')
     lines.append(f'mode_pr: {facts["mode_pr"]}\n')
-    lines.append(f'motor_slots: {facts["motor_slots"]}  '
-                 '# length of the LowCmd/LowState motor arrays\n')
+    lines.append('# The length of unitree_hg\'s LowCmd/LowState motor arrays.\n')
+    lines.append(f'motor_slots: {facts["motor_slots"]}\n')
+    lines.append('# The modes a config may name; a config without a mode runs the first.\n')
     lines.append(f'modes: [{", ".join(facts["modes"])}]\n')
-    lines.append(f'lower_slots: {list(facts["lower_slots"])}  # inclusive\n')
-    lines.append(f'upper_slots: {list(facts["upper_slots"])}  # inclusive\n')
-    lines.append('# Body joints in slot order. position is [low, high] in rad, velocity in\n'
-                 '# rad/s, effort in N*m.\n')
+    lines.append('# split_mode\'s lower-body and upper-body slots, [first, last] inclusive; '
+                 'together\n# they cover every body joint once.\n')
+    lines.append(f'lower_slots: {list(facts["lower_slots"])}\n')
+    lines.append(f'upper_slots: {list(facts["upper_slots"])}\n')
+    lines.append('# The body joints in slot order: slot is the motor array index, position '
+                 '[low, high]\n# in rad, velocity in rad/s, effort in N*m. golem_safety '
+                 'derives its limits from them.\n')
     lines.append('joints:\n')
     for name, slot, low, high, velocity, effort in joints:
         lines.append(
@@ -64,7 +69,7 @@ def robot_text(source, facts, joints):
 
 
 def check_round_trip(text, facts, joints):
-    """Fails unless the text reads back as exactly the source values."""
+    """Exit unless the text reads back as exactly the source values."""
     data = yaml.safe_load(text)
     expected_joints = [
         {'name': name, 'slot': slot, 'position': [float(low), float(high)],
@@ -78,6 +83,8 @@ def check_round_trip(text, facts, joints):
 
 
 def main():
+    """Write both robots' profiles."""
+    # The tables sit beside this script, which puts its own directory on sys.path.
     import g1_joint_limits as g1
     import h12_joint_limits as h12
 
@@ -91,7 +98,6 @@ def main():
         'motor_slots': g1.LOWCMD_MOTOR_SLOTS,
         'modes': ['split_mode', 'full_body_mode'],
         'lower_slots': (g1.LEG_SLOTS.start, g1.LEG_SLOTS.stop - 1),
-        # the waist and both arms
         'upper_slots': (g1.WAIST_SLOTS.start, g1.RIGHT_ARM_SLOTS[-1]),
     }
     robots = [

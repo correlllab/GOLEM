@@ -1,5 +1,8 @@
-"""Native ROS client assertions against a synthetic-physics Magpie sidecar."""
-import math
+"""Call the Magpie gripper services and DeliGrasp action over native ROS and check the replies.
+
+The ROS process that check_magpie_sidecar.py starts through the Magpie launcher; it checks a
+position command, refused invalid commands, an approach-only grasp and a no-contact abort.
+"""
 import time
 import rclpy
 from rclpy.action import ActionClient
@@ -13,11 +16,13 @@ states = {}
 subscriptions = [node.create_subscription(GripperState, f'/{side}/gripper/state', lambda msg, s=side: states.__setitem__(s, msg), 10) for side in ('left', 'right')]
 
 def complete(future, timeout=15):
+    """Spin until a future completes and return its result; fail after `timeout` s."""
     rclpy.spin_until_future_complete(node, future, timeout_sec=timeout)
     assert future.done(), 'ROS request timed out'
     return future.result()
 
 def wait_state(target):
+    """Wait up to 5 s for the left gripper's measured position to come within 0.1 of `target`."""
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         rclpy.spin_once(node, timeout_sec=.1)

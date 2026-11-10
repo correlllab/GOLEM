@@ -36,7 +36,6 @@ theme:
     - search.suggest
     - search.highlight
     - content.code.copy
-    - content.code.annotate
   icon:
     repo: fontawesome/brands/github
 
@@ -44,37 +43,22 @@ plugins:
   - search
 
 markdown_extensions:
-  - admonition
-  - attr_list
-  - def_list
-  - footnotes
-  - md_in_html
   - tables
   - toc:
       permalink: true
-  - pymdownx.details
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
-  - pymdownx.snippets
-  - pymdownx.superfences:
-      custom_fences:
-        - name: mermaid
-          class: mermaid
-          format: !!python/name:pymdownx.superfences.fence_code_format
-  - pymdownx.tabbed:
-      alternate_style: true
+  - pymdownx.superfences
 
 nav:
   - Home: index.md
   - Install and run:
       - Setup: SETUP.md
       - Running the stack: RUNNING.md
-      - macOS (Apple Silicon): MACOS.md
       - Navigation demo: NAVIGATION_DEMO.md
   - Debugging and testing:
       - DDS tuning: DDS_TUNING.md
-      - ROS MCP debug: ROS_MCP_DEBUG.md
       - Docker testing: DOCKER_TESTING.md
   - The G1:
       - g1/index.md

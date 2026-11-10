@@ -3,8 +3,8 @@
 The stack talks to the robot (or the sim) over **Unitree DDS** (CycloneDDS).
 `golem_safety` and `golem_upper_ik` read and write those topics as ROS 2
 topics, which run on CycloneDDS too (ROS `/lowcmd` is DDS `rt/lowcmd`, the
-same wire type); `g1_homie` and `dex_3` use the Unitree SDK in
-`unitree_sdk2_python/`. ROS 2 also carries the user-facing topics.
+same wire type), as does `golem_lowerbody_rl`'s leg node; `dex_3` uses the
+Unitree SDK in `unitree_sdk2_python/`. ROS 2 also carries the user-facing topics.
 
 ## Domains
 
@@ -12,11 +12,10 @@ same wire type); `g1_homie` and `dex_3` use the Unitree SDK in
 |---|---|
 | `1` | the sim (the default) |
 | `0` | the real robots. This is their **command bus**. |
-| `97` | the G1 package DDS tests and `tests/robocasa/g1/`, which use fake robot peers or a disposable sim |
-| `194` | the topic-surface probe, `tests/robocasa/surface/run.sh` |
-| `195`-`198` | the G1 acceptance tests in `tests/g1/` (arm, walk, nav, explore) |
 
-`tests/README.md` lists the H1-2 tests' domains.
+The tests' own domains are in their READMEs: `tests/README.md` for the H1-2's
+and the shared ones, `tests/g1/README.md` for the G1 acceptance tests, and
+`core_ws/src/dex_3/README.md` for the Dex3 driver's.
 
 Set the domain in `docker/.env` (copy it from `docker/.env.example`):
 
@@ -36,8 +35,8 @@ topic names, with identical `unitree_hg` types, so two of them on one domain
 command each other's robots. `docker/scripts/wait_for_sim.py` refuses to start
 a bringup against a simulator of the other robot (it reads `mode_machine` from
 `rt/lowstate`: 5 for the G1, 6 for the H1-2, each sim reporting its real
-robot's value), but only in `docker_stack.sh` and the mac stack
-(`GOLEM_WAIT_FOR_SIM=1`) and in `tests/stack`. `docker_run.sh ros` followed by
+robot's value), but only in `docker_stack.sh` (`GOLEM_WAIT_FOR_SIM=1`) and in
+`tests/stack`. `docker_run.sh ros` followed by
 a manual `ros2 launch` is not checked by the wrappers. `golem_safety` checks
 the value as well: it engages no input on another robot's `rt/lowstate` and
 latches its estop on one once engaged. That does not replace one robot per
@@ -109,7 +108,7 @@ The ones that matter first:
 
 ## Reading the robot without the stack
 
-The first session reads the robot from the G1's `ros` container
+The first session reads the robot from the `ros` container
 ([First real session](first-session.md), step 6), which has the SDK and the
 `cyclonedds` tool. Outside the containers, on the laptop itself:
 
@@ -141,23 +140,10 @@ Read-only: it subscribes and never publishes. Once a second it prints
 `mode_machine`, `mode_pr` and `tick`, the IMU roll, pitch and yaw, and each of
 the 29 joints by name with its angle. Stop it with Ctrl+C.
 
-## Dropped samples (UDP buffers)
+## Dropped samples and host shells
 
-Camera images and point clouds arrive in bursts that overflow the kernel's
-default UDP receive buffer, and DDS drops samples silently.
-`core_ws/cyclonedds.xml` asks for a larger buffer, but the host must allow it:
-see [`DDS_TUNING.md`](../DDS_TUNING.md) for the sysctls. To check, watch
-`RcvbufErrors`; it should stop climbing:
-
-```bash
-docker exec golem_ros grep '^Udp:' /proc/net/snmp
-```
-
-## Talking to the sim from the host
-
-Host shells do not read `docker/.env`. Load it first, or the topics are
-invisible:
-
-```bash
-set -a; source docker/.env; set +a
-```
+Camera images and point clouds that arrive in bursts can overflow the kernel's
+UDP receive buffer, and DDS then drops samples silently:
+[`DDS_TUNING.md`](../DDS_TUNING.md) has the sysctls and the check. A host shell
+does not read `docker/.env`, so topics from the sim stay invisible until it is
+loaded (`CLAUDE.md` §10, [Running](../RUNNING.md)).

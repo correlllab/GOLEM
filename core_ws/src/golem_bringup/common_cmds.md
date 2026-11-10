@@ -39,10 +39,14 @@ source ~/GOLEM/core_ws/install/setup.bash
 ros2 launch golem_bringup h12_real_robot.launch.py start_position_verified:=true
 ```
 
-The leg controller logs `waiting for /safety/heartbeat before pre-posing the
-legs`, ramps the legs into the ALMI crouch, then holds and logs
-`legs pre-posed (settled, err=...) — holding`. If it reports `NOT SETTLED` or
-the legs jump, Ctrl-C and do not engage.
+The leg node logs `loaded run config .../config/h12/real.yaml and policy
+.../config/h12/policies/almi.yaml`, then `waiting to pre-pose the legs: no
+/safety/heartbeat yet`, ramps the legs into the ALMI crouch, then holds and logs
+`legs pre-posed (settled, max error ... rad) — holding until the operator
+confirms`. If it reports `NOT SETTLED` or the legs jump, Ctrl-C and do not
+engage. The confirm is accepted only once the node logs `legs pre-posed (...) —
+holding; the policy may start` (every 5 s): 1 s of steady `/lowstate` and the
+arm controller commanding; until then it logs `the policy waits: <reason>`.
 
 Two start-up failures to watch for in this terminal:
 
@@ -57,8 +61,9 @@ Two start-up failures to watch for in this terminal:
   boards, lengthen the attempt. Restart the whole bringup. An attempt that
   outlasts the 3 s and then connects only delays the start: `safety_node`
   publishes no `/safety/heartbeat` before the first estop sample (and a
-  `/lowstate` reporting `mode_machine` 6), so the leg controller keeps logging
-  `waiting for /safety/heartbeat` and the legs stay at zero gain until then.
+  `/lowstate` reporting `mode_machine` 6), so the leg node keeps logging
+  `waiting to pre-pose the legs: no /safety/heartbeat yet` and the legs stay at
+  zero gain until then.
 - **The arms start only once `golem_safety` relays them.** `frame_task_server`
   (`golem_upper_ik`) holds the arms where they are until it sees its commands
   on `/lowcmd`. If that has not happened within 30 s
@@ -80,6 +85,21 @@ sample for 0.5 s), and then writes 50 zero-gain commands and goes silent.
 
 ```bash
 ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
+```
+
+A refused confirm answers `refused: ...` with the reason; the leg node logs
+`policy started` when it takes the legs. To run another H1-2 policy, launch
+with `policy:=fame` or `policy:=walk`. FAME's height command is
+`/lowerbody/height` (`std_msgs/Float32`, in the policy's own units):
+
+```bash
+ros2 topic pub --once /lowerbody/height std_msgs/msg/Float32 "{data: 0.9}"
+```
+
+The IMU trim is live (deg, within ±15; `real.yaml`'s `imu_trim_deg` seeds it):
+
+```bash
+ros2 param set /lowerbody_controller_node imu_trim_pitch_deg -2.0
 ```
 
 **3. Desktop — perception and skills:**
@@ -254,21 +274,19 @@ Optional goal fields (omit / `false` = off):
 | Field | Meaning |
 |---|---|
 | `arm` | `""` / `"none"` / omitted = auto: the grasp skill takes the arm whose gripper is currently closest to the object. Anything other than `left`/`right`/empty aborts the goal. |
-| `top_down` | forwarded verbatim to the inner `/skill/grasp` — same 80°-below-horizontal synthetic grasp, same reachability caveat as the grasp table above. **Also changes the place:** instead of lowering the object onto the target, the graspgenx frame goes to `TOP_DOWN_PLACE_HEIGHT` = 25 cm straight above the place point and releases, so the object is dropped the remaining ~14 cm (the fingers sit ~11 cm below that frame). Off by default: the normal place descent is vertical and grasp-agnostic. |
+| `top_down` | forwarded verbatim to the inner `/skill/grasp` — same 80°-below-horizontal synthetic grasp, same reachability caveat as the grasp table above. Off by default. |
 | `visual_servo` | forwarded verbatim to the inner `/skill/grasp` — same hand-camera alignment and the same abort-on-failure behavior. Off by default. ⚠️ Budget: the servo alone can take 90 s, and pick_place spends its Gemini place-target detect *before* the grasp, so prefer omitting `timeout` (run to completion) when using this. |
 
 The `place_target` is located with Gemini + SAM (not YOLO, whatever
 `target_object` routes to) and its **top face** becomes the drop point, anchored
 in the `camera_init` world frame so pelvis drift during the long grasp doesn't
-move it. The object lands in its pick-time orientation.
+move it.
 
-Sequence: detect place target → grasp → lift 10 cm in 5 cm hops → transit to a
-10 cm standoff above the release pose → vertical descent → release 3 cm above
-rest height → back the fingers out 15 cm along the reverse approach.
-
-With `top_down: true` the release pose changes only in *where* it is — the
-graspgenx frame goes 25 cm above the place point rather than to a computed
-set-down pose. Everything else (lift, standoff, descent, retreat) is unchanged.
+Sequence: detect place target → grasp → lift 10 cm in 5 cm hops → planned carry
+to a top-down release pose (the `top_down` grasp orientation, with the finger
+contact point `PLACE_HEIGHT` = 10 cm above the place target's top face) → open
+the gripper, dropping the object from there. The release pose is the same
+whether or not the grasp used `top_down`.
 
 **Budget:** the last 60 s of `timeout` (`PLACE_RESERVE_SEC`) are reserved for
 carry/place/release, so a slow Gemini detect can't starve the placement half —
@@ -286,13 +304,13 @@ aborts, which reads as a servo failure when it is really budget starvation.
 
 ## Named arm configs (`/named_config`)
 
-Drive the 14 arm joints to a predefined posture (`NAMED_CONFIGS` in
-`golem_upper_ik/golem_upper_ik/robots/h12.py`). `plan: false` (or omitted) servos
+Drive the 14 arm joints to a predefined posture (`named_configs` in
+`golem_upper_ik/config/h12/robot.yaml`). `plan: false` (or omitted) servos
 directly; `plan: true` runs the planner first. `duration` is the goal's time
 limit; `0` uses the controller config's `controller.timeout` (5 s in the H1-2
 configs). `slow_mode: true` moves at a quarter of the speed.
 
-The available configs are the keys of `NAMED_CONFIGS` in that file. The grasp
+The available configs are the keys of `named_configs` in that file. The grasp
 skill itself uses `prep` (arms clear of the head camera) and
 `staging_left` / `staging_right` (pre-approach posture for the grasping arm).
 

@@ -1,0 +1,7 @@
+# The controller config each G1 safety config runs with (golem_upper_ik.pairing). Both
+# safety configs relay the upper-body input the controller writes, and both controller
+# configs hold the waist stiff for HOMIE's walking policy; g1_split's speed limits suit the
+# real robot, sim_split's the sim. Format: example.pairing.yaml.
+pairs:
+  split: g1_split
+  sim_split: sim_split

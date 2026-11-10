@@ -1,0 +1,28 @@
+# Every key of a robot's leg data (config/<robot>/robot.yaml), with its meaning and
+# allowed values; read by golem_lowerbody_rl.profile, which requires every key and refuses
+# any other. This file documents the schema: setup.py does not install it, and
+# test_example_configs.py checks that it loads as a robot.yaml would. The values are the
+# H1-2's.
+
+# the leg joints the node commands, by URDF name, in the order of every policy's action;
+# exactly golem_safety's lower-slot joints (robots/<robot>.yaml lower_slots), each once
+legs:
+  - left_hip_yaw_joint
+  - left_hip_pitch_joint
+  - left_hip_roll_joint
+  - left_knee_joint
+  - left_ankle_pitch_joint
+  - left_ankle_roll_joint
+  - right_hip_yaw_joint
+  - right_hip_pitch_joint
+  - right_hip_roll_joint
+  - right_knee_joint
+  - right_ankle_pitch_joint
+  - right_ankle_roll_joint
+
+# the policies this robot may run, each once: names of config/<robot>/policies/<name>.yaml;
+# the launch file refuses any other
+policies: [almi, walk, fame]
+
+# the policy the bringups run when none is given; one of policies
+default_policy: almi

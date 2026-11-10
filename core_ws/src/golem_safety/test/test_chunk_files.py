@@ -1,9 +1,9 @@
-"""The npz chunks the C++ ChunkLogger writes, read back with numpy.
+"""
+Read back with numpy the npz chunks the C++ ChunkLogger writes.
 
-test_chunk_writer (built by this package's CMake, not installed) logs deterministic
-samples; the formulas below are the ones in test/test_chunk_writer.cpp. The keys, dtypes
-and shapes are the ones the G1's previous safety layer's chunk logger wrote, and combine_chunks.py
-(installed under lib/golem_safety) must still read them.
+test_chunk_writer (built by this package's CMake, not installed) logs deterministic samples;
+the formulas below are the ones in test/test_chunk_writer.cpp. The keys, dtypes and shapes
+are the chunk format that combine_chunks.py (installed under lib/golem_safety) reads.
 """
 import os
 from pathlib import Path
@@ -32,12 +32,14 @@ DTYPES = {
 
 
 def writer_executable():
+    """Return the test_chunk_writer executable CMake passes in the environment."""
     path = os.environ.get('GOLEM_SAFETY_TEST_CHUNK_WRITER')
     assert path and Path(path).is_file(), f'GOLEM_SAFETY_TEST_CHUNK_WRITER is not a file: {path}'
     return path
 
 
 def combine_script():
+    """Return the installed combine_chunks.py."""
     prefix = Path(get_package_prefix('golem_safety'))
     script = prefix / 'lib' / 'golem_safety' / 'combine_chunks.py'
     assert script.is_file(), f'{script} is not installed'
@@ -45,6 +47,7 @@ def combine_script():
 
 
 def write_chunks(directory, per_chunk, samples, motors):
+    """Write `samples` samples of `motors` motors in chunks of `per_chunk` into `directory`."""
     result = subprocess.run(
         [writer_executable(), str(directory), 'chunk_', str(per_chunk), str(samples),
          str(motors)],
@@ -53,15 +56,17 @@ def write_chunks(directory, per_chunk, samples, motors):
 
 
 def expected(first, count, motors):
-    """The samples first .. first+count-1 as the writer makes them, one array per key."""
+    """Return samples first .. first+count-1 as the writer makes them, one array per key."""
     k = np.arange(first, first + count, dtype=np.int64)[:, None]
     i = np.arange(motors, dtype=np.int64)[None, :]
     k1 = np.arange(first, first + count, dtype=np.float64)
 
     def pair(a, b):
+        """Stack a and b on a new last axis of 2."""
         return np.stack([a, b], axis=-1)
 
     def imu(*columns):
+        """Stack the columns, each broadcast over the samples, on a new last axis."""
         return np.stack([np.broadcast_to(c, k1.shape) for c in columns], axis=-1)
 
     return {
@@ -95,6 +100,7 @@ def expected(first, count, motors):
 
 
 def assert_chunk(data, first, count, motors):
+    """Assert that `data` holds samples first .. first+count-1 with every key's dtype and shape."""
     assert list(data.keys()) == list(KEYS)
     want = expected(first, count, motors)
     for key in KEYS:
@@ -106,6 +112,7 @@ def assert_chunk(data, first, count, motors):
 
 @pytest.mark.parametrize('motors', [27, 29, 35])
 def test_chunks_load_in_numpy(tmp_path, motors):
+    """Chunks of 27, 29 and 35 motors load in numpy with the expected keys, dtypes and values."""
     write_chunks(tmp_path, per_chunk=100, samples=250, motors=motors)
     files = sorted(tmp_path.glob('chunk_*.npz'))
     assert [f.name for f in files] == [f'chunk_{n:06d}.npz' for n in range(3)]
@@ -117,6 +124,7 @@ def test_chunks_load_in_numpy(tmp_path, motors):
 
 
 def test_chunks_are_valid_stored_zips(tmp_path):
+    """A chunk is a valid zip of one stored .npy per key, in key order."""
     write_chunks(tmp_path, per_chunk=40, samples=40, motors=29)
     with zipfile.ZipFile(tmp_path / 'chunk_000000.npz') as archive:
         assert archive.testzip() is None
@@ -127,6 +135,7 @@ def test_chunks_are_valid_stored_zips(tmp_path):
 
 
 def test_combine_chunks_concatenates(tmp_path):
+    """combine_chunks.py concatenates a run's chunks into one npz."""
     write_chunks(tmp_path, per_chunk=100, samples=250, motors=29)
     combined = tmp_path / 'out' / 'combined.npz'
     result = subprocess.run(
@@ -140,9 +149,28 @@ def test_combine_chunks_concatenates(tmp_path):
         assert_chunk(data, 0, 250, 29)
 
 
+def test_combine_chunks_takes_the_run_written_last_from_a_directory_of_runs(tmp_path):
+    """Given a directory of runs, as logging.base_dir is, combine_chunks.py merges the newest."""
+    older, newer = tmp_path / '20260101-120000-200', tmp_path / '20260101-120000-100'
+    write_chunks(older, per_chunk=100, samples=150, motors=29)
+    write_chunks(newer, per_chunk=100, samples=250, motors=29)
+    # The names sort the other way round: the run is picked by when it was written.
+    os.utime(older, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(newer, ns=(2_000_000_000, 2_000_000_000))
+    combined = tmp_path / 'combined.npz'
+    result = subprocess.run(
+        [sys.executable, str(combine_script()), '--load', str(tmp_path), '--save', str(combined)],
+        capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+
+    with np.load(combined, allow_pickle=False) as data:
+        assert_chunk(data, 0, 250, 29)
+
+
 def test_combine_chunks_defaults_to_the_golem_safety_directory():
-    # argparse does not print defaults in --help, and running without arguments would
-    # combine whatever a real run left in the default directory.
+    """combine_chunks.py defaults to /tmp/golem_safety and its combined.npz."""
+    # Read from the source: argparse does not print defaults in --help, and running without
+    # arguments would combine whatever a real run left in the default directory.
     source = combine_script().read_text()
     assert "default='/tmp/golem_safety'" in source
     assert "default='/tmp/golem_safety/combined.npz'" in source

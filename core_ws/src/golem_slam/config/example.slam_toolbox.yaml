@@ -1,0 +1,120 @@
+# Every key of slam_toolbox.yaml, slam_toolbox's parameters (async_slam_toolbox_node,
+# slam_toolbox 2.6, Humble), with that file's values. Not installed. Upstream reference:
+# https://github.com/SteveMacenski/slam_toolbox/tree/humble (README, "Configuration").
+slam_toolbox:
+  ros__parameters:
+    # The graph optimizer plugin.
+    solver_plugin: solver_plugins::CeresSolver
+    # Ceres linear solver: SPARSE_NORMAL_CHOLESKY, SPARSE_SCHUR, ITERATIVE_SCHUR or CGNR.
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    # Ceres preconditioner: JACOBI, IDENTITY (none) or SCHUR_JACOBI.
+    ceres_preconditioner: SCHUR_JACOBI
+    # Ceres trust region strategy: LEVENBERG_MARQUARDT or DOGLEG.
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    # Ceres dogleg type, with DOGLEG: TRADITIONAL_DOGLEG or SUBSPACE_DOGLEG.
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    # Ceres robust loss: None, HuberLoss or CauchyLoss.
+    ceres_loss_function: None
+
+    # The odometry frame map -> odom is published to; navigation_launch.py sets odom.
+    odom_frame: odom
+    # The map frame it publishes.
+    map_frame: map
+    # The robot's base frame; navigation_launch.py sets base_footprint, which must be
+    # level and on the floor because its height and tilt go into map -> odom.
+    base_frame: base_footprint
+    # sensor_msgs/LaserScan input; navigation_launch.py sets /converted_scan.
+    scan_topic: /scan
+    # true: offer the map saver services.
+    use_map_saver: true
+    # mapping or localization (against a saved map).
+    mode: mapping
+
+    # true: log at debug level.
+    debug_logging: false
+    # Process every n-th scan: >= 1.
+    throttle_scans: 1
+    # s between map -> odom publications; 0 publishes none.
+    transform_publish_period: 0.02
+    # s between occupancy grid (/map) updates.
+    map_update_interval: 5.0
+    # m, edge of one /map cell.
+    resolution: 0.05
+    # m, the range band of the beams drawn into /map.
+    min_laser_range: 0.0
+    max_laser_range: 20.0
+    # s, least time between two processed scans.
+    minimum_time_interval: 0.5
+    # s, how long a TF lookup waits.
+    transform_timeout: 0.2
+    # s of TF history kept.
+    tf_buffer_duration: 30.
+    # bytes, the stack size of the thread that serialises maps; large maps need more.
+    stack_size_to_use: 40000000
+    # true: allow editing the pose graph from RViz (keeps every scan in memory).
+    enable_interactive_mode: true
+
+    # true: refine each odometry pose by matching the scan.
+    use_scan_matching: true
+    # true: measure scan distances from each scan's barycentre, not its pose.
+    use_scan_barycenter: true
+    # m the robot must travel before a new scan is processed.
+    minimum_travel_distance: 0.5
+    # rad the robot must turn before a new scan is processed.
+    minimum_travel_heading: 0.5
+    # Scans kept in the rolling buffer the scan matcher matches against.
+    scan_buffer_size: 10
+    # m, the farthest a buffered scan may be from the newest.
+    scan_buffer_maximum_scan_distance: 10.0
+    # Least fine-match response that links two scans: 0-1.
+    link_match_minimum_response_fine: 0.1
+    # m, the farthest apart two linked scans may be.
+    link_scan_maximum_distance: 1.5
+    # m, how far from the robot loop closures are searched for.
+    loop_search_maximum_distance: 3.0
+    # true: close loops.
+    do_loop_closing: true
+    # Least number of scans in a chain that can close a loop.
+    loop_match_minimum_chain_size: 10
+    # Largest variance a coarse loop match may have.
+    loop_match_maximum_variance_coarse: 3.0
+    # Least coarse-match response that closes a loop: 0-1.
+    loop_match_minimum_response_coarse: 0.35
+    # Least fine-match response that closes a loop: 0-1.
+    loop_match_minimum_response_fine: 0.45
+
+    # m, side of the scan matcher's search window.
+    correlation_search_space_dimension: 0.5
+    # m, cell of the scan matcher's search window.
+    correlation_search_space_resolution: 0.01
+    # m, how far each scan point is smeared in the search window.
+    correlation_search_space_smear_deviation: 0.1
+
+    # m, side of the loop closure search window.
+    loop_search_space_dimension: 8.0
+    # m, cell of the loop closure search window.
+    loop_search_space_resolution: 0.05
+    # m, how far each point is smeared in the loop closure window.
+    loop_search_space_smear_deviation: 0.03
+
+    # Weight of a match's distance from the odometry pose.
+    distance_variance_penalty: 0.5
+    # Weight of a match's angle from the odometry pose.
+    angle_variance_penalty: 1.0
+
+    # rad, the angle range of the fine search.
+    fine_search_angle_offset: 0.00349
+    # rad, the angle range of the coarse search.
+    coarse_search_angle_offset: 0.349
+    # rad, the angle step of the coarse search.
+    coarse_angle_resolution: 0.0349
+    # Floor on the angle penalty: 0-1.
+    minimum_angle_penalty: 0.9
+    # Floor on the distance penalty: 0-1.
+    minimum_distance_penalty: 0.5
+    # true: widen the search window when no match is good enough.
+    use_response_expansion: true
+    # Beams that must cross a cell before it counts as free or occupied in /map.
+    min_pass_through: 2
+    # Fraction of crossing beams that must end in a cell for it to be occupied: 0-1.
+    occupancy_threshold: 0.1

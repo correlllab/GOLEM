@@ -1,7 +1,8 @@
 # The Unitree G1 in GOLEM
 
 GOLEM runs a second robot beside the H1-2: the Correll Lab's Unitree G1
-(29 DoF, two Dex3-1 hands). Its ROS 2 packages are `core_ws/src/g1_homie` and `dex_3`. Navigation
+(29 DoF, two Dex3-1 hands). Its own ROS 2 package is `core_ws/src/dex_3`, the Dex3-1 hands; its
+legs run HOMIE's walking policy in the shared `golem_lowerbody_rl`, and navigation
 and frontier exploration use the shared `golem_slam` and `golem_skills`; its
 models (Unitree's URDFs, MJCFs and meshes, and a sphere-packed self-collision
 model) are in `CL_Assets/g1`, installed for ROS by `golem_ros2_models` with the
@@ -11,9 +12,6 @@ the real robot, which speaks the same Unitree DDS interface.
 
 On the real G1 every node runs in Docker on a laptop wired to the robot.
 Nothing is installed on, or run from, the robot's own computers.
-
-The G1 packages, sim, tests and these pages come from
-[correlllab/G1_GOLEM](https://github.com/correlllab/G1_GOLEM).
 
 ## What works today
 
@@ -42,8 +40,7 @@ sim it waits for. Every `ros` container mounts and builds both robots' packages
 and uses `core_ws/cyclonedds.xml` directly, so `docker_run.sh ros` takes no
 `--g1` or `--h12` flag. `CLAUDE.md` §3 has the details.
 
-- x86 Linux with an NVIDIA GPU only: the Mac wrappers and the Isaac simulator
-  refuse the G1.
+- RoboCasa only: the Isaac simulator refuses the G1.
 - Both robots use the same images (`docker/scripts/docker_build.sh robocasa ros`).
 - The robots share container names (`golem_ros`, `golem_sim_robocasa`), node
   names and DDS topics. Run one robot at a time on a host, and never two robot
@@ -59,6 +56,7 @@ tests/g1/test_sim_bringup.sh            # arms
 tests/g1/test_sim_bringup.sh --walk     # walking
 tests/g1/test_sim_nav.sh                # Nav2 walks the G1 to a goal
 tests/g1/test_sim_explore.sh            # frontier exploration of the kitchen
+tests/sim/test_sim_stack.sh --g1        # stand, walk to a goal, arm moves and SLAM in one run
 ```
 
 A passing test ends with `PASSED: <n>/<n> checks` and exits 0.
@@ -97,12 +95,12 @@ ros2 service call /left/hand/open std_srvs/srv/Trigger
 
 **What to expect:** the robot starts hanging from the sim's elastic band with
 every motor off, as the real G1 starts in Unitree's debug mode. The arms move
-to `home` once the stack is up. HOMIE's walking node, which the sim bringup
-always starts, moves the legs to its default pose, starts its policy and
+to `home` once the stack is up. The leg node (`golem_lowerbody_rl`, running
+HOMIE), which the sim bringup always starts, moves the legs to its default pose, starts its policy and
 releases the band (`elastic band released` in the bringup's log); from then on
 it keeps the robot standing. The goals then move the arms to a T-pose, and the
-left hand closes and opens. The named postures are `NAMED_CONFIGS` in
-`core_ws/src/golem_upper_ik/golem_upper_ik/robots/g1.py`.
+left hand closes and opens. The named postures are `named_configs` in
+`core_ws/src/golem_upper_ik/config/g1/robot.yaml`.
 
 - Start the sim first. If you restart the sim, restart the `ros` container
   too, because sim time starts again at 0.
@@ -138,6 +136,7 @@ left hand closes and opens. The named postures are `NAMED_CONFIGS` in
 
 ## Licence
 
-The G1 packages (`dex_3`, `g1_homie`) are MIT. HOMIE's walking policy in
-`core_ws/src/g1_homie/policy/` is for non-commercial use only (CC BY-NC
+The packages the G1 runs (`dex_3`, `golem_lowerbody_rl` and the other shared
+`golem_*` packages) are MIT. HOMIE's walking policy in
+`core_ws/src/golem_lowerbody_rl/policies/homie/` is for non-commercial use only (CC BY-NC
 4.0 by its `LICENSE`; treat it as CC BY-NC-SA 4.0); see its `README.md`.

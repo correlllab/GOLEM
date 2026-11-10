@@ -1,20 +1,14 @@
-# Docker smoke tests: Ubuntu NVIDIA and Apple-Silicon Mac
+# Docker smoke tests
 
 The host wrappers are the supported entry points. They load `docker/.env`,
 validate domains and source mounts, and create cache directories. Commands
 below run from the GOLEM checkout. Do not run two simulators on the same DDS
 domain at once. Keep domain 0 reserved for the real robot.
 
-## Before copying to another machine
-
-The Isaac DDS fix includes an edit in
-`CL_isaaclab_sim/src/python/dds/common/dds_master.py`. A superproject commit alone
-does not include that file. Commit/push the simulator change in its own repo,
-then update GOLEM's submodule pin before testing a fresh clone. No dependency
-submodule pins, including Livox, need to change for these Docker fixes.
+## Before you start
 
 Initialize submodules and Git LFS assets as described in [SETUP.md](SETUP.md).
-Copy `docker/.env.example` to `docker/.env` if it does not exist. Linux's full
+Copy `docker/.env.example` to `docker/.env` if it does not exist. The full
 model-server bringup also needs the documented weights and API key. Optional
 mount roots (quote paths with spaces):
 
@@ -24,11 +18,9 @@ GOLEM_CACHE_DIR=/absolute/path/to/container_cache
 ROS_DOMAIN_ID=7
 ```
 
-Set those in `.env` or export them. Shell exports win. On Mac, the host asset
-path must be shared into the Colima VM. Build/install caches remain in Docker
-named volumes on the VM; `GOLEM_CACHE_DIR` does not relocate those volumes.
+Set those in `.env` or export them. Shell exports win.
 
-## Ubuntu on Intel/AMD with NVIDIA
+## RoboCasa and ROS
 
 Install Docker Compose v2+ and NVIDIA Container Toolkit first.
 
@@ -75,38 +67,7 @@ Stop this single-service simulator before trying `docker_stack.sh up isaac
 Docker change does not add missing clock/lidar/IMU functionality or establish
 full navigation/skills parity.
 
-## MacBook Air (Apple Silicon): RoboCasa + ROS only
-
-Use native arm64 Colima with Docker Compose; see [MACOS.md](MACOS.md) for setup.
-Start with cameras off and no GUI to reduce CPU/memory pressure:
-
-```bash
-docker/mac/scripts/docker_build_mac.sh --pull
-GOLEM_CAMERAS=0 docker/mac/scripts/docker_stack_mac.sh up robocasa
-
-docker/mac/scripts/docker_stack_mac.sh logs robocasa
-docker exec golem_ros bash -lc 'source /opt/core_ws/install/setup.bash; ros2 node list'
-docker exec golem_ros bash -lc 'source /opt/core_ws/install/setup.bash; ros2 topic hz /clock'
-```
-
-Expect the same readiness message, an advancing `/clock`, and the minimal Mac
-controller nodes. The VM uses software rendering and FastDDS; there should be
-no NVIDIA runtime or host X11 mount requirement. Isaac is intentionally rejected.
-
-For the optional browser viewer:
-
-```bash
-GOLEM_CAMERAS=0 GOLEM_DISPLAY=vnc docker/mac/scripts/docker_stack_mac.sh restart robocasa
-docker/mac/scripts/mac_vnc_tunnel.sh --open
-```
-
-Then test `GOLEM_RVIZ=vnc` and cameras enabled if resources permit. Finish with:
-
-```bash
-docker/mac/scripts/docker_stack_mac.sh stop robocasa
-```
-
-## Mount and restart checks (both platforms)
+## Mount and restart checks
 
 - Set custom asset/cache paths, including one with spaces. Launch and check
   `docker inspect golem_sim_robocasa --format '{{json .Mounts}}'`.
@@ -127,6 +88,6 @@ python3 -m unittest discover -s tests/docker -v
 
 These exercise wrapper behavior with a recording Docker substitute and render
 real Compose configuration without starting containers. They cover mount roots,
-missing sources, domain checks, build flags, environment precedence, restart
-behavior, and the Mac configuration. They do not establish GPU/GUI runtime,
-image build success, controller stability, or performance on a MacBook Air.
+missing sources, domain checks, build flags, environment precedence and restart
+behavior. They do not establish GPU/GUI runtime, image build success,
+controller stability, or performance.

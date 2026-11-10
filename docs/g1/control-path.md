@@ -10,23 +10,27 @@ YAML limits and timings differ.
 ```text
 frame_task_server (arm IK) -- rt/safety/lowcmd_upper_in --+
                                                           +--> safety_node --> rt/lowcmd  (all 29 motors)
-locomotion_node (HOMIE)   -- rt/safety/lowcmd_lower_in --+
+lowerbody_controller_node -- rt/safety/lowcmd_lower_in --+
+  (HOMIE)
 dex3_hands ------------------ rt/dex3/{left,right}/cmd ---------------------> hands (no safety layer)
 everything reads <---------- rt/lowstate, rt/dex3/{left,right}/state
 ```
 
 - **The safety layer** (`golem_safety`, split mode) writes every body motor on
   `rt/lowcmd`: the waist and arms from the arm controller's input, the legs
-  from the walking node's. From boot it writes zero gains on every motor, and
+  from the leg node's. From boot it writes zero gains on every motor, and
   each input's slots carry its commands from that input's first command on
   ([Safety layer](safety.md), Start-up).
 - **Arms.** The arm controller (`golem_upper_ik`) solves IK at
   `frequency.ctrl_hz` and streams commands at `frequency.pub_hz`. The safety
   layer relays the newest one at its `control.publish_hz`.
-- **Legs.** The walking node (`g1_homie`) waits for the safety layer's
-  heartbeat, moves the legs to HOMIE's default pose over 2 s, then runs HOMIE's
-  policy at 50 Hz on `/cmd_vel`; on the real robot it holds the default pose
-  until the operator calls `/lowerbody/confirm_engage`. The sim bringup always
+- **Legs.** The leg node (`golem_lowerbody_rl`'s `lowerbody_controller_node`,
+  policy `homie`) waits for the safety layer's heartbeat and an upright
+  `rt/lowstate`, moves the legs to HOMIE's default pose over 2 s, then runs
+  HOMIE's policy at 50 Hz of `rt/lowstate`'s tick on `/cmd_vel` once
+  `rt/lowstate` is steady and the arm controller commands; on the real robot
+  it holds the default pose until the operator calls
+  `/lowerbody/confirm_engage`. The sim bringup always
   starts it, the real bringup only with `start_position_verified:=true`; without
   it the leg motors stay off.
 - **Hands.** `dex3_hands` writes the hand topics directly, at its `rate_hz`
@@ -34,8 +38,8 @@ everything reads <---------- rt/lowstate, rt/dex3/{left,right}/state
 
 The motor commands are DDS topics in Unitree's IDL. `golem_safety` and
 `golem_upper_ik` read and write them as ROS 2 topics (ROS `/lowcmd` is DDS
-`rt/lowcmd`, the same wire type), while `locomotion_node` and `dex3_hands` use
-the Unitree SDK. The user-facing interface is ROS 2 too: `/cmd_vel`, the
+`rt/lowcmd`, the same wire type), and so does `lowerbody_controller_node`,
+while `dex3_hands` uses the Unitree SDK. The user-facing interface is ROS 2 too: `/cmd_vel`, the
 `/frame_task` and `/named_config` actions, the hand services,
 `/lowerbody/confirm_engage`, `/joint_states`, sensors.
 
@@ -51,7 +55,7 @@ the Unitree SDK. The user-facing interface is ROS 2 too: `/cmd_vel`, the
   plays the robot in debug mode. Every motor is off (zero torque) until the
   first `rt/lowcmd` with a valid CRC, `mode_machine` 5 and `mode_pr` 0; from
   then on `rt/lowcmd` drives every body motor. Meanwhile an elastic band on the
-  torso holds the robot up, as the H1-2 sim's does: the walking node releases it
+  torso holds the robot up, as the H1-2 sim's does: the leg node releases it
   through `/elastic_band/toggle` once its policy runs and the arm controller has
   finished its start-up moves, or `band.max_wait` after the policy started
   (SPACE in the viewer toggles it by hand).
@@ -67,15 +71,15 @@ instead of copying the numbers.
 |---|---|---|
 | DDS domain | 0 | 1 or another test domain; the sim refuses 0 |
 | Before the bringup | Unitree's debug mode, entered by the operator (the procedure is not written yet) | every motor off |
-| Who holds the robot until the legs stand | a gantry | the elastic band, until the walking node releases it |
+| Who holds the robot until the legs stand | a gantry | the elastic band, until the leg node releases it |
 | Motor torques | the robot's motor drivers | PD law every physics step, in sim time |
 | Silence on `rt/lowcmd` | not measured | `GOLEM_CMD_TIMEOUT` turns the motors off |
-| Time | wall clock | sim time, paced to at most real time; the safety layer's stale times still run on the host's clock |
-| Safety timings | `golem_safety/config/g1/split.yaml` | `sim_split.yaml`: looser, since the sim can run slower than real time |
+| Time | robot time on the boot and steady clocks | robot time is sim time under `use_sim_time`, paced to `GOLEM_SIM_RATE` (default real time); the heartbeat and its watchdogs stay on the steady clock |
+| Safety timings | `golem_safety/config/g1/split.yaml` | `sim_split.yaml`: longer stale times, in sim time, where the controllers' wall-time delays on a loaded host add up; estop limits relaxed for the sim's contact spikes |
 | Arm speed limits (`controller.v_lim`, `w_lim`, `dq_lim`) | `golem_upper_ik/config/g1/g1_split.yaml`: deliberately low for the first sessions | `sim_split.yaml` |
-| The walking node | `g1_homie/config/g1.yaml`: starts only with `start_position_verified:=true`, holds the default pose until `/lowerbody/confirm_engage` | `sim.yaml`: always starts, no confirm, releases the band |
-| Walking speed limits (`commands.vx`, `vy`, `yaw`) | `g1.yaml`: inside the trained ranges | `sim.yaml`: the trained ranges |
-| Navigation | on by default (`use_nav`): the MID-360 driver, `g1_fastlio.yaml`; not yet run | on by default (`use_nav`) |
+| The leg node | `golem_lowerbody_rl/config/g1/real.yaml`: starts only with `start_position_verified:=true`, holds the default pose until `/lowerbody/confirm_engage` | `sim.yaml`: always starts, no confirm, releases the band |
+| Walking speed limits (`commands.vx`, `vy`, `yaw`) | `real.yaml`: inside the trained ranges | `sim.yaml`: the trained ranges |
+| Navigation | on by default (`use_nav`): the MID-360 driver, `golem_slam`'s `config/g1/fastlio.yaml`; not yet run | on by default (`use_nav`): `config/g1/fastlio_sim.yaml` |
 | Status | nothing has run on the robot yet | arm, walk, nav and exploration tests pass |
 
 ## Not known yet

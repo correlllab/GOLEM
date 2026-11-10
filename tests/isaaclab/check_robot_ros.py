@@ -1,7 +1,10 @@
-"""Native ROS motor/sensor interoperability check against a live Isaac simulation.
+"""Drive a live Isaac H1-2 from native ROS and check its motion, hands and sensor topics.
 
-Invoked by run_robot_interop.sh on an isolated nonzero DDS domain. No DDS
-participant is created by the SDK: it only supplies the command CRC encoding.
+Run by run_robot_interop.sh on an isolated nonzero DDS domain. Moves the left wrist yaw
+(motor 19) and one hand out and back through /lowcmd and the hand's own interface, then
+waits for every sensor topic. ISAAC_HAND_TYPE (magpie|inspire) picks the hand check and
+ROBOT_INTEROP_TIMEOUT (s, default 300) bounds the run. The Unitree SDK only computes the
+command CRC here; it creates no DDS participant.
 """
 import math
 import os
@@ -18,7 +21,10 @@ from unitree_sdk2py.utils.crc import CRC
 
 
 class InspireCheck:
+    """Move one Inspire finger through /inspire/cmd and check /inspire/state follows."""
+
     def __init__(self, node):
+        """Create the Inspire command publisher and state subscription on `node`."""
         from unitree_go.msg import MotorCmd, MotorCmds, MotorStates
         self.MotorCmd, self.MotorCmds = MotorCmd, MotorCmds
         self.publisher = node.create_publisher(MotorCmds, '/inspire/cmd', 10)
@@ -27,25 +33,31 @@ class InspireCheck:
         self.subscription = node.create_subscription(MotorStates, '/inspire/state', self.receive, qos_profile_sensor_data)
 
     def receive(self, msg):
+        """Store a hand state, which must hold 12 finite positions."""
         assert len(msg.states) == 12 and all(math.isfinite(m.q) for m in msg.states), 'invalid Inspire state'
         self.state = msg
 
     def ready(self):
+        """Return whether a hand state has arrived."""
         return self.state is not None
 
     @property
     def actual(self):
+        """Return the checked finger's measured position."""
         return float(self.state.states[3].q)
 
     def start(self):
+        """Remember the hand's start and target the checked finger."""
         self.initial = [float(m.q) for m in self.state.states]
         self.positions = self.initial.copy()
         self.positions[3] = self.target = .95
 
     def tick(self):
+        """Send the current hand targets."""
         self.send(self.positions)
 
     def send(self, positions):
+        """Publish position commands for all 12 hand motors."""
         msg = self.MotorCmds()
         for position in positions:
             motor = self.MotorCmd()
@@ -54,6 +66,7 @@ class InspireCheck:
         self.publisher.publish(msg)
 
     def verify(self, stage):
+        """Assert the finger reached its target after moving; stage 0 is the move, 1 the return."""
         assert abs(self.actual - self.target) < .03, f'Inspire target={self.target}, actual={self.actual}'
         if stage == 0:
             assert self.initial[3] - self.actual > .015, 'Inspire flex did not move'
@@ -62,18 +75,24 @@ class InspireCheck:
             assert self.actual - self.first_actual > .015, 'Inspire reverse did not move'
 
     def reverse(self):
+        """Target the finger back the other way."""
         self.positions[3] = self.target = 1.
 
     def action_check(self):
+        """Return True: the Inspire hand has no action to check."""
         return True
 
     def restore(self):
+        """Send the hand back to its start."""
         if self.initial is not None:
             self.send(self.initial)
 
 
 class MagpieCheck:
+    """Move the right Magpie gripper through its services and DeliGrasp action and check its state follows."""
+
     def __init__(self, node):
+        """Create the gripper state subscriptions, service clients and action clients on `node`."""
         from rclpy.action import ActionClient
         from magpie_msgs.msg import GripperState
         from magpie_msgs.srv import SetGripperPosition, SetGripperForce
@@ -96,36 +115,43 @@ class MagpieCheck:
         self.left_action = ActionClient(node, DeliGrasp, '/left/gripper/deligrasp')
 
     def receive(self, side, msg):
+        """Store one gripper's finite state and count the right gripper's samples."""
         assert all(math.isfinite(x) for x in [msg.position, msg.force] + list(msg.finger_positions)), 'invalid Magpie state'
         self.state[side] = msg
         if side == 'right':
             self.state_sequence += 1
 
     def ready(self):
+        """Return whether both Magpie nodes, states, services and actions are up."""
         return {'isaac_magpie_left', 'isaac_magpie_right'} <= set(self.node.get_node_names()) and len(self.state) == 2 and all(c.service_is_ready() for c in self.clients.values()) and self.action.server_is_ready() and self.left_action.server_is_ready()
 
     @property
     def actual(self):
+        """Return the right gripper's measured aperture, mm."""
         return float(self.state['right'].position)
 
     def request_position(self, position):
+        """Ask the right gripper for an aperture, mm, at speed 0.3."""
         request = self.Position.Request()
         request.position, request.speed = float(position), .3
         self.pending.append(self.clients[('right', 'set_position')].call_async(request))
 
     def start(self):
+        """Remember the start aperture and ask for one 10 mm away from it."""
         self.initial = self.actual
         self.target = self.initial - 10. if self.initial > 15. else self.initial + 10.
         self.direction = 1. if self.target > self.initial else -1.
         self.request_position(self.target)
 
     def tick(self):
+        """Assert every answered set_position request succeeded."""
         for future in self.pending:
             if future.done():
                 response = future.result()
                 assert response.success, f'Magpie set_position rejected: {response.message}'
 
     def verify(self, stage):
+        """Assert the gripper reached its target after moving; stage 0 is the move, 1 the return."""
         assert self.pending[-1].done(), 'Magpie service response missing'
         self.tick()
         assert abs(self.actual - self.target) < 3., f'Magpie target={self.target}mm actual={self.actual}mm'
@@ -136,10 +162,12 @@ class MagpieCheck:
             assert -self.direction * (self.actual - self.first_actual) > 3., 'Magpie reverse did not move physical fingers'
 
     def reverse(self):
+        """Ask for the start aperture again."""
         self.target = self.initial
         self.request_position(self.target)
 
     def action_check(self):
+        """Advance an approach-only DeliGrasp 5 mm closed; return True once a later state confirms it."""
         if self.goal_future is None:
             goal = self.DeliGrasp.Goal()
             self.action_target = max(0., self.initial - 5.)
@@ -161,19 +189,22 @@ class MagpieCheck:
         result = self.result_future.result()
         assert result.status == 4 and result.result.success, f'DeliGrasp failed: {result.result.message}'
         assert abs(result.result.final_aperture - self.action_target) < 3., 'DeliGrasp result aperture missed target'
-        # Action results and state topics arrive independently. Require a new
-        # measured state after the result, bounded by the checker's global deadline.
+        # The result and the state topic arrive independently, so a state measured after the result
+        # must confirm the aperture; the run's deadline bounds the wait.
         if self.result_state_sequence is None:
             self.result_state_sequence = self.state_sequence
         return self.state_sequence > self.result_state_sequence and abs(self.actual - self.action_target) < 3.
 
     def restore(self):
+        """Ask for the start aperture."""
         if self.initial is not None:
             self.request_position(self.initial)
 
 
 def main():
+    """Run the wrist and hand checks, then wait for every sensor topic; raise on failure or timeout."""
     domain = int(os.environ.get('ROS_DOMAIN_ID', '0'))
+    # SAFETY: never on domain 0, the real robots' command bus.
     if not 1 <= domain <= 232:
         raise RuntimeError('ROS_DOMAIN_ID must be nonzero for simulation testing')
     rclpy.init()
@@ -187,11 +218,12 @@ def main():
     samples = []
 
     def lowstate(msg):
+        """Check a LowState is finite and upright at the task's spawn yaw, and keep it."""
         values = [v for motor in msg.motor_state[:27] for v in (motor.q, motor.dq, motor.tau_est)]
         quat = list(msg.imu_state.quaternion)
         assert all(math.isfinite(x) for x in values + quat), 'nonfinite lowstate'
         assert abs(sum(x*x for x in quat) - 1) < .05, 'invalid quaternion norm'
-        # The base task spawns fixed upright at yaw -90 degrees in WXYZ.
+        # The task spawns the robot upright at yaw -90 degrees; the quaternion is WXYZ.
         expected = (math.sqrt(.5), 0., 0., -math.sqrt(.5))
         assert abs(sum(a*b for a, b in zip(quat, expected))) > .99, f'expected fixture WXYZ yaw -90 quaternion, got {quat}'
         latest['state'] = msg
@@ -200,6 +232,7 @@ def main():
     subscriptions.append(node.create_subscription(LowState, '/lowstate', lowstate, qos_profile_sensor_data))
 
     def sensor(topic, msg):
+        """Check one sensor message is non-empty and finite and mark its topic seen."""
         if isinstance(msg, Image):
             assert msg.width > 0 and msg.height > 0 and len(msg.data) > 0, topic
         elif isinstance(msg, CompressedImage):
@@ -229,6 +262,7 @@ def main():
         subscriptions.append(node.create_subscription(kind, topic, lambda msg, t=topic: sensor(t, msg), qos_profile_sensor_data))
 
     def send(targets=None):
+        """Publish a /lowcmd holding `targets` on the 27 body motors, or every motor off without targets."""
         wire, native = unitree_hg_msg_dds__LowCmd_(), LowCmd()
         wire.mode_pr = native.mode_pr = 0
         wire.mode_machine = native.mode_machine = int(latest['state'].mode_machine) if 'state' in latest else 0
@@ -290,7 +324,7 @@ def main():
                         return
         raise AssertionError(f'timeout: stage={stage}, lowstate_samples={len(samples)}, missing_topics={sorted(set(required)-seen)}')
     finally:
-        # Release motors even when an assertion or transport error aborts the test.
+        # SAFETY: release every motor even when an assertion or a transport error ends the test.
         for _ in range(10):
             send()
             hand.restore()

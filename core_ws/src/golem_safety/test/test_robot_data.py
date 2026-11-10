@@ -1,4 +1,4 @@
-"""The installed robot data files, checked against the tables they were built from."""
+"""Check the installed robot profiles against the joint tables they were generated from."""
 import json
 from pathlib import Path
 
@@ -23,12 +23,14 @@ SCHEMA = {
 
 
 def load_robot(robot):
+    """Return the installed profile of `robot`."""
     share = Path(get_package_share_directory('golem_safety'))
     return yaml.safe_load((share / 'robots' / f'{robot}.yaml').read_text())
 
 
 @pytest.mark.parametrize('robot', sorted(SCHEMA))
 def test_robot_file_has_the_schema_and_robot_facts(robot):
+    """Each profile has exactly the schema's keys, the robot's facts and well-formed joints."""
     data = load_robot(robot)
     expected = dict(SCHEMA[robot])
     joint_count = expected.pop('joints')
@@ -45,15 +47,8 @@ def test_robot_file_has_the_schema_and_robot_facts(robot):
         assert joint['velocity'] > 0 and joint['effort'] > 0, joint['name']
 
 
-def test_g1_profile_has_no_arm_sdk():
-    '''The G1 runs split_mode or full_body_mode, and no slot past the body carries a value'''
-    data = load_robot('g1')
-    assert data['modes'] == ['split_mode', 'full_body_mode']
-    assert set(data) == {'robot', 'mode_machine', 'mode_pr', 'motor_slots', 'modes',
-                         'lower_slots', 'upper_slots', 'joints'}
-
-
 def check_against_table(robot, fixture, joint_count):
+    """Assert that the profile of `robot` holds the fixture table's joints, in slot order."""
     table = json.loads((FIXTURES / fixture).read_text())
     data = load_robot(robot)
 
@@ -72,15 +67,17 @@ def check_against_table(robot, fixture, joint_count):
 
 
 def test_h12_data_matches_todays_table():
+    """The H1-2 profile holds the recorded H1-2 joint table."""
     check_against_table('h12', 'h12_joint_limits.json', 27)
 
 
 def test_g1_data_matches_todays_table():
+    """The G1 profile holds the recorded G1 joint table."""
     check_against_table('g1', 'g1_joint_limits.json', 29)
 
 
 def test_g1_slot_groups_partition_the_body():
-    '''Legs 0-11, waist 12-14, left arm 15-21, right arm 22-28'''
+    """The G1's slots are legs 0-11, waist 12-14, left arm 15-21 and right arm 22-28."""
     names = [joint['name'] for joint in load_robot('g1')['joints']]
     legs, waist, left_arm, right_arm = names[0:12], names[12:15], names[15:22], names[22:29]
     assert all(name.split('_')[1] in ('hip', 'knee', 'ankle') for name in legs)
@@ -95,6 +92,7 @@ def test_g1_slot_groups_partition_the_body():
 
 
 def test_h12_shoulder_roll_keeps_the_table_limits_not_the_urdfs():
+    """The H1-2's shoulder roll limits are its joint table's, not its URDF's."""
     by_name = {joint['name']: joint for joint in load_robot('h12')['joints']}
     assert by_name['left_shoulder_roll_joint']['position'] == [-0.38, 3.4]
     assert by_name['right_shoulder_roll_joint']['position'] == [-3.4, 0.38]

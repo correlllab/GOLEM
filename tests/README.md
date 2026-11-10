@@ -15,15 +15,17 @@ its `cpu` job as a required branch-protection check to gate merges.
 | `tests/robocasa/surface/` | the topic surface of the RoboCasa sim, per robot, against a golden | `tests/robocasa/surface/README.md` |
 | `tests/stack/` | H1-2 sim + ROS stack integration (arms, locomotion) | `tests/stack/README.md` |
 | `tests/g1/` | the G1 acceptance tests: sim + whole G1 bringup | `tests/g1/README.md` |
+| `tests/sim/` | one closed-loop test of either robot: sim + whole bringup with navigation (standing, walking to a goal, arm moves, SLAM) | `tests/sim/README.md` |
 | `tests/docker/` | the wrappers, compose files, launchers and pins (CPU) | this page |
 
 No test runs on DDS domain 0. The H1-2 tests use the domains shown on this
-page and in `tests/stack/README.md`; the G1 tests and the surface probe use
+page and in `tests/stack/README.md`; the G1 tests, the closed-loop test of
+both robots and the surface probe use
 their own (below).
 
 ## CPU tests
 
-The Isaac suite needs Python 3.11, CPU PyTorch, NumPy, Pillow and CycloneDDS 0.10.2
+The Isaac suite needs Python 3.10, CPU PyTorch, NumPy, Pillow and CycloneDDS 0.10.2
 plus the checked-out Unitree SDK. It does not start Kit or DDS participants.
 See the workflow for the exact dependency setup.
 
@@ -119,6 +121,12 @@ tests/robocasa/g1/run_in_container.sh                         # every test_g1_*.
 tests/robocasa/g1/run_in_container.sh test_g1_sensors.py      # one file
 ```
 
+Each file is a unittest module (its `test_*` functions collected by
+`g1/function_tests.py`), so the H1-2 runner can run the ones that open no Unitree DDS
+channel too, e.g. `tests/robocasa/run_in_container.sh -s /home/code/tests/robocasa/g1 -p
+test_g1_sensor_msgs.py`; `test_g1_band.py`, `test_g1_sim_rate.py` and
+`test_g1_unitree_interface.py` open them and belong in the G1 runner's container.
+
 The acceptance tests start the G1 sim headless with the whole G1 bringup and
 check the sim's own recording of the run. They need the `golem_sim_robocasa`
 and `golem_ros` images and Docker's NVIDIA runtime, run with no network of their
@@ -133,8 +141,24 @@ tests/g1/test_sim_explore.sh                 # frontier exploration
 ```
 
 A passing test ends with `PASSED: <n>/<n> checks` and exits 0. The G1
-packages' own tests run in the G1 `ros` container; `docs/g1/packages.md` says
+packages' own tests run in the `ros` container (it serves both robots); `docs/g1/packages.md` says
 how.
 
 The G1 nav/explore tests use `golem_slam` and require FAST-LIO; `GOLEM_SIM_ODOM=1`
 is refused.
+
+## Both robots: the closed-loop test
+
+`tests/sim/test_sim_stack.sh` runs either robot's whole sim bringup with
+navigation and requires, in one run, the robot standing unsupported after the
+elastic band's release, a Nav2 goal 1.5 m ahead reached by walking,
+`/named_config` `t_pose` then `home` succeeding while it walks, SLAM healthy
+throughout (FAST-LIO's `/Odometry`, `level_odom`'s `odom -> base_footprint`, a
+growing `/map`, `/converted_scan` at rate) and `safety_node` the only
+publisher of `/lowcmd`. It uses domain 199 unless `ROS_DOMAIN_ID` is set and
+shares its containers (`tests/sim/common.sh`) with the G1 tests:
+
+```bash
+tests/sim/test_sim_stack.sh --h12
+tests/sim/test_sim_stack.sh --g1
+```

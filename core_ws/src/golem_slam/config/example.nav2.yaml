@@ -1,0 +1,353 @@
+# Every key of config/<robot>/nav2.yaml, Nav2's parameters (Humble), with the H1-2's
+# values. golem_slam's navigation_launch.py rewrites bt_navigator's
+# default_nav_to_pose_bt_xml and passes the file to nav2_bringup's navigation_launch.py,
+# which rewrites every use_sim_time key to its use_sim_time argument. Not installed.
+# Upstream reference, per server and plugin: https://docs.nav2.org/configuration/index.html
+---
+# Applied to every node of the file.
+/**:
+  ros__parameters:
+    # The robot's frame: level and on the floor (level_odom).
+    robot_base_frame: base_footprint
+    # slam_toolbox's map frame.
+    map_frame: map
+    # level_odom's odometry frame.
+    odom_frame: odom
+    # true on /clock (sims, bag replay); every use_sim_time key is rewritten by the launch.
+    use_sim_time: ${use_sim_time}
+
+controller_server:
+  ros__parameters:
+    use_sim_time: True
+    # Hz, the control loop rate.
+    controller_frequency: 20.0
+    # m/s, rad/s: odometry speeds below these count as zero.
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.001
+    min_theta_velocity_threshold: 0.001
+    # Name of the progress checker below (Humble takes one, not a list).
+    progress_checker_plugin: "progress_checker"
+    # Names of the goal checkers below.
+    goal_checker_plugins: ["goal_checker"]
+    # Names of the controllers below; the behavior tree picks one by name.
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      # m the robot must move within movement_time_allowance, or the goal fails.
+      required_movement_radius: 0.5
+      # s
+      movement_time_allowance: 10.0
+    goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      # m, position tolerance of a reached goal.
+      xy_goal_tolerance: 0.25
+      # rad, heading tolerance of a reached goal.
+      yaw_goal_tolerance: 0.25
+      # true: once inside xy_goal_tolerance, only the heading is still checked.
+      stateful: True
+    FollowPath:
+      plugin: "nav2_mppi_controller::MPPIController"
+      # Omni (vx, vy, wz), DiffDrive (vx, wz) or Ackermann.
+      motion_model: "Omni"
+      # Steps of each sampled trajectory: the horizon is time_steps * model_dt.
+      time_steps: 56
+      # s per step; equal to 1 / controller_frequency.
+      model_dt: 0.05
+      # Trajectories sampled per iteration.
+      batch_size: 2000
+      # Optimisation iterations per control cycle.
+      iteration_count: 1
+      # Selectiveness of the trajectory weighting: lower follows the best samples more.
+      temperature: 0.3
+      # Trade-off between smooth (high) and low-energy (low) control.
+      gamma: 0.015
+      # m/s, the forward speed limit.
+      vx_max: 0.30
+      # m/s, the backward speed limit (negative).
+      vx_min: -0.20
+      # m/s, the sideways speed limit (Omni only).
+      vy_max: 0.20
+      # rad/s, the turning speed limit.
+      wz_max: 0.50
+      # m/s, m/s, rad/s: standard deviation of the sampling noise per axis.
+      vx_std: 0.2
+      vy_std: 0.2
+      wz_std: 0.4
+      # m of the global plan ahead of the robot that the critics see.
+      prune_distance: 1.7
+      # s, how old a transform may be.
+      transform_tolerance: 0.1
+      # s without a command after which the optimiser state resets.
+      reset_period: 1.0
+      # true: draw new sampling noise every cycle.
+      regenerate_noises: false
+      # Failed optimisations in a row before the controller reports failure.
+      retry_attempt_limit: 1
+      # true: publish /trajectories (sampled and optimal trajectories, MarkerArray) and
+      # transformed_global_plan (Path) for RViz.
+      visualize: true
+      TrajectoryVisualizer:
+        # Draw every n-th trajectory of the batch.
+        trajectory_step: 5
+        # Draw every n-th point of a trajectory.
+        time_step: 3
+      # The critics scoring each trajectory; each has a block below.
+      critics: ["ConstraintCritic", "VelocityDeadbandCritic", "ObstaclesCritic",
+                "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic",
+                "PathAngleCritic", "TwirlingCritic"]
+      # Every critic has enabled (bool), cost_power (exponent of its cost, >= 1) and,
+      # except ObstaclesCritic, cost_weight (its weight in the sum).
+      ConstraintCritic:
+        # Penalises trajectories outside the speed limits.
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      VelocityDeadbandCritic:
+        # Penalises speeds inside the deadband.
+        enabled: true
+        cost_power: 1
+        cost_weight: 35.0
+        # m/s, m/s, rad/s: the [vx, vy, wz] magnitudes below which a command is penalised.
+        deadband_velocities: [0.07, 0.10, 0.05]
+      ObstaclesCritic:
+        # Penalises trajectories near or into obstacles in the local costmap.
+        enabled: true
+        cost_power: 1
+        # Weight of the distance to obstacles away from collision.
+        repulsion_weight: 1.5
+        # Weight of the cost inside collision_margin_distance.
+        critical_weight: 20.0
+        # true: check the footprint, not just the robot's centre.
+        consider_footprint: true
+        # Cost of a trajectory in collision.
+        collision_cost: 10000.0
+        # m from an obstacle where critical_weight takes over.
+        collision_margin_distance: 0.10
+        # m from the goal inside which the repulsion is turned off.
+        near_goal_distance: 0.5
+        # m, equal to the costmaps' inflation_radius.
+        inflation_radius: 0.4
+        # Equal to the costmaps' inflation layer cost_scaling_factor.
+        cost_scaling_factor: 3.0
+      GoalCritic:
+        # Pulls trajectories toward the goal position.
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        # m from the goal inside which it applies.
+        threshold_to_consider: 1.4
+      GoalAngleCritic:
+        # Pulls the heading toward the goal's heading.
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        # m from the goal inside which it applies.
+        threshold_to_consider: 0.5
+      PathAlignCritic:
+        # Keeps trajectories on the path.
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0
+        # Fraction of the path blocked above which it stops applying (to allow detours).
+        max_path_occupancy_ratio: 0.05
+        # Compare every n-th trajectory point.
+        trajectory_point_step: 4
+        # m from the goal inside which it stops applying.
+        threshold_to_consider: 0.5
+        # Path points the trajectories must have progressed along before it applies.
+        offset_from_furthest: 20
+        # true: also align with the path's orientations.
+        use_path_orientations: false
+      PathFollowCritic:
+        # Pulls trajectories along the path toward its far end.
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        # Path points beyond the furthest reached one it aims at.
+        offset_from_furthest: 5
+        # m from the goal inside which it stops applying.
+        threshold_to_consider: 1.4
+      PathAngleCritic:
+        # Turns the robot to face along the path when it points well off it.
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        # Path points beyond the furthest reached one it looks at.
+        offset_from_furthest: 4
+        # m from the goal inside which it stops applying.
+        threshold_to_consider: 0.5
+        # rad off the path direction above which it applies.
+        max_angle_to_furthest: 1.0
+        # true: face forward along the path; false: forward or backward.
+        forward_preference: true
+      TwirlingCritic:
+        # Penalises turning (holonomic motion models only).
+        enabled: true
+        cost_power: 1
+        cost_weight: 10.0
+
+bt_navigator:
+  ros__parameters:
+    # The NavigateToPose behavior tree file; navigation_launch.py rewrites it to the
+    # installed behavior_trees/navigate_to_pose_humanoid.xml.
+    default_nav_to_pose_bt_xml: ""
+
+velocity_smoother:
+  ros__parameters:
+    # Hz, the output rate on /cmd_vel.
+    smoothing_frequency: 20.0
+    # true: scale every axis together when one hits a limit.
+    scale_velocities: false
+    # OPEN_LOOP (from the last command) or CLOSED_LOOP (from odometry).
+    feedback: "OPEN_LOOP"
+    # m/s, m/s, rad/s: [vx, vy, wz] limits, which should match the controller's.
+    max_velocity: [0.30, 0.20, 0.50]
+    min_velocity: [-0.20, -0.20, -0.50]
+    # m/s^2, m/s^2, rad/s^2: acceleration limits.
+    max_accel: [1.0, 1.0, 1.5]
+    # m/s^2, m/s^2, rad/s^2: deceleration limits (negative).
+    max_decel: [-1.0, -1.0, -1.5]
+    # m/s, m/s, rad/s: commands smaller than these are sent as zero.
+    deadband_velocity: [0.0, 0.0, 0.0]
+    # s without an input command after which it sends zero.
+    velocity_timeout: 1.0
+
+behavior_server:
+  ros__parameters:
+    use_sim_time: ${use_sim_time}
+    # The frame the recoveries (BackUp, Wait) move in.
+    local_frame: odom
+    global_frame: map
+    robot_base_frame: base_footprint
+    # s, how old a transform may be.
+    transform_tolerance: 0.1
+
+planner_server:
+  ros__parameters:
+    use_sim_time: ${use_sim_time}
+    # Names of the planners below; the behavior tree picks one by name.
+    planner_plugins:
+      - GridBased
+    GridBased:
+      plugin: "nav2_smac_planner/SmacPlanner2D"
+      # m: with the goal blocked, plan to the nearest free cell this close to it.
+      tolerance: 0.25
+      # true: plan on a coarser copy of the costmap.
+      downsample_costmap: false
+      # Cells per side merged when downsampling.
+      downsampling_factor: 1
+      # true: plan through unknown space.
+      allow_unknown: true
+      # Search expansions before giving up (-1: no limit).
+      max_iterations: 1000000
+      # Expansions allowed once within tolerance of the goal.
+      max_on_approach_iterations: 1000
+      # s before the search gives up.
+      max_planning_time: 2.0
+      # Weight of cell cost against distance: higher keeps paths away from obstacles.
+      cost_travel_multiplier: 2.0
+      # true: give the path's last pose the approach direction; false: the goal's heading.
+      use_final_approach_orientation: false
+      smoother:
+        # Iterations of the path smoother.
+        max_iterations: 1000
+        # Weight of smoothness.
+        w_smooth: 0.3
+        # Weight of staying on the original path.
+        w_data: 0.2
+        # Change per iteration below which smoothing stops.
+        tolerance: 1.0e-10
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: ${use_sim_time}
+      robot_base_frame: base_footprint
+      # The frame the costmap is in.
+      global_frame: map
+      # Hz, how often the layers update the costmap.
+      update_frequency: 5.0
+      # Hz, how often the costmap is published.
+      publish_frequency: 5.0
+      # m per cell; equal to OctoMap's resolution.
+      resolution: 0.10
+      # true: keep unknown cells unknown instead of free.
+      track_unknown_space: true
+      # true: publish the whole costmap every time, not just updates.
+      always_send_full_costmap: true
+      # Names of the layers below, applied in order.
+      plugins: ["static_layer", "inflation_layer"]
+      # m, the robot's outline in base_footprint, a string of [x, y] points.
+      footprint: "[ [0.20, 0.275], [0.20, -0.275], [-0.20, -0.275], [-0.20, 0.275] ]"
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        # The occupancy grid it copies: OctoMap's projection.
+        map_topic: /projected_map
+        # true: subscribe transient local, to get a map published before it started.
+        map_subscribe_transient_local: True
+        # true: only free, occupied and unknown; false: keep the grid's values.
+        trinary_costmap: false
+        # Grid value (0-100) from which a cell is lethal.
+        lethal_cost_threshold: 100
+        # true: clear the cells under the footprint.
+        footprint_clearing_enabled: True
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        # Steepness of the cost's fall-off with distance from an obstacle.
+        cost_scaling_factor: 3.0
+        # m around obstacles that carries cost.
+        inflation_radius: 0.4
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 5.0
+      global_frame: odom
+      robot_base_frame: base_footprint
+      use_sim_time: ${use_sim_time}
+      # true: the costmap moves with the robot.
+      rolling_window: true
+      # m, size of the rolling window.
+      width: 6
+      height: 6
+      resolution: 0.05
+      track_unknown_space: false
+      footprint: "[ [0.20, 0.275], [0.20, -0.275], [-0.20, -0.275], [-0.20, 0.275] ]"
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_topic: /projected_map
+        map_subscribe_transient_local: True
+        footprint_clearing_enabled: True
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        footprint_clearing_enabled: True
+        # Names of the observation sources below.
+        observation_sources: scan
+        scan:
+          topic: /converted_scan
+          # LaserScan or PointCloud2.
+          data_type: "LaserScan"
+          # true: mark obstacles from it.
+          marking: True
+          # true: clear free space along its rays.
+          clearing: True
+          # true: a beam with no return (inf) clears out to raytrace_max_range.
+          inf_is_valid: True
+          # m in global_frame, the height band of points it marks.
+          min_obstacle_height: -0.1
+          max_obstacle_height: 2.0
+          # m, the range band it marks in.
+          obstacle_max_range: 2.9
+          obstacle_min_range: 0.0
+          # m, the range band it clears in.
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 1.0
+        inflation_radius: 0.4
+      always_send_full_costmap: True

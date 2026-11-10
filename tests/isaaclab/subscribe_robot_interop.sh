@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
-# Native ROS checker; build only message interfaces if the image lacks them.
+# Run check_robot_ros.py, first building the message interfaces it needs if they are not installed.
+#
+# Runs in the ROS container that run_robot_interop.sh starts. Uses core_ws's install when it
+# provides unitree_hg, unitree_go, livox_ros_driver2 and magpie_msgs; otherwise builds just
+# the messages the check uses, from core_ws/src, in a temporary workspace.
+# Environment: ISAAC_HAND_TYPE (read by the check). Exit: the check's status.
 set -eo pipefail
 source /opt/ros/humble/setup.bash
 if [ -f /home/code/core_ws/install/setup.bash ]; then source /home/code/core_ws/install/setup.bash; fi
 if ! /usr/bin/python3 -c 'from unitree_hg.msg import LowCmd, LowState; from unitree_go.msg import MotorCmds, MotorStates; from livox_ros_driver2.msg import CustomMsg; from magpie_msgs.msg import GripperState; from magpie_msgs.srv import SetGripperPosition, SetGripperForce; from magpie_msgs.action import DeliGrasp' >/dev/null 2>&1; then
     workspace=$(mktemp -d)
+    # One interface-only package per message package, each with only the definitions the check uses.
     for package in unitree_hg unitree_go livox_ros_driver2 magpie_msgs; do
         mkdir -p "$workspace/src/$package/msg"
         if [ "$package" = unitree_hg ]; then

@@ -1,0 +1,21 @@
+RoboCasa at 4f8a2980def75a55dff96b990745b83540425f09, for MuJoCo 3.17.0
+(docker/RobocasaDockerfile applies it with `git apply`, which fails the build
+if it no longer applies). RoboCasa's setup.py pins mujoco==3.3.1 and its
+__init__.py asserts that version at import; the image installs 3.17.0, so the
+assert names 3.17.0 instead.
+
+diff --git a/robocasa/__init__.py b/robocasa/__init__.py
+index 2bdf322..969af66 100644
+--- a/robocasa/__init__.py
++++ b/robocasa/__init__.py
+@@ -1003,8 +1003,8 @@ from robosuite.robots import ALL_ROBOTS
+ import mujoco
+ 
+ assert (
+-    mujoco.__version__ == "3.3.1"
+-), "MuJoCo version must be 3.3.1. Please run pip install mujoco==3.3.1"
++    mujoco.__version__ == "3.17.0"
++), "MuJoCo version must be 3.17.0, the version GOLEM's robocasa image installs"
+ 
+ import numpy
+ 

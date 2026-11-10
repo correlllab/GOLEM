@@ -1,5 +1,8 @@
-# Recorded from installed Linux images, 2026-09-17.
-# arm64 files reuse portable versions; require native build validation.
+# Common constraint set for every uv step in docker/RobocasaDockerfile, at the
+# versions of the validated image (provenance: SOURCES.md). Each numbered
+# robocasa-amd64-NN.txt includes it with -c and pins the packages whose
+# version changes between steps (huggingface-hub, mujoco, numpy, psutil),
+# which this set leaves out.
 absl-py==2.5.0
 aiohappyeyeballs==2.7.1
 aiohttp==3.14.3
@@ -52,7 +55,6 @@ colcon-recursive-crawl==0.2.3
 colcon-ros==0.5.0
 colcon-test-result==0.3.8
 colcon-zsh==0.5.0
-coloredlogs==15.0.1
 cryptography==3.4.8
 cuda-bindings==13.3.1
 cuda-pathfinder==1.6.0
@@ -79,7 +81,6 @@ farama-notifications==0.0.6
 filelock==3.32.3
 flake8==4.0.1
 flask==3.1.3
-flatbuffers==25.12.19
 frozenlist==1.8.0
 fsspec==2025.3.0
 gdown==6.3.0
@@ -98,7 +99,6 @@ hidapi==0.15.0
 httpcore==1.0.9
 httplib2==0.20.2
 httpx==0.28.1
-humanfriendly==10.0
 idna==3.19
 imageio==2.37.4
 imageio-ffmpeg==0.6.0
@@ -167,7 +167,6 @@ nvidia-nvshmem-cu13==3.4.5
 nvidia-nvtx==13.0.85
 nvidia-nvtx-cu12==12.6.77
 oauthlib==3.2.0
-onnxruntime==1.23.2
 opencv-python==5.0.0.93
 opencv-python-headless==5.0.0.93
 orderly-set==5.5.0

@@ -1,0 +1,73 @@
+# The G1's controller data (the 29-DoF model with both Dex3-1 hands), read by
+# golem_upper_ik.profile; its joint table is golem_safety's robots/g1.yaml. Every key and
+# what it means: example.robot.yaml.
+#
+# SAFETY: the self-collision model (golem_ros2_models) was packed on the rubber-hand G1, two
+# spheres per hand at the Dex3-1 palm and none on the fingers, so the barrier and the planner
+# do not see the Dex3-1 fingers. The IK can start a few millimetres inside controller.d_min,
+# and the barrier pushes the pair back out, but from a pose with a pair about 10 mm apart or
+# closer the start-up's first step has no solution and frame_task_server stops, logging the
+# closest sphere pairs. On the real G1 in debug mode the arms hang limp until the first
+# command, so they must hang clear of the body (in the sim they hang with the wrists on the
+# hips, their spheres 20 mm from the hip spheres; arms_down is inside them).
+
+display_name: G1
+
+enabled_joints:
+  - left_shoulder_pitch_joint
+  - left_shoulder_roll_joint
+  - left_shoulder_yaw_joint
+  - left_elbow_joint
+  - left_wrist_roll_joint
+  - left_wrist_pitch_joint
+  - left_wrist_yaw_joint
+  - right_shoulder_pitch_joint
+  - right_shoulder_roll_joint
+  - right_shoulder_yaw_joint
+  - right_elbow_joint
+  - right_wrist_roll_joint
+  - right_wrist_pitch_joint
+  - right_wrist_yaw_joint
+
+held_joints:
+  - waist_yaw_joint
+  - waist_roll_joint
+  - waist_pitch_joint
+# SAFETY: a walking policy may balance on the legs, trained with a stiff waist, so the
+# controller's shutdown command keeps the waist at its hold and only the arms go limp
+shutdown_keeps_held_joints: true
+
+ee_frames: [left_hand_palm_link, right_hand_palm_link]
+planner_frames: [left_hand_palm_link, right_hand_palm_link]
+# unmeasured on the real G1: if turning the waist changes the IMU yaw while the pelvis stays
+# still, the IMU is imu_in_torso (controller.imu_frame overrides this)
+imu_frame: imu_in_pelvis
+
+# Arm postures over enabled_joints (left arm, then right), rad. G1 conventions, checked with
+# forward kinematics on the with-hand URDF: all zeros is upper arms down, elbows at 90 deg,
+# forearms forward; elbow +pi/2 straightens the arm downward; shoulder pitch < 0 raises the
+# arm forward; shoulder roll > 0 (left) / < 0 (right) raises it out to the side. "The
+# example" is Unitree's G1 arm example, unitree_sdk2_python's g1_arm7_sdk_dds_example.py.
+named_configs:
+  # forearms forward, palms about 0.24 m in front of the pelvis at waist height; the
+  # example's first stage, and the start-up posture
+  home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+         0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  # straight arms hanging below the shoulders. SAFETY: the one posture in self-collision:
+  # the real wrists and hands rest on the hips (the meshes of CL_Assets/g1/g1_description
+  # touch), and each hand and wrist sphere sits 2 to 5 cm inside its hip-pitch sphere, so a
+  # direct goal to it stops short with the barrier on, and a planned goal to it fails
+  arms_down: [0.0, 0.0, 0.0, 1.5707963267948966, 0.0, 0.0, 0.0,
+              0.0, 0.0, 0.0, 1.5707963267948966, 0.0, 0.0, 0.0]
+  # straight arms out to the sides, horizontal; the example's lift target
+  t_pose: [0.0, 1.5707963267948966, 0.0, 1.5707963267948966, 0.0, 0.0, 0.0,
+           0.0, -1.5707963267948966, 0.0, 1.5707963267948966, 0.0, 0.0, 0.0]
+  # straight arms, 45 deg forward and down
+  arms_front_45: [-0.7853981633974483, 0.0, 0.0, 1.5707963267948966, 0.0, 0.0, 0.0,
+                  -0.7853981633974483, 0.0, 0.0, 1.5707963267948966, 0.0, 0.0, 0.0]
+
+startup_sequence: [home]
+
+config_defaults:
+  # 0 (off): its /lowstate tick lag is unmeasured on the real G1
+  controller.max_state_lag_ms: 0.0

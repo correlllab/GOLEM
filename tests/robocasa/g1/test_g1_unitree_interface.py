@@ -1,34 +1,39 @@
-"""Tests for g1.unitree_interface.SimInterface on the standalone G1 MJCF in CL_Assets/g1.
+"""Check the G1 sim's Unitree DDS interface (g1.unitree_interface.SimInterface) on the standalone G1 MJCF.
 
-robosuite is not needed: the model is the source MJCF (names unprefixed) with
-the pelvis framequat g1_robosuite adds, and the handlers are called directly
-with crafted messages. SimInterface still opens Unitree DDS channels, so run
-this only where DDS cannot reach the robot: tests/robocasa/g1/run_in_container.sh
-runs it in the robocasa image with --network none and ROS_DOMAIN_ID=97, with
-golem_robocasa on PYTHONPATH.
+robosuite is not needed: the model is CL_Assets/g1's source MJCF (names unprefixed) with the
+pelvis framequat g1_robosuite adds, and the handlers are called directly with crafted
+messages. SimInterface still opens Unitree DDS channels, so run this only where DDS cannot
+reach the robot: tests/robocasa/g1/run_in_container.sh runs it in the robocasa image with no
+network on ROS_DOMAIN_ID 97, with golem_robocasa on PYTHONPATH.
 """
 import math
 import os
-import sys
+import time
+import unittest
 
 import mujoco
 import numpy as np
 
+from unitree_sdk2py.core.channel import ChannelSubscriber
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__HandCmd_ as HandCmd_default
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_ as LowCmd_default
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_ as LowState_default
+from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
 from unitree_sdk2py.utils.crc import CRC
 
+import function_tests
 import g1
+import unitree_common
 from g1.sim_names import BODY_JOINTS, HAND_JOINTS, NameResolver
 from g1 import unitree_interface as ui
 
-# two levels up from golem_robocasa/g1/: the repo root on the host, /home/code in the container
+# Two levels up from golem_robocasa/g1/: the repo root on the host, /home/code in the container.
 REPO = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(g1.__file__)), "..", ".."))
 XML = os.path.join(REPO, "CL_Assets", "g1", "g1_description", "g1_29dof_with_hand_rev_1_0.xml")
 
 
 def _model():
+    """Return the source MJCF compiled with its meshes, the pelvis framequat and 2 ms steps."""
     xml = open(XML).read()
     xml = xml.replace('meshdir="meshes"', f'meshdir="{os.path.join(os.path.dirname(XML), "meshes")}"')
     xml = xml.replace("<sensor>", '<sensor>\n    <framequat name="imu-pelvis-orientation" '
@@ -46,7 +51,10 @@ CRC_ = CRC()
 
 
 def _reset(q=None):
-    """Fresh state and latches on the shared interface (DDS is opened once)"""
+    """Reset the sim to `q` (default pose without it) and clear the shared interface's latches.
+
+    One interface serves every test, so DDS is opened once.
+    """
     mujoco.mj_resetData(MODEL, DATA)
     if q is not None:
         DATA.qpos[RESOLVER.body.qpos] = q
@@ -58,6 +66,7 @@ def _reset(q=None):
 
 
 def _lowcmd(q=0.3, kp=40.0, kd=2.0, tau=0.5, mode=1, mode_machine=5, mode_pr=0):
+    """Return a LowCmd_ giving every body motor the same command, with a valid CRC."""
     msg = LowCmd_default()
     msg.mode_machine, msg.mode_pr = mode_machine, mode_pr
     for i in range(len(BODY_JOINTS)):
@@ -68,16 +77,18 @@ def _lowcmd(q=0.3, kp=40.0, kd=2.0, tau=0.5, mode=1, mode_machine=5, mode_pr=0):
 
 
 def _state():
+    """Return copies of the body joints' positions and velocities."""
     b = RESOLVER.body
     return DATA.qpos[b.qpos].copy(), DATA.qvel[b.qvel].copy()
 
 
 def test_names_resolve_in_slot_order():
+    """Body joints and hand actuators resolve in DDS slot order, with the MJCF's torque limits."""
     b = RESOLVER.body
     for i, name in enumerate(BODY_JOINTS):
         jid = mujoco.mj_name2id(MODEL, mujoco.mjtObj.mjOBJ_JOINT, name)
         assert b.qpos[i] == MODEL.jnt_qposadr[jid] and MODEL.actuator_trnid[b.ctrl[i], 0] == jid
-    # the MJCF orders the right hand's index before its middle finger; DDS slot 3 is middle_0
+    # The MJCF orders the right hand's index before its middle finger; DDS slot 3 is middle_0.
     for side, hand in RESOLVER.hands.items():
         names = [mujoco.mj_id2name(MODEL, mujoco.mjtObj.mjOBJ_ACTUATOR, a) for a in hand.ctrl]
         assert names == list(HAND_JOINTS[side]), names
@@ -88,11 +99,10 @@ def test_names_resolve_in_slot_order():
 
 
 def test_motors_off_until_first_valid_lowcmd():
-    """Nothing drives the robot before rt/lowcmd: every motor, body and hand,
-    is off (zero torque), however long the sim runs"""
+    """Every motor, body and hand, is off (zero torque) before the first rt/lowcmd, however long the sim runs."""
     _reset(np.linspace(-0.3, 0.3, len(BODY_JOINTS)))
     DATA.qvel[RESOLVER.body.qvel] = 0.5
-    DATA.ctrl[:] = 1.0   # whatever a previous step left
+    DATA.ctrl[:] = 1.0  # whatever a previous step left
     for t in (0.0, 1.0, 100.0):
         DATA.time = t
         IFACE.write_ctrl()
@@ -103,8 +113,7 @@ def test_motors_off_until_first_valid_lowcmd():
 
 
 def test_invalid_lowcmd_ignored():
-    """A frame with a bad CRC, another robot's mode_machine, mode_pr 1 or a
-    value that is not finite drives nothing"""
+    """A frame with a bad CRC, the H1-2's mode_machine, mode_pr 1 or a non-finite value drives nothing."""
     _reset()
     bad_crc = _lowcmd()
     bad_crc.crc ^= 1
@@ -113,16 +122,17 @@ def test_invalid_lowcmd_ignored():
         IFACE.write_ctrl()
         assert not IFACE.commanded and IFACE._lowcmd is None
         assert np.all(DATA.ctrl[RESOLVER.body.ctrl] == 0.0)
-    assert ui.lowcmd_error(_lowcmd(), CRC_) is None
+    assert unitree_common.lowcmd_error(_lowcmd(), CRC_, ui.SimInterface.MODE_MACHINE, "G1") is None
     IFACE._on_lowcmd(_lowcmd())
     assert IFACE.commanded
 
 
 def test_fast_crc_is_the_sdks():
-    """The sim's CRC (CRC_ is the same per-process object, sped up by the
-    interface) equals unitree_sdk2py's own on random frames, and its
-    pure-Python reference on raw bytes"""
-    assert getattr(CRC_, "_g1_sim_fast", False)
+    """The sim's sped-up CRC equals unitree_sdk2py's own on random frames, and its pure-Python reference on raw bytes.
+
+    CRC_ is the per-process object that the interface speeds up.
+    """
+    assert getattr(CRC_, "_sim_fast", False)
     rng = np.random.default_rng(1)
     frames = []
     for _ in range(20):
@@ -139,28 +149,15 @@ def test_fast_crc_is_the_sdks():
     raw = bytes(rng.integers(0, 256, 2092, dtype=np.uint8))
     fast_raw = CRC_._crc_ctypes(CRC_._CRC__Trans(raw))
     fast_words, fast_crc32 = CRC_.__dict__.pop("_CRC__Trans"), CRC_.__dict__.pop("_crc_ctypes")
-    try:   # the SDK's own methods, with the sim's taken off the object
+    try:  # the SDK's own methods, with the sim's taken off the object
         assert [CRC_.Crc(msg) for msg in frames] == fast
         assert CRC_._crc_py(CRC_._CRC__Trans(raw)) == fast_raw
     finally:
         CRC_._CRC__Trans, CRC_._crc_ctypes = fast_words, fast_crc32
 
 
-def test_timeout_knob_must_be_finite_and_positive():
-    name = "GOLEM_CMD_TIMEOUT"
-    assert ui.env_seconds(name, 0.5, {}) == 0.5
-    assert ui.env_seconds(name, 0.5, {name: " "}) == 0.5   # empty: the default, as compose passes it
-    assert ui.env_seconds(name, 0.5, {name: "0.25"}) == 0.25
-    for bad in ("nan", "inf", "-inf", "-0.5", "0", "fast"):
-        try:
-            ui.env_seconds(name, 0.5, {name: bad})
-        except ValueError as e:
-            assert name in str(e) and repr(bad) in str(e), e
-        else:
-            raise AssertionError(f"{name}={bad!r} accepted")
-
-
 def test_first_valid_lowcmd_drives_motors():
+    """A valid frame drives each motor at tau + kp*(q - q_meas) + kd*(dq - dq_meas), clipped to its limits; mode 0 is off."""
     _reset()
     IFACE._on_lowcmd(_lowcmd(q=0.3, kp=40.0, kd=2.0, tau=0.5))
     assert IFACE.commanded
@@ -170,26 +167,26 @@ def test_first_valid_lowcmd_drives_motors():
     expected = np.clip(40.0 * (0.3 - q) + 2.0 * (0.0 - dq) + 0.5, b.tau_min, b.tau_max)
     assert np.allclose(DATA.ctrl[b.ctrl], expected)
     assert np.any(DATA.ctrl[b.ctrl] != 0.0)
-    # motor mode 0 is off
+    # Motor mode 0 is off.
     IFACE._on_lowcmd(_lowcmd(mode=0))
     IFACE.write_ctrl()
     assert np.all(DATA.ctrl[b.ctrl] == 0.0)
 
 
 def test_band_is_none_until_the_sim_builds_it():
-    """sim_loop hands the interface its elastic band once built (the tests/g1
-    recorders read it); the interface itself never touches it"""
+    """The interface has no band until sim_loop hands it one, for the tests' recorders; it never uses it itself."""
     assert IFACE.band is None
 
 
 def test_no_arm_sdk_subscription():
-    """The sim consumes rt/lowcmd and the hands' commands, and no rt/arm_sdk"""
+    """The sim subscribes to rt/lowcmd and the hands' commands, and to no rt/arm_sdk."""
     assert set(IFACE._subscribers) == {"rt/lowcmd", "rt/dex3/left/cmd", "rt/dex3/right/cmd"}
     assert not [name for name in dir(ui) if "arm_sdk" in name.lower()]
     assert not [name for name in dir(IFACE) if "arm_sdk" in name.lower()]
 
 
 def test_lowcmd_timeout_turns_motors_off():
+    """Motors turn off after the command timeout in sim time and on again when commands resume."""
     _reset()
     IFACE._on_lowcmd(_lowcmd())
     IFACE.write_ctrl()
@@ -198,28 +195,30 @@ def test_lowcmd_timeout_turns_motors_off():
     IFACE.write_ctrl()
     assert np.all(DATA.ctrl[RESOLVER.body.ctrl] == 0.0)
     IFACE.sim_time = float(DATA.time)
-    IFACE._on_lowcmd(_lowcmd())  # back
+    IFACE._on_lowcmd(_lowcmd())  # commands resume
     IFACE.write_ctrl()
     assert np.any(DATA.ctrl[RESOLVER.body.ctrl] != 0.0)
 
 
 def test_physics_reset_restamps_the_latched_commands():
+    """After a physics reset puts time back, the latched command is restamped and times out from there."""
     _reset()
     IFACE.sim_time = 40.0
     IFACE._on_lowcmd(_lowcmd())
-    DATA.time = 0.002   # MuJoCo's auto-reset puts the time back to 0
+    DATA.time = 0.002  # MuJoCo's auto-reset puts the time back to 0
     IFACE.physics_reset()
     assert IFACE._lowcmd.time == IFACE.sim_time == 0.002
-    DATA.time = 0.002 + IFACE.lowcmd_timeout + 0.01   # so the timeouts fire again
+    DATA.time = 0.002 + IFACE.lowcmd_timeout + 0.01  # so the timeouts fire again
     IFACE.write_ctrl()
     assert np.all(DATA.ctrl[RESOLVER.body.ctrl] == 0.0)
 
 
 def test_hand_commands_by_joint_name_and_mode_byte():
+    """Hand commands drive each finger by joint name; a motor whose mode byte has status 0 or the timeout bit is off."""
     _reset()
     assert ui.hand_motor_on(0x01 << 4 | 3)
     assert not ui.hand_motor_on(0x01 << 4 | 3 | 1 << 7)  # timeout bit: released
-    assert not ui.hand_motor_on(3)                         # status 0
+    assert not ui.hand_motor_on(3)  # status 0
     msg = HandCmd_default()
     for i, c in enumerate(msg.motor_cmd):
         c.mode = i | 0x01 << 4
@@ -236,20 +235,54 @@ def test_hand_commands_by_joint_name_and_mode_byte():
     assert np.all(DATA.ctrl[RESOLVER.hands["left"].ctrl] == 0.0)
 
 
+def _wait_matched(received, timeout=5.0):
+    """Write probe rt/lowstate samples until the reader appending to received has one, then clear it.
+
+    The probes leave the IMU fields as they are. Fails after timeout s of wall time.
+    """
+    n = len(BODY_JOINTS)
+    deadline = time.monotonic() + timeout
+    while not received:
+        assert time.monotonic() < deadline, f"no reader matched rt/lowstate within {timeout} s"
+        IFACE._low_state.write(0, np.zeros(n), np.zeros(n), np.zeros(n), None, None, None)
+        time.sleep(0.01)
+    time.sleep(0.05)   # s: probes still in flight arrive before the clear
+    received.clear()
+
+
 def test_lowstate_and_hand_state():
+    """rt/lowstate goes out every step and hand state at 100 Hz, with the tick, mode_machine 5, CRC, joints and IMU.
+
+    rt/lowstate is read back through a DDS reader in this process, so the samples are the bytes
+    the numpy writer put on the wire, decoded by unitree_sdk2py.
+    """
+    assert IFACE._low_state.fast
     q0 = np.linspace(-0.2, 0.2, len(BODY_JOINTS))
     _reset(q0)
-    writes = {"lowstate": 0, "hand": 0}
-    IFACE._low_state_pub.Write = lambda msg, *a: writes.__setitem__("lowstate", writes["lowstate"] + 1)
+    received = []
+    reader = ChannelSubscriber(ui.TOPIC_LOWSTATE, LowState_)
+    reader.Init(received.append, 0)
+    _wait_matched(received)
+    hand_writes = 0
+
+    def count_hand(msg, *args):
+        """Count one hand state sample."""
+        nonlocal hand_writes
+        hand_writes += 1
+
     for pub in IFACE._hand_state_pub.values():
-        pub.Write = lambda msg, *a: writes.__setitem__("hand", writes["hand"] + 1)
+        pub.Write = count_hand
     IFACE._steps = 0
     for _ in range(5):
         IFACE.write_ctrl()
         mujoco.mj_step(MODEL, DATA)
         IFACE.after_step()
-    msg = IFACE.low_state
-    assert writes == {"lowstate": 5, "hand": 2}  # 500 Hz and 100 Hz of sim time, both hands
+    deadline = time.monotonic() + 2.0
+    while len(received) < 5 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    reader.Close()
+    assert (len(received), hand_writes) == (5, 2)  # 500 Hz and 100 Hz of sim time, both hands
+    msg = received[-1]
     assert msg.tick == round(DATA.time * 1000) == 10
     assert (msg.mode_machine, msg.mode_pr) == (5, 0)
     assert CRC_.Crc(msg) == msg.crc
@@ -260,22 +293,18 @@ def test_lowstate_and_hand_state():
     assert np.allclose(msg.imu_state.quaternion, quat, atol=1e-6) and quat[0] > 0.99  # w first
     acc = DATA.sensordata[RESOLVER.sensor_adr["acc"][0]:][:3]
     assert np.allclose(msg.imu_state.accelerometer, acc, atol=1e-5)
-    assert np.allclose(msg.imu_state.rpy, ui.rpy_from_quat(*quat), atol=1e-6)
+    assert np.allclose(msg.imu_state.rpy, unitree_common.rpy_from_quat(*quat), atol=1e-6)
     hand = RESOLVER.hands["left"]
     state = IFACE._hand_state["left"]
     assert np.allclose([m.q for m in state.motor_state[:7]], DATA.qpos[hand.qpos], atol=1e-6)
 
 
-if __name__ == "__main__":
-    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
-    failed = 0
-    for name, fn in tests:
-        try:
-            fn()
-            print(f"PASS {name}")
-        except Exception as e:  # noqa: BLE001
-            failed += 1
-            print(f"FAIL {name}: {type(e).__name__}: {e}")
-    print(f"{len(tests) - failed}/{len(tests)} passed")
+def tearDownModule():
+    """Close the shared interface's DDS channels."""
     IFACE.shutdown()
-    sys.exit(1 if failed else 0)
+
+
+G1UnitreeInterfaceTests = function_tests.test_case(globals(), "G1UnitreeInterfaceTests")
+
+if __name__ == "__main__":
+    unittest.main()

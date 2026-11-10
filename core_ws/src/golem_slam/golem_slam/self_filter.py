@@ -6,6 +6,13 @@ axis-aligned bounding box in the link frame (robot_geometry.link_boxes). Each
 cloud is tested against the boxes posed by TF at the cloud's stamp, and points
 inside any box are dropped. All point fields are passed through unchanged.
 
+A cloud is dropped while any link lacks a TF: publishing it would put the
+body back into the maps. A link that never had a TF (for example the Dex3
+finger links when no hand driver publishes their joints) is skipped instead,
+and logged once, once ``unseen_link_grace`` has passed since the first cloud in
+which any link had a TF; until then the cloud is dropped, so the TF tree has
+time to come up. A link that had a TF and has none now always drops the cloud.
+
 Subscribes ``cloud_in`` (sensor_msgs/PointCloud2) and ``/robot_description``
 (std_msgs/String, transient local, from robot_state_publisher); publishes
 ``cloud_out`` in the input cloud's frame.
@@ -16,6 +23,10 @@ ROS parameters:
   exclude_links   links never filtered
   max_tf_age      s; if TF at the cloud stamp is unavailable, the latest
                   transform is used as long as it is at most this old
+  unseen_link_grace
+                  s, measured on the cloud stamps (sim time under
+                  use_sim_time); how long after the first cloud with any TF
+                  a link without one is waited for before it is skipped
 """
 
 import numpy as np
@@ -30,11 +41,12 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 from golem_slam.robot_geometry import link_boxes, points_in_box, transform_to_rt
 
-# sensor_msgs/PointField datatype -> numpy type
+# sensor_msgs/PointField datatype -> numpy type.
 _FIELD_TYPES = {1: 'i1', 2: 'u1', 3: 'i2', 4: 'u2', 5: 'i4', 6: 'u4', 7: 'f4', 8: 'f8'}
 
 
 def cloud_dtype(msg):
+    """Return the numpy dtype of one point of a PointCloud2 (scalar fields only)."""
     endian = '>' if msg.is_bigendian else '<'
     fields = [f for f in msg.fields if f.count == 1]
     return np.dtype({
@@ -46,7 +58,7 @@ def cloud_dtype(msg):
 
 
 def cloud_points(msg):
-    """(structured array of all points, (N, 3) float64 xyz)."""
+    """Return (structured array of all points, (N, 3) float64 xyz) of a PointCloud2."""
     arr = np.frombuffer(msg.data, dtype=cloud_dtype(msg),
                         count=msg.width * msg.height)
     xyz = np.stack([arr['x'], arr['y'], arr['z']], axis=1).astype(np.float64)
@@ -54,15 +66,22 @@ def cloud_points(msg):
 
 
 class SelfFilter(Node):
+    """Republish each cloud without the points inside the robot's link boxes."""
 
     def __init__(self):
+        """Declare the parameters and subscribe to the robot description and the cloud."""
         super().__init__('self_filter')
         self.padding = self.declare_parameter('padding', 0.05).value
         self.exclude = set(self.declare_parameter('exclude_links', ['']).value) - {''}
         self.max_tf_age = Duration(
             seconds=self.declare_parameter('max_tf_age', 0.2).value)
 
+        self.unseen_link_grace = self.declare_parameter('unseen_link_grace', 2.0).value
+
         self.boxes = None
+        self.seen_links = set()
+        self.first_tf_stamp = None  # s, stamp of the first cloud with any link's TF
+        self.reported_unseen = frozenset()
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
@@ -74,6 +93,7 @@ class SelfFilter(Node):
                                  qos_profile_sensor_data)
 
     def _on_description(self, msg):
+        """Build the link boxes from the URDF, leaving out exclude_links."""
         try:
             boxes = link_boxes(msg.data, self.padding)
         except (OSError, ValueError, KeyError) as e:
@@ -83,6 +103,7 @@ class SelfFilter(Node):
         self.get_logger().info(f'filtering {len(self.boxes)} links, padding {self.padding} m')
 
     def _lookup(self, frame, link, stamp):
+        """Return frame -> link at stamp, else the latest within max_tf_age; else raise."""
         try:
             return self.tf_buffer.lookup_transform(frame, link, stamp)
         except TransformException:
@@ -93,32 +114,49 @@ class SelfFilter(Node):
         return tf
 
     def _on_cloud(self, msg):
+        """Publish the cloud without the body's points, or drop it while a link lacks TF."""
         if self.boxes is None or msg.width * msg.height == 0:
             return
         arr, xyz = cloud_points(msg)
         keep = np.isfinite(xyz).all(axis=1)
-        missing = []
+        lost = []
+        unseen = set()
         for link, (lo, hi) in self.boxes.items():
             try:
                 tf = self._lookup(msg.header.frame_id, link, msg.header.stamp)
             except TransformException:
-                missing.append(link)
+                if link in self.seen_links:
+                    lost.append(link)
+                else:
+                    unseen.add(link)
                 continue
+            self.seen_links.add(link)
             rot, trans = transform_to_rt(tf.transform)
-            # Cheap reject: only test points within the box's bounding sphere.
+            # Only points within the box's bounding sphere are tested against the box.
             centre = rot @ (0.5 * (lo + hi)) + trans
             radius = 0.5 * np.linalg.norm(hi - lo)
             near = keep & (np.sum((xyz - centre) ** 2, axis=1) <= radius * radius)
             if near.any():
                 idx = np.flatnonzero(near)
                 keep[idx[points_in_box(xyz[idx], rot, trans, lo, hi)]] = False
-        if missing:
-            # Publishing with unfiltered links would put the body back into the
-            # maps, so drop the cloud instead.
+        stamp = Time.from_msg(msg.header.stamp).nanoseconds * 1e-9
+        if self.first_tf_stamp is None and self.seen_links:
+            self.first_tf_stamp = stamp
+        waiting = self.first_tf_stamp is None or (
+            stamp - self.first_tf_stamp < self.unseen_link_grace)
+        if lost or (unseen and waiting):
+            waited = sorted(lost) + sorted(unseen if waiting else ())
             self.get_logger().warn(
-                f'no TF for {len(missing)} links (e.g. {missing[0]}); dropping cloud',
+                f'no TF for {len(waited)} links (e.g. {waited[0]}); dropping cloud',
                 throttle_duration_sec=5.0)
             return
+        unseen = frozenset(unseen)
+        if unseen != self.reported_unseen:
+            self.reported_unseen = unseen
+            if unseen:
+                self.get_logger().warn(
+                    f'no TF has ever come for {len(unseen)} links, not filtering them: '
+                    + ', '.join(sorted(unseen)))
 
         out = PointCloud2()
         out.header = msg.header
@@ -134,6 +172,7 @@ class SelfFilter(Node):
 
 
 def main(args=None):
+    """Run the self_filter node."""
     rclpy.init(args=args)
     node = SelfFilter()
     try:

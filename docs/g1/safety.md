@@ -3,8 +3,9 @@
 `golem_safety` (node `safety_node`) is the only node that writes the robot's
 body command topic, `rt/lowcmd`. The H1-2 runs the same node, with its own
 robot profile and configs. Every controller publishes to one of its
-`rt/safety/*` input topics instead, and `golem_upper_ik` and `g1_homie`
-refuse any other command topic. It relays the newest command of each input,
+`rt/safety/*` input topics instead: `golem_upper_ik` refuses any other
+command topic, and `golem_lowerbody_rl`'s leg node writes only
+`rt/safety/lowcmd_lower_in`. It relays the newest command of each input,
 clips it, checks every `rt/lowstate`, and latches an estop when something goes
 wrong.
 
@@ -30,8 +31,8 @@ motors ([Control in sim and on the robot](control-path.md)).
 | full body | `full.yaml` | `rt/safety/lowcmd_in` | one upstream controller; the bringup refuses this mode |
 
 `golem_bringup`'s `g1_core.launch.py` runs each safety config with exactly one
-arm-controller config (`G1_SAFETY_CONTROLLER_CONFIGS` in
-`core_ws/src/golem_upper_ik/golem_upper_ik/pairing.py`) and refuses the real
+arm-controller config (`core_ws/src/golem_upper_ik/config/g1/pairing.yaml`,
+applied by `golem_upper_ik.pairing`) and refuses the real
 configs in the sim and the `sim_*` ones on the robot. With `sim:=true`, which
 the sim bringup passes, `safety_node` refuses ROS domain 0, an unset
 `ROS_DOMAIN_ID` included.
@@ -40,14 +41,16 @@ the sim bringup passes, `safety_node` refuses ROS domain 0, an unset
 
 The G1 starts as the H1-2 does; no config key chooses it.
 
-1. **Zero gains from boot.** From its start the layer writes `rt/lowcmd` at
+1. **Zero gains from boot.** From its start (under `use_sim_time`, from the
+   first `/clock`) the layer writes `rt/lowcmd` at
    `control.publish_hz` with mode 0 and every value 0 on every slot, stamped
    with `mode_machine` 5: every motor is off. It checks every `rt/lowstate`
    against the estop limits from the first sample (below).
 2. **The heartbeat.** Once the newest `rt/lowstate` reports `mode_machine` 5,
    the layer beats true on `/safety/heartbeat` at 10 Hz: relaying can begin.
    It beats false once its estop latches, and never true if the estop latched
-   first. HOMIE's walking node starts only on the first true beat.
+   first. The walking node (`golem_lowerbody_rl`'s leg node) moves the legs
+   only after the first true beat.
 3. **Each input engages on its own first valid command** from then on, and
    logs `input_engaged` with its `source` (`split_mode_upper` for the arm
    controller, `split_mode_lower` for the walking node). Its slots carry its
@@ -75,9 +78,10 @@ the relay keeps running. Nothing latches on either.
 
 - **A controller that dies without its last command** leaves the waist and
   arms held on its last command until the bringup stops.
-- **A walking-node fault holds the legs, it does not turn the motors off.** A
-  fault (a stale `rt/lowstate`, a non-finite IMU value, a fall, a command later
-  than `faults.max_latency`) silences `locomotion_node`.
+- **A leg-node fault holds the legs, it does not turn the motors off.** A
+  fault (a stale `rt/lowstate`, a non-finite value, a fall, a failed policy
+  step, and where it is set a tick lag over `faults.max_latency`) silences
+  `lowerbody_controller_node`.
   `golem_safety` then keeps relaying its last leg command at 500 Hz, with the
   waist and arms, and reports `input_quiet` after `stale.lower_seconds`. That
   frozen leg target does not balance the robot. `golem_safety` has no tilt or
@@ -122,7 +126,7 @@ the robot used to be.
 stops publishing. It does so on Ctrl+C or SIGTERM, and when its start-up fails
 after its first command. The arms get mode 0 and zero kp, kd and tau; the
 waist keeps its hold angle, gains and torque (the G1 profile's
-`shutdown_keeps_held_joints_on_lowcmd`), because the walking policy was
+`shutdown_keeps_held_joints`), because the walking policy was
 trained with a stiff waist and a limp one slumps onto it. `golem_safety`
 relays the command, so **the arms go limp** while the waist holds and the
 walking node keeps the legs. That stays so: the quiet upper input keeps that

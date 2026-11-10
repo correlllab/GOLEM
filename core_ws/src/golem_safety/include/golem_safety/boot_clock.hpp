@@ -7,8 +7,11 @@
 namespace golem_safety
 {
 
-// Seconds on CLOCK_BOOTTIME: monotonic, so a wall-clock step neither fires nor hides a
-// timeout, and counting the time the host was suspended, so a suspend is a gap.
+// Return s on CLOCK_BOOTTIME. It is monotonic, so a wall-clock step neither fires nor hides
+// a timeout, and it counts the time the host was suspended, so a suspend shows as a gap.
+// SAFETY: on the real robots every timeout of the safety layer is measured on this clock; a
+// simulator's /clock replaces it (robot_clock.hpp) only under use_sim_time, which needs
+// sim:=true.
 inline double boot_time()
 {
   timespec ts{};
@@ -16,7 +19,7 @@ inline double boot_time()
   return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) * 1e-9;
 }
 
-// Sleeps until boot_time() reaches `deadline`; returns at once for a deadline passed.
+// Sleep until boot_time() reaches `deadline`, s; return at once for a deadline passed.
 inline void sleep_until_boot_time(double deadline)
 {
   if (!(deadline > boot_time())) {
@@ -31,6 +34,7 @@ inline void sleep_until_boot_time(double deadline)
     ts.tv_sec += 1;
     ts.tv_nsec -= 1000000000L;
   }
+  // An absolute deadline, so a sleep a signal interrupts resumes without drifting.
   while (clock_nanosleep(CLOCK_BOOTTIME, TIMER_ABSTIME, &ts, nullptr) == EINTR) {
   }
 }

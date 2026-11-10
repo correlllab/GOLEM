@@ -1,9 +1,9 @@
-"""The H1-2 RoboCasa sim's rt/lowstate carries the real H1-2's mode_machine.
+"""Check that the H1-2 RoboCasa sim's rt/lowstate carries the real H1-2's mode_machine.
 
-The test opens no DDS participant and starts no thread: unitree_interface's DDS channel
-and thread names are replaced by in-process fakes for the length of each test. It runs
-in the standard runner (tests/robocasa/run_in_container.sh) and in a throwaway container
-without a network:
+The test opens no DDS participant: unitree_interface's DDS channel names and cyclonedds'
+ddspy_write are replaced by in-process fakes (dds_fakes.py) for the length of each test. It runs in the
+standard runner (tests/robocasa/run_in_container.sh) and in a throwaway container without a
+network:
 
     docker run --rm --network none -v "$PWD:/repo:ro" -w /repo -e PYTHONPATH=golem_robocasa \
         -e PYTHONDONTWRITEBYTECODE=1 --entrypoint python3 golem_sim_robocasa:latest \
@@ -19,49 +19,17 @@ from unittest import mock
 import mujoco
 import numpy as np
 
-# unitree_interface reads ROS_DOMAIN_ID once, at import, and refuses a missing value and the
-# real robots' 0. The fakes below open nothing, so this value reaches no network; it is set
-# for the import only.
-with mock.patch.dict(os.environ, {'ROS_DOMAIN_ID': '199'}):
-    import unitree_interface
+import unitree_interface
+from dds_fakes import fake_dds
 
-MODE_MACHINE = 6  # what the real H1-2 reports in every LowState_ (bags of real runs)
-
-
-class FakePublisher:
-    """Stands in for ChannelPublisher: records the mode_machine of each sample written."""
-    written = []
-
-    def __init__(self, topic, kind):
-        self.topic = topic
-
-    def Init(self):
-        pass
-
-    def Write(self, sample):
-        self.written.append(sample.mode_machine)
-
-
-class FakeSubscriber:
-    def __init__(self, topic, kind):
-        self.topic = topic
-
-    def Init(self, handler, queue_size):
-        pass
-
-
-class FakeThread:
-    """Stands in for RecurrentThread: never runs its target."""
-    def __init__(self, interval, target, name):
-        self.target = target
-
-    def Start(self):
-        pass
+MODE_MACHINE = 6  # what the real H1-2 reports in every LowState_, in recordings of real runs
 
 
 def dummy_model_and_resolver():
-    """A model with MOTOR_NUM hinge joints and the sensors and motors SimInterface reads
-    through the resolver, without the kitchen scene."""
+    """Return a model of MOTOR_NUM hinge joints, with their motors and torque sensors, and its resolver.
+
+    It holds what SimInterface reads through the resolver, without the kitchen scene.
+    """
     n = unitree_interface.MOTOR_NUM
     bodies = ''.join(f'<body><joint name="j{i}" axis="0 0 1"/><geom size="0.01"/></body>'
                      for i in range(n))
@@ -78,24 +46,40 @@ def dummy_model_and_resolver():
 
 
 class H12SimLowStateTests(unittest.TestCase):
+    """Run SimInterface on the stand-in model with the DDS channels faked."""
+
     def setUp(self):
-        FakePublisher.written = []
-        for name, fake in (('ChannelFactoryInitialize', lambda id: None),
-                           ('ChannelPublisher', FakePublisher),
-                           ('ChannelSubscriber', FakeSubscriber),
-                           ('RecurrentThread', FakeThread)):
-            patcher = mock.patch.object(unitree_interface, name, fake)
-            patcher.start()
-            self.addCleanup(patcher.stop)
+        """Fake the DDS channels and make a SimInterface on a stand-in model."""
+        fake_dds(self, unitree_interface)
         model, resolver = dummy_model_and_resolver()
         self.iface = unitree_interface.SimInterface(model, mujoco.MjData(model), resolver=resolver)
 
     def test_h12_sim_lowstate_reports_6(self):
-        self.assertEqual(self.iface.low_state.mode_machine, MODE_MACHINE)
+        """The sim's rt/lowstate writer reports mode_machine 6, on the numpy path."""
+        self.assertEqual(self.iface._low_state.mode_machine, MODE_MACHINE)
+        self.assertTrue(self.iface._low_state.fast)
 
     def test_published_sample_carries_it(self):
-        self.iface.publish_low_state()
-        self.assertEqual(FakePublisher.written, [MODE_MACHINE])
+        """The sample written after a physics step carries mode_machine 6."""
+        self.iface.after_step()
+        pub = self.iface._low_state_pub
+        self.assertEqual((len(pub.sent), pub.last().mode_machine), (1, MODE_MACHINE))
+
+
+class DomainIdTests(unittest.TestCase):
+    """Check which ROS_DOMAIN_ID values the sim's DDS start-up accepts."""
+
+    def test_refuses_unset_and_real_robot_domain(self):
+        """An unset, empty, zero or non-numeric ROS_DOMAIN_ID raises."""
+        for env in ({}, {'ROS_DOMAIN_ID': ''}, {'ROS_DOMAIN_ID': '0'}, {'ROS_DOMAIN_ID': 'x'}):
+            with self.subTest(env=env), mock.patch.dict(os.environ, env, clear=True):
+                with self.assertRaises(RuntimeError):
+                    unitree_interface.domain_id()
+
+    def test_reads_sim_domain(self):
+        """A sim domain is read as its number."""
+        with mock.patch.dict(os.environ, {'ROS_DOMAIN_ID': '7'}):
+            self.assertEqual(unitree_interface.domain_id(), 7)
 
 
 if __name__ == '__main__':

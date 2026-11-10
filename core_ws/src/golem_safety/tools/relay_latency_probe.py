@@ -35,23 +35,29 @@ import sys
 import time
 from dataclasses import dataclass
 
-DISCOVERY_TIMEOUT_S = 10.0
+DISCOVERY_TIMEOUT_S = 10.0  # s to wait for the first sample on each topic
+# Subscription queue depth: deep enough that no sample of a 500 Hz stream is lost while the
+# executor is busy.
 RECORD_DEPTH = 10000
 
 
 @dataclass(frozen=True)
 class Matching:
+    """Hold the result of match_outputs()."""
+
     latencies: list  # s, one per matched output
     no_equal_input: int
     repeated: int
 
     @property
     def unmatched(self) -> int:
+        """Return the outputs that matched no input, for either reason."""
         return self.no_equal_input + self.repeated
 
 
 def match_outputs(inputs, outputs, since=-math.inf) -> Matching:
-    """Match each output sample to the newest input before it with the same q.
+    """
+    Match each output sample to the newest input before it with the same q.
 
     inputs and outputs are (arrival time in s, upper-slot q tuple), each in arrival order.
     Outputs that arrived before since are matched too, so that an input one of them took is
@@ -83,7 +89,7 @@ def match_outputs(inputs, outputs, since=-math.inf) -> Matching:
 
 
 def percentile(values, pct: float) -> float:
-    """Linear interpolation between the closest ranks, as numpy.percentile's default"""
+    """Return the pct-th percentile, interpolating as numpy.percentile does by default."""
     ordered = sorted(values)
     if not ordered:
         raise ValueError('no values')
@@ -94,7 +100,7 @@ def percentile(values, pct: float) -> float:
 
 
 def rate_stats(times) -> dict:
-    """Rate of arrivals at times (s, ascending): mean, p99 interval and longest gap"""
+    """Return the rate of arrivals at times (s, ascending): mean, p99 interval, longest gap."""
     if len(times) < 2:
         raise ValueError(f'{len(times)} samples: a rate needs at least 2')
     intervals_ms = [(b - a) * 1000.0 for a, b in zip(times, times[1:])]
@@ -107,7 +113,7 @@ def rate_stats(times) -> dict:
 
 
 def latency_stats(latencies) -> dict:
-    """Median, p99 and longest of the matched latencies (s), in ms"""
+    """Return the median, p99 and longest of the matched latencies (s), in ms."""
     if not latencies:
         raise ValueError('no output sample matched an input')
     latencies_ms = [latency * 1000.0 for latency in latencies]
@@ -120,7 +126,7 @@ def latency_stats(latencies) -> dict:
 
 
 def domain_refusal(value):
-    """Why this process must not join the ROS domain ROS_DOMAIN_ID=value, or None"""
+    """Return why this process must not join the ROS domain ROS_DOMAIN_ID=value, or None."""
     if value is None or not value.strip():
         return ('ROS_DOMAIN_ID is unset, so ROS would join domain 0, the real robots\' command '
                 'bus; export the stack\'s domain')
@@ -134,7 +140,7 @@ def domain_refusal(value):
 
 
 def upper_slots(robot: str) -> range:
-    """The robot's upper-body slots, from golem_safety's installed robots/<robot>.yaml"""
+    """Return the robot's upper-body slots, from golem_safety's installed robot profile."""
     import yaml
     from ament_index_python.packages import get_package_share_directory
     path = os.path.join(get_package_share_directory('golem_safety'), 'robots', f'{robot}.yaml')
@@ -144,7 +150,11 @@ def upper_slots(robot: str) -> range:
 
 
 def record(slots: range, input_topic: str, output_topic: str, settle: float, seconds: float):
-    """(inputs, outputs, window start, window end): every sample's arrival and upper-slot q"""
+    """
+    Record both topics; return (inputs, outputs, window start, window end).
+
+    inputs and outputs hold every sample's (monotonic arrival, upper-slot q).
+    """
     import rclpy
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -155,14 +165,16 @@ def record(slots: range, input_topic: str, output_topic: str, settle: float, sec
     inputs, outputs = [], []
 
     def recorder(samples):
+        """Return a callback that appends each message's arrival and q to `samples`."""
         def on_message(msg):
+            """Append this message's arrival and upper-slot q."""
             arrival = time.monotonic()
             motors = msg.motor_cmd
             samples.append((arrival, tuple(motors[slot].q for slot in slots)))
         return on_message
 
     rclpy.init()
-    # no /rosout writer or parameter services: fewer endpoints for the stack to discover
+    # No /rosout writer or parameter services: fewer endpoints for the stack to discover.
     node = rclpy.create_node('relay_latency_probe', enable_rosout=False,
                              start_parameter_services=False)
     node.create_subscription(LowCmd, input_topic, recorder(inputs), qos)
@@ -191,11 +203,13 @@ def record(slots: range, input_topic: str, output_topic: str, settle: float, sec
 
 
 def rounded(stats: dict) -> dict:
+    """Return `stats` with each float rounded to 3 decimals."""
     return {key: round(value, 3) if isinstance(value, float) else value
             for key, value in stats.items()}
 
 
 def main() -> int:
+    """Run the probe; return 0, 1 when it measured nothing usable, 2 on a refused domain."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--robot', required=True, choices=('h12', 'g1'))
     parser.add_argument('--output', default='/lowcmd',

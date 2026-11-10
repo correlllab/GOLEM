@@ -1,4 +1,8 @@
-"""Actual native ROS services/actions with synthetic physics, without a GPU."""
+"""Serve the Magpie bridge with synthetic physics while probe_magpie_services.py calls it over native ROS.
+
+No GPU: each loop reports every commanded aperture as reached. Runs in the Isaac container
+(run_magpie_transport.sh) and fails when the probe fails or runs past 40 s.
+"""
 from pathlib import Path
 import subprocess
 import time
@@ -13,6 +17,7 @@ try:
     launcher = Path('/home/code/CL_isaaclab_sim/src/python/sensors/magpie_launch.sh')
     probe = subprocess.Popen(['bash', str(launcher), '--script', '/home/code/tests/isaaclab/probe_magpie_services.py'])
     started = time.monotonic()
+    # Synthetic physics at 50 Hz: every gripper is reported at its commanded aperture at once.
     while probe.poll() is None and time.monotonic() - started < 40:
         commands = bridge.get_commands()
         states = {side: dict(position=values['aperture'], force=0., finger_positions=[values['aperture']]*2,

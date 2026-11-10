@@ -1,4 +1,5 @@
-"""Frontier exploration skill (/skill/frontier_explore).
+"""
+Explore the map's frontiers with Nav2 (/skill/frontier_explore).
 
 Walks the robot to the frontiers of slam_toolbox's /map via Nav2's
 /navigate_to_pose until no reachable frontier remains or the goal timeout
@@ -31,40 +32,45 @@ from custom_ros_messages.action import SkillFrontierExplore
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import OccupancyGrid
 import numpy as np
-from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
+from rclpy.action import ActionClient, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from scipy import ndimage
 from tf2_ros import Buffer, TransformException, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
-# Defaults applied when a goal field is left at 0 (SkillFrontierExplore.action).
+# defaults for goal fields left at 0 (SkillFrontierExplore.action)
 DEFAULT_MIN_CELLS = 6
 DEFAULT_BLACKLIST_RADIUS = 0.6   # m
 DEFAULT_MIN_GOAL_DISTANCE = 0.7  # m
 DEFAULT_GOAL_TIMEOUT = 120.0     # s
-# /map: slam_toolbox writes 0 (free), 100 (occupied) and -1 (unknown).
+# /map: slam_toolbox writes 0 (free), 100 (occupied) and -1 (unknown)
 FREE_BELOW = 25
 OCCUPIED_FROM = 65
-# Global costmap as OccupancyGrid (nav2_costmap_2d translation):
-# 99 is INSCRIBED_INFLATED_OBSTACLE, 100 LETHAL_OBSTACLE, -1 NO_INFORMATION.
+# the global costmap as an OccupancyGrid (nav2_costmap_2d's translation):
+# 99 is INSCRIBED_INFLATED_OBSTACLE, 100 LETHAL_OBSTACLE, -1 NO_INFORMATION
 COSTMAP_INSCRIBED = 99
 COSTMAP_LETHAL = 100
 EIGHT = np.ones((3, 3), bool)
-ROBOT_SNAP = 0.5    # m: snap to nearest walkable cell within this distance
-GOAL_FRONTIER = 0.5  # m: a goal stays wanted while min_cells frontier cells remain this close
-MAP_WAIT = 3.0      # s: how long each round waits for a current /map and costmap
-COSTMAP_LAG = 0.3   # s: costmap must be at least this much newer than /map
-POLL = 0.05         # s
+# m: the robot snaps to the nearest walkable cell within this distance
+ROBOT_SNAP = 0.5
+# m: a goal stays wanted while min_cells frontier cells remain this close to it
+GOAL_FRONTIER = 0.5
+# s each round waits for a current /map and costmap before using what it has
+MAP_WAIT = 3.0
+# s the costmap must be newer than /map, so it reflects that map
+COSTMAP_LAG = 0.3
+# s between checks while waiting
+POLL = 0.05
 MARKER_TOPIC = '/frontier_explore/frontiers'
-# Default footprint (matches golem_slam/config/g1_nav2.yaml; override via 'footprint' param).
+# m, (x, y) corners in the robot frame; default of the `footprint` parameter,
+# equal to golem_slam/config/g1/nav2.yaml's (test_frontier_explore checks it)
 G1_FOOTPRINT = '[[0.44, 0.24], [0.44, -0.24], [-0.20, -0.24], [-0.20, 0.24]]'
 
-# data (rows y, cols x) int16; res m; origin (x, y) of cell (0, 0)'s corner; stamp s.
+# data (rows y, cols x) int16; res m; origin (x, y) of cell (0, 0)'s corner; stamp s
 Grid = namedtuple('Grid', 'data res origin stamp')
-# A goal: frontier cell (x, y) in map, heading from the robot, cluster size in cells.
+# a goal: frontier cell (x, y) in the map frame, heading from the robot, cluster size in cells
 Frontier = namedtuple('Frontier', 'x y yaw size')
 
 
@@ -205,6 +211,7 @@ def outdated(grid, costmap, goal, footprint, min_cells, radius=GOAL_FRONTIER):
 def choose(frontiers, robot_xy, blacklist, blacklist_radius, min_goal_distance):
     """Return (nearest candidate or None, candidates) outside min_goal_distance and blacklist."""
     def distance(f):
+        """Return frontier `f`'s distance from the robot [m]."""
         return math.hypot(f.x - robot_xy[0], f.y - robot_xy[1])
 
     candidates = [
@@ -220,15 +227,18 @@ class _Run:
     """One exploration goal: feedback, result, cancel and ROS-clock deadline."""
 
     def __init__(self, node, goal_handle, timeout):
+        """Start the goal's deadline `timeout` s from now on the node clock."""
         self.node, self.gh = node, goal_handle
         self.feedback = SkillFrontierExplore.Feedback()
         self.result = SkillFrontierExplore.Result()
         self.deadline = node.now() + timeout
 
     def remaining(self):
+        """Return the seconds left before the deadline (node clock), at least 0."""
         return max(0.0, self.deadline - self.node.now())
 
     def _canceled(self):
+        """End the goal as canceled and return its result."""
         self.result.success, self.result.message = False, 'canceled'
         self.gh.canceled()
         self.node.get_logger().info('canceled')
@@ -253,6 +263,7 @@ class _Run:
         return True
 
     def abort(self, message):
+        """Abort the goal with `message`, or end it as canceled if a cancel was requested."""
         if self.gh.is_cancel_requested:
             return self._canceled()
         self.result.success, self.result.message = False, message
@@ -261,6 +272,7 @@ class _Run:
         return self.result
 
     def succeed(self, message):
+        """Succeed the goal with `message`, or end it as canceled if a cancel was requested."""
         if self.gh.is_cancel_requested:
             return self._canceled()
         self.feedback.phase, self.feedback.progress = 'done', 1.0
@@ -272,7 +284,7 @@ class _Run:
 
 
 class FrontierExploreSkill:
-    """Mixin providing /skill/frontier_explore on SkillsNode (or standalone FrontierExplore)."""
+    """Provide /skill/frontier_explore to SkillsNode (a mixin on the node that serves it)."""
 
     def _frontier_init(self):
         """Initialize parameters, /map + costmap subscriptions, Nav2 client, and markers."""
@@ -319,11 +331,13 @@ class FrontierExploreSkill:
         return self.get_clock().now().nanoseconds * 1e-9
 
     def _on_frontier_grid(self, key, msg):
+        """Cache the latest /map or costmap (`key`) as a Grid."""
         grid = grid_of(msg)
         with self._frontier_lock:
             self._frontier_grids[key] = grid
 
     def _on_frontier_goal(self, request):
+        """Accept a goal with finite, non-negative fields while no exploration is running."""
         self._frontier_init()
         values = (
             request.min_frontier_cells, request.blacklist_radius,
@@ -342,6 +356,7 @@ class FrontierExploreSkill:
         return GoalResponse.ACCEPT
 
     def _frontier_robot_xy(self):
+        """Return the robot's (x, y) in the map frame from TF, or None."""
         try:
             t = self.tf_buffer.lookup_transform(
                 self.map_frame, self.base_frame, Time())
@@ -350,6 +365,7 @@ class FrontierExploreSkill:
         return t.transform.translation.x, t.transform.translation.y
 
     def _publish_frontier_markers(self, frontiers, selected=None):
+        """Replace the RViz markers with one sphere per candidate, `selected` larger and green."""
         arr = MarkerArray()
         wipe = Marker()
         wipe.header.frame_id = self.map_frame
@@ -381,6 +397,7 @@ class FrontierExploreSkill:
         self._frontier_markers.publish(arr)
 
     def _clear_frontier_markers(self):
+        """Delete every frontier marker."""
         arr = MarkerArray()
         wipe = Marker()
         wipe.header.frame_id = self.map_frame
@@ -404,6 +421,7 @@ class FrontierExploreSkill:
         return future.result()
 
     def _frontier_sleep(self, seconds, gh):
+        """Wait `seconds` of node-clock time, or less on a cancel or shutdown."""
         end = self.now() + seconds
         while self.now() < end and not gh.is_cancel_requested and self.context.ok():
             threading.Event().wait(POLL)
@@ -439,6 +457,7 @@ class FrontierExploreSkill:
         return GoalStatus.STATUS_CANCELED, why
 
     def _exec_frontier_explore(self, gh):
+        """Run one exploration goal; an escaping exception aborts it and the busy flag is reset."""
         self._frontier_init()
         request = gh.request
         timeout = request.timeout.sec + request.timeout.nanosec * 1e-9
@@ -454,6 +473,14 @@ class FrontierExploreSkill:
                 self._frontier_busy = False
 
     def _explore_loop(self, gh, run, request):
+        """
+        Send Nav2 to the nearest candidate frontier, round after round, until none is left.
+
+        Each round waits up to MAP_WAIT for a /map newer than the last goal's
+        end and a costmap COSTMAP_LAG newer than that map, then uses the latest
+        it has. A failed or blocked goal is blacklisted; a goal reached or
+        seen on the way counts in goals_reached.
+        """
         min_cells = request.min_frontier_cells or DEFAULT_MIN_CELLS
         blacklist_radius = request.blacklist_radius or DEFAULT_BLACKLIST_RADIUS
         min_goal_distance = request.min_goal_distance or DEFAULT_MIN_GOAL_DISTANCE
@@ -554,19 +581,3 @@ class FrontierExploreSkill:
                     f'goal {sent}: failed ({reason}) after {last_end - start:.1f} s; '
                     'blacklisted'
                 )
-
-
-class FrontierExplore(Node, FrontierExploreSkill):
-    """Standalone node wrapper around FrontierExploreSkill."""
-
-    def __init__(self, **kwargs):
-        super().__init__('frontier_explore', **kwargs)
-        self._frontier_init()
-        self.server = ActionServer(
-            self, SkillFrontierExplore, '/skill/frontier_explore',
-            execute_callback=self._exec_frontier_explore,
-            goal_callback=self._on_frontier_goal,
-            cancel_callback=lambda _: CancelResponse.ACCEPT,
-            callback_group=self._cb_group,
-        )
-

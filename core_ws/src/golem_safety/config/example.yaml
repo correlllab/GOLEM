@@ -1,0 +1,118 @@
+# Every key of a golem_safety config, with its meaning, units and allowed values. No bringup
+# runs this file: the real configs are config/<robot>/*.yaml, which a bare config name
+# resolves against. Where a key has a fixed default, the value here is that default, used
+# when a config leaves the key out. The loader (src/config.cpp) refuses an unknown key, a
+# value out of range and a per-joint list of the wrong length, naming the file and the key.
+# test_config.cpp loads this file for every robot and checks that it has every key and the
+# defaults.
+
+# How the inputs are read: full_body_mode (one input for every body slot) or split_mode (a
+# lower-body input for the profile's lower_slots and an upper-body input for its
+# upper_slots, merged). Must be one of the robot profile's modes; default: its first mode.
+mode: split_mode
+
+# ROS topic names; each must start with '/' (the DDS topic rt/x is the ROS topic /x).
+topics:
+  # unitree_hg/LowCmd input of full_body_mode.
+  low_cmd_in: /safety/lowcmd_in
+  # unitree_hg/LowCmd lower-body input of split_mode.
+  low_cmd_lower_in: /safety/lowcmd_lower_in
+  # unitree_hg/LowCmd upper-body input of split_mode.
+  low_cmd_upper_in: /safety/lowcmd_upper_in
+  # The body command topic the node writes, and the only one it writes.
+  low_cmd_out: /lowcmd
+  # unitree_hg/LowState the robot or sim publishes.
+  low_state: /lowstate
+
+control:
+  # Hz, per s of robot time (the boot clock; a sim's /clock under use_sim_time), the node
+  # writes low_cmd_out at; > 0. Under use_sim_time about one write per /clock step, and two
+  # when a step spans two periods or more.
+  publish_hz: 500.0
+  # ms; the estop latches when a /lowstate arrives more than this late against the robot's
+  # ms tick. Checked only on ROS domain 0, the real robots' bus (the sims count tick in sim
+  # steps). <= 0 turns the check off. Required, no default, so that no robot runs another
+  # robot's value by leaving it out.
+  state_lag_ms: 0.0
+
+# s of robot time of silence after which an engaged input, or /lowstate, is reported as
+# quiet (and as resumed when it returns) while its last command keeps being relayed. <= 0
+# turns a report off; any finite number is accepted.
+stale:
+  # The upper-body input of split_mode.
+  upper_seconds: 0.0
+  # The lower-body input of split_mode, and the input of full_body_mode.
+  lower_seconds: 0.2
+  # /lowstate, once any input has engaged.
+  state_seconds: 0.1
+
+single_writer:
+  # s of robot time the current writer of an input must be quiet before a command from
+  # another DDS writer takes the input over; a second writer inside this gap latches the
+  # estop. > 0.
+  handover_seconds: 0.5
+
+# The hardware estop, read only when the node runs with use_estop:=true.
+estop:
+  # std_msgs/Bool, true when the estop is pressed: latches.
+  triggered_topic: /estop/triggered
+  # std_msgs/Bool, false when the estop box is unplugged: latches.
+  plugged_in_topic: /estop/plugged_in
+  # s of robot time (the boot clock on the real robots, which the hardware estop is on);
+  # from the first sample on, no new sample for longer than this latches. > 0.
+  timeout_seconds: 0.5
+
+# What the node writes once the estop has latched, until it restarts.
+estop_response:
+  # zero: every motor off (mode 0, every value 0), so the robot drops and must be supported.
+  # damp: every body motor on with kp 0 and the kd below, so the robot sinks on its
+  # dampers. Default: zero.
+  mode: zero
+  # N*m*s/rad, the damping gain of damp: one number for every body joint, or a list with one
+  # entry per body joint in slot order; each in [0, limits.clip.kd_max]. Required with damp;
+  # ignored with zero.
+  kd: 0.0
+  # burst_then_silence: burst_count estop commands, then nothing more on low_cmd_out.
+  # keep_writing: the estop command on every cycle until restart.
+  # Required, no default.
+  after: burst_then_silence
+  # Commands in the burst of burst_then_silence; an integer >= 1.
+  burst_count: 50
+
+# The per-joint limits, derived from the robot profile's joint table
+# (share/golem_safety/robots/<robot>.yaml). Each of position_offset, velocity_ratio and
+# torque_ratio is one number for every body joint, or a list with one entry per body joint
+# in slot order (as many entries as the profile has joints).
+limits:
+  # What a controller may command: a command is clipped to these before it is relayed.
+  clip:
+    # rad, inset from each end of the joint's position range: [low + offset, high - offset].
+    # A negative offset widens the range; the offsets must leave low < high.
+    position_offset: 0.01
+    # Fraction of the joint's velocity limit that |dq| is clipped to.
+    velocity_ratio: 0.5
+    # Fraction of the joint's effort limit that |tau| is clipped to.
+    torque_ratio: 0.5
+    # The largest kp of any joint, N*m/rad; one number, >= 0.
+    kp_max: 300.0
+    # The largest kd of any joint, N*m*s/rad; one number, >= 0.
+    kd_max: 30.0
+  # What the measured /lowstate may reach: a q outside the range, a |dq| or |tau_est| above
+  # its limit, or a non-finite value, on any slot of the mode's inputs, latches the estop.
+  # Checked from the first /lowstate, before any input engages.
+  estop:
+    # rad, as limits.clip.position_offset.
+    position_offset: 0.01
+    # Fraction of the joint's velocity limit that |dq| may reach.
+    velocity_ratio: 0.5
+    # Fraction of the joint's effort limit that |tau_est| may reach.
+    torque_ratio: 0.5
+
+# The chunk logger: one sample per /lowstate before the latch, with the last command written.
+logging:
+  # true|false.
+  enabled: false
+  # Each run writes to its own directory under this one, <base_dir>/<YYYYmmdd-HHMMSS>-<pid>.
+  base_dir: /tmp/golem_safety
+  # Chunk file names are <chunk_prefix>000000.npz, ...; scripts/combine_chunks.py merges them.
+  chunk_prefix: chunk_

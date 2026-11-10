@@ -1,13 +1,13 @@
-"""The mujoco_sensors ROS 2 node, which hosts a robot's sensor suite.
+"""Run the mujoco_sensors ROS 2 node: /clock, opt-in ground-truth odom and a robot's sensors.
 
 The node itself publishes:
   /clock                       rosgraph_msgs/Clock (sim time), on every tick
   /odom, odom -> pelvis on /tf ground-truth base pose, only with base_body_id >= 0
                                (opt-in, GOLEM_SIM_ODOM)
-Everything else on the node comes from the suite, which reproduces the robot's
-own sensor drivers (h12_sensors.H12Sensors for the H1-2). The suite is built in
-the constructor, so a missing GL fails at startup and a camera's EGL context
-exists before the passive viewer's GLFW window.
+Everything else on the node comes from the sensor suite, which reproduces the
+robot's own sensor drivers (h12_sensors.H12Sensors, g1.g1_sensors.G1Sensors).
+The suite is built in the constructor, so a missing GL fails at startup and a
+camera's EGL context exists before the passive viewer's GLFW window.
 
 tick() is called once per sim step from the physics thread: /clock, odom when
 due, then the suite's tick(sim_t, stamp). With sim_lock, the host holds it only
@@ -27,6 +27,11 @@ from rclpy.node import Node
 from rosgraph_msgs.msg import Clock
 from tf2_ros import TransformBroadcaster
 
+# The ground-truth odom's frames and rate (Hz of sim time).
+ODOM_FRAME = "odom"
+BASE_FRAME = "pelvis"
+ODOM_RATE_HZ = 50.0
+
 
 def _sim_time_to_msg(sim_time: float) -> TimeMsg:
     """Convert MuJoCo sim time (float seconds) to a ROS Time message."""
@@ -39,20 +44,24 @@ def _sim_time_to_msg(sim_time: float) -> TimeMsg:
 
 
 class SensorSuite(Protocol):
-    """A robot's sensor models, publishing on the host's node."""
+    """Define the interface of a robot's sensor models, which publish on the host's node."""
 
     def tick(self, sim_t: float, stamp: TimeMsg) -> None:
         """Publish what is due at sim_t (s); stamp is sim_t as a ROS time.
-        Called after /clock and odom, on every tick."""
+
+        Called after /clock and odom, on every tick.
+        """
 
     def shutdown(self) -> None:
         """Stop the suite's threads and free its GL context on the thread that owns it."""
 
     def stats(self) -> str:
-        """A summary for the sim's log; "" when there is nothing to report."""
+        """Return a summary for the sim's log, or "" when there is nothing to report."""
 
 
 class RosSensorBridge(Node):
+    """Host a sensor suite on the mujoco_sensors node and publish /clock and optional odom."""
+
     def __init__(
         self,
         model,
@@ -60,52 +69,50 @@ class RosSensorBridge(Node):
         make_sensors: Callable[[Node], SensorSuite],
         *,
         base_body_id: int = -1,
-        odom_frame: str = "odom",
-        base_frame: str = "pelvis",
-        odom_rate_hz: float = 50.0,
         sim_lock=None,
     ) -> None:
+        """Build the suite with make_sensors(node).
+
+        base_body_id >= 0 publishes that body's world pose as ODOM_FRAME ->
+        BASE_FRAME on /tf and /odom at ODOM_RATE_HZ of sim time. sim_lock, when
+        given, is held only while reading MjData.
+        """
         super().__init__("mujoco_sensors")
         self.model = model
         self.data = data
         self.sim_lock = sim_lock
 
-        # /clock stays on default reliable QoS so subscribers don't drop ticks.
+        # Reliable QoS, so subscribers do not drop ticks.
         self.pub_clock = self.create_publisher(Clock, "/clock", 10)
 
-        # The suite creates its publishers on this node.
         self.suite = make_sensors(self)
 
-        # Ground-truth base odometry (odom -> base_frame TF + /odom). The sim knows
-        # the pelvis world pose exactly, so we publish it directly instead of
-        # running FAST-LIO. This is the odom source SLAM (slam_toolbox) consumes.
+        # Ground truth, which the real robot does not have: GOLEM_SIM_ODOM opts in.
         self.base_body_id = int(base_body_id)
-        self.odom_frame = odom_frame
-        self.base_frame = base_frame
-        self.odom_period = 1.0 / odom_rate_hz
+        self.odom_period = 1.0 / ODOM_RATE_HZ
         self._last_odom_sim_t = 0.0
         if self.base_body_id >= 0:
             self._tf_broadcaster = TransformBroadcaster(self)
             self.pub_odom = self.create_publisher(Odometry, "/odom", 10)
 
     def shutdown(self) -> None:
+        """Stop the suite."""
         self.suite.shutdown()
 
     def stats(self) -> str:
+        """Return the suite's summary for the sim's log."""
         return self.suite.stats()
 
     def tick(self) -> None:
-        """Call once per sim step from the physics thread.
+        """Publish /clock, odom when due, then tick the suite; once per sim step, on the physics thread.
 
-        /clock is published every call, odom at its rate keyed off sim time,
-        then the suite ticks with the same sim time and stamp. sim_lock, when
-        given, is held only to read MjData, never while publishing.
+        With sim_lock, call it without holding the lock; without, keep physics
+        from advancing during the call.
         """
         with self.sim_lock or nullcontext():
             sim_t = float(self.data.time)
         stamp = _sim_time_to_msg(sim_t)
 
-        # Always publish /clock so subscriber nodes can track sim time.
         clock_msg = Clock()
         clock_msg.clock = stamp
         self.pub_clock.publish(clock_msg)
@@ -120,8 +127,8 @@ class RosSensorBridge(Node):
         self.suite.tick(sim_t, stamp)
 
     def _publish_odom(self, stamp: TimeMsg) -> None:
-        # Ground-truth pelvis pose in the sim world (used as the odom frame).
-        # MuJoCo quaternions are (w, x, y, z); ROS wants (x, y, z, w).
+        """Publish the base body's world pose as ODOM_FRAME -> BASE_FRAME on /tf and /odom."""
+        # MuJoCo quaternions are (w, x, y, z); ROS's are (x, y, z, w).
         with self.sim_lock or nullcontext():
             pos = self.data.xpos[self.base_body_id]
             quat = self.data.xquat[self.base_body_id]
@@ -131,8 +138,8 @@ class RosSensorBridge(Node):
 
         tf = TransformStamped()
         tf.header.stamp = stamp
-        tf.header.frame_id = self.odom_frame
-        tf.child_frame_id = self.base_frame
+        tf.header.frame_id = ODOM_FRAME
+        tf.child_frame_id = BASE_FRAME
         tf.transform.translation.x = px
         tf.transform.translation.y = py
         tf.transform.translation.z = pz
@@ -144,8 +151,8 @@ class RosSensorBridge(Node):
 
         odom = Odometry()
         odom.header.stamp = stamp
-        odom.header.frame_id = self.odom_frame
-        odom.child_frame_id = self.base_frame
+        odom.header.frame_id = ODOM_FRAME
+        odom.child_frame_id = BASE_FRAME
         odom.pose.pose.position.x = px
         odom.pose.pose.position.y = py
         odom.pose.pose.position.z = pz
@@ -156,7 +163,11 @@ class RosSensorBridge(Node):
         self.pub_odom.publish(odom)
 
 
-def init_ros() -> bool:
+def init_ros() -> None:
+    """Initialise rclpy, raising RuntimeError unless ROS_DOMAIN_ID is a positive integer.
+
+    SAFETY: domain 0 is the real robots' command bus; a sim never joins it.
+    """
     raw = os.getenv("ROS_DOMAIN_ID")
     if raw is None or raw == "":
         raise RuntimeError(
@@ -177,9 +188,9 @@ def init_ros() -> bool:
         )
     if not rclpy.ok():
         rclpy.init()
-    return True
 
 
 def shutdown_ros() -> None:
+    """Shut rclpy down if it is running."""
     if rclpy.ok():
         rclpy.shutdown()

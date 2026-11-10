@@ -1,0 +1,41 @@
+# The H1-2's leg node in the simulators; every key is described in ../example.run.yaml.
+sim: true
+
+startup:
+  # unattended sim runs start the policy once the pre-pose holds and the timing is ready
+  wait_for_confirm: false
+  ramp_seconds: 2.0
+  settle_tolerance: 0.15
+  settle_ticks: 10
+  settle_max_ticks: 400
+  steady_seconds: 1.0
+  tick_rate: [0.9, 1.1]
+  upper_fresh_seconds: 0.5
+
+heartbeat:
+  timeout: 0.5
+
+band:
+  release: true
+  # frame_task_server's start-up moves end about 24 s after the leg node starts in
+  # tests/stack and about 29 s under the full sim bringup; a band released before then
+  # drops the robot
+  max_wait: 34.0
+
+commands:
+  timeout: 0.5
+  vx: [-1.0, 1.0]
+  vy: [-1.0, 1.0]
+  yaw: [-1.0, 1.0]
+  accel: null
+  height_rate: null
+
+faults:
+  # longer than real.yaml's: gaps count sim time, and a delivery delay on a loaded host
+  # counts as sim time here, more of it at a GOLEM_SIM_RATE above 1
+  max_state_gap: 0.5
+  # the sim's tick is sim time, so tick lag is not a delivery delay there
+  max_latency: null
+
+# the sim IMU has no mounting bias
+imu_trim_deg: [0.0, 0.0, 0.0]

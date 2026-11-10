@@ -1,11 +1,12 @@
-'''
-Fixtures for the safety_node tests, on ROS domain 91: the node as a subprocess, and a
-fake robot that publishes /lowstate (and the controllers' commands and the hardware
-estop) and records /lowcmd and /safety/heartbeat with their source timestamps.
+"""
+Provide the safety_node test fixtures, on ROS domain 91.
 
-rclpy is imported only by these fixtures, so the other pytest files in this directory,
-which load this conftest too, do not need a ROS domain.
-'''
+The node runs as a subprocess, and a fake robot publishes /lowstate (and the controllers'
+commands and the hardware estop) and records /lowcmd and /safety/heartbeat with their
+source timestamps. A sim clock publishes /clock, for a node run with use_sim_time. rclpy is
+imported only inside these fixtures, so the other pytest files in this directory, which load
+this conftest too, need no ROS domain.
+"""
 
 import os
 import re
@@ -20,34 +21,37 @@ from pathlib import Path
 import pytest
 import yaml
 
-# golem_safety's integration-test domain; never 0, the real robots' command bus
+# golem_safety's integration-test domain; never 0, the real robots' command bus.
 TEST_DOMAIN = 91
-STATE_PERIOD = 0.005  # /lowstate at 200 Hz
+STATE_PERIOD = 0.005  # s: /lowstate at 200 Hz
 STREAM_EVERY = 2  # streamed commands and estop samples every 2 state periods: 100 Hz
 OUTPUTS = ('/lowcmd',)
 HEARTBEAT = '/safety/heartbeat'
-# the pose the fake robot reports, which the tests command
+# The pose the fake robot reports, which the tests command; rad.
 KNEE = 3  # left knee on both robots
 KNEE_Q = 0.5
 SHOULDER_Q = 0.2
-# rcutils' default console format: [LEVEL] [seconds] [logger]: message
+# rcutils' default console format: [LEVEL] [seconds] [logger]: message.
 LOG_LINE = re.compile(r'^\[(DEBUG|INFO|WARN|ERROR|FATAL)\] \[([0-9.]+)\] \[[^\]]*\]: (.*)$')
 _names = itertools.count()
 
 
 def share_dir() -> Path:
+    """Return golem_safety's installed share directory."""
     from ament_index_python.packages import get_package_share_directory
     return Path(get_package_share_directory('golem_safety'))
 
 
 def node_executable() -> str:
+    """Return the installed safety_node executable."""
     from ament_index_python.packages import get_package_prefix
     return str(Path(get_package_prefix('golem_safety')) / 'lib' / 'golem_safety' / 'safety_node')
 
 
 class Profile:
-    '''The robot facts the tests need, from the installed robots/<robot>.yaml'''
+    """Hold the robot facts the tests need, from the installed robots/<robot>.yaml."""
     def __init__(self, robot: str) -> None:
+        """Read the profile of `robot`."""
         data = yaml.safe_load((share_dir() / 'robots' / f'{robot}.yaml').read_text())
         self.robot = robot
         self.mode_machine = data['mode_machine']
@@ -55,14 +59,14 @@ class Profile:
         self.lower = range(data['lower_slots'][0], data['lower_slots'][1] + 1)
         self.upper = range(data['upper_slots'][0], data['upper_slots'][1] + 1)
         self.shoulder = self.joints.index('left_shoulder_pitch_joint')
-        # the joints a controller holds stiff: the G1's waist, the H1-2's torso
+        # The joints a controller holds stiff: the G1's waist, the H1-2's torso.
         self.held = [i for i, name in enumerate(self.joints)
                      if name.startswith('waist_') or name == 'torso_joint']
         self.position = [tuple(joint['position']) for joint in data['joints']]
 
 
 def node_env(extra: dict | None = None, drop: tuple = ()) -> dict:
-    '''The node's environment: domain 91, uncoloured log lines'''
+    """Return the node's environment: the test domain, uncoloured log lines."""
     env = dict(os.environ)
     env['ROS_DOMAIN_ID'] = str(TEST_DOMAIN)
     env['RCUTILS_COLORIZED_OUTPUT'] = '0'
@@ -75,7 +79,7 @@ def node_env(extra: dict | None = None, drop: tuple = ()) -> dict:
 
 
 def parse_events(lines: list[str]) -> list[tuple[str, float, dict]]:
-    '''(level, log time, event) of each JSON event the node logged; prose lines are skipped'''
+    """Return (level, log time, event) of each JSON event logged; prose is skipped."""
     events = []
     for line in lines:
         match = LOG_LINE.match(line)
@@ -89,10 +93,11 @@ def parse_events(lines: list[str]) -> list[tuple[str, float, dict]]:
 
 
 class SafetyNode:
-    '''safety_node as a subprocess; its output lines are collected by a thread'''
+    """Run safety_node as a subprocess, collecting its output lines on a thread."""
     def __init__(self, robot: str, config: str | Path, *, sim: bool = True,
                  use_estop: bool = False, env: dict | None = None,
                  stdout=None, stderr=None, params: dict | None = None) -> None:
+        """Start the node on `config` for `robot`; with stdout, its output goes there instead."""
         args = [node_executable(), '--ros-args']
         values = {'robot': robot, 'config': str(config),
                   'sim': 'true' if sim else 'false', 'use_estop': 'true' if use_estop else 'false'}
@@ -113,21 +118,25 @@ class SafetyNode:
                 args, env=env if env is not None else node_env(), stdout=stdout, stderr=stderr)
 
     def _read(self) -> None:
+        """Collect the node's output lines until it closes them."""
         for line in self.proc.stdout:
             self.lines.append(line.rstrip('\n'))
 
     def output(self) -> str:
+        """Return the output collected so far."""
         return '\n'.join(self.lines)
 
     def events(self, name: str | None = None) -> list[dict]:
+        """Return the JSON events logged so far, those called `name` when given."""
         return [e for _, _, e in parse_events(list(self.lines))
                 if name is None or e['event'] == name]
 
     def timed_events(self, name: str) -> list[tuple[str, float, dict]]:
-        '''(level, log time, event) of each event called name'''
+        """Return (level, log time, event) of each event called `name`."""
         return [entry for entry in parse_events(list(self.lines)) if entry[2]['event'] == name]
 
     def wait_for_event(self, name: str, timeout: float = 30.0) -> dict:
+        """Return the first event called `name`; fail when the node exits or `timeout` passes."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             found = self.events(name)
@@ -138,13 +147,14 @@ class SafetyNode:
         raise AssertionError(f'no {name} within {timeout} s:\n{self.output()}')
 
     def wait_exit(self, timeout: float) -> int:
+        """Wait up to `timeout` s for the node to exit; return its exit code."""
         code = self.proc.wait(timeout=timeout)
         if self._reader is not None:
             self._reader.join(timeout=5.0)
         return code
 
     def stop(self, timeout: float = 10.0) -> None:
-        '''SIGTERM, so that the node leaves the DDS graph cleanly; SIGKILL if it hangs'''
+        """Stop the node with SIGTERM, so it leaves the DDS graph cleanly; SIGKILL if it hangs."""
         if self.proc.poll() is None:
             self.proc.terminate()
             try:
@@ -157,13 +167,16 @@ class SafetyNode:
 
 
 class FakeRobot:
-    '''
-    An rclpy node that streams /lowstate at 200 Hz (and, when asked, commands and the
-    hardware estop at 100 Hz) from a thread, and records what the safety node writes as
-    (source timestamp, message): the node's own publish time on the wall clock, so that
-    the timing of the records does not depend on this process's scheduling
-    '''
+    """
+    Play the robot and its controllers over rclpy.
+
+    A thread streams /lowstate at 200 Hz and, when asked, commands and the hardware estop at
+    100 Hz; another records what the safety node writes as (source timestamp, message): the
+    node's own publish time on the wall clock, so the records' timing does not depend on this
+    process's scheduling.
+    """
     def __init__(self, robot: str, context, stream_state: bool = True) -> None:
+        """Create the node, its publishers and recorders, and start both threads."""
         import rclpy
         from rclpy.qos import QoSProfile, ReliabilityPolicy
         from std_msgs.msg import Bool
@@ -184,14 +197,14 @@ class FakeRobot:
         self._state_pub = self.node.create_publisher(LowState, '/lowstate', 10)
         self._estop_pubs = (self.node.create_publisher(Bool, '/estop/triggered', 10),
                             self.node.create_publisher(Bool, '/estop/plugged_in', 10))
-        # (triggered, plugged_in) streamed when set; None leaves that topic silent
+        # (triggered, plugged_in) streamed when set; None leaves that topic silent.
         self.estop_values: tuple | None = None
         self._streamed: list = []  # (publisher, command)
-        # held by the stream thread while it publishes a streamed command, and by
-        # close_publisher while it removes and destroys a publisher: a destroyed publisher is
-        # never written to
+        # Held by the stream thread while it publishes a streamed command, and by
+        # close_publisher while it removes and destroys a publisher, so that a destroyed
+        # publisher is never written to.
         self._publisher_lock = threading.Lock()
-        # written once in place of the first streamed command
+        # Written once in place of the first streamed command.
         self.once = None
         self._publishers: list = []
         qos = QoSProfile(depth=10000, reliability=ReliabilityPolicy.RELIABLE)
@@ -205,14 +218,13 @@ class FakeRobot:
         for thread in self._threads:
             thread.start()
 
-    # what the node writes
-
     def outputs(self, topic: str, since: float | None = None) -> list:
+        """Return the records of `topic`, those from `since` (wall clock, s) on when given."""
         records = list(self.received[topic])
         return records if since is None else [r for r in records if r[0] >= since]
 
     def wait_for_output(self, topic: str, check, timeout: float = 10.0) -> None:
-        '''Wait until the newest message on topic passes check'''
+        """Wait until the newest message on `topic` passes `check`."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             records = self.received[topic]
@@ -222,6 +234,7 @@ class FakeRobot:
         raise AssertionError(f'{topic} never carried the expected command')
 
     def _record(self) -> None:
+        """Take every message the subscriptions hold, with its source timestamp, until close()."""
         while not self._stop.is_set():
             got = False
             for topic, sub in self._subs.items():
@@ -237,14 +250,14 @@ class FakeRobot:
             if not got:
                 time.sleep(0.001)
 
-    # what the robot and its controllers send
-
     def command(self, knee: float | None = None, shoulder: float | None = None,
                 held_kp: float = 60.0, q: dict | None = None):
-        '''
-        A controller's command: the held joints at 0 with held_kp, and knee, shoulder and
-        each slot of q at its position, all with kp 60 and kd 1.5
-        '''
+        """
+        Return a controller's command.
+
+        The held joints are at 0 with held_kp; knee, shoulder and each slot of q at its position,
+        all with kp 60 and kd 1.5.
+        """
         cmd = self._lowcmd_type()
         for slot in self.profile.held:
             motor = cmd.motor_cmd[slot]
@@ -258,7 +271,7 @@ class FakeRobot:
         return cmd
 
     def publisher(self, topic: str, wait: bool = True):
-        '''A new writer on topic; wait: until the node's reader has matched it'''
+        """Return a new writer on `topic`; with wait, once the node's reader matched it."""
         pub = self.node.create_publisher(self._lowcmd_type, topic, 10)
         self._publishers.append(pub)
         if wait:
@@ -266,28 +279,29 @@ class FakeRobot:
             while pub.get_subscription_count() < 1:
                 assert time.monotonic() < deadline, f'no reader matched {topic}'
                 time.sleep(0.01)
-            # the reader side matches on the same discovery round; leave it time to
+            # The node's reader matches on the same discovery round; leave it time to.
             time.sleep(0.1)
         return pub
 
     def close_publisher(self, pub) -> None:
+        """Stop streaming on `pub` and destroy it."""
         with self._publisher_lock:
             self._streamed = [(p, c) for p, c in self._streamed if p is not pub]
             self._publishers.remove(pub)
             self.node.destroy_publisher(pub)
 
     def stream(self, *pairs) -> None:
-        '''Write each (publisher, command) at 100 Hz from the stream thread until changed'''
+        """Write each (publisher, command) at 100 Hz from the stream thread until changed."""
         self._streamed = list(pairs)
 
     def publish_for(self, seconds: float, *pairs, hz: float = 100.0) -> float:
-        '''Write each (publisher, command) pair at hz; return the last write's time'''
+        """Write each (publisher, command) at `hz` for `seconds`; return the last write's time."""
         period = 1.0 / hz
         deadline = time.monotonic() + seconds
         next_write = time.monotonic()
         last = time.time()
         while time.monotonic() < deadline:
-            last = time.time()  # taken before the write: the node receives it no earlier
+            last = time.time()  # before the write: the node receives it no earlier
             for pub, cmd in pairs:
                 pub.publish(cmd)
             next_write += period
@@ -295,13 +309,19 @@ class FakeRobot:
         return last
 
     def pause(self) -> None:
+        """Stop streaming /lowstate."""
         self._paused.set()
-        time.sleep(0.02)  # let a write in progress finish
+        time.sleep(0.02)  # lets a write in progress finish
 
     def resume(self) -> None:
+        """Resume streaming /lowstate."""
         self._paused.clear()
 
     def _stream(self) -> None:
+        """
+        Publish /lowstate every STATE_PERIOD, and the streamed commands and estop samples every
+        STREAM_EVERY periods, until close().
+        """
         tick = 0
         next_write = time.monotonic()
         while not self._stop.is_set():
@@ -327,15 +347,75 @@ class FakeRobot:
             time.sleep(max(0.0, delay))
 
     def close(self) -> None:
+        """Stop both threads and destroy the node."""
         self._stop.set()
         for thread in self._threads:
             thread.join(timeout=5.0)
         self.node.destroy_node()
 
 
+class SimClock:
+    """
+    Publish /clock as a simulator does: one STEP_S step of sim time per message.
+
+    rate is sim seconds per wall second; nothing is published before start(), and pause()
+    stops /clock until resume().
+    """
+
+    STEP_S = 0.002
+
+    def __init__(self, context, rate: float = 1.0, start_s: float = 100.0) -> None:
+        """Create the node and its publisher."""
+        import rclpy
+        from rosgraph_msgs.msg import Clock
+        self._msg = Clock()
+        self.node = rclpy.create_node(f'sim_clock_{os.getpid()}_{next(_names)}', context=context)
+        self._pub = self.node.create_publisher(Clock, '/clock', 10)
+        self.rate = rate
+        self._t_ns = int(start_s * 1e9)
+        self._running = threading.Event()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    @property
+    def now(self) -> float:
+        """Return the last sim time published, s."""
+        return self._t_ns * 1e-9
+
+    def start(self) -> None:
+        """Publish /clock from now on (again, after pause())."""
+        self._running.set()
+
+    def pause(self) -> None:
+        """Stop publishing /clock."""
+        self._running.clear()
+
+    def _run(self) -> None:
+        """Publish a step every STEP_S / rate s of wall time while running, until close()."""
+        next_write = time.monotonic()
+        while not self._stop.is_set():
+            if self._running.is_set():
+                self._t_ns += int(self.STEP_S * 1e9)
+                self._msg.clock.sec, self._msg.clock.nanosec = divmod(self._t_ns, 10**9)
+                self._pub.publish(self._msg)
+            next_write += self.STEP_S / self.rate
+            delay = next_write - time.monotonic()
+            if delay < -0.1:
+                next_write = time.monotonic()
+            time.sleep(max(0.0, delay))
+
+    def close(self) -> None:
+        """Stop the thread and destroy the node."""
+        self._stop.set()
+        self._thread.join(timeout=5.0)
+        self.node.destroy_node()
+
+
 class Run:
-    '''One test's safety node, fake robot and config'''
+    """Hold one test's safety node, fake robot and config."""
     def __init__(self, robot: FakeRobot, node: SafetyNode, config: dict, path: Path) -> None:
+        """Keep the parts of the run."""
         self.robot = robot
         self.node = node
         self.config = config
@@ -343,23 +423,28 @@ class Run:
 
     @property
     def out_topic(self) -> str:
+        """Return the config's output topic."""
         return self.config['topics']['low_cmd_out']
 
     def outputs(self, since: float | None = None) -> list:
+        """Return the records of the output topic, those from `since` on when given."""
         return self.robot.outputs(self.out_topic, since)
 
     def close(self) -> None:
+        """Stop the node, then the fake robot."""
         self.node.stop()
         self.robot.close()
 
 
 def write_config(directory: Path, robot: str, name: str, logging: dict | None = None,
                  **sections) -> tuple[Path, dict]:
-    '''
-    The installed config name of robot, logging off (or as given), with each keyword
-    section's keys replaced, written to directory/robot/name.yaml: the node refuses a config
-    in a directory named after another robot, so this one is in a directory named after its own
-    '''
+    """
+    Write a copy of the installed config `name` of `robot`; return (path, its data).
+
+    Logging is off unless given, and each keyword section's keys are replaced. The copy goes
+    to directory/robot/name.yaml, since the node refuses a config in a directory named after
+    another robot.
+    """
     raw = yaml.safe_load((share_dir() / 'config' / robot / f'{name}.yaml').read_text())
     raw['logging'] = {**raw.get('logging', {}), 'enabled': False, **(logging or {})}
     for section, values in sections.items():
@@ -375,6 +460,7 @@ def write_config(directory: Path, robot: str, name: str, logging: dict | None = 
 
 @pytest.fixture(scope='session')
 def ros_context():
+    """Yield an rclpy context on the test domain for the session."""
     import rclpy
     context = rclpy.Context()
     rclpy.init(context=context, domain_id=TEST_DOMAIN)
@@ -384,10 +470,11 @@ def ros_context():
 
 @pytest.fixture
 def fake_robot(ros_context):
-    '''fake_robot(robot, stream_state=True) -> FakeRobot, closed after the test'''
+    """Yield fake_robot(robot, stream_state=True) -> FakeRobot, closed after the test."""
     robots = []
 
     def make(robot: str, stream_state: bool = True) -> FakeRobot:
+        """Return a new fake robot of `robot`."""
         made = FakeRobot(robot, ros_context, stream_state)
         robots.append(made)
         return made
@@ -398,33 +485,55 @@ def fake_robot(ros_context):
 
 
 @pytest.fixture
+def sim_clock(ros_context):
+    """Yield sim_clock(rate=1.0) -> SimClock (not yet publishing), closed after the test."""
+    clocks = []
+
+    def make(rate: float = 1.0) -> SimClock:
+        """Return a new sim clock at `rate` sim seconds per wall second."""
+        made = SimClock(ros_context, rate)
+        clocks.append(made)
+        return made
+
+    yield make
+    for made in clocks:
+        made.close()
+
+
+@pytest.fixture
 def stack(tmp_path, ros_context):
-    '''
-    stack(robot, config, ...) -> Run: a fake robot, then the node on a copy of the
-    installed config, started and discovered. stale.state_seconds is 1.0 unless the test
-    passes state_stale=None (the shipped value) or its own: a stall of this process's
-    state thread must not report a quiet /lowstate in a test of something else. Each run is
-    stopped with SIGTERM after the test
-    '''
+    """
+    Yield stack(robot, config, ...) -> Run: a fake robot, then the node, started and discovered.
+
+    The node runs on a copy of the installed config with stale.state_seconds 1.0, unless the
+    test passes state_stale=None (the shipped value) or its own, so that a stall of this
+    process's state thread does not report a quiet /lowstate in a test of something else.
+    Each run is stopped with SIGTERM after the test.
+    """
     runs = []
 
     def start(robot: str, config: str, *, stream_state: bool = True, use_estop: bool = False,
               state_stale: float | None = 1.0, logging: dict | None = None,
-              state_q: dict | None = None, **sections) -> Run:
+              state_q: dict | None = None, params: dict | None = None, **sections) -> Run:
+        """
+        Start a fake robot and the node on the edited config; return the run once discovered.
+
+        params: more node parameters (use_sim_time, for one).
+        """
         sections = copy.deepcopy(sections)
         if state_stale is not None:
             sections['stale'] = dict(sections.get('stale', {}), state_seconds=state_stale)
         path, raw = write_config(tmp_path, robot, config, logging, **sections)
         robot_ = FakeRobot(robot, ros_context, stream_state)
-        # the measured q of these slots from the first /lowstate on
+        # The measured q of these slots from the first /lowstate on.
         for slot, q in (state_q or {}).items():
             robot_.state.motor_state[slot].q = q
-        node = SafetyNode(robot, path, use_estop=use_estop)
+        node = SafetyNode(robot, path, use_estop=use_estop, params=params)
         run = Run(robot_, node, raw, path)
         runs.append(run)
         node.wait_for_event('relay_started')
         deadline = time.monotonic() + 15.0
-        # the node's /lowstate reader and its output writer
+        # Wait until the node's /lowstate reader and its output writer are discovered.
         while (robot_._state_pub.get_subscription_count() < 1
                or robot_.node.count_publishers(run.out_topic) < 1):
             assert time.monotonic() < deadline, 'the node was never discovered'

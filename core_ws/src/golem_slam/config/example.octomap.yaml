@@ -1,0 +1,47 @@
+# Every key of config/<robot>/octomap.yaml, octomap_server's parameters
+# (octomap_server_node, ROS 2 Humble). octomap_server builds 3D occupancy from
+# /cloud_body_filtered and projects it to /projected_map, the static layer of both
+# Nav2 costmaps. Not installed. Upstream reference:
+# https://wiki.ros.org/octomap_server (the ROS 2 node keeps the parameter names).
+octomap_server:
+  ros__parameters:
+    # Fixed frame the octree is built and published in. map: level_odom makes it
+    # gravity-aligned with the floor at z = 0, so the heights below are above the floor.
+    frame_id: map
+    # Robot base frame, used only by filter_ground_plane.
+    base_frame_id: pelvis
+    # m, edge of one voxel. CPU grows sharply as it shrinks.
+    resolution: 0.10
+    # m, rays are cut at this range (-1: no limit).
+    sensor_model.max_range: 6.0
+    # Probability a ray's end voxel is occupied, applied per hit: 0.5-1.
+    sensor_model.hit: 0.7
+    # Probability a voxel a ray passes through is occupied, applied per miss: 0-0.5.
+    sensor_model.miss: 0.4
+    # Lower clamp of a voxel's occupancy probability: 0-1, < max. A lower clamp makes
+    # free space take longer to become occupied again.
+    sensor_model.min: 0.12
+    # Upper clamp of a voxel's occupancy probability: 0-1. A lower clamp lets fewer
+    # passing rays free an occupied voxel.
+    sensor_model.max: 0.9
+    # m in frame_id: only points between these heights are inserted.
+    point_cloud_min_z: -0.5
+    point_cloud_max_z: 2.5
+    # m in frame_id: only occupied voxels between these heights are lethal in
+    # /projected_map and drawn in /occupied_cells_vis_array.
+    occupancy_min_z: 0.15
+    occupancy_max_z: 1.9
+    # true: drop occupied voxels with no occupied neighbour (single-point noise).
+    filter_speckles: true
+    # true: find and leave out the ground plane in base_frame_id (RANSAC). false
+    # here: the floor's rays must clear free space.
+    filter_ground_plane: false
+    # true: colour the visualisation markers by height.
+    use_height_map: true
+    # Saturation of the height colouring: 0-1.
+    color_factor: 0.8
+    # true: also publish markers for free voxels.
+    publish_free_space: false
+    # true: publish the map topics latched (transient local), so a late subscriber
+    # such as a costmap's static layer gets the last map at once.
+    latch: true

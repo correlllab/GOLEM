@@ -8,17 +8,17 @@
 namespace golem_safety
 {
 
-// Per-slot limits derived from the robot's joint table and the config's ratios,
-// indexed by body slot (one entry per body joint).
+// Hold the per-slot limits derived from the robot's joint table and the config's ratios,
+// one entry per body joint, in slot order:
 //
-//   q_*_low  = joint low  + position_offset      rad
-//   q_*_high = joint high - position_offset      rad
+//   q_*_low  = joint low  + position_offset            rad
+//   q_*_high = joint high - position_offset            rad
 //   dq_*     = joint velocity limit * velocity_ratio   rad/s
 //   tau_*    = joint effort limit   * torque_ratio     N*m
 //
-// The clip limits bound what a controller may command; the estop limits bound
-// what the measured state may reach before the estop latches. kp_max and kd_max
-// bound the commanded gains of every joint.
+// SAFETY: the clip limits bound what a controller may command; the estop limits bound what
+// the measured state may reach before the estop latches. kp_max and kd_max bound every
+// joint's commanded gains. A negative position_offset widens a range past the joint table.
 struct DerivedLimits
 {
   std::vector<double> q_clip_low, q_clip_high, dq_clip, tau_clip;
@@ -27,36 +27,36 @@ struct DerivedLimits
   double kd_max = 30.0;
 };
 
-// What the layer does after the estop latches. Every config names it
-// (estop_response.after has no default).
-//   BurstThenSilence  estop_response.burst_count commands, then it stops publishing.
-//   KeepWriting       the estop command keeps being written.
+// Name what the layer writes after the estop latches (estop_response.after, which every
+// config must give).
+//   BurstThenSilence  estop_response.burst_count estop commands, then nothing.
+//   KeepWriting       the estop command on every cycle until restart.
 enum class EstopAfter { BurstThenSilence, KeepWriting };
 
-// The estop command: Zero turns every motor off; Damp keeps every motor on with
-// kp = 0 and the configured kd.
+// Name the estop command (estop_response.mode): Zero turns every motor off; Damp keeps
+// every motor on with kp 0 and the configured kd.
 enum class EstopMode { Zero, Damp };
 
-struct Topics  // ROS topic names; the DDS topic rt/x is the ROS topic /x
+// Hold the ROS topic names (topics.*); the DDS topic rt/x is the ROS topic /x.
+struct Topics
 {
   std::string low_cmd_in;        // full_body_mode input
-  std::string low_cmd_lower_in;  // split_mode legs input
-  std::string low_cmd_upper_in;  // split_mode torso or waist + arms input
-  std::string low_cmd_out;       // /lowcmd by default
+  std::string low_cmd_lower_in;  // split_mode lower-body input
+  std::string low_cmd_upper_in;  // split_mode upper-body input
+  std::string low_cmd_out;       // the body command topic the node writes
   std::string low_state;
 };
 
+// Hold the relay loop's settings (control.*).
 struct Control
 {
   double publish_hz = 500.0;
-  // Estop when /lowstate arrives this many ms later than the robot's tick clock
-  // implies, on ROS domain 0 only; <= 0 disables it. Required: every config sets it, so
-  // no robot takes another's value by leaving it out.
+  // ms; <= 0 turns the transport-lag check off. It has no default, so that no robot runs
+  // another robot's value by leaving it out.
   double state_lag_ms = 0.0;
 };
 
-// Quiet-input thresholds, seconds. A quiet input or /lowstate is reported and its
-// last command keeps being relayed. A value <= 0 disables the report.
+// Hold the quiet-report thresholds (stale.*), s; <= 0 turns a report off.
 struct Stale
 {
   double upper_seconds = 0.0;
@@ -64,38 +64,40 @@ struct Stale
   double state_seconds = 0.1;
 };
 
+// Hold the single-writer rule's setting (single_writer.*).
 struct SingleWriter
 {
-  // A new writer that appears after the old one was quiet longer than this is accepted;
-  // two writers live at once latch the estop. Positive: at 0 any interleaving writer
-  // would count as a handover.
+  // s a writer must be quiet before another writer takes its input over. Must be positive:
+  // at 0 any two interleaving writers would count as a handover.
   double handover_seconds = 0.5;
 };
 
-// The hardware estop's ROS topics, read only when the bringup passes use_estop.
+// Hold the hardware estop's ROS topics and timeout (estop.*), read only with use_estop.
 struct EstopInput
 {
   std::string triggered_topic = "/estop/triggered";
   std::string plugged_in_topic = "/estop/plugged_in";
-  double timeout_seconds = 0.5;  // a sample older than this latches
+  double timeout_seconds = 0.5;  // s; a newer sample must arrive within this, or it latches
 };
 
+// Hold what the layer writes after the latch (estop_response.*).
 struct EstopResponse
 {
   EstopMode mode = EstopMode::Zero;
-  std::vector<double> kd;  // per body slot; used by Damp only
+  std::vector<double> kd;  // per body slot; Damp only
   EstopAfter after = EstopAfter::BurstThenSilence;
   int burst_count = 50;  // BurstThenSilence only
 };
 
+// Hold the chunk logger's settings (logging.*).
 struct Logging
 {
   bool enabled = false;
-  std::string base_dir = "/tmp/golem_safety";
+  std::string base_dir = "/tmp/golem_safety";  // each run logs to a directory under it
   std::string chunk_prefix = "chunk_";
 };
 
-// One parsed and validated safety config: one field per schema key.
+// Hold one parsed and validated safety config, one field per schema section.
 struct SafetyConfig
 {
   std::string robot;   // the profile's robot
@@ -111,18 +113,18 @@ struct SafetyConfig
   Logging logging;
 };
 
-// Parses and validates config text for `profile`. `source` names the text in error
-// messages. Throws std::runtime_error, naming the robot, the source and the key, on
-// an unknown key, a value out of range, a mode the profile lacks, or a per-joint
-// list whose length is not the profile's joint count.
+// Parse and validate config text for `profile`; `source` names the text in errors. Throws
+// std::runtime_error, naming the robot, the source and the key, on an unknown key, a value
+// out of range, a mode the profile lacks, or a per-joint list whose length is not the
+// profile's joint count.
 SafetyConfig parse_safety_config(
   const std::string & yaml_text, const std::string & source, const RobotProfile & profile);
 
-// Loads a config for `profile`. A name without a directory, with or without ".yaml",
-// is read from share/golem_safety/config/<profile.robot>/; anything else is a path.
-// Throws std::runtime_error as parse_safety_config does, when the file is missing, and
-// when the path's directory is named after another robot with a profile (config/g1/...
-// for the h12).
+// Load a config for `profile`. A name without a '/', with or without ".yaml", is read from
+// share/golem_safety/config/<profile.robot>/; anything else is a path. Throws
+// std::runtime_error as parse_safety_config() does, when the file cannot be read, and when
+// the path's directory is named after another robot with a profile (config/g1/... for the
+// h12), since several configs of one robot also parse for the other.
 SafetyConfig load_safety_config(const std::string & name_or_path, const RobotProfile & profile);
 
 }  // namespace golem_safety

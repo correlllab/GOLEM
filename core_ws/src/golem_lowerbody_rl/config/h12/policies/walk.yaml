@@ -1,0 +1,78 @@
+# WALK: a TorchScript walking policy for the H1-2 (policies/walk/). Every key is
+# described in ../../example.policy.yaml.
+
+runtime:
+  kind: torchscript
+  file: policies/walk/walkingPolicy.pt
+  # the export has an LSTM and a reset_memory method; its memory is kept across resets,
+  # the behaviour its golden trace (test/golden/walk.npz) records
+  reset: null
+  threads: 1
+  warmup: false
+
+rate_hz: 50
+
+observed_joints:
+  - left_hip_yaw_joint
+  - left_hip_pitch_joint
+  - left_hip_roll_joint
+  - left_knee_joint
+  - left_ankle_pitch_joint
+  - left_ankle_roll_joint
+  - right_hip_yaw_joint
+  - right_hip_pitch_joint
+  - right_hip_roll_joint
+  - right_knee_joint
+  - right_ankle_pitch_joint
+  - right_ankle_roll_joint
+
+# the training nominal: a slight forward lean (hip pitch -0.16)
+default_pose:
+  left_hip_yaw_joint: 0.0
+  left_hip_pitch_joint: -0.16
+  left_hip_roll_joint: 0.0
+  left_knee_joint: 0.36
+  left_ankle_pitch_joint: -0.2
+  left_ankle_roll_joint: 0.0
+  right_hip_yaw_joint: 0.0
+  right_hip_pitch_joint: -0.16
+  right_hip_roll_joint: 0.0
+  right_knee_joint: 0.36
+  right_ankle_pitch_joint: -0.2
+  right_ankle_roll_joint: 0.0
+
+# 47 inputs: one step, no history
+groups:
+  - history: 1
+    terms:
+      - {term: ang_vel, scale: 0.25}
+      - {term: projected_gravity}
+      - {term: velocity_command, scale: [2.0, 2.0, 0.25]}
+      - {term: joint_pos_rel, scale: 1.0}
+      - {term: joint_vel, scale: 0.05}
+      - {term: last_action, clipped: false}
+      # the policy marches in place at zero command
+      - {term: gait_phase, period: 0.8, form: sin_cos, offset: null, stand_below: null}
+
+command:
+  trained_range: null
+  gain: null
+  clip: null
+  smooth_alpha: null
+  onset_reset: null
+  # not observed; the H1-2's height command starts here
+  height: {default: 1.0, range: null}
+
+action:
+  scale: 0.25
+  clip_raw: null
+  # the H1-2's leg motor limits
+  clip_targets:
+    lower: [-0.37, -3.13, -0.42, -0.11, -0.887334, -0.181799,
+            -0.37, -3.13, -3.13, -0.11, -0.887334, -0.181799]
+    upper: [0.37, 2.49, 3.13, 2.18, 0.513599, 0.181799,
+            0.37, 2.49, 0.42, 2.18, 0.513599, 0.181799]
+  kp: [200, 200, 200, 300, 40, 40, 200, 200, 200, 300, 40, 40]
+  kd: [2.5, 2.5, 2.5, 4, 2, 2, 2.5, 2.5, 2.5, 4, 2, 2]
+
+reset_on: [engage, band_release]

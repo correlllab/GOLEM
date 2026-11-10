@@ -1,9 +1,10 @@
-'''The H1-2's joint limits, the source of robots/h12.yaml (tools/generate_robot_data.py).
+"""
+Hold the H1-2's joint table, the source of robots/h12.yaml (tools/generate_robot_data.py).
 
-27 body joints in slot order: position in rad, velocity in rad/s, torque in N*m. These are
-the limits the robot runs, not the URDF's: shoulder roll is +-0.38 here and +-0.19 in
+The body joints in slot order: position in rad, velocity in rad/s, torque in N*m. These are
+the H1-2's own limits, not its URDF's: shoulder roll is +-0.38 rad here and +-0.19 rad in
 h1_2_magpie.urdf.
-'''
+"""
 
 MOTOR_COUNT = 27
 

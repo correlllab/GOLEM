@@ -1,25 +1,24 @@
-"""SkillPickPlace: prep -> detect the place target -> grasp the pick object
-(in-process /skill/grasp) -> lift it clear -> park the graspgenx frame
-top-down above the place target -> open the gripper.
+"""
+Execute /skill/pick_place: grasp an object, carry it above a place target and drop it.
 
-The place is deliberately simple: no orientation fan or rest-height
-descent. The place pose reuses the top_down grasp orientation
-(grasp_synthesis.top_down.top_down_pose — forward azimuth, level wrist,
-pitched TOP_DOWN_PITCH_DEG down) with the finger CONTACT point PLACE_HEIGHT
-above the place target's top face, and the object is dropped from there.
+prep -> detect the place target -> grasp the object (in-process /skill/grasp)
+-> lift it clear -> park the graspgenx frame top-down above the place target
+-> open the gripper.
 
-The place point is detected BEFORE the (long) grasp and anchored in
-WORLD_FRAME so pelvis drift during the grasp does not move the goal; at place
-time it is re-resolved into the live pelvis frame and the commanded pose is
-driven with servo_frame_to_world's drift compensation. Without a world TF the
-skill falls back to the detect-time pelvis point, uncompensated — the same
-degradation as the grasp skill without odometry.
+The place has no orientation search and no descent to a rest height: the place
+pose is the top_down grasp orientation (grasp_synthesis.top_down.top_down_pose:
+forward azimuth, level wrist, pitched TOP_DOWN_PITCH_DEG down) with the finger
+contact point PLACE_HEIGHT above the place target's top face, and the object
+is dropped from there.
 
-The post-grasp lift is world-anchored the same way (see the LIFT_* constants):
-its rungs are absolute offsets from the executed grasp pose along world +Z,
-each re-servoed against the measured world pose, and they drive the PINCH-POINT
-frame rather than the GraspGenX gripper-base frame — so the pull stays vertical
-and straight where the object actually sits, not 11.5 cm behind it.
+The place point is detected BEFORE the long grasp and anchored in WORLD_FRAME,
+so pelvis drift during the grasp does not move it; at place time it is
+re-resolved into the live pelvis frame and the pose is driven with
+servo_frame_to_world's drift compensation. Without a world TF the skill uses
+the detect-time pelvis point, uncompensated, as the grasp skill does without
+odometry.
+
+The post-grasp lift is world-anchored the same way (the LIFT_* constants).
 """
 
 import copy
@@ -44,53 +43,64 @@ from .grasp import (_approach_target_tf,
                     APPROACH_DURATION_SEC, FRAME_TASK_STABLE_STOP_MSGS)
 
 
-# [m] height of the released object's CONTACT point above the place target's
-# top face — the drop distance.
+# m, the drop height: the released object's contact point above the place
+# target's top face
 PLACE_HEIGHT = 0.10
-# z-band below the place cloud's top percentile counted as its top face when
-# averaging the drop point (excludes side-face points that would skew it).
+# m below the place cloud's top percentile counted as its top face when
+# averaging the drop point; excludes side-face points that would skew it
 TOP_FACE_BAND = 0.015
-# Portion of the skill budget reserved for the place: the inner grasp goal's
-# timeout is the remaining budget minus this, so a slow Gemini detect can't
-# starve the placement half of the skill.
+# s of the skill budget kept for the place: the inner grasp's timeout is the
+# remaining budget minus this, so a slow Gemini detection cannot starve the place
 PLACE_RESERVE_SEC = 60.0
-LIFT_HEIGHT = 0.10       # [m] total straight-up lift after the grasp closes
-# [m] per-waypoint increment of that lift: the rise is commanded as a ladder of
-# LIFT_STEP moves instead of one LIFT_HEIGHT move, so the arm clears the pick
-# site in short committed hops that stay interruptible. The line is anchored
-# ONCE at the executed grasp (outcome.pose) and each waypoint is an ABSOLUTE
-# offset from that anchor, so per-rung error cannot accumulate into the next —
-# and every rung also pulls the hand back onto the grasp's own vertical instead
-# of inheriting whatever residual and sag the close left behind.
+# m, total straight-up lift after the grasp closes
+LIFT_HEIGHT = 0.10
+# m per lift rung. The rise is a ladder of LIFT_STEP moves rather than one
+# move, so the arm clears the pick site in short, interruptible hops. The
+# ladder is anchored once at the executed grasp (outcome.pose) and every rung
+# is an ABSOLUTE offset from that anchor, so rung errors do not accumulate and
+# each rung pulls the hand back onto the grasp's own vertical.
 #
-# The anchor is in WORLD_FRAME whenever the grasp had a world TF, so "+Z" is
-# GRAVITY up and each rung is re-servoed against the measured world pose
-# (_servo_pose). Commanding pelvis +Z instead makes the pull follow the torso:
-# under a balancing lower body the pelvis pitches and sways during a rung, and
-# an uncompensated pelvis-frame command drags the held object sideways.
+# The anchor is in WORLD_FRAME whenever the grasp had a world TF, so +Z is
+# gravity up and each rung is re-servoed against the measured world pose
+# (_servo_pose). A pelvis +Z pull would follow the torso, which pitches and
+# sways under the balancing lower body, and drag the held object sideways.
 LIFT_STEP = 0.05
-# [s] commanded motion time per lift increment.
+# s of commanded motion per rung
 LIFT_STEP_DURATION_SEC = 4.0
 # The lift drives the PINCH-POINT frame, not the GraspGenX gripper-base frame
-# the grasp targets are computed for: the two sit GRIPPER_BASE_TO_CONTACT_M
-# (0.1146 m) apart along the approach, so nulling the error at the base lets a
-# wrist-orientation residual swing the fingertips through ~0.1146 x ang_tol
-# without the move ever noticing. On a small part held in the fingertips that
-# arc is the difference between lifting it and rolling it out of the jaws.
+# the targets are computed for. The two are GRIPPER_BASE_TO_CONTACT_M (0.1146 m)
+# apart along the approach, so nulling the error at the base would let a wrist
+# orientation residual swing the fingertips through ~0.1146 x ang_tol
+# unnoticed; on a small part held in the fingertips that arc rolls it out of
+# the jaws.
 PINCH_FRAMES = {'left': 'left_grasp_frame', 'right': 'right_grasp_frame'}
-# Debug TF (RViz): the detected place point / commanded place pose.
+# debug TF (RViz) of the detected place point, then the commanded place pose
 PLACE_TARGET_FRAME = 'pick_place_target_frame'
 
 
 class PickPlaceSkill:
-    def _exec_pick_place(self, gh):
-        """prep -> detect (place target) -> grasp -> place above -> release.
+    """Provide /skill/pick_place's execute callback to SkillsNode."""
 
-        Optional goal fields (see SkillPickPlace.action; zero/empty = off):
-          arm — "" or "none" leaves the pick arm to the grasp skill (nearest
-            arm); the resolved arm comes back on the outcome.
-          top_down, visual_servo — forwarded to /skill/grasp, which also
-            reads this node's `grasp_method` parameter."""
+    def _exec_pick_place(self, gh):
+        """
+        Pick goal.target_object and drop it on goal.place_target; return the result.
+
+        Optional goal fields (SkillPickPlace.action; zero / empty = off):
+          arm: '' or 'none' lets the grasp skill pick the nearest arm, which
+            the GraspOutcome reports back;
+          top_down, visual_servo: forwarded to /skill/grasp, which also reads
+            this node's `grasp_method` parameter.
+
+        PLACE_TARGET_FRAME is broadcast while the goal runs and dropped when
+        it ends, however it ends.
+        """
+        try:
+            return self._pick_place(gh)
+        finally:
+            self.drop_tf(PLACE_TARGET_FRAME)
+
+    def _pick_place(self, gh):
+        """Run the pick_place goal's body (see _exec_pick_place)."""
         goal = gh.request
         run = _Run(self, gh, SkillPickPlace, 'pick_place')
         arm = self._validated_arm(goal)
@@ -101,18 +111,20 @@ class PickPlaceSkill:
             return run.abort('empty place_target')
 
         def fail(message):
-            """Abort, lifting the hand clear first (mid-carry / over the
-            stack). `arm` is read at call time — it is None until the inner
-            grasp reports which hand it actually used."""
+            """
+            Lift the hand clear (mid-carry, over the target), then abort with `message`.
+
+            `arm` is read at call time: it stays None until the inner grasp
+            reports which hand it used.
+            """
             self._retreat_after_failure(arm, gh)
             return run.abort(message)
 
-        # --- detect: place-target top face, world-anchored --------------------
         if not run.phase('detect_place_target', 0.0):
             return run.result
-        # Arms clear of the head camera before the detection image is grabbed
-        # (the grasp skill preps again before its own detection — a no-op by
-        # then). Fires before this skill has moved the arm itself: no retreat.
+        # Arms out of the head camera's view before the detection image (the
+        # grasp skill's own 'prep' is then a no-op). The skill has not moved
+        # the arm yet, so there is no retreat.
         if not self.goto_named_config('prep', plan=True, slow_mode=True,
                                       duration_sec=30.0, result_timeout=90.0,
                                       outer_gh=gh):
@@ -120,7 +132,8 @@ class PickPlaceSkill:
         place_cloud, _, err = self.detect_object_cloud(place, run, gh)
         if err:
             return fail(f'place target: {err}')
-        top_p = _top_face_point(place_cloud)          # (x, y, z_top) in pelvis
+        # (x, y, z_top), pelvis frame
+        top_p = _top_face_point(place_cloud)
         top_w = self._transform_pose(pose_at(top_p), 'pelvis', WORLD_FRAME)
         self.publish_tf(_approach_target_tf(
             WORLD_FRAME if top_w is not None else 'pelvis',
@@ -131,21 +144,17 @@ class PickPlaceSkill:
             f'({top_p[0]:.3f}, {top_p[1]:.3f}, {top_p[2]:.3f}), '
             f'world anchor {"ok" if top_w is not None else "UNAVAILABLE"}')
 
-        # --- grasp: in-process /skill/grasp -----------------------------------
         if not run.phase('grasp_object', 0.2):
             return run.result
         outcome, err = self._grasp_via_skill(goal, obj, arm, run, gh)
         if err:
             return fail(err)
-        arm = outcome.arm    # the hand that actually grasped drives the place
+        # the hand that grasped drives the rest
+        arm = outcome.arm
 
-        # --- lift: rise LIFT_HEIGHT straight up as a ladder of LIFT_STEP hops,
-        # anchored ONCE at the grasp that was just executed (outcome.pose — in
-        # WORLD_FRAME when the grasp had a world TF, so the rungs climb GRAVITY
-        # +Z and each is drift-compensated). Targets are computed for the
-        # GraspGenX frame the grasp pose is expressed in, then re-expressed for
-        # the PINCH-POINT frame that actually holds the object (to_pinch). See
-        # the LIFT_* constants -------------------------------------------------
+        # The lift rungs are computed for the GraspGenX frame the grasp pose is
+        # in, then restated for the pinch-point frame that holds the object
+        # (to_pinch); see the LIFT_* constants.
         lift_frame = PINCH_FRAMES[arm]
         T_off = self._pinch_frame_offset(arm)
         if T_off is None:
@@ -153,9 +162,12 @@ class PickPlaceSkill:
                         'so the post-grasp lift target is unknown')
 
         def to_pinch(pose_gx):
-            """A target computed FOR the GraspGenX gripper-base frame, restated
-            as the equivalent target for the pinch-point frame (a body-fixed
-            offset, so this holds in the world and pelvis frames alike)."""
+            """
+            Restate a target computed for the GraspGenX frame as the pinch-point frame's target.
+
+            The offset is body-fixed, so this holds in the world and pelvis
+            frames alike.
+            """
             return matrix_to_pose(pose_to_matrix(pose_gx) @ T_off)
 
         world_ok = outcome.frame == WORLD_FRAME
@@ -179,12 +191,11 @@ class PickPlaceSkill:
                 return fail(f'post-grasp lift failed at {dz * 100:.0f}cm of '
                             f'{LIFT_HEIGHT * 100:.0f}cm')
 
-        # --- place: park the graspgenx frame top-down above the target --------
         if not run.phase('place', 0.7):
             return run.result
-        # Re-resolve the world-anchored place point into the LIVE pelvis frame
-        # (the grasp drifted the detect-time one), then build the top-down
-        # place pose: contact point PLACE_HEIGHT above the top face.
+        # The world-anchored place point, re-resolved into the live pelvis
+        # frame (the pelvis has drifted since detection); the place pose puts
+        # the contact point PLACE_HEIGHT above it.
         top_now = top_p
         if top_w is not None:
             p = self._transform_pose(top_w, WORLD_FRAME, 'pelvis')
@@ -205,7 +216,7 @@ class PickPlaceSkill:
         self.get_logger().info(
             f'pick_place: {GRASP_FRAMES[arm]} to the top-down release pose '
             f'{PLACE_HEIGHT * 100:.0f}cm above {place!r}')
-        # Planned transit (the hand carries the object across the workspace).
+        # planned: the hand carries the object across the workspace
         if not self.servo_frame_to_world(
                 GRASP_FRAMES[arm], place_w, place_p, outer_gh=gh,
                 duration_sec=APPROACH_DURATION_SEC, max_iter=SERVO_MAX_ITER,
@@ -215,7 +226,6 @@ class PickPlaceSkill:
         if gh.is_cancel_requested or run.remaining() <= 0.0:
             return fail('canceled or timed out during place')
 
-        # --- release ----------------------------------------------------------
         if not run.phase('release', 0.9):
             return run.result
         if not self.open_gripper(arm):
@@ -225,14 +235,15 @@ class PickPlaceSkill:
             f'above, grasp score {outcome.score:.2f})')
 
     def _grasp_via_skill(self, goal, obj, arm, run, gh):
-        """Send an in-process /skill/grasp goal for `obj` and return
-        (GraspOutcome, None) or (None, reason). The caller's top_down and
-        visual_servo are forwarded explicitly — an unset field silently
-        defaults to false, which is how visual_servo once got dropped here.
-        `arm` None = auto (the grasp skill picks; outcome.arm reports back).
-        Inner feedback is proxied into the 'grasp_object' phase; canceling the
-        outer goal cancels the in-flight inner goal (_send_action's outer_gh
-        plumbing)."""
+        """
+        Grasp `obj` through this node's own /skill/grasp: (GraspOutcome, None) or (None, reason).
+
+        top_down and visual_servo are copied explicitly from the pick_place
+        goal (an unset field defaults to false). `arm` None lets the grasp
+        skill choose and report it on the outcome. The inner feedback is
+        proxied into the 'grasp_object' phase, and canceling this goal cancels
+        the inner one (_send_action's outer_gh).
+        """
         inner_timeout = max(10.0, run.remaining() - PLACE_RESERVE_SEC)
         inner = SkillGrasp.Goal()
         inner.target_object = obj
@@ -240,8 +251,8 @@ class PickPlaceSkill:
         inner.top_down = goal.top_down
         inner.visual_servo = goal.visual_servo
         if inner_timeout == float('inf'):
-            # No deadline on this goal (timeout 0 = run to completion) — a
-            # zero inner Duration means exactly the same thing.
+            # this goal has no deadline (timeout 0), and a zero inner Duration
+            # means the same
             inner.timeout = Duration(sec=0, nanosec=0)
         else:
             whole = int(inner_timeout)
@@ -249,6 +260,7 @@ class PickPlaceSkill:
                 sec=whole, nanosec=int(round((inner_timeout - whole) * 1e9)))
 
         def _proxy(feedback_msg):
+            """Republish the inner grasp's progress as this goal's 0.2-0.7 'grasp_object' phase."""
             run.feedback.phase = 'grasp_object'
             run.feedback.progress = (
                 0.2 + 0.5 * float(feedback_msg.feedback.progress))
@@ -267,12 +279,14 @@ class PickPlaceSkill:
         return outcome, None
 
     def _pinch_frame_offset(self, arm):
-        """Fixed rigid transform (4x4) of the arm's pinch-point frame
-        (PINCH_FRAMES) expressed in its GraspGenX gripper-base frame — both are
-        fixed URDF children of the wrist yaw link, so the offset is constant;
-        read once per goal from TF. A target pose computed FOR the graspgenx
-        frame becomes the equivalent pinch-frame target as T_target @ offset.
-        None when TF can't resolve it (robot description not up)."""
+        """
+        Return the 4x4 pose of `arm`'s pinch-point frame in its GraspGenX frame, or None.
+
+        Both are fixed URDF children of the wrist yaw link, so the offset is
+        constant; it is read from TF once per goal (None until the robot
+        description is up). A target T for the GraspGenX frame becomes
+        T @ offset for the pinch-point frame.
+        """
         try:
             tf = self.tf_buffer.lookup_transform(
                 GRASP_FRAMES[arm], PINCH_FRAMES[arm], Time(),
@@ -284,12 +298,14 @@ class PickPlaceSkill:
     def _servo_pose(self, frame, pose, world_ok, gh, do_plan,
                     duration_sec=LIFT_STEP_DURATION_SEC, slow_mode=False,
                     label='', stable_stop_msgs=None):
-        """Drive URDF frame `frame` to `pose` — a Pose in WORLD_FRAME when
-        `world_ok` (servo_frame_to_world's drift compensation: the fixed world
-        target is re-resolved into the LIVE pelvis frame every pass and the
-        frame's actual world pose is measured back), else a pelvis-frame Pose
-        driven directly with no compensation. Same relaxed tolerances as the
-        grasp skill's servo."""
+        """
+        Drive URDF `frame` to `pose` with the grasp skill's servo tolerances; return reached.
+
+        With `world_ok`, `pose` is in WORLD_FRAME and servo_frame_to_world
+        compensates drift (the target is re-resolved into the live pelvis
+        frame every pass and the frame's world pose measured back); otherwise
+        `pose` is a pelvis-frame Pose driven directly.
+        """
         if world_ok:
             world_pose = pose
             fallback = self._transform_pose(pose, WORLD_FRAME, 'pelvis')
@@ -308,13 +324,16 @@ class PickPlaceSkill:
 
 
 def _top_face_point(cloud):
-    """(x, y, z_top) of `cloud`'s top face, in the cloud's own (z-up) frame:
-    z_top is the 95th-percentile z (robust to depth speckle) and x, y average
-    only the points within TOP_FACE_BAND below it — the visible top surface —
-    so side-face points don't skew the drop point."""
+    """
+    Return (x, y, z_top) of `cloud`'s top face, in the cloud's own (z-up) frame.
+
+    z_top is the 95th-percentile z (robust to depth speckle); x and y average
+    only the points within TOP_FACE_BAND below it, so side-face points do not
+    skew the drop point. An empty band falls back to the whole cloud.
+    """
     z = cloud[:, 2]
     z_top = float(np.percentile(z, 95))
     top = cloud[z > z_top - TOP_FACE_BAND]
-    if len(top) == 0:                 # degenerate band -> whole-cloud centroid
+    if len(top) == 0:
         top = cloud
     return np.array([float(np.mean(top[:, 0])), float(np.mean(top[:, 1])), z_top])

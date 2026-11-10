@@ -1,12 +1,9 @@
-"""SkillOpenDoor: detect -> grasp (composed) -> pull."""
+"""Stub the /skill/open_door executor: every goal aborts as not implemented."""
 
 
 class OpenDoorSkill:
-    def _exec_open_door(self, gh):
-        """detect -> grasp (composed via the SkillGrasp action) -> pull.
+    """Provide /skill/open_door's execute callback to SkillsNode."""
 
-        Detects locally as well: the pull endpoint and the grasp-roll estimate
-        are needed here, and SkillGrasp's Result (success/message only) cannot
-        return them. SkillGrasp re-detects internally; both detections see the
-        same object, so the antipodal roll estimates agree."""
+    def _exec_open_door(self, gh):
+        """Raise NotImplementedError, which SkillsNode's wrapper turns into an aborted goal."""
         raise NotImplementedError('open_door skill not implemented')

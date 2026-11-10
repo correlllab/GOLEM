@@ -47,9 +47,11 @@ namespace golem_safety
 namespace
 {
 
+// The motor slots of unitree_hg's LowCmd, which the CRC covers.
 constexpr size_t kSlots = 35;
 
-// The LowCmd struct of motor_crc_hg.h, which is the wire layout the robot checksums.
+// Mirror the MotorCmd struct of motor_crc_hg.h: the layout, padding included, that the
+// robot checksums.
 struct RawMotorCmd
 {
   uint8_t mode;
@@ -61,6 +63,7 @@ struct RawMotorCmd
   uint32_t reserve;
 };
 
+// Mirror the LowCmd struct of motor_crc_hg.h.
 struct RawLowCmd
 {
   uint8_t mode_pr;
@@ -79,7 +82,7 @@ static_assert(
 
 constexpr size_t kCrcWords = sizeof(RawLowCmd) / 4 - 1;  // every word but crc
 
-// Over the first `len` words of `ptr`, bit by bit, MSB first.
+// Return the CRC-32 of the first `len` words of `ptr`, bit by bit, MSB first.
 uint32_t crc32_core(const uint32_t * ptr, size_t len)
 {
   uint32_t CRC32 = 0xFFFFFFFF;
@@ -122,8 +125,8 @@ uint32_t lowcmd_crc(const unitree_hg::msg::LowCmd & cmd)
     raw.motor_cmd[i].kd = motor.kd;
     raw.motor_cmd[i].reserve = motor.reserve;
   }
-  // All four reserve words are covered, as in the Unitree SDK's CRC (the example's get_crc
-  // copies reserve[0] only).
+  // All four reserve words are covered, as in the Unitree SDK's CRC; the unitree_ros2
+  // example's get_crc copies reserve[0] only.
   raw.reserve = cmd.reserve;
 
   std::array<uint32_t, sizeof(RawLowCmd) / 4> words;
@@ -155,9 +158,7 @@ unitree_hg::msg::LowCmd zero_command(const RobotProfile & profile)
   return cmd;
 }
 
-unitree_hg::msg::LowCmd estop_command(
-  const RobotProfile & profile, const SafetyConfig & config,
-  const unitree_hg::msg::LowCmd & /* last */)
+unitree_hg::msg::LowCmd estop_command(const RobotProfile & profile, const SafetyConfig & config)
 {
   unitree_hg::msg::LowCmd cmd = zero_command(profile);
   if (config.estop_response.mode == EstopMode::Zero) {

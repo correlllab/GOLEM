@@ -42,7 +42,7 @@ std::string run_log_directory(const std::string & root)
 namespace
 {
 
-// numpy's dtype strings, for the element types a LogSample holds.
+// Give numpy's dtype string of each element type a LogSample holds.
 template<class T>
 struct Descr;
 template<>
@@ -56,8 +56,8 @@ struct Descr<int16_t> {static constexpr const char * value = "<i2";};
 template<>
 struct Descr<uint32_t> {static constexpr const char * value = "<u4";};
 
-// What one sample's field is made of: its element type, the dimensions it adds to the
-// chunk's shape after the sample axis, and how it is appended to the chunk's bytes.
+// Describe one sample field: its element type, the dimensions it adds to the chunk's shape
+// after the sample axis, and how it is appended to the chunk's bytes. A scalar adds none.
 template<class T>
 struct Field
 {
@@ -70,6 +70,7 @@ struct Field
   }
 };
 
+// Describe a fixed-size array field, which adds a dimension of K.
 template<class T, size_t K>
 struct Field<std::array<T, K>>
 {
@@ -87,7 +88,7 @@ struct Field<std::array<T, K>>
   }
 };
 
-// A std::vector field has one entry per motor.
+// Describe a std::vector field, which has one entry per motor.
 template<class T>
 struct Field<std::vector<T>>
 {
@@ -105,7 +106,7 @@ struct Field<std::vector<T>>
   }
 };
 
-// One array of a chunk: `data` holds the elements in C order.
+// Hold one array of a chunk: `data` holds the elements in C order.
 struct Column
 {
   std::string name;
@@ -114,7 +115,7 @@ struct Column
   std::vector<uint8_t> data;
 };
 
-// The array of `member` over `samples`, shaped (samples, <the field's dimensions>).
+// Return the array of `member` over `samples`, shaped (samples, <the field's dimensions>).
 template<class T>
 Column column(
   const char * name, const std::vector<LogSample> & samples, size_t motors, T LogSample::* member)
@@ -130,25 +131,28 @@ Column column(
   return out;
 }
 
+// Append `value` little-endian.
 void put16(std::vector<uint8_t> & out, uint16_t value)
 {
   out.push_back(static_cast<uint8_t>(value));
   out.push_back(static_cast<uint8_t>(value >> 8));
 }
 
+// Append `value` little-endian.
 void put32(std::vector<uint8_t> & out, uint32_t value)
 {
   put16(out, static_cast<uint16_t>(value));
   put16(out, static_cast<uint16_t>(value >> 16));
 }
 
+// Append the bytes of `text`.
 void put_text(std::vector<uint8_t> & out, const std::string & text)
 {
   out.insert(out.end(), text.begin(), text.end());
 }
 
-// A version 1.0 .npy file: magic, version, header length, the header dict padded with
-// spaces and a newline to a multiple of 64 bytes, then the data.
+// Return `column` as a version 1.0 .npy file: magic, version, header length, the header dict
+// padded with spaces and a newline to a multiple of 64 bytes, then the data.
 std::vector<uint8_t> npy_file(const Column & column)
 {
   std::string shape = "(";
@@ -171,10 +175,12 @@ std::vector<uint8_t> npy_file(const Column & column)
   return out;
 }
 
-// A zip archive whose entries are stored uncompressed, which numpy.load reads as an .npz.
+// Build a zip archive whose entries are stored uncompressed, which numpy.load reads as an
+// .npz. Stored entries keep the writer thread's cost to a copy and a CRC.
 class StoredZip
 {
 public:
+  // Append the entry `name` holding `data`; throw past the 4 GiB a zip without zip64 holds.
   void add(const std::string & name, const std::vector<uint8_t> & data)
   {
     if (data.size() > std::numeric_limits<uint32_t>::max() ||
@@ -205,7 +211,8 @@ public:
     entries_.push_back(std::move(entry));
   }
 
-  // The finished archive: the entries, then the central directory and its end record.
+  // Return the finished archive: the entries, then the central directory and its end
+  // record.
   std::vector<uint8_t> finish()
   {
     const auto directory_offset = static_cast<uint32_t>(file_.size());
@@ -242,6 +249,7 @@ public:
   }
 
 private:
+  // Remember one entry for the central directory.
   struct Entry
   {
     std::string name;
@@ -256,13 +264,14 @@ private:
   std::vector<Entry> entries_;
 };
 
+// Return whether `text` ends with `suffix`.
 bool has_suffix(const std::string & text, const std::string & suffix)
 {
   return text.size() >= suffix.size() &&
          text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
-// The npz bytes of `samples`: one .npy per key, in the key order of the LogSample fields.
+// Return the npz bytes of `samples`: one .npy per key, in LogSample's field order.
 std::vector<uint8_t> npz_bytes(const std::vector<LogSample> & samples, size_t motors)
 {
   const std::vector<Column> columns = {
@@ -295,6 +304,7 @@ std::vector<uint8_t> npz_bytes(const std::vector<LogSample> & samples, size_t mo
   return zip.finish();
 }
 
+// Return whether every motor field of `s` has `motors` entries.
 bool fits(const LogSample & s, size_t motors)
 {
   for (const size_t size :
@@ -324,7 +334,7 @@ ChunkLogger::ChunkLogger(
             "cannot create the log directory " + base_dir_ + ": " +
             (error ? error.message() : "not a directory"));
   }
-  // A run's chunks never mix with an earlier run's.
+  // A run's chunks never mix with an earlier run's in one directory.
   for (fs::directory_iterator it(base_dir_, error), end; !error && it != end;
     it.increment(error))
   {
@@ -433,7 +443,6 @@ void ChunkLogger::write_chunk(const std::vector<LogSample> & samples)
       }
     }
     fs::rename(temp_path, final_path);  // a reader never sees half a chunk
-    ++chunks_written_;
   } catch (const std::exception & e) {
     ++write_failures_;
     std::error_code ignored;

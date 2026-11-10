@@ -1,9 +1,18 @@
+"""Install golem_bringup's launch files, RViz configs and slider_debugger.py."""
 import os
 from glob import glob
 
 from setuptools import find_packages, setup
 
 package_name = 'golem_bringup'
+
+
+def files(pattern):
+    """Return the files matching pattern that exist."""
+    # A --symlink-install build directory keeps dangling links to files deleted from the
+    # source; they are skipped.
+    return [path for path in sorted(glob(pattern)) if os.path.isfile(path)]
+
 
 setup(
     name=package_name,
@@ -16,11 +25,10 @@ setup(
         # One entry per subdirectory, installed at the same relative path:
         # ros2 launch finds a launch file by name anywhere under the share
         # directory, so each file is installed once.
-        (os.path.join('share', package_name, 'launch', 'h12'), glob('launch/h12/*.launch.py')),
-        (os.path.join('share', package_name, 'launch', 'g1'), glob('launch/g1/*.launch.py')),
-        (os.path.join('share', package_name, 'config', 'h12'), glob('config/h12/*.yaml')),
-        (os.path.join('share', package_name, 'rviz', 'h12'), glob('rviz/h12/*.rviz')),
-        (os.path.join('share', package_name, 'rviz', 'g1'), glob('rviz/g1/*.rviz')),
+        (os.path.join('share', package_name, 'launch', 'h12'), files('launch/h12/*.launch.py')),
+        (os.path.join('share', package_name, 'launch', 'g1'), files('launch/g1/*.launch.py')),
+        (os.path.join('share', package_name, 'rviz', 'h12'), files('rviz/h12/*.rviz')),
+        (os.path.join('share', package_name, 'rviz', 'g1'), files('rviz/g1/*.rviz')),
     ],
     scripts=['scripts/slider_debugger.py'],
     install_requires=['setuptools'],
@@ -32,11 +40,6 @@ setup(
     extras_require={
         'test': [
             'pytest',
-        ],
-    },
-    entry_points={
-        'console_scripts': [
-            'livox_imu_upright = golem_bringup.livox_imu_upright:main',
         ],
     },
 )

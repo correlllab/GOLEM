@@ -1,0 +1,39 @@
+# The G1's leg node on the real robot; every key is described in ../example.run.yaml.
+sim: false
+
+startup:
+  # SAFETY: the policy takes the legs only on the operator's /lowerbody/confirm_engage
+  wait_for_confirm: true
+  ramp_seconds: 2.0
+  settle_tolerance: 0.15
+  settle_ticks: 10
+  settle_max_ticks: 400
+  steady_seconds: 1.0
+  tick_rate: [0.9, 1.1]
+  upper_fresh_seconds: 0.5
+
+heartbeat:
+  timeout: 0.5
+
+band:
+  # the real robot has no band; the gantry carries it
+  release: false
+  max_wait: 30.0
+
+commands:
+  timeout: 0.5
+  # SAFETY: deployment limits, inside HOMIE's trained ranges (the sim's limits)
+  vx: [-0.3, 0.5]
+  vy: [-0.3, 0.3]
+  yaw: [-0.6, 0.6]
+  accel: [0.5, 0.5, 1.0]
+  height_rate: 0.1
+
+faults:
+  # the H1-2's real value, the one measured on rclpy; unmeasured on the real G1
+  max_state_gap: 0.25
+  # unset until the pre-flight measurement of the tick lag on the laptop
+  max_latency: null
+
+# unmeasured on the real G1
+imu_trim_deg: [0.0, 0.0, 0.0]

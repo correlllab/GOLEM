@@ -1,6 +1,6 @@
-# Running the stack (x86)
+# Running the stack
 
-Setup first: [`SETUP.md`](SETUP.md). For Apple Silicon see [`MACOS.md`](MACOS.md).
+Setup first: [`SETUP.md`](SETUP.md).
 
 Always start containers through the provided scripts — they wire up
 `docker/.env`, the DDS domain check, bind-mount pre-creation, and stable
@@ -60,16 +60,14 @@ service name; otherwise attach with `docker exec`.
 
 ### RoboCasa
 
-Publishes `rt/lowstate` over CycloneDDS, and on the chosen ROS domain: `/clock`;
-the real RealSense drivers' topics, frame names and camera TF for
-`/realsense/{head,left_hand,right_hand}` (colour, depth and aligned depth, raw and
-compressed, with their camera_info, plus `depth/color/points`), as captured from
-the robot in `golem_robocasa/realsense_profile.yaml`. The head camera renders at
-`GOLEM_CAMERA_SCALE` (default 0.5) of the real 1280x720 with the real
-intrinsics; `GOLEM_CAMERA_DEPTH=0` and `GOLEM_CAMERA_POINTCLOUD=0` drop the depth
-stream and point cloud. Then the Livox topics `/livox/lidar` (CustomMsg),
-`/livox/pointcloud`, `/livox/imu`; and `/{left,right}/gripper/state`. It consumes
-`rt/lowcmd` and the `/{left,right}/gripper/*` services.
+It publishes and consumes what the real robot does: `CLAUDE.md` §8 ("Simulators
+mimic the real robot's topic surface") describes each robot's surface and its
+knobs, and `tests/robocasa/surface/{h12,g1}.json` is the measured surface the
+surface probe checks.
+
+The sim needs an NVIDIA GPU: without one it stops at start, before any ROS or
+DDS traffic. `GOLEM_SIM_RATE` sets its target real-time factor (default 1, real
+time; `max` never sleeps); `CLAUDE.md` §8 has both.
 
 Scene flags are passed straight through, e.g.
 `docker_run.sh robocasa --task OpenFridge --layout 1 --style 1 --seed 42`.
@@ -83,7 +81,7 @@ the elastic band as in a kitchen (`golem_robocasa/blank_env.py`); it refuses
 
 ### Isaac
 
-Uses the same wrappers, on NVIDIA Linux only. The launcher honors
+Uses the same wrappers. The launcher honors
 `ROS_DOMAIN_ID` and communicates directly on that simulation domain; zero is
 rejected. Select a task with `docker_run.sh isaac --task base --headless`.
 Magpie H1-2 is the default asset, with a floating base. Start the ROS lower-body
@@ -98,33 +96,20 @@ starting both containers does not imply full navigation/skills parity.
 ## Bringup
 
 `golem_bringup` is launch-only (the H1-2's files are in its `launch/h12/`), and
-sim versus real are separate launch files (no top-level file takes a `sim:=`
-argument; each passes its own to `h12_control`):
-
-| Launch file | Scenario |
-|---|---|
-| `h12_sim.launch.py` | x86 sim — the full stack |
-| `h12_sim_mac.launch.py` | mac sim — trimmed, toggled by `GOLEM_*` env vars |
-| `h12_real_robot.launch.py` | real robot, onboard PC: drivers, state publishers, estop + safety + IK, nav, lower body |
-| `h12_real_desktop.launch.py` | real: companion desktop — model servers, skills, rviz; hand cameras with `use_hand_cameras:=true` |
-| `h12_safety_grippers.launch.py` | real: estop + safety layer + grippers only |
-
-The top-level files above are assembled from building blocks you can also
-launch on their own: `h12_state` (state publishers), `h12_control` (estop,
-safety, IK), `h12_lowerbody`, `h12_models` (model servers + skills),
-`h12_real_drivers`, `h12_grippers`, and `h12_navigation` (in `golem_slam`).
+sim versus real are separate launch files. `CLAUDE.md` §6 lists the top-level
+files and the building blocks they include; each launch file's docstring is its
+reference.
 
 For sensors + SLAM/nav on the real robot with no joint commanded (no estop,
-safety or IK), use `ros2 launch golem_slam h12_real_slam.launch.py`, which lives in
-`golem_slam`; record those runs with `ros2 run golem_slam record_slam_bag --name <name>`.
+safety or IK), use `ros2 launch golem_bringup h12_real_slam.launch.py`; record those runs with `ros2 run golem_slam record_slam_bag --name <name>`.
 
-The x86 sim bringup starts the state publishers, the `frame_task_server` IK
+The sim bringup starts the state publishers, the `frame_task_server` IK
 solver, `safety_node`, the Gemini/SAM/GraspGen model servers, the RL lower-body
 controller, the skills node, nav, and RViz. Common arguments:
 
 ```bash
 ros2 launch golem_bringup h12_sim.launch.py \
-  use_rviz:=false use_nav:=false use_skills:=false lowerbody:=fame
+  use_rviz:=false use_nav:=false use_skills:=false policy:=fame
 ```
 
 ## Worked example — open the fridge
@@ -162,17 +147,17 @@ source core_ws/install/setup.bash
 ros2 launch golem_bringup h12_real_robot.launch.py start_position_verified:=true
 ```
 
-A native build there leaves out the G1's packages, as `launch_ros.sh` does
-for the H1-2: add `--packages-ignore dex_3 g1_homie` to its `colcon build`.
-`golem_bringup` exec_depends on the G1's packages, so a
-`--packages-up-to golem_bringup` without it builds them too. The build includes
+Build the whole workspace there, as `launch_ros.sh` does in the container: the
+G1's packages included, since `golem_bringup` exec_depends on them. The build includes
 `golem_ros2_models`, which installs both robots' models from the checkout's
 `CL_Assets` (run `git lfs pull` in it first): the H1-2's launches read the
 robot description from that package, not from `CL_Assets` directly.
 
 Leg commands are gated behind `start_position_verified:=true` (default false) —
-set it only after physically verifying the robot's pose. The `lowerbody:=` policy
-(default `almi`) then ramps the legs to its pre-pose crouch and holds until
+set it only after physically verifying the robot's pose. The `policy:=` policy
+(default `almi`; `golem_lowerbody_rl`'s `config/h12/robot.yaml` lists the H1-2's)
+then ramps the legs to its pre-pose crouch and, once `/lowstate` has been steady
+for 1 s and the arm controller commands, holds until
 
 ```bash
 ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
@@ -190,10 +175,10 @@ anywhere in their arguments, or with `GOLEM_ROBOT=g1` in the shell or
 (`robot: g1`) before the DDS domain check. The robot matters where it is
 inherent: which robot the sim runs, and which bringup `docker_stack.sh` starts
 and which sim it waits for. Every `ros` container mounts and builds both
-robots' packages (`dex_3` and `g1_homie` included) and uses the default
+robots' packages (`dex_3` and `golem_lowerbody_rl` included) and uses the default
 CycloneDDS configuration (`core_ws/cyclonedds.xml`), so `docker_run.sh ros`
 takes no `--g1` flag and runs both `g1_sim.launch.py` / `g1_real_robot.launch.py`
-and the H1-2's launches. The G1 runs on x86 Linux with RoboCasa only. Both
+and the H1-2's launches. The G1 runs with RoboCasa only. Both
 robots use the same container names and DDS topics: run one at a time.
 
 ```bash
@@ -204,12 +189,13 @@ docker/scripts/docker_run.sh ros                             # builds both robot
 ros2 launch golem_bringup g1_sim.launch.py                   # use_nav:=true use_skills:=true ...
 ```
 
-The G1 bringup always starts HOMIE's walking node in the sim. The robot hangs
-from the sim's elastic band with every motor off until the arm controller's
-first command; from then on the controller drives the waist and arms, and the
-leg motors stay off until the walking node moves the legs to its default pose.
-The walking node then starts its policy, and releases the band once
-`frame_task_server` has finished its start-up moves.
+The G1 bringup always starts the leg node (`golem_lowerbody_rl`, running
+HOMIE) in the sim. The robot hangs from the sim's elastic band with every
+motor off until the arm controller's first command; from then on the
+controller drives the waist and arms, and the leg motors stay off until the
+leg node moves the legs to HOMIE's default pose. The leg node then starts its
+policy, once `frame_task_server` has finished its start-up moves, and
+releases the band.
 
 The paired startup refuses a simulator of the other robot on the domain; the
 single-service flow does not check. On the real G1 the `ros` container runs on
@@ -233,17 +219,14 @@ session follows [`g1/first-session.md`](g1/first-session.md).
   <sim> --restart`); for Isaac run `git submodule update` first, since the
   change is in the `CL_isaaclab_sim` pin.
 - **Stale installs of removed packages.** colcon never removes a package that
-  is gone from `core_ws/src`. A workspace built before `golem_bringup` replaced
-  `h12_bringup` and `g1_bringup` (and `h12_safety_layer`,
-  `h12_ros2_controller`, `g1_safety_layer` and `g1_control` were deleted), or
-  before `dex_3` and `g1_homie` replaced `g1_dex3` and `g1_locomotion`, keeps
-  their build and install directories, and `launch_ros.sh` then stops with
-  `stale installed package '<pkg>' has no discovered source`. Delete them
-  once, from the repo root (`sudo` for files a container left root-owned):
-
-  ```bash
-  rm -rf {core_ws/build,core_ws/install,core_ws/build_stack_tests,core_ws/install_stack_tests,container_cache/g1_tests/build,container_cache/g1_tests/install}/{h12_bringup,g1_bringup,h12_safety_layer,h12_ros2_controller,g1_safety_layer,g1_control,h12_ros2_model,g1_description,g1_dex3,g1_locomotion,h12_slam,h12_deploy_mjpc,h12_skills,g1_navigation}
-  ```
+  is gone from `core_ws/src`. A workspace built before a package was renamed,
+  merged or deleted keeps its build and install directories, and
+  `launch_ros.sh` then stops with `stale installed package '<pkg>' has no
+  discovered source`. Stop the processes that use them, then delete them once,
+  from the repo root, on every host that built the workspace (`sudo` for files
+  a container left root-owned), with the `rm -rf` command under "Delete the
+  stale installs of removed packages" in [`CLAUDE.md`](https://github.com/correlllab/GOLEM/blob/main/CLAUDE.md) §10, which
+  lists every removed package.
 
   A native workspace (the H1-2's onboard PC) has no such check and keeps
   answering to the old names until they are deleted. A `--symlink-install`
@@ -251,7 +234,7 @@ session follows [`g1/first-session.md`](g1/first-session.md).
   next `golem_upper_ik` build (`can't copy ... doesn't exist or not a regular
   file`); the change report,
   `docs/superpowers/specs/2026-10-28-golem-bringup-and-g1-debug-mode/change-report.md`,
-  has their cleanup and the Mac's.
+  has their cleanup.
 - **X11 / GUI:** set `XAUTHORITY` to your session's existing authorization file.
   Use `GOLEM_DISPLAY=headless` or `--headless` when no X server is available.
 - **Talking to the sim from the host** bypasses the run scripts and so misses
@@ -261,30 +244,5 @@ session follows [`g1/first-session.md`](g1/first-session.md).
   host-mounted). Force one with `colcon build --symlink-install` inside the
   container; for a clean message rebuild, wipe `container_cache/msgs_ws/` on the
   host.
-- **MJPC C++ iteration** uses `docker exec -it golem_ros
-  /home/code/h12_sim_scripts/rebuild_mjpc.sh` (`--install` also refreshes assets
-  and proto), not colcon.
 - **Laggy point clouds or images** are usually kernel UDP buffer drops — see
   [`DDS_TUNING.md`](DDS_TUNING.md).
-
-## Package name migration
-
-The package directories, Python modules and ROS names changed together:
-`h12_slam` → `golem_slam`, `h12_deploy_mjpc` → `deploy_mjpc`, and
-`h12_skills` → `golem_skills`, and `g1_navigation` was merged into `golem_slam`
-(`g1_body_to_pelvis`) and `golem_skills` (`/skill/frontier_explore`). Existing executable and action names are unchanged.
-G1 navigation now uses `golem_slam`; see [G1 navigation](g1/navigation.md).
-
-Stop affected processes before rebuilding. Colcon does not remove obsolete
-install prefixes. Remove only these generated package caches from the repo root
-(on every host that built the workspace; use sudo for container-owned files):
-
-```bash
-rm -rf {core_ws/build,core_ws/install,core_ws/build_stack_tests,core_ws/install_stack_tests,container_cache/g1_tests/build,container_cache/g1_tests/install}/{h12_slam,h12_deploy_mjpc,h12_skills,g1_navigation}
-```
-
-Then rebuild through `docker/scripts/docker_run.sh ros` (or the native onboard
-colcon workflow), and source the new install in a fresh shell. Mac users must
-remove the same package prefixes from their build/install named volumes before
-running `docker/mac/scripts/docker_run_mac.sh ros`. Do not delete source or
-unrelated cache directories.

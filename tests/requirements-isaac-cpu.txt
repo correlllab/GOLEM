@@ -1,4 +1,7 @@
-# Install the CPU torch wheel separately (see the workflow).
+# The Isaac CPU tests' Python dependencies besides torch, whose CPU wheel the workflow
+# (.github/workflows/simulator-tests.yml) installs separately.
+# numpy<2 matches the stack's NumPy clamp.
 numpy<2
 Pillow>=10,<12
+# 0.10.2 is the CycloneDDS that unitree_sdk2_python requires.
 cyclonedds==0.10.2

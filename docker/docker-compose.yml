@@ -1,10 +1,25 @@
+# The containers: the isaac and robocasa simulators and the ros
+# workspace, one Compose profile each. Start them through
+# docker/scripts/docker_run.sh or docker_stack.sh, which load docker/.env, check
+# the DDS domain and the bind sources, and add the overlays:
+# docker-compose.gui.yml (X11 desktop), docker-compose.g1.yml (the G1 sim),
+# docker-compose.stack.yml (paired startup) and, when pinning CPUs,
+# docker-compose.cpus-sim.yml and docker-compose.cpus-ros.yml (cpuset for
+# robocasa and ros). Paths are relative to this directory; GOLEM_ASSETS_DIR and
+# GOLEM_CACHE_DIR relocate the asset and cache mounts. Every bind source must exist (create_host_path: false); the wrappers
+# create only the cache directories.
+#
+# All three run on the host network, so they share one DDS domain
+# (ROS_DOMAIN_ID, 1 when unset; 0 is the real robots' bus).
 services:
+  # Isaac Lab simulator of the H1-2 (IsaacDockerfile, launch_isaac.sh).
   isaac:
     profiles: [isaac]
     container_name: golem_sim_isaac
     build:
       context: ..
       dockerfile: docker/IsaacDockerfile
+    # No shell entrypoint, so command overrides run as given.
     entrypoint: []
     image: golem_sim_isaac:latest
     platform: linux/amd64
@@ -19,7 +34,6 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
       - QT_X11_NO_MITSHM=1
-      - LIBGL_ALWAYS_INDIRECT=0
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-1}
     volumes:
       - type: bind
@@ -28,6 +42,7 @@ services:
         read_only: true
         bind:
           create_host_path: false
+      # The launchers and wait_for_sim.py, at the path every image's command uses.
       - type: bind
         source: ./scripts
         target: /home/code/h12_sim_scripts
@@ -39,6 +54,8 @@ services:
         target: /home/code/CL_isaaclab_sim
         bind:
           create_host_path: false
+      # Isaac Sim's shader, kernel and Kit caches, kept across containers
+      # (prepare_mounts in docker_common.sh creates the host directories).
       - type: bind
         source: ${GOLEM_CACHE_DIR:-../container_cache}/isaac/ov
         target: /root/.cache/ov
@@ -61,6 +78,8 @@ services:
           create_host_path: false
     command: /home/code/h12_sim_scripts/launch_isaac.sh
 
+  # RoboCasa / MuJoCo simulator of either robot (RobocasaDockerfile,
+  # launch_robocasa.sh). The H1-2 unless docker-compose.g1.yml is added.
   robocasa:
     profiles: [robocasa]
     container_name: golem_sim_robocasa
@@ -76,40 +95,41 @@ services:
     network_mode: host
     stdin_open: true
     tty: true
+    # The simulator knobs pass through from the host shell or docker/.env;
+    # empty means the simulator's own default. The G1-only knobs are in
+    # docker-compose.g1.yml.
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
       - QT_X11_NO_MITSHM=1
-      - LIBGL_ALWAYS_INDIRECT=0
-      # launch_robocasa.sh exports MUJOCO_GL=egl for offscreen cameras in both
-      # display modes; the passive viewer opens its own GLFW window.
-      - MUJOCO_GL=${MUJOCO_GL:-glfw}
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-1}
-      # Minimum free space (m) between the robot and any non-floor geom at spawn.
-      # Empty = the task's default (h12_mujoco.py: 0.20, or the env's spawn_margin).
+      # H1-2: m of clearance between the robot and any non-floor geom at
+      # spawn. Empty: the task's spawn_margin, else 0.20 (h12_mujoco.py).
       - GOLEM_SPAWN_MARGIN=${GOLEM_SPAWN_MARGIN:-}
-      # GOLEM_CAMERAS=0 drops all RGBD cameras.
+      # Both robots: m the robot is backed off the spawn counter into open
+      # floor, for walking and navigation. Empty: 0, at the counter.
+      - GOLEM_SPAWN_BACKOFF=${GOLEM_SPAWN_BACKOFF:-}
+      # H1-2: 0 keeps the robot's own links in its lidar scan as occluders.
+      # Empty: they are filtered out (h12_mujoco.py).
+      - GOLEM_LIDAR_SELF_FILTER=${GOLEM_LIDAR_SELF_FILTER:-}
+      # Both robots: the target real-time factor, sim seconds per wall second
+      # (golem_robocasa/sim_common.py). Empty: 1, real time; 2 twice real time;
+      # max unpaced. Above 1 every ROS node gets less wall time per sim second.
+      - GOLEM_SIM_RATE=${GOLEM_SIM_RATE:-}
+      # Both robots: 0 drops every RGBD camera (the heaviest per-step cost).
       - GOLEM_CAMERAS=${GOLEM_CAMERAS:-}
-      # Camera toggles (h12_mujoco.py); empty = its default. GOLEM_CAMERA_SCALE:
-      # head-camera render scale of the real 1280x720 (default 0.5).
-      # GOLEM_CAMERA_DEPTH / GOLEM_CAMERA_POINTCLOUD = 0 drop depth/image_rect_raw
-      # / depth/color/points. GOLEM_HAND_CAMERA_RES=<W>x<H> renders both hand
-      # cameras at that size (default 256x256).
+      # Head camera size as a fraction of the real 1280x720 (default 0.5).
       - GOLEM_CAMERA_SCALE=${GOLEM_CAMERA_SCALE:-}
+      # H1-2: 0 drops depth/image_rect_raw; 0 on GOLEM_CAMERA_POINTCLOUD drops
+      # depth/color/points.
       - GOLEM_CAMERA_DEPTH=${GOLEM_CAMERA_DEPTH:-}
       - GOLEM_CAMERA_POINTCLOUD=${GOLEM_CAMERA_POINTCLOUD:-}
+      # H1-2: <W>x<H> of both hand cameras (default 256x256).
       - GOLEM_HAND_CAMERA_RES=${GOLEM_HAND_CAMERA_RES:-}
-      # 1 = publish ground-truth /odom + odom->pelvis TF (opt-in; never on by
-      # default — see h12_mujoco.py).
+      # 1 publishes ground-truth /odom and the odom -> pelvis TF. Ground truth
+      # stays opt-in: no bringup uses it (CLAUDE.md §8).
       - GOLEM_SIM_ODOM=${GOLEM_SIM_ODOM:-0}
-      # 1 = experiment harness surface: /sim/ground_truth + /sim/reset_objects;
-      # off by default (measurement_bridge.py).
-      - GOLEM_SIM_EXPERIMENT=${GOLEM_SIM_EXPERIMENT:-0}
-      # N*m/rad; > 0 adds a rotational hold to the elastic band (rigid tether
-      # fixture for experiments). 0 = linear-only band (default).
-      - GOLEM_SIM_TETHER_ROT_STIFFNESS=${GOLEM_SIM_TETHER_ROT_STIFFNESS:-0}
-      - GOLEM_SIM_TETHER_ROT_BODY=${GOLEM_SIM_TETHER_ROT_BODY:-}
-      # "dx,dy" m (world) added to the task spawn; empty = task spawn.
+      # H1-2: "dx,dy", m in the world frame, added to the task's spawn.
       - GOLEM_SPAWN_OFFSET=${GOLEM_SPAWN_OFFSET:-}
     volumes:
       - type: bind
@@ -129,13 +149,10 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      # Only the message packages the magpi sim needs — keeps the rest of
-      # core_ws (model_server weights, FAST_LIO, root-owned host build
-      # dir, etc.) out of this container. The parent rw mount persists
-      # build/install/log on the host under container_cache/msgs_ws/ so
-      # colcon's incremental rebuild on launch is a near-no-op when the
-      # IDL is unchanged; the two inner :ro mounts override their src/
-      # subdirs so the package sources stay read-only.
+      # msgs_ws: the only core_ws packages the simulator builds, the message
+      # packages it serves. The workspace root is a host cache directory, so
+      # colcon's build/install/log persist and an unchanged rebuild is a
+      # no-op; the two package sources are mounted read-only inside it.
       - type: bind
         source: ${GOLEM_CACHE_DIR:-../container_cache}/msgs_ws
         target: /home/code/msgs_ws
@@ -155,17 +172,15 @@ services:
           create_host_path: false
     command: /home/code/h12_sim_scripts/launch_robocasa.sh
 
+  # The ROS 2 workspace of both robots (RosDockerfile). launch_ros.sh builds
+  # core_ws and opens a shell; bringup is started by hand, or by
+  # docker-compose.stack.yml.
   ros:
     profiles: [ros]
     container_name: golem_ros
     build:
       context: ..
       dockerfile: docker/RosDockerfile
-      # MJPC_REF is exported by docker_build.sh from the mujoco_mpc submodule
-      # pin (git rev-parse HEAD:mujoco_mpc); if unset, RosDockerfile's default
-      # applies. This keeps the baked MJPC in lockstep with the gitlink.
-      args:
-        - MJPC_REF
     image: golem_ros:latest
     platform: linux/amd64
     init: true
@@ -180,22 +195,17 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=all
       - QT_X11_NO_MITSHM=1
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-1}
-      # CycloneDDS runtime tuning — enlarges the UDP receive buffer so bursty
-      # sensor traffic (camera images, Livox point clouds) stops overflowing the
-      # socket buffer and dropping DDS fragments. Config file bind-mounted below;
-      # also raise net.core.rmem_max on the host or this has no effect
-      # (see docs/DDS_TUNING.md).
+      # The CycloneDDS configuration mounted below: larger UDP receive buffers
+      # so bursty camera and point-cloud traffic is not dropped. It only takes
+      # effect once the host's net.core.rmem_max is raised (docs/DDS_TUNING.md).
       - CYCLONEDDS_URI=file:///home/code/cyclonedds.xml
-      # Gemini API key for the vision pipeline's gemini backbone + golem_skills.
-      # Passed through from the host shell: export GEMINI_API_KEY before running.
+      # Gemini API key for model_server's gemini_server and golem_skills.
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      # GraspGenX released checkpoints ship in the repo (git-LFS) and reach the
-      # container via the core_ws bind mount below. The image's
-      # GRASPGENX_CHECKPOINT_DIR defaults to an empty /opt staging dir, so point
-      # it at the real weights here (runtime override, no rebuild needed).
+      # graspgen_server's checkpoints, which come with model_server's weights
+      # through the core_ws mount (the image's default is an empty directory).
       - GRASPGENX_CHECKPOINT_DIR=/home/code/core_ws/src/model_server/weights/graspgen
-      # GraspGenX gripper assets root — the dir the magpie description is staged
-      # into via the bind mounts below. graspgen_server requires this explicitly.
+      # graspgen_server's gripper assets root, into which the Magpie gripper is
+      # mounted below.
       - GRASPGENX_ASSETS_DIR=/opt/graspgenx/assets
     volumes:
       - type: bind
@@ -203,9 +213,8 @@ services:
         target: /home/code/core_ws
         bind:
           create_host_path: false
-      # CycloneDDS tuning config (see CYCLONEDDS_URI above). core_ws is already
-      # mounted, but bind the file explicitly and read-only so the setting is
-      # obvious and can't be clobbered from inside the container.
+      # The CycloneDDS configuration (CYCLONEDDS_URI), read-only at a fixed
+      # path, though core_ws is mounted too.
       - type: bind
         source: ../core_ws/cyclonedds.xml
         target: /home/code/cyclonedds.xml
@@ -218,11 +227,11 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      # Stage the magpie GraspGenX gripper description into the (image-baked)
-      # GraspGenX assets so gripper_name=magpie resolves. Mount the LEAF dirs only —
-      # mounting all of assets/ would shadow the baked proc_grippers/ + sample_data/.
-      # gripper.urdf references ../meshes/magpie/, so the meshes leaf is mounted at
-      # x_grippers/meshes/magpie (one level up from the gripper dir).
+      # The Magpie gripper's GraspGenX description, so gripper_name=magpie
+      # resolves. Only the leaf directories are mounted: mounting assets/ would
+      # hide the image's proc_grippers/ and sample_data/. gripper.urdf refers to
+      # ../meshes/magpie/, so the meshes go one level above the gripper
+      # directory.
       - type: bind
         source: ${GOLEM_ASSETS_DIR:-../CL_Assets}/graspgenx/assets/magpie
         target: /opt/graspgenx/assets/x_grippers/magpie
@@ -241,52 +250,11 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      # HOMIE's policy for the G1's walking node (g1_homie), which reads it
-      # from /home/code/g1_homie; the policy's g1.yaml names the G1's MJCF
-      # in /home/code/CL_Assets, mounted above.
-      - type: bind
-        source: ../core_ws/src/g1_homie/policy
-        target: /home/code/g1_homie
-        read_only: true
-        bind:
-          create_host_path: false
-      # The repo's tools/, for tools/read_lowstate.py (docs/g1/first-session.md, step 6).
+      # The repo's tools/, for tools/read_lowstate.py
+      # (docs/g1/first-session.md).
       - type: bind
         source: ../tools
         target: /home/code/tools
-        read_only: true
-        bind:
-          create_host_path: false
-      # --- MuJoCo MPC (MJPC) dev mounts -------------------------------------
-      # rw SOURCE mount: the ../mujoco_mpc submodule fills the (build-time-removed)
-      # clone path so the C++ agent_server / task XMLs are host-editable. The
-      # importable package lives baked in dist-packages, so `import mujoco_mpc`
-      # works with zero rebuild; keep this checkout pinned at MJPC_REF.
-      - type: bind
-        source: ../mujoco_mpc
-        target: /home/code/mujoco_mpc
-        bind:
-          create_host_path: false
-      # Persistent CMake build tree, nested INSIDE the source mount at the exact
-      # in-tree path the image seed was built at (/home/code/mujoco_mpc/build), so
-      # CMakeCache absolute paths match and setup.py's build_ext reuses it. Host
-      # bytes live in gitignored container_cache/mjpc_build; launch_ros.sh hydrates
-      # it from /opt/mjpc-build-seed on first launch (see msgs_ws pattern above).
-      - type: bind
-        source: ${GOLEM_CACHE_DIR:-../container_cache}/mjpc_build
-        target: /home/code/mujoco_mpc/build
-        bind:
-          create_host_path: false
-      # Submodule git metadata (ro): mujoco_mpc/.git is a FILE with
-      # `gitdir: ../.git/modules/mujoco_mpc`, so mounting that dir at the
-      # matching container path makes git work on the mounted source.
-      # launch_ros.sh's hydrate needs `git diff --name-only <seed-ref>` to
-      # un-backdate exactly the files that changed since the image's baked
-      # build seed (otherwise a submodule ahead of MJPC_REF hydrates into a
-      # silently STALE build tree).
-      - type: bind
-        source: ${GOLEM_MJPC_GIT_DIR:-../.git/modules/mujoco_mpc}
-        target: /home/code/.git/modules/mujoco_mpc
         read_only: true
         bind:
           create_host_path: false

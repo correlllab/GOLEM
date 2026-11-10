@@ -1,19 +1,47 @@
 #!/usr/bin/env bash
-# Shared host-side configuration for Linux and Apple-Silicon wrappers.
+# Shared host-side helpers for the wrappers (docker_build.sh, docker_run.sh,
+# docker_stack.sh). Sourced, not run.
+#
+# Environment read:
+#   ROS_DOMAIN_ID      0..232, 1 when unset; 0 is the real robots' bus
+#   GOLEM_ROBOT        h12 (default) or g1, for the simulator services
+#   GOLEM_ASSETS_DIR   host CL_Assets (default: the checkout's)
+#   GOLEM_CACHE_DIR    host cache root (default: the checkout's container_cache)
+#   GOLEM_DISPLAY      auto (default), gui or headless
+#   DISPLAY, XAUTHORITY  the X server for gui mode
+#   GOLEM_CPU_PINNING  1 (default) or 0: 0 pins no container, explicit lists too
+#   GOLEM_SIM_CPUSET, GOLEM_ROS_CPUSET  CPUs the robocasa and ros containers may
+#                      use, as docker's --cpuset-cpus lists (0-15, 0,2,4-5);
+#                      default on a hybrid CPU: the performance cores for the
+#                      sim and the efficiency cores for ros; unset otherwise
+#   GOLEM_SYSFS_ROOT   prefix of the /sys files configure_cpus reads (default
+#                      empty; the host-script tests set it)
+#   docker/.env        any of the above; exported shell values win
+# Globals set: GOLEM_ROOT, COMPOSE (the docker compose command line, extended
+# by configure_robot, configure_display and configure_cpus), ENV_FILE,
+# ROBOT_FLAG, WRAPPER_ARGS; GOLEM_SIM_CPUSET and GOLEM_ROS_CPUSET are set or
+# unset by configure_cpus.
+# Every check fails through fail(): an "ERROR:" line on stderr and exit 1.
 GOLEM_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 
+# Print an error and exit 1.
 fail() { echo "ERROR: $*" >&2; exit 1; }
+# Fail unless file $1 exists and is not a Git LFS pointer.
 require_file() {
     [ -f "$1" ] || fail "Missing $1. Initialize submodules and fetch Git LFS assets (see docs/SETUP.md)."
     local first_line
     IFS= read -r first_line < "$1" || true
     [ "$first_line" != 'version https://git-lfs.github.com/spec/v1' ] || fail "$1 is a Git LFS pointer; fetch its LFS contents before launching."
 }
+# Fail unless directory $1 exists.
 require_dir() { [ -d "$1" ] || fail "Missing mount directory: $1"; }
 
+# Load docker/.env, resolve the mount roots and the domain, and start the
+# compose command line. Changes into the checkout.
 load_config() {
     cd "$GOLEM_ROOT"
-    # Match Compose precedence: explicitly exported shell values win over .env.
+    # Values exported in the shell win over docker/.env, as in Compose: save
+    # them, source the file, then restore them.
     local saved_env
     saved_env=$(export -p | sed 's/^declare -x /export /')
     if [ -f docker/.env ]; then
@@ -22,38 +50,35 @@ load_config() {
         set +a
         eval "$saved_env"
     fi
-    [ -z "$(env | sed -n '/^HAMS_[A-Z0-9_]*=/p')" ] || fail 'Rename HAMS_* variables to GOLEM_*.'
     export GOLEM_ASSETS_DIR="${GOLEM_ASSETS_DIR:-$GOLEM_ROOT/CL_Assets}"
     export GOLEM_CACHE_DIR="${GOLEM_CACHE_DIR:-$GOLEM_ROOT/container_cache}"
-    # Relative user paths are always relative to the checkout, on both platforms.
+    # Relative paths are relative to the checkout.
     case "$GOLEM_ASSETS_DIR" in /*) ;; *) GOLEM_ASSETS_DIR="$GOLEM_ROOT/$GOLEM_ASSETS_DIR";; esac
     case "$GOLEM_CACHE_DIR" in /*) ;; *) GOLEM_CACHE_DIR="$GOLEM_ROOT/$GOLEM_CACHE_DIR";; esac
+    # The domain: at most three decimal digits, read base 10 (bash would read
+    # 08 as invalid octal), at most 232. 00 is domain 0.
     export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-1}"
     case "$ROS_DOMAIN_ID" in ''|*[!0-9]*) fail 'ROS_DOMAIN_ID must be an integer from 0 to 232.';; esac
     [ "${#ROS_DOMAIN_ID}" -le 3 ] || fail 'ROS_DOMAIN_ID must be from 0 to 232.'
     ROS_DOMAIN_ID=$((10#$ROS_DOMAIN_ID))
     [ "$ROS_DOMAIN_ID" -le 232 ] || fail 'ROS_DOMAIN_ID must be from 0 to 232.'
+    # Compose gets the same env file explicitly (/dev/null when there is none).
     ENV_FILE="$GOLEM_ROOT/docker/.env"
     [ -f "$ENV_FILE" ] || ENV_FILE=/dev/null
-    if [ "${GOLEM_PLATFORM:-linux}" = mac ]; then
-        COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$GOLEM_ROOT/docker/mac/docker-compose.yml")
-        LAUNCH_SUFFIX=_mac
-    else
-        COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$GOLEM_ROOT/docker/docker-compose.yml")
-        LAUNCH_SUFFIX=
-    fi
+    COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$GOLEM_ROOT/docker/docker-compose.yml")
 }
 
+# Fail unless $1 is a service: robocasa, ros or isaac.
 validate_service() {
     case "$1" in
-        robocasa|ros) ;;
-        isaac) [ "${GOLEM_PLATFORM:-linux}" != mac ] || fail 'Isaac requires NVIDIA and is unavailable on Mac.';;
-        *) fail "Unknown service '$1'; use robocasa, ros, or isaac (Linux only).";;
+        robocasa|ros|isaac) ;;
+        *) fail "Unknown service '$1'; use robocasa, ros, or isaac.";;
     esac
 }
 
-# Splits the robot selectors --g1 / --h12 out of the arguments, wherever they
-# appear. ROBOT_FLAG is the selector (empty if none); WRAPPER_ARGS is the rest.
+# Split the robot selectors --g1 / --h12 out of the arguments, wherever they
+# appear: ROBOT_FLAG is the selector (empty if none), WRAPPER_ARGS the rest.
+# Fails on both selectors at once.
 parse_robot_flags() {
     ROBOT_FLAG=
     WRAPPER_ARGS=()
@@ -69,16 +94,15 @@ parse_robot_flags() {
     done
 }
 
-# Selects the robot for simulator service $1 and exports it as GOLEM_ROBOT (h12 or g1).
-# Precedence: ROBOT_FLAG, then the shell, then docker/.env (see load_config).
-# G1 adds its compose overlay; it runs on x86 Linux, never with Isaac.
+# Select the robot of simulator service $1 and export it as GOLEM_ROBOT (h12 or
+# g1): ROBOT_FLAG, else the shell's or docker/.env's GOLEM_ROBOT, else h12. The
+# G1 adds docker-compose.g1.yml and runs only with RoboCasa.
 configure_robot() {
     local service=$1 robot
     robot=$(printf '%s' "${ROBOT_FLAG:-${GOLEM_ROBOT:-h12}}" | tr '[:upper:]' '[:lower:]')
     case "$robot" in
         h12) ;;
         g1)
-            [ "${GOLEM_PLATFORM:-linux}" != mac ] || fail 'G1 is not available on Mac; use an x86 Linux host.'
             [ "$service" != isaac ] || fail 'G1 is not available with the Isaac simulator; use robocasa.'
             COMPOSE+=(-f "$GOLEM_ROOT/docker/docker-compose.g1.yml")
             ;;
@@ -87,11 +111,13 @@ configure_robot() {
     export GOLEM_ROBOT=$robot
 }
 
-# The confirmation is printed whether or not stdin is a terminal, so a log shows
-# that domain 0 was confirmed.
+# SAFETY: domain 0 is the real robots' command bus. Refuse it for every service
+# but the workspace container, and for that one ask on stdin. The prompt
+# goes to stderr whether or not stdin is a terminal, so a log shows that
+# domain 0 was confirmed.
 check_domain() {
     if [ "$ROS_DOMAIN_ID" = 0 ]; then
-        [ "$1" = ros ] && [ "${GOLEM_PLATFORM:-linux}" != mac ] || fail 'Domain 0 is reserved for the real robot.'
+        [ "$1" = ros ] || fail 'Domain 0 is reserved for the real robot.'
         local reply
         {
             echo 'Domain 0 is the REAL ROBOT bus.'
@@ -102,8 +128,10 @@ check_domain() {
     fi
 }
 
+# Resolve GOLEM_DISPLAY (auto: gui when DISPLAY is set) and, for gui, check
+# the X socket and Xauthority file and add docker-compose.gui.yml; headless
+# clears DISPLAY.
 configure_display() {
-    [ "${GOLEM_PLATFORM:-linux}" != mac ] || return 0
     local mode=${GOLEM_DISPLAY:-auto}
     [ "$mode" != auto ] || { if [ -n "${DISPLAY:-}" ]; then mode=gui; else mode=headless; fi; }
     case "$mode" in
@@ -115,13 +143,105 @@ configure_display() {
             require_dir /tmp/.X11-unix
             COMPOSE+=(-f "$GOLEM_ROOT/docker/docker-compose.gui.yml")
             ;;
-        *) fail 'Linux GOLEM_DISPLAY must be auto, gui, or headless.';;
+        *) fail 'GOLEM_DISPLAY must be auto, gui, or headless.';;
     esac
 }
 
-# The CL_Assets/g1 files a service reads: the G1 sim builds its robot from the
-# MJCF and URDF, and every ros container builds golem_ros2_models, which installs
-# the G1's URDF, sphere model and SRDF for both robots. The meshes are Git LFS.
+# Print the CPU numbers in the list $1 (docker's cpuset syntax: 0-3,8), one per
+# line, and fail on any other syntax (an empty item, a trailing comma included).
+# Ranges are capped at CPU 65535 so a typo cannot loop for long.
+expand_cpu_list() {
+    local items item
+    # read drops a trailing empty field, so a trailing comma is refused here.
+    [[ $1 != *, ]] || return 1
+    IFS=, read -ra items <<< "$1"
+    [ "${#items[@]}" -gt 0 ] || return 1
+    for item in "${items[@]}"; do
+        [[ $item =~ ^([0-9]+)(-([0-9]+))?$ ]] || return 1
+        local lo=$((10#${BASH_REMATCH[1]})) hi=$((10#${BASH_REMATCH[3]:-${BASH_REMATCH[1]}}))
+        { [ "$lo" -le "$hi" ] && [ "$hi" -le 65535 ]; } || return 1
+        seq "$lo" "$hi"
+    done
+}
+
+# Fail unless every CPU of list $2 is in the online list $3, naming its source
+# $1: the knob that set it, or the sysfs file it was detected from.
+check_cpuset() {
+    local knob=$1 list=$2 online=$3 cpus cpu
+    cpus=$(expand_cpu_list "$list") || fail "$knob='$list' is not a CPU list such as 0-15 or 0,2,4-5."
+    [ -n "$online" ] || return 0
+    online=" $(expand_cpu_list "$online" | tr '\n' ' ') "
+    for cpu in $cpus; do
+        case "$online" in
+            *" $cpu "*) ;;
+            *) fail "$knob='$list' names CPU $cpu, which is not online (online: ${online# }).";;
+        esac
+    done
+}
+
+# Choose the CPUs the simulator and ros containers are pinned to and export them
+# as GOLEM_SIM_CPUSET and GOLEM_ROS_CPUSET, or unset them; add the compose
+# overlay of each one that is set, so an unpinned run has no cpuset key. Then
+# print `cpus: sim <list>, ros <list>` (or `cpus: not pinned`) on stderr.
+#   - On a hybrid CPU (cpu_core and cpu_atom both in sysfs) the sim gets the
+#     performance cores and ros the efficiency cores: the sim's physics thread
+#     otherwise lands on an efficiency core about half the time.
+#   - An explicit GOLEM_SIM_CPUSET or GOLEM_ROS_CPUSET wins over that detection
+#     and pins without a hybrid CPU; GOLEM_CPU_PINNING=0 pins nothing at all.
+#   - Every set list is checked against the online CPUs before any container
+#     starts.
+# SAFETY: domain 0 is the real robots' bus and pins nothing: the real G1's ros
+# container keeps every core, so an explicit GOLEM_ROS_CPUSET there is refused,
+# not applied. No simulator runs on domain 0.
+# Call it after load_config, for the robocasa and ros services only (the Isaac
+# simulator is not pinned); docker_run.sh calls it before check_domain's prompt.
+configure_cpus() {
+    local sim=${GOLEM_SIM_CPUSET:-} ros=${GOLEM_ROS_CPUSET:-}
+    local sim_from=GOLEM_SIM_CPUSET ros_from=GOLEM_ROS_CPUSET
+    local root=${GOLEM_SYSFS_ROOT:-} core atom online=''
+    unset GOLEM_SIM_CPUSET GOLEM_ROS_CPUSET
+    if [ "$ROS_DOMAIN_ID" = 0 ]; then
+        [ -z "$ros" ] || fail "GOLEM_ROS_CPUSET='$ros' is set on domain 0, the real robot's bus, where the ros container keeps every core. Unset GOLEM_ROS_CPUSET."
+        echo 'cpus: not pinned (domain 0)' >&2
+        return 0
+    fi
+    case "${GOLEM_CPU_PINNING:-1}" in
+        1) ;;
+        0) echo 'cpus: not pinned (GOLEM_CPU_PINNING=0)' >&2; return 0;;
+        *) fail "GOLEM_CPU_PINNING must be 0 or 1, not '$GOLEM_CPU_PINNING'.";;
+    esac
+    if [ -r "$root/sys/devices/cpu_core/cpus" ] && [ -r "$root/sys/devices/cpu_atom/cpus" ] \
+            && IFS= read -r core < "$root/sys/devices/cpu_core/cpus" \
+            && IFS= read -r atom < "$root/sys/devices/cpu_atom/cpus" \
+            && [ -n "$core" ] && [ -n "$atom" ]; then
+        # A detected list is checked as an explicit one is, named by its sysfs file.
+        [ -n "$sim" ] || { sim=$core; sim_from='sysfs cpu_core/cpus (detected)'; }
+        [ -n "$ros" ] || { ros=$atom; ros_from='sysfs cpu_atom/cpus (detected)'; }
+    fi
+    if [ -r "$root/sys/devices/system/cpu/online" ]; then
+        IFS= read -r online < "$root/sys/devices/system/cpu/online" || online=''
+    fi
+    if [ -z "$sim$ros" ]; then
+        echo 'cpus: not pinned' >&2
+        return 0
+    fi
+    if [ -n "$sim" ]; then
+        check_cpuset "$sim_from" "$sim" "$online"
+        export GOLEM_SIM_CPUSET=$sim
+        COMPOSE+=(-f "$GOLEM_ROOT/docker/docker-compose.cpus-sim.yml")
+    fi
+    if [ -n "$ros" ]; then
+        check_cpuset "$ros_from" "$ros" "$online"
+        export GOLEM_ROS_CPUSET=$ros
+        COMPOSE+=(-f "$GOLEM_ROOT/docker/docker-compose.cpus-ros.yml")
+    fi
+    echo "cpus: sim ${sim:-all}, ros ${ros:-all}" >&2
+}
+
+# Fail unless the CL_Assets/g1 files service $1 reads exist and are not Git LFS
+# pointers: the G1 sim builds its robot from the MJCF and URDF, and every ros
+# container builds golem_ros2_models, which installs the G1's URDF, sphere
+# model and SRDF. Other services read none.
 require_g1_model() {
     local service=$1
     local g1="$GOLEM_ASSETS_DIR/g1"
@@ -144,9 +264,9 @@ require_g1_model() {
     done
 }
 
-# The CL_Assets files of the H1-2 that golem_ros2_models installs in every ros
-# container: its URDF, sphere model and SRDF, and the body and Magpie gripper
-# meshes, which are Git LFS.
+# Fail unless the H1-2 files golem_ros2_models installs in every ros container
+# (its URDF, sphere model and SRDF, and the body and Magpie gripper meshes)
+# exist and are not Git LFS pointers.
 require_h12_model() {
     local hint="Fetch the H1-2 model: git -C $GOLEM_ASSETS_DIR lfs pull (CL_Assets is a submodule: git submodule update --init CL_Assets first)"
     local files=(h1_2_magpie.urdf h1_2_magpie_sphere.urdf h1_2_magpie_sphere_collision.srdf)
@@ -167,22 +287,19 @@ require_h12_model() {
     done
 }
 
-# HOMIE's walking policy, which docker-compose.yml bind-mounts into every ros
-# container (launch_ros.sh builds both robots' packages there).
-require_g1_policy() {
-    local policy="$GOLEM_ROOT/core_ws/src/g1_homie/policy"
-    local name
-    for name in deploy.onnx g1.yaml homie_policy.py; do
-        require_file "$policy/$name"
-    done
-}
-
+# Check the bind sources service $1 needs, before any container starts, and
+# create the cache directories it mounts (Compose never creates a bind source).
 prepare_mounts() {
     local service=$1
+    # The robot models each service reads.
     case "$service" in
-        ros) require_h12_model; require_g1_model ros; require_g1_policy ;;
+        ros)
+            require_h12_model
+            require_g1_model ros
+            ;;
         robocasa) [ "${GOLEM_ROBOT:-h12}" != g1 ] || require_g1_model robocasa ;;
     esac
+    # The service's own sources and caches.
     case "$service" in
         isaac)
             require_file "$GOLEM_ROOT/CL_isaaclab_sim/sim_main.py"
@@ -193,23 +310,19 @@ prepare_mounts() {
             require_file "$GOLEM_ROOT/golem_robocasa/h12_mujoco.py"
             require_file "$GOLEM_ROOT/core_ws/src/magpie_msgs/package.xml"
             require_file "$GOLEM_ROOT/core_ws/src/custom_ros_messages/package.xml"
+            # Mount points of the two read-only package mounts inside msgs_ws.
             mkdir -p "$GOLEM_CACHE_DIR/msgs_ws/src/magpie_msgs" "$GOLEM_CACHE_DIR/msgs_ws/src/custom_ros_messages"
             ;;
         ros)
             require_file "$GOLEM_ROOT/core_ws/src/golem_bringup/package.xml"
-            if [ "${GOLEM_PLATFORM:-linux}" != mac ]; then
-                require_file "$GOLEM_ROOT/core_ws/cyclonedds.xml"
-                require_file "$GOLEM_ROOT/mujoco_mpc/CMakeLists.txt"
-                require_dir "$GOLEM_ASSETS_DIR/graspgenx/assets/magpie"
-                require_dir "$GOLEM_ASSETS_DIR/graspgenx/assets/meshes/magpie"
-                export GOLEM_MJPC_GIT_DIR="${GOLEM_MJPC_GIT_DIR:-$(git -C "$GOLEM_ROOT/mujoco_mpc" rev-parse --absolute-git-dir 2>/dev/null || echo "$GOLEM_ROOT/.git/modules/mujoco_mpc")}"
-                require_dir "$GOLEM_MJPC_GIT_DIR"
-                mkdir -p "$GOLEM_CACHE_DIR/mjpc_build" "$GOLEM_ROOT/mujoco_mpc/build"
-            fi
+            require_file "$GOLEM_ROOT/core_ws/cyclonedds.xml"
+            require_dir "$GOLEM_ASSETS_DIR/graspgenx/assets/magpie"
+            require_dir "$GOLEM_ASSETS_DIR/graspgenx/assets/meshes/magpie"
             ;;
     esac
 }
 
+# Print the container name of service $1: golem_ros, or golem_sim_<service>.
 container_name() {
     if [ "$1" = ros ]; then echo golem_ros; else echo "golem_sim_$1"; fi
 }

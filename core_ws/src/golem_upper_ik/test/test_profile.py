@@ -1,11 +1,5 @@
-'''
-The robot profiles against golem_safety's robot data and the old controllers' tables.
-
-test/fixtures/old_controller/<robot>.json holds the previous arm controllers' tables
-(test/fixtures/README.md); these tests import no old package.
-'''
+"""Check the robot profiles against golem_safety's robot data and robot.yaml's schema."""
 import dataclasses
-import json
 import os
 from pathlib import Path
 import types
@@ -14,58 +8,53 @@ from ament_index_python.packages import get_package_share_directory
 import numpy as np
 import pytest
 import yaml
+from golem_upper_ik.profile import known_robots
 
-FIXTURES = Path(__file__).parent / 'fixtures' / 'old_controller'
-ROBOTS = ('h12', 'g1')
+ROBOTS = known_robots()
 
 EXPECTED = {
     'h12': {
         'joints': 27,
         'mode_machine': 6,
-        'lower_slots': range(0, 12),
         'upper_slots': range(12, 27),
         'ee_frames': ('left_wrist_yaw_link', 'right_wrist_yaw_link'),
         'planner_frames': ('left_grasp_frame', 'right_grasp_frame'),
         'imu_frame': 'torso_link',
         'held_joints': ('torso_joint',),
         'urdf': 'h1_2_magpie.urdf',
-        'urdf_ros': 'h1_2_magpie_ros.urdf',
         'collision': ('h1_2_magpie_sphere.urdf', 'h1_2_magpie_sphere_collision.srdf'),
-        'shutdown_keeps_held_joints_on_lowcmd': False,
+        'shutdown_keeps_held_joints': False,
     },
     'g1': {
         'joints': 29,
         'mode_machine': 5,
-        'lower_slots': range(0, 12),
         'upper_slots': range(12, 29),
         'ee_frames': ('left_hand_palm_link', 'right_hand_palm_link'),
         'planner_frames': ('left_hand_palm_link', 'right_hand_palm_link'),
         'imu_frame': 'imu_in_pelvis',
         'held_joints': ('waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint'),
         'urdf': 'g1_29dof_with_hand_rev_1_0.urdf',
-        'urdf_ros': 'g1_29dof_with_hand_rev_1_0_ros.urdf',
         'collision': ('g1_sphere.urdf', 'g1_sphere_collision.srdf'),
-        'shutdown_keeps_held_joints_on_lowcmd': True,
+        'shutdown_keeps_held_joints': True,
     },
 }
 
 
 def profile_of(robot):
+    """Return robot's RobotProfile."""
     from golem_upper_ik.profile import load_profile
     return load_profile(robot)
 
 
-def old_tables(robot):
-    return json.loads((FIXTURES / f'{robot}.json').read_text())
-
-
 def safety_data(robot):
+    """Return golem_safety's robots/<robot>.yaml."""
     share = Path(get_package_share_directory('golem_safety'))
     return yaml.safe_load((share / 'robots' / f'{robot}.yaml').read_text())
 
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_profiles_load(robot):
+    """Each profile has the robot's joints, frames, files and identity, frozen and read-only."""
     profile = profile_of(robot)
     expected = EXPECTED[robot]
 
@@ -73,14 +62,13 @@ def test_profiles_load(robot):
     assert len(profile.body_joints) == expected['joints']
     assert profile.mode_machine == expected['mode_machine']
     assert profile.mode_pr == 0
-    assert profile.lower_slots == expected['lower_slots']
     assert profile.upper_slots == expected['upper_slots']
     assert profile.ee_frames == expected['ee_frames']
     assert profile.planner_frames == expected['planner_frames']
     assert profile.imu_frame == expected['imu_frame']
     assert profile.held_joints == expected['held_joints']
-    assert (profile.shutdown_keeps_held_joints_on_lowcmd
-            is expected['shutdown_keeps_held_joints_on_lowcmd'])
+    assert (profile.shutdown_keeps_held_joints
+            is expected['shutdown_keeps_held_joints'])
     for name in ('q_low', 'q_high', 'dq_max', 'tau_max'):
         values = getattr(profile, name)
         assert values.shape == (expected['joints'],), name
@@ -88,9 +76,7 @@ def test_profiles_load(robot):
         assert not values.flags.writeable, name
 
     assert Path(profile.urdf_path).name == expected['urdf']
-    assert Path(profile.urdf_ros_path).name == expected['urdf_ros']
     assert os.path.isfile(profile.urdf_path), profile.urdf_path
-    assert os.path.isfile(profile.urdf_ros_path), profile.urdf_ros_path
     assert tuple(Path(path).name for path in profile.collision) == expected['collision']
     for path in profile.collision:
         assert os.path.isfile(path), path
@@ -108,6 +94,7 @@ def test_profiles_load(robot):
 
 @pytest.mark.parametrize('fault', ['gap', 'repeat'])
 def test_joint_slots_must_be_0_to_n(monkeypatch, fault):
+    """golem_safety joint slots with a gap or a repeat are refused."""
     from golem_upper_ik import profile as profile_module
     data = profile_module._robot_data('h12')
     joints = [dict(joint) for joint in data['joints']]
@@ -119,6 +106,7 @@ def test_joint_slots_must_be_0_to_n(monkeypatch, fault):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_profile_body_joints_match_safety_data(robot):
+    """A profile's joint table is golem_safety's, in slot order."""
     profile = profile_of(robot)
     data = safety_data(robot)
     joints = data['joints']
@@ -126,56 +114,107 @@ def test_profile_body_joints_match_safety_data(robot):
     assert profile.body_joints == tuple(joint['name'] for joint in joints)
     assert profile.mode_machine == data['mode_machine']
     assert profile.mode_pr == data['mode_pr']
-    assert profile.modes == tuple(data['modes'])
     np.testing.assert_array_equal(profile.q_low, [joint['position'][0] for joint in joints])
     np.testing.assert_array_equal(profile.q_high, [joint['position'][1] for joint in joints])
     np.testing.assert_array_equal(profile.dq_max, [joint['velocity'] for joint in joints])
     np.testing.assert_array_equal(profile.tau_max, [joint['effort'] for joint in joints])
-    first, last = data['lower_slots']
-    assert profile.lower_slots == range(first, last + 1)
     first, last = data['upper_slots']
     assert profile.upper_slots == range(first, last + 1)
 
 
 @pytest.mark.parametrize('robot', ROBOTS)
-def test_profile_matches_old_controller_tables(robot):
+def test_held_joints_are_the_upper_joints_the_ik_leaves(robot):
+    """The held joints are the upper joints the IK does not solve for."""
     profile = profile_of(robot)
-    old = old_tables(robot)
-
-    assert profile.body_joints == tuple(old['body_joints'])
-    assert list(profile.upper_slots) == old['upper_body_index']
-    assert list(profile.lower_slots) == old['lower_body_index']
-    assert [profile.body_joints[i] for i in profile.upper_slots] == old['upper_body_joints']
-    assert profile.enabled_joints == tuple(old['enabled_joints'])
-    # the held joints are the upper-body joints the IK does not solve for
+    upper = [profile.body_joints[i] for i in profile.upper_slots]
     assert profile.held_joints == tuple(
-        joint for joint in old['upper_body_joints'] if joint not in old['enabled_joints'])
-    assert profile.planner_frames == tuple(old['planner_frame_names'])
-    if 'ee_frames' in old:
-        assert profile.ee_frames == tuple(old['ee_frames'])
-
-    limits = old['joint_limits']
-    np.testing.assert_array_equal(profile.q_low, [low for low, _ in limits['position']])
-    np.testing.assert_array_equal(profile.q_high, [high for _, high in limits['position']])
-    np.testing.assert_array_equal(profile.dq_max, limits['velocity'])
-    np.testing.assert_array_equal(profile.tau_max, limits['effort'])
+        joint for joint in upper if joint not in profile.enabled_joints)
+    assert set(profile.enabled_joints) <= set(upper)
 
 
 @pytest.mark.parametrize('robot', ROBOTS)
-def test_named_configs_match_old_controller(robot):
+def test_named_configs_are_over_the_ik_joints(robot):
+    """Every named config has one float per IK joint; the start-up postures are named."""
     profile = profile_of(robot)
-    old = old_tables(robot)
-
-    assert list(profile.named_configs) == list(old['named_configs'])
-    for name, q in old['named_configs'].items():
-        value = profile.named_configs[name]
+    for name, value in profile.named_configs.items():
         assert value.shape == (len(profile.enabled_joints),), name
         assert value.dtype == np.float64, name
-        np.testing.assert_array_equal(value, q, err_msg=name)
-    assert profile.startup_sequence == tuple(old['startup_sequence'])
+    assert set(profile.startup_sequence) <= set(profile.named_configs)
 
 
 def test_unknown_robot_raises():
-    from golem_upper_ik.profile import load_profile
-    with pytest.raises(ValueError, match='h1'):
-        load_profile('h1')
+    """An unknown robot is refused, naming the known ones."""
+    from golem_upper_ik.profile import load_profile, robot_config
+    for function in (load_profile, robot_config):
+        with pytest.raises(ValueError, match="unknown robot 'h1'.*g1, h12"):
+            function('h1')
+
+
+def test_known_robots():
+    """The known robots are g1 and h12."""
+    assert known_robots() == ('g1', 'h12')
+
+
+def test_a_robot_needs_both_packages_data_to_be_known(monkeypatch, tmp_path):
+    """A robot is known only with data in both golem_safety and golem_upper_ik."""
+    from golem_upper_ik import profile as profile_module
+    (tmp_path / 'golem_safety' / 'robots').mkdir(parents=True)
+    (tmp_path / 'golem_upper_ik' / 'config' / 'a').mkdir(parents=True)
+    (tmp_path / 'golem_upper_ik' / 'config' / 'b').mkdir(parents=True)
+    (tmp_path / 'golem_safety' / 'robots' / 'a.yaml').write_text('robot: a\n')
+    (tmp_path / 'golem_safety' / 'robots' / 'c.yaml').write_text('robot: c\n')
+    (tmp_path / 'golem_upper_ik' / 'config' / 'a' / 'robot.yaml').write_text('{}\n')
+    (tmp_path / 'golem_upper_ik' / 'config' / 'b' / 'robot.yaml').write_text('{}\n')
+    monkeypatch.setattr(profile_module, 'get_package_share_directory',
+                        lambda package: str(tmp_path / package))
+    assert profile_module.known_robots() == ('a',)
+
+
+def robot_config_with(monkeypatch, tmp_path, robot, change):
+    """Return robot_config(robot) read from a copy of robot's robot.yaml that change edits."""
+    from golem_upper_ik import profile as profile_module
+    real = get_package_share_directory('golem_upper_ik')
+    raw = yaml.safe_load((Path(real) / 'config' / robot / 'robot.yaml').read_text())
+    change(raw)
+    path = tmp_path / 'golem_upper_ik' / 'config' / robot / 'robot.yaml'
+    path.parent.mkdir(parents=True)
+    path.write_text(yaml.safe_dump(raw))
+
+    def share(package):
+        """Return tmp_path's share for golem_upper_ik, the installed one for others."""
+        return str(tmp_path / package) if package == 'golem_upper_ik' else (
+            get_package_share_directory(package))
+    monkeypatch.setattr(profile_module, 'get_package_share_directory', share)
+    return profile_module.robot_config(robot)
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_robot_config_rejects_unknown_and_missing_keys(monkeypatch, tmp_path, robot):
+    """robot.yaml with an unknown or a missing key is refused, naming it."""
+    with pytest.raises(ValueError, match=f"{robot}.*'extra_key'"):
+        robot_config_with(monkeypatch, tmp_path / 'extra', robot,
+                          lambda raw: raw.update(extra_key=1))
+    with pytest.raises(ValueError, match=f"{robot}.*'imu_frame'"):
+        robot_config_with(monkeypatch, tmp_path / 'missing', robot,
+                          lambda raw: raw.pop('imu_frame'))
+
+
+def test_robot_config_rejects_a_bad_value(monkeypatch, tmp_path):
+    """A named config that is not a list of numbers is refused."""
+    with pytest.raises(ValueError, match="'named_configs'.*home"):
+        robot_config_with(monkeypatch, tmp_path, 'h12',
+                          lambda raw: raw['named_configs'].update(home='zero'))
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_example_robot_yaml_loads_as_a_robot_yaml(monkeypatch, tmp_path, robot):
+    """Each robot's example.robot.yaml holds exactly the schema's keys and loads as robot.yaml."""
+    from golem_upper_ik import profile as profile_module
+    example = Path(__file__).resolve().parents[1] / 'config' / robot / 'example.robot.yaml'
+    raw = yaml.safe_load(example.read_text())
+    assert sorted(raw) == sorted(profile_module.ROBOT_CONFIG_KEYS)
+    config = robot_config_with(monkeypatch, tmp_path, robot,
+                               lambda data: (data.clear(), data.update(raw)))
+    assert config['display_name'] == raw['display_name']
+    profile = profile_module.load_profile(robot)
+    assert profile.held_joints == profile_of(robot).held_joints

@@ -1,26 +1,27 @@
-"""heuristic: a fixed set of canonical level-wrist grasps at the centroid.
+"""
+Synthesize a fixed set of level-wrist grasps at the centroid (the `heuristic` method).
 
 One grasp per (azimuth toward the working side, pitch below horizontal) at the
 object-cloud mean, each with a level wrist (+X horizontal, +Y up) and the
-finger contact point on the centroid, ordered by the priority tiers
-(ranking.priority_tier) that also rank GraspGenX output in graspgenx_filtered.
-No learned model and no shape analysis: it encodes only where this arm can
-reach.
+finger contact point on the centroid, ordered by ranking.priority_tier (the
+same tiers graspgenx_filtered ranks GraspGenX output by). There is no learned
+model and no shape analysis: it encodes only where the arm can reach.
 """
 
 from .common import approach_from_az_pitch, level_pose, make_candidates
 from .ranking import CROSS_BODY_TIER, gate_min_pitch, tier_histogram
 
-# Approach azimuths in the pelvis XY plane [deg]: 0 = straight forward
-# (pelvis +X); positive = toward the robot's midline, mirrored per arm. They
-# map to the forward / diagonal / center tier classes.
+# deg in the pelvis XY plane: 0 = forward (pelvis +X), positive = toward the
+# robot's midline, mirrored per arm; one each for the forward, diagonal and
+# center tier classes
 AZIMUTHS_DEG = (0.0, 45.0, 90.0)
-# Approach pitches below horizontal [deg]: 45 sits inside the tier 1-3 band,
-# 10 is a gentle downward rake (tiers 4-6).
+# deg below horizontal: 45 is inside the tier 1-3 pitch band, 10 a gentle
+# downward rake (tiers 4-6)
 PITCHES_DEG = (45.0, 10.0)
 
 
 def synthesize(inp):
+    """Return (Candidates, None) in tier order, or (None, reason) when none survive the gates."""
     side = 1.0 if inp.arm == 'right' else -1.0
     c = inp.centroid
     specs = [(side * az, p) for p in PITCHES_DEG for az in AZIMUTHS_DEG]
@@ -33,7 +34,7 @@ def synthesize(inp):
                       f'{inp.min_pitch_deg:.0f} deg down')
     cands = make_candidates([poses[i] for i in idxs], [labels[i] for i in idxs],
                             inp.arm, total=len(specs))
-    # Tier-major order (stable), dropping cross-body entries.
+    # stable sort, so equal tiers keep the PITCHES_DEG x AZIMUTHS_DEG order
     order = sorted((k for k, t in enumerate(cands.tiers) if t != CROSS_BODY_TIER),
                    key=lambda k: cands.tiers[k])
     if not order:

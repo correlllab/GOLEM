@@ -169,7 +169,7 @@
         "durability": "VOLATILE",
         "reliability": "RELIABLE"
       },
-      "rate_clock": "wall",
+      "rate_clock": "sim",
       "rate_hz": 9.962,
       "received": true,
       "type": "magpie_msgs/msg/GripperState",
@@ -177,7 +177,7 @@
     },
     "/livox/imu": {
       "encoding": null,
-      "frame_id": "lidar_link",
+      "frame_id": "livox_frame",
       "height": null,
       "point_fields": null,
       "qos": {
@@ -192,7 +192,7 @@
     },
     "/livox/lidar": {
       "encoding": null,
-      "frame_id": "lidar_link",
+      "frame_id": "livox_frame",
       "height": null,
       "point_fields": null,
       "qos": {
@@ -200,14 +200,14 @@
         "reliability": "RELIABLE"
       },
       "rate_clock": "sim",
-      "rate_hz": 9.936,
+      "rate_hz": 10.0,
       "received": true,
       "type": "livox_ros_driver2/msg/CustomMsg",
       "width": null
     },
     "/livox/pointcloud": {
       "encoding": null,
-      "frame_id": "lidar_link",
+      "frame_id": "livox_frame",
       "height": 1,
       "point_fields": [
         [
@@ -258,7 +258,7 @@
         "reliability": "RELIABLE"
       },
       "rate_clock": "sim",
-      "rate_hz": 9.936,
+      "rate_hz": 10.0,
       "received": true,
       "type": "sensor_msgs/msg/PointCloud2",
       "width": null
@@ -797,7 +797,7 @@
         "durability": "VOLATILE",
         "reliability": "RELIABLE"
       },
-      "rate_clock": "wall",
+      "rate_clock": "sim",
       "rate_hz": 10.032,
       "received": true,
       "type": "magpie_msgs/msg/GripperState",

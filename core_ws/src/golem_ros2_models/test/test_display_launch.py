@@ -1,4 +1,4 @@
-'''The viewer launch file: one robot's ROS copy to robot_state_publisher, sliders and RViz'''
+"""Test the viewer launch file: one robot's ROS copy to robot_state_publisher, sliders, RViz."""
 import importlib.util
 import os
 
@@ -9,6 +9,7 @@ from golem_ros2_models import paths
 
 
 def display_launch():
+    """Import the installed display.launch.py as a module."""
     from ament_index_python.packages import get_package_share_directory
     path = os.path.join(get_package_share_directory('golem_ros2_models'), 'launch',
                         'display.launch.py')
@@ -19,6 +20,7 @@ def display_launch():
 
 
 def test_robot_argument():
+    """`robot` defaults to h12 and allows exactly the robots paths knows."""
     from launch.actions import DeclareLaunchArgument
     description = display_launch().generate_launch_description()
     arguments = {action.name: action for action in description.entities
@@ -29,6 +31,7 @@ def test_robot_argument():
 
 @pytest.mark.parametrize('robot', paths.ROBOTS)
 def test_nodes(robot):
+    """The viewer starts the three nodes and feeds robot_state_publisher the ROS copy."""
     from launch import LaunchContext
     from launch.utilities import perform_substitutions
     context = LaunchContext()
@@ -39,7 +42,7 @@ def test_nodes(robot):
     publisher = next(n for n in nodes if n.node_package == 'robot_state_publisher')
     parameters = {perform_substitutions(context, key): perform_substitutions(context, value)
                   for key, value in publisher._Node__parameters[0].items()}
-    # launch_ros passes a multi-line string parameter on as a YAML scalar
+    # launch_ros passes a multi-line string parameter on as a YAML scalar.
     description = yaml.safe_load(parameters['robot_description'])
     with open(paths.urdf_path(robot, ros=True)) as f:
         assert description == f.read()

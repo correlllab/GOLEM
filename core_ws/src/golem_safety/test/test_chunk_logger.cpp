@@ -20,10 +20,11 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// A private temp directory, removed with the object.
+// Give each test a private temporary directory, removed after it.
 class ChunkLoggerTest : public ::testing::Test
 {
 protected:
+  // Create the test's directory.
   void SetUp() override
   {
     static int counter = 0;
@@ -32,13 +33,14 @@ protected:
     fs::create_directories(dir_);
   }
 
+  // Remove the test's directory.
   void TearDown() override
   {
     std::error_code ignored;
     fs::remove_all(dir_, ignored);
   }
 
-  // The file names in `dir`, sorted.
+  // Return the file names in `dir`, sorted.
   static std::vector<std::string> names_in(const fs::path & dir)
   {
     std::vector<std::string> names;
@@ -52,6 +54,7 @@ protected:
   fs::path dir_;
 };
 
+// Return a zeroed sample of `motors` slots stamped `time_stamp`.
 LogSample sample_of(size_t motors, double time_stamp)
 {
   LogSample sample(motors);
@@ -61,9 +64,9 @@ LogSample sample_of(size_t motors, double time_stamp)
 
 }  // namespace
 
+// Full chunks are written as they fill, and stop() writes the rest as a shorter last chunk.
 TEST_F(ChunkLoggerTest, WritesChunkFiles)
 {
-  // 2.5 chunks of samples: two full chunks and the partial one stop() flushes.
   ChunkLogger logger(dir_.string(), "chunk_", 100);
   for (int i = 0; i < 250; ++i) {
     logger.log(sample_of(29, 1.0e9 + i));
@@ -73,15 +76,14 @@ TEST_F(ChunkLoggerTest, WritesChunkFiles)
   const std::vector<std::string> expected = {
     "chunk_000000.npz", "chunk_000001.npz", "chunk_000002.npz"};
   EXPECT_EQ(names_in(dir_), expected);
-  EXPECT_EQ(logger.chunks_written(), 3u);
   EXPECT_EQ(logger.samples_dropped(), 0u);
   EXPECT_EQ(logger.write_failures(), 0u);
 
-  // Chunks 0 and 1 hold 100 samples each, chunk 2 holds 50.
   EXPECT_EQ(fs::file_size(dir_ / expected[0]), fs::file_size(dir_ / expected[1]));
   EXPECT_LT(fs::file_size(dir_ / expected[2]), fs::file_size(dir_ / expected[0]));
 }
 
+// A sample count that fills the last chunk exactly leaves no empty chunk behind.
 TEST_F(ChunkLoggerTest, ExactMultipleLeavesNoEmptyChunk)
 {
   ChunkLogger logger(dir_.string(), "chunk_", 50);
@@ -92,6 +94,7 @@ TEST_F(ChunkLoggerTest, ExactMultipleLeavesNoEmptyChunk)
   EXPECT_EQ(names_in(dir_), (std::vector<std::string>{"chunk_000000.npz", "chunk_000001.npz"}));
 }
 
+// Destroying the logger writes the samples still queued.
 TEST_F(ChunkLoggerTest, DestructorFlushes)
 {
   {
@@ -103,6 +106,7 @@ TEST_F(ChunkLoggerTest, DestructorFlushes)
   EXPECT_EQ(names_in(dir_), (std::vector<std::string>{"chunk_000000.npz"}));
 }
 
+// stop() can be called again, and a sample logged after it is ignored, not dropped.
 TEST_F(ChunkLoggerTest, StopIsIdempotentAndLaterSamplesAreIgnored)
 {
   ChunkLogger logger(dir_.string(), "chunk_", 100);
@@ -115,6 +119,7 @@ TEST_F(ChunkLoggerTest, StopIsIdempotentAndLaterSamplesAreIgnored)
   EXPECT_EQ(logger.samples_dropped(), 0u);
 }
 
+// A logger that got no sample writes no file.
 TEST_F(ChunkLoggerTest, NoSamplesWritesNoFiles)
 {
   ChunkLogger logger(dir_.string(), "chunk_", 100);
@@ -122,6 +127,7 @@ TEST_F(ChunkLoggerTest, NoSamplesWritesNoFiles)
   EXPECT_TRUE(names_in(dir_).empty());
 }
 
+// samples_per_chunk 0 is raised to 1.
 TEST_F(ChunkLoggerTest, ZeroSamplesPerChunkMeansOne)
 {
   ChunkLogger logger(dir_.string(), "chunk_", 0);
@@ -132,17 +138,19 @@ TEST_F(ChunkLoggerTest, ZeroSamplesPerChunkMeansOne)
   EXPECT_EQ(names_in(dir_).size(), 3u);
 }
 
+// Samples whose motor count differs from the first sample's, ragged ones and empty ones are
+// dropped and counted.
 TEST_F(ChunkLoggerTest, SamplesThatDoNotFitTheFirstAreDropped)
 {
   ChunkLogger logger(dir_.string(), "chunk_", 100);
   logger.log(sample_of(29, 0.0));
-  logger.log(sample_of(27, 1.0));  // another motor count than the first sample's
+  logger.log(sample_of(27, 1.0));
 
   LogSample ragged = sample_of(29, 2.0);
-  ragged.q_cmd.pop_back();  // a motor field that disagrees with the others
+  ragged.q_cmd.pop_back();
   logger.log(ragged);
 
-  logger.log(sample_of(0, 3.0));  // no motors at all
+  logger.log(sample_of(0, 3.0));
   logger.log(sample_of(29, 4.0));
   logger.stop();
 
@@ -150,6 +158,7 @@ TEST_F(ChunkLoggerTest, SamplesThatDoNotFitTheFirstAreDropped)
   EXPECT_EQ(names_in(dir_), (std::vector<std::string>{"chunk_000000.npz"}));
 }
 
+// The constructor creates missing parent directories, and directory() names the result.
 TEST_F(ChunkLoggerTest, CreatesMissingDirectoriesAndReportsIt)
 {
   const fs::path nested = dir_ / "a" / "b";
@@ -159,6 +168,7 @@ TEST_F(ChunkLoggerTest, CreatesMissingDirectoriesAndReportsIt)
   logger.stop();
 }
 
+// Starting removes earlier chunks and temporaries of its own prefix and nothing else.
 TEST_F(ChunkLoggerTest, ClearsOldChunksOfItsPrefixOnly)
 {
   for (const char * name :
@@ -173,12 +183,14 @@ TEST_F(ChunkLoggerTest, ClearsOldChunksOfItsPrefixOnly)
     (std::vector<std::string>{"chunks.npz", "notes.txt", "other_000001.npz"}));
 }
 
+// A directory that cannot be created throws std::runtime_error.
 TEST_F(ChunkLoggerTest, ThrowsWhenTheDirectoryCannotBeCreated)
 {
   std::ofstream(dir_ / "file") << "x";
   EXPECT_THROW(ChunkLogger((dir_ / "file" / "sub").string(), "chunk_", 10), std::runtime_error);
 }
 
+// Concurrent log() calls from several threads lose no sample below the queue bound.
 TEST_F(ChunkLoggerTest, ManyProducersLoseNothing)
 {
   ChunkLogger logger(dir_.string(), "chunk_", 100);
@@ -194,11 +206,11 @@ TEST_F(ChunkLoggerTest, ManyProducersLoseNothing)
     producer.join();
   }
   logger.stop();
-  // 2000 samples, nowhere near the queue bound.
   EXPECT_EQ(logger.samples_dropped(), 0u);
-  EXPECT_EQ(logger.chunks_written(), 20u);
+  EXPECT_EQ(names_in(dir_).size(), 20u);
 }
 
+// run_log_directory() is <root>/<YYYYmmdd-HHMMSS>-<pid>.
 TEST(RunLogDirectory, IsTheRootWithATimestampAndThePid)
 {
   const fs::path run = golem_safety::run_log_directory("/some/root");

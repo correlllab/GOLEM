@@ -1,0 +1,41 @@
+# Every key of export.yaml, which Locomanipulation_game's scripts/skrl/export_marl.py writes next to the networks in
+# policies/<name>/. marl_deploy_node loads it over the policy's deploy config (example.yaml), top-level key by key,
+# so each key here replaces the deploy config's. Nothing loads this file.
+
+# The navigation rest pose, from the run's arm target tables: one wrist pose per arm, [x, y, z (m), qw, qx, qy, qz],
+# pelvis frame, left then right.
+rest_pose:
+- [0.234, 0.2095, 0.095, 1.0, 0.0, 0.0, 0.0]
+- [0.234, -0.2095, 0.095, 1.0, 0.0, 0.0, 0.0]
+
+# joint name -> [low, high] rad, the position e-stop range of GOLEM's safety layer the run trained inside; it narrows
+# the joint target bounds. One entry shown; the export lists every joint.
+target_limits:
+  left_ankle_roll_joint: [-0.220799, 0.220799]
+
+# The training run's pelvis-motion estimator settings, as export_marl.py records them. Not read by lmg_deploy,
+# which takes its odometry from FAST-LIO instead.
+odometry:
+  mode: learned             # the run's estimator mode
+  history_frames: 25        # the run's estimator history length
+  vertical_from_feet: true  # a run estimator setting
+  tilt_from_gravity: true   # a run estimator setting
+
+# Whether the run's observations had a height-drop term. Not read by lmg_deploy, whose observations never do.
+height_drop_obs: false
+
+# true: the actors observe each leg's gait phase cos after its sin (legs 97 / arms 125 inputs).
+gait_phase_cos: true
+
+imu:
+  frame: livox_imu_link     # URDF frame the run's IMU sat in: livox_imu_link, livox_link or imu_link
+  offset: [0.0, 0.0, 0.0]   # the run's IMU offset setting; not read (marl_deploy_node's imu_offset_*_deg trim it)
+  gyro_lowpass_hz: 8.0      # Hz, cutoff of the GyroLowpass on the angular velocity; absent: none
+
+# Where the export came from; marl_deploy_node logs it at start.
+source:
+  checkpoint: <run>/checkpoints/agent_<step>.pt     # the skrl checkpoint the actors came from
+  estimator: <run>/estimator/estimator_<step>.pt    # the pelvis-motion estimator's checkpoint (not deployed)
+  target_tables: <run>/arm_target_tables.pt         # the arm target tables rest_pose came from
+  task: LocoManip-Marl-Direct-v0                    # the training task
+  exported: '2026-10-20T10:51:54'                   # when export_marl.py ran, ISO 8601

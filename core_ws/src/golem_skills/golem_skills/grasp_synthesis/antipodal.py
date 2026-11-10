@@ -1,9 +1,10 @@
-"""antipodal: close across the object's narrowest top-surface span.
+"""
+Close across the object's narrowest top-surface span (the `antipodal` method).
 
-PCA of the cloud's top slab (common.top_layer_pca) gives the principal XY
-axes; the fingers close across the MINOR axis — the antipodal pair with the
-shortest span — at the slab centroid, FINGER_SINK_M below the top surface.
-The closing axis is the method's whole idea, so the wrist is never re-rolled:
+PCA of the cloud's top slab (common.top_layer_pca) gives its principal XY
+axes; the fingers close across the MINOR axis, the antipodal pair with the
+shortest span, at the slab centroid, FINGER_SINK_M below the top surface. The
+closing axis is the point of the method, so the wrist is never re-rolled:
 candidates walk SURFACE_GRASP_TILTS on the minor axis, then one 45 deg grasp
 across the major axis as a fallback. The planned opening is the minor extent.
 """
@@ -16,6 +17,7 @@ from .ranking import gate_min_pitch
 
 
 def synthesize(inp):
+    """Return (Candidates, None) across the minor axis, or (None, reason) if the gate drops all."""
     cloud = inp.cloud
     pca = top_layer_pca(cloud)
     tip = surface_contact(pca['centroid'][:2], pca['top_z'],

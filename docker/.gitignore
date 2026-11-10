@@ -1,2 +1,2 @@
-# Local secrets / env overrides — use .env.example as the committed template.
+# Local settings and secrets; docker/.env.example is the committed template.
 .env

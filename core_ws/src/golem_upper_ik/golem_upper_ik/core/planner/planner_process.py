@@ -1,17 +1,16 @@
-'''
-PlannerClient: runs a ReducedJointPlanner in a subprocess of its own, so OMPL's planning
-time and native state stay out of the controller process.
+"""Run a ReducedJointPlanner in a subprocess of its own: PlannerClient.
 
-The subprocess builds its own RobotModel from the robot's profile, once, on the first
-request. A robot whose profile has no self-collision model cannot plan: its client reports
-unavailable and refuses every request without starting the subprocess.
+The subprocess keeps OMPL's planning time and native state out of the controller process.
+It builds its own RobotModel from the robot's profile, once, on the first request. A robot
+whose profile has no self-collision model cannot plan: its client reports unavailable and
+refuses every request without starting the subprocess.
 
 Every request carries a sequence number that its reply echoes, and the client takes only
 the reply to the request it waits for. A subprocess that may still owe a reply nobody waits
 for (its start timed out, or a request was abandoned) is stopped, and the next request
 starts a fresh one with fresh queues. Requests from several threads take turns: one waits
 until the one before it has its reply.
-'''
+"""
 import itertools
 import queue
 import threading
@@ -28,29 +27,29 @@ from golem_upper_ik.core.planner.reduced_joint_planner import (
     PlannerConfig,
     ReducedJointPlanner,
 )
-from golem_upper_ik.profile import RobotProfile, load_profile
-from golem_upper_ik.robots import robot_module
+from golem_upper_ik.profile import RobotProfile, load_profile, robot_config
 
 # why a robot without a self-collision model cannot plan: {robot} is its display name and
-# {module} its robot module
+# {module} its name
 PLANNER_UNAVAILABLE = (
     'Planning is unavailable: the {robot} has no self-collision model (its profile, '
-    'golem_upper_ik/robots/{module}.py, names no sphere URDF and SRDF); send the goal with '
-    'plan=false'
+    'golem_upper_ik/config/{module}/robot.yaml, names no sphere URDF and SRDF); send the '
+    'goal with plan=false'
 )
-STARTUP_TIMEOUT = 30.0  # s for the subprocess to build its model and report ready
-POLL_PERIOD = 0.1  # s between checks on the subprocess while waiting for it
-SHUTDOWN_GRACE = 2.0  # s a graceful shutdown waits for the subprocess before terminating it
+STARTUP_TIMEOUT = 30.0  # steady s for the subprocess to build its model and report ready
+POLL_PERIOD = 0.1  # steady s between checks on the subprocess while waiting for it
+SHUTDOWN_GRACE = 2.0  # steady s a graceful shutdown waits before terminating the subprocess
 
 
 class PlannerUnavailableError(RuntimeError):
-    '''The robot cannot plan: its profile has no self-collision model'''
+    """Signal that the robot cannot plan: its profile has no self-collision model."""
 
 
 class _Worker:
-    '''One planner subprocess and its two queues'''
+    """Hold one planner subprocess and its request and response queues."""
 
     def __init__(self, ctx, target, init_args):
+        """Create (not start) the subprocess running target(init_args, requests, responses)."""
         self.request_queue = ctx.Queue()
         self.response_queue = ctx.Queue()
         self.process = ctx.Process(
@@ -63,10 +62,11 @@ class _Worker:
         self._lock = threading.Lock()
 
     def close(self, graceful):
-        '''
-        Stop the subprocess: asked to shut down first when graceful, terminated otherwise
-        (or when it does not shut down in time). Only the first call does anything.
-        '''
+        """Stop the subprocess, asked to shut down first when graceful; once only.
+
+        It is terminated when not graceful or when it does not shut down within
+        SHUTDOWN_GRACE.
+        """
         with self._lock:
             if self.closed:
                 return
@@ -84,18 +84,20 @@ class _Worker:
 
 
 class PlannerClient:
-    '''Client for a planner subprocess'''
+    """Send plan requests to a planner subprocess, started on the first request."""
 
     def __init__(self, profile: RobotProfile, planner_config: PlannerConfig = None,
                  frame_names=None, startup_timeout: float = STARTUP_TIMEOUT):
-        '''
-        profile: the robot; the subprocess builds its model from load_profile(profile.robot)
+        """Set up the client; no subprocess starts before the first request.
+
+        profile: the robot; the subprocess builds its model from load_profile(profile.robot).
         planner_config: the planner's settings, default PlannerConfig(); its frame_names are
-            set from frame_names, and a config naming other frames is refused
+            set from frame_names, and a config naming other frames is refused (ValueError).
         frame_names: the (left, right) planner frames, default the profile's planner frames
-            (the controller passes the controller config's planner.frame_names)
-        startup_timeout: s for the subprocess to build its model and report ready
-        '''
+            (the controller passes the controller config's planner.frame_names).
+        startup_timeout: s of steady time for the subprocess to build its model and report
+            ready.
+        """
         self.robot = profile.robot
         frames = tuple(profile.planner_frames if frame_names is None else frame_names)
         config = planner_config if planner_config is not None else PlannerConfig()
@@ -107,32 +109,32 @@ class PlannerClient:
         self.unavailable_reason = None
         if profile.collision is None:
             self.unavailable_reason = PLANNER_UNAVAILABLE.format(
-                robot=robot_module(profile.robot).DISPLAY_NAME, module=profile.robot)
+                robot=robot_config(profile.robot)['display_name'], module=profile.robot)
 
         self._ctx = mp.get_context('spawn')
         self._worker_main = _planner_worker_main
         self._worker = None
         self._request_ids = itertools.count(1)
-        # one request at a time: two waiting on one worker's replies would each have to
-        # take the other's reply off the queue to find its own
+        # one request at a time: two waiting on one worker's replies would each have to take
+        # the other's reply off the queue to find its own
         self._request_lock = threading.Lock()
 
     @property
     def available(self) -> bool:
-        '''Whether the robot can plan; unavailable_reason says why not'''
+        """Return whether the robot can plan; unavailable_reason says why not."""
         return self.unavailable_reason is None
 
     def plan_configuration(self, current_q, start, goal,
                            active_mask=None, moving_speed=None,
                            max_interpolation_steps=None):
-        '''Plan to a reduced joint target in the planner process
+        """Return the subprocess's PlanResult from start to goal (reduced q).
 
-        The worker's PlannerConfig is serialized once at spawn, so per-goal
-        speed changes have to travel with the request. Leave the overrides at
-        None to plan with the config the worker was started with.
-        PlannerUnavailableError when the robot cannot plan; RuntimeError
-        ('planner shut down') when shutdown() runs while this waits.
-        '''
+        current_q is the measured body q, which places the frozen joints for the workspace
+        bounds. The worker's PlannerConfig is serialized once at spawn, so per-goal speed
+        changes travel with the request; None plans with the config the worker started with.
+        PlannerUnavailableError when the robot cannot plan; RuntimeError ('planner shut
+        down') when shutdown() runs while this waits, and for the worker's errors.
+        """
         if not self.available:
             raise PlannerUnavailableError(self.unavailable_reason)
         return self._request({
@@ -146,19 +148,19 @@ class PlannerClient:
         })
 
     def shutdown(self):
-        '''Stop the planner process; a request waiting on it raises 'planner shut down' '''
+        """Stop the planner process; a request waiting on it raises 'planner shut down'."""
         worker, self._worker = self._worker, None
         if worker is not None:
             worker.close(graceful=True)
 
     def _stop(self, worker):
-        '''Terminate worker, which may owe a reply nobody waits for'''
+        """Terminate worker, which may owe a reply nobody waits for."""
         if self._worker is worker:
             self._worker = None
         worker.close(graceful=False)
 
     def _start(self):
-        '''The running worker, started (lazily, so spawn cost is paid only when needed)'''
+        """Return the running worker, starting one if none runs (spawn cost only when needed)."""
         worker = self._worker
         if worker is not None and not worker.closed and worker.process.is_alive():
             return worker
@@ -166,7 +168,7 @@ class PlannerClient:
             self._stop(worker)
 
         init_args = {
-            # the profile itself does not pickle (read-only mappings): the worker loads it
+            # the profile does not pickle (read-only mappings): the worker loads it by name
             'robot': self.robot,
             'planner_config': asdict(self.planner_config),
         }
@@ -181,6 +183,7 @@ class PlannerClient:
         return worker
 
     def _await_ready(self, worker):
+        """Wait for worker's ready message; RuntimeError on its start-up error or a timeout."""
         deadline = time.monotonic() + self.startup_timeout
         while True:
             message = self._next_message(worker)
@@ -195,6 +198,7 @@ class PlannerClient:
             return
 
     def _request(self, request):
+        """Send request and return its result; RuntimeError for the worker's error."""
         with self._request_lock:
             worker = self._start()
             request_id = next(self._request_ids)
@@ -212,6 +216,7 @@ class PlannerClient:
         raise RuntimeError(f'Unexpected planner response: {response}')
 
     def _await_response(self, worker, request_id):
+        """Return the reply to request_id, dropping replies to other requests."""
         while True:
             message = self._next_message(worker)
             # None: still planning; another id: a reply to a request nobody waits for
@@ -219,10 +224,10 @@ class PlannerClient:
                 return message
 
     def _next_message(self, worker):
-        '''
-        The worker's next message, or None after a poll period without one. RuntimeError
-        when the client was shut down, or the worker exited and left no message.
-        '''
+        """Return the worker's next message, or None after a poll period without one.
+
+        RuntimeError when the client was shut down, or the worker exited and left no message.
+        """
         if worker.closed:
             raise RuntimeError('planner shut down')
         try:
@@ -242,11 +247,10 @@ class PlannerClient:
 
 
 class _PlannerWorker:
-    '''Own the native planner state inside the child process'''
+    """Own the robot model and the planner inside the subprocess."""
 
     def __init__(self, init_args):
-        # build native state in the child so OMPL and pinocchio stay isolated; the model
-        # builds its reduced and self-collision models from the profile
+        """Build the robot model and the planner from init_args' robot and planner config."""
         self.robot_model = RobotModel(load_profile(init_args['robot']))
         planner_config = PlannerConfig(**init_args['planner_config'])
         self.planner = ReducedJointPlanner(
@@ -255,12 +259,14 @@ class _PlannerWorker:
         )
 
     def handle(self, request):
+        """Return the result of one request; ValueError for an unknown command."""
         command = request['command']
         if command == 'plan_configuration':
             return self._plan_configuration(request)
         raise ValueError(f'Unsupported planner command: {command}')
 
     def _plan_configuration(self, request):
+        """Return the PlanResult of a plan_configuration request."""
         self._set_current_q(request['current_q'])
         start = np.asarray(request['start'], dtype=float)
         goal = np.asarray(request['goal'], dtype=float)
@@ -273,15 +279,15 @@ class _PlannerWorker:
 
     @contextmanager
     def _config_override(self, moving_speed, max_interpolation_steps):
-        '''Apply per-request planner speed settings, restoring them after'''
+        """Apply a request's speed settings to the planner config for the block, then restore."""
         if moving_speed is None and max_interpolation_steps is None:
             yield
             return
 
         config = self.planner.config
         previous = (config.moving_speed, config.max_interpolation_steps)
-        # PlannerConfig is validated at construction only, so an override has
-        # to be checked here or a bad value divides by zero when interpolating
+        # PlannerConfig is validated at construction only, so an override is checked here, or
+        # a bad value divides by zero when interpolating
         if moving_speed is not None:
             moving_speed = float(moving_speed)
             if moving_speed <= 0.0:
@@ -301,16 +307,21 @@ class _PlannerWorker:
             config.moving_speed, config.max_interpolation_steps = previous
 
     def _set_current_q(self, q):
-        # the caller's measured joints, at rest: the frozen joints' pose for the frame limits
+        """Hold the caller's measured body q, at rest, as the model's state.
+
+        It places the frozen joints for the planner frames' workspace bounds.
+        """
         self.robot_model.state_subscriber = FixedState(q)
         self.robot_model.update_kinematics()
 
 
 def _planner_worker_main(init_args, request_queue, response_queue):
-    '''The subprocess: ready (or startup_error), then one reply per request, by its id'''
+    """Run the subprocess: send ready (or startup_error), then one reply per request.
+
+    Each reply carries its request's id; a shutdown request ends the loop.
+    """
     try:
         worker = _PlannerWorker(init_args)
-        # notify the parent only after the child model is fully initialized
         response_queue.put({'type': 'ready'})
     except Exception as exc:
         response_queue.put({
@@ -335,10 +346,12 @@ def _planner_worker_main(init_args, request_queue, response_queue):
 
 
 def _optional_array(value, dtype=float):
+    """Return value as an array of dtype, or None."""
     if value is None:
         return None
     return np.asarray(value, dtype=dtype)
 
 
 def _format_error(exc):
+    """Return exc's message with the current traceback, for the parent to raise."""
     return f'{exc}\n{traceback.format_exc()}'

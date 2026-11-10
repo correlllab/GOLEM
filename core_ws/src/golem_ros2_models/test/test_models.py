@@ -1,7 +1,8 @@
-'''
-The installed models of both robots, read through golem_ros2_models.paths (needs the package
-built and sourced).
-'''
+"""
+Test both robots' installed models, read through golem_ros2_models.paths.
+
+Needs the package built and sourced.
+"""
 import hashlib
 import os
 import re
@@ -16,30 +17,33 @@ PACKAGE_URI = 'package://golem_ros2_models/'
 LFS_POINTER = b'version https://git-lfs'
 MESH_REF = re.compile(r'<mesh\b[^>]*?\bfilename="([^"]*)"')
 # The joints each robot's Pinocchio URDF has beyond its body joints: the Magpie grippers'
-# finger hinges and rockers on the H1-2, the Dex3-1 fingers on the G1
+# finger hinges and rockers on the H1-2, the Dex3-1 fingers on the G1.
 NON_BODY_JOINT = {
     'h12': re.compile(r'^(lg|rg)_'),
     'g1': re.compile(r'^(left|right)_hand_'),
 }
-# the Magpie finger hinges the H1-2's ROS copy fixes
+# The Magpie finger hinges the H1-2's ROS copy fixes.
 H12_HINGES = {f'{g}_{s}_hinge_{i}' for g in ('lg', 'rg') for s in ('left', 'right')
               for i in (1, 2, 3)}
 # sha256 of CL_Assets' g1/g1_sphere.urdf, installed verbatim: the lab's sphere model with
 # the optimiser-fitted torso column (CL_Assets/README.md). golem_upper_ik's G1 d_min and its
-# tests' distances hold for this file; a changed sphere model must change this too
+# tests' distances hold for this file; a changed sphere model must change this too.
 G1_SPHERE_SHA256 = '68c5e5cf93a6fcb5958f98dc88909be0632dd1165500adf6d1b4e8d64225dcf0'
 
 
 def share_dir():
+    """Return the package's installed share directory."""
     from ament_index_python.packages import get_package_share_directory
     return get_package_share_directory('golem_ros2_models')
 
 
 def parse(path):
-    '''
-    The URDF's root element. The H1-2's sphere URDF uses drake: elements without declaring
-    the namespace (urdfdom does not need it), so it is declared here when missing.
-    '''
+    """
+    Return the URDF's root element.
+
+    The H1-2's sphere URDF uses drake: elements without declaring the namespace (urdfdom
+    does not need it), so it is declared here when missing.
+    """
     with open(path) as f:
         text = f.read()
     if 'drake:' in text and 'xmlns:drake' not in text:
@@ -48,7 +52,7 @@ def parse(path):
 
 
 def installed_urdfs(robot):
-    '''(path, is the ROS copy) of every URDF installed for the robot'''
+    """Return (path, is the ROS copy) of every URDF installed for the robot."""
     found = []
     for root, _, files in os.walk(paths.model_dir(robot)):
         found += [(os.path.join(root, name), name.endswith('_ros.urdf'))
@@ -57,26 +61,31 @@ def installed_urdfs(robot):
 
 
 def assert_mesh_file(path, ref):
+    """Assert that a mesh reference resolves to a real file, not an LFS pointer."""
     assert os.path.isfile(path), f'{ref} does not resolve ({path})'
     with open(path, 'rb') as f:
         assert not f.read(len(LFS_POINTER)) == LFS_POINTER, f'{path} is a Git-LFS pointer'
 
 
 def joints(root):
+    """Return the URDF's joints by name, in file order."""
     return {joint.get('name'): joint for joint in root.iter('joint')}
 
 
 def actuated(root):
+    """Return the URDF's non-fixed joints, in file order."""
     return [joint for joint in root.iter('joint') if joint.get('type') != 'fixed']
 
 
 def floats(element, tag, attribute, default):
+    """Return a child's space-separated attribute as an array, or the default's."""
     child = element.find(tag)
     value = default if child is None else child.get(attribute, default)
     return np.array([float(x) for x in value.split()])
 
 
 def test_robots():
+    """The package knows the H1-2 and the G1, the H1-2 first (the default)."""
     assert paths.ROBOTS == ('h12', 'g1')
 
 
@@ -87,26 +96,27 @@ def test_robots():
     lambda: paths.model_paths(''),
 ])
 def test_unknown_robot_is_refused(call):
+    """Every lookup refuses an unknown robot, listing the known ones."""
     with pytest.raises(ValueError, match="h12.*g1"):
         call()
 
 
 @pytest.mark.parametrize('robot', paths.ROBOTS)
 def test_model_paths_exist(robot):
+    """model_paths names installed files in the robot's model directory."""
     model = paths.model_paths(robot)
-    assert set(model) == {'urdf_path', 'urdf_ros_path', 'collision'}
+    assert set(model) == {'urdf_path', 'collision'}
     assert model['urdf_path'] == paths.urdf_path(robot)
-    assert model['urdf_ros_path'] == paths.urdf_path(robot, ros=True)
     assert model['collision'] == paths.collision_paths(robot)
     assert len(model['collision']) == 2
-    for path in (model['urdf_path'], model['urdf_ros_path'], *model['collision']):
+    for path in (model['urdf_path'], paths.urdf_path(robot, ros=True), *model['collision']):
         assert os.path.isfile(path), path
         assert os.path.dirname(path) == paths.model_dir(robot)
     assert paths.model_dir(robot) == os.path.join(share_dir(), robot)
 
 
 def test_installed_files():
-    '''The installed layout: each robot's models, meshes and licence, the viewer'''
+    """Each robot's directory holds exactly its models, meshes and licence; the viewer installs."""
     share = share_dir()
     expected = {
         'h12': {'h1_2_magpie.urdf', 'h1_2_magpie_ros.urdf', 'h1_2_magpie_sphere.urdf',
@@ -123,6 +133,7 @@ def test_installed_files():
 
 @pytest.mark.parametrize('robot', paths.ROBOTS)
 def test_mesh_references_resolve(robot):
+    """Every installed URDF's meshes resolve inside the robot's directory or package URI."""
     urdfs = installed_urdfs(robot)
     assert len(urdfs) == 3
     for path, ros in urdfs:
@@ -146,6 +157,7 @@ def test_mesh_references_resolve(robot):
 
 @pytest.mark.parametrize('robot', paths.ROBOTS)
 def test_ros_copy_matches_pinocchio_copy(robot):
+    """The ROS copy has the Pinocchio copy's links and joints; only the H1-2's hinges differ."""
     from xml.parsers import expat
     with open(paths.urdf_path(robot, ros=True)) as f:
         expat.ParserCreate().Parse(f.read(), True)
@@ -169,11 +181,12 @@ def test_ros_copy_matches_pinocchio_copy(robot):
 
 @pytest.mark.parametrize('robot', paths.ROBOTS)
 def test_pinocchio_loads_the_model_with_meshes(robot):
+    """Pinocchio loads the URDF and finds every mesh it names."""
     pin = pytest.importorskip('pinocchio')
     path = paths.urdf_path(robot)
     model, collision, visual = pin.buildModelsFromUrdf(path, package_dirs=os.path.dirname(path))
     assert model.njoints > 1
-    # Pinocchio names a primitive's kind (SPHERE, CYLINDER) where a mesh's path would be
+    # Pinocchio names a primitive's kind (SPHERE, CYLINDER) where a mesh's path would be.
     mesh_paths = [geom.meshPath for geom in visual.geometryObjects
                   if geom.meshPath.lower().endswith('.stl')]
     assert mesh_paths and collision.ngeoms > 0
@@ -183,6 +196,7 @@ def test_pinocchio_loads_the_model_with_meshes(robot):
 
 @pytest.mark.parametrize('robot', paths.ROBOTS)
 def test_pinocchio_loads_the_sphere_model_with_its_srdf(robot):
+    """The SRDF removes some, but not all, of the sphere model's collision pairs."""
     pin = pytest.importorskip('pinocchio')
     urdf, srdf = paths.collision_paths(robot)
     model, collision, _ = pin.buildModelsFromUrdf(urdf, package_dirs=os.path.dirname(urdf))
@@ -193,13 +207,14 @@ def test_pinocchio_loads_the_sphere_model_with_its_srdf(robot):
 
 
 def test_g1_sphere_model_is_the_pinned_file():
+    """The installed G1 sphere model is the file golem_upper_ik's distances were set for."""
     with open(paths.collision_paths('g1')[0], 'rb') as f:
         assert hashlib.sha256(f.read()).hexdigest() == G1_SPHERE_SHA256
 
 
 @pytest.mark.parametrize('robot', paths.ROBOTS)
 def test_sphere_body_joints_match_the_model(robot):
-    '''The sphere model's actuated joints are the model's body joints, in order, alike'''
+    """The sphere model's actuated joints are the model's body joints, in order, alike."""
     plain = actuated(parse(paths.urdf_path(robot)))
     sphere = actuated(parse(paths.collision_paths(robot)[0]))
     body = [j for j in plain if not NON_BODY_JOINT[robot].match(j.get('name'))]

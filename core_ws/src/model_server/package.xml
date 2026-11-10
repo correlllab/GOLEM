@@ -3,7 +3,7 @@
 <package format="3">
   <name>model_server</name>
   <version>0.0.0</version>
-  <description>Self-contained ROS 2 service servers for Gemini, SAM3, and GraspGenX.</description>
+  <description>Self-contained ROS 2 service servers for Gemini, SAM3, GraspGenX and YOLO.</description>
   <maintainer email="maxlconway@gmail.com">max</maintainer>
   <license>MIT</license>
 
@@ -13,22 +13,15 @@
   <depend>sensor_msgs</depend>
   <depend>sensor_msgs_py</depend>
   <depend>geometry_msgs</depend>
-  <depend>visualization_msgs</depend>
-  <depend>tf2_ros</depend>
   <depend>cv_bridge</depend>
   <depend>python3-numpy</depend>
   <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-trimesh-pip</exec_depend>
 
-  <!-- pip-only deps (no rosdep keys); installed in the ros container:
-       gemini_server:   google-genai, pillow
-       sam_server:      torch, pillow, sam3
-       graspgen_server: torch, graspgenx
-       yolo_server:     torch, ultralytics -->
-
-  <test_depend>ament_copyright</test_depend>
-  <test_depend>ament_flake8</test_depend>
-  <test_depend>ament_pep257</test_depend>
-  <test_depend>python3-pytest</test_depend>
+  <!-- The servers' other model libraries have no rosdep keys; the ros image
+       pip-installs them, trimesh too, at its locked versions (README.md,
+       Dependencies). -->
 
   <export>
     <build_type>ament_python</build_type>

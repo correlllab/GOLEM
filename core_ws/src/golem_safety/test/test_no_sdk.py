@@ -1,7 +1,9 @@
-'''
-golem_safety's code talks ROS only: nothing in it imports the Unitree SDK. tools/ and
-test/fixtures are not scanned: the offline fixture tools read the SDK on purpose.
-'''
+"""
+Check that golem_safety's installed code talks ROS only: nothing imports the Unitree SDK.
+
+tools/ and test/ are not scanned: they are not installed, and test/fixtures records the
+SDK's CRCs.
+"""
 
 from pathlib import Path
 
@@ -11,6 +13,7 @@ SCANNED_FILES = ('CMakeLists.txt', 'package.xml')
 
 
 def test_no_sdk_import():
+    """No scanned file names unitree_sdk2py."""
     files = [PACKAGE / name for name in SCANNED_FILES]
     for directory in SCANNED_DIRS:
         found = sorted(p for p in (PACKAGE / directory).rglob('*') if p.is_file())

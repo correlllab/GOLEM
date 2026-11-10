@@ -1,8 +1,9 @@
-// golem_safety_dump_config <robot> <config>
+// Print what a safety config derives, as JSON: the derived limits and every parsed value
+// under the schema's keys, loaded with safety_node's own loader. Used to check a config's
+// estop limits against the robot's pose before a real-robot session.
 //
-// Loads a safety config with the node's own loader and prints what it derived as
-// JSON: the derived limits and every parsed value, under the schema's keys. The
-// limit parity test compares this output to what the old safety layers derive.
+// Usage: ros2 run golem_safety golem_safety_dump_config <robot> <config name or path>
+// Exit codes: 0 printed, 1 the profile or config does not load, 2 wrong arguments.
 #include <cstdio>
 #include <iomanip>
 #include <iostream>
@@ -13,6 +14,7 @@
 #include <vector>
 
 #include "golem_safety/config.hpp"
+#include "golem_safety/json.hpp"
 #include "golem_safety/robot_profile.hpp"
 
 namespace
@@ -20,8 +22,9 @@ namespace
 
 using golem_safety::EstopAfter;
 using golem_safety::EstopMode;
+using golem_safety::json_string;
 
-// A double that reads back as the same double.
+// Format a double so that it reads back as the same double.
 std::string number(double value)
 {
   std::ostringstream out;
@@ -29,18 +32,7 @@ std::string number(double value)
   return out.str();
 }
 
-std::string quoted(const std::string & text)
-{
-  std::string out = "\"";
-  for (const char c : text) {
-    if (c == '"' || c == '\\') {
-      out += '\\';
-    }
-    out += c;
-  }
-  return out + "\"";
-}
-
+// Return `values` as a JSON array.
 std::string array(const std::vector<double> & values)
 {
   std::string out = "[";
@@ -50,21 +42,23 @@ std::string array(const std::vector<double> & values)
   return out + "]";
 }
 
+// Return `value` as a JSON boolean.
 std::string boolean(bool value) {return value ? "true" : "false";}
 
+// Print `c` and the profile's mode_machine to stdout as one JSON object.
 void print(const golem_safety::SafetyConfig & c, const golem_safety::RobotProfile & profile)
 {
   const auto & l = c.limits;
   std::cout << "{\n"
-            << " \"robot\": " << quoted(c.robot) << ",\n"
-            << " \"source\": " << quoted(c.source) << ",\n"
+            << " \"robot\": " << json_string(c.robot) << ",\n"
+            << " \"source\": " << json_string(c.source) << ",\n"
             << " \"mode_machine\": " << static_cast<int>(profile.mode_machine) << ",\n"
-            << " \"mode\": " << quoted(golem_safety::mode_name(c.mode)) << ",\n"
-            << " \"topics\": {\"low_cmd_in\": " << quoted(c.topics.low_cmd_in)
-            << ", \"low_cmd_lower_in\": " << quoted(c.topics.low_cmd_lower_in)
-            << ", \"low_cmd_upper_in\": " << quoted(c.topics.low_cmd_upper_in)
-            << ", \"low_cmd_out\": " << quoted(c.topics.low_cmd_out)
-            << ", \"low_state\": " << quoted(c.topics.low_state) << "},\n"
+            << " \"mode\": " << json_string(golem_safety::mode_name(c.mode)) << ",\n"
+            << " \"topics\": {\"low_cmd_in\": " << json_string(c.topics.low_cmd_in)
+            << ", \"low_cmd_lower_in\": " << json_string(c.topics.low_cmd_lower_in)
+            << ", \"low_cmd_upper_in\": " << json_string(c.topics.low_cmd_upper_in)
+            << ", \"low_cmd_out\": " << json_string(c.topics.low_cmd_out)
+            << ", \"low_state\": " << json_string(c.topics.low_state) << "},\n"
             << " \"control\": {\"publish_hz\": " << number(c.control.publish_hz)
             << ", \"state_lag_ms\": " << number(c.control.state_lag_ms) << "},\n"
             << " \"stale\": {\"upper_seconds\": " << number(c.stale.upper_seconds)
@@ -72,13 +66,13 @@ void print(const golem_safety::SafetyConfig & c, const golem_safety::RobotProfil
             << ", \"state_seconds\": " << number(c.stale.state_seconds) << "},\n"
             << " \"single_writer\": {\"handover_seconds\": "
             << number(c.single_writer.handover_seconds) << "},\n"
-            << " \"estop\": {\"triggered_topic\": " << quoted(c.estop.triggered_topic)
-            << ", \"plugged_in_topic\": " << quoted(c.estop.plugged_in_topic)
+            << " \"estop\": {\"triggered_topic\": " << json_string(c.estop.triggered_topic)
+            << ", \"plugged_in_topic\": " << json_string(c.estop.plugged_in_topic)
             << ", \"timeout_seconds\": " << number(c.estop.timeout_seconds) << "},\n"
             << " \"estop_response\": {\"mode\": "
-            << quoted(c.estop_response.mode == EstopMode::Zero ? "zero" : "damp")
+            << json_string(c.estop_response.mode == EstopMode::Zero ? "zero" : "damp")
             << ", \"kd\": " << array(c.estop_response.kd) << ", \"after\": "
-            << quoted(c.estop_response.after == EstopAfter::BurstThenSilence ?
+            << json_string(c.estop_response.after == EstopAfter::BurstThenSilence ?
       "burst_then_silence" : "keep_writing")
             << ", \"burst_count\": " << c.estop_response.burst_count << "},\n"
             << " \"limits\": {\n"
@@ -94,8 +88,8 @@ void print(const golem_safety::SafetyConfig & c, const golem_safety::RobotProfil
             << "  \"kd_max\": " << number(l.kd_max) << "\n"
             << " },\n"
             << " \"logging\": {\"enabled\": " << boolean(c.logging.enabled)
-            << ", \"base_dir\": " << quoted(c.logging.base_dir)
-            << ", \"chunk_prefix\": " << quoted(c.logging.chunk_prefix) << "}\n"
+            << ", \"base_dir\": " << json_string(c.logging.base_dir)
+            << ", \"chunk_prefix\": " << json_string(c.logging.chunk_prefix) << "}\n"
             << "}\n";
 }
 

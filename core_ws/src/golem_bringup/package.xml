@@ -11,31 +11,22 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>estop</exec_depend>
-  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>magpie_control</exec_depend>
+  <exec_depend>livox_ros_driver2</exec_depend>
   <exec_depend>golem_safety</exec_depend>
   <exec_depend>golem_upper_ik</exec_depend>
-  <exec_depend>h12_lowerbody_rl</exec_depend>
+  <exec_depend>golem_lowerbody_rl</exec_depend>
   <exec_depend>lmg_deploy</exec_depend>
   <exec_depend>golem_ros2_models</exec_depend>
   <exec_depend>dex_3</exec_depend>
-  <exec_depend>g1_homie</exec_depend>
   <exec_depend>cl_realsense</exec_depend>
   <exec_depend>model_server</exec_depend>
   <exec_depend>custom_ros_messages</exec_depend>
   <exec_depend>magpie_msgs</exec_depend>
-  <exec_depend>std_srvs</exec_depend>
-  <exec_depend>python3-opencv</exec_depend>
-  <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-scipy</exec_depend>
   <exec_depend>golem_slam</exec_depend>
-  <exec_depend>deploy_mjpc</exec_depend>
   <exec_depend>golem_skills</exec_depend>
-  <exec_depend>fast_lio</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
-  <exec_depend>pointcloud_to_laserscan</exec_depend>
-  <exec_depend>slam_toolbox</exec_depend>
-  <exec_depend>nav2_bringup</exec_depend>
-  <exec_depend>nav2_bt_navigator</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

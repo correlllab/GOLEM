@@ -1,0 +1,64 @@
+# FAST-LIO on the H1-2's MID-360, for the real robot and both simulators; every key is
+# described in ../example.fastlio.yaml. Values are the real-verified reference stack's
+# (correlllab/fast_lio_nav2_humanoid, fast_lio_nav2_integration/config/mid360.yaml)
+# where no comment gives another reason.
+#
+# The MID-360 hangs upside down under the head, and /livox/lidar and /livox/imu are both
+# in its raw frame, the URDF's livox_link and livox_imu_link: the sims publish them from
+# the MJCF's livox_site and livox_imu_site, and on the real robot livox_ros_driver2
+# applies no rotation (MID360_config.json's extrinsic is zero) and nothing rotates the IMU.
+/**:
+    ros__parameters:
+        feature_extract_enable: false
+        point_filter_num: 3
+        max_iteration: 3
+        # 0.4 m: finer voxels (<= 0.3) destabilise the real MID-360 while walking,
+        # measured by replaying real walking bags; tests/sim's SLAM checks run the
+        # RoboCasa sim on it.
+        filter_size_surf: 0.4
+        filter_size_map: 0.4
+        cube_side_length: 1000.0
+        runtime_pos_log_enable: false
+        map_file_path: "./test.pcd"
+
+        common:
+            lid_topic:  "/livox/lidar"
+            imu_topic:  "/livox/imu"
+            time_sync_en: false
+            time_offset_lidar_to_imu: 0.0
+
+        preprocess:
+            lidar_type: 1
+            scan_line:  6                # the real MID-360 and RoboCasa number lines 0-3, Isaac 0-5
+            blind: 0.5
+            timestamp_unit: 3
+            scan_rate: 10
+
+        mapping:
+            acc_cov: 0.1
+            gyr_cov: 0.1
+            b_acc_cov: 0.0001
+            b_gyr_cov: 0.0001
+            fov_degree:    360.0
+            det_range:     100.0
+            extrinsic_est_en:  true
+            # The URDF's livox_link in livox_imu_link (h1_2_magpie_ros.urdf), under a
+            # degree from identity because the points and the IMU share the inversion;
+            # test_navigation_launch.py checks it against the URDF. body_to_pelvis reads
+            # these values too, so edit them here only.
+            extrinsic_T: [-0.010474205546, -0.023360766595, 0.044210452410]
+            extrinsic_R: [0.999929195836, 0.000000000000, 0.011899719142,
+                          0.000019039543, 0.999998720000, -0.001599886031,
+                          -0.011899703911, 0.001599999317, 0.999927915926]
+
+        publish:
+            path_en: true
+            effect_map_en: false
+            map_en: true
+            scan_publish_en:  true
+            dense_publish_en: false
+            scan_bodyframe_pub_en: true  # self_filter and level_odom read the body-frame scan
+
+        pcd_save:
+            pcd_save_en: false  # with interval -1 it would buffer every frame in RAM until shutdown
+            interval: -1

@@ -1,0 +1,63 @@
+# Every key of realsense_profile.yaml, the H1-2 sim's RealSense camera profile
+# (read by realsense_profile.py). Nothing loads this file; the values are
+# illustrations. Units: metres, quaternions x y z w, intrinsics in pixels.
+
+# Hz of sim time at which the sim re-publishes the driver's own camera edges
+# (those marked `driver` below) on /tf, as the RealSense driver does. Every
+# edge is also latched once on /tf_static.
+tf_rate_hz: 10.0
+
+cameras:
+  # One entry per camera namespace: the sim publishes /realsense/<namespace>/*.
+  # h12_mujoco.py reads head, left_hand and right_hand.
+  head:
+    # A URDF link whose frame is the robot MJCF camera's optical frame (+z
+    # forward, +y down). The sim moves that MJCF camera to color_frame and
+    # adds a depth camera at depth_frame, both placed through tf_static from
+    # this link. Required for a camera with `color` and `depth` intrinsics.
+    anchor_link: head_camera_link
+    # frame_id of the colour image, aligned depth and their camera_info.
+    color_frame: head_color_optical_frame
+    # frame_id of depth/image_rect_raw, its camera_info and depth/color/points.
+    depth_frame: head_depth_optical_frame
+    # The camera's static TF edges: [parent, child, [x, y, z], [qx, qy, qz, qw]],
+    # with a fifth element `driver` on the edges the RealSense driver publishes
+    # itself (also re-published on /tf at tf_rate_hz); the others are
+    # robot-side mounts. The tree must connect anchor_link, color_frame and
+    # depth_frame.
+    tf_static:
+      - [head_camera_link, head_link, [0.0, 0.015, -0.019], [-0.51, 0.524, -0.486, -0.478]]
+      - [head_link, head_depth_frame, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], driver]
+      - [head_depth_frame, head_depth_optical_frame, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, 0.5], driver]
+      - [head_link, head_color_frame, [0.0, 0.015, 0.0], [0.0, 0.0, 0.0, 1.0], driver]
+      - [head_color_frame, head_color_optical_frame, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, 0.5], driver]
+    # The real colour stream: its size (pixels) and k = [fx, fy, cx, cy]
+    # (pixels; integer coordinates are pixel centres). The sim renders it at
+    # GOLEM_CAMERA_SCALE times this size. Optional: without `color` (and
+    # `depth`) the camera keeps its MJCF fovy and renders colour and depth
+    # from the one camera at GOLEM_HAND_CAMERA_RES.
+    color:
+      width: 1280
+      height: 720
+      k: [909.7, 909.5, 647.7, 369.3]
+    # The real depth stream's camera_info, before decimation. Required with `color`.
+    depth:
+      width: 1280
+      height: 720
+      k: [642.6, 642.6, 651.2, 358.1]
+    # Integer >= 1, default 1: depth/image_rect_raw and the point cloud are
+    # this many times smaller than the depth camera_info, which keeps the
+    # undecimated size (the driver's decimation_filter magnitude).
+    decimation: 2
+
+  left_hand:
+    # A camera without intrinsics needs only its frames and TF edges.
+    color_frame: left_hand_color_optical_frame
+    depth_frame: left_hand_depth_optical_frame
+    tf_static:
+      - [lg_mount, left_hand_link, [0.0, 0.0, 0.05], [-0.5, -0.5, -0.5, 0.5]]
+      - [left_hand_link, left_hand_depth_frame, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], driver]
+      - [left_hand_depth_frame, left_hand_depth_optical_frame, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, 0.5], driver]
+      - [left_hand_link, left_hand_color_frame, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], driver]
+      - [left_hand_color_frame, left_hand_color_optical_frame, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, 0.5], driver]
+    decimation: 2

@@ -1,7 +1,9 @@
-"""SkillCloseDoor: detect -> approach -> push."""
+"""Stub the /skill/close_door executor: every goal aborts as not implemented."""
 
 
 class CloseDoorSkill:
+    """Provide /skill/close_door's execute callback to SkillsNode."""
+
     def _exec_close_door(self, gh):
-        """detect -> approach -> push (closed-hand push past the handle plane)."""
+        """Raise NotImplementedError, which SkillsNode's wrapper turns into an aborted goal."""
         raise NotImplementedError('close_door skill not implemented')

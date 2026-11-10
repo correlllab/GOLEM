@@ -1,10 +1,12 @@
-"""Native ROS regression: a paused sim must not pause safety liveness.
+"""Check that golem_safety's heartbeat keeps beating while the sim clock is paused.
 
-Runs the installed golem_safety safety_node as the sim bringups do (use_sim_time
-true, sim true) with no /clock publisher, and counts its /safety/heartbeat beats.
-The node beats only once relaying can begin, so the test feeds it an H1-2
-/lowstate (mode_machine 6) at 100 Hz. Its /lowstate and /lowcmd are remapped to
-topics of the test's own, so nothing else reads or writes them.
+Runs the installed safety_node as the sim bringups do (use_sim_time and sim true), gives it a
+/clock until its first beat, then pauses /clock (no publisher) and counts its /safety/heartbeat
+beats. The node beats only once relaying can begin, which under use_sim_time needs a first
+/clock, so the test feeds it an H1-2 /lowstate (mode_machine 6) at 100 Hz and /clock beside it.
+Its /lowstate and /lowcmd are remapped to topics of the test's own, so nothing else reads or
+writes them. Needs a ROS environment with golem_safety installed (launch_ros_stack.sh runs it
+after its build).
 """
 import importlib.util
 import os
@@ -14,21 +16,25 @@ import tempfile
 import time
 import unittest
 
-# s to wait for the first beat (process start and discovery), then to count beats
-FIRST_BEAT_TIMEOUT = 15.0
-WINDOW = 1.5
-# 10 Hz for WINDOW s gives 15; a paused clock gives none
+FIRST_BEAT_TIMEOUT = 15.0  # s of wall time to wait for the first beat: process start and discovery
+WINDOW = 1.5  # s of wall time to count beats in, from the first beat
+# The heartbeat's 10 Hz gives 15 beats in WINDOW; a heartbeat on the paused clock gives none.
 MIN_BEATS = 5
-STATE_PERIOD = 0.01  # s, wall clock: the fed /lowstate at 100 Hz
+STATE_PERIOD = 0.01  # s, wall clock: the fed /lowstate, and /clock until the first beat, at 100 Hz
+CLOCK_STEP_NS = 10_000_000  # ns of sim time per /clock message
 H12_MODE_MACHINE = 6
 
 
 @unittest.skipUnless(importlib.util.find_spec('rclpy'), 'requires ROS container')
 class HeartbeatClockTests(unittest.TestCase):
-    def test_heartbeat_advances_without_sim_clock(self):
+    """Run safety_node with /clock paused and count its heartbeat."""
+
+    def test_heartbeat_advances_with_the_sim_clock_paused(self):
+        """With use_sim_time and /clock paused, safety_node still beats true at about 10 Hz."""
         import rclpy
         from ament_index_python.packages import get_package_prefix
         from rclpy.executors import SingleThreadedExecutor
+        from rosgraph_msgs.msg import Clock
         from std_msgs.msg import Bool
         from unitree_hg.msg import LowState
         self.assertIn(int(os.environ.get('ROS_DOMAIN_ID', '0')), range(1, 233))
@@ -40,8 +46,20 @@ class HeartbeatClockTests(unittest.TestCase):
             Bool, '/safety/heartbeat', lambda m: beats.append((time.monotonic(), m.data)), 10)
         state = LowState(mode_machine=H12_MODE_MACHINE)
         state_pub = observer.create_publisher(LowState, '/heartbeat_clock_test/lowstate', 10)
-        # a wall timer: the observer does not use sim time either
-        observer.create_timer(STATE_PERIOD, lambda: state_pub.publish(state))
+        clock_pub = observer.create_publisher(Clock, '/clock', 10)
+        clock = Clock()
+
+        def feed():
+            """Publish /lowstate, and the next /clock step until the first beat."""
+            state_pub.publish(state)
+            if clock_pub is not None and not beats:
+                clock.clock.nanosec += CLOCK_STEP_NS
+                if clock.clock.nanosec >= 1_000_000_000:
+                    clock.clock.sec += 1
+                    clock.clock.nanosec -= 1_000_000_000
+                clock_pub.publish(clock)
+        # A wall timer: the observer does not use sim time either.
+        observer.create_timer(STATE_PERIOD, feed)
         executor = SingleThreadedExecutor()
         executor.add_node(observer)
         with tempfile.TemporaryFile(mode='w+') as log:
@@ -56,6 +74,9 @@ class HeartbeatClockTests(unittest.TestCase):
                 deadline = time.monotonic() + FIRST_BEAT_TIMEOUT
                 while not beats and time.monotonic() < deadline and process.poll() is None:
                     executor.spin_once(timeout_sec=.05)
+                # /clock pauses: nothing publishes it from the first beat on
+                observer.destroy_publisher(clock_pub)
+                clock_pub = None
                 until = beats[0][0] + WINDOW if beats else 0.
                 while time.monotonic() < until and process.poll() is None:
                     executor.spin_once(timeout_sec=.05)
@@ -79,7 +100,7 @@ class HeartbeatClockTests(unittest.TestCase):
         self.assertTrue(beats, f'No /safety/heartbeat within {FIRST_BEAT_TIMEOUT} s{output}')
         self.assertIsNone(exit_code, f'safety_node exited before the end of the test{output}')
         self.assertEqual(clock_publishers, 0,
-                         'A /clock publisher is on this domain: the test needs a paused clock')
+                         'A /clock publisher is on this domain: the test needs the clock paused')
         self.assertEqual(heartbeat_publishers, 1,
                          'The beats must come from this safety_node alone: another /safety/heartbeat '
                          'publisher is on this domain')

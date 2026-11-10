@@ -1,0 +1,8 @@
+# Pins the robocasa simulator to the CPUs in GOLEM_SIM_CPUSET. docker_common.sh's
+# configure_cpus adds this overlay only when it has set GOLEM_SIM_CPUSET, so an
+# unpinned run never interpolates an empty cpuset. On a hybrid CPU the list is
+# the performance cores', which keeps the physics thread off the efficiency
+# cores (the measured gain: docs/superpowers/specs/2026-11-05-sim-speed-results.md).
+services:
+  robocasa:
+    cpuset: ${GOLEM_SIM_CPUSET:?set by configure_cpus in docker_common.sh}

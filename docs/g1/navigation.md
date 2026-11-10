@@ -1,11 +1,13 @@
 # Navigation
 
-G1 bringup uses `golem_slam`, the H1-2 navigation pipeline with G1 profiles.
+G1 bringup uses `golem_slam`, the one navigation graph both robots run, on
+the G1's config directory, `golem_slam/config/g1/`.
 Both G1 bringups start it by default (`use_nav`). On the real G1 the bringup
 also starts the MID-360 driver (`golem_bringup`'s `launch/g1/g1_real_drivers.launch.py`,
-on `golem_slam/config/g1_MID360_config.json`: the laptop at 192.168.123.222,
+on `golem_slam/config/g1/MID360_config.json`: the laptop at 192.168.123.222,
 the lidar at 192.168.123.120, points and IMU in the raw sensor frame) and
-FAST-LIO on `g1_fastlio.yaml`. That path has not run on our G1 yet.
+FAST-LIO on `config/g1/fastlio.yaml`; the sim bringup runs FAST-LIO on
+`config/g1/fastlio_sim.yaml`. The real path has not run on our G1 yet.
 
 ## Pipeline
 
@@ -17,7 +19,8 @@ slam_toolbox uses `/converted_scan`, with scan matching
 and loop closure enabled. Nav2 uses the OctoMap `/projected_map` as its static
 obstacle map, plus the scan for local obstacle updates. MPPI drives HOMIE
 through the velocity smoother: forward/backward and yaw, with lateral velocity
-held at zero. The G1 profile uses its own footprint and height bands.
+held at zero. The G1's configs set its own footprint, motion limits and height
+bands (`nav2.yaml`, `octomap.yaml`, and `pipeline.yaml`'s scan band).
 
 The dynamic body-to-pelvis transform follows the measured waist. `level_odom`
 measures gravity and the floor rather than assuming a standing pelvis height.
@@ -40,12 +43,13 @@ Run only one of those bringups. The navigation-only entry point, requiring an
 already-running G1 state publisher, sensor stream and locomotion stack, is:
 
 ```bash
-ros2 launch golem_slam g1_navigation.launch.py sim:=true use_sim_time:=true
+ros2 launch golem_slam navigation.launch.py robot:=g1 use_sim_time:=true \
+  fast_lio_config:=$(ros2 pkg prefix --share golem_slam)/config/g1/fastlio_sim.yaml
 ```
 
-Send `/navigate_to_pose` goals in `map` once Nav2 is active. Available shared
-launch overrides include `fast_lio_config_file`, `nav2_params_file`,
-`slam_params_file`, `octomap_params_file`, and `pipeline_params_file`.
+Send `/navigate_to_pose` goals in `map` once Nav2 is active. Its other file
+arguments are `nav2_params_file`, `octomap_params_file` and `slam_params_file`;
+each defaults to the robot's (`golem_slam`'s README).
 
 ## Check
 
@@ -59,16 +63,15 @@ refused: the shared pipeline requires FAST-LIO's cloud. The test reports goal
 completion, stability, contacts, scan quality and localization; inspect its
 report rather than treating launch success as a navigation pass.
 
-### Validation status (2026-10-29)
+### Validation status
 
-The shared pipeline passed the point-to-point navigation acceptance test
-(13/13 checks) and the H1-2 arm smoke test passed after the rename. Extended
-G1 frontier exploration is **not yet passing**: a 120-second run reached 55.3%
-coverage versus the 95% requirement and exceeded the stability limits
-(22.3° maximum tilt, 0.693 m minimum pelvis height). Scans remained continuous,
+In the sim, the shared pipeline passes the point-to-point navigation acceptance
+test (13/13 checks). Extended G1 frontier exploration does **not** pass yet: a
+120-second run reached 55.3% coverage versus the 95% requirement and exceeded
+the stability limits (22.3° maximum tilt, 0.693 m minimum pelvis height). Scans remained continuous,
 localization error stayed below 1.4 cm, and there were no obstacle contacts.
 The explorer remains opt-in (`use_skills:=true`); its integration is present, but these results do
 not establish reliable autonomous exploration or real-G1 navigation.
 
-For old install directories after upgrading, see the
-[package migration instructions](../RUNNING.md#package-name-migration).
+For old install directories after upgrading, see the stale-install item in
+[Troubleshooting](../RUNNING.md#troubleshooting).

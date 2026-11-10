@@ -8,7 +8,7 @@ table is `golem_safety`'s robot profile.
 
 `setup.py` reads the repo's `CL_Assets` submodule at `../../../CL_Assets`, so the package
 builds only from `<repo>/core_ws/src/golem_ros2_models` with `CL_Assets` checked out and its
-meshes pulled from Git-LFS. Every x86 `ros` container mounts `CL_Assets` at
+meshes pulled from Git-LFS. Every `ros` container mounts `CL_Assets` at
 `/home/code/CL_Assets`. The build stops with a message when:
 
 - `CL_Assets` is missing, or a file the package installs is;
@@ -55,8 +55,8 @@ the H1-2's, keeps the pelvis and hip-pitch spheres active against the torso, arm
 - `model_dir(robot)`: `share/golem_ros2_models/<robot>`.
 - `urdf_path(robot, ros=False)`: the Pinocchio URDF, or with `ros=True` its ROS copy.
 - `collision_paths(robot)`: `(sphere URDF, SRDF)`.
-- `model_paths(robot)`: `{'urdf_path', 'urdf_ros_path', 'collision'}`, as `golem_upper_ik`'s
-  robot profiles name them.
+- `model_paths(robot)`: `{'urdf_path', 'collision'}`, as `golem_upper_ik`'s robot profiles
+  name them.
 
 Any other robot name raises `ValueError`.
 

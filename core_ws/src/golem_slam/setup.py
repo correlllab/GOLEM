@@ -1,9 +1,22 @@
+"""Install golem_slam: its modules, console scripts, launch file, configs and behaviour tree."""
 import os
 from glob import glob
 
 from setuptools import find_packages, setup
 
 package_name = 'golem_slam'
+# config/ (the shared files) and config/<robot>/, each robot's.
+CONFIG_DIRS = ['config'] + sorted(os.path.dirname(d) for d in glob('config/*/'))
+
+
+def files(*patterns):
+    """Return the files matching patterns that exist, leaving out the example configs."""
+    # A --symlink-install build directory keeps dangling links to files deleted from
+    # the source; they are skipped. config/example.*.yaml documents the keys and is
+    # not a config, so it is not installed.
+    return [path for pattern in patterns for path in sorted(glob(pattern))
+            if os.path.exists(path) and not os.path.basename(path).startswith('example.')]
+
 
 setup(
     name=package_name,
@@ -13,10 +26,11 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
-        (os.path.join('share', package_name, 'config'),
-            glob('config/*.yaml') + glob('config/*.json')),
-        (os.path.join('share', package_name, 'behavior_trees'), glob('behavior_trees/*.xml')),
+        (os.path.join('share', package_name, 'launch'), files('launch/*.py')),
+        *[(os.path.join('share', package_name, directory),
+           files(os.path.join(directory, '*.yaml'), os.path.join(directory, '*.json')))
+          for directory in CONFIG_DIRS],
+        (os.path.join('share', package_name, 'behavior_trees'), files('behavior_trees/*.xml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -31,7 +45,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'g1_body_to_pelvis = golem_slam.g1_body_to_pelvis:main',
+            'body_to_pelvis = golem_slam.body_to_pelvis:main',
             'level_cloud = golem_slam.level_cloud:main',
             'self_filter = golem_slam.self_filter:main',
             'level_odom = golem_slam.level_odom:main',

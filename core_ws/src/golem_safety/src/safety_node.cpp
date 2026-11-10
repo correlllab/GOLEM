@@ -1,11 +1,19 @@
-// safety_node: the only writer of the robots' body command topics. SafetyCore makes every
-// decision; this node takes the samples from ROS, keeps time on the boot clock, publishes
+// Run safety_node, the only writer of the robots' body command topic (/lowcmd). SafetyCore
+// makes every decision; this node takes the samples from ROS, keeps robot time
+// (robot_clock.hpp: the boot clock, or a simulator's /clock under use_sim_time), publishes
 // what the core returns, and logs the core's events.
+//
+// Parameters: robot (a profile under share/golem_safety/robots/), config (a name under
+// share/golem_safety/config/<robot>/, or a path), sim (refused on ROS domain 0), use_estop
+// (read the hardware estop topics) and use_sim_time (refused without sim). Exits 0 after a
+// clean exit on SIGINT, SIGTERM or SIGHUP, and 1 otherwise: a refusal to start, a failed
+// thread, or an exit that overran its budget.
 //
 // Threads:
 //   - the relay thread polls /lowstate, the hardware estop and the mode's inputs with
-//     take() and calls step() at control.publish_hz, sleeping to absolute deadlines on the
-//     boot clock; on exit it calls exit_step() at the same rate until the core is done.
+//     take() and calls step() at control.publish_hz of robot time, sleeping to absolute
+//     deadlines of it (under use_sim_time, from the first /clock on); on exit it calls
+//     exit_step() at the same rate on the boot clock until the core is done.
 //     It is the only thread that touches SafetyCore, except for estopped() and
 //     relay_ready();
 //   - an executor thread (a Spinner) runs the 10 Hz /safety/heartbeat wall timer, which
@@ -20,12 +28,14 @@
 #include <signal.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <deque>
 #include <exception>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -35,10 +45,12 @@
 #include <utility>
 #include <vector>
 
+#include "ament_index_cpp/get_package_share_directory.hpp"
 #include "golem_safety/boot_clock.hpp"
 #include "golem_safety/chunk_logger.hpp"
 #include "golem_safety/config.hpp"
 #include "golem_safety/json.hpp"
+#include "golem_safety/robot_clock.hpp"
 #include "golem_safety/robot_profile.hpp"
 #include "golem_safety/safety_core.hpp"
 #include "golem_safety/spinner.hpp"
@@ -57,15 +69,18 @@ using unitree_hg::msg::LowCmd;
 using unitree_hg::msg::LowState;
 
 const char * const kHeartbeatTopic = "/safety/heartbeat";
-constexpr std::chrono::milliseconds kHeartbeatPeriod{100};  // 10 Hz
-// Lines waiting for stderr; beyond this, new lines are dropped and counted.
+// 10 Hz; every reader's heartbeat timeout must stay longer than this period.
+constexpr std::chrono::milliseconds kHeartbeatPeriod{100};
+// Log lines waiting for stderr; beyond this, new lines are dropped and counted.
 constexpr size_t kMaxQueuedLines = 10000;
-// How long the exit waits for stderr to take the last lines, s.
+// s the exit waits for stderr to take the last lines.
 constexpr double kLogDrainSeconds = 1.0;
-// How long an exit sequence may overrun the rest of its estop burst before it counts as
-// failed, s.
+// s an exit sequence may overrun the rest of its estop burst before it counts as failed.
 constexpr double kExitMarginSeconds = 1.0;
+// s of steady time between the lines saying the relay still waits for its first /clock.
+constexpr double kClockWaitLogSeconds = 5.0;
 
+// Return the name of an exit signal.
 const char * signal_name(int signum)
 {
   switch (signum) {
@@ -79,18 +94,19 @@ const char * signal_name(int signum)
   return "an exit signal";
 }
 
-// Log lines written by a thread of their own: post() never blocks on stderr or throws, so
-// a closed, hung-up or stalled stderr (a dead ros2 launch, a closed terminal, a reader
-// that stopped reading) cannot stop the relay or the exit. rclcpp writes console
-// output under a global mutex, so once the relay runs nothing else in the node logs
-// through rclcpp.
+// Write log lines from a thread of their own.
+// SAFETY: post() never blocks on stderr or throws, so a closed, hung-up or stalled stderr (a
+// dead ros2 launch, a closed terminal, a reader that stopped reading) cannot stop the relay
+// or the exit. rclcpp writes console output under a global mutex, so once the relay runs
+// nothing else in the node logs through rclcpp.
 class EventLog
 {
 public:
+  // Start the writer thread, which logs through `logger`.
   explicit EventLog(rclcpp::Logger logger)
   : logger_(std::move(logger)), thread_([this] {run();}) {}
 
-  // Only on a path that skipped stop(); it waits for stderr to take the queued lines.
+  // Stop, on a path that skipped stop(); waits for stderr to take the queued lines.
   ~EventLog()
   {
     if (thread_.joinable()) {
@@ -101,6 +117,7 @@ public:
   EventLog(const EventLog &) = delete;
   EventLog & operator=(const EventLog &) = delete;
 
+  // Queue one line, or count it as dropped when the queue is full.
   void post(Event::Kind kind, std::string text) noexcept
   {
     try {
@@ -117,7 +134,7 @@ public:
     wake_.notify_all();
   }
 
-  // Waits up to `seconds` for every posted line to be written; false if stderr is stalled.
+  // Wait up to `seconds` for every posted line to be written; false if stderr is stalled.
   bool drain(double seconds)
   {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -125,7 +142,7 @@ public:
       lock, std::chrono::duration<double>(seconds), [this] {return pending_ == 0;});
   }
 
-  // Joins the writer thread; only after drain() returned true, or it may wait for ever.
+  // Join the writer thread; only after drain() returned true, or it may wait for ever.
   void stop()
   {
     {
@@ -137,6 +154,7 @@ public:
   }
 
 private:
+  // Write queued lines, reporting dropped ones first, until stop() and the queue is empty.
   void run()
   {
     for (;;) {
@@ -167,6 +185,7 @@ private:
     }
   }
 
+  // Log `line` through rclcpp at its level.
   void write(const Event & line) const
   {
     switch (line.kind) {
@@ -192,43 +211,46 @@ private:
   std::thread thread_;
 };
 
-// The longest the exit sequence takes, s: the rest of an estop burst.
+// Return the longest the exit sequence takes, s: a whole estop burst.
 double exit_seconds(const SafetyConfig & config)
 {
   return config.estop_response.burst_count / config.control.publish_hz;
 }
 
-// How long the exit sequence may take before it counts as failed, s.
+// Return how long the exit sequence may take before it counts as failed, s.
 double exit_budget_seconds(const SafetyConfig & config)
 {
   return exit_seconds(config) + kExitMarginSeconds;
 }
 
-// The relay loop and the exit sequence, on one thread.
+// Run the relay loop and the exit sequence on one thread of its own.
 class Relay
 {
 public:
+  // Pair an input of the core with its polled subscription.
   struct CommandInput
   {
     Input input;
     rclcpp::Subscription<LowCmd>::SharedPtr subscription;
   };
 
+  // Hold everything the loop uses; the thread starts with start(). `chunks` may be null.
+  // `clock` is robot time, which the relay's rate and the core's `now` count.
   Relay(
-    SafetyCore & core, const SafetyConfig & config, EventLog & log, ChunkLogger * chunks,
-    rclcpp::Publisher<LowCmd>::SharedPtr out,
+    SafetyCore & core, const SafetyConfig & config, RobotClock & clock, EventLog & log,
+    ChunkLogger * chunks, rclcpp::Publisher<LowCmd>::SharedPtr out,
     rclcpp::Subscription<LowState>::SharedPtr state, std::vector<CommandInput> inputs,
     rclcpp::Subscription<Bool>::SharedPtr estop_triggered,
     rclcpp::Subscription<Bool>::SharedPtr estop_plugged_in)
-  : core_(core), period_(1.0 / config.control.publish_hz),
+  : core_(core), clock_(clock), period_(1.0 / config.control.publish_hz),
     exit_budget_(exit_budget_seconds(config)), log_(log), chunks_(chunks),
     out_(std::move(out)), state_(std::move(state)), inputs_(std::move(inputs)),
     estop_triggered_(std::move(estop_triggered)), estop_plugged_in_(std::move(estop_plugged_in))
   {}
 
-  // Only on a path that skipped join(): the exit sequence runs, within the budget main()
-  // gives it. A thread still running after that uses the core, which is destroyed next, so
-  // the process leaves at once, as main() does.
+  // Run the exit sequence, on a path that skipped join(), within the budget main() gives it.
+  // A thread still running after that uses the core, which is destroyed next, so the
+  // process leaves at once, as main() does.
   ~Relay()
   {
     if (thread_.joinable()) {
@@ -249,15 +271,18 @@ public:
   Relay(const Relay &) = delete;
   Relay & operator=(const Relay &) = delete;
 
+  // Start the relay thread.
   void start() {thread_ = std::thread([this] {run();});}
 
+  // Ask the loop to switch to the exit sequence.
   void request_exit() {exit_requested_.store(true, std::memory_order_release);}
 
-  // Whether the thread has returned: after the exit sequence, or on a failure.
+  // Return whether the thread has returned: after the exit sequence, or on a failure.
   bool finished() const {return finished_.load(std::memory_order_acquire);}
+  // Return whether the loop ended with an exception.
   bool failed() const {return failed_.load(std::memory_order_acquire);}
 
-  // Waits up to `seconds` for the thread to return, then joins it; false if it has not.
+  // Wait up to `seconds` for the thread to return, then join it; false if it has not.
   bool join(double seconds)
   {
     {
@@ -273,6 +298,7 @@ public:
   }
 
 private:
+  // Run loop(), logging an escaping exception, then mark the thread finished.
   void run() noexcept
   {
     try {
@@ -291,13 +317,16 @@ private:
     done_.notify_all();
   }
 
+  // Take the samples and publish the core's command once per period of robot time, until the
+  // exit sequence is done.
   void loop()
   {
-    double next = boot_time();
+    wait_for_clock();
+    double next = clock_.now();
     bool exiting = false;
     for (;;) {
       exiting = exiting || exit_requested_.load(std::memory_order_acquire);
-      const double now = boot_time();
+      const double now = clock_.now();
       take_state(now);
       take_estop(now);
       if (!exiting) {
@@ -307,7 +336,7 @@ private:
       if (out) {
         out_->publish(*out);
       }
-      // after the command is out: the estop report is built here
+      // After the command is out: the estop report is built here.
       for (Event & event : core_.drain_events()) {
         log_.post(event.kind, std::move(event.text));
       }
@@ -315,17 +344,43 @@ private:
       if (exiting && !out) {
         return;
       }
+      if (exiting && clock_.sim_time()) {
+        // SAFETY: the exit sequence keeps the boot clock: a /clock that has stopped must
+        // not hold up the rest of an estop burst, or the exit.
+        sleep_until_boot_time(boot_time() + period_);
+        continue;
+      }
       next += period_;
-      // a cycle that ran more than a period late restarts the schedule: a slow cycle lowers
-      // the rate instead of bursting to catch up
-      const double after = boot_time();
+      // A cycle that ran more than a period late restarts the schedule, so a slow cycle
+      // lowers the rate instead of bursting to catch up.
+      const double after = clock_.now();
       if (next < after - period_) {
         next = after;
       }
-      sleep_until_boot_time(next);
+      clock_.sleep_until(next, [this] {return exit_requested_.load(std::memory_order_acquire);});
     }
   }
 
+  // Under use_sim_time, wait for the first /clock, which robot time starts with, logging that
+  // the relay waits; an exit request ends the wait. At once on the boot clock.
+  void wait_for_clock()
+  {
+    bool first = true;
+    double next_log = boot_time();
+    while (!clock_.started() && !exit_requested_.load(std::memory_order_acquire)) {
+      if (boot_time() >= next_log) {
+        log_.post(
+          first ? Event::Info : Event::Warn,
+          "waiting for the first /clock (use_sim_time): the relay runs on sim time and "
+          "writes nothing before it");
+        first = false;
+        next_log += kClockWaitLogSeconds;
+      }
+      clock_.wait_slice();
+    }
+  }
+
+  // Feed the newest /lowstate, if any, to the core, and log its sample.
   void take_state(double now)
   {
     if (!state_->take(state_msg_, info_)) {
@@ -339,8 +394,8 @@ private:
     }
   }
 
-  // A hardware estop sample is a value on each topic: on_estop runs once both have one,
-  // and then with the newest pair on every new value of either.
+  // Feed the hardware estop to the core. A sample is a value on each topic: on_estop runs
+  // once both have one, and then with the newest pair on every new value of either.
   void take_estop(double now)
   {
     if (!estop_triggered_) {
@@ -360,6 +415,7 @@ private:
     }
   }
 
+  // Feed each input's newest command to the core, with its writer's GID.
   void take_commands(double now)
   {
     for (const CommandInput & in : inputs_) {
@@ -373,7 +429,8 @@ private:
     }
   }
 
-  // Samples the chunk logger refused (another motor count, or a full queue), once.
+  // Warn, once, that the chunk logger has refused samples (another motor count, or a full
+  // queue).
   void report_dropped_samples()
   {
     if (chunks_ == nullptr || dropped_reported_ || chunks_->samples_dropped() == 0) {
@@ -386,7 +443,8 @@ private:
   }
 
   SafetyCore & core_;
-  const double period_;  // s
+  RobotClock & clock_;
+  const double period_;  // s of robot time
   const double exit_budget_;  // s
   EventLog & log_;
   ChunkLogger * const chunks_;
@@ -395,7 +453,7 @@ private:
   const std::vector<CommandInput> inputs_;
   const rclcpp::Subscription<Bool>::SharedPtr estop_triggered_, estop_plugged_in_;
 
-  // the relay thread's
+  // The relay thread's only.
   LowState state_msg_;
   LowCmd cmd_msg_;
   Bool bool_msg_;
@@ -411,15 +469,40 @@ private:
   std::thread thread_;
 };
 
-// The node's parameters, read once at start.
+// Hold the node's parameters, read once at start.
 struct Parameters
 {
   std::string robot;
   std::string config;
   bool sim = false;
   bool use_estop = false;
+  bool use_sim_time = false;  // declared by rclcpp
 };
 
+// Return the robots with a profile in share/golem_safety/robots/, as "a or b".
+std::string profiled_robots()
+{
+  std::vector<std::string> names;
+  try {
+    const std::filesystem::path robots =
+      ament_index_cpp::get_package_share_directory("golem_safety") + "/robots";
+    for (const auto & entry : std::filesystem::directory_iterator(robots)) {
+      if (entry.path().extension() == ".yaml") {
+        names.push_back(entry.path().stem().string());
+      }
+    }
+  } catch (const std::exception &) {
+    return "a robot with a profile in share/golem_safety/robots/";
+  }
+  std::sort(names.begin(), names.end());
+  std::string text;
+  for (const std::string & name : names) {
+    text += (text.empty() ? "" : " or ") + name;
+  }
+  return text;
+}
+
+// Declare and read the parameters; throw when robot or config is missing.
 Parameters read_parameters(rclcpp::Node & node)
 {
   Parameters p;
@@ -427,8 +510,9 @@ Parameters read_parameters(rclcpp::Node & node)
   p.config = node.declare_parameter<std::string>("config", "");
   p.sim = node.declare_parameter<bool>("sim", false);
   p.use_estop = node.declare_parameter<bool>("use_estop", false);
+  p.use_sim_time = node.get_parameter("use_sim_time").as_bool();
   if (p.robot.empty()) {
-    throw std::runtime_error("parameter 'robot' is required: h12 or g1");
+    throw std::runtime_error("parameter 'robot' is required: " + profiled_robots());
   }
   if (p.config.empty()) {
     throw std::runtime_error(
@@ -438,7 +522,8 @@ Parameters read_parameters(rclcpp::Node & node)
   return p;
 }
 
-// Logs the reason on one line, at once (nothing is running yet), and returns the exit code.
+// Log why the node refuses to start, on one line and at once (nothing is running yet), and
+// return the exit code.
 int refuse(const rclcpp::Logger & logger, std::string reason)
 {
   for (char & c : reason) {
@@ -450,6 +535,7 @@ int refuse(const rclcpp::Logger & logger, std::string reason)
   return 1;
 }
 
+// Subscribe to the inputs the config's mode reads.
 std::vector<Relay::CommandInput> command_inputs(
   rclcpp::Node & node, const SafetyConfig & config, const rclcpp::QoS & qos,
   const rclcpp::SubscriptionOptions & options)
@@ -469,6 +555,8 @@ std::vector<Relay::CommandInput> command_inputs(
   return {};
 }
 
+// Start the node, relay until an exit signal or a failure, run the exit sequence, and
+// return the exit code.
 int run(int argc, char ** argv, const sigset_t & exit_signals)
 {
   try {
@@ -488,12 +576,22 @@ int run(int argc, char ** argv, const sigset_t & exit_signals)
   size_t domain = 0;
   try {
     params = read_parameters(*node);
-    // before any publisher or subscription of the node's own
     domain = node->get_node_base_interface()->get_context()->get_domain_id();
+    // SAFETY: a node started for a simulator never runs on the real robots' command bus; it
+    // is refused before it creates its own publishers and subscriptions.
     if (params.sim && domain == 0) {
       const int code = refuse(
         logger, "sim:=true on ROS domain 0, the real robots' command bus: set ROS_DOMAIN_ID "
         "to the simulator's domain");
+      rclcpp::shutdown();
+      return code;
+    }
+    // SAFETY: robot time is a simulator's /clock only for a node started for one, so the
+    // real robots' relay, stale and estop timings always run on the boot clock.
+    if (params.use_sim_time && !params.sim) {
+      const int code = refuse(
+        logger, "use_sim_time:=true needs sim:=true: robot time on /clock is a simulator's, "
+        "and the real robots keep the boot clock");
       rclcpp::shutdown();
       return code;
     }
@@ -537,10 +635,10 @@ int run(int argc, char ** argv, const sigset_t & exit_signals)
       config->estop.plugged_in_topic, newest, [](Bool::ConstSharedPtr) {}, polled);
   }
 
-  // A beat means relaying can begin, since its readers start driving on the first one:
-  // nothing until SafetyCore::relay_ready(), then true, and false once the estop has
-  // latched, before the relay was ready too. On the steady clock, whatever use_sim_time
-  // says.
+  // SAFETY: a beat means relaying can begin, since its readers start driving on the first
+  // one: nothing until SafetyCore::relay_ready(), then true, and false once the estop has
+  // latched, even when it latched before the relay was ready. It runs on the steady clock,
+  // whatever use_sim_time says, so a paused sim cannot stop it.
   auto heartbeat = node->create_publisher<Bool>(kHeartbeatTopic, rclcpp::QoS(10));
   SafetyCore & safety = *core;
   auto heartbeat_timer = node->create_wall_timer(
@@ -556,10 +654,14 @@ int run(int argc, char ** argv, const sigset_t & exit_signals)
       heartbeat->publish(msg);
     });
 
+  // Robot time: the boot clock, or under use_sim_time the node's ROS clock, which /clock
+  // drives. Declared before the relay, which uses it until it is destroyed.
+  std::unique_ptr<RobotClock> clock = params.use_sim_time ?
+    std::make_unique<RobotClock>(node->get_clock()) : std::make_unique<RobotClock>();
   EventLog log(logger);
   Relay relay(
-    *core, *config, log, chunks.get(), out, state, std::move(inputs), estop_triggered,
-    estop_plugged_in);
+    *core, *config, *clock, log, chunks.get(), out, state, std::move(inputs),
+    estop_triggered, estop_plugged_in);
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(node);
   Spinner spinner(executor);
@@ -576,8 +678,8 @@ int run(int argc, char ** argv, const sigset_t & exit_signals)
     log.post(Event::Info, started);
   }
 
-  // Until an exit signal, the executor thread failing (the heartbeat stops with it), or the
-  // relay ending by itself; the last two are failures.
+  // Wait for an exit signal, the executor thread failing (the heartbeat stops with it), or
+  // the relay ending by itself; the last two are failures.
   int signum = 0;
   bool spinner_failed = false;
   while (!relay.finished()) {
@@ -624,7 +726,7 @@ int run(int argc, char ** argv, const sigset_t & exit_signals)
   }
 
   spinner.stop();
-  // the chunk logger last, after the final commands
+  // The chunk logger stops last, after the final commands are out.
   if (chunks) {
     chunks->stop();
     if (chunks->samples_dropped() > 0 || chunks->write_failures() > 0) {
@@ -651,6 +753,7 @@ int run(int argc, char ** argv, const sigset_t & exit_signals)
 }  // namespace
 }  // namespace golem_safety
 
+// Block the exit signals in every thread, then run the node.
 int main(int argc, char ** argv)
 {
   // Every thread inherits this mask, so only main() takes the exit signals (sigtimedwait in

@@ -14,7 +14,7 @@ does not show: aligned_depth_to_color is depth reprojected into the color
 camera, and here it is so trivially, as both come from the same MuJoCo camera:
 a depth pixel is the color pixel's, with the color intrinsics. The images are
 16:9, as the H1-2's head camera profile (1280x720) in cl_realsense's
-h12_rs_cams.launch.py.
+h12_headcamera.launch.py.
 
 Intrinsics are the pinhole of MuJoCo's projection: square pixels, fy = height /
 (2 tan(fovy / 2)), and the principal point at the image centre in the ROS/OpenCV

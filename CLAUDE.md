@@ -203,7 +203,7 @@ nests `unitree_api`, `unitree_go`, `unitree_hg`, `unitree_ros2_example`).
 | `magpie_control` | driver (gripper/sensors) | Dynamixel gripper node (`/left|right/gripper/*` services, DeliGrasp action), F/T + tactile sensor nodes | `gripper_node`, `ft_sensor_node` |
 | `magpie_msgs` | interfaces | Gripper/manipulation interfaces (`GripperState`, `SetGripperPosition/Force`, `DeliGrasp`, …) | rosidl only |
 | `estop` | safety (hardware) | Serial e-stop bridge → ROS Bool (real robot only; launched by real bringup, not sim) | `estop_node` |
-| `cl_realsense` | perception util | Point-cloud accumulator (tf2 + Open3D) for the RealSense cams; ships the real-camera launch file | `pc_acc`; `launch/h12_rs_cams.launch.py` |
+| `cl_realsense` | perception util | Point-cloud accumulator (tf2 + Open3D) for the RealSense cams; ships the real cameras' launch files | `pc_acc`; `launch/h12_headcamera.launch.py` (`h12_real_drivers`), `launch/h12_hand_cameras.launch.py` (`h12_real_desktop`) |
 | `FAST_LIO` (`fast_lio`) | SLAM (vendored) | LiDAR-inertial odometry/mapping from the Livox cloud (used by `golem_slam`) | `fastlio_mapping` |
 | `livox_ros_driver2` | driver (vendored) | Livox MID360 lidar driver (builds via its own `build.sh humble`) | `livox_ros_driver2_node` |
 | `unitree_ros2/*` | interfaces (vendored) | Unitree IDL packages — `unitree_hg` `LowCmd_`/`LowState_` are the stack's spine | rosidl only |
@@ -837,10 +837,12 @@ describe the new behaviour.
 - MuJoCo is pinned in the `robocasa` image (`3.17.0`, with robosuite and
   RoboCasa patched for it in `docker/patches/`): the sims call its API
   directly, so bump it together with those patches. The `ros` image keeps
-  `golem_base`'s MuJoCo, which nothing in `core_ws` imports.
+  `golem_base`'s MuJoCo, which nothing the workspace runs imports (HOMIE's
+  vendored `mujoco_deploy_g1.py` does, and nothing runs it).
 - `numpy<2`, `setuptools==59.6.0`, `wheel<0.44` are deliberately re-clamped in
   the Dockerfiles; add new pip deps at the END of a Dockerfile (layer-order
-  discipline), each through a lock step (`-c /opt/golem-locks/<step>.txt`,
+  discipline; in `RosDockerfile`, before its final clamp, which must stay its
+  last pip step), each through a lock step (`-c /opt/golem-locks/<step>.txt`,
   enforced by `tests/docker/test_source_pins.py`). Details in `docker/BUILD.md`.
 
 ## 9. Running the robot — the standard three-terminal flow

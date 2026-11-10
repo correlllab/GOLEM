@@ -288,10 +288,13 @@ are near-instant; wipe the host dir for a clean rebuild.
 - **CycloneDDS is pinned to 0.10.x from source** in every base/Isaac image (PyPI
   wheel needs the removed `q_radmin.h`).
 - **MuJoCo is pinned per image:** `3.17.0` in `robocasa` (with the patches in
-  `docker/patches/`, §5); `ros` keeps `golem_base`'s, which nothing in the
-  workspace imports.
+  `docker/patches/`, §5); `ros` keeps `golem_base`'s, which nothing the
+  workspace runs imports (HOMIE's vendored `mujoco_deploy_g1.py` does; nothing
+  runs it).
 - **Layer-order discipline:** heavy/stable layers first; volatile pins appended
-  last. New deps go at the *end* of a Dockerfile so they don't bust cached layers.
+  last. New deps go at the *end* of a Dockerfile so they don't bust cached layers;
+  in `RosDockerfile`, before the final setuptools/wheel/numpy clamp, which stays
+  the last pip step (`tests/docker/test_source_pins.py`).
 - **CUDA wheel split:** `ros`/base use torch **cu130**; Isaac inherits NVIDIA's
   bundled stack; RoboCasa resolves its own torch through `lerobot`. Inspect
   the built images when diagnosing GPU/torch compatibility.

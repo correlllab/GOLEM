@@ -87,6 +87,17 @@ class SourcePinTests(unittest.TestCase):
         for name in re.findall(r'^((?:cmeel[\w-]*|pin|libpinocchio|coal|libcoal|eigenpy))==', base, re.M):
             self.assertIn(name, uninstall)
 
+    def test_ros_clamps_setuptools_wheel_numpy_in_its_last_pip_step(self):
+        """The ROS image's last pip step clamps setuptools 59.6.0, wheel and numpy<2, so no later step moves them."""
+        # A step after the clamp could bring back the setuptools 84 that the GraspGenX
+        # dependency step installs, which breaks colcon's ament_python builds.
+        text = (ROOT / 'docker/RosDockerfile').read_text().replace('\\\n', ' ')
+        pip_steps = [run for run in re.findall(r'^RUN .*', text, re.M) if 'pip install' in run]
+        last = pip_steps[-1]
+        for pin in ('"numpy<2"', '"setuptools==59.6.0"', '"wheel<0.44"', '--no-deps'):
+            self.assertIn(pin, last)
+        self.assertIn('distutils-precedence.pth', last)
+
     def test_downloaded_scripts_do_not_follow_moving_refs(self):
         """No Dockerfile downloads the uv installer or the ROS key from a moving URL."""
         for path in FILES:

@@ -23,7 +23,7 @@ build backends require separate verification.
 | rl_games (IsaacLab extra) | 6b3534f29568158e9e29ec8bf83cc88fce5f0cae | Isaac pip VCS metadata |
 | robomimic (IsaacLab extra) | 7c66e7a41b5d9dcc905b1a68346bfee1b49b79c9 | Isaac pip VCS metadata |
 | Livox-SDK2 | 08f523c930b2f0ba1e98a6afaa8d7476bf479908 | ROS, RoboCasa (one commit: `test_every_image_builds_livox_sdk2_at_one_commit`) |
-| rosdistro signing key | e31287f892ecd01b170d1cbfa298db35abe4a74f | golem_base, Isaac (downloaded, referenced by no apt source) |
+| rosdistro signing key | e31287f892ecd01b170d1cbfa298db35abe4a74f | Isaac (downloaded, referenced by no apt source) |
 
 The protected `livox_ros_driver2` gitlink stays at `13eb05e` (`CLAUDE.md` §8).
 CLIP, GraspGenX's and IsaacLab's revisions are pinned in their Dockerfile
@@ -74,8 +74,9 @@ Each `*-amd64.txt` is the common Python constraint set. Numbered files include
 that set and declare intentional per-install transitions (NumPy, Hugging Face,
 MuJoCo, and build tools).
 
-The G1 stack's Python dependency is the last step of the ROS image, and
-MuJoCo 3.17.0 the last step of the RoboCasa image:
+The G1 stack's Python dependency is the ROS image's last install step,
+before its final setuptools/wheel/numpy clamp (which reuses
+`ros-amd64-06.txt`), and MuJoCo 3.17.0 the last step of the RoboCasa image:
 
 | Step file | Image | Direct pins | Other pins added to the common set |
 | --- | --- | --- | --- |

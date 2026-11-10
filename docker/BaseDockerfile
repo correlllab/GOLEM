@@ -28,15 +28,10 @@ ARG https_proxy
 ENV http_proxy=${http_proxy}
 ENV https_proxy=${https_proxy}
 
-# Matches nothing: apt-sources.sh has already replaced archive.ubuntu.com with
-# the dated snapshot. TODO(max): delete with the next deliberate base rebuild
-# (removing it rebuilds every image built on golem_base).
-RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|http://us.archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list
-
 # Packages both simulators and the workspace need: gcc-12 / g++-12 (made the
 # default compilers), cmake, git and git-lfs, Python 3.10 as `python`, the
-# X11 / GL / Vulkan / EGL / OSMesa runtime libraries MuJoCo and the viewers
-# load, and the locale. add-apt-repository rewrites sources.list, so
+# X11 / GL / Vulkan / EGL runtime libraries MuJoCo and the viewers load, and
+# the locale. add-apt-repository rewrites sources.list, so
 # apt-sources.sh runs again afterwards to put the dated snapshots back.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg locales software-properties-common \
@@ -45,7 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libglu1-mesa-dev vulkan-tools libvulkan1 \
         libx11-6 libxext6 libxrender1 libxi6 libxrandr2 libxcursor1 libxinerama1 \
         libgl1-mesa-glx libglib2.0-0 libsm6 libxt6 libxkbcommon-x11-0 \
-        libegl1-mesa-dev libosmesa6-dev \
+        libegl1-mesa-dev \
     && locale-gen en_US en_US.UTF-8 && update-locale LC_ALL=C.UTF-8 LANG=C.UTF-8 \
     && add-apt-repository universe \
     && sh /opt/golem-locks/apt-sources.sh \
@@ -54,12 +49,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # The ROS 2 Humble apt source: the 2026-08-07 snapshot, verified with the
-# vendored snapshot key. The rosdistro key downloaded here (pinned to a
-# rosdistro commit) is not referenced by any apt source. TODO(max): drop the
-# download with the next deliberate base rebuild.
-RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/e31287f892ecd01b170d1cbfa298db35abe4a74f/ros.key \
-        -o /usr/share/keyrings/ros-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/opt/golem-locks/ros-snapshot.asc] http://snapshots.ros.org/humble/2026-08-07/ubuntu jammy main" \
+# vendored snapshot key.
+RUN echo "deb [arch=$(dpkg --print-architecture) signed-by=/opt/golem-locks/ros-snapshot.asc] http://snapshots.ros.org/humble/2026-08-07/ubuntu jammy main" \
         > /etc/apt/sources.list.d/ros2.list
 
 # ROS 2 Humble for the simulators' ROS side: ros-base (rclpy, rclcpp, launch,

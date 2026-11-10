@@ -1,5 +1,6 @@
 # Constraints for RosDockerfile: the numpy / setuptools / wheel clamp after
-# the ML stack.
+# the ML stack (step 6), and the final clamp, the image's last step, which
+# installs only those three names.
 -c ros-amd64.txt
 huggingface-hub==0.27.0
 numpy==1.26.4

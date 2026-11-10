@@ -40,6 +40,7 @@ Observe only: scripts/run_experiment.sh
 Actuation only after separate approval and safe simulation start verification:
 scripts/run_experiment.sh start_position_verified:=true lowerbody:=fame_finetune
 Alternative standing policy: lowerbody:=almi_manip_stand
+Upper controller: upper_controller:=frame|counter (default frame).
 The lower-body engage_wait_for_confirm interlock remains enabled.
 Start the simulator separately, preferably GOLEM_CAMERA_SCALE=1 scripts/run_simulation.sh.
 Generic CLI: scripts/run_ros.sh topic list
@@ -69,11 +70,15 @@ def main():
     arguments = args.arguments
     if args.experiment:
         allowed = {'start_position_verified', 'lowerbody', 'marker_profile_path',
-                   'publish_annotated', 'image_transport'}
+                    'publish_annotated', 'image_transport', 'upper_controller'}
         if any(':=' not in arg or arg.split(':=', 1)[0] not in allowed for arg in arguments):
             raise RuntimeError('experiment arguments: start_position_verified:=true|false, '
                                'lowerbody:=fame_finetune|almi_manip_stand, marker_profile_path:=PATH, '
-                               'publish_annotated:=true|false, image_transport:=raw|compressed only')
+                                'publish_annotated:=true|false, image_transport:=raw|compressed, '
+                                'upper_controller:=frame|counter only')
+        if any(arg.startswith('upper_controller:=') and arg.split(':=', 1)[1] not in ('frame', 'counter')
+               for arg in arguments):
+            raise RuntimeError('upper_controller must be frame or counter')
         if any(arg.startswith('image_transport:=') and arg.split(':=', 1)[1] not in ('raw', 'compressed')
                for arg in arguments):
             raise RuntimeError('image_transport must be raw or compressed')
@@ -85,6 +90,9 @@ def main():
         if not catalog.is_file():
             raise RuntimeError(f'missing catalog: {catalog}')
         env['GOLEM_MARKER_CATALOG'] = str(catalog)
+        upper = next((arg.split(':=', 1)[1] for arg in reversed(arguments)
+                      if arg.startswith('upper_controller:=')), 'frame')
+        print(f'Upper controller: {upper} (actuation requires start_position_verified:=true)', flush=True)
         arguments = ['launch', 'h12_bringup', 'h12_native_experiment.launch.py', *arguments]
         acquire_experiment_lock(domain)
     elif not arguments:

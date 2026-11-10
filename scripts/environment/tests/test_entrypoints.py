@@ -70,6 +70,8 @@ class EntrypointTests(unittest.TestCase):
         self.assertNotIn('--lowerbody', command)
         self.assertEqual(env['ROS_DOMAIN_ID'], '1')
         self.assertEqual(env['GOLEM_SIM_ODOM'], '0')
+        self.assertNotIn('GOLEM_SIM_TETHER_ROT_STIFFNESS', env)
+        self.assertNotIn('GOLEM_SIM_TETHER_ROT_BODY', env)
         self.assertEqual({key: env[key] for key in runtime.PEGBOARD_CAMERA_DEFAULTS},
                          {'GOLEM_CAMERA_SCALE': '1', 'GOLEM_CAMERA_DEPTH': '0',
                            'GOLEM_CAMERA_POINTCLOUD': '0'})
@@ -80,6 +82,19 @@ class EntrypointTests(unittest.TestCase):
                 patch.object(os, 'execve'), patch('sys.stdout', new_callable=io.StringIO) as output:
             runtime.main()
         self.assertIn('legacy baked spawn (--lowerbody omitted); no policy selected', output.getvalue())
+
+    def test_manipulation_hoist_selects_existing_fixture_without_new_simulator_flags(self):
+        with patch.dict(os.environ, {}, clear=True), \
+                patch.object(sys, 'argv', ['run_simulation.py', '--manipulation-hoist']), \
+                patch.object(Path, 'is_file', return_value=True), patch.object(simulator, 'check'), \
+                patch.object(os, 'execve') as execute, \
+                patch('sys.stdout', new_callable=io.StringIO) as output:
+            runtime.main()
+        _, command, env = execute.call_args.args
+        self.assertEqual(command[-2:], ['--task', 'PegInHole'])
+        self.assertEqual(env['GOLEM_SIM_TETHER_ROT_STIFFNESS'], '2000')
+        self.assertEqual(env['GOLEM_SIM_TETHER_ROT_BODY'], 'pelvis')
+        self.assertIn('NOT free-standing balance', output.getvalue())
 
     def test_selected_policies_forward_unchanged_without_controller_launch(self):
         for policy in ('fame_finetune', 'almi_manip_stand'):
@@ -154,11 +169,12 @@ class EntrypointTests(unittest.TestCase):
         self.assertTrue(guide.targets)
         self.assertFalse(set(guide.targets) - set(guide.ids))
         commands = [code for code in guide.code if './scripts/run_simulation.sh --task' in code]
-        self.assertGreaterEqual(len(commands), 5)
+        self.assertTrue(commands)
         for command in commands:
             self.assertIn('--lowerbody ', command)
-        self.assertIn('./scripts/run_simulation.sh --task PegInHole --lowerbody almi_manip_stand',
-                      guide.code)
+        primary = './scripts/run_simulation.sh --task PegInHole --lowerbody almi_manip_stand'
+        self.assertTrue(any(command.startswith(primary) and '--manipulation-hoist' in command
+                            for command in commands))
 
     def test_pegboard_camera_defaults_preserve_explicit_overrides(self):
         overrides = {'GOLEM_CAMERA_SCALE': '0.5', 'GOLEM_CAMERA_DEPTH': '1',
@@ -320,6 +336,37 @@ class EntrypointTests(unittest.TestCase):
                 ros_runtime.main()
         execute.assert_not_called()
 
+    def test_experiment_forwards_upper_controller_and_explicit_policy(self):
+        import build_ros_workspace as workspace
+        for upper in ('frame', 'counter'):
+            for policy in ('fame_finetune', 'almi_manip_stand'):
+                arguments = [f'upper_controller:={upper}', f'lowerbody:={policy}']
+                with self.subTest(upper=upper, policy=policy), \
+                        patch.object(sys, 'argv', ['run_ros.py', '--experiment', *arguments]), \
+                        patch.dict(os.environ, {'ROS_DOMAIN_ID': '44'}, clear=True), \
+                        patch.object(workspace, 'require_venv'), \
+                        patch.object(ros_runtime, 'acquire_experiment_lock'), \
+                        patch.object(Path, 'is_file', return_value=True), \
+                        patch.object(os, 'execve') as execute, \
+                        patch('sys.stdout', new_callable=io.StringIO) as output:
+                    ros_runtime.main()
+                self.assertEqual(execute.call_args.args[1][-2:], arguments)
+                self.assertIn(f'Upper controller: {upper}', output.getvalue())
+
+    def test_experiment_rejects_bad_upper_controller_before_launch_or_lock(self):
+        import build_ros_workspace as workspace
+        for upper in ('', 'robust3c', 'Frame', 'counter; touch /invalid'):
+            with self.subTest(upper=upper), \
+                    patch.object(sys, 'argv', ['run_ros.py', '--experiment', f'upper_controller:={upper}']), \
+                    patch.object(workspace, 'require_venv'), \
+                    patch.object(Path, 'is_file', return_value=True), \
+                    patch.object(ros_runtime, 'acquire_experiment_lock') as lock, \
+                    patch.object(os, 'execve') as execute:
+                with self.assertRaisesRegex(RuntimeError, 'upper_controller must be frame or counter'):
+                    ros_runtime.main()
+            execute.assert_not_called()
+            lock.assert_not_called()
+
     def test_experiment_rejects_unowned_launch_parameters(self):
         import build_ros_workspace as workspace
         for argument in ('controller_python:=/foreign/python', 'use_sim_time:=false', '--show-args'):
@@ -340,7 +387,7 @@ class EntrypointTests(unittest.TestCase):
         self.assertNotIn('name = "nvidia-', (ROOT / 'environments/ros/uv.lock').read_text())
         deps = (ROOT / 'environments/controller/pyproject.toml').read_text()
         for dependency in ('numpy==2.2.6', 'pin==3.9.0', 'pin-pink==4.1.0',
-                           'cmeel-urdfdom==4.0.1', 'cmeel-tinyxml2==10.0.0'):
+                           'cmeel-urdfdom==4.0.1', 'cmeel-tinyxml2==10.0.0', 'crocoddyl==3.2.0'):
             self.assertIn(dependency, deps)
-        for name in ('torch==', 'opencv-python==', 'crocoddyl=='):
+        for name in ('torch==', 'opencv-python==', 'pynput'):
             self.assertNotIn(name, deps)

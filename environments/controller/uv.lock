@@ -248,6 +248,28 @@ wheels = [
 ]
 
 [[package]]
+name = "crocoddyl"
+version = "3.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cmeel" },
+    { name = "cmeel-boost" },
+    { name = "example-robot-data-loaders" },
+    { name = "libcrocoddyl" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/af/85/14cbad58ebfeaf1e44dc99352eeff54be90aca57c5f1de323b26ad44273a/crocoddyl-3.2.0.tar.gz", hash = "sha256:8dc06d584a0264d06eaa03624cecfbb2c3261b0e47619f432dc24d02bb5ea8c8", size = 751944, upload-time = "2025-12-18T17:36:41.553Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d5/c0/dc285d42c69c0a1ebdacc1a7946c5b93295d2a7b277344bc189b8fd200d1/crocoddyl-3.2.0-0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:8d3c14221abec86f1b793292c5281f49c757a40684c27957bc8458d42489de26", size = 6409740, upload-time = "2025-12-18T17:35:44.477Z" },
+    { url = "https://files.pythonhosted.org/packages/b2/23/b684c565979150e02dba8a556b9be0d1bf7cc094dba93e15f5b3145ff79b/crocoddyl-3.2.0-0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:d78fd36512e995cbe5577b2b9a7274eba4e79da31ca0372e20bdeb9cb8499a01", size = 6223386, upload-time = "2025-12-18T17:35:46.616Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/53/686df8e3103c0ec2a62640240895e7e8727a29db6130a8fdec6b1af67bf2/crocoddyl-3.2.0-0-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:63d68f1a2887efc867530697504cc262e170c3e23d328be9541d200015549cbc", size = 9638863, upload-time = "2025-12-18T17:35:48.502Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/e0/59b64e6f8af0d606ac11550c83f15c406f4f08bec8b9748711f9bef3643f/crocoddyl-3.2.0-0-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:ce9cfc4c081bc53c176453de41aa8673a137ac057ac3ad7a7478b0c4bfaaef7a", size = 9804063, upload-time = "2025-12-18T17:35:50.729Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/6c/8e325a459f8221c03222dd299ff40b3ac699483f0e21ccff5e4b51972da3/crocoddyl-3.2.0-1-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:52dff6933cab31aa4fc159d768678f272d6a05639fbbdc42e51c786171dfedd0", size = 6418869, upload-time = "2026-02-16T03:19:43.176Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/ce/5b13b9aa51d2379d32b3393ce73a20acd4c2dad8313feeb01ccaf4eccde8/crocoddyl-3.2.0-1-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:79f1c282c03de1ab69d0d9879aaa6c5d49c8f67b3426738c3d61eb479d06e184", size = 6230924, upload-time = "2026-02-16T03:19:45.341Z" },
+    { url = "https://files.pythonhosted.org/packages/4f/e8/4825f5ad663f991ac2e505cf393ff431e1a0e0489dab7d9c5afa8f5dc1d2/crocoddyl-3.2.0-1-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:2707312965b40302d2ca209265918f952b4b6195aa4ccaedbe12fb8a8d61084d", size = 9660559, upload-time = "2026-02-16T03:19:47.341Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/94/4df215a61ea180f7a97a3e8102193920341c12027364b9adb0a344cfc231/crocoddyl-3.2.0-1-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:c7b0b10e44eae6b4e1f563c5f350ac9a5fa51d644a1b48d78e172601e524b930", size = 9827611, upload-time = "2026-02-16T03:19:49.848Z" },
+]
+
+[[package]]
 name = "cyclonedds"
 version = "0.10.2"
 source = { registry = "https://pypi.org/simple" }
@@ -293,6 +315,34 @@ wheels = [
 ]
 
 [[package]]
+name = "example-robot-data"
+version = "6.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cmeel" },
+    { name = "jrl-cmakemodules" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/96/95/16a77fcca6a1f8604bd72626891af4250e2f66c5f5560a0829b85aed732c/example_robot_data-6.0.0.tar.gz", hash = "sha256:3ba16cdcd29825556e1e03d3a4b299f7c052a05f0075cfc4e0c3389cb9344579", size = 130316966, upload-time = "2026-10-30T15:51:18.745Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3a/24/eb3a4722a0d526c1d0a59357f7cc67dc56e55f73ddea7bfe9dca7be998f5/example_robot_data-6.0.0-0-py3-none-any.whl", hash = "sha256:424092a8093411ac2cd4ccc0572382bfc6b5eb4833aa984ef5e671dd67cd0a6e", size = 131055297, upload-time = "2026-10-30T15:51:13.75Z" },
+]
+
+[[package]]
+name = "example-robot-data-loaders"
+version = "6.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cmeel" },
+    { name = "example-robot-data" },
+    { name = "pin" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/03/7f/98ed74ec31af1251d2257731deca67ea9aac1035098bf8587b196ee02bba/example_robot_data_loaders-6.0.0.tar.gz", hash = "sha256:a935c39f4811e1ae5d05d963ef6a97c7de7379ea60cbf80bdcd1ee681fdb048d", size = 31010, upload-time = "2026-10-30T17:17:52.916Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c0/a4/bf26c4a178722e99613858e31de0afcdab0405cc5750cbea4f319c599065/example_robot_data_loaders-6.0.0-2-py310-none-any.whl", hash = "sha256:f19667bd2e16a3ff69b30dafb31f32035784b23304a3f1479738c06de27b1eea", size = 19091, upload-time = "2026-10-30T16:19:33.484Z" },
+    { url = "https://files.pythonhosted.org/packages/55/61/be8516df85d90fdaa7003044385a25c6d621990b92a1454aba9fdd4026bf/example_robot_data_loaders-6.0.0-4-py310-none-any.whl", hash = "sha256:d44650da108d057262c502507e50981321f36ad1130049d24705ad5d3e27d089", size = 19091, upload-time = "2026-10-30T17:17:46.397Z" },
+]
+
+[[package]]
 name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -320,6 +370,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "cmeel-tinyxml2" },
     { name = "cmeel-urdfdom" },
+    { name = "crocoddyl" },
     { name = "cyclonedds" },
     { name = "meshcat" },
     { name = "meshcat-shapes" },
@@ -340,6 +391,7 @@ dependencies = [
 requires-dist = [
     { name = "cmeel-tinyxml2", specifier = "==10.0.0" },
     { name = "cmeel-urdfdom", specifier = "==4.0.1" },
+    { name = "crocoddyl", specifier = "==3.2.0" },
     { name = "cyclonedds", specifier = "==0.10.2" },
     { name = "meshcat", specifier = "==0.3.2" },
     { name = "meshcat-shapes", specifier = "==1.0.0" },
@@ -391,6 +443,18 @@ wheels = [
 ]
 
 [[package]]
+name = "jrl-cmakemodules"
+version = "2.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cmeel" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a5/ec/b0fb5847a58de62c806bac23bf4dcfaecff96056d94094a927739dbfca8a/jrl_cmakemodules-2.1.0.tar.gz", hash = "sha256:0e27aea3edcf1329ab93669a0e69184e7d9486a9423c786a169a77a64dfa048a", size = 6528961, upload-time = "2026-07-08T10:35:16.562Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/f8/4001f9fe69de6890dc7f5a8aaa9d2cef7a5faeae6110d80f008995dae5c4/jrl_cmakemodules-2.1.0-1-py3-none-any.whl", hash = "sha256:caf72969c1139053c9f8b8fd44f0aacd9b49db48355d1add4acb7c980f09eb37", size = 6614076, upload-time = "2026-07-08T10:35:14.098Z" },
+]
+
+[[package]]
 name = "libcoal"
 version = "3.0.2"
 source = { registry = "https://pypi.org/simple" }
@@ -407,6 +471,28 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/ba/b0/3480197ba40cf9c6de71ca7f7a81a7504a40ca77a2b8604cbcc068f8f7ca/libcoal-3.0.2-0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:527c710c6215936f1a4b99ca1d01b4bb15c6b52980fa96cfa5f1fd1a7ef12393", size = 1484168, upload-time = "2025-10-15T22:53:29.933Z" },
     { url = "https://files.pythonhosted.org/packages/e2/e5/5b9605496e48a0437152196e5f200433d3904e59c899cab799a3c27bcd4f/libcoal-3.0.2-0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:ed45722c07a3d23a346211f837856549dce11167928743eb6c73bcf17a369dd6", size = 2257523, upload-time = "2025-10-15T22:53:31.214Z" },
     { url = "https://files.pythonhosted.org/packages/3c/49/c3bec783144c226b5ef3728ed66d7fc2d08c553922a3892591958284801a/libcoal-3.0.2-0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:c4ca3fec02386e5c8ccc81030c44e74a546b06059886ce04bb6c16fe4628e9ba", size = 2285635, upload-time = "2025-10-15T22:53:33.142Z" },
+]
+
+[[package]]
+name = "libcrocoddyl"
+version = "3.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cmeel" },
+    { name = "cmeel-boost" },
+    { name = "example-robot-data" },
+    { name = "libpinocchio" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/66/8d/4bf1c0314c23b12699fca110db6cb9111fdabaf90fea2aeee30cf65d85e9/libcrocoddyl-3.2.0.tar.gz", hash = "sha256:4f81e23a1fb185dba3cecb5f8d2630792d9dee1d6d4d3f1e55661ca704dc6f60", size = 751829, upload-time = "2025-12-18T13:37:42.198Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fb/c9/340d4c9e27bbcc0a4ae6023ed7a70e1721b24e01e540ea9dafde2fb4f509/libcrocoddyl-3.2.0-0-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:677d9308a2e989e268c871b5c9b0be78c76a98ba8795a3436800a2805823d57b", size = 3187027, upload-time = "2025-12-18T13:37:35.226Z" },
+    { url = "https://files.pythonhosted.org/packages/57/33/f1646dfa00134ce8fe9416ec8c5793a55ba6303d4259ba78a4c3dd628ef7/libcrocoddyl-3.2.0-0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:3b31515104c3e0e0b22ccf47644af905f321bf9517ce0ea31cf06c40d6463487", size = 2685157, upload-time = "2025-12-18T13:37:37.017Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/a5/75d537f218ccf994d97010a1dfff36ef0c5c56706979bc13a7f9a20455da/libcrocoddyl-3.2.0-0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:f9f844efc1c8413c8676d3bed5349a89fbe5a116646e1eb714849a2547b37bc2", size = 4421389, upload-time = "2025-12-18T13:37:38.981Z" },
+    { url = "https://files.pythonhosted.org/packages/76/3f/0253a8000bda2a41462e83d473880f574d804f682b20a5802ebb3170aa0b/libcrocoddyl-3.2.0-0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:e5b59d05fa92c9d2f9ba1634761a6588d3efccbb094731c72e22a2e7a64e0d63", size = 4785594, upload-time = "2025-12-18T13:37:40.779Z" },
+    { url = "https://files.pythonhosted.org/packages/77/8b/2ee296c4f6cd9176bab25539e4c4e5fa8f133dc65f55ffae99b5e12797f2/libcrocoddyl-3.2.0-1-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:d8736a0578ef69cbf347ca99f6bd131798e16d07e42e732d37e6bb6e889dfdd7", size = 3222189, upload-time = "2026-02-16T01:25:40.675Z" },
+    { url = "https://files.pythonhosted.org/packages/0c/6c/5a63edd1ff37fe9c226fcbcfc6ea9bbbd2dacaa553d1e3b2e5cbc856810f/libcrocoddyl-3.2.0-1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:0769770ab9d2edd8fae010589ecb7461a8c40fc55c2c4aff602e4e6e817296f1", size = 2706514, upload-time = "2026-02-16T01:25:42.67Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/7b/e2572a9d038031afe3fa1003e2a332058064c6ae268efae5d4e72d13215d/libcrocoddyl-3.2.0-1-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:7e12f2848ad8ae1061c9efae4589ef117a4cf31c71f1265d1a0594d91ab6aa08", size = 4468029, upload-time = "2026-02-16T01:25:44.051Z" },
+    { url = "https://files.pythonhosted.org/packages/12/16/4298e3595451f8822d35e59d505cb0499fa0dce6b0a0eb0b622dc84ec15e/libcrocoddyl-3.2.0-1-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:346bd344ea400aa6e917ea78be64d7acfca0214dc452ce8981ff699dc9f27442", size = 4843202, upload-time = "2026-02-16T01:25:45.488Z" },
 ]
 
 [[package]]

@@ -47,6 +47,7 @@ class NativeExperimentTests(unittest.TestCase):
             self.launch = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(self.launch)
         self.context = {'controller_python': '/usr/bin/python3', 'lowerbody': 'fame_finetune',
+                        'upper_controller': 'frame',
                         'start_position_verified': 'false', 'marker_catalog_path': str(SOURCE)}
 
     def compose(self):
@@ -77,6 +78,8 @@ class NativeExperimentTests(unittest.TestCase):
             self.assertTrue(actions[2].args[0].endswith('/h12_control.launch.py'))
             self.assertEqual(control['frame_task_prefix'], '/usr/bin/python3')
             self.assertEqual(control['safety_config'], 'sim_safety_split.yaml')
+            self.assertEqual(control['upper_controller'], 'frame')
+            self.assertEqual(control['frame_task_config'], 'sim_safety_split.yaml')
             self.assertEqual(lower['start_position_verified'], 'true')
             self.assertEqual(lower['lowerbody'], policy)
             self.assertEqual(lower['use_estimator'], 'false')
@@ -85,6 +88,55 @@ class NativeExperimentTests(unittest.TestCase):
             self.assertEqual(actions[4].parameters[0]['target_backend'], 'marker')
             self.assertNotIn('h12_models', str(actions))
             self.assertNotIn('h12_navigation', str(actions))
+
+    def test_counter_selection_is_independent_of_policy_and_requires_verification(self):
+        self.context['upper_controller'] = 'counter'
+        for policy in ('fame_finetune', 'almi_manip_stand'):
+            self.context['lowerbody'] = policy
+            self.context['start_position_verified'] = 'false'
+            self.assertEqual(len(self.compose()), 2)
+            self.context['start_position_verified'] = 'true'
+            actions = self.compose()
+            self.assertEqual(len(actions), 5)
+            control = dict(actions[2].launch_arguments)
+            self.assertEqual(control['upper_controller'], 'counter')
+            self.assertEqual(control['frame_task_config'], 'counter_safety_split.yaml')
+            self.assertEqual(control['safety_config'], 'sim_safety_split.yaml')
+            self.assertEqual(dict(actions[3].launch_arguments)['lowerbody'], policy)
+
+    def test_invalid_upper_controller_is_rejected_even_without_actuation(self):
+        for upper in ('', 'robust3c', 'Frame', 'counter; touch /invalid'):
+            self.context['upper_controller'] = upper
+            with self.assertRaisesRegex(RuntimeError, 'upper_controller must be frame or counter'):
+                self.compose()
+
+    def test_control_hook_passes_typed_parameter_to_exactly_one_upper(self):
+        def action(*args, **kwargs):
+            return SimpleNamespace(args=args, **kwargs)
+        descriptions = ModuleType('launch_ros.parameter_descriptions')
+        descriptions.ParameterValue = lambda value, value_type: SimpleNamespace(
+            value=value, value_type=value_type)
+        with patch.dict(sys.modules, {'launch_ros.parameter_descriptions': descriptions}), \
+                patch.object(sys.modules['launch.actions'], 'TimerAction', action, create=True), \
+                patch.dict(sys.modules, {'launch.conditions': SimpleNamespace(IfCondition=action)}):
+            spec = importlib.util.spec_from_file_location('control_launch',
+                SOURCE.with_name('h12_control.launch.py'))
+            control = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(control)
+            actions = control.generate_launch_description()
+        upper = [node for timer in actions if hasattr(timer, 'actions')
+                 for node in timer.actions if node.executable == 'frame_task_server']
+        self.assertEqual(len(upper), 1)
+        self.assertEqual(upper[0].name, 'frame_task_server')
+        self.assertEqual(len(upper[0].arguments), 2)
+        self.assertEqual(upper[0].arguments[0], '--config')
+        parameter = upper[0].parameters[1]['upper_controller']
+        self.assertIs(parameter.value_type, str)
+        for mode in ('frame', 'counter'):
+            self.assertEqual(parameter.value.perform({'upper_controller': mode}), mode)
+        declared = next(item for item in actions if item.args == ('upper_controller',))
+        self.assertEqual(declared.default_value, 'frame')
+        self.assertEqual(declared.choices, ['frame', 'counter'])
 
     def test_invalid_domains_are_rejected_before_actions(self):
         for domain in ('0', '', '-1', '233', 'garbage'):
@@ -121,6 +173,10 @@ class NativeExperimentTests(unittest.TestCase):
         descriptions = self.launch.generate_launch_description()
         verified = next(item for item in descriptions if item.args == ('start_position_verified',))
         self.assertEqual(verified.default_value, 'false')
+        upper = next(item for item in descriptions if item.args == ('upper_controller',))
+        self.assertEqual(upper.default_value, 'frame')
+        lower = next(item for item in descriptions if item.args == ('lowerbody',))
+        self.assertEqual(lower.default_value, 'fame_finetune')
         annotated = next(item for item in descriptions if item.args == ('publish_annotated',))
         self.assertEqual(annotated.default_value, 'true')
         transport = next(item for item in descriptions if item.args == ('image_transport',))

@@ -34,6 +34,10 @@ def parser():
     result.add_argument('--style', type=int)
     result.add_argument('--seed', type=int)
     result.add_argument('--timing', action='store_true')
+    result.add_argument('--manipulation-hoist', action='store_true',
+                        help='Supported manipulation fixture: existing pelvis rotational hold '
+                        'at 2000 N*m/rad while the startup tether is enabled. '
+                        'Not free-standing or a balance-performance test.')
     result.add_argument('--record', metavar='PATH', help='Opt-in WebM + evaluation-only JSONL recording')
     result.add_argument('--record-fps', type=float, default=None,
                         help='Frames per simulation second (default 20); not wall real-time')
@@ -85,6 +89,11 @@ def main():
                 VENV / 'livox-interfaces/install/share/livox_ros_driver2/local_setup.bash']
     env = environment()
     env.setdefault('GOLEM_SIM_ODOM', '0')
+    if args.manipulation_hoist:
+        env['GOLEM_SIM_TETHER_ROT_STIFFNESS'] = '2000'
+        env['GOLEM_SIM_TETHER_ROT_BODY'] = 'pelvis'
+        print('Manipulation hoist: pelvis rotational support enabled at 2000 N*m/rad; '
+              'NOT free-standing balance. Lower-body confirmation releases the tether.', flush=True)
     if args.task == 'PegInHole':
         # Marker localization uses RGB/CameraInfo; preserve explicit sensor choices.
         for name, value in PEGBOARD_CAMERA_DEFAULTS.items():

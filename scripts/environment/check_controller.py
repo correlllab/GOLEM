@@ -15,7 +15,8 @@ assert sys.version_info[:2] == (3, 10) and sys.base_prefix == '/usr'
 assert site.ENABLE_USER_SITE is False
 assert np.__version__ == '2.2.6'
 assert pin.__version__ == '3.9.0'
-for name in ('pink', 'ompl.base', 'ompl.geometric', 'rclpy',
+for name in ('pink', 'ompl.base', 'ompl.geometric', 'crocoddyl', 'rclpy',
+             'h12_ros2_controller.core.controller.counter_frame_controller',
              'h12_ros2_controller.ros2.frame_task_server',
              'h12_ros2_controller.ros2.joint_state_publisher'):
     module = importlib.import_module(name)
@@ -36,5 +37,5 @@ from sensor_msgs.msg import JointState
 message = JointState(name=['offline'], position=[0.25])
 np.testing.assert_array_equal(deserialize_message(serialize_message(message), JointState).position, [0.25])
 print(f'PASS installed URDF offline FK (nq={model.nq}) and JointState CDR in NumPy 2')
-print('PASS baseline controller imports, Pinocchio rotation and QP; no ROS init or controller construction')
-print('NOT qualified: live controller/ROS ABI, collision planning, actuation, balance or Crocoddyl')
+print('PASS frame/counter native imports, Pinocchio rotation and QP; no ROS init or controller construction')
+print('NOT checked by this command: live planning, actuation or balance performance')

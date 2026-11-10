@@ -1,4 +1,4 @@
-"""Sync isolated baseline controller libraries and perform offline math/import checks."""
+"""Sync isolated Frame/Counter libraries and perform offline math/import checks."""
 
 import os
 from pathlib import Path

@@ -30,6 +30,9 @@ def generate_launch_description():
             'use_frame_task', default_value='true',
             description='Start the frame_task_server arm IK action server'),
         DeclareLaunchArgument(
+            'upper_controller', default_value='frame', choices=['frame', 'counter'],
+            description='Upper controller backend for the single frame_task_server'),
+        DeclareLaunchArgument(
             'safety_config', default_value='relax_safety_split.yaml',
             description='h12_safety_layer config name or path (resolved against its config/ dir)'),
         DeclareLaunchArgument(
@@ -82,7 +85,8 @@ def generate_launch_description():
                     prefix=LaunchConfiguration('frame_task_prefix'),
                     name='frame_task_server',
                     arguments=['--config', LaunchConfiguration('frame_task_config')],
-                    parameters=[sim_time_param],
+                    parameters=[sim_time_param, {'upper_controller': ParameterValue(
+                        LaunchConfiguration('upper_controller'), value_type=str)}],
                     output='screen',
                     emulate_tty=True,
                     condition=IfCondition(LaunchConfiguration('use_frame_task')),

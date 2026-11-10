@@ -25,6 +25,9 @@ def _launch(context):
     policy = LaunchConfiguration('lowerbody').perform(context)
     if policy not in ('fame_finetune', 'almi_manip_stand'):
         raise RuntimeError('lowerbody must be fame_finetune or almi_manip_stand')
+    upper = LaunchConfiguration('upper_controller').perform(context)
+    if upper not in ('frame', 'counter'):
+        raise RuntimeError('upper_controller must be frame or counter')
     verified = LaunchConfiguration('start_position_verified').perform(context)
     if verified not in ('true', 'false'):
         raise RuntimeError('start_position_verified must be true or false')
@@ -58,7 +61,9 @@ def _launch(context):
             _include('h12_control.launch.py', {
                 **sim_time, 'use_estop': 'false', 'use_frame_task': 'true',
                 'safety_config': 'sim_safety_split.yaml',
-                'frame_task_config': 'sim_safety_split.yaml',
+                'upper_controller': upper,
+                'frame_task_config': ('counter_safety_split.yaml' if upper == 'counter'
+                                      else 'sim_safety_split.yaml'),
                 'frame_task_prefix': shlex.quote(python),
                 'safety_delay': '0.0', 'frame_task_delay': '2.0',
             }),
@@ -82,6 +87,9 @@ def generate_launch_description():
                               description='Allow safety, upper/lower actuation and marker skill servers'),
         DeclareLaunchArgument('lowerbody', default_value='fame_finetune',
                               description='fame_finetune | almi_manip_stand; standing only'),
+        DeclareLaunchArgument('upper_controller', default_value='frame',
+                              choices=['frame', 'counter'],
+                              description='Upper controller backend: frame | counter'),
         DeclareLaunchArgument('controller_python', default_value=EnvironmentVariable(
             'GOLEM_CONTROLLER_PYTHON', default_value='')),
         DeclareLaunchArgument('marker_catalog_path', default_value=EnvironmentVariable(

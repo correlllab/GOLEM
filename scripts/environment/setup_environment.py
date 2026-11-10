@@ -27,7 +27,8 @@ def main():
 Setup recreates missing .venv with /usr/bin/python3 (3.10), system-site-packages,
 no user site, uv sync --locked --inexact, and the SDK from this checkout --no-deps.
 ROS uses NumPy 1 and Torch 2.6 CPU; simulator and isolated controller use NumPy 2.
-Controller setup uses only baseline Pin/Pink/OMPL/QP libraries, not Crocoddyl or ML.
+Controller setup includes Pin/Pink/OMPL/QP and the locked Crocoddyl import dependency,
+without the vision or training stack.
 Its checks import actual arm entrypoints and run offline math, never constructors.
 Build experiment before controller setup/check; it needs native generated interfaces.
 No global pip, sudo, conda, or upgrades.

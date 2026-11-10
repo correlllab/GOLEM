@@ -1,0 +1,26 @@
+{
+  "assumptions": "Simulation-only distal pad calibration for the current MuJoCo Magpie hand. The cylinder is 12 mm in diameter and 50 mm long. The contact offset targets distal pad4 with nominal board clearance of about 7 mm during closure. The simulated bridge maps service position linearly to crank angle: a 46.65097 mm request gives a physical 20 mm jaw gap. aperture_margin_m therefore represents service-command compensation, NOT a physical margin. This is not hardware calibration. Contacts, friction and physics are unchanged.",
+  "active_pegs": {"cylinder_1": {"source_hole": "cylinder_1"}},
+  "aliases": {},
+  "cylinder_contact_from_tip_m": [0.0, 0.0, 0.04],
+  "grasp_rpy_board_deg": [180.0, 0.0, -60.0],
+  "top_down_rpy_pelvis_deg": {"left": [180.0, 0.0, 30.0], "right": [180.0, 0.0, 150.0]},
+  "arms": {
+    "left": {"contact_in_graspgenx_m": [0.0, 0.002238, 0.1786], "workspace_min_m": [0.15, -0.10, -0.30], "workspace_max_m": [0.80, 0.65, 0.80]},
+    "right": {"contact_in_graspgenx_m": [0.0, 0.002238, 0.1786], "workspace_min_m": [0.15, -0.65, -0.30], "workspace_max_m": [0.80, 0.10, 0.80]}
+  },
+  "aperture_margin_m": 0.03465097,
+  "approach_m": 0.05,
+  "extraction_m": 0.06,
+  "preinsert_tip_height_m": 0.04,
+  "step_m": 0.01,
+  "step_rad": 0.10,
+  "segment_sec": 8.0,
+  "planned_motion_sec": 30.0,
+  "linear_tolerance_m": 0.005,
+  "angular_tolerance_rad": 0.04,
+  "max_pose_age_sec": 0.5,
+  "max_board_jump_m": 0.05,
+  "max_board_jump_rad": 0.15,
+  "max_goal_sec": 180.0
+}

@@ -398,8 +398,8 @@ if 'config' in sys.argv:
                                'bash', str(self.root / 'tests/sim/common.sh')], cwd='/tmp',
                               env=dict(self.env, OUT=str(out)), text=True, capture_output=True)
 
-    def test_g1_test_setup_cleans_up_containers(self):
-        """sim_test_setup's cleanup for a G1 test removes every container its runs create and writes run.json for the G1."""
+    def test_sim_test_setup_for_g1_cleans_up_containers(self):
+        """sim_test_setup for the G1 adds the G1 overlay to every run, removes every container the test's runs create on exit, and records the robot in run.json."""
         self.install_copy('tests/sim/common.sh')
         out = self.root / 'g1 out'
         r = self.run_sim_test(out, 'sim_test_setup g1 g1 t bringup arm 195')

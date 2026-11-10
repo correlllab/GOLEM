@@ -1020,6 +1020,11 @@ on the real G1 yet; follow `docs/g1/first-session.md` step by step.
   a search for dangling links there would match them all); the change
   report (`docs/superpowers/specs/2026-10-28-golem-bringup-and-g1-debug-mode/change-report.md`)
   has the G1 cleanup.
+  MuJoCo MPC's retirement also leaves two things outside the workspace, both safe
+  to delete: `container_cache/mjpc_build` (MJPC's build directory, several GB,
+  which the `ros` container used to mount and no compose file mounts now) and
+  `.git/modules/mujoco_mpc` (the removed submodule's git directory); after a pull
+  an untracked `mujoco_mpc/` checkout may also remain. Nothing reads them.
 - **The `ros` container ≠ bringup.** It only builds and gives you a shell.
 - **Check the `robot:` line on simulator and stack runs.** `docker_run.sh robocasa|isaac`
   and `docker_stack.sh up` print the robot they selected; a `GOLEM_ROBOT` left

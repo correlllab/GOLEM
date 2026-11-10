@@ -1,10 +1,11 @@
 # Dead code in the submodules, for their owners
 
-The 2026-11-09 repo cleanup did not edit these submodules (CLAUDE.md §5). These
-findings come from its audits (`.superpowers/sdd/2026-11-09-dead-code/audit-D.md`,
-section B, and `audit-A.md` row 31), made at GOLEM 1e86e92. Each owner decides
-whether to act. The evidence is a `grep -rw` over this repo and every checked-out
-submodule; other lab repos that use these packages were not searched.
+The 2026-11-09 repo cleanup did not edit these submodules (CLAUDE.md §5). Its
+dead-code audit, made at GOLEM 1e86e92, found the items below; the Evidence
+column holds what each row rests on. Each owner decides whether to act. The
+evidence is a `grep -rw` over this repo and every checked-out submodule; other lab
+repos that use these packages were not searched. The findings the cleanup kept or
+left in this repo's own packages are in `2026-11-09-repo-cleanup-leftovers.md`.
 
 | # | Submodule | What | Kind | Evidence | Confidence |
 |---|---|---|---|---|---|

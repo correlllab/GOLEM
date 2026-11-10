@@ -6,7 +6,7 @@ stack for the Correll Lab's Unitree humanoids: the H1-2 and, beside it, the G1
 
 Two simulators (MuJoCo/RoboCasa and Isaac Lab) and a ROS 2 Humble workspace run
 in separate Docker containers sharing one DDS domain. The workspace holds the
-drivers, upper-body IK, lower-body MPC and RL locomotion, a safety layer,
+drivers, upper-body IK, lower-body RL locomotion, a safety layer,
 perception model servers, and an LLM-callable skills layer. Sim and real robot
 speak the same Unitree `rt/lowcmd` / `rt/lowstate` wire format, so code moves
 between them unchanged.

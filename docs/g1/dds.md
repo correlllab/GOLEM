@@ -14,7 +14,8 @@ Unitree SDK in `unitree_sdk2_python/`. ROS 2 also carries the user-facing topics
 | `0` | the real robots. This is their **command bus**. |
 
 The tests' own domains are in their READMEs: `tests/README.md` for the H1-2's
-and the shared ones, `tests/g1/README.md` for the G1 acceptance tests.
+and the shared ones, `tests/g1/README.md` for the G1 acceptance tests, and
+`core_ws/src/dex_3/README.md` for the Dex3 driver's.
 
 Set the domain in `docker/.env` (copy it from `docker/.env.example`):
 

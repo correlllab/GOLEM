@@ -1,12 +1,12 @@
 """
 Start the loco-manipulation game on the real H1-2's onboard PC; refuses to start today.
 
-    ros2 launch golem_bringup lmg_real.launch.py policy:=mid360v2
+    ros2 launch golem_bringup lmg_real.launch.py
 
-SAFETY: this launch refuses to start, before any node: lmg_deploy reads /livox/imu as
-upright, and the H1-2's MID-360 is mounted upside down and publishes it in its raw
-frame, so the policy would get an upside-down IMU. The refusal goes once lmg_deploy
-handles the raw frame (the strict xfail test_urdf_mount_is_the_livox_pitch marks it).
+SAFETY: this launch refuses to start, before any node. The H1-2's MID-360 is mounted
+upside down and publishes /livox/imu in its raw frame; lmg_deploy turns it into the
+upright frame the policies trained on, checked in the sim only. The refusal goes once
+that is checked on the robot.
 
 What it starts otherwise, all at once and INSTEAD of h12_real_robot.launch.py, never
 beside it: the drivers (h12_real_drivers: the MID-360, and the head camera and grippers
@@ -33,12 +33,11 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 
-NOT_STARTING = ('lmg_real: not starting: lmg_deploy reads /livox/imu as upright, and the H1-2 '
-                'MID-360 is in its raw (upside-down) frame; update lmg_deploy first (see the '
-                'strict xfail test_urdf_mount_is_the_livox_pitch)')
+NOT_STARTING = ('lmg_real: not starting: lmg_deploy\'s handling of the H1-2 MID-360\'s raw '
+                '(upside-down) /livox/imu is checked in the sim only; check it on the robot first')
 
 # The arguments passed through to h12_locomanipulationgame.launch.py as they are.
-GAME_ARGS = ('start_position_verified', 'policy', 'prepose_ramp_s', 'prepose_max_vel',
+GAME_ARGS = ('start_position_verified', 'prepose_ramp_s', 'prepose_max_vel',
              'imu_offset_roll_deg', 'imu_offset_pitch_deg', 'imu_offset_yaw_deg')
 
 
@@ -59,9 +58,6 @@ def generate_launch_description():
         DeclareLaunchArgument('start_position_verified', default_value='false',
                               description='true only after checking the robot is in a '
                                           'safe start pose: starts marl_deploy_node'),
-        DeclareLaunchArgument('policy',
-                              description='Required. The policy, policies/<name>/ of '
-                                          'lmg_deploy (it ships mid360v2)'),
         DeclareLaunchArgument('prepose_ramp_s', default_value='6.0',
                               description='s, the shortest ramp into the default pose'),
         DeclareLaunchArgument('prepose_max_vel', default_value='0.25',

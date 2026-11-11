@@ -9,7 +9,9 @@ order (locomanip_marl_env.py _get_observations, then _pre_physics_step):
   3. observations: the legs' (95) and the arms' (123), or 97 and 125 with
      gait_phase_cos (each leg's phase cos after its sin);
   4. actions: clamp to +-clip, legs = scale * a + default, arms = q + IK step
-     + residual_scale * r, both bounded to the hard limits +- target_margin
+     + residual_scale * r (each scale one number, or per joint from export.yaml's
+     leg_action_scales / arm_residual_scales: runs that matched their scales to
+     their PD gains), both bounded to the hard limits +- target_margin
      (negative: inside them), narrowed to target_limits where it names a joint
      (the run's GOLEM position e-stop range, from export.yaml). r is the
      arms' action, low-passed when arms.residual_cutoff_hz is set
@@ -24,6 +26,11 @@ integrates) and forward kinematics carries it to the pelvis through the torso
 joint. Each new pose moves the arm command by the pelvis's motion since the
 previous one; between SLAM poses (10 Hz against the 50 Hz policy) the command
 holds still in the pelvis frame.
+
+With command_filter_tau (export.yaml; s), the velocity command the policies
+see and the gait clock reads is the operator's through a first-order low-pass
+stepped once per control step, zeroed at reset and held at zero during an arm
+goal, as ModalVelocityCommand filters it in training.
 
 Recurrent actors (networks.RecurrentTorchScriptNetwork) carry their LSTM
 state from step to step; reset() zeroes it, as training did at each episode
@@ -57,6 +64,12 @@ NUM_JOINTS = 27
 NUM_LEGS = 12
 ARM_START = 13
 NUM_ARM_JOINTS = 14
+# The observation terms step() builds, in order (gait_phase_cos only with cfg["gait_phase_cos"]). An export's
+# legs_obs_terms / arms_obs_terms must equal them.
+COMMON_OBS_TERMS = ["base_lin_acc", "base_ang_vel", "projected_gravity", "velocity_commands", "arm_goal", "ee_targets",
+                    "joint_pos", "joint_vel", "gait_phase", "gait_phase_cos"]
+LEGS_OBS_TERMS = COMMON_OBS_TERMS + ["actions"]
+ARMS_OBS_TERMS = COMMON_OBS_TERMS + ["actions", "wrist_poses", "wrist_errors"]
 
 
 @dataclass
@@ -107,19 +120,29 @@ class MarlController:
         self.clip = float(cfg["clip_actions"])
         self.lower, self.upper = self._position_bounds(kinematics.joint_limits, float(cfg["target_margin"]),
                                                        cfg.get("target_limits"))
-        self.legs_scale = float(cfg["legs"]["action_scale"])
-        self.arms_scale = float(cfg["arms"]["residual_scale"])
+        self.legs_scale = self._scales(cfg.get("leg_action_scales"), cfg["legs"]["action_scale"], NUM_LEGS)
+        self.arms_scale = self._scales(cfg.get("arm_residual_scales"), cfg["arms"]["residual_scale"], NUM_ARM_JOINTS)
         self.ik_damping = float(cfg["arms"]["ik_damping"])
-        self.max_ik_step = float(cfg["arms"]["max_ik_step"])
+        # export.yaml's max_ik_step (the run's, per its control step) over the template's
+        self.max_ik_step = float(cfg.get("max_ik_step", cfg["arms"]["max_ik_step"]))
+        tau = float(cfg.get("command_filter_tau") or 0.0)
+        self.cmd_alpha = 1.0 - np.exp(-self.dt / tau) if tau > 0.0 else None
         self.gait_period = float(cfg["gait_period"])
         self.zero_cmd_eps = float(cfg["zero_cmd_eps"])
         self.gait_phase_cos = bool(cfg.get("gait_phase_cos", False))
+        for agent, terms in (("legs", LEGS_OBS_TERMS), ("arms", ARMS_OBS_TERMS)):
+            expected = [t for t in terms if t != "gait_phase_cos" or self.gait_phase_cos]
+            trained = cfg.get(f"{agent}_obs_terms")
+            if trained is not None and list(trained) != expected:
+                raise ValueError(f"{agent}_obs_terms {list(trained)} are not the observations this controller builds, "
+                                 f"{expected}")
         ranges = cfg["command_ranges"]
         self.cmd_low = np.array([ranges["lin_vel_x"][0], ranges["lin_vel_y"][0], ranges["ang_vel_z"][0]])
         self.cmd_high = np.array([ranges["lin_vel_x"][1], ranges["lin_vel_y"][1], ranges["ang_vel_z"][1]])
         self.settle_to_arm_s = float(cfg["settle_to_arm_s"])
         self.settle_to_nav_s = float(cfg["settle_to_nav_s"])
         self.num_arms = len(cfg["arms"]["ee_frames"])
+        self.arm_goals_trained = bool(cfg.get("arm_goals", True))   # export.yaml: false if the run trained none
         self.torque_headroom = cfg.get("torque_headroom")
         if self.torque_headroom is not None:
             self.effort_limits = np.asarray(cfg["effort_limits"], dtype=np.float64)
@@ -136,6 +159,7 @@ class MarlController:
         for arm in range(self.num_arms):
             self.rest_pose[arm, 3:] = quat_unique(self.rest_pose[arm, 3:])
         self.cmd_vel = np.zeros(3)
+        self.cmd_filtered = np.zeros(3)
         self.arm_goals: np.ndarray | None = None   # set_arm_goals' poses for the next arm mode; kept across resets
         self.reset(None)
 
@@ -146,6 +170,7 @@ class MarlController:
         self.pending_goal: np.ndarray | None = None
         self.believed = self.rest_pose.copy()   # (arms, 7) pelvis frame, wxyz: the arm command
         self.steps = 0                          # since reset: the gait clock
+        self.cmd_filtered = np.zeros(3)         # the command low-pass starts from zero, as training's does
         # The action terms' state after a reset: the legs see the applied target in action units, the arms zero.
         q_legs = state.q[:NUM_LEGS] if state is not None else self.default[:NUM_LEGS]
         self.legs_last = (q_legs - self.default[:NUM_LEGS]) / self.legs_scale
@@ -172,7 +197,10 @@ class MarlController:
         """Start an arm goal: (arms, 7) wrist targets (x, y, z, qw, qx, qy, qz) in the pelvis frame now.
 
         From navigation it goes through settle_to_arm_s first; in arm mode it replaces the goal at once.
+        Raises ValueError for a policy that never trained an arm goal (export.yaml arm_goals: false).
         """
+        if not self.arm_goals_trained:
+            raise ValueError("this policy never trained an arm goal (export.yaml arm_goals: false)")
         goal = np.asarray(poses, dtype=np.float64).reshape(self.num_arms, 7).copy()
         for arm in range(self.num_arms):
             goal[arm, 3:] = quat_unique(goal[arm, 3:] / np.linalg.norm(goal[arm, 3:]))
@@ -205,7 +233,7 @@ class MarlController:
         "walk": navigation on the velocity command (the start mode). "arm": zero velocity, the
         wrists on the goals of set_arm_goals (the rest pose until some are set). Each switch goes
         through its settle, if the config has one; switching to the mode the controller is already
-        in, or settling into, does nothing.
+        in, or settling into, does nothing. "arm" raises ValueError for a policy that never trained an arm goal.
         """
         if mode == "arm":
             if self.mode not in (Mode.ARM, Mode.SETTLE_TO_ARM):
@@ -232,6 +260,7 @@ class MarlController:
         self.kin.update(state.q)
         self._update_odometry()
         self._update_mode()
+        self._filter_command()
 
         common = self._common_obs(state)
         legs_obs = np.concatenate([common, self.legs_last])
@@ -307,6 +336,27 @@ class MarlController:
         """Return the velocity command the policy sees: the operator's while navigating, else zero."""
         return self.cmd_vel.copy() if self.mode == Mode.NAV else np.zeros(3)
 
+    def observed_command(self) -> np.ndarray:
+        """Return the command the policies see and the gait clock reads: velocity_command low-passed (command_filter_tau)."""
+        return self.cmd_filtered.copy() if self.cmd_alpha is not None else self.velocity_command()
+
+    def _filter_command(self) -> None:
+        """Step the command low-pass once toward velocity_command; zero it during an arm goal."""
+        if self.cmd_alpha is None:
+            return
+        if self.mode == Mode.ARM:
+            self.cmd_filtered[:] = 0.0   # training zeroes it with the command when an arm goal starts
+        else:
+            self.cmd_filtered += self.cmd_alpha * (self.velocity_command() - self.cmd_filtered)
+
+    @staticmethod
+    def _scales(per_joint, scale, n: int) -> np.ndarray:
+        """Return (n,) action scales: per_joint when given, else scale for every joint."""
+        out = np.full(n, float(scale)) if per_joint is None else np.asarray(per_joint, dtype=np.float64)
+        if out.shape != (n,):
+            raise ValueError(f"{len(out)} action scales for {n} joints")
+        return out
+
     def _gait_phase(self, cmd: np.ndarray) -> np.ndarray:
         """Return the sin of each leg's gait phase, then with gait_phase_cos the cos; phase 0 while standing."""
         if np.linalg.norm(cmd) < self.zero_cmd_eps:
@@ -319,7 +369,7 @@ class MarlController:
 
     def _common_obs(self, state: RobotState) -> np.ndarray:
         """Return the observation terms both agents share (ProprioCfg), in the env's order."""
-        cmd = self.velocity_command()
+        cmd = self.observed_command()
         ee_targets = np.concatenate([np.concatenate([p[:3], wxyz_to_xyzw(p[3:])]) for p in self.believed])
         return np.concatenate([
             state.acc,

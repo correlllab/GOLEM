@@ -29,7 +29,7 @@ SIM_DOMAIN = '221'
 # arguments that start the most nodes.
 TOP_LEVEL = [
     ('h12_sim.launch.py', {'use_skills': 'true', 'use_nav': 'true', 'use_rviz': 'true'}, True),
-    ('lmg_sim.launch.py', {'policy': 'mid360v2', 'use_slam': 'true'}, True),
+    ('lmg_sim.launch.py', {'use_slam': 'true', 'use_skills': 'true'}, True),
     ('g1_sim.launch.py', {'use_skills': 'true', 'use_nav': 'true', 'use_rviz': 'true'}, True),
     ('h12_real_robot.launch.py', {'start_position_verified': 'true'}, False),
     ('h12_real_desktop.launch.py', {'use_hand_cameras': 'true'}, False),
@@ -135,4 +135,4 @@ def test_every_node_runs_on_its_bringups_clock(launch_file, args, sim_time, monk
 def test_lmg_real_refuses_before_any_node():
     """lmg_real.launch.py refuses to start, so it starts no node on any clock."""
     with pytest.raises(RuntimeError):
-        _nodes('lmg_real.launch.py', {'policy': 'mid360v2', 'start_position_verified': 'true'})
+        _nodes('lmg_real.launch.py', {'start_position_verified': 'true'})

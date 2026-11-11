@@ -28,6 +28,7 @@ from launch import LaunchContext
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.utilities import normalize_to_list_of_substitutions, perform_substitutions
 import pytest
+import yaml
 
 from test_g1_launch import (
     _core_nodes, _location, _started, Started, UPPER_IK_LAUNCH)
@@ -117,10 +118,10 @@ def test_top_level_files_pass_sim_and_use_estop(launch_file, sim, use_estop, mon
 
 
 def test_lmg_real_refuses_to_start_before_any_node():
-    """lmg_real refuses first: lmg_deploy reads /livox/imu as upright, the H1-2's is not."""
+    """lmg_real refuses first: lmg_deploy's raw /livox/imu handling is checked in the sim only."""
     description = _load('lmg_real.launch.py').generate_launch_description()
     assert isinstance(description.entities[0], OpaqueFunction)
-    with pytest.raises(RuntimeError, match='^lmg_real: not starting: lmg_deploy reads /livox/imu'):
+    with pytest.raises(RuntimeError, match='^lmg_real: not starting: lmg_deploy'):
         description.entities[0].execute(LaunchContext())
 
 
@@ -129,6 +130,40 @@ def test_lmg_sim_is_not_guarded(monkeypatch):
     monkeypatch.setenv('ROS_DOMAIN_ID', '193')
     description = _load('lmg_sim.launch.py').generate_launch_description()
     assert not any(isinstance(entity, OpaqueFunction) for entity in description.entities)
+
+
+def test_the_game_runs_the_h12_policy():
+    """marl_deploy_node runs lmg_deploy's one H1-2 policy, policies/h12/h12.yaml (no policy:=)."""
+    config = os.path.join(get_package_share_directory('lmg_deploy'), 'policies', 'h12', 'h12.yaml')
+    assert os.path.isfile(config)
+    node = _walk('h12_locomanipulationgame.launch.py', urdf_path='/robot.urdf',
+                 start_position_verified='true')['marl_deploy_node']
+    assert node.parameters['config'] == config
+    for launch_file in ('lmg_sim.launch.py', 'lmg_real.launch.py',
+                        'h12_locomanipulationgame.launch.py'):
+        assert 'policy' not in _declared_names(launch_file), launch_file
+
+
+def _declared_names(launch_file):
+    """Return the names of the launch arguments launch_file declares."""
+    return {entity.name for entity in _load(launch_file).generate_launch_description().entities
+            if isinstance(entity, DeclareLaunchArgument)}
+
+
+def test_lmg_sim_starts_golem_skills_with_the_h12_footprint(monkeypatch):
+    """With use_skills, lmg_sim starts golem_skills, no service waits, H1-2 footprint."""
+    monkeypatch.setenv('ROS_DOMAIN_ID', '193')
+    assert 'skills' not in _walk('lmg_sim.launch.py')
+    skills = _walk('lmg_sim.launch.py', use_skills='true')['skills']
+    assert skills.package == 'golem_skills'
+    assert skills.parameters['wait_for_services'] is False
+    assert skills.parameters['use_sim_time'] is True
+    nav2 = os.path.join(get_package_share_directory('golem_slam'), 'config', 'h12', 'nav2.yaml')
+    with open(nav2) as f:
+        config = yaml.safe_load(f)
+    for costmap in ('global_costmap', 'local_costmap'):
+        assert skills.parameters['footprint'] == \
+            config[costmap][costmap]['ros__parameters']['footprint']
 
 
 def test_control_checks_the_pair_before_any_node():

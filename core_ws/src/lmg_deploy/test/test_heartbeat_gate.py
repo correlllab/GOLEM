@@ -2,7 +2,7 @@
 
     ROS_DOMAIN_ID=<not 0> python -m pytest test/test_heartbeat_gate.py
 
-A real node runs with the shipped mid360v2 policy and the H1-2 URDF beside a test node that
+A real node runs with the shipped H1-2 policy (policies/h12/) and the H1-2 URDF beside a test node that
 plays /lowstate and the heartbeat and records what reaches the safety layer's inputs.
 The test publishes on the DDS domain, so it is skipped on domain 0 (the real robots' bus).
 """
@@ -20,7 +20,7 @@ from unitree_hg.msg import LowCmd, LowState
 from lmg_deploy.marl_deploy_node import MarlDeployNode
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-POLICY = os.path.join(HERE, "..", "policies", "mid360v2", "mid360v2.yaml")
+POLICY = os.path.join(HERE, "..", "policies", "h12", "h12.yaml")
 URDF = os.environ.get(
     "H12_URDF", os.path.join(HERE, "..", "..", "..", "..", "CL_Assets", "ros_assets", "h1_2_magpie.urdf"))
 H12_MODE_MACHINE = 6

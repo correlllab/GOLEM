@@ -1,6 +1,6 @@
 """Drive marl_deploy_node through a scripted run in the RoboCasa sim, measured on FAST-LIO's /Odometry.
 
-Run in the ROS container with lmg_sim.launch.py policy:=<name> up (any non-zero ROS_DOMAIN_ID):
+Run in the ROS container with lmg_sim.launch.py up (any non-zero ROS_DOMAIN_ID):
     python3 sim_drive.py [--out /tmp/sim_drive.json] [--engage_timeout 300]
 
 It confirms the engage, then stands, walks backward and forward, turns, side-steps, reaches a world-fixed arm

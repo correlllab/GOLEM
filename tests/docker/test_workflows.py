@@ -762,8 +762,8 @@ if 'config' in sys.argv:
 
     def test_closed_loop_tests_forward_the_sim_rate_from_the_shell(self):
         """Every closed-loop test script hands GOLEM_SIM_RATE to sim_test_shell_knobs (the shell's value, never docker/.env's)."""
-        for script in ('tests/sim/test_sim_stack.sh', 'tests/g1/test_sim_bringup.sh', 'tests/g1/test_sim_nav.sh',
-                       'tests/g1/test_sim_explore.sh'):
+        for script in ('tests/sim/test_sim_stack.sh', 'tests/sim/test_lmg_explore.sh', 'tests/g1/test_sim_bringup.sh',
+                       'tests/g1/test_sim_nav.sh', 'tests/g1/test_sim_explore.sh'):
             with self.subTest(script=script):
                 text = (REPO / script).read_text()
                 calls = re.findall(r'^\s*sim_test_shell_knobs ((?:[^\n]*\\\n)*[^\n]*)', text, re.M)

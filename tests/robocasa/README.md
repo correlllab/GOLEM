@@ -34,6 +34,11 @@ on a small MuJoCo scene by `test_robosuite_common.py` and `test_h12_spawn_collis
 (`spawn_scene.py` holds the scene and a stand-in env); the G1's search is
 `g1/test_g1_spawn_collision.py`'s.
 
+The experiment surface `GOLEM_SIM_EXPERIMENT=1` serves (`/sim/ground_truth`,
+`/sim/reset_objects`; `measurement_bridge.py`), for grasp-experiment harnesses only,
+is checked by `test_measurement_experiment.py`: off by default, and on a small scene
+the ground truth it publishes and the object reset.
+
 Pure pacing/timing tests also run without ROS or MuJoCo:
 
 ```bash

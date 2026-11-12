@@ -556,9 +556,11 @@ def test_unknown_frame_is_refused_and_the_poses_keep_going(ros, models, capfd):
     assert not sent.result().accepted
     line = log.lines('no_such_frame')
     assert line and 'Refusing' in line[0], line
-    # the poses keep going out, the refused goal's frames never among them
+    # the poses keep going out (half a second's worth within two), the refused goal's frames
+    # never among them
+    from golem_upper_ik.ros2.frame_task_server import PUBLISH_HZ
     count = len(left.poses)
-    assert wait_for(lambda: len(left.poses) > count + 50, 2.0)
+    assert wait_for(lambda: len(left.poses) > count + PUBLISH_HZ / 2, 2.0)
     assert all(len(msg.poses) == 0 for msg in poses.poses)
 
 
@@ -977,7 +979,7 @@ def test_frame_task_server_rate():
     """The H1-2's commands reach another process at 500 Hz through its start-up and goals.
 
     At most 3 gaps over 20 ms and none over 50 ms. The 99th percentile of the period is
-    printed, not bounded: the IK, rclpy's handling of /lowstate at 500 Hz and the 100 Hz pose
+    printed, not bounded: the IK, rclpy's handling of /lowstate at 500 Hz and the 25 Hz pose
     topics share the GIL with the publisher thread. BLAS runs one thread. The bounds are wall
     time on the steady clock, which a loaded host can miss once, so a second run may pass in
     the first's place (RATE_ATTEMPTS); the exit checks hold on every run.

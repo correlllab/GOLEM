@@ -56,14 +56,16 @@ class FakeController:
         named configuration's joint error.
     plan_error, execute_error: raised by the plan or by execute_path.
     stale_at: the IK or hold step (1-based, both counted) that raises StaleStateError.
+    work: s of robot time each IK or hold step takes.
     """
 
     def __init__(self, trace, *, ik=(FAR,), hold=(False,), limited=((),), errors=(FAR,),
-                 plan_error=None, execute_error=None, stale_at=None):
+                 plan_error=None, execute_error=None, stale_at=None, work=WORK):
         """Keep the scripts; every count starts at 0."""
         self.trace = trace
         self.clock = FakeClock(trace)
         self.dt = DT
+        self._work_seconds = work
         self._ik, self._hold, self._limited, self._errors = ik, hold, limited, errors
         self._plan_error, self._execute_error, self._stale_at = (
             plan_error, execute_error, stale_at)
@@ -83,9 +85,9 @@ class FakeController:
         self._speed_scale = value
 
     def _work(self, name):
-        """Record a step, spend WORK of robot time on it, and raise at stale_at."""
+        """Record a step, spend its work of robot time on it, and raise at stale_at."""
         self.trace.append((name, self.ik_steps + self.hold_steps))
-        self.clock.t += WORK
+        self.clock.t += self._work_seconds
         if self._stale_at is not None and self.ik_steps + self.hold_steps >= self._stale_at:
             from golem_upper_ik.core.ros_io import StaleStateError
             raise StaleStateError('/lowstate is 80 ms stale (> 50 ms); holding the last command')
@@ -315,6 +317,18 @@ def steps(trace):
             if entry[0] in ('ik_step', 'hold_step') or entry[0].startswith('goto ')]
 
 
+def ik_steps_per_iteration(trace):
+    """Return how many IK steps each loop iteration ran, an iteration ending at its sleep."""
+    counts, count = [], 0
+    for entry in trace:
+        if entry[0] == 'ik_step' or entry[0].startswith('goto '):
+            count += 1
+        elif entry[0] == 'sleep':
+            counts.append(count)
+            count = 0
+    return counts
+
+
 def messages(trace, level):
     """Return the log messages of a level."""
     return [entry[1] for entry in trace if entry[0] == level]
@@ -345,6 +359,33 @@ def test_direct_goal_steps_the_ik_then_holds_until_reached(action):
     assert messages(trace, 'info')[2:] == [
         'IK converged; entering steady-state hold', *reached, 'Goal reached']
     assert messages(trace, 'warn') == []
+
+
+@pytest.mark.parametrize('action', ACTIONS)
+def test_direct_goal_catches_up_on_the_periods_an_iteration_took(action):
+    """An iteration longer than the control period owes the IK one step per period it took.
+
+    Each IK step takes two periods here: the first iteration runs one step, the next the two
+    it owes, and every later one CATCH_UP_STEPS, however many periods it took.
+    """
+    from golem_upper_ik.ros2.frame_task_server import CATCH_UP_STEPS
+    assert CATCH_UP_STEPS == 3
+    trace, handle, result, _ = run_goal(action, work=2 * DT)
+    assert ik_steps_per_iteration(trace) == [1, 2, 3]
+    # an iteration that overran its period sleeps none of it
+    assert entries(trace, 'sleep') == [('sleep', 0.0)] * 3
+    assert handle.status == 'succeeded' and not result.success
+    assert messages(trace, 'warn') == ['Timed out before IK convergence']
+
+
+@pytest.mark.parametrize('action', ACTIONS)
+def test_catch_up_ends_at_the_step_that_converges(action):
+    """The IK steps an iteration owes stop at the one under threshold_ik; the hold follows."""
+    trace, handle, result, _ = run_goal(action, work=2 * DT, ik=(FAR, NEAR),
+                                        errors=(FAR, FAR, NEAR))
+    assert steps(trace) == [IK_STEP[action]] * 2 + ['hold_step']
+    assert ik_steps_per_iteration(trace)[:2] == [1, 1]
+    assert handle.status == 'succeeded' and result.success
 
 
 @pytest.mark.parametrize('action', ACTIONS)

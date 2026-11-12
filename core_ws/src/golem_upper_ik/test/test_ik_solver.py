@@ -105,6 +105,13 @@ def test_collision_barrier_on_the_reduced_model(solver):
     assert solver.configuration_reduced.collision_model is model.collision_model_body_reduced
 
 
+def test_barrier_takes_the_closest_pairs(solver):
+    """The barrier constrains the BARRIER_PAIRS closest sphere pairs of each step, or all."""
+    from golem_upper_ik.core.ik_solver import BARRIER_PAIRS
+    pairs = len(solver.robot_model.collision_model_body_reduced.collisionPairs)
+    assert solver.collision_barrier_reduced.dim == min(BARRIER_PAIRS, pairs)
+
+
 def test_solves_a_reachable_target(solver):
     """Both arms reach a named posture's end-effector poses from home, moving only IK joints."""
     model = solver.robot_model

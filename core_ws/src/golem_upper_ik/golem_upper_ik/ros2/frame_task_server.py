@@ -10,7 +10,7 @@ Once its start-up is done (UpperController), the node serves:
   pelvis frame, directly through the IK or along an OMPL plan, then hold them;
 - /named_config (custom_ros_messages/NamedConfig): move the IK joints to a named
   configuration, the same two ways;
-and publishes at 100 Hz frame_names, frame_targets and frame_poses (the current goal's
+and publishes at 25 Hz frame_names, frame_targets and frame_poses (the current goal's
 frames, their targets and their measured poses), {left,right}_ee_pose (the end effectors'
 measured poses, which tell the robot's other nodes the controller is up) and
 {left,right}_ee_target (the current goal's targets for the end-effector frames). Every pose
@@ -42,13 +42,21 @@ from golem_upper_ik.ros2.utility import (  # noqa: E402
     matrix_to_pose, pose_to_matrix, robot_parameter, run,
 )
 
-__all__ = ['FrameTaskServer', 'SLOW_MODE_SCALE', 'main']
+__all__ = ['CATCH_UP_STEPS', 'FrameTaskServer', 'SLOW_MODE_SCALE', 'main']
 
 # Speed multiplier for a goal that asks for slow_mode. A direct move scales its joint
 # velocity by it; a planned move is planned at a proportionally lower planner-frame speed
 # (more waypoints, same control period), so the arm stays smooth instead of stepping.
 SLOW_MODE_SCALE = 0.25
-PUBLISH_HZ = 100.0  # the pose topics
+# The most IK steps one iteration of a direct goal runs. An iteration that outlasts the
+# control period (a loaded host, the executor's callbacks holding the GIL) owes the IK one
+# step per period it took, so the arm keeps its configured speed in robot time. SAFETY: each
+# step is solved and integrated over one period, inside its own joint limits and
+# self-collision barrier; this bounds the displacement one command carries to that many
+# steps', and a longer stall slows the move instead of jumping it.
+CATCH_UP_STEPS = 3
+# the pose topics; their forward kinematics share the GIL with the IK loop
+PUBLISH_HZ = 25.0
 # the frame every published pose is in
 POSE_FRAME = 'pelvis'
 # s between log lines while publishing the poses keeps failing
@@ -331,7 +339,9 @@ class FrameTaskServer(Node):
 
         ik_step: a direct goal's IK step, returning the body joint velocity (rad/s); the hold
             starts once its largest |velocity| is under threshold_ik. None for a planned goal,
-            whose hold starts at once.
+            whose hold starts at once. An iteration that took longer than the control period
+            runs the next iteration's IK steps it owes, one per period, at most CATCH_UP_STEPS
+            (stopping at the step under threshold_ik).
         A direct goal checks for a cancel after each step, a planned one before. The hold is
         reached when kind.reached(error) holds, or when the hold step itself converges (a
         planned goal: only with kind.planned_step_converges). Unless canceled the goal
@@ -345,12 +355,16 @@ class FrameTaskServer(Node):
         ik_converged = planned
         steady_state_converged = False
         blocked = None
+        steps_owed = 1
         while clock.now() - start_time < timeout:
             step_start = clock.now()
             if planned and goal_handle.is_cancel_requested:
                 return self._canceled(goal_handle, kind.result())
             if not ik_converged:
-                vel_error = np.max(np.abs(ik_step()))
+                for _ in range(steps_owed):
+                    vel_error = np.max(np.abs(ik_step()))
+                    if vel_error < self.threshold_ik:
+                        break
             else:
                 held = self.controller.steady_state_step()
                 steady_state_converged = step_converges and held
@@ -375,7 +389,9 @@ class FrameTaskServer(Node):
                         self.get_logger().info(kind.direct_reached_message)
                     break
 
-            clock.sleep(max(0.0, self.controller.dt - (clock.now() - step_start)))
+            dt = self.controller.dt
+            clock.sleep(max(0.0, dt - (clock.now() - step_start)))
+            steps_owed = min(CATCH_UP_STEPS, max(1, round((clock.now() - step_start) / dt)))
 
         if not ik_converged:
             self.get_logger().warn('Timed out before IK convergence')

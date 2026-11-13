@@ -17,35 +17,78 @@ from geometry_msgs.msg import Pose, Vector3Stamped
 from rclpy.duration import Duration as RclpyDuration
 from sensor_msgs.msg import Image
 
-from ..base import FRAME_TASK_STABLE_STOP_MSGS, GRASP_FRAMES
-from ..perception_utils import gemini_boxes
+from ..base import DEPTH_MAX_M, FRAME_TASK_STABLE_STOP_MSGS, GRASP_FRAMES
+from ..perception_utils import deproject_mask, gemini_boxes
 from .grasp_detection import box_detection
 from .grasp_markers import approach_target_tf
 
 
 # The hand camera looks straight down the approach axis, 4.4 cm ahead of the
 # gripper base, so "centered at depth D" means "on the approach ray, D ahead of
-# the camera"; the finger contact point is 0.0706 m ahead of the camera.
+# the camera". The jaws close along the optical Y axis. The Magpie fingers are
+# a linkage: the pads' far edges are 126 mm ahead of the camera fully open and
+# reach up to 150 mm as they close (FINGERTIP_REACH_M), well past the 70.6 mm
+# grasp contact point that grasp_synthesis plans with.
 #
-# m, camera -> object depth driven to; default of the node's `servo_depth`
-# parameter. A real target near where the fingers sit: at 100 mm the object
-# ends ~29 mm beyond the fingertips. The servo drives depth TO this value, so
-# it is not a band centre: a one-sided band such as (0, 105) would centre the
-# setpoint at 52.5 mm and make the servo plunge into the part whenever it
-# starts beyond 105 mm. VISUAL_SERVO_RANGE_TOL_M makes the band (99, 101) mm.
+# m, the deepest camera -> object depth driven to; default of the node's
+# `servo_depth` parameter. At 100 mm the open fingertips end 26 mm beyond the
+# object's near face, which suits a part standing taller than the fingers'
+# sweep. For a shorter part, servo_depth_floor raises the setpoint so the
+# closing fingertips stop VISUAL_SERVO_SURFACE_CLEARANCE_M above the surface
+# the part stands on. The servo drives depth TO the setpoint, so it is not a
+# band centre: a one-sided band such as (0, 105) would centre the setpoint at
+# 52.5 mm and make the servo plunge into the part whenever it starts beyond
+# 105 mm.
 VISUAL_SERVO_DEPTH_M = 0.10
-# Per-axis convergence tolerances [m], the values real screw-picking runs
-# converge with. The arm binds: frame_task settles to ~1.2 mm residual, so a
-# correction under ~2 mm does not execute and < 4 mm lateral is unreachable.
-#   X (across the jaws), what the grasp depends on: below the arm's ~1.2 mm
-#     resolution, so the loop converges when it happens to land in the band.
-#   Y (along the jaw span): the jaws open to 106 mm, so 5 mm still holds the
-#     part near the middle of the grip.
-#   range: decides whether the jaws close around the part or above it.
+# Per-axis convergence tolerances [m]. Each sits above what one measurement
+# resolves: a Gemini box segmented by SAM moves the object's X by about
+# +/-3 mm between frames of a still hand, and frame_task settles to ~1.2 mm,
+# so a tighter band is met only by chance.
+#   X (across the jaws), what the grasp depends on: the pads are 16 mm wide,
+#     so 3 mm keeps the part on them.
+#   Y (along the jaw span): the jaws open to 108 mm and centre the part as
+#     they close, so 5 mm still holds it near the middle of the grip.
+#   range: decides how far the pads overlap the part, and the surface
+#     clearance is VISUAL_SERVO_SURFACE_CLEARANCE_M, so it stays below that.
 # Keep X <= Y: the reverse is backwards for a parallel gripper.
-VISUAL_SERVO_X_TOL_M = 0.00025
+VISUAL_SERVO_X_TOL_M = 0.003
 VISUAL_SERVO_Y_TOL_M = 0.005
-VISUAL_SERVO_RANGE_TOL_M = 0.001
+VISUAL_SERVO_RANGE_TOL_M = 0.002
+# (pad gap [m], depth [m] of the pads' far edges ahead of the hand camera) of
+# the Magpie gripper, fully open to closed: the sim MJCF's crank swept to rest
+# at each angle. Unmeasured on the real H1-2.
+FINGERTIP_REACH_M = ((0.000, 0.148), (0.009, 0.149), (0.018, 0.150),
+                     (0.027, 0.150), (0.036, 0.150), (0.045, 0.150),
+                     (0.054, 0.148), (0.062, 0.147), (0.071, 0.145),
+                     (0.078, 0.143), (0.086, 0.140), (0.092, 0.137),
+                     (0.098, 0.134), (0.104, 0.130), (0.108, 0.126))
+# m: the pads' far edges in the optical frame, X across them (the same for
+# both pads) and Y their inner faces fully open, from the same sim sweep.
+# Unmeasured on the real H1-2.
+PAD_X_SPAN_M = (-0.004, 0.012)
+PAD_OPEN_Y_M = 0.054
+# m: how far above the surface the part stands on the pads' far edges stop
+# once closed on the part
+VISUAL_SERVO_SURFACE_CLEARANCE_M = 0.005
+# m: the support surface is read in a band this wide beyond the part's edge
+# along the jaw span, where the pads end their close, and this far beyond
+# the pads' X span: the deepest the fingertips reach in a close
+SURFACE_BAND_M = 0.02
+SURFACE_X_MARGIN_M = 0.005
+# fewest depth pixels in that band for a surface reading
+SURFACE_MIN_POINTS = 30
+# percentile of the band's depths taken as the surface: low, so the nearest
+# surface counts, but not the minimum, which one stray pixel would set
+SURFACE_PERCENTILE = 10
+# Approach blocked: an inward range step of at least BLOCKED_MIN_STEP_M that
+# the next measurement shows covered by less than BLOCKED_FRACTION of it, on
+# BLOCKED_STRIKES iterations in a row, means the fingers are against
+# something. The setpoint then becomes the depth where the hand stopped plus
+# BLOCKED_BACKOFF_M, so the loop stops pushing (a pushed arm leans the robot).
+BLOCKED_MIN_STEP_M = 0.003
+BLOCKED_FRACTION = 0.5
+BLOCKED_STRIKES = 2
+BLOCKED_BACKOFF_M = 0.005
 # s of robot time for the whole loop; the goal's own timeout still wins
 VISUAL_SERVO_TIMEOUT_SEC = 90.0
 # s per hand-camera Gemini query. A query takes seconds to minutes, far longer
@@ -57,9 +100,8 @@ VISUAL_SERVO_DETECT_WAIT_SEC = 1.5 * SERVO_GEMINI_TIMEOUT_SEC
 # inside the hand camera's minimum range), so the hand backs straight up
 # (pelvis +Z) by this much and keeps servoing
 VISUAL_SERVO_LOST_RETRACT_M = 0.05
-# m: depth at or below which the object is too close to steer by. Keep clearly
-# below 0.0706 m, where the fingers themselves are: a higher threshold reads the
-# fingers as "too close" and backing off can never clear it.
+# m: depth at or below which the object is too close to steer by: it would sit
+# between the finger links, short of the pads
 VISUAL_SERVO_MIN_RANGE_M = 0.055
 # consecutive too-close readings before backing off, so one frame never
 # commands a 5 cm retreat
@@ -115,8 +157,11 @@ class GraspServo:
         Align the gripper on `obj` with the hand camera at the pre-grasp.
 
         Drives GRASP_FRAMES[arm] in PURE TRANSLATION until `obj` sits at
-        (VISUAL_SERVO_TARGET_XY_M, `servo_depth`) in the hand camera's optical
-        frame; the orientation stays the planned grasp's.
+        (VISUAL_SERVO_TARGET_XY_M, depth setpoint) in the hand camera's
+        optical frame; the orientation stays the planned grasp's. The depth
+        setpoint is `servo_depth`, raised to the median servo_depth_floor of
+        the measurements so far (the closing pads stay off the surface under
+        the part) and, once the approach is blocked, to where it stopped.
 
         One iteration takes a hand-camera measurement newer than the last
         frame used (reusing a frame would apply its correction twice), and
@@ -132,9 +177,13 @@ class GraspServo:
         """
         frame = GRASP_FRAMES[arm]
         planned_q = targets.grasps_p[idx].orientation
+        servo_depth = float(self.get_parameter('servo_depth').value)
         target = np.array([VISUAL_SERVO_TARGET_XY_M[0],
-                           VISUAL_SERVO_TARGET_XY_M[1],
-                           float(self.get_parameter('servo_depth').value)])
+                           VISUAL_SERVO_TARGET_XY_M[1], servo_depth])
+        # servo_depth_floor of each measurement that read the surface [m],
+        # and the depth setpoint a blocked approach set [m]
+        floors, blocked_depth = [], None
+        blocked_hits = 0
         deadline = self.robot_now() + VISUAL_SERVO_TIMEOUT_SEC
         last_seen = self.robot_now()
         retracts = 0
@@ -163,7 +212,8 @@ class GraspServo:
                     f'{VISUAL_SERVO_TIMEOUT_SEC:.0f}s ({it} iteration(s), tol '
                     f'{VISUAL_SERVO_X_TOL_M * 1000:.2f}/'
                     f'{VISUAL_SERVO_Y_TOL_M * 1000:.0f}mm X/Y)')
-            p_cam, cam_frame, stamp, bundle = self._servo_measure(arm, obj, after, gh)
+            p_cam, cam_frame, stamp, bundle, floor = self._servo_measure(
+                arm, obj, after, gh)
             # A depth outside the band around the last and the predicted depth
             # is not this object (finger, shadow, background): drop the frame.
             # Persistent implausibility ends in the lost-sight back-off.
@@ -232,6 +282,42 @@ class GraspServo:
                 self.get_clock().sleep_for(RclpyDuration(seconds=0.1))
                 continue
             last_seen = self.robot_now()
+            if floor is not None:
+                floors.append(floor[0])
+            # last_z is None after a back-off, which moved the hand outward
+            if last_z is not None:
+                covered = last_z - float(p_cam[2])
+                if approach_blocked(last_z - pred_z, covered):
+                    blocked_hits += 1
+                else:
+                    blocked_hits = 0
+                if blocked_hits >= BLOCKED_STRIKES:
+                    blocked_hits = 0
+                    blocked_depth = max(blocked_depth or 0.0,
+                                        float(p_cam[2]) + BLOCKED_BACKOFF_M)
+                    self.get_logger().warn(
+                        f'grasp: visual servo approach blocked at '
+                        f'{p_cam[2] * 1000:.0f}mm (covered {covered * 1000:.1f} of '
+                        f'{(last_z - pred_z) * 1000:.1f}mm inward) — the fingers '
+                        f'are against something; depth setpoint no deeper than '
+                        f'{blocked_depth * 1000:.0f}mm')
+            depth_sp = max([servo_depth]
+                           + ([float(np.median(floors))] if floors else [])
+                           + ([blocked_depth] if blocked_depth is not None else []))
+            if abs(depth_sp - target[2]) > VISUAL_SERVO_STALL_EPS_M:
+                if blocked_depth is not None and depth_sp == blocked_depth:
+                    why = 'blocked approach'
+                elif floor is not None and depth_sp > servo_depth:
+                    why = (f'part {floor[1] * 1000:.0f}mm above its surface, '
+                           f'{floor[2] * 1000:.0f}mm across the jaws')
+                else:
+                    why = 'surface readings'
+                self.get_logger().info(
+                    f'grasp: visual servo depth setpoint {depth_sp * 1000:.0f}mm '
+                    f'({why}; servo_depth {servo_depth * 1000:.0f}mm)')
+                # the error is measured against a new setpoint
+                best_err, stalled = None, 0
+            target[2] = depth_sp
             err = p_cam - target
             ex, ey = float(abs(err[0])), float(abs(err[1]))
             rng = float(abs(err[2]))
@@ -280,8 +366,7 @@ class GraspServo:
                     return None, (
                         f'visual servo stalled on {obj!r}: no improvement over '
                         f'{stalled} iterations, still out of tolerance on {out} — '
-                        'the tolerance is below what this arm can resolve, or the '
-                        'setpoint is off')
+                        'the arm does not reach the setpoint, or the setpoint is off')
             delta = self._rotate_into_pelvis(step, cam_frame)
             cur = self._frame_pose_in_pelvis(frame)
             if delta is None or cur is None:
@@ -311,28 +396,30 @@ class GraspServo:
 
     def _servo_measure(self, arm, obj, after, gh):
         """
-        Measure `obj` in `arm`'s hand camera: (optical-frame point, frame_id, stamp, bundle).
+        Measure `obj` in `arm`'s hand camera: (optical point, frame_id, stamp, bundle, floor).
 
         Gemini boxes the latest bundle's rgb frame, SAM segments the box and
         bundle_mask_point lifts the mask to an on-object point with the
         bundle's aligned depth; when SAM gives no point, the box's central
-        quarter is used (bundle_detection_point). A tuple of Nones when
+        quarter is used (bundle_detection_point). `floor` is _servo_floor's
+        reading of the SAM mask, None without one. A tuple of Nones when
         nothing is usable. Only a bundle stamped strictly after `after` counts:
         `after` is the stamp of the frame last USED, so a frame's correction
         is never applied twice.
         """
         bundle = self.latest_arm_detections(arm)
         if bundle is None or not bundle.rgb_image.data:
-            return None, None, None, None
+            return None, None, None, None, None
         stamp = _stamp_tuple(bundle.rgb_image.header.stamp)
         if stamp <= after:
-            return None, None, None, None
+            return None, None, None, None, None
         box = self._gemini_box_on_image(obj, bundle.rgb_image, bundle.camera_info, gh)
         if box is None:
-            return None, None, None, None
+            return None, None, None, None, None
         mask = self.segment(text=obj, positive_boxes=box,
                             image=bundle.rgb_image, outer_gh=gh)
         p = self.bundle_mask_point(bundle, mask, min_depth=VISUAL_SERVO_MIN_DEPTH_M)
+        floor = None if p is None else self._servo_floor(bundle, mask, p)
         if p is None:
             self.get_logger().warn(
                 f'grasp: visual servo SAM mask for {obj!r} gave no point; '
@@ -340,8 +427,38 @@ class GraspServo:
             p = self.bundle_detection_point(bundle, box_detection(obj, box),
                                             min_depth=VISUAL_SERVO_MIN_DEPTH_M)
         if p is None:
-            return None, None, None, None
-        return p, self.bundle_camera_frame(bundle), stamp, bundle
+            return None, None, None, None, None
+        return p, self.bundle_camera_frame(bundle), stamp, bundle, floor
+
+    def _servo_floor(self, bundle, mask_msg, p_obj):
+        """
+        Read the depth floor from one hand-camera frame: (floor, height, width) [m], or None.
+
+        The part's width across the jaws comes from the SAM mask's points,
+        its height above the surface from the frame's other pixels
+        (surface_height), and the floor from both (servo_depth_floor). None
+        when the frame has no depth or the surface band has too few pixels.
+        """
+        depth, info = self._bundle_depth(bundle, 'visual servo floor')
+        if depth is None:
+            return None
+        mask = (np.frombuffer(bytes(mask_msg.data), dtype=np.uint8)
+                .reshape(mask_msg.height, mask_msg.width) > 127)
+        if mask.shape != depth.shape:
+            return None
+        fx, fy, cx, cy = info.k[0], info.k[4], info.k[2], info.k[5]
+        obj_pts = deproject_mask(mask, depth, fx, fy, cx, cy,
+                                 VISUAL_SERVO_MIN_DEPTH_M, DEPTH_MAX_M)
+        if len(obj_pts) == 0:
+            return None
+        width = part_width(obj_pts)
+        height = surface_height(
+            deproject_mask(~mask, depth, fx, fy, cx, cy,
+                           VISUAL_SERVO_MIN_DEPTH_M, DEPTH_MAX_M),
+            p_obj, width, VISUAL_SERVO_TARGET_XY_M)
+        if height is None:
+            return None
+        return servo_depth_floor(height, width), height, width
 
     def _gemini_box_on_image(self, obj, image, info, gh):
         """
@@ -472,6 +589,72 @@ class GraspServo:
         except Exception as e:                       # noqa: BLE001 - viz only
             self.get_logger().warn(f'servo image publish failed: {e}',
                                    throttle_duration_sec=5.0)
+
+
+def close_reach(width_m):
+    """
+    Return how deep [m] past the hand camera the pads reach closing onto a part `width_m` wide.
+
+    The deepest point of the whole close (FINGERTIP_REACH_M), not only of its
+    end: the linkage swings the pads deepest near a 30 mm gap, and a close
+    onto a narrower part passes through it.
+    """
+    gaps = [g for g, _ in FINGERTIP_REACH_M]
+    reach = [r for _, r in FINGERTIP_REACH_M]
+    w = float(np.clip(width_m, gaps[0], gaps[-1]))
+    return max([float(np.interp(w, gaps, reach))]
+               + [r for g, r in FINGERTIP_REACH_M if g >= w])
+
+
+def part_width(obj_pts):
+    """Return the part's extent [m] across the jaws (optical Y) from its (N, 3) optical points."""
+    lo, hi = np.percentile(np.asarray(obj_pts)[:, 1], (5, 95))
+    return float(hi - lo)
+
+
+def surface_height(scene_pts, p_obj, width_m, target_xy):
+    """
+    Return how far [m] beyond the part's point `p_obj` the surface under the pads lies, or None.
+
+    `scene_pts` is the hand camera's (N, 3) optical-frame cloud without the
+    part and `p_obj` the part's point in the same frame. The band read is
+    where the pads end their close once the servo puts the part at
+    `target_xy`: across the pads' X span (SURFACE_X_MARGIN_M wider each
+    side), and along Y from the part's edge, half `width_m` from it,
+    SURFACE_BAND_M outward on both sides, no further than the open pads. The
+    surface is the band's SURFACE_PERCENTILE depth; None with fewer than
+    SURFACE_MIN_POINTS pixels in the band.
+    """
+    pts = np.asarray(scene_pts, dtype=float).reshape(-1, 3)
+    # where each pixel ends up once the part sits at target_xy
+    x = pts[:, 0] - float(p_obj[0]) + target_xy[0]
+    y = np.abs(pts[:, 1] - float(p_obj[1]) + target_xy[1])
+    y_in = width_m / 2.0
+    y_out = min(y_in + SURFACE_BAND_M, PAD_OPEN_Y_M)
+    band = ((x >= PAD_X_SPAN_M[0] - SURFACE_X_MARGIN_M)
+            & (x <= PAD_X_SPAN_M[1] + SURFACE_X_MARGIN_M)
+            & (y >= y_in) & (y <= y_out))
+    if np.count_nonzero(band) < SURFACE_MIN_POINTS:
+        return None
+    return float(np.percentile(pts[band, 2], SURFACE_PERCENTILE)) - float(p_obj[2])
+
+
+def servo_depth_floor(height_m, width_m):
+    """
+    Return the nearest part depth [m] at which the pads close on it short of its surface.
+
+    For a part `width_m` wide across the jaws whose near face stands
+    `height_m` above its surface: the pads' deepest reach in the close
+    (close_reach) stays VISUAL_SERVO_SURFACE_CLEARANCE_M short of the
+    surface, so they overlap the part by `height_m` minus the clearance.
+    """
+    return close_reach(width_m) + VISUAL_SERVO_SURFACE_CLEARANCE_M - height_m
+
+
+def approach_blocked(commanded_m, covered_m):
+    """Return whether an inward range step `commanded_m` covering `covered_m` [m] hit something."""
+    return (commanded_m >= BLOCKED_MIN_STEP_M
+            and covered_m < BLOCKED_FRACTION * commanded_m)
 
 
 def _stamp_tuple(stamp):

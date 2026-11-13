@@ -491,8 +491,9 @@ class SkillsBase(Node):
             description=('metres the open-loop contact move stops short of the '
                          'grasp pose along its approach axis (0 = full pose)')))
         self.declare_parameter('servo_depth', VISUAL_SERVO_DEPTH_M, ParameterDescriptor(
-            description=('visual-servo target camera->object depth [m]; the finger '
-                         'contact point is 0.0706 m ahead of the hand camera')))
+            description=('deepest visual-servo camera->object depth [m]; the servo '
+                         'stops shallower when the closing fingertips would reach '
+                         'the surface under the part (grasp_servo.servo_depth_floor)')))
 
     def _on_color_image(self, msg: CompressedImage):
         """Cache the latest head-camera color frame."""

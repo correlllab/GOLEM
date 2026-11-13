@@ -231,17 +231,19 @@ The method names and what each does are in
 `visual_servo` composes with any of them.
 
 Every target goes through Gemini + SAM, on the head camera and in the visual
-servo — the pipeline the sim grasp tables measure. A battery-workcell YOLO class
-label as `target_object` (e.g. `OrageCover`) is sent to Gemini as a readable
-phrase (`GEMINI_NAMES` in `skills/grasp.py`); a descriptive name such as
-`'orange cover with a pink dot'` is used as given. `BATTERY_USE_GEMINI = False`
-in `skills/grasp.py` routes those labels to the head/hand YOLO detectors and the
-raw bounding-box cloud instead. The hand YOLO stream (`use_yolo:=true`) is still
-needed for the servo's aligned depth and intrinsics.
+servo, in the sim and on the robot alike: the pipeline the sim grasp tables
+measure. A battery-workcell YOLO class label as `target_object` (e.g.
+`OrageCover`) is sent to Gemini as a readable phrase (`GEMINI_NAMES` in
+`skills/grasp_detection.py`); a descriptive name such as
+`'orange cover with a pink dot'` is used as given. The hand YOLO stream
+(`use_yolo:=true`) is still needed for the servo's aligned depth and intrinsics.
 
 The full sequence runs: pre-grasp standoff → contact move (`APPROACH_DIST −` the
 `contact_offset` parameter, default 2.5 cm, = 7.5 cm along the approach) → force close at
-`base.GRIP_FORCE_N`. It does **not** lift afterwards.
+`base.GRIP_FORCE_N` → grip check. A contact move that stops before covering a
+quarter of its path drops that candidate and tries the next, and a close that
+leaves the pads together (`EMPTY_GRIP_MAX_MM`, `skills/grasp.py`) fails the
+goal. It does **not** lift afterwards.
 
 ---
 

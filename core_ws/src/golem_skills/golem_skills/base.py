@@ -8,8 +8,9 @@ inherits from it and from every mixin under skills/). It owns:
   * the clients: /frame_task and /named_config (arm IK), the per-arm gripper
     services, gemini_query, sam_segment and graspgen, and the node's own
     /skill/grasp (for pick_place);
-  * the head- and hand-camera caches (color, aligned depth, intrinsics, YOLO
-    bundles) and TF;
+  * the head-camera caches (color, aligned depth, intrinsics), the hand
+    cameras' yolo_server bundles (each frame with its aligned depth and
+    intrinsics) and TF;
   * the executor-safe call plumbing (_wait_future, _call_service,
     _send_action) and the per-goal context _Run;
   * the perception pipeline (query_gemini, segment, detect_object_cloud,
@@ -60,7 +61,7 @@ from std_srvs.srv import Trigger
 from .perception_utils import (
     decode_compressed_depth_image, deproject_mask, transform_points,
     transform_to_matrix, pose_to_matrix, matrix_to_pose, quat_geodesic,
-    extract_json,
+    gemini_boxes,
 )
 from .grasp_synthesis import DEFAULT_METHOD, METHODS, method_name
 from model_server.model_logging import _log_root
@@ -72,9 +73,6 @@ CAMERA_NS = '/realsense/head'
 COLOR_IMAGE_TOPIC = f'{CAMERA_NS}/color/image_raw/compressed'
 DEPTH_IMAGE_TOPIC = f'{CAMERA_NS}/aligned_depth_to_color/image_raw/compressedDepth'
 CAMERA_INFO_TOPIC = f'{CAMERA_NS}/color/camera_info'
-# yolo_server's DetectionBundle for the head color stream ('<image_topic>/detections');
-# its boxes are on the color grid, so they index the aligned depth cache directly
-DETECTION_TOPIC = f'{COLOR_IMAGE_TOPIC}/detections'
 # yolo_server's DetectionBundle per hand camera; the visual servo reads the
 # grasping arm's bundle, which carries that camera's aligned depth and intrinsics
 ARM_DETECTION_TOPICS = {
@@ -87,7 +85,8 @@ ARM_DETECTION_TOPICS = {
 # pose drives them as given, with no axis permutation or TCP offset.
 GRASP_FRAMES = {'left': 'left_graspgenx_frame', 'right': 'right_graspgenx_frame'}
 # per-arm gripper namespace: the magpie driver and the sims serve <ns>/set_position,
-# <ns>/set_force, <ns>/open, <ns>/close and <ns>/reset_overload, and publish <ns>/state
+# <ns>/set_force, <ns>/open and <ns>/close and publish <ns>/state; the driver
+# alone serves <ns>/reset_overload
 GRIPPER_NS = {'left': '/left/gripper', 'right': '/right/gripper'}
 
 # N, the grip-force limit set before every close. More than a small part needs
@@ -174,6 +173,10 @@ SLOW_MODE_TIME_SCALE = 4.0
 # a settled hold is recognized, and well below real motion.
 FRAME_TASK_STABLE_EPS_LIN = 0.0005    # m
 FRAME_TASK_STABLE_EPS_ANG = 0.002     # rad
+# Unchanged feedbacks in a row that end a move early: the arm has settled and
+# the server would only hold steady state until its ~5 s hold timeout. The
+# grasp and pick_place skills pass it to every move they command.
+FRAME_TASK_STABLE_STOP_MSGS = 20
 
 # s of steady time: the longest a robot-time wait goes without checking its stop event
 ROBOT_WAIT_POLL_SEC = 0.01
@@ -329,6 +332,8 @@ class SkillsBase(Node):
         # mm, the driver's published aperture per arm; tracks every close,
         # including the force-based /close, so it shows whether an object is held
         self._gripper_state_mm = {}
+        # s of robot time each arm's last state arrived
+        self._gripper_state_t = {}
         self.gripper_state_subs = {
             arm: self.create_subscription(
                 GripperState, f'{ns}/state',
@@ -425,8 +430,6 @@ class SkillsBase(Node):
         self._latest_depth = None
         # color CameraInfo (intrinsics and optical frame)
         self._latest_caminfo = None
-        # head-camera YOLO DetectionBundle
-        self._latest_detections = None
         self._latest_arm_detections = {arm: None for arm in ARM_DETECTION_TOPICS}
         self.create_subscription(
             CompressedImage, COLOR_IMAGE_TOPIC, self._on_color_image,
@@ -436,9 +439,6 @@ class SkillsBase(Node):
             qos_profile_sensor_data, callback_group=self._cb_group)
         self.create_subscription(
             CameraInfo, CAMERA_INFO_TOPIC, self._on_caminfo,
-            qos_profile_sensor_data, callback_group=self._cb_group)
-        self.create_subscription(
-            DetectionBundle, DETECTION_TOPIC, self._on_detections,
             qos_profile_sensor_data, callback_group=self._cb_group)
         for arm, topic in ARM_DETECTION_TOPICS.items():
             self.create_subscription(
@@ -483,9 +483,10 @@ class SkillsBase(Node):
                          f'{sorted(METHODS)}; goal.top_down overrides it')))
         self.add_on_set_parameters_callback(self._check_grasp_method)
         # Grasp execution depths, read per goal like grasp_method; the defaults
-        # are grasp.py's constants, imported here because grasp.py imports this
-        # module.
-        from .skills.grasp import CONTACT_OFFSET, VISUAL_SERVO_DEPTH_M
+        # are the grasp skill's constants, imported here because its modules
+        # import this one.
+        from .skills.grasp import CONTACT_OFFSET
+        from .skills.grasp_servo import VISUAL_SERVO_DEPTH_M
         self.declare_parameter('contact_offset', CONTACT_OFFSET, ParameterDescriptor(
             description=('metres the open-loop contact move stops short of the '
                          'grasp pose along its approach axis (0 = full pose)')))
@@ -505,10 +506,6 @@ class SkillsBase(Node):
         """Cache the latest head-camera color CameraInfo."""
         self._latest_caminfo = msg
 
-    def _on_detections(self, msg: DetectionBundle):
-        """Cache the latest head-camera YOLO DetectionBundle."""
-        self._latest_detections = msg
-
     def _on_arm_detections(self, arm, msg: DetectionBundle):
         """Cache the latest hand-camera YOLO DetectionBundle for `arm`."""
         self._latest_arm_detections[arm] = msg
@@ -520,10 +517,6 @@ class SkillsBase(Node):
     def latest_caminfo(self):
         """Return the latest head-camera color CameraInfo, or None."""
         return self._latest_caminfo
-
-    def latest_detections(self):
-        """Return the latest head-camera YOLO DetectionBundle, or None."""
-        return self._latest_detections
 
     def latest_arm_detections(self, arm):
         """Return the latest hand-camera YOLO DetectionBundle for `arm`, or None."""
@@ -735,25 +728,11 @@ class SkillsBase(Node):
         timeout = min(GEMINI_TIMEOUT_SEC, run.remaining())
         txt = self.query_gemini(GEMINI_GRASP_PROMPT.format(obj=obj),
                                 timeout_sec=timeout, outer_gh=gh)
-        data = extract_json(txt)
-        entry = None
-        if isinstance(data, list) and data:
-            entry = data[0]
-        elif isinstance(data, dict):
-            entry = data
-        if not isinstance(entry, dict) or 'box_2d' not in entry:
-            return None
         info = self.latest_caminfo()
         if info is None or not info.width or not info.height:
             return None
-        try:
-            y1, x1, y2, x2 = (float(v) for v in entry['box_2d'])
-        except (ValueError, TypeError):
-            return None
-        w, h = info.width, info.height
-        px1, px2 = sorted((x1 / 1000.0 * w, x2 / 1000.0 * w))
-        py1, py2 = sorted((y1 / 1000.0 * h, y2 / 1000.0 * h))
-        return [px1, py1, px2, py2]
+        boxes = gemini_boxes(txt, info.width, info.height)
+        return boxes[0] if boxes else None
 
     def detect_object_cloud(self, obj, run, gh):
         """
@@ -888,9 +867,9 @@ class SkillsBase(Node):
         hand-camera visual servo relies on. The depth must be aligned to the
         color grid the boxes were measured in.
 
-        Takes the median over the CENTRAL QUARTER of the box, as
-        _detection_point does: box edges pick up background depth, which on a
-        small part is the support surface and would bias the range.
+        Takes the median over the CENTRAL QUARTER of the box, as the grasp
+        skill's _box_point_pelvis does: box edges pick up background depth,
+        which on a small part is the support surface and would bias the range.
 
         `min_depth` [m] replaces DEPTH_MIN_M, which suits the head camera and
         would clip a hand camera that is deliberately closer to its target.
@@ -1333,8 +1312,23 @@ class SkillsBase(Node):
         return True
 
     def _on_gripper_state(self, arm, msg):
-        """Cache the driver's published gripper aperture [mm] for `arm`."""
+        """Cache the driver's published gripper aperture [mm] for `arm`, and when it came."""
         self._gripper_state_mm[arm] = float(msg.position)
+        self._gripper_state_t[arm] = self.robot_now()
+
+    def gripper_aperture_since(self, arm, since, wait_sec):
+        """
+        Return `arm`'s gripper opening [mm] from a state published after `since`, or None.
+
+        `since` and `wait_sec` are s of robot time; waits up to `wait_sec` for
+        such a state. None when none arrives, e.g. the driver is down.
+        """
+        deadline = self.robot_now() + wait_sec
+        while self._gripper_state_t.get(arm, -float('inf')) <= since:
+            if self.robot_now() >= deadline:
+                return None
+            self._sleep_robot(ROBOT_WAIT_POLL_SEC, threading.Event())
+        return self._gripper_state_mm[arm]
 
     def gripper_aperture(self, arm):
         """
@@ -1470,7 +1464,8 @@ class SkillsBase(Node):
         service future here does not deadlock it. It calls _wait_future
         directly, not _call_service, so failures can be logged throttled
         (GRIP_HOLD_WARN_EVERY). A failed tick is never fatal; the next one
-        tries again.
+        tries again. A driver that serves no reset_overload (the sims, which
+        model no overload) gets the close alone.
         """
         period = 1.0 / GRIP_HOLD_RATE_HZ
         calls = ((self.gripper_reset_clis[arm], 'reset_overload'),
@@ -1481,6 +1476,8 @@ class SkillsBase(Node):
             for client, label in calls:
                 if stop.is_set():
                     return
+                if label == 'reset_overload' and not client.service_is_ready():
+                    continue
                 result = None
                 if client.service_is_ready():
                     result = self._wait_future(

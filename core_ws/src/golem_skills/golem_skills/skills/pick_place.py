@@ -33,14 +33,14 @@ from tf2_ros import TransformException
 
 from custom_ros_messages.action import SkillGrasp, SkillPickPlace
 
-from ..base import _Run, GRASP_FRAMES, WORLD_FRAME
+from ..base import _Run, FRAME_TASK_STABLE_STOP_MSGS, GRASP_FRAMES, WORLD_FRAME
 from ..perception_utils import (matrix_to_pose, pose_to_matrix,
                                 transform_to_matrix)
 from ..grasp_synthesis.common import pose_at
 from ..grasp_synthesis.top_down import top_down_pose
-from .grasp import (_approach_target_tf,
-                    SERVO_MAX_ITER, SERVO_LIN_TOL, SERVO_ANG_TOL,
-                    APPROACH_DURATION_SEC, FRAME_TASK_STABLE_STOP_MSGS)
+from .grasp import (SERVO_MAX_ITER, SERVO_LIN_TOL, SERVO_ANG_TOL,
+                    APPROACH_DURATION_SEC)
+from .grasp_markers import approach_target_tf
 
 
 # m, the drop height: the released object's contact point above the place
@@ -135,7 +135,7 @@ class PickPlaceSkill:
         # (x, y, z_top), pelvis frame
         top_p = _top_face_point(place_cloud)
         top_w = self._transform_pose(pose_at(top_p), 'pelvis', WORLD_FRAME)
-        self.publish_tf(_approach_target_tf(
+        self.publish_tf(approach_target_tf(
             WORLD_FRAME if top_w is not None else 'pelvis',
             top_w if top_w is not None else pose_at(top_p),
             self.get_clock().now().to_msg(), child=PLACE_TARGET_FRAME))
@@ -209,7 +209,7 @@ class PickPlaceSkill:
         place_p = top_down_pose(top_now + [0.0, 0.0, PLACE_HEIGHT])
         place_w = (self._transform_pose(place_p, 'pelvis', WORLD_FRAME)
                    if top_w is not None else None)
-        self.publish_tf(_approach_target_tf(
+        self.publish_tf(approach_target_tf(
             WORLD_FRAME if place_w is not None else 'pelvis',
             place_w if place_w is not None else place_p,
             self.get_clock().now().to_msg(), child=PLACE_TARGET_FRAME))

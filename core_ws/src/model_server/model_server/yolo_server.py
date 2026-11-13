@@ -83,8 +83,8 @@ DEFAULT_IMAGE_TOPICS = [
     "/realsense/right_hand/color/image_raw/compressed",
 ]
 # default of `queries`: the battery-workcell classes YOLO_MODEL was fine-tuned
-# on, spelled exactly as its training labels; golem_skills' grasp.BATTERY_OBJECTS
-# lists the same names
+# on, spelled exactly as its training labels; golem_skills' grasp_detection.GEMINI_NAMES
+# maps the same names to phrases
 DEFAULT_QUERIES = ["Bolt", "BusBar", "InteriorScrew", "Nut", "OrageCover",
                    "Screw", "ScrewHole"]
 DEFAULT_PUBLISH_RATE_HZ = 5.0

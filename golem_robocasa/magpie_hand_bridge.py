@@ -45,11 +45,17 @@ except ModuleNotFoundError as exc:
     raise
 
 
-# Aperture: a linear map between the MJCF finger_joint1 angle (rad) and the
-# reported aperture (mm), spanning the real MAGPIE's ~0-110 mm. 0 rad is open,
-# CLOSED_RAD (finger_joint1's upper limit in the gripper MJCF) tips touching.
-OPEN_MM = 110.0
-CLOSED_MM = 0.0
+# Aperture: the gap between the pads' inner faces (mm), as the real driver
+# reports the jaw gap, against the finger_joint1 crank angle (rad), measured on
+# the gripper MJCF by sweeping the crank and interpolated linearly (within
+# 0.1 mm of the measured curve). The 4-bar makes it non-linear: 108.1 mm open
+# at 0 rad, the pads meet at 1.407 rad.
+APERTURE_TABLE_RAD = (0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0,
+                      1.1, 1.2, 1.3, 1.4, 1.407)
+APERTURE_TABLE_MM = (108.1, 103.5, 98.2, 92.2, 85.5, 78.3, 70.5, 62.4, 53.9,
+                     45.1, 36.2, 27.2, 18.3, 9.4, 0.7, 0.0)
+# rad, finger_joint1's upper limit in the gripper MJCF: /close drives the crank
+# here, past the pads' meeting angle, so the fingers squeeze at the force limit
 CLOSED_RAD = 2.05
 
 # Force: set_force bounds each finger's crank torque (actuator forcerange) at
@@ -74,15 +80,14 @@ _EPS_T = 1e-9
 
 
 def mm_to_rad(mm: float) -> float:
-    """Return the finger_joint1 angle (rad) of an aperture (mm), clipped to the range."""
-    f = (OPEN_MM - mm) / (OPEN_MM - CLOSED_MM)
-    return float(np.clip(f, 0.0, 1.0)) * CLOSED_RAD
+    """Return the finger_joint1 angle (rad) of a pad gap (mm), clipped to the table."""
+    # np.interp needs increasing x, and the gap falls as the angle rises
+    return float(np.interp(mm, APERTURE_TABLE_MM[::-1], APERTURE_TABLE_RAD[::-1]))
 
 
 def rad_to_mm(rad: float) -> float:
-    """Return the aperture (mm) of a finger_joint1 angle (rad), clipped to the range."""
-    f = float(np.clip(rad, 0.0, CLOSED_RAD)) / CLOSED_RAD
-    return OPEN_MM - f * (OPEN_MM - CLOSED_MM)
+    """Return the pad gap (mm) of a finger_joint1 angle (rad), clipped to the table."""
+    return float(np.interp(rad, APERTURE_TABLE_RAD, APERTURE_TABLE_MM))
 
 
 class MagpieHandBridge(Node):

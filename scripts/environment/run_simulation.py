@@ -38,6 +38,9 @@ def parser():
                         help='Supported manipulation fixture: existing pelvis rotational hold '
                         'at 2000 N*m/rad while the startup tether is enabled. '
                         'Not free-standing or a balance-performance test.')
+    result.add_argument('--task-tools', action='store_true',
+                        help='Enable the existing /sim/reset_objects service and '
+                        'evaluation-only /sim/ground_truth output; never a control input.')
     result.add_argument('--record', metavar='PATH', help='Opt-in WebM + evaluation-only JSONL recording')
     result.add_argument('--record-fps', type=float, default=None,
                         help='Frames per simulation second (default 20); not wall real-time')
@@ -89,6 +92,10 @@ def main():
                 VENV / 'livox-interfaces/install/share/livox_ros_driver2/local_setup.bash']
     env = environment()
     env.setdefault('GOLEM_SIM_ODOM', '0')
+    if args.task_tools:
+        env['GOLEM_SIM_EXPERIMENT'] = '1'
+        print('Task tools enabled: reset objects only between idle trials; '
+              'ground truth is for evaluation, not robot control', flush=True)
     if args.manipulation_hoist:
         env['GOLEM_SIM_TETHER_ROT_STIFFNESS'] = '2000'
         env['GOLEM_SIM_TETHER_ROT_BODY'] = 'pelvis'
@@ -103,7 +110,7 @@ def main():
         print('Spawn pose: legacy baked spawn (--lowerbody omitted); no policy selected', flush=True)
     else:
         print(f'Spawn pose: {args.lowerbody} source configuration; independently match '
-              f'./scripts/run_experiment.sh lowerbody:={args.lowerbody}; '
+              f'./scripts/run_controller.sh lowerbody:={args.lowerbody}; '
               'simulator does not start or confirm controllers', flush=True)
     print('Camera settings: '
           f'scale={env.get("GOLEM_CAMERA_SCALE", "0.5")}, '

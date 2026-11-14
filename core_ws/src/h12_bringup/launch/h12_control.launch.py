@@ -33,6 +33,9 @@ def generate_launch_description():
             'upper_controller', default_value='frame', choices=['frame', 'counter'],
             description='Upper controller backend for the single frame_task_server'),
         DeclareLaunchArgument(
+            'control_mode', default_value='',
+            description='Task mode: frame | counter; empty preserves the backend default'),
+        DeclareLaunchArgument(
             'comparison_order', default_value='frame,counter',
             description='Comparison trial CSV (frame/counter); requires upper_controller:=counter'),
         DeclareLaunchArgument(
@@ -88,9 +91,11 @@ def generate_launch_description():
                     prefix=LaunchConfiguration('frame_task_prefix'),
                     name='frame_task_server',
                     arguments=['--config', LaunchConfiguration('frame_task_config')],
-                    parameters=[sim_time_param, {'upper_controller': ParameterValue(
-                        LaunchConfiguration('upper_controller'), value_type=str),
-                        'comparison_order': ParameterValue(
+                     parameters=[sim_time_param, {'upper_controller': ParameterValue(
+                         LaunchConfiguration('upper_controller'), value_type=str),
+                         'control_mode': ParameterValue(
+                             LaunchConfiguration('control_mode'), value_type=str),
+                         'comparison_order': ParameterValue(
                             LaunchConfiguration('comparison_order'), value_type=str)}],
                     output='screen',
                     emulate_tty=True,

@@ -330,7 +330,7 @@ class SkillsBase(Node):
             profile_path = self.declare_parameter(
                 'marker_profile_path', '', ParameterDescriptor(read_only=True)).value
             self._marker_catalog = MarkerCatalog(catalog_path, profile_path or None)
-            self._marker_displaced = set()
+            self._saved_marker_approach = None
             self._board_observation = BoardObservation(
                 self._marker_catalog.profile['max_pose_age_sec'],
                 use_sim_time=self.get_parameter('use_sim_time').value)
@@ -413,6 +413,11 @@ class SkillsBase(Node):
         # frame_task server.
         self.named_config_cli = ActionClient(
             self, NamedConfig, '/named_config', callback_group=self._cb_group)
+        if self._target_backend == 'marker':
+            self.plan_frame_task_cli = ActionClient(
+                self, FrameTask, '/plan_frame_task', callback_group=self._cb_group)
+            self.replay_frame_task_cli = ActionClient(
+                self, FrameTask, '/replay_frame_task', callback_group=self._cb_group)
 
         # --- arm halt detection -------------------------------------------------
         # /safety/heartbeat is True until the safety layer latches estop (None
@@ -508,6 +513,9 @@ class SkillsBase(Node):
                 cli.wait_for_service(timeout_sec=10.0)
         self.frame_task_cli.wait_for_server(timeout_sec=10.0)
         self.named_config_cli.wait_for_server(timeout_sec=10.0)
+        if self._target_backend == 'marker':
+            self.plan_frame_task_cli.wait_for_server(timeout_sec=10.0)
+            self.replay_frame_task_cli.wait_for_server(timeout_sec=10.0)
 
         # --- per-run base-sway telemetry (run_telemetry.py) -------------------
         # `record_runs` (default true): each RECORDED_SKILLS run writes its own
@@ -527,6 +535,12 @@ class SkillsBase(Node):
             description=('grasp_synthesis method for /skill/grasp, one of '
                          f'{sorted(METHODS)}; goal.top_down overrides it')))
         self.add_on_set_parameters_callback(self._check_grasp_method)
+        mode = self.declare_parameter('approach_mode', 'plan', ParameterDescriptor(
+            description=('Marker approach: plan or reuse; '
+                         'change only between manipulation goals'))).value
+        if mode not in ('plan', 'reuse'):
+            raise ValueError('approach_mode must be plan or reuse')
+        self.add_on_set_parameters_callback(self._check_approach_mode)
         # Grasp-execution depths, read per goal like grasp_method. Defaults are
         # the skill's constants (imported here: grasp.py imports this module).
         from .skills.grasp import CONTACT_OFFSET, VISUAL_SERVO_DEPTH_M
@@ -618,6 +632,17 @@ class SkillsBase(Node):
                 return SetParametersResult(
                     successful=False,
                     reason=f'grasp_method must be one of {sorted(METHODS)}')
+        return SetParametersResult(successful=True)
+
+    def _check_approach_mode(self, params):
+        for p in params:
+            if p.name == 'approach_mode':
+                if p.value not in ('plan', 'reuse'):
+                    return SetParametersResult(successful=False,
+                                               reason='approach_mode must be plan or reuse')
+                if self._manipulation_lock.locked():
+                    return SetParametersResult(successful=False,
+                                               reason='approach_mode may change only while idle')
         return SetParametersResult(successful=True)
 
     def _on_skill_cancel(self, _cancel_request):
@@ -1042,7 +1067,7 @@ class SkillsBase(Node):
     def move_frame_to(self, frame, pose,
                       outer_gh=None, duration_sec=3, do_plan=True,
                       slow_mode=False, label='', stable_stop_msgs=None,
-                      lin_tol=0.01, ang_tol=0.05):
+                      lin_tol=0.01, ang_tol=0.05, client=None):
         """Send a frame to `pose` (position + orientation, in the pelvis frame) via
         /frame_task as a single combined move to the full target pose (target
         position + target orientation reached together).
@@ -1070,7 +1095,9 @@ class SkillsBase(Node):
 
         `lin_tol` / `ang_tol` [m, rad]: the final pelvis-frame error the move
         must be within to count as REACHED (returns True). Loosen these for a
-        rough staging move that need not land exactly."""
+        rough staging move that need not land exactly. `client` optionally selects
+        a FrameTask execution endpoint such as explicit cached-path replay; the
+        same completion and feedback checks still apply."""
         x, y, z = float(pose.position.x), float(pose.position.y), float(pose.position.z)
         quat = (pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w)
         target = Pose()
@@ -1080,7 +1107,7 @@ class SkillsBase(Node):
         return self._send_frame_move(frame, target, duration_sec, outer_gh, do_plan,
                                      slow_mode=slow_mode, label=label,
                                      stable_stop_msgs=stable_stop_msgs,
-                                     lin_tol=lin_tol, ang_tol=ang_tol)
+                                     lin_tol=lin_tol, ang_tol=ang_tol, client=client)
 
     def _on_safety_heartbeat(self, msg):
         self._safety_alive = bool(msg.data)
@@ -1103,7 +1130,7 @@ class SkillsBase(Node):
 
     def _send_frame_move(self, frame, pose, duration_sec, outer_gh, do_plan,
                          slow_mode=False, label='', stable_stop_msgs=None,
-                         lin_tol=0.01, ang_tol=0.05):
+                         lin_tol=0.01, ang_tol=0.05, client=None):
         """Command ONE /frame_task goal: drive `frame` to `pose` (a Pose already in
         the pelvis frame) over `duration_sec`, returning whether it reached the
         target (gated on the server's streamed IK convergence). The building block
@@ -1184,7 +1211,7 @@ class SkillsBase(Node):
                     stable_event.set()
 
         response = self._send_action(
-            self.frame_task_cli, goal, feedback_cb=_log_feedback,
+            self.frame_task_cli if client is None else client, goal, feedback_cb=_log_feedback,
             result_timeout=float(duration_sec) + 10.0, outer_gh=outer_gh,
             stop_event=stable_event)
         self._note_arm_move_status(response, f'frame_task {tag!r}')

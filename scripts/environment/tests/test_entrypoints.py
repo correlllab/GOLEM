@@ -72,6 +72,7 @@ class EntrypointTests(unittest.TestCase):
         self.assertEqual(env['GOLEM_SIM_ODOM'], '0')
         self.assertNotIn('GOLEM_SIM_TETHER_ROT_STIFFNESS', env)
         self.assertNotIn('GOLEM_SIM_TETHER_ROT_BODY', env)
+        self.assertNotIn('GOLEM_SIM_EXPERIMENT', env)
         self.assertEqual({key: env[key] for key in runtime.PEGBOARD_CAMERA_DEFAULTS},
                          {'GOLEM_CAMERA_SCALE': '1', 'GOLEM_CAMERA_DEPTH': '0',
                            'GOLEM_CAMERA_POINTCLOUD': '0'})
@@ -95,6 +96,16 @@ class EntrypointTests(unittest.TestCase):
         self.assertEqual(env['GOLEM_SIM_TETHER_ROT_STIFFNESS'], '2000')
         self.assertEqual(env['GOLEM_SIM_TETHER_ROT_BODY'], 'pelvis')
         self.assertIn('NOT free-standing balance', output.getvalue())
+
+    def test_task_tools_are_explicit_and_reuse_existing_experiment_switch(self):
+        with patch.dict(os.environ, {}, clear=True), \
+                patch.object(sys, 'argv', ['run_simulation.py', '--task-tools']), \
+                patch.object(Path, 'is_file', return_value=True), patch.object(simulator, 'check'), \
+                patch.object(os, 'execve') as execute:
+            runtime.main()
+        _, command, env = execute.call_args.args
+        self.assertEqual(env['GOLEM_SIM_EXPERIMENT'], '1')
+        self.assertEqual(command[-2:], ['--task', 'PegInHole'])
 
     def test_selected_policies_forward_unchanged_without_controller_launch(self):
         for policy in ('fame_finetune', 'almi_manip_stand'):
@@ -173,8 +184,7 @@ class EntrypointTests(unittest.TestCase):
         for command in commands:
             self.assertIn('--lowerbody ', command)
         primary = './scripts/run_simulation.sh --task PegInHole --lowerbody almi_manip_stand'
-        self.assertTrue(any(command.startswith(primary) and '--manipulation-hoist' in command
-                            for command in commands))
+        self.assertTrue(any(command.startswith(primary) for command in commands))
 
     def test_pegboard_camera_defaults_preserve_explicit_overrides(self):
         overrides = {'GOLEM_CAMERA_SCALE': '0.5', 'GOLEM_CAMERA_DEPTH': '1',
@@ -311,6 +321,58 @@ class EntrypointTests(unittest.TestCase):
                 os.close(first)
             replacement = ros_runtime.acquire_experiment_lock('1')
             os.close(replacement)
+
+    def test_task_controller_has_one_capable_backend_and_useful_defaults(self):
+        import build_ros_workspace as workspace
+        with patch.object(sys, 'argv', ['run_ros.py', '--controller']), \
+                patch.dict(os.environ, {'ROS_DOMAIN_ID': '46'}, clear=True), \
+                patch.object(workspace, 'require_venv'), \
+                patch.object(ros_runtime, 'acquire_experiment_lock'), \
+                patch.object(Path, 'is_file', return_value=True), patch.object(os, 'execve') as execute:
+            ros_runtime.main()
+        command = execute.call_args.args[1]
+        settings = dict(value.split(':=', 1) for value in command if ':=' in value)
+        self.assertEqual(settings['upper_controller'], 'counter')
+        self.assertEqual(settings['control_mode'], 'frame')
+        self.assertEqual(settings['lowerbody'], 'almi_manip_stand')
+        self.assertEqual(settings['image_transport'], 'compressed')
+        self.assertTrue(settings['marker_profile_path'].endswith('marker_profile_sim_extraction.json'))
+        self.assertNotIn('start_position_verified', settings)
+
+    def test_task_controller_preserves_explicit_policy_and_mode(self):
+        import build_ros_workspace as workspace
+        with patch.object(sys, 'argv', ['run_ros.py', '--controller',
+                                       'lowerbody:=fame_finetune', 'control_mode:=counter',
+                                       'approach_mode:=reuse', 'start_position_verified:=true']), \
+                patch.dict(os.environ, {'ROS_DOMAIN_ID': '46'}, clear=True), \
+                patch.object(workspace, 'require_venv'), \
+                patch.object(ros_runtime, 'acquire_experiment_lock'), \
+                patch.object(Path, 'is_file', return_value=True), patch.object(os, 'execve') as execute:
+            ros_runtime.main()
+        settings = dict(value.split(':=', 1) for value in execute.call_args.args[1] if ':=' in value)
+        self.assertEqual(settings['upper_controller'], 'counter')
+        self.assertEqual(settings['control_mode'], 'counter')
+        self.assertEqual(settings['lowerbody'], 'fame_finetune')
+        self.assertEqual(settings['approach_mode'], 'reuse')
+
+    def test_task_controller_rejects_invalid_mode_before_launch(self):
+        import build_ros_workspace as workspace
+        for argument in ('control_mode:=invalid', 'approach_mode:=invalid',
+                         'upper_controller:=frame'):
+            with self.subTest(argument=argument), \
+                    patch.object(sys, 'argv', ['run_ros.py', '--controller', argument]), \
+                    patch.object(workspace, 'require_venv'), \
+                    patch.object(Path, 'is_file', return_value=True), patch.object(os, 'execve') as execute:
+                with self.assertRaises(RuntimeError):
+                    ros_runtime.main()
+            execute.assert_not_called()
+
+    def test_task_controller_shell_rejects_real_domain(self):
+        result = subprocess.run([str(ROOT / 'scripts/run_controller.sh')],
+                                env={**os.environ, 'ROS_DOMAIN_ID': '0'},
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('real robot bus', result.stderr)
 
     def test_experiment_forwards_standard_image_transport(self):
         import build_ros_workspace as workspace

@@ -1,4 +1,4 @@
-"""Run a ROS CLI command in the clean native overlay, or gated experiment bringup."""
+"""Run ROS commands or the simulation controller in the clean native overlay."""
 
 import argparse
 import fcntl
@@ -20,7 +20,7 @@ def acquire_experiment_lock(domain):
         os.set_inheritable(descriptor, True)
     except BlockingIOError:
         os.close(descriptor)
-        raise RuntimeError('An experiment is already running on this domain. '
+        raise RuntimeError('Controller bringup is already running on this domain. '
                            'Stop its launch with Ctrl+C before switching between '
                            'observation and actuation modes.') from None
     except BaseException:
@@ -36,24 +36,30 @@ scripts/setup_environment.sh ros --local-ros-debs
 core_ws/scripts/build_ros_workspace.sh build --profile experiment --compile-jobs 2
 scripts/setup_environment.sh controller
 scripts/setup_environment.sh controller --check
-Observe only: scripts/run_experiment.sh
-Actuation only after separate approval and safe simulation start verification:
-scripts/run_experiment.sh start_position_verified:=true lowerbody:=fame_finetune
-Alternative standing policy: lowerbody:=almi_manip_stand
-Upper controller: upper_controller:=frame|counter (default frame).
-Same-run comparison requires upper_controller:=counter, including frame trials.
-comparison_order:=frame,counter (CSV; duplicates allowed, e.g. frame,counter,counter,frame).
-Change order between batches: scripts/run_ros.sh param set /frame_task_server comparison_order "counter,frame"
-The lower-body engage_wait_for_confirm interlock remains enabled.
-Start the simulator separately, preferably GOLEM_CAMERA_SCALE=1 scripts/run_simulation.sh.
+Start the simulator once, then the controller:
+scripts/run_simulation.sh --task PegInHole --lowerbody almi_manip_stand
+scripts/run_controller.sh start_position_verified:=true
+Task defaults: ALMI manipulation standing, Frame control mode, compressed RGB,
+and the simulator gripper calibration. lowerbody:=fame_finetune is optional.
+Engage the standing policy after initialization:
+scripts/run_ros.sh service call /lowerbody/confirm_engage std_srvs/srv/Trigger '{}'
+Choose Frame or Counter while idle:
+scripts/run_ros.sh param set /frame_task_server control_mode counter
+scripts/run_ros.sh param set /frame_task_server control_mode frame
+For repeated grasps, return to approach_start, then select the saved approach:
+scripts/run_ros.sh param set /h12_skills approach_mode reuse
+Restore the source peg before repeating an extraction.
+The existing run_experiment.sh remains available for explicit backend settings.
 Generic CLI: scripts/run_ros.sh topic list
 Generic parameter CLI: scripts/run_ros.sh param set NODE PARAM VALUE
 No launch command installs/builds. Nonzero simulation domain required.
-Offline checks do not qualify live control, balance, or insertion accuracy.''',
+Actuator launch remains gated by start_position_verified:=true.''',
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    result.add_argument('--experiment', action='store_true', help=argparse.SUPPRESS)
+    launch = result.add_mutually_exclusive_group()
+    launch.add_argument('--experiment', action='store_true', help=argparse.SUPPRESS)
+    launch.add_argument('--controller', action='store_true', help=argparse.SUPPRESS)
     result.add_argument('arguments', nargs=argparse.REMAINDER,
-                        help='ROS CLI arguments, or experiment key:=value launch arguments')
+                         help='ROS CLI arguments, or controller key:=value launch arguments')
     return result
 
 
@@ -72,14 +78,28 @@ def main():
     env = workspace.environment()
     env.update(OMP_NUM_THREADS='1', MKL_NUM_THREADS='1')
     arguments = args.arguments
-    if args.experiment:
+    if args.experiment or args.controller:
         allowed = {'start_position_verified', 'lowerbody', 'marker_profile_path',
-                    'publish_annotated', 'image_transport', 'upper_controller', 'comparison_order'}
+                    'publish_annotated', 'image_transport', 'upper_controller', 'comparison_order',
+                    'control_mode', 'approach_mode'}
         if any(':=' not in arg or arg.split(':=', 1)[0] not in allowed for arg in arguments):
             raise RuntimeError('experiment arguments: start_position_verified:=true|false, '
                                'lowerbody:=fame_finetune|almi_manip_stand, marker_profile_path:=PATH, '
                                 'publish_annotated:=true|false, image_transport:=raw|compressed, '
-                                'upper_controller:=frame|counter, comparison_order:=frame,counter')
+                                 'control_mode:=frame|counter, approach_mode:=plan|reuse, '
+                                 'upper_controller:=frame|counter, comparison_order:=frame,counter')
+        if args.controller:
+            provided = {arg.split(':=', 1)[0]: arg.split(':=', 1)[1] for arg in arguments}
+            if provided.get('upper_controller', 'counter') != 'counter':
+                raise RuntimeError('run_controller supports both modes in one backend; '
+                                   'select control_mode:=frame or control_mode:=counter')
+            defaults = {
+                'upper_controller': 'counter', 'control_mode': 'frame',
+                'lowerbody': 'almi_manip_stand', 'image_transport': 'compressed',
+                'marker_profile_path': str(ROOT / 'core_ws/src/h12_skills/h12_skills/'
+                                          'marker_profile_sim_extraction.json'),
+            }
+            arguments += [f'{key}:={value}' for key, value in defaults.items() if key not in provided]
         for arg in arguments:
             if arg.startswith('comparison_order:='):
                 value = arg.split(':=', 1)[1]
@@ -92,6 +112,10 @@ def main():
         if any(arg.startswith('image_transport:=') and arg.split(':=', 1)[1] not in ('raw', 'compressed')
                for arg in arguments):
             raise RuntimeError('image_transport must be raw or compressed')
+        for key, choices in (('control_mode', ('frame', 'counter')), ('approach_mode', ('plan', 'reuse'))):
+            if any(arg.startswith(f'{key}:=') and arg.split(':=', 1)[1] not in choices
+                   for arg in arguments):
+                raise RuntimeError(f'{key} must be {" or ".join(choices)}')
         python = ROOT / 'environments/controller/.venv/bin/python'
         if not python.is_file():
             raise RuntimeError('run scripts/setup_environment.sh controller first')
@@ -103,6 +127,9 @@ def main():
         upper = next((arg.split(':=', 1)[1] for arg in reversed(arguments)
                       if arg.startswith('upper_controller:=')), 'frame')
         print(f'Upper controller: {upper} (actuation requires start_position_verified:=true)', flush=True)
+        if args.controller:
+            mode = next(arg.split(':=', 1)[1] for arg in arguments if arg.startswith('control_mode:='))
+            print(f'Task control mode: {mode}; standing engagement is a separate command', flush=True)
         arguments = ['launch', 'h12_bringup', 'h12_native_experiment.launch.py', *arguments]
         acquire_experiment_lock(domain)
     elif not arguments:

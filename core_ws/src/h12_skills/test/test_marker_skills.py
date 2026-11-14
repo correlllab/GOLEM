@@ -45,7 +45,7 @@ def no_live_ros_endpoints(monkeypatch):
 
 
 class Log:
-    def info(self, *args):
+    def info(self, *args, **kwargs):
         pass
 
     warn = error = info
@@ -254,7 +254,11 @@ class Harness(GraspSkill, PickPlaceSkill):
     def __init__(self):
         self._target_backend = 'marker'
         self._marker_catalog = MarkerCatalog(CATALOG)
-        self._marker_displaced = set()
+        self._saved_marker_approach = None
+        self.approach_mode = 'plan'
+        self.preps, self.plans = [], []
+        self.plan_frame_task_cli = 'plan'
+        self.replay_frame_task_cli = 'replay'
         self._board_observation = BoardObservation(.5)
         self.now_ns = 10 * 10**9
         self.board = np.eye(4)
@@ -268,6 +272,26 @@ class Harness(GraspSkill, PickPlaceSkill):
         self.current = matrix_to_pose(self.board @ self._marker_catalog.geometry(
             'cylinder_1', 'cylinder_3', 'left').approach)
         self.refresh()
+        self._marker_reference = self.board.copy()
+
+    def get_parameter(self, name):
+        assert name == 'approach_mode'
+        return SimpleNamespace(value=self.approach_mode)
+
+    def goto_named_config(self, name, **kwargs):
+        assert name == 'prep' and kwargs['plan'] and kwargs['slow_mode']
+        assert not kwargs['outer_gh'].is_cancel_requested
+        self.preps.append(name)
+        return True
+
+    def _send_action(self, client, goal, **kwargs):
+        assert client == self.plan_frame_task_cli
+        assert goal.plan and goal.slow_mode and not kwargs['outer_gh'].is_cancel_requested
+        self.plans.append(copy.deepcopy(goal))
+        return SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED,
+                               result=SimpleNamespace(success=True))
+
+    _note_arm_move_status = SkillsBase._note_arm_move_status
 
     def refresh(self):
         if self._board_observation._accepted is not None:
@@ -290,7 +314,7 @@ class Harness(GraspSkill, PickPlaceSkill):
 
     def move_frame_to(self, frame, pose, **kwargs):
         self.moves.append((frame, copy.deepcopy(pose), kwargs))
-        assert kwargs['duration_sec'] <= (30 if kwargs['do_plan'] else 8)
+        assert kwargs['duration_sec'] <= (30 if kwargs['do_plan'] or kwargs.get('client') else 8)
         self.current = copy.deepcopy(pose)
         return True
 
@@ -306,7 +330,6 @@ class Harness(GraspSkill, PickPlaceSkill):
         # No sleeps or nodes: the real settle helper is tested separately.
         if gh.is_cancel_requested or run.remaining() <= 0:
             raise ValueError('canceled or timed out')
-        self._marker_board()
 
     def query_gemini(self, *args, **kwargs):
         pytest.fail('marker flow used AI')
@@ -334,16 +357,313 @@ def test_marker_pickplace_holds_preinsert_never_releases():
     g = node._marker_catalog.geometry('cylinder_1', 'cylinder_3', 'left')
     np.testing.assert_allclose(pose_to_matrix(node.current), node.board @ g.preinsert, atol=1e-7)
     assert all(not k['do_plan'] for _, _, k in node.moves if 'extraction' in k['label'])
-    # A consumed seated-source assumption cannot be silently reused.
-    commands = node.commands.copy()
-    assert not node._exec_pick_place(request()).success
-    assert node.commands == commands
+    # Each explicit call assumes the operator restored the physical seated source.
+    node.refresh()
+    assert node._exec_pick_place(request()).success
+    assert node.commands == ['position', 'force', 'close'] * 2
+    assert not hasattr(node, '_marker_displaced')
 
 
 def test_marker_grasp_uses_existing_schema_without_extracting():
     node, gh = Harness(), request(False)
     assert node._exec_grasp(gh).success
     assert not any('extraction' in k['label'] for _, _, k in node.moves)
+
+
+def test_plan_only_does_not_measure_unexecuted_endpoint_and_replay_asserts_target():
+    node, gh = Harness(), request(False)
+    node.current = matrix_to_pose(np.eye(4))
+    start = copy.deepcopy(node.current)
+    original = node._send_action
+
+    def plan(client, goal, **kwargs):
+        assert not node.moves
+        np.testing.assert_array_equal(pose_to_matrix(node.current), pose_to_matrix(start))
+        assert kwargs['result_timeout'] <= 30
+        return original(client, goal, **kwargs)
+
+    node._send_action = plan
+    assert node._exec_grasp(gh).success
+    assert node.preps == ['prep'] and len(node.plans) == 1
+    _, replay_target, replay_options = node.moves[0]
+    assert replay_options['client'] == 'replay'
+    np.testing.assert_array_equal(pose_to_matrix(node.plans[0].frame_targets[0]),
+                                  pose_to_matrix(replay_target))
+    assert not node._saved_marker_approach.board.flags.writeable
+    assert not node._saved_marker_approach.target.flags.writeable
+
+
+@pytest.mark.parametrize('mode', ['plan', 'reuse'])
+def test_marker_replay_transport_satisfies_controller_saved_plan_contract(mode):
+    # Load the actual validator without importing the controller's Pinocchio stack.
+    source = (ROOT / 'core_ws/src/h12_ros2_controller/h12_ros2_controller/core/'
+              'saved_frame_plan.py')
+    tree = ast.parse(source.read_text(), filename=str(source))
+    saved_class = next(item for item in tree.body
+                       if isinstance(item, ast.ClassDef) and item.name == 'SavedFramePlan')
+    validator = next(item for item in saved_class.body
+                     if isinstance(item, ast.FunctionDef) and item.name == 'assert_goal')
+    namespace = {'np': np}
+    exec(compile(ast.Module(body=[validator], type_ignores=[]), str(source), 'exec'), namespace)
+    assert_goal = namespace['assert_goal']
+
+    node = Harness()
+    node._send_frame_move = SkillsBase._send_frame_move.__get__(node)
+    plan = node._send_action
+    move = node.move_frame_to
+    replays = []
+
+    def action(client, goal, feedback_cb=None, **kwargs):
+        if client == node.plan_frame_task_cli:
+            return plan(client, goal, **kwargs)
+        assert client == node.replay_frame_task_cli
+        planned = node.plans[-1]
+        assert planned.plan and planned.slow_mode and not planned.relative
+        record = SimpleNamespace(frame_names=tuple(planned.frame_names), targets=np.array([
+            pose_to_matrix(target) for target in planned.frame_targets]))
+        assert_goal(record, goal)
+        assert not goal.plan and not goal.relative and not goal.slow_mode
+        np.testing.assert_allclose(
+            [pose_to_matrix(target) for target in goal.frame_targets], record.targets, atol=1e-14)
+        for flag in ('plan', 'relative', 'slow_mode'):
+            invalid = copy.deepcopy(goal)
+            setattr(invalid, flag, True)
+            with pytest.raises(ValueError, match='Replay accepts only'):
+                assert_goal(record, invalid)
+        replays.append(copy.deepcopy(goal))
+        feedback_cb(SimpleNamespace(feedback=SimpleNamespace(
+            errors_linear=[0.0], errors_angular=[0.0])))
+        return SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED,
+                               result=SimpleNamespace(success=True))
+
+    def execute(frame, target, **kwargs):
+        if kwargs.get('client') == node.replay_frame_task_cli:
+            assert SkillsBase.move_frame_to(node, frame, target, **kwargs)
+        else:
+            assert kwargs['slow_mode']  # Ordinary contact/carry keep their slow setting.
+        return move(frame, target, **kwargs)
+
+    node._send_action = action
+    node.move_frame_to = execute
+    assert node._exec_grasp(request(False)).success
+    if mode == 'reuse':
+        node.approach_mode = mode
+        node.refresh()
+        assert node._exec_grasp(request(False)).success
+    assert len(node.plans) == 1 and node.preps == ['prep']
+    assert len(replays) == (2 if mode == 'reuse' else 1)
+
+
+def test_reuse_keeps_snapshot_and_approach_with_new_destination_and_external_mode():
+    node = Harness()
+    assert node._exec_grasp(request(False)).success
+    saved = node._saved_marker_approach
+    node.approach_mode = 'reuse'
+    # Operator has restored the peg and returned the controller to approach_start.
+    # Skills neither sets nor reads the controller's independent control_mode.
+    node.control_mode = 'counter'
+    node.board[0, 3] += .01  # CV noise below the existing board jump bound, not 5 mm.
+    node.refresh()
+    node.moves.clear()
+    gh = request()
+    gh.request.place_target = 'cylinder_2'
+    assert node._exec_pick_place(gh).success
+    assert node.preps == ['prep'] and len(node.plans) == 1
+    assert node._saved_marker_approach is saved
+    np.testing.assert_allclose(pose_to_matrix(node.moves[0][1]), saved.target, atol=1e-14)
+    geometry = node._marker_catalog.geometry('cylinder_1', 'cylinder_2', 'left')
+    np.testing.assert_allclose(pose_to_matrix(node.current),
+                               geometry.target_matrix(saved.board, 'preinsert'), atol=1e-14)
+
+
+@pytest.mark.parametrize('fault', ['none', 'peg', 'source', 'arm', 'top_down', 'profile'])
+def test_reuse_requires_matching_saved_source_identity_before_any_command(fault):
+    node = Harness()
+    if fault != 'none':
+        assert node._exec_grasp(request(False)).success
+    node.approach_mode = 'reuse'
+    node.refresh()
+    node.moves.clear()
+    node.commands.clear()
+    gh = request(False)
+    if fault == 'peg':
+        node._marker_catalog.profile['active_pegs']['cylinder_2'] = {'source_hole': 'cylinder_2'}
+        gh.request.target_object = 'cylinder_2'
+    elif fault == 'source':
+        node._marker_catalog.profile['active_pegs']['cylinder_1']['source_hole'] = 'cylinder_2'
+    elif fault == 'arm':
+        gh.request.arm = 'right'
+    elif fault == 'top_down':
+        gh.request.top_down = True
+    elif fault == 'profile':
+        node._marker_catalog.profile['step_m'] *= .9
+    result = node._exec_grasp(gh)
+    assert not result.success and 'matching saved marker approach' in result.message
+    assert not node.moves and not node.commands
+
+
+@pytest.mark.parametrize('fault', ['missing', 'stale', 'invalid', 'translation', 'rotation'])
+def test_reuse_requires_fresh_unchanged_workcell_before_motion(fault):
+    node = Harness()
+    assert node._exec_grasp(request(False)).success
+    node.approach_mode = 'reuse'
+    node.moves.clear()
+    node.commands.clear()
+    if fault == 'missing':
+        node._board_observation = BoardObservation(.5)
+    elif fault == 'stale':
+        node.now_ns += 10**9
+    elif fault == 'invalid':
+        _, diag = observation_ns(node.now_ns, valid=False)
+        node._board_observation.on_diagnostics(diag)
+    elif fault == 'translation':
+        node.board[0, 3] += node._marker_catalog.profile['max_board_jump_m'] + .001
+        node.refresh()
+    else:
+        node.board[:3, :3] = Rotation.from_rotvec(
+            [0, 0, node._marker_catalog.profile['max_board_jump_rad'] + .001]).as_matrix()
+        node.refresh()
+    result = node._exec_grasp(request(False))
+    assert not result.success
+    assert 'board not visible before replay or workcell changed' in result.message
+    assert not node.moves and not node.commands and node.preps == ['prep']
+
+
+def test_new_plan_without_board_fails_after_named_prep_before_approach_or_close():
+    node = Harness()
+    node._board_observation = BoardObservation(.5)
+    result = node._exec_grasp(request(False))
+    assert not result.success and 'no matched observation' in result.message
+    assert node.preps == ['prep']
+    assert not node.plans and not node.moves and not node.commands
+
+
+def test_plan_captures_fresh_board_only_after_successful_prep():
+    node = Harness()
+    original = node.goto_named_config
+    node._board_observation = BoardObservation(.5)
+
+    def prep(*args, **kwargs):
+        result = original(*args, **kwargs)
+        node.board[0, 3] += .01
+        node.refresh()
+        return result
+
+    node.goto_named_config = prep
+    assert node._exec_grasp(request(False)).success
+    np.testing.assert_array_equal(node._saved_marker_approach.board, node.board)
+
+
+@pytest.mark.parametrize('fault', ['none', 'aborted', 'false'])
+def test_plan_result_failure_does_not_execute_replay_or_close(fault):
+    node = Harness()
+    node._send_action = lambda *a, **k: (
+        None if fault == 'none' else SimpleNamespace(
+            status=(GoalStatus.STATUS_ABORTED if fault == 'aborted'
+                    else GoalStatus.STATUS_SUCCEEDED),
+            result=SimpleNamespace(success=fault != 'false')))
+    result = node._exec_grasp(request(False))
+    assert not result.success and 'pregrasp plan failed' in result.message
+    assert not node.moves and node.commands == ['position']
+    assert node._saved_marker_approach is None
+
+
+@pytest.mark.parametrize('stage', ['prep', 'plan', 'replay', 'contact'])
+@pytest.mark.parametrize('fault', ['failure', 'cancel', 'deadline', 'halt'])
+def test_failed_approach_stages_never_close(stage, fault, monkeypatch):
+    node, gh = Harness(), request(False)
+
+    def fail():
+        if fault == 'cancel':
+            gh.is_cancel_requested = True
+        elif fault == 'deadline':
+            monkeypatch.setattr(_Run, 'remaining', lambda self: 0)
+        elif fault == 'halt':
+            node._arm_halt_reason = 'hardware stop'
+
+    if stage == 'prep':
+        def prep(*args, **kwargs):
+            fail()
+            return fault != 'failure'
+        node.goto_named_config = prep
+    elif stage == 'plan':
+        def plan(*args, **kwargs):
+            fail()
+            return SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED,
+                                   result=SimpleNamespace(success=fault != 'failure'))
+        node._send_action = plan
+    else:
+        original = node.move_frame_to
+
+        def move(frame, target, **kwargs):
+            label = 'pregrasp' if stage == 'replay' else 'contact approach'
+            hit = label in kwargs['label']
+            if hit:
+                fail()
+                return False if fault == 'failure' else original(frame, target, **kwargs)
+            return original(frame, target, **kwargs)
+
+        node.move_frame_to = move
+    assert not node._exec_grasp(gh).success
+    assert 'force' not in node.commands and 'close' not in node.commands
+
+
+def test_replay_controller_cache_target_rejection_propagates_without_replanning():
+    node = Harness()
+    assert node._exec_grasp(request(False)).success
+    saved = node._saved_marker_approach
+    node.approach_mode = 'reuse'
+    node.refresh()
+    node.commands.clear()
+
+    def controller_reject(frame, target, **kwargs):
+        assert kwargs['client'] == 'replay'
+        np.testing.assert_allclose(pose_to_matrix(target), saved.target, atol=1e-14)
+        node._arm_halt_reason = 'replay aborted: cached target mismatch'
+        return False
+
+    node.move_frame_to = controller_reject
+    result = node._exec_grasp(request(False))
+    assert not result.success and 'pregrasp waypoint not reached' in result.message
+    assert len(node.plans) == 1 and node.commands == ['position']
+
+
+def test_measured_contact_error_still_prevents_close_with_frozen_vision():
+    node = Harness()
+    settles = []
+
+    def settle(run, gh):
+        settles.append(True)
+        if len(settles) == 2:
+            node.current.position.x += .02
+
+    node._marker_settle = settle
+    result = node._exec_grasp(request(False))
+    assert not result.success and 'measured contact pose outside tolerance' in result.message
+    assert node.commands == ['position']
+
+
+def test_approach_mode_is_idle_only_and_frozen_for_entire_goal():
+    node = Harness()
+    node._manipulation_lock = threading.Lock()
+
+    def param(value):
+        return [SimpleNamespace(name='approach_mode', value=value)]
+    check = SkillsBase._check_approach_mode
+    assert check(node, param('reuse')).successful
+    assert not check(node, param('automatic')).successful
+    with node._manipulation_lock:
+        assert not check(node, param('reuse')).successful
+    original = node.goto_named_config
+
+    def prep(*args, **kwargs):
+        result = original(*args, **kwargs)
+        node.approach_mode = 'reuse'  # Even an injected change cannot alter this episode.
+        return result
+
+    node.goto_named_config = prep
+    assert node._exec_grasp(request(False)).success
+    assert len(node.plans) == 1 and node.preps == ['prep']
 
 
 @pytest.mark.parametrize('failure', ['move', 'cancel', 'timeout', 'stale', 'invalid', 'jump'])
@@ -380,8 +700,6 @@ def test_abort_before_close_and_never_release(failure, top_down, monkeypatch):
 
 
 @pytest.mark.parametrize('failure,reason', [
-    ('invalid', 'board localization invalid, stale, future, or clock reset: '
-                'observation invalidated by invalid pose or diagnostics'),
     ('cancel', 'user cancellation requested'),
     ('timeout', 'skill deadline expired'),
     ('halt', 'arm halted: hardware stop'),
@@ -397,10 +715,7 @@ def test_marker_move_reports_first_guard_cause(failure, reason):
         guard = kwargs['outer_gh']
         if failure == 'move':
             return False  # No guard rejection: retain controller failure wording.
-        if failure == 'invalid':
-            _, diag = observation_ns(node.now_ns, valid=False)
-            node._board_observation.on_diagnostics(diag)
-        elif failure == 'cancel':
+        if failure == 'cancel':
             gh.is_cancel_requested = True
         elif failure == 'timeout':
             run.remaining = lambda: 0.0
@@ -430,8 +745,7 @@ def test_pregrasp_guard_failure_never_closes_or_releases():
     node, gh = Harness(), request()
 
     def fail(frame, pose, **kwargs):
-        _, diag = observation_ns(node.now_ns, valid=False)
-        node._board_observation.on_diagnostics(diag)
+        node._arm_halt_reason = 'hardware stop'
         assert kwargs['outer_gh'].is_cancel_requested
         return False
 
@@ -439,8 +753,7 @@ def test_pregrasp_guard_failure_never_closes_or_releases():
     result = node._exec_pick_place(gh)
     assert not result.success
     assert result.message == (
-        'pregrasp canceled: board localization invalid, stale, future, or clock reset: '
-        'observation invalidated by invalid pose or diagnostics; no subsequent close or release'
+        'pregrasp canceled: arm halted: hardware stop; no subsequent close or release'
         '; no automatic retreat or release')
     assert node.commands == ['position']
     assert node._last_grasp_outcome is None
@@ -510,9 +823,9 @@ def test_explicit_top_down_is_geometric_and_controls_only_requested_arm(
                                geometry.target_matrix(node.board, 'preinsert' if pick_place else 'grasp'),
                                atol=1e-7)
     np.testing.assert_allclose(pose_to_matrix(node.current)[:3, :3], geometry.grasp[:3, :3], atol=1e-14)
-    commands = node.commands.copy()
-    assert not execute(gh).success
-    assert node.commands == commands
+    node.refresh()
+    assert execute(Goal(copy.deepcopy(gh.request))).success
+    assert node.commands == ['position', 'force', 'close'] * 2
 
 
 @pytest.mark.parametrize('fault', ['tilted_profile', 'invalid_minimum', 'servo'])
@@ -545,14 +858,15 @@ def test_known_left_fixture_transform_remains_outside_right_arm_admission():
     catalog.check_workspace(board, geometry)
 
 
-def test_top_down_tracks_updated_board_position_without_rotating_pelvis_orientation():
+def test_top_down_freezes_board_position_without_rotating_pelvis_orientation():
     node, gh = Harness(), request(False)
     gh.request.top_down = True
+    frozen = node.board.copy()
     original = node.move_frame_to
 
     def action(frame, pose, **kwargs):
         result = original(frame, pose, **kwargs)
-        if kwargs['do_plan']:
+        if kwargs.get('client') == 'replay':
             node.board[:3, :3] = Rotation.from_euler('xyz', [2, -1, 3], degrees=True).as_matrix()
             node.board[:3, 3] += [.001, -.002, .001]
             node.refresh()
@@ -563,7 +877,7 @@ def test_top_down_tracks_updated_board_position_without_rotating_pelvis_orientat
     assert result.success, result.message
     assert node.commands == ['position', 'force', 'close']
     g = node._marker_catalog.geometry('cylinder_1', 'cylinder_1', 'left', top_down=True)
-    np.testing.assert_allclose(pose_to_matrix(node.current), g.target_matrix(node.board, 'grasp'), atol=1e-14)
+    np.testing.assert_allclose(pose_to_matrix(node.current), g.target_matrix(frozen, 'grasp'), atol=1e-14)
     for _, pose, _ in node.moves:
         np.testing.assert_allclose(pose_to_matrix(pose)[:3, :3], g.grasp[:3, :3], atol=1e-14)
 
@@ -708,7 +1022,8 @@ def test_overlap_reservation_and_direct_nested_composition():
 
 @pytest.mark.parametrize('fault', ['ok', 'false_result', 'aborted', 'no_feedback',
                                    'empty_errors', 'large_error', 'nan'])
-def test_marker_transport_requires_boolean_and_finite_measured_error(fault):
+@pytest.mark.parametrize('replay', [False, True])
+def test_marker_transport_requires_boolean_and_finite_measured_error(fault, replay):
     node = object.__new__(SkillsBase)
     node._target_backend = 'marker'
     node._arm_halt_reason = None
@@ -717,8 +1032,10 @@ def test_marker_transport_requires_boolean_and_finite_measured_error(fault):
                                              warn=lambda *a, **k: None,
                                              error=lambda *a, **k: None)
     node.frame_task_cli = object()
+    selected = object() if replay else node.frame_task_cli
 
     def action(client, goal, feedback_cb, **kwargs):
+        assert client is selected
         if fault != 'no_feedback':
             lin = float('nan') if fault == 'nan' else .03 if fault == 'large_error' else .001
             feedback_cb(SimpleNamespace(feedback=SimpleNamespace(
@@ -728,23 +1045,35 @@ def test_marker_transport_requires_boolean_and_finite_measured_error(fault):
                                result=SimpleNamespace(success=fault != 'false_result'))
 
     node._send_action = action
-    assert node.move_frame_to('left_graspgenx_frame', matrix_to_pose(np.eye(4))) == (fault == 'ok')
+    kwargs = {'client': selected} if replay else {}
+    result = node.move_frame_to('left_graspgenx_frame', matrix_to_pose(np.eye(4)), **kwargs)
+    assert result == (fault == 'ok')
 
 
-def test_inflight_invalidation_requests_inner_motion_cancel():
+def test_inflight_invalidation_does_not_cancel_frozen_motion():
     node, gh = Harness(), request()
+    original = node.move_frame_to
+    observe = node._marker_board
+    captures = []
+
+    def capture(*args, **kwargs):
+        captures.append(True)
+        return observe(*args, **kwargs)
+
+    node._marker_board = capture
 
     def action(frame, target, **kwargs):
         guard = kwargs['outer_gh']
         assert not guard.is_cancel_requested
         _, diag = observation(valid=False)
         node._board_observation.on_diagnostics(diag)
-        assert guard.is_cancel_requested
-        return False
+        assert not guard.is_cancel_requested
+        return original(frame, target, **kwargs)
 
     node.move_frame_to = action
-    assert not node._exec_pick_place(gh).success
-    assert node.commands == ['position']
+    assert node._exec_pick_place(gh).success
+    assert node.commands == ['position', 'force', 'close']
+    assert captures == [True]
 
 
 @pytest.mark.parametrize('fault', ['cancel', 'stale', 'timeout', 'move'])
@@ -769,7 +1098,7 @@ def test_extraction_abort_keeps_grasp_without_reclose_or_release(fault, monkeypa
     assert node._last_grasp_outcome is None
 
 
-def test_settle_checks_real_cancel_deadline_and_invalid_observation():
+def test_settle_checks_real_cancel_deadline_and_halt_not_marker_visibility():
     node, gh = Harness(), request()
     # Harness overrides settle for fast flow tests. Test the actual method here.
     from h12_skills.skills.marker import MarkerManipulationSkill
@@ -782,7 +1111,9 @@ def test_settle_checks_real_cancel_deadline_and_invalid_observation():
         actual_settle(node, SimpleNamespace(remaining=lambda: 0), gh)
     _, diag = observation(valid=False)
     node._board_observation.on_diagnostics(diag)
-    with pytest.raises(ValueError, match='invalid'):
+    actual_settle(node, SimpleNamespace(remaining=lambda: 10), gh)
+    node._arm_halt_reason = 'hardware stop'
+    with pytest.raises(ValueError):
         actual_settle(node, SimpleNamespace(remaining=lambda: 10), gh)
 
 

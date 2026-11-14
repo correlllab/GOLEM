@@ -1,17 +1,22 @@
 """Marker-mode composition for the existing grasp and pick_place actions.
 
-Only a known seated cylinder is graspable. Pick/place means extract and hold
-at pre-insertion, never contact insertion or release. No cloud or AI is used.
+Every explicit goal assumes the operator has restored the named peg to its
+seated source. Home/approach replay does not restore it. Pick/place means extract
+and hold at pre-insertion, never insertion or release. No cloud or AI is used.
 """
 
+import json
 import math
 import threading
 import time
+from dataclasses import dataclass
 
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
-from custom_ros_messages.action import SkillGrasp, SkillPickPlace
+from action_msgs.msg import GoalStatus
+from builtin_interfaces.msg import Duration
+from custom_ros_messages.action import FrameTask, SkillGrasp, SkillPickPlace
 from magpie_msgs.srv import SetGripperPosition, SetGripperForce
 from std_srvs.srv import Trigger
 
@@ -19,43 +24,29 @@ from ..base import _Run, GRASP_FRAMES
 from ..perception_utils import matrix_to_pose, pose_to_matrix
 
 
+@dataclass(frozen=True)
+class SavedMarkerApproach:
+    """Source identity and frozen geometry for one explicitly cached approach."""
+
+    key: tuple
+    board: np.ndarray
+    target: np.ndarray
+
+
 class MarkerManipulationSkill:
+    """Execute operator-restored seated-source goals against one board snapshot."""
+
     def _marker_board(self, reference=None):
         board = self._board_observation.matrix(self.get_clock().now().nanoseconds)
-        if reference is None:
-            reference = getattr(self, '_marker_reference', None)
         if reference is not None:
             delta = np.linalg.inv(reference) @ board
             p = self._marker_catalog.profile
             if (np.linalg.norm(delta[:3, 3]) > p['max_board_jump_m']
                     or Rotation.from_matrix(delta[:3, :3]).magnitude() > p['max_board_jump_rad']):
                 raise ValueError('board pose jumped beyond configured tracking limits')
-        self._marker_reference = board
         return board
 
-    def _marker_move(self, name, geometry, run, gh, label, planned=False):
-        """Bounded waypoints resolved against a fresh board pose before EVERY send."""
-        p = self._marker_catalog.profile
-        board = self._marker_board()
-        current = self._frame_pose_in_pelvis(GRASP_FRAMES[geometry.arm])
-        if current is None:
-            raise ValueError('grasp frame TF unavailable')
-        start = pose_to_matrix(current)
-        target = geometry.target_matrix(board, name)
-        if not geometry.top_down:
-            start = np.linalg.inv(board) @ start
-            target = np.linalg.inv(board) @ target
-        angle = Rotation.from_matrix(start[:3, :3].T @ target[:3, :3]).magnitude()
-        count = max(1, math.ceil(max(
-            np.linalg.norm(target[:3, 3] - start[:3, 3]) / p['step_m'], angle / p['step_rad'])))
-        # Free-space transit uses the existing collision planner once, rather
-        # than replanning and settling at every centimetre. Contact/extraction
-        # remain small, direct waypoints; top-down approach follows pelvis-fixed
-        # G +Z, while extraction follows the observed source's board +Z.
-        if planned:
-            count = 1
-        rotation = Slerp([0, 1], Rotation.from_matrix([start[:3, :3], target[:3, :3]]))
-
+    def _marker_motion_guard(self, run, gh, geometry=None):
         skill = self
 
         class MotionGuard:
@@ -71,8 +62,9 @@ class MarkerManipulationSkill:
                     cause = f'arm halted: {halt}'
                 else:
                     try:
-                        observed = skill._marker_board(board)
-                        skill._marker_catalog.check_workspace(observed, geometry)
+                        if geometry is not None:
+                            skill._marker_catalog.check_workspace(
+                                skill._marker_reference, geometry)
                     except ValueError as exc:
                         cause = str(exc)
                     else:
@@ -81,6 +73,30 @@ class MarkerManipulationSkill:
                     self.reason = cause
                 return True
 
+        return MotionGuard()
+
+    def _marker_move(self, name, geometry, run, gh, label, planned=False, client=None,
+                     expected_target=None):
+        """Bounded motion against the episode snapshot; marker occlusion is expected."""
+        p = self._marker_catalog.profile
+        board = self._marker_reference
+        current = self._frame_pose_in_pelvis(GRASP_FRAMES[geometry.arm])
+        if current is None:
+            raise ValueError('grasp frame TF unavailable')
+        start = pose_to_matrix(current)
+        endpoint = (geometry.target_matrix(board, name)
+                    if expected_target is None else expected_target)
+        target = endpoint
+        if not geometry.top_down:
+            start = np.linalg.inv(board) @ start
+            target = np.linalg.inv(board) @ target
+        angle = Rotation.from_matrix(start[:3, :3].T @ target[:3, :3]).magnitude()
+        count = max(1, math.ceil(max(
+            np.linalg.norm(target[:3, 3] - start[:3, 3]) / p['step_m'], angle / p['step_rad'])))
+        # Explicit replay and planned carry each execute one complete path.
+        if planned or client is not None:
+            count = 1
+        rotation = Slerp([0, 1], Rotation.from_matrix([start[:3, :3], target[:3, :3]]))
         for k in range(1, count + 1):
             if gh.is_cancel_requested:
                 raise ValueError('motion canceled: user cancellation requested')
@@ -88,28 +104,31 @@ class MarkerManipulationSkill:
                 raise ValueError('motion canceled: skill deadline expired')
             if halt := self.arm_halt_reason():
                 raise ValueError(f'motion canceled: arm halted: {halt}')
-            board = self._marker_board(board)
             self._marker_catalog.check_workspace(board, geometry)
-            target = geometry.target_matrix(board, name)
-            if not geometry.top_down:
-                target = np.linalg.inv(board) @ target
             t = k / count
             waypoint = np.eye(4)
             waypoint[:3, :3] = rotation([t]).as_matrix()[0]
             waypoint[:3, 3] = start[:3, 3] + t * (target[:3, 3] - start[:3, 3])
             resolved = waypoint if geometry.top_down else board @ waypoint
-            guard = MotionGuard()
+            if k == count:
+                resolved = endpoint
+            guard = self._marker_motion_guard(run, gh, geometry)
+            overrides = {} if client is None else {'client': client}
+            # Replay preserves cached timing; only ordinary moves request slow scaling.
             if not self.move_frame_to(
                     GRASP_FRAMES[geometry.arm], matrix_to_pose(resolved),
                     outer_gh=guard, duration_sec=min(
                         p['planned_motion_sec'] if planned else p['segment_sec'], run.remaining()),
-                    do_plan=planned, slow_mode=True,
+                    do_plan=planned and client is None, slow_mode=client is None,
                     lin_tol=p['linear_tolerance_m'], ang_tol=p['angular_tolerance_rad'],
-                    label=f'marker {label} {k}/{count}'):
+                    label=f'marker {label} {k}/{count}', **overrides):
                 if guard.reason is not None:
                     raise ValueError(
                         f'{label} canceled: {guard.reason}; no subsequent close or release')
                 raise ValueError(f'{label} waypoint not reached; no subsequent close or release')
+            if guard.is_cancel_requested:
+                raise ValueError(
+                    f'{label} canceled: {guard.reason}; no subsequent close or release')
             measured = self._frame_pose_in_pelvis(GRASP_FRAMES[geometry.arm])
             if measured is None:
                 raise ValueError('measured frame pose unavailable after motion')
@@ -117,13 +136,31 @@ class MarkerManipulationSkill:
             if (np.linalg.norm(delta[:3, 3]) > p['linear_tolerance_m']
                     or Rotation.from_matrix(delta[:3, :3]).magnitude() > p['angular_tolerance_rad']):
                 raise ValueError('measured waypoint error exceeds marker profile tolerance')
-        self._marker_board(board)
+
+    def _marker_plan_approach(self, geometry, run, gh):
+        """Cache only: a successful planner result does not imply the arm moved."""
+        guard = self._marker_motion_guard(run, gh, geometry)
+        if guard.is_cancel_requested:
+            raise ValueError(f'pregrasp plan canceled: {guard.reason}')
+        goal = FrameTask.Goal()
+        goal.frame_names = [GRASP_FRAMES[geometry.arm]]
+        target = geometry.target_matrix(self._marker_reference, 'approach')
+        goal.frame_targets = [matrix_to_pose(target)]
+        goal.plan, goal.slow_mode = True, True
+        budget = min(self._marker_catalog.profile['planned_motion_sec'], run.remaining())
+        goal.duration = Duration(sec=int(budget), nanosec=int((budget % 1) * 1e9))
+        response = self._send_action(self.plan_frame_task_cli, goal,
+                                     result_timeout=budget, outer_gh=guard)
+        self._note_arm_move_status(response, 'marker pregrasp plan')
+        if (guard.is_cancel_requested or response is None
+                or response.status != GoalStatus.STATUS_SUCCEEDED or not response.result.success):
+            raise ValueError('pregrasp plan failed' + (
+                f': {guard.reason}' if guard.reason else ''))
 
     def _marker_gripper(self, arm, kind, value, run, gh):
         """No retry/hold thread can send another close after cancellation."""
         if gh.is_cancel_requested or run.remaining() <= 0 or self.arm_halt_reason():
             raise ValueError('gripper command canceled, timed out, or arm halted')
-        self._marker_board()
         if kind == 'position':
             self._stop_grip_hold(arm)
             request = SetGripperPosition.Request()
@@ -147,7 +184,6 @@ class MarkerManipulationSkill:
         while time.monotonic() < until:
             if gh.is_cancel_requested or run.remaining() <= 0 or self.arm_halt_reason():
                 raise ValueError('canceled or timed out while settling')
-            self._marker_board()
             event.wait(min(0.02, max(0, until - time.monotonic())))
 
     def _exec_marker(self, gh, pick_place=False):
@@ -161,6 +197,9 @@ class MarkerManipulationSkill:
         self._last_grasp_outcome = None
         self._marker_reference = None
         try:
+            mode = self.get_parameter('approach_mode').value
+            if mode not in ('plan', 'reuse'):
+                raise ValueError('approach_mode must be plan or reuse')
             if goal.visual_servo:
                 raise ValueError('marker profile rejects AI visual_servo; set visual_servo: false')
             arm = self._validated_arm(goal)
@@ -171,9 +210,35 @@ class MarkerManipulationSkill:
             destination = goal.place_target if pick_place else active['source_hole']
             geometry = self._marker_catalog.geometry(
                 peg_id, destination, arm, top_down=goal.top_down)
-            if peg_id in self._marker_displaced:
-                raise ValueError('peg source pose consumed/uncertain; reset experiment before another grasp')
-            board = self._marker_board()
+            key = (peg_id, geometry.source_hole, arm, geometry.top_down,
+                   json.dumps(p, sort_keys=True))
+            saved = getattr(self, '_saved_marker_approach', None)
+            guard = self._marker_motion_guard(run, gh)
+            if guard.is_cancel_requested:
+                raise ValueError(f'pregrasp canceled: {guard.reason}')
+            if mode == 'reuse':
+                if saved is None or saved.key != key:
+                    raise ValueError(
+                        'no matching saved marker approach for peg/source/arm/top_down/profile')
+                try:
+                    self._marker_board(saved.board)
+                except ValueError as exc:
+                    raise ValueError(
+                        f'board not visible before replay or workcell changed: {exc}') from exc
+                board = saved.board
+            else:
+                if not run.phase('marker_prep', 0.0):
+                    return run.result
+                if not self.goto_named_config(
+                        'prep', plan=True, slow_mode=True,
+                        duration_sec=min(30.0, run.remaining()),
+                        result_timeout=min(90.0, run.remaining()), outer_gh=guard):
+                    raise ValueError("move to 'prep' before detection failed")
+                if guard.is_cancel_requested:
+                    raise ValueError(f'prep canceled: {guard.reason}')
+                board = self._marker_board().copy()
+            board.setflags(write=False)
+            self._marker_reference = board
             self._marker_catalog.check_workspace(board, geometry)
             candidates = geometry.candidates(board)
             approach = geometry.target_matrix(board, 'grasp')[:3, 2]
@@ -190,12 +255,22 @@ class MarkerManipulationSkill:
                 return run.result
             self._marker_gripper(arm, 'position', geometry.aperture_m * 1000, run, gh)
             self._marker_settle(run, gh)
-            self._marker_move('approach', geometry, run, gh, 'pregrasp', planned=True)
+            if mode == 'plan':
+                self._saved_marker_approach = None
+                self._marker_plan_approach(geometry, run, gh)
+            target = geometry.target_matrix(board, 'approach')
+            if mode == 'reuse' and not np.array_equal(target, saved.target):
+                raise ValueError('saved approach geometry mismatch')
+            self._marker_move('approach', geometry, run, gh, 'pregrasp', planned=True,
+                              client=self.replay_frame_task_cli,
+                              expected_target=saved.target if mode == 'reuse' else target)
+            if mode == 'plan':
+                target.setflags(write=False)
+                self._saved_marker_approach = SavedMarkerApproach(key, board, target)
             if not run.phase('marker_approach', 0.3):
                 return run.result
             self._marker_move('grasp', geometry, run, gh, 'contact approach')
             self._marker_settle(run, gh)
-            board = self._marker_board()
             self._marker_catalog.check_workspace(board, geometry)
             measured = self._frame_pose_in_pelvis(GRASP_FRAMES[arm])
             if measured is None:
@@ -207,9 +282,6 @@ class MarkerManipulationSkill:
             self._marker_gripper(arm, 'force', 15.0, run, gh)
             if not run.phase('marker_close', 0.5):
                 return run.result
-            # Even a timed-out close may have moved the object. Never reuse its
-            # assumed seated pose after dispatching that command.
-            self._marker_displaced.add(peg_id)
             self._marker_gripper(arm, 'close', 0, run, gh)
             self._marker_settle(run, gh)
             grasp_pose = matrix_to_pose(geometry.target_matrix(board, 'grasp'))
@@ -228,12 +300,13 @@ class MarkerManipulationSkill:
                 self._marker_move('preinsert', geometry, run, gh, 'preinsert')
             if not run.phase('marker_hold', 0.95):
                 return run.result
-            self._marker_board()
+            outcome = (f'held at pre-insertion above {geometry.destination}; '
+                       'no insertion or release performed' if pick_place else
+                       'grasp commanded at known seated pose; no extraction performed')
             return run.succeed(
-                f'{peg_id} from {geometry.source_hole}: ' +
-                (f'held at pre-insertion above {geometry.destination}; no insertion or release performed'
-                 if pick_place else 'grasp commanded at known seated pose; no extraction performed') +
-                '; nominal geometry only, no contact/insertion or grip verification')
+                f'{peg_id} from {geometry.source_hole}: {outcome}; '
+                'nominal geometry only, no contact/insertion or grip verification; '
+                'caller must restore peg to seated source before each goal')
         except (ValueError, KeyError, TypeError) as exc:
             self._last_grasp_outcome = None
             return run.abort(str(exc) + '; no automatic retreat or release')

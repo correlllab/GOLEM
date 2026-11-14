@@ -10,6 +10,7 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, Opaq
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def _include(filename, arguments):
@@ -28,6 +29,12 @@ def _launch(context):
     upper = LaunchConfiguration('upper_controller').perform(context)
     if upper not in ('frame', 'counter'):
         raise RuntimeError('upper_controller must be frame or counter')
+    mode = LaunchConfiguration('control_mode').perform(context)
+    if mode not in ('', 'frame', 'counter') or (upper == 'frame' and mode == 'counter'):
+        raise RuntimeError('control_mode must be frame or counter; counter requires a capable backend')
+    approach = LaunchConfiguration('approach_mode').perform(context)
+    if approach not in ('plan', 'reuse'):
+        raise RuntimeError('approach_mode must be plan or reuse')
     order = LaunchConfiguration('comparison_order').perform(context)
     if not order or any(mode.strip() not in ('frame', 'counter') for mode in order.split(',')):
         raise RuntimeError('comparison_order must be CSV containing only frame or counter')
@@ -65,6 +72,7 @@ def _launch(context):
                 **sim_time, 'use_estop': 'false', 'use_frame_task': 'true',
                 'safety_config': 'sim_safety_split.yaml',
                 'upper_controller': upper,
+                'control_mode': mode,
                 'comparison_order': order,
                 'frame_task_config': ('counter_safety_split.yaml' if upper == 'counter'
                                       else 'sim_safety_split.yaml'),
@@ -78,8 +86,9 @@ def _launch(context):
             }),
             Node(package='h12_skills', executable='skills', name='h12_skills',
                  parameters=[{'use_sim_time': True, 'target_backend': 'marker',
-                              'marker_catalog_path': LaunchConfiguration('marker_catalog_path'),
-                              'marker_profile_path': LaunchConfiguration('marker_profile_path')}],
+                               'marker_catalog_path': LaunchConfiguration('marker_catalog_path'),
+                               'approach_mode': ParameterValue(approach, value_type=str),
+                               'marker_profile_path': LaunchConfiguration('marker_profile_path')}],
                  output='screen'),
         ])
     return actions
@@ -92,8 +101,12 @@ def generate_launch_description():
         DeclareLaunchArgument('lowerbody', default_value='fame_finetune',
                               description='fame_finetune | almi_manip_stand; standing only'),
         DeclareLaunchArgument('upper_controller', default_value='frame',
-                              choices=['frame', 'counter'],
-                              description='Upper controller backend: frame | counter'),
+                               choices=['frame', 'counter'],
+                               description='Upper controller backend: frame | counter'),
+        DeclareLaunchArgument('control_mode', default_value='',
+                              description='Frame or Counter task mode; empty preserves backend default'),
+        DeclareLaunchArgument('approach_mode', default_value='plan', choices=['plan', 'reuse'],
+                              description='Plan a new marker approach or replay its saved trajectory'),
         DeclareLaunchArgument('comparison_order', default_value='frame,counter',
                               description='Comparison CSV, duplicates allowed; counter container required'),
         DeclareLaunchArgument('controller_python', default_value=EnvironmentVariable(

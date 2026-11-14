@@ -1,12 +1,14 @@
 source_repository: git@github.com:correlllab/h12_mjlab.git
-source_revision: c946b1a74f6d6812d82f80fdc7651acb2840acd2
+source_revision: 88d8c99130fe06047acf07c432e8ffbafbf50462
 source_config: config/deploy_almi_manip_stand_real.yaml
 source_contract: h12_mjlab/utility/actor.py:ActorInferenceModel
+selection: archive_model_almi_manip_2_with_existing_almi_manip_stand_contract
 artifacts:
   model_almi_manip_stand.pt:
-    source: data/model_almi_manip_stand.pt
+    source: data/archive/model_almi_manip_2.pt
     format: training_checkpoint_weights_only_actor_state_dict
-    sha256: 56593f582e1044111cba3b34ead8451174794cee5fee09f2eda9fdb00bb0f2db
+    sha256: 27c022f438265389eff573c048a868f73070958e33244af84cc85a3cf8d4db5b
+    training_iteration: 249
 runtime:
   tested_python: 3.10.12
   tested_torch: 2.6.0+cpu

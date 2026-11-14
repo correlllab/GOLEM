@@ -3,6 +3,7 @@
 Run with the simulator Python: python -m unittest test_peg_in_hole_env -v
 """
 import importlib
+import ast
 import copy
 import json
 import os
@@ -19,6 +20,8 @@ from robosuite.models.tasks import ManipulationTask
 import h1_2_robosuite as robot
 from peg_in_hole_env import (SCENE_DIR, PegBoardArena, PegBoardConfig,
                              _polygon_clearance, canonical_task)
+from policy_initialization import load_leg_pose, make_foot_placer
+from sim_names import NameResolver
 
 
 class PegBoardSceneTests(unittest.TestCase):
@@ -113,14 +116,14 @@ class PegBoardSceneTests(unittest.TestCase):
                                            0.0067836904074)
                     self.assertEqual(model.geom("peg_cylinder_visual").group[0], 2)
                     expected_y = .185369815094 if side == "left" else -.264630184906
-                    np.testing.assert_allclose(board.pos, [.503832018731, expected_y, .955172239917], atol=1e-12)
+                    np.testing.assert_allclose(board.pos, [.668832018731, expected_y, .955172239917], atol=1e-12)
                     table = model.geom("pegboard_table_top")
                     np.testing.assert_allclose(table.size, [.18, .145, .02], atol=1e-12)
-                    np.testing.assert_allclose(table.pos, [.503832018731, expected_y, .935172239917], atol=1e-12)
+                    np.testing.assert_allclose(table.pos, [.668832018731, expected_y, .935172239917], atol=1e-12)
                     for i, (dx, dy) in enumerate(((-.125, -.09), (-.125, .09),
                                                   (.125, -.09), (.125, .09))):
                         leg = model.geom(f"pegboard_table_leg_{i}")
-                        np.testing.assert_allclose(leg.pos, [.503832018731 + dx, expected_y + dy,
+                        np.testing.assert_allclose(leg.pos, [.668832018731 + dx, expected_y + dy,
                                                            (.955172239917 - .04) / 2], atol=1e-12)
                         np.testing.assert_allclose(leg.size, [.025, .025, (.955172239917 - .04) / 2])
                     tip = data.site("peg_cylinder_tip").xpos.copy()
@@ -193,6 +196,75 @@ class PegBoardSceneTests(unittest.TestCase):
 
     def test_native_right_env_reset_and_mocked_runner(self):
         self._check_native_env("right")
+
+    def test_policy_startup_sweep_clearance_and_positional_pregrasp(self):
+        """Fixed-base geometry screen, not closed-loop balance or oriented grasp IK."""
+        root = Path(__file__).resolve().parents[1]
+        with patch.object(sys, "path", [str(root / "core_ws/src/h12_ros2_controller"), *sys.path]):
+            from h12_ros2_controller.utility.named_config import NAMED_CONFIGS
+
+        # Execute only the pure spawn-pose function, never the DDS-bearing runner.
+        tree = ast.parse((root / "h1_robocasa/h12_mujoco.py").read_text())
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                        and node.name == "_limp_upper_body_poses")
+        namespace = {"np": np, "_TORSO": 12, "_ARMS": (13, 20)}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), str(root / "h1_robocasa/h12_mujoco.py"),
+                     "exec"), namespace)
+        env = robot.make_kitchen_env("PegInHole", hard_reset=False)
+        try:
+            for policy in ("almi_manip_stand", "fame_finetune"):
+                with self.subTest(policy=policy):
+                    env.reset()
+                    model, data = env.sim.model._model, env.sim.data._data
+                    resolver = NameResolver(model)
+                    initial = np.r_[load_leg_pose(policy), np.zeros(15)]
+                    data.qpos[resolver.motor_qpos] = initial
+                    data.qvel[:] = 0
+                    place, _, _ = make_foot_placer(env, robot.place_robot_freejoint)
+                    robot.place_robot_collision_free(
+                        env, env.init_robot_base_pos, robot._euler_to_wxyz(env.init_robot_base_ori),
+                        margin=env.spawn_margin, clearance=0, placer=place,
+                        poses=namespace["_limp_upper_body_poses"](model, resolver.motor_qpos, initial))
+                    spawn = data.qpos.copy()
+                    sequence = ("home", "init_1", "init_2", "init_3", "home", "prep")
+                    minimum = .03
+                    for start, end in zip(sequence, sequence[1:]):
+                        for fraction in np.linspace(0, 1, 401):
+                            data.qpos[:] = spawn
+                            data.qpos[resolver.motor_qpos[13:]] = (
+                                (1 - fraction) * NAMED_CONFIGS[start] + fraction * NAMED_CONFIGS[end])
+                            mujoco.mj_forward(model, data)
+                            gap = robot._robot_env_gap(model, data, .03)
+                            self.assertGreaterEqual(gap, .015,
+                                f"{policy}: {start}->{end} at {fraction:.4f}, gap={gap:.9f} m")
+                            minimum = min(minimum, gap)
+
+                    # A point above the seated peg must remain reachable within arm limits.
+                    data.qpos[:] = spawn
+                    target = data.site("peg_cylinder_tip").xpos.copy() + [0, 0, .1]
+                    arm_qpos, arm_dofs = resolver.motor_qpos[13:20], resolver.motor_qvel[13:20]
+                    joints = [int(np.flatnonzero(model.jnt_qposadr == address)[0]) for address in arm_qpos]
+                    limits = model.jnt_range[joints]
+                    site = model.site("robot0_left_grasp_frame").id
+                    jacobian = np.zeros((3, model.nv))
+                    for _ in range(100):
+                        mujoco.mj_forward(model, data)
+                        error = target - data.site_xpos[site]
+                        if np.linalg.norm(error) < 1e-5:
+                            break
+                        mujoco.mj_jacSite(model, data, jacobian, None, site)
+                        jac = jacobian[:, arm_dofs]
+                        delta = jac.T @ np.linalg.solve(jac @ jac.T + np.eye(3) * 1e-4, error)
+                        data.qpos[arm_qpos] = np.clip(data.qpos[arm_qpos] + np.clip(delta, -.1, .1),
+                                                      limits[:, 0], limits[:, 1])
+                    mujoco.mj_forward(model, data)
+                    residual = np.linalg.norm(target - data.site_xpos[site])
+                    self.assertLess(residual, 1e-5)
+                    self.assertGreaterEqual(robot._robot_env_gap(model, data, .03), .015)
+                    print(policy, "startup_minimum_gap_m", minimum,
+                          "positional_pregrasp_error_m", residual)
+        finally:
+            env.close()
 
     def _check_native_env(self, side):
         # Fail closed if the native factory tries to load the kitchen stack.

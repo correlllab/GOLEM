@@ -120,8 +120,13 @@ def test_almi_actual_checkpoint_recurrent_replay_matches_upstream_contract():
         with torch.no_grad():
             latent, hidden = rnn(torch.from_numpy(obs)[None, None], hidden)
             expected_action = actor(latent[0]).numpy()[0]
+        actual_previous = policy._action.copy()
         actual = policy.compute(state)
-        np.testing.assert_allclose(policy._obs, obs, atol=3e-7)
+        np.testing.assert_allclose(policy._obs[:51], obs[:51], atol=3e-7)
+        # Independent actor roundoff feeds back only through previous actions.
+        np.testing.assert_array_equal(policy._obs[51:63], actual_previous)
+        np.testing.assert_allclose(policy._obs[51:63], obs[51:63], atol=2e-6, rtol=2e-6)
+        np.testing.assert_array_equal(policy._obs[63:], obs[63:])
         np.testing.assert_allclose(policy._action, expected_action, atol=2e-6, rtol=2e-6)
         np.testing.assert_allclose(actual.target_q,
                                    np.clip(policy.nominal_lower + .25 * expected_action,
@@ -160,7 +165,12 @@ def test_artifact_provenance_and_corruption_fail_closed(cls, name, tmp_path, mon
     root = POLICIES / name
     cfg = yaml.safe_load((root / (name + ".yaml")).read_text())
     provenance = yaml.safe_load((root / "SOURCE.yaml").read_text())
-    assert provenance["source_revision"] == "c946b1a74f6d6812d82f80fdc7651acb2840acd2"
+    expected_revision = ("88d8c99130fe06047acf07c432e8ffbafbf50462" if name == "almi_manip_stand"
+                         else "c946b1a74f6d6812d82f80fdc7651acb2840acd2")
+    assert provenance["source_revision"] == expected_revision
+    if name == "almi_manip_stand":
+        assert provenance["artifacts"]["model_almi_manip_stand.pt"]["source"] == (
+            "data/archive/model_almi_manip_2.pt")
     for key in ("policy_path", "encoder_path"):
         if key in cfg:
             path = root / cfg[key]
@@ -545,7 +555,66 @@ def test_fame_initial_joint_limits_rejected_before_any_mock_output():
     state.q[0] = 1.
     node._tick()
     assert outputs == []
-    node._trip_heartbeat.assert_called_once_with("FAME startup joints outside configured limits")
+    node._trip_heartbeat.assert_called_once()
+    reason = node._trip_heartbeat.call_args.args[0]
+    assert reason.startswith("FAME startup joints outside configured limits:")
+    assert "tick=None" in reason
+    node._manager.commit.assert_not_called()
+    node._release_band.assert_not_called()
+
+
+@pytest.mark.parametrize("position,rejected", [
+    (np.float32(-.37), False), (np.float32(.37), False),
+    (np.nextafter(np.float32(-.37), np.float32(-np.inf)), True),
+    (np.nextafter(np.float32(.37), np.float32(np.inf)), True),
+    (np.float32(-.3819151520729065), True),
+])
+def test_fame_startup_float32_guard_and_exact_sample_diagnostics(monkeypatch, position, rejected):
+    monkeypatch.setattr(time, "monotonic", lambda: 100.)
+    monkeypatch.setattr(time, "time", lambda: 1794452895.4334023)
+    node, policy, state, outputs, events = fame_startup_fixture()
+    node._lowstate = SimpleNamespace(tick=116)
+    node._lowstate_received_at = 99.98
+    node._hb_last = 99.9
+    state.t = .116
+    state.q[:12] = policy.startup_lower
+    state.q[0] = position
+    logger = SimpleNamespace(info=Mock(side_effect=lambda msg: events.append("log")))
+    node.get_logger = lambda: logger
+    assert state.q.dtype == policy._lower_limit.dtype == policy._upper_limit.dtype == np.float32
+    node._tick()
+    evidence = (
+        "tick=116", "ros_clock_s=0.116", "wall_time_s=1794452895.4334023",
+        "state_receipt_monotonic_s=99.98", f"state_receipt_age_s={100. - 99.98!r}",
+        f"heartbeat_age_s={100. - 99.9!r}",
+    )
+    if rejected:
+        assert outputs == []
+        logger.info.assert_not_called()
+        node._trip_heartbeat.assert_called_once()
+        message = node._trip_heartbeat.call_args.args[0]
+        assert message.startswith("FAME startup joints outside configured limits:")
+        excursion = np.maximum(policy._lower_limit[:1] - position, position - policy._upper_limit[:1])
+        for field in (
+            "motor_indices=[0]", f"measured_q={[float(position)]}",
+            f"lower={policy._lower_limit[:1].tolist()}",
+            f"upper={policy._upper_limit[:1].tolist()}",
+            "q_dtype=float32 lower_dtype=float32 upper_dtype=float32",
+            f"excursion_rad={excursion.tolist()}",
+        ):
+            assert field in message
+    else:
+        assert len(outputs) == 1
+        node._trip_heartbeat.assert_not_called()
+        logger.info.assert_called_once()
+        message = logger.info.call_args.args[0]
+        assert message.startswith("FAME first prepose command published:")
+        assert events == ["publish", "log"]
+        node._tick()
+        assert len(outputs) == 2
+        logger.info.assert_called_once()
+    for field in evidence:
+        assert field in message
     node._manager.commit.assert_not_called()
     node._release_band.assert_not_called()
 

@@ -82,7 +82,8 @@ class PegBoardConfig:
     peg_mode: str = "seated"
     peg_id: str = "cylinder_1"
     source_hole: str = "cylinder_1"
-    table_x: float = 0.503832018731
+    # Keep the workcell outside the standing policies' startup arm sweep.
+    table_x: float = 0.668832018731
     table_y: float = 0.185369815094
     table_height: float = 0.955172239917
     marker: bool = True

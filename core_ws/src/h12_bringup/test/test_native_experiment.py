@@ -33,6 +33,7 @@ class NativeExperimentTests(unittest.TestCase):
             'launch.substitutions': {'LaunchConfiguration': Configuration,
                                      'EnvironmentVariable': action('EnvironmentVariable')},
             'launch_ros.actions': {'Node': action('Node')},
+            'launch_ros.parameter_descriptions': {'ParameterValue': lambda value, value_type: value},
         }
         modules = {}
         for name, attributes in definitions.items():
@@ -47,7 +48,8 @@ class NativeExperimentTests(unittest.TestCase):
             self.launch = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(self.launch)
         self.context = {'controller_python': '/usr/bin/python3', 'lowerbody': 'fame_finetune',
-                        'upper_controller': 'frame',
+                         'upper_controller': 'frame',
+                         'control_mode': '', 'approach_mode': 'plan',
                         'comparison_order': 'frame,counter',
                         'start_position_verified': 'false', 'marker_catalog_path': str(SOURCE)}
 
@@ -80,6 +82,7 @@ class NativeExperimentTests(unittest.TestCase):
             self.assertEqual(control['frame_task_prefix'], '/usr/bin/python3')
             self.assertEqual(control['safety_config'], 'sim_safety_split.yaml')
             self.assertEqual(control['upper_controller'], 'frame')
+            self.assertEqual(control['control_mode'], '')
             self.assertEqual(control['comparison_order'], 'frame,counter')
             self.assertEqual(control['frame_task_config'], 'sim_safety_split.yaml')
             self.assertEqual(lower['start_position_verified'], 'true')
@@ -88,6 +91,7 @@ class NativeExperimentTests(unittest.TestCase):
             self.assertTrue(lower['lowerbody_params'].endswith('/config/lowerbody_experiment.yaml'))
             self.assertEqual(actions[4].executable, 'skills')
             self.assertEqual(actions[4].parameters[0]['target_backend'], 'marker')
+            self.assertEqual(actions[4].parameters[0]['approach_mode'], 'plan')
             self.assertNotIn('h12_models', str(actions))
             self.assertNotIn('h12_navigation', str(actions))
 
@@ -105,6 +109,22 @@ class NativeExperimentTests(unittest.TestCase):
             self.assertEqual(control['frame_task_config'], 'counter_safety_split.yaml')
             self.assertEqual(control['safety_config'], 'sim_safety_split.yaml')
             self.assertEqual(dict(actions[3].launch_arguments)['lowerbody'], policy)
+
+    def test_task_modes_are_explicit_and_do_not_change_backend_or_policy(self):
+        self.context.update(start_position_verified='true', upper_controller='counter')
+        for mode in ('frame', 'counter'):
+            self.context['control_mode'] = mode
+            self.context['approach_mode'] = 'reuse'
+            actions = self.compose()
+            self.assertEqual(dict(actions[2].launch_arguments)['control_mode'], mode)
+            self.assertEqual(dict(actions[2].launch_arguments)['upper_controller'], 'counter')
+            self.assertEqual(actions[4].parameters[0]['approach_mode'], 'reuse')
+        self.context['upper_controller'] = 'frame'
+        with self.assertRaisesRegex(RuntimeError, 'capable backend'):
+            self.compose()
+        self.context.update(upper_controller='counter', approach_mode='invalid')
+        with self.assertRaisesRegex(RuntimeError, 'approach_mode'):
+            self.compose()
 
     def test_invalid_upper_controller_is_rejected_even_without_actuation(self):
         for upper in ('', 'robust3c', 'Frame', 'counter; touch /invalid'):

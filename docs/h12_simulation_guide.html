@@ -62,374 +62,142 @@
 <body>
   <a class="skip" href="#main">Skip to guide</a>
   <div class="layout">
-    <aside>
-      <nav aria-label="Guide sections">
-        <div class="brand">GOLEM / FIELD GUIDE</div>
-        <ol>
-          <li><a href="#overview">01 Overview</a></li>
-          <li><a href="#prepare">02 Terminal preparation</a></li>
-          <li><a href="#build">03 First-time build</a></li>
-          <li><a href="#scene">04 Scene configuration</a></li>
-          <li><a href="#run">05 Start one comparison process</a></li>
-          <li><a href="#rviz">06 View and inspect</a></li>
-          <li><a href="#arm">07 Same-run planned comparison</a></li>
-          <li><a href="#skills">08 Peg extraction</a></li>
-          <li><a href="#reset">09 Stop and reset</a></li>
-          <li><a href="#reference">10 Quick reference</a></li>
-        </ol>
-      </nav>
-    </aside>
+    <aside><nav aria-label="Guide sections">
+      <div class="brand">GOLEM / FIELD GUIDE</div>
+      <ol>
+        <li><a href="#build">01 Prepare once</a></li>
+        <li><a href="#simulation">02 Launch simulation</a></li>
+        <li><a href="#controller">03 Launch controller</a></li>
+        <li><a href="#engage">04 Engage lower body</a></li>
+        <li><a href="#mode">05 Choose Frame or Counter</a></li>
+        <li><a href="#task">06 Grasp or extract</a></li>
+        <li><a href="#repeat">07 Return and reuse</a></li>
+        <li><a href="#details">08 Details and shutdown</a></li>
+      </ol>
+    </nav></aside>
     <main id="main">
       <header>
         <div class="eyebrow">Native Linux / MuJoCo / ROS 2 Humble</div>
-        <h1>H1-2 Simulation<br>Operations Guide</h1>
-        <p class="lede">Prepare the isolated environments and compare planned Frame-compatible and Counter arm motion in one supported simulation run. The calibrated peg-extraction procedure remains a separate reference. All commands start from the GOLEM repository root.</p>
-        <div class="callout warning"><p><strong>Simulation only.</strong> Use <code>ROS_DOMAIN_ID=1</code>. The native launchers refuse domain 0, the real robot bus. This guide does not cover hardware deployment. Offline checks and available policy files do not prove balance, safe motion, or successful grasping.</p></div>
+        <h1>H1-2 Simulation<br>Task Guide</h1>
+        <p class="lede">Launch the pegboard scene, start one controller, engage standing, then grasp or extract with Frame or Counter. Return to the recorded approach start to reuse the same plan without restarting standing.</p>
+        <p>Run commands from the GOLEM root in clean bash or zsh terminals, outside Conda. Set <code>ROS_DOMAIN_ID=1</code> in every terminal. The simulation helpers reject domain 0; hardware uses the separate <a href="h12_real_deployment_guide.html">real deployment guide</a>.</p>
       </header>
 
-      <section id="overview" aria-labelledby="overview-title">
-        <h2 id="overview-title">01 / What Runs Where</h2>
-        <p>The simulator, ROS processes, and arm controller use separate Python environments. The root scripts choose the correct interpreter and ROS overlays. Do not activate these environments manually or combine their Python paths.</p>
-        <div class="table-wrap"><table>
-          <caption>Environment roles</caption>
-          <thead><tr><th scope="col">Environment</th><th scope="col">Numerical stack</th><th scope="col">Role</th></tr></thead>
-          <tbody>
-            <tr><td><code>environments/ros</code></td><td>NumPy 1</td><td>ROS CLI, safety, lower-body policy node, geometric ArUco localization, and marker skills.</td></tr>
-            <tr><td><code>environments/controller</code></td><td>NumPy 2</td><td>Isolated Pinocchio/Pink/OMPL arm controller and joint-state publisher. Start Counter once for both comparison conditions. The ordinary Frame and Counter startup selections remain available for separate tasks.</td></tr>
-            <tr><td><code>environments/simulator</code></td><td>NumPy 2 / MuJoCo 3.3.1</td><td>PegInHole physics, viewer, cameras, grippers, clock, and DDS/ROS bridges.</td></tr>
-          </tbody>
-        </table></div>
-        <p>This marker workflow uses camera geometry and the local asset catalog. The ArUco localizer lives in <code>model_server</code>, but does not load its AI models. It does not need AI API keys, SAM weights, or cloud calls. Compressed image transport means JPEG camera delivery, not an AI motion prior. The native environment does not install RoboCasa kitchen scenes.</p>
-        <p>Keep ground-truth odometry off for this workflow. Localization comes from the head camera, its calibration, and timestamped TF, not simulator object poses.</p>
-      </section>
-
-      <section id="prepare" aria-labelledby="prepare-title">
-        <h2 id="prepare-title">02 / Prepare Each Terminal</h2>
-        <p>Use a normal user shell, including zsh. If Conda is active, deactivate it first; repeat the deactivation if environments are nested. Skip that command when Conda is not installed or no environment is active.</p>
-        <figure class="command"><figcaption><span>Each terminal / leave Conda if active</span><button type="button" data-copy="cmd-conda" aria-label="Copy Conda deactivation command">Copy</button></figcaption><pre><code id="cmd-conda">conda deactivate</code></pre></figure>
-        <figure class="command"><figcaption><span>Each terminal / repository and simulation domain</span><button type="button" data-copy="cmd-terminal" aria-label="Copy terminal preparation commands">Copy</button></figcaption><pre><code id="cmd-terminal">cd ~/Programming/GOLEM
-export ROS_DOMAIN_ID=1</code></pre></figure>
-        <p>The wrappers work directly from zsh or bash. Stay at the repository root and use the paths below; do not source ROS setup files, activate a venv, or manually alter <code>PYTHONPATH</code> or library paths. Display credentials are preserved by the wrappers, not repaired by them.</p>
-      </section>
-
       <section id="build" aria-labelledby="build-title">
-        <h2 id="build-title">03 / First-Time Setup and Build</h2>
-        <p>Complete this once for a prepared checkout, and repeat the relevant build/check after dependency, interface, or source changes. These commands prepare files and run offline checks; they do not start simulator loops or ROS nodes.</p>
-        <h3>Prerequisites</h3>
-        <ul>
-          <li>Linux with ROS 2 Humble under <code>/opt/ros/humble</code> and system Python 3.10 at <code>/usr/bin/python3</code>.</li>
-          <li>Initialized repository submodules and downloaded Git-LFS assets, including the H1-2 model, ManipulationNet catalog, and bundled standing policies.</li>
-          <li>The system packages listed in <code>environments/ros/apt-packages.txt</code>: build tools, CMake, Python development/colcon tools, ROS generators, rclpy, cv_bridge, and standard messages. A working OpenGL stack is needed for rendering; RViz also needs an installed <code>rviz2</code> and a working desktop display.</li>
-          <li>Access to the locked dependency downloads during setup. Setup runs as your normal user and does not install system packages or invoke sudo. Have an administrator provide missing system prerequisites rather than running the whole setup as root.</li>
-        </ul>
-        <p><code>--local-ros-debs</code> downloads and extracts only two allowlisted ROS packages, <code>ros-humble-rosidl-generator-dds-idl</code> and <code>ros-humble-nav2-msgs</code>, into the local environment. It is not a general apt installer or a replacement for ROS Humble.</p>
-        <figure class="command"><figcaption><span>Setup / ROS and simulator dependencies</span><button type="button" data-copy="cmd-setup" aria-label="Copy ROS and simulator setup commands">Copy</button></figcaption><pre><code id="cmd-setup">./scripts/setup_environment.sh ros --local-ros-debs
-./scripts/setup_environment.sh simulator</code></pre></figure>
-        <p>Build the <code>experiment</code> profile, which selects 12 packages, with two parallel compile jobs. Build it before setting up the controller: the controller check needs the generated interfaces.</p>
-        <figure class="command"><figcaption><span>Build / experiment workspace</span><button type="button" data-copy="cmd-build" aria-label="Copy experiment workspace build command">Copy</button></figcaption><pre><code id="cmd-build">./core_ws/scripts/build_ros_workspace.sh build --profile experiment --compile-jobs 2</code></pre></figure>
-        <figure class="command"><figcaption><span>Setup / isolated controller and simulator interfaces</span><button type="button" data-copy="cmd-controller-setup" aria-label="Copy controller and simulator interface setup commands">Copy</button></figcaption><pre><code id="cmd-controller-setup">./scripts/setup_environment.sh controller
+        <h2 id="build-title">01 / Prepare Once</h2>
+        <p>Use Linux with ROS 2 Humble, system Python 3.10, initialized submodules and Git-LFS assets. System prerequisites are listed in <code>environments/ros/apt-packages.txt</code>. A prepared checkout can go directly to step 02.</p>
+        <figure class="command"><figcaption><span>Each terminal / repository and isolated simulation domain</span><button type="button" data-copy="cmd-shell">Copy</button></figcaption><pre><code id="cmd-shell">conda deactivate
+cd ~/Programming/GOLEM
+export ROS_DOMAIN_ID=1</code></pre></figure>
+        <details><summary>First-time dependency setup and build</summary>
+          <p>Run in this order. The wrappers keep ROS/vision on NumPy 1 and the controller/simulator in their separate NumPy 2 environments; do not activate or combine their Python paths manually. Setup does not install system packages or need sudo.</p>
+          <figure class="command"><figcaption><span>Setup / build interfaces before the controller environment</span><button type="button" data-copy="cmd-build">Copy</button></figcaption><pre><code id="cmd-build">./scripts/setup_environment.sh ros --local-ros-debs
+./scripts/setup_environment.sh simulator
+./core_ws/scripts/build_ros_workspace.sh build --profile experiment --compile-jobs 2
+./scripts/setup_environment.sh controller
 ./scripts/setup_environment.sh simulator --build-interfaces</code></pre></figure>
-        <p>The controller setup installs its locked dependencies, including those needed by Counter. Repeat controller setup and the experiment workspace build after changing controller dependencies or launch files; do not manually install another version into the environment. The interface step builds message-only Livox support from the pinned checkout. It does not install a hardware driver or resynchronize the simulator dependencies.</p>
-        <figure class="command"><figcaption><span>Check / all three environments</span><button type="button" data-copy="cmd-check" aria-label="Copy offline environment check commands">Copy</button></figcaption><pre><code id="cmd-check">./scripts/setup_environment.sh ros --check --built --profile experiment
+          <figure class="command"><figcaption><span>Offline environment checks</span><button type="button" data-copy="cmd-check">Copy</button></figcaption><pre><code id="cmd-check">./scripts/setup_environment.sh ros --check --built --profile experiment
 ./scripts/setup_environment.sh controller --check
 ./scripts/setup_environment.sh simulator --check --bridges</code></pre></figure>
-        <p>Require successful checks before continuing. They check imports, generated interfaces, and offline numerical/bridge operations. They do not qualify standing performance, camera visibility during motion, contact physics, or insertion accuracy. Everyday launch commands do not install or compile anything.</p>
-      </section>
-
-      <section id="scene" aria-labelledby="scene-title">
-        <h2 id="scene-title">04 / Configure the Scene</h2>
-        <p>The default task is <code>PegInHole</code>, with a level table and board on the robot's left and one <code>cylinder_1</code> peg seated in <code>cylinder_1</code>. The board origin is approximately <code>(0.504, 0.185, 0.955)</code> metres in the scene world frame. The board footprint is <code>0.32 x 0.25 m</code>; its entry surface is 25 mm above its origin.</p>
-        <div class="table-wrap"><table>
-          <caption>Scene and localization defaults</caption>
-          <thead><tr><th scope="col">Setting</th><th scope="col">Default / meaning</th></tr></thead>
-          <tbody>
-            <tr><td>Task</td><td><code>--task PegInHole</code></td></tr>
-            <tr><td>Active peg and seated source</td><td><code>--peg cylinder_1 --source-hole cylinder_1</code></td></tr>
-            <tr><td>Markers</td><td><code>DICT_4X4_50</code>: ID 7 top-left, ID 8 top-right. Mount each 40 mm paper square flush with the board's top and adjacent outer side edge; no inset. Keep the printed orientation unchanged.</td></tr>
-            <tr><td>Marker dimensions</td><td>30 mm black square, 40 mm total white-paper square. PnP uses the black-square edge, not the paper edge.</td></tr>
-            <tr><td>Localization camera</td><td>Head color image and CameraInfo. The PegInHole helper selects full profiled 1280 &times; 720 resolution by default.</td></tr>
-            <tr><td>Extraction profile</td><td><code>core_ws/src/h12_skills/h12_skills/marker_profile_sim_extraction.json</code>; explicitly selected in bringup. The default <code>marker_profile.json</code> is nominal and is not the successful extraction calibration.</td></tr>
-          </tbody>
-        </table></div>
-        <p>Catalog suffixes <code>0..3</code> are clearance rows, top-to-bottom from tight to loose. They are <strong>not four peg sizes or scale factors</strong>: the source peg geometry is shared across a shape's rows. For example, <code>cylinder_3</code> names the looser destination row, not a larger cylinder.</p>
-        <p>On the 320 &times; 250 mm board, flush paper edges place marker centres at board-local (X, Y) = (&minus;140, 105) mm and (140, 105) mm: 280 mm centre-to-centre. Retain the full 5 mm white border around each 30 mm black code. The shared layout file defines these offsets for both rendering and localization. Accurate mounting helps repeatability but does not remove print-scale, camera-calibration or pose-estimation error.</p>
-        <p>The simulator can select catalog peg/source IDs, but the skills' active-peg profile must match the physical scene exactly. A different source hole requires an explicitly prepared matching profile, supplied with <code>marker_profile_path:=/absolute/path/to/profile.json</code>. Merely changing simulator flags does not update that profile. Catalog fit checks do not provide a grasp calibration. The extraction workflow below explicitly loads a simulator-only cylinder calibration instead of relying on the nominal profile.</p>
-        <figure class="command"><figcaption><span>Scene configuration / custom peg and source, ALMI spawn</span><button type="button" data-copy="cmd-sim-custom" aria-label="Copy custom peg simulator command">Copy</button></figcaption><pre><code id="cmd-sim-custom">./scripts/run_simulation.sh --task PegInHole --lowerbody almi_manip_stand --peg cylinder_2 --source-hole cylinder_1</code></pre></figure>
-        <p>This custom scene is an alternative to the normal run, not a second simulator. Prepare a matching skill profile before using skills. Existing <code>--layout</code>, <code>--style</code>, and <code>--seed</code> options remain available; peg/source flags remain specific to PegInHole.</p>
-        <h3>Camera defaults</h3>
-        <p>The PegInHole launch helper selects the camera settings for marker manipulation. Use the plain command in the next section; no inline camera variables are needed. The effective settings are printed at startup.</p>
-        <table aria-label="PegInHole camera defaults">
-          <thead><tr><th>Setting</th><th>Default</th><th>Purpose</th></tr></thead>
-          <tbody>
-            <tr><td><code>GOLEM_CAMERA_SCALE</code></td><td><code>1</code></td><td>Render at full profiled resolution, not an enlarged low-resolution image. This improves corner detection for the 30 mm markers; CameraInfo intrinsics match the rendering resolution.</td></tr>
-            <tr><td><code>GOLEM_CAMERA_DEPTH</code></td><td><code>0</code></td><td>Disable the standalone <code>depth/image_rect_raw</code> stream. Marker localization uses RGB and CameraInfo.</td></tr>
-            <tr><td><code>GOLEM_CAMERA_POINTCLOUD</code></td><td><code>0</code></td><td>Disable camera <code>depth/color/points</code> streams, which this experiment does not use.</td></tr>
-          </tbody>
-        </table>
-        <p>RGB, CameraInfo, camera TF, aligned depth and Livox LiDAR remain enabled. This is not a complete depth-rendering shutdown or a change to physics timing. The defaults apply to PegInHole through <code>run_simulation.sh</code>; other tasks keep their existing defaults. Explicitly exported <code>GOLEM_CAMERA_*</code> values still take precedence for advanced use. Change settings only before starting a fresh simulator.</p>
-      </section>
-
-      <section id="run" aria-labelledby="run-title">
-        <h2 id="run-title">05 / Start One Comparison Process</h2>
-        <p><strong>Main workflow: supported, empty-hand arm motion.</strong> Keep the translational tether and pelvis rotational hoist enabled. Select ALMI for the initial pose and lower-body pre-positioning, and leave its policy <strong>unengaged</strong>. This is not autonomous standing. Start one simulator and one Counter-capable upper-controller process. Keep that simulator and the same lower-body node instance running throughout the batch.</p>
-        <div class="callout warning"><p><strong>Live qualification pending.</strong> The planned same-run protocol below has not yet been qualified by an operator in this support condition. It is not a peg-extraction benchmark or evidence of improved balance. Unsupported, actively standing and real-robot comparisons need separate qualification.</p></div>
-        <h3>Terminal A / start the simulator first</h3>
-        <figure class="command"><figcaption><span>Terminal A / supported pegboard simulator, ALMI spawn</span><button type="button" data-copy="cmd-sim" aria-label="Copy supported pegboard simulator launch command">Copy</button></figcaption><pre><code id="cmd-sim">./scripts/run_simulation.sh --task PegInHole --lowerbody almi_manip_stand --manipulation-hoist</code></pre></figure>
-        <p>The explicit <code>--lowerbody almi_manip_stand</code> selects only the simulator's initial joint pose and pelvis fit, from the first twelve <code>default_angles</code> in the ALMI source configuration. It does not load a checkpoint, infer a policy, start a controller, or confirm engagement. Without <code>--lowerbody</code>, the root helper preserves the exact legacy baked spawn; it does not infer the ROS policy. Pelvis heading is independent of toe yaw; existing obstacle-clearance placement can still translate the base. Check the printed selection and actual fit logs: a source configuration pose is not a guarantee of balanced or flat-footed standing.</p>
-        <p>Leave this terminal running. <code>--manipulation-hoist</code> explicitly selects the existing pelvis rotational support, stiffness 2000 N m/rad and damping 12 N m s/rad, alongside the startup translational band. It is opt-in; omitting it does not reproduce the extraction support condition. Verify the seated peg, <code>elastic band on torso anchored at ...</code>, and the logged pelvis rotational hold. Support is not proof of a safe pose or stable balance.</p>
-        <details><summary>Without a display / choose this instead of the GUI simulator</summary>
-          <figure class="command"><figcaption><span>Terminal A / supported headless alternative</span><button type="button" data-copy="cmd-sim-headless" aria-label="Copy supported headless simulator launch command">Copy</button></figcaption><pre><code id="cmd-sim-headless">./scripts/run_simulation.sh --task PegInHole --lowerbody almi_manip_stand --manipulation-hoist --headless</code></pre></figure>
-          <p>Keep the same support and controller choices. Start only one simulator; do not run this alongside the GUI command.</p>
-        </details>
-        <p>To inspect performance, add <code>--timing</code> to the simulator command. It logs real-time factor and stage timings every five wall-clock seconds. A real-time factor of 1 means one simulated second per wall-clock second; 0.5 means the simulation takes twice as long. Check other CPU/GPU workloads and the reported stage costs before changing sensor output or physics settings. Start only one simulator.</p>
-        <div class="callout warning"><p>Keep the startup tether enabled. Do not press Space or manually toggle the band to bypass engagement. If the robot is not held in the expected safe posture, stop before starting actuation.</p></div>
-        <details><summary>Optional video / select this instead of the simulator command above</summary>
-          <p>Ensure <code>~/Downloads</code> already exists and choose an unused output name. Recording also writes an evaluation-only JSONL sidecar; it does not supply ground truth to the robot stack. Stop the simulator cleanly after the experiment so recording can finalize.</p>
-          <figure class="command"><figcaption><span>Terminal A / same support, optional 20 fps simulation-time recording</span><button type="button" data-copy="cmd-sim-record" aria-label="Copy supported simulator recording command">Copy</button></figcaption><pre><code id="cmd-sim-record">./scripts/run_simulation.sh --task PegInHole --lowerbody almi_manip_stand --manipulation-hoist \
-  --record "$HOME/Downloads/golem_peg_extraction_run.webm" --record-fps 20</code></pre></figure>
-          <p>Playback is <strong>1x simulation time</strong>, not evidence of wall-clock real-time performance. The camera/viewer image and evaluation sidecar do not replace physical contact and clearance checks.</p>
-        </details>
-        <h3>Terminal B / Counter-capable process for both conditions</h3>
-        <p>After visually verifying the held start posture and clear workspace, explicitly allow actuation. <code>start_position_verified:=true</code> is the operator's assertion, not an automated safety check. Start only this bringup for the comparison; do not leave observation-only bringup or another upper controller running.</p>
-        <figure class="command"><figcaption><span>Terminal B / one process, Frame then Counter batch order</span><button type="button" data-copy="cmd-comparison-start" aria-label="Copy same-run comparison bringup command">Copy</button></figcaption><pre><code id="cmd-comparison-start">./scripts/run_experiment.sh start_position_verified:=true \
-  upper_controller:=counter lowerbody:=almi_manip_stand \
-  comparison_order:=frame,counter \
-  image_transport:=compressed publish_annotated:=false</code></pre></figure>
-        <p><code>upper_controller:=counter</code> is required even for the Frame-compatible trials inside a batch. It loads one common Counter configuration once. <code>comparison_order</code> selects trial order, not a second process. The startup selector itself does not hot-swap backends. Ordinary <code>/frame_task</code> and <code>/named_config</code> behavior remains unchanged.</p>
-        <details><summary>Optional separate-run controllers / extraction reference and legacy functional checks</summary>
-        <p><strong>Run Frame OR Counter, never both.</strong> These are alternatives to the comparison bringup above. Each starts state/TF, localization, safety, one upper controller, ALMI pre-positioning, and marker skills. Stop and reset before changing startup backends. These separate-run commands do not provide the matched configuration and shared plan of a same-run batch.</p>
-        <div class="mode">
-          <h3>Alternative A / Frame baseline</h3>
-          <p>After visually verifying the held start posture and clear workspace, explicitly allow actuation. <code>start_position_verified:=true</code> is the operator's assertion, not an automated safety check.</p>
-          <figure class="command"><figcaption><span>Terminal B / Frame, supported ALMI pre-pose</span><button type="button" data-copy="cmd-actuate" aria-label="Copy Frame experiment command">Copy</button></figcaption><pre><code id="cmd-actuate">./scripts/run_experiment.sh start_position_verified:=true \
-  upper_controller:=frame lowerbody:=almi_manip_stand \
-  image_transport:=compressed publish_annotated:=false \
-  marker_profile_path:="$PWD/core_ws/src/h12_skills/h12_skills/marker_profile_sim_extraction.json"</code></pre></figure>
-          <p>Frame is the ordinary task-space baseline and the controller used for the successful supported extraction. For a one-arm task, it retains the other arm's ordinary hold behavior.</p>
-        </div>
-        <div class="mode">
-          <h3>Alternative B / Counter experiment</h3>
-          <figure class="command"><figcaption><span>Terminal B / Counter, same support and ALMI pre-pose</span><button type="button" data-copy="cmd-counter" aria-label="Copy Counter experiment command">Copy</button></figcaption><pre><code id="cmd-counter">./scripts/run_experiment.sh start_position_verified:=true \
-  upper_controller:=counter lowerbody:=almi_manip_stand \
-  image_transport:=compressed publish_annotated:=false \
-  marker_profile_path:="$PWD/core_ws/src/h12_skills/h12_skills/marker_profile_sim_extraction.json"</code></pre></figure>
-          <p>Counter uses the existing robust-3C nominal controller, <code>CounterDDPVelocityRobustController</code>, through a small <code>CounterFrameController</code> adapter. It does not select the separate H2/H3 benchmark variants. The selector loads the matching controller configuration; the upstream safety relay remains unchanged.</p>
-          <p>Counter uses the same <code>/frame_task</code> and <code>/named_config</code> interface. A single-frame, single-arm target leaves the opposite arm available for counter-motion; multi-frame goals are rejected in Counter mode. Do not constrain both arms or put an object in the free hand when testing that behavior. Its presence is not proof of successful tracking, contact, or improved balance.</p>
-        </div>
-        </details>
-        <h3>Initialization / required for either controller</h3>
-        <ol>
-          <li>Keep the simulator supported. Check fresh state and safety heartbeat; stop on stale control data or unexpected motion.</li>
-          <li>Wait for <code>init_1</code>, <code>init_2</code>, <code>init_3</code>, <code>home</code>, then torso yaw initialization. Require <code>Frame Task Server initialized</code> and fresh end-effector poses. Initialization uses plain named postures in both modes, not counter-motion.</li>
-          <li>Wait for <code>legs pre-posed (settled, ...)</code> and the lower-body confirmation prompt. A <code>NOT SETTLED (timeout)</code> message is not permission to continue. Inspect actual arm/leg posture and clearance, not only action-server availability or initialization logs.</li>
-          <li><strong>Do not call <code>/lowerbody/confirm_engage</code> for this supported workflow.</strong> Leave ALMI holding its pre-pose and leave both support mechanisms enabled. For the comparison, proceed directly to section 07 with both hands empty. Extraction has its own Frame startup and staging procedure.</li>
-        </ol>
-        <p>Select ALMI independently in both terminals: simulator syntax is <code>--lowerbody almi_manip_stand</code>, ROS syntax is <code>lowerbody:=almi_manip_stand</code>. Neither launcher selects the other terminal's policy. Starting the lower-body node permits pre-positioning before confirmation; unengaged does not mean no motor commands.</p>
-        <details><summary>Observation only / alternative to all actuated bringup</summary>
-          <figure class="command"><figcaption><span>Terminal B / observation only, no controllers or skill servers</span><button type="button" data-copy="cmd-observe" aria-label="Copy observation-only experiment command">Copy</button></figcaption><pre><code id="cmd-observe">./scripts/run_experiment.sh image_transport:=compressed</code></pre></figure>
-          <p>This starts state/TF and localization only. Stop it and wait for its children to exit before selecting Frame or Counter. It cannot execute the arm or skill commands below.</p>
-        </details>
-        <details><summary>Optional FAME selection and startup behavior</summary><p>For FAME, independently select <code>./scripts/run_simulation.sh --task PegInHole --lowerbody fame_finetune</code> in Terminal A and <code>./scripts/run_experiment.sh start_position_verified:=true lowerbody:=fame_finetune</code> in Terminal B, instead of the ALMI commands. The simulator uses the source configuration's <code>lower_start_pos</code>, not a training default, and only fits the initial joints/pelvis. It does not start or confirm the controller. With a fixed pelvis orientation, the asymmetric FAME pose can leave unequal sole gaps; inspect actual fit logs rather than assuming both feet are exactly flat. Controller pre-positioning follows the upstream deployment sequence: interpolate the measured legs to <code>lower_start_pos</code> over two seconds, then hold that startup posture for operator confirmation. The separate <code>lower_default_pos</code> remains the reference for policy observations and actions; it is not a replacement startup pose.</p></details>
-        <p>For either policy, torso yaw is owned by the upper-body controller, not by the twelve-leg-joint policy.</p>
-        <figure class="command"><figcaption><span>Terminal C / inspect measured arm poses after initialization</span><button type="button" data-copy="cmd-ee" aria-label="Copy end-effector pose inspection commands">Copy</button></figcaption><pre><code id="cmd-ee">./scripts/run_ros.sh topic echo /left_ee_pose --once
-./scripts/run_ros.sh topic echo /right_ee_pose --once</code></pre></figure>
-        <p>These end-effector topics report wrist-link poses, not the GRASPGENX origin used by the staging goal. Use the named grasp-frame TF in RViz or the active <code>/frame_poses</code> output to inspect that goal's actual controlled frame; do not compare a wrist position directly with a GRASPGENX target.</p>
-        <details><summary>Separate later experiment / engage the standing policy</summary>
-          <p>This is <strong>not part of the extraction recipe</strong>. Policy engagement changes the support condition and requires its own supervised balance experiment, with appropriate tether/hoist handling. Finish initialization, require settled legs, and verify actual posture and workspace before any confirmation. Do not manually remove support to bypass the interlock. An engaged policy with a rotational hoist is still not an unsupported balance test.</p>
-          <figure class="command"><figcaption><span>Separate balance experiment only / operator confirmation</span><button type="button" data-copy="cmd-confirm" aria-label="Copy optional lower-body engagement confirmation service call">Copy</button></figcaption><pre><code id="cmd-confirm">./scripts/run_ros.sh service call /lowerbody/confirm_engage std_srvs/srv/Trigger '{}'</code></pre></figure>
-          <p>The service can record an early confirmation. Never pre-call it or chain it into launch. It starts the selected 50 Hz standing policy and initiates its tether-release sequence; a successful response is not evidence of balance. Do not combine this test with an unverified grasp or controller comparison.</p>
+          <p>Require each command to succeed. Repeat the relevant build after source/interface changes. Everyday launch does not install or compile dependencies. This geometric marker workflow needs no cloud API key or AI model weights.</p>
         </details>
       </section>
 
-      <section id="rviz" aria-labelledby="rviz-title">
-        <h2 id="rviz-title">06 / View and Inspect</h2>
-        <p>Use another prepared terminal for RViz after the simulator and one bringup mode are running. The viewer does not replace bringup and should not start a second localizer.</p>
-        <figure class="command"><figcaption><span>Terminal D / RViz inspection</span><button type="button" data-copy="cmd-rviz" aria-label="Copy RViz launcher command">Copy</button></figcaption><pre><code id="cmd-rviz">./scripts/run_rviz.sh</code></pre></figure>
-        <p>The launcher starts only the RViz client, on simulation time, with <code>pelvis</code> as its fixed frame. Its source-checkout default is <code>core_ws/src/h12_bringup/rviz/pegboard.rviz</code>, derived from GOLEM's existing full <code>h12_bringup/rviz/main.rviz</code> recipe. The original <code>main.rviz</code> and standard bringup <code>use_rviz</code> defaults are unchanged. A working display and installed RViz are required. Use <code>--config PATH</code> for a different RViz configuration.</p>
-        <p>RViz alone does not publish a robot, TF, or camera images. If those displays have no data, check that the simulator and exactly one experiment bringup are running; enabling a display cannot replace its publisher. The prerequisite check below checks files and launcher dependencies, not live topic readiness or rendering performance.</p>
-        <figure class="command"><figcaption><span>Offline / check RViz prerequisites without opening it</span><button type="button" data-copy="cmd-rviz-check" aria-label="Copy RViz prerequisite check command">Copy</button></figcaption><pre><code id="cmd-rviz-check">./scripts/run_rviz.sh --check</code></pre></figure>
-        <div class="table-wrap"><table>
-          <caption>RViz views and visual keys</caption>
-          <thead><tr><th scope="col">Display</th><th scope="col">What to inspect</th></tr></thead>
-          <tbody>
-            <tr><td>Head RGB + Projected Geometry</td><td>Camera view from <code>/realsense/head/color/image_raw</code> with its matching <code>/realsense/head/color/camera_info</code>. Compare projected board/marker geometry with the image. The camera input uses Best Effort QoS.</td></tr>
-            <tr><td>RobotModel</td><td>Enabled full robot mesh, using Description Source <code>Topic</code> and <code>/robot_description</code> with Reliable, Transient Local QoS so a viewer opened after bringup receives the retained description. Bringup supplies the installed <code>h12_ros2_model</code> ROS URDF; its <code>package://h12_ros2_model/...</code> mesh paths resolve through the workspace overlay, not an RViz-specific file copy.</td></tr>
-            <tr><td>TF and grid</td><td>Selected pelvis, torso, head optical and grasp frames in the central 3D view. The orbit view frames the full robot and workspace, not just a close-up of the pelvis. The grid is pelvis-relative at Z = -0.97 m, a nominal standing ground reference, not a measured floor or ground-truth map. Board and camera geometry use pelvis-relative coordinates, not absolute simulator world height.</td></tr>
-            <tr><td>HeadColorImage / HeadDepthImage</td><td>Raw head RGB is enabled with Best Effort QoS. The optional depth display uses aligned depth, which remains available even with standalone depth disabled. Enable HeadDepthImage only when needed.</td></tr>
-            <tr><td>Accepted Board Pose</td><td>Axes from <code>/perception/pegboard/pose</code>. Check current diagnostics before using a previously drawn pose.</td></tr>
-            <tr><td>Board + Markers + Frustum + Status</td><td><code>/perception/pegboard/markers</code>: board outline, yellow marker outlines, cyan camera frustum, and green VALID or red INVALID status text. Destination axes at <code>cylinder_3</code> are shown when catalog geometry is available. Colors are paired with labels or distinct geometry, not used alone to indicate validity.</td></tr>
-            <tr><td>Annotated RGB</td><td><code>/perception/pegboard/annotated</code> with Best Effort QoS. The supported extraction commands set <code>publish_annotated:=false</code>, matching the reference run, so this display is empty while raw HeadColorImage remains available. For a separate visualization run, select <code>publish_annotated:=true</code> at bringup; enabling the RViz display alone does not start a publisher.</td></tr>
-          </tbody>
-        </table></div>
-        <p><code>/perception/pegboard/pose_optical</code> is the same estimate expressed in the camera optical frame, not a second board. Visualization outlines and projected axes are estimates, not physics or grasp verification.</p>
-        <figure class="command"><figcaption><span>Terminal C / read localization health</span><button type="button" data-copy="cmd-diagnostics" aria-label="Copy localization diagnostic inspection command">Copy</button></figcaption><pre><code id="cmd-diagnostics">./scripts/run_ros.sh topic echo /perception/pegboard/diagnostics --once</code></pre></figure>
-        <div class="table-wrap"><table>
-          <caption>How to interpret localization diagnostics</caption>
-          <thead><tr><th scope="col">Signal</th><th scope="col">Meaning and operator check</th></tr></thead>
-          <tbody>
-            <tr><td><code>valid=true</code>, level OK</td><td>The current image/calibration/TF and geometric quality checks accepted a board observation. This does not verify a grasp or guarantee collision clearance.</td></tr>
-            <tr><td>Waiting for image/calibration</td><td>Localization needs synchronized camera data. Confirm camera topics, advancing simulation time, and matching CameraInfo.</td></tr>
-            <tr><td>No usable marker or ambiguous pose</td><td>Check marker visibility, image resolution, marker IDs, layout, and viewpoint. Either marker can localize the board if its pose passes the quality checks; both need not be visible. Do not infer validity from marker count or a rendered model alone.</td></tr>
-            <tr><td>Reprojection / geometry rejection</td><td>The image estimate did not meet configured quality bounds. Check calibration and layout; do not loosen bounds simply to enable motion.</td></tr>
-            <tr><td>Observation TF pending</td><td>The localizer is waiting within a bounded interval for the camera-to-pelvis transform at the original image timestamp. Check one bringup's TF and simulation-time configuration if it persists. It does not substitute the latest TF.</td></tr>
-            <tr><td>Stale observation / clock reset</td><td>The last estimate is no longer safe to use. Default pose-age limits are 0.5 seconds of ROS time. With <code>use_sim_time=true</code>, a slow simulator is evaluated on its simulation clock, not on wall-time delivery gaps. Real-time operation also retains a monotonic receipt-age check. Goal execution deadlines remain wall-clock limits. Restart all ROS processes and RViz after a simulation clock reset.</td></tr>
-          </tbody>
-        </table></div>
-        <p>Inspect observation age and the status message, not only a persistent pose arrow. Input age, processing wall time, and pending-TF count help separate camera delivery, processing, and transform readiness. Low reprojection error is image consistency, not millimetre-level insertion accuracy. A previously drawn pose may remain visible after localization becomes invalid. Skills require fresh valid observations and reject excessive board jumps.</p>
-      </section>
-
-      <section id="arm" aria-labelledby="arm-title">
-        <h2 id="arm-title">07 / Same-Run Planned Comparison</h2>
-        <p>Use Terminal C after initialization and settled ALMI pre-positioning in section 05. Keep both hands empty and inspect the whole path and free-arm clearance. Do not run a marker skill or another arm goal during a batch. Do not engage the standing policy.</p>
-        <h3>Run one planned batch</h3>
-        <p>The comparison uses the existing <code>FrameTask</code> action type at <code>/compare_frame_task</code>. Require <code>plan: true</code> and exactly one frame and target. The example requests a 50 mm left-arm offset along pelvis X with no orientation change. The relative target is resolved once after common preparation, not separately from each trial's measured endpoint.</p>
-        <figure class="command"><figcaption><span>Terminal C / planned Frame then Counter, one batch</span><button type="button" data-copy="cmd-comparison-goal" aria-label="Copy same-run planned comparison goal">Copy</button></figcaption><pre><code id="cmd-comparison-goal">./scripts/run_ros.sh action send_goal /compare_frame_task custom_ros_messages/action/FrameTask \
-  "{plan: true, relative: true, slow_mode: false, frame_names: ['left_graspgenx_frame'], frame_targets: [{position: {x: 0.05, y: 0, z: 0}, orientation: {x: 0, y: 0, z: 0, w: 1}}], duration: {sec: 300, nanosec: 0}}" --feedback</code></pre></figure>
-        <p>For this comparison action, <code>duration</code> is the <strong>overall wall-clock budget for the whole batch</strong>, including preparation, planning and all trials. The 300-second example is a budget, not a requested movement duration or a promise of completion. This does not redefine the ordinary <code>/frame_task</code> timeout or post-goal hold behavior.</p>
-        <ol>
-          <li>Prepare the same upper-body posture and reset upper references, integral state and IK state using the same protocol before each condition. The optional ROS parameter <code>comparison_prepare_config</code> names an existing posture and defaults to <code>prep</code>; keep it unchanged for the batch. The lower-body node and policy state are not reset.</li>
-          <li>Plan once. Keep the other arm at its fixed nominal posture in the common full-joint reference. Record the reference waypoints <code>Q</code>, sample interval <code>dt</code> and reference hash.</li>
-          <li>Before each condition, freshly validate those same waypoints against the current measured start. Keep the original creation time and issue a separate fresh validation only after the checks pass. Do not rewrite the creation timestamp or skip validation. Invalid commands, rejected validation or failed tracking stop the batch.</li>
-          <li>Freeze the selected condition for the entire trial. Both conditions use the same moving-arm reference and motor-control law. Counter alone overrides the free arm; its actual free-arm trajectory differs by design.</li>
-        </ol>
-        <p>The baseline is <strong>Frame-compatible control under the common Counter configuration</strong>, not stock Frame settings. Both conditions share rates, limits, planning settings and gains. It is not an ad-hoc zero-balance-weight ablation. Each emitted moving-arm command is checked against its common nominal law. Identical reference hashes do not imply identical measured tracking, feedback-dependent torques or physical initial states across trials. The simulator and lower-body process keep evolving between trials.</p>
-        <h3>Change order only between idle batches</h3>
-        <p>The server reads and freezes <code>comparison_order</code> at batch start. Its default is <code>frame,counter</code>. After the complete batch has returned and the server is idle, set an ABBA order without restarting the simulator or controller:</p>
-        <figure class="command"><figcaption><span>Terminal C / idle batches only, select ABBA</span><button type="button" data-copy="cmd-comparison-order" aria-label="Copy idle comparison order parameter command">Copy</button></figcaption><pre><code id="cmd-comparison-order">./scripts/run_ros.sh param set /frame_task_server comparison_order "frame,counter,counter,frame"</code></pre></figure>
-        <p>For ABBA, use the same comparison goal with a larger whole-batch budget, for example <code>duration: {sec: 600, nanosec: 0}</code>. Wait for the parameter update to succeed before sending it. Busy updates are rejected. Do not change gains, thresholds, support, camera settings or controller configuration between conditions. One action shares one plan across all its trials. A later action plans again and resolves its relative target after its own preparation; its hash need not match the preceding batch.</p>
-        <p>To repeat the qualified eight-trial order, select the order below while idle, then use the same goal with a 600-second budget. It places ABBA and BAAB inside one action so they share one reference.</p>
-        <figure class="command"><figcaption><span>Terminal C / tested eight-trial order, idle only</span><button type="button" data-copy="cmd-comparison-eight" aria-label="Copy tested eight-trial comparison order">Copy</button></figcaption><pre><code id="cmd-comparison-eight">./scripts/run_ros.sh param set /frame_task_server comparison_order "frame,counter,counter,frame,counter,frame,frame,counter"</code></pre></figure>
-        <h3>Accept data, not just action success</h3>
-        <p>The server logs the path to a <code>planned-comparison-*.json</code> summary. It uses <code>ROS_LOG_DIR</code>, otherwise <code>ROS_HOME/log</code>, otherwise <code>~/.ros/log</code>. Keep it with the batch order and measured motion record. Check the common <code>config_digest</code>, <code>planned_path_checksum</code>, <code>dt</code> and original <code>created_at</code>; each trial has its own <code>validated_at</code>, condition, success, reason and endpoint errors. <code>moving_max_deviation</code> checks the moving-arm command against its common nominal command in the publisher's stored representation. It does not require identical feedback-dependent torque histories across physically different trials.</p>
-        <p><code>step_timing</code> groups preparation, playback and hold work by trial and condition. It contains step count, work-time sum/maximum and overrun count/maximum, in seconds. <code>step_timing_scope</code> explains that these supplied work times exclude observer-callback overhead. They are diagnostics, not a hard-real-time certificate.</p>
-        <p>Check actual moving-arm tracking and commanded and measured free-arm motion, not only action success. Never count a failed or rejected trial as success. Inspect <code>counter_status_counts</code> and <code>nominal_retry_used</code>: valid counter-only backtracking can preserve the moving reference, but constrained or retried solves must be reported rather than hidden. Completion or cancellation holds the last command; it does not promise an automatic return or safe retreat.</p>
-        <h3>Supported planned comparison qualification</h3>
-        <p>The eight-trial order above completed with one 30-waypoint reference at <code>dt = 1/30 s</code>. All trials kept the same path hash, configuration digest and original creation time. The last fresh validation used that reference at age 79.009 seconds. All 30 observed moving-arm position commands were identical across the eight trials, and reported moving-command deviation was zero. The simulator, upper controller and lower controller retained the same process identities; simulation time did not reset.</p>
-        <p>The free-arm ranges below cover playback plus the common endpoint hold.</p>
-        <table aria-label="Same-run supported planned comparison results">
-          <thead><tr><th>Result across four trials per condition</th><th>Frame-compatible</th><th>Counter</th></tr></thead>
-          <tbody>
-            <tr><td>Final task position error</td><td>0.089&ndash;0.148 mm</td><td>0.115&ndash;0.131 mm</td></tr>
-            <tr><td>Free-arm command range</td><td>0 rad</td><td>0.0532&ndash;0.0590 rad</td></tr>
-            <tr><td>Free-arm measured range</td><td>0.00509&ndash;0.00533 rad</td><td>0.0525&ndash;0.0582 rad</td></tr>
-          </tbody>
-        </table>
-        <p>A busy order update was rejected; an idle change to <code>counter,frame</code> and a second batch succeeded without restarting any of those processes. A separate playback-cancellation check returned CANCELED and held its last positions with zero commanded velocity for the 1.9-second observation window, without return motion.</p>
-        <p>These are <strong>supported functional results</strong>: ALMI remained in unengaged pre-pose hold under the tether and rotational hoist. Active-policy comparison, free-standing balance benefit, peg trials, and hard-real-time timing are not qualified. The inherited executor paces commands on wall time, not the simulator clock. Record real-time factor when interpreting a slower-than-real simulation. Actual playback took about 1.028&ndash;1.036 wall seconds for the nominal one-second tick schedule; the fixed five-second hold took about 5.16&ndash;5.19 wall seconds. These qualification measurements are phase totals; compute-work aggregates and phase totals do not establish end-to-end deadline guarantees.</p>
-        <div class="callout warning"><p><strong>Phase 1 is arm motion only.</strong> No peg is grasped or extracted in this batch. A skill can consume the source pose, and object reset is not implemented between conditions. Do not teleport the peg, reset the world or reset simulation time between trials. Extraction reliability and marker occlusion remain separate qualification questions.</p></div>
-        <details><summary>Reference commands / Frame extraction staging and ordinary arm actions</summary>
-        <h3>Stage the left task arm / Frame extraction preparation</h3>
-        <p>Use these three actions in order from a fresh supported <strong>Frame</strong> run. Wait for <code>SUCCEEDED</code> after each action and inspect actual clearance. Preparation bends the arms first, establishes the documented pitch-down orientation at a certified workspace point, then moves the left hand aside for the camera. Do not skip a stage or continue after an aborted goal. Positions are in metres in <code>pelvis</code>; quaternions are ROS XYZW order. This staging sequence is not a qualified Counter extraction sequence.</p>
-        <figure class="command"><figcaption><span>Terminal C / extraction stage 1, ordinary planned preparation</span><button type="button" data-copy="cmd-stage-prep" aria-label="Copy extraction preparation posture">Copy</button></figcaption><pre><code id="cmd-stage-prep">./scripts/run_ros.sh action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 'prep', plan: true, slow_mode: false, duration: {sec: 45, nanosec: 0}}" --feedback</code></pre></figure>
-        <figure class="command"><figcaption><span>Terminal C / extraction stage 2, certified-center top-down orientation</span><button type="button" data-copy="cmd-stage-center" aria-label="Copy certified-center top-down staging goal">Copy</button></figcaption><pre><code id="cmd-stage-center">./scripts/run_ros.sh action send_goal /frame_task custom_ros_messages/action/FrameTask \
-  "{plan: true, relative: false, slow_mode: true, frame_names: ['left_graspgenx_frame'], frame_targets: [{position: {x: 0.498881, y: 0.22693816485366958, z: 0.284491}, orientation: {x: 0.9659258262849371, y: 0.25881904510490605, z: 0.0000012986741187396612, w: -0.000002249369555945578}}], duration: {sec: 60, nanosec: 0}}" --feedback</code></pre></figure>
-        <figure class="command"><figcaption><span>Terminal C / extraction stage 3, camera-clear side position</span><button type="button" data-copy="cmd-stage-left" aria-label="Copy camera-clear extraction staging action goal">Copy</button></figcaption><pre><code id="cmd-stage-left">./scripts/run_ros.sh action send_goal /frame_task custom_ros_messages/action/FrameTask \
-  "{plan: true, relative: false, slow_mode: true, frame_names: ['left_graspgenx_frame'], frame_targets: [{position: {x: 0.4, y: 0.35, z: 0.25}, orientation: {x: 0.9659258263, y: 0.2588190451, z: 0.0, w: 0.0}}], duration: {sec: 60, nanosec: 0}}" --feedback</code></pre></figure>
-        <p>All three preparation actions have completed in supported testing with sub-millimetre final staging error. Require valid localization again after moving aside. This verifies preparation, not a subsequent grasp: the moving hand can still hide markers during the skill. Do not continue on an invalid observation or weaken the visibility checks to make it run.</p>
-        <h3>Historical separate-run direct-motion check</h3>
-        <p>This older functional check uses <code>plan: false</code> in two fresh runs. It is not the same-run planned protocol above. Retain it only as a reference for observing a Counter response.</p>
-        <ol>
-          <li>Start a fresh supported Frame run and complete initialization. Run the planned <code>prep</code> posture below, wait for success, then send the small relative left-arm move. Observe both arms in the simulator or RViz RobotModel.</li>
-          <li>Stop and reset using section 09. Start Counter instead, with the same ALMI pre-pose and tether/hoist, then repeat the same preparation and relative move. Keep the right arm clear, empty, and absent from <code>frame_names</code>.</li>
-          <li>Check <code>Upper controller: counter (CounterFrameController)</code> at startup and <code>Upper controller goal: balanced moving=left, counter=right</code> for the one-sided goal. Inspect measured motion, not merely an accepted goal or commanded targets. The left arm must still reach its task. Inspect the right arm during that task, not during named-pose initialization.</li>
-        </ol>
-        <figure class="command"><figcaption><span>Terminal C / tested comparison preparation, both arms plain</span><button type="button" data-copy="cmd-counter-prep" aria-label="Copy tested comparison preparation">Copy</button></figcaption><pre><code id="cmd-counter-prep">./scripts/run_ros.sh action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 'prep', plan: true, slow_mode: false, duration: {sec: 45, nanosec: 0}}" --feedback</code></pre></figure>
-        <figure class="command"><figcaption><span>Terminal C / tested task move, left arm +50 mm pelvis-X</span><button type="button" data-copy="cmd-counter-move" aria-label="Copy tested single-arm counter-response goal">Copy</button></figcaption><pre><code id="cmd-counter-move">./scripts/run_ros.sh action send_goal /frame_task custom_ros_messages/action/FrameTask \
-  "{plan: false, relative: true, slow_mode: false, frame_names: ['left_graspgenx_frame'], frame_targets: [{position: {x: 0.05, y: 0.0, z: 0.0}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}], duration: {sec: 30, nanosec: 0}}" --feedback</code></pre></figure>
-        <figure class="command"><figcaption><span>Terminal C / optional measured joint-state stream during comparison</span><button type="button" data-copy="cmd-joint-observe" aria-label="Copy measured joint-state inspection command">Copy</button></figcaption><pre><code id="cmd-joint-observe">./scripts/run_ros.sh topic echo /joint_states</code></pre></figure>
-        <p>Use another prepared terminal for inspection while the action runs, then Ctrl+C the inspection CLI. Do not repeatedly send the +50 mm goal: each accepted relative goal adds another offset. The matched supported check above completed successfully in both modes:</p>
-        <table aria-label="Historical separate-run direct Frame versus Counter response check">
-          <thead><tr><th>Measured result</th><th>Frame</th><th>Counter</th></tr></thead>
-          <tbody>
-            <tr><td>Final task position error</td><td>0.359 mm</td><td>0.347 mm</td></tr>
-            <tr><td>Maximum right-arm commanded change</td><td>0 rad</td><td>0.0626 rad (3.59 degrees)</td></tr>
-            <tr><td>Maximum right-arm measured movement</td><td>0.0352 rad drift</td><td>0.0605 rad (3.47 degrees)</td></tr>
-          </tbody>
-        </table>
-        <p>The clearest response in this check was the right shoulder-pitch joint, with the right elbow also moving. The Frame right-arm command stayed fixed; its measured drift is not counter control. Counter produced both commanded and measured right-arm motion. Both command arrays stayed fixed during the recorded post-success hold; there was no commanded return posture. This validates a small supported counter-response task, not Counter extraction, cancellation behavior, or improved standing balance. The hoist masks balance outcomes. A nearly stationary free arm on another small move does not by itself prove Counter is disabled.</p>
-        <p>This historical check used each backend's stock configuration: Frame at 50 Hz and Counter at 30 Hz, with different limits and planning bounds. It is not a controlled performance comparison. The 3.47-degree measured Counter response is not new planned-batch data, and the small task-error difference is not an algorithm ranking.</p>
-        <h3>Named configuration / choose one</h3>
-        <p><code>home</code> and <code>prep</code> are actual named configurations. They are posture examples, not universally collision-free moves. These two commands are alternatives, not a required sequence. Named postures command both arms using plain posture control, including when Counter is selected: a <code>prep</code> move is not evidence of counter-motion. Duration zero selects the server's configured timeout.</p>
-        <figure class="command"><figcaption><span>Terminal C / optional home posture</span><button type="button" data-copy="cmd-home" aria-label="Copy home named configuration action goal">Copy</button></figcaption><pre><code id="cmd-home">./scripts/run_ros.sh action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 'home', plan: false, slow_mode: true, duration: {sec: 0, nanosec: 0}}" --feedback</code></pre></figure>
-        <figure class="command"><figcaption><span>Terminal C / alternative prep posture</span><button type="button" data-copy="cmd-prep" aria-label="Copy prep named configuration action goal">Copy</button></figcaption><pre><code id="cmd-prep">./scripts/run_ros.sh action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 'prep', plan: false, slow_mode: true, duration: {sec: 30, nanosec: 0}}" --feedback</code></pre></figure>
-        <h3>Small relative frame move</h3>
-        <p>This requests a 20 mm upward offset for <code>right_graspgenx_frame</code>, measured along pelvis-frame Z, with no orientation change. It is <code>plan: false</code> and <code>slow_mode: true</code>. Relative offsets use pelvis axes, not tool-local axes.</p>
-        <figure class="command"><figcaption><span>Terminal C / optional right-arm +20 mm pelvis-Z move</span><button type="button" data-copy="cmd-frame" aria-label="Copy relative right grasp frame action goal">Copy</button></figcaption><pre><code id="cmd-frame">./scripts/run_ros.sh action send_goal /frame_task custom_ros_messages/action/FrameTask \
-  "{plan: false, relative: true, slow_mode: true, frame_names: ['right_graspgenx_frame'], frame_targets: [{position: {x: 0.0, y: 0.0, z: 0.02}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}], duration: {sec: 30, nanosec: 0}}" --feedback</code></pre></figure>
-        <div class="callout"><p><strong>Duration is a timeout, not a trajectory duration.</strong> For both actions, the server interprets a positive <code>duration</code> as the allowed wall-clock execution time; zero uses the server default. It does not force a 30-second movement. Slow mode reduces commanded speed. Planning checks modeled joint/self-collision constraints, not board or table avoidance, grip physics, or arbitrary scene obstacles. Check actual measured motion and scene clearance.</p></div>
-        <p>Do not publish direct motor commands to bypass the controller and safety pipeline. Gripper opening is not part of these examples: opening while holding a peg can drop it, and a skill-owned hold must not be overridden casually.</p>
+      <section id="simulation" aria-labelledby="simulation-title">
+        <h2 id="simulation-title">02 / Launch Simulation</h2>
+        <p>In Terminal A, start the simulator once and leave it running.</p>
+        <figure class="command"><figcaption><span>Terminal A / pegboard scene and ALMI start pose</span><button type="button" data-copy="cmd-sim">Copy</button></figcaption><pre><code id="cmd-sim">./scripts/run_simulation.sh --task PegInHole --lowerbody almi_manip_stand --task-tools</code></pre></figure>
+        <p>The scene contains a table and a 320 x 250 mm pegboard on the robot's left, with <code>cylinder_1</code> seated in source hole <code>cylinder_1</code>. The lower-body option selects the initial pose and pelvis fit, not a running policy. Inspect the actual pose, feet and clearances before starting control; leave the startup tether alone until engagement.</p>
+        <p><code>--task-tools</code> enables the existing object-only reset for repeated simulation trials. It also advertises evaluation ground truth; neither localization nor the controller uses that output. This option is not used on the real robot.</p>
+        <details><summary>Scene composition, markers and camera</summary>
+          <p>Board entry height is 25 mm above its origin. Catalog suffixes <code>0..3</code> are clearance rows, not different peg sizes. Changing <code>--peg</code> or <code>--source-hole</code> requires a matching skill profile; simulator flags do not update it.</p>
+          <p>Use <code>DICT_4X4_50</code>, ID 7 top-left and ID 8 top-right: 30 mm black codes on 40 mm paper squares, mounted flush to the top and adjacent side edges, with unchanged orientation and full 5 mm white borders. Board-local centres are (-140, 105) and (140, 105) mm. PnP uses the 30 mm black edge. Use an <a href="https://chev.me/arucogen/">ArUco print generator</a> with those IDs and check printed scale. The <a href="../h1_robocasa/board_marker.py">simulator marker generator</a> and <a href="../core_ws/src/model_server/config/pegboard_layout.json">shared layout</a> define the matching scene geometry.</p>
+          <p>PegInHole selects full-resolution head RGB, matching CameraInfo and compressed transport through the controller helper; no inline camera flags are needed. Localization uses the real head-camera geometry and timestamped TF, not object ground truth or an overhead camera. Either marker can provide an accepted pose.</p>
+          <p>For a machine without a display, append <code>--headless</code> to the same simulator command. Optional <code>--timing</code> reports real-time factor. These change the one launch, not add another simulator.</p>
         </details>
       </section>
 
-      <section id="skills" aria-labelledby="skills-title">
-        <h2 id="skills-title">08 / Calibrated Peg Extraction Reference</h2>
-        <p>This is a separate supported <strong>Frame</strong> procedure, not a <code>/compare_frame_task</code> batch. Use the optional Frame startup in section 05 and the extraction staging commands in section 07. Do not append these skills to an empty-hand comparison or treat Counter arm-motion results as Counter extraction qualification.</p>
-        <p><strong>Procedure:</strong> fresh default <code>cylinder_1</code> scene, translational tether plus pelvis rotational hoist, Frame bringup with <code>lowerbody:=almi_manip_stand</code>, the explicit profile below, completed upper initialization, settled ALMI pre-pose without engagement, valid camera localization, then all three preparation actions in section 07. Finally run <strong>one</strong> of the two alternatives below. The reference extraction uses source and destination <code>cylinder_1</code>, not a transfer to <code>cylinder_3</code>. Continuous marker visibility remains a qualification requirement; reaching the preparation poses does not guarantee that a fresh extraction will complete.</p>
-        <div class="callout warning"><p><strong>Simulator calibration only, not hardware calibration.</strong> Load <code>core_ws/src/h12_skills/h12_skills/marker_profile_sim_extraction.json</code> through the Terminal B command. Its GRASPGENX contact offset is <code>[0, 0.002238, 0.1786] m</code>, not the nominal <code>0.1146 m</code> axial offset. Its <code>aperture_margin_m=0.03465097</code> compensates the simulated gripper service mapping; it is <strong>not a physical jaw-clearance margin</strong>. Do not copy these values onto the robot or substitute the nominal profile and expect the same grasp.</p></div>
-        <p>The profile matches the 12 mm diameter, 50 mm long cylinder seated at <code>cylinder_1</code>. It requests a 50 mm approach, 60 mm board-normal extraction, and a final nominal tip height 40 mm above the selected entry. Keep <code>image_transport:=compressed</code> for full-resolution JPEG camera delivery. Require fresh valid localization diagnostics before the goal; the skills continue checking freshness during motion. Inspect the entire left-arm path, table/board clearance, and free arm.</p>
-        <div class="callout warning"><p><strong>Choose one alternative from a reset.</strong> Do not run grasp-only and then pick/place. Pick/place already includes its own grasp. Once close is dispatched, the skills treat the source pose as consumed or uncertain, even if the goal later fails. Reset the simulator and restart skills before another attempt; restarting skills alone does not restore the peg.</p></div>
-        <h3>Alternative A / grasp only</h3>
-        <figure class="command"><figcaption><span>Terminal C / grasp at seated source, no extraction</span><button type="button" data-copy="cmd-grasp" aria-label="Copy marker grasp-only action goal">Copy</button></figcaption><pre><code id="cmd-grasp">./scripts/run_ros.sh action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
+      <section id="controller" aria-labelledby="controller-title">
+        <h2 id="controller-title">03 / Launch Controller</h2>
+        <p>Verify the held start posture and empty, clear arm workspace. Then start one controller in Terminal B. <code>start_position_verified:=true</code> is your physical-pose assertion; startup itself moves joints.</p>
+        <figure class="command"><figcaption><span>Terminal B / one controller, Frame mode initially</span><button type="button" data-copy="cmd-controller">Copy</button></figcaption><pre><code id="cmd-controller">./scripts/run_controller.sh start_position_verified:=true</code></pre></figure>
+        <p>The helper starts state/TF, safety, ALMI lower-body control, marker localization and skills, and one Counter-capable arm server in <code>frame</code> mode. It selects compressed image transport and the simulator distal-grasp profile internally. Do not start a second bringup or a separate Frame controller.</p>
+        <p>Wait for <code>init_1</code>, <code>init_2</code>, <code>init_3</code>, <code>home</code>, torso initialization and <code>Frame Task Server initialized</code>. Initialization and named postures use plain posture control, not counter-motion.</p>
+      </section>
+
+      <section id="engage" aria-labelledby="engage-title">
+        <h2 id="engage-title">04 / Engage Lower Body</h2>
+        <p>Wait for controller initialization, settled legs and the confirmation prompt. With the startup tether still enabled and the arm sweep clear, explicitly finish moving both arms home:</p>
+        <figure class="command"><figcaption><span>Terminal C / home arms before engagement</span><button type="button" data-copy="cmd-home-before-engage">Copy</button></figcaption><pre><code id="cmd-home-before-engage">./scripts/run_ros.sh action send_goal /named_config custom_ros_messages/action/NamedConfig \
+  "{config_name: 'home', plan: true, slow_mode: false, duration: {sec: 45, nanosec: 0}}"</code></pre></figure>
+        <p>Wait for success and check that the measured arms are home, not merely commanded home. Check the actual leg posture and fresh safety/state data; an initialization warning or settle timeout is not measured convergence. Only then engage standing:</p>
+        <figure class="command"><figcaption><span>Terminal C / explicit standing-policy confirmation</span><button type="button" data-copy="cmd-engage">Copy</button></figcaption><pre><code id="cmd-engage">./scripts/run_ros.sh service call /lowerbody/confirm_engage std_srvs/srv/Trigger '{}'</code></pre></figure>
+        <p>This activates the selected policy and automatically releases the simulator tether through the existing engagement sequence. Do not pre-call the service, chain it to launch, or manually toggle the tether. Wait for stable standing before any arm goal. If standing is unstable, stop the task and keep the actual failure message and logs rather than continuing into a grasp.</p>
+        <details><summary>Optional RViz inspection</summary>
+          <figure class="command"><figcaption><span>Another prepared terminal / inspection client only</span><button type="button" data-copy="cmd-rviz">Copy</button></figcaption><pre><code id="cmd-rviz">./scripts/run_rviz.sh</code></pre></figure>
+          <p>Use pelvis as the fixed frame. Inspect the measured grasp frames, head image, board axes and diagnostics. A persistent pose arrow is not a fresh observation; raw wrist poses are not GRASPGENX tool poses.</p>
+        </details>
+      </section>
+
+      <section id="mode" aria-labelledby="mode-title">
+        <h2 id="mode-title">05 / Choose Frame or Counter</h2>
+        <p>One controller supports two execution modes. Frame follows the ordinary arm task; Counter also allows the opposite arm to counter-move. Keep that free hand empty and its whole workspace clear. Choose a mode only between completely finished tasks:</p>
+        <figure class="command"><figcaption><span>Idle server / choose Counter</span><button type="button" data-copy="cmd-counter">Copy</button></figcaption><pre><code id="cmd-counter">./scripts/run_ros.sh param set /frame_task_server control_mode counter</code></pre></figure>
+        <p>For Frame, use <code>./scripts/run_ros.sh param set /frame_task_server control_mode frame</code>. A parameter update does not move the robot. Busy changes are rejected. Do not restart standing or the controller to switch modes, and do not change parameters mid-goal.</p>
+      </section>
+
+      <section id="task" aria-labelledby="task-title">
+        <h2 id="task-title">06 / Grasp or Extract</h2>
+        <p>Start with the expected peg seated at its source, a clear workcell and fresh valid board localization. On a new task, the default <code>approach_mode=plan</code> automatically performs ordinary named preparation, takes a fresh ArUco board snapshot, plans the approach once, executes it, then performs contact and grasp. No manual three-pose staging is required.</p>
+        <p><strong>Choose one alternative below.</strong> Both use the same selected Frame/Counter mode and left-arm vertical approach. Do not send pick/place after grasp-only: it includes its own grasp and expects a freshly seated source.</p>
+        <h3>A / Grasp only</h3>
+        <figure class="command"><figcaption><span>Close on the seated source, without extraction</span><button type="button" data-copy="cmd-grasp">Copy</button></figcaption><pre><code id="cmd-grasp">./scripts/run_ros.sh action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
   "{target_object: 'cylinder_1', arm: 'left', top_down: true, min_downward_pitch_deg: 90.0, visual_servo: false, timeout: {sec: 180, nanosec: 0}}" --feedback</code></pre></figure>
-        <p>Approaches the calibrated seated source, commands close, and holds there. It does not extract the peg. A successful action result means the commanded sequence completed; it is not independent contact or grip verification.</p>
-        <h3>Alternative B / full extraction and retained pre-insertion hold</h3>
-        <figure class="command"><figcaption><span>Terminal C / fresh reset only, cylinder_1 extraction above its source</span><button type="button" data-copy="cmd-pick" aria-label="Copy full calibrated peg extraction action goal">Copy</button></figcaption><pre><code id="cmd-pick">./scripts/run_ros.sh action send_goal /skill/pick_place custom_ros_messages/action/SkillPickPlace \
+        <h3>B / Extract and hold</h3>
+        <figure class="command"><figcaption><span>Grasp, extract, carry and retain the peg above its source</span><button type="button" data-copy="cmd-extract">Copy</button></figcaption><pre><code id="cmd-extract">./scripts/run_ros.sh action send_goal /skill/pick_place custom_ros_messages/action/SkillPickPlace \
   "{target_object: 'cylinder_1', place_target: 'cylinder_1', arm: 'left', top_down: true, visual_servo: false, timeout: {sec: 180, nanosec: 0}}" --feedback</code></pre></figure>
-        <p>Includes grasp, board-normal extraction, carry/pre-insertion stages, and a retained hold above the same hole. The <strong>nominal tip target is 40 mm above the entry</strong>, assuming a rigid grasp. It does not insert or release. Do not open the gripper or issue another posture goal afterward. A later transfer to <code>cylinder_3</code> is a different experiment, not the demonstrated extraction recipe.</p>
-        <p>Keep <code>visual_servo: false</code>: marker mode has no AI servo. <code>top_down: true</code> requires a geometric vertical approach. <code>SkillGrasp</code> additionally exposes <code>min_downward_pitch_deg</code>, set to 90 above; <code>SkillPickPlace</code> has no such goal field and enforces the top-down 90-degree requirement internally. The calibrated left GRASPGENX orientation is pelvis-fixed RPY (180, 0, 30) degrees. Hole/contact positions follow the observed board pose; the contact offset is transformed using this tool orientation. Extraction and pre-insertion offsets follow the board normal. A nonvertical top-down profile fails closed rather than relaxing the pitch.</p>
-        <h3>What counts as success</h3>
-        <p>The reference supported Frame run physically extracted and retained the peg. Independent post-run checks over 100 hold snapshots found both finger pads in contact throughout, no non-hand peg contacts or active peg weld, at least 49.5 mm whole-collision-mesh clearance above the board, and less than 0.8 mm hand-relative position drift. These measurements describe that run, not a guarantee for every restart or a Counter result. No simulator ground-truth measurements were fed back to the controller.</p>
-        <p>The documented three-stage preparation is separately verified. A complete extraction from that fresh-start sequence is not yet repeatably qualified: the left forearm can occlude the markers during pregrasp, and the skill then cancels before closing. Inspect the head-camera view throughout the approach. The reference physical success and the supported Counter response must not be interpreted as resolving this visibility limitation.</p>
-        <p>Judge your run by actual peg motion and retained contact, not just <code>SUCCEEDED</code>, a rendered target, or a recorder classifier flag. The generic recorder's <code>physical_extraction_candidate</code> was false in the reference run because its 0.25 m hand-body proximity test excluded the distal-pad grip approximately 0.289 m from that origin. That heuristic is not independent grip verification; do not change thresholds merely to obtain a positive label.</p>
-        <h3>Optional right-arm geometry example / not the extraction recipe</h3>
-        <figure class="command"><figcaption><span>Terminal C / right-arm top-down, only with a reachable matching scene</span><button type="button" data-copy="cmd-grasp-right-down" aria-label="Copy right-arm geometric top-down marker goal">Copy</button></figcaption><pre><code id="cmd-grasp-right-down">./scripts/run_ros.sh action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
-  "{target_object: 'cylinder_1', arm: 'right', top_down: true, min_downward_pitch_deg: 90.0, visual_servo: false, timeout: {sec: 180, nanosec: 0}}" --feedback</code></pre></figure>
-        <p>This command does not move the board or change workspace limits. The default left fixture may be outside the right arm's admission limits; changing the arm in the goal does not select a right-side scene. The analysis boxes describe fingertip grasp-frame positions, not GRASPGENX origins, and are certified subsets rather than exhaustive reachability bounds. Use an explicit arm. Workspace admission, measured frame checks, board freshness, and planner results do not replace physics validation or actual clearance checks. On failure there is no guaranteed automatic retreat or release; inspect the scene before deciding how to stop and reset.</p>
-        <p>A message such as <code>pregrasp canceled: ...</code> identifies a skill guard that canceled the inner arm action; read the cause after the colon. <code>waypoint not reached</code> without a guard cause indicates an unsuccessful controller action and needs its controller feedback. Neither message means the selected arm is prohibited. Do not issue another goal until the preceding action has stopped and the current pose and visibility have been inspected.</p>
+        <p>Marker pick/place grasps, extracts along the board normal, carries and holds at pre-insertion. It does <strong>not insert or release</strong>. <code>SkillPickPlace</code> has no <code>min_downward_pitch_deg</code> field; its top-down path enforces 90 degrees internally. Keep <code>visual_servo: false</code>.</p>
+        <p>The task acquires its board snapshot at the start; a bounded executing trajectory does not require markers to stay visible behind the gripper. Joint, limit, cancellation and reached-target guards remain active. Check actual peg contact, motion and retention, not just action success. On failure, read the reported cause, wait for the goal to stop and inspect the current pose before another command; there is no automatic withdrawal.</p>
       </section>
 
-      <section id="reset" aria-labelledby="reset-title">
-        <h2 id="reset-title">09 / Stop and Reset</h2>
-        <ol>
-          <li>Stop issuing goals. Do not assume Ctrl+C on an action CLI cancels its server-side motion, or open a loaded gripper as a shortcut.</li>
-          <li>Stop experiment bringup/controllers in Terminal B with Ctrl+C and wait for its child processes to exit. Keep the simulator running during controller shutdown.</li>
-          <li>Stop RViz and any remaining ROS CLI or inspection processes.</li>
-          <li>Stop the simulator in Terminal A with Ctrl+C.</li>
-          <li>For a new attempt, launch the simulator again, then one bringup mode and RViz. Repeat initialization and held-posture checks. For supported extraction, keep the tether/hoist and do not confirm policy engagement. Any separate engagement experiment needs a fresh operator check and confirmation.</li>
-        </ol>
-        <p>A simulator restart resets simulation time. Restart <strong>all ROS processes and RViz</strong> with it so timestamped TF and perception caches do not span clock epochs. Restarting the experiment also clears the skills' consumed-source cache. There is no reset-service command in this workflow.</p>
+      <section id="repeat" aria-labelledby="repeat-title">
+        <h2 id="repeat-title">07 / Return and Reuse</h2>
+        <p>Keep simulation, controller and standing running. After <strong>grasp-only</strong>, the peg remains seated: open the hand before returning. After <strong>extraction</strong>, release the peg only where it can fall safely in the simulation, then clear the empty hand. Do not reset objects while the hand holds or contacts the peg.</p>
+        <figure class="command"><figcaption><span>After a seated grasp-only task / release the supported peg</span><button type="button" data-copy="cmd-open">Copy</button></figcaption><pre><code id="cmd-open">./scripts/run_ros.sh service call /left/gripper/open std_srvs/srv/Trigger '{}'</code></pre></figure>
+        <p>With the hand empty and return clearance checked, return both upper arms to the recorded approach start, the home for this particular approach:</p>
+        <figure class="command"><figcaption><span>Return to approach start / preserve standing and saved path</span><button type="button" data-copy="cmd-return">Copy</button></figcaption><pre><code id="cmd-return">./scripts/run_ros.sh action send_goal /named_config custom_ros_messages/action/NamedConfig \
+  "{config_name: 'approach_start', plan: true, slow_mode: false, duration: {sec: 45, nanosec: 0}}" --feedback</code></pre></figure>
+        <p>Wait for success. Ordinary <code>home</code> is a different posture and is not necessarily the path's start. Neither posture command resets the lower body or restores objects.</p>
+        <p>After an extraction, restore the source peg using the object-only reset. Call it only after the task has stopped and the open hand has returned clear of the source. It preserves robot state, the standing process, simulation time and the saved approach.</p>
+        <figure class="command"><figcaption><span>Idle simulation / restore the source peg, not the robot</span><button type="button" data-copy="cmd-reset-object">Copy</button></figcaption><pre><code id="cmd-reset-object">./scripts/run_ros.sh service call /sim/reset_objects std_srvs/srv/Trigger '{}'</code></pre></figure>
+        <figure class="command"><figcaption><span>Idle skills server / reuse the saved approach</span><button type="button" data-copy="cmd-reuse">Copy</button></figcaption><pre><code id="cmd-reuse">./scripts/run_ros.sh param set /h12_skills approach_mode reuse</code></pre></figure>
+        <p>Optionally select the other <code>control_mode</code> while idle, recheck the restored source and workcell, then send the <strong>same task goal</strong>. Reuse checks a fresh workcell observation against existing bounds, but keeps the original target snapshot and saved approach without replanning. A wrong start is rejected, not automatically corrected.</p>
+        <p>For a new scene/task, set <code>./scripts/run_ros.sh param set /h12_skills approach_mode plan</code> before the goal; its new plan replaces the cache. Saved paths and task snapshots live only in process memory: controller/skills restarts require planning again. You are responsible for restoring the input scenario before every explicit goal.</p>
       </section>
 
-      <section id="reference" aria-labelledby="reference-title">
-        <h2 id="reference-title">10 / Quick Reference</h2>
-        <p>These are script roles, not a block to execute in sequence. Copy the complete commands from the relevant section after reading their preconditions.</p>
-        <div class="table-wrap"><table>
-          <caption>Root-level entry points</caption>
-          <thead><tr><th scope="col">Command</th><th scope="col">What it starts or does</th></tr></thead>
-          <tbody>
-            <tr><td><code>./scripts/setup_environment.sh ros --local-ros-debs</code></td><td>Prepares local ROS dependencies; no nodes.</td></tr>
-            <tr><td><code>./scripts/setup_environment.sh simulator</code></td><td>Prepares simulator dependencies; no physics loop.</td></tr>
-            <tr><td><code>./core_ws/scripts/build_ros_workspace.sh build --profile experiment --compile-jobs 2</code></td><td>Builds the 12-package native experiment profile; no bringup.</td></tr>
-            <tr><td><code>./scripts/setup_environment.sh controller</code></td><td>Prepares the isolated arm environment after interfaces are built.</td></tr>
-            <tr><td><code>./scripts/setup_environment.sh simulator --build-interfaces</code></td><td>Generates pinned simulator message support and checks bridge imports.</td></tr>
-            <tr><td><code>./scripts/run_simulation.sh</code></td><td>Simulator, sensors and clock. Use the complete section 05 command with ALMI spawn and explicit pelvis hoist for supported extraction.</td></tr>
-            <tr><td><code>./scripts/run_experiment.sh</code></td><td>Observation-only by default. Use the complete Counter-capable comparison startup in section 05, or one optional separate-run backend command.</td></tr>
-            <tr><td><code>upper_controller:=frame</code> / <code>upper_controller:=counter</code></td><td>Startup backend selection, not a hot-swap. The same-run comparison requires Counter startup for both trial conditions. Supported workflows leave ALMI unengaged.</td></tr>
-            <tr><td><code>/compare_frame_task</code></td><td>Existing FrameTask type; planned, one-frame, empty-hand batch. Common configuration and plan; order frozen per batch. Live qualification pending.</td></tr>
-            <tr><td><code>./scripts/run_rviz.sh</code></td><td>RViz inspection client; keep only one experiment bringup.</td></tr>
-            <tr><td><code>./scripts/run_ros.sh topic list</code></td><td>Runs one ROS CLI command in the clean native overlay.</td></tr>
-          </tbody>
-        </table></div>
-        <figure class="command"><figcaption><span>Offline CLI reference / does not launch nodes</span><button type="button" data-copy="cmd-help" aria-label="Copy native script help commands">Copy</button></figcaption><pre><code id="cmd-help">./scripts/setup_environment.sh --help
-./scripts/run_simulation.sh --help
-./scripts/run_experiment.sh --help
-./scripts/run_ros.sh --help</code></pre></figure>
+      <section id="details" aria-labelledby="details-title">
+        <h2 id="details-title">08 / Details and Shutdown</h2>
+        <details><summary>Manual arm task: plan once, return and replay</summary>
+          <p>For an empty-hand, clearance-checked manual task, ordinary <code>/frame_task</code> still plans/executes one goal. The separate <code>/plan_frame_task</code> endpoint saves one explicit approach without movement:</p>
+          <figure class="command"><figcaption><span>Optional manual approach / plan only</span><button type="button" data-copy="cmd-plan">Copy</button></figcaption><pre><code id="cmd-plan">./scripts/run_ros.sh action send_goal /plan_frame_task custom_ros_messages/action/FrameTask \
+  "{plan: true, relative: true, slow_mode: false, frame_names: ['left_graspgenx_frame'], frame_targets: [{position: {x: 0.02, y: 0, z: 0}, orientation: {x: 0, y: 0, z: 0, w: 1}}], duration: {sec: 45, nanosec: 0}}" --feedback</code></pre></figure>
+          <figure class="command"><figcaption><span>Execute the saved manual approach / no target or planner</span><button type="button" data-copy="cmd-replay">Copy</button></figcaption><pre><code id="cmd-replay">./scripts/run_ros.sh action send_goal /replay_frame_task custom_ros_messages/action/FrameTask \
+  '{duration: {sec: 45, nanosec: 0}}' --feedback</code></pre></figure>
+          <p>Replay freshly validates the measured start and stored path and uses its saved timing under the current mode. For another replay, return through <code>approach_start</code> first. An optional frame-name assertion may be supplied; a new target is not needed. Named planning and ordinary planned carry goals do not overwrite this explicit cache. A new explicit plan does. Duration is an execution budget, not a requested movement time; the adapter paces execution on wall time.</p>
+          <p>Planning checks modeled joints and self-collision, not arbitrary table/board obstacles. Inspect the entire path and free-arm clearance.</p>
+        </details>
+        <details><summary>Alternative policy or supported bringup</summary>
+          <p>For an owner-approved FAME task, replace the simulator selection with <code>--lowerbody fame_finetune</code> and add <code>lowerbody:=fame_finetune</code> to the controller launch. Select the same policy independently in both terminals, then follow the settle-and-engage step.</p>
+          <p><code>--manipulation-hoist</code> adds rotational pelvis support for a deliberately supported experiment. It is not the main standing workflow and must be recorded as a different support condition. Leaving a policy unengaged under support is not standing. Do not mix supported results with engaged-standing results.</p>
+        </details>
+        <details><summary>Localization, calibration and actionable failures</summary>
+          <p>Read <code>/perception/pegboard/diagnostics</code> when acquisition fails. Check image/CameraInfo delivery, original-image timestamp TF, marker layout and observation freshness. Do not relax bounds or gains to make a rejected goal run. If a controller reports <code>waypoint not reached</code>, keep its feedback; if a skill reports cancellation, keep the guard reason after the colon.</p>
+          <p>The helper's <a href="../core_ws/src/h12_skills/h12_skills/marker_profile_sim_extraction.json">distal simulation profile</a> matches this cylinder/source and simulated gripper mapping. It is not a physical hardware calibration. Use an approved real profile on hardware, never this file.</p>
+        </details>
+        <p>For normal shutdown, finish/stop the active task and secure any held object, stop controller bringup with Ctrl+C and wait for its children, stop RViz/remaining ROS consumers, then stop the simulator. Ctrl+C on an action client alone is not proof that its server goal stopped.</p>
+        <p>Do not reset the whole world while the controller is standing. Use the explicit object-only reset between idle trials. If a full simulator reset is needed, shut down normally and restart all ROS consumers and RViz for the new clock epoch; initialize, engage and plan again. Object restoration is not insertion: no contact insertion or automatic release is performed by the skill.</p>
       </section>
-      <footer>GOLEM native simulation guide. For hardware planning, see the separate <a href="h12_real_deployment_guide.html">real deployment procedure template</a>; it is not hardware validated. Self-contained HTML: no external fonts, scripts, stylesheets, or network resources are required to read it. Copy buttons copy only the command text, without terminal labels.</footer>
+      <footer>GOLEM native simulation task guide. Copy buttons copy command text only; they never execute commands. Hardware procedure: <a href="h12_real_deployment_guide.html">real deployment guide</a>.</footer>
     </main>
   </div>
   <div id="copy-status" role="status" aria-live="polite" aria-atomic="true"></div>

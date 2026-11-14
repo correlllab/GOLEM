@@ -479,14 +479,34 @@ class LowerBodyControllerNode(Node):
             prepose_target = cmd.target_q.copy()
             ramp_ticks = (round(pending.startup_seconds * pending.control_hz)
                           if fame_startup else self._prepose_ramp_ticks)
-            if self._prepose_start_q is None:
+            first_prepose = self._prepose_start_q is None
+            if first_prepose:
                 self._prepose_start_q = state.q[:NUM_LEG_JOINTS].copy()
+                if fame_startup:
+                    now = time.monotonic()
+                    receipt = getattr(self, "_lowstate_received_at", None)
+                    startup_context = (
+                        f"tick={getattr(self._lowstate, 'tick', None)!r} "
+                        f"ros_clock_s={getattr(state, 't', None)!r} "
+                        f"wall_time_s={time.time()!r} state_receipt_monotonic_s={receipt!r} "
+                        f"state_receipt_age_s={None if receipt is None else now - receipt!r} "
+                        f"heartbeat_age_s={now - self._hb_last!r}")
                 if fame_startup and (
                         np.any(self._prepose_start_q < pending._lower_limit)
                         or np.any(self._prepose_start_q > pending._upper_limit)):
                     # deploy_real.py:_move_to_default_pose rejects out-of-limit
                     # measured initial joints before sending any startup command.
-                    self._trip_heartbeat("FAME startup joints outside configured limits")
+                    indices = np.flatnonzero(
+                        (self._prepose_start_q < pending._lower_limit)
+                        | (self._prepose_start_q > pending._upper_limit))
+                    q = self._prepose_start_q[indices]
+                    lower, upper = pending._lower_limit[indices], pending._upper_limit[indices]
+                    self._trip_heartbeat(
+                        f"FAME startup joints outside configured limits: {startup_context} "
+                        f"motor_indices={indices.tolist()} measured_q={q.tolist()} "
+                        f"lower={lower.tolist()} upper={upper.tolist()} "
+                        f"q_dtype={q.dtype} lower_dtype={lower.dtype} upper_dtype={upper.dtype} "
+                        f"excursion_rad={np.maximum(lower - q, q - upper).tolist()}")
                     return
             if self._prepose_ticks < ramp_ticks:
                 frac = self._prepose_ticks / ramp_ticks
@@ -496,6 +516,8 @@ class LowerBodyControllerNode(Node):
                 if fame_startup:
                     cmd.target_q = np.clip(cmd.target_q, pending._lower_limit, pending._upper_limit)
             self._publish_leg(cmd)
+            if fame_startup and first_prepose:
+                self.get_logger().info(f"FAME first prepose command published: {startup_context}")
             err = float(np.max(np.abs(state.q[:NUM_LEG_JOINTS] - prepose_target)))
             self._prepose_ticks += 1
             ramp_done = not fame_startup or self._prepose_ticks >= ramp_ticks

@@ -22,7 +22,9 @@ the real robot has no such interface:
                         every non-robot free body's world pose ("objects"),
                         the pose of every body attached under one ("links",
                         e.g. a cable's segments), the robot's whole-body CoM,
-                        and both ankle_roll_link poses
+                         both ankle_roll_link poses, and robot/environment
+                         contacts (signed distance in m; force/torque in the
+                         contact frame, N and N*m)
                         (poses are [x, y, z, qw, qx, qy, qz], world frame, m)
   /sim/reset_objects    std_srvs/Trigger  put every non-robot free body, and
                         the joints of the bodies attached under it, back at
@@ -32,6 +34,7 @@ import json
 import os
 
 import mujoco
+import numpy as np
 from rclpy.node import Node
 from std_msgs.msg import Bool, Float32, String
 from std_srvs.srv import Trigger
@@ -129,6 +132,7 @@ class MeasurementBridge(Node):
         mujoco.mj_forward(model, data)
 
     def _publish_ground_truth(self):
+        model = self.env.sim.model._model
         data = self.env.sim.data._data
 
         def pose(b):
@@ -143,6 +147,28 @@ class MeasurementBridge(Node):
         if self._gt_robot_root is not None:
             msg["robot_com"] = [float(v) for v in data.subtree_com[self._gt_robot_root]]
             msg["pelvis"] = pose(self._gt_robot_root)
+        pfx = self.env.robots[0].robot_model.naming_prefix
+        contacts = []
+        force = np.zeros(6)
+        for i, contact in enumerate(data.contact[:data.ncon]):
+            geoms = (int(contact.geom1), int(contact.geom2))
+            if min(geoms) < 0:
+                continue
+            bodies = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY,
+                                      int(model.geom_bodyid[g])) or "" for g in geoms]
+            if sum(name.startswith(pfx) for name in bodies) != 1:
+                continue
+            mujoco.mj_contactForce(model, data, i, force)
+            contacts.append({
+                "geoms": [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, g)
+                          for g in geoms],
+                "bodies": bodies,
+                "distance_m": float(contact.dist),
+                "position_world_m": contact.pos.tolist(),
+                "force_contact_N": force[:3].tolist(),
+                "torque_contact_Nm": force[3:].tolist(),
+            })
+        msg["robot_environment_contacts"] = contacts
         self._gt_pub.publish(String(data=json.dumps(msg)))
 
     def _on_elastic_band_toggle(self, request, response):

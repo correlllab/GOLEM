@@ -2,10 +2,12 @@
 Replay a grasp approach on golem_upper_ik's IK model and test the hand against the scene.
 
 ReachModel.check() steps the same differential IK the frame_task server steps, from a
-measured joint state, along the approach's waypoints, and counts the head-camera scene
-points the hand would sit in. serve() runs it in a child process for the grasp skill
-(skills/grasp_reach.py): pinocchio's URDF parse holds the GIL for seconds at a time, which
-would stall every callback of the skills node, the safety heartbeat's included.
+measured joint state, along the approach's waypoints, and tests the hand against the
+head-camera scene: the points it would sit in, and the support surface extended toward
+the robot where the camera does not see (support_edges). serve() runs it in a child
+process for the grasp skill (skills/grasp_reach.py): pinocchio's URDF parse holds the GIL
+for seconds at a time, which would stall every callback of the skills node, the safety
+heartbeat's included.
 
 This module imports no ROS package, so the child process starts without the node's.
 """
@@ -52,6 +54,26 @@ HAND_MARGIN_M = 0.003
 # scene points inside the hand that make a waypoint a collision
 HAND_HIT_POINTS = 10
 
+# The head camera does not see the space just in front of the robot at table height (on
+# the H1-2 at the battery, nothing nearer than ~0.38 m ahead of the pelvis), where a low
+# pre-grasp puts the hand. There the scene is taken to continue as first seen: in each
+# pelvis-y slice, everything nearer the robot than the slice's nearest scene point is
+# solid up to the height of the scene at that near edge. A hand reaching below a surface
+# whose near edge the camera does see (a table edge) is rejected too.
+# m: width of the pelvis-y slices
+SUPPORT_SLICE_M = 0.02
+# m: depth behind a slice's nearest point whose points give the slice's height
+SUPPORT_BAND_M = 0.03
+# percentile of those points' height taken as the slice's height (above the noise of the
+# few highest points)
+SUPPORT_TOP_PERCENTILE = 90
+# scene points a slice needs to be extended
+SUPPORT_MIN_POINTS = 5
+# m: spacing of the points the hand's boxes are sampled at for the support test
+HAND_SAMPLE_M = 0.005
+# m the hand may sit below an extended support before a waypoint is a collision
+SUPPORT_DEPTH_M = 0.005
+
 
 def hand_hits(obstacles, T):
     """Return how many `obstacles` points lie in the hand at gripper-base pose `T` (4x4)."""
@@ -65,6 +87,61 @@ def hand_hits(obstacles, T):
                    & (local[:, 1] > y0 + m) & (local[:, 1] < y1 - m)
                    & (local[:, 2] > z0 + m) & (local[:, 2] < z1 - m))
     return int(inside.sum())
+
+
+def _hand_samples():
+    """Return points filling HAND_BOXES_M, each shrunk by HAND_MARGIN_M (gripper-base frame)."""
+    m = HAND_MARGIN_M
+    out = []
+    for box in HAND_BOXES_M:
+        axes = [np.linspace(lo + m, hi - m, int(np.ceil((hi - lo - 2 * m) / HAND_SAMPLE_M)) + 1)
+                for lo, hi in zip(box[0::2], box[1::2])]
+        out.append(np.stack([a.ravel() for a in np.meshgrid(*axes, indexing='ij')], axis=-1))
+    return np.concatenate(out)
+
+
+HAND_SAMPLES = _hand_samples()
+
+
+def support_edges(obstacles):
+    """
+    Return {pelvis-y slice index: (near x, height)} of the scene's near edge [m, pelvis].
+
+    A slice's near x is its scene point nearest the robot, and its height the
+    SUPPORT_TOP_PERCENTILE height of the points within SUPPORT_BAND_M behind it. Slices
+    with fewer than SUPPORT_MIN_POINTS points are left out.
+    """
+    if obstacles is None or len(obstacles) == 0:
+        return {}
+    pts = np.asarray(obstacles, dtype=float)
+    idx = np.floor(pts[:, 1] / SUPPORT_SLICE_M).astype(int)
+    edges = {}
+    for i in np.unique(idx):
+        s = pts[idx == i]
+        if len(s) < SUPPORT_MIN_POINTS:
+            continue
+        near = float(s[:, 0].min())
+        band = s[s[:, 0] < near + SUPPORT_BAND_M, 2]
+        edges[int(i)] = (near, float(np.percentile(band, SUPPORT_TOP_PERCENTILE)))
+    return edges
+
+
+def support_depth(edges, T):
+    """Return how far [m] the hand at gripper-base pose `T` sits below the extended support."""
+    if not edges:
+        return 0.0
+    p = HAND_SAMPLES @ T[:3, :3].T + T[:3, 3]
+    idx = np.floor(p[:, 1] / SUPPORT_SLICE_M).astype(int)
+    depth = 0.0
+    for i in np.unique(idx):
+        edge = edges.get(int(i))
+        if edge is None:
+            continue
+        s = p[idx == i]
+        ahead = s[s[:, 0] < edge[0], 2]
+        if len(ahead):
+            depth = max(depth, edge[1] - float(ahead.min()))
+    return depth
 
 
 class ReachModel:
@@ -130,13 +207,20 @@ class ReachModel:
         `waypoints`: (4x4 pose, label, (lin_tol, ang_tol) or None, scene) in execution
         order, pelvis frame, for URDF `frame`; a waypoint with tolerances must be reached
         within them, one without only steers the IK, and one with `scene` set must leave
-        the hand out of `obstacles` ((N, 3) pelvis-frame points, or None).
+        the hand out of `obstacles` ((N, 3) pelvis-frame points, or None) and above the
+        support extended toward the robot (support_depth).
         """
         self.start(q_body)
+        edges = support_edges(obstacles)
         for T, label, tol, scene in waypoints:
-            hits = hand_hits(obstacles, T) if scene else 0
-            if hits >= HAND_HIT_POINTS:
-                return f'the hand would be in the scene at the {label} ({hits} points)'
+            if scene:
+                hits = hand_hits(obstacles, T)
+                if hits >= HAND_HIT_POINTS:
+                    return f'the hand would be in the scene at the {label} ({hits} points)'
+                below = support_depth(edges, T)
+                if below > SUPPORT_DEPTH_M:
+                    return (f'the hand would be {below * 1000:.0f} mm below the support seen '
+                            f'ahead of it at the {label}')
             lin, ang = self.follow(frame, T)
             if tol is not None and (lin > tol[0] or ang > tol[1]):
                 return (f'the IK stops {lin * 1000:.0f} mm / {np.degrees(ang):.0f} deg '

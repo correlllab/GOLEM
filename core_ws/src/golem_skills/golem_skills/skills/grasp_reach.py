@@ -3,8 +3,9 @@ Check a grasp candidate's approach before the arm moves: the IK along its path, 
 
 GraspReach is a mixin of GraspSkill. reach_check() replays the executor's approach (take
 off, straight-line transit to the pre-grasp, in along the grasp axis) on golem_upper_ik's
-own IK model, from the arm's measured joint positions (/joint_states), and counts the
-head-camera scene points the hand would sit in at the pre-grasp and along the grasp axis
+own IK model, from the arm's measured joint positions (/joint_states), and tests the hand
+at the pre-grasp and along the grasp axis against the head-camera scene: the points it
+would sit in, and, where the camera does not see, the support extended toward the robot
 (reach_model.ReachModel.check). A candidate that fails either is skipped without moving
 the arm, which costs about a second instead of a failed approach and a reset to 'prep'.
 
@@ -13,7 +14,8 @@ URDF parse holds the GIL for seconds at a time, and in the node's own process th
 the safety heartbeat's callback until golem_skills halts the arm move in flight.
 
 The check is a filter, not a guarantee: the IK model has the self-collision spheres but
-not the scene, and the scene test covers the hand only, from one head-camera view.
+not the scene, and the scene test covers the hand only, from one head-camera view and its
+extension of the support (reach_model.support_edges).
 """
 
 import multiprocessing

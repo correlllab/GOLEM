@@ -13,12 +13,13 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from golem_skills.grasp_synthesis.common import level_pose, pose_at
+from golem_skills.grasp_synthesis.common import grasp_pose, level_pose, pose_at
 from golem_skills.perception_utils import approach_pose, pose_to_matrix, pose_xyz
 from golem_skills.skills.grasp import (APPROACH_LIN_TOL, AXIS_APPROACH_STEP_M,
                                        LINEAR_APPROACH_SEG_M, SERVO_LIN_TOL,
                                        approach_waypoints, line_waypoints)
-from golem_skills.reach_model import HAND_HIT_POINTS, ReachModel, hand_hits
+from golem_skills.reach_model import (HAND_HIT_POINTS, SUPPORT_DEPTH_M, ReachModel,
+                                      hand_hits, support_depth, support_edges)
 from golem_skills.skills.grasp_reach import (OBJECT_CLEAR_M, SCENE_CROP_M, GraspReach,
                                              scene_obstacles)
 
@@ -46,6 +47,45 @@ def test_a_top_down_hand_whose_pads_straddle_a_part_is_clear():
     # contact point 5 mm above the table: the base sits 0.1146 m above it
     down[:3, 3] = (0.0, 0.0, 0.005 + 0.1146)
     assert hand_hits(table, down) == 0
+
+
+def seen_support(x0=0.38, y0=-0.3, y1=0.3):
+    """Return a table top at pelvis z 0 that the camera sees from `x0` on, between y0 and y1."""
+    xs, ys = np.meshgrid(np.arange(x0, 0.6, 0.005), np.arange(y0, y1, 0.005))
+    return np.stack([xs.ravel(), ys.ravel(), np.zeros(xs.size)], axis=-1)
+
+
+def rolled_pregrasp(z):
+    """Return the base pose 10 cm back of a +X grasp at (0.45, 0, z) closing vertically."""
+    grasp = grasp_pose((0.45, 0.0, z), (0.0, 0.0, 1.0), (1.0, 0.0, 0.0))
+    return pose_to_matrix(approach_pose(grasp, -0.10))
+
+
+def test_a_rolled_hand_below_the_unseen_table_front_is_caught():
+    """A vertical-closing hand in front of the seen table, fingers below its top, fails."""
+    table = seen_support()
+    T = rolled_pregrasp(0.02)
+    assert hand_hits(table, T) == 0
+    assert support_depth(support_edges(table), T) > 0.04
+
+
+def test_a_level_hand_above_the_unseen_table_front_is_clear():
+    """A level hand in front of the seen table, above its top, passes."""
+    table = seen_support()
+    level = pose_to_matrix(approach_pose(level_pose((0.45, 0.0, 0.05), (1.0, 0.0, 0.0)), -0.10))
+    assert support_depth(support_edges(table), level) <= SUPPORT_DEPTH_M
+
+
+def test_the_support_extends_only_in_the_slices_it_is_seen_in():
+    """The rolled hand passes when the table is seen only beside it, not ahead of it."""
+    table = seen_support(y0=0.15)
+    assert support_depth(support_edges(table), rolled_pregrasp(0.02)) <= SUPPORT_DEPTH_M
+
+
+def test_a_hand_behind_the_seen_near_edge_is_left_to_the_point_count():
+    """Hand points at or past a slice's near edge are not tested against the extension."""
+    table = seen_support(x0=0.20)
+    assert support_depth(support_edges(table), rolled_pregrasp(0.02)) == 0.0
 
 
 def test_scene_obstacles_drops_the_object_and_far_points():
@@ -124,6 +164,17 @@ def test_a_level_side_grasp_at_the_support_height_is_not(reach):
     grasp = level_pose((0.47, 0.28, -0.015), (0.0, -1.0, 0.0))
     assert _follow(reach, frame, _cur(reach, frame), approach_pose(grasp, -0.10),
                    approach_pose(grasp, -0.025)) is not None
+
+
+def test_the_check_rejects_a_waypoint_below_the_extended_support(reach):
+    """check() fails a scene waypoint whose hand sits below the support ahead of it."""
+    model, q = reach
+    T = rolled_pregrasp(0.02)
+    T[1, 3] = 0.25
+    table = seen_support(y0=0.1, y1=0.4)
+    why = model.check(q, 'left_graspgenx_frame', [(T, 'pre-grasp', None, True)], table)
+    assert why is not None and 'below the support' in why
+    assert model.check(q, 'left_graspgenx_frame', [(T, 'pre-grasp', None, False)], table) is None
 
 
 def test_a_cross_body_grasp_is_not(reach):

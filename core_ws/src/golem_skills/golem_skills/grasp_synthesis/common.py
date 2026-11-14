@@ -71,10 +71,13 @@ class Candidates:
     total: int
     # planned opening [m]; 0.0 when the method has none
     gripper_width: float
+    # how many candidates the executor may move the arm for; the rest only stand in
+    # for those the reach check skips (None: every one)
+    attempts: Optional[int] = None
 
 
 def make_candidates(poses, labels, arm, scores=None, total=None,
-                    gripper_width=0.0):
+                    gripper_width=0.0, attempts=None):
     """Wrap pelvis-frame Poses, already in execution order, as Candidates."""
     from .ranking import priority_tier
     grasps = []
@@ -89,7 +92,8 @@ def make_candidates(poses, labels, arm, scores=None, total=None,
         labels=list(labels),
         tiers=[priority_tier(p, arm) for p in poses],
         total=len(poses) if total is None else total,
-        gripper_width=float(gripper_width))
+        gripper_width=float(gripper_width),
+        attempts=attempts)
 
 
 def pose_at(point):

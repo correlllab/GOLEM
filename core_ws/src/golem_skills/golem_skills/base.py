@@ -40,7 +40,7 @@ from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from action_msgs.msg import GoalStatus
 from builtin_interfaces.msg import Duration
 from geometry_msgs.msg import Point, Pose, Quaternion, Vector3Stamped
-from sensor_msgs.msg import CameraInfo, CompressedImage, Image
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image, JointState
 from std_msgs.msg import Bool, Header
 
 from sensor_msgs_py import point_cloud2
@@ -344,6 +344,12 @@ class SkillsBase(Node):
         # mm, the aperture the driver reported after the last set_gripper per
         # arm; gripper_aperture's fallback before any state message
         self._gripper_actual_mm = {}
+        # the latest /joint_states (golem_upper_ik's joint_state_publisher, the
+        # body joints from /lowstate); the grasp reach check starts its IK there
+        self._joint_state = None
+        self.joint_state_sub = self.create_subscription(
+            JointState, '/joint_states', self._on_joint_state, 10,
+            callback_group=self._cb_group)
 
         # gemini_query: image (+ text) -> text; sam_segment: image + text/boxes ->
         # mono8 mask; graspgen: object cloud -> ranked 6-DOF grasps
@@ -1316,6 +1322,14 @@ class SkillsBase(Node):
         """Cache the driver's published gripper aperture [mm] for `arm`, and when it came."""
         self._gripper_state_mm[arm] = float(msg.position)
         self._gripper_state_t[arm] = self.robot_now()
+
+    def _on_joint_state(self, msg):
+        """Keep the latest /joint_states message."""
+        self._joint_state = msg
+
+    def latest_joint_state(self):
+        """Return the latest /joint_states message, or None before the first."""
+        return self._joint_state
 
     def gripper_aperture_since(self, arm, since, wait_sec):
         """

@@ -5,17 +5,20 @@ The flow (_exec_grasp):
 
     prep -> detect_object (Gemini box) -> segment_object (SAM mask -> cloud)
          -> get_grasp_candidates (the selected grasp_synthesis method)
-         -> per candidate, in the method's order: take off in Z, transit to
-            the pre-grasp, then in along the grasp axis (or the visual servo);
-            a candidate whose pre-grasp or contact is not reached is dropped
-            and the next one tried
+         -> per candidate, in the method's order: for a reach-checked method,
+            skip it when the IK or the scene says the approach fails
+            (grasp_reach.py); take off in Z, transit to the pre-grasp, then
+            in along the grasp axis (or the visual servo); a candidate whose
+            pre-grasp or contact is not reached is dropped and the next one
+            tried
          -> force close -> check the gripper holds something
 
 Perception and execution are the same for every synthesis method; only the
 candidate list differs (grasp_synthesis/__init__.py has the methods and how a
 goal selects one). The same path runs in the sim and on the robot, with no
 switches: head-camera detection is grasp_detection.py, the visual servo
-grasp_servo.py, the RViz markers grasp_markers.py.
+grasp_servo.py, the reach check grasp_reach.py, the RViz markers
+grasp_markers.py.
 
 SAFETY: every arm move is refused once golem_safety's heartbeat halts the arms
 or the frame_task server aborts a move (SkillsBase.arm_halt_reason); the skill
@@ -24,6 +27,7 @@ then aborts instead of trying more candidates or retreating.
 
 import copy
 import math
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -41,6 +45,7 @@ from ..perception_utils import (approach_pose, pose_quat, pose_xyz,
                                 quat_geodesic, quat_slerp)
 from .grasp_detection import GraspDetection, perception_name
 from .grasp_markers import TARGET_FRAME, GraspMarkers
+from .grasp_reach import GraspReach, scene_obstacles
 from .grasp_servo import GraspServo
 
 
@@ -156,6 +161,68 @@ def grip_failure(aperture_mm):
     return None
 
 
+def line_waypoints(start, target, step_m, step_rad):
+    """
+    Return the waypoints of a straight line from Pose `start` to Pose `target`, `target` last.
+
+    At most `step_m` [m] and `step_rad` apart, position interpolated and
+    orientation slerped, in whatever frame the two poses share.
+    """
+    p0, p1 = pose_xyz(start), pose_xyz(target)
+    q0, q1 = pose_quat(start), pose_quat(target)
+    dist = float(np.linalg.norm(p1 - p0))
+    angle = quat_geodesic(q0, q1)
+    n = max(1, int(math.ceil(max(dist / step_m, angle / step_rad))))
+    out = []
+    for k in range(1, n + 1):
+        t = float(k) / n
+        pk = p0 + t * (p1 - p0)
+        qk = quat_slerp(q0, q1, t)
+        wp = Pose()
+        wp.position = Point(x=float(pk[0]), y=float(pk[1]), z=float(pk[2]))
+        wp.orientation = Quaternion(x=float(qk[0]), y=float(qk[1]),
+                                    z=float(qk[2]), w=float(qk[3]))
+        out.append(wp)
+    return out
+
+
+def approach_waypoints(cur, pregrasp, contact):
+    """
+    Return the executor's approach from hand pose `cur` as GraspReach.reach_check waypoints.
+
+    The take-off, the transit to `pregrasp` and the axis steps to `contact`,
+    laid out as _approach_pregrasp and _move_in_along_axis lay them out (all
+    Poses in the pelvis frame), each with the tolerance its move must meet:
+    the take-off and the pre-grasp the approach tolerances, the axis steps
+    the contact tolerances until axis_approach_closes would close, and none
+    after that. The pre-grasp and the axis steps are near the object, so
+    they are the ones tested against the scene.
+    """
+    approach_tol = (APPROACH_LIN_TOL, APPROACH_ANG_TOL)
+    out = []
+    lift_z = max(cur.position.z, pregrasp.position.z) + APPROACH_CLEARANCE_M
+    start = cur
+    if lift_z - cur.position.z > 1e-3:
+        start = copy.deepcopy(cur)
+        start.position.z = lift_z
+        up = line_waypoints(cur, start, LINEAR_APPROACH_SEG_M, LINEAR_APPROACH_SEG_RAD)
+        for k, wp in enumerate(up, 1):
+            out.append((wp, 'take-off', approach_tol if k == len(up) else None, False))
+    transit = line_waypoints(start, pregrasp, LINEAR_APPROACH_SEG_M,
+                             LINEAR_APPROACH_SEG_RAD)
+    for k, wp in enumerate(transit, 1):
+        last = k == len(transit)
+        out.append((wp, 'pre-grasp' if last else f'transit {k}/{len(transit)}',
+                    approach_tol if last else None, last))
+    depth = float(np.linalg.norm(pose_xyz(contact) - pose_xyz(pregrasp)))
+    n = max(1, int(math.ceil(depth / AXIS_APPROACH_STEP_M)))
+    for k in range(1, n + 1):
+        must = not axis_approach_closes(depth * (k - 1) / n, depth)
+        out.append((approach_pose(pregrasp, depth * k / n), f'axis step {k}/{n}',
+                    (SERVO_LIN_TOL, SERVO_ANG_TOL) if must else None, True))
+    return out
+
+
 @dataclass
 class GraspOutcome:
     """
@@ -207,7 +274,7 @@ class _Contact:
     pose_w: object
 
 
-class GraspSkill(GraspDetection, GraspServo, GraspMarkers):
+class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
     """Provide /skill/grasp's execute callback and its pipeline to SkillsNode."""
 
     def _exec_grasp(self, gh):
@@ -250,6 +317,9 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers):
         self.get_logger().info(
             f'grasp: {obj!r} with synthesis method {method.name!r}'
             f'{" + visual servo" if goal.visual_servo else ""}')
+        if method.reach_check:
+            # built in the background while perception runs
+            self._reach_model_start()
 
         if not run.phase('detect_object', 0.0):
             return run.result
@@ -307,8 +377,10 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers):
         if targets.centroid_w is not None:
             self._note_run_target(targets.centroid_w)
         reset_cfg = stage_cfg if method.staged else 'prep'
+        obstacles = scene_obstacles(scene, obj_cloud) if method.reach_check else None
         contact, err = self._reach_candidate(run, gh, goal, obj, arm, cands,
-                                             targets, reset_cfg)
+                                             targets, reset_cfg,
+                                             method.reach_check, obstacles)
         if err:
             # A failed walk ends with the arms reset to reset_cfg and a halted
             # arm must not move, so only a servo cut short retreats.
@@ -392,13 +464,17 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers):
                         grasps_w=grasps_w, approaches_w=approaches_w,
                         have_world=have_world, centroid_w=centroid_w)
 
-    def _reach_candidate(self, run, gh, goal, obj, arm, cands, targets, reset_cfg):
+    def _reach_candidate(self, run, gh, goal, obj, arm, cands, targets, reset_cfg,
+                         check_reach=False, obstacles=None):
         """
         Bring the gripper to the first candidate it can close on.
 
         Returns (_Contact, None), or (_Contact or None, reason) on failure.
 
-        Walks the candidates in the method's order: the pre-grasp
+        Walks the candidates in the method's order, moving the arm for at most
+        cands.attempts of them. With `check_reach`, a candidate whose approach
+        fails the reach check (grasp_reach.py; `obstacles` the scene points
+        near the object) is skipped without moving the arm. Then the pre-grasp
         (_approach_pregrasp), then the visual servo with goal.visual_servo,
         else the move in along the grasp axis (_move_in_along_axis). A
         candidate is dropped when its pre-grasp is not reached or its axis
@@ -413,6 +489,8 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers):
         """
         width_mm = cands.gripper_width * 1000.0
         status = {}
+        attempts = cands.attempts or len(cands.grasps)
+        tried = skipped = 0
 
         def mark(i, state):
             """Set candidate `i`'s marker state and republish the markers."""
@@ -421,6 +499,19 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers):
                                         cands.scores, status)
 
         for i in range(len(cands.grasps)):
+            if tried >= attempts:
+                break
+            if gh.is_cancel_requested or run.remaining() <= 0.0:
+                return None, 'canceled or timed out during approach'
+            if check_reach:
+                why = self._check_candidate_reach(arm, targets, i, obstacles)
+                if why is not None:
+                    skipped += 1
+                    status[i] = 'failed'
+                    self.get_logger().info(
+                        f'grasp {i} ({cands.labels[i]}) skipped by the reach check: {why}')
+                    continue
+            tried += 1
             mark(i, 'trying')
             self._publish_target_tf(targets, targets.approaches_w[i],
                                     targets.approaches_p[i])
@@ -455,8 +546,26 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers):
                 return None, (f'arm halted during the reset to {reset_cfg!r}: {halt}'
                               if halt is not None else
                               f'reset to {reset_cfg!r} after grasp {i} failed')
+        checked = f', {skipped} failed the reach check' if check_reach else ''
         return None, (f'no reachable grasp for {obj!r} '
-                      f'(tried {len(cands.grasps)} of {cands.total})')
+                      f'(tried {tried}{checked}, of {cands.total})')
+
+    def _check_candidate_reach(self, arm, targets, idx, obstacles):
+        """Return why candidate `idx`'s approach fails the reach check, or None."""
+        frame = GRASP_FRAMES[arm]
+        cur = self._frame_pose_in_pelvis(frame)
+        if cur is None:
+            return None
+        contact = approach_pose(targets.grasps_p[idx],
+                                -float(self.get_parameter('contact_offset').value))
+        t0 = time.monotonic()
+        why = self.reach_check(
+            frame, approach_waypoints(cur, targets.approaches_p[idx], contact),
+            obstacles)
+        self.get_logger().info(
+            f'grasp {idx}: reach check {"failed" if why else "passed"} in '
+            f'{time.monotonic() - t0:.1f}s')
+        return why
 
     def _servo_contact(self, run, gh, arm, obj, targets, idx):
         """
@@ -500,25 +609,17 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers):
                 cur, target = cur_w, target_w
             else:
                 target_w = None
-        p0, p1 = pose_xyz(cur), pose_xyz(target)
-        q0, q1 = pose_quat(cur), pose_quat(target)
-        dist = float(np.linalg.norm(p1 - p0))
-        angle = quat_geodesic(q0, q1)
-        n = max(1, int(math.ceil(max(dist / step_m, angle / step_rad))))
+        dist = float(np.linalg.norm(pose_xyz(target) - pose_xyz(cur)))
+        angle = quat_geodesic(pose_quat(cur), pose_quat(target))
+        waypoints = line_waypoints(cur, target, step_m, step_rad)
+        n = len(waypoints)
         self.get_logger().info(
             f'grasp: {label}: {dist * 100:.1f}cm / {math.degrees(angle):.0f}deg '
             f'in {n} unplanned{" slow" if slow_mode else ""} step(s)'
             f'{f", tracking {WORLD_FRAME}" if target_w is not None else ""}')
-        for k in range(1, n + 1):
+        for k, wp in enumerate(waypoints, 1):
             if gh.is_cancel_requested or run.remaining() <= 0.0:
                 return False
-            t = float(k) / n
-            pk = p0 + t * (p1 - p0)
-            qk = quat_slerp(q0, q1, t)
-            wp = Pose()
-            wp.position = Point(x=float(pk[0]), y=float(pk[1]), z=float(pk[2]))
-            wp.orientation = Quaternion(x=float(qk[0]), y=float(qk[1]),
-                                        z=float(qk[2]), w=float(qk[3]))
             if target_w is not None:
                 wp = self._live_pelvis_pose(wp)
                 if wp is None:

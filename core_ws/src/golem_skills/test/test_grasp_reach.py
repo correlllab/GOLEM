@@ -1,10 +1,14 @@
 """
 Test the grasp reach check: the hand-in-scene count, the approach waypoints and the IK replay.
 
-The IK tests build golem_upper_ik's H1-2 model once (~17 s) and need no ROS graph.
+The IK tests build golem_upper_ik's H1-2 model (~15 s) once in this process and once in the
+check's child process, and need no ROS graph.
 """
 
 import math
+import threading
+import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -14,8 +18,9 @@ from golem_skills.perception_utils import approach_pose, pose_to_matrix, pose_xy
 from golem_skills.skills.grasp import (APPROACH_LIN_TOL, AXIS_APPROACH_STEP_M,
                                        LINEAR_APPROACH_SEG_M, SERVO_LIN_TOL,
                                        approach_waypoints, line_waypoints)
-from golem_skills.skills.grasp_reach import (HAND_HIT_POINTS, OBJECT_CLEAR_M, SCENE_CROP_M,
-                                             ReachModel, hand_hits, scene_obstacles)
+from golem_skills.reach_model import HAND_HIT_POINTS, ReachModel, hand_hits
+from golem_skills.skills.grasp_reach import (OBJECT_CLEAR_M, SCENE_CROP_M, GraspReach,
+                                             scene_obstacles)
 
 
 def plane(z, half=0.3, step=0.005):
@@ -89,14 +94,11 @@ def reach():
 
 
 def _follow(reach, frame, cur, pregrasp, contact):
-    """Return the first judged waypoint the IK misses, or None."""
+    """Return why the IK misses the approach without a scene, or None."""
     model, q = reach
-    model.start(q)
-    for pose, label, tol, _ in approach_waypoints(cur, pregrasp, contact):
-        lin, ang = model.follow(frame, pose_to_matrix(pose))
-        if tol is not None and (lin > tol[0] or ang > tol[1]):
-            return label
-    return None
+    waypoints = [(pose_to_matrix(p), label, tol, scene)
+                 for p, label, tol, scene in approach_waypoints(cur, pregrasp, contact)]
+    return model.check(q, frame, waypoints, None)
 
 
 def _cur(reach, frame):
@@ -130,3 +132,60 @@ def test_a_cross_body_grasp_is_not(reach):
     grasp = level_pose((0.45, 0.05, 0.0), (0.0, 1.0, 0.0))
     assert _follow(reach, frame, _cur(reach, frame), approach_pose(grasp, -0.10),
                    approach_pose(grasp, -0.025)) is not None
+
+
+class _Node(GraspReach):
+    """Stand in for the skills node: a logger and a fixed /joint_states."""
+
+    def __init__(self, joint_state):
+        """Keep `joint_state` and collect log lines."""
+        self.joint_state = joint_state
+        self.lines = []
+
+    def get_logger(self):
+        """Return self, which logs into `lines`."""
+        return self
+
+    def info(self, msg):
+        """Collect an info line."""
+        self.lines.append(msg)
+
+    warn = error = info
+
+    def latest_joint_state(self):
+        """Return the fixed joint state."""
+        return self.joint_state
+
+
+def test_the_child_process_check_leaves_the_node_threads_running(reach):
+    """While the model builds and checks, another thread runs every 0.5 s; the verdicts hold."""
+    model, q = reach
+    node = _Node(SimpleNamespace(name=model.joints, position=list(q)))
+    gaps, stop = [], threading.Event()
+
+    def tick():
+        last = time.monotonic()
+        while not stop.wait(0.01):
+            now = time.monotonic()
+            gaps.append(now - last)
+            last = now
+
+    ticker = threading.Thread(target=tick, daemon=True)
+    ticker.start()
+    try:
+        frame = 'left_graspgenx_frame'
+        cur = _cur(reach, frame)
+        side = level_pose((0.47, 0.28, -0.015), (0.0, -1.0, 0.0))
+        a = np.array([math.cos(math.radians(30)), 0.0, -math.sin(math.radians(30))])
+        forward = level_pose((0.40, 0.25, 0.05), a)
+        for grasp, fails in ((forward, False), (side, True)):
+            wps = approach_waypoints(cur, approach_pose(grasp, -0.10),
+                                     approach_pose(grasp, -0.025))
+            assert (node.reach_check(frame, wps, None) is not None) == fails, node.lines
+    finally:
+        stop.set()
+        ticker.join()
+        if node._reach_proc is not None:
+            node._reach_proc.kill()
+    assert any('IK model built' in line for line in node.lines), node.lines
+    assert max(gaps) < 0.5

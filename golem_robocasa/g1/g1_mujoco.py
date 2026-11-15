@@ -196,7 +196,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, duration=0.0
     # through view_sync.apply_perturbation().
     handle = view_sync = None
     if viewer:
-        handle, view_sync = open_viewer(model, data, physics_lock, band, band_body, "g1_mujoco")
+        handle, view_sync = open_viewer(model, data, physics_lock, band, band_body, "g1_mujoco",
+                                        sim_rate=sim_rate)
     # Logs the band's release and the first time the pelvis tips or drops.
     fall_logger = FallLogger(resolver.base_body, "pelvis", upright_min=FALL_UPRIGHTNESS,
                              height_min=FALL_PELVIS_HEIGHT)

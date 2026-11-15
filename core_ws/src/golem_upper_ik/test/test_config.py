@@ -9,7 +9,7 @@ import pytest
 import yaml
 
 CONFIGS = {
-    'h12': ['safety_split', 'sim_safety_split', 'safety_full'],
+    'h12': ['safety_split', 'safety_full'],
     'g1': ['g1_split', 'sim_split'],
 }
 CASES = [f'{robot}/{name}' for robot, names in CONFIGS.items() for name in names]

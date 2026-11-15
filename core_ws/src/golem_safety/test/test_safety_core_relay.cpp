@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -221,7 +222,7 @@ LowState past_estop(const RobotProfile & profile, const SafetyConfig & cfg, int 
 // from "A".
 struct H12Split
 {
-  SafetyConfig cfg = config(h12(), "sim_safety_split");
+  SafetyConfig cfg = config(h12(), "relax_safety_split");
   SafetyCore core{h12(), cfg, false, kDomain};
 
   H12Split()
@@ -238,7 +239,7 @@ struct H12Split
 // whatever header the input carried, on both robots.
 TEST(Relay, SplitMergesUpperAndLowerSlots)
 {
-  SafetyCore core(h12(), config(h12(), "sim_safety_split"), false, kDomain);
+  SafetyCore core(h12(), config(h12(), "relax_safety_split"), false, kDomain);
   core.on_state(state_of(h12()), 0.0);
   LowCmd lower = command(h12());
   lower.motor_cmd[5].q = 0.1F;
@@ -291,7 +292,7 @@ TEST(Relay, UnownedSlotsAreZeroCommand)
   const LowCmd zero = golem_safety::zero_command(h12());
 
   // split_mode: Lower owns 0-11 and Upper 12-26; 27-34 are no input's.
-  SafetyCore split(h12(), config(h12(), "sim_safety_split"), false, kDomain);
+  SafetyCore split(h12(), config(h12(), "relax_safety_split"), false, kDomain);
   split.on_state(state_of(h12()), 0.0);
   LowCmd lower = command(h12());
   fill_junk(lower, 27, 34);
@@ -345,7 +346,7 @@ TEST(Relay, UnownedSlotsAreZeroCommand)
 // gain_clipped is raised once per joint and gain.
 TEST(Clip, PositionVelocityTorqueAndGains)
 {
-  const SafetyConfig cfg = config(h12(), "sim_safety_split");
+  const SafetyConfig cfg = config(h12(), "relax_safety_split");
   const auto & limits = cfg.limits;
   SafetyCore core(h12(), cfg, false, kDomain);
   core.on_state(state_of(h12()), 0.0);
@@ -461,9 +462,9 @@ TEST(Clip, NonFiniteSampleLatches)
     int slot;
   };
   const std::vector<Case> cases = {
-    {h12(), "sim_safety_split", Input::Upper, "/safety/lowcmd_upper_in", 13},
-    {h12(), "sim_safety_split", Input::Lower, "/safety/lowcmd_lower_in", 4},
-    {h12(), "sim_safety_split", Input::Lower, "/safety/lowcmd_lower_in", 26},
+    {h12(), "relax_safety_split", Input::Upper, "/safety/lowcmd_upper_in", 13},
+    {h12(), "relax_safety_split", Input::Lower, "/safety/lowcmd_lower_in", 4},
+    {h12(), "relax_safety_split", Input::Lower, "/safety/lowcmd_lower_in", 26},
     {h12(), "default_safety_full", Input::Full, "/safety/lowcmd_in", 26},
     {g1(), "sim_split", Input::Upper, "/safety/lowcmd_upper_in", 3},
     {g1(), "sim_split", Input::Upper, "/safety/lowcmd_upper_in", 28},
@@ -495,7 +496,7 @@ TEST(Clip, NonFiniteFirstSampleLatches)
 {
   // A first command that is not valid latches before any input engages; the burst is the
   // estop command.
-  const SafetyConfig cfg = config(h12(), "sim_safety_split");
+  const SafetyConfig cfg = config(h12(), "relax_safety_split");
   SafetyCore core(h12(), cfg, false, kDomain);
   core.on_state(state_of(h12()), 0.0);
   ASSERT_TRUE(core.step(0.0));
@@ -537,15 +538,16 @@ TEST(Clip, NonFiniteFirstSampleLatches)
 // limit; past the clip range alone does not.
 TEST(Limits, MeasuredPastEstopLatches)
 {
-  const SafetyConfig cfg = config(h12(), "sim_safety_split");
+  const SafetyConfig cfg = config(h12(), "relax_safety_split");
   const auto & limits = cfg.limits;
 
   {
     SafetyCore core(h12(), cfg, false, kDomain);
     core.on_state(state_of(h12()), 0.0);
-    // Past the clip range but inside the estop range: no latch.
+    // Past the clip range but inside the estop range: no latch. Slot 25, the right wrist
+    // pitch, whose estop range is 0.1 rad wider than its clip range.
     LowState inside = state_of(h12());
-    inside.motor_state[20].q = static_cast<float>(limits.q_clip_high[20] + 0.05);
+    inside.motor_state[25].q = static_cast<float>(limits.q_clip_high[25] + 0.05);
     core.on_state(inside, 0.002);
     EXPECT_FALSE(core.estopped());
 
@@ -557,8 +559,9 @@ TEST(Limits, MeasuredPastEstopLatches)
     EXPECT_TRUE(contains(reason, "right_shoulder_pitch_joint")) << reason;
     EXPECT_TRUE(contains(reason, "x")) << reason;
     EXPECT_TRUE(contains(reason, " q ")) << reason;
-    EXPECT_TRUE(contains(reason, "limit 1.670")) << reason;
-    EXPECT_TRUE(contains(reason, "1.12x")) << reason;
+    char limit[32];
+    std::snprintf(limit, sizeof(limit), "limit %.3f", limits.q_estop_high[20]);
+    EXPECT_TRUE(contains(reason, limit)) << reason;
   }
 
   struct Case
@@ -596,7 +599,7 @@ TEST(Limits, MeasuredPastEstopLatches)
 // SAFETY: once engaged, a /lowstate with another robot's mode_machine latches.
 TEST(Identity, ForeignSampleAfterEngageLatches)
 {
-  SafetyCore core(h12(), config(h12(), "sim_safety_split"), false, kDomain);
+  SafetyCore core(h12(), config(h12(), "relax_safety_split"), false, kDomain);
   core.on_state(state_of(h12()), 0.0);
   LowState foreign = state_of(h12());
   foreign.mode_machine = 5;
@@ -764,7 +767,7 @@ TEST(Estop, KeepWriting)
 // samples are ignored.
 TEST(EstopInput, TriggeredOrUnpluggedLatchesWithUseEstop)
 {
-  const SafetyConfig cfg = config(h12(), "sim_safety_split");
+  const SafetyConfig cfg = config(h12(), "relax_safety_split");
   {
     SafetyCore core(h12(), cfg, true, kDomain);
     core.on_estop(false, true, 0.0);
@@ -837,7 +840,7 @@ TEST(ExitStep, FullAndSplitAreDoneAtOnce)
 // the last command written.
 TEST(Log, OneSamplePerLowstateOnTheBodySlots)
 {
-  SafetyConfig cfg = config(h12(), "sim_safety_split");
+  SafetyConfig cfg = config(h12(), "relax_safety_split");
   {
     SafetyCore core(h12(), cfg, false, kDomain);
     core.on_state(state_of(h12()), 0.0);
@@ -901,10 +904,10 @@ TEST(Events, GainClippedIsTheOldJson)
     {g1(), "sim_split", Input::Upper, 20, "kp", 300.1F,
       "{\"commanded\": 300.1000061035156, \"event\": \"gain_clipped\", \"gain\": \"kp\", "
       "\"joint\": \"left_wrist_pitch_joint\", \"max\": 200.0, \"source\": \"split_mode_upper\"}"},
-    {h12(), "sim_safety_split", Input::Lower, 3, "kd", 31.5F,
+    {h12(), "relax_safety_split", Input::Lower, 3, "kd", 31.5F,
       "{\"commanded\": 31.5, \"event\": \"gain_clipped\", \"gain\": \"kd\", "
       "\"joint\": \"left_knee_joint\", \"max\": 30.0, \"source\": \"split_mode_lower\"}"},
-    {h12(), "sim_safety_split", Input::Upper, 20, "kd", 1e20F,
+    {h12(), "relax_safety_split", Input::Upper, 20, "kd", 1e20F,
       "{\"commanded\": 1.0000000200408773e+20, \"event\": \"gain_clipped\", \"gain\": \"kd\", "
       "\"joint\": \"right_shoulder_pitch_joint\", \"max\": 30.0, "
       "\"source\": \"split_mode_upper\"}"},

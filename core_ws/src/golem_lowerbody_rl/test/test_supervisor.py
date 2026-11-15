@@ -333,7 +333,7 @@ def test_alternating_reasons_to_wait_are_logged_at_most_every_5_s():
 @pytest.mark.parametrize('ticks', [1, 4], ids=['half', 'double'])
 def test_tick_not_in_ms_never_becomes_ready(ticks):
     """Never start the policy on a tick that is not ms of the node's clock, and say why."""
-    rig = Rig('h12', 'sim')
+    rig = Rig('h12', 'sim', startup={'wait_for_confirm': False})
     rig.to(Phase.WAITING)
     rig.feed(round(20.0 / SAMPLE_DT), ticks=ticks)
     assert rig.sup.phase is Phase.HOLDING and rig.sup.fault is None
@@ -393,7 +393,7 @@ def test_ready_needs_fresh_upper_command():
 
 def test_ready_needs_steady_seconds_from_the_ramp_start():
     """Start no sooner than steady_seconds of ticks after the ramp began."""
-    rig = Rig('h12', 'sim', startup={'ramp_seconds': 0.1})
+    rig = Rig('h12', 'sim', startup={'ramp_seconds': 0.1, 'wait_for_confirm': False})
     rig.to(Phase.WAITING)
     rig.until(Phase.RAMPING)
     ramp_tick = rig.tick
@@ -438,7 +438,7 @@ def test_engage_resets_only_when_the_spec_says():
 
 def test_sim_policy_waits_for_ee_pose_or_max_wait():
     """In the sim, start on the first /left_ee_pose, or max_wait after holding began."""
-    rig = Rig('h12', 'sim')
+    rig = Rig('h12', 'sim', startup={'wait_for_confirm': False})
     rig.feed(round(6.0 / SAMPLE_DT))
     assert rig.sup.phase is Phase.HOLDING and not rig.runner.inputs
     assert 'the policy waits: frame_task_server is not up yet (no /left_ee_pose)' in \
@@ -509,7 +509,7 @@ def test_stale_cmd_is_zero_after_0_5_s():
 
 def test_commands_before_the_start_are_dropped():
     """Start the policy at zero velocity and the default height whatever came before."""
-    rig = Rig('h12', 'sim')
+    rig = Rig('h12', 'sim', startup={'wait_for_confirm': False})
     rig.sup.on_ee_pose(rig.mono)
     rig.until(Phase.HOLDING, upper=False)
     rig.sup.on_cmd(0.5, 0.0, 0.0, rig.mono)

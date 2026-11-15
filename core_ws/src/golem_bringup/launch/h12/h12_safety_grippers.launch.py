@@ -34,7 +34,6 @@ def generate_launch_description():
         {
             'use_sim_time': 'false',
             'sim': 'false',
-            'use_estop': 'true',
             'use_frame_task': 'false',
             'safety_config': LaunchConfiguration('safety_config'),
         },

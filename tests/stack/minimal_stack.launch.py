@@ -3,7 +3,8 @@
 Starts, at once and in this order: golem_safety's safety_node, golem_upper_ik's
 frame_task_server and joint_state_publisher, robot_state_publisher on the H1-2 URDF and, for
 the locomotion case only, golem_lowerbody_rl's lowerbody_controller_node pinned to ALMI. Every
-node runs on sim time with the H1-2's sim configs. If any node exits, the whole launch shuts
+node runs on sim time with the real H1-2's configs, as h12_sim does (no estop_node:
+safety_node runs without use_estop here). If any node exits, the whole launch shuts
 down.
 
 Reads the environment, not launch arguments: ROS_DOMAIN_ID (1..232), TEST_CASE
@@ -33,12 +34,12 @@ def generate_launch_description():
     nodes = [
         # SAFETY: the only writer of /lowcmd; the controllers below write its /safety/* inputs.
         Node(package='golem_safety', executable='safety_node', name='safety_node',
-             parameters=[sim_time, {'robot': 'h12', 'config': 'sim_safety_split.yaml', 'sim': True}],
+             parameters=[sim_time, {'robot': 'h12', 'config': 'relax_safety_split.yaml', 'sim': True}],
              output='screen'),
         # The arm controller under test in the arms case, and the torso and arm hold in locomotion;
         # its config pairs with the safety config above.
         Node(package='golem_upper_ik', executable='frame_task_server', name='frame_task_server',
-             parameters=[sim_time, {'robot': 'h12', 'config': 'sim_safety_split.yaml'}], output='screen'),
+             parameters=[sim_time, {'robot': 'h12', 'config': 'safety_split.yaml'}], output='screen'),
         # /joint_states from /lowstate, for robot_state_publisher's TF.
         Node(package='golem_upper_ik', executable='joint_state_publisher', name='joint_state_publisher',
              parameters=[sim_time, {'robot': 'h12'}], output='screen'),
@@ -48,7 +49,7 @@ def generate_launch_description():
     ]
     if case == 'locomotion':
         # The leg controller under test: ALMI on the H1-2's sim run config, as the sim bringups
-        # run it (no operator confirm; it releases the band). Its start needs frame_task_server's
+        # run it (check_lowerbody.py gives the operator's confirm; it releases the band). Its start needs frame_task_server's
         # fresh commands and first /left_ee_pose, so the arm controller above runs in this case too.
         nodes.append(Node(
             package='golem_lowerbody_rl', executable='lowerbody_controller_node', name='lowerbody_controller_node',

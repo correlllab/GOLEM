@@ -59,6 +59,7 @@ from magpie_hand_bridge import MagpieHandBridge
 from measurement_bridge import MeasurementBridge
 from mujoco_env import ElasticBand, FallLogger, apply_band
 from mujoco_ros_bridge import RosSensorBridge
+from estop_server import start_estop_server
 from sim_names import NameResolver
 from sim_timing import RealtimePacer, LoopTimings
 from unitree_interface import SimInterface
@@ -314,10 +315,15 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # The viewer draws its own MjData, refreshed from data by the viewer thread,
     # with the band while it is enabled; its mouse perturbation forces come back
     # through view_sync.apply_perturbation().
+    # The hardware estop box estop_node reads (estop_server); SAFETY: golem_safety
+    # latches on its ENTER toggle, and on its silence once the sim stops.
+    estop = start_estop_server("h12_mujoco")
+
     handle = view_sync = None
     if viewer:
         handle, view_sync = open_viewer(model, data, sim_lock, band, band_body_id, "h12_mujoco",
-                                        timings=timings, sim_rate=sim_rate)
+                                        timings=timings, sim_rate=sim_rate,
+                                        key_callbacks=(estop.key_callback,))
     # Logs the band's release and the first time the torso tips or drops.
     fall_logger = FallLogger(band_body_id, "torso", upright_min=0.5, height_min=0.5)
 
@@ -380,6 +386,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
         hand_right.stop()
         hand_left.stop()
         close_viewer(handle, view_sync)
+        estop.shutdown()
         executor.shutdown()
         ros_bridge.shutdown()
         for node in (measurement, hand_right, hand_left, ros_bridge):

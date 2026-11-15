@@ -54,7 +54,7 @@ def generate_launch_description():
                 condition=IfCondition(LaunchConfiguration('use_hand_cameras'))),
 
         # Perception servers, YOLO and the LLM-callable skills.
-        include('golem_bringup', 'h12/h12_models.launch.py', {
+        include('golem_bringup', 'h12/golem_vision_models.launch.py', {
             **wall_time,
             'use_yolo': 'true',
             'use_skills': LaunchConfiguration('use_skills'),

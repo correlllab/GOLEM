@@ -403,7 +403,9 @@ def run_drive(out):
         if "error" in goal:
             d.mark("no_goal", error=goal["error"])
             return 1
-        if d.wait_band_released(timeout=300.0, refusals=bringup_test.LAUNCH_REFUSALS) and d.wait_nav():
+        # The H1-2's sim run config waits for the operator's confirm, as the real one does.
+        if d.wait_band_released(timeout=300.0, refusals=bringup_test.LAUNCH_REFUSALS,
+                                confirm=robot_from_env() == "h12") and d.wait_nav():
             d.spin_for(STAND_S)
             x, y, yaw = d.goal_in_map(goal)
             ok = d.navigate_with_arms(x, y, yaw)

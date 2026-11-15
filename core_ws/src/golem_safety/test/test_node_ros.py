@@ -29,7 +29,7 @@ from conftest import (
 UPPER = '/safety/lowcmd_upper_in'
 LOWER = '/safety/lowcmd_lower_in'
 FULL_IN = '/safety/lowcmd_in'
-SPLIT = {'h12': 'sim_safety_split', 'g1': 'sim_split'}
+SPLIT = {'h12': 'relax_safety_split', 'g1': 'sim_split'}
 FULL = {'h12': 'default_safety_full', 'g1': 'full'}
 # s: long enough for every input of the mode to engage and its commands to be relayed.
 SETTLE = 0.9
@@ -160,8 +160,8 @@ def _refused(robot, config, timeout: float = 30.0, **kwargs) -> tuple[int, str]:
      ['g1', 'default_safety_split', "no config 'default_safety_split' for robot g1"]),
     ('h12', 'share:g1/full.yaml',
      ['h12', 'g1/full.yaml', 'in the config directory of robot g1, not of robot h12']),
-    ('g1', 'share:h12/sim_safety_split.yaml',
-     ['g1', 'h12/sim_safety_split.yaml', 'in the config directory of robot h12, not of robot g1']),
+    ('g1', 'share:h12/relax_safety_split.yaml',
+     ['g1', 'h12/relax_safety_split.yaml', 'in the config directory of robot h12, not of robot g1']),
 ], ids=['h12-g1_name', 'g1-h12_name', 'h12-g1_path', 'g1-h12_path'])
 def test_config_for_other_robot_is_refused(robot, config, words):
     """SAFETY: another robot's config, by name or by path, is refused before relaying."""
@@ -191,7 +191,7 @@ def test_a_config_that_fails_to_load_is_refused(tmp_path):
 ])
 def test_missing_or_unknown_parameters_are_refused(params, word):
     """A missing robot or config, or an unknown robot, is refused."""
-    node = SafetyNode('h12', 'sim_safety_split', params=params)
+    node = SafetyNode('h12', 'relax_safety_split', params=params)
     try:
         code = node.wait_exit(30.0)
     finally:
@@ -251,7 +251,7 @@ def test_sim_refuses_domain_zero(domain):
                                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:
         assert watcher.stdout.readline().strip() == 'ready'
-        node = SafetyNode('h12', 'sim_safety_split', sim=True, env=env)
+        node = SafetyNode('h12', 'relax_safety_split', sim=True, env=env)
         try:
             code = node.wait_exit(30.0)
         finally:
@@ -271,7 +271,7 @@ def test_sim_refuses_domain_zero(domain):
 
 def test_use_sim_time_needs_sim():
     """SAFETY: use_sim_time:=true without sim:=true is refused: real robots keep the boot clock."""
-    node = SafetyNode('h12', 'sim_safety_split', sim=False, params={'use_sim_time': 'true'})
+    node = SafetyNode('h12', 'relax_safety_split', sim=False, params={'use_sim_time': 'true'})
     try:
         code = node.wait_exit(30.0)
     finally:
@@ -344,7 +344,7 @@ def test_sim_time_exit_finishes_the_burst_with_clock_stopped(stack, sim_clock):
     """
     clock = sim_clock(rate=0.1)
     clock.start()
-    run = stack('h12', 'sim_safety_split', params=SIM_TIME)
+    run = stack('h12', 'relax_safety_split', params=SIM_TIME)
     pairs = input_pairs(run)
     run.robot.stream(*pairs)
     run.robot.wait_for_output('/lowcmd', lambda msg: carries(msg, run), timeout=15.0)
@@ -421,7 +421,7 @@ def test_the_launch_file_starts_the_node_after_start_delay():
 def test_the_launch_file_runs_the_node():
     """ros2 launch of safety.launch.py runs the node, which exits cleanly on SIGINT."""
     command = ['ros2', 'launch', 'golem_safety', 'safety.launch.py', 'robot:=h12',
-               'config:=sim_safety_split', 'sim:=true', 'use_sim_time:=false',
+               'config:=relax_safety_split', 'sim:=true', 'use_sim_time:=false',
                'start_delay:=0.5']
     launch = subprocess.Popen(command, env=node_env(), text=True, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, start_new_session=True)
@@ -541,7 +541,7 @@ def test_zero_stream_engages_each_input_on_its_own(stack, first):
     SAFETY: the zero stream runs from boot, and each input engages on its own first command,
     the other input's slots staying at the zero command.
     """
-    run = stack('h12', 'sim_safety_split')
+    run = stack('h12', 'relax_safety_split')
     joints = len(run.robot.profile.joints)
     time.sleep(0.3)
     boot = [msg for _, msg in run.outputs()]
@@ -636,7 +636,7 @@ def test_full_body_mode_clips_gains_and_holds_a_quiet_input(stack, robot):
 
 # (robot, config, the input that goes quiet).
 QUIET_INPUTS = [
-    ('h12', 'sim_safety_split', 'lower'), ('h12', 'sim_safety_split', 'upper'),
+    ('h12', 'relax_safety_split', 'lower'), ('h12', 'relax_safety_split', 'upper'),
     ('h12', 'default_safety_full', 'full'), ('g1', 'sim_split', 'lower'),
     ('g1', 'sim_split', 'upper'), ('g1', 'full', 'full'),
 ]
@@ -678,7 +678,7 @@ def test_quiet_input_is_held_and_reported(stack, robot, config, quiet):
     assert run.robot.outputs(HEARTBEAT) and all(beat for _, beat in run.robot.outputs(HEARTBEAT))
 
 
-QUIET_STATE = [('h12', 'sim_safety_split'), ('g1', 'sim_split'), ('g1', 'full')]
+QUIET_STATE = [('h12', 'relax_safety_split'), ('g1', 'sim_split'), ('g1', 'full')]
 
 
 @pytest.mark.parametrize('robot, config', QUIET_STATE, ids=[f'{r}-{c}' for r, c in QUIET_STATE])
@@ -713,7 +713,7 @@ def test_engage_refusals_are_logged_at_most_once_a_second(stack, robot):
     On another robot's /lowstate no input engages, and engage_refused is logged at most once a
     second.
     """
-    run = stack(robot, 'split' if robot == 'g1' else 'sim_safety_split')
+    run = stack(robot, 'split' if robot == 'g1' else 'relax_safety_split')
     foreign = 6 if robot == 'g1' else 5
     run.robot.state.mode_machine = foreign
     time.sleep(0.1)
@@ -738,7 +738,7 @@ def test_an_estop_before_engaging(stack, robot):
     SAFETY: a non-finite first command latches before engaging: no input engages, the estop
     command follows, and the heartbeat is false.
     """
-    run = stack(robot, 'split' if robot == 'g1' else 'sim_safety_split')
+    run = stack(robot, 'split' if robot == 'g1' else 'relax_safety_split')
     joints = len(run.robot.profile.joints)
     (lower_pub, lower), (upper_pub, upper) = input_pairs(run)
     # An input engages on its first valid command, so the NaN comes first.
@@ -765,7 +765,7 @@ def test_an_estop_before_engaging(stack, robot):
     assert run.robot.outputs(HEARTBEAT)[-1][1] is False
 
 
-DAMP = [('g1', 'split'), ('g1', 'full'), ('h12', 'sim_safety_split')]
+DAMP = [('g1', 'split'), ('g1', 'full'), ('h12', 'relax_safety_split')]
 
 
 @pytest.mark.parametrize('robot, config', DAMP, ids=[f'{r}-{c}' for r, c in DAMP])
@@ -798,7 +798,7 @@ def test_damp_estop_keeps_every_motor_on_with_only_kd(stack, robot, config):
     assert reason.startswith('Command validation failed')
 
 
-STATE_LIMITS = [('g1', 'split'), ('g1', 'full'), ('h12', 'sim_safety_split')]
+STATE_LIMITS = [('g1', 'split'), ('g1', 'full'), ('h12', 'relax_safety_split')]
 
 
 @pytest.mark.parametrize('robot, config', STATE_LIMITS,
@@ -894,7 +894,7 @@ def test_a_restarted_writer_is_accepted_after_a_quiet_gap(stack, robot):
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_a_second_writer_on_the_lower_input_before_engaging(stack, robot):
     """SAFETY: a second writer latches even before the other input engages."""
-    run = stack(robot, 'split' if robot == 'g1' else 'sim_safety_split')
+    run = stack(robot, 'split' if robot == 'g1' else 'relax_safety_split')
     joints = len(run.robot.profile.joints)
     (lower_pub, lower), (upper_pub, upper) = input_pairs(run)
     second = run.robot.publisher(LOWER)
@@ -1061,7 +1061,7 @@ def test_estop_silent_after_engaging_latches(stack, robot):
 
 def test_estop_topics_are_ignored_without_use_estop(stack):
     """Without use_estop the estop topics are ignored."""
-    run = stack('h12', 'sim_safety_split')
+    run = stack('h12', 'relax_safety_split')
     run.robot.estop_values = (True, False)
     run.robot.stream(*input_pairs(run))
     time.sleep(0.5)
@@ -1070,7 +1070,7 @@ def test_estop_topics_are_ignored_without_use_estop(stack):
     assert all(beat for _, beat in run.robot.outputs(HEARTBEAT))
 
 
-EXIT_LOWCMD = [('h12', 'sim_safety_split'), ('h12', 'default_safety_full'), ('g1', 'split'),
+EXIT_LOWCMD = [('h12', 'relax_safety_split'), ('h12', 'default_safety_full'), ('g1', 'split'),
                ('g1', 'full')]
 
 

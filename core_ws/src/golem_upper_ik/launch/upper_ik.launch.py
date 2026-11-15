@@ -3,15 +3,15 @@ r"""Start the arm controller, frame_task_server, once its config pairs with gole
 In order:
 1. The pairing check (golem_upper_ik.pairing): config must be the controller config paired
    with safety_config in config/<robot>/pairing.yaml, and with sim neither may be meant for
-   the other platform. A refused pairing raises before any node starts.
+   the other platform (golem_upper_ik.pairing). A refused pairing raises before any node starts.
 2. frame_task_server, start_delay seconds (wall clock) later.
 
 Both robots' bringups include this file first (golem_bringup's h12_control.launch.py and
 g1_core.launch.py), so a refused pairing stops the launch before any of their nodes starts.
 On its own:
 
-    ros2 launch golem_upper_ik upper_ik.launch.py robot:=h12 config:=sim_safety_split \
-        safety_config:=sim_safety_split sim:=true use_sim_time:=true
+    ros2 launch golem_upper_ik upper_ik.launch.py robot:=h12 config:=safety_split \
+        safety_config:=relax_safety_split sim:=true use_sim_time:=true
 """
 
 from launch import LaunchContext, LaunchDescription
@@ -87,7 +87,8 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument(
             'sim',
             description='true for a simulator, false for the real robot: a sim config '
-                        '(named sim*) is refused on the real robot and a real one in the sim'),
+                        '(named sim*) is refused on the real robot, and a real one in the sim '
+                        'of a robot that pairs sim configs (the G1)'),
         DeclareLaunchArgument(
             'use_sim_time', default_value='false',
             description="true to stamp and time the published poses with a simulator's "

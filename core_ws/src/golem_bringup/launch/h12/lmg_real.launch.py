@@ -98,7 +98,6 @@ def generate_launch_description():
         include('golem_bringup', 'h12/h12_control.launch.py', {
             **wall_time,
             'sim': 'false',
-            'use_estop': 'true',
             'use_frame_task': 'false',
             'safety_config': LaunchConfiguration('safety_config'),
         }),

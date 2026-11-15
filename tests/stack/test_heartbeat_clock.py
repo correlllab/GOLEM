@@ -64,7 +64,7 @@ class HeartbeatClockTests(unittest.TestCase):
         executor.add_node(observer)
         with tempfile.TemporaryFile(mode='w+') as log:
             process = subprocess.Popen(
-                [safety_node, '--ros-args', '-p', 'robot:=h12', '-p', 'config:=sim_safety_split',
+                [safety_node, '--ros-args', '-p', 'robot:=h12', '-p', 'config:=relax_safety_split',
                  '-p', 'sim:=true', '-p', 'use_sim_time:=true',
                  '-r', '/lowcmd:=/heartbeat_clock_test/lowcmd',
                  '-r', '/lowstate:=/heartbeat_clock_test/lowstate'],

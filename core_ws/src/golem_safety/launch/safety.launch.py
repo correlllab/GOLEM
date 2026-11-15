@@ -7,7 +7,7 @@ the node itself refuses a bad combination (an unknown robot, a config that does 
 it, sim:=true on ROS domain 0) by exiting 1 before it publishes. Both robots' bringups
 include this file (golem_bringup's h12_control.launch.py and g1_core.launch.py); on its own:
 
-    ros2 launch golem_safety safety.launch.py robot:=h12 config:=sim_safety_split sim:=true
+    ros2 launch golem_safety safety.launch.py robot:=h12 config:=relax_safety_split sim:=true
 """
 
 from launch import LaunchContext, LaunchDescription

@@ -29,7 +29,6 @@ def test_pairing_yaml_is_the_pair_table():
         'relax_safety_split': 'safety_split',
         'default_safety_split': 'safety_split',
         'tight_safety_split': 'safety_split',
-        'sim_safety_split': 'sim_safety_split',
         'relax_safety_full': 'safety_full',
         'default_safety_full': 'safety_full',
         'tight_safety_full': 'safety_full',
@@ -60,16 +59,14 @@ def test_the_pairing_functions_are_robot_independent():
      'safety config "sim_split" runs with controller config "sim_split", not "g1_split"'),
     ('g1', 'split', 'g1_split', True, 'safety config "split" is for the real robot, not the sim'),
     ('h12', 'relax_safety_split', 'safety_split', False, None),
-    ('h12', 'sim_safety_split', 'sim_safety_split', True, None),
-    ('h12', 'relax_safety_split', 'sim_safety_split', None,
+    ('h12', 'relax_safety_split', 'safety_full', None,
      'safety config "relax_safety_split" runs with controller config "safety_split", not '
-     '"sim_safety_split"'),
+     '"safety_full"'),
     ('h12', 'debug_unknown', 'safety_split', None,
      'safety config "debug_unknown" is not one of the H1-2 pairs'),
-    ('h12', 'relax_safety_split', 'safety_split', True,
-     'safety config "relax_safety_split" is for the real robot, not the sim'),
-    ('h12', 'sim_safety_split', 'sim_safety_split', False,
-     'safety config "sim_safety_split" is a sim config; the real robot never runs one'),
+    # The H1-2 pairs no sim config, so its sim runs the real ones.
+    ('h12', 'relax_safety_split', 'safety_split', True, None),
+    ('h12', 'default_safety_full', 'safety_full', True, None),
 ])
 def test_pairing_one_rule(robot, safety, controller, sim, expected):
     """One rule decides every robot: in the pairs, the paired controller, the right platform."""

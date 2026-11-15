@@ -253,19 +253,19 @@ including `h12_control.launch.py`'s `sim`, which has no default.
 
 | Top-level launch file | Scenario | Includes |
 |---|---|---|
-| `h12_sim.launch.py` | **sim** (`use_sim_time=true`), plus the camera optical-frame static TF and rviz (`use_rviz`) | state, control (`sim:=true`, `sim_safety_split` for both `safety_node` and `frame_task_server`, no stagger), lowerbody (run config `sim`), models (`use_skills`), navigation (`use_nav`) |
-| `h12_real_robot.launch.py` | **real robot, onboard PC** (native, `ROS_DOMAIN_ID=0`) | real_drivers, navigation, state, control (`sim:=false`, `use_estop:=true`, the defaults `relax_safety_split` and `safety_split`), lowerbody (run config `real`). Leg control is interlocked behind `start_position_verified:=true` (default **false**) |
-| `h12_real_desktop.launch.py` | **real: companion x86 desktop** — rviz, plus the hand cameras with `use_hand_cameras:=true` (default **false**) | models (`use_yolo:=true`) |
+| `h12_sim.launch.py` | **sim** (`use_sim_time=true`), plus the camera optical-frame static TF and rviz (`use_rviz`). Runs the real robot's operator gates: the estop (the sim serves the box) and the legs' `/lowerbody/confirm_engage` | state, control (`sim:=true`, `estop_node` on the sim's estop box, the real defaults `relax_safety_split` and `safety_split` and the real stagger), lowerbody (run config `sim`: the real start-up and faults, plus the band release), vision models (`use_skills`), navigation (always) |
+| `h12_real_robot.launch.py` | **real robot, onboard PC** (native, `ROS_DOMAIN_ID=0`) | real_drivers, navigation, state, control (`sim:=false`, the USB estop box, the defaults `relax_safety_split` and `safety_split`), lowerbody (run config `real`). Leg control is interlocked behind `start_position_verified:=true` (default **false**) |
+| `h12_real_desktop.launch.py` | **real: companion x86 desktop** — rviz, plus the hand cameras with `use_hand_cameras:=true` (default **false**) | vision models (`use_yolo:=true`) |
 | `h12_safety_grippers.launch.py` | real: actuation-only debug bringup | control (`sim:=false`, estop + safety, no IK), grippers |
-| `lmg_sim.launch.py` | **sim**, loco-manipulation game: the `lmg_deploy` MARL policy (its one H1-2 policy, `policies/h12/`) owns all 27 joints, no operator confirm. Refuses an unset or 0 `ROS_DOMAIN_ID` | state, control (`sim:=true`, no IK, no stagger), locomanipulationgame, navigation (`use_slam`), `golem_skills` (`use_skills`, default false: `/skill/*` without the service waits, on the H1-2's Nav2 footprint) |
-| `lmg_real.launch.py` | **real, onboard PC**, loco-manipulation game, run *instead of* `h12_real_robot`. **Refuses to start, before any node**, until `lmg_deploy`'s handling of the MID-360's raw (upside-down) `/livox/imu`, checked in the sim, is checked on the robot. Once lifted, the policy is behind `start_position_verified:=true` + `/marl_deploy_node/confirm_engage` | real_drivers, state, control (`sim:=false`, `use_estop:=true`, no IK), locomanipulationgame, navigation (`use_slam`) |
+| `lmg_sim.launch.py` | **sim**, loco-manipulation game: the `lmg_deploy` MARL policy (its one H1-2 policy, `policies/h12/`) owns all 27 joints, no operator confirm. Refuses an unset or 0 `ROS_DOMAIN_ID` | state, control (`sim:=true`, no IK, the sim's estop box, the real `safety_delay`), locomanipulationgame, navigation (`use_slam`), `golem_skills` (`use_skills`, default false: `/skill/*` without the service waits, on the H1-2's Nav2 footprint) |
+| `lmg_real.launch.py` | **real, onboard PC**, loco-manipulation game, run *instead of* `h12_real_robot`. **Refuses to start, before any node**, until `lmg_deploy`'s handling of the MID-360's raw (upside-down) `/livox/imu`, checked in the sim, is checked on the robot. Once lifted, the policy is behind `start_position_verified:=true` + `/marl_deploy_node/confirm_engage` | real_drivers, state, control (`sim:=false`, no IK), locomanipulationgame, navigation (`use_slam`) |
 
 | Building block | Starts |
 |---|---|
 | `h12_state.launch.py` | `golem_upper_ik`'s `robot_state.launch.py` (`robot: h12`, `urdf_file` passed on): `joint_state_publisher` (the 27 body joints from `/lowstate`) + `robot_state_publisher` |
-| `h12_control.launch.py` | [`estop_node`] → `golem_safety`'s `safety_node` (its `safety.launch.py`: `robot: h12`, `safety_config`, `sim`, `use_estop`) → `golem_upper_ik`'s `frame_task_server` (its `upper_ik.launch.py`: `robot: h12`, `frame_task_config`; `use_frame_task`), staggered by `safety_delay` (3 s) / `frame_task_delay` (5 s), passed on as each file's `start_delay`. `sim` has no default: a launch without it fails before any node starts. With `use_frame_task` it includes `upper_ik.launch.py` first, which refuses a `frame_task_config` that does not run with `safety_config` (`golem_upper_ik.pairing`) before anything starts. Only the pairs in `golem_upper_ik/config/h12/pairing.yaml` start, by name (a path only if its file name is a paired name), and sim and real configs do not mix |
+| `h12_control.launch.py` | `estop_node` (on `estop_serial_port`: empty finds the real USB box, the sims pass `socket://127.0.0.1:<15700 + ROS_DOMAIN_ID>`) → `golem_safety`'s `safety_node` (its `safety.launch.py`: `robot: h12`, `safety_config`, `sim`, always `use_estop: true`) → `golem_upper_ik`'s `frame_task_server` (its `upper_ik.launch.py`: `robot: h12`, `frame_task_config`; `use_frame_task`), staggered by `safety_delay` (3 s) / `frame_task_delay` (5 s), passed on as each file's `start_delay`. `sim` has no default: a launch without it fails before any node starts. With `use_frame_task` it includes `upper_ik.launch.py` first, which refuses a `frame_task_config` that does not run with `safety_config` (`golem_upper_ik.pairing`) before anything starts. Only the pairs in `golem_upper_ik/config/h12/pairing.yaml` start, by name (a path only if its file name is a paired name); the H1-2 pairs no sim config, so its sims run the real pairs |
 | `h12_lowerbody.launch.py` | `golem_lowerbody_rl`'s `lowerbody.launch.py` (`robot: h12`, `policy:=`, run config `lowerbody_config`, `sim`, every argument passed), behind `start_position_verified`; a policy the H1-2 does not list is refused. `h12_sim` and `h12_real_robot` include it last and put its check (`golem_bringup.h12_legs.leg_check`, with the arguments they pass it) first, so a refused policy or run config starts no node |
-| `h12_models.launch.py` | gemini + sam servers, [yolo], graspgen + `golem_skills` (`use_skills`) |
+| `golem_vision_models.launch.py` | gemini + sam servers, [yolo], graspgen + `golem_skills` (`use_skills`) |
 | `h12_real_drivers.launch.py` | Livox MID360 (no extrinsic rotation: the points and `/livox/imu` are both in the sensor's raw, upside-down frame, the URDF's `livox_link` and `livox_imu_link`), RealSense head camera, `h12_grippers.launch.py` (left+right `gripper_node`) |
 | `h12_locomanipulationgame.launch.py` | `marl_deploy_node` (behind `start_position_verified`; holds arm goals in the world by the SLAM `/Odometry`) |
 | `golem_slam/launch/navigation.launch.py` | the shared nav stack, included with `robot: h12` (FAST-LIO → pointcloud_to_laserscan → slam_toolbox → nav2; `golem_slam`'s `config/h12/`) |
@@ -285,7 +285,7 @@ for the includes after it, so pass consistent values (all four blocks share
 - `safety_node` streams zero-gain `/lowcmd` from boot (in the sim, from the first
   `/clock`). It engages each input on
   that input's first valid command once `/lowstate` reports `mode_machine` 6,
-  and, with `use_estop:=true`, once a first hardware estop sample has arrived;
+  and once a first estop sample has arrived;
   until then it logs `engage_refused` with the reason, at most once a second.
 - **`/safety/heartbeat` means relaying can begin.** `safety_node` publishes no
   beat until those two conditions hold; then it beats true at 10 Hz, and false
@@ -301,21 +301,25 @@ for the includes after it, so pass consistent values (all four blocks share
   up to `controller.startup_timeout` (30 s). If `golem_safety` has not relayed
   them by then, it sends one zero-gain command and exits 1 with an error that
   lists the causes: no `/lowstate` reporting `mode_machine` 6 (an H1-2 sim
-  started before the sims reported 6), no first estop sample with
-  `use_estop:=true`, a safety config that does not pair with its controller
+  started before the sims reported 6), no first estop sample, a safety config that does not pair with its controller
   config, or an estop latched at this start-up (the limit checks run from
   boot, in the sim from the first `/clock`, so a joint already past
   `limits.estop` latches it) or in an earlier
   run. The other nodes keep running, without `/frame_task` and
   `/named_config`.
-- **`use_estop`.** `use_estop:=true` (the real bringups and
-  `h12_safety_grippers`) starts `estop_node` and has `safety_node` read
-  `/estop/triggered` and `/estop/plugged_in`: no input engages before the first
-  sample, a sample that says triggered or unplugged latches the estop until
-  restart, and so does no new sample for `estop.timeout_seconds` (0.5 s) once
-  the first has arrived. With `use_estop:=false` (the sim bringups) those topics
-  are ignored.
-- **The real robot's estop start-up.** `estop_node` publishes nothing until its
+- **The estop, in the sim as on the real robot.** Every H1-2 bringup starts
+  `estop_node` and has `safety_node` read `/estop/triggered` and
+  `/estop/plugged_in` (`h12_control.launch.py` has no `use_estop` argument): no
+  input engages before the first sample, a sample that says triggered or
+  unplugged latches the estop until restart, and so does no new sample for
+  `estop.timeout_seconds` (0.5 s) once the first has arrived. The real box is an
+  Arduino on USB serial; the H1-2's RoboCasa and Isaac sims serve the same lines
+  (`ESTOP,BOOT`, then `ESTOP,0|1` at 50 Hz) on `127.0.0.1:<15700 +
+  ROS_DOMAIN_ID>` (`golem_robocasa/estop_server.py`, `CL_isaaclab_sim`'s copy),
+  which `estop_node` opens as a pyserial `socket://` URL. ENTER on the sim's
+  terminal (or the RoboCasa viewer) toggles the button; a stopped sim reads as
+  unplugged. The G1 has no estop node (`use_estop: false` in `g1_core`).
+- **The estop start-up.** `estop_node` publishes nothing until its
   first attempt to connect ends; that attempt probes every serial port it finds
   (up to about 3.25 s for each port that opens, so another serial device such as
   a gripper board lengthens it). When an attempt fails, it publishes unplugged
@@ -329,7 +333,8 @@ for the includes after it, so pass consistent values (all four blocks share
   cover the time `estop_node` takes to connect (the comment in
   `h12_control.launch.py`).
 - **The leg node** (`golem_lowerbody_rl`'s `lowerbody_controller_node`, its
-  README; the values are the run config's, `config/h12/{sim,real}.yaml`) is
+  README; the values are the run config's, `config/h12/{sim,real}.yaml`, which
+  differ only in the sim's band release and IMU trim) is
   silent until the first true heartbeat and an upright, finite `/lowstate`. It
   then ramps the legs over 2 s to the policy's crouch and holds there. The
   policy may start once `/lowstate` is steady over the last 1 s window (1 s
@@ -338,12 +343,12 @@ for the includes after it, so pass consistent values (all four blocks share
   which counts publishes, never qualifies; the windows follow one another, so
   a recent stall or a slowed tick makes it not ready again within 1 s), the arm controller's commands are fresh within 0.5 s and,
   in the sim, `frame_task_server`'s first `/left_ee_pose` has come (or
-  `band.max_wait`, 34 s); the node logs why it waits. On the real robot it
-  then holds until `ros2 service call /lowerbody/confirm_engage
+  `band.max_wait`, 34 s); the node logs why it waits. It then holds, in the
+  sim as on the real robot, until `ros2 service call /lowerbody/confirm_engage
   std_srvs/srv/Trigger` (refused at any other time), and runs the policy. A
   `/cmd_vel` older than 0.5 s is zero velocity; `/lowerbody/height`
   (`std_msgs/Float32`) is the policy's height command. Once the legs are
-  commanded, a `/lowstate` gap over `max_state_gap` (0.25 s real, 0.5 s sim;
+  commanded, a `/lowstate` gap over `max_state_gap` (0.25 s, in the sim too;
   `/lowstate` has its own executor thread), a tick that goes back, a
   non-finite value or non-unit IMU quaternion, a fall, a policy step that
   fails or gives non-finite targets, and in every phase a false heartbeat or
@@ -860,7 +865,10 @@ docker/scripts/docker_run.sh robocasa            # or: isaac; add --headless if 
 # Terminal 2 — ROS workspace (auto colcon-builds core_ws, drops to a shell)
 docker/scripts/docker_run.sh ros
 ros2 launch golem_bringup h12_sim.launch.py   # manual step — the container does NOT launch it
-# variants: use_skills:=false use_rviz:=false use_nav:=false
+# variants: use_skills:=false use_rviz:=false
+# As on the real robot, the legs hold their pre-pose until the operator's confirm (from
+# terminal 3), and ENTER in terminal 1 presses the sim's estop (restart the bringup after):
+#   ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
 
 # Terminal 3 — drive skills: attach to the running ROS container
 docker exec -it golem_ros /bin/bash

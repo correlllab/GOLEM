@@ -31,6 +31,10 @@ docker/scripts/docker_run.sh robocasa            # or: isaac
 # Terminal 2 — ROS workspace. Colcon-builds core_ws if stale, then drops to a shell.
 docker/scripts/docker_run.sh ros
 ros2 launch golem_bringup h12_sim.launch.py  # bringup is a manual step
+# The H1-2 sim runs the real robot's operator gates. The sim serves the estop box
+# (ENTER in terminal 1 or in its viewer presses it; golem_safety then latches until
+# you restart the bringup), and the legs hold their pre-pose until the confirm:
+#   ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
 
 # Terminal 3 — drive the robot from inside the running ROS container
 docker exec -it golem_ros bash
@@ -103,13 +107,14 @@ reference.
 For sensors + SLAM/nav on the real robot with no joint commanded (no estop,
 safety or IK), use `ros2 launch golem_bringup h12_real_slam.launch.py`; record those runs with `ros2 run golem_slam record_slam_bag --name <name>`.
 
-The sim bringup starts the state publishers, the `frame_task_server` IK
-solver, `safety_node`, the Gemini/SAM/GraspGen model servers, the RL lower-body
-controller, the skills node, nav, and RViz. Common arguments:
+The sim bringup starts the state publishers, `estop_node` on the sim's estop box,
+`safety_node` and the `frame_task_server` IK solver with the real robot's configs and
+delays (3 s, 5 s), the Gemini/SAM/GraspGen model servers (`golem_vision_models.launch.py`),
+the RL lower-body controller, the skills node, nav (always), and RViz. Common arguments:
 
 ```bash
 ros2 launch golem_bringup h12_sim.launch.py \
-  use_rviz:=false use_nav:=false use_skills:=false policy:=fame
+  use_rviz:=false use_skills:=false policy:=fame
 ```
 
 ## Worked example — open the fridge

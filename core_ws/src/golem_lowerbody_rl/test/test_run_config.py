@@ -12,9 +12,9 @@ SOURCE_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '
 # (robot, run) -> the values that differ between the four run configs
 EXPECTED = {
     ('h12', 'sim'): dict(
-        sim=True, wait_for_confirm=False, band_release=True, max_wait=34.0,
+        sim=True, wait_for_confirm=True, band_release=True, max_wait=34.0,
         vx=(-1.0, 1.0), vy=(-1.0, 1.0), yaw=(-1.0, 1.0), accel=None, height_rate=None,
-        max_state_gap=0.5, max_latency=None, imu_trim_deg=(0.0, 0.0, 0.0)),
+        max_state_gap=0.25, max_latency=None, imu_trim_deg=(0.0, 0.0, 0.0)),
     ('h12', 'real'): dict(
         sim=False, wait_for_confirm=True, band_release=False, max_wait=34.0,
         vx=(-1.0, 1.0), vy=(-1.0, 1.0), yaw=(-1.0, 1.0), accel=None, height_rate=None,

@@ -180,7 +180,7 @@ std::optional<LowCmd> run(
 TEST(Startup, ZeroStreamFromFirstStep)
 {
   const LowCmd zero = golem_safety::zero_command(h12());
-  for (const char * name : {"sim_safety_split", "default_safety_full"}) {
+  for (const char * name : {"relax_safety_split", "default_safety_full"}) {
     for (const bool use_estop : {false, true}) {
       SCOPED_TRACE(std::string(name) + (use_estop ? ", use_estop" : ""));
       SafetyCore core(h12(), config(h12(), name), use_estop, kDomain);
@@ -201,7 +201,7 @@ TEST(Startup, NoLowstateNeverEngages)
   // H1-2: commands for 5 s and no /lowstate. zero_command on every step, and the reason
   // at most once a second.
   const LowCmd zero = golem_safety::zero_command(h12());
-  SafetyCore core(h12(), config(h12(), "sim_safety_split"), false, kDomain);
+  SafetyCore core(h12(), config(h12(), "relax_safety_split"), false, kDomain);
   const LowCmd cmd = command(h12(), 0.1F);
   for (int i = 0; i < 500; ++i) {
     const double t = i * kStep;
@@ -294,7 +294,7 @@ TEST(Startup, NoLowstateNeverEngages)
 TEST(Startup, ZeroStreamEngagesPerInput)
 {
   const LowCmd zero = golem_safety::zero_command(h12());
-  SafetyCore core(h12(), config(h12(), "sim_safety_split"), false, kDomain);
+  SafetyCore core(h12(), config(h12(), "relax_safety_split"), false, kDomain);
   core.on_state(state_of(h12()), 0.0);
   const LowCmd upper = command(h12(), 0.1F);
   core.on_command(Input::Upper, upper, "upper", 0.001);
@@ -329,7 +329,7 @@ TEST(Startup, ZeroStreamEngagesPerInput)
 
   // A command that arrived before the first /lowstate does not engage its input then; the
   // input's next command does.
-  SafetyCore early(h12(), config(h12(), "sim_safety_split"), false, kDomain);
+  SafetyCore early(h12(), config(h12(), "relax_safety_split"), false, kDomain);
   early.on_command(Input::Upper, upper, "upper", 0.0);
   early.on_state(state_of(h12()), 0.01);
   out = early.step(0.01);
@@ -464,7 +464,7 @@ TEST(Estop, FirstSampleTriggeredLatches)
     const RobotProfile & profile;
     const char * config_name;
   };
-  for (const Case & c : {Case{h12(), "sim_safety_split"}, Case{g1(), "sim_split"}}) {
+  for (const Case & c : {Case{h12(), "relax_safety_split"}, Case{g1(), "sim_split"}}) {
     SCOPED_TRACE(c.config_name);
     const SafetyConfig cfg = config(c.profile, c.config_name);
     {
@@ -491,7 +491,7 @@ TEST(Estop, NoEngageBeforeFirstSample)
 {
   // H1-2: /lowstate and both inputs for 1 s, no estop sample: zero_command throughout.
   const LowCmd zero = golem_safety::zero_command(h12());
-  const SafetyConfig cfg = config(h12(), "sim_safety_split");
+  const SafetyConfig cfg = config(h12(), "relax_safety_split");
   SafetyCore core(h12(), cfg, true, kDomain);
   const LowCmd cmd = command(h12(), 0.1F);
   for (int i = 0; i < 100; ++i) {
@@ -539,7 +539,7 @@ TEST(Startup, RelayReadyNeedsTheRobotsLowstateAndAnEstopSample)
     const RobotProfile & profile;
     const char * config_name;
   };
-  for (const Case & c : {Case{h12(), "sim_safety_split"}, Case{g1(), "sim_split"}}) {
+  for (const Case & c : {Case{h12(), "relax_safety_split"}, Case{g1(), "sim_split"}}) {
     SCOPED_TRACE(c.config_name);
     const SafetyConfig cfg = config(c.profile, c.config_name);
     LowState foreign = state_of(c.profile);
@@ -598,7 +598,7 @@ TEST(Estop, StaleAfterEngageLatches)
     const RobotProfile & profile;
     const char * config_name;
   };
-  for (const Case & c : {Case{h12(), "sim_safety_split"}, Case{g1(), "sim_split"}}) {
+  for (const Case & c : {Case{h12(), "relax_safety_split"}, Case{g1(), "sim_split"}}) {
     SCOPED_TRACE(c.config_name);
     const SafetyConfig cfg = config(c.profile, c.config_name);
     ASSERT_EQ(cfg.estop.timeout_seconds, 0.5);
@@ -628,7 +628,7 @@ TEST(Estop, StaleAfterEngageLatches)
   }
 
   // From the first sample on, also before engaging.
-  SafetyCore early(h12(), config(h12(), "sim_safety_split"), true, kDomain);
+  SafetyCore early(h12(), config(h12(), "relax_safety_split"), true, kDomain);
   early.on_estop(false, true, 0.0);
   ASSERT_TRUE(early.step(0.5));
   EXPECT_FALSE(early.estopped());
@@ -639,7 +639,7 @@ TEST(Estop, StaleAfterEngageLatches)
 // Without use_estop, inputs engage with no estop sample, and silence latches nothing.
 TEST(Estop, IgnoredWithoutUseEstop)
 {
-  const SafetyConfig cfg = config(h12(), "sim_safety_split");
+  const SafetyConfig cfg = config(h12(), "relax_safety_split");
   SafetyCore core(h12(), cfg, false, kDomain);
   core.on_estop(true, true, 0.0);
   core.on_estop(false, false, 0.0);
@@ -672,7 +672,7 @@ TEST(Quiet, InputHeldAndReported)
     int last_before, first_after;  // the gap, in 10 ms steps
   };
   const std::vector<Case> cases = {
-    {h12(), "sim_safety_split", Input::Lower, "split_mode_lower", "/safety/lowcmd_lower_in",
+    {h12(), "relax_safety_split", Input::Lower, "split_mode_lower", "/safety/lowcmd_lower_in",
       0.2, 0, 101},
     // A gap of 3 s, past stale.upper_seconds (2.0).
     {h12(), "default_safety_split", Input::Upper, "split_mode_upper", "/safety/lowcmd_upper_in",
@@ -782,7 +782,7 @@ TEST(Quiet, LowstateGapHolds)
     const RobotProfile & profile;
     const char * config_name;
   };
-  for (const Case & c : {Case{h12(), "sim_safety_split"}, Case{g1(), "split"}}) {
+  for (const Case & c : {Case{h12(), "relax_safety_split"}, Case{g1(), "split"}}) {
     SCOPED_TRACE(c.config_name);
     const SafetyConfig cfg = config(c.profile, c.config_name);
     ASSERT_EQ(cfg.stale.state_seconds, 0.1);
@@ -830,7 +830,7 @@ TEST(Lag, Domain0LateTicksLatch)
   // /lowstate every 2 ms on time for 1 s, then each sample 1 ms later against the robot's
   // ms tick than the one before. The baseline may rise 0.5 ms/s, so the lag at the k-th
   // late sample is 0.9985 k ms: over 100 ms first at k = 101.
-  const SafetyConfig cfg = config(h12(), "sim_safety_split");
+  const SafetyConfig cfg = config(h12(), "relax_safety_split");
   ASSERT_EQ(cfg.control.state_lag_ms, 100.0);
   auto feed = [](SafetyCore & core, LowState state, int late_samples) {
       for (int i = 0; i <= 500; ++i) {
@@ -873,7 +873,7 @@ TEST(Lag, Domain0LateTicksLatch)
 // A tick wrap and clock drift below 0.5 ms/s are not lag.
 TEST(Lag, TickWrapAndSlowDriftAreNotLag)
 {
-  const SafetyConfig cfg = config(h12(), "sim_safety_split");
+  const SafetyConfig cfg = config(h12(), "relax_safety_split");
   // The uint32 ms tick wraps 1 s in.
   {
     SafetyCore core(h12(), cfg, false, kRealRobotDomain);
@@ -906,7 +906,7 @@ TEST(Exit, SplitStopsAtOnce)
     const RobotProfile & profile;
     const char * config_name;
   };
-  for (const Case & c : {Case{h12(), "sim_safety_split"}, Case{h12(), "default_safety_full"},
+  for (const Case & c : {Case{h12(), "relax_safety_split"}, Case{h12(), "default_safety_full"},
       Case{g1(), "sim_split"}, Case{g1(), "full"}})
   {
     SCOPED_TRACE(c.config_name);

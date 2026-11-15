@@ -6,11 +6,16 @@ Start the whole H1-2 against the RoboCasa or Isaac sim, on sim time.
 Start the simulator first: every node runs on its /clock. The leg node's check
 (golem_bringup.h12_legs.leg_check) runs first, so a refused policy starts no node; then
 everything starts at once: the state publishers (h12_state), the command path
-(h12_control: the safety/controller pairing check before any node, then safety_node and
-frame_task_server, with no estop and no stagger), the leg controller (h12_lowerbody, with
-the start pose taken as verified), the model servers and golem_skills (h12_models),
-navigation (use_nav), the static camera_link -> camera_color_optical_frame TF and RViz
-(use_rviz).
+(h12_control as on the real robot: the safety/controller pairing check before any node,
+then estop_node on the sim's estop box, safety_node and frame_task_server with the real
+robot's configs and delays), the leg controller (h12_lowerbody, with the start pose taken
+as verified), the model servers and golem_skills (golem_vision_models), navigation, the
+static camera_link -> camera_color_optical_frame TF and RViz (use_rviz).
+
+SAFETY: the sim runs the real robot's operator gates: the estop box the sim serves (ENTER
+on the sim's terminal or viewer presses it; golem_safety then latches until restart), and
+the leg policy holds its pre-pose until
+    ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
 
 Every node joins the launching shell's ROS_DOMAIN_ID; safety_node refuses sim:=true on
 domain 0, the real robot's command bus, so export a sim domain first.
@@ -20,6 +25,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from golem_bringup.h12_legs import leg_check
 from golem_bringup.include import include
+from golem_bringup.sim_estop import sim_estop_url
 from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -36,7 +42,8 @@ def generate_launch_description():
     # The simulator publishes /clock; every node uses it so TF lookups and sensor
     # stamps agree with the simulation.
     sim_time = {'use_sim_time': 'true'}
-    # The legs; the sim needs no operator check of the start pose.
+    # The legs; the sim needs no operator check of the start pose, but its run config
+    # waits for /lowerbody/confirm_engage as the real one does.
     legs = {
         **sim_time,
         'start_position_verified': 'true',
@@ -48,9 +55,6 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_rviz', default_value='true',
                               description='true: start RViz on rviz_config'),
-        DeclareLaunchArgument('use_nav', default_value='true',
-                              description="true: start golem_slam's navigation (FAST-LIO, "
-                                          'OctoMap, slam_toolbox, Nav2) for the H1-2'),
         DeclareLaunchArgument('use_skills', default_value='true',
                               description='true: start graspgen_server and golem_skills '
                                           '(/skill/*)'),
@@ -84,16 +88,14 @@ def generate_launch_description():
         include('golem_bringup', 'h12/h12_control.launch.py', {
             **sim_time,
             'sim': 'true',
-            'safety_config': 'sim_safety_split.yaml',
-            'frame_task_config': 'sim_safety_split.yaml',
-            # No estop in the sim, so nothing to wait for.
-            'safety_delay': '0.0',
-            'frame_task_delay': '0.0',
+            # The real robot's configs and delays (h12_control's defaults); the
+            # sim's estop box in place of the USB one.
+            'estop_serial_port': sim_estop_url(),
         }),
         # The legs.
         include('golem_bringup', 'h12/h12_lowerbody.launch.py', legs),
         # Perception servers and the LLM-callable skills.
-        include('golem_bringup', 'h12/h12_models.launch.py', {
+        include('golem_bringup', 'h12/golem_vision_models.launch.py', {
             **sim_time,
             'use_skills': LaunchConfiguration('use_skills'),
             'model_logging': LaunchConfiguration('model_logging'),
@@ -102,8 +104,7 @@ def generate_launch_description():
             'record_runs': LaunchConfiguration('record_runs'),
         }),
         # SLAM and Nav2, driving the legs on /cmd_vel.
-        include('golem_slam', 'navigation.launch.py', {**sim_time, 'robot': 'h12'},
-                condition=IfCondition(LaunchConfiguration('use_nav'))),
+        include('golem_slam', 'navigation.launch.py', {**sim_time, 'robot': 'h12'}),
 
         # For Isaac: its head camera's images are stamped
         # camera_color_optical_frame (CL_isaaclab_sim's ros_sensor_bridge.py,

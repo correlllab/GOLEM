@@ -193,12 +193,13 @@ def test_antipodal_closes_across_minor_axis(long_axis):
 
 
 def test_graspgenx_raw_executes_server_order_untouched():
-    """The graspgenx method keeps the server's top five grasps unchanged and in order."""
+    """The graspgenx method keeps the server's grasps unchanged and in order, moving for five."""
     pool = _planner_pool()
     planner = _fake_planner(pool)
     cands, _ = METHODS['graspgenx'].synthesize(_input(
         _box_cloud(OBJ, (0.04, 0.04, 0.04)), planner=planner))
-    assert len(cands.grasps) == 5           # MAX_GRASP_ATTEMPTS
+    assert len(cands.grasps) == len(pool)   # under MAX_GRASP_CHECKS
+    assert cands.attempts == 5              # MAX_GRASP_ATTEMPTS
     for g, p in zip(cands.grasps, pool):
         np.testing.assert_allclose(pose_to_matrix(g.pose), pose_to_matrix(p),
                                    atol=1e-9)
@@ -219,6 +220,28 @@ def test_graspgenx_filtered_rerolls_and_drops_cross_body():
         R = pose_to_matrix(g.pose)[:3, :3]
         assert abs(R[2, 0]) < 1e-6
         assert R[2, 1] >= 0.0
+    assert cands.attempts == 5
+
+
+def test_graspgenx_filtered_keeps_steep_grasps_with_their_roll():
+    """A grasp too steep to level stays in graspgenx_filtered, rolled as GraspGenX planned it."""
+    steep = level_pose(OBJ, approach_from_az_pitch(0, 80))
+    T = pose_to_matrix(steep)
+    T[:3, :2] = T[:3, :2] @ np.array([[0.0, -1.0], [1.0, 0.0]])  # roll 90 deg
+    from golem_skills.perception_utils import matrix_to_pose
+    pool = _planner_pool() + [matrix_to_pose(T)]
+    cands, _ = METHODS['graspgenx_filtered'].synthesize(_input(
+        _box_cloud(OBJ, (0.04, 0.04, 0.04)), planner=_fake_planner(pool)))
+    label = f'ggx-{len(pool) - 1}'
+    assert label in cands.labels
+    np.testing.assert_allclose(
+        pose_to_matrix(cands.grasps[cands.labels.index(label)].pose), T, atol=1e-9)
+
+
+def test_only_graspgenx_methods_are_reach_checked():
+    """The executor's reach check runs for the two GraspGenX methods and no other."""
+    assert {m.name for m in METHODS.values() if m.reach_check} == {
+        'graspgenx', 'graspgenx_filtered'}
 
 
 @pytest.mark.parametrize('name', sorted(METHODS))

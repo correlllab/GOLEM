@@ -59,9 +59,9 @@ config once they are read) and exits 1. On SIGINT or SIGTERM it shuts down (belo
 |---|---|---|---|
 | action | `/frame_task` | `custom_ros_messages/action/FrameTask` | pull named frames to target poses in the `pelvis` frame |
 | action | `/named_config` | `custom_ros_messages/action/NamedConfig` | move the IK joints to a named configuration |
-| pub | `frame_names` | `custom_ros_messages/msg/StringArray` | the current goal's frames, 100 Hz |
-| pub | `frame_targets`, `frame_poses` | `geometry_msgs/PoseArray` | their targets and measured poses, `pelvis` frame, 100 Hz |
-| pub | `left_ee_pose`, `right_ee_pose` | `geometry_msgs/PoseStamped` | the end effectors' measured poses, 100 Hz; their first message tells other nodes the controller is up |
+| pub | `frame_names` | `custom_ros_messages/msg/StringArray` | the current goal's frames, 25 Hz |
+| pub | `frame_targets`, `frame_poses` | `geometry_msgs/PoseArray` | their targets and measured poses, `pelvis` frame, 25 Hz |
+| pub | `left_ee_pose`, `right_ee_pose` | `geometry_msgs/PoseStamped` | the end effectors' measured poses, 25 Hz; their first message tells other nodes the controller is up |
 | pub | `left_ee_target`, `right_ee_target` | `geometry_msgs/PoseStamped` | the current goal's targets for the end-effector frames, when it names them |
 | pub | `topics.low_cmd` | `unitree_hg/msg/LowCmd` | reliable, keep-last 1, at `frequency.pub_hz`; must be under `/safety/` |
 | sub | `topics.low_state` (`/lowstate`) | `unitree_hg/msg/LowState` | keep-last 1, best effort |
@@ -181,7 +181,11 @@ then moves only in the start-up step 4.
   from the last command when it is within 0.1 rad of the measured pose on every IK joint;
   otherwise from the measured pose, dropping the held torque bias.
 - A direct goal (`plan: false`) steps the IK at `ctrl_hz`, its arm velocities limited to
-  `dq_lim` per joint and `v_lim`/`w_lim` at the end effectors. Once the IK converges it holds
+  `dq_lim` per joint and `v_lim`/`w_lim` at the end effectors. An iteration that takes longer
+  than the control period (a loaded host) runs the IK steps it owes next time, one per period
+  it took and at most `CATCH_UP_STEPS` (3), each solved over one period, so the arm keeps its
+  speed in robot time. The self-collision barrier constrains the `BARRIER_PAIRS` (32) closest
+  sphere pairs of each step (`core/ik_solver.py`). Once the IK converges it holds
   the target with integral control (`gains.ki`, fading over the next move). It succeeds when
   the frames (or joints) are within the thresholds before the goal's `duration` (or
   `controller.timeout`) runs out; a hold pinned at a joint position limit stops with

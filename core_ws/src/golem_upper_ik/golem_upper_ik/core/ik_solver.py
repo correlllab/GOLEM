@@ -3,8 +3,8 @@
 IKSolver keeps two configurations: one on the reduced model, which the IK steps, and one on
 the body model (no free-flyer), which carries every body joint's q. Each frame task pulls one
 frame to a target pose. With a self-collision model the reduced model's IK keeps the
-collision pairs controller.d_min apart (a self-collision barrier); without one it runs
-without the barrier. solve_ik_reduced tries seeds in turn, the measured pose first.
+collision pairs controller.d_min apart (a self-collision barrier, on the BARRIER_PAIRS
+closest pairs of each step); without one it runs without the barrier. solve_ik_reduced tries seeds in turn, the measured pose first.
 """
 import time
 from dataclasses import dataclass
@@ -21,6 +21,12 @@ SEED_CONFIGS = ('home', 't_pose', 'arms_front_45')
 # solve_ik_reduced converges when the summed frame-task errors are below these
 LINEAR_THRESHOLD = 1e-3  # m
 ANGULAR_THRESHOLD = 1e-2  # rad
+# The self-collision barrier's pairs: Pink computes every pair's distance and constrains
+# this many closest ones in each IK step (their Jacobians are most of a step's work; all of
+# both robots' ~210 pairs took ~22 ms a step). SAFETY: a pair outside them is farther than
+# every constrained one; in the sphere models' postures at most 26 pairs lie within 0.15 m,
+# and one step moves a pair a few mm.
+BARRIER_PAIRS = 32
 
 
 @dataclass
@@ -98,7 +104,8 @@ class IKSolver:
                 'collision_data': robot_model.collision_data_body_reduced,
             }
             self.collision_barrier_reduced = pink.barriers.SelfCollisionBarrier(
-                n_collision_pairs=len(robot_model.collision_model_body_reduced.collisionPairs),
+                n_collision_pairs=min(
+                    BARRIER_PAIRS, len(robot_model.collision_model_body_reduced.collisionPairs)),
                 gain=20.0,
                 safe_displacement_gain=1.0,
                 d_min=self.d_min,

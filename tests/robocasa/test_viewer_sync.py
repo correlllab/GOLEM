@@ -1,6 +1,7 @@
 """Check the shared viewer thread (viewer_sync.py) against a fake viewer handle, without a display."""
 import contextlib
 import io
+import math
 import threading
 import time
 import unittest
@@ -38,6 +39,11 @@ class FakeHandle:
         self.viewer_data = None
         self.perturb = perturb
         self.user_scn = FakeScene()
+        self.texts = None
+
+    def set_texts(self, texts):
+        """Keep the last text the thread set."""
+        self.texts = texts
 
     def is_running(self):
         """Return whether the viewer window is open."""
@@ -172,3 +178,51 @@ class ViewerSyncTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RtfMeterTests(unittest.TestCase):
+    """Check the real-time factor the viewer shows."""
+
+    def test_the_factor_is_sim_time_over_wall_time_in_the_window(self):
+        """Sim time advancing half as fast as wall time reads 0.5; older samples drop out."""
+        meter = viewer_sync.RtfMeter(window=1.0)
+        self.assertIsNone(meter.rtf())
+        for k in range(30):
+            meter.add(0.1 * k, 0.05 * k)
+        self.assertAlmostEqual(meter.rtf(), 0.5)
+        for k in range(30, 50):
+            meter.add(0.1 * k, 1.45 + 0.2 * (k - 29))
+        self.assertAlmostEqual(meter.rtf(), 2.0)
+
+    def test_a_sim_time_that_goes_back_restarts_the_window(self):
+        """After MuJoCo resets the time, the factor waits for two new samples."""
+        meter = viewer_sync.RtfMeter()
+        meter.add(0.0, 5.0)
+        meter.add(0.5, 5.5)
+        meter.add(0.6, 0.0)
+        self.assertIsNone(meter.rtf())
+        meter.add(1.1, 0.25)
+        self.assertAlmostEqual(meter.rtf(), 0.5)
+
+    def test_the_text_names_the_target(self):
+        """The value column holds the factor, the target (max for inf) and the sim time."""
+        self.assertEqual(viewer_sync.rtf_text(0.973, 12.34, 1.0),
+                         ('real-time factor\nsim time', '0.97 (target 1)\n12.3 s'))
+        self.assertEqual(viewer_sync.rtf_text(None, 0.0, math.inf)[1], '- (target max)\n0.0 s')
+        self.assertEqual(viewer_sync.rtf_text(2.5, 1.0)[1], '2.50\n1.0 s')
+
+    def test_the_sync_thread_shows_the_factor(self):
+        """The thread sets the viewer's top-left text."""
+        model = mujoco.MjModel.from_xml_string(XML)
+        data, viewer_data = mujoco.MjData(model), mujoco.MjData(model)
+        handle = FakeHandle()
+        handle.viewer_data = viewer_data
+        sync = viewer_sync.ViewerSync(model, data, handle, threading.Lock(), viewer_data,
+                                      hz=200.0, sim_rate=1.0)
+        self.addCleanup(sync.stop)
+        sync.start()
+        self.assertTrue(wait_for(lambda: handle.texts is not None))
+        font, grid, label, value = handle.texts
+        self.assertEqual(grid, mujoco.mjtGridPos.mjGRID_TOPLEFT)
+        self.assertTrue(label.startswith('real-time factor'))
+        self.assertIn('(target 1)', value)

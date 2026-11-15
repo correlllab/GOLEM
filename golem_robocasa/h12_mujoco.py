@@ -322,7 +322,8 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     handle = view_sync = None
     if viewer:
         handle, view_sync = open_viewer(model, data, sim_lock, band, band_body_id, "h12_mujoco",
-                                        timings=timings, key_callbacks=(estop.key_callback,))
+                                        timings=timings, sim_rate=sim_rate,
+                                        key_callbacks=(estop.key_callback,))
     # Logs the band's release and the first time the torso tips or drops.
     fall_logger = FallLogger(band_body_id, "torso", upright_min=0.5, height_min=0.5)
 

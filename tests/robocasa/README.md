@@ -34,6 +34,11 @@ on a small MuJoCo scene by `test_robosuite_common.py` and `test_h12_spawn_collis
 (`spawn_scene.py` holds the scene and a stand-in env); the G1's search is
 `g1/test_g1_spawn_collision.py`'s.
 
+The experiment surface `GOLEM_SIM_EXPERIMENT=1` serves (`/sim/ground_truth`,
+`/sim/reset_objects`; `measurement_bridge.py`), for grasp-experiment harnesses only,
+is checked by `test_measurement_experiment.py`: off by default, and on a small scene
+the ground truth it publishes and the object reset.
+
 Pure pacing/timing tests also run without ROS or MuJoCo:
 
 ```bash
@@ -90,8 +95,10 @@ EGL context cannot be made current once the GLFW window exists. The viewer
 draws its own `MjData`, refreshed and synced at 60 Hz on a separate thread
 (`viewer_sync.py`, shared by both sims; the H1-2's `viewer` stage), so
 `handle.sync()` never blocks physics. Mouse perturbation forces from each sync
-are applied to the simulation on every step. `test_viewer_sync.py` checks the
-thread against a fake handle.
+are applied to the simulation on every step. The thread also shows the measured
+real-time factor (sim time over the last second of wall time), the
+`GOLEM_SIM_RATE` target and the sim time in the viewer's top-left corner.
+`test_viewer_sync.py` checks the thread against a fake handle.
 
 The pacer repays at most 100 ms of wall-clock lag without dropping simulation
 steps. It does not make an overloaded scene run in real time.

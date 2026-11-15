@@ -2,11 +2,13 @@
 Provide the geometry and decoding helpers the skills share.
 
 Decode a compressedDepth image, back-project a pixel mask to camera-frame
-points, convert between poses, transforms, matrices and quaternions, and pull
-JSON out of a Gemini reply. Depends on numpy, OpenCV, geometry_msgs and
+points, convert between poses, transforms, matrices and quaternions, move a
+pose along its approach axis, and pull JSON and boxes out of a Gemini reply.
+Depends on numpy, OpenCV, geometry_msgs and
 model_server's rotations (mat_to_quat, which graspgen_server shares).
 """
 
+import copy
 import json
 import re
 import math
@@ -152,3 +154,70 @@ def extract_json(text):
                 continue
     boxes = [{'box_2d': [float(v) for v in m]} for m in _BOX_2D_RE.findall(text)]
     return boxes or None
+
+
+def gemini_boxes(text, width, height):
+    """
+    Return every "box_2d" box in a Gemini reply as pixel [x1, y1, x2, y2] lists, in reply order.
+
+    Gemini gives [y1, x1, y2, x2] normalized to 0-1000; each box is scaled
+    to a `width` x `height` image and its corners sorted. Entries without a
+    4-number box_2d are skipped; [] when nothing parses.
+    """
+    data = extract_json(text)
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list):
+        return []
+    boxes = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            y1, x1, y2, x2 = (float(v) for v in entry['box_2d'])
+        except (KeyError, ValueError, TypeError):
+            continue
+        px1, px2 = sorted((x1 / 1000.0 * width, x2 / 1000.0 * width))
+        py1, py2 = sorted((y1 / 1000.0 * height, y2 / 1000.0 * height))
+        boxes.append([px1, py1, px2, py2])
+    return boxes
+
+
+def pose_xyz(pose):
+    """Return `pose`'s position as a float array."""
+    return np.array([pose.position.x, pose.position.y, pose.position.z], dtype=float)
+
+
+def pose_quat(pose):
+    """Return `pose`'s orientation as a unit quaternion array (x, y, z, w)."""
+    q = np.array([pose.orientation.x, pose.orientation.y,
+                  pose.orientation.z, pose.orientation.w], dtype=float)
+    return q / np.linalg.norm(q)
+
+
+def quat_slerp(q0, q1, t):
+    """Interpolate from q0 (t=0) to q1 (t=1) along the shortest arc; (x, y, z, w) arrays."""
+    dot = float(np.dot(q0, q1))
+    if dot < 0.0:
+        q1, dot = -q1, -dot
+    # nearly parallel: normalized lerp avoids dividing by sin(theta) ~ 0
+    if dot > 0.9995:
+        q = q0 + t * (q1 - q0)
+        return q / np.linalg.norm(q)
+    theta = math.acos(dot)
+    return (math.sin((1.0 - t) * theta) * q0 + math.sin(t * theta) * q1) / math.sin(theta)
+
+
+def approach_pose(pose, dist):
+    """
+    Return a copy of `pose` moved `dist` m along its own +Z (the approach axis).
+
+    Positive is deeper toward the object, negative backs off (a pre-grasp
+    standoff); the orientation is unchanged.
+    """
+    z_axis = pose_to_matrix(pose)[:3, 2]
+    out = copy.deepcopy(pose)
+    out.position.x += dist * float(z_axis[0])
+    out.position.y += dist * float(z_axis[1])
+    out.position.z += dist * float(z_axis[2])
+    return out

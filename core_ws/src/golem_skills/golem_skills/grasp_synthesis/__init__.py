@@ -41,6 +41,9 @@ class GraspMethod:
     # posture above the workspace) instead of 'prep', and reset to it between
     # failed candidates.
     staged: bool = False
+    # True: the executor runs its reach check (skills/grasp_reach.py) on each
+    # candidate before moving the arm, and skips the ones that fail it
+    reach_check: bool = False
 
 
 METHODS = {m.name: m for m in (
@@ -48,8 +51,9 @@ METHODS = {m.name: m for m in (
     GraspMethod('top_down', top_down.synthesize, staged=True),
     GraspMethod('centroid', centroid.synthesize),
     GraspMethod('antipodal', antipodal.synthesize),
-    GraspMethod('graspgenx', graspgenx.synthesize_raw),
-    GraspMethod('graspgenx_filtered', graspgenx.synthesize_filtered),
+    GraspMethod('graspgenx', graspgenx.synthesize_raw, reach_check=True),
+    GraspMethod('graspgenx_filtered', graspgenx.synthesize_filtered,
+                reach_check=True),
 )}
 
 DEFAULT_METHOD = 'heuristic'

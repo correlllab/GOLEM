@@ -4,9 +4,12 @@ The viewer's handle.sync() takes ~11 ms because it waits for the render thread,
 so a physics loop that calls it every step runs far below real time. Here a
 60 Hz thread copies the simulation's display state into a separate MjData the
 viewer draws, syncs, and hands the mouse perturbation back for the physics loop
-to apply. open_viewer and close_viewer start and end the viewer and the
-thread for both sim loops.
+to apply. The thread also shows the measured real-time factor in the viewer's
+top-left corner (RtfMeter). open_viewer and close_viewer start and end the
+viewer and the thread for both sim loops.
 """
+import collections
+import math
 import threading
 import time
 import traceback
@@ -18,6 +21,45 @@ from mujoco_env import draw_band
 
 # Hz, wall. The sync thread's rate.
 VIEWER_HZ = 60.0
+# s, wall. The real-time factor shown is the sim time advanced over this window of wall time.
+RTF_WINDOW_S = 1.0
+# s, wall. How often the shown real-time factor is refreshed, so the digits can be read.
+RTF_TEXT_PERIOD_S = 0.25
+
+
+class RtfMeter:
+    """Measure the real-time factor, sim seconds per wall second, over RTF_WINDOW_S of wall time."""
+
+    def __init__(self, window=RTF_WINDOW_S):
+        """Start empty; window is in seconds of wall time."""
+        self._window = window
+        self._samples = collections.deque()
+
+    def add(self, wall, sim):
+        """Record sim time `sim` (s) seen at wall time `wall` (s).
+
+        A sim time that went back (MuJoCo reset the scene) restarts the window.
+        """
+        if self._samples and sim < self._samples[-1][1]:
+            self._samples.clear()
+        self._samples.append((wall, sim))
+        while len(self._samples) > 2 and wall - self._samples[1][0] >= self._window:
+            self._samples.popleft()
+
+    def rtf(self):
+        """Return the real-time factor over the window, or None before two samples span wall time."""
+        if len(self._samples) < 2:
+            return None
+        (w0, s0), (w1, s1) = self._samples[0], self._samples[-1]
+        return (s1 - s0) / (w1 - w0) if w1 > w0 else None
+
+
+def rtf_text(rtf, sim_time, target=None):
+    """Return the viewer's (label, value) text columns: the real-time factor, its target and sim time."""
+    value = '-' if rtf is None else f'{rtf:.2f}'
+    if target is not None:
+        value += ' (target max)' if math.isinf(target) else f' (target {target:g})'
+    return 'real-time factor\nsim time', f'{value}\n{sim_time:.1f} s'
 
 
 def copy_display_state(dst, src):
@@ -41,14 +83,15 @@ def band_overlay(band, body_id):
     return draw
 
 
-def open_viewer(model, data, lock, band, body, tag, timings=None, key_callbacks=()):
+def open_viewer(model, data, lock, band, body, tag, timings=None, sim_rate=None, key_callbacks=()):
     """Launch the passive viewer on its own copy of data, framed on body, and start its sync thread.
 
     lock is the physics loop's lock (ViewerSync). band, the sim's ElasticBand
     or None, is drawn while enabled and toggled by SPACE. Collision geoms are
     hidden. Each of key_callbacks also gets every key the viewer passes on.
-    A framing failure is logged under [tag]. Returns (handle, view_sync);
-    close them with close_viewer.
+    A framing failure is logged under [tag]. sim_rate, the target real-time
+    factor (sim_common.sim_rate_from_env), is shown beside the measured one.
+    Returns (handle, view_sync); close them with close_viewer.
     """
     import mujoco.viewer
 
@@ -77,7 +120,7 @@ def open_viewer(model, data, lock, band, body, tag, timings=None, key_callbacks=
             print(f"[{tag}] viewer camera framing skipped: {e}")
     view_sync = ViewerSync(model, data, handle, lock, viewer_data,
                            draw=band_overlay(band, body) if band is not None else None,
-                           timings=timings)
+                           timings=timings, sim_rate=sim_rate)
     view_sync.start()
     return handle, view_sync
 
@@ -94,7 +137,7 @@ class ViewerSync:
     """Refresh the viewer's MjData from the simulation's and sync the viewer at hz."""
 
     def __init__(self, model, data, handle, lock, viewer_data, draw=None, hz=VIEWER_HZ,
-                 timings=None):
+                 timings=None, sim_rate=None):
         """Set up the sync of data into viewer_data, drawn by the passive viewer handle.
 
         lock is the threading.Lock the physics loop holds around mj_step and
@@ -103,6 +146,8 @@ class ViewerSync:
         viewer_data), if given, runs once per frame before the sync to put the
         overlay in handle.user_scn; without it the overlay is cleared. timings,
         a sim_timing.LoopTimings, records each frame's wall time as stage "viewer".
+        Each frame also feeds data.time to an RtfMeter, whose real-time factor, with
+        sim_rate (the target, if given), is set as the viewer's text every RTF_TEXT_PERIOD_S.
         """
         self._model = model
         self._data = data
@@ -113,6 +158,9 @@ class ViewerSync:
         self._period = 1.0 / hz
         self._timings = timings
         self._perturb = np.zeros_like(data.xfrc_applied)
+        self._sim_rate = sim_rate
+        self._rtf = RtfMeter()
+        self._next_text = 0.0
         self._stop = threading.Event()
         self._thread = None
 
@@ -147,11 +195,17 @@ class ViewerSync:
                   "refreshes:\n" + traceback.format_exc(), flush=True)
 
     def _frame(self):
-        """Copy the state, draw the overlay, sync the viewer and keep its mouse force."""
+        """Copy the state, show the real-time factor, draw the overlay, sync and keep the mouse force."""
         viewer_data = self._viewer_data
         mark = self._timings.start() if self._timings is not None else 0.0
         with self._lock:
             copy_display_state(viewer_data, self._data)
+        now = time.perf_counter()
+        self._rtf.add(now, viewer_data.time)
+        if now >= self._next_text:
+            self._next_text = now + RTF_TEXT_PERIOD_S
+            label, value = rtf_text(self._rtf.rtf(), viewer_data.time, self._sim_rate)
+            self._handle.set_texts((None, mujoco.mjtGridPos.mjGRID_TOPLEFT, label, value))
         mujoco.mj_forward(self._model, viewer_data)
         # Zeroed so that after sync() it holds only the mouse perturbation.
         viewer_data.xfrc_applied[:] = 0.0

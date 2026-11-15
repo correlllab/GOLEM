@@ -2,14 +2,14 @@
 Start the loco-manipulation game against the sim: lmg_deploy's MARL policy on all 27 joints.
 
     ros2 launch golem_bringup lmg_sim.launch.py [use_skills:=true]
-
-Start the simulator first. Everything starts at once: the state publishers
-(h12_state), the command path (h12_control without frame_task_server, no estop, no
-delay), the policy (h12_locomanipulationgame: lmg_deploy's policies/h12/, with the start
-pose taken as verified and no operator confirm), navigation (use_slam), golem_skills
-(use_skills: /skill/*, among them /skill/frontier_explore, which walks the policy through
-Nav2) and RViz for Nav2 goals (use_rviz). golem_skills does not wait for the perception
-and gripper services or frame_task_server, none of which run here, and plans its frontier
+ Start the simulator first. Everything starts at once: the state publishers (h12_state),
+the command path (h12_control without frame_task_server, with the sim's estop box and the
+real robot's delay), the policy (h12_locomanipulationgame: lmg_deploy's policies/h12/,
+with the start pose taken as verified and no operator confirm), navigation (use_slam),
+golem_skills (use_skills: /skill/*, among them /skill/frontier_explore, which walks the
+policy through Nav2) and RViz for Nav2 goals (use_rviz). golem_skills does not wait for
+the perception and gripper services or frame_task_server, none of which run here, and
+plans its frontier
 goals with the H1-2's Nav2 footprint (golem_slam's config/h12/nav2.yaml).
 safety_config defaults to the real robot's preset, relax_safety_split: the policy was
 trained against its estops, and the sim is where to see that it does not trip them.
@@ -23,6 +23,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from golem_bringup.include import include
+from golem_bringup.sim_estop import sim_estop_url
 from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -90,8 +91,8 @@ def generate_launch_description():
             'sim': 'true',
             'use_frame_task': 'false',
             'safety_config': LaunchConfiguration('safety_config'),
-            # No hardware estop in the sim, so nothing to wait for.
-            'safety_delay': '0.0',
+            # The sim's estop box, as estop_node reads the real one.
+            'estop_serial_port': sim_estop_url(),
         }),
         # The policy, on all 27 joints.
         include('golem_bringup', 'h12/h12_locomanipulationgame.launch.py', {

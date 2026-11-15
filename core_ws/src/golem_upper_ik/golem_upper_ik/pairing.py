@@ -6,8 +6,9 @@ suffix is ignored. One rule serves every robot, checked in this order:
 
 - the safety config is one of the robot's pairs;
 - the controller config is the one paired with it;
-- with sim known, neither is a sim config (named sim*) on the real robot or a real config in
-  the sim.
+- with sim known, neither is a sim config (named sim*) on the real robot; and when the robot
+  pairs a sim config of its own (the G1), neither is a real config in the sim. A robot with
+  no sim pair (the H1-2) runs its real configs in the sim.
 
 upper_ik.launch.py applies the rule before it starts the controller, and golem_bringup's G1
 core takes its default controller config from default_controller_config().
@@ -85,9 +86,10 @@ def pairing_refusal(robot: str, controller_config: str, safety_config: str,
                 f'"{controller}": the controller must write the input the safety config '
                 'relays, with the limits it was tuned with')
     if sim is not None:
+        has_sim_pair = any(is_sim_config(name) for name in pairs)
         for kind, name in (('safety', safety), ('controller', controller)):
-            if is_sim_config(name) != sim:
-                if sim:
-                    return f'{kind} config "{name}" is for the real robot, not the sim'
+            if is_sim_config(name) and not sim:
                 return f'{kind} config "{name}" is a sim config; the real robot never runs one'
+            if sim and has_sim_pair and not is_sim_config(name):
+                return f'{kind} config "{name}" is for the real robot, not the sim'
     return None

@@ -15,6 +15,7 @@ import os
 import threading
 import time
 
+from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped, Twist
 import golem_lowerbody_rl.node as node_module
 from golem_lowerbody_rl.imu import apply_trim, IDENTITY, trim_quaternion
@@ -32,6 +33,7 @@ from rosgraph_msgs.msg import Clock
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 from unitree_hg.msg import LowCmd, LowState
+import yaml
 
 # the shell's ROS_DOMAIN_ID, but never 0 (the real robot) or 1 (the sim): 97 then
 _SHELL_DOMAIN = int(os.environ.get('ROS_DOMAIN_ID') or 0)
@@ -253,8 +255,22 @@ def _wait(condition, timeout):
     return bool(condition())
 
 
+def _unattended_sim(directory):
+    """Write the H1-2's sim run config with startup.wait_for_confirm false; return its path."""
+    path = os.path.join(get_package_share_directory('golem_lowerbody_rl'), 'config', 'h12',
+                        'sim.yaml')
+    with open(path, encoding='utf-8') as source:
+        raw = yaml.safe_load(source)
+    raw['startup']['wait_for_confirm'] = False
+    os.makedirs(os.path.join(str(directory), 'config', 'h12'), exist_ok=True)
+    target = os.path.join(str(directory), 'config', 'h12', 'sim.yaml')
+    with open(target, 'w', encoding='utf-8') as sink:
+        yaml.safe_dump(raw, sink)
+    return target
+
+
 @pytest.fixture
-def rig(monkeypatch):
+def rig(monkeypatch, tmp_path):
     """
     Return a function that starts the node and the fake robot, both spinning.
 
@@ -271,11 +287,16 @@ def rig(monkeypatch):
         """
         Start the node on config and policy (and overrides), and the fake robot beside it.
 
+        config 'sim' is the H1-2's sim run config without the operator's confirm, so the
+        policy starts unattended once ready.
+
         clock_rate: run the node with use_sim_time, and return (node, robot, SimClock) with
         the sim clock at that rate, not yet publishing.
         """
         if clock_rate is not None:
             overrides = [*overrides, Parameter('use_sim_time', value=True)]
+        if config == 'sim':
+            config = _unattended_sim(tmp_path)
         node = RecordingNode([], context=context, parameter_overrides=[
             Parameter('robot', value='h12'), Parameter('config', value=config),
             Parameter('policy', value=policy), *overrides])
@@ -347,17 +368,17 @@ def test_sim_time_takes_no_lowstate_before_the_first_clock(rig):
 
 
 def test_sim_time_state_gap_counts_sim_time(rig):
-    """Under use_sim_time a /lowstate gap is s of sim time: 0.8 s of wall time at 1/4 is 0.2."""
-    node, robot, clock = rig('sim', clock_rate=0.25)
+    """Under use_sim_time a /lowstate gap is s of sim time: 0.6 s of wall time at 1/8 is 0.075."""
+    node, robot, clock = rig('sim', clock_rate=0.125)
     clock.running.set()
     robot.heartbeat = True
-    assert _wait(lambda: node.supervisor.phase in (Phase.RAMPING, Phase.HOLDING), 5.0)
+    assert _wait(lambda: node.supervisor.phase in (Phase.RAMPING, Phase.HOLDING), 10.0)
     robot.state = False
-    time.sleep(0.8)
+    time.sleep(0.6)
     robot.state = True
     time.sleep(0.3)
     assert node.supervisor.fault is None, node.supervisor.fault
-    # max_state_gap is 0.5 s of sim time: 2 s of wall time
+    # max_state_gap is 0.25 s of sim time: 2 s of wall time
     robot.state = False
     stopped = time.monotonic()
     assert _wait(lambda: node.supervisor.phase is Phase.FAULTED, 5.0)

@@ -21,7 +21,7 @@ robots' bringups include it (`golem_bringup`'s `h12_control.launch.py` and
 `g1_core.launch.py`). On its own:
 
 ```bash
-ros2 launch golem_safety safety.launch.py robot:=h12 config:=sim_safety_split sim:=true
+ros2 launch golem_safety safety.launch.py robot:=h12 config:=relax_safety_split sim:=true
 ros2 run golem_safety safety_node --ros-args -p robot:=g1 -p config:=sim_split -p sim:=true
 ```
 
@@ -86,9 +86,8 @@ Both robots' `LowCmd`/`LowState` motor arrays hold 35 slots.
 
 | Robot | Config | Mode | Run by |
 |---|---|---|---|
-| H1-2 | `relax_safety_split` | split | `h12_real_robot` (the `h12_control.launch.py` default), `lmg_sim`, `lmg_real`, `h12_safety_grippers` (their defaults) |
+| H1-2 | `relax_safety_split` | split | `h12_sim`, `h12_real_robot` (the `h12_control.launch.py` default), `lmg_sim`, `lmg_real`, `h12_safety_grippers` (their defaults), `tests/stack` |
 | H1-2 | `default_safety_split`, `tight_safety_split` | split | by name (`safety_config:=`) |
-| H1-2 | `sim_safety_split` | split | `h12_sim`, `tests/stack` |
 | H1-2 | `default_safety_full`, `relax_safety_full`, `tight_safety_full`, `locomotion_safety_full` | full body | by name |
 | G1 | `split` | split | `g1_real_robot.launch.py` (default) |
 | G1 | `sim_split` | split | `g1_sim.launch.py` (default) |

@@ -69,7 +69,6 @@ def generate_launch_description():
         include('golem_bringup', 'h12/h12_control.launch.py', {
             **wall_time,
             'sim': 'false',
-            'use_estop': 'true',
         }),
         # The legs.
         include('golem_bringup', 'h12/h12_lowerbody.launch.py', legs),

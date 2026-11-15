@@ -34,8 +34,8 @@ The package's launch files start both nodes, and both robots' bringups include t
 On their own:
 
 ```bash
-ros2 launch golem_upper_ik upper_ik.launch.py robot:=h12 config:=sim_safety_split \
-    safety_config:=sim_safety_split sim:=true use_sim_time:=true
+ros2 launch golem_upper_ik upper_ik.launch.py robot:=h12 config:=safety_split \
+    safety_config:=relax_safety_split sim:=true use_sim_time:=true
 ros2 launch golem_upper_ik robot_state.launch.py robot:=h12 use_sim_time:=true
 ros2 run golem_upper_ik frame_task_server --ros-args -p robot:=g1 -p config:=sim_split
 ros2 run golem_upper_ik joint_state_publisher --ros-args -p robot:=h12
@@ -105,7 +105,6 @@ robot is refused with `ValueError`, naming the known ones.
 | Robot | Config | Writes | Runs with `golem_safety`'s |
 |---|---|---|---|
 | H1-2 | `safety_split` | `/safety/lowcmd_upper_in` | `relax_safety_split`, `default_safety_split`, `tight_safety_split` |
-| H1-2 | `sim_safety_split` | `/safety/lowcmd_upper_in` | `sim_safety_split` |
 | H1-2 | `safety_full` | `/safety/lowcmd_in` | `relax_safety_full`, `default_safety_full`, `tight_safety_full`, `locomotion_safety_full` |
 | G1 | `g1_split` | `/safety/lowcmd_upper_in` | `split` (a stiff waist, for walking) |
 | G1 | `sim_split` | `/safety/lowcmd_upper_in` | `sim_split` |

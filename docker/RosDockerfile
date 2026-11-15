@@ -364,6 +364,15 @@ RUN pip install -c /opt/golem-locks/ros-amd64-11.txt --no-cache-dir onnxruntime=
     && python3 -c "import onnxruntime"
 
 # -----------------------------------------------------------------------------
+# pyserial (python3-serial, estop's exec_depend): estop_node reads the H1-2's
+# estop box with it, the real USB one and the sims' socket:// one, which every
+# H1-2 sim bringup runs. From apt, so the snapshot pins it.
+# -----------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends python3-serial \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -c "import serial; serial.serial_for_url('loop://')"
+
+# -----------------------------------------------------------------------------
 # Clamp setuptools, wheel and numpy again, for the reasons of step 6: the
 # GraspGenX dependency step (ros-amd64-08) installs setuptools 84 and its
 # distutils-precedence.pth, which break colcon's ament_python builds. Last, so

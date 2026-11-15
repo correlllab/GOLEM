@@ -72,8 +72,9 @@ takes no `/lowstate` before the first `/clock`, and logs that it waits. The node
     within 1 s of the node's clock. The arm controller's `/safety/lowcmd_upper_in` is fresh
     within 0.5 s and, with `band.release` (the sims), `frame_task_server`'s
     first `/left_ee_pose` has come or `band.max_wait` has passed. The node logs
-    `the policy waits: <reason>` every 5 s. On the real robot it then waits
-    for `ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger`,
+    `the policy waits: <reason>` every 5 s. With `startup.wait_for_confirm`
+    (the real robot and the H1-2 sim) it then waits for
+    `ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger`,
     accepted only now and refused with the reason otherwise.
 4. **Running.** `policy started at zero velocity and the default height ...`;
     the policy resets as its spec's `reset_on` says. `/cmd_vel` goes to the
@@ -84,8 +85,8 @@ takes no `/lowstate` before the first `/clock`, and logs that it waits. The node
     warned about at most every 5 s. Every 10 s the node logs
     `timing over the last 10 s: ...` (step spacing and tick lag).
 5. **Faulted.** Once the legs are commanded, any of these stops the node for
-    good: a `/lowstate` gap over `faults.max_state_gap` (0.25 s real, 0.5 s
-    sim), or none for that long; a tick that goes back; a non-finite value or
+    good: a `/lowstate` gap over `faults.max_state_gap` (0.25 s on the real robots and the H1-2 sim,
+    0.5 s in the G1 sim), or none for that long; a tick that goes back; a non-finite value or
     a non-unit IMU quaternion; a fall (gravity z above -0.5); while running, a
     tick lag over `faults.max_latency` when it is set (null in every shipped
     config, and refused in a sim run config: a sim's tick counts sim time, and

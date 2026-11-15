@@ -1,9 +1,12 @@
 # The H1-2's leg node in the simulators; every key is described in ../example.run.yaml.
+# Its start-up and faults are real.yaml's; it differs only where the sim does: the
+# elastic band it releases and an IMU without the real mounting bias.
 sim: true
 
 startup:
-  # unattended sim runs start the policy once the pre-pose holds and the timing is ready
-  wait_for_confirm: false
+  # SAFETY: as on the real robot, the policy takes the legs only on
+  # /lowerbody/confirm_engage
+  wait_for_confirm: true
   ramp_seconds: 2.0
   settle_tolerance: 0.15
   settle_ticks: 10
@@ -31,10 +34,9 @@ commands:
   height_rate: null
 
 faults:
-  # longer than real.yaml's: gaps count sim time, and a delivery delay on a loaded host
-  # counts as sim time here, more of it at a GOLEM_SIM_RATE above 1
-  max_state_gap: 0.5
-  # the sim's tick is sim time, so tick lag is not a delivery delay there
+  # real.yaml's; gaps count sim time here, so a loaded host or a GOLEM_SIM_RATE above 1
+  # can trip it
+  max_state_gap: 0.25
   max_latency: null
 
 # the sim IMU has no mounting bias

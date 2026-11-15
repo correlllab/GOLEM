@@ -247,7 +247,7 @@ sim_test_run_ros() {
     local seconds=$1 script=$2
     set +e
     timeout "$seconds" "${COMPOSE[@]}" -f "$OUT/test_compose_ros_in_sim.yml" run --rm -T --no-deps --name "$ROS" \
-        -e G1_DDS_INTERFACE=lo -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONUNBUFFERED=1 ros bash -c "set -m
+        -e "GOLEM_ROBOT=$SIM_TEST_ROBOT" -e G1_DDS_INTERFACE=lo -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONUNBUFFERED=1 ros bash -c "set -m
     source /opt/ros/humble/setup.bash && source /home/code/core_ws/install/setup.bash || exit 3
     $script" 2>&1 | tee "$OUT/drive.log"
     DRIVE_RC=${PIPESTATUS[0]}

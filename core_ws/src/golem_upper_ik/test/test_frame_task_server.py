@@ -1054,15 +1054,15 @@ def test_upper_ik_launch_starts_only_frame_task_server():
     """upper_ik.launch.py checks the pairing, then starts frame_task_server after start_delay."""
     from launch.actions import DeclareLaunchArgument, OpaqueFunction
     declared, started, context = _launched(
-        'upper_ik.launch.py', robot='h12', config='sim_safety_split',
-        safety_config='sim_safety_split.yaml', sim='true', start_delay='1.5')
+        'upper_ik.launch.py', robot='h12', config='safety_split',
+        safety_config='relax_safety_split.yaml', sim='true', start_delay='1.5')
     assert declared == {'robot', 'config', 'safety_config', 'sim', 'use_sim_time',
                         'start_delay'}
     ((delay, node),) = started
     assert (node.node_package, node.node_executable, node._Node__node_name, delay) == (
         'golem_upper_ik', 'frame_task_server', 'frame_task_server', 1.5)
     assert _parameters(node, context) == {
-        'robot': 'h12', 'config': 'sim_safety_split', 'use_sim_time': False}
+        'robot': 'h12', 'config': 'safety_split', 'use_sim_time': False}
     # the pairing check runs first, before the controller starts
     entities = [entity for entity in _launch_description('upper_ik.launch.py').entities
                 if not isinstance(entity, DeclareLaunchArgument)]
@@ -1070,12 +1070,11 @@ def test_upper_ik_launch_starts_only_frame_task_server():
 
 
 @pytest.mark.parametrize('args, reason', [
-    (dict(robot='h12', config='safety_split', safety_config='sim_safety_split', sim='true'),
-     'safety config "sim_safety_split" runs with controller config "sim_safety_split", not '
-     '"safety_split"'),
-    (dict(robot='h12', config='sim_safety_split', safety_config='sim_safety_split',
-          sim='false'),
-     'safety config "sim_safety_split" is a sim config'),
+    (dict(robot='h12', config='safety_full', safety_config='relax_safety_split', sim='true'),
+     'safety config "relax_safety_split" runs with controller config "safety_split", not '
+     '"safety_full"'),
+    (dict(robot='g1', config='sim_split', safety_config='sim_split', sim='false'),
+     'safety config "sim_split" is a sim config'),
     (dict(robot='g1', config='sim_split', safety_config='full', sim='true'),
      'safety config "full" is not one of the G1 pairs'),
 ])

@@ -43,7 +43,7 @@ const RobotProfile & g1()
 // Every config under config/h12/.
 const char * const kH12Configs[] = {
   "default_safety_full", "default_safety_split", "locomotion_safety_full", "relax_safety_full",
-  "relax_safety_split", "sim_safety_split", "tight_safety_full", "tight_safety_split"};
+  "relax_safety_split", "tight_safety_full", "tight_safety_split"};
 
 // Every config under config/g1/.
 const char * const kG1Configs[] = {"full", "sim_split", "split"};
@@ -337,8 +337,6 @@ TEST(Config, H12UpperStaleSecondsAreTheOldEffectiveValues)
     .stale.upper_seconds, 2.0);
   EXPECT_DOUBLE_EQ(golem_safety::load_safety_config("relax_safety_split", h12())
     .stale.upper_seconds, 0.0);
-  EXPECT_DOUBLE_EQ(golem_safety::load_safety_config("sim_safety_split", h12())
-    .stale.upper_seconds, 0.0);
 }
 
 // SAFETY: every G1 config writes the zero estop command until restart, logs, and runs
@@ -401,7 +399,7 @@ TEST(Config, ConfigNamesBelongToTheirRobot)
 // of one robot also parse for the other.
 TEST(Config, PathInAnotherRobotsDirectoryIsRefused)
 {
-  // The G1's full.yaml parses for the H1-2, and the H1-2's sim_safety_split.yaml for the G1.
+  // The G1's full.yaml parses for the H1-2, and the H1-2's relax_safety_split.yaml for the G1.
   const std::string share = ament_index_cpp::get_package_share_directory("golem_safety");
   for (const char * name : kG1Configs) {
     const std::string path = share + "/config/g1/" + name + ".yaml";
@@ -418,7 +416,7 @@ TEST(Config, PathInAnotherRobotsDirectoryIsRefused)
     EXPECT_TRUE(contains(message, "robot h12")) << message;
   }
   EXPECT_NO_THROW(
-    golem_safety::load_safety_config(share + "/config/h12/sim_safety_split.yaml", h12()));
+    golem_safety::load_safety_config(share + "/config/h12/relax_safety_split.yaml", h12()));
   const TempConfig file(completed("mode: split_mode\n", h12()));
   EXPECT_NO_THROW(golem_safety::load_safety_config(file.path(), h12()));
 }

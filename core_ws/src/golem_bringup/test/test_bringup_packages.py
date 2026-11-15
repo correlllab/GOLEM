@@ -3,14 +3,14 @@ Test that both robots' bringups start the shared packages' nodes through their l
 
 golem_bringup depends on golem_safety, golem_upper_ik and golem_lowerbody_rl. For the
 H1-2, h12_state.launch.py includes golem_upper_ik's robot_state.launch.py, and
-h12_control.launch.py, which needs sim from
-every top-level file (the real-robot ones pass use_estop), includes golem_upper_ik's
-upper_ik.launch.py first, whose pairing check refuses a frame_task_config that does not
-run with its safety_config, then golem_safety's safety.launch.py. For the G1,
-g1_core.launch.py includes the same three files: safety_node with robot g1, the safety
-config, sim as the top-level file says and no hardware estop, and frame_task_server and
-joint_state_publisher with robot g1. The H1-2's h12_lowerbody.launch.py includes
-golem_lowerbody_rl's lowerbody.launch.py with robot h12 and every argument it takes, behind
+h12_control.launch.py, which needs sim from every top-level file and always runs
+estop_node (the sims on their own box), includes golem_upper_ik's upper_ik.launch.py
+first, whose pairing check refuses a frame_task_config that does not run with its
+safety_config, then golem_safety's safety.launch.py. For the G1, g1_core.launch.py
+includes the same three files: safety_node with robot g1, the safety config, sim as the
+top-level file says and no hardware estop, and frame_task_server and joint_state_publisher
+with robot g1. The H1-2's h12_lowerbody.launch.py includes golem_lowerbody_rl's
+lowerbody.launch.py with robot h12 and every argument it takes, behind
 start_position_verified (g1_core's include, robot g1, is in test_g1_launch.py). The nodes
 are read by walking those includes, as ros2 launch runs them. The launch tests need the
 workspace built and sourced.
@@ -96,25 +96,30 @@ def _walk(launch_file, **args):
     return _started(description.entities, context)[0]
 
 
-@pytest.mark.parametrize('launch_file, sim, use_estop', [
-    ('h12_sim.launch.py', 'true', 'false'),
-    ('lmg_sim.launch.py', 'true', 'false'),
-    ('h12_real_robot.launch.py', 'false', 'true'),
-    ('lmg_real.launch.py', 'false', 'true'),
-    ('h12_safety_grippers.launch.py', 'false', 'true'),
+@pytest.mark.parametrize('launch_file, sim, estop_port', [
+    ('h12_sim.launch.py', 'true', 'socket://127.0.0.1:15893'),
+    ('lmg_sim.launch.py', 'true', 'socket://127.0.0.1:15893'),
+    ('h12_real_robot.launch.py', 'false', ''),
+    ('lmg_real.launch.py', 'false', ''),
+    ('h12_safety_grippers.launch.py', 'false', ''),
 ])
-def test_top_level_files_pass_sim_and_use_estop(launch_file, sim, use_estop, monkeypatch):
-    """Each top-level H1-2 file passes h12_control its sim and use_estop, which reach the nodes."""
+def test_top_level_files_always_run_the_estop(launch_file, sim, estop_port, monkeypatch):
+    """
+    SAFETY: every top-level H1-2 file runs estop_node and a safety_node that obeys it.
+
+    The sims point estop_node at the box the sim serves on 15700 + ROS_DOMAIN_ID; the real
+    robot finds its USB box (an empty serial_port).
+    """
     # lmg_sim refuses an unset or 0 ROS_DOMAIN_ID.
     monkeypatch.setenv('ROS_DOMAIN_ID', '193')
     arguments = _passed_to(launch_file, 'h12_control.launch.py')
     assert arguments['sim'] == sim
-    # Absent: h12_control.launch.py's default, false.
-    assert arguments.get('use_estop', 'false') == use_estop
+    assert 'use_estop' not in arguments
+    assert arguments.get('estop_serial_port', '') == estop_port
     nodes = _walk('h12_control.launch.py', **arguments)
     assert nodes['safety_node'].parameters['sim'] == (sim == 'true')
-    assert nodes['safety_node'].parameters['use_estop'] == (use_estop == 'true')
-    assert ('estop_node' in nodes) == (use_estop == 'true')
+    assert nodes['safety_node'].parameters['use_estop'] is True
+    assert nodes['estop_node'].parameters['serial_port'] == estop_port
 
 
 def test_lmg_real_refuses_to_start_before_any_node():
@@ -177,17 +182,15 @@ def test_control_checks_the_pair_before_any_node():
 
 @pytest.mark.parametrize('safety_config, frame_task_config, use_frame_task, refused', [
     ('relax_safety_split.yaml', 'safety_split.yaml', 'true', False),
-    ('sim_safety_split.yaml', 'sim_safety_split.yaml', 'true', False),
     ('tight_safety_full', 'safety_full', 'true', False),
-    ('sim_safety_split.yaml', 'safety_split.yaml', 'true', True),
+    ('relax_safety_split.yaml', 'safety_full.yaml', 'true', True),
     ('tight_safety_full.yaml', 'safety_split.yaml', 'true', True),
     ('tight_safety_full.yaml', 'safety_split.yaml', 'false', False),
 ])
 def test_control_refuses_a_mismatched_pair(safety_config, frame_task_config, use_frame_task,
                                            refused):
     """With frame_task_server, a safety and controller config that do not pair are refused."""
-    args = dict(sim=str(safety_config.startswith('sim')).lower(),
-                safety_config=safety_config, frame_task_config=frame_task_config,
+    args = dict(sim='false', safety_config=safety_config, frame_task_config=frame_task_config,
                 use_frame_task=use_frame_task)
     if refused:
         with pytest.raises(RuntimeError, match='^upper_ik: not starting: safety config '):
@@ -201,24 +204,28 @@ def test_control_refuses_a_mismatched_pair(safety_config, frame_task_config, use
         assert 'frame_task_server' not in nodes
 
 
-def test_control_starts_safety_and_the_controller_after_their_delays():
-    """The real robot staggers estop_node, safety_node and frame_task_server; the sim does not."""
-    nodes = _walk('h12_control.launch.py', sim='false', use_estop='true')
-    assert nodes['estop_node'] == Started('estop', [], 0.0, {'use_sim_time': False})
+def test_control_starts_safety_and_the_controller_after_their_delays(monkeypatch):
+    """The sim staggers estop_node, safety_node and frame_task_server as the real robot does."""
+    nodes = _walk('h12_control.launch.py', sim='false')
+    assert nodes['estop_node'] == Started('estop', [], 0.0,
+                                          {'use_sim_time': False, 'serial_port': ''})
     assert nodes['safety_node'] == Started('golem_safety', [], 3.0, {
         'robot': 'h12', 'config': 'relax_safety_split.yaml', 'sim': False,
         'use_estop': True, 'use_sim_time': False})
     assert nodes['frame_task_server'] == Started('golem_upper_ik', [], 5.0, {
         'robot': 'h12', 'config': 'safety_split.yaml', 'use_sim_time': False})
-    # The sim bringup waits for no estop.
+    # The sim bringup: the real configs and delays, the sim's estop box.
+    monkeypatch.setenv('ROS_DOMAIN_ID', '7')
     sim = _passed_to('h12_sim.launch.py', 'h12_control.launch.py')
     nodes = _walk('h12_control.launch.py', **sim)
-    assert set(nodes) == {'safety_node', 'frame_task_server'}
-    assert nodes['safety_node'] == Started('golem_safety', [], 0.0, {
-        'robot': 'h12', 'config': 'sim_safety_split.yaml', 'sim': True,
-        'use_estop': False, 'use_sim_time': True})
-    assert nodes['frame_task_server'] == Started('golem_upper_ik', [], 0.0, {
-        'robot': 'h12', 'config': 'sim_safety_split.yaml', 'use_sim_time': True})
+    assert set(nodes) == {'estop_node', 'safety_node', 'frame_task_server'}
+    assert nodes['estop_node'] == Started('estop', [], 0.0, {
+        'use_sim_time': True, 'serial_port': 'socket://127.0.0.1:15707'})
+    assert nodes['safety_node'] == Started('golem_safety', [], 3.0, {
+        'robot': 'h12', 'config': 'relax_safety_split.yaml', 'sim': True,
+        'use_estop': True, 'use_sim_time': True})
+    assert nodes['frame_task_server'] == Started('golem_upper_ik', [], 5.0, {
+        'robot': 'h12', 'config': 'safety_split.yaml', 'use_sim_time': True})
 
 
 def test_state_starts_golem_upper_ik_robot_state():
@@ -288,7 +295,7 @@ def test_top_level_files_run_the_leg_node(launch_file, sim, config):
 def test_leg_block_passes_every_argument():
     """An earlier include's config and start_delay (Humble leaks them) do not reach the node."""
     nodes = _legs(sim='true', lowerbody_config='sim', start_position_verified='true',
-                  policy='fame', config='sim_safety_split.yaml', start_delay='5.0')
+                  policy='fame', config='relax_safety_split.yaml', start_delay='5.0')
     assert nodes['lowerbody_controller_node'] == Started('golem_lowerbody_rl', [], 0.0, {
         'robot': 'h12', 'config': 'sim', 'policy': 'fame', 'use_sim_time': False})
 

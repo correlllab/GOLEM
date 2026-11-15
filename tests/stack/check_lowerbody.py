@@ -109,7 +109,6 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--expected-policy', default='almi',
                         help='The policy /lowerbody/active_policy must name in every scored phase')
-    parser.add_argument('--confirm-engage', action='store_true', help='Call confirm_engage on the isolated simulation domain')
     parser.add_argument('--wall-timeout', type=float, default=600.)
     args = parser.parse_args()
     domain = int(os.environ.get('ROS_DOMAIN_ID', '0'))
@@ -147,7 +146,7 @@ def main():
                              QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE))
     node.create_subscription(LowState, '/lowstate', on_state, qos_profile_sensor_data)
     confirm = node.create_client(Trigger, '/lowerbody/confirm_engage')
-    future = None
+    future, confirmed, next_confirm = None, False, 0.
     file_position, pending = 0, ''
     deadline = time.monotonic()+args.wall_timeout
     def pump(speed=0.):
@@ -179,11 +178,15 @@ def main():
     try:
         while True:
             pump()
-            if args.confirm_engage and future is None and confirm.service_is_ready():
+            # The sim run config waits for the operator's confirm, as the real one does; the
+            # node refuses it until the pre-pose is held and ready, so retry once a second.
+            if not confirmed and future is None and confirm.service_is_ready() and \
+                    time.monotonic() >= next_confirm:
                 future = confirm.call_async(Trigger.Request())
             if future is not None and future.done():
                 response = future.result()
-                assert response is not None and response.success, f'Engage rejected: {response}'
+                future, next_confirm = None, time.monotonic() + 1.
+                confirmed = response is not None and response.success
             if (state['clock'] is not None and state['policy'] == args.expected_policy and
                 state['lowstate_at'] is not None and time.monotonic()-state['lowstate_at'] < 2. and
                 rows and abs(rows[-1]['sim_time']-state['clock']) < .25 and not rows[-1]['support_active']):

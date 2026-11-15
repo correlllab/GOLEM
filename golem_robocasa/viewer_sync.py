@@ -41,13 +41,14 @@ def band_overlay(band, body_id):
     return draw
 
 
-def open_viewer(model, data, lock, band, body, tag, timings=None):
+def open_viewer(model, data, lock, band, body, tag, timings=None, key_callbacks=()):
     """Launch the passive viewer on its own copy of data, framed on body, and start its sync thread.
 
     lock is the physics loop's lock (ViewerSync). band, the sim's ElasticBand
     or None, is drawn while enabled and toggled by SPACE. Collision geoms are
-    hidden. A framing failure is logged under [tag]. Returns (handle,
-    view_sync); close them with close_viewer.
+    hidden. Each of key_callbacks also gets every key the viewer passes on.
+    A framing failure is logged under [tag]. Returns (handle, view_sync);
+    close them with close_viewer.
     """
     import mujoco.viewer
 
@@ -57,9 +58,14 @@ def open_viewer(model, data, lock, band, body, tag, timings=None):
     with lock:
         copy_display_state(viewer_data, data)
     mujoco.mj_forward(model, viewer_data)
-    if band is not None:
-        # SPACE in the viewer toggles the band (ElasticBand.key_callback).
-        handle = mujoco.viewer.launch_passive(model, viewer_data, key_callback=band.key_callback)
+    # SPACE in the viewer toggles the band (ElasticBand.key_callback).
+    callbacks = ((band.key_callback,) if band is not None else ()) + tuple(key_callbacks)
+    if callbacks:
+        def on_key(keycode):
+            """Pass a viewer key to every callback."""
+            for callback in callbacks:
+                callback(keycode)
+        handle = mujoco.viewer.launch_passive(model, viewer_data, key_callback=on_key)
     else:
         handle = mujoco.viewer.launch_passive(model, viewer_data)
     handle.opt.geomgroup[0] = 0   # hide collision geoms

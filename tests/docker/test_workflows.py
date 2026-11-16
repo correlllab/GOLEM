@@ -532,7 +532,7 @@ if 'config' in sys.argv:
                 self.assertIn('GOLEM_SPAWN_BACKOFF=2.0', env)
                 self.assertEqual('GOLEM_CMD_TIMEOUT=' in env, robot == 'g1')
                 self.assertFalse(any(e.startswith('GOLEM_CMD_TIMEOUT') for e in env if e != 'GOLEM_CMD_TIMEOUT='))
-                self.assertEqual('GOLEM_SPAWN_MARGIN=' in env, robot == 'h12')
+                self.assertIn('GOLEM_SPAWN_MARGIN=', env)
                 self.assertEqual(self.overlay() in self.compose_files(run), robot == 'g1')
                 self.assertIn('/home/code/tests/sim/x.py sim --out /out', run[-1])
                 # The H1-2 sim imports magpie_msgs, which launch_robocasa.sh builds into msgs_ws.

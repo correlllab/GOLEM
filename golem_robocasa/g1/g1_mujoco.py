@@ -46,6 +46,10 @@ BAND_DAMPING = 2e3       # N*s/m
 # m: the spawn puts the lowest collision geom this far above the floor, so the
 # robot hangs from the band with its feet on the floor.
 SPAWN_CLEARANCE = 0.001
+# m of free space the spawn keeps from every robot collision geom to any non-floor geom, so
+# nothing starts touching and the limp arms have room under the band (their sag is
+# unmeasured; GOLEM_SPAWN_MARGIN overrides it).
+SPAWN_MARGIN = 0.05
 # s of wall lag the pacer repays at most; past it, it resyncs instead of catching up.
 MAX_LAG = 0.1
 # s of sim time between the loop's real-time factor logs.
@@ -61,15 +65,17 @@ UNSTABLE = (mujoco.mjtWarning.mjWARN_BADQPOS, mujoco.mjtWarning.mjWARN_BADQVEL,
             mujoco.mjtWarning.mjWARN_BADQACC)
 
 
-def spawn(env, resolver, backoff=0.0):
+def spawn(env, resolver, backoff=0.0, margin=SPAWN_MARGIN):
     """Put the robot at rest in g1_robosuite.STANCE, hands open, clear of the fixtures.
 
     Call after env.reset(), whose zero-action settling folds the limp robot
     (and whose initialization noise perturbs every joint). The robot is placed
     at RoboCasa's spawn, its lowest collision geom SPAWN_CLEARANCE above the
-    floor, and backed off (its -x) until it penetrates no fixture; backoff (m)
-    then backs it up to that much further into open floor. Zeroes every
-    velocity in the scene.
+    floor, and backed off (its -x), shifting sideways where that is not enough
+    (robosuite_common.place_robot_collision_free), until every robot collision
+    geom is margin (m) from any non-floor geom; backoff (m) then backs it up to
+    that much further into open floor. The controller's start-up moves the arms
+    to its home, which is the spawn pose. Zeroes every velocity in the scene.
     """
     data = env.sim.data._data
     data.qpos[resolver.body.qpos] = [g1_robosuite.STANCE.get(n, 0.0) for n in BODY_JOINTS]
@@ -79,7 +85,7 @@ def spawn(env, resolver, backoff=0.0):
     g1_robosuite.place_robot_collision_free(
         env, env.init_robot_base_pos,
         robosuite_common.euler_to_wxyz(getattr(env, "init_robot_base_ori", None)),
-        clearance=SPAWN_CLEARANCE, extra_backoff=backoff,
+        clearance=SPAWN_CLEARANCE, extra_backoff=backoff, margin=margin,
     )
 
 
@@ -136,7 +142,10 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, duration=0.0
     try:
         # GOLEM_SPAWN_BACKOFF (m, default 0: at the counter) backs the robot
         # further into open floor; Nav2 needs a free start cell to plan (~1.0).
-        spawn(env, resolver, backoff=float(os.environ.get("GOLEM_SPAWN_BACKOFF", "0") or 0))
+        # GOLEM_SPAWN_MARGIN (m, unset: SPAWN_MARGIN) is the clearance to the fixtures.
+        _margin = os.environ.get("GOLEM_SPAWN_MARGIN", "").strip()
+        spawn(env, resolver, backoff=float(os.environ.get("GOLEM_SPAWN_BACKOFF", "0") or 0),
+              margin=float(_margin) if _margin else SPAWN_MARGIN)
         print("[g1_mujoco] initial stance: legs at Unitree's default angles, everything else at 0")
     except Exception as e:
         print(f"[g1_mujoco] clean reset skipped: {e}")

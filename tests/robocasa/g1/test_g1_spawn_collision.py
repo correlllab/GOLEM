@@ -68,7 +68,7 @@ class PlacementTests(unittest.TestCase):
         start_pen = total_penetration(m, d)
         self.assertGreater(start_pen, 0, "the scene must start in collision")
         # Too few iterations to clear it, so the give-up path runs.
-        _place(m, d, step=0.02, max_iters=3, clearance=0.02)
+        _place(m, d, step=0.02, max_iters=3, clearance=0.02, lateral_offsets=(0.0,))
         mujoco.mj_forward(m, d)
         self.assertLessEqual(total_penetration(m, d), start_pen + 1e-9)
         self.assertLess(d.qpos[free_qadr(m)], 0.0, "give-up keeps the most-backed-off (least-penetrating) try")

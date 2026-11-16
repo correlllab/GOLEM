@@ -25,7 +25,7 @@ from robosuite.models.robots.manipulators.legged_manipulator_model import (
 from robosuite.robots import register_robot_class
 
 import robosuite_common
-from robosuite_common import ROBOT_PREFIXES, backward_dir, place_robot_clear, robot_env_contacts
+from robosuite_common import place_robot_clear
 
 _ASSETS = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "CL_Assets", "robosuite_assets")
@@ -179,126 +179,22 @@ class H1_2(LeggedManipulatorModel):
         return {"right": "right_hand", "left": "left_hand"}
 
 
-def _robot_env_gap(model, data, margin, prefixes=ROBOT_PREFIXES, floor_prefix="floor"):
-    """Return the smallest distance (m) from a robot geom to a non-floor environment geom.
-
-    Capped at margin, negative when they overlap. One collision pass with the
-    robot geoms' contact margin raised to margin finds every pair closer than
-    that; mj_geomDistance then measures each pair, since contact distances
-    under an inflated margin are unreliable (box-box can report tens of cm of
-    false penetration). Floors (bodies or geoms named floor*) are skipped: the
-    feet always stand within a few cm of them. The kinematics must be current;
-    the contacts are recomputed with the model's own margins before returning.
-    """
-    import mujoco
-
-    bodies = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, b) or "" for b in model.geom_bodyid]
-    geoms = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, g) or "" for g in range(model.ngeom)]
-    robot = np.array([b.startswith(prefixes) for b in bodies])
-    floor = np.array([b.startswith(floor_prefix) or g.startswith(floor_prefix)
-                      for b, g in zip(bodies, geoms)])
-    saved = model.geom_margin.copy()
-    saved_flags = model.opt.disableflags
-    try:
-        model.geom_margin[robot] = np.maximum(saved[robot], margin)
-        # The midphase culls pairs in multi-geom bodies by bounding volumes that
-        # ignore the inflated margin, which would drop near pairs.
-        model.opt.disableflags = saved_flags | mujoco.mjtDisableBit.mjDSBL_MIDPHASE
-        mujoco.mj_collision(model, data)
-        pairs = set()
-        for i in range(data.ncon):
-            g1, g2 = int(data.contact[i].geom1), int(data.contact[i].geom2)
-            if robot[g1] != robot[g2] and not (floor[g1] or floor[g2]):
-                pairs.add((g1, g2))
-        fromto = np.zeros(6)
-        gap = min([margin] + [mujoco.mj_geomDistance(model, data, g1, g2, margin, fromto)
-                              for g1, g2 in pairs])
-    finally:
-        model.geom_margin[:] = saved
-        model.opt.disableflags = saved_flags
-        mujoco.mj_collision(model, data)
-    return gap
-
-
-def _overlaps_behind(model, data, pos, back):
-    """Return whether the robot overlaps an environment geom on the back side of pos (xy)."""
-    return any(np.dot(np.asarray(c.pos[:2]) - pos[:2], back[:2]) > 0.0
-               for c in robot_env_contacts(model, data))
-
-
-def _placed_gap(env, pos, base_quat, clearance, margin, poses, back):
-    """Return (gap, blocked) for the base at pos over the current joints and every pose in poses.
-
-    poses are (qpos indices, values) pairs. gap is the smallest
-    _robot_env_gap; blocked means some pose overlaps a geom behind the base.
-    Leaves the robot at pos in its current joint state.
-    """
-    model = env.sim.model._model
-    data = env.sim.data._data
-    gap, blocked = margin, False
-    for idx, values in ((None, None), *poses):
-        if idx is not None:
-            spawn = data.qpos[idx].copy()
-            data.qpos[idx] = values
-        place_robot_clear(env, pos, base_quat, clearance)
-        pose_gap = _robot_env_gap(model, data, margin)
-        if pose_gap < 0.0:
-            blocked = blocked or _overlaps_behind(model, data, pos, back)
-        gap = min(gap, pose_gap)
-        if idx is not None:
-            data.qpos[idx] = spawn
-    if poses:
-        place_robot_clear(env, pos, base_quat, clearance)
-    return gap, blocked
-
-
 def place_robot_collision_free(env, base_pos, base_quat, step=0.02, max_iters=50,
-                               clearance=0.02, extra_backoff=0.0, margin=0.0, poses=()):
-    """Place the robot at its spawn with margin (m) of free space to every non-floor environment geom.
+                               clearance=0.02, extra_backoff=0.0, margin=0.0, poses=(),
+                               lateral_offsets=robosuite_common.LATERAL_OFFSETS):
+    """Place the H1-2 near its spawn with margin (m) of free space to every non-floor geom.
 
-    From base_pos, base_quat (wxyz) it places the robot clearance (m) above the
-    floor, then backs it off (the robot's -x) in step (m) increments, up to
-    max_iters, until the gap reaches margin; the orientation never changes.
-    margin 0 only removes overlap (1 mm minimum, so nothing starts touching).
-    poses are extra (qpos indices, values) joint configurations in which the
-    margin must hold too; the robot is left in its current joint state.
-
-    If the margin is not reached, or the robot starts overlapping something
-    behind it, it restores the position with the widest gap and warns, so the
-    sim still starts and never ends up on the far side of a fixture.
-    extra_backoff (m) then backs it further into open floor while the margin
-    holds, for Nav2, which needs a free start cell.
+    robosuite_common.place_robot_collision_free with the H1-2's placement: its
+    lowest geom (visual included) clearance (m) above the floor. Returns the gap.
     """
-    back = backward_dir(base_quat)
-    margin = max(margin, 1e-3)   # geoms that merely touch still make contacts
-    pos = np.array(base_pos, dtype=float)
-    best_pos, best_gap = None, None
-    for i in range(max_iters + 1):
-        gap, blocked = _placed_gap(env, pos, base_quat, clearance, margin, poses, back)
-        if i and blocked:
-            break
-        if best_gap is None or gap > best_gap:
-            best_gap, best_pos = gap, pos.copy()
-        if gap >= margin:
-            if i:
-                print(f"[h1_2_robosuite] moved robot back {i * step:.2f} m for "
-                      f"{margin:.2f} m spawn clearance")
-            if extra_backoff > 0.0:
-                last_clear, moved = pos.copy(), 0.0
-                for _ in range(int(extra_backoff / step)):
-                    pos[:2] += step * back[:2]
-                    if _placed_gap(env, pos, base_quat, clearance, margin, poses, back)[0] < margin:
-                        break
-                    last_clear, moved = pos.copy(), moved + step
-                place_robot_clear(env, last_clear, base_quat, clearance)
-                if moved:
-                    print(f"[h1_2_robosuite] backed robot {moved:.2f} m further into open floor (nav spawn)")
-            return
-        pos[:2] += step * back[:2]
-    place_robot_clear(env, best_pos, base_quat, clearance)
-    print(f"[h1_2_robosuite] WARNING: best spawn clearance {best_gap:.3f} m is below the "
-          f"requested {margin:.2f} m (searched {i * step:.2f} m back); keeping the "
-          f"widest-gap position")
+    def place(env, pos, quat):
+        """Put the pelvis at pos, its lowest geom clearance above the floor."""
+        place_robot_clear(env, pos, quat, clearance)
+
+    return robosuite_common.place_robot_collision_free(
+        env, base_pos, base_quat, place, step=step, max_iters=max_iters, margin=margin,
+        poses=poses, extra_backoff=extra_backoff, lateral_offsets=lateral_offsets,
+        tag="h1_2_robosuite")
 
 
 # RoboCasa's placement offset (m): the pelvis z. The soles are 1.041 m below

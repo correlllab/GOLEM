@@ -114,6 +114,34 @@ def _limp_upper_body_poses(model, motor_qpos, spawn):
     return poses
 
 
+# The arm postures (rad, left arm then right, each shoulder pitch/roll/yaw, elbow, wrist
+# roll/pitch/yaw) golem_upper_ik's frame_task_server moves through at start, while the band
+# still holds the robot at its spawn: golem_upper_ik/config/h12/robot.yaml's
+# startup_sequence and named_configs, copied because the sim reads no controller config
+# (tests/docker/test_sim_startup_poses.py keeps them equal).
+STARTUP_ARM_STAGES = (
+    ("init_1", (0.0, 0.35, 0.0, 1.3, 0.0, 0.0, 0.0, 0.0, -0.35, 0.0, 1.3, 0.0, 0.0, 0.0)),
+    ("init_2", (0.7, 0.35, 0.0, 1.3, 0.0, 0.0, 0.0, 0.7, -0.35, 0.0, 1.3, 0.0, 0.0, 0.0)),
+    ("init_3", (0.7, 0.35, 0.0, 0.0, 0.0, 0.0, 0.0, 0.7, -0.35, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    ("home", (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+)
+# Points checked along each start-up move, its end included: the arms sweep between stages.
+STARTUP_STEPS = 4
+
+
+def _startup_arm_poses(motor_qpos, spawn):
+    """Return the poses of the start-up arm moves from the spawn pose, as (qpos indices, values) pairs."""
+    poses = []
+    prev = np.asarray(spawn, dtype=float)
+    for _, arms in STARTUP_ARM_STAGES:
+        target = prev.copy()
+        target[_ARMS[0]:_ARMS[0] + 14] = arms
+        for a in np.linspace(0.0, 1.0, STARTUP_STEPS + 1)[1:]:
+            poses.append((motor_qpos, (1.0 - a) * prev + a * target))
+        prev = target
+    return poses
+
+
 def spawn(env, resolver, backoff=0.0, margin=None, offset=(0.0, 0.0)):
     """Put the robot at rest in its spawn pose, clear of the fixtures by margin, in the sagged poses too.
 
@@ -121,9 +149,12 @@ def spawn(env, resolver, backoff=0.0, margin=None, offset=(0.0, 0.0)):
     The robot is placed at RoboCasa's spawn shifted by offset ((dx, dy) m,
     world), its lowest geom 2 cm above the floor, and backed off (its -x) until
     every robot geom is margin (m; None: the env's spawn_margin, else 0.20)
-    from any non-floor geom, in the spawn pose and the poses the unpowered
-    upper body sags into; backoff (m) then backs it up to that much further
-    into open floor. Zeroes every velocity in the scene.
+    from any non-floor geom, in the spawn pose, the poses the unpowered upper
+    body sags into and along the controller's start-up arm moves
+    (STARTUP_ARM_STAGES); where backing straight off does not reach it, the
+    search shifts sideways too (robosuite_common.place_robot_collision_free).
+    backoff (m) then backs it up to that much further into open floor. Zeroes
+    every velocity in the scene.
     """
     data = env.sim.data._data
     init_qpos = _initial_motor_qpos()
@@ -136,7 +167,8 @@ def spawn(env, resolver, backoff=0.0, margin=None, offset=(0.0, 0.0)):
         env, pos, robosuite_common.euler_to_wxyz(getattr(env, "init_robot_base_ori", None)),
         extra_backoff=backoff,
         margin=getattr(env, "spawn_margin", 0.20) if margin is None else margin,
-        poses=_limp_upper_body_poses(env.sim.model._model, resolver.motor_qpos, init_qpos),
+        poses=(_limp_upper_body_poses(env.sim.model._model, resolver.motor_qpos, init_qpos)
+               + _startup_arm_poses(resolver.motor_qpos, init_qpos)),
     )
 
 

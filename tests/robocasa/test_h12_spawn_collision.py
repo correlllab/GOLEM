@@ -37,9 +37,9 @@ ARM_SCENE = SCENE.replace(
 
 
 def _gap(m, d, margin):
-    """Return _robot_env_gap after mj_forward."""
+    """Return robosuite_common.robot_env_gap after mj_forward."""
     mujoco.mj_forward(m, d)
-    return hr._robot_env_gap(m, d, margin)
+    return rc.robot_env_gap(m, d, margin)
 
 
 def _place(m, d, base_pos=(0.0, 0.0, 1.0), **kwargs):
@@ -75,14 +75,14 @@ class PlacementTests(unittest.TestCase):
         start_pen = total_penetration(m, d)
         self.assertGreater(start_pen, 0, "the scene must start in collision")
         # Clearing the counter takes ~11 steps; 3 forces the give-up path.
-        _place(m, d, step=0.02, max_iters=3, clearance=0.02)
+        _place(m, d, step=0.02, max_iters=3, clearance=0.02, lateral_offsets=(0.0,))
         mujoco.mj_forward(m, d)
         self.assertLessEqual(total_penetration(m, d), start_pen + 1e-9)
         self.assertLess(d.qpos[free_qadr(m)], 0.0, "give-up keeps the most-backed-off (least-penetrating) try")
 
 
 class GapTests(unittest.TestCase):
-    """Check _robot_env_gap, the free space the margin is measured in."""
+    """Check robot_env_gap, the free space the margin is measured in."""
 
     def test_ignores_floor_and_caps_at_margin(self):
         """The floor does not count toward the gap, which is capped at the margin."""
@@ -126,11 +126,12 @@ class MarginTests(unittest.TestCase):
         self.assertTrue(-0.22 - 1e-9 <= d.qpos[free_qadr(m)] < -0.18, "margin 0 only clears the overlap")
 
     def test_blocked_behind_keeps_widest_gap(self):
-        """With a wall behind, the search stops at the wall and keeps the widest gap in front of it."""
+        """With a wall behind and no sideways shift, the search stops at the wall and keeps the widest gap."""
         m, d = load(BLOCKED)
         out = io.StringIO()
         with redirect_stdout(out):
-            hr.place_robot_collision_free(FakeEnv(m, d), np.array([0.0, 0.0, 1.0]), IDENTITY, margin=0.2)
+            hr.place_robot_collision_free(FakeEnv(m, d), np.array([0.0, 0.0, 1.0]), IDENTITY,
+                                          margin=0.2, lateral_offsets=(0.0,))
         searched = float(re.search(r"searched ([0-9.]+) m back", out.getvalue()).group(1))
         self.assertLess(searched, 0.5, "the search stops at the wall behind")
         gap = _gap(m, d, 0.2)
@@ -149,6 +150,37 @@ class MarginTests(unittest.TestCase):
         self.assertLess(d.qpos[free_qadr(m)], upright_x - 0.05, "the swung pose needs more room")
         d.qpos[arm[0]] = math.pi / 2
         self.assertGreaterEqual(_gap(m, d, 0.2), 0.2 - 1e-9, "the margin holds in the extra pose")
+
+
+class SidewaysTests(unittest.TestCase):
+    """Check the sideways shifts the search tries when backing straight off is not enough."""
+
+    def test_shifts_sideways_past_a_wall_behind(self):
+        """Blocked behind, the search finds the margin beside the counter, at the smallest shift."""
+        m, d = load(BLOCKED)
+        _place(m, d, margin=0.2)
+        self.assertGreaterEqual(_gap(m, d, 0.2), 0.2 - 1e-9)
+        y = float(d.qpos[free_qadr(m) + 1])
+        # The counter's side is at |y| 0.2, the hand's half width 0.1: 0.5 m clears it by 0.2.
+        self.assertAlmostEqual(abs(y), 0.5, places=9)
+        self.assertGreater(d.qpos[free_qadr(m)], -0.5, "stays in front of the wall")
+
+    def test_straight_back_wins_when_it_reaches_the_margin(self):
+        """With room behind, the robot is never shifted sideways."""
+        m, d = load()
+        _place(m, d, margin=0.2)
+        self.assertEqual(float(d.qpos[free_qadr(m) + 1]), 0.0)
+
+    def test_warns_and_returns_the_gap_when_nothing_reaches_the_margin(self):
+        """Out of room everywhere, it warns, keeps the widest gap and returns it."""
+        m, d = load(BLOCKED)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            gap = hr.place_robot_collision_free(FakeEnv(m, d), np.array([0.0, 0.0, 1.0]), IDENTITY,
+                                                margin=0.2, lateral_offsets=(0.0, 0.1, -0.1))
+        self.assertIn("WARNING", out.getvalue())
+        self.assertAlmostEqual(gap, _gap(m, d, 0.2), places=9)
+        self.assertTrue(0.0 < gap < 0.2, gap)
 
 
 if __name__ == "__main__":

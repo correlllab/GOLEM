@@ -147,9 +147,14 @@ only when pinned, so an unpinned run has no `cpuset` key.
 The compose files pass the RoboCasa sims' knobs from the shell or `docker/.env`:
 `GOLEM_DISPLAY=auto|gui|headless` (the wrappers' display mode), `GOLEM_CAMERAS=0`,
 `GOLEM_SPAWN_BACKOFF=<m>`, `GOLEM_CMD_TIMEOUT=<sim-s>`.
-`GOLEM_SPAWN_MARGIN=<m>` (default 0.20; a task env can set its own via
-`spawn_margin`, as `battery_env.py` does) sets the H1-2's minimum spawn
-clearance from non-floor geoms. `GOLEM_CAMERA_SCALE=<f>`
+`GOLEM_SPAWN_MARGIN=<m>` sets the minimum spawn clearance from non-floor geoms
+(the H1-2's default 0.20, which a task env can set via `spawn_margin`, as
+`battery_env.py` does; the G1's 0.05). Both robots' spawn searches
+(`robosuite_common.place_robot_collision_free`) back the robot off, and shift it
+sideways where that is not enough, until the clearance holds; the H1-2's must
+also hold in its limp sag poses and along `golem_upper_ik`'s start-up arm moves
+(`h12_mujoco.STARTUP_ARM_STAGES`, kept equal to its `robot.yaml` by
+`tests/docker/test_sim_startup_poses.py`), which run while the band still holds it. `GOLEM_CAMERA_SCALE=<f>`
 (H1-2 default 0.5 of the real 1280x720), `GOLEM_CAMERA_DEPTH=0` and
 `GOLEM_CAMERA_POINTCLOUD=0` tune the H1-2's RoboCasa cameras.
 `GOLEM_SIM_RATE=<factor>|max` sets the sims' target real-time factor (default
@@ -589,7 +594,7 @@ for the band.) Its knobs are `GOLEM_LIDAR`, `GOLEM_LIDAR_POINTS` (points per
 frame, default the real sensor's 20,000), `GOLEM_LIDAR_HZ`, `GOLEM_CAMERAS`,
 `GOLEM_CAMERA_HZ`,
 `GOLEM_CAMERA_SCALE` (G1 default 0.5), `GOLEM_CMD_TIMEOUT`,
-`GOLEM_SPAWN_BACKOFF`, `GOLEM_SIM_ODOM`, `GOLEM_SIM_EXPERIMENT`,
+`GOLEM_SPAWN_BACKOFF`, `GOLEM_SPAWN_MARGIN`, `GOLEM_SIM_ODOM`, `GOLEM_SIM_EXPERIMENT`,
 `GOLEM_SIM_RATE` (as on the H1-2, above). Their
 defaults are in the code
 that reads them: `SensorConfig` in `g1/g1_sensors.py` (sensors),
@@ -597,7 +602,7 @@ that reads them: `SensorConfig` in `g1/g1_sensors.py` (sensors),
 (spawn, odom), `measurement_bridge.py` (experiment) and `sim_common.py`
 (rate); the compose files pass them
 (`docker/docker-compose.g1.yml` the G1-only ones). The G1 sim ignores the H1-2-only
-knobs (`GOLEM_SPAWN_MARGIN`, `GOLEM_SPAWN_OFFSET`, `GOLEM_HAND_CAMERA_RES`,
+knobs (`GOLEM_SPAWN_OFFSET`, `GOLEM_HAND_CAMERA_RES`,
 `GOLEM_CAMERA_DEPTH`, `GOLEM_CAMERA_POINTCLOUD`). It refuses
 `--timing`, and the H1-2 sim refuses `--duration` (`sim_common.py`).
 

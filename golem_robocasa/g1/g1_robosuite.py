@@ -34,7 +34,7 @@ from robosuite.models.robots.manipulators.legged_manipulator_model import (
 from robosuite.robots import register_robot_class
 
 import robosuite_common
-from robosuite_common import backward_dir, euler_to_wxyz, robot_env_contacts
+from robosuite_common import euler_to_wxyz
 
 G1_ASSETS = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -299,49 +299,22 @@ def place_robot_clear(env, pos, quat_wxyz, clearance=0.02):
     robosuite_common.place_robot_clear(env, pos, quat_wxyz, clearance, colliding_only=True)
 
 
-def place_robot_collision_free(env, base_pos, base_quat, step=0.02, max_iters=25,
-                               clearance=0.02, extra_backoff=0.0):
-    """Place the robot at its spawn without penetrating the environment, backing it off as needed.
+def place_robot_collision_free(env, base_pos, base_quat, step=0.02, max_iters=50,
+                               clearance=0.02, extra_backoff=0.0, margin=0.0, poses=(),
+                               lateral_offsets=robosuite_common.LATERAL_OFFSETS):
+    """Place the G1 near its spawn with margin (m) of free space to every non-floor geom.
 
-    From base_pos, base_quat (wxyz) it places the robot clearance (m) above the
-    floor, then backs it off (the robot's -x) in step (m) increments, up to
-    max_iters, until no robot geom penetrates an environment geom; the
-    orientation never changes. If it never clears, it restores the position
-    with the fewest contacts (then the least total depth) and warns, so the sim
-    still starts. extra_backoff (m) then backs it further into open floor while
-    it stays clear, for Nav2, which needs a free start cell.
+    robosuite_common.place_robot_collision_free with the G1's placement: its
+    lowest colliding geom clearance (m) above the floor. Returns the gap.
     """
-    back = backward_dir(base_quat)
-    model = env.sim.model._model
-    data = env.sim.data._data
-    pos = np.array(base_pos, dtype=float)
-    best_pos, best_score = None, None
-    for i in range(max_iters + 1):
-        place_robot_clear(env, pos, base_quat, clearance)
-        contacts = robot_env_contacts(model, data)
-        score = (len(contacts), sum(-c.dist for c in contacts))
-        if best_score is None or score < best_score:
-            best_score, best_pos = score, pos.copy()
-        if not contacts:
-            if i:
-                print(f"[g1_robosuite] moved robot back {i * step:.2f} m to clear spawn collision")
-            if extra_backoff > 0.0:
-                last_clear, moved = pos.copy(), 0.0
-                for _ in range(int(extra_backoff / step)):
-                    pos[:2] += step * back[:2]
-                    place_robot_clear(env, pos, base_quat, clearance)
-                    if robot_env_contacts(model, data):
-                        break
-                    last_clear, moved = pos.copy(), moved + step
-                place_robot_clear(env, last_clear, base_quat, clearance)
-                if moved:
-                    print(f"[g1_robosuite] backed robot {moved:.2f} m further into open floor (nav spawn)")
-            return
-        pos[:2] += step * back[:2]
-    place_robot_clear(env, best_pos, base_quat, clearance)
-    print(f"[g1_robosuite] WARNING: spawn still in collision after backing off "
-          f"{max_iters * step:.2f} m; keeping best position "
-          f"({best_score[0]} contact(s), {best_score[1]:.3f} m penetration)")
+    def place(env, pos, quat):
+        """Put the pelvis at pos, its lowest colliding geom clearance above the floor."""
+        place_robot_clear(env, pos, quat, clearance)
+
+    return robosuite_common.place_robot_collision_free(
+        env, base_pos, base_quat, place, step=step, max_iters=max_iters, margin=margin,
+        poses=poses, extra_backoff=extra_backoff, lateral_offsets=lateral_offsets,
+        tag="g1_robosuite")
 
 
 # RoboCasa's placement offset (m): x, y along the fixture from its anchor,

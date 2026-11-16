@@ -216,7 +216,7 @@ sim_test_start_sim() {
     shift
     local robot_env prepare=''
     if [ "$SIM_TEST_ROBOT" = g1 ]; then
-        robot_env=(-e GOLEM_CMD_TIMEOUT=)
+        robot_env=(-e GOLEM_CMD_TIMEOUT= -e GOLEM_SPAWN_MARGIN=)
     else
         prepare="GOLEM_PREPARE_ONLY=1 /home/code/h12_sim_scripts/launch_robocasa.sh && \
         source /home/code/msgs_ws/install/setup.bash && "

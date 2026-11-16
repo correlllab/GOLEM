@@ -83,7 +83,7 @@ ROBOTS = {"h12": {"min_pelvis_z": 0.77, "height": 1.80},
           "g1": {"min_pelvis_z": bringup_test.MIN_PELVIS_Z, "height": 1.40}}
 # The goal, from the sim's geometry.
 GOAL_AHEAD = 1.5  # m from the spawn's pelvis along its heading
-GOAL_CLEARANCE = 0.75  # m to the nearest occupied cell: the footprint's half diagonal + inflation 0.4
+GOAL_CLEARANCE = 0.75  # m to the nearest occupied cell: the footprint's half diagonal + a 0.4 m margin
 PATH_CLEARANCE = nav_test.PATH_CLEARANCE  # 0.35 m
 # The drive.
 NAV2_NODES = nav_test.NAV2_NODES

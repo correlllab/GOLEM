@@ -80,7 +80,7 @@ GRID_RES = 0.05  # m
 GRID_HALF = 5.0  # m around the spawn
 GOAL_Z = (0.02, 1.40)  # m: what the walking robot (1.32 m tall) can touch
 GOAL_DISTANCE = (2.0, 2.5, 3.0)  # m from the spawn's pelvis: min, preferred, max
-GOAL_CLEARANCE = 1.0  # m to the nearest occupied cell (footprint 0.5 m + inflation 0.55)
+GOAL_CLEARANCE = 1.0  # m to the nearest occupied cell (footprint 0.5 m + a 0.5 m margin)
 PATH_CLEARANCE = 0.35  # m: the robot fits through (half width 0.24 m)
 # m: the scan's height band in the world: pelvis_level -0.59 to +0.45 m, with the pelvis at
 # 0.72-0.75 m standing and walking, so 0.13-1.20 m; a little wider.

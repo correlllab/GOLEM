@@ -127,7 +127,7 @@ controller_server:
         # m from the goal inside which the repulsion is turned off.
         near_goal_distance: 0.5
         # m, equal to the costmaps' inflation_radius.
-        inflation_radius: 0.4
+        inflation_radius: 0.2
         # Equal to the costmaps' inflation layer cost_scaling_factor.
         cost_scaling_factor: 3.0
       GoalCritic:
@@ -297,7 +297,7 @@ global_costmap:
         # Steepness of the cost's fall-off with distance from an obstacle.
         cost_scaling_factor: 3.0
         # m around obstacles that carries cost.
-        inflation_radius: 0.4
+        inflation_radius: 0.2
 
 local_costmap:
   local_costmap:
@@ -349,5 +349,5 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 1.0
-        inflation_radius: 0.4
+        inflation_radius: 0.2
       always_send_full_costmap: True

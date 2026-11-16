@@ -42,6 +42,14 @@ The same nodes, executables and remaps on every robot:
   which can stall while the robot walks;
 - `cloud_registered_to_laserscan` (pointcloud_to_laserscan) → `/converted_scan`
   → slam_toolbox (`map → odom`);
+- `dynamic_footprint`: the local costmap's footprint (`/local_costmap/footprint`,
+  `geometry_msgs/Polygon`) at 5 Hz, the convex hull on the floor of `nav2.yaml`'s
+  local footprint (the body, which it never shrinks below) and the padded collision
+  boxes of `pipeline.yaml`'s `footprint.arm_links`, posed by TF. While a
+  `/frame_task` or `/named_config` goal is accepted, executing or cancelling, and
+  while an arm link has no TF within 0.5 s, it is the body alone, so a hand
+  reaching for a handle or a counter does not stop the base. The global costmap
+  keeps `nav2.yaml`'s fixed footprint, so planned paths do not change with the arms;
 - Nav2's navigation half, with `behavior_server`'s `cmd_vel` remapped so every
   Nav2 command goes through the velocity smoother.
 
@@ -52,7 +60,8 @@ config (`MID360_config.json`, read by the real robot's driver launch), Nav2
 (`nav2.yaml`), OctoMap (`octomap.yaml`) and `pipeline.yaml`, whose keys are all
 required: `lidar_link` (the URDF link of the raw sensor frame), `scan`
 (`min_height`, `max_height`: the scan band in m above the floor) and
-`level_odom` (`min_floor_depth`). The H1-2's FAST-LIO extrinsic is the URDF's
+`level_odom` (`min_floor_depth`) and `footprint` (`arm_links`, `padding`: the links
+and the m of padding `dynamic_footprint` widens the local footprint by). The H1-2's FAST-LIO extrinsic is the URDF's
 `livox_link` in `livox_imu_link`; `test/test_navigation_launch.py` checks it
 against the URDF.
 

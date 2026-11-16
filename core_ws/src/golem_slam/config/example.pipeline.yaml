@@ -18,3 +18,12 @@ level_odom:
   # m below the lidar a point must be to count as a floor candidate: deeper than table
   # tops near lidar height, shallower than the floor in every stance. > 0.
   min_floor_depth: 1.0
+
+# The local costmap's footprint (golem_slam/dynamic_footprint.py): the convex hull of
+# the local costmap's footprint in nav2.yaml (the body) and these links' collision
+# boxes on the floor, the body alone while an arm goal is in flight. The global
+# costmap keeps nav2.yaml's footprint.
+footprint:
+  # URDF links with collision geometry whose boxes widen the footprint. Link names.
+  arm_links: [left_elbow_link, right_elbow_link]
+  padding: 0.05      # m added on every side of each link box, >= 0

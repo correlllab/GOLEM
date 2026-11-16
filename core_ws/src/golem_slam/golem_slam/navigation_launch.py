@@ -3,8 +3,9 @@ Build golem_slam's navigation graph, one for every robot (launch/navigation.laun
 
 The robot argument picks a config directory, config/<robot>/: FAST-LIO
 (fastlio.yaml), Nav2 (nav2.yaml), OctoMap (octomap.yaml) and the pipeline
-profile (pipeline.yaml: the lidar link, the scan's height band and level_odom's
-values). The nodes, their executables and remaps are the same on every robot.
+profile (pipeline.yaml: the lidar link, the scan's height band, level_odom's
+values and the arm links that widen the local costmap's footprint). The nodes,
+their executables and remaps are the same on every robot.
 
 Every node starts at once, with no delays or conditions; each waits for its inputs
 (TF, clouds, the map) itself. Data flows: MID-360 -> FAST-LIO -> self_filter ->
@@ -31,7 +32,8 @@ from golem_slam.body_to_pelvis import LIVOX_FRAME, static_transform_arguments, t
 
 # pipeline.yaml's keys, every one required.
 PIPELINE_KEYS = (('lidar_link',), ('scan', 'min_height'), ('scan', 'max_height'),
-                 ('level_odom', 'min_floor_depth'))
+                 ('level_odom', 'min_floor_depth'), ('footprint', 'arm_links'),
+                 ('footprint', 'padding'))
 
 
 def _config_dir():
@@ -52,6 +54,16 @@ def load_pipeline(path):
     return profile
 
 
+def local_footprint(nav2_path):
+    """Return the local costmap's footprint string from a Nav2 params file; raise if absent."""
+    with open(nav2_path) as source:
+        params = yaml.safe_load(source) or {}
+    try:
+        return params['local_costmap']['local_costmap']['ros__parameters']['footprint']
+    except (KeyError, TypeError):
+        raise RuntimeError(f'golem_slam: {nav2_path} has no local_costmap footprint') from None
+
+
 def _pipeline(context):
     """Return the graph's nodes and the Nav2 include for the robot argument."""
     robot = LaunchConfiguration('robot').perform(context)
@@ -64,6 +76,7 @@ def _pipeline(context):
     profile = load_pipeline(os.path.join(robot_config, 'pipeline.yaml'))
     use_sim_time = LaunchConfiguration('use_sim_time')
     fast_lio_config = LaunchConfiguration('fast_lio_config').perform(context)
+    body_footprint = local_footprint(LaunchConfiguration('nav2_params_file').perform(context))
 
     # The driver and the sims stamp the lidar points and the IMU 'livox_frame', the
     # raw sensor frame, which the URDF's lidar link is; this joins it to the TF tree.
@@ -183,6 +196,21 @@ def _pipeline(context):
         ]
     )
 
+    # The local costmap's footprint, widened by the arms held ahead of the body (the
+    # body polygon alone during an arm goal); the global costmap keeps the fixed one
+    # (golem_slam/dynamic_footprint.py).
+    dynamic_footprint_node = Node(
+        package='golem_slam',
+        executable='dynamic_footprint',
+        name='dynamic_footprint',
+        output='screen',
+        parameters=[{'body_footprint': body_footprint,
+                     'arm_links': profile['footprint']['arm_links'],
+                     'padding': profile['footprint']['padding'],
+                     'use_sim_time': use_sim_time}],
+        remappings=[('footprint', '/local_costmap/footprint')],
+    )
+
     # 2D SLAM on the scan: the map frame and map -> odom.
     slam_toolbox_node = Node(
         package='slam_toolbox',
@@ -236,7 +264,7 @@ def _pipeline(context):
 
     return [livox_frame_tf, fast_lio_node, body_to_pelvis_node, level_odom_node,
             self_filter_node, level_cloud_node, octomap_node, pointcloud_to_laserscan_node,
-            slam_toolbox_node, nav2_launch]
+            slam_toolbox_node, dynamic_footprint_node, nav2_launch]
 
 
 def _robot_file(name):

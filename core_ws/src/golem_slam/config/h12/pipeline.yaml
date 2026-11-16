@@ -6,3 +6,9 @@ scan:                    # above floor returns and FAST-LIO's z drift, below the
   max_height: 1.7
 level_odom:
   min_floor_depth: 1.0   # the lidar is at least ~1.4 m above the floor in every stance
+footprint:               # the local costmap's footprint (golem_slam/dynamic_footprint.py)
+  arm_links: [left_elbow_link, left_wrist_roll_link, left_wrist_pitch_link,
+              lg_left_finger, lg_right_finger,
+              right_elbow_link, right_wrist_roll_link, right_wrist_pitch_link,
+              rg_left_finger, rg_right_finger]
+  padding: 0.05

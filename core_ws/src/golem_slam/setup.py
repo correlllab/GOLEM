@@ -49,6 +49,7 @@ setup(
             'level_cloud = golem_slam.level_cloud:main',
             'self_filter = golem_slam.self_filter:main',
             'level_odom = golem_slam.level_odom:main',
+            'dynamic_footprint = golem_slam.dynamic_footprint:main',
             'record_slam_bag = golem_slam.record_slam_bag:main',
         ],
     },

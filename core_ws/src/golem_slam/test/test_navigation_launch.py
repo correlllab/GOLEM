@@ -20,6 +20,7 @@ from launch_ros.actions import Node, SetRemap
 from launch_ros.utilities import evaluate_parameters
 
 from golem_slam.body_to_pelvis import fastlio_extrinsic
+from golem_slam.navigation_launch import local_footprint
 from urdf_chain import link_transform
 
 ROBOTS = ('h12', 'g1')
@@ -123,7 +124,7 @@ def test_one_graph():
     names = {entry[3] for entry in h12 if entry[0] == 'node'}
     assert names == {'livox_frame_tf', 'fast_lio', 'body_to_pelvis', 'level_odom',
                      'self_filter', 'level_cloud', 'octomap_server',
-                     'cloud_registered_to_laserscan', 'slam_toolbox'}
+                     'cloud_registered_to_laserscan', 'slam_toolbox', 'dynamic_footprint'}
     # Humble's navigation_launch remaps the controller but not the recoveries.
     assert ('remap', 'behavior_server:cmd_vel', 'cmd_vel_nav') in h12
     assert ('include', 'navigation_launch.py') in h12
@@ -148,11 +149,12 @@ def test_profiles_drive_the_differences(robot):
     """The robot's pipeline profile and config files set what differs between robots."""
     profile = PROFILES[robot]
     with open(os.path.join(CONFIG, robot, 'pipeline.yaml')) as f:
-        assert yaml.safe_load(f) == {
-            'lidar_link': profile['lidar_link'],
-            'scan': dict(zip(('min_height', 'max_height'), profile['scan'])),
-            'level_odom': {'min_floor_depth': profile['min_floor_depth']},
-        }
+        loaded = yaml.safe_load(f)
+    assert {k: v for k, v in loaded.items() if k != 'footprint'} == {
+        'lidar_link': profile['lidar_link'],
+        'scan': dict(zip(('min_height', 'max_height'), profile['scan'])),
+        'level_odom': {'min_floor_depth': profile['min_floor_depth']},
+    }
     context, actions = pipeline(robot)
     ns = nodes(context, actions)
     scan = ns['cloud_registered_to_laserscan'][1]
@@ -172,6 +174,12 @@ def test_profiles_drive_the_differences(robot):
     assert ns['slam_toolbox'][2] == [os.path.join(CONFIG, 'slam_toolbox.yaml')]
     assert context.launch_configurations['nav2_params_file'] == os.path.join(
         CONFIG, robot, 'nav2.yaml')
+    # The footprint node starts from the local costmap's own footprint and feeds it back.
+    footprint, values, _ = ns['dynamic_footprint']
+    assert values['body_footprint'] == local_footprint(os.path.join(CONFIG, robot, 'nav2.yaml'))
+    assert list(values['arm_links']) == loaded['footprint']['arm_links']
+    assert values['padding'] == loaded['footprint']['padding']
+    assert ('footprint', '/local_costmap/footprint') in remaps(context, footprint)
 
 
 def test_the_arguments_override_the_profile_files():

@@ -29,6 +29,12 @@
 # rest, so docker/.env never changes what is tested. Each sim ignores the other
 # robot's knobs that the robocasa service also passes.
 #
+# With SIM_TEST_VIDEO=1 (a test's GOLEM_TEST_VIDEO) the run is not headless: the sim opens its
+# MuJoCo viewer and the test's bringup its RViz on the host's X display (DISPLAY), through
+# a per-run Xauthority file whose cookie names no host (the containers have their own
+# hostname and no network), and the host records both windows with ffmpeg's x11grab
+# (sim_test_video_start, sim_test_video_stop) into <out>/stack.mp4, side by side.
+#
 # Exit codes of the functions that exit: 1 a container or wait failed, or a check failed
 # (sim_test_report); 2 a bad robot, domain or OUT; 3 the core_ws build failed.
 SIM_TESTS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -94,6 +100,7 @@ sim_test_setup() {
         out=$(cd -- "$OUT" && pwd)
     fi
     export GOLEM_ROBOT=$SIM_TEST_ROBOT GOLEM_DISPLAY=headless
+    [ "${SIM_TEST_VIDEO:-0}" != 1 ] || sim_test_video_display
     ROBOT_FLAG=
     load_config
     configure_robot robocasa
@@ -161,6 +168,8 @@ sim_test_cleanup() {
     local status=$?
     trap - EXIT
     [ -z "$LOAD_PID" ] || kill "$LOAD_PID" 2>/dev/null || true
+    sim_test_video_kill
+    [ -z "${SIM_TEST_XAUTH:-}" ] || rm -f "$SIM_TEST_XAUTH"
     local sim_state
     sim_state=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$SIM" 2>/dev/null || echo 'not started')
     docker rm -f "$ROS" "$ROS-build" "$SIM" >/dev/null 2>&1 || true
@@ -182,6 +191,104 @@ sim_test_cleanup() {
     } > "$OUT/run.json"
     echo "[$TAG] artifacts: $OUT"
     exit "$status"
+}
+
+# sim_test_video_display: point the containers at the host's X display through a per-run
+# Xauthority file (SIM_TEST_XAUTH) holding DISPLAY's cookie for any host; exit 2 without a
+# display, xauth, xwininfo or ffmpeg with x11grab.
+sim_test_video_display() {
+    [ -n "${DISPLAY:-}" ] || { echo "[$TAG] GOLEM_TEST_VIDEO=1 needs the host's X display (DISPLAY)" >&2; exit 2; }
+    local tool
+    for tool in xauth xwininfo ffmpeg; do
+        command -v "$tool" >/dev/null || { echo "[$TAG] GOLEM_TEST_VIDEO=1 needs $tool on the host" >&2; exit 2; }
+    done
+    ffmpeg -hide_banner -devices 2>/dev/null | grep -q x11grab ||
+        { echo "[$TAG] GOLEM_TEST_VIDEO=1 needs an ffmpeg with x11grab" >&2; exit 2; }
+    SIM_TEST_XAUTH=$(mktemp /tmp/golem-sim-xauth.XXXXXX)
+    # ffff: the cookie's family "wild", so it matches the containers' own hostnames.
+    xauth nlist "$DISPLAY" | sed -e 's/^..../ffff/' | xauth -f "$SIM_TEST_XAUTH" nmerge -
+    export XAUTHORITY=$SIM_TEST_XAUTH GOLEM_DISPLAY=gui
+}
+
+# sim_test_windows: print the ids, names and sizes of the display's named windows, one a line:
+# "<id> <width>x<height> <name>".
+sim_test_windows() {
+    xwininfo -root -tree 2>/dev/null |
+        sed -n -E 's/^ *(0x[0-9a-f]+) "(.*)": \(.*\) +([0-9]+x[0-9]+)\+-?[0-9]+\+-?[0-9]+ .*/\1 \3 \2/p'
+}
+
+# sim_test_video_start: with SIM_TEST_VIDEO=1, record the run's MuJoCo viewer and RViz windows
+# in the background (<out>/video_mujoco.mkv, video_rviz.mkv; <out>/video.log). Call it before
+# the sim starts: windows already open then (another RViz, say) are never recorded. Both
+# recordings start together, 3 s after both windows have appeared (their sizes settle),
+# at 25 fps, on the ros container's CPUs when they are pinned (GOLEM_ROS_CPUSET), so the
+# encoder leaves the sim's alone.
+sim_test_video_start() {
+    [ "${SIM_TEST_VIDEO:-0}" = 1 ] || return 0
+    local before
+    before=$(sim_test_windows | awk '{print $1}')
+    (
+        exec 9>&-
+        mujoco='' rviz=''
+        # The windows of this run: new since the start, named as the viewer and RViz
+        # name them, larger than 100 px.
+        for _ in $(seq 1 900); do
+            while read -r id size name; do
+                grep -qx "$id" <<< "$before" && continue
+                [ "${size%%x*}" -gt 100 ] && [ "${size##*x}" -gt 100 ] || continue
+                case "$name" in
+                    *MuJoCo*) mujoco=${mujoco:-$id} ;;
+                    *RViz*) rviz=${rviz:-$id} ;;
+                esac
+            done < <(sim_test_windows)
+            [ -n "$mujoco" ] && [ -n "$rviz" ] && break
+            sleep 1
+        done
+        if [ -z "$mujoco" ] || [ -z "$rviz" ]; then
+            echo "no window to record: MuJoCo '${mujoco:-none}', RViz '${rviz:-none}'"
+            exit 1
+        fi
+        echo "recording MuJoCo $mujoco and RViz $rviz"
+        sleep 3
+        pin=()
+        [ -z "${GOLEM_ROS_CPUSET:-}" ] || pin=(taskset -c "$GOLEM_ROS_CPUSET")
+        for pair in "mujoco $mujoco" "rviz $rviz"; do
+            set -- $pair
+            "${pin[@]}" ffmpeg -hide_banner -loglevel warning -nostdin -y -f x11grab -draw_mouse 0 \
+                -framerate 25 -window_id "$2" -i "$DISPLAY" -c:v libx264 -preset ultrafast -crf 23 \
+                "$OUT/video_$1.mkv" &
+            echo $! >> "$OUT/video.pids"
+        done
+        wait
+    ) > "$OUT/video.log" 2>&1 &
+    VIDEO_PID=$!
+}
+
+# sim_test_video_kill: stop the recordings (SIGINT, so ffmpeg closes its files) and wait for them.
+sim_test_video_kill() {
+    [ -n "${VIDEO_PID:-}" ] || return 0
+    local pid
+    if [ -f "$OUT/video.pids" ]; then
+        while read -r pid; do kill -INT "$pid" 2>/dev/null || true; done < "$OUT/video.pids"
+    fi
+    kill "$VIDEO_PID" 2>/dev/null || true
+    wait "$VIDEO_PID" 2>/dev/null || true
+    VIDEO_PID=''
+}
+
+# sim_test_video_stop: stop the recordings and put the two side by side, each scaled to 1080 px
+# high, in <out>/stack.mp4. A video that fails is reported, and does not fail the test.
+sim_test_video_stop() {
+    [ "${SIM_TEST_VIDEO:-0}" = 1 ] || return 0
+    sim_test_video_kill
+    if [ -s "$OUT/video_mujoco.mkv" ] && [ -s "$OUT/video_rviz.mkv" ] &&
+        ffmpeg -hide_banner -loglevel warning -nostdin -y -i "$OUT/video_mujoco.mkv" -i "$OUT/video_rviz.mkv" \
+            -filter_complex '[0:v]scale=-2:1080,setsar=1[m];[1:v]scale=-2:1080,setsar=1[r];[m][r]hstack=inputs=2:shortest=1[v]' \
+            -map '[v]' -c:v libx264 -crf 23 -pix_fmt yuv420p -movflags +faststart "$OUT/stack.mp4" >> "$OUT/video.log" 2>&1; then
+        echo "[$TAG] video: $OUT/stack.mp4"
+    else
+        echo "[$TAG] no video; see $OUT/video.log" >&2
+    fi
 }
 
 # sim_test_log_load: log the host's load every 10 s, for the record (<out>/load.log).
@@ -223,11 +330,19 @@ sim_test_start_sim() {
         robot_env=(-e GOLEM_SPAWN_MARGIN= -e GOLEM_SPAWN_OFFSET= -e GOLEM_LIDAR_SELF_FILTER=
                    -e GOLEM_CAMERA_DEPTH= -e GOLEM_CAMERA_POINTCLOUD= -e GOLEM_HAND_CAMERA_RES=)
     fi
+    local headless=--headless video_env=()
+    # The video: the viewer draws with Mesa's software renderer (GLX), whose frames x11grab can
+    # read; the NVIDIA driver's direct-rendered GLX frames never reach the X server it reads,
+    # so the recording would hold stale frames. The cameras and the lidar stay on the GPU (EGL).
+    if [ "${SIM_TEST_VIDEO:-0}" = 1 ]; then
+        headless=
+        video_env=(-e __GLX_VENDOR_LIBRARY_NAME=mesa -e LIBGL_ALWAYS_SOFTWARE=1)
+    fi
     "${COMPOSE[@]}" run -d --no-deps --name "$SIM" -e "GOLEM_ROBOT=$SIM_TEST_ROBOT" -e G1_DDS_INTERFACE=lo \
         -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONUNBUFFERED=1 -e MUJOCO_GL=egl -e GOLEM_SIM_EXPERIMENT=0 \
-        "${robot_env[@]}" "$@" robocasa bash -c "$MULTICAST && source /opt/ros/humble/setup.bash && \
+        "${robot_env[@]}" "${video_env[@]}" "$@" robocasa bash -c "$MULTICAST && source /opt/ros/humble/setup.bash && \
         source /opt/livox_ws/install/setup.bash && $prepare cd /home/code/golem_robocasa && \
-        exec python3 -u /home/code/tests/$SIM_TEST_SUITE/$py sim --out /out -- --headless --layout 9 --style 9 --seed 42" >/dev/null
+        exec python3 -u /home/code/tests/$SIM_TEST_SUITE/$py sim --out /out -- $headless --layout 9 --style 9 --seed 42" >/dev/null
     docker logs -f "$SIM" > "$OUT/sim.log" 2>&1 9>&- &
     for _ in $(seq 1 300); do
         grep -q "ROS bridges up" "$OUT/sim.log" && break

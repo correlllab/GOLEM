@@ -5,6 +5,7 @@
 #
 #   tests/sim/test_sim_stack.sh --h12
 #   tests/sim/test_sim_stack.sh --g1
+#   GOLEM_TEST_VIDEO=1 tests/sim/test_sim_stack.sh --h12    # and OUT/stack.mp4
 #
 # Builds core_ws and starts the robot's sim (h12_mujoco.py --h12 or --g1)
 # headless, with its sensors on, in the layout 9 / style 9 / seed 42 kitchen,
@@ -39,6 +40,11 @@
 #   GOLEM_CAMERAS, GOLEM_CAMERA_SCALE, and for the G1 GOLEM_LIDAR_POINTS,
 #   GOLEM_LIDAR_HZ, GOLEM_CAMERA_HZ   passed to the sim as the shell has them,
 #               docker/.env's never
+#   GOLEM_TEST_VIDEO 1: run with the sim's MuJoCo viewer and the bringup's RViz open on the
+#               host's X display and record them side by side into OUT/stack.mp4 (needs
+#               DISPLAY, xauth, xwininfo and ffmpeg with x11grab on the host; tests/sim/common.sh);
+#               the windows add rendering load beside the run; default 0. A video that fails
+#               is reported and does not fail the test
 #   GOLEM_SIM_RATE   passed to the sim as the shell has it, docker/.env's never: the target
 #               real-time factor (unset is 1, real time; or 2, max, ...); the checks are gates only at 1,
 #               and the summary records the rate the sim logged
@@ -82,12 +88,19 @@ else
     BRINGUP="h12_sim.launch.py use_rviz:=false use_skills:=false"
 fi
 
+# RViz only for the video.
+SIM_TEST_VIDEO=${GOLEM_TEST_VIDEO:-0}
+if [ "$SIM_TEST_VIDEO" = 1 ]; then
+    BRINGUP=${BRINGUP/use_rviz:=false/use_rviz:=true}
+fi
+
 # Containers, build, then the sim, up before the bringup.
 sim_test_setup "$ROBOT" sim test_sim_stack "stack-$ROBOT" stack 199
 sim_test_log_load
 
 echo "[test_sim_stack] $ROBOT on DDS domain $ROS_DOMAIN_ID, output in $OUT"
 sim_test_build_ros
+sim_test_video_start
 sim_test_start_sim test_sim_stack.py "${SIM_ENV[@]}"
 grep "\[test_sim_stack\]" "$OUT/sim.log" || true
 echo "[test_sim_stack] sim up; starting $BRINGUP"
@@ -106,6 +119,7 @@ sim_test_run_ros 900 "ros2 launch golem_bringup $BRINGUP > /out/launch.log 2>&1 
     wait \$LAUNCH
     exit \$rc"
 
-# Stop the sim, then check the run against its recording.
+# Stop the video, the sim, then check the run against its recording.
+sim_test_video_stop
 sim_test_stop_sim
 sim_test_report test_sim_stack.py

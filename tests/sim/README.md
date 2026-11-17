@@ -7,6 +7,7 @@ and keeps SLAM healthy.
 ```bash
 tests/sim/test_sim_stack.sh --h12
 tests/sim/test_sim_stack.sh --g1
+GOLEM_TEST_VIDEO=1 tests/sim/test_sim_stack.sh --h12   # and a video of the MuJoCo viewer and RViz
 ```
 
 A test that passes ends with `PASSED: <n>/<n> checks` and exits 0. A failing check prints `FAIL`
@@ -96,6 +97,25 @@ Each run writes to `tests/results/sim-stack-<robot>-<time>-<pid>/`:
 - `sim.log`, `launch.log`, `drive.log`, `ros_build.log` and `load.log`;
 - the recordings: `sim.npz`, `contacts.json`, `scene.npz`, `goal.json`, `events.json` and
   `drive.npz`.
+- with `GOLEM_TEST_VIDEO=1`, `stack.mp4` (below), the two windows' recordings `video_mujoco.mkv`
+  and `video_rviz.mkv`, and `video.log`.
+
+## The video
+
+With `GOLEM_TEST_VIDEO=1` the run is not headless: the sim opens its MuJoCo viewer and the
+bringup starts with `use_rviz:=true`, both on the host's X display (`DISPLAY`), through an
+Xauthority file written for the run whose cookie names no host (the containers have their own
+hostname and no network; the file is deleted at the end). The host records the two windows by
+their X window id with `ffmpeg`'s x11grab, so a window another one covers is still recorded,
+both starting 3 s after both have appeared (windows open before the run, another RViz say, are
+never recorded), at 25 fps and on the ros container's CPUs when they are pinned. When the test's
+steps end, `stack.mp4` puts the two side by side, each 1080 px high. The host needs `xauth`,
+`xwininfo` and an `ffmpeg` with x11grab; the test refuses to start without them.
+
+The windows render live beside the run, so the run carries more load than a headless one; the
+summary still prints the real-time factor the sim logged. A video that fails is reported (`no
+video; see .../video.log`) and does not fail the test. Leave the windows open while the test
+runs: closing the viewer stops the sim.
 
 The test stops the sim (`stop` file) and waits for its recording before it stops the bringup, so
 the recording ends with the robot standing, not with it falling once `rt/lowcmd` is silent. When a

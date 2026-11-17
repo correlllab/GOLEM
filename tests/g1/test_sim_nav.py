@@ -999,7 +999,7 @@ class Report(bringup_test.Report):
         world_map = self.world_from(sent["map_pelvis"])
         goal_map = sent["goal_map"]
         goal_world = world_map @ se2(*goal_map)
-        gwx, gwy, gwyaw = se2_parts(goal_world)
+        gwx, gwy, _ = se2_parts(goal_world)
         self.numbers["goal_sent_world_vs_picked_m"] = float(math.hypot(gwx - gx, gwy - gy))
         # The drive's last mark: the sim stops soon after, with the robot standing.
         last = max(ev.values(), key=lambda e: e["wall"])["name"]

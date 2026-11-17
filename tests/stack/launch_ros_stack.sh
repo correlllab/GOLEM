@@ -2,8 +2,7 @@
 # Build the controllers a stack case needs into a test install, then launch them.
 #
 # Runs inside the ROS test container that run.sh starts.
-# Usage: bash /home/code/tests/stack/launch_ros_stack.sh [--build-only]
-#   --build-only   build, run test_heartbeat_clock.py and exit 0 without launching.
+# Usage: bash /home/code/tests/stack/launch_ros_stack.sh
 # Environment: ROS_DOMAIN_ID (required, 1..232), TEST_CASE (arms|locomotion, default arms),
 #   SIMULATOR (isaac|robocasa, default isaac).
 # Prints STACK_BUILD_READY once built; run.sh waits for that line.
@@ -46,9 +45,6 @@ source "$TEST_INSTALL_BASE/setup.bash"
 # The safety heartbeat must run on a paused clock; checked before any sim is up.
 python3 /home/code/tests/stack/test_heartbeat_clock.py
 echo "STACK_BUILD_READY case=$TEST_CASE simulator=$SIMULATOR domain=$ROS_DOMAIN_ID"
-if [ "${1:-}" = --build-only ]; then
-    exit 0
-fi
 
 # Launch only once the H1-2 sim publishes rt/lowstate, then start the controllers.
 python3 /home/code/h12_sim_scripts/wait_for_sim.py

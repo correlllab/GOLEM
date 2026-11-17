@@ -59,6 +59,35 @@ Reproduce: copy `harness/` and a checkout of `h12_safety_layer` at `ad06903` (as
 `core_ws/install` sourced), then `bash /tmp/safety_diff/run_all.sh` and
 `python3 analyze.py out`. Domains 92 and 93 must be free; the harness refuses domain 0.
 
+## The real-robot bags, replayed
+
+`core_ws/src/lmg_deploy/bags/policy_bag_walk` (65 s, walking to Nav2 goals) and `reach`
+(31 s) were recorded on the real H1-2 with `h12_safety_layer` `camera_ready` `a178f0b`
+relaying `lmg_deploy`: both safety inputs, `/lowstate`, the estop topics and `/lowcmd`. The
+scripts are in [`harness/bags/`](harness/bags/).
+
+- **Headers on the real robot.** Every `/lowstate` (47,962 samples) reports `mode_machine` 6
+  and `mode_pr` 0; every input and every `/lowcmd` carries (6, 0); slots 27-34 are zero
+  throughout (`headers.py`).
+- **The recorded `/lowcmd` is the inputs, unchanged.** Every recorded frame with gains is
+  bit-identical, on all 27 body slots and every field, to the lower input (slots 0-11) and
+  the upper input (12-26) recorded within 200 ms before or 60 ms after it: 27,203 of 27,203
+  in `policy_bag_walk`, 11,294 of 11,294 in `reach` (`compare.py`). The 58 walk frames before
+  the first recorded input are not counted.
+- **golem_safety on the same inputs.** `replay.sh` plays each bag's inputs, `/lowstate` and
+  estop into `safety_node` (`relax_safety_split`, `use_estop:=true`, domain 93) and records
+  its `/lowcmd`. Every relayed frame is bit-identical to its inputs, header (6, 0) and zero
+  slots 27-34 included: 11,813 of 11,813 in `reach`, 28,556 of 28,562 in the walk; the 6
+  others are the first 11 ms, when the upper input had engaged and the lower's first command
+  had not arrived (its slots carry zero gains until then, as in `h12_safety_layer`).
+- **The estops happen at the same moment, for the same reason** (`timeline.py`): in the walk
+  both layers latch at 57.11 s on the right ankle roll measured at -0.2623 rad, past its
+  -0.2617 estop limit; in the reach both latch on the hardware estop press at 23.63 s. Both
+  write 50 zero commands after the latch, then nothing.
+
+The bags stay inside the clip limits and carry only (6, 0) headers, so they do not exercise
+clipping or a foreign header; the scenarios below do.
+
 ## Identical
 
 | Behaviour | Evidence |

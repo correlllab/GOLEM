@@ -1,0 +1,24 @@
+{
+ "default_safety_full": "identical",
+ "default_safety_split": "identical",
+ "locomotion_safety_full": "identical",
+ "relax_safety_full": "identical",
+ "relax_safety_split": {
+  "tau_estop": {
+   "left_ankle_pitch_joint": [
+    60.0,
+    95.0004
+   ],
+   "right_ankle_pitch_joint": [
+    60.0,
+    95.0004
+   ]
+  }
+ },
+ "sim_safety_split": {
+  "missing_in_golem_safety": "no config 'sim_safety_split' for robot h12: cannot read /home/code/core_ws/install/golem_safety/share/golem_safety/config/h12/sim_safety_split.yaml"
+ },
+ "tight_safety_full": "identical",
+ "tight_safety_split": "identical",
+ "_joint_tables": {}
+}

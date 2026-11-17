@@ -1,0 +1,229 @@
+
+=== startup_idle
+  old: frames in [0,1.0]: 484 (484/s); first frame t=-2.05; headers (mm,pr) [(0, 0)]; reserve [(0, 0, 0, 0)]
+    t=-1.0 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0; 27:0,0,0,0,0,0
+    t=0.5 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0; 27:0,0,0,0,0,0
+  new: frames in [0,1.0]: 500 (500/s); first frame t=-2.49; headers (mm,pr) [(6, 0)]; reserve [(0, 0, 0, 0)]
+    t=-1.0 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0; 27:0,0,0,0,0,0
+    t=0.5 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0; 27:0,0,0,0,0,0
+    log: {"config": "/home/code/core_ws/install/golem_safety/share/golem_safety/config/h12/default_safety_split.yaml", "event": "relay_started", "mode": "split_mode", "robot": "h12", "sim": true, "use_estop": false}
+
+=== relay_clip_split
+  old: frames in [0,1.0]: 465 (465/s); first frame t=-2.05; headers (mm,pr) [(0, 0), (6, 0), (7, 1)]; reserve [(0, 0, 0, 0), (9, 9, 9, 9)]
+    t=0.4 [mode/q/dq/tau/kp/kd] 0:1,0.429,2.3,-120,500,30; 1:1,-3.139,2.3,-120,0,0; 3:1,-0.119,1.4,-180,0,0; 13:1,-3.139,0.9,-24,0,0; 14:1,3.399,0.9,-24,500,30; 27:9,9,9,9,9,9; 34:9,9,9,9,9,9
+    t=0.9 [mode/q/dq/tau/kp/kd] 0:1,0.429,2.3,0,500,2; 1:1,2.499,2.3,0,500,2; 3:1,2.189,1.4,0,500,2; 13:1,1.569,0.9,0,500,2; 14:1,3.399,0.9,0,500,2; 27:0,0,0,0,0,0; 34:0,0,0,0,0,0
+    distinct body rows in (0.1,0.45): 1
+    distinct body rows in (0.6,0.95): 1
+    log: {"action_ms": 1794885459540, "decision_ms": 1794885459539, "decision_to_action_ms": 1, "event": "estop_command_written", "reason": "Upper-body command stale for 2.00s (> 2.0s)", "trigger_stamp_ms": null}
+  new: frames in [0,1.0]: 500 (500/s); first frame t=-2.49; headers (mm,pr) [(6, 0)]; reserve [(0, 0, 0, 0)]
+    t=0.4 [mode/q/dq/tau/kp/kd] 0:1,0.429,2.3,-120,500,30; 1:1,-3.139,2.3,-120,0,0; 3:1,-0.119,1.4,-180,0,0; 13:1,-3.139,0.9,-24,0,0; 14:1,3.399,0.9,-24,500,30; 27:0,0,0,0,0,0; 34:0,0,0,0,0,0
+    t=0.9 [mode/q/dq/tau/kp/kd] 0:1,0.429,2.3,0,500,2; 1:1,2.499,2.3,0,500,2; 3:1,2.189,1.4,0,500,2; 13:1,1.569,0.9,0,500,2; 14:1,3.399,0.9,0,500,2; 27:0,0,0,0,0,0; 34:0,0,0,0,0,0
+    distinct body rows in (0.1,0.45): 1
+    distinct body rows in (0.6,0.95): 1
+    log: {"config": "/home/code/core_ws/install/golem_safety/share/golem_safety/config/h12/default_safety_split.yaml", "event": "relay_started", "mode": "split_mode", "robot": "h12", "sim": true, "use_estop": false}
+    log: {"event": "input_engaged", "source": "split_mode_lower", "topic": "/safety/lowcmd_lower_in"}
+    log: {"age": 0.102, "event": "state_quiet", "seconds": 0.1, "topic": "/lowstate"}
+    log: {"age": 0.202, "event": "input_quiet", "seconds": 0.2, "source": "split_mode_lower", "topic": "/safety/lowcmd_lower_in"}
+
+=== relay_clip_full
+  old: frames in [0,1.0]: 478 (478/s); first frame t=-2.05; headers (mm,pr) [(0, 0), (7, 1)]; reserve [(0, 0, 0, 0), (9, 9, 9, 9)]
+    t=0.4 [mode/q/dq/tau/kp/kd] 0:1,0.429,2.3,-120,500,30; 1:1,-3.139,2.3,-120,0,0; 3:1,-0.119,1.4,-180,0,0; 13:1,-3.139,0.9,-24,0,0; 14:1,3.399,0.9,-24,500,30; 27:9,9,9,9,9,9; 34:9,9,9,9,9,9
+    t=0.9 [mode/q/dq/tau/kp/kd] 0:1,0.429,2.3,-120,500,30; 1:1,-3.139,2.3,-120,0,0; 3:1,-0.119,1.4,-180,0,0; 13:1,-3.139,0.9,-24,0,0; 14:1,3.399,0.9,-24,500,30; 27:9,9,9,9,9,9; 34:9,9,9,9,9,9
+    distinct body rows in (0.1,0.45): 1
+    distinct body rows in (0.6,0.95): 1
+  new: frames in [0,1.0]: 500 (500/s); first frame t=-2.49; headers (mm,pr) [(6, 0)]; reserve [(0, 0, 0, 0)]
+    t=0.4 [mode/q/dq/tau/kp/kd] 0:1,0.429,2.3,-120,500,30; 1:1,-3.139,2.3,-120,0,0; 3:1,-0.119,1.4,-180,0,0; 13:1,-3.139,0.9,-24,0,0; 14:1,3.399,0.9,-24,500,30; 27:0,0,0,0,0,0; 34:0,0,0,0,0,0
+    t=0.9 [mode/q/dq/tau/kp/kd] 0:1,0.429,2.3,-120,500,30; 1:1,-3.139,2.3,-120,0,0; 3:1,-0.119,1.4,-180,0,0; 13:1,-3.139,0.9,-24,0,0; 14:1,3.399,0.9,-24,500,30; 27:0,0,0,0,0,0; 34:0,0,0,0,0,0
+    distinct body rows in (0.1,0.45): 1
+    distinct body rows in (0.6,0.95): 1
+    log: {"config": "/home/code/core_ws/install/golem_safety/share/golem_safety/config/h12/default_safety_full.yaml", "event": "relay_started", "mode": "full_body_mode", "robot": "h12", "sim": true, "use_estop": false}
+    log: {"event": "input_engaged", "source": "full_body_mode", "topic": "/safety/lowcmd_in"}
+    log: {"age": 0.102, "event": "state_quiet", "seconds": 0.1, "topic": "/lowstate"}
+    log: {"age": 0.202, "event": "input_quiet", "seconds": 0.2, "source": "full_body_mode", "topic": "/safety/lowcmd_in"}
+
+=== nan_unowned_slot
+  old: frames in [0,1.0]: 470 (470/s); first frame t=-2.05; headers (mm,pr) [(0, 0), (6, 0)]; reserve [(0, 0, 0, 0)]
+    estop at t=0.505: 239 frames from then on, last t=0.999
+    t=0.4 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2; 20:1,0.1,0,0,50,2
+    t=0.9 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0; 20:0,0,0,0,0,0
+    log: {"action_ms": 1794885473056, "decision_ms": 1794885473054, "decision_to_action_ms": 2, "event": "estop_command_written", "reason": "Command validation failed on split_mode_lower: q contains non-finite values", "trigger_stamp_ms": 
+  new: frames in [0,1.0]: 301 (301/s); first frame t=-2.49; headers (mm,pr) [(6, 0)]; reserve [(0, 0, 0, 0)]
+    estop at t=0.503: 50 frames from then on, last t=0.601
+    t=0.4 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2; 20:1,0.1,0,0,50,2
+    t=0.9 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0; 20:0,0,0,0,0,0
+    log: {"config": "/home/code/core_ws/install/golem_safety/share/golem_safety/config/h12/default_safety_split.yaml", "event": "relay_started", "mode": "split_mode", "robot": "h12", "sim": true, "use_estop": false}
+    log: {"event": "input_engaged", "source": "split_mode_lower", "topic": "/safety/lowcmd_lower_in"}
+    log: {"action_ms": 3372253948, "decision_ms": 3372253948, "decision_to_action_ms": 0, "event": "estop_command_written", "reason": "Command validation failed on /safety/lowcmd_lower_in: motor 20 (right_shoulder_pitch_joint) q is nan", "
+
+=== upper_silent
+  old: frames in [0,3.5]: 1675 (479/s); first frame t=-2.05; headers (mm,pr) [(0, 0), (6, 0)]; reserve [(0, 0, 0, 0)]
+    estop at t=2.495: 487 frames from then on, last t=3.499
+    t=0.4 [mode/q/dq/tau/kp/kd] 0:1,0.05,0,0,50,2; 13:1,0.2,0,0,50,2
+    t=1.0 [mode/q/dq/tau/kp/kd] 0:1,0.05,0,0,50,2; 13:1,0.2,0,0,50,2
+    t=2.4 [mode/q/dq/tau/kp/kd] 0:1,0.05,0,0,50,2; 13:1,0.2,0,0,50,2
+    t=3.4 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0
+    log: {"action_ms": 1794885483043, "decision_ms": 1794885483041, "decision_to_action_ms": 2, "event": "estop_command_written", "reason": "Upper-body command stale for 2.00s (> 2.0s)", "trigger_stamp_ms": null}
+  new: frames in [0,3.5]: 1750 (500/s); first frame t=-2.49; headers (mm,pr) [(6, 0)]; reserve [(0, 0, 0, 0)]
+    t=0.4 [mode/q/dq/tau/kp/kd] 0:1,0.05,0,0,50,2; 13:1,0.2,0,0,50,2
+    t=1.0 [mode/q/dq/tau/kp/kd] 0:1,0.05,0,0,50,2; 13:1,0.2,0,0,50,2
+    t=2.4 [mode/q/dq/tau/kp/kd] 0:1,0.05,0,0,50,2; 13:1,0.2,0,0,50,2
+    t=3.4 [mode/q/dq/tau/kp/kd] 0:1,0.05,0,0,50,2; 13:1,0.2,0,0,50,2
+    log: {"config": "/home/code/core_ws/install/golem_safety/share/golem_safety/config/h12/default_safety_split.yaml", "event": "relay_started", "mode": "split_mode", "robot": "h12", "sim": true, "use_estop": false}
+    log: {"event": "input_engaged", "source": "split_mode_lower", "topic": "/safety/lowcmd_lower_in"}
+    log: {"age": 2.002, "event": "input_quiet", "seconds": 2.0, "source": "split_mode_upper", "topic": "/safety/lowcmd_upper_in"}
+    log: {"age": 0.102, "event": "state_quiet", "seconds": 0.1, "topic": "/lowstate"}
+    log: {"age": 0.2, "event": "input_quiet", "seconds": 0.2, "source": "split_mode_lower", "topic": "/safety/lowcmd_lower_in"}
+
+=== lower_silent
+  old: frames in [0,1.5]: 706 (471/s); first frame t=-2.05; headers (mm,pr) [(0, 0), (6, 0)]; reserve [(0, 0, 0, 0)]
+    t=0.4 [mode/q/dq/tau/kp/kd] 0:1,0.05,0,0,50,2; 13:1,0.2,0,0,50,2
+    t=1.0 [mode/q/dq/tau/kp/kd] 0:1,0.05,0,0,50,2; 13:1,0.2,0,0,50,2
+    t=1.4 [mode/q/dq/tau/kp/kd] 0:1,0.05,0,0,50,2; 13:1,0.2,0,0,50,2
+    log: {"action_ms": 1794885494618, "decision_ms": 1794885494616, "decision_to_action_ms": 2, "event": "estop_command_written", "reason": "Upper-body command stale for 2.00s (> 2.0s)", "trigger_stamp_ms": null}
+  new: frames in [0,1.5]: 750 (500/s); first frame t=-2.49; headers (mm,pr) [(6, 0)]; reserve [(0, 0, 0, 0)]
+    t=0.4 [mode/q/dq/tau/kp/kd] 0:1,0.05,0,0,50,2; 13:1,0.2,0,0,50,2
+    t=1.0 [mode/q/dq/tau/kp/kd] 0:1,0.05,0,0,50,2; 13:1,0.2,0,0,50,2
+    t=1.4 [mode/q/dq/tau/kp/kd] 0:1,0.05,0,0,50,2; 13:1,0.2,0,0,50,2
+    log: {"config": "/home/code/core_ws/install/golem_safety/share/golem_safety/config/h12/default_safety_split.yaml", "event": "relay_started", "mode": "split_mode", "robot": "h12", "sim": true, "use_estop": false}
+    log: {"event": "input_engaged", "source": "split_mode_lower", "topic": "/safety/lowcmd_lower_in"}
+    log: {"age": 0.202, "event": "input_quiet", "seconds": 0.2, "source": "split_mode_lower", "topic": "/safety/lowcmd_lower_in"}
+    log: {"age": 0.102, "event": "state_quiet", "seconds": 0.1, "topic": "/lowstate"}
+
+=== estop_q_edge
+  old: frames in [0,2.0]: 957 (478/s); first frame t=-2.05; headers (mm,pr) [(0, 0), (6, 0)]; reserve [(0, 0, 0, 0)]
+    estop at t=0.504: 723 frames from then on, last t=1.998
+    t=0.4 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=0.9 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0
+    t=1.4 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0
+    log:  0.  0.  0.  0.  0.  0.  0.  0.  0. ]{"action_ms": 1794885500130, "decision_ms": 1794885500128, "decision_to_action_ms": 2, "event": "estop_command_written", "reason": "motor 3 (left_knee_joint) q out of estop range: 3.20000004768
+  new: frames in [0,2.0]: 300 (150/s); first frame t=-2.49; headers (mm,pr) [(6, 0)]; reserve [(0, 0, 0, 0)]
+    estop at t=0.502: 50 frames from then on, last t=0.600
+    t=0.4 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=0.9 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0
+    t=1.4 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0
+    log: {"config": "/home/code/core_ws/install/golem_safety/share/golem_safety/config/h12/default_safety_split.yaml", "event": "relay_started", "mode": "split_mode", "robot": "h12", "sim": true, "use_estop": false}
+    log: {"event": "input_engaged", "source": "split_mode_lower", "topic": "/safety/lowcmd_lower_in"}
+    log: estop diagnostic, body slots in order:
+    log: {"action_ms": 3372281022, "decision_ms": 3372281022, "decision_to_action_ms": 0, "event": "estop_command_written", "reason": "motor 3 (left_knee_joint) q out of estop range: 3.2 (limit 3.200, 1.00x)", "trigger_stamp_ms": null}
+
+=== estop_q_below
+  old: frames in [0,1.5]: 696 (464/s); first frame t=-2.05; headers (mm,pr) [(0, 0), (6, 0)]; reserve [(0, 0, 0, 0)]
+    t=0.4 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=1.4 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    log: {"action_ms": 1794885512125, "decision_ms": 1794885512124, "decision_to_action_ms": 1, "event": "estop_command_written", "reason": "Upper-body command stale for 2.00s (> 2.0s)", "trigger_stamp_ms": null}
+  new: frames in [0,1.5]: 750 (500/s); first frame t=-2.49; headers (mm,pr) [(6, 0)]; reserve [(0, 0, 0, 0)]
+    t=0.4 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=1.4 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    log: {"config": "/home/code/core_ws/install/golem_safety/share/golem_safety/config/h12/default_safety_split.yaml", "event": "relay_started", "mode": "split_mode", "robot": "h12", "sim": true, "use_estop": false}
+    log: {"event": "input_engaged", "source": "split_mode_lower", "topic": "/safety/lowcmd_lower_in"}
+    log: {"age": 0.1, "event": "state_quiet", "seconds": 0.1, "topic": "/lowstate"}
+    log: {"age": 0.2, "event": "input_quiet", "seconds": 0.2, "source": "split_mode_lower", "topic": "/safety/lowcmd_lower_in"}
+
+=== estop_dq
+  old: frames in [0,1.5]: 714 (476/s); first frame t=-2.05; headers (mm,pr) [(0, 0), (6, 0)]; reserve [(0, 0, 0, 0)]
+    estop at t=0.504: 482 frames from then on, last t=1.499
+    t=0.4 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=0.9 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0
+    log:  0. 0. 0.]{"action_ms": 1794885517643, "decision_ms": 1794885517641, "decision_to_action_ms": 2, "event": "estop_command_written", "reason": "motor 16 (left_elbow_joint) dq out of estop range: 50.0", "trigger_stamp_ms": null}
+  new: frames in [0,1.5]: 300 (200/s); first frame t=-2.49; headers (mm,pr) [(6, 0)]; reserve [(0, 0, 0, 0)]
+    estop at t=0.502: 50 frames from then on, last t=0.600
+    t=0.4 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=0.9 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0
+    log: {"config": "/home/code/core_ws/install/golem_safety/share/golem_safety/config/h12/default_safety_split.yaml", "event": "relay_started", "mode": "split_mode", "robot": "h12", "sim": true, "use_estop": false}
+    log: {"event": "input_engaged", "source": "split_mode_lower", "topic": "/safety/lowcmd_lower_in"}
+    log: estop diagnostic, body slots in order:
+    log: {"action_ms": 3372298536, "decision_ms": 3372298536, "decision_to_action_ms": 0, "event": "estop_command_written", "reason": "motor 16 (left_elbow_joint) dq out of estop range: 50 (limit 6.000, 8.33x)", "trigger_stamp_ms": null}
+
+=== state_nan
+  old: frames in [0,1.5]: 716 (477/s); first frame t=-2.05; headers (mm,pr) [(0, 0), (6, 0)]; reserve [(0, 0, 0, 0)]
+    estop at t=0.505: 482 frames from then on, last t=1.499
+    t=0.4 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=0.9 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0
+    log: {"action_ms": 1794885526143, "decision_ms": 1794885526143, "decision_to_action_ms": 0, "event": "estop_command_written", "reason": "low_state contains non-finite values", "trigger_stamp_ms": null}dq_cmd: [0. 0. 0. 0. 0. 0. 0. 0. 0
+  new: frames in [0,1.5]: 301 (201/s); first frame t=-2.49; headers (mm,pr) [(6, 0)]; reserve [(0, 0, 0, 0)]
+    estop at t=0.502: 50 frames from then on, last t=0.600
+    t=0.4 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=0.9 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0
+    log: {"config": "/home/code/core_ws/install/golem_safety/share/golem_safety/config/h12/default_safety_split.yaml", "event": "relay_started", "mode": "split_mode", "robot": "h12", "sim": true, "use_estop": false}
+    log: {"event": "input_engaged", "source": "split_mode_lower", "topic": "/safety/lowcmd_lower_in"}
+    log: estop diagnostic, body slots in order:
+    log: {"action_ms": 3372307037, "decision_ms": 3372307037, "decision_to_action_ms": 0, "event": "estop_command_written", "reason": "motor 5 (left_ankle_roll_joint) tau is nan in /lowstate", "trigger_stamp_ms": null}
+
+=== engage_mm0
+  old: frames in [0,2.0]: 923 (462/s); first frame t=-2.05; headers (mm,pr) [(0, 0), (6, 0)]; reserve [(0, 0, 0, 0)]
+    t=0.5 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=1.5 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    log: {"action_ms": 1794885538192, "decision_ms": 1794885538190, "decision_to_action_ms": 2, "event": "estop_command_written", "reason": "Upper-body command stale for 2.00s (> 2.0s)", "trigger_stamp_ms": null}
+  new: frames in [0,2.0]: 1000 (500/s); first frame t=-2.49; headers (mm,pr) [(6, 0)]; reserve [(0, 0, 0, 0)]
+    t=0.5 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0
+    t=1.5 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    log: {"config": "/home/code/core_ws/install/golem_safety/share/golem_safety/config/h12/default_safety_split.yaml", "event": "relay_started", "mode": "split_mode", "robot": "h12", "sim": true, "use_estop": false}
+    log: {"event": "engage_refused", "mode": "split_mode", "reason": "/lowstate mode_machine is 0, expected 6"}
+    log: {"event": "input_engaged", "source": "split_mode_lower", "topic": "/safety/lowcmd_lower_in"}
+    log: {"age": 0.102, "event": "state_quiet", "seconds": 0.1, "topic": "/lowstate"}
+    log: {"age": 0.202, "event": "input_quiet", "seconds": 0.2, "source": "split_mode_lower", "topic": "/safety/lowcmd_lower_in"}
+
+=== foreign_mm
+  old: frames in [0,2.0]: 931 (466/s); first frame t=-2.05; headers (mm,pr) [(0, 0), (6, 0)]; reserve [(0, 0, 0, 0)]
+    t=0.5 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=1.5 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    log: {"action_ms": 1794885547197, "decision_ms": 1794885547195, "decision_to_action_ms": 2, "event": "estop_command_written", "reason": "Upper-body command stale for 2.00s (> 2.0s)", "trigger_stamp_ms": null}
+  new: frames in [0,2.0]: 551 (276/s); first frame t=-2.49; headers (mm,pr) [(6, 0)]; reserve [(0, 0, 0, 0)]
+    estop at t=1.002: 50 frames from then on, last t=1.100
+    t=0.5 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=1.5 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0
+    log: {"config": "/home/code/core_ws/install/golem_safety/share/golem_safety/config/h12/default_safety_split.yaml", "event": "relay_started", "mode": "split_mode", "robot": "h12", "sim": true, "use_estop": false}
+    log: {"event": "input_engaged", "source": "split_mode_lower", "topic": "/safety/lowcmd_lower_in"}
+    log: {"action_ms": 3372325097, "decision_ms": 3372325097, "decision_to_action_ms": 0, "event": "estop_command_written", "reason": "/lowstate mode_machine 5 is not the h12's 6: another robot or sim is on this domain", "trigger_stamp_ms"
+
+=== second_writer
+  old: frames in [0,1.5]: 685 (457/s); first frame t=-2.05; headers (mm,pr) [(0, 0), (6, 0)]; reserve [(0, 0, 0, 0)]
+    t=0.5 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=1.2 [mode/q/dq/tau/kp/kd] 0:1,0.3,0,0,50,2; 13:1,0.1,0,0,50,2
+    log: {"action_ms": 1794885555699, "decision_ms": 1794885555697, "decision_to_action_ms": 2, "event": "estop_command_written", "reason": "Upper-body command stale for 2.00s (> 2.0s)", "trigger_stamp_ms": null}
+  new: frames in [0,1.5]: 450 (300/s); first frame t=-2.49; headers (mm,pr) [(6, 0)]; reserve [(0, 0, 0, 0)]
+    estop at t=0.802: 50 frames from then on, last t=0.900
+    t=0.5 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=1.2 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0
+    log: {"config": "/home/code/core_ws/install/golem_safety/share/golem_safety/config/h12/default_safety_split.yaml", "event": "relay_started", "mode": "split_mode", "robot": "h12", "sim": true, "use_estop": false}
+    log: {"event": "input_engaged", "source": "split_mode_lower", "topic": "/safety/lowcmd_lower_in"}
+    log: {"action_ms": 3372333900, "decision_ms": 3372333900, "decision_to_action_ms": 0, "event": "estop_command_written", "reason": "second writer on /safety/lowcmd_lower_in: a new writer sent a command 0.010 s after the current writer's
+
+=== hw_estop_silent
+  old: frames in [0,2.0]: 932 (466/s); first frame t=-2.05; headers (mm,pr) [(0, 0), (6, 0)]; reserve [(0, 0, 0, 0)]
+    t=0.2 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=0.8 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=1.8 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    log: {"action_ms": 1794885564702, "decision_ms": 1794885564700, "decision_to_action_ms": 2, "event": "estop_command_written", "reason": "Upper-body command stale for 2.00s (> 2.0s)", "trigger_stamp_ms": null}
+  new: frames in [0,2.0]: 792 (396/s); first frame t=-2.49; headers (mm,pr) [(6, 0)]; reserve [(0, 0, 0, 0)]
+    estop at t=1.485: 50 frames from then on, last t=1.583
+    t=0.2 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0
+    t=0.8 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=1.8 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0
+    log: {"config": "/home/code/core_ws/install/golem_safety/share/golem_safety/config/h12/default_safety_split.yaml", "event": "relay_started", "mode": "split_mode", "robot": "h12", "sim": true, "use_estop": true}
+    log: {"event": "engage_refused", "mode": "split_mode", "reason": "no hardware estop sample received yet on /estop/triggered or /estop/plugged_in"}
+    log: {"event": "input_engaged", "source": "split_mode_lower", "topic": "/safety/lowcmd_lower_in"}
+    log: {"action_ms": 3372343084, "decision_ms": 3372343084, "decision_to_action_ms": 0, "event": "estop_command_written", "reason": "External estop silent: no sample on /estop/triggered or /estop/plugged_in for 0.502 s (timeout 0.5 s)", 
+
+=== hw_estop_trigger
+  old: frames in [0,2.0]: 946 (473/s); first frame t=-2.05; headers (mm,pr) [(0, 0), (6, 0)]; reserve [(0, 0, 0, 0)]
+    estop at t=1.006: 480 frames from then on, last t=1.999
+    t=0.2 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=0.8 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=1.8 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0
+    log: {"action_ms": 1794885570718, "decision_ms": 1794885570716, "decision_to_action_ms": 2, "event": "estop_command_written", "reason": "External estop triggered", "trigger_stamp_ms": 1794885570713, "trigger_to_action_ms": 5}
+  new: frames in [0,2.0]: 551 (276/s); first frame t=-2.49; headers (mm,pr) [(6, 0)]; reserve [(0, 0, 0, 0)]
+    estop at t=1.003: 50 frames from then on, last t=1.101
+    t=0.2 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0
+    t=0.8 [mode/q/dq/tau/kp/kd] 0:1,0.1,0,0,50,2; 13:1,0.1,0,0,50,2
+    t=1.8 [mode/q/dq/tau/kp/kd] 0:0,0,0,0,0,0; 13:0,0,0,0,0,0
+    log: {"config": "/home/code/core_ws/install/golem_safety/share/golem_safety/config/h12/default_safety_split.yaml", "event": "relay_started", "mode": "split_mode", "robot": "h12", "sim": true, "use_estop": true}
+    log: {"event": "engage_refused", "mode": "split_mode", "reason": "no hardware estop sample received yet on /estop/triggered or /estop/plugged_in"}
+    log: {"event": "input_engaged", "source": "split_mode_lower", "topic": "/safety/lowcmd_lower_in"}
+    log: {"action_ms": 3372351608, "decision_ms": 3372351608, "decision_to_action_ms": 0, "event": "estop_command_written", "reason": "External estop triggered", "trigger_stamp_ms": 3372351608, "trigger_to_action_ms": 0}
+
+=== bitwise: clipped body slots, old vs new
+  relay_clip_split (0.1, 0.45): identical=True
+  relay_clip_split (0.6, 0.95): identical=True
+  relay_clip_full (0.1, 0.45): identical=True
+  relay_clip_full (0.6, 0.95): identical=True

@@ -12,6 +12,8 @@ The design is `docs/superpowers/specs/2026-10-27-golem-upper-ik-and-safety-desig
 (section golem_safety). Every value and behavior that differs from the packages this one
 replaces is in the change report beside it,
 `docs/superpowers/specs/2026-10-27-golem-upper-ik-and-safety/change-report.md`.
+Its behaviour on the H1-2 against upstream `h12_safety_layer` `main`, measured on the same
+inputs, is `docs/superpowers/specs/2026-11-16-golem-safety-vs-h12-safety-layer/README.md`.
 
 ## Running it
 

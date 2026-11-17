@@ -9,7 +9,8 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# yaml-cpp reads the robot profiles and configs; zlib gives the npz writer its crc32.
+# yaml-cpp reads the robot profiles and configs; zlib gives the npz writer its crc32 (the
+# archive is written stored, uncompressed).
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -31,7 +32,6 @@ add_library(golem_safety_core
 target_include_directories(golem_safety_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 ament_target_dependencies(golem_safety_core ament_index_cpp unitree_hg)
-# zlib is only for crc32 in the npz writer; the archive is written stored.
 target_link_libraries(golem_safety_core yaml-cpp ZLIB::ZLIB)
 
 # golem_safety_dump_config: prints a config's derived limits and parsed values as JSON.

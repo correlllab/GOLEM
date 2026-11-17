@@ -153,7 +153,7 @@ and OMPL's time limits are host compute budgets, in s of steady time.
    within `controller.startup_move_timeout` of the gate opening.
 
 A start-up that fails after step 2 sends the shutdown command (Shutdown, below) and the
-node exits 1. `golem_safety` streams zero gains from boot and engages the upper-body input on
+node exits 1. `golem_safety` streams zero gains from the robot's first `/lowstate` and engages the upper-body input on
 its first command once `/lowstate` reports the profile's `mode_machine` (and, on the real
 H1-2, `estop_node` has sent a first sample), so the gate opens at the first relay, on both
 robots whether or not the leg node commands.

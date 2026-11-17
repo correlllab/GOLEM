@@ -41,10 +41,12 @@ the sim bringup passes, `safety_node` refuses ROS domain 0, an unset
 
 The G1 starts as the H1-2 does; no config key chooses it.
 
-1. **Zero gains from boot.** From its start (under `use_sim_time`, from the
-   first `/clock`) the layer writes `rt/lowcmd` at
-   `control.publish_hz` with mode 0 and every value 0 on every slot, stamped
-   with `mode_machine` 5: every motor is off. It checks every `rt/lowstate`
+1. **Zero gains from the first `rt/lowstate`.** The layer writes nothing until
+   an `rt/lowstate` reports `mode_machine` 5 (`relay_held` says why); from then
+   on (under `use_sim_time`, not before the first `/clock` either) it writes
+   `rt/lowcmd` at `control.publish_hz` with mode 0 and every value 0 on every
+   slot, stamped with the `mode_machine` that `rt/lowstate` reports: every
+   motor is off. It checks every `rt/lowstate`
    against the estop limits from the first sample (below).
 2. **The heartbeat.** Once the newest `rt/lowstate` reports `mode_machine` 5,
    the layer beats true on `/safety/heartbeat` at 10 Hz: relaying can begin.

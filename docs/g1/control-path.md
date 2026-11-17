@@ -18,7 +18,7 @@ everything reads <---------- rt/lowstate, rt/dex3/{left,right}/state
 
 - **The safety layer** (`golem_safety`, split mode) writes every body motor on
   `rt/lowcmd`: the waist and arms from the arm controller's input, the legs
-  from the leg node's. From boot it writes zero gains on every motor, and
+  from the leg node's. From the robot's first `rt/lowstate` it writes zero gains on every motor, and
   each input's slots carry its commands from that input's first command on
   ([Safety layer](safety.md), Start-up).
 - **Arms.** The arm controller (`golem_upper_ik`) solves IK at

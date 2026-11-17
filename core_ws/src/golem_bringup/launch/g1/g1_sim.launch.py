@@ -9,7 +9,7 @@ Start the simulated G1: the core stack with sim time and the sim configs.
 The G1 RoboCasa sim (golem_robocasa/g1/) takes rt/lowcmd and rt/dex3/*, and
 holds the robot up on an elastic band until /elastic_band/toggle releases it.
 golem_safety runs sim_split and the controller sim_split: golem_safety streams
-zero gains on every motor from boot and engages each input on its own first
+zero gains on every motor from the robot's first rt/lowstate and engages each input on its own first
 command. The leg node (golem_lowerbody_rl's lowerbody_controller_node) always
 runs HOMIE, on golem_lowerbody_rl's config/g1/sim.yaml: once golem_safety beats
 and rt/lowstate is upright, it moves the legs to the policy's default pose;

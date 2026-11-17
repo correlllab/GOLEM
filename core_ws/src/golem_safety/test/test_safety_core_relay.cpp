@@ -770,6 +770,7 @@ TEST(EstopInput, TriggeredOrUnpluggedLatchesWithUseEstop)
   const SafetyConfig cfg = config(h12(), "relax_safety_split");
   {
     SafetyCore core(h12(), cfg, true, kDomain);
+    core.on_state(state_of(h12()), 0.0);
     core.on_estop(false, true, 0.0);
     EXPECT_FALSE(core.estopped());
     core.on_estop(true, true, 0.010);
@@ -967,6 +968,7 @@ TEST(Events, EstopReportIsTheOldJsonAfterTheCommand)
 
   // The hardware estop adds trigger_to_action_ms.
   SafetyCore box(h12(), rig.cfg, true, kDomain);
+  box.on_state(state_of(h12()), 0.0);
   box.on_estop(true, true, 0.010);
   ASSERT_TRUE(box.step(0.013));
   reports = named(box.drain_events(), "estop_command_written");

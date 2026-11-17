@@ -134,11 +134,16 @@ uint32_t lowcmd_crc(const unitree_hg::msg::LowCmd & cmd)
   return crc32_core(words.data(), kCrcWords);
 }
 
+void stamp_header_and_crc(unitree_hg::msg::LowCmd & cmd, uint8_t mode_pr, uint8_t mode_machine)
+{
+  cmd.mode_pr = mode_pr;
+  cmd.mode_machine = mode_machine;
+  cmd.crc = lowcmd_crc(cmd);
+}
+
 void stamp_header_and_crc(unitree_hg::msg::LowCmd & cmd, const RobotProfile & profile)
 {
-  cmd.mode_pr = profile.mode_pr;
-  cmd.mode_machine = profile.mode_machine;
-  cmd.crc = lowcmd_crc(cmd);
+  stamp_header_and_crc(cmd, profile.mode_pr, profile.mode_machine);
 }
 
 unitree_hg::msg::LowCmd zero_command(const RobotProfile & profile)

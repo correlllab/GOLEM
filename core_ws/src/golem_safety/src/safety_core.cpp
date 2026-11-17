@@ -33,6 +33,8 @@ const std::string kReasonLost = "the estop latched, and its reason could not be 
 // s between engage_refused reports, so that a controller streaming before the robot is
 // ready does not flood the log.
 constexpr double kRefusalReportSeconds = 1.0;
+// s of robot time between the relay_held reports of one hold.
+constexpr double kHeldReportSeconds = 5.0;
 
 // ms per s the lag baseline may rise, to follow drift between the robot's tick and the host
 // clock: 500 ppm is well above crystal drift, so a delay that builds faster is lag.
@@ -246,7 +248,7 @@ void SafetyCore::on_state(const LowState & state, double now)
 void SafetyCore::update_relay_ready()
 {
   const bool ready = state_ && state_->mode_machine == profile_.mode_machine &&
-    (!use_estop_ || estop_sample_time_.has_value());
+    state_->mode_pr == profile_.mode_pr && (!use_estop_ || estop_sample_time_.has_value());
   relay_ready_.store(ready, std::memory_order_release);
 }
 
@@ -255,21 +257,47 @@ void SafetyCore::check_state(const LowState & state, double now)
   const std::optional<double> previous = state_time_;
   state_time_ = now;
   if (estopped()) {
+    // SAFETY: an estop that latched before our robot's first /lowstate writes its estop
+    // command from that /lowstate on; another robot's never stamps it.
+    if (!header_mode_machine_ && state.mode_machine == profile_.mode_machine) {
+      header_mode_machine_ = state.mode_machine;
+    }
     return;
   }
   state_ = state;
   state_wall_time_ = wall_seconds();
   state_unlogged_ = config_.logging.enabled;
 
-  // SAFETY: before any input engages, another robot's /lowstate only blocks engaging
-  // (refusal() reads it from state_); once an input has engaged it latches.
-  if (state.mode_machine != profile_.mode_machine) {
+  // SAFETY: every command carries the mode_machine of the newest /lowstate that reported
+  // the profile's, read from every sample; before any has, nothing is written (step()).
+  // Before any input engages, another robot's /lowstate holds the output and blocks
+  // engaging (refusal() reads it from state_); once an input has engaged it latches, and
+  // the estop commands keep our robot's last value, never the other's.
+  state_foreign_ = state.mode_machine != profile_.mode_machine;
+  if (!state_foreign_) {
+    header_mode_machine_ = state.mode_machine;
+  }
+  if (state_foreign_) {
     if (engaged_) {
       latch(
         now, std::nullopt, [&] {
           return config_.topics.low_state + " mode_machine " +
           std::to_string(state.mode_machine) + " is not the " + profile_.robot + "'s " +
           std::to_string(profile_.mode_machine) + ": another robot or sim is on this domain";
+        });
+    }
+    return;
+  }
+  // SAFETY: a /lowstate in another ankle mode carries motor-pair values, not the joints
+  // the limits and the controllers are written for: it blocks engaging, latches once
+  // engaged, and is not limit-checked. The commands keep the profile's mode_pr.
+  if (state.mode_pr != profile_.mode_pr) {
+    if (engaged_) {
+      latch(
+        now, std::nullopt, [&] {
+          return config_.topics.low_state + " mode_pr " + std::to_string(state.mode_pr) +
+          " is not the " + profile_.robot + "'s " + std::to_string(profile_.mode_pr) +
+          ": the robot is in another ankle mode";
         });
     }
     return;
@@ -474,7 +502,7 @@ void SafetyCore::try_engage(InputState & in, double now)
 }
 
 // The reasons are checked in this order: no /lowstate, a newest /lowstate from another
-// robot, and with use_estop no hardware estop sample.
+// robot, one in another ankle mode, and with use_estop no hardware estop sample.
 std::optional<SafetyCore::Refusal> SafetyCore::refusal() const
 {
   if (!state_ || !state_time_) {
@@ -482,6 +510,9 @@ std::optional<SafetyCore::Refusal> SafetyCore::refusal() const
   }
   if (state_->mode_machine != profile_.mode_machine) {
     return Refusal{Refusal::ModeMachine, state_->mode_machine};
+  }
+  if (state_->mode_pr != profile_.mode_pr) {
+    return Refusal{Refusal::ModePr, state_->mode_pr};
   }
   if (use_estop_ && !estop_sample_time_) {
     return Refusal{Refusal::NoEstopSample};
@@ -496,8 +527,11 @@ std::string SafetyCore::refusal_text(const Refusal & r) const
     case Refusal::NoState:
       return "no " + state_topic + " received yet";
     case Refusal::ModeMachine:
-      return state_topic + " mode_machine is " + std::to_string(r.mode_machine) +
+      return state_topic + " mode_machine is " + std::to_string(r.value) +
              ", expected " + std::to_string(profile_.mode_machine);
+    case Refusal::ModePr:
+      return state_topic + " mode_pr is " + std::to_string(r.value) +
+             ", expected " + std::to_string(profile_.mode_pr);
     case Refusal::NoEstopSample:
       return "no hardware estop sample received yet on " + config_.estop.triggered_topic +
              " or " + config_.estop.plugged_in_topic;
@@ -708,11 +742,43 @@ std::optional<LowCmd> SafetyCore::estop_output(double now)
 
 std::optional<LowCmd> SafetyCore::finish(std::optional<LowCmd> out)
 {
-  if (out) {
-    stamp_header_and_crc(*out, profile_);
-    last_written_ = *out;
+  if (!out || !header_mode_machine_) {
+    return std::nullopt;
   }
+  stamp_header_and_crc(*out, profile_.mode_pr, *header_mode_machine_);
+  last_written_ = *out;
   return out;
+}
+
+std::optional<LowCmd> SafetyCore::unwritten_estop()
+{
+  if (!estop_wait_reported_) {
+    estop_wait_reported_ = true;
+    raise(
+      Event::Error, [&] {
+        return "{\"event\": \"estop_waiting\", \"reason\": " + json_string(estop_reason()) +
+        ", \"why\": " + json_string(
+          "no " + config_.topics.low_state + " with the " + profile_.robot +
+          "'s mode_machine yet: the estop command is written from the first one") + "}";
+      });
+  }
+  return std::nullopt;
+}
+
+void SafetyCore::report_held(double now)
+{
+  if (held_reported_ && now - *held_reported_ < kHeldReportSeconds) {
+    return;
+  }
+  held_reported_ = now;
+  raise(
+    Event::Warn, [&] {
+      const std::string why = !state_ ?
+      "no " + config_.topics.low_state + " received yet" :
+      config_.topics.low_state + " mode_machine is " + std::to_string(state_->mode_machine) +
+      ", expected " + std::to_string(profile_.mode_machine);
+      return "{\"event\": \"relay_held\", \"reason\": " + json_string(why) + "}";
+    });
 }
 
 std::optional<LowCmd> SafetyCore::step(double now)
@@ -723,9 +789,18 @@ std::optional<LowCmd> SafetyCore::step(double now)
   // First, so that a silent hardware estop latches in the step that notices it.
   check_estop_input(now);
   if (estopped()) {
-    return finish(estop_output(now));
+    // SAFETY: an estop before any /lowstate with our mode_machine writes nothing until one
+    // arrives, as nothing was written before it; its burst then starts.
+    return header_mode_machine_ ? finish(estop_output(now)) : unwritten_estop();
   }
   report_quiet(now);
+  // SAFETY: nothing is written before a /lowstate with the profile's mode_machine, nor, before
+  // an input has engaged, while the newest /lowstate is another robot's.
+  if (!header_mode_machine_ || (state_foreign_ && !engaged_)) {
+    report_held(now);
+    return std::nullopt;
+  }
+  held_reported_.reset();
   return finish(merged());
 }
 
@@ -736,7 +811,9 @@ std::optional<LowCmd> SafetyCore::exit_step(double now)
     return std::nullopt;
   }
   std::optional<LowCmd> out;
-  if (estopped()) {
+  if (estopped() && !header_mode_machine_) {
+    unwritten_estop();
+  } else if (estopped()) {
     const bool burst = config_.estop_response.after == EstopAfter::BurstThenSilence;
     if (burst || !estop_written_) {
       out = estop_output(now);

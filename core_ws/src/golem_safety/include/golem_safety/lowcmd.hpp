@@ -15,9 +15,13 @@ namespace golem_safety
 // The robots and the sims drop a command whose CRC does not match.
 uint32_t lowcmd_crc(const unitree_hg::msg::LowCmd & cmd);
 
-// Set mode_pr and mode_machine from `profile`, then crc.
+// Set mode_pr and mode_machine, then crc.
 // SAFETY: every command is stamped last, after its final edit; an edit after the stamp
 // needs a new stamp, or the robot drops the command.
+void stamp_header_and_crc(
+  unitree_hg::msg::LowCmd & cmd, uint8_t mode_pr, uint8_t mode_machine);
+
+// Set mode_pr and mode_machine from `profile`, then crc.
 void stamp_header_and_crc(unitree_hg::msg::LowCmd & cmd, const RobotProfile & profile);
 
 // Return the stamped command that turns every motor off: mode 0 and q, dq, tau, kp, kd and

@@ -143,32 +143,45 @@ cycle. No timer in the node runs on the wall clock.
 **What it writes.** Each engaged input's newest valid command on that input's own slots
 (`full`: every body slot; `split`: the lower and upper slots). Every other slot, the slots
 past the body and the `reserve` words carry `zero_command` (mode 0, every value 0). Every
-command carries the profile's `mode_machine` and `mode_pr` and its own Unitree CRC (CRC-32
-over the message body, as the SDK computes it); nothing of an input's header is copied.
+command carries the `mode_machine` of the newest `/lowstate` that reported the profile's (read
+from every sample, as Unitree's examples copy it), the profile's `mode_pr` (0, pitch/roll
+ankles, which the layer chooses as Unitree's examples do) and its own Unitree CRC (CRC-32 over
+the message body, as the SDK computes it); nothing of an input's header is copied.
 
 **Clipping.** A command is valid when q, dq, tau, kp and kd are finite on every body slot,
 the input's own or not; any other command latches the estop. A valid command is clipped on
 its input's slots: q, dq and tau to `limits.clip`, kp and kd to [0, `kp_max`] and [0,
 `kd_max`]. A gain above its maximum raises `gain_clipped` (Warn) once per joint and gain.
 
-**Start-up**, the same on both robots (no config key chooses it): from boot (under
-`use_sim_time`, from the first `/clock`) the layer streams `zero_command` on every slot, so
-every motor is off. Each input engages on its own
+**Start-up**, the same on both robots (no config key chooses it): the layer writes nothing
+until a `/lowstate` reports the profile's `mode_machine` (`relay_held`, Warn, with the reason,
+at most every 5 s), nor, before an input has engaged, while the newest `/lowstate` reports
+another; from then on (under `use_sim_time`, from the first `/clock` as well) it streams
+`zero_command` on every slot, so every motor is off. Each input engages on its own
 first valid command that arrives once the newest `/lowstate` reports the profile's
-`mode_machine` (and, with `use_estop`, a first hardware estop sample has arrived); its slots
+`mode_machine` and `mode_pr` (and, with `use_estop`, a first hardware estop sample has
+arrived); its slots
 carry its commands from then on (`input_engaged`). The slots of an input that has not
 engaged stay at zero gain: in split mode the robot runs arms-only, with its leg motors off,
-until the leg node commands. The `/lowstate` limit checks run from boot (under
-`use_sim_time`, from the first `/clock`).
+until the leg node commands. The `/lowstate` limit checks run from the first sample (under
+`use_sim_time`, from the first `/clock`). An estop that latches before the robot's first
+`/lowstate` (a non-finite command, a first estop sample that says triggered) writes nothing
+until that `/lowstate` arrives (`estop_waiting`, Error, once), then its estop commands.
 
 A command that cannot engage raises `engage_refused` (Warn) with the first reason, at most
-once a second: `no /lowstate received yet`, `/lowstate mode_machine is 0, expected 6`, or
-`no hardware estop sample received yet on /estop/triggered or /estop/plugged_in`.
+once a second: `no /lowstate received yet`, `/lowstate mode_machine is 0, expected 6`,
+`/lowstate mode_pr is 1, expected 0`, or `no hardware estop sample received yet on
+/estop/triggered or /estop/plugged_in`.
 
-**Robot identity.** Every `/lowstate` is checked against the profile's `mode_machine`. Before
-engaging, another value only refuses (another robot or sim delays engaging); once engaged, it
-latches the estop (`/lowstate mode_machine 5 is not the h12's 6: another robot or sim is on
-this domain`). A foreign sample is never limit-checked. `docker/scripts/wait_for_sim.py`
+**Robot identity.** Every `/lowstate` is checked against the profile's `mode_machine` and
+`mode_pr`. Before engaging, another `mode_machine` holds the output and refuses engaging
+(another robot or sim delays it), and another `mode_pr` refuses engaging while the zero stream
+goes on with the profile's; once engaged, either latches the estop (`/lowstate mode_machine 5
+is not the h12's 6: another robot or sim is on this domain`, `/lowstate mode_pr 1 is not the
+h12's 0: the robot is in another ankle mode`), and the estop commands carry our robot's last
+`mode_machine`, never the other's. Such a sample is never limit-checked. The real H1-2 reports
+`mode_machine` 6 and `mode_pr` 0 (the `lmg_deploy` bags); the G1's `mode_pr` is unmeasured on
+the real G1. `docker/scripts/wait_for_sim.py`
 checks the same values before a paired bringup starts, and each robot's sims report them.
 
 **Quiet inputs are held and reported, not estopped.** Once an input has engaged, a gap in

@@ -327,7 +327,6 @@ def place_robot_collision_free(env, base_pos, base_quat, step=0.02, max_iters=50
 POS_OFFSET = (0.0, -0.30, 0.80)
 
 
-def make_kitchen_env(env_name, layout_ids=None, style_ids=None, seed=None, **kwargs):
+def make_kitchen_env(env_name, layout_ids=None, style_ids=None, seed=None):
     """Return the task env env_name around a G1Dex3 (robosuite_common.make_kitchen_env)."""
-    return robosuite_common.make_kitchen_env(G1Dex3, POS_OFFSET, env_name, layout_ids, style_ids, seed,
-                                             **kwargs)
+    return robosuite_common.make_kitchen_env(G1Dex3, POS_OFFSET, env_name, layout_ids, style_ids, seed)

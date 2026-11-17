@@ -303,17 +303,9 @@ def install_robocasa_patches(model_class, pos_offset):
     name = model_class.__name__
     if name in _PATCHED:
         return
-    import warnings
+    from robocasa.utils import env_utils as EU
 
-    try:
-        from robocasa.utils import env_utils as EU
-    except Exception as e:  # pragma: no cover - container only
-        warnings.warn(f"[robosuite_common] robocasa not importable: {e}")
-        return
-
-    offsets = getattr(EU, "_ROBOT_POS_OFFSETS", None)
-    if isinstance(offsets, dict):
-        offsets.setdefault(name, list(pos_offset))
+    EU._ROBOT_POS_OFFSETS.setdefault(name, list(pos_offset))
 
     def is_robot(env):
         """Return whether env's robot is a model_class."""
@@ -322,50 +314,40 @@ def install_robocasa_patches(model_class, pos_offset):
         except Exception:
             return False
 
-    orig_set_base = getattr(EU, "set_robot_base", None)
-    orig_set_pos = getattr(EU, "set_robot_to_position", None)
+    orig_set_base = EU.set_robot_base
+    orig_set_pos = EU.set_robot_to_position
 
-    if orig_set_base is not None:
-        def set_robot_base(*args, **kwargs):
-            """Place the robot at anchor_pos/anchor_ori and return the position; else call the placement before."""
-            env = kwargs.get("env", args[0] if args else None)
-            if env is not None and is_robot(env):
-                anchor_pos = kwargs.get("anchor_pos", args[1] if len(args) > 1 else None)
-                anchor_ori = kwargs.get("anchor_ori", args[2] if len(args) > 2 else None)
-                pos = np.array(anchor_pos, dtype=float) if anchor_pos is not None else np.zeros(3)
-                env.init_robot_base_pos = pos
-                env.init_robot_base_ori = (
-                    np.array(anchor_ori, dtype=float) if anchor_ori is not None else np.zeros(3)
-                )
-                place_robot_freejoint(env, pos, euler_to_wxyz(anchor_ori))
-                return pos
-            return orig_set_base(*args, **kwargs)
+    def set_robot_base(*args, **kwargs):
+        """Place the robot at anchor_pos/anchor_ori and return the position; else call the placement before."""
+        env = kwargs.get("env", args[0] if args else None)
+        if env is not None and is_robot(env):
+            anchor_pos = kwargs.get("anchor_pos", args[1] if len(args) > 1 else None)
+            anchor_ori = kwargs.get("anchor_ori", args[2] if len(args) > 2 else None)
+            pos = np.array(anchor_pos, dtype=float) if anchor_pos is not None else np.zeros(3)
+            env.init_robot_base_pos = pos
+            env.init_robot_base_ori = (
+                np.array(anchor_ori, dtype=float) if anchor_ori is not None else np.zeros(3)
+            )
+            place_robot_freejoint(env, pos, euler_to_wxyz(anchor_ori))
+            return pos
+        return orig_set_base(*args, **kwargs)
 
-        EU.set_robot_base = set_robot_base
+    def set_robot_to_position(*args, **kwargs):
+        """Place the robot at global_pos; else call the placement before."""
+        env = kwargs.get("env", args[0] if args else None)
+        global_pos = kwargs.get("global_pos", args[1] if len(args) > 1 else None)
+        if env is not None and is_robot(env) and global_pos is not None:
+            ori = getattr(env, "init_robot_base_ori", None)
+            place_robot_freejoint(env, np.array(global_pos, dtype=float), euler_to_wxyz(ori))
+            return
+        return orig_set_pos(*args, **kwargs)
 
-    if orig_set_pos is not None:
-        def set_robot_to_position(*args, **kwargs):
-            """Place the robot at global_pos; else call the placement before."""
-            env = kwargs.get("env", args[0] if args else None)
-            global_pos = kwargs.get("global_pos", args[1] if len(args) > 1 else None)
-            if env is not None and is_robot(env) and global_pos is not None:
-                ori = getattr(env, "init_robot_base_ori", None)
-                place_robot_freejoint(env, np.array(global_pos, dtype=float), euler_to_wxyz(ori))
-                return
-            return orig_set_pos(*args, **kwargs)
-
-        EU.set_robot_to_position = set_robot_to_position
-
-    if orig_set_base is None and orig_set_pos is None:
-        warnings.warn(
-            "[robosuite_common] no RoboCasa placement entry point found to patch; "
-            "call place_robot_freejoint(env, pos, quat) from the harness after reset."
-        )
+    EU.set_robot_base = set_robot_base
+    EU.set_robot_to_position = set_robot_to_position
     _PATCHED.add(name)
 
 
-def make_kitchen_env(model_class, pos_offset, env_name, layout_ids=None, style_ids=None, seed=None,
-                     **kwargs):
+def make_kitchen_env(model_class, pos_offset, env_name, layout_ids=None, style_ids=None, seed=None):
     """Return the task env env_name around model_class, without robosuite's renderer or camera observations.
 
     Installs the placement patch for model_class with pos_offset
@@ -391,5 +373,4 @@ def make_kitchen_env(model_class, pos_offset, env_name, layout_ids=None, style_i
     for k, v in (("layout_ids", layout_ids), ("style_ids", style_ids), ("seed", seed)):
         if v is not None:
             env_kwargs[k] = v
-    env_kwargs.update(kwargs)
     return robosuite.make(**env_kwargs)

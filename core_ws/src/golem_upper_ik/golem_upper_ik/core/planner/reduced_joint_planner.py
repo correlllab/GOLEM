@@ -711,7 +711,7 @@ class ReducedJointPlanner:
         self._print_interpolation_metadata(metadata, 'direct path')
         return path
 
-    def _shorten_path(self, path, smooth=True):
+    def _shorten_path(self, path):
         """Simplify an OMPL path (simplify), then shortcut and smooth it (shortcut).
 
         B-spline smoothing can overshoot into collision; plan() validates the result.
@@ -725,5 +725,4 @@ class ReducedJointPlanner:
             simplifier = og.PathSimplifier(self.si)
             simplifier.ropeShortcutPath(path)
             simplifier.reduceVertices(path)
-            if smooth:
-                simplifier.smoothBSpline(path)
+            simplifier.smoothBSpline(path)

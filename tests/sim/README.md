@@ -112,6 +112,12 @@ never recorded), at 25 fps and on the ros container's CPUs when they are pinned.
 steps end, `stack.mp4` puts the two side by side, each 1080 px high. The host needs `xauth`,
 `xwininfo` and an `ffmpeg` with x11grab; the test refuses to start without them.
 
+The viewer draws with Mesa's software renderer in a video run (`__GLX_VENDOR_LIBRARY_NAME=mesa`,
+`LIBGL_ALWAYS_SOFTWARE=1`, in the sim container only): the NVIDIA driver's direct-rendered frames
+never reach the X server x11grab reads, so a GPU viewer records as stale frames. The cameras and the
+lidar stay on the GPU (EGL). Software drawing gives the viewer's half about 6-9 frames per second
+while the robot moves (an H1-2 run, its window about 2300x1000 px); RViz's half about 13-16.
+
 The windows render live beside the run, so the run carries more load than a headless one; the
 summary still prints the real-time factor the sim logged. A video that fails is reported (`no
 video; see .../video.log`) and does not fail the test. Leave the windows open while the test

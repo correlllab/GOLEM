@@ -330,11 +330,17 @@ sim_test_start_sim() {
         robot_env=(-e GOLEM_SPAWN_MARGIN= -e GOLEM_SPAWN_OFFSET= -e GOLEM_LIDAR_SELF_FILTER=
                    -e GOLEM_CAMERA_DEPTH= -e GOLEM_CAMERA_POINTCLOUD= -e GOLEM_HAND_CAMERA_RES=)
     fi
-    local headless=--headless
-    [ "${SIM_TEST_VIDEO:-0}" != 1 ] || headless=
+    local headless=--headless video_env=()
+    # The video: the viewer draws with Mesa's software renderer (GLX), whose frames x11grab can
+    # read; the NVIDIA driver's direct-rendered GLX frames never reach the X server it reads,
+    # so the recording would hold stale frames. The cameras and the lidar stay on the GPU (EGL).
+    if [ "${SIM_TEST_VIDEO:-0}" = 1 ]; then
+        headless=
+        video_env=(-e __GLX_VENDOR_LIBRARY_NAME=mesa -e LIBGL_ALWAYS_SOFTWARE=1)
+    fi
     "${COMPOSE[@]}" run -d --no-deps --name "$SIM" -e "GOLEM_ROBOT=$SIM_TEST_ROBOT" -e G1_DDS_INTERFACE=lo \
         -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONUNBUFFERED=1 -e MUJOCO_GL=egl -e GOLEM_SIM_EXPERIMENT=0 \
-        "${robot_env[@]}" "$@" robocasa bash -c "$MULTICAST && source /opt/ros/humble/setup.bash && \
+        "${robot_env[@]}" "${video_env[@]}" "$@" robocasa bash -c "$MULTICAST && source /opt/ros/humble/setup.bash && \
         source /opt/livox_ws/install/setup.bash && $prepare cd /home/code/golem_robocasa && \
         exec python3 -u /home/code/tests/$SIM_TEST_SUITE/$py sim --out /out -- $headless --layout 9 --style 9 --seed 42" >/dev/null
     docker logs -f "$SIM" > "$OUT/sim.log" 2>&1 9>&- &

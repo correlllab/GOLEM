@@ -56,7 +56,7 @@ class Dex3Hand:
     """
 
     def __init__(self, side, kp=DEFAULT_KP, kd=DEFAULT_KD, rate_hz=100.0,
-                 cmd_topic=None, state_topic=None, max_speed=DEFAULT_MAX_SPEED, clock=None):
+                 max_speed=DEFAULT_MAX_SPEED, clock=None):
         """Open the hand's DDS channels and start the command thread.
 
         kp, kd: PD gains; rate_hz: command rate while commanding, per s of
@@ -77,9 +77,9 @@ class Dex3Hand:
         self._release_left = 0
         self._state = None
         self._cmd = HandCmdDefault()
-        self._pub = ChannelPublisher(cmd_topic or f'rt/dex3/{side}/cmd', HandCmd_)
+        self._pub = ChannelPublisher(f'rt/dex3/{side}/cmd', HandCmd_)
         self._pub.Init()
-        self._sub = ChannelSubscriber(state_topic or f'rt/dex3/{side}/state', HandState_)
+        self._sub = ChannelSubscriber(f'rt/dex3/{side}/state', HandState_)
         self._sub.Init(self._on_state, 10)
         self._running = True
         self._thread = threading.Thread(target=self._loop, name=f'dex3_{side}', daemon=True)

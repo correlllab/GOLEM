@@ -177,14 +177,20 @@ std::optional<LowCmd> run(
 }  // namespace
 
 // SAFETY: from the first step, with or without use_estop, the H1-2 writes the zero command.
-TEST(Startup, ZeroStreamFromFirstStep)
+TEST(Startup, ZeroStreamFromFirstLowstate)
 {
+  // Nothing before the robot's first /lowstate, with or without use_estop; zero_command
+  // from it on, before any estop sample or command.
   const LowCmd zero = golem_safety::zero_command(h12());
   for (const char * name : {"relax_safety_split", "default_safety_full"}) {
     for (const bool use_estop : {false, true}) {
       SCOPED_TRACE(std::string(name) + (use_estop ? ", use_estop" : ""));
       SafetyCore core(h12(), config(h12(), name), use_estop, kDomain);
-      for (int i = 0; i < 100; ++i) {
+      for (int i = 0; i < 50; ++i) {
+        ASSERT_FALSE(core.step(i * kStep)) << "step " << i;
+      }
+      core.on_state(state_of(h12()), 50 * kStep);
+      for (int i = 50; i < 100; ++i) {
         const auto out = core.step(i * kStep);
         ASSERT_TRUE(out) << "step " << i;
         expect_same(*out, zero);
@@ -194,12 +200,91 @@ TEST(Startup, ZeroStreamFromFirstStep)
   }
 }
 
+TEST(Startup, HeaderFollowsEveryLowstate)
+{
+  // The header is the robot's own: before engaging, a /lowstate from another robot holds
+  // the output (relay_held) until the robot's own returns; nothing is ever stamped with
+  // the other robot's value.
+  const LowCmd zero = golem_safety::zero_command(h12());
+  SafetyCore core(h12(), config(h12(), "relax_safety_split"), false, kDomain);
+  core.on_state(state_of(h12()), 0.0);
+  auto out = core.step(0.0);
+  ASSERT_TRUE(out);
+  EXPECT_EQ(out->mode_machine, 6);
+  EXPECT_EQ(out->mode_pr, 0);
+  LowState foreign = state_of(h12());
+  foreign.mode_machine = 5;
+  core.on_state(foreign, 0.01);
+  EXPECT_FALSE(core.step(0.01));
+  EXPECT_FALSE(core.relay_ready());
+  const auto held = named(core.drain_events(), "relay_held");
+  ASSERT_EQ(held.size(), 1U);
+  EXPECT_EQ(
+    held[0].second["reason"].as<std::string>(), "/lowstate mode_machine is 5, expected 6");
+  core.on_state(state_of(h12()), 0.02);
+  out = core.step(0.02);
+  ASSERT_TRUE(out);
+  expect_same(*out, zero);
+  EXPECT_FALSE(core.estopped());
+}
+
+TEST(Startup, ForeignModeMachineAfterEngagingKeepsOurHeader)
+{
+  // Once engaged, another robot's mode_machine latches; the burst carries our robot's
+  // last mode_machine, never the other's.
+  const SafetyConfig cfg = config(h12(), "relax_safety_split");
+  SafetyCore core(h12(), cfg, false, kDomain);
+  core.on_state(state_of(h12()), 0.0);
+  core.on_command(Input::Lower, command(h12()), "lower", 0.0);
+  ASSERT_TRUE(core.step(0.0));
+  LowState foreign = state_of(h12());
+  foreign.mode_machine = 5;
+  core.on_state(foreign, 0.01);
+  ASSERT_TRUE(core.estopped());
+  for (int i = 0; i < cfg.estop_response.burst_count; ++i) {
+    const auto out = core.step(0.01 + i * kStep);
+    ASSERT_TRUE(out) << "burst " << i;
+    expect_same(*out, golem_safety::estop_command(h12(), cfg));
+    ASSERT_EQ(out->mode_machine, 6);
+  }
+  EXPECT_FALSE(core.step(1.0)) << "silence after the burst";
+}
+
+TEST(Startup, ModePrMustMatch)
+{
+  // A /lowstate in another ankle mode blocks engaging while the zero stream goes on with
+  // the profile's mode_pr; once engaged it latches.
+  const SafetyConfig cfg = config(h12(), "relax_safety_split");
+  SafetyCore core(h12(), cfg, false, kDomain);
+  LowState ab = state_of(h12());
+  ab.mode_pr = 1;
+  core.on_state(ab, 0.0);
+  core.on_command(Input::Lower, command(h12(), 0.1F), "lower", 0.0);
+  auto out = core.step(0.0);
+  ASSERT_TRUE(out);
+  EXPECT_EQ(out->mode_pr, 0);
+  EXPECT_EQ(out->motor_cmd[3].kp, 0.0F) << "not engaged";
+  EXPECT_FALSE(core.relay_ready());
+  const auto refused = named(core.drain_events(), "engage_refused");
+  ASSERT_EQ(refused.size(), 1U);
+  EXPECT_EQ(refused[0].second["reason"].as<std::string>(), "/lowstate mode_pr is 1, expected 0");
+  core.on_state(state_of(h12()), 0.01);
+  core.on_command(Input::Lower, command(h12(), 0.1F), "lower", 0.01);
+  out = core.step(0.01);
+  ASSERT_TRUE(out);
+  EXPECT_EQ(out->motor_cmd[3].q, 0.1F);
+  core.on_state(ab, 0.02);
+  ASSERT_TRUE(core.estopped());
+  EXPECT_EQ(
+    core.estop_reason(), "/lowstate mode_pr 1 is not the h12's 0: the robot is in another ankle mode");
+}
+
 // SAFETY: without the robot's own /lowstate no input engages: the zero command throughout,
 // engage_refused at most once a second, and another robot's /lowstate only delays engaging.
 TEST(Startup, NoLowstateNeverEngages)
 {
-  // H1-2: commands for 5 s and no /lowstate. zero_command on every step, and the reason
-  // at most once a second.
+  // H1-2: commands for 5 s and no /lowstate. Nothing is written, and the reason for not
+  // engaging comes at most once a second.
   const LowCmd zero = golem_safety::zero_command(h12());
   SafetyCore core(h12(), config(h12(), "relax_safety_split"), false, kDomain);
   const LowCmd cmd = command(h12(), 0.1F);
@@ -207,9 +292,7 @@ TEST(Startup, NoLowstateNeverEngages)
     const double t = i * kStep;
     core.on_command(Input::Lower, cmd, "lower", t);
     core.on_command(Input::Upper, cmd, "upper", t);
-    const auto out = core.step(t);
-    ASSERT_TRUE(out) << "t = " << t;
-    ASSERT_EQ(out->motor_cmd, zero.motor_cmd) << "t = " << t;
+    ASSERT_FALSE(core.step(t)) << "t = " << t;
   }
   auto events = core.drain_events();
   auto refused = named(events, "engage_refused");
@@ -222,14 +305,13 @@ TEST(Startup, NoLowstateNeverEngages)
       "\"reason\": \"no /lowstate received yet\"}");
   }
 
-  // A /lowstate from the other robot: still zero_command, and why.
+  // A /lowstate from the other robot: still nothing, and why.
   LowState foreign = state_of(h12());
   foreign.mode_machine = 5;
   core.on_state(foreign, 5.5);
   core.on_command(Input::Upper, cmd, "upper", 5.5);
   auto out = core.step(5.5);
-  ASSERT_TRUE(out);
-  EXPECT_EQ(out->motor_cmd, zero.motor_cmd);
+  EXPECT_FALSE(out);
   EXPECT_FALSE(core.estopped());
   refused = named(core.drain_events(), "engage_refused");
   ASSERT_EQ(refused.size(), 1U);
@@ -246,8 +328,7 @@ TEST(Startup, NoLowstateNeverEngages)
   EXPECT_EQ(out->motor_cmd[3], zero.motor_cmd[3]);
   EXPECT_FALSE(core.estopped());
 
-  // G1: zero_command likewise.
-  const LowCmd g1_zero = golem_safety::zero_command(g1());
+  // G1: nothing likewise.
   const SafetyConfig g1_cfg = config(g1(), "sim_split");
   SafetyCore g1_core(g1(), g1_cfg, false, kDomain);
   const LowCmd g1_cmd = command(g1(), 0.1F);
@@ -255,9 +336,7 @@ TEST(Startup, NoLowstateNeverEngages)
     const double t = i * kStep;
     g1_core.on_command(Input::Lower, g1_cmd, "lower", t);
     g1_core.on_command(Input::Upper, g1_cmd, "upper", t);
-    const auto g1_out = g1_core.step(t);
-    ASSERT_TRUE(g1_out) << "t = " << t;
-    ASSERT_EQ(g1_out->motor_cmd, g1_zero.motor_cmd) << "t = " << t;
+    ASSERT_FALSE(g1_core.step(t)) << "t = " << t;
   }
   events = g1_core.drain_events();
   refused = named(events, "engage_refused");
@@ -272,8 +351,7 @@ TEST(Startup, NoLowstateNeverEngages)
   g1_core.on_command(Input::Lower, g1_cmd, "lower", 5.5);
   g1_core.on_command(Input::Upper, g1_cmd, "upper", 5.5);
   auto g1_out = g1_core.step(5.5);
-  ASSERT_TRUE(g1_out);
-  EXPECT_EQ(g1_out->motor_cmd, g1_zero.motor_cmd);
+  EXPECT_FALSE(g1_out);
   EXPECT_FALSE(g1_core.estopped());
   refused = named(g1_core.drain_events(), "engage_refused");
   ASSERT_EQ(refused.size(), 1U);
@@ -342,13 +420,20 @@ TEST(Startup, ZeroStreamEngagesPerInput)
 }
 
 // SAFETY: the G1 writes the zero command on all 35 slots from the first step.
-TEST(Startup, G1StreamsZeroFromFirstStep)
+TEST(Startup, G1StreamsZeroFromFirstLowstate)
 {
-  // No /lowstate and no input: zero_command on all 35 slots from the first step, stamped
-  // with the G1's mode_machine.
+  // Nothing before the first /lowstate; from it, with no input, zero_command on all 35
+  // slots, stamped with the mode_machine the /lowstate reports.
   const LowCmd zero = golem_safety::zero_command(g1());
   SafetyCore core(g1(), config(g1(), "sim_split"), false, kDomain);
-  for (int i = 0; i < 100; ++i) {
+  for (int i = 0; i < 50; ++i) {
+    ASSERT_FALSE(core.step(i * kStep)) << "step " << i;
+  }
+  const auto held = named(core.drain_events(), "relay_held");
+  ASSERT_EQ(held.size(), 1U);
+  EXPECT_EQ(held[0].second["reason"].as<std::string>(), "no /lowstate received yet");
+  core.on_state(state_of(g1()), 50 * kStep);
+  for (int i = 50; i < 150; ++i) {
     const auto out = core.step(i * kStep);
     ASSERT_TRUE(out) << "step " << i;
     expect_same(*out, zero);
@@ -428,7 +513,7 @@ TEST(Startup, G1LimitChecksFromBoot)
     SCOPED_TRACE(name);
     const SafetyConfig cfg = config(g1(), name);
     SafetyCore core(g1(), cfg, false, kDomain);
-    ASSERT_TRUE(core.step(0.0));
+    ASSERT_FALSE(core.step(0.0)) << "nothing before the first /lowstate";
     LowState state = state_of(g1());
     state.motor_state[kKnee].q = static_cast<float>(cfg.limits.q_estop_low[kKnee] - 0.1);
     core.on_state(state, 0.002);
@@ -472,10 +557,20 @@ TEST(Estop, FirstSampleTriggeredLatches)
       core.on_estop(true, true, 0.0);
       ASSERT_TRUE(core.estopped());
       EXPECT_EQ(core.estop_reason(), "External estop triggered");
-      // The estop command, the first of the H1-2's burst and of the G1's keep_writing.
-      const auto out = core.step(0.002);
+      // Nothing before the robot's first /lowstate, and why, once.
+      EXPECT_FALSE(core.step(0.002));
+      EXPECT_FALSE(core.step(0.004));
+      const auto waiting = named(core.drain_events(), "estop_waiting");
+      ASSERT_EQ(waiting.size(), 1U);
+      EXPECT_EQ(waiting[0].first.kind, Event::Error);
+      EXPECT_EQ(waiting[0].second["reason"].as<std::string>(), "External estop triggered");
+      // From it on, the estop command, the first of the H1-2's burst and of the G1's
+      // keep_writing, and its report.
+      core.on_state(state_of(c.profile), 0.005);
+      const auto out = core.step(0.006);
       ASSERT_TRUE(out);
       expect_same(*out, golem_safety::estop_command(c.profile, cfg));
+      EXPECT_EQ(named(core.drain_events(), "estop_command_written").size(), 1U);
     }
     {
       SafetyCore core(c.profile, cfg, true, kDomain);
@@ -629,6 +724,7 @@ TEST(Estop, StaleAfterEngageLatches)
 
   // From the first sample on, also before engaging.
   SafetyCore early(h12(), config(h12(), "relax_safety_split"), true, kDomain);
+  early.on_state(state_of(h12()), 0.0);
   early.on_estop(false, true, 0.0);
   ASSERT_TRUE(early.step(0.5));
   EXPECT_FALSE(early.estopped());

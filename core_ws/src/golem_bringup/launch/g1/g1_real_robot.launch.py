@@ -21,7 +21,7 @@ Before launching:
 
 golem_safety runs split.yaml: it writes every motor on rt/lowcmd, the legs
 from the leg node's input and the waist and arms from the arm
-controller's (g1_split.yaml). From boot it streams zero gains on every motor
+controller's (g1_split.yaml). From the robot's first rt/lowstate it streams zero gains on every motor
 (every motor off) and engages each input on its own first command: the arms on
 the controller's first command, and the move to home starts once the
 controller sees golem_safety relay it on rt/lowcmd.

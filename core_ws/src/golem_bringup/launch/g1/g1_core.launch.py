@@ -15,7 +15,7 @@ use_estop false: the G1 stack has no hardware estop node.
 
 safety_node runs split mode (split, or sim_split in the sim): it writes every
 motor on /lowcmd, the legs from the leg node's input and the waist and
-arms from the controller's. From boot it streams zero gains on every motor
+arms from the controller's. From the robot's first rt/lowstate it streams zero gains on every motor
 (every motor off), and engages each input on that input's own first valid
 command once rt/lowstate reports the G1's mode_machine (5); until the leg
 node commands, the leg motors stay off.

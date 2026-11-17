@@ -567,12 +567,20 @@ def test_zero_stream_engages_each_input_on_its_own(stack, first):
         'split_mode_lower', 'split_mode_upper']
 
 
-def test_g1_streams_lowcmd_from_boot(stack):
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_nothing_before_the_first_lowstate(stack, robot):
     """
-    SAFETY: with no input and no /lowstate the G1 gets the zero stream at about 500 Hz on every
-    slot, and no heartbeat, since the relay cannot begin.
+    SAFETY: with no /lowstate nothing goes out on /lowcmd and no heartbeat, and the node says
+    why; the robot's first /lowstate starts the zero stream at about 500 Hz, stamped with
+    the mode_machine it reports.
     """
-    run = stack('g1', 'split', stream_state=False)
+    run = stack(robot, SPLIT[robot], stream_state=False)
+    time.sleep(1.0)
+    assert run.outputs() == []
+    assert run.robot.outputs(HEARTBEAT) == []
+    assert reasons(run.node, 'relay_held')[0] == 'no /lowstate received yet'
+    assert run.node.events('input_engaged') == [] and estop_events(run.node) == []
+    run.robot.resume()
     time.sleep(0.3)
     start = time.time()
     time.sleep(1.0)
@@ -580,11 +588,10 @@ def test_g1_streams_lowcmd_from_boot(stack):
     window = [msg for t, msg in run.outputs(since=start) if t < end]
     hz = len(window) / (end - start)
     assert 450.0 <= hz <= 520.0, f'{hz:.0f} Hz'
+    mode_machine = run.robot.profile.mode_machine
     for msg in window:
         assert is_zeroed(msg, len(msg.motor_cmd))
-        assert (msg.mode_pr, msg.mode_machine) == (0, 5) and msg.crc == msg_crc(msg)
-    assert run.robot.outputs(HEARTBEAT) == []
-    assert run.node.events('input_engaged') == [] and estop_events(run.node) == []
+        assert (msg.mode_pr, msg.mode_machine) == (0, mode_machine) and msg.crc == msg_crc(msg)
 
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
@@ -962,8 +969,9 @@ def test_heartbeat_false_after_a_latch_before_the_first_beat(stack, robot, latch
     """
     SAFETY: a latch before the relay was ready makes the beats false and never true.
 
-    command: a non-finite command with no /lowstate yet; estop: a first hardware estop sample
-    that says triggered, with the robot's /lowstate.
+    command: a non-finite command with no /lowstate yet, which writes nothing and says why
+    (estop_waiting); estop: a first hardware estop sample that says triggered, with the
+    robot's /lowstate.
     """
     if latch == 'command':
         run = stack(robot, SPLIT[robot], stream_state=False)
@@ -976,7 +984,11 @@ def test_heartbeat_false_after_a_latch_before_the_first_beat(stack, robot, latch
         run.robot.estop_values = (True, True)
         reason_prefix = 'External estop triggered'
     time.sleep(1.2)
-    (report,) = run.node.events('estop_command_written')
+    if latch == 'command':
+        (report,) = run.node.events('estop_waiting')
+        assert run.outputs() == []
+    else:
+        (report,) = run.node.events('estop_command_written')
     assert report['reason'].startswith(reason_prefix), report
     beats = run.robot.outputs(HEARTBEAT)
     assert beats and not any(beat for _, beat in beats)

@@ -38,11 +38,18 @@ struct Event
 // Relay. Each input keeps its newest valid command. step() starts from zero_command and
 // copies onto each engaged input's slots that input's newest command, so a slot no engaged
 // input owns stays at zero_command (every motor off). step() and exit_step() stamp the
-// header and CRC on whatever they return, last.
+// header and CRC on whatever they return, last: mode_machine from the newest /lowstate that
+// reported the profile's (read from every sample), mode_pr from the profile.
+//
+// SAFETY: nothing is written before a /lowstate reports the profile's mode_machine, nor,
+// before an input has engaged, while the newest /lowstate reports another (relay_held,
+// Warn, at most every 5 s of one hold). An estop that latches before any such /lowstate
+// writes nothing until one arrives (estop_waiting, Error, once), then its estop commands as
+// after any latch, and estop_command_written.
 //
 // Engaging. Each input engages on its own first valid command that arrives while the newest
-// /lowstate carries the profile's mode_machine and, with use_estop, a hardware estop sample
-// has arrived (input_engaged, Info). A command that cannot engage raises engage_refused
+// /lowstate carries the profile's mode_machine and mode_pr and, with use_estop, a hardware
+// estop sample has arrived (input_engaged, Info). A command that cannot engage raises engage_refused
 // (Warn) with the first unmet condition, at most once a second. A /lowstate from another
 // robot before engaging only delays engaging.
 //
@@ -68,13 +75,14 @@ struct Event
 // writer's last command, valid or not, is older than single_writer.handover_seconds;
 // otherwise it latches the estop with "second writer on <topic>".
 //
-// SAFETY: the /lowstate checks run on every sample that carries the profile's mode_machine,
-// from the first one, before any input engages.
+// SAFETY: the /lowstate limit checks run on every sample that carries the profile's
+// mode_machine and mode_pr, from the first one, before any input engages.
 //
 // SAFETY: the estop latches, one way until the process restarts, on
 //   - a command with a non-finite value, before or after engaging: "Command validation
 //     failed on <topic>: motor <slot> (<joint>) <field> is <value>";
-//   - a /lowstate whose mode_machine is not the profile's, once an input has engaged;
+//   - a /lowstate whose mode_machine or mode_pr is not the profile's, once an input has
+//     engaged; after a foreign mode_machine the estop commands carry our robot's last one;
 //   - on ROS domain 0 with control.state_lag_ms > 0, a /lowstate that arrives more than
 //     state_lag_ms late against the robot's uint32 ms tick: its arrival minus its tick,
 //     less a baseline that is the smallest such offset seen and may rise by 0.5 ms/s to
@@ -176,8 +184,8 @@ private:
   // Name why a command cannot engage.
   struct Refusal
   {
-    enum Kind { NoState, ModeMachine, NoEstopSample } kind;
-    int mode_machine = 0;  // ModeMachine: the sample's
+    enum Kind { NoState, ModeMachine, ModePr, NoEstopSample } kind;
+    int value = 0;  // ModeMachine, ModePr: the sample's
   };
 
   // Hold the transport-lag check's state: the robot's ms tick, unwrapped, against `now`.
@@ -283,8 +291,13 @@ private:
   unitree_hg::msg::LowCmd merged() const;
   // Return this step's estop command per estop_response, or nullopt once the burst is done.
   std::optional<unitree_hg::msg::LowCmd> estop_output(double now);
-  // Stamp the header and CRC on `out` and remember it as the last command written.
+  // Stamp the header and CRC on `out` and remember it as the last command written; nullopt
+  // when no /lowstate has reported the profile's mode_machine yet.
   std::optional<unitree_hg::msg::LowCmd> finish(std::optional<unitree_hg::msg::LowCmd> out);
+  // Raise estop_waiting once for a latch with no header to stamp yet; return nullopt.
+  std::optional<unitree_hg::msg::LowCmd> unwritten_estop();
+  // Raise relay_held, at most once every kHeldReportSeconds of one hold.
+  void report_held(double now);
 
   const RobotProfile profile_;
   const SafetyConfig config_;
@@ -303,6 +316,11 @@ private:
   std::optional<double> refusal_reported_;  // s, the last engage_refused
 
   std::optional<unitree_hg::msg::LowState> state_;
+  // The mode_machine of the newest /lowstate that reported the profile's: every command's.
+  std::optional<uint8_t> header_mode_machine_;
+  bool state_foreign_ = false;  // the newest /lowstate's mode_machine is not the profile's
+  std::optional<double> held_reported_;  // s, the last relay_held of the current hold
+  bool estop_wait_reported_ = false;     // estop_waiting raised
   std::optional<double> state_time_;  // s, the last /lowstate's arrival, kept while estopped
   double state_wall_time_ = 0.0;  // s, wall clock at the newest /lowstate's arrival
   bool state_unlogged_ = false;   // take_log_sample() has a sample to return

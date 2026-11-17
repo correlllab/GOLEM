@@ -426,15 +426,14 @@ class UpperController:
         return (config.moving_speed * scale,
                 int(np.ceil(config.max_interpolation_steps / scale)))
 
-    def plan_to_configuration(self, q_reduced, start=None, active_mask=None):
-        """Return a planned reduced path from start (default: the command seed) to q_reduced.
+    def plan_to_configuration(self, q_reduced, active_mask=None):
+        """Return a planned reduced path from the command seed to q_reduced.
 
         PlannerUnavailableError when the controller cannot plan; RuntimeError when planning
         fails.
         """
         self._check_planning()
-        if start is None:
-            start = self._command_seed()[0][self.robot_model.reduced_mask]
+        start = self._command_seed()[0][self.robot_model.reduced_mask]
         moving_speed, max_interpolation_steps = self._planner_speed_overrides()
         result = self.planner.plan_configuration(
             current_q=self.robot_model.state['q'],
@@ -446,22 +445,23 @@ class UpperController:
         )
         return self._path_or_raise(result)
 
-    def plan_to_ik_target(self, start=None, ik_timeout=1.0, ik_alpha=0.1):
+    def plan_to_ik_target(self, ik_timeout):
         """Return a planned reduced path to the IK solution of the current frame tasks.
 
-        PlannerUnavailableError, before any IK, when the controller cannot plan; RuntimeError
-        when the IK or the planning fails. Only the joints that move the tasks' frames plan.
+        ik_timeout is each IK seed's time limit, s. PlannerUnavailableError, before any IK, when
+        the controller cannot plan; RuntimeError when the IK or the planning fails. Only the
+        joints that move the tasks' frames plan.
         """
         self._check_planning()
         # restrict planning to the joints supporting the active tasks, so untasked limbs
         # (the other arm) never move during the plan
         active_mask = self._active_task_mask()
         self.update_ik_solver()
-        ik_result = self.ik_solver.solve_ik_reduced(alpha=ik_alpha, timeout=ik_timeout)
+        ik_result = self.ik_solver.solve_ik_reduced(timeout=ik_timeout)
         if not ik_result.success:
             raise RuntimeError('IK failed to resolve current targets')
         q_goal = ik_result.q[self.robot_model.reduced_mask]
-        return self.plan_to_configuration(q_goal, start=start, active_mask=active_mask)
+        return self.plan_to_configuration(q_goal, active_mask=active_mask)
 
     def _active_task_mask(self):
         """Return the reduced-joint mask of the joints that move any frame task's frame."""
@@ -481,10 +481,10 @@ class UpperController:
             joint_id = model.parents[joint_id]
         return mask
 
-    def execute_path(self, path, validate=True):
+    def execute_path(self, path):
         """Command reduced waypoints as positions, one per control period.
 
-        validate checks each waypoint's limits and self-collision first (ValueError). Refused
+        Each waypoint's limits and self-collision are checked first (ValueError). Refused
         (RuntimeError) while the follow gate is shut.
         """
         if not self.low_cmd_handler.following:
@@ -500,11 +500,10 @@ class UpperController:
         for q_reduced in path:
             start = clock.now()
             self.check_state_fresh()
-            if validate:
-                if not self.robot_model.check_within_limits_reduced(q_reduced):
-                    raise ValueError('Path waypoint is outside joint limits')
-                if not self.robot_model.check_collision_free_reduced(q_reduced):
-                    raise ValueError('Path waypoint is in self-collision')
+            if not self.robot_model.check_within_limits_reduced(q_reduced):
+                raise ValueError('Path waypoint is outside joint limits')
+            if not self.robot_model.check_collision_free_reduced(q_reduced):
+                raise ValueError('Path waypoint is in self-collision')
             q = np.array(self.robot_model.state['q'], dtype=np.float64)
             q[self.robot_model.reduced_mask] = q_reduced
             self._apply_joint_position(q)

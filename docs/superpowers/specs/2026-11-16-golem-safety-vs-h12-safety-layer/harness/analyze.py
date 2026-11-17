@@ -23,6 +23,7 @@ SNAP = {
     'upper_silent': ([0.4, 1.0, 2.4, 3.4], [0, 13]),
     'lower_silent': ([0.4, 1.0, 1.4], [0, 13]),
     'estop_q_edge': ([0.4, 0.9, 1.4], [0, 13]),
+    'split_header_source': ([0.5], [0, 13, 27]),
     'estop_q_below': ([0.4, 1.4], [0, 13]),
     'estop_dq': ([0.4, 0.9], [0, 13]),
     'state_nan': ([0.4, 0.9], [0, 13]),
@@ -54,7 +55,6 @@ def reason(log):
                      r'input_resumed|stale|Command validation|state_quiet', line, re.I):
             line = re.sub(r'^\[\w+\] \[[\d.]+\] \[safety_node\]: ', '', line)
             lines.append(line[:230])
-    # keep first of each kind
     seen, out = set(), []
     for line in lines:
         key = line[:40]

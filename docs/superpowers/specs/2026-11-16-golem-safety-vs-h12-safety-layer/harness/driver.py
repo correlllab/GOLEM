@@ -71,7 +71,7 @@ def valid_cmd(q=0.1, kp=50.0, kd=2.0):
                 kp=np.full(N, kp), kd=np.full(N, kd))
 
 
-# Each scenario: config, mode, estop use, duration (s) and a function of t (s) returning
+# Each scenario: config, estop use, duration (s) and a function of t (s) returning
 # {'state': {...overrides} or None, 'lower'/'upper'/'full': cmd dict or None, 'extra': ...}.
 def scenarios():
     """Return the scenario table."""
@@ -126,6 +126,9 @@ def scenarios():
             both(valid_cmd()),
             state=q_at(3, 0.0 if t < 0.5 else f32(knee_hi) if t < 1.0
                        else knee_hi + 0.01))),
+        'split_header_source': ('default_safety_split', False, 1.0, lambda t: {
+            'lower': dict(valid_cmd(0.05), header=(8, 2), spare=5.0),
+            'upper': dict(valid_cmd(0.2), header=(7, 1), spare=9.0)}),
         'estop_q_below': ('default_safety_split', False, 1.5, lambda t: dict(
             both(valid_cmd()), state=q_at(3, np.nextafter(f32(knee_hi), f32(0)) if t >= 0.5
                                           else 0.0))),

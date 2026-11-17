@@ -12,8 +12,6 @@ service and action futures, so the node spins on a MultiThreadedExecutor with
 one reentrant callback group: the other threads keep the futures completing.
 """
 
-from functools import partial
-
 import rclpy
 from rclpy.action import ActionServer
 from rclpy.executors import MultiThreadedExecutor
@@ -42,8 +40,6 @@ class SkillsNode(SkillsBase, OpenDoorSkill, CloseDoorSkill, OpenLidSkill,
                                   log=log, visualize=viz, clear=clear)
         self._frontier_init()
 
-        # turn_lever and twist_knob share _exec_turn, bound to their action
-        # type, label and motion phase
         executors = {
             'open_door':  self._exec_open_door,
             'close_door': self._exec_close_door,
@@ -54,10 +50,8 @@ class SkillsNode(SkillsBase, OpenDoorSkill, CloseDoorSkill, OpenLidSkill,
             'pick_place': self._exec_pick_place,
             'press':      self._exec_press,
             'slide_rack': self._exec_slide_rack,
-            'turn_lever': partial(self._exec_turn, SKILL_ACTIONS['turn_lever'][0],
-                                  'turn_lever', 'turn'),
-            'twist_knob': partial(self._exec_turn, SKILL_ACTIONS['twist_knob'][0],
-                                  'twist_knob', 'twist'),
+            'turn_lever': self._exec_turn,
+            'twist_knob': self._exec_turn,
             'frontier_explore': self._exec_frontier_explore,
         }
         # frontier_explore validates its fields and runs one goal at a time

@@ -90,7 +90,7 @@ python scripts/skrl/deploy_parity.py --headless --checkpoint <same> \
 `golem_bringup/launch/h12/lmg_sim.launch.py` starts everything (the policy node comes from the shared
 block `h12_locomanipulationgame.launch.py`):
 - the state publishers;
-- the split safety layer with the real robot's preset (`relax_safety_split`; ankle pitch torque e-stop 95 Nm since 10-20, sport mode peaks at 93);
+- the split safety layer with the real robot's preset (`relax_safety_split`; ankle pitch torque e-stop 95 Nm, above sport mode's 93 Nm peak);
 - `marl_deploy_node` with `policies/h12/`;
 - SLAM: `golem_slam/launch/navigation.launch.py` with `robot: h12` (FAST-LIO, the floor-level laser scan, slam_toolbox and nav2).
   FAST-LIO's `/Odometry` is what keeps the arm goals fixed in the world.
@@ -147,8 +147,8 @@ ros2 topic echo /marl_deploy_node/wrist_error   # m, left and right
 
 ## Real robot
 
-`lmg_real.launch.py` still refuses to start, before any node. The node now reads the H1-2's raw, upside-down
-`/livox/imu` (see the IMU item below; checked in the sim), and the refusal stays until that is checked on the
+`lmg_real.launch.py` refuses to start, before any node, until the node's handling of the H1-2's raw, upside-down
+`/livox/imu` (see the IMU item below; checked in the sim) is checked on the
 robot. The rest of this section is what it starts once the refusal goes.
 
 On the onboard PC, run `golem_bringup/launch/h12/lmg_real.launch.py` **instead of**
@@ -169,7 +169,7 @@ ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger         
   next message.
 - The node always waits for `~/confirm_engage` here, and never calls the sim's elastic band; neither is an argument.
 - Drive with `/cmd_vel`, `~/set_mode` and `~/set_arm_goals` as above.
-- Same `policy`, `safety_config` and `use_slam` arguments as the sim launch; keep `use_slam` on for arm goals.
+- Same `safety_config` and `use_slam` arguments as the sim launch; keep `use_slam` on for arm goals.
 
 **Before the first real run:**
 - **IMU.** The node reads only the MID360's `/livox/imu`, never `LowState.imu_state`, whose attitude carries a ~2.5 deg calibration error. `/livox/imu` is in the URDF's `livox_imu_link` (the IMU chip), the MID-360's raw frame, upside down on the H1-2's head (CL_Assets `d7ef401` on). The node carries the readings from there into the frame the policy trained with, `export.yaml`'s `imu.frame`, through the URDF (`livox_imu.livox_to_imu_rotation`, tested by `test_urdf_mount_takes_the_raw_livox_frame_to_each_policy_frame`):

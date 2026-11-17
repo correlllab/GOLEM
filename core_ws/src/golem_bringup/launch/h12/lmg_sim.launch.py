@@ -2,7 +2,8 @@
 Start the loco-manipulation game against the sim: lmg_deploy's MARL policy on all 27 joints.
 
     ros2 launch golem_bringup lmg_sim.launch.py [use_skills:=true]
- Start the simulator first. Everything starts at once: the state publishers (h12_state),
+
+Start the simulator first. Everything starts at once: the state publishers (h12_state),
 the command path (h12_control without frame_task_server, with the sim's estop box and the
 real robot's delay), the policy (h12_locomanipulationgame: lmg_deploy's policies/h12/,
 with the start pose taken as verified and no operator confirm), navigation (use_slam),

@@ -28,6 +28,15 @@ def key_paths(tree, prefix=()):
     return paths
 
 
+def leaves(tree, prefix=()):
+    """Yield (key path, value) for every leaf of a loaded YAML mapping."""
+    for key, value in tree.items():
+        if isinstance(value, dict) and value:
+            yield from leaves(value, prefix + (key,))
+        else:
+            yield prefix + (key,), value
+
+
 def load(path):
     """Return a YAML file's content."""
     with open(path) as source:
@@ -64,3 +73,11 @@ def test_pipeline_example_loads_with_exactly_the_required_keys():
     assert key_paths(load_pipeline(path)) == set(PIPELINE_KEYS)
     for config in described('pipeline'):
         assert key_paths(load(config)) == set(PIPELINE_KEYS), config
+
+
+@pytest.mark.parametrize('path', described('nav2') + [os.path.join(CONFIG, 'example.nav2.yaml')])
+def test_nav2_use_sim_time_follows_the_launch_argument(path):
+    """Every use_sim_time key in a Nav2 config is the launch's use_sim_time, none hard-coded."""
+    values = {p: v for p, v in leaves(load(path)) if p[-1] == 'use_sim_time'}
+    assert values
+    assert all(v == '${use_sim_time}' for v in values.values()), values

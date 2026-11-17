@@ -3,7 +3,7 @@
 Self-contained ROS 2 (ament_python) package hosting the project's heavy
 model-inference servers. Each server is a single file that imports nothing from
 other workspace perception packages; the servers share only this package's
-`model_logging` module (which `golem_skills` imports too).
+`model_logging` and `rotations` modules (which `golem_skills` imports too).
 
 ## Executables
 

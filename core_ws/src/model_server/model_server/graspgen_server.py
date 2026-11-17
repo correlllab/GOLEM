@@ -154,9 +154,6 @@ class GraspGenServer(Node):
         self.logger = ModelLogger(self, 'graspgen', 'model_server', __file__,
                                   log=log, visualize=viz, clear=clear)
 
-        self._run_planner = run_planner_on_object
-        self._GraspGenXSampler = GraspGenXSampler
-
         ckpt_root = os.environ['GRASPGENX_CHECKPOINT_DIR']
         checkpoints = os.path.join(ckpt_root, 'release')
         self._assets_dir = os.environ['GRASPGENX_ASSETS_DIR']
@@ -217,7 +214,7 @@ class GraspGenServer(Node):
         name = gripper_name or DEFAULT_GRIPPER
         if name not in self._samplers:
             self.get_logger().info(f'Building GraspGenXSampler (gripper={name}) ...')
-            sampler = self._GraspGenXSampler(
+            sampler = GraspGenXSampler(
                 self._model_cfg, name, assets_dir=self._assets_dir)
             # gripper geometry for the collision filter and viser, best-effort:
             # a GraspGenX version may expose none
@@ -338,7 +335,7 @@ class GraspGenServer(Node):
         # GraspGenX centers the cloud itself and returns grasps in the input
         # frame, so the raw cloud goes in and the grasps come back in `frame`
         try:
-            out = self._run_planner(pts, gr.sampler, **self._kwargs)
+            out = run_planner_on_object(pts, gr.sampler, **self._kwargs)
         except Exception as e:
             response.success, response.message = False, f'planner failed: {e}'
             self.get_logger().error(response.message)

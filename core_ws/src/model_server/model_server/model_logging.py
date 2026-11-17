@@ -236,10 +236,9 @@ class ModelLogger:
         self._node.get_logger().warn(f'[{self.model_name} log] {msg}')
 
 
-def declare_logging_params(node, *, log_default=False, viz_default=False,
-                           clear_default=True):
+def declare_logging_params(node):
     """Declare enable_logging, enable_visualization and clear_logs on `node`; return the values."""
-    log = node.declare_parameter('enable_logging', log_default).value
-    viz = node.declare_parameter('enable_visualization', viz_default).value
-    clear = node.declare_parameter('clear_logs', clear_default).value
+    log = node.declare_parameter('enable_logging', False).value
+    viz = node.declare_parameter('enable_visualization', False).value
+    clear = node.declare_parameter('clear_logs', True).value
     return bool(log), bool(viz), bool(clear)

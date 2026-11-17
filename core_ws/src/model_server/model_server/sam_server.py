@@ -223,14 +223,13 @@ class SamServer(Node):
         except Exception as e:
             self.get_logger().warn(f'sam overlay failed: {e}')
 
-    def _fail(self, response, msg, rec=None):
+    def _fail(self, response, msg, rec):
         """Fill `response` as a failure with `msg` and an empty mask; return it."""
         response.score = 0.0
         response.success = False
         response.message = msg
         self.get_logger().warn(f"sam_segment: {msg}")
-        if rec is not None:
-            rec.finish(success=False, message=msg)
+        rec.finish(success=False, message=msg)
         return response
 
 

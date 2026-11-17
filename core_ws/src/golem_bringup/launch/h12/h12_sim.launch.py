@@ -1,7 +1,7 @@
 """
 Start the whole H1-2 against the RoboCasa or Isaac sim, on sim time.
 
-    ros2 launch golem_bringup h12_sim.launch.py [use_rviz:=false] [use_nav:=false] ...
+    ros2 launch golem_bringup h12_sim.launch.py [use_rviz:=false] [use_skills:=false] ...
 
 Start the simulator first: every node runs on its /clock. The leg node's check
 (golem_bringup.h12_legs.leg_check) runs first, so a refused policy starts no node; then

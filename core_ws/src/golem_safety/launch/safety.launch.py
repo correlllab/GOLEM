@@ -77,8 +77,10 @@ def generate_launch_description() -> LaunchDescription:
                         'triggered, unplugged or silent estop latches'),
         DeclareLaunchArgument(
             'use_sim_time', default_value='false',
-            description='true|false: true to run ROS time on a simulator\'s /clock; the '
-                        'relay and its timeouts run on the boot clock either way'),
+            description='true|false: true to run robot time (the relay\'s rate and every '
+                        'timeout of the core) on a simulator\'s /clock, false for the boot '
+                        'clock; the heartbeat and the exit stay on the steady and boot '
+                        'clocks either way. The node refuses true without sim:=true'),
         DeclareLaunchArgument(
             'start_delay', default_value='0.0',
             description='s of wall time before the node starts, >= 0'),

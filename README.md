@@ -6,10 +6,10 @@ stack for the Correll Lab's Unitree humanoids: the H1-2 and, beside it, the G1
 
 Two simulators (MuJoCo/RoboCasa and Isaac Lab) and a ROS 2 Humble workspace run
 in separate Docker containers sharing one DDS domain. The workspace holds the
-drivers, upper-body IK, lower-body RL locomotion, a safety layer,
-perception model servers, and an LLM-callable skills layer. Sim and real robot
-speak the same Unitree `rt/lowcmd` / `rt/lowstate` wire format, so code moves
-between them unchanged.
+drivers, upper-body IK, lower-body RL locomotion, a safety layer, SLAM and
+navigation, perception model servers, and an LLM-callable skills layer. Sim and
+real robot speak the same Unitree `rt/lowcmd` / `rt/lowstate` wire format, so
+code moves between them unchanged.
 
 ## Quick start
 
@@ -31,34 +31,53 @@ docker/scripts/docker_run.sh ros                     # 2. workspace shell
 ros2 launch golem_bringup h12_sim.launch.py          #    bringup is a manual step
 ```
 
-And in a third, ask the robot to do something:
+The sim runs the real robot's operator gates. The legs hold their pre-pose until
+you confirm them, and ENTER in terminal 1 (or in the sim's viewer) presses the
+estop; after an estop, restart the whole bringup. In a third terminal, confirm
+the legs and ask the robot to do something:
 
 ```bash
 docker exec -it golem_ros bash
 source /opt/ros/humble/setup.bash && source /home/code/core_ws/install/setup.bash
+ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
 ros2 action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
   "{target_object: 'vertical fridge handle', arm: 'right', timeout: {sec: 60, nanosec: 0}}" --feedback
 ```
 
+## Packages
+
+The workspace is `core_ws/src`. Both robots run the same `golem_*` packages,
+each configured per robot.
+
+| Package | What it does |
+|---|---|
+| `golem_bringup` | Launch files that start the whole robot, sim or real ([`CLAUDE.md`](CLAUDE.md) §6) |
+| `golem_safety` | The only writer of the motor command topic: relays, clips and checks every command, latches the estop |
+| `golem_upper_ik` | Arm IK controller (`/frame_task`, `/named_config`) with planning and self-collision avoidance |
+| `golem_lowerbody_rl` | Leg controller running the walking policies (ALMI, FAME and walk on the H1-2; HOMIE on the G1) |
+| `golem_slam` | FAST-LIO odometry, slam_toolbox mapping and Nav2 navigation |
+| `golem_skills` | The `/skill/*` actions an LLM can call (grasp, pick and place, frontier exploration) |
+| `golem_ros2_models` | Both robots' URDFs, meshes and self-collision models for ROS |
+| `model_server` | Gemini, SAM3, GraspGenX and YOLO behind ROS services |
+| `lmg_deploy` | The loco-manipulation game's whole-body MARL policy |
+| `dex_3` | The G1's Dex3-1 hands |
+
+Each package's `README.md` documents it; [`CLAUDE.md`](CLAUDE.md) §4 lists the
+vendored and submodule packages beside them. The RoboCasa sim for both robots is
+`golem_robocasa/`, the Isaac Lab sim (H1-2) `CL_isaaclab_sim/`.
+
 ## The G1
 
 GOLEM also runs the Unitree G1 (29 DoF, two Dex3-1 hands): its own package
-(`core_ws/src/dex_3`, the Dex3-1 hands), the safety layer, arm IK, leg
-controller (HOMIE's walking policy on the G1), models, bringup,
-SLAM/navigation and skills packages it shares with the H1-2
-(`core_ws/src/golem_safety`, `core_ws/src/golem_upper_ik`,
-`core_ws/src/golem_lowerbody_rl`, `core_ws/src/golem_ros2_models`,
-`core_ws/src/golem_bringup`, `core_ws/src/golem_slam`,
-`core_ws/src/golem_skills`), its models in
-`CL_Assets/g1`, and a RoboCasa sim in
-`golem_robocasa/g1/`. The H1-2 stays the default; `--g1` on a wrapper, or
-`GOLEM_ROBOT=g1`, selects the G1 (RoboCasa only). The images are
-the same, and every `ros` container builds and runs both robots' packages.
+(`dex_3`, the hands), the packages it shares with the H1-2 above, its models in
+`CL_Assets/g1`, and a RoboCasa sim in `golem_robocasa/g1/`. The H1-2 stays the
+default; `--g1` on a wrapper, or `GOLEM_ROBOT=g1`, selects the G1 (RoboCasa
+only). The images are the same, and every `ros` container builds and runs both
+robots' packages.
 
 ```bash
-tests/g1/test_sim_bringup.sh                          # the G1 acceptance test (arms); see tests/g1/README.md
-tests/sim/test_sim_stack.sh --g1                      # the closed-loop test of either robot; see tests/sim/README.md
 docker/scripts/docker_stack.sh up robocasa --g1       # the G1 sim and its bringup (the arms and HOMIE)
+tests/g1/test_sim_bringup.sh                          # the G1 acceptance test (arms); see tests/g1/README.md
 ```
 
 On the real G1 the whole stack runs in Docker on a laptop wired to the robot,
@@ -75,14 +94,24 @@ the same licence: treat it as CC BY-NC-SA 4.0. The packages around it
 (`golem_lowerbody_rl`, which runs it, and `dex_3`) are MIT. See the policy's
 `README.md`.
 
+## Tests
+
+The closed-loop test runs a robot's whole stack in the RoboCasa sim: it stands
+unsupported, walks to a Nav2 goal while moving its arms, keeps SLAM healthy, and
+`golem_safety` stays the only `/lowcmd` writer with no estop.
+
+```bash
+tests/sim/test_sim_stack.sh --h12
+tests/sim/test_sim_stack.sh --g1
+```
+
+[`tests/README.md`](tests/README.md) covers the rest: the sim unit tests, the
+G1 acceptance tests and the Docker script tests. Each package's own tests run
+with `colcon test` in the `ros` container.
+
 ## Layout and documentation
 
 The repo layout is in [`CLAUDE.md`](CLAUDE.md) §2 (most of the tree is git
 submodules, and large assets are Git-LFS). The user pages are in
-[`docs/`](docs/index.md); [`tests/README.md`](tests/README.md) covers the
-simulator regression and acceptance tests, and
-[`docker/BUILD.md`](docker/BUILD.md) how the images are layered and what is
-pinned.
-
-Individual packages document themselves — start with the package's own
-`README.md` and source.
+[`docs/`](docs/index.md), and [`docker/BUILD.md`](docker/BUILD.md) covers how
+the images are layered and what is pinned.

@@ -215,6 +215,7 @@ def test_the_child_process_check_leaves_the_node_threads_running(reach):
     gaps, stop = [], threading.Event()
 
     def tick():
+        """Record the gap between wake-ups every 0.01 s until `stop` is set."""
         last = time.monotonic()
         while not stop.wait(0.01):
             now = time.monotonic()

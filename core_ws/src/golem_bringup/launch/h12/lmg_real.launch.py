@@ -1,14 +1,13 @@
 """
-Start the loco-manipulation game on the real H1-2's onboard PC; refuses to start today.
+Start the loco-manipulation game on the real H1-2's onboard PC.
 
     ros2 launch golem_bringup lmg_real.launch.py
 
-SAFETY: this launch refuses to start, before any node. The H1-2's MID-360 is mounted
-upside down and publishes /livox/imu in its raw frame; lmg_deploy turns it into the
-upright frame the policies trained on, checked in the sim only. The refusal goes once
-that is checked on the robot.
+The policy's only IMU is the MID-360's /livox/imu, in the sensor's raw, upside-down
+frame; lmg_deploy turns it into the upright frame the policy trained on (its README,
+"Before the first real run"). LowState's torso IMU is not read.
 
-What it starts otherwise, all at once and INSTEAD of h12_real_robot.launch.py, never
+What it starts, all at once and INSTEAD of h12_real_robot.launch.py, never
 beside it: the drivers (h12_real_drivers: the MID-360, and the head camera and grippers
 when asked), the state publishers, the command path with the hardware estop but without
 frame_task_server, because marl_deploy_node owns both safety inputs, the policy
@@ -22,6 +21,10 @@ SAFETY: nothing commands the robot until both operator gates pass:
 The robot then walks on /cmd_vel and reaches for the arm goals the operator sets
 through /marl_deploy_node/set_mode and set_arm_goals.
 
+SAFETY: marl_deploy_node has no fall check, and a stale /lowstate or /livox/imu only
+pauses its publishing; golem_safety then keeps relaying its last targets, which do not
+balance the robot. The hardware estop is the stop: keep it in hand.
+
 Every node joins the launching shell's ROS_DOMAIN_ID, which must be 0, the real robot's
 command bus; ROS uses 0 when it is unset.
 """
@@ -29,31 +32,21 @@ command bus; ROS uses 0 when it is unset.
 from golem_bringup.include import include
 from golem_ros2_models.paths import urdf_path
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
-
-NOT_STARTING = ('lmg_real: not starting: lmg_deploy\'s handling of the H1-2 MID-360\'s raw '
-                '(upside-down) /livox/imu is checked in the sim only; check it on the robot first')
 
 # The arguments passed through to h12_locomanipulationgame.launch.py as they are.
 GAME_ARGS = ('start_position_verified', 'prepose_ramp_s', 'prepose_max_vel',
              'imu_offset_roll_deg', 'imu_offset_pitch_deg', 'imu_offset_yaw_deg')
 
 
-def _refuse(context):
-    """Stop the launch: lmg_deploy cannot read the raw-frame IMU yet."""
-    raise RuntimeError(NOT_STARTING)
-
-
 def generate_launch_description():
-    """Refuse first, then declare the game's arguments and blocks."""
+    """Declare the game's arguments and blocks."""
     # The real robot runs on the wall clock: there is no /clock.
     wall_time = {'use_sim_time': 'false'}
 
     return LaunchDescription([
-        # SAFETY: first, so the launch stops before any node starts.
-        OpaqueFunction(function=_refuse),
         # SAFETY: false by default, so a bare launch never commands the robot.
         DeclareLaunchArgument('start_position_verified', default_value='false',
                               description='true only after checking the robot is in a '
@@ -65,6 +58,8 @@ def generate_launch_description():
                                           'it lengthens the ramp'),
         # The URDF's livox_joint carries the measured mount, so the trims start at 0;
         # tune them live with ros2 param set /marl_deploy_node imu_offset_pitch_deg <deg>.
+        # They trim /livox/imu only: golem_lowerbody_rl's imu_trim_deg corrects LowState's
+        # torso IMU, a different sensor with its own error, and does not belong here.
         DeclareLaunchArgument('imu_offset_roll_deg', default_value='0.0',
                               description="deg, the start-up roll trim of the policy's IMU "
                                           '(/livox/imu): its reading with the torso level'),

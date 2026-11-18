@@ -122,12 +122,23 @@ def test_top_level_files_always_run_the_estop(launch_file, sim, estop_port, monk
     assert nodes['estop_node'].parameters['serial_port'] == estop_port
 
 
-def test_lmg_real_refuses_to_start_before_any_node():
-    """lmg_real refuses first: lmg_deploy's raw /livox/imu handling is checked in the sim only."""
-    description = _load('lmg_real.launch.py').generate_launch_description()
-    assert isinstance(description.entities[0], OpaqueFunction)
-    with pytest.raises(RuntimeError, match='^lmg_real: not starting: lmg_deploy'):
-        description.entities[0].execute(LaunchContext())
+def test_lmg_real_starts_the_policy_only_once_verified():
+    """SAFETY: lmg_real starts marl_deploy_node only with start_position_verified:=true."""
+    passed = _passed_to('lmg_real.launch.py', 'h12_locomanipulationgame.launch.py')
+    assert passed['start_position_verified'] == 'false'
+    assert passed['engage_wait_for_confirm'] == 'true'
+    game = 'h12_locomanipulationgame.launch.py'
+    assert 'marl_deploy_node' not in _walk(game, urdf_path='/robot.urdf',
+                                           start_position_verified='false')
+    assert 'marl_deploy_node' in _walk(game, urdf_path='/robot.urdf',
+                                       start_position_verified='true')
+
+
+def test_lmg_real_runs_the_livox_imu_untrimmed():
+    """lmg_real's /livox/imu trims default to 0: the URDF carries the measured mount."""
+    passed = _passed_to('lmg_real.launch.py', 'h12_locomanipulationgame.launch.py')
+    for axis in ('roll', 'pitch', 'yaw'):
+        assert float(passed[f'imu_offset_{axis}_deg']) == 0.0
 
 
 def test_lmg_sim_is_not_guarded(monkeypatch):

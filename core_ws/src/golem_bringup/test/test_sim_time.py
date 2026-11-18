@@ -32,6 +32,7 @@ TOP_LEVEL = [
     ('lmg_sim.launch.py', {'use_slam': 'true', 'use_skills': 'true'}, True),
     ('g1_sim.launch.py', {'use_skills': 'true', 'use_nav': 'true', 'use_rviz': 'true'}, True),
     ('h12_real_robot.launch.py', {'start_position_verified': 'true'}, False),
+    ('lmg_real.launch.py', {'start_position_verified': 'true'}, False),
     ('h12_real_desktop.launch.py', {'use_hand_cameras': 'true'}, False),
     ('h12_safety_grippers.launch.py', {}, False),
     ('h12_real_slam.launch.py', {}, False),
@@ -130,9 +131,3 @@ def test_every_node_runs_on_its_bringups_clock(launch_file, args, sim_time, monk
     wrong = [(package, executable, name, value) for package, executable, name, value in nodes
              if value not in allowed]
     assert wrong == [], f'{launch_file}: nodes not on use_sim_time {sim_time}: {wrong}'
-
-
-def test_lmg_real_refuses_before_any_node():
-    """lmg_real.launch.py refuses to start, so it starts no node on any clock."""
-    with pytest.raises(RuntimeError):
-        _nodes('lmg_real.launch.py', {'start_position_verified': 'true'})

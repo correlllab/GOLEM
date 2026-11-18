@@ -9,9 +9,10 @@ H1-2 counterpart of tests/g1/test_sim_explore.py, built on test_sim_stack.py.
           scene (qpos) at each sample, and at the spawn the compiled model
           (<out>/model.mjb) for the video role. The stack test's goal (goal.json) is not used.
   drive   in the ros container, beside 'ros2 launch golem_bringup lmg_sim.launch.py
-          use_rviz:=false use_skills:=true': waits until the policy node has released the
-          sim's elastic band, Nav2 is active and /skill/frontier_explore is served, stands
-          STAND_S, sends one SkillFrontierExplore goal (timeout EXPLORE_TIMEOUT_S, the
+          start_position_verified:=true use_rviz:=false use_skills:=true': calls
+          /marl_deploy_node/confirm_engage, as the operator does on the robot, and waits
+          until the policy node has released the sim's elastic band, Nav2 is active and
+          /skill/frontier_explore is served, stands STAND_S, sends one SkillFrontierExplore goal (timeout EXPLORE_TIMEOUT_S, the
           explorer's defaults otherwise) and waits for its result; records what the stack
           test's drive records (drive.npz) plus every /map (maps.npz), map -> pelvis at
           MAP_POSE_PERIOD_S (drive.npz map_pelvis) and the explorer's feedback and result
@@ -250,7 +251,8 @@ def run_drive(out):
     ok = False
     try:
         d.mark("drive_start")
-        if (d.wait_band_released(timeout=300.0, refusals=bringup_test.LAUNCH_REFUSALS) and d.wait_nav()
+        if (d.wait_band_released(timeout=300.0, refusals=bringup_test.LAUNCH_REFUSALS, confirm=True,
+                                 confirm_service="/marl_deploy_node/confirm_engage") and d.wait_nav()
                 and d.wait_explorer()):
             d.spin_for(STAND_S)
             ok = d.explore()

@@ -141,6 +141,21 @@ def test_lmg_real_runs_the_livox_imu_untrimmed():
         assert float(passed[f'imu_offset_{axis}_deg']) == 0.0
 
 
+def test_lmg_sim_runs_lmg_reals_operator_gates(monkeypatch):
+    """SAFETY: lmg_sim passes the policy lmg_real's gates: verified start off, confirm on."""
+    monkeypatch.setenv('ROS_DOMAIN_ID', '193')
+    game = 'h12_locomanipulationgame.launch.py'
+    sim, real = _passed_to('lmg_sim.launch.py', game), _passed_to('lmg_real.launch.py', game)
+    for name in ('start_position_verified', 'engage_wait_for_confirm', 'imu_offset_roll_deg',
+                 'imu_offset_pitch_deg', 'imu_offset_yaw_deg', 'prepose_ramp_s',
+                 'prepose_max_vel'):
+        assert sim[name] == real[name], name
+    assert sim['start_position_verified'] == 'false'
+    assert sim['engage_wait_for_confirm'] == 'true'
+    # The sim's only own step: release its elastic band once engaged.
+    assert (sim['disable_elastic_band'], real['disable_elastic_band']) == ('true', 'false')
+
+
 def test_lmg_sim_is_not_guarded(monkeypatch):
     """lmg_sim has no refusal of its own on a sim domain."""
     monkeypatch.setenv('ROS_DOMAIN_ID', '193')

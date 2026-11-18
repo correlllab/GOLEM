@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>H1-2 Real Deployment Guide | GOLEM</title>
+    <title>H1-2 Staged Real Deployment | GOLEM</title>
   <style>
     :root { --ink:#172a31; --muted:#465b62; --paper:#f6f4ee; --panel:#fff; --line:#ccd5d4; --accent:#085b58; --warn:#785011; --code:#12282f; }
     * { box-sizing:border-box; }
@@ -64,129 +64,229 @@
     <aside><nav aria-label="Guide sections">
       <div class="brand">GOLEM / FIELD GUIDE</div>
       <ol>
-        <li><a href="#prepare">01 Prepare and preflight</a></li>
-        <li><a href="#workcell">02 Start the workcell</a></li>
-        <li><a href="#controller">03 Launch controller</a></li>
-        <li><a href="#engage">04 Engage lower body</a></li>
-        <li><a href="#mode">05 Choose Frame or Counter</a></li>
-        <li><a href="#task">06 Grasp or extract</a></li>
-        <li><a href="#repeat">07 Return and reuse</a></li>
-        <li><a href="#stop">08 Stop and details</a></li>
+        <li><a href="#placement">01 Choose stage and host</a></li>
+        <li><a href="#prepare">02 Prepare the terminals</a></li>
+        <li><a href="#workcell">03 Camera localization only</a></li>
+        <li><a href="#controller">04 Crane-supported upper body</a></li>
+        <li><a href="#checks">05 Checks and shutdown</a></li>
+        <li><a href="#standing">06 Standing and peg task</a></li>
       </ol>
     </nav></aside>
     <main id="main">
       <header>
         <div class="eyebrow">Native Linux / ROS 2 Humble / Real robot</div>
-        <h1>H1-2 Real<br>Task Guide</h1>
-        <p class="lede">Start the measured workcell, launch one arm controller, engage the approved standing policy, then grasp or extract. Switch Frame/Counter and reuse an approach between tasks without restarting standing.</p>
-        <p>This is an operator procedure template; no hardware commands were executed to validate it. Use the team's approved hardware, policies, calibration and stop procedure. Commands below use native ROS on the hardware bus, never simulation helpers.</p>
+        <h1>H1-2 Real<br>Deployment Guide</h1>
+        <p class="lede">Run only what you need: camera localization without joint commands, upper-body control with the robot supported by the crane, or the complete standing and peg task in the final section.</p>
+        <p><strong>ROBOT</strong> means the onboard computer; <strong>LOCAL</strong> means the companion workstation. These are native ROS 2 commands, not simulation launchers. Hardware operation still requires the team's approved calibration, configurations and physical stop procedure.</p>
       </header>
 
+      <section id="placement" aria-labelledby="placement-title">
+        <h2 id="placement-title">01 / Choose Stage and Host</h2>
+        <div class="table-wrap"><table>
+          <caption>Three independent deployment levels</caption>
+          <thead><tr><th>Stage</th><th>Launch</th><th>Leave off</th><th>Motion boundary</th></tr></thead>
+          <tbody>
+            <tr><td><a href="#workcell">A / Camera localization</a></td><td>Head camera and ArUco. Add read-only state/TF only for pelvis-frame output.</td><td>Safety writer, arm controller, lower body, grippers and skills.</td><td>No GOLEM joint commands.</td></tr>
+            <tr><td><a href="#controller">B / Upper body on crane</a></td><td>E-stop, one fresh split safety relay and one upper controller. Camera/localizer and RViz are optional.</td><td>All lower-body nodes and engagement calls; peg skills are deferred to Stage C.</td><td>Arms and torso actuate at controller startup. Legs remain inactive; crane support is mandatory.</td></tr>
+            <tr><td><a href="#standing">C / Standing and peg task</a></td><td>Qualified B plus pelvis-frame localization, grippers and marker skills. Add a lower policy only for the full-standing variant.</td><td>Duplicate bringups, competing command writers and simulation fixtures.</td><td>Standing variant: lower startup already moves legs. Supported variant: keep crane support and skip lower startup entirely.</td></tr>
+          </tbody>
+        </table></div>
+        <div class="table-wrap"><table>
+          <caption>What belongs on ROBOT, and what can run LOCAL</caption>
+          <thead><tr><th>Component</th><th>Recommended host</th><th>Can move to LOCAL?</th></tr></thead>
+          <tbody>
+            <tr><td>Head camera, physical E-stop, Magpie drivers</td><td>ROBOT / actual USB or serial host</td><td>Only if the corresponding device is physically connected there. Do not start two drivers for one device.</td></tr>
+            <tr><td>Safety relay, final <code>rt/lowcmd</code> writer</td><td>ROBOT</td><td>Keep onboard for this procedure; workstation/network loss must not remove the physical stop path.</td></tr>
+            <tr><td>Joint-state subscriber + robot-state publisher</td><td>LOCAL in the examples</td><td>Yes; the pair can instead run onboard. Requires direct Unitree DDS state access and Controller Python for the subscriber.</td></tr>
+            <tr><td>Upper IK / Frame / Counter server</td><td>LOCAL in the main recipe</td><td>Yes; direct Unitree DDS access, approved workstation NIC and Controller Python are required. An onboard alternative is below.</td></tr>
+            <tr><td>ArUco localizer, marker skills, RViz, operator CLI</td><td>LOCAL</td><td>Yes; camera/TF topics must cross the network. No Gemini, SAM, YOLO or cloud API is needed for the marker path.</td></tr>
+            <tr><td>Lower-body policy</td><td>ROBOT, Stage C only</td><td>Keep onboard in this guide for predictable feedback latency; verify the approved checkpoint can run on that host.</td></tr>
+          </tbody>
+        </table></div>
+        <div class="callout warning"><p><strong>Do not use full bringup as a shortcut.</strong> <code>h12_real_robot_bringup.launch.py</code> starts upper control even when <code>start_position_verified:=false</code>. <code>h12_control.launch.py use_frame_task:=false</code> still starts the safety command writer. Neither is a camera-only launch.</p></div>
+        <p>The existing real desktop bringup is not the lean marker pipeline: it starts model servers and RViz, not ArUco. Start the individual components below and keep one owner per device, state publisher, controller and final command topic.</p>
+      </section>
+
       <section id="prepare" aria-labelledby="prepare-title">
-        <h2 id="prepare-title">01 / Prepare and Preflight</h2>
+        <h2 id="prepare-title">02 / Prepare the Terminals</h2>
         <ol>
-          <li>Assign an operator and a person holding the tested physical E-stop; verify the safety rig, exclusion area and stop/power procedure.</li>
-          <li>Verify the supported physical start pose, empty hands, feet, arm paths and whole free-arm workspace.</li>
-          <li>Verify hardware NIC/DDS configuration, device identities, permissions, timestamp synchronization and wall-time state/TF/camera data on both hosts.</li>
-          <li>Assign exactly one final <code>rt/lowcmd</code> writer, the safety relay. Approve the matching real upper/safety YAMLs, joint mappings, gains, limits and stale-data behavior; upper and lower controllers publish only their split safety inputs.</li>
-          <li>Approve the real lower policy/config and the physically calibrated marker/gripper profile matched to the seated source. No simulation gripper compensation or simulation safety profile belongs on hardware.</li>
+          <li>Choose A, B or C before launching anything. Camera-only does not require starting a controller.</li>
+          <li>For any actuation, assign an operator and physical E-stop operator; verify crane/support, exclusion area, empty hands, feet, complete initialization sweep and stop/power procedure.</li>
+          <li>Verify device identities, permissions, synchronized clocks and camera delivery between hosts. For A2/B/C, also verify the required Unitree DDS routing and measured state/TF.</li>
+          <li>For B/C, approve exactly one final <code>rt/lowcmd</code> writer, the safety relay, and the matching real upper/safety YAMLs, mappings, gains, limits and stale-data behavior. Upper and lower controllers publish only split inputs. Stage A starts no command writer.</li>
+          <li>Approve the lower policy and physical marker/gripper profile only when proceeding to Stage C. Do not use simulation compensation or simulation safety profiles on hardware.</li>
         </ol>
-        <p>Use a clean native bash or zsh terminal per long-running component. Set <code>GOLEM_ROOT</code> to this host's absolute checkout path, then prepare every terminal:</p>
-        <figure class="command"><figcaption><span>Each host / native zsh and approved hardware network</span><button type="button" data-copy="cmd-shell">Copy</button></figcaption><pre><code id="cmd-shell">cd "${GOLEM_ROOT:?set the absolute GOLEM checkout path on this host}" &amp;&amp;
-source /opt/ros/humble/setup.zsh &amp;&amp;
-source "$GOLEM_ROOT/core_ws/install/local_setup.zsh" &amp;&amp;
+        <p>Use one clean <strong>bash</strong> terminal per long-running component. Set <code>GOLEM_ROOT</code> to this host's absolute checkout path, then prepare every terminal. No hostname or path is shared implicitly between ROBOT and LOCAL.</p>
+        <figure class="command"><figcaption><span>ROBOT and LOCAL / repeat in each bash terminal</span><button type="button" data-copy="cmd-shell">Copy</button></figcaption><pre><code id="cmd-shell">cd "${GOLEM_ROOT:?set the absolute GOLEM checkout path on this host}" &amp;&amp;
+source /opt/ros/humble/setup.bash &amp;&amp;
+source "$GOLEM_ROOT/core_ws/install/local_setup.bash" &amp;&amp;
 export ROOT="$GOLEM_ROOT" PYTHONNOUSERSITE=1 ROS_DOMAIN_ID=0
 export ROS_PY="${ROOT:?}/environments/ros/.venv/bin/python"
 export CTRL_PY="${ROOT:?}/environments/controller/.venv/bin/python"
 export PYTHONPATH="${ROOT:?}/unitree_sdk2_python${PYTHONPATH:+:$PYTHONPATH}"
 ros_cli() { "${ROS_PY:?}" /opt/ros/humble/bin/ros2 "$@"; }</code></pre></figure>
-        <p>Require every setup line to succeed. In bash, use the corresponding <code>setup.bash</code> and <code>local_setup.bash</code>. Keep ROS/vision on ROS Python and arms/joint-state publishing on Controller Python through the explicit prefixes below. Every <code>APPROVED_*</code> value is supplied by the responsible operator; file values are absolute, existing files on the component's host.</p>
+        <p>Require every setup line to succeed. Keep ROS/vision on ROS Python (NumPy 1); use the explicit Controller Python (NumPy 2, Pinocchio/Crocoddyl/OMPL) prefixes only for arms and joint-state publishing. Do not globally activate the controller venv for the camera/localizer. Camera-frame localization needs no Controller Python, standing policy or ML weights.</p>
+        <p><strong>Network:</strong> both hosts use wall time and <code>ROS_DOMAIN_ID=0</code>, with synchronized clocks and approved ROS DDS discovery/routing. Unitree SDK participants also need the correct NIC: upper/safety YAMLs carry <code>network.interface</code>; the environment domain does not select it. The sample real upper profile hardcodes <code>eno1</code>, which may be wrong on LOCAL.</p>
+        <p>Every <code>APPROVED_*</code> value must be explicitly supplied. File paths are absolute, existing files on the host that consumes them. Re-check the model, NIC, split input/output topics, hardware gains/limits and watchdogs; do not treat a shipped YAML as hardware approval.</p>
         <details><summary>Build once, before hardware power or connection</summary>
-          <p>Provide ROS 2 Humble, Python 3.10 and <code>environments/ros/apt-packages.txt</code> prerequisites, submodules and Git-LFS assets. Check host architecture before setup: pinned binary dependencies must support that architecture; do not copy absolute-path venvs/install trees from another computer.</p>
+          <p>Provide ROS 2 Humble, Python 3.10 and <code>environments/ros/apt-packages.txt</code> prerequisites, committed submodule pins and Git-LFS assets. Check host architecture; do not copy venvs/install trees from another machine. Build while disconnected from hardware.</p>
           <figure class="command"><figcaption><span>Native setup / no simulator environment required</span><button type="button" data-copy="cmd-build">Copy</button></figcaption><pre><code id="cmd-build">./scripts/setup_environment.sh ros
-./core_ws/scripts/build_ros_workspace.sh build --profile experiment --compile-jobs 2
-./scripts/setup_environment.sh controller</code></pre></figure>
-          <p>The experiment build is not a hardware-driver installer. Provide approved <code>cl_realsense</code>/<code>realsense2_camera</code>, librealsense, image-transport plugins, physical Magpie/Dynamixel dependencies, udev permissions and E-stop serial setup separately. Verify the head-camera serial and gripper device IDs in their launch files.</p>
+./core_ws/scripts/build_ros_workspace.sh build --profile experiment --compile-jobs 2</code></pre></figure>
+          <figure class="command"><figcaption><span>Only the chosen upper-controller / joint-state host</span><button type="button" data-copy="cmd-build-controller">Copy</button></figcaption><pre><code id="cmd-build-controller">./scripts/setup_environment.sh controller</code></pre></figure>
+          <p>Install Controller Python only on hosts running the upper controller or joint-state subscriber. An existing approved ROS install is sufficient for camera-only operation; the build above is the complete native overlay, not a minimal camera installer. The experiment build does not install hardware drivers. Provide approved <code>cl_realsense</code>/<code>realsense2_camera</code>, librealsense, image transport, Magpie/Dynamixel, udev and E-stop serial dependencies separately on their device hosts.</p>
         </details>
+        <p class="small">Simulation-only wrappers <code>run_simulation.sh</code>, <code>run_controller.sh</code>, <code>run_ros.sh</code> and <code>run_rviz.sh</code> reject domain 0. Do not bypass those guards or run a simulator on the hardware bus.</p>
       </section>
 
       <section id="workcell" aria-labelledby="workcell-title">
-        <h2 id="workcell-title">02 / Start the Workcell</h2>
-        <p>Hardware replaces the simulation scene. Use the real 320 x 250 mm board, with the expected <code>cylinder_1</code> seated at source <code>cylinder_1</code>. Match the real profile to the board, source pose, TCP and physical gripper units. Keep the workcell fixed and verify table/board clearance along the whole approach.</p>
-        <p>Start each component once, in a separate prepared terminal. Onboard owns state/TF and devices; the companion owns geometric localization and skills. If an approved driver process already supplies one component, do not launch its duplicate.</p>
-        <figure class="command"><figcaption><span>Onboard / measured robot state and TF</span><button type="button" data-copy="cmd-state">Copy</button></figcaption><pre><code id="cmd-state">ros_cli launch h12_bringup h12_state.launch.py \
+        <h2 id="workcell-title">03 / Stage A: Camera Localization Only</h2>
+        <p>This stage starts no safety relay, arm controller, lower policy, gripper driver or skill server. Keep any other robot software under the approved hardware procedure; these commands add observation only.</p>
+        <h3>A1 / Camera-frame localization, no robot-state dependency</h3>
+        <p>Start the camera on its actual USB host, normally ROBOT. Verify the serial in the launch file; its current setting is <code>_250122072330</code> at 1280 x 720, 15 FPS.</p>
+        <figure class="command"><figcaption><span>ROBOT / head camera and mounting TF only</span><button type="button" data-copy="cmd-camera">Copy</button></figcaption><pre><code id="cmd-camera">ros_cli launch cl_realsense h12_headcamera.launch.py</code></pre></figure>
+        <figure class="command"><figcaption><span>LOCAL / inspect the actual camera frame</span><button type="button" data-copy="cmd-camera-header">Copy</button></figcaption><pre><code id="cmd-camera-header">ros_cli topic echo /realsense/head/color/camera_info --once --field header</code></pre></figure>
+        <p>Set <code>HEAD_OPTICAL_FRAME</code> to the exact observed <code>header.frame_id</code> (normally <code>head_color_optical_frame</code>). Then start one localizer:</p>
+        <figure class="command"><figcaption><span>LOCAL / board pose relative to the camera, no state/TF publisher required</span><button type="button" data-copy="cmd-localizer-camera">Copy</button></figcaption><pre><code id="cmd-localizer-camera">ros_cli run model_server aruco_localizer --ros-args \
+  -p use_sim_time:=false \
+  -p target_frame:="${HEAD_OPTICAL_FRAME:?set exact CameraInfo header.frame_id}" \
+  -p image_transport:=raw -p publish_annotated:=true</code></pre></figure>
+        <p>The same-frame TF lookup is identity, so A1 needs only images and matching CameraInfo. Check diagnostics and annotated images using <a href="#checks">Section 05</a>. <strong>Camera-frame output is for perception inspection, not a pelvis-frame arm goal.</strong> Do not start skills against it.</p>
+
+        <h3>A2 / Optional pelvis-frame localization, still no joint commands</h3>
+        <p>For robot-relative localization or RViz, add one read-only state/TF pair on LOCAL (or move this entire pair onboard). It subscribes to actual <code>rt/lowstate</code>; it does not construct an upper controller or command publisher.</p>
+        <figure class="command"><figcaption><span>LOCAL / read-only measured joints and robot TF</span><button type="button" data-copy="cmd-state">Copy</button></figcaption><pre><code id="cmd-state">ros_cli launch h12_bringup h12_state.launch.py \
   use_sim_time:=false joint_state_prefix:="${CTRL_PY:?}" \
-  urdf_file:="${APPROVED_URDF:?set reviewed real robot URDF path}"</code></pre></figure>
-        <figure class="command"><figcaption><span>Onboard / head camera, approved serial and extrinsics</span><button type="button" data-copy="cmd-camera">Copy</button></figcaption><pre><code id="cmd-camera">ros_cli launch cl_realsense h12_headcamera.launch.py</code></pre></figure>
-        <figure class="command"><figcaption><span>Onboard / grippers, fingers clear during initialization</span><button type="button" data-copy="cmd-grippers">Copy</button></figcaption><pre><code id="cmd-grippers">ros_cli launch h12_bringup h12_grippers.launch.py</code></pre></figure>
-        <figure class="command"><figcaption><span>Companion / calibrated head RGB and timestamped TF</span><button type="button" data-copy="cmd-localizer">Copy</button></figcaption><pre><code id="cmd-localizer">ros_cli run model_server aruco_localizer --ros-args \
+  urdf_file:="${APPROVED_URDF:?set reviewed real robot URDF path on this host}"</code></pre></figure>
+        <p>This state launch uses the default reader configuration with automatic NIC selection; it has no state-config argument. Approve DDS routing first. If an explicit state-reader NIC is required, use the alternative below instead of this launch.</p>
+        <details><summary>Explicit NIC for the read-only state reader</summary>
+          <p>This replaces the A2 <code>h12_state.launch.py</code> command above. Start these two independent processes on the chosen state host. The first uses a reviewed controller-format YAML solely to select its input DDS domain/NIC/topic; it publishes joint states, not commands. The second uses Humble's supported URDF-file argument.</p>
+          <figure class="command"><figcaption><span>State host / read-only subscriber with explicit network YAML</span><button type="button" data-copy="cmd-state-reader">Copy</button></figcaption><pre><code id="cmd-state-reader">ros_cli run --prefix "${CTRL_PY:?}" h12_ros2_controller joint_state_publisher \
+  --config "${APPROVED_STATE_CONFIG:?set reviewed state reader YAML for this host NIC}" \
+  --ros-args -p use_sim_time:=false</code></pre></figure>
+          <figure class="command"><figcaption><span>State host / robot-state publisher only, separate terminal</span><button type="button" data-copy="cmd-state-tf">Copy</button></figcaption><pre><code id="cmd-state-tf">ros_cli run robot_state_publisher robot_state_publisher \
+  "${APPROVED_URDF:?set reviewed real robot URDF path on this host}" \
+  --ros-args -p use_sim_time:=false</code></pre></figure>
+        </details>
+        <p>Stop only A1's localizer with Ctrl+C, leaving the camera running. Relaunch it for pelvis output; do not run two localizers publishing the same topics:</p>
+        <figure class="command"><figcaption><span>LOCAL / replaces A1 localizer; requires stamped pelvis-to-camera TF</span><button type="button" data-copy="cmd-localizer">Copy</button></figcaption><pre><code id="cmd-localizer">ros_cli run model_server aruco_localizer --ros-args \
   -p use_sim_time:=false -p target_frame:=pelvis \
-  -p image_transport:=compressed -p publish_annotated:=true</code></pre></figure>
-        <p>Wait for head-camera TF (the camera launch has a 10-second transform timer), matching CameraInfo and fresh valid board diagnostics. The state publisher's default DDS reader must resolve to the approved NIC/state topic; exporting domain 0 does not select a NIC. No simulator, <code>/clock</code> or ground-truth object publisher is used.</p>
+  -p image_transport:=raw -p publish_annotated:=true</code></pre></figure>
+        <p>Wait for the camera launch's delayed mounting TF (10 seconds), matching image/CameraInfo stamps and fresh <code>target_frame=pelvis</code> diagnostics. The chain is measured joints &rarr; pelvis/torso/head mount &rarr; calibrated camera mount &rarr; optical frame. Do not replace missing measured TF with invented static joint poses.</p>
+        <p>Raw transport is the baseline. If the camera host actually publishes <code>/realsense/head/color/image_raw/compressed</code> and its plugin is installed, relaunch the same localizer with <code>image_transport:=compressed</code> for the workstation link. No simulator, <code>/clock</code>, LiDAR/SLAM, AI model server or ground-truth publisher is required.</p>
         <details><summary>Marker print layout and optional RViz</summary>
           <p>Use <code>DICT_4X4_50</code>, ID 7 top-left and ID 8 top-right. Each 30 mm black code sits on a 40 mm paper square with a full 5 mm white border. Mount paper flush to the top and adjacent board side edges without changing orientation: centres (-140, 105) and (140, 105) mm in board-local X/Y. PnP uses the black-code edge, not paper size. Use an <a href="https://chev.me/arucogen/">ArUco print generator</a>, measure printed scale and check the <a href="../core_ws/src/model_server/config/pegboard_layout.json">shared layout</a>; catalog suffixes <code>0..3</code> mean clearance rows, not peg sizes.</p>
           <figure class="command"><figcaption><span>Companion / RViz client on wall time</span><button type="button" data-copy="cmd-rviz">Copy</button></figcaption><pre><code id="cmd-rviz">/opt/ros/humble/bin/rviz2 \
   -d "${ROOT:?}/core_ws/src/h12_bringup/rviz/pegboard.rviz" \
   --ros-args -p use_sim_time:=false</code></pre></figure>
-          <p>Use pelvis as fixed frame. Compare actual grasp-frame TF, head RGB and board diagnostics, not a stale pose arrow or wrist-link pose. This marker path needs no cloud models or AI API keys.</p>
+          <p>The supplied RViz configuration expects pelvis-frame output and A2 state/TF. For A1, inspect the annotated image or explicitly choose the observed optical frame in RViz; the pelvis configuration is not a camera-only prerequisite. Check measured grasp-frame TF, RGB and diagnostics rather than a stale pose arrow.</p>
         </details>
       </section>
 
       <section id="controller" aria-labelledby="controller-title">
-        <h2 id="controller-title">03 / Launch Controller</h2>
-        <p>After preflight, start the onboard control block once. This creates one Counter-capable arm server, initially in Frame mode, plus the E-stop bridge and safety relay. Startup moves arms and torso; wait for actual E-stop/safety readiness and completed initialization, not just elapsed launch delays.</p>
-        <figure class="command"><figcaption><span>Onboard / one arm server and approved real split safety path</span><button type="button" data-copy="cmd-control">Copy</button></figcaption><pre><code id="cmd-control">ros_cli launch h12_bringup h12_control.launch.py \
-  use_sim_time:=false use_estop:=true upper_controller:=counter control_mode:=frame \
+        <h2 id="controller-title">04 / Stage B: Crane-Supported Upper Body Only</h2>
+        <p>This recipe is independent of Stage A: named/manual arm goals need direct measured Unitree state, not a camera, ArUco, skills or a lower policy. Add A2 only if you want pelvis-frame localization and RViz. Keep the physical crane/support engaged for this entire stage.</p>
+        <div class="callout warning"><p><strong>Actuation starts at launch.</strong> The upper server enables arms and torso, starts its publisher, then moves through <code>init_1 &rarr; init_2 &rarr; init_3 &rarr; home</code> and torso initialization. <code>init=False</code> is not a read-only mode. A false lower-body start gate does not inhibit these upper motions.</p></div>
+        <h3>B1 / Mechanical and command-path gate</h3>
+        <p>Fully support the robot's weight, control any free leg motion, clear the complete arm/torso sweep, and complete the approved handover from any vendor controller. Assign exactly one final writer. <strong>No lower-body process may be running.</strong> Do not call <code>/lowerbody/confirm_engage</code>, any elastic-band service, or a simulation hoist option.</p>
+        <p>Start a <strong>fresh</strong> split safety relay. With no lower source its leg command slots start inactive; this is not a leg posture hold, vendor-controller pass-through, or standing mode. Do not reuse a relay that previously cached standing commands: stopping a lower publisher does not erase those cached commands.</p>
+        <h3>B2 / Safety on ROBOT, upper controller LOCAL</h3>
+        <p>In the main recipe, ROBOT owns the physical E-stop and final safety writer; LOCAL runs the arm solver. Verify the E-stop device/receiver and reviewed safety YAML before launching the writer:</p>
+        <figure class="command"><figcaption><span>ROBOT / E-stop + fresh safety relay, explicitly no arm server</span><button type="button" data-copy="cmd-control">Copy</button></figcaption><pre><code id="cmd-control">ros_cli launch h12_bringup h12_control.launch.py \
+  use_sim_time:=false use_estop:=true use_frame_task:=false \
+  safety_config:="${APPROVED_REAL_SAFETY:?set approved real split safety YAML}"</code></pre></figure>
+        <p>Check actual E-stop status at the receiver, fresh robot state and the relay before continuing. Launch delays and a true safety heartbeat are not proof of a functioning stop chain; see <a href="#checks">Section 05</a>.</p>
+        <figure class="command"><figcaption><span>LOCAL / one Counter-capable upper server, initially Frame</span><button type="button" data-copy="cmd-upper">Copy</button></figcaption><pre><code id="cmd-upper">ros_cli run --prefix "${CTRL_PY:?}" h12_ros2_controller frame_task_server \
+  --config "${APPROVED_REAL_UPPER:?set approved real upper YAML for this host NIC}" \
+  --ros-args -p use_sim_time:=false \
+  -p upper_controller:=counter -p control_mode:=frame</code></pre></figure>
+        <p>LOCAL must have direct, approved Unitree DDS connectivity; forwarding ROS camera topics alone is insufficient. Wait for measured initialization and the server-ready log. A startup convergence warning is not measured home.</p>
+        <details><summary>Alternative: keep the upper controller on ROBOT</summary>
+          <p>This <strong>replaces both</strong> B2 commands, not adds to them. ROBOT now needs Controller Python and the approved model/config. Complete the entire physical gate before launching: the arm server starts after a timer, without an interactive approval prompt.</p>
+          <figure class="command"><figcaption><span>ROBOT / alternative single control launch; do not also run LOCAL upper</span><button type="button" data-copy="cmd-control-onboard">Copy</button></figcaption><pre><code id="cmd-control-onboard">ros_cli launch h12_bringup h12_control.launch.py \
+  use_sim_time:=false use_estop:=true use_frame_task:=true \
+  upper_controller:=counter control_mode:=frame \
   frame_task_prefix:="${CTRL_PY:?}" \
   safety_config:="${APPROVED_REAL_SAFETY:?set approved real split safety YAML}" \
-  frame_task_config:="${APPROVED_REAL_UPPER:?set approved real Counter-capable upper YAML}"</code></pre></figure>
-        <p>Require the initialized-server log and measured poses after <code>init_1</code>, <code>init_2</code>, <code>init_3</code>, <code>home</code> and torso initialization. These are plain named-posture moves. Do not also run either full real bringup: the onboard full launch starts upper initialization even when its lower-body <code>start_position_verified</code> gate is false.</p>
-        <figure class="command"><figcaption><span>Onboard / verified physical start pose, one approved lower policy</span><button type="button" data-copy="cmd-lower">Copy</button></figcaption><pre><code id="cmd-lower">ros_cli launch h12_bringup h12_lowerbody.launch.py \
+  frame_task_config:="${APPROVED_REAL_UPPER:?set approved real upper YAML for ROBOT NIC}"</code></pre></figure>
+        </details>
+        <h3>B3 / Empty-hand upper-body check, crane remains supporting</h3>
+        <figure class="command"><figcaption><span>LOCAL operator / home only after safety and sweep checks</span><button type="button" data-copy="cmd-home-before-engage">Copy</button></figcaption><pre><code id="cmd-home-before-engage">ros_cli action send_goal /named_config custom_ros_messages/action/NamedConfig \
+  "{config_name: 'home', plan: true, slow_mode: false, duration: {sec: 45, nanosec: 0}}" --feedback</code></pre></figure>
+        <p>Verify measured arms are home. Start with Frame mode and an approved bounded empty-hand target. Counter is optional and may move the opposite arm; clear its whole workspace too. A crane-supported result is not evidence of free-standing balance.</p>
+        <figure class="command"><figcaption><span>LOCAL operator / idle server only, optional Counter test</span><button type="button" data-copy="cmd-counter">Copy</button></figcaption><pre><code id="cmd-counter">ros_cli param set /frame_task_server control_mode counter</code></pre></figure>
+        <p>Return to Frame with <code>ros_cli param set /frame_task_server control_mode frame</code>. The setting itself does not move the robot; changes while busy are rejected. Do not restart the controller to switch modes.</p>
+        <details><summary>Manual plan-only and replay, without skills or standing</summary>
+          <p>Supply an inspected hardware <code>FrameTask</code> YAML with <code>plan: true</code>, matching nonempty frame/target lists and a checked path. The plan-only call adds no motor motion, but the already-running server continues holding its prior command.</p>
+          <figure class="command"><figcaption><span>LOCAL operator / cache an approved empty-hand approach, no execution</span><button type="button" data-copy="cmd-plan">Copy</button></figcaption><pre><code id="cmd-plan">ros_cli action send_goal /plan_frame_task custom_ros_messages/action/FrameTask \
+  "${APPROVED_APPROACH_GOAL:?set complete inspected hardware FrameTask YAML}" --feedback</code></pre></figure>
+          <figure class="command"><figcaption><span>LOCAL operator / execute only after checking the plan and physical clearance</span><button type="button" data-copy="cmd-replay">Copy</button></figcaption><pre><code id="cmd-replay">ros_cli action send_goal /replay_frame_task custom_ros_messages/action/FrameTask \
+  '{duration: {sec: 45, nanosec: 0}}' --feedback</code></pre></figure>
+          <p>Replay validates the measured start and saved path, uses stored timing and does not replan. The duration is a wall-clock budget, not a requested motion time. Ordinary <code>/frame_task</code> with <code>plan: true</code> instead plans <em>and executes</em> in one call.</p>
+          <p>To repeat, return using <code>/named_config</code> with <code>config_name: 'approach_start'</code> and <code>plan: true</code>, then replay while still supported. Cache contents are RAM-only. Named planning and ordinary planned motions do not overwrite the explicit saved approach.</p>
+        </details>
+        <p><strong>The upper-body-only session ends here.</strong> Keep lower body and marker skills off and use Section 05 to stop. If you later want a crane-supported peg trial, use the supported variant in the final section; standing is not a software prerequisite for marker skills.</p>
+      </section>
+
+      <section id="checks" aria-labelledby="checks-title">
+        <h2 id="checks-title">05 / Checks and Shutdown</h2>
+        <div class="table-wrap"><table>
+          <caption>What to verify before moving to a later stage</caption>
+          <thead><tr><th>Stage</th><th>Required evidence</th><th>Not sufficient</th></tr></thead>
+          <tbody>
+            <tr><td>A / Localization</td><td>Matched image/CameraInfo stamps, measured print scale, fresh valid diagnostics and correct output frame. A2 also requires TF at the image timestamp.</td><td>One visible marker or a stale RViz arrow.</td></tr>
+            <tr><td>B / Supported upper</td><td>Physical support, checked initialization sweep, one writer, tested E-stop chain, fresh measured state and measured home.</td><td>Launch delay, server log, or successful action alone.</td></tr>
+            <tr><td>C / Standing/task</td><td>Approved start pose/policy, measured settling and stable standing, physical support handover, calibrated tool/contact geometry and observed task outcome.</td><td>A confirmation response or successful skill result.</td></tr>
+          </tbody>
+        </table></div>
+        <figure class="command"><figcaption><span>LOCAL / read-only localization diagnostics</span><button type="button" data-copy="cmd-diagnostics">Copy</button></figcaption><pre><code id="cmd-diagnostics">ros_cli topic echo /perception/pegboard/diagnostics --once</code></pre></figure>
+        <figure class="command"><figcaption><span>LOCAL / A2 only, inspect measured pelvis-to-camera TF</span><button type="button" data-copy="cmd-tf-check">Copy</button></figcaption><pre><code id="cmd-tf-check">ros_cli run tf2_ros tf2_echo pelvis \
+  "${HEAD_OPTICAL_FRAME:?set exact CameraInfo header.frame_id}"</code></pre></figure>
+        <figure class="command"><figcaption><span>LOCAL / Stage B or C only, observe heartbeat; not an E-stop test</span><button type="button" data-copy="cmd-heartbeat">Copy</button></figcaption><pre><code id="cmd-heartbeat">ros_cli topic hz /safety/heartbeat</code></pre></figure>
+        <p>For camera failures, check serial/USB, image transport, print layout, CameraInfo and clock synchronization before TF or calibration changes. A2 waits up to the configured observation age for exact-time TF; do not substitute a latest/stale transform or loosen bounds to force acceptance.</p>
+        <div class="callout warning"><p><strong>Current safety limits to account for:</strong> the raw E-stop monitor checks triggered/unplugged status when a sample exists, but does not fail closed on a never-received or stale sample. Its heartbeat alone cannot certify the physical stop chain or relay worker. Require an independently tested physical stop path and approved monitoring. The shipped <code>relax_safety_split.yaml</code> also disables the upper-command staleness watchdog; do not silently use that default for a remote arm process.</p></div>
+        <p>Normal exit from A: stop the localizer, optional state/TF and camera; no command path was started. Normal exit from B/C: finish or cancel the task, secure the payload, restore physical robot support, then use the team's approved control/power shutdown order. Losing LOCAL is not a normal stop procedure. Safety may latch when an upper publisher disappears.</p>
+        <p>For danger, use the tested physical E-stop/emergency procedure. Ctrl+C, ROS cancellation and a true heartbeat are not independent emergency stops. The last command may remain held; no automatic retreat, release or support recovery is promised. If returning from C to upper-only, first secure and shut down safely, then start B with a fresh relay; merely stopping the lower node leaves cached leg commands.</p>
+      </section>
+
+      <section id="standing" aria-labelledby="standing-title">
+        <h2 id="standing-title">06 / Stage C: Standing and Peg-in-Hole Workflow</h2>
+        <p><strong>This is the final, optional stage.</strong> Retain the qualified Stage B safety/upper processes; add missing A2 camera, measured state/TF and the single pelvis-frame localizer. Do not relaunch components that are already running. There is no need to start SLAM, Nav2 or the heavyweight model-server bringup for this marker task.</p>
+        <div class="callout"><p><strong>Choose the support condition before starting.</strong> For full standing, follow C1 through C5. For a crane-supported grasp/extraction trial, <strong>skip C1 entirely</strong>, keep all lower nodes off, and use C2 through C5 with qualified Stage B support. Keep the rig/workcell stable during motion and record the result as supported manipulation, not a standing evaluation. Never change support condition during a task.</p></div>
+        <p>Use the real 320 x 250 mm board and the approved seated source. Review the complete named <code>prep</code> sweep and approach against the physical table: robot self-collision planning does not model arbitrary table/board obstacles. A localization result alone is not a contact-geometry calibration.</p>
+        <h3 id="engage-title">C1 / Full-standing Variant Only: Add Lower Body on ROBOT</h3>
+        <p>Complete the approved real start-pose check before setting the gate true. Select the explicitly approved manipulation-standing policy/configuration: <code>almi_manip_stand</code> and <code>fame_finetune</code> are distinct from legacy <code>almi</code> and <code>fame</code>. No policy is implicitly hardware-qualified by this guide.</p>
+        <figure class="command"><figcaption><span>ROBOT / Stage C only; starting this node already pre-positions legs</span><button type="button" data-copy="cmd-lower">Copy</button></figcaption><pre><code id="cmd-lower">ros_cli launch h12_bringup h12_lowerbody.launch.py \
   use_sim_time:=false start_position_verified:=true use_estimator:=false \
-  lowerbody:="${APPROVED_LOWERBODY:?set approved real policy selector}" \
-  lowerbody_params:="${APPROVED_LOWER_CONFIG:?set approved real lower-body YAML}"</code></pre></figure>
-        <p>Lower startup already pre-positions joints. Use the approved real configuration with <code>engage_wait_for_confirm: true</code> and <code>disable_elastic_band: false</code>: despite its name, enabling the latter requests a simulator band-toggle service and can leave a hardware run waiting for a service that does not exist. The physical rig follows the team's procedure, not a simulated tether command.</p>
-        <figure class="command"><figcaption><span>Companion / calibrated real marker skills, not a simulation profile</span><button type="button" data-copy="cmd-skills">Copy</button></figcaption><pre><code id="cmd-skills">ros_cli run h12_skills skills --ros-args \
-  -p use_sim_time:=false -p target_backend:=marker \
+  lowerbody:="${APPROVED_LOWERBODY:?set approved real manipulation-standing selector}" \
+  lowerbody_params:="${APPROVED_LOWER_CONFIG:?set approved real lower-body ROS parameters YAML}"</code></pre></figure>
+        <p>Require <code>engage_wait_for_confirm: true</code> and <code>disable_elastic_band: false</code> in that reviewed configuration. The latter avoids the simulation-only <code>/elastic_band/toggle</code> path; it does not lower the physical crane. Check IMU calibration, startup bounds and measured leg settling. A pre-pose timeout, guard rejection or frozen output is not readiness; do not confirm or bypass the guard.</p>
+        <p>While still supported, recheck measured arm home from B3, feet and all clearances, fresh state and the tested E-stop chain. Only when the physical operator is ready, explicitly engage:</p>
+        <figure class="command"><figcaption><span>LOCAL operator / one deliberate standing-policy confirmation</span><button type="button" data-copy="cmd-engage">Copy</button></figcaption><pre><code id="cmd-engage">ros_cli service call /lowerbody/confirm_engage std_srvs/srv/Trigger '{}'</code></pre></figure>
+        <p>Do not pre-call or chain this service to launch. Coordinate crane/support handover physically using the approved procedure and wait for measured stable standing before task motions. A service success does not prove balance. If state, policy output, safety or posture is unhealthy, stop under the physical procedure.</p>
+
+        <h3>C2 / Add physical grippers and calibrated marker skills</h3>
+        <p>Verify both gripper USB identities and an empty, clear finger workspace. The existing launch has fixed device paths, not port arguments; it initializes hardware speed/torque. Skip it if an approved owner already drives those devices.</p>
+        <figure class="command"><figcaption><span>ROBOT / physical grippers, not part of camera-only or bare upper-body tests</span><button type="button" data-copy="cmd-grippers">Copy</button></figcaption><pre><code id="cmd-grippers">ros_cli launch h12_bringup h12_grippers.launch.py</code></pre></figure>
+        <figure class="command"><figcaption><span>LOCAL / marker skills with physical calibration and board-matched catalog</span><button type="button" data-copy="cmd-skills">Copy</button></figcaption><pre><code id="cmd-skills">ros_cli run h12_skills skills --ros-args \
+  -p use_sim_time:=false -p target_backend:=marker -p approach_mode:=plan \
   -p marker_profile_path:="${APPROVED_REAL_MARKER_PROFILE:?set calibrated real profile}" \
   -p marker_catalog_path:="${APPROVED_MARKER_CATALOG:?set board-matched catalog}"</code></pre></figure>
-        <p>Never use <code>marker_profile_sim_extraction.json</code>, <code>counter_safety_split.yaml</code> or an unreviewed nominal marker profile on hardware. An exported domain does not turn a simulation configuration into a real one.</p>
-      </section>
+        <p>No qualified physical marker/gripper profile is supplied by this procedure. Do not substitute <code>marker_profile_sim_extraction.json</code>, a nominal simulation profile, simulation safety YAMLs or unreviewed camera/contact offsets. The existing head-mount calibration reports roughly &plusmn;13 mm / 1.5&deg; accuracy; this is not insertion-level qualification.</p>
+        <p>Choose Frame or Counter on the same idle server using B3. Keep the opposite hand empty and its sweep clear. Do not change gains/configuration, switch modes mid-task or restart controllers between trials.</p>
 
-      <section id="engage" aria-labelledby="engage-title">
-        <h2 id="engage-title">04 / Engage Lower Body</h2>
-        <p>Wait for initialized upper control, settled legs and the confirmation prompt. With approved physical support, clear arm sweep and the E-stop operator ready, finish moving the arms home before releasing support:</p>
-        <figure class="command"><figcaption><span>Operator terminal / home arms before engagement</span><button type="button" data-copy="cmd-home-before-engage">Copy</button></figcaption><pre><code id="cmd-home-before-engage">ros_cli action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 'home', plan: true, slow_mode: false, duration: {sec: 45, nanosec: 0}}"</code></pre></figure>
-        <p>Wait for success and verify measured home, actual leg posture, support and fresh state/safety heartbeat. A commanded pose or startup warning is not measured convergence; do not continue after a settle timeout. Explicitly engage:</p>
-        <figure class="command"><figcaption><span>Operator terminal / standing-policy confirmation</span><button type="button" data-copy="cmd-engage">Copy</button></figcaption><pre><code id="cmd-engage">ros_cli service call /lowerbody/confirm_engage std_srvs/srv/Trigger '{}'</code></pre></figure>
-        <p>Do not pre-call or chain this service to launch. Follow the approved physical support procedure and wait for stable standing before arm goals. A successful service response is not measured balance. If posture is unstable or state/safety becomes stale, stop using the physical safety procedure and record the actual failure reason.</p>
-      </section>
-
-      <section id="mode" aria-labelledby="mode-title">
-        <h2 id="mode-title">05 / Choose Frame or Counter</h2>
-        <p>Use the same controller, node and task topics in either mode. Counter may move the opposite arm: keep that hand empty and its entire swept space clear. Select only between whole finished tasks:</p>
-        <figure class="command"><figcaption><span>Idle server / select Counter</span><button type="button" data-copy="cmd-counter">Copy</button></figcaption><pre><code id="cmd-counter">ros_cli param set /frame_task_server control_mode counter</code></pre></figure>
-        <p>For Frame, use <code>ros_cli param set /frame_task_server control_mode frame</code>. Setting a mode does not move the robot; busy changes are rejected. Do not restart the controller/lower policy or change gains, configuration or parameters during a goal.</p>
-      </section>
-
-      <section id="task" aria-labelledby="task-title">
-        <h2 id="task-title">06 / Grasp or Extract</h2>
+        <h3 id="task-title">C3 / Grasp or Extract, One Freshly Seated Source</h3>
         <p>Verify the source peg is seated, the real profile matches it, and the complete path is clear. Default <code>approach_mode=plan</code> performs ordinary named preparation, acquires a fresh ArUco board snapshot, plans one approach, executes it, then contacts and grasps. The named prep and tool geometry must be approved for this fixture; self-collision planning does not model arbitrary table/board obstacles.</p>
         <p><strong>Choose one task from a freshly seated source.</strong> The recipe is identical in Frame or Counter mode. Pick/place includes its own grasp; do not call it after grasp-only.</p>
-        <h3>A / Grasp only</h3>
+        <h4>Grasp only</h4>
         <figure class="command"><figcaption><span>Operator terminal / close on supported source, no extraction</span><button type="button" data-copy="cmd-grasp">Copy</button></figcaption><pre><code id="cmd-grasp">ros_cli action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
   "{target_object: 'cylinder_1', arm: 'left', top_down: true, min_downward_pitch_deg: 90.0, visual_servo: false, timeout: {sec: 180, nanosec: 0}}" --feedback</code></pre></figure>
-        <h3>B / Extract and hold</h3>
+        <h4>Extract and hold</h4>
         <figure class="command"><figcaption><span>Operator terminal / grasp, extract, carry and retained pre-insertion hold</span><button type="button" data-copy="cmd-extract">Copy</button></figcaption><pre><code id="cmd-extract">ros_cli action send_goal /skill/pick_place custom_ros_messages/action/SkillPickPlace \
   "{target_object: 'cylinder_1', place_target: 'cylinder_1', arm: 'left', top_down: true, visual_servo: false, timeout: {sec: 180, nanosec: 0}}" --feedback</code></pre></figure>
         <p>Marker pick/place does not insert or release. Its <code>top_down</code> path requires 90 degrees internally; <code>min_downward_pitch_deg</code> exists only on <code>SkillGrasp</code>. Keep <code>visual_servo: false</code>. Verify contact and actual extraction/retention rather than inferring them from action success.</p>
         <p>The bounded trajectory uses the accepted start snapshot, so markers need not remain visible behind the hand throughout motion. Joint, limit, reached-target and cancellation guards remain active. On failure, stop issuing goals, keep the reported cause and inspect the held posture/payload. Cancellation is not an E-stop or automatic withdrawal.</p>
-      </section>
-
-      <section id="repeat" aria-labelledby="repeat-title">
-        <h2 id="repeat-title">07 / Return and Reuse</h2>
-        <p>Keep standing and both controllers running. For grasp-only, verify the peg remains seated and supported, then open with the approved physical aperture before returning:</p>
+        <h3 id="repeat-title">C4 / Return and Reuse</h3>
+        <p>Keep the chosen support condition and existing processes unchanged. In the standing variant, also keep the lower controller running; in the supported variant, keep it off. For grasp-only, verify the peg remains seated and supported, then open with the approved physical aperture before returning:</p>
         <figure class="command"><figcaption><span>Seated source only / calibrated real gripper opening in millimetres</span><button type="button" data-copy="cmd-open">Copy</button></figcaption><pre><code id="cmd-open">ros_cli service call /left/gripper/set_position magpie_msgs/srv/SetGripperPosition \
   "{position: ${APPROVED_OPEN_WIDTH_MM:?set calibrated physical opening}, speed: 0.5}"</code></pre></figure>
         <p>After extraction, secure and physically restore the peg to its original seated source under the approved fixture procedure before repeating. Never open a loaded hand blindly or move the fixture around an actively moving robot. Return with empty hands and a checked path:</p>
@@ -196,27 +296,15 @@ ros_cli() { "${ROS_PY:?}" /opt/ros/humble/bin/ros2 "$@"; }</code></pre></figure>
         <figure class="command"><figcaption><span>Idle skills server / repeat the original approach without replanning</span><button type="button" data-copy="cmd-reuse">Copy</button></figcaption><pre><code id="cmd-reuse">ros_cli param set /h12_skills approach_mode reuse</code></pre></figure>
         <p>Optionally switch <code>control_mode</code> while idle, recheck the restored source/workcell, then send the same task goal. Reuse checks a fresh observation against existing workcell bounds but keeps the original task target snapshot and saved path. A wrong measured start is rejected, not automatically returned.</p>
         <p>For a changed scene/task, set <code>ros_cli param set /h12_skills approach_mode plan</code> and plan again. A new plan replaces the old cache. The path and snapshot are RAM-only and do not survive controller/skills restarts. Each explicit goal assumes the operator has restored and checked its input scenario.</p>
-      </section>
-
-      <section id="stop" aria-labelledby="stop-title">
-        <h2 id="stop-title">08 / Stop and Details</h2>
-        <p>For danger or unexpected motion, use the tested physical E-stop and approved hardware emergency procedure. For normal shutdown, stop issuing goals, secure the payload and robot, then follow the team's support/control/power sequence. ROS cancellation and Ctrl+C are not independent emergency stops; the last command may remain held and no automatic retreat is promised.</p>
-        <p>Keep task result/failure text, measured motion, software/configuration/profile revisions, checkpoint identity and physical support condition. Do not claim a standing or grasp result from action/service success alone.</p>
-        <details><summary>Manual single-arm plan and replay</summary>
-          <p>Ordinary <code>/frame_task</code> retains its one-goal behavior; <code>plan: true</code> there plans and executes. For a separate empty-hand manual task, supply one inspected hardware approach goal to the plan-only endpoint:</p>
-          <figure class="command"><figcaption><span>Manual / approved FrameTask YAML with plan:true and one frame/pose</span><button type="button" data-copy="cmd-plan">Copy</button></figcaption><pre><code id="cmd-plan">ros_cli action send_goal /plan_frame_task custom_ros_messages/action/FrameTask \
-  "${APPROVED_APPROACH_GOAL:?set complete inspected hardware FrameTask YAML}" --feedback</code></pre></figure>
-          <figure class="command"><figcaption><span>Manual / freshly validated replay, saved timing and current mode</span><button type="button" data-copy="cmd-replay">Copy</button></figcaption><pre><code id="cmd-replay">ros_cli action send_goal /replay_frame_task custom_ros_messages/action/FrameTask \
-  '{duration: {sec: 45, nanosec: 0}}' --feedback</code></pre></figure>
-          <p>Plan-only stores one path without moving. Replay needs no target; it checks current start/path and uses stored timing without replanning. Return through <code>approach_start</code> before repeating it. Named planning and ordinary planned carry goals do not overwrite the explicit cache; a new explicit plan does. Duration is a wall-clock execution budget, not requested movement time. The runtime adapter paces on wall time.</p>
-        </details>
+        <h3>C5 / Record the Outcome and Stop Safely</h3>
+        <p>Use <a href="#checks">Section 05</a> for shutdown. Record measured standing, actual peg displacement/retention, contacts, task result/failure text, software/configuration/profile revisions, checkpoint identity and support condition. The current skill has no autonomous insertion, release or grip-retention verification; a successful action is not a completed peg-in-hole assembly.</p>
         <details><summary>Component references and failed acquisition</summary>
           <p>If board acquisition fails, read <code>/perception/pegboard/diagnostics</code> and check print layout, CameraInfo, timestamp synchronization and TF at the image stamp. Do not loosen bounds or tune gains to bypass a rejected goal.</p>
-          <p>The <a href="../core_ws/src/h12_bringup/launch/h12_control.launch.py">control</a>, <a href="../core_ws/src/h12_bringup/launch/h12_lowerbody.launch.py">lower-body</a> and <a href="../core_ws/src/h12_bringup/launch/h12_state.launch.py">state</a> blocks are the command sources. The <a href="../core_ws/src/h12_bringup/config/lowerbody_real.yaml">real lower YAML</a> is a review starting point, not an approval substitute.</p>
-          <p>Root <code>run_simulation.sh</code>, <code>run_controller.sh</code>, <code>run_ros.sh</code> and <code>run_rviz.sh</code> are simulation-only and reject domain 0. Do not bypass those guards or run a simulator on the robot bus.</p>
+          <p>Source references: <a href="../core_ws/src/h12_bringup/launch/h12_control.launch.py">control block</a>, <a href="../core_ws/src/h12_bringup/launch/h12_lowerbody.launch.py">lower-body block</a>, <a href="../core_ws/src/h12_bringup/launch/h12_state.launch.py">read-only state block</a> and <a href="../core_ws/src/model_server/model_server/aruco_localizer.py">ArUco localizer</a>.</p>
+          <p>Launch separation is verified against the current code; no hardware commands were executed to validate this guide. Treat the <a href="../core_ws/src/h12_bringup/config/lowerbody_real.yaml">real lower YAML</a>, including its site-specific IMU trims, as a review starting point rather than an approval substitute.</p>
         </details>
       </section>
-      <footer>GOLEM real task procedure template. Copy buttons copy command text only; they never execute commands. Isolated simulation workflow: <a href="h12_simulation_guide.html">simulation guide</a>.</footer>
+      <footer>GOLEM staged real deployment. Copy buttons copy command text only; they never execute commands. Camera-only and crane-supported operation do not require Stage C. Isolated simulation workflow: <a href="h12_simulation_guide.html">simulation guide</a>.</footer>
     </main>
   </div>
   <div id="copy-status" role="status" aria-live="polite" aria-atomic="true"></div>

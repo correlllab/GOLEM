@@ -1,10 +1,14 @@
 """Check that every image builds from pinned inputs: base digests, commits and locked Python packages."""
 from pathlib import Path
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-FILES = sorted((ROOT / 'docker').glob('*Dockerfile'))
+# The x86 images' Dockerfiles and the Mac (arm64) twins of docker/mac/.
+FILES = sorted((ROOT / 'docker').glob('*Dockerfile')) + sorted((ROOT / 'docker/mac').glob('*Dockerfile'))
 
 class SourcePinTests(unittest.TestCase):
     """Check the Dockerfiles' base images, clones and downloads are pinned."""
@@ -38,7 +42,8 @@ class SourcePinTests(unittest.TestCase):
                 if 'Livox-SDK2.git' in run:
                     pin = re.search(r'checkout(?: --quiet)? ([0-9a-f]{40})\b', run)
                     refs[path.relative_to(ROOT).as_posix()] = pin and pin.group(1)
-        self.assertLessEqual({'docker/RosDockerfile', 'docker/RobocasaDockerfile'}, set(refs))
+        self.assertLessEqual({'docker/RosDockerfile', 'docker/RobocasaDockerfile',
+                              'docker/mac/RosDockerfile', 'docker/mac/RobocasaDockerfile'}, set(refs))
         self.assertEqual(len(set(refs.values())), 1, refs)
 
     def test_robocasa_patches_name_the_pinned_checkouts(self):
@@ -104,6 +109,42 @@ class SourcePinTests(unittest.TestCase):
             text = path.read_text()
             self.assertNotIn('https://astral.sh/uv/install.sh', text, str(path))
             self.assertNotIn('ros/rosdistro/master/ros.key', text, str(path))
+
+class MacImageTests(unittest.TestCase):
+    """Check the Mac images keep to the arm64 locks and match the x86 images' pins."""
+
+    def test_each_platform_installs_through_its_own_locks(self):
+        """The x86 Dockerfiles name only amd64 locks and the Mac ones only arm64 locks."""
+        for path in FILES:
+            arch = 'arm64' if path.parent.name == 'mac' else 'amd64'
+            other = 'amd64' if arch == 'arm64' else 'arm64'
+            text = path.read_text()
+            self.assertNotIn(f'-{other}', ''.join(re.findall(r'docker/locks/\S+|/opt/golem-locks/\S+', text)),
+                             str(path))
+
+    def test_mac_images_check_out_the_x86_commits(self):
+        """Each Mac Dockerfile clones the same commits as its x86 twin, the GPU-only clones of the ROS image aside."""
+        for name in ('BaseDockerfile', 'RosDockerfile', 'RobocasaDockerfile'):
+            x86 = set(re.findall(r'\b[0-9a-f]{40}\b', (ROOT / 'docker' / name).read_text()))
+            mac = set(re.findall(r'\b[0-9a-f]{40}\b', (ROOT / 'docker/mac' / name).read_text()))
+            self.assertLessEqual(mac, x86, name)
+
+    def test_arm64_locks_are_derived_from_the_amd64_locks(self):
+        """Every arm64 lock is what docker/mac/derive_arm64_locks.sh writes from its amd64 twin."""
+        with tempfile.TemporaryDirectory() as tmp:
+            locks = Path(tmp) / 'docker/locks'
+            shutil.copytree(ROOT / 'docker/locks', locks)
+            for path in locks.glob('*-arm64*.txt'):
+                path.unlink()
+            (Path(tmp) / 'docker/mac').mkdir()
+            shutil.copy(ROOT / 'docker/mac/derive_arm64_locks.sh', Path(tmp) / 'docker/mac')
+            subprocess.run(['bash', str(Path(tmp) / 'docker/mac/derive_arm64_locks.sh')], check=True)
+            derived = sorted(p.name for p in locks.glob('*-arm64*.txt'))
+            committed = sorted(p.name for p in (ROOT / 'docker/locks').glob('*-arm64*.txt'))
+            self.assertEqual(derived, committed)
+            for name in derived:
+                self.assertEqual((locks / name).read_text(), (ROOT / 'docker/locks' / name).read_text(), name)
+
 
 class PythonLockTests(unittest.TestCase):
     """Check every pip install goes through a committed lock file of exact pins."""

@@ -6,8 +6,10 @@
 #   e.g. --headless or --layout 9 --style 9 --seed 42. Without a DISPLAY,
 #   --headless is added (no passive viewer).
 # Environment: ROS_DOMAIN_ID (1..232, 1 when unset), DISPLAY,
-#   GOLEM_PREPARE_ONLY=1 (build msgs_ws and exit 0; docker_stack.sh), and the
-#   simulator's own knobs (docker-compose.yml, docker-compose.g1.yml).
+#   GOLEM_PREPARE_ONLY=1 (build msgs_ws and exit 0; docker_stack.sh),
+#   GOLEM_RENDER=gpu|cpu (MUJOCO_GL egl or osmesa; default gpu), and the
+#   simulator's own knobs (docker-compose.yml, docker-compose.g1.yml,
+#   docker-compose.mac.yml).
 # The simulator's topics are listed by its sensor modules (h12_sensors.py and
 # magpie_hand_bridge.py, or g1/g1_sensors.py) and CLAUDE.md §8.
 # Exit status: 1 on a refused domain; colcon's status when the msgs_ws build
@@ -44,8 +46,14 @@ esac
 
 # EGL renders the RGBD cameras and the MID-360's rays offscreen on the GPU, needs
 # no display, and can render on the sensors' worker threads; the passive viewer
-# opens its own GLFW window.
-export MUJOCO_GL=egl
+# opens its own GLFW window. GOLEM_RENDER=cpu (the Mac images,
+# docker-compose.mac.yml) renders the cameras through OSMesa instead
+# (sim_common.require_renderer).
+if [ "${GOLEM_RENDER:-gpu}" = cpu ]; then
+    export MUJOCO_GL=osmesa
+else
+    export MUJOCO_GL=egl
+fi
 
 cd /home/code/golem_robocasa
 # -u: Compose reads stdout through a pipe, which would block-buffer print() and

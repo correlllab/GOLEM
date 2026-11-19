@@ -1,0 +1,161 @@
+# golem_ros:arm64: the Mac (Apple Silicon) twin of docker/RosDockerfile, the
+# ROS 2 workspace image, on golem_base:arm64 (mac/BaseDockerfile).
+#
+# It has the x86 image's build toolchain, C++ libraries, Livox-SDK2, the Pink
+# IK / OMPL stack, Nav2 / SLAM / OctoMap, the RealSense driver and the G1's
+# onnxruntime, with the arm64 locks. It leaves out the model_server ML stack
+# (transformers, CLIP, SAM3, YOLO, GraspGenX): the Mac sim bringups
+# (h12_mac_sim, g1_mac_sim) start no model server, and GraspGenX has no CPU
+# path. core_ws still builds whole; those servers fail at import if started.
+# launch_ros.sh colcon-builds the bind-mounted core_ws at every container start.
+# Step numbers follow docker/RosDockerfile.
+FROM golem_base:arm64
+COPY docker/locks/ros-arm64*.txt /opt/golem-locks/
+
+# Optional build-time proxies (golem_base clears its own).
+ARG http_proxy
+ARG https_proxy
+ENV http_proxy=${http_proxy}
+ENV https_proxy=${https_proxy}
+
+# 1. apt: build tooling, system Python C-extensions and the ROS packages core_ws
+#    builds against (docker/RosDockerfile step 1 has a comment per group).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        pkg-config \
+        python3-colcon-common-extensions \
+        python3-rosdep \
+        python3-vcstool \
+        python3-numpy python3-scipy python3-yaml python3-transforms3d \
+        libpcl-dev libeigen3-dev libyaml-cpp-dev libopencv-dev \
+        ros-humble-ament-cmake \
+        ros-humble-ament-cmake-auto \
+        ros-humble-ament-cmake-python \
+        ros-humble-ament-lint-auto \
+        ros-humble-rosidl-default-generators \
+        ros-humble-rosidl-generator-dds-idl \
+        ros-humble-image-transport \
+        ros-humble-vision-msgs \
+        ros-humble-nav-msgs \
+        ros-humble-std-msgs \
+        ros-humble-std-srvs \
+        ros-humble-visualization-msgs \
+        ros-humble-xacro \
+        ros-humble-robot-state-publisher \
+        ros-humble-joint-state-publisher \
+        ros-humble-launch-ros \
+        ros-humble-launch-xml \
+        ros-humble-pcl-ros \
+        ros-humble-pcl-conversions \
+        ros-humble-tf2-eigen \
+        ros-humble-tf2-tools \
+        ros-humble-rclcpp \
+        ros-humble-rclcpp-components \
+        ros-humble-rviz2 \
+        ros-humble-pinocchio \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Livox-SDK2, which livox_ros_driver2 in core_ws links, at the commit every
+#    image uses (tests/docker/test_source_pins.py).
+RUN git clone https://github.com/Livox-SDK/Livox-SDK2.git /tmp/Livox-SDK2 && \
+    git -C /tmp/Livox-SDK2 checkout --quiet 08f523c930b2f0ba1e98a6afaa8d7476bf479908 && \
+    cd /tmp/Livox-SDK2 && mkdir build && cd build && \
+    cmake .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5 && make -j"$(nproc)" && make install && \
+    ldconfig && \
+    rm -rf /tmp/Livox-SDK2
+
+# 3. Python: golem_upper_ik's controller stack and open3d (0.18.0 here: 0.19.0
+#    has no linux/aarch64 wheel). Base's NumPy-2 pinocchio closure goes first,
+#    as on x86 (docker/RosDockerfile step 3 says why).
+RUN pip uninstall -y pin libpinocchio coal libcoal eigenpy \
+        cmeel cmeel-assimp cmeel-boost cmeel-console-bridge cmeel-octomap \
+        cmeel-qhull cmeel-tinyxml2 cmeel-urdfdom cmeel-zlib
+RUN pip install -c /opt/golem-locks/ros-arm64-01.txt --no-cache-dir --ignore-installed blinker \
+        "numpy<2" \
+        "scikit-learn>=1.4" \
+        pin-pink \
+        qpsolvers \
+        quadprog \
+        proxsuite \
+        "ompl==2.0.1" \
+        meshcat \
+        meshcat-shapes \
+        pyquaternion \
+        tqdm \
+        open3d
+
+# 7. Interactive shells source the core_ws overlay once launch_ros.sh has built
+#    it (base's .bashrc already sources /opt/ros/humble).
+RUN echo '[ -f /home/code/core_ws/install/setup.bash ] && source /home/code/core_ws/install/setup.bash' >> /root/.bashrc
+
+WORKDIR /home/code/core_ws
+
+# Build core_ws, then a shell (launch_ros.sh); bringup is a manual step.
+CMD ["/home/code/h12_sim_scripts/launch_ros.sh"]
+
+# Tkinter, for golem_bringup's slider_debugger.py.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3-tk \
+    && rm -rf /var/lib/apt/lists/*
+
+# Navigation, SLAM and debugging tools: golem_slam builds against them, though
+# the Mac sims have no lidar to run them on (docker/RosDockerfile has a comment
+# per group).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-navigation2 \
+        ros-humble-nav2-bringup \
+        ros-humble-slam-toolbox \
+        ros-humble-pointcloud-to-laserscan \
+        ros-humble-rqt \
+        ros-humble-rqt-common-plugins \
+        ros-humble-rqt-graph \
+        ros-humble-rqt-tf-tree \
+        ros-humble-rqt-reconfigure \
+        ros-humble-teleop-twist-keyboard \
+        ros-humble-teleop-twist-joy \
+        ros-humble-rosbag2 \
+        ros-humble-rosbag2-storage-default-plugins \
+        ros-humble-diagnostic-updater \
+        ros-humble-foxglove-bridge \
+    && rm -rf /var/lib/apt/lists/*
+
+# The RealSense ROS driver and the image transports (cl_realsense's launch
+# files name them).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-realsense2-camera \
+        ros-humble-image-transport-plugins \
+    && rm -rf /var/lib/apt/lists/*
+
+# OctoMap for golem_slam's navigation.launch.py.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-octomap-server \
+        ros-humble-octomap-rviz-plugins \
+    && rm -rf /var/lib/apt/lists/*
+
+# The G1's additions: joint_state_publisher_gui (golem_ros2_models'
+# display.launch.py) and onnxruntime 1.23.2, which runs HOMIE's walking policy
+# in golem_lowerbody_rl.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-joint-state-publisher-gui \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install -c /opt/golem-locks/ros-arm64-11.txt --no-cache-dir onnxruntime==1.23.2 \
+    && python3 -c "import onnxruntime"
+
+# pyserial (estop's exec_depend): estop_node reads the H1-2 sims' socket://
+# estop box with it.
+RUN apt-get update && apt-get install -y --no-install-recommends python3-serial \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -c "import serial; serial.serial_for_url('loop://')"
+
+# 6. Clamp numpy, setuptools and wheel to what colcon and the ABI need, last, so
+#    it covers every pip step above (docker/RosDockerfile steps 6 and 8 say
+#    why each pin, and why the stale files are deleted first).
+RUN rm -rf /usr/local/lib/python3.10/dist-packages/setuptools \
+           /usr/local/lib/python3.10/dist-packages/setuptools-*.dist-info \
+           /usr/local/lib/python3.10/dist-packages/pkg_resources \
+           /usr/local/lib/python3.10/dist-packages/pkg_resources-*.dist-info \
+           /usr/local/lib/python3.10/dist-packages/_distutils_hack \
+           /usr/local/lib/python3.10/dist-packages/wheel \
+           /usr/local/lib/python3.10/dist-packages/wheel-*.dist-info \
+    && pip install -c /opt/golem-locks/ros-arm64-06.txt --no-cache-dir --no-deps "numpy<2" "setuptools==59.6.0" "wheel<0.44" \
+    && rm -f /usr/local/lib/python3.10/dist-packages/distutils-precedence.pth \
+    && python3 -c "import setuptools, wheel, numpy; assert setuptools.__version__ == '59.6.0', setuptools.__version__; assert numpy.__version__.startswith('1.'), numpy.__version__; print('clamp ok:', setuptools.__version__, wheel.__version__, numpy.__version__)"

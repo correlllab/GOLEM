@@ -16,9 +16,12 @@
 #                      sim and the efficiency cores for ros; unset otherwise
 #   GOLEM_SYSFS_ROOT   prefix of the /sys files configure_cpus reads (default
 #                      empty; the host-script tests set it)
+#   GOLEM_PLATFORM     linux or mac (default: mac on Darwin arm64, else linux);
+#                      mac runs the arm64 images of docker/mac/ (docs/MAC.md)
 #   docker/.env        any of the above; exported shell values win
 # Globals set: GOLEM_ROOT, COMPOSE (the docker compose command line, extended
-# by configure_robot, configure_display and configure_cpus), ENV_FILE,
+# by configure_platform, configure_robot, configure_display and
+# configure_cpus), GOLEM_PLATFORM, ENV_FILE,
 # ROBOT_FLAG, WRAPPER_ARGS; GOLEM_SIM_CPUSET and GOLEM_ROS_CPUSET are set or
 # unset by configure_cpus.
 # Every check fails through fail(): an "ERROR:" line on stderr and exit 1.
@@ -66,14 +69,41 @@ load_config() {
     ENV_FILE="$GOLEM_ROOT/docker/.env"
     [ -f "$ENV_FILE" ] || ENV_FILE=/dev/null
     COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$GOLEM_ROOT/docker/docker-compose.yml")
+    configure_platform
 }
 
-# Fail unless $1 is a service: robocasa, ros or isaac.
+# Select the host platform and export it as GOLEM_PLATFORM: the shell's or
+# docker/.env's GOLEM_PLATFORM, else mac on Darwin arm64 (Apple Silicon), else
+# linux. linux leaves COMPOSE as load_config made it (the x86 / NVIDIA images).
+# mac adds docker-compose.mac.yml (the arm64 images of docker/mac/, no NVIDIA
+# runtime, the sims on CPU rendering), exports GOLEM_LIDAR=0 unless set (the
+# Mac sims have no lidar caster) and headless unless GOLEM_DISPLAY is set
+# (there is no X server). Called by load_config.
+configure_platform() {
+    local platform=${GOLEM_PLATFORM:-}
+    if [ -z "$platform" ]; then
+        if [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then platform=mac; else platform=linux; fi
+    fi
+    case "$platform" in
+        linux) ;;
+        mac)
+            COMPOSE+=(-f "$GOLEM_ROOT/docker/docker-compose.mac.yml")
+            export GOLEM_LIDAR="${GOLEM_LIDAR:-0}"
+            export GOLEM_DISPLAY="${GOLEM_DISPLAY:-headless}"
+            ;;
+        *) fail "GOLEM_PLATFORM must be linux or mac, not '$platform'.";;
+    esac
+    export GOLEM_PLATFORM=$platform
+}
+
+# Fail unless $1 is a service: robocasa, ros or isaac (not isaac on the Mac,
+# which has no NVIDIA GPU). Call it after load_config.
 validate_service() {
     case "$1" in
         robocasa|ros|isaac) ;;
         *) fail "Unknown service '$1'; use robocasa, ros, or isaac.";;
     esac
+    [ "$1" != isaac ] || [ "${GOLEM_PLATFORM:-linux}" != mac ] || fail 'The Isaac simulator needs an NVIDIA GPU and does not run on the Mac; use robocasa.'
 }
 
 # Split the robot selectors --g1 / --h12 out of the arguments, wherever they

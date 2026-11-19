@@ -9,8 +9,10 @@ everything starts at once: the state publishers (h12_state), the command path
 (h12_control as on the real robot: the safety/controller pairing check before any node,
 then estop_node on the sim's estop box, safety_node and frame_task_server with the real
 robot's configs and delays), the leg controller (h12_lowerbody, with the start pose taken
-as verified), the model servers and golem_skills (golem_vision_models), navigation, the
-static camera_link -> camera_color_optical_frame TF and RViz (use_rviz).
+as verified), the model servers and golem_skills (golem_vision_models; use_vision),
+navigation (use_nav), the static camera_link -> camera_color_optical_frame TF and RViz
+(use_rviz). use_vision and use_nav default to true; h12_mac_sim.launch.py turns both off
+for the Mac sim, which has no lidar and no GPU for the model servers.
 
 SAFETY: the sim runs the real robot's operator gates: the estop box the sim serves (ENTER
 on the sim's terminal or viewer presses it; golem_safety then latches until restart), and
@@ -75,6 +77,13 @@ def generate_launch_description():
                                           'start-up (clear_logs)'),
         DeclareLaunchArgument('rviz_config', default_value=default_rviz,
                               description='RViz config file (path)'),
+        DeclareLaunchArgument('use_vision', default_value='true',
+                              description='true: start the model servers (gemini, sam, and '
+                                          'with use_skills graspgen and golem_skills); '
+                                          'false: none of them, use_skills included'),
+        DeclareLaunchArgument('use_nav', default_value='true',
+                              description="true: golem_slam's FAST-LIO, SLAM and Nav2 on the "
+                                          "sim's MID-360; false: no navigation"),
 
         # SAFETY: first, so a refused policy or run config starts no node: the leg
         # block, which checks them too, is included after the others.
@@ -102,9 +111,10 @@ def generate_launch_description():
             'model_visualization': LaunchConfiguration('model_visualization'),
             'model_clear_logs': LaunchConfiguration('model_clear_logs'),
             'record_runs': LaunchConfiguration('record_runs'),
-        }),
+        }, condition=IfCondition(LaunchConfiguration('use_vision'))),
         # SLAM and Nav2, driving the legs on /cmd_vel.
-        include('golem_slam', 'navigation.launch.py', {**sim_time, 'robot': 'h12'}),
+        include('golem_slam', 'navigation.launch.py', {**sim_time, 'robot': 'h12'},
+                condition=IfCondition(LaunchConfiguration('use_nav'))),
 
         # For Isaac: its head camera's images are stamped
         # camera_color_optical_frame (CL_isaaclab_sim's ros_sensor_bridge.py,

@@ -32,6 +32,8 @@ TOP_LEVEL = [
     ('lmg_sim.launch.py', {'start_position_verified': 'true', 'use_slam': 'true',
                            'use_skills': 'true'}, True),
     ('g1_sim.launch.py', {'use_skills': 'true', 'use_nav': 'true', 'use_rviz': 'true'}, True),
+    ('h12_mac_sim.launch.py', {'use_rviz': 'true'}, True),
+    ('g1_mac_sim.launch.py', {'use_rviz': 'true'}, True),
     ('h12_real_robot.launch.py', {'start_position_verified': 'true'}, False),
     ('lmg_real.launch.py', {'start_position_verified': 'true'}, False),
     ('h12_real_desktop.launch.py', {'use_hand_cameras': 'true'}, False),
@@ -132,3 +134,38 @@ def test_every_node_runs_on_its_bringups_clock(launch_file, args, sim_time, monk
     wrong = [(package, executable, name, value) for package, executable, name, value in nodes
              if value not in allowed]
     assert wrong == [], f'{launch_file}: nodes not on use_sim_time {sim_time}: {wrong}'
+
+
+# Packages of the nodes the Mac sim bringups leave out: navigation (no lidar on the Mac
+# sim) and the model servers and skills (no GPU stack in the Mac's golem_ros).
+NAV_AND_VISION = ('fast_lio', 'golem_slam', 'slam_toolbox', 'octomap_server',
+                  'pointcloud_to_laserscan', 'model_server', 'golem_skills')
+
+
+def _packages(launch_file, args):
+    """Return the packages of the nodes launch_file starts with args, on a sim domain."""
+    return {package for package, _, _, _ in _nodes(launch_file, args)}
+
+
+@pytest.mark.parametrize('mac_file, sim_file, sim_args, core', [
+    ('h12_mac_sim.launch.py', 'h12_sim.launch.py', {'use_rviz': 'false'},
+     {'golem_safety', 'golem_upper_ik', 'golem_lowerbody_rl', 'estop'}),
+    ('g1_mac_sim.launch.py', 'g1_sim.launch.py', {'use_rviz': 'false'},
+     {'golem_safety', 'golem_upper_ik', 'golem_lowerbody_rl', 'dex_3'}),
+])
+def test_mac_sim_is_the_sim_bringup_without_nav_or_vision(mac_file, sim_file, sim_args, core,
+                                                          monkeypatch):
+    """A Mac sim bringup starts its sim bringup's command path and legs, no nav or vision node."""
+    monkeypatch.setenv('ROS_DOMAIN_ID', SIM_DOMAIN)
+    mac = _packages(mac_file, {})
+    assert core <= mac, mac
+    assert mac.isdisjoint(NAV_AND_VISION), mac & set(NAV_AND_VISION)
+    assert not [package for package in mac if package.startswith('nav2_')], mac
+    assert mac <= _packages(sim_file, sim_args), mac
+
+
+def test_h12_sim_defaults_keep_nav_and_vision(monkeypatch):
+    """h12_sim.launch.py with its defaults still starts navigation and the model servers."""
+    monkeypatch.setenv('ROS_DOMAIN_ID', SIM_DOMAIN)
+    packages = _packages('h12_sim.launch.py', {})
+    assert {'fast_lio', 'model_server', 'golem_skills'} <= packages, packages

@@ -11,7 +11,8 @@
 #   --g1 / --h12        the robot (anywhere in the arguments)
 # The ros container builds core_ws, waits in wait_for_sim.py for a fresh
 # rt/lowstate from a simulator of the selected robot, then starts its bringup
-# (docker-compose.stack.yml): h12_sim.launch.py, or g1_sim.launch.py for the G1.
+# (docker-compose.stack.yml): h12_sim.launch.py, or g1_sim.launch.py for the G1;
+# on the Mac (GOLEM_PLATFORM=mac) h12_mac_sim.launch.py or g1_mac_sim.launch.py.
 # Environment: GOLEM_ROBOT=h12|g1, GOLEM_DISPLAY, GOLEM_SIM_TIMEOUT (s, the
 # wait), GOLEM_USE_RVIZ (true|false; default true when DISPLAY is set),
 # GOLEM_CPU_PINNING, GOLEM_SIM_CPUSET and GOLEM_ROS_CPUSET (the CPUs the RoboCasa
@@ -49,10 +50,15 @@ fi
 if [ "$ACTION" = logs ]; then exec "${COMPOSE[@]}" logs -f "$SIM" ros; fi
 configure_robot "$SIM"
 echo "robot: $GOLEM_ROBOT" >&2
-if [ "$GOLEM_ROBOT" = g1 ]; then
-    # Read by docker-compose.stack.yml. Set here, from the selected robot,
-    # because a value left in the shell or docker/.env would start the H1-2
-    # bringup against the G1 sim.
+# The Mac runs the arm64 images (configure_platform); Linux prints nothing here.
+[ "$GOLEM_PLATFORM" != mac ] || echo 'platform: mac (arm64, CPU rendering, no lidar)' >&2
+# Read by docker-compose.stack.yml. Set here, from the selected robot and
+# platform, because a value left in the shell or docker/.env would start the
+# other robot's bringup. The Mac runs the mac_sim bringups (no lidar,
+# navigation or vision models; docs/MAC.md).
+if [ "$GOLEM_PLATFORM" = mac ]; then
+    export GOLEM_BRINGUP_LAUNCH=${GOLEM_ROBOT}_mac_sim.launch.py
+elif [ "$GOLEM_ROBOT" = g1 ]; then
     export GOLEM_BRINGUP_LAUNCH=g1_sim.launch.py
 fi
 check_domain "$SIM"

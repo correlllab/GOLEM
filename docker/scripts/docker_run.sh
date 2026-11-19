@@ -32,6 +32,8 @@ else
     configure_robot "$SIM"
     echo "robot: $GOLEM_ROBOT" >&2
 fi
+# The Mac runs the arm64 images (configure_platform); Linux prints nothing here.
+[ "$GOLEM_PLATFORM" != mac ] || echo 'platform: mac (arm64, CPU rendering, no lidar)' >&2
 RESTART=0
 if [ "${1:-}" = --restart ]; then RESTART=1; shift; fi
 # Pin the container to its CPUs (robocasa, ros; not the Isaac simulator). Before the

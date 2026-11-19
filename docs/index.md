@@ -17,7 +17,7 @@ including the `README.md` and `CLAUDE.md` developer guide, is at
 |---|---|---|
 | Unitree H1-2 (the default) | [Setup](SETUP.md), then [Running the stack](RUNNING.md) | x86 Linux with an NVIDIA GPU |
 | Unitree G1 | [The G1](g1/index.md), then [First real session](g1/first-session.md) for the real robot | x86 Linux with an NVIDIA GPU, RoboCasa simulator only |
-| Either robot on an Apple Silicon Mac | [The Mac](MAC.md) | a reduced RoboCasa sim: no lidar, navigation or model servers |
+| Either robot on an Apple Silicon Mac | [The Mac](MAC.md) | a reduced RoboCasa sim at real time, navigation included; no model servers or Isaac |
 
 Both robots use the same images and the same setup. The wrappers in
 `docker/scripts/` run the H1-2 unless `--g1` or `GOLEM_ROBOT=g1` selects the G1.

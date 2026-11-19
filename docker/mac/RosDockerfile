@@ -97,9 +97,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-tk \
     && rm -rf /var/lib/apt/lists/*
 
-# Navigation, SLAM and debugging tools: golem_slam builds against them, though
-# the Mac sims have no lidar to run them on (docker/RosDockerfile has a comment
-# per group).
+# Navigation, SLAM and debugging tools: golem_slam builds against them and the
+# Mac bringups run them on the sims' CPU-cast MID-360 (docker/RosDockerfile has
+# a comment per group).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-navigation2 \
         ros-humble-nav2-bringup \

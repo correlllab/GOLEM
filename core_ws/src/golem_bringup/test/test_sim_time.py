@@ -154,7 +154,7 @@ def _packages(launch_file, args):
 ])
 def test_mac_sim_is_the_sim_bringup_without_vision(mac_file, sim_file, sim_args, core,
                                                    monkeypatch):
-    """A Mac sim bringup starts the command path, legs and navigation, and no model server or skill."""
+    """A Mac sim bringup starts the command path, legs and navigation, but no model server."""
     monkeypatch.setenv('ROS_DOMAIN_ID', SIM_DOMAIN)
     mac = _packages(mac_file, {})
     assert core <= mac, mac

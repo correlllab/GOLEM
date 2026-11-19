@@ -79,7 +79,7 @@ controller_server:
         collision_cost: 10000.0
         collision_margin_distance: 0.10
         near_goal_distance: 0.5
-        inflation_radius: 0.2   # = the costmaps' inflation_radius
+        inflation_radius: 0.3   # = the local costmap's inflation_radius
         cost_scaling_factor: 3.0
       GoalCritic:
         enabled: true
@@ -198,7 +198,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.2
+        inflation_radius: 0.22  # > the body footprint's inscribed radius with Nav2's 0.01 m footprint_padding (0.21 m)
 local_costmap:
   local_costmap:
     ros__parameters:
@@ -246,5 +246,5 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 1.0
-        inflation_radius: 0.2
+        inflation_radius: 0.3  # >= dynamic_footprint's inscribed radius (the arms hanging behind the pelvis push it past 0.2 m)
       always_send_full_costmap: True

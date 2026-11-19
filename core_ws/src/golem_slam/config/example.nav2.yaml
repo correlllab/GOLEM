@@ -126,8 +126,8 @@ controller_server:
         collision_margin_distance: 0.10
         # m from the goal inside which the repulsion is turned off.
         near_goal_distance: 0.5
-        # m, equal to the costmaps' inflation_radius.
-        inflation_radius: 0.2
+        # m, equal to the local costmap's inflation_radius (the critic reads the local costmap).
+        inflation_radius: 0.3
         # Equal to the costmaps' inflation layer cost_scaling_factor.
         cost_scaling_factor: 3.0
       GoalCritic:
@@ -296,8 +296,9 @@ global_costmap:
         plugin: "nav2_costmap_2d::InflationLayer"
         # Steepness of the cost's fall-off with distance from an obstacle.
         cost_scaling_factor: 3.0
-        # m around obstacles that carries cost.
-        inflation_radius: 0.2
+        # m around obstacles that carries cost; more than the footprint's inscribed
+        # radius plus Nav2's footprint_padding (0.01 m), or Nav2 logs an error.
+        inflation_radius: 0.22
 
 local_costmap:
   local_costmap:
@@ -348,6 +349,9 @@ local_costmap:
           raytrace_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
+        # Steepness of the cost's fall-off with distance from an obstacle.
         cost_scaling_factor: 1.0
-        inflation_radius: 0.2
+        # m around obstacles that carries cost; at least the largest inscribed
+        # radius dynamic_footprint publishes, or Nav2 logs an error per footprint.
+        inflation_radius: 0.3
       always_send_full_costmap: True

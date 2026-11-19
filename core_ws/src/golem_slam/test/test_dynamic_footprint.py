@@ -1,7 +1,7 @@
 """Test the footprint geometry and the arm-goal check of golem_slam.dynamic_footprint."""
 from action_msgs.msg import GoalStatus, GoalStatusArray
-from golem_slam.dynamic_footprint import (arm_goal_live, box_corners, convex_hull,
-                                          footprint, moved, parse_polygon)
+from golem_slam.dynamic_footprint import (arm_goal_live, body_only_reason, box_corners,
+                                          convex_hull, footprint, moved, parse_polygon)
 import numpy as np
 import pytest
 
@@ -88,3 +88,13 @@ def test_live_goals_drop_the_arms():
                   GoalStatus.STATUS_CANCELING):
         assert arm_goal_live([status_array(GoalStatus.STATUS_SUCCEEDED),
                               status_array(state)])
+
+
+def test_the_arms_count_only_after_the_controller_starts_up():
+    """Before the ready topic's first message, or during a live arm goal, the body is alone."""
+    done = [status_array(GoalStatus.STATUS_SUCCEEDED)]
+    live = [status_array(GoalStatus.STATUS_EXECUTING)]
+    assert 'starting up' in body_only_reason(False, done, '/left_ee_pose')
+    assert '/left_ee_pose' in body_only_reason(False, done, '/left_ee_pose')
+    assert body_only_reason(True, live, '/left_ee_pose') == 'an arm goal is in flight'
+    assert body_only_reason(True, done, '/left_ee_pose') is None

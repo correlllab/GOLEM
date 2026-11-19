@@ -159,3 +159,12 @@ RUN rm -rf /usr/local/lib/python3.10/dist-packages/setuptools \
     && pip install -c /opt/golem-locks/ros-arm64-06.txt --no-cache-dir --no-deps "numpy<2" "setuptools==59.6.0" "wheel<0.44" \
     && rm -f /usr/local/lib/python3.10/dist-packages/distutils-precedence.pth \
     && python3 -c "import setuptools, wheel, numpy; assert setuptools.__version__ == '59.6.0', setuptools.__version__; assert numpy.__version__.startswith('1.'), numpy.__version__; print('clamp ok:', setuptools.__version__, wheel.__version__, numpy.__version__)"
+
+# RViz's display: Xvfb with Mesa's software OpenGL, shown over VNC (x11vnc) and
+# in a browser (noVNC on websockify), started by vnc_display.sh, the entrypoint.
+# A Mac has no X server a container can render OpenGL through (docs/MAC.md).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        xvfb x11vnc novnc python3-websockify \
+    && rm -rf /var/lib/apt/lists/*
+COPY docker/mac/vnc_display.sh /opt/golem/vnc_display.sh
+ENTRYPOINT ["/opt/golem/vnc_display.sh"]

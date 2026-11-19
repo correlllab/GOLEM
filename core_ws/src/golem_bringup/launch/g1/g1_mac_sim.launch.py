@@ -1,7 +1,7 @@
 """
 Start the G1 against the Mac's RoboCasa sim: g1_sim without skills or the hand driver.
 
-    ros2 launch golem_bringup g1_mac_sim.launch.py [use_hands:=true] [use_rviz:=true]
+    ros2 launch golem_bringup g1_mac_sim.launch.py [use_hands:=true] [use_rviz:=false]
 
 The Mac sim (docker/docker-compose.mac.yml, docs/MAC.md) renders on the CPU and casts its
 MID-360 on the CPU, and an 8-core Mac holds real time only without the Dex3-1 hand
@@ -23,8 +23,9 @@ from launch.substitutions import LaunchConfiguration
 def generate_launch_description():
     """Declare the Mac bringup's arguments and include g1_sim without skills."""
     return LaunchDescription([
-        DeclareLaunchArgument('use_rviz', default_value='false',
-                              description='true: start RViz (needs a display in golem_ros)'),
+        DeclareLaunchArgument('use_rviz', default_value='true',
+                              description='true: start RViz, on the Mac golem_ros display '
+                                          '(http://localhost:6080/vnc.html); false: none'),
         DeclareLaunchArgument('use_hands', default_value='false',
                               description='true: start dex3_hands, the Dex3-1 hand driver '
                                           '(about a quarter of a core: the stack then falls '

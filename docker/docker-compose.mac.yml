@@ -37,6 +37,10 @@ services:
     runtime: !reset null
     shm_size: 2g
     environment:
+      # RViz draws on the Xvfb display docker/mac/vnc_display.sh starts, shown
+      # at http://localhost:6080/vnc.html (docs/MAC.md); GOLEM_VNC=0 starts none.
+      DISPLAY: ":99"
+      GOLEM_VNC: ${GOLEM_VNC:-1}
       # core_ws/cyclonedds.xml, then an override of its 16 MB minimum UDP
       # receive buffer: the minimum makes every ROS node fail to create its
       # domain unless the kernel's net.core.rmem_max allows it, which the

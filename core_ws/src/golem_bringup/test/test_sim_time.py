@@ -32,6 +32,8 @@ TOP_LEVEL = [
     ('lmg_sim.launch.py', {'start_position_verified': 'true', 'use_slam': 'true',
                            'use_skills': 'true'}, True),
     ('g1_sim.launch.py', {'use_skills': 'true', 'use_nav': 'true', 'use_rviz': 'true'}, True),
+    ('h12_mac_sim.launch.py', {'use_rviz': 'true'}, True),
+    ('g1_mac_sim.launch.py', {'use_rviz': 'true', 'use_hands': 'true'}, True),
     ('h12_real_robot.launch.py', {'start_position_verified': 'true'}, False),
     ('lmg_real.launch.py', {'start_position_verified': 'true'}, False),
     ('h12_real_desktop.launch.py', {'use_hand_cameras': 'true'}, False),
@@ -132,3 +134,43 @@ def test_every_node_runs_on_its_bringups_clock(launch_file, args, sim_time, monk
     wrong = [(package, executable, name, value) for package, executable, name, value in nodes
              if value not in allowed]
     assert wrong == [], f'{launch_file}: nodes not on use_sim_time {sim_time}: {wrong}'
+
+
+# Packages of the nodes the Mac sim bringups leave out: the model servers and skills (no
+# GPU stack in the Mac's golem_ros).
+VISION = ('model_server', 'golem_skills')
+
+
+def _packages(launch_file, args):
+    """Return the packages of the nodes launch_file starts with args, on a sim domain."""
+    return {package for package, _, _, _ in _nodes(launch_file, args)}
+
+
+@pytest.mark.parametrize('mac_file, sim_file, sim_args, core', [
+    ('h12_mac_sim.launch.py', 'h12_sim.launch.py', {'use_rviz': 'false'},
+     {'golem_safety', 'golem_upper_ik', 'golem_lowerbody_rl', 'estop', 'fast_lio', 'golem_slam'}),
+    ('g1_mac_sim.launch.py', 'g1_sim.launch.py', {'use_rviz': 'false'},
+     {'golem_safety', 'golem_upper_ik', 'golem_lowerbody_rl', 'fast_lio', 'golem_slam'}),
+])
+def test_mac_sim_is_the_sim_bringup_without_vision(mac_file, sim_file, sim_args, core,
+                                                   monkeypatch):
+    """A Mac sim bringup starts the command path, legs and navigation, but no model server."""
+    monkeypatch.setenv('ROS_DOMAIN_ID', SIM_DOMAIN)
+    mac = _packages(mac_file, {})
+    assert core <= mac, mac
+    assert mac.isdisjoint(VISION), mac & set(VISION)
+    assert mac <= _packages(sim_file, sim_args), mac
+
+
+def test_g1_mac_sim_leaves_the_hand_driver_out(monkeypatch):
+    """g1_mac_sim starts no dex3_hands by default, and does with use_hands:=true."""
+    monkeypatch.setenv('ROS_DOMAIN_ID', SIM_DOMAIN)
+    assert 'dex_3' not in _packages('g1_mac_sim.launch.py', {})
+    assert 'dex_3' in _packages('g1_mac_sim.launch.py', {'use_hands': 'true'})
+
+
+def test_h12_sim_defaults_keep_vision(monkeypatch):
+    """h12_sim.launch.py with its defaults still starts the model servers and skills."""
+    monkeypatch.setenv('ROS_DOMAIN_ID', SIM_DOMAIN)
+    packages = _packages('h12_sim.launch.py', {})
+    assert {'fast_lio', 'model_server', 'golem_skills'} <= packages, packages

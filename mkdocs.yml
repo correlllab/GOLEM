@@ -57,6 +57,7 @@ nav:
       - Setup: SETUP.md
       - Running the stack: RUNNING.md
       - Navigation demo: NAVIGATION_DEMO.md
+      - The Mac: MAC.md
   - Debugging and testing:
       - DDS tuning: DDS_TUNING.md
       - Docker testing: DOCKER_TESTING.md

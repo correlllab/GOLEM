@@ -1,5 +1,8 @@
 """Check that the RoboCasa sims stop at start, with one message, without a GPU to render on through EGL.
 
+GOLEM_RENDER=cpu (the Mac images) is the one way past the check: it renders through OSMesa
+and casts the lidar on the CPU (RenderModeTests).
+
 sim_common.egl_renderer() is the probe and sim_common.require_gpu() the stop. The probe is made
 to fail three ways: a failing probe passed in, MuJoCo not on EGL (MUJOCO_GL=osmesa) and Mesa's
 software EGL in place of NVIDIA's, the last two in h12_mujoco.py run as a subprocess for each
@@ -49,6 +52,44 @@ class RequireGpuTests(unittest.TestCase):
                     sim_common.egl_renderer({"MUJOCO_GL": value})
 
 
+class RenderModeTests(unittest.TestCase):
+    """Check GOLEM_RENDER: gpu (the default) keeps the GPU check; cpu needs OSMesa."""
+
+    def test_unset_or_empty_is_gpu(self):
+        """GOLEM_RENDER unset, empty or blank is gpu, the default."""
+        for env in ({}, {"GOLEM_RENDER": ""}, {"GOLEM_RENDER": "  "}):
+            with self.subTest(env=env):
+                self.assertEqual(sim_common.render_mode(env), "gpu")
+
+    def test_a_bad_value_stops_the_sim(self):
+        """A GOLEM_RENDER other than gpu or cpu stops the sim, naming the knob."""
+        with self.assertRaises(SystemExit) as caught:
+            sim_common.render_mode({"GOLEM_RENDER": "metal"})
+        self.assertIn("GOLEM_RENDER must be gpu or cpu", caught.exception.code)
+
+    def test_gpu_mode_still_requires_the_gpu(self):
+        """By default require_renderer() runs the GPU check, and a failing probe still stops the sim."""
+        def probe():
+            """Fail as the probe does with MuJoCo off EGL."""
+            raise RuntimeError("MUJOCO_GL is 'osmesa', not 'egl'")
+
+        with self.assertRaises(SystemExit) as caught:
+            sim_common.require_renderer({"MUJOCO_GL": "osmesa"}, probe)
+        self.assertTrue(caught.exception.code.startswith(sim_common.GPU_REQUIRED))
+
+    def test_cpu_mode_needs_osmesa(self):
+        """GOLEM_RENDER=cpu passes with MUJOCO_GL=osmesa and refuses another MUJOCO_GL."""
+        def probe():
+            """Fail: cpu mode must not probe the GPU."""
+            raise AssertionError("probed the GPU")
+
+        env = {"GOLEM_RENDER": "CPU", "MUJOCO_GL": "osmesa"}
+        self.assertEqual(sim_common.require_renderer(env, probe), "cpu")
+        with self.assertRaises(SystemExit) as caught:
+            sim_common.require_renderer({"GOLEM_RENDER": "cpu", "MUJOCO_GL": "egl"}, probe)
+        self.assertIn("MUJOCO_GL must be osmesa", caught.exception.code)
+
+
 class SimStartTests(unittest.TestCase):
     """Run each robot's sim with the probe made to fail and check it stops at start."""
 
@@ -58,8 +99,11 @@ class SimStartTests(unittest.TestCase):
         Returns the CompletedProcess.
         """
         args = args or ("--headless", "--task", "Blank")
+        # GOLEM_RENDER is the test's own: the Mac images set cpu (docker-compose.mac.yml),
+        # and these tests check the default, gpu.
+        base = {k: v for k, v in os.environ.items() if k != "GOLEM_RENDER"}
         r = subprocess.run([sys.executable, "-u", SIM, f"--{robot}", *args],
-                           capture_output=True, text=True, env=dict(os.environ, **env),
+                           capture_output=True, text=True, env=dict(base, **env),
                            timeout=START_TIMEOUT_S, cwd=os.path.dirname(SIM))
         print(f"\n  {robot}: exit {r.returncode}: {r.stderr.strip().splitlines()[-1:] or r.stdout[-300:]}")
         return r

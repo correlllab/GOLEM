@@ -1,4 +1,4 @@
-"""Select the robot, check the GPU, parse the command line and the sims' knobs, resolve tasks and frame the viewer for both sims.
+"""Select the robot, check the renderer, parse the command line and the sims' knobs, resolve tasks and frame the viewer for both sims.
 
 It imports only the standard library at module level (mujoco and robocasa
 inside the functions that need them): h12_mujoco.py picks the robot and checks
@@ -30,6 +30,10 @@ VIEW_CAM_LOOKAT_DZ = 0.0     # m, lookat offset above the robot body
 GPU_REQUIRED = "the RoboCasa sims need an NVIDIA GPU, rendering through EGL (MUJOCO_GL=egl)"
 # GL_RENDERER substrings of software rasterisers, which EGL falls back to without a GPU.
 SOFTWARE_RENDERERS = ("llvmpipe", "softpipe", "swrast", "software", "swiftshader")
+# GOLEM_RENDER's values: gpu (the default) checks for the GPU above; cpu renders the
+# cameras through OSMesa and casts the MID-360's rays exactly on the CPU (mid360.CpuCaster),
+# much more slowly. The Mac images set cpu (docker/docker-compose.mac.yml).
+RENDER_MODES = ("gpu", "cpu")
 
 
 def add_robot_args(parser: argparse.ArgumentParser) -> None:
@@ -94,6 +98,35 @@ def require_gpu(probe: Callable[[], str] = egl_renderer) -> str:
         sys.exit(f"{GPU_REQUIRED}: {exc}")
     print(f"[sim_common] rendering through EGL on {renderer}", flush=True)
     return renderer
+
+
+def render_mode(env: Mapping[str, str] = os.environ) -> str:
+    """Return GOLEM_RENDER, gpu or cpu in any case; unset or empty is gpu. Exits for any other value."""
+    raw = env.get("GOLEM_RENDER", "")
+    mode = raw.strip().lower() or "gpu"
+    if mode not in RENDER_MODES:
+        sys.exit(f"GOLEM_RENDER must be gpu or cpu, not {raw!r}")
+    return mode
+
+
+def require_renderer(env: Mapping[str, str] = os.environ,
+                     probe: Callable[[], str] = egl_renderer) -> str:
+    """Check the sim can render as GOLEM_RENDER asks, logging how; return the mode.
+
+    gpu: require_gpu(probe), which exits without an NVIDIA GPU on EGL. cpu: exits unless
+    MUJOCO_GL is osmesa; the cameras then render through OSMesa and the MID-360 casts its
+    rays on the CPU (mid360.make_caster).
+    """
+    mode = render_mode(env)
+    if mode == "gpu":
+        require_gpu(probe)
+        return mode
+    backend = env.get("MUJOCO_GL", "")
+    if backend.strip().lower() != "osmesa":
+        sys.exit(f"GOLEM_RENDER=cpu renders through OSMesa: MUJOCO_GL must be osmesa, not {backend!r}")
+    print("[sim_common] rendering on the CPU through OSMesa (GOLEM_RENDER=cpu); "
+          "the MID-360's rays cast on the CPU", flush=True)
+    return mode
 
 
 def env_flag(name: str, default: bool, env: Mapping[str, str] = os.environ) -> bool:

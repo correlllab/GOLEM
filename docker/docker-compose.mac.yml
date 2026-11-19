@@ -1,0 +1,45 @@
+# The Mac (Apple Silicon) overlay on docker-compose.yml. docker_common.sh's
+# configure_platform adds it when the platform is mac (Darwin on arm64, or
+# GOLEM_PLATFORM=mac), never on Linux, so the x86 / NVIDIA services are as the
+# base file declares them. It swaps the images for the arm64 builds of
+# docker/mac/, drops the NVIDIA runtime, and sets the sims' CPU rendering.
+# Container names, mounts and the host network are the base file's: on
+# OrbStack or Docker Desktop (host networking on) both containers share the
+# Linux VM's network, so DDS between them works; the macOS host is not on it,
+# so ros2 and RViz run inside golem_ros. docs/MAC.md has the flow and what the
+# Mac leaves out (the GPU vision models, Isaac).
+services:
+  robocasa:
+    build:
+      dockerfile: docker/mac/RobocasaDockerfile
+    image: golem_sim_robocasa:arm64
+    platform: linux/arm64
+    # No NVIDIA GPU: the base file's runtime is removed (Compose >= 2.24).
+    runtime: !reset null
+    # 2 GB of /dev/shm: the base file's 16 GB exceeds a laptop VM's memory.
+    shm_size: 2g
+    environment:
+      # gpu (the sims' default, an NVIDIA GPU over EGL) or cpu (OSMesa, the
+      # MID-360 cast exactly on the CPU): golem_robocasa/sim_common.py. The
+      # Mac has only cpu.
+      GOLEM_RENDER: cpu
+      # Both robots' MID-360 points per frame. configure_robot exports the
+      # Mac's default per robot (6000 for the H1-2, 10000 for the G1: the
+      # most each holds real time with on an 8-core M3, docs/MAC.md).
+      GOLEM_LIDAR_POINTS: ${GOLEM_LIDAR_POINTS:-}
+      # Software-rendered cameras cost the most per step: off unless asked for.
+      GOLEM_CAMERAS: ${GOLEM_CAMERAS:-0}
+  ros:
+    build:
+      dockerfile: docker/mac/RosDockerfile
+    image: golem_ros:arm64
+    platform: linux/arm64
+    runtime: !reset null
+    shm_size: 2g
+    environment:
+      # core_ws/cyclonedds.xml, then an override of its 16 MB minimum UDP
+      # receive buffer: the minimum makes every ROS node fail to create its
+      # domain unless the kernel's net.core.rmem_max allows it, which the
+      # OrbStack / Docker Desktop VM does not by default (docs/DDS_TUNING.md
+      # raises it on Linux hosts).
+      CYCLONEDDS_URI: "file:///home/code/cyclonedds.xml,<CycloneDDS><Domain><Internal><SocketReceiveBufferSize min=\"default\"/></Internal></Domain></CycloneDDS>"

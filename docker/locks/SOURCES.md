@@ -107,3 +107,14 @@ under `/opt/robocasa/robocasa/models/assets` (123,434 files at capture). This
 catches changed contents, additions and removals without committing a large
 file manifest. Updating assets requires explicit review and regenerating the
 digest from the approved tree, not accepting a mismatch during a normal build.
+
+## The Mac's arm64 locks
+
+`*-arm64*.txt` are the Mac images' locks (`docker/mac/`, `docs/MAC.md`), derived
+from their `*-amd64*.txt` twins by `docker/mac/derive_arm64_locks.sh`: the CUDA
+wheels dropped, torch and torchvision on their `+cpu` builds, open3d 0.18.0
+(0.19.0 has no linux/aarch64 wheel). Rerun the script after any amd64 lock
+change; `tests/docker/test_source_pins.py` checks they match. The Mac base image
+is `ubuntu:jammy-20260901.2`, pinned by digest, and installs `ca-certificates`
+from the image's live `ports.ubuntu.com` lists before switching to the snapshot,
+the one package not resolved against it.

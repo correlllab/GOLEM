@@ -2,8 +2,10 @@
 # Build the GOLEM images (docker/BUILD.md).
 #
 # Usage: docker_build.sh [--pull] [--no-cache] [isaac|robocasa|ros ...]
-#   isaac, robocasa, ros  the images to build; none: all three. robocasa and
-#                         ros build golem_base first.
+#   isaac, robocasa, ros  the images to build; none: all three (on the Mac,
+#                         robocasa and ros). robocasa and ros build golem_base
+#                         first. On the Mac (GOLEM_PLATFORM=mac) every image is
+#                         the arm64 build of docker/mac/ (docs/MAC.md).
 #   --pull                refresh the public base images (CUDA, Isaac Sim)
 #   --no-cache            rebuild every layer
 # Environment: docker/.env and the shell as in docker_common.sh.
@@ -24,7 +26,9 @@ for arg in "$@"; do
         *) validate_service "$arg"; SERVICES+=("$arg");;
     esac
 done
-[ ${#SERVICES[@]} -gt 0 ] || SERVICES=(robocasa ros isaac)
+if [ ${#SERVICES[@]} -eq 0 ]; then
+    if [ "$GOLEM_PLATFORM" = mac ]; then SERVICES=(robocasa ros); else SERVICES=(robocasa ros isaac); fi
+fi
 # Check the COPY sources before building anything.
 NEEDS_BASE=0
 for service in "${SERVICES[@]}"; do
@@ -33,9 +37,14 @@ for service in "${SERVICES[@]}"; do
     esac
     if [ "$service" = robocasa ]; then require_file core_ws/src/livox_ros_driver2/package_ROS2.xml; fi
 done
-# golem_base first, under the local tag the children's FROM names.
+# golem_base first, under the local tag the children's FROM names: the x86
+# image, or on the Mac the arm64 one of docker/mac/ (golem_base:arm64).
 if [ "$NEEDS_BASE" = 1 ]; then
-    docker build --platform linux/amd64 "${BUILD_FLAGS[@]}" -t golem_base:latest -f docker/BaseDockerfile .
+    if [ "$GOLEM_PLATFORM" = mac ]; then
+        docker build --platform linux/arm64 "${BUILD_FLAGS[@]}" -t golem_base:arm64 -f docker/mac/BaseDockerfile .
+    else
+        docker build --platform linux/amd64 "${BUILD_FLAGS[@]}" -t golem_base:latest -f docker/BaseDockerfile .
+    fi
 fi
 # Isaac has a public base, so it gets --pull. The children build on the local
 # golem_base just built: --pull there would try to download golem_base from

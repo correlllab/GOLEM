@@ -4,8 +4,9 @@ Usage: h12_mujoco.py [--h12 | --g1] [--headless] [--task NAME] [--layout N]
 [--style N] [--seed N] [--timing | --duration S]. The robot is chosen
 (sim_common.select_robot) before the H1-2's imports, and --g1 hands the whole
 command line to g1.g1_mujoco.main. Each runner parses its command line, then
-checks the GPU (sim_common.require_gpu: either sim stops there without one), so
---help and a usage error need no GPU; the H1-2 does both before its imports. The
+checks the GPU (sim_common.require_renderer: either sim stops there without one,
+unless GOLEM_RENDER=cpu renders on the CPU), so --help and a usage error need no
+GPU; the H1-2 does both before its imports. The
 H1-2's loop is sim_loop below.
 """
 import argparse
@@ -38,7 +39,7 @@ if __name__ == "__main__":
         sys.exit(g1_mujoco.main(sys.argv[1:]))
     _PARSER = _parser()
     _ARGS = sim_common.parse_args(_PARSER, sys.argv[1:], "h12")
-    sim_common.require_gpu()
+    sim_common.require_renderer()
 
 import os
 import threading
@@ -50,6 +51,7 @@ import rclpy.executors
 from mujoco_ros_bridge import init_ros, shutdown_ros
 
 import h1_2_robosuite  # registers H1_2 and the MAGPIE grippers
+import mid360
 import realsense_profile
 import robosuite_common
 import battery_env  # registers the Battery env
@@ -287,6 +289,9 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     _hand_res = tuple(int(v) for v in
                       (os.environ.get('GOLEM_HAND_CAMERA_RES', '').strip() or '256x256').lower().split('x'))
     _cameras = realsense_profile.camera_specs(model, _camera_names, _profile, _camera_scale, _hand_res)
+    # GOLEM_LIDAR_POINTS: points per 10 Hz frame, default the real sensor's 20,000.
+    _lidar_points = mid360.points_from_env()
+    print(f"[h12_mujoco] MID-360 lidar: {_lidar_points} points a frame")
     _depth_on = sim_common.env_flag('GOLEM_CAMERA_DEPTH', True)
     _cloud_on = sim_common.env_flag('GOLEM_CAMERA_POINTCLOUD', True)
     print(f"[h12_mujoco] RGBD cameras {'ON' if _cameras_on else 'OFF (GOLEM_CAMERAS=0)'}"
@@ -319,6 +324,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
             lidar_self_prefixes=(
                 (pfx, "gripper0_") if sim_common.env_flag("GOLEM_LIDAR_SELF_FILTER", True) else ()
             ),
+            lidar_points=_lidar_points,
             sim_lock=sim_lock,
             timings=timings,
         ),

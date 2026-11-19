@@ -33,7 +33,9 @@ configured per robot, and start from one bringup package, `golem_bringup`. Each 
 against its sim and the real robot, so code moves between them unchanged. The
 G1 runs in Unitree's debug mode: Unitree's own controller is released, and the
 stack drives every motor on `rt/lowcmd`, as on the H1-2. The stack runs on one
-platform, x86 Linux with an NVIDIA GPU.
+platform, x86 Linux with an NVIDIA GPU. An Apple Silicon Mac runs a reduced
+RoboCasa sim of either robot at real time (no model servers or Isaac; the lidar
+cast on the CPU, with fewer points): `docs/MAC.md`.
 
 The H1-2 is the default everywhere. `GOLEM_ROBOT=g1` or `--g1` on a simulator or
 stack wrapper selects the G1 where the attached robot matters: the sim and
@@ -45,7 +47,7 @@ pages are in `docs/g1/` (start at `docs/g1/index.md`).
 
 | Path | What it is |
 |---|---|
-| `docker/` | the images and containers (Dockerfiles, `docker-compose.yml`, the G1 overlay `docker-compose.g1.yml`, `scripts/`) |
+| `docker/` | the images and containers (Dockerfiles, `docker-compose.yml`, the G1 overlay `docker-compose.g1.yml`, `scripts/`; the Mac's arm64 images in `docker/mac/` with the overlay `docker-compose.mac.yml`, `docs/MAC.md`) |
 | `core_ws/` | the ROS 2 workspace — where the bulk of development happens (see §4); the G1's own package is `core_ws/src/dex_3/`, the safety layer, arm controller, leg controller, SLAM/navigation and skills both robots run in `core_ws/src/golem_safety/`, `core_ws/src/golem_upper_ik/`, `core_ws/src/golem_lowerbody_rl/`, `core_ws/src/golem_slam/` and `core_ws/src/golem_skills/` |
 | `golem_robocasa/` | RoboCasa/MuJoCo simulator entry point for both robots (`h12_mujoco.py`; `--g1` hands over to the G1 sim package `golem_robocasa/g1/`) and the ROS/DDS bridges |
 | `CL_isaaclab_sim/` | Isaac Lab simulator, H1-2 only (`sim_main.py`, DDS bridges, tasks) |
@@ -89,7 +91,11 @@ launch bringup**.
 
 ### Robot selection
 
-`docker/scripts/docker_common.sh` owns this. On simulator and stack wrappers,
+`docker/scripts/docker_common.sh` owns this, and the platform too: on Darwin
+arm64 (or `GOLEM_PLATFORM=mac`) every wrapper adds `docker-compose.mac.yml`
+(the arm64 images of `docker/mac/`, no NVIDIA runtime, `GOLEM_RENDER=cpu`,
+`GOLEM_LIDAR_POINTS` 6000 for the H1-2 and 10000 for the G1 unless set), refuses Isaac, and `docker_stack.sh` starts `h12_mac_sim` or
+`g1_mac_sim`; on Linux nothing changes (`docs/MAC.md`). On simulator and stack wrappers,
 the robot is `--g1`/`--h12` on the wrapper, else `GOLEM_ROBOT` from the shell,
 else from `docker/.env`, else `h12`. The selection means "which robot is
 attached" and matters only where that is inherent: which robot the RoboCasa sim
@@ -519,7 +525,10 @@ H1-2 imports and hands the G1 over to `golem_robocasa/g1/g1_mujoco.py`. Both
 sims render their cameras and the MID-360's rays through EGL on an NVIDIA GPU:
 without one (MuJoCo not on EGL, no EGL device, a software renderer) the sim
 stops at start, once its command line is parsed and before it builds a scene or
-starts ROS or DDS, with one message (`sim_common.require_gpu`). The H1-2
+starts ROS or DDS, with one message (`sim_common.require_gpu`). The one way past
+it is the Mac images' opt-in `GOLEM_RENDER=cpu` (OSMesa for the cameras, the
+MID-360 cast exactly on the CPU by `mid360.CpuCaster`; `sim_common.require_renderer`,
+`mid360.make_caster`). The H1-2
 stays the default, and nothing on the G1 path may change its behaviour. The robots share
 `sim_common.py`, `measurement_bridge.py`, the pacer in `sim_timing.py` (its
 `--timing` report is the H1-2's only) and the `mujoco_sensors` node in
@@ -550,7 +559,7 @@ with a valid CRC, `mode_machine` 6, `mode_pr` 0 and finite values (other frames
 are dropped); after that, `GOLEM_CMD_TIMEOUT` of silence turns every motor off
 until frames return. Its MID-360 is the model both robots share
 (`golem_robocasa/mid360.py`): the real scan pattern, 20,000 points a 10 Hz
-frame on lines 0-3, each point's `offset_time` the time of the pose it was cast
+frame (`GOLEM_LIDAR_POINTS`, which only the Mac's compose file passes to it) on lines 0-3, each point's `offset_time` the time of the pose it was cast
 from, and each ray without a return a point at (0, 0, 0), as the real driver
 publishes it; `/livox/lidar` and `/livox/pointcloud` carry the same frame. Its rays are
 read from depth images rendered on the GPU (`mid360.GpuCaster`, as on the G1),

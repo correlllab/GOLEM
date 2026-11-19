@@ -55,6 +55,9 @@ if 'config' in sys.argv:
         self.env.update(PATH=str(self.bin) + ':' + os.environ['PATH'], CALLS=str(self.root / 'calls'), DISPLAY='')
         # The host's own CPUs must not change what a test sees; the pinning tests turn it on.
         self.env['GOLEM_CPU_PINNING'] = '0'
+        # Nor the host's platform: every test runs the Linux path but the Mac ones, which
+        # set GOLEM_PLATFORM=mac.
+        self.env['GOLEM_PLATFORM'] = 'linux'
 
     def run_script(self, path, *args, **env):
         """Run a script of the fixture checkout with `env` added to the environment."""
@@ -691,6 +694,89 @@ if 'config' in sys.argv:
         self.assertEqual(self.stack_up_env(), {'GOLEM_ROBOT': 'g1',
                                                'GOLEM_BRINGUP_LAUNCH': 'g1_sim.launch.py'})
         self.assertEqual(r.stderr.count('robot: g1'), 1)
+
+    def mac_overlay(self):
+        """Return the fixture's Mac compose overlay path."""
+        return str(self.root / 'docker/docker-compose.mac.yml')
+
+    def test_linux_never_adds_the_mac_overlay(self):
+        """On Linux no wrapper adds docker-compose.mac.yml."""
+        for args in (('docker/scripts/docker_run.sh', 'robocasa'), ('docker/scripts/docker_run.sh', 'ros'),
+                     ('docker/scripts/docker_stack.sh', 'up', 'robocasa', '--headless'),
+                     ('docker/scripts/docker_build.sh', 'robocasa', 'ros')):
+            with self.subTest(args=args):
+                r = self.run_script(*args)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertFalse(any(self.mac_overlay() in c for c in self.calls()))
+
+    def test_mac_adds_the_mac_overlay_to_every_compose_call(self):
+        """On the Mac every compose call of docker_run.sh carries docker-compose.mac.yml, after the base file."""
+        for service in ('robocasa', 'ros'):
+            with self.subTest(service=service):
+                r = self.run_script('docker/scripts/docker_run.sh', service, GOLEM_PLATFORM='mac')
+                self.assertEqual(r.returncode, 0, r.stderr)
+                files = self.compose_files(self.run_calls()[-1])
+                self.assertEqual(files[:2], [str(self.root / 'docker/docker-compose.yml'), self.mac_overlay()])
+
+    def test_mac_detected_from_the_host(self):
+        """Without GOLEM_PLATFORM the wrappers pick mac on Darwin arm64 and linux elsewhere."""
+        uname = self.bin / 'uname'
+        uname.write_text('#!/bin/sh\ncase "$1" in -s) echo "$FAKE_S";; -m) echo "$FAKE_M";; esac\n')
+        uname.chmod(0o755)
+        env = {k: v for k, v in self.env.items() if k != 'GOLEM_PLATFORM'}
+        for system, machine, mac in (('Darwin', 'arm64', True), ('Darwin', 'x86_64', False),
+                                     ('Linux', 'x86_64', False), ('Linux', 'aarch64', False)):
+            with self.subTest(system=system, machine=machine):
+                (self.root / 'calls').unlink(missing_ok=True)
+                r = subprocess.run(['bash', str(self.root / 'docker/scripts/docker_run.sh'), 'ros'],
+                                   cwd='/tmp', env=dict(env, FAKE_S=system, FAKE_M=machine),
+                                   text=True, capture_output=True)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(self.mac_overlay() in self.compose_files(self.run_calls()[-1]), mac)
+
+    def test_mac_refuses_isaac(self):
+        """The Mac refuses the Isaac sim in every wrapper, before compose or a build runs."""
+        for args in (('docker/scripts/docker_run.sh', 'isaac'),
+                     ('docker/scripts/docker_stack.sh', 'up', 'isaac', '--headless'),
+                     ('docker/scripts/docker_build.sh', 'isaac')):
+            with self.subTest(args=args):
+                r = self.run_script(*args, GOLEM_PLATFORM='mac')
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn('Isaac', r.stderr)
+                self.assertFalse(self.calls())
+
+    def test_mac_builds_the_arm64_base_and_no_isaac(self):
+        """docker_build.sh on the Mac builds golem_base:arm64 from docker/mac/ and, by default, robocasa and ros only."""
+        r = self.run_script('docker/scripts/docker_build.sh', GOLEM_PLATFORM='mac')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        builds = [c for c in self.calls() if 'build' in c]
+        self.assertIn('linux/arm64', builds[0])
+        self.assertIn('golem_base:arm64', builds[0])
+        self.assertIn('docker/mac/BaseDockerfile', builds[0])
+        self.assertEqual(builds[-1][-2:], ['robocasa', 'ros'])
+        self.assertIn(self.mac_overlay(), self.compose_files(builds[-1]))
+
+    def test_mac_stack_starts_the_mac_bringups(self):
+        """docker_stack.sh on the Mac starts h12_mac_sim.launch.py, or g1_mac_sim.launch.py with --g1."""
+        self.install_env_recording_docker()
+        for flag, robot in (('--h12', 'h12'), ('--g1', 'g1')):
+            with self.subTest(robot=robot):
+                for name in ('calls', 'calls.env'):
+                    (self.root / name).unlink(missing_ok=True)
+                r = self.run_script('docker/scripts/docker_stack.sh', 'up', 'robocasa', flag,
+                                    GOLEM_PLATFORM='mac', GOLEM_BRINGUP_LAUNCH='h12_sim.launch.py')
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(self.stack_up_env(), {'GOLEM_ROBOT': robot,
+                                                       'GOLEM_BRINGUP_LAUNCH': f'{robot}_mac_sim.launch.py'})
+                for call in self.compose_calls():
+                    self.assertIn(self.mac_overlay(), self.compose_files(call))
+
+    def test_bad_platform_is_refused(self):
+        """A GOLEM_PLATFORM other than linux or mac is refused before compose runs."""
+        r = self.run_script('docker/scripts/docker_run.sh', 'ros', GOLEM_PLATFORM='windows')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('GOLEM_PLATFORM must be linux or mac', r.stderr)
+        self.assertFalse(self.calls())
 
     def test_stack_g1_overrides_leftover_bringup_selection(self):
         """--g1 starts g1_sim.launch.py even when the shell and docker/.env name the H1-2's launch."""

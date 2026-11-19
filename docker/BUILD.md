@@ -72,6 +72,13 @@ nvcr.io/nvidia/isaac-sim:5.1.0
   Its bundled interpreter and ROS bridge are separate from the Humble/Python 3.10
   stack in `golem_base`. The Dockerfile also installs ROS Jazzy tooling.
 
+On an Apple Silicon Mac the wrappers build the same graph's arm64 twins
+instead, `golem_base:arm64`, `golem_ros:arm64` and `golem_sim_robocasa:arm64`,
+from `docker/mac/*Dockerfile` on `ubuntu:jammy` with the `*-arm64*` locks (no
+CUDA, no Isaac, no model-server stack; `docs/MAC.md`). Keep their commits and
+pins in step with the x86 Dockerfiles: `tests/docker/test_source_pins.py`
+checks it.
+
 All containers interoperate over **CycloneDDS on one ROS domain** (default
 `ROS_DOMAIN_ID=1`; domain `0` is reserved for the real robots), one robot
 stack per domain.

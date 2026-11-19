@@ -1,0 +1,143 @@
+# golem_base:arm64: the Mac (Apple Silicon) twin of docker/BaseDockerfile, the
+# shared foundation of the Mac golem_ros (mac/RosDockerfile) and
+# golem_sim_robocasa (mac/RobocasaDockerfile) images. Same stages and pins as
+# the x86 base, on plain Ubuntu 22.04 for linux/arm64 instead of the CUDA image,
+# with PyTorch's CPU build, the arm64 locks (locks/*-arm64*.txt, derived by
+# mac/derive_arm64_locks.sh) and the Unitree SDK's CycloneDDS under its own
+# soname (below). docker/scripts/docker_build.sh builds it on a Mac
+# (docs/MAC.md); the x86 images never read this file.
+
+# Ubuntu 22.04 (Jammy, the platform ROS 2 Humble targets) of 2026-09-01, the
+# last image older than the apt snapshot (a newer one carries packages newer
+# than the snapshot, which apt cannot satisfy), pinned by the digest
+# of its multi-arch index; docker_build.sh selects linux/arm64 from it.
+FROM ubuntu:jammy-20260901.2@sha256:b8b6ee6aa931ecd9d0d952abc34dc0e5f7c6a30c6bb71b079fe399fde0329c02
+# The Python constraint files and the dated apt snapshot sources: the x86
+# base's, whose Ubuntu snapshot also serves arm64. The snapshot is HTTPS-only
+# and plain ubuntu:22.04, unlike the CUDA image, ships without
+# ca-certificates, so it comes first from the image's own ports.ubuntu.com
+# lists (the one package not resolved against the snapshot).
+COPY docker/locks/base-arm64*.txt docker/locks/apt-sources.sh docker/locks/ros-snapshot.asc /opt/golem-locks/
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && sh /opt/golem-locks/apt-sources.sh
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=America/Denver
+ENV LANG=C.UTF-8
+ENV ROS_DISTRO=humble
+# Every container talks ROS over CycloneDDS, the same DDS the Unitree SDK uses.
+ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+
+# Optional build-time proxies; cleared at the end of this file.
+ARG http_proxy
+ARG https_proxy
+ENV http_proxy=${http_proxy}
+ENV https_proxy=${https_proxy}
+
+# The x86 base's packages: gcc-12 / g++-12 (made the default compilers), cmake,
+# git and git-lfs, Python 3.10 as `python`, the X11 / GL runtime libraries
+# MuJoCo loads, and the locale. add-apt-repository rewrites sources.list, so
+# apt-sources.sh runs again afterwards to put the dated snapshots back.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl gnupg locales software-properties-common \
+        gcc-12 g++-12 cmake build-essential git git-lfs wget unzip \
+        python3 python3-dev python3-pip python-is-python3 \
+        libglu1-mesa-dev \
+        libx11-6 libxext6 libxrender1 libxi6 libxrandr2 libxcursor1 libxinerama1 \
+        libgl1-mesa-glx libglib2.0-0 libsm6 libxt6 libxkbcommon-x11-0 \
+        libegl1-mesa-dev \
+    && locale-gen en_US en_US.UTF-8 && update-locale LC_ALL=C.UTF-8 LANG=C.UTF-8 \
+    && add-apt-repository universe \
+    && sh /opt/golem-locks/apt-sources.sh \
+    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100 \
+    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100 \
+    && rm -rf /var/lib/apt/lists/*
+
+# The ROS 2 Humble apt source: the 2026-08-07 snapshot (it has arm64), verified
+# with the vendored snapshot key.
+RUN echo "deb [arch=$(dpkg --print-architecture) signed-by=/opt/golem-locks/ros-snapshot.asc] http://snapshots.ros.org/humble/2026-08-07/ubuntu jammy main" \
+        > /etc/apt/sources.list.d/ros2.list
+
+# ROS 2 Humble for the simulators' ROS side, as in the x86 base.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-ros-base \
+        ros-humble-rmw-cyclonedds-cpp \
+        ros-humble-sensor-msgs-py \
+        ros-humble-tf2-ros \
+        ros-humble-tf2-ros-py \
+        ros-humble-geometry-msgs \
+        ros-humble-rosgraph-msgs \
+        ros-humble-cv-bridge \
+    && rm -rf /var/lib/apt/lists/*
+
+# uv 0.12.15 into /usr/local/bin. The installer URL names the version.
+RUN curl -LsSf https://astral.sh/uv/0.12.15/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
+    && uv --version
+
+# CycloneDDS 0.10.x from source, at the x86 base's commit, for the Unitree
+# SDK's Python binding (PyPI cyclonedds 0.10.2; see docker/BaseDockerfile).
+# The sims run it beside ROS's own CycloneDDS in one process, each creating
+# the same DDS domain, which needs two separate libddsc copies. On arm64 the
+# binding's C extension would bind to ROS's copy by their shared soname
+# (libddsc.so.0) once rclpy has loaded it, its first topic would fail against
+# the participant its Python side made in this copy, and cyclonedds-python
+# 0.10.2's error path then segfaults. So this copy's soname is
+# libddsc_unitree.so.0 (patchelf), and the binding's extension needs it by
+# that name from this directory (next step).
+RUN apt-get update && apt-get install -y --no-install-recommends patchelf \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone https://github.com/eclipse-cyclonedds/cyclonedds /cyclonedds && \
+    git -C /cyclonedds checkout --quiet 5041f3560c088c99e5088b2b8520b69169621196 && \
+    cd /cyclonedds && mkdir build install && cd build && \
+    cmake .. -DCMAKE_INSTALL_PREFIX=../install && \
+    cmake --build . --target install && \
+    rm -rf /cyclonedds/build && \
+    cd /cyclonedds/install/lib && \
+    patchelf --set-soname libddsc_unitree.so.0 "$(readlink -f libddsc.so)" && \
+    ln -s "$(basename "$(readlink -f libddsc.so)")" libddsc_unitree.so.0
+
+ENV CYCLONEDDS_HOME=/cyclonedds/install
+
+# The Unitree Python SDK from the repo's submodule. The whole package tree is
+# copied over the installed one for its native CRC libraries (utils/lib); the
+# SDK loads crc_aarch64.so on this platform. cyclonedds builds from source
+# (--no-binary) against CYCLONEDDS_HOME; its _clayer extension is then pointed
+# at libddsc_unitree.so.0 in /cyclonedds/install/lib (one patchelf call per
+# change: patchelf 0.14 mangles combined ones). The last step fails the build
+# if the SDK and a ROS node cannot share one process, as the sims do: with two
+# libddsc.so.0 the first Unitree topic after rclpy segfaults. Domain 232: no
+# sim or robot uses it.
+COPY unitree_sdk2_python /home/code/unitree_sdk2_python
+RUN cd /home/code/unitree_sdk2_python && \
+    uv pip install -c /opt/golem-locks/base-arm64-01.txt --system --no-binary cyclonedds . && \
+    SP=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
+    for so in "$SP"/cyclonedds/_clayer*.so; do \
+        patchelf --replace-needed libddsc.so.0 libddsc_unitree.so.0 "$so" && \
+        patchelf --set-rpath /cyclonedds/install/lib "$so"; \
+    done && \
+    cp -r /home/code/unitree_sdk2_python/unitree_sdk2py/* "$SP/unitree_sdk2py/" && \
+    python3 -c "from unitree_sdk2py.utils.crc import CRC; CRC()" && \
+    bash -c 'source /opt/ros/humble/setup.bash && ROS_DOMAIN_ID=232 python3 -X faulthandler -c "\
+import rclpy; \
+from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelPublisher; \
+from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_; \
+ChannelFactoryInitialize(232); ChannelPublisher(\"rt/lowstate\", LowState_).Init(); \
+rclpy.init(); rclpy.create_node(\"check_unitree_dds\").destroy_node(); rclpy.shutdown()"'
+
+# PyTorch and torchvision, CPU builds for linux/aarch64 (the TorchScript leg
+# policies run on the CPU on every platform).
+RUN UV_HTTP_TIMEOUT=600 uv pip install -c /opt/golem-locks/base-arm64-02.txt --system --no-cache \
+        torch torchvision \
+        --index-url https://download.pytorch.org/whl/cpu
+
+# Kinematics libraries: `pin` (pinocchio) and the pink and mink IK wrappers.
+RUN uv pip install -c /opt/golem-locks/base-arm64-03.txt --system --no-cache pin pink mink
+
+RUN echo 'source /opt/ros/humble/setup.bash' >> /root/.bashrc
+
+# Clear the build-time proxies (see the ARGs above).
+ENV http_proxy=
+ENV https_proxy=
+
+WORKDIR /home/code

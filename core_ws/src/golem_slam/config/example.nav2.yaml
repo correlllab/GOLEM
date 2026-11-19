@@ -296,8 +296,9 @@ global_costmap:
         plugin: "nav2_costmap_2d::InflationLayer"
         # Steepness of the cost's fall-off with distance from an obstacle.
         cost_scaling_factor: 3.0
-        # m around obstacles that carries cost.
-        inflation_radius: 0.2
+        # m around obstacles that carries cost; more than the footprint's inscribed
+        # radius plus Nav2's footprint_padding (0.01 m), or Nav2 logs an error.
+        inflation_radius: 0.22
 
 local_costmap:
   local_costmap:

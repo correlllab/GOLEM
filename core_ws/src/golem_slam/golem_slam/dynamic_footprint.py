@@ -12,15 +12,20 @@ While an arm goal is in flight on any of ``arm_action_status`` (accepted,
 executing or cancelling), the footprint is the body polygon alone: a hand
 reaching for a handle or a counter must not read as the robot colliding with
 it, or Nav2 would stop the base during a grasp. The same body polygon goes out
-while any arm link has no TF within ``max_tf_age``.
+until the first message on ``arms_ready_topic``, which the arm controller
+publishes once its start-up moves are done (frame_task_server's
+``/left_ee_pose``): those moves swing the arms behind the pelvis, past the
+local costmap's inflation radius, while the robot cannot drive yet. It also goes
+out while any arm link has no TF within ``max_tf_age``.
 
 Nav2's costmap reads a polygon on its ``footprint`` topic in place of its
 ``footprint`` parameter (nav2_costmap_2d's Costmap2DROS); the launch remaps
 ``footprint`` to the local costmap's. The global costmap keeps the fixed
 polygon, so the planner's paths do not change with the arms.
 
-Subscribes ``/robot_description`` (std_msgs/String, transient local) and each
-``arm_action_status`` topic (action_msgs/GoalStatusArray); publishes
+Subscribes ``/robot_description`` (std_msgs/String, transient local), each
+``arm_action_status`` topic (action_msgs/GoalStatusArray) and
+``arms_ready_topic`` (geometry_msgs/PoseStamped); publishes
 ``footprint`` (geometry_msgs/Polygon, in ``base_frame``: Humble's costmap takes a
 Polygon with no frame and reads it in its robot_base_frame).
 
@@ -34,6 +39,8 @@ ROS parameters:
                       moves by more than this, and at least once a second
   max_tf_age          s; an arm link whose latest TF is older drops the arms
   arm_action_status   action status topics whose live goals drop the arms
+  arms_ready_topic    the arms count from its first message on (empty: from the
+                      start)
 """
 
 import yaml
@@ -41,7 +48,7 @@ import yaml
 import numpy as np
 import rclpy
 from action_msgs.msg import GoalStatus, GoalStatusArray
-from geometry_msgs.msg import Point32, Polygon
+from geometry_msgs.msg import Point32, Polygon, PoseStamped
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
@@ -116,6 +123,20 @@ def arm_goal_live(status_arrays):
                for array in status_arrays for s in array.status_list)
 
 
+def body_only_reason(arms_ready, status_arrays, ready_topic):
+    """
+    Return why the footprint is the body alone, or None when the arms count.
+
+    arms_ready is whether ready_topic has had a message; status_arrays are the arm
+    actions' latest GoalStatusArrays.
+    """
+    if not arms_ready:
+        return f'the arm controller is starting up (no {ready_topic} yet)'
+    if arm_goal_live(status_arrays):
+        return 'an arm goal is in flight'
+    return None
+
+
 class DynamicFootprint(Node):
     """Publish the local costmap's footprint widened by the arms."""
 
@@ -133,12 +154,14 @@ class DynamicFootprint(Node):
         topics = [t for t in self.declare_parameter(
             'arm_action_status',
             ['/frame_task/_action/status', '/named_config/_action/status']).value if t]
+        self.ready_topic = self.declare_parameter('arms_ready_topic', '/left_ee_pose').value
 
         self.boxes = None
         self.status = {}
         self.published = None
         self.last_publish = None
         self.reason = None
+        self.arms_ready = not self.ready_topic
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
@@ -151,11 +174,17 @@ class DynamicFootprint(Node):
             self.create_subscription(
                 GoalStatusArray, topic,
                 lambda msg, topic=topic: self.status.__setitem__(topic, msg), status_qos)
+        if self.ready_topic:
+            self.create_subscription(PoseStamped, self.ready_topic, self._on_ready, 1)
         self.pub = self.create_publisher(Polygon, 'footprint', 10)
         self.create_timer(1.0 / rate, self._tick)
         self.get_logger().info(
             f'footprint from {len(self.arm_links)} arm links, body '
             f'{self.body.tolist()}, dropping the arms during goals on {topics}')
+
+    def _on_ready(self, _msg):
+        """Count the arms from now on: the arm controller's start-up moves are done."""
+        self.arms_ready = True
 
     def _on_description(self, msg):
         """Build the arm links' boxes from the URDF."""
@@ -189,8 +218,9 @@ class DynamicFootprint(Node):
 
     def _tick(self):
         """Recompute the footprint and publish it when it moved, or once a second."""
-        if arm_goal_live(self.status.values()):
-            arms, reason = np.empty((0, 3)), 'an arm goal is in flight'
+        reason = body_only_reason(self.arms_ready, self.status.values(), self.ready_topic)
+        if reason:
+            arms = np.empty((0, 3))
         else:
             arms, reason = self._arm_points()
             if arms is None:

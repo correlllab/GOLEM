@@ -29,7 +29,8 @@ SIM_DOMAIN = '221'
 # arguments that start the most nodes.
 TOP_LEVEL = [
     ('h12_sim.launch.py', {'use_skills': 'true', 'use_rviz': 'true'}, True),
-    ('lmg_sim.launch.py', {'use_slam': 'true', 'use_skills': 'true'}, True),
+    ('lmg_sim.launch.py', {'start_position_verified': 'true', 'use_slam': 'true',
+                           'use_skills': 'true'}, True),
     ('g1_sim.launch.py', {'use_skills': 'true', 'use_nav': 'true', 'use_rviz': 'true'}, True),
     ('h12_real_robot.launch.py', {'start_position_verified': 'true'}, False),
     ('lmg_real.launch.py', {'start_position_verified': 'true'}, False),

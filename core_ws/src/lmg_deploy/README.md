@@ -91,7 +91,9 @@ python scripts/skrl/deploy_parity.py --headless --checkpoint <same> \
 block `h12_locomanipulationgame.launch.py`):
 - the state publishers;
 - the split safety layer with the real robot's preset (`relax_safety_split`; ankle pitch torque e-stop 95 Nm, above sport mode's 93 Nm peak);
-- `marl_deploy_node` with `policies/h12/`;
+- `marl_deploy_node` with `policies/h12/`, behind `lmg_real`'s operator gates: `start_position_verified:=true`
+  (default `false`) starts it, and it holds the pre-pose under the sim's elastic band until `~/confirm_engage`,
+  then releases the band;
 - SLAM: `golem_slam/launch/navigation.launch.py` with `robot: h12` (FAST-LIO, the floor-level laser scan, slam_toolbox and nav2).
   FAST-LIO's `/Odometry` is what keeps the arm goals fixed in the world.
 
@@ -104,11 +106,13 @@ export ROS_DOMAIN_ID=42
 docker/scripts/docker_run.sh robocasa env GOLEM_SPAWN_BACKOFF=0.3 \
     /home/code/h12_sim_scripts/launch_robocasa.sh --headless --task AirDryFruit --layout 1 --seed 42   # terminal 1
 docker/scripts/docker_run.sh ros                                                                     # terminal 2, then:
-ros2 launch golem_bringup lmg_sim.launch.py [use_skills:=true]
+ros2 launch golem_bringup lmg_sim.launch.py start_position_verified:=true [use_skills:=true]
+ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger   # terminal 3: engage, as on the robot
 ```
 
-**Launch arguments:** `use_slam` (default `true`; with `false` the arm goals ride with the pelvis and the node warns),
-`use_rviz`, `prepose_ramp_s`, `prepose_max_vel`,
+**Launch arguments:** `start_position_verified` (default `false`, as in `lmg_real`), `use_slam` (default `true`;
+with `false` the arm goals ride with the pelvis and the node warns), `use_rviz`, `prepose_ramp_s`, `prepose_max_vel`,
+`imu_offset_{roll,pitch,yaw}_deg` (default 0),
 `safety_config`, `use_skills` (default `false`; `true` starts `golem_skills`, whose `/skill/frontier_explore` explores
 the kitchen through Nav2: `tests/sim/test_lmg_explore.sh` runs it closed loop).
 
@@ -163,7 +167,7 @@ ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger         
 - Engaging zeroes the velocity command: a `/cmd_vel` sent before the confirm is dropped, so only a new message
   after `nav` appears moves the robot. A publisher still streaming (e.g. `ros2 topic pub -r`) sets it again on its
   next message.
-- The node always waits for `~/confirm_engage` here, and never calls the sim's elastic band; neither is an argument.
+- The node always waits for `~/confirm_engage`, here as in `lmg_sim`, and never calls the sim's elastic band; neither is an argument.
 - Drive with `/cmd_vel`, `~/set_mode` and `~/set_arm_goals` as above.
 - Same `safety_config` and `use_slam` arguments as the sim launch; keep `use_slam` on for arm goals.
 

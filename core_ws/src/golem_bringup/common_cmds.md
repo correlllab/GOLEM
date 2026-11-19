@@ -373,7 +373,8 @@ by the SLAM odometry, so keep `use_slam` on). You drive it yourself (see
 `lmg_deploy/README.md` for all launch arguments):
 
 ```bash
-ros2 launch golem_bringup lmg_sim.launch.py   # lmg_deploy's policies/h12/, its one H1-2 policy
+ros2 launch golem_bringup lmg_sim.launch.py start_position_verified:=true   # lmg_deploy's policies/h12/
+ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger         # engage, as on the robot
 ```
 
 Walk:

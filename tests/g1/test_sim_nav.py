@@ -517,16 +517,19 @@ class SimDriver:
         except OSError:
             return False
 
-    def wait_band_released(self, timeout=120.0, refusals=(), confirm=False):
+    def wait_band_released(self, timeout=120.0, refusals=(), confirm=False,
+                           confirm_service="/lowerbody/confirm_engage"):
         """Wait for the sim to log the band's release; return False on a timeout or at once on a refusal.
 
         The robot's leg node asks for the release once its policy runs and frame_task_server is
         up; `refusals` are the launch's refusal lines in launch.log. With `confirm`, for a run
-        config that waits for the operator (the H1-2's), it calls /lowerbody/confirm_engage once
-        a second until the leg node accepts it (it refuses one before the pre-pose is ready).
+        config that waits for the operator (the H1-2's), it calls `confirm_service` once a second
+        until the node accepts it (the leg node refuses one before the pre-pose is ready;
+        marl_deploy_node's /marl_deploy_node/confirm_engage accepts at once and engages once
+        the pre-pose settles).
         """
         from std_srvs.srv import Trigger
-        client = self.node.create_client(Trigger, "/lowerbody/confirm_engage") if confirm else None
+        client = self.node.create_client(Trigger, confirm_service) if confirm else None
         future, next_call, confirmed = None, 0.0, False
         end = time.time() + timeout
         sim_log = os.path.join(self.out, "sim.log")

@@ -135,9 +135,10 @@ GOLEM_TEST_VIDEO=1 tests/sim/test_lmg_explore.sh   # and the video
 ```
 
 The H1-2 counterpart of `tests/g1/test_sim_explore.sh`, on the same containers and kitchen: the ros
-container runs `lmg_sim.launch.py use_rviz:=false use_skills:=true`, so `lmg_deploy`'s
-`marl_deploy_node` owns all 27 joints and walks on Nav2's `/cmd_vel`, and `golem_skills`
-serves `/skill/frontier_explore` on the H1-2's Nav2 footprint. Once the policy node has released the
+container runs `lmg_sim.launch.py start_position_verified:=true use_rviz:=false use_skills:=true`,
+so `lmg_deploy`'s `marl_deploy_node` owns all 27 joints and walks on Nav2's `/cmd_vel`, and
+`golem_skills` serves `/skill/frontier_explore` on the H1-2's Nav2 footprint. The test calls
+`/marl_deploy_node/confirm_engage`, as the operator does on the robot. Once the policy node has released the
 band, Nav2 is active and the explorer is served, the test stands 3 s and sends one
 `SkillFrontierExplore` goal with a 240 s budget (the H1-2 walks at most 0.3 m/s).
 

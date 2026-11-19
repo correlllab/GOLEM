@@ -1,12 +1,13 @@
 """
 Start the loco-manipulation game against the sim: lmg_deploy's MARL policy on all 27 joints.
 
-    ros2 launch golem_bringup lmg_sim.launch.py [use_skills:=true]
+    ros2 launch golem_bringup lmg_sim.launch.py start_position_verified:=true [use_skills:=true]
+    ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger
 
 Start the simulator first. Everything starts at once: the state publishers (h12_state),
 the command path (h12_control without frame_task_server, with the sim's estop box and the
-real robot's delay), the policy (h12_locomanipulationgame: lmg_deploy's policies/h12/,
-with the start pose taken as verified and no operator confirm), navigation (use_slam),
+real robot's delay), the policy (h12_locomanipulationgame: lmg_deploy's policies/h12/),
+navigation (use_slam),
 golem_skills (use_skills: /skill/*, among them /skill/frontier_explore, which walks the
 policy through Nav2) and RViz for Nav2 goals (use_rviz). golem_skills does not wait for
 the perception and gripper services or frame_task_server, none of which run here, and
@@ -16,9 +17,15 @@ safety_config defaults to the real robot's preset, relax_safety_split: the polic
 trained against its estops, and the sim is where to see that it does not trip them.
 lmg_real.launch.py is the real-robot counterpart.
 
-SAFETY: this launch engages and walks without an operator, so it refuses an unset or 0
-ROS_DOMAIN_ID (domain 0, also the DDS default, is the real robot's command bus) before
-any node starts.
+The operator gates are lmg_real's: start_position_verified:=true (default false) starts
+marl_deploy_node, which ramps to the policy's default pose and holds it, under the sim's
+elastic band, until ~/confirm_engage; the sim's estop box latches golem_safety as the real
+one does (ENTER in the sim's terminal). The only sim-only step is the band: once engaged
+the node releases it through /elastic_band/toggle.
+
+SAFETY: a sim bringup on the real robot's command bus would drive the robot (and the test
+scripts confirm the engage themselves), so it refuses an unset or 0 ROS_DOMAIN_ID (domain
+0, also the DDS default, is that bus) before any node starts.
 """
 import os
 
@@ -34,8 +41,9 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 import yaml
 
-# The arguments passed through to h12_locomanipulationgame.launch.py as they are.
-GAME_ARGS = ('prepose_ramp_s', 'prepose_max_vel')
+# The arguments passed through to h12_locomanipulationgame.launch.py as they are: lmg_real's.
+GAME_ARGS = ('start_position_verified', 'prepose_ramp_s', 'prepose_max_vel',
+             'imu_offset_roll_deg', 'imu_offset_pitch_deg', 'imu_offset_yaw_deg')
 
 
 def h12_footprint():
@@ -60,11 +68,23 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true',
                               description='true: every node runs on the simulator /clock'),
+        # SAFETY: false by default, as in lmg_real, so the operator gate is the real one.
+        DeclareLaunchArgument('start_position_verified', default_value='false',
+                              description='true only after checking the robot is in a '
+                                          'safe start pose: starts marl_deploy_node'),
         DeclareLaunchArgument('prepose_ramp_s', default_value='6.0',
                               description='s, the shortest ramp into the default pose'),
         DeclareLaunchArgument('prepose_max_vel', default_value='0.25',
                               description='rad/s, the fastest joint target during that ramp; '
                                           'it lengthens the ramp'),
+        # The sim's /livox/imu carries the URDF's mount, so the trims start at 0, as in lmg_real.
+        DeclareLaunchArgument('imu_offset_roll_deg', default_value='0.0',
+                              description="deg, the start-up roll trim of the policy's IMU "
+                                          '(/livox/imu): its reading with the torso level'),
+        DeclareLaunchArgument('imu_offset_pitch_deg', default_value='0.0',
+                              description="deg, the start-up pitch trim of the policy's IMU"),
+        DeclareLaunchArgument('imu_offset_yaw_deg', default_value='0.0',
+                              description="deg, the start-up yaw trim of the policy's IMU"),
         DeclareLaunchArgument('safety_config', default_value='relax_safety_split.yaml',
                               description='golem_safety config: a name under its config/h12/, '
                                           'or a path'),
@@ -95,14 +115,14 @@ def generate_launch_description():
             # The sim's estop box, as estop_node reads the real one.
             'estop_serial_port': sim_estop_url(),
         }),
-        # The policy, on all 27 joints.
+        # The policy, on all 27 joints, behind lmg_real's operator gates.
         include('golem_bringup', 'h12/h12_locomanipulationgame.launch.py', {
             **sim_time,
             **{name: LaunchConfiguration(name) for name in GAME_ARGS},
             'urdf_path': urdf_path('h12'),
-            'start_position_verified': 'true',
-            # Engages as soon as the pre-pose settles, with no operator confirm.
-            'engage_wait_for_confirm': 'false',
+            # SAFETY: the operator's confirm, fixed as in lmg_real, not an argument.
+            'engage_wait_for_confirm': 'true',
+            # Sim only: release the elastic band once engaged.
             'disable_elastic_band': 'true',
         }),
         # SLAM and Nav2, driving the policy on /cmd_vel.

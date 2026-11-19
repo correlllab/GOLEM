@@ -104,10 +104,11 @@ ENV CYCLONEDDS_HOME=/cyclonedds/install
 # SDK loads crc_aarch64.so on this platform. cyclonedds builds from source
 # (--no-binary) against CYCLONEDDS_HOME; its _clayer extension is then pointed
 # at libddsc_unitree.so.0 in /cyclonedds/install/lib (one patchelf call per
-# change: patchelf 0.14 mangles combined ones). check_unitree_dds.py fails the
-# build if the SDK and a ROS node cannot share a domain in one process.
+# change: patchelf 0.14 mangles combined ones). The last step fails the build
+# if the SDK and a ROS node cannot share one process, as the sims do: with two
+# libddsc.so.0 the first Unitree topic after rclpy segfaults. Domain 232: no
+# sim or robot uses it.
 COPY unitree_sdk2_python /home/code/unitree_sdk2_python
-COPY docker/mac/check_unitree_dds.py /opt/golem-checks/
 RUN cd /home/code/unitree_sdk2_python && \
     uv pip install -c /opt/golem-locks/base-arm64-01.txt --system --no-binary cyclonedds . && \
     SP=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
@@ -117,8 +118,12 @@ RUN cd /home/code/unitree_sdk2_python && \
     done && \
     cp -r /home/code/unitree_sdk2_python/unitree_sdk2py/* "$SP/unitree_sdk2py/" && \
     python3 -c "from unitree_sdk2py.utils.crc import CRC; CRC()" && \
-    python3 /opt/golem-checks/check_unitree_dds.py && \
-    bash -c 'source /opt/ros/humble/setup.bash && python3 /opt/golem-checks/check_unitree_dds.py --ros'
+    bash -c 'source /opt/ros/humble/setup.bash && ROS_DOMAIN_ID=232 python3 -X faulthandler -c "\
+import rclpy; \
+from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelPublisher; \
+from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_; \
+ChannelFactoryInitialize(232); ChannelPublisher(\"rt/lowstate\", LowState_).Init(); \
+rclpy.init(); rclpy.create_node(\"check_unitree_dds\").destroy_node(); rclpy.shutdown()"'
 
 # PyTorch and torchvision, CPU builds for linux/aarch64 (the TorchScript leg
 # policies run on the CPU on every platform).

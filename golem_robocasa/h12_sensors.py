@@ -311,7 +311,6 @@ class H12Sensors:
         imu_acc_sensor: str = "livox_imu_acc",
         imu_rate_hz: float = 100.0,
         lidar_self_prefixes: tuple = (),
-        lidar: bool = True,
         lidar_points=None,
         sim_lock=None,
         timings=None,
@@ -325,10 +324,8 @@ class H12Sensors:
         lidar_exclude_body is the body it rides in, whose geoms the rays pass
         through; geoms of bodies named with a lidar_self_prefixes prefix give no
         return. The lidar's GPU caster raises RuntimeError when EGL fails to
-        render. lidar False drops the MID-360 (/livox/lidar, /livox/pointcloud,
-        /livox/imu), as GOLEM_LIDAR=0 does, and makes no GPU caster;
-        lidar_points is its points per frame (None, the real 20,000). Rates are
-        Hz of sim time.
+        render. lidar_points is its points per frame (None, the real 20,000).
+        Rates are Hz of sim time.
         """
         self.node = node
         self.model = model
@@ -370,11 +367,20 @@ class H12Sensors:
             self._static_tf.sendTransform(
                 [self._tf_msg(e, _sim_time_to_msg(float(data.time))) for e in self._camera_tf])
             self._camera_tf_broadcaster = TransformBroadcaster(self.node)
-        self.lidar = bool(lidar)
         # Reliable, as FAST-LIO subscribes (laserMapping.cpp); a best-effort
-        # publisher would not match it. Without the lidar none is made.
-        if self.lidar:
-            self._make_livox_publishers()
+        # publisher would not match it.
+        self.pub_lidar = self.node.create_publisher(
+            CustomMsg, "/livox/lidar",
+            QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
+                       history=HistoryPolicy.KEEP_LAST, depth=20))
+        self.pub_pc2 = self.node.create_publisher(
+            PointCloud2, "/livox/pointcloud",
+            QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
+                       history=HistoryPolicy.KEEP_LAST, depth=20))
+        self.pub_imu = self.node.create_publisher(
+            Imu, "/livox/imu",
+            QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
+                       history=HistoryPolicy.KEEP_LAST, depth=10))
 
         self.imu_period = 1.0 / imu_rate_hz
         self.imu_quat_adr, self.imu_quat_dim = self._sensor_adr(imu_quat_sensor)
@@ -389,33 +395,17 @@ class H12Sensors:
         self._last_imu_sim_t = 0.0
         # The scan thread publishes both lidar topics; its GPU caster makes its
         # EGL context here, before the passive viewer's window exists.
-        self._lidar = (_LidarScans(model, self.lidar_body_id, self.lidar_exclude_body_id,
-                                   self.geom_is_robot, LIVOX_FRAME,
-                                   self.pub_lidar.publish, self.pub_pc2.publish,
-                                   self.timings, sim_lock, lidar_points)
-                       if self.lidar else None)
-        # The cameras render on a worker thread, through MUJOCO_GL's backend, while physics runs.
+        self._lidar = _LidarScans(model, self.lidar_body_id, self.lidar_exclude_body_id,
+                                  self.geom_is_robot, LIVOX_FRAME,
+                                  self.pub_lidar.publish, self.pub_pc2.publish,
+                                  self.timings, sim_lock, lidar_points)
+        # The cameras render on a worker thread, through EGL, while physics runs.
         self._camera_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera")
         self._camera_pending = None
         if self.cameras:
-            # Make the GL context now: once the passive viewer's GLFW window
+            # Make the EGL context now: once the passive viewer's GLFW window
             # exists, a new EGL context can no longer be made current.
             self._camera_worker.submit(self._ensure_renderer).result()
-
-    def _make_livox_publishers(self) -> None:
-        """Make the MID-360's /livox/lidar, /livox/pointcloud and /livox/imu publishers."""
-        self.pub_lidar = self.node.create_publisher(
-            CustomMsg, "/livox/lidar",
-            QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
-                       history=HistoryPolicy.KEEP_LAST, depth=20))
-        self.pub_pc2 = self.node.create_publisher(
-            PointCloud2, "/livox/pointcloud",
-            QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
-                       history=HistoryPolicy.KEEP_LAST, depth=20))
-        self.pub_imu = self.node.create_publisher(
-            Imu, "/livox/imu",
-            QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
-                       history=HistoryPolicy.KEEP_LAST, depth=10))
 
     def _make_camera_pub(self, spec) -> _CameraPub:
         """Return a camera's MuJoCo ids, camera_info and publishers for the streams switched on."""
@@ -510,7 +500,7 @@ class H12Sensors:
         with the state time, one physics step before sim_t (module docstring).
         Call it without holding sim_lock, on the thread that steps the physics.
         """
-        if self.lidar and sim_t - self._last_imu_sim_t >= self.imu_period:
+        if sim_t - self._last_imu_sim_t >= self.imu_period:
             self._last_imu_sim_t = sim_t
             try:
                 self._publish_imu(stamp)
@@ -529,8 +519,6 @@ class H12Sensors:
             except Exception as e:
                 self.get_logger().warn(f"camera publish failed: {e}")
 
-        if self._lidar is None:
-            return
         try:
             self._lidar.tick(self.data, sim_t - self.model.opt.timestep)
         except Exception as e:

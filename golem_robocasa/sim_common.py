@@ -124,9 +124,8 @@ def require_renderer(env: Mapping[str, str] = os.environ,
     backend = env.get("MUJOCO_GL", "")
     if backend.strip().lower() != "osmesa":
         sys.exit(f"GOLEM_RENDER=cpu renders through OSMesa: MUJOCO_GL must be osmesa, not {backend!r}")
-    lidar = "the MID-360's rays cast on the CPU" if env_flag("GOLEM_LIDAR", True, env) else "no MID-360"
-    print(f"[sim_common] rendering on the CPU through OSMesa (GOLEM_RENDER=cpu); {lidar}",
-          flush=True)
+    print("[sim_common] rendering on the CPU through OSMesa (GOLEM_RENDER=cpu); "
+          "the MID-360's rays cast on the CPU", flush=True)
     return mode
 
 

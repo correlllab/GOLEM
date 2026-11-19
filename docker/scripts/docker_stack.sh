@@ -50,12 +50,10 @@ fi
 if [ "$ACTION" = logs ]; then exec "${COMPOSE[@]}" logs -f "$SIM" ros; fi
 configure_robot "$SIM"
 echo "robot: $GOLEM_ROBOT" >&2
-# The Mac runs the arm64 images (configure_platform); Linux prints nothing here.
-[ "$GOLEM_PLATFORM" != mac ] || echo "platform: mac (arm64, CPU rendering, lidar $([ "$GOLEM_LIDAR" = 1 ] && echo 'on the CPU' || echo off))" >&2
 # Read by docker-compose.stack.yml. Set here, from the selected robot and
 # platform, because a value left in the shell or docker/.env would start the
-# other robot's bringup. The Mac runs the mac_sim bringups (navigation only
-# with GOLEM_LIDAR=1, no vision models; docs/MAC.md).
+# other robot's bringup. The Mac runs the mac_sim bringups (no vision models;
+# docs/MAC.md).
 if [ "$GOLEM_PLATFORM" = mac ]; then
     export GOLEM_BRINGUP_LAUNCH=${GOLEM_ROBOT}_mac_sim.launch.py
 elif [ "$GOLEM_ROBOT" = g1 ]; then

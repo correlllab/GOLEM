@@ -491,23 +491,6 @@ def _log(text):
     print(text, flush=True)
 
 
-def threads_from_env(env=os.environ):
-    """Return GOLEM_LIDAR_THREADS, the CpuCaster's thread count: unset or empty is DEFAULT_THREADS.
-
-    Raises ValueError, naming the knob, for anything but an integer of at least 1.
-    """
-    raw = env.get("GOLEM_LIDAR_THREADS", "")
-    if not raw.strip():
-        return DEFAULT_THREADS
-    try:
-        threads = int(raw)
-    except ValueError:
-        threads = 0
-    if threads < 1:
-        raise ValueError(f"GOLEM_LIDAR_THREADS must be an integer of at least 1, got {raw!r}")
-    return threads
-
-
 def points_from_env(env=os.environ):
     """Return GOLEM_LIDAR_POINTS, the points per frame: unset or empty is the real sensor's.
 
@@ -533,14 +516,14 @@ def make_caster(model, exclude_body, geomgroup, render="gpu", robot_geoms=None, 
     CpuCaster on its own copy of model, since it edits the model it casts on (its
     docstring), so the physics may step model while it casts; runtime edits of model reach
     its casts only through the snapshot (poses, alpha). threads is the CpuCaster's thread
-    count (None: GOLEM_LIDAR_THREADS, threads_from_env). ValueError for any other render.
+    count (None: DEFAULT_THREADS). ValueError for any other render.
     geomgroup and robot_geoms are the casters' own.
     """
     if render == "gpu":
         return GpuCaster(model, exclude_body, geomgroup, robot_geoms=robot_geoms)
     if render == "cpu":
         return CpuCaster(copy.copy(model), exclude_body, geomgroup, robot_geoms=robot_geoms,
-                         threads=threads_from_env() if threads is None else threads)
+                         threads=DEFAULT_THREADS if threads is None else threads)
     raise ValueError(f"render must be gpu or cpu, got {render!r}")
 
 

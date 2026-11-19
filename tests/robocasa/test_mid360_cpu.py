@@ -102,21 +102,16 @@ class MakeCasterTests(unittest.TestCase):
         finally:
             caster.close()
 
-    def test_cpu_casts_on_golem_lidar_threads(self):
-        """GOLEM_LIDAR_THREADS sets the CpuCaster's threads; unset or empty is DEFAULT_THREADS; bad values raise."""
-        self.assertEqual(mid360.threads_from_env({}), mid360.DEFAULT_THREADS)
-        self.assertEqual(mid360.threads_from_env({"GOLEM_LIDAR_THREADS": " "}), mid360.DEFAULT_THREADS)
-        self.assertEqual(mid360.threads_from_env({"GOLEM_LIDAR_THREADS": "4"}), 4)
-        for bad in ("0", "-2", "four", "1.5"):
-            with self.subTest(GOLEM_LIDAR_THREADS=bad):
-                with self.assertRaisesRegex(ValueError, "GOLEM_LIDAR_THREADS"):
-                    mid360.threads_from_env({"GOLEM_LIDAR_THREADS": bad})
+    def test_cpu_casts_on_the_threads_given(self):
+        """make_caster's threads sets the CpuCaster's thread count; None is DEFAULT_THREADS."""
         model, _, torso = _scene()
-        caster = mid360.make_caster(model, torso, VISUAL, "cpu", threads=3)
-        try:
-            self.assertEqual(caster.threads, 3)
-        finally:
-            caster.close()
+        for threads, expected in ((3, 3), (None, mid360.DEFAULT_THREADS)):
+            with self.subTest(threads=threads):
+                caster = mid360.make_caster(model, torso, VISUAL, "cpu", threads=threads)
+                try:
+                    self.assertEqual(caster.threads, expected)
+                finally:
+                    caster.close()
 
     def test_points_come_from_golem_lidar_points(self):
         """GOLEM_LIDAR_POINTS sets the points per frame; unset or empty is the real 20,000; bad values raise."""

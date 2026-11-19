@@ -297,7 +297,7 @@ def main(argv):
     task = sim_common.select_task(parser, args, tag="g1_mujoco",
                                   own_tasks=battery_env.TASKS + blank_env.TASKS, no_kitchen=blank_env.TASKS)
     # The camera and the lidar's rays render through EGL on the GPU: stop here
-    # without one, unless GOLEM_RENDER=cpu renders on the CPU with no lidar.
+    # without one, unless GOLEM_RENDER=cpu renders on the CPU.
     sim_common.require_renderer()
 
     sim_loop(task, viewer=not args.headless,

@@ -76,9 +76,8 @@ load_config() {
 # docker/.env's GOLEM_PLATFORM, else mac on Darwin arm64 (Apple Silicon), else
 # linux. linux leaves COMPOSE as load_config made it (the x86 / NVIDIA images).
 # mac adds docker-compose.mac.yml (the arm64 images of docker/mac/, no NVIDIA
-# runtime, the sims on CPU rendering), exports GOLEM_LIDAR=0 unless set (the
-# CPU lidar is slow; 1 adds it and navigation) and headless unless GOLEM_DISPLAY is set
-# (there is no X server). Called by load_config.
+# runtime, the sims on CPU rendering) and exports headless unless GOLEM_DISPLAY
+# is set (there is no X server). Called by load_config.
 configure_platform() {
     local platform=${GOLEM_PLATFORM:-}
     if [ -z "$platform" ]; then
@@ -88,7 +87,6 @@ configure_platform() {
         linux) ;;
         mac)
             COMPOSE+=(-f "$GOLEM_ROOT/docker/docker-compose.mac.yml")
-            export GOLEM_LIDAR="${GOLEM_LIDAR:-0}"
             export GOLEM_DISPLAY="${GOLEM_DISPLAY:-headless}"
             ;;
         *) fail "GOLEM_PLATFORM must be linux or mac, not '$platform'.";;
@@ -126,7 +124,8 @@ parse_robot_flags() {
 
 # Select the robot of simulator service $1 and export it as GOLEM_ROBOT (h12 or
 # g1): ROBOT_FLAG, else the shell's or docker/.env's GOLEM_ROBOT, else h12. The
-# G1 adds docker-compose.g1.yml and runs only with RoboCasa.
+# G1 adds docker-compose.g1.yml and runs only with RoboCasa. On the Mac it also
+# exports the robot's GOLEM_LIDAR_POINTS default.
 configure_robot() {
     local service=$1 robot
     robot=$(printf '%s' "${ROBOT_FLAG:-${GOLEM_ROBOT:-h12}}" | tr '[:upper:]' '[:lower:]')
@@ -139,6 +138,16 @@ configure_robot() {
         *) fail "GOLEM_ROBOT must be h12 or g1, not '$robot'.";;
     esac
     export GOLEM_ROBOT=$robot
+    # The Mac casts the MID-360 on the CPU: fewer points than the real 20,000 a
+    # frame keep the sim and the navigation stack at real time on an 8-core M3
+    # (docs/MAC.md). A shell or docker/.env value wins.
+    if [ "${GOLEM_PLATFORM:-linux}" = mac ]; then
+        if [ "$robot" = g1 ]; then
+            export GOLEM_LIDAR_POINTS=${GOLEM_LIDAR_POINTS:-10000}
+        else
+            export GOLEM_LIDAR_POINTS=${GOLEM_LIDAR_POINTS:-6000}
+        fi
+    fi
 }
 
 # SAFETY: domain 0 is the real robots' command bus. Refuse it for every service

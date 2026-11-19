@@ -700,7 +700,7 @@ if 'config' in sys.argv:
         return str(self.root / 'docker/docker-compose.mac.yml')
 
     def test_linux_never_adds_the_mac_overlay(self):
-        """On Linux no wrapper adds docker-compose.mac.yml or prints a platform line."""
+        """On Linux no wrapper adds docker-compose.mac.yml."""
         for args in (('docker/scripts/docker_run.sh', 'robocasa'), ('docker/scripts/docker_run.sh', 'ros'),
                      ('docker/scripts/docker_stack.sh', 'up', 'robocasa', '--headless'),
                      ('docker/scripts/docker_build.sh', 'robocasa', 'ros')):
@@ -708,7 +708,6 @@ if 'config' in sys.argv:
                 r = self.run_script(*args)
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertFalse(any(self.mac_overlay() in c for c in self.calls()))
-                self.assertNotIn('platform:', r.stderr)
 
     def test_mac_adds_the_mac_overlay_to_every_compose_call(self):
         """On the Mac every compose call of docker_run.sh carries docker-compose.mac.yml, after the base file."""
@@ -718,7 +717,6 @@ if 'config' in sys.argv:
                 self.assertEqual(r.returncode, 0, r.stderr)
                 files = self.compose_files(self.run_calls()[-1])
                 self.assertEqual(files[:2], [str(self.root / 'docker/docker-compose.yml'), self.mac_overlay()])
-                self.assertIn('platform: mac', r.stderr)
 
     def test_mac_detected_from_the_host(self):
         """Without GOLEM_PLATFORM the wrappers pick mac on Darwin arm64 and linux elsewhere."""

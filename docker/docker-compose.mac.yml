@@ -7,8 +7,7 @@
 # OrbStack or Docker Desktop (host networking on) both containers share the
 # Linux VM's network, so DDS between them works; the macOS host is not on it,
 # so ros2 and RViz run inside golem_ros. docs/MAC.md has the flow and what the
-# Mac sims leave out (the GPU vision models, Isaac; the lidar and navigation
-# only with GOLEM_LIDAR=1).
+# Mac leaves out (the GPU vision models, Isaac).
 services:
   robocasa:
     build:
@@ -21,18 +20,12 @@ services:
     shm_size: 2g
     environment:
       # gpu (the sims' default, an NVIDIA GPU over EGL) or cpu (OSMesa, the
-      # MID-360 on the CPU): golem_robocasa/sim_common.py. The Mac has only cpu.
+      # MID-360 cast exactly on the CPU): golem_robocasa/sim_common.py. The
+      # Mac has only cpu.
       GOLEM_RENDER: cpu
-      # Both robots' MID-360, off by default: GOLEM_LIDAR=1 casts its rays
-      # exactly on the CPU (mid360.CpuCaster), much slower than the x86 GPU,
-      # and the Mac bringups then run navigation. configure_platform exports
-      # the same default, so docker-compose.g1.yml's GOLEM_LIDAR agrees.
-      GOLEM_LIDAR: ${GOLEM_LIDAR:-0}
-      # Threads the CPU lidar casts on (mid360.threads_from_env); empty: a
-      # quarter of the VM's CPUs, at most 4.
-      GOLEM_LIDAR_THREADS: ${GOLEM_LIDAR_THREADS:-}
-      # Both robots' MID-360 points per frame (empty: the real 20,000);
-      # 10000 halves the CPU lidar's cost (docs/MAC.md).
+      # Both robots' MID-360 points per frame. configure_robot exports the
+      # Mac's default per robot (6000 for the H1-2, 10000 for the G1: the
+      # most each holds real time with on an 8-core M3, docs/MAC.md).
       GOLEM_LIDAR_POINTS: ${GOLEM_LIDAR_POINTS:-}
       # Software-rendered cameras cost the most per step: off unless asked for.
       GOLEM_CAMERAS: ${GOLEM_CAMERAS:-0}
@@ -44,12 +37,9 @@ services:
     runtime: !reset null
     shm_size: 2g
     environment:
-      # The sim's lidar knob: h12_mac_sim and g1_mac_sim default use_nav to it.
-      GOLEM_LIDAR: ${GOLEM_LIDAR:-0}
       # core_ws/cyclonedds.xml, then an override of its 16 MB minimum UDP
       # receive buffer: the minimum makes every ROS node fail to create its
       # domain unless the kernel's net.core.rmem_max allows it, which the
       # OrbStack / Docker Desktop VM does not by default (docs/DDS_TUNING.md
-      # raises it on Linux hosts). The Mac sims stream no lidar or cameras by
-      # default, the bursts the large buffer absorbs.
+      # raises it on Linux hosts).
       CYCLONEDDS_URI: "file:///home/code/cyclonedds.xml,<CycloneDDS><Domain><Internal><SocketReceiveBufferSize min=\"default\"/></Internal></Domain></CycloneDDS>"

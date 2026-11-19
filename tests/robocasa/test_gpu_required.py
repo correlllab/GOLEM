@@ -53,7 +53,7 @@ class RequireGpuTests(unittest.TestCase):
 
 
 class RenderModeTests(unittest.TestCase):
-    """Check GOLEM_RENDER: gpu (the default) keeps the GPU check; cpu needs OSMesa and no lidar."""
+    """Check GOLEM_RENDER: gpu (the default) keeps the GPU check; cpu needs OSMesa."""
 
     def test_unset_or_empty_is_gpu(self):
         """GOLEM_RENDER unset, empty or blank is gpu, the default."""
@@ -78,15 +78,13 @@ class RenderModeTests(unittest.TestCase):
         self.assertTrue(caught.exception.code.startswith(sim_common.GPU_REQUIRED))
 
     def test_cpu_mode_needs_osmesa(self):
-        """GOLEM_RENDER=cpu passes with MUJOCO_GL=osmesa, lidar on or off, and refuses another MUJOCO_GL."""
+        """GOLEM_RENDER=cpu passes with MUJOCO_GL=osmesa and refuses another MUJOCO_GL."""
         def probe():
             """Fail: cpu mode must not probe the GPU."""
             raise AssertionError("probed the GPU")
 
-        for lidar in ("0", "1", ""):
-            with self.subTest(GOLEM_LIDAR=lidar):
-                env = {"GOLEM_RENDER": "CPU", "MUJOCO_GL": "osmesa", "GOLEM_LIDAR": lidar}
-                self.assertEqual(sim_common.require_renderer(env, probe), "cpu")
+        env = {"GOLEM_RENDER": "CPU", "MUJOCO_GL": "osmesa"}
+        self.assertEqual(sim_common.require_renderer(env, probe), "cpu")
         with self.assertRaises(SystemExit) as caught:
             sim_common.require_renderer({"GOLEM_RENDER": "cpu", "MUJOCO_GL": "egl"}, probe)
         self.assertIn("MUJOCO_GL must be osmesa", caught.exception.code)
@@ -101,9 +99,9 @@ class SimStartTests(unittest.TestCase):
         Returns the CompletedProcess.
         """
         args = args or ("--headless", "--task", "Blank")
-        # The render knobs are the test's own: the Mac images set GOLEM_RENDER=cpu and
-        # GOLEM_LIDAR=0 (docker-compose.mac.yml), and these tests check the default, gpu.
-        base = {k: v for k, v in os.environ.items() if k not in ("GOLEM_RENDER", "GOLEM_LIDAR")}
+        # GOLEM_RENDER is the test's own: the Mac images set cpu (docker-compose.mac.yml),
+        # and these tests check the default, gpu.
+        base = {k: v for k, v in os.environ.items() if k != "GOLEM_RENDER"}
         r = subprocess.run([sys.executable, "-u", SIM, f"--{robot}", *args],
                            capture_output=True, text=True, env=dict(base, **env),
                            timeout=START_TIMEOUT_S, cwd=os.path.dirname(SIM))

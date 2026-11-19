@@ -7,6 +7,7 @@
 #   docker/scripts/package_humble_runtime.py IsaacDockerfile
 #   docker/locks/**                          every Dockerfile
 #   docker/patches/**                        RobocasaDockerfile
+#   docker/mac/vnc_display.sh                mac/RosDockerfile
 # Their .git entries stay out.
 *
 !core_ws
@@ -30,3 +31,6 @@ docker/scripts/*
 !docker/locks/**
 !docker/patches
 !docker/patches/**
+!docker/mac
+docker/mac/*
+!docker/mac/vnc_display.sh

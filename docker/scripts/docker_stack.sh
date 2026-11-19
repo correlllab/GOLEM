@@ -88,7 +88,8 @@ if [ "$SIM" = robocasa ]; then
     "${COMPOSE[@]}" run --rm -T -e GOLEM_PREPARE_ONLY=1 robocasa
 fi
 # Add the stack overlay (wait for the sim, then bringup).
-if [ -n "${DISPLAY:-}" ]; then
+# The Mac's golem_ros always has a display for it (docker/mac/vnc_display.sh).
+if [ -n "${DISPLAY:-}" ] || [ "$GOLEM_PLATFORM" = mac ]; then
     export GOLEM_USE_RVIZ=${GOLEM_USE_RVIZ:-true}
 else
     export GOLEM_USE_RVIZ=${GOLEM_USE_RVIZ:-false}

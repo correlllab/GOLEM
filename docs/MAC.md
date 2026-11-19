@@ -17,7 +17,7 @@ bringup and navigation away from the lab machines; the closed-loop tests
 | Compose | `docker/docker-compose.yml` | the same, plus `docker/docker-compose.mac.yml` (no NVIDIA runtime) |
 | Sim rendering | EGL on the GPU (`GOLEM_RENDER=gpu`) | OSMesa on the CPU (`GOLEM_RENDER=cpu`); cameras off by default (`GOLEM_CAMERAS=0`) |
 | MID-360 lidar | cast on the GPU (`mid360.GpuCaster`), 20,000 points a frame | cast exactly on the CPU (`mid360.CpuCaster`); `GOLEM_LIDAR_POINTS` 6,000 (H1-2) or 10,000 (G1) a frame by default |
-| Bringup | `h12_sim`, `g1_sim` | `h12_mac_sim`, `g1_mac_sim`: the sim bringups without model servers or skills; the G1's without the hand driver (`use_hands:=true` adds it) |
+| Bringup | `h12_sim`, `g1_sim` | `h12_mac_sim`, `g1_mac_sim`: the sim bringups without model servers or skills; the G1's without the hand driver (`use_hands:=true` adds it); RViz on a virtual display, in a browser at `localhost:6080` |
 | Not available | — | Isaac, `golem_skills`, the model servers (GraspGenX has no CPU path) |
 
 The wrappers pick the Mac by themselves on Darwin arm64 (`GOLEM_PLATFORM=mac`;
@@ -57,6 +57,16 @@ Then send `/navigate_to_pose` goals in `map` once Nav2's lifecycle nodes are up,
 as on x86 ([Navigation demo](NAVIGATION_DEMO.md)). The three-terminal flow of
 [Running the stack](RUNNING.md) works too (`docker_run.sh robocasa --g1`, then
 `ros2 launch golem_bringup g1_mac_sim.launch.py` in `golem_ros`).
+
+**RViz.** The Mac bringups start RViz by default (`use_rviz:=false` leaves it
+out). A Mac has no X server a container can draw OpenGL through, so the
+`golem_ros` container draws on a virtual display (Xvfb, Mesa's software OpenGL)
+that `docker/mac/vnc_display.sh` starts with the container. Open it in a
+browser at <http://localhost:6080/vnc.html>, or in Screen Sharing at
+`vnc://localhost:5901`. Software OpenGL draws on one thread (`LP_NUM_THREADS=1`):
+on every core RViz takes about 1.5 of them and the H1-2's stack falls to
+0.78-0.83x; on one it holds 0.98-1.00x. `GOLEM_VNC=0` starts no display, and
+`GOLEM_VNC_SIZE` sets its size (default `1280x800`).
 
 ## Measured speed
 

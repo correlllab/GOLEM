@@ -28,8 +28,9 @@ from launch.substitutions import LaunchConfiguration
 def generate_launch_description():
     """Declare the Mac bringup's arguments and include h12_sim without vision."""
     return LaunchDescription([
-        DeclareLaunchArgument('use_rviz', default_value='false',
-                              description='true: start RViz (needs a display in golem_ros)'),
+        DeclareLaunchArgument('use_rviz', default_value='true',
+                              description='true: start RViz, on the Mac golem_ros display '
+                                          '(http://localhost:6080/vnc.html); false: none'),
         DeclareLaunchArgument('policy', default_value='almi',
                               description='The policy golem_lowerbody_rl runs on the legs: '
                                           'almi, fame or walk; any other is refused'),

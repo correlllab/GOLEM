@@ -106,8 +106,28 @@ the CPU; layout 9, style 9, seed 42, the spawn backed off 2.0 m, as
 | RTF while recording the viewer | 0.40-0.48 | 0.27-0.31 |
 
 These runs had the sim's viewer open on a virtual display, recorded with ffmpeg,
-which takes much of the CPU; without the recording the stack's RTF with the lidar
-is not measured. The H1-2 run had no estop latch over its 360 s.
+which takes much of the CPU. The H1-2 run had no estop latch over its 360 s.
+
+Without the recording, the G1's navigation stack (same scene and goals) runs at
+0.80-0.89x, `/lowstate` at 500 Hz of sim time with gaps up to 40 ms of wall time,
+no fault; the goal ahead succeeds (6.3-6.5 s, 0.21-0.28 m off), and the goal back
+to the start aborted both times, about 0.85 m short. The VM is CPU-bound there:
+`golem_ros` takes about 3.75 cores (FAST-LIO, SLAM, OctoMap, Nav2, the leg policy,
+the arm controller) and the sim about 2.4 of the M3's 8.
+
+**Lidar threads.** The CPU caster's thread count is `GOLEM_LIDAR_THREADS` (default
+a quarter of the VM's CPUs, at most 4: 2 on an 8-CPU VM). It speeds the sim on its
+own, but not the navigation stack, where every core is busy:
+
+| Threads | 1 | 2 | 4 | 6 | 8 |
+|---|---|---|---|---|---|
+| G1 sim alone, kitchen, CPU lidar, unpaced | 0.82x | 1.48x | 1.96x | 2.10x | 1.90x |
+| G1 navigation stack at real time | — | 0.80-0.89x | 0.80-0.82x | — | — |
+
+The Mac's GPU is not a way out: in a Podman libkrun VM a container reaches it
+through Vulkan 1.2 (Venus over MoltenVK, with a patched Mesa), but not through
+OpenGL/EGL, which MuJoCo's renderer and `mid360.GpuCaster` need (Zink needs a
+Vulkan feature MoltenVK lacks; krunkit has no virgl GL on macOS).
 
 For comparison, the x86 lab machine (i7-14700F, RTX 5070 Ti, sensors and
 navigation on) runs the full stack at 0.83x (H1-2) and 1.00x (G1)

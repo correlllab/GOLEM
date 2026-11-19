@@ -28,6 +28,9 @@ services:
       # and the Mac bringups then run navigation. configure_platform exports
       # the same default, so docker-compose.g1.yml's GOLEM_LIDAR agrees.
       GOLEM_LIDAR: ${GOLEM_LIDAR:-0}
+      # Threads the CPU lidar casts on (mid360.threads_from_env); empty: a
+      # quarter of the VM's CPUs, at most 4.
+      GOLEM_LIDAR_THREADS: ${GOLEM_LIDAR_THREADS:-}
       # Software-rendered cameras cost the most per step: off unless asked for.
       GOLEM_CAMERAS: ${GOLEM_CAMERAS:-0}
   ros:

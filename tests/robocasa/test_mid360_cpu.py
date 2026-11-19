@@ -102,6 +102,22 @@ class MakeCasterTests(unittest.TestCase):
         finally:
             caster.close()
 
+    def test_cpu_casts_on_golem_lidar_threads(self):
+        """GOLEM_LIDAR_THREADS sets the CpuCaster's threads; unset or empty is DEFAULT_THREADS; bad values raise."""
+        self.assertEqual(mid360.threads_from_env({}), mid360.DEFAULT_THREADS)
+        self.assertEqual(mid360.threads_from_env({"GOLEM_LIDAR_THREADS": " "}), mid360.DEFAULT_THREADS)
+        self.assertEqual(mid360.threads_from_env({"GOLEM_LIDAR_THREADS": "4"}), 4)
+        for bad in ("0", "-2", "four", "1.5"):
+            with self.subTest(GOLEM_LIDAR_THREADS=bad):
+                with self.assertRaisesRegex(ValueError, "GOLEM_LIDAR_THREADS"):
+                    mid360.threads_from_env({"GOLEM_LIDAR_THREADS": bad})
+        model, _, torso = _scene()
+        caster = mid360.make_caster(model, torso, VISUAL, "cpu", threads=3)
+        try:
+            self.assertEqual(caster.threads, 3)
+        finally:
+            caster.close()
+
     def test_an_unknown_render_is_refused(self):
         """A render other than gpu or cpu raises ValueError, naming it."""
         model, _, torso = _scene()

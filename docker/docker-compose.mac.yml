@@ -41,6 +41,10 @@ services:
       # at http://localhost:6080/vnc.html (docs/MAC.md); GOLEM_VNC=0 starts none.
       DISPLAY: ":99"
       GOLEM_VNC: ${GOLEM_VNC:-1}
+      GOLEM_VNC_SIZE: ${GOLEM_VNC_SIZE:-1280x800}
+      # Mesa's software OpenGL draws RViz on one thread: on every core it takes
+      # about 1.5 of them and the stack falls below real time (docs/MAC.md).
+      LP_NUM_THREADS: ${LP_NUM_THREADS:-1}
       # core_ws/cyclonedds.xml, then an override of its 16 MB minimum UDP
       # receive buffer: the minimum makes every ROS node fail to create its
       # domain unless the kernel's net.core.rmem_max allows it, which the

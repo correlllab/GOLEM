@@ -11,14 +11,14 @@
 # OrbStack and Docker Desktop forward to the Mac's localhost:
 #   http://localhost:6080/vnc.html   or   vnc://localhost:5901 (Screen Sharing)
 # Environment: DISPLAY (:99, docker-compose.mac.yml); GOLEM_VNC=0 starts no
-#   display (the command still runs); GOLEM_VNC_SIZE (default 1600x1000).
+#   display (the command still runs); GOLEM_VNC_SIZE (default 1280x800, docker-compose.mac.yml).
 # Exit status: the command's. A display that fails to start is logged and the
 #   command runs anyway: RViz then fails alone.
 set -u
 
 # Start Xvfb, x11vnc and noVNC in the background, once per container.
 start_display() {
-    local display=${DISPLAY:-:99} size=${GOLEM_VNC_SIZE:-1600x1000}
+    local display=${DISPLAY:-:99} size=${GOLEM_VNC_SIZE:-1280x800}
     local n=${display#:}
     # A container restarted with `docker restart` keeps its /tmp, and a stale
     # lock makes Xvfb refuse the display.

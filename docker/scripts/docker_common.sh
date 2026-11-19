@@ -77,7 +77,7 @@ load_config() {
 # linux. linux leaves COMPOSE as load_config made it (the x86 / NVIDIA images).
 # mac adds docker-compose.mac.yml (the arm64 images of docker/mac/, no NVIDIA
 # runtime, the sims on CPU rendering), exports GOLEM_LIDAR=0 unless set (the
-# Mac sims have no lidar caster) and headless unless GOLEM_DISPLAY is set
+# CPU lidar is slow; 1 adds it and navigation) and headless unless GOLEM_DISPLAY is set
 # (there is no X server). Called by load_config.
 configure_platform() {
     local platform=${GOLEM_PLATFORM:-}

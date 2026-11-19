@@ -2,8 +2,9 @@
 
 The stack's platform is x86 Linux with an NVIDIA GPU. An Apple Silicon Mac runs
 a reduced RoboCasa sim of either robot: the command path (`golem_safety`,
-`golem_upper_ik`), the legs (`golem_lowerbody_rl`) and walking on `/cmd_vel`.
-It has no lidar, no navigation, no model servers or skills, and no Isaac sim.
+`golem_upper_ik`), the legs (`golem_lowerbody_rl`) and walking on `/cmd_vel`,
+and with `GOLEM_LIDAR=1` the MID-360 cast on the CPU and navigation (FAST-LIO,
+SLAM, Nav2) on it. It has no model servers or skills, and no Isaac sim.
 Use it to develop and check controllers and bringup away from the lab
 machines; the closed-loop tests (`tests/sim`, `tests/g1`) stay x86 gates.
 
@@ -15,13 +16,13 @@ machines; the closed-loop tests (`tests/sim`, `tests/g1`) stay x86 gates.
 | Python locks | `docker/locks/*-amd64*.txt` | `docker/locks/*-arm64*.txt`, derived from the amd64 locks by `docker/mac/derive_arm64_locks.sh` (CPU torch, no CUDA wheels, open3d 0.18.0) |
 | Compose | `docker/docker-compose.yml` | the same, plus `docker/docker-compose.mac.yml` (no NVIDIA runtime) |
 | Sim rendering | EGL on the GPU (`GOLEM_RENDER=gpu`) | OSMesa on the CPU (`GOLEM_RENDER=cpu`); cameras off by default (`GOLEM_CAMERAS=0`) |
-| MID-360 lidar | on | none (`GOLEM_LIDAR=0`): its caster renders on the GPU |
-| Bringup | `h12_sim`, `g1_sim` | `h12_mac_sim`, `g1_mac_sim`: the sim bringups without navigation, model servers or skills |
-| Not available | — | Isaac, navigation and SLAM, `golem_skills`, the model servers (GraspGenX has no CPU path) |
+| MID-360 lidar | on, cast on the GPU (`mid360.GpuCaster`) | off by default; `GOLEM_LIDAR=1` casts it exactly on the CPU (`mid360.CpuCaster`) |
+| Bringup | `h12_sim`, `g1_sim` | `h12_mac_sim`, `g1_mac_sim`: the sim bringups without model servers or skills, navigation exactly when `GOLEM_LIDAR=1` |
+| Not available | — | Isaac, `golem_skills`, the model servers (GraspGenX has no CPU path) |
 
 The wrappers pick the Mac by themselves on Darwin arm64 (`GOLEM_PLATFORM=mac`;
 `GOLEM_PLATFORM=linux` forces the x86 path) and print
-`platform: mac (arm64, CPU rendering, no lidar)` beside `robot:`. Nothing on
+`platform: mac (arm64, CPU rendering, lidar off|on the CPU)` beside `robot:`. Nothing on
 Linux changes: there the wrappers make the same docker calls as before.
 
 ## Setup
@@ -56,6 +57,10 @@ ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
   "{config_name: t_pose, plan: false, duration: {sec: 15, nanosec: 0}}"
 ```
 
+Navigation: add `GOLEM_LIDAR=1` to either `up` (the bringups then start
+`golem_slam`), wait for Nav2's lifecycle nodes, and send `/navigate_to_pose`
+goals in `map`, as on x86 ([Navigation demo](NAVIGATION_DEMO.md)).
+
 `docker_stack.sh` runs a random kitchen task; with the arms out (`t_pose`) the
 robot can touch a fixture, and the goal then fails its steady-state hold. The
 three-terminal flow of [Running the stack](RUNNING.md) works too
@@ -89,6 +94,21 @@ stacks' from `/clock` against wall time in `golem_ros`.
 | Arms (`/named_config`, 15 s) | Blank scene: 8 of 8 goals succeed, standing and walking | not measured |
 | CPU | sim about 0.4 core, ros about 1.8 cores | sim about 0.25 core, ros about 1.85 cores |
 
+**Navigation** (`GOLEM_LIDAR=1`, the MID-360's 20,000 points a frame cast on
+the CPU; layout 9, style 9, seed 42, the spawn backed off 2.0 m, as
+`tests/sim`; a Nav2 goal 1.5 m ahead, then one back to the start):
+
+| | G1 | H1-2 |
+|---|---|---|
+| Sim alone with the CPU lidar, unpaced | 1.48x | not measured |
+| 1.5 m goal ahead | succeeded in 6.5 s of sim time, 0.25 m from it by SLAM (twice) | succeeded in 3.7 s, 0.25 m from it |
+| Goal back to the start | not finished: the recording ended mid-goal | succeeded in 17.6 s, 0.26 m from it |
+| RTF while recording the viewer | 0.40-0.48 | 0.27-0.31 |
+
+These runs had the sim's viewer open on a virtual display, recorded with ffmpeg,
+which takes much of the CPU; without the recording the stack's RTF with the lidar
+is not measured. The H1-2 run had no estop latch over its 360 s.
+
 For comparison, the x86 lab machine (i7-14700F, RTX 5070 Ti, sensors and
 navigation on) runs the full stack at 0.83x (H1-2) and 1.00x (G1)
 (`docs/superpowers/specs/2026-11-05-sim-speed-results.md`).
@@ -112,6 +132,9 @@ scheduling or the heavier H1-2 ROS side) is not measured.
   segfault in its first topic, so the Mac base renames the SDK's copy
   (`libddsc_unitree.so.0`) and checks the pair at build time
   (`docker/mac/check_unitree_dds.py`).
+- `GOLEM_RENDER=cpu` casts the MID-360 with `mid360.CpuCaster` (`mj_multiRay`,
+  exact, a quarter of the cores at most 4 threads) in place of the GPU's depth
+  renders; the x86 default (`gpu`) is unchanged.
 - `core_ws/cyclonedds.xml` requires 16 MB UDP receive buffers, which the VM's
   default `net.core.rmem_max` refuses (every node then fails to create its
   domain); the Mac overlay's `CYCLONEDDS_URI` drops that minimum.

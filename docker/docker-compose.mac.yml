@@ -7,7 +7,8 @@
 # OrbStack or Docker Desktop (host networking on) both containers share the
 # Linux VM's network, so DDS between them works; the macOS host is not on it,
 # so ros2 and RViz run inside golem_ros. docs/MAC.md has the flow and what the
-# Mac sims leave out (lidar, navigation, the GPU vision models, Isaac).
+# Mac sims leave out (the GPU vision models, Isaac; the lidar and navigation
+# only with GOLEM_LIDAR=1).
 services:
   robocasa:
     build:
@@ -19,12 +20,13 @@ services:
     # 2 GB of /dev/shm: the base file's 16 GB exceeds a laptop VM's memory.
     shm_size: 2g
     environment:
-      # gpu (the sims' default, an NVIDIA GPU over EGL) or cpu (OSMesa, no
-      # MID-360): golem_robocasa/sim_common.py. The Mac has only cpu.
+      # gpu (the sims' default, an NVIDIA GPU over EGL) or cpu (OSMesa, the
+      # MID-360 on the CPU): golem_robocasa/sim_common.py. The Mac has only cpu.
       GOLEM_RENDER: cpu
-      # Both robots' MID-360: the Mac has no lidar caster, so 0 (1 stops the
-      # sim at start with GOLEM_RENDER=cpu). configure_platform exports the
-      # same default, so docker-compose.g1.yml's GOLEM_LIDAR agrees.
+      # Both robots' MID-360, off by default: GOLEM_LIDAR=1 casts its rays
+      # exactly on the CPU (mid360.CpuCaster), much slower than the x86 GPU,
+      # and the Mac bringups then run navigation. configure_platform exports
+      # the same default, so docker-compose.g1.yml's GOLEM_LIDAR agrees.
       GOLEM_LIDAR: ${GOLEM_LIDAR:-0}
       # Software-rendered cameras cost the most per step: off unless asked for.
       GOLEM_CAMERAS: ${GOLEM_CAMERAS:-0}
@@ -36,6 +38,8 @@ services:
     runtime: !reset null
     shm_size: 2g
     environment:
+      # The sim's lidar knob: h12_mac_sim and g1_mac_sim default use_nav to it.
+      GOLEM_LIDAR: ${GOLEM_LIDAR:-0}
       # core_ws/cyclonedds.xml, then an override of its 16 MB minimum UDP
       # receive buffer: the minimum makes every ROS node fail to create its
       # domain unless the kernel's net.core.rmem_max allows it, which the

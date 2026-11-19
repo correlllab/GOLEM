@@ -34,8 +34,8 @@ against its sim and the real robot, so code moves between them unchanged. The
 G1 runs in Unitree's debug mode: Unitree's own controller is released, and the
 stack drives every motor on `rt/lowcmd`, as on the H1-2. The stack runs on one
 platform, x86 Linux with an NVIDIA GPU. An Apple Silicon Mac runs a reduced
-RoboCasa sim of either robot (no lidar, navigation, model servers or Isaac):
-`docs/MAC.md`.
+RoboCasa sim of either robot (no model servers or Isaac; the lidar, cast on the
+CPU, and navigation only with `GOLEM_LIDAR=1`): `docs/MAC.md`.
 
 The H1-2 is the default everywhere. `GOLEM_ROBOT=g1` or `--g1` on a simulator or
 stack wrapper selects the G1 where the attached robot matters: the sim and
@@ -94,7 +94,7 @@ launch bringup**.
 `docker/scripts/docker_common.sh` owns this, and the platform too: on Darwin
 arm64 (or `GOLEM_PLATFORM=mac`) every wrapper adds `docker-compose.mac.yml`
 (the arm64 images of `docker/mac/`, no NVIDIA runtime, `GOLEM_RENDER=cpu`,
-`GOLEM_LIDAR=0`), refuses Isaac, and `docker_stack.sh` starts `h12_mac_sim` or
+`GOLEM_LIDAR=0` unless set), refuses Isaac, and `docker_stack.sh` starts `h12_mac_sim` or
 `g1_mac_sim`; on Linux nothing changes (`docs/MAC.md`). On simulator and stack wrappers,
 the robot is `--g1`/`--h12` on the wrapper, else `GOLEM_ROBOT` from the shell,
 else from `docker/.env`, else `h12`. The selection means "which robot is
@@ -526,9 +526,9 @@ sims render their cameras and the MID-360's rays through EGL on an NVIDIA GPU:
 without one (MuJoCo not on EGL, no EGL device, a software renderer) the sim
 stops at start, once its command line is parsed and before it builds a scene or
 starts ROS or DDS, with one message (`sim_common.require_gpu`). The one way past
-it is the Mac images' opt-in `GOLEM_RENDER=cpu` (OSMesa, and only with
-`GOLEM_LIDAR=0`, which the H1-2 sim honours as the G1's does;
-`sim_common.require_renderer`). The H1-2
+it is the Mac images' opt-in `GOLEM_RENDER=cpu` (OSMesa for the cameras, the
+MID-360 cast exactly on the CPU by `mid360.CpuCaster`; `sim_common.require_renderer`,
+`mid360.make_caster`). The H1-2 sim honours `GOLEM_LIDAR=0` as the G1's does. The H1-2
 stays the default, and nothing on the G1 path may change its behaviour. The robots share
 `sim_common.py`, `measurement_bridge.py`, the pacer in `sim_timing.py` (its
 `--timing` report is the H1-2's only) and the `mujoco_sensors` node in

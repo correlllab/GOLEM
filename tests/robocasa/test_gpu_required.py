@@ -1,7 +1,7 @@
 """Check that the RoboCasa sims stop at start, with one message, without a GPU to render on through EGL.
 
 GOLEM_RENDER=cpu (the Mac images) is the one way past the check: it renders through OSMesa
-and needs GOLEM_LIDAR=0 (RenderModeTests).
+and casts the lidar on the CPU (RenderModeTests).
 
 sim_common.egl_renderer() is the probe and sim_common.require_gpu() the stop. The probe is made
 to fail three ways: a failing probe passed in, MuJoCo not on EGL (MUJOCO_GL=osmesa) and Mesa's
@@ -77,21 +77,19 @@ class RenderModeTests(unittest.TestCase):
             sim_common.require_renderer({"MUJOCO_GL": "osmesa"}, probe)
         self.assertTrue(caught.exception.code.startswith(sim_common.GPU_REQUIRED))
 
-    def test_cpu_mode_needs_osmesa_and_no_lidar(self):
-        """GOLEM_RENDER=cpu passes with MUJOCO_GL=osmesa and GOLEM_LIDAR=0, and refuses either missing."""
+    def test_cpu_mode_needs_osmesa(self):
+        """GOLEM_RENDER=cpu passes with MUJOCO_GL=osmesa, lidar on or off, and refuses another MUJOCO_GL."""
         def probe():
             """Fail: cpu mode must not probe the GPU."""
             raise AssertionError("probed the GPU")
 
-        ok = {"GOLEM_RENDER": "CPU", "MUJOCO_GL": "osmesa", "GOLEM_LIDAR": "0"}
-        self.assertEqual(sim_common.require_renderer(ok, probe), "cpu")
-        for change, reason in (({"MUJOCO_GL": "egl"}, "MUJOCO_GL must be osmesa"),
-                               ({"GOLEM_LIDAR": ""}, "GOLEM_LIDAR=0"),
-                               ({"GOLEM_LIDAR": "1"}, "GOLEM_LIDAR=0")):
-            with self.subTest(change=change):
-                with self.assertRaises(SystemExit) as caught:
-                    sim_common.require_renderer(dict(ok, **change), probe)
-                self.assertIn(reason, caught.exception.code)
+        for lidar in ("0", "1", ""):
+            with self.subTest(GOLEM_LIDAR=lidar):
+                env = {"GOLEM_RENDER": "CPU", "MUJOCO_GL": "osmesa", "GOLEM_LIDAR": lidar}
+                self.assertEqual(sim_common.require_renderer(env, probe), "cpu")
+        with self.assertRaises(SystemExit) as caught:
+            sim_common.require_renderer({"GOLEM_RENDER": "cpu", "MUJOCO_GL": "egl"}, probe)
+        self.assertIn("MUJOCO_GL must be osmesa", caught.exception.code)
 
 
 class SimStartTests(unittest.TestCase):
@@ -139,15 +137,6 @@ class SimStartTests(unittest.TestCase):
         for robot in ("h12", "g1"):
             with self.subTest(robot=robot):
                 self.assert_refused(self.start(robot, MUJOCO_GL="osmesa"), "MUJOCO_GL is 'osmesa'")
-
-    def test_cpu_rendering_with_the_lidar_on_stops_both_sims_at_start(self):
-        """GOLEM_RENDER=cpu without GOLEM_LIDAR=0 stops either robot's sim at start, before its kitchen."""
-        for robot in ("h12", "g1"):
-            with self.subTest(robot=robot):
-                r = self.start(robot, MUJOCO_GL="osmesa", GOLEM_RENDER="cpu", GOLEM_LIDAR="1")
-                self.assertEqual(r.returncode, 1, (r.stdout + r.stderr)[-2000:])
-                self.assertIn("set GOLEM_LIDAR=0", r.stderr.strip().splitlines()[-1])
-                self.assertNotIn("RoboCasa task", r.stdout)
 
     def test_on_mesas_software_egl_both_sims_stop_at_start(self):
         """With only Mesa's EGL, which renders in software, either robot's sim stops at start."""

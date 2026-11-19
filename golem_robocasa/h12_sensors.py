@@ -78,6 +78,7 @@ from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Imu, PointCloud2
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 import mid360
+import sim_common
 import realsense_profile
 from mujoco_ros_bridge import _sim_time_to_msg
 
@@ -192,7 +193,7 @@ class _LidarScans(mid360.ScanRing):
 
     def __init__(self, model, body_id, exclude_body_id, robot_geoms, frame_id,
                  publish_lidar, publish_cloud, timings=None, sim_lock=None):
-        """Build the GPU caster and start the thread.
+        """Build the caster GOLEM_RENDER picks (mid360.make_caster) and start the thread.
 
         The sensor's pose is body body_id's; the rays pass through body exclude_body_id's
         geoms, and a ray whose first hit is in the bool mask robot_geoms (ngeom,) gives no
@@ -204,8 +205,10 @@ class _LidarScans(mid360.ScanRing):
         self._frame_id = frame_id
         self._publish_lidar = publish_lidar
         self._publish_cloud = publish_cloud
-        caster = mid360.GpuCaster(model, exclude_body_id, LIDAR_GEOM_GROUPS, robot_geoms=robot_geoms)
-        _log(f"lidar rays cast on the GPU every {caster.batch_s * 1e3:g} ms of sim time")
+        render = sim_common.render_mode()
+        caster = mid360.make_caster(model, exclude_body_id, LIDAR_GEOM_GROUPS, render,
+                                    robot_geoms=robot_geoms)
+        _log(f"lidar rays cast on the {render.upper()} every {caster.batch_s * 1e3:g} ms of sim time")
         super().__init__(mid360.Mid360Scanner(caster), model,
                          lambda data: (data.xpos[body], data.xmat[body].reshape(3, 3)),
                          self._publish_frame, caster.batch_s, sim_lock, timings, _log)

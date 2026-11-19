@@ -3,7 +3,7 @@
 # golem_base:arm64 (mac/BaseDockerfile). Same stages, commits, patches and
 # kitchen-asset digest as the x86 image, with the arm64 locks and OSMesa as the
 # renderer: the Mac has no NVIDIA GPU, so the sims run with GOLEM_RENDER=cpu,
-# which draws the cameras in software and has no MID-360 (docs/MAC.md). The
+# which draws the cameras in software and casts the MID-360 on the CPU (docs/MAC.md). The
 # simulator source (golem_robocasa) is bind-mounted at runtime.
 FROM golem_base:arm64
 COPY docker/locks/robocasa-arm64*.txt docker/locks/robocasa-assets.digest /opt/golem-locks/

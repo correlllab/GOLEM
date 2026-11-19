@@ -31,8 +31,8 @@ GPU_REQUIRED = "the RoboCasa sims need an NVIDIA GPU, rendering through EGL (MUJ
 # GL_RENDERER substrings of software rasterisers, which EGL falls back to without a GPU.
 SOFTWARE_RENDERERS = ("llvmpipe", "softpipe", "swrast", "software", "swiftshader")
 # GOLEM_RENDER's values: gpu (the default) checks for the GPU above; cpu renders the
-# cameras through OSMesa and has no MID-360, whose caster (mid360.GpuCaster) is EGL-only.
-# The Mac images set cpu (docker/docker-compose.mac.yml).
+# cameras through OSMesa and casts the MID-360's rays exactly on the CPU (mid360.CpuCaster),
+# much more slowly. The Mac images set cpu (docker/docker-compose.mac.yml).
 RENDER_MODES = ("gpu", "cpu")
 
 
@@ -114,7 +114,8 @@ def require_renderer(env: Mapping[str, str] = os.environ,
     """Check the sim can render as GOLEM_RENDER asks, logging how; return the mode.
 
     gpu: require_gpu(probe), which exits without an NVIDIA GPU on EGL. cpu: exits unless
-    MUJOCO_GL is osmesa and GOLEM_LIDAR is off, since the MID-360 casts its rays on the GPU.
+    MUJOCO_GL is osmesa; the cameras then render through OSMesa and the MID-360 casts its
+    rays on the CPU (mid360.make_caster).
     """
     mode = render_mode(env)
     if mode == "gpu":
@@ -123,10 +124,8 @@ def require_renderer(env: Mapping[str, str] = os.environ,
     backend = env.get("MUJOCO_GL", "")
     if backend.strip().lower() != "osmesa":
         sys.exit(f"GOLEM_RENDER=cpu renders through OSMesa: MUJOCO_GL must be osmesa, not {backend!r}")
-    if env_flag("GOLEM_LIDAR", True, env):
-        sys.exit("GOLEM_RENDER=cpu has no MID-360 (its rays render through EGL on a GPU): "
-                 "set GOLEM_LIDAR=0")
-    print("[sim_common] rendering on the CPU through OSMesa (GOLEM_RENDER=cpu); no MID-360",
+    lidar = "the MID-360's rays cast on the CPU" if env_flag("GOLEM_LIDAR", True, env) else "no MID-360"
+    print(f"[sim_common] rendering on the CPU through OSMesa (GOLEM_RENDER=cpu); {lidar}",
           flush=True)
     return mode
 

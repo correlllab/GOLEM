@@ -103,13 +103,15 @@ class Mid360:
         return (data.site_xpos[self.site_id].copy(),
                 data.site_xmat[self.site_id].reshape(3, 3).copy())
 
-    def make_caster(self):
-        """Return a mid360.GpuCaster through torso_link, visual geoms only.
+    def make_caster(self, render="gpu"):
+        """Return render's caster (mid360.make_caster) through torso_link, visual geoms only.
 
-        Rays whose first hit is another robot geom give no return. The caster casts on its own
+        render is GOLEM_RENDER's value: gpu a mid360.GpuCaster, cpu a mid360.CpuCaster. Rays
+        whose first hit is another robot geom give no return. The caster casts on its own
         copy of the model; close() it when done. Raises RuntimeError when EGL fails to render.
         """
-        return mid360.GpuCaster(self.model, self.torso_id, GEOM_GROUPS, robot_geoms=self.robot_geom)
+        return mid360.make_caster(self.model, self.torso_id, GEOM_GROUPS, render,
+                                  robot_geoms=self.robot_geom)
 
     def imu(self, data, point=IMU_IN_LIDAR):
         """Return (angular velocity rad/s, specific force g) at point, in livox_frame axes.

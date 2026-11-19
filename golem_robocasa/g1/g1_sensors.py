@@ -207,11 +207,12 @@ class _LidarScans(mid360.ScanRing):
         Raises RuntimeError when EGL fails to render.
         """
         self.mid360 = g1_lidar.Mid360(model, prefix)
-        caster = self.mid360.make_caster()
+        render = sim_common.render_mode()
+        caster = self.mid360.make_caster(render)
         # s of sim time between casts: the caster's batch, or each frame's period when that
         # is shorter, so that every frame is cast from a pose of its own.
         interval = min(caster.batch_s, 1.0 / config.lidar_hz)
-        _log(f"lidar rays cast on the GPU every {interval * 1e3:g} ms of sim time")
+        _log(f"lidar rays cast on the {render.upper()} every {interval * 1e3:g} ms of sim time")
         super().__init__(g1_lidar.make_scanner(caster, config.lidar_points, config.lidar_hz), model,
                          self.mid360.pose, lambda frame: publish(sm.livox_custom_msg_cdr(frame)),
                          interval, log=_log)

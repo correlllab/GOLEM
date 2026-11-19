@@ -32,8 +32,8 @@ TOP_LEVEL = [
     ('lmg_sim.launch.py', {'start_position_verified': 'true', 'use_slam': 'true',
                            'use_skills': 'true'}, True),
     ('g1_sim.launch.py', {'use_skills': 'true', 'use_nav': 'true', 'use_rviz': 'true'}, True),
-    ('h12_mac_sim.launch.py', {'use_rviz': 'true'}, True),
-    ('g1_mac_sim.launch.py', {'use_rviz': 'true'}, True),
+    ('h12_mac_sim.launch.py', {'use_rviz': 'true', 'use_nav': 'true'}, True),
+    ('g1_mac_sim.launch.py', {'use_rviz': 'true', 'use_nav': 'true'}, True),
     ('h12_real_robot.launch.py', {'start_position_verified': 'true'}, False),
     ('lmg_real.launch.py', {'start_position_verified': 'true'}, False),
     ('h12_real_desktop.launch.py', {'use_hand_cameras': 'true'}, False),
@@ -155,8 +155,9 @@ def _packages(launch_file, args):
 ])
 def test_mac_sim_is_the_sim_bringup_without_nav_or_vision(mac_file, sim_file, sim_args, core,
                                                           monkeypatch):
-    """A Mac sim bringup starts its sim bringup's command path and legs, no nav or vision node."""
+    """Without GOLEM_LIDAR a Mac sim bringup starts its command path and legs, no nav or vision."""
     monkeypatch.setenv('ROS_DOMAIN_ID', SIM_DOMAIN)
+    monkeypatch.delenv('GOLEM_LIDAR', raising=False)
     mac = _packages(mac_file, {})
     assert core <= mac, mac
     assert mac.isdisjoint(NAV_AND_VISION), mac & set(NAV_AND_VISION)
@@ -169,3 +170,13 @@ def test_h12_sim_defaults_keep_nav_and_vision(monkeypatch):
     monkeypatch.setenv('ROS_DOMAIN_ID', SIM_DOMAIN)
     packages = _packages('h12_sim.launch.py', {})
     assert {'fast_lio', 'model_server', 'golem_skills'} <= packages, packages
+
+
+@pytest.mark.parametrize('mac_file', ['h12_mac_sim.launch.py', 'g1_mac_sim.launch.py'])
+def test_mac_sim_navigates_when_the_sim_has_its_lidar(mac_file, monkeypatch):
+    """GOLEM_LIDAR=1 (the sim casts its MID-360 on the CPU) adds navigation, still no vision."""
+    monkeypatch.setenv('ROS_DOMAIN_ID', SIM_DOMAIN)
+    monkeypatch.setenv('GOLEM_LIDAR', '1')
+    packages = _packages(mac_file, {})
+    assert {'fast_lio', 'golem_slam', 'slam_toolbox'} <= packages, packages
+    assert packages.isdisjoint({'model_server', 'golem_skills'}), packages

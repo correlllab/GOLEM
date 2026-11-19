@@ -192,13 +192,15 @@ class _LidarScans(mid360.ScanRing):
     """Cast the MID-360's scans on the mid360_scan thread (a mid360.ScanRing) and publish both lidar topics."""
 
     def __init__(self, model, body_id, exclude_body_id, robot_geoms, frame_id,
-                 publish_lidar, publish_cloud, timings=None, sim_lock=None):
+                 publish_lidar, publish_cloud, timings=None, sim_lock=None,
+                 points_per_frame=None):
         """Build the caster GOLEM_RENDER picks (mid360.make_caster) and start the thread.
 
         The sensor's pose is body body_id's; the rays pass through body exclude_body_id's
         geoms, and a ray whose first hit is in the bool mask robot_geoms (ngeom,) gives no
         return (a zero point). Each frame goes to publish_lidar(CustomMsg CDR bytes) and
         publish_cloud(PointCloud2) in frame_id. sim_lock is held for the snapshot copies only.
+        points_per_frame is the rays a 10 Hz frame fires; None is the real sensor's 20,000.
         Raises RuntimeError when EGL fails to render.
         """
         body = int(body_id)
@@ -209,7 +211,9 @@ class _LidarScans(mid360.ScanRing):
         caster = mid360.make_caster(model, exclude_body_id, LIDAR_GEOM_GROUPS, render,
                                     robot_geoms=robot_geoms)
         _log(f"lidar rays cast on the {render.upper()} every {caster.batch_s * 1e3:g} ms of sim time")
-        super().__init__(mid360.Mid360Scanner(caster), model,
+        rate = (mid360.POINTS_PER_SECOND if points_per_frame is None
+                else points_per_frame * mid360.FRAME_RATE_HZ)
+        super().__init__(mid360.Mid360Scanner(caster, points_per_second=rate), model,
                          lambda data: (data.xpos[body], data.xmat[body].reshape(3, 3)),
                          self._publish_frame, caster.batch_s, sim_lock, timings, _log)
 
@@ -308,6 +312,7 @@ class H12Sensors:
         imu_rate_hz: float = 100.0,
         lidar_self_prefixes: tuple = (),
         lidar: bool = True,
+        lidar_points=None,
         sim_lock=None,
         timings=None,
     ):
@@ -321,7 +326,8 @@ class H12Sensors:
         through; geoms of bodies named with a lidar_self_prefixes prefix give no
         return. The lidar's GPU caster raises RuntimeError when EGL fails to
         render. lidar False drops the MID-360 (/livox/lidar, /livox/pointcloud,
-        /livox/imu), as GOLEM_LIDAR=0 does, and makes no GPU caster. Rates are
+        /livox/imu), as GOLEM_LIDAR=0 does, and makes no GPU caster;
+        lidar_points is its points per frame (None, the real 20,000). Rates are
         Hz of sim time.
         """
         self.node = node
@@ -386,7 +392,7 @@ class H12Sensors:
         self._lidar = (_LidarScans(model, self.lidar_body_id, self.lidar_exclude_body_id,
                                    self.geom_is_robot, LIVOX_FRAME,
                                    self.pub_lidar.publish, self.pub_pc2.publish,
-                                   self.timings, sim_lock)
+                                   self.timings, sim_lock, lidar_points)
                        if self.lidar else None)
         # The cameras render on a worker thread, through MUJOCO_GL's backend, while physics runs.
         self._camera_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera")

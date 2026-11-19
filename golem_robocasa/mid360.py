@@ -508,6 +508,24 @@ def threads_from_env(env=os.environ):
     return threads
 
 
+def points_from_env(env=os.environ):
+    """Return GOLEM_LIDAR_POINTS, the points per frame: unset or empty is the real sensor's.
+
+    The real sensor's is POINTS_PER_SECOND / FRAME_RATE_HZ (20,000). Raises ValueError, naming
+    the knob, for anything but an integer of at least 1.
+    """
+    raw = env.get("GOLEM_LIDAR_POINTS", "")
+    if not raw.strip():
+        return int(round(POINTS_PER_SECOND / FRAME_RATE_HZ))
+    try:
+        points = int(raw)
+    except ValueError:
+        points = 0
+    if points < 1:
+        raise ValueError(f"GOLEM_LIDAR_POINTS must be an integer of at least 1, got {raw!r}")
+    return points
+
+
 def make_caster(model, exclude_body, geomgroup, render="gpu", robot_geoms=None, threads=None):
     """Return the caster for render, GOLEM_RENDER's value (sim_common.render_mode).
 

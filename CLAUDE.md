@@ -559,7 +559,7 @@ with a valid CRC, `mode_machine` 6, `mode_pr` 0 and finite values (other frames
 are dropped); after that, `GOLEM_CMD_TIMEOUT` of silence turns every motor off
 until frames return. Its MID-360 is the model both robots share
 (`golem_robocasa/mid360.py`): the real scan pattern, 20,000 points a 10 Hz
-frame on lines 0-3, each point's `offset_time` the time of the pose it was cast
+frame (`GOLEM_LIDAR_POINTS`, which only the Mac's compose file passes to it) on lines 0-3, each point's `offset_time` the time of the pose it was cast
 from, and each ray without a return a point at (0, 0, 0), as the real driver
 publishes it; `/livox/lidar` and `/livox/pointcloud` carry the same frame. Its rays are
 read from depth images rendered on the GPU (`mid360.GpuCaster`, as on the G1),

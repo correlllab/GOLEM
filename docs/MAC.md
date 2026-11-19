@@ -124,6 +124,25 @@ own, but not the navigation stack, where every core is busy:
 | G1 sim alone, kitchen, CPU lidar, unpaced | 0.82x | 1.48x | 1.96x | 2.10x | 1.90x |
 | G1 navigation stack at real time | — | 0.80-0.89x | 0.80-0.82x | — | — |
 
+**Fewer lidar points.** `GOLEM_LIDAR_POINTS` (both robots; empty is the real
+20,000 a frame) sets the rays a 10 Hz frame fires, and the CPU lidar's cost falls
+with it. Navigation stack at real time, same scene and goals, no recording:
+
+| | Points a frame | RTF | `/lowstate` largest gap | Casts that waited for the lidar | Goal ahead / back to start |
+|---|---|---|---|---|---|
+| G1 (`use_hands:=false`) | 10,000 | 1.00 (sim loop idle 26%) | 24 ms | 2% | succeeded (0.27 m off) / not run |
+| H1-2 | 20,000 | 0.55-0.57 | 46 ms | 99% | succeeded (0.18 m) / succeeded (0.04 m) |
+| H1-2 | 10,000 | 0.88-0.95 | 25 ms | 87% | succeeded (0.23 m) / succeeded (0.04 m) |
+| H1-2 | 6,000 | 1.00 | 17 ms | 22% | succeeded (0.27 m) / succeeded (0.11 m) |
+
+No fault or estop latch in any of these runs. The H1-2 needs fewer points than
+the G1 because its rays hit every geom group, the kitchen's collision geoms
+included (`h12_sensors.LIDAR_GEOM_GROUPS`), where the G1's hit the visual geoms
+only. A sparser scan than the real sensor's has not been checked for SLAM
+quality beyond these goals. For real time on an 8-core Mac:
+`GOLEM_LIDAR=1 GOLEM_LIDAR_POINTS=6000` (H1-2) or `10000` (G1, with
+`use_hands:=false` on `g1_mac_sim`).
+
 The Mac's GPU is not a way out: in a Podman libkrun VM a container reaches it
 through Vulkan 1.2 (Venus over MoltenVK, with a patched Mesa), but not through
 OpenGL/EGL, which MuJoCo's renderer and `mid360.GpuCaster` need (Zink needs a

@@ -118,6 +118,16 @@ class MakeCasterTests(unittest.TestCase):
         finally:
             caster.close()
 
+    def test_points_come_from_golem_lidar_points(self):
+        """GOLEM_LIDAR_POINTS sets the points per frame; unset or empty is the real 20,000; bad values raise."""
+        self.assertEqual(mid360.points_from_env({}), 20000)
+        self.assertEqual(mid360.points_from_env({"GOLEM_LIDAR_POINTS": ""}), 20000)
+        self.assertEqual(mid360.points_from_env({"GOLEM_LIDAR_POINTS": "10000"}), 10000)
+        for bad in ("0", "-5", "many", "1e4"):
+            with self.subTest(GOLEM_LIDAR_POINTS=bad):
+                with self.assertRaisesRegex(ValueError, "GOLEM_LIDAR_POINTS"):
+                    mid360.points_from_env({"GOLEM_LIDAR_POINTS": bad})
+
     def test_an_unknown_render_is_refused(self):
         """A render other than gpu or cpu raises ValueError, naming it."""
         model, _, torso = _scene()

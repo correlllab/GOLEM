@@ -51,6 +51,7 @@ import rclpy.executors
 from mujoco_ros_bridge import init_ros, shutdown_ros
 
 import h1_2_robosuite  # registers H1_2 and the MAGPIE grippers
+import mid360
 import realsense_profile
 import robosuite_common
 import battery_env  # registers the Battery env
@@ -291,7 +292,10 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
     # GOLEM_LIDAR=0 drops the MID-360 (/livox/*), as on the G1; GOLEM_RENDER=cpu
     # needs it off (sim_common.require_renderer).
     _lidar_on = sim_common.env_flag('GOLEM_LIDAR', True)
-    print(f"[h12_mujoco] MID-360 lidar {'ON' if _lidar_on else 'OFF (GOLEM_LIDAR=0)'}")
+    # GOLEM_LIDAR_POINTS: points per 10 Hz frame, default the real sensor's 20,000.
+    _lidar_points = mid360.points_from_env()
+    print(f"[h12_mujoco] MID-360 lidar "
+          f"{f'ON, {_lidar_points} points a frame' if _lidar_on else 'OFF (GOLEM_LIDAR=0)'}")
     _depth_on = sim_common.env_flag('GOLEM_CAMERA_DEPTH', True)
     _cloud_on = sim_common.env_flag('GOLEM_CAMERA_POINTCLOUD', True)
     print(f"[h12_mujoco] RGBD cameras {'ON' if _cameras_on else 'OFF (GOLEM_CAMERAS=0)'}"
@@ -325,6 +329,7 @@ def sim_loop(task, viewer=True, layout=None, style=None, seed=None, timing=False
                 (pfx, "gripper0_") if sim_common.env_flag("GOLEM_LIDAR_SELF_FILTER", True) else ()
             ),
             lidar=_lidar_on,
+            lidar_points=_lidar_points,
             sim_lock=sim_lock,
             timings=timings,
         ),

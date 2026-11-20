@@ -26,10 +26,14 @@ wrappers make the same docker calls as before.
 
 ## Setup
 
-- [OrbStack](https://orbstack.dev) or Docker Desktop (4.34 or later, host
-  networking turned on), Compose 2.24 or later. Both containers share the Linux
-  VM's network, so DDS works between them; the macOS host is not on it, so run
-  `ros2` inside `golem_ros`.
+- [OrbStack](https://orbstack.dev), Docker Desktop (4.34 or later, host
+  networking turned on) or [Colima](https://github.com/abiosoft/colima) (the
+  `vz` VM), Compose 2.24 or later. Both containers share the Linux VM's
+  network, so DDS works between them; the macOS host is not on it, so run
+  `ros2` inside `golem_ros`. Colima shares only your home folder with its VM
+  by default, so keep the checkout under `~`, and give its VM the disk and
+  cores below (`colima start --cpu 12 --memory 16 --disk 150`; the disk only
+  grows).
 - Submodules and LFS as in [Setup](SETUP.md) §1; `docker/.env` as in §2
   (`GEMINI_API_KEY` is not needed).
 - About 70 GB of disk for the images (the RoboCasa image holds about 10 GB of

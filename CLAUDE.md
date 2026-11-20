@@ -951,6 +951,98 @@ describe the new behaviour.
 
 Everyone runs their package through bringup, which starts the whole robot.
 
+### Quick reference: simulators and containers
+
+Run every command from the repo root, on the host, unless it says "in
+`golem_ros`". The same commands work on x86 + NVIDIA and on an Apple Silicon
+Mac: the wrappers detect the Mac and select its images, its compose overlay and
+its bringups (`h12_mac_sim`, `g1_mac_sim`) automatically (§3, `docs/MAC.md`).
+
+| | x86 Linux + NVIDIA | Apple Silicon Mac |
+|---|---|---|
+| Simulators | RoboCasa (both robots), Isaac (H1-2 only) | RoboCasa only, headless (no MuJoCo viewer) |
+| Bringup | `h12_sim` / `g1_sim` | `h12_mac_sim` / `g1_mac_sim` (no model servers or skills) |
+| RViz | on the host's X display (`--gui`, or `DISPLAY` set) | in a browser at <http://localhost:6080/vnc.html> |
+| Build | `docker/scripts/docker_build.sh robocasa ros` | `docker/scripts/docker_build.sh` (about 35 min) |
+
+**Build once**, and again after a change to a Dockerfile or the locks:
+`docker/scripts/docker_build.sh [robocasa] [ros] [isaac]`. Changes to the code in
+`core_ws` need no image rebuild. The `ros` container rebuilds the workspace
+incrementally every time it starts. The sims run the checkout's `golem_robocasa`
+from a bind mount, so restarting the sim container picks up a change.
+
+**There are two ways to run the stack:**
+
+1. **One command (`docker_stack.sh`)**: starts the sim and the `ros` container
+   detached. `ros` builds `core_ws`, waits for a sim of the selected robot, then
+   launches the platform's default bringup. Use this to run the stack as it is.
+2. **Three terminals (`docker_run.sh`)**: the sim in the foreground in terminal
+   1, a shell in `golem_ros` in terminal 2 where you `ros2 launch` a bringup
+   with the arguments you choose, and terminal 3 for commands. Use this when
+   you change launch arguments or restart the bringup often. Unlike
+   `docker_stack.sh`, nothing checks that the sim is the robot you launch.
+
+```bash
+# --- One command ---------------------------------------------------------
+docker/scripts/docker_stack.sh up robocasa --h12            # or --g1; add --headless or --gui
+docker/scripts/docker_stack.sh logs robocasa                # follow both containers (Ctrl-C stops following only)
+docker/scripts/docker_stack.sh restart robocasa --h12       # replace both containers (after a pull, or a sim change)
+docker/scripts/docker_stack.sh stop robocasa                # stop both; build caches are kept
+
+# --- Three terminals -----------------------------------------------------
+# 1: the sim; wait for "[golem_sim] ROS bridges up"
+docker/scripts/docker_run.sh robocasa --h12 --layout 9 --style 9 --seed 42
+# 2: builds core_ws, then a shell in golem_ros
+docker/scripts/docker_run.sh ros
+ros2 launch golem_bringup h12_sim.launch.py      # x86; on the Mac: h12_mac_sim.launch.py
+#    (G1: g1_sim.launch.py, on the Mac g1_mac_sim.launch.py; the ros container serves both robots)
+# 3: a second shell in the same container
+docker exec -it golem_ros bash
+source /opt/ros/humble/setup.bash && source /home/code/core_ws/install/setup.bash
+```
+
+**Container lifecycle:**
+
+- The containers are `golem_sim_robocasa` (or `golem_sim_isaac`) and
+  `golem_ros`, whichever robot runs.
+- `docker_run.sh` refuses to start a container whose name is taken. Pass
+  `--restart` right after the profile to replace it
+  (`docker_run.sh ros --restart`), or stop the pair with
+  `docker_stack.sh stop robocasa`.
+- Ctrl-C in a `docker_run.sh` terminal stops and removes that container.
+- Restarting the sim resets sim time to 0, so restart `golem_ros` (or at least
+  its bringup) after it.
+- Switching robots means stopping the running pair first: both robots share the
+  container names and the DDS domain. Check the `robot:` line every wrapper
+  prints.
+- In the sim's foreground terminal, ENTER presses the H1-2 sim's estop. Restart
+  the bringup after an estop.
+
+**Commands (terminal 3, or `docker exec` into the `docker_stack.sh` pair):**
+
+```bash
+ros2 topic hz /lowstate                                     # the sim is publishing (about 500 Hz)
+ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger   # H1-2: start the leg policy (it holds its pre-pose until then)
+ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
+  "{config_name: 't_pose', plan: false, duration: {sec: 0, nanosec: 0}}"   # or home, arms_asym, ... (golem_upper_ik/config/<robot>/robot.yaml)
+ros2 action send_goal /frame_task custom_ros_messages/action/FrameTask \
+  "{relative: true, plan: false, frame_names: ['right_wrist_yaw_link'],
+    frame_targets: [{position: {x: 0.0, y: 0.0, z: 0.05}, orientation: {w: 1.0}}],
+    duration: {sec: 0, nanosec: 0}}"                        # 5 cm up, pelvis frame; G1: right_hand_palm_link
+ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.3}}"   # walk (Ctrl-C: zero after 0.5 s)
+```
+
+More examples, Nav2 goals included, are in `core_ws/src/golem_bringup/common_cmds.md`
+and `docs/NAVIGATION_DEMO.md`. The G1's leg node starts HOMIE and releases the
+band without a confirm in the sim. Wait for its `elastic band released`. Both
+robots need open floor to walk (`GOLEM_SPAWN_BACKOFF=2.0` before the sim's
+command).
+
+**Isaac (x86, H1-2 only):** `docker/scripts/docker_stack.sh up isaac`, or
+`docker/scripts/docker_run.sh isaac [--headless]` in terminal 1 and
+`h12_sim.launch.py` in terminal 2. Its
+`/lowstate` tick counts publishes, so the leg policy never starts there (§8).
+
 ### The H1-2
 
 ```bash
@@ -1067,10 +1159,13 @@ on the real G1 yet; follow `docs/g1/first-session.md` step by step.
 2. `cp docker/.env.example docker/.env`; set `GEMINI_API_KEY` and
    `ROS_DOMAIN_ID` (any non-zero; 0 is the real robot).
 3. Place SAM3 weights at `core_ws/src/model_server/weights/sam3.pt`
-   (gated HF download — see `docs/SETUP.md`).
-4. `docker/scripts/docker_build.sh robocasa ros` (add `isaac` if needed).
-5. Run the three-terminal flow in §9; confirm with `ros2 topic hz /lowstate`
-   and `ros2 action list | grep skill` inside `golem_ros`.
+   (gated HF download — see `docs/SETUP.md`). Not needed on a Mac, which runs
+   no model servers; there `GEMINI_API_KEY` is not needed either.
+4. `docker/scripts/docker_build.sh robocasa ros` (add `isaac` if needed; on a
+   Mac, `docker/scripts/docker_build.sh` builds the arm64 images: OrbStack or
+   Docker Desktop, `docs/MAC.md`).
+5. Run the stack as in §9's quick reference; confirm with `ros2 topic hz /lowstate`
+   (and, on x86, `ros2 action list | grep skill`) inside `golem_ros`.
 6. Trigger `/skill/grasp` or the frontier explorer (§7).
 7. Read first: §5's development practice and pull request rules, `docs/RUNNING.md`
    (run flows), `docker/BUILD.md` (build system), your target package's source. `docs/index.md` indexes the rest of `docs/`; the

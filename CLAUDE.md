@@ -6,7 +6,10 @@ bringups that include them), the H1-2's raw-frame lidar, the RoboCasa sims'
 Unitree DDS interfaces, the leg node's start-up on both robots, the `ros`
 container's mounts and checks, the HOMIE licence rule, the package tables,
 the G1's packages and the closed-loop tests were checked against the code on
-2026-11-05; the single platform (§2, §3, §9) and the RoboCasa sims' GPU
+2026-11-05; the RoboCasa sim's single entry point and loop (§2, §3, §8), the
+Isaac sim's elastic band and topic list (§8), the Livox pins (§8), the safety
+config counts (§8) and the development and pull-request rules (§5) on
+2026-11-19; the single platform (§2, §3, §9) and the RoboCasa sims' GPU
 requirement (§8) on 2026-11-09; the models
 (`golem_ros2_models`, `CL_Assets/g1`), the robot selection, the rest of the G1
 text (its sim and invariants), the `mode_machine` identity check and the
@@ -53,7 +56,7 @@ pages are in `docs/g1/` (start at `docs/g1/index.md`).
 | `CL_isaaclab_sim/` | Isaac Lab simulator, H1-2 only (`sim_main.py`, DDS bridges, tasks) |
 | `CL_Assets/` | both robots' URDFs, MJCFs, meshes and self-collision models (the G1's in `CL_Assets/g1/`), Isaac USD (Git-LFS submodule); `golem_ros2_models` installs the models for ROS, and the sims read them directly |
 | `unitree_sdk2_python/` | vendored Unitree DDS SDK (Python) |
-| `tests/` | simulator regression and acceptance tests (`tests/README.md`); the G1 acceptance tests are in `tests/g1/`, the closed-loop test of both robots in `tests/sim/` |
+| `tests/` | simulator regression and acceptance tests (`tests/README.md`); the G1 acceptance tests are in `tests/g1/`, the closed-loop test of both robots in `tests/sim/`, the Isaac sim's in `tests/isaaclab/`, and the wrappers' and pins' in `tests/docker/` |
 | `tools/` | standalone debug tools (`read_lowstate.py`, which prints the real G1's `rt/lowstate`) |
 | `docs/` | user-facing docs: `SETUP.md`, `RUNNING.md`, `DDS_TUNING.md`, `DOCKER_TESTING.md`, `NAVIGATION_DEMO.md`, and the G1's in `docs/g1/` |
 | `docker/BUILD.md` | deep dive on the image/build system — read it before touching any Dockerfile |
@@ -252,6 +255,80 @@ thumb:
   Treat changes there as interface changes: minimal, deliberate, announced.
 - Submodule packages must be committed and pushed in the submodule repo, then
   the pin bumped here. Never leave a submodule pointing at an unpushed commit.
+
+### Development practice
+
+- **Start from the request, and stay inside it.** Do what was asked, in the
+  package it belongs to. When the work turns up something else (a bug next
+  door, a refactor that would help, a flaky test), write it down and report it;
+  do not fix it in the same change. If the task cannot be done without growing,
+  stop and say what it now needs before going on.
+- **Read before writing.** Read the package's README, its tests and the code
+  you will change. Find out how the thing is tested and run that test before
+  the first edit, so you know what passed beforehand.
+- **Branch first.** Never commit to `main`. One branch per change, named for it
+  (`golem_slam/inflation_radius`, `tests/estop-server`). Commit or push only
+  when asked.
+- **Keep refactors and behaviour changes apart.** A commit either moves code
+  without changing what it does, or changes what it does; a reviewer must be
+  able to tell which from the message. A rename, a deletion and a new feature
+  are three commits, and usually three pull requests.
+- **Prove it by running it.** A change is not done until the test that covers
+  it has run and passed on the final code. Which tests gate which area:
+
+  | You changed | Run at least |
+  |---|---|
+  | a `core_ws/src` package | that package's tests (its README's Tests section) |
+  | `golem_robocasa/` | `tests/robocasa/run_in_container.sh`, `tests/robocasa/g1/run_in_container.sh`, both `tests/robocasa/surface/run.sh`, `tests/sim/test_sim_stack.sh --h12` and `--g1` |
+  | `CL_isaaclab_sim/` | `tests/isaaclab/run_in_container.sh`, `run_smoke.sh`, and the GPU check of what you touched |
+  | `docker/` or a launcher | `python -m unittest discover -s tests/docker` |
+  | a bringup or anything both robots run | the closed-loop test of **both** robots |
+
+  A test you could not run (no GPU, no Mac, no robot) is named as not run, never
+  left out.
+- **Measure before claiming.** A performance claim needs a before and an after
+  taken on the same machine in the same session, repeated, with the numbers in
+  the report. "Should be faster" is not a result.
+- **Report failures as they are.** Say which tests failed, with the line that
+  failed. A failure that was already there is reported as already there, with
+  how you know (the same test run on `main`); it is not grounds to skip the
+  test or to weaken it. Never edit a test to make it pass without saying what
+  the test was protecting.
+- **A new feature is off until someone turns it on,** wherever the shared
+  infra is concerned: a flag or knob whose default keeps today's behaviour, as
+  the sims' opt-in knobs do.
+- **Leave no debris.** No debug prints, scratch scripts, commented-out code or
+  one-off measurement files in the tree. Do not add files you did not create
+  for the change (`git add` by path, never `git add -A` on a tree with
+  untracked data such as `core_ws/bags/`).
+- **Update the docs the change makes wrong** in the same change: this file,
+  the package README, the test README. Describe what the code does now.
+
+### Pull requests
+
+A pull request is one reviewable idea. Someone who has not followed the work
+must be able to read it in one sitting and say yes or no.
+
+- **One concern per pull request.** If the title needs "and" or ";" it is two
+  pull requests. A feature in a submodule and an unrelated refactor here do not
+  share one because they were written in the same session.
+- **Small enough to review.** Aim under about 400 changed lines outside tests
+  and generated files. Past that, split it: the mechanical part first (renames,
+  moves, deletions, with no behaviour change), then the behaviour change on top.
+- **The description states**, in this order: what changes and why, in two or
+  three sentences; what was run and its result (a table of test and outcome);
+  what was **not** run and why; any failure that predates the change; anything
+  the reviewer must do (merge order, a re-pin, a rebuild, a stale install to
+  delete).
+- **Submodules go first.** Open the submodule's pull request, link it, and say
+  in this repo's pull request that it pins that commit. Merge the submodule's
+  with a merge commit, so the pinned hash stays on its `main`; after a squash or
+  rebase, re-pin before merging here.
+- **Shared infra gets its own pull request** and says so in the title
+  (`golem_safety: ...`, `docker: ...`, `golem_robocasa: ...`), with the effect
+  on each robot and on sim and real spelled out.
+- **Do not merge your own pull request,** and do not push to a branch someone
+  else opened unless asked.
 
 ## 6. Bringup: how the robot starts
 
@@ -625,8 +702,10 @@ what the sim publishes re-records the golden in the same commit.
 
 **Isaac (`CL_isaaclab_sim/sim_main.py`, H1-2 only)** — publishes `rt/lowstate`
 (`mode_machine` 6) and optional `rt/inspire/state` over CycloneDDS, `/clock`,
-three RealSense RGBD camera streams with camera info, and
-`/livox/{lidar,pointcloud,imu}`. Consumes
+three RealSense RGBD camera streams with camera info,
+`/livox/{lidar,pointcloud,imu}`, and two aliases of its own that the real robot
+does not publish, `/lidar/first_link` (the point cloud) and `/imu/base_link`
+(`ros_sensor_bridge.py`); stack code must not depend on the aliases. Consumes
 `rt/lowcmd` and optional `rt/inspire/cmd`. The default asset is the floating-base Magpie H1-2; `--hand_type inspire`
 selects the Inspire fixture. Magpie exposes the real gripper state, services,
 and DeliGrasp action through a native ROS process inside the Isaac container.
@@ -672,22 +751,19 @@ Leave it there. A bump to `4a1def9` on 2026-08-05 broke both sim images and was
 reverted; the same trap is still armed.
 
 Why it breaks: the driver and Livox-SDK2 are **separate upstream repos that ship
-paired halves of the same feature**, but only the driver is pinned here — both
-Dockerfiles install the SDK with an unpinned `git clone --depth 1 …master`
-(`RosDockerfile` §2, `RobocasaDockerfile` near the end). That clone sits in a
-layer *above* the driver's `COPY`/build, and Docker invalidates downward only,
-so bumping the driver rebuilds it against whatever SDK headers your cache
-happens to hold. `4a1def9` (Avia2) calls `kLivoxLidarDoubleEchoData` /
-`LivoxLidarDoubleEchoRawPoint`, added in SDK commit `08f523c` — against an
-older cached SDK it fails with "was not declared in this scope".
-**Stale, not re-verified:** every image that builds the SDK checks out
-Livox-SDK2 at `08f523c` (`RosDockerfile` §2 and `RobocasaDockerfile`;
-`tests/docker/test_source_pins.py` keeps them on one commit); the unpinned
-`master` clone described in this paragraph is gone. The pin rule above stands.
+paired halves of the same feature**, and each is pinned on its own: the driver
+by the submodule, the SDK by a full commit hash in every Dockerfile that builds
+it (`08f523c`, checked out in `RosDockerfile` §2, `RobocasaDockerfile` and both
+`docker/mac/` images; `tests/docker/test_source_pins.py` keeps them on one
+commit). A driver newer than the pinned SDK calls symbols that SDK lacks:
+`4a1def9` (Avia2) calls `kLivoxLidarDoubleEchoData` /
+`LivoxLidarDoubleEchoRawPoint`, which arrive with SDK commit `08f523c`, and
+against an older SDK it fails with "was not declared in this scope". So a
+driver bump is never one change in one place.
 
-The failure is silent. Upstream's `build.sh` ends in `popd`, so it exits 0 even
-when its colcon build fails, and `launch_ros.sh` doesn't check either. The image
-builds "successfully" with `/opt/livox_ws/install/livox_ros_driver2/` holding
+The failure can be silent. Upstream's `build.sh` ends in `popd`, so it exits 0 even
+when its colcon build fails. An image that does not check the result (the x86
+`RobocasaDockerfile`) builds "successfully" with `/opt/livox_ws/install/livox_ros_driver2/` holding
 only `package.*` stubs — no `local_setup.bash`, no Python module — and you find
 out at runtime:
 
@@ -695,15 +771,14 @@ out at runtime:
 ModuleNotFoundError: No module named 'livox_ros_driver2'   # h12_sensors.py, or g1/g1_sensors.py for the G1
 ```
 
-Whether it reproduces depends on how old your Docker cache is, so "it built on
-my machine" proves nothing.
-
 If you genuinely need a newer driver (Avia2/Mid-360s hardware), do it in one
-change: add `ARG LIVOX_SDK2_REF=<matching SDK sha>` to **every** Dockerfile that
-builds the SDK, with a pinned `git fetch --depth 1 origin "$LIVOX_SDK2_REF"`, keep the SHAs
-identical (the images must agree on the `CustomMsg` wire format), and assert the
-build worked — `python3 -c 'from livox_ros_driver2.msg import CustomMsg'` — so a
-mismatch fails the image build instead of shipping broken.
+change: bump the submodule and the SDK commit in **every** Dockerfile that
+builds the SDK together, keep the hashes identical (the images must agree on
+the `CustomMsg` wire format; `test_source_pins.py` fails otherwise), and assert
+in the image build that the driver built
+(`python3 -c 'from livox_ros_driver2.msg import CustomMsg'`), so a mismatch
+fails the build instead of shipping broken. `docker/mac/RobocasaDockerfile`
+has that assertion; the x86 `RobocasaDockerfile` does not yet.
 
 ### Comments and docstrings
 
@@ -813,7 +888,7 @@ describe the new behaviour.
   (`control.state_lag_ms`, on domain 0; off in every G1 config), and with
   `use_estop` a hardware estop that is triggered, unplugged or silent. What it
   writes comes from the config's `estop_response`:
-  - H1-2 (all 8 configs): 50 zero-gain commands (mode 0, every value 0), then
+  - H1-2 (all 7 configs): 50 zero-gain commands (mode 0, every value 0), then
     no `rt/lowcmd` until restart.
   - G1 (all 3 configs): the estop command, written every cycle until restart
     (`mode: zero`, `after: keep_writing`: every motor off, so the robot drops;
@@ -997,8 +1072,8 @@ on the real G1 yet; follow `docs/g1/first-session.md` step by step.
 5. Run the three-terminal flow in §9; confirm with `ros2 topic hz /lowstate`
    and `ros2 action list | grep skill` inside `golem_ros`.
 6. Trigger `/skill/grasp` or the frontier explorer (§7).
-7. Read first: `docs/RUNNING.md` (run flows), `docker/BUILD.md` (build system),
-   your target package's source. `docs/index.md` indexes the rest of `docs/`; the
+7. Read first: §5's development practice and pull request rules, `docs/RUNNING.md`
+   (run flows), `docker/BUILD.md` (build system), your target package's source. `docs/index.md` indexes the rest of `docs/`; the
    G1 starts at `docs/g1/index.md`.
 
 ### Common pitfalls

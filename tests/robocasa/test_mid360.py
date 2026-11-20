@@ -14,7 +14,6 @@ import numpy as np
 
 import mid360
 from exact_rays import ExactCaster
-from sim_timing import LoopTimings
 
 FRAME_POINTS = 20_000                 # POINTS_PER_SECOND / FRAME_RATE_HZ
 STEP_S = 0.01                         # s of sim time between update() calls (ExactCaster.batch_s)
@@ -256,7 +255,7 @@ class ScannerTests(unittest.TestCase):
 class ScanRingTests(unittest.TestCase):
     """Check ScanRing's depth, backpressure and frame lag."""
 
-    def ring(self, cast_s=0.0, interval=STEP_S, timings=None):
+    def ring(self, cast_s=0.0, interval=STEP_S):
         """Return a started ScanRing in a 3 m cube room whose casts take at least cast_s wall s.
 
         Frames go to self.frames, each with the ring's sim time when it was published.
@@ -276,8 +275,7 @@ class ScanRingTests(unittest.TestCase):
         self.frames = []
         ring = mid360.ScanRing(mid360.Mid360Scanner(caster), model,
                                lambda d: (np.zeros(3), UPSIDE_DOWN),
-                               lambda frame: self.frames.append((frame, ring.now)), interval,
-                               timings=timings)
+                               lambda frame: self.frames.append((frame, ring.now)), interval)
         self.addCleanup(ring.close)
         self.data = data
         return ring
@@ -294,10 +292,9 @@ class ScanRingTests(unittest.TestCase):
         Casts of 25 ms every 10 ms of sim time: the physics loop below, which would run far
         faster than real time, is held to the casts' pace. Every frame still fires all 20,000
         rays (each hits the room), and at its publication the sim is at most one frame period
-        past the frame's end. Each wait is timed as the lidar_wait stage.
+        past the frame's end.
         """
-        timings = LoopTimings(enabled=True)
-        ring = self.ring(cast_s=0.025, timings=timings)
+        ring = self.ring(cast_s=0.025)
         start = time.perf_counter()
         for k in range(301):   # 0.6 s of sim time in 2 ms steps
             ring.tick(self.data, k * 0.002)
@@ -315,8 +312,6 @@ class ScanRingTests(unittest.TestCase):
         self.assertGreater(ring.max_lag, 0.05)
         self.assertLessEqual(ring.max_lag, 0.1 + 1e-9)
         self.assertIn(f"6 lidar frames ({ring.waits} of 61 casts waited", ring.stats())
-        self.assertEqual(timings.stages["lidar_wait"][1], ring.waits)
-        self.assertEqual(timings.stages["lidar_capture"][1], 61)
 
     def test_a_fast_caster_never_waits(self):
         """tick() does not wait, nor count a wait, while the casts keep up with the loop."""

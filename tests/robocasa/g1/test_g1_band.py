@@ -2,7 +2,7 @@
 
 The kitchen is tests/robocasa/surface/run.sh's: layout 9, style 9, seed 42. The env is built
 headless with g1_robosuite.make_kitchen_env, the robot spawned and the band built by
-g1_mujoco's own spawn() and make_band(), and the physics stepped as sim_loop steps it: the
+g1_robot's own spawn() and make_band(), and the physics stepped as sim_loop steps it: the
 interface's motor torques (SimInterface with no rt/lowcmd, so every motor off), the band's
 force (mujoco_env.apply_band), mj_step. Run it in the robocasa image with golem_robocasa on PYTHONPATH;
 tests/robocasa/g1/run_in_container.sh runs it with no network on ROS_DOMAIN_ID 97, because
@@ -23,7 +23,7 @@ import function_tests
 import mujoco_env
 import robosuite_common
 import sim_common
-from g1 import g1_mujoco, g1_robosuite
+from g1 import g1_robot, g1_robosuite
 from g1.sim_names import NameResolver
 from g1.unitree_interface import SimInterface
 
@@ -46,7 +46,7 @@ def _sim():
     env.reset()
     model, data = env.sim.model._model, env.sim.data._data
     resolver = NameResolver(model, robot_prefix=env.robots[0].robot_model.naming_prefix)
-    g1_mujoco.spawn(env, resolver)
+    g1_robot.spawn(env, resolver)
     iface = SimInterface(model, data, resolver)
     spawn = (data.qpos.copy(), data.qvel.copy(), float(data.time))
     return env, model, data, resolver, iface, spawn
@@ -60,7 +60,7 @@ def _from_spawn():
     data.xfrc_applied[:] = 0.0
     mujoco.mj_forward(model, data)
     iface.sim_time = t
-    band, body = g1_mujoco.make_band(data, resolver)
+    band, body = g1_robot.make_band(data, resolver)
     return model, data, resolver, iface, band, body
 
 
@@ -89,7 +89,7 @@ def test_spawn_clear_of_floor_and_kitchen():
     contacts = robosuite_common.robot_env_contacts(model, data)
     assert not contacts, f"{len(contacts)} robot<->kitchen contacts at spawn"
     assert np.allclose(band.point - data.xpos[body], [0.0, 0.0, 0.01])
-    # Twice the H1-2 band's stiffness: at its 1e4 N/m the limp G1 keeps rocking (g1_mujoco.py).
+    # Twice the H1-2 band's stiffness: at its 1e4 N/m the limp G1 keeps rocking (g1_robot.py).
     assert (band.stiffness, band.damping, band.length) == (2e4, 2e3, 0)
     assert band.enabled
 

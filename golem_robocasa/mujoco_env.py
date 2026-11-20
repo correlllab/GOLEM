@@ -1,7 +1,7 @@
 """Model the elastic band both sim runners hang the robot from until a policy drives it, and log a fall.
 
 The band is a spring-damper pulling a body (the torso) toward a fixed anchor
-above its spawn. h12_mujoco.sim_loop and g1.g1_mujoco.sim_loop apply it every
+above its spawn. golem_sim.sim_loop applies it every
 physics step while it is enabled (apply_band); SPACE in the viewer or
 /elastic_band/toggle (MeasurementBridge) releases it. FallLogger logs the
 band's release and the robot's first fall, which the closed-loop tests read.

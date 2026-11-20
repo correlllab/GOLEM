@@ -4,7 +4,7 @@ golem_skills' frontier explorer walks the G1 through Nav2 from the spawn until i
 RoboCasa kitchen explored, or its time runs out. test_sim_explore.sh runs the roles and has the
 usage. Built on test_sim_nav.py.
 
-  sim     test_sim_nav.py's sim role as it is: h12_mujoco.py --g1, recording the robot's
+  sim     test_sim_nav.py's sim role as it is: golem_sim.py --g1, recording the robot's
           state (<out>/sim.npz) and any robot-environment contact (<out>/contacts.json),
           and at the spawn the kitchen's occupancy from the sim's own geometry
           (<out>/scene.npz), among it the floor the robot can reach: the cells of a 5 cm
@@ -357,7 +357,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("role", choices=("sim", "drive", "report"))
     parser.add_argument("--out", required=True, help="the shared output directory")
-    parser.epilog = "sim: the G1 sim's arguments (h12_mujoco.py --g1) follow a --"
+    parser.epilog = "sim: the G1 sim's arguments (golem_sim.py --g1) follow a --"
     argv = sys.argv[1:]
     sim_args = argv[argv.index("--") + 1:] if "--" in argv else []
     args = parser.parse_args(argv[:len(argv) - len(sim_args) - ("--" in argv)])

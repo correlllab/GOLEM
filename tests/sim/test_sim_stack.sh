@@ -7,7 +7,7 @@
 #   tests/sim/test_sim_stack.sh --g1
 #   GOLEM_TEST_VIDEO=1 tests/sim/test_sim_stack.sh --h12    # and OUT/stack.mp4
 #
-# Builds core_ws and starts the robot's sim (h12_mujoco.py --h12 or --g1)
+# Builds core_ws and starts the robot's sim (golem_sim.py --h12 or --g1)
 # headless, with its sensors on, in the layout 9 / style 9 / seed 42 kitchen,
 # the spawn backed 2.0 m into open floor. In its network namespace a ros
 # container then runs the robot's sim bringup with navigation

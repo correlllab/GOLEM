@@ -32,7 +32,7 @@ standing, then it walks 5 s at 0.3 m/s. A passing run ends with
 ```bash
 # terminal 1: the sim, the spawn backed 2 m into open floor
 GOLEM_SPAWN_BACKOFF=2.0 docker/scripts/docker_run.sh robocasa --g1 --layout 9 --style 9 --seed 42
-# wait for "[g1_mujoco] ROS bridges up"
+# wait for "[golem_sim] ROS bridges up"
 
 # terminal 2: wait for the leg node's "elastic band released" line
 docker/scripts/docker_run.sh ros

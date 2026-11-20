@@ -1,6 +1,6 @@
 """Serve the H1-2 sim's MAGPIE grippers on the real magpie_control driver's ROS surface.
 
-One MagpieHandBridge serves one gripper. h12_mujoco.py spins one per side on
+One MagpieHandBridge serves one gripper. golem_sim.py spins one per side on
 its background MultiThreadedExecutor, and its physics loop calls tick() after
 every step; every MjData or MjModel access holds the sim lock, since mj_step
 runs on the main thread. The state rate and the DeliGrasp settles count sim

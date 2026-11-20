@@ -104,7 +104,7 @@ from pathlib import Path
 import sys
 root, sim, output = sys.argv[1:]
 source = (Path(root)/f'docker/scripts/launch_{sim}.sh').read_text()
-entry = '/home/code/CL_isaaclab_sim/sim_main.py' if sim == 'isaac' else 'h12_mujoco.py'
+entry = '/home/code/CL_isaaclab_sim/sim_main.py' if sim == 'isaac' else 'golem_sim.py'
 old = entry if sim == 'isaac' else f'exec python -u {entry}'
 assert source.count(old) == 1, 'Canonical launcher changed; update test instrumentation'
 # The copy is mounted at /test_launcher.sh, away from runtime_common.sh, so that path is made absolute.

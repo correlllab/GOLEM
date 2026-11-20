@@ -323,7 +323,7 @@ def place_robot_collision_free(env, base_pos, base_quat, step=0.02, max_iters=50
 # of the pelvis at counter-top height: 8 of 12 kitchens tried needed the pelvis
 # 0.27 m further back than the anchor to clear the counter, so it stands 0.30 m
 # back. Pelvis z 0.80 keeps the soles ~1.5 cm clear at the stance until
-# g1_mujoco.spawn re-places the robot.
+# g1_robot.spawn re-places the robot.
 POS_OFFSET = (0.0, -0.30, 0.80)
 
 

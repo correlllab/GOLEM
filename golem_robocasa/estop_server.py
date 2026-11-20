@@ -42,7 +42,7 @@ class EstopServer:
     def __init__(self, port: int, tag: str):
         """Bind the port; raise OSError when another process holds it.
 
-        tag prefixes the log lines (e.g. "h12_mujoco").
+        tag prefixes the log lines (e.g. "golem_sim").
         """
         self._tag = tag
         self._lock = threading.Lock()

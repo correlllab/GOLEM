@@ -3,7 +3,7 @@
 Nav2 walks the G1 to a goal in the RoboCasa kitchen. test_sim_nav.sh runs the roles and has
 the usage.
 
-  sim     in the robocasa container: h12_mujoco.py --g1 as __main__, recording
+  sim     in the robocasa container: golem_sim.py --g1 as __main__, recording
           the robot's state as test_sim_bringup.py's sim role does (<out>/sim.npz),
           and also, after every physics step, any penetrating contact between a
           robot geom and anything but the floor (<out>/contacts.json). At startup,
@@ -383,7 +383,7 @@ class NavRecorder(bringup_test.Recorder):
 
 
 def run_sim(out, sim_args):
-    """Run h12_mujoco.py --g1 with the recorder, the scene map and the goal; write sensors.json, for the drive, first."""
+    """Run golem_sim.py --g1 with the recorder, the scene map and the goal; write sensors.json, for the drive, first."""
     bringup_test.write_sensor_config(out)
     bringup_test.run_recorded_sim(
         out, "g1", sim_args, NavRecorder(out), "test_sim_nav",
@@ -1135,7 +1135,7 @@ class Report(bringup_test.Report):
         self.check("no contact", not c["contact_steps"], f"{c['steps']} physics steps: {text}")
 
     def fall_log(self):
-        """Check the sim's fall logger (golem_robocasa/g1/g1_mujoco.py), which looks at every physics step, logged no fall."""
+        """Check the sim's fall logger (golem_robocasa/g1/g1_robot.py), which looks at every physics step, logged no fall."""
         path = os.path.join(self.out, "sim.log")
         if not os.path.exists(path):
             self.check("no fall logged", False, "no sim.log")
@@ -1308,7 +1308,7 @@ def main():
     parser.add_argument("--out", required=True, help="the shared output directory")
     parser.add_argument("--keep-lidar", action="store_true",
                         help="drive: keep the /livox/lidar frames from the goal on (lidar_frames.npz)")
-    parser.epilog = "sim: the G1 sim's arguments (h12_mujoco.py --g1) follow a --"
+    parser.epilog = "sim: the G1 sim's arguments (golem_sim.py --g1) follow a --"
     argv = sys.argv[1:]
     sim_args = argv[argv.index("--") + 1:] if "--" in argv else []
     args = parser.parse_args(argv[:len(argv) - len(sim_args) - ("--" in argv)])

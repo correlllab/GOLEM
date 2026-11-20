@@ -104,13 +104,13 @@ services:
       - QT_X11_NO_MITSHM=1
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-1}
       # H1-2: m of clearance between the robot and any non-floor geom at
-      # spawn. Empty: the task's spawn_margin, else 0.20 (h12_mujoco.py).
+      # spawn. Empty: the task's spawn_margin, else 0.20 (golem_sim.py).
       - GOLEM_SPAWN_MARGIN=${GOLEM_SPAWN_MARGIN:-}
       # Both robots: m the robot is backed off the spawn counter into open
       # floor, for walking and navigation. Empty: 0, at the counter.
       - GOLEM_SPAWN_BACKOFF=${GOLEM_SPAWN_BACKOFF:-}
       # H1-2: 0 keeps the robot's own links in its lidar scan as occluders.
-      # Empty: they are filtered out (h12_mujoco.py).
+      # Empty: they are filtered out (golem_sim.py).
       - GOLEM_LIDAR_SELF_FILTER=${GOLEM_LIDAR_SELF_FILTER:-}
       # Both robots: the target real-time factor, sim seconds per wall second
       # (golem_robocasa/sim_common.py). Empty: 1, real time; 2 twice real time;

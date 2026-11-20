@@ -51,42 +51,30 @@ PYTHONPATH=golem_robocasa python3 -m unittest discover -s tests/robocasa -p test
 factor); its gripper tests, which check that the grippers' rates count sim time, need rclpy and
 are skipped outside the container.
 
-To measure the actual kitchen loop, add `--timing` to a normal launch:
+To measure the actual kitchen loop, read the sim's own log of a normal launch:
 
 ```bash
-docker/scripts/docker_run.sh robocasa --headless --task OpenFridge --layout 1 --style 1 --seed 42 --timing
+docker/scripts/docker_run.sh robocasa --headless --task OpenFridge --layout 1 --style 1 --seed 42
 ```
 
-Every five wall-clock seconds, `[sim-timing]` reports simulation/wall-clock time
-(RTF: 1 means real time) and mean/max milliseconds per stage call, with call
-counts. `camera_render` includes scene capture and both render passes per
-camera (with the wait for `mid360.GL_LOCK`, which the cameras and the lidar's
-GPU caster take turns on); `camera_depth_render` the depth stream's render;
-`camera_publish` image conversion, compression, and publishing; `camera_cloud`
-the point cloud. `lidar_capture` is the physics thread's copy of the poses one
-lidar cast reads, under the sim lock; `lidar_wait` the physics thread waiting
-for a free slot when the lidar's thread is a frame behind; `lidar_cast` one
-cast of the rays due since the last (every caster's `batch_s` of sim time, on
-the lidar's thread); `lidar_publish` packing and publishing a frame on both
-lidar topics. The line ends with the lidar's counts: frames, the casts that
-waited, and how far behind the sim a frame was at most. Physics includes lock
-acquisition and PD control; `lowstate` is the `rt/lowstate` sample built,
-signed and published after every physics step. Timings are silent unless requested.
+Every 30 s of sim time it logs `real-time factor ... over the last 30 s`, the share of
+wall time the loop slept, and the sensors' counts: lidar frames, the casts that made the
+physics wait and how far behind the sim a frame was at most, and on the G1 the head
+camera's frames published and dropped. `GOLEM_SIM_RATE=max` gives the unpaced ceiling.
 Both sims build that sample with numpy (`LowStateWriter` in `unitree_common.py`);
 `test_lowstate_writer.py` checks its bytes against `unitree_sdk2py`'s serializer and
 CRC, and that they take at most a third of the SDK path's time, printing both paths'
 microseconds per sample.
 
 Compare the same task/layout/style/seed, display mode, subscribers, and hardware.
-Discard the first interval for renderer warm-up. PD torque is recomputed every
+Discard the first line for renderer warm-up. PD torque is recomputed every
 physics step. RoboCasa fixture updates and success checks run once per control
 step (`env.control_timestep`, 20 Hz), matching RoboCasa's own `env.step`.
 
 Camera frames are rendered from a partial `MjData` snapshot on a worker
 thread, overlapping physics, with one job in flight. A due job waits for the
-previous one rather than being dropped, so every scheduled frame is published.
-`camera_capture` is the locked snapshot, `camera_wait` is time the loop blocked
-on the previous job. The MID-360's casts run on their own thread from a ring of
+previous one rather than being dropped, so every scheduled frame is published
+(the H1-2's cameras; the G1's head camera drops a frame due while it renders). The MID-360's casts run on their own thread from a ring of
 pose snapshots (`mid360.ScanRing`): the ring holds one frame of casts, and when
 the thread falls that far behind the loop waits for it, so the real-time factor
 drops instead of the lidar falling more than a frame behind.
@@ -94,7 +82,7 @@ The launcher selects EGL for offscreen camera rendering in both display modes;
 the camera context is created before the passive viewer opens, because a new
 EGL context cannot be made current once the GLFW window exists. The viewer
 draws its own `MjData`, refreshed and synced at 60 Hz on a separate thread
-(`viewer_sync.py`, shared by both sims; the H1-2's `viewer` stage), so
+(`viewer_sync.py`, shared by both robots), so
 `handle.sync()` never blocks physics. Mouse perturbation forces from each sync
 are applied to the simulation on every step. The thread also shows the measured
 real-time factor (sim time over the last second of wall time), the

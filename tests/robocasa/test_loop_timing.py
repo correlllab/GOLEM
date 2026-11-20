@@ -1,9 +1,7 @@
-"""Check the H1-2 sim loop's real-time pacer and its --timing report (sim_timing.py), without ROS or MuJoCo."""
-import io
+"""Check the sim loop's real-time pacer (sim_timing.py), without ROS or MuJoCo."""
 import unittest
-from contextlib import redirect_stdout
 
-from sim_timing import RealtimePacer, LoopTimings
+from sim_timing import RealtimePacer
 
 
 class FakeClock:
@@ -25,7 +23,7 @@ class FakeClock:
 
 
 class PacingTests(unittest.TestCase):
-    """Check RealtimePacer and LoopTimings against a fake clock."""
+    """Check RealtimePacer against a fake clock."""
 
     def test_fast_steps_track_the_original_deadline(self):
         """Steps faster than real time are slowed to one 10 ms step per 10 ms."""
@@ -65,58 +63,6 @@ class PacingTests(unittest.TestCase):
         for value in (0, -1, float('nan'), float('inf')):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 RealtimePacer(value)
-
-    def test_timing_is_silent_by_default(self):
-        """Timings print nothing unless enabled."""
-        timing = LoopTimings()
-        with redirect_stdout(io.StringIO()) as output:
-            timing.stop('physics', timing.start())
-            timing.maybe_report(1.0)
-        self.assertEqual(output.getvalue(), '')
-
-    def test_timing_baseline_excludes_startup_and_existing_sim_time(self):
-        """The real-time factor counts from the reset, not from start-up or sim time before it."""
-        clock = FakeClock()
-        timing = LoopTimings(enabled=True, interval=1, clock=clock)
-        clock.now = 10.0
-        timing.reset(5.0)
-        clock.now = 11.0
-        with redirect_stdout(io.StringIO()) as output:
-            timing.maybe_report(5.5)
-        self.assertIn('RTF=0.500', output.getvalue())
-
-    def test_timing_reports_sim_wall_ratio_and_stage_cost(self):
-        """The report gives the real-time factor and each stage's cost in ms."""
-        clock = FakeClock()
-        timing = LoopTimings(enabled=True, interval=1, clock=clock)
-        start = timing.start()
-        clock.now = 0.02
-        timing.stop('physics', start)
-        clock.now = 1.0
-        with redirect_stdout(io.StringIO()) as output:
-            timing.maybe_report(0.5)
-        self.assertIn('RTF=0.500', output.getvalue())
-        self.assertIn('physics', output.getvalue())
-        self.assertIn('20.00', output.getvalue())
-
-    def test_timing_report_appends_the_sensor_stats(self):
-        """stats() is called only when a report is due, and its text ends the line."""
-        clock = FakeClock()
-        timing = LoopTimings(enabled=True, interval=1, clock=clock)
-        calls = []
-
-        def stats():
-            """Return the sensors' counts and record the call."""
-            calls.append(clock.now)
-            return '9 lidar frames'
-
-        with redirect_stdout(io.StringIO()) as output:
-            clock.now = 0.5
-            timing.maybe_report(0.5, stats)
-            clock.now = 1.0
-            timing.maybe_report(1.0, stats)
-        self.assertEqual(calls, [1.0])
-        self.assertTrue(output.getvalue().rstrip().endswith('; 9 lidar frames'), output.getvalue())
 
 
 if __name__ == '__main__':

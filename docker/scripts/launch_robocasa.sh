@@ -1,8 +1,8 @@
 #!/bin/bash
 # The robocasa container's command: build msgs_ws, then run the RoboCasa
-# simulator (golem_robocasa/h12_mujoco.py) of the selected robot.
+# simulator (golem_robocasa/golem_sim.py) of the selected robot.
 #
-# Usage: launch_robocasa.sh [h12_mujoco.py arguments...]
+# Usage: launch_robocasa.sh [golem_sim.py arguments...]
 #   e.g. --headless or --layout 9 --style 9 --seed 42. Without a DISPLAY,
 #   --headless is added (no passive viewer).
 # Environment: ROS_DOMAIN_ID (1..232, 1 when unset), DISPLAY,
@@ -58,4 +58,4 @@ fi
 cd /home/code/golem_robocasa
 # -u: Compose reads stdout through a pipe, which would block-buffer print() and
 # hold back the "ROS bridges up" readiness line on a quiet headless run.
-exec python -u h12_mujoco.py "$@"
+exec python -u golem_sim.py "$@"

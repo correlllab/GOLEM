@@ -443,6 +443,17 @@ class LowCmdLatch:
             self.commanded = True
             log(f't={cmd.time:.3f}s: first valid rt/lowcmd; it drives all {self._motors} body motors')
 
+    def physics_reset(self):
+        """Restamp the latched rt/lowcmd at the sim time after MuJoCo reset the scene.
+
+        The timeout then still measures the silence since the last frame
+        instead of waiting for the old sim time to come round again.
+        """
+        now = float(self.data.time)   # the subclass's MjData
+        self.sim_time = now
+        if self._lowcmd is not None:
+            self._lowcmd = self._lowcmd._replace(time=now)
+
     def _lowcmd_torques(self, q, dq, now):
         """Return the latched command's torques at q, dq, or zeros once it is older than the timeout."""
         cmd = self._lowcmd

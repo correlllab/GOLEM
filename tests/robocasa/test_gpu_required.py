@@ -5,7 +5,7 @@ and casts the lidar on the CPU (RenderModeTests).
 
 sim_common.egl_renderer() is the probe and sim_common.require_gpu() the stop. The probe is made
 to fail three ways: a failing probe passed in, MuJoCo not on EGL (MUJOCO_GL=osmesa) and Mesa's
-software EGL in place of NVIDIA's, the last two in h12_mujoco.py run as a subprocess for each
+software EGL in place of NVIDIA's, the last two in golem_sim.py run as a subprocess for each
 robot; with the probe failing, --help and a usage error still answer. Run it in the robocasa
 image, on its GPU:
 ROS_DOMAIN_ID=231 tests/robocasa/run_in_container.sh -p test_gpu_required.py
@@ -17,7 +17,7 @@ import unittest
 
 import sim_common
 
-SIM = os.path.join(os.path.dirname(os.path.abspath(sim_common.__file__)), "h12_mujoco.py")
+SIM = os.path.join(os.path.dirname(os.path.abspath(sim_common.__file__)), "golem_sim.py")
 # glvnd's vendor file for Mesa's EGL: with only it listed, EGL renders on Mesa's software
 # rasteriser even where NVIDIA's EGL is installed.
 MESA_EGL_VENDOR = "/usr/share/glvnd/egl_vendor.d/50_mesa.json"
@@ -94,7 +94,7 @@ class SimStartTests(unittest.TestCase):
     """Run each robot's sim with the probe made to fail and check it stops at start."""
 
     def start(self, robot, *args, **env):
-        """Run h12_mujoco.py for robot with args (default: headless in the Blank task) and env added.
+        """Run golem_sim.py for robot with args (default: headless in the Blank task) and env added.
 
         Returns the CompletedProcess.
         """

@@ -37,7 +37,7 @@ GRIPPER_LEFT_XML = os.path.join(_ASSETS, "grippers", "magpie_left_gripper.xml")
 # The robot MJCF's head camera, whose optical frame is the URDF head_camera_link.
 HEAD_CAMERA = "head_cam"
 
-# robosuite's init_qpos of the 27 actuated joints; h12_mujoco puts the robot in
+# robosuite's init_qpos of the 27 actuated joints; h12_robot puts the robot in
 # its own spawn pose after the reset.
 _INIT_QPOS = np.zeros(27)
 
@@ -198,7 +198,7 @@ def place_robot_collision_free(env, base_pos, base_quat, step=0.02, max_iters=50
 
 
 # RoboCasa's placement offset (m): the pelvis z. The soles are 1.041 m below
-# the pelvis at init_qpos, so 1.05 keeps them ~1 cm clear until h12_mujoco
+# the pelvis at init_qpos, so 1.05 keeps them ~1 cm clear until h12_robot
 # re-places the robot.
 POS_OFFSET = (0.0, 0.0, 1.05)
 

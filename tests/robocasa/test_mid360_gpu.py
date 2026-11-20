@@ -18,7 +18,7 @@ import numpy as np
 import mid360
 import sim_common
 from exact_rays import ExactCaster
-from spawn_scene import import_h12_mujoco
+from spawn_scene import import_h12_robot
 
 LAYOUT, STYLE, SEED = 9, 9, 42        # the surface probe's kitchen
 FRAME_POINTS = 20_000                 # one 10 Hz frame of the pattern
@@ -79,15 +79,15 @@ def _rotation(axis, degrees):
 
 @functools.lru_cache(maxsize=None)
 def _g1():
-    """Return the G1's Kitchen, spawned by g1_mujoco.spawn() at RoboCasa's spawn."""
-    from g1 import g1_lidar, g1_mujoco, g1_robosuite
+    """Return the G1's Kitchen, spawned by g1_robot.spawn() at RoboCasa's spawn."""
+    from g1 import g1_lidar, g1_robot, g1_robosuite
     from g1.sim_names import NameResolver
     env = g1_robosuite.make_kitchen_env(sim_common.random_task(seed=SEED), layout_ids=LAYOUT,
                                         style_ids=STYLE, seed=SEED)
     env.reset()
     model, data = env.sim.model._model, env.sim.data._data
     prefix = env.robots[0].robot_model.naming_prefix
-    g1_mujoco.spawn(env, NameResolver(model, robot_prefix=prefix))
+    g1_robot.spawn(env, NameResolver(model, robot_prefix=prefix))
     mujoco.mj_forward(model, data)
     site = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, prefix + g1_lidar.SITE)
     return Kitchen(model, data, int(model.site_bodyid[site]), g1_lidar.GEOM_GROUPS,
@@ -96,8 +96,8 @@ def _g1():
 
 @functools.lru_cache(maxsize=None)
 def _h12():
-    """Return the H1-2's Kitchen, spawned by h12_mujoco.spawn() at RoboCasa's spawn."""
-    h12_mujoco = import_h12_mujoco()
+    """Return the H1-2's Kitchen, spawned by h12_robot.spawn() at RoboCasa's spawn."""
+    h12_robot = import_h12_robot()
     import h1_2_robosuite
     from sim_names import NameResolver
     env = h1_2_robosuite.make_kitchen_env(sim_common.random_task(seed=SEED), layout_ids=LAYOUT,
@@ -105,7 +105,7 @@ def _h12():
     env.reset()
     model, data = env.sim.model._model, env.sim.data._data
     resolver = NameResolver(model)
-    h12_mujoco.spawn(env, resolver)
+    h12_robot.spawn(env, resolver)
     mujoco.mj_forward(model, data)
     lidar = resolver.body_id("livox_link")
     return Kitchen(model, data, resolver.body_id("torso_link"), H12_GROUPS,

@@ -222,6 +222,29 @@ def left_dir(base_quat):
 LATERAL_OFFSETS = (0.0, 0.1, -0.1, 0.2, -0.2, 0.3, -0.3, 0.4, -0.4, 0.5, -0.5)
 
 
+# Points checked along each start-up arm move, its end included: the arms sweep between stages.
+STARTUP_STEPS = 4
+
+
+def startup_arm_poses(motor_qpos, spawn, stages, first_arm_slot, steps=STARTUP_STEPS):
+    """Return the poses of the controller's start-up arm moves from the spawn pose, for place_robot_collision_free.
+
+    spawn is the body motors' spawn pose (rad) and motor_qpos their qpos indices. stages is
+    ((name, 14 arm angles rad), ...), golem_upper_ik's startup_sequence in order; the 14 arm
+    motors start at slot first_arm_slot. Each move is sampled at steps points, its end
+    included. Returns (qpos indices, values) pairs.
+    """
+    poses = []
+    prev = np.asarray(spawn, dtype=float)
+    for _, arms in stages:
+        target = prev.copy()
+        target[first_arm_slot:first_arm_slot + 14] = arms
+        for a in np.linspace(0.0, 1.0, steps + 1)[1:]:
+            poses.append((motor_qpos, (1.0 - a) * prev + a * target))
+        prev = target
+    return poses
+
+
 def place_robot_collision_free(env, base_pos, base_quat, place, step=0.02, max_iters=50,
                                margin=0.0, poses=(), extra_backoff=0.0,
                                lateral_offsets=LATERAL_OFFSETS, tag="robosuite_common"):

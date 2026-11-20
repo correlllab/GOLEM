@@ -17,8 +17,8 @@ import sim_common
 
 # The --task hooks passed to resolve_task, one per runner, each claiming the Battery and Blank tasks.
 OWN_TASKS = battery_env.TASKS + blank_env.TASKS
-H12_TASKS = {'tag': 'h12_mujoco', 'robot_task': lambda name: sim_common.canonical_task(name, OWN_TASKS)}
-G1_TASKS = {'tag': 'g1_mujoco', 'robot_task': lambda name: sim_common.canonical_task(name, OWN_TASKS)}
+H12_TASKS = {'tag': 'golem_sim', 'robot_task': lambda name: sim_common.canonical_task(name, OWN_TASKS)}
+G1_TASKS = {'tag': 'golem_sim', 'robot_task': lambda name: sim_common.canonical_task(name, OWN_TASKS)}
 
 
 def _resolve(*args, **kwargs):
@@ -38,33 +38,33 @@ class ResolveTaskTests(unittest.TestCase):
 
     def test_abstract_base_picks_the_same_subclass_as_before(self):
         """A seeded abstract task base resolves to a fixed concrete subclass and says so."""
-        task, out = _resolve('OpenDoor', seed=1, tag='h12_mujoco')
+        task, out = _resolve('OpenDoor', seed=1, tag='golem_sim')
         self.assertEqual(task, 'OpenCabinet')
         self.assertEqual(
-            out, "[h12_mujoco] 'OpenDoor' is an abstract task base; randomly selected "
+            out, "[golem_sim] 'OpenDoor' is an abstract task base; randomly selected "
                  "concrete subclass 'OpenCabinet' (from 3 options)\n")
-        task, _ = _resolve('ManipulateDoor', seed=1, tag='h12_mujoco')
+        task, _ = _resolve('ManipulateDoor', seed=1, tag='golem_sim')
         self.assertEqual(task, 'CloseFridge')
 
     def test_log_prefix_is_the_robots_tag(self):
         """resolve_task's message starts with the runner's tag."""
-        _, out = _resolve('OpenDoor', seed=1, tag='g1_mujoco')
-        self.assertTrue(out.startswith("[g1_mujoco] 'OpenDoor' is an abstract task base"), out)
+        _, out = _resolve('OpenDoor', seed=1, tag='golem_sim')
+        self.assertTrue(out.startswith("[golem_sim] 'OpenDoor' is an abstract task base"), out)
 
     def test_concrete_task_is_returned_unchanged(self):
         """A concrete task resolves to itself, silently."""
-        task, out = _resolve('OpenFridge', tag='g1_mujoco')
+        task, out = _resolve('OpenFridge', tag='golem_sim')
         self.assertEqual((task, out), ('OpenFridge', ''))
 
     def test_unknown_task_exits_with_the_tag(self):
         """An unknown task exits with a message under the runner's tag."""
         with self.assertRaises(SystemExit) as caught:
-            sim_common.resolve_task('NoSuchTask', tag='g1_mujoco')
-        self.assertEqual(caught.exception.code, "[g1_mujoco] unknown RoboCasa task 'NoSuchTask'")
+            sim_common.resolve_task('NoSuchTask', tag='golem_sim')
+        self.assertEqual(caught.exception.code, "[golem_sim] unknown RoboCasa task 'NoSuchTask'")
 
     def test_robot_hook_claims_its_task_first(self):
         """A runner's task hook resolves its own task before RoboCasa's."""
-        task, out = _resolve('battery', tag='h12_mujoco',
+        task, out = _resolve('battery', tag='golem_sim',
                              robot_task=lambda name: sim_common.canonical_task(name, battery_env.TASKS))
         self.assertEqual((task, out), ('Battery', ''))
 
@@ -86,7 +86,7 @@ class RefuseKitchenArgsTests(unittest.TestCase):
 
     def _parser(self):
         """Return a parser with the common options."""
-        parser = argparse.ArgumentParser(prog='h12_mujoco.py')
+        parser = argparse.ArgumentParser(prog='golem_sim.py')
         sim_common.add_common_args(parser)
         return parser
 
@@ -122,18 +122,18 @@ class SelectTaskTests(unittest.TestCase):
 
     def _select(self, argv):
         """Return (task, what select_task printed) for argv, with the runners' own tasks."""
-        parser = argparse.ArgumentParser(prog='h12_mujoco.py')
+        parser = argparse.ArgumentParser(prog='golem_sim.py')
         sim_common.add_common_args(parser)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            task = sim_common.select_task(parser, parser.parse_args(argv), tag='g1_mujoco', own_tasks=OWN_TASKS,
+            task = sim_common.select_task(parser, parser.parse_args(argv), tag='golem_sim', own_tasks=OWN_TASKS,
                                           no_kitchen=blank_env.TASKS)
         return task, out.getvalue()
 
     def test_no_task_picks_a_seeded_kitchen_and_says_so(self):
         """Without --task the seeded random pick is chosen and logged under the tag."""
         self.assertEqual(self._select(['--seed', '42']),
-                         ('CloseStandMixerHead', "[g1_mujoco] no --task given; randomly selected "
+                         ('CloseStandMixerHead', "[golem_sim] no --task given; randomly selected "
                                                  "'CloseStandMixerHead'\n"))
 
     def test_own_task_in_any_case_and_its_kitchen_refusal(self):

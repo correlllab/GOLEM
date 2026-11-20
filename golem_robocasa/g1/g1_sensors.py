@@ -58,7 +58,7 @@ touch the sim's MjData:
     renderer's scene (mjv_updateScene, which reads MjData, on the CPU); the
     thread owns the renderer's GL context (it is thread-affine) and renders that
     scene, with the GIL released, so the render, far longer than the copy, does
-    not hold up the physics or rt/lowstate (and g1_mujoco's GIL_SWITCH_S keeps
+    not hold up the physics or rt/lowstate (and g1_robot's GIL_SWITCH_S keeps
     the thread's Python work from doing so). It renders under mid360.GL_LOCK, taking turns with the GPU
     caster (g1_head_camera.py). The scene is handed over, not copied: a frame
     that comes due while the thread still renders the last is dropped (and

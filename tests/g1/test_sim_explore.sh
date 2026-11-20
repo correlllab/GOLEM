@@ -5,7 +5,7 @@
 #
 #   tests/g1/test_sim_explore.sh                    # FAST_LIO on the sim's MID-360
 #
-# Builds core_ws for the G1 and starts the sim (h12_mujoco.py --g1) headless,
+# Builds core_ws for the G1 and starts the sim (golem_sim.py --g1) headless,
 # with its sensors on, in the layout 9 / style 9 / seed 42 kitchen, the spawn
 # backed EXPLORE_BACKOFF m into open floor, as test_sim_nav.sh does. In its
 # network namespace a ros container then runs 'ros2 launch golem_bringup

@@ -12,7 +12,7 @@ CRC, mode_machine 5, mode_pr 0 and finite values on the 29 body motors; other
 frames are dropped. From then on rt/lowcmd drives every body motor, and motor
 mode 0 turns one off. A hand's motors are off until its first rt/dex3/<side>/cmd
 with finite values on its 7 motors; other hand frames are dropped too. Until a
-command drives it the robot hangs from the sim's elastic band (g1_mujoco), as
+command drives it the robot hangs from the sim's elastic band (g1_robot), as
 the H1-2 does in its sim.
 
 Every torque is recomputed every physics step from the latched commands and the
@@ -130,17 +130,6 @@ class SimInterface(LowCmdLatch):
                                 f'{len(msg.motor_cmd)} motors or a value that is not finite')
             return
         self._hand_cmd[side] = cmd
-
-    def physics_reset(self):
-        """Restamp the latched rt/lowcmd at the sim time after MuJoCo reset the scene.
-
-        The timeout then still measures the silence since the last frame
-        instead of waiting for the old sim time to come round again.
-        """
-        now = float(self.data.time)
-        self.sim_time = now
-        if self._lowcmd is not None:
-            self._lowcmd = self._lowcmd._replace(time=now)
 
     def write_ctrl(self):
         """Write every motor's torque for the next physics step, limited to its actuatorfrcrange."""

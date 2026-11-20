@@ -346,7 +346,7 @@ prepare_mounts() {
                      "$GOLEM_CACHE_DIR/isaac/local_share_ov" "$GOLEM_CACHE_DIR/isaac/isaacsim"
             ;;
         robocasa)
-            require_file "$GOLEM_ROOT/golem_robocasa/h12_mujoco.py"
+            require_file "$GOLEM_ROOT/golem_robocasa/golem_sim.py"
             require_file "$GOLEM_ROOT/core_ws/src/magpie_msgs/package.xml"
             require_file "$GOLEM_ROOT/core_ws/src/custom_ros_messages/package.xml"
             # Mount points of the two read-only package mounts inside msgs_ws.

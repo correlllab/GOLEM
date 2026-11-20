@@ -1,6 +1,6 @@
 """Register the Battery task: the robot at the ARPA battery workcell.
 
-Both sim runners run it (``h12_mujoco.py --task Battery``, ``--g1`` for the
+Both sim runners run it (``golem_sim.py --task Battery``, ``--g1`` for the
 G1). It is a robosuite env, not a RoboCasa kitchen, around the robot the
 kitchen tasks use (``H1_2`` or ``G1Dex3``), so every robot0_/gripper0_ name the
 bridges resolve is the kitchen tasks'. The arena is ``CL_Assets/mujoco_assets/battery/

@@ -1,6 +1,6 @@
 """Check that the G1 sim's loop paces to GOLEM_SIM_RATE through the shared pacer (sim_timing.RealtimePacer).
 
-Each test runs g1_mujoco.sim_loop headless in the Blank task, sensors off, in a subprocess
+Each test runs golem_sim.sim_loop on the G1 headless in the Blank task, sensors off, in a subprocess
 (it starts ROS and Unitree DDS), with the pacer replaced by a subclass that records how it was
 built and counts its waits. Run it in the robocasa image with golem_robocasa on PYTHONPATH;
 tests/robocasa/g1/run_in_container.sh runs it with no network on ROS_DOMAIN_ID 97.
@@ -19,7 +19,8 @@ DURATION = 0.05  # s of sim time each loop runs
 LOOP = textwrap.dedent("""
     import json
     import sim_timing
-    from g1 import g1_mujoco
+    import golem_sim
+    from g1 import g1_robot
 
     pacers = []
 
@@ -32,8 +33,8 @@ LOOP = textwrap.dedent("""
             pacers[-1]["waits"] += 1
             return super().wait()
 
-    g1_mujoco.RealtimePacer = RecordedPacer
-    g1_mujoco.sim_loop("Blank", viewer=False, duration=%r)
+    sim_timing.RealtimePacer = RecordedPacer
+    golem_sim.sim_loop(g1_robot.G1Robot(), "Blank", viewer=False, duration=%r)
     print("PACERS " + json.dumps(pacers))
 """ % DURATION)
 
@@ -59,7 +60,7 @@ def test_rate_two_paces_every_step_at_twice_real_time():
     (pacer,) = _pacers(r)
     assert pacer["rate"] == 2.0, pacer
     assert pacer["waits"] == round(DURATION / pacer["timestep"]), pacer
-    assert "[g1_mujoco] sim rate: 2x real time (GOLEM_SIM_RATE)" in r.stdout
+    assert "[golem_sim] sim rate: 2x real time (GOLEM_SIM_RATE)" in r.stdout
 
 
 def test_default_is_real_time():
@@ -67,7 +68,7 @@ def test_default_is_real_time():
     r = _run("")
     (pacer,) = _pacers(r)
     assert pacer["rate"] == 1.0, pacer
-    assert "[g1_mujoco] sim rate: 1x real time (GOLEM_SIM_RATE)" in r.stdout
+    assert "[golem_sim] sim rate: 1x real time (GOLEM_SIM_RATE)" in r.stdout
 
 
 def test_max_is_unpaced():
@@ -75,7 +76,7 @@ def test_max_is_unpaced():
     r = _run("max")
     (pacer,) = _pacers(r)
     assert pacer["rate"] == float("inf"), pacer
-    assert "[g1_mujoco] sim rate: unpaced" in r.stdout
+    assert "[golem_sim] sim rate: unpaced" in r.stdout
 
 
 def test_bad_rate_stops_before_the_scene_is_built():

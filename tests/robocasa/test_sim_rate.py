@@ -311,7 +311,8 @@ H12_LOOP = textwrap.dedent("""
     stub = types.ModuleType("magpie_hand_bridge")
     stub.MagpieHandBridge = RecordedHand
     sys.modules["magpie_hand_bridge"] = stub
-    import h12_mujoco
+    import golem_sim
+    import h12_robot
 
     pacers = []
 
@@ -326,9 +327,9 @@ H12_LOOP = textwrap.dedent("""
                 raise KeyboardInterrupt
             return super().wait()
 
-    h12_mujoco.RealtimePacer = RecordedPacer
+    sim_timing.RealtimePacer = RecordedPacer
     try:
-        h12_mujoco.sim_loop("Blank", viewer=False)
+        golem_sim.sim_loop(h12_robot.H12Robot(), "Blank", viewer=False)
     except KeyboardInterrupt:
         pass
     print("RESULT " + json.dumps({"pacers": pacers, "hands": [
@@ -357,7 +358,7 @@ class H12LoopWiringTests(unittest.TestCase):
         (pacer,) = result["pacers"]
         self.assertEqual(pacer["rate"], 2.0)
         self.assertEqual(pacer["waits"], H12_LOOP_STEPS)
-        self.assertIn("[h12_mujoco] sim rate: 2x real time (GOLEM_SIM_RATE)", r.stdout)
+        self.assertIn("[golem_sim] sim rate: 2x real time (GOLEM_SIM_RATE)", r.stdout)
         self.assertEqual(sorted(h["side"] for h in result["hands"]), ["left", "right"])
         for hand in result["hands"]:
             self.assertEqual(len(hand["ticks"]), H12_LOOP_STEPS, hand["side"])

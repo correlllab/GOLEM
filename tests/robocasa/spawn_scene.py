@@ -6,7 +6,7 @@ data the way the placement functions read a robosuite env. import_robot_module i
 robosuite module, with stand-ins for the robosuite modules it imports where robosuite is not
 installed (the host), so the placement functions run on numpy and mujoco alone. Used by
 test_robosuite_common.py, test_h12_spawn_collision.py and g1/test_g1_spawn_collision.py.
-import_h12_mujoco imports the H1-2's runner without its gripper bridge, for the tests that spawn
+import_h12_robot imports the H1-2's runner without its gripper bridge, for the tests that spawn
 the H1-2 in a real env (test_blank_env.py, test_fixture_collisions.py, test_mid360_gpu.py).
 """
 import importlib
@@ -142,8 +142,8 @@ def _install_robosuite_stubs():
     mod("robosuite.robots").register_robot_class = lambda *a, **k: (lambda cls: cls)
 
 
-def import_h12_mujoco():
-    """Import and return h12_mujoco, with a stand-in gripper bridge unless a test registered its own.
+def import_h12_robot():
+    """Import and return h12_robot, with a stand-in gripper bridge unless a test registered its own.
 
     The real bridge needs magpie_msgs, which the test containers' shell does not source; the
     spawn and the band do not use it.
@@ -152,7 +152,7 @@ def import_h12_mujoco():
         stub = types.ModuleType("magpie_hand_bridge")
         stub.MagpieHandBridge = None
         sys.modules["magpie_hand_bridge"] = stub
-    return importlib.import_module("h12_mujoco")
+    return importlib.import_module("h12_robot")
 
 
 def import_robot_module(name):

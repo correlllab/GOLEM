@@ -65,15 +65,15 @@ def main():
 
         gym.make = observed_make
     elif simulator == 'robocasa':
-        entry = Path('/home/code/golem_robocasa/h12_mujoco.py')
+        entry = Path('/home/code/golem_robocasa/golem_sim.py')
         sys.path.insert(0, str(entry.parent))
         import mujoco
         step = mujoco.mj_step
 
         def observed_step(model, data, *args, **kwargs):
-            """Step MuJoCo and, for steps of h12_mujoco.py's main loop, record the pelvis and joints."""
+            """Step MuJoCo and, for steps of golem_sim.py's loop, record the pelvis and joints."""
             result = step(model, data, *args, **kwargs)
-            # Only h12_mujoco.py's main loop has `resolver` and `band` locals; robosuite's
+            # Only golem_sim.py's loop has `resolver` and `band` locals; robosuite's
             # initialisation and settling steps, which reset time, are not recorded.
             caller = sys._getframe(1)
             local = caller.f_locals

@@ -7,7 +7,7 @@ and frontier exploration use the shared `golem_slam` and `golem_skills`; its
 models (Unitree's URDFs, MJCFs and meshes, and a sphere-packed self-collision
 model) are in `CL_Assets/g1`, installed for ROS by `golem_ros2_models` with the
 H1-2's, and its RoboCasa kitchen sim is `golem_robocasa/g1/`, started through the same entry point
-as the H1-2's (`h12_mujoco.py --g1`). The same bringup runs against the sim or
+as the H1-2's (`golem_sim.py --g1`). The same bringup runs against the sim or
 the real robot, which speaks the same Unitree DDS interface.
 
 On the real G1 every node runs in Docker on a laptop wired to the robot.
@@ -78,7 +78,7 @@ To send your own arm and hand goals, start the stack in three terminals:
 ```bash
 # terminal 1: the sim with its viewer (add --headless for none)
 docker/scripts/docker_run.sh robocasa --g1 --layout 9 --style 9 --seed 42
-# wait for "[g1_mujoco] ROS bridges up"
+# wait for "[golem_sim] ROS bridges up"
 
 # terminal 2: builds core_ws (both robots' packages) if needed, then opens a shell
 docker/scripts/docker_run.sh ros

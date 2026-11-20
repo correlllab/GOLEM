@@ -97,7 +97,7 @@ launch bringup**.
 `docker/scripts/docker_common.sh` owns this, and the platform too: on Darwin
 arm64 (or `GOLEM_PLATFORM=mac`) every wrapper adds `docker-compose.mac.yml`
 (the arm64 images of `docker/mac/`, no NVIDIA runtime, `GOLEM_RENDER=cpu`,
-`GOLEM_LIDAR_POINTS` 6000 for the H1-2 and 10000 for the G1 unless set; RViz on a virtual display, at `http://localhost:6080/vnc.html`), refuses Isaac, and `docker_stack.sh` starts `h12_mac_sim` or
+`GOLEM_LIDAR_POINTS` 6000 for the H1-2 and 10000 for the G1 unless set; RViz on a virtual display, at `http://localhost:6080/vnc.html`; the colcon build trees in Docker volumes, not the checkout), refuses Isaac, and `docker_stack.sh` starts `h12_mac_sim` or
 `g1_mac_sim`; on Linux nothing changes (`docs/MAC.md`). On simulator and stack wrappers,
 the robot is `--g1`/`--h12` on the wrapper, else `GOLEM_ROBOT` from the shell,
 else from `docker/.env`, else `h12`. The selection means "which robot is

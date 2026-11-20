@@ -105,6 +105,16 @@ happened once, in an earlier run with the VM overloaded.
   arm64 the SDK's binding would bind to ROS's copy by their shared soname and
   segfault in its first topic, so the Mac base renames the SDK's copy
   (`libddsc_unitree.so.0`) and checks the pair at build time.
+- The colcon build trees (`core_ws`'s `build`, `install` and `log`, and the
+  sim's `msgs_ws`) are Docker volumes on the VM's disk, not folders in the
+  checkout (`docker-compose.mac.yml`). Every file a container writes through
+  the VM's file sharing reaches the macOS host, and on a university-managed
+  Mac its endpoint security scans each one: on an M4 Pro under Colima a write
+  took about 180 ms, and a cold `core_ws` build ran over 40 minutes at 15% CPU
+  without finishing; with the volumes a cold build and stack start takes 2.5
+  minutes. The sources stay bind-mounted, so edits show up as before; for a clean build,
+  `docker volume rm golem_core_build golem_core_install golem_core_log
+  golem_msgs_ws` with the containers stopped.
 - The Mac's GPU is out of reach: a container gets no OpenGL/EGL on macOS, which
   MuJoCo's renderer and `mid360.GpuCaster` need.
 - `core_ws/cyclonedds.xml` requires 16 MB UDP receive buffers, which the VM's

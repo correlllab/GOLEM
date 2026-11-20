@@ -22,7 +22,6 @@ from rclpy.serialization import deserialize_message
 import h12_sensors
 import mid360
 import sim_common
-from sim_timing import LoopTimings
 
 ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'CL_Assets')
 URDF = os.path.join(ASSETS, 'ros_assets', 'h1_2_magpie.urdf')
@@ -135,7 +134,7 @@ class LidarMountTests(unittest.TestCase):
         robot = model.body_rootid[model.geom_bodyid] == model.body_rootid[torso]
         published = []
         scans = h12_sensors._LidarScans(model, body('livox_link'), torso, robot, 'livox_frame',
-                                        published.append, lambda msg: None, LoopTimings())
+                                        published.append, lambda msg: None)
         frames = []
         update = scans.scanner.update
 

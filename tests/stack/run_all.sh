@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Run every stack case that can pass: arms and locomotion against RoboCasa, then arms against
 # Isaac. Isaac's locomotion is skipped: its rt/lowstate tick counts publishes, not ms of the
-# node's clock, so the leg node never starts there, and Isaac serves no /elastic_band/toggle.
+# node's clock, so the leg node never starts there, and the test's Isaac sim runs without the opt-in band
+# (--elastic_band).
 #
 # Usage: tests/stack/run_all.sh
 # Environment: whatever run.sh reads (ROS_DOMAIN_ID, GOLEM_TEST_WALL_TIMEOUT, GOLEM_TEST_CAMERAS).

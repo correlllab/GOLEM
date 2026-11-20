@@ -2,7 +2,7 @@
 
 The env builds, holds only the floor and the robot, spawns the robot at the origin facing +x,
 and the elastic band holds the limp robot up. Each robot is spawned and banded as its runner
-does it: the G1 with g1_mujoco's own spawn() and make_band(); the H1-2 with h12_mujoco's spawn()
+does it: the G1 with g1_robot's own spawn() and make_band(); the H1-2 with h12_robot's spawn()
 and its band's values, which sit inline in its sim loop. No motor is driven (ctrl 0), as in both
 sims before the first rt/lowcmd.
 
@@ -15,7 +15,7 @@ import unittest
 import mujoco
 import numpy as np
 
-from spawn_scene import import_h12_mujoco
+from spawn_scene import import_h12_robot
 
 STEPS = 500  # physics steps with the band on
 # m the pelvis may sink below its spawn height while hanging: the feet drop onto the floor from
@@ -25,7 +25,7 @@ MAX_PELVIS_DROP = 0.10
 # m: the most the lowest robot geom may stand above the floor at spawn (the runners'
 # clearances are 0.02 for the H1-2 and 0.001 for the G1).
 SPAWN_CLEARANCE_MAX = 0.03
-# The H1-2's band as h12_mujoco's sim loop builds it: anchor offset from the torso (m),
+# The H1-2's band as h12_robot's sim loop builds it: anchor offset from the torso (m),
 # stiffness (N/m) and damping (N*s/m).
 H12_BAND = dict(dz=-0.04, stiffness=1e4, damping=2e3)
 # Bodies robosuite's Arena adds to every scene: mocap end-effector targets for its GUI, with
@@ -44,12 +44,12 @@ def _h12():
     import robosuite_common
     from mujoco_env import ElasticBand
     from sim_names import NameResolver
-    h12_mujoco = import_h12_mujoco()
+    h12_robot = import_h12_robot()
     env = h1_2_robosuite.make_kitchen_env("Blank")
     env.reset()
     model, data = env.sim.model._model, env.sim.data._data
     resolver = NameResolver(model)
-    h12_mujoco.spawn(env, resolver)
+    h12_robot.spawn(env, resolver)
     torso = resolver.body_id("torso_link")
     anchor = data.xpos[torso].copy()
     anchor[2] += H12_BAND["dz"]
@@ -65,14 +65,14 @@ def _g1():
 
     Returns (env, model, data, pelvis body, band, band body, lowest robot geom z).
     """
-    from g1 import g1_mujoco, g1_robosuite
+    from g1 import g1_robot, g1_robosuite
     from g1.sim_names import NameResolver
     env = g1_robosuite.make_kitchen_env("Blank")
     env.reset()
     model, data = env.sim.model._model, env.sim.data._data
     resolver = NameResolver(model, robot_prefix=env.robots[0].robot_model.naming_prefix)
-    g1_mujoco.spawn(env, resolver)
-    band, body = g1_mujoco.make_band(data, resolver)
+    g1_robot.spawn(env, resolver)
+    band, body = g1_robot.make_band(data, resolver)
     return env, model, data, resolver.base_body, band, body, \
         g1_robosuite.lowest_robot_point_z(env)
 

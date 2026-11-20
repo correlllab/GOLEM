@@ -83,7 +83,7 @@ def band_overlay(band, body_id):
     return draw
 
 
-def open_viewer(model, data, lock, band, body, tag, timings=None, sim_rate=None, key_callbacks=()):
+def open_viewer(model, data, lock, band, body, tag, sim_rate=None, key_callbacks=()):
     """Launch the passive viewer on its own copy of data, framed on body, and start its sync thread.
 
     lock is the physics loop's lock (ViewerSync). band, the sim's ElasticBand
@@ -120,7 +120,7 @@ def open_viewer(model, data, lock, band, body, tag, timings=None, sim_rate=None,
             print(f"[{tag}] viewer camera framing skipped: {e}")
     view_sync = ViewerSync(model, data, handle, lock, viewer_data,
                            draw=band_overlay(band, body) if band is not None else None,
-                           timings=timings, sim_rate=sim_rate)
+                           sim_rate=sim_rate)
     view_sync.start()
     return handle, view_sync
 
@@ -137,15 +137,14 @@ class ViewerSync:
     """Refresh the viewer's MjData from the simulation's and sync the viewer at hz."""
 
     def __init__(self, model, data, handle, lock, viewer_data, draw=None, hz=VIEWER_HZ,
-                 timings=None, sim_rate=None):
+                 sim_rate=None):
         """Set up the sync of data into viewer_data, drawn by the passive viewer handle.
 
         lock is the threading.Lock the physics loop holds around mj_step and
         after_step (and around apply_perturbation); the copy takes it too.
         viewer_data is the MjData the viewer was launched with. draw(handle,
         viewer_data), if given, runs once per frame before the sync to put the
-        overlay in handle.user_scn; without it the overlay is cleared. timings,
-        a sim_timing.LoopTimings, records each frame's wall time as stage "viewer".
+        overlay in handle.user_scn; without it the overlay is cleared.
         Each frame also feeds data.time to an RtfMeter, whose real-time factor, with
         sim_rate (the target, if given), is set as the viewer's text every RTF_TEXT_PERIOD_S.
         """
@@ -156,7 +155,6 @@ class ViewerSync:
         self._viewer_data = viewer_data
         self._draw = draw
         self._period = 1.0 / hz
-        self._timings = timings
         self._perturb = np.zeros_like(data.xfrc_applied)
         self._sim_rate = sim_rate
         self._rtf = RtfMeter()
@@ -197,7 +195,6 @@ class ViewerSync:
     def _frame(self):
         """Copy the state, show the real-time factor, draw the overlay, sync and keep the mouse force."""
         viewer_data = self._viewer_data
-        mark = self._timings.start() if self._timings is not None else 0.0
         with self._lock:
             copy_display_state(viewer_data, self._data)
         now = time.perf_counter()
@@ -216,5 +213,3 @@ class ViewerSync:
         self._handle.sync()
         with self._lock:
             self._perturb[:] = viewer_data.xfrc_applied
-        if self._timings is not None:
-            self._timings.stop("viewer", mark)

@@ -1,6 +1,6 @@
 """Register the Blank task: the robot alone on a floor, under a light.
 
-Both sim runners run it (``h12_mujoco.py --task Blank``, with or without
+Both sim runners run it (``golem_sim.py --task Blank``, with or without
 ``--g1``). It is a robosuite env, not a RoboCasa kitchen, around the robot the
 runner registers (``H1_2`` or ``G1Dex3``), so every robot0_/gripper0_ name the
 bridges resolve is the kitchen tasks'. The arena is robosuite's ``EmptyArena``

@@ -25,7 +25,7 @@ class Workflows(unittest.TestCase):
         self.root = Path(self.tmp.name)
         shutil.copytree(REPO / 'docker', self.root / 'docker', ignore=shutil.ignore_patterns('.env', '__pycache__'))
         for name in ('unitree_sdk2_python/setup.py', *self.H12_MODEL, *self.G1_MODEL,
-                     'CL_isaaclab_sim/sim_main.py', 'golem_robocasa/h12_mujoco.py',
+                     'CL_isaaclab_sim/sim_main.py', 'golem_robocasa/golem_sim.py',
                      'core_ws/src/magpie_msgs/package.xml', 'core_ws/src/custom_ros_messages/package.xml',
                      'core_ws/src/livox_ros_driver2/package_ROS2.xml', 'core_ws/cyclonedds.xml',
                      'core_ws/src/golem_bringup/package.xml'):
@@ -93,10 +93,10 @@ if 'config' in sys.argv:
 
     def test_missing_source_fails_before_container_creation(self):
         """A missing sim source fails, naming the file, before any container is created."""
-        (self.root / 'golem_robocasa/h12_mujoco.py').unlink()
+        (self.root / 'golem_robocasa/golem_sim.py').unlink()
         r = self.run_script('docker/scripts/docker_run.sh', 'robocasa')
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn('h12_mujoco.py', r.stderr)
+        self.assertIn('golem_sim.py', r.stderr)
         self.assertFalse(any('run' in c for c in self.calls()))
 
     def test_isaac_launcher_forwards_options_without_a_terminal(self):
@@ -122,7 +122,7 @@ if 'config' in sys.argv:
 
     def test_lfs_pointer_is_not_accepted_as_an_asset(self):
         """A Git LFS pointer in place of a required file is refused, naming LFS."""
-        asset = self.root / 'golem_robocasa/h12_mujoco.py'
+        asset = self.root / 'golem_robocasa/golem_sim.py'
         asset.write_text('version https://git-lfs.github.com/spec/v1\noid sha256:123\nsize 10\n')
         r = self.run_script('docker/scripts/docker_run.sh', 'robocasa')
         self.assertNotEqual(r.returncode, 0)

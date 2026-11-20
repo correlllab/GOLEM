@@ -8,7 +8,7 @@
 #   GOLEM_TEST_VIDEO=1 tests/sim/test_lmg_explore.sh      # and the video
 #   tests/sim/test_lmg_explore.sh --video OUT             # re-render OUT/explore.mp4 of a finished run
 #
-# Builds core_ws and starts the sim (h12_mujoco.py --h12) headless, with its sensors on, in the
+# Builds core_ws and starts the sim (golem_sim.py --h12) headless, with its sensors on, in the
 # layout 9 / style 9 / seed 42 kitchen, the spawn backed EXPLORE_BACKOFF m into open floor, as
 # test_sim_stack.sh does. In its network namespace a ros container then runs
 # 'ros2 launch golem_bringup lmg_sim.launch.py start_position_verified:=true use_rviz:=false

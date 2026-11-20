@@ -89,14 +89,14 @@ class AddCommonArgsTests(unittest.TestCase):
         """The common options' defaults."""
         args = self.parser.parse_args([])
         self.assertEqual(vars(args), dict(robot=None, headless=False, task=None, layout=None,
-                                          style=None, seed=None, timing=False, duration=0.0))
+                                          style=None, seed=None))
 
     def test_values(self):
         """Every common option parses to its value and type."""
         args = self.parser.parse_args(['--g1', '--headless', '--task', 'OpenFridge', '--layout', '9',
-                                       '--style', '8', '--seed', '42', '--timing', '--duration', '2.5'])
+                                       '--style', '8', '--seed', '42'])
         self.assertEqual(vars(args), dict(robot='g1', headless=True, task='OpenFridge', layout=9,
-                                          style=8, seed=42, timing=True, duration=2.5))
+                                          style=8, seed=42))
 
     def test_robot_flags_are_the_shared_pair(self):
         """The common options include the mutually exclusive robot flags."""
@@ -116,7 +116,7 @@ class ParseArgsTests(unittest.TestCase):
 
     def setUp(self):
         """Make a parser with the common options."""
-        self.parser = argparse.ArgumentParser(prog='h12_mujoco.py')
+        self.parser = argparse.ArgumentParser(prog='golem_sim.py')
         add_common_args(self.parser)
 
     def parse_error(self, argv, robot):
@@ -153,20 +153,12 @@ class ParseArgsTests(unittest.TestCase):
         self.assertEqual(parse_args(self.parser, ['--h1'], 'h12').robot, 'h12')
         self.assertEqual(parse_args(self.parser, ['--g'], 'g1').robot, 'g1')
 
-    def test_h12_has_no_duration_yet(self):
-        """The H1-2 runner refuses a nonzero --duration; the G1 runner takes it."""
-        code, err = self.parse_error(['--duration', '5'], 'h12')
-        self.assertEqual(code, 2)
-        self.assertIn('--duration is not supported for the H1-2 yet', err)
-        self.assertEqual(parse_args(self.parser, ['--duration', '5'], 'g1').duration, 5.0)
-        self.assertEqual(parse_args(self.parser, ['--duration', '0'], 'h12').duration, 0.0)
-
-    def test_g1_has_no_timing_yet(self):
-        """The G1 runner refuses --timing; the H1-2 runner takes it."""
-        code, err = self.parse_error(['--timing'], 'g1')
-        self.assertEqual(code, 2)
-        self.assertIn('--timing is not supported for the G1 yet', err)
-        self.assertTrue(parse_args(self.parser, ['--timing'], 'h12').timing)
+    def test_no_timing_or_duration_option(self):
+        """Neither robot's runner takes --timing or --duration."""
+        for robot in ('h12', 'g1'):
+            for flag in (['--timing'], ['--duration', '5']):
+                code, _ = self.parse_error(flag, robot)
+                self.assertEqual(code, 2)
 
     def test_other_options_pass_through(self):
         """Other options parse unchanged."""

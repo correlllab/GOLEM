@@ -49,7 +49,7 @@ a slot of a ring; the thread casts the rays due by then, labelled with that
 time, and packs and publishes each frame it completes. The caster casts on its
 own copy of the model and releases the GIL while it renders, so the casts run
 beside the physics. The ring holds one frame of casts: when the thread falls
-that far behind, tick() waits for it (the lidar_wait stage), so a frame trails
+that far behind, tick() waits for it, so a frame trails
 the sim by at most one frame period and the real-time factor drops instead.
 
 State time. tick() runs after mj_step, which leaves the kinematics of the
@@ -64,7 +64,6 @@ from array import array as _array
 from collections import namedtuple
 from contextlib import nullcontext
 
-from sim_timing import LoopTimings
 
 import mujoco
 import numpy as np
@@ -192,7 +191,7 @@ class _LidarScans(mid360.ScanRing):
     """Cast the MID-360's scans on the mid360_scan thread (a mid360.ScanRing) and publish both lidar topics."""
 
     def __init__(self, model, body_id, exclude_body_id, robot_geoms, frame_id,
-                 publish_lidar, publish_cloud, timings=None, sim_lock=None,
+                 publish_lidar, publish_cloud, sim_lock=None,
                  points_per_frame=None):
         """Build the caster GOLEM_RENDER picks (mid360.make_caster) and start the thread.
 
@@ -215,7 +214,7 @@ class _LidarScans(mid360.ScanRing):
                 else points_per_frame * mid360.FRAME_RATE_HZ)
         super().__init__(mid360.Mid360Scanner(caster, points_per_second=rate), model,
                          lambda data: (data.xpos[body], data.xmat[body].reshape(3, 3)),
-                         self._publish_frame, caster.batch_s, sim_lock, timings, _log)
+                         self._publish_frame, caster.batch_s, sim_lock, _log)
 
     def _publish_frame(self, frame):
         """Publish a mid360.LidarFrame on /livox/lidar and /livox/pointcloud, stamped at its first point."""
@@ -313,7 +312,6 @@ class H12Sensors:
         lidar_self_prefixes: tuple = (),
         lidar_points=None,
         sim_lock=None,
-        timings=None,
     ):
         """Build the sensors; raise RuntimeError for a body, camera or sensor missing from model.
 
@@ -331,7 +329,6 @@ class H12Sensors:
         self.model = model
         self.data = data
         self.sim_lock = sim_lock
-        self.timings = timings if timings is not None else LoopTimings()
 
         self._camera_specs = list(cameras)
         self.depth_stream = bool(depth_stream)
@@ -398,7 +395,7 @@ class H12Sensors:
         self._lidar = _LidarScans(model, self.lidar_body_id, self.lidar_exclude_body_id,
                                   self.geom_is_robot, LIVOX_FRAME,
                                   self.pub_lidar.publish, self.pub_pc2.publish,
-                                  self.timings, sim_lock, lidar_points)
+                                  sim_lock, lidar_points)
         # The cameras render on a worker thread, through EGL, while physics runs.
         self._camera_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera")
         self._camera_pending = None
@@ -551,16 +548,12 @@ class H12Sensors:
 
     def _publish_camera_frame(self, stamp: TimeMsg) -> None:
         """Snapshot MjData and submit rendering and publishing every camera from it to the camera worker."""
-        capture_start = self.timings.start()
         snapshot = self._capture_camera_snapshot()
-        self.timings.stop("camera_capture", capture_start)
         # One frame set in flight at most: wait rather than drop, so every
         # scheduled frame is published. result() re-raises the last one's failure.
-        wait_start = self.timings.start()
         pending, self._camera_pending = self._camera_pending, None
         if pending is not None:
             pending.result()
-        self.timings.stop("camera_wait", wait_start)
         self._camera_pending = self._camera_worker.submit(self._render_and_publish_cameras, stamp, snapshot)
 
     def _capture_camera_snapshot(self):
@@ -676,7 +669,6 @@ class H12Sensors:
         self._ensure_renderer()
         for cam in self.cameras:
             spec, pubs = cam.spec, cam.pubs
-            render_start = self.timings.start()
             size = (spec.color.width, spec.color.height)
             r, (rgb_buf, depth_buf) = self._renderer[size], self._buffers[size]
             r.disable_depth_rendering()
@@ -686,11 +678,9 @@ class H12Sensors:
                 r.enable_depth_rendering()
                 aligned = r.render(out=depth_buf)
             aligned_mm = self._depth_mm(aligned)
-            self.timings.stop("camera_render", render_start)
 
             depth_mm = None
             if self.depth_stream or self.pointcloud:
-                depth_start = self.timings.start()
                 size = (spec.depth_image.width, spec.depth_image.height)
                 rd, (_, ddepth_buf) = self._renderer[size], self._buffers[size]
                 rd.enable_depth_rendering()
@@ -698,9 +688,7 @@ class H12Sensors:
                 with mid360.GL_LOCK:
                     depth = rd.render(out=ddepth_buf)
                 depth_mm = self._depth_mm(depth)
-                self.timings.stop("camera_depth_render", depth_start)
 
-            publish_start = self.timings.start()
             pubs["color"].publish(self._image_msg(stamp, spec.color_frame, rgb_u8, "rgb8", 3))
             if pubs["color_jpeg"].get_subscription_count() > 0:
                 jpeg = io.BytesIO()
@@ -723,10 +711,8 @@ class H12Sensors:
                 if pubs["depth_png"].get_subscription_count() > 0:
                     pubs["depth_png"].publish(self._compressed_depth_msg(stamp, spec.depth_frame, depth_mm))
                 self._publish_info(pubs["depth_info"], cam.depth_info, stamp)
-            self.timings.stop("camera_publish", publish_start)
 
             if self.pointcloud:
-                cloud_start = self.timings.start()
                 points = realsense_profile.colored_cloud(
                     depth_mm.astype(np.float32) / 1000.0, spec.depth_image,
                     rgb_u8, spec.color, spec.T_color_depth)
@@ -741,4 +727,3 @@ class H12Sensors:
                 msg.is_dense = True
                 msg.data = _array("B", points.tobytes())
                 pubs["points"].publish(msg)
-                self.timings.stop("camera_cloud", cloud_start)

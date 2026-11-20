@@ -612,19 +612,6 @@ class Mid360Scanner:
         return frame
 
 
-class _NoTimings:
-    """Stand in for sim_timing.LoopTimings when no stage is timed."""
-
-    @staticmethod
-    def start():
-        """Return a dummy start mark."""
-        return 0.0
-
-    @staticmethod
-    def stop(name, start):
-        """Record nothing."""
-
-
 class ScanRing:
     """Cast a scanner's rays on a thread of its own, fed with pose snapshots from the physics thread.
 
@@ -636,18 +623,15 @@ class ScanRing:
     GIL, so the casts run beside the physics; other runtime edits of the model do not reach it.
 
     Backpressure. The ring holds the whole casts that fit in one frame period (at least one), the
-    one being cast included. When it is full, tick() waits for the thread (counted in waits,
-    timed as the lidar_wait stage): a published frame trails the sim by at most one frame period
+    one being cast included. When it is full, tick() waits for the thread (counted in waits): a published frame trails the sim by at most one frame period
     (one interval when the interval is longer) and no ray is dropped; the sim's real-time
     factor drops instead.
 
     Threads. tick() runs on the physics thread between steps; it holds lock, when given, only
     for the copy, and the live model's alpha is read under it. publish runs on the scan thread.
-    timings (sim_timing.LoopTimings' start() and stop()) times the stages lidar_capture (the
-    copy), lidar_wait, lidar_cast (one scanner update) and lidar_publish.
     """
 
-    def __init__(self, scanner, model, pose, publish, interval, lock=None, timings=None, log=_log):
+    def __init__(self, scanner, model, pose, publish, interval, lock=None, log=_log):
         """Start the scan thread for scanner, whose caster casts on a copy of model (the live one).
 
         pose(data) returns the sensor's (origin (3,) m, rotation (3, 3) sensor -> world) in data;
@@ -663,7 +647,6 @@ class ScanRing:
         self._pose = pose
         self._publish = publish
         self._lock = lock
-        self.timings = timings if timings is not None else _NoTimings()
         self._log = log
         self.data = mujoco.MjData(model)   # the thread's: only its geom poses are read
         n = self.slots
@@ -713,7 +696,6 @@ class ScanRing:
             if not self._thread.is_alive():
                 raise RuntimeError("the lidar's scan thread has stopped") from None
             self.waits += 1
-            wait_start = self.timings.start()
             slot = None
             while slot is None:
                 try:
@@ -721,8 +703,6 @@ class ScanRing:
                 except queue.Empty:
                     if not self._thread.is_alive():
                         raise RuntimeError("the lidar's scan thread has stopped") from None
-            self.timings.stop("lidar_wait", wait_start)
-        capture_start = self.timings.start()
         lock = self._lock
         if lock is not None:
             lock.acquire()
@@ -737,7 +717,6 @@ class ScanRing:
         finally:
             if lock is not None:
                 lock.release()
-        self.timings.stop("lidar_capture", capture_start)
         self._work.put((slot, t))
 
     def _run(self):
@@ -747,7 +726,6 @@ class ScanRing:
         counts the cast in progress.
         """
         d = self.data
-        timings = self.timings
         while (item := self._work.get()) is not None:
             slot, t = item
             try:
@@ -755,16 +733,12 @@ class ScanRing:
                 np.copyto(d.geom_xmat, self._geom_xmat[slot])
                 snapshot = Snapshot(self._origin[slot], self._rotation[slot], d,
                                     self._geom_alpha[slot], self._mat_alpha[slot])
-                cast_start = timings.start()
                 frame = self.scanner.update(snapshot, t)
-                timings.stop("lidar_cast", cast_start)
                 if frame is not None:
                     now = self.now
                     if now is not None:
                         self.max_lag = max(self.max_lag, now - t)
-                    publish_start = timings.start()
                     self._publish(frame)
-                    timings.stop("lidar_publish", publish_start)
                     self.frames += 1
             except Exception as e:   # keeps the sim running; logged once per kind
                 if type(e) not in self._errors:

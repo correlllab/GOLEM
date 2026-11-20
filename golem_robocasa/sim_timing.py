@@ -1,6 +1,5 @@
-"""Pace both RoboCasa sims' loops to a target real-time factor; report the H1-2's per-stage timings (--timing)."""
+"""Pace the RoboCasa sim loop to a target real-time factor."""
 import math
-import threading
 import time
 
 
@@ -44,64 +43,3 @@ class RealtimePacer:
             # Only the wall deadline moves; sim time is never skipped.
             self.deadline = now - self.max_lag
         return 0.0
-
-
-class LoopTimings:
-    """Collect per-stage wall times and print mean/max ms and the real-time factor.
-
-    Disabled (the default) it does nothing. The sensor worker threads record
-    stages too, so updates and reports take a lock.
-    """
-
-    def __init__(self, enabled=False, interval=5.0, *, clock=time.perf_counter):
-        """Report every interval wall seconds when enabled."""
-        self.enabled = enabled
-        self.interval = interval
-        self.clock = clock
-        self.wall_start = clock() if enabled else 0.0
-        self.sim_start = 0.0
-        self.stages = {}
-        self._lock = threading.Lock()
-
-    def reset(self, sim_time):
-        """Start a new report interval at sim_time (s) and drop the stages so far."""
-        self.wall_start = self.clock() if self.enabled else 0.0
-        self.sim_start = sim_time
-        with self._lock:
-            self.stages.clear()
-
-    def start(self):
-        """Return the start mark of a stage, to pass to stop()."""
-        return self.clock() if self.enabled else 0.0
-
-    def stop(self, name, start):
-        """Record the wall time since start under the stage name."""
-        if self.enabled:
-            elapsed = self.clock() - start
-            with self._lock:
-                total, count, longest = self.stages.get(name, (0.0, 0, 0.0))
-                self.stages[name] = (total + elapsed, count + 1, max(longest, elapsed))
-
-    def maybe_report(self, sim_time, stats=None):
-        """Print the report and start a new interval once interval wall seconds have passed.
-
-        stats, when given, is called at each report and what it returns ("" for nothing) is
-        appended to the line (the sensors' counts).
-        """
-        if not self.enabled:
-            return
-        now = self.clock()
-        wall = now - self.wall_start
-        if wall < self.interval:
-            return
-        with self._lock:
-            stages, self.stages = self.stages, {}
-        fields = ' '.join(
-            f'{name}={1000 * total / count:.2f}/{1000 * longest:.2f}ms(n={count})'
-            for name, (total, count, longest) in stages.items()
-        )
-        extra = stats() if stats is not None else ''
-        print(f'[sim-timing] RTF={(sim_time - self.sim_start) / wall:.3f} '
-              f'(stage mean/max) {fields}' + (f'; {extra}' if extra else ''), flush=True)
-        self.wall_start = now
-        self.sim_start = sim_time

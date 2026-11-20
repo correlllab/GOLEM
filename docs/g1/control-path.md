@@ -51,7 +51,7 @@ while `dex3_hands` uses the Unitree SDK. The user-facing interface is ROS 2 too:
   puts the robot into debug mode before the bringup starts; nothing in this
   stack does that step or checks it
   ([First real session](first-session.md#entering-debug-mode-not-yet-written)).
-- **In the sim:** `golem_robocasa/g1/` (`g1_mujoco.py`, `unitree_interface.py`)
+- **In the sim:** `golem_robocasa/g1/` (`g1_robot.py`, `unitree_interface.py`)
   plays the robot in debug mode. Every motor is off (zero torque) until the
   first `rt/lowcmd` with a valid CRC, `mode_machine` 5 and `mode_pr` 0; from
   then on `rt/lowcmd` drives every body motor. Meanwhile an elastic band on the
@@ -59,7 +59,7 @@ while `dex3_hands` uses the Unitree SDK. The user-facing interface is ROS 2 too:
   through `/elastic_band/toggle` once its policy runs and the arm controller has
   finished its start-up moves, or `band.max_wait` after the policy started
   (SPACE in the viewer toggles it by hand).
-  `g1/unitree_interface.py`'s and `g1_mujoco.py`'s docstrings are the
+  `g1/unitree_interface.py`'s and `g1_robot.py`'s docstrings are the
   reference.
 
 ## Sim and real compared

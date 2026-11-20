@@ -7,7 +7,7 @@ Every motor is off (zero torque) until the first rt/lowcmd frame with a valid
 CRC, mode_machine 6, mode_pr 0 and finite values on the 27 body motors; other
 frames are dropped. From then on rt/lowcmd drives the body: motor mode 1 turns
 a motor's PD on, any other mode turns it off. Until a command drives it the
-robot hangs from the sim's elastic band (h12_mujoco).
+robot hangs from the sim's elastic band (h12_robot).
 
 Every torque is recomputed every physics step from the latched command and the
 current state (write_ctrl), as the motors' ~1 kHz servo loop does: a torque

@@ -1,7 +1,7 @@
 """Select the robot, check the renderer, parse the command line and the sims' knobs, resolve tasks and frame the viewer for both sims.
 
 It imports only the standard library at module level (mujoco and robocasa
-inside the functions that need them): h12_mujoco.py picks the robot and checks
+inside the functions that need them): golem_sim.py picks the robot and checks
 the GPU with it before it imports either robot's modules.
 """
 import argparse
@@ -15,7 +15,6 @@ ROBOTS = ("h12", "g1")
 ROBOT_LABELS = {"h12": "the H1-2", "g1": "the G1"}
 
 # The option each robot's loop does not implement; parse_args refuses it.
-_UNSUPPORTED = {"h12": "--duration", "g1": "--timing"}
 
 # The passive viewer's opening camera: straight down onto the robot wherever
 # RoboCasa and the spawn placement put it, rotated with the robot's yaw so the
@@ -181,11 +180,6 @@ def add_common_args(parser: argparse.ArgumentParser, *,
     parser.add_argument("--layout", type=int, default=None, help="RoboCasa kitchen layout id")
     parser.add_argument("--style", type=int, default=None, help="RoboCasa kitchen style id")
     parser.add_argument("--seed", type=int, default=None, help="episode seed")
-    parser.add_argument("--timing", action="store_true",
-                        help="Log real-time factor and stage mean/max timings every 5 seconds")
-    parser.add_argument("--duration", type=float, default=0.0,
-                        help="sim seconds to run from the first step, then exit "
-                             "(default 0: run until closed; G1 only)")
     add_robot_args(parser)
 
 
@@ -193,16 +187,13 @@ def parse_args(parser: argparse.ArgumentParser, argv: Sequence[str], robot: str)
     """Parse argv for the runner of robot ('h12' or 'g1').
 
     Exits with a usage error (2) for a robot flag that reads as the other robot
-    (h12_mujoco.py dispatches whole --h12/--g1 tokens, so only an abbreviation
-    such as --g gets here) and for the option in _UNSUPPORTED for this robot.
+    (golem_sim.py picks the robot from whole --h12/--g1 tokens, so only an abbreviation
+    such as --g gets here).
     """
     args = parser.parse_args(argv)
     if args.robot not in (None, robot):
         parser.error(f"the robot flag is abbreviated and reads as --{args.robot} here, "
                      f"but this runs {ROBOT_LABELS[robot]}; spell the robot flag out: --{args.robot}")
-    flag = _UNSUPPORTED[robot]
-    if getattr(args, flag[2:]):
-        parser.error(f"{flag} is not supported for {ROBOT_LABELS[robot]} yet")
     return args
 
 

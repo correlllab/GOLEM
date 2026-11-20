@@ -37,8 +37,8 @@ release, telemetry continuity, and active policies. No fixed base is allowed.
 `isaac locomotion` cannot pass: `run.sh` refuses it and `run_all.sh` skips it. Isaac's
 `rt/lowstate` tick counts publishes, not milliseconds of the node's clock, so
 the leg node's readiness check never passes and the policy never starts (the
-node logs that the tick is off the node's clock), and Isaac serves no
-`/elastic_band/toggle`. Thresholds are in `check_lowerbody.py`.
+node logs that the tick is off the node's clock). Isaac's elastic band and its
+`/elastic_band/toggle` are opt-in (`--elastic_band`), and this test does not start it. Thresholds are in `check_lowerbody.py`.
 
 The scoring unit tests run in the GitHub CPU merge workflow:
 

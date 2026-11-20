@@ -4,7 +4,7 @@ The robot stands unsupported once the elastic band is off, Nav2 walks it to a go
 while /named_config moves its arms, and SLAM stays healthy throughout. test_sim_stack.sh runs
 the roles and has the usage.
 
-  sim     in the robocasa container: h12_mujoco.py as __main__ for GOLEM_ROBOT's
+  sim     in the robocasa container: golem_sim.py as __main__ for GOLEM_ROBOT's
           robot (--h12 or --g1), recording from the sim's own state: after every
           physics step the elastic band's state and any penetrating contact between
           a robot geom and anything but the floor, and every test_sim_bringup.RECORD_EVERY steps the
@@ -186,7 +186,7 @@ class Recorder(bringup_test.StepRecorder):
 
 
 def run_sim(out, sim_args):
-    """Run h12_mujoco.py for GOLEM_ROBOT's robot with the recorder, the scene map and the goal."""
+    """Run golem_sim.py for GOLEM_ROBOT's robot with the recorder, the scene map and the goal."""
     robot = robot_from_env()
     bringup_test.run_recorded_sim(
         out, robot, sim_args, Recorder(out), "test_sim_stack",
@@ -684,7 +684,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("role", choices=("sim", "drive", "report"))
     parser.add_argument("--out", required=True, help="the shared output directory")
-    parser.epilog = "sim: h12_mujoco.py's arguments follow a --; the robot is GOLEM_ROBOT's"
+    parser.epilog = "sim: golem_sim.py's arguments follow a --; the robot is GOLEM_ROBOT's"
     argv = sys.argv[1:]
     sim_args = argv[argv.index("--") + 1:] if "--" in argv else []
     args = parser.parse_args(argv[:len(argv) - len(sim_args) - ("--" in argv)])

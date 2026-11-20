@@ -28,7 +28,6 @@ from h12_sensors import (
     self_filter_geoms, PC2_DTYPE, _COMPRESSED_DEPTH_HEADER, _JPEG_QUALITY,
 )
 from mujoco_ros_bridge import RosSensorBridge, _sim_time_to_msg
-from sim_timing import LoopTimings
 
 SCENE = '''<mujoco>
   <visual><global offwidth="32" offheight="32"/></visual>
@@ -230,7 +229,6 @@ class SensorTests(unittest.TestCase):
                                 _camera_info(spec.depth_info, 'depth_optical'),
                                 {k: Recorder(b.sim_lock) for k in keys})]
         b.get_logger = lambda: SimpleNamespace(warn=lambda text: self.fail(text))
-        b.timings = LoopTimings()
         b._camera_worker, b._camera_pending = ThreadPoolExecutor(max_workers=1), None
         self.addCleanup(b.shutdown)
 
@@ -504,7 +502,7 @@ class LidarTests(unittest.TestCase):
         self.cloud, self.custom = Recorder(self.lock), Recorder(self.lock)
         scans = _LidarScans(self.model, self.lidar, self.torso,
                             self.robot if robot_geoms is None else robot_geoms, 'livox_frame',
-                            self.custom.publish, self.cloud.publish, LoopTimings(), self.lock)
+                            self.custom.publish, self.cloud.publish, self.lock)
         self.addCleanup(scans.close)
         return scans
 

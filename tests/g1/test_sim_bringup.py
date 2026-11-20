@@ -2,7 +2,7 @@
 
 test_sim_bringup.sh runs them; see it for the usage.
 
-  sim     in the robocasa container: h12_mujoco.py --g1 as __main__ (its own
+  sim     in the robocasa container: golem_sim.py --g1 as __main__ (its own
           CLI), recording the robot's state from the sim after every 10th physics
           step (50 Hz of sim time; GOLEM_TEST_RECORD_EVERY=1 for every step)
           to <out>/sim.npz, until <out>/stop appears.
@@ -112,7 +112,7 @@ HEAD_VFOV_DEG = (41.0, 44.0)
 OPTICAL_IN_LINK_XYZW = (-0.5, 0.5, -0.5, 0.5)   # rpy (-pi/2, 0, -pi/2), REP 103's optical frame
 # the feet whose world positions the sim records (the G1's ankle roll links)
 FEET = ("left_ankle_roll_link", "right_ankle_roll_link")
-# the sim's log line once the band is off (golem_robocasa/g1/g1_mujoco.py's fall logger)
+# the sim's log line once the band is off (golem_robocasa/g1/g1_robot.py's fall logger)
 BAND_RELEASED_LINE = "elastic band released at t="
 # the leg node (golem_lowerbody_rl): its ROS logger, and its log lines: its run config,
 # the policy's start, each call of the band's toggle with its reason, and the toggle's
@@ -335,7 +335,7 @@ def write_sensor_config(out):
 
 
 def run_recorded_sim(out, robot, sim_args, recorder, tag, on_init=None):
-    """Run h12_mujoco.py for robot ('h12' or 'g1') as __main__ with recorder.step after every SimInterface.after_step.
+    """Run golem_sim.py for robot ('h12' or 'g1') as __main__ with recorder.step after every SimInterface.after_step.
 
     on_init(iface), if given, runs once the SimInterface is made: the robot is at the spawn, in
     the sim's stance, before the first step and the bridges. SIGTERM, like Ctrl-C, ends the sim,
@@ -367,7 +367,7 @@ def run_recorded_sim(out, robot, sim_args, recorder, tag, on_init=None):
     if on_init is not None:
         interface.__init__ = hooked_init
     signal.signal(signal.SIGTERM, interrupt)
-    script = os.path.join(SIM, "h12_mujoco.py")
+    script = os.path.join(SIM, "golem_sim.py")
     sys.argv = [script, f"--{robot}"] + sim_args
     try:
         runpy.run_path(script, run_name="__main__")
@@ -378,7 +378,7 @@ def run_recorded_sim(out, robot, sim_args, recorder, tag, on_init=None):
 
 
 def run_sim(out, sim_args):
-    """Run h12_mujoco.py --g1 with the recorder; write sensors.json, for the drive, first."""
+    """Run golem_sim.py --g1 with the recorder; write sensors.json, for the drive, first."""
     write_sensor_config(out)
     run_recorded_sim(out, "g1", sim_args, Recorder(out), "test_sim_bringup")
 
@@ -1393,7 +1393,7 @@ def main():
     parser.add_argument("role", choices=("sim", "drive", "report"))
     parser.add_argument("--out", required=True, help="the shared output directory")
     parser.add_argument("--walk", action="store_true", help="drive: the walk test")
-    parser.epilog = "sim: the G1 sim's arguments (h12_mujoco.py --g1) follow a --"
+    parser.epilog = "sim: the G1 sim's arguments (golem_sim.py --g1) follow a --"
     argv = sys.argv[1:]
     sim_args = argv[argv.index("--") + 1:] if "--" in argv else []
     args = parser.parse_args(argv[:len(argv) - len(sim_args) - ("--" in argv)])

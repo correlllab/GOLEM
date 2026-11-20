@@ -12,7 +12,7 @@ import mujoco
 import numpy as np
 
 import sim_common
-from spawn_scene import import_h12_mujoco
+from spawn_scene import import_h12_robot
 
 LAYOUT, STYLE, SEED = 9, 9, 42        # the surface probe's kitchen
 PAIR_STEPS = 100                      # physics steps over which the broadphase pairs are recorded
@@ -25,26 +25,26 @@ RESTING_TASKS = ("CloseDrawer", "PickPlaceCabinetToCounter", "OpenBlenderLid")
 
 
 def _h12_kitchen(task):
-    """Return the H1-2's env for task, spawned by h12_mujoco.spawn()."""
-    h12_mujoco = import_h12_mujoco()
+    """Return the H1-2's env for task, spawned by h12_robot.spawn()."""
+    h12_robot = import_h12_robot()
     import h1_2_robosuite
     from sim_names import NameResolver
     env = h1_2_robosuite.make_kitchen_env(task, layout_ids=LAYOUT, style_ids=STYLE, seed=SEED)
     env.reset()
     model, data = env.sim.model._model, env.sim.data._data
-    h12_mujoco.spawn(env, NameResolver(model))
+    h12_robot.spawn(env, NameResolver(model))
     mujoco.mj_forward(model, data)
     return env
 
 
 def _g1_kitchen(task):
-    """Return the G1's env for task, spawned by g1_mujoco.spawn()."""
-    from g1 import g1_mujoco, g1_robosuite
+    """Return the G1's env for task, spawned by g1_robot.spawn()."""
+    from g1 import g1_robot, g1_robosuite
     from g1.sim_names import NameResolver
     env = g1_robosuite.make_kitchen_env(task, layout_ids=LAYOUT, style_ids=STYLE, seed=SEED)
     env.reset()
     model, data = env.sim.model._model, env.sim.data._data
-    g1_mujoco.spawn(env, NameResolver(model, robot_prefix=env.robots[0].robot_model.naming_prefix))
+    g1_robot.spawn(env, NameResolver(model, robot_prefix=env.robots[0].robot_model.naming_prefix))
     mujoco.mj_forward(model, data)
     return env
 
@@ -208,7 +208,7 @@ class FixtureCollisionTests(unittest.TestCase):
         An object must still touch the fixture it was placed in; a loose fixture (on a free
         joint) must still touch a geom of another fixture. Neither may sink.
         """
-        from g1 import g1_mujoco
+        from g1 import g1_robot
         from g1.sim_names import NameResolver
         from mujoco_env import apply_band
         for task in RESTING_TASKS:
@@ -216,7 +216,7 @@ class FixtureCollisionTests(unittest.TestCase):
                 env = _g1_kitchen(task)
                 model, data = env.sim.model._model, env.sim.data._data
                 geoms = _Geoms(env)
-                band, band_body = g1_mujoco.make_band(
+                band, band_body = g1_robot.make_band(
                     data, NameResolver(model, robot_prefix=env.robots[0].robot_model.naming_prefix))
                 vel = np.zeros(6)
                 self.assertGreater(sim_common.exclude_fixture_collisions(env), 0)

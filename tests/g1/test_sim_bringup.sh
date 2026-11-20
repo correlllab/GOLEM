@@ -4,7 +4,7 @@
 #   tests/g1/test_sim_bringup.sh           # the arm test
 #   tests/g1/test_sim_bringup.sh --walk    # the walk test
 #
-# Builds core_ws for the G1, starts the sim (h12_mujoco.py --g1) headless in the
+# Builds core_ws for the G1, starts the sim (golem_sim.py --g1) headless in the
 # layout 9 / style 9 / seed 42 kitchen, then, in its network namespace, a ros
 # container that runs 'ros2 launch golem_bringup g1_sim.launch.py
 # use_rviz:=false' and the test's steps (test_sim_bringup.py drive). It then stops

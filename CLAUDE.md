@@ -49,7 +49,7 @@ pages are in `docs/g1/` (start at `docs/g1/index.md`).
 |---|---|
 | `docker/` | the images and containers (Dockerfiles, `docker-compose.yml`, the G1 overlay `docker-compose.g1.yml`, `scripts/`; the Mac's arm64 images in `docker/mac/` with the overlay `docker-compose.mac.yml`, `docs/MAC.md`) |
 | `core_ws/` | the ROS 2 workspace — where the bulk of development happens (see §4); the G1's own package is `core_ws/src/dex_3/`, the safety layer, arm controller, leg controller, SLAM/navigation and skills both robots run in `core_ws/src/golem_safety/`, `core_ws/src/golem_upper_ik/`, `core_ws/src/golem_lowerbody_rl/`, `core_ws/src/golem_slam/` and `core_ws/src/golem_skills/` |
-| `golem_robocasa/` | RoboCasa/MuJoCo simulator entry point for both robots (`h12_mujoco.py`; `--g1` hands over to the G1 sim package `golem_robocasa/g1/`) and the ROS/DDS bridges |
+| `golem_robocasa/` | RoboCasa/MuJoCo simulator for both robots: one entry point and loop (`golem_sim.py`), a robot object each (`h12_robot.py`, `g1/g1_robot.py`) and the ROS/DDS bridges |
 | `CL_isaaclab_sim/` | Isaac Lab simulator, H1-2 only (`sim_main.py`, DDS bridges, tasks) |
 | `CL_Assets/` | both robots' URDFs, MJCFs, meshes and self-collision models (the G1's in `CL_Assets/g1/`), Isaac USD (Git-LFS submodule); `golem_ros2_models` installs the models for ROS, and the sims read them directly |
 | `unitree_sdk2_python/` | vendored Unitree DDS SDK (Python) |
@@ -157,9 +157,9 @@ The compose files pass the RoboCasa sims' knobs from the shell or `docker/.env`:
 (the H1-2's default 0.20, which a task env can set via `spawn_margin`, as
 `battery_env.py` does; the G1's 0.05). Both robots' spawn searches
 (`robosuite_common.place_robot_collision_free`) back the robot off, and shift it
-sideways where that is not enough, until the clearance holds; the H1-2's must
-also hold in its limp sag poses and along `golem_upper_ik`'s start-up arm moves
-(`h12_mujoco.STARTUP_ARM_STAGES`, kept equal to its `robot.yaml` by
+sideways where that is not enough, until the clearance holds; it must
+also hold in each robot's limp sag poses and along `golem_upper_ik`'s start-up arm moves
+(`STARTUP_ARM_STAGES` in `h12_robot.py` and `g1/g1_robot.py`, kept equal to each `robot.yaml` by
 `tests/docker/test_sim_startup_poses.py`), which run while the band still holds it. `GOLEM_CAMERA_SCALE=<f>`
 (H1-2 default 0.5 of the real 1280x720), `GOLEM_CAMERA_DEPTH=0` and
 `GOLEM_CAMERA_POINTCLOUD=0` tune the H1-2's RoboCasa cameras.
@@ -519,9 +519,11 @@ ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
 `CL_isaaclab_sim` and `golem_robocasa` should generally not be modified unless
 necessary, and their **default behaviors must be preserved**. Everyone's
 sim-vs-real workflow depends on them behaving like the real robot.
-`golem_robocasa/h12_mujoco.py` is the one RoboCasa entry point for both robots: it
-picks the robot (`--h12`/`--g1`, else `GOLEM_ROBOT`, else `h12`) before its
-H1-2 imports and hands the G1 over to `golem_robocasa/g1/g1_mujoco.py`. Both
+`golem_robocasa/golem_sim.py` is the one RoboCasa entry point and physics loop for both
+robots: it picks the robot (`--h12`/`--g1`, else `GOLEM_ROBOT`, else `h12`) before either
+robot's imports and runs that robot's object (`h12_robot.H12Robot`, `g1/g1_robot.G1Robot`:
+spawn, band, sensors, DDS interface, locking and what only it serves) through the same loop,
+so a change to the loop is made once. Both
 sims render their cameras and the MID-360's rays through EGL on an NVIDIA GPU:
 without one (MuJoCo not on EGL, no EGL device, a software renderer) the sim
 stops at start, once its command line is parsed and before it builds a scene or
@@ -530,8 +532,7 @@ it is the Mac images' opt-in `GOLEM_RENDER=cpu` (OSMesa for the cameras, the
 MID-360 cast exactly on the CPU by `mid360.CpuCaster`; `sim_common.require_renderer`,
 `mid360.make_caster`). The H1-2
 stays the default, and nothing on the G1 path may change its behaviour. The robots share
-`sim_common.py`, `measurement_bridge.py`, the pacer in `sim_timing.py` (its
-`--timing` report is the H1-2's only) and the `mujoco_sensors` node in
+`sim_common.py`, `measurement_bridge.py`, the pacer in `sim_timing.py` and the `mujoco_sensors` node in
 `mujoco_ros_bridge.py`; each has its own sensor suite
 (`h12_sensors.py`, `g1/g1_sensors.py`) and Unitree DDS interface
 (`unitree_interface.py`, `g1/unitree_interface.py`), which share their command
@@ -546,7 +547,7 @@ lid) collide with everything as before.
 They should publish only what the real robot publishes and consume only what
 it consumes. Verified current surface:
 
-**RoboCasa, H1-2 (`golem_robocasa/h12_mujoco.py`)** — publishes `/clock`, the real
+**RoboCasa, H1-2 (`golem_robocasa/golem_sim.py`)** — publishes `/clock`, the real
 RealSense drivers' topics, frame names and camera TF (`/tf_static` + `/tf`) for
 `/realsense/{head,left_hand,right_hand}` — colour, depth and aligned depth with
 their camera_info, and `depth/color/points` — as captured from the robot in
@@ -589,7 +590,7 @@ probe clear it.
 `h12_sensors.py`, the grippers in `magpie_hand_bridge.py`, `/clock` and the
 opt-in odom in `mujoco_ros_bridge.py`, Unitree DDS in `unitree_interface.py`.)
 
-**RoboCasa, G1 (`h12_mujoco.py --g1`, `golem_robocasa/g1/`)** — publishes `/clock`,
+**RoboCasa, G1 (`golem_sim.py --g1`, `golem_robocasa/g1/`)** — publishes `/clock`,
 the Livox MID-360 as its driver does in CustomMsg mode (`/livox/lidar`,
 `/livox/imu`, no `/livox/pointcloud`), the head RealSense D435
 (`/realsense/head/*` and its `/tf_static`), and over Unitree DDS `rt/lowstate`
@@ -600,7 +601,7 @@ motor is off until the first `rt/lowcmd` with a valid CRC, `mode_machine` 5
 and `mode_pr` 0, and an elastic band on `torso_link` holds the robot until the
 toggle (or SPACE in the viewer) releases it; the G1 bringup's leg node
 calls it. It reads none of HOMIE's files. (Trust `g1/g1_sensors.py` for
-the ROS side, `g1/unitree_interface.py` for the DDS side and `g1/g1_mujoco.py`
+the ROS side, `g1/unitree_interface.py` for the DDS side and `g1/g1_robot.py`
 for the band.) Its knobs are `GOLEM_LIDAR`, `GOLEM_LIDAR_POINTS` (points per
 frame, default the real sensor's 20,000), `GOLEM_LIDAR_HZ`, `GOLEM_CAMERAS`,
 `GOLEM_CAMERA_HZ`,
@@ -609,13 +610,13 @@ frame, default the real sensor's 20,000), `GOLEM_LIDAR_HZ`, `GOLEM_CAMERAS`,
 `GOLEM_SIM_RATE` (as on the H1-2, above). Their
 defaults are in the code
 that reads them: `SensorConfig` in `g1/g1_sensors.py` (sensors),
-`unitree_common.py` (the command timeout), `g1/g1_mujoco.py`
-(spawn, odom), `measurement_bridge.py` (experiment) and `sim_common.py`
+`unitree_common.py` (the command timeout), `g1/g1_robot.py`
+(spawn), `golem_sim.py` (odom), `measurement_bridge.py` (experiment) and `sim_common.py`
 (rate); the compose files pass them
 (`docker/docker-compose.g1.yml` the G1-only ones). The G1 sim ignores the H1-2-only
 knobs (`GOLEM_SPAWN_OFFSET`, `GOLEM_HAND_CAMERA_RES`,
-`GOLEM_CAMERA_DEPTH`, `GOLEM_CAMERA_POINTCLOUD`). It refuses
-`--timing`, and the H1-2 sim refuses `--duration` (`sim_common.py`).
+`GOLEM_CAMERA_DEPTH`, `GOLEM_CAMERA_POINTCLOUD`). The sim logs its real-time factor
+every 30 s of sim time, with the sensors' counts.
 
 The measured surface of each RoboCasa robot is checked in as a golden:
 `tests/robocasa/surface/{h12,g1}.json`, compared by
@@ -629,6 +630,10 @@ three RealSense RGBD camera streams with camera info, and
 `rt/lowcmd` and optional `rt/inspire/cmd`. The default asset is the floating-base Magpie H1-2; `--hand_type inspire`
 selects the Inspire fixture. Magpie exposes the real gripper state, services,
 and DeliGrasp action through a native ROS process inside the Isaac container.
+With `--elastic_band` (opt-in, refused with `--fix_base`; without it the robot floats free,
+the default) it hangs the robot from the RoboCasa H1-2 sim's elastic band on `torso_link` and
+serves `/elastic_band/toggle` (`std_srvs/srv/Trigger`), checked by
+`tests/isaaclab/run_elastic_band.sh`.
 Its H1-2 (the USD) keeps the MID-360 upright, unlike the RoboCasa sim and the
 real robot's raw frame, so `golem_slam`'s H1-2 configs do not match Isaac's lidar.
 Its `rt/lowstate` tick counts publishes, not milliseconds, so
@@ -647,8 +652,7 @@ exists. Keeping it off by default keeps the sim honest and protects
 sim-to-real transfer.
 
 - **RoboCasa complies, for both robots:** ground-truth `/odom` + `odom→pelvis`
-  TF is gated by `GOLEM_SIM_ODOM` (default `'0'` = off, read in `h12_mujoco.py`
-  and `g1/g1_mujoco.py`). No stack opts in: every bringup's navigation runs on FAST-LIO, and the G1 bringup and tests refuse it. Keep it that way. The
+  TF is gated by `GOLEM_SIM_ODOM` (default `'0'` = off, read in `golem_sim.py`). No stack opts in: every bringup's navigation runs on FAST-LIO, and the G1 bringup and tests refuse it. Keep it that way. The
   experiment surface (`/sim/ground_truth`, `/sim/reset_objects`) is gated by
   `GOLEM_SIM_EXPERIMENT` (`measurement_bridge.py`). The closed-loop tests
   (`tests/g1`, `tests/sim`) run the sim with both off (`GOLEM_SIM_ODOM=0`,
@@ -909,7 +913,7 @@ docker/scripts/docker_stack.sh logs robocasa
 
 # Or three terminals, to choose the bringup's arguments (the wrappers do not
 # check the sim's robot here; golem_safety's own check is in §8)
-# Terminal 1 — the sim; wait for "[g1_mujoco] ROS bridges up"
+# Terminal 1 — the sim; wait for "[golem_sim] ROS bridges up"
 docker/scripts/docker_run.sh robocasa --g1 --layout 9 --style 9 --seed 42
 # Terminal 2 — builds core_ws (both robots' packages), drops to a shell; no
 # --g1 needed: the ros container runs either robot's bringup

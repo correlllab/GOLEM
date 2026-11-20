@@ -91,7 +91,7 @@ def on_init(out, iface):
 
 
 def run_sim(out, sim_args):
-    """Run h12_mujoco.py --h12 with the recorder, the scene map and the saved model."""
+    """Run golem_sim.py --h12 with the recorder, the scene map and the saved model."""
     if os.environ.get("GOLEM_ROBOT", "").strip().lower() != ROBOT:
         raise SystemExit(f"GOLEM_ROBOT must be {ROBOT}")
     bringup_test.run_recorded_sim(out, ROBOT, sim_args, Recorder(out), "test_lmg_explore",
@@ -445,7 +445,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("role", choices=("sim", "drive", "report", "video"))
     parser.add_argument("--out", required=True, help="the shared output directory")
-    parser.epilog = "sim: h12_mujoco.py's arguments follow a --"
+    parser.epilog = "sim: golem_sim.py's arguments follow a --"
     argv = sys.argv[1:]
     sim_args = argv[argv.index("--") + 1:] if "--" in argv else []
     args = parser.parse_args(argv[:len(argv) - len(sim_args) - ("--" in argv)])

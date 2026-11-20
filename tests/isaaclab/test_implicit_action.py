@@ -33,6 +33,7 @@ class ImplicitActionTests(unittest.TestCase):
         """Targets, gains and feed-forward torque reach the drives with no PD torque added, unchanged gains are not rewritten, and mode 0 zeroes them."""
         action = object.__new__(module.UnitreeMotorAction)
         action.num_envs = 1
+        action._env = SimpleNamespace()
         action._body_ids = list(range(27))
         action._hand_ids = list(range(27,39))
         action._coupled_ids = list(range(39,51))

@@ -623,6 +623,24 @@ def test_obs_terms_must_match_the_layout():
         _controller(legs_obs_terms=legs, arms_obs_terms=LEGS_OBS_TERMS)
 
 
+def test_legs_obs_may_leave_out_the_wrist_targets():
+    """A legs term list without ee_targets builds the legs' observation 14 shorter, the rest in order; the arms' not."""
+    legs = [t for t in LEGS_OBS_TERMS if t != "gait_phase_cos"]
+    arms = [t for t in ARMS_OBS_TERMS if t != "gait_phase_cos"]
+    full, cfg = _controller(legs_obs_terms=legs, arms_obs_terms=arms)
+    trimmed, _ = _controller(legs_obs_terms=[t for t in legs if t != "ee_targets"], arms_obs_terms=arms)
+    state = _state(cfg)
+    for ctrl in (full, trimmed):
+        ctrl.reset(state)
+        ctrl.step(state)
+    a, b = full.last_obs["legs"], trimmed.last_obs["legs"]
+    assert b.shape == (a.shape[0] - 14,)
+    np.testing.assert_allclose(b, np.concatenate([a[:13], a[27:]]))
+    np.testing.assert_allclose(trimmed.last_obs["arms"], full.last_obs["arms"])
+    with pytest.raises(ValueError):
+        _controller(legs_obs_terms=legs, arms_obs_terms=[t for t in arms if t != "ee_targets"])
+
+
 def test_arm_goals_refused_for_a_policy_that_never_trained_one():
     """With arm_goals false, set_mode arm and request_arm_goal raise and the controller keeps navigating."""
     ctrl, cfg = _controller(arm_goals=False)

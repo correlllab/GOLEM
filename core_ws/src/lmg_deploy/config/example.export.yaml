@@ -33,6 +33,11 @@ default_joint_pos: [0.0, -0.375, 0.0, 0.697, -0.322, 0.0, 0.0, -0.375, 0.0, 0.69
 leg_action_scales: [0.2, 0.2, 0.2, 0.1875, 0.125, 0.25, 0.2, 0.2, 0.2, 0.1875, 0.125, 0.25]   # per leg joint
 arm_residual_scales: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # 0: IK alone
 max_ik_step: 0.05           # rad per policy step
+# recorded by exports from 2026-11-16. The controller reads the first two from the deploy config's arms block
+# (h12.yaml: the same values), so a run that trains with others needs them set there; clip_actions overrides it.
+residual_cutoff_hz: 3.0     # Hz, the arms' residual low-pass
+ik_damping: 0.05            # the IK's damping
+clip_actions: 10.0          # the env clamps every raw action to +-this
 gait_period: 0.7            # s, sport mode's gait cycle
 zero_cmd_eps: 0.03          # a command norm under this is standing
 command_ranges:             # the run's command ranges; /cmd_vel is clipped to them
@@ -41,6 +46,7 @@ command_ranges:             # the run's command ranges; /cmd_vel is clipped to t
   ang_vel_z: [-0.97, 0.97]
 command_filter_tau: 0.5     # s, the velocity command's low-pass
 arm_goals: false            # the run never trained an arm goal (arm_goal_prob 0); the deploy refuses one
+# the legs' list may leave out ee_targets (LocoManip-LegsOnly-v0 runs from 2026-11-16; legs.num_obs is then 83)
 legs_obs_terms: [base_lin_acc, base_ang_vel, projected_gravity, velocity_commands, arm_goal, ee_targets, joint_pos,
                  joint_vel, gait_phase, gait_phase_cos, actions]
 arms_obs_terms: [base_lin_acc, base_ang_vel, projected_gravity, velocity_commands, arm_goal, ee_targets, joint_pos,

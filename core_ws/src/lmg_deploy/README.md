@@ -5,8 +5,9 @@ Runs a two-agent MARL policy from Locomanipulation_game (branch `marl-direct`,
 delay in training) on the H1-2. The policies live one per robot, in `policies/h12/` and
 `policies/g1/` (empty so far), **one iteration at a time: a new export replaces the robot's
 folder, and old ones are deleted, not kept beside it** (`policies/README.md`). `policies/h12/` holds
-LegsBalanceAmp_s42 (LocoManip-LegsBalanceAmp-v0: the sport-mode recipe at 100 Hz, legs only, so it
-refuses arm goals); its `export.yaml`'s `source` names the checkpoint. A
+LegsEnergyDefault200k_s43 (LocoManip-LegsOnly-v0: the sport-mode recipe at 100 Hz, legs only, so it
+refuses arm goals; trained with a mechanical-power penalty and no pelvis-height reward, and its legs
+actor is not shown the wrist targets); its `export.yaml`'s `source` names the checkpoint. A
 **legs** agent that walks on `/cmd_vel`, and an **arms** agent that reaches
 wrist-pose goals through a damped-least-squares IK step plus a learned
 residual. One node, `marl_deploy_node`, owns all 27 joints. It publishes
@@ -23,7 +24,7 @@ the first latches it silent.
 
 | File | What it is |
 |---|---|
-| `lmg_deploy/controller.py` | ROS-free env step: SLAM odometry → mode → observations (legs 95, arms 123; 97 and 125 with `gait_phase_cos`) → joint targets |
+| `lmg_deploy/controller.py` | ROS-free env step: SLAM odometry → mode → observations (legs 95, arms 123; 97 and 125 with `gait_phase_cos`; the legs' 14 fewer when the export's `legs_obs_terms` leaves out `ee_targets`) → joint targets |
 | `lmg_deploy/kinematics.py` | Pinocchio wrist FK, Jacobian and IK step, in the pelvis frame |
 | `lmg_deploy/rotations.py` | numpy versions of the isaaclab.utils.math functions training used |
 | `lmg_deploy/networks.py` | TorchScript loader for the exported actors |
@@ -67,7 +68,8 @@ It writes:
   phase cos after its sin), `imu` (the frame the run's IMU sat in, its offset, and `gyro_lowpass_hz` when the gyro
   was low-passed) and the source files. The sport-mode runs' exports also carry their control rate (`control_dt`
   0.01), gains, stance, per-joint action scales, `max_ik_step`, gait period, standing threshold, command ranges and
-  low-pass (`command_filter_tau`), their observation term lists, which the controller checks against its own, and
+  low-pass (`command_filter_tau`), their observation term lists, which the controller checks against its own (the
+legs' list may leave out `ee_targets`: LocoManip-LegsOnly-v0 runs from 2026-11-16, 83 inputs), and
   `arm_goals` (false: the run never trained an arm goal, so `set_mode arm` and `~/arm_goal` are refused). The node
   loads it over the policy's yaml and runs at 1 / `control_dt`. A new policy's yaml is the last
   one's with `legs.num_obs` / `arms.num_obs` set to the export's printed sizes.

@@ -11,6 +11,12 @@
 #
 # All three run on the host network, so they share one DDS domain
 # (ROS_DOMAIN_ID, 1 when unset; 0 is the real robots' bus).
+#
+# The project name is fixed: Compose would otherwise name the project after
+# this directory, docker, and adopt any other checkout's containers whose
+# compose file also sits in a docker/ directory and has a ros or robocasa
+# service, which `up --force-recreate` (docker_stack.sh) then deletes.
+name: golem
 services:
   # Isaac Lab simulator of the H1-2 (IsaacDockerfile, launch_isaac.sh).
   isaac:

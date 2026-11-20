@@ -58,6 +58,7 @@ ROS_DOMAIN_ID=187 tests/isaaclab/run_smoke.sh
 ROS_DOMAIN_ID=188 tests/isaaclab/run_livox_interop.sh
 ROS_DOMAIN_ID=189 tests/isaaclab/run_sensor_transport.sh
 ROS_DOMAIN_ID=191 tests/isaaclab/run_robot_interop.sh
+tests/isaaclab/run_elastic_band.sh
 ```
 
 `run_smoke.sh` requires the actual Isaac Lab scene to complete 50 steps and
@@ -68,6 +69,11 @@ decoded by the ROS container's generated Humble Livox message type.
 `run_robot_interop.sh` publishes native ROS LowCmd and checks wrist motion,
 Magpie gripper services/actions (or Inspire commands when selected), measured
 hand state and all 19 sensor topics. It releases body motors on exit.
+`run_elastic_band.sh` runs the sim with `--elastic_band` and no controller for 50 s of sim
+time (domain 185 unless `ROS_DOMAIN_ID` is set): the limp robot must hang within 0.10 m of the
+band's anchor for 40 s, collapse when `/elastic_band/toggle` releases it, and be pulled back to the
+anchor from where it lay when a second call enables the band. Its log is
+`tests/results/isaac-elastic-band.log`.
 The workflow has an explicit manual GPU job for a prepared self-hosted
 runner labelled `nvidia`; it is not run automatically on untrusted pull requests.
 
@@ -80,7 +86,9 @@ robot-specific acceptance tests when the CL_Assets pin changes.
 Isaac defaults to the floating-base Magpie H1-2 in `CL_Assets`. Use
 `docker/scripts/docker_run.sh isaac --hand_type inspire --headless` for the
 Inspire fixture. `--fix_base` fixes the Magpie root for isolated motor tests;
-normal launches leave it free and require a lower-body controller.
+normal launches leave it free and require a lower-body controller. `--elastic_band` (not with
+`--fix_base`) hangs the free robot from the RoboCasa sims' elastic band on `torso_link` until
+`/elastic_band/toggle` releases it.
 
 Magpie exposes `/{left,right}/gripper/state`, the gripper services and DeliGrasp
 through a native ROS process in the Isaac container. Its isolated Humble/Python runtime and messages are built into the Isaac image

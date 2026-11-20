@@ -90,7 +90,10 @@ Uses the same wrappers. The launcher honors
 rejected. Select a task with `docker_run.sh isaac --task base --headless`.
 Magpie H1-2 is the default asset, with a floating base. Start the ROS lower-body
 controller to support it. Select the Inspire fixture with `--hand_type inspire`.
-Use `--fix_base` only for a fixed-root bench test. Logs go to container stdout.
+Use `--fix_base` only for a fixed-root bench test. `--elastic_band` (not with `--fix_base`)
+hangs the floating robot from an elastic band on its torso, as the RoboCasa sims do, until
+`ros2 service call /elastic_band/toggle std_srvs/srv/Trigger` releases it; a second call
+enables it again. Logs go to container stdout.
 The Magpie ROS gripper process starts inside the Isaac container using an
 isolated Humble runtime. Its message interfaces are built into the image.
 

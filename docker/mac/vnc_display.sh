@@ -7,7 +7,9 @@
 # A Mac has no X server a container can render through (XQuartz gives no
 # OpenGL on Apple Silicon), so RViz draws on Xvfb display :99 with Mesa's
 # software OpenGL (llvmpipe), shown by x11vnc on port 5901 and by noVNC in a
-# browser on port 6080. The containers run on the VM's host network, which
+# browser on port 6080; matchbox-window-manager fits each window to the screen
+# (the RViz configs keep the lab monitors' window geometry, off this display).
+# The containers run on the VM's host network, which
 # OrbStack and Docker Desktop forward to the Mac's localhost:
 #   http://localhost:6080/vnc.html   or   vnc://localhost:5901 (Screen Sharing)
 # Environment: DISPLAY (:99, docker-compose.mac.yml); GOLEM_VNC=0 starts no
@@ -33,6 +35,7 @@ start_display() {
         echo "vnc_display: Xvfb did not start on $display (/tmp/xvfb.log)" >&2
         return 0
     fi
+    DISPLAY=$display matchbox-window-manager -use_titlebar no >/tmp/wm.log 2>&1 &
     # No password: the VM's network is reachable only from the Mac.
     x11vnc -display "$display" -rfbport 5901 -forever -shared -nopw -quiet \
         >/tmp/x11vnc.log 2>&1 &

@@ -163,8 +163,10 @@ RUN rm -rf /usr/local/lib/python3.10/dist-packages/setuptools \
 # RViz's display: Xvfb with Mesa's software OpenGL, shown over VNC (x11vnc) and
 # in a browser (noVNC on websockify), started by vnc_display.sh, the entrypoint.
 # A Mac has no X server a container can render OpenGL through (docs/MAC.md).
+# matchbox-window-manager fits each window to the screen: the RViz configs keep
+# the lab monitors' window geometry, which lies off a 1280x800 display.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        xvfb x11vnc novnc python3-websockify \
+        xvfb x11vnc novnc python3-websockify matchbox-window-manager \
     && rm -rf /var/lib/apt/lists/*
 COPY docker/mac/vnc_display.sh /opt/golem/vnc_display.sh
 ENTRYPOINT ["/opt/golem/vnc_display.sh"]

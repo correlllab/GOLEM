@@ -6,8 +6,10 @@ order (locomanip_marl_env.py _get_observations, then _pre_physics_step):
   1. pelvis odometry: move the arm command by how the pelvis moved since the
      last SLAM pose (ArmTargetsCommand.apply_pelvis_motion);
   2. commands: advance the settle timer, switch mode;
-  3. observations: the legs' (95) and the arms' (123), or 97 and 125 with
-     gait_phase_cos (each leg's phase cos after its sin);
+  3. observations: each agent's terms in export.yaml's legs_obs_terms /
+     arms_obs_terms (OBS_TERMS' order, any of them left out), or all of them
+     (legs 95, arms 123; 97 and 125 with gait_phase_cos, each leg's phase cos
+     after its sin);
   4. actions: clamp to +-clip, legs = scale * a + default, arms = q + IK step
      + residual_scale * r (each scale one number, or per joint from export.yaml's
      leg_action_scales / arm_residual_scales: runs that matched their scales to
@@ -19,6 +21,37 @@ order (locomanip_marl_env.py _get_observations, then _pre_physics_step):
      action. With torque_headroom set, each target is then kept where the PD
      torque it asks for at the measured state, kp (target - q) - kd qd, is
      within torque_headroom x effort_limits (mdp.actions.torque_bounds).
+     With export.yaml's arm_ik block the arms are mdp.IKPostureArmAction's
+     instead (below).
+
+arm_ik (mdp.IKPostureArmAction, LocoManip-ArmsOnly-v0 / LocoManip-Marl-Direct-v0
+runs; Locomanipulation_game's mujoco_evals/mujoco_sim.py MarlMujoco is the
+numpy twin). Per step, from the arms' action a (14 wide, 28 with
+posture_actions: the residual, then the posture offset):
+  - residual: integrated (residual_integrate: leak exp(-dt / leak_s), plus
+    gain x a, clamped to +-clamp) or low-passed as above; held while frozen;
+  - posture: per arm seed_q (posture_from_command: during an arm goal the
+    joint angles of arm_seed_table's row nearest the arm command, position and
+    rotation at seed_rot_weight m per rad, with seed_solve solved for the
+    command itself; set once per goal, as training draws it; a rest-pose goal
+    and navigation: the default angles), plus posture_scale x posture_gain x
+    the offset, inside the target bounds narrowed by limit_margin;
+  - trajectory: the target ik_q moves from its own last value (not the
+    measured angles) to the posture, each arm's joints together at
+    trajectory_max_vel / trajectory_max_acc (without them: max_ik_step per
+    joint); without trajectory, one limit-aware, posture-seeking IK step from
+    the measured angles (_posture_step);
+  - target: ik_q + gravity offset (gravity_offset: minus each arm joint's
+    gravity torque at ik_q over its kp, gravity in the pelvis frame from the
+    IMU attitude carried through imu.frame's pose) + integral + scale x
+    residual, then the bounds above;
+  - integral: leaks (integral.leak_s); once ik_q has arrived at the posture,
+    integral.gain x each arm's rot_weight-weighted DLS step on the measured
+    wrist's error is added; clamped to +-integral.clamp;
+  - freeze: the residual is latched once ik_q has arrived and both wrists have
+    been within freeze.pos_tol / rot_tol of the arm command for settle_s;
+    released when the posture moves or the arm goal ends.
+reset() starts ik_q at the measured arm angles with everything else zero.
 
 Odometry is the SLAM pipeline's: set_slam_pose() takes FAST-LIO's body pose
 (camera_init -> body; the body is cfg["slam_frame"], the IMU frame FAST-LIO
@@ -64,13 +97,16 @@ NUM_JOINTS = 27
 NUM_LEGS = 12
 ARM_START = 13
 NUM_ARM_JOINTS = 14
-# The observation terms step() builds, in order (gait_phase_cos only with cfg["gait_phase_cos"]). An export's
-# legs_obs_terms / arms_obs_terms must equal them; the legs' may leave out ee_targets (LocoManip-LegsOnly-v0 runs
-# from 2026-11-16: no arm goals, so the legs' actor is not shown the wrist targets).
+# The observation terms step() can build, in order (gait_phase_cos only with cfg["gait_phase_cos"]). An export's
+# legs_obs_terms / arms_obs_terms name the ones its actors saw, in this order, any left out: LocoManip-LegsOnly-v0's
+# legs from 2026-11-16 drop ee_targets, from 2026-11-19 arm_goal, and every actor from 2026-11-20 base_lin_acc (the
+# torso IMU's runs); LocoManip-ArmsOnly-v0's arms drop the IMU, the velocity command and the gait clock.
 COMMON_OBS_TERMS = ["base_lin_acc", "base_ang_vel", "projected_gravity", "velocity_commands", "arm_goal", "ee_targets",
                     "joint_pos", "joint_vel", "gait_phase", "gait_phase_cos"]
 LEGS_OBS_TERMS = COMMON_OBS_TERMS + ["actions"]
 ARMS_OBS_TERMS = COMMON_OBS_TERMS + ["actions", "wrist_poses", "wrist_errors"]
+GRAVITY = 9.81             # m/s^2, the training sim's
+SOFT_LIMIT_FACTOR = 0.9    # the training asset's soft_joint_pos_limit_factor (H1_2_MAGPIE_CFG): the seed solve's range
 
 
 @dataclass
@@ -131,14 +167,8 @@ class MarlController:
         self.gait_period = float(cfg["gait_period"])
         self.zero_cmd_eps = float(cfg["zero_cmd_eps"])
         self.gait_phase_cos = bool(cfg.get("gait_phase_cos", False))
-        self.legs_see_ee_targets = "ee_targets" in (cfg.get("legs_obs_terms") or LEGS_OBS_TERMS)
-        for agent, terms in (("legs", LEGS_OBS_TERMS), ("arms", ARMS_OBS_TERMS)):
-            expected = [t for t in terms if (t != "gait_phase_cos" or self.gait_phase_cos)
-                        and (t != "ee_targets" or agent == "arms" or self.legs_see_ee_targets)]
-            trained = cfg.get(f"{agent}_obs_terms")
-            if trained is not None and list(trained) != expected:
-                raise ValueError(f"{agent}_obs_terms {list(trained)} are not the observations this controller builds, "
-                                 f"{expected}")
+        self.obs_terms = {agent: self._agent_terms(cfg.get(f"{agent}_obs_terms"), terms)
+                          for agent, terms in (("legs", LEGS_OBS_TERMS), ("arms", ARMS_OBS_TERMS))}
         ranges = cfg["command_ranges"]
         self.cmd_low = np.array([ranges["lin_vel_x"][0], ranges["lin_vel_y"][0], ranges["ang_vel_z"][0]])
         self.cmd_high = np.array([ranges["lin_vel_x"][1], ranges["lin_vel_y"][1], ranges["ang_vel_z"][1]])
@@ -149,9 +179,19 @@ class MarlController:
         self.torque_headroom = cfg.get("torque_headroom")
         if self.torque_headroom is not None:
             self.effort_limits = np.asarray(cfg["effort_limits"], dtype=np.float64)
-        cutoff = cfg["arms"].get("residual_cutoff_hz")
+        # export.yaml's residual_cutoff_hz (the run's) over the template's
+        cutoff = cfg.get("residual_cutoff_hz", cfg["arms"].get("residual_cutoff_hz"))
+        # LocoManip-Marl-Direct-v0's arm goals (export.yaml, from its ArmTargetsCommandCfg): arm_goal_frame "pelvis"
+        # rides the goal on the pelvis (pelvis_fixed_goals: no odometry moves it), arm_goal_keeps_walking keeps the
+        # operator's velocity command through an arm goal (independent_of_legs)
+        frame = cfg.get("arm_goal_frame", "world")
+        if frame not in ("world", "pelvis"):
+            raise ValueError(f"arm_goal_frame must be 'world' or 'pelvis', not {frame!r}")
+        self.arm_goal_on_pelvis = frame == "pelvis"
+        self.arm_goal_keeps_walking = bool(cfg.get("arm_goal_keeps_walking", False))
         self.filter_alpha = 1.0 if cutoff is None else 1.0 - np.exp(-2.0 * np.pi * float(cutoff) * self.dt)
         self.slam_frame = cfg["slam_frame"]
+        self._init_arm_ik(cfg)
         self._slam_pose: tuple[np.ndarray, np.ndarray] | None = None   # latest body pose, SLAM world frame
         if len(self.default) != NUM_JOINTS or len(self.kp) != NUM_JOINTS or len(self.kd) != NUM_JOINTS:
             raise ValueError("default_joint_pos, kp and kd need one entry per policy joint (27)")
@@ -177,8 +217,15 @@ class MarlController:
         # The action terms' state after a reset: the legs see the applied target in action units, the arms zero.
         q_legs = state.q[:NUM_LEGS] if state is not None else self.default[:NUM_LEGS]
         self.legs_last = (q_legs - self.default[:NUM_LEGS]) / self.legs_scale
-        self.arms_last = np.zeros(NUM_ARM_JOINTS)
-        self.residual = np.zeros(NUM_ARM_JOINTS)    # the arms' action after the low-pass
+        self.arms_last = np.zeros(self.n_arm_actions)
+        self.residual = np.zeros(self.n_arm_actions)   # the arms' action after the low-pass (or integration)
+        # arm_ik's state, as IKPostureArmAction.reset leaves it: the target from the measured arm angles, at rest
+        self.ik_q = (state.q if state is not None else self.default)[ARM_START:].copy()
+        self.traj_v = np.zeros(NUM_ARM_JOINTS)      # the trajectory's velocity (rad/s)
+        self.integral = np.zeros(NUM_ARM_JOINTS)    # the pose-error integral (rad)
+        self.frozen, self.settled_steps = False, 0  # the residual latched (arm_ik.freeze)
+        self.posture = self.default[ARM_START:].copy()
+        self.seed_q = self.default[ARM_START:].copy()   # (14,) the posture's base: navigation's, the default angles
         self._prev_pelvis: tuple[np.ndarray, np.ndarray] | None = None   # pelvis pose at the last SLAM pose used
         self.last_obs: dict[str, np.ndarray] = {}
         for network in (self.legs, self.arms):
@@ -209,6 +256,7 @@ class MarlController:
             goal[arm, 3:] = quat_unique(goal[arm, 3:] / np.linalg.norm(goal[arm, 3:]))
         if self.mode == Mode.ARM:
             self.believed = goal           # a goal replacing a goal has no settle, as in training
+            self._update_seeds()
         elif self.settle_to_arm_s > 0.0:
             self.pending_goal = goal
             self.mode, self.timer = Mode.SETTLE_TO_ARM, self.settle_to_arm_s
@@ -227,6 +275,7 @@ class MarlController:
         self.arm_goals = goal
         if self.mode == Mode.ARM:
             self.believed = goal.copy()
+            self._update_seeds()
         elif self.mode == Mode.SETTLE_TO_ARM:
             self.pending_goal = goal.copy()
 
@@ -250,6 +299,7 @@ class MarlController:
         """Return to navigation, through settle_to_nav_s from an arm goal; a pending goal is dropped."""
         if self.mode == Mode.ARM:
             self.believed = self.rest_pose.copy()
+            self._update_seeds()
             if self.settle_to_nav_s > 0.0:
                 self.mode, self.timer = Mode.SETTLE_TO_NAV, self.settle_to_nav_s
             else:
@@ -265,11 +315,8 @@ class MarlController:
         self._update_mode()
         self._filter_command()
 
-        common = self._common_obs(state)
-        legs_common = common if self.legs_see_ee_targets else self._common_obs(state, ee_targets=False)
-        legs_obs = np.concatenate([legs_common, self.legs_last])
-        arms_obs = np.concatenate([common, self.arms_last, self._wrist_poses(), self._wrist_errors()])
-        self.last_obs = {"legs": legs_obs, "arms": arms_obs}
+        self.last_obs = self.observations(state)
+        legs_obs, arms_obs = self.last_obs["legs"], self.last_obs["arms"]
 
         legs_action = np.clip(self.legs(legs_obs), -self.clip, self.clip)
         arms_action = np.clip(self.arms(arms_obs), -self.clip, self.clip)
@@ -277,20 +324,238 @@ class MarlController:
         target = self.default.copy()
         legs_target = legs_action * self.legs_scale + self.default[:NUM_LEGS]
         target[:NUM_LEGS] = self._torque_bound(self._bound(legs_target, slice(0, NUM_LEGS)), state, slice(0, NUM_LEGS))
-        ik = state.q[ARM_START:].copy()
-        for arm in range(self.num_arms):
-            cols = self.kin.arm_cols[arm] - ARM_START
-            ik[cols] += self.kin.ik_step(arm, self.believed[arm, :3], self.believed[arm, 3:],
-                                         self.ik_damping, self.max_ik_step)
-        self.residual = self.residual + self.filter_alpha * (arms_action - self.residual)
         arms = slice(ARM_START, NUM_JOINTS)
-        target[arms] = self._torque_bound(self._bound(ik + self.residual * self.arms_scale, arms), state, arms)
+        if self.arm_ik is not None:
+            target[arms] = self._posture_arms(state, arms_action)
+        else:
+            ik = state.q[ARM_START:].copy()
+            for arm in range(self.num_arms):
+                cols = self.kin.arm_cols[arm] - ARM_START
+                ik[cols] += self.kin.ik_step(arm, self.believed[arm, :3], self.believed[arm, 3:],
+                                             self.ik_damping, self.max_ik_step)
+            self.residual = self.residual + self.filter_alpha * (arms_action - self.residual)
+            target[arms] = self._torque_bound(self._bound(ik + self.residual * self.arms_scale, arms), state, arms)
 
         # What each agent observes of its action next step (mdp.applied_action).
         self.legs_last = (target[:NUM_LEGS] - self.default[:NUM_LEGS]) / self.legs_scale
         self.arms_last = self.residual.copy()
         self.steps += 1
         return JointCommand(q=target, kp=self.kp.copy(), kd=self.kd.copy())
+
+    # -- arm_ik: mdp.IKPostureArmAction ------------------------------------------
+
+    def _init_arm_ik(self, cfg: dict) -> None:
+        """Read export.yaml's arm_ik block (mujoco_evals/common.py read_deploy_settings writes it), if any."""
+        self.arm_ik = cfg.get("arm_ik") or None
+        c = self.arm_ik or {}
+        self.n_arm_actions = 2 * NUM_ARM_JOINTS if self.arm_ik and c.get("posture_actions", True) else NUM_ARM_JOINTS
+        num_actions = cfg["arms"].get("num_actions")
+        if num_actions is not None and int(num_actions) != self.n_arm_actions:
+            raise ValueError(f"arms.num_actions {num_actions}, but arm_ik's action is {self.n_arm_actions} wide")
+        if self.arm_ik is None:
+            return
+        if self.num_arms != 2:
+            raise ValueError("arm_ik needs two arms")
+        if c.get("trajectory") and c.get("trajectory_max_acc") is not None and c.get("trajectory_max_vel") is None:
+            raise ValueError("arm_ik.trajectory_max_acc needs trajectory_max_vel")
+        if (c.get("integral") or c.get("freeze")) and not c.get("trajectory"):
+            raise ValueError("arm_ik.integral and arm_ik.freeze need trajectory")
+        arms = slice(ARM_START, NUM_JOINTS)
+        self.ik_lower = self.lower[arms] + float(c["limit_margin"])
+        self.ik_upper = self.upper[arms] - float(c["limit_margin"])
+        self.row_weight = np.array([1.0, 1.0, 1.0, c["rot_weight"], c["rot_weight"], c["rot_weight"]], dtype=np.float64)
+        self.settle_steps = max(1, int(round(float(c["freeze"]["settle_s"]) / self.dt))) if c.get("freeze") else 0
+        # the goal table's poses and joint angles per arm (export.yaml arm_seed_table; marl_deploy_node makes the path
+        # absolute)
+        self.seed_table = None
+        if c.get("posture_from_command"):
+            table = np.load(cfg["arm_seed_table"])
+            self.seed_table = [(table[f"poses_{arm}"].astype(np.float64), table[f"joints_{arm}"].astype(np.float64))
+                               for arm in range(self.num_arms)]
+        if c.get("seed_solve") and self.seed_table is None:
+            raise ValueError("arm_ik.seed_solve needs posture_from_command (the seed table)")
+        if c.get("seed_solve"):
+            # the solve's range: training's soft limits (SOFT_LIMIT_FACTOR of the hard range) narrowed by the margin
+            factor = float(c["seed_solve"].get("soft_limit_factor", SOFT_LIMIT_FACTOR))
+            hard = self.kin.joint_limits
+            mid, half = hard.mean(axis=1), 0.5 * (hard[:, 1] - hard[:, 0])
+            margin = float(c["seed_solve"].get("joint_range_margin", 0.0))
+            self.solve_low, self.solve_high = mid - factor * half + margin, mid + factor * half - margin
+        # the IMU frame the state's attitude is in, for the gravity offset's pelvis-frame gravity
+        self.imu_frame = (cfg.get("imu") or {}).get("frame", "imu_link")
+        if c.get("gravity_offset") and self.imu_frame not in self.kin.extra_frames:
+            raise ValueError(f"arm_ik.gravity_offset needs the IMU frame {self.imu_frame!r} among the kinematics' frames")
+
+    def _update_seeds(self) -> None:
+        """Set seed_q for the arm command just set (ArmTargetsCommand draws it once per goal): during an arm goal the
+        seed table's nearest rows, with seed_solve solved for the command; the rest pose and navigation: default."""
+        default = self.default[ARM_START:].copy()
+        if (self.arm_ik is None or self.seed_table is None or self.mode != Mode.ARM
+                or np.allclose(self.believed, self.rest_pose, atol=1e-9)):
+            self.seed_q = default
+            return
+        seed = self.default.copy()
+        for arm in range(self.num_arms):
+            seed[self.kin.arm_cols[arm]] = self._nearest_row(arm)
+        if self.arm_ik.get("seed_solve"):
+            c = self.arm_ik["seed_solve"]
+            seed = self.kin.solve_arms(self.believed, seed, self.solve_low, self.solve_high, iters=int(c["iters"]),
+                                       damping=float(c["damping"]), rot_weight=float(c["rot_weight"]))
+        self.seed_q = seed[ARM_START:].copy()
+
+    def _nearest_row(self, arm: int) -> np.ndarray:
+        """Return the joint angles of the arm's seed-table row nearest its command: squared position distance plus
+        (seed_rot_weight x rotation angle)^2, the angle from 8 (1 - |q . q_row|) (ArmTargetsCommand.nearest_joints)."""
+        poses, joints = self.seed_table[arm]
+        b = self.believed[arm]
+        w2 = float(self.arm_ik["seed_rot_weight"]) ** 2
+        d = ((poses[:, :3] - b[:3]) ** 2).sum(axis=1) + w2 * 8.0 * (1.0 - np.abs(poses[:, 3:] @ b[3:]))
+        return joints[int(np.argmin(d))]
+
+    def _posture_arms(self, state: RobotState, action: np.ndarray) -> np.ndarray:
+        """Return the arms' 14 targets from their action, IKPostureArmAction.process_actions (module doc)."""
+        c, n = self.arm_ik, NUM_ARM_JOINTS
+        if action.shape != (self.n_arm_actions,):
+            raise ValueError(f"arms action of {action.shape}, arm_ik expects ({self.n_arm_actions},)")
+        if not self.frozen:
+            ri = c.get("residual_integrate")
+            if ri:
+                leak = np.exp(-self.dt / float(ri["leak_s"]))
+                self.residual = np.clip(leak * self.residual + float(ri["gain"]) * action,
+                                        -float(ri["clamp"]), float(ri["clamp"]))
+            else:
+                self.residual = self.residual + self.filter_alpha * (action - self.residual)
+        offset = self.residual[n:] if self.n_arm_actions == 2 * n else 0.0
+        self.posture = np.clip(self.seed_q + float(c["posture_scale"]) * float(c["posture_gain"]) * offset,
+                               self.ik_lower, self.ik_upper)
+        arms = slice(ARM_START, NUM_JOINTS)
+        if c.get("trajectory"):
+            if c.get("trajectory_max_vel") is None:
+                ik = self.ik_q + np.clip(self.posture - self.ik_q, -self.max_ik_step, self.max_ik_step)
+            else:
+                ik = self._synchronized_step()
+            self.ik_q = self._bound(ik, arms)
+            if c.get("integral"):
+                self._update_integral()
+            target = self.ik_q + self._gravity_offset(state, self.ik_q) + self.integral + self.arms_scale * self.residual[:n]
+            target = self._torque_bound(self._bound(target, arms), state, arms)
+            if c.get("freeze"):
+                self._update_freeze()
+            return target
+        ik = state.q[arms].copy()
+        for arm in range(self.num_arms):
+            cols = self.kin.arm_cols[arm] - ARM_START
+            ik[cols] += self._posture_step(arm, ik[cols], cols)
+        self.ik_q = self._bound(ik, arms)   # where a trajectory would start from
+        target = ik + self._gravity_offset(state, ik) + self.arms_scale * self.residual[:n]
+        return self._torque_bound(self._bound(target, arms), state, arms)
+
+    def _synchronized_step(self) -> np.ndarray:
+        """Return the trajectory's next target: per arm, all joints along the straight line to the posture, the fastest
+        at trajectory_max_vel, slowed to stop there, its velocity changed by at most trajectory_max_acc x dt."""
+        c, dt = self.arm_ik, self.dt
+        vmax = float(c["trajectory_max_vel"])
+        amax = None if c.get("trajectory_max_acc") is None else float(c["trajectory_max_acc"])
+        ik = self.ik_q.copy()
+        for arm in range(self.num_arms):
+            cols = self.kin.arm_cols[arm] - ARM_START
+            delta = self.posture[cols] - self.ik_q[cols]
+            dist = max(float(np.abs(delta).max()), 1e-9)
+            cap = min(vmax, np.sqrt(2.0 * amax * dist)) if amax is not None else vmax
+            v = delta / dt * min(1.0, cap * dt / dist)
+            if amax is not None:
+                dv = v - self.traj_v[cols]
+                v = self.traj_v[cols] + dv * min(1.0, amax * dt / max(float(np.abs(dv).max()), 1e-12))
+            self.traj_v[cols] = v
+            ik[cols] = self.ik_q[cols] + v * dt
+        return ik
+
+    def _arrived(self) -> bool:
+        """Return whether the trajectory's target has stopped at the posture."""
+        return bool(np.abs(self.ik_q - self.posture).max() < 1e-4 and np.abs(self.traj_v).max() < 1e-3)
+
+    def _wrist_error(self, arm: int) -> np.ndarray:
+        """Return the arm's measured wrist (position, axis-angle) error to the arm command, pelvis frame."""
+        pos, quat = self.kin.wrist_pose(arm)
+        return np.concatenate(compute_pose_error(pos, quat, self.believed[arm, :3], self.believed[arm, 3:]))
+
+    def _update_integral(self) -> None:
+        """Leak the pose-error integral; once arrived, add gain x each arm's weighted DLS step on its wrist's error."""
+        c, ik = self.arm_ik["integral"], self.arm_ik
+        self.integral *= np.exp(-self.dt / float(c["leak_s"]))
+        if self._arrived():
+            damp = float(ik["ik_damping"]) ** 2 * np.eye(6)
+            for arm in range(self.num_arms):
+                jac = self.kin.jacobian(arm) * self.row_weight[:, None]
+                err = self._wrist_error(arm) * self.row_weight
+                cols = self.kin.arm_cols[arm] - ARM_START
+                self.integral[cols] += float(c["gain"]) * (jac.T @ np.linalg.solve(jac @ jac.T + damp, err))
+        self.integral = np.clip(self.integral, -float(c["clamp"]), float(c["clamp"]))
+
+    def _update_freeze(self) -> None:
+        """Latch the residual once arrived with both wrists on the command for settle_s; release when the posture
+        moves or the arm goal ends."""
+        f = self.arm_ik["freeze"]
+        arrived, arm_mode = self._arrived(), self.mode == Mode.ARM
+        self.frozen = self.frozen and arrived and arm_mode
+        on_goal = arm_mode
+        for arm in range(self.num_arms):
+            err = self._wrist_error(arm)
+            on_goal = on_goal and np.linalg.norm(err[:3]) < float(f["pos_tol"]) and np.linalg.norm(err[3:]) < float(f["rot_tol"])
+        self.settled_steps = self.settled_steps + 1 if (arrived and on_goal and not self.frozen) else 0
+        self.frozen = self.frozen or self.settled_steps >= self.settle_steps
+
+    def gravity_b(self, state: RobotState) -> np.ndarray:
+        """Return gravity (m/s^2) in the pelvis frame: the IMU's projected gravity carried through imu_frame's pose."""
+        _, q_pelvis_imu = self.kin.frame_pose(self.imu_frame)
+        return GRAVITY * quat_apply(q_pelvis_imu, projected_gravity(state.quat))
+
+    def _gravity_offset(self, state: RobotState, arm_q: np.ndarray) -> np.ndarray | float:
+        """Return minus each arm joint's gravity torque at arm_q over its kp (arm_ik.gravity_offset), else 0."""
+        if not self.arm_ik.get("gravity_offset"):
+            return 0.0
+        q = self.default.copy()        # training's ArmKinematics holds the torso at its default angle
+        q[ARM_START:] = arm_q
+        tau = self.kin.gravity_torques(q, self.gravity_b(state))[ARM_START:]
+        return -tau / self.kp[ARM_START:]
+
+    def _posture_step(self, arm: int, q: np.ndarray, cols: np.ndarray) -> np.ndarray:
+        """Return one arm's IKPostureArmAction._step from its measured angles q: the weighted DLS task step and the
+        null-space pull toward the posture, joints that would pass limit_margin short of their bounds locked and solved
+        out, ik_passes times, capped at max_ik_step."""
+        c = self.arm_ik
+        jac = self.kin.jacobian(arm) * self.row_weight[:, None]
+        err = self._wrist_error(arm) * self.row_weight
+        pull = float(c["null_gain"]) * (self.posture[cols] - q)
+        low, high = self.ik_lower[cols], self.ik_upper[cols]
+        damp = float(c["ik_damping"]) ** 2 * np.eye(6)
+        free = np.ones(len(q), dtype=bool)
+        for _ in range(int(c["ik_passes"])):
+            f = free.astype(np.float64)
+            jf = jac * f[None, :]
+            pinv = jf.T @ np.linalg.inv(jf @ jf.T + damp)
+            step = (pinv @ err + (np.eye(len(q)) - pinv @ jf) @ (pull * f)) * f
+            step = np.clip(step, -self.max_ik_step, self.max_ik_step)
+            new = q + step
+            hit = ((new < low) & (step < 0)) | ((new > high) & (step > 0))
+            if not (hit & free).any():
+                break
+            free &= ~hit
+        return step
+
+    # -- observations and bounds -----------------------------------------------
+
+    def _agent_terms(self, trained, terms: list[str]) -> list[str]:
+        """Return the terms an actor observes: trained (an export's list), checked to be terms, in order, or all."""
+        full = [t for t in terms if t != "gait_phase_cos" or self.gait_phase_cos]
+        if trained is None:
+            return full
+        trained = list(trained)
+        unknown = [t for t in trained if t not in full]
+        order = [full.index(t) for t in trained if t in full]
+        if unknown or order != sorted(set(order)):
+            raise ValueError(f"obs terms {trained} are not observations this controller builds in its order {full}")
+        return trained
 
     def _position_bounds(self, hard: np.ndarray, margin: float, target_limits: dict | None):
         """Return (lower, upper) per joint (rad): the hard limits widened by margin, narrowed to target_limits."""
@@ -323,6 +588,7 @@ class MarlController:
         self.believed = goal
         self.pending_goal = None
         self.mode, self.timer = Mode.ARM, 0.0
+        self._update_seeds()
 
     def _update_mode(self) -> None:
         """Count down a settle by one step and finish it when it runs out."""
@@ -337,8 +603,10 @@ class MarlController:
             self.mode = Mode.NAV
 
     def velocity_command(self) -> np.ndarray:
-        """Return the velocity command the policy sees: the operator's while navigating, else zero."""
-        return self.cmd_vel.copy() if self.mode == Mode.NAV else np.zeros(3)
+        """Return the velocity command the policy sees: the operator's while navigating (and through an arm goal with
+        arm_goal_keeps_walking), else zero."""
+        walking = self.mode == Mode.NAV or self.arm_goal_keeps_walking
+        return self.cmd_vel.copy() if walking else np.zeros(3)
 
     def observed_command(self) -> np.ndarray:
         """Return the command the policies see and the gait clock reads: velocity_command low-passed (command_filter_tau)."""
@@ -348,7 +616,7 @@ class MarlController:
         """Step the command low-pass once toward velocity_command; zero it during an arm goal."""
         if self.cmd_alpha is None:
             return
-        if self.mode == Mode.ARM:
+        if self.mode == Mode.ARM and not self.arm_goal_keeps_walking:
             self.cmd_filtered[:] = 0.0   # training zeroes it with the command when an arm goal starts
         else:
             self.cmd_filtered += self.cmd_alpha * (self.velocity_command() - self.cmd_filtered)
@@ -371,25 +639,27 @@ class MarlController:
         angle = 2.0 * np.pi * phase
         return np.concatenate([np.sin(angle), np.cos(angle)]) if self.gait_phase_cos else np.sin(angle)
 
-    def _common_obs(self, state: RobotState, ee_targets: bool = True) -> np.ndarray:
-        """Return the observation terms both agents share (ProprioCfg), in the env's order.
-
-        ee_targets False leaves the wrist targets out, for a legs actor trained without them.
-        """
+    def observations(self, state: RobotState) -> dict[str, np.ndarray]:
+        """Return each agent's observation vector at the measured state: its terms (obs_terms) in the env's order."""
         cmd = self.observed_command()
-        ee_targets = (np.concatenate([np.concatenate([p[:3], wxyz_to_xyzw(p[3:])]) for p in self.believed])
-                      if ee_targets else np.zeros(0))
-        return np.concatenate([
-            state.acc,
-            state.gyro,
-            projected_gravity(state.quat),
-            cmd,
-            [1.0 if self.mode == Mode.ARM else 0.0],
-            ee_targets,
-            state.q - self.default,
-            state.dq,
-            self._gait_phase(cmd),
-        ])
+        phase = self._gait_phase(cmd)
+        terms = {
+            "base_lin_acc": state.acc,
+            "base_ang_vel": state.gyro,
+            "projected_gravity": projected_gravity(state.quat),
+            "velocity_commands": cmd,
+            "arm_goal": np.array([1.0 if self.mode == Mode.ARM else 0.0]),
+            "ee_targets": np.concatenate([np.concatenate([p[:3], wxyz_to_xyzw(p[3:])]) for p in self.believed]),
+            "joint_pos": state.q - self.default,
+            "joint_vel": state.dq,
+            "gait_phase": phase[:2],
+            "gait_phase_cos": phase[2:],
+        }
+        legs = {**terms, "actions": self.legs_last}
+        arms = {**terms, "actions": self.arms_last, "wrist_poses": self._wrist_poses(),
+                "wrist_errors": self._wrist_errors()}
+        return {"legs": np.concatenate([legs[t] for t in self.obs_terms["legs"]]),
+                "arms": np.concatenate([arms[t] for t in self.obs_terms["arms"]])}
 
     def _wrist_poses(self) -> np.ndarray:
         """Return each wrist's pelvis-frame pose as position and xyzw quaternion, concatenated."""
@@ -429,7 +699,7 @@ class MarlController:
 
     def _move_goal(self, delta_pos: np.ndarray, delta_quat: np.ndarray) -> None:
         """Keep the arm goal fixed in the world through a pelvis motion delta (previous pelvis frame)."""
-        if self.mode not in (Mode.ARM, Mode.SETTLE_TO_ARM):
+        if self.mode not in (Mode.ARM, Mode.SETTLE_TO_ARM) or self.arm_goal_on_pelvis:
             return
         # A world-fixed target: T_prev o c_prev = T_new o c_new, so c_new = delta^-1 o c_prev.
         poses = self.believed if self.mode == Mode.ARM else self.pending_goal

@@ -65,7 +65,8 @@ NUM_LEGS = 12
 ARM_START = 13
 NUM_ARM_JOINTS = 14
 # The observation terms step() builds, in order (gait_phase_cos only with cfg["gait_phase_cos"]). An export's
-# legs_obs_terms / arms_obs_terms must equal them.
+# legs_obs_terms / arms_obs_terms must equal them; the legs' may leave out ee_targets (LocoManip-LegsOnly-v0 runs
+# from 2026-11-16: no arm goals, so the legs' actor is not shown the wrist targets).
 COMMON_OBS_TERMS = ["base_lin_acc", "base_ang_vel", "projected_gravity", "velocity_commands", "arm_goal", "ee_targets",
                     "joint_pos", "joint_vel", "gait_phase", "gait_phase_cos"]
 LEGS_OBS_TERMS = COMMON_OBS_TERMS + ["actions"]
@@ -130,8 +131,10 @@ class MarlController:
         self.gait_period = float(cfg["gait_period"])
         self.zero_cmd_eps = float(cfg["zero_cmd_eps"])
         self.gait_phase_cos = bool(cfg.get("gait_phase_cos", False))
+        self.legs_see_ee_targets = "ee_targets" in (cfg.get("legs_obs_terms") or LEGS_OBS_TERMS)
         for agent, terms in (("legs", LEGS_OBS_TERMS), ("arms", ARMS_OBS_TERMS)):
-            expected = [t for t in terms if t != "gait_phase_cos" or self.gait_phase_cos]
+            expected = [t for t in terms if (t != "gait_phase_cos" or self.gait_phase_cos)
+                        and (t != "ee_targets" or agent == "arms" or self.legs_see_ee_targets)]
             trained = cfg.get(f"{agent}_obs_terms")
             if trained is not None and list(trained) != expected:
                 raise ValueError(f"{agent}_obs_terms {list(trained)} are not the observations this controller builds, "
@@ -263,7 +266,8 @@ class MarlController:
         self._filter_command()
 
         common = self._common_obs(state)
-        legs_obs = np.concatenate([common, self.legs_last])
+        legs_common = common if self.legs_see_ee_targets else self._common_obs(state, ee_targets=False)
+        legs_obs = np.concatenate([legs_common, self.legs_last])
         arms_obs = np.concatenate([common, self.arms_last, self._wrist_poses(), self._wrist_errors()])
         self.last_obs = {"legs": legs_obs, "arms": arms_obs}
 
@@ -367,10 +371,14 @@ class MarlController:
         angle = 2.0 * np.pi * phase
         return np.concatenate([np.sin(angle), np.cos(angle)]) if self.gait_phase_cos else np.sin(angle)
 
-    def _common_obs(self, state: RobotState) -> np.ndarray:
-        """Return the observation terms both agents share (ProprioCfg), in the env's order."""
+    def _common_obs(self, state: RobotState, ee_targets: bool = True) -> np.ndarray:
+        """Return the observation terms both agents share (ProprioCfg), in the env's order.
+
+        ee_targets False leaves the wrist targets out, for a legs actor trained without them.
+        """
         cmd = self.observed_command()
-        ee_targets = np.concatenate([np.concatenate([p[:3], wxyz_to_xyzw(p[3:])]) for p in self.believed])
+        ee_targets = (np.concatenate([np.concatenate([p[:3], wxyz_to_xyzw(p[3:])]) for p in self.believed])
+                      if ee_targets else np.zeros(0))
         return np.concatenate([
             state.acc,
             state.gyro,

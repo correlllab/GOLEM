@@ -217,6 +217,9 @@ arm_residual_scales:
 - 0.0
 - 0.0
 max_ik_step: 0.05
+residual_cutoff_hz: 3.0
+ik_damping: 0.05
+clip_actions: 10.0
 gait_period: 0.7
 zero_cmd_eps: 0.03
 command_ranges:
@@ -237,7 +240,6 @@ legs_obs_terms:
 - projected_gravity
 - velocity_commands
 - arm_goal
-- ee_targets
 - joint_pos
 - joint_vel
 - gait_phase
@@ -258,7 +260,7 @@ arms_obs_terms:
 - wrist_poses
 - wrist_errors
 source:
-  checkpoint: /home/max/Locomanipulation_game/logs/skrl/locomanip_marl/2026-11-10_06-17-22_LegsBalanceAmp_s42/checkpoints/agent_200160.pt
+  checkpoint: /home/max/Locomanipulation_game/logs/skrl/locomanip_marl/2026-11-19_10-32-00_LegsEnergyDefault200k_s43/checkpoints/agent_200160.pt
   target_tables: /home/max/Locomanipulation_game/source/locomanipulation_game/locomanipulation_game/data/arm_target_tables_v3.pt
-  task: LocoManip-LegsBalanceAmp-v0
-  exported: '2026-11-10T14:16:58'
+  task: LocoManip-LegsOnly-v0
+  exported: '2026-11-19T21:49:51'

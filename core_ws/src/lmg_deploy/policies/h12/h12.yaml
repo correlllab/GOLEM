@@ -59,7 +59,7 @@ torque_headroom: 0.85       # then: kp (target - q) - kd dq within this share of
 
 legs:
   policy: legs.pt
-  num_obs: 97               # 95 + each leg's gait phase cos
+  num_obs: 83               # 81 + each leg's gait phase cos; no wrist targets (export.yaml legs_obs_terms)
   num_actions: 12
   action_scale: 0.25        # target = scale * action + default
 

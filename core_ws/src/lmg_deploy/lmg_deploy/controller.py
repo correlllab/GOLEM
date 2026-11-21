@@ -69,6 +69,11 @@ Recurrent actors (networks.RecurrentTorchScriptNetwork) carry their LSTM
 state from step to step; reset() zeroes it, as training did at each episode
 start.
 
+IMU calibration (imu_calibration.py): with export.yaml imu.orientation calibrated, the controller removes the
+robot's static torso-IMU offset (MarlController's imu_calibration) from every state it reads, so the observations,
+the arms' gravity offset and step() all see the corrected attitude; a raw policy (imu.orientation raw, or absent)
+reads the IMU as reported.
+
 Modes follow the training command schedule: navigation (velocity command
 live, arms holding the rest pose) or an arm goal (velocity zero, one wrist
 pose per arm fixed in the world), with a zero-velocity settle at each switch.
@@ -76,11 +81,13 @@ The operator's arm goal is a pelvis-frame pose taken at request time; the
 SLAM odometry keeps it on its world point from then on, through the settle too.
 """
 
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, replace
 from enum import Enum
 
 import numpy as np
 
+from lmg_deploy.imu_calibration import correct_imu, level_vector, resolve_calibration
 from lmg_deploy.kinematics import ArmKinematics
 from lmg_deploy.rotations import (
     compute_pose_error,
@@ -107,6 +114,7 @@ LEGS_OBS_TERMS = COMMON_OBS_TERMS + ["actions"]
 ARMS_OBS_TERMS = COMMON_OBS_TERMS + ["actions", "wrist_poses", "wrist_errors"]
 GRAVITY = 9.81             # m/s^2, the training sim's
 SOFT_LIMIT_FACTOR = 0.9    # the training asset's soft_joint_pos_limit_factor (H1_2_MAGPIE_CFG): the seed solve's range
+LOG = logging.getLogger(__name__)
 
 
 @dataclass
@@ -141,13 +149,20 @@ class Mode(Enum):
 class MarlController:
     """Step the legs and arms policies and turn their actions into bounded joint targets."""
 
-    def __init__(self, cfg: dict, kinematics: ArmKinematics, legs, arms):
+    def __init__(self, cfg: dict, kinematics: ArmKinematics, legs, arms, imu_calibration: dict | None = None):
         """Read the deploy config (config/example.yaml) and start an episode at the default pose.
 
         legs / arms: callables numpy -> numpy (networks.py). kinematics needs cfg["slam_frame"] among
-        its extra frames. Raises ValueError on a config whose sizes or target bounds are wrong.
+        its extra frames. imu_calibration: the robot's torso-IMU calibration, {"roll_deg", "pitch_deg",
+        "yaw_deg", "rotate_gyro"} (config/imu_calibration.yaml), or None; applied only when export.yaml's
+        imu.orientation is calibrated (imu_calibration.resolve_calibration). Raises ValueError on a config
+        whose sizes or target bounds are wrong, and on a calibrated policy without a calibration.
         """
         self.cfg = cfg
+        # the calibration applied to every state read (None: the IMU as reported) and the line saying so
+        self.imu_calibration, self.imu_calibration_note = resolve_calibration(cfg, imu_calibration)
+        (LOG.warning if imu_calibration is not None and self.imu_calibration is None else LOG.info)(
+            self.imu_calibration_note)
         self.kin = kinematics
         self.legs, self.arms = legs, arms
         self.dt = float(cfg["control_dt"])
@@ -505,10 +520,18 @@ class MarlController:
         self.settled_steps = self.settled_steps + 1 if (arrived and on_goal and not self.frozen) else 0
         self.frozen = self.frozen or self.settled_steps >= self.settle_steps
 
+    def corrected_state(self, state: RobotState) -> RobotState:
+        """Return the measured state with the IMU calibration applied (the state itself without one)."""
+        if self.imu_calibration is None:
+            return state
+        quat, gyro = correct_imu(state.quat, state.gyro, self.imu_calibration)
+        return replace(state, quat=quat, gyro=gyro, acc=level_vector(state.acc, self.imu_calibration))
+
     def gravity_b(self, state: RobotState) -> np.ndarray:
-        """Return gravity (m/s^2) in the pelvis frame: the IMU's projected gravity carried through imu_frame's pose."""
+        """Return gravity (m/s^2) in the pelvis frame at the measured state: the IMU's projected gravity (calibrated)
+        carried through imu_frame's pose."""
         _, q_pelvis_imu = self.kin.frame_pose(self.imu_frame)
-        return GRAVITY * quat_apply(q_pelvis_imu, projected_gravity(state.quat))
+        return GRAVITY * quat_apply(q_pelvis_imu, projected_gravity(self.corrected_state(state).quat))
 
     def _gravity_offset(self, state: RobotState, arm_q: np.ndarray) -> np.ndarray | float:
         """Return minus each arm joint's gravity torque at arm_q over its kp (arm_ik.gravity_offset), else 0."""
@@ -640,7 +663,9 @@ class MarlController:
         return np.concatenate([np.sin(angle), np.cos(angle)]) if self.gait_phase_cos else np.sin(angle)
 
     def observations(self, state: RobotState) -> dict[str, np.ndarray]:
-        """Return each agent's observation vector at the measured state: its terms (obs_terms) in the env's order."""
+        """Return each agent's observation vector at the measured state (the IMU calibrated): its terms (obs_terms)
+        in the env's order."""
+        state = self.corrected_state(state)
         cmd = self.observed_command()
         phase = self._gait_phase(cmd)
         terms = {

@@ -129,5 +129,8 @@ rest_pose: null
 # The frame the policy's IMU trained in and its gyro low-pass; export.yaml sets it. Absent: frame imu_link, no
 # low-pass.
 imu:
+  source: livox             # lowstate: the torso IMU, /lowstate imu_state (frame imu_link); else /livox/imu
+  orientation: raw          # lowstate only. raw (or absent): its quaternion as reported; calibrated: the robot's
+                            # calibration (config/imu_calibration.yaml) removed first, refused when the robot has none
   frame: livox_imu_link     # URDF frame: livox_imu_link, livox_link or imu_link
   gyro_lowpass_hz: 8.0      # Hz, cutoff of the 2nd-order Butterworth on the angular velocity; 0 or absent: none

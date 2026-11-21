@@ -65,8 +65,24 @@ on the torso IMU as /lowstate reports it, its quaternion's bias drawn around the
 robot's measured one: the node takes LowState.imu_state's quaternion (wxyz) and
 accelerometer as reported and its gyroscope through the GyroLowpass the run
 trained with (``imu.gyro_lowpass_hz``, sampled at every /lowstate by its tick),
-with no trim (``imu_offset_*`` are ignored), and needs neither /livox/imu nor
-FAST-LIO's attitude.
+and needs neither /livox/imu nor FAST-LIO's attitude. ``imu_offset_*`` (the
+/livox/imu trim, below) must stay 0 for these exports: the node refuses
+anything else, so no trim reaches the torso IMU twice.
+
+IMU calibration: export.yaml's ``imu.orientation`` (imu_calibration.py) says
+whether the run trained on the torso IMU's quaternion as reported (``raw``, or
+absent: the runs with ``imu.quat_bias_deg``, the robot's bias drawn in
+training) or with the robot's static offset removed (``calibrated``, only a
+residual of ``imu.residual_deg`` drawn). The robot's calibration is its entry
+in ``imu_calibration_file`` (default config/imu_calibration.yaml beside the
+installed policies), under ``robot`` (default: the policy folder's name,
+policies/<robot>/). The node hands it to MarlController, which applies it to a
+calibrated policy only (corrected = reported * R_bias^-1), refuses to start a
+calibrated policy without one, and ignores it, logging so, for a raw policy.
+Once engaged on the torso IMU, after about 5 s standing still on both loaded
+feet at zero command, the node compares the policy's IMU tilt with the tilt
+forward kinematics gives from the soles (calibrate_imu's) and warns once if
+they differ by more than 1 deg (calibrated policies; raw ones log it).
 
 Otherwise the policy's IMU observations (angular velocity, specific force,
 projected gravity) come from the MID360's /livox/imu, never LowState.imu_state,
@@ -96,9 +112,10 @@ moves camera_init: restart this node with it.
 
 ``imu_offset_{roll,pitch,yaw}_deg`` (default 0) trim that IMU live (``ros2 param
 set`` or rqt_reconfigure): the attitude it reads with the torso level, as in
-golem_lowerbody_rl. The trim rotates the attitude, the angular velocity and the
-specific force alike, so projected gravity and the accelerometer agree on the
-tilt.
+golem_lowerbody_rl, in the calibration's convention (imu_calibration.correct_imu
+with rotate_gyro: a mount tilt). The trim rotates the attitude, the angular
+velocity and the specific force alike, so projected gravity and the
+accelerometer agree on the tilt. It applies to /livox/imu only.
 """
 
 import os
@@ -127,18 +144,22 @@ from lmg_deploy.controller import (
     MarlController,
     RobotState,
 )
+from lmg_deploy.imu_calibration import (
+    FEET,
+    IMU_FRAME,
+    StandingTiltCheck,
+    StillThresholds,
+    correct_imu,
+    fk_imu_gravity,
+    level_vector,
+    load_calibration,
+    still_and_loaded,
+)
 from lmg_deploy.kinematics import ArmKinematics
 from lmg_deploy.livox_attitude import LivoxAttitude, in_imu_frame
 from lmg_deploy.livox_imu import LIVOX_IMU_FRAME, GyroLowpass, LivoxImu, livox_to_imu_rotation
 from lmg_deploy.networks import load_network
-from lmg_deploy.rotations import (
-    imu_mount_quat,
-    projected_gravity,
-    quat_apply,
-    quat_conjugate,
-    quat_mul,
-    xyzw_to_wxyz,
-)
+from lmg_deploy.rotations import projected_gravity, xyzw_to_wxyz
 
 MOTOR_MODE_PR = 1          # LowCmd motor mode: enabled
 SAFETY_HEARTBEAT_TOPIC = "/safety/heartbeat"
@@ -148,6 +169,8 @@ PREPOSE_MAX_S = 8.0         # s after the ramp; posed or not, stop waiting
 DEFAULT_IMU_FRAME = "imu_link"   # exports without an imu block (Explicit500) trained on the torso IMU
 IMU_OFFSET_PARAMS = ("imu_offset_roll_deg", "imu_offset_pitch_deg", "imu_offset_yaw_deg")
 IMU_OFFSET_RANGE_DEG = 15.0  # deg, the range ros2 param set accepts for each trim
+TILT_CHECK_HOLD_S = 5.0     # s standing still on both feet before the IMU tilt is compared with the kinematic one
+TILT_CHECK_TOL_DEG = 1.0    # deg; a larger difference warns once
 SLAM_STALE_S = 0.5          # s; /Odometry older than this while reaching: warn that the goals ride with the pelvis
 
 
@@ -174,6 +197,9 @@ class MarlDeployNode(Node):
         self.declare_parameter("livox_gravity_tau_s", 0.5)  # s, attitude filter's pull toward the accelerometer
         self.declare_parameter("livox_attitude", "fastlio")  # "fastlio" | "filter": where projected gravity comes from
         self.declare_parameter("livox_odom_timeout", 1.0)   # s; fastlio: no /Odometry this long, the filter stands in
+        # The robot's torso-IMU calibration (config/imu_calibration.yaml); "": defaults from the policy folder.
+        self.declare_parameter("robot", "")                  # its entry; "": the policy folder's name (h12)
+        self.declare_parameter("imu_calibration_file", "")   # "": config/imu_calibration.yaml beside policies/
         for name in IMU_OFFSET_PARAMS:
             self.declare_parameter(name, 0.0, ParameterDescriptor(
                 description="live IMU trim, deg: the IMU's reading with the torso level",
@@ -207,7 +233,7 @@ class MarlDeployNode(Node):
             joint_names=cfg["joint_names"],
             ee_frames=cfg["arms"]["ee_frames"],
             arm_joint_names=[cfg["joint_names"][ARM_START:ARM_START + 7], cfg["joint_names"][ARM_START + 7:]],
-            extra_frames=list(dict.fromkeys([cfg["slam_frame"], LIVOX_IMU_FRAME, imu_frame])),
+            extra_frames=list(dict.fromkeys([cfg["slam_frame"], LIVOX_IMU_FRAME, imu_frame, IMU_FRAME, *FEET])),
         )
         kin.update(np.zeros(NUM_JOINTS))
         r_imu_livox = livox_to_imu_rotation(kin, imu_frame)
@@ -237,7 +263,14 @@ class MarlDeployNode(Node):
                             cfg["legs"]["num_obs"], cfg["legs"]["num_actions"])   # MLP or LSTM
         arms = load_network(os.path.join(cfg_dir, cfg["arms"]["policy"]),
                             cfg["arms"]["num_obs"], cfg["arms"]["num_actions"])
-        self.controller = MarlController(cfg, kin, legs, arms)
+        calibration = self._load_imu_calibration(cfg_dir)
+        self.controller = MarlController(cfg, kin, legs, arms, imu_calibration=calibration)
+        ignored = calibration is not None and self.controller.imu_calibration is None
+        (self.get_logger().warn if ignored else self.get_logger().info)(self.controller.imu_calibration_note)
+        self._kin = kin
+        self._still = StillThresholds()
+        self._tilt_check = StandingTiltCheck(float(cfg["control_dt"]), TILT_CHECK_HOLD_S, TILT_CHECK_TOL_DEG) \
+            if self._lowstate_imu else None
 
         self._lowstate: LowState | None = None
         self._lowstate_time: float | None = None   # monotonic receipt time
@@ -264,7 +297,11 @@ class MarlDeployNode(Node):
         self._hb_last: float | None = None
         self._dead = False                  # latched: never publishes again
         self._state_name = ""
-        self._imu_mount = self._build_imu_mount({n: float(self.get_parameter(n).value) for n in IMU_OFFSET_PARAMS})
+        trim = {n: float(self.get_parameter(n).value) for n in IMU_OFFSET_PARAMS}
+        if self._lowstate_imu and any(trim.values()):
+            raise ValueError("imu_offset_*_deg trim /livox/imu; this export reads the torso IMU (imu.source lowstate), "
+                             "whose calibration is config/imu_calibration.yaml: keep them at 0")
+        self._livox_trim = self._build_livox_trim(trim)
         self.add_on_set_parameters_callback(self._on_set_parameters)
 
         lowstate_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -291,15 +328,35 @@ class MarlDeployNode(Node):
         self.get_logger().info(
             f"marl_deploy_node ready: {cfg_path}, {control_hz:.0f} Hz, "
             f"confirm={'required' if self._confirm_wait else 'auto'}, "
-            f"IMU {'/lowstate imu_state (untrimmed)' if self._lowstate_imu else '/livox/imu'} in {self._imu_frame}, "
+            f"IMU {('/lowstate imu_state ' + ('calibrated' if self.controller.imu_calibration else 'as reported')) if self._lowstate_imu else '/livox/imu'} "
+            f"in {self._imu_frame}, "
             f"gyro low-pass {f'{self._gyro_lowpass_hz:g} Hz' if self._gyro_lowpass_hz > 0 else 'off'}")
 
-    def _build_imu_mount(self, deg: dict) -> np.ndarray | None:
-        """Log the IMU trim (deg per IMU_OFFSET_PARAMS name) and return its mount quaternion, None when zero."""
-        self.get_logger().info("IMU trim: roll %+.3f pitch %+.3f yaw %+.3f deg" % tuple(deg[n] for n in IMU_OFFSET_PARAMS))
+    def _load_imu_calibration(self, cfg_dir: str) -> dict | None:
+        """Return the robot's torso-IMU calibration from imu_calibration_file (None: unset, or no file)."""
+        robot = self.get_parameter("robot").value or os.path.basename(cfg_dir)
+        path = self.get_parameter("imu_calibration_file").value or os.path.join(
+            cfg_dir, "..", "..", "config", "imu_calibration.yaml")
+        if not os.path.isfile(path):
+            self.get_logger().warn(f"no IMU calibration file {path}: robot {robot!r} has no IMU calibration")
+            return None
+        calibration = load_calibration(path, robot)
+        self.get_logger().info(f"IMU calibration of {robot!r} ({os.path.normpath(path)}): "
+                               + ("unset" if calibration is None else
+                                  "roll %+.3f pitch %+.3f yaw %+.3f deg, rotate_gyro %s" % (
+                                      calibration["roll_deg"], calibration["pitch_deg"], calibration["yaw_deg"],
+                                      calibration["rotate_gyro"])))
+        return calibration
+
+    def _build_livox_trim(self, deg: dict) -> dict | None:
+        """Log the /livox/imu trim (deg per IMU_OFFSET_PARAMS name) and return it as a calibration (a mount tilt:
+        every vector rotated), None when zero."""
+        self.get_logger().info("/livox/imu trim: roll %+.3f pitch %+.3f yaw %+.3f deg"
+                               % tuple(deg[n] for n in IMU_OFFSET_PARAMS))
         if not any(deg.values()):
             return None
-        return imu_mount_quat(*(np.radians(deg[n]) for n in IMU_OFFSET_PARAMS))
+        roll, pitch, yaw = (deg[n] for n in IMU_OFFSET_PARAMS)
+        return {"roll_deg": roll, "pitch_deg": pitch, "yaw_deg": yaw, "rotate_gyro": True}
 
     def _on_set_parameters(self, params) -> SetParametersResult:
         """Apply a live IMU trim change; refuse a non-finite one."""
@@ -311,7 +368,11 @@ class MarlDeployNode(Node):
             # The new values aren't stored until this returns.
             deg = {n: float(self.get_parameter(n).value) for n in IMU_OFFSET_PARAMS}
             deg.update({p.name: float(p.value) for p in touched})
-            self._imu_mount = self._build_imu_mount(deg)
+            if self._lowstate_imu and any(deg.values()):
+                return SetParametersResult(successful=False, reason=(
+                    "imu_offset_*_deg trim /livox/imu; this policy reads the torso IMU, calibrated by "
+                    "config/imu_calibration.yaml"))
+            self._livox_trim = self._build_livox_trim(deg)
         return SetParametersResult(successful=True)
 
     def _on_lowstate(self, msg: LowState) -> None:
@@ -459,12 +520,13 @@ class MarlDeployNode(Node):
             self._state_pub.publish(String(data=name))
 
     def _robot_state(self, msg: LowState) -> RobotState:
-        """Return the controller's state from /lowstate and the IMU, in the policy's IMU frame, trimmed."""
+        """Return the controller's state from /lowstate and the IMU, in the policy's IMU frame (/livox/imu trimmed;
+        the torso IMU as reported, which the controller calibrates)."""
         motors = msg.motor_state
         q = np.array([motors[i].q for i in range(NUM_JOINTS)], dtype=np.float64)
         dq = np.array([motors[i].dq for i in range(NUM_JOINTS)], dtype=np.float64)
         if self._lowstate_imu:
-            # the torso IMU as reported, untrimmed: the policy trained on its bias
+            # the torso IMU as reported: the controller applies the robot's calibration to a calibrated policy
             imu = msg.imu_state
             gyro = self._lowstate_gyro if self._lowstate_gyro is not None else np.array(imu.gyroscope, dtype=np.float64)
             return RobotState(q=q, dq=dq, quat=np.array(imu.quaternion, dtype=np.float64), gyro=gyro.copy(),
@@ -483,9 +545,9 @@ class MarlDeployNode(Node):
         else:
             # Only the pre-pose runs before the attitude is up, and it reads q alone.
             quat, gyro, acc = np.array([1.0, 0.0, 0.0, 0.0]), np.zeros(3), np.zeros(3)
-        if self._imu_mount is not None:
-            quat = quat_mul(quat, quat_conjugate(self._imu_mount))
-            gyro, acc = quat_apply(self._imu_mount, gyro), quat_apply(self._imu_mount, acc)
+        if self._livox_trim is not None:
+            quat, gyro = correct_imu(quat, gyro, self._livox_trim)
+            acc = level_vector(acc, self._livox_trim)
         return RobotState(q=q, dq=dq, quat=quat, gyro=gyro, acc=acc)
 
     def _odom_fresh(self, now: float) -> bool:
@@ -590,7 +652,36 @@ class MarlDeployNode(Node):
                 return
         self._publish(cmd, msg.mode_machine)
         self._set_state(self.controller.mode.value)
+        self._check_tilt(msg, state)
         self._err_pub.publish(Float32MultiArray(data=self.controller.wrist_errors().astype(np.float32).tolist()))
+
+    def _check_tilt(self, msg: LowState, state: RobotState) -> None:
+        """Once, after TILT_CHECK_HOLD_S standing still on both loaded feet at zero command, compare the policy's IMU
+        tilt with the kinematic one from the soles; warn if a calibrated policy's differ by over TILT_CHECK_TOL_DEG."""
+        if self._tilt_check is None or self._tilt_check.done:
+            return
+        ctrl = self.controller
+        motors = msg.motor_state
+        tau = np.array([motors[i].tau_est for i in range(NUM_JOINTS)], dtype=np.float64)
+        standing = (ctrl.mode.value == "nav" and not np.any(ctrl.velocity_command())
+                    and float(np.linalg.norm(ctrl.observed_command())) < ctrl.zero_cmd_eps
+                    and bool(still_and_loaded(state.dq, np.array(msg.imu_state.gyroscope, dtype=np.float64), tau,
+                                              self._still)))
+        # the kinematics is at this state's q: step() updated it
+        g_fk = fk_imu_gravity(self._kin).mean(0) if standing else np.zeros(3)
+        report = self._tilt_check.update(standing, projected_gravity(ctrl.corrected_state(state).quat), g_fk)
+        if report is None:
+            return
+        line = ("IMU tilt as the policy sees it roll %+.2f pitch %+.2f deg, by kinematics from the soles roll %+.2f "
+                "pitch %+.2f (difference %+.2f / %+.2f) after %.0f s standing"
+                % (*report["imu_tilt"], *report["fk_tilt"], *report["diff"], TILT_CHECK_HOLD_S))
+        if ctrl.imu_calibration is None:
+            self.get_logger().info(line + " (raw policy: the robot's IMU offset is expected here)")
+        elif report["mismatch"]:
+            self.get_logger().warn(line + f": more than {TILT_CHECK_TOL_DEG:g} deg. Is config/imu_calibration.yaml "
+                                   "this robot's, and are both feet flat on level ground? (README 'IMU calibration')")
+        else:
+            self.get_logger().info(line)
 
     def _prepose(self, state: RobotState, mode_machine: int) -> None:
         """Ramp to and hold the default pose, then engage once settled, levelled and confirmed."""

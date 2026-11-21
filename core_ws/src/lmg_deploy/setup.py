@@ -37,6 +37,7 @@ setup(
     entry_points={
         'console_scripts': [
             'marl_deploy_node = lmg_deploy.marl_deploy_node:main',
+            'calibrate_imu = lmg_deploy.calibrate_imu:main',
         ],
     },
 )

@@ -1,19 +1,39 @@
-"""Test the IMU trim (imu_mount_quat) as marl_deploy_node applies it.
+"""Test the /livox/imu trim (imu_offset_*_deg) as marl_deploy_node applies it.
+
+The trim is a calibration in imu_calibration's convention with rotate_gyro (a mount tilt): marl_deploy_node's
+_build_livox_trim builds it and _robot_state applies imu_calibration.correct_imu and level_vector. It applies to
+/livox/imu only; the torso IMU's calibration (config/imu_calibration.yaml) is the controller's
+(test_imu_calibration.py), and the node refuses a non-zero trim on a torso-IMU policy.
 
     python -m pytest test/test_imu_trim.py
 """
 
 import numpy as np
 
+from lmg_deploy import imu_calibration as C
 from lmg_deploy import rotations as R
 
 DOWN = np.array([0.0, 0.0, -1.0])
 
 
 def _trim(mount, quat, gyro, acc):
-    """Apply marl_deploy_node._robot_state's trim to an attitude, a rate and a specific force."""
-    return (R.quat_mul(quat, R.quat_conjugate(mount)),
-            R.quat_apply(mount, gyro), R.quat_apply(mount, acc))
+    """Apply marl_deploy_node._robot_state's trim (mount: the trim's quaternion) to an attitude, a rate and a
+    specific force."""
+    cal = _calibration(mount)
+    quat, gyro = C.correct_imu(quat, gyro, cal)
+    return quat, gyro, C.level_vector(acc, cal)
+
+
+def _calibration(mount):
+    """Return the trim calibration (deg, rotate_gyro) whose bias quaternion is mount (Rz Ry Rx, small angles)."""
+    w, x, y, z = mount
+    roll = np.arctan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
+    pitch = np.arcsin(np.clip(2 * (w * y - z * x), -1.0, 1.0))
+    yaw = np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+    cal = {"roll_deg": np.degrees(roll), "pitch_deg": np.degrees(pitch), "yaw_deg": np.degrees(yaw),
+           "rotate_gyro": True}
+    np.testing.assert_allclose(R.quat_unique(C.bias_quat(cal)), R.quat_unique(mount), atol=1e-12)
+    return cal
 
 
 def test_positive_pitch_reads_forward_and_positive_roll_right():

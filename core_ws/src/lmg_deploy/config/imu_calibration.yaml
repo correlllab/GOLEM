@@ -1,0 +1,34 @@
+# Each robot's torso-IMU (/lowstate imu_state) orientation calibration, keyed by the robot's policy folder name
+# (policies/<robot>/). marl_deploy_node passes the robot's entry to MarlController(imu_calibration=...), which applies
+# it only to a policy whose export.yaml has imu.orientation: calibrated; a raw policy (imu.orientation raw, or an
+# older export with imu.quat_bias_deg) reads the IMU as reported, and the node logs that the calibration is ignored.
+# A calibrated policy on a robot whose entry is null is refused at start.
+#
+#   roll_deg, pitch_deg, yaw_deg: what the quaternion reads (deg) with imu_link level: reported = true * R_bias,
+#     R_bias = Rz(yaw) Ry(pitch) Rx(roll); pitch positive nose down, roll positive tilting right (Isaac's
+#     quat_from_euler_xyz, as training's lowstate_imu.py). The deploy applies corrected = reported * R_bias^-1.
+#   rotate_gyro: false (training biased the quaternion only: an estimator offset); true re-expresses the gyro (and
+#     the specific force) in the level frame, for an offset that is a physical mounting tilt.
+#
+# Measure with calibrate_imu (README "IMU calibration"): both feet flat on level ground, still. Write the date, the
+# method and each bag's numbers beside the value. Yaw is unobservable that way: leave it 0.
+
+# H1-2: unset. Measured 2026-11-21 with calibrate_imu (forward kinematics soles -> imu_link against the quaternion,
+# still windows with both knees loaded) on the two 2026-11-20 deploy bags, robot lowered onto its feet under the
+# hoist in the pre-pose:
+#   lmg_legsenergy200k_s43_2026-11-20_1157: roll +0.42 pitch -2.12 (4589 /lowstate samples, 9.2 s); left foot +1.04 / -0.42,
+#     right foot -0.20 / -3.83: the feet disagree by 1.24 roll, 3.41 pitch
+#   lmg_legsenergy200k_s43_2026-11-20_1449: roll +0.11 pitch -2.50 (4374 samples, 8.7 s); left +0.56 / -1.02, right
+#     -0.34 / -3.99: the feet disagree by 0.90 roll, 2.97 pitch
+# The bags differ by 0.31 roll and 0.38 pitch (the bar is 0.3), and in both the right sole sits ~3 deg more toe-down
+# than the left by kinematics (the legs' pitch chains differ by 0.06 rad), so the "both soles flat" premise doesn't
+# hold: an ankle encoder offset, uneven floor, or the hoist still carrying weight. Other references: the quaternion
+# reads pitch -2.3 / roll -0.2 against the torso accelerometer, -3.2..-3.4 / -0.05..+0.2 against the head MID-360.
+# Re-measure on flat floor with the hoist slack (and check the ankle zeros) before setting it.
+h12: null
+#   roll_deg: 0.0
+#   pitch_deg: 0.0
+#   yaw_deg: 0.0
+#   rotate_gyro: false
+
+g1: null

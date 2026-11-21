@@ -316,6 +316,9 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         method, err = self._resolve_grasp_method(goal)
         if err:
             return run.abort(err)
+        err = self._robot_refusal(method, goal)
+        if err:
+            return run.abort(err)
         obj = perception_name(goal.target_object)
         self.get_logger().info(
             f'grasp: {obj!r} with synthesis method {method.name!r}'
@@ -447,6 +450,22 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
             return None, (f'unknown grasp_method {name!r}; expected one of '
                           f'{sorted(METHODS)}')
         return method, None
+
+    def _robot_refusal(self, method, goal):
+        """
+        Return why this robot cannot run `method` or the goal's options, or None.
+
+        Checked before the arm moves: a GraspGenX method needs a gripper
+        GraspGenX has a model of, and goal.visual_servo needs hand cameras.
+        """
+        name = self.robot.name
+        if method.graspgen and self.robot.graspgen_gripper is None:
+            return (f'grasp_method {method.name!r} plans with GraspGenX, which has '
+                    f'no model of the {name} hand; use one of '
+                    f'{sorted(m for m, v in METHODS.items() if not v.graspgen)}')
+        if goal.visual_servo and not self.robot.hand_cameras:
+            return f'visual_servo needs hand cameras, and the {name} has none'
+        return None
 
     def get_grasp_candidates(self, method, goal, obj, arm, obj_cloud, scene):
         """Run `method` on the segmented object; return (Candidates, None) or (None, reason)."""

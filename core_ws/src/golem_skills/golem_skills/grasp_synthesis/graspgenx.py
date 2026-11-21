@@ -40,6 +40,8 @@ GRASP_YUP_TOL_DEG = 55.0
 
 def _plan(inp):
     """Return (graspgen response, None), or (None, reason) when the service gives none."""
+    if inp.gripper_name is None:
+        return None, "GraspGenX has no model of this robot's gripper"
     resp = inp.plan_grasp(inp.cloud, gripper_name=inp.gripper_name, frame='pelvis',
                           scene_cloud=inp.scene, arm=inp.arm)
     if resp is None:

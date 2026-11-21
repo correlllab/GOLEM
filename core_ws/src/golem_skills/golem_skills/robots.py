@@ -38,6 +38,9 @@ class RobotProfile:
     graspgen_gripper: Optional[str]
     # the hand the grasp closes, one of hands.HANDS
     hand: str
+    # whether each hand carries a camera (yolo_server's hand-camera bundles),
+    # which goal.visual_servo needs
+    hand_cameras: bool
 
 
 H12 = RobotProfile(
@@ -49,6 +52,7 @@ H12 = RobotProfile(
     staging_configs={'left': 'staging_left', 'right': 'staging_right'},
     graspgen_gripper='magpie',
     hand='magpie',
+    hand_cameras=True,
 )
 
 ROBOTS = {p.name: p for p in (H12,)}

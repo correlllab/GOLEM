@@ -267,3 +267,19 @@ def test_planner_failure_is_a_reason_not_an_exception():
         cands, err = METHODS[name].synthesize(
             _input(_box_cloud(OBJ, (0.04, 0.04, 0.04)), planner=no_plan))
         assert cands is None and 'no grasp planned' in err
+
+
+@pytest.mark.parametrize('name', ['graspgenx', 'graspgenx_filtered'])
+def test_graspgenx_without_a_gripper_model_plans_nothing(name):
+    """With no GraspGenX gripper for the robot, the service is not called and the method fails."""
+    planner = _fake_planner(_planner_pool())
+    inp = _input(_box_cloud(OBJ, (0.04, 0.04, 0.04)), planner=planner)
+    inp.gripper_name = None
+    cands, err = METHODS[name].synthesize(inp)
+    assert cands is None and 'no model' in err
+    assert planner.calls == []
+
+
+def test_only_the_graspgenx_methods_need_graspgen():
+    """The heuristic methods run on any robot; the two GraspGenX ones need its model."""
+    assert {n for n, m in METHODS.items() if m.graspgen} == {'graspgenx', 'graspgenx_filtered'}

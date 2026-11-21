@@ -44,6 +44,9 @@ class GraspMethod:
     # True: the executor runs its reach check (skills/grasp_reach.py) on each
     # candidate before moving the arm, and skips the ones that fail it
     reach_check: bool = False
+    # True: the method plans with the graspgen service, so it runs only on a
+    # robot whose gripper GraspGenX has a model of (RobotProfile.graspgen_gripper)
+    graspgen: bool = False
 
 
 METHODS = {m.name: m for m in (
@@ -51,9 +54,10 @@ METHODS = {m.name: m for m in (
     GraspMethod('top_down', top_down.synthesize, staged=True),
     GraspMethod('centroid', centroid.synthesize),
     GraspMethod('antipodal', antipodal.synthesize),
-    GraspMethod('graspgenx', graspgenx.synthesize_raw, reach_check=True),
+    GraspMethod('graspgenx', graspgenx.synthesize_raw, reach_check=True,
+                graspgen=True),
     GraspMethod('graspgenx_filtered', graspgenx.synthesize_filtered,
-                reach_check=True),
+                reach_check=True, graspgen=True),
 )}
 
 DEFAULT_METHOD = 'heuristic'

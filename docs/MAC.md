@@ -26,10 +26,14 @@ wrappers make the same docker calls as before.
 
 ## Setup
 
-- [OrbStack](https://orbstack.dev) or Docker Desktop (4.34 or later, host
-  networking turned on), Compose 2.24 or later. Both containers share the Linux
-  VM's network, so DDS works between them; the macOS host is not on it, so run
-  `ros2` inside `golem_ros`.
+- [OrbStack](https://orbstack.dev), Docker Desktop (4.34 or later, host
+  networking turned on) or [Colima](https://github.com/abiosoft/colima) (the
+  `vz` VM), Compose 2.24 or later. Both containers share the Linux VM's
+  network, so DDS works between them; the macOS host is not on it, so run
+  `ros2` inside `golem_ros`. Colima shares only your home folder with its VM
+  by default, so keep the checkout under `~`, and give its VM the disk and
+  cores below (`colima start --cpu 12 --memory 16 --disk 150`; the disk only
+  grows).
 - Submodules and LFS as in [Setup](SETUP.md) §1; `docker/.env` as in §2
   (`GEMINI_API_KEY` is not needed).
 - About 70 GB of disk for the images (the RoboCasa image holds about 10 GB of
@@ -95,6 +99,51 @@ The H1-2's `estop_node` declares the sim's estop stream stale after 0.1 s, so a
 VM stall longer than that latches `golem_safety`'s estop and the robot falls; it
 happened once, in an earlier run with the VM overloaded.
 
+### By sensor, on an M4 Pro
+
+Measured 2026-11-20 on a MacBook Pro M4 Pro (10 performance + 4 efficiency
+cores, 48 GB), Colima with 12 CPUs and 16 GB, headless: the G1, the spawn backed
+off 2.0 m, the robot standing after the band's release, no Nav2 goals. RTF is
+the sim's own log (`golem_sim`, sim against wall time over 30 s of sim time),
+the first 30 s dropped and the next four averaged. Lidar is `GOLEM_LIDAR` at
+10,000 points unless noted; the camera is `GOLEM_CAMERAS=1`, the head D435 at
+640x360 and 6 Hz. The stack is `g1_mac_sim`, RViz included.
+
+Paced at real time (`GOLEM_SIM_RATE` unset), one run each:
+
+| | Lidar | Camera | RTF | Sim loop idle | Camera frames dropped | CPUs: sim / `golem_ros` |
+|---|---|---|---|---|---|---|
+| Sim alone | off | off | 1.00 | 68% | | 0.3 / - |
+| Sim alone | off | on | 1.00 | 73% | 0% | 1.0 / - |
+| Sim alone | on | off | 1.00 | 71% | | 0.7 / - |
+| Sim alone | on | on | 1.00 | 70% | 0% | 1.8 / - |
+| Sim and stack | off | off | 1.00 | 58% | | 0.6 / 4.4 |
+| Sim and stack | off | on | 1.00 | 52% | 1% | 2.8 / 4.3 |
+| Sim and stack | on | off | 1.00 | 47% | | 1.5 / 5.3 |
+| Sim and stack | on | on | 1.00 | 50% | 0% | 2.6 / 5.3 |
+| Sim and stack | 20,000 points | off | 1.00 | 50% | | 1.6 / 5.6 |
+
+No fall or estop in any run, and the sim never waited for a lidar cast.
+
+The sim alone unpaced (`GOLEM_SIM_RATE=max`), three runs each:
+
+| Lidar | Camera | RTF | Lidar casts the sim waited for | Camera frames dropped |
+|---|---|---|---|---|
+| off | off | 4.0-5.9 | | |
+| off | on | 4.3-5.3 | | 50% |
+| on | off | 4.0-4.6 | 0-71% | |
+| on | on | 3.5-4.4 | 0-70% | 50% |
+| 20,000 points | off | 2.4-3.2 | 3-99% | |
+
+The physics alone runs on one core at 4-6 times real time. The lidar's 10,000
+points cost it 10-20%, the real sensor's 20,000 about 40%, and then the cast is
+what the sim waits for. The camera takes one to two cores but renders on its own
+thread, so it hardly slows the physics: it renders about 16 frames a wall
+second, dropping half the frames due when unpaced and at most 1% at real time.
+Each run held steady within itself, but the same setup differed by up to 40%
+between runs, presumably the VM's physics thread landing on performance or
+efficiency cores (not checked).
+
 ## Image notes
 
 - The Mac base starts from a dated Ubuntu image older than the apt snapshot
@@ -105,6 +154,16 @@ happened once, in an earlier run with the VM overloaded.
   arm64 the SDK's binding would bind to ROS's copy by their shared soname and
   segfault in its first topic, so the Mac base renames the SDK's copy
   (`libddsc_unitree.so.0`) and checks the pair at build time.
+- The colcon build trees (`core_ws`'s `build`, `install` and `log`, and the
+  sim's `msgs_ws`) are Docker volumes on the VM's disk, not folders in the
+  checkout (`docker-compose.mac.yml`). Every file a container writes through
+  the VM's file sharing reaches the macOS host, and on a university-managed
+  Mac its endpoint security scans each one: on an M4 Pro under Colima a write
+  took about 180 ms, and a cold `core_ws` build ran over 40 minutes at 15% CPU
+  without finishing; with the volumes a cold build and stack start takes 2.5
+  minutes. The sources stay bind-mounted, so edits show up as before; for a clean build,
+  `docker volume rm golem_core_build golem_core_install golem_core_log
+  golem_msgs_ws` with the containers stopped.
 - The Mac's GPU is out of reach: a container gets no OpenGL/EGL on macOS, which
   MuJoCo's renderer and `mid360.GpuCaster` need.
 - `core_ws/cyclonedds.xml` requires 16 MB UDP receive buffers, which the VM's

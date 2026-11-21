@@ -8,8 +8,24 @@
 # Linux VM's network, so DDS between them works; the macOS host is not on it,
 # so ros2 and RViz run inside golem_ros. docs/MAC.md has the flow and what the
 # Mac leaves out (the GPU vision models, Isaac).
+#
+# The colcon build trees (core_ws's build, install and log, and the sim's
+# msgs_ws) live in Docker volumes on the VM's own disk, not in the checkout:
+# every file a container writes through the VM's file sharing reaches the
+# macOS host, and on a managed Mac whose endpoint security scans each one, a
+# write costs ~180 ms (Colima, measured) against microseconds on the VM's
+# disk; a cold core_ws build and stack start fell from over 40 min (the build
+# alone, unfinished) to 2.5 min. Sources stay
+# bind-mounted from the checkout. `docker volume rm golem_core_build` (and the
+# others below) gives a clean build.
 services:
   robocasa:
+    volumes:
+      # Replaces the base file's container_cache/msgs_ws bind (same target);
+      # the message sources it binds into msgs_ws/src mount on top.
+      - type: volume
+        source: golem_msgs_ws
+        target: /home/code/msgs_ws
     build:
       dockerfile: docker/mac/RobocasaDockerfile
     image: golem_sim_robocasa:arm64
@@ -51,3 +67,25 @@ services:
       # OrbStack / Docker Desktop VM does not by default (docs/DDS_TUNING.md
       # raises it on Linux hosts).
       CYCLONEDDS_URI: "file:///home/code/cyclonedds.xml,<CycloneDDS><Domain><Internal><SocketReceiveBufferSize min=\"default\"/></Internal></Domain></CycloneDDS>"
+    volumes:
+      # core_ws's colcon trees on the VM's disk (the header); the sources
+      # under core_ws/src stay the base file's bind of the checkout.
+      - type: volume
+        source: golem_core_build
+        target: /home/code/core_ws/build
+      - type: volume
+        source: golem_core_install
+        target: /home/code/core_ws/install
+      - type: volume
+        source: golem_core_log
+        target: /home/code/core_ws/log
+# Fixed names, whatever the Compose project is called.
+volumes:
+  golem_msgs_ws:
+    name: golem_msgs_ws
+  golem_core_build:
+    name: golem_core_build
+  golem_core_install:
+    name: golem_core_install
+  golem_core_log:
+    name: golem_core_log

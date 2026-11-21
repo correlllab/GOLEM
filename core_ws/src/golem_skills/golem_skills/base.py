@@ -39,12 +39,13 @@ from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 
 from action_msgs.msg import GoalStatus
 from builtin_interfaces.msg import Duration
-from geometry_msgs.msg import Point, Pose, Quaternion, Vector3Stamped
+from geometry_msgs.msg import Point, Pose, Quaternion, TransformStamped, Vector3Stamped
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image, JointState
 from std_msgs.msg import Bool, Header
 
 from sensor_msgs_py import point_cloud2
-from tf2_ros import Buffer, TransformBroadcaster, TransformListener, TransformException
+from tf2_ros import (Buffer, StaticTransformBroadcaster, TransformBroadcaster,
+                     TransformListener, TransformException)
 
 from custom_ros_messages.msg import DetectionBundle
 from custom_ros_messages.srv import GeminiQuery, SamSegment, GraspGen
@@ -66,7 +67,7 @@ from .perception_utils import (
 from .grasp_synthesis import DEFAULT_METHOD, METHODS, method_name
 from model_server.model_logging import _log_root
 from .hands import DEX3_NS
-from .robots import ARMS, DEFAULT_ROBOT, ROBOTS, robot_profile
+from .robots import ARMS, DEFAULT_ROBOT, ROBOTS, drive_pose, robot_profile
 from .run_telemetry import RunRecorder, describe_goal, run_dir
 
 
@@ -430,6 +431,12 @@ class SkillsBase(Node):
         # (publish_tf, _republish_tfs) so they do not expire; the skill that
         # registered a frame drops it (drop_tf) when its goal ends.
         self.tf_broadcaster = TransformBroadcaster(self)
+        # The robot's tool frames (robots.RobotProfile.tool_frames: on the G1
+        # the Dex3-1 grasp and pinch frames its URDF lacks), latched on
+        # /tf_static, so every TF lookup of a grasp or pinch frame works as it
+        # does on a URDF frame.
+        self._tool_tf = StaticTransformBroadcaster(self)
+        self._broadcast_tool_frames()
         # child_frame_id -> TransformStamped
         self._persistent_tfs = {}
         self._tf_lock = threading.Lock()
@@ -565,6 +572,24 @@ class SkillsBase(Node):
         with self._tf_lock:
             self._persistent_tfs[transform.child_frame_id] = transform
         self.tf_broadcaster.sendTransform(transform)
+
+    def _broadcast_tool_frames(self):
+        """Send every tool frame of the robot's profile on /tf_static (none on the H1-2)."""
+        tfs = []
+        stamp = self.get_clock().now().to_msg()
+        for name, tool in self.robot.tool_frames.items():
+            t = TransformStamped()
+            t.header.stamp = stamp
+            t.header.frame_id = tool.parent
+            t.child_frame_id = name
+            p = matrix_to_pose(tool.matrix())
+            t.transform.translation.x = p.position.x
+            t.transform.translation.y = p.position.y
+            t.transform.translation.z = p.position.z
+            t.transform.rotation = p.orientation
+            tfs.append(t)
+        if tfs:
+            self._tool_tf.sendTransform(tfs)
 
     def drop_tf(self, child_frame_id):
         """Stop re-broadcasting a frame registered with publish_tf."""
@@ -1106,6 +1131,10 @@ class SkillsBase(Node):
         Reached means the goal succeeded (or stopped early as stable) AND the
         last streamed error is within (`lin_tol`, `ang_tol`).
 
+        A tool frame of the robot (robots.drive_pose) is driven through its
+        URDF parent at the pose that puts it at `pose`; the streamed errors
+        are then the parent's.
+
         `stable_stop_msgs`: if set, cancel the goal and return once the
         streamed (lin, ang) feedback stays within FRAME_TASK_STABLE_EPS_* of
         its running reference for that many messages: the arm has settled and
@@ -1116,8 +1145,12 @@ class SkillsBase(Node):
         if halt is not None:
             self.get_logger().error(f'frame_task[{tag}] not sent: {halt}')
             return False
+        drive_frame, T = drive_pose(self.robot, frame, pose_to_matrix(pose))
+        if drive_frame != frame:
+            tag = f'{tag} via {drive_frame}'
+            pose = matrix_to_pose(T)
         goal = FrameTask.Goal()
-        goal.frame_names = [frame]
+        goal.frame_names = [drive_frame]
         goal.frame_targets = [pose]
         goal.plan = do_plan
         goal.slow_mode = bool(slow_mode)

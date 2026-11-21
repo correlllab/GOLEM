@@ -21,11 +21,11 @@ from golem_upper_ik.core.ik_solver import IKSolver
 from golem_upper_ik.core.robot_model import FixedState, RobotModel
 from golem_upper_ik.profile import load_profile
 
+from .robots import drive_pose, robot_profile
 
-# robot whose IK model the check runs: the grasp skill drives the H1-2's Magpie frames
-REACH_ROBOT = 'h12'
+
 # m golem_upper_ik's self-collision barrier keeps between sphere pairs (controller.d_min of
-# every H1-2 controller config)
+# every H1-2 and G1 controller config)
 REACH_D_MIN_M = 0.02
 # s per simulated IK step; the frame_task server steps faster, but the path it follows
 # is the same, and a coarser step keeps a check near a second
@@ -37,17 +37,29 @@ REACH_STEPS_MAX = 200
 REACH_STABLE_M = 0.0005
 REACH_STABLE_STEPS = 20
 
-# The hand's volume in the GraspGenX gripper-base frame (+Z the approach, +X the
-# finger-closing axis), as axis-aligned boxes (x0, x1, y0, y1, z0, z1) [m], from the magpie
-# meshes in CL_Assets/graspgenx/assets/meshes/magpie: the base (base_top, base_bot) and the
-# open fingers back to the contact plane (common.GRIPPER_BASE_TO_CONTACT_M). Beyond that
-# plane the pads straddle the part and a close stops on whatever they meet, so they are
-# not tested.
-HAND_BOXES_M = (
-    (-0.067, 0.067, -0.019, 0.015, 0.002, 0.085),
-    (-0.108, -0.054, -0.021, 0.016, 0.066, 0.1146),
-    (0.054, 0.108, -0.021, 0.016, 0.066, 0.1146),
-)
+# Each hand's volume in its grasp frame (the GraspGenX gripper-base convention: +Z the
+# approach, +X the finger-closing axis), as axis-aligned boxes (x0, x1, y0, y1, z0, z1)
+# [m], back to the contact plane (common.GRIPPER_BASE_TO_CONTACT_M). Beyond that plane
+# the fingers straddle the part and a close stops on whatever they meet, so they are not
+# tested.
+HAND_BOXES_M = {
+    # the base (base_top, base_bot) and the open fingers, from the magpie meshes in
+    # CL_Assets/graspgenx/assets/meshes/magpie
+    'magpie': (
+        (-0.067, 0.067, -0.019, 0.015, 0.002, 0.085),
+        (-0.108, -0.054, -0.021, 0.016, 0.066, 0.1146),
+        (0.054, 0.108, -0.021, 0.016, 0.066, 0.1146),
+    ),
+    # the Dex3-1 open, in robots.py's grasp frame: the palm, the index and middle fingers
+    # standing straight along +X, and the thumb standing out of the palm toward the part.
+    # From the URDF's joint origins with links about 25 mm thick, not from the meshes;
+    # unmeasured on the real G1.
+    'dex3': (
+        (-0.080, 0.000, -0.045, 0.045, 0.0496, 0.0846),
+        (-0.010, 0.095, -0.042, 0.042, 0.0626, 0.0866),
+        (-0.070, -0.040, -0.012, 0.012, 0.0846, 0.1146),
+    ),
+}
 # m each box is shrunk by on every side, so depth noise on a surface the hand only
 # touches does not count
 HAND_MARGIN_M = 0.003
@@ -75,32 +87,32 @@ HAND_SAMPLE_M = 0.005
 SUPPORT_DEPTH_M = 0.005
 
 
-def hand_hits(obstacles, T):
-    """Return how many `obstacles` points lie in the hand at gripper-base pose `T` (4x4)."""
+def hand_hits(obstacles, T, hand):
+    """Return how many `obstacles` points lie in `hand` (a HAND_BOXES_M key) at grasp pose `T`."""
     if obstacles is None or len(obstacles) == 0:
         return 0
     local = (obstacles - T[:3, 3]) @ T[:3, :3]
     m = HAND_MARGIN_M
     inside = np.zeros(len(local), dtype=bool)
-    for x0, x1, y0, y1, z0, z1 in HAND_BOXES_M:
+    for x0, x1, y0, y1, z0, z1 in HAND_BOXES_M[hand]:
         inside |= ((local[:, 0] > x0 + m) & (local[:, 0] < x1 - m)
                    & (local[:, 1] > y0 + m) & (local[:, 1] < y1 - m)
                    & (local[:, 2] > z0 + m) & (local[:, 2] < z1 - m))
     return int(inside.sum())
 
 
-def _hand_samples():
-    """Return points filling HAND_BOXES_M, each shrunk by HAND_MARGIN_M (gripper-base frame)."""
+def _hand_samples(boxes):
+    """Return points filling `boxes`, each shrunk by HAND_MARGIN_M (grasp frame)."""
     m = HAND_MARGIN_M
     out = []
-    for box in HAND_BOXES_M:
+    for box in boxes:
         axes = [np.linspace(lo + m, hi - m, int(np.ceil((hi - lo - 2 * m) / HAND_SAMPLE_M)) + 1)
                 for lo, hi in zip(box[0::2], box[1::2])]
         out.append(np.stack([a.ravel() for a in np.meshgrid(*axes, indexing='ij')], axis=-1))
     return np.concatenate(out)
 
 
-HAND_SAMPLES = _hand_samples()
+HAND_SAMPLES = {hand: _hand_samples(boxes) for hand, boxes in HAND_BOXES_M.items()}
 
 
 def support_edges(obstacles):
@@ -126,11 +138,11 @@ def support_edges(obstacles):
     return edges
 
 
-def support_depth(edges, T):
-    """Return how far [m] the hand at gripper-base pose `T` sits below the extended support."""
+def support_depth(edges, T, hand):
+    """Return how far [m] `hand` at grasp pose `T` sits below the extended support."""
     if not edges:
         return 0.0
-    p = HAND_SAMPLES @ T[:3, :3].T + T[:3, 3]
+    p = HAND_SAMPLES[hand] @ T[:3, :3].T + T[:3, 3]
     idx = np.floor(p[:, 1] / SUPPORT_SLICE_M).astype(int)
     depth = 0.0
     for i in np.unique(idx):
@@ -147,9 +159,11 @@ def support_depth(edges, T):
 class ReachModel:
     """Follow pelvis-frame waypoints with golem_upper_ik's IK from a measured pose."""
 
-    def __init__(self):
-        """Build the robot's IK model (~15 s: the URDF and self-collision model)."""
-        self.profile = load_profile(REACH_ROBOT)
+    def __init__(self, robot):
+        """Build `robot`'s IK model (~15 s: the URDF and self-collision model)."""
+        # the skills' profile (robots.py): its hand and tool frames
+        self.robot = robot_profile(robot)
+        self.profile = load_profile(self.robot.name)
         self.model = RobotModel(self.profile)
         self.joints = list(self.profile.body_joints)
         q = np.zeros(self.model.num_motor)
@@ -205,32 +219,35 @@ class ReachModel:
         Return why the approach along `waypoints` fails from body q `q_body`, or None.
 
         `waypoints`: (4x4 pose, label, (lin_tol, ang_tol) or None, scene) in execution
-        order, pelvis frame, for URDF `frame`; a waypoint with tolerances must be reached
-        within them, one without only steers the IK, and one with `scene` set must leave
-        the hand out of `obstacles` ((N, 3) pelvis-frame points, or None) and above the
-        support extended toward the robot (support_depth).
+        order, pelvis frame, for the grasp frame `frame` (a URDF frame or a tool frame of
+        the robot's profile, which the IK follows through its parent, as frame_task
+        does); a waypoint with tolerances must be reached within them, one without only
+        steers the IK, and one with `scene` set must leave the hand out of `obstacles`
+        ((N, 3) pelvis-frame points, or None) and above the support extended toward the
+        robot (support_depth).
         """
         self.start(q_body)
         edges = support_edges(obstacles)
+        hand = self.robot.hand
         for T, label, tol, scene in waypoints:
             if scene:
-                hits = hand_hits(obstacles, T)
+                hits = hand_hits(obstacles, T, hand)
                 if hits >= HAND_HIT_POINTS:
                     return f'the hand would be in the scene at the {label} ({hits} points)'
-                below = support_depth(edges, T)
+                below = support_depth(edges, T, hand)
                 if below > SUPPORT_DEPTH_M:
                     return (f'the hand would be {below * 1000:.0f} mm below the support seen '
                             f'ahead of it at the {label}')
-            lin, ang = self.follow(frame, T)
+            lin, ang = self.follow(*drive_pose(self.robot, frame, T))
             if tol is not None and (lin > tol[0] or ang > tol[1]):
                 return (f'the IK stops {lin * 1000:.0f} mm / {np.degrees(ang):.0f} deg '
                         f'short of the {label}')
         return None
 
 
-def serve(conn):
+def serve(conn, robot):
     """
-    Build a ReachModel and answer check requests on `conn` until the other end closes.
+    Build `robot`'s ReachModel and answer check requests on `conn` until the other end closes.
 
     Sends ('ready', build s) or ('error', reason) once, then for each request
     (joint names, positions, frame, waypoints, obstacles) one ('ok', ReachModel.check's
@@ -238,7 +255,7 @@ def serve(conn):
     """
     try:
         t0 = time.monotonic()
-        model = ReachModel()
+        model = ReachModel(robot)
         conn.send(('ready', time.monotonic() - t0))
     except Exception as e:  # noqa: BLE001 - any failure is reported to the node
         conn.send(('error', f'{type(e).__name__}: {e}'))

@@ -71,7 +71,8 @@ class GraspReach:
             # spawn, not fork: a forked child would inherit the node's rclpy threads
             ctx = multiprocessing.get_context('spawn')
             self._reach_conn, child = ctx.Pipe()
-            self._reach_proc = ctx.Process(target=reach_model.serve, args=(child,),
+            self._reach_proc = ctx.Process(target=reach_model.serve,
+                                           args=(child, self.robot.name),
                                            name='grasp_reach', daemon=True)
             self._reach_proc.start()
             child.close()

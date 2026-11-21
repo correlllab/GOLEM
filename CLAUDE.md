@@ -211,7 +211,7 @@ nests `unitree_api`, `unitree_go`, `unitree_hg`, `unitree_ros2_example`).
 | `golem_lowerbody_rl` | **controller (lower body, both robots)** | One leg node for both robots, run from config, with no robot or policy name in its code: a robot's `config/<robot>/` (`robot.yaml`: leg joints and the policies it may run; `sim.yaml` and `real.yaml`: start-up, band, command and fault limits of the run) and each policy's spec in `config/<robot>/policies/<name>.yaml` (runtime, TorchScript or ONNX; observation terms; command processing; action mapping); joint slots and `mode_machine` come from `golem_safety`'s robot profile. The H1-2 runs the TorchScript walking, FAME RMA stand/squat and ALMI stand/walk policies, one per run (`policy:=`, `almi` by default in every bringup); the G1 runs HOMIE's ONNX walking policy (its weights under their own licence in `policies/homie/`, §8). ROS only (no Unitree SDK): consumes `/lowstate`, `/cmd_vel` and `/lowerbody/height`, publishes the 12 leg joints' PD setpoints on `golem_safety`'s `/safety/lowcmd_lower_in` | `lowerbody_controller_node` (`/lowerbody/confirm_engage`, `/lowerbody/active_policy`); `launch/lowerbody.launch.py` (`robot`, `config`, `policy`, `sim`; refuses a run config for the other platform, a real-robot run config without the operator's confirm, or an unlisted policy before any node starts: `lowerbody: not starting: ...`), which `h12_lowerbody.launch.py` and `g1_core.launch.py` include; the H1-2's top-level files, which include the leg block last, run the same check first (`golem_bringup.h12_legs.leg_check`) |
 | `lmg_deploy` | controller (whole body, MARL) | The loco-manipulation game's two-agent (legs + IK arms) MARL policy, run by the `lmg_*` bringups. It reads `/livox/imu` in the MID-360's raw, upside-down `livox_imu_link`, as the H1-2's models and RoboCasa sim carry it, and turns it into the upright frame the policies trained on (`livox_imu.livox_to_imu_rotation`). Policies live one per robot, `policies/h12/` and `policies/g1/` (empty), **one iteration at a time: a new export replaces the folder and old ones are deleted** (`policies/README.md`) | `marl_deploy_node` |
 | `golem_slam` | SLAM + navigation (both robots) | One navigation graph for both robots (FAST-LIO deskewed cloud → self filter → floor alignment (`level_odom`)/OctoMap and `level_cloud` → scan → slam_toolbox → Nav2 MPPI, every Nav2 command through the velocity smoother; the local costmap's footprint widened by the arms, `dynamic_footprint`, the body alone during an arm goal), with the dynamic `body → pelvis` transform (`body_to_pelvis`, following the torso or waist joints) and a static `<lidar link> → livox_frame`. `navigation.launch.py robot:=h12\|g1` picks the robot's config directory, `config/<robot>/`: FAST-LIO (`fastlio.yaml`, the G1 sim's `fastlio_sim.yaml`), the MID360 driver config (`MID360_config.json`, real robot, read by the real-driver launches), Nav2 (`nav2.yaml`), OctoMap (`octomap.yaml`) and the pipeline profile (`pipeline.yaml`: lidar link, scan band, `level_odom` values, the arm links of `dynamic_footprint`); slam_toolbox's `config/slam_toolbox.yaml` is shared; `config/example.<kind>.yaml` annotate every key and are not installed | `launch/navigation.launch.py`, `body_to_pelvis`, `config/` |
-| `golem_skills` | **skills (both robots)** | Action servers for the 12 `/skill/*` atomic skills an LLM can call (frontier exploration lives here). See §7. | `skills` (SkillsNode) |
+| `golem_skills` | **skills (both robots)** | Action servers for the 12 `/skill/*` atomic skills an LLM can call (frontier exploration lives here); the `robot` parameter picks the H1-2's or the G1's profile (`robots.py`). See §7. | `skills` (SkillsNode) |
 | `model_server` | model server | ROS service servers wrapping ML models: Gemini VLM, SAM3 segmentation, GraspGenX grasp generation, YOLO detection | `gemini_server`, `sam_server`, `graspgen_server`, `yolo_server` |
 | `custom_ros_messages` | interfaces (both robots) | 19 actions (13 `Skill*`, `FrameTask`, `NamedConfig`, `DualArm`, …), msgs, srvs (`GeminiQuery`, `SamSegment`, `GraspGen`, `SetHandPose`, …) | rosidl only |
 | `magpie_control` | driver (gripper/sensors) | Dynamixel gripper node (`/left|right/gripper/*` services, DeliGrasp action), F/T + tactile sensor nodes | `gripper_node`, `ft_sensor_node` |
@@ -466,7 +466,7 @@ reference.
 
 | Launch file | Scenario | Starts |
 |---|---|---|
-| `g1_sim.launch.py` | **G1 sim** (sim time; `sim_split` for `golem_safety` and the controller, `golem_lowerbody_rl`'s `config/g1/sim.yaml`). Always starts the leg node, running HOMIE. `use_nav` (default true) adds shared navigation (`golem_slam`, FAST-LIO odometry), `use_skills:=true` starts `golem_skills` (including `/skill/frontier_explore`) | `g1_core` |
+| `g1_sim.launch.py` | **G1 sim** (sim time; `sim_split` for `golem_safety` and the controller, `golem_lowerbody_rl`'s `config/g1/sim.yaml`). Always starts the leg node, running HOMIE. `use_nav` (default true) adds shared navigation (`golem_slam`, FAST-LIO odometry), `use_skills:=true` starts `golem_skills` on its G1 profile (`robot: g1`; including `/skill/frontier_explore`) | `g1_core` |
 | `g1_real_robot.launch.py` | **real G1** in Unitree's debug mode, every node in the laptop's `golem_ros` container on domain 0 (`split` and `g1_split`, `golem_lowerbody_rl`'s `config/g1/real.yaml`). The leg node only with `start_position_verified:=true` (default **false**): without it the leg motors stay off and the arms run. `use_nav` (default true) adds the MID-360 driver and `golem_slam`; no skills yet | `g1_core` |
 | `g1_core.launch.py` | shared core, starting `golem_safety`'s and `golem_upper_ik`'s nodes through their launch files (`safety.launch.py`, `upper_ik.launch.py`, `robot_state.launch.py`), as the H1-2's blocks do: `robot_state_publisher`, `golem_upper_ik`'s `joint_state_publisher` (`robot: g1`), `golem_safety`'s `safety_node` (`robot: g1`, `safety_config`, `sim`, `use_estop: false`: the G1 has no estop node), then `golem_upper_ik`'s `frame_task_server` (`robot: g1`, `controller_config`) after `controller_delay` (2 s), then `golem_lowerbody_rl`'s `lowerbody_controller_node` (its `lowerbody.launch.py`: `robot: g1`, `policy: homie`, run config `lowerbody_config`) after `locomotion_delay` (2 s more: always in the sim, with `start_position_verified` on the real robot); [`dex3_hands`] (`use_hands`), [rviz] (`use_rviz`), [`golem_slam`] (`use_nav`), [`golem_skills`] (`use_skills`) | — |
 
@@ -556,9 +556,24 @@ the `SKILL_ACTIONS` table (`base.py`). All types are
 
 `custom_ros_messages` also defines `SkillRetrieveMemory`; no node in this
 repo serves it yet. On the G1, `golem_skills` starts when `use_skills:=true`
-is passed to `g1_sim.launch.py` (with `wait_for_services: false` so it starts
-immediately without waiting for H1-2 vision/gripper services), serving
-`/skill/frontier_explore`.
+is passed to `g1_sim.launch.py` (with `robot: g1` and `wait_for_services:
+false`, so it starts immediately without waiting for the perception and hand
+services), serving `/skill/frontier_explore` and the manipulation skills.
+
+The node's read-only `robot` parameter (`h12` by default, `g1`) picks a
+profile in `golem_skills/robots.py`: the frames the grasp and pick_place
+skills drive, the hand, the named configs and the GraspGenX gripper. On the
+G1 the grasp closes the Dex3-1 through `dex_3`'s `/<arm>/hand/{open,close}`
+(the grip check reads the finger joints on `/joint_states`), starts from
+`home` (the G1 has no `prep` or staging config), and drives tool frames on
+`<arm>_hand_palm_link` (`<arm>_dex3_grasp_frame`, `<arm>_dex3_pinch_frame`,
+which the node broadcasts on `/tf_static`; their offsets are from the URDF,
+unmeasured). The G1 refuses `graspgenx*` (GraspGenX has no Dex3-1 model) and
+`visual_servo` (no hand cameras) before the arm moves, so it runs
+`heuristic`, `antipodal`, `centroid` and `top_down`. Its execution was run
+in the sim from a synthetic object cloud; a perception-driven grasp has not
+run on it (the head camera does not see the RoboCasa counter tops), nor has
+`pick_place`.
 
 Arm moves (`/frame_task`, `/named_config`) need a live `/safety/heartbeat`:
 `golem_skills` refuses to send one before the first true beat, after a false

@@ -25,8 +25,10 @@ Nothing is installed on, or run from, the robot's own computers.
 
 Not done yet: the procedure for entering Unitree's debug mode on our G1,
 navigation on the real robot, self-collision spheres on the Dex3-1 fingers,
-manipulation skills, sensors and skills in the real bringup, and tuning of
-gains and limits on our G1.
+a perception-driven grasp and `pick_place` (the manipulation skills run on the
+G1's profile, but only their execution has run, in the sim, from a synthetic
+object), sensors and skills in the real bringup, and tuning of gains and
+limits on our G1.
 
 ## Selecting the G1
 

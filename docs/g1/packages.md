@@ -26,7 +26,7 @@ below has its own README with the full details, except the launch-only
 | `golem_upper_ik` | the arm IK controller, `frame_task_server` (`/frame_task`, `/named_config`), and `joint_state_publisher` ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_upper_ik/README.md)). |
 | `golem_lowerbody_rl` | the leg node, running HOMIE on the G1's legs ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_lowerbody_rl/README.md)). |
 | `golem_slam` | the SLAM and Nav2 graph both robots run, `navigation.launch.py robot:=g1` ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_slam/README.md)). |
-| `golem_skills` | action servers for `/skill/*`, including `/skill/frontier_explore`, started by `use_skills:=true` in the G1 bringup. |
+| `golem_skills` | action servers for `/skill/*`, including `/skill/frontier_explore`, started by `use_skills:=true` in the G1 bringup on its G1 profile (`robot: g1`): `/skill/grasp` and `/skill/pick_place` close the Dex3-1 hands with the heuristic grasp methods (no GraspGenX, no visual servo). |
 | `custom_ros_messages` | the actions and services (`FrameTask`, `NamedConfig`, `SetHandPose`, `SkillFrontierExplore`, ...). |
 | `FAST_LIO` (package `fast_lio`) | lidar-inertial odometry for `golem_slam` |
 | `livox_ros_driver2` | the `CustomMsg` type of `/livox/lidar`, and the MID-360 driver the real G1's bringup starts with `use_nav` (`launch/g1/g1_real_drivers.launch.py`) |

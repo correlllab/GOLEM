@@ -44,7 +44,7 @@ def _fake_planner(poses, scores=None, width=0.05):
 
     def plan_grasp(cloud, gripper_name, frame, scene_cloud=None, arm=''):
         """Return a graspgen-like response holding `poses`, scored best-first."""
-        calls.append(dict(frame=frame, arm=arm))
+        calls.append(dict(frame=frame, arm=arm, gripper_name=gripper_name))
         grasps = []
         for p in poses:
             g = PoseStamped()
@@ -64,7 +64,8 @@ def _input(cloud, arm='right', min_pitch=0.0, planner=None):
     """Build a SynthesisInput for the object 'thing'."""
     return SynthesisInput(obj='thing', arm=arm, cloud=cloud, scene=None,
                           min_pitch_deg=min_pitch,
-                          plan_grasp=planner or _fake_planner([]), log=_Log())
+                          plan_grasp=planner or _fake_planner([]), log=_Log(),
+                          gripper_name='magpie')
 
 
 def _contact(pose):
@@ -204,7 +205,7 @@ def test_graspgenx_raw_executes_server_order_untouched():
         np.testing.assert_allclose(pose_to_matrix(g.pose), pose_to_matrix(p),
                                    atol=1e-9)
     assert cands.scores == sorted(cands.scores, reverse=True)
-    assert planner.calls[0] == dict(frame='pelvis', arm='right')
+    assert planner.calls[0] == dict(frame='pelvis', arm='right', gripper_name='magpie')
 
 
 def test_graspgenx_filtered_rerolls_and_drops_cross_body():
@@ -266,3 +267,19 @@ def test_planner_failure_is_a_reason_not_an_exception():
         cands, err = METHODS[name].synthesize(
             _input(_box_cloud(OBJ, (0.04, 0.04, 0.04)), planner=no_plan))
         assert cands is None and 'no grasp planned' in err
+
+
+@pytest.mark.parametrize('name', ['graspgenx', 'graspgenx_filtered'])
+def test_graspgenx_without_a_gripper_model_plans_nothing(name):
+    """With no GraspGenX gripper for the robot, the service is not called and the method fails."""
+    planner = _fake_planner(_planner_pool())
+    inp = _input(_box_cloud(OBJ, (0.04, 0.04, 0.04)), planner=planner)
+    inp.gripper_name = None
+    cands, err = METHODS[name].synthesize(inp)
+    assert cands is None and 'no model' in err
+    assert planner.calls == []
+
+
+def test_only_the_graspgenx_methods_need_graspgen():
+    """The heuristic methods run on any robot; the two GraspGenX ones need its model."""
+    assert {n for n, m in METHODS.items() if m.graspgen} == {'graspgenx', 'graspgenx_filtered'}

@@ -17,7 +17,7 @@ from geometry_msgs.msg import Pose, Vector3Stamped
 from rclpy.duration import Duration as RclpyDuration
 from sensor_msgs.msg import Image
 
-from ..base import DEPTH_MAX_M, FRAME_TASK_STABLE_STOP_MSGS, GRASP_FRAMES
+from ..base import DEPTH_MAX_M, FRAME_TASK_STABLE_STOP_MSGS
 from ..perception_utils import deproject_mask, gemini_boxes
 from .grasp_detection import box_detection
 from .grasp_markers import approach_target_tf
@@ -156,7 +156,7 @@ class GraspServo:
         """
         Align the gripper on `obj` with the hand camera at the pre-grasp.
 
-        Drives GRASP_FRAMES[arm] in PURE TRANSLATION until `obj` sits at
+        Drives the arm's grasp frame in PURE TRANSLATION until `obj` sits at
         (VISUAL_SERVO_TARGET_XY_M, depth setpoint) in the hand camera's
         optical frame; the orientation stays the planned grasp's. The depth
         setpoint is `servo_depth`, raised to the median servo_depth_floor of
@@ -175,7 +175,7 @@ class GraspServo:
         Returns (pose, None), the pelvis-frame gripper Pose it converged at,
         where the caller closes with no contact move, or (None, reason).
         """
-        frame = GRASP_FRAMES[arm]
+        frame = self.robot.grasp_frames[arm]
         planned_q = targets.grasps_p[idx].orientation
         servo_depth = float(self.get_parameter('servo_depth').value)
         target = np.array([VISUAL_SERVO_TARGET_XY_M[0],

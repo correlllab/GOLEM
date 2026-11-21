@@ -10,6 +10,7 @@
   <depend>rclpy</depend>
   <exec_depend>model_server</exec_depend>
   <exec_depend>golem_upper_ik</exec_depend>
+  <exec_depend>dex_3</exec_depend>
   <depend>rcl_interfaces</depend>
   <depend>custom_ros_messages</depend>
   <depend>magpie_msgs</depend>

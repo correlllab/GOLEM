@@ -39,12 +39,13 @@ from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 
 from action_msgs.msg import GoalStatus
 from builtin_interfaces.msg import Duration
-from geometry_msgs.msg import Point, Pose, Quaternion, Vector3Stamped
+from geometry_msgs.msg import Point, Pose, Quaternion, TransformStamped, Vector3Stamped
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image, JointState
 from std_msgs.msg import Bool, Header
 
 from sensor_msgs_py import point_cloud2
-from tf2_ros import Buffer, TransformBroadcaster, TransformListener, TransformException
+from tf2_ros import (Buffer, StaticTransformBroadcaster, TransformBroadcaster,
+                     TransformListener, TransformException)
 
 from custom_ros_messages.msg import DetectionBundle
 from custom_ros_messages.srv import GeminiQuery, SamSegment, GraspGen
@@ -65,6 +66,8 @@ from .perception_utils import (
 )
 from .grasp_synthesis import DEFAULT_METHOD, METHODS, method_name
 from model_server.model_logging import _log_root
+from .hands import DEX3_NS
+from .robots import ARMS, DEFAULT_ROBOT, ROBOTS, drive_pose, robot_profile
 from .run_telemetry import RunRecorder, describe_goal, run_dir
 
 
@@ -80,10 +83,6 @@ ARM_DETECTION_TOPICS = {
     'right': '/realsense/right_hand/color/image_raw/compressed/detections',
 }
 
-# URDF gripper-BASE frames whose axes match GraspGenX's grasp convention (+Z
-# approach, +X finger closing, origin at the magpie gripper base), so a grasp
-# pose drives them as given, with no axis permutation or TCP offset.
-GRASP_FRAMES = {'left': 'left_graspgenx_frame', 'right': 'right_graspgenx_frame'}
 # per-arm gripper namespace: the magpie driver and the sims serve <ns>/set_position,
 # <ns>/set_force, <ns>/open and <ns>/close and publish <ns>/state; the driver
 # alone serves <ns>/reset_overload
@@ -302,30 +301,42 @@ class SkillsBase(Node):
         # them, and pick_place can call this node's own /skill/grasp.
         self._cb_group = ReentrantCallbackGroup()
 
+        # The robot the skills drive (robots.py): its grasp frames, named
+        # configurations and grasp planner gripper. Read once: a running node
+        # serves one robot.
+        self.robot = robot_profile(self.declare_parameter(
+            'robot', DEFAULT_ROBOT, ParameterDescriptor(
+                description=f'robot the skills drive, one of {sorted(ROBOTS)}',
+                read_only=True)).value)
+        self.get_logger().info(f'golem_skills: robot {self.robot.name}')
+
+        # The hand the robot grasps with (hands.py): the Magpie gripper's
+        # services below, or the Dex3-1 driver's open and close.
+        magpie_ns = GRIPPER_NS if self.robot.hand == 'magpie' else {}
         self.gripper_clis = {
             arm: self.create_client(SetGripperPosition, f'{ns}/set_position',
                                     callback_group=self._cb_group)
-            for arm, ns in GRIPPER_NS.items()
+            for arm, ns in magpie_ns.items()
         }
         self.gripper_open_clis = {
             arm: self.create_client(Trigger, f'{ns}/open', callback_group=self._cb_group)
-            for arm, ns in GRIPPER_NS.items()
+            for arm, ns in magpie_ns.items()
         }
         self.gripper_close_clis = {
             arm: self.create_client(Trigger, f'{ns}/close', callback_group=self._cb_group)
-            for arm, ns in GRIPPER_NS.items()
+            for arm, ns in magpie_ns.items()
         }
         self.gripper_force_clis = {
             arm: self.create_client(SetGripperForce, f'{ns}/set_force',
                                     callback_group=self._cb_group)
-            for arm, ns in GRIPPER_NS.items()
+            for arm, ns in magpie_ns.items()
         }
         # clears a Dynamixel overload without opening the fingers; the grip-hold
         # loop's other call
         self.gripper_reset_clis = {
             arm: self.create_client(Trigger, f'{ns}/reset_overload',
                                     callback_group=self._cb_group)
-            for arm, ns in GRIPPER_NS.items()
+            for arm, ns in magpie_ns.items()
         }
         # arm -> (thread, stop Event) of the running grip-hold loop
         self._grip_hold = {}
@@ -339,14 +350,29 @@ class SkillsBase(Node):
                 GripperState, f'{ns}/state',
                 lambda msg, a=arm: self._on_gripper_state(a, msg),
                 10, callback_group=self._cb_group)
-            for arm, ns in GRIPPER_NS.items()
+            for arm, ns in magpie_ns.items()
         }
         # mm, the aperture the driver reported after the last set_gripper per
         # arm; gripper_aperture's fallback before any state message
         self._gripper_actual_mm = {}
-        # the latest /joint_states (golem_upper_ik's joint_state_publisher, the
-        # body joints from /lowstate); the grasp reach check starts its IK there
-        self._joint_state = None
+        # the Dex3-1 driver's named poses, per arm
+        dex3_ns = DEX3_NS if self.robot.hand == 'dex3' else {}
+        self.hand_open_clis = {
+            arm: self.create_client(Trigger, f'{ns}/open', callback_group=self._cb_group)
+            for arm, ns in dex3_ns.items()
+        }
+        self.hand_close_clis = {
+            arm: self.create_client(Trigger, f'{ns}/close', callback_group=self._cb_group)
+            for arm, ns in dex3_ns.items()
+        }
+        # joint name -> (position [rad], robot time it arrived [s]) from every
+        # /joint_states message. More than one node publishes there, each its
+        # own joints (golem_upper_ik's joint_state_publisher the body from
+        # /lowstate; on the G1 dex_3's driver the fingers too), so the joints
+        # are kept per name rather than as the last message. The grasp reach
+        # check starts its IK at them.
+        self._joints = {}
+        self._joints_lock = threading.Lock()
         self.joint_state_sub = self.create_subscription(
             JointState, '/joint_states', self._on_joint_state, 10,
             callback_group=self._cb_group)
@@ -405,6 +431,12 @@ class SkillsBase(Node):
         # (publish_tf, _republish_tfs) so they do not expire; the skill that
         # registered a frame drops it (drop_tf) when its goal ends.
         self.tf_broadcaster = TransformBroadcaster(self)
+        # The robot's tool frames (robots.RobotProfile.tool_frames: on the G1
+        # the Dex3-1 grasp and pinch frames its URDF lacks), latched on
+        # /tf_static, so every TF lookup of a grasp or pinch frame works as it
+        # does on a URDF frame.
+        self._tool_tf = StaticTransformBroadcaster(self)
+        self._broadcast_tool_frames()
         # child_frame_id -> TransformStamped
         self._persistent_tfs = {}
         self._tf_lock = threading.Lock()
@@ -452,8 +484,8 @@ class SkillsBase(Node):
                 lambda msg, a=arm: self._on_arm_detections(a, msg),
                 qos_profile_sensor_data, callback_group=self._cb_group)
 
-        # With `wait_for_services`, wait for the H1-2's perception and gripper
-        # services and the arm actions, 10 s in total; a missing one is not fatal.
+        # With `wait_for_services`, wait for the perception and hand services
+        # and the arm actions, 10 s in total; a missing one is not fatal.
         wait_for_services = bool(
             self.declare_parameter('wait_for_services', True).value)
         if wait_for_services:
@@ -462,7 +494,8 @@ class SkillsBase(Node):
             for cli in (self.gemini_cli, self.sam_cli, self.graspgen_cli,
                         *self.gripper_clis.values(), *self.gripper_open_clis.values(),
                         *self.gripper_close_clis.values(),
-                        *self.gripper_force_clis.values()):
+                        *self.gripper_force_clis.values(),
+                        *self.hand_open_clis.values(), *self.hand_close_clis.values()):
                 rem = max(0.0, deadline - time.monotonic())
                 if rem <= 0.0:
                     break
@@ -539,6 +572,24 @@ class SkillsBase(Node):
         with self._tf_lock:
             self._persistent_tfs[transform.child_frame_id] = transform
         self.tf_broadcaster.sendTransform(transform)
+
+    def _broadcast_tool_frames(self):
+        """Send every tool frame of the robot's profile on /tf_static (none on the H1-2)."""
+        tfs = []
+        stamp = self.get_clock().now().to_msg()
+        for name, tool in self.robot.tool_frames.items():
+            t = TransformStamped()
+            t.header.stamp = stamp
+            t.header.frame_id = tool.parent
+            t.child_frame_id = name
+            p = matrix_to_pose(tool.matrix())
+            t.transform.translation.x = p.position.x
+            t.transform.translation.y = p.position.y
+            t.transform.translation.z = p.position.z
+            t.transform.rotation = p.orientation
+            tfs.append(t)
+        if tfs:
+            self._tool_tf.sendTransform(tfs)
 
     def drop_tf(self, child_frame_id):
         """Stop re-broadcasting a frame registered with publish_tf."""
@@ -997,7 +1048,7 @@ class SkillsBase(Node):
         """
         Drive URDF `frame` to `pose` (pelvis frame) with one /frame_task goal; return reached.
 
-        `frame` is GRASP_FRAMES[arm] for grasping. Pass the skill's goal handle
+        `frame` is the robot's grasp frame (robots.py) for grasping. Pass the skill's goal handle
         as `outer_gh` so a skill cancel cancels the frame_task goal too.
 
         `duration_sec` is a TIMEOUT. `slow_mode` runs the goal at the server's
@@ -1080,6 +1131,10 @@ class SkillsBase(Node):
         Reached means the goal succeeded (or stopped early as stable) AND the
         last streamed error is within (`lin_tol`, `ang_tol`).
 
+        A tool frame of the robot (robots.drive_pose) is driven through its
+        URDF parent at the pose that puts it at `pose`; the streamed errors
+        are then the parent's.
+
         `stable_stop_msgs`: if set, cancel the goal and return once the
         streamed (lin, ang) feedback stays within FRAME_TASK_STABLE_EPS_* of
         its running reference for that many messages: the arm has settled and
@@ -1090,8 +1145,12 @@ class SkillsBase(Node):
         if halt is not None:
             self.get_logger().error(f'frame_task[{tag}] not sent: {halt}')
             return False
+        drive_frame, T = drive_pose(self.robot, frame, pose_to_matrix(pose))
+        if drive_frame != frame:
+            tag = f'{tag} via {drive_frame}'
+            pose = matrix_to_pose(T)
         goal = FrameTask.Goal()
-        goal.frame_names = [frame]
+        goal.frame_names = [drive_frame]
         goal.frame_targets = [pose]
         goal.plan = do_plan
         goal.slow_mode = bool(slow_mode)
@@ -1324,12 +1383,43 @@ class SkillsBase(Node):
         self._gripper_state_t[arm] = self.robot_now()
 
     def _on_joint_state(self, msg):
-        """Keep the latest /joint_states message."""
-        self._joint_state = msg
+        """Keep each joint's latest /joint_states position and when it arrived."""
+        t = self.robot_now()
+        with self._joints_lock:
+            for name, position in zip(msg.name, msg.position):
+                self._joints[name] = (float(position), t)
 
     def latest_joint_state(self):
-        """Return the latest /joint_states message, or None before the first."""
-        return self._joint_state
+        """
+        Return every joint heard on /joint_states as one JointState, or None before the first.
+
+        Each joint has its latest position, whichever publisher sent it.
+        """
+        with self._joints_lock:
+            if not self._joints:
+                return None
+            msg = JointState()
+            msg.name = list(self._joints)
+            msg.position = [p for p, _ in self._joints.values()]
+        return msg
+
+    def joint_positions_since(self, names, since, wait_sec):
+        """
+        Return {name: position [rad]} of `names`, each from a message after `since`, or None.
+
+        `since` and `wait_sec` are s of robot time; waits up to `wait_sec` for
+        every one of `names` to be published after `since`. None when one is
+        not, e.g. its publisher is down.
+        """
+        deadline = self.robot_now() + wait_sec
+        while True:
+            with self._joints_lock:
+                got = {n: self._joints.get(n) for n in names}
+            if all(v is not None and v[1] > since for v in got.values()):
+                return {n: v[0] for n, v in got.items()}
+            if self.robot_now() >= deadline:
+                return None
+            self._sleep_robot(ROBOT_WAIT_POLL_SEC, threading.Event())
 
     def gripper_aperture_since(self, arm, since, wait_sec):
         """
@@ -1405,8 +1495,14 @@ class SkillsBase(Node):
 
         A position command, so partial openings hold, followed by
         GRIPPER_SETTLE_SEC so the fingers stop before the arm moves. Opening
-        ends the arm's grip-hold loop (through set_gripper).
+        ends the arm's grip-hold loop (through set_gripper). A Dex3-1 opens
+        fully whatever `amount` (its driver's `open` pose).
         """
+        if self.robot.hand == 'dex3':
+            if not self._trigger_gripper(self.hand_open_clis[arm], f'hand open({arm})'):
+                return False
+            self.get_clock().sleep_for(RclpyDuration(seconds=GRIPPER_SETTLE_SEC))
+            return True
         amount = min(max(float(amount), 0.0), 1.0)
         if not self.set_gripper(arm, amount * GRIPPER_MAX_WIDTH_MM):
             return False
@@ -1423,7 +1519,16 @@ class SkillsBase(Node):
         returns before the fingers finish, then starts the grip-hold loop
         (_grip_hold_loop), which keeps running after this call and after the
         skill returns, until the gripper is opened. Returns success.
+
+        A Dex3-1 has no force limit or overload: its driver's `close` pose,
+        which the driver keeps commanding, then GRIPPER_SETTLE_SEC; no
+        grip-hold loop.
         """
+        if self.robot.hand == 'dex3':
+            if not self._trigger_gripper(self.hand_close_clis[arm], f'hand close({arm})'):
+                return False
+            self.get_clock().sleep_for(RclpyDuration(seconds=GRIPPER_SETTLE_SEC))
+            return True
         if not self.set_gripper_force(arm, force_n):
             return False
         if not self._trigger_gripper(self.gripper_close_clis[arm], f'close({arm})'):
@@ -1514,7 +1619,7 @@ class SkillsBase(Node):
     def _validated_arm(self, goal):
         """Return goal.arm normalized to 'left' or 'right', or None for any other value."""
         arm = goal.arm.strip().lower()
-        if arm not in GRASP_FRAMES:
+        if arm not in ARMS:
             return None
         return arm
 
@@ -1542,8 +1647,8 @@ class SkillsBase(Node):
                     goal.top_down, self.get_parameter('grasp_method').value)
             try:
                 rec = RunRecorder(
-                    self, skill, out_dir, WORLD_FRAME, GRASP_FRAMES,
-                    arm=arm if arm in GRASP_FRAMES else None,
+                    self, skill, out_dir, WORLD_FRAME, self.robot.grasp_frames,
+                    arm=arm if arm in ARMS else None,
                     request=request).start()
             # recording must never break a skill
             except Exception as e:

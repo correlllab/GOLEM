@@ -33,7 +33,7 @@ from tf2_ros import TransformException
 
 from custom_ros_messages.action import SkillGrasp, SkillPickPlace
 
-from ..base import _Run, FRAME_TASK_STABLE_STOP_MSGS, GRASP_FRAMES, WORLD_FRAME
+from ..base import _Run, FRAME_TASK_STABLE_STOP_MSGS, WORLD_FRAME
 from ..perception_utils import (matrix_to_pose, pose_to_matrix,
                                 transform_to_matrix)
 from ..grasp_synthesis.common import pose_at
@@ -67,13 +67,12 @@ LIFT_HEIGHT = 0.10
 LIFT_STEP = 0.05
 # s of commanded motion per rung
 LIFT_STEP_DURATION_SEC = 4.0
-# The lift drives the PINCH-POINT frame, not the GraspGenX gripper-base frame
-# the targets are computed for. The two are GRIPPER_BASE_TO_CONTACT_M (0.1146 m)
-# apart along the approach, so nulling the error at the base would let a wrist
-# orientation residual swing the fingertips through ~0.1146 x ang_tol
-# unnoticed; on a small part held in the fingertips that arc rolls it out of
-# the jaws.
-PINCH_FRAMES = {'left': 'left_grasp_frame', 'right': 'right_grasp_frame'}
+# The lift drives the robot's PINCH-POINT frame (robots.RobotProfile.pinch_frames),
+# not the GraspGenX gripper-base frame the targets are computed for. The two
+# are GRIPPER_BASE_TO_CONTACT_M (0.1146 m) apart along the approach, so nulling
+# the error at the base would let a wrist orientation residual swing the
+# fingertips through ~0.1146 x ang_tol unnoticed; on a small part held in the
+# fingertips that arc rolls it out of the jaws.
 # debug TF (RViz) of the detected place point, then the commanded place pose
 PLACE_TARGET_FRAME = 'pick_place_target_frame'
 
@@ -123,12 +122,13 @@ class PickPlaceSkill:
         if not run.phase('detect_place_target', 0.0):
             return run.result
         # Arms out of the head camera's view before the detection image (the
-        # grasp skill's own 'prep' is then a no-op). The skill has not moved
-        # the arm yet, so there is no retreat.
-        if not self.goto_named_config('prep', plan=True, slow_mode=True,
+        # grasp skill's own move to prep is then a no-op). The skill has not
+        # moved the arm yet, so there is no retreat.
+        prep = self.robot.prep_config
+        if not self.goto_named_config(prep, plan=True, slow_mode=True,
                                       duration_sec=30.0, result_timeout=90.0,
                                       outer_gh=gh):
-            return run.abort("move to 'prep' before detection failed")
+            return run.abort(f'move to {prep!r} before detection failed')
         place_cloud, _, err = self.detect_object_cloud(place, run, gh)
         if err:
             return fail(f'place target: {err}')
@@ -155,10 +155,10 @@ class PickPlaceSkill:
         # The lift rungs are computed for the GraspGenX frame the grasp pose is
         # in, then restated for the pinch-point frame that holds the object
         # (to_pinch); see the LIFT_* constants.
-        lift_frame = PINCH_FRAMES[arm]
+        lift_frame = self.robot.pinch_frames[arm]
         T_off = self._pinch_frame_offset(arm)
         if T_off is None:
-            return fail(f'TF {GRASP_FRAMES[arm]} -> {lift_frame} unavailable, '
+            return fail(f'TF {self.robot.grasp_frames[arm]} -> {lift_frame} unavailable, '
                         'so the post-grasp lift target is unknown')
 
         def to_pinch(pose_gx):
@@ -214,11 +214,11 @@ class PickPlaceSkill:
             place_w if place_w is not None else place_p,
             self.get_clock().now().to_msg(), child=PLACE_TARGET_FRAME))
         self.get_logger().info(
-            f'pick_place: {GRASP_FRAMES[arm]} to the top-down release pose '
+            f'pick_place: {self.robot.grasp_frames[arm]} to the top-down release pose '
             f'{PLACE_HEIGHT * 100:.0f}cm above {place!r}')
         # planned: the hand carries the object across the workspace
         if not self.servo_frame_to_world(
-                GRASP_FRAMES[arm], place_w, place_p, outer_gh=gh,
+                self.robot.grasp_frames[arm], place_w, place_p, outer_gh=gh,
                 duration_sec=APPROACH_DURATION_SEC, max_iter=SERVO_MAX_ITER,
                 lin_tol=SERVO_LIN_TOL, ang_tol=SERVO_ANG_TOL,
                 label='carry to release pose above place target'):
@@ -289,7 +289,7 @@ class PickPlaceSkill:
         """
         try:
             tf = self.tf_buffer.lookup_transform(
-                GRASP_FRAMES[arm], PINCH_FRAMES[arm], Time(),
+                self.robot.grasp_frames[arm], self.robot.pinch_frames[arm], Time(),
                 timeout=RclpyDuration(seconds=1.0))
         except TransformException:
             return None

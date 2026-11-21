@@ -63,9 +63,10 @@ odom -> pelvis publisher.
 FAST-LIO starts while the sim's elastic band still holds the robot up: the
 leg node releases it once its policy runs and the controller's start-up moves
 are done (or band.max_wait after the policy started).
-use_skills:=true starts golem_skills (serving /skill/*, including
-/skill/frontier_explore) without waiting for the H1-2's perception and gripper
-services. use_hands starts dex3_hands, the Dex3-1 driver, which writes
+use_skills:=true starts golem_skills on its G1 profile (robot: g1; serving
+/skill/*, including /skill/frontier_explore and, with the Dex3-1 driver and the
+perception services, /skill/grasp and /skill/pick_place) without waiting for
+those services. use_hands starts dex3_hands, the Dex3-1 driver, which writes
 rt/dex3/<side>/cmd directly, outside golem_safety. use_rviz starts RViz on
 rviz/g1/g1.rviz.
 
@@ -217,12 +218,13 @@ def _setup(context):
         ),
     ]
     if _as_bool(context, 'use_skills'):
-        # The /skill/* action servers, without waiting for the H1-2's services.
+        # The /skill/* action servers on the G1's profile (the Dex3-1 hands),
+        # without waiting for the perception and hand services.
         actions.append(Node(
             package='golem_skills',
             executable='skills',
             name='golem_skills',
-            parameters=[use_sim_time, {'wait_for_services': False}],
+            parameters=[use_sim_time, {'robot': ROBOT, 'wait_for_services': False}],
             output='screen',
         ))
     if use_nav and not sim:

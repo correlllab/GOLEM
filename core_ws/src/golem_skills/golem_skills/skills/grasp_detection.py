@@ -12,7 +12,7 @@ import numpy as np
 from geometry_msgs.msg import Point
 from custom_ros_messages.msg import Detection
 
-from ..base import GEMINI_TIMEOUT_SEC, GRASP_FRAMES
+from ..base import GEMINI_TIMEOUT_SEC
 from ..grasp_synthesis.common import pose_at
 from ..perception_utils import gemini_boxes
 
@@ -64,8 +64,9 @@ class GraspDetection:
         if len(boxes) <= 1:
             return boxes[0] if boxes else self._gemini_box(obj, run, gh)
         ref = None
-        if arm in GRASP_FRAMES:
-            o = self._transform_pose(pose_at((0.0, 0.0, 0.0)), GRASP_FRAMES[arm], 'pelvis')
+        if arm in self.robot.grasp_frames:
+            o = self._transform_pose(pose_at((0.0, 0.0, 0.0)),
+                                     self.robot.grasp_frames[arm], 'pelvis')
             if o is not None:
                 ref = np.array([o.position.x, o.position.y, o.position.z])
         if ref is None:
@@ -83,7 +84,7 @@ class GraspDetection:
                 f'grasp: {len(boxes)} {obj!r} instances in view but none had '
                 f'usable head-camera depth; falling back to the single-box query')
             return self._gemini_box(obj, run, gh)
-        where = f'the {arm} arm' if arm in GRASP_FRAMES else 'the robot'
+        where = f'the {arm} arm' if arm in self.robot.grasp_frames else 'the robot'
         self.get_logger().info(
             f'grasp: {len(boxes)} {obj!r} instances in view; picked the one at '
             f'pelvis ({best_pt[0]:.3f}, {best_pt[1]:.3f}, {best_pt[2]:.3f}), '

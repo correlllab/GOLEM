@@ -11,7 +11,7 @@ The flow (_exec_grasp):
             in along the grasp axis (or the visual servo); a candidate whose
             pre-grasp or contact is not reached is dropped and the next one
             tried
-         -> force close -> check the gripper holds something
+         -> close -> check the hand holds something
 
 Perception and execution are the same for every synthesis method; only the
 candidate list differs (grasp_synthesis/__init__.py has the methods and how a
@@ -37,10 +37,12 @@ from rclpy.duration import Duration as RclpyDuration
 
 from custom_ros_messages.action import SkillGrasp
 
-from ..base import (_Run, FRAME_TASK_STABLE_STOP_MSGS, GRASP_FRAMES,
-                    SLOW_MODE_TIME_SCALE, WORLD_FRAME)
+from ..base import (_Run, FRAME_TASK_STABLE_STOP_MSGS, SLOW_MODE_TIME_SCALE,
+                    WORLD_FRAME)
 from ..grasp_synthesis import METHODS, SynthesisInput, method_name
 from ..grasp_synthesis.common import pose_at
+from ..hands import (dex3_closing_joints, dex3_closure, dex3_closure_text,
+                     dex3_grip_failure)
 from ..perception_utils import (approach_pose, pose_quat, pose_xyz,
                                 quat_geodesic, quat_slerp)
 from .grasp_detection import GraspDetection, perception_name
@@ -100,7 +102,8 @@ EMPTY_GRIP_MAX_MM = 2.0
 # wider than this cannot be grasped.
 OPEN_GRIP_MIN_MM = 90.0
 # s of robot time to wait for a gripper state published after the close (the
-# driver and the sims publish at 10 Hz)
+# Magpie driver and the H1-2 sims publish at 10 Hz, dex_3's driver its finger
+# joints at 50 Hz)
 GRIP_STATE_WAIT_SEC = 1.0
 
 
@@ -313,6 +316,9 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         method, err = self._resolve_grasp_method(goal)
         if err:
             return run.abort(err)
+        err = self._robot_refusal(method, goal)
+        if err:
+            return run.abort(err)
         obj = perception_name(goal.target_object)
         self.get_logger().info(
             f'grasp: {obj!r} with synthesis method {method.name!r}'
@@ -323,14 +329,16 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
 
         if not run.phase('detect_object', 0.0):
             return run.result
-        # Arms to 'prep' first, out of the head camera's view (an arm across the
-        # object corrupts the box, mask and cloud); planned, because the arms
-        # start wherever the last skill left them. The only failure without a
-        # retreat: the skill has not moved the arm yet.
-        if not self.goto_named_config('prep', plan=True, slow_mode=True,
+        # Arms to the robot's prep config ('prep' on the H1-2) first, out of
+        # the head camera's view (an arm across the object corrupts the box,
+        # mask and cloud); planned, because the arms start wherever the last
+        # skill left them. The only failure without a retreat: the skill has
+        # not moved the arm yet.
+        prep = self.robot.prep_config
+        if not self.goto_named_config(prep, plan=True, slow_mode=True,
                                       duration_sec=30.0, result_timeout=90.0,
                                       outer_gh=gh):
-            return run.abort("move to 'prep' before detection failed")
+            return run.abort(f'move to {prep!r} before detection failed')
 
         def fail(message):
             """Lift the hand clear of the workspace, then abort with `message`."""
@@ -356,9 +364,9 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
 
         # A staged method starts from the arm's joint-space staging config: a
         # repeatable posture above the workspace for a steep top-down approach,
-        # reached without an IK solve, with the other arm at 'prep'. Other
-        # methods start from 'prep'.
-        stage_cfg = 'staging_right' if arm == 'right' else 'staging_left'
+        # reached without an IK solve, with the other arm at prep. Other
+        # methods start from prep.
+        stage_cfg = self.robot.staging_configs[arm]
         if method.staged:
             if not self.goto_named_config(stage_cfg, plan=True, slow_mode=True,
                                           duration_sec=30.0, result_timeout=90.0,
@@ -376,7 +384,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         # the run_telemetry target is the object centroid in the world frame
         if targets.centroid_w is not None:
             self._note_run_target(targets.centroid_w)
-        reset_cfg = stage_cfg if method.staged else 'prep'
+        reset_cfg = stage_cfg if method.staged else prep
         obstacles = scene_obstacles(scene, obj_cloud) if method.reach_check else None
         contact, err = self._reach_candidate(run, gh, goal, obj, arm, cands,
                                              targets, reset_cfg,
@@ -395,8 +403,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         if not self.close_gripper(arm):
             return fail('gripper close failed')
         self.get_clock().sleep_for(RclpyDuration(seconds=POST_CLOSE_SETTLE_SEC))
-        aperture = self.gripper_aperture_since(arm, closed_at, GRIP_STATE_WAIT_SEC)
-        reason = grip_failure(aperture)
+        reason, held = self._grip_check(arm, closed_at)
         if reason is not None:
             return fail(f'grasp of {obj!r} with {method.name} candidate '
                         f'{cands.labels[contact.idx]} failed: {reason}')
@@ -413,7 +420,26 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         return run.succeed(
             f'grasped {obj!r} with {method.name} candidate '
             f'{cands.labels[contact.idx]} (score {cands.scores[contact.idx]:.2f}, '
-            f'gripper at {aperture:.1f} mm)')
+            f'{held})')
+
+    def _grip_check(self, arm, closed_at):
+        """
+        Return (why `arm`'s hand holds nothing, or None; its state for the result message).
+
+        `closed_at` is the robot time the close was sent; only hand state
+        published after it counts. The Magpie's aperture (grip_failure), or
+        how far the Dex3-1's fingers closed (hands.dex3_grip_failure).
+        """
+        if self.robot.hand == 'dex3':
+            positions = self.joint_positions_since(
+                dex3_closing_joints(arm), closed_at, GRIP_STATE_WAIT_SEC)
+            reason = dex3_grip_failure(arm, positions)
+            held = ('fingers closed ' + dex3_closure_text(dex3_closure(arm, positions))
+                    if positions is not None else '')
+            return reason, held
+        aperture = self.gripper_aperture_since(arm, closed_at, GRIP_STATE_WAIT_SEC)
+        reason = grip_failure(aperture)
+        return reason, (f'gripper at {aperture:.1f} mm' if aperture is not None else '')
 
     def _resolve_grasp_method(self, goal):
         """Return (GraspMethod, None) for the goal, or (None, reason) for an unknown name."""
@@ -425,12 +451,29 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
                           f'{sorted(METHODS)}')
         return method, None
 
+    def _robot_refusal(self, method, goal):
+        """
+        Return why this robot cannot run `method` or the goal's options, or None.
+
+        Checked before the arm moves: a GraspGenX method needs a gripper
+        GraspGenX has a model of, and goal.visual_servo needs hand cameras.
+        """
+        name = self.robot.name
+        if method.graspgen and self.robot.graspgen_gripper is None:
+            return (f'grasp_method {method.name!r} plans with GraspGenX, which has '
+                    f'no model of the {name} hand; use one of '
+                    f'{sorted(m for m, v in METHODS.items() if not v.graspgen)}')
+        if goal.visual_servo and not self.robot.hand_cameras:
+            return f'visual_servo needs hand cameras, and the {name} has none'
+        return None
+
     def get_grasp_candidates(self, method, goal, obj, arm, obj_cloud, scene):
         """Run `method` on the segmented object; return (Candidates, None) or (None, reason)."""
         inp = SynthesisInput(
             obj=obj, arm=arm, cloud=obj_cloud, scene=scene,
             min_pitch_deg=float(goal.min_downward_pitch_deg or 0.0),
-            plan_grasp=self.plan_grasp, log=self.get_logger())
+            plan_grasp=self.plan_grasp, log=self.get_logger(),
+            gripper_name=self.robot.graspgen_gripper)
         cands, err = method.synthesize(inp)
         if err is None and not cands.grasps:
             err = f'{method.name} produced no grasp for {obj!r}'
@@ -520,7 +563,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
                 f'{cands.tiers[i]}, score {cands.scores[i]:.2f}, '
                 f'width {width_mm:.1f}mm')
             contact, why = None, 'pre-grasp unreachable'
-            if self._approach_pregrasp(GRASP_FRAMES[arm], targets.approaches_p[i],
+            if self._approach_pregrasp(self.robot.grasp_frames[arm], targets.approaches_p[i],
                                        run, gh, pregrasp_w=targets.approaches_w[i]):
                 if goal.visual_servo:
                     contact, err = self._servo_contact(run, gh, arm, obj, targets, i)
@@ -552,7 +595,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
 
     def _check_candidate_reach(self, arm, targets, idx, obstacles):
         """Return why candidate `idx`'s approach fails the reach check, or None."""
-        frame = GRASP_FRAMES[arm]
+        frame = self.robot.grasp_frames[arm]
         cur = self._frame_pose_in_pelvis(frame)
         if cur is None:
             return None
@@ -582,7 +625,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
             self.get_logger().warn(
                 f'grasp: visual servo did not converge ({err}) — closing '
                 'anyway at the current pose (best-effort)')
-            pose_p = self._frame_pose_in_pelvis(GRASP_FRAMES[arm])
+            pose_p = self._frame_pose_in_pelvis(self.robot.grasp_frames[arm])
         pose_w = (self._transform_pose(pose_p, 'pelvis', WORLD_FRAME)
                   if targets.have_world and pose_p is not None else None)
         return _Contact(idx, pose_p, pose_w), None
@@ -682,7 +725,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         correction removes the remaining pelvis drift. A cancel or an arm halt
         misses the candidate.
         """
-        frame = GRASP_FRAMES[arm]
+        frame = self.robot.grasp_frames[arm]
         stop_short = float(self.get_parameter('contact_offset').value)
         contact_p = approach_pose(targets.grasps_p[idx], -stop_short)
         contact_w = (approach_pose(targets.grasps_w[idx], -stop_short)
@@ -747,7 +790,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         if halt is not None:
             self.get_logger().warn(f'retreat: skipped, arm halted: {halt}')
             return
-        frame = GRASP_FRAMES[arm]
+        frame = self.robot.grasp_frames[arm]
         cur = self._frame_pose_in_pelvis(frame)
         if cur is None:
             self.get_logger().warn(
@@ -787,12 +830,12 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         object is on (+Y = left).
         """
         dists = {}
-        for arm, frame in GRASP_FRAMES.items():
+        for arm, frame in self.robot.grasp_frames.items():
             p = self._transform_pose(pose_at(centroid_p), 'pelvis', frame)
             if p is not None:
                 dists[arm] = math.sqrt(p.position.x ** 2 + p.position.y ** 2
                                        + p.position.z ** 2)
-        if len(dists) == len(GRASP_FRAMES):
+        if len(dists) == len(self.robot.grasp_frames):
             arm = min(dists, key=dists.get)
             self.get_logger().info(
                 'grasp: auto-selected %s arm (hand-to-object %s)' % (

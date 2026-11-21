@@ -37,8 +37,8 @@ from rclpy.duration import Duration as RclpyDuration
 
 from custom_ros_messages.action import SkillGrasp
 
-from ..base import (_Run, FRAME_TASK_STABLE_STOP_MSGS, GRASP_FRAMES,
-                    SLOW_MODE_TIME_SCALE, WORLD_FRAME)
+from ..base import (_Run, FRAME_TASK_STABLE_STOP_MSGS, SLOW_MODE_TIME_SCALE,
+                    WORLD_FRAME)
 from ..grasp_synthesis import METHODS, SynthesisInput, method_name
 from ..grasp_synthesis.common import pose_at
 from ..perception_utils import (approach_pose, pose_quat, pose_xyz,
@@ -323,14 +323,16 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
 
         if not run.phase('detect_object', 0.0):
             return run.result
-        # Arms to 'prep' first, out of the head camera's view (an arm across the
-        # object corrupts the box, mask and cloud); planned, because the arms
-        # start wherever the last skill left them. The only failure without a
-        # retreat: the skill has not moved the arm yet.
-        if not self.goto_named_config('prep', plan=True, slow_mode=True,
+        # Arms to the robot's prep config ('prep' on the H1-2) first, out of
+        # the head camera's view (an arm across the object corrupts the box,
+        # mask and cloud); planned, because the arms start wherever the last
+        # skill left them. The only failure without a retreat: the skill has
+        # not moved the arm yet.
+        prep = self.robot.prep_config
+        if not self.goto_named_config(prep, plan=True, slow_mode=True,
                                       duration_sec=30.0, result_timeout=90.0,
                                       outer_gh=gh):
-            return run.abort("move to 'prep' before detection failed")
+            return run.abort(f'move to {prep!r} before detection failed')
 
         def fail(message):
             """Lift the hand clear of the workspace, then abort with `message`."""
@@ -356,9 +358,9 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
 
         # A staged method starts from the arm's joint-space staging config: a
         # repeatable posture above the workspace for a steep top-down approach,
-        # reached without an IK solve, with the other arm at 'prep'. Other
-        # methods start from 'prep'.
-        stage_cfg = 'staging_right' if arm == 'right' else 'staging_left'
+        # reached without an IK solve, with the other arm at prep. Other
+        # methods start from prep.
+        stage_cfg = self.robot.staging_configs[arm]
         if method.staged:
             if not self.goto_named_config(stage_cfg, plan=True, slow_mode=True,
                                           duration_sec=30.0, result_timeout=90.0,
@@ -376,7 +378,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         # the run_telemetry target is the object centroid in the world frame
         if targets.centroid_w is not None:
             self._note_run_target(targets.centroid_w)
-        reset_cfg = stage_cfg if method.staged else 'prep'
+        reset_cfg = stage_cfg if method.staged else prep
         obstacles = scene_obstacles(scene, obj_cloud) if method.reach_check else None
         contact, err = self._reach_candidate(run, gh, goal, obj, arm, cands,
                                              targets, reset_cfg,
@@ -430,7 +432,8 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         inp = SynthesisInput(
             obj=obj, arm=arm, cloud=obj_cloud, scene=scene,
             min_pitch_deg=float(goal.min_downward_pitch_deg or 0.0),
-            plan_grasp=self.plan_grasp, log=self.get_logger())
+            plan_grasp=self.plan_grasp, log=self.get_logger(),
+            gripper_name=self.robot.graspgen_gripper)
         cands, err = method.synthesize(inp)
         if err is None and not cands.grasps:
             err = f'{method.name} produced no grasp for {obj!r}'
@@ -520,7 +523,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
                 f'{cands.tiers[i]}, score {cands.scores[i]:.2f}, '
                 f'width {width_mm:.1f}mm')
             contact, why = None, 'pre-grasp unreachable'
-            if self._approach_pregrasp(GRASP_FRAMES[arm], targets.approaches_p[i],
+            if self._approach_pregrasp(self.robot.grasp_frames[arm], targets.approaches_p[i],
                                        run, gh, pregrasp_w=targets.approaches_w[i]):
                 if goal.visual_servo:
                     contact, err = self._servo_contact(run, gh, arm, obj, targets, i)
@@ -552,7 +555,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
 
     def _check_candidate_reach(self, arm, targets, idx, obstacles):
         """Return why candidate `idx`'s approach fails the reach check, or None."""
-        frame = GRASP_FRAMES[arm]
+        frame = self.robot.grasp_frames[arm]
         cur = self._frame_pose_in_pelvis(frame)
         if cur is None:
             return None
@@ -582,7 +585,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
             self.get_logger().warn(
                 f'grasp: visual servo did not converge ({err}) — closing '
                 'anyway at the current pose (best-effort)')
-            pose_p = self._frame_pose_in_pelvis(GRASP_FRAMES[arm])
+            pose_p = self._frame_pose_in_pelvis(self.robot.grasp_frames[arm])
         pose_w = (self._transform_pose(pose_p, 'pelvis', WORLD_FRAME)
                   if targets.have_world and pose_p is not None else None)
         return _Contact(idx, pose_p, pose_w), None
@@ -682,7 +685,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         correction removes the remaining pelvis drift. A cancel or an arm halt
         misses the candidate.
         """
-        frame = GRASP_FRAMES[arm]
+        frame = self.robot.grasp_frames[arm]
         stop_short = float(self.get_parameter('contact_offset').value)
         contact_p = approach_pose(targets.grasps_p[idx], -stop_short)
         contact_w = (approach_pose(targets.grasps_w[idx], -stop_short)
@@ -747,7 +750,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         if halt is not None:
             self.get_logger().warn(f'retreat: skipped, arm halted: {halt}')
             return
-        frame = GRASP_FRAMES[arm]
+        frame = self.robot.grasp_frames[arm]
         cur = self._frame_pose_in_pelvis(frame)
         if cur is None:
             self.get_logger().warn(
@@ -787,12 +790,12 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         object is on (+Y = left).
         """
         dists = {}
-        for arm, frame in GRASP_FRAMES.items():
+        for arm, frame in self.robot.grasp_frames.items():
             p = self._transform_pose(pose_at(centroid_p), 'pelvis', frame)
             if p is not None:
                 dists[arm] = math.sqrt(p.position.x ** 2 + p.position.y ** 2
                                        + p.position.z ** 2)
-        if len(dists) == len(GRASP_FRAMES):
+        if len(dists) == len(self.robot.grasp_frames):
             arm = min(dists, key=dists.get)
             self.get_logger().info(
                 'grasp: auto-selected %s arm (hand-to-object %s)' % (

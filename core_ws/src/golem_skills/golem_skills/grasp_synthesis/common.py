@@ -43,6 +43,8 @@ class SynthesisInput:
     plan_grasp: Callable
     # rclpy logger
     log: object
+    # gripper_name the graspgen service plans for (robots.RobotProfile.graspgen_gripper)
+    gripper_name: str
 
     @property
     def centroid(self):

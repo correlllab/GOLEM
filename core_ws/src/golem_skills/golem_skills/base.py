@@ -65,6 +65,7 @@ from .perception_utils import (
 )
 from .grasp_synthesis import DEFAULT_METHOD, METHODS, method_name
 from model_server.model_logging import _log_root
+from .robots import ARMS, DEFAULT_ROBOT, ROBOTS, robot_profile
 from .run_telemetry import RunRecorder, describe_goal, run_dir
 
 
@@ -80,10 +81,6 @@ ARM_DETECTION_TOPICS = {
     'right': '/realsense/right_hand/color/image_raw/compressed/detections',
 }
 
-# URDF gripper-BASE frames whose axes match GraspGenX's grasp convention (+Z
-# approach, +X finger closing, origin at the magpie gripper base), so a grasp
-# pose drives them as given, with no axis permutation or TCP offset.
-GRASP_FRAMES = {'left': 'left_graspgenx_frame', 'right': 'right_graspgenx_frame'}
 # per-arm gripper namespace: the magpie driver and the sims serve <ns>/set_position,
 # <ns>/set_force, <ns>/open and <ns>/close and publish <ns>/state; the driver
 # alone serves <ns>/reset_overload
@@ -301,6 +298,15 @@ class SkillsBase(Node):
         # block on inner futures while the executor's other threads complete
         # them, and pick_place can call this node's own /skill/grasp.
         self._cb_group = ReentrantCallbackGroup()
+
+        # The robot the skills drive (robots.py): its grasp frames, named
+        # configurations and grasp planner gripper. Read once: a running node
+        # serves one robot.
+        self.robot = robot_profile(self.declare_parameter(
+            'robot', DEFAULT_ROBOT, ParameterDescriptor(
+                description=f'robot the skills drive, one of {sorted(ROBOTS)}',
+                read_only=True)).value)
+        self.get_logger().info(f'golem_skills: robot {self.robot.name}')
 
         self.gripper_clis = {
             arm: self.create_client(SetGripperPosition, f'{ns}/set_position',
@@ -997,7 +1003,7 @@ class SkillsBase(Node):
         """
         Drive URDF `frame` to `pose` (pelvis frame) with one /frame_task goal; return reached.
 
-        `frame` is GRASP_FRAMES[arm] for grasping. Pass the skill's goal handle
+        `frame` is the robot's grasp frame (robots.py) for grasping. Pass the skill's goal handle
         as `outer_gh` so a skill cancel cancels the frame_task goal too.
 
         `duration_sec` is a TIMEOUT. `slow_mode` runs the goal at the server's
@@ -1514,7 +1520,7 @@ class SkillsBase(Node):
     def _validated_arm(self, goal):
         """Return goal.arm normalized to 'left' or 'right', or None for any other value."""
         arm = goal.arm.strip().lower()
-        if arm not in GRASP_FRAMES:
+        if arm not in ARMS:
             return None
         return arm
 
@@ -1542,8 +1548,8 @@ class SkillsBase(Node):
                     goal.top_down, self.get_parameter('grasp_method').value)
             try:
                 rec = RunRecorder(
-                    self, skill, out_dir, WORLD_FRAME, GRASP_FRAMES,
-                    arm=arm if arm in GRASP_FRAMES else None,
+                    self, skill, out_dir, WORLD_FRAME, self.robot.grasp_frames,
+                    arm=arm if arm in ARMS else None,
                     request=request).start()
             # recording must never break a skill
             except Exception as e:

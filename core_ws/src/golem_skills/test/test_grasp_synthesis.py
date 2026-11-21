@@ -44,7 +44,7 @@ def _fake_planner(poses, scores=None, width=0.05):
 
     def plan_grasp(cloud, gripper_name, frame, scene_cloud=None, arm=''):
         """Return a graspgen-like response holding `poses`, scored best-first."""
-        calls.append(dict(frame=frame, arm=arm))
+        calls.append(dict(frame=frame, arm=arm, gripper_name=gripper_name))
         grasps = []
         for p in poses:
             g = PoseStamped()
@@ -64,7 +64,8 @@ def _input(cloud, arm='right', min_pitch=0.0, planner=None):
     """Build a SynthesisInput for the object 'thing'."""
     return SynthesisInput(obj='thing', arm=arm, cloud=cloud, scene=None,
                           min_pitch_deg=min_pitch,
-                          plan_grasp=planner or _fake_planner([]), log=_Log())
+                          plan_grasp=planner or _fake_planner([]), log=_Log(),
+                          gripper_name='magpie')
 
 
 def _contact(pose):
@@ -204,7 +205,7 @@ def test_graspgenx_raw_executes_server_order_untouched():
         np.testing.assert_allclose(pose_to_matrix(g.pose), pose_to_matrix(p),
                                    atol=1e-9)
     assert cands.scores == sorted(cands.scores, reverse=True)
-    assert planner.calls[0] == dict(frame='pelvis', arm='right')
+    assert planner.calls[0] == dict(frame='pelvis', arm='right', gripper_name='magpie')
 
 
 def test_graspgenx_filtered_rerolls_and_drops_cross_body():

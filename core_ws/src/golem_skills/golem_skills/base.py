@@ -350,9 +350,14 @@ class SkillsBase(Node):
         # mm, the aperture the driver reported after the last set_gripper per
         # arm; gripper_aperture's fallback before any state message
         self._gripper_actual_mm = {}
-        # the latest /joint_states (golem_upper_ik's joint_state_publisher, the
-        # body joints from /lowstate); the grasp reach check starts its IK there
-        self._joint_state = None
+        # joint name -> (position [rad], robot time it arrived [s]) from every
+        # /joint_states message. More than one node publishes there, each its
+        # own joints (golem_upper_ik's joint_state_publisher the body from
+        # /lowstate; on the G1 dex_3's driver the fingers too), so the joints
+        # are kept per name rather than as the last message. The grasp reach
+        # check starts its IK at them.
+        self._joints = {}
+        self._joints_lock = threading.Lock()
         self.joint_state_sub = self.create_subscription(
             JointState, '/joint_states', self._on_joint_state, 10,
             callback_group=self._cb_group)
@@ -1330,12 +1335,43 @@ class SkillsBase(Node):
         self._gripper_state_t[arm] = self.robot_now()
 
     def _on_joint_state(self, msg):
-        """Keep the latest /joint_states message."""
-        self._joint_state = msg
+        """Keep each joint's latest /joint_states position and when it arrived."""
+        t = self.robot_now()
+        with self._joints_lock:
+            for name, position in zip(msg.name, msg.position):
+                self._joints[name] = (float(position), t)
 
     def latest_joint_state(self):
-        """Return the latest /joint_states message, or None before the first."""
-        return self._joint_state
+        """
+        Return every joint heard on /joint_states as one JointState, or None before the first.
+
+        Each joint has its latest position, whichever publisher sent it.
+        """
+        with self._joints_lock:
+            if not self._joints:
+                return None
+            msg = JointState()
+            msg.name = list(self._joints)
+            msg.position = [p for p, _ in self._joints.values()]
+        return msg
+
+    def joint_positions_since(self, names, since, wait_sec):
+        """
+        Return {name: position [rad]} of `names`, each from a message after `since`, or None.
+
+        `since` and `wait_sec` are s of robot time; waits up to `wait_sec` for
+        every one of `names` to be published after `since`. None when one is
+        not, e.g. its publisher is down.
+        """
+        deadline = self.robot_now() + wait_sec
+        while True:
+            with self._joints_lock:
+                got = {n: self._joints.get(n) for n in names}
+            if all(v is not None and v[1] > since for v in got.values()):
+                return {n: v[0] for n, v in got.items()}
+            if self.robot_now() >= deadline:
+                return None
+            self._sleep_robot(ROBOT_WAIT_POLL_SEC, threading.Event())
 
     def gripper_aperture_since(self, arm, since, wait_sec):
         """

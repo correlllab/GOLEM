@@ -59,9 +59,19 @@ stopped: its stale times (stale.*_seconds) only report a quiet input.
 
 IMU
 ---
-The policy's IMU observations (angular velocity, specific force, projected
-gravity) come from the MID360's /livox/imu, never LowState.imu_state, whose
-attitude carries a calibration error of about 2.5 deg. /livox/imu is in the
+An export whose ``imu.source`` is ``lowstate`` (Locomanipulation_game runs from
+2026-11-20, export.yaml imu: {source: lowstate, frame: imu_link, ...}) trained
+on the torso IMU as /lowstate reports it, its quaternion's bias drawn around the
+robot's measured one: the node takes LowState.imu_state's quaternion (wxyz) and
+accelerometer as reported and its gyroscope through the GyroLowpass the run
+trained with (``imu.gyro_lowpass_hz``, sampled at every /lowstate by its tick),
+with no trim (``imu_offset_*`` are ignored), and needs neither /livox/imu nor
+FAST-LIO's attitude.
+
+Otherwise the policy's IMU observations (angular velocity, specific force,
+projected gravity) come from the MID360's /livox/imu, never LowState.imu_state,
+whose attitude carries a calibration error of about 2.5 deg (which those
+policies did not train with). /livox/imu is in the
 URDF's livox_imu_link (the IMU chip), the MID-360's raw frame, upside down on
 the H1-2's head.
 
@@ -119,7 +129,7 @@ from lmg_deploy.controller import (
 )
 from lmg_deploy.kinematics import ArmKinematics
 from lmg_deploy.livox_attitude import LivoxAttitude, in_imu_frame
-from lmg_deploy.livox_imu import LIVOX_IMU_FRAME, LivoxImu, livox_to_imu_rotation
+from lmg_deploy.livox_imu import LIVOX_IMU_FRAME, GyroLowpass, LivoxImu, livox_to_imu_rotation
 from lmg_deploy.networks import load_network
 from lmg_deploy.rotations import (
     imu_mount_quat,
@@ -183,6 +193,9 @@ class MarlDeployNode(Node):
             with open(export_path) as f:
                 cfg.update(yaml.safe_load(f) or {})
             self.get_logger().info(f"export: {cfg.get('source')}")
+        # arm_ik's goal table (arm_seed_table.npz), named relative to the export's folder
+        if cfg.get("arm_seed_table"):
+            cfg["arm_seed_table"] = os.path.join(cfg_dir, cfg["arm_seed_table"])
         control_hz = float(self.get_parameter("control_hz").value) or 1.0 / float(cfg["control_dt"])
         if abs(1.0 / control_hz - float(cfg["control_dt"])) > 1e-6:
             raise ValueError(f"control_hz {control_hz} doesn't match the policy's control_dt {cfg['control_dt']}")
@@ -204,6 +217,13 @@ class MarlDeployNode(Node):
         self._livox = LivoxImu(r_imu_livox, tau_s=float(self.get_parameter("livox_gravity_tau_s").value),
                                gyro_lowpass_hz=gyro_lowpass_hz)
         self._gyro_lowpass_hz = gyro_lowpass_hz
+        # /lowstate's torso IMU (imu.source lowstate): its gyroscope through the run's low-pass, per /lowstate sample
+        self._lowstate_imu = (cfg.get("imu") or {}).get("source") == "lowstate"
+        if self._lowstate_imu and imu_frame != "imu_link":
+            raise ValueError(f"imu.source lowstate needs imu.frame imu_link (the torso IMU's), not {imu_frame!r}")
+        self._lowstate_lowpass = GyroLowpass(gyro_lowpass_hz) if self._lowstate_imu and gyro_lowpass_hz > 0 else None
+        self._lowstate_gyro: np.ndarray | None = None
+        self._lowstate_tick: int | None = None
         self._livox_time: float | None = None   # monotonic receipt time of the last /livox/imu
         # The attitude: FAST-LIO's, of the IMU body (/livox/imu's frame), carried into the policy's IMU frame.
         source = self.get_parameter("livox_attitude").value
@@ -270,7 +290,8 @@ class MarlDeployNode(Node):
         self._set_state("idle")
         self.get_logger().info(
             f"marl_deploy_node ready: {cfg_path}, {control_hz:.0f} Hz, "
-            f"confirm={'required' if self._confirm_wait else 'auto'}, IMU /livox/imu in {self._imu_frame}, "
+            f"confirm={'required' if self._confirm_wait else 'auto'}, "
+            f"IMU {'/lowstate imu_state (untrimmed)' if self._lowstate_imu else '/livox/imu'} in {self._imu_frame}, "
             f"gyro low-pass {f'{self._gyro_lowpass_hz:g} Hz' if self._gyro_lowpass_hz > 0 else 'off'}")
 
     def _build_imu_mount(self, deg: dict) -> np.ndarray | None:
@@ -294,9 +315,17 @@ class MarlDeployNode(Node):
         return SetParametersResult(successful=True)
 
     def _on_lowstate(self, msg: LowState) -> None:
-        """Keep the latest /lowstate and its receipt time."""
+        """Keep the latest /lowstate and its receipt time; with imu.source lowstate, filter its gyroscope."""
         self._lowstate = msg
         self._lowstate_time = time.monotonic()
+        if self._lowstate_imu:
+            gyro = np.array(msg.imu_state.gyroscope, dtype=np.float64)
+            if self._lowstate_lowpass is not None:
+                # the sample's dt from LowState.tick (ms); a first sample or a gap restarts the filter
+                dt = 0.0 if self._lowstate_tick is None else 1e-3 * ((msg.tick - self._lowstate_tick) & 0xFFFFFFFF)
+                gyro = self._lowstate_lowpass(gyro, dt)
+            self._lowstate_tick = msg.tick
+            self._lowstate_gyro = gyro
 
     def _on_livox_imu(self, msg: Imu) -> None:
         """Feed a /livox/imu sample to the filter and the FAST-LIO attitude."""
@@ -432,6 +461,14 @@ class MarlDeployNode(Node):
     def _robot_state(self, msg: LowState) -> RobotState:
         """Return the controller's state from /lowstate and the IMU, in the policy's IMU frame, trimmed."""
         motors = msg.motor_state
+        q = np.array([motors[i].q for i in range(NUM_JOINTS)], dtype=np.float64)
+        dq = np.array([motors[i].dq for i in range(NUM_JOINTS)], dtype=np.float64)
+        if self._lowstate_imu:
+            # the torso IMU as reported, untrimmed: the policy trained on its bias
+            imu = msg.imu_state
+            gyro = self._lowstate_gyro if self._lowstate_gyro is not None else np.array(imu.gyroscope, dtype=np.float64)
+            return RobotState(q=q, dq=dq, quat=np.array(imu.quaternion, dtype=np.float64), gyro=gyro.copy(),
+                              acc=np.array(imu.accelerometer, dtype=np.float64))
         if self._livox.ready:
             # Gyro (low-passed) and specific force from LivoxImu; the attitude from
             # FAST-LIO when levelled and current, else LivoxImu's filter.
@@ -449,18 +486,17 @@ class MarlDeployNode(Node):
         if self._imu_mount is not None:
             quat = quat_mul(quat, quat_conjugate(self._imu_mount))
             gyro, acc = quat_apply(self._imu_mount, gyro), quat_apply(self._imu_mount, acc)
-        return RobotState(
-            q=np.array([motors[i].q for i in range(NUM_JOINTS)], dtype=np.float64),
-            dq=np.array([motors[i].dq for i in range(NUM_JOINTS)], dtype=np.float64),
-            quat=quat, gyro=gyro, acc=acc,
-        )
+        return RobotState(q=q, dq=dq, quat=quat, gyro=gyro, acc=acc)
 
     def _odom_fresh(self, now: float) -> bool:
         """Return whether /Odometry arrived within livox_odom_timeout of now (monotonic s)."""
         return self._slam_time is not None and now - self._slam_time <= self._odom_timeout
 
     def _livox_fresh(self, now: float) -> bool:
-        """Return whether the IMU attitude is up and /livox/imu arrived within livox_imu_timeout of now."""
+        """Return whether the IMU attitude is up and /livox/imu arrived within livox_imu_timeout of now (always,
+        with imu.source lowstate: /lowstate's freshness is checked on its own)."""
+        if self._lowstate_imu:
+            return True
         return (self._livox.ready and self._livox_time is not None
                 and now - self._livox_time <= float(self.get_parameter("livox_imu_timeout").value))
 
@@ -587,7 +623,7 @@ class MarlDeployNode(Node):
             self.get_logger().info("pre-posed; waiting for /livox/imu (h12_real_drivers use_lidar?)",
                                    throttle_duration_sec=5.0)
             return
-        if self._attitude is not None and not self._attitude.calibrated:
+        if self._attitude is not None and not self._lowstate_imu and not self._attitude.calibrated:
             why = self._attitude.calibrate()
             if why is not None:
                 self._set_state("waiting_imu")

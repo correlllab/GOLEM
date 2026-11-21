@@ -387,6 +387,27 @@ def test_slam_odometry_moves_goal_against_pelvis_motion():
         np.testing.assert_allclose(R.quat_unique(ctrl.believed[arm, 3:]), R.quat_unique(quat), atol=1e-9)
 
 
+def test_pelvis_frame_goal_ignores_odometry_and_walking_goes_on():
+    """arm_goal_frame pelvis (LocoManip-Marl-Direct-v0's goals ride on the pelvis): odometry leaves the goal alone;
+    arm_goal_keeps_walking: the operator's command stays live through an arm goal."""
+    ctrl, cfg = _controller(arm_goal_frame="pelvis", arm_goal_keeps_walking=True)
+    state = _state(cfg)
+    ctrl.reset(state)
+    ctrl.set_velocity_command(np.array([0.3, 0.0, 0.2]))
+    goal = ctrl.rest_pose.copy()
+    ctrl.request_arm_goal(goal)
+    for pelvis_pos, pelvis_quat in ((np.zeros(3), np.array([1.0, 0, 0, 0])),
+                                    (np.array([0.1, 0.0, 0.0]), R.quat_from_rotvec(np.array([0.0, 0.0, 0.2])))):
+        ctrl.set_slam_pose(*_slam_body_pose(ctrl, state, pelvis_pos, pelvis_quat))
+        ctrl.step(state)
+    assert ctrl.mode == Mode.ARM
+    np.testing.assert_allclose(ctrl.believed, goal, atol=1e-12)
+    np.testing.assert_allclose(ctrl.velocity_command(), [0.3, 0.0, 0.2])
+    assert np.linalg.norm(ctrl.observed_command()) > 0.0
+    with pytest.raises(ValueError):
+        _controller(arm_goal_frame="map")
+
+
 def test_slam_odometry_follows_the_torso_joint():
     """A torso turn moves the lidar but not the pelvis, so the body pose it reports leaves the goal in place."""
     ctrl, cfg = _controller()
@@ -612,33 +633,43 @@ def test_command_filter_low_passes_the_observed_command():
     np.testing.assert_allclose(ctrl.observed_command(), 0.0)             # and from zero after a reset
 
 
-def test_obs_terms_must_match_the_layout():
-    """An export's observation term lists must be the controller's own; matching lists and none both build."""
+def test_obs_terms_must_be_known_and_in_order():
+    """An export's observation term lists must be terms the controller builds, in its order; any may be left out,
+    and no list means all of them."""
     legs = [t for t in LEGS_OBS_TERMS if t != "gait_phase_cos"]   # explicit500 has no gait_phase_cos
     arms = [t for t in ARMS_OBS_TERMS if t != "gait_phase_cos"]
     _controller(legs_obs_terms=legs, arms_obs_terms=arms)
-    with pytest.raises(ValueError):
+    _controller(legs_obs_terms=legs[1:], arms_obs_terms=arms[4:])
+    with pytest.raises(ValueError):    # unknown
         _controller(legs_obs_terms=legs[:-1] + ["height_scan", "actions"], arms_obs_terms=arms)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):    # gait_phase_cos without gait_phase_cos in the config
         _controller(legs_obs_terms=legs, arms_obs_terms=LEGS_OBS_TERMS)
+    with pytest.raises(ValueError):    # out of order
+        _controller(legs_obs_terms=legs, arms_obs_terms=[arms[1], arms[0]] + arms[2:])
 
 
-def test_legs_obs_may_leave_out_the_wrist_targets():
-    """A legs term list without ee_targets builds the legs' observation 14 shorter, the rest in order; the arms' not."""
+def test_obs_left_out_terms_are_cut_from_the_full_vector():
+    """Trimmed term lists build each agent's full vector with the left-out terms' slices removed, the rest in order:
+    the legs without base_lin_acc, arm_goal and ee_targets (LocoManip-LegsOnly-v0, the torso IMU's runs), the arms
+    without the IMU, the command and the gait clock (LocoManip-ArmsOnly-v0)."""
     legs = [t for t in LEGS_OBS_TERMS if t != "gait_phase_cos"]
     arms = [t for t in ARMS_OBS_TERMS if t != "gait_phase_cos"]
     full, cfg = _controller(legs_obs_terms=legs, arms_obs_terms=arms)
-    trimmed, _ = _controller(legs_obs_terms=[t for t in legs if t != "ee_targets"], arms_obs_terms=arms)
+    trimmed, _ = _controller(legs_obs_terms=[t for t in legs if t not in ("base_lin_acc", "arm_goal", "ee_targets")],
+                             arms_obs_terms=[t for t in arms if t not in ("base_lin_acc", "base_ang_vel",
+                                                                          "projected_gravity", "velocity_commands",
+                                                                          "gait_phase")])
     state = _state(cfg)
     for ctrl in (full, trimmed):
         ctrl.reset(state)
+        ctrl.set_velocity_command(np.array([0.3, 0.0, 0.1]))
         ctrl.step(state)
     a, b = full.last_obs["legs"], trimmed.last_obs["legs"]
-    assert b.shape == (a.shape[0] - 14,)
-    np.testing.assert_allclose(b, np.concatenate([a[:13], a[27:]]))
-    np.testing.assert_allclose(trimmed.last_obs["arms"], full.last_obs["arms"])
-    with pytest.raises(ValueError):
-        _controller(legs_obs_terms=legs, arms_obs_terms=[t for t in arms if t != "ee_targets"])
+    # full legs: acc 0:3, gyro 3:6, gravity 6:9, cmd 9:12, arm_goal 12, ee_targets 13:27, then the rest
+    np.testing.assert_allclose(b, np.concatenate([a[3:12], a[27:]]))
+    a, b = full.last_obs["arms"], trimmed.last_obs["arms"]
+    gait = slice(27 + 54, 27 + 54 + 2)   # after joint_pos and joint_vel
+    np.testing.assert_allclose(b, np.concatenate([a[12:gait.start], a[gait.stop:]]))
 
 
 def test_arm_goals_refused_for_a_policy_that_never_trained_one():
@@ -651,3 +682,323 @@ def test_arm_goals_refused_for_a_policy_that_never_trained_one():
         ctrl.request_arm_goal(ctrl.rest_pose)
     assert ctrl.mode == Mode.NAV
     ctrl.set_mode("walk")                       # walking stays allowed
+
+
+# -- arm_ik: mdp.IKPostureArmAction ----------------------------------------------------------
+
+# Coexist200k_s42's arm_ik block (export.yaml), without the seed table, the gravity offset, the integral or the freeze.
+ARM_IK = {"rot_weight": 0.3, "null_gain": 0.05, "posture_scale": 0.5, "posture_gain": 1.0, "limit_margin": 0.05,
+          "ik_damping": 0.05, "ik_passes": 3, "posture_from_command": False, "trajectory": True,
+          "seed_rot_weight": 0.3, "posture_actions": False, "trajectory_max_vel": 2.0, "trajectory_max_acc": 10.0,
+          "gravity_offset": False}
+
+
+def _ik_controller(arms_net=None, arm_ik=None, **overrides):
+    """Return a controller with ARM_IK (updated by arm_ik) on the test config, the torso IMU among its frames."""
+    cfg = _cfg()
+    cfg.update(overrides)
+    cfg["arm_ik"] = {**ARM_IK, **(arm_ik or {})}
+    names = cfg["joint_names"]
+    kin = ArmKinematics(URDF, names, cfg["arms"]["ee_frames"], [names[13:20], names[20:]],
+                        extra_frames=[cfg["slam_frame"], "imu_link"])
+    return MarlController(cfg, kin, ZeroNetwork(12), arms_net or ZeroNetwork(14)), cfg
+
+
+def _arm_q(cfg, offsets):
+    """Return the default pose with the arm joints moved by offsets (14,)."""
+    q = np.array(cfg["default_joint_pos"], dtype=np.float64)
+    q[13:] += offsets
+    return q
+
+
+def test_arm_ik_reset_starts_the_trajectory_at_the_measured_arms():
+    """reset(state): the target's trajectory starts at the measured arm angles, at rest, with no residual or integral."""
+    ctrl, cfg = _ik_controller(arms_net=ConstNetwork(np.full(14, 0.5)))
+    state = _state(cfg, _arm_q(cfg, np.linspace(-0.2, 0.2, 14)))
+    ctrl.reset(state)
+    for _ in range(5):
+        ctrl.step(state)
+    assert np.abs(ctrl.residual).max() > 0 and np.abs(ctrl.traj_v).max() > 0
+    moved = _state(cfg, _arm_q(cfg, np.linspace(0.1, -0.1, 14)))
+    ctrl.reset(moved)
+    np.testing.assert_allclose(ctrl.ik_q, moved.q[13:])
+    for value in (ctrl.traj_v, ctrl.integral, ctrl.residual, ctrl.arms_last):
+        np.testing.assert_allclose(value, 0.0)
+    assert not ctrl.frozen and ctrl.residual.shape == (14,)
+    np.testing.assert_allclose(ctrl.seed_q, ctrl.default[13:])
+
+
+def test_arm_ik_trajectory_is_synchronized_and_rate_limited():
+    """The target moves from its own last value (not the measured angles) to the posture, each arm's joints along one
+    straight line, within trajectory_max_vel and trajectory_max_acc, and stops there."""
+    ctrl, cfg = _ik_controller(torque_headroom=None)
+    offsets = np.array([0.3, 0.1, -0.2, 0.25, 0.0, -0.1, 0.05] * 2)
+    start = _state(cfg, _arm_q(cfg, offsets))
+    ctrl.reset(start)
+    held = _state(cfg, _arm_q(cfg, 0.5 * offsets))   # the measured arms never move: the target ignores them
+    dt, prev_v = ctrl.dt, np.zeros(14)
+    for _ in range(100):
+        before = ctrl.ik_q.copy()
+        cmd = ctrl.step(held)
+        v = (ctrl.ik_q - before) / dt
+        np.testing.assert_allclose(v, ctrl.traj_v, atol=1e-9)
+        for cols in (slice(0, 7), slice(7, 14)):
+            assert np.abs(v[cols]).max() <= 2.0 + 1e-9
+            assert np.abs(v[cols] - prev_v[cols]).max() <= 10.0 * dt + 1e-9
+            # synchronized: the velocity is along the line from the start to the posture
+            line = -offsets[cols] / np.linalg.norm(offsets[cols])
+            np.testing.assert_allclose(v[cols] - (v[cols] @ line) * line, 0.0, atol=1e-9)
+        np.testing.assert_allclose(cmd.q[13:], ctrl.ik_q)   # no residual, no gravity offset, no integral
+        prev_v = v
+    np.testing.assert_allclose(ctrl.ik_q, ctrl.default[13:], atol=1e-9)
+    assert np.abs(ctrl.traj_v).max() < 1e-9
+
+
+def test_arm_ik_trajectory_without_max_vel_caps_each_joint():
+    """Without trajectory_max_vel each joint moves at most max_ik_step per step toward the posture."""
+    ctrl, cfg = _ik_controller(torque_headroom=None, arm_ik={"trajectory_max_vel": None, "trajectory_max_acc": None})
+    ctrl.reset(_state(cfg, _arm_q(cfg, np.full(14, 0.15))))
+    ctrl.step(_state(cfg))
+    np.testing.assert_allclose(ctrl.ik_q, 0.15 - ctrl.max_ik_step)
+
+
+def test_arm_ik_residual_integrates_with_leak_and_clamp():
+    """residual_integrate: r <- clip(exp(-dt / leak_s) r + gain a, +-clamp), added times the residual scale."""
+    ri = {"gain": 0.02, "leak_s": 5.0, "clamp": 1.0}
+    a = np.linspace(-3.0, 3.0, 14)
+    ctrl, cfg = _ik_controller(arms_net=ConstNetwork(a), arm_ik={"residual_integrate": ri}, torque_headroom=None)
+    state = _state(cfg)
+    ctrl.reset(state)
+    leak, r = np.exp(-ctrl.dt / 5.0), np.zeros(14)
+    for _ in range(10):
+        cmd = ctrl.step(state)
+        r = np.clip(leak * r + 0.02 * a, -1.0, 1.0)
+        np.testing.assert_allclose(ctrl.residual, r, atol=1e-12)
+        np.testing.assert_allclose(ctrl.arms_last, r, atol=1e-12)
+        np.testing.assert_allclose(cmd.q[13:], np.clip(ctrl.ik_q + ctrl.arms_scale * r, ctrl.lower[13:], ctrl.upper[13:]))
+    for _ in range(200):
+        ctrl.step(state)
+    assert np.abs(ctrl.residual).max() <= 1.0 + 1e-12 and np.isclose(np.abs(ctrl.residual).max(), 1.0)
+
+
+def test_arm_ik_posture_actions_widen_the_action():
+    """posture_actions: the action is 28 wide, the residual then the posture offset, which moves the posture."""
+    with pytest.raises(ValueError):
+        _ik_controller(arm_ik={"posture_actions": True})   # the config's arms.num_actions is 14
+    cfg = _cfg()
+    a = np.concatenate([np.zeros(14), np.full(14, 0.2)])
+    ctrl, cfg = _ik_controller(arms_net=ConstNetwork(a), arm_ik={"posture_actions": True},
+                               arms={**cfg["arms"], "num_actions": 28})
+    state = _state(cfg)
+    ctrl.reset(state)
+    ctrl.step(state)
+    assert ctrl.arms_last.shape == (28,)
+    offset = ctrl.residual[14:]
+    np.testing.assert_allclose(ctrl.posture, np.clip(ctrl.default[13:] + 0.5 * offset, ctrl.ik_lower, ctrl.ik_upper))
+    assert np.abs(offset).max() > 0
+
+
+def _seed_table(ctrl, joints_per_arm, path):
+    """Write a seed table whose rows are the wrist poses (forward kinematics) at the given arm angles."""
+    rows = {}
+    for arm in range(2):
+        poses = []
+        for joints in joints_per_arm:
+            q = ctrl.default.copy()
+            q[ctrl.kin.arm_cols[arm]] = joints[arm]
+            ctrl.kin.update(q)
+            poses.append(np.concatenate(ctrl.kin.wrist_pose(arm)))
+        rows[f"poses_{arm}"] = np.array(poses, dtype=np.float32)
+        rows[f"joints_{arm}"] = np.array([j[arm] for j in joints_per_arm], dtype=np.float32)
+    np.savez(path, **rows)
+    return str(path)
+
+
+def _wrist_goal(ctrl, arm_q):
+    """Return both wrists' poses (2, 7) at the default pose with the arms at arm_q (14,)."""
+    q = ctrl.default.copy()
+    q[13:] = arm_q
+    ctrl.kin.update(q)
+    return np.stack([np.concatenate(ctrl.kin.wrist_pose(arm)) for arm in range(2)])
+
+
+SEED_ROWS = [np.zeros((2, 7)),
+             np.array([[-0.5, 0.3, 0.0, 0.8, 0.0, 0.0, 0.0], [-0.5, -0.3, 0.0, 0.8, 0.0, 0.0, 0.0]]),
+             np.array([[-1.0, 0.5, 0.3, 1.2, 0.2, 0.1, 0.0], [-1.0, -0.5, -0.3, 1.2, -0.2, 0.1, 0.0]])]
+
+
+def test_arm_ik_seed_is_the_nearest_rows_angles_once_per_goal(tmp_path):
+    """posture_from_command: during an arm goal the posture is the seed table's row nearest the command, set when the
+    goal is; a rest-pose goal and navigation use the default angles; odometry moving the goal keeps the seed."""
+    ctrl, cfg = _ik_controller()
+    table = _seed_table(ctrl, SEED_ROWS, tmp_path / "seeds.npz")
+    ctrl, cfg = _ik_controller(arm_ik={"posture_from_command": True}, arm_seed_table=table)
+    state = _state(cfg)
+    ctrl.reset(state)
+    goal = _wrist_goal(ctrl, SEED_ROWS[1].reshape(14) + 0.02)
+    ctrl.request_arm_goal(goal)
+    ctrl.step(state)
+    np.testing.assert_allclose(ctrl.seed_q, SEED_ROWS[1].reshape(14), atol=1e-6)
+    ctrl._move_goal(np.array([0.3, 0.0, 0.0]), np.array([1.0, 0, 0, 0]))   # nearer row 2 now: the seed stays
+    np.testing.assert_allclose(ctrl.seed_q, SEED_ROWS[1].reshape(14), atol=1e-6)
+    ctrl.set_arm_goals(_wrist_goal(ctrl, SEED_ROWS[2].reshape(14)))      # a new goal in arm mode: a new seed
+    np.testing.assert_allclose(ctrl.seed_q, SEED_ROWS[2].reshape(14), atol=1e-6)
+    ctrl.set_arm_goals(ctrl.rest_pose)
+    np.testing.assert_allclose(ctrl.seed_q, ctrl.default[13:])
+    ctrl.set_arm_goals(goal)
+    ctrl.end_arm_goal()
+    np.testing.assert_allclose(ctrl.seed_q, ctrl.default[13:])
+
+
+def test_arm_ik_seed_solve_reaches_the_command(tmp_path):
+    """seed_solve: from the nearest row's angles, the seed is solved for the commanded wrist poses themselves."""
+    ctrl, cfg = _ik_controller()
+    table = _seed_table(ctrl, SEED_ROWS, tmp_path / "seeds.npz")
+    solve = {"iters": 60, "damping": 0.05, "rot_weight": 0.5, "joint_range_margin": 0.0, "soft_limit_factor": 1.0}
+    ctrl, cfg = _ik_controller(arm_ik={"posture_from_command": True, "seed_solve": solve}, arm_seed_table=table)
+    ctrl.reset(_state(cfg))
+    target_q = SEED_ROWS[1].reshape(14) + np.array([0.1, -0.05, 0.1, -0.1, 0.1, 0.05, -0.1] * 2)
+    goal = _wrist_goal(ctrl, target_q)
+    ctrl.request_arm_goal(goal)
+    solved = _wrist_goal(ctrl, ctrl.seed_q)
+    np.testing.assert_allclose(solved[:, :3], goal[:, :3], atol=1e-4)
+    for arm in range(2):
+        _, rot = R.compute_pose_error(solved[arm, :3], solved[arm, 3:], goal[arm, :3], goal[arm, 3:])
+        assert np.linalg.norm(rot) < 1e-3
+
+
+def test_gravity_torques_match_the_potential_energy():
+    """kinematics.gravity_torques is minus the gradient of the potential energy, for any gravity direction."""
+    import pinocchio as pin
+
+    cfg = _cfg()
+    kin = _kin(cfg)
+    model = pin.buildModelFromUrdf(URDF)
+    data = model.createData()
+    q = np.array(cfg["default_joint_pos"], dtype=np.float64)
+    q[13:] = RNG.uniform(-0.5, 0.5, 14)
+    g = RNG.normal(size=3)
+    g *= 9.81 / np.linalg.norm(g)
+    model.gravity.linear = g
+    tau = kin.gravity_torques(q, g)
+
+    def energy(qp):
+        q_pin = pin.neutral(model)
+        q_pin[kin._q_idx] = qp
+        return pin.computePotentialEnergy(model, data, q_pin)
+
+    for j in range(13, 27):
+        dq = np.zeros(27)
+        dq[j] = 1e-6
+        np.testing.assert_allclose(tau[j], -(energy(q + dq) - energy(q - dq)) / 2e-6, atol=1e-5)
+
+
+def test_arm_ik_gravity_offset_uses_the_pelvis_frame_gravity():
+    """gravity_offset: the target carries minus the arm joints' gravity torque at the target over kp, with gravity in
+    the pelvis frame from the IMU's attitude carried through the IMU frame's pose (a tilted pelvis, a turned torso)."""
+    ctrl, cfg = _ik_controller(arm_ik={"gravity_offset": True}, torque_headroom=None)
+    q = _arm_q(cfg, np.zeros(14))
+    q[12] = 0.3                                                  # the torso turned: the IMU frame with it
+    q_wp = R.quat_mul(R.quat_from_rotvec(np.array([0.2, 0.0, 0.0])), R.quat_from_rotvec(np.array([0.0, -0.3, 0.1])))
+    ctrl.kin.update(q)
+    _, q_pi = ctrl.kin.frame_pose("imu_link")
+    state = RobotState(q=q, dq=np.zeros(27), quat=R.quat_mul(q_wp, q_pi), gyro=np.zeros(3), acc=np.zeros(3))
+    ctrl.reset(state)
+    cmd = ctrl.step(state)
+    g_b = R.quat_apply_inverse(q_wp, np.array([0.0, 0.0, -9.81]))
+    np.testing.assert_allclose(ctrl.gravity_b(state), g_b, atol=1e-9)
+    held = ctrl.default.copy()                                    # training's kinematics: the torso at its default
+    held[13:] = ctrl.ik_q
+    tau = ctrl.kin.gravity_torques(held, g_b)[13:]
+    np.testing.assert_allclose(cmd.q[13:], np.clip(ctrl.ik_q - tau / ctrl.kp[13:], ctrl.lower[13:], ctrl.upper[13:]))
+    assert np.abs(tau).max() > 0.5                                # the arms' weight shows
+
+
+def test_arm_ik_integral_adds_the_weighted_dls_step_once_arrived():
+    """integral: leaks, and once the target has arrived adds gain x each arm's rot_weight-weighted DLS step on its
+    measured wrist's error; clamped."""
+    integral = {"gain": 0.01, "leak_s": 60.0, "clamp": 0.3}
+    ctrl, cfg = _ik_controller(arm_ik={"integral": integral}, torque_headroom=None)
+    state = _state(cfg)
+    ctrl.reset(state)
+    goal = ctrl.rest_pose.copy()
+    goal[:, 2] -= 0.005
+    ctrl.request_arm_goal(goal)
+    ctrl.step(state)
+    w = np.array([1, 1, 1, 0.3, 0.3, 0.3])
+    expected = np.zeros(14)
+    for arm in range(2):
+        jac = ctrl.kin.jacobian(arm) * w[:, None]
+        pos, quat = ctrl.kin.wrist_pose(arm)
+        err = np.concatenate(R.compute_pose_error(pos, quat, goal[arm, :3], goal[arm, 3:])) * w
+        expected[7 * arm:7 * arm + 7] = 0.01 * jac.T @ np.linalg.solve(jac @ jac.T + 0.05 ** 2 * np.eye(6), err)
+    np.testing.assert_allclose(ctrl.integral, expected, atol=1e-12)
+    cmd = ctrl.step(state)
+    np.testing.assert_allclose(ctrl.integral, np.clip(expected * np.exp(-ctrl.dt / 60.0) + expected, -0.3, 0.3),
+                               atol=1e-12)
+    np.testing.assert_allclose(cmd.q[13:], np.clip(ctrl.ik_q + ctrl.integral, ctrl.lower[13:], ctrl.upper[13:]))
+    # not arrived (the target still moving): the integral only leaks
+    ctrl.reset(_state(cfg, _arm_q(cfg, np.full(14, 0.1))))
+    ctrl.integral[:] = 0.2
+    ctrl.step(state)
+    np.testing.assert_allclose(ctrl.integral, 0.2 * np.exp(-ctrl.dt / 60.0))
+
+
+def test_arm_ik_freeze_latches_the_residual_on_the_goal_and_releases_it():
+    """freeze: once arrived with both wrists on the command for settle_s the residual is held whatever the action;
+    ending the arm goal releases it."""
+    arms = ConstNetwork(np.full(14, 0.5))
+    freeze = {"pos_tol": 0.001, "rot_tol": 0.0873, "settle_s": 0.1}
+    ctrl, cfg = _ik_controller(arms_net=arms, arm_ik={"freeze": freeze}, torque_headroom=None)
+    state = _state(cfg)
+    ctrl.reset(state)
+    for _ in range(3):
+        ctrl.step(state)
+    assert not ctrl.frozen                                        # navigation: never frozen
+    ctrl.request_arm_goal(ctrl.rest_pose)                         # the wrists are on it at the default pose
+    for _ in range(4):
+        ctrl.step(state)
+    assert not ctrl.frozen
+    ctrl.step(state)                                              # the fifth step on the goal: 0.1 s
+    assert ctrl.frozen
+    held = ctrl.residual.copy()
+    arms.out = np.full(14, -1.0)
+    for _ in range(5):
+        ctrl.step(state)
+    np.testing.assert_allclose(ctrl.residual, held)
+    ctrl.end_arm_goal()
+    ctrl.step(state)
+    assert not ctrl.frozen
+    ctrl.step(state)
+    assert np.all(ctrl.residual < held)
+
+
+def test_arm_ik_without_trajectory_steps_toward_the_goal():
+    """Without trajectory, one limit-aware, posture-seeking IK step from the measured angles per step walks the wrists
+    toward the goal under perfect tracking, capped per joint; a joint at limit_margin from its bound locks (the wrist
+    pitch here, which leaves 2 cm of this goal: why training moved to the trajectory)."""
+    ctrl, cfg = _ik_controller(arm_ik={"trajectory": False}, torque_headroom=None)
+    q = np.array(cfg["default_joint_pos"], dtype=np.float64)
+    ctrl.reset(_state(cfg, q))
+    goal = ctrl.rest_pose.copy()
+    goal[0, :3] += [0.05, 0.05, -0.1]
+    goal[1, :3] += [0.05, -0.05, -0.1]
+    ctrl.request_arm_goal(goal)
+    for _ in range(60):
+        cmd = ctrl.step(_state(cfg, q))
+        assert np.abs(cmd.q[13:] - q[13:]).max() <= ctrl.max_ik_step + 1e-12
+        q[13:] = cmd.q[13:]
+    assert np.all(ctrl.wrist_errors() < 0.025)                    # from 0.122 m
+    assert np.all(q[13:] >= ctrl.ik_lower - ctrl.max_ik_step) and np.all(q[13:] <= ctrl.ik_upper + ctrl.max_ik_step)
+
+
+def test_arm_ik_config_checks():
+    """integral and freeze need trajectory; seed_solve needs the seed table; gravity_offset needs the IMU frame."""
+    with pytest.raises(ValueError):
+        _ik_controller(arm_ik={"trajectory": False, "integral": {"gain": 0.01, "leak_s": 60.0, "clamp": 0.3}})
+    with pytest.raises(ValueError):
+        _ik_controller(arm_ik={"seed_solve": {"iters": 5, "damping": 0.05, "rot_weight": 0.5}})
+    cfg = _cfg()
+    cfg["arm_ik"] = {**ARM_IK, "gravity_offset": True}
+    with pytest.raises(ValueError):
+        MarlController(cfg, _kin(cfg), ZeroNetwork(12), ZeroNetwork(14))   # no imu_link among the frames

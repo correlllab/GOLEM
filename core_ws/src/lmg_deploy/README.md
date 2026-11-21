@@ -24,8 +24,8 @@ the first latches it silent.
 
 | File | What it is |
 |---|---|
-| `lmg_deploy/controller.py` | ROS-free env step: SLAM odometry → mode → observations (legs 95, arms 123; 97 and 125 with `gait_phase_cos`; the legs' 14 fewer when the export's `legs_obs_terms` leaves out `ee_targets`) → joint targets |
-| `lmg_deploy/kinematics.py` | Pinocchio wrist FK, Jacobian and IK step, in the pelvis frame |
+| `lmg_deploy/controller.py` | ROS-free env step: SLAM odometry → mode → observations (each actor's terms as the export's `legs_obs_terms` / `arms_obs_terms` list them, in the controller's order, any left out; all of them without the lists: legs 95, arms 123, 97 and 125 with `gait_phase_cos`) → joint targets |
+| `lmg_deploy/kinematics.py` | Pinocchio wrist FK, Jacobian and IK step, in the pelvis frame; the arm joints' gravity torques and `arm_ik`'s seed solve |
 | `lmg_deploy/rotations.py` | numpy versions of the isaaclab.utils.math functions training used |
 | `lmg_deploy/networks.py` | TorchScript loader for the exported actors |
 | `lmg_deploy/livox_imu.py` | `/livox/imu` into the policy's IMU frame: the gyro low-pass, the specific force, and a complementary-filter attitude (the fallback, or `livox_attitude:=filter`) |
@@ -35,7 +35,7 @@ the first latches it silent.
 | `config/policy_template.yaml` | the deploy config a new policy starts from: joint order, defaults, gains, scales, bounds, command ranges (each from the training env), and the SLAM body frame |
 | `policies/<robot>/<robot>.yaml`, `{legs,arms}.pt`, `export.yaml` | the robot's one policy (`h12/`; `g1/` empty): its deploy config and what the export writes, below; the `.pt` files in Git LFS (`policies/.gitattributes`). One iteration at a time, old ones deleted (`policies/README.md`) |
 | `bags/<name>/` | rosbag2 recordings of Explicit500 on the real robot (`policy_bag_walk`: walking to nav2 goals; `reach`: an arm goal, ended by the hardware e-stop), the `.db3` files in Git LFS |
-| `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, SLAM odometry, modes) on `test/data/explicit500.yaml`, Explicit500's deploy config |
+| `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, SLAM odometry, modes, `arm_ik`) on `test/data/explicit500.yaml`, Explicit500's deploy config |
 | `test/sim_drive.py` | a scripted drive in the Robocasa sim (stand, walk, turn, side-step, arm goal), measured on FAST-LIO's `/Odometry` |
 | `test/test_heartbeat_gate.py` | a real node with the shipped policy on a non-zero DDS domain: silent, in `waiting_heartbeat`, until the first beat, then it pre-poses from the pose at the beat |
 | `test/test_livox_imu.py`, `test/test_livox_attitude.py` | unit tests of the two `/livox/imu` attitude paths, the gyro low-pass and the URDF mount |
@@ -71,8 +71,25 @@ It writes:
   low-pass (`command_filter_tau`), their observation term lists, which the controller checks against its own (the
 legs' list may leave out `ee_targets`: LocoManip-LegsOnly-v0 runs from 2026-11-16, 83 inputs), and
   `arm_goals` (false: the run never trained an arm goal, so `set_mode arm` and `~/arm_goal` are refused). The node
-  loads it over the policy's yaml and runs at 1 / `control_dt`. A new policy's yaml is the last
-  one's with `legs.num_obs` / `arms.num_obs` set to the export's printed sizes.
+  loads it over the policy's yaml and runs at 1 / `control_dt`. A new policy's yaml is the template with
+  `legs.num_obs` / `arms.num_obs` set to the networks' sizes (export_marl.py writes them from 2026-11-20).
+- `imu.source: lowstate` (runs from 2026-11-20, trained on the torso IMU as /lowstate reports it): the node reads
+  `LowState.imu_state` (quaternion, accelerometer; the gyroscope through `imu.gyro_lowpass_hz`), untrimmed, and needs
+  neither `/livox/imu` nor FAST-LIO's attitude (marl_deploy_node.py's IMU section). Those runs' actors drop
+  `base_lin_acc` (`imu.acc: dropped`).
+- `arm_goal_frame: pelvis` and `arm_goal_keeps_walking: true` (LocoManip-Marl-Direct-v0 from 2026-11-19): an arm goal
+  rides on the pelvis (the SLAM odometry doesn't move it) and the velocity command stays live through it.
+- With an `arm_ik` block in `export.yaml` (runs whose arms trained with `mdp.IKPostureArmAction`:
+  LocoManip-ArmsOnly-v0, LocoManip-Marl-Direct-v0 from 2026-11-19), the arms run as that action term does, not by the
+  IK step above: with `trajectory`, the arm target moves from its own last value to a posture (each arm's joints
+  together, at `trajectory_max_vel` / `trajectory_max_acc`), the posture being the default angles or, with
+  `posture_from_command`, the joint angles of `arm_seed_table.npz`'s row nearest the arm goal (solved for the goal
+  itself with `seed_solve`; set once per goal); plus the arms' gravity torque at the target over kp
+  (`gravity_offset`; gravity in the pelvis frame from the IMU attitude), the pose-error integral (`integral`) and the
+  residual (integrated with `residual_integrate`, latched on the goal with `freeze`). `reset` (engage, band release)
+  starts the target at the measured arm angles. `config/example.export.yaml` documents every key;
+  `arm_seed_table` names a file in the export's folder (`policies/<robot>/`, copied with the networks). Locomanipulation_game's
+  `mujoco_evals/mujoco_sim.py` (`MarlMujoco.process_actions`) is the same arm path in numpy.
 
 The export also writes `estimator.pt` and an `odometry` block in `export.yaml`; the deploy doesn't use them (its
 odometry is the SLAM pipeline's, below), so leave them out of `policies/`.

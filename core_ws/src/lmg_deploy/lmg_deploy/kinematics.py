@@ -14,6 +14,12 @@ pairing: its linear rows are taken at the COM point, the poses at the frame.
 The model is the H1-2 URDF with a fixed base at the pelvis: every pose and
 Jacobian here is relative to the pelvis, as in training (PhysX world-frame
 Jacobian rotated into the root frame).
+
+For mdp.IKPostureArmAction (export.yaml arm_ik) it also gives the arm joints'
+gravity torques (ArmKinematics.gravity_torques in Locomanipulation_game's
+mdp/arm_kinematics.py) and the seed solve (its ArmKinematics.solve, the wrist
+frame's origin, not the COM), on their own Pinocchio data so the measured
+state's poses and Jacobians stay as update() left them.
 """
 
 import xml.etree.ElementTree as ET
@@ -60,6 +66,12 @@ class ArmKinematics:
         self.joint_limits = np.stack([lower, upper], axis=1)  # (num joints, 2), policy order
         self._jacobians: list[np.ndarray] = []
         self._poses: list[tuple[np.ndarray, np.ndarray]] = []
+        self.extra_frames = list(self._extra_ids)
+        # gravity_torques sets its model's gravity per call: a model of its own; solve_arms works on its own data
+        self._gmodel = pin.buildModelFromUrdf(urdf_path)
+        self._gdata = self._gmodel.createData()
+        self._sdata = self.model.createData()
+        self._v_idx = np.array([self.model.joints[self.model.getJointId(n)].idx_v for n in joint_names])
 
     def update(self, q: np.ndarray) -> None:
         """Compute the poses and wrist Jacobians at joint angles q (rad, policy order)."""
@@ -90,6 +102,53 @@ class ArmKinematics:
     def frame_pose(self, name: str) -> tuple[np.ndarray, np.ndarray]:
         """Return an extra frame's (position m, quaternion wxyz) in the pelvis frame at the last update()."""
         return self._extra_poses[name]
+
+    def jacobian(self, arm: int) -> np.ndarray:
+        """Return the arm's (6, 7) wrist Jacobian at the last update(): pelvis frame, linear rows at the wrist COM."""
+        return self._jacobians[arm]
+
+    def gravity_torques(self, q: np.ndarray, gravity_b: np.ndarray) -> np.ndarray:
+        """Return the torque gravity puts on each joint (Nm, policy order) at joint angles q (rad, policy order; the
+        joints the policy leaves out, the grippers', at 0), gravity_b the gravity vector (m/s^2) in the pelvis frame.
+
+        Training's ArmKinematics.gravity_torques for the arm joints (a PD holds q with its target at q - tau / kp).
+        """
+        q_pin = pin.neutral(self._gmodel)
+        q_pin[self._q_idx] = q
+        pin.framesForwardKinematics(self._gmodel, self._gdata, q_pin)
+        r_root_pelvis = self._gdata.oMf[self._pelvis_id].rotation
+        self._gmodel.gravity.linear = r_root_pelvis @ np.asarray(gravity_b, dtype=np.float64)
+        # Pinocchio's generalized gravity is the torque that holds q: minus the torque gravity puts on each joint
+        return -pin.computeGeneralizedGravity(self._gmodel, self._gdata, q_pin)[self._v_idx]
+
+    def solve_arms(self, goals: np.ndarray, q0: np.ndarray, low: np.ndarray, high: np.ndarray, iters: int,
+                   damping: float, rot_weight: float, max_step: float = 0.2) -> np.ndarray:
+        """Return q0 (policy order) with each arm's joints solved for its wrist goal (arms, 7: x y z qw qx qy qz,
+        pelvis frame), from q0's: training's ArmKinematics.solve, damped least squares on the pose error [position,
+        rot_weight x axis-angle] at the wrist frame's origin, each step capped at max_step per joint and clamped into
+        [low, high] (policy order); the other joints held at q0's."""
+        q = np.asarray(q0, dtype=np.float64).copy()
+        w = np.array([1.0, 1.0, 1.0, rot_weight, rot_weight, rot_weight])
+        damp = damping ** 2 * np.eye(6)
+        q_pin = pin.neutral(self.model)
+        data = self._sdata
+        for _ in range(iters):
+            q_pin[self._q_idx] = q
+            pin.computeJointJacobians(self.model, data, q_pin)
+            pin.updateFramePlacements(self.model, data)
+            o_m_pelvis = data.oMf[self._pelvis_id]
+            r_pelvis_t = o_m_pelvis.rotation.T
+            for arm, fid in enumerate(self._ee_ids):
+                pelvis_m_ee = o_m_pelvis.actInv(data.oMf[fid])
+                pos_err, rot_err = compute_pose_error(pelvis_m_ee.translation, quat_from_matrix(pelvis_m_ee.rotation),
+                                                      goals[arm, :3], goals[arm, 3:])
+                jac = pin.getFrameJacobian(self.model, data, fid, pin.LOCAL_WORLD_ALIGNED)[:, self._v_cols[arm]]
+                jac = np.vstack([r_pelvis_t @ jac[:3], r_pelvis_t @ jac[3:]]) * w[:, None]
+                err = np.concatenate([pos_err, rot_err]) * w
+                step = jac.T @ np.linalg.solve(jac @ jac.T + damp, err)
+                cols = self.arm_cols[arm]
+                q[cols] = np.clip(q[cols] + np.clip(step, -max_step, max_step), low[cols], high[cols])
+        return q
 
     def ik_step(self, arm: int, target_pos: np.ndarray, target_quat: np.ndarray, damping: float,
                 max_step: float) -> np.ndarray:

@@ -170,7 +170,12 @@ def test_use_skills_is_declared_and_starts_golem_skills():
     for value in ('true', 'false'):
         passed = _passed_to_core('g1_sim.launch.py', use_nav='true', use_skills=value)
         assert passed['use_skills'] == value
-        assert ('skills' in _core_nodes(**passed)) == (value == 'true')
+        nodes = _core_nodes(**passed)
+        assert ('skills' in nodes) == (value == 'true')
+        if value == 'true':
+            # golem_skills drives the G1's profile (its Dex3-1 hands), not the default H1-2
+            assert nodes['skills'].parameters['robot'] == 'g1'
+            assert nodes['skills'].parameters['wait_for_services'] is False
 
 
 def test_core_passes_use_sim_time_on():

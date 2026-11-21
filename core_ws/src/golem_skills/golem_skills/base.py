@@ -65,6 +65,7 @@ from .perception_utils import (
 )
 from .grasp_synthesis import DEFAULT_METHOD, METHODS, method_name
 from model_server.model_logging import _log_root
+from .hands import DEX3_NS
 from .robots import ARMS, DEFAULT_ROBOT, ROBOTS, robot_profile
 from .run_telemetry import RunRecorder, describe_goal, run_dir
 
@@ -308,30 +309,33 @@ class SkillsBase(Node):
                 read_only=True)).value)
         self.get_logger().info(f'golem_skills: robot {self.robot.name}')
 
+        # The hand the robot grasps with (hands.py): the Magpie gripper's
+        # services below, or the Dex3-1 driver's open and close.
+        magpie_ns = GRIPPER_NS if self.robot.hand == 'magpie' else {}
         self.gripper_clis = {
             arm: self.create_client(SetGripperPosition, f'{ns}/set_position',
                                     callback_group=self._cb_group)
-            for arm, ns in GRIPPER_NS.items()
+            for arm, ns in magpie_ns.items()
         }
         self.gripper_open_clis = {
             arm: self.create_client(Trigger, f'{ns}/open', callback_group=self._cb_group)
-            for arm, ns in GRIPPER_NS.items()
+            for arm, ns in magpie_ns.items()
         }
         self.gripper_close_clis = {
             arm: self.create_client(Trigger, f'{ns}/close', callback_group=self._cb_group)
-            for arm, ns in GRIPPER_NS.items()
+            for arm, ns in magpie_ns.items()
         }
         self.gripper_force_clis = {
             arm: self.create_client(SetGripperForce, f'{ns}/set_force',
                                     callback_group=self._cb_group)
-            for arm, ns in GRIPPER_NS.items()
+            for arm, ns in magpie_ns.items()
         }
         # clears a Dynamixel overload without opening the fingers; the grip-hold
         # loop's other call
         self.gripper_reset_clis = {
             arm: self.create_client(Trigger, f'{ns}/reset_overload',
                                     callback_group=self._cb_group)
-            for arm, ns in GRIPPER_NS.items()
+            for arm, ns in magpie_ns.items()
         }
         # arm -> (thread, stop Event) of the running grip-hold loop
         self._grip_hold = {}
@@ -345,11 +349,21 @@ class SkillsBase(Node):
                 GripperState, f'{ns}/state',
                 lambda msg, a=arm: self._on_gripper_state(a, msg),
                 10, callback_group=self._cb_group)
-            for arm, ns in GRIPPER_NS.items()
+            for arm, ns in magpie_ns.items()
         }
         # mm, the aperture the driver reported after the last set_gripper per
         # arm; gripper_aperture's fallback before any state message
         self._gripper_actual_mm = {}
+        # the Dex3-1 driver's named poses, per arm
+        dex3_ns = DEX3_NS if self.robot.hand == 'dex3' else {}
+        self.hand_open_clis = {
+            arm: self.create_client(Trigger, f'{ns}/open', callback_group=self._cb_group)
+            for arm, ns in dex3_ns.items()
+        }
+        self.hand_close_clis = {
+            arm: self.create_client(Trigger, f'{ns}/close', callback_group=self._cb_group)
+            for arm, ns in dex3_ns.items()
+        }
         # joint name -> (position [rad], robot time it arrived [s]) from every
         # /joint_states message. More than one node publishes there, each its
         # own joints (golem_upper_ik's joint_state_publisher the body from
@@ -463,8 +477,8 @@ class SkillsBase(Node):
                 lambda msg, a=arm: self._on_arm_detections(a, msg),
                 qos_profile_sensor_data, callback_group=self._cb_group)
 
-        # With `wait_for_services`, wait for the H1-2's perception and gripper
-        # services and the arm actions, 10 s in total; a missing one is not fatal.
+        # With `wait_for_services`, wait for the perception and hand services
+        # and the arm actions, 10 s in total; a missing one is not fatal.
         wait_for_services = bool(
             self.declare_parameter('wait_for_services', True).value)
         if wait_for_services:
@@ -473,7 +487,8 @@ class SkillsBase(Node):
             for cli in (self.gemini_cli, self.sam_cli, self.graspgen_cli,
                         *self.gripper_clis.values(), *self.gripper_open_clis.values(),
                         *self.gripper_close_clis.values(),
-                        *self.gripper_force_clis.values()):
+                        *self.gripper_force_clis.values(),
+                        *self.hand_open_clis.values(), *self.hand_close_clis.values()):
                 rem = max(0.0, deadline - time.monotonic())
                 if rem <= 0.0:
                     break
@@ -1447,8 +1462,14 @@ class SkillsBase(Node):
 
         A position command, so partial openings hold, followed by
         GRIPPER_SETTLE_SEC so the fingers stop before the arm moves. Opening
-        ends the arm's grip-hold loop (through set_gripper).
+        ends the arm's grip-hold loop (through set_gripper). A Dex3-1 opens
+        fully whatever `amount` (its driver's `open` pose).
         """
+        if self.robot.hand == 'dex3':
+            if not self._trigger_gripper(self.hand_open_clis[arm], f'hand open({arm})'):
+                return False
+            self.get_clock().sleep_for(RclpyDuration(seconds=GRIPPER_SETTLE_SEC))
+            return True
         amount = min(max(float(amount), 0.0), 1.0)
         if not self.set_gripper(arm, amount * GRIPPER_MAX_WIDTH_MM):
             return False
@@ -1465,7 +1486,16 @@ class SkillsBase(Node):
         returns before the fingers finish, then starts the grip-hold loop
         (_grip_hold_loop), which keeps running after this call and after the
         skill returns, until the gripper is opened. Returns success.
+
+        A Dex3-1 has no force limit or overload: its driver's `close` pose,
+        which the driver keeps commanding, then GRIPPER_SETTLE_SEC; no
+        grip-hold loop.
         """
+        if self.robot.hand == 'dex3':
+            if not self._trigger_gripper(self.hand_close_clis[arm], f'hand close({arm})'):
+                return False
+            self.get_clock().sleep_for(RclpyDuration(seconds=GRIPPER_SETTLE_SEC))
+            return True
         if not self.set_gripper_force(arm, force_n):
             return False
         if not self._trigger_gripper(self.gripper_close_clis[arm], f'close({arm})'):

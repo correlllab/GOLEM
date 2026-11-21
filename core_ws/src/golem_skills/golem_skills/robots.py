@@ -36,6 +36,8 @@ class RobotProfile:
     staging_configs: dict
     # gripper_name the graspgen service plans for; None: no GraspGenX model
     graspgen_gripper: Optional[str]
+    # the hand the grasp closes, one of hands.HANDS
+    hand: str
 
 
 H12 = RobotProfile(
@@ -46,6 +48,7 @@ H12 = RobotProfile(
     prep_config='prep',
     staging_configs={'left': 'staging_left', 'right': 'staging_right'},
     graspgen_gripper='magpie',
+    hand='magpie',
 )
 
 ROBOTS = {p.name: p for p in (H12,)}

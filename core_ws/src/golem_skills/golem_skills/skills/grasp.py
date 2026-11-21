@@ -11,7 +11,7 @@ The flow (_exec_grasp):
             in along the grasp axis (or the visual servo); a candidate whose
             pre-grasp or contact is not reached is dropped and the next one
             tried
-         -> force close -> check the gripper holds something
+         -> close -> check the hand holds something
 
 Perception and execution are the same for every synthesis method; only the
 candidate list differs (grasp_synthesis/__init__.py has the methods and how a
@@ -41,6 +41,8 @@ from ..base import (_Run, FRAME_TASK_STABLE_STOP_MSGS, SLOW_MODE_TIME_SCALE,
                     WORLD_FRAME)
 from ..grasp_synthesis import METHODS, SynthesisInput, method_name
 from ..grasp_synthesis.common import pose_at
+from ..hands import (dex3_closing_joints, dex3_closure, dex3_closure_text,
+                     dex3_grip_failure)
 from ..perception_utils import (approach_pose, pose_quat, pose_xyz,
                                 quat_geodesic, quat_slerp)
 from .grasp_detection import GraspDetection, perception_name
@@ -100,7 +102,8 @@ EMPTY_GRIP_MAX_MM = 2.0
 # wider than this cannot be grasped.
 OPEN_GRIP_MIN_MM = 90.0
 # s of robot time to wait for a gripper state published after the close (the
-# driver and the sims publish at 10 Hz)
+# Magpie driver and the H1-2 sims publish at 10 Hz, dex_3's driver its finger
+# joints at 50 Hz)
 GRIP_STATE_WAIT_SEC = 1.0
 
 
@@ -397,8 +400,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         if not self.close_gripper(arm):
             return fail('gripper close failed')
         self.get_clock().sleep_for(RclpyDuration(seconds=POST_CLOSE_SETTLE_SEC))
-        aperture = self.gripper_aperture_since(arm, closed_at, GRIP_STATE_WAIT_SEC)
-        reason = grip_failure(aperture)
+        reason, held = self._grip_check(arm, closed_at)
         if reason is not None:
             return fail(f'grasp of {obj!r} with {method.name} candidate '
                         f'{cands.labels[contact.idx]} failed: {reason}')
@@ -415,7 +417,26 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         return run.succeed(
             f'grasped {obj!r} with {method.name} candidate '
             f'{cands.labels[contact.idx]} (score {cands.scores[contact.idx]:.2f}, '
-            f'gripper at {aperture:.1f} mm)')
+            f'{held})')
+
+    def _grip_check(self, arm, closed_at):
+        """
+        Return (why `arm`'s hand holds nothing, or None; its state for the result message).
+
+        `closed_at` is the robot time the close was sent; only hand state
+        published after it counts. The Magpie's aperture (grip_failure), or
+        how far the Dex3-1's fingers closed (hands.dex3_grip_failure).
+        """
+        if self.robot.hand == 'dex3':
+            positions = self.joint_positions_since(
+                dex3_closing_joints(arm), closed_at, GRIP_STATE_WAIT_SEC)
+            reason = dex3_grip_failure(arm, positions)
+            held = ('fingers closed ' + dex3_closure_text(dex3_closure(arm, positions))
+                    if positions is not None else '')
+            return reason, held
+        aperture = self.gripper_aperture_since(arm, closed_at, GRIP_STATE_WAIT_SEC)
+        reason = grip_failure(aperture)
+        return reason, (f'gripper at {aperture:.1f} mm' if aperture is not None else '')
 
     def _resolve_grasp_method(self, goal):
         """Return (GraspMethod, None) for the goal, or (None, reason) for an unknown name."""

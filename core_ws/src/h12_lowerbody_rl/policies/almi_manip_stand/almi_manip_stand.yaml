@@ -1,6 +1,6 @@
 policy_path: model_almi_manip_stand.pt
 artifact_sha256:
-  policy_path: 27c022f438265389eff573c048a868f73070958e33244af84cc85a3cf8d4db5b
+  policy_path: 2b961b8732308630ae05e2c07a13f359c1f48d2b3543a84c0abbfa9da7be717c
 kps: [200, 200, 200, 200, 80, 80, 200, 200, 200, 200, 80, 80]
 kds: [6, 6, 6, 6, 3, 3, 6, 6, 6, 6, 3, 3]
 default_angles: [0, -0.4, 0, 0.8, -0.4, 0, 0, -0.4, 0, 0.8, -0.4, 0, 0, 0.4, 0.2, 0, 0.3, 0.4, -0.2, 0, 0.3]

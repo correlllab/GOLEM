@@ -165,12 +165,14 @@ def test_artifact_provenance_and_corruption_fail_closed(cls, name, tmp_path, mon
     root = POLICIES / name
     cfg = yaml.safe_load((root / (name + ".yaml")).read_text())
     provenance = yaml.safe_load((root / "SOURCE.yaml").read_text())
-    expected_revision = ("88d8c99130fe06047acf07c432e8ffbafbf50462" if name == "almi_manip_stand"
+    expected_revision = ("968ba6b6b7181ae6e7af3f3005b4dd0457098b29" if name == "almi_manip_stand"
                          else "c946b1a74f6d6812d82f80fdc7651acb2840acd2")
     assert provenance["source_revision"] == expected_revision
     if name == "almi_manip_stand":
         assert provenance["artifacts"]["model_almi_manip_stand.pt"]["source"] == (
-            "data/archive/model_almi_manip_2.pt")
+            "data/model_almi_manip_stand.pt")
+        checkpoint = torch.load(root / cfg["policy_path"], map_location="cpu", weights_only=True)
+        assert checkpoint["iter"] == provenance["artifacts"][cfg["policy_path"]]["training_iteration"] == 1099
     for key in ("policy_path", "encoder_path"):
         if key in cfg:
             path = root / cfg[key]

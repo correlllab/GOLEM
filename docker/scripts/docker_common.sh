@@ -22,7 +22,6 @@ load_config() {
         set +a
         eval "$saved_env"
     fi
-    [ -z "$(env | sed -n '/^HAMS_[A-Z0-9_]*=/p')" ] || fail 'Rename HAMS_* variables to GOLEM_*.'
     export GOLEM_ASSETS_DIR="${GOLEM_ASSETS_DIR:-$GOLEM_ROOT/CL_Assets}"
     export GOLEM_CACHE_DIR="${GOLEM_CACHE_DIR:-$GOLEM_ROOT/container_cache}"
     # Relative user paths are always relative to the checkout, on both platforms.

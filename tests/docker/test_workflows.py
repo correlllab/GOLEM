@@ -45,7 +45,7 @@ if 'config' in sys.argv:
     os.execv('/usr/bin/docker', ['docker'] + sys.argv[1:])
 ''')
         docker.chmod(0o755)
-        self.env = {k: v for k, v in os.environ.items() if not k.startswith(('GOLEM_', 'ROS_', 'HAMS_'))}
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith(('GOLEM_', 'ROS_'))}
         self.env.update(PATH=str(self.bin) + ':' + os.environ['PATH'], CALLS=str(self.root / 'calls'), DISPLAY='')
 
     def run_script(self, path, *args, **env):

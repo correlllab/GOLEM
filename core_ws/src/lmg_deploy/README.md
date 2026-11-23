@@ -5,10 +5,10 @@ Runs a two-agent MARL policy from Locomanipulation_game (branch `marl-direct`,
 delay in training) on the H1-2. The policies live one per robot, in `policies/h12/` and
 `policies/g1/` (empty so far), **one iteration at a time: a new export replaces the robot's
 folder, and old ones are deleted, not kept beside it** (`policies/README.md`). `policies/h12/` holds
-LegsEngageBlend200k_s42 (LocoManip-LegsOnly-v0: the sport-mode recipe at 100 Hz, legs only, so it
+LegsFastEnv60k_s42 (LocoManip-LegsOnly-v0: the sport-mode recipe at 100 Hz, legs only, so it
 refuses arm goals; on the calibrated torso IMU, `imu.source: lowstate`, so it needs the robot's entry in
-`config/imu_calibration.yaml`; trained to engage from a sagged pre-pose with a 0.5 s leg target blend,
-`engage_blend_s`, and its legs actor is not shown the wrist targets); its `export.yaml`'s `source` names the checkpoint. A
+`config/imu_calibration.yaml`; no engage blend: engage it on the hoist with the feet clear and the rope
+carrying weight, then lower it; its legs actor is not shown the wrist targets); its `export.yaml`'s `source` names the checkpoint. A
 **legs** agent that walks on `/cmd_vel`, and an **arms** agent that reaches
 wrist-pose goals through a damped-least-squares IK step plus a learned
 residual. One node, `marl_deploy_node`, owns all 27 joints. It publishes

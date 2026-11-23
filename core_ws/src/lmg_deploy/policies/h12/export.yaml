@@ -230,7 +230,6 @@ arm_residual_scales:
 - 0.0
 - 0.0
 max_ik_step: 0.05
-engage_blend_s: 0.5
 residual_cutoff_hz: 3.0
 ik_damping: 0.05
 clip_actions: 10.0
@@ -271,7 +270,7 @@ arms_obs_terms:
 - wrist_poses
 - wrist_errors
 source:
-  checkpoint: /home/max/Locomanipulation_game/logs/skrl/locomanip_marl/2026-11-22_23-34-13_LegsEngageBlend200k_s42/checkpoints/agent_200160.pt
+  checkpoint: /home/max/Locomanipulation_game/logs/skrl/locomanip_marl/2026-11-22_10-44-28_LegsFastEnv60k_s42/checkpoints/agent_60048.pt
   target_tables: /home/max/Locomanipulation_game/source/locomanipulation_game/locomanipulation_game/data/arm_target_tables_v3.pt
   task: LocoManip-LegsOnly-v0
-  exported: '2026-11-23T11:44:10'
+  exported: '2026-11-23T12:35:44'

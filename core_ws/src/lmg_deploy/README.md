@@ -84,6 +84,10 @@ legs' list may leave out `ee_targets`: LocoManip-LegsOnly-v0 runs from 2026-11-1
   robot's static offset removed, only `imu.residual_deg` drawn): the deploy applies the robot's calibration and
   refuses to start without one; `raw`, or absent (the exports with `imu.quat_bias_deg`, trained on the bias itself):
   the quaternion as reported, the robot's calibration ignored. Anything else is refused ("IMU calibration" below).
+- `engage_blend_s` (runs from 2026-11-22, trained with it): over the first `engage_blend_s` after the engage the legs'
+  targets go linearly from the pre-pose's last command to the policy's (the legs observe the blended targets, as in
+  training), so a policy engaged from a sagged pose does not jump its targets. Only the engage blends: the sim's
+  restart at the band's release does not. Absent or 0: none.
 - `arm_goal_frame: pelvis` and `arm_goal_keeps_walking: true` (LocoManip-Marl-Direct-v0 from 2026-11-19): an arm goal
   rides on the pelvis (the SLAM odometry doesn't move it) and the velocity command stays live through it.
 - With an `arm_ik` block in `export.yaml` (runs whose arms trained with `mdp.IKPostureArmAction`:

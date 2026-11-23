@@ -198,6 +198,7 @@ class MarlDeployNode(Node):
         self.declare_parameter("livox_attitude", "fastlio")  # "fastlio" | "filter": where projected gravity comes from
         self.declare_parameter("livox_odom_timeout", 1.0)   # s; fastlio: no /Odometry this long, the filter stands in
         # The robot's torso-IMU calibration (config/imu_calibration.yaml); "": defaults from the policy folder.
+        # robot h12_sim is the H1-2's simulators' entry (no offset), which lmg_sim passes.
         self.declare_parameter("robot", "")                  # its entry; "": the policy folder's name (h12)
         self.declare_parameter("imu_calibration_file", "")   # "": config/imu_calibration.yaml beside policies/
         for name in IMU_OFFSET_PARAMS:

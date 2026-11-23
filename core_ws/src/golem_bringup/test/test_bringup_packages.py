@@ -156,6 +156,16 @@ def test_lmg_sim_runs_lmg_reals_operator_gates(monkeypatch):
     assert (sim['disable_elastic_band'], real['disable_elastic_band']) == ('true', 'false')
 
 
+def test_lmg_reads_the_torso_imu_with_its_platforms_calibration(monkeypatch):
+    """lmg_real removes the real H1-2's torso-IMU offset (h12); lmg_sim none (h12_sim)."""
+    monkeypatch.setenv('ROS_DOMAIN_ID', '193')
+    game = 'h12_locomanipulationgame.launch.py'
+    for launch_file, robot in (('lmg_real.launch.py', 'h12'), ('lmg_sim.launch.py', 'h12_sim')):
+        passed = _passed_to(launch_file, game)
+        node = _walk(game, **{**passed, 'start_position_verified': 'true'})['marl_deploy_node']
+        assert node.parameters['robot'] == robot, launch_file
+
+
 def test_lmg_sim_is_not_guarded(monkeypatch):
     """lmg_sim has no refusal of its own on a sim domain."""
     monkeypatch.setenv('ROS_DOMAIN_ID', '193')

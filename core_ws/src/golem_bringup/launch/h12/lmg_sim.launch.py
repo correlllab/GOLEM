@@ -20,8 +20,10 @@ lmg_real.launch.py is the real-robot counterpart.
 The operator gates are lmg_real's: start_position_verified:=true (default false) starts
 marl_deploy_node, which ramps to the policy's default pose and holds it, under the sim's
 elastic band, until ~/confirm_engage; the sim's estop box latches golem_safety as the real
-one does (ENTER in the sim's terminal). The only sim-only step is the band: once engaged
-the node releases it through /elastic_band/toggle.
+one does (ENTER in the sim's terminal). The sim-only steps: once engaged the node releases
+the band through /elastic_band/toggle, and it reads the torso IMU with the sim's calibration
+(lmg_deploy's config/imu_calibration.yaml h12_sim: no offset, the sim's IMU being exact)
+where lmg_real removes the real robot's (h12).
 
 SAFETY: a sim bringup on the real robot's command bus would drive the robot (and the test
 scripts confirm the engage themselves), so it refuses an unset or 0 ROS_DOMAIN_ID (domain
@@ -124,6 +126,8 @@ def generate_launch_description():
             'engage_wait_for_confirm': 'true',
             # Sim only: release the elastic band once engaged.
             'disable_elastic_band': 'true',
+            # Sim only: the sim's torso IMU is exact, so no offset is removed from it.
+            'imu_calibration_robot': 'h12_sim',
         }),
         # SLAM and Nav2, driving the policy on /cmd_vel.
         include('golem_slam', 'navigation.launch.py', {**sim_time, 'robot': 'h12'},

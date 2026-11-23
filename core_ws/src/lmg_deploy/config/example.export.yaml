@@ -33,6 +33,11 @@ imu:
 #   residual_deg: {roll: [-1.0, 1.0], pitch: [-1.0, 1.0], yaw: [-1.0, 1.0]}
 #                             # the calibration error it trained to tolerate (calibrated only; logged)
 
+# Runs from 2026-11-22 also carry the legs' engage blend they trained with (a comment here: the shipped policy predates
+# it, and test_example_configs.py compares this file's keys with the shipped export.yaml's):
+#   engage_blend_s: 0.5       # s after the engage over which the legs' targets go linearly from the pre-pose's last
+#                             # command to the policy's; absent or 0: none
+
 # The sport-mode runs' exports (from LocoManip-LegsSquare-v0 on) also carry what they trained with, over the deploy
 # config's keys of the same names (example.yaml):
 control_dt: 0.01            # s, the policy step (100 Hz)

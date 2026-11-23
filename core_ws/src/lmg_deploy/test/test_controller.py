@@ -612,6 +612,37 @@ def test_per_joint_action_scales():
         _controller(leg_action_scales=[0.25] * 11)
 
 
+def test_engage_blend_moves_the_legs_from_the_held_target_to_the_policys():
+    """With engage_blend_s and a held target, the legs' targets go linearly from it to the policy's, observed as sent."""
+    legs = ConstNetwork(np.ones(12))
+    ctrl, cfg = _controller(legs=legs, engage_blend_s=0.1, torque_headroom=None, target_limits=None, target_margin=1.0)
+    default = np.array(cfg["default_joint_pos"])
+    held = default.copy()
+    held[:12] -= 0.2                                   # rad: a sagged hold
+    policy = default[:12] + 0.25                       # the constant action 1 at the test config's scale 0.25
+    state = _state(cfg)
+    ctrl.reset(state, held_target=held)
+    steps = int(round(0.1 / cfg["control_dt"]))
+    for k in range(steps + 2):
+        cmd = ctrl.step(state)
+        w = min(1.0, (k + 1) / steps)
+        np.testing.assert_allclose(cmd.q[:12], held[:12] + w * (policy - held[:12]))
+        np.testing.assert_allclose(ctrl.legs_last, (cmd.q[:12] - default[:12]) / 0.25)
+
+
+def test_no_engage_blend_without_a_held_target_or_engage_blend_s():
+    """A reset without a held target (the band's restart), or a policy without engage_blend_s, sends its targets at once."""
+    default_cfg = _cfg()
+    policy = np.array(default_cfg["default_joint_pos"][:12]) + 0.25
+    held = np.array(default_cfg["default_joint_pos"]) - 0.2
+    for blend, held_target in ((0.1, None), (None, held)):
+        ctrl, cfg = _controller(legs=ConstNetwork(np.ones(12)), engage_blend_s=blend, torque_headroom=None,
+                                target_limits=None, target_margin=1.0)
+        state = _state(cfg)
+        ctrl.reset(state, held_target=held_target)
+        np.testing.assert_allclose(ctrl.step(state).q[:12], policy)
+
+
 def test_command_filter_low_passes_the_observed_command():
     """With command_filter_tau the policies see the command low-passed, zero during an arm goal and after a reset."""
     legs = ConstNetwork(np.zeros(12))

@@ -288,6 +288,7 @@ class MarlDeployNode(Node):
         self._prepose_ticks = 0
         self._prepose_pass = 0
         self._prepose_start: np.ndarray | None = None
+        self._last_sent: np.ndarray | None = None   # rad, the last 27 targets published (the engage blend starts there)
         self._engaged = False
         self._band_released = not bool(self.get_parameter("disable_elastic_band").value)
         self._band_release_at: float | None = None
@@ -583,6 +584,7 @@ class MarlDeployNode(Node):
                 m.kp = float(cmd.kp[i])
                 m.kd = float(cmd.kd[i])
             pub.publish(msg)
+        self._last_sent = cmd.q.copy()
 
     def _release_band(self) -> None:
         """Call /elastic_band/toggle once it is available, one call at a time."""
@@ -733,7 +735,7 @@ class MarlDeployNode(Node):
                 throttle_duration_sec=5.0)
             return
         self.get_logger().info(f"pre-posed ({'settled' if settled else 'timeout'}, max err {err:.3f} rad): engaging")
-        ctrl.reset(state)
+        ctrl.reset(state, held_target=self._last_sent)
         # A /cmd_vel that arrived before engaging is not a command to walk now.
         ctrl.set_velocity_command(np.zeros(3))
         self._engaged = True

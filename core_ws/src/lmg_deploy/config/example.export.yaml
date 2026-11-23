@@ -17,21 +17,21 @@ target_limits:
 gait_phase_cos: true
 
 imu:
-  frame: livox_imu_link     # URDF frame the run's IMU sat in: livox_imu_link, livox_link or imu_link
+  source: lowstate          # the policy reads /lowstate imu_state (frame imu_link); absent: the Livox IMU (runs
+                            # before 2026-11-20)
+  frame: imu_link           # URDF frame the run's IMU sat in: livox_imu_link, livox_link or imu_link
   offset: [0.0, 0.0, 0.0]   # the run's IMU offset setting; not read (marl_deploy_node's imu_offset_*_deg trim it)
+  orientation: calibrated   # trained with the static offset removed: the deploy applies the robot's calibration
+                            # (config/imu_calibration.yaml) and refuses to start without one. raw (or absent): trained
+                            # on the quaternion as reported, its bias drawn around the robot's (quat_bias_deg below);
+                            # the deploy applies no calibration (ignores the robot's)
+  residual_deg: {roll: [-1.0, 1.0], pitch: [-1.0, 1.0], yaw: [-1.0, 1.0]}
+                            # the calibration error it trained to tolerate (calibrated only; logged)
   gyro_lowpass_hz: 8.0      # Hz, cutoff of the GyroLowpass on the angular velocity; absent: none
-# Runs on the torso IMU (from 2026-11-20) also carry, in the imu block (the shipped policy predates them, so they are
-# comments here: test_example_configs.py compares this file's keys with the shipped export.yaml's):
-#   source: lowstate          # the policy reads /lowstate imu_state (frame imu_link)
-#   acc: dropped              # its actors don't observe the accelerometer
-#   and one of:
+  acc: dropped              # its actors don't observe the accelerometer
+# A raw-orientation run carries instead of orientation and residual_deg (a comment here: test_example_configs.py
+# compares this file's keys with the shipped export.yaml's):
 #   quat_bias_deg: {roll: [-0.6, 0.4], pitch: [-3.6, -2.0], yaw: [-1.0, 1.0]}
-#                             # orientation raw (no orientation key): trained on the quaternion as reported, its bias
-#                             # drawn around the robot's; the deploy applies no calibration (ignores the robot's)
-#   orientation: calibrated   # trained with the static offset removed: the deploy applies the robot's calibration
-#                             # (config/imu_calibration.yaml) and refuses to start without one. Explicit raw: as above
-#   residual_deg: {roll: [-1.0, 1.0], pitch: [-1.0, 1.0], yaw: [-1.0, 1.0]}
-#                             # the calibration error it trained to tolerate (calibrated only; logged)
 
 # Runs from 2026-11-22 also carry the legs' engage blend they trained with (a comment here: the shipped policy predates
 # it, and test_example_configs.py compares this file's keys with the shipped export.yaml's):

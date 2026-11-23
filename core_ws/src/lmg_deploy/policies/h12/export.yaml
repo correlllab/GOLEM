@@ -97,12 +97,25 @@ target_limits:
   - 1.249
 gait_phase_cos: true
 imu:
-  frame: livox_imu_link
+  source: lowstate
+  frame: imu_link
   offset:
   - 0.0
   - 0.0
   - 0.0
+  orientation: calibrated
+  residual_deg:
+    roll:
+    - -1.0
+    - 1.0
+    pitch:
+    - -1.0
+    - 1.0
+    yaw:
+    - -1.0
+    - 1.0
   gyro_lowpass_hz: 8.0
+  acc: dropped
 control_dt: 0.01
 kp:
 - 250.0
@@ -117,7 +130,7 @@ kp:
 - 400.0
 - 80.0
 - 40.0
-- 600.0
+- 500.0
 - 250.0
 - 400.0
 - 80.0
@@ -150,16 +163,16 @@ kd:
 - 10.0
 - 2.0
 - 2.0
-- 0.5
-- 0.5
-- 0.5
+- 1.0
+- 1.0
+- 1.0
 - 6.0
 - 10.0
 - 2.0
 - 2.0
-- 0.5
-- 0.5
-- 0.5
+- 1.0
+- 1.0
+- 1.0
 default_joint_pos:
 - 0.0
 - -0.375
@@ -235,18 +248,15 @@ command_ranges:
 command_filter_tau: 0.5
 arm_goals: false
 legs_obs_terms:
-- base_lin_acc
 - base_ang_vel
 - projected_gravity
 - velocity_commands
-- arm_goal
 - joint_pos
 - joint_vel
 - gait_phase
 - gait_phase_cos
 - actions
 arms_obs_terms:
-- base_lin_acc
 - base_ang_vel
 - projected_gravity
 - velocity_commands
@@ -260,7 +270,7 @@ arms_obs_terms:
 - wrist_poses
 - wrist_errors
 source:
-  checkpoint: /home/max/Locomanipulation_game/logs/skrl/locomanip_marl/2026-11-19_10-32-00_LegsEnergyDefault200k_s43/checkpoints/agent_200160.pt
+  checkpoint: /home/max/Locomanipulation_game/logs/skrl/locomanip_marl/2026-11-22_10-44-28_LegsFastEnv60k_s42/checkpoints/agent_60048.pt
   target_tables: /home/max/Locomanipulation_game/source/locomanipulation_game/locomanipulation_game/data/arm_target_tables_v3.pt
   task: LocoManip-LegsOnly-v0
-  exported: '2026-11-19T21:49:51'
+  exported: '2026-11-22T17:16:51'

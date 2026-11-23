@@ -337,8 +337,7 @@ class MarlController:
         arms_action = np.clip(self.arms(arms_obs), -self.clip, self.clip)
 
         target = self.default.copy()
-        legs_target = legs_action * self.legs_scale + self.default[:NUM_LEGS]
-        target[:NUM_LEGS] = self._torque_bound(self._bound(legs_target, slice(0, NUM_LEGS)), state, slice(0, NUM_LEGS))
+        target[:NUM_LEGS] = self.legs_targets(legs_action, state)
         arms = slice(ARM_START, NUM_JOINTS)
         if self.arm_ik is not None:
             target[arms] = self._posture_arms(state, arms_action)
@@ -356,6 +355,11 @@ class MarlController:
         self.arms_last = self.residual.copy()
         self.steps += 1
         return JointCommand(q=target, kp=self.kp.copy(), kd=self.kd.copy())
+
+    def legs_targets(self, legs_action: np.ndarray, state: RobotState) -> np.ndarray:
+        """Return the legs' 12 joint targets (rad) for their clipped action at state: scaled, then bounded."""
+        target = legs_action * self.legs_scale + self.default[:NUM_LEGS]
+        return self._torque_bound(self._bound(target, slice(0, NUM_LEGS)), state, slice(0, NUM_LEGS))
 
     # -- arm_ik: mdp.IKPostureArmAction ------------------------------------------
 

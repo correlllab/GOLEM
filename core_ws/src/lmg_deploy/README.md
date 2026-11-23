@@ -228,7 +228,10 @@ correction is corrected = reported * R_bias^-1 (`imu_calibration.correct_imu(qua
 biases the quaternion only, so the gyro is left as reported; `rotate_gyro: true` re-expresses it (and the specific
 force) in the level frame, for an offset that is a physical mounting tilt (gyro_level = R_bias gyro_imu).
 
-**Where it lives:** `config/imu_calibration.yaml`, one entry per robot named as its policy folder (`h12`, `g1`):
+**Where it lives:** `config/imu_calibration.yaml`, one entry per robot named as its policy folder (`h12`, `g1`),
+and one for its simulators (`h12_sim`: all zero, the sim's torso IMU being MuJoCo's exact attitude; `lmg_sim` runs
+the node with `robot: h12_sim` through `h12_locomanipulationgame`'s `imu_calibration_robot`, and `lmg_real` keeps
+the default `h12`):
 `roll_deg`, `pitch_deg`, `yaw_deg` (0), `rotate_gyro` (false), or `null` while unmeasured. `marl_deploy_node` reads
 its robot's entry (parameters `robot`, default the policy folder's name, and `imu_calibration_file`, default the
 installed `config/imu_calibration.yaml`) and passes it to `MarlController(cfg, kin, legs, arms,

@@ -7,7 +7,8 @@ lmg_real.launch.py include this file and start the state publishers, the safety 
 and SLAM. The node runs lmg_deploy's policies/h12/, the H1-2's one policy. It starts only
 with start_position_verified:=true; it ramps the joints to the policy's default pose,
 holds it until ~/confirm_engage (with engage_wait_for_confirm) and holds its arm goals in
-the world by SLAM's /Odometry.
+the world by SLAM's /Odometry. imu_calibration_robot picks the torso-IMU calibration a
+calibrated policy runs with: the real robot's (h12, the default) or the sim's (h12_sim).
 """
 import os
 
@@ -50,6 +51,10 @@ def generate_launch_description():
         DeclareLaunchArgument('disable_elastic_band', default_value='false',
                               description="true: release the sim's elastic band through "
                                           '/elastic_band/toggle once engaged (sim only)'),
+        DeclareLaunchArgument('imu_calibration_robot', default_value='h12',
+                              description="the entry of lmg_deploy's config/imu_calibration.yaml "
+                                          "whose torso-IMU offset is removed: h12 (the real "
+                                          "robot's) or h12_sim (none: the sim's IMU is exact)"),
         *[DeclareLaunchArgument(f'imu_offset_{axis}_deg', default_value='0.0',
                                 description=f'startup IMU {axis} trim [deg]: its reading with the '
                                             'torso level (live: ros2 param set)')
@@ -74,6 +79,8 @@ def generate_launch_description():
                     LaunchConfiguration('prepose_ramp_s'), value_type=float),
                 'prepose_max_vel': ParameterValue(
                     LaunchConfiguration('prepose_max_vel'), value_type=float),
+                'robot': ParameterValue(
+                    LaunchConfiguration('imu_calibration_robot'), value_type=str),
                 **{f'imu_offset_{axis}_deg': ParameterValue(
                     LaunchConfiguration(f'imu_offset_{axis}_deg'), value_type=float)
                    for axis in ('roll', 'pitch', 'yaw')},

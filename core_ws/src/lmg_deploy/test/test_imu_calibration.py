@@ -117,9 +117,17 @@ def test_load_calibration(tmp_path):
     shipped = os.path.join(PKG, "config", "imu_calibration.yaml")
     with open(shipped) as f:
         robots = yaml.safe_load(f)
-    assert set(robots) >= {"h12", "g1"}
+    assert set(robots) >= {"h12", "h12_sim", "g1"}
     for robot in robots:
         C.load_calibration(shipped, robot)
+
+
+def test_the_sim_entry_removes_no_offset():
+    """The shipped h12_sim entry is all zero: a calibrated policy reads the sim's exact torso IMU unchanged."""
+    shipped = os.path.join(PKG, "config", "imu_calibration.yaml")
+    sim = C.load_calibration(shipped, "h12_sim")
+    assert (sim["roll_deg"], sim["pitch_deg"], sim["yaw_deg"], sim["rotate_gyro"]) == (0.0, 0.0, 0.0, False)
+    assert C.load_calibration(shipped, "h12") != sim
 
 
 # -- the export contract in the controller ---------------------------------------------

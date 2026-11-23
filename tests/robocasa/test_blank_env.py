@@ -21,7 +21,7 @@ STEPS = 1000  # physics steps with the band on: 2 s, the anchor's 1 s lift and a
 # m the pelvis may sink below its spawn height: the H1-2 drops onto its feet from its 2 cm
 # spawn clearance before the rising anchor takes its weight.
 MAX_PELVIS_DROP = 0.10
-# m: the lowest robot geom above the floor once the robot hangs (6-9 cm measured).
+# m: the lowest robot geom above the floor once the robot hangs (measured: the H1-2 21.6 cm, the G1 7.4 cm).
 MIN_HANG_CLEARANCE = 0.04
 # m: the most the lowest robot geom may stand above the floor at spawn (the runners'
 # clearances are 0.02 for the H1-2 and 0.001 for the G1).

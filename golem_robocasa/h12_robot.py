@@ -116,8 +116,8 @@ def spawn(env, resolver, backoff=0.0, margin=None, offset=(0.0, 0.0)):
 # BAND_HOOK above the torso's origin, where the hoist hooks the real robot, that lifts the
 # robot BAND_LIFT over BAND_LIFT_DURATION and, BAND_LOWER_DELAY after every leg motor is held,
 # lowers it BAND_LOWER_DROP over BAND_LOWER_DURATION onto its feet. Measured in RoboCasa (the
-# Blank task and the layout 9 / style 9 / seed 42 kitchen): hanging limp, the feet 6.3-7.2 cm
-# clear of the floor and the torso within 3.3 deg of upright for 40 s, through the arms' start-up
+# Blank task and the layout 9 / style 9 / seed 42 kitchen, at BAND_LIFT 0.12 m): hanging limp, the feet
+# 6.3-7.2 cm clear of the floor (21.6 cm at 0.27 m, the Blank task) and the torso within 3.3 deg of upright for 40 s, through the arms' start-up
 # moves too (hooked at the waist the robot pitched over to ~85 deg); lowered with the legs held
 # in the ALMI, lmg or WALK/FAME pre-pose, the feet carry 96-100 % of the weight, the rope slack
 # by 5.7, 9.6 and 13.7 cm. Stiffness 1e4 N/m holds the robot near upright through the ~20 s the
@@ -127,11 +127,11 @@ BAND_BODY = "torso_link"
 BAND_STIFFNESS = 1e4     # N/m
 BAND_DAMPING = 2e3       # N*s/m
 BAND_HOOK = (0.0, 0.0, 0.55)   # m, torso_link's frame: above the shoulders, as in training
-BAND_LIFT = 0.12               # m
+BAND_LIFT = 0.27               # m
 BAND_LIFT_DURATION = 1.0       # s of sim time
 BAND_LOWER_DELAY = 1.0         # s of sim time
-BAND_LOWER_DURATION = 2.5      # s of sim time
-BAND_LOWER_DROP = 0.30         # m
+BAND_LOWER_DURATION = 3.75     # s of sim time: 0.12 m/s
+BAND_LOWER_DROP = 0.45         # m: the anchor ends 0.18 m below the hook's spawn height
 # golem_sim.py --no_band_lowering: the anchor fixed 4 cm below the torso's spawn, pulling its
 # origin, the feet carrying part of the weight (13 % limp, 27 % in ALMI's pre-pose).
 BAND_FIXED_DZ = -0.04    # m

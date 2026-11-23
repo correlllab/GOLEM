@@ -1,8 +1,8 @@
 """Run the RoboCasa MuJoCo sim of the H1-2, or of the G1 with --g1 or GOLEM_ROBOT=g1.
 
 Usage: golem_sim.py [--h12 | --g1] [--headless] [--task NAME] [--layout N]
-[--style N] [--seed N]. One loop (sim_loop) runs both robots; what differs between them is
-a robot object with one interface (SimRobot below): h12_robot.H12Robot or
+[--style N] [--seed N] [--no_band_lowering]. One loop (sim_loop) runs both robots; what
+differs between them is a robot object with one interface (SimRobot below): h12_robot.H12Robot or
 g1.g1_robot.G1Robot. The robot is chosen (sim_common.select_robot) and the command line
 parsed before either robot's module is imported: the H1-2's needs magpie_msgs and the
 H1-2's CL_Assets files, which a G1 container may not have. The renderer is checked next
@@ -40,8 +40,15 @@ class SimRobot(Protocol):
     def spawn(self, env, resolver):
         """Put the robot at rest at its spawn, clear of the scene; reads the robot's spawn knobs."""
 
-    def make_band(self, data, resolver):
-        """Return (ElasticBand, body id) of the band that holds the robot at its spawn."""
+    def make_band(self, data, resolver, lowering=True):
+        """Return (ElasticBand, body id) of the band that holds the robot at its spawn.
+
+        lowering True hangs the robot with its feet clear of the floor, for band_lowering;
+        False is the fixed anchor of --no_band_lowering.
+        """
+
+    def band_lowering(self, band):
+        """Return the mujoco_env.BandLowering that lowers make_band's hanging band onto the feet."""
 
     def odom_body(self, env, resolver):
         """Return the id of the body the opt-in ground-truth odom reports."""
@@ -84,6 +91,12 @@ def _parser() -> argparse.ArgumentParser:
                   "the robot alone on a floor (no --layout or --style). "
                   "Omit to launch a random registered kitchen task.",
     )
+    parser.add_argument(
+        "--no_band_lowering",
+        action="store_true",
+        help="Keep the elastic band's anchor fixed where it starts, the feet on the floor, instead of "
+             "hanging the robot and lowering it onto its feet once the legs are held (default: lowering)",
+    )
     return parser
 
 
@@ -99,7 +112,8 @@ def make_robot(name):
     return H12Robot()
 
 
-def sim_loop(robot, task, viewer=True, layout=None, style=None, seed=None, duration=0.0):
+def sim_loop(robot, task, viewer=True, layout=None, style=None, seed=None, duration=0.0,
+             band_lowering=True):
     """Run robot (a SimRobot) in task (a RoboCasa kitchen, Battery or Blank) until stopped.
 
     The loop steps the env's own MjData (never env.step()) and drives:
@@ -110,8 +124,11 @@ def sim_loop(robot, task, viewer=True, layout=None, style=None, seed=None, durat
       - MeasurementBridge        : /robocasa/*, /elastic_band/toggle
       - the robot's extras       : what only it serves (the H1-2's grippers and estop box)
     An elastic band on the torso holds the robot until /elastic_band/toggle or SPACE in the
-    viewer releases it. The loop paces to GOLEM_SIM_RATE (sim_common.sim_rate_from_env;
-    default real time) and logs its real-time factor every RTF_LOG_S of sim time. duration is
+    viewer releases it. With band_lowering (the default) it hangs the robot with its feet clear
+    of the floor and lowers it onto them once the legs are held (mujoco_env.BandLowering, the
+    training env's hoist); without it, its anchor stays fixed with the feet on the floor. The
+    loop paces to GOLEM_SIM_RATE (sim_common.sim_rate_from_env; default real time) and logs
+    its real-time factor every RTF_LOG_S of sim time. duration is
     sim seconds from the first step, counted in physics steps (0: until the viewer closes or
     Ctrl-C); the tests pass it, the command line does not.
     """
@@ -147,10 +164,13 @@ def sim_loop(robot, task, viewer=True, layout=None, style=None, seed=None, durat
 
     # The band holds the robot from the first physics step; every motor is off until the
     # first valid rt/lowcmd.
-    band, band_body = robot.make_band(data, resolver)
+    band, band_body = robot.make_band(data, resolver, band_lowering)
     band_vel = np.zeros(6)   # apply_band's scratch
-    print(f"[{TAG}] elastic band on the torso anchored at {band.point.round(3)}; "
-          "/elastic_band/toggle or SPACE in the viewer releases it")
+    lowering = robot.band_lowering(band) if band_lowering else None
+    print(f"[{TAG}] elastic band on the torso anchored at {band.point.round(3)}"
+          + (f", a rope that lifts the robot {lowering.lift:.2f} m and lowers it {lowering.drop:.2f} m "
+             "once the legs are held" if lowering else ", fixed (--no_band_lowering)")
+          + "; /elastic_band/toggle or SPACE in the viewer releases it")
 
     print(f"[{TAG}] RoboCasa task {task!r} built around {robot.label}: "
           f"nq={model.nq} nu={model.nu}; {robot.describe(model, resolver)}")
@@ -226,6 +246,8 @@ def sim_loop(robot, task, viewer=True, layout=None, style=None, seed=None, durat
             with physics_lock:
                 if view_sync is not None:
                     view_sync.apply_perturbation()
+                if lowering is not None:
+                    lowering.step(float(data.time), sim_interface)
                 apply_band(model, data, band, band_body, band_vel)
                 sim_interface.write_ctrl()
                 before = float(data.time)
@@ -290,7 +312,8 @@ def main(argv):
     robot = make_robot(name)
     task = sim_common.select_task(parser, args, tag=TAG, own_tasks=robot.own_tasks,
                                   no_kitchen=robot.no_kitchen)
-    sim_loop(robot, task, viewer=not args.headless, layout=args.layout, style=args.style, seed=args.seed)
+    sim_loop(robot, task, viewer=not args.headless, layout=args.layout, style=args.style, seed=args.seed,
+             band_lowering=not args.no_band_lowering)
 
 
 if __name__ == "__main__":

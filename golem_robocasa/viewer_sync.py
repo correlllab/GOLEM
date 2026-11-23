@@ -75,9 +75,9 @@ def copy_display_state(dst, src):
 def band_overlay(band, body_id):
     """Return a draw callback that shows the elastic band on body_id while it is enabled."""
     def draw(handle, viewer_data):
-        """Draw the band from its anchor to the body, or clear the overlay once released."""
+        """Draw the band from its anchor to its hook on the body, or clear the overlay once released."""
         if band.enabled:
-            draw_band(handle, band.point, viewer_data.xpos[body_id])
+            draw_band(handle, band.point, band.hook_point(viewer_data, body_id))
         else:
             handle.user_scn.ngeom = 0
     return draw

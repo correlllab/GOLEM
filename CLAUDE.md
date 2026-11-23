@@ -9,8 +9,8 @@ the G1's packages and the closed-loop tests were checked against the code on
 2026-11-05; the RoboCasa sim's single entry point and loop (§2, §3, §8), the
 Isaac sim's elastic band and topic list (§8), the Livox pins (§8), the safety
 config counts (§8) and the development and pull-request rules (§5) on
-2026-11-19; the single platform (§2, §3, §9) and the RoboCasa sims' GPU
-requirement (§8) on 2026-11-09; the models
+2026-11-19; the RoboCasa sims' elastic band (§8) on 2026-11-22; the single
+platform (§2, §3, §9) and the RoboCasa sims' GPU requirement (§8) on 2026-11-09; the models
 (`golem_ros2_models`, `CL_Assets/g1`), the robot selection, the rest of the G1
 text (its sim and invariants), the `mode_machine` identity check and the
 stale-install pitfall on 2026-10-28; the DDS-domain rules and the H1-2 claims
@@ -615,7 +615,16 @@ sim-vs-real workflow depends on them behaving like the real robot.
 robots: it picks the robot (`--h12`/`--g1`, else `GOLEM_ROBOT`, else `h12`) before either
 robot's imports and runs that robot's object (`h12_robot.H12Robot`, `g1/g1_robot.G1Robot`:
 spawn, band, sensors, DDS interface, locking and what only it serves) through the same loop,
-so a change to the loop is made once. Both
+so a change to the loop is made once. Both robots hang from an elastic band on
+`torso_link` until `/elastic_band/toggle` (or SPACE in the viewer) releases it. By default it
+plays the training env's hoist (`mujoco_env.BandLowering`, each robot's `BAND_*` values): a rope
+hooked above the shoulders lifts the robot until its feet hang clear of the floor, and once
+every leg motor is held (on, kp > 0, in the latched `rt/lowcmd`) lowers it onto its feet, so the
+feet carry the weight before the release (the H1-2 all of it; the G1 about 75 %, in two stages:
+light contact once the legs are held, the rest once the arm controller holds the waist too, since
+a lower body under a limp waist folds);
+`golem_sim.py --no_band_lowering` keeps the fixed anchor the sims had before, at the waist with
+the feet on the floor. Both
 sims render their cameras and the MID-360's rays through EGL on an NVIDIA GPU:
 without one (MuJoCo not on EGL, no EGL device, a software renderer) the sim
 stops at start, once its command line is parsed and before it builds a scene or
@@ -690,7 +699,7 @@ and `rt/dex3/{left,right}/state`, and serves `/elastic_band/toggle`
 (`std_srvs/srv/Trigger`, as the H1-2 sim does); consumes `rt/lowcmd` and
 `rt/dex3/{left,right}/cmd`. It plays the robot in Unitree's debug mode: every
 motor is off until the first `rt/lowcmd` with a valid CRC, `mode_machine` 5
-and `mode_pr` 0, and an elastic band on `torso_link` holds the robot until the
+and `mode_pr` 0, and the elastic band (above) holds the robot until the
 toggle (or SPACE in the viewer) releases it; the G1 bringup's leg node
 calls it. It reads none of HOMIE's files. (Trust `g1/g1_sensors.py` for
 the ROS side, `g1/unitree_interface.py` for the DDS side and `g1/g1_robot.py`
@@ -725,7 +734,8 @@ does not publish, `/lidar/first_link` (the point cloud) and `/imu/base_link`
 selects the Inspire fixture. Magpie exposes the real gripper state, services,
 and DeliGrasp action through a native ROS process inside the Isaac container.
 With `--elastic_band` (opt-in, refused with `--fix_base`; without it the robot floats free,
-the default) it hangs the robot from the RoboCasa H1-2 sim's elastic band on `torso_link` and
+the default) it hangs the robot from the RoboCasa H1-2 sim's fixed elastic band (`golem_sim.py
+--no_band_lowering`'s, at the waist: no hook, lift or lowering) on `torso_link` and
 serves `/elastic_band/toggle` (`std_srvs/srv/Trigger`), checked by
 `tests/isaaclab/run_elastic_band.sh`.
 Its H1-2 (the USD) keeps the MID-360 upright, unlike the RoboCasa sim and the

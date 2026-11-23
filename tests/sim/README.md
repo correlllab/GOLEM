@@ -19,7 +19,7 @@ limits.
 
 The sim starts headless in the layout 9 / style 9 / seed 42 kitchen with its sensors on, the spawn
 backed 2.0 m into open floor (`GOLEM_SPAWN_BACKOFF=2.0`), and the robot hanging from the sim's
-elastic band. Beside it, the ros container runs the robot's sim bringup with navigation:
+elastic band, which lowers it onto its feet once the leg motors are held (`CLAUDE.md` §8). Beside it, the ros container runs the robot's sim bringup with navigation:
 
 - H1-2: `h12_sim.launch.py use_rviz:=false use_skills:=false`;
 - G1: `g1_sim.launch.py use_rviz:=false`.

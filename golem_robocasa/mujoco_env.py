@@ -1,9 +1,12 @@
 """Model the elastic band both sim runners hang the robot from until a policy drives it, and log a fall.
 
-The band is a spring-damper pulling a body (the torso) toward a fixed anchor
-above its spawn. golem_sim.sim_loop applies it every
+The band is a spring-damper pulling a body (the torso), or a hook point on
+it, toward an anchor above its spawn. golem_sim.sim_loop applies it every
 physics step while it is enabled (apply_band); SPACE in the viewer or
-/elastic_band/toggle (MeasurementBridge) releases it. FallLogger logs the
+/elastic_band/toggle (MeasurementBridge) releases it. BandLowering moves the
+anchor as the training env's hoist does: up until the robot hangs, then down
+onto its feet once the legs (on the G1 then the waist too) are held
+(golem_sim.py --no_band_lowering keeps it fixed). FallLogger logs the
 band's release and the robot's first fall, which the closed-loop tests read.
 """
 import mujoco
@@ -13,17 +16,31 @@ import numpy as np
 class ElasticBand:
     """Compute the band's force on the body it holds, and toggle it."""
 
-    def __init__(self, point=np.array([0, 0, 3]), length=0, stiffness=200, damping=100):
+    def __init__(self, point=np.array([0, 0, 3]), length=0, stiffness=200, damping=100, rope=False,
+                 hook=None):
         """Anchor the band at point (m, world), enabled.
 
         length is the spring's rest length (m), stiffness N/m, damping N*s/m on
-        the body's whole linear velocity.
+        the hooked point's whole linear velocity. A rope band never pulls the
+        body down: its vertical force is clamped at 0, as a hoist's rope goes
+        slack. hook is the point (m, the body's frame) the band pulls, which
+        apply_band then also turns by its torque; None pulls the body's origin
+        through its centre of mass, with no torque.
         """
         self.point = point.astype(np.float64)
         self.length = length
         self.stiffness = stiffness
         self.damping = damping
+        self.rope = rope
+        self.hook = None if hook is None else np.asarray(hook, dtype=np.float64)
         self.enabled = True
+        self._torque = False   # apply_band wrote a torque it must clear at the release
+
+    def hook_point(self, data, body):
+        """Return the world point (m) the band pulls on body in data: its hook, or the body's origin."""
+        if self.hook is None:
+            return data.xpos[body]
+        return data.xpos[body] + data.xmat[body].reshape(3, 3) @ self.hook
 
     def evaluate_force(self, x, v):
         """Return the world-frame force (N) on the body at position x moving at velocity v.
@@ -38,7 +55,10 @@ class ElasticBand:
             spring = -self.stiffness * (displacement - self.length) * offset / displacement
         else:
             spring = np.zeros(3)
-        return spring - self.damping * v
+        force = spring - self.damping * v
+        if self.rope:
+            force[2] = max(force[2], 0.0)
+        return force
 
     def toggle(self) -> bool:
         """Enable or disable the band, log it, and return whether it is now enabled."""
@@ -60,14 +80,81 @@ def apply_band(model, data, band, body, vel):
     """Write the band's force on body into xfrc_applied for the next physics step.
 
     Its pull while enabled, else zero: MuJoCo keeps xfrc_applied between steps,
-    so call it before every mj_step. vel is a 6-vector scratch buffer.
+    so call it before every mj_step. A hooked band (ElasticBand.hook) also
+    writes the pull's torque about the body's centre of mass, and clears it
+    once at the release. vel is a 6-vector scratch buffer.
     """
     if band.enabled:
-        # [angular(3), linear(3)] of the body, world frame
+        # [angular(3), linear(3)] of the body at its centre of mass, world frame
         mujoco.mj_objectVelocity(model, data, mujoco.mjtObj.mjOBJ_BODY, body, vel, 0)
-        data.xfrc_applied[body, :3] = band.evaluate_force(data.xpos[body], vel[3:])
+        if band.hook is None:
+            data.xfrc_applied[body, :3] = band.evaluate_force(data.xpos[body], vel[3:])
+            return
+        arm = band.hook_point(data, body) - data.xipos[body]   # m, world: centre of mass -> hook
+        force = band.evaluate_force(data.xipos[body] + arm, vel[3:] + np.cross(vel[:3], arm))
+        data.xfrc_applied[body, :3] = force
+        data.xfrc_applied[body, 3:] = np.cross(arm, force)
+        band._torque = True
     else:
         data.xfrc_applied[body, :3] = 0.0
+        if band._torque:
+            data.xfrc_applied[body, 3:] = 0.0
+            band._torque = False
+
+
+class BandLowering:
+    """Move the band's anchor as the training env's hoist does: hang the robot, then lower it onto its feet.
+
+    From the first step the anchor rises lift m, linearly over lift_duration s
+    of sim time, so the robot hangs with its feet clear of the floor. Then each
+    of stages, a (slots, drop, delay, duration) in turn, lowers it: once every
+    motor in slots is on with kp > 0 in the robot's latched rt/lowcmd, it waits
+    delay s, then comes down drop m over duration s (not before the stage
+    before it has ended), and stays there until the band's toggle releases it.
+    The band is a rope (ElasticBand.rope), so an anchor below the hook holds
+    the robot sideways and does not pull it down: the feet carry the weight. A
+    release stops it for good. It moves band.point in place, so the viewer's
+    overlay follows.
+    """
+
+    def __init__(self, band, lift, lift_duration, stages):
+        """Move band's anchor (an ElasticBand at the robot's spawn); lift m over lift_duration s, then stages."""
+        self.band = band
+        self.lift, self.lift_duration = lift, lift_duration
+        self.stages = [(np.asarray(slots, dtype=int), drop, delay, duration)
+                       for slots, drop, delay, duration in stages]
+        self.drop = sum(stage[1] for stage in self.stages)   # m, all the stages
+        self.base = float(band.point[2])   # m, world: the anchor at the spawn
+        self.t0 = None      # s of sim time of the first step
+        self.starts = []    # s of sim time each stage started down, as their slots are held in turn
+        self.done = False
+
+    def step(self, t, latch):
+        """Place the anchor for sim time t (s); latch is the robot's SimInterface (unitree_common.LowCmdLatch)."""
+        if self.done:
+            return
+        if not self.band.enabled:
+            self.done = True
+            print(f"[elastic-band] t={t:.2f}s: released with the anchor at z {self.band.point[2]:.3f} m",
+                  flush=True)
+            return
+        if self.t0 is None:
+            self.t0 = t
+        if len(self.starts) < len(self.stages):
+            slots, drop, delay, duration = self.stages[len(self.starts)]
+            if latch.holds(slots):
+                after = self.starts[-1] + self.stages[len(self.starts) - 1][3] if self.starts else t
+                self.starts.append(max(t + delay, after))
+                print(f"[elastic-band] t={t:.2f}s: motors {slots[0]}-{slots[-1]} are held; the anchor comes down "
+                      f"{drop:.3f} m over {duration:.1f}s from t={self.starts[-1]:.2f}s", flush=True)
+        z = self.base + self.lift * min(1.0, (t - self.t0) / self.lift_duration)
+        for start, (_, drop, _, duration) in zip(self.starts, self.stages):
+            z -= drop * min(1.0, max(0.0, (t - start) / duration))
+        self.band.point[2] = z
+        if len(self.starts) == len(self.stages) and t >= self.starts[-1] + self.stages[-1][3]:
+            self.done = True
+            print(f"[elastic-band] t={t:.2f}s: anchor lowered to z {z:.3f} m; "
+                  "it stays there until the band is released", flush=True)
 
 
 class FallLogger:

@@ -9,7 +9,7 @@ from . import g1_robosuite  # registers G1Dex3 and its gripper
 import battery_env  # registers the Battery env
 import blank_env  # registers the Blank env
 import robosuite_common
-from mujoco_env import ElasticBand, FallLogger
+from mujoco_env import BandLowering, ElasticBand, FallLogger
 from .g1_sensors import G1Sensors, SensorConfig
 from .sim_names import BODY_JOINTS, NameResolver
 from .unitree_interface import SimInterface
@@ -20,20 +20,40 @@ from .unitree_interface import SimInterface
 FALL_UPRIGHTNESS = 0.5   # pelvis z-axis . world up
 FALL_PELVIS_HEIGHT = 0.2  # m
 
-# The elastic band pulls the torso toward a point BAND_ANCHOR_DZ above its
-# spawn and holds the robot while no motor drives it, until /elastic_band/toggle
-# or SPACE in the viewer releases it. It is twice as stiff as the H1-2's: at
-# 1e4 N/m the limp G1 (34.4 kg) rocks fore and aft on its legs, the pelvis
-# tilting 16-19 deg for 20 s and more, and the physics can go unstable; at
-# 2e4 N/m it settles within 4 s, upright to 0.3 deg, the torso ~1.4 cm below
-# the anchor (measured in three RoboCasa kitchens; tests/robocasa/g1/
-# test_g1_band.py checks one).
+# The elastic band holds the robot while no motor drives it, until /elastic_band/toggle or
+# SPACE in the viewer releases it. By default it plays the training env's hoist
+# (mujoco_env.BandLowering), as on the H1-2: a rope on a hook BAND_HOOK above the torso's origin,
+# above the shoulders, lifts the robot BAND_LIFT over BAND_LIFT_DURATION, then lowers it in two
+# stages. The waist is limp until the arm controller holds it, and a lower body standing under a
+# limp waist folds once the feet carry more than its own share (~53 %): with the feet at 56 % the
+# waist pitched to -0.17 rad and frame_task_server's start found the wrists inside the hips. So
+# BAND_LOWER_DELAY after every leg motor is held the anchor comes down BAND_LOWER_DROP over
+# BAND_LOWER_DURATION, onto the feet with the rope still carrying ~75 % (waist -0.04 rad, as
+# hanging), and once the waist is held too, BAND_WAIST_DROP more over BAND_WAIST_DURATION, so the
+# feet carry ~75 % before the release (in the closed-loop test 2.6 s before it). Measured in RoboCasa (the Blank task and the layout 9 /
+# style 9 / seed 42 kitchen): hanging limp, the feet 6-9 cm clear of the floor and the pelvis
+# within 11 deg of upright for 40 s, through the arms' start-up move too (hooked at the waist it
+# swung to 25-36 deg). It is twice as stiff as the H1-2's: at 1e4 N/m the limp G1 (34.4 kg) on its
+# feet rocks fore and aft, the pelvis tilting 16-19 deg for 20 s and more, and the physics can go
+# unstable; at 2e4 N/m it settles within 4 s (measured with the fixed anchor in three kitchens).
 BAND_BODY = "torso_link"
-BAND_ANCHOR_DZ = 0.01    # m
 BAND_STIFFNESS = 2e4     # N/m
 BAND_DAMPING = 2e3       # N*s/m
-# m: the spawn puts the lowest collision geom this far above the floor, so the
-# robot hangs from the band with its feet on the floor.
+BAND_HOOK = (0.0, 0.0, 0.33)   # m, torso_link's frame: above the shoulders
+BAND_LIFT = 0.14               # m
+BAND_LIFT_DURATION = 1.0       # s of sim time
+BAND_LOWER_DELAY = 1.0         # s of sim time
+BAND_LOWER_DURATION = 2.5      # s of sim time
+BAND_LOWER_DROP = 0.13         # m
+BAND_WAIST_DURATION = 0.5      # s of sim time
+BAND_WAIST_DROP = 0.01         # m
+# golem_sim.py --no_band_lowering: the anchor fixed 1 cm above the torso's spawn, pulling its
+# origin, the feet on the floor.
+BAND_FIXED_DZ = 0.01     # m
+# The leg motors' slots in sim_names.BODY_JOINTS, and the legs' and the waist's (yaw, roll, pitch).
+LEG_SLOTS = range(12)
+LEG_WAIST_SLOTS = range(15)
+# m: the spawn puts the lowest collision geom this far above the floor.
 SPAWN_CLEARANCE = 0.001
 # m of free space the spawn keeps from every robot collision geom to any non-floor geom, in
 # the spawn pose, the limp poses and along the start-up arm moves (GOLEM_SPAWN_MARGIN
@@ -115,17 +135,30 @@ def spawn(env, resolver, backoff=0.0, margin=SPAWN_MARGIN):
     )
 
 
-def make_band(data, resolver):
-    """Return (band, torso body id): the band on the torso, anchored BAND_ANCHOR_DZ above it now.
+def make_band(data, resolver, lowering=True):
+    """Return (band, torso body id): the band on the torso, anchored from where it is now.
 
-    Call it at the spawn.
+    Call it at the spawn. With lowering, a rope on BAND_HOOK anchored at the
+    hook, for band_lowering to move; without, the fixed anchor BAND_FIXED_DZ
+    above the torso's origin.
     """
     body = resolver.body_id(BAND_BODY)
     if body < 0:
         raise KeyError(f"no body {resolver.robot_prefix}{BAND_BODY} for the elastic band")
-    anchor = data.xpos[body].copy()
-    anchor[2] += BAND_ANCHOR_DZ
-    return ElasticBand(anchor, length=0, stiffness=BAND_STIFFNESS, damping=BAND_DAMPING), body
+    if not lowering:
+        anchor = data.xpos[body] + (0.0, 0.0, BAND_FIXED_DZ)
+        return ElasticBand(anchor, length=0, stiffness=BAND_STIFFNESS, damping=BAND_DAMPING), body
+    band = ElasticBand(np.zeros(3), length=0, stiffness=BAND_STIFFNESS, damping=BAND_DAMPING, rope=True,
+                       hook=BAND_HOOK)
+    band.point = band.hook_point(data, body).copy()
+    return band, body
+
+
+def band_lowering(band):
+    """Return the mujoco_env.BandLowering that hangs the robot from make_band's rope and lowers it."""
+    return BandLowering(band, BAND_LIFT, BAND_LIFT_DURATION,
+                        ((LEG_SLOTS, BAND_LOWER_DROP, BAND_LOWER_DELAY, BAND_LOWER_DURATION),
+                         (LEG_WAIST_SLOTS, BAND_WAIST_DROP, 0.0, BAND_WAIST_DURATION)))
 
 
 class G1Robot:
@@ -161,9 +194,13 @@ class G1Robot:
               margin=float(margin) if margin else SPAWN_MARGIN)
         print("[g1_robot] initial stance: legs at Unitree's default angles, everything else at 0")
 
-    def make_band(self, data, resolver):
-        """Return (band, torso body id): the band on the torso, anchored BAND_ANCHOR_DZ above it now."""
-        return make_band(data, resolver)
+    def make_band(self, data, resolver, lowering=True):
+        """Return (band, torso body id): make_band above, hanging the robot or, lowering False, the fixed anchor."""
+        return make_band(data, resolver, lowering)
+
+    def band_lowering(self, band):
+        """Return the BandLowering of make_band's hanging band (band_lowering above)."""
+        return band_lowering(band)
 
     def odom_body(self, env, resolver):
         """Return the pelvis."""

@@ -454,6 +454,17 @@ class LowCmdLatch:
         if self._lowcmd is not None:
             self._lowcmd = self._lowcmd._replace(time=now)
 
+    def holds(self, slots):
+        """Return whether the latched rt/lowcmd drives every motor in slots (body slot indices) with kp > 0.
+
+        False before the first valid frame and once the latched frame is older
+        than the timeout, when every motor is off. Physics thread.
+        """
+        cmd = self._lowcmd
+        if cmd is None or self.sim_time - cmd.time > self.lowcmd_timeout:
+            return False
+        return bool(np.all(cmd.on[slots] & (cmd.kp[slots] > 0.0)))
+
     def _lowcmd_torques(self, q, dq, now):
         """Return the latched command's torques at q, dq, or zeros once it is older than the timeout."""
         cmd = self._lowcmd

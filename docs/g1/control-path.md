@@ -55,7 +55,9 @@ while `dex3_hands` uses the Unitree SDK. The user-facing interface is ROS 2 too:
   plays the robot in debug mode. Every motor is off (zero torque) until the
   first `rt/lowcmd` with a valid CRC, `mode_machine` 5 and `mode_pr` 0; from
   then on `rt/lowcmd` drives every body motor. Meanwhile an elastic band on the
-  torso holds the robot up, as the H1-2 sim's does: the leg node releases it
+  torso holds the robot up, as the H1-2 sim's does: it hangs the robot with its
+  feet clear of the floor and lowers it onto them once the leg node holds the
+  legs (`golem_sim.py --no_band_lowering` keeps it fixed); the leg node releases it
   through `/elastic_band/toggle` once its policy runs and the arm controller has
   finished its start-up moves, or `band.max_wait` after the policy started
   (SPACE in the viewer toggles it by hand).

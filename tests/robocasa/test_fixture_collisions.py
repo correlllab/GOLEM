@@ -2,7 +2,7 @@
 
 The pair check runs in the surface probe's kitchen (layout 9, style 9, seed 42) with each robot
 spawned as its sim spawns it. The resting check runs in the same layout and style with the G1
-on its band, in two of RoboCasa's tasks that put an object in a fixture, a drawer (a moving
+on its fixed band (golem_sim.py --no_band_lowering's), in two of RoboCasa's tasks that put an object in a fixture, a drawer (a moving
 part) and a cabinet shelf (a static part), and in one with a loose fixture on a free joint (a
 blender lid). Run it with tests/robocasa/run_in_container.sh.
 """
@@ -216,8 +216,10 @@ class FixtureCollisionTests(unittest.TestCase):
                 env = _g1_kitchen(task)
                 model, data = env.sim.model._model, env.sim.data._data
                 geoms = _Geoms(env)
+                # The fixed band (--no_band_lowering's): it only has to keep the limp robot still.
                 band, band_body = g1_robot.make_band(
-                    data, NameResolver(model, robot_prefix=env.robots[0].robot_model.naming_prefix))
+                    data, NameResolver(model, robot_prefix=env.robots[0].robot_model.naming_prefix),
+                    lowering=False)
                 vel = np.zeros(6)
                 self.assertGreater(sim_common.exclude_fixture_collisions(env), 0)
                 body = mujoco.mjtObj.mjOBJ_BODY

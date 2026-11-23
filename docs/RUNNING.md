@@ -78,6 +78,11 @@ Scene flags are passed straight through, e.g.
 `--task Battery` loads the battery workcell instead of a kitchen
 (`golem_robocasa/battery_env.py`; scene and objects in
 `CL_Assets/mujoco_assets/battery/`); `--layout`/`--style` don't apply to it.
+The robot starts hanging from an elastic band, its feet clear of the floor, and
+the sim lowers it onto its feet once the leg motors are held, as the training
+hoist does; `--no_band_lowering` keeps the band's anchor fixed at the waist with
+the feet on the floor (`CLAUDE.md` §8). The leg node, or SPACE in the viewer,
+releases it.
 `--task Blank` (any case; both robots, with or without `--g1`) puts the robot
 alone on a floor under a light, standing at the origin facing +x and held by
 the elastic band as in a kitchen (`golem_robocasa/blank_env.py`); it refuses
@@ -91,7 +96,8 @@ rejected. Select a task with `docker_run.sh isaac --task base --headless`.
 Magpie H1-2 is the default asset, with a floating base. Start the ROS lower-body
 controller to support it. Select the Inspire fixture with `--hand_type inspire`.
 Use `--fix_base` only for a fixed-root bench test. `--elastic_band` (not with `--fix_base`)
-hangs the floating robot from an elastic band on its torso, as the RoboCasa sims do, until
+hangs the floating robot from an elastic band on its torso, as the RoboCasa sims do with
+`--no_band_lowering` (a fixed anchor at the waist), until
 `ros2 service call /elastic_band/toggle std_srvs/srv/Trigger` releases it; a second call
 enables it again. Logs go to container stdout.
 The Magpie ROS gripper process starts inside the Isaac container using an
@@ -198,10 +204,11 @@ ros2 launch golem_bringup g1_sim.launch.py                   # use_nav:=true use
 ```
 
 The G1 bringup always starts the leg node (`golem_lowerbody_rl`, running
-HOMIE) in the sim. The robot hangs from the sim's elastic band with every
-motor off until the arm controller's first command; from then on the
-controller drives the waist and arms, and the leg motors stay off until the
-leg node moves the legs to HOMIE's default pose. The leg node then starts its
+HOMIE) in the sim. The robot hangs from the sim's elastic band, its feet clear
+of the floor, with every motor off until the arm controller's first command;
+from then on the controller drives the waist and arms, and the leg motors stay
+off until the leg node moves the legs to HOMIE's default pose, when the sim
+lowers the band onto the feet. The leg node then starts its
 policy, once `frame_task_server` has finished its start-up moves, and
 releases the band.
 

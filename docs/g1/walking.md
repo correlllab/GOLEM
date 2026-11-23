@@ -10,7 +10,8 @@ the safety layer on `sim_split` and the arm controller on its `sim_split`
 config. No launch argument turns it on or off. The robot starts hanging from
 the sim's elastic band, its leg motors off. Once `golem_safety` beats on
 `/safety/heartbeat` and `rt/lowstate` is upright, the leg node moves the legs
-to the policy's default pose over 2 s and holds it. Once `rt/lowstate` has been
+to the policy's default pose over 2 s and holds it, and the sim lowers the band
+until the feet carry most of the weight. Once `rt/lowstate` has been
 steady for 1 s, the arm controller commands and it has finished its start-up
 moves (its first `/left_ee_pose`), the node starts the policy at zero velocity
 and then releases the band; without a `/left_ee_pose`, each waits

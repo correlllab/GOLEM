@@ -223,6 +223,25 @@ class H12UnitreeInterfaceTests(unittest.TestCase):
         self.assertEqual(len(lines), 1, lines)
         self.assertIn('back', lines[0])
 
+    def test_holds_needs_every_slot_on_with_kp_and_a_fresh_frame(self):
+        """holds() is true only while the latest frame drives every given slot in mode 1 with kp > 0."""
+        legs = range(12)
+        self.assertFalse(self.iface.holds(legs))   # no frame yet
+        self.quiet(self.deliver, lowcmd(kp=0.0, kd=2.0))   # golem_safety's damping: no kp
+        self.assertFalse(self.iface.holds(legs))
+        self.quiet(self.deliver, lowcmd(mode=0))   # every motor off
+        self.assertFalse(self.iface.holds(legs))
+        one_off = lowcmd()
+        one_off.motor_cmd[5].kp = 0.0
+        one_off.crc = CRC_.Crc(one_off)
+        self.quiet(self.deliver, one_off)
+        self.assertFalse(self.iface.holds(legs))
+        self.assertTrue(self.iface.holds(range(6, 12)))
+        self.quiet(self.deliver, lowcmd())
+        self.assertTrue(self.iface.holds(legs))
+        self.iface.sim_time += self.iface.lowcmd_timeout + 0.01   # the frame has timed out
+        self.assertFalse(self.iface.holds(legs))
+
     def test_timeout_knob_must_be_finite_and_positive(self):
         """GOLEM_CMD_TIMEOUT must be finite and positive, and a bad value stops the sim at import."""
         name = 'GOLEM_CMD_TIMEOUT'

@@ -164,3 +164,28 @@ class ParseArgsTests(unittest.TestCase):
         """Other options parse unchanged."""
         args = parse_args(self.parser, ['--task', 'OpenFridge', '--seed', '3'], 'g1')
         self.assertEqual((args.task, args.seed), ('OpenFridge', 3))
+
+
+class BandLoweringFlagTests(unittest.TestCase):
+    """Check golem_sim.py's --no_band_lowering: off by default, passed to sim_loop."""
+
+    def run_main(self, argv):
+        """Run golem_sim.main(argv) with the renderer check, the robot, the task and the loop stubbed; return sim_loop's kwargs."""
+        from unittest import mock
+        import golem_sim
+        robot = mock.Mock(own_tasks=(), no_kitchen=())
+        with mock.patch.object(golem_sim.sim_common, 'require_renderer'), \
+                mock.patch.object(golem_sim, 'make_robot', return_value=robot), \
+                mock.patch.object(golem_sim.sim_common, 'select_task', return_value='Blank'), \
+                mock.patch.object(golem_sim, 'sim_loop') as loop:
+            golem_sim.main(argv)
+        return loop.call_args.kwargs
+
+    def test_lowering_is_the_default(self):
+        """Without the flag the sim hangs the robot and lowers it (band_lowering True)."""
+        self.assertIs(self.run_main(['--h12', '--headless'])['band_lowering'], True)
+
+    def test_flag_keeps_the_fixed_anchor(self):
+        """--no_band_lowering passes band_lowering False, on either robot."""
+        self.assertIs(self.run_main(['--h12', '--no_band_lowering'])['band_lowering'], False)
+        self.assertIs(self.run_main(['--g1', '--headless', '--no_band_lowering'])['band_lowering'], False)

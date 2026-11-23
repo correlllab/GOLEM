@@ -14,7 +14,7 @@ import battery_env  # registers the Battery env
 import blank_env  # registers the Blank env
 from h12_sensors import H12Sensors
 from magpie_hand_bridge import MagpieHandBridge
-from mujoco_env import ElasticBand, FallLogger
+from mujoco_env import BandLowering, ElasticBand, FallLogger
 from estop_server import start_estop_server
 from sim_names import NameResolver
 from unitree_interface import SimInterface
@@ -112,27 +112,56 @@ def spawn(env, resolver, backoff=0.0, margin=None, offset=(0.0, 0.0)):
 
 
 # The elastic band on the torso holds the robot until SPACE or /elastic_band/toggle releases
-# it. Its anchor is 4 cm below the torso's spawn: the feet carry part of the weight.
-# Stiffness 1e4 N/m holds the limp robot near upright through the ~20 s the leg policy waits
-# under the band for the arms' start-up (static tilt ~ gravity torque / stiffness; at 1e3 it
-# pitched forward ~60 deg). Damping 2e3 N*s/m settles a sideways shove well within a second.
+# it. By default it plays the training env's hoist (mujoco_env.BandLowering): a rope on a hook
+# BAND_HOOK above the torso's origin, where the hoist hooks the real robot, that lifts the
+# robot BAND_LIFT over BAND_LIFT_DURATION and, BAND_LOWER_DELAY after every leg motor is held,
+# lowers it BAND_LOWER_DROP over BAND_LOWER_DURATION onto its feet. Measured in RoboCasa (the
+# Blank task and the layout 9 / style 9 / seed 42 kitchen): hanging limp, the feet 6.3-7.2 cm
+# clear of the floor and the torso within 3.3 deg of upright for 40 s, through the arms' start-up
+# moves too (hooked at the waist the robot pitched over to ~85 deg); lowered with the legs held
+# in the ALMI, lmg or WALK/FAME pre-pose, the feet carry 96-100 % of the weight, the rope slack
+# by 5.7, 9.6 and 13.7 cm. Stiffness 1e4 N/m holds the robot near upright through the ~20 s the
+# leg policy waits under the band for the arms' start-up (at 1e3 the waist-hooked band let it
+# pitch forward ~60 deg). Damping 2e3 N*s/m settles a sideways shove well within a second.
 BAND_BODY = "torso_link"
-BAND_ANCHOR_DZ = -0.04   # m
 BAND_STIFFNESS = 1e4     # N/m
 BAND_DAMPING = 2e3       # N*s/m
+BAND_HOOK = (0.0, 0.0, 0.55)   # m, torso_link's frame: above the shoulders, as in training
+BAND_LIFT = 0.12               # m
+BAND_LIFT_DURATION = 1.0       # s of sim time
+BAND_LOWER_DELAY = 1.0         # s of sim time
+BAND_LOWER_DURATION = 2.5      # s of sim time
+BAND_LOWER_DROP = 0.30         # m
+# golem_sim.py --no_band_lowering: the anchor fixed 4 cm below the torso's spawn, pulling its
+# origin, the feet carrying part of the weight (13 % limp, 27 % in ALMI's pre-pose).
+BAND_FIXED_DZ = -0.04    # m
+# The leg motors' slots in sim_names.ROS_MOTOR_ORDER.
+LEG_SLOTS = range(12)
 
 
-def make_band(data, resolver):
-    """Return (band, torso body id): the band on the torso, anchored BAND_ANCHOR_DZ from it now.
+def make_band(data, resolver, lowering=True):
+    """Return (band, torso body id): the band on the torso, anchored from where it is now.
 
-    Call it at the spawn. Raises KeyError when the model has no torso_link.
+    Call it at the spawn. With lowering, a rope on BAND_HOOK anchored at the
+    hook, for band_lowering to move; without, the fixed anchor BAND_FIXED_DZ
+    from the torso's origin. Raises KeyError when the model has no torso_link.
     """
     body = resolver.body_id(BAND_BODY)
     if body < 0:
         raise KeyError(f"no body {BAND_BODY} for the elastic band")
-    anchor = data.xpos[body].copy()
-    anchor[2] += BAND_ANCHOR_DZ
-    return ElasticBand(anchor, length=0, stiffness=BAND_STIFFNESS, damping=BAND_DAMPING), body
+    if not lowering:
+        anchor = data.xpos[body] + (0.0, 0.0, BAND_FIXED_DZ)
+        return ElasticBand(anchor, length=0, stiffness=BAND_STIFFNESS, damping=BAND_DAMPING), body
+    band = ElasticBand(np.zeros(3), length=0, stiffness=BAND_STIFFNESS, damping=BAND_DAMPING, rope=True,
+                       hook=BAND_HOOK)
+    band.point = band.hook_point(data, body).copy()
+    return band, body
+
+
+def band_lowering(band):
+    """Return the mujoco_env.BandLowering that hangs the robot from make_band's rope and lowers it."""
+    return BandLowering(band, BAND_LIFT, BAND_LIFT_DURATION,
+                        ((LEG_SLOTS, BAND_LOWER_DROP, BAND_LOWER_DELAY, BAND_LOWER_DURATION),))
 
 
 class H12Robot:
@@ -175,9 +204,13 @@ class H12Robot:
               margin=float(margin) if margin else None, offset=(dx, dy))
         print("[h12_robot] initial stance from baked-in sim defaults")
 
-    def make_band(self, data, resolver):
-        """Return (band, torso body id): the band on the torso, anchored BAND_ANCHOR_DZ from it now."""
-        return make_band(data, resolver)
+    def make_band(self, data, resolver, lowering=True):
+        """Return (band, torso body id): make_band above, hanging the robot or, lowering False, the fixed anchor."""
+        return make_band(data, resolver, lowering)
+
+    def band_lowering(self, band):
+        """Return the BandLowering of make_band's hanging band (band_lowering above)."""
+        return band_lowering(band)
 
     def odom_body(self, env, resolver):
         """Return the body of the pelvis free joint."""

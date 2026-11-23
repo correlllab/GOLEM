@@ -87,7 +87,8 @@ Isaac defaults to the floating-base Magpie H1-2 in `CL_Assets`. Use
 `docker/scripts/docker_run.sh isaac --hand_type inspire --headless` for the
 Inspire fixture. `--fix_base` fixes the Magpie root for isolated motor tests;
 normal launches leave it free and require a lower-body controller. `--elastic_band` (not with
-`--fix_base`) hangs the free robot from the RoboCasa sims' elastic band on `torso_link` until
+`--fix_base`) hangs the free robot from the RoboCasa sims' fixed elastic band on `torso_link`
+(`golem_sim.py --no_band_lowering`'s) until
 `/elastic_band/toggle` releases it.
 
 Magpie exposes `/{left,right}/gripper/state`, the gripper services and DeliGrasp

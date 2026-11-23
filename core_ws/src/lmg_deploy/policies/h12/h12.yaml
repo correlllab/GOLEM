@@ -59,13 +59,13 @@ torque_headroom: 0.85       # then: kp (target - q) - kd dq within this share of
 
 legs:
   policy: legs.pt
-  num_obs: 83               # 81 + each leg's gait phase cos; no wrist targets (export.yaml legs_obs_terms)
+  num_obs: 79
   num_actions: 12
   action_scale: 0.25        # target = scale * action + default
 
 arms:
   policy: arms.pt
-  num_obs: 125
+  num_obs: 122
   num_actions: 14
   residual_scale: 0.2       # target = q + IK step + scale * residual
   residual_cutoff_hz: 3.0   # residual = the action low-passed (one pole, per policy step); the arms observe it

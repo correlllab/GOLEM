@@ -17,26 +17,18 @@ target_limits:
 gait_phase_cos: true
 
 imu:
-  frame: livox_imu_link     # URDF frame the run's IMU sat in: livox_imu_link, livox_link or imu_link
+  source: lowstate          # the policy reads /lowstate imu_state (frame imu_link); absent: /livox/imu
+  frame: imu_link           # URDF frame the run's IMU sat in: imu_link, livox_imu_link or livox_link
   offset: [0.0, 0.0, 0.0]   # the run's IMU offset setting; not read (marl_deploy_node's imu_offset_*_deg trim it)
+  orientation: calibrated   # trained with the static offset removed: the deploy applies the robot's calibration
+                            # (config/imu_calibration.yaml) and refuses to start without one. raw (or absent, as in
+                            # exports with quat_bias_deg: {roll: [-0.6, 0.4], pitch: [-3.6, -2.0], yaw: [-1.0, 1.0]},
+                            # the bias drawn around the robot's): trained on the quaternion as reported, the deploy
+                            # applies no calibration (ignores the robot's)
+  residual_deg: {roll: [-1.0, 1.0], pitch: [-1.0, 1.0], yaw: [-1.0, 1.0]}
+                            # the calibration error it trained to tolerate (calibrated only; logged)
   gyro_lowpass_hz: 8.0      # Hz, cutoff of the GyroLowpass on the angular velocity; absent: none
-# Runs on the torso IMU (from 2026-11-20) also carry, in the imu block (the shipped policy predates them, so they are
-# comments here: test_example_configs.py compares this file's keys with the shipped export.yaml's):
-#   source: lowstate          # the policy reads /lowstate imu_state (frame imu_link)
-#   acc: dropped              # its actors don't observe the accelerometer
-#   and one of:
-#   quat_bias_deg: {roll: [-0.6, 0.4], pitch: [-3.6, -2.0], yaw: [-1.0, 1.0]}
-#                             # orientation raw (no orientation key): trained on the quaternion as reported, its bias
-#                             # drawn around the robot's; the deploy applies no calibration (ignores the robot's)
-#   orientation: calibrated   # trained with the static offset removed: the deploy applies the robot's calibration
-#                             # (config/imu_calibration.yaml) and refuses to start without one. Explicit raw: as above
-#   residual_deg: {roll: [-1.0, 1.0], pitch: [-1.0, 1.0], yaw: [-1.0, 1.0]}
-#                             # the calibration error it trained to tolerate (calibrated only; logged)
-
-# Runs from 2026-11-22 also carry the legs' engage blend they trained with (a comment here: the shipped policy predates
-# it, and test_example_configs.py compares this file's keys with the shipped export.yaml's):
-#   engage_blend_s: 0.5       # s after the engage over which the legs' targets go linearly from the pre-pose's last
-#                             # command to the policy's; absent or 0: none
+  acc: dropped              # its actors don't observe the accelerometer
 
 # The sport-mode runs' exports (from LocoManip-LegsSquare-v0 on) also carry what they trained with, over the deploy
 # config's keys of the same names (example.yaml):
@@ -50,6 +42,8 @@ default_joint_pos: [0.0, -0.375, 0.0, 0.697, -0.322, 0.0, 0.0, -0.375, 0.0, 0.69
 leg_action_scales: [0.2, 0.2, 0.2, 0.1875, 0.125, 0.25, 0.2, 0.2, 0.2, 0.1875, 0.125, 0.25]   # per leg joint
 arm_residual_scales: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # 0: IK alone
 max_ik_step: 0.05           # rad per policy step
+engage_blend_s: 0.5         # s after the engage over which the legs' targets go linearly from the pre-pose's last
+                            # command to the policy's (runs from 2026-11-22); absent or 0: none
 # recorded by exports from 2026-11-16. The controller reads the first two from the deploy config's arms block
 # (h12.yaml: the same values), so a run that trains with others needs them set there; clip_actions overrides it.
 residual_cutoff_hz: 3.0     # Hz, the arms' residual low-pass

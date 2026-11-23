@@ -5,9 +5,10 @@ Runs a two-agent MARL policy from Locomanipulation_game (branch `marl-direct`,
 delay in training) on the H1-2. The policies live one per robot, in `policies/h12/` and
 `policies/g1/` (empty so far), **one iteration at a time: a new export replaces the robot's
 folder, and old ones are deleted, not kept beside it** (`policies/README.md`). `policies/h12/` holds
-LegsEnergyDefault200k_s43 (LocoManip-LegsOnly-v0: the sport-mode recipe at 100 Hz, legs only, so it
-refuses arm goals; trained with a mechanical-power penalty and no pelvis-height reward, and its legs
-actor is not shown the wrist targets); its `export.yaml`'s `source` names the checkpoint. A
+LegsEngageBlend200k_s42 (LocoManip-LegsOnly-v0: the sport-mode recipe at 100 Hz, legs only, so it
+refuses arm goals; on the calibrated torso IMU, `imu.source: lowstate`, so it needs the robot's entry in
+`config/imu_calibration.yaml`; trained to engage from a sagged pre-pose with a 0.5 s leg target blend,
+`engage_blend_s`, and its legs actor is not shown the wrist targets); its `export.yaml`'s `source` names the checkpoint. A
 **legs** agent that walks on `/cmd_vel`, and an **arms** agent that reaches
 wrist-pose goals through a damped-least-squares IK step plus a learned
 residual. One node, `marl_deploy_node`, owns all 27 joints. It publishes
@@ -202,7 +203,7 @@ ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger         
 - Same `safety_config` and `use_slam` arguments as the sim launch; keep `use_slam` on for arm goals.
 
 **Before the first real run:**
-- **IMU.** The node reads only the MID360's `/livox/imu`, never `LowState.imu_state`, whose attitude carries a ~2.5 deg calibration error. `/livox/imu` is in the URDF's `livox_imu_link` (the IMU chip), the MID-360's raw frame, upside down on the H1-2's head (CL_Assets `d7ef401` on). The node carries the readings from there into the frame the policy trained with, `export.yaml`'s `imu.frame`, through the URDF (`livox_imu.livox_to_imu_rotation`, tested by `test_urdf_mount_takes_the_raw_livox_frame_to_each_policy_frame`):
+- **IMU** (`/livox/imu` policies; the shipped one is on the torso IMU, below). The node reads only the MID360's `/livox/imu`, never `LowState.imu_state`, whose attitude carries a ~2.5 deg calibration error. `/livox/imu` is in the URDF's `livox_imu_link` (the IMU chip), the MID-360's raw frame, upside down on the H1-2's head (CL_Assets `d7ef401` on). The node carries the readings from there into the frame the policy trained with, `export.yaml`'s `imu.frame`, through the URDF (`livox_imu.livox_to_imu_rotation`, tested by `test_urdf_mount_takes_the_raw_livox_frame_to_each_policy_frame`):
   - `livox_imu_link`: the chip upright, as the policies trained it (Locomanipulation_game's CL_Assets pin is older than `d7ef401`): the raw frame turned half a turn about x;
   - `livox_link` (the point frame, 0.7 deg from the chip), upright the same way;
   - `imu_link` on `torso_link` for Explicit500 and older (the default when the export has no `imu` block).

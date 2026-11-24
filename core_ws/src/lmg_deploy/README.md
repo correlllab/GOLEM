@@ -94,6 +94,9 @@ legs' list may leave out `ee_targets`: LocoManip-LegsOnly-v0 runs from 2026-11-1
   this cutoff each control step, after the engage blend and before the bounds (the legs observe the filtered targets,
   as in training). It starts at the pre-pose's last command at the engage, else at the measured legs. Absent or 0:
   none. A policy trained with it must not run on an lmg_deploy without it.
+- `joint_vel_lowpass` (runs from 2026-11-24): the motor drivers' 2nd-order low-pass at ~21 Hz on the hip, knee and
+  torso velocities /lowstate reports, which those runs trained with. The robot does it itself, so the node reads
+  nothing of it; it is there for the MuJoCo evals.
 - `arm_goal_frame: pelvis` and `arm_goal_keeps_walking: true` (LocoManip-Marl-Direct-v0 from 2026-11-19): an arm goal
   rides on the pelvis (the SLAM odometry doesn't move it) and the velocity command stays live through it.
 - With an `arm_ik` block in `export.yaml` (runs whose arms trained with `mdp.IKPostureArmAction`:

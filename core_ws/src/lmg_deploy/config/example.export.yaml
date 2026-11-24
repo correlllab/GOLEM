@@ -40,6 +40,9 @@ imu:
 # and runs from 2026-11-24 the legs' target low-pass (likewise a comment):
 #   leg_action_lowpass_hz: 8.0  # Hz, the one-pole low-pass on the legs' targets each control step, before the bounds;
 #                               # absent or 0: none
+#   joint_vel_lowpass:          # the motor drivers' low-pass on the reported joint velocities the run trained with
+#     cutoff_hz: 21.0           # (the robot applies it itself: not read here; Locomanipulation_game's MuJoCo evals
+#     joints: [".*_hip_(yaw|pitch|roll)_joint", ".*_knee_joint", "torso_joint"]   # apply it)
 
 # The sport-mode runs' exports (from LocoManip-LegsSquare-v0 on) also carry what they trained with, over the deploy
 # config's keys of the same names (example.yaml):

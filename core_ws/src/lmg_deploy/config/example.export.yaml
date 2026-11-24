@@ -62,7 +62,9 @@ command_ranges:             # the run's command ranges; /cmd_vel is clipped to t
   lin_vel_y: [-0.54, 0.54]
   ang_vel_z: [-0.97, 0.97]
 command_filter_tau: 0.5     # s, the velocity command's low-pass
-arm_goals: false            # the run never trained an arm goal (arm_goal_prob 0); the deploy refuses one
+arm_goals: true             # the run trained arm goals; false (arm_goal_prob 0): the deploy refuses one
+arm_goal_frame: pelvis      # LocoManip-Marl-Direct-v0: the goal rides on the pelvis (world: odometry moves it)
+arm_goal_keeps_walking: true  # the legs keep following /cmd_vel during an arm goal (false: zero command)
 # the legs' list may leave out ee_targets (LocoManip-LegsOnly-v0 runs from 2026-11-16; legs.num_obs is then 83)
 legs_obs_terms: [base_lin_acc, base_ang_vel, projected_gravity, velocity_commands, arm_goal, ee_targets, joint_pos,
                  joint_vel, gait_phase, gait_phase_cos, actions]
@@ -71,43 +73,42 @@ arms_obs_terms: [base_lin_acc, base_ang_vel, projected_gravity, velocity_command
 
 # Runs whose arms trained with mdp.IKPostureArmAction (LocoManip-ArmsOnly-v0, LocoManip-Marl-Direct-v0 from 2026-11-19)
 # also carry its settings and, with posture_from_command, arm_seed_table; the controller then runs the arms as that
-# action term does (controller.py's module doc). The shipped policy has none, so they are documented here as comments
-# (test_example_configs.py compares this file's keys with the shipped export.yaml's). Coexist200k_s42's:
-# arm_ik:
-#   rot_weight: 0.3             # the rotation error's weight against position's (1 per m), the IK's and the integral's
-#   null_gain: 0.05             # without trajectory: share of the posture error the null-space pull asks per step
-#   posture_scale: 0.5          # rad of posture offset per action unit (posture_actions)
-#   posture_gain: 1.0           # times posture_scale
-#   limit_margin: 0.05          # rad: the posture (and the IK's joint locks) stay this far inside the target bounds
-#   ik_damping: 0.05            # the weighted DLS damping (integral, and the IK without trajectory)
-#   ik_passes: 3                # without trajectory: solves per step, locking the joints that would pass their bounds
-#   posture_from_command: true  # the posture is the seed table's row nearest the arm command (else the default angles)
-#   trajectory: true            # the target moves from its own last value to the posture (else one IK step from q)
-#   seed_rot_weight: 0.3        # m per rad of rotation in the seed lookup's distance
-#   posture_actions: false      # true: the arms' action is 28 wide, the residual then the posture offset
-#   trajectory_max_vel: 2.0     # rad/s, each arm's fastest joint (null: max_ik_step per joint per step)
-#   trajectory_max_acc: 10.0    # rad/s^2, its velocity change (null: no limit)
-#   gravity_offset: true        # the target carries minus each arm joint's gravity torque at it over kp
-#   residual_integrate:         # the residual integrated, not low-passed (absent: residual_cutoff_hz's low-pass)
-#     gain: 0.02                # action units added per step per action unit
-#     leak_s: 5.0               # s, its leak toward 0
-#     clamp: 1.0                # action units
-#   integral:                   # the measured wrists' pose error integrated onto the target once it has stopped
-#     gain: 0.01                # share of the weighted DLS step on the error added per step
-#     leak_s: 60.0              # s
-#     clamp: 0.3                # rad per joint
-#   freeze:                     # the residual latched once the wrists sit on the command
-#     pos_tol: 0.001            # m, each wrist
-#     rot_tol: 0.0873           # rad, each wrist
-#     settle_s: 0.5             # s on the goal, the target stopped, before the latch
-#   seed_solve:                 # the nearest row's angles solved for the commanded poses themselves, once per goal
-#     iters: 20
-#     damping: 0.05
-#     rot_weight: 0.5
-#     joint_range_margin: 0.1   # rad inside the soft limits
-#     soft_limit_factor: 0.9    # not written by export_marl.py; default 0.9, the training asset's soft-limit factor
-# arm_seed_table: arm_seed_table.npz   # per arm the goal table's poses (poses_<arm>, pelvis frame, x y z qw qx qy qz)
-#                                      # and joint angles (joints_<arm>), next to export.yaml
+# action term does (controller.py's module doc). Coop300k_s42's:
+arm_ik:
+  rot_weight: 0.3             # the rotation error's weight against position's (1 per m), the IK's and the integral's
+  null_gain: 0.05             # without trajectory: share of the posture error the null-space pull asks per step
+  posture_scale: 0.5          # rad of posture offset per action unit (posture_actions)
+  posture_gain: 1.0           # times posture_scale
+  limit_margin: 0.05          # rad: the posture (and the IK's joint locks) stay this far inside the target bounds
+  ik_damping: 0.05            # the weighted DLS damping (integral, and the IK without trajectory)
+  ik_passes: 3                # without trajectory: solves per step, locking the joints that would pass their bounds
+  posture_from_command: true  # the posture is the seed table's row nearest the arm command (else the default angles)
+  trajectory: true            # the target moves from its own last value to the posture (else one IK step from q)
+  seed_rot_weight: 0.3        # m per rad of rotation in the seed lookup's distance
+  posture_actions: false      # true: the arms' action is 28 wide, the residual then the posture offset
+  trajectory_max_vel: 2.0     # rad/s, each arm's fastest joint (null: max_ik_step per joint per step)
+  trajectory_max_acc: 10.0    # rad/s^2, its velocity change (null: no limit)
+  gravity_offset: true        # the target carries minus each arm joint's gravity torque at it over kp
+  residual_integrate:         # the residual integrated, not low-passed (absent: residual_cutoff_hz's low-pass)
+    gain: 0.02                # action units added per step per action unit
+    leak_s: 5.0               # s, its leak toward 0
+    clamp: 1.0                # action units
+  integral:                   # the measured wrists' pose error integrated onto the target once it has stopped
+    gain: 0.01                # share of the weighted DLS step on the error added per step
+    leak_s: 60.0              # s
+    clamp: 0.3                # rad per joint
+  freeze:                     # the residual latched once the wrists sit on the command
+    pos_tol: 0.001            # m, each wrist
+    rot_tol: 0.0873           # rad, each wrist
+    settle_s: 0.5             # s on the goal, the target stopped, before the latch
+  seed_solve:                 # the nearest row's angles solved for the commanded poses themselves, once per goal
+    iters: 20
+    damping: 0.05
+    rot_weight: 0.5
+    joint_range_margin: 0.1   # rad inside the soft limits
+  # soft_limit_factor: 0.9    # not written by export_marl.py; default 0.9, the training asset's soft-limit factor
+arm_seed_table: arm_seed_table.npz     # per arm the goal table's poses (poses_<arm>, pelvis frame, x y z qw qx qy qz)
+                                       # and joint angles (joints_<arm>), next to export.yaml
 
 # Where the export came from; marl_deploy_node logs it at start.
 source:

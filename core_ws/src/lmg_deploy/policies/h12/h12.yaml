@@ -65,7 +65,7 @@ legs:
 
 arms:
   policy: arms.pt
-  num_obs: 122
+  num_obs: 108
   num_actions: 14
   residual_scale: 0.2       # target = q + IK step + scale * residual
   residual_cutoff_hz: 3.0   # residual = the action low-passed (one pole, per policy step); the arms observe it

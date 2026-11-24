@@ -1,18 +1,18 @@
 rest_pose:
-- - 0.234006
-  - 0.209505
-  - 0.094968
-  - 1.0
-  - 3.0e-06
-  - 2.0e-06
-  - 9.0e-06
 - - 0.234012
-  - -0.209478
-  - 0.094963
+  - 0.209501
+  - 0.094979
   - 1.0
-  - 3.0e-06
-  - 9.0e-06
-  - 9.0e-06
+  - 1.0e-06
+  - -4.0e-06
+  - -5.0e-06
+- - 0.234008
+  - -0.20949
+  - 0.094979
+  - 1.0
+  - 1.0e-06
+  - -3.0e-06
+  - -5.0e-06
 target_limits:
   left_hip_yaw_joint:
   - -0.409
@@ -54,47 +54,47 @@ target_limits:
   - -2.329
   - 2.329
   left_shoulder_pitch_joint:
-  - -3.119
-  - 1.549
+  - -3.039
+  - 1.469
   left_shoulder_roll_joint:
-  - -0.359
-  - 3.379
+  - -0.279
+  - 3.299
   left_shoulder_yaw_joint:
-  - -2.639
-  - 2.989
+  - -2.559
+  - 2.909
   left_elbow_joint:
-  - -0.929
-  - 3.159
+  - -0.849
+  - 3.079
   left_wrist_roll_joint:
-  - -2.989
-  - 2.729
+  - -2.909
+  - 2.649
   left_wrist_pitch_joint:
-  - -0.4415
-  - 0.4415
+  - -0.3615
+  - 0.3615
   left_wrist_yaw_joint:
-  - -1.249
-  - 1.249
+  - -1.169
+  - 1.169
   right_shoulder_pitch_joint:
-  - -3.119
-  - 1.549
+  - -3.039
+  - 1.469
   right_shoulder_roll_joint:
-  - -3.379
-  - 0.359
+  - -3.299
+  - 0.279
   right_shoulder_yaw_joint:
-  - -2.989
-  - 2.639
+  - -2.909
+  - 2.559
   right_elbow_joint:
-  - -0.929
-  - 3.159
+  - -0.849
+  - 3.079
   right_wrist_roll_joint:
-  - -2.729
-  - 2.989
+  - -2.649
+  - 2.909
   right_wrist_pitch_joint:
-  - -0.4415
-  - 0.4415
+  - -0.3615
+  - 0.3615
   right_wrist_yaw_joint:
-  - -1.249
-  - 1.249
+  - -1.169
+  - 1.169
 gait_phase_cos: true
 imu:
   source: lowstate
@@ -215,24 +215,56 @@ leg_action_scales:
 - 0.125
 - 0.25
 arm_residual_scales:
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
+- 0.048
+- 0.03
+- 0.15
+- 0.1
+- 0.2
+- 0.2
+- 0.2
+- 0.048
+- 0.03
+- 0.15
+- 0.1
+- 0.2
+- 0.2
+- 0.2
 max_ik_step: 0.05
-residual_cutoff_hz: 3.0
+residual_cutoff_hz: 1.0
 ik_damping: 0.05
 clip_actions: 10.0
+arm_ik:
+  rot_weight: 0.3
+  null_gain: 0.05
+  posture_scale: 0.5
+  posture_gain: 1.0
+  limit_margin: 0.05
+  ik_damping: 0.05
+  ik_passes: 3
+  posture_from_command: true
+  trajectory: true
+  seed_rot_weight: 0.3
+  posture_actions: false
+  trajectory_max_vel: 2.0
+  trajectory_max_acc: 10.0
+  gravity_offset: true
+  residual_integrate:
+    gain: 0.02
+    leak_s: 5.0
+    clamp: 1.0
+  integral:
+    gain: 0.01
+    leak_s: 60.0
+    clamp: 0.3
+  freeze:
+    pos_tol: 0.001
+    rot_tol: 0.08726646259971647
+    settle_s: 0.5
+  seed_solve:
+    iters: 20
+    damping: 0.05
+    rot_weight: 0.5
+    joint_range_margin: 0.1
 gait_period: 0.7
 zero_cmd_eps: 0.03
 command_ranges:
@@ -246,7 +278,9 @@ command_ranges:
   - -0.97
   - 0.97
 command_filter_tau: 0.5
-arm_goals: false
+arm_goals: true
+arm_goal_frame: pelvis
+arm_goal_keeps_walking: true
 legs_obs_terms:
 - base_ang_vel
 - projected_gravity
@@ -257,20 +291,15 @@ legs_obs_terms:
 - gait_phase_cos
 - actions
 arms_obs_terms:
-- base_ang_vel
-- projected_gravity
-- velocity_commands
-- arm_goal
 - ee_targets
 - joint_pos
 - joint_vel
-- gait_phase
-- gait_phase_cos
 - actions
 - wrist_poses
 - wrist_errors
 source:
-  checkpoint: /home/max/Locomanipulation_game/logs/skrl/locomanip_marl/2026-11-22_10-44-28_LegsFastEnv60k_s42/checkpoints/agent_60048.pt
-  target_tables: /home/max/Locomanipulation_game/source/locomanipulation_game/locomanipulation_game/data/arm_target_tables_v3.pt
-  task: LocoManip-LegsOnly-v0
-  exported: '2026-11-22T17:16:51'
+  checkpoint: /home/max/Locomanipulation_game_noise/logs/skrl/locomanip_marl/2026-11-24_00-13-33_Coop300k_s42/checkpoints/agent_150000.pt
+  target_tables: /home/max/Locomanipulation_game_noise/logs/skrl/locomanip_marl/2026-11-24_00-13-33_Coop300k_s42/arm_target_tables_armsonly_v2.pt
+  task: LocoManip-Marl-Direct-v0
+  exported: '2026-11-24T10:43:12'
+arm_seed_table: arm_seed_table.npz

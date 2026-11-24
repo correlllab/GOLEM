@@ -263,17 +263,21 @@ It picks the still samples (every leg joint under 0.2 rad/s, the gyro under 0.1 
 (the sole level, yaw unobservable: it stays 0), and fits the quaternion's tilt to it. Each foot gives its own estimate;
 their disagreement is the quality check (over 0.5 deg it warns: a foot on its edge, uneven floor, the hoist carrying
 weight, a joint zero offset). Write the value in `config/imu_calibration.yaml` with the date, the method and each
-bag's numbers, only when two recordings agree within 0.3 deg in roll and pitch.
+bag's numbers, only when two recordings agree within 0.3 deg in roll and pitch. On floor that is not level within
+about 0.2 deg, record pairs on one spot, facing forward and turned 180 deg, and compare the pairs' means: a floor
+slope flips sign with the turn. A taut hoist is fine when the pre-pose does not stand alone; a sole it lifts shows
+in the feet's disagreement.
 
-The 2026-11-20 deploy bags (`lmg_legsenergy200k_s43_2026-11-20_1157` / `_1449`, lowered onto the feet under the hoist)
-give roll +0.42 / +0.11, pitch -2.12 / -2.50 deg, but their feet disagree by 3.0-3.4 deg in pitch (the right sole
-~3 deg more toe-down than the left by kinematics) and the bags by 0.31 / 0.38 deg; the H1-2's entry was provisional,
-roll +0.1, pitch -2.7, the middle of every estimate. The 2026-11-23 LegsFastEnv60k_s42 bags (an 18.7 min stand on
-flat feet, `standing2`, and two deploy runs) set the pitch to -2.2: the midpoint of calibrate_imu on that stand
-(pitch -2.11; the feet again disagree by 2.9 deg, a suspected right ankle pitch zero offset) and the quaternion
-against the torso accelerometer (pitch -2.31..-2.34 in every standing window of all three bags; accelerometer and
-kinematics agree within 0.23 deg on the flat stand). Roll stays +0.1 until the right ankle zero is checked (kinematics
-+0.83, accelerometer -0.17). `config/imu_calibration.yaml` has the numbers.
+The H1-2's entry (roll +1.0, pitch -1.7, 2026-11-24) holds only with the right ankle zero offsets set on its motor
+controller (motor 10 -3.4, motor 11 4.7 in the Unitree app). Without them the right sole read ~3.4 deg toe-up and
+~1.2 deg rolled against the left on flat feet, so the feet disagreed by ~3 deg in every earlier recording. It is the
+mean of two pairs of recordings on one spot, facing forward and turned 180 deg (a floor slope flips sign with the
+turn, so a pair's mean cancels it), in the pre-pose with the hoist taut (the pre-pose does not balance alone); the
+pairs agree within 0.29 roll, 0.04 pitch, and the feet within 0.41 in every recording. The torso accelerometer reads
+1.0 roll, 0.65 pitch away from the leg kinematics, floor-free (the quaternion against it: roll -0.2, pitch -2.35):
+most likely an IMU board tilted on `torso_link` (else an offset shared by both legs, which a flat-footed stand
+cannot see); the kinematic value removes the tilt with the estimator's offset.
+`config/imu_calibration.yaml` has the numbers.
 
 **At run time,** once the policy is engaged on the torso IMU and has stood still on both loaded feet at zero command
 for 5 s, the node compares the IMU tilt the policy sees with the kinematic one (the estimator's function) and warns

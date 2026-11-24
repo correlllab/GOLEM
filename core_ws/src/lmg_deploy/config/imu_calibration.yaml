@@ -15,36 +15,32 @@
 # Measure with calibrate_imu (README "IMU calibration"): both feet flat on level ground, still. Write the date, the
 # method and each bag's numbers beside the value. Yaw is unobservable that way: leave it 0.
 
-# H1-2: pitch -2.2 (2026-11-23), the midpoint of the leg kinematics (-2.11) and the torso accelerometer (-2.33) on a
-# flat-footed stand; roll stays +0.1 (provisional, below) until the right ankle pitch zero is checked.
-# Measured on the 2026-11-23 bags of LegsFastEnv60k_s42 (fastenv60k_2026-11-23/):
-#   standing2 (an 18.7 min stand, both feet flat), calibrate_imu: roll +0.83 pitch -2.11 (112986 still samples); left
-#     foot pitch -0.68, right -3.54: the feet disagree by 2.87 pitch, 0.08 roll (the right sole ~3 deg more toe-down by
-#     kinematics again, as on 11-20: a suspected right ankle pitch encoder zero offset)
-#   the quaternion against the torso IMU's own accelerometer tilt, standing windows: pitch -2.34 / roll -0.18
-#     (standing2), -2.34 / -0.17 (lmg_legsfastenv60k_s42_2026-11-23_1445), -2.31 / -0.16 (_1440; the robot leaned back
-#     onto its heels in _1440 and _1445): constant across 35 min and 6 deg of real lean
-#   standing2's accelerometer tilt against its leg kinematics: pitch agree within 0.23
-# The two methods agree in pitch (-2.11 / -2.33) but not in roll (+0.83 / -0.17): the kinematic roll leans on the
-# right ankle. Re-check the right ankle zero, then settle roll.
-#
-# Previously (2026-11-22) provisional roll +0.1, pitch -2.7, the middle of every estimate. Measured 2026-11-21 with
-# calibrate_imu (forward kinematics soles -> imu_link against the quaternion, still windows with both knees loaded) on
-# the two 2026-11-20 deploy bags, robot lowered onto its feet under the hoist in the pre-pose:
-#   lmg_legsenergy200k_s43_2026-11-20_1157: roll +0.42 pitch -2.12 (4589 /lowstate samples, 9.2 s); left foot +1.04 / -0.42,
-#     right foot -0.20 / -3.83: the feet disagree by 1.24 roll, 3.41 pitch
-#   lmg_legsenergy200k_s43_2026-11-20_1449: roll +0.11 pitch -2.50 (4374 samples, 8.7 s); left +0.56 / -1.02, right
-#     -0.34 / -3.99: the feet disagree by 0.90 roll, 2.97 pitch
-# The bags differ by 0.31 roll and 0.38 pitch (the bar is 0.3), and in both the right sole sits ~3 deg more toe-down
-# than the left by kinematics (the legs' pitch chains differ by 0.06 rad), so the "both soles flat" premise doesn't
-# hold: an ankle encoder offset, uneven floor, or the hoist still carrying weight. Other references: the quaternion
-# reads pitch -2.3 / roll -0.2 against the torso accelerometer, -3.2..-3.4 / -0.05..+0.2 against the head MID-360;
-# the raw-IMU policies trained on an offset of roll -0.6..+0.4, pitch -3.6..-2.0. Every estimate is within 0.65 deg of
-# roll +0.1, pitch -2.7, inside the +-1 deg error the calibrated policies train to tolerate (imu.residual_deg).
-# It was to be re-measured on flat floor with the hoist slack (and the ankle zeros checked): the 11-23 stand above.
+# H1-2: roll +1.0, pitch -1.7 (2026-11-24), calibrate_imu averaged over two 180-deg turned pairs. Valid only with
+# the right ankle zero offsets set on its motor controller (Unitree app): motor 10 (right_ankle_pitch) -3.4, motor 11
+# (right_ankle_roll) 4.7; re-measure after any re-zeroing. Before those offsets the right sole read ~3.4 deg toe-up and
+# ~1.2 deg rolled against the left with both soles flat, so every earlier calibrate_imu estimate is biased.
+# Method: pre-pose (waiting_confirm) on the feet, hoist taut (the pre-pose does not balance alone), 40 s of /lowstate
+# still per recording, on one taped spot facing forward (A) and turned 180 deg (B); the floor there reads 0.1-0.2 deg
+# front-high and 0.2-0.4 deg roll by phone level. A floor slope flips sign with the turn, so each pair's mean cancels
+# it. Bags imucal_<name>_2026-11-24 (motor 11 at 5.0 in A3-B4, 4.7 in A5):
+#   A3: roll +0.21 pitch -2.06 (4124 samples), feet disagree 0.41 roll, 0.04 pitch
+#   B3: roll +1.17 pitch -1.42 (4122), feet 0.24 / 0.04
+#   A4: roll +0.68 pitch -1.99 (4124), feet 0.26 / 0.09
+#   B4: roll +1.27 pitch -1.41 (4124), feet 0.39 / 0.02
+#   pair means: A3+B3 +0.69 / -1.74, A4+B4 +0.97 / -1.70 (they agree within 0.29 / 0.04); with motor 11's
+#   4.7 (+0.3 deg on the right ankle roll) applied in the analysis, the mean is +0.98 / -1.69
+#   A5 (motor 11 at 4.7): roll +0.53 pitch -1.98, feet 0.24 / 0.11; less the forward floor shift of the pairs
+#   (-0.39 / -0.30): +0.92 / -1.68
+# The torso accelerometer disagrees: the quaternion against it reads roll -0.2, pitch -2.35 in every bag, either way
+# round (as on 2026-11-23), so floor-free the accelerometer and the leg kinematics differ by +1.0 roll, +0.65 pitch.
+# An IMU board tilted on torso_link would do that (the likelier cause, unmeasured on the real H1-2), as would an
+# offset shared by both legs, which a flat-footed stand cannot see. This value removes both the estimator's offset
+# and a board tilt, so the policy sees torso_link's attitude. rotate_gyro stays false: about 1 deg of the offset
+# would be a physical tilt, which leaves the gyro ~1 deg off its axes, and rotating it by the whole offset would
+# over-rotate it by the estimator's ~2.4 deg.
 h12:
-  roll_deg: 0.1
-  pitch_deg: -2.2
+  roll_deg: 1.0
+  pitch_deg: -1.7
   yaw_deg: 0.0
   rotate_gyro: false
 

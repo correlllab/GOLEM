@@ -9,10 +9,21 @@ An LSTM actor (export_marl.py's RecurrentActor: forward(obs, h, c) ->
 RecurrentTorchScriptNetwork, which carries the hidden state from step to step;
 reset() zeroes it, as training zeroed it at every episode start.
 load_network picks the wrapper.
+
+Warm-up: TorchScript's profiling executor runs a module's first call to
+record shapes and compiles the optimized graph on the second, which took the
+first policy step after the engage 23-49 ms on the robot (the 2026-11-23 bags'
+one late /safety/lowcmd_lower_in, then rclpy's missed tick 2-5 ms after it).
+Each wrapper therefore runs WARMUP_CALLS forward passes on zeros at load, the
+same path as a real step, and a recurrent one then zeroes its state: the
+network's output on any later input is what an unwarmed one would compute
+(the controller also resets the networks at every engage).
 """
 
 import numpy as np
 import torch
+
+WARMUP_CALLS = 3   # forward passes at load: the profiling run, the optimizing one, one on the optimized graph
 
 
 class TorchScriptNetwork:
@@ -27,6 +38,7 @@ class TorchScriptNetwork:
         if out.shape != (1, num_outputs):
             raise ValueError(f"{path}: {num_inputs} inputs gave output shape {tuple(out.shape)}, "
                              f"expected (1, {num_outputs})")
+        warm_up(self, num_inputs)
 
     def reset(self) -> None:
         """Do nothing: a feed-forward actor has no state."""
@@ -52,6 +64,7 @@ class RecurrentTorchScriptNetwork:
         if out.shape != (1, num_outputs):
             raise ValueError(f"{path}: {num_inputs} inputs gave output shape {tuple(out.shape)}, "
                              f"expected (1, {num_outputs})")
+        warm_up(self, num_inputs)
 
     def reset(self) -> None:
         """Zero the hidden and cell state, as at an episode start."""
@@ -63,6 +76,14 @@ class RecurrentTorchScriptNetwork:
         with torch.inference_mode():
             out, self._h, self._c = self.module(torch.from_numpy(x.astype(np.float32)).unsqueeze(0), self._h, self._c)
         return out.squeeze(0).numpy().astype(np.float64)
+
+
+def warm_up(network, num_inputs: int) -> None:
+    """Run WARMUP_CALLS steps of `network` on zero observations (its real call path), then reset its state."""
+    zeros = np.zeros(num_inputs, dtype=np.float64)
+    for _ in range(WARMUP_CALLS):
+        network(zeros)
+    network.reset()
 
 
 def load_network(path: str, num_inputs: int, num_outputs: int):

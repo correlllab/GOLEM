@@ -169,6 +169,9 @@ PREPOSE_MAX_S = 8.0         # s after the ramp; posed or not, stop waiting
 DEFAULT_IMU_FRAME = "imu_link"   # exports without an imu block (Explicit500) trained on the torso IMU
 IMU_OFFSET_PARAMS = ("imu_offset_roll_deg", "imu_offset_pitch_deg", "imu_offset_yaw_deg")
 IMU_OFFSET_RANGE_DEG = 15.0  # deg, the range ros2 param set accepts for each trim
+# A tick this soon after the last command (a fraction of the control period) sends nothing: after an overrun rclpy
+# runs the missed tick at once, which sent the next targets 2-5 ms after the late ones (the 11-23 bags' engage).
+MIN_COMMAND_GAP = 0.5
 TILT_CHECK_HOLD_S = 5.0     # s standing still on both feet before the IMU tilt is compared with the kinematic one
 TILT_CHECK_TOL_DEG = 1.0    # deg; a larger difference warns once
 SLAM_STALE_S = 0.5          # s; /Odometry older than this while reaching: warn that the goals ride with the pelvis
@@ -290,6 +293,7 @@ class MarlDeployNode(Node):
         self._prepose_pass = 0
         self._prepose_start: np.ndarray | None = None
         self._last_sent: np.ndarray | None = None   # rad, the last 27 targets published (the engage blend starts there)
+        self._last_publish: float | None = None     # monotonic time they went out
         self._engaged = False
         self._band_released = not bool(self.get_parameter("disable_elastic_band").value)
         self._band_release_at: float | None = None
@@ -586,6 +590,7 @@ class MarlDeployNode(Node):
                 m.kd = float(cmd.kd[i])
             pub.publish(msg)
         self._last_sent = cmd.q.copy()
+        self._last_publish = time.monotonic()
 
     def _release_band(self) -> None:
         """Call /elastic_band/toggle once it is available, one call at a time."""
@@ -636,6 +641,11 @@ class MarlDeployNode(Node):
         state = self._robot_state(msg)
         if not (np.isfinite(state.q).all() and np.isfinite(state.quat).all()):
             self._latch("non-finite /lowstate")
+            return
+        if self._last_publish is not None and now - self._last_publish < MIN_COMMAND_GAP / self._control_hz:
+            # rclpy's catch-up for a tick an overrun missed: the next tick on the timer's grid steps instead
+            self.get_logger().warn(f"tick {1e3 * (now - self._last_publish):.1f} ms after the last command "
+                                   "(the previous tick overran); skipping it", throttle_duration_sec=1.0)
             return
 
         if not self._engaged:

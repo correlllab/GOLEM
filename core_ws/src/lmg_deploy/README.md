@@ -266,11 +266,13 @@ bag's numbers, only when two recordings agree within 0.3 deg in roll and pitch.
 
 The 2026-11-20 deploy bags (`lmg_legsenergy200k_s43_2026-11-20_1157` / `_1449`, lowered onto the feet under the hoist)
 give roll +0.42 / +0.11, pitch -2.12 / -2.50 deg, but their feet disagree by 3.0-3.4 deg in pitch (the right sole
-~3 deg more toe-down than the left by kinematics) and the bags by 0.31 / 0.38 deg. The H1-2's entry is therefore
-provisional: roll +0.1, pitch -2.7, the middle of every estimate (those bags, the torso accelerometer, the head
-MID-360, the offset the raw-IMU policies trained on), all within 0.65 deg of it and so inside the +-1 deg the
-calibrated policies train to tolerate. Replace it once two recordings agree (`config/imu_calibration.yaml` has the
-numbers).
+~3 deg more toe-down than the left by kinematics) and the bags by 0.31 / 0.38 deg; the H1-2's entry was provisional,
+roll +0.1, pitch -2.7, the middle of every estimate. The 2026-11-23 LegsFastEnv60k_s42 bags (an 18.7 min stand on
+flat feet, `standing2`, and two deploy runs) set the pitch to -2.2: the midpoint of calibrate_imu on that stand
+(pitch -2.11; the feet again disagree by 2.9 deg, a suspected right ankle pitch zero offset) and the quaternion
+against the torso accelerometer (pitch -2.31..-2.34 in every standing window of all three bags; accelerometer and
+kinematics agree within 0.23 deg on the flat stand). Roll stays +0.1 until the right ankle zero is checked (kinematics
++0.83, accelerometer -0.17). `config/imu_calibration.yaml` has the numbers.
 
 **At run time,** once the policy is engaged on the torso IMU and has stood still on both loaded feet at zero command
 for 5 s, the node compares the IMU tilt the policy sees with the kinematic one (the estimator's function) and warns

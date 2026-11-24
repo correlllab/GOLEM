@@ -112,3 +112,20 @@ def test_silent_until_the_first_heartbeat_then_pre_poses_from_the_pose_at_the_be
     assert rig.states[-1] == "preposing"
     assert rig.lower[0].motor_cmd[0].q == pytest.approx(0.3, abs=1e-6)
     assert rig.lower[0].mode_machine == H12_MODE_MACHINE
+
+
+def test_a_tick_right_after_a_command_sends_nothing(rig):
+    """A tick within half a control period of the last command (rclpy's catch-up after an overrun) is skipped."""
+    rig.beating = True
+    rig.spin(5.0, until=lambda: rig.lower and rig.states[-1] == "preposing")
+    node = rig.node
+    time.sleep(0.6 / node._control_hz)   # not spinning: no timer tick in between
+    before, ticks = node._last_publish, node._prepose_ticks
+    node._tick()                          # on time: sends
+    sent = node._last_publish
+    assert sent > before and node._prepose_ticks == ticks + 1
+    node._tick()                          # at once: skipped
+    assert node._last_publish == sent and node._prepose_ticks == ticks + 1
+    n = len(rig.lower)
+    rig.spin(0.2)
+    assert len(rig.lower) > n            # the timer's next ticks send again

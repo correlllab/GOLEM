@@ -535,6 +535,75 @@ def test_controller_reset_resets_recurrent_actors():
     assert (legs.resets, arms.resets) == (before[0] + 1, before[1] + 1)
 
 
+SHIPPED = os.path.join(HERE, "..", "policies", "h12")
+
+
+def _shipped_cfg():
+    """Return policies/h12's deploy config, its export.yaml applied (as marl_deploy_node reads it)."""
+    with open(os.path.join(SHIPPED, "h12.yaml")) as f:
+        cfg = yaml.safe_load(f)
+    with open(os.path.join(SHIPPED, "export.yaml")) as f:
+        cfg.update(yaml.safe_load(f) or {})
+    return cfg
+
+
+def test_networks_warm_up_at_load_and_start_from_a_zero_state():
+    """load_network runs the actor a few times at load (TorchScript's slow first calls), then zeroes a recurrent
+    state: the wrapper's first steps equal the bare module's from a zero state, call for call."""
+    torch = pytest.importorskip("torch")
+    from lmg_deploy import networks
+    cfg = _shipped_cfg()
+    rng = np.random.default_rng(3)
+    for agent in ("legs", "arms"):
+        n_obs, n_act = cfg[agent]["num_obs"], cfg[agent]["num_actions"]
+        path = os.path.join(SHIPPED, cfg[agent]["policy"])
+        net = networks.load_network(path, n_obs, n_act)
+        cold = torch.jit.load(path, map_location="cpu")
+        cold.eval()
+        recurrent = isinstance(net, networks.RecurrentTorchScriptNetwork)
+        if recurrent:
+            assert not net._h.any() and not net._c.any()   # warmed, then reset
+            h = c = torch.zeros(net.state_shape)
+        for _ in range(4):
+            x = rng.normal(size=n_obs)
+            with torch.inference_mode():
+                xt = torch.from_numpy(x.astype(np.float32)).unsqueeze(0)
+                ref = (cold(xt, h, c) if recurrent else (cold(xt),))
+            if recurrent:
+                h, c = ref[1], ref[2]
+            np.testing.assert_allclose(net(x), ref[0].squeeze(0).numpy(), rtol=0.0, atol=1e-6)
+
+
+def test_warmed_controller_steps_as_a_cold_one(monkeypatch):
+    """The shipped policy's first steps after an engage reset are the same with the warm-up as without it."""
+    pytest.importorskip("torch")
+    from lmg_deploy import networks
+    from lmg_deploy.imu_calibration import FEET, IMU_FRAME
+    cfg = _shipped_cfg()
+    names = cfg["joint_names"]
+    imu_frame = (cfg.get("imu") or {}).get("frame", "imu_link")
+
+    def build(warmup_calls):
+        monkeypatch.setattr(networks, "WARMUP_CALLS", warmup_calls)
+        kin = ArmKinematics(URDF, names, cfg["arms"]["ee_frames"], [names[13:20], names[20:]],
+                            extra_frames=list(dict.fromkeys([cfg["slam_frame"], imu_frame, IMU_FRAME, *FEET])))
+        nets = [networks.load_network(os.path.join(SHIPPED, cfg[a]["policy"]), cfg[a]["num_obs"],
+                                      cfg[a]["num_actions"]) for a in ("legs", "arms")]
+        return MarlController(cfg, kin, *nets, imu_calibration={"roll_deg": 0.1, "pitch_deg": -2.2})
+
+    rng = np.random.default_rng(4)
+    states = [RobotState(q=np.array(cfg["default_joint_pos"]) + rng.normal(0, 0.03, 27), dq=rng.normal(0, 0.1, 27),
+                         quat=np.array([0.9998, 0.005, -0.019, 0.0]), gyro=rng.normal(0, 0.02, 3),
+                         acc=np.array([0.3, 0.1, 9.8])) for _ in range(5)]
+    held = np.array(cfg["default_joint_pos"]) + 0.01
+    outs = []
+    for warmup_calls in (0, networks.WARMUP_CALLS):
+        ctrl = build(warmup_calls)
+        ctrl.reset(states[0], held_target=held)   # the engage
+        outs.append([ctrl.step(s).q for s in states])
+    np.testing.assert_allclose(outs[1], outs[0], rtol=0.0, atol=1e-6)
+
+
 # -- manual mode switch and arm goals (~/set_mode, ~/set_arm_goals) ------------------------
 
 def test_starts_walking_and_switches_by_hand():

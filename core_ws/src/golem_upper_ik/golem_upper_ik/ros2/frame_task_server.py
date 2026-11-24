@@ -83,6 +83,20 @@ class _GoalKind(NamedTuple):
     direct_reached_message: str | None
 
 
+class _Outcome(NamedTuple):
+    """Hold how a goal's drive ended (FrameTaskServer._drive).
+
+    canceled: a cancel ended it. ik_converged: the IK had converged and the hold had started.
+    reached: the hold reached the target. blocked: the joints pinning the hold at a position
+    limit, or None.
+    """
+
+    canceled: bool
+    ik_converged: bool
+    reached: bool
+    blocked: str | None
+
+
 class FrameTaskServer(Node):
     """Serve /frame_task and /named_config and publish the frame poses (module doc)."""
 
@@ -335,6 +349,25 @@ class FrameTaskServer(Node):
         return self._run_goal(goal_handle, kind, timeout)
 
     def _run_goal(self, goal_handle, kind, timeout, ik_step=None):
+        """Drive the goal (_drive), then end it; return its result.
+
+        Unless canceled the goal succeeds, its result's success saying whether the IK
+        converged and the hold reached the target.
+        """
+        outcome = self._drive(goal_handle, kind, timeout, ik_step=ik_step)
+        if outcome.canceled:
+            return self._canceled(goal_handle, kind.result())
+        if not outcome.ik_converged:
+            self.get_logger().warn('Timed out before IK convergence')
+        else:
+            self._log_hold_outcome(outcome.reached, outcome.blocked)
+
+        goal_handle.succeed()
+        result = kind.result()
+        result.success = bool(outcome.ik_converged and outcome.reached)
+        return result
+
+    def _drive(self, goal_handle, kind, timeout, ik_step=None):
         """Step to the goal's target, then hold until reached, blocked, canceled or timeout.
 
         ik_step: a direct goal's IK step, returning the body joint velocity (rad/s); the hold
@@ -344,9 +377,8 @@ class FrameTaskServer(Node):
             (stopping at the step under threshold_ik).
         A direct goal checks for a cancel after each step, a planned one before. The hold is
         reached when kind.reached(error) holds, or when the hold step itself converges (a
-        planned goal: only with kind.planned_step_converges). Unless canceled the goal
-        succeeds, its result's success saying whether the IK converged and the hold reached
-        the target. timeout is in s of robot time.
+        planned goal: only with kind.planned_step_converges). timeout is in s of robot time.
+        Returns an _Outcome; the goal is left for the caller to end.
         """
         clock = self.controller.clock
         planned = ik_step is None
@@ -359,7 +391,7 @@ class FrameTaskServer(Node):
         while clock.now() - start_time < timeout:
             step_start = clock.now()
             if planned and goal_handle.is_cancel_requested:
-                return self._canceled(goal_handle, kind.result())
+                return _Outcome(True, ik_converged, False, None)
             if not ik_converged:
                 for _ in range(steps_owed):
                     vel_error = np.max(np.abs(ik_step()))
@@ -369,7 +401,7 @@ class FrameTaskServer(Node):
                 held = self.controller.steady_state_step()
                 steady_state_converged = step_converges and held
             if not planned and goal_handle.is_cancel_requested:
-                return self._canceled(goal_handle, kind.result())
+                return _Outcome(True, ik_converged, False, None)
 
             error = kind.error()
             kind.feedback(goal_handle, error)
@@ -393,15 +425,7 @@ class FrameTaskServer(Node):
             clock.sleep(max(0.0, dt - (clock.now() - step_start)))
             steps_owed = min(CATCH_UP_STEPS, max(1, round((clock.now() - step_start) / dt)))
 
-        if not ik_converged:
-            self.get_logger().warn('Timed out before IK convergence')
-        else:
-            self._log_hold_outcome(steady_state_converged, blocked)
-
-        goal_handle.succeed()
-        result = kind.result()
-        result.success = bool(ik_converged and steady_state_converged)
-        return result
+        return _Outcome(False, ik_converged, steady_state_converged, blocked)
 
     def _limit_block_reason(self):
         """Return the joints pinning the steady-state hold at a position limit, or None."""

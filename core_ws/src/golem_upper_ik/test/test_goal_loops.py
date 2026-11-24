@@ -75,6 +75,22 @@ class FakeController:
         self.ik_steps = self.hold_steps = self.error_reads = 0
         self.steady_state_limited_joints = []
         self._speed_scale = 1.0
+        self._bias_joints = None
+
+    @property
+    def bias_joints(self):
+        """Return the joints whose torque bias the goal changes, or None for every joint."""
+        return self._bias_joints
+
+    @bias_joints.setter
+    def bias_joints(self, value):
+        """Record the joints whose torque bias the goal changes."""
+        self.trace.append(('bias_joints', value))
+        self._bias_joints = value
+
+    def arm_joint_ids(self, arms):
+        """Return the arms' joint ids: the left arm's are 0 and 1, the right arm's 2 and 3."""
+        return sorted(joint for arm in arms for joint in {'left': (0, 1), 'right': (2, 3)}[arm])
 
     @property
     def speed_scale(self):
@@ -665,6 +681,36 @@ def test_grasp_goal_drives_only_the_targeted_arms():
                               errors=(NEAR,))
     assert [entry[2] for entry in entries(trace, 'add_frame_task')] == [
         'left_grasp', 'right_grasp']
+
+
+@pytest.mark.parametrize('arms', [('left',), ('right',), ('left', 'right')])
+@pytest.mark.parametrize('ending', [
+    {}, {'ik': (NEAR,), 'errors': (NEAR,)}, {'cancel_at': 2}, {'stale_at': 2},
+    {'plan': True, 'plan_error': RuntimeError('no path found')}])
+def test_grasp_goal_changes_only_the_targeted_arms_bias(arms, ending):
+    """A grasp goal changes the torque bias of its targeted arms' joints alone, until it ends.
+
+    However it ends (timed out, reached, canceled, a stale state, a failed plan), the bias
+    joints are set before the IK is seeded and cleared after its last step.
+    """
+    trace, handle, _, _ = run_goal('grasp', request=grasp_request(
+        arms=arms, plan=ending.get('plan', False)),
+        **{key: value for key, value in ending.items() if key != 'plan'})
+    joints = sorted(joint for arm in arms for joint in {'left': (0, 1), 'right': (2, 3)}[arm])
+    assert entries(trace, 'bias_joints') == [('bias_joints', joints), ('bias_joints', None)]
+    names = [entry[0] for entry in trace]
+    set_at, cleared_at = [i for i, name in enumerate(names) if name == 'bias_joints']
+    assert set_at < names.index('update_ik_solver')
+    assert all(set_at < i < cleared_at for i, name in enumerate(names)
+               if name in ('ik_step', 'hold_step', 'execute_path'))
+    assert handle.status is not None
+
+
+@pytest.mark.parametrize('action', ACTIONS)
+def test_frame_and_named_goals_change_every_joints_bias(action):
+    """/frame_task and /named_config goals leave the bias joints unset: every joint's bias."""
+    trace, _, _, controller = run_goal(action)
+    assert entries(trace, 'bias_joints') == [] and controller.bias_joints is None
 
 
 def test_grasp_goal_aborts_at_its_timeout():

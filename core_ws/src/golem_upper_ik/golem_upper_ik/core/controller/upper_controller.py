@@ -113,6 +113,10 @@ class UpperController:
         # holding and faded by _apply_joint_position while moving
         self._tau_bias = np.zeros(robot_model.num_motor)
         self._tau_bias_decay = float(np.exp(-self.dt / TAU_BIAS_FADE_SEC))
+        # body joint ids whose torque bias the current goal changes, or None for every joint:
+        # the hold integrates the bias and a move fades it on these alone, so every other
+        # joint keeps its command, bias included, and stays where it is
+        self.bias_joints = None
         # ms. Controlling on stale state winds up the hold's integral term and seeds moves
         # from where the arm was, so motion stops when the state is staler than this; 0 (off
         # the real robots' domain) turns the check off
@@ -318,6 +322,12 @@ class UpperController:
             self._apply_joint_position(self.ik_solver.q)
             self.update_robot_model()
             self.clock.sleep(self.dt)
+
+    def arm_joint_ids(self, arms):
+        """Return the body joint ids of the IK joints of arms ('left', 'right'), sorted."""
+        index = {'left': self.robot_model.left_arm_index,
+                 'right': self.robot_model.right_arm_index}
+        return sorted(joint for arm in arms for joint in index[arm])
 
     def ee_transformations(self):
         """Return the left and right end effectors' 4x4 placements in the pelvis frame.
@@ -577,7 +587,8 @@ class UpperController:
 
         Converged: every upper joint within threshold (rad) of its held command. A hold pinned
         against a joint position limit cannot converge: the integral term is frozen,
-        steady_state_limited_joints names the joints, and this returns False.
+        steady_state_limited_joints names the joints, and this returns False. With
+        bias_joints set, only those joints' bias integrates.
         """
         self.check_state_fresh()
         if self._steady is None:
@@ -585,6 +596,10 @@ class UpperController:
         steady = self._steady
         q_state = np.asarray(self.robot_model.state['q'], dtype=np.float64)
         tau_bias_increment = steady['ki'] * (steady['q'] - q_state) * self.dt
+        if self.bias_joints is not None:
+            kept = np.ones(self.robot_model.num_motor, dtype=bool)
+            kept[self.bias_joints] = False
+            tau_bias_increment[kept] = 0.0
         self.steady_state_limited_joints = self._steady_state_limited_joints(
             q_state, tau_bias_increment, threshold)
         if not self.steady_state_limited_joints:
@@ -619,10 +634,16 @@ class UpperController:
         return vel_scaled
 
     def _apply_joint_position(self, q):
-        """Command q with dq 0 and the gravity torque plus the bias, which fades by one step."""
+        """Command q with dq 0 and the gravity torque plus the bias, which fades by one step.
+
+        Only the bias_joints' bias fades, when the goal names them.
+        """
         tau = self.robot_model.dynamics.get_gravity_compensation(self.robot_model.state['q'])
         tau = tau + self._tau_bias
-        self._tau_bias *= self._tau_bias_decay
+        if self.bias_joints is None:
+            self._tau_bias *= self._tau_bias_decay
+        else:
+            self._tau_bias[self.bias_joints] *= self._tau_bias_decay
         self._command(q, np.zeros(self.robot_model.num_motor), tau)
 
     def _apply_velocity_command(self, vel):

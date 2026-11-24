@@ -863,6 +863,41 @@ def test_grasp_frame_target_moves_one_arm(ros, models, robot):
     np.testing.assert_array_equal(following.measured(), held)
 
 
+def _slot_commands(following, slots):
+    """Return the newest command's q and tau on slots, as two arrays."""
+    motors = following.last_command[1].motor_cmd
+    return (np.array([motors[slot].q for slot in slots]),
+            np.array([motors[slot].tau for slot in slots]))
+
+
+def test_grasp_frame_target_leaves_the_other_arm_and_the_torso_alone(ros, models):
+    """A one-arm goal leaves the other arm's and the torso's command q and torque bias alone.
+
+    The H1-2's hold integrates a torque bias (gains.ki) toward the held command; the other arm
+    and the torso sag 0.01 rad below theirs here, and a bias integrated on them would lift
+    them. The server starts without a bias, so their torque stays the gravity torque.
+    """
+    profile = profile_of('h12')
+    following, model, _, poses = grasp_server(ros, models, 'h12')
+    others = [profile.body_joints.index(joint) for joint in profile.enabled_joints
+              if joint.startswith('right_')] + [profile.body_joints.index('torso_joint')]
+    sag = np.zeros(len(profile.body_joints))
+    sag[others] = 0.01
+    following.set_sag(sag)
+    time.sleep(0.3)
+    q_before, _ = _slot_commands(following, others)
+    target = _shifted(_matrix(poses['left'].poses[-1]), (0.03, 0.0, 0.02))
+    status, result = GraspClient(ros).run(grasp_goal(left=target))
+    assert status == GoalStatus.STATUS_SUCCEEDED and result.success, result.message
+    time.sleep(0.1)
+    q_after, tau_after = _slot_commands(following, others)
+    gravity = model.dynamics.get_gravity_compensation(following.measured())[others]
+    np.testing.assert_array_equal(q_after, q_before)
+    # a bias integrated over the 0.2 s settling alone would be more than 1 N*m; float32 on
+    # the wire
+    np.testing.assert_allclose(tau_after, gravity, atol=1e-3)
+
+
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_planned_grasp_frame_target(ros, models, robot):
     """A planned goal moves both grasp frames to their targets along a plan."""

@@ -673,11 +673,21 @@ class FrameTaskServer(Node):
     def _grasp_frame_target(self, goal_handle, targets):
         """Pull each targeted grasp frame to its target, directly or along a plan; end the goal.
 
-        The other arm holds where it is. The timeout counts robot time from here, planning
-        and the path included. The goal succeeds once every target has been within the
-        thresholds for GRASP_SETTLE_S, and aborts at the timeout, on a planning or execution
-        failure, or on a hold pinned at a joint limit; a cancel ends it where the arms are.
+        Only the targeted arms' joints change their torque bias (controller.bias_joints), so
+        the other arm and the torso or waist keep their commands and hold where they are.
+        The timeout counts robot time from here, planning and the path included. The goal
+        succeeds once every target has been within the thresholds for GRASP_SETTLE_S, and
+        aborts at the timeout, on a planning or execution failure, or on a hold pinned at a
+        joint limit; a cancel ends it where the arms are.
         """
+        self.controller.bias_joints = self.controller.arm_joint_ids(targets)
+        try:
+            return self._move_grasp_frames(goal_handle, targets)
+        finally:
+            self.controller.bias_joints = None
+
+    def _move_grasp_frames(self, goal_handle, targets):
+        """Run _grasp_frame_target's goal with its bias joints set; end the goal."""
         goal = goal_handle.request
         self.controller.check_state_fresh()
         frames = {arm: frame.name for arm, frame in zip(ARMS, self.profile.grasp_frames)}

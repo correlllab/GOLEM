@@ -28,6 +28,10 @@ shutdown_keeps_held_joints: false
 
 ee_frames: [left_wrist_yaw_link, right_wrist_yaw_link]
 planner_frames: [left_grasp_frame, right_grasp_frame]
+# the Magpie grippers' pinch points, frames of the URDF
+grasp_frames:
+  left: {frame: left_grasp_frame}
+  right: {frame: right_grasp_frame}
 imu_frame: torso_link
 
 # Arm postures over enabled_joints (left arm, then right), rad, all inside the joint limits.

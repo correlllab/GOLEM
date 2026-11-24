@@ -10,8 +10,10 @@ RobotModel holds:
   self-collision model, when the profile names a sphere URDF and SRDF (has_collision);
   without one, every configuration counts as collision-free.
 
-Every URDF joint that is not a body joint (the grippers', the hands') is frozen out of every
-model, so the joints left are the profile's body joints in /lowcmd slot order and /lowstate
+Each arm's grasp frame (profile.grasp_frames) is a frame of every model: one the URDF lacks is
+added to the free-flyer and body models as a fixed frame on its parent link, and the reduced
+model keeps it. Every URDF joint that is not a body joint (the grippers', the hands') is
+frozen out of every model, so the joints left are the profile's body joints in /lowcmd slot order and /lowstate
 values feed the models directly. Joint arrays (q, dq, tau) hold one value per body joint in
 slot order; the _reduced ones one per IK joint, in the profile's enabled_joints order. The
 measured state comes from a StateSource (state_subscriber).
@@ -113,6 +115,7 @@ class RobotModel:
                                 for joint in profile.enabled_joints if joint.startswith('right_')]
 
         self.model, _, _ = self._load_urdf_freeflyer(filename)
+        self._add_grasp_frames(self.model, filename)
         self.data = self.model.createData()
         imu_frame = profile.imu_frame if imu_frame is None else imu_frame
         if not self.model.existFrame(imu_frame):
@@ -121,6 +124,7 @@ class RobotModel:
         self.imu_frame = imu_frame
 
         self.model_body, _, _ = self._load_urdf_body(filename)
+        self._add_grasp_frames(self.model_body, filename)
         self.data_body = self.model_body.createData()
 
         # the measured state; without a source the model is at rest at q = 0
@@ -137,6 +141,45 @@ class RobotModel:
         self.has_collision = profile.collision is not None
         if self.has_collision:
             self._init_collision_model(*profile.collision)
+
+    def _add_grasp_frames(self, model, urdf_path):
+        """Add the grasp frames the URDF lacks to model, and check every grasp frame's arm.
+
+        ValueError, naming the frame, for a URDF grasp frame model does not have, an added one
+        it already has or whose parent it lacks, and a grasp frame no joint of its arm moves
+        or a joint of the other arm does.
+        """
+        robot = self.profile.robot
+        for arm, frame in zip(('left', 'right'), self.profile.grasp_frames):
+            if frame.parent is None:
+                if not model.existFrame(frame.name):
+                    raise ValueError(f'robot {robot}: the {arm} grasp frame {frame.name} is not '
+                                     f'a frame of {urdf_path}')
+            else:
+                if model.existFrame(frame.name):
+                    raise ValueError(f'robot {robot}: the {arm} grasp frame {frame.name} is a '
+                                     f'frame of {urdf_path} already: give its frame alone')
+                if not model.existFrame(frame.parent):
+                    raise ValueError(f'robot {robot}: the {arm} grasp frame\'s parent '
+                                     f'{frame.parent} is not a frame of {urdf_path}')
+                parent_id = model.getFrameId(frame.parent)
+                parent = model.frames[parent_id]
+                model.addFrame(pin.Frame(frame.name, parent.parentJoint, parent_id,
+                                         parent.placement * pin.SE3(frame.offset),
+                                         pin.FrameType.OP_FRAME))
+            joint_id = model.frames[model.getFrameId(frame.name)].parentJoint
+            chain = set()
+            while joint_id > 0:
+                chain.add(model.names[joint_id])
+                joint_id = model.parents[joint_id]
+            other = 'right' if arm == 'left' else 'left'
+            arm_joints = {joint for joint in self.profile.enabled_joints
+                          if joint.startswith(f'{arm}_')}
+            other_joints = {joint for joint in self.profile.enabled_joints
+                            if joint.startswith(f'{other}_')}
+            if not chain & arm_joints or chain & other_joints:
+                raise ValueError(f'robot {robot}: the {arm} grasp frame {frame.name} must be '
+                                 f'moved by the {arm} arm\'s joints alone')
 
     def _init_reduced_model(self, enabled_joints):
         """Build the reduced model with every joint but enabled_joints frozen at 0.

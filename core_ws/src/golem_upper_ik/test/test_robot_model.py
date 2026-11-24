@@ -294,13 +294,83 @@ def test_profile_frames_exist_in_every_model(models, robot):
     """Every frame the profile and the configs name is in every model."""
     model = models(robot)
     profile = model.profile
-    frames = set(profile.ee_frames + profile.planner_frames + (profile.imu_frame, 'torso_link'))
+    frames = set(profile.ee_frames + profile.planner_frames + (profile.imu_frame, 'torso_link')
+                 + tuple(frame.name for frame in profile.grasp_frames))
     if robot == 'g1':
         # the G1's sensors and the other IMU, which controller.imu_frame may name
         frames |= {'imu_in_torso', 'd435_link', 'mid360_link'}
     for frame in sorted(frames):
         for name in ('model', 'model_body', 'model_body_reduced'):
             assert getattr(model, name).existFrame(frame), (name, frame)
+
+
+# each robot's (left, right) grasp frames: the H1-2's URDF frames, the G1's added on its palms
+GRASP_FRAMES = {
+    'h12': (('left_grasp_frame', None), ('right_grasp_frame', None)),
+    'g1': (('left_grasp_frame', 'left_hand_palm_link'),
+           ('right_grasp_frame', 'right_hand_palm_link')),
+}
+
+
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_grasp_frames_sit_at_their_offsets(models, robot):
+    """Each grasp frame is where the profile puts it, in every model, at any arm pose.
+
+    A frame the robot model adds sits at its offset from its parent; and the reduced model,
+    the IK's, places it as the body model does with the frozen joints at their angles.
+    """
+    model = models(robot)
+    profile = model.profile
+    assert tuple((frame.name, frame.parent) for frame in profile.grasp_frames) == (
+        GRASP_FRAMES[robot])
+    rng = np.random.default_rng(3)
+    low, high = model.model_body.lowerPositionLimit, model.model_body.upperPositionLimit
+    q = low + (high - low) * rng.uniform(0.2, 0.8, model.num_motor)
+    try:
+        model.rebuild_reduced_model(q)
+        for frame in profile.grasp_frames:
+            body = model.get_frame_transformation_body(frame.name, q)
+            reduced = model.get_frame_transformation_reduced(frame.name, q[model.reduced_mask])
+            np.testing.assert_allclose(reduced, body, atol=1e-9)
+            if frame.parent is not None:
+                parent = model.get_frame_transformation_body(frame.parent, q)
+                np.testing.assert_allclose(body, parent @ frame.offset, atol=1e-9)
+                position = model.get_frame_position(frame.name, q)
+                expected = model.get_frame_position(frame.parent, q) + model.get_frame_rotation(
+                    frame.parent, q) @ frame.offset[:3, 3]
+                np.testing.assert_allclose(position, expected, atol=1e-9)
+    finally:
+        model.rebuild_reduced_model(np.zeros(model.num_motor))
+
+
+def test_g1_grasp_frames_are_the_dex3_pinch_points(models):
+    """The G1's grasp frames sit between thumb and fingers, z out of the palm's face."""
+    model = models('g1')
+    q = np.zeros(model.num_motor)
+    for frame, side in zip(model.profile.grasp_frames, (-1.0, 1.0)):
+        in_palm = np.linalg.inv(model.get_frame_transformation_body(frame.parent, q)) @ (
+            model.get_frame_transformation_body(frame.name, q))
+        np.testing.assert_allclose(in_palm[:3, 3], [0.08, side * 0.04, 0.0], atol=1e-12)
+        np.testing.assert_allclose(in_palm[:3, 0], [1.0, 0.0, 0.0], atol=1e-12)
+        np.testing.assert_allclose(in_palm[:3, 2], [0.0, side, 0.0], atol=1e-12)
+
+
+@pytest.mark.parametrize('arm, name, parent, words', [
+    (0, 'no_such_frame', None, 'left grasp frame no_such_frame is not a frame of'),
+    (1, 'right_grasp_frame', 'no_such_link', 'parent no_such_link is not a frame of'),
+    (1, 'right_hand_palm_link', 'right_hand_palm_link', 'is a frame of .* already'),
+    (0, 'left_grasp_frame', 'right_hand_palm_link', "moved by the left arm's joints alone"),
+])
+def test_model_refuses_a_bad_grasp_frame(arm, name, parent, words):
+    """A grasp frame missing, on a missing parent, added twice or on the other arm is refused."""
+    from dataclasses import replace
+    from golem_upper_ik.core.robot_model import RobotModel
+    from golem_upper_ik.profile import GraspFrame
+    profile = profile_of('g1')
+    frames = list(profile.grasp_frames)
+    frames[arm] = GraspFrame(name, parent, None if parent is None else frames[arm].offset)
+    with pytest.raises(ValueError, match=words):
+        RobotModel(replace(profile, grasp_frames=tuple(frames)))
 
 
 def pelvis_quaternion(model, q, imu_wxyz):

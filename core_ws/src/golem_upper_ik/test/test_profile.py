@@ -19,6 +19,7 @@ EXPECTED = {
         'upper_slots': range(12, 27),
         'ee_frames': ('left_wrist_yaw_link', 'right_wrist_yaw_link'),
         'planner_frames': ('left_grasp_frame', 'right_grasp_frame'),
+        'grasp_frames': (('left_grasp_frame', None), ('right_grasp_frame', None)),
         'imu_frame': 'torso_link',
         'held_joints': ('torso_joint',),
         'urdf': 'h1_2_magpie.urdf',
@@ -31,6 +32,8 @@ EXPECTED = {
         'upper_slots': range(12, 29),
         'ee_frames': ('left_hand_palm_link', 'right_hand_palm_link'),
         'planner_frames': ('left_hand_palm_link', 'right_hand_palm_link'),
+        'grasp_frames': (('left_grasp_frame', 'left_hand_palm_link'),
+                         ('right_grasp_frame', 'right_hand_palm_link')),
         'imu_frame': 'imu_in_pelvis',
         'held_joints': ('waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint'),
         'urdf': 'g1_29dof_with_hand_rev_1_0.urdf',
@@ -65,6 +68,13 @@ def test_profiles_load(robot):
     assert profile.upper_slots == expected['upper_slots']
     assert profile.ee_frames == expected['ee_frames']
     assert profile.planner_frames == expected['planner_frames']
+    assert tuple((frame.name, frame.parent) for frame in profile.grasp_frames) == (
+        expected['grasp_frames'])
+    for frame in profile.grasp_frames:
+        if frame.parent is None:
+            assert frame.offset is None
+        else:
+            assert frame.offset.shape == (4, 4) and not frame.offset.flags.writeable
     assert profile.imu_frame == expected['imu_frame']
     assert profile.held_joints == expected['held_joints']
     assert (profile.shutdown_keeps_held_joints
@@ -204,6 +214,64 @@ def test_robot_config_rejects_a_bad_value(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="'named_configs'.*home"):
         robot_config_with(monkeypatch, tmp_path, 'h12',
                           lambda raw: raw['named_configs'].update(home='zero'))
+
+
+def test_g1_grasp_frames_are_the_offsets_in_robot_yaml():
+    """The G1's grasp frames carry robot.yaml's xyz (m) and rot (rows) as 4x4 offsets."""
+    left, right = profile_of('g1').grasp_frames
+    np.testing.assert_array_equal(left.offset, [[1.0, 0.0, 0.0, 0.08],
+                                                [0.0, 0.0, -1.0, -0.04],
+                                                [0.0, 1.0, 0.0, 0.0],
+                                                [0.0, 0.0, 0.0, 1.0]])
+    np.testing.assert_array_equal(right.offset, [[1.0, 0.0, 0.0, 0.08],
+                                                 [0.0, 0.0, 1.0, 0.04],
+                                                 [0.0, -1.0, 0.0, 0.0],
+                                                 [0.0, 0.0, 0.0, 1.0]])
+
+
+def _set_grasp_frame(arm, **entry):
+    """Return a robot.yaml edit that sets grasp_frames.<arm> to entry."""
+    return lambda raw: raw['grasp_frames'].update({arm: entry})
+
+
+ADDED = {'frame': 'left_grasp_frame', 'parent': 'left_hand_palm_link', 'xyz': [0.1, 0.0, 0.0],
+         'rot': [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]}
+
+
+@pytest.mark.parametrize('change, words', [
+    (lambda raw: raw.update(grasp_frames={'left': {'frame': 'a'}}),
+     "'grasp_frames' must map left and right"),
+    (_set_grasp_frame('left'), "'grasp_frames.left' must hold 'frame' alone"),
+    (_set_grasp_frame('left', frame='a', parent='b'), "'grasp_frames.left' must hold"),
+    (_set_grasp_frame('right', frame=''), "'grasp_frames.right.frame' must be a name"),
+    (_set_grasp_frame('left', **dict(ADDED, parent=3)),
+     "'grasp_frames.left.parent' must be a name"),
+    (_set_grasp_frame('left', **dict(ADDED, xyz=[0.1, 0.0])),
+     "'grasp_frames.left.xyz' must be a list of 3 numbers"),
+    (_set_grasp_frame('left', **dict(ADDED, xyz=[0.1, 0.0, float('nan')])),
+     "'grasp_frames.left.xyz' must be finite"),
+    (_set_grasp_frame('left', **dict(ADDED, rot=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])),
+     "'grasp_frames.left.rot' must be 3 rows"),
+    (_set_grasp_frame('left', **dict(ADDED, rot=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0],
+                                                 [0.0, 0.0, -1.0]])),
+     "'grasp_frames.left.rot' must be a rotation matrix"),
+    (_set_grasp_frame('left', **dict(ADDED, rot=[[2.0, 0.0, 0.0], [0.0, 1.0, 0.0],
+                                                 [0.0, 0.0, 1.0]])),
+     "'grasp_frames.left.rot' must be a rotation matrix"),
+    (_set_grasp_frame('left', frame='right_grasp_frame'), 'must name two frames'),
+])
+def test_robot_config_refuses_a_bad_grasp_frame(monkeypatch, tmp_path, change, words):
+    """A grasp_frames entry of the wrong shape, name, offset or rotation is refused."""
+    with pytest.raises(ValueError, match=f"robot h12 .*{words}"):
+        robot_config_with(monkeypatch, tmp_path, 'h12', change)
+
+
+def test_robot_config_takes_an_added_grasp_frame(monkeypatch, tmp_path):
+    """A grasp frame given by parent, xyz and rot loads as that offset."""
+    config = robot_config_with(monkeypatch, tmp_path, 'g1',
+                               _set_grasp_frame('left', **ADDED))
+    assert config['grasp_frames']['left'] == ADDED
+    assert config['grasp_frames']['right']['parent'] == 'right_hand_palm_link'
 
 
 @pytest.mark.parametrize('robot', ROBOTS)

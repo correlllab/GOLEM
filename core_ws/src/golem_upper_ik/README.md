@@ -79,9 +79,9 @@ own nodes.
 `golem_upper_ik.profile.load_profile(robot)` joins three sources: `golem_safety`'s
 `robots/<robot>.yaml` (joint names in slot order, limits, slot ranges, `mode_machine`), the
 one joint table both packages read; `config/<robot>/robot.yaml` in this package (display
-name, IK and held joints, frames, named configurations, start-up sequence, per-robot config
-defaults), which `profile.robot_config(robot)` returns checked (every key required, no
-others); and the model files, from `golem_ros2_models`. A robot is known
+name, IK and held joints, frames, grasp frames, named configurations, start-up sequence,
+per-robot config defaults), which `profile.robot_config(robot)` returns checked (every key
+required, no others); and the model files, from `golem_ros2_models`. A robot is known
 (`profile.known_robots()`) when `robots/<robot>.yaml` and `config/<robot>/robot.yaml` both
 exist, so a new robot is two data files and its configs, with no Python change. An unknown
 robot is refused with `ValueError`, naming the known ones.
@@ -93,6 +93,7 @@ robot is refused with `ValueError`, naming the known ones.
 | Held joints at shutdown (Shutdown, below) | off, with the arms | kept at their hold |
 | End-effector frames | `left/right_wrist_yaw_link` | `left/right_hand_palm_link` |
 | Planner frames | `left/right_grasp_frame` | `left/right_hand_palm_link` |
+| Grasp frames (`grasp_frames`) | `left/right_grasp_frame`, the Magpie grippers' pinch points in the URDF | `left/right_grasp_frame`, the Dex3-1 pinch points, which the URDF lacks: `RobotModel` adds each at its fixed offset (`xyz`, `rot`) from `left/right_hand_palm_link`, between the thumb and the fingers (from the URDF's joint origins, unmeasured) |
 | IMU frame | `torso_link` | `imu_in_pelvis` (`controller.imu_frame` overrides) |
 | Model (`golem_ros2_models`) | `h1_2_magpie.urdf` | `g1_29dof_with_hand_rev_1_0.urdf` |
 | Self-collision model | `h1_2_magpie_sphere.urdf` + `h1_2_magpie_sphere_collision.srdf` | `g1_sphere.urdf` + `g1_sphere_collision.srdf`, packed on the rubber-hand G1: two spheres per hand at the Dex3-1 palm, none on the fingers, so the barrier and the planner do not see the Dex3-1 fingers. Its torso spheres stay inside the torso's flanks, where the hanging upper arms are 9 mm from the torso (`CL_Assets/README.md`) |

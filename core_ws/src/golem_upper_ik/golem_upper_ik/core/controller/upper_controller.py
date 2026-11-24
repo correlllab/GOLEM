@@ -481,11 +481,13 @@ class UpperController:
             joint_id = model.parents[joint_id]
         return mask
 
-    def execute_path(self, path):
+    def execute_path(self, path, stop=None):
         """Command reduced waypoints as positions, one per control period.
 
         Each waypoint's limits and self-collision are checked first (ValueError). Refused
-        (RuntimeError) while the follow gate is shut.
+        (RuntimeError) while the follow gate is shut. stop, when given, is called before each
+        waypoint: a true return ends the path there, the last waypoint commanded holding.
+        Returns whether every waypoint was commanded.
         """
         if not self.low_cmd_handler.following:
             # SAFETY: absolute waypoints would run ahead of a robot that is not following
@@ -499,6 +501,8 @@ class UpperController:
         clock = self.clock
         for q_reduced in path:
             start = clock.now()
+            if stop is not None and stop():
+                return False
             self.check_state_fresh()
             if not self.robot_model.check_within_limits_reduced(q_reduced):
                 raise ValueError('Path waypoint is outside joint limits')
@@ -509,6 +513,7 @@ class UpperController:
             self._apply_joint_position(q)
             self.update_robot_model()
             clock.sleep(max(0.0, self.dt - (clock.now() - start)))
+        return True
 
     def update_robot_model(self):
         """Update the robot model's kinematics from the measured state."""

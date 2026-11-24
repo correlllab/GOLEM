@@ -3,8 +3,9 @@
 FakeController answers each IK step, hold step and error read from a script and advances a
 fake robot clock, so every path of /frame_task and /named_config runs in exact robot time:
 direct and planned moves, the hold, cancel, timeouts, a hold blocked at a limit, plan and
-execution failures, the stale-state abort, slow mode and an unknown named configuration.
-Each test reads the trace of what the server did, in order.
+execution failures, the stale-state abort, slow mode and an unknown named configuration; and
+/grasp_frame_target's settling, aborts, cancels and the path it can stop. Each test reads the
+trace of what the server did, in order.
 """
 from types import SimpleNamespace
 import threading
@@ -57,15 +58,17 @@ class FakeController:
     plan_error, execute_error: raised by the plan or by execute_path.
     stale_at: the IK or hold step (1-based, both counted) that raises StaleStateError.
     work: s of robot time each IK or hold step takes.
+    path: s of robot time a planned path takes to execute.
     """
 
     def __init__(self, trace, *, ik=(FAR,), hold=(False,), limited=((),), errors=(FAR,),
-                 plan_error=None, execute_error=None, stale_at=None, work=WORK):
+                 plan_error=None, execute_error=None, stale_at=None, work=WORK, path=0.5):
         """Keep the scripts; every count starts at 0."""
         self.trace = trace
         self.clock = FakeClock(trace)
         self.dt = DT
         self._work_seconds = work
+        self._path_seconds = path
         self._ik, self._hold, self._limited, self._errors = ik, hold, limited, errors
         self._plan_error, self._execute_error, self._stale_at = (
             plan_error, execute_error, stale_at)
@@ -124,6 +127,11 @@ class FakeController:
         error = self._error()
         return np.array([error, 0.0, 0.0, error, 0.0, 0.0])
 
+    def frame_pose_error(self, frame_name, target):
+        """Return a grasp frame's error: the scripted value, m and rad."""
+        error = self._error()
+        return error, error
+
     @property
     def reduced_configuration_error(self):
         """Return the IK joints' error from the named configuration."""
@@ -172,12 +180,24 @@ class FakeController:
         """Plan to q_reduced."""
         return self._plan(('plan_to_configuration', list(q_reduced)))
 
-    def execute_path(self, path):
-        """Run a path for 0.5 s of robot time, or raise execute_error."""
+    def execute_path(self, path, stop=None):
+        """Run a path for its s of robot time, or raise execute_error.
+
+        With stop, each waypoint takes its share of the time after stop() says go on; a true
+        stop() ends the path there, recorded, and returns False.
+        """
         self._call('execute_path', len(path))
-        self.clock.t += 0.5
+        if stop is None:
+            self.clock.t += self._path_seconds
+        else:
+            for index in range(len(path)):
+                if stop():
+                    self._call('path_stopped', index)
+                    return False
+                self.clock.t += self._path_seconds / len(path)
         if self._execute_error is not None:
             raise self._execute_error
+        return True
 
 
 class FakeLogger:
@@ -222,6 +242,9 @@ class FakeGoalHandle:
         """Record a feedback message's values."""
         if hasattr(feedback, 'joint_error'):
             self._trace.append(('feedback', feedback.joint_error))
+        elif hasattr(feedback, 'left_error_m'):
+            self._trace.append(('feedback', feedback.left_error_m, feedback.left_error_rad,
+                                feedback.right_error_m, feedback.right_error_rad))
         else:
             self._trace.append(('feedback', list(feedback.errors_linear),
                                 list(feedback.errors_angular)))
@@ -257,7 +280,9 @@ def server_of(controller, trace):
     logger = FakeLogger(trace)
     server.get_logger = lambda: logger
     server.robot = 'h12'
-    server.profile = SimpleNamespace(named_configs={'home': np.array([0.0, 0.5])})
+    server.profile = SimpleNamespace(
+        named_configs={'home': np.array([0.0, 0.5])},
+        grasp_frames=(SimpleNamespace(name='left_grasp'), SimpleNamespace(name='right_grasp')))
     server.controller = controller
     server.timeout = TIMEOUT
     server.threshold_ik = 1e-3
@@ -293,15 +318,33 @@ def named_request(name='home', plan=False, slow_mode=False, duration=0.0):
     return goal
 
 
+def grasp_request(arms=('left',), plan=False, timeout=0.0, frame_id='pelvis'):
+    """Return a GraspFrameTarget goal with a target for arms, in frame_id; timeout in s."""
+    from custom_ros_messages.action import GraspFrameTarget
+    goal = GraspFrameTarget.Goal()
+    for arm in arms:
+        pose = getattr(goal, arm)
+        pose.header.frame_id = frame_id
+        pose.pose.position.x = 0.3
+        pose.pose.orientation.w = 1.0
+    goal.plan = plan
+    goal.timeout.sec = int(timeout)
+    return goal
+
+
+REQUESTS = {'frame': frame_request, 'named': named_request, 'grasp': grasp_request}
+
+
 def run_goal(action, plan=False, cancel_at=None, request=None, **script):
     """Run one goal through the server; return (trace, goal handle, result, controller)."""
     trace = []
     controller = FakeController(trace, **script)
     server = server_of(controller, trace)
     if request is None:
-        request = (frame_request if action == 'frame' else named_request)(plan=plan)
+        request = REQUESTS[action](plan=plan)
     handle = FakeGoalHandle(trace, request, cancel_at)
-    callback = server.frame_task_callback if action == 'frame' else server.named_config_callback
+    callback = {'frame': server.frame_task_callback, 'named': server.named_config_callback,
+                'grasp': server.grasp_frame_target_callback}[action]
     result = callback(handle)
     return trace, handle, result, controller
 
@@ -581,3 +624,154 @@ def test_feedback_carries_each_frames_errors():
     assert entries(trace, 'feedback')[0] == ('feedback', [0.5], [0.5])
     trace, _, _, _ = run_goal('named', errors=(0.5,))
     assert entries(trace, 'feedback')[0] == ('feedback', 0.5)
+
+
+# robot-time periods of the settling window: the reached reads a direct goal needs in a row
+SETTLE_READS = 3  # reached at t, t + DT and t + 2 * DT >= t + GRASP_SETTLE_S
+
+
+def test_grasp_settling_time_is_whole_periods():
+    """The scripted loops' settling takes SETTLE_READS reached reads at DT."""
+    from golem_upper_ik.ros2.frame_task_server import GRASP_SETTLE_S
+    assert (SETTLE_READS - 2) * DT < GRASP_SETTLE_S <= (SETTLE_READS - 1) * DT
+
+
+def test_grasp_goal_succeeds_once_the_targets_have_settled():
+    """A grasp goal succeeds only after its targets stay reached for GRASP_SETTLE_S.
+
+    A read outside the thresholds restarts the window; the hold step's own convergence ends
+    nothing.
+    """
+    errors = (FAR, FAR, NEAR, FAR) + (NEAR,) * SETTLE_READS
+    trace, handle, result, _ = run_goal('grasp', ik=(FAR, NEAR), hold=(True,), errors=errors)
+    assert steps(trace) == ['ik_step', 'ik_step'] + ['hold_step'] * 5
+    assert handle.status == 'succeeded' and result.success
+    assert result.message == 'reached (left 0.0 mm 0.0000 rad, right 0.0 mm 0.0000 rad)'
+    feedback = entries(trace, 'feedback')
+    assert len(feedback) == 7
+    # the arm without a target reports 0
+    assert feedback[0] == ('feedback', FAR, FAR, 0.0, 0.0)
+
+
+def test_grasp_goal_drives_only_the_targeted_arms():
+    """A grasp goal replaces the frame tasks with one on each targeted grasp frame."""
+    trace, _, _, _ = run_goal('grasp', errors=(NEAR,))
+    assert entries(trace, 'add_frame_task') == [
+        ('add_frame_task', 'left_grasp_task', 'left_grasp')]
+    names = [entry[0] for entry in trace]
+    assert names.index('check_state_fresh') < names.index('clear_frame_tasks') < names.index(
+        'add_frame_task') < names.index('update_ik_solver')
+    trace, _, _, _ = run_goal('grasp', request=grasp_request(arms=('left', 'right')),
+                              errors=(NEAR,))
+    assert [entry[2] for entry in entries(trace, 'add_frame_task')] == [
+        'left_grasp', 'right_grasp']
+
+
+def test_grasp_goal_aborts_at_its_timeout():
+    """A grasp goal whose targets are never reached aborts at its timeout, saying so."""
+    trace, handle, result, _ = run_goal('grasp', ik=(NEAR,), hold=(True,))
+    assert handle.status == 'aborted' and not result.success
+    assert steps(trace) == ['ik_step'] + ['hold_step'] * (ITERATIONS - 1)
+    assert result.message.startswith('timed out after 1.0 s (left 1000.0 mm 1.0000 rad')
+    trace, handle, result, _ = run_goal('grasp', request=grasp_request(timeout=2.0))
+    assert steps(trace) == ['ik_step'] * 2 * ITERATIONS
+    assert handle.status == 'aborted'
+    assert result.message.startswith('timed out after 2.0 s before the IK converged')
+
+
+def test_grasp_goal_canceled_holds_where_it_is():
+    """A canceled grasp goal ends canceled at once, saying the arms hold where they are."""
+    trace, handle, result, _ = run_goal('grasp', ik=(FAR, NEAR), cancel_at=3)
+    assert handle.status == 'canceled' and not result.success
+    assert steps(trace) == ['ik_step', 'ik_step', 'hold_step']
+    assert result.message.startswith('canceled; the arms hold where they are (left')
+
+
+def test_grasp_goal_pinned_at_a_limit_aborts():
+    """A grasp goal whose hold is pinned at a joint limit aborts, naming the joint."""
+    limited = ((), (('left_elbow_joint', 1.5, 1.5),))
+    trace, handle, result, _ = run_goal('grasp', ik=(NEAR,), limited=limited)
+    assert handle.status == 'aborted' and not result.success
+    assert result.message.startswith('the hold is pinned at a joint position limit: '
+                                     'left_elbow_joint q=+1.500 (limit +1.500)')
+
+
+# s of robot time a scripted grasp path takes: 3 waypoints of one DT each
+PATH = 3 * DT
+
+
+def test_planned_grasp_goal_plans_executes_then_holds():
+    """A planned grasp goal plans, runs the path with feedback at each waypoint, then holds.
+
+    Its timeout counts from the goal's start, the path included.
+    """
+    trace, handle, result, _ = run_goal('grasp', plan=True, path=PATH)
+    names = [entry[0] for entry in trace]
+    assert ('plan_to_ik_target', TIMEOUT) in trace
+    start = names.index('execute_path')
+    # before each of the 3 waypoints a feedback and a cancel check, then the hold
+    assert names[start + 1:start + 7] == ['feedback', 'cancel?'] * 3
+    assert names[start + 7:start + 9] == ['init_steady_state', 'cancel?']
+    # the rest of the 1 s timeout after the path, in hold steps
+    assert steps(trace) == ['hold_step'] * (ITERATIONS - 3)
+    assert handle.status == 'aborted'
+    assert result.message.startswith('timed out after 1.0 s (left')
+
+
+def test_planned_grasp_goal_reached():
+    """A planned grasp goal that settles after its path succeeds."""
+    trace, handle, result, _ = run_goal('grasp', plan=True, path=PATH,
+                                        errors=(FAR,) * 3 + (NEAR,) * SETTLE_READS)
+    assert handle.status == 'succeeded' and result.success
+    assert steps(trace) == ['hold_step'] * SETTLE_READS
+
+
+def test_planned_grasp_goal_stops_its_path():
+    """A cancel or the timeout during the path stops it at the next waypoint."""
+    trace, handle, result, _ = run_goal('grasp', plan=True, path=PATH, cancel_at=2)
+    assert ('path_stopped', 1) in trace and steps(trace) == []
+    assert handle.status == 'canceled'
+    assert result.message.startswith('canceled during the path; the arms hold where they are')
+    trace, handle, result, _ = run_goal('grasp', plan=True, path=3.0)
+    assert ('path_stopped', 1) in trace and steps(trace) == []
+    assert handle.status == 'aborted'
+    assert result.message.startswith('timed out after 1.0 s during the path (left')
+
+
+@pytest.mark.parametrize('failing', ['plan_error', 'execute_error'])
+def test_planned_grasp_goal_failure_aborts(failing):
+    """A planned grasp goal whose plan or path fails aborts with the reason."""
+    trace, handle, result, _ = run_goal('grasp', plan=True,
+                                        **{failing: RuntimeError('no path found')})
+    assert handle.status == 'aborted' and not result.success
+    assert result.message == 'planning or execution failed: no path found'
+    assert steps(trace) == []
+
+
+@pytest.mark.parametrize('plan', [False, True])
+def test_grasp_goal_stale_state_aborts(plan):
+    """A stale /lowstate mid-goal aborts a grasp goal with the reason."""
+    trace, handle, result, _ = run_goal('grasp', plan=plan, ik=(NEAR,), stale_at=2)
+    assert handle.status == 'aborted' and not result.success
+    assert result.message == ('/lowstate is 80 ms stale (> 50 ms); holding the last command')
+
+
+@pytest.mark.parametrize('request_, words', [
+    (lambda: grasp_request(arms=()), 'neither arm has a target'),
+    (lambda: _grasp_with(position_x=float('nan')), 'the left target is not finite'),
+    (lambda: _grasp_with(w=0.0), 'the left target has no orientation'),
+])
+def test_grasp_goal_refused_before_any_step(request_, words):
+    """A grasp goal without a target or with a bad pose aborts before the controller moves."""
+    trace, handle, result, controller = run_goal('grasp', request=request_())
+    assert handle.status == 'aborted' and not result.success
+    assert result.message.startswith(words), result.message
+    assert steps(trace) == [] and entries(trace, 'check_state_fresh') == []
+
+
+def _grasp_with(position_x=0.3, w=1.0):
+    """Return a left-arm grasp goal with that position x (m) and orientation w."""
+    goal = grasp_request()
+    goal.left.pose.position.x = position_x
+    goal.left.pose.orientation.w = w
+    return goal

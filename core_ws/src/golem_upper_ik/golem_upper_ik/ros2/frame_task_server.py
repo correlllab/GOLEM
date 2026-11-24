@@ -10,12 +10,18 @@ Once its start-up is done (UpperController), the node serves:
   pelvis frame, directly through the IK or along an OMPL plan, then hold them;
 - /named_config (custom_ros_messages/NamedConfig): move the IK joints to a named
   configuration, the same two ways;
+- /grasp_frame_target (custom_ros_messages/GraspFrameTarget): move each arm's grasp frame
+  (the profile's grasp_frames) to a target in the pelvis frame or, resolved through TF when
+  the goal starts, in a world frame, the same two ways; it succeeds once every target has
+  been held within the thresholds for GRASP_SETTLE_S, and aborts at its timeout;
 and publishes at 25 Hz frame_names, frame_targets and frame_poses (the current goal's
 frames, their targets and their measured poses), {left,right}_ee_pose (the end effectors'
-measured poses, which tell the robot's other nodes the controller is up) and
-{left,right}_ee_target (the current goal's targets for the end-effector frames). Every pose
-is in the pelvis frame. A goal's duration and control period are s of robot time (the
-controller's clock: the sim's /clock under use_sim_time, the steady clock otherwise).
+measured poses, which tell the robot's other nodes the controller is up),
+{left,right}_ee_target (the current goal's targets for the end-effector frames) and
+/{left,right}_grasp_frame_pose (the grasp frames' measured poses, every body joint measured,
+as TF has them). Every pose is in the pelvis frame. A goal's duration or timeout and the
+control period are s of robot time (the controller's clock: the sim's /clock under
+use_sim_time, the steady clock otherwise).
 """
 import os
 
@@ -25,14 +31,18 @@ os.environ['OPENBLAS_NUM_THREADS'] = '1'
 os.environ['OMP_NUM_THREADS'] = '1'
 
 import threading  # noqa: E402
+import time  # noqa: E402
 from typing import Callable, NamedTuple  # noqa: E402
 
-from custom_ros_messages.action import FrameTask, NamedConfig  # noqa: E402
+from custom_ros_messages.action import FrameTask, GraspFrameTarget, NamedConfig  # noqa: E402
 from custom_ros_messages.msg import StringArray  # noqa: E402
 from geometry_msgs.msg import PoseArray, PoseStamped  # noqa: E402
 import numpy as np  # noqa: E402
+from pyquaternion import Quaternion  # noqa: E402
 from rclpy.action import ActionServer, CancelResponse, GoalResponse  # noqa: E402
 from rclpy.node import Node  # noqa: E402
+from rclpy.time import Time  # noqa: E402
+from tf2_ros import Buffer, TransformException, TransformListener  # noqa: E402
 
 from golem_upper_ik.config import load_controller_config  # noqa: E402
 from golem_upper_ik.core.controller.frame_controller import FrameController  # noqa: E402
@@ -42,7 +52,8 @@ from golem_upper_ik.ros2.utility import (  # noqa: E402
     matrix_to_pose, pose_to_matrix, robot_parameter, run,
 )
 
-__all__ = ['CATCH_UP_STEPS', 'FrameTaskServer', 'SLOW_MODE_SCALE', 'main']
+__all__ = ['CATCH_UP_STEPS', 'FrameTaskServer', 'GRASP_SETTLE_S', 'GoalError', 'SLOW_MODE_SCALE',
+           'main']
 
 # Speed multiplier for a goal that asks for slow_mode. A direct move scales its joint
 # velocity by it; a planned move is planned at a proportionally lower planner-frame speed
@@ -61,6 +72,24 @@ PUBLISH_HZ = 25.0
 POSE_FRAME = 'pelvis'
 # s between log lines while publishing the poses keeps failing
 PUBLISH_ERROR_LOG_PERIOD = 1.0
+# the arms, in the order of the profile's (left, right) grasp frames
+ARMS = ('left', 'right')
+# the grasp-frame action and pose topics: global names, which every arm controller serves
+GRASP_ACTION = '/grasp_frame_target'
+GRASP_POSE_TOPICS = ('/left_grasp_frame_pose', '/right_grasp_frame_pose')
+# s of robot time every targeted grasp frame must stay within threshold_linear and
+# threshold_angular before a /grasp_frame_target goal succeeds
+GRASP_SETTLE_S = 0.2
+# s of steady time a goal with a world-frame target listens to TF for its transforms
+TF_WAIT_S = 1.0
+# s of robot time: a world-frame target whose newest transform is older is refused
+TF_MAX_AGE_S = 0.5
+# s of steady time between TF lookups while waiting
+TF_POLL_S = 0.02
+
+
+class GoalError(Exception):
+    """Signal a /grasp_frame_target goal that cannot run; its message says why."""
 
 
 class _GoalKind(NamedTuple):
@@ -69,9 +98,10 @@ class _GoalKind(NamedTuple):
     result: the action's Result type. target: what a planned goal plans to, for the log.
     error(): the goal's error now; feedback(goal_handle, error) publishes it;
     reached(error) says whether it is within the action's thresholds.
-    planned_step_converges: whether the hold step's own convergence ends a planned goal (a
-    direct goal's always does). direct_reached_message: logged when a direct goal reaches
-    its target, or None.
+    planned_step_converges, direct_step_converges: whether the hold step's own convergence
+    ends a planned or a direct goal. direct_reached_message: logged when a direct goal
+    reaches its target, or None. settle: s of robot time the target must stay reached before
+    the goal is.
     """
 
     result: type
@@ -81,6 +111,8 @@ class _GoalKind(NamedTuple):
     reached: Callable
     planned_step_converges: bool
     direct_reached_message: str | None
+    direct_step_converges: bool = True
+    settle: float = 0.0
 
 
 class _Outcome(NamedTuple):
@@ -98,7 +130,7 @@ class _Outcome(NamedTuple):
 
 
 class FrameTaskServer(Node):
-    """Serve /frame_task and /named_config and publish the frame poses (module doc)."""
+    """Serve /frame_task, /named_config and /grasp_frame_target and publish the poses."""
 
     def __init__(self, *, robot_model=None, init=True, **node_kwargs):
         """Read the parameters and the config; start() builds the controller and the topics.
@@ -147,6 +179,8 @@ class FrameTaskServer(Node):
         self.left_ee_target_publisher = self.create_publisher(PoseStamped, 'left_ee_target', 10)
         self.right_ee_target_publisher = self.create_publisher(PoseStamped, 'right_ee_target',
                                                                10)
+        self.grasp_pose_publishers = tuple(self.create_publisher(PoseStamped, topic, 10)
+                                           for topic in GRASP_POSE_TOPICS)
         self.publisher_timer = self.create_timer(1.0 / PUBLISH_HZ, self.publisher_callback)
 
         self.action_server = ActionServer(
@@ -157,6 +191,10 @@ class FrameTaskServer(Node):
         self.named_config_server = ActionServer(
             self, NamedConfig, 'named_config',
             execute_callback=self.named_config_callback,
+            cancel_callback=self.cancel_callback)
+        self.grasp_frame_target_server = ActionServer(
+            self, GraspFrameTarget, GRASP_ACTION,
+            execute_callback=self.grasp_frame_target_callback,
             cancel_callback=self.cancel_callback)
         self.get_logger().info(f'Frame Task Server initialized ({self.summary})')
 
@@ -194,7 +232,7 @@ class FrameTaskServer(Node):
                                     throttle_duration_sec=PUBLISH_ERROR_LOG_PERIOD)
 
     def _publish_poses(self):
-        """Publish the goal's frames, targets and measured poses, and the end effectors'."""
+        """Publish the goal's frames, targets and poses, and the end-effector and grasp poses."""
         frame_names, frame_targets = self.frame_names, self.frame_targets
         names = StringArray()
         names.data = list(frame_names)
@@ -209,6 +247,9 @@ class FrameTaskServer(Node):
         left, right = self.controller.ee_transformations()
         self.left_ee_pose_publisher.publish(self._stamp_pose(matrix_to_pose(left), stamp))
         self.right_ee_pose_publisher.publish(self._stamp_pose(matrix_to_pose(right), stamp))
+        for frame, publisher in zip(self.profile.grasp_frames, self.grasp_pose_publishers):
+            pose = self.controller.get_frame_transformation(frame.name)
+            publisher.publish(self._stamp_pose(matrix_to_pose(pose), stamp))
         # an end effector's target goes out only while the goal has a task on its frame
         for frame, publisher in zip(self.profile.ee_frames, (self.left_ee_target_publisher,
                                                              self.right_ee_target_publisher)):
@@ -274,10 +315,10 @@ class FrameTaskServer(Node):
                 ik_step=self.controller.control_step_reduced,
                 plan=lambda: self.controller.plan_to_ik_target(ik_timeout=self.timeout))
 
-    def _goal_timeout(self, goal):
-        """Return the goal's duration, s of robot time, or controller.timeout without one."""
-        duration = goal.duration.sec + goal.duration.nanosec * 1e-9
-        return duration if duration > 0.0 else self.timeout
+    def _goal_timeout(self, duration):
+        """Return a goal's duration or timeout, s of robot time; controller.timeout for 0."""
+        seconds = duration.sec + duration.nanosec * 1e-9
+        return seconds if seconds > 0.0 else self.timeout
 
     def _resolve_target(self, frame_name, target, relative):
         """Return one frame's absolute 4x4 target in the pelvis frame.
@@ -308,7 +349,7 @@ class FrameTaskServer(Node):
         slow_mode slows this goal only: full speed returns when it ends, however it ends.
         """
         goal = goal_handle.request
-        timeout = self._goal_timeout(goal)
+        timeout = self._goal_timeout(goal.duration)
         self.controller.speed_scale = SLOW_MODE_SCALE if goal.slow_mode else 1.0
         if goal.slow_mode:
             self.get_logger().info(f'Slow mode enabled (speed_scale={SLOW_MODE_SCALE})')
@@ -376,16 +417,21 @@ class FrameTaskServer(Node):
             runs the next iteration's IK steps it owes, one per period, at most CATCH_UP_STEPS
             (stopping at the step under threshold_ik).
         A direct goal checks for a cancel after each step, a planned one before. The hold is
-        reached when kind.reached(error) holds, or when the hold step itself converges (a
-        planned goal: only with kind.planned_step_converges). timeout is in s of robot time.
-        Returns an _Outcome; the goal is left for the caller to end.
+        reached when kind.reached(error) holds, or when the hold step itself converges (as
+        kind.planned_step_converges or kind.direct_step_converges say), and has stayed so for
+        kind.settle s of robot time. timeout is in s of robot time. Returns an _Outcome; the
+        goal is left for the caller to end.
         """
         clock = self.controller.clock
         planned = ik_step is None
-        step_converges = kind.planned_step_converges if planned else True
+        step_converges = (kind.planned_step_converges if planned
+                          else kind.direct_step_converges)
         start_time = clock.now()
         ik_converged = planned
         steady_state_converged = False
+        reached = False
+        # robot time the target was first reached since it last was not, or None
+        reached_since = None
         blocked = None
         steps_owed = 1
         while clock.now() - start_time < timeout:
@@ -415,17 +461,22 @@ class FrameTaskServer(Node):
                 blocked = self._limit_block_reason()
                 if blocked is not None:
                     break
-                steady_state_converged = steady_state_converged or kind.reached(error)
-                if steady_state_converged:
-                    if not planned and kind.direct_reached_message is not None:
-                        self.get_logger().info(kind.direct_reached_message)
-                    break
+                if steady_state_converged or kind.reached(error):
+                    now = clock.now()
+                    reached_since = now if reached_since is None else reached_since
+                    if now - reached_since >= kind.settle:
+                        reached = True
+                        if not planned and kind.direct_reached_message is not None:
+                            self.get_logger().info(kind.direct_reached_message)
+                        break
+                else:
+                    reached_since = None
 
             dt = self.controller.dt
             clock.sleep(max(0.0, dt - (clock.now() - step_start)))
             steps_owed = min(CATCH_UP_STEPS, max(1, round((clock.now() - step_start) / dt)))
 
-        return _Outcome(False, ik_converged, steady_state_converged, blocked)
+        return _Outcome(False, ik_converged, reached, blocked)
 
     def _limit_block_reason(self):
         """Return the joints pinning the steady-state hold at a position limit, or None."""
@@ -521,10 +572,224 @@ class FrameTaskServer(Node):
                 # the feedback's joint error is measured against the planned goal
                 after_plan=lambda: self.controller.set_reduced_configuration_target(q_reduced))
 
+    def grasp_frame_target_callback(self, goal_handle):
+        """Run a GraspFrameTarget goal; every way it ends gives the result a message.
+
+        Its targets are resolved into the pelvis frame first; then it waits for the goal in
+        flight, if any, to end.
+        """
+        self.get_logger().info('Received grasp frame target goal')
+        try:
+            targets = self._grasp_targets(goal_handle.request)
+            with self._controller_lock:
+                return self._grasp_frame_target(goal_handle, targets)
+        except (GoalError, StaleStateError) as error:
+            return self._end_grasp(goal_handle, 'abort', str(error))
+
+    def _end_grasp(self, goal_handle, how, message, success=False):
+        """End a GraspFrameTarget goal ('succeed', 'abort' or 'canceled'); return its result."""
+        if success:
+            self.get_logger().info(f'Grasp frame target reached: {message}')
+        else:
+            self.get_logger().warn(f'Grasp frame target {how}: {message}')
+        getattr(goal_handle, how)()
+        result = GraspFrameTarget.Result()
+        result.success = success
+        result.message = message
+        return result
+
+    def _grasp_targets(self, goal):
+        """Return {arm: 4x4 target in the pelvis frame} for each arm the goal targets.
+
+        An arm whose header.frame_id is empty has no target. A target in another frame is
+        resolved through TF now (_pelvis_transforms). GoalError for a goal without a target,
+        a non-finite position or orientation, a zero orientation, or a transform TF does not
+        give.
+        """
+        stamped = {arm: getattr(goal, arm) for arm in ARMS}
+        targeted = {arm: pose for arm, pose in stamped.items() if pose.header.frame_id}
+        if not targeted:
+            raise GoalError('neither arm has a target: give left or right a header.frame_id '
+                            f'({POSE_FRAME} or a world frame)')
+        targets = {}
+        for arm, pose in targeted.items():
+            position, orientation = pose.pose.position, pose.pose.orientation
+            values = np.array([position.x, position.y, position.z, orientation.w,
+                               orientation.x, orientation.y, orientation.z])
+            if not np.all(np.isfinite(values)):
+                raise GoalError(f'the {arm} target is not finite: {values.tolist()}')
+            if np.linalg.norm(values[3:]) < 1e-6:
+                raise GoalError(f'the {arm} target has no orientation (a zero quaternion)')
+            # pose_to_matrix normalises the quaternion
+            targets[arm] = pose_to_matrix(pose.pose)
+        frames = sorted({pose.header.frame_id for pose in targeted.values()} - {POSE_FRAME})
+        transforms = self._pelvis_transforms(frames) if frames else {}
+        for arm, pose in targeted.items():
+            frame = pose.header.frame_id
+            if frame != POSE_FRAME:
+                targets[arm] = transforms[frame] @ targets[arm]
+        return targets
+
+    def _pelvis_transforms(self, frames):
+        """Return {frame: its 4x4 pose in the pelvis frame}, from TF's newest transforms.
+
+        Listens to TF (/tf, /tf_static) for up to TF_WAIT_S s of steady time, then stops. A
+        transform older than TF_MAX_AGE_S s of robot time is not taken; one of static
+        transforms only (stamp 0) is. GoalError, naming each frame, when a transform is
+        missing or too old by then.
+        """
+        tf_buffer = Buffer()
+        listener = TransformListener(tf_buffer, self)
+        try:
+            found, problems = {}, {}
+            deadline = time.monotonic() + TF_WAIT_S
+            while True:
+                now = self.get_clock().now()
+                for frame in frames:
+                    if frame in found:
+                        continue
+                    try:
+                        transform = tf_buffer.lookup_transform(POSE_FRAME, frame, Time())
+                    except TransformException as error:
+                        problems[frame] = f'no transform from {frame} to {POSE_FRAME} ({error})'
+                        continue
+                    stamp = Time.from_msg(transform.header.stamp, clock_type=now.clock_type)
+                    age = (now - stamp).nanoseconds * 1e-9
+                    if stamp.nanoseconds > 0 and age > TF_MAX_AGE_S:
+                        problems[frame] = (f'the newest transform from {frame} to {POSE_FRAME} '
+                                           f'is {age:.2f} s old (> {TF_MAX_AGE_S} s)')
+                        continue
+                    found[frame] = _transform_matrix(transform.transform)
+                if len(found) == len(frames):
+                    return found
+                if time.monotonic() >= deadline:
+                    raise GoalError('; '.join(problems[frame] for frame in frames
+                                              if frame not in found)
+                                    + f', after {TF_WAIT_S:.1f} s of listening to TF')
+                time.sleep(TF_POLL_S)
+        finally:
+            listener.unregister()
+
+    def _grasp_frame_target(self, goal_handle, targets):
+        """Pull each targeted grasp frame to its target, directly or along a plan; end the goal.
+
+        The other arm holds where it is. The timeout counts robot time from here, planning
+        and the path included. The goal succeeds once every target has been within the
+        thresholds for GRASP_SETTLE_S, and aborts at the timeout, on a planning or execution
+        failure, or on a hold pinned at a joint limit; a cancel ends it where the arms are.
+        """
+        goal = goal_handle.request
+        self.controller.check_state_fresh()
+        frames = {arm: frame.name for arm, frame in zip(ARMS, self.profile.grasp_frames)}
+        self.controller.clear_frame_tasks()
+        self.frame_names = [frames[arm] for arm in targets]
+        self.frame_targets = [matrix_to_pose(target) for target in targets.values()]
+        for arm, target in targets.items():
+            self.controller.add_frame_task(f'{frames[arm]}_task', frames[arm], target)
+        self.get_logger().info('Moving the grasp frames: ' + '; '.join(
+            f'{arm} to {np.round(target[:3, 3], 3).tolist()} m'
+            for arm, target in targets.items()) + (' along a plan' if goal.plan else ''))
+        self.controller.update_ik_solver()
+
+        kind = _GoalKind(
+            result=GraspFrameTarget.Result, target='grasp frame targets',
+            error=lambda: self._grasp_errors(frames, targets),
+            feedback=self._publish_grasp_feedback, reached=self._grasp_targets_reached,
+            planned_step_converges=False, direct_reached_message=None,
+            direct_step_converges=False, settle=GRASP_SETTLE_S)
+        clock = self.controller.clock
+        timeout = self._goal_timeout(goal.timeout)
+        deadline = clock.now() + timeout
+        ik_step = self.controller.control_step_reduced
+        if goal.plan:
+            ended = self._grasp_path(goal_handle, kind, deadline, timeout)
+            if ended is not None:
+                return ended
+            self.controller.init_steady_state()
+            ik_step = None
+
+        outcome = self._drive(goal_handle, kind, deadline - clock.now(), ik_step=ik_step)
+        errors = self._error_text(kind.error())
+        if outcome.canceled:
+            return self._end_grasp(goal_handle, 'canceled',
+                                   f'canceled; the arms hold where they are ({errors})')
+        if outcome.reached:
+            return self._end_grasp(goal_handle, 'succeed', f'reached ({errors})', success=True)
+        if outcome.blocked is not None:
+            return self._end_grasp(goal_handle, 'abort',
+                                   'the hold is pinned at a joint position limit: '
+                                   f'{outcome.blocked} ({errors})')
+        stage = '' if outcome.ik_converged else ' before the IK converged'
+        return self._end_grasp(goal_handle, 'abort',
+                               f'timed out after {timeout:.1f} s{stage} ({errors})')
+
+    def _grasp_path(self, goal_handle, kind, deadline, timeout):
+        """Plan to the IK solution of the targets and execute the path; None once executed.
+
+        Otherwise the goal's result: aborted when planning or execution fails or the deadline
+        (robot time) passes during the path, canceled on a cancel. Feedback goes out before
+        each waypoint, and a cancel or the deadline ends the path at the next one.
+        StaleStateError propagates.
+        """
+        clock = self.controller.clock
+
+        def stop():
+            """Publish the feedback; return whether a cancel or the deadline ends the path."""
+            kind.feedback(goal_handle, kind.error())
+            return goal_handle.is_cancel_requested or clock.now() >= deadline
+        try:
+            path = self.controller.plan_to_ik_target(ik_timeout=self.timeout)
+            self.get_logger().info(f'Executing planned path with {len(path)} waypoints')
+            executed = self.controller.execute_path(path, stop=stop)
+        except StaleStateError:
+            raise
+        except Exception as error:
+            return self._end_grasp(goal_handle, 'abort', f'planning or execution failed: {error}')
+        if executed:
+            return None
+        errors = self._error_text(kind.error())
+        if goal_handle.is_cancel_requested:
+            return self._end_grasp(goal_handle, 'canceled', 'canceled during the path; the arms '
+                                   f'hold where they are ({errors})')
+        return self._end_grasp(goal_handle, 'abort',
+                               f'timed out after {timeout:.1f} s during the path ({errors})')
+
+    def _grasp_errors(self, frames, targets):
+        """Return {arm: (m, rad)}: each grasp frame's error from its target; 0s without one."""
+        return {arm: (self.controller.frame_pose_error(frames[arm], targets[arm])
+                      if arm in targets else (0.0, 0.0)) for arm in ARMS}
+
+    def _grasp_targets_reached(self, errors):
+        """Return whether every arm is within threshold_linear and threshold_angular."""
+        return all(distance < self.threshold_linear and angle < self.threshold_angular
+                   for distance, angle in errors.values())
+
+    def _publish_grasp_feedback(self, goal_handle, errors):
+        """Publish a GraspFrameTarget goal's errors (_grasp_errors()) as feedback."""
+        feedback = GraspFrameTarget.Feedback()
+        feedback.left_error_m, feedback.left_error_rad = errors['left']
+        feedback.right_error_m, feedback.right_error_rad = errors['right']
+        goal_handle.publish_feedback(feedback)
+
+    @staticmethod
+    def _error_text(errors):
+        """Return errors (_grasp_errors()) as text: mm and rad per arm."""
+        return ', '.join(f'{arm} {distance * 1000.0:.1f} mm {angle:.4f} rad'
+                         for arm, (distance, angle) in errors.items())
+
     def cancel_callback(self, goal_handle):
         """Accept every cancel request; the goal loop ends at its next step."""
         self.get_logger().info('Canceling goal')
         return CancelResponse.ACCEPT
+
+
+def _transform_matrix(transform):
+    """Return a geometry_msgs Transform as a 4x4 transformation."""
+    rotation = transform.rotation
+    matrix = np.eye(4)
+    matrix[:3, :3] = Quaternion(rotation.w, rotation.x, rotation.y, rotation.z).rotation_matrix
+    matrix[:3, 3] = [transform.translation.x, transform.translation.y, transform.translation.z]
+    return matrix
 
 
 def main(args=None):

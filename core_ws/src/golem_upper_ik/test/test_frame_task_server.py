@@ -320,9 +320,15 @@ def test_slow_mode_scales_speed(ros, models, robot, tmp_path):
     controller.speed_scale = 1.0
 
     # the same 2 cm move at full speed and in slow mode, with a move back between them
+    upper = list(profile.upper_slots)
     peaks = {}
     for slow_mode, x, measured in ((False, 0.02, True), (False, -0.02, False),
                                    (True, 0.02, True)):
+        # the recorder stamps a command when its callback runs, which can trail the publisher
+        # under load; the window starts once it has the controller's current command, so the
+        # last goal's commands are not read as this one's
+        assert wait_for(lambda: recorder.samples and np.allclose(
+            recorder.samples[-1].q, controller.low_cmd_handler.q_cmd[upper], atol=1e-6), 5.0)
         start = time.monotonic()
         status, result = send_goal(
             ros, FrameTask, '/frame_task',

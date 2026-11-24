@@ -37,6 +37,9 @@ imu:
 # it, and test_example_configs.py compares this file's keys with the shipped export.yaml's):
 #   engage_blend_s: 0.5       # s after the engage over which the legs' targets go linearly from the pre-pose's last
 #                             # command to the policy's; absent or 0: none
+# and runs from 2026-11-24 the legs' target low-pass (likewise a comment):
+#   leg_action_lowpass_hz: 8.0  # Hz, the one-pole low-pass on the legs' targets each control step, before the bounds;
+#                               # absent or 0: none
 
 # The sport-mode runs' exports (from LocoManip-LegsSquare-v0 on) also carry what they trained with, over the deploy
 # config's keys of the same names (example.yaml):

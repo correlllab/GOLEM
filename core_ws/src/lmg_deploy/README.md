@@ -90,6 +90,10 @@ legs' list may leave out `ee_targets`: LocoManip-LegsOnly-v0 runs from 2026-11-1
   targets go linearly from the pre-pose's last command to the policy's (the legs observe the blended targets, as in
   training), so a policy engaged from a sagged pose does not jump its targets. Only the engage blends: the sim's
   restart at the band's release does not. Absent or 0: none.
+- `leg_action_lowpass_hz` (runs from 2026-11-24, trained with it): the legs' targets go through a one-pole low-pass at
+  this cutoff each control step, after the engage blend and before the bounds (the legs observe the filtered targets,
+  as in training). It starts at the pre-pose's last command at the engage, else at the measured legs. Absent or 0:
+  none. A policy trained with it must not run on an lmg_deploy without it.
 - `arm_goal_frame: pelvis` and `arm_goal_keeps_walking: true` (LocoManip-Marl-Direct-v0 from 2026-11-19): an arm goal
   rides on the pelvis (the SLAM odometry doesn't move it) and the velocity command stays live through it.
 - With an `arm_ik` block in `export.yaml` (runs whose arms trained with `mdp.IKPostureArmAction`:

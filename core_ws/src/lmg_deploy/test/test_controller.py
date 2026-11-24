@@ -544,6 +544,8 @@ def _shipped_cfg():
         cfg = yaml.safe_load(f)
     with open(os.path.join(SHIPPED, "export.yaml")) as f:
         cfg.update(yaml.safe_load(f) or {})
+    if cfg.get("arm_seed_table"):  # named relative to the export's folder, as marl_deploy_node resolves it
+        cfg["arm_seed_table"] = os.path.join(SHIPPED, cfg["arm_seed_table"])
     return cfg
 
 
@@ -710,6 +712,47 @@ def test_no_engage_blend_without_a_held_target_or_engage_blend_s():
         state = _state(cfg)
         ctrl.reset(state, held_target=held_target)
         np.testing.assert_allclose(ctrl.step(state).q[:12], policy)
+
+
+def test_leg_action_lowpass_filters_the_legs_targets_from_the_held_target():
+    """With leg_action_lowpass_hz the legs' targets are one-pole low-passed from the held target, observed as sent."""
+    ctrl, cfg = _controller(legs=ConstNetwork(np.ones(12)), leg_action_lowpass_hz=8.0, torque_headroom=None,
+                            target_limits=None, target_margin=1.0)
+    default = np.array(cfg["default_joint_pos"])
+    held = default.copy()
+    held[:12] -= 0.2
+    policy = default[:12] + 0.25                       # the constant action 1 at the test config's scale 0.25
+    alpha = 1.0 - np.exp(-2.0 * np.pi * 8.0 * cfg["control_dt"])
+    state = _state(cfg)
+    ctrl.reset(state, held_target=held)
+    y = held[:12].copy()
+    for _ in range(5):
+        cmd = ctrl.step(state)
+        y = y + alpha * (policy - y)
+        np.testing.assert_allclose(cmd.q[:12], y)
+        np.testing.assert_allclose(ctrl.legs_last, (cmd.q[:12] - default[:12]) / 0.25)
+    # without a held target (a restart) it starts at the measured legs
+    ctrl.reset(state)
+    np.testing.assert_allclose(ctrl.step(state).q[:12], state.q[:12] + alpha * (policy - state.q[:12]))
+
+
+def test_leg_action_lowpass_is_bounded_after_filtering():
+    """The bounds apply to the filtered target, and the filter's state stays the unbounded one."""
+    ctrl, cfg = _controller(legs=ConstNetwork(np.full(12, 10.0)), leg_action_lowpass_hz=8.0, torque_headroom=None)
+    state = _state(cfg)
+    ctrl.reset(state)
+    for _ in range(50):
+        cmd = ctrl.step(state)
+        assert np.all(cmd.q[:12] <= ctrl.upper[:12] + 1e-12) and np.all(cmd.q[:12] >= ctrl.lower[:12] - 1e-12)
+    np.testing.assert_allclose(ctrl.legs_lowpass, np.array(cfg["default_joint_pos"][:12]) + 2.5, atol=1e-6)
+
+
+def test_no_leg_action_lowpass_without_the_key():
+    """A policy without leg_action_lowpass_hz sends its targets at once."""
+    ctrl, cfg = _controller(legs=ConstNetwork(np.ones(12)), torque_headroom=None, target_limits=None, target_margin=1.0)
+    state = _state(cfg)
+    ctrl.reset(state, held_target=np.array(cfg["default_joint_pos"]) - 0.2)
+    np.testing.assert_allclose(ctrl.step(state).q[:12], np.array(cfg["default_joint_pos"][:12]) + 0.25)
 
 
 def test_command_filter_low_passes_the_observed_command():

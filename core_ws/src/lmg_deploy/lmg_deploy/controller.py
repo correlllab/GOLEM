@@ -77,6 +77,15 @@ observe the blended target as their last action (mdp.BoundedJointPositionAction'
 engage_blend_s). It keeps the first commands continuous with the held ones when
 the policy's first targets are far from them (an engage from a sagged pose).
 
+Leg target low-pass: with export.yaml's leg_action_lowpass_hz (Hz; absent or 0:
+none), after the engage blend the legs' target goes through a one-pole low-pass
+per control step, y += alpha (target - y) with alpha = 1 - exp(-2 pi f
+control_dt), and is then bounded as in step 4, so the bounds hold every step
+(mdp.BoundedJointPositionAction's target_lowpass_hz). Its state y is the filtered
+target before the bounds; reset() starts it at held_target (the engage), else
+at the measured legs (the default pose without a state). The legs observe the
+filtered, bounded target as their last action.
+
 IMU calibration (imu_calibration.py): with export.yaml imu.orientation calibrated, the controller removes the
 robot's static torso-IMU offset (MarlController's imu_calibration) from every state it reads, so the observations,
 the arms' gravity offset and step() all see the corrected attitude; a raw policy (imu.orientation raw, or absent)
@@ -189,6 +198,9 @@ class MarlController:
         self.cmd_alpha = 1.0 - np.exp(-self.dt / tau) if tau > 0.0 else None
         self.gait_period = float(cfg["gait_period"])
         self.engage_blend_steps = int(round(float(cfg.get("engage_blend_s") or 0.0) / self.dt))
+        # export.yaml's leg_action_lowpass_hz (module doc, leg target low-pass); 1.0: no filter
+        lowpass_hz = float(cfg.get("leg_action_lowpass_hz") or 0.0)
+        self.legs_lowpass_alpha = 1.0 - np.exp(-2.0 * np.pi * lowpass_hz * self.dt) if lowpass_hz > 0.0 else 1.0
         self.zero_cmd_eps = float(cfg["zero_cmd_eps"])
         self.gait_phase_cos = bool(cfg.get("gait_phase_cos", False))
         self.obs_terms = {agent: self._agent_terms(cfg.get(f"{agent}_obs_terms"), terms)
@@ -248,6 +260,9 @@ class MarlController:
         # rad, the engage blend's start (None: no blend)
         self.blend_from = (None if held_target is None or not self.engage_blend_steps
                            else np.asarray(held_target, dtype=np.float64)[:NUM_LEGS].copy())
+        # rad, the leg target low-pass's state: from the held target at the engage, else the measured legs
+        self.legs_lowpass = (np.asarray(held_target, dtype=np.float64)[:NUM_LEGS].copy() if held_target is not None
+                             else np.asarray(q_legs, dtype=np.float64).copy())
         self.arms_last = np.zeros(self.n_arm_actions)
         self.residual = np.zeros(self.n_arm_actions)   # the arms' action after the low-pass (or integration)
         # arm_ik's state, as IKPostureArmAction.reset leaves it: the target from the measured arm angles, at rest
@@ -374,11 +389,14 @@ class MarlController:
 
     def legs_targets(self, legs_action: np.ndarray, state: RobotState) -> np.ndarray:
         """Return the legs' 12 joint targets (rad) for their clipped action at state: scaled, blended at the engage
-        (module doc, engage blend; by step()'s count, self.steps), then bounded."""
+        (module doc, engage blend; by step()'s count, self.steps), low-passed (leg_action_lowpass_hz), then bounded."""
         target = legs_action * self.legs_scale + self.default[:NUM_LEGS]
         if self.blend_from is not None and self.steps < self.engage_blend_steps:
             # SAFETY: the engage's first targets stay continuous with the held ones (module doc, engage blend)
             target = self.blend_from + (self.steps + 1) / self.engage_blend_steps * (target - self.blend_from)
+        if self.legs_lowpass_alpha < 1.0:
+            self.legs_lowpass = self.legs_lowpass + self.legs_lowpass_alpha * (target - self.legs_lowpass)
+            target = self.legs_lowpass.copy()
         return self._torque_bound(self._bound(target, slice(0, NUM_LEGS)), state, slice(0, NUM_LEGS))
 
     # -- arm_ik: mdp.IKPostureArmAction ------------------------------------------

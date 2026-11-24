@@ -678,16 +678,17 @@ class FrameTaskServer(Node):
         The timeout counts robot time from here, planning and the path included. The goal
         succeeds once every target has been within the thresholds for GRASP_SETTLE_S, and
         aborts at the timeout, on a planning or execution failure, or on a hold pinned at a
-        joint limit; a cancel ends it where the arms are.
+        joint limit; a cancel stops the targeted arms where they are (controller.stop_joints).
         """
-        self.controller.bias_joints = self.controller.arm_joint_ids(targets)
+        joints = self.controller.arm_joint_ids(targets)
+        self.controller.bias_joints = joints
         try:
-            return self._move_grasp_frames(goal_handle, targets)
+            return self._move_grasp_frames(goal_handle, targets, joints)
         finally:
             self.controller.bias_joints = None
 
-    def _move_grasp_frames(self, goal_handle, targets):
-        """Run _grasp_frame_target's goal with its bias joints set; end the goal."""
+    def _move_grasp_frames(self, goal_handle, targets, joints):
+        """Run _grasp_frame_target's goal on the targeted arms' body joints; end the goal."""
         goal = goal_handle.request
         self.controller.check_state_fresh()
         frames = {arm: frame.name for arm, frame in zip(ARMS, self.profile.grasp_frames)}
@@ -700,6 +701,8 @@ class FrameTaskServer(Node):
             f'{arm} to {np.round(target[:3, 3], 3).tolist()} m'
             for arm, target in targets.items()) + (' along a plan' if goal.plan else ''))
         self.controller.update_ik_solver()
+        # how far the targeted arms rest off their commands now, for a cancel's stop
+        stop_reference = self.controller.stop_reference(joints)
 
         kind = _GoalKind(
             result=GraspFrameTarget.Result, target='grasp frame targets',
@@ -712,17 +715,19 @@ class FrameTaskServer(Node):
         deadline = clock.now() + timeout
         ik_step = self.controller.control_step_reduced
         if goal.plan:
-            ended = self._grasp_path(goal_handle, kind, deadline, timeout)
+            ended = self._grasp_path(goal_handle, kind, deadline, timeout,
+                                     lambda: self.controller.stop_joints(joints, stop_reference))
             if ended is not None:
                 return ended
             self.controller.init_steady_state()
             ik_step = None
 
         outcome = self._drive(goal_handle, kind, deadline - clock.now(), ik_step=ik_step)
-        errors = self._error_text(kind.error())
         if outcome.canceled:
-            return self._end_grasp(goal_handle, 'canceled',
-                                   f'canceled; the arms hold where they are ({errors})')
+            self.controller.stop_joints(joints, stop_reference)
+            return self._end_grasp(goal_handle, 'canceled', 'canceled; the arms hold where they '
+                                   f'are ({self._error_text(kind.error())})')
+        errors = self._error_text(kind.error())
         if outcome.reached:
             return self._end_grasp(goal_handle, 'succeed', f'reached ({errors})', success=True)
         if outcome.blocked is not None:
@@ -733,13 +738,13 @@ class FrameTaskServer(Node):
         return self._end_grasp(goal_handle, 'abort',
                                f'timed out after {timeout:.1f} s{stage} ({errors})')
 
-    def _grasp_path(self, goal_handle, kind, deadline, timeout):
+    def _grasp_path(self, goal_handle, kind, deadline, timeout, stop_arms):
         """Plan to the IK solution of the targets and execute the path; None once executed.
 
         Otherwise the goal's result: aborted when planning or execution fails or the deadline
-        (robot time) passes during the path, canceled on a cancel. Feedback goes out before
-        each waypoint, and a cancel or the deadline ends the path at the next one.
-        StaleStateError propagates.
+        (robot time) passes during the path, canceled on a cancel, which calls stop_arms() to
+        stop the targeted arms where they are. Feedback goes out before each waypoint, and a
+        cancel or the deadline ends the path at the next one. StaleStateError propagates.
         """
         clock = self.controller.clock
 
@@ -757,10 +762,11 @@ class FrameTaskServer(Node):
             return self._end_grasp(goal_handle, 'abort', f'planning or execution failed: {error}')
         if executed:
             return None
-        errors = self._error_text(kind.error())
         if goal_handle.is_cancel_requested:
+            stop_arms()
             return self._end_grasp(goal_handle, 'canceled', 'canceled during the path; the arms '
-                                   f'hold where they are ({errors})')
+                                   f'hold where they are ({self._error_text(kind.error())})')
+        errors = self._error_text(kind.error())
         return self._end_grasp(goal_handle, 'abort',
                                f'timed out after {timeout:.1f} s during the path ({errors})')
 

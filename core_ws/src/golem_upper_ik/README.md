@@ -249,8 +249,18 @@ then moves only in the start-up step 4.
   or the timeout, during a planned path stops it before its next waypoint; the IK solve and the
   planning before the path are not cut short (the planner's first request also builds its
   robot model, seconds). Every end sets the
-  result's `message` (`reached (...)`, or why it was aborted or canceled, with the errors), and
-  after any end the arms hold the last command, where the goal left them. The feedback, every
+  result's `message` (`reached (...)`, or why it was aborted or canceled, with the errors). A
+  cancel, direct or during the path, stops the targeted arms where they are, since a moving
+  arm lags its command (about 20 mm at the grasp frame at 0.3 m/s on the H1-2 sim) and would
+  keep going that far: each of their joints is commanded at its measured position plus its
+  resting offset (`stop_joints`), how far it sat off its command when the goal started (the
+  gravity error its torque bias leaves), adjusted by the bias faded since; a joint that was
+  moving or more than 0.1 rad off then gets no offset. The arm then stops within its braking
+  distance and settles near the pose (in the sims, cancelled at 0.13 to 0.33 m/s: at most 6 mm
+  away on the H1-2 and 14 mm on the soft-armed G1 within 0.1 s, settling within 2.5 mm and
+  1.5 mm). A `/frame_task` or `/named_config` cancel, and a grasp goal's timeout, leave the
+  last command, which a moving arm keeps following. After any other end the arms hold the
+  last command, where the goal left them. The feedback, every
   control step and before every waypoint, and the errors in the message are each grasp frame's
   distance from its target (m) and the angle between their rotations (rad), measured as the IK
   sees the frame (the reduced model at the measured arm joints, the torso or waist at the angle

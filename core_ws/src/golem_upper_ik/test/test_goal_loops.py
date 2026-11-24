@@ -161,6 +161,15 @@ class FakeController:
         """Start the hold."""
         self._call('init_steady_state')
 
+    def stop_reference(self, joint_ids):
+        """Return a stand-in for the joints' resting offsets, recording the call."""
+        self._call('stop_reference', list(joint_ids))
+        return ('reference', tuple(joint_ids))
+
+    def stop_joints(self, joint_ids, reference=None):
+        """Stop the joints where they are."""
+        self._call('stop_joints', list(joint_ids), reference)
+
     def check_state_fresh(self):
         """Pass the freshness check."""
         self._call('check_state_fresh')
@@ -726,11 +735,35 @@ def test_grasp_goal_aborts_at_its_timeout():
 
 
 def test_grasp_goal_canceled_holds_where_it_is():
-    """A canceled grasp goal ends canceled at once, saying the arms hold where they are."""
+    """A canceled grasp goal stops its arms where they are, then ends canceled, saying so."""
     trace, handle, result, _ = run_goal('grasp', ik=(FAR, NEAR), cancel_at=3)
     assert handle.status == 'canceled' and not result.success
     assert steps(trace) == ['ik_step', 'ik_step', 'hold_step']
     assert result.message.startswith('canceled; the arms hold where they are (left')
+    names = [entry[0] for entry in trace]
+    # with the resting offsets taken once the IK was seeded, before the first step
+    assert entries(trace, 'stop_joints') == [('stop_joints', [0, 1], ('reference', (0, 1)))]
+    assert names.index('update_ik_solver') < names.index('stop_reference') < names.index(
+        'ik_step')
+    assert names.index('hold_step') < names.index('stop_joints') < names.index('status')
+
+
+@pytest.mark.parametrize('ending', [
+    {}, {'ik': (NEAR,), 'errors': (NEAR,)}, {'stale_at': 2},
+    {'ik': (NEAR,), 'limited': ((), (('left_elbow_joint', 1.5, 1.5),))}])
+def test_grasp_goal_stops_its_arms_only_on_a_cancel(ending):
+    """Only a cancel stops the arms; every other end leaves the goal's last command."""
+    trace, handle, _, _ = run_goal('grasp', request=grasp_request(arms=('left', 'right')),
+                                   **ending)
+    assert handle.status in ('aborted', 'succeeded')
+    assert entries(trace, 'stop_joints') == []
+
+
+@pytest.mark.parametrize('action', ACTIONS)
+def test_canceled_frame_and_named_goals_keep_their_last_command(action):
+    """A canceled /frame_task or /named_config goal ends on its last command, as it did."""
+    trace, handle, _, _ = run_goal(action, ik=(FAR,), cancel_at=2)
+    assert handle.status == 'canceled' and entries(trace, 'stop_joints') == []
 
 
 def test_grasp_goal_pinned_at_a_limit_aborts():
@@ -778,9 +811,14 @@ def test_planned_grasp_goal_stops_its_path():
     assert ('path_stopped', 1) in trace and steps(trace) == []
     assert handle.status == 'canceled'
     assert result.message.startswith('canceled during the path; the arms hold where they are')
+    # a cancel stops the arm where it is; the timeout leaves the last waypoint
+    names = [entry[0] for entry in trace]
+    assert entries(trace, 'stop_joints') == [('stop_joints', [0, 1], ('reference', (0, 1)))]
+    assert names.index('stop_reference') < names.index('plan_to_ik_target')
+    assert names.index('path_stopped') < names.index('stop_joints') < names.index('status')
     trace, handle, result, _ = run_goal('grasp', plan=True, path=3.0)
     assert ('path_stopped', 1) in trace and steps(trace) == []
-    assert handle.status == 'aborted'
+    assert handle.status == 'aborted' and entries(trace, 'stop_joints') == []
     assert result.message.startswith('timed out after 1.0 s during the path (left')
 
 

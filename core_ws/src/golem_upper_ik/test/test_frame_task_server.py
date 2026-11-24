@@ -899,6 +899,41 @@ def test_grasp_frame_target_leaves_the_other_arm_and_the_torso_alone(ros, models
 
 
 @pytest.mark.parametrize('robot', ROBOTS)
+def test_stop_joints_commands_the_measured_pose_plus_the_resting_offset(ros, models, robot):
+    """stop_joints commands its joints at their measured positions plus their resting offset.
+
+    The left arm rests 0.02 rad below its command here. Without a reference the stop command
+    is the measured pose; with stop_reference taken at rest (no bias fading since) it is the
+    measured pose plus those 0.02 rad, where the arm rests. The other joints keep their
+    command.
+    """
+    profile = profile_of(robot)
+    following, model, server, _ = grasp_server(ros, models, robot)
+    controller = server.controller
+    left = controller.arm_joint_ids(['left'])
+    others = [slot for slot in profile.upper_slots if slot not in left]
+    sag = np.zeros(len(profile.body_joints))
+    sag[left] = 0.02
+    following.set_sag(sag)
+    command = controller.low_cmd_handler.q_cmd
+    assert wait_for(lambda: np.allclose(controller.robot_model.state['q'][left],
+                                        command[left] - 0.02, atol=1e-5), 2.0)
+    reference = controller.stop_reference(left)
+    np.testing.assert_allclose(reference[0], 0.02, atol=1e-5)
+    measured = np.array(controller.robot_model.state['q'])
+
+    controller.stop_joints(left, reference)
+    after = controller.low_cmd_handler.q_cmd
+    np.testing.assert_allclose(after[left], command[left], atol=1e-5)
+    np.testing.assert_array_equal(after[others], command[others])
+
+    controller.stop_joints(left)
+    after = controller.low_cmd_handler.q_cmd
+    np.testing.assert_allclose(after[left], measured[left], atol=1e-6)
+    np.testing.assert_array_equal(after[others], command[others])
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
 def test_planned_grasp_frame_target(ros, models, robot):
     """A planned goal moves both grasp frames to their targets along a plan."""
     config = config_of(robot, CONFIGS[robot])

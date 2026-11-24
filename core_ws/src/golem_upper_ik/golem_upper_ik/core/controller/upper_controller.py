@@ -56,6 +56,9 @@ TAU_BIAS_FADE_SEC = 1.0
 HOLD_SPEED = 0.3
 # rad: a start-up posture is reached when the IK's command is this close on every IK joint
 STARTUP_THRESHOLD = 1e-3
+# rad/s: a joint faster than this when a goal starts is not at rest, so how far it sits off
+# its command then is not its resting offset (stop_reference)
+STOP_REFERENCE_MAX_SPEED = 0.05
 
 
 def ros_domain_id(node) -> int:
@@ -322,6 +325,50 @@ class UpperController:
             self._apply_joint_position(self.ik_solver.q)
             self.update_robot_model()
             self.clock.sleep(self.dt)
+
+    def stop_reference(self, joint_ids):
+        """Return what stop_joints needs to stop joint_ids where they are, taken at rest.
+
+        Returns (offset, bias): each joint's resting offset, its command less its measured
+        position (rad: the gravity error its torque bias leaves, over kp), and its torque bias
+        (N*m), both now. A joint faster than STOP_REFERENCE_MAX_SPEED, or further than
+        COMMAND_SEED_MAX_GAP off its command (blocked or pushed), gets offset 0.
+        """
+        joint_ids = list(joint_ids)
+        state = self.robot_model.state
+        offset = (self.low_cmd_handler.q_cmd.astype(np.float64)[joint_ids]
+                  - np.asarray(state['q'], dtype=np.float64)[joint_ids])
+        unknown = ((np.abs(np.asarray(state['dq'], dtype=np.float64)[joint_ids])
+                    > STOP_REFERENCE_MAX_SPEED)
+                   | ~(np.abs(offset) <= COMMAND_SEED_MAX_GAP))
+        offset[unknown] = 0.0
+        return offset, self._tau_bias[joint_ids].copy()
+
+    def stop_joints(self, joint_ids, reference=None):
+        """Command joint_ids where they will rest at their measured positions: stop a moving arm.
+
+        A move's command leads the arm by its tracking lag (about 20 mm at the grasp frame at
+        0.3 m/s on the H1-2 sim), so an arm left on the move's last command keeps going that
+        far. Each joint is commanded at its measured position plus its resting offset:
+        reference (stop_reference, taken when the goal started) gives it, adjusted by the
+        torque bias that has faded since (its change over kp); without one the offset is 0.
+        The arm then stops within its braking distance. The other joints keep their last
+        command; the torque is the gravity torque at the measured pose plus the bias, as on
+        every command. StaleStateError, the last command standing, when /lowstate is stale.
+        """
+        self.check_state_fresh()
+        joint_ids = list(joint_ids)
+        measured = np.asarray(self.robot_model.state['q'], dtype=np.float64)
+        offset = np.zeros(len(joint_ids))
+        if reference is not None:
+            offset_then, bias_then = reference
+            kp = np.asarray(self.config['gains']['kp'], dtype=np.float64)[joint_ids]
+            faded = (bias_then - self._tau_bias[joint_ids]) / np.where(kp > 0.0, kp, np.inf)
+            offset = offset_then + faded
+        q = self.low_cmd_handler.q_cmd.astype(np.float64)
+        q[joint_ids] = measured[joint_ids] + offset
+        tau = self.robot_model.dynamics.get_gravity_compensation(measured) + self._tau_bias
+        self._command(q, np.zeros(self.robot_model.num_motor), tau)
 
     def arm_joint_ids(self, arms):
         """Return the body joint ids of the IK joints of arms ('left', 'right'), sorted."""

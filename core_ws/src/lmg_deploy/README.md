@@ -275,7 +275,8 @@ mean of two pairs of recordings on one spot, facing forward and turned 180 deg (
 turn, so a pair's mean cancels it), in the pre-pose with the hoist taut (the pre-pose does not balance alone); the
 pairs agree within 0.29 roll, 0.04 pitch, and the feet within 0.41 in every recording. The torso accelerometer reads
 1.0 roll, 0.65 pitch away from the leg kinematics, floor-free (the quaternion against it: roll -0.2, pitch -2.35):
-an IMU board tilted on `torso_link`, or an offset shared by both legs, which a flat-footed stand cannot see.
+most likely an IMU board tilted on `torso_link` (else an offset shared by both legs, which a flat-footed stand
+cannot see); the kinematic value removes the tilt with the estimator's offset.
 `config/imu_calibration.yaml` has the numbers.
 
 **At run time,** once the policy is engaged on the torso IMU and has stood still on both loaded feet at zero command

@@ -33,9 +33,11 @@
 #   (-0.39 / -0.30): +0.92 / -1.68
 # The torso accelerometer disagrees: the quaternion against it reads roll -0.2, pitch -2.35 in every bag, either way
 # round (as on 2026-11-23), so floor-free the accelerometer and the leg kinematics differ by +1.0 roll, +0.65 pitch.
-# An IMU board tilted on torso_link, or an offset shared by both legs (which a flat-footed stand cannot see), would
-# each do that. The two candidates are within the +-1 deg error the calibrated policies train to tolerate
-# (imu.residual_deg) of their midpoint, roll +0.4, pitch -2.0.
+# An IMU board tilted on torso_link would do that (the likelier cause, unmeasured on the real H1-2), as would an
+# offset shared by both legs, which a flat-footed stand cannot see. This value removes both the estimator's offset
+# and a board tilt, so the policy sees torso_link's attitude. rotate_gyro stays false: about 1 deg of the offset
+# would be a physical tilt, which leaves the gyro ~1 deg off its axes, and rotating it by the whole offset would
+# over-rotate it by the estimator's ~2.4 deg.
 h12:
   roll_deg: 1.0
   pitch_deg: -1.7

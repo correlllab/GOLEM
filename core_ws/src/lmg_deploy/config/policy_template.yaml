@@ -58,21 +58,21 @@ torque_headroom: 0.85       # the run's 85% torque headroom
 
 legs:
   policy: legs.pt
-  num_obs: 97               # with gait_phase_cos
+  num_obs: 79               # the shipped term list's size; export_marl.py writes the network's
   num_actions: 12
   action_scale: 0.25
 
 arms:
   policy: arms.pt
-  num_obs: 125              # with gait_phase_cos
+  num_obs: 108              # the shipped term list's size; export_marl.py writes the network's
   num_actions: 14
   residual_scale: 0.2
-  residual_cutoff_hz: 3.0
+  residual_cutoff_hz: 3.0   # not read (older exports)
   ee_frames: [left_wrist_yaw_link, right_wrist_yaw_link]
-  ik_damping: 0.05
-  max_ik_step: 0.1
+  ik_damping: 0.05          # not read (older exports)
+  max_ik_step: 0.1          # not read (older exports)
 
-# FAST-LIO's body is the IMU chip it integrates /livox/imu in (golem_slam config/h12/fastlio.yaml).
+# Not read: FAST-LIO's body, which older exports' world-frame arm goals were carried by.
 slam_frame: livox_imu_link
 
 # manager_based mdp/rewards.py's gait clock

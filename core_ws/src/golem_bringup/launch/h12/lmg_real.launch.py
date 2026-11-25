@@ -57,8 +57,8 @@ def generate_launch_description():
                               description='golem_safety config: a name under its config/h12/, '
                                           'or a path'),
         DeclareLaunchArgument('use_slam', default_value='true',
-                              description="true: start golem_slam's navigation, which also "
-                                          'gives the policy /Odometry for its arm goals'),
+                              description="true: start golem_slam's navigation, which drives "
+                                          'the policy on /cmd_vel'),
         # The MID-360 is SLAM's lidar and IMU.
         DeclareLaunchArgument('use_lidar', default_value='true',
                               description='true: start the MID-360 driver'),

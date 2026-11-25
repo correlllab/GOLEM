@@ -355,7 +355,7 @@ including `h12_control.launch.py`'s `sim`, which has no default.
 | `h12_lowerbody.launch.py` | `golem_lowerbody_rl`'s `lowerbody.launch.py` (`robot: h12`, `policy:=`, run config `lowerbody_config`, `sim`, every argument passed), behind `start_position_verified`; a policy the H1-2 does not list is refused. `h12_sim` and `h12_real_robot` include it last and put its check (`golem_bringup.h12_legs.leg_check`, with the arguments they pass it) first, so a refused policy or run config starts no node |
 | `golem_vision_models.launch.py` | gemini + sam servers, [yolo], graspgen + `golem_skills` (`use_skills`) |
 | `h12_real_drivers.launch.py` | Livox MID360 (no extrinsic rotation: the points and `/livox/imu` are both in the sensor's raw, upside-down frame, the URDF's `livox_link` and `livox_imu_link`), RealSense head camera, `h12_grippers.launch.py` (left+right `gripper_node`) |
-| `h12_locomanipulationgame.launch.py` | `marl_deploy_node` (behind `start_position_verified`; holds arm goals in the world by the SLAM `/Odometry`) |
+| `h12_locomanipulationgame.launch.py` | `marl_deploy_node` (behind `start_position_verified`) |
 | `golem_slam/launch/navigation.launch.py` | the shared nav stack, included with `robot: h12` (FAST-LIO → pointcloud_to_laserscan → slam_toolbox → nav2; `golem_slam`'s `config/h12/`) |
 
 `golem_bringup` has one more top-level file, `h12_real_slam.launch.py`

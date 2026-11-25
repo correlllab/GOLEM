@@ -3,7 +3,6 @@
     python -m pytest test/test_imu_calibration.py
 """
 
-import logging
 import os
 
 import numpy as np
@@ -14,7 +13,7 @@ from lmg_deploy import imu_calibration as C
 from lmg_deploy import rotations as R
 from lmg_deploy.controller import MarlController, RobotState
 from lmg_deploy.kinematics import ArmKinematics
-from shipped_policy import URDF, shipped_cfg
+from shipped_policy import URDF, ZERO_CALIBRATION, shipped_cfg
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PKG = os.path.join(HERE, "..")
@@ -88,10 +87,6 @@ def test_rotate_gyro_expresses_a_tilted_imus_rate_in_the_level_frame():
     quat, gyro = C.correct_imu(imu0, w_imu, cal)
     np.testing.assert_allclose(gyro, w_body, atol=1e-6)
     _same_rotation(quat, q0)
-    # the specific force rotates the same way, and not at all without rotate_gyro
-    f_body = np.array([0.3, -0.2, 9.8])
-    np.testing.assert_allclose(C.level_vector(R.quat_apply_inverse(r, f_body), cal), f_body, atol=1e-12)
-    np.testing.assert_array_equal(C.level_vector(f_body, CAL), f_body)
 
 
 def test_validate_calibration():
@@ -145,7 +140,7 @@ def _ctrl(imu=None, imu_calibration=None):
     cfg = _cfg(imu)
     names = cfg["joint_names"]
     kin = ArmKinematics(URDF, names, cfg["arms"]["ee_frames"], [names[13:20], names[20:]],
-                        extra_frames=[cfg["slam_frame"], "imu_link"])
+                        extra_frames=["imu_link"])
     return MarlController(cfg, kin, _Echo(12), _Echo(14), imu_calibration=imu_calibration)
 
 
@@ -167,7 +162,7 @@ def _states(cfg, n=5):
     for _ in range(n):
         q = np.array(cfg["default_joint_pos"], dtype=np.float64) + RNG.normal(0.0, 0.05, 27)
         out.append(RobotState(q=q, dq=RNG.normal(0.0, 0.1, 27), quat=R.quat_mul(_random_attitude(0.1), C.bias_quat(CAL)),
-                              gyro=RNG.normal(0.0, 0.3, 3), acc=np.array([0.1, -0.2, 9.8])))
+                              gyro=RNG.normal(0.0, 0.3, 3)))
     return out
 
 
@@ -178,7 +173,7 @@ def test_calibrated_policy_without_a_calibration_is_refused():
 
 
 def test_unknown_orientation_and_calibrated_livox_are_refused():
-    """An orientation other than raw / calibrated, or calibrated on a source other than the torso IMU, is refused."""
+    """An orientation other than calibrated, or calibrated on a source other than the torso IMU, is refused."""
     with pytest.raises(ValueError, match="orientation"):
         _ctrl({**LOWSTATE_IMU, "orientation": "levelled"}, CAL)
     with pytest.raises(ValueError, match="lowstate"):
@@ -193,8 +188,7 @@ def test_calibrated_policy_sees_the_corrected_imu():
     assert "applying" in ctrl.imu_calibration_note
     true = _random_attitude(0.1)
     gyro = np.array([0.1, -0.2, 0.3])
-    state = RobotState(q=ctrl.default.copy(), dq=np.zeros(27), quat=R.quat_mul(true, C.bias_quat(CAL)), gyro=gyro,
-                       acc=np.zeros(3))
+    state = RobotState(q=ctrl.default.copy(), dq=np.zeros(27), quat=R.quat_mul(true, C.bias_quat(CAL)), gyro=gyro)
     ctrl.reset(state)
     ctrl.step(state)
     legs = ctrl.last_obs["legs"]                    # the shipped layout: gyro 0:3, gravity 3:6
@@ -207,10 +201,10 @@ def test_calibrated_gravity_offset_uses_the_corrected_attitude():
     """gravity_b (the arms' gravity offset) reads the corrected attitude: a calibrated controller on the biased IMU
     gives the gravity, and the joint targets, an uncalibrated one gives on the true attitude."""
     cal_ctrl = _ctrl(CALIBRATED_IMU, CAL)
-    ref_ctrl = _ctrl({**LOWSTATE_IMU, "orientation": "raw"}, None)
+    ref_ctrl = _ctrl(CALIBRATED_IMU, ZERO_CALIBRATION)
     for state in _states(_cfg(), 3):
         true_state = RobotState(q=state.q, dq=state.dq, quat=R.quat_mul(state.quat, R.quat_conjugate(C.bias_quat(CAL))),
-                                gyro=state.gyro, acc=state.acc)
+                                gyro=state.gyro)
         for ctrl, s in ((cal_ctrl, state), (ref_ctrl, true_state)):
             ctrl.reset(s)
         a, b = cal_ctrl.step(state), ref_ctrl.step(true_state)
@@ -219,36 +213,13 @@ def test_calibrated_gravity_offset_uses_the_corrected_attitude():
         np.testing.assert_allclose(cal_ctrl.last_obs["legs"], ref_ctrl.last_obs["legs"], atol=1e-9)
 
 
-def test_raw_and_old_exports_ignore_a_calibration(caplog):
-    """An old export (no imu block, or quat_bias_deg and no orientation) or an explicit orientation raw reads the IMU
-    as reported: with the robot's calibration given its observations and targets are bit for bit those without one,
-    and the node's log says the calibration is ignored."""
+def test_raw_and_old_exports_are_refused():
+    """An old export (no imu block, or quat_bias_deg and no orientation) or an explicit orientation raw, trained on the
+    IMU as reported, is refused at start, with the robot's calibration or without."""
     for imu in (None, RAW_IMU, {**LOWSTATE_IMU, "orientation": "raw"}):
-        with caplog.at_level(logging.INFO, logger="lmg_deploy.controller"):
-            caplog.clear()
-            given = _ctrl(imu, CAL)
-        assert given.imu_calibration is None
-        assert any("ignored" in r.message and r.levelno == logging.WARNING for r in caplog.records)
-        plain = _ctrl(imu, None)
-        for state in _states(_cfg(imu)):
-            for ctrl in (given, plain):
-                ctrl.reset(state)
-            a, b = given.step(state), plain.step(state)
-            np.testing.assert_array_equal(a.q, b.q)
-            np.testing.assert_array_equal(given.last_obs["legs"], plain.last_obs["legs"])
-            np.testing.assert_array_equal(given.last_obs["arms"], plain.last_obs["arms"])
-            # the biased quaternion reaches the policy unchanged
-            np.testing.assert_array_equal(given.last_obs["legs"][3:6], R.projected_gravity(state.quat))
-
-
-def test_positional_arguments_still_work():
-    """MarlController(cfg, kin, legs, arms) as before (deploy_parity.py's call): no calibration (a raw export)."""
-    cfg = _cfg(RAW_IMU)
-    names = cfg["joint_names"]
-    kin = ArmKinematics(URDF, names, cfg["arms"]["ee_frames"], [names[13:20], names[20:]],
-                        extra_frames=[cfg["slam_frame"], "imu_link"])
-    ctrl = MarlController(cfg, kin, _Echo(12), _Echo(14))
-    assert ctrl.imu_calibration is None
+        for calibration in (CAL, None):
+            with pytest.raises(ValueError, match="orientation"):
+                _ctrl(imu, calibration)
 
 
 # -- the estimate ---------------------------------------------------------------------------

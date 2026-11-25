@@ -6,9 +6,9 @@ and the lower-body RL node must not run beside it. lmg_sim.launch.py and
 lmg_real.launch.py include this file and start the state publishers, the safety layer
 and SLAM. The node runs lmg_deploy's policies/h12/, the H1-2's one policy. It starts only
 with start_position_verified:=true; it ramps the joints to the policy's default pose,
-holds it until ~/confirm_engage (with engage_wait_for_confirm) and holds its arm goals in
-the world by SLAM's /Odometry. imu_calibration_robot picks the torso-IMU calibration a
-calibrated policy runs with: the real robot's (h12, the default) or the sim's (h12_sim).
+holds it until ~/confirm_engage (with engage_wait_for_confirm). imu_calibration_robot
+picks the torso-IMU calibration the policy runs with: the real robot's (h12, the default)
+or the sim's (h12_sim).
 """
 import os
 

@@ -5,9 +5,7 @@ Run on a host with pinocchio + torch (e.g. the env_isaaclab conda env):
 The Isaac Lab parity tests also need ISAACLAB_MATH, the path to
 IsaacLab/source/isaaclab/isaaclab/utils/math.py; they are skipped without it.
 
-The controller runs on the shipped H1-2 policy's deploy config (shipped_policy.py) with stand-in actors. The tests
-of the export formats the shipped policy does not use (no arm_ik, a world-frame arm goal on SLAM odometry) run on
-Explicit500's deploy config, test/data/explicit500.yaml.
+The controller runs on the shipped H1-2 policy's deploy config (shipped_policy.py) with stand-in actors.
 """
 
 import importlib.util
@@ -23,7 +21,6 @@ from lmg_deploy.kinematics import ArmKinematics
 from shipped_policy import POLICY_DIR, URDF, ZERO_CALIBRATION, shipped_cfg
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LEGACY_CFG_PATH = os.path.join(HERE, "data", "explicit500.yaml")   # legs 95 / arms 123 inputs, no arm_ik
 RNG = np.random.default_rng(0)
 # The shipped policy's observation layout (export.yaml legs_obs_terms / arms_obs_terms), as slices
 LEGS = {"gyro": slice(0, 3), "gravity": slice(3, 6), "cmd": slice(6, 9), "q": slice(9, 36), "dq": slice(36, 63),
@@ -37,17 +34,10 @@ def _cfg():
     return shipped_cfg()
 
 
-def _legacy_cfg():
-    """Return Explicit500's deploy config (no arm_ik, every observation term, world-frame arm goals)."""
-    with open(LEGACY_CFG_PATH) as f:
-        return yaml.safe_load(f)
-
-
 def _kin(cfg):
-    """Return the H1-2 kinematics for cfg's joints and wrists, with its SLAM frame and the torso IMU's."""
+    """Return the H1-2 kinematics for cfg's joints and wrists, with the torso IMU's frame."""
     names = cfg["joint_names"]
-    return ArmKinematics(URDF, names, cfg["arms"]["ee_frames"], [names[13:20], names[20:]],
-                         extra_frames=[cfg["slam_frame"], "imu_link"])
+    return ArmKinematics(URDF, names, cfg["arms"]["ee_frames"], [names[13:20], names[20:]], extra_frames=["imu_link"])
 
 
 def _random_quat():
@@ -59,8 +49,7 @@ def _random_quat():
 def _state(cfg, q=None):
     """Return a still, upright robot state at q (default: the config's default pose)."""
     q = np.array(cfg["default_joint_pos"], dtype=np.float64) if q is None else q
-    return RobotState(q=q, dq=np.zeros(27), quat=np.array([1.0, 0, 0, 0]),
-                      gyro=np.zeros(3), acc=np.array([0.0, 0.0, 9.81]))
+    return RobotState(q=q, dq=np.zeros(27), quat=np.array([1.0, 0, 0, 0]), gyro=np.zeros(3))
 
 
 class ZeroNetwork:
@@ -187,37 +176,6 @@ def test_jacobian_matches_finite_differences():
         kin.update(q)
 
 
-def test_ik_steps_converge():
-    """Repeated IK steps bring both wrists onto reachable goals."""
-    cfg = _legacy_cfg()
-    kin = _kin(cfg)
-    default = np.array(cfg["default_joint_pos"])
-    goal_q = default.copy()
-    goal_q[13:27] = RNG.uniform(-0.4, 0.4, size=14)
-    goal_q[16] = goal_q[23] = 0.8   # elbows bent, away from the straight-arm singularity
-    kin.update(goal_q)
-    targets = [kin.wrist_pose(arm) for arm in range(2)]
-    q = default.copy()
-    for _ in range(60):
-        kin.update(q)
-        for arm in range(2):
-            q[kin.arm_cols[arm]] += kin.ik_step(arm, *targets[arm], damping=0.05, max_step=0.1)
-    kin.update(q)
-    for arm in range(2):
-        pos_err, rot_err = R.compute_pose_error(*kin.wrist_pose(arm), *targets[arm])
-        assert np.linalg.norm(pos_err) < 5e-3
-        assert np.linalg.norm(rot_err) < 2e-2
-
-
-def test_ik_step_capped():
-    """No joint's IK step exceeds max_step."""
-    cfg = _legacy_cfg()
-    kin = _kin(cfg)
-    kin.update(np.array(cfg["default_joint_pos"]))
-    step = kin.ik_step(0, np.array([0.5, 0.5, 0.5]), np.array([0.0, 1.0, 0.0, 0.0]), 0.05, 0.1)
-    assert np.all(np.abs(step) <= 0.1 + 1e-12)
-
-
 # -- controller --------------------------------------------------------------------
 
 
@@ -227,13 +185,6 @@ def _controller(legs=None, arms=None, **overrides):
     cfg.update(overrides)
     return MarlController(cfg, _kin(cfg), legs or ZeroNetwork(12), arms or ZeroNetwork(14),
                           imu_calibration=ZERO_CALIBRATION), cfg
-
-
-def _legacy_controller(legs=None, arms=None, **overrides):
-    """Return a controller on Explicit500's config with the overrides, and the config; zero actors by default."""
-    cfg = _legacy_cfg()
-    cfg.update(overrides)
-    return MarlController(cfg, _kin(cfg), legs or ZeroNetwork(12), arms or ZeroNetwork(14)), cfg
 
 
 def test_observation_sizes_and_layout():
@@ -323,11 +274,15 @@ def test_position_bounds_inside_hard_limits_and_target_limits():
 
 
 def test_example_config_builds_a_controller():
-    """config/example.yaml is a config the controller accepts, with gait_phase_cos's 97 / 125 inputs."""
-    with open(os.path.join(HERE, "..", "config", "example.yaml")) as f:
-        cfg = yaml.safe_load(f)
+    """config/example.yaml with config/example.export.yaml over it is a config the controller accepts, its actors'
+    inputs the example's num_obs."""
+    cfg = {}
+    for name in ("example.yaml", "example.export.yaml"):
+        with open(os.path.join(HERE, "..", "config", name)) as f:
+            cfg.update(yaml.safe_load(f))
+    cfg["arm_seed_table"] = _cfg()["arm_seed_table"]
     legs, arms = ConstNetwork(np.zeros(12)), ConstNetwork(np.zeros(14))
-    ctrl = MarlController(cfg, _kin(cfg), legs, arms)
+    ctrl = MarlController(cfg, _kin(cfg), legs, arms, imu_calibration=ZERO_CALIBRATION)
     state = _state(cfg)
     ctrl.reset(state)
     ctrl.step(state)
@@ -345,6 +300,48 @@ def test_a_settle_at_the_mode_switch_is_refused():
     for key in ("settle_to_arm_s", "settle_to_nav_s"):
         with pytest.raises(ValueError, match=key):
             _controller(**{key: 0.5})
+
+
+@pytest.mark.parametrize("overrides", [
+    {"arm_goals": False},                                    # a run that never trained an arm goal
+    {"arm_goal_frame": "world"},                             # world-frame goals kept by SLAM odometry
+    {"arm_goal_frame": None},
+    {"arm_goal_keeps_walking": False},                       # arm goals that stop walking
+    {"arm_goal_keeps_walking": None},
+    {"legs_obs_terms": None},                                # every observation term
+    {"arms_obs_terms": None},
+    {"rest_pose": None},                                     # no arm target tables
+    {"arm_ik": None},                                        # mdp.IKResidualArmAction's arms
+])
+def test_older_export_formats_are_refused(overrides):
+    """An export of a format the shipped policy does not use is refused at start, naming the key."""
+    key = next(iter(overrides))
+    with pytest.raises(ValueError, match=key):
+        _controller(**overrides)
+
+
+@pytest.mark.parametrize("arm_ik", [
+    {"posture_actions": True},                               # a 28-wide action with a posture offset
+    {"trajectory": False},                                   # an IK step from the measured angles
+    {"posture_from_command": False},                         # the default angles as every goal's posture
+    {"trajectory_max_vel": None},                            # a per-joint step cap
+    {"trajectory_max_acc": None},
+    {"residual_integrate": None},                            # the residual low-passed
+])
+def test_older_arm_ik_variants_are_refused(arm_ik):
+    """An arm_ik block of a variant the shipped policy does not use is refused at start, naming the key."""
+    key = next(iter(arm_ik))
+    cfg = _cfg()
+    with pytest.raises(ValueError, match=f"arm_ik.*{key}"):
+        _controller(arm_ik={**cfg["arm_ik"], **arm_ik})
+
+
+@pytest.mark.parametrize("terms", [["base_lin_acc", "base_ang_vel"], ["arm_goal", "joint_pos"]])
+def test_older_observation_terms_are_refused(terms):
+    """The accelerometer and the arm-goal flag, which no shipped actor observes, are not terms this controller
+    builds: a list naming them is refused."""
+    with pytest.raises(ValueError, match="obs terms"):
+        _controller(legs_obs_terms=terms)
 
 
 def test_arm_goal_replaces_the_command_and_walking_goes_on():
@@ -368,125 +365,7 @@ def test_arm_goal_replaces_the_command_and_walking_goes_on():
     np.testing.assert_allclose(ctrl.believed, ctrl.rest_pose)
 
 
-def test_arms_track_goal_with_pure_ik():
-    """With zero residual, stepping the joints to the IK targets walks the wrists onto the goal."""
-    ctrl, cfg = _legacy_controller()
-    q = np.array(cfg["default_joint_pos"])
-    ctrl.reset(_state(cfg, q))
-    goal = ctrl.rest_pose.copy()
-    goal[0, :3] += [0.05, 0.05, -0.1]
-    goal[1, :3] += [0.05, -0.05, -0.1]
-    ctrl.request_arm_goal(goal)
-    for _ in range(40):
-        cmd = ctrl.step(_state(cfg, q))
-        q[13:] = cmd.q[13:]                     # perfect tracking
-    assert np.all(_wrist_distances(ctrl) < 5e-3)
-
-
-def _wrist_distances(ctrl):
-    """Return each wrist's distance from its arm command (m) at the last step's joints."""
-    return np.linalg.norm(ctrl._wrist_errors().reshape(2, 6)[:, :3], axis=1)
-
-
-def _slam_body_pose(ctrl, state, pelvis_pos, pelvis_quat):
-    """Return the body pose FAST-LIO would report for a pelvis at this world pose, at the state's joints."""
-    ctrl.kin.update(state.q)
-    p_pb, q_pb = ctrl.kin.frame_pose(ctrl.slam_frame)
-    return pelvis_pos + R.quat_apply(pelvis_quat, p_pb), R.quat_mul(pelvis_quat, q_pb)
-
-
-def test_slam_odometry_moves_goal_against_pelvis_motion():
-    """When the pelvis walks forward and turns, the goal moves back and turns the other way in its frame."""
-    ctrl, cfg = _legacy_controller()
-    state = _state(cfg)
-    ctrl.reset(state)
-    goal = ctrl.rest_pose.copy()
-    ctrl.request_arm_goal(goal)
-    yaw = 0.2
-    for pelvis_pos, pelvis_quat in ((np.zeros(3), np.array([1.0, 0, 0, 0])),
-                                    (np.array([0.1, 0.0, 0.0]), R.quat_from_rotvec(np.array([0.0, 0.0, yaw])))):
-        ctrl.set_slam_pose(*_slam_body_pose(ctrl, state, pelvis_pos, pelvis_quat))
-        ctrl.step(state)
-    world = [(np.zeros(3) + p[:3], p[3:]) for p in goal]         # the first pelvis pose is the world frame
-    for arm in range(2):
-        pos, quat = R.subtract_frame_transforms(np.array([0.1, 0.0, 0.0]),
-                                                R.quat_from_rotvec(np.array([0.0, 0.0, yaw])), *world[arm])
-        np.testing.assert_allclose(ctrl.believed[arm, :3], pos, atol=1e-9)
-        np.testing.assert_allclose(R.quat_unique(ctrl.believed[arm, 3:]), R.quat_unique(quat), atol=1e-9)
-
-
-def test_pelvis_frame_goal_ignores_odometry():
-    """arm_goal_frame pelvis (the shipped policy's goals ride on the pelvis): odometry leaves the goal alone."""
-    ctrl, cfg = _controller()
-    state = _state(cfg)
-    ctrl.reset(state)
-    goal = ctrl.rest_pose.copy()
-    ctrl.request_arm_goal(goal)
-    for pelvis_pos, pelvis_quat in ((np.zeros(3), np.array([1.0, 0, 0, 0])),
-                                    (np.array([0.1, 0.0, 0.0]), R.quat_from_rotvec(np.array([0.0, 0.0, 0.2])))):
-        ctrl.set_slam_pose(*_slam_body_pose(ctrl, state, pelvis_pos, pelvis_quat))
-        ctrl.step(state)
-    np.testing.assert_allclose(ctrl.believed, goal, atol=1e-12)
-    with pytest.raises(ValueError):
-        _controller(arm_goal_frame="map")
-
-
-def test_slam_odometry_follows_the_torso_joint():
-    """A torso turn moves the lidar but not the pelvis, so the body pose it reports leaves the goal in place."""
-    ctrl, cfg = _legacy_controller()
-    state = _state(cfg)
-    ctrl.reset(state)
-    goal = ctrl.rest_pose.copy()
-    ctrl.request_arm_goal(goal)
-    ctrl.set_slam_pose(*_slam_body_pose(ctrl, state, np.zeros(3), np.array([1.0, 0, 0, 0])))
-    ctrl.step(state)
-    turned = _state(cfg)
-    turned.q[12] = 0.4                                            # torso_joint, rad
-    ctrl.set_slam_pose(*_slam_body_pose(ctrl, turned, np.zeros(3), np.array([1.0, 0, 0, 0])))
-    ctrl.step(turned)
-    np.testing.assert_allclose(ctrl.believed, goal, atol=1e-9)
-
-
-def test_slam_odometry_moves_goal_only_on_a_new_pose():
-    """One SLAM pose moves the goal once, however many policy steps follow it."""
-    ctrl, cfg = _legacy_controller()
-    state = _state(cfg)
-    ctrl.reset(state)
-    goal = ctrl.rest_pose.copy()
-    ctrl.request_arm_goal(goal)
-    ctrl.set_slam_pose(*_slam_body_pose(ctrl, state, np.zeros(3), np.array([1.0, 0, 0, 0])))
-    ctrl.step(state)
-    ctrl.set_slam_pose(*_slam_body_pose(ctrl, state, np.array([0.05, 0.0, 0.0]), np.array([1.0, 0, 0, 0])))
-    for _ in range(5):                                            # one SLAM pose, five policy steps
-        ctrl.step(state)
-    np.testing.assert_allclose(ctrl.believed[:, 0], goal[:, 0] - 0.05, atol=1e-9)
-    np.testing.assert_allclose(ctrl.believed[:, 1:3], goal[:, 1:3], atol=1e-9)
-
-
-def test_template_slam_frame_is_fastlio_body():
-    """The template's slam_frame is FAST-LIO's body, the IMU frame it integrates /livox/imu in (livox_imu_link)."""
-    with open(os.path.join(HERE, "..", "config", "policy_template.yaml")) as f:
-        cfg = yaml.safe_load(f)
-    assert cfg["slam_frame"] == "livox_imu_link"
-
-
 # -- action terms ------------------------------------------------------------------------
-
-
-def test_residual_low_pass_and_observed_action():
-    """The arms' residual is low-passed, and the arms observe the filtered residual as their last action."""
-    action = np.full(14, 1.0)
-    arms = ConstNetwork(action)
-    ctrl, cfg = _legacy_controller(arms=arms)
-    state = _state(cfg)
-    ctrl.reset(state)
-    alpha = 1.0 - np.exp(-2.0 * np.pi * 3.0 * 0.02)
-    ctrl.step(state)
-    np.testing.assert_allclose(ctrl.residual, alpha * action)
-    np.testing.assert_allclose(ctrl.arms_last, alpha * action)        # the arms observe the filtered residual
-    ctrl.step(state)
-    np.testing.assert_allclose(ctrl.residual, (alpha + alpha * (1 - alpha)) * action)
-    np.testing.assert_allclose(arms.inputs[-1][83:97], alpha * action)
 
 
 def test_targets_inside_the_safety_clip():
@@ -599,20 +478,19 @@ def test_warmed_controller_steps_as_a_cold_one(monkeypatch):
     from lmg_deploy.imu_calibration import FEET, IMU_FRAME
     cfg = _cfg()
     names = cfg["joint_names"]
-    imu_frame = (cfg.get("imu") or {}).get("frame", "imu_link")
 
     def build(warmup_calls):
         monkeypatch.setattr(networks, "WARMUP_CALLS", warmup_calls)
         kin = ArmKinematics(URDF, names, cfg["arms"]["ee_frames"], [names[13:20], names[20:]],
-                            extra_frames=list(dict.fromkeys([cfg["slam_frame"], imu_frame, IMU_FRAME, *FEET])))
+                            extra_frames=[IMU_FRAME, *FEET])   # as marl_deploy_node builds them
         nets = [networks.load_network(os.path.join(POLICY_DIR, cfg[a]["policy"]), cfg[a]["num_obs"],
                                       cfg[a]["num_actions"]) for a in ("legs", "arms")]
         return MarlController(cfg, kin, *nets, imu_calibration={"roll_deg": 0.1, "pitch_deg": -2.2})
 
     rng = np.random.default_rng(4)
     states = [RobotState(q=np.array(cfg["default_joint_pos"]) + rng.normal(0, 0.03, 27), dq=rng.normal(0, 0.1, 27),
-                         quat=np.array([0.9998, 0.005, -0.019, 0.0]), gyro=rng.normal(0, 0.02, 3),
-                         acc=np.array([0.3, 0.1, 9.8])) for _ in range(5)]
+                         quat=np.array([0.9998, 0.005, -0.019, 0.0]), gyro=rng.normal(0, 0.02, 3))
+              for _ in range(5)]
     held = np.array(cfg["default_joint_pos"]) + 0.01
     outs = []
     for warmup_calls in (0, networks.WARMUP_CALLS):
@@ -735,20 +613,6 @@ def test_command_filter_low_passes_the_observed_command():
     np.testing.assert_allclose(ctrl.observed_command(), 0.0)             # from zero after a reset
 
 
-def test_command_filter_zero_during_an_arm_goal_that_stops_walking():
-    """Without arm_goal_keeps_walking the low-passed command is zero during an arm goal."""
-    legs = ConstNetwork(np.zeros(12))
-    ctrl, cfg = _legacy_controller(legs=legs, command_filter_tau=0.5)
-    state = _state(cfg)
-    ctrl.reset(state)
-    ctrl.set_velocity_command(np.array([0.5, 0.0, 0.0]))
-    ctrl.step(state)
-    assert legs.inputs[-1][9] > 0.0
-    ctrl.request_arm_goal(ctrl.rest_pose)
-    ctrl.step(state)
-    np.testing.assert_allclose(legs.inputs[-1][9:12], 0.0)
-
-
 def test_obs_terms_must_be_known_and_in_order():
     """An export's observation term lists must be terms the controller builds, in its order; any may be left out."""
     _controller(legs_obs_terms=LEGS_OBS_TERMS, arms_obs_terms=ARMS_OBS_TERMS)
@@ -760,16 +624,6 @@ def test_obs_terms_must_be_known_and_in_order():
         _controller(legs_obs_terms=legs, gait_phase_cos=False)
     with pytest.raises(ValueError):    # out of order
         _controller(legs_obs_terms=legs, arms_obs_terms=[arms[1], arms[0]] + arms[2:])
-
-
-def test_obs_without_term_lists_are_every_term():
-    """An export without term lists (Explicit500) observes every term."""
-    legs, arms = ConstNetwork(np.zeros(12)), ConstNetwork(np.zeros(14))
-    ctrl, cfg = _legacy_controller(legs=legs, arms=arms)
-    state = _state(cfg)
-    ctrl.reset(state)
-    ctrl.step(state)
-    assert legs.inputs[-1].shape == (95,) and arms.inputs[-1].shape == (123,)
 
 
 def test_obs_left_out_terms_are_cut_from_the_full_vector():
@@ -789,15 +643,6 @@ def test_obs_left_out_terms_are_cut_from_the_full_vector():
     np.testing.assert_allclose(b, np.concatenate([a[14:82], a[96:]]))
 
 
-def test_arm_goals_refused_for_a_policy_that_never_trained_one():
-    """With arm_goals false, request_arm_goal raises and the controller keeps navigating."""
-    ctrl, cfg = _legacy_controller(arm_goals=False)
-    ctrl.reset(_state(cfg))
-    with pytest.raises(ValueError):
-        ctrl.request_arm_goal(ctrl.rest_pose)
-    assert ctrl.mode == Mode.NAV
-
-
 # -- arm_ik: mdp.IKPostureArmAction ----------------------------------------------------------
 
 # The shipped arm_ik block's terms that _ik_controller turns off, each test turning on its own
@@ -812,22 +657,6 @@ def _ik_controller(arms_net=None, arm_ik=None, **overrides):
     cfg["arm_ik"] = {**base, "gravity_offset": False, **(arm_ik or {})}
     return MarlController(cfg, _kin(cfg), ZeroNetwork(12), arms_net or ZeroNetwork(14),
                           imu_calibration=ZERO_CALIBRATION), cfg
-
-
-# Coexist200k_s42's arm_ik block, an older export's (no residual integration, no seed table), for the variants the
-# shipped policy does not use.
-LEGACY_ARM_IK = {"rot_weight": 0.3, "null_gain": 0.05, "posture_scale": 0.5, "posture_gain": 1.0, "limit_margin": 0.05,
-                 "ik_damping": 0.05, "ik_passes": 3, "posture_from_command": False, "trajectory": True,
-                 "seed_rot_weight": 0.3, "posture_actions": False, "trajectory_max_vel": 2.0,
-                 "trajectory_max_acc": 10.0, "gravity_offset": False}
-
-
-def _legacy_ik_controller(arms_net=None, arm_ik=None, **overrides):
-    """Return a controller with LEGACY_ARM_IK (updated by arm_ik) on Explicit500's config."""
-    cfg = _legacy_cfg()
-    cfg.update(overrides)
-    cfg["arm_ik"] = {**LEGACY_ARM_IK, **(arm_ik or {})}
-    return MarlController(cfg, _kin(cfg), ZeroNetwork(12), arms_net or ZeroNetwork(14)), cfg
 
 
 def _arm_q(cfg, offsets):
@@ -881,15 +710,6 @@ def test_arm_ik_trajectory_is_synchronized_and_rate_limited():
     assert np.abs(ctrl.traj_v).max() < 1e-9
 
 
-def test_arm_ik_trajectory_without_max_vel_caps_each_joint():
-    """Without trajectory_max_vel each joint moves at most max_ik_step per step toward the posture."""
-    ctrl, cfg = _legacy_ik_controller(torque_headroom=None,
-                                      arm_ik={"trajectory_max_vel": None, "trajectory_max_acc": None})
-    ctrl.reset(_state(cfg, _arm_q(cfg, np.full(14, 0.15))))
-    ctrl.step(_state(cfg))
-    np.testing.assert_allclose(ctrl.ik_q, 0.15 - ctrl.max_ik_step)
-
-
 def test_arm_ik_residual_integrates_with_leak_and_clamp():
     """residual_integrate: r <- clip(exp(-dt / leak_s) r + gain a, +-clamp), added times the residual scale."""
     a = np.linspace(-3.0, 3.0, 14)
@@ -907,23 +727,6 @@ def test_arm_ik_residual_integrates_with_leak_and_clamp():
     for _ in range(400):
         ctrl.step(state)
     assert np.abs(ctrl.residual).max() <= ri["clamp"] + 1e-12 and np.isclose(np.abs(ctrl.residual).max(), ri["clamp"])
-
-
-def test_arm_ik_posture_actions_widen_the_action():
-    """posture_actions: the action is 28 wide, the residual then the posture offset, which moves the posture."""
-    with pytest.raises(ValueError):
-        _legacy_ik_controller(arm_ik={"posture_actions": True})   # the config's arms.num_actions is 14
-    cfg = _legacy_cfg()
-    a = np.concatenate([np.zeros(14), np.full(14, 0.2)])
-    ctrl, cfg = _legacy_ik_controller(arms_net=ConstNetwork(a), arm_ik={"posture_actions": True},
-                                      arms={**cfg["arms"], "num_actions": 28})
-    state = _state(cfg)
-    ctrl.reset(state)
-    ctrl.step(state)
-    assert ctrl.arms_last.shape == (28,)
-    offset = ctrl.residual[14:]
-    np.testing.assert_allclose(ctrl.posture, np.clip(ctrl.default[13:] + 0.5 * offset, ctrl.ik_lower, ctrl.ik_upper))
-    assert np.abs(offset).max() > 0
 
 
 def _seed_table(ctrl, joints_per_arm, path):
@@ -1028,7 +831,7 @@ def test_arm_ik_gravity_offset_uses_the_pelvis_frame_gravity():
     q_wp = R.quat_mul(R.quat_from_rotvec(np.array([0.2, 0.0, 0.0])), R.quat_from_rotvec(np.array([0.0, -0.3, 0.1])))
     ctrl.kin.update(q)
     _, q_pi = ctrl.kin.frame_pose("imu_link")
-    state = RobotState(q=q, dq=np.zeros(27), quat=R.quat_mul(q_wp, q_pi), gyro=np.zeros(3), acc=np.zeros(3))
+    state = RobotState(q=q, dq=np.zeros(27), quat=R.quat_mul(q_wp, q_pi), gyro=np.zeros(3))
     ctrl.reset(state)
     cmd = ctrl.step(state)
     g_b = R.quat_apply_inverse(q_wp, np.array([0.0, 0.0, -9.81]))
@@ -1106,34 +909,10 @@ def test_arm_ik_freeze_latches_the_residual_on_the_goal_and_releases_it(tmp_path
     assert np.all(ctrl.residual < held)
 
 
-def test_arm_ik_without_trajectory_steps_toward_the_goal():
-    """Without trajectory, one limit-aware, posture-seeking IK step from the measured angles per step walks the wrists
-    toward the goal under perfect tracking, capped per joint; a joint at limit_margin from its bound locks (the wrist
-    pitch here, which leaves 2 cm of this goal: why training moved to the trajectory)."""
-    ctrl, cfg = _legacy_ik_controller(arm_ik={"trajectory": False}, torque_headroom=None)
-    q = np.array(cfg["default_joint_pos"], dtype=np.float64)
-    ctrl.reset(_state(cfg, q))
-    goal = ctrl.rest_pose.copy()
-    goal[0, :3] += [0.05, 0.05, -0.1]
-    goal[1, :3] += [0.05, -0.05, -0.1]
-    ctrl.request_arm_goal(goal)
-    for _ in range(60):
-        cmd = ctrl.step(_state(cfg, q))
-        assert np.abs(cmd.q[13:] - q[13:]).max() <= ctrl.max_ik_step + 1e-12
-        q[13:] = cmd.q[13:]
-    assert np.all(_wrist_distances(ctrl) < 0.025)                    # from 0.122 m
-    assert np.all(q[13:] >= ctrl.ik_lower - ctrl.max_ik_step) and np.all(q[13:] <= ctrl.ik_upper + ctrl.max_ik_step)
-
-
-def test_arm_ik_config_checks():
-    """integral and freeze need trajectory; seed_solve needs the seed table; gravity_offset needs the IMU frame."""
-    with pytest.raises(ValueError):
-        _legacy_ik_controller(arm_ik={"trajectory": False, "integral": {"gain": 0.01, "leak_s": 60.0, "clamp": 0.3}})
-    with pytest.raises(ValueError):
-        _legacy_ik_controller(arm_ik={"seed_solve": {"iters": 5, "damping": 0.05, "rot_weight": 0.5}})
+def test_arm_ik_gravity_offset_needs_the_imu_frame():
+    """gravity_offset needs the IMU frame among the kinematics' frames."""
     cfg = _cfg()
     names = cfg["joint_names"]
-    kin = ArmKinematics(URDF, names, cfg["arms"]["ee_frames"], [names[13:20], names[20:]],
-                        extra_frames=[cfg["slam_frame"]])
+    kin = ArmKinematics(URDF, names, cfg["arms"]["ee_frames"], [names[13:20], names[20:]])
     with pytest.raises(ValueError):
         MarlController(cfg, kin, ZeroNetwork(12), ZeroNetwork(14), imu_calibration=ZERO_CALIBRATION)   # no imu_link

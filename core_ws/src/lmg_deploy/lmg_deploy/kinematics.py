@@ -1,19 +1,14 @@
-"""Compute the wrist forward kinematics and the arms' IK step in the pelvis frame, with Pinocchio.
-
-This reproduces mdp.IKResidualArmAction in Locomanipulation_game: per arm, one
-damped-least-squares step (Isaac Lab's DifferentialIKController, pose command,
-absolute, dls) from the measured joint angles toward the commanded wrist pose,
-with the wrist Jacobian expressed in the pelvis frame and restricted to the
-arm's 7 joints, then each joint's step capped at max_ik_step.
-
-The training Jacobian came from PhysX, whose linear rows are the velocity of
-the link's centre of mass (the URDF <inertial> origin of the wrist link
-alone), while the pose error is the link frame's. The IK step reproduces that
-pairing: its linear rows are taken at the COM point, the poses at the frame.
+"""Compute the wrists' forward kinematics and Jacobians in the pelvis frame, with Pinocchio.
 
 The model is the H1-2 URDF with a fixed base at the pelvis: every pose and
 Jacobian here is relative to the pelvis, as in training (PhysX world-frame
 Jacobian rotated into the root frame).
+
+The training Jacobian came from PhysX, whose linear rows are the velocity of
+the link's centre of mass (the URDF <inertial> origin of the wrist link
+alone), while the pose error is the link frame's. jacobian() reproduces that
+pairing: its linear rows are taken at the COM point, the poses at the frame.
+mdp.IKPostureArmAction's integral (controller.py) steps on it.
 
 For mdp.IKPostureArmAction (export.yaml arm_ik) it also gives the arm joints'
 gravity torques (ArmKinematics.gravity_torques in Locomanipulation_game's
@@ -149,16 +144,6 @@ class ArmKinematics:
                 cols = self.arm_cols[arm]
                 q[cols] = np.clip(q[cols] + np.clip(step, -max_step, max_step), low[cols], high[cols])
         return q
-
-    def ik_step(self, arm: int, target_pos: np.ndarray, target_quat: np.ndarray, damping: float,
-                max_step: float) -> np.ndarray:
-        """Return one arm's capped DLS joint step (rad) toward a pelvis-frame wrist pose, in arm_cols order."""
-        pos, quat = self._poses[arm]
-        pos_err, rot_err = compute_pose_error(pos, quat, target_pos, target_quat)
-        err = np.concatenate([pos_err, rot_err])
-        jac = self._jacobians[arm]
-        step = jac.T @ np.linalg.solve(jac @ jac.T + damping ** 2 * np.eye(6), err)
-        return np.clip(step, -max_step, max_step)
 
 
 def _skew(v: np.ndarray) -> np.ndarray:

@@ -63,44 +63,39 @@ torque_headroom: 0.85
 
 legs:
   policy: legs.pt           # the legs' TorchScript actor, relative to this file
-  num_obs: 97               # the actor's input size: 95, or 97 with gait_phase_cos
+  num_obs: 79               # the actor's input size: the sizes of the terms legs_obs_terms lists
   num_actions: 12           # one action per leg joint
   action_scale: 0.25        # leg target = action_scale * action + default_joint_pos
 
 arms:
   policy: arms.pt           # the arms' TorchScript actor, relative to this file
-  num_obs: 125              # the actor's input size: 123, or 125 with gait_phase_cos
+  num_obs: 108              # the actor's input size: the sizes of the terms arms_obs_terms lists
   num_actions: 14           # one residual per arm joint
-  residual_scale: 0.2       # arm target = q + IK step + residual_scale * residual
-  # Hz: the arms' action passes a one-pole low-pass (per policy step) to become the residual the arms observe.
-  # Absent or null: no low-pass.
-  residual_cutoff_hz: 3.0
+  residual_scale: 0.2       # the arm target's residual term = residual_scale * residual (arm_ik's)
+  residual_cutoff_hz: 3.0   # not read: older exports' residual low-pass (arm_ik integrates the residual)
   ee_frames: [left_wrist_yaw_link, right_wrist_yaw_link]   # URDF wrist frames the arm goals are for, left then right
-  ik_damping: 0.05          # damping of the damped-least-squares IK step
-  max_ik_step: 0.1          # rad, the largest IK step of any arm joint per policy step
+  ik_damping: 0.05          # not read: older exports' IK step (arm_ik has its own ik_damping)
+  max_ik_step: 0.1          # not read: older exports' IK step
 
 # Per joint, over legs.action_scale and arms.residual_scale: 12 leg action scales and 14 arm residual scales.
 # export.yaml sets them for runs that matched their scales to their PD gains (the sport-mode runs). Absent: the
 # single numbers above for every joint.
 leg_action_scales: [0.2, 0.2, 0.2, 0.1875, 0.125, 0.25, 0.2, 0.2, 0.2, 0.1875, 0.125, 0.25]
 arm_residual_scales: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-# rad, over arms.max_ik_step: the run's largest IK step per policy step, set by export.yaml.
-max_ik_step: 0.05
 # s, time constant of the first-order low-pass on the velocity command the policies see and the gait clock reads,
-# stepped once per policy step, zeroed at reset and held at zero during an arm goal. Absent or 0: no low-pass.
+# stepped once per policy step and zeroed at reset; it stays live through an arm goal. Absent or 0: no low-pass.
 command_filter_tau: 0.5
-# false: the run never trained an arm goal (arm_goal_prob 0), and the controller refuses one. export.yaml sets it.
-# Absent: true.
-arm_goals: false
+# true (or absent): the run trained arm goals; export.yaml sets it. false (arm_goal_prob 0) is refused at start.
+arm_goals: true
 # The observation terms each actor trained on, in order; export.yaml writes them. The controller refuses a config
-# whose lists are not the observations it builds. Absent: not checked.
-legs_obs_terms: [base_lin_acc, base_ang_vel, projected_gravity, velocity_commands, arm_goal, ee_targets, joint_pos,
-                 joint_vel, gait_phase, gait_phase_cos, actions]
-arms_obs_terms: [base_lin_acc, base_ang_vel, projected_gravity, velocity_commands, arm_goal, ee_targets, joint_pos,
-                 joint_vel, gait_phase, gait_phase_cos, actions, wrist_poses, wrist_errors]
+# without them or whose lists are not the observations it builds, in its order: base_ang_vel, projected_gravity,
+# velocity_commands, ee_targets, joint_pos, joint_vel, gait_phase, gait_phase_cos, actions, and the arms' wrist_poses
+# and wrist_errors.
+legs_obs_terms: [base_ang_vel, projected_gravity, velocity_commands, joint_pos, joint_vel, gait_phase, gait_phase_cos,
+                 actions]
+arms_obs_terms: [ee_targets, joint_pos, joint_vel, actions, wrist_poses, wrist_errors]
 
-# URDF frame of FAST-LIO's body (/Odometry, camera_init -> body), which forward kinematics carries to the pelvis to
-# keep the arm goals fixed in the world. FAST-LIO's body is the IMU it integrates /livox/imu in: livox_imu_link.
+# Not read: the URDF frame of FAST-LIO's body, which older exports' world-frame arm goals were carried by.
 slam_frame: livox_imu_link
 
 # s, the gait clock's period; the legs' phases start at 0 and 0.5 at the episode start and advance together.
@@ -123,13 +118,13 @@ settle_to_arm_s: 0.0
 settle_to_nav_s: 0.0
 
 # The navigation rest pose: one wrist pose per arm, [x, y, z (m), qw, qx, qy, qz], pelvis frame, left then right.
-# null: forward kinematics at default_joint_pos. export.yaml sets it from the run's arm target tables.
+# export.yaml sets it from the run's arm target tables; null (no tables: an older export) is refused at start.
 rest_pose: null
 
 # The IMU the policy trained on and its gyro low-pass; export.yaml sets it.
 imu:
-  source: lowstate          # the torso IMU, /lowstate imu_state; marl_deploy_node refuses any other source
-  orientation: raw          # raw (or absent): its quaternion as reported; calibrated: the robot's calibration
-                            # (config/imu_calibration.yaml) removed first, refused when the robot has none
+  source: lowstate          # the torso IMU, /lowstate imu_state; any other source is refused at start
+  orientation: calibrated   # the robot's calibration (config/imu_calibration.yaml) removed first, refused when the
+                            # robot has none; raw (or absent: trained on the quaternion as reported) is refused
   frame: imu_link           # URDF frame the IMU sits in: imu_link, the torso IMU's (marl_deploy_node refuses another)
   gyro_lowpass_hz: 8.0      # Hz, cutoff of the 2nd-order Butterworth on the angular velocity; 0 or absent: none

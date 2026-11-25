@@ -24,10 +24,6 @@ Flow
 While engaged the robot navigates on /cmd_vel, the arms at the rest pose.
 ~/state (latched) names the current state.
 
-The arm goals stay fixed in the world by the SLAM pipeline's odometry
-(/Odometry, FAST-LIO's camera_init -> body), so golem_slam's navigation launch
-must run beside this node; without it the goals stay fixed to the pelvis.
-
 This node owns all 27 joints: legs on /safety/lowcmd_lower_in, torso and arms
 on /safety/lowcmd_upper_in. frame_task_server and lowerbody_controller_node
 must not run beside it (the lmg bringups start neither).
@@ -56,20 +52,17 @@ refused at start): LowState.imu_state's quaternion (wxyz) and its gyroscope
 through the GyroLowpass the run trained with (``imu.gyro_lowpass_hz``, sampled
 at every /lowstate by its tick).
 
-IMU calibration: export.yaml's ``imu.orientation`` (imu_calibration.py) says
-whether the run trained on the torso IMU's quaternion as reported (``raw``, or
-absent: the runs with ``imu.quat_bias_deg``, the robot's bias drawn in
-training) or with the robot's static offset removed (``calibrated``, only a
-residual of ``imu.residual_deg`` drawn). The robot's calibration is its entry
-in ``imu_calibration_file`` (default config/imu_calibration.yaml beside the
-installed policies), under ``robot`` (default: the policy folder's name,
-policies/<robot>/). The node hands it to MarlController, which applies it to a
-calibrated policy only (corrected = reported * R_bias^-1), refuses to start a
-calibrated policy without one, and ignores it, logging so, for a raw policy.
-Once engaged, after about 5 s standing still on both loaded feet at zero
-command, the node compares the policy's IMU tilt with the tilt forward
-kinematics gives from the soles (calibrate_imu's) and warns once if they differ
-by more than 1 deg (calibrated policies; raw ones log it).
+IMU calibration: the run trained with the robot's static torso-IMU offset
+removed (export.yaml ``imu.orientation`` calibrated, only a residual of
+``imu.residual_deg`` drawn; imu_calibration.py). The robot's calibration is its
+entry in ``imu_calibration_file`` (default config/imu_calibration.yaml beside
+the installed policies), under ``robot`` (default: the policy folder's name,
+policies/<robot>/). The node hands it to MarlController, which applies it
+(corrected = reported * R_bias^-1) and refuses to start without one. Once
+engaged, after about 5 s standing still on both loaded feet at zero command,
+the node compares the policy's IMU tilt with the tilt forward kinematics gives
+from the soles (calibrate_imu's) and warns once if they differ by more than 1
+deg.
 """
 
 import os
@@ -80,7 +73,6 @@ import rclpy
 import torch
 import yaml
 from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, String
@@ -107,7 +99,7 @@ from lmg_deploy.imu_calibration import (
 from lmg_deploy.kinematics import ArmKinematics
 from lmg_deploy.gyro_lowpass import GyroLowpass
 from lmg_deploy.networks import load_network
-from lmg_deploy.rotations import projected_gravity, xyzw_to_wxyz
+from lmg_deploy.rotations import projected_gravity
 
 MOTOR_MODE_PR = 1          # LowCmd motor mode: enabled
 SAFETY_HEARTBEAT_TOPIC = "/safety/heartbeat"
@@ -119,7 +111,6 @@ PREPOSE_MAX_S = 8.0         # s after the ramp; posed or not, stop waiting
 MIN_COMMAND_GAP = 0.5
 TILT_CHECK_HOLD_S = 5.0     # s standing still on both feet before the IMU tilt is compared with the kinematic one
 TILT_CHECK_TOL_DEG = 1.0    # deg; a larger difference warns once
-SLAM_STALE_S = 0.5          # s; /Odometry older than this while reaching: warn that the goals ride with the pelvis
 
 
 class MarlDeployNode(Node):
@@ -178,7 +169,7 @@ class MarlDeployNode(Node):
             joint_names=cfg["joint_names"],
             ee_frames=cfg["arms"]["ee_frames"],
             arm_joint_names=[cfg["joint_names"][ARM_START:ARM_START + 7], cfg["joint_names"][ARM_START + 7:]],
-            extra_frames=list(dict.fromkeys([cfg["slam_frame"], IMU_FRAME, *FEET])),
+            extra_frames=[IMU_FRAME, *FEET],
         )
         kin.update(np.zeros(NUM_JOINTS))
         # The gyro low-pass the run trained with, per /lowstate sample; absent: none.
@@ -194,15 +185,13 @@ class MarlDeployNode(Node):
                             cfg["arms"]["num_obs"], cfg["arms"]["num_actions"])
         calibration = self._load_imu_calibration(cfg_dir)
         self.controller = MarlController(cfg, kin, legs, arms, imu_calibration=calibration)
-        ignored = calibration is not None and self.controller.imu_calibration is None
-        (self.get_logger().warn if ignored else self.get_logger().info)(self.controller.imu_calibration_note)
+        self.get_logger().info(self.controller.imu_calibration_note)
         self._kin = kin
         self._still = StillThresholds()
         self._tilt_check = StandingTiltCheck(float(cfg["control_dt"]), TILT_CHECK_HOLD_S, TILT_CHECK_TOL_DEG)
 
         self._lowstate: LowState | None = None
         self._lowstate_time: float | None = None   # monotonic receipt time
-        self._slam_time: float | None = None       # monotonic receipt time of the last /Odometry
         self._confirm_wait = bool(self.get_parameter("engage_wait_for_confirm").value)
         self._confirmed = False
         self._control_hz = control_hz
@@ -235,7 +224,6 @@ class MarlDeployNode(Node):
         self.create_subscription(LowState, "/lowstate", self._on_lowstate, lowstate_qos)
         self.create_subscription(Twist, "/cmd_vel", self._on_cmd_vel, 10)
         self.create_subscription(Bool, SAFETY_HEARTBEAT_TOPIC, self._on_heartbeat, 10)
-        self.create_subscription(Odometry, "/Odometry", self._on_odometry, 10)
         self._lower_pub = self.create_publisher(LowCmd, "/safety/lowcmd_lower_in", 10)
         self._upper_pub = self.create_publisher(LowCmd, "/safety/lowcmd_upper_in", 10)
         self._state_pub = self.create_publisher(String, "~/state", latched)
@@ -276,13 +264,6 @@ class MarlDeployNode(Node):
             gyro = self._lowstate_lowpass(gyro, dt)
         self._lowstate_tick = msg.tick
         self._lowstate_gyro = gyro
-
-    def _on_odometry(self, msg: Odometry) -> None:
-        """Feed a FAST-LIO pose to the controller's odometry."""
-        p, o = msg.pose.pose.position, msg.pose.pose.orientation
-        quat = xyzw_to_wxyz(np.array([o.x, o.y, o.z, o.w]))
-        self.controller.set_slam_pose(np.array([p.x, p.y, p.z]), quat)
-        self._slam_time = time.monotonic()
 
     def _on_cmd_vel(self, msg: Twist) -> None:
         """Set the velocity command from /cmd_vel."""
@@ -331,8 +312,7 @@ class MarlDeployNode(Node):
         dq = np.array([motors[i].dq for i in range(NUM_JOINTS)], dtype=np.float64)
         imu = msg.imu_state
         gyro = self._lowstate_gyro if self._lowstate_gyro is not None else np.array(imu.gyroscope, dtype=np.float64)
-        return RobotState(q=q, dq=dq, quat=np.array(imu.quaternion, dtype=np.float64), gyro=gyro.copy(),
-                          acc=np.array(imu.accelerometer, dtype=np.float64))
+        return RobotState(q=q, dq=dq, quat=np.array(imu.quaternion, dtype=np.float64), gyro=gyro.copy())
 
     def _publish(self, cmd: JointCommand, mode_machine: int) -> None:
         """Publish the legs' rows and the torso and arms' rows on golem_safety's two inputs.
@@ -418,9 +398,6 @@ class MarlDeployNode(Node):
         if self._band_release_at is not None and not self._band_released and now >= self._band_release_at:
             self._release_band()
 
-        if self.controller.mode.value == "arm_goal" and (self._slam_time is None or now - self._slam_time > SLAM_STALE_S):
-            self.get_logger().warn("no fresh /Odometry: the arm goals move with the pelvis (is golem_slam running?)",
-                                   throttle_duration_sec=5.0)
         cmd = self.controller.step(state)
         for name, obs in self.controller.last_obs.items():
             if not np.isfinite(obs).all():
@@ -450,9 +427,7 @@ class MarlDeployNode(Node):
         line = ("IMU tilt as the policy sees it roll %+.2f pitch %+.2f deg, by kinematics from the soles roll %+.2f "
                 "pitch %+.2f (difference %+.2f / %+.2f) after %.0f s standing"
                 % (*report["imu_tilt"], *report["fk_tilt"], *report["diff"], TILT_CHECK_HOLD_S))
-        if ctrl.imu_calibration is None:
-            self.get_logger().info(line + " (raw policy: the robot's IMU offset is expected here)")
-        elif report["mismatch"]:
+        if report["mismatch"]:
             self.get_logger().warn(line + f": more than {TILT_CHECK_TOL_DEG:g} deg. Is config/imu_calibration.yaml "
                                    "this robot's, and are both feet flat on level ground? (README 'IMU calibration')")
         else:

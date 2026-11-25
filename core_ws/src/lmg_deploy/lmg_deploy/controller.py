@@ -239,7 +239,6 @@ class MarlController:
             self.rest_pose[arm, 3:] = quat_unique(self.rest_pose[arm, 3:])
         self.cmd_vel = np.zeros(3)
         self.cmd_filtered = np.zeros(3)
-        self.arm_goals: np.ndarray | None = None   # set_arm_goals' poses for the next arm mode; kept across resets
         self.reset(None)
 
     def reset(self, state: RobotState | None, held_target: np.ndarray | None = None) -> None:
@@ -309,33 +308,17 @@ class MarlController:
         else:
             self._start_arm_goal(goal)
 
-    def set_arm_goals(self, poses: np.ndarray) -> None:
-        """Set the wrist goals for arm mode, (arms, 7) (x, y, z, qw, qx, qy, qz), pelvis frame.
-
-        In arm mode they replace the goal at once, taken in the pelvis frame now; otherwise they are
-        kept, also across reset(), and taken in the pelvis frame of the next set_mode("arm").
-        """
-        goal = np.asarray(poses, dtype=np.float64).reshape(self.num_arms, 7).copy()
-        for arm in range(self.num_arms):
-            goal[arm, 3:] = quat_unique(goal[arm, 3:] / np.linalg.norm(goal[arm, 3:]))
-        self.arm_goals = goal
-        if self.mode == Mode.ARM:
-            self.believed = goal.copy()
-            self._update_seeds()
-        elif self.mode == Mode.SETTLE_TO_ARM:
-            self.pending_goal = goal.copy()
-
     def set_mode(self, mode: str) -> None:
         """Switch to "walk" or "arm"; raise ValueError on another mode.
 
         "walk": navigation on the velocity command (the start mode). "arm": zero velocity, the
-        wrists on the goals of set_arm_goals (the rest pose until some are set). Each switch goes
+        wrists on the rest pose. Each switch goes
         through its settle, if the config has one; switching to the mode the controller is already
         in, or settling into, does nothing. "arm" raises ValueError for a policy that never trained an arm goal.
         """
         if mode == "arm":
             if self.mode not in (Mode.ARM, Mode.SETTLE_TO_ARM):
-                self.request_arm_goal(self.arm_goals if self.arm_goals is not None else self.rest_pose)
+                self.request_arm_goal(self.rest_pose)
         elif mode == "walk":
             self.end_arm_goal()
         else:
@@ -744,10 +727,6 @@ class MarlController:
             pos_err, rot_err = compute_pose_error(pos, quat, self.believed[arm, :3], self.believed[arm, 3:])
             out.append(np.concatenate([pos_err, rot_err]))
         return np.concatenate(out)
-
-    def wrist_errors(self) -> np.ndarray:
-        """Return each wrist's position error to the arm command (m), for logging."""
-        return np.linalg.norm(self._wrist_errors().reshape(self.num_arms, 6)[:, :3], axis=1)
 
     def _update_odometry(self) -> None:
         """Move the arm command by the pelvis's motion since the last SLAM pose used, in that pose's pelvis frame."""

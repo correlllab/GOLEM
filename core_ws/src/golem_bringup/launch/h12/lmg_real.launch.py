@@ -18,8 +18,8 @@ SAFETY: nothing commands the robot until both operator gates pass:
   1. start_position_verified:=true starts marl_deploy_node; it ramps all 27 joints to
      the policy's default pose and holds there;
   2. ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger engages it.
-The robot then walks on /cmd_vel and reaches for the arm goals the operator sets
-through /marl_deploy_node/set_mode and set_arm_goals.
+The robot then walks on /cmd_vel; /marl_deploy_node/set_mode switches it between walking
+and arm mode.
 
 SAFETY: marl_deploy_node has no fall check, and a stale /lowstate or /livox/imu only
 pauses its publishing; golem_safety then keeps relaying its last targets, which do not

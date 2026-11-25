@@ -45,7 +45,7 @@ the first latches it silent.
 | `test/test_heartbeat_gate.py` | a real node with the shipped policy on a non-zero DDS domain: silent, in `waiting_heartbeat`, until the first beat, then it pre-poses from the pose at the beat |
 | `test/test_imu_calibration.py`, `test/test_imu_trim.py` | the calibration's math, the export contract in the controller, the estimator on synthetic kinematics; the `/livox/imu` trim |
 | `test/test_livox_imu.py`, `test/test_livox_attitude.py` | unit tests of the two `/livox/imu` attitude paths, the gyro low-pass and the URDF mount |
-| `custom_ros_messages/srv/Lmg*.srv` | the node's services: `LmgSetMode` (walk / arm), `LmgSetArmGoals` (left, right pose) |
+| `custom_ros_messages/srv/LmgSetMode.srv` | the node's `~/set_mode` service (walk / arm) |
 
 ## Exporting a checkpoint
 
@@ -76,7 +76,7 @@ It writes:
   0.01), gains, stance, per-joint action scales, `max_ik_step`, gait period, standing threshold, command ranges and
   low-pass (`command_filter_tau`), their observation term lists, which the controller checks against its own (the
 legs' list may leave out `ee_targets`: LocoManip-LegsOnly-v0 runs from 2026-11-16, 83 inputs), and
-  `arm_goals` (false: the run never trained an arm goal, so `set_mode arm` and `~/arm_goal` are refused). The node
+  `arm_goals` (false: the run never trained an arm goal, so `set_mode arm` is refused). The node
   loads it over the policy's yaml and runs at 1 / `control_dt`. A new policy's yaml is the template with
   `legs.num_obs` / `arms.num_obs` set to the networks' sizes (export_marl.py writes them from 2026-11-20).
 - `imu.source: lowstate` (runs from 2026-11-20, trained on the torso IMU as /lowstate reports it): the node reads
@@ -159,29 +159,19 @@ the kitchen through Nav2: `tests/sim/test_lmg_explore.sh` runs it closed loop).
 
 ```bash
 ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.3}}"   # walk (clipped to vx ±0.7, vy ±0.3, wz ±0.5)
-ros2 service call /marl_deploy_node/set_arm_goals custom_ros_messages/srv/LmgSetArmGoals \
-  "{left: {position: {x: 0.30, y: 0.22, z: -0.15}, orientation: {w: 1.0}},
-    right: {position: {x: 0.30, y: -0.22, z: -0.15}, orientation: {w: 1.0}}}"  # pelvis frame; kept until arm mode
-ros2 service call /marl_deploy_node/set_mode custom_ros_messages/srv/LmgSetMode "{mode: arm}"    # stop and reach (crouch)
+ros2 service call /marl_deploy_node/set_mode custom_ros_messages/srv/LmgSetMode "{mode: arm}"    # the arms at the rest pose
 ros2 service call /marl_deploy_node/set_mode custom_ros_messages/srv/LmgSetMode "{mode: walk}"   # back to /cmd_vel
 ```
 
-`set_arm_goals` in arm mode moves the goals at once; while walking it keeps them for the next `set_mode arm`, and
-they are taken in the pelvis frame of that switch. Arm mode without goals holds the rest pose (standing still).
-`set_mode` is refused until the node is engaged. A PoseArray sets the goals and switches to arm mode in one message:
+`set_mode` is refused until the node is engaged.
 
 ```bash
-ros2 topic pub --once /marl_deploy_node/arm_goal geometry_msgs/msg/PoseArray \
-  "{poses: [{position: {x: 0.30, y: 0.25, z: 0.05}, orientation: {w: 1.0}},
-            {position: {x: 0.30, y: -0.25, z: 0.05}, orientation: {w: 1.0}}]}"  # left, right; pelvis frame
-ros2 service call /marl_deploy_node/end_arm_goal std_srvs/srv/Trigger
 ros2 topic echo /marl_deploy_node/state         # idle, waiting_heartbeat, preposing, waiting_imu, waiting_confirm, nav, settle_to_arm, arm_goal, settle_to_nav, fault: ...
-ros2 topic echo /marl_deploy_node/wrist_error   # m, left and right
 ```
 
 **Arm goals.**
 - An arm goal stops the robot and reaches at once (`settle_to_arm_s` and `settle_to_nav_s` are 0 in the template).
-- The goal is a `left_wrist_yaw_link` and `right_wrist_yaw_link` pose in the pelvis frame, taken when it arrives.
+- The goal is a `left_wrist_yaw_link` and `right_wrist_yaw_link` pose in the pelvis frame, taken when it starts.
   The SLAM odometry keeps it fixed in the world from then on: each FAST-LIO pose (`/Odometry`, camera_init -> body,
   ~10 Hz) is carried from FAST-LIO's body, the IMU it integrates (`slam_frame: livox_imu_link`), to the pelvis by forward kinematics, through the
   torso joint, and the goal moves by the pelvis's motion since the previous one. Training used a learned estimator
@@ -207,7 +197,7 @@ ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger         
   after `nav` appears moves the robot. A publisher still streaming (e.g. `ros2 topic pub -r`) sets it again on its
   next message.
 - The node always waits for `~/confirm_engage`, here as in `lmg_sim`, and never calls the sim's elastic band; neither is an argument.
-- Drive with `/cmd_vel`, `~/set_mode` and `~/set_arm_goals` as above.
+- Drive with `/cmd_vel` and `~/set_mode` as above.
 - Same `safety_config` and `use_slam` arguments as the sim launch; keep `use_slam` on for arm goals.
 
 **Before the first real run:**

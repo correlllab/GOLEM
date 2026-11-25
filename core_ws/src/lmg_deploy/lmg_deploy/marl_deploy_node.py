@@ -23,14 +23,9 @@ Flow
 
 While engaged the robot starts in walking mode and navigates on /cmd_vel. The
 mode is switched by hand with ~/set_mode (custom_ros_messages/LmgSetMode:
-"walk" or "arm"); ~/set_arm_goals (custom_ros_messages/LmgSetArmGoals) sets the
-left and right wrist_yaw_link goals, pelvis frame: in arm mode at once, while
-walking for the next switch to arm mode (until some are set, arm mode holds the
-rest pose). A PoseArray on ~/arm_goal (left then right) sets the goals and
-switches to arm mode in one message, ~/end_arm_goal back to walking. /cmd_vel
-is ignored in arm mode: the policy only ever saw zero there. ~/state (latched)
-names the current state; ~/wrist_error gives each wrist's distance to its
-goal (m) while engaged.
+"walk" or "arm"); arm mode holds the arms at the rest pose. /cmd_vel is ignored
+in arm mode for a policy that only ever saw zero there. ~/state (latched) names
+the current state.
 
 The arm goals stay fixed in the world by the SLAM pipeline's odometry
 (/Odometry, FAST-LIO's camera_init -> body), so golem_slam's navigation launch
@@ -125,15 +120,15 @@ import numpy as np
 import rclpy
 import torch
 import yaml
-from geometry_msgs.msg import PoseArray, Twist
+from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor, SetParametersResult
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Bool, Float32MultiArray, String
+from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
-from custom_ros_messages.srv import LmgSetArmGoals as SetArmGoals, LmgSetMode as SetMode
+from custom_ros_messages.srv import LmgSetMode as SetMode
 from unitree_hg.msg import LowCmd, LowState
 
 from lmg_deploy.controller import (
@@ -319,15 +314,11 @@ class MarlDeployNode(Node):
         self.create_subscription(Imu, "/livox/imu", self._on_livox_imu, qos_profile_sensor_data)
         self.create_subscription(Bool, SAFETY_HEARTBEAT_TOPIC, self._on_heartbeat, 10)
         self.create_subscription(Odometry, "/Odometry", self._on_odometry, 10)
-        self.create_subscription(PoseArray, "~/arm_goal", self._on_arm_goal, 10)
         self._lower_pub = self.create_publisher(LowCmd, "/safety/lowcmd_lower_in", 10)
         self._upper_pub = self.create_publisher(LowCmd, "/safety/lowcmd_upper_in", 10)
         self._state_pub = self.create_publisher(String, "~/state", latched)
-        self._err_pub = self.create_publisher(Float32MultiArray, "~/wrist_error", 10)
         self.create_service(Trigger, "~/confirm_engage", self._on_confirm)
-        self.create_service(Trigger, "~/end_arm_goal", self._on_end_arm_goal)
         self.create_service(SetMode, "~/set_mode", self._on_set_mode)
-        self.create_service(SetArmGoals, "~/set_arm_goals", self._on_set_arm_goals)
         self._band_cli = self.create_client(Trigger, "/elastic_band/toggle")
         self.create_timer(1.0 / control_hz, self._tick)
         self._set_state("idle")
@@ -421,35 +412,6 @@ class MarlDeployNode(Node):
         """Set the velocity command from /cmd_vel."""
         self.controller.set_velocity_command(np.array([msg.linear.x, msg.linear.y, msg.angular.z]))
 
-    def _poses(self, poses_msg) -> np.ndarray | str:
-        """Return (arms, 7) wxyz poses from geometry_msgs Poses (left, right), or why they can't be a goal."""
-        n = self.controller.num_arms
-        if len(poses_msg) != n:
-            return f"arm goal needs {n} poses (left, right), got {len(poses_msg)}"
-        poses = np.array([[p.position.x, p.position.y, p.position.z,
-                           *xyzw_to_wxyz(np.array([p.orientation.x, p.orientation.y,
-                                                   p.orientation.z, p.orientation.w]))]
-                          for p in poses_msg])
-        if not np.isfinite(poses).all() or np.any(np.linalg.norm(poses[:, 3:], axis=1) < 1e-6):
-            return "arm goal has a non-finite position or a zero quaternion"
-        return poses
-
-    def _on_arm_goal(self, msg: PoseArray) -> None:
-        """Start an arm goal from ~/arm_goal; ignored before engaging or when malformed."""
-        poses = self._poses(msg.poses)
-        if isinstance(poses, str):
-            self.get_logger().error(f"{poses}; ignored")
-            return
-        if not self._engaged:
-            self.get_logger().warn("arm goal before the policy is engaged; ignored")
-            return
-        try:
-            self.controller.request_arm_goal(poses)
-        except ValueError as e:
-            self.get_logger().error(f"arm goal refused: {e}")
-            return
-        self.get_logger().info(f"arm goal: left {poses[0, :3].round(3)}, right {poses[1, :3].round(3)} (pelvis)")
-
     def _on_heartbeat(self, msg: Bool) -> None:
         """Latch silent on a false beat; otherwise note the beat's time."""
         if self._dead:
@@ -462,20 +424,12 @@ class MarlDeployNode(Node):
     def _on_confirm(self, _req, resp):
         """Serve ~/confirm_engage: allow the engage once the pre-pose settles."""
         if not self._engaged:
-            # A /cmd_vel that arrived before the go-ahead is not a command to walk
-            # on (arm goals are already ignored until engaged).
+            # A /cmd_vel that arrived before the go-ahead is not a command to walk on.
             self.controller.set_velocity_command(np.zeros(3))
         self._confirmed = True
         resp.success = True
         resp.message = "already engaged" if self._engaged else "confirmed: engaging once the pre-pose settles"
         self.get_logger().info(f"operator confirm: {resp.message}")
-        return resp
-
-    def _on_end_arm_goal(self, _req, resp):
-        """Serve ~/end_arm_goal: return to walking."""
-        self.controller.end_arm_goal()
-        resp.success = True
-        resp.message = f"mode {self.controller.mode.value}"
         return resp
 
     def _on_set_mode(self, req, resp):
@@ -494,20 +448,6 @@ class MarlDeployNode(Node):
                 return resp
             resp.success, resp.message = True, f"mode {self.controller.mode.value}"
             self.get_logger().info(f"set_mode {mode}: {resp.message}")
-        return resp
-
-    def _on_set_arm_goals(self, req, resp):
-        """Serve ~/set_arm_goals: set the wrist goals, applied now in arm mode, else at the next switch."""
-        poses = self._poses([req.left, req.right])
-        if isinstance(poses, str):
-            resp.success, resp.message = False, poses
-            return resp
-        self.controller.set_arm_goals(poses)
-        applied = self.controller.mode.value == "arm_goal"
-        resp.success = True
-        resp.message = (f"left {poses[0, :3].round(3).tolist()}, right {poses[1, :3].round(3).tolist()} (pelvis): "
-                        + ("applied" if applied else "kept for the next set_mode arm"))
-        self.get_logger().info(f"set_arm_goals: {resp.message}")
         return resp
 
     def _latch(self, reason: str) -> None:
@@ -666,7 +606,6 @@ class MarlDeployNode(Node):
         self._publish(cmd, msg.mode_machine)
         self._set_state(self.controller.mode.value)
         self._check_tilt(msg, state)
-        self._err_pub.publish(Float32MultiArray(data=self.controller.wrist_errors().astype(np.float32).tolist()))
 
     def _check_tilt(self, msg: LowState, state: RobotState) -> None:
         """Once, after TILT_CHECK_HOLD_S standing still on both loaded feet at zero command, compare the policy's IMU

@@ -368,8 +368,7 @@ ros2 action send_goal /frame_task custom_ros_messages/action/FrameTask \
 ## Loco-manipulation game policy (`/marl_deploy_node`)
 
 The Locomanipulation_game MARL policy (`lmg_deploy`) drives all 27
-joints: legs walk on `/cmd_vel`, arms reach wrist-pose goals (held in the world
-by the SLAM odometry, so keep `use_slam` on). You drive it yourself (see
+joints: legs walk on `/cmd_vel`, arms hold the rest pose. You drive it yourself (see
 `lmg_deploy/README.md` for all launch arguments):
 
 ```bash
@@ -384,15 +383,9 @@ ros2 topic echo /marl_deploy_node/state --once                 # expect "nav" on
 ros2 run teleop_twist_keyboard teleop_twist_keyboard           # walk
 ```
 
-To reach, then go back to walking:
+Arm mode, which holds the arms at the rest pose, and back:
 
 ```bash
-ros2 topic pub --once /marl_deploy_node/arm_goal geometry_msgs/msg/PoseArray \
-  "{poses: [{position: {x: 0.30, y: 0.25, z: 0.05}, orientation: {w: 1.0}},
-            {position: {x: 0.30, y: -0.25, z: 0.05}, orientation: {w: 1.0}}]}"
-ros2 topic echo /marl_deploy_node/wrist_error                  # metres, left and right
-ros2 service call /marl_deploy_node/end_arm_goal std_srvs/srv/Trigger
+ros2 service call /marl_deploy_node/set_mode custom_ros_messages/srv/LmgSetMode "{mode: arm}"
+ros2 service call /marl_deploy_node/set_mode custom_ros_messages/srv/LmgSetMode "{mode: walk}"
 ```
-
-Arm goals are `left_wrist_yaw_link` then `right_wrist_yaw_link` poses in the
-pelvis frame; `/cmd_vel` is ignored until the goal ends.

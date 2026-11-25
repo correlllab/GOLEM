@@ -396,7 +396,12 @@ def test_arms_track_goal_with_pure_ik():
     for _ in range(40):
         cmd = ctrl.step(_state(cfg, q))
         q[13:] = cmd.q[13:]                     # perfect tracking
-    assert np.all(ctrl.wrist_errors() < 5e-3)
+    assert np.all(_wrist_distances(ctrl) < 5e-3)
+
+
+def _wrist_distances(ctrl):
+    """Return each wrist's distance from its arm command (m) at the last step's joints."""
+    return np.linalg.norm(ctrl._wrist_errors().reshape(2, 6)[:, :3], axis=1)
 
 
 def _slam_body_pose(ctrl, state, pelvis_pos, pelvis_quat):
@@ -626,7 +631,7 @@ def test_warmed_controller_steps_as_a_cold_one(monkeypatch):
     np.testing.assert_allclose(outs[1], outs[0], rtol=0.0, atol=1e-6)
 
 
-# -- manual mode switch and arm goals (~/set_mode, ~/set_arm_goals) ------------------------
+# -- manual mode switch (~/set_mode) --------------------------------------------------------
 
 def test_starts_walking_and_switches_by_hand():
     """The controller starts walking; set_mode switches to arm and back, and refuses another mode."""
@@ -647,43 +652,18 @@ def test_starts_walking_and_switches_by_hand():
         ctrl.set_mode("run")
 
 
-def test_arm_goals_wait_for_arm_mode_and_apply_at_once_in_it():
-    """Arm goals wait for arm mode, apply at once in it, and survive a reset."""
-    ctrl, cfg = _legacy_controller(settle_to_arm_s=0.0, settle_to_nav_s=0.0)
-    ctrl.reset(_state(cfg))
-    goal = ctrl.rest_pose.copy()
-    goal[:, 2] -= 0.3                                  # both wrists 30 cm lower: a crouch
-    ctrl.set_arm_goals(goal)
-    assert ctrl.mode == Mode.NAV                       # setting goals doesn't switch the mode
-    np.testing.assert_allclose(ctrl.believed, ctrl.rest_pose)
-    ctrl.set_mode("arm")
-    np.testing.assert_allclose(ctrl.believed, goal)
-    other = goal.copy()
-    other[0, 1] += 0.1
-    ctrl.set_arm_goals(other)                          # in arm mode: at once
-    np.testing.assert_allclose(ctrl.believed, other)
-    ctrl.set_mode("walk")
-    np.testing.assert_allclose(ctrl.believed, ctrl.rest_pose)
-    ctrl.reset(_state(cfg))                            # the goals stay set across a reset (the band release)
-    ctrl.set_mode("arm")
-    np.testing.assert_allclose(ctrl.believed, other)
-
-
 def test_set_mode_arm_goes_through_the_settle():
     """set_mode arm goes through the settle, and a repeated call does not restart it."""
     ctrl, cfg = _legacy_controller(settle_to_arm_s=0.1, settle_to_nav_s=0.0)
     state = _state(cfg)
     ctrl.reset(state)
-    goal = ctrl.rest_pose.copy()
-    goal[:, 0] += 0.05
-    ctrl.set_arm_goals(goal)
     ctrl.set_mode("arm")
     assert ctrl.mode == Mode.SETTLE_TO_ARM
     ctrl.set_mode("arm")                               # already on its way: no restart of the settle
     for _ in range(5):
         ctrl.step(state)
     assert ctrl.mode == Mode.ARM
-    np.testing.assert_allclose(ctrl.believed, goal, atol=1e-9)
+    np.testing.assert_allclose(ctrl.believed, ctrl.rest_pose, atol=1e-9)   # arm mode holds the rest pose
 
 
 def test_per_joint_action_scales():
@@ -1185,7 +1165,7 @@ def test_arm_ik_without_trajectory_steps_toward_the_goal():
         cmd = ctrl.step(_state(cfg, q))
         assert np.abs(cmd.q[13:] - q[13:]).max() <= ctrl.max_ik_step + 1e-12
         q[13:] = cmd.q[13:]
-    assert np.all(ctrl.wrist_errors() < 0.025)                    # from 0.122 m
+    assert np.all(_wrist_distances(ctrl) < 0.025)                    # from 0.122 m
     assert np.all(q[13:] >= ctrl.ik_lower - ctrl.max_ik_step) and np.all(q[13:] <= ctrl.ik_upper + ctrl.max_ik_step)
 
 

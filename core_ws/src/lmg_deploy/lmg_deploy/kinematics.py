@@ -66,6 +66,7 @@ class ArmKinematics:
         self._gmodel = pin.buildModelFromUrdf(urdf_path)
         self._gdata = self._gmodel.createData()
         self._sdata = self.model.createData()
+        self._pdata = self.model.createData()   # frame_poses' own: the measured state's update() stays as it is
         self._v_idx = np.array([self.model.joints[self.model.getJointId(n)].idx_v for n in joint_names])
 
     def update(self, q: np.ndarray) -> None:
@@ -97,6 +98,19 @@ class ArmKinematics:
     def frame_pose(self, name: str) -> tuple[np.ndarray, np.ndarray]:
         """Return an extra frame's (position m, quaternion wxyz) in the pelvis frame at the last update()."""
         return self._extra_poses[name]
+
+    def frame_poses(self, q: np.ndarray, frames: list[str]) -> list[tuple[np.ndarray, np.ndarray]]:
+        """Return each extra frame's (position m, quaternion wxyz with qw >= 0) in the pelvis frame at joint angles q
+        (rad, policy order), on data of its own: what update() left is not changed."""
+        q_pin = pin.neutral(self.model)
+        q_pin[self._q_idx] = q
+        pin.framesForwardKinematics(self.model, self._pdata, q_pin)
+        o_m_pelvis = self._pdata.oMf[self._pelvis_id]
+        out = []
+        for name in frames:
+            pelvis_m_f = o_m_pelvis.actInv(self._pdata.oMf[self._extra_ids[name]])
+            out.append((pelvis_m_f.translation.copy(), quat_unique(quat_from_matrix(pelvis_m_f.rotation))))
+        return out
 
     def jacobian(self, arm: int) -> np.ndarray:
         """Return the arm's (6, 7) wrist Jacobian at the last update(): pelvis frame, linear rows at the wrist COM."""

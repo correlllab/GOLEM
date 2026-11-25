@@ -21,8 +21,19 @@ Flow
    ``band_release_delay_s`` later and the episode restarts then, so the
    policy's first free step is its episode's first.
 
-While engaged the robot navigates on /cmd_vel, the arms at the rest pose.
-~/state (latched) names the current state.
+While engaged the robot walks on /cmd_vel, the arms at the rest pose until
+the first arm goal. /grasp_frame_target (custom_ros_messages/GraspFrameTarget,
+grasp_server.py) moves each arm's grasp frame to a target, the policy's wrist
+goal set to put it there; the legs keep walking on /cmd_vel through it. It is
+refused until the node has engaged (and, in the sim, released the elastic
+band); a fault, a stale /lowstate or the episode's restart aborts the goal in
+flight. /left_grasp_frame_pose and /right_grasp_frame_pose (pelvis frame, the
+measured joints by forward kinematics) go out at 25 Hz from the first
+/lowstate. ~/state (latched) names the current state.
+
+The goal's success tolerance, settle time and default timeout are the deploy
+config's grasp_frame_target block (config/example.yaml), else GRASP_DEFAULTS,
+measured on the shipped policy in the sim.
 
 This node owns all 27 joints: legs on /safety/lowcmd_lower_in, torso and arms
 on /safety/lowcmd_upper_in. frame_task_server and lowerbody_controller_node
@@ -96,8 +107,10 @@ from lmg_deploy.imu_calibration import (
     load_calibration,
     still_and_loaded,
 )
-from lmg_deploy.kinematics import ArmKinematics
+from lmg_deploy.grasp_goal import GRASP_FRAMES
+from lmg_deploy.grasp_server import GraspGoalServer
 from lmg_deploy.gyro_lowpass import GyroLowpass
+from lmg_deploy.kinematics import ArmKinematics
 from lmg_deploy.networks import load_network
 from lmg_deploy.rotations import projected_gravity
 
@@ -111,6 +124,12 @@ PREPOSE_MAX_S = 8.0         # s after the ramp; posed or not, stop waiting
 MIN_COMMAND_GAP = 0.5
 TILT_CHECK_HOLD_S = 5.0     # s standing still on both feet before the IMU tilt is compared with the kinematic one
 TILT_CHECK_TOL_DEG = 1.0    # deg; a larger difference warns once
+GRASP_POSE_HZ = 25.0        # Hz, the grasp-frame pose topics
+# /grasp_frame_target's tolerances and times without a grasp_frame_target block in the deploy config (example.yaml),
+# from the shipped policy (Coop300k_s42 at 150k) in the RoboCasa sim: on reachable targets 5-15 cm away the grasp
+# frame held 3-7 mm (at most 6-12 mm) and 0.01-0.06 rad (at most 0.09) from the target, standing or walking at
+# 0.2 m/s, within 0.7-1.8 s; a 0.25 rad turn of the target took 4.4 s to come within 15 mm; unmeasured on the real H1-2
+GRASP_DEFAULTS = {"tolerance_m": 0.015, "tolerance_rad": 0.1, "settle_s": 0.5, "default_timeout_s": 10.0}
 
 
 class MarlDeployNode(Node):
@@ -169,7 +188,7 @@ class MarlDeployNode(Node):
             joint_names=cfg["joint_names"],
             ee_frames=cfg["arms"]["ee_frames"],
             arm_joint_names=[cfg["joint_names"][ARM_START:ARM_START + 7], cfg["joint_names"][ARM_START + 7:]],
-            extra_frames=[IMU_FRAME, *FEET],
+            extra_frames=[IMU_FRAME, *FEET, *GRASP_FRAMES],
         )
         kin.update(np.zeros(NUM_JOINTS))
         # The gyro low-pass the run trained with, per /lowstate sample; absent: none.
@@ -229,13 +248,21 @@ class MarlDeployNode(Node):
         self._state_pub = self.create_publisher(String, "~/state", latched)
         self.create_service(Trigger, "~/confirm_engage", self._on_confirm)
         self._band_cli = self.create_client(Trigger, "/elastic_band/toggle")
+        grasp = {**GRASP_DEFAULTS, **(cfg.get("grasp_frame_target") or {})}
+        unknown = set(grasp) - set(GRASP_DEFAULTS)
+        if unknown:
+            raise ValueError(f"grasp_frame_target has unknown keys {sorted(unknown)} (config/example.yaml)")
+        self._pose_every = max(1, int(round(control_hz / GRASP_POSE_HZ)))
+        self._pose_ticks = 0
+        self._grasp = GraspGoalServer(self, kin, ready=self._grasp_refusal, **grasp)
         self.create_timer(1.0 / control_hz, self._tick)
         self._set_state("idle")
         self.get_logger().info(
             f"marl_deploy_node ready: {cfg_path}, {control_hz:.0f} Hz, "
             f"confirm={'required' if self._confirm_wait else 'auto'}, "
             f"IMU /lowstate imu_state {'calibrated' if self.controller.imu_calibration else 'as reported'}, "
-            f"gyro low-pass {f'{self._gyro_lowpass_hz:g} Hz' if self._gyro_lowpass_hz > 0 else 'off'}")
+            f"gyro low-pass {f'{self._gyro_lowpass_hz:g} Hz' if self._gyro_lowpass_hz > 0 else 'off'}, "
+            f"/grasp_frame_target {grasp}")
 
     def _load_imu_calibration(self, cfg_dir: str) -> dict | None:
         """Return the robot's torso-IMU calibration from imu_calibration_file (None: unset, or no file)."""
@@ -289,10 +316,28 @@ class MarlDeployNode(Node):
         self.get_logger().info(f"operator confirm: {resp.message}")
         return resp
 
+    def _grasp_refusal(self) -> str | None:
+        """Return why a /grasp_frame_target goal may not start now, or None (read on the action server's thread)."""
+        if self._dead:
+            return f"marl_deploy_node is latched silent ({self._state_name}); restart it"
+        if not self._engaged:
+            return ("the policy is not engaged yet: it engages once pre-posed and confirmed "
+                    "(/marl_deploy_node/confirm_engage)")
+        if not self._band_released:
+            return "the sim's elastic band is not released yet; the episode restarts at its release"
+        return None
+
+    def destroy_node(self) -> None:
+        """Stop the /grasp_frame_target server, then destroy the node."""
+        if hasattr(self, "_grasp"):
+            self._grasp.shutdown()
+        super().destroy_node()
+
     def _latch(self, reason: str) -> None:
-        """Stop publishing for good and report reason on ~/state and the log."""
+        """Stop publishing for good, abort the arm goals and report reason on ~/state and the log."""
         # SAFETY: one way until the node restarts; golem_safety keeps relaying the last targets.
         self._dead = True
+        self._grasp.abort_all(f"marl_deploy_node latched silent: {reason}")
         self._set_state(f"fault: {reason}")
         self.get_logger().error(
             f"LATCHED SILENT: {reason}. No more commands on /safety/lowcmd_*_in; "
@@ -358,13 +403,16 @@ class MarlDeployNode(Node):
         self._band_released = True
         self.get_logger().info(f"elastic band released ({result.message}); episode restarts")
         if self._lowstate is not None:
+            self._grasp.abort_all("the episode restarted at the elastic band's release")
             self.controller.reset(self._robot_state(self._lowstate))
 
     def _tick(self) -> None:
-        """Run one control tick: the heartbeat and freshness gates, then the pre-pose or a policy step."""
+        """Run one control tick: the grasp-frame poses, the heartbeat and freshness gates, then the pre-pose or a policy
+        step and the arm goal."""
+        now = time.monotonic()
+        self._publish_grasp_poses(now)
         if self._dead:
             return
-        now = time.monotonic()
         if self._hb_last is not None and now - self._hb_last > self._hb_timeout:
             self._latch(f"no {SAFETY_HEARTBEAT_TOPIC} for {self._hb_timeout:.1f} s (safety node down?)")
             return
@@ -379,6 +427,7 @@ class MarlDeployNode(Node):
         if now - self._lowstate_time > self._lowstate_timeout:
             self.get_logger().warn(
                 f"/lowstate is {now - self._lowstate_time:.2f} s old; not stepping", throttle_duration_sec=1.0)
+            self._grasp.abort_all(f"/lowstate is {now - self._lowstate_time:.2f} s old; the policy is not stepping")
             return
         msg = self._lowstate
         state = self._robot_state(msg)
@@ -404,8 +453,23 @@ class MarlDeployNode(Node):
                 self._latch(f"non-finite {name} observation")
                 return
         self._publish(cmd, msg.mode_machine)
+        if self._dead:
+            return
+        self._grasp.step(self.get_clock().now().nanoseconds * 1e-9, self.controller, state.q)
         self._set_state(self.controller.mode.value)
         self._check_tilt(msg, state)
+
+    def _publish_grasp_poses(self, now: float) -> None:
+        """Every _pose_every ticks, publish the grasp frames' poses at the newest /lowstate, if fresh (now: monotonic s)."""
+        self._pose_ticks += 1
+        if self._pose_ticks < self._pose_every or self._lowstate is None:
+            return
+        if now - self._lowstate_time > self._lowstate_timeout:
+            return
+        self._pose_ticks = 0
+        q = np.array([self._lowstate.motor_state[i].q for i in range(NUM_JOINTS)], dtype=np.float64)
+        if np.isfinite(q).all():
+            self._grasp.publish_poses(q, self.get_clock().now().to_msg())
 
     def _check_tilt(self, msg: LowState, state: RobotState) -> None:
         """Once, after TILT_CHECK_HOLD_S standing still on both loaded feet at zero command, compare the policy's IMU

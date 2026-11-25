@@ -723,15 +723,23 @@ def test_frame_and_named_goals_change_every_joints_bias(action):
 
 
 def test_grasp_goal_aborts_at_its_timeout():
-    """A grasp goal whose targets are never reached aborts at its timeout, saying so."""
+    """A grasp goal whose targets are never reached aborts at its timeout, stopping its arms.
+
+    A moving arm lags its command, so the timeout stops it where it is, as a cancel does.
+    """
     trace, handle, result, _ = run_goal('grasp', ik=(NEAR,), hold=(True,))
     assert handle.status == 'aborted' and not result.success
     assert steps(trace) == ['ik_step'] + ['hold_step'] * (ITERATIONS - 1)
-    assert result.message.startswith('timed out after 1.0 s (left 1000.0 mm 1.0000 rad')
+    assert result.message.startswith('timed out after 1.0 s; the arms hold where they are '
+                                     '(left 1000.0 mm 1.0000 rad')
+    names = [entry[0] for entry in trace]
+    assert entries(trace, 'stop_joints') == [('stop_joints', [0, 1], ('reference', (0, 1)))]
+    assert names.index('hold_step') < names.index('stop_joints') < names.index('status')
     trace, handle, result, _ = run_goal('grasp', request=grasp_request(timeout=2.0))
     assert steps(trace) == ['ik_step'] * 2 * ITERATIONS
     assert handle.status == 'aborted'
-    assert result.message.startswith('timed out after 2.0 s before the IK converged')
+    assert result.message.startswith('timed out after 2.0 s before the IK converged; the arms '
+                                     'hold where they are')
 
 
 def test_grasp_goal_canceled_holds_where_it_is():
@@ -749,10 +757,10 @@ def test_grasp_goal_canceled_holds_where_it_is():
 
 
 @pytest.mark.parametrize('ending', [
-    {}, {'ik': (NEAR,), 'errors': (NEAR,)}, {'stale_at': 2},
+    {'ik': (NEAR,), 'errors': (NEAR,)}, {'stale_at': 2},
     {'ik': (NEAR,), 'limited': ((), (('left_elbow_joint', 1.5, 1.5),))}])
-def test_grasp_goal_stops_its_arms_only_on_a_cancel(ending):
-    """Only a cancel stops the arms; every other end leaves the goal's last command."""
+def test_grasp_goal_stops_its_arms_only_on_a_cancel_or_timeout(ending):
+    """Reached, stale or pinned at a limit, a grasp goal leaves its last command."""
     trace, handle, _, _ = run_goal('grasp', request=grasp_request(arms=('left', 'right')),
                                    **ending)
     assert handle.status in ('aborted', 'succeeded')
@@ -794,7 +802,7 @@ def test_planned_grasp_goal_plans_executes_then_holds():
     # the rest of the 1 s timeout after the path, in hold steps
     assert steps(trace) == ['hold_step'] * (ITERATIONS - 3)
     assert handle.status == 'aborted'
-    assert result.message.startswith('timed out after 1.0 s (left')
+    assert result.message.startswith('timed out after 1.0 s; the arms hold where they are (left')
 
 
 def test_planned_grasp_goal_reached():
@@ -811,25 +819,36 @@ def test_planned_grasp_goal_stops_its_path():
     assert ('path_stopped', 1) in trace and steps(trace) == []
     assert handle.status == 'canceled'
     assert result.message.startswith('canceled during the path; the arms hold where they are')
-    # a cancel stops the arm where it is; the timeout leaves the last waypoint
+    # a cancel stops the arm where it is
     names = [entry[0] for entry in trace]
     assert entries(trace, 'stop_joints') == [('stop_joints', [0, 1], ('reference', (0, 1)))]
     assert names.index('stop_reference') < names.index('plan_to_ik_target')
     assert names.index('path_stopped') < names.index('stop_joints') < names.index('status')
     trace, handle, result, _ = run_goal('grasp', plan=True, path=3.0)
     assert ('path_stopped', 1) in trace and steps(trace) == []
-    assert handle.status == 'aborted' and entries(trace, 'stop_joints') == []
-    assert result.message.startswith('timed out after 1.0 s during the path (left')
+    # so does the timeout
+    assert handle.status == 'aborted'
+    assert entries(trace, 'stop_joints') == [('stop_joints', [0, 1], ('reference', (0, 1)))]
+    assert result.message.startswith(
+        'timed out after 1.0 s during the path; the arms hold where they are (left')
 
 
-@pytest.mark.parametrize('failing', ['plan_error', 'execute_error'])
-def test_planned_grasp_goal_failure_aborts(failing):
-    """A planned grasp goal whose plan or path fails aborts with the reason."""
+@pytest.mark.parametrize('failing, message, stops', [
+    ('plan_error', 'planning failed: no path found', False),
+    ('execute_error', 'execution failed: no path found; the arms hold where they are', True)])
+def test_planned_grasp_goal_failure_aborts(failing, message, stops):
+    """A planned grasp goal whose plan or path fails aborts with the reason.
+
+    A path that fails once the arms move stops them where they are; a failed plan moved
+    nothing, so it leaves the command.
+    """
     trace, handle, result, _ = run_goal('grasp', plan=True,
                                         **{failing: RuntimeError('no path found')})
     assert handle.status == 'aborted' and not result.success
-    assert result.message == 'planning or execution failed: no path found'
+    assert result.message == message
     assert steps(trace) == []
+    assert entries(trace, 'stop_joints') == (
+        [('stop_joints', [0, 1], ('reference', (0, 1)))] if stops else [])
 
 
 @pytest.mark.parametrize('plan', [False, True])

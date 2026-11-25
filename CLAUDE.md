@@ -1209,6 +1209,14 @@ on the real G1 yet; follow `docs/g1/first-session.md` step by step.
   expected 6`), so `frame_task_server` exits after 30 s. For Isaac, run
   `git submodule update` first: the H1-2 Isaac sim reports 6 from the current
   `CL_isaaclab_sim` pin.
+- **Rebuild `custom_ros_messages` clean once after pulling the removal of `LmgSetMode`
+  and `LmgSetArmGoals`.** An incremental build keeps their generated sources, and the
+  package's type support library then needs symbols that no longer exist: a node that uses
+  a `custom_ros_messages` interface dies on it (`marl_deploy_node` in `lmg_sim`: `undefined
+  symbol: custom_ros_messages__srv__lmg_set_arm_goals__response__convert_from_py`). From the
+  repo root, on every host that built it (`sudo` for files a container left root-owned):
+  `rm -rf {core_ws,container_cache/sim_tests,container_cache/g1_tests,container_cache/msgs_ws}/{build,install}/custom_ros_messages core_ws/{build,install}_stack_tests/custom_ros_messages`;
+  the next start rebuilds it.
 - **Delete the stale installs of removed packages once after pulling.** colcon
   never removes a package that is gone from `core_ws/src`, so a workspace built
   before `golem_bringup` replaced `h12_bringup` and `g1_bringup` (and the four

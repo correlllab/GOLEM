@@ -463,6 +463,13 @@ def test_slam_odometry_moves_goal_only_on_a_new_pose():
     np.testing.assert_allclose(ctrl.believed[:, 1:3], goal[:, 1:3], atol=1e-9)
 
 
+def test_template_slam_frame_is_fastlio_body():
+    """The template's slam_frame is FAST-LIO's body, the IMU frame it integrates /livox/imu in (livox_imu_link)."""
+    with open(os.path.join(HERE, "..", "config", "policy_template.yaml")) as f:
+        cfg = yaml.safe_load(f)
+    assert cfg["slam_frame"] == "livox_imu_link"
+
+
 # -- action terms ------------------------------------------------------------------------
 
 

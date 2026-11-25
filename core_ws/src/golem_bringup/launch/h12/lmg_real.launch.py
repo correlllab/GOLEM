@@ -3,9 +3,8 @@ Start the loco-manipulation game on the real H1-2's onboard PC.
 
     ros2 launch golem_bringup lmg_real.launch.py
 
-The policy's only IMU is the MID-360's /livox/imu, in the sensor's raw, upside-down
-frame; lmg_deploy turns it into the upright frame the policy trained on (its README,
-"Before the first real run"). LowState's torso IMU is not read.
+The policy reads the torso IMU as /lowstate reports it, with the real robot's calibration
+removed (lmg_deploy's README, "IMU calibration").
 
 What it starts, all at once and INSTEAD of h12_real_robot.launch.py, never
 beside it: the drivers (h12_real_drivers: the MID-360, and the head camera and grippers
@@ -20,7 +19,7 @@ SAFETY: nothing commands the robot until both operator gates pass:
   2. ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger engages it.
 The robot then walks on /cmd_vel.
 
-SAFETY: marl_deploy_node has no fall check, and a stale /lowstate or /livox/imu only
+SAFETY: marl_deploy_node has no fall check, and a stale /lowstate only
 pauses its publishing; golem_safety then keeps relaying its last targets, which do not
 balance the robot. The hardware estop is the stop: keep it in hand.
 
@@ -36,8 +35,7 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 
 # The arguments passed through to h12_locomanipulationgame.launch.py as they are.
-GAME_ARGS = ('start_position_verified', 'prepose_ramp_s', 'prepose_max_vel',
-             'imu_offset_roll_deg', 'imu_offset_pitch_deg', 'imu_offset_yaw_deg')
+GAME_ARGS = ('start_position_verified', 'prepose_ramp_s', 'prepose_max_vel')
 
 
 def generate_launch_description():
@@ -55,25 +53,13 @@ def generate_launch_description():
         DeclareLaunchArgument('prepose_max_vel', default_value='0.25',
                               description='rad/s, the fastest joint target during that ramp; '
                                           'it lengthens the ramp'),
-        # The URDF's livox_joint carries the measured mount, so the trims start at 0;
-        # tune them live with ros2 param set /marl_deploy_node imu_offset_pitch_deg <deg>.
-        # They trim /livox/imu only: golem_lowerbody_rl's imu_trim_deg corrects LowState's
-        # torso IMU, a different sensor with its own error, and does not belong here.
-        DeclareLaunchArgument('imu_offset_roll_deg', default_value='0.0',
-                              description="deg, the start-up roll trim of the policy's IMU "
-                                          '(/livox/imu): its reading with the torso level'),
-        DeclareLaunchArgument('imu_offset_pitch_deg', default_value='0.0',
-                              description="deg, the start-up pitch trim of the policy's IMU"),
-        DeclareLaunchArgument('imu_offset_yaw_deg', default_value='0.0',
-                              description="deg, the start-up yaw trim of the policy's IMU"),
         DeclareLaunchArgument('safety_config', default_value='relax_safety_split.yaml',
                               description='golem_safety config: a name under its config/h12/, '
                                           'or a path'),
         DeclareLaunchArgument('use_slam', default_value='true',
                               description="true: start golem_slam's navigation, which also "
                                           'gives the policy /Odometry for its arm goals'),
-        # The game reads the MID-360 for SLAM and as the policy's IMU;
-        # marl_deploy_node waits in the pre-pose until /livox/imu is up.
+        # The MID-360 is SLAM's lidar and IMU.
         DeclareLaunchArgument('use_lidar', default_value='true',
                               description='true: start the MID-360 driver'),
         DeclareLaunchArgument('use_head_camera', default_value='false',

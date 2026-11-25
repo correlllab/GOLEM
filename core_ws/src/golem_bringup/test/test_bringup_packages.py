@@ -134,20 +134,12 @@ def test_lmg_real_starts_the_policy_only_once_verified():
                                        start_position_verified='true')
 
 
-def test_lmg_real_runs_the_livox_imu_untrimmed():
-    """lmg_real's /livox/imu trims default to 0: the URDF carries the measured mount."""
-    passed = _passed_to('lmg_real.launch.py', 'h12_locomanipulationgame.launch.py')
-    for axis in ('roll', 'pitch', 'yaw'):
-        assert float(passed[f'imu_offset_{axis}_deg']) == 0.0
-
-
 def test_lmg_sim_runs_lmg_reals_operator_gates(monkeypatch):
     """SAFETY: lmg_sim passes the policy lmg_real's gates: verified start off, confirm on."""
     monkeypatch.setenv('ROS_DOMAIN_ID', '193')
     game = 'h12_locomanipulationgame.launch.py'
     sim, real = _passed_to('lmg_sim.launch.py', game), _passed_to('lmg_real.launch.py', game)
-    for name in ('start_position_verified', 'engage_wait_for_confirm', 'imu_offset_roll_deg',
-                 'imu_offset_pitch_deg', 'imu_offset_yaw_deg', 'prepose_ramp_s',
+    for name in ('start_position_verified', 'engage_wait_for_confirm', 'prepose_ramp_s',
                  'prepose_max_vel'):
         assert sim[name] == real[name], name
     assert sim['start_position_verified'] == 'false'

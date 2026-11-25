@@ -44,8 +44,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 import yaml
 
 # The arguments passed through to h12_locomanipulationgame.launch.py as they are: lmg_real's.
-GAME_ARGS = ('start_position_verified', 'prepose_ramp_s', 'prepose_max_vel',
-             'imu_offset_roll_deg', 'imu_offset_pitch_deg', 'imu_offset_yaw_deg')
+GAME_ARGS = ('start_position_verified', 'prepose_ramp_s', 'prepose_max_vel')
 
 
 def h12_footprint():
@@ -79,14 +78,6 @@ def generate_launch_description():
         DeclareLaunchArgument('prepose_max_vel', default_value='0.25',
                               description='rad/s, the fastest joint target during that ramp; '
                                           'it lengthens the ramp'),
-        # The sim's /livox/imu carries the URDF's mount, so the trims start at 0, as in lmg_real.
-        DeclareLaunchArgument('imu_offset_roll_deg', default_value='0.0',
-                              description="deg, the start-up roll trim of the policy's IMU "
-                                          '(/livox/imu): its reading with the torso level'),
-        DeclareLaunchArgument('imu_offset_pitch_deg', default_value='0.0',
-                              description="deg, the start-up pitch trim of the policy's IMU"),
-        DeclareLaunchArgument('imu_offset_yaw_deg', default_value='0.0',
-                              description="deg, the start-up yaw trim of the policy's IMU"),
         DeclareLaunchArgument('safety_config', default_value='relax_safety_split.yaml',
                               description='golem_safety config: a name under its config/h12/, '
                                           'or a path'),

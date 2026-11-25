@@ -17,10 +17,10 @@ target_limits:
 gait_phase_cos: true
 
 imu:
-  source: lowstate          # the policy reads /lowstate imu_state (frame imu_link); absent: the Livox IMU (runs
-                            # before 2026-11-20)
-  frame: imu_link           # URDF frame the run's IMU sat in: livox_imu_link, livox_link or imu_link
-  offset: [0.0, 0.0, 0.0]   # the run's IMU offset setting; not read (marl_deploy_node's imu_offset_*_deg trim it)
+  source: lowstate          # the policy reads /lowstate imu_state (frame imu_link); marl_deploy_node refuses any other
+                            # (the Livox IMU of runs before 2026-11-20)
+  frame: imu_link           # URDF frame the run's IMU sat in: imu_link (marl_deploy_node refuses another)
+  offset: [0.0, 0.0, 0.0]   # the run's IMU offset setting; not read
   orientation: calibrated   # trained with the static offset removed: the deploy applies the robot's calibration
                             # (config/imu_calibration.yaml) and refuses to start without one. raw (or absent): trained
                             # on the quaternion as reported, its bias drawn around the robot's (quat_bias_deg below);

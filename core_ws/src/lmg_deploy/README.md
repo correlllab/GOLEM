@@ -30,8 +30,7 @@ the first latches it silent.
 | `lmg_deploy/kinematics.py` | Pinocchio wrist FK, Jacobian and IK step, in the pelvis frame; the arm joints' gravity torques and `arm_ik`'s seed solve |
 | `lmg_deploy/rotations.py` | numpy versions of the isaaclab.utils.math functions training used |
 | `lmg_deploy/networks.py` | TorchScript loader for the exported actors |
-| `lmg_deploy/livox_imu.py` | `/livox/imu` into the policy's IMU frame: the gyro low-pass, the specific force, and a complementary-filter attitude (the fallback, or `livox_attitude:=filter`) |
-| `lmg_deploy/livox_attitude.py` | the policy's attitude from FAST-LIO's `/Odometry`, carried by the gyro, levelled at the pre-pose |
+| `lmg_deploy/gyro_lowpass.py` | `GyroLowpass`, the 2nd-order Butterworth training ran on the torso IMU's angular velocity |
 | `lmg_deploy/imu_calibration.py` | the torso IMU's orientation calibration: the correction (`correct_imu`), the export contract (`resolve_calibration`), the kinematic tilt and the estimate, the runtime check (README "IMU calibration") |
 | `lmg_deploy/calibrate_imu.py` | `ros2 run lmg_deploy calibrate_imu <bag>`: the calibration from a bag of the robot standing still on both feet |
 | `config/imu_calibration.yaml` | each robot's torso-IMU calibration (`h12`, `g1`), with how and when it was measured |
@@ -43,8 +42,8 @@ the first latches it silent.
 | `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, SLAM odometry, modes, `arm_ik`) on the shipped policy's deploy config (`test/shipped_policy.py`: `policies/h12/h12.yaml` with its `export.yaml` over it, as the node loads them), and the export formats it does not use on `test/data/explicit500.yaml`, Explicit500's |
 | `test/sim_drive.py` | a scripted drive in the Robocasa sim (stand, walk, turn, side-step, arm goal), measured on FAST-LIO's `/Odometry` |
 | `test/test_heartbeat_gate.py` | a real node with the shipped policy on a non-zero DDS domain: silent, in `waiting_heartbeat`, until the first beat, then it pre-poses from the pose at the beat |
-| `test/test_imu_calibration.py`, `test/test_imu_trim.py` | the calibration's math, the export contract in the controller, the estimator on synthetic kinematics; the `/livox/imu` trim |
-| `test/test_livox_imu.py`, `test/test_livox_attitude.py` | unit tests of the two `/livox/imu` attitude paths, the gyro low-pass and the URDF mount |
+| `test/test_imu_calibration.py` | the calibration's math, the export contract in the controller, the estimator on synthetic kinematics |
+| `test/test_gyro_lowpass.py` | the gyro low-pass: a Butterworth at any sample rate, its step response, its restart after a dropout |
 
 ## Exporting a checkpoint
 
@@ -79,8 +78,9 @@ legs' list may leave out `ee_targets`: LocoManip-LegsOnly-v0 runs from 2026-11-1
   loads it over the policy's yaml and runs at 1 / `control_dt`. A new policy's yaml is the template with
   `legs.num_obs` / `arms.num_obs` set to the networks' sizes (export_marl.py writes them from 2026-11-20).
 - `imu.source: lowstate` (runs from 2026-11-20, trained on the torso IMU as /lowstate reports it): the node reads
-  `LowState.imu_state` (quaternion, accelerometer; the gyroscope through `imu.gyro_lowpass_hz`), untrimmed, and needs
-  neither `/livox/imu` nor FAST-LIO's attitude (marl_deploy_node.py's IMU section). Those runs' actors drop
+  `LowState.imu_state` (quaternion, accelerometer; the gyroscope through `imu.gyro_lowpass_hz`; marl_deploy_node.py's
+  IMU section). Exports on the `/livox/imu` attitude path (an `imu.source` other than `lowstate`, runs before
+  2026-11-20) are refused at start. Those runs' actors drop
   `base_lin_acc` (`imu.acc: dropped`). `imu.orientation` says how its quaternion was trained: `calibrated` (the
   robot's static offset removed, only `imu.residual_deg` drawn): the deploy applies the robot's calibration and
   refuses to start without one; `raw`, or absent (the exports with `imu.quat_bias_deg`, trained on the bias itself):
@@ -116,7 +116,8 @@ odometry is the SLAM pipeline's, below), so leave them out of `policies/`.
 Locomanipulation_game's `deploy_parity.py` checks the deploy controller against the training env, step by step, on
 the run's physics: observations term by term, the networks against skrl (LSTM actors stepped alongside), the joint
 targets and the rest pose. Against this package (SLAM odometry, no estimator) it skips the odometry comparison; with
-`imu.gyro_lowpass_hz` it feeds the controller this package's own `GyroLowpass` and compares it with training's:
+`imu.gyro_lowpass_hz` it feeds the controller this package's own `GyroLowpass` (`lmg_deploy.gyro_lowpass`) and
+compares it with training's:
 
 ```bash
 python scripts/skrl/deploy_parity.py --headless --checkpoint <same> \
@@ -150,7 +151,6 @@ ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger   # term
 
 **Launch arguments:** `start_position_verified` (default `false`, as in `lmg_real`), `use_slam` (default `true`;
 with `false` the arm goals ride with the pelvis and the node warns), `use_rviz`, `prepose_ramp_s`, `prepose_max_vel`,
-`imu_offset_{roll,pitch,yaw}_deg` (default 0; the `/livox/imu` trim, refused non-zero for a torso-IMU policy),
 `safety_config`, `use_skills` (default `false`; `true` starts `golem_skills`, whose `/skill/frontier_explore` explores
 the kitchen through Nav2: `tests/sim/test_lmg_explore.sh` runs it closed loop).
 
@@ -159,7 +159,7 @@ rest pose:
 
 ```bash
 ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.3}}"   # walk (clipped to the export's command_ranges)
-ros2 topic echo /marl_deploy_node/state         # idle, waiting_heartbeat, preposing, waiting_imu, waiting_confirm, nav, arm_goal, fault: ...
+ros2 topic echo /marl_deploy_node/state         # idle, waiting_heartbeat, preposing, waiting_confirm, nav, arm_goal, fault: ...
 ```
 
 **Arm goals.**
@@ -194,14 +194,11 @@ ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger         
 - Same `safety_config` and `use_slam` arguments as the sim launch; keep `use_slam` on for arm goals.
 
 **Before the first real run:**
-- **IMU.** The node reads only the MID360's `/livox/imu`, never `LowState.imu_state`, whose attitude carries a ~2.5 deg calibration error. `/livox/imu` is in the URDF's `livox_imu_link` (the IMU chip), the MID-360's raw frame, upside down on the H1-2's head (CL_Assets `d7ef401` on). The node carries the readings from there into the frame the policy trained with, `export.yaml`'s `imu.frame`, through the URDF (`livox_imu.livox_to_imu_rotation`, tested by `test_urdf_mount_takes_the_raw_livox_frame_to_each_policy_frame`):
-  - `livox_imu_link`: the chip upright, as the policies trained it (Locomanipulation_game's CL_Assets pin is older than `d7ef401`): the raw frame turned half a turn about x;
-  - `livox_link` (the point frame, 0.7 deg from the chip), upright the same way;
-  - `imu_link` on `torso_link` for Explicit500 and older (the default when the export has no `imu` block).
-
-  The attitude (so projected gravity) comes from FAST-LIO by default (`livox_attitude:=fastlio`): `/Odometry` is the IMU body's pose in `camera_init`, carried forward between poses by the gyro and levelled once from the accelerometer while the robot holds the pre-pose (`lmg_deploy/livox_attitude.py`; state `waiting_imu` until the head is still, so FAST-LIO must run, `use_slam:=true`). On the real walking bag it is 0.23 deg off FAST-LIO's poses (p95 0.62), where the complementary filter (`lmg_deploy/livox_imu.py`) is 1.9 deg off (p95 4.4): its pull toward the accelerometer follows the gait. With no `/Odometry` for `livox_odom_timeout` (1 s) the node falls back to the filter and warns; `livox_attitude:=filter` uses the filter throughout. Restart the node with FAST-LIO (it moves `camera_init`). The angular velocity passes the gyro low-pass the run trained with, `imu.gyro_lowpass_hz` in `export.yaml` (absent: none, as for Explicit500). `livox_imu.GyroLowpass` is a 2nd-order Butterworth, discretized exactly over each sample's dt, so training's physics rate and the MID360's 200 Hz realize the same filter. At 8 Hz it takes the head's ~20 Hz pitch resonance while walking from 0.5-0.9 to ~0.1 rad/s rms. `livox_joint` and `livox_imu_joint` carry the real robot's measured mount (point frame 8.77 deg, chip 9.45 deg pitch); `imu_offset_{roll,pitch,yaw}_deg` (default 0) trims what is left, live.
-  - Checked on the robot with the raw driver: `core_ws/bags/imu_check_2026-11-17` (still) and `imu_tilt_2026-11-18` (hoisted tilts and turns). The policy-frame gyro and projected gravity follow LowState's on every axis (2 Hz low-passed r > 0.99, gain 0.95-1.02), FAST-LIO's attitude is 0.5 deg from the filter's, and gyro and accelerometer fits of `/livox/imu` against the torso IMU land within about 1 deg of the URDF, inside the training's mount randomization (+-1.5 deg pitch, +-0.75 deg roll and yaw).
-  - Keep the trims at 0. Against LowState's attitude `/livox/imu` reads about 3.3 deg more pitch, but about 2.3 deg of that is LowState's quaternion disagreeing with its own accelerometer, in every bag. `golem_lowerbody_rl`'s `imu_trim_deg` corrects that torso IMU; it is a different sensor, and neither it nor a gap measured against LowState's attitude is a trim for `/livox/imu`.
+- **IMU.** The node reads the torso IMU as `/lowstate` reports it (`imu.source: lowstate`, `imu.frame: imu_link`;
+  an export with another source is refused at start): the quaternion, corrected by the robot's calibration for a
+  calibrated policy, and the gyroscope through the low-pass the run trained with, `imu.gyro_lowpass_hz` in
+  `export.yaml` (`gyro_lowpass.GyroLowpass`, a 2nd-order Butterworth discretized exactly over each sample's dt from
+  `LowState.tick`, so training's physics rate and `/lowstate`'s realize the same filter).
 - **IMU calibration** for torso-IMU policies (`imu.source: lowstate`): below.
 - **Safety-layer gaps.** The safety layer holds the last command on a silent channel. Its stale times only report a quiet input (`input_quiet`): in `relax_safety_split`, the lmg bringups' preset, `stale.lower_seconds` is 0.2 and `stale.upper_seconds` 0 (off), and neither stops the relay. If this node latches silent, the safety layer keeps sending its last targets until it is stopped.
 
@@ -235,10 +232,6 @@ imu_calibration={...})`, which applies it inside the controller, so the observat
 | `calibrated` (needs `imu.source: lowstate`) | applied, logged | **refused** at start (ValueError) |
 | `raw`, or absent (older exports) | ignored, with a warning | nothing applied |
 | anything else | refused | refused |
-
-`imu_offset_{roll,pitch,yaw}_deg`, the live `/livox/imu` trim, is a separate sensor's: the same convention (as a mount
-tilt) but only on the `/livox/imu` path. The node refuses it non-zero for a torso-IMU policy, so nothing is applied
-to the torso IMU twice.
 
 **Measuring it.** Lower the robot onto level floor in the pre-pose, both soles flat, the hoist slack, and record a few
 seconds still (`waiting_confirm` is enough): `ros2 bag record /lowstate`. Then, offline (inside the ROS image, or

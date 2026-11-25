@@ -55,10 +55,6 @@ def generate_launch_description():
                               description="the entry of lmg_deploy's config/imu_calibration.yaml "
                                           "whose torso-IMU offset is removed: h12 (the real "
                                           "robot's) or h12_sim (none: the sim's IMU is exact)"),
-        *[DeclareLaunchArgument(f'imu_offset_{axis}_deg', default_value='0.0',
-                                description=f'startup IMU {axis} trim [deg]: its reading with the '
-                                            'torso level (live: ros2 param set)')
-          for axis in ('roll', 'pitch', 'yaw')],
         # The policy on all 27 joints, through safety_node's split inputs.
         Node(
             package='lmg_deploy',
@@ -81,9 +77,6 @@ def generate_launch_description():
                     LaunchConfiguration('prepose_max_vel'), value_type=float),
                 'robot': ParameterValue(
                     LaunchConfiguration('imu_calibration_robot'), value_type=str),
-                **{f'imu_offset_{axis}_deg': ParameterValue(
-                    LaunchConfiguration(f'imu_offset_{axis}_deg'), value_type=float)
-                   for axis in ('roll', 'pitch', 'yaw')},
             }],
         ),
     ])

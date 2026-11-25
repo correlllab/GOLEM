@@ -195,8 +195,8 @@ ros2 topic echo /marl_deploy_node/state         # idle, waiting_heartbeat, prepo
   joint-space trajectory to a posture from the seed table, not a straight line: a target 18 cm away took the grasp
   frame up to 44 cm from its start on the way.
 - A goal is refused (aborted, with why) until the node has engaged and, in the sim, released the elastic band; a
-  fault (the node latching silent), a `/lowstate` older than `lowstate_timeout` or the episode's restart aborts the
-  goals in flight.
+  fault (the node latching silent), a `/lowstate` older than 1 s (`GRASP_STALE_ABORT_S`; a shorter gap only pauses
+  the policy) or the episode's restart aborts the goals in flight.
 - `/left_grasp_frame_pose`, `/right_grasp_frame_pose` (`geometry_msgs/PoseStamped`, `pelvis`): the grasp frames by
   forward kinematics of the newest `/lowstate`, 25 Hz, from the first `/lowstate` on (within 1.2 mm and 0.004 rad of
   TF's in the sim).

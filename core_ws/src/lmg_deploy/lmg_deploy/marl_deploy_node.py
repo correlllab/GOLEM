@@ -26,8 +26,8 @@ the first arm goal. /grasp_frame_target (custom_ros_messages/GraspFrameTarget,
 grasp_server.py) moves each arm's grasp frame to a target, the policy's wrist
 goal set to put it there; the legs keep walking on /cmd_vel through it. It is
 refused until the node has engaged (and, in the sim, released the elastic
-band); a fault, a stale /lowstate or the episode's restart aborts the goal in
-flight. /left_grasp_frame_pose and /right_grasp_frame_pose (pelvis frame, the
+band); a fault, a /lowstate older than GRASP_STALE_ABORT_S or the episode's
+restart aborts the goal in flight. /left_grasp_frame_pose and /right_grasp_frame_pose (pelvis frame, the
 measured joints by forward kinematics) go out at 25 Hz from the first
 /lowstate. ~/state (latched) names the current state.
 
@@ -125,6 +125,7 @@ MIN_COMMAND_GAP = 0.5
 TILT_CHECK_HOLD_S = 5.0     # s standing still on both feet before the IMU tilt is compared with the kinematic one
 TILT_CHECK_TOL_DEG = 1.0    # deg; a larger difference warns once
 GRASP_POSE_HZ = 25.0        # Hz, the grasp-frame pose topics
+GRASP_STALE_ABORT_S = 1.0   # s of wall clock: a /lowstate this old aborts the arm goals (a shorter gap only pauses)
 # /grasp_frame_target's tolerances and times without a grasp_frame_target block in the deploy config (example.yaml),
 # from the shipped policy (Coop300k_s42 at 150k) in the RoboCasa sim: on reachable targets 5-15 cm away the grasp
 # frame held 3-7 mm (at most 6-12 mm) and 0.01-0.06 rad (at most 0.09) from the target, standing or walking at
@@ -427,7 +428,8 @@ class MarlDeployNode(Node):
         if now - self._lowstate_time > self._lowstate_timeout:
             self.get_logger().warn(
                 f"/lowstate is {now - self._lowstate_time:.2f} s old; not stepping", throttle_duration_sec=1.0)
-            self._grasp.abort_all(f"/lowstate is {now - self._lowstate_time:.2f} s old; the policy is not stepping")
+            if now - self._lowstate_time > GRASP_STALE_ABORT_S:
+                self._grasp.abort_all(f"/lowstate is {now - self._lowstate_time:.2f} s old; the policy is not stepping")
             return
         msg = self._lowstate
         state = self._robot_state(msg)

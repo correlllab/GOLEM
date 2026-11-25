@@ -5,7 +5,7 @@ order (locomanip_marl_env.py _get_observations, then _pre_physics_step):
 
   1. pelvis odometry: move the arm command by how the pelvis moved since the
      last SLAM pose (ArmTargetsCommand.apply_pelvis_motion);
-  2. commands: advance the settle timer, switch mode;
+  2. commands: the velocity command's low-pass;
   3. observations: each agent's terms in export.yaml's legs_obs_terms /
      arms_obs_terms (OBS_TERMS' order, any of them left out), or all of them
      (legs 95, arms 123; 97 and 125 with gait_phase_cos, each leg's phase cos
@@ -92,10 +92,10 @@ the arms' gravity offset and step() all see the corrected attitude; a raw policy
 reads the IMU as reported.
 
 Modes follow the training command schedule: navigation (velocity command
-live, arms holding the rest pose) or an arm goal (velocity zero, one wrist
-pose per arm fixed in the world), with a zero-velocity settle at each switch.
-The operator's arm goal is a pelvis-frame pose taken at request time; the
-SLAM odometry keeps it on its world point from then on, through the settle too.
+live, arms holding the rest pose) or an arm goal (one wrist pose per arm),
+switched at once, as the task does. The arm goal is a pelvis-frame pose taken
+at request time; for a world-frame policy (arm_goal_frame world) the SLAM
+odometry keeps it on its world point from then on.
 """
 
 import logging
@@ -158,9 +158,7 @@ class Mode(Enum):
     """Name the controller's command modes; the values are what ~/state publishes."""
 
     NAV = "nav"
-    SETTLE_TO_ARM = "settle_to_arm"
     ARM = "arm_goal"
-    SETTLE_TO_NAV = "settle_to_nav"
 
 
 class MarlController:
@@ -173,7 +171,8 @@ class MarlController:
         its extra frames. imu_calibration: the robot's torso-IMU calibration, {"roll_deg", "pitch_deg",
         "yaw_deg", "rotate_gyro"} (config/imu_calibration.yaml), or None; applied only when export.yaml's
         imu.orientation is calibrated (imu_calibration.resolve_calibration). Raises ValueError on a config
-        whose sizes or target bounds are wrong, and on a calibrated policy without a calibration.
+        whose sizes or target bounds are wrong, on one with a settle at the mode switch (settle_to_arm_s or
+        settle_to_nav_s not 0), and on a calibrated policy without a calibration.
         """
         self.cfg = cfg
         # the calibration applied to every state read (None: the IMU as reported) and the line saying so
@@ -208,8 +207,10 @@ class MarlController:
         ranges = cfg["command_ranges"]
         self.cmd_low = np.array([ranges["lin_vel_x"][0], ranges["lin_vel_y"][0], ranges["ang_vel_z"][0]])
         self.cmd_high = np.array([ranges["lin_vel_x"][1], ranges["lin_vel_y"][1], ranges["ang_vel_z"][1]])
-        self.settle_to_arm_s = float(cfg["settle_to_arm_s"])
-        self.settle_to_nav_s = float(cfg["settle_to_nav_s"])
+        for key in ("settle_to_arm_s", "settle_to_nav_s"):
+            if float(cfg.get(key) or 0.0) != 0.0:
+                raise ValueError(f"{key} {cfg[key]}: this lmg_deploy switches between navigation and an arm goal at "
+                                 "once, as the shipped policy trained; a settle at the switch is no longer supported")
         self.num_arms = len(cfg["arms"]["ee_frames"])
         self.arm_goals_trained = bool(cfg.get("arm_goals", True))   # export.yaml: false if the run trained none
         self.torque_headroom = cfg.get("torque_headroom")
@@ -248,8 +249,6 @@ class MarlController:
         doc, engage blend). None: no blend (a restart of a running policy, the band's release in the sim).
         """
         self.mode = Mode.NAV
-        self.timer = 0.0
-        self.pending_goal: np.ndarray | None = None
         self.believed = self.rest_pose.copy()   # (arms, 7) pelvis frame, wxyz: the arm command
         self.steps = 0                          # since reset: the gait clock
         self.cmd_filtered = np.zeros(3)         # the command low-pass starts from zero, as training's does
@@ -291,7 +290,7 @@ class MarlController:
     def request_arm_goal(self, poses: np.ndarray) -> None:
         """Start an arm goal: (arms, 7) wrist targets (x, y, z, qw, qx, qy, qz) in the pelvis frame now.
 
-        From navigation it goes through settle_to_arm_s first; in arm mode it replaces the goal at once.
+        It starts at once, from navigation or replacing the goal in arm mode.
         Raises ValueError for a policy that never trained an arm goal (export.yaml arm_goals: false).
         """
         if not self.arm_goals_trained:
@@ -299,49 +298,19 @@ class MarlController:
         goal = np.asarray(poses, dtype=np.float64).reshape(self.num_arms, 7).copy()
         for arm in range(self.num_arms):
             goal[arm, 3:] = quat_unique(goal[arm, 3:] / np.linalg.norm(goal[arm, 3:]))
-        if self.mode == Mode.ARM:
-            self.believed = goal           # a goal replacing a goal has no settle, as in training
-            self._update_seeds()
-        elif self.settle_to_arm_s > 0.0:
-            self.pending_goal = goal
-            self.mode, self.timer = Mode.SETTLE_TO_ARM, self.settle_to_arm_s
-        else:
-            self._start_arm_goal(goal)
-
-    def set_mode(self, mode: str) -> None:
-        """Switch to "walk" or "arm"; raise ValueError on another mode.
-
-        "walk": navigation on the velocity command (the start mode). "arm": zero velocity, the
-        wrists on the rest pose. Each switch goes
-        through its settle, if the config has one; switching to the mode the controller is already
-        in, or settling into, does nothing. "arm" raises ValueError for a policy that never trained an arm goal.
-        """
-        if mode == "arm":
-            if self.mode not in (Mode.ARM, Mode.SETTLE_TO_ARM):
-                self.request_arm_goal(self.rest_pose)
-        elif mode == "walk":
-            self.end_arm_goal()
-        else:
-            raise ValueError(f"mode must be 'walk' or 'arm', not {mode!r}")
+        self._start_arm_goal(goal)
 
     def end_arm_goal(self) -> None:
-        """Return to navigation, through settle_to_nav_s from an arm goal; a pending goal is dropped."""
+        """Return to navigation from an arm goal, the arms to the rest pose."""
         if self.mode == Mode.ARM:
+            self.mode = Mode.NAV
             self.believed = self.rest_pose.copy()
             self._update_seeds()
-            if self.settle_to_nav_s > 0.0:
-                self.mode, self.timer = Mode.SETTLE_TO_NAV, self.settle_to_nav_s
-            else:
-                self.mode = Mode.NAV
-        elif self.mode == Mode.SETTLE_TO_ARM:
-            self.pending_goal = None
-            self.mode = Mode.NAV
 
     def step(self, state: RobotState) -> JointCommand:
         """Run one env step at the measured state and return the joint command."""
         self.kin.update(state.q)
         self._update_odometry()
-        self._update_mode()
         self._filter_command()
 
         self.last_obs = self.observations(state)
@@ -634,21 +603,8 @@ class MarlController:
     def _start_arm_goal(self, goal: np.ndarray) -> None:
         """Enter arm mode with goal as the arm command."""
         self.believed = goal
-        self.pending_goal = None
-        self.mode, self.timer = Mode.ARM, 0.0
+        self.mode = Mode.ARM
         self._update_seeds()
-
-    def _update_mode(self) -> None:
-        """Count down a settle by one step and finish it when it runs out."""
-        if self.mode not in (Mode.SETTLE_TO_ARM, Mode.SETTLE_TO_NAV):
-            return
-        self.timer -= self.dt
-        if self.timer > 1e-9:
-            return
-        if self.mode == Mode.SETTLE_TO_ARM:
-            self._start_arm_goal(self.pending_goal)
-        else:
-            self.mode = Mode.NAV
 
     def velocity_command(self) -> np.ndarray:
         """Return the velocity command the policy sees: the operator's while navigating (and through an arm goal with
@@ -745,10 +701,10 @@ class MarlController:
 
     def _move_goal(self, delta_pos: np.ndarray, delta_quat: np.ndarray) -> None:
         """Keep the arm goal fixed in the world through a pelvis motion delta (previous pelvis frame)."""
-        if self.mode not in (Mode.ARM, Mode.SETTLE_TO_ARM) or self.arm_goal_on_pelvis:
+        if self.mode != Mode.ARM or self.arm_goal_on_pelvis:
             return
         # A world-fixed target: T_prev o c_prev = T_new o c_new, so c_new = delta^-1 o c_prev.
-        poses = self.believed if self.mode == Mode.ARM else self.pending_goal
+        poses = self.believed
         for arm in range(self.num_arms):
             pos, quat = subtract_frame_transforms(delta_pos, delta_quat, poses[arm, :3], poses[arm, 3:])
             poses[arm, :3], poses[arm, 3:] = pos, quat_unique(quat)

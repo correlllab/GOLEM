@@ -21,11 +21,8 @@ Flow
    ``band_release_delay_s`` later and the episode restarts then, so the
    policy's first free step is its episode's first.
 
-While engaged the robot starts in walking mode and navigates on /cmd_vel. The
-mode is switched by hand with ~/set_mode (custom_ros_messages/LmgSetMode:
-"walk" or "arm"); arm mode holds the arms at the rest pose. /cmd_vel is ignored
-in arm mode for a policy that only ever saw zero there. ~/state (latched) names
-the current state.
+While engaged the robot navigates on /cmd_vel, the arms at the rest pose.
+~/state (latched) names the current state.
 
 The arm goals stay fixed in the world by the SLAM pipeline's odometry
 (/Odometry, FAST-LIO's camera_init -> body), so golem_slam's navigation launch
@@ -128,7 +125,6 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPo
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
-from custom_ros_messages.srv import LmgSetMode as SetMode
 from unitree_hg.msg import LowCmd, LowState
 
 from lmg_deploy.controller import (
@@ -318,7 +314,6 @@ class MarlDeployNode(Node):
         self._upper_pub = self.create_publisher(LowCmd, "/safety/lowcmd_upper_in", 10)
         self._state_pub = self.create_publisher(String, "~/state", latched)
         self.create_service(Trigger, "~/confirm_engage", self._on_confirm)
-        self.create_service(SetMode, "~/set_mode", self._on_set_mode)
         self._band_cli = self.create_client(Trigger, "/elastic_band/toggle")
         self.create_timer(1.0 / control_hz, self._tick)
         self._set_state("idle")
@@ -430,24 +425,6 @@ class MarlDeployNode(Node):
         resp.success = True
         resp.message = "already engaged" if self._engaged else "confirmed: engaging once the pre-pose settles"
         self.get_logger().info(f"operator confirm: {resp.message}")
-        return resp
-
-    def _on_set_mode(self, req, resp):
-        """Serve ~/set_mode: switch to walk or arm; refused before engaging."""
-        mode = req.mode.strip().lower()
-        if mode not in (SetMode.Request.WALK, SetMode.Request.ARM):
-            resp.success, resp.message = False, f"mode must be '{SetMode.Request.WALK}' or '{SetMode.Request.ARM}', not {req.mode!r}"
-        elif not self._engaged:
-            resp.success, resp.message = False, "not engaged yet: the policy starts in walking mode once it engages"
-        else:
-            try:
-                self.controller.set_mode(mode)
-            except ValueError as e:
-                resp.success, resp.message = False, str(e)
-                self.get_logger().warn(f"set_mode {mode} refused: {e}")
-                return resp
-            resp.success, resp.message = True, f"mode {self.controller.mode.value}"
-            self.get_logger().info(f"set_mode {mode}: {resp.message}")
         return resp
 
     def _latch(self, reason: str) -> None:
@@ -595,7 +572,7 @@ class MarlDeployNode(Node):
         if self._band_release_at is not None and not self._band_released and now >= self._band_release_at:
             self._release_band()
 
-        if self.controller.mode.value in ("arm_goal", "settle_to_arm") and (self._slam_time is None or now - self._slam_time > SLAM_STALE_S):
+        if self.controller.mode.value == "arm_goal" and (self._slam_time is None or now - self._slam_time > SLAM_STALE_S):
             self.get_logger().warn("no fresh /Odometry: the arm goals move with the pelvis (is golem_slam running?)",
                                    throttle_duration_sec=5.0)
         cmd = self.controller.step(state)

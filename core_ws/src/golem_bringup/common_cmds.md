@@ -382,10 +382,3 @@ Walk:
 ros2 topic echo /marl_deploy_node/state --once                 # expect "nav" once engaged
 ros2 run teleop_twist_keyboard teleop_twist_keyboard           # walk
 ```
-
-Arm mode, which holds the arms at the rest pose, and back:
-
-```bash
-ros2 service call /marl_deploy_node/set_mode custom_ros_messages/srv/LmgSetMode "{mode: arm}"
-ros2 service call /marl_deploy_node/set_mode custom_ros_messages/srv/LmgSetMode "{mode: walk}"
-```

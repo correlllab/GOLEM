@@ -89,8 +89,8 @@ max_ik_step: 0.05
 # s, time constant of the first-order low-pass on the velocity command the policies see and the gait clock reads,
 # stepped once per policy step, zeroed at reset and held at zero during an arm goal. Absent or 0: no low-pass.
 command_filter_tau: 0.5
-# false: the run never trained an arm goal (arm_goal_prob 0), and the controller refuses one (set_mode arm,
-# ~/arm_goal). export.yaml sets it. Absent: true.
+# false: the run never trained an arm goal (arm_goal_prob 0), and the controller refuses one. export.yaml sets it.
+# Absent: true.
 arm_goals: false
 # The observation terms each actor trained on, in order; export.yaml writes them. The controller refuses a config
 # whose lists are not the observations it builds. Absent: not checked.
@@ -117,9 +117,9 @@ command_ranges:
   lin_vel_y: [-0.3, 0.3]
   ang_vel_z: [-0.5, 0.5]
 
-# s of zero velocity before an arm goal takes over from navigation; 0: none.
+# s of zero velocity before an arm goal takes over from navigation, and before navigation resumes after one: 0 or
+# absent only (the controller switches at once, as the policies train; any other value is refused).
 settle_to_arm_s: 0.0
-# s of zero velocity before navigation resumes after an arm goal; 0: none.
 settle_to_nav_s: 0.0
 
 # The navigation rest pose: one wrist pose per arm, [x, y, z (m), qw, qx, qy, qz], pelvis frame, left then right.

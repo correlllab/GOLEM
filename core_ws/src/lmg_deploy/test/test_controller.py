@@ -6,8 +6,8 @@ The Isaac Lab parity tests also need ISAACLAB_MATH, the path to
 IsaacLab/source/isaaclab/isaaclab/utils/math.py; they are skipped without it.
 
 The controller runs on the shipped H1-2 policy's deploy config (shipped_policy.py) with stand-in actors. The tests
-of the export formats the shipped policy does not use (no arm_ik, a world-frame arm goal on SLAM odometry, the mode
-switch) run on Explicit500's deploy config, test/data/explicit500.yaml.
+of the export formats the shipped policy does not use (no arm_ik, a world-frame arm goal on SLAM odometry) run on
+Explicit500's deploy config, test/data/explicit500.yaml.
 """
 
 import importlib.util
@@ -340,27 +340,11 @@ def test_target_limits_must_name_policy_joints():
         _controller(target_limits={"not_a_joint": [-1.0, 1.0]})
 
 
-def test_arm_goal_modes_and_settle():
-    """An arm goal settles at zero velocity before arm mode, and ending it settles back to navigation."""
-    ctrl, cfg = _legacy_controller(settle_to_arm_s=0.75, settle_to_nav_s=1.5)
-    state = _state(cfg)
-    ctrl.reset(state)
-    ctrl.set_velocity_command(np.array([0.5, 0.0, 0.0]))
-    goal = ctrl.rest_pose.copy()
-    goal[:, 2] -= 0.1
-    ctrl.request_arm_goal(goal)
-    assert ctrl.mode == Mode.SETTLE_TO_ARM
-    np.testing.assert_allclose(ctrl.velocity_command(), 0.0)
-    for _ in range(int(round(0.75 / 0.02))):
-        ctrl.step(state)
-    assert ctrl.mode == Mode.ARM
-    np.testing.assert_allclose(ctrl.believed, goal)
-    ctrl.end_arm_goal()
-    assert ctrl.mode == Mode.SETTLE_TO_NAV
-    for _ in range(int(round(1.5 / 0.02))):
-        ctrl.step(state)
-    assert ctrl.mode == Mode.NAV
-    np.testing.assert_allclose(ctrl.velocity_command(), [0.5, 0, 0])
+def test_a_settle_at_the_mode_switch_is_refused():
+    """settle_to_arm_s or settle_to_nav_s other than 0 is refused: the controller switches modes at once."""
+    for key in ("settle_to_arm_s", "settle_to_nav_s"):
+        with pytest.raises(ValueError, match=key):
+            _controller(**{key: 0.5})
 
 
 def test_arm_goal_replaces_the_command_and_walking_goes_on():
@@ -386,7 +370,7 @@ def test_arm_goal_replaces_the_command_and_walking_goes_on():
 
 def test_arms_track_goal_with_pure_ik():
     """With zero residual, stepping the joints to the IK targets walks the wrists onto the goal."""
-    ctrl, cfg = _legacy_controller(settle_to_arm_s=0.0)
+    ctrl, cfg = _legacy_controller()
     q = np.array(cfg["default_joint_pos"])
     ctrl.reset(_state(cfg, q))
     goal = ctrl.rest_pose.copy()
@@ -631,41 +615,6 @@ def test_warmed_controller_steps_as_a_cold_one(monkeypatch):
     np.testing.assert_allclose(outs[1], outs[0], rtol=0.0, atol=1e-6)
 
 
-# -- manual mode switch (~/set_mode) --------------------------------------------------------
-
-def test_starts_walking_and_switches_by_hand():
-    """The controller starts walking; set_mode switches to arm and back, and refuses another mode."""
-    ctrl, cfg = _legacy_controller(settle_to_arm_s=0.0, settle_to_nav_s=0.0)
-    state = _state(cfg)
-    ctrl.reset(state)
-    assert ctrl.mode == Mode.NAV
-    ctrl.set_velocity_command(np.array([0.4, 0.0, 0.2]))
-    np.testing.assert_allclose(ctrl.velocity_command(), [0.4, 0.0, 0.2])
-    ctrl.set_mode("arm")                               # no goals set: the arms hold the rest pose
-    assert ctrl.mode == Mode.ARM
-    np.testing.assert_allclose(ctrl.velocity_command(), 0.0)
-    np.testing.assert_allclose(ctrl.believed, ctrl.rest_pose)
-    ctrl.set_mode("walk")
-    assert ctrl.mode == Mode.NAV
-    np.testing.assert_allclose(ctrl.velocity_command(), [0.4, 0.0, 0.2])
-    with pytest.raises(ValueError):
-        ctrl.set_mode("run")
-
-
-def test_set_mode_arm_goes_through_the_settle():
-    """set_mode arm goes through the settle, and a repeated call does not restart it."""
-    ctrl, cfg = _legacy_controller(settle_to_arm_s=0.1, settle_to_nav_s=0.0)
-    state = _state(cfg)
-    ctrl.reset(state)
-    ctrl.set_mode("arm")
-    assert ctrl.mode == Mode.SETTLE_TO_ARM
-    ctrl.set_mode("arm")                               # already on its way: no restart of the settle
-    for _ in range(5):
-        ctrl.step(state)
-    assert ctrl.mode == Mode.ARM
-    np.testing.assert_allclose(ctrl.believed, ctrl.rest_pose, atol=1e-9)   # arm mode holds the rest pose
-
-
 def test_per_joint_action_scales():
     """Per-joint scales map each action to its target and back to the observed action; a wrong count raises."""
     scales = np.linspace(0.1, 0.3, 12)
@@ -782,7 +731,7 @@ def test_command_filter_low_passes_the_observed_command():
 def test_command_filter_zero_during_an_arm_goal_that_stops_walking():
     """Without arm_goal_keeps_walking the low-passed command is zero during an arm goal."""
     legs = ConstNetwork(np.zeros(12))
-    ctrl, cfg = _legacy_controller(legs=legs, command_filter_tau=0.5, settle_to_arm_s=0.0)
+    ctrl, cfg = _legacy_controller(legs=legs, command_filter_tau=0.5)
     state = _state(cfg)
     ctrl.reset(state)
     ctrl.set_velocity_command(np.array([0.5, 0.0, 0.0]))

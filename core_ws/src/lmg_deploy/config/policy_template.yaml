@@ -85,7 +85,7 @@ command_ranges:
   lin_vel_y: [-0.3, 0.3]
   ang_vel_z: [-0.5, 0.5]
 
-# No settle: the task switches between navigation and an arm goal at once (ArmTargetsCommand).
+# No settle: the task switches between navigation and an arm goal at once (ArmTargetsCommand); other values are refused.
 settle_to_arm_s: 0.0
 settle_to_nav_s: 0.0
 

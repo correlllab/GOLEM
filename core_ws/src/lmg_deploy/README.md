@@ -45,7 +45,6 @@ the first latches it silent.
 | `test/test_heartbeat_gate.py` | a real node with the shipped policy on a non-zero DDS domain: silent, in `waiting_heartbeat`, until the first beat, then it pre-poses from the pose at the beat |
 | `test/test_imu_calibration.py`, `test/test_imu_trim.py` | the calibration's math, the export contract in the controller, the estimator on synthetic kinematics; the `/livox/imu` trim |
 | `test/test_livox_imu.py`, `test/test_livox_attitude.py` | unit tests of the two `/livox/imu` attitude paths, the gyro low-pass and the URDF mount |
-| `custom_ros_messages/srv/LmgSetMode.srv` | the node's `~/set_mode` service (walk / arm) |
 
 ## Exporting a checkpoint
 
@@ -76,7 +75,7 @@ It writes:
   0.01), gains, stance, per-joint action scales, `max_ik_step`, gait period, standing threshold, command ranges and
   low-pass (`command_filter_tau`), their observation term lists, which the controller checks against its own (the
 legs' list may leave out `ee_targets`: LocoManip-LegsOnly-v0 runs from 2026-11-16, 83 inputs), and
-  `arm_goals` (false: the run never trained an arm goal, so `set_mode arm` is refused). The node
+  `arm_goals` (false: the run never trained an arm goal, so an arm goal is refused). The node
   loads it over the policy's yaml and runs at 1 / `control_dt`. A new policy's yaml is the template with
   `legs.num_obs` / `arms.num_obs` set to the networks' sizes (export_marl.py writes them from 2026-11-20).
 - `imu.source: lowstate` (runs from 2026-11-20, trained on the torso IMU as /lowstate reports it): the node reads
@@ -155,22 +154,16 @@ with `false` the arm goals ride with the pelvis and the node warns), `use_rviz`,
 `safety_config`, `use_skills` (default `false`; `true` starts `golem_skills`, whose `/skill/frontier_explore` explores
 the kitchen through Nav2: `tests/sim/test_lmg_explore.sh` runs it closed loop).
 
-**Driving it** (from `docker exec -it golem_ros bash`). The node starts in walking mode once engaged:
+**Driving it** (from `docker exec -it golem_ros bash`). The node walks on `/cmd_vel` once engaged, the arms at the
+rest pose:
 
 ```bash
-ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.3}}"   # walk (clipped to vx ±0.7, vy ±0.3, wz ±0.5)
-ros2 service call /marl_deploy_node/set_mode custom_ros_messages/srv/LmgSetMode "{mode: arm}"    # the arms at the rest pose
-ros2 service call /marl_deploy_node/set_mode custom_ros_messages/srv/LmgSetMode "{mode: walk}"   # back to /cmd_vel
-```
-
-`set_mode` is refused until the node is engaged.
-
-```bash
-ros2 topic echo /marl_deploy_node/state         # idle, waiting_heartbeat, preposing, waiting_imu, waiting_confirm, nav, settle_to_arm, arm_goal, settle_to_nav, fault: ...
+ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.3}}"   # walk (clipped to the export's command_ranges)
+ros2 topic echo /marl_deploy_node/state         # idle, waiting_heartbeat, preposing, waiting_imu, waiting_confirm, nav, arm_goal, fault: ...
 ```
 
 **Arm goals.**
-- An arm goal stops the robot and reaches at once (`settle_to_arm_s` and `settle_to_nav_s` are 0 in the template).
+- An arm goal takes over at once (`settle_to_arm_s` and `settle_to_nav_s` must be 0: a settle at the switch is refused).
 - The goal is a `left_wrist_yaw_link` and `right_wrist_yaw_link` pose in the pelvis frame, taken when it starts.
   The SLAM odometry keeps it fixed in the world from then on: each FAST-LIO pose (`/Odometry`, camera_init -> body,
   ~10 Hz) is carried from FAST-LIO's body, the IMU it integrates (`slam_frame: livox_imu_link`), to the pelvis by forward kinematics, through the
@@ -197,7 +190,7 @@ ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger         
   after `nav` appears moves the robot. A publisher still streaming (e.g. `ros2 topic pub -r`) sets it again on its
   next message.
 - The node always waits for `~/confirm_engage`, here as in `lmg_sim`, and never calls the sim's elastic band; neither is an argument.
-- Drive with `/cmd_vel` and `~/set_mode` as above.
+- Drive with `/cmd_vel` as above.
 - Same `safety_config` and `use_slam` arguments as the sim launch; keep `use_slam` on for arm goals.
 
 **Before the first real run:**

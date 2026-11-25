@@ -40,6 +40,7 @@ from geometry_msgs.msg import PoseArray, PoseStamped  # noqa: E402
 import numpy as np  # noqa: E402
 from pyquaternion import Quaternion  # noqa: E402
 from rclpy.action import ActionServer, CancelResponse, GoalResponse  # noqa: E402
+from rclpy.executors import SingleThreadedExecutor  # noqa: E402
 from rclpy.node import Node  # noqa: E402
 from rclpy.time import Time  # noqa: E402
 from tf2_ros import Buffer, TransformException, TransformListener  # noqa: E402
@@ -637,9 +638,19 @@ class FrameTaskServer(Node):
         transform older than TF_MAX_AGE_S s of robot time is not taken; one of static
         transforms only (stamp 0) is. GoalError, naming each frame, when a transform is
         missing or too old by then.
+
+        The listener runs on a node and executor of its own, shut down before the node is
+        destroyed: subscriptions destroyed on this node while its executor waits on them stop
+        that executor (InvalidHandle), and with it every callback of the controller.
         """
+        tf_node = Node(f'{self.get_name()}_tf', context=self.context,
+                       use_global_arguments=False, start_parameter_services=False)
+        executor = SingleThreadedExecutor(context=self.context)
+        executor.add_node(tf_node)
         tf_buffer = Buffer()
-        listener = TransformListener(tf_buffer, self)
+        TransformListener(tf_buffer, tf_node)
+        spinner = threading.Thread(target=executor.spin, name='grasp_tf', daemon=True)
+        spinner.start()
         try:
             found, problems = {}, {}
             deadline = time.monotonic() + TF_WAIT_S
@@ -668,7 +679,9 @@ class FrameTaskServer(Node):
                                     + f', after {TF_WAIT_S:.1f} s of listening to TF')
                 time.sleep(TF_POLL_S)
         finally:
-            listener.unregister()
+            executor.shutdown()
+            spinner.join()
+            tf_node.destroy_node()
 
     def _grasp_frame_target(self, goal_handle, targets):
         """Pull each targeted grasp frame to its target, directly or along a plan; end the goal.

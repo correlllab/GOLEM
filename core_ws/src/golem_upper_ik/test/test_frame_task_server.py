@@ -1040,6 +1040,42 @@ def test_grasp_frame_target_refuses_a_missing_or_stale_transform(ros, models):
     np.testing.assert_array_equal(following.measured(), held)
 
 
+def test_world_frame_goals_keep_the_server_serving(ros, models):
+    """World-frame goals under a busy /tf leave the server serving every later goal.
+
+    Each world-frame goal listens to TF and then stops listening; that must not stop the
+    executor that serves the controller's callbacks (it did once, InvalidHandle, live on the
+    H1-2 sim, whose /tf runs at the joint-state rate).
+    """
+    from tf2_ros import TransformBroadcaster
+    _, _, _, poses = grasp_server(ros, models, 'h12')
+    pelvis_in_world = _world((1.0, 2.0, 0.5), 0.7)
+    node = ros.node('busy_world')
+    broadcaster = TransformBroadcaster(node)
+    stop = threading.Event()
+
+    def publish():
+        """Publish busy_world -> pelvis, stamped now, at about 500 Hz until stopped."""
+        while not stop.is_set():
+            broadcaster.sendTransform(_transform('busy_world', 'pelvis', pelvis_in_world,
+                                                 node.get_clock().now().to_msg()))
+            time.sleep(0.002)
+    thread = threading.Thread(target=publish, daemon=True)
+    thread.start()
+    client = GraspClient(ros)
+    try:
+        for _ in range(8):
+            target = _matrix(poses['left'].poses[-1])
+            status, result = client.run(grasp_goal(left=pelvis_in_world @ target,
+                                                   frame_id='busy_world'))
+            assert status == GoalStatus.STATUS_SUCCEEDED, result.message
+    finally:
+        stop.set()
+        thread.join(timeout=1.0)
+    status, result = client.run(grasp_goal(left=_matrix(poses['left'].poses[-1])))
+    assert status == GoalStatus.STATUS_SUCCEEDED, result.message
+
+
 def test_grasp_frame_target_needs_a_target(ros, models):
     """A goal with no target aborts at once, and nothing moves."""
     following, _, _, _ = grasp_server(ros, models, 'g1')

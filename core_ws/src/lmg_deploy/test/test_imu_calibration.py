@@ -14,12 +14,10 @@ from lmg_deploy import imu_calibration as C
 from lmg_deploy import rotations as R
 from lmg_deploy.controller import MarlController, RobotState
 from lmg_deploy.kinematics import ArmKinematics
+from shipped_policy import URDF, shipped_cfg
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PKG = os.path.join(HERE, "..")
-CFG_PATH = os.path.join(HERE, "data", "explicit500.yaml")
-URDF = os.environ.get(
-    "H12_URDF", os.path.join(HERE, "..", "..", "..", "..", "CL_Assets", "ros_assets", "h1_2_magpie.urdf"))
 RNG = np.random.default_rng(1)
 CAL = {"roll_deg": -0.3, "pitch_deg": -2.4, "yaw_deg": 0.7, "rotate_gyro": False}
 LOWSTATE_IMU = {"source": "lowstate", "frame": "imu_link", "offset": [0.0, 0.0, 0.0], "gyro_lowpass_hz": 8.0,
@@ -134,24 +132,18 @@ def test_the_sim_entry_removes_no_offset():
 
 
 def _cfg(imu=None):
-    """Return the test deploy config with an imu block (None: none, as Explicit500)."""
-    with open(CFG_PATH) as f:
-        cfg = yaml.safe_load(f)
+    """Return the shipped policy's deploy config, its imu block replaced by imu (None: none, as old exports)."""
+    cfg = shipped_cfg()
+    cfg.pop("imu")
     if imu is not None:
         cfg["imu"] = imu
     return cfg
 
 
-def _ctrl(imu=None, imu_calibration=None, gravity_offset=False):
-    """Return a controller on the test config; with gravity_offset, arm_ik's gravity offset on."""
+def _ctrl(imu=None, imu_calibration=None):
+    """Return a controller on the shipped config with imu as its imu block (its arm_ik's gravity offset on)."""
     cfg = _cfg(imu)
     names = cfg["joint_names"]
-    if gravity_offset:
-        cfg["arm_ik"] = {"rot_weight": 0.3, "null_gain": 0.05, "posture_scale": 0.5, "posture_gain": 1.0,
-                         "limit_margin": 0.05, "ik_damping": 0.05, "ik_passes": 3, "posture_from_command": False,
-                         "trajectory": True, "seed_rot_weight": 0.3, "posture_actions": False,
-                         "trajectory_max_vel": 2.0, "trajectory_max_acc": 10.0, "gravity_offset": True}
-        cfg["torque_headroom"] = None
     kin = ArmKinematics(URDF, names, cfg["arms"]["ee_frames"], [names[13:20], names[20:]],
                         extra_frames=[cfg["slam_frame"], "imu_link"])
     return MarlController(cfg, kin, _Echo(12), _Echo(14), imu_calibration=imu_calibration)
@@ -205,17 +197,17 @@ def test_calibrated_policy_sees_the_corrected_imu():
                        acc=np.zeros(3))
     ctrl.reset(state)
     ctrl.step(state)
-    legs = ctrl.last_obs["legs"]                    # Explicit500's layout: acc 0:3, gyro 3:6, gravity 6:9
-    np.testing.assert_allclose(legs[6:9], R.projected_gravity(true), atol=1e-12)
-    np.testing.assert_allclose(legs[3:6], gyro)
-    np.testing.assert_allclose(ctrl.observations(state)["legs"][6:9], R.projected_gravity(true), atol=1e-12)
+    legs = ctrl.last_obs["legs"]                    # the shipped layout: gyro 0:3, gravity 3:6
+    np.testing.assert_allclose(legs[3:6], R.projected_gravity(true), atol=1e-12)
+    np.testing.assert_allclose(legs[0:3], gyro)
+    np.testing.assert_allclose(ctrl.observations(state)["legs"][3:6], R.projected_gravity(true), atol=1e-12)
 
 
 def test_calibrated_gravity_offset_uses_the_corrected_attitude():
     """gravity_b (the arms' gravity offset) reads the corrected attitude: a calibrated controller on the biased IMU
     gives the gravity, and the joint targets, an uncalibrated one gives on the true attitude."""
-    cal_ctrl = _ctrl(CALIBRATED_IMU, CAL, gravity_offset=True)
-    ref_ctrl = _ctrl({**LOWSTATE_IMU, "orientation": "raw"}, None, gravity_offset=True)
+    cal_ctrl = _ctrl(CALIBRATED_IMU, CAL)
+    ref_ctrl = _ctrl({**LOWSTATE_IMU, "orientation": "raw"}, None)
     for state in _states(_cfg(), 3):
         true_state = RobotState(q=state.q, dq=state.dq, quat=R.quat_mul(state.quat, R.quat_conjugate(C.bias_quat(CAL))),
                                 gyro=state.gyro, acc=state.acc)
@@ -246,15 +238,15 @@ def test_raw_and_old_exports_ignore_a_calibration(caplog):
             np.testing.assert_array_equal(given.last_obs["legs"], plain.last_obs["legs"])
             np.testing.assert_array_equal(given.last_obs["arms"], plain.last_obs["arms"])
             # the biased quaternion reaches the policy unchanged
-            np.testing.assert_array_equal(given.last_obs["legs"][6:9], R.projected_gravity(state.quat))
+            np.testing.assert_array_equal(given.last_obs["legs"][3:6], R.projected_gravity(state.quat))
 
 
 def test_positional_arguments_still_work():
-    """MarlController(cfg, kin, legs, arms) as before (deploy_parity.py's call): no calibration."""
-    cfg = _cfg()
+    """MarlController(cfg, kin, legs, arms) as before (deploy_parity.py's call): no calibration (a raw export)."""
+    cfg = _cfg(RAW_IMU)
     names = cfg["joint_names"]
     kin = ArmKinematics(URDF, names, cfg["arms"]["ee_frames"], [names[13:20], names[20:]],
-                        extra_frames=[cfg["slam_frame"]])
+                        extra_frames=[cfg["slam_frame"], "imu_link"])
     ctrl = MarlController(cfg, kin, _Echo(12), _Echo(14))
     assert ctrl.imu_calibration is None
 

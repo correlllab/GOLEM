@@ -20,9 +20,9 @@ ARMS = ('left', 'right')
 
 @dataclass(frozen=True)
 class ToolFrame:
-    """A frame the skills define on a URDF link the robot's model has: a fixed pose in it."""
+    """A frame the skills define, fixed on a frame the robot's model has: a pose in it."""
 
-    # URDF frame it is fixed to, the one frame_task drives for it
+    # frame it is fixed to
     parent: str
     # m, its origin in `parent`
     xyz: tuple
@@ -47,14 +47,16 @@ class RobotProfile:
     # convention (+Z the approach, +X the finger-closing axis, the finger
     # contact point grasp_synthesis.common.GRIPPER_BASE_TO_CONTACT_M along +Z)
     grasp_frames: dict
-    # arm -> pinch-point frame, at the finger contact point; pick_place's lift
-    # drives it
+    # arm -> pinch-point frame, at the finger contact point: the arm's grasp
+    # frame in golem_upper_ik's config/<robot>/robot.yaml (grasp_frames), the
+    # frame /grasp_frame_target drives. pick_place's lift drives it.
     pinch_frames: dict
-    # golem_upper_ik named configuration the arms go to before the head camera
-    # looks: out of its view
-    prep_config: str
-    # arm -> named configuration a staged synthesis method starts from
-    staging_configs: dict
+    # arm -> pinch-frame pose (x, y, z m, qx, qy, qz, qw; pelvis frame) the
+    # arms go to before the head camera looks: out of its view
+    prep_posture: dict
+    # arm a staged synthesis method grasps with -> the posture it starts from
+    # (arm -> pinch-frame pose, as prep_posture)
+    staging_postures: dict
     # gripper_name the graspgen service plans for; None: no GraspGenX model
     graspgen_gripper: Optional[str]
     # the hand the grasp closes, one of hands.HANDS
@@ -62,19 +64,37 @@ class RobotProfile:
     # whether each hand carries a camera (yolo_server's hand-camera bundles),
     # which goal.visual_servo needs
     hand_cameras: bool
-    # frame name -> ToolFrame, for grasp and pinch frames the robot's URDF does
-    # not have: SkillsBase broadcasts them as static TF and drives frame_task
-    # through their parent (drive_pose)
+    # frame name -> ToolFrame, for grasp frames neither the robot's URDF nor
+    # golem_upper_ik has: SkillsBase broadcasts them as static TF
     tool_frames: dict = field(default_factory=dict)
 
+
+# The postures are the pinch frames' poses at golem_upper_ik's named
+# configurations of the same name (its config/<robot>/robot.yaml), by forward
+# kinematics on golem_upper_ik's model of the robot with the torso or waist at
+# its hold (0 rad), rounded to 0.1 mm and 1e-4.
+# H1-2 'prep': init_3 with the elbows bent, the grasp frames level and raised.
+H12_PREP = {
+    'left': (0.2498, 0.2810, 0.1802, 0.1638, 0.0037, -0.0282, 0.9861),
+    'right': (0.2498, -0.2810, 0.1802, -0.1638, 0.0037, 0.0282, 0.9861),
+}
 
 H12 = RobotProfile(
     name='h12',
     # URDF frames of the Magpie grippers
     grasp_frames={'left': 'left_graspgenx_frame', 'right': 'right_graspgenx_frame'},
     pinch_frames={'left': 'left_grasp_frame', 'right': 'right_grasp_frame'},
-    prep_config='prep',
-    staging_configs={'left': 'staging_left', 'right': 'staging_right'},
+    prep_posture=H12_PREP,
+    # 'staging_left' and 'staging_right': the grasping arm above the workspace
+    # for a steep top-down approach, the other arm at 'prep'. The IK reaches
+    # them with the wrist yaw at its limit, where golem_upper_ik's goal ends
+    # pinned at the limit about 1-3 mm short.
+    staging_postures={
+        'left': {'left': (0.3030, 0.2030, 0.0557, -0.0017, 0.6429, -0.0032, 0.7660),
+                 'right': H12_PREP['right']},
+        'right': {'left': H12_PREP['left'],
+                  'right': (0.3030, -0.2030, 0.0557, 0.0017, 0.6429, 0.0032, 0.7660)},
+    },
     graspgen_gripper='magpie',
     hand='magpie',
     hand_cameras=True,
@@ -86,47 +106,44 @@ H12 = RobotProfile(
 # package, so the value is repeated here; test_robots checks the two agree.
 CONVENTION_CONTACT_M = 0.1146
 
-# The G1's Dex3-1 grasp, in <arm>_hand_palm_link (from the URDF joint origins, not
-# measured): the index and middle fingers stand along the palm's +X from
-# x = 0.078 m, 57 mm apart in z, and curl toward the palm's face (-Y on the left
-# hand, +Y on the right); the thumb stands out of that face at x = 0.023 m and
-# swings toward +X. The grasp approaches along the face's normal and closes
-# along the palm's +X, with the finger contact point DEX3_CONTACT_M in front of
-# the face, between thumb and fingers. Unmeasured on the real G1 and its sim.
-DEX3_CONTACT_M = (0.08, 0.04, 0.0)
+
+def _convention_frame(arm):
+    """
+    Return `arm`'s GraspGenX-convention frame on a pinch frame with the convention's axes.
+
+    The G1's pinch frames (golem_upper_ik's grasp frames on the Dex3-1 palms)
+    already have the convention's axes: +Z the palm face's normal (the
+    approach), +X the closing direction. The convention frame sits
+    CONVENTION_CONTACT_M behind the pinch point along +Z.
+    """
+    return ToolFrame(f'{arm}_grasp_frame', (0.0, 0.0, -CONVENTION_CONTACT_M),
+                     ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)))
 
 
-def _dex3_frames(arm):
-    """Return {grasp frame: ToolFrame, pinch frame: ToolFrame} of `arm`'s Dex3-1."""
-    side = -1.0 if arm == 'left' else 1.0
-    # columns x (closing: palm +X), y (z cross x), z (approach: the palm face's normal)
-    z = np.array([0.0, side, 0.0])
-    x = np.array([1.0, 0.0, 0.0])
-    R = np.column_stack([x, np.cross(z, x), z])
-    contact = np.array([DEX3_CONTACT_M[0], side * DEX3_CONTACT_M[1], DEX3_CONTACT_M[2]])
-    rot = tuple(tuple(float(v) for v in row) for row in R)
-    parent = f'{arm}_hand_palm_link'
-    return {
-        f'{arm}_dex3_grasp_frame': ToolFrame(
-            parent, tuple(float(v) for v in contact - CONVENTION_CONTACT_M * z), rot),
-        f'{arm}_dex3_pinch_frame': ToolFrame(parent, tuple(float(v) for v in contact), rot),
-    }
-
+# G1 'home': forearms forward, the pinch points about 0.32 m in front of the
+# pelvis at waist height; its start-up posture.
+G1_HOME = {
+    'left': (0.3213, 0.1116, 0.0952, 0.7071, 0.0, -0.0001, 0.7071),
+    'right': (0.3213, -0.1116, 0.0952, 0.7071, 0.0, -0.0001, -0.7071),
+}
 
 G1 = RobotProfile(
     name='g1',
-    # tool frames on the Dex3-1 palms (DEX3_CONTACT_M): the G1's URDF has no grasp frame
+    # the GraspGenX-convention frames on the pinch frames: neither the G1's
+    # URDF nor golem_upper_ik has them
     grasp_frames={arm: f'{arm}_dex3_grasp_frame' for arm in ARMS},
-    pinch_frames={arm: f'{arm}_dex3_pinch_frame' for arm in ARMS},
-    # golem_upper_ik's G1 has no 'prep' or staging posture; 'home' holds the
-    # forearms forward, the palms about 0.24 m in front of the pelvis
-    prep_config='home',
-    staging_configs={arm: 'home' for arm in ARMS},
+    # golem_upper_ik's grasp frames on the Dex3-1 palms, which the G1's URDF
+    # lacks: SkillsBase broadcasts them from golem_upper_ik's profile
+    pinch_frames={arm: f'{arm}_grasp_frame' for arm in ARMS},
+    # the G1 has no 'prep' or staging posture; 'home' holds the hands in
+    # front of the pelvis
+    prep_posture=G1_HOME,
+    staging_postures={arm: G1_HOME for arm in ARMS},
     # GraspGenX has no Dex3-1 model, and the G1 no hand cameras
     graspgen_gripper=None,
     hand='dex3',
     hand_cameras=False,
-    tool_frames={**_dex3_frames('left'), **_dex3_frames('right')},
+    tool_frames={f'{arm}_dex3_grasp_frame': _convention_frame(arm) for arm in ARMS},
 )
 
 ROBOTS = {p.name: p for p in (H12, G1)}
@@ -142,14 +159,9 @@ def robot_profile(name):
     return ROBOTS[key]
 
 
-def drive_pose(profile, frame, T):
-    """
-    Return (URDF frame, its 4x4 pose) that puts `frame` at 4x4 pose `T`.
-
-    A tool frame (profile.tool_frames) is driven through its parent; any other
-    frame is a URDF frame, returned as given.
-    """
-    tool = profile.tool_frames.get(frame)
-    if tool is None:
-        return frame, T
-    return tool.parent, T @ np.linalg.inv(tool.matrix())
+def arm_of(profile, frame):
+    """Return the arm whose grasp or pinch frame `frame` is, or None."""
+    for arm in ARMS:
+        if frame in (profile.grasp_frames[arm], profile.pinch_frames[arm]):
+            return arm
+    return None

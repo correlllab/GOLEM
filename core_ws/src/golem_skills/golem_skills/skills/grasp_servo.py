@@ -42,7 +42,7 @@ from .grasp_markers import approach_target_tf
 VISUAL_SERVO_DEPTH_M = 0.10
 # Per-axis convergence tolerances [m]. Each sits above what one measurement
 # resolves: a Gemini box segmented by SAM moves the object's X by about
-# +/-3 mm between frames of a still hand, and frame_task settles to ~1.2 mm,
+# +/-3 mm between frames of a still hand, and the arm settles to ~1.2 mm,
 # so a tighter band is met only by chance.
 #   X (across the jaws), what the grasp depends on: the pads are 16 mm wide,
 #     so 3 mm keeps the part on them.
@@ -92,7 +92,7 @@ BLOCKED_BACKOFF_M = 0.005
 # s of robot time for the whole loop; the goal's own timeout still wins
 VISUAL_SERVO_TIMEOUT_SEC = 90.0
 # s per hand-camera Gemini query. A query takes seconds to minutes, far longer
-# than a frame_task iteration, so the servo is slow but works on any object
+# than an arm move, so the servo is slow but works on any object
 # Gemini can name; sight counts as lost after 1.5 queries without a usable box.
 SERVO_GEMINI_TIMEOUT_SEC = 60.0
 VISUAL_SERVO_DETECT_WAIT_SEC = 1.5 * SERVO_GEMINI_TIMEOUT_SEC

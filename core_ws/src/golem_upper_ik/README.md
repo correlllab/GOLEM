@@ -185,7 +185,9 @@ then moves only in the start-up step 4.
   and hands the same range to the planner's subprocess. No solution lies where the clip would
   cut the command, and a joint the IK parks at a limit sits `position_offset` inside the table,
   so its overshoot past the command stays clear of `golem_safety`'s estop range. A seed, a
-  measured pose or an integrated step outside the range is clamped into it.
+  measured pose or an integrated step outside the range is clamped into it. Each config's
+  `limits.clip.position_offset` comment says how its margin covers the overshoot measured
+  against the estop ranges of the `golem_safety` configs it pairs with.
 - A direct goal (`plan: false`) steps the IK at `ctrl_hz`, its arm velocities limited to
   `dq_lim` per joint and `v_lim`/`w_lim` at the end effectors. An iteration that takes longer
   than the control period (a loaded host) runs the IK steps it owes next time, one per period

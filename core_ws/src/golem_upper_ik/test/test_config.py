@@ -405,3 +405,36 @@ def test_examples_are_not_installed():
         f'example.{kind}.yaml' for kind in ('controller', 'pairing', 'robot')
         for _ in CONFIGS)
     assert list(share.glob('*/example.*')) == []
+
+
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_start_up_postures_and_seeds_are_in_every_ik_range(robot):
+    """Every start-up posture and IK seed lies inside each controller config's clip range.
+
+    The clip range is the IK's range: a start-up posture outside it is never reached (the
+    start-up fails at startup_move_timeout), and a seed outside it is clamped.
+    """
+    from golem_upper_ik.core.ik_solver import SEED_CONFIGS
+    from golem_upper_ik.profile import load_profile
+    profile = load_profile(robot)
+    ik = [profile.body_joints.index(joint) for joint in profile.enabled_joints]
+    pairs = yaml.safe_load((Path(get_package_share_directory('golem_upper_ik')) / 'config'
+                            / robot / 'pairing.yaml').read_text())['pairs']
+    for name in sorted(set(pairs.values())):
+        clip = load(robot, name)['limits']['q_clip_limits'][ik]
+        for posture in set(profile.startup_sequence) | set(SEED_CONFIGS):
+            q = np.asarray(profile.named_configs[posture])
+            inside = (q >= clip[:, 0]) & (q <= clip[:, 1])
+            assert inside.all(), (name, posture, [profile.enabled_joints[i]
+                                                  for i in np.flatnonzero(~inside)])
+
+
+def test_h12_staging_postures_are_in_the_split_ik_range():
+    """The H1-2's staging postures, the wrist yaw 6.8 mrad inside the table, fit safety_split."""
+    from golem_upper_ik.profile import load_profile
+    profile = load_profile('h12')
+    ik = [profile.body_joints.index(joint) for joint in profile.enabled_joints]
+    clip = load('h12', 'safety_split')['limits']['q_clip_limits'][ik]
+    for posture in ('staging_left', 'staging_right'):
+        q = np.asarray(profile.named_configs[posture])
+        assert np.all(q >= clip[:, 0]) and np.all(q <= clip[:, 1]), posture

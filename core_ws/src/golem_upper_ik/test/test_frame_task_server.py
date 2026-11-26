@@ -169,7 +169,9 @@ def test_grasp_frame_goal_is_a_pelvis_frame_move(ros, models, robot, imu):
     threshold_angular = config['controller']['threshold_angular']
     client = GraspClient(ros)
 
-    for position, rotation in (((0.0, 0.0, 0.05), np.eye(3)),
+    # down, not up: from the H1-2's prep, 5 cm up and 5 cm out yawed needs the left elbow at
+    # its joint-table limit, outside the IK's range
+    for position, rotation in (((0.0, 0.0, -0.05), np.eye(3)),
                                ((0.05, 0.0, 0.0), np.eye(3)),
                                ((0.0, 0.0, 0.0), _rotation('z', 0.2))):
         time.sleep(0.1)

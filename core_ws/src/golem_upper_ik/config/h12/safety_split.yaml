@@ -66,7 +66,21 @@ gains:
 
 limits:
   clip:
-    position_offset: 0.001
+    # rad; torso, then the arms in slot order. A joint the IK parks at its range limit (this
+    # far inside the joint table) settles or overshoots past its command, and
+    # relax_safety_split latches its estop 0.1 mrad inside the table. In the RoboCasa sim the
+    # worst measured past the command was 11.8 mrad (a shoulder pitch held at its limit), the
+    # elbow's 7.1 mrad (the fridge-handle grasp's take-off) and 9.0 mrad (a fast direct move),
+    # so 0.02 leaves 1.7 times the worst; unmeasured on the real H1-2. Wrist pitch and yaw keep
+    # 0.001: relax_safety_split's estop range (-0.10) and default_safety_split's (-1.01) lie
+    # outside the table there, tight_safety_split clips them 0.05 inside it itself, and the
+    # staging postures (robot.yaml) park the wrist yaw 6.8 mrad inside the table. Their
+    # overshoot reached 35 to 49 mrad in the sim's direct moves overhead and at speed, the
+    # arm's other joints 50 to 160 mrad off their commands (the 49 stopped by the sim's joint
+    # stop); unmeasured on the real H1-2
+    position_offset: [0.02,
+                      0.02, 0.02, 0.02, 0.02, 0.02, 0.001, 0.001,
+                      0.02, 0.02, 0.02, 0.02, 0.02, 0.001, 0.001]
     velocity_ratio: 0.10
     # torso, then the arms in slot order. The elbows' 1.1111 x 18 N*m = 20.0 N*m is for
     # high-force grasping; the golem_safety config in use is the real ceiling

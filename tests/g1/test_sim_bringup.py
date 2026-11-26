@@ -70,9 +70,10 @@ WALK_SECONDS = 5.0         # sim s of /cmd_vel
 SENSOR_SECONDS = 10.0      # sim s of listening to the sensors
 # pass limits
 ARM_TOL = 0.1              # rad: measured arm joints vs the named config
-# the posture the arm test sends as grasp-frame targets: straight arms 45 deg forward and
-# down. golem_upper_ik reaches it from 'home' along a plan in about 5 s; 't_pose' (straight
-# arms out) is singular, where the IK holds about 2.5 mrad off and the goal times out
+# the posture the arm test sends as grasp-frame targets, direct: straight arms 45 deg forward
+# and down. From 'home' golem_upper_ik reaches it directly in about 10 s, while a planned goal
+# fails ('IK failed to resolve current targets'); 't_pose' (straight arms out) is singular,
+# where the IK holds about 2.5 mrad off and the goal times out
 POSTURE = "arms_front_45"
 POSTURE_TIMEOUT_S = 30     # s of robot time, the goal's timeout (planning included)
 POSE_TOL_M = 0.01          # m: measured grasp frame vs its target
@@ -603,7 +604,7 @@ class Driver:
         return True
 
     def grasp_goal(self, name, targets, timeout=POSTURE_TIMEOUT_S):
-        """Send `targets` on /grasp_frame_target, planned, and wait for its result.
+        """Send `targets` on /grasp_frame_target, direct, and wait for its result.
 
         `targets`: {arm: [x, y, z, qx, qy, qz, qw]} in the pelvis frame. Marks the result,
         then, 0.5 s (sim) later, the measured grasp-frame poses; returns the goal's success.
@@ -618,7 +619,7 @@ class Driver:
             o = target.pose.orientation
             o.x, o.y, o.z, o.w = v[3:]
             setattr(goal, arm, target)
-        goal.plan = True
+        goal.plan = False
         goal.timeout.sec = int(timeout)
         self.mark(f"{name}_sent", targets=targets)
         handle = self.wait_future(self.grasp_target.send_goal_async(goal), 10.0)

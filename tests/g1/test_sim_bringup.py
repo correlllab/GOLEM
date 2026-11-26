@@ -26,8 +26,8 @@ around the release, for the record.
 
 The arm test (default), after the release: frame_task_server took the arms
 to 'home' at startup, a /grasp_frame_target goal to the grasp frames' poses at
-the named config POSTURE ends without a fault and the measured grasp frames
-reach them, /left/hand/close closes the left hand, and stopping frame_task_server
+the named config POSTURE (at the waist's measured angles) succeeds and the
+measured grasp frames reach them, /left/hand/close closes the left hand, and stopping frame_task_server
 leaves the waist roll and pitch at their hold (its shutdown command keeps them
 stiff on rt/lowcmd) while the leg node keeps the robot standing. The walk
 test (--walk) stands 5 s after the release, walks on /cmd_vel 0.3 m/s forward
@@ -71,15 +71,16 @@ SENSOR_SECONDS = 10.0      # sim s of listening to the sensors
 # pass limits
 ARM_TOL = 0.1              # rad: measured arm joints vs the named config
 # the posture the arm test sends as grasp-frame targets, direct: straight arms 45 deg forward
-# and down. From 'home' golem_upper_ik reaches it directly in about 10 s, while a planned goal
-# fails ('IK failed to resolve current targets'); 't_pose' (straight arms out) is singular,
-# where the IK holds about 2.5 mrad off and the goal times out
+# and down, from forward kinematics at the waist's measured angles. The straight arms reach
+# no further: targets at the waist's 0 lie about 1 mm out of reach of a waist that holds a
+# little pitched (-0.012 rad seen), where the IK never converges and the goal times out
 POSTURE = "arms_front_45"
+WAIST_JOINTS = ("waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint")
 POSTURE_TIMEOUT_S = 30     # s of robot time, the goal's timeout (planning included)
 POSE_TOL_M = 0.01          # m: measured grasp frame vs its target
 POSE_TOL_RAD = 0.05        # rad: the same, the angle between them
 # the GraspFrameTarget result's outcome of a goal that did not reach its target without a
-# fault (a timeout, a hold pinned at a joint limit): the measured poses then decide
+# fault (a timeout, a hold pinned at a joint limit), for tests/sim's arm moves
 NOT_REACHED = "NOT_REACHED"
 HAND_TOL = 0.05            # rad: measured fingers vs the close pose
 MIN_PELVIS_Z = 0.70        # m: HOMIE stands at 0.744
@@ -145,12 +146,12 @@ ANSI_COLOUR = re.compile(r"\x1b\[[0-9;]*m")
 
 
 
-def posture_targets(robot, name):
+def posture_targets(robot, name, held=None):
     """Return {arm: [x, y, z, qx, qy, qz, qw]}: the grasp frames at golem_upper_ik's named config.
 
     Forward kinematics of `name` (config/<robot>/robot.yaml) on golem_upper_ik's model of
-    `robot`, the held torso or waist joints at 0; pelvis frame. Run where golem_upper_ik is
-    installed (the ros container).
+    `robot`, the held torso or waist joints at `held` ({joint: rad}) or 0; pelvis frame. Run
+    where golem_upper_ik is installed (the ros container).
     """
     import numpy as np
     from pyquaternion import Quaternion
@@ -161,6 +162,8 @@ def posture_targets(robot, name):
     joints = list(profile.body_joints)
     q = np.zeros(len(joints))
     for joint, value in zip(profile.enabled_joints, profile.named_configs[name]):
+        q[joints.index(joint)] = value
+    for joint, value in (held or {}).items():
         q[joints.index(joint)] = value
     targets = {}
     for arm, frame in zip(("left", "right"), profile.grasp_frames):
@@ -507,8 +510,18 @@ class Driver:
         for arm in ("left", "right"):
             self.node.create_subscription(PoseStamped, f"/{arm}_grasp_frame_pose",
                                           lambda msg, arm=arm: self._keep_grasp_pose(arm, msg), 10)
+        # joint name -> the latest measured position on /joint_states (rad)
+        from sensor_msgs.msg import JointState
+        self.joints = {}
+        self.node.create_subscription(
+            JointState, "/joint_states",
+            lambda msg: self.joints.update(zip(msg.name, msg.position)), 10)
         self.launch_log = os.path.join(out, "launch.log")
         self.sim_log = os.path.join(out, "sim.log")
+
+    def held_joints(self):
+        """Return {joint: rad}: the G1's waist joints as /joint_states last measured them."""
+        return {joint: self.joints[joint] for joint in WAIST_JOINTS if joint in self.joints}
 
     def _on_clock(self, raw):
         """Keep the sim time from a serialised /clock."""
@@ -825,7 +838,9 @@ def run_drive(out, walk):
             if not d.wait_for_controller() or not d.wait_band_released():
                 return 1
             d.check_sensors()  # standing on HOMIE from the release, the arms at home
-            d.grasp_goal(POSTURE, posture_targets("g1", POSTURE))
+            held = d.held_joints()
+            d.mark("posture_waist", joints=held)
+            d.grasp_goal(POSTURE, posture_targets("g1", POSTURE, held))
             d.spin_for(1.0)
             d.trigger("/left/hand/close")
             d.spin_for(2.5)  # the hand check averages the last 0.5 s of it
@@ -1148,12 +1163,12 @@ class Report:
                    f"{err.max():.3f} rad ({worst}), mean {err.mean():.3f}; commanded max {cmd_err:.4f} "
                    f"(limit {HOME_CMD_TOL}); waist yaw/roll/pitch "
                    f"{waist[0]:+.3f} {waist[1]:+.3f} {waist[2]:+.3f}")
-        # The POSTURE goal ends without a fault and the measured grasp frames reach it.
+        # The POSTURE goal succeeds and the measured grasp frames reach it.
         result = self.events.get(f"{POSTURE}_result", {})
         targets = self.events.get(f"{POSTURE}_sent", {}).get("targets", {})
         measured = self.events.get(f"{POSTURE}_measured", {}).get("poses", {})
         errs = {arm: pose_error(targets[arm], measured[arm]) for arm in targets if arm in measured}
-        ended = bool(result.get("success")) or result.get("outcome") == NOT_REACHED
+        ended = bool(result.get("success"))
         within = len(errs) == 2 and all(m <= POSE_TOL_M and a <= POSE_TOL_RAD for m, a in errs.values())
         took = result["wall"] - self.events[f"{POSTURE}_sent"]["wall"] if result else math.nan
         self.numbers[POSTURE] = {"result": result.get("message"), "errors": errs}

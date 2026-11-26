@@ -37,8 +37,8 @@ band while `golem_safety` streams zero-gain `rt/lowcmd`. The leg node (`golem_lo
   The report also prints the pelvis and the feet around the release, for the record.
 - **Arm test**: after the release, the arms are at `home` from the controller's start-up, a
   direct `/grasp_frame_target` goal to the grasp frames' poses at `arms_front_45` (forward kinematics
-  of the named config on `golem_upper_ik`'s model) ends without a fault and the measured grasp
-  frames are within 10 mm and 0.05 rad of them 0.5 s later, and `/left/hand/close` closes the
+  of the named config on `golem_upper_ik`'s model, the waist at its measured angles) succeeds and
+  the measured grasp frames are within 10 mm and 0.05 rad of them 0.5 s later, and `/left/hand/close` closes the
   left hand. Then
   `frame_task_server` alone is stopped while the leg node balances the robot. Its shutdown
   command keeps the waist at its hold, so the waist roll and pitch stay within 0.1 rad of it

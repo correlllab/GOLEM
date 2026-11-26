@@ -225,25 +225,26 @@ def test_waits_that_are_not_arm_goals_ignore_the_heartbeat(skills):
 
 
 class FakeResponse:
-    """Stand in for a goal's result response: its status and the result's message."""
+    """Stand in for a goal's result response: its status and the result's outcome and message."""
 
-    def __init__(self, status, message):
-        """Hold `status` (GoalStatus) and a GraspFrameTarget result with `message`."""
+    def __init__(self, status, outcome, message):
+        """Hold `status` (GoalStatus) and a GraspFrameTarget result's `outcome`, `message`."""
         self.status = status
-        self.result = GraspFrameTarget.Result(success=False, message=message)
+        self.result = GraspFrameTarget.Result(outcome=outcome, success=False, message=message)
 
 
 @pytest.mark.parametrize('message', [
     'timed out after 5.0 s; the arms hold where they are (left 0.0 mm 0.0000 rad, right 3.1 '
     'mm 0.0095 rad)',
-    'timed out after 5.0 s during the path; the arms hold where they are (...)',
     'the hold is pinned at a joint position limit: right_wrist_yaw_joint q=-1.268 (limit '
     '-1.269) (...)',
+    'any words at all',
 ])
 def test_an_arm_goal_that_ends_short_of_its_target_halts_nothing(skills, message):
-    """A timeout or a hold pinned at a joint limit (both controllers' messages) is no fault."""
+    """An abort with outcome NOT_REACHED is no fault, whatever its message says."""
     _beat(skills, True)
-    skills._note_arm_move_status(FakeResponse(GoalStatus.STATUS_ABORTED, message), 'move')
+    skills._note_arm_move_status(FakeResponse(
+        GoalStatus.STATUS_ABORTED, GraspFrameTarget.Result.NOT_REACHED, message), 'move')
     assert skills.arm_halt_reason() is None
 
 
@@ -251,9 +252,11 @@ def test_an_arm_goal_that_ends_short_of_its_target_halts_nothing(skills, message
     'planning failed: Planning failed: goal moves left_grasp_frame above y=0.4500',
     "the robot's state is stale: no /lowstate for 1.0 s",
     'marl_deploy_node is shutting down',
+    'timed out after 5.0 s',
 ])
 def test_an_arm_goal_aborted_for_anything_else_halts_the_arms(skills, message):
-    """Any other abort by the controller halts the arms for the rest of the skill goal."""
+    """An abort with outcome FAILED halts the arms for the goal, whatever its message says."""
     _beat(skills, True)
-    skills._note_arm_move_status(FakeResponse(GoalStatus.STATUS_ABORTED, message), 'move')
+    skills._note_arm_move_status(FakeResponse(
+        GoalStatus.STATUS_ABORTED, GraspFrameTarget.Result.FAILED, message), 'move')
     assert skills.arm_halt_reason().endswith(message)

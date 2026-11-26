@@ -177,15 +177,12 @@ ARM_MOVE_STABLE_EPS_ANG = 0.002     # rad
 # move they command.
 ARM_MOVE_STABLE_STOP_MSGS = 20
 
-# How the arm controllers end a /grasp_frame_target goal that did not reach its
-# target without a fault: both start a timeout's message with 'timed out
-# after' (golem_upper_ik's frame_task_server, lmg_deploy's grasp_server), and
-# golem_upper_ik one whose hold is pinned at a joint limit with 'the hold is
-# pinned at a joint position limit'. The action has no field that tells these
-# from a fault, so the message is read. Every other abort (a stale /lowstate,
-# a planning or execution failure, a fault, a bad target) halts the arms for
-# the rest of the skill goal (_note_arm_move_status).
-NOT_REACHED_PREFIXES = ('timed out after', 'the hold is pinned at a joint position limit')
+# How an arm controller ended a /grasp_frame_target goal that did not reach its
+# target without a fault (its timeout, a hold pinned at a joint limit). Every
+# other abort (outcome FAILED: a stale /lowstate, a planning or execution
+# failure, a fault, a bad target) halts the arms for the rest of the skill goal
+# (_note_arm_move_status).
+NOT_REACHED = GraspFrameTarget.Result.NOT_REACHED
 
 # m, rad: within these of a posture's pinch-frame poses the posture counts as
 # reached (goto_posture); golem_upper_ik reaches the H1-2's staging postures
@@ -431,9 +428,9 @@ class SkillsBase(Node):
         # first true beat, after a false one (for the node's life), or while no
         # beat has come for `heartbeat_timeout`, and a goal in flight is
         # canceled on the server; a /grasp_frame_target goal the controller
-        # ABORTS for any reason but not reaching its target (NOT_REACHED_PREFIXES:
-        # a stale robot state, a planning or execution failure, a fault) halts
-        # the arms for the rest of the skill goal. See arm_halt_reason().
+        # ABORTS with any outcome but NOT_REACHED (a stale robot state, a
+        # planning or execution failure, a fault) halts the arms for the rest
+        # of the skill goal. See arm_halt_reason().
         self.declare_parameter('heartbeat_timeout', HEARTBEAT_TIMEOUT_SEC)
         # SAFETY: the steady clock, whatever use_sim_time says, so a golem_safety that has
         # stopped halts the arms while a sim's /clock stands still; a fake in the tests
@@ -1218,11 +1215,11 @@ class SkillsBase(Node):
         Latch an arm halt for the rest of the goal after a failed arm move `what`.
 
         Latched when the controller aborted the move for anything but not
-        reaching its target (NOT_REACHED_PREFIXES), or when the move has no
+        reaching its target (outcome NOT_REACHED), or when the move has no
         result because a halt canceled it.
         """
         if (response is not None and response.status == GoalStatus.STATUS_ABORTED
-                and not response.result.message.startswith(NOT_REACHED_PREFIXES)):
+                and response.result.outcome != NOT_REACHED):
             self._arm_halt_reason = (
                 f'{what} was aborted by the arm controller: {response.result.message}')
             self.get_logger().error(f'arm halted: {self._arm_halt_reason}')
@@ -1324,7 +1321,7 @@ class SkillsBase(Node):
                      and response.result.success)
         not_reached = (response is not None
                        and response.status == GoalStatus.STATUS_ABORTED
-                       and response.result.message.startswith(NOT_REACHED_PREFIXES))
+                       and response.result.outcome == NOT_REACHED)
         ok = succeeded or (
             (stable_stopped or not_reached) and bool(last)
             and last['lin'] < lin_tol and last['ang'] < ang_tol)

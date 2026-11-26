@@ -582,7 +582,8 @@ Every arm move is one goal on `/grasp_frame_target` (`GraspFrameTarget`, the
 interface `golem_upper_ik` and `lmg_deploy` both serve), and a relative move
 starts from the measured pose on `/{left,right}_grasp_frame_pose`. A goal the
 controller aborts for anything but its timeout or a hold pinned at a joint
-limit halts the arms for the rest of the skill goal. Arm moves need a live
+limit (the result's `outcome`: `FAILED`, not `NOT_REACHED`) halts the arms for
+the rest of the skill goal. Arm moves need a live
 `/safety/heartbeat`:
 `golem_skills` refuses to send one before the first true beat, after a false
 beat (until the node restarts) and when the last beat is older than

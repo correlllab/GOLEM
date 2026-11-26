@@ -34,18 +34,18 @@ class BandRelease:
         self._in_flight = False
         self._called = False  # the one call has been asked for
 
-    def poll(self, now: float, running_since: float | None, ee_pose_seen: bool,
+    def poll(self, now: float, running_since: float | None, arm_pose_seen: bool,
              service_ready: bool) -> str | None:
         """
         Return the reason to call /elastic_band/toggle now, and mark the call in flight.
 
         None when no call is due, and for good once it has been asked for. running_since
-        is when the policy started (None while it does not run), ee_pose_seen whether a
+        is when the policy started (None while it does not run), arm_pose_seen whether a
         /left_grasp_frame_pose has come, service_ready whether the toggle service is there.
         """
         if not self.enabled or self._called or running_since is None:
             return None
-        if ee_pose_seen:
+        if arm_pose_seen:
             reason = 'the policy runs and the arm controller is up (/left_grasp_frame_pose)'
         elif now - running_since >= self.max_wait:
             reason = (f'the policy has run for {self.max_wait:.0f} s, the maximum wait '

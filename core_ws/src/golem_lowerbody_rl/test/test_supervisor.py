@@ -158,7 +158,7 @@ class Rig:
         its absence is what keeps the policy from starting.
         """
         if phase is not Phase.HOLDING or self.config.startup.wait_for_confirm:
-            self.sup.on_ee_pose(self.mono)
+            self.sup.on_arm_pose(self.mono)
         if phase is Phase.WAITING:
             return
         self.until(Phase.RAMPING)
@@ -436,14 +436,14 @@ def test_engage_resets_only_when_the_spec_says():
     assert rig.runner.resets == []
 
 
-def test_sim_policy_waits_for_ee_pose_or_max_wait():
+def test_sim_policy_waits_for_arm_pose_or_max_wait():
     """In the sim, start on the first /left_grasp_frame_pose, or max_wait after holding began."""
     rig = Rig('h12', 'sim', startup={'wait_for_confirm': False})
     rig.feed(round(6.0 / SAMPLE_DT))
     assert rig.sup.phase is Phase.HOLDING and not rig.runner.inputs
     assert 'the policy waits: the arm controller is not up yet (no /left_grasp_frame_pose)' in \
         rig.messages()
-    rig.sup.on_ee_pose(rig.mono)
+    rig.sup.on_arm_pose(rig.mono)
     rig.feed(SAMPLES_PER_STEP)
     assert rig.sup.phase is Phase.RUNNING and len(rig.runner.inputs) == 1
     assert not rig.messages('warn')
@@ -460,7 +460,7 @@ def test_sim_policy_waits_for_ee_pose_or_max_wait():
                               'after the legs were pre-posed: the policy no longer waits for it')
 
 
-def test_real_run_has_no_ee_pose_gate():
+def test_real_run_has_no_arm_pose_gate():
     """Accept the confirm on the real robot without any /left_grasp_frame_pose."""
     rig = Rig('g1', 'real')
     rig.until(Phase.HOLDING)
@@ -510,7 +510,7 @@ def test_stale_cmd_is_zero_after_0_5_s():
 def test_commands_before_the_start_are_dropped():
     """Start the policy at zero velocity and the default height whatever came before."""
     rig = Rig('h12', 'sim', startup={'wait_for_confirm': False})
-    rig.sup.on_ee_pose(rig.mono)
+    rig.sup.on_arm_pose(rig.mono)
     rig.until(Phase.HOLDING, upper=False)
     rig.sup.on_cmd(0.5, 0.0, 0.0, rig.mono)
     rig.sup.on_height(0.4, rig.mono)
@@ -600,7 +600,7 @@ def test_band_without_band_release_reset():
     assert rig.messages()[-1] == 'elastic band released (/elastic_band/toggle: disabled)'
 
 
-def test_band_due_max_wait_after_running_without_ee_pose():
+def test_band_due_max_wait_after_running_without_arm_pose():
     """Ask for the toggle max_wait after the policy started when no /left_grasp_frame_pose came."""
     rig = Rig('g1', 'sim', band={'max_wait': 2.0})
     rig.until(Phase.RUNNING)

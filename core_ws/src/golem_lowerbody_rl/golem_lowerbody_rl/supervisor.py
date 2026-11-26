@@ -84,7 +84,7 @@ STATS_SECONDS = 10.0
 # MeasurementBridge answers "enabled" or "disabled")
 BAND_ON = 'enabled'
 CONFIRM_CALL = 'ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger'
-EE_POSE_MISSING = 'the arm controller is not up yet (no /left_grasp_frame_pose)'
+ARM_POSE_MISSING = 'the arm controller is not up yet (no /left_grasp_frame_pose)'
 UPPER_KIND = 'no recent command from the arm controller'
 # the steady window is filling: a reason that is not logged
 STEADY_FILLING = '/lowstate has not been steady for long enough yet'
@@ -283,7 +283,7 @@ class LegSupervisor:
         """Take a command of the arm controller's, received at now (readiness only)."""
         self._upper_t = now
 
-    def on_ee_pose(self, now: float) -> None:
+    def on_arm_pose(self, now: float) -> None:
         """Take a /left_grasp_frame_pose: the arm controller has finished its start-up moves."""
         self._ee_seen = True
 
@@ -587,7 +587,7 @@ class LegSupervisor:
         if reason is None:
             reason = self._upper_reason(now)
         if reason is None:
-            reason = self._ee_pose_reason(now)
+            reason = self._arm_pose_reason(now)
         if reason is None:
             reason = self._rate_verdict
             if reason == STEADY_FILLING:
@@ -638,7 +638,7 @@ class LegSupervisor:
             return f'{UPPER_KIND} (the last {age:.2f} s ago, max {fresh:.2f} s)'
         return None
 
-    def _ee_pose_reason(self, now: float) -> str | None:
+    def _arm_pose_reason(self, now: float) -> str | None:
         """Return why the policy waits for the arm controller under the band, or None."""
         band = self._run.band
         if not band.release or self._ee_seen or self._ee_wait_over:
@@ -646,12 +646,12 @@ class LegSupervisor:
         held = None if self._holding_since is None else now - self._holding_since
         if held is not None and held >= band.max_wait:
             self._ee_wait_over = True
-            self._log('warn', f'{EE_POSE_MISSING} {held:.0f} s after the legs were pre-posed: '
+            self._log('warn', f'{ARM_POSE_MISSING} {held:.0f} s after the legs were pre-posed: '
                               'the policy no longer waits for it (band.max_wait)')
             return None
         # a policy run long under the band settles into a stance the robot stumbles from
         # at the release
-        return EE_POSE_MISSING
+        return ARM_POSE_MISSING
 
     def _log_every(self, level: str, message: str, now: float) -> None:
         """

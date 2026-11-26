@@ -158,7 +158,7 @@ class FakeG1:
 
     /lowstate every STATE_PERIOD from a G1 standing still (mode_machine 5, its tick ms of
     the wall clock), the arm controller's command (waist and arms at 0, kp 60) at 100 Hz
-    while arms is set, /left_grasp_frame_pose while ee_pose is set, and the band toggle. Records
+    while arms is set, /left_grasp_frame_pose while arm_pose is set, and the band toggle. Records
     /lowcmd, /safety/lowcmd_lower_in and /safety/heartbeat with their receive times.
     """
 
@@ -171,7 +171,7 @@ class FakeG1:
         self.quat = list(quat)
         self.gyro = [0.0, 0.0, 0.0]
         self.arms = False
-        self.ee_pose = False
+        self.arm_pose = False
         self.lowcmd = []  # (monotonic s, LowCmd) of /lowcmd
         self.lower = []  # (monotonic s, LowCmd) of /safety/lowcmd_lower_in
         self.beats = []  # (monotonic s, bool) of /safety/heartbeat
@@ -186,7 +186,7 @@ class FakeG1:
         newest = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         self._state = self.node.create_publisher(LowState, '/lowstate', newest)
         self._upper = self.node.create_publisher(LowCmd, '/safety/lowcmd_upper_in', 1)
-        self._ee = self.node.create_publisher(PoseStamped, '/left_grasp_frame_pose', 10)
+        self._arm_pose = self.node.create_publisher(PoseStamped, '/left_grasp_frame_pose', 10)
         self.node.create_subscription(
             LowCmd, '/lowcmd', lambda m: self.lowcmd.append((time.monotonic(), m)),
             QoSProfile(depth=100, reliability=ReliabilityPolicy.BEST_EFFORT))
@@ -234,8 +234,8 @@ class FakeG1:
         """Publish the arm controller's command and /left_grasp_frame_pose while they are on."""
         if self.arms:
             self._upper.publish(self._arm_cmd)
-        if self.ee_pose:
-            self._ee.publish(PoseStamped())
+        if self.arm_pose:
+            self._arm_pose.publish(PoseStamped())
 
     def _toggle(self, _request, response):
         """Answer the band toggle: the band is off."""
@@ -339,7 +339,7 @@ def _errors(rig):
 def _running(rig):
     """Have the arm controller command and publish its pose; wait until the policy runs."""
     rig.robot.arms = True
-    rig.robot.ee_pose = True
+    rig.robot.arm_pose = True
     assert _wait(lambda: rig.node.supervisor.phase is Phase.RUNNING, START_TIMEOUT), (
         rig.node.supervisor.phase, rig.node.supervisor.wait_reason, rig.node.records[-5:])
 
@@ -378,7 +378,7 @@ def test_g1_legs_start_behind_safety_node():
 
         # the arm controller commands and is up: HOMIE runs, the band goes
         rig.robot.arms = True
-        rig.robot.ee_pose = True
+        rig.robot.arm_pose = True
         assert _wait(lambda: rig.node.supervisor.phase is Phase.RUNNING, START_TIMEOUT), (
             rig.node.supervisor.wait_reason, rig.node.records[-5:])
         assert _wait(lambda: any(m.startswith('elastic band released')

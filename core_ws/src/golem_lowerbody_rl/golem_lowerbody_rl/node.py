@@ -166,7 +166,7 @@ class LowerBodyControllerNode(Node):
         self._ee_sub = None
         if self._run.band.release:
             self._ee_sub = self.create_subscription(
-                PoseStamped, '/left_grasp_frame_pose', self._on_ee_pose, 10, callback_group=group)
+                PoseStamped, '/left_grasp_frame_pose', self._on_arm_pose, 10, callback_group=group)
         self._band_client = self.create_client(Trigger, '/elastic_band/toggle',
                                                callback_group=group)
         self.create_service(Trigger, '/lowerbody/confirm_engage', self._on_confirm,
@@ -310,10 +310,10 @@ class LowerBodyControllerNode(Node):
         with self._lock:
             self._supervisor.on_upper_cmd(self._times()[0])
 
-    def _on_ee_pose(self, _msg: PoseStamped) -> None:
+    def _on_arm_pose(self, _msg: PoseStamped) -> None:
         """Take the first /left_grasp_frame_pose and drop the subscription."""
         with self._lock:
-            self._supervisor.on_ee_pose(self._times()[0])
+            self._supervisor.on_arm_pose(self._times()[0])
         if self._ee_sub is not None:
             self.destroy_subscription(self._ee_sub)
             self._ee_sub = None

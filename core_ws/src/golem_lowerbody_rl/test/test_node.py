@@ -145,7 +145,7 @@ class Robot:
         self.heartbeat = False
         self.state = True
         self.upper = True
-        self.ee_pose = True
+        self.arm_pose = True
         self.cmd = None
         self.lower = []  # (monotonic s, LowCmd) of /safety/lowcmd_lower_in
         self.toggle_calls = []
@@ -154,7 +154,7 @@ class Robot:
             LowState, '/lowstate', QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         self._beat = self.node.create_publisher(Bool, '/safety/heartbeat', 10)
         self._upper = self.node.create_publisher(LowCmd, '/safety/lowcmd_upper_in', 1)
-        self._ee = self.node.create_publisher(PoseStamped, '/left_grasp_frame_pose', 10)
+        self._arm_pose = self.node.create_publisher(PoseStamped, '/left_grasp_frame_pose', 10)
         self._cmd = self.node.create_publisher(Twist, '/cmd_vel', 10)
         self.node.create_subscription(LowCmd, '/safety/lowcmd_lower_in',
                                       lambda m: self.lower.append((time.monotonic(), m)), 10)
@@ -178,8 +178,8 @@ class Robot:
         """Publish the arm controller's command, /left_grasp_frame_pose and /cmd_vel as set."""
         if self.upper:
             self._upper.publish(LowCmd())
-        if self.ee_pose:
-            self._ee.publish(PoseStamped())
+        if self.arm_pose:
+            self._arm_pose.publish(PoseStamped())
         if self.cmd is not None:
             twist = Twist()
             twist.linear.x, twist.linear.y, twist.angular.z = self.cmd

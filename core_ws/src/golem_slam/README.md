@@ -46,8 +46,9 @@ The same nodes, executables and remaps on every robot:
   `geometry_msgs/Polygon`) at 5 Hz, the convex hull on the floor of `nav2.yaml`'s
   local footprint (the body, which it never shrinks below) and the padded collision
   boxes of `pipeline.yaml`'s `footprint.arm_links`, posed by TF. While a
-  `/frame_task` or `/named_config` goal is accepted, executing or cancelling, and
-  while an arm link has no TF within 0.5 s, it is the body alone, so a hand
+  `/grasp_frame_target` goal is accepted, executing or cancelling, before the arm
+  controller's first `/left_grasp_frame_pose` and while an arm link has no TF
+  within 0.5 s, it is the body alone, so a hand
   reaching for a handle or a counter does not stop the base. The global costmap
   keeps `nav2.yaml`'s fixed footprint, so planned paths do not change with the arms;
 - Nav2's navigation half, with `behavior_server`'s `cmd_vel` remapped so every

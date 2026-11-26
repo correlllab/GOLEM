@@ -209,16 +209,17 @@ def _known_cells(msg):
     return int(np.count_nonzero(np.asarray(msg.data, np.int8) >= 0))
 
 
-def arm_reached(succeeded, message, error):
+def arm_reached(succeeded, outcome, error):
     """Return whether a /grasp_frame_target move reached its targets.
 
-    `succeeded`: the result's success; `message`: its message; `error`: the last feedback's
-    largest [m, rad] over the arms, or None. A goal that ended without reaching and without a
-    fault (bringup_test.NOT_REACHED_PREFIXES) reaches within ARM_TOL_M and ARM_TOL_RAD.
+    `succeeded`: the result's success; `outcome`: its outcome's name
+    (bringup_test.outcome_name); `error`: the last feedback's largest [m, rad] over the arms, or
+    None. A goal that ended without reaching and without a fault (bringup_test.NOT_REACHED)
+    reaches within ARM_TOL_M and ARM_TOL_RAD.
     """
     if succeeded:
         return True
-    return (bool(message) and message.startswith(bringup_test.NOT_REACHED_PREFIXES)
+    return (outcome == bringup_test.NOT_REACHED
             and error is not None and error[0] <= ARM_TOL_M and error[1] <= ARM_TOL_RAD)
 
 
@@ -387,10 +388,13 @@ class Driver(nav_test.SimDriver):
                         arm[1], arm[3] = response.get_result_async(), "running"
                 else:
                     message = None if response is None else response.result.message
+                    arm_outcome = None if response is None else bringup_test.outcome_name(
+                        response.result.outcome)
                     success = response is not None and arm_reached(
-                        response.result.success, message, self.arm_error)
+                        response.result.success, arm_outcome, self.arm_error)
                     self.mark(f"{arm[0]}_result", status=None if response is None else response.status,
-                              success=success, message=message, error=self.arm_error)
+                              success=success, message=message, outcome=arm_outcome,
+                              error=self.arm_error)
                     arm = None
                     if not success:
                         pending = []

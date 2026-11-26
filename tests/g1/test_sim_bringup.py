@@ -78,9 +78,9 @@ POSTURE = "arms_front_45"
 POSTURE_TIMEOUT_S = 30     # s of robot time, the goal's timeout (planning included)
 POSE_TOL_M = 0.01          # m: measured grasp frame vs its target
 POSE_TOL_RAD = 0.05        # rad: the same, the angle between them
-# how the arm controllers end a grasp-frame goal that did not reach its target without a
-# fault (golem_skills' base.NOT_REACHED_PREFIXES): the measured poses then decide
-NOT_REACHED_PREFIXES = ("timed out after", "the hold is pinned at a joint position limit")
+# the GraspFrameTarget result's outcome of a goal that did not reach its target without a
+# fault (a timeout, a hold pinned at a joint limit): the measured poses then decide
+NOT_REACHED = "NOT_REACHED"
 HAND_TOL = 0.05            # rad: measured fingers vs the close pose
 MIN_PELVIS_Z = 0.70        # m: HOMIE stands at 0.744
 # pelvis z-axis from vertical: the limp robot hangs from the band within 4 deg,
@@ -169,6 +169,13 @@ def posture_targets(robot, name):
         targets[arm] = [float(v) for v in T[:3, 3]] + [float(quat.x), float(quat.y),
                                                       float(quat.z), float(quat.w)]
     return targets
+
+
+def outcome_name(value):
+    """Return the name of a GraspFrameTarget result's outcome value (REACHED, NOT_REACHED, ...)."""
+    from custom_ros_messages.action import GraspFrameTarget
+    names = ("FAILED", "REACHED", "NOT_REACHED", "CANCELED")
+    return {getattr(GraspFrameTarget.Result, name): name for name in names}.get(value, f"unknown {value}")
 
 
 def pose_error(target, measured):
@@ -629,7 +636,8 @@ class Driver:
         result = self.wait_future(handle.get_result_async(), timeout + 30.0)
         success = bool(result is not None and result.result.success)
         self.mark(f"{name}_result", accepted=True, status=None if result is None else result.status,
-                  success=success, message=None if result is None else result.result.message)
+                  success=success, message=None if result is None else result.result.message,
+                  outcome=None if result is None else outcome_name(result.result.outcome))
         self.spin_for(0.5)
         self.mark(f"{name}_measured", poses=dict(self.grasp_poses))
         return success
@@ -1145,8 +1153,7 @@ class Report:
         targets = self.events.get(f"{POSTURE}_sent", {}).get("targets", {})
         measured = self.events.get(f"{POSTURE}_measured", {}).get("poses", {})
         errs = {arm: pose_error(targets[arm], measured[arm]) for arm in targets if arm in measured}
-        ended = bool(result.get("success")) or str(result.get("message") or "").startswith(
-            NOT_REACHED_PREFIXES)
+        ended = bool(result.get("success")) or result.get("outcome") == NOT_REACHED
         within = len(errs) == 2 and all(m <= POSE_TOL_M and a <= POSE_TOL_RAD for m, a in errs.values())
         took = result["wall"] - self.events[f"{POSTURE}_sent"]["wall"] if result else math.nan
         self.numbers[POSTURE] = {"result": result.get("message"), "errors": errs}

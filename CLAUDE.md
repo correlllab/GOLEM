@@ -394,8 +394,8 @@ for the includes after it, so pass consistent values (all four blocks share
   config, or an estop latched at this start-up (the limit checks run from
   boot, in the sim from the first `/clock`, so a joint already past
   `limits.estop` latches it) or in an earlier
-  run. The other nodes keep running, without `/frame_task` and
-  `/named_config`.
+  run. The other nodes keep running, without its actions
+  (`/grasp_frame_target`).
 - **The estop, in the sim as on the real robot.** Every H1-2 bringup starts
   `estop_node` and has `safety_node` read `/estop/triggered` and
   `/estop/plugged_in` (`h12_control.launch.py` has no `use_estop` argument): no
@@ -1059,12 +1059,11 @@ source /opt/ros/humble/setup.bash && source /home/code/core_ws/install/setup.bas
 ```bash
 ros2 topic hz /lowstate                                     # the sim is publishing (about 500 Hz)
 ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger   # H1-2: start the leg policy (it holds its pre-pose until then)
-ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 't_pose', plan: false, duration: {sec: 0, nanosec: 0}}"   # or home, arms_asym, ... (golem_upper_ik/config/<robot>/robot.yaml)
-ros2 action send_goal /frame_task custom_ros_messages/action/FrameTask \
-  "{relative: true, plan: false, frame_names: ['right_wrist_yaw_link'],
-    frame_targets: [{position: {x: 0.0, y: 0.0, z: 0.05}, orientation: {w: 1.0}}],
-    duration: {sec: 0, nanosec: 0}}"                        # 5 cm up, pelvis frame; G1: right_hand_palm_link
+ros2 topic echo --once /right_grasp_frame_pose            # the right grasp frame's measured pose, pelvis frame
+ros2 action send_goal /grasp_frame_target custom_ros_messages/action/GraspFrameTarget \
+  "{right: {header: {frame_id: pelvis}, pose: {position: {x: 0.40, y: -0.25, z: 0.10},
+    orientation: {w: 1.0}}}, timeout: {sec: 5}}"          # H1-2: the right grasp frame to a pelvis-frame pose; the
+                                                            # action is absolute: a relative move is the echoed pose plus the offset
 ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.3}}"   # walk (Ctrl-C: zero after 0.5 s)
 ```
 
@@ -1103,8 +1102,8 @@ ros2 action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
 
 The closed-loop check of the whole H1-2 stack in RoboCasa is
 `tests/sim/test_sim_stack.sh --h12` (`tests/sim/README.md`): the robot standing
-unsupported, a Nav2 goal reached by walking, `/named_config` moves while it
-walks, SLAM healthy throughout and `safety_node` the only `/lowcmd` publisher.
+unsupported, a Nav2 goal reached by walking, `/grasp_frame_target` arm moves
+while it walks, SLAM healthy throughout and `safety_node` the only `/lowcmd` publisher.
 `tests/stack/run.sh` checks the arms and the legs alone.
 
 ### The G1
@@ -1127,8 +1126,10 @@ ros2 launch golem_bringup g1_sim.launch.py     # wait for the leg node's "elasti
 # Terminal 3
 docker exec -it golem_ros bash
 source /opt/ros/humble/setup.bash && source /home/code/core_ws/install/setup.bash
-ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 't_pose', plan: false, duration: {sec: 0, nanosec: 0}}"
+# the right grasp frame 5 cm above its pose at 'home' (the start-up posture), pelvis frame
+ros2 action send_goal /grasp_frame_target custom_ros_messages/action/GraspFrameTarget \
+  "{right: {header: {frame_id: pelvis}, pose: {position: {x: 0.3213, y: -0.1116, z: 0.1452},
+     orientation: {x: 0.7071, y: 0.0, z: -0.0001, w: -0.7071}}}, timeout: {sec: 10}}"
 ```
 
 Walking and navigation need the spawn backed into open floor

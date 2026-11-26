@@ -89,8 +89,10 @@ ros2 launch golem_bringup g1_sim.launch.py    # options: use_rviz:=false use_han
 # terminal 3
 docker exec -it golem_ros bash
 source /opt/ros/humble/setup.bash && source /home/code/core_ws/install/setup.bash
-ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 't_pose', plan: false, duration: {sec: 0, nanosec: 0}}"
+# the right grasp frame 5 cm above its pose at 'home' (the start-up posture), pelvis frame
+ros2 action send_goal /grasp_frame_target custom_ros_messages/action/GraspFrameTarget \
+  "{right: {header: {frame_id: pelvis}, pose: {position: {x: 0.3213, y: -0.1116, z: 0.1452},
+     orientation: {x: 0.7071, y: 0.0, z: -0.0001, w: -0.7071}}}, timeout: {sec: 10}}"
 ros2 service call /left/hand/close std_srvs/srv/Trigger
 ros2 service call /left/hand/open std_srvs/srv/Trigger
 ```
@@ -100,9 +102,11 @@ every motor off, as the real G1 starts in Unitree's debug mode. The arms move
 to `home` once the stack is up. The leg node (`golem_lowerbody_rl`, running
 HOMIE), which the sim bringup always starts, moves the legs to its default pose, starts its policy and
 releases the band (`elastic band released` in the bringup's log); from then on
-it keeps the robot standing. The goals then move the arms to a T-pose, and the
-left hand closes and opens. The named postures are `named_configs` in
-`core_ws/src/golem_upper_ik/config/g1/robot.yaml`.
+it keeps the robot standing. The goal then raises the right hand 5 cm, and the
+left hand closes and opens. The goal's pose is the right grasp frame's at the
+named posture `home` of `core_ws/src/golem_upper_ik/config/g1/robot.yaml`
+(forward kinematics), 5 cm higher; the grasp frames sit on the Dex3-1 palms,
+between thumb and fingers.
 
 - Start the sim first. If you restart the sim, restart the `ros` container
   too, because sim time starts again at 0.
@@ -116,11 +120,11 @@ left hand closes and opens. The named postures are `named_configs` in
   OMPL (`plan: true`), as on the H1-2. Its spheres cover the Dex3-1 palms but
   not the fingers, and it keeps them 20 mm apart, as on the H1-2. `arms_down`
   rests the hands on the hips, inside the hip spheres, so a goal to it stops
-  short and a planned one fails. `slow_mode: true` (a quarter of the speed) and
-  a `FrameTask` with `relative: true` work as on the H1-2: a relative target is
-  an offset in the `pelvis` frame (the frame of absolute targets and
-  `/left_ee_pose`), whatever the IMU says: `{position: {x: 0.05}}` moves the
-  hand 5 cm forward of the pelvis however the robot is turned or tilted.
+  short and a planned one fails. `/grasp_frame_target` works as on the H1-2:
+  its targets are absolute, in the `pelvis` frame (the frame of
+  `/left_grasp_frame_pose`) whatever the IMU says, so a move 5 cm forward of the
+  pelvis is the measured pose with 0.05 added to `x`, however the robot is
+  turned or tilted.
 
 ## Pages
 

@@ -172,9 +172,9 @@ ARM_MOVE_STABLE_EPS_LIN = 0.0005    # m
 ARM_MOVE_STABLE_EPS_ANG = 0.002     # rad
 # Unchanged feedbacks in a row (25 Hz from both arm controllers) that end a
 # move early: the arm has settled short of the controller's own tolerance
-# (golem_upper_ik's is about 1 mm, which a soft arm can hover just outside of
-# until the goal's timeout). The grasp and pick_place skills pass it to every
-# move they command.
+# (golem_upper_ik's configs' threshold_linear and threshold_angular, lmg_deploy's
+# grasp_frame_target tolerance), where it would hover until the goal's
+# timeout. The grasp and pick_place skills pass it to every move they command.
 ARM_MOVE_STABLE_STOP_MSGS = 20
 
 # How an arm controller ended a /grasp_frame_target goal that did not reach its

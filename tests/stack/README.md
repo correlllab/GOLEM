@@ -21,7 +21,7 @@ controllers read no images, and RoboCasa's camera renders cost the sim physics
 time (the physics waits for a frame still rendering). `run.json` records
 the camera setting, the git state and the exact image IDs used.
 
-Arms move both wrist frames forward 2 cm and back through `/frame_task`.
+Arms move both grasp frames forward 2 cm and back through `/grasp_frame_target`.
 Acceptance requires successful actions, measured end-effector progress and
 joint motion, and advancing LowState ticks. Isaac uses a fixed base for this
 isolated arm test; RoboCasa retains its normal support tether.

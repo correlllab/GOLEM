@@ -25,8 +25,9 @@ start), and the robot stands for 5 s after it. The report also gives the pelvis 
 around the release, for the record.
 
 The arm test (default), after the release: frame_task_server took the arms
-to 'home' at startup, a NamedConfig 't_pose' goal succeeds and the arms reach
-it, /left/hand/close closes the left hand, and stopping frame_task_server
+to 'home' at startup, a /grasp_frame_target goal to the grasp frames' poses at
+the named config POSTURE ends without a fault and the measured grasp frames
+reach them, /left/hand/close closes the left hand, and stopping frame_task_server
 leaves the waist roll and pitch at their hold (its shutdown command keeps them
 stiff on rt/lowcmd) while the leg node keeps the robot standing. The walk
 test (--walk) stands 5 s after the release, walks on /cmd_vel 0.3 m/s forward
@@ -69,10 +70,20 @@ WALK_SECONDS = 5.0         # sim s of /cmd_vel
 SENSOR_SECONDS = 10.0      # sim s of listening to the sensors
 # pass limits
 ARM_TOL = 0.1              # rad: measured arm joints vs the named config
+# the posture the arm test sends as grasp-frame targets: straight arms 45 deg forward and
+# down. golem_upper_ik reaches it from 'home' along a plan in about 5 s; 't_pose' (straight
+# arms out) is singular, where the IK holds about 2.5 mrad off and the goal times out
+POSTURE = "arms_front_45"
+POSTURE_TIMEOUT_S = 30     # s of robot time, the goal's timeout (planning included)
+POSE_TOL_M = 0.01          # m: measured grasp frame vs its target
+POSE_TOL_RAD = 0.05        # rad: the same, the angle between them
+# how the arm controllers end a grasp-frame goal that did not reach its target without a
+# fault (golem_skills' base.NOT_REACHED_PREFIXES): the measured poses then decide
+NOT_REACHED_PREFIXES = ("timed out after", "the hold is pinned at a joint position limit")
 HAND_TOL = 0.05            # rad: measured fingers vs the close pose
 MIN_PELVIS_Z = 0.70        # m: HOMIE stands at 0.744
 # pelvis z-axis from vertical: the limp robot hangs from the band within 4 deg,
-# HOMIE stands at ~2 deg and leans ~6.5 deg with the arms in t_pose; well short of
+# HOMIE stands at ~2 deg and leans ~6.5 deg with the arms out to the sides; well short of
 # the leg node's 25 deg upright gate
 MAX_TILT_DEG = 15.0
 HOME_CMD_TOL = 0.01        # rad: the commanded arm targets vs home
@@ -131,6 +142,39 @@ LOG_LINE = re.compile(r"\[(DEBUG|INFO|WARN|ERROR|FATAL)\] \[(\d+(?:\.\d+)?)\] \[
 # the colour codes a node launched with emulate_tty wraps its log lines in
 ANSI_COLOUR = re.compile(r"\x1b\[[0-9;]*m")
 
+
+
+def posture_targets(robot, name):
+    """Return {arm: [x, y, z, qx, qy, qz, qw]}: the grasp frames at golem_upper_ik's named config.
+
+    Forward kinematics of `name` (config/<robot>/robot.yaml) on golem_upper_ik's model of
+    `robot`, the held torso or waist joints at 0; pelvis frame. Run where golem_upper_ik is
+    installed (the ros container).
+    """
+    import numpy as np
+    from pyquaternion import Quaternion
+    from golem_upper_ik.core.robot_model import RobotModel
+    from golem_upper_ik.profile import load_profile
+    profile = load_profile(robot)
+    model = RobotModel(profile)
+    joints = list(profile.body_joints)
+    q = np.zeros(len(joints))
+    for joint, value in zip(profile.enabled_joints, profile.named_configs[name]):
+        q[joints.index(joint)] = value
+    targets = {}
+    for arm, frame in zip(("left", "right"), profile.grasp_frames):
+        T = np.asarray(model.get_frame_transformation_body(frame.name, q))
+        quat = Quaternion(matrix=T[:3, :3])
+        targets[arm] = [float(v) for v in T[:3, 3]] + [float(quat.x), float(quat.y),
+                                                      float(quat.z), float(quat.w)]
+    return targets
+
+
+def pose_error(target, measured):
+    """Return (m, rad) between two [x, y, z, qx, qy, qz, qw] poses."""
+    dot = abs(sum(a * b for a, b in zip(target[3:], measured[3:])))
+    norm = math.sqrt(sum(a * a for a in target[3:]) * sum(b * b for b in measured[3:]))
+    return math.dist(target[:3], measured[:3]), 2.0 * math.acos(min(1.0, dot / norm))
 
 def file_has(path, text):
     """Return whether the file at `path` contains `text`; False if it cannot be read."""
@@ -450,6 +494,11 @@ class Driver:
         self.grasp_pose_first = None
         self.node.create_subscription(PoseStamped, "/left_grasp_frame_pose", self._on_grasp_pose, QoSProfile(
             depth=1000, reliability=ReliabilityPolicy.RELIABLE))
+        # arm -> the latest measured grasp-frame pose, [x, y, z, qx, qy, qz, qw] (pelvis frame)
+        self.grasp_poses = {}
+        for arm in ("left", "right"):
+            self.node.create_subscription(PoseStamped, f"/{arm}_grasp_frame_pose",
+                                          lambda msg, arm=arm: self._keep_grasp_pose(arm, msg), 10)
         self.launch_log = os.path.join(out, "launch.log")
         self.sim_log = os.path.join(out, "sim.log")
 
@@ -457,6 +506,11 @@ class Driver:
         """Keep the sim time from a serialised /clock."""
         self.clock = _cdr_stamp(raw)
         self.clocks += 1
+
+    def _keep_grasp_pose(self, arm, msg):
+        """Keep `arm`'s latest measured grasp-frame pose."""
+        p, o = msg.pose.position, msg.pose.orientation
+        self.grasp_poses[arm] = [p.x, p.y, p.z, o.x, o.y, o.z, o.w]
 
     def _on_grasp_pose(self, msg):
         """Mark the first /left_grasp_frame_pose, with its stamp (sim time)."""
@@ -512,11 +566,11 @@ class Driver:
         return True
 
     def wait_for_controller(self, timeout=240.0):
-        """Wait for /named_config, which frame_task_server serves after its start-up move to 'home'."""
+        """Wait for /grasp_frame_target, which frame_task_server serves after its start-up move to 'home'."""
         from rclpy.action import ActionClient
-        from custom_ros_messages.action import NamedConfig
-        self.named_config = ActionClient(self.node, NamedConfig, "named_config")
-        if not self.spin_until(self.named_config.server_is_ready, timeout, every=0.1):
+        from custom_ros_messages.action import GraspFrameTarget
+        self.grasp_target = ActionClient(self.node, GraspFrameTarget, "/grasp_frame_target")
+        if not self.spin_until(self.grasp_target.server_is_ready, timeout, every=0.1):
             self.mark("controller_timeout")
             return False
         self.mark("controller_up")
@@ -548,20 +602,35 @@ class Driver:
                 break
         return True
 
-    def named_config_goal(self, name, timeout=60.0):
-        """Send a /named_config goal and wait for its result; return its success."""
-        from custom_ros_messages.action import NamedConfig
-        goal = NamedConfig.Goal()
-        goal.config_name, goal.plan = name, False
-        self.mark(f"{name}_sent")
-        handle = self.wait_future(self.named_config.send_goal_async(goal), 10.0)
+    def grasp_goal(self, name, targets, timeout=POSTURE_TIMEOUT_S):
+        """Send `targets` on /grasp_frame_target, planned, and wait for its result.
+
+        `targets`: {arm: [x, y, z, qx, qy, qz, qw]} in the pelvis frame. Marks the result,
+        then, 0.5 s (sim) later, the measured grasp-frame poses; returns the goal's success.
+        """
+        from custom_ros_messages.action import GraspFrameTarget
+        from geometry_msgs.msg import PoseStamped
+        goal = GraspFrameTarget.Goal()
+        for arm, v in targets.items():
+            target = PoseStamped()
+            target.header.frame_id = "pelvis"
+            target.pose.position.x, target.pose.position.y, target.pose.position.z = v[:3]
+            o = target.pose.orientation
+            o.x, o.y, o.z, o.w = v[3:]
+            setattr(goal, arm, target)
+        goal.plan = True
+        goal.timeout.sec = int(timeout)
+        self.mark(f"{name}_sent", targets=targets)
+        handle = self.wait_future(self.grasp_target.send_goal_async(goal), 10.0)
         if handle is None or not handle.accepted:
             self.mark(f"{name}_result", accepted=False, success=False)
             return False
-        result = self.wait_future(handle.get_result_async(), timeout)
+        result = self.wait_future(handle.get_result_async(), timeout + 30.0)
         success = bool(result is not None and result.result.success)
         self.mark(f"{name}_result", accepted=True, status=None if result is None else result.status,
-                  success=success)
+                  success=success, message=None if result is None else result.result.message)
+        self.spin_for(0.5)
+        self.mark(f"{name}_measured", poses=dict(self.grasp_poses))
         return success
 
     def trigger(self, service, timeout=30.0):
@@ -729,7 +798,7 @@ def run_drive(out, walk):
     d = Driver(out)
     d.info = {"mode": "walk" if walk else "arm", "arm_joints": list(profile.enabled_joints),
               "home": profile.named_configs["home"].tolist(),
-              "t_pose": profile.named_configs["t_pose"].tolist(),
+              "posture": POSTURE,
               "left_hand_joints": JOINT_NAMES["left"],
               "left_close": named_pose("left", "close").tolist(),
               "walk_speed": WALK_SPEED, "walk_seconds": WALK_SECONDS}
@@ -747,7 +816,7 @@ def run_drive(out, walk):
             if not d.wait_for_controller() or not d.wait_band_released():
                 return 1
             d.check_sensors()  # standing on HOMIE from the release, the arms at home
-            d.named_config_goal("t_pose")
+            d.grasp_goal(POSTURE, posture_targets("g1", POSTURE))
             d.spin_for(1.0)
             d.trigger("/left/hand/close")
             d.spin_for(2.5)  # the hand check averages the last 0.5 s of it
@@ -1057,28 +1126,34 @@ class Report:
               f"{a['feet_moved_end_m'][1] * 100:.1f} cm at the end)")
 
     def arm_test(self):
-        """Check the arm test: start-up, home, t_pose, the left hand's close, the waist after the controller stops, the sensors."""
+        """Check the arm test: start-up, home, POSTURE, the left hand's close, the waist after the controller stops, the sensors."""
         s = self.s
         samples = len(s["t"])
         r = self.startup()
         # frame_task_server took the arms to home at start-up, and commands it.
-        rows = self.window("controller_up", "t_pose_sent", start_offset=1.0)
+        rows = self.window("controller_up", f"{POSTURE}_sent", start_offset=1.0)
         err, worst, cmd_err, waist = self.arm_error("home", "home", rows)
         span = s["t"][rows[-1]] - s["t"][rows[0]]
         self.check("home at startup", err.max() <= ARM_TOL and cmd_err <= HOME_CMD_TOL,
-                   f"arms (14) vs home over the {span:.1f} s (sim) before the t_pose goal: max "
+                   f"arms (14) vs home over the {span:.1f} s (sim) before the {POSTURE} goal: max "
                    f"{err.max():.3f} rad ({worst}), mean {err.mean():.3f}; commanded max {cmd_err:.4f} "
                    f"(limit {HOME_CMD_TOL}); waist yaw/roll/pitch "
                    f"{waist[0]:+.3f} {waist[1]:+.3f} {waist[2]:+.3f}")
-        # NamedConfig t_pose succeeds and the arms reach it.
-        result = self.events.get("t_pose_result", {})
-        rows = self.window("t_pose_result", "/left/hand/close_sent", start_offset=0.5)
-        err, worst, cmd_err, waist = self.arm_error("t_pose", "t_pose", rows)
-        took = result["wall"] - self.events["t_pose_sent"]["wall"]
-        self.check("t_pose", bool(result.get("success")) and err.max() <= ARM_TOL,
-                   f"goal success {result.get('success')} after {took:.1f} s wall; arms vs t_pose: max "
-                   f"{err.max():.3f} rad ({worst}), mean {err.mean():.3f}; commanded max {cmd_err:.4f}; "
-                   f"waist {waist[0]:+.3f} {waist[1]:+.3f} {waist[2]:+.3f}")
+        # The POSTURE goal ends without a fault and the measured grasp frames reach it.
+        result = self.events.get(f"{POSTURE}_result", {})
+        targets = self.events.get(f"{POSTURE}_sent", {}).get("targets", {})
+        measured = self.events.get(f"{POSTURE}_measured", {}).get("poses", {})
+        errs = {arm: pose_error(targets[arm], measured[arm]) for arm in targets if arm in measured}
+        ended = bool(result.get("success")) or str(result.get("message") or "").startswith(
+            NOT_REACHED_PREFIXES)
+        within = len(errs) == 2 and all(m <= POSE_TOL_M and a <= POSE_TOL_RAD for m, a in errs.values())
+        took = result["wall"] - self.events[f"{POSTURE}_sent"]["wall"] if result else math.nan
+        self.numbers[POSTURE] = {"result": result.get("message"), "errors": errs}
+        self.check(POSTURE, ended and within,
+                   f"goal success {result.get('success')} after {took:.1f} s wall "
+                   f"({result.get('message')}); measured grasp frames 0.5 s (sim) after: "
+                   + ", ".join(f"{arm} {m * 1000:.1f} mm {a:.4f} rad" for arm, (m, a) in errs.items())
+                   + f" (limits {POSE_TOL_M * 1000:.0f} mm, {POSE_TOL_RAD} rad)")
         # /left/hand/close closes the left hand: the last 0.5 s of sim time before
         # frame_task_server is stopped, at least 2 s after the response.
         response = self.events.get("/left/hand/close_response", {})
@@ -1104,9 +1179,9 @@ class Report:
         stop = self.at("controller_stopped")
         released = samples if r is None else r
         self.phases([("under the band", 0, released),
-                     ("on HOMIE, home", released, self.at("t_pose_sent")),
-                     ("to t_pose", self.at("t_pose_sent"), self.at("t_pose_result")),
-                     ("t_pose and hand", self.at("t_pose_result"), stop),
+                     ("on HOMIE, home", released, self.at(f"{POSTURE}_sent")),
+                     (f"to {POSTURE}", self.at(f"{POSTURE}_sent"), self.at(f"{POSTURE}_result")),
+                     (f"{POSTURE} and hand", self.at(f"{POSTURE}_result"), stop),
                      ("controller stopped", stop, self.at("end") + 1)])
         if r is not None:
             self.standing(slice(r, self.at("end") + 1), "from the release to the end")

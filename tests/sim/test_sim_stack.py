@@ -1,7 +1,7 @@
 """Test either robot's whole stack in the RoboCasa sim, closed loop: the roles run in the containers.
 
 The robot stands unsupported once the elastic band is off, Nav2 walks it to a goal ahead
-while /named_config moves its arms, and SLAM stays healthy throughout. test_sim_stack.sh runs
+while /grasp_frame_target moves its arms, and SLAM stays healthy throughout. test_sim_stack.sh runs
 the roles and has the usage.
 
   sim     in the robocasa container: golem_sim.py as __main__ for GOLEM_ROBOT's
@@ -15,8 +15,9 @@ the roles and has the usage.
   drive   in the ros container, beside the robot's sim bringup with navigation:
           waits until the band is off and Nav2's lifecycle nodes are active, stands
           STAND_S, sends one NavigateToPose goal, and once the robot walks sends
-          /named_config 't_pose', then 'home' once that has succeeded (each with a
-          duration of ARM_GOAL_S); after the goal it stands SETTLE_S and waits for a
+          /grasp_frame_target goals (direct, a timeout of ARM_GOAL_S each) to the grasp
+          frames' poses at the robot's two ARM_MOVES postures, the second once the first
+          has reached; after the goal it stands SETTLE_S and waits for a
           /map published after the walk. Throughout it records /Odometry,
           /converted_scan, /map, the odom -> base_footprint TF, /cmd_vel and the
           publishers of /lowcmd (<out>/drive.npz, events.json).
@@ -42,10 +43,12 @@ Pass if, in one run:
     fall logger (sim.log) logs no fall;
   - the goal succeeds within GOAL_TIMEOUT_S of sim time, and the true pelvis ends
     within FINAL_TOL of it, at the result and SETTLE_S later;
-  - while walking to it, 't_pose' and then 'home' succeed: 't_pose' sent once
-    /cmd_vel moves the robot and before the goal's result, 'home' once 't_pose'
-    has succeeded (each move takes seconds and the walk a few, so 'home' may end
-    after the goal's result);
+  - while walking to it, both arm moves reach: the first sent once /cmd_vel moves
+    the robot and before the goal's result, the second once the first has reached
+    (each move takes seconds and the walk a few, so the second may end after the
+    goal's result). A move reaches when its goal succeeds, or ends at its timeout
+    or pinned at a joint limit (no fault) with its last feedback within ARM_TOL_M
+    and ARM_TOL_RAD of the targets;
   - SLAM is healthy from Nav2's start to the drive's end: /Odometry at
     MIN_ODOM_HZ or more in every sim second, the odom -> base_footprint TF present
     at every sample and at most MAX_TF_AGE_S old, the known cells of /map more
@@ -90,10 +93,18 @@ NAV2_NODES = nav_test.NAV2_NODES
 STAND_S = 3.0  # s of sim time standing before the goal, Nav2 up
 SETTLE_S = 2.0  # s of sim time after the goal's result
 GOAL_TIMEOUT_S = 90.0  # s of sim time from the goal to its result
-# s: each /named_config goal's duration, frame_task_server's timeout for it (its default,
-# controller.timeout, 5 s, ends the H1-2's move to 't_pose' before its IK converges)
+# robot -> the two golem_upper_ik named configs whose grasp-frame poses the arms go to while
+# walking, out and back to the start-up posture (test_sim_bringup.posture_targets)
+ARM_MOVES = {"h12": ("prep", "home"), "g1": ("arms_front_45", "home")}
+# s: each /grasp_frame_target goal's timeout, robot time (the controller's default,
+# controller.timeout, 5 s, can end a move before its IK converges)
 ARM_GOAL_S = 15
-ARM_TIMEOUT_S = 60.0  # s of wall time for each /named_config goal's result
+ARM_TIMEOUT_S = 60.0  # s of wall time for each /grasp_frame_target goal's result
+# m, rad: a move that ends without reaching (its timeout, a hold pinned at a joint limit) still
+# reaches within these of its targets, by its last feedback (golem_upper_ik's own tolerance is
+# about 1 mm, which a walking robot's arms can hover just outside of)
+ARM_TOL_M = 0.01
+ARM_TOL_RAD = 0.05
 # s of sim time after the goal's result to wait for a /map that slam_toolbox published after the
 # walk (it publishes every map_update_interval, 5 s, and adds a scan every
 # minimum_travel_distance, 0.5 m)
@@ -198,6 +209,19 @@ def _known_cells(msg):
     return int(np.count_nonzero(np.asarray(msg.data, np.int8) >= 0))
 
 
+def arm_reached(succeeded, message, error):
+    """Return whether a /grasp_frame_target move reached its targets.
+
+    `succeeded`: the result's success; `message`: its message; `error`: the last feedback's
+    largest [m, rad] over the arms, or None. A goal that ended without reaching and without a
+    fault (bringup_test.NOT_REACHED_PREFIXES) reaches within ARM_TOL_M and ARM_TOL_RAD.
+    """
+    if succeeded:
+        return True
+    return (bool(message) and message.startswith(bringup_test.NOT_REACHED_PREFIXES)
+            and error is not None and error[0] <= ARM_TOL_M and error[1] <= ARM_TOL_RAD)
+
+
 class Driver(nav_test.SimDriver):
     """Drive the test against the running bringup: the goal, the arm moves and SLAM's recordings."""
 
@@ -254,16 +278,16 @@ class Driver(nav_test.SimDriver):
     def wait_nav(self, timeout=180.0):
         """Wait until Nav2 is ready; return whether it became ready within `timeout` s of wall time.
 
-        Ready: Nav2's lifecycle nodes active, /navigate_to_pose and /named_config served,
+        Ready: Nav2's lifecycle nodes active, /navigate_to_pose and /grasp_frame_target served,
         map -> base_footprint in TF, and a /map and a /converted_scan heard.
         """
-        from custom_ros_messages.action import NamedConfig
+        from custom_ros_messages.action import GraspFrameTarget
         from lifecycle_msgs.msg import State
         from lifecycle_msgs.srv import GetState
         from nav2_msgs.action import NavigateToPose
         from rclpy.action import ActionClient
         self.navigate = ActionClient(self.node, NavigateToPose, "navigate_to_pose")
-        self.named_config = ActionClient(self.node, NamedConfig, "named_config")
+        self.grasp_target = ActionClient(self.node, GraspFrameTarget, "/grasp_frame_target")
         clients = {name: self.node.create_client(GetState, f"/{name}/get_state") for name in NAV2_NODES}
         end = time.time() + timeout
         states = {}
@@ -276,37 +300,47 @@ class Driver(nav_test.SimDriver):
                     states[name] = ("active" if response.current_state.id == State.PRIMARY_STATE_ACTIVE
                                     else response.current_state.label)
             if (all(states.get(n) == "active" for n in NAV2_NODES) and self.navigate.server_is_ready()
-                    and self.named_config.server_is_ready() and self.lookup("map", "base_footprint") is not None
+                    and self.grasp_target.server_is_ready() and self.lookup("map", "base_footprint") is not None
                     and self.maps and self.scans):
                 self.mark("nav_active", states=states)
                 return True
             for _ in range(20):
                 self.spin()
         self.mark("nav_timeout", states=states, action_server=self.navigate.server_is_ready(),
-                  named_config=self.named_config.server_is_ready(),
+                  grasp_frame_target=self.grasp_target.server_is_ready(),
                   map_base=self.lookup("map", "base_footprint") is not None, maps=len(self.maps),
                   scans=len(self.scans))
         return False
 
-    def _send_named(self, name):
-        """Send a /named_config goal of ARM_GOAL_S; return its future and the wall time."""
-        from custom_ros_messages.action import NamedConfig
-        goal = NamedConfig.Goal()
-        goal.config_name, goal.plan = name, False
-        goal.duration.sec = ARM_GOAL_S
+    def _send_posture(self, name):
+        """Send the grasp frames to posture `name` (self.arm_targets), direct; return its future and the wall time."""
+        from custom_ros_messages.action import GraspFrameTarget
+        from geometry_msgs.msg import PoseStamped
+        goal = GraspFrameTarget.Goal()
+        for arm, v in self.arm_targets[name].items():
+            target = PoseStamped()
+            target.header.frame_id = "pelvis"
+            target.pose.position.x, target.pose.position.y, target.pose.position.z = v[:3]
+            o = target.pose.orientation
+            o.x, o.y, o.z, o.w = v[3:]
+            setattr(goal, arm, target)
+        goal.plan = False
+        goal.timeout.sec = ARM_GOAL_S
         self.mark(f"{name}_sent")
         self.arm_error = None
 
         def feedback(msg):
-            """Keep the arm's latest joint error, rad."""
-            self.arm_error = float(msg.feedback.joint_error)
-        return self.named_config.send_goal_async(goal, feedback_callback=feedback), time.time()
+            """Keep the arms' latest largest error, [m, rad]."""
+            fb = msg.feedback
+            self.arm_error = [max(fb.left_error_m, fb.right_error_m),
+                              max(fb.left_error_rad, fb.right_error_rad)]
+        return self.grasp_target.send_goal_async(goal, feedback_callback=feedback), time.time()
 
     def navigate_with_arms(self, x, y, yaw):
         """Send the goal and the arm moves, and wait for all their results; return the goal's success.
 
-        't_pose' goes once /cmd_vel moves the robot and while the goal runs, 'home' once 't_pose'
-        has succeeded.
+        The first of the robot's ARM_MOVES goes once /cmd_vel moves the robot and while the goal
+        runs, the second once the first has reached (arm_reached).
         """
         from action_msgs.msg import GoalStatus
         from nav2_msgs.action import NavigateToPose
@@ -322,11 +356,11 @@ class Driver(nav_test.SimDriver):
             return False
         result = handle.get_result_async()
         start, give_up = self.clock, time.time() + 4 * GOAL_TIMEOUT_S
-        pending = ["t_pose", "home"]
+        pending = list(self.moves)
         arm = None  # [name, the send's future, then the result's; wall at the send; sent or running]
         outcome = None
-        # 't_pose' only while the goal runs; 'home' after a successful 't_pose', whenever.
-        while outcome is None or arm is not None or pending[:1] == ["home"]:
+        # the first move only while the goal runs; the second after the first, whenever
+        while outcome is None or arm is not None or pending[:1] == [self.moves[1]]:
             if outcome is None and result.done():
                 status = result.result().status
                 outcome = status == GoalStatus.STATUS_SUCCEEDED
@@ -339,9 +373,10 @@ class Driver(nav_test.SimDriver):
                 outcome = False
                 self.mark("goal_result", status=result.result().status if result.done() else None, success=False,
                           sim_seconds=self.clock - start)
-            if arm is None and pending and self.walking is not None and (outcome is None or pending[0] == "home"):
+            if (arm is None and pending and self.walking is not None
+                    and (outcome is None or pending[0] == self.moves[1])):
                 name = pending.pop(0)
-                arm = [name, *self._send_named(name), "sent"]
+                arm = [name, *self._send_posture(name), "sent"]
             elif arm is not None and arm[1].done():
                 response = arm[1].result()
                 if arm[3] == "sent":  # the goal's handle
@@ -351,9 +386,11 @@ class Driver(nav_test.SimDriver):
                     else:
                         arm[1], arm[3] = response.get_result_async(), "running"
                 else:
-                    success = response is not None and bool(response.result.success)
+                    message = None if response is None else response.result.message
+                    success = response is not None and arm_reached(
+                        response.result.success, message, self.arm_error)
                     self.mark(f"{arm[0]}_result", status=None if response is None else response.status,
-                              success=success, joint_error=self.arm_error)
+                              success=success, message=message, error=self.arm_error)
                     arm = None
                     if not success:
                         pending = []
@@ -397,6 +434,9 @@ def run_drive(out):
         goal = json.load(f)
     d = Driver(out)
     d.info["goal"] = goal
+    d.moves = ARM_MOVES[robot_from_env()]
+    d.arm_targets = {name: bringup_test.posture_targets(robot_from_env(), name) for name in d.moves}
+    d.info["arm_targets"] = d.arm_targets
     ok = False
     try:
         d.mark("drive_start")
@@ -551,40 +591,47 @@ class Report:
                    f"it walked {self.numbers['goal']['travelled_straight']:.2f} m from where the goal was sent")
 
     def arms_while_walking(self):
-        """Check 't_pose' was sent while walking and 'home' after it, and both succeeded.
+        """Check the first arm move was sent while walking and the second after it, and both reached.
 
-        Each move takes seconds and the walk to the goal a few, so 'home' may run after the
+        Each move takes seconds and the walk to the goal a few, so the second may run after the
         goal's result.
         """
         ev, walking = self.events, self.info.get("walking")
-        names = ("t_pose_sent", "t_pose_result", "home_sent", "home_result")
+        first, second = ARM_MOVES[self.robot]
+        names = (f"{first}_sent", f"{first}_result", f"{second}_sent", f"{second}_result")
         got = {n: ev.get(n) for n in names}
         self.numbers["arms"] = {n: (None if e is None else {k: e.get(k) for k in ("sim", "wall", "success",
-                                                                                  "joint_error")})
+                                                                                  "message", "error")})
                                 for n, e in got.items()}
         goal_end = ev.get("goal_result", {}).get("wall", math.inf)
+
+        def error(e):
+            """Return a move's last feedback error as text."""
+            err = e.get("error")
+            return "none" if err is None else f"{err[0] * 1000:.1f} mm {err[1]:.4f} rad"
         if walking is None or any(e is None for e in got.values()):
             self.check("arms while walking", False,
                        ("the robot never walked on /cmd_vel after the goal; " if walking is None else "")
                        + f"marks {[n for n, e in got.items() if e is None]} missing"
-                       + "".join(f"; {n[:-7]} failed, joint error {got[n].get('joint_error')} rad"
-                                 for n in ("t_pose_result", "home_result") if got[n] and not got[n]["success"])
+                       + "".join(f"; {n[:-7]} failed ({got[n].get('message')}), last error {error(got[n])}"
+                                 for n in names[1::2] if got[n] and not got[n]["success"])
                        + ": see drive.log and launch.log")
             return
-        in_walk = walking["wall"] <= got["t_pose_sent"]["wall"] <= goal_end
-        ok = got["t_pose_result"]["success"] and got["home_result"]["success"] and in_walk
+        in_walk = walking["wall"] <= got[f"{first}_sent"]["wall"] <= goal_end
+        ok = got[f"{first}_result"]["success"] and got[f"{second}_result"]["success"] and in_walk
         sim0 = walking["sim"]
 
         def outcome(name):
             """Return a move's result, timed from the walk's start."""
             e = got[f"{name}_result"]
-            return (f"{'succeeded' if e['success'] else 'FAILED'} +{e['sim'] - sim0:.1f} s (joint error "
-                    f"{e.get('joint_error')} rad)")
+            return (f"{'reached' if e['success'] else 'FAILED'} +{e['sim'] - sim0:.1f} s ({e.get('message')}; "
+                    f"last error {error(e)})")
         self.check("arms while walking", ok,
-                   f"the robot walked from sim t {sim0:.1f} s; 't_pose' sent +{got['t_pose_sent']['sim'] - sim0:.1f} "
-                   f"s, {outcome('t_pose')}; 'home' sent +{got['home_sent']['sim'] - sim0:.1f} s, {outcome('home')}; "
+                   f"the robot walked from sim t {sim0:.1f} s; '{first}' sent "
+                   f"+{got[f'{first}_sent']['sim'] - sim0:.1f} s, {outcome(first)}; '{second}' sent "
+                   f"+{got[f'{second}_sent']['sim'] - sim0:.1f} s, {outcome(second)}; "
                    f"the goal's result +{ev['goal_result']['sim'] - sim0:.1f} s"
-                   + ("" if in_walk else "; 't_pose' was not sent while walking"))
+                   + ("" if in_walk else f"; '{first}' was not sent while walking"))
 
     def slam(self):
         """Check FAST_LIO's /Odometry, level_odom's TF, slam_toolbox's /map and the scan over the SLAM window."""

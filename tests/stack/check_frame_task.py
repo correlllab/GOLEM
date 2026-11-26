@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Move both H1-2 wrists forward and back through the real /frame_task server and score the motion.
+"""Move both H1-2 grasp frames forward and back through the real /grasp_frame_target server and score the motion.
 
-frame_task_server publishes /{left,right}_ee_pose in the pelvis frame (m, quaternion XYZW)
-for its end-effector frames, the H1-2's wrist yaw links. LowState motor slots 13:20 and 20:27
-are the left and right arm motors. The server reads goal.duration as wall seconds; the phases
-here are timed in /clock sim seconds, under a separate wall timeout. Writes a JSON report and
-exits 0 only when both phases pass.
+frame_task_server publishes /{left,right}_grasp_frame_pose in the pelvis frame (m, quaternion
+XYZW) for its grasp frames, the H1-2's left_grasp_frame and right_grasp_frame. LowState motor
+slots 13:20 and 20:27 are the left and right arm motors. The goal's timeout is robot time (sim
+time here), as are the phases, under a separate wall timeout. Writes a JSON report and exits 0
+only when both phases pass.
 """
 import argparse
 import copy
@@ -87,19 +87,19 @@ def main():
     from geometry_msgs.msg import PoseStamped
     from rosgraph_msgs.msg import Clock
     from unitree_hg.msg import LowState
-    from custom_ros_messages.action import FrameTask
+    from custom_ros_messages.action import GraspFrameTarget
 
     started = time.monotonic()
     deadline = started + args.wall_timeout
-    report = {'test': 'frame_task_both_arms', 'simulator': args.simulator,
+    report = {'test': 'grasp_frame_target_both_arms', 'simulator': args.simulator,
               'domain': int(os.environ['ROS_DOMAIN_ID']), 'passed': False,
-              'coordinate_frame': 'pelvis', 'frame_names': ['left_wrist_yaw_link', 'right_wrist_yaw_link'],
+              'coordinate_frame': 'pelvis', 'frame_names': ['left_grasp_frame', 'right_grasp_frame'],
               'offset_m': args.offset, 'position_tolerance_m': args.position_tolerance, 'phases': []}
     latest, counts = {}, {'left': 0, 'right': 0, 'joints': 0}
     active_handle = None
     rclpy.init()
     node = rclpy.create_node('golem_frame_task_physics_check')
-    client = ActionClient(node, FrameTask, '/frame_task')
+    client = ActionClient(node, GraspFrameTarget, '/grasp_frame_target')
     subscriptions = []
 
     def clock(msg):
@@ -110,11 +110,11 @@ def main():
         latest['clock'] = now
 
     def ee(side, msg):
-        """Store one side's measured end-effector pose, which must be finite and in the pelvis frame."""
+        """Store one side's measured grasp-frame pose, which must be finite and in the pelvis frame."""
         if msg.header.frame_id != 'pelvis':
-            raise AssertionError(f'{side} EE frame must be pelvis, got {msg.header.frame_id}')
+            raise AssertionError(f'{side} grasp frame pose must be in pelvis, got {msg.header.frame_id}')
         if not all(math.isfinite(v) for v in pose_values(msg.pose)):
-            raise AssertionError(f'{side} EE pose contains nonfinite values')
+            raise AssertionError(f'{side} grasp frame pose contains nonfinite values')
         latest[side] = msg.pose
         counts[side] += 1
 
@@ -132,7 +132,7 @@ def main():
     subscriptions.append(node.create_subscription(Clock, '/clock', clock, qos_profile_sensor_data))
     subscriptions.append(node.create_subscription(LowState, '/lowstate', state, qos_profile_sensor_data))
     for side in ('left', 'right'):
-        subscriptions.append(node.create_subscription(PoseStamped, f'/{side}_ee_pose', lambda msg, side=side: ee(side, msg), qos_profile_sensor_data))
+        subscriptions.append(node.create_subscription(PoseStamped, f'/{side}_grasp_frame_pose', lambda msg, side=side: ee(side, msg), qos_profile_sensor_data))
 
     def spin():
         """Spin once; raise TimeoutError past the wall deadline."""
@@ -155,21 +155,22 @@ def main():
             if phase_name == 'forward':
                 for pose in targets.values():
                     pose.position.x += args.offset
-            goal = FrameTask.Goal()
+            goal = GraspFrameTarget.Goal()
             goal.plan = False
-            goal.slow_mode = True
-            goal.frame_names = report['frame_names']
-            goal.frame_targets = [targets['left'], targets['right']]
-            remaining = max(1., deadline - time.monotonic())
-            goal.duration.sec = math.ceil(remaining)  # s of wall time: the server's goal timeout
+            for side in ('left', 'right'):
+                target = PoseStamped(pose=targets[side])
+                target.header.frame_id = 'pelvis'
+                setattr(goal, side, target)
+            goal.timeout.sec = math.ceil(args.sim_timeout)  # s of robot time: the server's goal timeout
             phase = {'name': phase_name, 'sim_start': latest['clock'], 'action_success': False,
                      'starts': start_poses, 'targets': {s: pose_values(p) for s, p in targets.items()}}
             report['phases'].append(phase)
             feedback_samples = []
             def feedback(message):
-                """Keep the action's per-frame linear (m) and angular (rad) errors."""
-                feedback_samples.append({'linear_m': list(message.feedback.errors_linear),
-                                         'angular_rad': list(message.feedback.errors_angular)})
+                """Keep the action's per-arm linear (m) and angular (rad) errors, left then right."""
+                fb = message.feedback
+                feedback_samples.append({'linear_m': [fb.left_error_m, fb.right_error_m],
+                                         'angular_rad': [fb.left_error_rad, fb.right_error_rad]})
             pending = client.send_goal_async(goal, feedback_callback=feedback)
             result = None
             result_counts = None

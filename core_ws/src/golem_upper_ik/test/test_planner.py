@@ -356,7 +356,7 @@ PLANNED_MOVE = {'h12': ('init_3', 'prep'), 'g1': ('home', 'arms_front_45')}
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_planner_client_plans(robot):
-    """The subprocess builds the robot's model and plans; a speed override reaches it."""
+    """The subprocess builds the robot's model and plans, and reports a refused request."""
     profile = profile_of(robot)
     named = profile.named_configs
     begin, end = (named[name] for name in PLANNED_MOVE[robot])
@@ -371,19 +371,10 @@ def test_planner_client_plans(robot):
         np.testing.assert_allclose(result.path[0], begin, atol=1e-9)
         np.testing.assert_allclose(result.path[-1], end, atol=1e-9)
 
-        # a per-request speed reaches the worker: half the speed, about twice the waypoints
-        slow = client.plan_configuration(
-            current_q=current_q, start=begin, goal=end,
-            moving_speed=client.planner_config.moving_speed / 2,
-            max_interpolation_steps=2 * client.planner_config.max_interpolation_steps,
-        )
-        assert slow.success, slow.reason
-        assert slow.path.shape[0] > 1.8 * result.path.shape[0]
-
-        # an override is checked in the worker and reported back; the worker stays
+        # a request the worker refuses is reported back; the worker stays
         worker = client._worker
-        with pytest.raises(RuntimeError, match='moving_speed must be positive'):
-            client.plan_configuration(current_q, begin, end, moving_speed=0.0)
+        with pytest.raises(RuntimeError, match=r'start must have shape'):
+            client.plan_configuration(current_q, begin[:3], end)
         assert client._worker is worker and worker.process.is_alive()
 
         if robot == 'g1':

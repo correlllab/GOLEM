@@ -88,17 +88,6 @@ class FakeController:
         """Return the arms' joint ids: the left arm's are 0 and 1, the right arm's 2 and 3."""
         return sorted(joint for arm in arms for joint in {'left': (0, 1), 'right': (2, 3)}[arm])
 
-    @property
-    def speed_scale(self):
-        """Return the speed multiplier."""
-        return self._speed_scale
-
-    @speed_scale.setter
-    def speed_scale(self, value):
-        """Record the speed multiplier."""
-        self.trace.append(('speed_scale', value))
-        self._speed_scale = value
-
     def _work(self, name):
         """Record a step, spend its work of robot time on it, and raise at stale_at."""
         self.trace.append((name, self.ik_steps + self.hold_steps))

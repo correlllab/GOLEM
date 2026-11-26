@@ -110,8 +110,6 @@ class UpperController:
         self.w_lim = controller['w_lim']
         self.dq_lim = controller['dq_lim']
         self.d_min = controller['d_min']
-        # multiplier on commanded arm speed: 1.0 is full speed, a goal's slow mode lowers it
-        self.speed_scale = 1.0
         # N*m per body joint: the steady-state hold's integral torque bias, integrated while
         # holding and faded by _apply_joint_position while moving
         self._tau_bias = np.zeros(robot_model.num_motor)
@@ -455,24 +453,6 @@ class UpperController:
             raise RuntimeError(f'Planning failed: {result.reason}')
         return result.path
 
-    def _planner_speed_overrides(self):
-        """Return (moving_speed, max_interpolation_steps) for speed_scale; (None, None) at 1.
-
-        A planned path is slowed by planning it at a lower planner-frame speed: the planner
-        then emits proportionally more waypoints and execute_path still clocks them out at
-        dt. Stretching the step period instead keeps the original waypoint spacing and turns
-        a smooth ramp into a staircase. At full speed the planner process keeps the config it
-        was started with.
-        """
-        scale = float(self.speed_scale)
-        if scale == 1.0:
-            return None, None
-        config = self.planner.planner_config
-        # the waypoint cap bounds a path's duration, so it has to grow with the step count or
-        # a long slow path clamps back to near full speed
-        return (config.moving_speed * scale,
-                int(np.ceil(config.max_interpolation_steps / scale)))
-
     def plan_to_configuration(self, q_reduced, active_mask=None):
         """Return a planned reduced path from the command seed to q_reduced.
 
@@ -481,14 +461,11 @@ class UpperController:
         """
         self._check_planning()
         start = self._command_seed()[0][self.robot_model.reduced_mask]
-        moving_speed, max_interpolation_steps = self._planner_speed_overrides()
         result = self.planner.plan_configuration(
             current_q=self.robot_model.state['q'],
             start=start,
             goal=np.asarray(q_reduced, dtype=float),
             active_mask=active_mask,
-            moving_speed=moving_speed,
-            max_interpolation_steps=max_interpolation_steps,
         )
         return self._path_or_raise(result)
 
@@ -541,10 +518,9 @@ class UpperController:
             raise RuntimeError("Not executing a path before golem_safety relays the "
                                "controller's commands (follow gate shut)")
         path = self._as_reduced_path(path)
-        # The path is time-parameterized at dt by the planner (slow moves are planned at a
-        # lower moving_speed and come back with more waypoints), so it always plays back at
-        # the control period: each step sleeps the period less the work already done, or
-        # the checks and FK would stretch a path past its planned duration
+        # The path is time-parameterized at dt by the planner, so it plays back at the control
+        # period: each step sleeps the period less the work already done, or the checks and
+        # FK would stretch a path past its planned duration
         clock = self.clock
         for q_reduced in path:
             start = clock.now()
@@ -641,7 +617,7 @@ class UpperController:
         return bool(np.max(np.abs(q_error[self.upper_ids])) < threshold)
 
     def _limit_joint_vel(self, vel):
-        """Return vel with each arm scaled under dq_lim, v_lim and w_lim, then by speed_scale.
+        """Return vel with each arm scaled under dq_lim, v_lim and w_lim.
 
         Each arm's joints are scaled together, so its direction is kept; the other joints
         pass through.
@@ -657,7 +633,7 @@ class UpperController:
                 self.v_lim / (np.linalg.norm(twist[:3]) + 1e-6),
                 self.w_lim / (np.linalg.norm(twist[3:]) + 1e-6),
             ])
-            vel_scaled[arm] = self.speed_scale * scaler * vel[arm]
+            vel_scaled[arm] = scaler * vel[arm]
         return vel_scaled
 
     def _apply_joint_position(self, q):

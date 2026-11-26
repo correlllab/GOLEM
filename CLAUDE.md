@@ -562,27 +562,35 @@ services), serving `/skill/frontier_explore` and the manipulation skills.
 
 The node's read-only `robot` parameter (`h12` by default, `g1`) picks a
 profile in `golem_skills/robots.py`: the frames the grasp and pick_place
-skills drive, the hand, the named configs and the GraspGenX gripper. On the
-G1 the grasp closes the Dex3-1 through `dex_3`'s `/<arm>/hand/{open,close}`
-(the grip check reads the finger joints on `/joint_states`), starts from
-`home` (the G1 has no `prep` or staging config), and drives tool frames on
-`<arm>_hand_palm_link` (`<arm>_dex3_grasp_frame`, `<arm>_dex3_pinch_frame`,
-which the node broadcasts on `/tf_static`; their offsets are from the URDF,
-unmeasured). The G1 refuses `graspgenx*` (GraspGenX has no Dex3-1 model) and
+skills plan for (the GraspGenX-convention frame) and drive (each arm's
+pinch frame, `golem_upper_ik`'s grasp frame), the hand, the postures (the
+pinch frames' poses in the pelvis frame, by forward kinematics of
+`golem_upper_ik`'s named configs: the H1-2's `prep` and staging postures) and
+the GraspGenX gripper. On the G1 the grasp closes the Dex3-1 through
+`dex_3`'s `/<arm>/hand/{open,close}` (the grip check reads the finger joints
+on `/joint_states`), starts from its `home` posture, and plans for
+`<arm>_dex3_grasp_frame` on `golem_upper_ik`'s `<arm>_grasp_frame` (the node
+broadcasts both on `/tf_static`, the grasp frame from `golem_upper_ik`'s
+profile; their offsets are from the URDF, unmeasured). The G1 refuses `graspgenx*` (GraspGenX has no Dex3-1 model) and
 `visual_servo` (no hand cameras) before the arm moves, so it runs
 `heuristic`, `antipodal`, `centroid` and `top_down`. Its execution was run
 in the sim from a synthetic object cloud; a perception-driven grasp has not
 run on it (the head camera does not see the RoboCasa counter tops), nor has
 `pick_place`.
 
-Arm moves (`/frame_task`, `/named_config`) need a live `/safety/heartbeat`:
+Every arm move is one goal on `/grasp_frame_target` (`GraspFrameTarget`, the
+interface `golem_upper_ik` and `lmg_deploy` both serve), and a relative move
+starts from the measured pose on `/{left,right}_grasp_frame_pose`. A goal the
+controller aborts for anything but its timeout or a hold pinned at a joint
+limit halts the arms for the rest of the skill goal. Arm moves need a live
+`/safety/heartbeat`:
 `golem_skills` refuses to send one before the first true beat, after a false
 beat (until the node restarts) and when the last beat is older than
 `heartbeat_timeout` (0.5 s), and it cancels the move in flight on the server,
 so the skill fails with the halt reason. Grippers, navigation and
 `frontier_explore` do not depend on it.
 
-Skills consume the `frame_task` IK action, the gripper services, and the
+Skills consume the `/grasp_frame_target` arm action, the gripper services, and the
 `model_server` perception services (`gemini_query`, `sam_segment`, `graspgen` —
 this is why the `ros` container needs `GEMINI_API_KEY`). There is currently no
 autonomous LLM orchestrator in-repo that calls them; they are invoked over ROS
@@ -599,9 +607,12 @@ ros2 action send_goal /skill/frontier_explore custom_ros_messages/action/SkillFr
   "{min_frontier_cells: 6, blacklist_radius: 0.6, min_goal_distance: 0.7, goal_timeout: 120.0, timeout: {sec: 1800, nanosec: 0}}" \
   --feedback
 
-# non-skill but useful: move arms to a named posture first
-ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 'home', duration: {sec: 0, nanosec: 0}}"
+# non-skill but useful: move the right arm's grasp frame (pelvis frame; the
+# H1-2's prep posture) along a planned path; the timeout (robot time) covers
+# the planning too, and 0 is the controller's 5 s
+ros2 action send_goal /grasp_frame_target custom_ros_messages/action/GraspFrameTarget \
+  "{right: {header: {frame_id: pelvis}, pose: {position: {x: 0.25, y: -0.281, z: 0.18},
+    orientation: {x: -0.1638, y: 0.0037, z: 0.0282, w: 0.9861}}}, plan: true, timeout: {sec: 30}}"
 ```
 
 ## 8. Do-not-break rules

@@ -673,7 +673,8 @@ def test_hold_pinned_at_a_limit_is_not_converged(ros, models, robot):
     """A hold pinned at a position clip limit is not converged, naming the joint."""
     profile = profile_of(robot)
     config = config_of(robot, CONFIGS[robot])
-    # the G1's configs carry no integral gain; the hold's I-term needs one
+    # one integral gain on every upper joint, the G1's waist included (its configs' is 0),
+    # so the I-term pushes the left elbow whatever the configs say
     config['gains']['ki'][list(profile.upper_slots)] = 100.0
     limits = config['limits']['q_clip_limits']
     elbow = profile.body_joints.index('left_elbow_joint')

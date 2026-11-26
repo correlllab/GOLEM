@@ -239,9 +239,9 @@ then moves only in the start-up step 4.
   `/frame_task` goal does (direct, or along a plan with `plan: true`), with these differences.
   Only the targeted arms' joints change their torque bias: the hold's integral term
   (`gains.ki`) and its fading over a move act on them alone, so the arm without a target and
-  the torso or waist keep their commands, torque bias included, and stay where they are (on
-  the H1-2, whose hold integrates, an arm sagging below its command would otherwise be lifted
-  onto it, about 11 mm in the sim). Its `timeout` (0: `controller.timeout`) counts
+  the torso or waist keep their commands, torque bias included, and stay where they are (both
+  robots' holds integrate on the arms, and an arm sagging below its command would otherwise
+  be lifted onto it, about 11 mm in the H1-2 sim). Its `timeout` (0: `controller.timeout`) counts
   robot time from its start, planning and the path included. It succeeds once every target has
   stayed within `threshold_linear` and `threshold_angular` for `GRASP_SETTLE_S` (0.2 s of robot
   time); the hold step's own convergence ends nothing. It aborts at the timeout, on a planning

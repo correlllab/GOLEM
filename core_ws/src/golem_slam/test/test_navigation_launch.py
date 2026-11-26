@@ -112,7 +112,7 @@ def test_robot_is_required_and_the_files_default_per_robot():
     declared = {a.name: a for a in _description().entities
                 if isinstance(a, DeclareLaunchArgument)}
     assert set(declared) == {'robot', 'use_sim_time', 'fast_lio_config', 'nav2_params_file',
-                             'octomap_params_file', 'slam_params_file'}
+                             'octomap_params_file', 'slam_params_file', 'arm_footprint'}
     assert declared['robot'].default_value is None
 
 
@@ -180,6 +180,16 @@ def test_profiles_drive_the_differences(robot):
     assert list(values['arm_links']) == loaded['footprint']['arm_links']
     assert values['padding'] == loaded['footprint']['padding']
     assert ('footprint', '/local_costmap/footprint') in remaps(context, footprint)
+
+
+def test_arm_footprint_false_keeps_the_body_polygon():
+    """arm_footprint:=false gives dynamic_footprint no arm links: the body polygon alone."""
+    context, actions = pipeline('h12', arm_footprint='false')
+    _, values, _ = nodes(context, actions)['dynamic_footprint']
+    assert [link for link in values['arm_links'] if link] == []
+    context, actions = pipeline('h12')
+    _, values, _ = nodes(context, actions)['dynamic_footprint']
+    assert [link for link in values['arm_links'] if link]
 
 
 def test_the_arguments_override_the_profile_files():

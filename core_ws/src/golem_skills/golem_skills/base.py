@@ -168,14 +168,14 @@ SERVO_DIVERGE_M = 0.01
 # counts as unchanged when both errors stay within these bands of the running
 # reference. Above the arm's steady-state jitter (~0.1 mm, <1 mrad), so a
 # settled hold is recognized, and well below real motion.
-FRAME_TASK_STABLE_EPS_LIN = 0.0005    # m
-FRAME_TASK_STABLE_EPS_ANG = 0.002     # rad
+ARM_MOVE_STABLE_EPS_LIN = 0.0005    # m
+ARM_MOVE_STABLE_EPS_ANG = 0.002     # rad
 # Unchanged feedbacks in a row (25 Hz from both arm controllers) that end a
 # move early: the arm has settled short of the controller's own tolerance
 # (golem_upper_ik's is about 1 mm, which a soft arm can hover just outside of
 # until the goal's timeout). The grasp and pick_place skills pass it to every
 # move they command.
-FRAME_TASK_STABLE_STOP_MSGS = 20
+ARM_MOVE_STABLE_STOP_MSGS = 20
 
 # How the arm controllers end a /grasp_frame_target goal that did not reach its
 # target without a fault: both start a timeout's message with 'timed out
@@ -1245,7 +1245,7 @@ class SkillsBase(Node):
         (the largest over the targeted arms) within (`lin_tol`, `ang_tol`).
 
         `stable_stop_msgs`: if set, cancel the goal and return once the
-        streamed (lin, ang) feedback stays within FRAME_TASK_STABLE_EPS_* of
+        streamed (lin, ang) feedback stays within ARM_MOVE_STABLE_EPS_* of
         its running reference for that many messages: the arm has settled
         short of the controller's tolerance. A planned move stops so only
         within (`lin_tol`, `ang_tol`): its feedback holds still between the
@@ -1298,8 +1298,8 @@ class SkillsBase(Node):
                 # the count while a settled hold accrues it.
                 ref = stable['ref']
                 if (ref is not None
-                        and abs(last['lin'] - ref[0]) <= FRAME_TASK_STABLE_EPS_LIN
-                        and abs(last['ang'] - ref[1]) <= FRAME_TASK_STABLE_EPS_ANG):
+                        and abs(last['lin'] - ref[0]) <= ARM_MOVE_STABLE_EPS_LIN
+                        and abs(last['ang'] - ref[1]) <= ARM_MOVE_STABLE_EPS_ANG):
                     stable['n'] += 1
                 else:
                     stable['ref'], stable['n'] = (last['lin'], last['ang']), 1
@@ -1307,8 +1307,8 @@ class SkillsBase(Node):
                 if stable['n'] >= stable_stop_msgs and (within or not do_plan):
                     self.get_logger().info(
                         f'arm move [{tag}] feedback stable (within '
-                        f'{FRAME_TASK_STABLE_EPS_LIN * 1000:.1f}mm/'
-                        f'{FRAME_TASK_STABLE_EPS_ANG:.3f}rad) for {stable_stop_msgs} '
+                        f'{ARM_MOVE_STABLE_EPS_LIN * 1000:.1f}mm/'
+                        f'{ARM_MOVE_STABLE_EPS_ANG:.3f}rad) for {stable_stop_msgs} '
                         f'msgs (lin={last["lin"] * 1000:.1f}mm '
                         f'ang={last["ang"]:.3f}rad) — stopping early')
                     stable_event.set()
@@ -1389,7 +1389,7 @@ class SkillsBase(Node):
                 orientation=Quaternion(x=float(qx), y=float(qy), z=float(qz), w=float(qw)))
         ok = self._send_grasp_move(targets, timeout_sec, outer_gh, plan,
                                    tag=f'posture {name!r}',
-                                   stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
+                                   stable_stop_msgs=ARM_MOVE_STABLE_STOP_MSGS,
                                    lin_tol=POSTURE_LIN_TOL, ang_tol=POSTURE_ANG_TOL)
         self.get_logger().info(f'posture {name!r}: {"reached" if ok else "FAILED"}')
         return ok

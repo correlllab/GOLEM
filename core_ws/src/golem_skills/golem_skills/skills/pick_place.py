@@ -33,7 +33,7 @@ from tf2_ros import TransformException
 
 from custom_ros_messages.action import SkillGrasp, SkillPickPlace
 
-from ..base import _Run, FRAME_TASK_STABLE_STOP_MSGS, WORLD_FRAME
+from ..base import _Run, ARM_MOVE_STABLE_STOP_MSGS, WORLD_FRAME
 from ..perception_utils import (matrix_to_pose, pose_to_matrix,
                                 transform_to_matrix)
 from ..grasp_synthesis.common import pose_at
@@ -183,7 +183,7 @@ class PickPlaceSkill:
             if not self._servo_pose(
                     lift_frame, to_pinch(rung), world_ok, gh, do_plan=False,
                     duration_sec=LIFT_STEP_DURATION_SEC,
-                    stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
+                    stable_stop_msgs=ARM_MOVE_STABLE_STOP_MSGS,
                     label=f'lift rung {k}/{n_rungs} (+{dz * 100:.0f}cm Z)'):
                 return fail(f'post-grasp lift failed at {dz * 100:.0f}cm of '
                             f'{LIFT_HEIGHT * 100:.0f}cm')

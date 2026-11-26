@@ -17,7 +17,7 @@ from geometry_msgs.msg import Pose, Vector3Stamped
 from rclpy.duration import Duration as RclpyDuration
 from sensor_msgs.msg import Image
 
-from ..base import DEPTH_MAX_M, FRAME_TASK_STABLE_STOP_MSGS
+from ..base import DEPTH_MAX_M, ARM_MOVE_STABLE_STOP_MSGS
 from ..perception_utils import deproject_mask, gemini_boxes
 from .grasp_detection import box_detection
 from .grasp_markers import approach_target_tf
@@ -266,7 +266,7 @@ class GraspServo:
                 self.move_frame_to(
                     frame, up, outer_gh=gh,
                     duration_sec=VISUAL_SERVO_MOVE_SEC, do_plan=False,
-                    stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
+                    stable_stop_msgs=ARM_MOVE_STABLE_STOP_MSGS,
                     label=f'visual servo back-off {retracts}/'
                           f'{VISUAL_SERVO_MAX_RETRACTS}')
                 # The hand is somewhere new: `after` becomes a clock instant
@@ -384,7 +384,7 @@ class GraspServo:
             self.move_frame_to(
                 frame, goal_pose, outer_gh=gh,
                 duration_sec=VISUAL_SERVO_MOVE_SEC,
-                do_plan=False, stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
+                do_plan=False, stable_stop_msgs=ARM_MOVE_STABLE_STOP_MSGS,
                 label=f'visual servo correction iter {it}')
             self._log_servo_tracking(frame, cur, delta, it)
             # a fully executed move lands at z - step[2], an ignored one stays at z

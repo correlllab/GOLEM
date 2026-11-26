@@ -37,7 +37,7 @@ from rclpy.duration import Duration as RclpyDuration
 
 from custom_ros_messages.action import SkillGrasp
 
-from ..base import _Run, FRAME_TASK_STABLE_STOP_MSGS, WORLD_FRAME
+from ..base import _Run, ARM_MOVE_STABLE_STOP_MSGS, WORLD_FRAME
 from ..grasp_synthesis import METHODS, SynthesisInput, method_name
 from ..grasp_synthesis.common import pose_at
 from ..hands import (dex3_closing_joints, dex3_closure, dex3_closure_text,
@@ -666,7 +666,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
             if not self.move_frame_to(
                     frame, wp, outer_gh=gh, duration_sec=seg_sec,
                     do_plan=False, lin_tol=lin_tol, ang_tol=ang_tol,
-                    stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
+                    stable_stop_msgs=ARM_MOVE_STABLE_STOP_MSGS,
                     label=f'{label} {k}/{n}'):
                 return False
         return True
@@ -743,7 +743,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
             if self.move_frame_to(
                     frame, step, outer_gh=gh, duration_sec=AXIS_APPROACH_STEP_SEC,
                     do_plan=False, lin_tol=SERVO_LIN_TOL, ang_tol=SERVO_ANG_TOL,
-                    stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
+                    stable_stop_msgs=ARM_MOVE_STABLE_STOP_MSGS,
                     label=f'in along the grasp axis {k}/{n}'):
                 continue
             halt = self.arm_halt_reason()
@@ -761,7 +761,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
                 frame, contact_w, contact_p, outer_gh=gh,
                 duration_sec=SERVO_DURATION_SEC, max_iter=SERVO_MAX_ITER,
                 lin_tol=SERVO_LIN_TOL, ang_tol=SERVO_ANG_TOL, do_plan=False,
-                stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
+                stable_stop_msgs=ARM_MOVE_STABLE_STOP_MSGS,
                 label='world-frame contact correction')
         halt = self.arm_halt_reason()
         if halt is not None:
@@ -796,7 +796,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
             'before reporting the failure')
         if not self.move_frame_to(frame, up, outer_gh=gh,
                                   duration_sec=FAILURE_RETRACT_SEC, do_plan=False,
-                                  stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
+                                  stable_stop_msgs=ARM_MOVE_STABLE_STOP_MSGS,
                                   label='failure retreat lift'):
             self.get_logger().warn('retreat: lift incomplete')
 

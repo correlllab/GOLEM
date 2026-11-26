@@ -120,8 +120,11 @@ def generate_launch_description():
             # Sim only: the sim's torso IMU is exact, so no offset is removed from it.
             'imu_calibration_robot': 'h12_sim',
         }),
-        # SLAM and Nav2, driving the policy on /cmd_vel.
-        include('golem_slam', 'navigation.launch.py', {**sim_time, 'robot': 'h12'},
+        # SLAM and Nav2, driving the policy on /cmd_vel. The local costmap's footprint is the
+        # body polygon alone (arm_footprint false), as the game has always run: the arms
+        # widening it is off until someone turns it on for the game.
+        include('golem_slam', 'navigation.launch.py',
+                {**sim_time, 'robot': 'h12', 'arm_footprint': 'false'},
                 condition=IfCondition(LaunchConfiguration('use_slam'))),
         # The /skill/* action servers, without waiting for the H1-2's perception and
         # gripper services or frame_task_server, which the game does not run.

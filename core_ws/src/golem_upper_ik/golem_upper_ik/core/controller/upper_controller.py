@@ -80,7 +80,8 @@ class UpperController:
         profile, config: the robot's profile and controller config
             (golem_upper_ik.config.load_controller_config).
         robot_model: the profile's RobotModel at controller.imu_frame, default built here;
-            its state source is the controller's /lowstate subscriber until shutdown().
+            its state source is the controller's /lowstate subscriber until shutdown(), and
+            its position limits are narrowed to the config's clip range (set_position_limits).
         init: run the start-up moves.
         Raises ValueError for a config or model of another robot or IMU frame, and
         RuntimeError (after the shutdown command) when the start-up fails.
@@ -97,6 +98,10 @@ class UpperController:
         elif robot_model.imu_frame != controller['imu_frame']:
             raise ValueError(f'the robot model takes the IMU in {robot_model.imu_frame}, '
                              f"not in controller.imu_frame {controller['imu_frame']}")
+        # SAFETY: the IK, the planner and the waypoint checks keep inside the clip range, so
+        # no solution lies where the clip would cut the command, and a joint parked at its
+        # limit sits limits.clip.position_offset inside the joint table
+        robot_model.set_position_limits(config['limits']['q_clip_limits'])
         self.node = node
         self.profile = profile
         self.config = config
@@ -162,7 +167,8 @@ class UpperController:
             self.ik_solver = IKSolver(robot_model, profile.named_configs, dt=self.dt,
                                       d_min=self.d_min)
             self.planner = PlannerClient(profile, self._planner_config(),
-                                         frame_names=config['planner']['frame_names'])
+                                         frame_names=config['planner']['frame_names'],
+                                         q_limits=config['limits']['q_clip_limits'])
             if init:
                 self._startup_routine()
         except BaseException:

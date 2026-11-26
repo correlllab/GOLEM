@@ -388,6 +388,33 @@ def test_planner_client_plans(robot):
     assert not worker.process.is_alive()
 
 
+def test_planner_worker_plans_in_the_given_range(monkeypatch):
+    """The client hands its range to the worker, whose model plans within it."""
+    from golem_upper_ik.core.planner import planner_process
+    profile = profile_of('h12')
+    q_limits = np.stack([profile.q_low + 0.02, profile.q_high - 0.02], axis=1)
+    client = PlannerClient(profile, q_limits=q_limits)
+    started = {}
+
+    def capture(ctx, target, init_args):
+        """Keep the init_args a worker would start with, and start nothing."""
+        started.update(init_args)
+        raise RuntimeError('captured')
+    monkeypatch.setattr(planner_process, '_Worker', capture)
+    with pytest.raises(RuntimeError, match='captured'):
+        client._start()
+    np.testing.assert_array_equal(started['q_limits'], q_limits)
+    worker = planner_process._PlannerWorker(started)
+    model = worker.robot_model
+    mask = model.reduced_mask
+    # within the URDF's limits (the H1-2's shoulder roll stops at 0.19 rad inward there)
+    urdf_low, urdf_high = model._urdf_position_limits
+    np.testing.assert_array_equal(model.model_body_reduced.lowerPositionLimit,
+                                  np.maximum(urdf_low, q_limits[:, 0])[mask])
+    np.testing.assert_array_equal(worker.planner.model_upper,
+                                  np.minimum(urdf_high, q_limits[:, 1])[mask])
+
+
 def stub_client(worker_main, startup_timeout=30.0):
     """Return an H1-2 PlannerClient running worker_main in its subprocess."""
     client = PlannerClient(profile_of('h12'), startup_timeout=startup_timeout)

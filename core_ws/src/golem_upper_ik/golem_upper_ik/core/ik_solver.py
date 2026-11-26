@@ -5,6 +5,13 @@ the body model (no free-flyer), which carries every body joint's q. Each frame t
 frame to a target pose. With a self-collision model the reduced model's IK keeps the
 collision pairs controller.d_min apart (a self-collision barrier, on the BARRIER_PAIRS
 closest pairs of each step); without one it runs without the barrier. solve_ik_reduced tries seeds in turn, the measured pose first.
+
+The IK keeps every IK joint within the reduced model's position limits (RobotModel's range:
+the controller's clip range). A configuration or seed given outside them is clamped into them
+first, and so is every integrated step (the QP solver meets Pink's configuration limit only to
+its tolerance, about 1e-7 rad, and Pink's acceleration limit takes the square root of the
+distance to the limit, which is not a number past it), so every q the solver returns or
+integrates to lies within them.
 """
 import time
 from dataclasses import dataclass
@@ -159,19 +166,35 @@ class IKSolver:
         for task_name in list(self.frame_tasks.keys()):
             del self.frame_tasks[task_name]
 
+    def _clamp_reduced(self, q_reduced):
+        """Return reduced q clamped into the reduced model's position limits."""
+        model = self.robot_model.model_body_reduced
+        return np.clip(q_reduced, model.lowerPositionLimit, model.upperPositionLimit)
+
     def update_configurations(self, q=None):
-        """Set both configurations from body q (default: the measured state)."""
+        """Set both configurations from body q (default: the measured state).
+
+        The IK joints are clamped into the position limits first: a measured pose past them
+        (a joint pushed or overshooting) restarts the IK at the limit.
+        """
         if q is None:
             q = self.robot_model.state['q']
-        q = np.asarray(q, dtype=float)
+        q = np.array(q, dtype=float)
+        q[self.robot_model.reduced_mask] = self._clamp_reduced(q[self.robot_model.reduced_mask])
         self.configuration.update(q)
         self.configuration_reduced.update(q[self.robot_model.reduced_mask])
 
     def integrate(self, vel: np.ndarray):
-        """Advance both configurations by body joint velocity vel (rad/s) over dt."""
-        vel_reduced = vel[self.robot_model.reduced_mask]
-        self.configuration.integrate_inplace(vel, self.dt)
-        self.configuration_reduced.integrate_inplace(vel_reduced, self.dt)
+        """Advance both configurations by body joint velocity vel (rad/s) over dt.
+
+        The IK joints end clamped into the position limits.
+        """
+        mask = self.robot_model.reduced_mask
+        q = self.configuration.integrate(vel, self.dt)
+        q[mask] = self._clamp_reduced(q[mask])
+        self.configuration.update(q)
+        self.configuration_reduced.update(
+            self._clamp_reduced(self.configuration_reduced.integrate(vel[mask], self.dt)))
 
     def _ik_reduced(self, tasks, dt):
         """Return the reduced joint velocity Pink solves for tasks over dt, with the barrier."""
@@ -238,8 +261,8 @@ class IKSolver:
         return normalized
 
     def _seed_list(self):
-        """Return the seeds as (name, reduced q)."""
-        return [(seed_name, self._normalize_reduced_seed(seed, seed_name))
+        """Return the seeds as (name, reduced q), each clamped into the position limits."""
+        return [(seed_name, self._clamp_reduced(self._normalize_reduced_seed(seed, seed_name)))
                 for seed_name, seed in self._default_seed_items()]
 
     def _best_attempt(self, attempts):
@@ -270,7 +293,8 @@ class IKSolver:
             )
             tasks = list(self.frame_tasks.values()) + [self.posture_task]
             vel = self._ik_reduced(tasks, alpha)
-            self.configuration_reduced.integrate_inplace(vel, alpha)
+            self.configuration_reduced.update(
+                self._clamp_reduced(self.configuration_reduced.integrate(vel, alpha)))
             linear_err, angular_err = self._frame_task_errors(
                 self.configuration_reduced,
             )

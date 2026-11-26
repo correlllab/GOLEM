@@ -135,7 +135,9 @@ limits:
   # (every body slot), a list over the body slots or a list over the upper slots (the legs
   # then 0); each >= 0. golem_safety clips again with its own config.
   clip:
-    # rad: q within [low + this, high - this] of the robot's position limits
+    # rad: q within [low + this, high - this] of the robot's position limits (the joint
+    # table). The IK, the planner and the path checks keep within the same range (within the
+    # URDF's limits too), so a joint the IK parks at a limit sits this far inside the table
     position_offset: 0.001
     # |dq| at most this times the robot's velocity limit
     velocity_ratio: 0.10

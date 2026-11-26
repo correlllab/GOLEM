@@ -52,7 +52,8 @@ FREQUENCY_DEFAULTS = {
     'check_hz': 1000.0,  # the follow gate's check between control steps
 }
 # limits.clip: q within [low + position_offset, high - position_offset], |dq| at most
-# velocity_ratio * the velocity limit, |tau| at most torque_ratio * the torque limit
+# velocity_ratio * the velocity limit, |tau| at most torque_ratio * the torque limit. The q
+# range is also the IK's and the planner's position range (UpperController)
 CLIP_DEFAULTS = {
     'position_offset': 0.001,  # rad
     'velocity_ratio': 0.10,

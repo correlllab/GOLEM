@@ -3,8 +3,8 @@
 Ros is one rclpy context per test with an executor spinning its nodes in a thread;
 FakeRobot publishes /lowstate; Recorder records a command topic; Echo plays golem_safety
 relaying the controller's commands on its output topic. profile_of, shared_model (the
-session's robot model, put back at rest after the test) and G1_LIMP_ARMS (where the G1's
-limp arms hang) serve the controller tests.
+session's robot model, put back at rest and on the URDF's limits after the test) and
+G1_LIMP_ARMS (where the G1's limp arms hang) serve the controller tests.
 
 For the controller's closed loop: FollowingRobot executes the controller's commands as an
 engaged golem_safety would relay them, and relays them itself; RelayedRobot sits behind
@@ -56,12 +56,17 @@ def profile_of(robot):
 
 
 def shared_model(ros, models, robot):
-    """Return the session's model of robot (models fixture), put back at rest at the end."""
+    """Return the session's model of robot (models fixture), put back at rest at the end.
+
+    A controller built on it narrows its position limits to the config's clip range; the end
+    puts back the URDF's.
+    """
     model = models(robot)
 
     def rest():
-        """Detach the state source and re-lock the reduced model at q = 0."""
+        """Detach the state source, restore the URDF's limits, re-lock the reduced model at 0."""
         model.state_subscriber = None
+        model.set_position_limits(None)
         model.rebuild_reduced_model(np.zeros(model.num_motor))
     ros.on_close(rest)
     return model

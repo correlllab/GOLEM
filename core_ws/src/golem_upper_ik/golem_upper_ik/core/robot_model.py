@@ -17,6 +17,10 @@ frozen out of every model, so the joints left are the profile's body joints in /
 values feed the models directly. Joint arrays (q, dq, tau) hold one value per body joint in
 slot order; the _reduced ones one per IK joint, in the profile's enabled_joints order. The
 measured state comes from a StateSource (state_subscriber).
+
+The body model's position limits, which every reduced model takes, are the URDF's, or a
+narrower range given as q_limits (set_position_limits): the controller gives its config's
+clip range, so the IK, the planner and the limit checks all keep inside what it commands.
 """
 from collections.abc import Mapping
 import os
@@ -94,12 +98,14 @@ class FixedState:
 class RobotModel:
     """Hold one robot's free-flyer, body, reduced and self-collision models (module doc)."""
 
-    def __init__(self, profile: RobotProfile, imu_frame: str | None = None):
+    def __init__(self, profile: RobotProfile, imu_frame: str | None = None, q_limits=None):
         """Build the models from profile, at rest at q = 0 with no state source.
 
         profile: the robot's URDF, body joints, IK joints and self-collision files.
         imu_frame: the URDF frame the /lowstate IMU is mounted on, from which full_q recovers
             the pelvis orientation; default the profile's. ValueError if the URDF lacks it.
+        q_limits: the body joints' position range, as set_position_limits takes it; default
+            the URDF's limits.
         """
         filename = profile.urdf_path
         if os.path.splitext(filename)[1] != '.urdf':
@@ -126,6 +132,9 @@ class RobotModel:
         self.model_body, _, _ = self._load_urdf_body(filename)
         self._add_grasp_frames(self.model_body, filename)
         self.data_body = self.model_body.createData()
+        self._urdf_position_limits = (self.model_body.lowerPositionLimit.copy(),
+                                      self.model_body.upperPositionLimit.copy())
+        self._apply_position_limits(q_limits)
 
         # the measured state; without a source the model is at rest at q = 0
         self.state_subscriber: StateSource | None = None
@@ -201,6 +210,39 @@ class RobotModel:
             self.model_body, self.frozen_ids_body, reference_q
         )
         self.data_body_reduced = self.model_body_reduced.createData()
+        self._reduced_reference_q = np.array(reference_q, dtype=float)
+
+    def _apply_position_limits(self, q_limits):
+        """Set the body model's position limits to q_limits within the URDF's (None: the URDF's)."""
+        lower, upper = (limit.copy() for limit in self._urdf_position_limits)
+        if q_limits is not None:
+            q_limits = np.asarray(q_limits, dtype=float)
+            if q_limits.shape != (self.num_motor, 2):
+                raise ValueError(f'robot {self.profile.robot}: q_limits must have shape '
+                                 f'({self.num_motor}, 2), not {q_limits.shape}')
+            if not np.all(np.isfinite(q_limits)):
+                raise ValueError(f'robot {self.profile.robot}: q_limits must be finite')
+            lower = np.maximum(lower, q_limits[:, 0])
+            upper = np.minimum(upper, q_limits[:, 1])
+            empty = np.nonzero(lower >= upper)[0]
+            if len(empty):
+                raise ValueError(f'robot {self.profile.robot}: q_limits leave joint '
+                                 f'{self.body_joints[empty[0]]} no range '
+                                 f'([{lower[empty[0]]}, {upper[empty[0]]}])')
+        self.model_body.lowerPositionLimit = lower
+        self.model_body.upperPositionLimit = upper
+
+    def set_position_limits(self, q_limits=None):
+        """Narrow the body joints' position range to q_limits, within the URDF's limits.
+
+        q_limits: (body joints, 2) [low, high] in rad, in slot order; None restores the URDF's
+        limits. The reduced model is rebuilt with the frozen joints where they were locked,
+        so it, the IK and the planner built on it take the new range; callers must rebind
+        anything holding the old reduced model (IKSolver.rebuild_reduced). ValueError for a
+        mis-shaped or non-finite q_limits, or one that leaves a joint no range.
+        """
+        self._apply_position_limits(q_limits)
+        self.rebuild_reduced_model(self._reduced_reference_q)
 
     def rebuild_reduced_model(self, reference_q=None):
         """Re-lock the frozen joints at reference_q (default: the measured state).
@@ -441,7 +483,7 @@ class RobotModel:
         return data.oMf[self.model_body_reduced.getFrameId(frame_name)].np
 
     def check_within_limits_reduced(self, q_reduced):
-        """Return whether every IK joint of q_reduced is within its URDF position limits."""
+        """Return whether every IK joint of q_reduced is within its position limits."""
         return (
             np.all(q_reduced <= self.model_body_reduced.upperPositionLimit) and
             np.all(q_reduced >= self.model_body_reduced.lowerPositionLimit)

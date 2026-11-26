@@ -449,6 +449,27 @@ def test_hold_pinned_at_a_limit_is_not_converged(ros, models, robot):
     assert limited[0][2] == pytest.approx(limits[elbow, 1])
 
 
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_controller_keeps_the_ik_in_the_clip_range(ros, models, robot):
+    """The controller narrows its model's and its planner's range to the config's clip range."""
+    from golem_upper_ik.core.controller.frame_controller import FrameController
+    profile = profile_of(robot)
+    config = config_of(robot, CONFIGS[robot])
+    clip = config['limits']['q_clip_limits']
+    model = shared_model(ros, models, robot)
+    mask = model.reduced_mask
+    low = np.maximum(model.model_body.lowerPositionLimit, clip[:, 0])[mask]
+    high = np.minimum(model.model_body.upperPositionLimit, clip[:, 1])[mask]
+    RelayedRobot(ros, profile, body_pose(profile, START[robot]), '/lowcmd').start()
+    controller = FrameController(ros.node('controller'), profile, config, robot_model=model,
+                                 init=False)
+    ros.on_close(controller.shutdown)
+    np.testing.assert_array_equal(model.model_body_reduced.lowerPositionLimit, low)
+    np.testing.assert_array_equal(model.model_body_reduced.upperPositionLimit, high)
+    assert controller.ik_solver.configuration_reduced.model is model.model_body_reduced
+    np.testing.assert_array_equal(controller.planner.q_limits, clip)
+
+
 def test_execute_path_waits_for_the_follow_gate(ros, models):
     """execute_path is refused while nothing relays the commands."""
     from golem_upper_ik.core.controller.frame_controller import FrameController

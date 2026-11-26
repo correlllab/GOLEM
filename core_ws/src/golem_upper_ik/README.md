@@ -179,6 +179,13 @@ then moves only in the start-up step 4.
   their measured angles, so the IK's forward kinematics match the robot, and starts the IK
   from the last command when it is within 0.1 rad of the measured pose on every IK joint;
   otherwise from the measured pose, dropping the held torque bias.
+- The IK, the planner's bounds and the path checks keep every IK joint within the clip range,
+  `limits.clip.position_offset` inside the joint table (and within the URDF's limits): the
+  controller narrows its robot model's position limits to it (`RobotModel.set_position_limits`)
+  and hands the same range to the planner's subprocess. No solution lies where the clip would
+  cut the command, and a joint the IK parks at a limit sits `position_offset` inside the table,
+  so its overshoot past the command stays clear of `golem_safety`'s estop range. A seed, a
+  measured pose or an integrated step outside the range is clamped into it.
 - A direct goal (`plan: false`) steps the IK at `ctrl_hz`, its arm velocities limited to
   `dq_lim` per joint and `v_lim`/`w_lim` at the end effectors. An iteration that takes longer
   than the control period (a loaded host) runs the IK steps it owes next time, one per period

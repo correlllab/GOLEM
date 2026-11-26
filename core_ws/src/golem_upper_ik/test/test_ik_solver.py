@@ -245,3 +245,66 @@ def test_g1_arms_down_stops_short(models):
     assert np.max(np.abs(path[-1] - named['arms_down'])) > 0.05
     assert all(model.check_collision_free_reduced(q) for q in path)
 
+
+
+@pytest.mark.parametrize('robot, base', [('h12', 'home'), ('g1', 't_pose')])
+def test_solutions_stay_in_the_clip_range(models, robot, base):
+    """The IK never returns or steps to a configuration outside the controller's clip range.
+
+    Each target is the pose of the base posture with one IK joint 0.2 rad past its joint
+    table limit, and the measured pose is that configuration, outside the range too: the
+    solves from every seed and 30 control steps from the measured pose all stay within the
+    clip range. A target the self-collision barrier leaves no IK step for (NoSolutionFound)
+    returns nothing; at least three in four targets of each robot have one.
+    """
+    from pink.exceptions import NoSolutionFound
+    from golem_upper_ik.config import load_controller_config
+    from golem_upper_ik.core.ik_solver import IKSolver
+    model = models(robot)
+    profile = model.profile
+    config = load_controller_config(robot, {'h12': 'safety_split', 'g1': 'g1_split'}[robot])
+    clip = config['limits']['q_clip_limits']
+    mask = model.reduced_mask
+    low = np.maximum(model.model_body.lowerPositionLimit, clip[:, 0])[mask]
+    high = np.minimum(model.model_body.upperPositionLimit, clip[:, 1])[mask]
+    table = np.stack([profile.q_low, profile.q_high], axis=1)[mask]
+    start = np.asarray(profile.named_configs[base], dtype=float)
+    left, right = profile.ee_frames
+    cases = solved = 0
+    try:
+        model.set_position_limits(clip)
+        solver = IKSolver(model, profile.named_configs, dt=0.02,
+                          d_min=config['controller']['d_min'])
+        for joint in range(mask.sum()):
+            for side, past in ((0, -0.2), (1, 0.2)):
+                cases += 1
+                q_past = start.copy()
+                q_past[joint] = table[joint, side] + past
+                q_body = model.zero_q_body
+                q_body[mask] = q_past
+                measured(model, q_body)
+                solver.clear_frame_tasks()
+                solver.add_frame_task('left', left)
+                solver.add_frame_task('right', right)
+                solver.configuration_reduced.update(q_past)
+                for task in solver.frame_tasks.values():
+                    task.set_target_from_configuration(solver.configuration_reduced)
+                where = (profile.enabled_joints[joint], 'low' if side == 0 else 'high')
+                try:
+                    result = solver.solve_ik_reduced(alpha=0.1, timeout=0.05)
+                    q = result.q[mask]
+                    assert np.all(q >= low - 1e-9) and np.all(q <= high + 1e-9), where
+                    solver.update_configurations()
+                    for _ in range(30):
+                        solver.integrate(solver.ik_step_reduced())
+                        q = solver.q_reduced
+                        assert np.all(q >= low - 1e-9) and np.all(q <= high + 1e-9), where
+                        np.testing.assert_array_equal(solver.q[mask], q)
+                except NoSolutionFound:
+                    continue
+                solved += 1
+    finally:
+        model.state_subscriber = None
+        model.set_position_limits(None)
+        model.rebuild_reduced_model(np.zeros(model.num_motor))
+    assert solved >= 0.75 * cases, (solved, cases)

@@ -134,15 +134,6 @@ class IKSolver:
         """Return a copy of the reduced configuration's q, one value per IK joint."""
         return np.copy(self.configuration_reduced.q)
 
-    def compute_error_reduced(self, task: pink.Task, q_reduced: np.ndarray) -> np.ndarray:
-        """Return task's error at q_reduced, on a reduced configuration of its own."""
-        configuration_reduced = pink.Configuration(
-            self.robot_model.model_body_reduced,
-            self.robot_model.data_body_reduced,
-            q_reduced,
-        )
-        return task.compute_error(configuration_reduced)
-
     def add_frame_task(self, task_name: str, frame_name: str,
                        position_cost: float = 50.0,
                        orientation_cost: float = 30.0,

@@ -376,16 +376,6 @@ class UpperController:
                  'right': self.robot_model.right_arm_index}
         return sorted(joint for arm in arms for joint in index[arm])
 
-    def ee_transformations(self):
-        """Return the left and right end effectors' 4x4 placements in the pelvis frame.
-
-        From the reduced model at one measured state, on data of their own, so a call from
-        another thread leaves the IK's data alone.
-        """
-        q_reduced = self.robot_model.state_reduced['q']
-        return tuple(self.robot_model.get_frame_transformation_reduced(name, q_reduced)
-                     for name in (self.left_ee_name, self.right_ee_name))
-
     def check_state_fresh(self):
         """Raise StaleStateError if /lowstate is staler than max_state_lag_ms (when on)."""
         if self.max_state_lag_ms <= 0.0:
@@ -575,16 +565,6 @@ class UpperController:
     def update_robot_model(self):
         """Update the robot model's kinematics from the measured state."""
         self.robot_model.update_kinematics()
-
-    @property
-    def reduced_configuration_error(self):
-        """Return the measured IK joints' error from the joint-space goal, rad."""
-        return self.ik_solver.compute_error_reduced(
-            self.ik_solver.config_task, self.robot_model.state_reduced['q'])
-
-    def set_reduced_configuration_target(self, q_reduced):
-        """Set the joint-space goal that reduced_configuration_error measures against."""
-        self.ik_solver.config_task.set_target(q_reduced)
 
     def goto_reduced_configuration(self, q_reduced):
         """Command one IK step toward q_reduced; return the body joint velocity, rad/s."""

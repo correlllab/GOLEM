@@ -33,8 +33,8 @@ held_joints:
 # turns them off with the IK joints (mode 0, zero gains and torque)
 shutdown_keeps_held_joints: false
 
-# [left, right] end-effector frames: the speed limits' frames and the
-# {left,right}_ee_pose topics' frames
+# [left, right] end-effector frames: the frames of the direct moves' v_lim and w_lim
+# speed limits
 ee_frames: [left_wrist_yaw_link, right_wrist_yaw_link]
 # [left, right]: the planner's default frames (controller config planner.frame_names)
 planner_frames: [left_grasp_frame, right_grasp_frame]
@@ -52,8 +52,9 @@ grasp_frames:
 # default of controller.imu_frame
 imu_frame: torso_link
 
-# name -> one angle per enabled joint, rad, within the joint limits: the postures
-# /named_config moves to. The IK's fallback seeds (ik_solver.SEED_CONFIGS: home, t_pose,
+# name -> one angle per enabled joint, rad, within the joint limits: named postures, read by
+# the start-up (startup_sequence) and, through this file, by golem_skills' and the tests'
+# grasp-frame postures. The IK's fallback seeds (ik_solver.SEED_CONFIGS: home, t_pose,
 # arms_front_45) must be among them.
 named_configs:
   home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,

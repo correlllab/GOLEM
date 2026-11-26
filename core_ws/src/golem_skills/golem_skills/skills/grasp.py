@@ -521,9 +521,12 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         else the move in along the grasp axis (_move_in_along_axis). A
         candidate is dropped when its pre-grasp is not reached or its axis
         move stops too early; the arms then return to the posture `reset`
-        ((name, posture), goto_posture) by a PLANNED move, because a failed
-        Cartesian approach can leave a joint pinned at its limit, from which no
-        further direct move makes progress. A visual servo that does not converge
+        ((name, posture), goto_posture) by a PLANNED move to its pinch-frame
+        poses. The posture is a pose, not a joint configuration: the IK may
+        reach it with the joints elsewhere than the named configuration it was
+        derived from (in the H1-2 sim, a wrist yaw left at its limit by a staging
+        posture stayed there), and a planned goal the IK cannot solve fails and
+        halts the arms for the goal. A visual servo that does not converge
         closes where it stopped (best-effort). On failure the first element
         is a _Contact when the caller should retreat before reporting (a
         cancel or timeout during the servo), else None. Each candidate's

@@ -1024,7 +1024,7 @@ Visualization Manager:
       Enabled: false
       Head Length: 0.10000000149011612
       Head Radius: 0.10000000149011612
-      Name: L_EE_Pose
+      Name: L_Grasp_Frame_Pose
       Shaft Length: 0.10000000149011612
       Shaft Radius: 0.05000000074505806
       Shape: Arrow
@@ -1034,7 +1034,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /left_ee_pose
+        Value: /left_grasp_frame_pose
       Value: false
     - Alpha: 1
       Axes Length: 1
@@ -1044,7 +1044,7 @@ Visualization Manager:
       Enabled: false
       Head Length: 0.10000000149011612
       Head Radius: 0.10000000149011612
-      Name: R_EE_Pose
+      Name: R_Grasp_Frame_Pose
       Shaft Length: 0.10000000149011612
       Shaft Radius: 0.05000000074505806
       Shape: Arrow
@@ -1054,7 +1054,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /right_ee_pose
+        Value: /right_grasp_frame_pose
       Value: false
     - Alpha: 1
       Arrow Length: 0.10000000149011612

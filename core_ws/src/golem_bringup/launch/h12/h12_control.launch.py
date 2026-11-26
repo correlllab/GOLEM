@@ -61,7 +61,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'use_frame_task', default_value='true',
             description='true: start frame_task_server, the arm IK action server '
-                        '(/frame_task, /named_config)'),
+                        '(/grasp_frame_target)'),
         DeclareLaunchArgument(
             'safety_config', default_value='relax_safety_split.yaml',
             description='golem_safety config: a name under its config/h12/, or a path. '

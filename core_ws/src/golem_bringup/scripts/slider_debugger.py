@@ -1,23 +1,21 @@
 #!/usr/bin/env python3
 """
-Drive the H1-2's frame_task_server and Magpie grippers from a slider window (Tk).
+Drive the H1-2's arm controller and Magpie grippers from a slider window (Tk).
 
-    ros2 run golem_bringup slider_debugger.py [--ros-args -p target_frames:="[...]"]
+    ros2 run golem_bringup slider_debugger.py
 
-Twelve sliders (x, y, z in m and roll, pitch, yaw in rad for each arm) set /frame_task
-targets for the GraspGenX gripper-base frames, left_graspgenx_frame and
-right_graspgenx_frame, the frames the grasp skill commands, so a grasp pose can be
-replayed by hand to watch the IK converge or contort. Two more sliders set each
-gripper's gripper/set_position (0 closed, 1 open, scaled by gripper_max_mm). Send sends
-all of them; each send cancels the arm goal in flight, and closing the window cancels
-the last one.
+Twelve sliders (x, y, z in m and roll, pitch, yaw in rad for each arm) set one
+/grasp_frame_target goal for both arms' grasp frames, left_grasp_frame and
+right_grasp_frame (the Magpie pinch points), so a pose can be replayed by hand to watch
+the IK converge or contort. Two more sliders set each gripper's gripper/set_position (0
+closed, 1 open, scaled by gripper_max_mm). Send sends all of them; each send cancels the
+arm goal in flight, and closing the window cancels the last one.
 
-The pose is the driven frame's position and xyz-Euler angles in pelvis. For the
-graspgenx frames +z is the approach axis (roll, pitch, yaw 0 points it along pelvis +z);
-1.5708 0 1.5708 matches the wrist's identity orientation.
+The pose is the grasp frame's position and xyz-Euler angles in pelvis; the H1-2's grasp
+frames have the wrist's orientation, so 0 0 0 points the gripper along pelvis +x.
 
-ROS parameters: target_frames (the two frames driven, left then right),
-left_gripper_service, right_gripper_service, gripper_max_mm (mm, the fully open width).
+ROS parameters: left_gripper_service, right_gripper_service, gripper_max_mm (mm, the
+fully open width).
 """
 
 import math
@@ -28,21 +26,21 @@ from scipy.spatial.transform import Rotation
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
-from geometry_msgs.msg import Pose, Point, Quaternion
+from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
 from builtin_interfaces.msg import Duration
 
-from custom_ros_messages.action import FrameTask
+from custom_ros_messages.action import GraspFrameTarget
 from magpie_msgs.srv import SetGripperPosition
 
 
-# The default target_frames: the frames the grasp skill commands.
-TARGET_FRAMES = ('left_graspgenx_frame', 'right_graspgenx_frame')
+# the frames /grasp_frame_target drives, left then right: the sliders' titles
+TARGET_FRAMES = ('left_grasp_frame', 'right_grasp_frame')
 SPIN_PERIOD_MS = 100  # ms between ROS spins from the Tk loop
-GOAL_DURATION_SEC = 30  # s, each /frame_task goal's duration
+GOAL_TIMEOUT_SEC = 30  # s of robot time, each /grasp_frame_target goal's timeout
 
 
 class SliderDebugger(Node):
-    """Send /frame_task goals and gripper positions from the sliders' values."""
+    """Send /grasp_frame_target goals and gripper positions from the sliders' values."""
 
     def __init__(self):
         """Declare the parameters and create the action and service clients."""
@@ -51,13 +49,12 @@ class SliderDebugger(Node):
         self.declare_parameter('left_gripper_service', '/left/gripper/set_position')
         self.declare_parameter('right_gripper_service', '/right/gripper/set_position')
         self.declare_parameter('gripper_max_mm', 85.0)
-        self.declare_parameter('target_frames', list(TARGET_FRAMES))
         self.left_gripper_srv_name = self.get_parameter('left_gripper_service').value
         self.right_gripper_srv_name = self.get_parameter('right_gripper_service').value
         self.gripper_max_mm = float(self.get_parameter('gripper_max_mm').value)
-        self.target_frames = list(self.get_parameter('target_frames').value)
+        self.target_frames = list(TARGET_FRAMES)
 
-        self.frame_task_cli = ActionClient(self, FrameTask, '/frame_task')
+        self.grasp_target_cli = ActionClient(self, GraspFrameTarget, '/grasp_frame_target')
         self.left_gripper_cli = self.create_client(SetGripperPosition, self.left_gripper_srv_name)
         self.right_gripper_cli = self.create_client(SetGripperPosition,
                                                     self.right_gripper_srv_name)
@@ -80,7 +77,7 @@ class SliderDebugger(Node):
 
     def send_targets(self, left_xyzrpy, right_xyzrpy):
         """Cancel the goal in flight and send both frames' targets, if the server is up."""
-        if not self.frame_task_cli.server_is_ready():
+        if not self.grasp_target_cli.server_is_ready():
             return
         if self._goal_handle is not None:
             try:
@@ -89,15 +86,14 @@ class SliderDebugger(Node):
                 pass
             self._goal_handle = None
 
-        goal = FrameTask.Goal()
-        goal.frame_names = list(self.target_frames)
-        goal.frame_targets = [
-            self._build_pose(*left_xyzrpy),
-            self._build_pose(*right_xyzrpy),
-        ]
-        goal.duration = Duration(sec=GOAL_DURATION_SEC, nanosec=0)
+        goal = GraspFrameTarget.Goal()
+        goal.left = PoseStamped(pose=self._build_pose(*left_xyzrpy))
+        goal.left.header.frame_id = 'pelvis'
+        goal.right = PoseStamped(pose=self._build_pose(*right_xyzrpy))
+        goal.right.header.frame_id = 'pelvis'
+        goal.timeout = Duration(sec=GOAL_TIMEOUT_SEC, nanosec=0)
 
-        send_future = self.frame_task_cli.send_goal_async(goal)
+        send_future = self.grasp_target_cli.send_goal_async(goal)
         send_future.add_done_callback(self._on_goal_response)
 
     def _on_goal_response(self, future):
@@ -105,7 +101,7 @@ class SliderDebugger(Node):
         try:
             handle = future.result()
         except Exception as exc:
-            self.get_logger().warn(f'frame_task send failed: {exc}')
+            self.get_logger().warn(f'grasp_frame_target send failed: {exc}')
             return
         if handle is not None and handle.accepted:
             self._goal_handle = handle
@@ -127,7 +123,7 @@ class SliderDebugger(Node):
         cli.call_async(req)
 
     def cancel_active_goal(self):
-        """Cancel the /frame_task goal in flight, if any."""
+        """Cancel the /grasp_frame_target goal in flight, if any."""
         if self._goal_handle is not None:
             try:
                 self._goal_handle.cancel_goal_async()

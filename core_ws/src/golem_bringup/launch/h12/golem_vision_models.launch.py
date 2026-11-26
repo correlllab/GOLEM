@@ -92,7 +92,7 @@ def generate_launch_description():
 
         # GraspGenX grasp planning loads a heavy GPU model, so it starts only with
         # the skills that use it; the grasp skill chains
-        # gemini -> sam -> graspgen -> frame_task.
+        # gemini -> sam -> graspgen -> /grasp_frame_target.
         Node(
             package='model_server',
             executable='graspgen_server',

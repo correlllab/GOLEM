@@ -25,8 +25,9 @@ controller:
   startup_move_timeout: 30.0
   threshold_ik: 0.0001
   threshold_joint: 0.01
-  threshold_linear: 0.001
-  threshold_angular: 0.002
+  # m, rad: the sim's (sim_split.yaml says why); unmeasured on the real G1
+  threshold_linear: 0.002
+  threshold_angular: 0.01
 
 planner:
   planner: RRTConnect

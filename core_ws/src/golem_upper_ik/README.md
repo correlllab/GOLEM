@@ -244,7 +244,9 @@ then moves only in the start-up step 4.
   be lifted onto it, about 11 mm in the H1-2 sim). Its `timeout` (0: `controller.timeout`) counts
   robot time from its start, planning and the path included. It succeeds once every target has
   stayed within `threshold_linear` and `threshold_angular` for `GRASP_SETTLE_S` (0.2 s of robot
-  time); the hold step's own convergence ends nothing. It aborts at the timeout, on a planning
+  time); the hold step's own convergence ends nothing. Both robots' configs set the thresholds
+  to 2 mm and 10 mrad: in the sims the hold settles within about 0.6 mm and 2 mrad, and a
+  planned goal holds the IK solve's solution, which stops within 1 mm and 10 mrad. It aborts at the timeout, on a planning
   or execution failure, on a hold pinned at a joint limit and on a stale `/lowstate`. A cancel,
   or the timeout, during a planned path stops it before its next waypoint; the IK solve and the
   planning before the path are not cut short (the planner's first request also builds its

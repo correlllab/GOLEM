@@ -12,19 +12,19 @@ START = 100.0  # when the policy started (running_since), s
 
 
 def test_band_release_waits_for_the_policy():
-    """Ask for nothing before the policy runs, then once /left_ee_pose has come."""
+    """Ask for nothing before the policy runs, then once /left_grasp_frame_pose has come."""
     band = BandRelease(enabled=True, max_wait=MAX_WAIT)
     for now in (START, START + 2 * MAX_WAIT):
         assert band.poll(now, None, ee_pose_seen=True, service_ready=True) is None
     reason = band.poll(START + 0.1, START, ee_pose_seen=True, service_ready=True)
-    assert reason is not None and '/left_ee_pose' in reason
+    assert reason is not None and '/left_grasp_frame_pose' in reason
     assert not band.released
     # the call is in flight: its reply is the awaited result
     assert band.result(True) and band.released
 
 
-def test_band_release_waits_for_frame_task_or_max_wait():
-    """Ask max_wait after the policy started when no /left_ee_pose has come."""
+def test_band_release_waits_for_the_arm_controller_or_max_wait():
+    """Ask max_wait after the policy started when no /left_grasp_frame_pose has come."""
     band = BandRelease(enabled=True, max_wait=MAX_WAIT)
     for now in (START, START + 1.0, START + MAX_WAIT - 0.01):
         assert band.poll(now, START, ee_pose_seen=False, service_ready=True) is None

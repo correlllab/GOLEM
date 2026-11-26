@@ -31,7 +31,7 @@ Locomotion requires 5 simulation seconds of unsupported ALMI balance,
 policy throughout, as in bringup. The leg node runs on the H1-2's sim run config
 (`golem_lowerbody_rl`'s `config/h12/sim.yaml`): its policy starts only once the
 arm controller's commands are fresh and `frame_task_server` has published its
-first `/left_ee_pose`, so this case runs `frame_task_server` too, holding the
+first `/left_grasp_frame_pose`, so this case runs `frame_task_server` too, holding the
 torso and arms as the sim bringup does. Tests check physical height, tilt, displacement, both knees, support
 release, telemetry continuity, and active policies. No fixed base is allowed.
 `isaac locomotion` cannot pass: `run.sh` refuses it and `run_all.sh` skips it. Isaac's

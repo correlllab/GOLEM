@@ -154,7 +154,7 @@ class Rig:
         """
         Drive the supervisor to phase, confirming when the run config needs it.
 
-        /left_ee_pose comes first, except for holding without a confirm (the sims), where
+        /left_grasp_frame_pose comes first, except for holding without a confirm (the sims), where
         its absence is what keeps the policy from starting.
         """
         if phase is not Phase.HOLDING or self.config.startup.wait_for_confirm:
@@ -314,7 +314,7 @@ def test_alternating_reasons_to_wait_are_logged_at_most_every_5_s():
     rig = Rig('h12', 'sim')
     rig.until(Phase.HOLDING, upper=False)
     start = len(rig.log)
-    # no arm controller for 0.6 s, then 10 ms of it with no /left_ee_pose, for 7.3 s
+    # no arm controller for 0.6 s, then 10 ms of it with no /left_grasp_frame_pose, for 7.3 s
     for _ in range(12):
         rig.feed(300, upper=False)
         rig.feed(5)
@@ -322,7 +322,7 @@ def test_alternating_reasons_to_wait_are_logged_at_most_every_5_s():
              if m.startswith('the policy waits')]
     kinds = {kind for kind, _ in lines}
     assert kinds == {'the policy waits: no recent command from the arm controller',
-                     'the policy waits: frame_task_server is not up yet'}, lines
+                     'the policy waits: the arm controller is not up yet'}, lines
     for kind in kinds:
         assert np.all(np.diff([t for k, t in lines if k == kind]) >= 5.0)
     assert len(lines) <= 4, lines
@@ -437,11 +437,11 @@ def test_engage_resets_only_when_the_spec_says():
 
 
 def test_sim_policy_waits_for_ee_pose_or_max_wait():
-    """In the sim, start on the first /left_ee_pose, or max_wait after holding began."""
+    """In the sim, start on the first /left_grasp_frame_pose, or max_wait after holding began."""
     rig = Rig('h12', 'sim', startup={'wait_for_confirm': False})
     rig.feed(round(6.0 / SAMPLE_DT))
     assert rig.sup.phase is Phase.HOLDING and not rig.runner.inputs
-    assert 'the policy waits: frame_task_server is not up yet (no /left_ee_pose)' in \
+    assert 'the policy waits: the arm controller is not up yet (no /left_grasp_frame_pose)' in \
         rig.messages()
     rig.sup.on_ee_pose(rig.mono)
     rig.feed(SAMPLES_PER_STEP)
@@ -456,12 +456,12 @@ def test_sim_policy_waits_for_ee_pose_or_max_wait():
     rig.until(Phase.RUNNING)
     assert rig.mono - holding_at == pytest.approx(3.0, abs=0.021)
     (warning,) = rig.messages('warn')
-    assert warning.startswith('frame_task_server is not up yet (no /left_ee_pose) 3 s after '
-                              'the legs were pre-posed: the policy no longer waits for it')
+    assert warning.startswith('the arm controller is not up yet (no /left_grasp_frame_pose) 3 s '
+                              'after the legs were pre-posed: the policy no longer waits for it')
 
 
 def test_real_run_has_no_ee_pose_gate():
-    """Accept the confirm on the real robot without any /left_ee_pose."""
+    """Accept the confirm on the real robot without any /left_grasp_frame_pose."""
     rig = Rig('g1', 'real')
     rig.until(Phase.HOLDING)
     rig.feed(SAMPLES_PER_STEP)
@@ -547,7 +547,7 @@ def test_band_called_once_and_never_retried():
     assert rig.messages('warn') == ['the elastic band is due for release, but '
                                     '/elastic_band/toggle is not there yet: waiting for it']
     reason = rig.sup.band_due(rig.mono)
-    assert reason == 'the policy runs and frame_task_server is up (/left_ee_pose)'
+    assert reason == 'the policy runs and the arm controller is up (/left_grasp_frame_pose)'
     assert rig.messages()[-1] == f'releasing the elastic band: {reason}'
     for later in (0.1, 10.0, 100.0):
         assert rig.sup.band_due(rig.mono + later) is None
@@ -601,7 +601,7 @@ def test_band_without_band_release_reset():
 
 
 def test_band_due_max_wait_after_running_without_ee_pose():
-    """Ask for the toggle max_wait after the policy started when no /left_ee_pose came."""
+    """Ask for the toggle max_wait after the policy started when no /left_grasp_frame_pose came."""
     rig = Rig('g1', 'sim', band={'max_wait': 2.0})
     rig.until(Phase.RUNNING)
     started = rig.mono
@@ -1116,7 +1116,7 @@ def test_gains_must_be_one_finite_value_per_leg(name, value):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_a_faulted_node_never_releases_the_band(robot):
-    """SAFETY: a node that faulted while running, /left_ee_pose seen, never asks for the band."""
+    """SAFETY: a node that faulted while running, its arm pose seen, never asks for the band."""
     rig = Rig(robot, 'sim')
     rig.to(Phase.RUNNING)
     rig.feed(1, quat=_rolled(70.0))

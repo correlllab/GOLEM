@@ -3,7 +3,7 @@ Decide when the leg node commands the legs, and with what, for every robot, with
 
 The node hands LegSupervisor every /lowstate sample (a StateSample with its tick), every
 /safety/heartbeat beat, /cmd_vel, the height command, the arm controller's commands, the
-first /left_ee_pose, the operator's confirm and the band toggle's reply. on_state returns
+first /left_grasp_frame_pose, the operator's confirm and the band toggle's reply. on_state returns
 the leg targets to publish for a sample, or None to stay silent. What differs between
 robots, and between a sim and a real robot, comes only from the run config, the robot
 profile and the policy's spec.
@@ -22,12 +22,12 @@ Phases (Phase):
   first; each window starts where the last ended, and its verdict stands while the next
   fills), no gap over faults.max_state_gap,
   the arm controller commanding within startup.upper_fresh_seconds and, with band.release,
-  a first /left_ee_pose or band.max_wait since HOLDING began. With
+  a first /left_grasp_frame_pose or band.max_wait since HOLDING began. With
   startup.wait_for_confirm it then also waits for the operator's confirm, accepted only
   while holding and ready; without, it starts.
 - RUNNING: the policy drives the legs from zero velocity and its default height, reset
   as its spec's reset_on says. With band.release the band toggle is due once, once
-  /left_ee_pose has come or band.max_wait after the policy started.
+  /left_grasp_frame_pose has come or band.max_wait after the policy started.
 - FAULTED: silent for good. Once the legs are commanded (RAMPING, HOLDING, RUNNING): a
   /lowstate gap over faults.max_state_gap, a tick that goes back, a non-finite value, a
   quaternion norm outside 1 +- QUAT_NORM_TOLERANCE, a fall (gravity z above
@@ -84,7 +84,7 @@ STATS_SECONDS = 10.0
 # MeasurementBridge answers "enabled" or "disabled")
 BAND_ON = 'enabled'
 CONFIRM_CALL = 'ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger'
-EE_POSE_MISSING = 'frame_task_server is not up yet (no /left_ee_pose)'
+EE_POSE_MISSING = 'the arm controller is not up yet (no /left_grasp_frame_pose)'
 UPPER_KIND = 'no recent command from the arm controller'
 # the steady window is filling: a reason that is not logged
 STEADY_FILLING = '/lowstate has not been steady for long enough yet'
@@ -284,7 +284,7 @@ class LegSupervisor:
         self._upper_t = now
 
     def on_ee_pose(self, now: float) -> None:
-        """Take a /left_ee_pose: frame_task_server has finished its start-up moves."""
+        """Take a /left_grasp_frame_pose: the arm controller has finished its start-up moves."""
         self._ee_seen = True
 
     def check(self, now: float, steady: float) -> None:
@@ -639,7 +639,7 @@ class LegSupervisor:
         return None
 
     def _ee_pose_reason(self, now: float) -> str | None:
-        """Return why the policy waits for frame_task_server under the band, or None."""
+        """Return why the policy waits for the arm controller under the band, or None."""
         band = self._run.band
         if not band.release or self._ee_seen or self._ee_wait_over:
             return None

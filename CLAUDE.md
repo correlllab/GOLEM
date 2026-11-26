@@ -431,7 +431,7 @@ for the includes after it, so pass consistent values (all four blocks share
   comes first: the tick advancing at the node clock's rate, so Isaac's tick,
   which counts publishes, never qualifies; the windows follow one another, so
   a recent stall or a slowed tick makes it not ready again within 1 s), the arm controller's commands are fresh within 0.5 s and,
-  in the sim, `frame_task_server`'s first `/left_ee_pose` has come (or
+  in the sim, the arm controller's first `/left_grasp_frame_pose` has come (or
   `band.max_wait`, 34 s); the node logs why it waits. It then holds, in the
   sim as on the real robot, until `ros2 service call /lowerbody/confirm_engage
   std_srvs/srv/Trigger` (refused at any other time), and runs the policy. A
@@ -444,7 +444,7 @@ for the includes after it, so pass consistent values (all four blocks share
   none for 0.5 s after the first, stop it for good: it logs the fault once,
   publishes nothing more and stays up. In the sim it calls
   `/elastic_band/toggle` once, when the service is there, once the policy runs
-  and `/left_ee_pose` has come (or `band.max_wait` after the policy started);
+  and `/left_grasp_frame_pose` has come (or `band.max_wait` after the policy started);
   the reply is final (a failure is logged as `elastic band release failed:
   ...` and the band stays on), and a success resets the policy at once.
 
@@ -529,11 +529,11 @@ which `golem_upper_ik`'s `upper_ik.launch.py` applies (`upper_ik: not starting:
   clock's rate) and the arm controller's commands are fresh. On the real robot
   it also holds until `ros2 service call /lowerbody/confirm_engage
   std_srvs/srv/Trigger`. In the sim it also holds until the first
-  `/left_ee_pose` (`frame_task_server` publishes it after its start-up moves),
+  `/left_grasp_frame_pose` (`frame_task_server` publishes it after its start-up moves),
   or `band.max_wait` (30 s) after the legs reached the pose: the policy must
   not run long under the sim's elastic band (about 1.5 s or more there, and
   the robot stumbles at the release). The policy then starts, and the node
-  calls `/elastic_band/toggle` once: once `/left_ee_pose` has come, or
+  calls `/elastic_band/toggle` once: once `/left_grasp_frame_pose` has come, or
   `band.max_wait` after the policy started; the reply is final. A false
   heartbeat, or none for 0.5 s after the first, stops it for good in every
   phase.

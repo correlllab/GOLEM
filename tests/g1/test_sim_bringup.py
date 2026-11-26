@@ -15,12 +15,12 @@ test_sim_bringup.sh runs them; see it for the usage.
 Both tests start as the G1 starts in debug mode: the limp robot hangs from the
 sim's elastic band while golem_safety streams zero-gain rt/lowcmd, the leg node
 (golem_lowerbody_rl's lowerbody_controller_node, running HOMIE) pre-poses the
-legs, starts its policy under the band once frame_task_server is up, and then
+legs, starts its policy under the band once the arm controller is up, and then
 releases the band. Both check that start-up: the band holds the robot upright,
 golem_safety latches no estop, the leg node's policy starts, the band comes off
-once because frame_task_server is up (the leg node's log gives /left_ee_pose as
+once because the arm controller is up (the leg node's log gives /left_grasp_frame_pose as
 the reason for every toggle call, not band.max_wait; the band is off after the
-first /left_ee_pose the test sees and within band.max_wait of the policy's
+first /left_grasp_frame_pose the test sees and within band.max_wait of the policy's
 start), and the robot stands for 5 s after it. The report also gives the pelvis and the feet
 around the release, for the record.
 
@@ -123,8 +123,8 @@ POLICY_STARTED = "policy started at zero velocity"
 # the bringup's refusals: golem_upper_ik's pairing check and golem_lowerbody_rl's
 LAUNCH_REFUSALS = ("upper_ik: not starting", "lowerbody: not starting")
 BAND_CALL = "releasing the elastic band: "
-# BandRelease's reason once /left_ee_pose has come; band.max_wait's names the maximum wait
-BAND_CALL_BY_POSE = BAND_CALL + "the policy runs and frame_task_server is up (/left_ee_pose)"
+# BandRelease's reason once /left_grasp_frame_pose has come; band.max_wait's names the maximum wait
+BAND_CALL_BY_POSE = BAND_CALL + "the policy runs and the arm controller is up (/left_grasp_frame_pose)"
 BAND_TOGGLED = "elastic band released"
 # a ROS log line in launch.log: level, wall time, logger, text
 LOG_LINE = re.compile(r"\[(DEBUG|INFO|WARN|ERROR|FATAL)\] \[(\d+(?:\.\d+)?)\] \[([^\]]+)\]: (.*)")
@@ -426,7 +426,7 @@ class Driver:
     """Run the arm or walk test's steps against the running bringup, marking each in events.json."""
 
     def __init__(self, out):
-        """Start the test's node, following /clock and the first /left_ee_pose."""
+        """Start the test's node, following /clock and the first /left_grasp_frame_pose."""
         import rclpy
         from rclpy.node import Node
         from rclpy.qos import QoSProfile, ReliabilityPolicy
@@ -442,13 +442,13 @@ class Driver:
         self.clocks = 0  # /clock messages heard
         self.node.create_subscription(Clock, "/clock", self._on_clock,
                                       QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT), raw=True)
-        # frame_task_server publishes /left_ee_pose (100 Hz) once its start-up moves are
+        # frame_task_server publishes /left_grasp_frame_pose (25 Hz) once its start-up moves are
         # done; the first one's stamp (sim time) is when the test saw the controller ready.
         # The drive spins in every wait, and the deep history keeps that first one
         # through a slow spin
         from geometry_msgs.msg import PoseStamped
-        self.ee_pose_first = None
-        self.node.create_subscription(PoseStamped, "/left_ee_pose", self._on_ee_pose, QoSProfile(
+        self.grasp_pose_first = None
+        self.node.create_subscription(PoseStamped, "/left_grasp_frame_pose", self._on_grasp_pose, QoSProfile(
             depth=1000, reliability=ReliabilityPolicy.RELIABLE))
         self.launch_log = os.path.join(out, "launch.log")
         self.sim_log = os.path.join(out, "sim.log")
@@ -458,11 +458,11 @@ class Driver:
         self.clock = _cdr_stamp(raw)
         self.clocks += 1
 
-    def _on_ee_pose(self, msg):
-        """Mark the first /left_ee_pose, with its stamp (sim time)."""
-        if self.ee_pose_first is None:
-            self.ee_pose_first = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-            self.mark("left_ee_pose_first", stamp=self.ee_pose_first)
+    def _on_grasp_pose(self, msg):
+        """Mark the first /left_grasp_frame_pose, with its stamp (sim time)."""
+        if self.grasp_pose_first is None:
+            self.grasp_pose_first = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            self.mark("left_grasp_frame_pose_first", stamp=self.grasp_pose_first)
 
     def mark(self, name, **extra):
         """Record a named event with its wall and sim times, and rewrite events.json."""
@@ -982,25 +982,25 @@ class Report:
         return wall
 
     def band_released(self, release, policy_wall):
-        """Check the band comes off once and stays off, because frame_task_server is up.
+        """Check the band comes off once and stays off, because the arm controller is up.
 
-        Every toggle call the leg node logged gives /left_ee_pose as its reason (not
-        band.max_wait), the band is off after the first /left_ee_pose the test saw (its stamp,
+        Every toggle call the leg node logged gives /left_grasp_frame_pose as its reason (not
+        band.max_wait), the band is off after the first /left_grasp_frame_pose the test saw (its stamp,
         sim time), and within band.max_wait of the policy's start (wall time).
         """
         changes = self.s["band_changes"]
         states = changes[:, 2].tolist()
-        pose = self.events.get("left_ee_pose_first")
+        pose = self.events.get("left_grasp_frame_pose_first")
         max_wait = self.info.get("band_max_wait")
         reasons = [text for _, _, text in logged(os.path.join(self.out, "launch.log"), LEG_NODE)
                    if text.startswith(BAND_CALL) or text.startswith(BAND_TOGGLED)]
         calls = [text for text in reasons if text.startswith(BAND_CALL)]
         by_pose = bool(calls) and all(text == BAND_CALL_BY_POSE for text in calls)
-        self.numbers["band_release"] = {"changes_t_wall_on": changes.tolist(), "left_ee_pose_first": pose,
-                                        "max_wait": max_wait, "walking_node": reasons, "by_left_ee_pose": by_pose}
+        self.numbers["band_release"] = {"changes_t_wall_on": changes.tolist(), "left_grasp_frame_pose_first": pose,
+                                        "max_wait": max_wait, "walking_node": reasons, "by_left_grasp_frame_pose": by_pose}
         if release is None:
             self.check("band released after the controller is ready", False,
-                       "the band was never released" + ("" if pose else ", and the test saw no /left_ee_pose"))
+                       "the band was never released" + ("" if pose else ", and the test saw no /left_grasp_frame_pose"))
             return
         _, t_off, wall_off = release
         once = states == [1.0, 0.0]
@@ -1008,17 +1008,17 @@ class Report:
         since = wall_off - policy_wall if policy_wall is not None else math.nan
         in_time = max_wait is not None and 0.0 <= since <= max_wait + BAND_POLL_SLACK_S
         self.numbers["band_release"].update(sim_t=t_off, wall=wall_off, after_policy_wall_s=since,
-                                            after_left_ee_pose_sim_s=None if pose is None else t_off - pose["stamp"])
+                                            after_left_grasp_frame_pose_sim_s=None if pose is None else t_off - pose["stamp"])
         text = (f"off at sim t {t_off:.3f} s; " + ("on from the first step, then off once" if once else
                                                    f"its states over the run {states} (1 on, 0 off)")
-                + "; " + (f"{t_off - pose['stamp']:.3f} s (sim) after the first /left_ee_pose's stamp "
-                          f"{pose['stamp']:.3f} s" if pose else "the test saw no /left_ee_pose")
+                + "; " + (f"{t_off - pose['stamp']:.3f} s (sim) after the first /left_grasp_frame_pose's stamp "
+                          f"{pose['stamp']:.3f} s" if pose else "the test saw no /left_grasp_frame_pose")
                 + f"; {since:.2f} s (wall) after the policy's start (band.max_wait {max_wait} s, "
                 f"+{BAND_POLL_SLACK_S} s for the node's poll)")
         if not calls:
             text += f"; {LEG_NODE} logged no call of /elastic_band/toggle"
         elif not by_pose:
-            text += f"; {LEG_NODE} released it for another reason than /left_ee_pose"
+            text += f"; {LEG_NODE} released it for another reason than /left_grasp_frame_pose"
         if reasons:
             text += f"; {LEG_NODE}: {' / '.join(reasons)}"
         self.check("band released after the controller is ready", once and after_pose and in_time and by_pose,

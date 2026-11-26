@@ -29,8 +29,8 @@ band while `golem_safety` streams zero-gain `rt/lowcmd`. The leg node (`golem_lo
     fault;
   - `band released after the controller is ready`: the band comes off once and stays off,
     because `frame_task_server` is up: every toggle call the leg node logs gives
-    `/left_ee_pose` as its reason, so a release by `band.max_wait` fails the check. The band is
-    off after the first `/left_ee_pose` the test sees and within the leg node's run config's
+    `/left_grasp_frame_pose` as its reason, so a release by `band.max_wait` fails the check. The
+    band is off after the first `/left_grasp_frame_pose` the test sees and within the leg node's run config's
     `band.max_wait` of the policy's start;
   - `standing after release`: the robot stands for 5 s after the release.
 

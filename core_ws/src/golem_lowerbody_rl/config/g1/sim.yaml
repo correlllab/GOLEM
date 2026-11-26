@@ -17,7 +17,7 @@ heartbeat:
 
 band:
   # HOMIE run long under the band crouches with the feet off the floor and stumbles at
-  # the release, so the policy starts on frame_task_server's first /left_ee_pose
+  # the release, so the policy starts on the arm controller's first /left_grasp_frame_pose
   release: true
   max_wait: 30.0
 

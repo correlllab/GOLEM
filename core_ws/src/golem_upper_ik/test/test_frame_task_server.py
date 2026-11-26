@@ -748,6 +748,12 @@ def test_execute_path_paces_at_dt_minus_work(ros, models, monkeypatch):
                                atol=1e-6)
 
 
+def grasp_outcome(name):
+    """Return the GraspFrameTarget result's outcome constant called name."""
+    from custom_ros_messages.action import GraspFrameTarget
+    return getattr(GraspFrameTarget.Result, name)
+
+
 def grasp_goal(left=None, right=None, frame_id='pelvis', plan=False, timeout=0.0):
     """Return a GraspFrameTarget goal: each arm's 4x4 target in frame_id, None for none.
 
@@ -854,6 +860,7 @@ def test_grasp_frame_target_moves_one_arm(ros, models, robot):
     client = GraspClient(ros)
     status, result = client.run(grasp_goal(left=target))
     assert status == GoalStatus.STATUS_SUCCEEDED and result.success, result.message
+    assert result.outcome == grasp_outcome('REACHED')
     assert result.message.startswith('reached (left '), result.message
     last = client.feedback[-1]
     assert last.left_error_m < threshold_linear and last.left_error_rad < threshold_angular
@@ -1011,6 +1018,7 @@ def test_grasp_frame_target_refuses_a_missing_or_stale_transform(ros, models):
     start = time.monotonic()
     status, result = client.run(grasp_goal(left=target, frame_id='nowhere'))
     assert status == GoalStatus.STATUS_ABORTED and not result.success
+    assert result.outcome == grasp_outcome('FAILED')
     assert result.message.startswith('no transform from nowhere to pelvis'), result.message
     assert TF_WAIT_S <= time.monotonic() - start < TF_WAIT_S + 1.0
 
@@ -1082,6 +1090,7 @@ def test_grasp_frame_target_needs_a_target(ros, models):
     held = following.measured()
     status, result = GraspClient(ros).run(grasp_goal())
     assert status == GoalStatus.STATUS_ABORTED and not result.success
+    assert result.outcome == grasp_outcome('FAILED')
     assert result.message.startswith('neither arm has a target'), result.message
     np.testing.assert_array_equal(following.measured(), held)
 
@@ -1093,6 +1102,7 @@ def test_grasp_frame_target_times_out(ros, models):
     start = time.monotonic()
     status, result = GraspClient(ros).run(grasp_goal(left=target, timeout=1.0))
     assert status == GoalStatus.STATUS_ABORTED and not result.success
+    assert result.outcome == grasp_outcome('NOT_REACHED')
     assert result.message.startswith('timed out after 1.0 s'), result.message
     assert 1.0 <= time.monotonic() - start < 2.0
 
@@ -1115,6 +1125,7 @@ def test_canceled_grasp_frame_target_holds_where_it_is(ros, models, tmp_path, pl
     handle.cancel_goal_async()
     status, result = client.outcome(handle)
     assert status == GoalStatus.STATUS_CANCELED and not result.success
+    assert result.outcome == grasp_outcome('CANCELED')
     expected = 'canceled during the path' if plan else 'canceled; the arms hold where they are'
     assert result.message.startswith(expected), result.message
     # the last step's command may still be on its way at the result

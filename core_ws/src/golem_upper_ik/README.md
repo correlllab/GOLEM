@@ -249,7 +249,11 @@ then moves only in the start-up step 4.
   or the timeout, during a planned path stops it before its next waypoint; the IK solve and the
   planning before the path are not cut short (the planner's first request also builds its
   robot model, seconds). Every end sets the
-  result's `message` (`reached (...)`, or why it was aborted or canceled, with the errors). A
+  result's `outcome`: `REACHED` (succeeded), `NOT_REACHED` (aborted: the timeout, before the IK
+  converged, during the path or in the hold, or a hold pinned at a joint limit), `CANCELED`, or
+  `FAILED` (aborted for anything else: a bad target, TF, planning or execution, a stale
+  `/lowstate`); and its `message` (`reached (...)`, or why it was aborted or canceled, with the
+  errors). A
   cancel or the timeout, direct or during the path, or a path that fails while it runs, stops the targeted arms where they are, since a moving
   arm lags its command (about 20 mm at the grasp frame at 0.3 m/s on the H1-2 sim) and would
   keep going that far: each of their joints is commanded at its measured position plus its

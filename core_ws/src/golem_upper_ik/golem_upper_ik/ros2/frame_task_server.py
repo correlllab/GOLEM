@@ -585,17 +585,26 @@ class FrameTaskServer(Node):
             with self._controller_lock:
                 return self._grasp_frame_target(goal_handle, targets)
         except (GoalError, StaleStateError) as error:
-            return self._end_grasp(goal_handle, 'abort', str(error))
+            return self._end_grasp(goal_handle, GraspFrameTarget.Result.FAILED, str(error))
 
-    def _end_grasp(self, goal_handle, how, message, success=False):
-        """End a GraspFrameTarget goal ('succeed', 'abort' or 'canceled'); return its result."""
-        if success:
+    def _end_grasp(self, goal_handle, outcome, message):
+        """End a GraspFrameTarget goal with outcome (a Result constant); return its result.
+
+        REACHED succeeds the goal, CANCELED marks it canceled, NOT_REACHED and FAILED abort it.
+        """
+        Result = GraspFrameTarget.Result
+        if outcome == Result.REACHED:
             self.get_logger().info(f'Grasp frame target reached: {message}')
+            goal_handle.succeed()
+        elif outcome == Result.CANCELED:
+            self.get_logger().warn(f'Grasp frame target canceled: {message}')
+            goal_handle.canceled()
         else:
-            self.get_logger().warn(f'Grasp frame target {how}: {message}')
-        getattr(goal_handle, how)()
-        result = GraspFrameTarget.Result()
-        result.success = success
+            self.get_logger().warn(f'Grasp frame target abort: {message}')
+            goal_handle.abort()
+        result = Result()
+        result.outcome = outcome
+        result.success = outcome == Result.REACHED
         result.message = message
         return result
 
@@ -736,32 +745,35 @@ class FrameTaskServer(Node):
             self.controller.init_steady_state()
             ik_step = None
 
+        Result = GraspFrameTarget.Result
         outcome = self._drive(goal_handle, kind, deadline - clock.now(), ik_step=ik_step)
         if outcome.canceled:
             self.controller.stop_joints(joints, stop_reference)
-            return self._end_grasp(goal_handle, 'canceled', 'canceled; the arms hold where they '
-                                   f'are ({self._error_text(kind.error())})')
+            return self._end_grasp(goal_handle, Result.CANCELED, 'canceled; the arms hold where '
+                                   f'they are ({self._error_text(kind.error())})')
         errors = self._error_text(kind.error())
         if outcome.reached:
-            return self._end_grasp(goal_handle, 'succeed', f'reached ({errors})', success=True)
+            return self._end_grasp(goal_handle, Result.REACHED, f'reached ({errors})')
         if outcome.blocked is not None:
-            return self._end_grasp(goal_handle, 'abort',
+            return self._end_grasp(goal_handle, Result.NOT_REACHED,
                                    'the hold is pinned at a joint position limit: '
                                    f'{outcome.blocked} ({errors})')
         self.controller.stop_joints(joints, stop_reference)
         stage = '' if outcome.ik_converged else ' before the IK converged'
-        return self._end_grasp(goal_handle, 'abort', f'timed out after {timeout:.1f} s{stage}; '
-                               f'the arms hold where they are ({errors})')
+        return self._end_grasp(goal_handle, Result.NOT_REACHED, f'timed out after {timeout:.1f} '
+                               f's{stage}; the arms hold where they are ({errors})')
 
     def _grasp_path(self, goal_handle, kind, deadline, timeout, stop_arms):
         """Plan to the IK solution of the targets and execute the path; None once executed.
 
-        Otherwise the goal's result: aborted when planning or execution fails or the deadline
-        (robot time) passes during the path, canceled on a cancel; once the path has started,
-        each of those ends calls stop_arms() to stop the targeted arms where they are. Feedback goes out before each waypoint, and a
-        cancel or the deadline ends the path at the next one. StaleStateError propagates.
+        Otherwise the goal's result: FAILED when planning or execution fails, NOT_REACHED when
+        the deadline (robot time) passes during the path, CANCELED on a cancel; once the path
+        has started, each of those ends calls stop_arms() to stop the targeted arms where they
+        are. Feedback goes out before each waypoint, and a cancel or the deadline ends the path
+        at the next one. StaleStateError propagates.
         """
         clock = self.controller.clock
+        Result = GraspFrameTarget.Result
 
         def stop():
             """Publish the feedback; return whether a cancel or the deadline ends the path."""
@@ -772,7 +784,7 @@ class FrameTaskServer(Node):
         except StaleStateError:
             raise
         except Exception as error:
-            return self._end_grasp(goal_handle, 'abort', f'planning failed: {error}')
+            return self._end_grasp(goal_handle, Result.FAILED, f'planning failed: {error}')
         self.get_logger().info(f'Executing planned path with {len(path)} waypoints')
         try:
             executed = self.controller.execute_path(path, stop=stop)
@@ -780,18 +792,18 @@ class FrameTaskServer(Node):
             raise
         except Exception as error:
             stop_arms()
-            return self._end_grasp(goal_handle, 'abort', f'execution failed: {error}; the arms '
-                                   'hold where they are')
+            return self._end_grasp(goal_handle, Result.FAILED, f'execution failed: {error}; the '
+                                   'arms hold where they are')
         if executed:
             return None
         if goal_handle.is_cancel_requested:
             stop_arms()
-            return self._end_grasp(goal_handle, 'canceled', 'canceled during the path; the arms '
-                                   f'hold where they are ({self._error_text(kind.error())})')
+            return self._end_grasp(goal_handle, Result.CANCELED, 'canceled during the path; the '
+                                   f'arms hold where they are ({self._error_text(kind.error())})')
         stop_arms()
         errors = self._error_text(kind.error())
-        return self._end_grasp(goal_handle, 'abort', f'timed out after {timeout:.1f} s during the '
-                               f'path; the arms hold where they are ({errors})')
+        return self._end_grasp(goal_handle, Result.NOT_REACHED, f'timed out after {timeout:.1f} s '
+                               f'during the path; the arms hold where they are ({errors})')
 
     def _grasp_errors(self, frames, targets):
         """Return {arm: (m, rad)}: each grasp frame's error from its target; 0s without one."""

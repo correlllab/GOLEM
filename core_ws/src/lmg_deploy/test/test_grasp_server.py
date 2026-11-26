@@ -26,6 +26,7 @@ from lmg_deploy.grasp_server import GraspGoalServer
 from lmg_deploy.kinematics import ArmKinematics
 from shipped_policy import URDF, shipped_cfg
 
+Result = GraspFrameTarget.Result  # the outcome constants
 TOLERANCE = {"tolerance_m": 0.01, "tolerance_rad": 0.1, "settle_s": 0.2, "default_timeout_s": 1.0}
 DT = 0.01   # s of the test's robot time per tick
 
@@ -150,6 +151,7 @@ def test_a_goal_on_the_grasp_frame_succeeds_after_the_settle_and_sends_its_wrist
     handle = rig.send({0: (pos, quat)}, feedback=lambda m: feedback.append(m.feedback))
     wrapped = rig.run(handle, 2.0)
     assert wrapped.status == 4 and wrapped.result.success, wrapped.result.message   # SUCCEEDED
+    assert wrapped.result.outcome == Result.REACHED
     assert wrapped.result.message.startswith("reached")
     poses, arms = rig.ctrl.goals[0]
     assert arms == [0]
@@ -164,6 +166,7 @@ def test_a_goal_off_reach_times_out_and_holds_its_arm(rig):
     start = rig.now
     wrapped = rig.run(rig.send({1: (pos + [0.1, 0.0, 0.0], quat)}, timeout=0.5), 2.0)
     assert wrapped.status == 6 and "timed out after 0.5 s" in wrapped.result.message   # ABORTED
+    assert wrapped.result.outcome == Result.NOT_REACHED and not wrapped.result.success
     assert rig.now - start == pytest.approx(0.5, abs=2 * DT)
     assert rig.ctrl.holds == [[1]]
 
@@ -176,6 +179,7 @@ def test_a_cancel_holds_the_targeted_arms(rig):
     handle.cancel_goal_async()
     wrapped = rig.run(handle, 1.0)
     assert wrapped.status == 5 and "canceled" in wrapped.result.message   # CANCELED
+    assert wrapped.result.outcome == Result.CANCELED and not wrapped.result.success
     assert rig.ctrl.holds == [[0, 1]]
 
 
@@ -194,7 +198,23 @@ def test_a_world_frame_target_is_resolved_through_tf_and_a_missing_frame_aborts(
     assert wrapped.status == 4, wrapped.result.message
     wrapped = rig.run(rig.send({0: (pos, quat)}, frame_id="nowhere"), 2.0)
     assert wrapped.status == 6 and "nowhere" in wrapped.result.message
+    assert wrapped.result.outcome == Result.FAILED
     assert len(rig.ctrl.goals) == 1
+
+
+def test_a_queued_goal_canceled_before_it_starts_ends_canceled(rig):
+    """A goal canceled while another runs ends CANCELED without moving its arm."""
+    pos, quat = rig.grasp_pose(0)
+    first = rig.send({0: (pos + [0.1, 0.0, 0.0], quat)}, timeout=5.0)
+    second = rig.send({1: rig.grasp_pose(1)}, timeout=5.0)
+    rig.tick(0.1)
+    second.cancel_goal_async()
+    wrapped = rig.run(second, 1.0)
+    assert wrapped.status == 5 and wrapped.result.outcome == Result.CANCELED   # CANCELED
+    assert wrapped.result.message.startswith("canceled before it started")
+    assert [arms for _, arms in rig.ctrl.goals] == [[0]]
+    rig.server.abort_all("test over")
+    rig.run(first, 0.1)
 
 
 def test_goals_run_one_at_a_time_in_order(rig):
@@ -208,6 +228,7 @@ def test_goals_run_one_at_a_time_in_order(rig):
     for handle in (first, second):
         wrapped = rig.run(handle, 0.1)
         assert wrapped.status == 6 and wrapped.result.message == "test fault"
+        assert wrapped.result.outcome == Result.FAILED
 
 
 def test_the_grasp_frame_poses_are_published_in_the_pelvis_frame(rig):
@@ -231,6 +252,7 @@ def test_a_goal_the_node_refuses_aborts_with_its_reason():
     try:
         wrapped = rig.run(rig.send({0: rig.grasp_pose(0)}), 1.0)
         assert wrapped.status == 6 and wrapped.result.message == "the policy is not engaged yet"
+        assert wrapped.result.outcome == Result.FAILED
         assert rig.ctrl.goals == []
     finally:
         rig.close()

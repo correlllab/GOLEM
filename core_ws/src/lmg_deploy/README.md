@@ -43,7 +43,7 @@ the first latches it silent.
 | `bags/<name>/` | rosbag2 recordings of Explicit500 on the real robot (`policy_bag_walk`: walking to nav2 goals; `reach`: an arm goal, ended by the hardware e-stop), the `.db3` files in Git LFS |
 | `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, observation layout, arm goals, `arm_ik`, the refused export formats) on the shipped policy's deploy config (`test/shipped_policy.py`: `policies/h12/h12.yaml` with its `export.yaml` over it, as the node loads them) |
 | `test/test_node_config.py` | the node refuses, at start, an export it would misread |
-| `test/test_grasp_goal.py`, `test/test_grasp_server.py` | the grasp-frame maths; `/grasp_frame_target` over ROS against a stand-in controller (success, timeout, cancel, world frames through TF, the queue, refusals) and the pose topics |
+| `test/test_grasp_goal.py`, `test/test_grasp_server.py` | the grasp-frame maths; `/grasp_frame_target` over ROS against a stand-in controller (success, timeout, cancel, world frames through TF, the queue, refusals, each with its outcome) and the pose topics |
 | `test/sim_drive.py` | a scripted drive in the Robocasa sim (stand, walk, turn, side-step, a `/grasp_frame_target` goal), measured on FAST-LIO's `/Odometry` |
 | `test/test_heartbeat_gate.py` | a real node with the shipped policy on a non-zero DDS domain: silent, in `waiting_heartbeat`, until the first beat, then it pre-poses from the pose at the beat |
 | `test/test_imu_calibration.py` | the calibration's math, the export contract in the controller, the estimator on synthetic kinematics |
@@ -187,7 +187,8 @@ ros2 topic echo /marl_deploy_node/state         # idle, waiting_heartbeat, prepo
   (robot time from its start; 0: the default); a cancel or the timeout stops the targeted arms where they are (their
   command, posture and trajectory set to the measured pose and angles). After any end the arms hold their last
   command. Feedback (25 Hz) is each arm's grasp-frame error, m and rad, pelvis frame (0 without a target). `plan` is
-  ignored: the policy moves directly.
+  ignored: the policy moves directly. The result's `outcome` is `REACHED` on success, `NOT_REACHED` at the timeout,
+  `CANCELED` on a cancel (of a running or a queued goal) and `FAILED` for every other abort (below).
 - Tolerance, settle time and default timeout: the deploy config's `grasp_frame_target` block (`config/example.yaml`),
   else `GRASP_DEFAULTS` in `marl_deploy_node.py`: 15 mm, 0.1 rad, 0.5 s, 10 s. In the RoboCasa sim the shipped
   policy held its grasp frames 3-7 mm (at most 6-12 mm) and 0.01-0.06 rad from reachable targets 5-15 cm away,

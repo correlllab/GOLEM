@@ -18,7 +18,8 @@ to put the grasp frames on their targets (grasp_goal.GraspFrames), succeeds once
 within the tolerance for settle_s (robot time), and aborts at its timeout (robot time from its start; 0: the
 default); a cancel or the timeout stops the targeted arms where they are (MarlController.hold_arms). abort_all()
 aborts the running and the queued goals (a fault, a stale /lowstate, the episode's restart). ``plan`` is accepted and
-ignored: the policy moves directly.
+ignored: the policy moves directly. The result's outcome is REACHED on success, NOT_REACHED at the timeout, CANCELED
+on a cancel (running or queued) and FAILED for every other abort (a goal refused or that cannot run, abort_all()).
 """
 
 import threading
@@ -39,6 +40,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from lmg_deploy.grasp_goal import ARMS, GRASP_FRAMES, GoalJudge, GraspFrames, pose_error
 from lmg_deploy.rotations import quat_apply, quat_mul, quat_unique, wxyz_to_xyzw, xyzw_to_wxyz
 
+Result = GraspFrameTarget.Result  # every end sets its outcome: REACHED, NOT_REACHED, CANCELED or FAILED
 GRASP_ACTION = "/grasp_frame_target"
 GRASP_POSE_TOPICS = ("/left_grasp_frame_pose", "/right_grasp_frame_pose")
 POSE_FRAME = "pelvis"      # the frame every target is held in and every pose is published in
@@ -60,7 +62,7 @@ class _Goal:
     targets: dict                    # arm index -> (position m, quaternion wxyz), pelvis frame
     timeout_s: float                 # s of robot time from its start
     done: threading.Event = field(default_factory=threading.Event)
-    outcome: tuple | None = None     # (how: 'succeed' | 'abort' | 'canceled', message)
+    outcome: tuple | None = None     # (GraspFrameTarget.Result outcome constant, message)
     errors: list | None = None       # per arm (m, rad); (0, 0) for an arm without a target
     deadline: float | None = None    # s of robot time, set when it starts
     judge: GoalJudge | None = None
@@ -119,7 +121,7 @@ class GraspGoalServer:
                 raise GoalError(refusal)
             targets = self._targets(goal_handle.request)
         except GoalError as error:
-            return self._end(goal_handle, "abort", str(error))
+            return self._end(goal_handle, Result.FAILED, str(error))
         timeout = goal_handle.request.timeout.sec + 1e-9 * goal_handle.request.timeout.nanosec
         goal = _Goal(goal_handle, targets, timeout if timeout > 0.0 else self._default_timeout_s)
         self._node.get_logger().info("grasp frame target: " + "; ".join(
@@ -137,16 +139,21 @@ class GraspGoalServer:
                 goal_handle.publish_feedback(feedback)
         return self._end(goal_handle, *goal.outcome)
 
-    def _end(self, goal_handle, how: str, message: str):
-        """End goal_handle ('succeed', 'abort' or 'canceled') with message; return its result."""
+    def _end(self, goal_handle, outcome: int, message: str):
+        """End goal_handle with outcome (a Result constant) and message; return its result.
+
+        REACHED succeeds the goal, CANCELED marks it canceled, NOT_REACHED and FAILED abort it.
+        """
+        how = {Result.REACHED: "succeed", Result.CANCELED: "canceled"}.get(outcome, "abort")
         # one call site per severity: rclpy refuses a call site whose severity changes
-        if how == "succeed":
+        if outcome == Result.REACHED:
             self._node.get_logger().info(f"grasp frame target {how}: {message}")
         else:
             self._node.get_logger().warn(f"grasp frame target {how}: {message}")
         getattr(goal_handle, how)()
-        result = GraspFrameTarget.Result()
-        result.success = how == "succeed"
+        result = Result()
+        result.outcome = outcome
+        result.success = outcome == Result.REACHED
         result.message = message
         return result
 
@@ -241,7 +248,7 @@ class GraspGoalServer:
         with self._lock:
             for goal in [g for g in self._queue if g.handle.is_cancel_requested]:
                 self._queue.remove(goal)
-                self._finish(goal, "canceled", "canceled before it started; the arms did not move for it")
+                self._finish(goal, Result.CANCELED, "canceled before it started; the arms did not move for it")
             if self._active is None and self._queue:
                 self._start(self._queue.popleft(), now, controller)
             goal = self._active
@@ -253,12 +260,13 @@ class GraspGoalServer:
         text = self._error_text(goal, errors)
         if goal.handle.is_cancel_requested:
             controller.hold_arms(q, list(goal.targets))
-            self._end_active("canceled", f"canceled; the arms hold where they are ({text})")
+            self._end_active(Result.CANCELED, f"canceled; the arms hold where they are ({text})")
         elif goal.judge.reached(now, [errors[arm] for arm in goal.targets]):
-            self._end_active("succeed", f"reached ({text})")
+            self._end_active(Result.REACHED, f"reached ({text})")
         elif now >= goal.deadline:
             controller.hold_arms(q, list(goal.targets))
-            self._end_active("abort", f"timed out after {goal.timeout_s:.1f} s; the arms hold where they are ({text})")
+            self._end_active(Result.NOT_REACHED,
+                             f"timed out after {goal.timeout_s:.1f} s; the arms hold where they are ({text})")
 
     def _start(self, goal: _Goal, now: float, controller) -> None:
         """Start goal (the lock held): the targeted arms' wrist goals to put their grasp frames on the targets."""
@@ -288,27 +296,27 @@ class GraspGoalServer:
         return ", ".join(f"{ARMS[arm]} {errors[arm][0] * 1000.0:.1f} mm {errors[arm][1]:.3f} rad"
                          for arm in goal.targets)
 
-    def _end_active(self, how: str, message: str) -> None:
-        """End the running goal with how and message."""
+    def _end_active(self, outcome: int, message: str) -> None:
+        """End the running goal with outcome (a Result constant) and message."""
         with self._lock:
             goal, self._active = self._active, None
             if goal is not None:
-                self._finish(goal, how, message)
+                self._finish(goal, outcome, message)
 
     @staticmethod
-    def _finish(goal: _Goal, how: str, message: str) -> None:
-        """Give goal its outcome and wake its execute callback (the lock held)."""
-        goal.outcome = (how, message)
+    def _finish(goal: _Goal, outcome: int, message: str) -> None:
+        """Give goal its outcome (a Result constant) and message and wake its execute callback (the lock held)."""
+        goal.outcome = (outcome, message)
         goal.done.set()
 
     def abort_all(self, message: str) -> None:
-        """Abort the running and the queued goals with message; the arms keep their commands."""
+        """Abort the running and the queued goals as FAILED with message; the arms keep their commands."""
         with self._lock:
             goals = ([self._active] if self._active is not None else []) + list(self._queue)
             self._active = None
             self._queue.clear()
             for goal in goals:
-                self._finish(goal, "abort", message)
+                self._finish(goal, Result.FAILED, message)
 
     @property
     def busy(self) -> bool:

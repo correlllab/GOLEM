@@ -308,3 +308,130 @@ def test_solutions_stay_in_the_clip_range(models, robot, base):
         model.set_position_limits(None)
         model.rebuild_reduced_model(np.zeros(model.num_motor))
     assert solved >= 0.75 * cases, (solved, cases)
+
+
+def stepping_solver(models, robot):
+    """Return (solver, config) on the robot's real controller config: its clip range and ctrl_hz."""
+    from golem_upper_ik.config import load_controller_config
+    from golem_upper_ik.core.ik_solver import IKSolver
+    model = models(robot)
+    config = load_controller_config(robot, {'h12': 'safety_split', 'g1': 'g1_split'}[robot])
+    model.set_position_limits(config['limits']['q_clip_limits'])
+    solver = IKSolver(model, model.profile.named_configs,
+                      dt=1.0 / config['frequency']['ctrl_hz'], d_min=config['controller']['d_min'])
+    return solver, config
+
+
+def step_to(solver, q_start, q_goal, steps, check):
+    """Step the IK from reduced q_start toward the grasp-frame poses of reduced q_goal.
+
+    Each step's velocity is integrated as the controller does; check(q_before, vel) runs on
+    every step. Returns False when the barrier leaves no IK step (NoSolutionFound).
+    """
+    from pink.exceptions import NoSolutionFound
+    model = solver.robot_model
+    q_body = model.zero_q_body
+    q_body[model.reduced_mask] = q_start
+    measured(model, q_body)
+    solver.update_configurations()
+    solver.clear_frame_tasks()
+    left, right = model.profile.ee_frames
+    solver.add_frame_task('left', left)
+    solver.add_frame_task('right', right)
+    solver.configuration_reduced.update(q_goal)
+    for task in solver.frame_tasks.values():
+        task.set_target_from_configuration(solver.configuration_reduced)
+    solver.configuration_reduced.update(solver.q[model.reduced_mask])
+    try:
+        for _ in range(steps):
+            q_before = solver.q_reduced
+            vel = solver.ik_step_reduced()
+            check(q_before, vel[model.reduced_mask])
+            solver.integrate(vel)
+    except NoSolutionFound:
+        return False
+    return True
+
+
+@pytest.mark.parametrize('robot, base', [('h12', 'home'), ('g1', 't_pose')])
+def test_stepped_approach_to_a_limit_is_braked(models, robot, base):
+    """A stepped move closes on a position limit no faster than its distance over the time constant.
+
+    Each target is the pose of the base posture with one IK joint 0.2 rad past its range
+    limit. On every control step every IK joint moves toward its nearer limit by at most
+    its distance to it times 1 - exp(-dt / LIMIT_APPROACH_TIME), and the bound is the one
+    that stops the joint in some step (it binds).
+    """
+    from golem_upper_ik.core.ik_solver import LIMIT_APPROACH_TIME
+    model = models(robot)
+    mask = model.reduced_mask
+    start = np.asarray(model.profile.named_configs[base], dtype=float)
+    try:
+        solver, _ = stepping_solver(models, robot)
+        low = model.model_body_reduced.lowerPositionLimit.copy()
+        high = model.model_body_reduced.upperPositionLimit.copy()
+        fraction = -np.expm1(-solver.dt / LIMIT_APPROACH_TIME)
+        binding = []
+
+        def check(q, vel):
+            step = vel * solver.dt
+            toward_low = np.maximum(-step, 0.0)
+            toward_high = np.maximum(step, 0.0)
+            assert np.all(toward_low <= fraction * (q - low) + 1e-6)
+            assert np.all(toward_high <= fraction * (high - q) + 1e-6)
+            binding.append(np.any(np.isclose(toward_low, fraction * (q - low), atol=1e-6)
+                                  & (toward_low > 1e-4))
+                           or np.any(np.isclose(toward_high, fraction * (high - q), atol=1e-6)
+                                     & (toward_high > 1e-4)))
+
+        solved = 0
+        for joint in range(mask.sum()):
+            for side, limit, past in ((0, low, -0.2), (1, high, 0.2)):
+                goal = start.copy()
+                goal[joint] = limit[joint] + past
+                solved += step_to(solver, start, goal, 60, check)
+        assert solved >= mask.sum()
+        assert any(binding)
+    finally:
+        model.state_subscriber = None
+        model.set_position_limits(None)
+        model.rebuild_reduced_model(np.zeros(model.num_motor))
+
+
+@pytest.mark.parametrize('robot, base', [('h12', 'home'), ('g1', 't_pose')])
+def test_stepped_moves_away_from_limits_are_not_braked(models, robot, base):
+    """A step whose joints all stay farther from the limits than the brake reaches is Pink's default.
+
+    Targets are the poses of the base posture with every IK joint moved by up to 0.3 rad.
+    On each step where the brake's bound on every joint (its distance to its nearer limit
+    times 1 - exp(-dt / LIMIT_APPROACH_TIME)) exceeds the default-gain step by 1 mrad, the
+    braked step equals the step under Pink's default configuration limit (gain 0.5).
+    """
+    from golem_upper_ik.core.ik_solver import LIMIT_APPROACH_TIME
+    model = models(robot)
+    start = np.asarray(model.profile.named_configs[base], dtype=float)
+    rng = np.random.default_rng(3)
+    try:
+        solver, _ = stepping_solver(models, robot)
+        low = model.model_body_reduced.lowerPositionLimit.copy()
+        high = model.model_body_reduced.upperPositionLimit.copy()
+        fraction = -np.expm1(-solver.dt / LIMIT_APPROACH_TIME)
+        compared = []
+
+        def check(q, vel):
+            default = solver._ik_reduced(list(solver.frame_tasks.values()) + [solver.posture_task],
+                                         solver.dt, solver.limits_reduced)
+            distance = np.minimum(q - low, high - q)
+            if np.all(distance * fraction > np.abs(default) * solver.dt + 1e-3):
+                np.testing.assert_allclose(vel, default, atol=1e-6)
+                compared.append(True)
+
+        for _ in range(8):
+            goal = np.clip(start + rng.uniform(-0.3, 0.3, size=start.shape), low + 0.05,
+                           high - 0.05)
+            step_to(solver, start, goal, 30, check)
+        assert len(compared) >= 100
+    finally:
+        model.state_subscriber = None
+        model.set_position_limits(None)
+        model.rebuild_reduced_model(np.zeros(model.num_motor))

@@ -11,7 +11,9 @@ the controller's clip range). A configuration or seed given outside them is clam
 first, and so is every integrated step (the QP solver meets Pink's configuration limit only to
 its tolerance, about 1e-7 rad, and Pink's acceleration limit takes the square root of the
 distance to the limit, which is not a number past it), so every q the solver returns or
-integrates to lies within them.
+integrates to lies within them. The stepped moves (ik_step_reduced, goto_reduced_configuration)
+brake into the limits: a joint closes on its limit at no more than its distance over
+LIMIT_APPROACH_TIME; solve_ik_reduced's iterations keep Pink's default gain.
 """
 import time
 from dataclasses import dataclass
@@ -34,6 +36,17 @@ ANGULAR_THRESHOLD = 1e-2  # rad
 # every constrained one; in the sphere models' postures at most 26 pairs lie within 0.15 m,
 # and one step moves a pair a few mm.
 BARRIER_PAIRS = 32
+# s: the time constant of an IK joint's approach to its position limit in the stepped moves
+# (ik_step_reduced, goto_reduced_configuration): each step closes at most 1 - exp(-dt / this)
+# of the distance, so a joint slows into its limit at no more than distance / this rad/s
+# (0.27 rad/s at 50 mrad, 0.11 at 20) instead of arriving at dq_lim. In the H1-2 RoboCasa sim,
+# where the skills' failure-retreat lift brings the shoulder yaw's command to the clip, the
+# yaw went 16.7 mrad past the clip without it and 9.9 to 14.4 mrad with it (8 lifts), and
+# that lift took 3.1 s instead of 2.1 s. A command already parked on the clip is not braked:
+# with it, one of 20 grasps still took the yaw 20.3 mrad past from there. Stepping the
+# H1-2's IK on 30 direct goals that stay 0.2 rad inside the range took no longer with 0.2 s,
+# 0.03 s longer at most with 0.3 s and 0.1 s with 0.5 s. Unmeasured on the real robots
+LIMIT_APPROACH_TIME = 0.2
 
 
 @dataclass
@@ -123,13 +136,20 @@ class IKSolver:
             robot_model.state_reduced['q'],
             **collision_kwargs,
         )
-        self.limits_reduced = [
-            pink.limits.ConfigurationLimit(robot_model.model_body_reduced),
-            pink.limits.VelocityLimit(robot_model.model_body_reduced),
+        model = robot_model.model_body_reduced
+        velocity_limits = [
+            pink.limits.VelocityLimit(model),
             # rad/s^2 on every IK joint
-            pink.limits.AccelerationLimit(robot_model.model_body_reduced,
-                                          25.0 * np.ones(robot_model.model_body_reduced.nv))
+            pink.limits.AccelerationLimit(model, 25.0 * np.ones(model.nv)),
         ]
+        # solve_ik_reduced's iterations: a search for the goal, not a motion, so Pink's default
+        # configuration-limit gain (0.5 of the distance per iteration)
+        self.limits_reduced = [pink.limits.ConfigurationLimit(model)] + velocity_limits
+        # the stepped moves the controller commands: braked into the limits
+        self.step_limits_reduced = [
+            pink.limits.ConfigurationLimit(
+                model, config_limit_gain=-np.expm1(-self.dt / LIMIT_APPROACH_TIME)),
+        ] + velocity_limits
 
     @property
     def q(self):
@@ -196,8 +216,11 @@ class IKSolver:
         self.configuration_reduced.update(
             self._clamp_reduced(self.configuration_reduced.integrate(vel[mask], self.dt)))
 
-    def _ik_reduced(self, tasks, dt):
-        """Return the reduced joint velocity Pink solves for tasks over dt, with the barrier."""
+    def _ik_reduced(self, tasks, dt, limits=None):
+        """Return the reduced joint velocity Pink solves for tasks over dt, with the barrier.
+
+        limits: the Pink limits; default limits_reduced (the solve's).
+        """
         barriers = []
         if self.collision_barrier_reduced is not None:
             barriers = [self.collision_barrier_reduced]
@@ -206,7 +229,7 @@ class IKSolver:
             tasks,
             dt=dt,
             solver=self.solver,
-            limits=self.limits_reduced,
+            limits=self.limits_reduced if limits is None else limits,
             barriers=barriers,
             safety_break=False
         )
@@ -314,7 +337,7 @@ class IKSolver:
         """Return one IK step's body joint velocity (rad/s) for the frame tasks; others 0."""
         self.posture_task.set_target_from_configuration(self.configuration_reduced)
         tasks = list(self.frame_tasks.values()) + [self.posture_task]
-        vel = self._ik_reduced(tasks, self.dt)
+        vel = self._ik_reduced(tasks, self.dt, self.step_limits_reduced)
         vel_full = self.robot_model.zero_q_body
         vel_full[self.robot_model.reduced_mask] = vel
         return vel_full
@@ -340,7 +363,7 @@ class IKSolver:
     def goto_reduced_configuration(self, q_reduced: np.ndarray):
         """Return one IK step's body joint velocity (rad/s) toward q_reduced; others 0."""
         self.config_task.set_target(q_reduced)
-        vel = self._ik_reduced([self.config_task], self.dt)
+        vel = self._ik_reduced([self.config_task], self.dt, self.step_limits_reduced)
         vel_full = self.robot_model.zero_q_body
         vel_full[self.robot_model.reduced_mask] = vel
         return vel_full

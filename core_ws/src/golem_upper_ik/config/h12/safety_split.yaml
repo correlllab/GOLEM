@@ -14,7 +14,6 @@ controller:
   hold_targets:
     torso_joint: 0.0
   threshold_ik: 0.0001
-  threshold_joint: 0.01
   # m, rad: in the RoboCasa sim the hold settles each grasp frame within 0.6 mm and 2.1 mrad
   # of its target, 1.0 mm and 4.1 mrad while it settles (40 goals); a planned goal holds the
   # IK solve's solution, which stops within 1 mm and 10 mrad (ik_solver.LINEAR_THRESHOLD,

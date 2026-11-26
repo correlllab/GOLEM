@@ -22,7 +22,6 @@ controller:
   startup_timeout: 30.0
   startup_move_timeout: 30.0
   threshold_ik: 0.0001
-  threshold_joint: 0.01
   # m, rad: in the RoboCasa sim the hold settles each grasp frame within 0.4 mm and 0.5 mrad
   # of its target with gains.ki (45 goals), and up to 1.1 mm and 3.3 mrad without it; a planned
   # goal holds the IK solve's solution, which stops within 1 mm and 10 mrad

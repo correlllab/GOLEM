@@ -36,9 +36,8 @@ CONTROLLER_DEFAULTS = {
     'd_min': 0.02,  # self-collision distance the IK keeps, m
     'timeout': 10.0,  # s per goal without a duration
     'threshold_ik': 0.001,  # largest IK joint velocity at which a goal's IK has converged
-    'threshold_joint': 0.01,  # rad: a named-config goal's largest joint error when reached
-    'threshold_linear': 0.002,  # m: a frame goal's largest position error when reached
-    'threshold_angular': 0.01,  # rad: a frame goal's largest orientation error when reached
+    'threshold_linear': 0.002,  # m: a grasp goal's largest position error when reached
+    'threshold_angular': 0.01,  # rad: a grasp goal's largest orientation error when reached
     'state_timeout': 5.0,  # s to wait for a fresh /lowstate before enabling anything
     'startup_timeout': 30.0,  # s for golem_safety to be seen relaying the commands
     'startup_move_timeout': 30.0,  # s for the start-up moves, from the follow gate opening

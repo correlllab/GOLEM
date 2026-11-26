@@ -115,7 +115,7 @@ def test_defaults(robot, tmp_path):
     assert controller['imu_frame'] == profile.imu_frame
     expected = {
         'v_lim': 1.0, 'w_lim': 2.0, 'dq_lim': 1.0, 'd_min': 0.02, 'timeout': 10.0,
-        'threshold_ik': 0.001, 'threshold_joint': 0.01, 'threshold_linear': 0.002,
+        'threshold_ik': 0.001, 'threshold_linear': 0.002,
         'threshold_angular': 0.01, 'state_timeout': 5.0, 'startup_timeout': 30.0,
         'startup_move_timeout': 30.0, 'follow_tolerance': 0.05,
     }
@@ -244,7 +244,6 @@ def test_bad_values_raise(tmp_path, section, key, value):
     ('controller.dq_lim', 0.0),
     ('controller.timeout', 0.0),
     ('controller.threshold_ik', 0.0),
-    ('controller.threshold_joint', 0.0),
     ('controller.threshold_linear', -0.001),
     ('controller.threshold_angular', 0.0),
     ('controller.d_min', -0.01),

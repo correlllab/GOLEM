@@ -3,7 +3,7 @@
 #
 # Usage: tests/stack/run.sh isaac|robocasa arms|locomotion
 #   arms         both grasp frames 2 cm forward and back through /grasp_frame_target
-#                (check_frame_task.py)
+#                (check_grasp_frame_target.py)
 #   locomotion   ALMI balance, walk and stop on /cmd_vel (check_lowerbody.py); RoboCasa only:
 #                `isaac locomotion` is refused, since Isaac's rt/lowstate tick counts publishes
 #                and the leg node never starts there (tests/stack/README.md)

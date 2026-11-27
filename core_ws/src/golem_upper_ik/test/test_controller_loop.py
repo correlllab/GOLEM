@@ -367,6 +367,37 @@ def test_a_planned_goal_takes_the_first_seed_the_planner_reaches(models, robot, 
 
 
 @pytest.mark.parametrize('robot', ROBOTS)
+@pytest.mark.parametrize('enabled', [True, False])
+def test_warm_planner_starts_the_planner_with_the_controller(ros, models, robot, enabled):
+    """warm_planner starts the planner subprocess in the background as the controller starts.
+
+    Only when the config lets it plan; without warm_planner, or with planning off, none starts.
+    """
+    from golem_upper_ik.core.controller.frame_controller import FrameController
+    profile = profile_of(robot)
+    config = config_of(robot, CONFIGS[robot])
+    config['planner']['enabled'] = enabled
+    FollowingRobot(ros, profile, body_pose(profile, 'prep' if robot == 'h12' else 'home'),
+                   '/lowcmd')
+    model = shared_model(ros, models, robot)
+    warmed = FrameController(ros.node('controller'), profile, config, robot_model=model,
+                             init=False, warm_planner=True)
+    ros.on_close(warmed.shutdown)
+    if enabled:
+        assert wait_for(lambda: warmed.planner._worker is not None
+                        and warmed.planner._worker.process.is_alive(), 60.0)
+    else:
+        time.sleep(0.5)
+        assert warmed.planner._worker is None
+    warmed.shutdown()
+    cold = FrameController(ros.node('controller'), profile, config, robot_model=model,
+                           init=False)
+    ros.on_close(cold.shutdown)
+    time.sleep(0.5)
+    assert cold.planner._worker is None
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
 def test_no_lowstate_means_no_command_and_a_clear_error(ros, models, robot):
     """Without /lowstate nothing is commanded, and the start-up stops with a clear error."""
     profile = profile_of(robot)

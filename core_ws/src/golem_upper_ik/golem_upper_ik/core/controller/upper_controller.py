@@ -581,32 +581,49 @@ class UpperController:
         fails.
         """
         self._check_planning()
+        return self._path_or_raise(self._plan(q_reduced, active_mask))
+
+    def _plan(self, q_reduced, active_mask):
+        """Return the planner's PlanResult from the command seed to q_reduced."""
         start = self._command_seed()[0][self.robot_model.reduced_mask]
-        result = self.planner.plan_configuration(
+        return self.planner.plan_configuration(
             current_q=self.robot_model.state['q'],
             start=start,
             goal=np.asarray(q_reduced, dtype=float),
             active_mask=active_mask,
         )
-        return self._path_or_raise(result)
 
     def plan_to_ik_target(self, ik_timeout):
-        """Return a planned reduced path to the IK solution of the current frame tasks.
+        """Return a planned reduced path to an IK solution of the current frame tasks.
 
-        ik_timeout is each IK seed's time limit, s. PlannerUnavailableError, before any IK, when
-        the controller cannot plan; RuntimeError when the IK or the planning fails. Only the
-        joints that move the tasks' frames plan.
+        ik_timeout is each IK seed's time limit, s (IKSolver.solve_ik_reduced). A seed's
+        solution counts only once the planner finds a path to it; when the planner finds none,
+        the IK goes on to the next seed. PlannerUnavailableError, before any IK, when the
+        controller cannot plan; RuntimeError when no seed converges ('IK failed to resolve
+        current targets'), when the planner found no path to any that did (the last one's
+        reason), or from the planner itself. Only the joints that move the tasks' frames plan.
         """
         self._check_planning()
         # restrict planning to the joints supporting the active tasks, so untasked limbs
         # (the other arm) never move during the plan
         active_mask = self._active_task_mask()
         self.update_ik_solver()
-        ik_result = self.ik_solver.solve_ik_reduced(timeout=ik_timeout)
-        if not ik_result.success:
+        planned = {}
+
+        def plannable(ik_result):
+            """Plan to a converged seed's solution; return whether a path was found."""
+            planned['result'] = self._plan(ik_result.q[self.robot_model.reduced_mask],
+                                           active_mask)
+            if not planned['result'].success:
+                self._logger.info(f"The IK converged from seed '{ik_result.seed_name}', but "
+                                  f"planning to it failed: {planned['result'].reason}; "
+                                  'trying the next seed')
+            return planned['result'].success
+
+        self.ik_solver.solve_ik_reduced(timeout=ik_timeout, accept=plannable)
+        if 'result' not in planned:
             raise RuntimeError('IK failed to resolve current targets')
-        q_goal = ik_result.q[self.robot_model.reduced_mask]
-        return self.plan_to_configuration(q_goal, active_mask=active_mask)
+        return self._path_or_raise(planned['result'])
 
     def _active_task_mask(self):
         """Return the reduced-joint mask of the joints that move any frame task's frame."""

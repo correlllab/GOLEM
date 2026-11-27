@@ -233,7 +233,13 @@ then moves only in the start-up step 4.
   5 rad/s² covers the position-limit brake's own deceleration, `dq_lim / LIMIT_APPROACH_TIME`
   (4.2 rad/s² at the sims' 0.83 rad/s, 1.5 at the real G1's 0.3); the constant's comment has the
   measurements.
-- `plan: true`: the OMPL planner (in a subprocess of its own) plans in the IK joints, with the
+- `plan: true`: the goal's joint target is an IK solution of its targets, iterated from the
+  measured pose and then the named seeds `home`, `t_pose` and `arms_front_45`
+  (`core/ik_solver.py`) in two passes: each seed first for at most `SEED_FIRST_PASS` (2 s of
+  steady time), then the seeds that have not converged for the rest of `controller.timeout`
+  each. A seed's solution counts only once the planner finds a path to it; when it finds none,
+  the next seed to converge is tried, and the goal fails with the planner's reason once none
+  is left. The OMPL planner (in a subprocess of its own) plans in the IK joints, with the
   self-collision checks and the planner frames' x/y/z bounds, and the path is executed one
   waypoint per control period. Its smoothstep timing gets more waypoints until no joint
   accelerates faster than `ACCEL_LIMIT` along it, from rest to rest (up to

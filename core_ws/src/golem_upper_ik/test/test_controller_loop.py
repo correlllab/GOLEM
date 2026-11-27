@@ -20,6 +20,9 @@ of following it.
 Under use_sim_time the start-up's waits count the sim's /clock (SimClock): its timeouts are s
 of sim time, whether the sim runs faster or slower than the wall clock.
 
+A planned goal's IK goes on to the next seed to converge when the planner finds no path to a
+seed's solution.
+
 The acceleration limit: its stop step, step bounds and per-arm factor, and over whole IK-stepped
 moves (a start-up move, a direct goal, a goal into a position limit) every command's change of
 step on both robots.
@@ -32,6 +35,7 @@ to the bound.
 import re
 import threading
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -292,6 +296,74 @@ def test_shutdown_stops_the_planner_and_detaches_the_state_whatever_raises(raisi
     with pytest.raises(RuntimeError, match=f'the {raising} failed'):
         controller.shutdown()
     assert calls == ['handler', 'planner', 'state', 'clock']
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
+@pytest.mark.parametrize('refused', [0, 1, 2, None])
+def test_a_planned_goal_takes_the_first_seed_the_planner_reaches(models, robot, refused):
+    """A planned goal's IK goes on to the next converged seed when the planner reaches none.
+
+    Measured at arms_front_45 and targeting its grasp frames, the measured pose ('current')
+    and the arms_front_45 seed converge with no time to iterate. The planner refuses the
+    first `refused` converged seeds' solutions: the goal plans to the next, fails with the
+    planner's reason once both are refused, and, with a target no seed reaches (None), fails
+    with the IK's error before any plan.
+    """
+    import pinocchio as pin
+    from golem_upper_ik.core.controller.upper_controller import UpperController
+    from golem_upper_ik.core.ik_solver import IKSolver
+    from golem_upper_ik.core.planner.reduced_joint_planner import PlanResult
+    from golem_upper_ik.core.robot_model import FixedState
+    model = models(robot)
+    profile = model.profile
+    q = model.zero_q_body
+    q[model.reduced_mask] = profile.named_configs['arms_front_45']
+    model.state_subscriber = FixedState(q)
+    try:
+        model.rebuild_reduced_model(q)
+        solver = IKSolver(model, profile.named_configs, dt=1.0 / 30.0, d_min=0.02)
+        for grasp_frame in profile.grasp_frames:
+            target = pin.SE3(model.get_frame_transformation_body(grasp_frame.name, q))
+            if refused is None:
+                target.translation[0] += 1.0  # 1 m further forward: out of reach
+            solver.add_frame_task(grasp_frame.name, grasp_frame.name, target=target)
+        controller = UpperController.__new__(UpperController)
+        controller.robot_model = model
+        controller.ik_solver = solver
+        controller._check_planning = lambda: None
+        controller._active_task_mask = lambda: None
+        controller.update_ik_solver = lambda: None
+        logged = []
+        controller._logger = SimpleNamespace(info=logged.append)
+        plans = []
+
+        def plan(q_reduced, active_mask):
+            """Refuse the first `refused` goals; plan a one-waypoint path to the others."""
+            plans.append(np.array(q_reduced))
+            if len(plans) <= (refused or 0):
+                return PlanResult(success=False, path=np.empty((0, len(q_reduced))),
+                                  reason=f'refused goal {len(plans)}')
+            return PlanResult(success=True, path=np.array([q_reduced]), reason='direct path')
+
+        controller._plan = plan
+        if refused is None:
+            with pytest.raises(RuntimeError, match='IK failed to resolve current targets'):
+                controller.plan_to_ik_target(ik_timeout=0.0)
+            assert plans == []
+        elif refused == 2:
+            with pytest.raises(RuntimeError, match='Planning failed: refused goal 2'):
+                controller.plan_to_ik_target(ik_timeout=0.0)
+            assert len(plans) == 2
+        else:
+            path = controller.plan_to_ik_target(ik_timeout=0.0)
+            assert len(plans) == refused + 1
+            np.testing.assert_array_equal(path, [plans[-1]])
+        assert len(logged) == min(refused or 0, 2)
+        assert all('trying the next seed' in line for line in logged)
+        if refused:
+            assert "seed 'current'" in logged[0]
+    finally:
+        model.state_subscriber = None
 
 
 @pytest.mark.parametrize('robot', ROBOTS)

@@ -87,6 +87,98 @@ def test_named_seeds_are_fallbacks(solver, monkeypatch, target, tried):
                                model.profile.named_configs[target], atol=1e-12)
 
 
+def fake_attempts(solver, monkeypatch, converges):
+    """Replace the IK attempt with a fake; return its calls as (seed, timeout, start q).
+
+    converges(seed_name, call) says whether a seed's call-th attempt (from 1) converges; each
+    attempt ends at its start plus 0.01 rad on every IK joint, at once.
+    """
+    from golem_upper_ik.core.ik_solver import IKResult
+    model = solver.robot_model
+    calls = []
+
+    def attempt(seed_name, q_seed, alpha, timeout):
+        """Note the call; return the fake outcome."""
+        calls.append((seed_name, timeout, np.array(q_seed)))
+        q = model.zero_q_body
+        q[model.reduced_mask] = np.asarray(q_seed) + 0.01
+        success = converges(seed_name, sum(call[0] == seed_name for call in calls))
+        return IKResult(q=q, success=success, linear_error=0.0 if success else 1.0,
+                        angular_error=0.0, seed_name=seed_name)
+
+    monkeypatch.setattr(solver, '_solve_ik_reduced_attempt', attempt)
+    return calls
+
+
+def test_a_fast_seed_is_not_held_up_by_seeds_that_never_converge(solver, monkeypatch):
+    """The first pass gives each seed at most SEED_FIRST_PASS, in order.
+
+    So a seed that converges in its first pass ends the search after the seeds before it have
+    run SEED_FIRST_PASS each, not their whole timeout.
+    """
+    from golem_upper_ik.core.ik_solver import SEED_FIRST_PASS
+    measured(solver.robot_model, solver.robot_model.zero_q_body)
+    calls = fake_attempts(solver, monkeypatch, lambda seed, call: seed == 't_pose')
+    result = solver.solve_ik_reduced(timeout=5.0)
+    assert [(seed, timeout) for seed, timeout, _ in calls] == [
+        ('current', SEED_FIRST_PASS), ('home', SEED_FIRST_PASS), ('t_pose', SEED_FIRST_PASS)]
+    assert result.success and result.seed_name == 't_pose'
+
+
+def test_the_second_pass_resumes_each_seed_for_the_rest_of_its_timeout(solver, monkeypatch):
+    """A seed that converges only after its first pass is resumed where that pass left it.
+
+    The second pass goes through the unconverged seeds in order, each for its timeout less
+    what its first pass took, so each seed iterates for its timeout in all.
+    """
+    from golem_upper_ik.core.ik_solver import SEED_FIRST_PASS
+    measured(solver.robot_model, solver.robot_model.zero_q_body)
+    calls = fake_attempts(solver, monkeypatch, lambda seed, call: (seed, call) == ('home', 2))
+    result = solver.solve_ik_reduced(timeout=5.0)
+    assert [seed for seed, _, _ in calls] == [
+        'current', 'home', 't_pose', 'arms_front_45', 'current', 'home']
+    assert all(timeout == SEED_FIRST_PASS for _, timeout, _ in calls[:4])
+    # the fake attempts take no time, so the second pass gets (nearly) the whole timeout
+    assert all(5.0 - 0.05 < timeout <= 5.0 for _, timeout, _ in calls[4:])
+    np.testing.assert_allclose(calls[5][2], calls[1][2] + 0.01)
+    assert result.success and result.seed_name == 'home'
+    np.testing.assert_allclose(result.q[solver.robot_model.reduced_mask], calls[1][2] + 0.02)
+
+
+def test_a_timeout_shorter_than_the_first_pass_bounds_it(solver, monkeypatch):
+    """With timeout under SEED_FIRST_PASS each seed gets timeout, once; none converging.
+
+    The best attempt is returned and the configuration left at it.
+    """
+    measured(solver.robot_model, solver.robot_model.zero_q_body)
+    calls = fake_attempts(solver, monkeypatch, lambda seed, call: False)
+    result = solver.solve_ik_reduced(timeout=0.2)
+    assert [(seed, timeout) for seed, timeout, _ in calls] == [
+        ('current', 0.2), ('home', 0.2), ('t_pose', 0.2), ('arms_front_45', 0.2)]
+    assert not result.success
+    np.testing.assert_allclose(solver.configuration_reduced.q,
+                               result.q[solver.robot_model.reduced_mask])
+
+
+def test_a_refused_seed_passes_the_search_on(solver, monkeypatch):
+    """A converged seed accept refuses passes the search on to the next seed to converge.
+
+    accept is called once for each converged seed, in the order they converge.
+    """
+    measured(solver.robot_model, solver.robot_model.zero_q_body)
+    fake_attempts(solver, monkeypatch, lambda seed, call: seed in ('current', 't_pose'))
+    asked = []
+
+    def accept(result):
+        """Note the seed; take only t_pose's solution."""
+        asked.append(result.seed_name)
+        return result.seed_name == 't_pose'
+
+    result = solver.solve_ik_reduced(timeout=5.0, accept=accept)
+    assert asked == ['current', 't_pose']
+    assert result.success and result.seed_name == 't_pose'
+
+
 def test_seed_configs_must_be_named_configs():
     """A solver whose named configs lack a seed is refused before the model is touched."""
     from golem_upper_ik.core.ik_solver import IKSolver

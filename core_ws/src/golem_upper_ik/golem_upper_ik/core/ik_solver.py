@@ -4,7 +4,8 @@ IKSolver keeps two configurations: one on the reduced model, which the IK steps,
 the body model (no free-flyer), which carries every body joint's q. Each frame task pulls one
 frame to a target pose. With a self-collision model the reduced model's IK keeps the
 collision pairs controller.d_min apart (a self-collision barrier, on the BARRIER_PAIRS
-closest pairs of each step); without one it runs without the barrier. solve_ik_reduced tries seeds in turn, the measured pose first.
+closest pairs of each step); without one it runs without the barrier. solve_ik_reduced tries
+seeds in turn, the measured pose first, in two passes (SEED_FIRST_PASS).
 
 The IK keeps every IK joint within the reduced model's position limits (RobotModel's range:
 the controller's clip range). A configuration or seed given outside them is clamped into them
@@ -30,6 +31,15 @@ from golem_upper_ik.core.robot_model import RobotModel
 # named configurations solve_ik_reduced falls back to, in order, after the measured pose;
 # every robot's profile must name them
 SEED_CONFIGS = ('home', 't_pose', 'arms_front_45')
+# s of steady time: solve_ik_reduced's first pass gives each seed this long, in order, and its
+# second pass resumes the seeds that have not converged for the rest of their timeout. Offline
+# (the H1-2's safety_split and the G1's sim_split, 1176 converged seed solves of 425 recorded,
+# posture and random goals, in the ros container on the E-cores), all but one converged within
+# 2 s (that one in 2.15 s; the G1's postures within 0.94 s), so the first pass takes the seed one
+# pass would have taken; and a seed that never converges no longer keeps the seeds after it
+# waiting its whole timeout: the H1-2's staging-right posture, where 'current' and 'home' never
+# converge and 't_pose' does in 0.12 s, takes 4.1 s of IK instead of 10.1 s
+SEED_FIRST_PASS = 2.0
 # solve_ik_reduced converges when the summed frame-task errors are below these
 LINEAR_THRESHOLD = 1e-3  # m
 ANGULAR_THRESHOLD = 1e-2  # rad
@@ -365,22 +375,42 @@ class IKSolver:
         vel_full[self.robot_model.reduced_mask] = vel
         return vel_full
 
-    def solve_ik_reduced(self, alpha=0.1, timeout=1.0):
-        """Return an IKResult: the IK iterated to convergence from each seed in turn.
+    def solve_ik_reduced(self, alpha=0.1, timeout=1.0, accept=None):
+        """Return an IKResult: the IK iterated to convergence from the seeds, in two passes.
 
-        alpha is the iteration step, s; timeout bounds each seed's iterations, s of steady
-        time. A converged seed ends the search; without one, the reduced configuration is left
-        at the best.
+        alpha is the iteration step, s; timeout bounds each seed's iterations in all, s of
+        steady time. The first pass iterates each seed in order for at most SEED_FIRST_PASS;
+        the second resumes, in order, each seed that has not converged where its first pass
+        left it, for the rest of its timeout (a timeout of SEED_FIRST_PASS or less is one
+        pass). A converged seed ends the search when accept(result) is true (default:
+        always), called once for each converged seed, in the order they converge; one it
+        refuses passes the search on to the next. The configuration is then at the returned
+        seed's solution. Without an accepted seed, the reduced configuration is left at the
+        best attempt (a converged one first), which is returned. A seed whose iteration has
+        no QP solution raises NoSolutionFound and ends the search.
         """
-        attempts = []
-        for seed_name, q_seed in self._seed_list():
-            attempt = self._solve_ik_reduced_attempt(seed_name, q_seed, alpha, timeout)
-            attempts.append(attempt)
-            if attempt.success:
-                return self._best_attempt(attempts)
+        mask = self.robot_model.reduced_mask
+        seeds = self._seed_list()
+        resume = dict(seeds)
+        spent = dict.fromkeys(resume, 0.0)
+        attempts = {}
+        passes = (timeout,) if timeout <= SEED_FIRST_PASS else (SEED_FIRST_PASS, timeout)
+        for budget in passes:
+            for seed_name, _ in seeds:
+                attempt = attempts.get(seed_name)
+                if attempt is not None and (attempt.success or spent[seed_name] >= budget):
+                    continue
+                start = time.monotonic()
+                attempt = self._solve_ik_reduced_attempt(
+                    seed_name, resume[seed_name], alpha, budget - spent[seed_name])
+                spent[seed_name] += time.monotonic() - start
+                resume[seed_name] = attempt.q[mask]
+                attempts[seed_name] = attempt
+                if attempt.success and (accept is None or accept(attempt)):
+                    return attempt
 
-        result = self._best_attempt(attempts)
-        self.configuration_reduced.update(result.q[self.robot_model.reduced_mask])
+        result = self._best_attempt(list(attempts.values()))
+        self.configuration_reduced.update(result.q[mask])
         return result
 
     def limited_step(self, step, low, high, capped=False):

@@ -64,9 +64,9 @@ gains:
 limits:
   clip:
     # rad: split latches its estop at the joint table (offset 0) and turns every motor off.
-    # The H1-2's arms, at two to four times these gains, overshot a command parked at their
-    # limit by up to 11.8 mrad in the RoboCasa sim (h12/safety_split.yaml), more than 0.01
-    # would leave; 0.02 is the H1-2's margin. Unmeasured on the real G1 and in the G1 sim
+    # The H1-2's arms, at two to four times these gains, went up to 7.9 mrad past their clip
+    # in the RoboCasa sim (h12/safety_split.yaml); 0.02 is the H1-2's margin, 2.5 times that.
+    # Unmeasured on the real G1 and in the G1 sim
     position_offset: 0.02
     velocity_ratio: 0.10
     torque_ratio: 0.60

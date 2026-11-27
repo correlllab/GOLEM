@@ -43,11 +43,12 @@ BARRIER_PAIRS = 32
 # of the distance, so a joint slows into its limit at no more than distance / this rad/s
 # (0.27 rad/s at 50 mrad, 0.11 at 20) instead of arriving at dq_lim. In the H1-2 RoboCasa sim,
 # where the skills' failure-retreat lift brings the shoulder yaw's command to the clip, the
-# yaw went 16.7 mrad past the clip without it and 9.9 to 14.4 mrad with it (8 lifts), and
-# that lift took 3.1 s instead of 2.1 s. A command already parked on the clip is not braked:
-# with it, one of 20 grasps still took the yaw 20.3 mrad past from there. Stepping the
-# H1-2's IK on 30 direct goals that stay 0.2 rad inside the range took no longer with 0.2 s,
-# 0.03 s longer at most with 0.3 s and 0.1 s with 0.5 s. Unmeasured on the real robots
+# yaw went 16.7 mrad past the clip without it and 9.9 to 14.4 mrad with it (8 lifts, the
+# steps then capped at 0.83 rad/s), most of it the hold's torque bias carried into the lift;
+# with the controller's acceleration limit and bias bound too (UpperController), 0.3 to 0.4
+# mrad (8 lifts), the lift taking 2.6 s. Stepping the H1-2's IK on 30 direct goals that stay
+# 0.2 rad inside the range took no longer with 0.2 s, 0.03 s longer at most with 0.3 s and
+# 0.1 s with 0.5 s. Unmeasured on the real robots
 LIMIT_APPROACH_TIME = 0.2
 
 

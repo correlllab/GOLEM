@@ -74,10 +74,13 @@ limits:
     # the fridge-handle grasp's take-off) and 7.2 mrad (the shoulder yaw parked for the
     # Battery's leftmost screw), and 7.9 mrad in a direct goal into the elbow's limit, so 0.02
     # leaves 2.5 times the worst. Without them a hold's torque bias carried onto the clip took
-    # the shoulder yaw 16.7 to 21.7 mrad past it. Unmeasured on the real H1-2. Wrist pitch and
-    # yaw keep 0.001: relax_safety_split's estop range (-0.10) and default_safety_split's
-    # (-1.01) lie outside the table there, tight_safety_split clips them 0.05 inside it itself,
-    # and the staging postures (robot.yaml) park the wrist yaw 6.8 mrad inside the table. Their
+    # the shoulder yaw 9.9 to 16.7 mrad past it (19.8 once, 8 of it unexplained), and twice in
+    # 40 grasps a parked yaw went 21.3 and 21.7 mrad past without a bias toward the limit (one
+    # recorded pointing away, the other unrecorded): this margin does not cover that, and it did
+    # not recur in the 23 grasps run with both. Unmeasured on the real H1-2. Wrist pitch and yaw
+    # keep 0.001: relax_safety_split's estop range (-0.10) and default_safety_split's (-1.01)
+    # lie outside the table there, tight_safety_split clips them 0.05 inside it itself, and the
+    # staging postures (robot.yaml) park the wrist yaw 6.8 mrad inside the table. Their
     # overshoot reached 35 to 49 mrad in the sim's direct moves overhead and at speed, the arm's
     # other joints 50 to 160 mrad off their commands (the 49 stopped by the sim's joint stop);
     # unmeasured on the real H1-2

@@ -14,8 +14,9 @@ distance to the limit, which is not a number past it), so every q the solver ret
 integrates to lies within them. The stepped moves (ik_step_reduced, goto_reduced_configuration)
 brake into the limits: a joint closes on its limit at no more than its distance over
 LIMIT_APPROACH_TIME; solve_ik_reduced's iterations keep Pink's default gain. A stepped move's
-step is otherwise the whole step to its goal within the model's velocity limits: the
-controller scales it to its speed and acceleration limits.
+step is otherwise the whole step to its goal within the model's velocity limits, which the
+controller takes as the distance left for its acceleration limit; a start-up move's step
+(goto_reduced_configuration) can also move each IK joint at most JOINT_SPEED_CAP.
 """
 import time
 from dataclasses import dataclass
@@ -50,6 +51,20 @@ BARRIER_PAIRS = 32
 # 0.2 rad inside the range took no longer with 0.2 s, 0.03 s longer at most with 0.3 s and
 # 0.1 s with 0.5 s. Unmeasured on the real robots
 LIMIT_APPROACH_TIME = 0.2
+# rad/s: the most a start-up move's step (goto_reduced_configuration, capped) moves any one IK
+# joint, each joint bounded on its own in the IK's quadratic program, so a joint with less to
+# go arrives first and the others keep going, as the start-up moves did with Pink's
+# AccelerationLimit(25 rad/s^2) and no last step (25 rad/s^2 times the 1/30 s period). In the
+# H1-2's RoboCasa Battery scene the start-up's home move puts the left hand on the table; moved
+# along a straight joint path instead (each arm scaled as a whole), the hand came to rest
+# differently, the torso stood 0.076 instead of 0.042 rad when the first goal started, and
+# the right arm's grasps then failed to plan their staging posture; with this cap the torso
+# stood at 0.046 and the staging posture planned again. Each arm is scaled under
+# controller.dq_lim after it
+JOINT_SPEED_CAP = 0.83
+# limited_step's weight on leaving its bounds, against the step's distance from the one asked
+# for (both in rad^2): leaving them by 1 urad costs as much as missing the step by 1 mrad
+LIMITED_STEP_SLACK_WEIGHT = 1e6
 
 
 @dataclass
@@ -149,13 +164,14 @@ class IKSolver:
             pink.limits.AccelerationLimit(model, 25.0 * np.ones(model.nv)),
         ]
         # the stepped moves the controller commands: braked into the limits, and otherwise the
-        # whole step to the goal the velocity limits allow, which the controller takes as the
-        # distance left (UpperController's acceleration limit scales it)
-        self.step_limits_reduced = [
-            pink.limits.ConfigurationLimit(
-                model, config_limit_gain=-np.expm1(-self.dt / LIMIT_APPROACH_TIME)),
-            pink.limits.VelocityLimit(model),
-        ]
+        # whole step to the goal the model's velocity limits allow, which the controller takes
+        # as the distance left (its acceleration limit); the capped start-up moves' limits also
+        # hold each IK joint to JOINT_SPEED_CAP
+        brake = pink.limits.ConfigurationLimit(
+            model, config_limit_gain=-np.expm1(-self.dt / LIMIT_APPROACH_TIME))
+        self.step_limits_reduced = [brake, pink.limits.VelocityLimit(model)]
+        self.capped_step_limits_reduced = [brake, pink.limits.VelocityLimit(
+            model, np.minimum(model.velocityLimit, JOINT_SPEED_CAP))]
 
     @property
     def q(self):
@@ -366,28 +382,51 @@ class IKSolver:
         self.configuration_reduced.update(result.q[self.robot_model.reduced_mask])
         return result
 
-    def limited_step(self, step, low, high):
-        """Return the reduced step (rad) nearest step within [low, high], or None if none is.
+    def limited_step(self, step, low, high, capped=False):
+        """Return the reduced step (rad) nearest step within [low, high], or None.
 
-        The step also keeps the stepped moves' limits (step_limits_reduced: the position limits'
-        brake and the velocity limits) and the self-collision barrier at the reduced
-        configuration, as an IK step does; nearest is in joint space. None when no step keeps
-        them all (the QP solver finds none).
+        The step keeps the stepped moves' limits (step_limits_reduced: the position limits'
+        brake and the velocity limits; capped, also JOINT_SPEED_CAP) and the self-collision
+        barrier at the reduced configuration, as an IK step does; nearest is in joint space.
+        When no step within [low, high] keeps them (the barrier or the brake needs a harder
+        change), the step keeps them and leaves [low, high] by the least it can (summed
+        squares). None only when the QP solver finds no step at all. SAFETY: the limits and the
+        barrier are hard constraints in both; only [low, high] gives way.
         """
         barriers = []
         if self.collision_barrier_reduced is not None:
             barriers = [self.collision_barrier_reduced]
-        problem = pink.build_ik(self.configuration_reduced, [], self.dt,
-                                limits=self.step_limits_reduced, barriers=barriers)
+        limits = self.capped_step_limits_reduced if capped else self.step_limits_reduced
+        problem = pink.build_ik(self.configuration_reduced, [], self.dt, limits=limits,
+                                barriers=barriers)
         step = np.asarray(step, dtype=np.float64)
-        return qpsolvers.solve_qp(np.eye(step.size), -step, problem.G, problem.h,
-                                  lb=np.asarray(low, dtype=np.float64),
-                                  ub=np.asarray(high, dtype=np.float64), solver=self.solver)
+        low, high = np.asarray(low, dtype=np.float64), np.asarray(high, dtype=np.float64)
+        n = step.size
+        within = qpsolvers.solve_qp(np.eye(n), -step, problem.G, problem.h, lb=low, ub=high,
+                                    solver=self.solver)
+        if within is not None:
+            return within
+        # [step, slack]: low - slack <= step <= high + slack, slack >= 0, the slack weighed so
+        # heavily that the step leaves the bounds only as far as the constraints make it
+        eye, zero = np.eye(n), np.zeros((n, n))
+        G = np.vstack([np.hstack([problem.G, np.zeros((problem.G.shape[0], n))]),
+                       np.hstack([eye, -eye]), np.hstack([-eye, -eye])])
+        h = np.concatenate([problem.h, high, -low])
+        P = np.block([[eye, zero], [zero, LIMITED_STEP_SLACK_WEIGHT * eye]])
+        q = np.concatenate([-step, np.zeros(n)])
+        lb = np.concatenate([np.full(n, -np.inf), np.zeros(n)])
+        out = qpsolvers.solve_qp(P, q, G, h, lb=lb, solver=self.solver)
+        return None if out is None else out[:n]
 
-    def goto_reduced_configuration(self, q_reduced: np.ndarray):
-        """Return one IK step's body joint velocity (rad/s) toward q_reduced; others 0."""
+    def goto_reduced_configuration(self, q_reduced: np.ndarray, capped=True):
+        """Return one IK step's body joint velocity (rad/s) toward q_reduced; others 0.
+
+        capped: each IK joint at most JOINT_SPEED_CAP (capped_step_limits_reduced).
+        """
         self.config_task.set_target(q_reduced)
-        vel = self._ik_reduced([self.config_task], self.dt, self.step_limits_reduced)
+        vel = self._ik_reduced(
+            [self.config_task], self.dt,
+            self.capped_step_limits_reduced if capped else self.step_limits_reduced)
         vel_full = self.robot_model.zero_q_body
         vel_full[self.robot_model.reduced_mask] = vel
         return vel_full

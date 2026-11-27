@@ -55,8 +55,8 @@ COMMAND_SEED_MAX_GAP = 0.1
 # RoboCasa sim a bias integrated in a hold (3.7 to 5.1 N*m, 25 to 34 mrad over kp, the hand
 # pressing on the table) carried into the move that took the shoulder yaw's command onto its
 # clip, and the yaw went 8.9 to 16.7 mrad past it (12 grasps), against the clip's 20 mrad
-# margin to the estop. 5 mrad covers the bias a hold needed where nothing pressed on the arm: at most
-# 4.0 mrad over kp to bring a joint parked at its clip onto it (the left shoulder yaw, an
+# margin to the estop. 5 mrad covers the bias a hold needed where nothing pressed on the arm:
+# at most 4.0 mrad over kp to bring a joint parked at its clip onto it (the left shoulder yaw, an
 # unreachable target), and the gravity model's error, at most 4.2 mrad over kp (1.0 N*m on a
 # shoulder pitch where the bias is 0). Unmeasured on the real robots
 BIAS_PAST_CLIP = 0.005
@@ -668,7 +668,9 @@ class UpperController:
         The IK's velocity, rad/s, is commanded within the speed and acceleration limits.
         """
         self.check_state_fresh()
-        return self._step_ik(self.ik_solver.goto_reduced_configuration(q_reduced))
+        return self._step_ik(self.ik_solver.goto_reduced_configuration(q_reduced),
+                             self.ik_solver.goto_reduced_configuration(q_reduced, capped=False),
+                             capped=True)
 
     def control_step_reduced(self):
         """Command one IK step on every frame task; return its speeds (_step_ik).
@@ -676,18 +678,23 @@ class UpperController:
         The IK's velocity, rad/s, is commanded within the speed and acceleration limits.
         """
         self.check_state_fresh()
-        return self._step_ik(self.ik_solver.ik_step_reduced())
+        vel = self.ik_solver.ik_step_reduced()
+        return self._step_ik(vel, vel)
 
-    def _step_ik(self, vel_ik):
+    def _step_ik(self, vel_ik, vel_free, capped=False):
         """Command the IK's body joint velocity vel_ik (rad/s) within the limits; return speeds.
 
-        The step is limited to the speed limits (_limit_joint_vel), then to the acceleration
-        limit (_limit_joint_acc), then to the speed limits again, which win over the
-        acceleration limit. Returns per body joint the larger of the IK's and the commanded
-        speed, rad/s: the IK has converged when every one is under threshold_ik, so a step the
-        limits hold back, or a joint still moving, does not read as converged.
+        vel_free is the same step without the start-up moves' JOINT_SPEED_CAP (ik_solver): the
+        distance left. capped: vel_ik is a start-up move's step, under the cap, and the cap
+        holds through the acceleration limit. The step is limited to the speed limits
+        (_limit_joint_vel), then to the acceleration limit (_limit_joint_acc), then to the speed
+        limits again, which win over the acceleration limit. Returns per body joint the larger
+        of the IK's and the commanded speed, rad/s: the IK has converged when every one is under
+        threshold_ik, so a step the limits hold back, or a joint still moving, does not read as
+        converged.
         """
-        vel = self._limit_joint_vel(self._limit_joint_acc(self._limit_joint_vel(vel_ik), vel_ik))
+        vel = self._limit_joint_vel(self._limit_joint_acc(self._limit_joint_vel(vel_ik),
+                                                          vel_free, capped))
         self._apply_velocity_command(vel)
         return np.maximum(np.abs(vel_ik), np.abs(vel))
 
@@ -776,17 +783,18 @@ class UpperController:
             vel_scaled[arm] = scaler * vel[arm]
         return vel_scaled
 
-    def _limit_joint_acc(self, vel, vel_ik):
+    def _limit_joint_acc(self, vel, vel_ik, capped=False):
         """Return vel within ACCEL_LIMIT of the last IK step, braking into the IK's goal.
 
         vel: the step's body joint velocity within the speed limits, rad/s; vel_ik: the IK's
-        unscaled velocity, whose step is the distance left to the goal. The IK joints take
-        the step nearest vel's that changes each joint's step by at most ACCEL_LIMIT * dt^2
-        from its last and lets it stop within its distance left (step_bounds), and that keeps
-        the IK's position-limit brake, velocity limits and self-collision barrier
-        (IKSolver.limited_step). When there is none (the IK's brake or barrier, or the goal,
-        needs a harder change), each arm's step is scaled along vel's instead (accel_scale),
-        the IK's limits winning. The other joints pass through.
+        velocity without JOINT_SPEED_CAP or the speed limits, whose step is the distance left
+        to the goal. The IK joints take the step nearest vel's that changes each joint's step
+        by at most ACCEL_LIMIT * dt^2 from its last and lets it stop within its distance left
+        (step_bounds), and that keeps the IK's position-limit brake, velocity limits (capped,
+        also JOINT_SPEED_CAP) and self-collision barrier (IKSolver.limited_step); where those
+        need a harder change, the step keeps them and leaves the acceleration limit by the
+        least it can. When the QP solver finds no step, each arm's step is scaled along vel's
+        instead (accel_scale), the IK's limits winning. The other joints pass through.
         """
         dt = self.dt
         change = ACCEL_LIMIT * dt * dt
@@ -796,7 +804,7 @@ class UpperController:
         low, high = step_bounds(remaining, self._last_step[mask], change)
         limited = None
         if np.all(low <= high):
-            limited = self.ik_solver.limited_step(step, low, high)
+            limited = self.ik_solver.limited_step(step, low, high, capped)
         if limited is not None:
             vel[mask] = limited / dt
             return vel

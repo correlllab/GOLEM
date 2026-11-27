@@ -150,8 +150,9 @@ and OMPL's time limits are host compute budgets, in s of steady time.
    limit checks run from its first `/lowstate`, so a joint already past `limits.estop` latches
    it) or in an earlier run.
 4. Move through the start-up postures, each until the IK's command is within 1e-3 rad of it
-   (the IK's steps within the acceleration limit, Goals below), then step the held joints to
-   `controller.hold_targets` at min(0.3, `dq_lim`) rad/s, all within
+   (the IK's steps within the acceleration limit, Goals below, and each IK joint at most
+   `JOINT_SPEED_CAP`, 0.83 rad/s, on its own: a joint with less to go arrives first), then step
+   the held joints to `controller.hold_targets` at min(0.3, `dq_lim`) rad/s, all within
    `controller.startup_move_timeout` of the gate opening.
 
 A start-up that fails after step 2 sends the shutdown command (Shutdown, below) and the

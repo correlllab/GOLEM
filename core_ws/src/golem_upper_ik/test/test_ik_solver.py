@@ -439,3 +439,72 @@ def test_stepped_moves_away_from_limits_are_not_braked(models, robot, base):
         model.state_subscriber = None
         model.set_position_limits(None)
         model.rebuild_reduced_model(np.zeros(model.num_motor))
+
+
+@pytest.mark.parametrize('robot, base', [('h12', 'home'), ('g1', 't_pose')])
+def test_start_up_steps_clip_each_joint_at_the_speed_cap(models, robot, base):
+    """A capped start-up step is the uncapped one with each joint clipped at JOINT_SPEED_CAP.
+
+    So each joint closes on its posture at up to the cap on its own, the ones with less to go
+    arriving first, instead of the arm moving along a straight joint path. The goal is the
+    base posture with every IK joint moved by up to 0.5 rad, away from the limits.
+    """
+    from golem_upper_ik.core.ik_solver import JOINT_SPEED_CAP
+    model = models(robot)
+    start = np.asarray(model.profile.named_configs[base], dtype=float)
+    rng = np.random.default_rng(5)
+    try:
+        solver, _ = stepping_solver(models, robot)
+        low = model.model_body_reduced.lowerPositionLimit
+        high = model.model_body_reduced.upperPositionLimit
+        mask = model.reduced_mask
+        clipped = 0
+        for _ in range(5):
+            goal = np.clip(start + rng.uniform(-0.5, 0.5, size=start.shape), low + 0.3, high - 0.3)
+            q_body = model.zero_q_body
+            q_body[mask] = start
+            measured(model, q_body)
+            solver.update_configurations()
+            capped = solver.goto_reduced_configuration(goal)[mask]
+            free = solver.goto_reduced_configuration(goal, capped=False)[mask]
+            np.testing.assert_allclose(capped, np.clip(free, -JOINT_SPEED_CAP, JOINT_SPEED_CAP),
+                                       atol=1e-6)
+            clipped += np.sum(np.abs(free) > JOINT_SPEED_CAP)
+        assert clipped > 0
+    finally:
+        model.state_subscriber = None
+        model.set_position_limits(None)
+        model.rebuild_reduced_model(np.zeros(model.num_motor))
+
+
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_limited_step_keeps_the_limits_when_its_bounds_cannot(models, robot):
+    """Bounds that would take a joint past its position limit give way; the limit holds.
+
+    The left elbow sits on its upper limit and the bounds ask it to step 5 to 10 mrad further:
+    the step stays inside the limit (within the QP's tolerance) and every other joint keeps
+    its bounds.
+    """
+    model = models(robot)
+    try:
+        solver, _ = stepping_solver(models, robot)
+        mask = model.reduced_mask
+        elbow = list(model.profile.enabled_joints).index('left_elbow_joint')
+        q = np.asarray(model.profile.named_configs['home'], dtype=float).copy()
+        q[elbow] = model.model_body_reduced.upperPositionLimit[elbow]
+        q_body = model.zero_q_body
+        q_body[mask] = q
+        measured(model, q_body)
+        solver.update_configurations()
+        low, high = np.full(q.size, -0.002), np.full(q.size, 0.002)
+        low[elbow], high[elbow] = 0.005, 0.01
+        step = solver.limited_step(np.zeros(q.size), low, high)
+        assert step is not None
+        assert step[elbow] <= 1e-6
+        others = np.arange(q.size) != elbow
+        assert np.all(step[others] >= low[others] - 1e-6)
+        assert np.all(step[others] <= high[others] + 1e-6)
+    finally:
+        model.state_subscriber = None
+        model.set_position_limits(None)
+        model.rebuild_reduced_model(np.zeros(model.num_motor))

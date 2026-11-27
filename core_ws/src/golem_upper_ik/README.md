@@ -149,9 +149,10 @@ and OMPL's time limits are host compute budgets, in s of steady time.
    with `use_estop:=true`, the paired safety config, and no estop latched at this start-up (its
    limit checks run from its first `/lowstate`, so a joint already past `limits.estop` latches
    it) or in an earlier run.
-4. Move through the start-up postures, each until the IK's command is within 1e-3 rad of it,
-   then step the held joints to `controller.hold_targets` at min(0.3, `dq_lim`) rad/s, all
-   within `controller.startup_move_timeout` of the gate opening.
+4. Move through the start-up postures, each until the IK's command is within 1e-3 rad of it
+   (the IK's steps within the acceleration limit, Goals below), then step the held joints to
+   `controller.hold_targets` at min(0.3, `dq_lim`) rad/s, all within
+   `controller.startup_move_timeout` of the gate opening.
 
 A start-up that fails after step 2 sends the shutdown command (Shutdown, below) and the
 node exits 1. `golem_safety` streams zero gains from the robot's first `/lowstate` and engages the upper-body input on
@@ -193,18 +194,38 @@ then moves only in the start-up step 4.
   `limits.clip.position_offset` comment says how its margin covers the overshoot measured
   against the estop ranges of the `golem_safety` configs it pairs with.
 - A direct goal (`plan: false`) steps the IK at `ctrl_hz`, its arm velocities limited to
-  `dq_lim` per joint and `v_lim`/`w_lim` at the end effectors. An iteration that takes longer
-  than the control period (a loaded host) runs the IK steps it owes next time, one per period
-  it took and at most `CATCH_UP_STEPS` (3), each solved over one period, so the arm keeps its
-  speed in robot time. The self-collision barrier constrains the `BARRIER_PAIRS` (32) closest
-  sphere pairs of each step (`core/ik_solver.py`). Once the IK's step is slower than
-  `threshold_ik` it holds the target with integral control (`gains.ki`, fading over the next
-  move); the targets are checked against the thresholds only from then on.
-- `plan: true`: the OMPL planner (in a subprocess of its own) plans in the IK joints, with
-  the self-collision checks and the planner frames' x/y/z bounds, and the path is executed one
-  waypoint per control period. `planner.enabled: false` aborts every planned goal before any
-  IK solve: `Planning is turned off: ...; send the goal with plan=false`. A profile without a
-  self-collision model could not plan either (`Planning is unavailable`); both robots' have
+  `dq_lim` per joint and `v_lim`/`w_lim` at the end effectors, and their changes to the
+  acceleration limit (below). An iteration that takes longer than the control period (a loaded
+  host) runs the IK steps it owes next time, one per period it took and at most
+  `CATCH_UP_STEPS` (3), each solved over one period and each within the acceleration limit, so
+  the arm keeps its speed in robot time. The self-collision barrier constrains the
+  `BARRIER_PAIRS` (32) closest sphere pairs of each step (`core/ik_solver.py`). Once the IK's
+  step is slower than `threshold_ik` it holds the target with integral control (`gains.ki`,
+  fading over the next move); the targets are checked against the thresholds only from then on.
+- **The acceleration limit.** Every IK-stepped command (the start-up moves and direct goals)
+  changes each IK joint's velocity by at most `ACCEL_LIMIT` (5 rad/s² of robot time,
+  `core/controller/upper_controller.py`), from rest at its start to rest in the hold. Each
+  control step takes the step nearest the IK's (within the speed limits) that changes no
+  joint's step by more than `ACCEL_LIMIT * dt^2` from its last, lets each joint still stop
+  within the IK's distance left to the goal, and keeps the IK's position-limit brake, velocity
+  limits and self-collision barrier (`IKSolver.limited_step`). When no step does (the brake,
+  the barrier or a goal behind a fast joint needs a harder change), each arm's step is scaled
+  along the IK's instead (`accel_scale`), the IK's limits winning, and the change can exceed
+  the limit there. The step is then scaled under `dq_lim`, `v_lim` and `w_lim` once more, so
+  the speed limits win too. The IK's own step is otherwise its whole step to the goal, so the
+  joints cruise at the speed limits. A direct goal's IK has converged once both its own and the
+  commanded joint speeds are under `threshold_ik`. Two commands jump on purpose, outside the IK
+  steps: a goal that starts from the measured pose (more than 0.1 rad off the command, above)
+  moves the command onto the arm, and a cancel or a timeout moves it to where the arm will rest
+  (`stop_joints`, below). 5 rad/s² is the position-limit brake's own deceleration at a `dq_lim`
+  of 1 rad/s; the constant's comment has the measurements.
+- `plan: true`: the OMPL planner (in a subprocess of its own) plans in the IK joints, with the
+  self-collision checks and the planner frames' x/y/z bounds, and the path is executed one
+  waypoint per control period. Its smoothstep timing gets more waypoints until no joint
+  accelerates faster than `ACCEL_LIMIT` along it, from rest to rest (up to
+  `planner.max_interpolation_steps`). `planner.enabled: false` aborts every planned goal before
+  any IK solve: `Planning is turned off: ...; send the goal with plan=false`. A profile without
+  a self-collision model could not plan either (`Planning is unavailable`); both robots' have
   one.
 - The G1's `arms_down` is in self-collision: the real wrists and hands rest on the hips, and
   each hand and wrist sphere sits 2 to 5 cm inside its hip-pitch sphere. A goal to it stops

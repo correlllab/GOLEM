@@ -19,6 +19,10 @@ of following it.
 
 Under use_sim_time the start-up's waits count the sim's /clock (SimClock): its timeouts are s
 of sim time, whether the sim runs faster or slower than the wall clock.
+
+The acceleration limit: its stop step, step bounds and per-arm factor, and over whole IK-stepped
+moves (a start-up move, a direct goal, a goal into a position limit) every command's change of
+step on both robots.
 """
 import re
 import threading
@@ -673,3 +677,159 @@ def test_relay_starting_late_still_gets_the_whole_start_up_move(ros, models, rob
     assert settles(robot_, final_pose(profile, config), 0.02)
     # the controller kept commanding: golem_safety never latched its estop
     assert not layer.estopped(), layer.output()
+
+
+def covered(step, change):
+    """Return the distance a joint covers from step (rad), its steps then shrinking by change."""
+    steps = step - change * np.arange(int(step / change) + 2)
+    return float(np.sum(steps[steps > 0.0]))
+
+
+def test_stop_step_is_the_largest_step_that_stops_within_the_distance_left():
+    """stop_step's step and the shrinking steps after it cover the distance left; longer, more."""
+    from golem_upper_ik.core.controller.upper_controller import stop_step
+    change = 5.0 / 30.0 ** 2
+    for remaining in np.linspace(0.0, 0.5, 1001):
+        step = float(stop_step(remaining, change))
+        assert covered(step, change) <= remaining + 1e-12
+        assert covered(step + 1e-6, change) > remaining
+    # elementwise, and a distance left of 0 or less gives 0
+    np.testing.assert_array_equal(stop_step(np.array([0.0, -0.1]), change), [0.0, 0.0])
+
+
+def test_step_bounds_keep_the_change_and_brake_into_the_goal():
+    """Each joint's bounds lie within change of its last step and stop within its distance left.
+
+    A joint too fast to stop within it still keeps the change: the bounds are never empty.
+    """
+    from golem_upper_ik.core.controller.upper_controller import step_bounds, stop_step
+    change = 5.0 / 30.0 ** 2
+    rng = np.random.default_rng(0)
+    for _ in range(200):
+        remaining = rng.uniform(-0.1, 0.1, 14)
+        last = rng.uniform(-0.035, 0.035, 14)
+        low, high = step_bounds(remaining, last, change)
+        assert np.all(low <= high)
+        assert np.all(low >= last - change - 1e-15) and np.all(high <= last + change + 1e-15)
+        stop = stop_step(np.abs(remaining), change)
+        toward = np.where(remaining > 0.0, high, -low)
+        can_stop = np.where(remaining > 0.0, stop >= last - change, stop >= -last - change)
+        assert np.all(toward[can_stop] <= stop[can_stop] + 1e-15)
+
+
+def test_accel_scale_speeds_up_along_the_step_and_brakes_win():
+    """From rest the arm's step grows by change along the IK's step; a harder brake wins.
+
+    The factor keeps the step's direction; when the IK's step needs a joint to slow by more
+    than change, the factor is the braking one and the joint slows as the IK says.
+    """
+    from golem_upper_ik.core.controller.upper_controller import accel_scale
+    change = 5.0 / 30.0 ** 2
+    step = np.array([0.0333, -0.01, 0.0, 0.002])
+    remaining = step * 10.0
+    factor = accel_scale(step, remaining, np.zeros(4), change)
+    assert np.max(np.abs(factor * step)) == pytest.approx(change)
+    # the IK's step shrinks to a quarter of the last one, in a joint 1 mm from its goal
+    last = np.array([0.03, 0.0, 0.0, 0.0])
+    factor = accel_scale(np.array([0.001, 0.0, 0.0, 0.0]), np.array([0.001, 0.0, 0.0, 0.0]),
+                         last, change)
+    assert factor == pytest.approx(1.0)
+
+
+def segment_changes(commands):
+    """Return the largest change of step (rad) in a command sequence from rest to rest."""
+    commands = np.asarray(commands, dtype=np.float64)
+    rest = np.vstack([commands[:1], commands, commands[-1:]])
+    return float(np.max(np.abs(np.diff(rest, n=2, axis=0))))
+
+
+@pytest.mark.parametrize('robot, config_name', [
+    ('h12', 'safety_split'), ('g1', 'sim_split'), ('g1', 'g1_split')])
+def test_ik_steps_keep_the_acceleration_limit(ros, models, robot, config_name):
+    """Every IK-stepped command changes each IK joint's step by at most ACCEL_LIMIT * dt^2.
+
+    And the grasp frames keep controller.v_lim and w_lim, which win over it.
+
+    Each move starts and ends at rest: the start-up postures (on the G1 from where its limp
+    arms hang, the self-collision barrier near), a direct goal 10 cm forward and 5 cm up until
+    the IK converges, and a start-up move toward a configuration past the left elbow's
+    position limit, which the limit's brake stops at it.
+    """
+    from golem_upper_ik.core.controller.upper_controller import ACCEL_LIMIT
+    profile = profile_of(robot)
+    config = config_of(robot, config_name)
+    model = shared_model(ros, models, robot)
+    arms = G1_LIMP_ARMS if robot == 'g1' else 'home'
+    robot_ = FollowingRobot(ros, profile, body_pose(profile, arms), '/lowcmd')
+    controller = build(ros, model, config, init=False)
+    ik_slots = slots_of(profile, profile.enabled_joints)
+    change = ACCEL_LIMIT * controller.dt ** 2
+    threshold = config['controller']['threshold_ik']
+    assert wait_for(lambda: controller.low_cmd_handler.following, 2.0)
+
+    def commanded():
+        """Return the IK joints' command."""
+        return controller.low_cmd_handler.q_cmd[ik_slots].astype(np.float64)
+
+    def start_goal():
+        """Wait for the robot to reach the command, then start a goal from it."""
+        command = commanded()
+        assert wait_for(lambda: np.max(np.abs(robot_.measured()[ik_slots] - command)) < 1e-6,
+                        2.0)
+        controller.clear_frame_tasks()
+        controller.update_ik_solver()
+        return [commanded()]
+
+    moves = {}
+    sequence = start_goal()
+    for name in profile.startup_sequence:
+        posture = np.asarray(profile.named_configs[name], dtype=np.float64)
+        for _ in range(600):
+            controller.goto_reduced_configuration(posture)
+            sequence.append(commanded())
+            if np.max(np.abs(controller.ik_solver.q_reduced - posture)) < 1e-3:
+                break
+    moves['start-up'] = sequence
+
+    left = ee_transformations(controller)[0]
+    target = left.copy()
+    target[:3, 3] += [0.10, 0.0, 0.05]
+    sequence = start_goal()
+    controller.add_frame_task('left_task', profile.ee_frames[0], target)
+    for _ in range(600):
+        converged = np.max(np.abs(controller.control_step_reduced())) < threshold
+        sequence.append(commanded())
+        if converged:
+            break
+    assert converged
+    moves['direct'] = sequence
+
+    # a move toward a configuration 0.15 rad past the left elbow's nearer limit
+    elbow = list(profile.enabled_joints).index('left_elbow_joint')
+    reduced = model.model_body_reduced
+    beyond = controller.ik_solver.q_reduced
+    limits = (reduced.lowerPositionLimit[elbow], reduced.upperPositionLimit[elbow])
+    limit = min(limits, key=lambda bound: abs(bound - beyond[elbow]))
+    beyond[elbow] = limit + np.sign(limit - beyond[elbow]) * 0.15
+    sequence = start_goal()
+    for _ in range(300):
+        controller.goto_reduced_configuration(beyond)
+        sequence.append(commanded())
+    # the brake took the elbow onto its limit
+    assert abs(sequence[-1][elbow] - limit) < 0.005
+    moves['into a limit'] = sequence
+
+    v_lim, w_lim = config['controller']['v_lim'], config['controller']['w_lim']
+    for name, sequence in moves.items():
+        assert len(sequence) > 10, name
+        # float32 on the wire
+        assert segment_changes(sequence) <= change + 1e-5, name
+        # the speed limits still hold, measured between the commands' grasp-frame poses (the
+        # controller takes them by the Jacobian at the measured pose, hence the 3 %)
+        for frame in profile.ee_frames:
+            poses = [model.get_frame_transformation_reduced(frame, q) for q in sequence]
+            for before, after in zip(poses, poses[1:]):
+                linear = np.linalg.norm(after[:3, 3] - before[:3, 3]) / controller.dt
+                cosine = (np.trace(before[:3, :3].T @ after[:3, :3]) - 1.0) / 2.0
+                angular = np.arccos(np.clip(cosine, -1.0, 1.0)) / controller.dt
+                assert linear <= 1.03 * v_lim and angular <= 1.03 * w_lim, (name, frame)

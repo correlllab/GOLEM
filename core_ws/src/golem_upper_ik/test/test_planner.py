@@ -171,6 +171,33 @@ def test_plan_between_fake_valid_states():
     assert np.allclose(result.path[-1], [0.5, 0.5])
 
 
+def peak_acceleration(path, dt):
+    """Return a path's largest joint acceleration, rad/s^2, from rest before to rest after."""
+    rest = np.vstack([path[:1], path, path[-1:]])
+    return float(np.max(np.abs(np.diff(rest, n=2, axis=0)))) / dt ** 2
+
+
+def test_paths_keep_max_acceleration():
+    """A path too short for max_acceleration gets more waypoints, its acceleration then within it.
+
+    Without max_acceleration the path keeps moving_speed's waypoint count, whose smoothstep
+    accelerates the joints faster than that.
+    """
+    dt = 1.0 / 30.0
+    paths = {}
+    for limit in (None, 2.0):
+        planner = ReducedJointPlanner(
+            FakeRobotModel(), config=config(moving_speed=10.0, dt=dt, max_acceleration=limit))
+        result = planner.plan([0.0, 0.0], [0.4, 0.4])
+        assert result.success
+        np.testing.assert_allclose(result.path[0], [0.0, 0.0])
+        np.testing.assert_allclose(result.path[-1], [0.4, 0.4])
+        paths[limit] = result.path
+    assert peak_acceleration(paths[None], dt) > 2.0
+    assert len(paths[2.0]) > len(paths[None])
+    assert peak_acceleration(paths[2.0], dt) <= 2.0 * (1.0 + 1e-9)
+
+
 def test_plan_pins_idle_right_arm_with_home_tolerance():
     """An arm whose start and goal differ by less than the tolerance stays pinned."""
     lower = -np.ones(14)

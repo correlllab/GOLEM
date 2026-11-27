@@ -405,8 +405,10 @@ def test_stepped_moves_away_from_limits_are_not_braked(models, robot, base):
     Targets are the poses of the base posture with every IK joint moved by up to 0.3 rad.
     On each step where the brake's bound on every joint (its distance to its nearer limit
     times 1 - exp(-dt / LIMIT_APPROACH_TIME)) exceeds the default-gain step by 1 mrad, the
-    braked step equals the step under Pink's default configuration limit (gain 0.5).
+    braked step equals the step under Pink's default configuration limit (gain 0.5) and the
+    same velocity limits.
     """
+    import pink
     from golem_upper_ik.core.ik_solver import LIMIT_APPROACH_TIME
     model = models(robot)
     start = np.asarray(model.profile.named_configs[base], dtype=float)
@@ -417,10 +419,12 @@ def test_stepped_moves_away_from_limits_are_not_braked(models, robot, base):
         high = model.model_body_reduced.upperPositionLimit.copy()
         fraction = -np.expm1(-solver.dt / LIMIT_APPROACH_TIME)
         compared = []
+        default_limits = [pink.limits.ConfigurationLimit(model.model_body_reduced),
+                          pink.limits.VelocityLimit(model.model_body_reduced)]
 
         def check(q, vel):
             default = solver._ik_reduced(list(solver.frame_tasks.values()) + [solver.posture_task],
-                                         solver.dt, solver.limits_reduced)
+                                         solver.dt, default_limits)
             distance = np.minimum(q - low, high - q)
             if np.all(distance * fraction > np.abs(default) * solver.dt + 1e-3):
                 np.testing.assert_allclose(vel, default, atol=1e-6)

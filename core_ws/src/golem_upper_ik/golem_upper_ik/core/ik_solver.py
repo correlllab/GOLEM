@@ -13,7 +13,9 @@ its tolerance, about 1e-7 rad, and Pink's acceleration limit takes the square ro
 distance to the limit, which is not a number past it), so every q the solver returns or
 integrates to lies within them. The stepped moves (ik_step_reduced, goto_reduced_configuration)
 brake into the limits: a joint closes on its limit at no more than its distance over
-LIMIT_APPROACH_TIME; solve_ik_reduced's iterations keep Pink's default gain.
+LIMIT_APPROACH_TIME; solve_ik_reduced's iterations keep Pink's default gain. A stepped move's
+step is otherwise the whole step to its goal within the model's velocity limits: the
+controller scales it to its speed and acceleration limits.
 """
 import time
 from dataclasses import dataclass
@@ -137,19 +139,22 @@ class IKSolver:
             **collision_kwargs,
         )
         model = robot_model.model_body_reduced
-        velocity_limits = [
+        # solve_ik_reduced's iterations: a search for the goal, not a motion, so Pink's default
+        # configuration-limit gain (0.5 of the distance per iteration), and each iteration's
+        # step capped at 25 rad/s^2 times the iteration step squared
+        self.limits_reduced = [
+            pink.limits.ConfigurationLimit(model),
             pink.limits.VelocityLimit(model),
-            # rad/s^2 on every IK joint
             pink.limits.AccelerationLimit(model, 25.0 * np.ones(model.nv)),
         ]
-        # solve_ik_reduced's iterations: a search for the goal, not a motion, so Pink's default
-        # configuration-limit gain (0.5 of the distance per iteration)
-        self.limits_reduced = [pink.limits.ConfigurationLimit(model)] + velocity_limits
-        # the stepped moves the controller commands: braked into the limits
+        # the stepped moves the controller commands: braked into the limits, and otherwise the
+        # whole step to the goal the velocity limits allow, which the controller takes as the
+        # distance left (UpperController's acceleration limit scales it)
         self.step_limits_reduced = [
             pink.limits.ConfigurationLimit(
                 model, config_limit_gain=-np.expm1(-self.dt / LIMIT_APPROACH_TIME)),
-        ] + velocity_limits
+            pink.limits.VelocityLimit(model),
+        ]
 
     @property
     def q(self):
@@ -359,6 +364,24 @@ class IKSolver:
         result = self._best_attempt(attempts)
         self.configuration_reduced.update(result.q[self.robot_model.reduced_mask])
         return result
+
+    def limited_step(self, step, low, high):
+        """Return the reduced step (rad) nearest step within [low, high], or None if none is.
+
+        The step also keeps the stepped moves' limits (step_limits_reduced: the position limits'
+        brake and the velocity limits) and the self-collision barrier at the reduced
+        configuration, as an IK step does; nearest is in joint space. None when no step keeps
+        them all (the QP solver finds none).
+        """
+        barriers = []
+        if self.collision_barrier_reduced is not None:
+            barriers = [self.collision_barrier_reduced]
+        problem = pink.build_ik(self.configuration_reduced, [], self.dt,
+                                limits=self.step_limits_reduced, barriers=barriers)
+        step = np.asarray(step, dtype=np.float64)
+        return qpsolvers.solve_qp(np.eye(step.size), -step, problem.G, problem.h,
+                                  lb=np.asarray(low, dtype=np.float64),
+                                  ub=np.asarray(high, dtype=np.float64), solver=self.solver)
 
     def goto_reduced_configuration(self, q_reduced: np.ndarray):
         """Return one IK step's body joint velocity (rad/s) toward q_reduced; others 0."""

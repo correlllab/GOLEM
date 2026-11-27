@@ -85,7 +85,8 @@ planner:
   # s of robot time, > 0: time between path waypoints; default the control period
   # (1 / frequency.ctrl_hz)
   dt: 0.02
-  # whole numbers >= 2 and >= min: the fewest and most waypoints in a path
+  # whole numbers >= 2 and >= min: the fewest and most waypoints in a path; a path whose
+  # joints would accelerate faster than the controller's ACCEL_LIMIT gets more, up to the most
   min_interpolation_steps: 2
   max_interpolation_steps: 300
   # > 0: OMPL's state validity checking resolution, a fraction of the joint space's extent

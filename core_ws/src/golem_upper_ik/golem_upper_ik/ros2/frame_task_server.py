@@ -222,8 +222,8 @@ class FrameTaskServer(Node):
     def _drive(self, goal_handle, kind, timeout, ik_step=None):
         """Step to the goal's target, then hold until reached, blocked, canceled or timeout.
 
-        ik_step: a direct goal's IK step, returning the body joint velocity (rad/s); the hold
-            starts once its largest |velocity| is under threshold_ik. None for a planned goal,
+        ik_step: a direct goal's IK step, returning its body joint speeds (rad/s,
+            UpperController._step_ik); the hold starts once the largest is under threshold_ik. None for a planned goal,
             whose hold starts at once. An iteration that took longer than the control period
             runs the next iteration's IK steps it owes, one per period, at most CATCH_UP_STEPS
             (stopping at the step under threshold_ik).

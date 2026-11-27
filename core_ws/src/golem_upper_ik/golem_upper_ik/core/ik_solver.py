@@ -41,15 +41,15 @@ ANGULAR_THRESHOLD = 1e-2  # rad
 BARRIER_PAIRS = 32
 # s: the time constant of an IK joint's approach to its position limit in the stepped moves
 # (ik_step_reduced, goto_reduced_configuration): each step closes at most 1 - exp(-dt / this)
-# of the distance, so a joint slows into its limit at no more than distance / this rad/s
-# (0.27 rad/s at 50 mrad, 0.11 at 20) instead of arriving at dq_lim. In the H1-2 RoboCasa sim,
-# where the skills' failure-retreat lift brings the shoulder yaw's command to the clip, the
-# yaw went 16.7 mrad past the clip without it and 9.9 to 14.4 mrad with it (8 lifts, the
-# steps then capped at 0.83 rad/s), most of it the hold's torque bias carried into the lift;
-# with the controller's acceleration limit and bias bound too (UpperController), 0.3 to 0.4
-# mrad (8 lifts), the lift taking 2.6 s. Stepping the H1-2's IK on 30 direct goals that stay
-# 0.2 rad inside the range took no longer with 0.2 s, 0.03 s longer at most with 0.3 s and
-# 0.1 s with 0.5 s. Unmeasured on the real robots
+# of the distance, so a joint slows into its limit at no more than distance / this rad/s (0.27
+# rad/s at 50 mrad, 0.11 at 20) instead of arriving at dq_lim. In the H1-2 RoboCasa sim, where
+# the skills' failure-retreat lift brings the shoulder yaw's command to the clip, the yaw went
+# 16.7 mrad past the clip without it and 9.9 to 14.4 mrad with it (8 lifts, the steps then
+# capped at 0.83 rad/s), most of it the hold's torque bias carried into the lift; with the
+# controller's acceleration limit and bias bound too (UpperController), 0.3 to 0.4 mrad (13
+# lifts), the lift taking 2.5 to 2.6 s. Stepping the H1-2's IK on 30 direct goals that stay 0.2
+# rad inside the range took no longer with 0.2 s, 0.03 s longer at most with 0.3 s and 0.1 s
+# with 0.5 s. Unmeasured on the real robots
 LIMIT_APPROACH_TIME = 0.2
 # rad/s: the most a start-up move's step (goto_reduced_configuration, capped) moves any one IK
 # joint, each joint bounded on its own in the IK's quadratic program, so a joint with less to
@@ -57,10 +57,11 @@ LIMIT_APPROACH_TIME = 0.2
 # AccelerationLimit(25 rad/s^2) and no last step (25 rad/s^2 times the 1/30 s period). In the
 # H1-2's RoboCasa Battery scene the start-up's home move puts the left hand on the table; moved
 # along a straight joint path instead (each arm scaled as a whole), the hand came to rest
-# differently, the torso stood 0.076 instead of 0.042 rad when the first goal started, and
-# the right arm's grasps then failed to plan their staging posture; with this cap the torso
-# stood at 0.046 and the staging posture planned again. Each arm is scaled under
-# controller.dq_lim after it
+# differently, the torso stood 0.076 instead of 0.042 rad when the first goal started, and the
+# right arm's grasps then failed to plan their staging posture; with this cap the torso stood
+# at 0.046 and the staging posture planned again, on its near branch, in 9 of 9 right-arm
+# grasps (5 of 5 before the acceleration limit, 0 of 5 without the cap). Each arm is scaled
+# under controller.dq_lim after it
 JOINT_SPEED_CAP = 0.83
 # limited_step's weight on leaving its bounds, against the step's distance from the one asked
 # for (both in rad^2): leaving them by 1 urad costs as much as missing the step by 1 mrad

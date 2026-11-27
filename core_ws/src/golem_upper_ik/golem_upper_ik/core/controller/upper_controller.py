@@ -77,12 +77,13 @@ STOP_REFERENCE_MAX_SPEED = 0.05
 # position-limit brake's own deceleration, dq_lim / LIMIT_APPROACH_TIME (4.2 rad/s^2 at the
 # H1-2's 0.83 rad/s, 5 at the G1 sim's 1.0), so the brake keeps it. Stepping each robot's IK
 # offline (48 direct goals and the start-up, perfect tracking), every step kept it to within
-# 1 %, and the H1-2's median goal took 0.3 to 0.5 s longer than before it (the G1's none); before
-# it a command went from rest to 0.83 rad/s in one step (25 rad/s^2) and changed by up to 44.
-# Times the arms' inertia (the mass matrix's diagonal), over kp, it is at most 9 mrad on the
-# H1-2 and 17 mrad on the G1. Two commands still jump at once, on purpose: a stop on a cancel
-# or a timeout (stop_joints) and a goal that restarts from the measured pose (_command_seed).
-# Unmeasured on the real robots
+# 1 % but one on each G1 config (6.8 and 8.8 rad/s^2, the speed limits winning), and the H1-2's
+# median goal took 0.3 to 0.5 s longer than before it (the G1's none); before it a command went
+# from rest to 0.83 rad/s in one step (25 rad/s^2) and changed by up to 44. Times the arms'
+# inertia (the mass matrix's diagonal), over kp, it is at most 9 mrad on the H1-2 and 17 mrad
+# on the G1. Two commands still jump at once, on purpose: a stop on a cancel or a timeout
+# (stop_joints) and a goal that restarts from the measured pose (_command_seed). Unmeasured on
+# the real robots
 ACCEL_LIMIT = 5.0
 
 

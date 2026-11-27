@@ -218,18 +218,20 @@ then moves only in the start-up step 4.
   control step takes the step nearest the IK's (within the speed limits) that changes no
   joint's step by more than `ACCEL_LIMIT * dt^2` from its last, lets each joint still stop
   within the IK's distance left to the goal, and keeps the IK's position-limit brake, velocity
-  limits and self-collision barrier (`IKSolver.limited_step`). When no step does (the brake,
-  the barrier or a goal behind a fast joint needs a harder change), each arm's step is scaled
-  along the IK's instead (`accel_scale`), the IK's limits winning, and the change can exceed
-  the limit there. The step is then scaled under `dq_lim`, `v_lim` and `w_lim` once more, so
-  the speed limits win too. The IK's own step is otherwise its whole step to the goal, so the
-  joints cruise at the speed limits (the H1-2's `dq_lim` is 0.83 rad/s, the top speed they had
-  before the acceleration limit). A direct goal's IK has converged once both its own and the
-  commanded joint speeds are under `threshold_ik`. Two commands jump on purpose, outside the IK
-  steps: a goal that starts from the measured pose (more than 0.1 rad off the command, above)
-  moves the command onto the arm, and a cancel or a timeout moves it to where the arm will rest
-  (`stop_joints`, below). 5 rad/s² is the position-limit brake's own deceleration at a `dq_lim`
-  of 1 rad/s; the constant's comment has the measurements.
+  limits and self-collision barrier (`IKSolver.limited_step`). Where those need a harder change
+  (the brake, the barrier or a goal behind a fast joint), the step keeps them and leaves the
+  acceleration limit by the least it can; only when the QP solver finds no step at all is each
+  arm's step scaled along the IK's instead (`accel_scale`). The step is then scaled under
+  `dq_lim`, `v_lim` and `w_lim` once more, so the speed limits win too. The IK's own step is
+  otherwise its whole step to the goal, so the joints cruise at the speed limits (the H1-2's
+  `dq_lim` is 0.83 rad/s, the top speed they had before the acceleration limit). A direct
+  goal's IK has converged once both its own and the commanded joint speeds are under
+  `threshold_ik`. Two commands jump on purpose, outside the IK steps: a goal that starts from
+  the measured pose (more than 0.1 rad off the command, above) moves the command onto the arm,
+  and a cancel or a timeout moves it to where the arm will rest (`stop_joints`, below).
+  5 rad/s² covers the position-limit brake's own deceleration, `dq_lim / LIMIT_APPROACH_TIME`
+  (4.2 rad/s² at the H1-2's 0.83 rad/s, 5 at the G1 sim's 1.0); the constant's comment has the
+  measurements.
 - `plan: true`: the OMPL planner (in a subprocess of its own) plans in the IK joints, with the
   self-collision checks and the planner frames' x/y/z bounds, and the path is executed one
   waypoint per control period. Its smoothstep timing gets more waypoints until no joint

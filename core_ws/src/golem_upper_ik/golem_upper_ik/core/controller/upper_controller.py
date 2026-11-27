@@ -21,7 +21,8 @@ Each goal re-locks the reduced model's frozen joints at the measured pose and st
 from the last command (update_ik_solver). On the real robots' ROS domain (0) every control
 step first checks that /lowstate is no staler than controller.max_state_lag_ms
 (StaleStateError otherwise; the last command keeps going out). Commands carry the gravity
-torque plus the steady-state hold's integral bias, which fades over a move.
+torque plus the steady-state hold's integral bias, which fades over a move and is bounded
+toward each joint's position clip limits (_bound_bias).
 """
 import numpy as np
 from pink.exceptions import NoSolutionFound
@@ -48,6 +49,17 @@ STATE_MAX_AGE = 0.1
 # pushed, so the move restarts from the measured position and drops the held torque bias,
 # releasing the force instead of continuing it.
 COMMAND_SEED_MAX_GAP = 0.1
+# rad: how far past its position clip a joint's torque bias alone may push it. Each joint's
+# bias toward a clip limit is bounded at kp times the command's distance inside that limit
+# plus this (_bound_bias), on every command: holds, moves and stops. SAFETY: in the H1-2
+# RoboCasa sim a bias integrated in a hold (3.7 to 5.1 N*m, 25 to 34 mrad over kp, the hand
+# pressing on the table) carried into the move that took the shoulder yaw's command onto its
+# clip, and the yaw went 8.9 to 16.7 mrad past it (12 grasps), against the clip's 20 mrad
+# margin to the estop. 5 mrad covers the bias a hold needed where nothing pressed on the arm: at most
+# 4.0 mrad over kp to bring a joint parked at its clip onto it (the left shoulder yaw, an
+# unreachable target), and the gravity model's error, at most 4.2 mrad over kp (1.0 N*m on a
+# shoulder pitch where the bias is 0). Unmeasured on the real robots
+BIAS_PAST_CLIP = 0.005
 # s: the time constant over which the steady-state torque bias fades once a move commands
 # positions. Carrying it over keeps the arm from sagging at the start of a move; fading it
 # hands the load back to gravity compensation as the arm leaves the pose the bias was
@@ -207,6 +219,9 @@ class UpperController:
         # limit counts from; 0 after any other command, which holds or jumps the arms
         self._last_step = np.zeros(robot_model.num_motor)
         self._tau_bias_decay = float(np.exp(-self.dt / TAU_BIAS_FADE_SEC))
+        # N*m/rad and rad per body joint, for _bound_bias
+        self._kp = np.asarray(config['gains']['kp'], dtype=np.float64)
+        self._q_clip_limits = np.asarray(config['limits']['q_clip_limits'], dtype=np.float64)
         # body joint ids whose torque bias the current goal changes, or None for every joint:
         # the hold integrates the bias and a move fades it on these alone, so every other
         # joint keeps its command, bias included, and stays where it is
@@ -223,6 +238,7 @@ class UpperController:
             [controller['hold_targets'][joint] for joint in profile.held_joints])
         body = profile.body_joints
         self.enabled_ids = [body.index(joint) for joint in profile.enabled_joints]
+        self._held_ids = [body.index(joint) for joint in profile.held_joints]
         self.upper_ids = list(profile.upper_slots)
         self.left_ee_name, self.right_ee_name = profile.ee_frames
         # (joint name, q, limit) for the joints the steady-state hold is pinned against
@@ -449,8 +465,9 @@ class UpperController:
         reference (stop_reference, taken when the goal started) gives it, adjusted by the
         torque bias that has faded since (its change over kp); without one the offset is 0.
         The arm then stops within its braking distance. The other joints keep their last
-        command; the torque is the gravity torque at the measured pose plus the bias, as on
-        every command. StaleStateError, the last command standing, when /lowstate is stale.
+        command; the torque is the gravity torque at the measured pose plus the bias, bounded
+        for the stop's command (_bound_bias), as on every command. StaleStateError, the last
+        command standing, when /lowstate is stale.
         """
         self.check_state_fresh()
         joint_ids = list(joint_ids)
@@ -463,6 +480,7 @@ class UpperController:
             offset = offset_then + faded
         q = self.low_cmd_handler.q_cmd.astype(np.float64)
         q[joint_ids] = measured[joint_ids] + offset
+        self._bound_bias(q)
         tau = self.robot_model.dynamics.get_gravity_compensation(measured) + self._tau_bias
         self._command(q, np.zeros(self.robot_model.num_motor), tau)
 
@@ -708,7 +726,9 @@ class UpperController:
         Converged: every upper joint within threshold (rad) of its held command. A hold pinned
         against a joint position limit cannot converge: the integral term is frozen,
         steady_state_limited_joints names the joints, and this returns False. With
-        bias_joints set, only those joints' bias integrates.
+        bias_joints set, only those joints' bias integrates. Each joint's bias is then bounded
+        toward its clip limits (_bound_bias), so a joint whose bias stops at the bound short
+        of its clip holds there, unconverged and not pinned.
         """
         self.check_state_fresh()
         if self._steady is None:
@@ -725,6 +745,7 @@ class UpperController:
         if not self.steady_state_limited_joints:
             self._tau_bias = np.clip(self._tau_bias + tau_bias_increment,
                                      -steady['tau_bias_limit'], steady['tau_bias_limit'])
+        self._bound_bias(steady['q'])
         tau = self.robot_model.dynamics.get_gravity_compensation(q_state) + self._tau_bias
         self._command(steady['q'], steady['dq'], tau)
         self.update_robot_model()
@@ -782,11 +803,29 @@ class UpperController:
                                     self._last_step[arm], change)
         return vel
 
+    def _bound_bias(self, q):
+        """Bound each joint's torque bias toward its clip limits for the command q (rad).
+
+        SAFETY: a joint's bias toward a clip limit is at most kp times q's distance inside
+        that limit plus BIAS_PAST_CLIP, so the bias alone holds the joint no further than
+        BIAS_PAST_CLIP past the clip, whatever bias a hold integrated or a move carried in.
+        q is per body joint, taken as the command carries it: clipped, the held joints at
+        their hold angles.
+        """
+        low, high = self._q_clip_limits[:, 0], self._q_clip_limits[:, 1]
+        q = np.clip(np.asarray(q, dtype=np.float64), low, high)
+        q[self._held_ids] = self.low_cmd_handler.hold
+        self._tau_bias = np.clip(self._tau_bias,
+                                 -self._kp * (q - low + BIAS_PAST_CLIP),
+                                 self._kp * (high - q + BIAS_PAST_CLIP))
+
     def _apply_joint_position(self, q):
         """Command q with dq 0 and the gravity torque plus the bias, which fades by one step.
 
-        Only the bias_joints' bias fades, when the goal names them.
+        The bias is bounded for q first (_bound_bias). Only the bias_joints' bias fades, when
+        the goal names them.
         """
+        self._bound_bias(q)
         tau = self.robot_model.dynamics.get_gravity_compensation(self.robot_model.state['q'])
         tau = tau + self._tau_bias
         if self.bias_joints is None:

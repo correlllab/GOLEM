@@ -202,6 +202,15 @@ then moves only in the start-up step 4.
   `BARRIER_PAIRS` (32) closest sphere pairs of each step (`core/ik_solver.py`). Once the IK's
   step is slower than `threshold_ik` it holds the target with integral control (`gains.ki`,
   fading over the next move); the targets are checked against the thresholds only from then on.
+- **The torque bias near a clip.** On every command (a hold, a move, a stop) each joint's
+  torque bias toward a position clip limit is bounded at kp times the command's distance inside
+  that limit plus `BIAS_PAST_CLIP` (5 mrad, `core/controller/upper_controller.py`), so the
+  bias alone holds a joint at most 5 mrad past its clip, whatever a hold integrated (the hand
+  pressing on a table) or a move carried in; per joint, the other joints integrate on. A hold
+  whose bias stops at the bound short of the clip is neither converged nor pinned at a limit
+  (the pinned report needs the joint within 1 mrad of its clip): the goal ends at its timeout
+  or the caller's cancel. In the H1-2 sim's grasps, 21 of 83 holds pinned at a limit had needed
+  more bias than the bound to get there.
 - **The acceleration limit.** Every IK-stepped command (the start-up moves and direct goals)
   changes each IK joint's velocity by at most `ACCEL_LIMIT` (5 rad/s² of robot time,
   `core/controller/upper_controller.py`), from rest at its start to rest in the hold. Each

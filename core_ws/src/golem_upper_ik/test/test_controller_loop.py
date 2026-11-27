@@ -753,7 +753,8 @@ def segment_changes(commands):
 def test_ik_steps_keep_the_acceleration_limit(ros, models, robot, config_name):
     """Every IK-stepped command changes each IK joint's step by at most ACCEL_LIMIT * dt^2.
 
-    And the grasp frames keep controller.v_lim and w_lim, which win over it.
+    And no IK joint moves faster than controller.dq_lim, and the grasp frames keep
+    controller.v_lim and w_lim.
 
     Each move starts and ends at rest: the start-up postures (on the G1 from where its limp
     arms hang, the self-collision barrier near), a direct goal 10 cm forward and 5 cm up until
@@ -825,10 +826,14 @@ def test_ik_steps_keep_the_acceleration_limit(ros, models, robot, config_name):
     moves['into a limit'] = sequence
 
     v_lim, w_lim = config['controller']['v_lim'], config['controller']['w_lim']
+    dq_lim = config['controller']['dq_lim']
     for name, sequence in moves.items():
         assert len(sequence) > 10, name
         # float32 on the wire
         assert segment_changes(sequence) <= change + 1e-5, name
+        # no joint faster than dq_lim
+        speed = np.max(np.abs(np.diff(np.asarray(sequence), axis=0))) / controller.dt
+        assert speed <= dq_lim + 1e-4, (name, speed)
         # the speed limits still hold, measured between the commands' grasp-frame poses (the
         # controller takes them by the Jacobian at the measured pose, hence the 3 %)
         for frame in profile.ee_frames:

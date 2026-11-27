@@ -222,7 +222,8 @@ then moves only in the start-up step 4.
   along the IK's instead (`accel_scale`), the IK's limits winning, and the change can exceed
   the limit there. The step is then scaled under `dq_lim`, `v_lim` and `w_lim` once more, so
   the speed limits win too. The IK's own step is otherwise its whole step to the goal, so the
-  joints cruise at the speed limits. A direct goal's IK has converged once both its own and the
+  joints cruise at the speed limits (the H1-2's `dq_lim` is 0.83 rad/s, the top speed they had
+  before the acceleration limit). A direct goal's IK has converged once both its own and the
   commanded joint speeds are under `threshold_ik`. Two commands jump on purpose, outside the IK
   steps: a goal that starts from the measured pose (more than 0.1 rad off the command, above)
   moves the command onto the arm, and a cancel or a timeout moves it to where the arm will rest

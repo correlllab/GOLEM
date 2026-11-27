@@ -8,7 +8,9 @@ topics:
 controller:
   v_lim: 1.0
   w_lim: 2.0
-  dq_lim: 1.0
+  # the top speed every stepped IK joint had before the acceleration limit (Pink's 25 rad/s^2
+  # times the 1/30 s period), so the limit only makes the arms gentler, never faster
+  dq_lim: 0.83
   d_min: 0.02
   timeout: 5.0
   hold_targets:

@@ -438,3 +438,13 @@ def test_h12_staging_postures_are_in_the_split_ik_range():
     for posture in ('staging_left', 'staging_right'):
         q = np.asarray(profile.named_configs[posture])
         assert np.all(q >= clip[:, 0]) and np.all(q <= clip[:, 1]), posture
+
+
+@pytest.mark.parametrize('name', ['safety_split', 'safety_full'])
+def test_h12_arms_move_no_faster_than_before_the_acceleration_limit(name):
+    """Every H1-2 controller config caps the IK joints at 0.83 rad/s (dq_lim).
+
+    Before the acceleration limit Pink capped each stepped IK joint at 25 rad/s^2 times the
+    1/30 s period, 0.83 rad/s; the H1-2's arms keep that top speed.
+    """
+    assert load('h12', name)['controller']['dq_lim'] <= 0.83

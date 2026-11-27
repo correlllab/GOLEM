@@ -203,6 +203,79 @@ class StagedLoweringTests(unittest.TestCase):
         self.assertFalse(lowering.done)
 
 
+class DeferredReleaseTests(unittest.TestCase):
+    """Check that a release asked for while the band lowers the robot waits for the lowering's end."""
+
+    def setUp(self):
+        """Two stages: 0.2 m over 1 s once slots 0-1 are held, 0.1 m over 1 s once slot 2 is too."""
+        self.band = ElasticBand(np.array([0.0, 0.0, 1.0]), rope=True)
+        self.lowering = BandLowering(self.band, lift=0.0, lift_duration=1.0,
+                                     stages=((range(2), 0.2, 0.0, 1.0), (range(3), 0.1, 0.0, 1.0)))
+        self.latch = _Latch()
+        self.out = io.StringIO()
+
+    def at(self, t):
+        """Step the lowering at sim time t (s), keeping its log."""
+        with contextlib.redirect_stdout(self.out):
+            self.lowering.step(t, self.latch)
+
+    def toggle(self):
+        """Toggle the band, keeping its log; return whether it is enabled."""
+        with contextlib.redirect_stdout(self.out):
+            return self.band.toggle()
+
+    def test_a_release_during_a_stage_waits_for_the_stages_queued(self):
+        """Asked for mid-stage, the release comes once the last stage under way has ended."""
+        self.at(0.0)
+        self.latch.held = {0, 1, 2}
+        self.at(0.5)    # both stages queued: 0.5-1.5 s, then 1.5-2.5 s
+        self.at(1.0)
+        self.assertTrue(self.toggle())
+        self.assertTrue(self.band.enabled and self.band.release_pending)
+        self.assertFalse(self.band.wait_released(0.0))
+        self.assertTrue(self.toggle())   # a second toggle changes nothing
+        for t in (1.5, 2.0, 2.4):
+            self.at(t)
+            self.assertTrue(self.band.enabled, t)
+        self.at(2.5)
+        self.assertFalse(self.band.enabled)
+        self.assertFalse(self.band.release_pending)
+        self.assertTrue(self.band.wait_released(0.0))
+        self.assertAlmostEqual(float(self.band.point[2]), 0.7)
+        self.at(2.6)
+        self.assertTrue(self.lowering.done)
+        self.assertIn('lets go once lowered', self.out.getvalue())
+
+    def test_a_release_with_no_stage_under_way_is_at_once(self):
+        """Before the first stage's motors are held, and between stages, the band lets go at once."""
+        self.at(0.0)
+        self.assertFalse(self.toggle())
+        self.assertTrue(self.band.wait_released(0.0))
+        band = ElasticBand(np.array([0.0, 0.0, 1.0]), rope=True)
+        lowering = BandLowering(band, lift=0.0, lift_duration=1.0,
+                                stages=((range(2), 0.2, 0.0, 1.0), (range(3), 0.1, 0.0, 1.0)))
+        self.latch.held = {0, 1}
+        with contextlib.redirect_stdout(self.out):
+            for t in (0.0, 0.5, 1.0, 1.5):   # the first stage 0-1 s; the second's slot not held
+                lowering.step(t, self.latch)
+            self.assertFalse(band.toggle())
+
+    def test_a_toggle_after_the_release_hangs_the_robot_again(self):
+        """Once released, a toggle enables the band again, as without a lowering."""
+        self.at(0.0)
+        self.toggle()
+        self.assertTrue(self.toggle())
+        self.assertTrue(self.band.enabled)
+        self.assertFalse(self.band.wait_released(0.0))
+
+    def test_without_a_lowering_a_release_is_at_once(self):
+        """A band no BandLowering moves (--no_band_lowering) lets go at once."""
+        band = ElasticBand(np.array([0.0, 0.0, 1.0]))
+        with contextlib.redirect_stdout(self.out):
+            self.assertFalse(band.toggle())
+        self.assertTrue(band.wait_released(0.0))
+
+
 class FallLoggerTests(unittest.TestCase):
     """Check what the fall logger logs, and when."""
 

@@ -31,6 +31,8 @@ import json
 import os
 
 import mujoco
+import rclpy
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.node import Node
 from std_msgs.msg import Bool, Float32, String
 from std_srvs.srv import Trigger
@@ -53,7 +55,10 @@ class MeasurementBridge(Node):
 
         self.elastic_band = elastic_band
         if elastic_band is not None:
-            self.create_service(Trigger, "/elastic_band/toggle", self._on_elastic_band_toggle)
+            # its own callback group: a deferred release's reply waits without holding up the
+            # node's other callbacks
+            self.create_service(Trigger, "/elastic_band/toggle", self._on_elastic_band_toggle,
+                                callback_group=MutuallyExclusiveCallbackGroup())
 
         # transient_local, so a late subscriber still gets the task name and goal.
         from rclpy.qos import QoSDurabilityPolicy, QoSProfile
@@ -156,8 +161,21 @@ class MeasurementBridge(Node):
         self._gt_pub.publish(String(data=json.dumps(msg)))
 
     def _on_elastic_band_toggle(self, request, response):
-        """Toggle the band and answer with its new state."""
+        """Toggle the band and answer with its new state, once it holds.
+
+        A release the band defers while it lowers the robot (ElasticBand.toggle) is answered
+        once the band has let go: "disabled" then means released. This waits on the executor
+        thread serving the service; the physics loop, which makes the release, runs on. If ROS
+        shuts down first, the reply fails.
+        """
         enabled = self.elastic_band.toggle()
+        while enabled and self.elastic_band.release_pending:
+            if self.elastic_band.wait_released(0.1):
+                enabled = False
+            elif not rclpy.ok():
+                response.success = False
+                response.message = "the sim stopped before the band let go"
+                return response
         response.success = True
         response.message = "enabled" if enabled else "disabled"
         return response

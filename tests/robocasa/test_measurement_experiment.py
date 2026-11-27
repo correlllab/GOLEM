@@ -1,4 +1,4 @@
-"""Check measurement_bridge.py's opt-in experiment surface (/sim/ground_truth, /sim/reset_objects).
+"""Check measurement_bridge.py's opt-in experiment surface (/sim/ground_truth, /sim/reset_objects) and its band toggle.
 
 The bridge is built on a small scene with recording publishers and services: no ROS node starts
 and no DDS traffic flows.
@@ -134,3 +134,54 @@ class ExperimentSurfaceTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class BandToggleReplyTest(unittest.TestCase):
+    """The band toggle's reply comes once the band holds what it says."""
+
+    def test_a_deferred_release_is_answered_once_released(self):
+        """A release the band defers while lowering is answered 'disabled' only once it lets go."""
+        import contextlib
+        import io
+        import threading
+        from std_srvs.srv import Trigger
+        from mujoco_env import ElasticBand
+        band = ElasticBand(np.array([0.0, 0.0, 1.0]), rope=True)
+        bridge = MeasurementBridge.__new__(MeasurementBridge)
+        bridge.elastic_band = band
+        band.set_lowering(True)
+        replies = []
+        out = io.StringIO()
+
+        def call():
+            """Call the toggle's callback as the service would."""
+            with patch('measurement_bridge.rclpy.ok', lambda: True), contextlib.redirect_stdout(out):
+                replies.append(bridge._on_elastic_band_toggle(Trigger.Request(), Trigger.Response()))
+
+        thread = threading.Thread(target=call, daemon=True)
+        thread.start()
+        thread.join(0.5)
+        self.assertTrue(thread.is_alive())   # the band still lowers: no reply yet
+        self.assertTrue(band.enabled)
+        with contextlib.redirect_stdout(out):
+            band.set_lowering(False)
+        thread.join(2.0)
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(replies[0].success)
+        self.assertEqual(replies[0].message, 'disabled')
+        self.assertFalse(band.enabled)
+
+    def test_an_immediate_toggle_answers_at_once(self):
+        """With no lowering under way the toggle answers at once, as before."""
+        from std_srvs.srv import Trigger
+        from mujoco_env import ElasticBand
+        import contextlib
+        import io
+        band = ElasticBand(np.array([0.0, 0.0, 1.0]))
+        bridge = MeasurementBridge.__new__(MeasurementBridge)
+        bridge.elastic_band = band
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply = bridge._on_elastic_band_toggle(Trigger.Request(), Trigger.Response())
+            self.assertEqual(reply.message, 'disabled')
+            reply = bridge._on_elastic_band_toggle(Trigger.Request(), Trigger.Response())
+        self.assertEqual(reply.message, 'enabled')

@@ -288,8 +288,8 @@ then moves only in the start-up step 4.
   or execution failure, on a hold pinned at a joint limit and on a stale `/lowstate`. A cancel,
   or the timeout, during a planned path stops it before its next waypoint; the IK solve and the
   planning before the path are not cut short (a planner subprocess that has not started yet
-  builds its robot model first, seconds: the node starts it in the background with its
-  start-up moves, `UpperController`'s `warm_planner`). Every end sets the
+  builds its robot model first, 0.4 s in the ros container: the node starts it in the
+  background with its start-up moves, `UpperController`'s `warm_planner`). Every end sets the
   result's `outcome`: `REACHED` (succeeded), `NOT_REACHED` (aborted: the timeout, before the IK
   converged, during the path or in the hold, or a hold pinned at a joint limit), `CANCELED`, or
   `FAILED` (aborted for anything else: a bad target, TF, planning or execution, a stale

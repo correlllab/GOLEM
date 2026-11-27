@@ -18,9 +18,9 @@ controller:
   v_lim: 1.0
   # rad/s, > 0: each arm's end-effector angular speed limit on direct moves
   w_lim: 2.0
-  # rad/s, > 0: IK joint speed limit on direct moves; the start-up moves the held joints at
-  # the smaller of this and 0.3 rad/s
-  dq_lim: 1.0
+  # rad/s, > 0: IK joint speed limit: each arm's IK step is scaled so no joint passes it; the
+  # start-up moves the held joints at the smaller of this and 0.3 rad/s
+  dq_lim: 0.83
   # m, >= 0: distance the IK's self-collision barrier keeps between sphere pairs
   d_min: 0.02
   # s of robot time (the sim's /clock under use_sim_time, else steady), > 0: how long a

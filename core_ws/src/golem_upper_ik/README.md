@@ -230,7 +230,7 @@ then moves only in the start-up step 4.
   the measured pose (more than 0.1 rad off the command, above) moves the command onto the arm,
   and a cancel or a timeout moves it to where the arm will rest (`stop_joints`, below).
   5 rad/s² covers the position-limit brake's own deceleration, `dq_lim / LIMIT_APPROACH_TIME`
-  (4.2 rad/s² at the H1-2's 0.83 rad/s, 5 at the G1 sim's 1.0); the constant's comment has the
+  (4.2 rad/s² at the sims' 0.83 rad/s, 1.5 at the real G1's 0.3); the constant's comment has the
   measurements.
 - `plan: true`: the OMPL planner (in a subprocess of its own) plans in the IK joints, with the
   self-collision checks and the planner frames' x/y/z bounds, and the path is executed one

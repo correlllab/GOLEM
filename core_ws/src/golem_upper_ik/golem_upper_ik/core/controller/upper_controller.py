@@ -75,7 +75,7 @@ STOP_REFERENCE_MAX_SPEED = 0.05
 # rad/s^2 of robot time: the most an IK-stepped command changes an IK joint's velocity
 # (_limit_joint_acc), and a planned path's (PlannerConfig.max_acceleration). 5 covers the
 # position-limit brake's own deceleration, dq_lim / LIMIT_APPROACH_TIME (4.2 rad/s^2 at the
-# H1-2's 0.83 rad/s, 5 at the G1 sim's 1.0), so the brake keeps it. Stepping each robot's IK
+# sims' 0.83 rad/s, 1.5 at the real G1's 0.3), so the brake keeps it. Stepping each robot's IK
 # offline (48 direct goals and the start-up, perfect tracking), every step kept it to within
 # 1 % but one on each G1 config (6.8 and 8.8 rad/s^2, the speed limits winning), and the H1-2's
 # median goal took 0.3 to 0.5 s longer than before it (the G1's none); before it a command went

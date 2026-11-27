@@ -8,7 +8,9 @@ topics:
 controller:
   v_lim: 0.5
   w_lim: 1.0
-  dq_lim: 1.0
+  # the H1-2's arm top speed (its safety_split), so the G1 sim's arms move no faster than the
+  # H1-2's; the real G1's g1_split keeps 0.3
+  dq_lim: 0.83
   # the H1-2's: at home, the start-up posture, the closest pairs (the upper arms against the
   # torso) are 0.025 m apart (CL_Assets/README.md)
   d_min: 0.02

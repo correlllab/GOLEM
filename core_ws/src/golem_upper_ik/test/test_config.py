@@ -448,3 +448,9 @@ def test_h12_arms_move_no_faster_than_before_the_acceleration_limit(name):
     1/30 s period, 0.83 rad/s; the H1-2's arms keep that top speed.
     """
     assert load('h12', name)['controller']['dq_lim'] <= 0.83
+
+
+@pytest.mark.parametrize('name', ['sim_split'])
+def test_g1_sim_arms_move_no_faster_than_the_h12s(name):
+    """Every G1 sim controller config caps the IK joints at the H1-2's 0.83 rad/s (dq_lim)."""
+    assert load('g1', name)['controller']['dq_lim'] <= 0.83

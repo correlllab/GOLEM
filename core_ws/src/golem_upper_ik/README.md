@@ -209,9 +209,10 @@ then moves only in the start-up step 4.
   bias alone holds a joint at most 5 mrad past its clip, whatever a hold integrated (the hand
   pressing on a table) or a move carried in; per joint, the other joints integrate on. A hold
   whose bias stops at the bound short of the clip is neither converged nor pinned at a limit
-  (the pinned report needs the joint within 1 mrad of its clip): the goal ends at its timeout
-  or the caller's cancel. In the H1-2 sim's grasps, 21 of 83 holds pinned at a limit had needed
-  more bias than the bound to get there.
+  (the pinned report needs the joint within 1 mrad of its clip): a hold that needs more bias
+  than the bound runs to its timeout, or to the caller's cancel, such as `golem_skills`'
+  stable-stop (it ends a move whose feedback stops changing). In the H1-2 sim's grasps, 21 of
+  83 holds pinned at a limit had needed more bias than the bound to get there.
 - **The acceleration limit.** Every IK-stepped command (the start-up moves and direct goals)
   changes each IK joint's velocity by at most `ACCEL_LIMIT` (5 rad/s² of robot time,
   `core/controller/upper_controller.py`), from rest at its start to rest in the hold. Each

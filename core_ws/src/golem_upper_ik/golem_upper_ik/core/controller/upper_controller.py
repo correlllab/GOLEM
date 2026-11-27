@@ -738,7 +738,8 @@ class UpperController:
         steady_state_limited_joints names the joints, and this returns False. With
         bias_joints set, only those joints' bias integrates. Each joint's bias is then bounded
         toward its clip limits (_bound_bias), so a joint whose bias stops at the bound short
-        of its clip holds there, unconverged and not pinned.
+        of its clip holds there, unconverged and not pinned: the goal runs to its timeout or
+        its caller's cancel (golem_skills' stable-stop).
         """
         self.check_state_fresh()
         if self._steady is None:

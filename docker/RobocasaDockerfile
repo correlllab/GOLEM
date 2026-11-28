@@ -33,7 +33,7 @@ RUN uv pip install -c /opt/golem-locks/robocasa-amd64-01.txt --system --no-cache
         "numpy>=2.2.6" \
         "Pillow>=10.0"
 
-# robosuite and RoboCasa, at fixed commits: every h12_mujoco.py task is a
+# robosuite and RoboCasa, at fixed commits: every golem_sim.py kitchen task is a
 # RoboCasa kitchen, whose KitchenArena subclasses robosuite's Arena. Neither is
 # fully on PyPI, so both install from git, editable. RoboCasa depends on
 # lerobot, which pins torch 2.7.1 and so replaces base's cu130 torch in this

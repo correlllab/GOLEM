@@ -30,7 +30,7 @@ export LD_LIBRARY_PATH=${CYCLONEDDS_HOME}/lib:/isaac-sim/exts/isaacsim.ros2.brid
 TASK="base"
 HEADLESS_FLAG=""
 # Run headless when no display is reachable (SSH without X11, CI).
-if [ -z "$HEADLESS_FLAG" ] && [ -z "${DISPLAY:-}" ]; then
+if [ -z "${DISPLAY:-}" ]; then
     echo "[launch_isaac] no DISPLAY set — forcing --headless"
     HEADLESS_FLAG="--headless"
 fi

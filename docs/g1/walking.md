@@ -13,8 +13,8 @@ the sim's elastic band, its leg motors off. Once `golem_safety` beats on
 to the policy's default pose over 2 s and holds it, and the sim lowers the band
 until the feet carry most of the weight. Once `rt/lowstate` has been
 steady for 1 s, the arm controller commands and it has finished its start-up
-moves (its first `/left_ee_pose`), the node starts the policy at zero velocity
-and then releases the band; without a `/left_ee_pose`, each waits
+moves (its first `/left_grasp_frame_pose`), the node starts the policy at zero
+velocity and then releases the band; without a `/left_grasp_frame_pose`, each waits
 `band.max_wait`. From then on HOMIE keeps the robot standing and walks it on
 `/cmd_vel`.
 

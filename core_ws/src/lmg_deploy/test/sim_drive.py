@@ -3,10 +3,11 @@
 Run in the ROS container with lmg_sim.launch.py start_position_verified:=true up (any non-zero ROS_DOMAIN_ID):
     python3 sim_drive.py [--out /tmp/sim_drive.json] [--engage_timeout 300]
 
-It confirms the engage, then stands, walks backward and forward, turns, side-steps, reaches a world-fixed arm
-goal and walks again. For each phase it prints, and writes to --out, the commanded velocity, the head IMU's mean
-heading-frame velocity and yaw rate (FAST-LIO's body, differenced over 0.5 s windows), the cosine between commanded
-and actual planar velocity, the largest height drop and tilt from standing, the node's states and the wrist errors.
+It confirms the engage, then stands, walks backward and forward, turns, side-steps, moves both grasp frames to a
+/grasp_frame_target goal (ARM_GOAL_OFFSET from where they are, pelvis frame) and walks again. For each phase it
+prints, and writes to --out, the commanded velocity, the head IMU's mean heading-frame velocity and yaw rate
+(FAST-LIO's body, differenced over 0.5 s windows), the cosine between commanded and actual planar velocity, the
+largest height drop and tilt from standing, the node's states and the grasp frames' errors (the goal's feedback).
 camera_init is levelled as golem_slam level_odom does it: up = the mean /livox/imu specific force, rotated into
 camera_init, over the first stand. A drop of 0.4 m or a tilt past 0.8 rad from standing counts as a fall.
 """
@@ -18,12 +19,14 @@ import time
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import Pose, PoseArray, Twist
+from custom_ros_messages.action import GraspFrameTarget
+from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Float32MultiArray, String
+from rclpy.action import ActionClient
+from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 # (label, seconds, (vx m/s, vy m/s, wz rad/s)) or (label, seconds, "arm"). The RoboCasa spawn faces a fixture
@@ -39,11 +42,11 @@ PHASES = [
     ("walk sideways left 0.2", 4.0, (0.0, 0.2, 0.0)),
     ("walk sideways right 0.2", 4.0, (0.0, -0.2, 0.0)),
     ("stop again", 3.0, (0.0, 0.0, 0.0)),
-    ("arm goal (world-fixed)", 8.0, "arm"),
+    ("grasp frame goal", 8.0, "arm"),
     ("walk backward 0.3 again", 5.0, (-0.3, 0.0, 0.0)),
     ("stop at the end", 3.0, (0.0, 0.0, 0.0)),
 ]
-ARM_GOAL = [(0.30, 0.25, 0.05), (0.30, -0.25, 0.05)]  # m, left then right wrist, pelvis frame
+ARM_GOAL_OFFSET = (0.05, 0.0, 0.10)  # m, pelvis frame: each grasp frame's goal from where it is at the phase's start
 
 
 def rot(q):
@@ -55,7 +58,7 @@ def rot(q):
 
 
 class Driver(Node):
-    """Record FAST-LIO poses, the node's state and wrist errors, and send it commands."""
+    """Record FAST-LIO poses, the node's state and the grasp frames' errors, and send it commands."""
 
     def __init__(self):
         """Create the subscriptions, publishers and service clients."""
@@ -65,17 +68,19 @@ class Driver(Node):
         self.levelling = True
         self.up = None
         self.states = []        # (t, state)
-        self.wrist = []         # (t, left, right)
+        self.wrist = []         # (t, left, right): the grasp frames' errors, m
+        self.grasp_poses = {}   # topic -> the newest PoseStamped
         self.create_subscription(Odometry, "/Odometry", self._on_odom, 50)
         self.create_subscription(Imu, "/livox/imu", self._on_imu, qos_profile_sensor_data)
         latched = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                              history=HistoryPolicy.KEEP_LAST, depth=1)   # as the node publishes ~/state
         self.create_subscription(String, "/marl_deploy_node/state", self._on_state, latched)
-        self.create_subscription(Float32MultiArray, "/marl_deploy_node/wrist_error", self._on_wrist, 10)
+        for topic in ("/left_grasp_frame_pose", "/right_grasp_frame_pose"):
+            self.create_subscription(PoseStamped, topic,
+                                     lambda m, topic=topic: self.grasp_poses.__setitem__(topic, m), 10)
         self.pub_cmd = self.create_publisher(Twist, "/cmd_vel", 10)
-        self.pub_goal = self.create_publisher(PoseArray, "/marl_deploy_node/arm_goal", 10)
+        self.grasp = ActionClient(self, GraspFrameTarget, "/grasp_frame_target")
         self.cli_confirm = self.create_client(Trigger, "/marl_deploy_node/confirm_engage")
-        self.cli_end = self.create_client(Trigger, "/marl_deploy_node/end_arm_goal")
 
     def _on_odom(self, m):
         """Record a FAST-LIO pose with its receipt time."""
@@ -121,10 +126,30 @@ class Driver(Node):
         """Record a ~/state change with its receipt time."""
         self.states.append((time.monotonic(), m.data))
 
-    def _on_wrist(self, m):
-        """Record the left and right wrist errors (m) with their receipt time."""
-        if len(m.data) >= 2:
-            self.wrist.append((time.monotonic(), float(m.data[0]), float(m.data[1])))
+    def _on_feedback(self, m):
+        """Record the goal's left and right grasp-frame errors (m) with their receipt time."""
+        self.wrist.append((time.monotonic(), float(m.feedback.left_error_m), float(m.feedback.right_error_m)))
+
+    def grasp_goal(self, seconds):
+        """Send both grasp frames ARM_GOAL_OFFSET from their poses now (timeout seconds); return a one-line result."""
+        if len(self.grasp_poses) < 2 or not self.grasp.wait_for_server(timeout_sec=10.0):
+            return "grasp_frame_target: no server or no grasp-frame poses"
+        goal = GraspFrameTarget.Goal()
+        for stamped, topic in ((goal.left, "/left_grasp_frame_pose"), (goal.right, "/right_grasp_frame_pose")):
+            stamped.header.frame_id = "pelvis"
+            stamped.pose = self.grasp_poses[topic].pose
+            stamped.pose.position.x += ARM_GOAL_OFFSET[0]
+            stamped.pose.position.y += ARM_GOAL_OFFSET[1]
+            stamped.pose.position.z += ARM_GOAL_OFFSET[2]
+        goal.timeout.sec = int(seconds)
+        sent = self.grasp.send_goal_async(goal, feedback_callback=self._on_feedback)
+        rclpy.spin_until_future_complete(self, sent, timeout_sec=10.0)
+        if not sent.done() or not sent.result().accepted:
+            return "grasp_frame_target: not accepted"
+        result = sent.result().get_result_async()
+        rclpy.spin_until_future_complete(self, result, timeout_sec=seconds + 10.0)
+        r = result.result()
+        return f"grasp_frame_target: status {r.status} {r.result.message}" if r else "grasp_frame_target: no result"
 
     @property
     def state(self):
@@ -154,7 +179,7 @@ class Driver(Node):
 
 
 def phase_stats(d, t0, t1, cmd, z_stand):
-    """Return one phase's measured velocity, yaw rate, drop, tilt, states and wrist errors."""
+    """Return one phase's measured velocity, yaw rate, drop, tilt, states and grasp-frame errors."""
     od = d.odom_rows(t0, t1)
     out = {}
     if len(od) < 10:
@@ -187,8 +212,8 @@ def phase_stats(d, t0, t1, cmd, z_stand):
     wr = [x for x in d.wrist if t0 <= x[0] <= t1]
     if wr and cmd == "arm":
         late_w = wr[len(wr) // 2:]
-        out["wrist_err_cm_end"] = round(100 * float(np.mean([0.5 * (a + b) for _, a, b in late_w])), 1)
-        out["wrist_err_cm_min"] = round(100 * float(min(0.5 * (a + b) for _, a, b in wr)), 1)
+        out["grasp_err_cm_end"] = round(100 * float(np.mean([0.5 * (a + b) for _, a, b in late_w])), 1)
+        out["grasp_err_cm_min"] = round(100 * float(min(0.5 * (a + b) for _, a, b in wr)), 1)
     out["states"] = sorted({s for t, s in d.states if t0 <= t <= t1} | ({d.state} if d.state else set()))
     out["fell"] = bool(drop > 0.4 or od[:, 5].max() > 0.8)
     return out
@@ -204,7 +229,7 @@ def main():
     d = Driver()
     log = {"events": [], "phases": []}
     t_start = time.monotonic()
-    # Wait for the node to pre-pose and level its attitude, then confirm.
+    # Wait for the node to pre-pose, then confirm.
     while time.monotonic() - t_start < args.engage_timeout and d.state not in ("waiting_confirm", "nav"):
         d.spin_for(0.5)
         if d.state.startswith("fault"):
@@ -221,15 +246,7 @@ def main():
     for label, seconds, cmd in PHASES:
         t0 = time.monotonic()
         if cmd == "arm":
-            pa = PoseArray()
-            for x, y, z in ARM_GOAL:
-                p = Pose()
-                p.position.x, p.position.y, p.position.z = x, y, z
-                p.orientation.w = 1.0
-                pa.poses.append(p)
-            d.pub_goal.publish(pa)
-            d.spin_for(seconds)
-            log["events"].append(d.call(d.cli_end, "end_arm_goal"))
+            log["events"].append(d.grasp_goal(seconds))
         else:
             d.spin_for(seconds, cmd)
         if d.levelling:  # the first phase stands: level camera_init from it

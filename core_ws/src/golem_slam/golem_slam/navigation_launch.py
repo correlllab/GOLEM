@@ -77,6 +77,7 @@ def _pipeline(context):
     use_sim_time = LaunchConfiguration('use_sim_time')
     fast_lio_config = LaunchConfiguration('fast_lio_config').perform(context)
     body_footprint = local_footprint(LaunchConfiguration('nav2_params_file').perform(context))
+    arm_footprint = LaunchConfiguration('arm_footprint').perform(context).lower() == 'true'
 
     # The driver and the sims stamp the lidar points and the IMU 'livox_frame', the
     # raw sensor frame, which the URDF's lidar link is; this joins it to the TF tree.
@@ -205,7 +206,9 @@ def _pipeline(context):
         name='dynamic_footprint',
         output='screen',
         parameters=[{'body_footprint': body_footprint,
-                     'arm_links': profile['footprint']['arm_links'],
+                     # [''], not []: an empty list has no type for a ROS parameter
+                     'arm_links': (profile['footprint']['arm_links']
+                                   if arm_footprint else ['']),
                      'padding': profile['footprint']['padding'],
                      'use_sim_time': use_sim_time}],
         remappings=[('footprint', '/local_costmap/footprint')],
@@ -292,5 +295,9 @@ def generate_launch_description():
         DeclareLaunchArgument('slam_params_file', default_value=os.path.join(
             _config_dir(), 'slam_toolbox.yaml'),
             description='slam_toolbox parameter file (path), shared by both robots'),
+        DeclareLaunchArgument('arm_footprint', default_value='true',
+                              description="true: the local costmap's footprint is widened by "
+                                          "the arms (pipeline.yaml's footprint.arm_links); "
+                                          'false: the body polygon alone'),
         OpaqueFunction(function=_pipeline),
     ])

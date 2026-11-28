@@ -25,8 +25,8 @@ Interfaces:
 - sub /safety/heartbeat (std_msgs/Bool): golem_safety's, true while it relays.
 - sub /safety/lowcmd_upper_in (unitree_hg/LowCmd): the arm controller's commands; only
   whether they are fresh is read.
-- sub /left_ee_pose (geometry_msgs/PoseStamped): with band.release only, dropped after the
-  first: frame_task_server has finished its start-up moves.
+- sub /left_grasp_frame_pose (geometry_msgs/PoseStamped): with band.release only, dropped after the
+  first: the arm controller has finished its start-up moves.
 - pub /safety/lowcmd_lower_in (unitree_hg/LowCmd): the leg targets, in the leg slots.
 - pub /lowerbody/active_policy (std_msgs/String, latched): the policy's name while it
   drives the legs, otherwise "idle".
@@ -166,7 +166,7 @@ class LowerBodyControllerNode(Node):
         self._ee_sub = None
         if self._run.band.release:
             self._ee_sub = self.create_subscription(
-                PoseStamped, '/left_ee_pose', self._on_ee_pose, 10, callback_group=group)
+                PoseStamped, '/left_grasp_frame_pose', self._on_arm_pose, 10, callback_group=group)
         self._band_client = self.create_client(Trigger, '/elastic_band/toggle',
                                                callback_group=group)
         self.create_service(Trigger, '/lowerbody/confirm_engage', self._on_confirm,
@@ -310,10 +310,10 @@ class LowerBodyControllerNode(Node):
         with self._lock:
             self._supervisor.on_upper_cmd(self._times()[0])
 
-    def _on_ee_pose(self, _msg: PoseStamped) -> None:
-        """Take the first /left_ee_pose and drop the subscription."""
+    def _on_arm_pose(self, _msg: PoseStamped) -> None:
+        """Take the first /left_grasp_frame_pose and drop the subscription."""
         with self._lock:
-            self._supervisor.on_ee_pose(self._times()[0])
+            self._supervisor.on_arm_pose(self._times()[0])
         if self._ee_sub is not None:
             self.destroy_subscription(self._ee_sub)
             self._ee_sub = None

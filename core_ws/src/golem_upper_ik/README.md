@@ -4,7 +4,7 @@ The upper-body (torso or waist, and arms) IK controller of the Unitree H1-2 and 
 nodes, both robots, each robot described by a profile:
 
 - `frame_task_server` solves Pink IK on the 14 arm joints with a self-collision barrier,
-  plans with OMPL, and serves `/frame_task`, `/named_config` and `/grasp_frame_target`. It
+  plans with OMPL, and serves `/grasp_frame_target`. It
   writes its commands only to a `golem_safety` input (`/safety/...`), never to `/lowcmd`.
 - `joint_state_publisher` publishes `/joint_states` for the robot's body joints from
   `/lowstate`.
@@ -57,19 +57,15 @@ config once they are read) and exits 1. On SIGINT or SIGTERM it shuts down (belo
 
 | Direction | Name | Type | Notes |
 |---|---|---|---|
-| action | `/frame_task` | `custom_ros_messages/action/FrameTask` | pull named frames to target poses in the `pelvis` frame |
-| action | `/named_config` | `custom_ros_messages/action/NamedConfig` | move the IK joints to a named configuration |
 | action | `/grasp_frame_target` | `custom_ros_messages/action/GraspFrameTarget` | move each arm's grasp frame to a target in the `pelvis` frame or a world frame (Grasp-frame targets, below) |
 | pub | `frame_names` | `custom_ros_messages/msg/StringArray` | the current goal's frames, 25 Hz |
 | pub | `frame_targets`, `frame_poses` | `geometry_msgs/PoseArray` | their targets and measured poses, `pelvis` frame, 25 Hz |
-| pub | `left_ee_pose`, `right_ee_pose` | `geometry_msgs/PoseStamped` | the end effectors' measured poses, 25 Hz; their first message tells other nodes the controller is up |
-| pub | `left_ee_target`, `right_ee_target` | `geometry_msgs/PoseStamped` | the current goal's targets for the end-effector frames, when it names them |
-| pub | `/left_grasp_frame_pose`, `/right_grasp_frame_pose` | `geometry_msgs/PoseStamped` | the grasp frames' measured poses in the `pelvis` frame, 25 Hz, from every measured body joint (as TF has the frames: the H1-2's are URDF frames, the G1's sit at their offsets from the palm links) |
+| pub | `/left_grasp_frame_pose`, `/right_grasp_frame_pose` | `geometry_msgs/PoseStamped` | the grasp frames' measured poses in the `pelvis` frame, 25 Hz, from every measured body joint (as TF has the frames: the H1-2's are URDF frames, the G1's sit at their offsets from the palm links); their first message tells other nodes the controller is up |
 | pub | `topics.low_cmd` | `unitree_hg/msg/LowCmd` | reliable, keep-last 1, at `frequency.pub_hz`; must be under `/safety/` |
 | sub | `topics.low_state` (`/lowstate`) | `unitree_hg/msg/LowState` | keep-last 1, best effort |
 | sub | `/lowcmd` | `LowCmd` | `golem_safety`'s output, read (never written) only until the follow gate opens |
 
-The actions, publishers and the `/frame_task` goal check exist once the start-up is done.
+The action and the publishers exist once the start-up is done.
 `/grasp_frame_target` and the grasp pose topics have global names: they are the interface every
 arm controller of the robot serves alike.
 
@@ -153,9 +149,11 @@ and OMPL's time limits are host compute budgets, in s of steady time.
    with `use_estop:=true`, the paired safety config, and no estop latched at this start-up (its
    limit checks run from its first `/lowstate`, so a joint already past `limits.estop` latches
    it) or in an earlier run.
-4. Move through the start-up postures, each until the IK's command is within 1e-3 rad of it,
-   then step the held joints to `controller.hold_targets` at min(0.3, `dq_lim`) rad/s, all
-   within `controller.startup_move_timeout` of the gate opening.
+4. Move through the start-up postures, each until the IK's command is within 1e-3 rad of it
+   (the IK's steps within the acceleration limit, Goals below, and each IK joint at most
+   `JOINT_SPEED_CAP`, 0.83 rad/s, on its own: a joint with less to go arrives first), then step
+   the held joints to `controller.hold_targets` at min(0.3, `dq_lim`) rad/s, all within
+   `controller.startup_move_timeout` of the gate opening.
 
 A start-up that fails after step 2 sends the shutdown command (Shutdown, below) and the
 node exits 1. `golem_safety` streams zero gains from the robot's first `/lowstate` and engages the upper-body input on
@@ -178,35 +176,76 @@ then moves only in the start-up step 4.
 
 **Goals.**
 
-- One goal at a time drives the controller. A `/frame_task` goal naming a frame the model
-  does not have is refused before it is accepted; an unknown `/named_config` name aborts.
+- One goal at a time drives the controller: a goal waits for the one in flight to end.
 - Each goal re-locks the reduced model's frozen joints (the torso or waist, and the legs) at
   their measured angles, so the IK's forward kinematics match the robot, and starts the IK
   from the last command when it is within 0.1 rad of the measured pose on every IK joint;
   otherwise from the measured pose, dropping the held torque bias.
+- The IK, the planner's bounds and the path checks keep every IK joint within the clip range,
+  `limits.clip.position_offset` inside the joint table (and within the URDF's limits): the
+  controller narrows its robot model's position limits to it (`RobotModel.set_position_limits`)
+  and hands the same range to the planner's subprocess. No solution lies where the clip would
+  cut the command, and a joint the IK parks at a limit sits `position_offset` inside the table,
+  so its overshoot past the command stays clear of `golem_safety`'s estop range. A seed, a
+  measured pose or an integrated step outside the range is clamped into it. A direct goal's
+  and a start-up move's IK steps brake into the range's limits: a joint closes on its limit at
+  no more than its distance over `LIMIT_APPROACH_TIME` (0.2 s, `core/ik_solver.py`), so it
+  arrives slowly instead of at `dq_lim`; moves that stay farther from the limits are not
+  slowed, and the IK solves of planned goals do not brake. Each config's
+  `limits.clip.position_offset` comment says how its margin covers the overshoot measured
+  against the estop ranges of the `golem_safety` configs it pairs with.
 - A direct goal (`plan: false`) steps the IK at `ctrl_hz`, its arm velocities limited to
-  `dq_lim` per joint and `v_lim`/`w_lim` at the end effectors. An iteration that takes longer
-  than the control period (a loaded host) runs the IK steps it owes next time, one per period
-  it took and at most `CATCH_UP_STEPS` (3), each solved over one period, so the arm keeps its
-  speed in robot time. The self-collision barrier constrains the `BARRIER_PAIRS` (32) closest
-  sphere pairs of each step (`core/ik_solver.py`). Once the IK converges it holds
-  the target with integral control (`gains.ki`, fading over the next move). It succeeds when
-  the frames (or joints) are within the thresholds before the goal's `duration` (or
-  `controller.timeout`) runs out; a hold pinned at a joint position limit stops with
-  `success: false` (`Hold blocked at a joint position limit: ...`).
-- `relative: true` (`FrameTask`): each target is an offset from the frame's measured pose in
-  the `pelvis` frame, the frame of absolute targets and of `/left_ee_pose`: its translation is
-  added to the frame's position in pelvis axes, and its rotation pre-multiplies the frame's
-  orientation (pelvis axes, about the frame's origin). The IMU orientation plays no part, so
-  `{position: {z: 0.05}}` moves the frame 5 cm up the pelvis's z axis however the robot is
-  turned or tilted.
-- `slow_mode: true` (both actions): a quarter of the speed (`SLOW_MODE_SCALE` 0.25), applied
-  after the speed limits; a planned goal is planned at a quarter of `planner.moving_speed`.
-- `plan: true`: the OMPL planner (in a subprocess of its own) plans in the IK joints, with
-  the self-collision checks and the planner frames' x/y/z bounds, and the path is executed one
-  waypoint per control period. `planner.enabled: false` aborts every planned goal before any
-  IK solve: `Planning is turned off: ...; send the goal with plan=false`. A profile without a
-  self-collision model could not plan either (`Planning is unavailable`); both robots' have
+  `dq_lim` per joint and `v_lim`/`w_lim` at the end effectors, and their changes to the
+  acceleration limit (below). An iteration that takes longer than the control period (a loaded
+  host) runs the IK steps it owes next time, one per period it took and at most
+  `CATCH_UP_STEPS` (3), each solved over one period and each within the acceleration limit, so
+  the arm keeps its speed in robot time. The self-collision barrier constrains the
+  `BARRIER_PAIRS` (32) closest sphere pairs of each step (`core/ik_solver.py`). Once the IK's
+  step is slower than `threshold_ik` it holds the target with integral control (`gains.ki`,
+  fading over the next move); the targets are checked against the thresholds only from then on.
+- **The torque bias near a clip.** On every command (a hold, a move, a stop) each joint's
+  torque bias toward a position clip limit is bounded at kp times the command's distance inside
+  that limit plus `BIAS_PAST_CLIP` (5 mrad, `core/controller/upper_controller.py`), so the
+  bias alone holds a joint at most 5 mrad past its clip, whatever a hold integrated (the hand
+  pressing on a table) or a move carried in; per joint, the other joints integrate on. A hold
+  whose bias stops at the bound short of the clip is neither converged nor pinned at a limit
+  (the pinned report needs the joint within 1 mrad of its clip): a hold that needs more bias
+  than the bound runs to its timeout, or to the caller's cancel, such as `golem_skills`'
+  stable-stop (it ends a move whose feedback stops changing). In the H1-2 sim's grasps, 21 of
+  83 holds pinned at a limit had needed more bias than the bound to get there.
+- **The acceleration limit.** Every IK-stepped command (the start-up moves and direct goals)
+  changes each IK joint's velocity by at most `ACCEL_LIMIT` (5 rad/s² of robot time,
+  `core/controller/upper_controller.py`), from rest at its start to rest in the hold. Each
+  control step takes the step nearest the IK's (within the speed limits) that changes no
+  joint's step by more than `ACCEL_LIMIT * dt^2` from its last, lets each joint still stop
+  within the IK's distance left to the goal, and keeps the IK's position-limit brake, velocity
+  limits and self-collision barrier (`IKSolver.limited_step`). Where those need a harder change
+  (the brake, the barrier or a goal behind a fast joint), the step keeps them and leaves the
+  acceleration limit by the least it can; only when the QP solver finds no step at all is each
+  arm's step scaled along the IK's instead (`accel_scale`). The step is then scaled under
+  `dq_lim`, `v_lim` and `w_lim` once more, so the speed limits win too. The IK's own step is
+  otherwise its whole step to the goal, so the joints cruise at the speed limits (the H1-2's
+  `dq_lim` is 0.83 rad/s, the top speed they had before the acceleration limit). A direct
+  goal's IK has converged once both its own and the commanded joint speeds are under
+  `threshold_ik`. Two commands jump on purpose, outside the IK steps: a goal that starts from
+  the measured pose (more than 0.1 rad off the command, above) moves the command onto the arm,
+  and a cancel or a timeout moves it to where the arm will rest (`stop_joints`, below).
+  5 rad/s² covers the position-limit brake's own deceleration, `dq_lim / LIMIT_APPROACH_TIME`
+  (4.2 rad/s² at the sims' 0.83 rad/s, 1.5 at the real G1's 0.3); the constant's comment has the
+  measurements.
+- `plan: true`: the goal's joint target is an IK solution of its targets, iterated from the
+  measured pose and then the named seeds `home`, `t_pose` and `arms_front_45`
+  (`core/ik_solver.py`) in two passes: each seed first for at most `SEED_FIRST_PASS` (2 s of
+  steady time), then the seeds that have not converged for the rest of `controller.timeout`
+  each. A seed's solution counts only once the planner finds a path to it; when it finds none,
+  the next seed to converge is tried, and the goal fails with the planner's reason once none
+  is left. The OMPL planner (in a subprocess of its own) plans in the IK joints, with the
+  self-collision checks and the planner frames' x/y/z bounds, and the path is executed one
+  waypoint per control period. Its smoothstep timing gets more waypoints until no joint
+  accelerates faster than `ACCEL_LIMIT` along it, from rest to rest (up to
+  `planner.max_interpolation_steps`). `planner.enabled: false` aborts every planned goal before
+  any IK solve: `Planning is turned off: ...; send the goal with plan=false`. A profile without
+  a self-collision model could not plan either (`Planning is unavailable`); both robots' have
   one.
 - The G1's `arms_down` is in self-collision: the real wrists and hands rest on the hips, and
   each hand and wrist sphere sits 2 to 5 cm inside its hip-pitch sphere. A goal to it stops
@@ -235,21 +274,26 @@ then moves only in the start-up step 4.
   moves with the pelvis and leaves the world pose; send a new goal to aim at the world pose
   again. A target with a non-finite value or a zero quaternion aborts the goal; the quaternion
   is normalised.
-  The goal replaces the frame tasks with one on each targeted grasp frame and runs as a
-  `/frame_task` goal does (direct, or along a plan with `plan: true`), with these differences.
-  Only the targeted arms' joints change their torque bias: the hold's integral term
+  The goal replaces the frame tasks with one on each targeted grasp frame and runs direct, or
+  along a plan with `plan: true`. Only the targeted arms' joints change their torque bias: the hold's integral term
   (`gains.ki`) and its fading over a move act on them alone, so the arm without a target and
-  the torso or waist keep their commands, torque bias included, and stay where they are (on
-  the H1-2, whose hold integrates, an arm sagging below its command would otherwise be lifted
-  onto it, about 11 mm in the sim). Its `timeout` (0: `controller.timeout`) counts
+  the torso or waist keep their commands, torque bias included, and stay where they are (both
+  robots' holds integrate on the arms, and an arm sagging below its command would otherwise
+  be lifted onto it, about 11 mm in the H1-2 sim). Its `timeout` (0: `controller.timeout`) counts
   robot time from its start, planning and the path included. It succeeds once every target has
   stayed within `threshold_linear` and `threshold_angular` for `GRASP_SETTLE_S` (0.2 s of robot
-  time); the hold step's own convergence ends nothing. It aborts at the timeout, on a planning
+  time); the hold step's own convergence ends nothing. Both robots' configs set the thresholds
+  to 2 mm and 10 mrad: in the sims the hold settles within about 0.6 mm and 2 mrad, and a
+  planned goal holds the IK solve's solution, which stops within 1 mm and 10 mrad. It aborts at the timeout, on a planning
   or execution failure, on a hold pinned at a joint limit and on a stale `/lowstate`. A cancel,
   or the timeout, during a planned path stops it before its next waypoint; the IK solve and the
   planning before the path are not cut short (the planner's first request also builds its
   robot model, seconds). Every end sets the
-  result's `message` (`reached (...)`, or why it was aborted or canceled, with the errors). A
+  result's `outcome`: `REACHED` (succeeded), `NOT_REACHED` (aborted: the timeout, before the IK
+  converged, during the path or in the hold, or a hold pinned at a joint limit), `CANCELED`, or
+  `FAILED` (aborted for anything else: a bad target, TF, planning or execution, a stale
+  `/lowstate`); and its `message` (`reached (...)`, or why it was aborted or canceled, with the
+  errors). A
   cancel or the timeout, direct or during the path, or a path that fails while it runs, stops the targeted arms where they are, since a moving
   arm lags its command (about 20 mm at the grasp frame at 0.3 m/s on the H1-2 sim) and would
   keep going that far: each of their joints is commanded at its measured position plus its
@@ -258,15 +302,14 @@ then moves only in the start-up step 4.
   moving or more than 0.1 rad off then gets no offset. The arm then stops within its braking
   distance and settles near the pose (in the sims, cancelled at 0.13 to 0.33 m/s: at most 6 mm
   away on the H1-2 and 14 mm on the soft-armed G1 within 0.1 s, settling within 2.5 mm and
-  1.5 mm). A `/frame_task` or `/named_config` cancel leaves the last command, which a
-  moving arm keeps following. After any other end (reached, a hold pinned at a limit, a plan
+  1.5 mm). After any other end (reached, a hold pinned at a limit, a plan
   that fails before the path, a stale `/lowstate`) the arms hold the last command, where the goal left them. The feedback, every
   control step and before every waypoint, and the errors in the message are each grasp frame's
   distance from its target (m) and the angle between their rotations (rad), measured as the IK
   sees the frame (the reduced model at the measured arm joints, the torso or waist at the angle
-  the goal locked it at); 0 for an arm without a target. One goal at a time drives the
-  controller, whichever of the three actions it came on: a goal waits for the one in flight to
-  end.
+  the goal locked it at); 0 for an arm without a target. The pelvis frame is the robot's own:
+  the IMU orientation plays no part, so a target 5 cm above the measured pose is 5 cm up the
+  pelvis's z axis however the robot is turned or tilted.
 - On ROS domain 0 every control step first checks that `/lowstate` is no staler than
   `controller.max_state_lag_ms` (the larger of its tick lag and its age); a stale state aborts
   the goal and the last command keeps going out. The sims stamp the tick in sim steps, so the
@@ -322,7 +365,7 @@ robots with their collision models), the ROS I/O, command handler and follow gat
 (`test_ros_io.py`, `test_low_cmd_handler.py`), the controller and the nodes
 (`test_controller_loop.py`, `test_frame_task_server.py`, `/grasp_frame_target` and the grasp
 pose topics included), a start-up IK step with no solution (`test_startup_no_solution.py`),
-the goal loops of the three actions against a scripted controller (`test_goal_loops.py`) and
+the goal loop of `/grasp_frame_target` against a scripted controller (`test_goal_loops.py`) and
 that nothing imports `unitree_sdk2py` (`test_no_sdk.py`).
 
 ## Tools

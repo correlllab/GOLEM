@@ -25,8 +25,9 @@ class PlannerConfig:
 
     Units: timeout and simplify_time in s of steady time (host compute budgets), dt in s of
     robot time (a waypoint per control period); range, validity_resolution and
-    start_limit_tolerance in rad (joint space); moving_speed in m/s; the frame_* bounds and
-    margins in m, in the pelvis frame, None for no bound.
+    start_limit_tolerance in rad (joint space); moving_speed in m/s; max_acceleration in
+    rad/s^2 of robot time, None for no bound; the frame_* bounds and margins in m, in the pelvis
+    frame, None for no bound.
     config/<robot>/example.controller.yaml in the source tree describes each key.
     """
 
@@ -41,6 +42,10 @@ class PlannerConfig:
     dt: float = 1.0 / 30.0
     min_interpolation_steps: int = 2
     max_interpolation_steps: int = 300
+    # the most a joint's velocity changes along a path, from rest at its start to rest at its
+    # end: a path that would change it faster gets more waypoints, up to
+    # max_interpolation_steps. Not a config key: the controller sets its acceleration limit
+    max_acceleration: float = None
     validity_resolution: float = 0.0025
     constraint_check_steps: int = 10
     # frames bounded by the frame_* limits and timed by moving_speed; PlannerClient sets
@@ -111,6 +116,8 @@ class ReducedJointPlanner:
             raise ValueError('Planner moving_speed must be positive')
         if self.config.dt <= 0.0:
             raise ValueError('Planner dt must be positive')
+        if self.config.max_acceleration is not None and self.config.max_acceleration <= 0.0:
+            raise ValueError('Planner max_acceleration must be positive')
         if self.config.min_interpolation_steps < 2:
             raise ValueError('Planner min_interpolation_steps must be at least 2')
         if (
@@ -624,9 +631,12 @@ class ReducedJointPlanner:
         metadata = self._interpolation_metadata(sparse_path)
         self._print_interpolation_metadata(metadata, 'ompl path')
         steps = max(metadata['waypoint_count'], sparse_path.shape[0])
-        path.interpolate(steps)
-        path_array = self._path_to_array(path)
-        path_array = self._smooth_path_timing(path_array)
+
+        def timed(count):
+            """Return the OMPL path interpolated to count states, along a smoothstep."""
+            path.interpolate(count)
+            return self._smooth_path_timing(self._path_to_array(path))
+        path_array = self._within_max_acceleration(timed, steps, 'ompl path')
         reason = self._path_validity_failure(path_array)
         if reason:
             return PlanResult(
@@ -704,11 +714,42 @@ class ReducedJointPlanner:
         """Return the straight joint path from start to goal, timed by a smoothstep."""
         coarse_path = np.vstack([start, goal])
         metadata = self._interpolation_metadata(coarse_path)
-        steps = metadata['waypoint_count']
-        alpha = self._smoothstep(steps).reshape(-1, 1)
-        path = (1.0 - alpha) * start + alpha * goal
-        path[:, ~self.active_mask] = self.pinned_q[~self.active_mask]
         self._print_interpolation_metadata(metadata, 'direct path')
+
+        def timed(count):
+            """Return the straight path over count waypoints, along a smoothstep."""
+            alpha = self._smoothstep(count).reshape(-1, 1)
+            path = (1.0 - alpha) * start + alpha * goal
+            path[:, ~self.active_mask] = self.pinned_q[~self.active_mask]
+            return path
+        return self._within_max_acceleration(timed, metadata['waypoint_count'], 'direct path')
+
+    def _peak_acceleration(self, path):
+        """Return a timed path's largest joint acceleration, rad/s^2, at rest before and after."""
+        rest = np.vstack([path[:1], path, path[-1:]])
+        return float(np.max(np.abs(np.diff(rest, n=2, axis=0)))) / self.config.dt ** 2
+
+    def _within_max_acceleration(self, timed, steps, label):
+        """Return timed(count), count grown from steps until the path keeps max_acceleration.
+
+        timed(count) returns the path timed over count waypoints. The count grows with the
+        square root of the peak's excess (a smoothstep's acceleration falls with the square of
+        its duration) until the path is within max_acceleration or has max_interpolation_steps
+        waypoints.
+        """
+        path = timed(steps)
+        limit = self.config.max_acceleration
+        if limit is None:
+            return path
+        most = int(self.config.max_interpolation_steps)
+        peak = self._peak_acceleration(path)
+        while peak > limit * (1.0 + 1e-9) and len(path) < most:
+            steps = min(most, max(len(path) + 1,
+                                  int(np.ceil((len(path) - 1) * np.sqrt(peak / limit))) + 1))
+            path = timed(steps)
+            peak = self._peak_acceleration(path)
+            print(f'[planner] {label}: {len(path)} waypoints for max_acceleration '
+                  f'{limit:.1f} rad/s^2 (peak {peak:.2f})', flush=True)
         return path
 
     def _shorten_path(self, path):

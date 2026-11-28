@@ -26,9 +26,11 @@ elastic band, which lowers it onto its feet once the leg motors are held (`CLAUD
 
 The robot's leg node releases the band once its policy runs and `frame_task_server` is up. Then
 the test's steps wait for Nav2, let the robot stand 3 s, send one `NavigateToPose` goal 1.5 m ahead
-of the spawn, and, once `/cmd_vel` moves the robot, `/named_config` `t_pose`, then `home` once
-`t_pose` has succeeded, each goal with a 15 s duration (`frame_task_server`'s timeout for it; its
-default, 5 s, ends the H1-2's move to `t_pose` before its IK converges). After the goal's result
+of the spawn, and, once `/cmd_vel` moves the robot, a direct `/grasp_frame_target` goal to the
+grasp frames' poses at a named config of `golem_upper_ik` (the H1-2's `prep`, the G1's
+`arms_front_45`, by forward kinematics on its model), then one to `home` once the first has
+reached, each with a 15 s timeout (the controller's default, 5 s, can end a move before its IK
+converges). After the goal's result
 the robot stands 2 s, and the test waits for a `/map` that slam_toolbox published after the walk
 (it publishes every 5 s and adds a scan every 0.5 m travelled).
 
@@ -43,11 +45,12 @@ the robot stands 2 s, and the test waits for a `/map` that slam_toolbox publishe
   kitchen) are reported, not failed.
 - **Goal reached**: Nav2 reports success within 90 s of sim time, and the true pelvis ends within
   0.4 m of the goal.
-- **Arms while walking**: `t_pose` is sent once `/cmd_vel` moves the robot, before the goal's
-  result; `home` is sent once `t_pose` has succeeded; both goals carry a 15 s duration and both
-  must succeed (`NamedConfig`'s `success`). Only `t_pose` has to start during the walk: the 1.5 m
-  walk takes 4-6 s and each move a few seconds, so `t_pose` may end, and `home` usually runs,
-  after the goal's result. The check does not require either move to finish inside the walk.
+- **Arms while walking**: the first move is sent once `/cmd_vel` moves the robot, before the
+  goal's result; `home` is sent once the first has reached; both goals carry a 15 s timeout and
+  both must reach: the goal succeeds (the controller's tolerance, about 1 mm), or it ends at its
+  timeout or pinned at a joint limit with its last feedback within 10 mm and 0.05 rad of the
+  targets. Only the first move has to start during the walk: the 1.5 m walk takes 4-6 s and each
+  move a few seconds, so the first may end, and `home` usually runs, after the goal's result. The check does not require either move to finish inside the walk.
 - **SLAM healthy** from Nav2's start to the end: `/Odometry` (FAST-LIO) at 5 Hz or more in every sim
   second; `level_odom`'s `odom -> base_footprint` in TF at every sample, at most 0.5 s behind
   `/clock`; `/map` knows more cells at the end than at Nav2's start; `/converted_scan` never stops

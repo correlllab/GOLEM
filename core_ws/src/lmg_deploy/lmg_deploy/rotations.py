@@ -2,7 +2,7 @@
 
 Quaternions are (w, x, y, z), as in Isaac Lab. Each function mirrors the
 isaaclab.utils.math function of the same name, which the training environment
-used, so the deployed observations and IK step follow its conventions.
+used, so the deployed observations and arm targets follow its conventions.
 """
 
 import numpy as np
@@ -96,12 +96,6 @@ def quat_from_matrix(m: np.ndarray) -> np.ndarray:
 def projected_gravity(quat: np.ndarray) -> np.ndarray:
     """Return the unit gravity direction in the body frame of attitude quat: (0, 0, -1) when upright."""
     return quat_apply_inverse(quat, np.array([0.0, 0.0, -1.0]))
-
-
-def subtract_frame_transforms(pos_a, quat_a, pos_b, quat_b):
-    """Return pose b expressed in frame a, T_a^-1 o T_b, as (position, quaternion)."""
-    quat_a_inv = quat_conjugate(quat_a)
-    return quat_apply(quat_a_inv, pos_b - pos_a), quat_mul(quat_a_inv, quat_b)
 
 
 def compute_pose_error(pos_cur, quat_cur, pos_des, quat_des):

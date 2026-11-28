@@ -5,22 +5,16 @@
 Parameters: robot (required; a robot with data in golem_upper_ik's config/) and config
 (required; a controller config name under share/golem_upper_ik/config/<robot>/, or a path).
 
-Once its start-up is done (UpperController), the node serves:
-- /frame_task (custom_ros_messages/FrameTask): pull named frames to target poses in the
-  pelvis frame, directly through the IK or along an OMPL plan, then hold them;
-- /named_config (custom_ros_messages/NamedConfig): move the IK joints to a named
-  configuration, the same two ways;
-- /grasp_frame_target (custom_ros_messages/GraspFrameTarget): move each arm's grasp frame
-  (the profile's grasp_frames) to a target in the pelvis frame or, resolved through TF when
-  the goal starts, in a world frame, the same two ways; it succeeds once every target has
-  been held within the thresholds for GRASP_SETTLE_S, and aborts at its timeout;
-and publishes at 25 Hz frame_names, frame_targets and frame_poses (the current goal's
-frames, their targets and their measured poses), {left,right}_ee_pose (the end effectors'
-measured poses, which tell the robot's other nodes the controller is up),
-{left,right}_ee_target (the current goal's targets for the end-effector frames) and
-/{left,right}_grasp_frame_pose (the grasp frames' measured poses, every body joint measured,
-as TF has them). Every pose is in the pelvis frame. A goal's duration or timeout and the
-control period are s of robot time (the controller's clock: the sim's /clock under
+Once its start-up is done (UpperController), the node serves /grasp_frame_target
+(custom_ros_messages/GraspFrameTarget): move each arm's grasp frame (the profile's
+grasp_frames) to a target in the pelvis frame or, resolved through TF when the goal starts, in
+a world frame, directly through the IK or along an OMPL plan; it succeeds once every target
+has been held within the thresholds for GRASP_SETTLE_S, and aborts at its timeout. It
+publishes at 25 Hz frame_names, frame_targets and frame_poses (the current goal's frames,
+their targets and their measured poses) and /{left,right}_grasp_frame_pose (the grasp frames'
+measured poses, every body joint measured, as TF has them; their first message tells the
+robot's other nodes the controller is up). Every pose is in the pelvis frame. A goal's timeout
+and the control period are s of robot time (the controller's clock: the sim's /clock under
 use_sim_time, the steady clock otherwise).
 """
 import os
@@ -34,12 +28,12 @@ import threading  # noqa: E402
 import time  # noqa: E402
 from typing import Callable, NamedTuple  # noqa: E402
 
-from custom_ros_messages.action import FrameTask, GraspFrameTarget, NamedConfig  # noqa: E402
+from custom_ros_messages.action import GraspFrameTarget  # noqa: E402
 from custom_ros_messages.msg import StringArray  # noqa: E402
 from geometry_msgs.msg import PoseArray, PoseStamped  # noqa: E402
 import numpy as np  # noqa: E402
 from pyquaternion import Quaternion  # noqa: E402
-from rclpy.action import ActionServer, CancelResponse, GoalResponse  # noqa: E402
+from rclpy.action import ActionServer, CancelResponse  # noqa: E402
 from rclpy.executors import SingleThreadedExecutor  # noqa: E402
 from rclpy.node import Node  # noqa: E402
 from rclpy.time import Time  # noqa: E402
@@ -53,13 +47,8 @@ from golem_upper_ik.ros2.utility import (  # noqa: E402
     matrix_to_pose, pose_to_matrix, robot_parameter, run,
 )
 
-__all__ = ['CATCH_UP_STEPS', 'FrameTaskServer', 'GRASP_SETTLE_S', 'GoalError', 'SLOW_MODE_SCALE',
-           'main']
+__all__ = ['CATCH_UP_STEPS', 'FrameTaskServer', 'GRASP_SETTLE_S', 'GoalError', 'main']
 
-# Speed multiplier for a goal that asks for slow_mode. A direct move scales its joint
-# velocity by it; a planned move is planned at a proportionally lower planner-frame speed
-# (more waypoints, same control period), so the arm stays smooth instead of stepping.
-SLOW_MODE_SCALE = 0.25
 # The most IK steps one iteration of a direct goal runs. An iteration that outlasts the
 # control period (a loaded host, the executor's callbacks holding the GIL) owes the IK one
 # step per period it took, so the arm keeps its configured speed in robot time. SAFETY: each
@@ -94,26 +83,17 @@ class GoalError(Exception):
 
 
 class _GoalKind(NamedTuple):
-    """Hold what one action's goals differ in, for the goal loop both actions share.
+    """Hold how the goal loop reads and judges a goal.
 
-    result: the action's Result type. target: what a planned goal plans to, for the log.
     error(): the goal's error now; feedback(goal_handle, error) publishes it;
-    reached(error) says whether it is within the action's thresholds.
-    planned_step_converges, direct_step_converges: whether the hold step's own convergence
-    ends a planned or a direct goal. direct_reached_message: logged when a direct goal
-    reaches its target, or None. settle: s of robot time the target must stay reached before
-    the goal is.
+    reached(error) says whether it is within the thresholds. settle: s of robot time the
+    target must stay reached before the goal is.
     """
 
-    result: type
-    target: str
     error: Callable
     feedback: Callable
     reached: Callable
-    planned_step_converges: bool
-    direct_reached_message: str | None
-    direct_step_converges: bool = True
-    settle: float = 0.0
+    settle: float
 
 
 class _Outcome(NamedTuple):
@@ -131,7 +111,7 @@ class _Outcome(NamedTuple):
 
 
 class FrameTaskServer(Node):
-    """Serve /frame_task, /named_config and /grasp_frame_target and publish the poses."""
+    """Serve /grasp_frame_target and publish the poses."""
 
     def __init__(self, *, robot_model=None, init=True, **node_kwargs):
         """Read the parameters and the config; start() builds the controller and the topics.
@@ -151,7 +131,6 @@ class FrameTaskServer(Node):
         controller = self.config['controller']
         self.timeout = controller['timeout']
         self.threshold_ik = controller['threshold_ik']
-        self.threshold_joint = controller['threshold_joint']
         self.threshold_linear = controller['threshold_linear']
         self.threshold_angular = controller['threshold_angular']
         # the current goal's frames and their targets
@@ -166,8 +145,8 @@ class FrameTaskServer(Node):
     def start(self):
         """Build the controller (its start-up included), then the publishers and action servers.
 
-        /left_ee_pose appearing tells the robot's other nodes the controller is up. The node
-        must be spinning, since the start-up waits on its /lowstate subscription.
+        /left_grasp_frame_pose appearing tells the robot's other nodes the controller is up.
+        The node must be spinning, since the start-up waits on its /lowstate subscription.
         """
         self.controller = FrameController(self, self.profile, self.config,
                                           robot_model=self._robot_model, init=self._init)
@@ -175,24 +154,10 @@ class FrameTaskServer(Node):
         self.frame_names_publisher = self.create_publisher(StringArray, 'frame_names', 10)
         self.frame_targets_publisher = self.create_publisher(PoseArray, 'frame_targets', 10)
         self.frame_poses_publisher = self.create_publisher(PoseArray, 'frame_poses', 10)
-        self.left_ee_pose_publisher = self.create_publisher(PoseStamped, 'left_ee_pose', 10)
-        self.right_ee_pose_publisher = self.create_publisher(PoseStamped, 'right_ee_pose', 10)
-        self.left_ee_target_publisher = self.create_publisher(PoseStamped, 'left_ee_target', 10)
-        self.right_ee_target_publisher = self.create_publisher(PoseStamped, 'right_ee_target',
-                                                               10)
         self.grasp_pose_publishers = tuple(self.create_publisher(PoseStamped, topic, 10)
                                            for topic in GRASP_POSE_TOPICS)
         self.publisher_timer = self.create_timer(1.0 / PUBLISH_HZ, self.publisher_callback)
 
-        self.action_server = ActionServer(
-            self, FrameTask, 'frame_task',
-            execute_callback=self.frame_task_callback,
-            goal_callback=self.frame_task_goal_callback,
-            cancel_callback=self.cancel_callback)
-        self.named_config_server = ActionServer(
-            self, NamedConfig, 'named_config',
-            execute_callback=self.named_config_callback,
-            cancel_callback=self.cancel_callback)
         self.grasp_frame_target_server = ActionServer(
             self, GraspFrameTarget, GRASP_ACTION,
             execute_callback=self.grasp_frame_target_callback,
@@ -233,7 +198,7 @@ class FrameTaskServer(Node):
                                     throttle_duration_sec=PUBLISH_ERROR_LOG_PERIOD)
 
     def _publish_poses(self):
-        """Publish the goal's frames, targets and poses, and the end-effector and grasp poses."""
+        """Publish the goal's frames, targets and poses, and the grasp poses."""
         frame_names, frame_targets = self.frame_names, self.frame_targets
         names = StringArray()
         names.data = list(frame_names)
@@ -245,191 +210,32 @@ class FrameTaskServer(Node):
             [matrix_to_pose(self.controller.get_frame_transformation(name))
              for name in frame_names], stamp))
 
-        left, right = self.controller.ee_transformations()
-        self.left_ee_pose_publisher.publish(self._stamp_pose(matrix_to_pose(left), stamp))
-        self.right_ee_pose_publisher.publish(self._stamp_pose(matrix_to_pose(right), stamp))
         for frame, publisher in zip(self.profile.grasp_frames, self.grasp_pose_publishers):
             pose = self.controller.get_frame_transformation(frame.name)
             publisher.publish(self._stamp_pose(matrix_to_pose(pose), stamp))
-        # an end effector's target goes out only while the goal has a task on its frame
-        for frame, publisher in zip(self.profile.ee_frames, (self.left_ee_target_publisher,
-                                                             self.right_ee_target_publisher)):
-            target = self.controller.frame_task_target(f'{frame}_task')
-            if target is not None:
-                publisher.publish(self._stamp_pose(matrix_to_pose(target), stamp))
-
-    def _abort_stale(self, goal_handle, result, error):
-        """Abort a goal because /lowstate went stale; the last command holds."""
-        self.get_logger().error(f'Aborting goal: {error}')
-        goal_handle.abort()
-        result.success = False
-        return result
-
-    def frame_task_goal_callback(self, goal_request):
-        """Refuse a goal that names a frame the robot's models do not have."""
-        unknown = self.controller.unknown_frames(goal_request.frame_names)
-        if unknown:
-            self.get_logger().warn(
-                f'Refusing the FrameTask goal: {", ".join(repr(name) for name in unknown)} '
-                f'is not a frame of the {self.robot} model')
-            return GoalResponse.REJECT
-        return GoalResponse.ACCEPT
-
-    def frame_task_callback(self, goal_handle):
-        """Run a FrameTask goal; abort it when /lowstate goes stale."""
-        try:
-            return self._frame_task_callback(goal_handle)
-        except StaleStateError as error:
-            return self._abort_stale(goal_handle, FrameTask.Result(), error)
-
-    def _frame_task_callback(self, goal_handle):
-        """Replace the frame tasks with the goal's, then move directly or along a plan."""
-        with self._controller_lock:
-            self.get_logger().info('Received goal')
-            goal = goal_handle.request
-            # relative targets resolve against the measured pose, which must be fresh
-            self.controller.check_state_fresh()
-
-            target_matrices = [
-                self._resolve_target(name, pose_to_matrix(target), goal.relative)
-                for name, target in zip(goal.frame_names, goal.frame_targets)
-            ]
-
-            self.controller.clear_frame_tasks()
-            self.frame_names = list(goal.frame_names)
-            self.frame_targets = [matrix_to_pose(matrix) for matrix in target_matrices]
-
-            self.get_logger().info(
-                'Going to target frame poses' + (' (relative)' if goal.relative else ''))
-            for frame_name, target_matrix in zip(goal.frame_names, target_matrices):
-                self.controller.add_frame_task(f'{frame_name}_task', frame_name, target_matrix)
-
-            self.controller.update_ik_solver()
-
-            kind = _GoalKind(
-                result=FrameTask.Result, target='target frame poses',
-                error=self._frame_task_errors, feedback=self._publish_frame_task_feedback,
-                reached=self._frame_targets_reached,
-                planned_step_converges=False, direct_reached_message=None)
-            return self._move(
-                goal_handle, kind,
-                ik_step=self.controller.control_step_reduced,
-                plan=lambda: self.controller.plan_to_ik_target(ik_timeout=self.timeout))
 
     def _goal_timeout(self, duration):
         """Return a goal's duration or timeout, s of robot time; controller.timeout for 0."""
         seconds = duration.sec + duration.nanosec * 1e-9
         return seconds if seconds > 0.0 else self.timeout
 
-    def _resolve_target(self, frame_name, target, relative):
-        """Return one frame's absolute 4x4 target in the pelvis frame.
-
-        A relative target's translation is added to the frame's measured position, and its
-        rotation is applied in pelvis-frame axes about the frame's measured origin.
-        """
-        if not relative:
-            return target
-        current = self.controller.get_frame_transformation(frame_name)
-        absolute = np.eye(4)
-        absolute[:3, :3] = target[:3, :3] @ current[:3, :3]
-        absolute[:3, 3] = current[:3, 3] + target[:3, 3]
-        return absolute
-
-    def _canceled(self, goal_handle, result):
-        """Mark a goal canceled and return its failed result."""
-        self.get_logger().info('Goal cancelled')
-        goal_handle.canceled()
-        result.success = False
-        return result
-
-    def _move(self, goal_handle, kind, ik_step, plan, after_plan=None):
-        """Run a goal at its speed, directly or along a plan as it asks; return its result.
-
-        ik_step() is the direct goal's IK step (_run_goal); plan() returns the planned goal's
-        path and after_plan(), when given, runs once it has executed (_planned_goal).
-        slow_mode slows this goal only: full speed returns when it ends, however it ends.
-        """
-        goal = goal_handle.request
-        timeout = self._goal_timeout(goal.duration)
-        self.controller.speed_scale = SLOW_MODE_SCALE if goal.slow_mode else 1.0
-        if goal.slow_mode:
-            self.get_logger().info(f'Slow mode enabled (speed_scale={SLOW_MODE_SCALE})')
-        try:
-            if goal.plan:
-                return self._planned_goal(goal_handle, kind, timeout, plan, after_plan)
-            return self._run_goal(goal_handle, kind, timeout, ik_step=ik_step)
-        finally:
-            self.controller.speed_scale = 1.0
-
-    def _planned_goal(self, goal_handle, kind, timeout, plan, after_plan):
-        """Plan, execute the path, then hold until reached, blocked or timeout.
-
-        A planning or execution failure aborts the goal. Otherwise after_plan() runs, when
-        given, and the hold starts (_run_goal); timeout is in s of robot time from the end of
-        the path.
-        """
-        self.get_logger().info(f'Planning path to {kind.target}')
-        clock = self.controller.clock
-        try:
-            path = plan()
-            self.get_logger().info(f'Executing planned path with {len(path)} waypoints')
-            execute_start = clock.now()
-            self.controller.execute_path(path)
-            self.get_logger().info(
-                f'Path execution finished in {clock.now() - execute_start:.2f}s; '
-                f'holding steady state (timeout {timeout:.1f}s)')
-        except Exception as error:
-            self.get_logger().warn(f'Planning or execution failed: {error}')
-            goal_handle.abort()
-            result = kind.result()
-            result.success = False
-            return result
-
-        if after_plan is not None:
-            after_plan()
-        self.controller.init_steady_state()
-        return self._run_goal(goal_handle, kind, timeout)
-
-    def _run_goal(self, goal_handle, kind, timeout, ik_step=None):
-        """Drive the goal (_drive), then end it; return its result.
-
-        Unless canceled the goal succeeds, its result's success saying whether the IK
-        converged and the hold reached the target.
-        """
-        outcome = self._drive(goal_handle, kind, timeout, ik_step=ik_step)
-        if outcome.canceled:
-            return self._canceled(goal_handle, kind.result())
-        if not outcome.ik_converged:
-            self.get_logger().warn('Timed out before IK convergence')
-        else:
-            self._log_hold_outcome(outcome.reached, outcome.blocked)
-
-        goal_handle.succeed()
-        result = kind.result()
-        result.success = bool(outcome.ik_converged and outcome.reached)
-        return result
-
     def _drive(self, goal_handle, kind, timeout, ik_step=None):
         """Step to the goal's target, then hold until reached, blocked, canceled or timeout.
 
-        ik_step: a direct goal's IK step, returning the body joint velocity (rad/s); the hold
-            starts once its largest |velocity| is under threshold_ik. None for a planned goal,
+        ik_step: a direct goal's IK step, returning its body joint speeds (rad/s,
+            UpperController._step_ik); the hold starts once the largest is under threshold_ik. None for a planned goal,
             whose hold starts at once. An iteration that took longer than the control period
             runs the next iteration's IK steps it owes, one per period, at most CATCH_UP_STEPS
             (stopping at the step under threshold_ik).
         A direct goal checks for a cancel after each step, a planned one before. The hold is
-        reached when kind.reached(error) holds, or when the hold step itself converges (as
-        kind.planned_step_converges or kind.direct_step_converges say), and has stayed so for
-        kind.settle s of robot time. timeout is in s of robot time. Returns an _Outcome; the
-        goal is left for the caller to end.
+        reached when kind.reached(error) has held for kind.settle s of robot time; the hold
+        step's own convergence ends nothing. timeout is in s of robot time. Returns an
+        _Outcome; the goal is left for the caller to end.
         """
         clock = self.controller.clock
         planned = ik_step is None
-        step_converges = (kind.planned_step_converges if planned
-                          else kind.direct_step_converges)
         start_time = clock.now()
         ik_converged = planned
-        steady_state_converged = False
         reached = False
         # robot time the target was first reached since it last was not, or None
         reached_since = None
@@ -445,8 +251,7 @@ class FrameTaskServer(Node):
                     if vel_error < self.threshold_ik:
                         break
             else:
-                held = self.controller.steady_state_step()
-                steady_state_converged = step_converges and held
+                self.controller.steady_state_step()
             if not planned and goal_handle.is_cancel_requested:
                 return _Outcome(True, ik_converged, False, None)
 
@@ -462,13 +267,11 @@ class FrameTaskServer(Node):
                 blocked = self._limit_block_reason()
                 if blocked is not None:
                     break
-                if steady_state_converged or kind.reached(error):
+                if kind.reached(error):
                     now = clock.now()
                     reached_since = now if reached_since is None else reached_since
                     if now - reached_since >= kind.settle:
                         reached = True
-                        if not planned and kind.direct_reached_message is not None:
-                            self.get_logger().info(kind.direct_reached_message)
                         break
                 else:
                     reached_since = None
@@ -486,93 +289,6 @@ class FrameTaskServer(Node):
             return None
         return ', '.join(f'{name} q={q:+.3f} (limit {limit:+.3f})' for name, q, limit in limited)
 
-    def _log_hold_outcome(self, converged, blocked):
-        """Log how the hold ended: blocked at a limit, reached, or timed out."""
-        if blocked is not None:
-            self.get_logger().warn(f'Hold blocked at a joint position limit: {blocked}')
-        elif converged:
-            self.get_logger().info('Goal reached')
-        else:
-            self.get_logger().warn('Timed out during steady-state hold')
-
-    def _frame_task_errors(self):
-        """Return each goal frame's position (m) and orientation (rad) error, as two lists."""
-        errors_linear = []
-        errors_angular = []
-        for frame_name in self.frame_names:
-            error = self.controller.get_frame_task_error(f'{frame_name}_task')
-            errors_linear.append(float(np.linalg.norm(error[:3])))
-            errors_angular.append(float(np.linalg.norm(error[3:])))
-        return errors_linear, errors_angular
-
-    def _frame_targets_reached(self, errors):
-        """Return whether every goal frame is within threshold_linear and threshold_angular.
-
-        errors: _frame_task_errors()'s two lists; a goal with no frame is never reached.
-        """
-        errors_linear, errors_angular = errors
-        return (len(errors_linear) > 0 and len(errors_angular) > 0 and
-                max(errors_linear) < self.threshold_linear and
-                max(errors_angular) < self.threshold_angular)
-
-    def _publish_frame_task_feedback(self, goal_handle, errors):
-        """Publish a FrameTask goal's frame errors (_frame_task_errors()) as feedback."""
-        feedback = FrameTask.Feedback()
-        feedback.errors_linear, feedback.errors_angular = errors
-        goal_handle.publish_feedback(feedback)
-
-    def _named_config_joint_error(self):
-        """Return the largest IK joint error from the named configuration, rad."""
-        return float(np.max(np.abs(self.controller.reduced_configuration_error)))
-
-    def _named_config_reached(self, joint_error):
-        """Return whether every IK joint is within threshold_joint of the named configuration."""
-        return joint_error < self.threshold_joint
-
-    def _publish_named_config_feedback(self, goal_handle, joint_error):
-        """Publish a NamedConfig goal's joint error as feedback."""
-        feedback = NamedConfig.Feedback()
-        feedback.joint_error = joint_error
-        goal_handle.publish_feedback(feedback)
-
-    def named_config_callback(self, goal_handle):
-        """Run a NamedConfig goal; abort it when /lowstate goes stale."""
-        try:
-            return self._named_config_callback(goal_handle)
-        except StaleStateError as error:
-            return self._abort_stale(goal_handle, NamedConfig.Result(), error)
-
-    def _named_config_callback(self, goal_handle):
-        """Move to the named configuration directly or along a plan; abort an unknown name."""
-        with self._controller_lock:
-            self.get_logger().info('Received named config goal')
-            goal = goal_handle.request
-
-            config_name = goal.config_name
-            if config_name not in self.profile.named_configs:
-                self.get_logger().warn(f'Named config "{config_name}" not found')
-                goal_handle.abort()
-                result = NamedConfig.Result()
-                result.success = False
-                return result
-
-            self.get_logger().info(f'Going to named config: {config_name}')
-            q_reduced = self.profile.named_configs[config_name]
-
-            self.controller.update_ik_solver()
-
-            kind = _GoalKind(
-                result=NamedConfig.Result, target='named configuration',
-                error=self._named_config_joint_error,
-                feedback=self._publish_named_config_feedback, reached=self._named_config_reached,
-                planned_step_converges=True, direct_reached_message='Named config reached')
-            return self._move(
-                goal_handle, kind,
-                ik_step=lambda: self.controller.goto_reduced_configuration(q_reduced),
-                plan=lambda: self.controller.plan_to_configuration(q_reduced),
-                # the feedback's joint error is measured against the planned goal
-                after_plan=lambda: self.controller.set_reduced_configuration_target(q_reduced))
-
     def grasp_frame_target_callback(self, goal_handle):
         """Run a GraspFrameTarget goal; every way it ends gives the result a message.
 
@@ -585,17 +301,26 @@ class FrameTaskServer(Node):
             with self._controller_lock:
                 return self._grasp_frame_target(goal_handle, targets)
         except (GoalError, StaleStateError) as error:
-            return self._end_grasp(goal_handle, 'abort', str(error))
+            return self._end_grasp(goal_handle, GraspFrameTarget.Result.FAILED, str(error))
 
-    def _end_grasp(self, goal_handle, how, message, success=False):
-        """End a GraspFrameTarget goal ('succeed', 'abort' or 'canceled'); return its result."""
-        if success:
+    def _end_grasp(self, goal_handle, outcome, message):
+        """End a GraspFrameTarget goal with outcome (a Result constant); return its result.
+
+        REACHED succeeds the goal, CANCELED marks it canceled, NOT_REACHED and FAILED abort it.
+        """
+        Result = GraspFrameTarget.Result
+        if outcome == Result.REACHED:
             self.get_logger().info(f'Grasp frame target reached: {message}')
+            goal_handle.succeed()
+        elif outcome == Result.CANCELED:
+            self.get_logger().warn(f'Grasp frame target canceled: {message}')
+            goal_handle.canceled()
         else:
-            self.get_logger().warn(f'Grasp frame target {how}: {message}')
-        getattr(goal_handle, how)()
-        result = GraspFrameTarget.Result()
-        result.success = success
+            self.get_logger().warn(f'Grasp frame target abort: {message}')
+            goal_handle.abort()
+        result = Result()
+        result.outcome = outcome
+        result.success = outcome == Result.REACHED
         result.message = message
         return result
 
@@ -719,11 +444,9 @@ class FrameTaskServer(Node):
         stop_reference = self.controller.stop_reference(joints)
 
         kind = _GoalKind(
-            result=GraspFrameTarget.Result, target='grasp frame targets',
             error=lambda: self._grasp_errors(frames, targets),
             feedback=self._publish_grasp_feedback, reached=self._grasp_targets_reached,
-            planned_step_converges=False, direct_reached_message=None,
-            direct_step_converges=False, settle=GRASP_SETTLE_S)
+            settle=GRASP_SETTLE_S)
         clock = self.controller.clock
         timeout = self._goal_timeout(goal.timeout)
         deadline = clock.now() + timeout
@@ -736,32 +459,35 @@ class FrameTaskServer(Node):
             self.controller.init_steady_state()
             ik_step = None
 
+        Result = GraspFrameTarget.Result
         outcome = self._drive(goal_handle, kind, deadline - clock.now(), ik_step=ik_step)
         if outcome.canceled:
             self.controller.stop_joints(joints, stop_reference)
-            return self._end_grasp(goal_handle, 'canceled', 'canceled; the arms hold where they '
-                                   f'are ({self._error_text(kind.error())})')
+            return self._end_grasp(goal_handle, Result.CANCELED, 'canceled; the arms hold where '
+                                   f'they are ({self._error_text(kind.error())})')
         errors = self._error_text(kind.error())
         if outcome.reached:
-            return self._end_grasp(goal_handle, 'succeed', f'reached ({errors})', success=True)
+            return self._end_grasp(goal_handle, Result.REACHED, f'reached ({errors})')
         if outcome.blocked is not None:
-            return self._end_grasp(goal_handle, 'abort',
+            return self._end_grasp(goal_handle, Result.NOT_REACHED,
                                    'the hold is pinned at a joint position limit: '
                                    f'{outcome.blocked} ({errors})')
         self.controller.stop_joints(joints, stop_reference)
         stage = '' if outcome.ik_converged else ' before the IK converged'
-        return self._end_grasp(goal_handle, 'abort', f'timed out after {timeout:.1f} s{stage}; '
-                               f'the arms hold where they are ({errors})')
+        return self._end_grasp(goal_handle, Result.NOT_REACHED, f'timed out after {timeout:.1f} '
+                               f's{stage}; the arms hold where they are ({errors})')
 
     def _grasp_path(self, goal_handle, kind, deadline, timeout, stop_arms):
         """Plan to the IK solution of the targets and execute the path; None once executed.
 
-        Otherwise the goal's result: aborted when planning or execution fails or the deadline
-        (robot time) passes during the path, canceled on a cancel; once the path has started,
-        each of those ends calls stop_arms() to stop the targeted arms where they are. Feedback goes out before each waypoint, and a
-        cancel or the deadline ends the path at the next one. StaleStateError propagates.
+        Otherwise the goal's result: FAILED when planning or execution fails, NOT_REACHED when
+        the deadline (robot time) passes during the path, CANCELED on a cancel; once the path
+        has started, each of those ends calls stop_arms() to stop the targeted arms where they
+        are. Feedback goes out before each waypoint, and a cancel or the deadline ends the path
+        at the next one. StaleStateError propagates.
         """
         clock = self.controller.clock
+        Result = GraspFrameTarget.Result
 
         def stop():
             """Publish the feedback; return whether a cancel or the deadline ends the path."""
@@ -772,7 +498,7 @@ class FrameTaskServer(Node):
         except StaleStateError:
             raise
         except Exception as error:
-            return self._end_grasp(goal_handle, 'abort', f'planning failed: {error}')
+            return self._end_grasp(goal_handle, Result.FAILED, f'planning failed: {error}')
         self.get_logger().info(f'Executing planned path with {len(path)} waypoints')
         try:
             executed = self.controller.execute_path(path, stop=stop)
@@ -780,18 +506,18 @@ class FrameTaskServer(Node):
             raise
         except Exception as error:
             stop_arms()
-            return self._end_grasp(goal_handle, 'abort', f'execution failed: {error}; the arms '
-                                   'hold where they are')
+            return self._end_grasp(goal_handle, Result.FAILED, f'execution failed: {error}; the '
+                                   'arms hold where they are')
         if executed:
             return None
         if goal_handle.is_cancel_requested:
             stop_arms()
-            return self._end_grasp(goal_handle, 'canceled', 'canceled during the path; the arms '
-                                   f'hold where they are ({self._error_text(kind.error())})')
+            return self._end_grasp(goal_handle, Result.CANCELED, 'canceled during the path; the '
+                                   f'arms hold where they are ({self._error_text(kind.error())})')
         stop_arms()
         errors = self._error_text(kind.error())
-        return self._end_grasp(goal_handle, 'abort', f'timed out after {timeout:.1f} s during the '
-                               f'path; the arms hold where they are ({errors})')
+        return self._end_grasp(goal_handle, Result.NOT_REACHED, f'timed out after {timeout:.1f} s '
+                               f'during the path; the arms hold where they are ({errors})')
 
     def _grasp_errors(self, frames, targets):
         """Return {arm: (m, rad)}: each grasp frame's error from its target; 0s without one."""

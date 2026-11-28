@@ -17,7 +17,7 @@ from geometry_msgs.msg import Pose, Vector3Stamped
 from rclpy.duration import Duration as RclpyDuration
 from sensor_msgs.msg import Image
 
-from ..base import DEPTH_MAX_M, FRAME_TASK_STABLE_STOP_MSGS
+from ..base import DEPTH_MAX_M, ARM_MOVE_STABLE_STOP_MSGS
 from ..perception_utils import deproject_mask, gemini_boxes
 from .grasp_detection import box_detection
 from .grasp_markers import approach_target_tf
@@ -42,7 +42,7 @@ from .grasp_markers import approach_target_tf
 VISUAL_SERVO_DEPTH_M = 0.10
 # Per-axis convergence tolerances [m]. Each sits above what one measurement
 # resolves: a Gemini box segmented by SAM moves the object's X by about
-# +/-3 mm between frames of a still hand, and frame_task settles to ~1.2 mm,
+# +/-3 mm between frames of a still hand, and the arm settles to ~1.2 mm,
 # so a tighter band is met only by chance.
 #   X (across the jaws), what the grasp depends on: the pads are 16 mm wide,
 #     so 3 mm keeps the part on them.
@@ -92,7 +92,7 @@ BLOCKED_BACKOFF_M = 0.005
 # s of robot time for the whole loop; the goal's own timeout still wins
 VISUAL_SERVO_TIMEOUT_SEC = 90.0
 # s per hand-camera Gemini query. A query takes seconds to minutes, far longer
-# than a frame_task iteration, so the servo is slow but works on any object
+# than an arm move, so the servo is slow but works on any object
 # Gemini can name; sight counts as lost after 1.5 queries without a usable box.
 SERVO_GEMINI_TIMEOUT_SEC = 60.0
 VISUAL_SERVO_DETECT_WAIT_SEC = 1.5 * SERVO_GEMINI_TIMEOUT_SEC
@@ -266,7 +266,7 @@ class GraspServo:
                 self.move_frame_to(
                     frame, up, outer_gh=gh,
                     duration_sec=VISUAL_SERVO_MOVE_SEC, do_plan=False,
-                    stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
+                    stable_stop_msgs=ARM_MOVE_STABLE_STOP_MSGS,
                     label=f'visual servo back-off {retracts}/'
                           f'{VISUAL_SERVO_MAX_RETRACTS}')
                 # The hand is somewhere new: `after` becomes a clock instant
@@ -384,7 +384,7 @@ class GraspServo:
             self.move_frame_to(
                 frame, goal_pose, outer_gh=gh,
                 duration_sec=VISUAL_SERVO_MOVE_SEC,
-                do_plan=False, stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
+                do_plan=False, stable_stop_msgs=ARM_MOVE_STABLE_STOP_MSGS,
                 label=f'visual servo correction iter {it}')
             self._log_servo_tracking(frame, cur, delta, it)
             # a fully executed move lands at z - step[2], an ignored one stays at z

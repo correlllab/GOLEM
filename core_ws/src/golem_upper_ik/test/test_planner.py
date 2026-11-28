@@ -171,6 +171,33 @@ def test_plan_between_fake_valid_states():
     assert np.allclose(result.path[-1], [0.5, 0.5])
 
 
+def peak_acceleration(path, dt):
+    """Return a path's largest joint acceleration, rad/s^2, from rest before to rest after."""
+    rest = np.vstack([path[:1], path, path[-1:]])
+    return float(np.max(np.abs(np.diff(rest, n=2, axis=0)))) / dt ** 2
+
+
+def test_paths_keep_max_acceleration():
+    """A path too short for max_acceleration gets more waypoints, its acceleration then within it.
+
+    Without max_acceleration the path keeps moving_speed's waypoint count, whose smoothstep
+    accelerates the joints faster than that.
+    """
+    dt = 1.0 / 30.0
+    paths = {}
+    for limit in (None, 2.0):
+        planner = ReducedJointPlanner(
+            FakeRobotModel(), config=config(moving_speed=10.0, dt=dt, max_acceleration=limit))
+        result = planner.plan([0.0, 0.0], [0.4, 0.4])
+        assert result.success
+        np.testing.assert_allclose(result.path[0], [0.0, 0.0])
+        np.testing.assert_allclose(result.path[-1], [0.4, 0.4])
+        paths[limit] = result.path
+    assert peak_acceleration(paths[None], dt) > 2.0
+    assert len(paths[2.0]) > len(paths[None])
+    assert peak_acceleration(paths[2.0], dt) <= 2.0 * (1.0 + 1e-9)
+
+
 def test_plan_pins_idle_right_arm_with_home_tolerance():
     """An arm whose start and goal differ by less than the tolerance stays pinned."""
     lower = -np.ones(14)
@@ -356,7 +383,7 @@ PLANNED_MOVE = {'h12': ('init_3', 'prep'), 'g1': ('home', 'arms_front_45')}
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_planner_client_plans(robot):
-    """The subprocess builds the robot's model and plans; a speed override reaches it."""
+    """The subprocess builds the robot's model and plans, and reports a refused request."""
     profile = profile_of(robot)
     named = profile.named_configs
     begin, end = (named[name] for name in PLANNED_MOVE[robot])
@@ -371,19 +398,10 @@ def test_planner_client_plans(robot):
         np.testing.assert_allclose(result.path[0], begin, atol=1e-9)
         np.testing.assert_allclose(result.path[-1], end, atol=1e-9)
 
-        # a per-request speed reaches the worker: half the speed, about twice the waypoints
-        slow = client.plan_configuration(
-            current_q=current_q, start=begin, goal=end,
-            moving_speed=client.planner_config.moving_speed / 2,
-            max_interpolation_steps=2 * client.planner_config.max_interpolation_steps,
-        )
-        assert slow.success, slow.reason
-        assert slow.path.shape[0] > 1.8 * result.path.shape[0]
-
-        # an override is checked in the worker and reported back; the worker stays
+        # a request the worker refuses is reported back; the worker stays
         worker = client._worker
-        with pytest.raises(RuntimeError, match='moving_speed must be positive'):
-            client.plan_configuration(current_q, begin, end, moving_speed=0.0)
+        with pytest.raises(RuntimeError, match=r'start must have shape'):
+            client.plan_configuration(current_q, begin[:3], end)
         assert client._worker is worker and worker.process.is_alive()
 
         if robot == 'g1':
@@ -395,6 +413,33 @@ def test_planner_client_plans(robot):
         client.shutdown()
     assert client._worker is None
     assert not worker.process.is_alive()
+
+
+def test_planner_worker_plans_in_the_given_range(monkeypatch):
+    """The client hands its range to the worker, whose model plans within it."""
+    from golem_upper_ik.core.planner import planner_process
+    profile = profile_of('h12')
+    q_limits = np.stack([profile.q_low + 0.02, profile.q_high - 0.02], axis=1)
+    client = PlannerClient(profile, q_limits=q_limits)
+    started = {}
+
+    def capture(ctx, target, init_args):
+        """Keep the init_args a worker would start with, and start nothing."""
+        started.update(init_args)
+        raise RuntimeError('captured')
+    monkeypatch.setattr(planner_process, '_Worker', capture)
+    with pytest.raises(RuntimeError, match='captured'):
+        client._start()
+    np.testing.assert_array_equal(started['q_limits'], q_limits)
+    worker = planner_process._PlannerWorker(started)
+    model = worker.robot_model
+    mask = model.reduced_mask
+    # within the URDF's limits (the H1-2's shoulder roll stops at 0.19 rad inward there)
+    urdf_low, urdf_high = model._urdf_position_limits
+    np.testing.assert_array_equal(model.model_body_reduced.lowerPositionLimit,
+                                  np.maximum(urdf_low, q_limits[:, 0])[mask])
+    np.testing.assert_array_equal(worker.planner.model_upper,
+                                  np.minimum(urdf_high, q_limits[:, 1])[mask])
 
 
 def stub_client(worker_main, startup_timeout=30.0):

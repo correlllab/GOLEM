@@ -21,8 +21,8 @@ grasp_servo.py, the reach check grasp_reach.py, the RViz markers
 grasp_markers.py.
 
 SAFETY: every arm move is refused once golem_safety's heartbeat halts the arms
-or the frame_task server aborts a move (SkillsBase.arm_halt_reason); the skill
-then aborts instead of trying more candidates or retreating.
+or the arm controller aborts a move for a fault (SkillsBase.arm_halt_reason);
+the skill then aborts instead of trying more candidates or retreating.
 """
 
 import copy
@@ -37,8 +37,7 @@ from rclpy.duration import Duration as RclpyDuration
 
 from custom_ros_messages.action import SkillGrasp
 
-from ..base import (_Run, FRAME_TASK_STABLE_STOP_MSGS, SLOW_MODE_TIME_SCALE,
-                    WORLD_FRAME)
+from ..base import _Run, ARM_MOVE_STABLE_STOP_MSGS, WORLD_FRAME
 from ..grasp_synthesis import METHODS, SynthesisInput, method_name
 from ..grasp_synthesis.common import pose_at
 from ..hands import (dex3_closing_joints, dex3_closure, dex3_closure_text,
@@ -53,12 +52,11 @@ from .grasp_servo import GraspServo
 
 # ---- failure retreat (_retreat_after_failure) -------------------------------
 # m: before reporting a failure the hand lifts straight up so it is not left
-# parked in the workspace, in slow mode because it starts wherever the failure
-# left it, often next to the object. Skipped when 'prep' fails before
-# detection (the arm has not moved) and when arm motion is halted.
+# parked in the workspace. Skipped when 'prep' fails before detection (the arm
+# has not moved) and when arm motion is halted.
 FAILURE_RETRACT_M = 0.15
-# s, full-speed budget, multiplied by SLOW_MODE_TIME_SCALE
-FAILURE_RETRACT_SEC = 3.0
+# s of robot time, the lift's timeout
+FAILURE_RETRACT_SEC = 12.0
 
 
 # ---- motion and execution ---------------------------------------------------
@@ -72,8 +70,9 @@ APPROACH_DIST = 0.10
 # m every grasp is shifted along its own approach axis before execution
 # (positive = deeper); the pre-grasp moves with it
 GRASP_OFFSET = 0.0
-# s before the close: frame_task reports done at IK convergence while the arm
-# is still settling by several mm, and closing during that drags the part
+# s before the close: an arm move ends (reached, or stopped early as settled)
+# while the arm may still settle by several mm, and closing during that drags
+# the part
 PRE_CLOSE_SETTLE_SEC = 1.0
 # s after the close (on top of close_gripper's settle), so the grip is at full
 # force before e.g. pick_place's lift
@@ -126,22 +125,27 @@ SERVO_ANG_TOL = 0.05
 # candidates as unreachable and burns the pool.
 APPROACH_LIN_TOL = 0.025
 APPROACH_ANG_TOL = 0.10
-# Every candidate is approached in three straight-line, unplanned, slow-mode
-# stages (_straight_line_move):
+# Every candidate is approached in three straight-line, unplanned stages of
+# short goals (_straight_line_move), so neither arm controller strays far from
+# the line between the goals. In the H1-2 sim, golem_upper_ik's IK follows a
+# 3 cm step within about 7 mm of the line, and lmg_deploy's policy, which takes
+# the arms along its own joint-space path, within about 2 cm (over 30 cm off a
+# 16 cm move):
 #   1. take off straight up (pelvis +Z), holding the orientation, to
 #      APPROACH_CLEARANCE_M above the higher of the hand and the pre-grasp;
 #   2. transit to the pre-grasp, position and orientation interpolated;
 #   3. in along the grasp's own +Z axis to the contact pose
 #      (_move_in_along_axis), orientation held.
 # The visual servo, when requested, replaces stage 3. A failed candidate is
-# followed by a planned reset to 'prep' (a staged method: its staging config).
+# followed by a planned reset to the prep posture (a staged method: its staging
+# posture).
 APPROACH_CLEARANCE_M = 0.05
-# stage 1-2 segment limits [m, rad] per frame_task goal, so no single goal asks
-# for a large reorientation
+# stage 1-2 segment limits [m, rad] per arm goal, so no single goal asks for a
+# large reorientation or strays far from the line
 LINEAR_APPROACH_SEG_M = 0.10
 LINEAR_APPROACH_SEG_RAD = 0.35
-# s per stage 1-2 segment, already long enough for LINEAR_APPROACH_SEG_M at
-# slow-mode speed
+# s of robot time per stage 1-2 segment, a timeout well beyond what
+# LINEAR_APPROACH_SEG_M takes
 LINEAR_APPROACH_SEG_SEC = 10.0
 # stage 3 step along the grasp axis [m] and its budget [s]
 AXIS_APPROACH_STEP_M = 0.025
@@ -329,16 +333,13 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
 
         if not run.phase('detect_object', 0.0):
             return run.result
-        # Arms to the robot's prep config ('prep' on the H1-2) first, out of
-        # the head camera's view (an arm across the object corrupts the box,
-        # mask and cloud); planned, because the arms start wherever the last
-        # skill left them. The only failure without a retreat: the skill has
-        # not moved the arm yet.
-        prep = self.robot.prep_config
-        if not self.goto_named_config(prep, plan=True, slow_mode=True,
-                                      duration_sec=30.0, result_timeout=90.0,
-                                      outer_gh=gh):
-            return run.abort(f'move to {prep!r} before detection failed')
+        # Arms to the robot's prep posture first, out of the head camera's
+        # view (an arm across the object corrupts the box, mask and cloud);
+        # planned, because the arms start wherever the last skill left them.
+        # The only failure without a retreat: the skill has not moved the arm
+        # yet.
+        if not self.goto_posture('prep', self.robot.prep_posture, outer_gh=gh):
+            return run.abort("move to 'prep' before detection failed")
 
         def fail(message):
             """Lift the hand clear of the workspace, then abort with `message`."""
@@ -362,16 +363,13 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         if not self.open_gripper(arm, OPEN_PERCENT):
             return fail('gripper pre-open failed')
 
-        # A staged method starts from the arm's joint-space staging config: a
-        # repeatable posture above the workspace for a steep top-down approach,
-        # reached without an IK solve, with the other arm at prep. Other
-        # methods start from prep.
-        stage_cfg = self.robot.staging_configs[arm]
+        # A staged method starts from the arm's staging posture: a repeatable
+        # posture above the workspace for a steep top-down approach, with the
+        # other arm at prep. Other methods start from prep.
         if method.staged:
-            if not self.goto_named_config(stage_cfg, plan=True, slow_mode=True,
-                                          duration_sec=30.0, result_timeout=90.0,
-                                          outer_gh=gh):
-                return fail(f"move to {stage_cfg!r} staging config failed")
+            if not self.goto_posture(f'staging {arm}', self.robot.staging_postures[arm],
+                                     outer_gh=gh):
+                return fail(f'move to the {arm} staging posture failed')
 
         if not run.phase('approach_grasp', 0.4):
             return run.result
@@ -384,13 +382,14 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         # the run_telemetry target is the object centroid in the world frame
         if targets.centroid_w is not None:
             self._note_run_target(targets.centroid_w)
-        reset_cfg = stage_cfg if method.staged else prep
+        reset = ((f'staging {arm}', self.robot.staging_postures[arm]) if method.staged
+                 else ('prep', self.robot.prep_posture))
         obstacles = scene_obstacles(scene, obj_cloud) if method.reach_check else None
         contact, err = self._reach_candidate(run, gh, goal, obj, arm, cands,
-                                             targets, reset_cfg,
+                                             targets, reset,
                                              method.reach_check, obstacles)
         if err:
-            # A failed walk ends with the arms reset to reset_cfg and a halted
+            # A failed walk ends with the arms reset and a halted
             # arm must not move, so only a servo cut short retreats.
             if contact is not None:
                 return fail(err)
@@ -507,7 +506,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
                         grasps_w=grasps_w, approaches_w=approaches_w,
                         have_world=have_world, centroid_w=centroid_w)
 
-    def _reach_candidate(self, run, gh, goal, obj, arm, cands, targets, reset_cfg,
+    def _reach_candidate(self, run, gh, goal, obj, arm, cands, targets, reset,
                          check_reach=False, obstacles=None):
         """
         Bring the gripper to the first candidate it can close on.
@@ -521,10 +520,13 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         (_approach_pregrasp), then the visual servo with goal.visual_servo,
         else the move in along the grasp axis (_move_in_along_axis). A
         candidate is dropped when its pre-grasp is not reached or its axis
-        move stops too early; the arms then return to the named config
-        `reset_cfg` by a PLANNED joint-space move, because a failed Cartesian
-        approach can leave a joint pinned at its limit, from which no further
-        Cartesian move makes progress. A visual servo that does not converge
+        move stops too early; the arms then return to the posture `reset`
+        ((name, posture), goto_posture) by a PLANNED move to its pinch-frame
+        poses. The posture is a pose, not a joint configuration: the IK may
+        reach it with the joints elsewhere than the named configuration it was
+        derived from (in the H1-2 sim, a wrist yaw left at its limit by a staging
+        posture stayed there), and a planned goal the IK cannot solve fails and
+        halts the arms for the goal. A visual servo that does not converge
         closes where it stopped (best-effort). On failure the first element
         is a _Contact when the caller should retreat before reporting (a
         cancel or timeout during the servo), else None. Each candidate's
@@ -581,14 +583,12 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
             halt = self.arm_halt_reason()
             if halt is not None:
                 return None, f'arm halted during the approach: {halt}'
-            self.get_logger().warn(f'grasp {i}: {why}; resetting to {reset_cfg!r}')
-            if not self.goto_named_config(reset_cfg, plan=True, slow_mode=True,
-                                          duration_sec=30.0, result_timeout=90.0,
-                                          outer_gh=gh):
+            self.get_logger().warn(f'grasp {i}: {why}; resetting to {reset[0]!r}')
+            if not self.goto_posture(*reset, outer_gh=gh):
                 halt = self.arm_halt_reason()
-                return None, (f'arm halted during the reset to {reset_cfg!r}: {halt}'
+                return None, (f'arm halted during the reset to {reset[0]!r}: {halt}'
                               if halt is not None else
-                              f'reset to {reset_cfg!r} after grasp {i} failed')
+                              f'reset to {reset[0]!r} after grasp {i} failed')
         checked = f', {skipped} failed the reach check' if check_reach else ''
         return None, (f'no reachable grasp for {obj!r} '
                       f'(tried {tried}{checked}, of {cands.total})')
@@ -631,12 +631,11 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         return _Contact(idx, pose_p, pose_w), None
 
     def _straight_line_move(self, frame, target, run, gh, step_m, step_rad,
-                            seg_sec, lin_tol, ang_tol, label, slow_mode=True,
-                            target_w=None):
+                            seg_sec, lin_tol, ang_tol, label, target_w=None):
         """
         Move `frame` to `target` (pelvis frame) along a straight line; return reached.
 
-        Direct (unplanned) frame_task goals of at most `step_m` and
+        Direct (unplanned) arm goals of at most `step_m` and
         `step_rad` each, orientation slerped. With `target_w` (the same target
         in WORLD_FRAME) the line is laid out in the world frame and each
         waypoint is re-resolved into the live pelvis frame just before it is
@@ -658,7 +657,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         n = len(waypoints)
         self.get_logger().info(
             f'grasp: {label}: {dist * 100:.1f}cm / {math.degrees(angle):.0f}deg '
-            f'in {n} unplanned{" slow" if slow_mode else ""} step(s)'
+            f'in {n} unplanned step(s)'
             f'{f", tracking {WORLD_FRAME}" if target_w is not None else ""}')
         for k, wp in enumerate(waypoints, 1):
             if gh.is_cancel_requested or run.remaining() <= 0.0:
@@ -669,9 +668,8 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
                     return False
             if not self.move_frame_to(
                     frame, wp, outer_gh=gh, duration_sec=seg_sec,
-                    do_plan=False, slow_mode=slow_mode,
-                    lin_tol=lin_tol, ang_tol=ang_tol,
-                    stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
+                    do_plan=False, lin_tol=lin_tol, ang_tol=ang_tol,
+                    stable_stop_msgs=ARM_MOVE_STABLE_STOP_MSGS,
                     label=f'{label} {k}/{n}'):
                 return False
         return True
@@ -716,8 +714,8 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
 
         The contact target is the grasp backed off by the node's
         `contact_offset` parameter, reached in AXIS_APPROACH_STEP_M straight
-        steps with the grasp orientation held, slow and unplanned (planning
-        would fight the approach into the object). The move stops at the first
+        steps with the grasp orientation held, unplanned (planning would fight
+        the approach into the object). The move stops at the first
         step that misses its tolerance; the gripper closes there when
         axis_approach_closes allows it, else the candidate is missed. With
         world anchoring each step is laid out along the world-frame grasp axis
@@ -747,9 +745,8 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
                     targets.approaches_w[idx], depth * k / n)) or step
             if self.move_frame_to(
                     frame, step, outer_gh=gh, duration_sec=AXIS_APPROACH_STEP_SEC,
-                    do_plan=False, slow_mode=True,
-                    lin_tol=SERVO_LIN_TOL, ang_tol=SERVO_ANG_TOL,
-                    stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
+                    do_plan=False, lin_tol=SERVO_LIN_TOL, ang_tol=SERVO_ANG_TOL,
+                    stable_stop_msgs=ARM_MOVE_STABLE_STOP_MSGS,
                     label=f'in along the grasp axis {k}/{n}'):
                 continue
             halt = self.arm_halt_reason()
@@ -765,10 +762,9 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         if targets.have_world and self.arm_halt_reason() is None:
             self.servo_frame_to_world(
                 frame, contact_w, contact_p, outer_gh=gh,
-                duration_sec=SERVO_DURATION_SEC * SLOW_MODE_TIME_SCALE,
-                max_iter=SERVO_MAX_ITER,
+                duration_sec=SERVO_DURATION_SEC, max_iter=SERVO_MAX_ITER,
                 lin_tol=SERVO_LIN_TOL, ang_tol=SERVO_ANG_TOL, do_plan=False,
-                slow_mode=True, stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
+                stable_stop_msgs=ARM_MOVE_STABLE_STOP_MSGS,
                 label='world-frame contact correction')
         halt = self.arm_halt_reason()
         if halt is not None:
@@ -779,7 +775,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         """
         Lift `arm`'s hand FAILURE_RETRACT_M straight up (pelvis +Z) before a failure is reported.
 
-        Shared with pick_place. Keeps the current orientation (from TF):
+        Shared with pick_place. Keeps the current orientation (measured):
         re-orienting a stuck arm makes a bad situation worse. Best-effort: the
         skill is already failing and the retreat never replaces its reason.
         Skipped while arm motion is halted.
@@ -794,7 +790,7 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
         cur = self._frame_pose_in_pelvis(frame)
         if cur is None:
             self.get_logger().warn(
-                f'retreat: TF {frame!r} -> pelvis unavailable; leaving the arm in place')
+                f'retreat: {frame!r} pose unavailable; leaving the arm in place')
             return
         up = copy.deepcopy(cur)
         up.position.z += FAILURE_RETRACT_M
@@ -802,15 +798,14 @@ class GraspSkill(GraspDetection, GraspServo, GraspMarkers, GraspReach):
             f'retreat: lifting {frame} {FAILURE_RETRACT_M * 100:.0f}cm (pelvis +Z) '
             'before reporting the failure')
         if not self.move_frame_to(frame, up, outer_gh=gh,
-                                  duration_sec=FAILURE_RETRACT_SEC * SLOW_MODE_TIME_SCALE,
-                                  do_plan=False, slow_mode=True,
-                                  stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
+                                  duration_sec=FAILURE_RETRACT_SEC, do_plan=False,
+                                  stable_stop_msgs=ARM_MOVE_STABLE_STOP_MSGS,
                                   label='failure retreat lift'):
             self.get_logger().warn('retreat: lift incomplete')
 
     def _frame_pose_in_pelvis(self, frame):
-        """Return the current pose of URDF `frame` in the pelvis frame, or None."""
-        return self._transform_pose(pose_at((0.0, 0.0, 0.0)), frame, 'pelvis')
+        """Return `frame`'s measured pose in the pelvis frame, read fresh, or None."""
+        return self.measured_frame_pose(frame)
 
     def _rotate_into_pelvis(self, vec, src_frame):
         """Rotate the 3-vector `vec` from `src_frame` into the pelvis frame, or return None."""

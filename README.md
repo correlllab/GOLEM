@@ -53,7 +53,7 @@ each configured per robot.
 |---|---|
 | `golem_bringup` | Launch files that start the whole robot, sim or real ([`CLAUDE.md`](CLAUDE.md) §6) |
 | `golem_safety` | The only writer of the motor command topic: relays, clips and checks every command, latches the estop |
-| `golem_upper_ik` | Arm IK controller (`/frame_task`, `/named_config`) with planning and self-collision avoidance |
+| `golem_upper_ik` | Arm IK controller (`/grasp_frame_target`, the arm interface every caller uses) with planning and self-collision avoidance |
 | `golem_lowerbody_rl` | Leg controller running the walking policies (ALMI, FAME and walk on the H1-2; HOMIE on the G1) |
 | `golem_slam` | FAST-LIO odometry, slam_toolbox mapping and Nav2 navigation |
 | `golem_skills` | The `/skill/*` actions an LLM can call (grasp, pick and place, frontier exploration) |

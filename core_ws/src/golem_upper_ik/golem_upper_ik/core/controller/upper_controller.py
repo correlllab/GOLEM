@@ -21,7 +21,8 @@ Each goal re-locks the reduced model's frozen joints at the measured pose and st
 from the last command (update_ik_solver). On the real robots' ROS domain (0) every control
 step first checks that /lowstate is no staler than controller.max_state_lag_ms
 (StaleStateError otherwise; the last command keeps going out). Commands carry the gravity
-torque plus the steady-state hold's integral bias, which fades over a move.
+torque plus the steady-state hold's integral bias, which fades over a move and is bounded
+toward each joint's position clip limits (_bound_bias).
 """
 import numpy as np
 from pink.exceptions import NoSolutionFound
@@ -35,7 +36,8 @@ from golem_upper_ik.core.robot_model import RobotModel
 from golem_upper_ik.core.ros_io import StaleStateError, StateSubscriber
 from golem_upper_ik.profile import RobotProfile
 
-__all__ = ['UpperController', 'ros_domain_id']
+__all__ = ['ACCEL_LIMIT', 'UpperController', 'accel_scale', 'ros_domain_id', 'step_bounds',
+           'stop_step']
 
 # The real robots' command bus; the staleness check runs only there, since the sims stamp
 # /lowstate's tick in sim steps, not in ms of the robot's clock
@@ -47,6 +49,17 @@ STATE_MAX_AGE = 0.1
 # pushed, so the move restarts from the measured position and drops the held torque bias,
 # releasing the force instead of continuing it.
 COMMAND_SEED_MAX_GAP = 0.1
+# rad: how far past its position clip a joint's torque bias alone may push it. Each joint's
+# bias toward a clip limit is bounded at kp times the command's distance inside that limit
+# plus this (_bound_bias), on every command: holds, moves and stops. SAFETY: in the H1-2
+# RoboCasa sim a bias integrated in a hold (3.7 to 5.1 N*m, 25 to 34 mrad over kp, the hand
+# pressing on the table) carried into the move that took the shoulder yaw's command onto its
+# clip, and the yaw went 8.9 to 16.7 mrad past it (12 grasps), against the clip's 20 mrad
+# margin to the estop. 5 mrad covers the bias a hold needed where nothing pressed on the arm:
+# at most 4.0 mrad over kp to bring a joint parked at its clip onto it (the left shoulder yaw, an
+# unreachable target), and the gravity model's error, at most 4.2 mrad over kp (1.0 N*m on a
+# shoulder pitch where the bias is 0). Unmeasured on the real robots
+BIAS_PAST_CLIP = 0.005
 # s: the time constant over which the steady-state torque bias fades once a move commands
 # positions. Carrying it over keeps the arm from sagging at the start of a move; fading it
 # hands the load back to gravity compensation as the arm leaves the pose the bias was
@@ -59,6 +72,93 @@ STARTUP_THRESHOLD = 1e-3
 # rad/s: a joint faster than this when a goal starts is not at rest, so how far it sits off
 # its command then is not its resting offset (stop_reference)
 STOP_REFERENCE_MAX_SPEED = 0.05
+# rad/s^2 of robot time: the most an IK-stepped command changes an IK joint's velocity
+# (_limit_joint_acc), and a planned path's (PlannerConfig.max_acceleration). 5 covers the
+# position-limit brake's own deceleration, dq_lim / LIMIT_APPROACH_TIME (4.2 rad/s^2 at the
+# sims' 0.83 rad/s, 1.5 at the real G1's 0.3), so the brake keeps it. Stepping each robot's IK
+# offline (48 direct goals and the start-up, perfect tracking), every step kept it to within
+# 1 % but one on each G1 config (6.8 and 8.8 rad/s^2, the speed limits winning), and the H1-2's
+# median goal took 0.3 to 0.5 s longer than before it (the G1's none); before it a command went
+# from rest to 0.83 rad/s in one step (25 rad/s^2) and changed by up to 44. Times the arms'
+# inertia (the mass matrix's diagonal), over kp, it is at most 9 mrad on the H1-2 and 17 mrad
+# on the G1. Two commands still jump at once, on purpose: a stop on a cancel or a timeout
+# (stop_joints) and a goal that restarts from the measured pose (_command_seed). Unmeasured on
+# the real robots
+ACCEL_LIMIT = 5.0
+
+
+def stop_step(remaining, change):
+    """Return the largest step (rad) after which a joint can still stop within remaining (rad).
+
+    The steps after it shrink by change (rad) each control period, so the joint covers at most
+    remaining, this step included. Elementwise on arrays; a remaining of 0 or less gives 0.
+    """
+    remaining = np.maximum(np.asarray(remaining, dtype=np.float64), 0.0)
+    # the steps change * k for k = 1..m cover change * m (m + 1) / 2
+    m = np.floor(np.sqrt(0.25 + 2.0 * remaining / change) - 0.5)
+    m = np.where(change * m * (m + 1.0) / 2.0 > remaining, m - 1.0, m)
+    return m * change + (remaining - change * m * (m + 1.0) / 2.0) / (m + 1.0)
+
+
+def step_bounds(remaining, last, change):
+    """Return (low, high): the steps (rad per joint) the acceleration limit allows now.
+
+    Each joint's step stays within change of its last step and, toward its goal, at most
+    stop_step of its distance left (remaining, signed), so it can still stop there; a joint
+    already too fast to stop there slows by change, and passes its goal by the least the
+    limit allows (the IK's distance left shrinks faster than its steps where the arm's
+    other joints take over the motion).
+    """
+    remaining = np.asarray(remaining, dtype=np.float64)
+    low, high = last - change, last + change
+    stop = stop_step(np.abs(remaining), change)
+    high = np.where(remaining > 0.0, np.minimum(high, np.maximum(stop, low)), high)
+    low = np.where(remaining < 0.0, np.maximum(low, np.minimum(-stop, high)), low)
+    return low, high
+
+
+def accel_scale(step, remaining, last, change):
+    """Return the factor in [0, 1] that scales one arm's IK step to the acceleration limit.
+
+    step: the arm's step this control period, rad per joint (the IK's, within the speed
+        limits); remaining: the IK's whole step toward its goal, rad per joint (the distance
+        left; same signs as step); last: the arm's commanded step of the last control period,
+        rad per joint; change: the most a joint's step may change from one period to the
+        next, rad (the acceleration limit times the period squared).
+    The factor is at most the braking one, which lets every joint still stop within its
+    distance left (stop_step), so the arm slows into its goal. Within that it is the largest
+    that changes no moving joint's step by more than change from its last, so the arm speeds
+    up and slows at the limit. When no factor does (the IK slows or turns the arm harder than
+    the limit: a position limit's brake, the self-collision barrier, a change of direction),
+    it is the one that changes the moving joints' steps least. A joint the IK stops (step 0)
+    stops whatever the factor. SAFETY: a factor in [0, 1] moves every joint along the IK's
+    step, no further, so the position limits and the self-collision barrier the IK keeps on
+    its step hold at any factor.
+    """
+    step = np.asarray(step, dtype=np.float64)
+    moving = step != 0.0
+    if not moving.any():
+        return 1.0
+    step, last = step[moving], np.asarray(last, dtype=np.float64)[moving]
+    most = min(1.0, float(np.min(
+        stop_step(np.abs(np.asarray(remaining, dtype=np.float64)[moving]), change)
+        / np.abs(step))))
+    # each moving joint keeps |factor * step - last| <= change for factor in [low, high]
+    ends = np.stack([(last - change) / step, (last + change) / step])
+    low, high = float(np.max(np.min(ends, axis=0))), float(np.min(np.max(ends, axis=0)))
+    if max(low, 0.0) <= min(high, most):
+        return min(high, most)
+    # the largest change max_j |factor * step_j - last_j| is convex and piecewise linear in
+    # the factor: its least lies at an end or where two of its pieces cross
+    with np.errstate(divide='ignore', invalid='ignore'):
+        crossings = np.concatenate([
+            (last[:, None] - last[None, :]) / (step[:, None] - step[None, :]),
+            (last[:, None] + last[None, :]) / (step[:, None] + step[None, :])], axis=None)
+    candidates = np.clip(np.concatenate([[0.0, most], last / step,
+                                         crossings[np.isfinite(crossings)]]), 0.0, most)
+    worst = np.max(np.abs(candidates[:, None] * step[None, :] - last[None, :]), axis=1)
+    best = candidates[worst <= worst.min() + 1e-12]
+    return float(best.max())
 
 
 def ros_domain_id(node) -> int:
@@ -80,7 +180,8 @@ class UpperController:
         profile, config: the robot's profile and controller config
             (golem_upper_ik.config.load_controller_config).
         robot_model: the profile's RobotModel at controller.imu_frame, default built here;
-            its state source is the controller's /lowstate subscriber until shutdown().
+            its state source is the controller's /lowstate subscriber until shutdown(), and
+            its position limits are narrowed to the config's clip range (set_position_limits).
         init: run the start-up moves.
         Raises ValueError for a config or model of another robot or IMU frame, and
         RuntimeError (after the shutdown command) when the start-up fails.
@@ -97,6 +198,10 @@ class UpperController:
         elif robot_model.imu_frame != controller['imu_frame']:
             raise ValueError(f'the robot model takes the IMU in {robot_model.imu_frame}, '
                              f"not in controller.imu_frame {controller['imu_frame']}")
+        # SAFETY: the IK, the planner and the waypoint checks keep inside the clip range, so
+        # no solution lies where the clip would cut the command, and a joint parked at its
+        # limit sits limits.clip.position_offset inside the joint table
+        robot_model.set_position_limits(config['limits']['q_clip_limits'])
         self.node = node
         self.profile = profile
         self.config = config
@@ -110,12 +215,16 @@ class UpperController:
         self.w_lim = controller['w_lim']
         self.dq_lim = controller['dq_lim']
         self.d_min = controller['d_min']
-        # multiplier on commanded arm speed: 1.0 is full speed, a goal's slow mode lowers it
-        self.speed_scale = 1.0
         # N*m per body joint: the steady-state hold's integral torque bias, integrated while
         # holding and faded by _apply_joint_position while moving
         self._tau_bias = np.zeros(robot_model.num_motor)
+        # rad per body joint: the last command's IK step, which the next step's acceleration
+        # limit counts from; 0 after any other command, which holds or jumps the arms
+        self._last_step = np.zeros(robot_model.num_motor)
         self._tau_bias_decay = float(np.exp(-self.dt / TAU_BIAS_FADE_SEC))
+        # N*m/rad and rad per body joint, for _bound_bias
+        self._kp = np.asarray(config['gains']['kp'], dtype=np.float64)
+        self._q_clip_limits = np.asarray(config['limits']['q_clip_limits'], dtype=np.float64)
         # body joint ids whose torque bias the current goal changes, or None for every joint:
         # the hold integrates the bias and a move fades it on these alone, so every other
         # joint keeps its command, bias included, and stays where it is
@@ -132,6 +241,7 @@ class UpperController:
             [controller['hold_targets'][joint] for joint in profile.held_joints])
         body = profile.body_joints
         self.enabled_ids = [body.index(joint) for joint in profile.enabled_joints]
+        self._held_ids = [body.index(joint) for joint in profile.held_joints]
         self.upper_ids = list(profile.upper_slots)
         self.left_ee_name, self.right_ee_name = profile.ee_frames
         # (joint name, q, limit) for the joints the steady-state hold is pinned against
@@ -164,7 +274,8 @@ class UpperController:
             self.ik_solver = IKSolver(robot_model, profile.named_configs, dt=self.dt,
                                       d_min=self.d_min)
             self.planner = PlannerClient(profile, self._planner_config(),
-                                         frame_names=config['planner']['frame_names'])
+                                         frame_names=config['planner']['frame_names'],
+                                         q_limits=config['limits']['q_clip_limits'])
             if init:
                 self._startup_routine()
         except BaseException:
@@ -174,10 +285,14 @@ class UpperController:
             raise
 
     def _planner_config(self):
-        """Return the PlannerConfig of the planner section; dt defaults to the control period."""
+        """Return the PlannerConfig of the planner section, at the controller's ACCEL_LIMIT.
+
+        dt defaults to the control period.
+        """
         settings = {key: value for key, value in self.config['planner'].items()
                     if key not in ('enabled', 'frame_names')}
         settings.setdefault('dt', self.dt)
+        settings['max_acceleration'] = ACCEL_LIMIT
         return PlannerConfig(**settings)
 
     def _wait_for_state(self):
@@ -353,8 +468,9 @@ class UpperController:
         reference (stop_reference, taken when the goal started) gives it, adjusted by the
         torque bias that has faded since (its change over kp); without one the offset is 0.
         The arm then stops within its braking distance. The other joints keep their last
-        command; the torque is the gravity torque at the measured pose plus the bias, as on
-        every command. StaleStateError, the last command standing, when /lowstate is stale.
+        command; the torque is the gravity torque at the measured pose plus the bias, bounded
+        for the stop's command (_bound_bias), as on every command. StaleStateError, the last
+        command standing, when /lowstate is stale.
         """
         self.check_state_fresh()
         joint_ids = list(joint_ids)
@@ -367,6 +483,7 @@ class UpperController:
             offset = offset_then + faded
         q = self.low_cmd_handler.q_cmd.astype(np.float64)
         q[joint_ids] = measured[joint_ids] + offset
+        self._bound_bias(q)
         tau = self.robot_model.dynamics.get_gravity_compensation(measured) + self._tau_bias
         self._command(q, np.zeros(self.robot_model.num_motor), tau)
 
@@ -375,16 +492,6 @@ class UpperController:
         index = {'left': self.robot_model.left_arm_index,
                  'right': self.robot_model.right_arm_index}
         return sorted(joint for arm in arms for joint in index[arm])
-
-    def ee_transformations(self):
-        """Return the left and right end effectors' 4x4 placements in the pelvis frame.
-
-        From the reduced model at one measured state, on data of their own, so a call from
-        another thread leaves the IK's data alone.
-        """
-        q_reduced = self.robot_model.state_reduced['q']
-        return tuple(self.robot_model.get_frame_transformation_reduced(name, q_reduced)
-                     for name in (self.left_ee_name, self.right_ee_name))
 
     def check_state_fresh(self):
         """Raise StaleStateError if /lowstate is staler than max_state_lag_ms (when on)."""
@@ -411,6 +518,8 @@ class UpperController:
         if not from_command:
             self._tau_bias[:] = 0.0
         self.ik_solver.update_configurations(q_seed)
+        # the goal's first step starts from rest: the last command has held since it was sent
+        self._last_step[:] = 0.0
 
     def _command_seed(self):
         """Return (q, from_command): the body configuration a new move starts from.
@@ -465,24 +574,6 @@ class UpperController:
             raise RuntimeError(f'Planning failed: {result.reason}')
         return result.path
 
-    def _planner_speed_overrides(self):
-        """Return (moving_speed, max_interpolation_steps) for speed_scale; (None, None) at 1.
-
-        A planned path is slowed by planning it at a lower planner-frame speed: the planner
-        then emits proportionally more waypoints and execute_path still clocks them out at
-        dt. Stretching the step period instead keeps the original waypoint spacing and turns
-        a smooth ramp into a staircase. At full speed the planner process keeps the config it
-        was started with.
-        """
-        scale = float(self.speed_scale)
-        if scale == 1.0:
-            return None, None
-        config = self.planner.planner_config
-        # the waypoint cap bounds a path's duration, so it has to grow with the step count or
-        # a long slow path clamps back to near full speed
-        return (config.moving_speed * scale,
-                int(np.ceil(config.max_interpolation_steps / scale)))
-
     def plan_to_configuration(self, q_reduced, active_mask=None):
         """Return a planned reduced path from the command seed to q_reduced.
 
@@ -490,35 +581,49 @@ class UpperController:
         fails.
         """
         self._check_planning()
+        return self._path_or_raise(self._plan(q_reduced, active_mask))
+
+    def _plan(self, q_reduced, active_mask):
+        """Return the planner's PlanResult from the command seed to q_reduced."""
         start = self._command_seed()[0][self.robot_model.reduced_mask]
-        moving_speed, max_interpolation_steps = self._planner_speed_overrides()
-        result = self.planner.plan_configuration(
+        return self.planner.plan_configuration(
             current_q=self.robot_model.state['q'],
             start=start,
             goal=np.asarray(q_reduced, dtype=float),
             active_mask=active_mask,
-            moving_speed=moving_speed,
-            max_interpolation_steps=max_interpolation_steps,
         )
-        return self._path_or_raise(result)
 
     def plan_to_ik_target(self, ik_timeout):
-        """Return a planned reduced path to the IK solution of the current frame tasks.
+        """Return a planned reduced path to an IK solution of the current frame tasks.
 
-        ik_timeout is each IK seed's time limit, s. PlannerUnavailableError, before any IK, when
-        the controller cannot plan; RuntimeError when the IK or the planning fails. Only the
-        joints that move the tasks' frames plan.
+        ik_timeout is each IK seed's time limit, s (IKSolver.solve_ik_reduced). A seed's
+        solution counts only once the planner finds a path to it; when the planner finds none,
+        the IK goes on to the next seed. PlannerUnavailableError, before any IK, when the
+        controller cannot plan; RuntimeError when no seed converges ('IK failed to resolve
+        current targets'), when the planner found no path to any that did (the last one's
+        reason), or from the planner itself. Only the joints that move the tasks' frames plan.
         """
         self._check_planning()
         # restrict planning to the joints supporting the active tasks, so untasked limbs
         # (the other arm) never move during the plan
         active_mask = self._active_task_mask()
         self.update_ik_solver()
-        ik_result = self.ik_solver.solve_ik_reduced(timeout=ik_timeout)
-        if not ik_result.success:
+        planned = {}
+
+        def plannable(ik_result):
+            """Plan to a converged seed's solution; return whether a path was found."""
+            planned['result'] = self._plan(ik_result.q[self.robot_model.reduced_mask],
+                                           active_mask)
+            if not planned['result'].success:
+                self._logger.info(f"The IK converged from seed '{ik_result.seed_name}', but "
+                                  f"planning to it failed: {planned['result'].reason}; "
+                                  'trying the next seed')
+            return planned['result'].success
+
+        self.ik_solver.solve_ik_reduced(timeout=ik_timeout, accept=plannable)
+        if 'result' not in planned:
             raise RuntimeError('IK failed to resolve current targets')
-        q_goal = ik_result.q[self.robot_model.reduced_mask]
-        return self.plan_to_configuration(q_goal, active_mask=active_mask)
+        return self._path_or_raise(planned['result'])
 
     def _active_task_mask(self):
         """Return the reduced-joint mask of the joints that move any frame task's frame."""
@@ -551,10 +656,9 @@ class UpperController:
             raise RuntimeError("Not executing a path before golem_safety relays the "
                                "controller's commands (follow gate shut)")
         path = self._as_reduced_path(path)
-        # The path is time-parameterized at dt by the planner (slow moves are planned at a
-        # lower moving_speed and come back with more waypoints), so it always plays back at
-        # the control period: each step sleeps the period less the work already done, or
-        # the checks and FK would stretch a path past its planned duration
+        # The path is time-parameterized at dt by the planner, so it plays back at the control
+        # period: each step sleeps the period less the work already done, or the checks and
+        # FK would stretch a path past its planned duration
         clock = self.clock
         for q_reduced in path:
             start = clock.now()
@@ -576,27 +680,41 @@ class UpperController:
         """Update the robot model's kinematics from the measured state."""
         self.robot_model.update_kinematics()
 
-    @property
-    def reduced_configuration_error(self):
-        """Return the measured IK joints' error from the joint-space goal, rad."""
-        return self.ik_solver.compute_error_reduced(
-            self.ik_solver.config_task, self.robot_model.state_reduced['q'])
-
-    def set_reduced_configuration_target(self, q_reduced):
-        """Set the joint-space goal that reduced_configuration_error measures against."""
-        self.ik_solver.config_task.set_target(q_reduced)
-
     def goto_reduced_configuration(self, q_reduced):
-        """Command one IK step toward q_reduced; return the body joint velocity, rad/s."""
+        """Command one IK step toward q_reduced; return its speeds (_step_ik).
+
+        The IK's velocity, rad/s, is commanded within the speed and acceleration limits.
+        """
         self.check_state_fresh()
-        vel = self.ik_solver.goto_reduced_configuration(q_reduced)
-        return self._apply_velocity_command(self._limit_joint_vel(vel))
+        return self._step_ik(self.ik_solver.goto_reduced_configuration(q_reduced),
+                             self.ik_solver.goto_reduced_configuration(q_reduced, capped=False),
+                             capped=True)
 
     def control_step_reduced(self):
-        """Command one IK step on every frame task; return the body joint velocity, rad/s."""
+        """Command one IK step on every frame task; return its speeds (_step_ik).
+
+        The IK's velocity, rad/s, is commanded within the speed and acceleration limits.
+        """
         self.check_state_fresh()
         vel = self.ik_solver.ik_step_reduced()
-        return self._apply_velocity_command(self._limit_joint_vel(vel))
+        return self._step_ik(vel, vel)
+
+    def _step_ik(self, vel_ik, vel_free, capped=False):
+        """Command the IK's body joint velocity vel_ik (rad/s) within the limits; return speeds.
+
+        vel_free is the same step without the start-up moves' JOINT_SPEED_CAP (ik_solver): the
+        distance left. capped: vel_ik is a start-up move's step, under the cap, and the cap
+        holds through the acceleration limit. The step is limited to the speed limits
+        (_limit_joint_vel), then to the acceleration limit (_limit_joint_acc), then to the speed
+        limits again, which win over the acceleration limit. Returns per body joint the larger
+        of the IK's and the commanded speed, rad/s: the IK has converged when every one is under
+        threshold_ik, so a step the limits hold back, or a joint still moving, does not read as
+        converged.
+        """
+        vel = self._limit_joint_vel(self._limit_joint_acc(self._limit_joint_vel(vel_ik),
+                                                          vel_free, capped))
+        self._apply_velocity_command(vel)
+        return np.maximum(np.abs(vel_ik), np.abs(vel))
 
     def init_steady_state(self):
         """Hold the last command with integral control from the next steady_state_step.
@@ -635,7 +753,10 @@ class UpperController:
         Converged: every upper joint within threshold (rad) of its held command. A hold pinned
         against a joint position limit cannot converge: the integral term is frozen,
         steady_state_limited_joints names the joints, and this returns False. With
-        bias_joints set, only those joints' bias integrates.
+        bias_joints set, only those joints' bias integrates. Each joint's bias is then bounded
+        toward its clip limits (_bound_bias), so a joint whose bias stops at the bound short
+        of its clip holds there, unconverged and not pinned: the goal runs to its timeout or
+        its caller's cancel (golem_skills' stable-stop).
         """
         self.check_state_fresh()
         if self._steady is None:
@@ -652,6 +773,7 @@ class UpperController:
         if not self.steady_state_limited_joints:
             self._tau_bias = np.clip(self._tau_bias + tau_bias_increment,
                                      -steady['tau_bias_limit'], steady['tau_bias_limit'])
+        self._bound_bias(steady['q'])
         tau = self.robot_model.dynamics.get_gravity_compensation(q_state) + self._tau_bias
         self._command(steady['q'], steady['dq'], tau)
         self.update_robot_model()
@@ -661,7 +783,7 @@ class UpperController:
         return bool(np.max(np.abs(q_error[self.upper_ids])) < threshold)
 
     def _limit_joint_vel(self, vel):
-        """Return vel with each arm scaled under dq_lim, v_lim and w_lim, then by speed_scale.
+        """Return vel with each arm scaled under dq_lim, v_lim and w_lim.
 
         Each arm's joints are scaled together, so its direction is kept; the other joints
         pass through.
@@ -677,14 +799,62 @@ class UpperController:
                 self.v_lim / (np.linalg.norm(twist[:3]) + 1e-6),
                 self.w_lim / (np.linalg.norm(twist[3:]) + 1e-6),
             ])
-            vel_scaled[arm] = self.speed_scale * scaler * vel[arm]
+            vel_scaled[arm] = scaler * vel[arm]
         return vel_scaled
+
+    def _limit_joint_acc(self, vel, vel_ik, capped=False):
+        """Return vel within ACCEL_LIMIT of the last IK step, braking into the IK's goal.
+
+        vel: the step's body joint velocity within the speed limits, rad/s; vel_ik: the IK's
+        velocity without JOINT_SPEED_CAP or the speed limits, whose step is the distance left
+        to the goal. The IK joints take the step nearest vel's that changes each joint's step
+        by at most ACCEL_LIMIT * dt^2 from its last and lets it stop within its distance left
+        (step_bounds), and that keeps the IK's position-limit brake, velocity limits (capped,
+        also JOINT_SPEED_CAP) and self-collision barrier (IKSolver.limited_step); where those
+        need a harder change, the step keeps them and leaves the acceleration limit by the
+        least it can. When the QP solver finds no step, each arm's step is scaled along vel's
+        instead (accel_scale), the IK's limits winning. The other joints pass through.
+        """
+        dt = self.dt
+        change = ACCEL_LIMIT * dt * dt
+        mask = self.robot_model.reduced_mask
+        vel = np.array(vel, dtype=np.float64)
+        step, remaining = vel[mask] * dt, np.asarray(vel_ik, dtype=np.float64)[mask] * dt
+        low, high = step_bounds(remaining, self._last_step[mask], change)
+        limited = None
+        if np.all(low <= high):
+            limited = self.ik_solver.limited_step(step, low, high, capped)
+        if limited is not None:
+            vel[mask] = limited / dt
+            return vel
+        for arm in (self.robot_model.left_arm_index, self.robot_model.right_arm_index):
+            vel[arm] *= accel_scale(vel[arm] * dt, np.asarray(vel_ik)[arm] * dt,
+                                    self._last_step[arm], change)
+        return vel
+
+    def _bound_bias(self, q):
+        """Bound each joint's torque bias toward its clip limits for the command q (rad).
+
+        SAFETY: a joint's bias toward a clip limit is at most kp times q's distance inside
+        that limit plus BIAS_PAST_CLIP, so the bias alone holds the joint no further than
+        BIAS_PAST_CLIP past the clip, whatever bias a hold integrated or a move carried in.
+        q is per body joint, taken as the command carries it: clipped, the held joints at
+        their hold angles.
+        """
+        low, high = self._q_clip_limits[:, 0], self._q_clip_limits[:, 1]
+        q = np.clip(np.asarray(q, dtype=np.float64), low, high)
+        q[self._held_ids] = self.low_cmd_handler.hold
+        self._tau_bias = np.clip(self._tau_bias,
+                                 -self._kp * (q - low + BIAS_PAST_CLIP),
+                                 self._kp * (high - q + BIAS_PAST_CLIP))
 
     def _apply_joint_position(self, q):
         """Command q with dq 0 and the gravity torque plus the bias, which fades by one step.
 
-        Only the bias_joints' bias fades, when the goal names them.
+        The bias is bounded for q first (_bound_bias). Only the bias_joints' bias fades, when
+        the goal names them.
         """
+        self._bound_bias(q)
         tau = self.robot_model.dynamics.get_gravity_compensation(self.robot_model.state['q'])
         tau = tau + self._tau_bias
         if self.bias_joints is None:
@@ -694,15 +864,27 @@ class UpperController:
         self._command(q, np.zeros(self.robot_model.num_motor), tau)
 
     def _apply_velocity_command(self, vel):
-        """Integrate vel into the IK, command the result, and return vel."""
+        """Integrate vel into the IK, command the result, and return vel.
+
+        The step the IK took (clamped into the position limits) is the next step's last step,
+        unless the follow gate held the command back.
+        """
+        q_before = self.ik_solver.q
         self.ik_solver.integrate(vel)
+        step = self.ik_solver.q - q_before
         self._apply_joint_position(self.ik_solver.q)
+        if self.low_cmd_handler.following:
+            self._last_step = step
         self.update_robot_model()
         return vel
 
     def _command(self, q, dq, tau):
-        """Send q, dq and tau to the handler, then sync the IK to what the gate let through."""
+        """Send q, dq and tau to the handler, then sync the IK to what the gate let through.
+
+        The last IK step is 0 after it (_apply_velocity_command sets it after its command).
+        """
         self.low_cmd_handler.set_joint_commands(q, dq, tau)
+        self._last_step = np.zeros(self.robot_model.num_motor)
         self._sync_to_command()
 
     def _sync_to_command(self):

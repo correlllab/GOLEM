@@ -19,17 +19,30 @@ of following it.
 
 Under use_sim_time the start-up's waits count the sim's /clock (SimClock): its timeouts are s
 of sim time, whether the sim runs faster or slower than the wall clock.
+
+A planned goal's IK goes on to the next seed to converge when the planner finds no path to a
+seed's solution.
+
+The acceleration limit: its stop step, step bounds and per-arm factor, and over whole IK-stepped
+moves (a start-up move, a direct goal, a goal into a position limit) every command's change of
+step on both robots.
+
+The hold's torque bias near a position clip, against a robot that settles where a PD would
+(ros_harness.Spring): the bias toward the clip stops at its bound per joint while a joint away
+from the limits integrates on, and a bias carried into a move or a stop onto the clip is cut
+to the bound.
 """
 import re
 import threading
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from golem_upper_ik.profile import known_robots
 
 from ros_harness import (
-    G1_LIMP_ARMS, CommandRecorder, FollowingRobot, RelayedRobot, SafetyNode, SimClock,
+    G1_LIMP_ARMS, CommandRecorder, FollowingRobot, RelayedRobot, SafetyNode, SimClock, Spring,
     body_pose, profile_of, shared_model, slots_of, wait_for,
 )
 
@@ -152,9 +165,20 @@ def settles(robot, upper_q, tolerance=0.01, timeout=5.0):
                     timeout, period=0.02)
 
 
+def ee_transformations(controller):
+    """Return the left and right end effectors' 4x4 placements in the pelvis frame.
+
+    From the reduced model at the measured state, on data of their own.
+    """
+    model = controller.robot_model
+    q_reduced = model.state_reduced['q']
+    return tuple(model.get_frame_transformation_reduced(name, q_reduced)
+                 for name in (controller.left_ee_name, controller.right_ee_name))
+
+
 def ee_position(controller, side):
     """Return an end effector's position (0 left, 1 right) in the pelvis frame, m."""
-    return controller.ee_transformations()[side][:3, 3].copy()
+    return ee_transformations(controller)[side][:3, 3].copy()
 
 
 def push_and_check_the_hold(controller, robot, recorders):
@@ -213,7 +237,7 @@ def test_startup_home_ee_target_and_zero_gain_shutdown(ros, models, robot):
 
     # a target 5 cm forward of the left end effector is reached; the right one stays put
     controller.update_ik_solver()
-    left = controller.ee_transformations()[0]
+    left = ee_transformations(controller)[0]
     right_start = ee_position(controller, 1)
     target = left.copy()
     target[0, 3] += 0.05
@@ -272,6 +296,74 @@ def test_shutdown_stops_the_planner_and_detaches_the_state_whatever_raises(raisi
     with pytest.raises(RuntimeError, match=f'the {raising} failed'):
         controller.shutdown()
     assert calls == ['handler', 'planner', 'state', 'clock']
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
+@pytest.mark.parametrize('refused', [0, 1, 2, None])
+def test_a_planned_goal_takes_the_first_seed_the_planner_reaches(models, robot, refused):
+    """A planned goal's IK goes on to the next converged seed when the planner reaches none.
+
+    Measured at arms_front_45 and targeting its grasp frames, the measured pose ('current')
+    and the arms_front_45 seed converge with no time to iterate. The planner refuses the
+    first `refused` converged seeds' solutions: the goal plans to the next, fails with the
+    planner's reason once both are refused, and, with a target no seed reaches (None), fails
+    with the IK's error before any plan.
+    """
+    import pinocchio as pin
+    from golem_upper_ik.core.controller.upper_controller import UpperController
+    from golem_upper_ik.core.ik_solver import IKSolver
+    from golem_upper_ik.core.planner.reduced_joint_planner import PlanResult
+    from golem_upper_ik.core.robot_model import FixedState
+    model = models(robot)
+    profile = model.profile
+    q = model.zero_q_body
+    q[model.reduced_mask] = profile.named_configs['arms_front_45']
+    model.state_subscriber = FixedState(q)
+    try:
+        model.rebuild_reduced_model(q)
+        solver = IKSolver(model, profile.named_configs, dt=1.0 / 30.0, d_min=0.02)
+        for grasp_frame in profile.grasp_frames:
+            target = pin.SE3(model.get_frame_transformation_body(grasp_frame.name, q))
+            if refused is None:
+                target.translation[0] += 1.0  # 1 m further forward: out of reach
+            solver.add_frame_task(grasp_frame.name, grasp_frame.name, target=target)
+        controller = UpperController.__new__(UpperController)
+        controller.robot_model = model
+        controller.ik_solver = solver
+        controller._check_planning = lambda: None
+        controller._active_task_mask = lambda: None
+        controller.update_ik_solver = lambda: None
+        logged = []
+        controller._logger = SimpleNamespace(info=logged.append)
+        plans = []
+
+        def plan(q_reduced, active_mask):
+            """Refuse the first `refused` goals; plan a one-waypoint path to the others."""
+            plans.append(np.array(q_reduced))
+            if len(plans) <= (refused or 0):
+                return PlanResult(success=False, path=np.empty((0, len(q_reduced))),
+                                  reason=f'refused goal {len(plans)}')
+            return PlanResult(success=True, path=np.array([q_reduced]), reason='direct path')
+
+        controller._plan = plan
+        if refused is None:
+            with pytest.raises(RuntimeError, match='IK failed to resolve current targets'):
+                controller.plan_to_ik_target(ik_timeout=0.0)
+            assert plans == []
+        elif refused == 2:
+            with pytest.raises(RuntimeError, match='Planning failed: refused goal 2'):
+                controller.plan_to_ik_target(ik_timeout=0.0)
+            assert len(plans) == 2
+        else:
+            path = controller.plan_to_ik_target(ik_timeout=0.0)
+            assert len(plans) == refused + 1
+            np.testing.assert_array_equal(path, [plans[-1]])
+        assert len(logged) == min(refused or 0, 2)
+        assert all('trying the next seed' in line for line in logged)
+        if refused:
+            assert "seed 'current'" in logged[0]
+    finally:
+        model.state_subscriber = None
 
 
 @pytest.mark.parametrize('robot', ROBOTS)
@@ -462,7 +554,7 @@ def test_every_command_holds_the_hold_targets_while_the_held_joints_sag(ros, mod
     for _ in range(3):
         controller.clear_frame_tasks()
         controller.update_ik_solver()
-        target = controller.ee_transformations()[0]
+        target = ee_transformations(controller)[0]
         target[0, 3] += 0.02
         controller.add_frame_task('left_task', profile.ee_frames[0], target)
         for _ in range(30):
@@ -662,3 +754,257 @@ def test_relay_starting_late_still_gets_the_whole_start_up_move(ros, models, rob
     assert settles(robot_, final_pose(profile, config), 0.02)
     # the controller kept commanding: golem_safety never latched its estop
     assert not layer.estopped(), layer.output()
+
+
+def covered(step, change):
+    """Return the distance a joint covers from step (rad), its steps then shrinking by change."""
+    steps = step - change * np.arange(int(step / change) + 2)
+    return float(np.sum(steps[steps > 0.0]))
+
+
+def test_stop_step_is_the_largest_step_that_stops_within_the_distance_left():
+    """stop_step's step and the shrinking steps after it cover the distance left; longer, more."""
+    from golem_upper_ik.core.controller.upper_controller import stop_step
+    change = 5.0 / 30.0 ** 2
+    for remaining in np.linspace(0.0, 0.5, 1001):
+        step = float(stop_step(remaining, change))
+        assert covered(step, change) <= remaining + 1e-12
+        assert covered(step + 1e-6, change) > remaining
+    # elementwise, and a distance left of 0 or less gives 0
+    np.testing.assert_array_equal(stop_step(np.array([0.0, -0.1]), change), [0.0, 0.0])
+
+
+def test_step_bounds_keep_the_change_and_brake_into_the_goal():
+    """Each joint's bounds lie within change of its last step and stop within its distance left.
+
+    A joint too fast to stop within it still keeps the change: the bounds are never empty.
+    """
+    from golem_upper_ik.core.controller.upper_controller import step_bounds, stop_step
+    change = 5.0 / 30.0 ** 2
+    rng = np.random.default_rng(0)
+    for _ in range(200):
+        remaining = rng.uniform(-0.1, 0.1, 14)
+        last = rng.uniform(-0.035, 0.035, 14)
+        low, high = step_bounds(remaining, last, change)
+        assert np.all(low <= high)
+        assert np.all(low >= last - change - 1e-15) and np.all(high <= last + change + 1e-15)
+        stop = stop_step(np.abs(remaining), change)
+        toward = np.where(remaining > 0.0, high, -low)
+        can_stop = np.where(remaining > 0.0, stop >= last - change, stop >= -last - change)
+        assert np.all(toward[can_stop] <= stop[can_stop] + 1e-15)
+
+
+def test_accel_scale_speeds_up_along_the_step_and_brakes_win():
+    """From rest the arm's step grows by change along the IK's step; a harder brake wins.
+
+    The factor keeps the step's direction; when the IK's step needs a joint to slow by more
+    than change, the factor is the braking one and the joint slows as the IK says.
+    """
+    from golem_upper_ik.core.controller.upper_controller import accel_scale
+    change = 5.0 / 30.0 ** 2
+    step = np.array([0.0333, -0.01, 0.0, 0.002])
+    remaining = step * 10.0
+    factor = accel_scale(step, remaining, np.zeros(4), change)
+    assert np.max(np.abs(factor * step)) == pytest.approx(change)
+    # the IK's step shrinks to a quarter of the last one, in a joint 1 mm from its goal
+    last = np.array([0.03, 0.0, 0.0, 0.0])
+    factor = accel_scale(np.array([0.001, 0.0, 0.0, 0.0]), np.array([0.001, 0.0, 0.0, 0.0]),
+                         last, change)
+    assert factor == pytest.approx(1.0)
+
+
+def segment_changes(commands):
+    """Return the largest change of step (rad) in a command sequence from rest to rest."""
+    commands = np.asarray(commands, dtype=np.float64)
+    rest = np.vstack([commands[:1], commands, commands[-1:]])
+    return float(np.max(np.abs(np.diff(rest, n=2, axis=0))))
+
+
+@pytest.mark.parametrize('robot, config_name', [
+    ('h12', 'safety_split'), ('g1', 'sim_split'), ('g1', 'g1_split')])
+def test_ik_steps_keep_the_acceleration_limit(ros, models, robot, config_name):
+    """Every IK-stepped command changes each IK joint's step by at most ACCEL_LIMIT * dt^2.
+
+    And no IK joint moves faster than controller.dq_lim (on the start-up moves, nor than
+    ik_solver.JOINT_SPEED_CAP), and the grasp frames keep controller.v_lim and w_lim.
+
+    Each move starts and ends at rest: the start-up postures (on the G1 from where its limp
+    arms hang, the self-collision barrier near), a direct goal 10 cm forward and 5 cm up until
+    the IK converges, and a start-up move toward a configuration past the left elbow's
+    position limit, which the limit's brake stops at it.
+    """
+    from golem_upper_ik.core.controller.upper_controller import ACCEL_LIMIT
+    profile = profile_of(robot)
+    config = config_of(robot, config_name)
+    model = shared_model(ros, models, robot)
+    arms = G1_LIMP_ARMS if robot == 'g1' else 'home'
+    robot_ = FollowingRobot(ros, profile, body_pose(profile, arms), '/lowcmd')
+    controller = build(ros, model, config, init=False)
+    ik_slots = slots_of(profile, profile.enabled_joints)
+    change = ACCEL_LIMIT * controller.dt ** 2
+    threshold = config['controller']['threshold_ik']
+    assert wait_for(lambda: controller.low_cmd_handler.following, 2.0)
+
+    def commanded():
+        """Return the IK joints' command."""
+        return controller.low_cmd_handler.q_cmd[ik_slots].astype(np.float64)
+
+    def start_goal():
+        """Wait for the robot to reach the command, then start a goal from it."""
+        command = commanded()
+        assert wait_for(lambda: np.max(np.abs(robot_.measured()[ik_slots] - command)) < 1e-6,
+                        2.0)
+        controller.clear_frame_tasks()
+        controller.update_ik_solver()
+        return [commanded()]
+
+    moves = {}
+    sequence = start_goal()
+    for name in profile.startup_sequence:
+        posture = np.asarray(profile.named_configs[name], dtype=np.float64)
+        for _ in range(600):
+            controller.goto_reduced_configuration(posture)
+            sequence.append(commanded())
+            if np.max(np.abs(controller.ik_solver.q_reduced - posture)) < 1e-3:
+                break
+    moves['start-up'] = sequence
+
+    left = ee_transformations(controller)[0]
+    target = left.copy()
+    target[:3, 3] += [0.10, 0.0, 0.05]
+    sequence = start_goal()
+    controller.add_frame_task('left_task', profile.ee_frames[0], target)
+    for _ in range(600):
+        converged = np.max(np.abs(controller.control_step_reduced())) < threshold
+        sequence.append(commanded())
+        if converged:
+            break
+    assert converged
+    moves['direct'] = sequence
+
+    # a move toward a configuration 0.15 rad past the left elbow's nearer limit
+    elbow = list(profile.enabled_joints).index('left_elbow_joint')
+    reduced = model.model_body_reduced
+    beyond = controller.ik_solver.q_reduced
+    limits = (reduced.lowerPositionLimit[elbow], reduced.upperPositionLimit[elbow])
+    limit = min(limits, key=lambda bound: abs(bound - beyond[elbow]))
+    beyond[elbow] = limit + np.sign(limit - beyond[elbow]) * 0.15
+    sequence = start_goal()
+    for _ in range(300):
+        controller.goto_reduced_configuration(beyond)
+        sequence.append(commanded())
+    # the brake took the elbow onto its limit
+    assert abs(sequence[-1][elbow] - limit) < 0.005
+    moves['into a limit'] = sequence
+
+    from golem_upper_ik.core.ik_solver import JOINT_SPEED_CAP
+    v_lim, w_lim = config['controller']['v_lim'], config['controller']['w_lim']
+    dq_lim = config['controller']['dq_lim']
+    for name, sequence in moves.items():
+        assert len(sequence) > 10, name
+        # float32 on the wire
+        assert segment_changes(sequence) <= change + 1e-5, name
+        # no joint faster than dq_lim; the start-up moves no faster than JOINT_SPEED_CAP either
+        top = dq_lim if name == 'direct' else min(dq_lim, JOINT_SPEED_CAP)
+        speed = np.max(np.abs(np.diff(np.asarray(sequence), axis=0))) / controller.dt
+        assert speed <= top + 1e-4, (name, speed)
+        # the speed limits still hold, measured between the commands' grasp-frame poses (the
+        # controller takes them by the Jacobian at the measured pose, hence the 3 %)
+        for frame in profile.ee_frames:
+            poses = [model.get_frame_transformation_reduced(frame, q) for q in sequence]
+            for before, after in zip(poses, poses[1:]):
+                linear = np.linalg.norm(after[:3, 3] - before[:3, 3]) / controller.dt
+                cosine = (np.trace(before[:3, :3].T @ after[:3, :3]) - 1.0) / 2.0
+                angular = np.arccos(np.clip(cosine, -1.0, 1.0)) / controller.dt
+                assert linear <= 1.03 * v_lim and angular <= 1.03 * w_lim, (name, frame)
+
+
+def toward(bias, clip_side):
+    """Return a bias (N*m) along the direction of clip_side (+1 the upper limit, -1 the lower)."""
+    return clip_side * bias
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_hold_bias_toward_a_clip_stops_at_its_bound(ros, models, robot):
+    """A joint held on its clip integrates its bias toward it only up to kp * BIAS_PAST_CLIP.
+
+    The left elbow's command sits on its nearer clip limit and a load pulls it 3 * BIAS_PAST_CLIP
+    off it: its bias stops at the bound, BIAS_PAST_CLIP over kp short of the load, so the
+    elbow rests short of its clip, neither converged nor pinned. The left shoulder roll, far
+    from its limits under the same load over kp, integrates past that bound: the bound is
+    per joint and freezes nothing else.
+    """
+    from golem_upper_ik.core.controller.upper_controller import BIAS_PAST_CLIP
+    profile = profile_of(robot)
+    config = config_of(robot, CONFIGS[robot])
+    kp = np.asarray(config['gains']['kp'], dtype=np.float64)
+    clip = config['limits']['q_clip_limits']
+    elbow = profile.body_joints.index('left_elbow_joint')
+    roll = profile.body_joints.index('left_shoulder_roll_joint')
+    q0 = body_pose(profile, 'prep' if robot == 'h12' else 'home')
+    robot_ = FollowingRobot(ros, profile, q0, '/lowcmd')
+    model = shared_model(ros, models, robot)
+    controller = build(ros, model, config, init=False)
+    assert wait_for(lambda: controller.low_cmd_handler.following, 2.0)
+    side = 1.0 if clip[elbow, 1] - q0[elbow] < q0[elbow] - clip[elbow, 0] else -1.0
+    q = controller.low_cmd_handler.q_cmd.astype(np.float64)
+    q[elbow] = clip[elbow, 1] if side > 0 else clip[elbow, 0]
+    controller._apply_joint_position(q)
+    # the load each joint's hold must cancel, N*m, pulling the elbow off its clip
+    load = np.zeros(len(profile.body_joints))
+    load[elbow] = side * 3.0 * BIAS_PAST_CLIP * kp[elbow]
+    load[roll] = 3.0 * BIAS_PAST_CLIP * kp[roll]
+    Spring(ros, robot_, controller, [elbow, roll], load, kp)
+    controller.init_steady_state()
+    bound = BIAS_PAST_CLIP * kp[elbow]
+    # the command is float32 on the wire: within 1 urad of the clip
+    slack = 1e-6 * kp[elbow]
+    for _ in range(120):
+        controller.steady_state_step()
+        assert toward(controller._tau_bias[elbow], side) <= bound + slack
+        time.sleep(controller.dt)
+    assert toward(controller._tau_bias[elbow], side) == pytest.approx(bound, abs=slack)
+    assert controller._tau_bias[roll] > 1.5 * BIAS_PAST_CLIP * kp[roll]
+    assert controller.steady_state_limited_joints == []
+    # the elbow rests the load's excess over the bound short of its clip
+    excess = (abs(load[elbow]) - bound) / kp[elbow]
+    assert wait_for(lambda: abs(robot_.measured()[elbow] - (q[elbow] - side * excess)) < 1e-3,
+                    2.0)
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_a_carried_bias_is_cut_as_the_command_reaches_the_clip(ros, models, robot):
+    """A bias carried into a move is cut to kp * (distance inside the clip + BIAS_PAST_CLIP).
+
+    The left elbow carries a bias toward its nearer clip limit worth 50 mrad over kp while its
+    command steps from 60 mrad inside that limit onto it: after every command the bias is
+    within the bound of that command, and once there, a stop (stop_joints) keeps it there.
+    """
+    from golem_upper_ik.core.controller.upper_controller import BIAS_PAST_CLIP
+    profile = profile_of(robot)
+    config = config_of(robot, CONFIGS[robot])
+    kp = np.asarray(config['gains']['kp'], dtype=np.float64)
+    clip = config['limits']['q_clip_limits']
+    elbow = profile.body_joints.index('left_elbow_joint')
+    q0 = body_pose(profile, 'prep' if robot == 'h12' else 'home')
+    FollowingRobot(ros, profile, q0, '/lowcmd')
+    model = shared_model(ros, models, robot)
+    controller = build(ros, model, config, init=False)
+    assert wait_for(lambda: controller.low_cmd_handler.following, 2.0)
+    side = 1.0 if clip[elbow, 1] - q0[elbow] < q0[elbow] - clip[elbow, 0] else -1.0
+    limit = clip[elbow, 1] if side > 0 else clip[elbow, 0]
+    controller._tau_bias[elbow] = side * 0.05 * kp[elbow]
+    q = controller.low_cmd_handler.q_cmd.astype(np.float64)
+    for inside in np.linspace(0.06, 0.0, 13):
+        q[elbow] = limit - side * inside
+        controller._apply_joint_position(q)
+        assert toward(controller._tau_bias[elbow], side) <= (
+            kp[elbow] * (inside + BIAS_PAST_CLIP + 1e-9))
+    elbow_ids = [elbow]
+    controller.stop_joints(elbow_ids, (np.zeros(1), np.array([side * 0.05 * kp[elbow]])))
+    command = controller.low_cmd_handler.q_cmd.astype(np.float64)[elbow]
+    assert clip[elbow, 0] - 1e-6 <= command <= clip[elbow, 1] + 1e-6
+    inside = abs(limit - command)
+    # float32 on the wire
+    assert toward(controller._tau_bias[elbow], side) <= (
+        kp[elbow] * (inside + BIAS_PAST_CLIP + 1e-6))

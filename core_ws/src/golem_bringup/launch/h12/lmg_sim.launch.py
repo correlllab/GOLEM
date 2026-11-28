@@ -44,8 +44,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 import yaml
 
 # The arguments passed through to h12_locomanipulationgame.launch.py as they are: lmg_real's.
-GAME_ARGS = ('start_position_verified', 'prepose_ramp_s', 'prepose_max_vel',
-             'imu_offset_roll_deg', 'imu_offset_pitch_deg', 'imu_offset_yaw_deg')
+GAME_ARGS = ('start_position_verified', 'prepose_ramp_s', 'prepose_max_vel')
 
 
 def h12_footprint():
@@ -79,20 +78,12 @@ def generate_launch_description():
         DeclareLaunchArgument('prepose_max_vel', default_value='0.25',
                               description='rad/s, the fastest joint target during that ramp; '
                                           'it lengthens the ramp'),
-        # The sim's /livox/imu carries the URDF's mount, so the trims start at 0, as in lmg_real.
-        DeclareLaunchArgument('imu_offset_roll_deg', default_value='0.0',
-                              description="deg, the start-up roll trim of the policy's IMU "
-                                          '(/livox/imu): its reading with the torso level'),
-        DeclareLaunchArgument('imu_offset_pitch_deg', default_value='0.0',
-                              description="deg, the start-up pitch trim of the policy's IMU"),
-        DeclareLaunchArgument('imu_offset_yaw_deg', default_value='0.0',
-                              description="deg, the start-up yaw trim of the policy's IMU"),
         DeclareLaunchArgument('safety_config', default_value='relax_safety_split.yaml',
                               description='golem_safety config: a name under its config/h12/, '
                                           'or a path'),
         DeclareLaunchArgument('use_slam', default_value='true',
-                              description="true: start golem_slam's navigation, which also "
-                                          "gives the policy /Odometry for its arm goals"),
+                              description="true: start golem_slam's navigation, which drives "
+                                          'the policy on /cmd_vel'),
         DeclareLaunchArgument('use_skills', default_value='false',
                               description='true: start golem_skills (/skill/*, among them '
                                           '/skill/frontier_explore); needs use_slam'),
@@ -129,8 +120,11 @@ def generate_launch_description():
             # Sim only: the sim's torso IMU is exact, so no offset is removed from it.
             'imu_calibration_robot': 'h12_sim',
         }),
-        # SLAM and Nav2, driving the policy on /cmd_vel.
-        include('golem_slam', 'navigation.launch.py', {**sim_time, 'robot': 'h12'},
+        # SLAM and Nav2, driving the policy on /cmd_vel. The local costmap's footprint is the
+        # body polygon alone (arm_footprint false), as the game has always run: the arms
+        # widening it is off until someone turns it on for the game.
+        include('golem_slam', 'navigation.launch.py',
+                {**sim_time, 'robot': 'h12', 'arm_footprint': 'false'},
                 condition=IfCondition(LaunchConfiguration('use_slam'))),
         # The /skill/* action servers, without waiting for the H1-2's perception and
         # gripper services or frame_task_server, which the game does not run.

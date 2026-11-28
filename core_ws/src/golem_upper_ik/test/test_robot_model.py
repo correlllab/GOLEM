@@ -290,6 +290,54 @@ def test_reduced_limit_violations_name_the_joint(models):
 
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_position_limits_narrow_within_the_urdf(models, robot):
+    """set_position_limits narrows the range within the URDF's, through rebuilds; None restores."""
+    model = models(robot)
+    mask = model.reduced_mask
+    urdf_low = model.model_body.lowerPositionLimit.copy()
+    urdf_high = model.model_body.upperPositionLimit.copy()
+    q_limits = np.stack([urdf_low + 0.01, urdf_high - 0.01], axis=1)
+    # a range wider than the URDF's keeps the URDF's
+    first_ik = int(np.nonzero(mask)[0][0])
+    q_limits[first_ik] = [urdf_low[first_ik] - 1.0, urdf_high[first_ik] + 1.0]
+    expected_low = np.maximum(urdf_low, q_limits[:, 0])[mask]
+    expected_high = np.minimum(urdf_high, q_limits[:, 1])[mask]
+    try:
+        model.set_position_limits(q_limits)
+        for reference in (None, np.full(model.num_motor, 0.05)):
+            if reference is not None:
+                model.rebuild_reduced_model(reference)
+            np.testing.assert_array_equal(model.model_body_reduced.lowerPositionLimit,
+                                          expected_low)
+            np.testing.assert_array_equal(model.model_body_reduced.upperPositionLimit,
+                                          expected_high)
+        # the URDF's limit of a narrowed joint is outside the range now
+        q = np.clip(np.zeros(mask.sum()), expected_low, expected_high)
+        assert model.check_within_limits_reduced(q)
+        q[1] = urdf_high[mask][1]
+        assert not model.check_within_limits_reduced(q)
+    finally:
+        model.set_position_limits(None)
+        model.rebuild_reduced_model(np.zeros(model.num_motor))
+    np.testing.assert_array_equal(model.model_body_reduced.lowerPositionLimit, urdf_low[mask])
+    np.testing.assert_array_equal(model.model_body_reduced.upperPositionLimit, urdf_high[mask])
+
+
+@pytest.mark.parametrize('q_limits, words', [
+    (np.zeros((3, 2)), 'shape'),
+    (np.full((27, 2), np.nan), 'finite'),
+    (np.zeros((27, 2)), 'no range'),
+])
+def test_position_limits_refuse_a_bad_range(models, q_limits, words):
+    """A mis-shaped, non-finite or empty range is refused and the URDF's limits stay."""
+    model = models('h12')
+    urdf_low = model.model_body.lowerPositionLimit.copy()
+    with pytest.raises(ValueError, match=words):
+        model.set_position_limits(q_limits)
+    np.testing.assert_array_equal(model.model_body.lowerPositionLimit, urdf_low)
+
+
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_profile_frames_exist_in_every_model(models, robot):
     """Every frame the profile and the configs name is in every model."""
     model = models(robot)

@@ -36,9 +36,8 @@ CONTROLLER_DEFAULTS = {
     'd_min': 0.02,  # self-collision distance the IK keeps, m
     'timeout': 10.0,  # s per goal without a duration
     'threshold_ik': 0.001,  # largest IK joint velocity at which a goal's IK has converged
-    'threshold_joint': 0.01,  # rad: a named-config goal's largest joint error when reached
-    'threshold_linear': 0.002,  # m: a frame goal's largest position error when reached
-    'threshold_angular': 0.01,  # rad: a frame goal's largest orientation error when reached
+    'threshold_linear': 0.002,  # m: a grasp goal's largest position error when reached
+    'threshold_angular': 0.01,  # rad: a grasp goal's largest orientation error when reached
     'state_timeout': 5.0,  # s to wait for a fresh /lowstate before enabling anything
     'startup_timeout': 30.0,  # s for golem_safety to be seen relaying the commands
     'startup_move_timeout': 30.0,  # s for the start-up moves, from the follow gate opening
@@ -53,14 +52,16 @@ FREQUENCY_DEFAULTS = {
     'check_hz': 1000.0,  # the follow gate's check between control steps
 }
 # limits.clip: q within [low + position_offset, high - position_offset], |dq| at most
-# velocity_ratio * the velocity limit, |tau| at most torque_ratio * the torque limit
+# velocity_ratio * the velocity limit, |tau| at most torque_ratio * the torque limit. The q
+# range is also the IK's and the planner's position range (UpperController)
 CLIP_DEFAULTS = {
     'position_offset': 0.001,  # rad
     'velocity_ratio': 0.10,
     'torque_ratio': 0.25,
 }
-# The planner section's keys, by kind: the fields of PlannerConfig (core.planner), and
-# enabled. The loader checks the keys a file gives and fills in only enabled (true) and
+# The planner section's keys, by kind: the fields of PlannerConfig (core.planner) but
+# max_acceleration (the controller's ACCEL_LIMIT), and enabled. The loader checks the keys a
+# file gives and fills in only enabled (true) and
 # frame_names (the profile's planner frames); PlannerConfig supplies every other default.
 # A goal can plan only when the profile has a self-collision model and enabled is true.
 PLANNER_TEXT_KEYS = ('planner',)  # the OMPL planner's name

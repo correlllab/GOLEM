@@ -40,7 +40,8 @@ The motor commands are DDS topics in Unitree's IDL. `golem_safety` and
 `golem_upper_ik` read and write them as ROS 2 topics (ROS `/lowcmd` is DDS
 `rt/lowcmd`, the same wire type), and so does `lowerbody_controller_node`,
 while `dex3_hands` uses the Unitree SDK. The user-facing interface is ROS 2 too: `/cmd_vel`, the
-`/frame_task` and `/named_config` actions, the hand services,
+`/grasp_frame_target` action and the `/{left,right}_grasp_frame_pose` topics,
+the hand services,
 `/lowerbody/confirm_engage`, `/joint_states`, sensors.
 
 ## What sits behind the topics

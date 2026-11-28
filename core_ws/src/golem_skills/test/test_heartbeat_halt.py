@@ -4,8 +4,10 @@ import os
 import threading
 import time
 
-from custom_ros_messages.action import NamedConfig
+from action_msgs.msg import GoalStatus
+from custom_ros_messages.action import GraspFrameTarget
 from golem_skills.base import SkillsBase
+from golem_skills.robots import robot_profile
 import pytest
 import rclpy
 from rclpy.task import Future
@@ -68,8 +70,12 @@ class FakeGoalHandle:
         return future
 
 
-class FakeNamedConfigClient:
-    """Stand in for the /named_config action client; its goal never finishes by itself."""
+# a posture goto_posture sends: the H1-2's prep
+POSTURE = robot_profile('h12').prep_posture
+
+
+class FakeArmClient:
+    """Stand in for the /grasp_frame_target action client; its goal never finishes by itself."""
 
     def __init__(self):
         """Create the client with one goal handle that never resolves."""
@@ -159,25 +165,25 @@ def test_a_latched_estop_wins_over_a_silent_heartbeat(skills):
 
 def test_no_arm_goal_is_sent_while_halted(skills):
     """No arm goal is sent while the arms are halted."""
-    client = FakeNamedConfigClient()
-    skills.named_config_cli = client
-    assert skills.goto_named_config('home') is False
+    client = FakeArmClient()
+    skills.grasp_target_cli = client
+    assert skills.goto_posture('prep', POSTURE) is False
     assert client.goals == []
 
 
 def test_a_silent_heartbeat_cancels_the_arm_goal_in_flight(skills):
     """A silent heartbeat cancels the arm goal in flight and halts the arms for the goal."""
-    client = FakeNamedConfigClient()
-    skills.named_config_cli = client
+    client = FakeArmClient()
+    skills.grasp_target_cli = client
     _beat(skills, True)
     outcome = []
     caller = threading.Thread(
-        target=lambda: outcome.append(skills.goto_named_config('home')))
+        target=lambda: outcome.append(skills.goto_posture('prep', POSTURE)))
     caller.start()
     deadline = time.monotonic() + 5.0
     while not client.goals and time.monotonic() < deadline:
         time.sleep(0.01)
-    assert isinstance(client.goals[0], NamedConfig.Goal)
+    assert isinstance(client.goals[0], GraspFrameTarget.Goal)
     assert caller.is_alive() and not client.handle.canceled.is_set()
 
     skills._monotonic.advance(1.0)
@@ -192,12 +198,12 @@ def test_a_silent_heartbeat_cancels_the_arm_goal_in_flight(skills):
 
 def test_a_false_beat_cancels_the_arm_goal_in_flight(skills):
     """A false beat cancels the arm goal in flight."""
-    client = FakeNamedConfigClient()
-    skills.named_config_cli = client
+    client = FakeArmClient()
+    skills.grasp_target_cli = client
     _beat(skills, True)
     outcome = []
     caller = threading.Thread(
-        target=lambda: outcome.append(skills.goto_named_config('home')))
+        target=lambda: outcome.append(skills.goto_posture('prep', POSTURE)))
     caller.start()
     deadline = time.monotonic() + 5.0
     while not client.goals and time.monotonic() < deadline:
@@ -216,3 +222,41 @@ def test_waits_that_are_not_arm_goals_ignore_the_heartbeat(skills):
     future = Future()
     threading.Timer(0.3, lambda: future.set_result('done')).start()
     assert skills._wait_future(future, 5.0) == 'done'
+
+
+class FakeResponse:
+    """Stand in for a goal's result response: its status and the result's outcome and message."""
+
+    def __init__(self, status, outcome, message):
+        """Hold `status` (GoalStatus) and a GraspFrameTarget result's `outcome`, `message`."""
+        self.status = status
+        self.result = GraspFrameTarget.Result(outcome=outcome, success=False, message=message)
+
+
+@pytest.mark.parametrize('message', [
+    'timed out after 5.0 s; the arms hold where they are (left 0.0 mm 0.0000 rad, right 3.1 '
+    'mm 0.0095 rad)',
+    'the hold is pinned at a joint position limit: right_wrist_yaw_joint q=-1.268 (limit '
+    '-1.269) (...)',
+    'any words at all',
+])
+def test_an_arm_goal_that_ends_short_of_its_target_halts_nothing(skills, message):
+    """An abort with outcome NOT_REACHED is no fault, whatever its message says."""
+    _beat(skills, True)
+    skills._note_arm_move_status(FakeResponse(
+        GoalStatus.STATUS_ABORTED, GraspFrameTarget.Result.NOT_REACHED, message), 'move')
+    assert skills.arm_halt_reason() is None
+
+
+@pytest.mark.parametrize('message', [
+    'planning failed: Planning failed: goal moves left_grasp_frame above y=0.4500',
+    "the robot's state is stale: no /lowstate for 1.0 s",
+    'marl_deploy_node is shutting down',
+    'timed out after 5.0 s',
+])
+def test_an_arm_goal_aborted_for_anything_else_halts_the_arms(skills, message):
+    """An abort with outcome FAILED halts the arms for the goal, whatever its message says."""
+    _beat(skills, True)
+    skills._note_arm_move_status(FakeResponse(
+        GoalStatus.STATUS_ABORTED, GraspFrameTarget.Result.FAILED, message), 'move')
+    assert skills.arm_halt_reason().endswith(message)

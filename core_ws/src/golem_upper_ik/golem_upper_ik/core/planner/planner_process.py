@@ -17,7 +17,6 @@ import threading
 import time
 import traceback
 import multiprocessing as mp
-from contextlib import contextmanager
 from dataclasses import asdict, replace
 
 import numpy as np
@@ -87,7 +86,7 @@ class PlannerClient:
     """Send plan requests to a planner subprocess, started on the first request."""
 
     def __init__(self, profile: RobotProfile, planner_config: PlannerConfig = None,
-                 frame_names=None, startup_timeout: float = STARTUP_TIMEOUT):
+                 frame_names=None, startup_timeout: float = STARTUP_TIMEOUT, q_limits=None):
         """Set up the client; no subprocess starts before the first request.
 
         profile: the robot; the subprocess builds its model from load_profile(profile.robot).
@@ -97,6 +96,9 @@ class PlannerClient:
             (the controller passes the controller config's planner.frame_names).
         startup_timeout: s of steady time for the subprocess to build its model and report
             ready.
+        q_limits: the body joints' position range the planner keeps within, as
+            RobotModel.set_position_limits takes it (the controller's clip range); default
+            the URDF's limits.
         """
         self.robot = profile.robot
         frames = tuple(profile.planner_frames if frame_names is None else frame_names)
@@ -106,6 +108,7 @@ class PlannerClient:
                              f'from the planner frames {frames}: pass them as frame_names')
         self.planner_config = replace(config, frame_names=frames)
         self.startup_timeout = startup_timeout
+        self.q_limits = None if q_limits is None else np.array(q_limits, dtype=float)
         self.unavailable_reason = None
         if profile.collision is None:
             self.unavailable_reason = PLANNER_UNAVAILABLE.format(
@@ -124,14 +127,11 @@ class PlannerClient:
         """Return whether the robot can plan; unavailable_reason says why not."""
         return self.unavailable_reason is None
 
-    def plan_configuration(self, current_q, start, goal,
-                           active_mask=None, moving_speed=None,
-                           max_interpolation_steps=None):
+    def plan_configuration(self, current_q, start, goal, active_mask=None):
         """Return the subprocess's PlanResult from start to goal (reduced q).
 
         current_q is the measured body q, which places the frozen joints for the workspace
-        bounds. The worker's PlannerConfig is serialized once at spawn, so per-goal speed
-        changes travel with the request; None plans with the config the worker started with.
+        bounds; the worker plans with the PlannerConfig it was started with.
         PlannerUnavailableError when the robot cannot plan; RuntimeError ('planner shut
         down') when shutdown() runs while this waits, and for the worker's errors.
         """
@@ -143,8 +143,6 @@ class PlannerClient:
             'start': np.asarray(start, dtype=float),
             'goal': np.asarray(goal, dtype=float),
             'active_mask': _optional_array(active_mask, dtype=bool),
-            'moving_speed': moving_speed,
-            'max_interpolation_steps': max_interpolation_steps,
         })
 
     def shutdown(self):
@@ -171,6 +169,7 @@ class PlannerClient:
             # the profile does not pickle (read-only mappings): the worker loads it by name
             'robot': self.robot,
             'planner_config': asdict(self.planner_config),
+            'q_limits': self.q_limits,
         }
         worker = _Worker(self._ctx, self._worker_main, init_args)
         self._worker = worker
@@ -250,8 +249,9 @@ class _PlannerWorker:
     """Own the robot model and the planner inside the subprocess."""
 
     def __init__(self, init_args):
-        """Build the robot model and the planner from init_args' robot and planner config."""
-        self.robot_model = RobotModel(load_profile(init_args['robot']))
+        """Build the robot model and the planner from init_args' robot, range and planner config."""
+        self.robot_model = RobotModel(load_profile(init_args['robot']),
+                                      q_limits=init_args.get('q_limits'))
         planner_config = PlannerConfig(**init_args['planner_config'])
         self.planner = ReducedJointPlanner(
             self.robot_model,
@@ -271,40 +271,7 @@ class _PlannerWorker:
         start = np.asarray(request['start'], dtype=float)
         goal = np.asarray(request['goal'], dtype=float)
         active_mask = _optional_array(request.get('active_mask'), dtype=bool)
-        with self._config_override(
-            request.get('moving_speed'),
-            request.get('max_interpolation_steps'),
-        ):
-            return self.planner.plan(start, goal, active_mask=active_mask)
-
-    @contextmanager
-    def _config_override(self, moving_speed, max_interpolation_steps):
-        """Apply a request's speed settings to the planner config for the block, then restore."""
-        if moving_speed is None and max_interpolation_steps is None:
-            yield
-            return
-
-        config = self.planner.config
-        previous = (config.moving_speed, config.max_interpolation_steps)
-        # PlannerConfig is validated at construction only, so an override is checked here, or
-        # a bad value divides by zero when interpolating
-        if moving_speed is not None:
-            moving_speed = float(moving_speed)
-            if moving_speed <= 0.0:
-                raise ValueError('Planner moving_speed must be positive')
-            config.moving_speed = moving_speed
-        if max_interpolation_steps is not None:
-            max_interpolation_steps = int(max_interpolation_steps)
-            if max_interpolation_steps < config.min_interpolation_steps:
-                raise ValueError(
-                    'Planner max_interpolation_steps must be at least '
-                    'min_interpolation_steps'
-                )
-            config.max_interpolation_steps = max_interpolation_steps
-        try:
-            yield
-        finally:
-            config.moving_speed, config.max_interpolation_steps = previous
+        return self.planner.plan(start, goal, active_mask=active_mask)
 
     def _set_current_q(self, q):
         """Hold the caller's measured body q, at rest, as the model's state.

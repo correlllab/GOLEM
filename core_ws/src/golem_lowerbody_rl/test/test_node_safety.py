@@ -3,8 +3,8 @@ Check the G1's leg node behind golem_safety's installed safety_node on a test do
 
 In this process: lowerbody_controller_node (robot g1, the sim run config, HOMIE) and a
 helper node standing in for the rest of the G1 (/lowstate from a G1 whose tick counts ms of
-the wall clock, the arm controller's /safety/lowcmd_upper_in, frame_task_server's
-/left_ee_pose and the sim's band toggle), which also records /lowcmd, the node's leg input
+the wall clock, the arm controller's /safety/lowcmd_upper_in and
+/left_grasp_frame_pose and the sim's band toggle), which also records /lowcmd, the node's leg input
 and /safety/heartbeat. Beside them, golem_safety's safety_node runs as a subprocess with
 robot g1 on a copy of its sim_split.yaml (split mode, sim:=true, no hardware estop), so the
 node's commands reach the motors only as golem_safety relays them. Every topic and service
@@ -50,7 +50,7 @@ _SHELL_DOMAIN = int(os.environ.get('ROS_DOMAIN_ID') or 0)
 TEST_DOMAIN = _SHELL_DOMAIN if _SHELL_DOMAIN > 1 else 97
 # every name the node, the helper or safety_node uses, moved under a run's prefix
 NAMES = ('/lowstate', '/lowcmd', '/safety/lowcmd_lower_in', '/safety/lowcmd_upper_in',
-         '/safety/heartbeat', '/left_ee_pose', '/elastic_band/toggle', '/cmd_vel',
+         '/safety/heartbeat', '/left_grasp_frame_pose', '/elastic_band/toggle', '/cmd_vel',
          '/lowerbody/height', '/lowerbody/active_policy', '/lowerbody/confirm_engage')
 PROFILE = load_profile('g1')
 LEG_SLOTS = [int(slot) for slot in PROFILE.slots(PROFILE.legs)]
@@ -158,7 +158,7 @@ class FakeG1:
 
     /lowstate every STATE_PERIOD from a G1 standing still (mode_machine 5, its tick ms of
     the wall clock), the arm controller's command (waist and arms at 0, kp 60) at 100 Hz
-    while arms is set, /left_ee_pose while ee_pose is set, and the band toggle. Records
+    while arms is set, /left_grasp_frame_pose while arm_pose is set, and the band toggle. Records
     /lowcmd, /safety/lowcmd_lower_in and /safety/heartbeat with their receive times.
     """
 
@@ -171,7 +171,7 @@ class FakeG1:
         self.quat = list(quat)
         self.gyro = [0.0, 0.0, 0.0]
         self.arms = False
-        self.ee_pose = False
+        self.arm_pose = False
         self.lowcmd = []  # (monotonic s, LowCmd) of /lowcmd
         self.lower = []  # (monotonic s, LowCmd) of /safety/lowcmd_lower_in
         self.beats = []  # (monotonic s, bool) of /safety/heartbeat
@@ -186,7 +186,7 @@ class FakeG1:
         newest = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         self._state = self.node.create_publisher(LowState, '/lowstate', newest)
         self._upper = self.node.create_publisher(LowCmd, '/safety/lowcmd_upper_in', 1)
-        self._ee = self.node.create_publisher(PoseStamped, '/left_ee_pose', 10)
+        self._arm_pose = self.node.create_publisher(PoseStamped, '/left_grasp_frame_pose', 10)
         self.node.create_subscription(
             LowCmd, '/lowcmd', lambda m: self.lowcmd.append((time.monotonic(), m)),
             QoSProfile(depth=100, reliability=ReliabilityPolicy.BEST_EFFORT))
@@ -231,11 +231,11 @@ class FakeG1:
         self._state.publish(msg)
 
     def _publish_inputs(self):
-        """Publish the arm controller's command and /left_ee_pose while they are on."""
+        """Publish the arm controller's command and /left_grasp_frame_pose while they are on."""
         if self.arms:
             self._upper.publish(self._arm_cmd)
-        if self.ee_pose:
-            self._ee.publish(PoseStamped())
+        if self.arm_pose:
+            self._arm_pose.publish(PoseStamped())
 
     def _toggle(self, _request, response):
         """Answer the band toggle: the band is off."""
@@ -337,9 +337,9 @@ def _errors(rig):
 
 
 def _running(rig):
-    """Have the arm controller and frame_task_server up; wait until the policy runs."""
+    """Have the arm controller command and publish its pose; wait until the policy runs."""
     rig.robot.arms = True
-    rig.robot.ee_pose = True
+    rig.robot.arm_pose = True
     assert _wait(lambda: rig.node.supervisor.phase is Phase.RUNNING, START_TIMEOUT), (
         rig.node.supervisor.phase, rig.node.supervisor.wait_reason, rig.node.records[-5:])
 
@@ -350,7 +350,7 @@ def test_g1_legs_start_behind_safety_node():
 
     golem_safety beats and streams zero gains; the node stays silent while the robot is
     tilted, pre-poses the legs from where they are once it is upright, holds the pre-pose
-    until the arm controller commands and frame_task_server is up, then runs HOMIE and
+    until the arm controller commands and is up, then runs HOMIE and
     releases the band once. golem_safety engages each input on its own first command and
     relays the node's legs with the policy's gains, stamped for the G1.
     """
@@ -376,9 +376,9 @@ def test_g1_legs_start_behind_safety_node():
         assert rig.node.supervisor.phase is Phase.HOLDING
         assert rig.node.supervisor.wait_reason.startswith(UPPER_KIND)
 
-        # the arm controller commands and frame_task_server is up: HOMIE runs, the band goes
+        # the arm controller commands and is up: HOMIE runs, the band goes
         rig.robot.arms = True
-        rig.robot.ee_pose = True
+        rig.robot.arm_pose = True
         assert _wait(lambda: rig.node.supervisor.phase is Phase.RUNNING, START_TIMEOUT), (
             rig.node.supervisor.wait_reason, rig.node.records[-5:])
         assert _wait(lambda: any(m.startswith('elastic band released')
@@ -411,10 +411,10 @@ def test_g1_legs_start_behind_safety_node():
         assert _is_off(msg.motor_cmd[12:])
     # one command per 20 ms of tick while running: HOMIE's 50 Hz
     assert 40.0 < rate < 55.0, f'{rate:.1f} Hz'
-    # the band was released once, because frame_task_server is up
+    # the band was released once, because the arm controller is up
     calls = [m for _, _, m in records if m.startswith('releasing the elastic band: ')]
-    assert calls == ['releasing the elastic band: the policy runs and frame_task_server is up '
-                     '(/left_ee_pose)']
+    assert calls == ['releasing the elastic band: the policy runs and the arm controller is up '
+                     '(/left_grasp_frame_pose)']
     assert len(toggles) == 1
 
     # golem_safety engaged the node's input on its first command, the arm controller's

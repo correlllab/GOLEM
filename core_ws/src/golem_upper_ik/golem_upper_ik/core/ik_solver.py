@@ -4,7 +4,20 @@ IKSolver keeps two configurations: one on the reduced model, which the IK steps,
 the body model (no free-flyer), which carries every body joint's q. Each frame task pulls one
 frame to a target pose. With a self-collision model the reduced model's IK keeps the
 collision pairs controller.d_min apart (a self-collision barrier, on the BARRIER_PAIRS
-closest pairs of each step); without one it runs without the barrier. solve_ik_reduced tries seeds in turn, the measured pose first.
+closest pairs of each step); without one it runs without the barrier. solve_ik_reduced tries
+seeds in turn, the measured pose first, in two passes (SEED_FIRST_PASS).
+
+The IK keeps every IK joint within the reduced model's position limits (RobotModel's range:
+the controller's clip range). A configuration or seed given outside them is clamped into them
+first, and so is every integrated step (the QP solver meets Pink's configuration limit only to
+its tolerance, about 1e-7 rad, and Pink's acceleration limit takes the square root of the
+distance to the limit, which is not a number past it), so every q the solver returns or
+integrates to lies within them. The stepped moves (ik_step_reduced, goto_reduced_configuration)
+brake into the limits: a joint closes on its limit at no more than its distance over
+LIMIT_APPROACH_TIME; solve_ik_reduced's iterations keep Pink's default gain. A stepped move's
+step is otherwise the whole step to its goal within the model's velocity limits, which the
+controller takes as the distance left for its acceleration limit; a start-up move's step
+(goto_reduced_configuration) can also move each IK joint at most JOINT_SPEED_CAP.
 """
 import time
 from dataclasses import dataclass
@@ -18,6 +31,15 @@ from golem_upper_ik.core.robot_model import RobotModel
 # named configurations solve_ik_reduced falls back to, in order, after the measured pose;
 # every robot's profile must name them
 SEED_CONFIGS = ('home', 't_pose', 'arms_front_45')
+# s of steady time: solve_ik_reduced's first pass gives each seed this long, in order, and its
+# second pass resumes the seeds that have not converged for the rest of their timeout. Offline
+# (the H1-2's safety_split and the G1's sim_split, 1176 converged seed solves of 425 recorded,
+# posture and random goals, in the ros container on the E-cores), all but one converged within
+# 2 s (that one in 2.15 s; the G1's postures within 0.94 s), so the first pass takes the seed one
+# pass would have taken; and a seed that never converges no longer keeps the seeds after it
+# waiting its whole timeout: the H1-2's staging-right posture, where 'current' and 'home' never
+# converge and 't_pose' does in 0.12 s, takes 4.1 s of IK instead of 10.1 s
+SEED_FIRST_PASS = 2.0
 # solve_ik_reduced converges when the summed frame-task errors are below these
 LINEAR_THRESHOLD = 1e-3  # m
 ANGULAR_THRESHOLD = 1e-2  # rad
@@ -27,6 +49,33 @@ ANGULAR_THRESHOLD = 1e-2  # rad
 # every constrained one; in the sphere models' postures at most 26 pairs lie within 0.15 m,
 # and one step moves a pair a few mm.
 BARRIER_PAIRS = 32
+# s: the time constant of an IK joint's approach to its position limit in the stepped moves
+# (ik_step_reduced, goto_reduced_configuration): each step closes at most 1 - exp(-dt / this)
+# of the distance, so a joint slows into its limit at no more than distance / this rad/s (0.27
+# rad/s at 50 mrad, 0.11 at 20) instead of arriving at dq_lim. In the H1-2 RoboCasa sim, where
+# the skills' failure-retreat lift brings the shoulder yaw's command to the clip, the yaw went
+# 16.7 mrad past the clip without it and 9.9 to 14.4 mrad with it (8 lifts, the steps then
+# capped at 0.83 rad/s), most of it the hold's torque bias carried into the lift; with the
+# controller's acceleration limit and bias bound too (UpperController), 0.3 to 0.4 mrad (13
+# lifts), the lift taking 2.5 to 2.6 s. Stepping the H1-2's IK on 30 direct goals that stay 0.2
+# rad inside the range took no longer with 0.2 s, 0.03 s longer at most with 0.3 s and 0.1 s
+# with 0.5 s. Unmeasured on the real robots
+LIMIT_APPROACH_TIME = 0.2
+# rad/s: the most a start-up move's step (goto_reduced_configuration, capped) moves any one IK
+# joint, each joint bounded on its own in the IK's quadratic program, so a joint with less to
+# go arrives first and the others keep going, as the start-up moves did with Pink's
+# AccelerationLimit(25 rad/s^2) and no last step (25 rad/s^2 times the 1/30 s period). In the
+# H1-2's RoboCasa Battery scene the start-up's home move puts the left hand on the table; moved
+# along a straight joint path instead (each arm scaled as a whole), the hand came to rest
+# differently, the torso stood 0.076 instead of 0.042 rad when the first goal started, and the
+# right arm's grasps then failed to plan their staging posture; with this cap the torso stood
+# at 0.046 and the staging posture planned again, on its near branch, in 9 of 9 right-arm
+# grasps (5 of 5 before the acceleration limit, 0 of 5 without the cap). Each arm is scaled
+# under controller.dq_lim after it
+JOINT_SPEED_CAP = 0.83
+# limited_step's weight on leaving its bounds, against the step's distance from the one asked
+# for (both in rad^2): leaving them by 1 urad costs as much as missing the step by 1 mrad
+LIMITED_STEP_SLACK_WEIGHT = 1e6
 
 
 @dataclass
@@ -116,13 +165,24 @@ class IKSolver:
             robot_model.state_reduced['q'],
             **collision_kwargs,
         )
+        model = robot_model.model_body_reduced
+        # solve_ik_reduced's iterations: a search for the goal, not a motion, so Pink's default
+        # configuration-limit gain (0.5 of the distance per iteration), and each iteration's
+        # step capped at 25 rad/s^2 times the iteration step squared
         self.limits_reduced = [
-            pink.limits.ConfigurationLimit(robot_model.model_body_reduced),
-            pink.limits.VelocityLimit(robot_model.model_body_reduced),
-            # rad/s^2 on every IK joint
-            pink.limits.AccelerationLimit(robot_model.model_body_reduced,
-                                          25.0 * np.ones(robot_model.model_body_reduced.nv))
+            pink.limits.ConfigurationLimit(model),
+            pink.limits.VelocityLimit(model),
+            pink.limits.AccelerationLimit(model, 25.0 * np.ones(model.nv)),
         ]
+        # the stepped moves the controller commands: braked into the limits, and otherwise the
+        # whole step to the goal the model's velocity limits allow, which the controller takes
+        # as the distance left (its acceleration limit); the capped start-up moves' limits also
+        # hold each IK joint to JOINT_SPEED_CAP
+        brake = pink.limits.ConfigurationLimit(
+            model, config_limit_gain=-np.expm1(-self.dt / LIMIT_APPROACH_TIME))
+        self.step_limits_reduced = [brake, pink.limits.VelocityLimit(model)]
+        self.capped_step_limits_reduced = [brake, pink.limits.VelocityLimit(
+            model, np.minimum(model.velocityLimit, JOINT_SPEED_CAP))]
 
     @property
     def q(self):
@@ -133,15 +193,6 @@ class IKSolver:
     def q_reduced(self):
         """Return a copy of the reduced configuration's q, one value per IK joint."""
         return np.copy(self.configuration_reduced.q)
-
-    def compute_error_reduced(self, task: pink.Task, q_reduced: np.ndarray) -> np.ndarray:
-        """Return task's error at q_reduced, on a reduced configuration of its own."""
-        configuration_reduced = pink.Configuration(
-            self.robot_model.model_body_reduced,
-            self.robot_model.data_body_reduced,
-            q_reduced,
-        )
-        return task.compute_error(configuration_reduced)
 
     def add_frame_task(self, task_name: str, frame_name: str,
                        position_cost: float = 50.0,
@@ -168,22 +219,41 @@ class IKSolver:
         for task_name in list(self.frame_tasks.keys()):
             del self.frame_tasks[task_name]
 
+    def _clamp_reduced(self, q_reduced):
+        """Return reduced q clamped into the reduced model's position limits."""
+        model = self.robot_model.model_body_reduced
+        return np.clip(q_reduced, model.lowerPositionLimit, model.upperPositionLimit)
+
     def update_configurations(self, q=None):
-        """Set both configurations from body q (default: the measured state)."""
+        """Set both configurations from body q (default: the measured state).
+
+        The IK joints are clamped into the position limits first: a measured pose past them
+        (a joint pushed or overshooting) restarts the IK at the limit.
+        """
         if q is None:
             q = self.robot_model.state['q']
-        q = np.asarray(q, dtype=float)
+        q = np.array(q, dtype=float)
+        q[self.robot_model.reduced_mask] = self._clamp_reduced(q[self.robot_model.reduced_mask])
         self.configuration.update(q)
         self.configuration_reduced.update(q[self.robot_model.reduced_mask])
 
     def integrate(self, vel: np.ndarray):
-        """Advance both configurations by body joint velocity vel (rad/s) over dt."""
-        vel_reduced = vel[self.robot_model.reduced_mask]
-        self.configuration.integrate_inplace(vel, self.dt)
-        self.configuration_reduced.integrate_inplace(vel_reduced, self.dt)
+        """Advance both configurations by body joint velocity vel (rad/s) over dt.
 
-    def _ik_reduced(self, tasks, dt):
-        """Return the reduced joint velocity Pink solves for tasks over dt, with the barrier."""
+        The IK joints end clamped into the position limits.
+        """
+        mask = self.robot_model.reduced_mask
+        q = self.configuration.integrate(vel, self.dt)
+        q[mask] = self._clamp_reduced(q[mask])
+        self.configuration.update(q)
+        self.configuration_reduced.update(
+            self._clamp_reduced(self.configuration_reduced.integrate(vel[mask], self.dt)))
+
+    def _ik_reduced(self, tasks, dt, limits=None):
+        """Return the reduced joint velocity Pink solves for tasks over dt, with the barrier.
+
+        limits: the Pink limits; default limits_reduced (the solve's).
+        """
         barriers = []
         if self.collision_barrier_reduced is not None:
             barriers = [self.collision_barrier_reduced]
@@ -192,7 +262,7 @@ class IKSolver:
             tasks,
             dt=dt,
             solver=self.solver,
-            limits=self.limits_reduced,
+            limits=self.limits_reduced if limits is None else limits,
             barriers=barriers,
             safety_break=False
         )
@@ -247,8 +317,8 @@ class IKSolver:
         return normalized
 
     def _seed_list(self):
-        """Return the seeds as (name, reduced q)."""
-        return [(seed_name, self._normalize_reduced_seed(seed, seed_name))
+        """Return the seeds as (name, reduced q), each clamped into the position limits."""
+        return [(seed_name, self._clamp_reduced(self._normalize_reduced_seed(seed, seed_name)))
                 for seed_name, seed in self._default_seed_items()]
 
     def _best_attempt(self, attempts):
@@ -279,7 +349,8 @@ class IKSolver:
             )
             tasks = list(self.frame_tasks.values()) + [self.posture_task]
             vel = self._ik_reduced(tasks, alpha)
-            self.configuration_reduced.integrate_inplace(vel, alpha)
+            self.configuration_reduced.update(
+                self._clamp_reduced(self.configuration_reduced.integrate(vel, alpha)))
             linear_err, angular_err = self._frame_task_errors(
                 self.configuration_reduced,
             )
@@ -299,33 +370,94 @@ class IKSolver:
         """Return one IK step's body joint velocity (rad/s) for the frame tasks; others 0."""
         self.posture_task.set_target_from_configuration(self.configuration_reduced)
         tasks = list(self.frame_tasks.values()) + [self.posture_task]
-        vel = self._ik_reduced(tasks, self.dt)
+        vel = self._ik_reduced(tasks, self.dt, self.step_limits_reduced)
         vel_full = self.robot_model.zero_q_body
         vel_full[self.robot_model.reduced_mask] = vel
         return vel_full
 
-    def solve_ik_reduced(self, alpha=0.1, timeout=1.0):
-        """Return an IKResult: the IK iterated to convergence from each seed in turn.
+    def solve_ik_reduced(self, alpha=0.1, timeout=1.0, accept=None):
+        """Return an IKResult: the IK iterated to convergence from the seeds, in two passes.
 
-        alpha is the iteration step, s; timeout bounds each seed's iterations, s of steady
-        time. A converged seed ends the search; without one, the reduced configuration is left
-        at the best.
+        alpha is the iteration step, s; timeout bounds each seed's iterations in all, s of
+        steady time. The first pass iterates each seed in order for at most SEED_FIRST_PASS;
+        the second resumes, in order, each seed that has not converged where its first pass
+        left it, for the rest of its timeout (a timeout of SEED_FIRST_PASS or less is one
+        pass). A converged seed ends the search when accept(result) is true (default:
+        always), called once for each converged seed, in the order they converge; one it
+        refuses passes the search on to the next. The configuration is then at the returned
+        seed's solution. Without an accepted seed, the reduced configuration is left at the
+        best attempt (a converged one first), which is returned. A seed whose iteration has
+        no QP solution raises NoSolutionFound and ends the search.
         """
-        attempts = []
-        for seed_name, q_seed in self._seed_list():
-            attempt = self._solve_ik_reduced_attempt(seed_name, q_seed, alpha, timeout)
-            attempts.append(attempt)
-            if attempt.success:
-                return self._best_attempt(attempts)
+        mask = self.robot_model.reduced_mask
+        seeds = self._seed_list()
+        resume = dict(seeds)
+        spent = dict.fromkeys(resume, 0.0)
+        attempts = {}
+        passes = (timeout,) if timeout <= SEED_FIRST_PASS else (SEED_FIRST_PASS, timeout)
+        for budget in passes:
+            for seed_name, _ in seeds:
+                attempt = attempts.get(seed_name)
+                if attempt is not None and (attempt.success or spent[seed_name] >= budget):
+                    continue
+                start = time.monotonic()
+                attempt = self._solve_ik_reduced_attempt(
+                    seed_name, resume[seed_name], alpha, budget - spent[seed_name])
+                spent[seed_name] += time.monotonic() - start
+                resume[seed_name] = attempt.q[mask]
+                attempts[seed_name] = attempt
+                if attempt.success and (accept is None or accept(attempt)):
+                    return attempt
 
-        result = self._best_attempt(attempts)
-        self.configuration_reduced.update(result.q[self.robot_model.reduced_mask])
+        result = self._best_attempt(list(attempts.values()))
+        self.configuration_reduced.update(result.q[mask])
         return result
 
-    def goto_reduced_configuration(self, q_reduced: np.ndarray):
-        """Return one IK step's body joint velocity (rad/s) toward q_reduced; others 0."""
+    def limited_step(self, step, low, high, capped=False):
+        """Return the reduced step (rad) nearest step within [low, high], or None.
+
+        The step keeps the stepped moves' limits (step_limits_reduced: the position limits'
+        brake and the velocity limits; capped, also JOINT_SPEED_CAP) and the self-collision
+        barrier at the reduced configuration, as an IK step does; nearest is in joint space.
+        When no step within [low, high] keeps them (the barrier or the brake needs a harder
+        change), the step keeps them and leaves [low, high] by the least it can (summed
+        squares). None only when the QP solver finds no step at all. SAFETY: the limits and the
+        barrier are hard constraints in both; only [low, high] gives way.
+        """
+        barriers = []
+        if self.collision_barrier_reduced is not None:
+            barriers = [self.collision_barrier_reduced]
+        limits = self.capped_step_limits_reduced if capped else self.step_limits_reduced
+        problem = pink.build_ik(self.configuration_reduced, [], self.dt, limits=limits,
+                                barriers=barriers)
+        step = np.asarray(step, dtype=np.float64)
+        low, high = np.asarray(low, dtype=np.float64), np.asarray(high, dtype=np.float64)
+        n = step.size
+        within = qpsolvers.solve_qp(np.eye(n), -step, problem.G, problem.h, lb=low, ub=high,
+                                    solver=self.solver)
+        if within is not None:
+            return within
+        # [step, slack]: low - slack <= step <= high + slack, slack >= 0, the slack weighed so
+        # heavily that the step leaves the bounds only as far as the constraints make it
+        eye, zero = np.eye(n), np.zeros((n, n))
+        G = np.vstack([np.hstack([problem.G, np.zeros((problem.G.shape[0], n))]),
+                       np.hstack([eye, -eye]), np.hstack([-eye, -eye])])
+        h = np.concatenate([problem.h, high, -low])
+        P = np.block([[eye, zero], [zero, LIMITED_STEP_SLACK_WEIGHT * eye]])
+        q = np.concatenate([-step, np.zeros(n)])
+        lb = np.concatenate([np.full(n, -np.inf), np.zeros(n)])
+        out = qpsolvers.solve_qp(P, q, G, h, lb=lb, solver=self.solver)
+        return None if out is None else out[:n]
+
+    def goto_reduced_configuration(self, q_reduced: np.ndarray, capped=True):
+        """Return one IK step's body joint velocity (rad/s) toward q_reduced; others 0.
+
+        capped: each IK joint at most JOINT_SPEED_CAP (capped_step_limits_reduced).
+        """
         self.config_task.set_target(q_reduced)
-        vel = self._ik_reduced([self.config_task], self.dt)
+        vel = self._ik_reduced(
+            [self.config_task], self.dt,
+            self.capped_step_limits_reduced if capped else self.step_limits_reduced)
         vel_full = self.robot_model.zero_q_body
         vel_full[self.robot_model.reduced_mask] = vel
         return vel_full

@@ -1,9 +1,9 @@
-"""Check check_frame_task.py's arm scoring: a succeeded action alone cannot pass."""
+"""Check check_grasp_frame_target.py's arm scoring: a succeeded action alone cannot pass."""
 import importlib.util
 from pathlib import Path
 import unittest
 
-spec = importlib.util.spec_from_file_location('frame_check', Path(__file__).with_name('check_frame_task.py'))
+spec = importlib.util.spec_from_file_location('grasp_check', Path(__file__).with_name('check_grasp_frame_target.py'))
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 

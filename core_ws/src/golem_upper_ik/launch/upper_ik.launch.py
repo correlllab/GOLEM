@@ -51,7 +51,7 @@ def _start(context: LaunchContext) -> list:
     bringup may have set robot or config for itself (Humble includes are not scoped).
     """
     return [TimerAction(period=float(_text(context, 'start_delay')), actions=[
-        # the controller: /frame_task and /named_config, commanding golem_safety's input
+        # the controller: /grasp_frame_target, commanding golem_safety's input
         Node(
             package='golem_upper_ik',
             executable='frame_task_server',

@@ -5,9 +5,10 @@ Hold the machinery every skill shares: clients, camera caches, perception, motio
 SkillsBase is the node every skill mixin plugs into (SkillsNode in node.py
 inherits from it and from every mixin under skills/). It owns:
 
-  * the clients: /frame_task and /named_config (arm IK), the per-arm gripper
-    services, gemini_query, sam_segment and graspgen, and the node's own
-    /skill/grasp (for pick_place);
+  * the clients: /grasp_frame_target (the arm controller, golem_upper_ik or
+    lmg_deploy) and the measured grasp-frame poses it publishes, the per-arm
+    gripper services, gemini_query, sam_segment and graspgen, and the node's
+    own /skill/grasp (for pick_place);
   * the head-camera caches (color, aligned depth, intrinsics), the hand
     cameras' yolo_server bundles (each frame with its aligned depth and
     intrinsics) and TF;
@@ -15,7 +16,7 @@ inherits from it and from every mixin under skills/). It owns:
     _send_action) and the per-goal context _Run;
   * the perception pipeline (query_gemini, segment, detect_object_cloud,
     mask_to_cloud, plan_grasp) and the motion primitives (move_frame_to,
-    servo_frame_to_world, goto_named_config, the gripper calls);
+    servo_frame_to_world, goto_posture, the gripper calls);
   * the arm halt on /safety/heartbeat (arm_halt_reason).
 
 Skill deadlines, arm-move waits, the grip-hold period and the camera waits count robot time
@@ -39,7 +40,8 @@ from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 
 from action_msgs.msg import GoalStatus
 from builtin_interfaces.msg import Duration
-from geometry_msgs.msg import Point, Pose, Quaternion, TransformStamped, Vector3Stamped
+from geometry_msgs.msg import (Point, Pose, PoseStamped, Quaternion, TransformStamped,
+                               Vector3Stamped)
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image, JointState
 from std_msgs.msg import Bool, Header
 
@@ -49,7 +51,7 @@ from tf2_ros import (Buffer, StaticTransformBroadcaster, TransformBroadcaster,
 
 from custom_ros_messages.msg import DetectionBundle
 from custom_ros_messages.srv import GeminiQuery, SamSegment, GraspGen
-from custom_ros_messages.action import FrameTask, NamedConfig
+from custom_ros_messages.action import GraspFrameTarget
 from custom_ros_messages.action import (
     SkillCloseDoor, SkillOpenDoor, SkillCloseLid, SkillOpenLid,
     SkillNavigate, SkillGrasp, SkillPickPlace, SkillPress, SkillSlideRack,
@@ -67,7 +69,7 @@ from .perception_utils import (
 from .grasp_synthesis import DEFAULT_METHOD, METHODS, method_name
 from model_server.model_logging import _log_root
 from .hands import DEX3_NS
-from .robots import ARMS, DEFAULT_ROBOT, ROBOTS, drive_pose, robot_profile
+from .robots import ARMS, DEFAULT_ROBOT, ROBOTS, arm_of, robot_profile
 from .run_telemetry import RunRecorder, describe_goal, run_dir
 
 
@@ -161,21 +163,37 @@ WORLD_FRAME = 'camera_init'
 # drift fixes are moving the base rather than the hand (arm blocked by contact,
 # the balance controller stepping away from the reach) and only chase the target
 SERVO_DIVERGE_M = 0.01
-# A FrameTask duration is a timeout, and slow_mode scales joint velocity by the
-# frame_task server's SLOW_MODE_SCALE (0.25), so a slow move needs its budget
-# multiplied by 1 / SLOW_MODE_SCALE to reach as far as a full-speed one.
-SLOW_MODE_TIME_SCALE = 4.0
 
-# Early stop of a frame_task move (_send_frame_move's stable_stop_msgs): a
-# feedback counts as unchanged when both errors stay within these bands of the
-# running reference. Above the arm's steady-state jitter (~0.1 mm, <1 mrad), so
-# a settled hold is recognized, and well below real motion.
-FRAME_TASK_STABLE_EPS_LIN = 0.0005    # m
-FRAME_TASK_STABLE_EPS_ANG = 0.002     # rad
-# Unchanged feedbacks in a row that end a move early: the arm has settled and
-# the server would only hold steady state until its ~5 s hold timeout. The
-# grasp and pick_place skills pass it to every move they command.
-FRAME_TASK_STABLE_STOP_MSGS = 20
+# Early stop of an arm move (_send_grasp_move's stable_stop_msgs): a feedback
+# counts as unchanged when both errors stay within these bands of the running
+# reference. Above the arm's steady-state jitter (~0.1 mm, <1 mrad), so a
+# settled hold is recognized, and well below real motion.
+ARM_MOVE_STABLE_EPS_LIN = 0.0005    # m
+ARM_MOVE_STABLE_EPS_ANG = 0.002     # rad
+# Unchanged feedbacks in a row (25 Hz from both arm controllers) that end a
+# move early: the arm has settled short of the controller's own tolerance
+# (golem_upper_ik's configs' threshold_linear and threshold_angular, lmg_deploy's
+# grasp_frame_target tolerance), where it would hover until the goal's
+# timeout. The grasp and pick_place skills pass it to every move they command.
+ARM_MOVE_STABLE_STOP_MSGS = 20
+
+# How an arm controller ended a /grasp_frame_target goal that did not reach its
+# target without a fault (its timeout, a hold pinned at a joint limit). Every
+# other abort (outcome FAILED: a stale /lowstate, a planning or execution
+# failure, a fault, a bad target) halts the arms for the rest of the skill goal
+# (_note_arm_move_status).
+NOT_REACHED = GraspFrameTarget.Result.NOT_REACHED
+
+# m, rad: within these of a posture's pinch-frame poses the posture counts as
+# reached (goto_posture); golem_upper_ik reaches the H1-2's staging postures
+# with the wrist yaw pinned at its limit, 1-3 mm short
+POSTURE_LIN_TOL = 0.01
+POSTURE_ANG_TOL = 0.05
+# s of robot time a posture move may take, planning, the path and the hold
+# included (the controllers' default is 5 s)
+POSTURE_TIMEOUT_SEC = 60.0
+# s of robot time to wait for a measured grasp-frame pose published after the request
+GRASP_POSE_WAIT_SEC = 0.5
 
 # s of steady time: the longest a robot-time wait goes without checking its stop event
 ROBOT_WAIT_POLL_SEC = 0.01
@@ -386,20 +404,33 @@ class SkillsBase(Node):
         self.graspgen_cli = self.create_client(
             GraspGen, 'graspgen', callback_group=self._cb_group)
 
-        self.frame_task_cli = ActionClient(
-            self, FrameTask, '/frame_task', callback_group=self._cb_group)
-        # named arm configurations (prep, home, ...), served by frame_task_server too
-        self.named_config_cli = ActionClient(
-            self, NamedConfig, '/named_config', callback_group=self._cb_group)
+        # the arm controller's grasp-frame action (golem_upper_ik's
+        # frame_task_server or lmg_deploy's marl_deploy_node)
+        self.grasp_target_cli = ActionClient(
+            self, GraspFrameTarget, '/grasp_frame_target', callback_group=self._cb_group)
+        # arm -> (measured pinch-frame Pose in the pelvis frame, robot time it
+        # arrived [s]) from the controller's /<arm>_grasp_frame_pose (25 Hz)
+        self._grasp_poses = {}
+        self.grasp_pose_subs = {
+            arm: self.create_subscription(
+                PoseStamped, f'/{arm}_grasp_frame_pose',
+                lambda msg, a=arm: self._on_grasp_pose(a, msg),
+                10, callback_group=self._cb_group)
+            for arm in ARMS
+        }
+        # frame -> its 4x4 transform to its arm's pinch frame (fixed), read
+        # from TF once (_pinch_offset)
+        self._pinch_offsets = {}
 
         # SAFETY: arm motion halts on golem_safety's /safety/heartbeat. Nothing
         # beats until golem_safety can relay, then True at 10 Hz, then False
         # once its estop latches (until restart). No arm goal is sent before the
         # first true beat, after a false one (for the node's life), or while no
         # beat has come for `heartbeat_timeout`, and a goal in flight is
-        # canceled on the server; a frame_task or named_config goal the server
-        # ABORTS (estop, stale robot state, execution error) halts the arms for
-        # the rest of the skill goal. See arm_halt_reason().
+        # canceled on the server; a /grasp_frame_target goal the controller
+        # ABORTS with any outcome but NOT_REACHED (a stale robot state, a
+        # planning or execution failure, a fault) halts the arms for the rest
+        # of the skill goal. See arm_halt_reason().
         self.declare_parameter('heartbeat_timeout', HEARTBEAT_TIMEOUT_SEC)
         # SAFETY: the steady clock, whatever use_sim_time says, so a golem_safety that has
         # stopped halts the arms while a sim's /clock stands still; a fake in the tests
@@ -431,10 +462,11 @@ class SkillsBase(Node):
         # (publish_tf, _republish_tfs) so they do not expire; the skill that
         # registered a frame drops it (drop_tf) when its goal ends.
         self.tf_broadcaster = TransformBroadcaster(self)
-        # The robot's tool frames (robots.RobotProfile.tool_frames: on the G1
-        # the Dex3-1 grasp and pinch frames its URDF lacks), latched on
-        # /tf_static, so every TF lookup of a grasp or pinch frame works as it
-        # does on a URDF frame.
+        # The grasp and pinch frames the robot's URDF lacks, latched on
+        # /tf_static, so every TF lookup of them works as it does on a URDF
+        # frame: golem_upper_ik's grasp frames defined on a parent link (the
+        # G1's, on the Dex3-1 palms) and the profile's tool frames
+        # (robots.RobotProfile.tool_frames). None on the H1-2.
         self._tool_tf = StaticTransformBroadcaster(self)
         self._broadcast_tool_frames()
         # child_frame_id -> TransformStamped
@@ -489,7 +521,8 @@ class SkillsBase(Node):
         wait_for_services = bool(
             self.declare_parameter('wait_for_services', True).value)
         if wait_for_services:
-            self.get_logger().info('Waiting for gemini/sam/graspgen, grippers, frame_task...')
+            self.get_logger().info(
+                'Waiting for gemini/sam/graspgen, grippers, grasp_frame_target...')
             deadline = time.monotonic() + 10.0
             for cli in (self.gemini_cli, self.sam_cli, self.graspgen_cli,
                         *self.gripper_clis.values(), *self.gripper_open_clis.values(),
@@ -500,11 +533,9 @@ class SkillsBase(Node):
                 if rem <= 0.0:
                     break
                 cli.wait_for_service(timeout_sec=rem)
-            for act_cli in (self.frame_task_cli, self.named_config_cli):
-                rem = max(0.0, deadline - time.monotonic())
-                if rem <= 0.0:
-                    break
-                act_cli.wait_for_server(timeout_sec=rem)
+            rem = max(0.0, deadline - time.monotonic())
+            if rem > 0.0:
+                self.grasp_target_cli.wait_for_server(timeout_sec=rem)
 
         # `record_runs`: each RECORDED_SKILLS run writes run_telemetry files under
         # <package>/logs/runs/<skill>/. One recorder is active at a time
@@ -574,15 +605,27 @@ class SkillsBase(Node):
         self.tf_broadcaster.sendTransform(transform)
 
     def _broadcast_tool_frames(self):
-        """Send every tool frame of the robot's profile on /tf_static (none on the H1-2)."""
+        """
+        Send the grasp and pinch frames the URDF lacks on /tf_static (none on the H1-2).
+
+        golem_upper_ik's grasp frames that its profile defines on a parent link,
+        then the skills profile's tool frames.
+        """
+        # imported here: it reads golem_upper_ik's and golem_safety's installed
+        # data, for the one robot this node drives
+        from golem_upper_ik.profile import load_profile
+        frames = [(f.name, f.parent, np.asarray(f.offset))
+                  for f in load_profile(self.robot.name).grasp_frames if f.parent]
+        frames += [(name, tool.parent, tool.matrix())
+                   for name, tool in self.robot.tool_frames.items()]
         tfs = []
         stamp = self.get_clock().now().to_msg()
-        for name, tool in self.robot.tool_frames.items():
+        for name, parent, T in frames:
             t = TransformStamped()
             t.header.stamp = stamp
-            t.header.frame_id = tool.parent
+            t.header.frame_id = parent
             t.child_frame_id = name
-            p = matrix_to_pose(tool.matrix())
+            p = matrix_to_pose(T)
             t.transform.translation.x = p.position.x
             t.transform.translation.y = p.position.y
             t.transform.translation.z = p.position.z
@@ -1043,39 +1086,102 @@ class SkillsBase(Node):
 
     def move_frame_to(self, frame, pose,
                       outer_gh=None, duration_sec=3, do_plan=True,
-                      slow_mode=False, label='', stable_stop_msgs=None,
+                      label='', stable_stop_msgs=None,
                       lin_tol=0.01, ang_tol=0.05):
         """
-        Drive URDF `frame` to `pose` (pelvis frame) with one /frame_task goal; return reached.
+        Drive `frame` to `pose` (pelvis frame) with one /grasp_frame_target goal; return reached.
 
-        `frame` is the robot's grasp frame (robots.py) for grasping. Pass the skill's goal handle
-        as `outer_gh` so a skill cancel cancels the frame_task goal too.
+        `frame` is one of the robot's grasp or pinch frames (robots.py). The
+        goal targets its arm's pinch frame, the frame the controller drives,
+        at the pose that puts `frame` at `pose` (_pinch_offset). Pass the
+        skill's goal handle as `outer_gh` so a skill cancel cancels the arm
+        goal too.
 
-        `duration_sec` is a TIMEOUT. `slow_mode` runs the goal at the server's
-        SLOW_MODE_SCALE (1/4) arm speed for delicate moves near an object or
-        with a payload, and does not stretch the timeout: callers multiply it
-        by SLOW_MODE_TIME_SCALE.
+        `duration_sec` is the goal's timeout, s of robot time (planning and
+        the path included). `do_plan` asks golem_upper_ik for a planned path
+        (lmg_deploy ignores it).
 
         `label` names what the move is for (e.g. 'contact descent') and is in
-        every frame_task log line of the move.
+        every log line of the move.
 
         `stable_stop_msgs` (int, or None to disable): return early once the
-        server's feedback stays unchanged for this many messages
-        (_send_frame_move).
+        controller's feedback stays unchanged for this many messages
+        (_send_grasp_move).
 
-        `lin_tol` / `ang_tol` [m, rad]: the final pelvis-frame error within
-        which the move counts as reached; loosen them for a rough staging move.
+        `lin_tol` / `ang_tol` [m, rad]: the pinch frame's final error within
+        which a move the controller did not report reached counts as reached;
+        loosen them for a rough staging move.
         """
-        x, y, z = float(pose.position.x), float(pose.position.y), float(pose.position.z)
-        quat = (pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w)
-        target = Pose()
-        target.position = Point(x=x, y=y, z=z)
-        target.orientation = Quaternion(
-            x=float(quat[0]), y=float(quat[1]), z=float(quat[2]), w=float(quat[3]))
-        return self._send_frame_move(frame, target, duration_sec, outer_gh, do_plan,
-                                     slow_mode=slow_mode, label=label,
-                                     stable_stop_msgs=stable_stop_msgs,
+        arm = arm_of(self.robot, frame)
+        offset = self._pinch_offset(frame) if arm is not None else None
+        if offset is None:
+            self.get_logger().error(
+                f'arm move {frame} | {label}: no fixed transform from {frame!r} to its '
+                'arm\'s pinch frame; not sent')
+            return False
+        target = matrix_to_pose(pose_to_matrix(pose) @ offset)
+        tag = f'{frame} | {label}' if label else frame
+        if frame != self.robot.pinch_frames[arm]:
+            tag = f'{tag} via {self.robot.pinch_frames[arm]}'
+        return self._send_grasp_move({arm: target}, duration_sec, outer_gh, do_plan,
+                                     tag=tag, stable_stop_msgs=stable_stop_msgs,
                                      lin_tol=lin_tol, ang_tol=ang_tol)
+
+    def _pinch_offset(self, frame):
+        """
+        Return `frame`'s fixed 4x4 transform to its arm's pinch frame, or None.
+
+        A target T for `frame` is T @ offset for the pinch frame. Read from TF
+        once (both are rigid on the hand) and kept; None while TF lacks it.
+        """
+        offset = self._pinch_offsets.get(frame)
+        if offset is not None:
+            return offset
+        pinch = self.robot.pinch_frames[arm_of(self.robot, frame)]
+        if frame == pinch:
+            offset = np.eye(4)
+        else:
+            try:
+                tf = self.tf_buffer.lookup_transform(
+                    frame, pinch, Time(), timeout=RclpyDuration(seconds=1.0))
+            except TransformException as e:
+                self.get_logger().warn(f'TF {frame!r} -> {pinch!r} failed: {e}')
+                return None
+            offset = transform_to_matrix(tf.transform)
+        self._pinch_offsets[frame] = offset
+        return offset
+
+    def _on_grasp_pose(self, arm, msg):
+        """Keep `arm`'s latest measured pinch-frame pose and the robot time it arrived."""
+        self._grasp_poses[arm] = (msg.pose, self.robot_now())
+
+    def measured_frame_pose(self, frame, wait_sec=GRASP_POSE_WAIT_SEC):
+        """
+        Return `frame`'s measured Pose in the pelvis frame, or None.
+
+        A grasp or pinch frame of an arm comes from the arm controller's
+        /<arm>_grasp_frame_pose, a message published after this call (it waits
+        up to `wait_sec` s of robot time for one), composed with the frame's
+        fixed offset from the pinch frame. Any other frame comes from TF.
+        """
+        arm = arm_of(self.robot, frame)
+        if arm is None:
+            return self._transform_pose(Pose(orientation=Quaternion(w=1.0)), frame, 'pelvis')
+        offset = self._pinch_offset(frame)
+        if offset is None:
+            return None
+        since = self.robot_now()
+        deadline = since + wait_sec
+        while True:
+            got = self._grasp_poses.get(arm)
+            if got is not None and got[1] > since:
+                return matrix_to_pose(pose_to_matrix(got[0]) @ np.linalg.inv(offset))
+            if self.robot_now() >= deadline:
+                self.get_logger().warn(
+                    f'no /{arm}_grasp_frame_pose within {wait_sec:.1f} s: is the arm '
+                    'controller up?')
+                return None
+            self._sleep_robot(ROBOT_WAIT_POLL_SEC, threading.Event())
 
     def _on_safety_heartbeat(self, msg):
         """Record a /safety/heartbeat; a false beat latches the arm halt for the node's life."""
@@ -1087,13 +1193,13 @@ class SkillsBase(Node):
         """
         Return why arm motion must stop for the current skill goal, or None.
 
-        SAFETY: while this returns a reason, no frame_task or named_config goal
-        is sent and the one in flight is canceled, so a skill aborts rather
-        than try another target. Halted after a false /safety/heartbeat (for
-        the node's life: golem_safety's estop latches until restart), before
-        the first beat, while the last beat is older than `heartbeat_timeout`,
-        and for the rest of the goal after a move the server aborted or a halt
-        that canceled a move in flight.
+        SAFETY: while this returns a reason, no /grasp_frame_target goal is
+        sent and the one in flight is canceled, so a skill aborts rather than
+        try another target. Halted after a false /safety/heartbeat (for the
+        node's life: golem_safety's estop latches until restart), before the
+        first beat, while the last beat is older than `heartbeat_timeout`, and
+        for the rest of the goal after a move the controller aborted for a
+        fault (_note_arm_move_status) or a halt that canceled a move in flight.
         """
         if self._safety_latched:
             return 'golem_safety estop latched'
@@ -1108,13 +1214,14 @@ class SkillsBase(Node):
         """
         Latch an arm halt for the rest of the goal after a failed arm move `what`.
 
-        Latched when the server aborted the move, or when the move has no
+        Latched when the controller aborted the move for anything but not
+        reaching its target (outcome NOT_REACHED), or when the move has no
         result because a halt canceled it.
         """
-        if response is not None and response.status == GoalStatus.STATUS_ABORTED:
+        if (response is not None and response.status == GoalStatus.STATUS_ABORTED
+                and response.result.outcome != NOT_REACHED):
             self._arm_halt_reason = (
-                f'{what} was aborted by the server (estop, stale robot state, '
-                'or an execution error)')
+                f'{what} was aborted by the arm controller: {response.result.message}')
             self.get_logger().error(f'arm halted: {self._arm_halt_reason}')
         elif response is None:
             halt = self.arm_halt_reason()
@@ -1122,49 +1229,49 @@ class SkillsBase(Node):
                 self._arm_halt_reason = halt
                 self.get_logger().error(f'{what} canceled: {halt}')
 
-    def _send_frame_move(self, frame, pose, duration_sec, outer_gh, do_plan,
-                         slow_mode=False, label='', stable_stop_msgs=None,
-                         lin_tol=0.01, ang_tol=0.05):
+    def _send_grasp_move(self, targets, duration_sec, outer_gh, do_plan, tag,
+                         stable_stop_msgs=None, lin_tol=0.01, ang_tol=0.05):
         """
-        Send ONE /frame_task goal driving `frame` to `pose` (pelvis frame); return reached.
+        Send ONE /grasp_frame_target goal moving the pinch frames to `targets`; return reached.
 
-        Reached means the goal succeeded (or stopped early as stable) AND the
-        last streamed error is within (`lin_tol`, `ang_tol`).
-
-        A tool frame of the robot (robots.drive_pose) is driven through its
-        URDF parent at the pose that puts it at `pose`; the streamed errors
-        are then the parent's.
+        `targets`: arm -> Pose of its pinch frame in the pelvis frame; an arm
+        without one stays where it is. `duration_sec` is the goal's timeout
+        (s of robot time). Reached means the controller reported the goal
+        reached, or the move ended without reaching it (an early stop, its
+        timeout, a hold pinned at a joint limit) with the last streamed errors
+        (the largest over the targeted arms) within (`lin_tol`, `ang_tol`).
 
         `stable_stop_msgs`: if set, cancel the goal and return once the
-        streamed (lin, ang) feedback stays within FRAME_TASK_STABLE_EPS_* of
-        its running reference for that many messages: the arm has settled and
-        the server would only hold steady state until its timeout.
+        streamed (lin, ang) feedback stays within ARM_MOVE_STABLE_EPS_* of
+        its running reference for that many messages: the arm has settled
+        short of the controller's tolerance. A planned move stops so only
+        within (`lin_tol`, `ang_tol`): its feedback holds still between the
+        waypoints of a slow stretch of its path.
         """
-        tag = f'{frame} | {label}' if label else frame
         halt = self.arm_halt_reason()
         if halt is not None:
-            self.get_logger().error(f'frame_task[{tag}] not sent: {halt}')
+            self.get_logger().error(f'arm move [{tag}] not sent: {halt}')
             return False
-        drive_frame, T = drive_pose(self.robot, frame, pose_to_matrix(pose))
-        if drive_frame != frame:
-            tag = f'{tag} via {drive_frame}'
-            pose = matrix_to_pose(T)
-        goal = FrameTask.Goal()
-        goal.frame_names = [drive_frame]
-        goal.frame_targets = [pose]
-        goal.plan = do_plan
-        goal.slow_mode = bool(slow_mode)
-        x, y, z = pose.position.x, pose.position.y, pose.position.z
+        goal = GraspFrameTarget.Goal()
+        for arm, pose in targets.items():
+            target = PoseStamped()
+            target.header.frame_id = 'pelvis'
+            target.pose = pose
+            setattr(goal, arm, target)
+        goal.plan = bool(do_plan)
         # keeps the fractional seconds of the budget
         whole = int(duration_sec)
-        goal.duration = Duration(
+        goal.timeout = Duration(
             sec=whole, nanosec=int(round((float(duration_sec) - whole) * 1e9)))
 
+        where = ', '.join(
+            f'{arm} ({p.position.x:.3f}, {p.position.y:.3f}, {p.position.z:.3f})'
+            for arm, p in targets.items())
         self.get_logger().info(
-            f'frame_task: {tag} -> ({x:.3f}, {y:.3f}, {z:.3f}) in {duration_sec}s'
-            + (' [SLOW]' if slow_mode else '') + (' [planned]' if do_plan else ''))
+            f'arm move [{tag}]: {where} in {duration_sec}s'
+            + (' [planned]' if do_plan else ''))
 
-        # the latest streamed errors (max over the driven frames), for the
+        # the latest streamed errors (max over the targeted arms), for the
         # throttled convergence log and the final reached test
         last = {}
         stable_event = threading.Event() if stable_stop_msgs else None
@@ -1173,10 +1280,12 @@ class SkillsBase(Node):
         def _log_feedback(feedback_msg):
             """Log the streamed convergence and count unchanged feedbacks for the early stop."""
             fb = feedback_msg.feedback
-            last['lin'] = max(fb.errors_linear) if fb.errors_linear else 0.0
-            last['ang'] = max(fb.errors_angular) if fb.errors_angular else 0.0
+            errors = {'left': (fb.left_error_m, fb.left_error_rad),
+                      'right': (fb.right_error_m, fb.right_error_rad)}
+            last['lin'] = max(float(errors[arm][0]) for arm in targets)
+            last['ang'] = max(float(errors[arm][1]) for arm in targets)
             self.get_logger().info(
-                f'frame_task[{tag}] converging: '
+                f'arm move [{tag}] converging: '
                 f'lin={last["lin"] * 1000:.1f}mm ang={last["ang"]:.3f}rad',
                 throttle_duration_sec=0.5)
             if stable_event is not None and not stable_event.is_set():
@@ -1186,36 +1295,41 @@ class SkillsBase(Node):
                 # the count while a settled hold accrues it.
                 ref = stable['ref']
                 if (ref is not None
-                        and abs(last['lin'] - ref[0]) <= FRAME_TASK_STABLE_EPS_LIN
-                        and abs(last['ang'] - ref[1]) <= FRAME_TASK_STABLE_EPS_ANG):
+                        and abs(last['lin'] - ref[0]) <= ARM_MOVE_STABLE_EPS_LIN
+                        and abs(last['ang'] - ref[1]) <= ARM_MOVE_STABLE_EPS_ANG):
                     stable['n'] += 1
                 else:
                     stable['ref'], stable['n'] = (last['lin'], last['ang']), 1
-                if stable['n'] >= stable_stop_msgs:
+                within = last['lin'] < lin_tol and last['ang'] < ang_tol
+                if stable['n'] >= stable_stop_msgs and (within or not do_plan):
                     self.get_logger().info(
-                        f'frame_task[{tag}] feedback stable (within '
-                        f'{FRAME_TASK_STABLE_EPS_LIN * 1000:.1f}mm/'
-                        f'{FRAME_TASK_STABLE_EPS_ANG:.3f}rad) for {stable_stop_msgs} '
+                        f'arm move [{tag}] feedback stable (within '
+                        f'{ARM_MOVE_STABLE_EPS_LIN * 1000:.1f}mm/'
+                        f'{ARM_MOVE_STABLE_EPS_ANG:.3f}rad) for {stable_stop_msgs} '
                         f'msgs (lin={last["lin"] * 1000:.1f}mm '
                         f'ang={last["ang"]:.3f}rad) — stopping early')
                     stable_event.set()
 
         response = self._send_action(
-            self.frame_task_cli, goal, feedback_cb=_log_feedback,
+            self.grasp_target_cli, goal, feedback_cb=_log_feedback,
             result_timeout=float(duration_sec) + 10.0, outer_gh=outer_gh,
             stop_event=stable_event, halt_check=self.arm_halt_reason)
-        self._note_arm_move_status(response, f'frame_task {tag!r}')
+        self._note_arm_move_status(response, f'arm move {tag!r}')
         stable_stopped = stable_event is not None and stable_event.is_set()
-        ok = stable_stopped or (
-            response is not None and response.status == GoalStatus.STATUS_SUCCEEDED)
-        # The server's goal status is SUCCEEDED even when it times out short of
-        # the target, so the last streamed error decides. The tolerances are
-        # looser than the server's 1 mm / 2 mrad to absorb feedback jitter.
-        if ok and last:
-            ok = last['lin'] < lin_tol and last['ang'] < ang_tol
+        succeeded = (response is not None
+                     and response.status == GoalStatus.STATUS_SUCCEEDED
+                     and response.result.success)
+        not_reached = (response is not None
+                       and response.status == GoalStatus.STATUS_ABORTED
+                       and response.result.outcome == NOT_REACHED)
+        ok = succeeded or (
+            (stable_stopped or not_reached) and bool(last)
+            and last['lin'] < lin_tol and last['ang'] < ang_tol)
+        if response is not None and response.result.message:
+            self.get_logger().info(f'arm move [{tag}]: {response.result.message}')
         if last:
             self.get_logger().info(
-                f'frame_task[{tag}] done: lin={last["lin"] * 1000:.1f}mm '
+                f'arm move [{tag}] done: lin={last["lin"] * 1000:.1f}mm '
                 f'ang={last["ang"]:.3f}rad success={ok}')
         return ok
 
@@ -1253,48 +1367,39 @@ class SkillsBase(Node):
         ang = quat_geodesic((q.x, q.y, q.z, q.w), target_quat)
         return lin, ang
 
-    def goto_named_config(self, name, duration_sec=0.0, plan=False,
-                          slow_mode=False, result_timeout=60.0, outer_gh=None):
+    def goto_posture(self, name, posture, outer_gh=None, plan=True,
+                     timeout_sec=POSTURE_TIMEOUT_SEC):
         """
-        Drive the arms to frame_task_server's named configuration `name`; return reached.
+        Move both pinch frames to `posture` with one /grasp_frame_target goal; return reached.
 
-        `duration_sec` 0 is the server's default move timeout; `plan` asks
-        for a planned move instead of the direct IK descent; `slow_mode` runs
-        it at SLOW_MODE_SCALE speed, so pass a larger `duration_sec` and
-        `result_timeout`. Pass the skill goal handle as `outer_gh` so a skill
-        cancel cancels the arm move.
+        `posture`: arm -> pinch-frame pose (x, y, z, qx, qy, qz, qw) in the
+        pelvis frame (robots.RobotProfile.prep_posture, staging_postures);
+        `name` names it in the log. Planned by default, since the arms start
+        wherever the last move left them (lmg_deploy ignores `plan`). Reached
+        within POSTURE_LIN_TOL / POSTURE_ANG_TOL. Pass the skill goal handle as
+        `outer_gh` so a skill cancel cancels the arm move.
         """
-        halt = self.arm_halt_reason()
-        if halt is not None:
-            self.get_logger().error(f'named_config {name!r} not sent: {halt}')
-            return False
-        goal = NamedConfig.Goal()
-        goal.plan = bool(plan)
-        goal.config_name = name
-        goal.slow_mode = bool(slow_mode)
-        goal.duration.sec = int(duration_sec)
-        goal.duration.nanosec = int((duration_sec - int(duration_sec)) * 1e9)
-        response = self._send_action(self.named_config_cli, goal,
-                                     result_timeout=result_timeout,
-                                     outer_gh=outer_gh,
-                                     halt_check=self.arm_halt_reason)
-        self._note_arm_move_status(response, f'named_config {name!r}')
-        ok = (response is not None
-              and response.status == GoalStatus.STATUS_SUCCEEDED
-              and response.result.success)
-        self.get_logger().info(
-            f'named_config {name!r}: {"reached" if ok else "FAILED"}')
+        targets = {}
+        for arm, (x, y, z, qx, qy, qz, qw) in posture.items():
+            targets[arm] = Pose(
+                position=Point(x=float(x), y=float(y), z=float(z)),
+                orientation=Quaternion(x=float(qx), y=float(qy), z=float(qz), w=float(qw)))
+        ok = self._send_grasp_move(targets, timeout_sec, outer_gh, plan,
+                                   tag=f'posture {name!r}',
+                                   stable_stop_msgs=ARM_MOVE_STABLE_STOP_MSGS,
+                                   lin_tol=POSTURE_LIN_TOL, ang_tol=POSTURE_ANG_TOL)
+        self.get_logger().info(f'posture {name!r}: {"reached" if ok else "FAILED"}')
         return ok
 
     def servo_frame_to_world(self, frame, world_pose, fallback_pose, outer_gh=None,
                              duration_sec=10.0, *, max_iter, lin_tol, ang_tol,
-                             do_plan=True, slow_mode=False, label='',
+                             do_plan=True, label='',
                              stable_stop_msgs=None):
         """
         Drive `frame` to `world_pose` (WORLD_FRAME), compensating pelvis drift; return reached.
 
         Each iteration re-resolves the fixed world target into the LIVE pelvis
-        frame, commands frame_task there, then measures the frame's actual
+        frame, commands the arm controller there, then measures the frame's actual
         world pose, and stops once within (`lin_tol` m, `ang_tol` rad).
 
         Returns True on convergence, and also best-effort after `max_iter`
@@ -1306,11 +1411,11 @@ class SkillsBase(Node):
         or when the world TF drops mid-servo, it makes ONE direct pelvis-frame
         move to `fallback_pose` without drift compensation.
 
-        `do_plan`, `slow_mode`, `label` and `stable_stop_msgs` are forwarded
-        to every move. Pass do_plan=False for a short, committed straight-in
-        move (pre-grasp -> contact), where collision-aware planning would fight
-        the approach into the object. The caller scales `duration_sec` for
-        slow mode; the per-iteration drift-fix budget is scaled here.
+        `do_plan`, `label` and `stable_stop_msgs` are forwarded to every move.
+        Pass do_plan=False for a short, committed straight-in move (pre-grasp
+        -> contact), where collision-aware planning would fight the approach
+        into the object. `duration_sec` is the first move's timeout; each
+        drift fix after it gets 3 s.
         """
         tag = f'{frame} | {label}' if label else frame
         if world_pose is None:
@@ -1319,7 +1424,7 @@ class SkillsBase(Node):
                 '(pelvis-drift compensation OFF)')
             return self.move_frame_to(frame, fallback_pose, outer_gh=outer_gh,
                                       duration_sec=duration_sec, do_plan=do_plan,
-                                      slow_mode=slow_mode, label=label,
+                                      label=label,
                                       stable_stop_msgs=stable_stop_msgs)
         tp = np.array([world_pose.position.x, world_pose.position.y,
                        world_pose.position.z])
@@ -1336,16 +1441,14 @@ class SkillsBase(Node):
                     f'servo[{tag}]: lost {WORLD_FRAME} TF; pelvis fallback')
                 return self.move_frame_to(frame, fallback_pose, outer_gh=outer_gh,
                                           duration_sec=duration_sec, do_plan=do_plan,
-                                          slow_mode=slow_mode, label=label,
+                                          label=label,
                                           stable_stop_msgs=stable_stop_msgs)
-            # iteration 0 is the full approach (already scaled by the caller);
-            # later ones are short drift fixes, scaled here for slow mode
-            dur = duration_sec if i == 0 else (
-                3.0 * (SLOW_MODE_TIME_SCALE if slow_mode else 1.0))
+            # iteration 0 is the full approach; later ones are short drift fixes
+            dur = duration_sec if i == 0 else 3.0
             iter_label = (f'{label} (drift fix {i})' if label and i else label)
             ok = self.move_frame_to(frame, pelvis_pose, outer_gh=outer_gh,
                                     duration_sec=dur, do_plan=do_plan,
-                                    slow_mode=slow_mode, label=iter_label,
+                                    label=iter_label,
                                     stable_stop_msgs=stable_stop_msgs)
             lin, ang = self._world_frame_error(frame, tp, tq)
             # unmeasurable in the world frame: report the pelvis-frame result

@@ -11,9 +11,9 @@ IK trajectory from `arm_seed_table.npz` plus the learned residual; the /lowstate
 calibrated orientation, so it needs h12's entry in `config/imu_calibration.yaml`, and its legs actor is
 not shown the wrist targets); its `export.yaml`'s `source` names the checkpoint. A
 **legs** agent that walks on `/cmd_vel`, and an **arms** agent that reaches
-wrist-pose goals through a damped-least-squares IK step plus a learned
-residual. One node, `marl_deploy_node`, owns all 27 joints. It publishes
-through the split safety layer and obeys `/safety/heartbeat`.
+wrist-pose goals along an IK trajectory plus a learned residual, given as grasp-frame targets on
+`/grasp_frame_target` (Arm goals, below). One node, `marl_deploy_node`, owns all 27 joints. It publishes through the
+split safety layer and obeys `/safety/heartbeat`.
 
 Modelled on `golem_lowerbody_rl`'s `lowerbody_controller_node`. The node goes
 through the same steps (pre-pose ramp, operator confirm, elastic-band
@@ -26,26 +26,28 @@ the first latches it silent.
 
 | File | What it is |
 |---|---|
-| `lmg_deploy/controller.py` | ROS-free env step: SLAM odometry → mode → observations (each actor's terms as the export's `legs_obs_terms` / `arms_obs_terms` list them, in the controller's order, any left out; all of them without the lists: legs 95, arms 123, 97 and 125 with `gait_phase_cos`) → joint targets |
-| `lmg_deploy/kinematics.py` | Pinocchio wrist FK, Jacobian and IK step, in the pelvis frame; the arm joints' gravity torques and `arm_ik`'s seed solve |
+| `lmg_deploy/controller.py` | ROS-free env step: command → observations (each actor's terms as the export's `legs_obs_terms` / `arms_obs_terms` list them, in the controller's order, any left out) → joint targets; refuses an export format the shipped policy does not use (`_check_format`) |
+| `lmg_deploy/kinematics.py` | Pinocchio wrist FK and Jacobian, in the pelvis frame; the arm joints' gravity torques and `arm_ik`'s seed solve |
 | `lmg_deploy/rotations.py` | numpy versions of the isaaclab.utils.math functions training used |
 | `lmg_deploy/networks.py` | TorchScript loader for the exported actors |
-| `lmg_deploy/livox_imu.py` | `/livox/imu` into the policy's IMU frame: the gyro low-pass, the specific force, and a complementary-filter attitude (the fallback, or `livox_attitude:=filter`) |
-| `lmg_deploy/livox_attitude.py` | the policy's attitude from FAST-LIO's `/Odometry`, carried by the gyro, levelled at the pre-pose |
+| `lmg_deploy/gyro_lowpass.py` | `GyroLowpass`, the 2nd-order Butterworth training ran on the torso IMU's angular velocity |
 | `lmg_deploy/imu_calibration.py` | the torso IMU's orientation calibration: the correction (`correct_imu`), the export contract (`resolve_calibration`), the kinematic tilt and the estimate, the runtime check (README "IMU calibration") |
 | `lmg_deploy/calibrate_imu.py` | `ros2 run lmg_deploy calibrate_imu <bag>`: the calibration from a bag of the robot standing still on both feet |
 | `config/imu_calibration.yaml` | each robot's torso-IMU calibration (`h12`, `g1`), with how and when it was measured |
 | `lmg_deploy/marl_deploy_node.py` | the ROS node: safety channels, heartbeat, pre-pose, band, operator interface |
+| `lmg_deploy/grasp_server.py` | `/grasp_frame_target` and the `/{left,right}_grasp_frame_pose` topics: the action server on threads of its own, the goals run by the control tick |
+| `lmg_deploy/grasp_goal.py` | ROS-free: the wrist <-> grasp-frame transform from the URDF, the goals' errors and their settle judge |
 | `config/example.yaml`, `config/example.export.yaml` | every key of a deploy config and of `export.yaml`, with its meaning and units (nothing loads them; `test/test_example_configs.py` keeps their keys in step) |
 | `config/policy_template.yaml` | the deploy config a new policy starts from: joint order, defaults, gains, scales, bounds, command ranges (each from the training env), and the SLAM body frame |
 | `policies/<robot>/<robot>.yaml`, `{legs,arms}.pt`, `export.yaml` | the robot's one policy (`h12/`; `g1/` empty): its deploy config and what the export writes, below; the `.pt` files in Git LFS (`policies/.gitattributes`). One iteration at a time, old ones deleted (`policies/README.md`) |
 | `bags/<name>/` | rosbag2 recordings of Explicit500 on the real robot (`policy_bag_walk`: walking to nav2 goals; `reach`: an arm goal, ended by the hardware e-stop), the `.db3` files in Git LFS |
-| `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, IK, observation layout, SLAM odometry, modes, `arm_ik`) on `test/data/explicit500.yaml`, Explicit500's deploy config |
-| `test/sim_drive.py` | a scripted drive in the Robocasa sim (stand, walk, turn, side-step, arm goal), measured on FAST-LIO's `/Odometry` |
+| `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, observation layout, arm goals, `arm_ik`, the refused export formats) on the shipped policy's deploy config (`test/shipped_policy.py`: `policies/h12/h12.yaml` with its `export.yaml` over it, as the node loads them) |
+| `test/test_node_config.py` | the node refuses, at start, an export it would misread |
+| `test/test_grasp_goal.py`, `test/test_grasp_server.py` | the grasp-frame maths; `/grasp_frame_target` over ROS against a stand-in controller (success, timeout, cancel, world frames through TF, the queue, refusals, each with its outcome) and the pose topics |
+| `test/sim_drive.py` | a scripted drive in the Robocasa sim (stand, walk, turn, side-step, a `/grasp_frame_target` goal), measured on FAST-LIO's `/Odometry` |
 | `test/test_heartbeat_gate.py` | a real node with the shipped policy on a non-zero DDS domain: silent, in `waiting_heartbeat`, until the first beat, then it pre-poses from the pose at the beat |
-| `test/test_imu_calibration.py`, `test/test_imu_trim.py` | the calibration's math, the export contract in the controller, the estimator on synthetic kinematics; the `/livox/imu` trim |
-| `test/test_livox_imu.py`, `test/test_livox_attitude.py` | unit tests of the two `/livox/imu` attitude paths, the gyro low-pass and the URDF mount |
-| `custom_ros_messages/srv/Lmg*.srv` | the node's services: `LmgSetMode` (walk / arm), `LmgSetArmGoals` (left, right pose) |
+| `test/test_imu_calibration.py` | the calibration's math, the export contract in the controller, the estimator on synthetic kinematics |
+| `test/test_gyro_lowpass.py` | the gyro low-pass: a Butterworth at any sample rate, its step response, its restart after a dropout |
 
 ## Exporting a checkpoint
 
@@ -71,21 +73,16 @@ It writes:
   (`networks.RecurrentTorchScriptNetwork`).
 - `export.yaml`: the run's navigation rest pose, its `target_limits` (runs trained inside GOLEM's position e-stop
   range: joint -> [low, high], narrowing the target bounds), `gait_phase_cos` (the actors observe each leg's gait
-  phase cos after its sin), `imu` (the frame the run's IMU sat in, its offset, and `gyro_lowpass_hz` when the gyro
-  was low-passed) and the source files. The sport-mode runs' exports also carry their control rate (`control_dt`
-  0.01), gains, stance, per-joint action scales, `max_ik_step`, gait period, standing threshold, command ranges and
-  low-pass (`command_filter_tau`), their observation term lists, which the controller checks against its own (the
-legs' list may leave out `ee_targets`: LocoManip-LegsOnly-v0 runs from 2026-11-16, 83 inputs), and
-  `arm_goals` (false: the run never trained an arm goal, so `set_mode arm` and `~/arm_goal` are refused). The node
-  loads it over the policy's yaml and runs at 1 / `control_dt`. A new policy's yaml is the template with
-  `legs.num_obs` / `arms.num_obs` set to the networks' sizes (export_marl.py writes them from 2026-11-20).
-- `imu.source: lowstate` (runs from 2026-11-20, trained on the torso IMU as /lowstate reports it): the node reads
-  `LowState.imu_state` (quaternion, accelerometer; the gyroscope through `imu.gyro_lowpass_hz`), untrimmed, and needs
-  neither `/livox/imu` nor FAST-LIO's attitude (marl_deploy_node.py's IMU section). Those runs' actors drop
-  `base_lin_acc` (`imu.acc: dropped`). `imu.orientation` says how its quaternion was trained: `calibrated` (the
-  robot's static offset removed, only `imu.residual_deg` drawn): the deploy applies the robot's calibration and
-  refuses to start without one; `raw`, or absent (the exports with `imu.quat_bias_deg`, trained on the bias itself):
-  the quaternion as reported, the robot's calibration ignored. Anything else is refused ("IMU calibration" below).
+  phase cos after its sin), `imu`, its control rate (`control_dt` 0.01), gains, stance, per-joint action scales, gait
+  period, standing threshold, command ranges and low-pass (`command_filter_tau`), its observation term lists, which
+  the controller checks against its own, `arm_goals`, `arm_goal_frame`, `arm_goal_keeps_walking`, `arm_ik`,
+  `arm_seed_table` and the source files. The node loads it over the policy's yaml and runs at 1 / `control_dt`. A new
+  policy's yaml is the template with `legs.num_obs` / `arms.num_obs` set to the networks' sizes (export_marl.py
+  writes them from 2026-11-20). `config/example.export.yaml` documents every key.
+- `imu`: `source: lowstate` and `frame: imu_link` (trained on the torso IMU as /lowstate reports it): the node reads
+  `LowState.imu_state`'s quaternion and its gyroscope through `imu.gyro_lowpass_hz` (marl_deploy_node.py's IMU
+  section). `orientation: calibrated` (the robot's static offset removed, only `imu.residual_deg` drawn): the deploy
+  applies the robot's calibration and refuses to start without one ("IMU calibration" below).
 - `engage_blend_s` (runs from 2026-11-22, trained with it): over the first `engage_blend_s` after the engage the legs'
   targets go linearly from the pre-pose's last command to the policy's (the legs observe the blended targets, as in
   training), so a policy engaged from a sagged pose does not jump its targets. Only the engage blends: the sim's
@@ -98,26 +95,35 @@ legs' list may leave out `ee_targets`: LocoManip-LegsOnly-v0 runs from 2026-11-1
   torso velocities /lowstate reports, which those runs trained with. The robot does it itself, so the node reads
   nothing of it; it is there for the MuJoCo evals.
 - `arm_goal_frame: pelvis` and `arm_goal_keeps_walking: true` (LocoManip-Marl-Direct-v0 from 2026-11-19): an arm goal
-  rides on the pelvis (the SLAM odometry doesn't move it) and the velocity command stays live through it.
-- With an `arm_ik` block in `export.yaml` (runs whose arms trained with `mdp.IKPostureArmAction`:
-  LocoManip-ArmsOnly-v0, LocoManip-Marl-Direct-v0 from 2026-11-19), the arms run as that action term does, not by the
-  IK step above: with `trajectory`, the arm target moves from its own last value to a posture (each arm's joints
-  together, at `trajectory_max_vel` / `trajectory_max_acc`), the posture being the default angles or, with
-  `posture_from_command`, the joint angles of `arm_seed_table.npz`'s row nearest the arm goal (solved for the goal
-  itself with `seed_solve`; set once per goal); plus the arms' gravity torque at the target over kp
-  (`gravity_offset`; gravity in the pelvis frame from the IMU attitude), the pose-error integral (`integral`) and the
-  residual (integrated with `residual_integrate`, latched on the goal with `freeze`). `reset` (engage, band release)
-  starts the target at the measured arm angles. `config/example.export.yaml` documents every key;
-  `arm_seed_table` names a file in the export's folder (`policies/<robot>/`, copied with the networks). Locomanipulation_game's
-  `mujoco_evals/mujoco_sim.py` (`MarlMujoco.process_actions`) is the same arm path in numpy.
+  rides on the pelvis and the velocity command stays live through it.
+- `arm_ik` (the arms trained with `mdp.IKPostureArmAction`): the arm target moves from its own last value to a posture
+  (each arm's joints together, at `trajectory_max_vel` / `trajectory_max_acc`), the posture being the default angles
+  in navigation or the joint angles of `arm_seed_table.npz`'s row nearest the arm goal (`posture_from_command`;
+  solved for the goal itself with `seed_solve`; set once per goal); plus the arms' gravity torque at the target over
+  kp (`gravity_offset`; gravity in the pelvis frame from the IMU attitude), the pose-error integral (`integral`) and
+  the residual (integrated with `residual_integrate`, latched on the goal with `freeze`). `reset` (engage, band
+  release) starts the target at the measured arm angles. `arm_seed_table` names a file in the export's folder
+  (`policies/<robot>/`, copied with the networks). Locomanipulation_game's `mujoco_evals/mujoco_sim.py`
+  (`MarlMujoco.process_actions`) is the same arm path in numpy.
 
-The export also writes `estimator.pt` and an `odometry` block in `export.yaml`; the deploy doesn't use them (its
-odometry is the SLAM pipeline's, below), so leave them out of `policies/`.
+**Older export formats are refused at start**, with the key that makes them older, not run as if they were this
+one (`controller._check_format`, `imu_calibration.resolve_calibration`, the node's IMU check): an IMU other than the
+calibrated torso IMU (the `/livox/imu` attitude path, `imu.orientation` raw), no `arm_ik` (`mdp.IKResidualArmAction`'s
+IK step and residual low-pass) or another `arm_ik` variant (`posture_actions`, no `trajectory` or its speed limits, no
+`residual_integrate`, no `posture_from_command`), world-frame arm goals on SLAM odometry (`arm_goal_frame` other than
+`pelvis`), arm goals that stop walking, `arm_goals: false`, no term lists or terms no shipped actor observes
+(`base_lin_acc`, `arm_goal`), no `rest_pose`, and a settle at the mode switch (`settle_to_arm_s`, `settle_to_nav_s`).
+The keys older exports set that this format leaves inert (`slam_frame`, `max_ik_step`, `residual_cutoff_hz`,
+`ik_damping`, `arm_ik`'s `null_gain`, `ik_passes`, `posture_scale`, `posture_gain`) are not read.
+
+The export also writes `estimator.pt` and an `odometry` block in `export.yaml`; the deploy doesn't use them, so leave
+them out of `policies/`.
 
 Locomanipulation_game's `deploy_parity.py` checks the deploy controller against the training env, step by step, on
 the run's physics: observations term by term, the networks against skrl (LSTM actors stepped alongside), the joint
-targets and the rest pose. Against this package (SLAM odometry, no estimator) it skips the odometry comparison; with
-`imu.gyro_lowpass_hz` it feeds the controller this package's own `GyroLowpass` and compares it with training's:
+targets and the rest pose. Against this package (no estimator) it skips the odometry comparison; with
+`imu.gyro_lowpass_hz` it feeds the controller this package's own `GyroLowpass` (`lmg_deploy.gyro_lowpass`) and
+compares it with training's:
 
 ```bash
 python scripts/skrl/deploy_parity.py --headless --checkpoint <same> \
@@ -133,8 +139,8 @@ block `h12_locomanipulationgame.launch.py`):
 - `marl_deploy_node` with `policies/h12/`, behind `lmg_real`'s operator gates: `start_position_verified:=true`
   (default `false`) starts it, and it holds the pre-pose under the sim's elastic band until `~/confirm_engage`,
   then releases the band;
-- SLAM: `golem_slam/launch/navigation.launch.py` with `robot: h12` (FAST-LIO, the floor-level laser scan, slam_toolbox and nav2).
-  FAST-LIO's `/Odometry` is what keeps the arm goals fixed in the world.
+- SLAM: `golem_slam/launch/navigation.launch.py` with `robot: h12` (FAST-LIO, the floor-level laser scan, slam_toolbox and nav2),
+  which drives the policy on `/cmd_vel`.
 
 `frame_task_server` and the lower-body RL node stay off, so this node is the only publisher on each safety channel.
 
@@ -149,44 +155,53 @@ ros2 launch golem_bringup lmg_sim.launch.py start_position_verified:=true [use_s
 ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger   # terminal 3: engage, as on the robot
 ```
 
-**Launch arguments:** `start_position_verified` (default `false`, as in `lmg_real`), `use_slam` (default `true`;
-with `false` the arm goals ride with the pelvis and the node warns), `use_rviz`, `prepose_ramp_s`, `prepose_max_vel`,
-`imu_offset_{roll,pitch,yaw}_deg` (default 0; the `/livox/imu` trim, refused non-zero for a torso-IMU policy),
+**Launch arguments:** `start_position_verified` (default `false`, as in `lmg_real`), `use_slam` (default `true`:
+navigation on `/cmd_vel`), `use_rviz`, `prepose_ramp_s`, `prepose_max_vel`,
 `safety_config`, `use_skills` (default `false`; `true` starts `golem_skills`, whose `/skill/frontier_explore` explores
 the kitchen through Nav2: `tests/sim/test_lmg_explore.sh` runs it closed loop).
 
-**Driving it** (from `docker exec -it golem_ros bash`). The node starts in walking mode once engaged:
+**Driving it** (from `docker exec -it golem_ros bash`). The node walks on `/cmd_vel` once engaged, the arms at the
+rest pose until the first arm goal:
 
 ```bash
-ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.3}}"   # walk (clipped to vx ±0.7, vy ±0.3, wz ±0.5)
-ros2 service call /marl_deploy_node/set_arm_goals custom_ros_messages/srv/LmgSetArmGoals \
-  "{left: {position: {x: 0.30, y: 0.22, z: -0.15}, orientation: {w: 1.0}},
-    right: {position: {x: 0.30, y: -0.22, z: -0.15}, orientation: {w: 1.0}}}"  # pelvis frame; kept until arm mode
-ros2 service call /marl_deploy_node/set_mode custom_ros_messages/srv/LmgSetMode "{mode: arm}"    # stop and reach (crouch)
-ros2 service call /marl_deploy_node/set_mode custom_ros_messages/srv/LmgSetMode "{mode: walk}"   # back to /cmd_vel
+ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.3}}"   # walk (clipped to the export's command_ranges)
+ros2 topic echo /left_grasp_frame_pose --once   # the measured grasp frame, pelvis frame
+ros2 action send_goal /grasp_frame_target custom_ros_messages/action/GraspFrameTarget \
+  "{left: {header: {frame_id: pelvis}, pose: {position: {x: 0.51, y: 0.18, z: 0.16}, orientation: {w: 1.0}}},
+    timeout: {sec: 10}}" --feedback               # the right arm, without a frame_id, keeps its command
+ros2 topic echo /marl_deploy_node/state         # idle, waiting_heartbeat, preposing, waiting_confirm, nav, arm_goal, fault: ...
 ```
 
-`set_arm_goals` in arm mode moves the goals at once; while walking it keeps them for the next `set_mode arm`, and
-they are taken in the pelvis frame of that switch. Arm mode without goals holds the rest pose (standing still).
-`set_mode` is refused until the node is engaged. A PoseArray sets the goals and switches to arm mode in one message:
-
-```bash
-ros2 topic pub --once /marl_deploy_node/arm_goal geometry_msgs/msg/PoseArray \
-  "{poses: [{position: {x: 0.30, y: 0.25, z: 0.05}, orientation: {w: 1.0}},
-            {position: {x: 0.30, y: -0.25, z: 0.05}, orientation: {w: 1.0}}]}"  # left, right; pelvis frame
-ros2 service call /marl_deploy_node/end_arm_goal std_srvs/srv/Trigger
-ros2 topic echo /marl_deploy_node/state         # idle, waiting_heartbeat, preposing, waiting_imu, waiting_confirm, nav, settle_to_arm, arm_goal, settle_to_nav, fault: ...
-ros2 topic echo /marl_deploy_node/wrist_error   # m, left and right
-```
-
-**Arm goals.**
-- An arm goal stops the robot and reaches at once (`settle_to_arm_s` and `settle_to_nav_s` are 0 in the template).
-- The goal is a `left_wrist_yaw_link` and `right_wrist_yaw_link` pose in the pelvis frame, taken when it arrives.
-  The SLAM odometry keeps it fixed in the world from then on: each FAST-LIO pose (`/Odometry`, camera_init -> body,
-  ~10 Hz) is carried from FAST-LIO's body, the IMU it integrates (`slam_frame: livox_imu_link`), to the pelvis by forward kinematics, through the
-  torso joint, and the goal moves by the pelvis's motion since the previous one. Training used a learned estimator
-  instead; with no fresh `/Odometry` while reaching the node warns and the goal stays fixed to the pelvis.
-- `/cmd_vel` is ignored during an arm goal; the policy only ever saw a zero command there.
+**Arm goals** (`/grasp_frame_target`, `custom_ros_messages/action/GraspFrameTarget`; `grasp_server.py`). The interface
+`golem_upper_ik`'s `frame_task_server` serves too (the action's comments are the contract); only one of them runs.
+- Each target is an arm's grasp frame (`left_grasp_frame`, `right_grasp_frame`: the Magpie pinch points, 23 cm along
+  the wrist in the URDF). The node takes the fixed wrist -> grasp-frame transform from the URDF it loads and gives
+  the policy the `*_wrist_yaw_link` goal that puts the grasp frame on the target.
+- `header.frame_id` `pelvis`: relative to the robot now. Any other frame (`odom`, `map`) is resolved into the pelvis
+  frame through TF once, when the goal is accepted: the node listens to TF on a node of its own for up to 1 s and
+  takes the newest transform (one more than 0.5 s of robot time old is refused). The goal then rides on the pelvis
+  (`arm_goal_frame: pelvis`): when the robot walks or sways the target moves with it. An empty `frame_id` leaves
+  that arm's command and posture as they are; a goal without any target, or with a non-finite value, aborts.
+- Goals run one at a time, in the order they came; the legs keep walking on `/cmd_vel` throughout. A goal succeeds
+  once every targeted grasp frame has stayed within the tolerance for the settle time, and aborts at its `timeout`
+  (robot time from its start; 0: the default); a cancel or the timeout stops the targeted arms where they are (their
+  command, posture and trajectory set to the measured pose and angles). After any end the arms hold their last
+  command. Feedback (25 Hz) is each arm's grasp-frame error, m and rad, pelvis frame (0 without a target). `plan` is
+  ignored: the policy moves directly. The result's `outcome` is `REACHED` on success, `NOT_REACHED` at the timeout,
+  `CANCELED` on a cancel (of a running or a queued goal) and `FAILED` for every other abort (below).
+- Tolerance, settle time and default timeout: the deploy config's `grasp_frame_target` block (`config/example.yaml`),
+  else `GRASP_DEFAULTS` in `marl_deploy_node.py`: 15 mm, 0.1 rad, 0.5 s, 10 s. In the RoboCasa sim the shipped
+  policy held its grasp frames 3-7 mm (at most 6-12 mm) and 0.01-0.06 rad from reachable targets 5-15 cm away,
+  standing or walking at 0.2 m/s, within 0.7-1.8 s; unmeasured on the real H1-2. The arms move along the policy's
+  joint-space trajectory to a posture from the seed table, not a straight line: a target 18 cm away took the grasp
+  frame up to 44 cm from its start on the way.
+- A goal is refused (aborted, with why) until the node has engaged and, in the sim, released the elastic band; a
+  fault (the node latching silent), a `/lowstate` older than 1 s (`GRASP_STALE_ABORT_S`; a shorter gap only pauses
+  the policy) or the episode's restart aborts the goals in flight.
+- `/left_grasp_frame_pose`, `/right_grasp_frame_pose` (`geometry_msgs/PoseStamped`, `pelvis`): the grasp frames by
+  forward kinematics of the newest `/lowstate`, 25 Hz, from the first `/lowstate` on (within 1.2 mm and 0.004 rad of
+  TF's in the sim).
+- `settle_to_arm_s` and `settle_to_nav_s` must be 0: the policy switches to its arm goal at once.
 
 ## Real robot
 
@@ -207,34 +222,31 @@ ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger         
   after `nav` appears moves the robot. A publisher still streaming (e.g. `ros2 topic pub -r`) sets it again on its
   next message.
 - The node always waits for `~/confirm_engage`, here as in `lmg_sim`, and never calls the sim's elastic band; neither is an argument.
-- Drive with `/cmd_vel`, `~/set_mode` and `~/set_arm_goals` as above.
-- Same `safety_config` and `use_slam` arguments as the sim launch; keep `use_slam` on for arm goals.
+- Drive with `/cmd_vel` and `/grasp_frame_target` as above.
+- Same `safety_config` and `use_slam` arguments as the sim launch.
 
 **Before the first real run:**
-- **IMU.** The node reads only the MID360's `/livox/imu`, never `LowState.imu_state`, whose attitude carries a ~2.5 deg calibration error. `/livox/imu` is in the URDF's `livox_imu_link` (the IMU chip), the MID-360's raw frame, upside down on the H1-2's head (CL_Assets `d7ef401` on). The node carries the readings from there into the frame the policy trained with, `export.yaml`'s `imu.frame`, through the URDF (`livox_imu.livox_to_imu_rotation`, tested by `test_urdf_mount_takes_the_raw_livox_frame_to_each_policy_frame`):
-  - `livox_imu_link`: the chip upright, as the policies trained it (Locomanipulation_game's CL_Assets pin is older than `d7ef401`): the raw frame turned half a turn about x;
-  - `livox_link` (the point frame, 0.7 deg from the chip), upright the same way;
-  - `imu_link` on `torso_link` for Explicit500 and older (the default when the export has no `imu` block).
-
-  The attitude (so projected gravity) comes from FAST-LIO by default (`livox_attitude:=fastlio`): `/Odometry` is the IMU body's pose in `camera_init`, carried forward between poses by the gyro and levelled once from the accelerometer while the robot holds the pre-pose (`lmg_deploy/livox_attitude.py`; state `waiting_imu` until the head is still, so FAST-LIO must run, `use_slam:=true`). On the real walking bag it is 0.23 deg off FAST-LIO's poses (p95 0.62), where the complementary filter (`lmg_deploy/livox_imu.py`) is 1.9 deg off (p95 4.4): its pull toward the accelerometer follows the gait. With no `/Odometry` for `livox_odom_timeout` (1 s) the node falls back to the filter and warns; `livox_attitude:=filter` uses the filter throughout. Restart the node with FAST-LIO (it moves `camera_init`). The angular velocity passes the gyro low-pass the run trained with, `imu.gyro_lowpass_hz` in `export.yaml` (absent: none, as for Explicit500). `livox_imu.GyroLowpass` is a 2nd-order Butterworth, discretized exactly over each sample's dt, so training's physics rate and the MID360's 200 Hz realize the same filter. At 8 Hz it takes the head's ~20 Hz pitch resonance while walking from 0.5-0.9 to ~0.1 rad/s rms. `livox_joint` and `livox_imu_joint` carry the real robot's measured mount (point frame 8.77 deg, chip 9.45 deg pitch); `imu_offset_{roll,pitch,yaw}_deg` (default 0) trims what is left, live.
-  - Checked on the robot with the raw driver: `core_ws/bags/imu_check_2026-11-17` (still) and `imu_tilt_2026-11-18` (hoisted tilts and turns). The policy-frame gyro and projected gravity follow LowState's on every axis (2 Hz low-passed r > 0.99, gain 0.95-1.02), FAST-LIO's attitude is 0.5 deg from the filter's, and gyro and accelerometer fits of `/livox/imu` against the torso IMU land within about 1 deg of the URDF, inside the training's mount randomization (+-1.5 deg pitch, +-0.75 deg roll and yaw).
-  - Keep the trims at 0. Against LowState's attitude `/livox/imu` reads about 3.3 deg more pitch, but about 2.3 deg of that is LowState's quaternion disagreeing with its own accelerometer, in every bag. `golem_lowerbody_rl`'s `imu_trim_deg` corrects that torso IMU; it is a different sensor, and neither it nor a gap measured against LowState's attitude is a trim for `/livox/imu`.
+- **IMU.** The node reads the torso IMU as `/lowstate` reports it (`imu.source: lowstate`, `imu.frame: imu_link`;
+  an export with another source is refused at start): the quaternion, corrected by the robot's calibration for a
+  calibrated policy, and the gyroscope through the low-pass the run trained with, `imu.gyro_lowpass_hz` in
+  `export.yaml` (`gyro_lowpass.GyroLowpass`, a 2nd-order Butterworth discretized exactly over each sample's dt from
+  `LowState.tick`, so training's physics rate and `/lowstate`'s realize the same filter).
 - **IMU calibration** for torso-IMU policies (`imu.source: lowstate`): below.
 - **Safety-layer gaps.** The safety layer holds the last command on a silent channel. Its stale times only report a quiet input (`input_quiet`): in `relax_safety_split`, the lmg bringups' preset, `stale.lower_seconds` is 0.2 and `stale.upper_seconds` 0 (off), and neither stops the relay. If this node latches silent, the safety layer keeps sending its last targets until it is stopped.
 
 ## IMU calibration
 
 The H1-2's torso IMU (`/lowstate` `imu_state`) reads its quaternion about 2-3 deg nose up with the torso level.
-Policies trained before the calibration existed draw that bias in training (`export.yaml` `imu.quat_bias_deg`,
-pitch -3.6..-2.0 deg) and run on the quaternion as reported. Newer ones train on a level IMU with a small residual
-(`imu.orientation: calibrated`, `imu.residual_deg` +-1 deg), so the deploy must remove the robot's offset first.
+The policies train on a level IMU with a small residual (`imu.orientation: calibrated`, `imu.residual_deg` +-1 deg),
+so the deploy must remove the robot's offset first. Policies trained before the calibration existed drew that bias in
+training (`imu.quat_bias_deg`, `imu.orientation` raw or absent); this deploy refuses them.
 
 **Convention** (training's, Locomanipulation_game's `lowstate_imu.py`): the calibration is the attitude the quaternion
 reads with `imu_link` level, (roll, pitch, yaw) deg; reported = true * R_bias in the body frame, R_bias = Rz(yaw)
 Ry(pitch) Rx(roll) (Isaac's `quat_from_euler_xyz`), pitch positive nose down, roll positive tilting right. The
 correction is corrected = reported * R_bias^-1 (`imu_calibration.correct_imu(quat, gyro, calibration)`). Training
-biases the quaternion only, so the gyro is left as reported; `rotate_gyro: true` re-expresses it (and the specific
-force) in the level frame, for an offset that is a physical mounting tilt (gyro_level = R_bias gyro_imu).
+biases the quaternion only, so the gyro is left as reported; `rotate_gyro: true` re-expresses it in the level
+frame, for an offset that is a physical mounting tilt (gyro_level = R_bias gyro_imu).
 
 **Where it lives:** `config/imu_calibration.yaml`, one entry per robot named as its policy folder (`h12`, `g1`),
 and one for its simulators (`h12_sim`: all zero, the sim's torso IMU being MuJoCo's exact attitude; `lmg_sim` runs
@@ -250,12 +262,7 @@ imu_calibration={...})`, which applies it inside the controller, so the observat
 | `export.yaml` `imu.orientation` | robot calibration set | robot calibration `null` |
 |---|---|---|
 | `calibrated` (needs `imu.source: lowstate`) | applied, logged | **refused** at start (ValueError) |
-| `raw`, or absent (older exports) | ignored, with a warning | nothing applied |
-| anything else | refused | refused |
-
-`imu_offset_{roll,pitch,yaw}_deg`, the live `/livox/imu` trim, is a separate sensor's: the same convention (as a mount
-tilt) but only on the `/livox/imu` path. The node refuses it non-zero for a torso-IMU policy, so nothing is applied
-to the torso IMU twice.
+| `raw`, absent (older exports) or anything else | refused | refused |
 
 **Measuring it.** Lower the robot onto level floor in the pre-pose, both soles flat, the hoist slack, and record a few
 seconds still (`waiting_confirm` is enough): `ros2 bag record /lowstate`. Then, offline (inside the ROS image, or
@@ -288,4 +295,4 @@ cannot see); the kinematic value removes the tilt with the estimator's offset.
 
 **At run time,** once the policy is engaged on the torso IMU and has stood still on both loaded feet at zero command
 for 5 s, the node compares the IMU tilt the policy sees with the kinematic one (the estimator's function) and warns
-once if they differ by more than 1 deg (a raw policy logs it: its offset is expected).
+once if they differ by more than 1 deg.

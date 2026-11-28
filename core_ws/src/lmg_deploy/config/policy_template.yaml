@@ -58,21 +58,21 @@ torque_headroom: 0.85       # the run's 85% torque headroom
 
 legs:
   policy: legs.pt
-  num_obs: 97               # with gait_phase_cos
+  num_obs: 79               # the shipped term list's size; export_marl.py writes the network's
   num_actions: 12
   action_scale: 0.25
 
 arms:
   policy: arms.pt
-  num_obs: 125              # with gait_phase_cos
+  num_obs: 108              # the shipped term list's size; export_marl.py writes the network's
   num_actions: 14
   residual_scale: 0.2
-  residual_cutoff_hz: 3.0
+  residual_cutoff_hz: 3.0   # not read (older exports)
   ee_frames: [left_wrist_yaw_link, right_wrist_yaw_link]
-  ik_damping: 0.05
-  max_ik_step: 0.1
+  ik_damping: 0.05          # not read (older exports)
+  max_ik_step: 0.1          # not read (older exports)
 
-# FAST-LIO's body is the IMU chip it integrates /livox/imu in (golem_slam config/h12/fastlio.yaml).
+# Not read: FAST-LIO's body, which older exports' world-frame arm goals were carried by.
 slam_frame: livox_imu_link
 
 # manager_based mdp/rewards.py's gait clock
@@ -85,9 +85,17 @@ command_ranges:
   lin_vel_y: [-0.3, 0.3]
   ang_vel_z: [-0.5, 0.5]
 
-# No settle: the task switches between navigation and an arm goal at once (ArmTargetsCommand).
+# No settle: the task switches between navigation and an arm goal at once (ArmTargetsCommand); other values are refused.
 settle_to_arm_s: 0.0
 settle_to_nav_s: 0.0
+
+# /grasp_frame_target's success tolerance and times (example.yaml): marl_deploy_node's defaults, measured on
+# Coop300k_s42 in the RoboCasa sim; a policy that holds its grasp frames less tightly needs its own.
+grasp_frame_target:
+  tolerance_m: 0.015
+  tolerance_rad: 0.1
+  settle_s: 0.5
+  default_timeout_s: 10.0
 
 # export.yaml sets it from the run's arm_target_tables.pt (default_poses).
 rest_pose: null

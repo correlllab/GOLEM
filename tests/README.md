@@ -161,7 +161,7 @@ is refused.
 `tests/sim/test_sim_stack.sh` runs either robot's whole sim bringup with
 navigation and requires, in one run, the robot standing unsupported after the
 elastic band's release, a Nav2 goal 1.5 m ahead reached by walking,
-`/named_config` `t_pose` then `home` succeeding while it walks, SLAM healthy
+its arms reaching two `/grasp_frame_target` postures while it walks, SLAM healthy
 throughout (FAST-LIO's `/Odometry`, `level_odom`'s `odom -> base_footprint`, a
 growing `/map`, `/converted_scan` at rate) and `safety_node` the only
 publisher of `/lowcmd`. It uses domain 199 unless `ROS_DOMAIN_ID` is set and

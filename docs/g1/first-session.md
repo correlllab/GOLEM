@@ -49,7 +49,7 @@ below depend on it.
 | 5. Start the container | `docker/scripts/docker_run.sh ros`; it asks you to confirm domain 0. |
 | 6. Read-only checks | Gate: the container is on domain 0, or exit and fix `docker/.env` and the shell's exports. Then nothing else writes the command topics, `rt/lowstate` arrives, and every joint is inside the safety layer's estop limits. |
 | 7. First launch: the arms | `ros2 launch golem_bringup g1_real_robot.launch.py use_hands:=false use_rviz:=false`: the zero-gain stream, the heartbeat, the arms' start-up. The legs stay limp. |
-| 8. Named configs | Send only `arms_front_45` and `home` on `/named_config`, one at a time, `home` last. |
+| 8. Two postures | Send only the grasp-frame poses of `arms_front_45` and `home` on `/grasp_frame_target`, one at a time, `home` last. |
 | 9. Stop the bringup | Stop the controller alone (the arms go limp, the waist holds), then Ctrl+C the launch, with the gantry carrying the robot. |
 | 10. Second launch: the legs | Step 6's last checks again (no other writer, the joints inside the estop limits), then the same launch with `start_position_verified:=true`: the walking node's pre-pose and hold, then the confirm. Stop with step 9. While the legs hold, the leg node's `timing over the last ...` lines (step spacing and tick lag on the laptop's ROS path) are the measurement that sets `golem_lowerbody_rl`'s `config/g1/real.yaml` `faults.max_state_gap` and `faults.max_latency` before any walking. |
 | 11. End the session | Copy the safety layer's logs out, exit the container, set `docker/.env` back to the sim. |
@@ -312,9 +312,10 @@ the moves to `home` and the waist hold take more than 30 s after that.
 If the safety layer prints `estop_command_written` at any point, or the
 controller exits with an error, go to step 9.
 
-### 8. Named configs only (terminal 2)
+### 8. Two postures only (terminal 2)
 
-This session uses only `arms_front_45` and `home`. `arms_front_45` (straight
+This session uses only `arms_front_45` and `home`, each sent as its two grasp
+frames' poses on `/grasp_frame_target`. `arms_front_45` (straight
 arms, 45 degrees forward and down) loads the shoulders less than `t_pose`, and
 its closest sphere pair is 27.9 mm apart, clear of the 20 mm keep-out. Send one
 goal at a time, and wait for each to finish before sending the next. Send
@@ -324,16 +325,29 @@ the hips, inside the hip spheres of the controller's self-collision model, so
 a goal to it stops short.
 
 ```bash
-ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 'arms_front_45', plan: false, duration: {sec: 0, nanosec: 0}}"
-ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 'home', plan: false, duration: {sec: 0, nanosec: 0}}"
+# The grasp frames' poses (pelvis frame: m, quaternion x y z w) at arms_front_45, then at
+# home: forward kinematics of golem_upper_ik's config/g1/robot.yaml named_configs with the
+# waist at 0, on golem_upper_ik's model of the G1 (its RobotModel).
+ros2 action send_goal /grasp_frame_target custom_ros_messages/action/GraspFrameTarget \
+  "{left: {header: {frame_id: pelvis}, pose: {position: {x: 0.3407, y: 0.0721, z: -0.0623},
+     orientation: {x: 0.6986, y: 0.2252, z: -0.3308, w: 0.5931}}},
+    right: {header: {frame_id: pelvis}, pose: {position: {x: 0.3407, y: -0.0721, z: -0.0623},
+     orientation: {x: 0.6986, y: -0.2252, z: -0.3308, w: -0.5931}}},
+    plan: false, timeout: {sec: 30}}"
+ros2 action send_goal /grasp_frame_target custom_ros_messages/action/GraspFrameTarget \
+  "{left: {header: {frame_id: pelvis}, pose: {position: {x: 0.3213, y: 0.1116, z: 0.0952},
+     orientation: {x: 0.7071, y: 0.0, z: -0.0001, w: 0.7071}}},
+    right: {header: {frame_id: pelvis}, pose: {position: {x: 0.3213, y: -0.1116, z: 0.0952},
+     orientation: {x: 0.7071, y: 0.0, z: -0.0001, w: -0.7071}}},
+    plan: false, timeout: {sec: 30}}"
 ```
 
-A goal reports `success: true` once every arm joint is within 0.01 rad of the
-pose (`controller.threshold_joint`). A goal that ends with `success: false`
-did not get there before its timeout (`controller.timeout`, or the goal's
-`duration`): check where the arms stopped before sending the next one.
+A goal reports `success: true` (`outcome` 1, `REACHED`) once both grasp frames
+have stayed within `controller.threshold_linear` and `threshold_angular` of
+their targets for 0.2 s. `outcome` 2 (`NOT_REACHED`) means the arms did not
+get there before the goal's 30 s timeout: check where they stopped (the
+result's message gives each arm's error) before sending the next goal.
+`outcome` 0 (`FAILED`) is a fault: go to step 9.
 
 Send no other goals, and start no second controller: a second live writer on
 the safety layer's input latches its estop.

@@ -4,7 +4,7 @@ Check lowerbody_controller_node in one process, against fake publishers on a tes
 A helper node stands in for the rest of the robot: /lowstate from an upright H1-2 whose
 legs stand near the policy's pre-pose and whose tick counts ms of the wall clock (the
 node's clock here), golem_safety's /safety/heartbeat, the arm controller's
-/safety/lowcmd_upper_in, frame_task_server's /left_ee_pose and the sim's band toggle,
+/safety/lowcmd_upper_in, the arm controller's /left_grasp_frame_pose and the sim's band toggle,
 served under a name of the test's own (TOGGLE_REMAP). The node runs ALMI, its runner
 wrapped to record every step and reset, in a MultiThreadedExecutor as main() spins it.
 Under use_sim_time a SimClock publishes /clock at other speeds than the wall clock's.
@@ -145,7 +145,7 @@ class Robot:
         self.heartbeat = False
         self.state = True
         self.upper = True
-        self.ee_pose = True
+        self.arm_pose = True
         self.cmd = None
         self.lower = []  # (monotonic s, LowCmd) of /safety/lowcmd_lower_in
         self.toggle_calls = []
@@ -154,7 +154,7 @@ class Robot:
             LowState, '/lowstate', QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         self._beat = self.node.create_publisher(Bool, '/safety/heartbeat', 10)
         self._upper = self.node.create_publisher(LowCmd, '/safety/lowcmd_upper_in', 1)
-        self._ee = self.node.create_publisher(PoseStamped, '/left_ee_pose', 10)
+        self._arm_pose = self.node.create_publisher(PoseStamped, '/left_grasp_frame_pose', 10)
         self._cmd = self.node.create_publisher(Twist, '/cmd_vel', 10)
         self.node.create_subscription(LowCmd, '/safety/lowcmd_lower_in',
                                       lambda m: self.lower.append((time.monotonic(), m)), 10)
@@ -175,11 +175,11 @@ class Robot:
         self._state.publish(msg)
 
     def _publish_inputs(self):
-        """Publish the arm controller's command, /left_ee_pose and /cmd_vel as set."""
+        """Publish the arm controller's command, /left_grasp_frame_pose and /cmd_vel as set."""
         if self.upper:
             self._upper.publish(LowCmd())
-        if self.ee_pose:
-            self._ee.publish(PoseStamped())
+        if self.arm_pose:
+            self._arm_pose.publish(PoseStamped())
         if self.cmd is not None:
             twist = Twist()
             twist.linear.x, twist.linear.y, twist.angular.z = self.cmd

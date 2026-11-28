@@ -17,21 +17,17 @@ target_limits:
 gait_phase_cos: true
 
 imu:
-  source: lowstate          # the policy reads /lowstate imu_state (frame imu_link); absent: the Livox IMU (runs
-                            # before 2026-11-20)
-  frame: imu_link           # URDF frame the run's IMU sat in: livox_imu_link, livox_link or imu_link
-  offset: [0.0, 0.0, 0.0]   # the run's IMU offset setting; not read (marl_deploy_node's imu_offset_*_deg trim it)
+  source: lowstate          # the policy reads /lowstate imu_state (frame imu_link); marl_deploy_node refuses any other
+                            # (the Livox IMU of runs before 2026-11-20)
+  frame: imu_link           # URDF frame the run's IMU sat in: imu_link (marl_deploy_node refuses another)
+  offset: [0.0, 0.0, 0.0]   # the run's IMU offset setting; not read
   orientation: calibrated   # trained with the static offset removed: the deploy applies the robot's calibration
-                            # (config/imu_calibration.yaml) and refuses to start without one. raw (or absent): trained
-                            # on the quaternion as reported, its bias drawn around the robot's (quat_bias_deg below);
-                            # the deploy applies no calibration (ignores the robot's)
+                            # (config/imu_calibration.yaml) and refuses to start without one. raw (or absent: trained
+                            # on the quaternion as reported, runs before 2026-11-21) is refused
   residual_deg: {roll: [-1.0, 1.0], pitch: [-1.0, 1.0], yaw: [-1.0, 1.0]}
                             # the calibration error it trained to tolerate (calibrated only; logged)
   gyro_lowpass_hz: 8.0      # Hz, cutoff of the GyroLowpass on the angular velocity; absent: none
-  acc: dropped              # its actors don't observe the accelerometer
-# A raw-orientation run carries instead of orientation and residual_deg (a comment here: test_example_configs.py
-# compares this file's keys with the shipped export.yaml's):
-#   quat_bias_deg: {roll: [-0.6, 0.4], pitch: [-3.6, -2.0], yaw: [-1.0, 1.0]}
+  acc: dropped              # its actors don't observe the accelerometer (not read: no term observes it)
 
 # Runs from 2026-11-22 also carry the legs' engage blend they trained with (a comment here: the shipped policy predates
 # it, and test_example_configs.py compares this file's keys with the shipped export.yaml's):
@@ -54,12 +50,10 @@ kd: [6.5, 6.5, 6.5, 10.0, 1.5, 0.4, 6.5, 6.5, 6.5, 10.0, 1.5, 0.4, 6.0,
 default_joint_pos: [0.0, -0.375, 0.0, 0.697, -0.322, 0.0, 0.0, -0.375, 0.0, 0.697, -0.322, 0.0, 0.0,
                     0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # rad, sport mode's stance
 leg_action_scales: [0.2, 0.2, 0.2, 0.1875, 0.125, 0.25, 0.2, 0.2, 0.2, 0.1875, 0.125, 0.25]   # per leg joint
-arm_residual_scales: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # 0: IK alone
-max_ik_step: 0.05           # rad per policy step
-# recorded by exports from 2026-11-16. The controller reads the first two from the deploy config's arms block
-# (h12.yaml: the same values), so a run that trains with others needs them set there; clip_actions overrides it.
-residual_cutoff_hz: 3.0     # Hz, the arms' residual low-pass
-ik_damping: 0.05            # the IK's damping
+arm_residual_scales: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # per arm joint
+max_ik_step: 0.05           # not read: older exports' IK step
+residual_cutoff_hz: 3.0     # not read: older exports' residual low-pass (arm_ik integrates the residual)
+ik_damping: 0.05            # not read: older exports' IK damping (arm_ik.ik_damping is the integral's)
 clip_actions: 10.0          # the env clamps every raw action to +-this
 gait_period: 0.7            # s, sport mode's gait cycle
 zero_cmd_eps: 0.03          # a command norm under this is standing
@@ -68,34 +62,34 @@ command_ranges:             # the run's command ranges; /cmd_vel is clipped to t
   lin_vel_y: [-0.54, 0.54]
   ang_vel_z: [-0.97, 0.97]
 command_filter_tau: 0.5     # s, the velocity command's low-pass
-arm_goals: true             # the run trained arm goals; false (arm_goal_prob 0): the deploy refuses one
-arm_goal_frame: pelvis      # LocoManip-Marl-Direct-v0: the goal rides on the pelvis (world: odometry moves it)
-arm_goal_keeps_walking: true  # the legs keep following /cmd_vel during an arm goal (false: zero command)
-# the legs' list may leave out ee_targets (LocoManip-LegsOnly-v0 runs from 2026-11-16; legs.num_obs is then 83)
-legs_obs_terms: [base_lin_acc, base_ang_vel, projected_gravity, velocity_commands, arm_goal, ee_targets, joint_pos,
-                 joint_vel, gait_phase, gait_phase_cos, actions]
-arms_obs_terms: [base_lin_acc, base_ang_vel, projected_gravity, velocity_commands, arm_goal, ee_targets, joint_pos,
-                 joint_vel, gait_phase, gait_phase_cos, actions, wrist_poses, wrist_errors]
+arm_goals: true             # the run trained arm goals; false (arm_goal_prob 0) is refused at start
+arm_goal_frame: pelvis      # the goal rides on the pelvis; absent (world-frame goals on SLAM odometry) is refused
+arm_goal_keeps_walking: true  # the legs keep following /cmd_vel during an arm goal; absent or false is refused
+# each actor's terms in the controller's order (controller.py OBS_TERMS); absent is refused
+legs_obs_terms: [base_ang_vel, projected_gravity, velocity_commands, joint_pos, joint_vel, gait_phase, gait_phase_cos,
+                 actions]
+arms_obs_terms: [ee_targets, joint_pos, joint_vel, actions, wrist_poses, wrist_errors]
 
-# Runs whose arms trained with mdp.IKPostureArmAction (LocoManip-ArmsOnly-v0, LocoManip-Marl-Direct-v0 from 2026-11-19)
-# also carry its settings and, with posture_from_command, arm_seed_table; the controller then runs the arms as that
-# action term does (controller.py's module doc). Coop300k_s42's:
+# The arms' mdp.IKPostureArmAction (LocoManip-Marl-Direct-v0 from 2026-11-19): its settings and arm_seed_table; the
+# controller runs the arms as that action term does (controller.py's module doc). An export without it, or with
+# another variant than the one below (posture_actions true, trajectory or posture_from_command false, no
+# trajectory_max_vel, trajectory_max_acc or residual_integrate), is refused at start. Coop300k_s42's:
 arm_ik:
-  rot_weight: 0.3             # the rotation error's weight against position's (1 per m), the IK's and the integral's
-  null_gain: 0.05             # without trajectory: share of the posture error the null-space pull asks per step
-  posture_scale: 0.5          # rad of posture offset per action unit (posture_actions)
-  posture_gain: 1.0           # times posture_scale
-  limit_margin: 0.05          # rad: the posture (and the IK's joint locks) stay this far inside the target bounds
-  ik_damping: 0.05            # the weighted DLS damping (integral, and the IK without trajectory)
-  ik_passes: 3                # without trajectory: solves per step, locking the joints that would pass their bounds
-  posture_from_command: true  # the posture is the seed table's row nearest the arm command (else the default angles)
-  trajectory: true            # the target moves from its own last value to the posture (else one IK step from q)
+  rot_weight: 0.3             # the rotation error's weight against position's (1 per m), the integral's
+  null_gain: 0.05             # not read: older exports' IK step without trajectory
+  posture_scale: 0.5          # not read: older exports' posture offset (posture_actions)
+  posture_gain: 1.0           # not read: times posture_scale
+  limit_margin: 0.05          # rad: the posture stays this far inside the target bounds
+  ik_damping: 0.05            # the integral's weighted DLS damping
+  ik_passes: 3                # not read: older exports' IK step without trajectory
+  posture_from_command: true  # the posture is the seed table's row nearest the arm command; must be true
+  trajectory: true            # the target moves from its own last value to the posture; must be true
   seed_rot_weight: 0.3        # m per rad of rotation in the seed lookup's distance
-  posture_actions: false      # true: the arms' action is 28 wide, the residual then the posture offset
-  trajectory_max_vel: 2.0     # rad/s, each arm's fastest joint (null: max_ik_step per joint per step)
-  trajectory_max_acc: 10.0    # rad/s^2, its velocity change (null: no limit)
+  posture_actions: false      # must be false: the arms' action is 14 wide, the residual
+  trajectory_max_vel: 2.0     # rad/s, each arm's fastest joint; required
+  trajectory_max_acc: 10.0    # rad/s^2, its velocity change; required
   gravity_offset: true        # the target carries minus each arm joint's gravity torque at it over kp
-  residual_integrate:         # the residual integrated, not low-passed (absent: residual_cutoff_hz's low-pass)
+  residual_integrate:         # the residual integrated; required
     gain: 0.02                # action units added per step per action unit
     leak_s: 5.0               # s, its leak toward 0
     clamp: 1.0                # action units

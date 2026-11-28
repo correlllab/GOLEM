@@ -15,18 +15,19 @@ test_sim_bringup.sh runs them; see it for the usage.
 Both tests start as the G1 starts in debug mode: the limp robot hangs from the
 sim's elastic band while golem_safety streams zero-gain rt/lowcmd, the leg node
 (golem_lowerbody_rl's lowerbody_controller_node, running HOMIE) pre-poses the
-legs, starts its policy under the band once frame_task_server is up, and then
+legs, starts its policy under the band once the arm controller is up, and then
 releases the band. Both check that start-up: the band holds the robot upright,
 golem_safety latches no estop, the leg node's policy starts, the band comes off
-once because frame_task_server is up (the leg node's log gives /left_ee_pose as
+once because the arm controller is up (the leg node's log gives /left_grasp_frame_pose as
 the reason for every toggle call, not band.max_wait; the band is off after the
-first /left_ee_pose the test sees and within band.max_wait of the policy's
+first /left_grasp_frame_pose the test sees and within band.max_wait of the policy's
 start), and the robot stands for 5 s after it. The report also gives the pelvis and the feet
 around the release, for the record.
 
 The arm test (default), after the release: frame_task_server took the arms
-to 'home' at startup, a NamedConfig 't_pose' goal succeeds and the arms reach
-it, /left/hand/close closes the left hand, and stopping frame_task_server
+to 'home' at startup, a /grasp_frame_target goal to the grasp frames' poses at
+the named config POSTURE (at the waist's measured angles) succeeds and the
+measured grasp frames reach them, /left/hand/close closes the left hand, and stopping frame_task_server
 leaves the waist roll and pitch at their hold (its shutdown command keeps them
 stiff on rt/lowcmd) while the leg node keeps the robot standing. The walk
 test (--walk) stands 5 s after the release, walks on /cmd_vel 0.3 m/s forward
@@ -69,10 +70,22 @@ WALK_SECONDS = 5.0         # sim s of /cmd_vel
 SENSOR_SECONDS = 10.0      # sim s of listening to the sensors
 # pass limits
 ARM_TOL = 0.1              # rad: measured arm joints vs the named config
+# the posture the arm test sends as grasp-frame targets, direct: straight arms 45 deg forward
+# and down, from forward kinematics at the waist's measured angles. The straight arms reach
+# no further: targets at the waist's 0 lie about 1 mm out of reach of a waist that holds a
+# little pitched (-0.012 rad seen), where the IK never converges and the goal times out
+POSTURE = "arms_front_45"
+WAIST_JOINTS = ("waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint")
+POSTURE_TIMEOUT_S = 30     # s of robot time, the goal's timeout (planning included)
+POSE_TOL_M = 0.01          # m: measured grasp frame vs its target
+POSE_TOL_RAD = 0.05        # rad: the same, the angle between them
+# the GraspFrameTarget result's outcome of a goal that did not reach its target without a
+# fault (a timeout, a hold pinned at a joint limit), for tests/sim's arm moves
+NOT_REACHED = "NOT_REACHED"
 HAND_TOL = 0.05            # rad: measured fingers vs the close pose
 MIN_PELVIS_Z = 0.70        # m: HOMIE stands at 0.744
 # pelvis z-axis from vertical: the limp robot hangs from the band within 4 deg,
-# HOMIE stands at ~2 deg and leans ~6.5 deg with the arms in t_pose; well short of
+# HOMIE stands at ~2 deg and leans ~6.5 deg with the arms out to the sides; well short of
 # the leg node's 25 deg upright gate
 MAX_TILT_DEG = 15.0
 HOME_CMD_TOL = 0.01        # rad: the commanded arm targets vs home
@@ -123,14 +136,56 @@ POLICY_STARTED = "policy started at zero velocity"
 # the bringup's refusals: golem_upper_ik's pairing check and golem_lowerbody_rl's
 LAUNCH_REFUSALS = ("upper_ik: not starting", "lowerbody: not starting")
 BAND_CALL = "releasing the elastic band: "
-# BandRelease's reason once /left_ee_pose has come; band.max_wait's names the maximum wait
-BAND_CALL_BY_POSE = BAND_CALL + "the policy runs and frame_task_server is up (/left_ee_pose)"
+# BandRelease's reason once /left_grasp_frame_pose has come; band.max_wait's names the maximum wait
+BAND_CALL_BY_POSE = BAND_CALL + "the policy runs and the arm controller is up (/left_grasp_frame_pose)"
 BAND_TOGGLED = "elastic band released"
 # a ROS log line in launch.log: level, wall time, logger, text
 LOG_LINE = re.compile(r"\[(DEBUG|INFO|WARN|ERROR|FATAL)\] \[(\d+(?:\.\d+)?)\] \[([^\]]+)\]: (.*)")
 # the colour codes a node launched with emulate_tty wraps its log lines in
 ANSI_COLOUR = re.compile(r"\x1b\[[0-9;]*m")
 
+
+
+def posture_targets(robot, name, held=None):
+    """Return {arm: [x, y, z, qx, qy, qz, qw]}: the grasp frames at golem_upper_ik's named config.
+
+    Forward kinematics of `name` (config/<robot>/robot.yaml) on golem_upper_ik's model of
+    `robot`, the held torso or waist joints at `held` ({joint: rad}) or 0; pelvis frame. Run
+    where golem_upper_ik is installed (the ros container).
+    """
+    import numpy as np
+    from pyquaternion import Quaternion
+    from golem_upper_ik.core.robot_model import RobotModel
+    from golem_upper_ik.profile import load_profile
+    profile = load_profile(robot)
+    model = RobotModel(profile)
+    joints = list(profile.body_joints)
+    q = np.zeros(len(joints))
+    for joint, value in zip(profile.enabled_joints, profile.named_configs[name]):
+        q[joints.index(joint)] = value
+    for joint, value in (held or {}).items():
+        q[joints.index(joint)] = value
+    targets = {}
+    for arm, frame in zip(("left", "right"), profile.grasp_frames):
+        T = np.asarray(model.get_frame_transformation_body(frame.name, q))
+        quat = Quaternion(matrix=T[:3, :3])
+        targets[arm] = [float(v) for v in T[:3, 3]] + [float(quat.x), float(quat.y),
+                                                      float(quat.z), float(quat.w)]
+    return targets
+
+
+def outcome_name(value):
+    """Return the name of a GraspFrameTarget result's outcome value (REACHED, NOT_REACHED, ...)."""
+    from custom_ros_messages.action import GraspFrameTarget
+    names = ("FAILED", "REACHED", "NOT_REACHED", "CANCELED")
+    return {getattr(GraspFrameTarget.Result, name): name for name in names}.get(value, f"unknown {value}")
+
+
+def pose_error(target, measured):
+    """Return (m, rad) between two [x, y, z, qx, qy, qz, qw] poses."""
+    dot = abs(sum(a * b for a, b in zip(target[3:], measured[3:])))
+    norm = math.sqrt(sum(a * a for a in target[3:]) * sum(b * b for b in measured[3:]))
+    return math.dist(target[:3], measured[:3]), 2.0 * math.acos(min(1.0, dot / norm))
 
 def file_has(path, text):
     """Return whether the file at `path` contains `text`; False if it cannot be read."""
@@ -426,7 +481,7 @@ class Driver:
     """Run the arm or walk test's steps against the running bringup, marking each in events.json."""
 
     def __init__(self, out):
-        """Start the test's node, following /clock and the first /left_ee_pose."""
+        """Start the test's node, following /clock and the first /left_grasp_frame_pose."""
         import rclpy
         from rclpy.node import Node
         from rclpy.qos import QoSProfile, ReliabilityPolicy
@@ -442,27 +497,47 @@ class Driver:
         self.clocks = 0  # /clock messages heard
         self.node.create_subscription(Clock, "/clock", self._on_clock,
                                       QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT), raw=True)
-        # frame_task_server publishes /left_ee_pose (100 Hz) once its start-up moves are
+        # frame_task_server publishes /left_grasp_frame_pose (25 Hz) once its start-up moves are
         # done; the first one's stamp (sim time) is when the test saw the controller ready.
         # The drive spins in every wait, and the deep history keeps that first one
         # through a slow spin
         from geometry_msgs.msg import PoseStamped
-        self.ee_pose_first = None
-        self.node.create_subscription(PoseStamped, "/left_ee_pose", self._on_ee_pose, QoSProfile(
+        self.grasp_pose_first = None
+        self.node.create_subscription(PoseStamped, "/left_grasp_frame_pose", self._on_grasp_pose, QoSProfile(
             depth=1000, reliability=ReliabilityPolicy.RELIABLE))
+        # arm -> the latest measured grasp-frame pose, [x, y, z, qx, qy, qz, qw] (pelvis frame)
+        self.grasp_poses = {}
+        for arm in ("left", "right"):
+            self.node.create_subscription(PoseStamped, f"/{arm}_grasp_frame_pose",
+                                          lambda msg, arm=arm: self._keep_grasp_pose(arm, msg), 10)
+        # joint name -> the latest measured position on /joint_states (rad)
+        from sensor_msgs.msg import JointState
+        self.joints = {}
+        self.node.create_subscription(
+            JointState, "/joint_states",
+            lambda msg: self.joints.update(zip(msg.name, msg.position)), 10)
         self.launch_log = os.path.join(out, "launch.log")
         self.sim_log = os.path.join(out, "sim.log")
+
+    def held_joints(self):
+        """Return {joint: rad}: the G1's waist joints as /joint_states last measured them."""
+        return {joint: self.joints[joint] for joint in WAIST_JOINTS if joint in self.joints}
 
     def _on_clock(self, raw):
         """Keep the sim time from a serialised /clock."""
         self.clock = _cdr_stamp(raw)
         self.clocks += 1
 
-    def _on_ee_pose(self, msg):
-        """Mark the first /left_ee_pose, with its stamp (sim time)."""
-        if self.ee_pose_first is None:
-            self.ee_pose_first = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-            self.mark("left_ee_pose_first", stamp=self.ee_pose_first)
+    def _keep_grasp_pose(self, arm, msg):
+        """Keep `arm`'s latest measured grasp-frame pose."""
+        p, o = msg.pose.position, msg.pose.orientation
+        self.grasp_poses[arm] = [p.x, p.y, p.z, o.x, o.y, o.z, o.w]
+
+    def _on_grasp_pose(self, msg):
+        """Mark the first /left_grasp_frame_pose, with its stamp (sim time)."""
+        if self.grasp_pose_first is None:
+            self.grasp_pose_first = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            self.mark("left_grasp_frame_pose_first", stamp=self.grasp_pose_first)
 
     def mark(self, name, **extra):
         """Record a named event with its wall and sim times, and rewrite events.json."""
@@ -512,11 +587,11 @@ class Driver:
         return True
 
     def wait_for_controller(self, timeout=240.0):
-        """Wait for /named_config, which frame_task_server serves after its start-up move to 'home'."""
+        """Wait for /grasp_frame_target, which frame_task_server serves after its start-up move to 'home'."""
         from rclpy.action import ActionClient
-        from custom_ros_messages.action import NamedConfig
-        self.named_config = ActionClient(self.node, NamedConfig, "named_config")
-        if not self.spin_until(self.named_config.server_is_ready, timeout, every=0.1):
+        from custom_ros_messages.action import GraspFrameTarget
+        self.grasp_target = ActionClient(self.node, GraspFrameTarget, "/grasp_frame_target")
+        if not self.spin_until(self.grasp_target.server_is_ready, timeout, every=0.1):
             self.mark("controller_timeout")
             return False
         self.mark("controller_up")
@@ -548,20 +623,36 @@ class Driver:
                 break
         return True
 
-    def named_config_goal(self, name, timeout=60.0):
-        """Send a /named_config goal and wait for its result; return its success."""
-        from custom_ros_messages.action import NamedConfig
-        goal = NamedConfig.Goal()
-        goal.config_name, goal.plan = name, False
-        self.mark(f"{name}_sent")
-        handle = self.wait_future(self.named_config.send_goal_async(goal), 10.0)
+    def grasp_goal(self, name, targets, timeout=POSTURE_TIMEOUT_S):
+        """Send `targets` on /grasp_frame_target, direct, and wait for its result.
+
+        `targets`: {arm: [x, y, z, qx, qy, qz, qw]} in the pelvis frame. Marks the result,
+        then, 0.5 s (sim) later, the measured grasp-frame poses; returns the goal's success.
+        """
+        from custom_ros_messages.action import GraspFrameTarget
+        from geometry_msgs.msg import PoseStamped
+        goal = GraspFrameTarget.Goal()
+        for arm, v in targets.items():
+            target = PoseStamped()
+            target.header.frame_id = "pelvis"
+            target.pose.position.x, target.pose.position.y, target.pose.position.z = v[:3]
+            o = target.pose.orientation
+            o.x, o.y, o.z, o.w = v[3:]
+            setattr(goal, arm, target)
+        goal.plan = False
+        goal.timeout.sec = int(timeout)
+        self.mark(f"{name}_sent", targets=targets)
+        handle = self.wait_future(self.grasp_target.send_goal_async(goal), 10.0)
         if handle is None or not handle.accepted:
             self.mark(f"{name}_result", accepted=False, success=False)
             return False
-        result = self.wait_future(handle.get_result_async(), timeout)
+        result = self.wait_future(handle.get_result_async(), timeout + 30.0)
         success = bool(result is not None and result.result.success)
         self.mark(f"{name}_result", accepted=True, status=None if result is None else result.status,
-                  success=success)
+                  success=success, message=None if result is None else result.result.message,
+                  outcome=None if result is None else outcome_name(result.result.outcome))
+        self.spin_for(0.5)
+        self.mark(f"{name}_measured", poses=dict(self.grasp_poses))
         return success
 
     def trigger(self, service, timeout=30.0):
@@ -729,7 +820,7 @@ def run_drive(out, walk):
     d = Driver(out)
     d.info = {"mode": "walk" if walk else "arm", "arm_joints": list(profile.enabled_joints),
               "home": profile.named_configs["home"].tolist(),
-              "t_pose": profile.named_configs["t_pose"].tolist(),
+              "posture": POSTURE,
               "left_hand_joints": JOINT_NAMES["left"],
               "left_close": named_pose("left", "close").tolist(),
               "walk_speed": WALK_SPEED, "walk_seconds": WALK_SECONDS}
@@ -747,7 +838,9 @@ def run_drive(out, walk):
             if not d.wait_for_controller() or not d.wait_band_released():
                 return 1
             d.check_sensors()  # standing on HOMIE from the release, the arms at home
-            d.named_config_goal("t_pose")
+            held = d.held_joints()
+            d.mark("posture_waist", joints=held)
+            d.grasp_goal(POSTURE, posture_targets("g1", POSTURE, held))
             d.spin_for(1.0)
             d.trigger("/left/hand/close")
             d.spin_for(2.5)  # the hand check averages the last 0.5 s of it
@@ -982,25 +1075,25 @@ class Report:
         return wall
 
     def band_released(self, release, policy_wall):
-        """Check the band comes off once and stays off, because frame_task_server is up.
+        """Check the band comes off once and stays off, because the arm controller is up.
 
-        Every toggle call the leg node logged gives /left_ee_pose as its reason (not
-        band.max_wait), the band is off after the first /left_ee_pose the test saw (its stamp,
+        Every toggle call the leg node logged gives /left_grasp_frame_pose as its reason (not
+        band.max_wait), the band is off after the first /left_grasp_frame_pose the test saw (its stamp,
         sim time), and within band.max_wait of the policy's start (wall time).
         """
         changes = self.s["band_changes"]
         states = changes[:, 2].tolist()
-        pose = self.events.get("left_ee_pose_first")
+        pose = self.events.get("left_grasp_frame_pose_first")
         max_wait = self.info.get("band_max_wait")
         reasons = [text for _, _, text in logged(os.path.join(self.out, "launch.log"), LEG_NODE)
                    if text.startswith(BAND_CALL) or text.startswith(BAND_TOGGLED)]
         calls = [text for text in reasons if text.startswith(BAND_CALL)]
         by_pose = bool(calls) and all(text == BAND_CALL_BY_POSE for text in calls)
-        self.numbers["band_release"] = {"changes_t_wall_on": changes.tolist(), "left_ee_pose_first": pose,
-                                        "max_wait": max_wait, "walking_node": reasons, "by_left_ee_pose": by_pose}
+        self.numbers["band_release"] = {"changes_t_wall_on": changes.tolist(), "left_grasp_frame_pose_first": pose,
+                                        "max_wait": max_wait, "walking_node": reasons, "by_left_grasp_frame_pose": by_pose}
         if release is None:
             self.check("band released after the controller is ready", False,
-                       "the band was never released" + ("" if pose else ", and the test saw no /left_ee_pose"))
+                       "the band was never released" + ("" if pose else ", and the test saw no /left_grasp_frame_pose"))
             return
         _, t_off, wall_off = release
         once = states == [1.0, 0.0]
@@ -1008,17 +1101,17 @@ class Report:
         since = wall_off - policy_wall if policy_wall is not None else math.nan
         in_time = max_wait is not None and 0.0 <= since <= max_wait + BAND_POLL_SLACK_S
         self.numbers["band_release"].update(sim_t=t_off, wall=wall_off, after_policy_wall_s=since,
-                                            after_left_ee_pose_sim_s=None if pose is None else t_off - pose["stamp"])
+                                            after_left_grasp_frame_pose_sim_s=None if pose is None else t_off - pose["stamp"])
         text = (f"off at sim t {t_off:.3f} s; " + ("on from the first step, then off once" if once else
                                                    f"its states over the run {states} (1 on, 0 off)")
-                + "; " + (f"{t_off - pose['stamp']:.3f} s (sim) after the first /left_ee_pose's stamp "
-                          f"{pose['stamp']:.3f} s" if pose else "the test saw no /left_ee_pose")
+                + "; " + (f"{t_off - pose['stamp']:.3f} s (sim) after the first /left_grasp_frame_pose's stamp "
+                          f"{pose['stamp']:.3f} s" if pose else "the test saw no /left_grasp_frame_pose")
                 + f"; {since:.2f} s (wall) after the policy's start (band.max_wait {max_wait} s, "
                 f"+{BAND_POLL_SLACK_S} s for the node's poll)")
         if not calls:
             text += f"; {LEG_NODE} logged no call of /elastic_band/toggle"
         elif not by_pose:
-            text += f"; {LEG_NODE} released it for another reason than /left_ee_pose"
+            text += f"; {LEG_NODE} released it for another reason than /left_grasp_frame_pose"
         if reasons:
             text += f"; {LEG_NODE}: {' / '.join(reasons)}"
         self.check("band released after the controller is ready", once and after_pose and in_time and by_pose,
@@ -1057,28 +1150,33 @@ class Report:
               f"{a['feet_moved_end_m'][1] * 100:.1f} cm at the end)")
 
     def arm_test(self):
-        """Check the arm test: start-up, home, t_pose, the left hand's close, the waist after the controller stops, the sensors."""
+        """Check the arm test: start-up, home, POSTURE, the left hand's close, the waist after the controller stops, the sensors."""
         s = self.s
         samples = len(s["t"])
         r = self.startup()
         # frame_task_server took the arms to home at start-up, and commands it.
-        rows = self.window("controller_up", "t_pose_sent", start_offset=1.0)
+        rows = self.window("controller_up", f"{POSTURE}_sent", start_offset=1.0)
         err, worst, cmd_err, waist = self.arm_error("home", "home", rows)
         span = s["t"][rows[-1]] - s["t"][rows[0]]
         self.check("home at startup", err.max() <= ARM_TOL and cmd_err <= HOME_CMD_TOL,
-                   f"arms (14) vs home over the {span:.1f} s (sim) before the t_pose goal: max "
+                   f"arms (14) vs home over the {span:.1f} s (sim) before the {POSTURE} goal: max "
                    f"{err.max():.3f} rad ({worst}), mean {err.mean():.3f}; commanded max {cmd_err:.4f} "
                    f"(limit {HOME_CMD_TOL}); waist yaw/roll/pitch "
                    f"{waist[0]:+.3f} {waist[1]:+.3f} {waist[2]:+.3f}")
-        # NamedConfig t_pose succeeds and the arms reach it.
-        result = self.events.get("t_pose_result", {})
-        rows = self.window("t_pose_result", "/left/hand/close_sent", start_offset=0.5)
-        err, worst, cmd_err, waist = self.arm_error("t_pose", "t_pose", rows)
-        took = result["wall"] - self.events["t_pose_sent"]["wall"]
-        self.check("t_pose", bool(result.get("success")) and err.max() <= ARM_TOL,
-                   f"goal success {result.get('success')} after {took:.1f} s wall; arms vs t_pose: max "
-                   f"{err.max():.3f} rad ({worst}), mean {err.mean():.3f}; commanded max {cmd_err:.4f}; "
-                   f"waist {waist[0]:+.3f} {waist[1]:+.3f} {waist[2]:+.3f}")
+        # The POSTURE goal succeeds and the measured grasp frames reach it.
+        result = self.events.get(f"{POSTURE}_result", {})
+        targets = self.events.get(f"{POSTURE}_sent", {}).get("targets", {})
+        measured = self.events.get(f"{POSTURE}_measured", {}).get("poses", {})
+        errs = {arm: pose_error(targets[arm], measured[arm]) for arm in targets if arm in measured}
+        ended = bool(result.get("success"))
+        within = len(errs) == 2 and all(m <= POSE_TOL_M and a <= POSE_TOL_RAD for m, a in errs.values())
+        took = result["wall"] - self.events[f"{POSTURE}_sent"]["wall"] if result else math.nan
+        self.numbers[POSTURE] = {"result": result.get("message"), "errors": errs}
+        self.check(POSTURE, ended and within,
+                   f"goal success {result.get('success')} after {took:.1f} s wall "
+                   f"({result.get('message')}); measured grasp frames 0.5 s (sim) after: "
+                   + ", ".join(f"{arm} {m * 1000:.1f} mm {a:.4f} rad" for arm, (m, a) in errs.items())
+                   + f" (limits {POSE_TOL_M * 1000:.0f} mm, {POSE_TOL_RAD} rad)")
         # /left/hand/close closes the left hand: the last 0.5 s of sim time before
         # frame_task_server is stopped, at least 2 s after the response.
         response = self.events.get("/left/hand/close_response", {})
@@ -1104,9 +1202,9 @@ class Report:
         stop = self.at("controller_stopped")
         released = samples if r is None else r
         self.phases([("under the band", 0, released),
-                     ("on HOMIE, home", released, self.at("t_pose_sent")),
-                     ("to t_pose", self.at("t_pose_sent"), self.at("t_pose_result")),
-                     ("t_pose and hand", self.at("t_pose_result"), stop),
+                     ("on HOMIE, home", released, self.at(f"{POSTURE}_sent")),
+                     (f"to {POSTURE}", self.at(f"{POSTURE}_sent"), self.at(f"{POSTURE}_result")),
+                     (f"{POSTURE} and hand", self.at(f"{POSTURE}_result"), stop),
                      ("controller stopped", stop, self.at("end") + 1)])
         if r is not None:
             self.standing(slice(r, self.at("end") + 1), "from the release to the end")

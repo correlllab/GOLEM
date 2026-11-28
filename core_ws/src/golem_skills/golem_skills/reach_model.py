@@ -1,8 +1,9 @@
 """
 Replay a grasp approach on golem_upper_ik's IK model and test the hand against the scene.
 
-ReachModel.check() steps the same differential IK the frame_task server steps, from a
-measured joint state, along the approach's waypoints, and tests the hand against the
+ReachModel.check() steps the same differential IK golem_upper_ik's frame_task_server steps,
+on the frame it drives (the arm's grasp frame, the skills' pinch frame), from a measured
+joint state, along the approach's waypoints, and tests the hand against the
 head-camera scene: the points it would sit in, and the support surface extended toward
 the robot where the camera does not see (support_edges). serve() runs it in a child
 process for the grasp skill (skills/grasp_reach.py): pinocchio's URDF parse holds the GIL
@@ -21,13 +22,13 @@ from golem_upper_ik.core.ik_solver import IKSolver
 from golem_upper_ik.core.robot_model import FixedState, RobotModel
 from golem_upper_ik.profile import load_profile
 
-from .robots import drive_pose, robot_profile
+from .robots import arm_of, robot_profile
 
 
 # m golem_upper_ik's self-collision barrier keeps between sphere pairs (controller.d_min of
 # every H1-2 and G1 controller config)
 REACH_D_MIN_M = 0.02
-# s per simulated IK step; the frame_task server steps faster, but the path it follows
+# s per simulated IK step; frame_task_server steps faster, but the path it follows
 # is the same, and a coarser step keeps a check near a second
 REACH_IK_DT_S = 0.05
 # steps a waypoint may take before its error is judged
@@ -196,6 +197,26 @@ class ReachModel:
         """Return `frame`'s 4x4 pose (pelvis) at the IK's current configuration."""
         return np.asarray(self.model.get_frame_transformation_reduced(frame, self.ik.q_reduced))
 
+    def pinch_target(self, frame, T):
+        """
+        Return (`frame`'s arm's pinch frame, its 4x4 target that puts `frame` at `T`).
+
+        The pinch frame is the one the arm controller drives (/grasp_frame_target).
+        A tool frame of the profile is fixed on a model frame; any other frame is a
+        model frame. Both are rigid on the hand, so their transform to the pinch
+        frame is read at the IK's current configuration.
+        """
+        pinch = self.robot.pinch_frames[arm_of(self.robot, frame)]
+        if frame == pinch:
+            return pinch, T
+        tool = self.robot.tool_frames.get(frame)
+        if tool is None:
+            offset = np.linalg.inv(self.frame_pose(frame)) @ self.frame_pose(pinch)
+        else:
+            offset = (np.linalg.inv(tool.matrix())
+                      @ np.linalg.inv(self.frame_pose(tool.parent)) @ self.frame_pose(pinch))
+        return pinch, T @ offset
+
     def follow(self, frame, T):
         """Step the IK toward 4x4 pose `T` until it stops improving; return (m, rad) left."""
         self.ik.clear_frame_tasks()
@@ -219,9 +240,10 @@ class ReachModel:
         Return why the approach along `waypoints` fails from body q `q_body`, or None.
 
         `waypoints`: (4x4 pose, label, (lin_tol, ang_tol) or None, scene) in execution
-        order, pelvis frame, for the grasp frame `frame` (a URDF frame or a tool frame of
-        the robot's profile, which the IK follows through its parent, as frame_task
-        does); a waypoint with tolerances must be reached within them, one without only
+        order, pelvis frame, for the grasp or pinch frame `frame`, which the IK follows
+        through its arm's pinch frame, as the arm controller does (pinch_target); a
+        waypoint with tolerances must be reached within them (the pinch frame's error,
+        as the executor judges it), one without only
         steers the IK, and one with `scene` set must leave the hand out of `obstacles`
         ((N, 3) pelvis-frame points, or None) and above the support extended toward the
         robot (support_depth).
@@ -238,7 +260,7 @@ class ReachModel:
                 if below > SUPPORT_DEPTH_M:
                     return (f'the hand would be {below * 1000:.0f} mm below the support seen '
                             f'ahead of it at the {label}')
-            lin, ang = self.follow(*drive_pose(self.robot, frame, T))
+            lin, ang = self.follow(*self.pinch_target(frame, T))
             if tol is not None and (lin > tol[0] or ang > tol[1]):
                 return (f'the IK stops {lin * 1000:.0f} mm / {np.degrees(ang):.0f} deg '
                         f'short of the {label}')

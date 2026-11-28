@@ -8,15 +8,20 @@ topics:
 controller:
   v_lim: 1.0
   w_lim: 2.0
-  dq_lim: 1.0
+  # the top speed every stepped IK joint had before the acceleration limit (Pink's 25 rad/s^2
+  # times the 1/30 s period), so the limit only makes the arms gentler, never faster
+  dq_lim: 0.83
   d_min: 0.02
   timeout: 5.0
   hold_targets:
     torso_joint: 0.0
   threshold_ik: 0.0001
-  threshold_joint: 0.01
-  threshold_linear: 0.001
-  threshold_angular: 0.002
+  # m, rad: in the RoboCasa sim the hold settles each grasp frame within 0.6 mm and 2.1 mrad
+  # of its target, 1.0 mm and 4.1 mrad while it settles (40 goals); a planned goal holds the
+  # IK solve's solution, which stops within 1 mm and 10 mrad (ik_solver.LINEAR_THRESHOLD,
+  # ANGULAR_THRESHOLD). The G1's measure the same; unmeasured on the real H1-2
+  threshold_linear: 0.002
+  threshold_angular: 0.01
 
 planner:
   planner: RRTConnect
@@ -63,7 +68,28 @@ gains:
 
 limits:
   clip:
-    position_offset: 0.001
+    # rad; torso, then the arms in slot order. A joint the IK parks at its range limit (this far
+    # inside the joint table) settles or overshoots past its command, and relax_safety_split
+    # latches its estop 0.1 mrad inside the table. In the RoboCasa sim, with the arm commands'
+    # acceleration limit and the hold's bias bound (ACCEL_LIMIT, BIAS_PAST_CLIP in
+    # upper_controller.py), the worst past the clip over 16 grasps was 9.1 mrad (the shoulder
+    # yaw parked for the Battery's leftmost screw, its bias pointing away from the limit) and
+    # 7.4 mrad (the elbow on the fridge-handle grasp's take-off), and 7.9 mrad in a direct goal
+    # into the elbow's limit, so 0.02 leaves 2.2 times the worst. Without them a hold's torque
+    # bias carried onto the clip took the shoulder yaw 9.9 to 16.7 mrad past it (19.8 once, 8 of
+    # it unexplained), and twice in 40 grasps a parked yaw went 21.3 and 21.7 mrad past without
+    # a bias toward the limit (one recorded pointing away, the other unrecorded): this margin
+    # does not cover that, and it did not recur in the 50 grasps run with both (a parked yaw
+    # went at most 9.1 mrad past). Unmeasured on the real H1-2. Wrist pitch and yaw keep 0.001:
+    # relax_safety_split's estop range (-0.10) and default_safety_split's (-1.01) lie outside
+    # the table there, tight_safety_split clips them 0.05 inside it itself, and the staging
+    # postures (robot.yaml) park the wrist yaw 6.8 mrad inside the table. Their overshoot
+    # reached 35 to 49 mrad in the sim's direct moves overhead and at speed, the arm's other
+    # joints 50 to 160 mrad off their commands (the 49 stopped by the sim's joint stop);
+    # unmeasured on the real H1-2
+    position_offset: [0.02,
+                      0.02, 0.02, 0.02, 0.02, 0.02, 0.001, 0.001,
+                      0.02, 0.02, 0.02, 0.02, 0.02, 0.001, 0.001]
     velocity_ratio: 0.10
     # torso, then the arms in slot order. The elbows' 1.1111 x 18 N*m = 20.0 N*m is for
     # high-force grasping; the golem_safety config in use is the real ceiling

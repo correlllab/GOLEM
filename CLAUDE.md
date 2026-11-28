@@ -156,6 +156,12 @@ only when pinned, so an unpinned run has no `cpuset` key.
 The compose files pass the RoboCasa sims' knobs from the shell or `docker/.env`:
 `GOLEM_DISPLAY=auto|gui|headless` (the wrappers' display mode), `GOLEM_CAMERAS=0`,
 `GOLEM_SPAWN_BACKOFF=<m>`, `GOLEM_CMD_TIMEOUT=<sim-s>`.
+`GOLEM_H12_DRIVE_MODEL=1` (H1-2, default off) gives the motors the real robot's drive
+behaviour (`golem_robocasa/h12_drive.py`): the hip rolls are series-elastic (the robot's
+20 Hz hip-roll resonance; rt/lowstate reports the rotor), rt/lowcmd reaches the motors
+a few ms late, and the hip, knee and torso velocities are low-passed at 21 Hz as the
+motor drivers report them. A policy that rings at 20 Hz on the robot rings in the sim
+only with it on; off, the sim is unchanged.
 `GOLEM_SPAWN_MARGIN=<m>` sets the minimum spawn clearance from non-floor geoms
 (the H1-2's default 0.20, which a task env can set via `spawn_margin`, as
 `battery_env.py` does; the G1's 0.05). Both robots' spawn searches

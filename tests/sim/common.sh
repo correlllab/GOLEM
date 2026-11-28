@@ -328,7 +328,8 @@ sim_test_start_sim() {
         prepare="GOLEM_PREPARE_ONLY=1 /home/code/h12_sim_scripts/launch_robocasa.sh && \
         source /home/code/msgs_ws/install/setup.bash && "
         robot_env=(-e GOLEM_SPAWN_MARGIN= -e GOLEM_SPAWN_OFFSET= -e GOLEM_LIDAR_SELF_FILTER=
-                   -e GOLEM_CAMERA_DEPTH= -e GOLEM_CAMERA_POINTCLOUD= -e GOLEM_HAND_CAMERA_RES=)
+                   -e GOLEM_CAMERA_DEPTH= -e GOLEM_CAMERA_POINTCLOUD= -e GOLEM_HAND_CAMERA_RES=
+                   -e GOLEM_H12_DRIVE_MODEL=)
     fi
     local headless=--headless video_env=()
     # The video: the viewer draws with Mesa's software renderer (GLX), whose frames x11grab can

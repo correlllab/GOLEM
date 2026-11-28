@@ -220,7 +220,15 @@ class H12Robot:
         return int(model.jnt_bodyid[joint])
 
     def make_interface(self, model, data, resolver):
-        """Return the H1-2's Unitree DDS interface; the gripper actuators are the hand bridges'."""
+        """Return the H1-2's Unitree DDS interface; the gripper actuators are the hand bridges'.
+
+        GOLEM_H12_DRIVE_MODEL=1 (default off) gives it the real robot's drive behaviour: the hip rolls'
+        series elasticity (their 20 Hz resonance), the motors' command delay and the drivers' velocity
+        low-pass (h12_drive.py).
+        """
+        if sim_common.env_flag("GOLEM_H12_DRIVE_MODEL", False):
+            import h12_drive
+            return h12_drive.make_interface(model, data, resolver)
         return SimInterface(model, data, resolver=resolver)
 
     def make_lock(self, viewer):

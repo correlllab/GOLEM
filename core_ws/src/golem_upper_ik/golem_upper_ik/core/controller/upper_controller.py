@@ -170,7 +170,8 @@ class UpperController:
     """Command one robot's upper body by IK through golem_safety (module doc)."""
 
     def __init__(self, node, profile: RobotProfile, config: dict,
-                 robot_model: RobotModel = None, init: bool = True):
+                 robot_model: RobotModel = None, init: bool = True,
+                 warm_planner: bool = False):
         """Wait for /lowstate, command the measured pose, then run the start-up (with init).
 
         node: the ROS node the controller's subscriptions, publisher and logger live on; an
@@ -183,6 +184,10 @@ class UpperController:
             its state source is the controller's /lowstate subscriber until shutdown(), and
             its position limits are narrowed to the config's clip range (set_position_limits).
         init: run the start-up moves.
+        warm_planner: start the planner subprocess in the background before the start-up
+            moves (PlannerClient.warm_up), when the controller can plan, so the first planned
+            goal need not; a start that fails is logged, and the first planned goal starts it
+            and fails as it would have.
         Raises ValueError for a config or model of another robot or IMU frame, and
         RuntimeError (after the shutdown command) when the start-up fails.
         """
@@ -276,6 +281,8 @@ class UpperController:
             self.planner = PlannerClient(profile, self._planner_config(),
                                          frame_names=config['planner']['frame_names'],
                                          q_limits=config['limits']['q_clip_limits'])
+            if warm_planner and self.planning_refusal is None:
+                self.planner.warm_up(on_error=self._planner_warm_up_failed)
             if init:
                 self._startup_routine()
         except BaseException:
@@ -283,6 +290,11 @@ class UpperController:
             # then falls silent
             self.shutdown()
             raise
+
+    def _planner_warm_up_failed(self, error):
+        """Log that the planner subprocess did not start ahead of the first planned goal."""
+        self._logger.warn(f'The planner did not start ahead of the first planned goal ({error}); '
+                          'that goal starts it')
 
     def _planner_config(self):
         """Return the PlannerConfig of the planner section, at the controller's ACCEL_LIMIT.

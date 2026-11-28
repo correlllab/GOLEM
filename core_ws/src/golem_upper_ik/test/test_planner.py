@@ -587,3 +587,84 @@ def test_shutdown_during_a_request_raises_cleanly():
     assert isinstance(errors[0], RuntimeError)
     assert str(errors[0]) == 'planner shut down'
     assert planner_processes() == []
+
+
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_warm_up_starts_the_planner_in_the_background(robot):
+    """warm_up starts the subprocess in a thread, and the first request finds it running."""
+    client = PlannerClient(profile_of(robot))
+    try:
+        thread = client.warm_up()
+        assert thread is not None and thread.daemon
+        thread.join(timeout=60.0)
+        assert not thread.is_alive()
+        worker = client._worker
+        assert worker is not None and worker.process.is_alive()
+        named = profile_of(robot).named_configs
+        begin, end = (named[name] for name in PLANNED_MOVE[robot])
+        current_q = np.zeros(len(profile_of(robot).body_joints))
+        result = client.plan_configuration(current_q, begin, end)
+        assert result.success, result.reason
+        assert client._worker is worker
+        assert len(planner_processes()) == 1
+    finally:
+        client.shutdown()
+    assert planner_processes() == []
+
+
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_warm_up_without_a_self_collision_model_starts_nothing(robot):
+    """A robot that cannot plan has nothing to warm up."""
+    from dataclasses import replace
+    client = PlannerClient(replace(profile_of(robot), collision=None))
+    assert client.warm_up() is None
+    assert client._worker is None
+    client.shutdown()
+
+
+def test_a_failed_warm_up_fails_the_first_request_as_before():
+    """A warm-up whose start fails leaves no subprocess, and the first request fails as before.
+
+    The failure goes to on_error; the first request starts a subprocess and fails as it would
+    have without the warm-up.
+    """
+    client = stub_client(planner_stubs.dies_at_start)
+    errors = []
+    client.warm_up(on_error=errors.append).join(timeout=10.0)
+    assert len(errors) == 1 and 'exit code 3' in str(errors[0])
+    assert client._worker is None
+    with pytest.raises(RuntimeError, match='exit code 3'):
+        plan(client, 0.1)
+    client.shutdown()
+
+
+def test_shutdown_during_warm_up_leaves_no_subprocess():
+    """shutdown() during the warm-up stops its subprocess, and none starts after it.
+
+    Nothing goes to on_error; a request or a warm-up after the shutdown starts nothing.
+    """
+    client = stub_client(planner_stubs.ready_after_a_second)
+    errors = []
+    thread = client.warm_up(on_error=errors.append)
+    time.sleep(0.3)  # the subprocess is starting
+    client.shutdown()
+    thread.join(timeout=10.0)
+    assert not thread.is_alive()
+    assert errors == []
+    assert planner_processes() == []
+    with pytest.raises(RuntimeError, match='planner shut down'):
+        plan(client, 0.1)
+    assert client.warm_up(on_error=errors.append).join(timeout=5.0) is None
+    assert errors == []
+    assert planner_processes() == []
+
+
+def test_a_closed_worker_does_not_start():
+    """A worker closed before its start never starts its subprocess."""
+    client = stub_client(planner_stubs.echo)
+    from golem_upper_ik.core.planner.planner_process import _Worker
+    worker = _Worker(client._ctx, client._worker_main, {})
+    worker.close(graceful=True)
+    with pytest.raises(RuntimeError, match='planner shut down'):
+        worker.start()
+    assert worker.process.pid is None

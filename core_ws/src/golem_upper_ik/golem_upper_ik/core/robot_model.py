@@ -120,7 +120,7 @@ class RobotModel:
         self.right_arm_index = [self.body_joints.index(joint)
                                 for joint in profile.enabled_joints if joint.startswith('right_')]
 
-        self.model, _, _ = self._load_urdf_freeflyer(filename)
+        self.model = self._load_urdf_kinematics(filename, free_flyer=True)
         self._add_grasp_frames(self.model, filename)
         self.data = self.model.createData()
         imu_frame = profile.imu_frame if imu_frame is None else imu_frame
@@ -129,7 +129,7 @@ class RobotModel:
                              f'{filename}')
         self.imu_frame = imu_frame
 
-        self.model_body, _, _ = self._load_urdf_body(filename)
+        self.model_body = self._load_urdf_kinematics(filename, free_flyer=False)
         self._add_grasp_frames(self.model_body, filename)
         self.data_body = self.model_body.createData()
         self._urdf_position_limits = (self.model_body.lowerPositionLimit.copy(),
@@ -281,12 +281,12 @@ class RobotModel:
             model_collision_reduced, collision_model_reduced, self._collision_srdf_path
         )
 
-    def _keep_body_joints(self, urdf_path, model, collision_model, visual_model):
-        """Return the models with every non-body joint frozen at Pinocchio's neutral.
+    def _keep_body_joints(self, urdf_path, model, geometry_models=()):
+        """Return model, and its geometry_models, with every non-body joint frozen at neutral.
 
-        The non-body joints are the grippers' and the hands'; neutral is angle 0, also for a
-        continuous joint. ValueError if a body joint is missing or the joints left are not in
-        /lowcmd slot order.
+        Returns (model, [geometry models]). The non-body joints are the grippers' and the
+        hands'; neutral is Pinocchio's, angle 0, also for a continuous joint. ValueError if a
+        body joint is missing or the joints left are not in /lowcmd slot order.
         """
         robot = self.profile.robot
         missing = [name for name in self.body_joints if not model.existJointName(name)]
@@ -296,32 +296,44 @@ class RobotModel:
             model.getJointId(name) for name in model.names[1:]
             if name not in self.body_joints and name != 'root_joint'
         ]
-        reduced, [collision_model, visual_model] = pin.buildReducedModel(
-            model, [collision_model, visual_model], frozen_ids, pin.neutral(model)
-        )
+        if geometry_models:
+            reduced, geometry_models = pin.buildReducedModel(
+                model, list(geometry_models), frozen_ids, pin.neutral(model))
+        else:
+            reduced = pin.buildReducedModel(model, frozen_ids, pin.neutral(model))
         # the controller feeds /lowstate q straight into these models, so the order must match
         order = tuple(name for name in reduced.names[1:] if name != 'root_joint')
         if order != self.body_joints:
             raise ValueError(f'robot {robot}: the joints of {urdf_path} are in the order '
                              f'{order}, not the /lowcmd slot order {self.body_joints}')
-        return reduced, collision_model, visual_model
+        return reduced, list(geometry_models)
 
-    def _load_urdf_freeflyer(self, urdf_path):
-        """Return the free-flyer models of a URDF: nq = 7 + num_motor, nv = 6 + num_motor."""
-        model, collision_model, visual_model = pin.buildModelsFromUrdf(
-            filename=urdf_path,
-            package_dirs=os.path.dirname(urdf_path),
-            root_joint=pin.JointModelFreeFlyer(),
-        )
-        return self._keep_body_joints(urdf_path, model, collision_model, visual_model)
+    def _load_urdf_kinematics(self, urdf_path, free_flyer):
+        """Return a URDF's kinematic model, body joints only, without its geometry.
+
+        With free_flyer, nq = 7 + num_motor and nv = 6 + num_motor; without, nq = nv =
+        num_motor. No mesh is read: nothing uses the robot URDF's collision or visual
+        geometry (the self-collision model is the sphere URDF's, _load_urdf_body), and
+        reading its meshes took 6.7 s (H1-2) and 4.0 s (G1) a model in the ros container.
+        """
+        if free_flyer:
+            model = pin.buildModelFromUrdf(urdf_path, pin.JointModelFreeFlyer())
+        else:
+            model = pin.buildModelFromUrdf(urdf_path)
+        return self._keep_body_joints(urdf_path, model)[0]
 
     def _load_urdf_body(self, urdf_path):
-        """Return the fixed-base models of a URDF: nq = nv = num_motor."""
+        """Return the fixed-base models of a URDF with its geometry: nq = nv = num_motor.
+
+        Returns (model, collision model, visual model).
+        """
         model, collision_model, visual_model = pin.buildModelsFromUrdf(
             filename=urdf_path,
             package_dirs=os.path.dirname(urdf_path),
         )
-        return self._keep_body_joints(urdf_path, model, collision_model, visual_model)
+        reduced, (collision_model, visual_model) = self._keep_body_joints(
+            urdf_path, model, (collision_model, visual_model))
+        return reduced, collision_model, visual_model
 
     @staticmethod
     def _process_srdf(model, collision_model, srdf_path):

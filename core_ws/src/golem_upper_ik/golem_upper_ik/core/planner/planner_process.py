@@ -1,7 +1,8 @@
 """Run a ReducedJointPlanner in a subprocess of its own: PlannerClient.
 
 The subprocess keeps OMPL's planning time and native state out of the controller process.
-It builds its own RobotModel from the robot's profile, once, on the first request. A robot
+It builds its own RobotModel from the robot's profile, once, on the first request, or ahead
+of it in a thread of its own (warm_up). After shutdown() no subprocess starts again. A robot
 whose profile has no self-collision model cannot plan: its client reports unavailable and
 refuses every request without starting the subprocess.
 
@@ -58,7 +59,15 @@ class _Worker:
             daemon=True,
         )
         self.closed = False
+        # start() and close() take turns, so a close before the start keeps it from starting
         self._lock = threading.Lock()
+
+    def start(self):
+        """Start the subprocess; RuntimeError ('planner shut down') once it was closed."""
+        with self._lock:
+            if self.closed:
+                raise RuntimeError('planner shut down')
+            self.process.start()
 
     def close(self, graceful):
         """Stop the subprocess, asked to shut down first when graceful; once only.
@@ -70,7 +79,8 @@ class _Worker:
             if self.closed:
                 return
             self.closed = True
-        if self.process.pid is None:  # never started
+            started = self.process.pid is not None
+        if not started:
             return
         if graceful and self.process.is_alive():
             self.request_queue.put({'command': 'shutdown'})
@@ -117,6 +127,8 @@ class PlannerClient:
         self._ctx = mp.get_context('spawn')
         self._worker_main = _planner_worker_main
         self._worker = None
+        # set by shutdown(): no subprocess starts after it
+        self._shut_down = False
         self._request_ids = itertools.count(1)
         # one request at a time: two waiting on one worker's replies would each have to take
         # the other's reply off the queue to find its own
@@ -145,8 +157,37 @@ class PlannerClient:
             'active_mask': _optional_array(active_mask, dtype=bool),
         })
 
+    def warm_up(self, on_error=None):
+        """Start the subprocess in a thread of its own, so the first request need not; return it.
+
+        The thread takes its turn with the requests and starts the subprocess as the first
+        request would. A start that fails calls on_error(error) (not after shutdown()) and
+        leaves no subprocess, so the first request starts one and fails as it would have.
+        Returns the (daemon) thread, or None when the robot cannot plan.
+        """
+        if not self.available:
+            return None
+
+        def warm():
+            """Start the subprocess unless shut down; report a failure to on_error."""
+            try:
+                with self._request_lock:
+                    if not self._shut_down:
+                        self._start()
+            except Exception as error:  # the first request meets it again
+                if on_error is not None and not self._shut_down:
+                    on_error(error)
+
+        thread = threading.Thread(target=warm, name='planner_warm_up', daemon=True)
+        thread.start()
+        return thread
+
     def shutdown(self):
-        """Stop the planner process; a request waiting on it raises 'planner shut down'."""
+        """Stop the planner process for good; a request waiting on it raises 'planner shut down'.
+
+        A request or warm-up after it raises the same, starting nothing.
+        """
+        self._shut_down = True
         worker, self._worker = self._worker, None
         if worker is not None:
             worker.close(graceful=True)
@@ -174,7 +215,10 @@ class PlannerClient:
         worker = _Worker(self._ctx, self._worker_main, init_args)
         self._worker = worker
         try:
-            worker.process.start()
+            # shutdown() sets the flag before it takes the worker, so one of the two stops it
+            if self._shut_down:
+                raise RuntimeError('planner shut down')
+            worker.start()
             self._await_ready(worker)
         except BaseException:
             self._stop(worker)

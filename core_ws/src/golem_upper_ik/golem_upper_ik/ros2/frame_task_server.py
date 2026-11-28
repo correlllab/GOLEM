@@ -117,7 +117,8 @@ class FrameTaskServer(Node):
         """Read the parameters and the config; start() builds the controller and the topics.
 
         robot_model: a RobotModel of the robot to use instead of building one.
-        init: run the controller's start-up moves.
+        init: run the controller's start-up moves, and start the planner subprocess in the
+            background with them (UpperController's warm_planner).
         """
         super().__init__('frame_task_server', **node_kwargs)
         self.robot = robot_parameter(self)
@@ -148,8 +149,11 @@ class FrameTaskServer(Node):
         /left_grasp_frame_pose appearing tells the robot's other nodes the controller is up.
         The node must be spinning, since the start-up waits on its /lowstate subscription.
         """
+        # with the start-up moves the planner starts in the background, so the first planned
+        # goal does not wait for it
         self.controller = FrameController(self, self.profile, self.config,
-                                          robot_model=self._robot_model, init=self._init)
+                                          robot_model=self._robot_model, init=self._init,
+                                          warm_planner=self._init)
 
         self.frame_names_publisher = self.create_publisher(StringArray, 'frame_names', 10)
         self.frame_targets_publisher = self.create_publisher(PoseArray, 'frame_targets', 10)

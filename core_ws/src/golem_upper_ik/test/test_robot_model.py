@@ -29,6 +29,52 @@ def fixed_state(q, dq=None, imu_quaternion=None):
 
 
 @pytest.mark.parametrize('robot', ['h12', 'g1'])
+def test_models_are_the_urdf_models_without_reading_its_meshes(models, robot, monkeypatch):
+    """The free-flyer and body models equal the ones built with the URDF's geometry.
+
+    Joints, limits, inertias and frames (the grasp frames included) are the same as when the
+    robot URDF is read with its meshes; only the sphere URDF is read with its geometry.
+    """
+    import os
+    from golem_upper_ik.core.robot_model import RobotModel
+    model = models(robot)
+    profile = model.profile
+    read = []
+    build = pin.buildModelsFromUrdf
+
+    def noted(*args, **kwargs):
+        """Note the URDF read with its geometry, then read it."""
+        read.append(kwargs.get('filename', args[0] if args else None))
+        return build(*args, **kwargs)
+
+    monkeypatch.setattr(pin, 'buildModelsFromUrdf', noted)
+    RobotModel(profile)
+    assert read == ([profile.collision[0]] if profile.collision else [])
+    monkeypatch.undo()
+    urdf = profile.urdf_path
+    for built, root in ((model.model, pin.JointModelFreeFlyer()), (model.model_body, None)):
+        kwargs = {} if root is None else {'root_joint': root}
+        full, collision, visual = pin.buildModelsFromUrdf(
+            filename=urdf, package_dirs=os.path.dirname(urdf), **kwargs)
+        reference, _ = model._keep_body_joints(urdf, full, (collision, visual))
+        model._add_grasp_frames(reference, urdf)
+        assert (built.nq, built.nv) == (reference.nq, reference.nv)
+        assert list(built.names) == list(reference.names)
+        for name in ('lowerPositionLimit', 'upperPositionLimit', 'velocityLimit', 'effortLimit'):
+            if built is model.model_body and 'Position' in name:
+                continue  # narrowed by the clip range
+            np.testing.assert_array_equal(getattr(built, name), getattr(reference, name))
+        for a, b in zip(built.inertias, reference.inertias):
+            np.testing.assert_array_equal(a.toDynamicParameters(), b.toDynamicParameters())
+        for a, b in zip(built.jointPlacements, reference.jointPlacements):
+            np.testing.assert_array_equal(a.homogeneous, b.homogeneous)
+        assert [f.name for f in built.frames] == [f.name for f in reference.frames]
+        for a, b in zip(built.frames, reference.frames):
+            assert a.parentJoint == b.parentJoint
+            np.testing.assert_array_equal(a.placement.homogeneous, b.placement.homogeneous)
+
+
+@pytest.mark.parametrize('robot', ['h12', 'g1'])
 def test_models_follow_the_profile(models, robot):
     """The models keep the body joints in slot order and solve for the IK joints only."""
     profile = profile_of(robot)

@@ -3,8 +3,9 @@
 The controller plans through /plan_arm_trajectory (custom_ros_messages/PlanArmTrajectory),
 which golem_ompl's planner_server serves; golem_ompl imports this package, so nothing here
 imports it. A call waits for the service to appear (the server builds its models at start)
-for up to SERVICE_WAIT, then for the reply, which ends only with the reply, the server going
-away, or shutdown(). Calls from several threads take turns.
+for up to SERVICE_WAIT, then for the reply, which ends with the reply, the server going away,
+shutdown(), or the caller's stop: an abandoned request's late reply is dropped. Calls from
+several threads take turns.
 """
 import threading
 import time
@@ -42,16 +43,21 @@ class PlanClient:
         # one call at a time
         self._lock = threading.Lock()
 
-    def call(self, request):
-        """Return the PlanArmTrajectory response to request.
+    def call(self, request, stop=None):
+        """Return the PlanArmTrajectory response to request, or None when stop ends the wait.
 
-        RuntimeError when the service does not appear within SERVICE_WAIT, when it goes away
-        before it replies, and ('planner shut down') once shutdown() has run.
+        stop(), when given, is polled every POLL_PERIOD while the call waits for the service
+        or the reply; a true return abandons the request (its reply, should it come, is
+        dropped) and returns None. RuntimeError when the service does not appear within
+        SERVICE_WAIT, when it goes away before it replies, and ('planner shut down') once
+        shutdown() has run.
         """
         with self._lock:
             deadline = time.monotonic() + SERVICE_WAIT
             while not self._client.service_is_ready():
                 self._check_shut_down()
+                if stop is not None and stop():
+                    return None
                 if time.monotonic() >= deadline:
                     raise RuntimeError(f'the planner service {PLAN_SERVICE} did not appear '
                                        f"within {SERVICE_WAIT:.0f} s: is golem_ompl's "
@@ -62,6 +68,9 @@ class PlanClient:
             future.add_done_callback(lambda _: replied.set())
             while not replied.wait(POLL_PERIOD):
                 self._check_shut_down()
+                if stop is not None and stop():
+                    self._client.remove_pending_request(future)
+                    return None
                 if not self._client.service_is_ready():
                     raise RuntimeError(f'the planner service {PLAN_SERVICE} went away before '
                                        'it replied')

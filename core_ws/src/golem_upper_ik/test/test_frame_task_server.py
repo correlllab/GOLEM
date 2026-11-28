@@ -951,6 +951,38 @@ def test_canceled_grasp_frame_target_holds_where_it_is(ros, models, tmp_path, pl
     assert 0.002 < moved < 0.045, moved
 
 
+def test_a_cancel_while_planning_ends_the_goal_and_drops_the_late_reply(ros, models):
+    """A cancel while the planner works ends the goal at once; its late reply moves nothing.
+
+    The planner takes 2 s per reply: the goal canceled after 0.5 s ends canceled with the arms
+    where they were, they stay there when the abandoned reply comes, and the next planned
+    goal, answered after it, is reached.
+    """
+    plans = PlanServer(ros, profile_of('h12'), delay=2.0)
+    following, _, _, poses = grasp_server(ros, models, 'h12')
+    start = _matrix(poses['left'].poses[-1])
+    target = _shifted(start, (0.04, 0.0, 0.0))
+    client = GraspClient(ros)
+    begun = following.measured()
+    handle = client.send(grasp_goal(left=target, plan=True, timeout=30.0))
+    assert wait_for(lambda: len(plans.requests) == 1, 5.0)
+    time.sleep(0.5)
+    handle.cancel_goal_async()
+    started = time.monotonic()
+    status, result = client.outcome(handle)
+    assert time.monotonic() - started < 1.0
+    assert status == GoalStatus.STATUS_CANCELED and not result.success
+    assert result.outcome == grasp_outcome('CANCELED')
+    assert result.message.startswith('canceled while planning; the arms hold where they are'), \
+        result.message
+    # the abandoned reply comes 2 s after its request, and nothing follows it
+    time.sleep(2.0)
+    np.testing.assert_allclose(following.measured(), begun, atol=2e-3)
+    status, result = client.run(grasp_goal(left=target, plan=True, timeout=30.0), 40.0)
+    assert status == GoalStatus.STATUS_SUCCEEDED and result.success, result.message
+    assert len(plans.requests) == 2
+
+
 def executable(name):
     """Return the installed console script name."""
     from ament_index_python.packages import get_package_prefix

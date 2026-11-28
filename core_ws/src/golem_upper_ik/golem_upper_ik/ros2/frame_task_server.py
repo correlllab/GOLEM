@@ -482,10 +482,11 @@ class FrameTaskServer(Node):
         """Plan to an IK solution of targets ({arm: 4x4}) and execute the path; None once done.
 
         Otherwise the goal's result: FAILED when planning or execution fails, NOT_REACHED when
-        the deadline (robot time) passes during the path, CANCELED on a cancel; once the path
-        has started, each of those ends calls stop_arms() to stop the targeted arms where they
-        are. Feedback goes out before each waypoint, and a cancel or the deadline ends the path
-        at the next one. StaleStateError propagates.
+        the deadline (robot time) passes while planning or during the path, CANCELED on a
+        cancel. A cancel or the deadline ends the planning at once, the plan request abandoned
+        (its late reply is dropped), and the path at its next waypoint; each of those ends, and
+        a path that fails while it runs, calls stop_arms() to stop the targeted arms where they
+        are. Feedback goes out before each waypoint. StaleStateError propagates.
         """
         clock = self.controller.clock
         Result = GraspFrameTarget.Result
@@ -495,11 +496,22 @@ class FrameTaskServer(Node):
             kind.feedback(goal_handle, kind.error())
             return goal_handle.is_cancel_requested or clock.now() >= deadline
         try:
-            path = self.controller.plan_to_targets(targets, ik_timeout=self.timeout)
+            path = self.controller.plan_to_targets(
+                targets, ik_timeout=self.timeout,
+                stop=lambda: goal_handle.is_cancel_requested or clock.now() >= deadline)
         except StaleStateError:
             raise
         except Exception as error:
             return self._end_grasp(goal_handle, Result.FAILED, f'planning failed: {error}')
+        if path is None:
+            stop_arms()
+            errors = self._error_text(kind.error())
+            if goal_handle.is_cancel_requested:
+                return self._end_grasp(goal_handle, Result.CANCELED, 'canceled while planning; '
+                                       f'the arms hold where they are ({errors})')
+            return self._end_grasp(goal_handle, Result.NOT_REACHED, f'timed out after '
+                                   f'{timeout:.1f} s while planning; the arms hold where they '
+                                   f'are ({errors})')
         self.get_logger().info(f'Executing planned path with {len(path)} waypoints')
         try:
             executed = self.controller.execute_path(path, stop=stop)

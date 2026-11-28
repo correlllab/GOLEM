@@ -564,7 +564,7 @@ class UpperController:
             raise ValueError('Path must contain only finite values')
         return path
 
-    def plan_to_targets(self, targets, ik_timeout):
+    def plan_to_targets(self, targets, ik_timeout, stop=None):
         """Return a planned reduced path to an IK solution of targets, from golem_ompl.
 
         targets: {arm: 4x4 grasp-frame target in the pelvis frame}; ik_timeout: each IK seed's
@@ -577,10 +577,14 @@ class UpperController:
         request, when the controller cannot plan; RuntimeError when no seed converges ('IK
         failed to resolve current targets'), when no path was found ('Planning failed: ' and
         the planner's reason), for a refused request or a malformed reply, and from PlanClient.
+        stop(), when given, is polled while the request waits: a true return abandons it and
+        returns None (PlanClient.call).
         """
         self._check_planning()
         self.update_ik_solver()
-        response = self.planner.call(self._plan_request(targets, ik_timeout))
+        response = self.planner.call(self._plan_request(targets, ik_timeout), stop=stop)
+        if response is None:
+            return None
         Response = PlanArmTrajectory.Response
         if response.outcome == Response.NO_PATH:
             raise RuntimeError(f'Planning failed: {response.message}')

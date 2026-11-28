@@ -298,14 +298,17 @@ then moves only in the start-up step 4.
   to 2 mm and 10 mrad: in the sims the hold settles within about 0.6 mm and 2 mrad, and a
   planned goal holds the IK solve's solution, which stops within 1 mm and 10 mrad. It aborts at the timeout, on a planning
   or execution failure, on a hold pinned at a joint limit and on a stale `/lowstate`. A cancel,
-  or the timeout, during a planned path stops it before its next waypoint; the IK solve and the
-  planning before the path are not cut short. Every end sets the
+  or the timeout, during a planned path stops it before its next waypoint; while the planner
+  works (the IK solve and the plan, in `golem_ompl`), one ends the goal at once (`canceled while
+  planning`, `timed out after ... while planning`), the plan request abandoned: its late reply
+  is dropped, and the server finishes it before it answers the next request. Every end sets the
   result's `outcome`: `REACHED` (succeeded), `NOT_REACHED` (aborted: the timeout, before the IK
-  converged, during the path or in the hold, or a hold pinned at a joint limit), `CANCELED`, or
+  converged, while planning, during the path or in the hold, or a hold pinned at a joint
+  limit), `CANCELED`, or
   `FAILED` (aborted for anything else: a bad target, TF, planning or execution, a stale
   `/lowstate`); and its `message` (`reached (...)`, or why it was aborted or canceled, with the
   errors). A
-  cancel or the timeout, direct or during the path, or a path that fails while it runs, stops the targeted arms where they are, since a moving
+  cancel or the timeout, direct, while planning or during the path, or a path that fails while it runs, stops the targeted arms where they are, since a moving
   arm lags its command (about 20 mm at the grasp frame at 0.3 m/s on the H1-2 sim) and would
   keep going that far: each of their joints is commanded at its measured position plus its
   resting offset (`stop_joints`), how far it sat off its command when the goal started (the

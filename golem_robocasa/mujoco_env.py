@@ -3,12 +3,16 @@
 The band is a spring-damper pulling a body (the torso), or a hook point on
 it, toward an anchor above its spawn. golem_sim.sim_loop applies it every
 physics step while it is enabled (apply_band); SPACE in the viewer or
-/elastic_band/toggle (MeasurementBridge) releases it. BandLowering moves the
+/elastic_band/toggle (MeasurementBridge) releases it, but not while BandLowering
+is still bringing the robot down: that release takes effect once the lowering
+has ended (ElasticBand.toggle). BandLowering moves the
 anchor as the training env's hoist does: up until the robot hangs, then down
 onto its feet once the legs (on the G1 then the waist too) are held
 (golem_sim.py --no_band_lowering keeps it fixed). FallLogger logs the
 band's release and the robot's first fall, which the closed-loop tests read.
 """
+import threading
+
 import mujoco
 import numpy as np
 
@@ -35,6 +39,14 @@ class ElasticBand:
         self.hook = None if hook is None else np.asarray(hook, dtype=np.float64)
         self.enabled = True
         self._torque = False   # apply_band wrote a torque it must clear at the release
+        # True while a BandLowering brings the robot down (a stage under way); a release asked
+        # for then waits for the lowering to end, release_pending set meanwhile
+        self.lowering = False
+        self.release_pending = False
+        # toggle() runs on the service's and the viewer's threads, set_lowering() on the physics
+        # loop's
+        self._lock = threading.Lock()
+        self._released = threading.Event()   # set while the band is released
 
     def hook_point(self, data, body):
         """Return the world point (m) the band pulls on body in data: its hook, or the body's origin."""
@@ -61,10 +73,42 @@ class ElasticBand:
         return force
 
     def toggle(self) -> bool:
-        """Enable or disable the band, log it, and return whether it is now enabled."""
-        self.enabled = not self.enabled
+        """Enable or disable the band, log it, and return whether it is now enabled.
+
+        A release asked for while the band is lowering the robot (lowering) does not let go:
+        the band stays enabled, release_pending is set, and set_lowering(False) releases it
+        once the lowering has ended. A toggle while that release waits changes nothing.
+        """
+        with self._lock:
+            if self.enabled and self.lowering:
+                if not self.release_pending:
+                    self.release_pending = True
+                    print("Elastic band release requested while it lowers the robot; it lets go once lowered",
+                          flush=True)
+                return True
+            self._set(not self.enabled)
+            return self.enabled
+
+    def set_lowering(self, lowering: bool):
+        """Note whether a BandLowering is bringing the robot down; at its end, make a waiting release."""
+        with self._lock:
+            self.lowering = lowering
+            if not lowering and self.release_pending:
+                self._set(False)
+
+    def wait_released(self, timeout: float) -> bool:
+        """Wait up to timeout s (wall) for the band to be released; return whether it is."""
+        return self._released.wait(timeout)
+
+    def _set(self, enabled: bool):
+        """Enable or disable the band and log it; the caller holds _lock."""
+        self.enabled = enabled
+        self.release_pending = False
+        if enabled:
+            self._released.clear()
+        else:
+            self._released.set()
         print(f"Elastic band {'enabled' if self.enabled else 'disabled'}")
-        return self.enabled
 
     # GLFW_KEY_SPACE: mujoco.viewer passes raw GLFW key codes, and mujoco.glfw
     # is not importable as an attribute in mujoco 3.3.
@@ -111,6 +155,11 @@ class BandLowering:
     motor in slots is on with kp > 0 in the robot's latched rt/lowcmd, it waits
     delay s, then comes down drop m over duration s (not before the stage
     before it has ended), and stays there until the band's toggle releases it.
+    While a stage is under way (from its motors' hold, its delay included, to its
+    end) the band is lowering (ElasticBand.set_lowering): a release asked for then
+    waits for the stage's end, or the end of the stage queued after it. With no
+    stage under way (before the first is held, between one's end and the next's
+    hold, after the last) a release takes effect at once.
     The band is a rope (ElasticBand.rope), so an anchor below the hook holds
     the robot sideways and does not pull it down: the feet carry the weight. A
     release stops it for good. It moves band.point in place, so the viewer's
@@ -151,6 +200,8 @@ class BandLowering:
         for start, (_, drop, _, duration) in zip(self.starts, self.stages):
             z -= drop * min(1.0, max(0.0, (t - start) / duration))
         self.band.point[2] = z
+        # under way until the last scheduled stage ends
+        self.band.set_lowering(bool(self.starts) and t < self.starts[-1] + self.stages[len(self.starts) - 1][3])
         if len(self.starts) == len(self.stages) and t >= self.starts[-1] + self.stages[-1][3]:
             self.done = True
             print(f"[elastic-band] t={t:.2f}s: anchor lowered to z {z:.3f} m; "

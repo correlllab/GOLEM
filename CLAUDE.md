@@ -629,6 +629,8 @@ every leg motor is held (on, kp > 0, in the latched `rt/lowcmd`) lowers it onto 
 feet carry the weight before the release (the H1-2 all of it; the G1 about 75 %, in two stages:
 light contact once the legs are held, the rest once the arm controller holds the waist too, since
 a lower body under a limp waist folds);
+a release (the toggle or SPACE) asked for while a lowering stage is under way waits for the
+lowering's end, and the toggle's reply comes once the band has let go (`ElasticBand.toggle`);
 `golem_sim.py --no_band_lowering` keeps the fixed anchor the sims had before, at the waist with
 the feet on the floor. Both
 sims render their cameras and the MID-360's rays through EGL on an NVIDIA GPU:

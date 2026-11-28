@@ -60,7 +60,9 @@ while `dex3_hands` uses the Unitree SDK. The user-facing interface is ROS 2 too:
   legs (`golem_sim.py --no_band_lowering` keeps it fixed); the leg node releases it
   through `/elastic_band/toggle` once its policy runs and the arm controller has
   finished its start-up moves, or `band.max_wait` after the policy started
-  (SPACE in the viewer toggles it by hand).
+  (SPACE in the viewer toggles it by hand); a release asked for while the band
+  is still lowering the robot takes effect once it has lowered it, and the
+  toggle's reply waits for that.
   `g1/unitree_interface.py`'s and `g1_robot.py`'s docstrings are the
   reference.
 

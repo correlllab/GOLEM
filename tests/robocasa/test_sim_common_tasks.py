@@ -147,7 +147,7 @@ class SelectTaskTests(unittest.TestCase):
 class RandomTaskTests(unittest.TestCase):
     """Check random_task's seeded picks."""
 
-    def test_seeded_pick_is_the_one_h12_mujoco_made(self):
+    def test_seeded_pick_is_fixed(self):
         """A seeded random pick is a fixed task."""
         self.assertEqual(sim_common.random_task(seed=42), 'CloseStandMixerHead')
         self.assertEqual(sim_common.random_task(seed=1), 'CupcakeCleanup')

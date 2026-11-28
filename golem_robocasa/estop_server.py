@@ -71,12 +71,6 @@ class EstopServer:
         print(f"[{self._tag}] estop box on socket://127.0.0.1:{self.port}: clear; "
               f"{keys} toggles it", flush=True)
 
-    @property
-    def triggered(self) -> bool:
-        """Return whether the button is pressed."""
-        with self._lock:
-            return self._triggered
-
     def toggle(self) -> None:
         """Press the button if it is clear, release it if it is pressed."""
         with self._lock:

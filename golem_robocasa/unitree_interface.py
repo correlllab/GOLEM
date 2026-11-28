@@ -89,7 +89,6 @@ class SimInterface(LowCmdLatch):
     def after_step(self):
         """Publish rt/lowstate of the state mj_step just produced."""
         d = self.data
-        r = self.resolver
         sd = d.sensordata
         self.sim_time = float(d.time)
         tick = int(round(d.time * 1000.0)) & 0xFFFFFFFF  # ms of sim time

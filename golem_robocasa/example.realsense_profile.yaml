@@ -9,7 +9,7 @@ tf_rate_hz: 10.0
 
 cameras:
   # One entry per camera namespace: the sim publishes /realsense/<namespace>/*.
-  # h12_mujoco.py reads head, left_hand and right_hand.
+  # h12_sensors.py reads head, left_hand and right_hand.
   head:
     # A URDF link whose frame is the robot MJCF camera's optical frame (+z
     # forward, +y down). The sim moves that MJCF camera to color_frame and

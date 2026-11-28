@@ -3,13 +3,14 @@
 Ros is one rclpy context per test with an executor spinning its nodes in a thread;
 FakeRobot publishes /lowstate; Recorder records a command topic; Echo plays golem_safety
 relaying the controller's commands on its output topic. profile_of, shared_model (the
-session's robot model, put back at rest after the test) and G1_LIMP_ARMS (where the G1's
-limp arms hang) serve the controller tests.
+session's robot model, put back at rest and on the URDF's limits after the test) and
+G1_LIMP_ARMS (where the G1's limp arms hang) serve the controller tests.
 
 For the controller's closed loop: FollowingRobot executes the controller's commands as an
 engaged golem_safety would relay them, and relays them itself; RelayedRobot sits behind
 golem_safety's output topic, with golem_safety's safety_node run as a subprocess
-(SafetyNode); CommandRecorder also notes the robot's measured pose.
+(SafetyNode); CommandRecorder also notes the robot's measured pose. Spring makes a
+FollowingRobot settle where a PD would under a load and the controller's torque bias.
 
 SimClock publishes /clock as a sim would, at a chosen rate of sim seconds per wall second, and
 Ros.node(name, sim_time=True) makes a node that runs on it (use_sim_time).
@@ -56,12 +57,17 @@ def profile_of(robot):
 
 
 def shared_model(ros, models, robot):
-    """Return the session's model of robot (models fixture), put back at rest at the end."""
+    """Return the session's model of robot (models fixture), put back at rest at the end.
+
+    A controller built on it narrows its position limits to the config's clip range; the end
+    puts back the URDF's.
+    """
     model = models(robot)
 
     def rest():
-        """Detach the state source and re-lock the reduced model at q = 0."""
+        """Detach the state source, restore the URDF's limits, re-lock the reduced model at 0."""
         model.state_subscriber = None
+        model.set_position_limits(None)
         model.rebuild_reduced_model(np.zeros(model.num_motor))
     ros.on_close(rest)
     return model
@@ -671,3 +677,37 @@ class SafetyNode:
         except subprocess.TimeoutExpired:
             self.proc.kill()
             self.proc.wait(timeout=5.0)
+
+
+class Spring:
+    """Settle a FollowingRobot's slots where a PD at kp would under a load and the torque bias.
+
+    Each slot of slots rests its load over its kp (N*m and N*m/rad, both per body joint)
+    below its command, less the controller's torque bias over kp: a robot whose hold needs
+    a bias of load to reach its command. A thread updates the robot's sag every 4 ms until
+    stop() or the test's end.
+    """
+
+    def __init__(self, ros, robot, controller, slots, load, kp):
+        """Start updating robot's sag from controller's bias."""
+        self._stop = threading.Event()
+        count = len(robot.profile.body_joints)
+        slots = list(slots)
+        load = np.asarray(load, dtype=np.float64)
+        kp = np.asarray(kp, dtype=np.float64)
+
+        def run():
+            """Set the sag from the bias until stopped."""
+            while not self._stop.is_set():
+                sag = np.zeros(count)
+                sag[slots] = (load[slots] - controller._tau_bias[slots]) / kp[slots]
+                robot.set_sag(sag)
+                time.sleep(0.004)
+        self._thread = threading.Thread(target=run, daemon=True)
+        self._thread.start()
+        ros.on_close(self.stop)
+
+    def stop(self):
+        """Stop updating the sag."""
+        self._stop.set()
+        self._thread.join(1.0)

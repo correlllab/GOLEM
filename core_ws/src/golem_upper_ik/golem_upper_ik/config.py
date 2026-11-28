@@ -52,14 +52,16 @@ FREQUENCY_DEFAULTS = {
     'check_hz': 1000.0,  # the follow gate's check between control steps
 }
 # limits.clip: q within [low + position_offset, high - position_offset], |dq| at most
-# velocity_ratio * the velocity limit, |tau| at most torque_ratio * the torque limit
+# velocity_ratio * the velocity limit, |tau| at most torque_ratio * the torque limit. The q
+# range is also the IK's and the planner's position range (UpperController)
 CLIP_DEFAULTS = {
     'position_offset': 0.001,  # rad
     'velocity_ratio': 0.10,
     'torque_ratio': 0.25,
 }
-# The planner section's keys, by kind: the fields of PlannerConfig (core.planner), and
-# enabled. The loader checks the keys a file gives and fills in only enabled (true) and
+# The planner section's keys, by kind: the fields of PlannerConfig (core.planner) but
+# max_acceleration (the controller's ACCEL_LIMIT), and enabled. The loader checks the keys a
+# file gives and fills in only enabled (true) and
 # frame_names (the profile's planner frames); PlannerConfig supplies every other default.
 # A goal can plan only when the profile has a self-collision model and enabled is true.
 PLANNER_TEXT_KEYS = ('planner',)  # the OMPL planner's name

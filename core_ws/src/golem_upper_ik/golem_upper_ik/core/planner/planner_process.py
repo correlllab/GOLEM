@@ -86,7 +86,7 @@ class PlannerClient:
     """Send plan requests to a planner subprocess, started on the first request."""
 
     def __init__(self, profile: RobotProfile, planner_config: PlannerConfig = None,
-                 frame_names=None, startup_timeout: float = STARTUP_TIMEOUT):
+                 frame_names=None, startup_timeout: float = STARTUP_TIMEOUT, q_limits=None):
         """Set up the client; no subprocess starts before the first request.
 
         profile: the robot; the subprocess builds its model from load_profile(profile.robot).
@@ -96,6 +96,9 @@ class PlannerClient:
             (the controller passes the controller config's planner.frame_names).
         startup_timeout: s of steady time for the subprocess to build its model and report
             ready.
+        q_limits: the body joints' position range the planner keeps within, as
+            RobotModel.set_position_limits takes it (the controller's clip range); default
+            the URDF's limits.
         """
         self.robot = profile.robot
         frames = tuple(profile.planner_frames if frame_names is None else frame_names)
@@ -105,6 +108,7 @@ class PlannerClient:
                              f'from the planner frames {frames}: pass them as frame_names')
         self.planner_config = replace(config, frame_names=frames)
         self.startup_timeout = startup_timeout
+        self.q_limits = None if q_limits is None else np.array(q_limits, dtype=float)
         self.unavailable_reason = None
         if profile.collision is None:
             self.unavailable_reason = PLANNER_UNAVAILABLE.format(
@@ -165,6 +169,7 @@ class PlannerClient:
             # the profile does not pickle (read-only mappings): the worker loads it by name
             'robot': self.robot,
             'planner_config': asdict(self.planner_config),
+            'q_limits': self.q_limits,
         }
         worker = _Worker(self._ctx, self._worker_main, init_args)
         self._worker = worker
@@ -244,8 +249,9 @@ class _PlannerWorker:
     """Own the robot model and the planner inside the subprocess."""
 
     def __init__(self, init_args):
-        """Build the robot model and the planner from init_args' robot and planner config."""
-        self.robot_model = RobotModel(load_profile(init_args['robot']))
+        """Build the robot model and the planner from init_args' robot, range and planner config."""
+        self.robot_model = RobotModel(load_profile(init_args['robot']),
+                                      q_limits=init_args.get('q_limits'))
         planner_config = PlannerConfig(**init_args['planner_config'])
         self.planner = ReducedJointPlanner(
             self.robot_model,

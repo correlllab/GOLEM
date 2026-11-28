@@ -29,7 +29,7 @@ import yaml
 from golem_upper_ik.profile import known_robots
 
 from ros_harness import (
-    TEST_DOMAIN, CommandRecorder, FakeRobot, FollowingRobot, RelayedRobot, SimClock,
+    TEST_DOMAIN, CommandRecorder, FakeRobot, FollowingRobot, RelayedRobot, SimClock, Spring,
     body_pose, profile_of, shared_model, slots_of, wait_for,
 )
 
@@ -169,7 +169,9 @@ def test_grasp_frame_goal_is_a_pelvis_frame_move(ros, models, robot, imu):
     threshold_angular = config['controller']['threshold_angular']
     client = GraspClient(ros)
 
-    for position, rotation in (((0.0, 0.0, 0.05), np.eye(3)),
+    # down, not up: from the H1-2's prep, 5 cm up and 5 cm out yawed needs the left elbow at
+    # its joint-table limit, outside the IK's range
+    for position, rotation in (((0.0, 0.0, -0.05), np.eye(3)),
                                ((0.05, 0.0, 0.0), np.eye(3)),
                                ((0.0, 0.0, 0.0), _rotation('z', 0.2))):
         time.sleep(0.1)
@@ -449,6 +451,27 @@ def test_hold_pinned_at_a_limit_is_not_converged(ros, models, robot):
     assert limited[0][2] == pytest.approx(limits[elbow, 1])
 
 
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_controller_keeps_the_ik_in_the_clip_range(ros, models, robot):
+    """The controller narrows its model's and its planner's range to the config's clip range."""
+    from golem_upper_ik.core.controller.frame_controller import FrameController
+    profile = profile_of(robot)
+    config = config_of(robot, CONFIGS[robot])
+    clip = config['limits']['q_clip_limits']
+    model = shared_model(ros, models, robot)
+    mask = model.reduced_mask
+    low = np.maximum(model.model_body.lowerPositionLimit, clip[:, 0])[mask]
+    high = np.minimum(model.model_body.upperPositionLimit, clip[:, 1])[mask]
+    RelayedRobot(ros, profile, body_pose(profile, START[robot]), '/lowcmd').start()
+    controller = FrameController(ros.node('controller'), profile, config, robot_model=model,
+                                 init=False)
+    ros.on_close(controller.shutdown)
+    np.testing.assert_array_equal(model.model_body_reduced.lowerPositionLimit, low)
+    np.testing.assert_array_equal(model.model_body_reduced.upperPositionLimit, high)
+    assert controller.ik_solver.configuration_reduced.model is model.model_body_reduced
+    np.testing.assert_array_equal(controller.planner.q_limits, clip)
+
+
 def test_execute_path_waits_for_the_follow_gate(ros, models):
     """execute_path is refused while nothing relays the commands."""
     from golem_upper_ik.core.controller.frame_controller import FrameController
@@ -623,6 +646,45 @@ def test_grasp_frame_target_moves_one_arm(ros, models, robot):
     held = following.measured()
     time.sleep(0.3)
     np.testing.assert_array_equal(following.measured(), held)
+
+
+# the named postures whose grasp-frame poses a loaded hold must still reach: home, the
+# H1-2's prep and its staging postures (the wrist yaw 6 mrad inside its clip), the G1's
+# arms_front_45
+REACHED_POSTURES = {'h12': ('home', 'prep', 'staging_left', 'staging_right'),
+                    'g1': ('home', 'arms_front_45')}
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_loaded_holds_reach_the_named_postures(ros, models, robot):
+    """Goals to the named postures' poses end REACHED with a load the hold must cancel.
+
+    Every IK joint of the targeted arm settles 0.3 N*m over kp below its command, less the
+    torque bias over kp (ros_harness.Spring): the hold integrates the bias that brings each
+    joint onto its command, near a clip (the H1-2's staging wrist yaw, 6 mrad inside its
+    clip) as away from one, within the bias bound, and each goal ends REACHED.
+    """
+    config = config_of(robot, CONFIGS[robot])
+    kp = np.asarray(config['gains']['kp'], dtype=np.float64)
+    following, model, server, _ = grasp_server(ros, models, robot)
+    controller = server.controller
+    profile = model.profile
+    client = GraspClient(ros)
+    for arm in ('left', 'right'):
+        joints = controller.arm_joint_ids([arm])
+        load = np.zeros(len(profile.body_joints))
+        load[joints] = 0.3
+        spring = Spring(ros, following, controller, joints, load, kp)
+        for name in REACHED_POSTURES[robot]:
+            q = body_pose(profile, name)
+            frame = [f.name for f in profile.grasp_frames][('left', 'right').index(arm)]
+            target = model.get_frame_transformation_body(frame, q)
+            # the real G1's config moves the arms at 0.15 m/s: 6 to 7 s to arms_front_45
+            status, result = client.run(grasp_goal(**{arm: target}, timeout=20.0))
+            assert status == GoalStatus.STATUS_SUCCEEDED and result.success, (arm, name,
+                                                                                result.message)
+        spring.stop()
+        following.set_sag(np.zeros(len(profile.body_joints)))
 
 
 def _slot_commands(following, slots):

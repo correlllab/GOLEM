@@ -18,9 +18,9 @@ controller:
   v_lim: 1.0
   # rad/s, > 0: each arm's end-effector angular speed limit on direct moves
   w_lim: 2.0
-  # rad/s, > 0: IK joint speed limit on direct moves; the start-up moves the held joints at
-  # the smaller of this and 0.3 rad/s
-  dq_lim: 1.0
+  # rad/s, > 0: IK joint speed limit: each arm's IK step is scaled so no joint passes it; the
+  # start-up moves the held joints at the smaller of this and 0.3 rad/s
+  dq_lim: 0.83
   # m, >= 0: distance the IK's self-collision barrier keeps between sphere pairs
   d_min: 0.02
   # s of robot time (the sim's /clock under use_sim_time, else steady), > 0: how long a
@@ -87,7 +87,8 @@ planner:
   # s of robot time, > 0: time between path waypoints; default the control period
   # (1 / frequency.ctrl_hz)
   dt: 0.02
-  # whole numbers >= 2 and >= min: the fewest and most waypoints in a path
+  # whole numbers >= 2 and >= min: the fewest and most waypoints in a path; a path whose
+  # joints would accelerate faster than the controller's ACCEL_LIMIT gets more, up to the most
   min_interpolation_steps: 2
   max_interpolation_steps: 300
   # > 0: OMPL's state validity checking resolution, a fraction of the joint space's extent
@@ -135,7 +136,9 @@ limits:
   # (every body slot), a list over the body slots or a list over the upper slots (the legs
   # then 0); each >= 0. golem_safety clips again with its own config.
   clip:
-    # rad: q within [low + this, high - this] of the robot's position limits
+    # rad: q within [low + this, high - this] of the robot's position limits (the joint
+    # table). The IK, the planner and the path checks keep within the same range (within the
+    # URDF's limits too), so a joint the IK parks at a limit sits this far inside the table
     position_offset: 0.001
     # |dq| at most this times the robot's velocity limit
     velocity_ratio: 0.10

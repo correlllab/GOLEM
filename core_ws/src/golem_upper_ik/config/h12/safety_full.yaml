@@ -8,7 +8,9 @@ topics:
 controller:
   v_lim: 1.0
   w_lim: 2.0
-  dq_lim: 1.0
+  # the top speed every stepped IK joint had before the acceleration limit (Pink's 25 rad/s^2
+  # times the 1/30 s period), so the limit only makes the arms gentler, never faster
+  dq_lim: 0.83
   d_min: 0.02
   timeout: 5.0
   hold_targets:
@@ -67,6 +69,13 @@ gains:
 
 limits:
   clip:
-    position_offset: 0.001
+    # rad: safety_split's margin (its comment has the measurements), on every joint: the
+    # *_safety_full configs latch their estop 0.1 mrad inside the table on the wrist pitch and
+    # yaw too (tight_safety_full 2 mrad, behind its own 0.05 clip). It does not cover the 35 to
+    # 49 mrad the wrists overshot in the sim's direct moves overhead and at speed. The staging
+    # postures' wrist yaw (6.8 mrad inside the table) lies outside this range: the IK reaches
+    # their grasp-frame poses with the other joints (within 0.7 mm and 0.6 mrad from prep),
+    # but whether the planner finds a path there is unmeasured
+    position_offset: 0.02
     velocity_ratio: 0.10
     torque_ratio: 0.60

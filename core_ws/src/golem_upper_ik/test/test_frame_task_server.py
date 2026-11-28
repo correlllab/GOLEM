@@ -3,7 +3,7 @@
 In this process, frame_task_server against a robot that executes and relays its commands
 (FollowingRobot), sharing the session's robot model: pelvis-frame grasp-frame goals whatever
 the IMU says, a goal's timeout in sim time, the fresh-state wait, the stale-state abort,
-planned goals (planned by ros_harness.PlanServer, which plays golem_ompl's planner_server) and
+planned goals (planned by ros_harness.PlanServer, which plays golem_ompl's arm_planner_server) and
 planning turned off, the goal start from the last command, the hold pinned at a limit, and
 execute_path's pacing; /grasp_frame_target's goals in the pelvis frame and through TF,
 planned, refused, timed out and canceled, and the grasp pose topics.

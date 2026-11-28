@@ -1,4 +1,4 @@
-"""Check planner_server: its request parsing, and the node serving /plan_arm_trajectory.
+"""Check arm_planner_server: its request parsing, and the node serving /plan_arm_trajectory.
 
 parse_request turns a PlanArmTrajectory request into ArmPlanner's arguments, in the robot's
 joint order, and refuses a malformed one. The node, in this process on domain 93, serves a
@@ -319,7 +319,7 @@ def test_the_installed_node_starts_and_stops_on_a_signal(how):
     from ament_index_python.packages import get_package_prefix, get_package_share_directory
     if how == 'script':
         command = [str(Path(get_package_prefix('golem_ompl')) / 'lib' / 'golem_ompl'
-                       / 'planner_server'),
+                       / 'arm_planner_server'),
                    '--ros-args', '-p', 'robot:=h12', '-p', 'config:=safety_split']
     else:
         command = ['ros2', 'launch',

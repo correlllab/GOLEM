@@ -5,13 +5,13 @@ Starts robot_state_publisher and golem_upper_ik's joint_state_publisher (the
 29 body joints; golem_upper_ik's robot_state.launch.py), golem_safety's
 safety_node, the only writer of /lowcmd (golem_safety's safety.launch.py), the
 arm controller (golem_upper_ik's frame_task_server, through its
-upper_ik.launch.py) and its planner (golem_ompl's planner_server, through its
+upper_ik.launch.py) and its planner (golem_ompl's arm_planner_server, through its
 planner.launch.py, on the controller config, at once), the leg node running
 HOMIE (golem_lowerbody_rl's lowerbody_controller_node, through its
 lowerbody.launch.py; on the real robot only with start_position_verified:=true)
 and, optionally, navigation (golem_slam), the Dex3-1 hands and RViz. The golem
 nodes get robot g1 as a ROS parameter, safety_node, frame_task_server and
-planner_server their configs and the leg node its run config. safety_node also
+arm_planner_server their configs and the leg node its run config. safety_node also
 gets sim (it refuses sim:=true on ROS domain 0) and use_estop false: the G1
 stack has no hardware estop node.
 

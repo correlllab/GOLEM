@@ -1,4 +1,4 @@
-"""Plan one robot's arm paths for any controller: ArmPlanner, the core of planner_server.
+"""Plan one robot's arm paths for any controller: ArmPlanner, the core of arm_planner_server.
 
 ArmPlanner builds the robot's models once and serves one plan at a time (it is not
 thread-safe): a pose goal (each moving arm's grasp-frame target in the pelvis frame) or a joint

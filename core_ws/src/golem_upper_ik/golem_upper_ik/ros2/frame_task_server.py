@@ -8,7 +8,7 @@ Parameters: robot (required; a robot with data in golem_upper_ik's config/) and 
 Once its start-up is done (UpperController), the node serves /grasp_frame_target
 (custom_ros_messages/GraspFrameTarget): move each arm's grasp frame (the profile's
 grasp_frames) to a target in the pelvis frame or, resolved through TF when the goal starts, in
-a world frame, directly through the IK or along a path golem_ompl's planner_server plans
+a world frame, directly through the IK or along a path golem_ompl's arm_planner_server plans
 (/plan_arm_trajectory); it succeeds once every target
 has been held within the thresholds for GRASP_SETTLE_S, and aborts at its timeout. It
 publishes at 25 Hz frame_names, frame_targets and frame_poses (the current goal's frames,

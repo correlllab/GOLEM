@@ -28,7 +28,7 @@ The package's launch files start both nodes, and both robots' bringups include t
   not run with `safety_config` (Safety pairing, below), raising `upper_ik: not starting:
   <reason>` before it starts anything, then starts `frame_task_server` after `start_delay`.
   The bringups include it before any other node, so a refused pair stops the launch first.
-  They start `golem_ompl`'s `planner_server` (`planner.launch.py`) beside it, on the same
+  They start `golem_ompl`'s `arm_planner_server` (`planner.launch.py`) beside it, on the same
   controller config, which plans the goals sent with `plan: true`.
 - `robot_state.launch.py` (`robot` required; `use_sim_time`; `urdf_file`, empty for the
   robot's ROS URDF from `golem_ros2_models`) starts `robot_state_publisher` on that URDF and
@@ -237,7 +237,7 @@ then moves only in the start-up step 4.
   5 rad/s² covers the position-limit brake's own deceleration, `dq_lim / LIMIT_APPROACH_TIME`
   (4.2 rad/s² at the sims' 0.83 rad/s, 1.5 at the real G1's 0.3); the constant's comment has the
   measurements.
-- `plan: true`: the controller asks `golem_ompl`'s `planner_server` for the path
+- `plan: true`: the controller asks `golem_ompl`'s `arm_planner_server` for the path
   (`/plan_arm_trajectory`, `core/plan_client.py`), sending the measured state, the start at the
   last command (the goal's start, above), the clip range, the targets in the pelvis frame, the
   waypoint period (the control period unless `planner.dt` is set), `planner.moving_speed`,
@@ -379,7 +379,7 @@ models), the ROS I/O, command handler and follow gate
 (`test_ros_io.py`, `test_low_cmd_handler.py`), the controller and the nodes
 (`test_controller_loop.py`, `test_frame_task_server.py`, `/grasp_frame_target` and the grasp
 pose topics included; planned goals against `ros_harness.PlanServer`, a stand-in for
-`golem_ompl`'s `planner_server`, whose own tests run the real planning), a start-up IK step
+`golem_ompl`'s `arm_planner_server`, whose own tests run the real planning), a start-up IK step
 with no solution (`test_startup_no_solution.py`), the goal loop of `/grasp_frame_target` against a scripted controller (`test_goal_loops.py`) and
 that nothing imports `unitree_sdk2py` (`test_no_sdk.py`).
 

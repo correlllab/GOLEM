@@ -1,7 +1,7 @@
-"""Ask golem_ompl's planner_server for a planned arm path: PlanClient.
+"""Ask golem_ompl's arm_planner_server for a planned arm path: PlanClient.
 
 The controller plans through /plan_arm_trajectory (custom_ros_messages/PlanArmTrajectory),
-which golem_ompl's planner_server serves; golem_ompl imports this package, so nothing here
+which golem_ompl's arm_planner_server serves; golem_ompl imports this package, so nothing here
 imports it. A call waits for the service to appear (the server builds its models at start)
 for up to SERVICE_WAIT, then for the reply, which ends with the reply, the server going away,
 shutdown(), or the caller's stop: an abandoned request's late reply is dropped. Calls from
@@ -15,7 +15,7 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 
 __all__ = ['PLAN_SERVICE', 'PlanClient', 'PlannerUnavailableError']
 
-# the planner's service, golem_ompl's planner_server
+# the planner's service, golem_ompl's arm_planner_server
 PLAN_SERVICE = '/plan_arm_trajectory'
 # steady s a call waits for the service to appear: the server serves only once its models
 # are built
@@ -61,7 +61,7 @@ class PlanClient:
                 if time.monotonic() >= deadline:
                     raise RuntimeError(f'the planner service {PLAN_SERVICE} did not appear '
                                        f"within {SERVICE_WAIT:.0f} s: is golem_ompl's "
-                                       'planner_server running?')
+                                       'arm_planner_server running?')
                 time.sleep(POLL_PERIOD)
             future = self._client.call_async(request)
             replied = threading.Event()

@@ -1,4 +1,4 @@
-r"""Start the arm planner, planner_server, which serves /plan_arm_trajectory.
+r"""Start the arm planner, arm_planner_server, which serves /plan_arm_trajectory.
 
 It starts at once: it builds the robot's models (seconds) and then serves the service, so a
 bringup that includes it before the arm controller has it ready by the first planned goal.
@@ -19,7 +19,7 @@ from golem_upper_ik.profile import known_robots
 
 
 def _start(context: LaunchContext) -> list:
-    """Return planner_server, every argument read now.
+    """Return arm_planner_server, every argument read now.
 
     Humble includes are not scoped: a later include of the bringup may set robot or config
     for itself, so the values are taken when this file is included.
@@ -31,8 +31,8 @@ def _start(context: LaunchContext) -> list:
         # the planner: /plan_arm_trajectory for the arm controller
         Node(
             package='golem_ompl',
-            executable='planner_server',
-            name='planner_server',
+            executable='arm_planner_server',
+            name='arm_planner_server',
             output='screen',
             emulate_tty=True,
             # typed strings: launch_ros reads a plain string parameter as YAML, which would

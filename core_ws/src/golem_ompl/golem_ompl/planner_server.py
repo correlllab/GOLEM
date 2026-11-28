@@ -1,6 +1,6 @@
-"""Serve one robot's arm planner as a ROS node: planner_server.
+"""Serve one robot's arm planner as a ROS node: arm_planner_server.
 
-    ros2 run golem_ompl planner_server --ros-args -p robot:=h12 -p config:=safety_split
+    ros2 run golem_ompl arm_planner_server --ros-args -p robot:=h12 -p config:=safety_split
 
 Parameters: robot (required; a robot with data in golem_upper_ik's config/) and config
 (required; a golem_upper_ik controller config name under share/golem_upper_ik/config/<robot>/,
@@ -167,7 +167,7 @@ class PlannerServer(Node):
 
     def __init__(self, **node_kwargs):
         """Read the parameters and the config; start() builds the planner and the service."""
-        super().__init__('planner_server', **node_kwargs)
+        super().__init__('arm_planner_server', **node_kwargs)
         self.robot = robot_parameter(self)
         self.profile = load_profile(self.robot)
         self.config_name = self.declare_parameter('config', '').value
@@ -256,7 +256,7 @@ class PlannerServer(Node):
 
 def main(args=None):
     """Run the node until SIGINT or SIGTERM (golem_upper_ik's utility.run)."""
-    run('planner_server', PlannerServer, args=args)
+    run('arm_planner_server', PlannerServer, args=args)
 
 
 if __name__ == '__main__':

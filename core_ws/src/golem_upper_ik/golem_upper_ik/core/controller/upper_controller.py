@@ -572,7 +572,7 @@ class UpperController:
         as for every goal; the request carries the measured state, the start (the command
         seed's IK joints), the clip range, the planner section's speed, waypoint period
         (default the control period) and OMPL budget, and ACCEL_LIMIT. golem_ompl's
-        planner_server solves the IK from its seeds and plans to the first converged solution
+        arm_planner_server solves the IK from its seeds and plans to the first converged solution
         it finds a path to; only the targeted arms move. PlannerUnavailableError, before any
         request, when the controller cannot plan; RuntimeError when no seed converges ('IK
         failed to resolve current targets'), when no path was found ('Planning failed: ' and

@@ -157,10 +157,10 @@ def _configs(nodes):
     """
     Return safety_node's and frame_task_server's config parameters, where started.
 
-    planner_server runs on frame_task_server's config wherever both start.
+    arm_planner_server runs on frame_task_server's config wherever both start.
     """
     if 'frame_task_server' in nodes:
-        assert nodes['planner_server'].parameters['config'] == \
+        assert nodes['arm_planner_server'].parameters['config'] == \
             nodes['frame_task_server'].parameters['config']
     return {name: nodes[name].parameters['config']
             for name in ('safety_node', 'frame_task_server') if name in nodes}
@@ -339,7 +339,7 @@ def test_core_starts_the_shared_packages_through_their_launch_files():
     """
     g1_core starts the shared packages' nodes from their launch files.
 
-    golem_ompl's planner_server starts at once, on the controller config.
+    golem_ompl's arm_planner_server starts at once, on the controller config.
     """
     for sim in ('false', 'true'):
         nodes, _ = _core(sim=sim, use_sim_time=sim)
@@ -351,5 +351,5 @@ def test_core_starts_the_shared_packages_through_their_launch_files():
         assert nodes['safety_node'] == Started('golem_safety', [], 0.0, {
             'robot': 'g1', 'config': 'sim_split' if sim == 'true' else 'split',
             'sim': sim == 'true', 'use_estop': False, **sim_time})
-        assert nodes['planner_server'] == Started('golem_ompl', [], 0.0, {
+        assert nodes['arm_planner_server'] == Started('golem_ompl', [], 0.0, {
             'robot': 'g1', 'config': 'sim_split' if sim == 'true' else 'g1_split', **sim_time})

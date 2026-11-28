@@ -15,7 +15,7 @@ FollowingRobot settle where a PD would under a load and the controller's torque 
 SimClock publishes /clock as a sim would, at a chosen rate of sim seconds per wall second, and
 Ros.node(name, sim_time=True) makes a node that runs on it (use_sim_time).
 
-PlanServer plays golem_ompl's planner_server for planned goals (golem_ompl depends on this
+PlanServer plays golem_ompl's arm_planner_server for planned goals (golem_ompl depends on this
 package, so its tests cannot run it here).
 
 Every node lives in the test's context, so they share one DDS participant and discover each
@@ -717,7 +717,7 @@ class Spring:
 
 
 class PlanServer:
-    """Play golem_ompl's planner_server: serve /plan_arm_trajectory with straight paths.
+    """Play golem_ompl's arm_planner_server: serve /plan_arm_trajectory with straight paths.
 
     A pose goal's IK is golem_upper_ik's IKSolver on a model of the server's own, narrowed to
     the request's range and re-locked at its measured pose, from the IK's seeds (the first

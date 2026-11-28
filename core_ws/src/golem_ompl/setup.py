@@ -23,7 +23,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'planner_server = golem_ompl.planner_server:main',
+            'arm_planner_server = golem_ompl.planner_server:main',
         ],
     },
 )

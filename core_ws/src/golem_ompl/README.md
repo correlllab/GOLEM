@@ -1,7 +1,7 @@
 # golem_ompl
 
 Plans collision-free arm paths for the Unitree H1-2 and G1, for any arm controller: the
-`planner_server` node serves `/plan_arm_trajectory`
+`arm_planner_server` node serves `/plan_arm_trajectory`
 (`custom_ros_messages/srv/PlanArmTrajectory`). It imports `golem_upper_ik`'s robot model,
 profile, IK solver and controller configs; every robot-specific value comes from there.
 
@@ -55,10 +55,10 @@ Only the joints that move the targeted grasp frames (or the named arms) plan; th
 keeps its start. A request in another position range narrows both models and rebuilds the
 planner; the next request in the same range reuses them.
 
-## The node (`planner_server`)
+## The node (`arm_planner_server`)
 
 ```bash
-ros2 run golem_ompl planner_server --ros-args -p robot:=h12 -p config:=safety_split
+ros2 run golem_ompl arm_planner_server --ros-args -p robot:=h12 -p config:=safety_split
 ros2 launch golem_ompl planner.launch.py robot:=g1 config:=sim_split use_sim_time:=true
 ```
 

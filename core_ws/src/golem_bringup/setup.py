@@ -1,4 +1,4 @@
-"""Install golem_bringup's launch files, RViz configs and slider_debugger.py."""
+"""Install golem_bringup's launch files and RViz configs."""
 import os
 from glob import glob
 
@@ -30,7 +30,6 @@ setup(
         (os.path.join('share', package_name, 'rviz', 'h12'), files('rviz/h12/*.rviz')),
         (os.path.join('share', package_name, 'rviz', 'g1'), files('rviz/g1/*.rviz')),
     ],
-    scripts=['scripts/slider_debugger.py'],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='max',

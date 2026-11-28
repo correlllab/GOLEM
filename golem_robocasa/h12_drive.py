@@ -1,12 +1,12 @@
 """The real H1-2's drive behaviour for the RoboCasa sim: hip-roll series elasticity and the drivers' velocity lag.
 
-Opt-in with GOLEM_H12_DRIVE_MODEL=1 (h12_robot.make_interface); off, the sim is unchanged.
+On by default (h12_robot.make_interface); GOLEM_H12_DRIVE_MODEL=0 gives the ideal motors of before.
 
 Why: on the robot a hip roll follows its target about 0.05 at 10 Hz, 0.10-0.13 at 20 Hz (phase about -90 deg) and
 0.03-0.08 at 30 Hz while walking, in sport mode and under the lmg_deploy policies alike, and the motor drivers report
 the velocity of hip yaw/pitch/roll, knee and torso through a ~21 Hz 2nd-order low-pass (~12 ms late). A rigid joint
 under the same PD follows 20 Hz targets 5-20x less, so a policy that damps hip roll on that lagged velocity rings at
-20 Hz on the robot (lmg_deploy's Coop150k policy did, 2026-11-24) and not in this sim. With the model on:
+20 Hz on the robot (lmg_deploy's Coop150k policy did, 2026-11-24) and, with ideal motors, not in the sim. The model:
 
   * each hip roll gets a rotor of inertia J on which the motor's PD acts, coupled to the link by a gear spring k and
     damper c; rt/lowstate reports the rotor (as the robot's encoder does), the link gets the spring torque:

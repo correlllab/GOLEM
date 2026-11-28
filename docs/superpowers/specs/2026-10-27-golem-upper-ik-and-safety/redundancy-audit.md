@@ -2025,7 +2025,7 @@ passes exactly today's arguments, so its default is unchanged. The G1 can either
     standing and nav from the spawn), and `tests/stack/run.sh robocasa locomotion` for the H1-2.
   - A shared intermediate class under robosuite's registering metaclass may register an extra
     "robot" name; check that `REGISTERED_ROBOTS` stays clean.
-- The port design (`.../audit/6_unified_sim_design.md:225,239,501`) deliberately left placement
+- The port design (`../2026-10-26-g1-port/6_unified_sim_design.md:225,239,501`) deliberately left placement
   per robot. This proposal revisits that now that both copies are in one repo.
 
 ### S2. Spawn-collision tests: `h1_robocasa/test_spawn_collision.py` vs `tests/robocasa/g1/test_g1_spawn_collision.py`. Class B

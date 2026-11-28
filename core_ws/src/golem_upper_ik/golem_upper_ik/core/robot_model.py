@@ -71,7 +71,7 @@ class StateSource(Protocol):
 class FixedState:
     """Report the same state on every read: q, dq (default 0) and optionally an IMU.
 
-    Never stale (staleness_ms 0). The planner subprocess holds the caller's measured q in one.
+    Never stale (staleness_ms 0). golem_ompl's planner holds the request's measured q in one.
     """
 
     def __init__(self, q, dq=None, imu_quaternion=None):

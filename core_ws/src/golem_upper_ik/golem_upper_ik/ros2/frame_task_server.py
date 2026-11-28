@@ -8,7 +8,8 @@ Parameters: robot (required; a robot with data in golem_upper_ik's config/) and 
 Once its start-up is done (UpperController), the node serves /grasp_frame_target
 (custom_ros_messages/GraspFrameTarget): move each arm's grasp frame (the profile's
 grasp_frames) to a target in the pelvis frame or, resolved through TF when the goal starts, in
-a world frame, directly through the IK or along an OMPL plan; it succeeds once every target
+a world frame, directly through the IK or along a path golem_ompl's planner_server plans
+(/plan_arm_trajectory); it succeeds once every target
 has been held within the thresholds for GRASP_SETTLE_S, and aborts at its timeout. It
 publishes at 25 Hz frame_names, frame_targets and frame_poses (the current goal's frames,
 their targets and their measured poses) and /{left,right}_grasp_frame_pose (the grasp frames'
@@ -117,8 +118,7 @@ class FrameTaskServer(Node):
         """Read the parameters and the config; start() builds the controller and the topics.
 
         robot_model: a RobotModel of the robot to use instead of building one.
-        init: run the controller's start-up moves, and start the planner subprocess in the
-            background with them (UpperController's warm_planner).
+        init: run the controller's start-up moves.
         """
         super().__init__('frame_task_server', **node_kwargs)
         self.robot = robot_parameter(self)
@@ -149,11 +149,8 @@ class FrameTaskServer(Node):
         /left_grasp_frame_pose appearing tells the robot's other nodes the controller is up.
         The node must be spinning, since the start-up waits on its /lowstate subscription.
         """
-        # with the start-up moves the planner starts in the background, so the first planned
-        # goal does not wait for it
         self.controller = FrameController(self, self.profile, self.config,
-                                          robot_model=self._robot_model, init=self._init,
-                                          warm_planner=self._init)
+                                          robot_model=self._robot_model, init=self._init)
 
         self.frame_names_publisher = self.create_publisher(StringArray, 'frame_names', 10)
         self.frame_targets_publisher = self.create_publisher(PoseArray, 'frame_targets', 10)
@@ -456,7 +453,7 @@ class FrameTaskServer(Node):
         deadline = clock.now() + timeout
         ik_step = self.controller.control_step_reduced
         if goal.plan:
-            ended = self._grasp_path(goal_handle, kind, deadline, timeout,
+            ended = self._grasp_path(goal_handle, targets, kind, deadline, timeout,
                                      lambda: self.controller.stop_joints(joints, stop_reference))
             if ended is not None:
                 return ended
@@ -481,8 +478,8 @@ class FrameTaskServer(Node):
         return self._end_grasp(goal_handle, Result.NOT_REACHED, f'timed out after {timeout:.1f} '
                                f's{stage}; the arms hold where they are ({errors})')
 
-    def _grasp_path(self, goal_handle, kind, deadline, timeout, stop_arms):
-        """Plan to the IK solution of the targets and execute the path; None once executed.
+    def _grasp_path(self, goal_handle, targets, kind, deadline, timeout, stop_arms):
+        """Plan to an IK solution of targets ({arm: 4x4}) and execute the path; None once done.
 
         Otherwise the goal's result: FAILED when planning or execution fails, NOT_REACHED when
         the deadline (robot time) passes during the path, CANCELED on a cancel; once the path
@@ -498,7 +495,7 @@ class FrameTaskServer(Node):
             kind.feedback(goal_handle, kind.error())
             return goal_handle.is_cancel_requested or clock.now() >= deadline
         try:
-            path = self.controller.plan_to_ik_target(ik_timeout=self.timeout)
+            path = self.controller.plan_to_targets(targets, ik_timeout=self.timeout)
         except StaleStateError:
             raise
         except Exception as error:

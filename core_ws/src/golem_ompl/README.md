@@ -70,6 +70,10 @@ node's other callbacks going on. A robot without a self-collision model serves t
 refuses every request. On SIGINT or SIGTERM the process exits at once, a plan in progress with
 it (`golem_upper_ik`'s `utility.run`).
 
+`golem_bringup` starts it beside the arm controller, on the arm controller's config: the
+H1-2's `h12_control.launch.py` (with `use_frame_task`) and the G1's `g1_core.launch.py`.
+`golem_upper_ik`'s `frame_task_server` sends its `plan: true` goals here.
+
 ## Tests
 
 ```bash

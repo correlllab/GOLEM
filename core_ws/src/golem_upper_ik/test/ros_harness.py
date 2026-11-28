@@ -15,6 +15,9 @@ FollowingRobot settle where a PD would under a load and the controller's torque 
 SimClock publishes /clock as a sim would, at a chosen rate of sim seconds per wall second, and
 Ros.node(name, sim_time=True) makes a node that runs on it (use_sim_time).
 
+PlanServer plays golem_ompl's planner_server for planned goals (golem_ompl depends on this
+package, so its tests cannot run it here).
+
 Every node lives in the test's context, so they share one DDS participant and discover each
 other at once.
 """
@@ -711,3 +714,81 @@ class Spring:
         """Stop updating the sag."""
         self._stop.set()
         self._thread.join(1.0)
+
+
+class PlanServer:
+    """Play golem_ompl's planner_server: serve /plan_arm_trajectory with straight paths.
+
+    A pose goal's IK is golem_upper_ik's IKSolver on a model of the server's own, narrowed to
+    the request's range and re-locked at its measured pose, from the IK's seeds (the first
+    converged seed, no planner behind it); the arms without a target stay at the start. The
+    path is the straight joint path from the start to that solution, one waypoint per dt,
+    as many as the targeted grasp frames' longest distance takes at frame_speed (at least 2).
+    No seed converging gives NO_IK_SOLUTION. requests: the requests served, in order. delay:
+    s of steady time each reply waits before it is sent.
+    """
+
+    def __init__(self, ros, profile, delay=0.0):
+        """Serve the service on a node of ros."""
+        from custom_ros_messages.srv import PlanArmTrajectory
+        from golem_upper_ik.core.robot_model import RobotModel
+        self.profile = profile
+        self.delay = delay
+        self.requests = []
+        self._model = RobotModel(profile)
+        self.node = ros.node('plan_server')
+        self.node.create_service(PlanArmTrajectory, '/plan_arm_trajectory', self._serve)
+
+    def _serve(self, request, response):
+        """Answer request (the service callback)."""
+        import pinocchio as pin
+        from custom_ros_messages.srv import PlanArmTrajectory
+        from trajectory_msgs.msg import JointTrajectoryPoint
+        from golem_upper_ik.core.ik_solver import IKSolver
+        from golem_upper_ik.core.robot_model import FixedState
+        from golem_upper_ik.ros2.utility import pose_to_matrix
+        self.requests.append(request)
+        time.sleep(self.delay)
+        model, profile = self._model, self.profile
+        body = list(profile.body_joints)
+        measured = dict(zip(request.measured.name, request.measured.position))
+        q = np.array([measured[name] for name in body])
+        lower, upper = list(request.position_lower), list(request.position_upper)
+        model.set_position_limits(np.column_stack((lower, upper)) if lower else None)
+        model.state_subscriber = FixedState(q)
+        model.rebuild_reduced_model(q)
+        arm_joints = [name for name, kept in zip(body, model.reduced_mask) if kept]
+        given = dict(zip(request.start.name, request.start.position))
+        start = np.array([given[name] for name in arm_joints])
+        solver = IKSolver(model, profile.named_configs, dt=request.dt, d_min=0.02)
+        frames = {arm: frame.name for arm, frame in zip(('left', 'right'), profile.grasp_frames)}
+        targeted = [arm for arm in ('left', 'right')
+                    if getattr(request, f'{arm}_pose').header.frame_id]
+        for arm in targeted:
+            target = pose_to_matrix(getattr(request, f'{arm}_pose').pose)
+            solver.add_frame_task(arm, frames[arm], target=pin.SE3(target))
+        result = solver.solve_ik_reduced(timeout=request.ik_timeout or 5.0)
+        if not result.success:
+            response.outcome = PlanArmTrajectory.Response.NO_IK_SOLUTION
+            response.message = 'IK failed to resolve current targets'
+            return response
+        goal = start.copy()
+        for index, name in enumerate(arm_joints):
+            if any(name.startswith(f'{arm}_') for arm in targeted):
+                goal[index] = result.q[model.reduced_mask][index]
+        distance = max(np.linalg.norm(
+            model.get_frame_transformation_reduced(frames[arm], goal)[:3, 3]
+            - model.get_frame_transformation_reduced(frames[arm], start)[:3, 3])
+            for arm in targeted)
+        count = max(2, int(np.ceil(distance / (request.frame_speed or 0.25) / request.dt)) + 1)
+        response.outcome = PlanArmTrajectory.Response.PLANNED
+        response.success = True
+        response.message = 'direct path'
+        response.ik_seed = result.seed_name
+        response.trajectory.joint_names = arm_joints
+        response.trajectory.points = [
+            JointTrajectoryPoint(positions=[float(value) for value in waypoint])
+            for waypoint in np.linspace(start, goal, count)]
+        response.goal.name = arm_joints
+        response.goal.position = [float(value) for value in goal]
+        return response

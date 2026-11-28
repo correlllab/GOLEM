@@ -4,7 +4,8 @@ The upper-body (torso or waist, and arms) IK controller of the Unitree H1-2 and 
 nodes, both robots, each robot described by a profile:
 
 - `frame_task_server` solves Pink IK on the 14 arm joints with a self-collision barrier,
-  plans with OMPL, and serves `/grasp_frame_target`. It
+  plans through `golem_ompl`'s `/plan_arm_trajectory` (OMPL), and serves
+  `/grasp_frame_target`. It
   writes its commands only to a `golem_safety` input (`/safety/...`), never to `/lowcmd`.
 - `joint_state_publisher` publishes `/joint_states` for the robot's body joints from
   `/lowstate`.
@@ -27,6 +28,8 @@ The package's launch files start both nodes, and both robots' bringups include t
   not run with `safety_config` (Safety pairing, below), raising `upper_ik: not starting:
   <reason>` before it starts anything, then starts `frame_task_server` after `start_delay`.
   The bringups include it before any other node, so a refused pair stops the launch first.
+  They start `golem_ompl`'s `planner_server` (`planner.launch.py`) beside it, on the same
+  controller config, which plans the goals sent with `plan: true`.
 - `robot_state.launch.py` (`robot` required; `use_sim_time`; `urdf_file`, empty for the
   robot's ROS URDF from `golem_ros2_models`) starts `robot_state_publisher` on that URDF and
   `joint_state_publisher`.
@@ -134,7 +137,8 @@ the publisher, the follow gate) counts robot time: the sim's `/clock` with `use_
 so the controller keeps its timing in sim seconds whatever the sim's speed, and the steady
 (monotonic) clock otherwise, on the real robots (`golem_upper_ik.core.robot_clock`). Under
 `use_sim_time` robot time stands still while `/clock` does, and never steps back. The IK's
-and OMPL's time limits are host compute budgets, in s of steady time.
+and OMPL's time limits, and a plan request's wait for the service, are host compute budgets,
+in s of steady time.
 
 **Start-up**, before any goal:
 
@@ -184,7 +188,7 @@ then moves only in the start-up step 4.
 - The IK, the planner's bounds and the path checks keep every IK joint within the clip range,
   `limits.clip.position_offset` inside the joint table (and within the URDF's limits): the
   controller narrows its robot model's position limits to it (`RobotModel.set_position_limits`)
-  and hands the same range to the planner's subprocess. No solution lies where the clip would
+  and sends the same range with every plan request. No solution lies where the clip would
   cut the command, and a joint the IK parks at a limit sits `position_offset` inside the table,
   so its overshoot past the command stays clear of `golem_safety`'s estop range. A seed, a
   measured pose or an integrated step outside the range is clamped into it. A direct goal's
@@ -233,20 +237,28 @@ then moves only in the start-up step 4.
   5 rad/s² covers the position-limit brake's own deceleration, `dq_lim / LIMIT_APPROACH_TIME`
   (4.2 rad/s² at the sims' 0.83 rad/s, 1.5 at the real G1's 0.3); the constant's comment has the
   measurements.
-- `plan: true`: the goal's joint target is an IK solution of its targets, iterated from the
-  measured pose and then the named seeds `home`, `t_pose` and `arms_front_45`
-  (`core/ik_solver.py`) in two passes: each seed first for at most `SEED_FIRST_PASS` (2 s of
-  steady time), then the seeds that have not converged for the rest of `controller.timeout`
-  each. A seed's solution counts only once the planner finds a path to it; when it finds none,
-  the next seed to converge is tried, and the goal fails with the planner's reason once none
-  is left. The OMPL planner (in a subprocess of its own) plans in the IK joints, with the
-  self-collision checks and the planner frames' x/y/z bounds, and the path is executed one
-  waypoint per control period. Its smoothstep timing gets more waypoints until no joint
-  accelerates faster than `ACCEL_LIMIT` along it, from rest to rest (up to
-  `planner.max_interpolation_steps`). `planner.enabled: false` aborts every planned goal before
-  any IK solve: `Planning is turned off: ...; send the goal with plan=false`. A profile without
-  a self-collision model could not plan either (`Planning is unavailable`); both robots' have
-  one.
+- `plan: true`: the controller asks `golem_ompl`'s `planner_server` for the path
+  (`/plan_arm_trajectory`, `core/plan_client.py`), sending the measured state, the start at the
+  last command (the goal's start, above), the clip range, the targets in the pelvis frame, the
+  waypoint period (the control period unless `planner.dt` is set), `planner.moving_speed`,
+  `planner.timeout`, `ACCEL_LIMIT` and `controller.timeout` as each IK seed's budget. The
+  server runs this package's IK and planner: the goal's joint target is an IK solution of its
+  targets, iterated from the measured pose and then the named seeds `home`, `t_pose` and
+  `arms_front_45` (`core/ik_solver.py`) in two passes: each seed first for at most
+  `SEED_FIRST_PASS` (2 s of steady time), then the seeds that have not converged for the rest
+  of `controller.timeout` each. A seed's solution counts only once the planner finds a path to
+  it; when it finds none, the next seed to converge is tried, and the goal fails with the
+  planner's reason once none is left. The OMPL planner (`core/planner/`) plans in the IK
+  joints, with the self-collision checks and the planner frames' x/y/z bounds, and the path is
+  executed one waypoint per control period. Its smoothstep timing gets more waypoints until no
+  joint accelerates faster than `ACCEL_LIMIT` along it, from rest to rest (up to
+  `planner.max_interpolation_steps`). The planner config is this package's controller config,
+  which the server is started with too. A first planned goal waits up to 30 s of steady time
+  for the service to appear (the server serves once its models are built), and a server that
+  goes away before it replies fails the goal. `planner.enabled: false` aborts every planned
+  goal before any request: `Planning is turned off: ...; send the goal with plan=false`. A
+  profile without a self-collision model could not plan either (`Planning is unavailable`);
+  both robots' have one.
 - The G1's `arms_down` is in self-collision: the real wrists and hands rest on the hips, and
   each hand and wrist sphere sits 2 to 5 cm inside its hip-pitch sphere. A goal to it stops
   short, held off by the barrier, and a planned goal to it fails (`goal is in
@@ -287,9 +299,7 @@ then moves only in the start-up step 4.
   planned goal holds the IK solve's solution, which stops within 1 mm and 10 mrad. It aborts at the timeout, on a planning
   or execution failure, on a hold pinned at a joint limit and on a stale `/lowstate`. A cancel,
   or the timeout, during a planned path stops it before its next waypoint; the IK solve and the
-  planning before the path are not cut short (a planner subprocess that has not started yet
-  builds its robot model first, 0.4 s in the ros container: the node starts it in the
-  background with its start-up moves, `UpperController`'s `warm_planner`). Every end sets the
+  planning before the path are not cut short. Every end sets the
   result's `outcome`: `REACHED` (succeeded), `NOT_REACHED` (aborted: the timeout, before the IK
   converged, during the path or in the hold, or a hold pinned at a joint limit), `CANCELED`, or
   `FAILED` (aborted for anything else: a bad target, TF, planning or execution, a stale
@@ -334,9 +344,9 @@ loads: OpenBLAS's busy-waiting threads would stall the 500 Hz publisher.
 
 **Shutdown.** rclpy's signal handlers are off. The first SIGINT or SIGTERM ends the node; a
 later one is ignored. `frame_task_server` first sends its upper slots one command and stops
-publishing, then stops the planner and its `/lowstate` subscription, the last two even if an
-earlier step fails; the whole shutdown fits in launch's 5 s `sigterm_timeout`. The command
-gives the IK joints mode 0 and zero kp, kd and tau (q and dq as they were). The held joints
+publishing, then ends a plan request waiting for its reply and stops its `/lowstate`
+subscription, the last two even if an earlier step fails; the whole shutdown fits in
+launch's 5 s `sigterm_timeout`. The command gives the IK joints mode 0 and zero kp, kd and tau (q and dq as they were). The held joints
 get the same, unless the profile's `shutdown_keeps_held_joints` is set (the G1):
 then they keep their hold angle, gains and torque, since a walking policy on the legs needs
 a stiff waist. What `golem_safety` does with that command:
@@ -365,8 +375,9 @@ model, IK and planner (`test_robot_model.py`, `test_ik_solver.py`, `test_planner
 robots with their collision models), the ROS I/O, command handler and follow gate
 (`test_ros_io.py`, `test_low_cmd_handler.py`), the controller and the nodes
 (`test_controller_loop.py`, `test_frame_task_server.py`, `/grasp_frame_target` and the grasp
-pose topics included), a start-up IK step with no solution (`test_startup_no_solution.py`),
-the goal loop of `/grasp_frame_target` against a scripted controller (`test_goal_loops.py`) and
+pose topics included; planned goals against `ros_harness.PlanServer`, a stand-in for
+`golem_ompl`'s `planner_server`, whose own tests run the real planning), a start-up IK step
+with no solution (`test_startup_no_solution.py`), the goal loop of `/grasp_frame_target` against a scripted controller (`test_goal_loops.py`) and
 that nothing imports `unitree_sdk2py` (`test_no_sdk.py`).
 
 ## Tools

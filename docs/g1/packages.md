@@ -3,9 +3,9 @@
 The G1's own ROS 2 package is `dex_3`, in
 `core_ws/src/`. `launch_ros.sh` builds
 it in every `ros` container, whichever robot the wrappers selected, so one
-container runs either robot's bringup. The G1 shares seven packages with the H1-2, built for both robots: the
+container runs either robot's bringup. The G1 shares eight packages with the H1-2, built for both robots: the
 safety layer `golem_safety`, the arm controller `golem_upper_ik` and the leg node
-`golem_lowerbody_rl`, each with a profile or data and configs per robot, the models `golem_ros2_models`, the
+`golem_lowerbody_rl`, each with a profile or data and configs per robot, the arm planner `golem_ompl`, the models `golem_ros2_models`, the
 bringup `golem_bringup`, navigation `golem_slam`, and skills `golem_skills`. Each package
 below has its own README with the full details, except the launch-only
 `golem_bringup`.
@@ -24,10 +24,11 @@ below has its own README with the full details, except the launch-only
 | `golem_ros2_models` | both robots' models from `CL_Assets`, installed for ROS ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_ros2_models/README.md)). |
 | `golem_safety` | the safety layer, `safety_node`, the only writer of `rt/lowcmd` ([Safety layer](safety.md), [README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_safety/README.md)). |
 | `golem_upper_ik` | the arm IK controller, `frame_task_server` (`/grasp_frame_target`, the arm interface every arm controller serves), and `joint_state_publisher` ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_upper_ik/README.md)). |
+| `golem_ompl` | the arm planner, `planner_server` (`/plan_arm_trajectory`), which plans `frame_task_server`'s goals sent with `plan: true` ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_ompl/README.md)). |
 | `golem_lowerbody_rl` | the leg node, running HOMIE on the G1's legs ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_lowerbody_rl/README.md)). |
 | `golem_slam` | the SLAM and Nav2 graph both robots run, `navigation.launch.py robot:=g1` ([README](https://github.com/correlllab/GOLEM/blob/main/core_ws/src/golem_slam/README.md)). |
 | `golem_skills` | action servers for `/skill/*`, including `/skill/frontier_explore`, started by `use_skills:=true` in the G1 bringup on its G1 profile (`robot: g1`): `/skill/grasp` and `/skill/pick_place` close the Dex3-1 hands with the heuristic grasp methods (no GraspGenX, no visual servo). |
-| `custom_ros_messages` | the actions and services (`GraspFrameTarget`, `SetHandPose`, `SkillFrontierExplore`, ...). |
+| `custom_ros_messages` | the actions and services (`GraspFrameTarget`, `PlanArmTrajectory`, `SetHandPose`, `SkillFrontierExplore`, ...). |
 | `FAST_LIO` (package `fast_lio`) | lidar-inertial odometry for `golem_slam` |
 | `livox_ros_driver2` | the `CustomMsg` type of `/livox/lidar`, and the MID-360 driver the real G1's bringup starts with `use_nav` (`launch/g1/g1_real_drivers.launch.py`) |
 | `unitree_ros2` | Unitree message definitions (`unitree_hg` and others) |

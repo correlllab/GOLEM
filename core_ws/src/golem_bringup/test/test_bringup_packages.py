@@ -233,7 +233,11 @@ def test_control_refuses_a_mismatched_pair(safety_config, frame_task_config, use
 
 
 def test_control_starts_safety_and_the_controller_after_their_delays(monkeypatch):
-    """The sim staggers estop_node, safety_node and frame_task_server as the real robot does."""
+    """
+    The sim staggers estop_node, safety_node and frame_task_server as the real robot does.
+
+    planner_server starts at once, on frame_task_server's config.
+    """
     nodes = _walk('h12_control.launch.py', sim='false')
     assert nodes['estop_node'] == Started('estop', [], 0.0,
                                           {'use_sim_time': False, 'serial_port': ''})
@@ -242,17 +246,21 @@ def test_control_starts_safety_and_the_controller_after_their_delays(monkeypatch
         'use_estop': True, 'use_sim_time': False})
     assert nodes['frame_task_server'] == Started('golem_upper_ik', [], 5.0, {
         'robot': 'h12', 'config': 'safety_split.yaml', 'use_sim_time': False})
+    assert nodes['planner_server'] == Started('golem_ompl', [], 0.0, {
+        'robot': 'h12', 'config': 'safety_split.yaml', 'use_sim_time': False})
     # The sim bringup: the real configs and delays, the sim's estop box.
     monkeypatch.setenv('ROS_DOMAIN_ID', '7')
     sim = _passed_to('h12_sim.launch.py', 'h12_control.launch.py')
     nodes = _walk('h12_control.launch.py', **sim)
-    assert set(nodes) == {'estop_node', 'safety_node', 'frame_task_server'}
+    assert set(nodes) == {'estop_node', 'safety_node', 'frame_task_server', 'planner_server'}
     assert nodes['estop_node'] == Started('estop', [], 0.0, {
         'use_sim_time': True, 'serial_port': 'socket://127.0.0.1:15707'})
     assert nodes['safety_node'] == Started('golem_safety', [], 3.0, {
         'robot': 'h12', 'config': 'relax_safety_split.yaml', 'sim': True,
         'use_estop': True, 'use_sim_time': True})
     assert nodes['frame_task_server'] == Started('golem_upper_ik', [], 5.0, {
+        'robot': 'h12', 'config': 'safety_split.yaml', 'use_sim_time': True})
+    assert nodes['planner_server'] == Started('golem_ompl', [], 0.0, {
         'robot': 'h12', 'config': 'safety_split.yaml', 'use_sim_time': True})
 
 

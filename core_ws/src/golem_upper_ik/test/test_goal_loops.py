@@ -153,9 +153,9 @@ class FakeController:
         """Re-seed the IK."""
         self._call('update_ik_solver')
 
-    def plan_to_ik_target(self, ik_timeout):
-        """Record a plan to the tasks' IK solution; return 3 waypoints or raise plan_error."""
-        self._call('plan_to_ik_target', ik_timeout)
+    def plan_to_targets(self, targets, ik_timeout):
+        """Record a plan to the targets' IK solution; return 3 waypoints or raise plan_error."""
+        self._call('plan_to_targets', ik_timeout)
         if self._plan_error is not None:
             raise self._plan_error
         return [np.zeros(2)] * 3
@@ -459,7 +459,7 @@ def test_planned_grasp_goal_plans_executes_then_holds():
     """
     trace, handle, result, _ = run_goal(plan=True, path=PATH)
     names = [entry[0] for entry in trace]
-    assert ('plan_to_ik_target', TIMEOUT) in trace
+    assert ('plan_to_targets', TIMEOUT) in trace
     start = names.index('execute_path')
     # before each of the 3 waypoints a feedback and a cancel check, then the hold
     assert names[start + 1:start + 7] == ['feedback', 'cancel?'] * 3
@@ -488,7 +488,7 @@ def test_planned_grasp_goal_stops_its_path():
     # a cancel stops the arm where it is
     names = [entry[0] for entry in trace]
     assert entries(trace, 'stop_joints') == [('stop_joints', [0, 1], ('reference', (0, 1)))]
-    assert names.index('stop_reference') < names.index('plan_to_ik_target')
+    assert names.index('stop_reference') < names.index('plan_to_targets')
     assert names.index('path_stopped') < names.index('stop_joints') < names.index('status')
     trace, handle, result, _ = run_goal(plan=True, path=3.0)
     assert ('path_stopped', 1) in trace and steps(trace) == []

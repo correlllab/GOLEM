@@ -20,8 +20,8 @@ of following it.
 Under use_sim_time the start-up's waits count the sim's /clock (SimClock): its timeouts are s
 of sim time, whether the sim runs faster or slower than the wall clock.
 
-A planned goal's IK goes on to the next seed to converge when the planner finds no path to a
-seed's solution.
+A planned goal's request to golem_ompl carries the measured state, the last command and the
+clip range; without a self-collision model nothing is requested.
 
 The acceleration limit: its stop step, step bounds and per-arm factor, and over whole IK-stepped
 moves (a start-up move, a direct goal, a goal into a position limit) every command's change of
@@ -271,9 +271,9 @@ def test_startup_home_ee_target_and_zero_gain_shutdown(ros, models, robot):
 
 @pytest.mark.parametrize('raising', ['handler', 'planner'])
 def test_shutdown_stops_the_planner_and_detaches_the_state_whatever_raises(raising):
-    """A handler or planner whose shutdown raises still leaves nothing behind.
+    """A handler or plan client whose shutdown raises still leaves nothing behind.
 
-    The planner subprocess is still stopped, the state source detached and the robot clock
+    The plan client is still shut down, the state source detached and the robot clock
     closed, and the error propagates.
     """
     from golem_upper_ik.core.controller.upper_controller import UpperController
@@ -299,102 +299,75 @@ def test_shutdown_stops_the_planner_and_detaches_the_state_whatever_raises(raisi
 
 
 @pytest.mark.parametrize('robot', ROBOTS)
-@pytest.mark.parametrize('refused', [0, 1, 2, None])
-def test_a_planned_goal_takes_the_first_seed_the_planner_reaches(models, robot, refused):
-    """A planned goal's IK goes on to the next converged seed when the planner reaches none.
+def test_a_planned_goals_request_carries_the_controllers_state(ros, models, robot):
+    """The plan request carries what the planner needs to continue from the last command.
 
-    Measured at arms_front_45 and targeting its grasp frames, the measured pose ('current')
-    and the arms_front_45 seed converge with no time to iterate. The planner refuses the
-    first `refused` converged seeds' solutions: the goal plans to the next, fails with the
-    planner's reason once both are refused, and, with a target no seed reaches (None), fails
-    with the IK's error before any plan.
+    The measured state (every body joint), the start at the last command where the arm sags
+    below it, the clip range, each target in the pelvis frame, the control period, the
+    planner section's speed and budget, and the acceleration limit.
     """
-    import pinocchio as pin
-    from golem_upper_ik.core.controller.upper_controller import UpperController
-    from golem_upper_ik.core.ik_solver import IKSolver
-    from golem_upper_ik.core.planner.reduced_joint_planner import PlanResult
-    from golem_upper_ik.core.robot_model import FixedState
-    model = models(robot)
-    profile = model.profile
-    q = model.zero_q_body
-    q[model.reduced_mask] = profile.named_configs['arms_front_45']
-    model.state_subscriber = FixedState(q)
-    try:
-        model.rebuild_reduced_model(q)
-        solver = IKSolver(model, profile.named_configs, dt=1.0 / 30.0, d_min=0.02)
-        for grasp_frame in profile.grasp_frames:
-            target = pin.SE3(model.get_frame_transformation_body(grasp_frame.name, q))
-            if refused is None:
-                target.translation[0] += 1.0  # 1 m further forward: out of reach
-            solver.add_frame_task(grasp_frame.name, grasp_frame.name, target=target)
-        controller = UpperController.__new__(UpperController)
-        controller.robot_model = model
-        controller.ik_solver = solver
-        controller._check_planning = lambda: None
-        controller._active_task_mask = lambda: None
-        controller.update_ik_solver = lambda: None
-        logged = []
-        controller._logger = SimpleNamespace(info=logged.append)
-        plans = []
+    from golem_upper_ik.core.controller.frame_controller import FrameController
+    from golem_upper_ik.core.controller.upper_controller import ACCEL_LIMIT
+    profile = profile_of(robot)
+    config = config_of(robot, CONFIGS[robot])
+    robot_ = FollowingRobot(ros, profile, body_pose(profile, 'prep' if robot == 'h12' else 'home'),
+                            '/lowcmd')
+    model = shared_model(ros, models, robot)
+    controller = FrameController(ros.node('controller'), profile, config, robot_model=model,
+                                 init=False)
+    ros.on_close(controller.shutdown)
+    assert wait_for(lambda: controller.low_cmd_handler.following, 2.0)
+    sag = np.zeros(len(profile.body_joints))
+    sag[model.reduced_mask] = 0.01
+    robot_.set_sag(sag)
+    controller._apply_joint_position(controller.low_cmd_handler.q_cmd.astype(np.float64))
+    assert wait_for(lambda: np.max(np.abs(model.state['q'] + sag
+                                          - controller.low_cmd_handler.q_cmd)) < 1e-5, 2.0)
+    target = np.eye(4)
+    target[:3, 3] = (0.3, 0.2, 0.1)
+    request = controller._plan_request({'left': target}, 3.0)
 
-        def plan(q_reduced, active_mask):
-            """Refuse the first `refused` goals; plan a one-waypoint path to the others."""
-            plans.append(np.array(q_reduced))
-            if len(plans) <= (refused or 0):
-                return PlanResult(success=False, path=np.empty((0, len(q_reduced))),
-                                  reason=f'refused goal {len(plans)}')
-            return PlanResult(success=True, path=np.array([q_reduced]), reason='direct path')
-
-        controller._plan = plan
-        if refused is None:
-            with pytest.raises(RuntimeError, match='IK failed to resolve current targets'):
-                controller.plan_to_ik_target(ik_timeout=0.0)
-            assert plans == []
-        elif refused == 2:
-            with pytest.raises(RuntimeError, match='Planning failed: refused goal 2'):
-                controller.plan_to_ik_target(ik_timeout=0.0)
-            assert len(plans) == 2
-        else:
-            path = controller.plan_to_ik_target(ik_timeout=0.0)
-            assert len(plans) == refused + 1
-            np.testing.assert_array_equal(path, [plans[-1]])
-        assert len(logged) == min(refused or 0, 2)
-        assert all('trying the next seed' in line for line in logged)
-        if refused:
-            assert "seed 'current'" in logged[0]
-    finally:
-        model.state_subscriber = None
+    assert list(request.measured.name) == list(profile.body_joints)
+    np.testing.assert_allclose(request.measured.position, model.state['q'], atol=1e-6)
+    ik_joints = [name for name, kept in zip(profile.body_joints, model.reduced_mask) if kept]
+    assert list(request.start.name) == ik_joints
+    np.testing.assert_allclose(request.start.position,
+                               controller.low_cmd_handler.q_cmd[model.reduced_mask], atol=1e-6)
+    clip = config['limits']['q_clip_limits']
+    np.testing.assert_array_equal(request.position_lower, clip[:, 0])
+    np.testing.assert_array_equal(request.position_upper, clip[:, 1])
+    assert request.left_pose.header.frame_id == 'pelvis'
+    assert request.right_pose.header.frame_id == ''
+    position = request.left_pose.pose.position
+    assert (position.x, position.y, position.z) == (0.3, 0.2, 0.1)
+    assert request.left_pose.pose.orientation.w == pytest.approx(1.0)
+    assert list(request.goal_joints.name) == []
+    assert request.dt == pytest.approx(controller.dt)
+    # 0 where the config leaves the key out: the planner's own setting, from the same config
+    assert request.frame_speed == config['planner'].get('moving_speed', 0.0)
+    assert request.plan_timeout == config['planner'].get('timeout', 0.0)
+    assert request.max_acceleration == ACCEL_LIMIT
+    assert request.ik_timeout == 3.0
 
 
 @pytest.mark.parametrize('robot', ROBOTS)
-@pytest.mark.parametrize('enabled', [True, False])
-def test_warm_planner_starts_the_planner_with_the_controller(ros, models, robot, enabled):
-    """warm_planner starts the planner subprocess in the background as the controller starts.
-
-    Only when the config lets it plan; without warm_planner, or with planning off, none starts.
-    """
-    from golem_upper_ik.core.controller.frame_controller import FrameController
-    profile = profile_of(robot)
-    config = config_of(robot, CONFIGS[robot])
-    config['planner']['enabled'] = enabled
-    FollowingRobot(ros, profile, body_pose(profile, 'prep' if robot == 'h12' else 'home'),
-                   '/lowcmd')
-    model = shared_model(ros, models, robot)
-    warmed = FrameController(ros.node('controller'), profile, config, robot_model=model,
-                             init=False, warm_planner=True)
-    ros.on_close(warmed.shutdown)
-    if enabled:
-        assert wait_for(lambda: warmed.planner._worker is not None
-                        and warmed.planner._worker.process.is_alive(), 60.0)
-    else:
-        time.sleep(0.5)
-        assert warmed.planner._worker is None
-    warmed.shutdown()
-    cold = FrameController(ros.node('controller'), profile, config, robot_model=model,
-                           init=False)
-    ros.on_close(cold.shutdown)
-    time.sleep(0.5)
-    assert cold.planner._worker is None
+def test_a_robot_without_a_self_collision_model_does_not_plan(robot):
+    """Without a self-collision model, a planned goal is refused before any request."""
+    from dataclasses import replace
+    from golem_upper_ik.core.controller.upper_controller import UpperController
+    from golem_upper_ik.core.plan_client import PlannerUnavailableError
+    from golem_upper_ik.profile import robot_config
+    controller = UpperController.__new__(UpperController)
+    controller.profile = replace(profile_of(robot), collision=None)
+    controller.config = {'planner': {'enabled': True}, 'source': 'test'}
+    controller.planner = None  # a request would fail on it
+    display = robot_config(robot)['display_name']
+    with pytest.raises(PlannerUnavailableError) as error:
+        controller.plan_to_targets({'left': np.eye(4)}, 1.0)
+    assert str(error.value) == (
+        f'Planning is unavailable: the {display} has no self-collision model (its profile, '
+        f'golem_upper_ik/config/{robot}/robot.yaml, names no sphere URDF and SRDF); send the '
+        'goal with plan=false')
 
 
 @pytest.mark.parametrize('robot', ROBOTS)

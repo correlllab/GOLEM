@@ -3,9 +3,10 @@
 In this process, frame_task_server against a robot that executes and relays its commands
 (FollowingRobot), sharing the session's robot model: pelvis-frame grasp-frame goals whatever
 the IMU says, a goal's timeout in sim time, the fresh-state wait, the stale-state abort,
-planned goals and planning turned off, the goal start from the last command, the hold pinned
-at a limit, and execute_path's pacing; /grasp_frame_target's goals in the pelvis frame and
-through TF, planned, refused, timed out and canceled, and the grasp pose topics.
+planned goals (planned by ros_harness.PlanServer, which plays golem_ompl's planner_server) and
+planning turned off, the goal start from the last command, the hold pinned at a limit, and
+execute_path's pacing; /grasp_frame_target's goals in the pelvis frame and through TF,
+planned, refused, timed out and canceled, and the grasp pose topics.
 
 Then the installed console scripts as processes: joint_state_publisher's /joint_states,
 the parameters both nodes refuse, frame_task_server's shutdown on a signal, and its command
@@ -29,8 +30,8 @@ import yaml
 from golem_upper_ik.profile import known_robots
 
 from ros_harness import (
-    TEST_DOMAIN, CommandRecorder, FakeRobot, FollowingRobot, RelayedRobot, SimClock, Spring,
-    body_pose, profile_of, shared_model, slots_of, wait_for,
+    TEST_DOMAIN, CommandRecorder, FakeRobot, FollowingRobot, PlanServer, RelayedRobot, SimClock,
+    Spring, body_pose, profile_of, shared_model, slots_of, wait_for,
 )
 
 ROBOTS = known_robots()
@@ -329,6 +330,7 @@ def test_planned_goals(ros, models, robot):
     robot_ = FollowingRobot(ros, profile, body_pose(profile, START[robot]), '/lowcmd')
     model = shared_model(ros, models, robot)
     poses = {arm: PoseRecorder(ros, f'/{arm}_grasp_frame_pose') for arm in ('left', 'right')}
+    plans = PlanServer(ros, profile)
     server_of(ros, model, CONFIGS[robot])
     assert wait_for(lambda: all(recorder.poses for recorder in poses.values()), 5.0)
     frames = [frame.name for frame in profile.grasp_frames]
@@ -353,6 +355,7 @@ def test_planned_goals(ros, models, robot):
     assert status == GoalStatus.STATUS_SUCCEEDED and result.success, result
     assert reached({'left': target})
     assert robot_.commands > 0
+    assert len(plans.requests) == 3
 
 
 def test_planning_turned_off(ros, models, capfd, tmp_path):
@@ -453,7 +456,7 @@ def test_hold_pinned_at_a_limit_is_not_converged(ros, models, robot):
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_controller_keeps_the_ik_in_the_clip_range(ros, models, robot):
-    """The controller narrows its model's and its planner's range to the config's clip range."""
+    """The controller narrows its model's range to the config's clip range."""
     from golem_upper_ik.core.controller.frame_controller import FrameController
     profile = profile_of(robot)
     config = config_of(robot, CONFIGS[robot])
@@ -469,7 +472,6 @@ def test_controller_keeps_the_ik_in_the_clip_range(ros, models, robot):
     np.testing.assert_array_equal(model.model_body_reduced.lowerPositionLimit, low)
     np.testing.assert_array_equal(model.model_body_reduced.upperPositionLimit, high)
     assert controller.ik_solver.configuration_reduced.model is model.model_body_reduced
-    np.testing.assert_array_equal(controller.planner.q_limits, clip)
 
 
 def test_execute_path_waits_for_the_follow_gate(ros, models):
@@ -762,6 +764,7 @@ def test_planned_grasp_frame_target(ros, models, robot):
     """A planned goal moves both grasp frames to their targets along a plan."""
     config = config_of(robot, CONFIGS[robot])
     threshold_linear = config['controller']['threshold_linear']
+    PlanServer(ros, profile_of(robot))
     _, _, _, poses = grasp_server(ros, models, robot)
     targets = {arm: _shifted(_matrix(poses[arm].poses[-1]), (0.04, 0.0, 0.0))
                for arm in ('left', 'right')}
@@ -924,13 +927,13 @@ def test_canceled_grasp_frame_target_holds_where_it_is(ros, models, tmp_path, pl
     # slow enough that the move or the path is still under way at the cancel
     planner = {'moving_speed': 0.02}
     config = edited_config(tmp_path, 'h12', CONFIGS['h12'], planner=planner, v_lim=0.02)
+    PlanServer(ros, profile_of('h12'))
     following, _, _, poses = grasp_server(ros, models, 'h12', config=config)
     start = _matrix(poses['left'].poses[-1])
     target = _shifted(start, (0.05, 0.0, 0.0))
     client = GraspClient(ros)
     handle = client.send(grasp_goal(left=target, plan=plan, timeout=30.0))
     begun = following.measured()
-    # a first plan waits for the planner process to build its robot model
     assert wait_for(lambda: np.max(np.abs(following.measured() - begun)) > 0.005, 60.0)
     time.sleep(0.5)
     handle.cancel_goal_async()

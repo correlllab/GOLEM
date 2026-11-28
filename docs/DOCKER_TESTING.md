@@ -63,9 +63,8 @@ ROS_DOMAIN_ID=7 docker/scripts/docker_run.sh ros python3 /home/code/h12_sim_scri
 ```
 
 Stop this single-service simulator before trying `docker_stack.sh up isaac
---headless`. Isaac's existing sensor coverage differs from RoboCasa; this
-Docker change does not add missing clock/lidar/IMU functionality or establish
-full navigation/skills parity.
+--headless`. Isaac's `rt/lowstate` tick counts publishes, so the leg policy
+never starts there (CLAUDE.md §8).
 
 ## Mount and restart checks
 

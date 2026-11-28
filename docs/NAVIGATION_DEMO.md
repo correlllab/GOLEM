@@ -9,8 +9,8 @@ Set up the host and build the images first ([`SETUP.md`](SETUP.md)).
 ## What it demonstrates
 
 - **The shared navigation graph** — `h12_sim.launch.py` runs `golem_slam`'s
-  `navigation.launch.py` for the H1-2 (`use_nav`, on by default; `golem_slam`'s
-  README has the details). FAST-LIO turns the Livox lidar and IMU into odometry
+  `navigation.launch.py` for the H1-2 (always included; `golem_slam`'s README
+  has the details). FAST-LIO turns the Livox lidar and IMU into odometry
   (`/Odometry`) and a deskewed cloud; `self_filter` drops the robot's own body
   from it; `level_odom` publishes the gravity-aligned `odom → base_footprint`;
   OctoMap builds the 3D map and its 2D projection `/projected_map`; the cloud is
@@ -34,14 +34,17 @@ workspace first and starts `h12_sim.launch.py` once the sim publishes:
 ```bash
 # from the repo root; --headless when there is no display
 GOLEM_CAMERAS=0 GOLEM_SPAWN_BACKOFF=1.5 docker/scripts/docker_stack.sh up robocasa --gui
-docker/scripts/docker_stack.sh logs robocasa     # wait for the leg node's "elastic band released"
+docker/scripts/docker_stack.sh logs robocasa     # wait for the leg node's "holding; the policy may start"
 ```
 
-Then send the explorer:
+The legs hold their pre-pose until the operator's confirm, as on the real
+robot (the leg node repeats the confirm call while it holds). Confirm, wait
+for the leg node's "elastic band released" in the logs, then send the explorer:
 
 ```bash
 docker exec -it golem_ros bash
 source /opt/ros/humble/setup.bash && source /home/code/core_ws/install/setup.bash
+ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger
 ros2 action send_goal /skill/frontier_explore custom_ros_messages/action/SkillFrontierExplore \
   "{min_frontier_cells: 6, blacklist_radius: 0.6, min_goal_distance: 0.7, goal_timeout: 120.0, timeout: {sec: 1800, nanosec: 0}}" \
   --feedback

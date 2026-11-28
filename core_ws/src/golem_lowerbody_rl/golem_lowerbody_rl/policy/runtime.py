@@ -9,23 +9,12 @@ need not install onnxruntime.
 from __future__ import annotations
 
 import os
-from typing import Protocol
 
 import numpy as np
 
 from golem_lowerbody_rl.policy.spec import RuntimeSpec
 
-__all__ = ['OnnxRuntime', 'Runtime', 'TorchScriptRuntime', 'load_runtime']
-
-
-class Runtime(Protocol):
-    """Run a network on one input vector and clear its state."""
-
-    def __call__(self, x: np.ndarray) -> np.ndarray:
-        """Return the network's output (float32) for the float32 input x."""
-
-    def reset(self) -> None:
-        """Clear the network's recurrent state, if it has any."""
+__all__ = ['OnnxRuntime', 'TorchScriptRuntime', 'load_runtime']
 
 
 def _last_line(error: Exception) -> str:

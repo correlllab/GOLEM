@@ -149,6 +149,5 @@ on a fake clock); `test_launch.py` (the launch file's refusals);
 heartbeat loss and bad `/lowstate`), both on `ROS_DOMAIN_ID`, or 97 when it is
 unset, 0 or 1, with every name of a `test_node_safety.py` run under a prefix of
 its own. `test_node_safety.py` needs DDS discovery between processes: not
-`--network none`. The mypy test is skipped where
-`ament_mypy` is not installed (the ros image). `policies/homie/test_homie_policy.py`
-checks HOMIE's own policy file.
+`--network none`. `policies/homie/test_homie_policy.py` checks HOMIE's own
+policy file.

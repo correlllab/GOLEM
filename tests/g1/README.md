@@ -29,14 +29,17 @@ band while `golem_safety` streams zero-gain `rt/lowcmd`. The leg node (`golem_lo
     fault;
   - `band released after the controller is ready`: the band comes off once and stays off,
     because `frame_task_server` is up: every toggle call the leg node logs gives
-    `/left_ee_pose` as its reason, so a release by `band.max_wait` fails the check. The band is
-    off after the first `/left_ee_pose` the test sees and within the leg node's run config's
+    `/left_grasp_frame_pose` as its reason, so a release by `band.max_wait` fails the check. The
+    band is off after the first `/left_grasp_frame_pose` the test sees and within the leg node's run config's
     `band.max_wait` of the policy's start;
   - `standing after release`: the robot stands for 5 s after the release.
 
   The report also prints the pelvis and the feet around the release, for the record.
 - **Arm test**: after the release, the arms are at `home` from the controller's start-up, a
-  `t_pose` goal succeeds and the arms reach it, and `/left/hand/close` closes the left hand. Then
+  direct `/grasp_frame_target` goal to the grasp frames' poses at `arms_front_45` (forward kinematics
+  of the named config on `golem_upper_ik`'s model) ends without a fault and the measured grasp
+  frames are within 10 mm and 0.05 rad of them 0.5 s later, and `/left/hand/close` closes the
+  left hand. Then
   `frame_task_server` alone is stopped while the leg node balances the robot. Its shutdown
   command keeps the waist at its hold, so the waist roll and pitch stay within 0.1 rad of it
   for 4 s (a limp waist slumps about 0.5 rad), and the robot keeps standing. The test finds the

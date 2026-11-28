@@ -33,7 +33,7 @@ from tf2_ros import TransformException
 
 from custom_ros_messages.action import SkillGrasp, SkillPickPlace
 
-from ..base import _Run, FRAME_TASK_STABLE_STOP_MSGS, WORLD_FRAME
+from ..base import _Run, ARM_MOVE_STABLE_STOP_MSGS, WORLD_FRAME
 from ..perception_utils import (matrix_to_pose, pose_to_matrix,
                                 transform_to_matrix)
 from ..grasp_synthesis.common import pose_at
@@ -124,11 +124,8 @@ class PickPlaceSkill:
         # Arms out of the head camera's view before the detection image (the
         # grasp skill's own move to prep is then a no-op). The skill has not
         # moved the arm yet, so there is no retreat.
-        prep = self.robot.prep_config
-        if not self.goto_named_config(prep, plan=True, slow_mode=True,
-                                      duration_sec=30.0, result_timeout=90.0,
-                                      outer_gh=gh):
-            return run.abort(f'move to {prep!r} before detection failed')
+        if not self.goto_posture('prep', self.robot.prep_posture, outer_gh=gh):
+            return run.abort("move to 'prep' before detection failed")
         place_cloud, _, err = self.detect_object_cloud(place, run, gh)
         if err:
             return fail(f'place target: {err}')
@@ -186,7 +183,7 @@ class PickPlaceSkill:
             if not self._servo_pose(
                     lift_frame, to_pinch(rung), world_ok, gh, do_plan=False,
                     duration_sec=LIFT_STEP_DURATION_SEC,
-                    stable_stop_msgs=FRAME_TASK_STABLE_STOP_MSGS,
+                    stable_stop_msgs=ARM_MOVE_STABLE_STOP_MSGS,
                     label=f'lift rung {k}/{n_rungs} (+{dz * 100:.0f}cm Z)'):
                 return fail(f'post-grasp lift failed at {dz * 100:.0f}cm of '
                             f'{LIFT_HEIGHT * 100:.0f}cm')
@@ -296,10 +293,10 @@ class PickPlaceSkill:
         return transform_to_matrix(tf.transform)
 
     def _servo_pose(self, frame, pose, world_ok, gh, do_plan,
-                    duration_sec=LIFT_STEP_DURATION_SEC, slow_mode=False,
+                    duration_sec=LIFT_STEP_DURATION_SEC,
                     label='', stable_stop_msgs=None):
         """
-        Drive URDF `frame` to `pose` with the grasp skill's servo tolerances; return reached.
+        Drive `frame` to `pose` with the grasp skill's servo tolerances; return reached.
 
         With `world_ok`, `pose` is in WORLD_FRAME and servo_frame_to_world
         compensates drift (the target is re-resolved into the live pelvis
@@ -318,8 +315,7 @@ class PickPlaceSkill:
         return self.servo_frame_to_world(
             frame, world_pose, fallback, outer_gh=gh,
             duration_sec=duration_sec, max_iter=SERVO_MAX_ITER,
-            lin_tol=SERVO_LIN_TOL, ang_tol=SERVO_ANG_TOL, do_plan=do_plan,
-            slow_mode=slow_mode, label=label,
+            lin_tol=SERVO_LIN_TOL, ang_tol=SERVO_ANG_TOL, do_plan=do_plan, label=label,
             stable_stop_msgs=stable_stop_msgs)
 
 

@@ -136,8 +136,8 @@ class Driver(stack_test.Driver):
         """Wait until Nav2 is ready; return whether it became ready within `timeout` s of wall time.
 
         Ready: Nav2's lifecycle nodes active, /navigate_to_pose served, map -> base_footprint in
-        TF, and a /map and a /converted_scan heard. The game runs no frame_task_server, so
-        /named_config is not waited for.
+        TF, and a /map and a /converted_scan heard. No arm action is waited for: the test moves
+        no arm.
         """
         from lifecycle_msgs.msg import State
         from lifecycle_msgs.srv import GetState

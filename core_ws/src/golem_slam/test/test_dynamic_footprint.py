@@ -94,7 +94,7 @@ def test_the_arms_count_only_after_the_controller_starts_up():
     """Before the ready topic's first message, or during a live arm goal, the body is alone."""
     done = [status_array(GoalStatus.STATUS_SUCCEEDED)]
     live = [status_array(GoalStatus.STATUS_EXECUTING)]
-    assert 'starting up' in body_only_reason(False, done, '/left_ee_pose')
-    assert '/left_ee_pose' in body_only_reason(False, done, '/left_ee_pose')
-    assert body_only_reason(True, live, '/left_ee_pose') == 'an arm goal is in flight'
-    assert body_only_reason(True, done, '/left_ee_pose') is None
+    assert 'starting up' in body_only_reason(False, done, '/left_grasp_frame_pose')
+    assert '/left_grasp_frame_pose' in body_only_reason(False, done, '/left_grasp_frame_pose')
+    assert body_only_reason(True, live, '/left_grasp_frame_pose') == 'an arm goal is in flight'
+    assert body_only_reason(True, done, '/left_grasp_frame_pose') is None

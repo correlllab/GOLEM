@@ -40,7 +40,7 @@ real.yaml), and drives the legs through golem_safety's split mode. It sends
 nothing until golem_safety beats on /safety/heartbeat and rt/lowstate is
 upright. Then it ramps the legs to the policy's default pose and holds it
 until 1 s of steady rt/lowstate and the controller's commands, and in the sim
-the controller's first /left_ee_pose (its start-up moves done; or band.max_wait
+the controller's first /left_grasp_frame_pose (its start-up moves done; or band.max_wait
 after the pose was reached). In the sim it then starts the policy and releases
 the sim's elastic band; on the real robot it holds the pose until the operator
 calls /lowerbody/confirm_engage (golem_lowerbody_rl's README has the details).

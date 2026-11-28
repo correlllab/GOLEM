@@ -2,7 +2,8 @@
 # Run one H1-2 stack case: the real controllers against a sim, scored from the sim's own telemetry.
 #
 # Usage: tests/stack/run.sh isaac|robocasa arms|locomotion
-#   arms         both wrists 2 cm forward and back through /frame_task (check_frame_task.py)
+#   arms         both grasp frames 2 cm forward and back through /grasp_frame_target
+#                (check_frame_task.py)
 #   locomotion   ALMI balance, walk and stop on /cmd_vel (check_lowerbody.py); RoboCasa only:
 #                `isaac locomotion` is refused, since Isaac's rt/lowstate tick counts publishes
 #                and the leg node never starts there (tests/stack/README.md)

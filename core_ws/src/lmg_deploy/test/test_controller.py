@@ -346,7 +346,7 @@ def test_older_observation_terms_are_refused(terms):
 
 def test_arm_goal_replaces_the_command_and_walking_goes_on():
     """An arm goal (pelvis frame) takes over the arm command at once and stays put while the robot walks; the operator's
-    command stays live through it (arm_goal_keeps_walking); ending it returns the rest pose."""
+    command stays live through it (arm_goal_keeps_walking)."""
     ctrl, cfg = _controller()
     state = _state(cfg)
     ctrl.reset(state)
@@ -360,9 +360,71 @@ def test_arm_goal_replaces_the_command_and_walking_goes_on():
     np.testing.assert_allclose(ctrl.believed, goal, atol=1e-12)
     np.testing.assert_allclose(ctrl.velocity_command(), [0.3, 0.0, 0.2])
     assert np.linalg.norm(ctrl.observed_command()) > 0.0
-    ctrl.end_arm_goal()
-    assert ctrl.mode == Mode.NAV
-    np.testing.assert_allclose(ctrl.believed, ctrl.rest_pose)
+
+
+def test_a_one_arm_goal_leaves_the_other_arms_command_and_posture():
+    """A goal on one arm moves that arm's command and posture seed only; the other keeps both, from navigation (the
+    rest pose, the default angles) or from an earlier goal; its row of poses is not read."""
+    ctrl, cfg = _controller()
+    state = _state(cfg)
+    ctrl.reset(state)
+    goal = ctrl.rest_pose.copy()
+    goal[:, :3] += [0.08, 0.0, 0.12]
+    goal[1] = np.nan                                              # not read
+    ctrl.request_arm_goal(goal, arms=[0])
+    assert ctrl.mode == Mode.ARM
+    np.testing.assert_allclose(ctrl.believed[0], goal[0], atol=1e-12)
+    np.testing.assert_array_equal(ctrl.believed[1], ctrl.rest_pose[1])
+    np.testing.assert_array_equal(ctrl.seed_q[7:], ctrl.default[20:])
+    assert np.abs(ctrl.seed_q[:7] - ctrl.default[13:20]).max() > 0.05
+    left_seed = ctrl.seed_q[:7].copy()
+    right = ctrl.rest_pose.copy()
+    right[1, :3] += [0.08, 0.0, 0.12]
+    ctrl.request_arm_goal(right, arms=[1])
+    np.testing.assert_allclose(ctrl.believed[0], goal[0], atol=1e-12)
+    np.testing.assert_array_equal(ctrl.seed_q[:7], left_seed)
+    assert np.abs(ctrl.seed_q[7:] - ctrl.default[20:]).max() > 0.05
+
+
+def test_both_arms_goal_seeds_as_one_goal_per_arm():
+    """A goal on both arms gives each arm the seed a goal on it alone gives (the arms' solves are their own)."""
+    ctrl, cfg = _controller()
+    goal = ctrl.rest_pose.copy()
+    goal[0, :3] += [0.08, 0.0, 0.12]
+    goal[1, :3] += [0.05, -0.02, 0.10]
+    ctrl.reset(_state(cfg))
+    ctrl.request_arm_goal(goal)
+    both = ctrl.seed_q.copy()
+    for arm, cols in ((0, slice(0, 7)), (1, slice(7, 14))):
+        ctrl.reset(_state(cfg))
+        ctrl.request_arm_goal(goal, arms=[arm])
+        np.testing.assert_allclose(ctrl.seed_q[cols], both[cols], atol=1e-12)
+
+
+def test_hold_arms_stops_an_arm_where_it_is():
+    """hold_arms: the arm's command is its measured wrist pose, its posture and trajectory its measured angles (at
+    rest); the other arm keeps its command and posture; the trajectory then stays on the measured angles."""
+    ctrl, cfg = _controller(torque_headroom=None)
+    state = _state(cfg)
+    ctrl.reset(state)
+    goal = ctrl.rest_pose.copy()
+    goal[:, :3] += [0.08, 0.0, 0.12]
+    ctrl.request_arm_goal(goal)
+    right_cmd, right_seed = ctrl.believed[1].copy(), ctrl.seed_q[7:].copy()
+    q = np.array(cfg["default_joint_pos"], dtype=np.float64)
+    q[13:20] += np.array([-0.3, 0.2, 0.1, 0.4, 0.0, -0.1, 0.05])
+    ctrl.hold_arms(q, [0])
+    ctrl.kin.update(q)
+    np.testing.assert_allclose(ctrl.believed[0], np.concatenate(ctrl.kin.wrist_pose(0)), atol=1e-12)
+    np.testing.assert_array_equal(ctrl.seed_q[:7], q[13:20])
+    np.testing.assert_array_equal(ctrl.ik_q[:7], q[13:20])
+    np.testing.assert_array_equal(ctrl.traj_v[:7], 0.0)
+    np.testing.assert_array_equal(ctrl.believed[1], right_cmd)
+    np.testing.assert_array_equal(ctrl.seed_q[7:], right_seed)
+    held = _state(cfg, q)
+    for _ in range(300):
+        ctrl.step(held)
+    np.testing.assert_allclose(ctrl.ik_q[:7], q[13:20], atol=1e-6)
 
 
 # -- action terms ------------------------------------------------------------------------
@@ -774,9 +836,6 @@ def test_arm_ik_seed_is_the_nearest_rows_angles_once_per_goal(tmp_path):
     np.testing.assert_allclose(ctrl.seed_q, SEED_ROWS[2].reshape(14), atol=1e-6)
     ctrl.request_arm_goal(ctrl.rest_pose)
     np.testing.assert_allclose(ctrl.seed_q, ctrl.default[13:])
-    ctrl.request_arm_goal(goal)
-    ctrl.end_arm_goal()
-    np.testing.assert_allclose(ctrl.seed_q, ctrl.default[13:])
 
 
 def test_arm_ik_seed_solve_reaches_the_command(tmp_path):
@@ -878,7 +937,7 @@ def test_arm_ik_integral_adds_the_weighted_dls_step_once_arrived(tmp_path):
 
 def test_arm_ik_freeze_latches_the_residual_on_the_goal_and_releases_it(tmp_path):
     """freeze: once arrived with both wrists on the command for settle_s the residual is held whatever the action;
-    ending the arm goal releases it."""
+    a new goal that moves the posture releases it."""
     arms = ConstNetwork(np.full(14, 0.5))
     freeze = {"pos_tol": 0.001, "rot_tol": 0.0873, "settle_s": 0.05}
     ctrl, cfg = _ik_controller()
@@ -902,7 +961,7 @@ def test_arm_ik_freeze_latches_the_residual_on_the_goal_and_releases_it(tmp_path
     for _ in range(5):
         ctrl.step(state)
     np.testing.assert_allclose(ctrl.residual, held)
-    ctrl.end_arm_goal()
+    ctrl.request_arm_goal(_wrist_goal(ctrl, SEED_ROWS[1].reshape(14)))
     ctrl.step(state)
     assert not ctrl.frozen
     ctrl.step(state)

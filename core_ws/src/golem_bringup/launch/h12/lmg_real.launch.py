@@ -91,7 +91,10 @@ def generate_launch_description():
             'engage_wait_for_confirm': 'true',
             'disable_elastic_band': 'false',
         }),
-        # SLAM and Nav2, driving the policy on /cmd_vel.
-        include('golem_slam', 'navigation.launch.py', {**wall_time, 'robot': 'h12'},
+        # SLAM and Nav2, driving the policy on /cmd_vel. The local costmap's footprint is the
+        # body polygon alone (arm_footprint false), as the game has always run: the arms
+        # widening it is off until someone turns it on for the game.
+        include('golem_slam', 'navigation.launch.py',
+                {**wall_time, 'robot': 'h12', 'arm_footprint': 'false'},
                 condition=IfCondition(LaunchConfiguration('use_slam'))),
     ])

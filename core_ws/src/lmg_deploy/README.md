@@ -11,8 +11,9 @@ IK trajectory from `arm_seed_table.npz` plus the learned residual; the /lowstate
 calibrated orientation, so it needs h12's entry in `config/imu_calibration.yaml`, and its legs actor is
 not shown the wrist targets); its `export.yaml`'s `source` names the checkpoint. A
 **legs** agent that walks on `/cmd_vel`, and an **arms** agent that reaches
-wrist-pose goals along an IK trajectory plus a learned residual. One node, `marl_deploy_node`, owns all 27 joints. It publishes
-through the split safety layer and obeys `/safety/heartbeat`.
+wrist-pose goals along an IK trajectory plus a learned residual, given as grasp-frame targets on
+`/grasp_frame_target` (Arm goals, below). One node, `marl_deploy_node`, owns all 27 joints. It publishes through the
+split safety layer and obeys `/safety/heartbeat`.
 
 Modelled on `golem_lowerbody_rl`'s `lowerbody_controller_node`. The node goes
 through the same steps (pre-pose ramp, operator confirm, elastic-band
@@ -34,13 +35,16 @@ the first latches it silent.
 | `lmg_deploy/calibrate_imu.py` | `ros2 run lmg_deploy calibrate_imu <bag>`: the calibration from a bag of the robot standing still on both feet |
 | `config/imu_calibration.yaml` | each robot's torso-IMU calibration (`h12`, `g1`), with how and when it was measured |
 | `lmg_deploy/marl_deploy_node.py` | the ROS node: safety channels, heartbeat, pre-pose, band, operator interface |
+| `lmg_deploy/grasp_server.py` | `/grasp_frame_target` and the `/{left,right}_grasp_frame_pose` topics: the action server on threads of its own, the goals run by the control tick |
+| `lmg_deploy/grasp_goal.py` | ROS-free: the wrist <-> grasp-frame transform from the URDF, the goals' errors and their settle judge |
 | `config/example.yaml`, `config/example.export.yaml` | every key of a deploy config and of `export.yaml`, with its meaning and units (nothing loads them; `test/test_example_configs.py` keeps their keys in step) |
 | `config/policy_template.yaml` | the deploy config a new policy starts from: joint order, defaults, gains, scales, bounds, command ranges (each from the training env), and the SLAM body frame |
 | `policies/<robot>/<robot>.yaml`, `{legs,arms}.pt`, `export.yaml` | the robot's one policy (`h12/`; `g1/` empty): its deploy config and what the export writes, below; the `.pt` files in Git LFS (`policies/.gitattributes`). One iteration at a time, old ones deleted (`policies/README.md`) |
 | `bags/<name>/` | rosbag2 recordings of Explicit500 on the real robot (`policy_bag_walk`: walking to nav2 goals; `reach`: an arm goal, ended by the hardware e-stop), the `.db3` files in Git LFS |
 | `test/test_controller.py` | unit tests (rotations vs Isaac Lab, Jacobian, observation layout, arm goals, `arm_ik`, the refused export formats) on the shipped policy's deploy config (`test/shipped_policy.py`: `policies/h12/h12.yaml` with its `export.yaml` over it, as the node loads them) |
 | `test/test_node_config.py` | the node refuses, at start, an export it would misread |
-| `test/sim_drive.py` | a scripted drive in the Robocasa sim (stand, walk, turn, side-step, arm goal), measured on FAST-LIO's `/Odometry` |
+| `test/test_grasp_goal.py`, `test/test_grasp_server.py` | the grasp-frame maths; `/grasp_frame_target` over ROS against a stand-in controller (success, timeout, cancel, world frames through TF, the queue, refusals, each with its outcome) and the pose topics |
+| `test/sim_drive.py` | a scripted drive in the Robocasa sim (stand, walk, turn, side-step, a `/grasp_frame_target` goal), measured on FAST-LIO's `/Odometry` |
 | `test/test_heartbeat_gate.py` | a real node with the shipped policy on a non-zero DDS domain: silent, in `waiting_heartbeat`, until the first beat, then it pre-poses from the pose at the beat |
 | `test/test_imu_calibration.py` | the calibration's math, the export contract in the controller, the estimator on synthetic kinematics |
 | `test/test_gyro_lowpass.py` | the gyro low-pass: a Butterworth at any sample rate, its step response, its restart after a dropout |
@@ -157,18 +161,47 @@ navigation on `/cmd_vel`), `use_rviz`, `prepose_ramp_s`, `prepose_max_vel`,
 the kitchen through Nav2: `tests/sim/test_lmg_explore.sh` runs it closed loop).
 
 **Driving it** (from `docker exec -it golem_ros bash`). The node walks on `/cmd_vel` once engaged, the arms at the
-rest pose:
+rest pose until the first arm goal:
 
 ```bash
 ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.3}}"   # walk (clipped to the export's command_ranges)
+ros2 topic echo /left_grasp_frame_pose --once   # the measured grasp frame, pelvis frame
+ros2 action send_goal /grasp_frame_target custom_ros_messages/action/GraspFrameTarget \
+  "{left: {header: {frame_id: pelvis}, pose: {position: {x: 0.51, y: 0.18, z: 0.16}, orientation: {w: 1.0}}},
+    timeout: {sec: 10}}" --feedback               # the right arm, without a frame_id, keeps its command
 ros2 topic echo /marl_deploy_node/state         # idle, waiting_heartbeat, preposing, waiting_confirm, nav, arm_goal, fault: ...
 ```
 
-**Arm goals.**
-- An arm goal takes over at once (`settle_to_arm_s` and `settle_to_nav_s` must be 0: a settle at the switch is refused).
-- The goal is a `left_wrist_yaw_link` and `right_wrist_yaw_link` pose in the pelvis frame, taken when it starts, and
-  it rides on the pelvis from then on, as the policy trained (`arm_goal_frame: pelvis`).
-- `/cmd_vel` stays live during an arm goal (`arm_goal_keeps_walking`).
+**Arm goals** (`/grasp_frame_target`, `custom_ros_messages/action/GraspFrameTarget`; `grasp_server.py`). The interface
+`golem_upper_ik`'s `frame_task_server` serves too (the action's comments are the contract); only one of them runs.
+- Each target is an arm's grasp frame (`left_grasp_frame`, `right_grasp_frame`: the Magpie pinch points, 23 cm along
+  the wrist in the URDF). The node takes the fixed wrist -> grasp-frame transform from the URDF it loads and gives
+  the policy the `*_wrist_yaw_link` goal that puts the grasp frame on the target.
+- `header.frame_id` `pelvis`: relative to the robot now. Any other frame (`odom`, `map`) is resolved into the pelvis
+  frame through TF once, when the goal is accepted: the node listens to TF on a node of its own for up to 1 s and
+  takes the newest transform (one more than 0.5 s of robot time old is refused). The goal then rides on the pelvis
+  (`arm_goal_frame: pelvis`): when the robot walks or sways the target moves with it. An empty `frame_id` leaves
+  that arm's command and posture as they are; a goal without any target, or with a non-finite value, aborts.
+- Goals run one at a time, in the order they came; the legs keep walking on `/cmd_vel` throughout. A goal succeeds
+  once every targeted grasp frame has stayed within the tolerance for the settle time, and aborts at its `timeout`
+  (robot time from its start; 0: the default); a cancel or the timeout stops the targeted arms where they are (their
+  command, posture and trajectory set to the measured pose and angles). After any end the arms hold their last
+  command. Feedback (25 Hz) is each arm's grasp-frame error, m and rad, pelvis frame (0 without a target). `plan` is
+  ignored: the policy moves directly. The result's `outcome` is `REACHED` on success, `NOT_REACHED` at the timeout,
+  `CANCELED` on a cancel (of a running or a queued goal) and `FAILED` for every other abort (below).
+- Tolerance, settle time and default timeout: the deploy config's `grasp_frame_target` block (`config/example.yaml`),
+  else `GRASP_DEFAULTS` in `marl_deploy_node.py`: 15 mm, 0.1 rad, 0.5 s, 10 s. In the RoboCasa sim the shipped
+  policy held its grasp frames 3-7 mm (at most 6-12 mm) and 0.01-0.06 rad from reachable targets 5-15 cm away,
+  standing or walking at 0.2 m/s, within 0.7-1.8 s; unmeasured on the real H1-2. The arms move along the policy's
+  joint-space trajectory to a posture from the seed table, not a straight line: a target 18 cm away took the grasp
+  frame up to 44 cm from its start on the way.
+- A goal is refused (aborted, with why) until the node has engaged and, in the sim, released the elastic band; a
+  fault (the node latching silent), a `/lowstate` older than 1 s (`GRASP_STALE_ABORT_S`; a shorter gap only pauses
+  the policy) or the episode's restart aborts the goals in flight.
+- `/left_grasp_frame_pose`, `/right_grasp_frame_pose` (`geometry_msgs/PoseStamped`, `pelvis`): the grasp frames by
+  forward kinematics of the newest `/lowstate`, 25 Hz, from the first `/lowstate` on (within 1.2 mm and 0.004 rad of
+  TF's in the sim).
+- `settle_to_arm_s` and `settle_to_nav_s` must be 0: the policy switches to its arm goal at once.
 
 ## Real robot
 
@@ -189,7 +222,7 @@ ros2 service call /marl_deploy_node/confirm_engage std_srvs/srv/Trigger         
   after `nav` appears moves the robot. A publisher still streaming (e.g. `ros2 topic pub -r`) sets it again on its
   next message.
 - The node always waits for `~/confirm_engage`, here as in `lmg_sim`, and never calls the sim's elastic band; neither is an argument.
-- Drive with `/cmd_vel` as above.
+- Drive with `/cmd_vel` and `/grasp_frame_target` as above.
 - Same `safety_config` and `use_slam` arguments as the sim launch.
 
 **Before the first real run:**

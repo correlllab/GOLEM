@@ -19,7 +19,7 @@ from rclpy.task import Future
 from rclpy.time import Time
 from std_msgs.msg import Bool
 
-from test_heartbeat_halt import DDS_CONFIG, SILENT, FakeClock, FakeNamedConfigClient
+from test_heartbeat_halt import DDS_CONFIG, SILENT, FakeArmClient, FakeClock
 
 TEST_DOMAIN = 95
 
@@ -121,8 +121,8 @@ def test_a_skill_deadline_counts_the_steady_clock_without_sim_time(real):
 def test_an_arm_move_wait_counts_sim_time(sim):
     """Under use_sim_time an arm move's result wait ends after its timeout of sim time."""
     node, clock, _ = sim
-    client = FakeNamedConfigClient()
-    node.named_config_cli = client
+    client = FakeArmClient()
+    node.grasp_target_cli = client
     outcome = []
     caller = threading.Thread(target=lambda: outcome.append(
         node._send_action(client, 'goal', result_timeout=1.0)))

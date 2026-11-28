@@ -97,7 +97,7 @@ def test_an_inward_step_that_did_not_move_is_blocked():
 
 
 def test_an_inward_step_that_moved_is_not_blocked():
-    """A step covered to within the frame_task residual is free motion."""
+    """A step covered to within the arm move's residual is free motion."""
     assert not approach_blocked(0.010, 0.008)
 
 

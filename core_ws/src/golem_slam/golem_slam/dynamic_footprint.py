@@ -12,10 +12,12 @@ While an arm goal is in flight on any of ``arm_action_status`` (accepted,
 executing or cancelling), the footprint is the body polygon alone: a hand
 reaching for a handle or a counter must not read as the robot colliding with
 it, or Nav2 would stop the base during a grasp. The same body polygon goes out
-until the first message on ``arms_ready_topic``, which the arm controller
-publishes once its start-up moves are done (frame_task_server's
-``/left_ee_pose``): those moves swing the arms behind the pelvis, past the
-local costmap's inflation radius, while the robot cannot drive yet. It also goes
+until the first message on ``arms_ready_topic``, the arm controller's
+``/left_grasp_frame_pose``: golem_upper_ik's frame_task_server publishes it
+once its start-up moves are done (those moves swing the arms behind the
+pelvis, past the local costmap's inflation radius, while the robot cannot
+drive yet); lmg_deploy's marl_deploy_node publishes it whenever /lowstate is
+fresh, so under it the arms count from its start. It also goes
 out while any arm link has no TF within ``max_tf_age``.
 
 Nav2's costmap reads a polygon on its ``footprint`` topic in place of its
@@ -153,8 +155,9 @@ class DynamicFootprint(Node):
         self.max_tf_age = Duration(seconds=self.declare_parameter('max_tf_age', 0.5).value)
         topics = [t for t in self.declare_parameter(
             'arm_action_status',
-            ['/frame_task/_action/status', '/named_config/_action/status']).value if t]
-        self.ready_topic = self.declare_parameter('arms_ready_topic', '/left_ee_pose').value
+            ['/grasp_frame_target/_action/status']).value if t]
+        self.ready_topic = self.declare_parameter('arms_ready_topic',
+                                                  '/left_grasp_frame_pose').value
 
         self.boxes = None
         self.status = {}

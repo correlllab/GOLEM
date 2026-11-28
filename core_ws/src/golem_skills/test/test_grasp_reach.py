@@ -264,12 +264,12 @@ def reach_g1():
     return model, q
 
 
-def test_the_g1_ik_follows_its_tool_frame_through_the_palm(reach_g1):
+def test_the_g1_ik_follows_its_tool_frame_through_the_pinch_frame(reach_g1):
     """From 'home' the left Dex3-1 grasp frame reaches 5 cm ahead, not 1 m ahead."""
     model, q = reach_g1
     frame = 'left_dex3_grasp_frame'
     model.start(q)
-    cur = model.frame_pose('left_hand_palm_link') @ model.robot.tool_frames[frame].matrix()
+    cur = model.frame_pose('left_grasp_frame') @ model.robot.tool_frames[frame].matrix()
     near, far = cur.copy(), cur.copy()
     near[0, 3] += 0.05
     far[0, 3] += 1.0

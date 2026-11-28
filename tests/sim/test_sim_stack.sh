@@ -1,7 +1,7 @@
 #!/bin/bash
 # Closed-loop test of either robot's whole stack in the RoboCasa sim, run from
 # the host: the robot stands unsupported, Nav2 walks it to a goal 1.5 m ahead
-# while /named_config moves its arms, and SLAM stays healthy throughout.
+# while /grasp_frame_target moves its arms, and SLAM stays healthy throughout.
 #
 #   tests/sim/test_sim_stack.sh --h12
 #   tests/sim/test_sim_stack.sh --g1
@@ -14,7 +14,7 @@
 # ('ros2 launch golem_bringup h12_sim.launch.py use_rviz:=false use_skills:=false'
 # or 'g1_sim.launch.py use_rviz:=false') and the test's steps
 # (test_sim_stack.py drive): wait for the elastic band's release and Nav2, send
-# one NavigateToPose goal, move the arms to 't_pose' and back 'home' while the
+# one NavigateToPose goal, move the arms out and back 'home' while the
 # robot walks, record. Then it stops the sim first (OUT/stop), with the robot
 # standing, and the bringup once the sim has saved its recording: stopping the
 # bringup first would stop rt/lowcmd, and the sim, with every motor off after

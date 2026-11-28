@@ -397,6 +397,12 @@ def ik_steps_per_iteration(trace):
     return counts
 
 
+def outcome(name):
+    """Return the GraspFrameTarget result's outcome constant called name."""
+    from custom_ros_messages.action import GraspFrameTarget
+    return getattr(GraspFrameTarget.Result, name)
+
+
 def messages(trace, level):
     """Return the log messages of a level."""
     return [entry[1] for entry in trace if entry[0] == level]
@@ -671,6 +677,7 @@ def test_grasp_goal_succeeds_once_the_targets_have_settled():
     trace, handle, result, _ = run_goal('grasp', ik=(FAR, NEAR), hold=(True,), errors=errors)
     assert steps(trace) == ['ik_step', 'ik_step'] + ['hold_step'] * 5
     assert handle.status == 'succeeded' and result.success
+    assert result.outcome == outcome('REACHED')
     assert result.message == 'reached (left 0.0 mm 0.0000 rad, right 0.0 mm 0.0000 rad)'
     feedback = entries(trace, 'feedback')
     assert len(feedback) == 7
@@ -729,6 +736,7 @@ def test_grasp_goal_aborts_at_its_timeout():
     """
     trace, handle, result, _ = run_goal('grasp', ik=(NEAR,), hold=(True,))
     assert handle.status == 'aborted' and not result.success
+    assert result.outcome == outcome('NOT_REACHED')
     assert steps(trace) == ['ik_step'] + ['hold_step'] * (ITERATIONS - 1)
     assert result.message.startswith('timed out after 1.0 s; the arms hold where they are '
                                      '(left 1000.0 mm 1.0000 rad')
@@ -737,7 +745,7 @@ def test_grasp_goal_aborts_at_its_timeout():
     assert names.index('hold_step') < names.index('stop_joints') < names.index('status')
     trace, handle, result, _ = run_goal('grasp', request=grasp_request(timeout=2.0))
     assert steps(trace) == ['ik_step'] * 2 * ITERATIONS
-    assert handle.status == 'aborted'
+    assert handle.status == 'aborted' and result.outcome == outcome('NOT_REACHED')
     assert result.message.startswith('timed out after 2.0 s before the IK converged; the arms '
                                      'hold where they are')
 
@@ -746,6 +754,7 @@ def test_grasp_goal_canceled_holds_where_it_is():
     """A canceled grasp goal stops its arms where they are, then ends canceled, saying so."""
     trace, handle, result, _ = run_goal('grasp', ik=(FAR, NEAR), cancel_at=3)
     assert handle.status == 'canceled' and not result.success
+    assert result.outcome == outcome('CANCELED')
     assert steps(trace) == ['ik_step', 'ik_step', 'hold_step']
     assert result.message.startswith('canceled; the arms hold where they are (left')
     names = [entry[0] for entry in trace]
@@ -775,10 +784,11 @@ def test_canceled_frame_and_named_goals_keep_their_last_command(action):
 
 
 def test_grasp_goal_pinned_at_a_limit_aborts():
-    """A grasp goal whose hold is pinned at a joint limit aborts, naming the joint."""
+    """A grasp goal whose hold is pinned at a joint limit aborts, naming the joint: not reached."""
     limited = ((), (('left_elbow_joint', 1.5, 1.5),))
     trace, handle, result, _ = run_goal('grasp', ik=(NEAR,), limited=limited)
     assert handle.status == 'aborted' and not result.success
+    assert result.outcome == outcome('NOT_REACHED')
     assert result.message.startswith('the hold is pinned at a joint position limit: '
                                      'left_elbow_joint q=+1.500 (limit +1.500)')
 
@@ -801,7 +811,7 @@ def test_planned_grasp_goal_plans_executes_then_holds():
     assert names[start + 7:start + 9] == ['init_steady_state', 'cancel?']
     # the rest of the 1 s timeout after the path, in hold steps
     assert steps(trace) == ['hold_step'] * (ITERATIONS - 3)
-    assert handle.status == 'aborted'
+    assert handle.status == 'aborted' and result.outcome == outcome('NOT_REACHED')
     assert result.message.startswith('timed out after 1.0 s; the arms hold where they are (left')
 
 
@@ -810,6 +820,7 @@ def test_planned_grasp_goal_reached():
     trace, handle, result, _ = run_goal('grasp', plan=True, path=PATH,
                                         errors=(FAR,) * 3 + (NEAR,) * SETTLE_READS)
     assert handle.status == 'succeeded' and result.success
+    assert result.outcome == outcome('REACHED')
     assert steps(trace) == ['hold_step'] * SETTLE_READS
 
 
@@ -817,7 +828,7 @@ def test_planned_grasp_goal_stops_its_path():
     """A cancel or the timeout during the path stops it at the next waypoint."""
     trace, handle, result, _ = run_goal('grasp', plan=True, path=PATH, cancel_at=2)
     assert ('path_stopped', 1) in trace and steps(trace) == []
-    assert handle.status == 'canceled'
+    assert handle.status == 'canceled' and result.outcome == outcome('CANCELED')
     assert result.message.startswith('canceled during the path; the arms hold where they are')
     # a cancel stops the arm where it is
     names = [entry[0] for entry in trace]
@@ -827,7 +838,7 @@ def test_planned_grasp_goal_stops_its_path():
     trace, handle, result, _ = run_goal('grasp', plan=True, path=3.0)
     assert ('path_stopped', 1) in trace and steps(trace) == []
     # so does the timeout
-    assert handle.status == 'aborted'
+    assert handle.status == 'aborted' and result.outcome == outcome('NOT_REACHED')
     assert entries(trace, 'stop_joints') == [('stop_joints', [0, 1], ('reference', (0, 1)))]
     assert result.message.startswith(
         'timed out after 1.0 s during the path; the arms hold where they are (left')
@@ -845,6 +856,7 @@ def test_planned_grasp_goal_failure_aborts(failing, message, stops):
     trace, handle, result, _ = run_goal('grasp', plan=True,
                                         **{failing: RuntimeError('no path found')})
     assert handle.status == 'aborted' and not result.success
+    assert result.outcome == outcome('FAILED')
     assert result.message == message
     assert steps(trace) == []
     assert entries(trace, 'stop_joints') == (
@@ -856,6 +868,7 @@ def test_grasp_goal_stale_state_aborts(plan):
     """A stale /lowstate mid-goal aborts a grasp goal with the reason."""
     trace, handle, result, _ = run_goal('grasp', plan=plan, ik=(NEAR,), stale_at=2)
     assert handle.status == 'aborted' and not result.success
+    assert result.outcome == outcome('FAILED')
     assert result.message == ('/lowstate is 80 ms stale (> 50 ms); holding the last command')
 
 
@@ -868,6 +881,7 @@ def test_grasp_goal_refused_before_any_step(request_, words):
     """A grasp goal without a target or with a bad pose aborts before the controller moves."""
     trace, handle, result, controller = run_goal('grasp', request=request_())
     assert handle.status == 'aborted' and not result.success
+    assert result.outcome == outcome('FAILED')
     assert result.message.startswith(words), result.message
     assert steps(trace) == [] and entries(trace, 'check_state_fresh') == []
 

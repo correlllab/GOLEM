@@ -50,7 +50,8 @@ def generate_launch_description():
     if case == 'locomotion':
         # The leg controller under test: ALMI on the H1-2's sim run config, as the sim bringups
         # run it (check_lowerbody.py gives the operator's confirm; it releases the band). Its start needs frame_task_server's
-        # fresh commands and first /left_ee_pose, so the arm controller above runs in this case too.
+        # fresh commands and first /left_grasp_frame_pose, so the arm controller above runs in this
+        # case too.
         nodes.append(Node(
             package='golem_lowerbody_rl', executable='lowerbody_controller_node', name='lowerbody_controller_node',
             parameters=[sim_time, {'robot': 'h12', 'config': 'sim', 'policy': 'almi'}], output='screen'))

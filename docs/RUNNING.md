@@ -137,8 +137,14 @@ docker/scripts/docker_run.sh ros
 ros2 launch golem_bringup h12_sim.launch.py
 
 # Terminal 3 (inside golem_ros, workspace sourced)
-ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 'home', duration: {sec: 0, nanosec: 0}}"
+# optional: both grasp frames to their poses at golem_upper_ik's 'home', planned
+# (the grasp skill moves the arms to its own 'prep' posture first anyway)
+ros2 action send_goal /grasp_frame_target custom_ros_messages/action/GraspFrameTarget \
+  "{left: {header: {frame_id: pelvis}, pose: {position: {x: 0.466, y: 0.2095, z: 0.0956},
+     orientation: {w: 1.0}}},
+    right: {header: {frame_id: pelvis}, pose: {position: {x: 0.466, y: -0.2095, z: 0.0956},
+     orientation: {w: 1.0}}},
+    plan: true, timeout: {sec: 30}}"
 
 ros2 action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
   "{target_object: 'vertical fridge handle', arm: 'right', timeout: {sec: 60, nanosec: 0}}" \

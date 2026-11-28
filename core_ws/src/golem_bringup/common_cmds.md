@@ -13,7 +13,7 @@ Quick sanity checks:
 
 ```bash
 ros2 topic hz /lowstate          # sim/robot is alive and publishing state
-ros2 action list | grep -E 'skill|frame_task|named_config'
+ros2 action list | grep -E 'skill|grasp_frame_target'
 ```
 
 **Timeouts:** every `/skill/*` goal takes a `timeout` Duration. **Omit it (or send
@@ -71,7 +71,7 @@ Two start-up failures to watch for in this terminal:
   `golem_safety` waits for: `/lowstate` reporting `mode_machine` 6, a first
   estop sample, the paired safety config, no estop latched. Meanwhile
   `safety_node` logs `engage_refused` with the reason, at most once a second.
-  The rest of the bringup keeps running, without `/frame_task`.
+  The rest of the bringup keeps running, without `/grasp_frame_target`.
 
 The leg controller's input is held like any other: if it crashes or stops,
 `golem_safety` keeps relaying its last leg command and only reports it
@@ -109,8 +109,8 @@ ros2 launch golem_bringup h12_real_desktop.launch.py
 # add use_hand_cameras:=true when the grasp uses visual_servo
 ```
 
-Wait for `golem_skills` to report ready; it looks for frame_task, the grippers
-and the model servers on startup.
+Wait for `golem_skills` to report ready; it looks for `/grasp_frame_target`, the
+grippers and the model servers on startup.
 
 **4. Grasp.** Lay the screwdriver flat in reach of the arm, shaft pointing
 straight away from the robot. `top_down` closes the fingers along pelvis ±Y
@@ -129,26 +129,35 @@ ros2 action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
 Drop `top_down: true` to try the heuristic side approaches instead.
 
 **5. Lift.** The grasp skill closes the gripper and stops. Raise the hand
-straight up from where it closed with a relative `frame_task` goal. With
-`relative: true` each target is an offset from the frame's current pose: the
-position is added in pelvis axes (`z: 0.05` = 5 cm up), and an identity
-orientation (`w: 1.0`, not all zeros) keeps the wrist as it is. Use
-`left_graspgenx_frame` for the left arm.
+straight up from where it closed with a `/grasp_frame_target` goal 5 cm above
+the right grasp frame's measured pose. The action takes absolute targets in
+the `pelvis` frame, so read the pose first and send it back with `z` raised
+and the orientation kept (an arm without a target, here the left, stays where
+it is; use `left` for the left arm):
 
 ```bash
-ros2 action send_goal /frame_task custom_ros_messages/action/FrameTask \
-  "{relative: true, plan: false, frame_names: ['right_graspgenx_frame'],
-    frame_targets: [{position: {x: 0.0, y: 0.0, z: 0.05},
-                     orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}],
-    duration: {sec: 3, nanosec: 0}}" \
+ros2 topic echo --once /right_grasp_frame_pose
+# copy position and orientation, add 0.05 to position.z:
+ros2 action send_goal /grasp_frame_target custom_ros_messages/action/GraspFrameTarget \
+  "{right: {header: {frame_id: pelvis},
+            pose: {position: {x: X, y: Y, z: Z_PLUS_0_05},
+                   orientation: {x: QX, y: QY, z: QZ, w: QW}}},
+    timeout: {sec: 5}}" \
   --feedback
 ```
 
-Then carry the handle back by raising the arm to `prep`:
+Then carry the handle back by raising both arms to the grasp skill's `prep`
+posture (its pinch-frame poses in `golem_skills/robots.py`), planned:
 
 ```bash
-ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 'prep', plan: true, slow_mode: true, duration: {sec: 30, nanosec: 0}}" \
+ros2 action send_goal /grasp_frame_target custom_ros_messages/action/GraspFrameTarget \
+  "{left: {header: {frame_id: pelvis},
+           pose: {position: {x: 0.2498, y: 0.2810, z: 0.1802},
+                  orientation: {x: 0.1638, y: 0.0037, z: -0.0282, w: 0.9861}}},
+    right: {header: {frame_id: pelvis},
+            pose: {position: {x: 0.2498, y: -0.2810, z: 0.1802},
+                   orientation: {x: -0.1638, y: 0.0037, z: 0.0282, w: 0.9861}}},
+    plan: true, timeout: {sec: 30}}" \
   --feedback
 ```
 
@@ -304,64 +313,34 @@ aborts, which reads as a servo failure when it is really budget starvation.
 
 ---
 
-## Named arm configs (`/named_config`)
+## Arm grasp-frame targets (`/grasp_frame_target`)
 
-Drive the 14 arm joints to a predefined posture (`named_configs` in
-`golem_upper_ik/config/h12/robot.yaml`). `plan: false` (or omitted) servos
-directly; `plan: true` runs the planner first. `duration` is the goal's time
-limit; `0` uses the controller config's `controller.timeout` (5 s in the H1-2
-configs). `slow_mode: true` moves at a quarter of the speed.
-
-The available configs are the keys of `named_configs` in that file. The grasp
-skill itself uses `prep` (arms clear of the head camera) and
-`staging_left` / `staging_right` (pre-approach posture for the grasping arm).
+Move each arm's grasp frame (its pinch point: `left_grasp_frame` /
+`right_grasp_frame` on the H1-2's Magpie grippers) to a pose in the **`pelvis`**
+frame, or in another TF frame (`map`, `odom`), resolved into the pelvis frame
+once when the goal starts. An arm whose target has an empty `frame_id` stays
+where it is. `plan: true` has `golem_upper_ik` plan a path first (`lmg_deploy`,
+which serves the same action, ignores it). `timeout` counts robot time from the
+goal's start, the planning included; `0` is the controller's `controller.timeout`
+(5 s in the H1-2 configs), too short for most planned goals. The goal succeeds
+once the targets have been held within the controller's tolerance (about 1 mm on
+`golem_upper_ik`, 15 mm on `lmg_deploy`); its feedback is each arm's error. A
+cancel or the timeout stops the arms where they are. The measured poses are on
+`/left_grasp_frame_pose` and `/right_grasp_frame_pose`.
 
 ```bash
-# arms down to the home baseline
-ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 'home', duration: {sec: 0, nanosec: 0}}" \
+# right grasp frame to a point in front of the robot, the wrist level (pelvis frame)
+ros2 action send_goal /grasp_frame_target custom_ros_messages/action/GraspFrameTarget \
+  "{right: {header: {frame_id: pelvis},
+            pose: {position: {x: 0.40, y: -0.25, z: 0.10},
+                   orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}},
+    timeout: {sec: 5}}" \
   --feedback
 ```
 
-```bash
-# T-pose, planned, over 4 s
-ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{plan: true, config_name: 't_pose', duration: {sec: 4, nanosec: 0}}" \
-  --feedback
-```
-
----
-
-## Frame task / arm IK (`/frame_task`)
-
-Command one or more end-effector frames to a Cartesian target. Targets are
-`geometry_msgs/Pose` in the **`pelvis`** frame; orientation is a quaternion
-(`w: 1.0` = identity). `frame_names` and `frame_targets` must be the same length.
-Common frames: `left_wrist_yaw_link`, `right_wrist_yaw_link`.
-
-```bash
-# move the right wrist to a point in front of the robot (pelvis frame)
-ros2 action send_goal /frame_task custom_ros_messages/action/FrameTask \
-  "{plan: false,
-    frame_names: ['right_wrist_yaw_link'],
-    frame_targets: [{position: {x: 0.30, y: -0.20, z: 0.10},
-                     orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}],
-    duration: {sec: 3, nanosec: 0}}" \
-  --feedback
-```
-
-```bash
-# dual-arm: both wrists to symmetric targets, planned
-ros2 action send_goal /frame_task custom_ros_messages/action/FrameTask \
-  "{plan: true,
-    frame_names: ['left_wrist_yaw_link', 'right_wrist_yaw_link'],
-    frame_targets: [{position: {x: 0.24, y: 0.20, z: 0.09},
-                     orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}},
-                    {position: {x: 0.24, y: -0.20, z: 0.09},
-                     orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}],
-    duration: {sec: 4, nanosec: 0}}" \
-  --feedback
-```
+The grasp skill's postures (`prep`, the staging postures) are pinch-frame poses
+in `golem_skills/robots.py`; the carry in the screwdriver walk-through above
+sends `prep`.
 
 ---
 

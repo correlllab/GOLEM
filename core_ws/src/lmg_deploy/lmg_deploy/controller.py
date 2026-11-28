@@ -81,8 +81,10 @@ state it reads; the observations, the arms' gravity offset and step() all see
 the corrected attitude.
 
 Modes follow the training command schedule: navigation (arms holding the rest
-pose) or an arm goal (one wrist pose per arm, in the pelvis frame, riding on
-the pelvis as arm_goal_frame pelvis trained it), switched at once.
+pose) until the first arm goal, then the arm goal (one wrist pose per arm, in
+the pelvis frame, riding on the pelvis as arm_goal_frame pelvis trained it).
+A goal may target one arm; the other keeps its command and posture seed.
+hold_arms() stops arms where they are (a canceled or timed-out goal).
 """
 
 import logging
@@ -268,24 +270,37 @@ class MarlController:
         """Set the velocity command (vx, vy m/s, wz rad/s, body frame), clipped to the training ranges."""
         self.cmd_vel = np.clip(np.asarray(cmd, dtype=np.float64), self.cmd_low, self.cmd_high)
 
-    def request_arm_goal(self, poses: np.ndarray) -> None:
+    def request_arm_goal(self, poses: np.ndarray, arms=None) -> None:
         """Start an arm goal: (arms, 7) wrist targets (x, y, z, qw, qx, qy, qz) in the pelvis frame now.
 
-        It starts at once, from navigation or replacing the goal in arm mode.
+        arms: the arms (indices) the goal targets, None: all. Each other arm keeps its arm command and posture, and
+        its row of poses is not read. It starts at once, from navigation or replacing the goal in arm mode.
         """
-        goal = np.asarray(poses, dtype=np.float64).reshape(self.num_arms, 7).copy()
-        for arm in range(self.num_arms):
-            goal[arm, 3:] = quat_unique(goal[arm, 3:] / np.linalg.norm(goal[arm, 3:]))
+        arms = list(range(self.num_arms)) if arms is None else list(arms)
+        poses = np.asarray(poses, dtype=np.float64).reshape(self.num_arms, 7)
+        goal = self.believed.copy()
+        for arm in arms:
+            goal[arm, :3] = poses[arm, :3]
+            goal[arm, 3:] = quat_unique(poses[arm, 3:] / np.linalg.norm(poses[arm, 3:]))
         self.believed = goal
         self.mode = Mode.ARM
-        self._update_seeds()
+        self._update_seeds(arms)
 
-    def end_arm_goal(self) -> None:
-        """Return to navigation from an arm goal, the arms to the rest pose."""
-        if self.mode == Mode.ARM:
-            self.mode = Mode.NAV
-            self.believed = self.rest_pose.copy()
-            self._update_seeds()
+    def hold_arms(self, q: np.ndarray, arms) -> None:
+        """Stop the arms (indices) where they are: each one's command to its measured wrist pose, its posture to its
+        measured joint angles (q: rad, policy order), and its trajectory stopped there (ik_q at q, at rest), so its
+        target holds the measured pose instead of running on ahead of the lagging arm. The other arm keeps its
+        command and trajectory."""
+        self.kin.update(q)
+        for arm in arms:
+            pos, quat = self.kin.wrist_pose(arm)
+            self.believed[arm] = np.concatenate([pos, quat])
+            cols = self.kin.arm_cols[arm]
+            # SAFETY: the target steps back onto the measured angles, which only lowers the PD torque it asks for
+            self.seed_q[cols - ARM_START] = q[cols]
+            self.ik_q[cols - ARM_START] = q[cols]
+            self.traj_v[cols - ARM_START] = 0.0
+        self.mode = Mode.ARM
 
     def step(self, state: RobotState) -> JointCommand:
         """Run one env step at the measured state and return the joint command."""
@@ -352,20 +367,23 @@ class MarlController:
         if c.get("gravity_offset") and self.imu_frame not in self.kin.extra_frames:
             raise ValueError(f"arm_ik.gravity_offset needs the IMU frame {self.imu_frame!r} among the kinematics' frames")
 
-    def _update_seeds(self) -> None:
-        """Set seed_q for the arm command just set (ArmTargetsCommand draws it once per goal): during an arm goal the
-        seed table's nearest rows, with seed_solve solved for the command; the rest pose and navigation: default."""
-        default = self.default[ARM_START:].copy()
-        if self.mode != Mode.ARM or np.allclose(self.believed, self.rest_pose, atol=1e-9):
-            self.seed_q = default
-            return
+    def _update_seeds(self, arms) -> None:
+        """Set seed_q for the arms (indices) whose command was just set (ArmTargetsCommand draws it once per goal): the
+        seed table's nearest row, with seed_solve solved for the command; an arm commanded to its rest pose: the
+        default angles. The other arm keeps its seed."""
         seed = self.default.copy()
-        for arm in range(self.num_arms):
-            seed[self.kin.arm_cols[arm]] = self._nearest_row(arm)
-        if self.arm_ik.get("seed_solve"):
+        seed[ARM_START:] = self.seed_q
+        reaching = [arm for arm in arms if not np.allclose(self.believed[arm], self.rest_pose[arm], atol=1e-9)]
+        for arm in arms:
+            cols = self.kin.arm_cols[arm]
+            seed[cols] = self._nearest_row(arm) if arm in reaching else self.default[cols]
+        if reaching and self.arm_ik.get("seed_solve"):
             c = self.arm_ik["seed_solve"]
-            seed = self.kin.solve_arms(self.believed, seed, self.solve_low, self.solve_high, iters=int(c["iters"]),
-                                       damping=float(c["damping"]), rot_weight=float(c["rot_weight"]))
+            # each arm's solve is its own (its joints, the torso held), so the arms not reaching keep their seed
+            solved = self.kin.solve_arms(self.believed, seed, self.solve_low, self.solve_high, iters=int(c["iters"]),
+                                         damping=float(c["damping"]), rot_weight=float(c["rot_weight"]))
+            for arm in reaching:
+                seed[self.kin.arm_cols[arm]] = solved[self.kin.arm_cols[arm]]
         self.seed_q = seed[ARM_START:].copy()
 
     def _nearest_row(self, arm: int) -> np.ndarray:

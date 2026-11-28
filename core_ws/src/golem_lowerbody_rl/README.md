@@ -70,8 +70,8 @@ takes no `/lowstate` before the first `/clock`, and logs that it waits. The node
     ended and its verdict stands while the next fills, so a recent stall makes
     the policy not ready again however long the hold, and a slowed tick does
     within 1 s of the node's clock. The arm controller's `/safety/lowcmd_upper_in` is fresh
-    within 0.5 s and, with `band.release` (the sims), `frame_task_server`'s
-    first `/left_ee_pose` has come or `band.max_wait` has passed. The node logs
+    within 0.5 s and, with `band.release` (the sims), the arm controller's
+    first `/left_grasp_frame_pose` has come or `band.max_wait` has passed. The node logs
     `the policy waits: <reason>` every 5 s. With `startup.wait_for_confirm`
     (the real robot and the H1-2 sim) it then waits for
     `ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger`,
@@ -114,7 +114,7 @@ delays a state sample by as long as it holds it.
 ## Elastic band (sim)
 
 With `band.release` (the sims' run configs) the node calls
-`/elastic_band/toggle` once: when the policy runs and `/left_ee_pose` has come,
+`/elastic_band/toggle` once: when the policy runs and `/left_grasp_frame_pose` has come,
 or `band.max_wait` after the policy started, and only when the service is there
 (it warns once while it is not). It logs `releasing the elastic band:
 <reason>`. The service flips the band, so the reply is final. A success logs

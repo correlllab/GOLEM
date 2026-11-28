@@ -42,7 +42,7 @@ band:
   # true or false: true calls the sim's /elastic_band/toggle once the policy has started
   # (false on the real robot, which has no band)
   release: true
-  # s of robot time (> 0): how long the policy waits for the first /left_ee_pose after the
+  # s of robot time (> 0): how long the policy waits for the first /left_grasp_frame_pose after the
   # pre-pose, and the band release after the policy starts, before going ahead anyway
   max_wait: 34.0
 

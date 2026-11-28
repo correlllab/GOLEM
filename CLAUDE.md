@@ -209,7 +209,7 @@ nests `unitree_api`, `unitree_go`, `unitree_hg`, `unitree_ros2_example`).
 | `golem_bringup` | **bringup (both robots)** | Launch-only package that starts the whole H1-2 (`launch/h12/`) or G1 (`launch/g1/`), sim or real. See §6. | top-level + building-block launch files, RViz configs |
 | `golem_ros2_models` | **description (both robots)** | Installs both robots' models from `CL_Assets`: the H1-2 with its Magpie grippers and the G1 with its Dex3-1 hands, each a Pinocchio URDF, a ROS copy with `package://golem_ros2_models/...` URIs, the meshes, and a sphere-packed self-collision model with its SRDF. No nodes and no joint table (that is `golem_safety`'s robot profile) | `golem_ros2_models.paths`; `launch/display.launch.py` (`robot:=h12|g1`) |
 | `golem_lowerbody_rl` | **controller (lower body, both robots)** | One leg node for both robots, run from config, with no robot or policy name in its code: a robot's `config/<robot>/` (`robot.yaml`: leg joints and the policies it may run; `sim.yaml` and `real.yaml`: start-up, band, command and fault limits of the run) and each policy's spec in `config/<robot>/policies/<name>.yaml` (runtime, TorchScript or ONNX; observation terms; command processing; action mapping); joint slots and `mode_machine` come from `golem_safety`'s robot profile. The H1-2 runs the TorchScript walking, FAME RMA stand/squat and ALMI stand/walk policies, one per run (`policy:=`, `almi` by default in every bringup); the G1 runs HOMIE's ONNX walking policy (its weights under their own licence in `policies/homie/`, §8). ROS only (no Unitree SDK): consumes `/lowstate`, `/cmd_vel` and `/lowerbody/height`, publishes the 12 leg joints' PD setpoints on `golem_safety`'s `/safety/lowcmd_lower_in` | `lowerbody_controller_node` (`/lowerbody/confirm_engage`, `/lowerbody/active_policy`); `launch/lowerbody.launch.py` (`robot`, `config`, `policy`, `sim`; refuses a run config for the other platform, a real-robot run config without the operator's confirm, or an unlisted policy before any node starts: `lowerbody: not starting: ...`), which `h12_lowerbody.launch.py` and `g1_core.launch.py` include; the H1-2's top-level files, which include the leg block last, run the same check first (`golem_bringup.h12_legs.leg_check`) |
-| `lmg_deploy` | controller (whole body, MARL) | The loco-manipulation game's two-agent (legs + IK arms) MARL policy, run by the `lmg_*` bringups. It reads the torso IMU as `/lowstate` reports it, with the robot's calibration removed (`config/imu_calibration.yaml`). Policies live one per robot, `policies/h12/` and `policies/g1/` (empty), **one iteration at a time: a new export replaces the folder and old ones are deleted** (`policies/README.md`) | `marl_deploy_node` |
+| `lmg_deploy` | controller (whole body, MARL) | The loco-manipulation game's two-agent (legs + IK arms) MARL policy, run by the `lmg_*` bringups. It reads the torso IMU as `/lowstate` reports it, with the robot's calibration removed (`config/imu_calibration.yaml`). It serves `/grasp_frame_target` and publishes `/{left,right}_grasp_frame_pose`, the arm interface `golem_upper_ik` serves too (never both at once). Policies live one per robot, `policies/h12/` and `policies/g1/` (empty), **one iteration at a time: a new export replaces the folder and old ones are deleted** (`policies/README.md`) | `marl_deploy_node` |
 | `golem_slam` | SLAM + navigation (both robots) | One navigation graph for both robots (FAST-LIO deskewed cloud → self filter → floor alignment (`level_odom`)/OctoMap and `level_cloud` → scan → slam_toolbox → Nav2 MPPI, every Nav2 command through the velocity smoother; the local costmap's footprint widened by the arms, `dynamic_footprint`, the body alone during an arm goal), with the dynamic `body → pelvis` transform (`body_to_pelvis`, following the torso or waist joints) and a static `<lidar link> → livox_frame`. `navigation.launch.py robot:=h12\|g1` picks the robot's config directory, `config/<robot>/`: FAST-LIO (`fastlio.yaml`, the G1 sim's `fastlio_sim.yaml`), the MID360 driver config (`MID360_config.json`, real robot, read by the real-driver launches), Nav2 (`nav2.yaml`), OctoMap (`octomap.yaml`) and the pipeline profile (`pipeline.yaml`: lidar link, scan band, `level_odom` values, the arm links of `dynamic_footprint`); slam_toolbox's `config/slam_toolbox.yaml` is shared; `config/example.<kind>.yaml` annotate every key and are not installed | `launch/navigation.launch.py`, `body_to_pelvis`, `config/` |
 | `golem_skills` | **skills (both robots)** | Action servers for the 12 `/skill/*` atomic skills an LLM can call (frontier exploration lives here); the `robot` parameter picks the H1-2's or the G1's profile (`robots.py`). See §7. | `skills` (SkillsNode) |
 | `model_server` | model server | ROS service servers wrapping ML models: Gemini VLM, SAM3 segmentation, GraspGenX grasp generation, YOLO detection | `gemini_server`, `sam_server`, `graspgen_server`, `yolo_server` |
@@ -394,8 +394,8 @@ for the includes after it, so pass consistent values (all four blocks share
   config, or an estop latched at this start-up (the limit checks run from
   boot, in the sim from the first `/clock`, so a joint already past
   `limits.estop` latches it) or in an earlier
-  run. The other nodes keep running, without `/frame_task` and
-  `/named_config`.
+  run. The other nodes keep running, without its actions
+  (`/grasp_frame_target`).
 - **The estop, in the sim as on the real robot.** Every H1-2 bringup starts
   `estop_node` and has `safety_node` read `/estop/triggered` and
   `/estop/plugged_in` (`h12_control.launch.py` has no `use_estop` argument): no
@@ -431,7 +431,7 @@ for the includes after it, so pass consistent values (all four blocks share
   comes first: the tick advancing at the node clock's rate, so Isaac's tick,
   which counts publishes, never qualifies; the windows follow one another, so
   a recent stall or a slowed tick makes it not ready again within 1 s), the arm controller's commands are fresh within 0.5 s and,
-  in the sim, `frame_task_server`'s first `/left_ee_pose` has come (or
+  in the sim, the arm controller's first `/left_grasp_frame_pose` has come (or
   `band.max_wait`, 34 s); the node logs why it waits. It then holds, in the
   sim as on the real robot, until `ros2 service call /lowerbody/confirm_engage
   std_srvs/srv/Trigger` (refused at any other time), and runs the policy. A
@@ -444,7 +444,7 @@ for the includes after it, so pass consistent values (all four blocks share
   none for 0.5 s after the first, stop it for good: it logs the fault once,
   publishes nothing more and stays up. In the sim it calls
   `/elastic_band/toggle` once, when the service is there, once the policy runs
-  and `/left_ee_pose` has come (or `band.max_wait` after the policy started);
+  and `/left_grasp_frame_pose` has come (or `band.max_wait` after the policy started);
   the reply is final (a failure is logged as `elastic band release failed:
   ...` and the band stays on), and a success resets the policy at once.
 
@@ -529,11 +529,11 @@ which `golem_upper_ik`'s `upper_ik.launch.py` applies (`upper_ik: not starting:
   clock's rate) and the arm controller's commands are fresh. On the real robot
   it also holds until `ros2 service call /lowerbody/confirm_engage
   std_srvs/srv/Trigger`. In the sim it also holds until the first
-  `/left_ee_pose` (`frame_task_server` publishes it after its start-up moves),
+  `/left_grasp_frame_pose` (`frame_task_server` publishes it after its start-up moves),
   or `band.max_wait` (30 s) after the legs reached the pose: the policy must
   not run long under the sim's elastic band (about 1.5 s or more there, and
   the robot stumbles at the release). The policy then starts, and the node
-  calls `/elastic_band/toggle` once: once `/left_ee_pose` has come, or
+  calls `/elastic_band/toggle` once: once `/left_grasp_frame_pose` has come, or
   `band.max_wait` after the policy started; the reply is final. A false
   heartbeat, or none for 0.5 s after the first, stops it for good in every
   phase.
@@ -562,27 +562,36 @@ services), serving `/skill/frontier_explore` and the manipulation skills.
 
 The node's read-only `robot` parameter (`h12` by default, `g1`) picks a
 profile in `golem_skills/robots.py`: the frames the grasp and pick_place
-skills drive, the hand, the named configs and the GraspGenX gripper. On the
-G1 the grasp closes the Dex3-1 through `dex_3`'s `/<arm>/hand/{open,close}`
-(the grip check reads the finger joints on `/joint_states`), starts from
-`home` (the G1 has no `prep` or staging config), and drives tool frames on
-`<arm>_hand_palm_link` (`<arm>_dex3_grasp_frame`, `<arm>_dex3_pinch_frame`,
-which the node broadcasts on `/tf_static`; their offsets are from the URDF,
-unmeasured). The G1 refuses `graspgenx*` (GraspGenX has no Dex3-1 model) and
+skills plan for (the GraspGenX-convention frame) and drive (each arm's
+pinch frame, `golem_upper_ik`'s grasp frame), the hand, the postures (the
+pinch frames' poses in the pelvis frame, by forward kinematics of
+`golem_upper_ik`'s named configs: the H1-2's `prep` and staging postures) and
+the GraspGenX gripper. On the G1 the grasp closes the Dex3-1 through
+`dex_3`'s `/<arm>/hand/{open,close}` (the grip check reads the finger joints
+on `/joint_states`), starts from its `home` posture, and plans for
+`<arm>_dex3_grasp_frame` on `golem_upper_ik`'s `<arm>_grasp_frame` (the node
+broadcasts both on `/tf_static`, the grasp frame from `golem_upper_ik`'s
+profile; their offsets are from the URDF, unmeasured). The G1 refuses `graspgenx*` (GraspGenX has no Dex3-1 model) and
 `visual_servo` (no hand cameras) before the arm moves, so it runs
 `heuristic`, `antipodal`, `centroid` and `top_down`. Its execution was run
 in the sim from a synthetic object cloud; a perception-driven grasp has not
 run on it (the head camera does not see the RoboCasa counter tops), nor has
 `pick_place`.
 
-Arm moves (`/frame_task`, `/named_config`) need a live `/safety/heartbeat`:
+Every arm move is one goal on `/grasp_frame_target` (`GraspFrameTarget`, the
+interface `golem_upper_ik` and `lmg_deploy` both serve), and a relative move
+starts from the measured pose on `/{left,right}_grasp_frame_pose`. A goal the
+controller aborts for anything but its timeout or a hold pinned at a joint
+limit (the result's `outcome`: `FAILED`, not `NOT_REACHED`) halts the arms for
+the rest of the skill goal. Arm moves need a live
+`/safety/heartbeat`:
 `golem_skills` refuses to send one before the first true beat, after a false
 beat (until the node restarts) and when the last beat is older than
 `heartbeat_timeout` (0.5 s), and it cancels the move in flight on the server,
 so the skill fails with the halt reason. Grippers, navigation and
 `frontier_explore` do not depend on it.
 
-Skills consume the `frame_task` IK action, the gripper services, and the
+Skills consume the `/grasp_frame_target` arm action, the gripper services, and the
 `model_server` perception services (`gemini_query`, `sam_segment`, `graspgen` —
 this is why the `ros` container needs `GEMINI_API_KEY`). There is currently no
 autonomous LLM orchestrator in-repo that calls them; they are invoked over ROS
@@ -599,9 +608,12 @@ ros2 action send_goal /skill/frontier_explore custom_ros_messages/action/SkillFr
   "{min_frontier_cells: 6, blacklist_radius: 0.6, min_goal_distance: 0.7, goal_timeout: 120.0, timeout: {sec: 1800, nanosec: 0}}" \
   --feedback
 
-# non-skill but useful: move arms to a named posture first
-ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 'home', duration: {sec: 0, nanosec: 0}}"
+# non-skill but useful: move the right arm's grasp frame (pelvis frame; the
+# H1-2's prep posture) along a planned path; the timeout (robot time) covers
+# the planning too, and 0 is the controller's 5 s
+ros2 action send_goal /grasp_frame_target custom_ros_messages/action/GraspFrameTarget \
+  "{right: {header: {frame_id: pelvis}, pose: {position: {x: 0.25, y: -0.281, z: 0.18},
+    orientation: {x: -0.1638, y: 0.0037, z: 0.0282, w: 0.9861}}}, plan: true, timeout: {sec: 30}}"
 ```
 
 ## 8. Do-not-break rules
@@ -1048,12 +1060,11 @@ source /opt/ros/humble/setup.bash && source /home/code/core_ws/install/setup.bas
 ```bash
 ros2 topic hz /lowstate                                     # the sim is publishing (about 500 Hz)
 ros2 service call /lowerbody/confirm_engage std_srvs/srv/Trigger   # H1-2: start the leg policy (it holds its pre-pose until then)
-ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 't_pose', plan: false, duration: {sec: 0, nanosec: 0}}"   # or home, arms_asym, ... (golem_upper_ik/config/<robot>/robot.yaml)
-ros2 action send_goal /frame_task custom_ros_messages/action/FrameTask \
-  "{relative: true, plan: false, frame_names: ['right_wrist_yaw_link'],
-    frame_targets: [{position: {x: 0.0, y: 0.0, z: 0.05}, orientation: {w: 1.0}}],
-    duration: {sec: 0, nanosec: 0}}"                        # 5 cm up, pelvis frame; G1: right_hand_palm_link
+ros2 topic echo --once /right_grasp_frame_pose            # the right grasp frame's measured pose, pelvis frame
+ros2 action send_goal /grasp_frame_target custom_ros_messages/action/GraspFrameTarget \
+  "{right: {header: {frame_id: pelvis}, pose: {position: {x: 0.40, y: -0.25, z: 0.10},
+    orientation: {w: 1.0}}}, timeout: {sec: 5}}"          # H1-2: the right grasp frame to a pelvis-frame pose; the
+                                                            # action is absolute: a relative move is the echoed pose plus the offset
 ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.3}}"   # walk (Ctrl-C: zero after 0.5 s)
 ```
 
@@ -1092,8 +1103,8 @@ ros2 action send_goal /skill/grasp custom_ros_messages/action/SkillGrasp \
 
 The closed-loop check of the whole H1-2 stack in RoboCasa is
 `tests/sim/test_sim_stack.sh --h12` (`tests/sim/README.md`): the robot standing
-unsupported, a Nav2 goal reached by walking, `/named_config` moves while it
-walks, SLAM healthy throughout and `safety_node` the only `/lowcmd` publisher.
+unsupported, a Nav2 goal reached by walking, `/grasp_frame_target` arm moves
+while it walks, SLAM healthy throughout and `safety_node` the only `/lowcmd` publisher.
 `tests/stack/run.sh` checks the arms and the legs alone.
 
 ### The G1
@@ -1116,8 +1127,10 @@ ros2 launch golem_bringup g1_sim.launch.py     # wait for the leg node's "elasti
 # Terminal 3
 docker exec -it golem_ros bash
 source /opt/ros/humble/setup.bash && source /home/code/core_ws/install/setup.bash
-ros2 action send_goal /named_config custom_ros_messages/action/NamedConfig \
-  "{config_name: 't_pose', plan: false, duration: {sec: 0, nanosec: 0}}"
+# the right grasp frame 5 cm above its pose at 'home' (the start-up posture), pelvis frame
+ros2 action send_goal /grasp_frame_target custom_ros_messages/action/GraspFrameTarget \
+  "{right: {header: {frame_id: pelvis}, pose: {position: {x: 0.3213, y: -0.1116, z: 0.1452},
+     orientation: {x: 0.7071, y: 0.0, z: -0.0001, w: -0.7071}}}, timeout: {sec: 10}}"
 ```
 
 Walking and navigation need the spawn backed into open floor
@@ -1209,6 +1222,14 @@ on the real G1 yet; follow `docs/g1/first-session.md` step by step.
   expected 6`), so `frame_task_server` exits after 30 s. For Isaac, run
   `git submodule update` first: the H1-2 Isaac sim reports 6 from the current
   `CL_isaaclab_sim` pin.
+- **Rebuild `custom_ros_messages` clean once after pulling the removal of `LmgSetMode`
+  and `LmgSetArmGoals`.** An incremental build keeps their generated sources, and the
+  package's type support library then needs symbols that no longer exist: a node that uses
+  a `custom_ros_messages` interface dies on it (`marl_deploy_node` in `lmg_sim`: `undefined
+  symbol: custom_ros_messages__srv__lmg_set_arm_goals__response__convert_from_py`). From the
+  repo root, on every host that built it (`sudo` for files a container left root-owned):
+  `rm -rf {core_ws,container_cache/sim_tests,container_cache/g1_tests,container_cache/msgs_ws}/{build,install}/custom_ros_messages core_ws/{build,install}_stack_tests/custom_ros_messages`;
+  the next start rebuilds it.
 - **Delete the stale installs of removed packages once after pulling.** colcon
   never removes a package that is gone from `core_ws/src`, so a workspace built
   before `golem_bringup` replaced `h12_bringup` and `g1_bringup` (and the four

@@ -1,7 +1,7 @@
 """
 Decide when the leg node releases the sim's elastic band, with no ROS.
 
-The policy must be running, and frame_task_server up (its first /left_ee_pose) or
+The policy must be running, and the arm controller up (its first /left_grasp_frame_pose) or
 band.max_wait passed since the policy started.
 """
 
@@ -25,7 +25,7 @@ class BandRelease:
     """
 
     def __init__(self, enabled: bool, max_wait: float):
-        """Ask only when enabled; max_wait s of robot time after a start with no /left_ee_pose."""
+        """Ask only when enabled; max_wait s of robot time after a start with no arm pose."""
         self.enabled = enabled
         self.max_wait = max_wait
         self.released = False
@@ -34,22 +34,22 @@ class BandRelease:
         self._in_flight = False
         self._called = False  # the one call has been asked for
 
-    def poll(self, now: float, running_since: float | None, ee_pose_seen: bool,
+    def poll(self, now: float, running_since: float | None, arm_pose_seen: bool,
              service_ready: bool) -> str | None:
         """
         Return the reason to call /elastic_band/toggle now, and mark the call in flight.
 
         None when no call is due, and for good once it has been asked for. running_since
-        is when the policy started (None while it does not run), ee_pose_seen whether a
-        /left_ee_pose has come, service_ready whether the toggle service is there.
+        is when the policy started (None while it does not run), arm_pose_seen whether a
+        /left_grasp_frame_pose has come, service_ready whether the toggle service is there.
         """
         if not self.enabled or self._called or running_since is None:
             return None
-        if ee_pose_seen:
-            reason = 'the policy runs and frame_task_server is up (/left_ee_pose)'
+        if arm_pose_seen:
+            reason = 'the policy runs and the arm controller is up (/left_grasp_frame_pose)'
         elif now - running_since >= self.max_wait:
             reason = (f'the policy has run for {self.max_wait:.0f} s, the maximum wait '
-                      '(band.max_wait), with no /left_ee_pose from frame_task_server')
+                      '(band.max_wait), with no /left_grasp_frame_pose from the arm controller')
         else:
             return None
         self.service_missing = not service_ready

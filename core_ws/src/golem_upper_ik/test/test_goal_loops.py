@@ -56,16 +56,19 @@ class FakeController:
     stale_at: the IK or hold step (1-based, both counted) that raises StaleStateError.
     work: s of robot time each IK or hold step takes.
     path: s of robot time a planned path takes to execute.
+    plan_time: s of robot time a plan takes, in steps of DT.
     """
 
     def __init__(self, trace, *, ik=(FAR,), hold=(False,), limited=((),), errors=(FAR,),
-                 plan_error=None, execute_error=None, stale_at=None, work=WORK, path=0.5):
+                 plan_error=None, execute_error=None, stale_at=None, work=WORK, path=0.5,
+                 plan_time=0.0):
         """Keep the scripts; every count starts at 0."""
         self.trace = trace
         self.clock = FakeClock(trace)
         self.dt = DT
         self._work_seconds = work
         self._path_seconds = path
+        self._plan_time = plan_time
         self._ik, self._hold, self._limited, self._errors = ik, hold, limited, errors
         self._plan_error, self._execute_error, self._stale_at = (
             plan_error, execute_error, stale_at)
@@ -153,11 +156,21 @@ class FakeController:
         """Re-seed the IK."""
         self._call('update_ik_solver')
 
-    def plan_to_ik_target(self, ik_timeout):
-        """Record a plan to the tasks' IK solution; return 3 waypoints or raise plan_error."""
-        self._call('plan_to_ik_target', ik_timeout)
+    def plan_to_targets(self, targets, ik_timeout, stop=None):
+        """Record a plan to the targets' IK solution; return 3 waypoints or raise plan_error.
+
+        With plan_time, the plan takes that many s of robot time, polling stop() each step;
+        a true stop() ends it, recorded, and returns None.
+        """
+        self._call('plan_to_targets', ik_timeout)
         if self._plan_error is not None:
             raise self._plan_error
+        steps = int(round(self._plan_time / DT))
+        for step in range(steps):
+            if stop is not None and stop():
+                self.trace.append(('plan_stopped', step))
+                return None
+            self.clock.t += DT
         return [np.zeros(2)] * 3
 
     def execute_path(self, path, stop=None):
@@ -459,7 +472,7 @@ def test_planned_grasp_goal_plans_executes_then_holds():
     """
     trace, handle, result, _ = run_goal(plan=True, path=PATH)
     names = [entry[0] for entry in trace]
-    assert ('plan_to_ik_target', TIMEOUT) in trace
+    assert ('plan_to_targets', TIMEOUT) in trace
     start = names.index('execute_path')
     # before each of the 3 waypoints a feedback and a cancel check, then the hold
     assert names[start + 1:start + 7] == ['feedback', 'cancel?'] * 3
@@ -479,6 +492,29 @@ def test_planned_grasp_goal_reached():
     assert steps(trace) == ['hold_step'] * SETTLE_READS
 
 
+def test_planned_grasp_goal_ends_at_a_cancel_while_planning():
+    """A cancel while planning ends the goal at once: canceled, the arms stopped, no path."""
+    trace, handle, result, _ = run_goal(plan=True, plan_time=0.5, cancel_at=3)
+    assert ('plan_stopped', 2) in trace
+    names = [entry[0] for entry in trace]
+    assert 'execute_path' not in names and steps(trace) == []
+    assert handle.status == 'canceled' and result.outcome == outcome('CANCELED')
+    assert result.message.startswith('canceled while planning; the arms hold where they are')
+    assert entries(trace, 'stop_joints') == [('stop_joints', [0, 1], ('reference', (0, 1)))]
+    assert names.index('plan_stopped') < names.index('stop_joints') < names.index('status')
+
+
+def test_planned_grasp_goal_ends_at_its_timeout_while_planning():
+    """The timeout while planning ends the goal: not reached, the arms stopped, no path."""
+    trace, handle, result, _ = run_goal(plan=True, plan_time=3.0)
+    assert ('plan_stopped', int(TIMEOUT / DT)) in trace
+    assert 'execute_path' not in [entry[0] for entry in trace] and steps(trace) == []
+    assert handle.status == 'aborted' and result.outcome == outcome('NOT_REACHED')
+    assert result.message.startswith(
+        'timed out after 1.0 s while planning; the arms hold where they are (left')
+    assert entries(trace, 'stop_joints') == [('stop_joints', [0, 1], ('reference', (0, 1)))]
+
+
 def test_planned_grasp_goal_stops_its_path():
     """A cancel or the timeout during the path stops it at the next waypoint."""
     trace, handle, result, _ = run_goal(plan=True, path=PATH, cancel_at=2)
@@ -488,7 +524,7 @@ def test_planned_grasp_goal_stops_its_path():
     # a cancel stops the arm where it is
     names = [entry[0] for entry in trace]
     assert entries(trace, 'stop_joints') == [('stop_joints', [0, 1], ('reference', (0, 1)))]
-    assert names.index('stop_reference') < names.index('plan_to_ik_target')
+    assert names.index('stop_reference') < names.index('plan_to_targets')
     assert names.index('path_stopped') < names.index('stop_joints') < names.index('status')
     trace, handle, result, _ = run_goal(plan=True, path=3.0)
     assert ('path_stopped', 1) in trace and steps(trace) == []

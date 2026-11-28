@@ -1,8 +1,8 @@
 """Run the upper-body (torso or waist, and arms) IK controller of one robot on a ROS node.
 
 UpperController reads /lowstate through a StateSubscriber, solves the Pink IK on the robot
-model's reduced model, plans with the OMPL planner where the profile has a self-collision
-model, and commands golem_safety's input through a LowCmdHandler.
+model's reduced model, plans through golem_ompl's /plan_arm_trajectory where the profile has a
+self-collision model (PlanClient), and commands golem_safety's input through a LowCmdHandler.
 
 Every rate, wait and timeout is in s of robot time (golem_upper_ik.core.robot_clock, the
 controller's clock): the sim's /clock under use_sim_time, the steady clock otherwise.
@@ -24,21 +24,30 @@ step first checks that /lowstate is no staler than controller.max_state_lag_ms
 torque plus the steady-state hold's integral bias, which fades over a move and is bounded
 toward each joint's position clip limits (_bound_bias).
 """
+from custom_ros_messages.srv import PlanArmTrajectory
 import numpy as np
 from pink.exceptions import NoSolutionFound
+import pinocchio as pin
 
 from golem_upper_ik.config import SAFETY_OUTPUT_TOPIC
 from golem_upper_ik.core.ik_solver import IKSolver
 from golem_upper_ik.core.low_cmd_handler import LowCmdHandler
-from golem_upper_ik.core.planner import PlannerClient, PlannerConfig, PlannerUnavailableError
+from golem_upper_ik.core.plan_client import PlanClient, PlannerUnavailableError
 from golem_upper_ik.core.robot_clock import RobotClock
 from golem_upper_ik.core.robot_model import RobotModel
 from golem_upper_ik.core.ros_io import StaleStateError, StateSubscriber
-from golem_upper_ik.profile import RobotProfile
+from golem_upper_ik.profile import RobotProfile, robot_config
 
 __all__ = ['ACCEL_LIMIT', 'UpperController', 'accel_scale', 'ros_domain_id', 'step_bounds',
            'stop_step']
 
+# why a robot without a self-collision model cannot plan: {robot} is its display name and
+# {module} its name
+PLANNER_UNAVAILABLE = (
+    'Planning is unavailable: the {robot} has no self-collision model (its profile, '
+    'golem_upper_ik/config/{module}/robot.yaml, names no sphere URDF and SRDF); send the '
+    'goal with plan=false'
+)
 # The real robots' command bus; the staleness check runs only there, since the sims stamp
 # /lowstate's tick in sim steps, not in ms of the robot's clock
 REAL_ROBOT_DOMAIN_ID = 0
@@ -73,7 +82,7 @@ STARTUP_THRESHOLD = 1e-3
 # its command then is not its resting offset (stop_reference)
 STOP_REFERENCE_MAX_SPEED = 0.05
 # rad/s^2 of robot time: the most an IK-stepped command changes an IK joint's velocity
-# (_limit_joint_acc), and a planned path's (PlannerConfig.max_acceleration). 5 covers the
+# (_limit_joint_acc), and a planned path's (the plan request's max_acceleration). 5 covers the
 # position-limit brake's own deceleration, dq_lim / LIMIT_APPROACH_TIME (4.2 rad/s^2 at the
 # sims' 0.83 rad/s, 1.5 at the real G1's 0.3), so the brake keeps it. Stepping each robot's IK
 # offline (48 direct goals and the start-up, perfect tracking), every step kept it to within
@@ -170,8 +179,7 @@ class UpperController:
     """Command one robot's upper body by IK through golem_safety (module doc)."""
 
     def __init__(self, node, profile: RobotProfile, config: dict,
-                 robot_model: RobotModel = None, init: bool = True,
-                 warm_planner: bool = False):
+                 robot_model: RobotModel = None, init: bool = True):
         """Wait for /lowstate, command the measured pose, then run the start-up (with init).
 
         node: the ROS node the controller's subscriptions, publisher and logger live on; an
@@ -184,10 +192,6 @@ class UpperController:
             its state source is the controller's /lowstate subscriber until shutdown(), and
             its position limits are narrowed to the config's clip range (set_position_limits).
         init: run the start-up moves.
-        warm_planner: start the planner subprocess in the background before the start-up
-            moves (PlannerClient.warm_up), when the controller can plan, so the first planned
-            goal need not; a start that fails is logged, and the first planned goal starts it
-            and fails as it would have.
         Raises ValueError for a config or model of another robot or IMU frame, and
         RuntimeError (after the shutdown command) when the start-up fails.
         """
@@ -203,7 +207,7 @@ class UpperController:
         elif robot_model.imu_frame != controller['imu_frame']:
             raise ValueError(f'the robot model takes the IMU in {robot_model.imu_frame}, '
                              f"not in controller.imu_frame {controller['imu_frame']}")
-        # SAFETY: the IK, the planner and the waypoint checks keep inside the clip range, so
+        # SAFETY: the IK, the plans and the waypoint checks keep inside the clip range, so
         # no solution lies where the clip would cut the command, and a joint parked at its
         # limit sits limits.clip.position_offset inside the joint table
         robot_model.set_position_limits(config['limits']['q_clip_limits'])
@@ -278,11 +282,7 @@ class UpperController:
                 tau=robot_model.dynamics.get_gravity_compensation(q_measured))
             self.ik_solver = IKSolver(robot_model, profile.named_configs, dt=self.dt,
                                       d_min=self.d_min)
-            self.planner = PlannerClient(profile, self._planner_config(),
-                                         frame_names=config['planner']['frame_names'],
-                                         q_limits=config['limits']['q_clip_limits'])
-            if warm_planner and self.planning_refusal is None:
-                self.planner.warm_up(on_error=self._planner_warm_up_failed)
+            self.planner = PlanClient(node)
             if init:
                 self._startup_routine()
         except BaseException:
@@ -290,22 +290,6 @@ class UpperController:
             # then falls silent
             self.shutdown()
             raise
-
-    def _planner_warm_up_failed(self, error):
-        """Log that the planner subprocess did not start ahead of the first planned goal."""
-        self._logger.warn(f'The planner did not start ahead of the first planned goal ({error}); '
-                          'that goal starts it')
-
-    def _planner_config(self):
-        """Return the PlannerConfig of the planner section, at the controller's ACCEL_LIMIT.
-
-        dt defaults to the control period.
-        """
-        settings = {key: value for key, value in self.config['planner'].items()
-                    if key not in ('enabled', 'frame_names')}
-        settings.setdefault('dt', self.dt)
-        settings['max_acceleration'] = ACCEL_LIMIT
-        return PlannerConfig(**settings)
 
     def _wait_for_state(self):
         """Block until a fresh /lowstate with finite joint positions; RuntimeError at timeout.
@@ -554,8 +538,9 @@ class UpperController:
     @property
     def planning_refusal(self):
         """Return why this controller cannot plan, or None."""
-        if not self.planner.available:
-            return self.planner.unavailable_reason
+        if self.profile.collision is None:
+            return PLANNER_UNAVAILABLE.format(
+                robot=robot_config(self.profile.robot)['display_name'], module=self.profile.robot)
         if not self.config['planner']['enabled']:
             return (f"Planning is turned off: the controller config {self.config['source']} "
                     'sets planner.enabled: false; send the goal with plan=false')
@@ -579,81 +564,72 @@ class UpperController:
             raise ValueError('Path must contain only finite values')
         return path
 
-    @staticmethod
-    def _path_or_raise(result):
-        """Return a PlanResult's path; RuntimeError with its reason if planning failed."""
-        if not result.success:
-            raise RuntimeError(f'Planning failed: {result.reason}')
-        return result.path
+    def plan_to_targets(self, targets, ik_timeout, stop=None):
+        """Return a planned reduced path to an IK solution of targets, from golem_ompl.
 
-    def plan_to_configuration(self, q_reduced, active_mask=None):
-        """Return a planned reduced path from the command seed to q_reduced.
-
-        PlannerUnavailableError when the controller cannot plan; RuntimeError when planning
-        fails.
+        targets: {arm: 4x4 grasp-frame target in the pelvis frame}; ik_timeout: each IK seed's
+        budget, s of steady time. update_ik_solver readies the controller for the goal first,
+        as for every goal; the request carries the measured state, the start (the command
+        seed's IK joints), the clip range, the planner section's speed, waypoint period
+        (default the control period) and OMPL budget, and ACCEL_LIMIT. golem_ompl's
+        arm_planner_server solves the IK from its seeds and plans to the first converged solution
+        it finds a path to; only the targeted arms move. PlannerUnavailableError, before any
+        request, when the controller cannot plan; RuntimeError when no seed converges ('IK
+        failed to resolve current targets'), when no path was found ('Planning failed: ' and
+        the planner's reason), for a refused request or a malformed reply, and from PlanClient.
+        stop(), when given, is polled while the request waits: a true return abandons it and
+        returns None (PlanClient.call).
         """
         self._check_planning()
-        return self._path_or_raise(self._plan(q_reduced, active_mask))
-
-    def _plan(self, q_reduced, active_mask):
-        """Return the planner's PlanResult from the command seed to q_reduced."""
-        start = self._command_seed()[0][self.robot_model.reduced_mask]
-        return self.planner.plan_configuration(
-            current_q=self.robot_model.state['q'],
-            start=start,
-            goal=np.asarray(q_reduced, dtype=float),
-            active_mask=active_mask,
-        )
-
-    def plan_to_ik_target(self, ik_timeout):
-        """Return a planned reduced path to an IK solution of the current frame tasks.
-
-        ik_timeout is each IK seed's time limit, s (IKSolver.solve_ik_reduced). A seed's
-        solution counts only once the planner finds a path to it; when the planner finds none,
-        the IK goes on to the next seed. PlannerUnavailableError, before any IK, when the
-        controller cannot plan; RuntimeError when no seed converges ('IK failed to resolve
-        current targets'), when the planner found no path to any that did (the last one's
-        reason), or from the planner itself. Only the joints that move the tasks' frames plan.
-        """
-        self._check_planning()
-        # restrict planning to the joints supporting the active tasks, so untasked limbs
-        # (the other arm) never move during the plan
-        active_mask = self._active_task_mask()
         self.update_ik_solver()
-        planned = {}
+        response = self.planner.call(self._plan_request(targets, ik_timeout), stop=stop)
+        if response is None:
+            return None
+        Response = PlanArmTrajectory.Response
+        if response.outcome == Response.NO_PATH:
+            raise RuntimeError(f'Planning failed: {response.message}')
+        if response.outcome != Response.PLANNED:
+            raise RuntimeError(response.message)
+        names = tuple(response.trajectory.joint_names)
+        if names != self._reduced_joints:
+            raise RuntimeError(f'the planner returned a path in joints {list(names)}, not in the '
+                               f'IK joints {list(self._reduced_joints)}')
+        return self._as_reduced_path([point.positions for point in response.trajectory.points])
 
-        def plannable(ik_result):
-            """Plan to a converged seed's solution; return whether a path was found."""
-            planned['result'] = self._plan(ik_result.q[self.robot_model.reduced_mask],
-                                           active_mask)
-            if not planned['result'].success:
-                self._logger.info(f"The IK converged from seed '{ik_result.seed_name}', but "
-                                  f"planning to it failed: {planned['result'].reason}; "
-                                  'trying the next seed')
-            return planned['result'].success
+    @property
+    def _reduced_joints(self):
+        """Return the IK joints' names in the reduced model's (slot) order."""
+        return tuple(name for name, kept in zip(self.profile.body_joints,
+                                                self.robot_model.reduced_mask) if kept)
 
-        self.ik_solver.solve_ik_reduced(timeout=ik_timeout, accept=plannable)
-        if 'result' not in planned:
-            raise RuntimeError('IK failed to resolve current targets')
-        return self._path_or_raise(planned['result'])
-
-    def _active_task_mask(self):
-        """Return the reduced-joint mask of the joints that move any frame task's frame."""
-        mask = np.zeros(self.robot_model.model_body_reduced.nq, dtype=bool)
-        for task in self.ik_solver.frame_tasks.values():
-            mask |= self._reduced_support_mask(task.frame)
-        return mask
-
-    def _reduced_support_mask(self, frame_name):
-        """Return the reduced-joint mask of the joints between the root and frame_name."""
-        model = self.robot_model.model_body_reduced
-        joint_id = model.frames[model.getFrameId(frame_name)].parentJoint
-        mask = np.zeros(model.nq, dtype=bool)
-        while joint_id > 0:
-            idx_q = model.joints[joint_id].idx_q
-            mask[idx_q:idx_q + model.joints[joint_id].nq] = True
-            joint_id = model.parents[joint_id]
-        return mask
+    def _plan_request(self, targets, ik_timeout):
+        """Return the PlanArmTrajectory request of a planned goal to targets (plan_to_targets)."""
+        request = PlanArmTrajectory.Request()
+        body = list(self.profile.body_joints)
+        request.measured.header.stamp = self.node.get_clock().now().to_msg()
+        request.measured.name = body
+        request.measured.position = [float(value) for value in self.robot_model.state['q']]
+        start = self._command_seed()[0][self.robot_model.reduced_mask]
+        request.start.name = list(self._reduced_joints)
+        request.start.position = [float(value) for value in start]
+        request.position_lower = [float(value) for value in self._q_clip_limits[:, 0]]
+        request.position_upper = [float(value) for value in self._q_clip_limits[:, 1]]
+        for arm, target in targets.items():
+            stamped = getattr(request, f'{arm}_pose')
+            stamped.header.frame_id = 'pelvis'
+            position, rotation = target[:3, 3], pin.Quaternion(np.asarray(target[:3, :3]))
+            stamped.pose.position.x, stamped.pose.position.y, stamped.pose.position.z = (
+                float(value) for value in position)
+            stamped.pose.orientation.x, stamped.pose.orientation.y = rotation.x, rotation.y
+            stamped.pose.orientation.z, stamped.pose.orientation.w = rotation.z, rotation.w
+        planner = self.config['planner']
+        request.dt = float(planner.get('dt', self.dt))
+        # 0: the planner's own setting, the same controller config's
+        request.frame_speed = float(planner.get('moving_speed', 0.0))
+        request.max_acceleration = ACCEL_LIMIT
+        request.ik_timeout = float(ik_timeout)
+        request.plan_timeout = float(planner.get('timeout', 0.0))
+        return request
 
     def execute_path(self, path, stop=None):
         """Command reduced waypoints as positions, one per control period.
@@ -914,13 +890,13 @@ class UpperController:
             self._steady['q'] = q_cmd
 
     def shutdown(self):
-        """Send the shutdown command and stop publishing, then stop the planner and the state.
+        """Send the shutdown command and stop publishing, then stop planning and the state.
 
-        SAFETY: the shutdown command (LowCmdHandler.shutdown) goes first, since the planner's
-        own shutdown may wait out a plan in progress; publishing stops before the state source
-        is detached, since a detached source would leave the follow gate nothing to hold the
-        commands near. The planner and the state source are stopped even when an earlier step
-        raises, so no planner subprocess outlives the controller; the error propagates.
+        SAFETY: the shutdown command (LowCmdHandler.shutdown) goes first; publishing stops
+        before the state source is detached, since a detached source would leave the follow
+        gate nothing to hold the commands near. A plan request waiting for its reply ends
+        ('planner shut down'), and the state source is stopped, even when an earlier step
+        raises; the error propagates.
         Then the robot clock closes, after the publisher has stopped: a goal waiting on a
         stopped /clock ends with an error instead of waiting for ever. Calling it again does
         nothing more.

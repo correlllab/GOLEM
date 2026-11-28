@@ -59,7 +59,7 @@ CLIP_DEFAULTS = {
     'velocity_ratio': 0.10,
     'torque_ratio': 0.25,
 }
-# The planner section's keys, by kind: the fields of PlannerConfig (core.planner) but
+# The planner section's keys, by kind: the fields of golem_ompl's PlannerConfig but
 # max_acceleration (the controller's ACCEL_LIMIT), and enabled. The loader checks the keys a
 # file gives and fills in only enabled (true) and
 # frame_names (the profile's planner frames); PlannerConfig supplies every other default.

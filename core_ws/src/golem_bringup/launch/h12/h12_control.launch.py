@@ -1,11 +1,13 @@
 """
-Start the H1-2's command path: estop_node, safety_node, frame_task_server.
+Start the H1-2's command path: estop_node, safety_node, frame_task_server, arm_planner_server.
 
 golem_safety's safety_node is the only writer of /lowcmd; golem_upper_ik's
-frame_task_server (use_frame_task) commands the arms and torso through it. Each comes
-from its own package's launch file (safety.launch.py, upper_ik.launch.py). The order,
-on the wall clock: estop_node at once, safety_node after safety_delay,
-frame_task_server after frame_task_delay, in the sim as on the real robot.
+frame_task_server (use_frame_task) commands the arms and torso through it, and plans its
+planned goals through golem_ompl's arm_planner_server (use_frame_task too, on the same
+controller config). Each comes from its own package's launch file (safety.launch.py,
+upper_ik.launch.py, planner.launch.py). The order, on the wall clock: estop_node and
+arm_planner_server at once, safety_node after safety_delay, frame_task_server after
+frame_task_delay, in the sim as on the real robot.
 
 upper_ik.launch.py is included first: it refuses a frame_task_config that does not run
 with safety_config (golem_upper_ik.pairing) before this file starts any node. Without
@@ -61,7 +63,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'use_frame_task', default_value='true',
             description='true: start frame_task_server, the arm IK action server '
-                        '(/grasp_frame_target)'),
+                        "(/grasp_frame_target), and golem_ompl's arm_planner_server, which plans "
+                        'its planned goals (/plan_arm_trajectory)'),
         DeclareLaunchArgument(
             'safety_config', default_value='relax_safety_split.yaml',
             description='golem_safety config: a name under its config/h12/, or a path. '
@@ -97,6 +100,13 @@ def generate_launch_description():
             'sim': sim,
             'use_sim_time': use_sim_time,
             'start_delay': LaunchConfiguration('frame_task_delay'),
+        }, condition=IfCondition(LaunchConfiguration('use_frame_task'))),
+        # The arm planner for frame_task_server's planned goals, at once: it builds its
+        # models, then serves /plan_arm_trajectory.
+        include('golem_ompl', 'planner.launch.py', {
+            'robot': ROBOT,
+            'config': LaunchConfiguration('frame_task_config'),
+            'use_sim_time': use_sim_time,
         }, condition=IfCondition(LaunchConfiguration('use_frame_task'))),
         # The hardware e-stop box, published for safety_node.
         Node(

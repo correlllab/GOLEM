@@ -21,10 +21,9 @@ from golem_upper_ik.profile import known_robots
 __all__ = ['matrix_to_pose', 'pose_to_matrix', 'robot_parameter', 'run']
 
 # s to wait at exit for the callbacks still running (a goal sees the shut-down controller
-# refuse its next command and ends within a control step), then for the executor's thread.
-# The controller's shutdown command goes out first; after it the planner may take
-# planner_process.SHUTDOWN_GRACE for a plan in progress and its terminate wait
-# (PlannerClient.shutdown). All of it must fit within launch's default sigterm_timeout of 5 s
+# refuse its next command, or its plan request end, and ends within a control step), then
+# for the executor's thread. The controller's shutdown command goes out first. All of it must
+# fit within launch's default sigterm_timeout of 5 s
 EXIT_CALLBACK_TIMEOUT = 1.0
 EXIT_JOIN_TIMEOUT = 0.5
 

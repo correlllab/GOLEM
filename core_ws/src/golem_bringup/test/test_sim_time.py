@@ -148,9 +148,11 @@ def _packages(launch_file, args):
 
 @pytest.mark.parametrize('mac_file, sim_file, sim_args, core', [
     ('h12_mac_sim.launch.py', 'h12_sim.launch.py', {'use_rviz': 'true'},
-     {'golem_safety', 'golem_upper_ik', 'golem_lowerbody_rl', 'estop', 'fast_lio', 'golem_slam'}),
+     {'golem_safety', 'golem_upper_ik', 'golem_ompl', 'golem_lowerbody_rl', 'estop', 'fast_lio',
+      'golem_slam'}),
     ('g1_mac_sim.launch.py', 'g1_sim.launch.py', {'use_rviz': 'true'},
-     {'golem_safety', 'golem_upper_ik', 'golem_lowerbody_rl', 'fast_lio', 'golem_slam'}),
+     {'golem_safety', 'golem_upper_ik', 'golem_ompl', 'golem_lowerbody_rl', 'fast_lio',
+      'golem_slam'}),
 ])
 def test_mac_sim_is_the_sim_bringup_without_vision(mac_file, sim_file, sim_args, core,
                                                    monkeypatch):

@@ -5,10 +5,10 @@ g1_core always starts golem_lowerbody_rl's leg node (lowerbody_controller_node, 
 policy homie) in the sim, and on the real robot only with start_position_verified:=true,
 as the H1-2's leg node is started. It runs the split-mode configs and refuses sim/real
 mixes, and the real and sim launches pass their settings on. g1_core starts golem_safety,
-golem_upper_ik and golem_lowerbody_rl through their launch files, so the nodes are read by
-walking those includes, as ros2 launch runs them. Needs the workspace built and sourced
-(golem_bringup, golem_ros2_models, golem_safety, golem_upper_ik and golem_lowerbody_rl
-installed).
+golem_upper_ik, golem_ompl and golem_lowerbody_rl through their launch files, so the nodes are
+read by walking those includes, as ros2 launch runs them. Needs the workspace built and
+sourced (golem_bringup, golem_ros2_models, golem_safety, golem_upper_ik, golem_ompl and
+golem_lowerbody_rl installed).
 """
 
 import importlib.util
@@ -37,8 +37,10 @@ SAFETY_LAUNCH = _package_launch('golem_safety', 'safety.launch.py')
 UPPER_IK_LAUNCH = _package_launch('golem_upper_ik', 'upper_ik.launch.py')
 ROBOT_STATE_LAUNCH = _package_launch('golem_upper_ik', 'robot_state.launch.py')
 LOWERBODY_LAUNCH = _package_launch('golem_lowerbody_rl', 'lowerbody.launch.py')
+PLANNER_LAUNCH = _package_launch('golem_ompl', 'planner.launch.py')
 # The shared packages' launch files, which the bringups include for their nodes.
-PACKAGE_LAUNCHES = {SAFETY_LAUNCH, UPPER_IK_LAUNCH, ROBOT_STATE_LAUNCH, LOWERBODY_LAUNCH}
+PACKAGE_LAUNCHES = {SAFETY_LAUNCH, UPPER_IK_LAUNCH, ROBOT_STATE_LAUNCH, LOWERBODY_LAUNCH,
+                    PLANNER_LAUNCH}
 LEGS = 'lowerbody_controller_node'
 
 
@@ -152,7 +154,14 @@ def _passed_to_core(launch_file, **args):
 
 
 def _configs(nodes):
-    """Return safety_node's and frame_task_server's config parameters, where started."""
+    """
+    Return safety_node's and frame_task_server's config parameters, where started.
+
+    arm_planner_server runs on frame_task_server's config wherever both start.
+    """
+    if 'frame_task_server' in nodes:
+        assert nodes['arm_planner_server'].parameters['config'] == \
+            nodes['frame_task_server'].parameters['config']
     return {name: nodes[name].parameters['config']
             for name in ('safety_node', 'frame_task_server') if name in nodes}
 
@@ -327,7 +336,11 @@ def test_core_checks_the_pairing_before_any_node():
 
 
 def test_core_starts_the_shared_packages_through_their_launch_files():
-    """g1_core starts golem_safety's and golem_upper_ik's nodes from their launch files."""
+    """
+    g1_core starts the shared packages' nodes from their launch files.
+
+    golem_ompl's arm_planner_server starts at once, on the controller config.
+    """
     for sim in ('false', 'true'):
         nodes, _ = _core(sim=sim, use_sim_time=sim)
         sim_time = {'use_sim_time': sim == 'true'}
@@ -338,3 +351,5 @@ def test_core_starts_the_shared_packages_through_their_launch_files():
         assert nodes['safety_node'] == Started('golem_safety', [], 0.0, {
             'robot': 'g1', 'config': 'sim_split' if sim == 'true' else 'split',
             'sim': sim == 'true', 'use_estop': False, **sim_time})
+        assert nodes['arm_planner_server'] == Started('golem_ompl', [], 0.0, {
+            'robot': 'g1', 'config': 'sim_split' if sim == 'true' else 'g1_split', **sim_time})

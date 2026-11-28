@@ -13,7 +13,7 @@ PKG = os.path.join(HERE, "..")
 SHIPPED_POLICIES = ("h12",)
 # export.yaml keys marl_deploy_node reads that a deploy config may also carry.
 EXPORT_KEYS_READ = {"gait_phase_cos", "imu", "imu.source", "imu.orientation", "imu.frame", "imu.gyro_lowpass_hz", "leg_action_scales",
-                    "arm_residual_scales", "max_ik_step", "command_filter_tau", "legs_obs_terms", "arms_obs_terms",
+                    "arm_residual_scales", "command_filter_tau", "legs_obs_terms", "arms_obs_terms",
                     "arm_goals"}
 
 
@@ -36,7 +36,7 @@ def _keys(cfg, prefix=""):
 def test_example_has_every_deploy_config_key():
     """example.yaml has the template's and every shipped deploy config's keys, plus the export keys the node reads."""
     example = _keys(_load("config", "example.yaml"))
-    for path in (("config", "policy_template.yaml"), ("test", "data", "explicit500.yaml"),
+    for path in (("config", "policy_template.yaml"),
                  *(("policies", name, f"{name}.yaml") for name in SHIPPED_POLICIES)):
         assert _keys(_load(*path)) <= example, path
     assert example == _keys(_load("config", "policy_template.yaml")) | EXPORT_KEYS_READ

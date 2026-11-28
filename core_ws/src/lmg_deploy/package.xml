@@ -13,12 +13,10 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>custom_ros_messages</exec_depend>
-  <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>unitree_hg</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>pinocchio</exec_depend>
-  <exec_depend>nav_msgs</exec_depend>
   <!-- torch comes from pip in the golem_ros image (no rosdep key) -->
 
   <test_depend>python3-pytest</test_depend>

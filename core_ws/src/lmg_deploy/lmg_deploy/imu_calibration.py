@@ -12,8 +12,9 @@ a frame B tilted from the torso frame T by R_bias (q_wB = q_wT R_bias) measures 
 w_T = R_bias w_B (test_imu_calibration.py pins the direction on a rotating body).
 
 export.yaml's imu.orientation says which IMU the policy trained on: "calibrated" (the bias removed, only a residual
-of imu.residual_deg left) or "raw" (the robot's bias itself, imu.quat_bias_deg: every export before the key existed).
-resolve_calibration() is the rule between that and the robot's calibration (config/imu_calibration.yaml).
+of imu.residual_deg left) is the one lmg_deploy runs; "raw" (the robot's bias itself, imu.quat_bias_deg: every export
+before the key existed) is refused. resolve_calibration() is the rule between that and the robot's calibration
+(config/imu_calibration.yaml).
 
 The estimate (calibrate_imu.py): with both feet flat on level ground and the robot still, each sole is level up to
 yaw, so forward kinematics sole -> imu_link gives imu_link's true tilt (fk_projected_gravity); the quaternion's tilt
@@ -28,7 +29,6 @@ import numpy as np
 
 from lmg_deploy.rotations import imu_mount_quat, projected_gravity, quat_apply, quat_conjugate, quat_mul
 
-ORIENTATIONS = ("raw", "calibrated")
 CALIBRATION_LIMIT_DEG = 15.0   # a calibration angle beyond this is a typo, not an IMU offset
 FEET = ("left_ankle_roll_link", "right_ankle_roll_link")   # the soles: level at zero joint angles (URDF)
 IMU_FRAME = "imu_link"
@@ -83,14 +83,6 @@ def correct_imu(quat: np.ndarray, gyro: np.ndarray, calibration: dict | None) ->
     return quat, gyro
 
 
-def level_vector(v: np.ndarray, calibration: dict | None) -> np.ndarray:
-    """Return a vector the IMU measured (e.g. its specific force) in the level frame: rotated by R_bias with
-    rotate_gyro (a physical tilt), else unchanged (an estimator offset tilts the quaternion only)."""
-    if calibration is None or not calibration.get("rotate_gyro", False):
-        return v
-    return quat_apply(bias_quat(calibration), np.asarray(v, dtype=np.float64))
-
-
 def load_calibration(path: str, robot: str) -> dict | None:
     """Return robot's entry of a calibration file (config/imu_calibration.yaml), validated; None if it is null or
     absent. Raises ValueError on a malformed entry, FileNotFoundError on a missing file."""
@@ -105,33 +97,19 @@ def load_calibration(path: str, robot: str) -> dict | None:
 # -- the export contract ----------------------------------------------------------
 
 
-def imu_orientation(cfg: dict) -> str:
-    """Return export.yaml's imu.orientation, "raw" when absent (exports with quat_bias_deg, or no imu block).
+def resolve_calibration(cfg: dict, calibration: dict | None) -> tuple[dict, str]:
+    """Return the calibration to apply to the policy's IMU and a line saying what was decided.
 
-    Raises ValueError on another value.
-    """
-    orientation = (cfg.get("imu") or {}).get("orientation", "raw")
-    if orientation not in ORIENTATIONS:
-        raise ValueError(f"export.yaml imu.orientation must be one of {ORIENTATIONS}, not {orientation!r}: "
-                         "this lmg_deploy doesn't know how that policy's IMU was trained")
-    return orientation
-
-
-def resolve_calibration(cfg: dict, calibration: dict | None) -> tuple[dict | None, str]:
-    """Return the calibration to apply to the policy's IMU (None: none) and a line saying what was decided.
-
-    imu.orientation calibrated: needs imu.source lowstate and a calibration (ValueError otherwise). raw (or
-    absent): nothing is applied, even if a calibration is given: the policy trained on the biased IMU.
+    Needs export.yaml imu.orientation calibrated on imu.source lowstate, and a calibration; raises ValueError
+    otherwise: a raw policy (imu.orientation raw, or absent: it trained on the biased IMU) is an older export.
     """
     imu = cfg.get("imu") or {}
-    orientation = imu_orientation(cfg)
+    orientation = imu.get("orientation", "raw")
+    if orientation != "calibrated":
+        raise ValueError(f"export.yaml imu.orientation {orientation!r}: this lmg_deploy runs policies trained on the "
+                         "calibrated torso IMU (imu.orientation calibrated); a policy trained on the IMU as reported "
+                         "(raw, or no orientation: runs before 2026-11-21) is no longer supported")
     calibration = validate_calibration(calibration)
-    if orientation == "raw":
-        if calibration is None:
-            return None, "IMU orientation raw (the policy trained on the biased IMU): no calibration applied"
-        return None, ("IMU orientation raw (the policy trained on the biased IMU): the robot's IMU calibration "
-                      f"(roll {calibration['roll_deg']:+.2f}, pitch {calibration['pitch_deg']:+.2f}, "
-                      f"yaw {calibration['yaw_deg']:+.2f} deg) is ignored")
     if imu.get("source") != "lowstate":
         raise ValueError(f"export.yaml imu.orientation calibrated needs imu.source lowstate (the torso IMU the "
                          f"calibration is for), not {imu.get('source')!r}")

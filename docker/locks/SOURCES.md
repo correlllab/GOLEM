@@ -113,7 +113,9 @@ digest from the approved tree, not accepting a mismatch during a normal build.
 `*-arm64*.txt` are the Mac images' locks (`docker/mac/`, `docs/MAC.md`), derived
 from their `*-amd64*.txt` twins by `docker/mac/derive_arm64_locks.sh`: the CUDA
 wheels dropped, torch and torchvision on their `+cpu` builds, open3d 0.18.0
-(0.19.0 has no linux/aarch64 wheel). Rerun the script after any amd64 lock
+(0.19.0 has no linux/aarch64 wheel). The ROS model_server and GraspGenX steps
+(`ros-amd64-02` to `05`, `07` to `10`) have no arm64 twin: the Mac image does
+not install them. Rerun the script after any amd64 lock
 change; `tests/docker/test_source_pins.py` checks they match. The Mac base image
 is `ubuntu:jammy-20260901.2`, pinned by digest, and installs `ca-certificates`
 from the image's live `ports.ubuntu.com` lists before switching to the snapshot,

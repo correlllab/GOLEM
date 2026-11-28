@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>golem_ompl</name>
+  <version>0.1.0</version>
+  <description>Collision-free arm path planning (OMPL) for the Unitree H1-2 and G1, served to any arm controller</description>
+  <maintainer email="maxlconway@gmail.com">maxconway</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
+  <exec_depend>custom_ros_messages</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+  <!-- the robot model, profile, IK solver and controller configs -->
+  <exec_depend>golem_upper_ik</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>pinocchio</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

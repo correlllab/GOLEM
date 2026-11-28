@@ -115,7 +115,7 @@ above. In order:
 5. **SAM3** at a fixed commit, on `PYTHONPATH` (its `setup.py` builds a bogus
    package name, so it is not pip-installed).
 6. **The setuptools / wheel / numpy clamp** (§9).
-7. **Tkinter, Nav2 / SLAM / rqt / teleop / rosbag2.**
+7. **Nav2 / SLAM / rqt / teleop / rosbag2.**
 8. **GraspGenX** (NVlabs): its wheel is built against a newer setuptools in a
    staging directory (the system setuptools 59.6 predates its PEP 621
    metadata) and installed `--no-deps`; the whole environment is then frozen as

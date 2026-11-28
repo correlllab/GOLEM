@@ -22,11 +22,12 @@ controller:
   startup_timeout: 30.0
   startup_move_timeout: 30.0
   threshold_ik: 0.0001
-  # the arm PD without an integral term (gains.ki 0) settles about 1e-3 rad off under
-  # gravity, inside this
-  threshold_joint: 0.01
-  threshold_linear: 0.001
-  threshold_angular: 0.002
+  # m, rad: in the RoboCasa sim the hold settles each grasp frame within 0.4 mm and 0.5 mrad
+  # of its target with gains.ki (45 goals), 0.6 mm and 1 mrad without it (33 goals); a planned
+  # goal holds the IK solve's solution, which stops within 1 mm and 10 mrad
+  # (ik_solver.LINEAR_THRESHOLD, ANGULAR_THRESHOLD). The H1-2's measure the same
+  threshold_linear: 0.002
+  threshold_angular: 0.01
 
 planner:
   planner: RRTConnect
@@ -48,7 +49,13 @@ gains:
   kd: [8.0, 10.0, 10.0,
        1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5,
        1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5]
-  ki: 0.0
+  # Waist 0: a grasp goal integrates its targeted arms only, so the waist holds by its PD.
+  # Arms 150, kp / ki 0.4 s as the H1-2's shoulders and elbows: in the RoboCasa sim the hold
+  # then settles each grasp frame within 0.4 mm and 0.5 mrad of its target (0.6 mm and 1 mrad
+  # without it), with no oscillation over 45 goals
+  ki: [0.0, 0.0, 0.0,
+       150.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0,
+       150.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0]
 
 limits:
   clip:

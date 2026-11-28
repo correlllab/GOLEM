@@ -6,9 +6,10 @@ plays the robot and golem_safety's relay: it publishes /lowstate at 500 Hz, exec
 command on /safety/lowcmd_upper_in at once (each slot with kp > 0 jumps to its q) and relays
 it on golem_safety's output, /lowcmd, and records the receive time of every command. Two
 windows are measured: the start-up (from the first command to the server's first
-/left_ee_pose, the start-up moves stepping the IK) and the goals (FrameTask goals that move
-both end effectors 10 cm forward and back, one after another, for --seconds). Then the
-server is stopped with SIGINT.
+/left_grasp_frame_pose, the start-up moves stepping the IK) and the goals (/grasp_frame_target
+goals, one after another for --seconds, that send both grasp frames 30 cm forward of their
+poses at the window's start and back, each ending at its GOAL_STEP_S timeout before it can
+reach its target, so the IK steps throughout). Then the server is stopped with SIGINT.
 
 The JSON on stdout gives, per window, the achieved rate, the 99th percentile of the receive
 period, the longest gap, how many gaps were over 20 ms and the control steps per second
@@ -39,8 +40,8 @@ for _var in ('OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS'):
     os.environ.setdefault(_var, '1')
 
 from ament_index_python.packages import get_package_prefix  # noqa: E402
-from custom_ros_messages.action import FrameTask  # noqa: E402
-from geometry_msgs.msg import Pose, PoseStamped  # noqa: E402
+from custom_ros_messages.action import GraspFrameTarget  # noqa: E402
+from geometry_msgs.msg import PoseStamped  # noqa: E402
 import numpy as np  # noqa: E402
 import rclpy  # noqa: E402
 from rclpy.action import ActionClient  # noqa: E402
@@ -51,9 +52,12 @@ from unitree_hg.msg import LowCmd, LowState  # noqa: E402
 from golem_upper_ik.config import SAFETY_OUTPUT_TOPIC, load_controller_config  # noqa: E402
 from golem_upper_ik.profile import load_profile  # noqa: E402
 
-READY_TIMEOUT_S = 120.0  # for the server's first /left_ee_pose
+READY_TIMEOUT_S = 120.0  # for the server's first /left_grasp_frame_pose
 LONG_GAP_MS = 20.0  # a gap counted in gaps_over_20ms
 GOAL_TIMEOUT_S = 30.0
+# s of robot time each goal runs: shorter than a 30 cm move at the configs' speed limits, so
+# no goal settles into its hold (where the command stands still)
+GOAL_STEP_S = 0.4
 # keeps every sample: each command's receive time is recorded
 RECORD_QOS = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                         history=HistoryPolicy.KEEP_LAST, depth=10000)
@@ -175,12 +179,15 @@ def wait(condition, timeout):
     return bool(condition())
 
 
-def forward(x):
-    """Return a relative target x m forward (pelvis x), the orientation kept."""
-    pose = Pose()
-    pose.position.x = x
-    pose.orientation.w = 1.0
-    return pose
+def forward(stamped, x):
+    """Return a pelvis-frame PoseStamped x m forward (pelvis x) of stamped, orientation kept."""
+    target = PoseStamped()
+    target.header.frame_id = 'pelvis'
+    target.pose.position.x = stamped.pose.position.x + x
+    target.pose.position.y = stamped.pose.position.y
+    target.pose.position.z = stamped.pose.position.z
+    target.pose.orientation = stamped.pose.orientation
+    return target
 
 
 def main():
@@ -197,9 +204,18 @@ def main():
     node = rclpy.create_node('frame_task_server_rate_probe')
     robot = Robot(node, profile, config)
     ready = []
-    node.create_subscription(PoseStamped, '/left_ee_pose',
-                             lambda msg: ready or ready.append(time.monotonic()), 10)
-    client = ActionClient(node, FrameTask, '/frame_task')
+    # each grasp frame's newest measured pose
+    poses = {}
+
+    def on_pose(arm, msg):
+        """Keep arm's newest grasp-frame pose; the first one marks the server ready."""
+        poses[arm] = msg
+        if not ready:
+            ready.append(time.monotonic())
+    for arm in ('left', 'right'):
+        node.create_subscription(PoseStamped, f'/{arm}_grasp_frame_pose',
+                                 lambda msg, arm=arm: on_pose(arm, msg), 10)
+    client = ActionClient(node, GraspFrameTarget, '/grasp_frame_target')
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)
     threading.Thread(target=executor.spin, daemon=True).start()
@@ -219,26 +235,29 @@ def main():
     code = 0
     try:
         if not wait(lambda: ready, READY_TIMEOUT_S):
-            raise RuntimeError('frame_task_server did not publish /left_ee_pose')
+            raise RuntimeError('frame_task_server did not publish /left_grasp_frame_pose')
         result['startup'] = stats(*robot.window(robot.times[0], ready[0]))
         result['server_threads'], result['server_threads_named_as_process'] = \
             threads_of(server.pid)
 
-        assert client.wait_for_server(timeout_sec=10.0), 'no /frame_task action server'
+        assert client.wait_for_server(timeout_sec=10.0), 'no /grasp_frame_target action server'
+        if not wait(lambda: len(poses) == 2, 5.0):
+            raise RuntimeError('frame_task_server did not publish /right_grasp_frame_pose')
+        start_poses = dict(poses)
         goals_start = time.monotonic()
         sent = 0
         while time.monotonic() - goals_start < args.seconds:
-            goal = FrameTask.Goal()
-            goal.frame_names = list(profile.ee_frames)
-            x = 0.1 if sent % 2 == 0 else -0.1
-            goal.frame_targets = [forward(x), forward(x)]
-            goal.relative = True
+            goal = GraspFrameTarget.Goal()
+            x = 0.3 if sent % 2 == 0 else 0.0
+            goal.left = forward(start_poses['left'], x)
+            goal.right = forward(start_poses['right'], x)
+            goal.timeout.nanosec = int(GOAL_STEP_S * 1e9)
             future = client.send_goal_async(goal)
             if not wait(future.done, 10.0) or not future.result().accepted:
-                raise RuntimeError('a FrameTask goal was not accepted')
+                raise RuntimeError('a /grasp_frame_target goal was not accepted')
             done = future.result().get_result_async()
             if not wait(done.done, GOAL_TIMEOUT_S):
-                raise RuntimeError('a FrameTask goal gave no result')
+                raise RuntimeError('a /grasp_frame_target goal gave no result')
             sent += 1
         goals_end = time.monotonic()
         result['goals'] = stats(*robot.window(goals_start, goals_end))

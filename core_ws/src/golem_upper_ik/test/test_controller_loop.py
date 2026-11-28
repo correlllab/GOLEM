@@ -152,9 +152,20 @@ def settles(robot, upper_q, tolerance=0.01, timeout=5.0):
                     timeout, period=0.02)
 
 
+def ee_transformations(controller):
+    """Return the left and right end effectors' 4x4 placements in the pelvis frame.
+
+    From the reduced model at the measured state, on data of their own.
+    """
+    model = controller.robot_model
+    q_reduced = model.state_reduced['q']
+    return tuple(model.get_frame_transformation_reduced(name, q_reduced)
+                 for name in (controller.left_ee_name, controller.right_ee_name))
+
+
 def ee_position(controller, side):
     """Return an end effector's position (0 left, 1 right) in the pelvis frame, m."""
-    return controller.ee_transformations()[side][:3, 3].copy()
+    return ee_transformations(controller)[side][:3, 3].copy()
 
 
 def push_and_check_the_hold(controller, robot, recorders):
@@ -213,7 +224,7 @@ def test_startup_home_ee_target_and_zero_gain_shutdown(ros, models, robot):
 
     # a target 5 cm forward of the left end effector is reached; the right one stays put
     controller.update_ik_solver()
-    left = controller.ee_transformations()[0]
+    left = ee_transformations(controller)[0]
     right_start = ee_position(controller, 1)
     target = left.copy()
     target[0, 3] += 0.05
@@ -462,7 +473,7 @@ def test_every_command_holds_the_hold_targets_while_the_held_joints_sag(ros, mod
     for _ in range(3):
         controller.clear_frame_tasks()
         controller.update_ik_solver()
-        target = controller.ee_transformations()[0]
+        target = ee_transformations(controller)[0]
         target[0, 3] += 0.02
         controller.add_frame_task('left_task', profile.ee_frames[0], target)
         for _ in range(30):

@@ -141,7 +141,7 @@ def main():
         rclpy.spin_once(node, timeout_sec=.02)
 
     try:
-        print('FRAME_TASK_CHECK_READY', flush=True)
+        print('GRASP_FRAME_TARGET_CHECK_READY', flush=True)
         while not (client.server_is_ready() and all(k in latest for k in ('left', 'right', 'joints', 'clock'))):
             spin()
         ready_time = latest['clock']

@@ -17,7 +17,6 @@ import threading
 import time
 import traceback
 import multiprocessing as mp
-from contextlib import contextmanager
 from dataclasses import asdict, replace
 
 import numpy as np
@@ -124,14 +123,11 @@ class PlannerClient:
         """Return whether the robot can plan; unavailable_reason says why not."""
         return self.unavailable_reason is None
 
-    def plan_configuration(self, current_q, start, goal,
-                           active_mask=None, moving_speed=None,
-                           max_interpolation_steps=None):
+    def plan_configuration(self, current_q, start, goal, active_mask=None):
         """Return the subprocess's PlanResult from start to goal (reduced q).
 
         current_q is the measured body q, which places the frozen joints for the workspace
-        bounds. The worker's PlannerConfig is serialized once at spawn, so per-goal speed
-        changes travel with the request; None plans with the config the worker started with.
+        bounds; the worker plans with the PlannerConfig it was started with.
         PlannerUnavailableError when the robot cannot plan; RuntimeError ('planner shut
         down') when shutdown() runs while this waits, and for the worker's errors.
         """
@@ -143,8 +139,6 @@ class PlannerClient:
             'start': np.asarray(start, dtype=float),
             'goal': np.asarray(goal, dtype=float),
             'active_mask': _optional_array(active_mask, dtype=bool),
-            'moving_speed': moving_speed,
-            'max_interpolation_steps': max_interpolation_steps,
         })
 
     def shutdown(self):
@@ -271,40 +265,7 @@ class _PlannerWorker:
         start = np.asarray(request['start'], dtype=float)
         goal = np.asarray(request['goal'], dtype=float)
         active_mask = _optional_array(request.get('active_mask'), dtype=bool)
-        with self._config_override(
-            request.get('moving_speed'),
-            request.get('max_interpolation_steps'),
-        ):
-            return self.planner.plan(start, goal, active_mask=active_mask)
-
-    @contextmanager
-    def _config_override(self, moving_speed, max_interpolation_steps):
-        """Apply a request's speed settings to the planner config for the block, then restore."""
-        if moving_speed is None and max_interpolation_steps is None:
-            yield
-            return
-
-        config = self.planner.config
-        previous = (config.moving_speed, config.max_interpolation_steps)
-        # PlannerConfig is validated at construction only, so an override is checked here, or
-        # a bad value divides by zero when interpolating
-        if moving_speed is not None:
-            moving_speed = float(moving_speed)
-            if moving_speed <= 0.0:
-                raise ValueError('Planner moving_speed must be positive')
-            config.moving_speed = moving_speed
-        if max_interpolation_steps is not None:
-            max_interpolation_steps = int(max_interpolation_steps)
-            if max_interpolation_steps < config.min_interpolation_steps:
-                raise ValueError(
-                    'Planner max_interpolation_steps must be at least '
-                    'min_interpolation_steps'
-                )
-            config.max_interpolation_steps = max_interpolation_steps
-        try:
-            yield
-        finally:
-            config.moving_speed, config.max_interpolation_steps = previous
+        return self.planner.plan(start, goal, active_mask=active_mask)
 
     def _set_current_q(self, q):
         """Hold the caller's measured body q, at rest, as the model's state.

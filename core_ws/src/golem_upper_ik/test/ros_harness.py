@@ -9,8 +9,7 @@ limp arms hang) serve the controller tests.
 For the controller's closed loop: FollowingRobot executes the controller's commands as an
 engaged golem_safety would relay them, and relays them itself; RelayedRobot sits behind
 golem_safety's output topic, with golem_safety's safety_node run as a subprocess
-(SafetyNode); CommandRecorder also notes the robot's measured pose; send_goal is an action
-client.
+(SafetyNode); CommandRecorder also notes the robot's measured pose.
 
 SimClock publishes /clock as a sim would, at a chosen rate of sim seconds per wall second, and
 Ros.node(name, sim_time=True) makes a node that runs on it (use_sim_time).
@@ -28,7 +27,6 @@ import time
 
 import numpy as np
 import rclpy
-from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.parameter import Parameter
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -616,21 +614,6 @@ class Sample:
     def __init__(self, t, q, kp, measured):
         """Hold the fields."""
         self.t, self.q, self.kp, self.measured = t, q, kp, measured
-
-
-def send_goal(ros, action_type, action_name, goal, timeout=60.0):
-    """Send goal to the action server and wait for the outcome; return (status, result)."""
-    node = ros.node('action_client')
-    client = ActionClient(node, action_type, action_name)
-    assert client.wait_for_server(timeout_sec=10.0), f'no {action_name} action server'
-    sent = client.send_goal_async(goal)
-    assert wait_for(sent.done, 10.0), f'{action_name} did not answer the goal'
-    handle = sent.result()
-    assert handle.accepted, f'{action_name} refused the goal'
-    done = handle.get_result_async()
-    assert wait_for(done.done, timeout), f'{action_name} gave no result within {timeout} s'
-    response = done.result()
-    return response.status, response.result
 
 
 class SafetyNode:

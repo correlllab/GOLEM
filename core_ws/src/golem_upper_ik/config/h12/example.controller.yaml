@@ -30,9 +30,8 @@ controller:
   # rad/s, > 0: a direct goal's IK has converged once no IK joint moves faster than this in
   # a step; the goal then holds the command (integral control)
   threshold_ik: 0.001
-  # rad, > 0: a named-config goal is reached once every IK joint is within this
-  threshold_joint: 0.01
-  # m, > 0: a frame goal is reached once every frame is within this of its target...
+  # m, > 0: a /grasp_frame_target goal is reached once every targeted grasp frame has stayed
+  # within this of its target...
   threshold_linear: 0.002
   # rad, > 0: ...and its orientation within this
   threshold_angular: 0.01

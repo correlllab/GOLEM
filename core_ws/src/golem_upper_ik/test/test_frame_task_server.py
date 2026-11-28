@@ -1,11 +1,11 @@
 """Check frame_task_server and joint_state_publisher on domain 92, and the launch files.
 
 In this process, frame_task_server against a robot that executes and relays its commands
-(FollowingRobot), sharing the session's robot model: relative and slow-mode frame goals,
-slow-mode named configurations, the fresh-state wait, the stale-state abort, planned goals
-and planning turned off, the goal start from the last command, the hold pinned at a limit,
-and execute_path's pacing; /grasp_frame_target's goals in the pelvis frame and through TF,
-planned, refused, timed out and canceled, and the grasp pose topics.
+(FollowingRobot), sharing the session's robot model: pelvis-frame grasp-frame goals whatever
+the IMU says, a goal's timeout in sim time, the fresh-state wait, the stale-state abort,
+planned goals and planning turned off, the goal start from the last command, the hold pinned
+at a limit, and execute_path's pacing; /grasp_frame_target's goals in the pelvis frame and
+through TF, planned, refused, timed out and canceled, and the grasp pose topics.
 
 Then the installed console scripts as processes: joint_state_publisher's /joint_states,
 the parameters both nodes refuse, frame_task_server's shutdown on a signal, and its command
@@ -22,7 +22,7 @@ import threading
 import time
 
 from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import Pose, PoseArray, PoseStamped
+from geometry_msgs.msg import PoseArray, PoseStamped
 import numpy as np
 import pytest
 import yaml
@@ -30,7 +30,7 @@ from golem_upper_ik.profile import known_robots
 
 from ros_harness import (
     TEST_DOMAIN, CommandRecorder, FakeRobot, FollowingRobot, RelayedRobot, SimClock,
-    body_pose, profile_of, send_goal, shared_model, slots_of, wait_for,
+    body_pose, profile_of, shared_model, slots_of, wait_for,
 )
 
 ROBOTS = known_robots()
@@ -110,92 +110,9 @@ class PoseRecorder:
         return np.array([q.w, q.x, q.y, q.z])
 
 
-def offset_pose(x=0.0):
-    """Return a pose x m forward with no rotation."""
-    pose = Pose()
-    pose.position.x = x
-    pose.orientation.w = 1.0
-    return pose
-
-
-def frame_goal(frame, target, relative=False, slow_mode=False, plan=False, duration=0.0):
-    """Return a FrameTask goal for one frame."""
-    from custom_ros_messages.action import FrameTask
-    goal = FrameTask.Goal()
-    goal.frame_names = [frame]
-    goal.frame_targets = [target]
-    goal.relative = relative
-    goal.slow_mode = slow_mode
-    goal.plan = plan
-    goal.duration.sec = int(duration)
-    goal.duration.nanosec = int((duration - int(duration)) * 1e9)
-    return goal
-
-
-def named_goal(name, slow_mode=False, plan=False, duration=0.0):
-    """Return a NamedConfig goal; duration in s, 0 for controller.timeout."""
-    from custom_ros_messages.action import NamedConfig
-    goal = NamedConfig.Goal()
-    goal.config_name = name
-    goal.slow_mode = slow_mode
-    goal.plan = plan
-    goal.duration.sec = int(duration)
-    goal.duration.nanosec = int((duration - int(duration)) * 1e9)
-    return goal
-
-
 def ik_slots(profile):
     """Return the body slots of the IK joints."""
     return slots_of(profile, profile.enabled_joints)
-
-
-def ee_speeds(model, samples, frame_index, ctrl_hz):
-    """Return the commanded end-effector speed of each control step, m/s, from the commands."""
-    profile = model.profile
-    upper = list(profile.upper_slots)
-    arm = [upper.index(slot) for slot in ik_slots(profile)]
-    steps = [samples[0].q]
-    for sample in samples[1:]:
-        if not np.array_equal(sample.q, steps[-1]):
-            steps.append(sample.q)
-    positions = np.array([
-        model.get_frame_transformation_reduced(profile.ee_frames[frame_index], q[arm])[:3, 3]
-        for q in steps])
-    return np.linalg.norm(np.diff(positions, axis=0), axis=1) * ctrl_hz
-
-
-def joint_speeds(profile, samples, ctrl_hz):
-    """Return the largest commanded IK-joint speed of each control step, rad/s."""
-    upper = list(profile.upper_slots)
-    arm = [upper.index(slot) for slot in ik_slots(profile)]
-    steps = [samples[0].q[arm]]
-    for sample in samples[1:]:
-        if not np.array_equal(sample.q[arm], steps[-1]):
-            steps.append(sample.q[arm])
-    return np.max(np.abs(np.diff(np.array(steps), axis=0)), axis=1) * ctrl_hz
-
-
-@pytest.mark.parametrize('robot', ROBOTS)
-def test_relative_frame_goal(ros, models, robot):
-    """A relative frame goal moves the end effector 5 cm forward, keeping its orientation."""
-    from custom_ros_messages.action import FrameTask
-    profile = profile_of(robot)
-    config = config_of(robot, CONFIGS[robot])
-    FollowingRobot(ros, profile, body_pose(profile, START[robot]), '/lowcmd')
-    model = shared_model(ros, models, robot)
-    left = PoseRecorder(ros, '/left_ee_pose')
-    server_of(ros, model, CONFIGS[robot])
-    assert wait_for(lambda: left.poses, 5.0)
-    start, start_quaternion = left.position(), left.quaternion()
-
-    status, result = send_goal(ros, FrameTask, '/frame_task',
-                               frame_goal(profile.ee_frames[0], offset_pose(0.05), relative=True))
-    assert status == GoalStatus.STATUS_SUCCEEDED and result.success
-    time.sleep(0.1)
-    threshold = config['controller']['threshold_linear']
-    assert np.linalg.norm(left.position() - (start + [0.05, 0.0, 0.0])) <= threshold + 1e-4
-    # the orientation is kept: the target's is the frame's own
-    assert abs(abs(np.dot(left.quaternion(), start_quaternion)) - 1.0) < 1e-4
 
 
 def _rotation(axis, angle):
@@ -229,174 +146,74 @@ def _matrix(stamped):
     return pose_to_matrix(stamped.pose)
 
 
-def _offset(position=(0.0, 0.0, 0.0), rotation=np.eye(3)):
-    """Return a Pose of a translation (m) and a rotation."""
-    from golem_upper_ik.ros2.utility import matrix_to_pose
-    offset = np.eye(4)
-    offset[:3, :3] = rotation
-    offset[:3, 3] = position
-    return matrix_to_pose(offset)
-
-
 @pytest.mark.parametrize('imu', IMU_ORIENTATIONS)
 @pytest.mark.parametrize('robot', ROBOTS)
-def test_relative_frame_goal_is_a_pelvis_frame_move(ros, models, robot, imu):
-    """A relative target resolves in the pelvis frame whatever the IMU says.
+def test_grasp_frame_goal_is_a_pelvis_frame_move(ros, models, robot, imu):
+    """A pelvis-frame target is reached in the pelvis frame whatever the IMU says.
 
-    Its position is the frame's measured pelvis-frame position (/left_ee_pose) plus the offset,
-    its orientation the offset's rotation (pelvis axes) times the frame's measured one; and
-    /frame_poses reports the measured pose in the pelvis frame too.
+    Each target is the grasp frame's measured pose (/left_grasp_frame_pose) moved in pelvis
+    axes; /frame_targets carries it and /frame_poses the measured pose, both in the pelvis
+    frame too.
     """
-    from custom_ros_messages.action import FrameTask
     profile = profile_of(robot)
     config = config_of(robot, CONFIGS[robot])
     FollowingRobot(ros, profile, body_pose(profile, START[robot]),
                    '/lowcmd', imu_quaternion=IMU_ORIENTATIONS[imu])
     model = shared_model(ros, models, robot)
-    left = PoseRecorder(ros, '/left_ee_pose')
-    target = PoseRecorder(ros, '/left_ee_target')
+    left = PoseRecorder(ros, '/left_grasp_frame_pose')
+    frame_targets = PoseRecorder(ros, '/frame_targets', PoseArray)
     frame_poses = PoseRecorder(ros, '/frame_poses', PoseArray)
     server_of(ros, model, CONFIGS[robot])
     assert wait_for(lambda: left.poses, 5.0)
     threshold_linear = config['controller']['threshold_linear']
     threshold_angular = config['controller']['threshold_angular']
-    frame = profile.ee_frames[0]
+    client = GraspClient(ros)
 
     for position, rotation in (((0.0, 0.0, 0.05), np.eye(3)),
                                ((0.05, 0.0, 0.0), np.eye(3)),
                                ((0.0, 0.0, 0.0), _rotation('z', 0.2))):
         time.sleep(0.1)
-        start = _matrix(left.poses[-1])
-        status, result = send_goal(ros, FrameTask, '/frame_task',
-                                   frame_goal(frame, _offset(position, rotation),
-                                              relative=True))
-        assert status == GoalStatus.STATUS_SUCCEEDED and result.success
+        expected = _shifted(_matrix(left.poses[-1]), position, rotation)
+        status, result = client.run(grasp_goal(left=expected))
+        assert status == GoalStatus.STATUS_SUCCEEDED and result.success, result.message
         time.sleep(0.1)
-        expected = np.eye(4)
-        expected[:3, :3] = rotation @ start[:3, :3]
-        expected[:3, 3] = start[:3, 3] + position
-        resolved = _matrix(target.poses[-1])
-        np.testing.assert_allclose(resolved[:3, 3], expected[:3, 3], atol=1e-5)
-        np.testing.assert_allclose(resolved[:3, :3], expected[:3, :3], atol=1e-5)
+        resolved = frame_targets.poses[-1].poses[0]
+        np.testing.assert_allclose(
+            [resolved.position.x, resolved.position.y, resolved.position.z],
+            expected[:3, 3], atol=1e-5)
         reached = _matrix(left.poses[-1])
         assert np.linalg.norm(reached[:3, 3] - expected[:3, 3]) <= threshold_linear + 1e-4
-        angle = np.arccos(np.clip((np.trace(expected[:3, :3].T @ reached[:3, :3]) - 1.0) / 2.0,
-                                  -1.0, 1.0))
-        assert angle <= threshold_angular + 1e-4
+        assert _angle(reached, expected) <= threshold_angular + 1e-4
         measured = frame_poses.poses[-1].poses[0]
         np.testing.assert_allclose(
             [measured.position.x, measured.position.y, measured.position.z],
             reached[:3, 3], atol=1e-4)
 
 
-@pytest.mark.parametrize('robot', ROBOTS)
-def test_slow_mode_scales_speed(ros, models, robot, tmp_path):
-    """slow_mode scales each IK step's joint velocity by SLOW_MODE_SCALE, after the limits.
-
-    With the installed configs' limits a move's speed is set by the IK's own acceleration limit
-    and damping, not by v_lim, and a slow move steps through more of that speed curve than a
-    full-speed one; so here v_lim is low enough to bind, and the two moves' peaks compare.
-    """
-    from custom_ros_messages.action import FrameTask
-    from golem_upper_ik.ros2.frame_task_server import SLOW_MODE_SCALE
-    assert SLOW_MODE_SCALE == 0.25
-    profile = profile_of(robot)
-    v_lim = 0.04  # m/s
-    config_path = edited_config(tmp_path, robot, CONFIGS[robot], v_lim=v_lim)
-    config = config_of(robot, str(config_path))
-    FollowingRobot(ros, profile, body_pose(profile, START[robot]), '/lowcmd')
-    model = shared_model(ros, models, robot)
-    recorder = CommandRecorder(ros, config['topics']['low_cmd'], profile)
-    controller = server_of(ros, model, config_path).controller
-    frame = profile.ee_frames[0]
-
-    # one step: the slow velocity is the full-speed one, scaled
-    vel = np.zeros(model.num_motor)
-    vel[ik_slots(profile)] = np.linspace(-0.8, 0.8, len(profile.enabled_joints))
-    full = controller._limit_joint_vel(vel)
-    controller.speed_scale = SLOW_MODE_SCALE
-    np.testing.assert_allclose(controller._limit_joint_vel(vel), SLOW_MODE_SCALE * full,
-                               rtol=1e-12)
-    controller.speed_scale = 1.0
-
-    # the same 2 cm move at full speed and in slow mode, with a move back between them
-    upper = list(profile.upper_slots)
-    peaks = {}
-    for slow_mode, x, measured in ((False, 0.02, True), (False, -0.02, False),
-                                   (True, 0.02, True)):
-        # the recorder stamps a command when its callback runs, which can trail the publisher
-        # under load; the window starts once it has the controller's current command, so the
-        # last goal's commands are not read as this one's
-        assert wait_for(lambda: recorder.samples and np.allclose(
-            recorder.samples[-1].q, controller.low_cmd_handler.q_cmd[upper], atol=1e-6), 5.0)
-        start = time.monotonic()
-        status, result = send_goal(
-            ros, FrameTask, '/frame_task',
-            frame_goal(frame, offset_pose(x), relative=True, slow_mode=slow_mode,
-                       duration=15.0))
-        assert status == GoalStatus.STATUS_SUCCEEDED and result.success
-        if measured:
-            samples = [s for s in recorder.samples if s.t >= start]
-            peaks[slow_mode] = np.max(
-                ee_speeds(model, samples, 0, config['frequency']['ctrl_hz']))
-    # the full-speed move is held at the speed limit
-    assert peaks[False] == pytest.approx(v_lim, rel=0.02), peaks
-    assert peaks[True] <= SLOW_MODE_SCALE * peaks[False] + 1e-3, peaks
-
-
-@pytest.mark.parametrize('robot', ROBOTS)
-def test_named_config_slow_mode(ros, models, robot):
-    """A slow-mode named config moves at a quarter of the joint speed limit and is reached."""
-    from custom_ros_messages.action import NamedConfig
-    from golem_upper_ik.ros2.frame_task_server import SLOW_MODE_SCALE
-    profile = profile_of(robot)
-    config = config_of(robot, CONFIGS[robot])
-    name = START[robot]
-    # the left shoulder pitch starts 0.15 rad from the named configuration
-    q0 = body_pose(profile, name)
-    q0[profile.body_joints.index('left_shoulder_pitch_joint')] += 0.15
-    robot_ = FollowingRobot(ros, profile, q0, '/lowcmd')
-    model = shared_model(ros, models, robot)
-    recorder = CommandRecorder(ros, config['topics']['low_cmd'], profile)
-    server_of(ros, model, CONFIGS[robot])
-
-    start = time.monotonic()
-    status, result = send_goal(ros, NamedConfig, '/named_config',
-                               named_goal(name, slow_mode=True))
-    assert status == GoalStatus.STATUS_SUCCEEDED and result.success
-    reached = robot_.measured()[ik_slots(profile)]
-    assert np.max(np.abs(reached - profile.named_configs[name])) < \
-        config['controller']['threshold_joint']
-    # at a quarter of the joint speed limit
-    samples = [s for s in recorder.samples if s.t >= start]
-    speeds = joint_speeds(profile, samples, config['frequency']['ctrl_hz'])
-    dq_lim = config['controller']['dq_lim']
-    assert np.max(speeds) <= SLOW_MODE_SCALE * dq_lim * 1.001 + 1e-4
-    assert np.max(speeds) > 0.5 * SLOW_MODE_SCALE * dq_lim
-
-
 @pytest.mark.parametrize('rate', [0.5, 2.0])
 def test_goal_duration_counts_sim_time(ros, models, rate):
-    """Under use_sim_time a goal's duration is s of sim time at any sim speed."""
-    from custom_ros_messages.action import NamedConfig
+    """Under use_sim_time a goal's timeout is s of sim time at any sim speed."""
     profile = profile_of('h12')
     name = START['h12']
-    # the left elbow settles 0.05 rad short of every command, so the hold never converges
-    # and the goal runs for its whole duration
+    # the left elbow settles 0.05 rad short of every command, so the grasp frame never
+    # reaches its target and the goal runs for its whole timeout
     sag = np.zeros(len(profile.body_joints))
     sag[profile.body_joints.index('left_elbow_joint')] = 0.05
     FollowingRobot(ros, profile, body_pose(profile, name), '/lowcmd', sag=sag)
     sim = SimClock(ros, rate=rate)
     sim.start()
     model = shared_model(ros, models, 'h12')
+    left = PoseRecorder(ros, '/left_grasp_frame_pose')
     server = server_of(ros, model, CONFIGS['h12'], sim_time=True)
     assert server.controller.clock._ros_clock is not None
     assert wait_for(lambda: server.controller.low_cmd_handler.following, 5.0)
+    assert wait_for(lambda: left.poses, 5.0)
+    target = _shifted(_matrix(left.poses[-1]), (0.02, 0.0, 0.0))
     start, sim_start = time.monotonic(), sim.now
-    status, result = send_goal(ros, NamedConfig, '/named_config',
-                               named_goal(name, duration=1.0))
+    status, result = GraspClient(ros).run(grasp_goal(left=target, timeout=1.0))
     wall, sim_seconds = time.monotonic() - start, sim.now - sim_start
-    assert status == GoalStatus.STATUS_SUCCEEDED and not result.success
+    assert status == GoalStatus.STATUS_ABORTED, result.message
+    assert result.outcome == grasp_outcome('NOT_REACHED')
     # 1 s of sim time: 2 s of wall time at half speed, 0.5 s at twice
     assert 1.0 <= sim_seconds < 1.3, sim_seconds
     assert 1.0 / rate - 0.1 <= wall < 1.0 / rate + 0.4, wall
@@ -417,18 +234,18 @@ def test_startup_waits_for_fresh_state(ros, models, tmp_path):
     time.sleep(0.2)
     assert recorder.count == 0
     # nothing tells the robot's other nodes that the controller is up
-    assert probe.count_publishers('/left_ee_pose') == 0
+    assert probe.count_publishers('/left_grasp_frame_pose') == 0
     assert probe.count_publishers('/safety/lowcmd_upper_in') == 0
 
 
 def test_stale_state_aborts_goal(ros, models, monkeypatch, capfd):
     """On domain 0, /lowstate going stale aborts a goal, and the last command holds."""
-    from custom_ros_messages.action import FrameTask
     from golem_upper_ik.core.controller import upper_controller
     profile = profile_of('h12')
     config = config_of('h12', CONFIGS['h12'])
     robot_ = FollowingRobot(ros, profile, body_pose(profile, START['h12']), '/lowcmd')
     model = shared_model(ros, models, 'h12')
+    left = PoseRecorder(ros, '/left_grasp_frame_pose')
     recorder = CommandRecorder(ros, config['topics']['low_cmd'], profile)
     log = Log(capfd)
     # off the real robot's domain the tick-lag check is off: the sims stamp their tick in
@@ -447,14 +264,16 @@ def test_stale_state_aborts_goal(ros, models, monkeypatch, capfd):
         stop_at.append(time.monotonic())
         robot_.stop_state()
     threading.Thread(target=stop_state_mid_goal, daemon=True).start()
-    status, result = send_goal(
-        ros, FrameTask, '/frame_task',
-        frame_goal(profile.ee_frames[0], offset_pose(1.0), relative=True, duration=8.0))
+    assert wait_for(lambda: left.poses, 5.0)
+    target = _shifted(_matrix(left.poses[-1]), (1.0, 0.0, 0.0))
+    status, result = GraspClient(ros).run(grasp_goal(left=target, timeout=8.0))
     ended = time.monotonic()
     assert status == GoalStatus.STATUS_ABORTED and not result.success
+    assert result.outcome == grasp_outcome('FAILED')
     assert ended - stop_at[0] < 1.0
-    assert wait_for(lambda: log.lines('[frame_task_server]: Aborting goal: /lowstate is '), 2.0)
-    line = log.lines('Aborting goal')[0]
+    assert wait_for(
+        lambda: log.lines('[frame_task_server]: Grasp frame target abort: /lowstate is '), 2.0)
+    line = log.lines('Grasp frame target abort')[0]
     assert 'ms stale (> 50 ms); holding the last command' in line, line
     # the last command holds: once it arrives it never changes. Samples carry their receive
     # time, so commands published before the abort can still arrive after it under load.
@@ -473,160 +292,89 @@ def test_stale_state_aborts_goal(ros, models, monkeypatch, capfd):
 
 def test_stale_state_does_not_abort_a_goal_off_the_real_robots_domain(ros, models, capfd):
     """Off domain 0 the staleness check is off: a goal runs to its timeout."""
-    from custom_ros_messages.action import FrameTask
     profile = profile_of('h12')
     robot_ = FollowingRobot(ros, profile, body_pose(profile, START['h12']), '/lowcmd')
     model = shared_model(ros, models, 'h12')
+    left = PoseRecorder(ros, '/left_grasp_frame_pose')
     log = Log(capfd)
     # on the test domain the tick-lag check is off: its deadline is 0
     server = server_of(ros, model, CONFIGS['h12'])
     assert server.controller.max_state_lag_ms == 0.0
-    # a slow 30 cm move keeps the IK stepping past the goal's 2 s; /lowstate stops at 0.5 s
+    assert wait_for(lambda: left.poses, 5.0)
+    # a target out of reach keeps the IK stepping past the goal's 2 s; /lowstate stops at 0.5 s
+    target = _shifted(_matrix(left.poses[-1]), (1.0, 0.0, 0.0))
     threading.Timer(0.5, robot_.stop_state).start()
     start = time.monotonic()
-    status, result = send_goal(
-        ros, FrameTask, '/frame_task',
-        frame_goal(profile.ee_frames[0], offset_pose(0.3), relative=True, slow_mode=True,
-                   duration=2.0))
-    # the goal ran to its timeout on the stale state, and was not aborted
-    assert status == GoalStatus.STATUS_SUCCEEDED
+    status, result = GraspClient(ros).run(grasp_goal(left=target, timeout=2.0))
+    # the goal ran to its timeout on the stale state: not reached, and no fault
+    assert status == GoalStatus.STATUS_ABORTED
+    assert result.outcome == grasp_outcome('NOT_REACHED'), result.message
     assert time.monotonic() - start >= 2.0
-    assert log.lines('Aborting goal') == []
-
-
-def test_frame_task_target_never_raises_while_tasks_are_added(ros, models):
-    """frame_task_target never raises while another thread replaces the tasks."""
-    from golem_upper_ik.core.controller.frame_controller import FrameController
-    profile = profile_of('g1')
-    config = config_of('g1', CONFIGS['g1'])
-    FollowingRobot(ros, profile, body_pose(profile, START['g1']), '/lowcmd')
-    model = shared_model(ros, models, 'g1')
-    controller = FrameController(ros.node('controller'), profile, config, robot_model=model,
-                                 init=False)
-    ros.on_close(controller.shutdown)
-    frame = profile.ee_frames[0]
-    target = controller.ee_transformations()[0]
-    # another thread reads the target in a tight loop, with the GIL handed over as often as
-    # the interpreter allows, while tasks come and go
-    errors, reads = [], [0]
-    done = threading.Event()
-
-    def read():
-        """Read the target in a tight loop, keeping any error."""
-        while not done.is_set():
-            try:
-                controller.frame_task_target(f'{frame}_task')
-                reads[0] += 1
-            except Exception as error:  # the outcome under test
-                errors.append(error)
-                return
-    switch_interval = sys.getswitchinterval()
-    sys.setswitchinterval(1e-6)
-    reader = threading.Thread(target=read, daemon=True)
-    try:
-        reader.start()
-        for _ in range(3000):
-            controller.clear_frame_tasks()
-            controller.add_frame_task(f'{frame}_task', frame, target)
-            if errors:
-                break
-    finally:
-        done.set()
-        reader.join(timeout=5.0)
-        sys.setswitchinterval(switch_interval)
-    assert errors == []
-    assert reads[0] > 1000
-    np.testing.assert_allclose(controller.frame_task_target(f'{frame}_task'), target)
-
-
-def test_unknown_frame_is_refused_and_the_poses_keep_going(ros, models, capfd):
-    """A goal naming an unknown frame is refused, and the poses keep going out."""
-    from custom_ros_messages.action import FrameTask
-    from rclpy.action import ActionClient
-    profile = profile_of('h12')
-    FollowingRobot(ros, profile, body_pose(profile, START['h12']), '/lowcmd')
-    model = shared_model(ros, models, 'h12')
-    log = Log(capfd)
-    left = PoseRecorder(ros, '/left_ee_pose')
-    poses = PoseRecorder(ros, '/frame_poses', PoseArray)
-    server_of(ros, model, CONFIGS['h12'])
-    assert wait_for(lambda: left.poses, 5.0)
-
-    goal = FrameTask.Goal()
-    goal.frame_names = [profile.ee_frames[0], 'no_such_frame']
-    goal.frame_targets = [offset_pose(0.0), offset_pose(0.0)]
-    goal.relative = True
-    client = ActionClient(ros.node('action_client'), FrameTask, '/frame_task')
-    assert client.wait_for_server(timeout_sec=10.0)
-    sent = client.send_goal_async(goal)
-    assert wait_for(sent.done, 10.0)
-    assert not sent.result().accepted
-    line = log.lines('no_such_frame')
-    assert line and 'Refusing' in line[0], line
-    # the poses keep going out (half a second's worth within two), the refused goal's frames
-    # never among them
-    from golem_upper_ik.ros2.frame_task_server import PUBLISH_HZ
-    count = len(left.poses)
-    assert wait_for(lambda: len(left.poses) > count + PUBLISH_HZ / 2, 2.0)
-    assert all(len(msg.poses) == 0 for msg in poses.poses)
+    assert log.lines('stale') == []
 
 
 @pytest.mark.parametrize('robot', ROBOTS)
 def test_planned_goals(ros, models, robot):
-    """Planned named configs out and back, then a planned frame goal, are reached.
+    """Planned goals to a posture's grasp-frame poses, back, then 5 cm forward, are reached.
 
-    The G1 goes out to t_pose; the H1-2, whose t_pose is past its planner frames' y limit, to
-    arms_front_45.
+    The targets are the grasp frames at the named configurations (the model's forward
+    kinematics, every other joint as measured). The G1 goes out to t_pose; the H1-2, whose
+    t_pose is past its planner frames' y limit, to arms_front_45.
     """
-    from custom_ros_messages.action import FrameTask, NamedConfig
     profile = profile_of(robot)
     config = config_of(robot, CONFIGS[robot])
+    threshold_linear = config['controller']['threshold_linear']
     robot_ = FollowingRobot(ros, profile, body_pose(profile, START[robot]), '/lowcmd')
     model = shared_model(ros, models, robot)
+    poses = {arm: PoseRecorder(ros, f'/{arm}_grasp_frame_pose') for arm in ('left', 'right')}
     server_of(ros, model, CONFIGS[robot])
-    threshold = config['controller']['threshold_joint']
+    assert wait_for(lambda: all(recorder.poses for recorder in poses.values()), 5.0)
+    frames = [frame.name for frame in profile.grasp_frames]
+    client = GraspClient(ros)
+
+    def reached(targets):
+        """Return whether both grasp frames are within threshold_linear of targets."""
+        time.sleep(0.2)
+        return all(np.linalg.norm(_matrix(poses[arm].poses[-1])[:3, 3] - targets[arm][:3, 3])
+                   <= threshold_linear + 1e-4 for arm in targets)
 
     for name in ({'h12': 'arms_front_45', 'g1': 't_pose'}[robot], START[robot]):
-        status, result = send_goal(ros, NamedConfig, '/named_config',
-                                   named_goal(name, plan=True))
+        q = body_pose(profile, name)
+        targets = {arm: model.get_frame_transformation_body(frame, q)
+                   for arm, frame in zip(('left', 'right'), frames)}
+        status, result = client.run(grasp_goal(plan=True, timeout=30.0, **targets), 40.0)
         assert status == GoalStatus.STATUS_SUCCEEDED and result.success, (name, result)
-        reached = robot_.measured()[ik_slots(profile)]
-        assert np.max(np.abs(reached - profile.named_configs[name])) < threshold, name
+        assert reached(targets), name
 
-    left = profile.ee_frames[0]
-    before = model.get_frame_position(left, robot_.measured()).copy()
-    status, result = send_goal(ros, FrameTask, '/frame_task',
-                               frame_goal(left, offset_pose(0.05), relative=True, plan=True))
+    target = _shifted(_matrix(poses['left'].poses[-1]), (0.05, 0.0, 0.0))
+    status, result = client.run(grasp_goal(left=target, plan=True, timeout=20.0))
     assert status == GoalStatus.STATUS_SUCCEEDED and result.success, result
-    moved = model.get_frame_position(left, robot_.measured()) - before
-    assert np.linalg.norm(moved) == pytest.approx(0.05, abs=5e-3), moved
+    assert reached({'left': target})
+    assert robot_.commands > 0
 
 
 def test_planning_turned_off(ros, models, capfd, tmp_path):
     """planner.enabled: false refuses every planned goal before any IK solve."""
-    from custom_ros_messages.action import FrameTask, NamedConfig
     profile = profile_of('g1')
     config_path = edited_config(tmp_path, 'g1', CONFIGS['g1'], planner={'enabled': False})
     config = config_of('g1', str(config_path))
     FollowingRobot(ros, profile, body_pose(profile, START['g1']), '/lowcmd')
     model = shared_model(ros, models, 'g1')
+    left = PoseRecorder(ros, '/left_grasp_frame_pose')
     log = Log(capfd)
     recorder = CommandRecorder(ros, config['topics']['low_cmd'], profile)
     server_of(ros, model, config_path)
-    assert wait_for(lambda: recorder.count > 0, 2.0)
+    assert wait_for(lambda: recorder.count > 0 and left.poses, 2.0)
 
     start = time.monotonic()
-    status, result = send_goal(ros, FrameTask, '/frame_task',
-                               frame_goal(profile.ee_frames[0], offset_pose(0.05),
-                                          relative=True, plan=True))
+    target = _shifted(_matrix(left.poses[-1]), (0.05, 0.0, 0.0))
+    status, result = GraspClient(ros).run(grasp_goal(left=target, plan=True))
     assert status == GoalStatus.STATUS_ABORTED and not result.success
-    status, result = send_goal(ros, NamedConfig, '/named_config', named_goal('home', plan=True))
-    assert status == GoalStatus.STATUS_ABORTED and not result.success
-    assert wait_for(lambda: len(log.lines('Planning is turned off')) == 2, 2.0)
-    line = log.lines('Planning is turned off')[0]
-    assert '[frame_task_server]: Planning or execution failed: ' in line, line
-    assert f'the controller config {config_path} sets planner.enabled: false' in line, line
-    assert 'send the goal with plan=false' in line, line
+    assert result.outcome == grasp_outcome('FAILED')
+    assert result.message.startswith('planning failed: Planning is turned off'), result.message
+    assert f'the controller config {config_path} sets planner.enabled: false' in result.message
+    assert 'send the goal with plan=false' in result.message
+    assert wait_for(lambda: log.lines('Planning is turned off'), 2.0)
     # nothing moved
     sent = [s.q for s in recorder.samples if s.t >= start]
     assert all(np.array_equal(q, sent[0]) for q in sent)
@@ -673,7 +421,8 @@ def test_hold_pinned_at_a_limit_is_not_converged(ros, models, robot):
     """A hold pinned at a position clip limit is not converged, naming the joint."""
     profile = profile_of(robot)
     config = config_of(robot, CONFIGS[robot])
-    # the G1's configs carry no integral gain; the hold's I-term needs one
+    # one integral gain on every upper joint, the G1's waist included (its configs' is 0),
+    # so the I-term pushes the left elbow whatever the configs say
     config['gains']['ki'][list(profile.upper_slots)] = 100.0
     limits = config['limits']['q_clip_limits']
     elbow = profile.body_joints.index('left_elbow_joint')
@@ -1286,10 +1035,10 @@ def test_frame_task_server_shuts_down_with_zero_gains_on_a_signal(ros, signals):
     """On SIGINT or SIGTERM, once or twice, the server exits 0 after its zero-gain command."""
     profile = profile_of('g1')
     robot_ = FollowingRobot(ros, profile, body_pose(profile, 'home'), '/lowcmd')
-    left = PoseRecorder(ros, '/left_ee_pose')
+    left = PoseRecorder(ros, '/left_grasp_frame_pose')
     process = NodeProcess('frame_task_server', 'robot:=g1', f'config:={CONFIGS["g1"]}')
     try:
-        # its end-effector poses go out once the start-up is done
+        # its grasp-frame poses go out once the start-up is done
         assert wait_for(lambda: left.poses, 60.0), process.output()
         assert robot_.zero_gain_commands == 0
         # a second signal, as from an impatient operator, arrives during the shutdown

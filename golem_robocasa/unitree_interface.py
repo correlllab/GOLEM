@@ -93,12 +93,19 @@ class SimInterface(LowCmdLatch):
         sd = d.sensordata
         self.sim_time = float(d.time)
         tick = int(round(d.time * 1000.0)) & 0xFFFFFFFF  # ms of sim time
-        # tau_est is the <jointactuatorfrc> sensor, the torque after the joint's
-        # actuatorfrcrange clamp, as the real motor measures it. The unclamped
-        # data.actuator_force would trip golem_safety's estop limits.
-        q, dq, tau = d.qpos[r.motor_qpos], d.qvel[r.motor_qvel], sd[r.motor_tau]
+        q, dq, tau = self.lowstate_motors()
         imu = [sd[part] for part in self._imu] if self.have_imu else [None] * 3
         self._low_state.write(tick, q, dq, tau, *imu)
+
+    def lowstate_motors(self):
+        """Return the motors' q, dq and tau_est for this step's rt/lowstate (h12_drive overrides it).
+
+        tau_est is the <jointactuatorfrc> sensor, the torque after the joint's
+        actuatorfrcrange clamp, as the real motor measures it. The unclamped
+        data.actuator_force would trip golem_safety's estop limits.
+        """
+        d, r = self.data, self.resolver
+        return d.qpos[r.motor_qpos], d.qvel[r.motor_qvel], d.sensordata[r.motor_tau]
 
     def shutdown(self):
         """Close the DDS topics."""

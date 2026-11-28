@@ -75,7 +75,7 @@ def in_process_pose_plan(planner, measured_q, start, targets):
     with the controller config's planner settings at ACCEL_LIMIT.
     """
     from golem_upper_ik.core.ik_solver import IKSolver
-    from golem_upper_ik.core.planner import PlannerConfig, ReducedJointPlanner
+    from golem_ompl.reduced_joint_planner import PlannerConfig, ReducedJointPlanner
     from golem_upper_ik.core.robot_model import FixedState, RobotModel
     profile, config = planner.profile, planner.config
     controller = config['controller']
@@ -189,7 +189,7 @@ def test_a_pose_goal_takes_the_first_seed_the_planner_reaches(planners, robot, r
     path (the planner's reason) once both are refused, and, with a target no seed reaches
     (None), ends without an IK solution before any plan.
     """
-    from golem_upper_ik.core.planner.reduced_joint_planner import PlanResult
+    from golem_ompl.reduced_joint_planner import PlanResult
     planner = planners(robot)
     q = body_q(planner, 'arms_front_45')
     shift = (1.0, 0.0, 0.0) if refused is None else (0.0, 0.0, 0.0)  # 1 m: out of reach

@@ -2,7 +2,7 @@
 
 A path is valid when every joint is within its limits, the self-collision model reports no
 collision, and the planner frames stay within the configured workspace bounds. The planner
-needs a self-collision model; golem_ompl's ArmPlanner refuses a robot without one.
+needs a self-collision model; ArmPlanner refuses a robot without one.
 """
 import numpy as np
 from ompl import base as ob
@@ -49,7 +49,7 @@ class PlannerConfig:
     validity_resolution: float = 0.0025
     constraint_check_steps: int = 10
     # frames bounded by the frame_* limits and timed by moving_speed; the caller sets them
-    # (golem_ompl's planner_config_of), and the planner refuses a config without them
+    # (arm_planner.planner_config_of), and the planner refuses a config without them
     frame_names: tuple = None
     frame_x_max: float = 0.50
     frame_y_min: float = None

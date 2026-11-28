@@ -27,7 +27,7 @@ from pink.exceptions import NoSolutionFound
 import pinocchio as pin
 
 from golem_upper_ik.core.ik_solver import IKSolver
-from golem_upper_ik.core.planner import PlannerConfig, ReducedJointPlanner
+from golem_ompl.reduced_joint_planner import PlannerConfig, ReducedJointPlanner
 from golem_upper_ik.core.robot_model import FixedState, RobotModel
 from golem_upper_ik.profile import RobotProfile, robot_config
 

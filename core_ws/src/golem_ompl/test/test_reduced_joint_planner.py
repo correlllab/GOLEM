@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from golem_upper_ik.core.planner import PlannerConfig, ReducedJointPlanner
+from golem_ompl.reduced_joint_planner import PlannerConfig, ReducedJointPlanner
 
 
 def profile_of(robot):

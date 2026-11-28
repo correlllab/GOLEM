@@ -64,7 +64,7 @@ controller:
 
 # The OMPL planner, for goals with plan: true. It runs only where the robot's profile has a
 # self-collision model; the defaults are PlannerConfig's
-# (golem_upper_ik.core.planner.reduced_joint_planner).
+# (golem_ompl.reduced_joint_planner), which golem_ompl's planner_server runs.
 planner:
   # true or false: false refuses every planned goal
   enabled: true

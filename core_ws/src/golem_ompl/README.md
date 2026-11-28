@@ -85,4 +85,6 @@ The ROS tests run on `ROS_DOMAIN_ID` 93 (`test/conftest.py`). `test_arm_planner.
 both robots' models, that a pose goal and a joint goal give exactly the path `golem_upper_ik`'s
 controller planned in process, the seed rule, the request's timing, a new position range and a
 robot without a self-collision model; `test_planner_server.py` the request parsing and its
-refusals, the node's responses, and the installed console script and launch file.
+refusals, the node's responses, and the installed console script and launch file;
+`test_reduced_joint_planner.py` the planner on a two- or three-joint stand-in for the robot
+model: its endpoint checks, the acceleration bound, the pinned arm and the workspace bounds.

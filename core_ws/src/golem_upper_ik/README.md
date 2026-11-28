@@ -242,17 +242,17 @@ then moves only in the start-up step 4.
   last command (the goal's start, above), the clip range, the targets in the pelvis frame, the
   waypoint period (the control period unless `planner.dt` is set), `planner.moving_speed`,
   `planner.timeout`, `ACCEL_LIMIT` and `controller.timeout` as each IK seed's budget. The
-  server runs this package's IK and planner: the goal's joint target is an IK solution of its
+  server runs this package's IK and its own planner: the goal's joint target is an IK solution of its
   targets, iterated from the measured pose and then the named seeds `home`, `t_pose` and
   `arms_front_45` (`core/ik_solver.py`) in two passes: each seed first for at most
   `SEED_FIRST_PASS` (2 s of steady time), then the seeds that have not converged for the rest
   of `controller.timeout` each. A seed's solution counts only once the planner finds a path to
   it; when it finds none, the next seed to converge is tried, and the goal fails with the
-  planner's reason once none is left. The OMPL planner (`core/planner/`) plans in the IK
-  joints, with the self-collision checks and the planner frames' x/y/z bounds, and the path is
-  executed one waypoint per control period. Its smoothstep timing gets more waypoints until no
-  joint accelerates faster than `ACCEL_LIMIT` along it, from rest to rest (up to
-  `planner.max_interpolation_steps`). The planner config is this package's controller config,
+  planner's reason once none is left. The OMPL planner (`golem_ompl`'s
+  `ReducedJointPlanner`) plans in the IK joints, with the self-collision checks and the
+  planner frames' x/y/z bounds, and the path is executed one waypoint per control period. Its
+  smoothstep timing gets more waypoints until no joint accelerates faster than `ACCEL_LIMIT`
+  along it, from rest to rest (up to `planner.max_interpolation_steps`). The planner config is this package's controller config,
   which the server is started with too. A first planned goal waits up to 30 s of steady time
   for the service to appear (the server serves once its models are built), and a server that
   goes away before it replies fails the goal. `planner.enabled: false` aborts every planned
@@ -371,8 +371,8 @@ docker/scripts/docker_run.sh ros --restart /home/code/h12_sim_scripts/launch_ros
 The ROS tests run on `ROS_DOMAIN_ID` 92 (`test/conftest.py`, `test/ros_harness.py`), some
 against `golem_safety`'s installed `safety_node`. They cover the profiles
 (`test_profile.py`), the configs and pairing (`test_config.py`, `test_pairing.py`), the robot
-model, IK and planner (`test_robot_model.py`, `test_ik_solver.py`, `test_planner.py`; both
-robots with their collision models), the ROS I/O, command handler and follow gate
+model and IK (`test_robot_model.py`, `test_ik_solver.py`; both robots with their collision
+models), the ROS I/O, command handler and follow gate
 (`test_ros_io.py`, `test_low_cmd_handler.py`), the controller and the nodes
 (`test_controller_loop.py`, `test_frame_task_server.py`, `/grasp_frame_target` and the grasp
 pose topics included; planned goals against `ros_harness.PlanServer`, a stand-in for

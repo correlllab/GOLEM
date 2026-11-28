@@ -1,4 +1,4 @@
-"""Check the H1-2 sim's opt-in drive model (golem_robocasa/h12_drive.py, GOLEM_H12_DRIVE_MODEL=1).
+"""Check the H1-2 sim's drive model (golem_robocasa/h12_drive.py; on unless GOLEM_H12_DRIVE_MODEL=0).
 
 The series-elastic hip roll's response against its closed form, the command delay, the reported rotor state, the
 drivers' velocity low-pass and tau_est, on test_h12_unitree_interface's stand-in model with the DDS faked. Runs in
@@ -138,9 +138,9 @@ class DriveInterfaceTests(unittest.TestCase):
 
 
 class KnobTests(unittest.TestCase):
-    """GOLEM_H12_DRIVE_MODEL picks the interface; off by default."""
+    """GOLEM_H12_DRIVE_MODEL picks the interface; the drive by default, the ideal motors with 0."""
 
-    def test_off_by_default_on_with_the_knob(self):
+    def test_on_by_default_off_with_0(self):
         # h12_robot imports the gripper bridge, which needs the ROS workspace's magpie_msgs: a stand-in, as
         # test_sim_rate's gripper tests use one
         stand_in = types.ModuleType('magpie_hand_bridge')
@@ -152,8 +152,8 @@ class KnobTests(unittest.TestCase):
                 mock.patch.object(h12_drive, 'make_interface') as drive:
             with mock.patch.dict(os.environ, {'GOLEM_H12_DRIVE_MODEL': ''}):
                 robot.make_interface('m', 'd', 'r')
-            self.assertEqual((plain.call_count, drive.call_count), (1, 0))
-            with mock.patch.dict(os.environ, {'GOLEM_H12_DRIVE_MODEL': '1'}):
+            self.assertEqual((plain.call_count, drive.call_count), (0, 1))
+            with mock.patch.dict(os.environ, {'GOLEM_H12_DRIVE_MODEL': '0'}):
                 robot.make_interface('m', 'd', 'r')
             self.assertEqual((plain.call_count, drive.call_count), (1, 1))
 

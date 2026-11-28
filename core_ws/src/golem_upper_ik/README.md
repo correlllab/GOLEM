@@ -4,8 +4,8 @@ The upper-body (torso or waist, and arms) IK controller of the Unitree H1-2 and 
 nodes, both robots, each robot described by a profile:
 
 - `frame_task_server` solves Pink IK on the 14 arm joints with a self-collision barrier,
-  plans with OMPL, and serves `/frame_task` and `/named_config`. It writes its
-  commands only to a `golem_safety` input (`/safety/...`), never to `/lowcmd`.
+  plans with OMPL, and serves `/frame_task`, `/named_config` and `/grasp_frame_target`. It
+  writes its commands only to a `golem_safety` input (`/safety/...`), never to `/lowcmd`.
 - `joint_state_publisher` publishes `/joint_states` for the robot's body joints from
   `/lowstate`.
 
@@ -59,15 +59,19 @@ config once they are read) and exits 1. On SIGINT or SIGTERM it shuts down (belo
 |---|---|---|---|
 | action | `/frame_task` | `custom_ros_messages/action/FrameTask` | pull named frames to target poses in the `pelvis` frame |
 | action | `/named_config` | `custom_ros_messages/action/NamedConfig` | move the IK joints to a named configuration |
+| action | `/grasp_frame_target` | `custom_ros_messages/action/GraspFrameTarget` | move each arm's grasp frame to a target in the `pelvis` frame or a world frame (Grasp-frame targets, below) |
 | pub | `frame_names` | `custom_ros_messages/msg/StringArray` | the current goal's frames, 25 Hz |
 | pub | `frame_targets`, `frame_poses` | `geometry_msgs/PoseArray` | their targets and measured poses, `pelvis` frame, 25 Hz |
 | pub | `left_ee_pose`, `right_ee_pose` | `geometry_msgs/PoseStamped` | the end effectors' measured poses, 25 Hz; their first message tells other nodes the controller is up |
 | pub | `left_ee_target`, `right_ee_target` | `geometry_msgs/PoseStamped` | the current goal's targets for the end-effector frames, when it names them |
+| pub | `/left_grasp_frame_pose`, `/right_grasp_frame_pose` | `geometry_msgs/PoseStamped` | the grasp frames' measured poses in the `pelvis` frame, 25 Hz, from every measured body joint (as TF has the frames: the H1-2's are URDF frames, the G1's sit at their offsets from the palm links) |
 | pub | `topics.low_cmd` | `unitree_hg/msg/LowCmd` | reliable, keep-last 1, at `frequency.pub_hz`; must be under `/safety/` |
 | sub | `topics.low_state` (`/lowstate`) | `unitree_hg/msg/LowState` | keep-last 1, best effort |
 | sub | `/lowcmd` | `LowCmd` | `golem_safety`'s output, read (never written) only until the follow gate opens |
 
 The actions, publishers and the `/frame_task` goal check exist once the start-up is done.
+`/grasp_frame_target` and the grasp pose topics have global names: they are the interface every
+arm controller of the robot serves alike.
 
 `joint_state_publisher`: `joint_states` (`sensor_msgs/JointState`) at 100 Hz, the profile's
 body joints in slot order (27 or 29) with the newest `low_state_topic` (`/lowstate`)
@@ -79,9 +83,9 @@ own nodes.
 `golem_upper_ik.profile.load_profile(robot)` joins three sources: `golem_safety`'s
 `robots/<robot>.yaml` (joint names in slot order, limits, slot ranges, `mode_machine`), the
 one joint table both packages read; `config/<robot>/robot.yaml` in this package (display
-name, IK and held joints, frames, named configurations, start-up sequence, per-robot config
-defaults), which `profile.robot_config(robot)` returns checked (every key required, no
-others); and the model files, from `golem_ros2_models`. A robot is known
+name, IK and held joints, frames, grasp frames, named configurations, start-up sequence,
+per-robot config defaults), which `profile.robot_config(robot)` returns checked (every key
+required, no others); and the model files, from `golem_ros2_models`. A robot is known
 (`profile.known_robots()`) when `robots/<robot>.yaml` and `config/<robot>/robot.yaml` both
 exist, so a new robot is two data files and its configs, with no Python change. An unknown
 robot is refused with `ValueError`, naming the known ones.
@@ -93,6 +97,7 @@ robot is refused with `ValueError`, naming the known ones.
 | Held joints at shutdown (Shutdown, below) | off, with the arms | kept at their hold |
 | End-effector frames | `left/right_wrist_yaw_link` | `left/right_hand_palm_link` |
 | Planner frames | `left/right_grasp_frame` | `left/right_hand_palm_link` |
+| Grasp frames (`grasp_frames`) | `left/right_grasp_frame`, the Magpie grippers' pinch points in the URDF | `left/right_grasp_frame`, the Dex3-1 pinch points, which the URDF lacks: `RobotModel` adds each at its fixed offset (`xyz`, `rot`) from `left/right_hand_palm_link`, between the thumb and the fingers (from the URDF's joint origins, unmeasured) |
 | IMU frame | `torso_link` | `imu_in_pelvis` (`controller.imu_frame` overrides) |
 | Model (`golem_ros2_models`) | `h1_2_magpie.urdf` | `g1_29dof_with_hand_rev_1_0.urdf` |
 | Self-collision model | `h1_2_magpie_sphere.urdf` + `h1_2_magpie_sphere_collision.srdf` | `g1_sphere.urdf` + `g1_sphere_collision.srdf`, packed on the rubber-hand G1: two spheres per hand at the Dex3-1 palm, none on the fingers, so the barrier and the planner do not see the Dex3-1 fingers. Its torso spheres stay inside the torso's flanks, where the hanging upper arms are 9 mm from the torso (`CL_Assets/README.md`) |
@@ -217,6 +222,51 @@ then moves only in the start-up step 4.
   inside the keep-out reads as self-collision. On the G1 the limp arms settle with the wrists
   resting on the hips (elbows about 1.25 rad), their spheres 20 mm from the hip spheres, and
   the start-up reaches `home` from there; from `arms_down` it could not.
+- **Grasp-frame targets** (`/grasp_frame_target`). Each arm's target is a `PoseStamped` for
+  its grasp frame (`grasp_frames`); an empty `header.frame_id` leaves that arm where it is, and
+  a goal without any target aborts. A target in `pelvis` is taken as it is. A target in any
+  other frame (`map`, `odom`) is resolved into the `pelvis` frame once, when the goal starts,
+  before it waits for a goal in flight: the node listens to TF (`/tf`, `/tf_static`) for up
+  to `TF_WAIT_S` (1 s), takes the newest transform from that frame to `pelvis` and stops
+  listening; a transform TF does not give, or whose newest stamp is more than `TF_MAX_AGE_S`
+  (0.5 s) of robot time old (a chain of static transforms only is always taken), aborts the
+  goal, naming the frame. The controller then holds that `pelvis`-frame target: the arms ride
+  on the pelvis, so when the robot walks, sways or turns after the goal starts, the grasp frame
+  moves with the pelvis and leaves the world pose; send a new goal to aim at the world pose
+  again. A target with a non-finite value or a zero quaternion aborts the goal; the quaternion
+  is normalised.
+  The goal replaces the frame tasks with one on each targeted grasp frame and runs as a
+  `/frame_task` goal does (direct, or along a plan with `plan: true`), with these differences.
+  Only the targeted arms' joints change their torque bias: the hold's integral term
+  (`gains.ki`) and its fading over a move act on them alone, so the arm without a target and
+  the torso or waist keep their commands, torque bias included, and stay where they are (on
+  the H1-2, whose hold integrates, an arm sagging below its command would otherwise be lifted
+  onto it, about 11 mm in the sim). Its `timeout` (0: `controller.timeout`) counts
+  robot time from its start, planning and the path included. It succeeds once every target has
+  stayed within `threshold_linear` and `threshold_angular` for `GRASP_SETTLE_S` (0.2 s of robot
+  time); the hold step's own convergence ends nothing. It aborts at the timeout, on a planning
+  or execution failure, on a hold pinned at a joint limit and on a stale `/lowstate`. A cancel,
+  or the timeout, during a planned path stops it before its next waypoint; the IK solve and the
+  planning before the path are not cut short (the planner's first request also builds its
+  robot model, seconds). Every end sets the
+  result's `message` (`reached (...)`, or why it was aborted or canceled, with the errors). A
+  cancel or the timeout, direct or during the path, or a path that fails while it runs, stops the targeted arms where they are, since a moving
+  arm lags its command (about 20 mm at the grasp frame at 0.3 m/s on the H1-2 sim) and would
+  keep going that far: each of their joints is commanded at its measured position plus its
+  resting offset (`stop_joints`), how far it sat off its command when the goal started (the
+  gravity error its torque bias leaves), adjusted by the bias faded since; a joint that was
+  moving or more than 0.1 rad off then gets no offset. The arm then stops within its braking
+  distance and settles near the pose (in the sims, cancelled at 0.13 to 0.33 m/s: at most 6 mm
+  away on the H1-2 and 14 mm on the soft-armed G1 within 0.1 s, settling within 2.5 mm and
+  1.5 mm). A `/frame_task` or `/named_config` cancel leaves the last command, which a
+  moving arm keeps following. After any other end (reached, a hold pinned at a limit, a plan
+  that fails before the path, a stale `/lowstate`) the arms hold the last command, where the goal left them. The feedback, every
+  control step and before every waypoint, and the errors in the message are each grasp frame's
+  distance from its target (m) and the angle between their rotations (rad), measured as the IK
+  sees the frame (the reduced model at the measured arm joints, the torso or waist at the angle
+  the goal locked it at); 0 for an arm without a target. One goal at a time drives the
+  controller, whichever of the three actions it came on: a goal waits for the one in flight to
+  end.
 - On ROS domain 0 every control step first checks that `/lowstate` is no staler than
   `controller.max_state_lag_ms` (the larger of its tick lag and its age); a stale state aborts
   the goal and the last command keeps going out. The sims stamp the tick in sim steps, so the
@@ -270,9 +320,10 @@ against `golem_safety`'s installed `safety_node`. They cover the profiles
 model, IK and planner (`test_robot_model.py`, `test_ik_solver.py`, `test_planner.py`; both
 robots with their collision models), the ROS I/O, command handler and follow gate
 (`test_ros_io.py`, `test_low_cmd_handler.py`), the controller and the nodes
-(`test_controller_loop.py`, `test_frame_task_server.py`), a start-up IK step with no
-solution (`test_startup_no_solution.py`), the goal loops against a scripted controller
-(`test_goal_loops.py`) and that nothing imports `unitree_sdk2py` (`test_no_sdk.py`).
+(`test_controller_loop.py`, `test_frame_task_server.py`, `/grasp_frame_target` and the grasp
+pose topics included), a start-up IK step with no solution (`test_startup_no_solution.py`),
+the goal loops of the three actions against a scripted controller (`test_goal_loops.py`) and
+that nothing imports `unitree_sdk2py` (`test_no_sdk.py`).
 
 ## Tools
 

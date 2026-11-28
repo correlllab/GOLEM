@@ -38,6 +38,16 @@ shutdown_keeps_held_joints: false
 ee_frames: [left_wrist_yaw_link, right_wrist_yaw_link]
 # [left, right]: the planner's default frames (controller config planner.frame_names)
 planner_frames: [left_grasp_frame, right_grasp_frame]
+# left and right: each arm's grasp frame, its pinch point rigidly attached to the wrist, which
+# grasp-frame targets move. Either {frame: <name>},
+# a frame of the URDF, or a frame the URDF does not have, which the robot model adds:
+#   frame: its name, not a frame of the URDF; the two arms' names differ
+#   parent: the URDF frame (a link of that arm) it is fixed to
+#   xyz: [x, y, z], m: its origin in parent
+#   rot: its rotation in parent, a rotation matrix by rows (columns: its x, y, z axes)
+grasp_frames:
+  left: {frame: left_grasp_frame}
+  right: {frame: right_grasp_frame}
 # the URDF frame of /lowstate's IMU, from which the pelvis orientation is recovered; the
 # default of controller.imu_frame
 imu_frame: torso_link

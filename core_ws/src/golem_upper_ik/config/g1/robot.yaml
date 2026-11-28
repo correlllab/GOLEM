@@ -39,6 +39,28 @@ shutdown_keeps_held_joints: true
 
 ee_frames: [left_hand_palm_link, right_hand_palm_link]
 planner_frames: [left_hand_palm_link, right_hand_palm_link]
+# The Dex3-1 pinch points, which the URDF lacks (from its joint origins; unmeasured on the real
+# G1 and its sim): the index and middle fingers stand along the palm's +x from x = 0.078 m and
+# curl toward the palm's face (-y on the left hand, +y on the right); the thumb stands out of
+# that face at x = 0.023 m. The frame sits 0.08 m along the palm's x and 0.04 m in front of
+# its face, between thumb and fingers, its z the face's normal (the approach) and its x the
+# palm's x (the closing direction). golem_skills' left/right_dex3_pinch_frame are the same
+# poses.
+grasp_frames:
+  left:
+    frame: left_grasp_frame
+    parent: left_hand_palm_link
+    xyz: [0.08, -0.04, 0.0]
+    rot: [[1.0, 0.0, 0.0],
+          [0.0, 0.0, -1.0],
+          [0.0, 1.0, 0.0]]
+  right:
+    frame: right_grasp_frame
+    parent: right_hand_palm_link
+    xyz: [0.08, 0.04, 0.0]
+    rot: [[1.0, 0.0, 0.0],
+          [0.0, 0.0, 1.0],
+          [0.0, -1.0, 0.0]]
 # unmeasured on the real G1: if turning the waist changes the IMU yaw while the pelvis stays
 # still, the IMU is imu_in_torso (controller.imu_frame overrides this)
 imu_frame: imu_in_pelvis

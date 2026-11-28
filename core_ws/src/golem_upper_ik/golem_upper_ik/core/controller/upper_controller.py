@@ -56,6 +56,9 @@ TAU_BIAS_FADE_SEC = 1.0
 HOLD_SPEED = 0.3
 # rad: a start-up posture is reached when the IK's command is this close on every IK joint
 STARTUP_THRESHOLD = 1e-3
+# rad/s: a joint faster than this when a goal starts is not at rest, so how far it sits off
+# its command then is not its resting offset (stop_reference)
+STOP_REFERENCE_MAX_SPEED = 0.05
 
 
 def ros_domain_id(node) -> int:
@@ -113,6 +116,10 @@ class UpperController:
         # holding and faded by _apply_joint_position while moving
         self._tau_bias = np.zeros(robot_model.num_motor)
         self._tau_bias_decay = float(np.exp(-self.dt / TAU_BIAS_FADE_SEC))
+        # body joint ids whose torque bias the current goal changes, or None for every joint:
+        # the hold integrates the bias and a move fades it on these alone, so every other
+        # joint keeps its command, bias included, and stays where it is
+        self.bias_joints = None
         # ms. Controlling on stale state winds up the hold's integral term and seeds moves
         # from where the arm was, so motion stops when the state is staler than this; 0 (off
         # the real robots' domain) turns the check off
@@ -319,6 +326,56 @@ class UpperController:
             self.update_robot_model()
             self.clock.sleep(self.dt)
 
+    def stop_reference(self, joint_ids):
+        """Return what stop_joints needs to stop joint_ids where they are, taken at rest.
+
+        Returns (offset, bias): each joint's resting offset, its command less its measured
+        position (rad: the gravity error its torque bias leaves, over kp), and its torque bias
+        (N*m), both now. A joint faster than STOP_REFERENCE_MAX_SPEED, or further than
+        COMMAND_SEED_MAX_GAP off its command (blocked or pushed), gets offset 0.
+        """
+        joint_ids = list(joint_ids)
+        state = self.robot_model.state
+        offset = (self.low_cmd_handler.q_cmd.astype(np.float64)[joint_ids]
+                  - np.asarray(state['q'], dtype=np.float64)[joint_ids])
+        unknown = ((np.abs(np.asarray(state['dq'], dtype=np.float64)[joint_ids])
+                    > STOP_REFERENCE_MAX_SPEED)
+                   | ~(np.abs(offset) <= COMMAND_SEED_MAX_GAP))
+        offset[unknown] = 0.0
+        return offset, self._tau_bias[joint_ids].copy()
+
+    def stop_joints(self, joint_ids, reference=None):
+        """Command joint_ids where they will rest at their measured positions: stop a moving arm.
+
+        A move's command leads the arm by its tracking lag (about 20 mm at the grasp frame at
+        0.3 m/s on the H1-2 sim), so an arm left on the move's last command keeps going that
+        far. Each joint is commanded at its measured position plus its resting offset:
+        reference (stop_reference, taken when the goal started) gives it, adjusted by the
+        torque bias that has faded since (its change over kp); without one the offset is 0.
+        The arm then stops within its braking distance. The other joints keep their last
+        command; the torque is the gravity torque at the measured pose plus the bias, as on
+        every command. StaleStateError, the last command standing, when /lowstate is stale.
+        """
+        self.check_state_fresh()
+        joint_ids = list(joint_ids)
+        measured = np.asarray(self.robot_model.state['q'], dtype=np.float64)
+        offset = np.zeros(len(joint_ids))
+        if reference is not None:
+            offset_then, bias_then = reference
+            kp = np.asarray(self.config['gains']['kp'], dtype=np.float64)[joint_ids]
+            faded = (bias_then - self._tau_bias[joint_ids]) / np.where(kp > 0.0, kp, np.inf)
+            offset = offset_then + faded
+        q = self.low_cmd_handler.q_cmd.astype(np.float64)
+        q[joint_ids] = measured[joint_ids] + offset
+        tau = self.robot_model.dynamics.get_gravity_compensation(measured) + self._tau_bias
+        self._command(q, np.zeros(self.robot_model.num_motor), tau)
+
+    def arm_joint_ids(self, arms):
+        """Return the body joint ids of the IK joints of arms ('left', 'right'), sorted."""
+        index = {'left': self.robot_model.left_arm_index,
+                 'right': self.robot_model.right_arm_index}
+        return sorted(joint for arm in arms for joint in index[arm])
+
     def ee_transformations(self):
         """Return the left and right end effectors' 4x4 placements in the pelvis frame.
 
@@ -481,11 +538,13 @@ class UpperController:
             joint_id = model.parents[joint_id]
         return mask
 
-    def execute_path(self, path):
+    def execute_path(self, path, stop=None):
         """Command reduced waypoints as positions, one per control period.
 
         Each waypoint's limits and self-collision are checked first (ValueError). Refused
-        (RuntimeError) while the follow gate is shut.
+        (RuntimeError) while the follow gate is shut. stop, when given, is called before each
+        waypoint: a true return ends the path there, the last waypoint commanded holding.
+        Returns whether every waypoint was commanded.
         """
         if not self.low_cmd_handler.following:
             # SAFETY: absolute waypoints would run ahead of a robot that is not following
@@ -499,6 +558,8 @@ class UpperController:
         clock = self.clock
         for q_reduced in path:
             start = clock.now()
+            if stop is not None and stop():
+                return False
             self.check_state_fresh()
             if not self.robot_model.check_within_limits_reduced(q_reduced):
                 raise ValueError('Path waypoint is outside joint limits')
@@ -509,6 +570,7 @@ class UpperController:
             self._apply_joint_position(q)
             self.update_robot_model()
             clock.sleep(max(0.0, self.dt - (clock.now() - start)))
+        return True
 
     def update_robot_model(self):
         """Update the robot model's kinematics from the measured state."""
@@ -572,7 +634,8 @@ class UpperController:
 
         Converged: every upper joint within threshold (rad) of its held command. A hold pinned
         against a joint position limit cannot converge: the integral term is frozen,
-        steady_state_limited_joints names the joints, and this returns False.
+        steady_state_limited_joints names the joints, and this returns False. With
+        bias_joints set, only those joints' bias integrates.
         """
         self.check_state_fresh()
         if self._steady is None:
@@ -580,6 +643,10 @@ class UpperController:
         steady = self._steady
         q_state = np.asarray(self.robot_model.state['q'], dtype=np.float64)
         tau_bias_increment = steady['ki'] * (steady['q'] - q_state) * self.dt
+        if self.bias_joints is not None:
+            kept = np.ones(self.robot_model.num_motor, dtype=bool)
+            kept[self.bias_joints] = False
+            tau_bias_increment[kept] = 0.0
         self.steady_state_limited_joints = self._steady_state_limited_joints(
             q_state, tau_bias_increment, threshold)
         if not self.steady_state_limited_joints:
@@ -614,10 +681,16 @@ class UpperController:
         return vel_scaled
 
     def _apply_joint_position(self, q):
-        """Command q with dq 0 and the gravity torque plus the bias, which fades by one step."""
+        """Command q with dq 0 and the gravity torque plus the bias, which fades by one step.
+
+        Only the bias_joints' bias fades, when the goal names them.
+        """
         tau = self.robot_model.dynamics.get_gravity_compensation(self.robot_model.state['q'])
         tau = tau + self._tau_bias
-        self._tau_bias *= self._tau_bias_decay
+        if self.bias_joints is None:
+            self._tau_bias *= self._tau_bias_decay
+        else:
+            self._tau_bias[self.bias_joints] *= self._tau_bias_decay
         self._command(q, np.zeros(self.robot_model.num_motor), tau)
 
     def _apply_velocity_command(self, vel):

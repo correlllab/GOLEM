@@ -4,7 +4,8 @@ In this process, frame_task_server against a robot that executes and relays its 
 (FollowingRobot), sharing the session's robot model: relative and slow-mode frame goals,
 slow-mode named configurations, the fresh-state wait, the stale-state abort, planned goals
 and planning turned off, the goal start from the last command, the hold pinned at a limit,
-and execute_path's pacing.
+and execute_path's pacing; /grasp_frame_target's goals in the pelvis frame and through TF,
+planned, refused, timed out and canceled, and the grasp pose topics.
 
 Then the installed console scripts as processes: joint_state_publisher's /joint_states,
 the parameters both nodes refuse, frame_task_server's shutdown on a signal, and its command
@@ -319,9 +320,15 @@ def test_slow_mode_scales_speed(ros, models, robot, tmp_path):
     controller.speed_scale = 1.0
 
     # the same 2 cm move at full speed and in slow mode, with a move back between them
+    upper = list(profile.upper_slots)
     peaks = {}
     for slow_mode, x, measured in ((False, 0.02, True), (False, -0.02, False),
                                    (True, 0.02, True)):
+        # the recorder stamps a command when its callback runs, which can trail the publisher
+        # under load; the window starts once it has the controller's current command, so the
+        # last goal's commands are not read as this one's
+        assert wait_for(lambda: recorder.samples and np.allclose(
+            recorder.samples[-1].q, controller.low_cmd_handler.q_cmd[upper], atol=1e-6), 5.0)
         start = time.monotonic()
         status, result = send_goal(
             ros, FrameTask, '/frame_task',
@@ -739,6 +746,384 @@ def test_execute_path_paces_at_dt_minus_work(ros, models, monkeypatch):
     assert len(path) * controller.dt - 0.05 < elapsed < len(path) * controller.dt + 0.15
     np.testing.assert_allclose(controller.low_cmd_handler.q_cmd[ik_slots(profile)], path[-1],
                                atol=1e-6)
+
+
+def grasp_goal(left=None, right=None, frame_id='pelvis', plan=False, timeout=0.0):
+    """Return a GraspFrameTarget goal: each arm's 4x4 target in frame_id, None for none.
+
+    timeout in s, 0 for controller.timeout.
+    """
+    from custom_ros_messages.action import GraspFrameTarget
+    from golem_upper_ik.ros2.utility import matrix_to_pose
+    goal = GraspFrameTarget.Goal()
+    for arm, target in (('left', left), ('right', right)):
+        if target is not None:
+            stamped = getattr(goal, arm)
+            stamped.header.frame_id = frame_id
+            stamped.pose = matrix_to_pose(target)
+    goal.plan = plan
+    goal.timeout.sec = int(timeout)
+    goal.timeout.nanosec = int((timeout - int(timeout)) * 1e9)
+    return goal
+
+
+class GraspClient:
+    """Send /grasp_frame_target goals, keeping every feedback message."""
+
+    def __init__(self, ros):
+        """Wait for the action server."""
+        from custom_ros_messages.action import GraspFrameTarget
+        from rclpy.action import ActionClient
+        self.client = ActionClient(ros.node('grasp_client'), GraspFrameTarget,
+                                   '/grasp_frame_target')
+        assert self.client.wait_for_server(timeout_sec=10.0), 'no /grasp_frame_target server'
+        self.feedback = []
+
+    def send(self, goal):
+        """Send goal; return its handle, once accepted."""
+        sent = self.client.send_goal_async(
+            goal, feedback_callback=lambda message: self.feedback.append(message.feedback))
+        assert wait_for(sent.done, 10.0), '/grasp_frame_target did not answer the goal'
+        handle = sent.result()
+        assert handle.accepted, '/grasp_frame_target refused the goal'
+        return handle
+
+    @staticmethod
+    def outcome(handle, timeout=30.0):
+        """Wait for a sent goal's outcome; return (status, result)."""
+        done = handle.get_result_async()
+        assert wait_for(done.done, timeout), f'no result within {timeout} s'
+        return done.result().status, done.result().result
+
+    def run(self, goal, timeout=30.0):
+        """Send goal and return (status, result) once it ends."""
+        return self.outcome(self.send(goal), timeout)
+
+
+def _angle(first, second):
+    """Return the angle between two 4x4 transformations' rotations, rad."""
+    cosine = (np.trace(first[:3, :3].T @ second[:3, :3]) - 1.0) / 2.0
+    return float(np.arccos(np.clip(cosine, -1.0, 1.0)))
+
+
+def _shifted(pose, position=(0.0, 0.0, 0.0), rotation=np.eye(3)):
+    """Return 4x4 pose moved by position (m, pelvis axes) and turned by rotation about itself."""
+    moved = np.array(pose, dtype=float)
+    moved[:3, :3] = rotation @ moved[:3, :3]
+    moved[:3, 3] += position
+    return moved
+
+
+def grasp_server(ros, models, robot, config=None):
+    """Start frame_task_server on robot at START, behind a FollowingRobot; return its parts.
+
+    Returns (robot, model, server, {arm: PoseRecorder of /<arm>_grasp_frame_pose}), once
+    both grasp poses have come.
+    """
+    profile = profile_of(robot)
+    following = FollowingRobot(ros, profile, body_pose(profile, START[robot]), '/lowcmd')
+    model = shared_model(ros, models, robot)
+    poses = {arm: PoseRecorder(ros, f'/{arm}_grasp_frame_pose') for arm in ('left', 'right')}
+    server = server_of(ros, model, CONFIGS[robot] if config is None else config)
+    assert wait_for(lambda: all(recorder.poses for recorder in poses.values()), 5.0)
+    return following, model, server, poses
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_grasp_frame_target_moves_one_arm(ros, models, robot):
+    """A pelvis-frame target moves its arm's grasp frame there; the other arm stays put.
+
+    The goal succeeds with its errors under the thresholds, the arm without a target reports
+    0, the grasp pose topics give the measured grasp frames, and the arms hold afterwards.
+    """
+    config = config_of(robot, CONFIGS[robot])
+    threshold_linear = config['controller']['threshold_linear']
+    threshold_angular = config['controller']['threshold_angular']
+    following, model, _, poses = grasp_server(ros, models, robot)
+    frames = [frame.name for frame in model.profile.grasp_frames]
+    # the topics give the grasp frames' poses at the measured body joints
+    measured = following.measured()
+    for arm, frame in zip(('left', 'right'), frames):
+        np.testing.assert_allclose(_matrix(poses[arm].poses[-1]),
+                                   model.get_frame_transformation_body(frame, measured),
+                                   atol=1e-6)
+        assert poses[arm].poses[-1].header.frame_id == 'pelvis'
+    start = {arm: _matrix(poses[arm].poses[-1]) for arm in ('left', 'right')}
+    target = _shifted(start['left'], (0.03, 0.0, 0.02), _rotation('z', 0.1))
+
+    client = GraspClient(ros)
+    status, result = client.run(grasp_goal(left=target))
+    assert status == GoalStatus.STATUS_SUCCEEDED and result.success, result.message
+    assert result.message.startswith('reached (left '), result.message
+    last = client.feedback[-1]
+    assert last.left_error_m < threshold_linear and last.left_error_rad < threshold_angular
+    assert last.right_error_m == 0.0 and last.right_error_rad == 0.0
+    time.sleep(0.2)
+    reached = _matrix(poses['left'].poses[-1])
+    assert np.linalg.norm(reached[:3, 3] - target[:3, 3]) <= threshold_linear + 1e-4
+    assert _angle(reached, target) <= threshold_angular + 1e-4
+    assert np.linalg.norm(_matrix(poses['right'].poses[-1])[:3, 3] - start['right'][:3, 3]) < 1e-3
+    # the arms hold the goal's last command
+    held = following.measured()
+    time.sleep(0.3)
+    np.testing.assert_array_equal(following.measured(), held)
+
+
+def _slot_commands(following, slots):
+    """Return the newest command's q and tau on slots, as two arrays."""
+    motors = following.last_command[1].motor_cmd
+    return (np.array([motors[slot].q for slot in slots]),
+            np.array([motors[slot].tau for slot in slots]))
+
+
+def test_grasp_frame_target_leaves_the_other_arm_and_the_torso_alone(ros, models):
+    """A one-arm goal leaves the other arm's and the torso's command q and torque bias alone.
+
+    The H1-2's hold integrates a torque bias (gains.ki) toward the held command; the other arm
+    and the torso sag 0.01 rad below theirs here, and a bias integrated on them would lift
+    them. The server starts without a bias, so their torque stays the gravity torque.
+    """
+    profile = profile_of('h12')
+    following, model, _, poses = grasp_server(ros, models, 'h12')
+    others = [profile.body_joints.index(joint) for joint in profile.enabled_joints
+              if joint.startswith('right_')] + [profile.body_joints.index('torso_joint')]
+    sag = np.zeros(len(profile.body_joints))
+    sag[others] = 0.01
+    following.set_sag(sag)
+    time.sleep(0.3)
+    q_before, _ = _slot_commands(following, others)
+    target = _shifted(_matrix(poses['left'].poses[-1]), (0.03, 0.0, 0.02))
+    status, result = GraspClient(ros).run(grasp_goal(left=target))
+    assert status == GoalStatus.STATUS_SUCCEEDED and result.success, result.message
+    time.sleep(0.1)
+    q_after, tau_after = _slot_commands(following, others)
+    gravity = model.dynamics.get_gravity_compensation(following.measured())[others]
+    np.testing.assert_array_equal(q_after, q_before)
+    # a bias integrated over the 0.2 s settling alone would be more than 1 N*m; float32 on
+    # the wire
+    np.testing.assert_allclose(tau_after, gravity, atol=1e-3)
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_stop_joints_commands_the_measured_pose_plus_the_resting_offset(ros, models, robot):
+    """stop_joints commands its joints at their measured positions plus their resting offset.
+
+    The left arm rests 0.02 rad below its command here. Without a reference the stop command
+    is the measured pose; with stop_reference taken at rest (no bias fading since) it is the
+    measured pose plus those 0.02 rad, where the arm rests. The other joints keep their
+    command.
+    """
+    profile = profile_of(robot)
+    following, model, server, _ = grasp_server(ros, models, robot)
+    controller = server.controller
+    left = controller.arm_joint_ids(['left'])
+    others = [slot for slot in profile.upper_slots if slot not in left]
+    sag = np.zeros(len(profile.body_joints))
+    sag[left] = 0.02
+    following.set_sag(sag)
+    command = controller.low_cmd_handler.q_cmd
+    assert wait_for(lambda: np.allclose(controller.robot_model.state['q'][left],
+                                        command[left] - 0.02, atol=1e-5), 2.0)
+    reference = controller.stop_reference(left)
+    np.testing.assert_allclose(reference[0], 0.02, atol=1e-5)
+    measured = np.array(controller.robot_model.state['q'])
+
+    controller.stop_joints(left, reference)
+    after = controller.low_cmd_handler.q_cmd
+    np.testing.assert_allclose(after[left], command[left], atol=1e-5)
+    np.testing.assert_array_equal(after[others], command[others])
+
+    controller.stop_joints(left)
+    after = controller.low_cmd_handler.q_cmd
+    np.testing.assert_allclose(after[left], measured[left], atol=1e-6)
+    np.testing.assert_array_equal(after[others], command[others])
+
+
+@pytest.mark.parametrize('robot', ROBOTS)
+def test_planned_grasp_frame_target(ros, models, robot):
+    """A planned goal moves both grasp frames to their targets along a plan."""
+    config = config_of(robot, CONFIGS[robot])
+    threshold_linear = config['controller']['threshold_linear']
+    _, _, _, poses = grasp_server(ros, models, robot)
+    targets = {arm: _shifted(_matrix(poses[arm].poses[-1]), (0.04, 0.0, 0.0))
+               for arm in ('left', 'right')}
+    status, result = GraspClient(ros).run(grasp_goal(plan=True, timeout=20.0, **targets))
+    assert status == GoalStatus.STATUS_SUCCEEDED and result.success, result.message
+    time.sleep(0.2)
+    for arm in ('left', 'right'):
+        reached = _matrix(poses[arm].poses[-1])
+        assert np.linalg.norm(reached[:3, 3] - targets[arm][:3, 3]) <= threshold_linear + 1e-4
+
+
+def _world(translation, yaw):
+    """Return a 4x4 pose of the pelvis in a world frame: translation (m), yaw (rad)."""
+    pose = np.eye(4)
+    pose[:3, :3] = _rotation('z', yaw)
+    pose[:3, 3] = translation
+    return pose
+
+
+def _transform(parent, child, pose, stamp):
+    """Return a TransformStamped of child's 4x4 pose in parent, stamped stamp."""
+    from geometry_msgs.msg import TransformStamped
+    transform = TransformStamped()
+    transform.header.frame_id = parent
+    transform.header.stamp = stamp
+    transform.child_frame_id = child
+    transform.transform.translation.x, transform.transform.translation.y, \
+        transform.transform.translation.z = (float(value) for value in pose[:3, 3])
+    w, x, y, z = _quaternion_wxyz(pose[:3, :3])
+    transform.transform.rotation.w, transform.transform.rotation.x = float(w), float(x)
+    transform.transform.rotation.y, transform.transform.rotation.z = float(y), float(z)
+    return transform
+
+
+def test_grasp_frame_target_in_a_world_frame(ros, models):
+    """A world-frame target is resolved through TF into the pelvis frame when the goal starts."""
+    from tf2_ros import StaticTransformBroadcaster
+    config = config_of('h12', CONFIGS['h12'])
+    _, _, _, poses = grasp_server(ros, models, 'h12')
+    pelvis_in_world = _world((1.0, 2.0, 0.5), 0.7)
+    node = ros.node('world')
+    broadcaster = StaticTransformBroadcaster(node)
+    broadcaster.sendTransform(_transform('test_world', 'pelvis', pelvis_in_world,
+                                         node.get_clock().now().to_msg()))
+    target = _shifted(_matrix(poses['right'].poses[-1]), (0.03, -0.02, 0.0))
+    status, result = GraspClient(ros).run(
+        grasp_goal(right=pelvis_in_world @ target, frame_id='test_world'))
+    assert status == GoalStatus.STATUS_SUCCEEDED and result.success, result.message
+    time.sleep(0.2)
+    reached = _matrix(poses['right'].poses[-1])
+    assert (np.linalg.norm(reached[:3, 3] - target[:3, 3])
+            <= config['controller']['threshold_linear'] + 1e-4)
+
+
+def test_grasp_frame_target_refuses_a_missing_or_stale_transform(ros, models):
+    """A target in a frame TF does not give, or gives only old, aborts saying which."""
+    from golem_upper_ik.ros2.frame_task_server import TF_MAX_AGE_S, TF_WAIT_S
+    from tf2_ros import TransformBroadcaster
+    import rclpy.duration
+    following, _, _, poses = grasp_server(ros, models, 'h12')
+    held = following.measured()
+    client = GraspClient(ros)
+    target = _matrix(poses['left'].poses[-1])
+
+    start = time.monotonic()
+    status, result = client.run(grasp_goal(left=target, frame_id='nowhere'))
+    assert status == GoalStatus.STATUS_ABORTED and not result.success
+    assert result.message.startswith('no transform from nowhere to pelvis'), result.message
+    assert TF_WAIT_S <= time.monotonic() - start < TF_WAIT_S + 1.0
+
+    # /tf two seconds behind, as from a stopped odometry
+    node = ros.node('old_world')
+    broadcaster = TransformBroadcaster(node)
+    stop = threading.Event()
+
+    def publish():
+        """Publish old_world -> pelvis stamped 2 s ago until stopped."""
+        while not stop.is_set():
+            stamp = node.get_clock().now() - rclpy.duration.Duration(seconds=2.0)
+            broadcaster.sendTransform(_transform('old_world', 'pelvis', np.eye(4),
+                                                 stamp.to_msg()))
+            time.sleep(0.02)
+    thread = threading.Thread(target=publish, daemon=True)
+    thread.start()
+    try:
+        status, result = client.run(grasp_goal(left=target, frame_id='old_world'))
+    finally:
+        stop.set()
+        thread.join(timeout=1.0)
+    assert status == GoalStatus.STATUS_ABORTED and not result.success
+    assert result.message.startswith(
+        'the newest transform from old_world to pelvis is 2.0'), result.message
+    assert f'(> {TF_MAX_AGE_S} s)' in result.message
+    np.testing.assert_array_equal(following.measured(), held)
+
+
+def test_world_frame_goals_keep_the_server_serving(ros, models):
+    """World-frame goals under a busy /tf leave the server serving every later goal.
+
+    Each world-frame goal listens to TF and then stops listening; that must not stop the
+    executor that serves the controller's callbacks (it did once, InvalidHandle, live on the
+    H1-2 sim, whose /tf runs at the joint-state rate).
+    """
+    from tf2_ros import TransformBroadcaster
+    _, _, _, poses = grasp_server(ros, models, 'h12')
+    pelvis_in_world = _world((1.0, 2.0, 0.5), 0.7)
+    node = ros.node('busy_world')
+    broadcaster = TransformBroadcaster(node)
+    stop = threading.Event()
+
+    def publish():
+        """Publish busy_world -> pelvis, stamped now, at about 500 Hz until stopped."""
+        while not stop.is_set():
+            broadcaster.sendTransform(_transform('busy_world', 'pelvis', pelvis_in_world,
+                                                 node.get_clock().now().to_msg()))
+            time.sleep(0.002)
+    thread = threading.Thread(target=publish, daemon=True)
+    thread.start()
+    client = GraspClient(ros)
+    try:
+        for _ in range(8):
+            target = _matrix(poses['left'].poses[-1])
+            status, result = client.run(grasp_goal(left=pelvis_in_world @ target,
+                                                   frame_id='busy_world'))
+            assert status == GoalStatus.STATUS_SUCCEEDED, result.message
+    finally:
+        stop.set()
+        thread.join(timeout=1.0)
+    status, result = client.run(grasp_goal(left=_matrix(poses['left'].poses[-1])))
+    assert status == GoalStatus.STATUS_SUCCEEDED, result.message
+
+
+def test_grasp_frame_target_needs_a_target(ros, models):
+    """A goal with no target aborts at once, and nothing moves."""
+    following, _, _, _ = grasp_server(ros, models, 'g1')
+    held = following.measured()
+    status, result = GraspClient(ros).run(grasp_goal())
+    assert status == GoalStatus.STATUS_ABORTED and not result.success
+    assert result.message.startswith('neither arm has a target'), result.message
+    np.testing.assert_array_equal(following.measured(), held)
+
+
+def test_grasp_frame_target_times_out(ros, models):
+    """A target out of reach aborts at the goal's timeout, s of robot time, saying so."""
+    _, _, _, poses = grasp_server(ros, models, 'g1')
+    target = _shifted(_matrix(poses['left'].poses[-1]), (1.0, 0.0, 0.0))
+    start = time.monotonic()
+    status, result = GraspClient(ros).run(grasp_goal(left=target, timeout=1.0))
+    assert status == GoalStatus.STATUS_ABORTED and not result.success
+    assert result.message.startswith('timed out after 1.0 s'), result.message
+    assert 1.0 <= time.monotonic() - start < 2.0
+
+
+@pytest.mark.parametrize('plan', [False, True])
+def test_canceled_grasp_frame_target_holds_where_it_is(ros, models, tmp_path, plan):
+    """A cancel ends a direct move or a planned path where it is, and the arms hold there."""
+    # slow enough that the move or the path is still under way at the cancel
+    planner = {'moving_speed': 0.02}
+    config = edited_config(tmp_path, 'h12', CONFIGS['h12'], planner=planner, v_lim=0.02)
+    following, _, _, poses = grasp_server(ros, models, 'h12', config=config)
+    start = _matrix(poses['left'].poses[-1])
+    target = _shifted(start, (0.05, 0.0, 0.0))
+    client = GraspClient(ros)
+    handle = client.send(grasp_goal(left=target, plan=plan, timeout=30.0))
+    begun = following.measured()
+    # a first plan waits for the planner process to build its robot model
+    assert wait_for(lambda: np.max(np.abs(following.measured() - begun)) > 0.005, 60.0)
+    time.sleep(0.5)
+    handle.cancel_goal_async()
+    status, result = client.outcome(handle)
+    assert status == GoalStatus.STATUS_CANCELED and not result.success
+    expected = 'canceled during the path' if plan else 'canceled; the arms hold where they are'
+    assert result.message.startswith(expected), result.message
+    # the last step's command may still be on its way at the result
+    time.sleep(0.1)
+    held = following.measured()
+    time.sleep(0.3)
+    np.testing.assert_array_equal(following.measured(), held)
+    moved = np.linalg.norm(_matrix(poses['left'].poses[-1])[:3, 3] - start[:3, 3])
+    assert 0.002 < moved < 0.045, moved
 
 
 def executable(name):

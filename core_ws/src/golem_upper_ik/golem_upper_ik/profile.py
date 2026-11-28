@@ -4,10 +4,12 @@ The joint table (names in slot order, limits, upper slots, mode_machine) is gole
 share/golem_safety/robots/<robot>.yaml, the one copy both packages read. The rest (frames,
 held and IK joints, named configurations, controller-config defaults) is this package's
 share/golem_upper_ik/config/<robot>/robot.yaml (its keys: config/<robot>/example.robot.yaml),
-and the model files are golem_ros2_models'.
+and the model files are golem_ros2_models'. Each arm's grasp frame (GraspFrame) is a frame of
+the robot's URDF, or a fixed pose on one of its links that the robot model adds as a frame.
 """
 from collections.abc import Mapping
 from dataclasses import dataclass
+import math
 import os
 from types import MappingProxyType
 
@@ -16,13 +18,36 @@ from golem_ros2_models import paths as model_files
 import numpy as np
 import yaml
 
-__all__ = ['RobotProfile', 'known_robots', 'load_profile', 'robot_config']
+__all__ = ['GraspFrame', 'RobotProfile', 'known_robots', 'load_profile', 'robot_config']
 
 # robot.yaml must hold exactly these keys
 ROBOT_CONFIG_KEYS = (
     'display_name', 'enabled_joints', 'held_joints', 'shutdown_keeps_held_joints', 'ee_frames',
-    'planner_frames', 'imu_frame', 'named_configs', 'startup_sequence', 'config_defaults',
+    'planner_frames', 'grasp_frames', 'imu_frame', 'named_configs', 'startup_sequence',
+    'config_defaults',
 )
+# the arms, in the order of every (left, right) pair of a profile
+ARMS = ('left', 'right')
+# a grasp frame of the URDF has only the first of these keys; a grasp frame the robot model
+# adds has all of them
+GRASP_FRAME_KEYS = ('frame', 'parent', 'xyz', 'rot')
+# how far a grasp frame's rot may be from a rotation: |R^T R - I| (max entry) and |det R - 1|
+ROTATION_TOLERANCE = 1e-6
+
+
+# eq=False: compared and hashed by identity, since an array field has no truth value
+@dataclass(frozen=True, eq=False)
+class GraspFrame:
+    """Name one arm's grasp frame, the pinch point rigidly attached to its wrist.
+
+    A frame of the robot's URDF has no parent. One the URDF lacks is fixed on the URDF link
+    parent at offset, a read-only 4x4 pose in parent (m), and the robot model adds it as a
+    frame of that name.
+    """
+
+    name: str
+    parent: str | None
+    offset: np.ndarray | None
 
 
 # eq=False: compared and hashed by identity, since an array field has no truth value
@@ -48,6 +73,7 @@ class RobotProfile:
     collision: tuple[str, str] | None  # (sphere URDF, SRDF); None: no self-collision model
     ee_frames: tuple[str, str]  # (left, right)
     planner_frames: tuple[str, str]  # (left, right)
+    grasp_frames: tuple[GraspFrame, GraspFrame]  # (left, right)
     imu_frame: str
     held_joints: tuple[str, ...]  # upper-body joints the IK does not solve for
     # SAFETY: true keeps the held joints at their hold, gains and torque in the controller's
@@ -111,6 +137,67 @@ def _number(where: str, key: str, value) -> float:
     return value
 
 
+def _finite_numbers(where: str, key: str, value, count: int) -> list[float]:
+    """Return value as floats if it is a list of count finite numbers."""
+    if not isinstance(value, list) or len(value) != count:
+        raise ValueError(f"{where}: '{key}' must be a list of {count} numbers, not {value!r}")
+    numbers = [float(_number(where, key, item)) for item in value]
+    if not all(math.isfinite(number) for number in numbers):
+        raise ValueError(f"{where}: '{key}' must be finite, not {value!r}")
+    return numbers
+
+
+def _grasp_frames(where: str, value) -> dict:
+    """Return grasp_frames checked: {arm: {'frame': name} or every GRASP_FRAME_KEYS key}.
+
+    xyz is three numbers (m), rot a rotation matrix by rows; the two frames' names differ.
+    """
+    if not isinstance(value, dict) or sorted(value) != sorted(ARMS):
+        raise ValueError(f"{where}: 'grasp_frames' must map left and right to a grasp frame, "
+                         f'not {value!r}')
+    frames = {}
+    for arm in ARMS:
+        entry = value[arm]
+        key = f'grasp_frames.{arm}'
+        if not isinstance(entry, dict) or sorted(entry) not in (
+                ['frame'], sorted(GRASP_FRAME_KEYS)):
+            raise ValueError(f"{where}: '{key}' must hold 'frame' alone (a URDF frame) or "
+                             f"{', '.join(GRASP_FRAME_KEYS)}, not {entry!r}")
+        for name in ('frame', 'parent'):
+            if name in entry and not (isinstance(entry[name], str) and entry[name]):
+                raise ValueError(f"{where}: '{key}.{name}' must be a name, not "
+                                 f'{entry[name]!r}')
+        frame = {'frame': entry['frame']}
+        if 'parent' in entry:
+            frame['parent'] = entry['parent']
+            frame['xyz'] = _finite_numbers(where, f'{key}.xyz', entry['xyz'], 3)
+            rows = entry['rot']
+            if not isinstance(rows, list) or len(rows) != 3:
+                raise ValueError(f"{where}: '{key}.rot' must be 3 rows of 3 numbers, not "
+                                 f'{rows!r}')
+            rot = np.array([_finite_numbers(where, f'{key}.rot', row, 3) for row in rows])
+            if (np.max(np.abs(rot.T @ rot - np.eye(3))) > ROTATION_TOLERANCE
+                    or abs(np.linalg.det(rot) - 1.0) > ROTATION_TOLERANCE):
+                raise ValueError(f"{where}: '{key}.rot' must be a rotation matrix, not "
+                                 f'{rows!r}')
+            frame['rot'] = rot.tolist()
+        frames[arm] = frame
+    if frames['left']['frame'] == frames['right']['frame']:
+        raise ValueError(f"{where}: 'grasp_frames' must name two frames, not "
+                         f"{frames['left']['frame']!r} twice")
+    return frames
+
+
+def _grasp_frame(config: dict) -> GraspFrame:
+    """Return one checked grasp_frames entry as a GraspFrame."""
+    if 'parent' not in config:
+        return GraspFrame(name=config['frame'], parent=None, offset=None)
+    offset = np.eye(4)
+    offset[:3, :3] = config['rot']
+    offset[:3, 3] = config['xyz']
+    return GraspFrame(name=config['frame'], parent=config['parent'], offset=_read_only(offset))
+
+
 def robot_config(robot: str) -> dict:
     """Return the checked data of config/<robot>/robot.yaml, keyed by ROBOT_CONFIG_KEYS.
 
@@ -140,6 +227,7 @@ def robot_config(robot: str) -> dict:
         _strings(where, key, raw[key])
     for key in ('ee_frames', 'planner_frames'):
         _strings(where, key, raw[key], 2)
+    config['grasp_frames'] = _grasp_frames(where, raw['grasp_frames'])
     if not isinstance(raw['imu_frame'], str) or not raw['imu_frame']:
         raise ValueError(f"{where}: 'imu_frame' must be a name, not {raw['imu_frame']!r}")
     if not isinstance(raw['shutdown_keeps_held_joints'], bool):
@@ -214,6 +302,7 @@ def load_profile(robot: str) -> RobotProfile:
         collision=None if files['collision'] is None else tuple(files['collision']),
         ee_frames=tuple(config['ee_frames']),
         planner_frames=tuple(config['planner_frames']),
+        grasp_frames=tuple(_grasp_frame(config['grasp_frames'][arm]) for arm in ARMS),
         imu_frame=config['imu_frame'],
         held_joints=held_joints,
         shutdown_keeps_held_joints=bool(config['shutdown_keeps_held_joints']),

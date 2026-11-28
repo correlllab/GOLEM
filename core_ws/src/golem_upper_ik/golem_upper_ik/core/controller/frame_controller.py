@@ -38,6 +38,20 @@ class FrameController(UpperController):
             raise ValueError(f'Task {task_name} not found')
         return self.ik_solver.compute_error_reduced(task, self.robot_model.state_reduced['q'])
 
+    def frame_pose_error(self, frame_name: str, target: np.ndarray):
+        """Return a frame's distance from target (m) and the angle between their rotations (rad).
+
+        target is a 4x4 pose in the pelvis frame. The frame's pose is the IK's own view: the
+        reduced model at the measured IK joints, the frozen joints at the angles the last goal
+        locked them at.
+        """
+        pose = self.robot_model.get_frame_transformation_reduced(
+            frame_name, self.robot_model.state_reduced['q'])
+        target = np.asarray(target, dtype=np.float64)
+        distance = float(np.linalg.norm(pose[:3, 3] - target[:3, 3]))
+        cosine = (np.trace(target[:3, :3].T @ pose[:3, :3]) - 1.0) / 2.0
+        return distance, float(np.arccos(np.clip(cosine, -1.0, 1.0)))
+
     def clear_frame_tasks(self):
         """Remove every frame task."""
         self.ik_solver.clear_frame_tasks()

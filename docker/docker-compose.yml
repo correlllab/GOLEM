@@ -132,6 +132,10 @@ services:
       - GOLEM_CAMERA_POINTCLOUD=${GOLEM_CAMERA_POINTCLOUD:-}
       # H1-2: <W>x<H> of both hand cameras (default 256x256).
       - GOLEM_HAND_CAMERA_RES=${GOLEM_HAND_CAMERA_RES:-}
+      # H1-2: 1 gives the motors the real robot's drive behaviour (h12_drive.py: the
+      # hip rolls' 20 Hz series elasticity, the command delay, the drivers' velocity
+      # low-pass). Off by default.
+      - GOLEM_H12_DRIVE_MODEL=${GOLEM_H12_DRIVE_MODEL:-}
       # 1 publishes ground-truth /odom and the odom -> pelvis TF. Ground truth
       # stays opt-in: no bringup uses it (CLAUDE.md §8).
       - GOLEM_SIM_ODOM=${GOLEM_SIM_ODOM:-0}
